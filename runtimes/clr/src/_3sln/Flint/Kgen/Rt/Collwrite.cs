@@ -48,7 +48,7 @@ public static class Collwrite {
                 long i = Num.I64Of(rt, k);
                 if (i >= 0) {
                     if (((int) i) <= Vec.Count(rt, coll)) {
-                        return Vec.Assoc(rt, coll, (int) i, v);
+                        return VecAssoc(rt, coll, (int) i, v);
                     }
                 }
             }
@@ -156,7 +156,7 @@ public static class Collwrite {
         }
         if (Val.IsHeap(coll)) {
             if (Obj.Ty(rt.gc.sp, Val.AsHeap(coll)) == Obj.TyVec) {
-                long x = Vec.Nth(rt, coll, i, Val.NotFound);
+                long x = VecNth(rt, coll, i, Val.NotFound);
                 if (x != Val.NotFound) {
                     return x;
                 }

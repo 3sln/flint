@@ -7,12 +7,12 @@
 (ns flint.rt.tablemake
   (:require [flint.impl.rt :refer [defn return if let do comment doc == != >=
                                    not nil? alloc heap slot set-slot fixnum
-                                   vec-nth vec-conj empty-vec empty-map mark
-                                   push r set-r pop-to for charge-checked
-                                   throw-str str-cat static-text own-text Rt
-                                   Value I32 RootIx Text NIL TY_SCHEMA
-                                   SC_NAMES SC_TYPES SC_INDEX SC_IDS SC_WIDTH
-                                   SC_LEN TB_SCHEMA]]
+                                   empty-vec empty-map mark push r set-r
+                                   pop-to for charge-checked throw-str str-cat
+                                   static-text own-text Rt Value I32 RootIx
+                                   Text NIL TY_SCHEMA SC_NAMES SC_TYPES
+                                   SC_INDEX SC_IDS SC_WIDTH SC_LEN TB_SCHEMA]]
+            [flint.rt.vecwrite :refer [vec-conj]]
             [flint.rt.vector :refer [vec-count]]
             [flint.rt.tablemeta :refer [schema-width table-count]]
             [flint.rt.tableref :refer [schema-id ref-to-map]]
@@ -21,7 +21,7 @@
             [flint.rt.tablesay :refer [kw-name column-list]]
             [flint.rt.mapread :refer [map-get]]
             [flint.rt.mapwrite :refer [map-assoc]]
-            [flint.rt.vecread :refer [is-vector-like]]
+            [flint.rt.vecread :refer [is-vector-like vec-nth]]
             [flint.rt.names :refer [is-keyword]]))
 
 (doc "`[[name type] ...]` -> a schema."

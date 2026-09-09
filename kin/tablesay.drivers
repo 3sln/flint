@@ -308,6 +308,7 @@ fn main() {
             return i >= count(rt, v) ? dflt : rt.slot(v, i);
         }
     }
+    static long vecNth(Rt rt, long v, int i, long dflt) { return Vec.nth(rt, v, i, dflt); }
     static final class Str {
         static String text(Rt rt, long v) { return rt.names.get(Val.idx(v)); }
     }
@@ -519,6 +520,7 @@ namespace _3sln.Flint.Kgen.Rt {
             return i >= Count(rt, v) ? dflt : rt.Slot(v, i);
         }
     }
+    internal static long VecNth(Rt rt, long v, int i, long dflt) { return Vec.Nth(rt, v, i, dflt); }
     internal static class Str {
         internal static string Text(Rt rt, long v) { return rt.names[Val.Idx(v)]; }
     }

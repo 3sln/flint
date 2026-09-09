@@ -38,7 +38,7 @@ public final class Ropecp {
     /// question answered three ways, and -1 does not survive the trip to an
     /// unsigned index.
     public static int ropeByteOfCp(Rt rt, long v, int k) {
-        int absent = Str.sBytes(rt, v);
+        int absent = sBytes(rt, v);
         long node;
         int want;
         int base;
@@ -49,10 +49,10 @@ public final class Ropecp {
             if (!isRope(rt, node)) {
                 // A LEAF. ASCII means the index IS the offset; otherwise
                 // scan, bounded by the leaf.
-                if (want >= Str.sCount(rt, node)) {
+                if (want >= sCount(rt, node)) {
                     return absent;
                 }
-                if (Str.sAscii(rt, node)) {
+                if (sAscii(rt, node)) {
                     return base + want;
                 }
                 int at;
@@ -84,14 +84,14 @@ public final class Ropecp {
                     break;
                 }
                 long kid = rt.slot(node, Str.RP_KIDS + i);
-                int c = Str.sCount(rt, kid);
+                int c = sCount(rt, kid);
                 if (want < c) {
                     node = kid;
                     found = true;
                     break;
                 }
                 want -= c;
-                base += Str.sBytes(rt, kid);
+                base += sBytes(rt, kid);
                 i += 1;
             }
             // One step per node examined: the descent is work too, and a
@@ -146,7 +146,7 @@ public final class Ropecp {
                     break;
                 }
                 long kid = rt.slot(node, Str.RP_KIDS + i);
-                int n = Str.sBytes(rt, kid);
+                int n = sBytes(rt, kid);
                 if (want < n) {
                     node = kid;
                     found = true;

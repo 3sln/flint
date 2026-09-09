@@ -14,13 +14,15 @@
   (:require [flint.impl.rt :refer [defn return if let do comment doc local set
                                    == != >= <= < not or nil? is-heap as-heap
                                    ty mark push r set-r pop-to while break +
-                                   to-i32 slot char-at vec-nth vec-assoc
-                                   i64-of bare-kw name-of value-text throw-str
-                                   str-cat static-text empty-map
-                                   map-entry-as-vec Rt Value I32 I64 Ty Bool
-                                   RootIx Text NIL NOT_FOUND TY_ARRAYMAP
-                                   TY_HASHMAP TY_VEC TY_TAGGED TY_TABLE
-                                   TY_TABLEREF TY_MAPENTRY]]
+                                   to-i32 slot i64-of bare-kw name-of
+                                   value-text throw-str str-cat static-text
+                                   empty-map map-entry-as-vec Rt Value I32 I64
+                                   Ty Bool RootIx Text NIL NOT_FOUND
+                                   TY_ARRAYMAP TY_HASHMAP TY_VEC TY_TAGGED
+                                   TY_TABLE TY_TABLEREF TY_MAPENTRY]]
+            [flint.rt.vecread :refer [vec-nth]]
+            [flint.rt.vecassoc :refer [vec-assoc]]
+            [flint.rt.strs :refer [char-at]]
             [flint.rt.vector :refer [vec-count]]
             [flint.rt.mapwrite :refer [map-assoc]]
             [flint.rt.names :refer [is-symbol]]

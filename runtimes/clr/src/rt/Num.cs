@@ -33,6 +33,8 @@ public static class Num {
     /// branch out; it is a name now because the generated arm needs one.
     public static double Trunc(double d) { return d < 0 ? System.Math.Ceiling(d) : System.Math.Floor(d); }
 
+    // @kin:link:ns: flint.rt.num
+    // @kin:link:form:integer: {:template "Num.Integer({0}, {1})"}
     public static long Integer(Rt rt, long n) {
         if (n >= -(1L << 47) && n < (1L << 47)) return Val.Fixnum(n);
         long a = rt.Alloc(Obj.TyBigint, 8);
@@ -92,6 +94,7 @@ public static class Num {
     static long MulExact(long a, long b) { checked { return a * b; } }
     static long NegExact(long a) { checked { return -a; } }
 
+    // @kin:link:form:num-add: {:template "Num.Add({0}, {1}, {2})"}
     public static long Add(Rt rt, long a, long b) {
         long? x = AsI64(rt, a), y = AsI64(rt, b);
         if (x != null && y != null) {

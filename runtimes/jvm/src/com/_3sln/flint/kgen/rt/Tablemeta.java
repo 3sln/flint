@@ -75,15 +75,15 @@ public final class Tablemeta {
     }
     /// The stable id of the `c`th column.
     public static int schemaIdAt(Rt rt, long s, int c) {
-        return (int) Val.asFixnum(Vec.nth(rt, rt.slot(s, Table.SC_IDS), c, Val.NIL));
+        return (int) Val.asFixnum(vecNth(rt, rt.slot(s, Table.SC_IDS), c, Val.NIL));
     }
     /// The name of the `c`th column.
     public static long schemaNameAt(Rt rt, long s, int c) {
-        return Vec.nth(rt, rt.slot(s, Table.SC_NAMES), c, Val.NIL);
+        return vecNth(rt, rt.slot(s, Table.SC_NAMES), c, Val.NIL);
     }
     /// The declared type of the `c`th column.
     public static long schemaTypeAt(Rt rt, long s, int c) {
-        return Vec.nth(rt, rt.slot(s, Table.SC_TYPES), c, Val.NIL);
+        return vecNth(rt, rt.slot(s, Table.SC_TYPES), c, Val.NIL);
     }
     /// Two schemas are the same when the names and the types are, IN ORDER.
     /// 

@@ -47,7 +47,7 @@ public static class Tablerow {
         int ri = rt.Push(row);
         long sch = rt.Slot(rt.R(ti), global::Flint.Rt.Table.TB_SCHEMA);
         int si = rt.Push(sch);
-        if (!global::Flint.Rt.Table.checkRow(rt, rt.R(si), rt.R(ri), (int) i)) {
+        if (!CheckRow(rt, rt.R(si), rt.R(ri), (int) i)) {
             rt.PopTo(@base);
             return Val.Nil;
         }
@@ -80,15 +80,15 @@ public static class Tablerow {
                 int id = SchemaIdAt(rt, rt.R(si), c);
                 Collapse(rt, rt.R(chi), id);
             }
-            long nv = Vec.Conj(rt, rt.R(ci), rt.R(chi));
+            long nv = VecConj(rt, rt.R(ci), rt.R(chi));
             rt.SetR(ci, nv);
             rt.PopTo(chi);
         } else {
-            long ch = Vec.Nth(rt, rt.R(ci), which, Val.Nil);
+            long ch = VecNth(rt, rt.R(ci), which, Val.Nil);
             int chi = rt.Push(ch);
             long nch = ChunkWithRow(rt, rt.R(si), rt.R(chi), within, rt.R(ri), append);
             int nj = rt.Push(nch);
-            long nv = Vec.Assoc(rt, rt.R(ci), which, rt.R(nj));
+            long nv = VecAssoc(rt, rt.R(ci), which, rt.R(nj));
             rt.SetR(ci, nv);
             rt.PopTo(chi);
         }
@@ -154,8 +154,8 @@ public static class Tablerow {
         long kept0 = Vec.Empty(rt);
         int ki = rt.Push(kept0);
         for (int k = first; k < last + 1; k++) {
-            long ch = Vec.Nth(rt, rt.R(ci), k, Val.Nil);
-            long nv = Vec.Conj(rt, rt.R(ki), ch);
+            long ch = VecNth(rt, rt.R(ci), k, Val.Nil);
+            long nv = VecConj(rt, rt.R(ki), ch);
             rt.SetR(ki, nv);
         }
         long sch = rt.Slot(rt.R(ti), global::Flint.Rt.Table.TB_SCHEMA);

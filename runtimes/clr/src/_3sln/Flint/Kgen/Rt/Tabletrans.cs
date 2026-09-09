@@ -62,7 +62,7 @@ public static class Tabletrans {
         long open0 = OpenChunk(rt, rt.R(si));
         int oi = rt.Push(open0);
         if (partial > 0) {
-            long last = Vec.Nth(rt, rt.R(ci), (int)((uint) full >> global::Flint.Rt.Table.CHUNK_SHIFT), Val.Nil);
+            long last = VecNth(rt, rt.R(ci), (int)((uint) full >> global::Flint.Rt.Table.CHUNK_SHIFT), Val.Nil);
             int li = rt.Push(last);
             int ncols = SchemaLen(rt, rt.R(si));
             rt.ChargeWork(partial * ncols);
@@ -74,7 +74,7 @@ public static class Tabletrans {
                     rt.SetSlot(Val.AsHeap(col), k, v);
                 }
             }
-            long popped = Vec.Pop(rt, rt.R(ci));
+            long popped = VecPop(rt, rt.R(ci));
             rt.SetR(ci, popped);
             rt.PopTo(li);
         }
@@ -106,7 +106,7 @@ public static class Tabletrans {
         int ri = rt.Push(row);
         int si = rt.Push(rt.Slot(rt.R(ti), global::Flint.Rt.Table.TT_SCHEMA));
         int count = (int) Val.AsFixnum(rt.Slot(rt.R(ti), global::Flint.Rt.Table.TT_COUNT));
-        if (!global::Flint.Rt.Table.checkRow(rt, rt.R(si), rt.R(ri), count)) {
+        if (!CheckRow(rt, rt.R(si), rt.R(ri), count)) {
             rt.PopTo(@base);
             return Val.Nil;
         }
@@ -121,7 +121,7 @@ public static class Tabletrans {
                 Collapse(rt, rt.R(oi), id);
             }
             long chunks = rt.Slot(rt.R(ti), global::Flint.Rt.Table.TT_CHUNKS);
-            long grown = Vec.Conj(rt, chunks, rt.R(oi));
+            long grown = VecConj(rt, chunks, rt.R(oi));
             rt.SetSlot(Val.AsHeap(rt.R(ti)), global::Flint.Rt.Table.TT_CHUNKS, grown);
             long fresh = OpenChunk(rt, rt.R(si));
             rt.SetSlot(Val.AsHeap(rt.R(ti)), global::Flint.Rt.Table.TT_OPEN, fresh);
@@ -148,7 +148,7 @@ public static class Tabletrans {
         if (fill > 0) {
             long @sealed = Seal(rt, rt.R(si), rt.R(oi), fill);
             int sj = rt.Push(@sealed);
-            long grown = Vec.Conj(rt, rt.R(ci), rt.R(sj));
+            long grown = VecConj(rt, rt.R(ci), rt.R(sj));
             rt.SetR(ci, grown);
             rt.PopTo(sj);
         }

@@ -11,6 +11,7 @@ import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Byteeq.*;
 import static com._3sln.flint.kgen.rt.Eq.*;
+import static com._3sln.flint.kgen.rt.Mapeq.*;
 import static com._3sln.flint.kgen.rt.Numkind.*;
 import static com._3sln.flint.kgen.rt.Ropeeq.*;
 import static com._3sln.flint.kgen.rt.Ropemeas.*;
@@ -141,7 +142,7 @@ public final class Valeq {
             return seqEq(rt, a, b);
         }
         if (ca == CAT_MAP) {
-            return Maps.eq(rt, a, b);
+            return mapEq(rt, a, b);
         }
         if (ca == CAT_SET) {
             return Sets.eq(rt, a, b);
@@ -155,13 +156,13 @@ public final class Valeq {
         // values do not. Byte strings compare by content across both tiers
         // for the same reason.
         if (((ta == TY_STR) || (ta == TY_ROPE)) && ((tb == TY_STR) || (tb == TY_ROPE))) {
-            if (Str.sBytes(rt, a) != Str.sBytes(rt, b)) {
+            if (sBytes(rt, a) != sBytes(rt, b)) {
                 return false;
             }
             // BOTH INTERNED AND NOT BIT-EQUAL MEANS NOT EQUAL, with no
             // need to look at the bytes at all. Only flat strings are
             // interned, so a rope on either side has to be walked.
-            if (((ta == TY_STR) && (tb == TY_STR)) && (Str.sBytes(rt, a) <= com.flint.rt.Interns.INTERN_MAX)) {
+            if (((ta == TY_STR) && (tb == TY_STR)) && (sBytes(rt, a) <= com.flint.rt.Interns.INTERN_MAX)) {
                 return false;
             }
             // WALKED, not copied. Building a byte array of both sides
@@ -182,8 +183,8 @@ public final class Valeq {
             if (ta != tb) {
                 return false;
             }
-            int na = Table.tableCount(rt, a);
-            int nb = Table.tableCount(rt, b);
+            int na = tableCount(rt, a);
+            int nb = tableCount(rt, b);
             if (na != nb) {
                 return false;
             }
@@ -205,9 +206,9 @@ public final class Valeq {
             i = 0;
             same = true;
             while (i < na) {
-                long ra = Table.tableRef(rt, rt.r(ai), i);
+                long ra = tableRef(rt, rt.r(ai), i);
                 int ri = rt.push(ra);
-                long rb = Table.tableRef(rt, rt.r(bi), i);
+                long rb = tableRef(rt, rt.r(bi), i);
                 boolean one = valEq(rt, rt.r(ri), rb);
                 rt.popTo(ri);
                 if (!one) {

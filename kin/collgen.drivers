@@ -132,6 +132,7 @@ fn main() {
     static final class Table { static final int RF_SCHEMA = 0;
         static int tableCount(Rt rt, long v) { return 72; }
         static int schemaLen(Rt rt, long s) { return 74; } }
+    static int schemaLen(Rt rt, long s) { return Table.schemaLen(rt, s); }
     static final class Val {
         static final long NIL = Probe.NIL;
         static boolean isHeap(long v) { return v >= 100 && v != NIL; }
@@ -157,6 +158,7 @@ fn main() {
     static final class Str {
         static int sCount(Rt rt, long v) { return 71; }
     }
+    static int sCount(Rt rt, long v) { return Str.sCount(rt, v); }
     static boolean isSeq(Rt rt, long v) {
         return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_CONS;
     }
@@ -166,6 +168,8 @@ fn main() {
         static long nth(Rt rt, long v, int i, long d) { return 0x910L + i; }
         static long empty(Rt rt) { return 0x921L; }
     }
+    static long vecPop(Rt rt, long v) { return Vec.pop(rt, v); }
+    static long vecNth(Rt rt, long v, int i, long d) { return Vec.nth(rt, v, i, d); }
     static int tableCount(Rt rt, long v) { return 72; }
     static int ttableCount(Rt rt, long v) { return 73; }
     static int mapCount(Rt rt, long v) { return 75; }
@@ -249,6 +253,7 @@ namespace Flint.Rt {
     }
 }
 --csharp-head
+    internal static int SchemaLen(Rt rt, long s) { return 74; }
     internal const long NIL = 0xFFFFL;
     internal static class Obj {
         internal const int TyVec = 9, TyMapentry = 15, TyTagged = 16;
@@ -283,6 +288,7 @@ namespace Flint.Rt {
     internal static class Str {
         internal static int SCount(Rt rt, long v) { return 71; }
     }
+    internal static int SCount(Rt rt, long v) { return Str.SCount(rt, v); }
     internal static bool IsSeq(Rt rt, long v) {
         return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyCons;
     }
@@ -292,6 +298,8 @@ namespace Flint.Rt {
         internal static long Nth(Rt rt, long v, int i, long d) { return 0x910L + i; }
         internal static long Empty(Rt rt) { return 0x921L; }
     }
+    internal static long VecPop(Rt rt, long v) { return Vec.Pop(rt, v); }
+    internal static long VecNth(Rt rt, long v, int i, long d) { return Vec.Nth(rt, v, i, d); }
     internal static int TableCount(Rt rt, long v) { return 72; }
     internal static int TtableCount(Rt rt, long v) { return 73; }
     internal static int MapCount(Rt rt, long v) { return 75; }

@@ -45,7 +45,7 @@ public final class Tablerow {
         int ri = rt.push(row);
         long sch = rt.slot(rt.r(ti), Table.TB_SCHEMA);
         int si = rt.push(sch);
-        if (!Table.checkRow(rt, rt.r(si), rt.r(ri), (int) i)) {
+        if (!checkRow(rt, rt.r(si), rt.r(ri), (int) i)) {
             rt.popTo(base);
             return Val.NIL;
         }
@@ -78,15 +78,15 @@ public final class Tablerow {
                 int id = schemaIdAt(rt, rt.r(si), c);
                 collapse(rt, rt.r(chi), id);
             }
-            long nv = Vec.conj(rt, rt.r(ci), rt.r(chi));
+            long nv = vecConj(rt, rt.r(ci), rt.r(chi));
             rt.setR(ci, nv);
             rt.popTo(chi);
         } else {
-            long ch = Vec.nth(rt, rt.r(ci), which, Val.NIL);
+            long ch = vecNth(rt, rt.r(ci), which, Val.NIL);
             int chi = rt.push(ch);
             long nch = chunkWithRow(rt, rt.r(si), rt.r(chi), within, rt.r(ri), append);
             int nj = rt.push(nch);
-            long nv = Vec.assoc(rt, rt.r(ci), which, rt.r(nj));
+            long nv = vecAssoc(rt, rt.r(ci), which, rt.r(nj));
             rt.setR(ci, nv);
             rt.popTo(chi);
         }
@@ -152,8 +152,8 @@ public final class Tablerow {
         long kept0 = Vec.empty(rt);
         int ki = rt.push(kept0);
         for (int k = first; k < last + 1; k++) {
-            long ch = Vec.nth(rt, rt.r(ci), k, Val.NIL);
-            long nv = Vec.conj(rt, rt.r(ki), ch);
+            long ch = vecNth(rt, rt.r(ci), k, Val.NIL);
+            long nv = vecConj(rt, rt.r(ki), ch);
             rt.setR(ki, nv);
         }
         long sch = rt.slot(rt.r(ti), Table.TB_SCHEMA);

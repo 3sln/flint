@@ -13,13 +13,6 @@ import static com._3sln.flint.kgen.rt.Ropemeas.*;
 import static com._3sln.flint.kgen.rt.Ropenode.*;
 
 public final class Ropecat {
-    /// Is `v` the NODE tier -- a tree rather than a leaf or an inline string?
-    public static boolean isRope(Rt rt, long v) {
-        if (!Val.isHeap(v)) {
-            return false;
-        }
-        return ty(rt.gc.sp, Val.asHeap(v)) == TY_ROPE;
-    }
     /// How many children this node has.
     public static int ropeKids(Rt rt, long v) {
         return olen(rt, v) - Str.RP_KIDS;
@@ -93,15 +86,15 @@ public final class Ropecat {
     }
     /// `a` followed by `b`, as a string.
     public static long sConcat(Rt rt, long a, long b) {
-        if (Str.sBytes(rt, a) == 0) {
+        if (sBytes(rt, a) == 0) {
             return b;
         }
-        if (Str.sBytes(rt, b) == 0) {
+        if (sBytes(rt, b) == 0) {
             return a;
         }
         // Small enough that a tree would cost more in metadata than the copy
         // saves. This is the tier that must NOT be skipped.
-        if ((Str.sBytes(rt, a) + Str.sBytes(rt, b)) <= Str.FLAT_MAX) {
+        if ((sBytes(rt, a) + sBytes(rt, b)) <= Str.FLAT_MAX) {
             return Str.copyConcat(rt, a, b);
         }
         long appended = ropeAppend(rt, a, b);

@@ -77,15 +77,15 @@ public static class Tablemeta {
     }
     /// The stable id of the `c`th column.
     public static int SchemaIdAt(Rt rt, long s, int c) {
-        return (int) Val.AsFixnum(Vec.Nth(rt, rt.Slot(s, global::Flint.Rt.Table.SC_IDS), c, Val.Nil));
+        return (int) Val.AsFixnum(VecNth(rt, rt.Slot(s, global::Flint.Rt.Table.SC_IDS), c, Val.Nil));
     }
     /// The name of the `c`th column.
     public static long SchemaNameAt(Rt rt, long s, int c) {
-        return Vec.Nth(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES), c, Val.Nil);
+        return VecNth(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES), c, Val.Nil);
     }
     /// The declared type of the `c`th column.
     public static long SchemaTypeAt(Rt rt, long s, int c) {
-        return Vec.Nth(rt, rt.Slot(s, global::Flint.Rt.Table.SC_TYPES), c, Val.Nil);
+        return VecNth(rt, rt.Slot(s, global::Flint.Rt.Table.SC_TYPES), c, Val.Nil);
     }
     /// Two schemas are the same when the names and the types are, IN ORDER.
     /// 

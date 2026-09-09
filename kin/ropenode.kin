@@ -12,14 +12,14 @@
 ;; tiers, which needs a host slice -- so they stay hand-written and this file
 ;; calls across to them.
 (ns flint.rt.ropenode
-  (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   == < + - and for as-idx local set forever while
-                                   mark push r set-r pop-to alloc set-at heap
-                                   fixnum nil? shl bit-or bool-bit
-                                   s-bytes s-count s-ascii s-empty
-                                   Rt Value Addr RootIx I32 Bool NIL
-                                   TY_ROPE FANOUT
-                                   RP_BYTES RP_CPS RP_FLAT RP_HASH RP_KIDS]]))
+  (:require [flint.impl.rt :refer [defn return if let do comment doc == < + -
+                                   and for as-idx local set forever while mark
+                                   push r set-r pop-to alloc set-at heap
+                                   fixnum nil? shl bit-or bool-bit Rt Value
+                                   Addr RootIx I32 Bool NIL TY_ROPE FANOUT
+                                   RP_BYTES RP_CPS RP_FLAT RP_HASH RP_KIDS]]
+            [flint.rt.ropemeas :refer [s-ascii s-bytes s-count]]
+            [flint.rt.strs :refer [s-empty]]))
 
 (doc "A node over the `n` values already rooted at `base`."
      ""

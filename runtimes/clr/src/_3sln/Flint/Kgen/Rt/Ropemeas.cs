@@ -11,9 +11,15 @@ using static global::Flint.Rt.Eq;
 using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
-using static global::_3sln.Flint.Kgen.Rt.Ropecat;
 
 public static class Ropemeas {
+    /// Is `v` the NODE tier -- a tree rather than a leaf or an inline string?
+    public static bool IsRope(Rt rt, long v) {
+        if (!Val.IsHeap(v)) {
+            return false;
+        }
+        return Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyRope;
+    }
     /// Is `v` a STRING -- any of the three tiers?
     /// 
     /// Inline first, because it is a test on the value word and the other two

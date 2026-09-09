@@ -49,7 +49,7 @@ public static class Tablesay {
         @out = "";
         for (int c = 0; c < n; c++) {
             long names = rt.Slot(s, global::Flint.Rt.Table.SC_NAMES);
-            long name = Vec.Nth(rt, names, c, Val.Nil);
+            long name = VecNth(rt, names, c, Val.Nil);
             string shown = KwName(rt, name);
             if (c > 0) {
                 @out = @out + " ";
@@ -134,7 +134,7 @@ public static class Tablesay {
             long val = RowColumn(rt, rt.R(si), rt.R(ri), c);
             int vi = rt.Push(val);
             long names = rt.Slot(rt.R(si), global::Flint.Rt.Table.SC_NAMES);
-            long name = Vec.Nth(rt, names, c, Val.Nil);
+            long name = VecNth(rt, names, c, Val.Nil);
             int ni = rt.Push(name);
             if (rt.R(vi) == Val.NotFound) {
                 string nm = KwName(rt, rt.R(ni));
@@ -144,8 +144,8 @@ public static class Tablesay {
                 return false;
             }
             long types = rt.Slot(rt.R(si), global::Flint.Rt.Table.SC_TYPES);
-            long tp = Vec.Nth(rt, types, c, Val.Nil);
-            if (!global::Flint.Rt.Table.typeOk(rt, tp, rt.R(vi))) {
+            long tp = VecNth(rt, types, c, Val.Nil);
+            if (!TypeOk(rt, tp, rt.R(vi))) {
                 string msg = ColumnTypeError(rt, rt.R(ni), tp, rt.R(vi), rowno);
                 rt.PopTo(@base);
                 rt.ThrowStr("IllegalArgumentException", msg);

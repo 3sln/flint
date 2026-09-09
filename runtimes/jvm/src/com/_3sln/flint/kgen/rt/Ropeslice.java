@@ -26,7 +26,7 @@ public final class Ropeslice {
         if (from >= to) {
             return Str.sEmpty(rt);
         }
-        int n = Str.sBytes(rt, v);
+        int n = sBytes(rt, v);
         int hi;
         hi = to;
         if (hi > n) {
@@ -56,7 +56,7 @@ public final class Ropeslice {
         at = 0;
         for (int i = 0; i < kids; i++) {
             long k = rt.slot(rt.r(vi), Str.RP_KIDS + i);
-            int w = Str.sBytes(rt, k);
+            int w = sBytes(rt, k);
             if ((at + w) > from) {
                 if (at < hi) {
                     int klo;
@@ -85,7 +85,7 @@ public final class Ropeslice {
                         rt.popTo(base);
                         return Val.NIL;
                     }
-                    if (Str.sBytes(rt, piece) > 0) {
+                    if (sBytes(rt, piece) > 0) {
                         rt.push(piece);
                         made += 1;
                     }

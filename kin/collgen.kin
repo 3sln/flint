@@ -23,14 +23,15 @@
 (ns flint.rt.collgen
   (:require [flint.impl.rt :refer [defn return if let do comment doc == not or
                                    nil? is-heap as-heap ty - slot throw-str
-                                   str-cat static-text own-text s-count
-                                   vec-nth vec-pop schema-len empty-vec
+                                   str-cat static-text own-text empty-vec
                                    empty-map empty-set empty-list Rt Value I32
                                    Ty Bool Text NIL RF_SCHEMA TY_VEC
                                    TY_MAPENTRY TY_TAGGED TY_TABLE TY_TTABLE
                                    TY_TABLEREF TY_ARRAYMAP TY_HASHMAP TY_SET
                                    TY_BYTES TY_BROPE TY_TVEC TY_TMAP TY_TSET
                                    TY_EMPTY_LIST]]
+            [flint.rt.vecread :refer [vec-nth]]
+            [flint.rt.vecassoc :refer [vec-pop]]
             [flint.rt.vector :refer [vec-count]]
             [flint.rt.nouns :refer [describe]]
             [flint.rt.seqcore :refer [is-seq]]
@@ -40,9 +41,9 @@
             [flint.rt.vectrans :refer [tvec-count]]
             [flint.rt.maptrans :refer [tmap-count tset-count]]
             [flint.rt.seqwalk :refer [seq-count first rest]]
-            [flint.rt.tablemeta :refer [table-count]]
+            [flint.rt.tablemeta :refer [schema-len table-count]]
             [flint.rt.tabletrans :refer [ttable-count]]
-            [flint.rt.ropemeas :refer [is-string]]))
+            [flint.rt.ropemeas :refer [is-string s-count]]))
 
 (doc "How many things are in it."
      ""

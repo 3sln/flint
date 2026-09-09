@@ -274,6 +274,8 @@ public final class Str {
     /// never read: every `hash` of a heap string rehashed its whole content,
     /// where native reads the slot. A long string used as a map key paid its
     /// length per lookup.
+    // @kin:link:ns: flint.rt.strs
+    // @kin:link:form:string-hash: {:template "Str.stringHash({0}, {1})"}
     public static int stringHash(Rt rt, long v) {
         if (Val.isInlineStr(v)) return Hash.hashString(Val.inlineBytes(v));
         long a = Val.asHeap(v);
@@ -287,6 +289,7 @@ public final class Str {
 
     /// The hash of a KEYWORD, read from slot 2 where it was stored when the
     /// keyword was built.
+    // @kin:link:form:keyword-hash: {:template "Str.keywordHash({0}, {1})"}
     public static int keywordHash(Rt rt, long v) {
         if (Val.isInlineKw(v)) return Hash.hashKeyword(null, Val.inlineBytes(v));
         return (int) Val.asFixnum(rt.slot(v, 2));
@@ -371,6 +374,7 @@ public final class Str {
     /// A DEFAULT rather than a fixed `NOT_FOUND`, matching `Vec.nth`,
     /// `Maps.get` and the native runtime's `char_at`. Absence is an argument
     /// in this runtime now, not a sentinel each caller has to know about.
+    // @kin:link:form:char-at: {:template "Str.nth({0}, {1}, {2}, {3})"}
     public static long nth(Rt rt, long v, int i, long dflt) {
         byte[] out = new byte[4];
         int w = cpBytesAt(rt, v, i, out);
@@ -478,7 +482,7 @@ public final class Str {
     /// and this is the bound on the scan inside one leaf.
     public static final int INDEX_LEAF = 128;
 
-    public static boolean isRope(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropecat.isRope(rt, v); }
+    public static boolean isRope(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropemeas.isRope(rt, v); }
 
     static int ropeKids(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropecat.ropeKids(rt, v); }
 
@@ -539,6 +543,7 @@ public final class Str {
     static long ropeAppend(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Ropecat.ropeAppend(rt, a, b); }
 
     /// Copy the range out into a fresh string -- the DECODE half, see the Rust copy.
+    // @kin:link:form:s-copy-range: {:template "Str.sCopyRange({0}, {1}, {2}, {3})"}
     public static long sCopyRange(Rt rt, long v, int from, int to) {
         int base = rt.mark();
         int vi = rt.push(v);
@@ -555,8 +560,10 @@ public final class Str {
     }
 
     /// The empty string, interned -- see the Rust copy.
+    // @kin:link:form:s-empty: {:template "Str.sEmpty({0})"}
     public static long sEmpty(Rt rt) { return of(rt, ""); }
 
+    // @kin:link:form:s-concat-copy: {:template "Str.copyConcat({0}, {1}, {2})"}
     public static long copyConcat(Rt rt, long a, long b) {
         byte[] x = bytes(rt, a), y = bytes(rt, b);
         // Copying is work, and it is charged at the same rate everywhere.

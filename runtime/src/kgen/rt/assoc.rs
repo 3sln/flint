@@ -86,7 +86,7 @@ impl Rt {
         self.pop_to(base);
         return out;
     }
-    pub(crate) fn coll_assoc(&mut self, n: Value, h: u32, key: Value, val: Value, edit: Value, shift: u32) -> Value {
+    pub fn coll_assoc(&mut self, n: Value, h: u32, key: Value, val: Value, edit: Value, shift: u32) -> Value {
         let nh: u32 = self.cn_hash(n);
         if nh != h {
             // A different hash at this depth: the node becomes a child of

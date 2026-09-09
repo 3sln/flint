@@ -193,6 +193,8 @@ public static class Str {
     /// type: flint has no char, and `doc/decisions/0010` counts that among the
     /// documented divergences rather than a gap.
     /// The character at code point `i`, or `dflt`. See the JVM's `nth`.
+    // @kin:link:ns: flint.rt.strs
+    // @kin:link:form:char-at: {:template "Str.Nth({0}, {1}, {2}, {3})"}
     public static long Nth(Rt rt, long v, int i, long dflt) {
         var outb = new byte[4];
         int w = CpBytesAt(rt, v, i, outb);
@@ -340,6 +342,7 @@ public static class Str {
     /// never read: every `Hash` of a heap string rehashed its whole content,
     /// where native reads the slot. A long string used as a map key paid its
     /// length per lookup.
+    // @kin:link:form:string-hash: {:template "Str.StringHash({0}, {1})"}
     public static int StringHash(Rt rt, long v) {
         if (Val.IsInlineStr(v)) return Hash.HashString(Val.InlineBytes(v));
         long a = Val.AsHeap(v);
@@ -353,6 +356,7 @@ public static class Str {
 
     /// The hash of a KEYWORD, read from slot 2 where it was stored when the
     /// keyword was built.
+    // @kin:link:form:keyword-hash: {:template "Str.KeywordHash({0}, {1})"}
     public static int KeywordHash(Rt rt, long v) {
         if (Val.IsInlineKw(v)) return Hash.HashKeyword(null, Val.InlineBytes(v));
         return (int) Val.AsFixnum(rt.Slot(v, 2));
@@ -436,7 +440,7 @@ public static class Str {
     /// and this is the bound on the scan inside one leaf.
     public const int INDEX_LEAF = 128;
 
-    public static bool IsRope(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Ropecat.IsRope(rt, v);
+    public static bool IsRope(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Ropemeas.IsRope(rt, v);
 
     static int RopeKids(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Ropecat.RopeKids(rt, v);
 
@@ -488,6 +492,7 @@ public static class Str {
     static long RopeAppend(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Ropecat.RopeAppend(rt, a, b); }
 
     /// Copy the range out into a fresh string -- the DECODE half.
+    // @kin:link:form:s-copy-range: {:template "Str.SCopyRange({0}, {1}, {2}, {3})"}
     public static long SCopyRange(Rt rt, long v, int from, int to) {
         int bas = rt.Mark();
         int vi = rt.Push(v);
@@ -504,8 +509,10 @@ public static class Str {
     }
 
     /// The empty string, interned -- see the Rust copy.
+    // @kin:link:form:s-empty: {:template "Str.SEmpty({0})"}
     public static long SEmpty(Rt rt) { return Of(rt, ""); }
 
+    // @kin:link:form:s-concat-copy: {:template "Str.CopyConcat({0}, {1}, {2})"}
     public static long CopyConcat(Rt rt, long a, long b) {
         // Copying is work, charged at the same rate everywhere.
         rt.ChargeBytes(SBytes(rt, a) + SBytes(rt, b));

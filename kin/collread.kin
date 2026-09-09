@@ -18,12 +18,15 @@
 (ns flint.rt.collread
   (:require [flint.impl.rt :refer [defn return if let do comment doc == != >=
                                    < or not nil? is-heap as-heap ty slot
-                                   char-at to-i32 u< i64-of bare-kw
-                                   static-text vec-nth table-ref ref-get Rt
-                                   Value I32 I64 Ty Bool NIL NOT_FOUND
-                                   TY_ARRAYMAP TY_HASHMAP TY_SET TY_VEC
-                                   TY_MAPENTRY TY_TABLE TY_TABLEREF TY_TAGGED
-                                   TY_BYTES TY_BROPE TY_TVEC TY_TMAP TY_TSET]]
+                                   to-i32 u< i64-of bare-kw static-text
+                                   ref-get Rt Value I32 I64 Ty Bool NIL
+                                   NOT_FOUND TY_ARRAYMAP TY_HASHMAP TY_SET
+                                   TY_VEC TY_MAPENTRY TY_TABLE TY_TABLEREF
+                                   TY_TAGGED TY_BYTES TY_BROPE TY_TVEC TY_TMAP
+                                   TY_TSET]]
+            [flint.rt.vecread :refer [vec-nth]]
+            [flint.rt.tableref :refer [table-ref]]
+            [flint.rt.strs :refer [char-at]]
             [flint.rt.vector :refer [vec-count]]
             [flint.rt.mapread :refer [map-get map-contains]]
             [flint.rt.setcore :refer [set-get set-contains]]

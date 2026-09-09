@@ -82,7 +82,7 @@ public final class Tablecell {
     /// `row` MAY BE ANOTHER TABLE'S ROW REF, so a row can be moved between
     /// tables without being materialised into a map first.
     public static long rowColumn(Rt rt, long s, long row, int c) {
-        long name = Vec.nth(rt, rt.slot(s, Table.SC_NAMES), c, Val.NIL);
+        long name = vecNth(rt, rt.slot(s, Table.SC_NAMES), c, Val.NIL);
         if (isTableRef(rt, row)) {
             return refGet(rt, row, name, Val.NOT_FOUND);
         }
@@ -112,7 +112,7 @@ public final class Tablecell {
     /// One cell of a table, by column id and row. No row and no ref is built.
     public static long tableCell(Rt rt, long t, int id, int i) {
         int phys = i + tableOffset(rt, t);
-        long ch = Vec.nth(rt, rt.slot(t, Table.TB_CHUNKS), phys >>> Table.CHUNK_SHIFT, Val.NIL);
+        long ch = vecNth(rt, rt.slot(t, Table.TB_CHUNKS), phys >>> Table.CHUNK_SHIFT, Val.NIL);
         return chunkGet(rt, ch, id, phys & (Table.CHUNK - 1));
     }
     /// Is `v` a transient table?

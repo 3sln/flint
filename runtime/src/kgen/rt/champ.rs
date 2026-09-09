@@ -19,36 +19,36 @@ use crate::kgen::rt::casetable::*;
 
 impl Rt {
     #[inline]
-    pub(crate) fn bn_datamap(&self, n: Value) -> u32 {
+    pub fn bn_datamap(&self, n: Value) -> u32 {
         return self.slot(n, BN_DATAMAP).as_fixnum() as u32;
     }
     #[inline]
-    pub(crate) fn bn_nodemap(&self, n: Value) -> u32 {
+    pub fn bn_nodemap(&self, n: Value) -> u32 {
         return self.slot(n, BN_NODEMAP).as_fixnum() as u32;
     }
     #[inline]
-    pub(crate) fn bn_key(&self, n: Value, i: u32) -> Value {
+    pub fn bn_key(&self, n: Value, i: u32) -> Value {
         return self.slot(n, BN_BASE + (2 * i));
     }
     #[inline]
-    pub(crate) fn bn_val(&self, n: Value, i: u32) -> Value {
+    pub fn bn_val(&self, n: Value, i: u32) -> Value {
         return self.slot(n, BN_BASE + ((2 * i) + 1));
     }
     #[inline]
-    pub(crate) fn bn_set_key(&mut self, n: Value, i: u32, v: Value) {
+    pub fn bn_set_key(&mut self, n: Value, i: u32, v: Value) {
         self.set(n, BN_BASE + (2 * i), v);
     }
     #[inline]
-    pub(crate) fn bn_set_val(&mut self, n: Value, i: u32, v: Value) {
+    pub fn bn_set_val(&mut self, n: Value, i: u32, v: Value) {
         self.set(n, BN_BASE + ((2 * i) + 1), v);
     }
     /// Sub-nodes live at the END, in DESCENDING bit order.
     #[inline]
-    pub(crate) fn bn_node(&self, n: Value, j: u32) -> Value {
+    pub fn bn_node(&self, n: Value, j: u32) -> Value {
         return self.slot(n, (self.olen(n) - 1) - j);
     }
     #[inline]
-    pub(crate) fn bn_set_node(&mut self, n: Value, j: u32, v: Value) {
+    pub fn bn_set_node(&mut self, n: Value, j: u32, v: Value) {
         self.set(n, (self.olen(n) - 1) - j, v);
     }
 }

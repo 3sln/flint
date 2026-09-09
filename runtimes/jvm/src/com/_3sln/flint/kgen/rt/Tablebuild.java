@@ -53,9 +53,9 @@ public final class Tablebuild {
                 int coli = rt.push(col);
                 long name = schemaNameAt(rt, rt.r(si), c);
                 long types = rt.slot(rt.r(si), Table.SC_TYPES);
-                long tp = Vec.nth(rt, types, c, Val.NIL);
+                long tp = vecNth(rt, types, c, Val.NIL);
                 for (int k = 0; k < take; k++) {
-                    long rowv = Vec.nth(rt, rt.r(ri), row + k, Val.NIL);
+                    long rowv = vecNth(rt, rt.r(ri), row + k, Val.NIL);
                     long val = mapGet(rt, rowv, name, Val.NIL);
                     if (!typeOk(rt, tp, val)) {
                         String msg = columnTypeError(rt, name, tp, val, row + k);
@@ -68,7 +68,7 @@ public final class Tablebuild {
                 collapse(rt, rt.r(chi), id);
                 rt.popTo(coli);
             }
-            long nv = Vec.conj(rt, rt.r(ci), rt.r(chi));
+            long nv = vecConj(rt, rt.r(ci), rt.r(chi));
             rt.setR(ci, nv);
             rt.popTo(chi);
             row += take;
@@ -109,14 +109,14 @@ public final class Tablebuild {
             int chi = rt.push(ch);
             for (int c = 0; c < ncols; c++) {
                 int id = schemaIdAt(rt, rt.r(si), c);
-                long src = Vec.nth(rt, rt.r(ci), c, Val.NIL);
+                long src = vecNth(rt, rt.r(ci), c, Val.NIL);
                 int sj = rt.push(src);
                 long types = rt.slot(rt.r(si), Table.SC_TYPES);
-                long tp = Vec.nth(rt, types, c, Val.NIL);
+                long tp = vecNth(rt, types, c, Val.NIL);
                 long col = Conc.newObj(rt, TY_NODE, take);
                 int cj = rt.push(col);
                 for (int k = 0; k < take; k++) {
-                    long v = Vec.nth(rt, rt.r(sj), row + k, Val.NIL);
+                    long v = vecNth(rt, rt.r(sj), row + k, Val.NIL);
                     if (!typeOk(rt, tp, v)) {
                         long name = schemaNameAt(rt, rt.r(si), c);
                         String msg = columnTypeError(rt, name, tp, v, row + k);
@@ -129,7 +129,7 @@ public final class Tablebuild {
                 collapse(rt, rt.r(chi), id);
                 rt.popTo(sj);
             }
-            long nv = Vec.conj(rt, rt.r(ki), rt.r(chi));
+            long nv = vecConj(rt, rt.r(ki), rt.r(chi));
             rt.setR(ki, nv);
             rt.popTo(chi);
             row += take;

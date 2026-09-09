@@ -42,9 +42,9 @@ public static class Seqwalk {
                 return rt.Slot(coll, i);
             }
             if (Obj.Ty(rt.gc.sp, Val.AsHeap(coll)) == Obj.TyTable) {
-                return Table.tableRef(rt, coll, i);
+                return TableRef(rt, coll, i);
             }
-            return Vec.Nth(rt, coll, i, Val.Nil);
+            return VecNth(rt, coll, i, Val.Nil);
         }
         if (t == Obj.TyStrseq) {
             return Str.Nth(rt, rt.Slot(s, 0), (int) Val.AsFixnum(rt.Slot(s, 1)), Val.Nil);
@@ -71,7 +71,7 @@ public static class Seqwalk {
             if (Obj.Ty(rt.gc.sp, Val.AsHeap(coll)) == Obj.TyMapentry) {
                 n = 2;
             } else if (Obj.Ty(rt.gc.sp, Val.AsHeap(coll)) == Obj.TyTable) {
-                n = Table.tableCount(rt, coll);
+                n = TableCount(rt, coll);
             } else {
                 n = Vec.Count(rt, coll);
             }
@@ -83,7 +83,7 @@ public static class Seqwalk {
         if (t == Obj.TyStrseq) {
             long st = rt.Slot(s, 0);
             int i = (int) Val.AsFixnum(rt.Slot(s, 1));
-            if ((i + 1) >= Str.SCount(rt, st)) {
+            if ((i + 1) >= SCount(rt, st)) {
                 return Val.Nil;
             }
             return Strseq(rt, st, i + 1);
@@ -206,7 +206,7 @@ public static class Seqwalk {
         }
         if (IsString(rt, v)) {
             // CODE POINTS, matching the index the strseq holds.
-            if (Str.SCount(rt, v) == 0) {
+            if (SCount(rt, v) == 0) {
                 return Val.Nil;
             }
             return Strseq(rt, v, 0);
@@ -244,7 +244,7 @@ public static class Seqwalk {
             return Vecseq(rt, v, 0);
         }
         if (t == Obj.TyTable) {
-            if (Table.tableCount(rt, v) == 0) {
+            if (TableCount(rt, v) == 0) {
                 return Val.Nil;
             }
             return Vecseq(rt, v, 0);
@@ -254,7 +254,7 @@ public static class Seqwalk {
             return Seq(rt, m);
         }
         if ((t == Obj.TyArraymap) || (t == Obj.TyHashmap)) {
-            long ents = Maps.EntryVector(rt, v);
+            long ents = MapEntryVector(rt, v);
             if (Val.IsNil(ents)) {
                 return Val.Nil;
             }
@@ -264,7 +264,7 @@ public static class Seqwalk {
             return Vecseq(rt, ents, 0);
         }
         if (t == Obj.TySet) {
-            long ents = Sets.ElementVector(rt, v);
+            long ents = SetElementVector(rt, v);
             if (Val.IsNil(ents)) {
                 return Val.Nil;
             }

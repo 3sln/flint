@@ -112,7 +112,7 @@ public final class Ropeflat {
             long k = rt.slot(rt.r(vi), Str.RP_KIDS + i);
             int ki = rt.push(k);
             int kh = ropeHash(rt, rt.r(ki));
-            int kb = Str.sBytes(rt, rt.r(ki));
+            int kb = sBytes(rt, rt.r(ki));
             h = (h * pow31(rt, kb)) + kh;
             rt.popTo(ki);
         }
@@ -178,7 +178,7 @@ public final class Ropeflat {
         at = 0;
         for (int i = 0; i < n; i++) {
             long k = rt.slot(v, Str.RP_KIDS + i);
-            int w = Str.sBytes(rt, k);
+            int w = sBytes(rt, k);
             if (((at + w) > from) && (at < to)) {
                 // GUARDED, not clamped after the fact. `I32` is `u32` in
                 // Rust, where `(- from at)` wraps to a huge number and a

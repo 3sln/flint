@@ -151,10 +151,12 @@ fn main() {
         static long nth(Rt rt, long v, int i, long d) { return 0x930L + i; }
         static int count(Rt rt, long v) { return rt.vn; }
     }
+    static long vecNth(Rt rt, long v, int i, long d) { return Vec.nth(rt, v, i, d); }
     static final class Table {
         static long tableRef(Rt rt, long t, int i) { return rt.rowmiss ? NIL : 0x940L + i; }
         static long refGet(Rt rt, long r, long k, long d) { return 0x923L; }
     }
+    static long tableRef(Rt rt, long t, int i) { return Table.tableRef(rt, t, i); }
     static long bAt(Rt rt, long b, int i, long d) { return 0x950L + i; }
     static long tvecNth(Rt rt, long t, int i, long d) { return 0x960L + i; }
     static long tmapGet(Rt rt, long t, long k, long d) { return 0x924L; }
@@ -267,11 +269,13 @@ namespace Flint.Rt {
         internal static long Nth(Rt rt, long v, int i, long d) { return 0x930L + i; }
         internal static int Count(Rt rt, long v) { return rt.vn; }
     }
+    internal static long VecNth(Rt rt, long v, int i, long d) { return Vec.Nth(rt, v, i, d); }
     // `table-ref` and `ref-get` resolve to a BARE `Table`, so the probe puts
     // one inside itself rather than in the runtime's namespace.
     internal static class Table {
         internal static long tableRef(Rt rt, long t, int i) { return rt.rowmiss ? NIL : 0x940L + i; }
     }
+    internal static long TableRef(Rt rt, long t, int i) { return Table.tableRef(rt, t, i); }
     internal static long BAt(Rt rt, long b, int i, long d) { return 0x950L + i; }
     internal static long TvecNth(Rt rt, long t, int i, long d) { return 0x960L + i; }
     internal static long TmapGet(Rt rt, long t, long k, long d) { return 0x924L; }

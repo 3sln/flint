@@ -10,10 +10,11 @@
 (ns flint.rt.tablemeta
   (:require [flint.impl.rt :refer [defn return if let comment doc == != >= +
                                    not is-heap as-heap ty slot as-fixnum
-                                   to-i32 vec-nth val-eq NIL Rt Value I32 Bool
+                                   to-i32 val-eq NIL Rt Value I32 Bool
                                    TY_SCHEMA TY_TABLE TY_TABLEREF SC_NAMES
                                    SC_TYPES SC_IDS SC_WIDTH TB_COUNT TB_OFFSET
                                    CH_ROWS CH_ENC CH_BASE ENC_CONST]]
+            [flint.rt.vecread :refer [vec-nth]]
             [flint.rt.vector :refer [vec-count]]))
 
 (doc "Is `v` a schema, a table, a row ref?"

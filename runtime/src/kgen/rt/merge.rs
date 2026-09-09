@@ -18,7 +18,7 @@ use crate::kgen::rt::pike::*;
 use crate::kgen::rt::casetable::*;
 
 impl Rt {
-    pub(crate) fn merge_two(&mut self, shift: u32, k0: Value, v0: Value, h0: u32, k1: Value, v1: Value, h1: u32, edit: Value) -> Value {
+    pub fn merge_two(&mut self, shift: u32, k0: Value, v0: Value, h0: u32, k1: Value, v1: Value, h1: u32, edit: Value) -> Value {
         let mk: usize = self.mark();
         let ik0: usize = self.push(k0);
         let iv0: usize = self.push(v0);

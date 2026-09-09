@@ -157,10 +157,10 @@ public final class Valhash {
             return hashOrdered(rt, v);
         }
         if ((t == TY_ARRAYMAP) || (t == TY_HASHMAP)) {
-            return Maps.hash(rt, v);
+            return hashMap(rt, v);
         }
         if (t == TY_SET) {
-            return Sets.hash(rt, v);
+            return hashSet(rt, v);
         }
         // AN OPAQUE VALUE CARRIES ITS OWN IDENTITY, assigned at creation
         // and STORED (`0022`). The per-type constant below would be
@@ -181,13 +181,13 @@ public final class Valhash {
         if (t == TY_TABLE) {
             int base = rt.mark();
             int vi = rt.push(v);
-            int n = Table.tableCount(rt, rt.r(vi));
+            int n = tableCount(rt, rt.r(vi));
             int acc;
             int i;
             acc = 1;
             i = 0;
             while (i < n) {
-                long row = Table.tableRef(rt, rt.r(vi), i);
+                long row = tableRef(rt, rt.r(vi), i);
                 int ri = rt.push(row);
                 int h = hashValue(rt, rt.r(ri));
                 rt.popTo(ri);

@@ -124,6 +124,7 @@ fn main() {
         static final int RF_SCHEMA = 0;
         static int schemaLen(Rt rt, long s) { return (int) rt.h[(int) s]; }
     }
+    static int schemaLen(Rt rt, long s) { return Table.schemaLen(rt, s); }
     static int ty(int[] sp, long a) { return sp[(int) a]; }
 --java
     public static void main(String[] args) {
@@ -202,6 +203,7 @@ fn main() {
                 internal const int RF_SCHEMA = 0;
                 internal static int schemaLen(Probe.Rt rt, long s) { return (int) rt.h[(int) s]; }
             }
+            internal static int SchemaLen(Probe.Rt rt, long s) { return Table.schemaLen(rt, s); }
         }
     }
 --csharp

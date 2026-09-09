@@ -31,7 +31,7 @@ public final class Collvec {
             for (int i = 0; i < cnCount(rt, rt.r(ni)); i++) {
                 rt.chargeWork(1);
                 long e = mapEntry(rt, cnKey(rt, rt.r(ni), i), cnVal(rt, rt.r(ni), i));
-                long nv = Vec.conj(rt, rt.r(ai), e);
+                long nv = vecConj(rt, rt.r(ai), e);
                 rt.setR(ai, nv);
             }
             rt.popTo(base);
@@ -40,7 +40,7 @@ public final class Collvec {
         for (int i = 0; i < Integer.bitCount(bnDatamap(rt, rt.r(ni))); i++) {
             rt.chargeWork(1);
             long e = mapEntry(rt, bnKey(rt, rt.r(ni), i), bnVal(rt, rt.r(ni), i));
-            long nv = Vec.conj(rt, rt.r(ai), e);
+            long nv = vecConj(rt, rt.r(ai), e);
             rt.setR(ai, nv);
         }
         for (int j = 0; j < Integer.bitCount(bnNodemap(rt, rt.r(ni))); j++) {
@@ -57,7 +57,7 @@ public final class Collvec {
         if (!isBmnode(rt, rt.r(ni))) {
             for (int i = 0; i < cnCount(rt, rt.r(ni)); i++) {
                 rt.chargeWork(1);
-                long nv = Vec.conj(rt, rt.r(ai), cnKey(rt, rt.r(ni), i));
+                long nv = vecConj(rt, rt.r(ai), cnKey(rt, rt.r(ni), i));
                 rt.setR(ai, nv);
             }
             rt.popTo(base);
@@ -65,7 +65,7 @@ public final class Collvec {
         }
         for (int i = 0; i < Integer.bitCount(bnDatamap(rt, rt.r(ni))); i++) {
             rt.chargeWork(1);
-            long nv = Vec.conj(rt, rt.r(ai), bnKey(rt, rt.r(ni), i));
+            long nv = vecConj(rt, rt.r(ai), bnKey(rt, rt.r(ni), i));
             rt.setR(ai, nv);
         }
         for (int j = 0; j < Integer.bitCount(bnNodemap(rt, rt.r(ni))); j++) {
@@ -90,7 +90,7 @@ public final class Collvec {
         if (ty(rt.gc.sp, Val.asHeap(rt.r(mi))) == TY_ARRAYMAP) {
             for (int i = 0; i < mapCount(rt, rt.r(mi)); i++) {
                 long e = mapEntry(rt, amKey(rt, rt.r(mi), i), amVal(rt, rt.r(mi), i));
-                long nv = Vec.conj(rt, rt.r(ai), e);
+                long nv = vecConj(rt, rt.r(ai), e);
                 rt.setR(ai, nv);
             }
             long flat = rt.r(ai);
@@ -121,7 +121,7 @@ public final class Collvec {
         int mi = rt.push(m);
         if (ty(rt.gc.sp, Val.asHeap(rt.r(mi))) == TY_ARRAYMAP) {
             for (int i = 0; i < mapCount(rt, rt.r(mi)); i++) {
-                long nv = Vec.conj(rt, rt.r(ai), amKey(rt, rt.r(mi), i));
+                long nv = vecConj(rt, rt.r(ai), amKey(rt, rt.r(mi), i));
                 rt.setR(ai, nv);
             }
             long flat = rt.r(ai);

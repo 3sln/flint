@@ -68,6 +68,8 @@ public final class Sets {
     // `transientOf`, `tconj`, `tdisj`, `tcount`, `tget` and `tpersistent` are
     // GENERATED, from `kin/maptrans.kin`.
 
+    // @kin:link:ns: flint.rt.sets
+    // @kin:link:form:set-eq: {:template "Sets.eq({0}, {1}, {2})"}
     public static boolean eq(Rt rt, long a, long b) {
         if (count(rt, a) != count(rt, b)) return false;
         return Maps.eq(rt, rt.slot(a, S_MAP), rt.slot(b, S_MAP));

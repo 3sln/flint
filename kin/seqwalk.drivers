@@ -325,22 +325,28 @@ fn main() {
             return i >= count(rt, v) ? dflt : rt.slot(v, i + 1);
         }
     }
+    static long vecNth(Rt rt, long v, int i, long dflt) { return Vec.nth(rt, v, i, dflt); }
     static final class Str {
         static int sCount(Rt rt, long v) { return (int) rt.slot(v, 0); }
         static long nth(Rt rt, long v, int i, long dflt) {
             return i >= sCount(rt, v) ? dflt : rt.slot(v, i + 1);
         }
     }
+    static int sCount(Rt rt, long v) { return Str.sCount(rt, v); }
     static final class Table {
         static long refToMap(Rt rt, long r) { return rt.slot(r, 0); }
         static int tableCount(Rt rt, long t) { return (int) rt.slot(t, 0); }
         static long tableRef(Rt rt, long t, int i) { return 0x7000 + i; }
     }
+    static int tableCount(Rt rt, long t) { return Table.tableCount(rt, t); }
+    static long tableRef(Rt rt, long t, int i) { return Table.tableRef(rt, t, i); }
     static final class Num { static long add(Rt rt, long a, long b) { return a + b; } }
     // `seq`'s COLLABORATORS. `entryVector` and `elementVector` are still
     // hand-written -- the closure hole -- so the probe answers a plain vector.
     static final class Maps { static long entryVector(Rt rt, long m) { return rt.slot(m, 0); } }
     static final class Sets { static long elementVector(Rt rt, long m) { return rt.slot(m, 0); } }
+    static long mapEntryVector(Rt rt, long m) { return Maps.entryVector(rt, m); }
+    static long setElementVector(Rt rt, long m) { return Sets.elementVector(rt, m); }
     static boolean rangeEmpty(Rt rt, long v) { return rt.slot(v, 0) >= rt.slot(v, 1); }
     static String THROWN = "";
     static String describe(Rt rt, long v) {
@@ -559,20 +565,26 @@ namespace Flint.Rt {
             return i >= Count(rt, v) ? dflt : rt.Slot(v, i + 1);
         }
     }
+    internal static long VecNth(Rt rt, long v, int i, long dflt) { return Vec.Nth(rt, v, i, dflt); }
     internal static class Str {
         internal static int SCount(Rt rt, long v) { return (int) rt.Slot(v, 0); }
         internal static long Nth(Rt rt, long v, int i, long dflt) {
             return i >= SCount(rt, v) ? dflt : rt.Slot(v, i + 1);
         }
     }
+    internal static int SCount(Rt rt, long v) { return Str.SCount(rt, v); }
     internal static class Table {
         internal static int tableCount(Rt rt, long t) { return (int) rt.Slot(t, 0); }
         internal static long tableRef(Rt rt, long t, int i) { return 0x7000 + i; }
     }
+    internal static int TableCount(Rt rt, long t) { return Table.tableCount(rt, t); }
+    internal static long TableRef(Rt rt, long t, int i) { return Table.tableRef(rt, t, i); }
     internal static class Num { internal static long Add(Rt rt, long a, long b) { return a + b; } }
     // `seq`'s collaborators -- see the Java copy.
     internal static class Maps { internal static long EntryVector(Rt rt, long m) { return rt.Slot(m, 0); } }
     internal static class Sets { internal static long ElementVector(Rt rt, long m) { return rt.Slot(m, 0); } }
+    internal static long MapEntryVector(Rt rt, long m) { return Maps.EntryVector(rt, m); }
+    internal static long SetElementVector(Rt rt, long m) { return Sets.ElementVector(rt, m); }
     internal static bool RangeEmpty(Rt rt, long v) { return rt.Slot(v, 0) >= rt.Slot(v, 1); }
     internal static string Describe(Rt rt, long v) {
         if (Val.IsNil(v)) return "nil";

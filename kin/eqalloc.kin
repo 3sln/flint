@@ -17,8 +17,9 @@
 ;; `category`, the ports keep it on `Rt` -- so a single region cannot span
 ;; `category` through here in all three files.
 (ns flint.rt.eqalloc
-  (:require [flint.impl.rt :refer [defn doc return if and not != is-heap category
-                                   Rt Value Bool CAT_SCALAR]]))
+  (:require [flint.impl.rt :refer [defn doc return if and not != is-heap Rt
+                                   Value Bool CAT_SCALAR]]
+            [flint.rt.eq :refer [category]]))
 
 (doc "Can `=` or `hash` on this value allocate?"
      ""

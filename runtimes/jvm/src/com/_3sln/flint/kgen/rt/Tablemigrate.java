@@ -49,7 +49,7 @@ public final class Tablemigrate {
                 id = width;
                 width += 1;
             }
-            long dv = Vec.conj(rt, rt.r(di), Val.fixnum(id & 0xFFFFFFFFL));
+            long dv = vecConj(rt, rt.r(di), Val.fixnum(id & 0xFFFFFFFFL));
             rt.setR(di, dv);
             long m = mapAssoc(rt, rt.r(ii), rt.r(ni), Val.fixnum(id & 0xFFFFFFFFL));
             rt.setR(ii, m);
@@ -105,7 +105,7 @@ public final class Tablemigrate {
                     rt.popTo(base);
                     return rt.throwStr("IllegalArgumentException", "the new schema adds :" + nm + " and the table has no values for it; give it a default -- (migrate t s {:" + nm + " v}) -- or compute one per row: (migrate t s (fn [row] ...))");
                 }
-                if (!Table.typeOk(rt, wantTy, dv)) {
+                if (!typeOk(rt, wantTy, dv)) {
                     String nm = kwName(rt, rt.r(nmi));
                     String wt = kwName(rt, wantTy);
                     long gk = rt.kindOf(dv);
@@ -128,7 +128,7 @@ public final class Tablemigrate {
                 rt.popTo(base);
                 return Val.NIL;
             }
-            long ch = Vec.nth(rt, rt.r(ci), k, Val.NIL);
+            long ch = vecNth(rt, rt.r(ci), k, Val.NIL);
             int chi = rt.push(ch);
             int rows = chunkRows(rt, rt.r(chi));
             long nc = newChunk(rt, width, rows);
@@ -154,7 +154,7 @@ public final class Tablemigrate {
                     rt.setSlot(Val.asHeap(rt.slot(rt.r(ni), Table.CH_ENC)), id, Val.fixnum(Table.ENC_CONST & 0xFFFFFFFFL));
                 }
             }
-            long ov = Vec.conj(rt, rt.r(oi), rt.r(ni));
+            long ov = vecConj(rt, rt.r(oi), rt.r(ni));
             rt.setR(oi, ov);
             rt.popTo(chi);
         }

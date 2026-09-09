@@ -8,17 +8,17 @@
 ;; These are ORDINARY errors and not `#?(:flint/check ...)`: a closed table
 ;; that accepted a bad row in a release build would not be closed (`0026`).
 (ns flint.rt.tablesay
-  (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   == != > >= < not nil?
-                                   slot vec-nth mark push r set-r pop-to
-                                   local set for while
-                                   value-text name-of  kind-of type-ok own-text
-                                   seq-of first-of next-of slot-or-nth
-                                   charge-work throw-str str-cat static-text
-                                   Rt Value I32 Bool Text RootIx
+  (:require [flint.impl.rt :refer [defn return if let do comment doc == != >
+                                   >= < not nil? slot mark push r set-r pop-to
+                                   local set for while value-text name-of
+                                   kind-of own-text seq-of first-of next-of
+                                   slot-or-nth charge-work throw-str str-cat
+                                   static-text Rt Value I32 Bool Text RootIx
                                    NIL NOT_FOUND SC_NAMES SC_TYPES RF_SCHEMA]]
-            [flint.rt.tablemeta :refer [schema-len schema-width schema-name-at
-                                        is-table-ref]]
+            [flint.rt.tablekind :refer [type-ok]]
+            [flint.rt.vecread :refer [vec-nth]]
+            [flint.rt.tablemeta :refer [is-table-ref schema-len schema-name-at
+                                        schema-width]]
             [flint.rt.tableref :refer [schema-id]]
             [flint.rt.tablecell :refer [row-column]]
             [flint.rt.mapcore :refer [is-map map-count]]

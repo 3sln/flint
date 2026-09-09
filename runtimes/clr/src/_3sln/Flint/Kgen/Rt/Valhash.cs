@@ -159,10 +159,10 @@ public static class Valhash {
             return HashOrdered(rt, v);
         }
         if ((t == Obj.TyArraymap) || (t == Obj.TyHashmap)) {
-            return Maps.Hash(rt, v);
+            return HashMap(rt, v);
         }
         if (t == Obj.TySet) {
-            return Sets.Hash(rt, v);
+            return HashSet(rt, v);
         }
         // AN OPAQUE VALUE CARRIES ITS OWN IDENTITY, assigned at creation
         // and STORED (`0022`). The per-type constant below would be
@@ -183,13 +183,13 @@ public static class Valhash {
         if (t == Obj.TyTable) {
             int @base = rt.Mark();
             int vi = rt.Push(v);
-            int n = Table.tableCount(rt, rt.R(vi));
+            int n = TableCount(rt, rt.R(vi));
             int acc;
             int i;
             acc = 1;
             i = 0;
             while (i < n) {
-                long row = Table.tableRef(rt, rt.R(vi), i);
+                long row = TableRef(rt, rt.R(vi), i);
                 int ri = rt.Push(row);
                 int h = HashValue(rt, rt.R(ri));
                 rt.PopTo(ri);

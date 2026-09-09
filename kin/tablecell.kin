@@ -5,18 +5,17 @@
 ;; field -- and `collapse` is what makes a column of one repeated value cost
 ;; one slot instead of 256.
 (ns flint.rt.tablecell
-  (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   == != >= > < + - ushr bit-and not nil?
-                                   is-heap as-heap ty olen slot set-slot
-                                   fixnum vec-nth val-eq new-obj charge-work
-                                   local set for break
-                                   mark push r pop-to
-                                   Rt Value I32 Bool RootIx Ty NIL NOT_FOUND
-                                   TY_NODE TY_TTABLE
-                                   SC_NAMES TB_CHUNKS CHUNK CHUNK_SHIFT
-                                   CH_ROWS CH_ENC CH_BASE ENC_FLAT ENC_CONST]]
-            [flint.rt.tablemeta :refer [schema-len schema-name-at is-table-ref
-                                        table-offset chunk-get]]
+  (:require [flint.impl.rt :refer [defn return if let do comment doc == != >=
+                                   > < + - ushr bit-and not nil? is-heap
+                                   as-heap ty olen slot set-slot fixnum val-eq
+                                   new-obj charge-work local set for break
+                                   mark push r pop-to Rt Value I32 Bool RootIx
+                                   Ty NIL NOT_FOUND TY_NODE TY_TTABLE SC_NAMES
+                                   TB_CHUNKS CHUNK CHUNK_SHIFT CH_ROWS CH_ENC
+                                   CH_BASE ENC_FLAT ENC_CONST]]
+            [flint.rt.vecread :refer [vec-nth]]
+            [flint.rt.tablemeta :refer [chunk-get is-table-ref schema-len
+                                        schema-name-at table-offset]]
             [flint.rt.tableref :refer [ref-get]]
             [flint.rt.mapread :refer [map-get]]))
 

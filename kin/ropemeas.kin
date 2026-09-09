@@ -16,8 +16,13 @@
                                    leaf-len leaf-byte slot as-fixnum to-i32
                                    str-is-ascii or ty
                                    Rt Value I32 Bool Ty RP_BYTES RP_CPS
-                                   TY_STR TY_ROPE]]
-            [flint.rt.ropecat :refer [is-rope]]))
+                                   TY_STR TY_ROPE]]))
+
+(doc "Is `v` the NODE tier -- a tree rather than a leaf or an inline string?")
+(defn ^:pub ^:method ^Bool is-rope [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return false))
+  (return (== (ty rt (as-heap v)) TY_ROPE)))
 
 (doc "Is `v` a STRING -- any of the three tiers?"
      ""

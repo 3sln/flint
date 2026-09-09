@@ -13,19 +13,22 @@
 (ns flint.rt.tablemigrate
   (:require [flint.impl.rt :refer [defn return if let do comment doc == != < +
                                    not val-eq alloc heap slot set-slot fixnum
-                                   vec-nth vec-conj empty-vec empty-map mark
-                                   push r set-r pop-to for local set
-                                   charge-checked throw-str str-cat
-                                   static-text kind-of type-ok Rt Value I32
-                                   RootIx Text NIL NOT_FOUND TY_SCHEMA
-                                   TY_TABLE SC_NAMES SC_TYPES SC_INDEX SC_IDS
-                                   SC_WIDTH SC_LEN CH_BASE CH_ENC ENC_CONST
-                                   TB_SCHEMA TB_CHUNKS TB_COUNT TB_OFFSET
-                                   TB_LEN]]
+                                   empty-vec empty-map mark push r set-r
+                                   pop-to for local set charge-checked
+                                   throw-str str-cat static-text kind-of Rt
+                                   Value I32 RootIx Text NIL NOT_FOUND
+                                   TY_SCHEMA TY_TABLE SC_NAMES SC_TYPES
+                                   SC_INDEX SC_IDS SC_WIDTH SC_LEN CH_BASE
+                                   CH_ENC ENC_CONST TB_SCHEMA TB_CHUNKS
+                                   TB_COUNT TB_OFFSET TB_LEN]]
+            [flint.rt.tablekind :refer [type-ok]]
+            [flint.rt.vecwrite :refer [vec-conj]]
+            [flint.rt.vecread :refer [vec-nth]]
             [flint.rt.vector :refer [vec-count]]
-            [flint.rt.tablemeta :refer [schema-len schema-width schema-id-at
-                                        schema-name-at schema-type-at
-                                        table-count chunk-rows chunk-enc]]
+            [flint.rt.tablemeta :refer [chunk-enc chunk-rows schema-id-at
+                                        schema-len schema-name-at
+                                        schema-type-at schema-width
+                                        table-count]]
             [flint.rt.tableref :refer [schema-id]]
             [flint.rt.tablecell :refer [new-chunk schema-pos-of]]
             [flint.rt.tablesay :refer [kw-name]]

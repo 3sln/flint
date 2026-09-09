@@ -60,7 +60,7 @@ public final class Tabletrans {
         long open0 = openChunk(rt, rt.r(si));
         int oi = rt.push(open0);
         if (partial > 0) {
-            long last = Vec.nth(rt, rt.r(ci), full >>> Table.CHUNK_SHIFT, Val.NIL);
+            long last = vecNth(rt, rt.r(ci), full >>> Table.CHUNK_SHIFT, Val.NIL);
             int li = rt.push(last);
             int ncols = schemaLen(rt, rt.r(si));
             rt.chargeWork(partial * ncols);
@@ -72,7 +72,7 @@ public final class Tabletrans {
                     rt.setSlot(Val.asHeap(col), k, v);
                 }
             }
-            long popped = Vec.pop(rt, rt.r(ci));
+            long popped = vecPop(rt, rt.r(ci));
             rt.setR(ci, popped);
             rt.popTo(li);
         }
@@ -104,7 +104,7 @@ public final class Tabletrans {
         int ri = rt.push(row);
         int si = rt.push(rt.slot(rt.r(ti), Table.TT_SCHEMA));
         int count = (int) Val.asFixnum(rt.slot(rt.r(ti), Table.TT_COUNT));
-        if (!Table.checkRow(rt, rt.r(si), rt.r(ri), count)) {
+        if (!checkRow(rt, rt.r(si), rt.r(ri), count)) {
             rt.popTo(base);
             return Val.NIL;
         }
@@ -119,7 +119,7 @@ public final class Tabletrans {
                 collapse(rt, rt.r(oi), id);
             }
             long chunks = rt.slot(rt.r(ti), Table.TT_CHUNKS);
-            long grown = Vec.conj(rt, chunks, rt.r(oi));
+            long grown = vecConj(rt, chunks, rt.r(oi));
             rt.setSlot(Val.asHeap(rt.r(ti)), Table.TT_CHUNKS, grown);
             long fresh = openChunk(rt, rt.r(si));
             rt.setSlot(Val.asHeap(rt.r(ti)), Table.TT_OPEN, fresh);
@@ -146,7 +146,7 @@ public final class Tabletrans {
         if (fill > 0) {
             long sealed = seal(rt, rt.r(si), rt.r(oi), fill);
             int sj = rt.push(sealed);
-            long grown = Vec.conj(rt, rt.r(ci), rt.r(sj));
+            long grown = vecConj(rt, rt.r(ci), rt.r(sj));
             rt.setR(ci, grown);
             rt.popTo(sj);
         }

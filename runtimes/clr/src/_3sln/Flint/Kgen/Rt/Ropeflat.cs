@@ -114,7 +114,7 @@ public static class Ropeflat {
             long k = rt.Slot(rt.R(vi), global::Flint.Rt.Str.RP_KIDS + i);
             int ki = rt.Push(k);
             int kh = RopeHash(rt, rt.R(ki));
-            int kb = Str.SBytes(rt, rt.R(ki));
+            int kb = SBytes(rt, rt.R(ki));
             h = unchecked(unchecked(h * Pow31(rt, kb)) + kh);
             rt.PopTo(ki);
         }
@@ -180,7 +180,7 @@ public static class Ropeflat {
         at = 0;
         for (int i = 0; i < n; i++) {
             long k = rt.Slot(v, global::Flint.Rt.Str.RP_KIDS + i);
-            int w = Str.SBytes(rt, k);
+            int w = SBytes(rt, k);
             if (((at + w) > from) && (at < to)) {
                 // GUARDED, not clamped after the fact. `I32` is `u32` in
                 // Rust, where `(- from at)` wraps to a huge number and a

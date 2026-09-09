@@ -214,6 +214,8 @@ fn main() {
         static long nth(Rt rt, long v, int i, long d) { return i < rt.vecn ? 0x940L + i : d; }
         static long mapEntryAsVec(Rt rt, long e) { return rt.obj(TY_VEC); }
     }
+    static long vecAssoc(Rt rt, long v, int i, long x) { return Vec.assoc(rt, v, i, x); }
+    static long vecNth(Rt rt, long v, int i, long d) { return Vec.nth(rt, v, i, d); }
     static long seq(Rt rt, long c) { return rt.seqn == 0 ? NIL : 0xC000L + rt.seqn; }
     static long first(Rt rt, long s) { return 0x950L + (s - 0xC000L); }
     static long next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
@@ -364,6 +366,8 @@ namespace Flint.Rt {
         internal static long Nth(Rt rt, long v, int i, long d) { return i < rt.vecn ? 0x940L + i : d; }
         internal static long MapEntryAsVec(Rt rt, long e) { return rt.Obj_(Obj.TyVec); }
     }
+    internal static long VecAssoc(Rt rt, long v, int i, long x) { return Vec.Assoc(rt, v, i, x); }
+    internal static long VecNth(Rt rt, long v, int i, long d) { return Vec.Nth(rt, v, i, d); }
     internal static long Seq(Rt rt, long c) { return rt.seqn == 0 ? NIL : 0xC000L + rt.seqn; }
     internal static long First(Rt rt, long s) { return 0x950L + (s - 0xC000L); }
     internal static long Next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }

@@ -19,14 +19,15 @@
 ;; generated walk in this port charged nothing at all and no gate noticed.
 (ns flint.rt.collvec
   (:require [flint.impl.rt :refer [defn return if let local set do comment doc
-                                   for == != not
-                                   mark push r set-r pop-to slot ty as-heap
-                                   nil? popcount is-bmnode charge-work
-                                   charge-checked empty-vec vec-conj
-                                   bn-datamap bn-nodemap bn-key bn-val bn-node
-                                   cn-count cn-key cn-val
-                                   Rt Value RootIx I32 Ty NIL
-                                   HM_ROOT S_MAP TY_ARRAYMAP]]
+                                   for == != not mark push r set-r pop-to slot
+                                   ty as-heap nil? popcount charge-work
+                                   charge-checked empty-vec Rt Value RootIx
+                                   I32 Ty NIL HM_ROOT S_MAP TY_ARRAYMAP]]
+            [flint.rt.vecwrite :refer [vec-conj]]
+            [flint.rt.nodeclass :refer [is-bmnode]]
+            [flint.rt.collnode :refer [cn-count cn-key cn-val]]
+            [flint.rt.champ :refer [bn-datamap bn-key bn-node bn-nodemap
+                                    bn-val]]
             [flint.rt.mapcore :refer [map-count am-key am-val map-entry]]
             [flint.rt.setcore :refer [set-count]]))
 

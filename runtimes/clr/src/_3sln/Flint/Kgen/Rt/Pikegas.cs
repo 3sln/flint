@@ -32,7 +32,7 @@ public static class Pikegas {
     /// bound the work rather than bill for it afterwards, so a pathological
     /// pattern hits the budget rather than the wall clock.
     public static int ChargeSubject(Rt rt, long s) {
-        int n = Str.SBytes(rt, s);
+        int n = SBytes(rt, s);
         rt.ChargeBytes(n);
         return n;
     }

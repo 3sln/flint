@@ -18,7 +18,7 @@ public final class Ropeeq {
         if (a == b) {
             return true;
         }
-        if (Str.sBytes(rt, a) != Str.sBytes(rt, b)) {
+        if (sBytes(rt, a) != sBytes(rt, b)) {
             return false;
         }
         int wa = rt.walkOpen(a);

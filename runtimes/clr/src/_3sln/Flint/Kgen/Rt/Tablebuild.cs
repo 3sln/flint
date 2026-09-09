@@ -55,9 +55,9 @@ public static class Tablebuild {
                 int coli = rt.Push(col);
                 long name = SchemaNameAt(rt, rt.R(si), c);
                 long types = rt.Slot(rt.R(si), global::Flint.Rt.Table.SC_TYPES);
-                long tp = Vec.Nth(rt, types, c, Val.Nil);
+                long tp = VecNth(rt, types, c, Val.Nil);
                 for (int k = 0; k < take; k++) {
-                    long rowv = Vec.Nth(rt, rt.R(ri), row + k, Val.Nil);
+                    long rowv = VecNth(rt, rt.R(ri), row + k, Val.Nil);
                     long val = MapGet(rt, rowv, name, Val.Nil);
                     if (!TypeOk(rt, tp, val)) {
                         string msg = ColumnTypeError(rt, name, tp, val, row + k);
@@ -70,7 +70,7 @@ public static class Tablebuild {
                 Collapse(rt, rt.R(chi), id);
                 rt.PopTo(coli);
             }
-            long nv = Vec.Conj(rt, rt.R(ci), rt.R(chi));
+            long nv = VecConj(rt, rt.R(ci), rt.R(chi));
             rt.SetR(ci, nv);
             rt.PopTo(chi);
             row += take;
@@ -111,14 +111,14 @@ public static class Tablebuild {
             int chi = rt.Push(ch);
             for (int c = 0; c < ncols; c++) {
                 int id = SchemaIdAt(rt, rt.R(si), c);
-                long src = Vec.Nth(rt, rt.R(ci), c, Val.Nil);
+                long src = VecNth(rt, rt.R(ci), c, Val.Nil);
                 int sj = rt.Push(src);
                 long types = rt.Slot(rt.R(si), global::Flint.Rt.Table.SC_TYPES);
-                long tp = Vec.Nth(rt, types, c, Val.Nil);
+                long tp = VecNth(rt, types, c, Val.Nil);
                 long col = Conc.NewObj(rt, Obj.TyNode, take);
                 int cj = rt.Push(col);
                 for (int k = 0; k < take; k++) {
-                    long v = Vec.Nth(rt, rt.R(sj), row + k, Val.Nil);
+                    long v = VecNth(rt, rt.R(sj), row + k, Val.Nil);
                     if (!TypeOk(rt, tp, v)) {
                         long name = SchemaNameAt(rt, rt.R(si), c);
                         string msg = ColumnTypeError(rt, name, tp, v, row + k);
@@ -131,7 +131,7 @@ public static class Tablebuild {
                 Collapse(rt, rt.R(chi), id);
                 rt.PopTo(sj);
             }
-            long nv = Vec.Conj(rt, rt.R(ki), rt.R(chi));
+            long nv = VecConj(rt, rt.R(ki), rt.R(chi));
             rt.SetR(ki, nv);
             rt.PopTo(chi);
             row += take;

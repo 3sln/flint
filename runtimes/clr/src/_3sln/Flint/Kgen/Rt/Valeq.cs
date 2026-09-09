@@ -13,6 +13,7 @@ using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Byteeq;
 using static global::_3sln.Flint.Kgen.Rt.Eq;
+using static global::_3sln.Flint.Kgen.Rt.Mapeq;
 using static global::_3sln.Flint.Kgen.Rt.Numkind;
 using static global::_3sln.Flint.Kgen.Rt.Ropeeq;
 using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
@@ -143,7 +144,7 @@ public static class Valeq {
             return SeqEq(rt, a, b);
         }
         if (ca == CAT_MAP) {
-            return Maps.Eq(rt, a, b);
+            return MapEq(rt, a, b);
         }
         if (ca == CAT_SET) {
             return Sets.Eq(rt, a, b);
@@ -157,13 +158,13 @@ public static class Valeq {
         // values do not. Byte strings compare by content across both tiers
         // for the same reason.
         if (((ta == Obj.TyStr) || (ta == Obj.TyRope)) && ((tb == Obj.TyStr) || (tb == Obj.TyRope))) {
-            if (Str.SBytes(rt, a) != Str.SBytes(rt, b)) {
+            if (SBytes(rt, a) != SBytes(rt, b)) {
                 return false;
             }
             // BOTH INTERNED AND NOT BIT-EQUAL MEANS NOT EQUAL, with no
             // need to look at the bytes at all. Only flat strings are
             // interned, so a rope on either side has to be walked.
-            if (((ta == Obj.TyStr) && (tb == Obj.TyStr)) && (Str.SBytes(rt, a) <= global::Flint.Rt.Interns.InternMax)) {
+            if (((ta == Obj.TyStr) && (tb == Obj.TyStr)) && (SBytes(rt, a) <= global::Flint.Rt.Interns.InternMax)) {
                 return false;
             }
             // WALKED, not copied. Building a byte array of both sides
@@ -184,8 +185,8 @@ public static class Valeq {
             if (ta != tb) {
                 return false;
             }
-            int na = Table.tableCount(rt, a);
-            int nb = Table.tableCount(rt, b);
+            int na = TableCount(rt, a);
+            int nb = TableCount(rt, b);
             if (na != nb) {
                 return false;
             }
@@ -207,9 +208,9 @@ public static class Valeq {
             i = 0;
             same = true;
             while (i < na) {
-                long ra = Table.tableRef(rt, rt.R(ai), i);
+                long ra = TableRef(rt, rt.R(ai), i);
                 int ri = rt.Push(ra);
-                long rb = Table.tableRef(rt, rt.R(bi), i);
+                long rb = TableRef(rt, rt.R(bi), i);
                 bool one = ValEq(rt, rt.R(ri), rb);
                 rt.PopTo(ri);
                 if (!one) {

@@ -19,6 +19,8 @@ use crate::value::{Value, NIL};
 
 impl Rt {
     /// Canonical integer: fixnum when it fits, boxed otherwise.
+    // @kin:link:ns: flint.rt.num
+    // @kin:link:form:integer: {:template "{0}.integer({1})"}
     pub fn integer(&mut self, n: i64) -> Value {
         if Value::fits_fixnum(n) {
             return Value::fixnum(n);
@@ -68,6 +70,7 @@ impl Rt {
         self.throw_str("ArithmeticException", "integer overflow")
     }
 
+    // @kin:link:form:num-add: {:template "{0}.num_add({1}, {2})"}
     pub fn num_add(&mut self, a: Value, b: Value) -> Value {
         if let (Some(x), Some(y)) = (self.as_i64(a), self.as_i64(b)) {
             match x.checked_add(y) {

@@ -15,7 +15,7 @@ using static global::_3sln.Flint.Kgen.Rt.Champ;
 using static global::_3sln.Flint.Kgen.Rt.Collnode;
 
 public static class Merge {
-    internal static long MergeTwo(Rt rt, int shift, long k0, long v0, int h0, long k1, long v1, int h1, long edit) {
+    public static long MergeTwo(Rt rt, int shift, long k0, long v0, int h0, long k1, long v1, int h1, long edit) {
         int mk = rt.Mark();
         int ik0 = rt.Push(k0);
         int iv0 = rt.Push(v0);

@@ -245,6 +245,8 @@ impl Rt {
     }
 
     /// Hash of a string value, cached in the object for heap strings.
+    // @kin:link:ns: flint.rt.strs
+    // @kin:link:form:string-hash: {:template "{0}.string_hash({1})"}
     pub fn string_hash(&mut self, v: Value) -> u32 {
         if v.is_inline_str() {
             let mut b = [0u8; INLINE_MAX];
@@ -377,6 +379,7 @@ impl Rt {
 
     // --- predicates and accessors -----------------------------------------
 
+    // @kin:link:form:keyword-hash: {:template "{0}.keyword_hash({1})"}
     pub fn keyword_hash(&self, v: Value) -> u32 {
         if v.is_inline_kw() {
             let mut b = [0u8; INLINE_MAX];

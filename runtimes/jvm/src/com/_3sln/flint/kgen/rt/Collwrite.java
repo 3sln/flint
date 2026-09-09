@@ -46,7 +46,7 @@ public final class Collwrite {
                 long i = Num.i64Of(rt, k);
                 if (i >= 0) {
                     if (((int) i) <= Vec.count(rt, coll)) {
-                        return Vec.assoc(rt, coll, (int) i, v);
+                        return vecAssoc(rt, coll, (int) i, v);
                     }
                 }
             }
@@ -154,7 +154,7 @@ public final class Collwrite {
         }
         if (Val.isHeap(coll)) {
             if (ty(rt.gc.sp, Val.asHeap(coll)) == TY_VEC) {
-                long x = Vec.nth(rt, coll, i, Val.NOT_FOUND);
+                long x = vecNth(rt, coll, i, Val.NOT_FOUND);
                 if (x != Val.NOT_FOUND) {
                     return x;
                 }

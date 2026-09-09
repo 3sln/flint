@@ -47,7 +47,7 @@ public final class Tablesay {
         out = "";
         for (int c = 0; c < n; c++) {
             long names = rt.slot(s, Table.SC_NAMES);
-            long name = Vec.nth(rt, names, c, Val.NIL);
+            long name = vecNth(rt, names, c, Val.NIL);
             String shown = kwName(rt, name);
             if (c > 0) {
                 out = out + " ";
@@ -132,7 +132,7 @@ public final class Tablesay {
             long val = rowColumn(rt, rt.r(si), rt.r(ri), c);
             int vi = rt.push(val);
             long names = rt.slot(rt.r(si), Table.SC_NAMES);
-            long name = Vec.nth(rt, names, c, Val.NIL);
+            long name = vecNth(rt, names, c, Val.NIL);
             int ni = rt.push(name);
             if (rt.r(vi) == Val.NOT_FOUND) {
                 String nm = kwName(rt, rt.r(ni));
@@ -142,8 +142,8 @@ public final class Tablesay {
                 return false;
             }
             long types = rt.slot(rt.r(si), Table.SC_TYPES);
-            long tp = Vec.nth(rt, types, c, Val.NIL);
-            if (!Table.typeOk(rt, tp, rt.r(vi))) {
+            long tp = vecNth(rt, types, c, Val.NIL);
+            if (!typeOk(rt, tp, rt.r(vi))) {
                 String msg = columnTypeError(rt, rt.r(ni), tp, rt.r(vi), rowno);
                 rt.popTo(base);
                 rt.throwStr("IllegalArgumentException", msg);

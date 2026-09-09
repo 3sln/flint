@@ -11,20 +11,22 @@
 ;; knowing before trusting gas as a proxy for work: it measures the program,
 ;; not the runtime underneath it.
 (ns flint.rt.tabletrans
-  (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   == != > + - * bit-and bit-or not ushr
-                                   slot set-slot fixnum as-fixnum to-i32 heap
-                                   alloc vec-nth vec-conj vec-pop charge-work
-                                   check-row throw-str str-cat static-text
-                                   local set for mark push r set-r pop-to
-                                   Rt Value I32 Bool RootIx StaticText NIL TRUE FALSE
-                                   TY_TABLE TY_TTABLE CHUNK CHUNK_SHIFT
-                                   CH_ROWS CH_BASE
-                                   TB_SCHEMA TB_CHUNKS TB_COUNT TB_OFFSET TB_LEN
-                                   TT_SCHEMA TT_CHUNKS TT_COUNT TT_OPEN
-                                   TT_LIVE TT_LEN]]
-            [flint.rt.tablemeta :refer [schema-len schema-id-at table-count
-                                        chunk-rows chunk-get]]
+  (:require [flint.impl.rt :refer [defn return if let do comment doc == != > +
+                                   - * bit-and bit-or not ushr slot set-slot
+                                   fixnum as-fixnum to-i32 heap alloc
+                                   charge-work throw-str str-cat static-text
+                                   local set for mark push r set-r pop-to Rt
+                                   Value I32 Bool RootIx StaticText NIL TRUE
+                                   FALSE TY_TABLE TY_TTABLE CHUNK CHUNK_SHIFT
+                                   CH_ROWS CH_BASE TB_SCHEMA TB_CHUNKS
+                                   TB_COUNT TB_OFFSET TB_LEN TT_SCHEMA
+                                   TT_CHUNKS TT_COUNT TT_OPEN TT_LIVE TT_LEN]]
+            [flint.rt.tablesay :refer [check-row]]
+            [flint.rt.vecwrite :refer [vec-conj]]
+            [flint.rt.vecread :refer [vec-nth]]
+            [flint.rt.vecassoc :refer [vec-pop]]
+            [flint.rt.tablemeta :refer [chunk-get chunk-rows schema-id-at
+                                        schema-len table-count]]
             [flint.rt.tablecell :refer [collapse]]
             [flint.rt.tablefill :refer [open-chunk write-row seal]]))
 

@@ -15,13 +15,6 @@ using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 using static global::_3sln.Flint.Kgen.Rt.Ropenode;
 
 public static class Ropecat {
-    /// Is `v` the NODE tier -- a tree rather than a leaf or an inline string?
-    public static bool IsRope(Rt rt, long v) {
-        if (!Val.IsHeap(v)) {
-            return false;
-        }
-        return Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyRope;
-    }
     /// How many children this node has.
     public static int RopeKids(Rt rt, long v) {
         return Olen(rt, v) - global::Flint.Rt.Str.RP_KIDS;
@@ -95,15 +88,15 @@ public static class Ropecat {
     }
     /// `a` followed by `b`, as a string.
     public static long SConcat(Rt rt, long a, long b) {
-        if (Str.SBytes(rt, a) == 0) {
+        if (SBytes(rt, a) == 0) {
             return b;
         }
-        if (Str.SBytes(rt, b) == 0) {
+        if (SBytes(rt, b) == 0) {
             return a;
         }
         // Small enough that a tree would cost more in metadata than the copy
         // saves. This is the tier that must NOT be skipped.
-        if ((Str.SBytes(rt, a) + Str.SBytes(rt, b)) <= global::Flint.Rt.Str.FLAT_MAX) {
+        if ((SBytes(rt, a) + SBytes(rt, b)) <= global::Flint.Rt.Str.FLAT_MAX) {
             return Str.CopyConcat(rt, a, b);
         }
         long appended = RopeAppend(rt, a, b);

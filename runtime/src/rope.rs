@@ -85,6 +85,8 @@ impl Rt {
     /// `SLICE_MIN` exists to force this path for a small range -- a three-byte
     /// slice must not keep a 509 KB section alive -- so this is policy rather
     /// than a fallback.
+    // @kin:link:ns: flint.rt.strs
+    // @kin:link:form:s-copy-range: {:template "{0}.s_copy_range({1}, {2}, {3})"}
     pub(crate) fn s_copy_range(&mut self, v: Value, from: u32, to: u32) -> Value {
         let base = self.mark();
         let vi = self.push(v);
@@ -99,6 +101,7 @@ impl Rt {
     /// The empty string. INTERNED rather than allocated, unlike `b_empty`'s
     /// byte leaf: an empty string is an inline value here, so there is nothing
     /// to allocate and the generated half cannot build one itself.
+    // @kin:link:form:s-empty: {:template "{0}.s_empty()"}
     pub(crate) fn s_empty(&mut self) -> Value {
         self.string("")
     }
@@ -106,6 +109,7 @@ impl Rt {
     /// `pub(crate)` because the generated rope half calls it: flattening two
     /// strings into one leaf needs a byte sink, so it stays hand-written and
     /// the boundary between the halves is a module boundary.
+    // @kin:link:form:s-concat-copy: {:template "{0}.copy_concat({1}, {2})"}
     pub(crate) fn copy_concat(&mut self, a: Value, b: Value) -> Value {
         // Charged where the bytes actually move. A tree join moves none, which
         // is what makes repeated concatenation linear in gas as well as in time

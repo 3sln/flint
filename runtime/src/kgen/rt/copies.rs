@@ -18,7 +18,7 @@ use crate::kgen::rt::pike::*;
 use crate::kgen::rt::casetable::*;
 
 impl Rt {
-    pub(crate) fn bn_copy_insert_entry(&mut self, n: Value, bit: u32, key: Value, val: Value, edit: Value) -> Value {
+    pub fn bn_copy_insert_entry(&mut self, n: Value, bit: u32, key: Value, val: Value, edit: Value) -> Value {
         let mk: usize = self.mark();
         let ni: usize = self.push(n);
         let ki: usize = self.push(key);
@@ -62,7 +62,7 @@ impl Rt {
         self.pop_to(mk);
         return built;
     }
-    pub(crate) fn bn_copy_remove_entry(&mut self, n: Value, bit: u32, edit: Value) -> Value {
+    pub fn bn_copy_remove_entry(&mut self, n: Value, bit: u32, edit: Value) -> Value {
         let mk: usize = self.mark();
         let ni: usize = self.push(n);
         let ei: usize = self.push(edit);
@@ -102,7 +102,7 @@ impl Rt {
         self.pop_to(mk);
         return built;
     }
-    pub(crate) fn bn_copy_set_value(&mut self, n: Value, at: u32, val: Value, edit: Value) -> Value {
+    pub fn bn_copy_set_value(&mut self, n: Value, at: u32, val: Value, edit: Value) -> Value {
         let mk: usize = self.mark();
         let ni: usize = self.push(n);
         let vi: usize = self.push(val);
@@ -141,7 +141,7 @@ impl Rt {
         self.pop_to(mk);
         return built;
     }
-    pub(crate) fn bn_copy_set_node(&mut self, n: Value, at: u32, sub: Value, edit: Value) -> Value {
+    pub fn bn_copy_set_node(&mut self, n: Value, at: u32, sub: Value, edit: Value) -> Value {
         let mk: usize = self.mark();
         let ni: usize = self.push(n);
         let si: usize = self.push(sub);
@@ -184,7 +184,7 @@ impl Rt {
     /// positions are computed from the OLD bitmaps -- `at-node` is the index in
     /// the new nodemap as well, because the bit being added is the one being
     /// counted up to.
-    pub(crate) fn bn_inline_to_node(&mut self, n: Value, bit: u32, sub: Value, edit: Value) -> Value {
+    pub fn bn_inline_to_node(&mut self, n: Value, bit: u32, sub: Value, edit: Value) -> Value {
         let mk: usize = self.mark();
         let ni: usize = self.push(n);
         let si: usize = self.push(sub);
@@ -233,7 +233,7 @@ impl Rt {
         return built;
     }
     /// And the reverse: a sub-node collapses back to an inline pair.
-    pub(crate) fn bn_node_to_inline(&mut self, n: Value, bit: u32, key: Value, val: Value, edit: Value) -> Value {
+    pub fn bn_node_to_inline(&mut self, n: Value, bit: u32, key: Value, val: Value, edit: Value) -> Value {
         let mk: usize = self.mark();
         let ni: usize = self.push(n);
         let ki: usize = self.push(key);

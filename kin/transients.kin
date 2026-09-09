@@ -33,8 +33,7 @@
                                         tvec-persistent]]
             [flint.rt.tabletrans :refer [table-transient ttable-conj
                                          ttable-persistent]]
-            [flint.rt.numkind :refer [is-int]]
-))
+            [flint.rt.numkind :refer [is-int]]))
 
 (doc "Refuse a non-transient, NAMING it."
      ""

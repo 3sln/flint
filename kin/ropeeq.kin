@@ -15,14 +15,14 @@
 ;; other side is peeked, and two slices of one string skip the shared leaf
 ;; without a byte being read.
 (ns flint.rt.ropeeq
-  (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   == != < > not and nil? is-heap as-heap
-                                   is-inline-str leaf-len leaf-byte
-                                   + - local set forever break continue to-addr
-                                   run-eq s-bytes
-                                   walk-open walk-close walk-dup walk-take
-                                   walk-next walk-done
-                                   Rt Value I32 Bool Walk NIL STR_DATA]]))
+  (:require [flint.impl.rt :refer [defn return if let do comment doc == != < >
+                                   not and nil? is-heap as-heap is-inline-str
+                                   leaf-len leaf-byte + - local set forever
+                                   break continue to-addr run-eq walk-open
+                                   walk-close walk-dup walk-take walk-next
+                                   walk-done Rt Value I32 Bool Walk NIL
+                                   STR_DATA]]
+            [flint.rt.ropemeas :refer [s-bytes]]))
 
 (doc "Do `a` and `b` hold the same bytes, whatever shape they are in?")
 (defn ^:pub ^:method ^Bool tree-eq [^:mut ^Rt rt ^Value a ^Value b]

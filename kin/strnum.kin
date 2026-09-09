@@ -31,12 +31,13 @@
 ;; wide for 64 bits falls through to the decimal path rather than failing,
 ;; which is how `99999999999999999999` becomes `1.0E20` rather than nothing.
 (ns flint.rt.strnum
-  (:require [flint.impl.rt :refer [defn return if let do local set forever break
-                                   comment doc not and or == != < <= > >= + - *
-                                   quot to-i64 cps-len cps-at cps-close
-                                   integer of-double f64-of-str
-                                   Rt Bool I32 I64 F64 Value Cps NIL
-                                   I64_MIN F64_INF F64_NAN]]
+  (:require [flint.impl.rt :refer [defn return if let do local set forever
+                                   break comment doc not and or == != < <= >
+                                   >= + - * quot to-i64 cps-len cps-at
+                                   cps-close of-double f64-of-str Rt Bool I32
+                                   I64 F64 Value Cps NIL I64_MIN F64_INF
+                                   F64_NAN]]
+            [flint.rt.num :refer [integer]]
             [flint.rt.codepoints :refer [code-points]]
             [flint.rt.ropemeas :refer [is-string]]))
 

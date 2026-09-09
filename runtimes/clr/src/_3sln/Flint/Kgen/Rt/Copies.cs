@@ -15,7 +15,7 @@ using static global::_3sln.Flint.Kgen.Rt.Champ;
 using static global::_3sln.Flint.Kgen.Rt.Collnode;
 
 public static class Copies {
-    internal static long BnCopyInsertEntry(Rt rt, long n, int bit, long key, long val, long edit) {
+    public static long BnCopyInsertEntry(Rt rt, long n, int bit, long key, long val, long edit) {
         int mk = rt.Mark();
         int ni = rt.Push(n);
         int ki = rt.Push(key);
@@ -59,7 +59,7 @@ public static class Copies {
         rt.PopTo(mk);
         return built;
     }
-    internal static long BnCopyRemoveEntry(Rt rt, long n, int bit, long edit) {
+    public static long BnCopyRemoveEntry(Rt rt, long n, int bit, long edit) {
         int mk = rt.Mark();
         int ni = rt.Push(n);
         int ei = rt.Push(edit);
@@ -99,7 +99,7 @@ public static class Copies {
         rt.PopTo(mk);
         return built;
     }
-    internal static long BnCopySetValue(Rt rt, long n, int at, long val, long edit) {
+    public static long BnCopySetValue(Rt rt, long n, int at, long val, long edit) {
         int mk = rt.Mark();
         int ni = rt.Push(n);
         int vi = rt.Push(val);
@@ -138,7 +138,7 @@ public static class Copies {
         rt.PopTo(mk);
         return built;
     }
-    internal static long BnCopySetNode(Rt rt, long n, int at, long sub, long edit) {
+    public static long BnCopySetNode(Rt rt, long n, int at, long sub, long edit) {
         int mk = rt.Mark();
         int ni = rt.Push(n);
         int si = rt.Push(sub);
@@ -181,7 +181,7 @@ public static class Copies {
     /// positions are computed from the OLD bitmaps -- `at-node` is the index in
     /// the new nodemap as well, because the bit being added is the one being
     /// counted up to.
-    internal static long BnInlineToNode(Rt rt, long n, int bit, long sub, long edit) {
+    public static long BnInlineToNode(Rt rt, long n, int bit, long sub, long edit) {
         int mk = rt.Mark();
         int ni = rt.Push(n);
         int si = rt.Push(sub);
@@ -230,7 +230,7 @@ public static class Copies {
         return built;
     }
     /// And the reverse: a sub-node collapses back to an inline pair.
-    internal static long BnNodeToInline(Rt rt, long n, int bit, long key, long val, long edit) {
+    public static long BnNodeToInline(Rt rt, long n, int bit, long key, long val, long edit) {
         int mk = rt.Mark();
         int ni = rt.Push(n);
         int ki = rt.Push(key);

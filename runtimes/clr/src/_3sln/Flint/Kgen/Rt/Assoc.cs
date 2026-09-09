@@ -88,7 +88,7 @@ public static class Assoc {
         rt.PopTo(@base);
         return @out;
     }
-    internal static long CollAssoc(Rt rt, long n, int h, long key, long val, long edit, int shift) {
+    public static long CollAssoc(Rt rt, long n, int h, long key, long val, long edit, int shift) {
         int nh = CnHash(rt, n);
         if (nh != h) {
             // A different hash at this depth: the node becomes a child of

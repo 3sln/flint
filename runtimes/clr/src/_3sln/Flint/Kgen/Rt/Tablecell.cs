@@ -84,7 +84,7 @@ public static class Tablecell {
     /// `row` MAY BE ANOTHER TABLE'S ROW REF, so a row can be moved between
     /// tables without being materialised into a map first.
     public static long RowColumn(Rt rt, long s, long row, int c) {
-        long name = Vec.Nth(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES), c, Val.Nil);
+        long name = VecNth(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES), c, Val.Nil);
         if (IsTableRef(rt, row)) {
             return RefGet(rt, row, name, Val.NotFound);
         }
@@ -114,7 +114,7 @@ public static class Tablecell {
     /// One cell of a table, by column id and row. No row and no ref is built.
     public static long TableCell(Rt rt, long t, int id, int i) {
         int phys = i + TableOffset(rt, t);
-        long ch = Vec.Nth(rt, rt.Slot(t, global::Flint.Rt.Table.TB_CHUNKS), (int)((uint) phys >> global::Flint.Rt.Table.CHUNK_SHIFT), Val.Nil);
+        long ch = VecNth(rt, rt.Slot(t, global::Flint.Rt.Table.TB_CHUNKS), (int)((uint) phys >> global::Flint.Rt.Table.CHUNK_SHIFT), Val.Nil);
         return ChunkGet(rt, ch, id, phys & (global::Flint.Rt.Table.CHUNK - 1));
     }
     /// Is `v` a transient table?

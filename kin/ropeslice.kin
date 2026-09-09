@@ -10,14 +10,13 @@
 ;; carries per-node code-point counts for exactly that descent. What arrives
 ;; here has already been converted.
 (ns flint.rt.ropeslice
-  (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   == < > >= <= + - not nil?
-                                   for local set break slot
-                                   mark push r pop-to
-                                   s-bytes s-copy-range s-empty
-                                   Rt Value RootIx I32 NIL
+  (:require [flint.impl.rt :refer [defn return if let do comment doc == < > >=
+                                   <= + - not nil? for local set break slot
+                                   mark push r pop-to Rt Value RootIx I32 NIL
                                    RP_KIDS SLICE_MIN]]
-            [flint.rt.ropecat :refer [is-rope rope-kids]]
+            [flint.rt.ropemeas :refer [is-rope s-bytes]]
+            [flint.rt.strs :refer [s-copy-range s-empty]]
+            [flint.rt.ropecat :refer [rope-kids]]
             [flint.rt.ropenode :refer [rope-from-roots]]))
 
 (doc "`v` from byte `from` to byte `to`, exclusive."

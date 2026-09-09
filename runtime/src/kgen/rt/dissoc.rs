@@ -96,7 +96,7 @@ impl Rt {
         self.pop_to(base);
         return out;
     }
-    pub(crate) fn coll_dissoc(&mut self, n: Value, key: Value, edit: Value) -> Value {
+    pub fn coll_dissoc(&mut self, n: Value, key: Value, edit: Value) -> Value {
         let scan: usize = self.mark();
         let sni: usize = self.push(n);
         let ski: usize = self.push(key);

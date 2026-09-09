@@ -45,6 +45,9 @@ impl Rt {
         Value::heap(a)
     }
     fn olen(&self, v: Value) -> u32 { self.lens[v.0 as usize] }
+    fn is_rope(&self, v: Value) -> bool {
+        v.is_heap() && self.gc.sp[v.0 as usize] == TY_ROPE
+    }
     fn rope_node(&mut self, base: usize, n: u32) -> Value {
         let (mut bytes, mut cps, mut ascii) = (0u32, 0u32, true);
         for i in 0..n {
@@ -158,6 +161,9 @@ fn main() {
                         sAscii(rt, a) && sAscii(rt, b));
         }
     }
+    static boolean sAscii(Rt rt, long v) { return Str.sAscii(rt, v); }
+    static int sCount(Rt rt, long v) { return Str.sCount(rt, v); }
+    static int sBytes(Rt rt, long v) { return Str.sBytes(rt, v); }
     static final class Val {
         static final long NIL = Probe.NIL;
         static boolean isHeap(long v) { return v >= 100 && v != NIL; }
@@ -194,6 +200,9 @@ fn main() {
     }
     static int olen(Rt rt, long v) { return rt.lens[(int) v]; }
     static int ty(int[] sp, long a) { return sp[(int) a]; }
+    static boolean isRope(Rt rt, long v) {
+        return Val.isHeap(v) && rt.gc.sp[(int) v] == TY_ROPE;
+    }
     static long ropeNode(Rt rt, int base, int n) {
         int bytes = 0, cps = 0; boolean ascii = true;
         for (int i = 0; i < n; i++) {
@@ -288,6 +297,9 @@ namespace Flint.Rt {
                         SAsciiOf(rt, a) && SAsciiOf(rt, b));
         }
     }
+    internal static bool SAscii(Rt rt, long v) { return Str.SAscii(rt, v); }
+    internal static int SCount(Rt rt, long v) { return Str.SCount(rt, v); }
+    internal static int SBytes(Rt rt, long v) { return Str.SBytes(rt, v); }
     internal static class Rope { internal const int FANOUT = 3; }
     internal static class Val {
         internal const long Nil = 0xFFFFL;
@@ -324,6 +336,9 @@ namespace Flint.Rt {
         internal long Slot(long n, int i) { return h[(int) n + i]; }
     }
     internal static int Olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    internal static bool IsRope(Rt rt, long v) {
+        return Val.IsHeap(v) && rt.gc.sp[(int) v] == Obj.TyRope;
+    }
     internal static long RopeNode(Rt rt, int bas, int n) {
         int bytes = 0, cps = 0; bool ascii = true;
         for (int i = 0; i < n; i++) {

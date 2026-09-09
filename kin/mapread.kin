@@ -18,16 +18,14 @@
 ;; ports gained it rather than Rust losing it.
 (ns flint.rt.mapread
   (:require [flint.impl.rt :refer [defn return if let local set do comment doc
-                                   for break not == != <
-                                   mark push r pop-to slot nil?
-                                   val-eq hash-value ref-get
-                                   ty as-heap is-heap
-                                   Rt Value RootIx I32 Ty Bool
-                                   NIL NOT_FOUND HM_ROOT
-                                   TY_ARRAYMAP TY_HASHMAP TY_TABLEREF]]
+                                   for break not == != < mark push r pop-to
+                                   slot nil? val-eq hash-value ref-get ty
+                                   as-heap is-heap Rt Value RootIx I32 Ty Bool
+                                   NIL NOT_FOUND HM_ROOT TY_ARRAYMAP
+                                   TY_HASHMAP TY_TABLEREF]]
             [flint.rt.mapcore :refer [map-count am-key am-val]]
             [flint.rt.eqalloc :refer [eq-may-alloc]]
-            [flint.rt.find    :refer [node-find node-find-scalar]]))
+            [flint.rt.find :refer [node-find node-find-scalar]]))
 
 (doc "Where `k` sits in an array map, or `n` when it is not there."
      ""

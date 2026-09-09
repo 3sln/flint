@@ -27,6 +27,7 @@ fn main() {
     static final class Str {
         static int sBytes(Rt rt, long v) { return (int) v; }
     }
+    static int sBytes(Rt rt, long v) { return Str.sBytes(rt, v); }
 --java
     public static void main(String[] args) {
         Rt rt = new Rt();
@@ -45,6 +46,7 @@ fn main() {
     static class Str {
         internal static int SBytes(Rt rt, long v) { return (int) v; }
     }
+    internal static int SBytes(Rt rt, long v) { return Str.SBytes(rt, v); }
 --csharp
     static void Main() {
         var rt = new Rt();

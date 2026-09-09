@@ -97,7 +97,7 @@ public static class Dissoc {
         rt.PopTo(@base);
         return @out;
     }
-    internal static long CollDissoc(Rt rt, long n, long key, long edit) {
+    public static long CollDissoc(Rt rt, long n, long key, long edit) {
         int scan = rt.Mark();
         int sni = rt.Push(n);
         int ski = rt.Push(key);

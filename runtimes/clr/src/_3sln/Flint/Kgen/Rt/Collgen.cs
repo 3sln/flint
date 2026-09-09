@@ -36,7 +36,7 @@ public static class Collgen {
             return 0;
         }
         if (IsString(rt, v)) {
-            return Str.SCount(rt, v);
+            return SCount(rt, v);
         }
         if (Val.IsHeap(v)) {
             int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
@@ -58,7 +58,7 @@ public static class Collgen {
             }
             // A REF COUNTS ITS COLUMNS, because it is a map of them.
             if (t == Obj.TyTableref) {
-                return global::Flint.Rt.Table.schemaLen(rt, rt.Slot(v, global::Flint.Rt.Table.RF_SCHEMA));
+                return SchemaLen(rt, rt.Slot(v, global::Flint.Rt.Table.RF_SCHEMA));
             }
             if ((t == Obj.TyArraymap) || (t == Obj.TyHashmap)) {
                 return MapCount(rt, v);
@@ -104,7 +104,7 @@ public static class Collgen {
                 if (Vec.Count(rt, coll) == 0) {
                     return rt.ThrowStr("IllegalStateException", "cannot pop an empty vector");
                 }
-                return Vec.Pop(rt, coll);
+                return VecPop(rt, coll);
             }
             if (t == Obj.TyEmptyList) {
                 return rt.ThrowStr("IllegalStateException", "cannot pop an empty list");
@@ -127,7 +127,7 @@ public static class Collgen {
                 if (n == 0) {
                     return Val.Nil;
                 }
-                return Vec.Nth(rt, coll, n - 1, Val.Nil);
+                return VecNth(rt, coll, n - 1, Val.Nil);
             }
         }
         return First(rt, coll);

@@ -191,6 +191,9 @@ fn main() {
         static int sCount(Rt rt, long v) { return rt.sCount(v); }
         static boolean sAscii(Rt rt, long v) { return rt.sAscii(v); }
     }
+    static boolean sAscii(Rt rt, long v) { return Str.sAscii(rt, v); }
+    static int sCount(Rt rt, long v) { return Str.sCount(rt, v); }
+    static int sBytes(Rt rt, long v) { return Str.sBytes(rt, v); }
     static int pow31(Rt rt, int n) { return rt.pow31(n); }
     static final class Val {
         static final long NIL = Probe.NIL;
@@ -453,6 +456,9 @@ namespace Flint.Rt {
         internal static int SCount(Rt rt, long v) { return rt.SCount(v); }
         internal static bool SAscii(Rt rt, long v) { return rt.SAscii(v); }
     }
+    internal static bool SAscii(Rt rt, long v) { return Str.SAscii(rt, v); }
+    internal static int SCount(Rt rt, long v) { return Str.SCount(rt, v); }
+    internal static int SBytes(Rt rt, long v) { return Str.SBytes(rt, v); }
     internal static int Olen(Rt rt, long v) { return rt.lens[(int) v]; }
     internal static bool IsRope(Rt rt, long v) {
         return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, v) == Obj.TyRope;

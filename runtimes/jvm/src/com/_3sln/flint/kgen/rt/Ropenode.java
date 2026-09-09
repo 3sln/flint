@@ -30,9 +30,9 @@ public final class Ropenode {
         ascii = true;
         for (int i = 0; i < n; i++) {
             long k = rt.r(base + i);
-            bytes += Str.sBytes(rt, k);
-            cps += Str.sCount(rt, k);
-            ascii = ascii && Str.sAscii(rt, k);
+            bytes += sBytes(rt, k);
+            cps += sCount(rt, k);
+            ascii = ascii && sAscii(rt, k);
         }
         long a = rt.alloc(TY_ROPE, Str.RP_KIDS + n);
         if (a == 0) {

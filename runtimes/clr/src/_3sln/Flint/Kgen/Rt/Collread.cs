@@ -51,7 +51,7 @@ public static class Collread {
             if (IsInt(rt, k)) {
                 long i = Num.I64Of(rt, k);
                 if (i >= 0) {
-                    return Vec.Nth(rt, coll, (int) i, dflt);
+                    return VecNth(rt, coll, (int) i, dflt);
                 }
             }
             return dflt;
@@ -76,7 +76,7 @@ public static class Collread {
             if (IsInt(rt, k)) {
                 long i = Num.I64Of(rt, k);
                 if (i >= 0) {
-                    long row = Table.tableRef(rt, coll, (int) i);
+                    long row = TableRef(rt, coll, (int) i);
                     if (Val.IsNil(row)) {
                         return dflt;
                     }

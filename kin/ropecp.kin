@@ -10,13 +10,12 @@
 ;; that no test compared. It is four lines; it is also exactly the kind of
 ;; thing that stays right by luck.
 (ns flint.rt.ropecp
-  (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   == != < > >= not
-                                   + - local set forever break
-                                   leaf-len leaf-byte s-bytes s-count s-ascii
-                                   slot charge-bytes charge-work sink-put
-                                   Rt Value I32 Bool Sink RP_KIDS]]
-            [flint.rt.ropecat :refer [is-rope rope-kids]]))
+  (:require [flint.impl.rt :refer [defn return if let do comment doc == != < >
+                                   >= not + - local set forever break leaf-len
+                                   leaf-byte slot charge-bytes charge-work
+                                   sink-put Rt Value I32 Bool Sink RP_KIDS]]
+            [flint.rt.ropemeas :refer [is-rope s-ascii s-bytes s-count]]
+            [flint.rt.ropecat :refer [rope-kids]]))
 
 (doc "How many bytes the code point starting with `b0` occupies."
      ""

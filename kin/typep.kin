@@ -24,14 +24,11 @@
 ;; * `fn?` the builtin. Rust calls `is_fn`; the ports go through this table.
 ;;   One route now.
 (ns flint.rt.typep
-  (:require [flint.impl.rt :refer [defn return if let case comment doc
-                                   not or ==
-                                   is-heap as-heap ty nil?  is-bool
-                                   is-double   
-                                   
-                                   Rt Value Ty Bool I32
-                                   CAT_SEQUENTIAL
-                                   TY_CLOSURE TY_NATIVEFN TY_MULTIFN]]
+  (:require [flint.impl.rt :refer [defn return if let case comment doc not or
+                                   == is-heap as-heap ty nil? is-bool
+                                   is-double Rt Value Ty Bool I32
+                                   CAT_SEQUENTIAL TY_CLOSURE TY_NATIVEFN
+                                   TY_MULTIFN]]
             [flint.rt.eq :refer [category]]
             [flint.rt.seqcore :refer [is-seq]]
             [flint.rt.vecread :refer [is-vector-like]]

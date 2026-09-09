@@ -23,15 +23,15 @@
 ;; and which does not tell the type checker the loop diverges.
 (ns flint.rt.find
   (:require [flint.impl.rt :refer [defn return if let local set do comment
-                                   forever for break
-                                   mark push r set-r pop-to not == != <
-                                   is-bmnode bitpos index-of
-                                   bn-datamap bn-nodemap bn-key bn-val bn-node
-                                   cn-hash cn-count cn-key cn-val
-                                   val-eq eq-may-alloc node-find-scalar
-                                   + bit-and
-                                   Rt Value RootIx I32 Bool
-                                   NOT_FOUND HASH_BITS]]))
+                                   forever for break mark push r set-r pop-to
+                                   not == != < val-eq + bit-and Rt Value
+                                   RootIx I32 Bool NOT_FOUND HASH_BITS]]
+            [flint.rt.nodeclass :refer [is-bmnode]]
+            [flint.rt.eqalloc :refer [eq-may-alloc]]
+            [flint.rt.collnode :refer [cn-count cn-hash cn-key cn-val]]
+            [flint.rt.champ :refer [bn-datamap bn-key bn-node bn-nodemap
+                                    bn-val]]
+            [flint.rt.maps :refer [bitpos index-of]]))
 
 (defn ^:pub ^:method ^Value node-find-scalar
   [^:mut ^Rt rt ^Value n ^:mut ^I32 shift ^I32 h ^Value key]

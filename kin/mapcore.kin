@@ -17,14 +17,13 @@
 (ns flint.rt.mapcore
   (:require [flint.impl.rt :refer [defn return if let do comment doc not or ==
                                    mark push r pop-to alloc set-at heap fixnum
-                                   slot olen as-fixnum to-i32 quot
-                                   schema-len RF_SCHEMA ty as-heap is-heap
-                                   - * +
-                                   Rt Value Addr RootIx I32 Ty Bool NIL
-                                   AM_BASE AM_META AM_HASH
-                                   HM_CNT HM_ROOT HM_META HM_HASH
+                                   slot olen as-fixnum to-i32 quot RF_SCHEMA
+                                   ty as-heap is-heap - * + Rt Value Addr
+                                   RootIx I32 Ty Bool NIL AM_BASE AM_META
+                                   AM_HASH HM_CNT HM_ROOT HM_META HM_HASH
                                    TY_ARRAYMAP TY_HASHMAP TY_TABLEREF
-                                   TY_MAPENTRY]]))
+                                   TY_MAPENTRY]]
+            [flint.rt.tablemeta :refer [schema-len]]))
 
 (doc "Is this a map? A ROW REF answers yes, which is what lets code that does"
      "not know it holds a table keep working (`doc/decisions/0026`).")

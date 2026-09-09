@@ -49,7 +49,7 @@ public final class Collread {
             if (isInt(rt, k)) {
                 long i = Num.i64Of(rt, k);
                 if (i >= 0) {
-                    return Vec.nth(rt, coll, (int) i, dflt);
+                    return vecNth(rt, coll, (int) i, dflt);
                 }
             }
             return dflt;
@@ -74,7 +74,7 @@ public final class Collread {
             if (isInt(rt, k)) {
                 long i = Num.i64Of(rt, k);
                 if (i >= 0) {
-                    long row = Table.tableRef(rt, coll, (int) i);
+                    long row = tableRef(rt, coll, (int) i);
                     if (Val.isNil(row)) {
                         return dflt;
                     }

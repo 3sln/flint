@@ -194,6 +194,7 @@ fn main() {
             return i >= count(rt, v) ? dflt : rt.slot(v, i);
         }
     }
+    static long vecNth(Rt rt, long v, int i, long dflt) { return Vec.nth(rt, v, i, dflt); }
     // Nested to reproduce the port's FULLY QUALIFIED `com.flint.rt.Eq` --
     // the vocabulary spells it in full because a bare `Eq` inside the
     // generated package would resolve to the GENERATED one.
@@ -346,6 +347,7 @@ namespace Flint.Rt {
             return i >= Count(rt, v) ? dflt : rt.Slot(v, i);
         }
     }
+    internal static long VecNth(Rt rt, long v, int i, long dflt) { return Vec.Nth(rt, v, i, dflt); }
     internal static long Vector(Rt rt, long[] xs) {
         long a = rt.Alloc(Obj.TyVec, System.Math.Max(1, xs.Length));
         rt.lens[(int) a] = xs.Length;

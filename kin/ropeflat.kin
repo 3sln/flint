@@ -9,17 +9,18 @@
 ;; the cached flattening, the descent, the one-pass copy -- is what `byteflat`
 ;; already does.
 (ns flint.rt.ropeflat
-  (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   == != not nil? is-heap as-heap ty
-                                   is-inline-str + - for local set olen slot set-slot
-                                   mark push r pop-to leaf-len leaf-byte
-                                   wmul wadd is-fixnum as-fixnum fixnum to-i32
-                                   s-bytes sink-put to-addr and >= <= > < * ==
-                                   sink-open sink-close sink-put-run sink-put-inline
-                                   sink-contiguous
-                                   Rt Value Ty I32 RootIx Sink HDR STR_DATA
-                                   TY_STR TY_ROPE RP_FLAT RP_HASH RP_KIDS]]
-            [flint.rt.ropecat :refer [is-rope rope-kids]]
+  (:require [flint.impl.rt :refer [defn return if let do comment doc == != not
+                                   nil? is-heap as-heap ty is-inline-str + -
+                                   for local set olen slot set-slot mark push
+                                   r pop-to leaf-len leaf-byte wmul wadd
+                                   is-fixnum as-fixnum fixnum to-i32 sink-put
+                                   to-addr and >= <= > < * == sink-open
+                                   sink-close sink-put-run sink-put-inline
+                                   sink-contiguous Rt Value Ty I32 RootIx Sink
+                                   HDR STR_DATA TY_STR TY_ROPE RP_FLAT RP_HASH
+                                   RP_KIDS]]
+            [flint.rt.ropemeas :refer [is-rope s-bytes]]
+            [flint.rt.ropecat :refer [rope-kids]]
             [flint.rt.bytehash :refer [pow31]]))
 
 (doc "Append every byte of the string `v` to the sink `s`."

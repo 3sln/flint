@@ -51,7 +51,7 @@ public static class Tablemigrate {
                 id = width;
                 width += 1;
             }
-            long dv = Vec.Conj(rt, rt.R(di), Val.Fixnum(id & 0xFFFFFFFFL));
+            long dv = VecConj(rt, rt.R(di), Val.Fixnum(id & 0xFFFFFFFFL));
             rt.SetR(di, dv);
             long m = MapAssoc(rt, rt.R(ii), rt.R(ni), Val.Fixnum(id & 0xFFFFFFFFL));
             rt.SetR(ii, m);
@@ -107,7 +107,7 @@ public static class Tablemigrate {
                     rt.PopTo(@base);
                     return rt.ThrowStr("IllegalArgumentException", "the new schema adds :" + nm + " and the table has no values for it; give it a default -- (migrate t s {:" + nm + " v}) -- or compute one per row: (migrate t s (fn [row] ...))");
                 }
-                if (!global::Flint.Rt.Table.typeOk(rt, wantTy, dv)) {
+                if (!TypeOk(rt, wantTy, dv)) {
                     string nm = KwName(rt, rt.R(nmi));
                     string wt = KwName(rt, wantTy);
                     long gk = rt.KindOf(dv);
@@ -130,7 +130,7 @@ public static class Tablemigrate {
                 rt.PopTo(@base);
                 return Val.Nil;
             }
-            long ch = Vec.Nth(rt, rt.R(ci), k, Val.Nil);
+            long ch = VecNth(rt, rt.R(ci), k, Val.Nil);
             int chi = rt.Push(ch);
             int rows = ChunkRows(rt, rt.R(chi));
             long nc = NewChunk(rt, width, rows);
@@ -156,7 +156,7 @@ public static class Tablemigrate {
                     rt.SetSlot(Val.AsHeap(rt.Slot(rt.R(ni), global::Flint.Rt.Table.CH_ENC)), id, Val.Fixnum(global::Flint.Rt.Table.ENC_CONST & 0xFFFFFFFFL));
                 }
             }
-            long ov = Vec.Conj(rt, rt.R(oi), rt.R(ni));
+            long ov = VecConj(rt, rt.R(oi), rt.R(ni));
             rt.SetR(oi, ov);
             rt.PopTo(chi);
         }

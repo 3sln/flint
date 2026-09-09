@@ -30,7 +30,7 @@ public final class Pikegas {
     /// bound the work rather than bill for it afterwards, so a pathological
     /// pattern hits the budget rather than the wall clock.
     public static int chargeSubject(Rt rt, long s) {
-        int n = Str.sBytes(rt, s);
+        int n = sBytes(rt, s);
         rt.chargeBytes(n);
         return n;
     }

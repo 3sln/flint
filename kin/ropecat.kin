@@ -16,20 +16,15 @@
 ;; indexing descends instead, an O(n)-deep tree makes the walk quadratic in a
 ;; new place. `test/scaling.clj` measured 3.02x.
 (ns flint.rt.ropecat
-  (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   == < <= + - not nil? is-heap as-heap ty
-                                   for local set olen slot
-                                   mark push r pop-to
-                                   s-bytes s-concat-copy
-                                   Rt Value RootIx I32 Bool NIL
-                                   TY_ROPE FLAT_MAX FANOUT RP_KIDS]]
+  (:require [flint.impl.rt :refer [defn return if let do comment doc == < <= +
+                                   - not nil? is-heap as-heap ty for local set
+                                   olen slot mark push r pop-to Rt Value
+                                   RootIx I32 Bool NIL TY_ROPE FLAT_MAX FANOUT
+                                   RP_KIDS]]
+            [flint.rt.ropemeas :refer [is-rope s-bytes]]
+            [flint.rt.strs :refer [s-concat-copy]]
             [flint.rt.ropenode :refer [rope-node rope-lift]]))
 
-(doc "Is `v` the NODE tier -- a tree rather than a leaf or an inline string?")
-(defn ^:pub ^:method ^Bool is-rope [^Rt rt ^Value v]
-  (if (not (is-heap v))
-    (return false))
-  (return (== (ty rt (as-heap v)) TY_ROPE)))
 
 (doc "How many children this node has.")
 (defn ^:pub ^:method ^I32 rope-kids [^Rt rt ^Value v]

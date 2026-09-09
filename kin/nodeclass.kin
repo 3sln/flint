@@ -10,16 +10,16 @@
 ;; ranges. The ports say the same thing in one less level of nesting, which is
 ;; the tie-breaker whenever both spellings are correct.
 (ns flint.rt.nodeclass
-  (:require [flint.impl.rt :refer [defn return if let comment doc not
-                                   ty as-heap popcount == !=
-                                   bn-datamap bn-nodemap
-                                   Rt Value I32 Bool TY_BMNODE]]))
+  (:require [flint.impl.rt :refer [defn return if let comment doc not ty
+                                   as-heap popcount == != Rt Value I32 Bool
+                                   TY_BMNODE]]
+            [flint.rt.champ :refer [bn-datamap bn-nodemap]]))
 
-(defn ^:inline ^:method ^Bool is-bmnode [^Rt rt ^Value n]
+(defn ^:pub ^:inline ^:method ^Bool is-bmnode [^Rt rt ^Value n]
   (return (== (ty rt (as-heap n)) TY_BMNODE)))
 
 (doc "EMPTY / ONE / MORE, the CHAMP size predicate that drives collapsing.")
-(defn ^:method ^I32 node-size-class [^Rt rt ^Value n]
+(defn ^:pub ^:method ^I32 node-size-class [^Rt rt ^Value n]
   (comment "A collision node always holds at least two pairs.")
   (if (not (is-bmnode rt n))
     (return 2))

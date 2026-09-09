@@ -18,12 +18,12 @@
 ;; DIVIDE BY ZERO IS A DIFFERENT REFUSAL and comes first: it is a question
 ;; about the divisor, not about the width of the answer.
 (ns flint.rt.numdiv
-  (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   == != < and or not
-                                    i64-of  num-f64 is-double
-                                   integer of-double f-trunc throw-str quot rem
-                                   to-f64 throw-not-a-number - * fdiv
-                                   Rt Value I64 F64 Bool NIL I64_MIN]]
+  (:require [flint.impl.rt :refer [defn return if let do comment doc == != <
+                                   and or not i64-of num-f64 is-double
+                                   of-double f-trunc throw-str quot rem to-f64
+                                   throw-not-a-number - * fdiv Rt Value I64
+                                   F64 Bool NIL I64_MIN]]
+            [flint.rt.num :refer [integer]]
             [flint.rt.numkind :refer [is-int is-number]]))
 
 (doc "Both integers? Then the pair is the integer path."

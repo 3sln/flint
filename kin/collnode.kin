@@ -24,7 +24,7 @@
                                    TY_BMNODE BN_BASE BN_EDIT
                                    BN_DATAMAP BN_NODEMAP]]))
 
-(defn ^:method ^Value cn-new [^:mut ^Rt rt ^I32 h ^I32 npairs ^Value edit]
+(defn ^:pub ^:method ^Value cn-new [^:mut ^Rt rt ^I32 h ^I32 npairs ^Value edit]
   (comment "`edit` is rooted across the allocation and read back after it:"
            "`alloc` collects, and a host local does not survive that.")
   (let [^RootIx e (push rt edit)
@@ -37,16 +37,16 @@
     (set-at rt a CN_HASH (fixnum h))
     (return (heap a))))
 
-(defn ^:inline ^:method ^I32 cn-count [^Rt rt ^Value n]
+(defn ^:pub ^:inline ^:method ^I32 cn-count [^Rt rt ^Value n]
   (return (quot (- (olen rt n) CN_BASE) 2)))
 
-(defn ^:method ^I32 cn-hash [^Rt rt ^Value n]
+(defn ^:pub ^:method ^I32 cn-hash [^Rt rt ^Value n]
   (return (to-i32 (as-fixnum (slot rt n CN_HASH)))))
 
-(defn ^:inline ^:method ^Value cn-key [^Rt rt ^Value n ^I32 i]
+(defn ^:pub ^:inline ^:method ^Value cn-key [^Rt rt ^Value n ^I32 i]
   (return (slot rt n (+ CN_BASE (* 2 i)))))
 
-(defn ^:inline ^:method ^Value cn-val [^Rt rt ^Value n ^I32 i]
+(defn ^:pub ^:inline ^:method ^Value cn-val [^Rt rt ^Value n ^I32 i]
   (return (slot rt n (+ (+ CN_BASE (* 2 i)) 1))))
 
 (doc "A BITMAP NODE, allocated and stamped with its two maps.")

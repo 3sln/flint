@@ -33,7 +33,7 @@ public static class Collvec {
             for (int i = 0; i < CnCount(rt, rt.R(ni)); i++) {
                 rt.ChargeWork(1);
                 long e = MapEntry(rt, CnKey(rt, rt.R(ni), i), CnVal(rt, rt.R(ni), i));
-                long nv = Vec.Conj(rt, rt.R(ai), e);
+                long nv = VecConj(rt, rt.R(ai), e);
                 rt.SetR(ai, nv);
             }
             rt.PopTo(@base);
@@ -42,7 +42,7 @@ public static class Collvec {
         for (int i = 0; i < System.Numerics.BitOperations.PopCount((uint)(BnDatamap(rt, rt.R(ni)))); i++) {
             rt.ChargeWork(1);
             long e = MapEntry(rt, BnKey(rt, rt.R(ni), i), BnVal(rt, rt.R(ni), i));
-            long nv = Vec.Conj(rt, rt.R(ai), e);
+            long nv = VecConj(rt, rt.R(ai), e);
             rt.SetR(ai, nv);
         }
         for (int j = 0; j < System.Numerics.BitOperations.PopCount((uint)(BnNodemap(rt, rt.R(ni)))); j++) {
@@ -59,7 +59,7 @@ public static class Collvec {
         if (!IsBmnode(rt, rt.R(ni))) {
             for (int i = 0; i < CnCount(rt, rt.R(ni)); i++) {
                 rt.ChargeWork(1);
-                long nv = Vec.Conj(rt, rt.R(ai), CnKey(rt, rt.R(ni), i));
+                long nv = VecConj(rt, rt.R(ai), CnKey(rt, rt.R(ni), i));
                 rt.SetR(ai, nv);
             }
             rt.PopTo(@base);
@@ -67,7 +67,7 @@ public static class Collvec {
         }
         for (int i = 0; i < System.Numerics.BitOperations.PopCount((uint)(BnDatamap(rt, rt.R(ni)))); i++) {
             rt.ChargeWork(1);
-            long nv = Vec.Conj(rt, rt.R(ai), BnKey(rt, rt.R(ni), i));
+            long nv = VecConj(rt, rt.R(ai), BnKey(rt, rt.R(ni), i));
             rt.SetR(ai, nv);
         }
         for (int j = 0; j < System.Numerics.BitOperations.PopCount((uint)(BnNodemap(rt, rt.R(ni)))); j++) {
@@ -92,7 +92,7 @@ public static class Collvec {
         if (Obj.Ty(rt.gc.sp, Val.AsHeap(rt.R(mi))) == Obj.TyArraymap) {
             for (int i = 0; i < MapCount(rt, rt.R(mi)); i++) {
                 long e = MapEntry(rt, AmKey(rt, rt.R(mi), i), AmVal(rt, rt.R(mi), i));
-                long nv = Vec.Conj(rt, rt.R(ai), e);
+                long nv = VecConj(rt, rt.R(ai), e);
                 rt.SetR(ai, nv);
             }
             long flat = rt.R(ai);
@@ -123,7 +123,7 @@ public static class Collvec {
         int mi = rt.Push(m);
         if (Obj.Ty(rt.gc.sp, Val.AsHeap(rt.R(mi))) == Obj.TyArraymap) {
             for (int i = 0; i < MapCount(rt, rt.R(mi)); i++) {
-                long nv = Vec.Conj(rt, rt.R(ai), AmKey(rt, rt.R(mi), i));
+                long nv = VecConj(rt, rt.R(ai), AmKey(rt, rt.R(mi), i));
                 rt.SetR(ai, nv);
             }
             long flat = rt.R(ai);

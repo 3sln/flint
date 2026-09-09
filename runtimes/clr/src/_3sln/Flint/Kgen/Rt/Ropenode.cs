@@ -32,9 +32,9 @@ public static class Ropenode {
         ascii = true;
         for (int i = 0; i < n; i++) {
             long k = rt.R(@base + i);
-            bytes += Str.SBytes(rt, k);
-            cps += Str.SCount(rt, k);
-            ascii = ascii && Str.SAscii(rt, k);
+            bytes += SBytes(rt, k);
+            cps += SCount(rt, k);
+            ascii = ascii && SAscii(rt, k);
         }
         long a = rt.Alloc(Obj.TyRope, global::Flint.Rt.Str.RP_KIDS + n);
         if (a == 0) {

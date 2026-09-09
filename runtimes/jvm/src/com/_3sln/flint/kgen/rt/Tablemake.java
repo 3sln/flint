@@ -41,7 +41,7 @@ public final class Tablemake {
         long ids0 = Vec.empty(rt);
         int di = rt.push(ids0);
         for (int i = 0; i < n; i++) {
-            long pair = Vec.nth(rt, rt.r(pi), i, Val.NIL);
+            long pair = vecNth(rt, rt.r(pi), i, Val.NIL);
             int pj = rt.push(pair);
             if (!isVectorLike(rt, rt.r(pj))) {
                 rt.popTo(base);
@@ -51,8 +51,8 @@ public final class Tablemake {
                 rt.popTo(base);
                 return rt.throwStr("IllegalArgumentException", "a schema is [[name type] ...]; this entry is not a name and a type");
             }
-            long nm = Vec.nth(rt, rt.r(pj), 0, Val.NIL);
-            long tp = Vec.nth(rt, rt.r(pj), 1, Val.NIL);
+            long nm = vecNth(rt, rt.r(pj), 0, Val.NIL);
+            long tp = vecNth(rt, rt.r(pj), 1, Val.NIL);
             if (!isKeyword(rt, nm)) {
                 rt.popTo(base);
                 return rt.throwStr("IllegalArgumentException", "a column name must be a keyword");
@@ -70,13 +70,13 @@ public final class Tablemake {
                 rt.popTo(base);
                 return rt.throwStr("IllegalArgumentException", "the column :" + shown + " is named twice");
             }
-            long nv = Vec.conj(rt, rt.r(ni), nm);
+            long nv = vecConj(rt, rt.r(ni), nm);
             rt.setR(ni, nv);
-            long tv = Vec.conj(rt, rt.r(ti), tp);
+            long tv = vecConj(rt, rt.r(ti), tp);
             rt.setR(ti, tv);
             long m = mapAssoc(rt, rt.r(ii), nm, Val.fixnum(i & 0xFFFFFFFFL));
             rt.setR(ii, m);
-            long dv = Vec.conj(rt, rt.r(di), Val.fixnum(i & 0xFFFFFFFFL));
+            long dv = vecConj(rt, rt.r(di), Val.fixnum(i & 0xFFFFFFFFL));
             rt.setR(di, dv);
             rt.popTo(pj);
         }
@@ -132,7 +132,7 @@ public final class Tablemake {
         int oi = rt.push(out0);
         for (int i = 0; i < n; i++) {
             long v = tableCell(rt, rt.r(ti), id, i);
-            long nv = Vec.conj(rt, rt.r(oi), v);
+            long nv = vecConj(rt, rt.r(oi), v);
             rt.setR(oi, nv);
         }
         long out = rt.r(oi);

@@ -14,11 +14,11 @@ using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Champ;
 
 public static class Nodeclass {
-    internal static bool IsBmnode(Rt rt, long n) {
+    public static bool IsBmnode(Rt rt, long n) {
         return Obj.Ty(rt.gc.sp, Val.AsHeap(n)) == Obj.TyBmnode;
     }
     /// EMPTY / ONE / MORE, the CHAMP size predicate that drives collapsing.
-    internal static int NodeSizeClass(Rt rt, long n) {
+    public static int NodeSizeClass(Rt rt, long n) {
         // A collision node always holds at least two pairs.
         if (!IsBmnode(rt, n)) {
             return 2;

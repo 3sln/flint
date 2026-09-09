@@ -28,7 +28,7 @@ public static class Ropeslice {
         if (from >= to) {
             return Str.SEmpty(rt);
         }
-        int n = Str.SBytes(rt, v);
+        int n = SBytes(rt, v);
         int hi;
         hi = to;
         if (hi > n) {
@@ -58,7 +58,7 @@ public static class Ropeslice {
         at = 0;
         for (int i = 0; i < kids; i++) {
             long k = rt.Slot(rt.R(vi), global::Flint.Rt.Str.RP_KIDS + i);
-            int w = Str.SBytes(rt, k);
+            int w = SBytes(rt, k);
             if ((at + w) > from) {
                 if (at < hi) {
                     int klo;
@@ -87,7 +87,7 @@ public static class Ropeslice {
                         rt.PopTo(@base);
                         return Val.Nil;
                     }
-                    if (Str.SBytes(rt, piece) > 0) {
+                    if (SBytes(rt, piece) > 0) {
                         rt.Push(piece);
                         made += 1;
                     }

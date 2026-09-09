@@ -9,9 +9,15 @@ import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
-import static com._3sln.flint.kgen.rt.Ropecat.*;
 
 public final class Ropemeas {
+    /// Is `v` the NODE tier -- a tree rather than a leaf or an inline string?
+    public static boolean isRope(Rt rt, long v) {
+        if (!Val.isHeap(v)) {
+            return false;
+        }
+        return ty(rt.gc.sp, Val.asHeap(v)) == TY_ROPE;
+    }
     /// Is `v` a STRING -- any of the three tiers?
     /// 
     /// Inline first, because it is a test on the value word and the other two

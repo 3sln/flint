@@ -19,11 +19,11 @@ use crate::kgen::rt::casetable::*;
 
 impl Rt {
     #[inline]
-    pub(crate) fn is_bmnode(&self, n: Value) -> bool {
+    pub fn is_bmnode(&self, n: Value) -> bool {
         return ty(&self.gc.sp, n.as_heap()) == TY_BMNODE;
     }
     /// EMPTY / ONE / MORE, the CHAMP size predicate that drives collapsing.
-    pub(crate) fn node_size_class(&self, n: Value) -> u32 {
+    pub fn node_size_class(&self, n: Value) -> u32 {
         // A collision node always holds at least two pairs.
         if !self.is_bmnode(n) {
             return 2;

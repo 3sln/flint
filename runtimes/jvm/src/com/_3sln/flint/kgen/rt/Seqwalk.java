@@ -40,9 +40,9 @@ public final class Seqwalk {
                 return rt.slot(coll, i);
             }
             if (ty(rt.gc.sp, Val.asHeap(coll)) == TY_TABLE) {
-                return Table.tableRef(rt, coll, i);
+                return tableRef(rt, coll, i);
             }
-            return Vec.nth(rt, coll, i, Val.NIL);
+            return vecNth(rt, coll, i, Val.NIL);
         }
         if (t == TY_STRSEQ) {
             return Str.nth(rt, rt.slot(s, 0), (int) Val.asFixnum(rt.slot(s, 1)), Val.NIL);
@@ -69,7 +69,7 @@ public final class Seqwalk {
             if (ty(rt.gc.sp, Val.asHeap(coll)) == TY_MAPENTRY) {
                 n = 2;
             } else if (ty(rt.gc.sp, Val.asHeap(coll)) == TY_TABLE) {
-                n = Table.tableCount(rt, coll);
+                n = tableCount(rt, coll);
             } else {
                 n = Vec.count(rt, coll);
             }
@@ -81,7 +81,7 @@ public final class Seqwalk {
         if (t == TY_STRSEQ) {
             long st = rt.slot(s, 0);
             int i = (int) Val.asFixnum(rt.slot(s, 1));
-            if ((i + 1) >= Str.sCount(rt, st)) {
+            if ((i + 1) >= sCount(rt, st)) {
                 return Val.NIL;
             }
             return strseq(rt, st, i + 1);
@@ -204,7 +204,7 @@ public final class Seqwalk {
         }
         if (isString(rt, v)) {
             // CODE POINTS, matching the index the strseq holds.
-            if (Str.sCount(rt, v) == 0) {
+            if (sCount(rt, v) == 0) {
                 return Val.NIL;
             }
             return strseq(rt, v, 0);
@@ -242,7 +242,7 @@ public final class Seqwalk {
             return vecseq(rt, v, 0);
         }
         if (t == TY_TABLE) {
-            if (Table.tableCount(rt, v) == 0) {
+            if (tableCount(rt, v) == 0) {
                 return Val.NIL;
             }
             return vecseq(rt, v, 0);
@@ -252,7 +252,7 @@ public final class Seqwalk {
             return seq(rt, m);
         }
         if ((t == TY_ARRAYMAP) || (t == TY_HASHMAP)) {
-            long ents = Maps.entryVector(rt, v);
+            long ents = mapEntryVector(rt, v);
             if (Val.isNil(ents)) {
                 return Val.NIL;
             }
@@ -262,7 +262,7 @@ public final class Seqwalk {
             return vecseq(rt, ents, 0);
         }
         if (t == TY_SET) {
-            long ents = Sets.elementVector(rt, v);
+            long ents = setElementVector(rt, v);
             if (Val.isNil(ents)) {
                 return Val.NIL;
             }

@@ -22,28 +22,28 @@
                                    Rt Value I32
                                    BN_DATAMAP BN_NODEMAP BN_BASE]]))
 
-(defn ^:inline ^:method ^I32 bn-datamap [^Rt rt ^Value n]
+(defn ^:pub ^:inline ^:method ^I32 bn-datamap [^Rt rt ^Value n]
   (return (to-i32 (as-fixnum (slot rt n BN_DATAMAP)))))
 
-(defn ^:inline ^:method ^I32 bn-nodemap [^Rt rt ^Value n]
+(defn ^:pub ^:inline ^:method ^I32 bn-nodemap [^Rt rt ^Value n]
   (return (to-i32 (as-fixnum (slot rt n BN_NODEMAP)))))
 
-(defn ^:inline ^:method ^Value bn-key [^Rt rt ^Value n ^I32 i]
+(defn ^:pub ^:inline ^:method ^Value bn-key [^Rt rt ^Value n ^I32 i]
   (return (slot rt n (+ BN_BASE (* 2 i)))))
 
-(defn ^:inline ^:method ^Value bn-val [^Rt rt ^Value n ^I32 i]
+(defn ^:pub ^:inline ^:method ^Value bn-val [^Rt rt ^Value n ^I32 i]
   (return (slot rt n (+ BN_BASE (+ (* 2 i) 1)))))
 
-(defn ^:inline ^:method bn-set-key [^:mut ^Rt rt ^Value n ^I32 i ^Value v]
+(defn ^:pub ^:inline ^:method bn-set-key [^:mut ^Rt rt ^Value n ^I32 i ^Value v]
   (set-slot rt n (+ BN_BASE (* 2 i)) v))
 
-(defn ^:inline ^:method bn-set-val [^:mut ^Rt rt ^Value n ^I32 i ^Value v]
+(defn ^:pub ^:inline ^:method bn-set-val [^:mut ^Rt rt ^Value n ^I32 i ^Value v]
   (set-slot rt n (+ BN_BASE (+ (* 2 i) 1)) v))
 
 (doc "Sub-nodes live at the END, in DESCENDING bit order.")
 
-(defn ^:inline ^:method ^Value bn-node [^Rt rt ^Value n ^I32 j]
+(defn ^:pub ^:inline ^:method ^Value bn-node [^Rt rt ^Value n ^I32 j]
   (return (slot rt n (- (- (olen rt n) 1) j))))
 
-(defn ^:inline ^:method bn-set-node [^:mut ^Rt rt ^Value n ^I32 j ^Value v]
+(defn ^:pub ^:inline ^:method bn-set-node [^:mut ^Rt rt ^Value n ^I32 j ^Value v]
   (set-slot rt n (- (- (olen rt n) 1) j) v))

@@ -35,6 +35,8 @@ public final class Num {
     /// the generated arm needs one.
     public static double trunc(double d) { return d < 0 ? Math.ceil(d) : Math.floor(d); }
 
+    // @kin:link:ns: flint.rt.num
+    // @kin:link:form:integer: {:template "Num.integer({0}, {1})"}
     public static long integer(Rt rt, long n) {
         if (n >= -(1L << 47) && n < (1L << 47)) return Val.fixnum(n);
         long a = rt.alloc(TY_BIGINT, 8);
@@ -101,6 +103,7 @@ public final class Num {
         return rt.throwStr("ArithmeticException", "Divide by zero");
     }
 
+    // @kin:link:form:num-add: {:template "Num.add({0}, {1}, {2})"}
     public static long add(Rt rt, long a, long b) {
         Long x = asI64(rt, a), y = asI64(rt, b);
         if (x != null && y != null) {

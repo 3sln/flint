@@ -256,6 +256,8 @@ impl Rt {
     /// A DEFAULT rather than an `Option`, the same convergence `vec_nth` and
     /// `map_get` already made: the ports answered a sentinel, Rust answered
     /// `Option`, and every caller here was spelling a default out anyway.
+    // @kin:link:ns: flint.rt.strs
+    // @kin:link:form:char-at: {:template "{0}.char_at({1}, {2}, {3})"}
     pub fn char_at(&mut self, s: Value, i: u32, dflt: Value) -> Value {
         let mut out = [0u8; 4];
         match self.cp_bytes_at(s, i, &mut out) {

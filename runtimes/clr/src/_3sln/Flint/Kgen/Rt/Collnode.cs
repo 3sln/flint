@@ -13,7 +13,7 @@ using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 
 public static class Collnode {
-    internal static long CnNew(Rt rt, int h, int npairs, long edit) {
+    public static long CnNew(Rt rt, int h, int npairs, long edit) {
         // `edit` is rooted across the allocation and read back after it:
         // `alloc` collects, and a host local does not survive that.
         int e = rt.Push(edit);
@@ -27,16 +27,16 @@ public static class Collnode {
         rt.SetSlot(a, CN_HASH, Val.Fixnum(h & 0xFFFFFFFFL));
         return Val.Heap(a);
     }
-    internal static int CnCount(Rt rt, long n) {
+    public static int CnCount(Rt rt, long n) {
         return (Olen(rt, n) - CN_BASE) / 2;
     }
-    internal static int CnHash(Rt rt, long n) {
+    public static int CnHash(Rt rt, long n) {
         return (int) Val.AsFixnum(rt.Slot(n, CN_HASH));
     }
-    internal static long CnKey(Rt rt, long n, int i) {
+    public static long CnKey(Rt rt, long n, int i) {
         return rt.Slot(n, CN_BASE + (2 * i));
     }
-    internal static long CnVal(Rt rt, long n, int i) {
+    public static long CnVal(Rt rt, long n, int i) {
         return rt.Slot(n, (CN_BASE + (2 * i)) + 1);
     }
     /// A BITMAP NODE, allocated and stamped with its two maps.

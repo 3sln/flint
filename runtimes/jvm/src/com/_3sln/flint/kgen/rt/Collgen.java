@@ -34,7 +34,7 @@ public final class Collgen {
             return 0;
         }
         if (isString(rt, v)) {
-            return Str.sCount(rt, v);
+            return sCount(rt, v);
         }
         if (Val.isHeap(v)) {
             int t = ty(rt.gc.sp, Val.asHeap(v));
@@ -56,7 +56,7 @@ public final class Collgen {
             }
             // A REF COUNTS ITS COLUMNS, because it is a map of them.
             if (t == TY_TABLEREF) {
-                return Table.schemaLen(rt, rt.slot(v, Table.RF_SCHEMA));
+                return schemaLen(rt, rt.slot(v, Table.RF_SCHEMA));
             }
             if ((t == TY_ARRAYMAP) || (t == TY_HASHMAP)) {
                 return mapCount(rt, v);
@@ -102,7 +102,7 @@ public final class Collgen {
                 if (Vec.count(rt, coll) == 0) {
                     return rt.throwStr("IllegalStateException", "cannot pop an empty vector");
                 }
-                return Vec.pop(rt, coll);
+                return vecPop(rt, coll);
             }
             if (t == TY_EMPTY_LIST) {
                 return rt.throwStr("IllegalStateException", "cannot pop an empty list");
@@ -125,7 +125,7 @@ public final class Collgen {
                 if (n == 0) {
                     return Val.NIL;
                 }
-                return Vec.nth(rt, coll, n - 1, Val.NIL);
+                return vecNth(rt, coll, n - 1, Val.NIL);
             }
         }
         return first(rt, coll);

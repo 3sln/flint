@@ -67,9 +67,6 @@ impl Rt {
         else if v.is_heap() { self.gc.sp.read_u8(v.as_heap() + obj::STR_DATA + i as u64) as u32 }
         else { 0 }
     }
-    fn is_rope(&self, v: Value) -> bool {
-        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_ROPE
-    }
     fn rope_kids(&self, v: Value) -> u32 { self.olen(v) - obj::RP_KIDS }
     // A FLAT STRING puts its bytes at STR_DATA, not at HDR.
     // THE ALLOCATOR SETS THE ASCII BIT, as the runtime's does -- `s_ascii`
@@ -211,9 +208,6 @@ fn main() {
     }
     static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
     static int olen(Rt rt, long v) { return rt.lens[(int) v]; }
-    static boolean isRope(Rt rt, long v) {
-        return Val.isHeap(v) && ty(rt.gc.sp, v) == TY_ROPE;
-    }
     static int ropeKids(Rt rt, long v) { return olen(rt, v) - Str.RP_KIDS; }
     static long flat(Rt rt, int[] bs) {
         long a = rt.alloc(TY_STR, bs.length);
@@ -349,9 +343,6 @@ namespace Flint.Rt {
         }
     }
     internal static int Olen(Rt rt, long v) { return rt.lens[(int) v]; }
-    internal static bool IsRope(Rt rt, long v) {
-        return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, v) == Obj.TyRope;
-    }
     internal static int RopeKids(Rt rt, long v) { return Olen(rt, v) - global::Flint.Rt.Str.RP_KIDS; }
     internal static long Flat(Rt rt, int[] bs) {
         long a = rt.Alloc(Obj.TyStr, bs.Length);

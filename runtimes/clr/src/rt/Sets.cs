@@ -57,6 +57,8 @@ public static class Sets {
     // `TransientOf`, `TConj`, `TDisj`, `TCount`, `TGet` and `TPersistent` are
     // GENERATED, from `kin/maptrans.kin`.
 
+    // @kin:link:ns: flint.rt.sets
+    // @kin:link:form:set-eq: {:template "Sets.Eq({0}, {1}, {2})"}
     public static bool Eq(Rt rt, long a, long b) {
         if (Count(rt, a) != Count(rt, b)) return false;
         return Maps.Eq(rt, rt.Slot(a, S_MAP), rt.Slot(b, S_MAP));

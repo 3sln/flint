@@ -571,6 +571,7 @@ fn main() {
         static boolean typeOk(Rt rt, long t, long v) { return Probe.typeOk(rt, t, v); }
         static boolean checkRow(Rt rt, long s, long row, int rowno) { return true; }
     }
+    static boolean checkRow(Rt rt, long s, long row, int rowno) { return Table.checkRow(rt, s, row, rowno); }
     static final class Val {
         static final long NIL = Probe.NIL, NOT_FOUND = Probe.NOT_FOUND;
         static boolean isHeap(long v) {
@@ -650,6 +651,7 @@ fn main() {
             return i >= count(rt, v) ? dflt : rt.slot(v, i);
         }
     }
+    static long vecNth(Rt rt, long v, int i, long dflt) { return Vec.nth(rt, v, i, dflt); }
     static final class Str {
         static boolean isKeyword(Rt rt, long v) { return Val.isKw(v); }
         static boolean isString(Rt rt, long v) { return Val.isName(v); }
@@ -1112,6 +1114,7 @@ namespace Flint.Rt {
             return i >= Count(rt, v) ? dflt : rt.Slot(v, i);
         }
     }
+    internal static long VecNth(Rt rt, long v, int i, long dflt) { return Vec.Nth(rt, v, i, dflt); }
     internal static class Str {
         internal static bool IsKeyword(Rt rt, long v) { return Val.IsKw(v); }
         internal static bool IsString(Rt rt, long v) { return Val.IsName(v); }

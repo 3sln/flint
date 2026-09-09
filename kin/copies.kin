@@ -20,18 +20,17 @@
 ;; off-by-one in the slot arithmetic here is a map that loses an entry, and
 ;; six near-copies in three languages is eighteen chances to make one.
 (ns flint.rt.copies
-  (:require [flint.impl.rt :refer [defn return if let local set do for continue comment doc
-                                   mark push r pop-to nil? not
-                                    bn-datamap bn-nodemap bn-key bn-val
-                                   bn-node bn-set-key bn-set-val bn-set-node
-                                   index-of popcount
-                                   + - < == and slot bit-or bit-xor bit-and
-                                   Rt Value RootIx I32 NIL
+  (:require [flint.impl.rt :refer [defn return if let local set do for
+                                   continue comment doc mark push r pop-to
+                                   nil? not popcount + - < == and slot bit-or
+                                   bit-xor bit-and Rt Value RootIx I32 NIL
                                    BN_EDIT]]
+            [flint.rt.champ :refer [bn-datamap bn-key bn-node bn-nodemap
+                                    bn-set-key bn-set-node bn-set-val bn-val]]
+            [flint.rt.maps :refer [index-of]]
             [flint.rt.collnode :refer [bn-new]]))
 
-(defn ^:method ^Value bn-copy-insert-entry
-  [^:mut ^Rt rt ^Value n ^I32 bit ^Value key ^Value val ^Value edit]
+(defn ^:pub ^:method ^Value bn-copy-insert-entry [^:mut ^Rt rt ^Value n ^I32 bit ^Value key ^Value val ^Value edit]
   (let [^RootIx mk (mark rt)
         ^RootIx ni (push rt n)
         ^RootIx ki (push rt key)
@@ -70,8 +69,7 @@
         (pop-to rt mk)
         (return built)))))
 
-(defn ^:method ^Value bn-copy-remove-entry
-  [^:mut ^Rt rt ^Value n ^I32 bit ^Value edit]
+(defn ^:pub ^:method ^Value bn-copy-remove-entry [^:mut ^Rt rt ^Value n ^I32 bit ^Value edit]
   (let [^RootIx mk (mark rt)
         ^RootIx ni (push rt n)
         ^RootIx ei (push rt edit)
@@ -105,8 +103,7 @@
         (pop-to rt mk)
         (return built)))))
 
-(defn ^:method ^Value bn-copy-set-value
-  [^:mut ^Rt rt ^Value n ^I32 at ^Value val ^Value edit]
+(defn ^:pub ^:method ^Value bn-copy-set-value [^:mut ^Rt rt ^Value n ^I32 at ^Value val ^Value edit]
   (let [^RootIx mk (mark rt)
         ^RootIx ni (push rt n)
         ^RootIx vi (push rt val)
@@ -142,8 +139,7 @@
           (pop-to rt mk)
           (return built))))))
 
-(defn ^:method ^Value bn-copy-set-node
-  [^:mut ^Rt rt ^Value n ^I32 at ^Value sub ^Value edit]
+(defn ^:pub ^:method ^Value bn-copy-set-node [^:mut ^Rt rt ^Value n ^I32 at ^Value sub ^Value edit]
   (let [^RootIx mk (mark rt)
         ^RootIx ni (push rt n)
         ^RootIx si (push rt sub)
@@ -184,8 +180,7 @@
      "the new nodemap as well, because the bit being added is the one being"
      "counted up to.")
 
-(defn ^:method ^Value bn-inline-to-node
-  [^:mut ^Rt rt ^Value n ^I32 bit ^Value sub ^Value edit]
+(defn ^:pub ^:method ^Value bn-inline-to-node [^:mut ^Rt rt ^Value n ^I32 bit ^Value sub ^Value edit]
   (let [^RootIx mk (mark rt)
         ^RootIx ni (push rt n)
         ^RootIx si (push rt sub)
@@ -227,8 +222,7 @@
 
 (doc "And the reverse: a sub-node collapses back to an inline pair.")
 
-(defn ^:method ^Value bn-node-to-inline
-  [^:mut ^Rt rt ^Value n ^I32 bit ^Value key ^Value val ^Value edit]
+(defn ^:pub ^:method ^Value bn-node-to-inline [^:mut ^Rt rt ^Value n ^I32 bit ^Value key ^Value val ^Value edit]
   (let [^RootIx mk (mark rt)
         ^RootIx ni (push rt n)
         ^RootIx ki (push rt key)

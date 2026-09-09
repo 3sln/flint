@@ -57,6 +57,8 @@ impl Rt {
     /// It also cost a CALLBACK, and `set_for_each` is one of the two closures
     /// blocking these functions from being generated. One of the six turns
     /// out not to have needed a walk at all.
+    // @kin:link:ns: flint.rt.sets
+    // @kin:link:form:set-eq: {:template "{0}.set_eq({1}, {2})"}
     pub fn set_eq(&mut self, a: Value, b: Value) -> bool {
         if self.set_count(a) != self.set_count(b) {
             return false;

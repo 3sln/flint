@@ -810,13 +810,6 @@
     ;; The map's own helpers. `bn-set-*` and `cn-set` are themselves
     ;; generated, by `champ.kin`, which is what makes this a second layer
     ;; rather than a second copy.
-    'cn-new (own "cn_new" "cnNew" 3)
-    'bn-set-key (own "bn_set_key" "bnSetKey" 3)
-    'bn-set-val (own "bn_set_val" "bnSetVal" 3)
-    'bn-set-node (own "bn_set_node" "bnSetNode" 3)
-    'hash-mask (own-static "mask" "mask" 2)
-    'index-of (own-static "index_of" "indexOf" 2)
-    'bitpos (own-static "bitpos" "bitpos" 2)
 
     ;; Functions kin itself GENERATED, in `merge.kin` and `copies.kin`. A
     ;; generated function is reachable from another source only through a
@@ -827,15 +820,8 @@
     ;; three operations were written out at each use -- so the helper was
     ;; added there rather than the inline form taught to kin: the ports had
     ;; already named it, and a name is the portable half.
-    'cn-hash (own "cn_hash" "cnHash" 1)
-    'cn-count (own "cn_count" "cnCount" 1)
-    'cn-key (own "cn_key" "cnKey" 2)
-    'cn-val (own "cn_val" "cnVal" 2)
-    'node-assoc (own "node_assoc" "nodeAssoc" 6)
-    'coll-dissoc (own "coll_dissoc" "collDissoc" 3)
     ;; `category` is itself generated, by `kin/eq.kin`, and is reached from
     ;; inside its own class on the ports -- so it is `own`, not `sibling`.
-    'category (own "category" "category" 1)
     ;; The TABLE unit, reached from the map layer. `map_count` needs it for a
     ;; ROW REF, which counts its COLUMNS -- the defensive arm both ports have
     ;; and Rust does not.
@@ -882,6 +868,12 @@
     'empty-set (core/call {:rust "{0}.empty_set()"
                            :java "Sets.empty({0})"
                            :csharp "global::Flint.Rt.Sets.Empty({0})"})
+    ;; `ref-get` and `ref-to-map` are the same shape one tier up, and stay for
+    ;; the same reason: a row ref answers `get` like a map, so `mapread`
+    ;; reaches for them -- and `ref-get` finds its column THROUGH a map, so
+    ;; `tableref` reaches back. Both are generated, in `flint.rt.tableref`;
+    ;; the templates below name the host facade that forwards to them, which
+    ;; is the one hop a declaration cannot avoid here.
     'ref-to-map (core/call {:rust "{0}.ref_to_map({1})"
                             :java "Table.refToMap({0}, {1})"
                             :csharp "global::Flint.Rt.Table.refToMap({0}, {1})"})
@@ -891,31 +883,12 @@
     ;; STILL HAND-WRITTEN, and reached as a call rather than a sibling until
     ;; it is not: `check-row` builds the refusal messages that `0032` is about,
     ;; and those are the last part of `Table` to port.
-    'check-row (core/call {:rust "{0}.check_row({1}, {2}, {3})"
-                           :java "Table.checkRow({0}, {1}, {2}, {3})"
-                           :csharp "global::Flint.Rt.Table.checkRow({0}, {1}, {2}, {3})"}
-                          {:tag Bool})
-    'schema-len (core/call {:rust "{0}.schema_len({1})"
-                            :java "Table.schemaLen({0}, {1})"
-                            :csharp "global::Flint.Rt.Table.schemaLen({0}, {1})"})
     ;; `eq_may_alloc` is GENERATED, by `eqalloc.kin`, so it is `own` rather
     ;; than a hand-written sibling -- and `own` is now exactly right for one:
     ;; a bare call, with the static import derived from the fact that this
     ;; source mentions the name. It used to be spelled `Eq.eqMayAlloc`,
     ;; because the region was spliced into `Eq.java`; it lives in
     ;; `flint.rt.Eqalloc` now and nothing needs to say so.
-    'eq-may-alloc (own "eq_may_alloc" "eqMayAlloc" 1)
-    'node-find-scalar (own "node_find_scalar" "nodeFindScalar" 4)
-    'node-size-class (own "node_size_class" "nodeSizeClass" 1)
-    'bn-copy-remove-entry (own "bn_copy_remove_entry" "bnCopyRemoveEntry" 3)
-    'bn-node-to-inline (own "bn_node_to_inline" "bnNodeToInline" 5)
-    'merge-two (own "merge_two" "mergeTwo" 8)
-    'bn-copy-set-value (own "bn_copy_set_value" "bnCopySetValue" 4)
-    'bn-copy-set-node (own "bn_copy_set_node" "bnCopySetNode" 4)
-    'bn-copy-insert-entry (own "bn_copy_insert_entry" "bnCopyInsertEntry" 5)
-    'bn-inline-to-node (own "bn_inline_to_node" "bnInlineToNode" 4)
-    'is-bmnode (own "is_bmnode" "isBmnode" 1)
-    'coll-assoc (own "coll_assoc" "collAssoc" 6)
     ;; `eq` and `hash-value` live in Eq on the ports, not in Maps -- a
     ;; SIBLING rather than one of our own, and the distinction is exactly what
     ;; the two helpers exist to keep straight.
@@ -924,20 +897,27 @@
     ;; class FULLY QUALIFIED here, for different reasons -- see the note on
     ;; `eq-may-alloc` above. `sibling` takes one class name for both ports
     ;; and cannot say either of them.
-    ;; `val-eq` IS `flint.rt.valeq`'s OWN, which is what lets `seq-eq` call it
-    ;; from above its definition: kin resolves a file's `defn`s in order, so
-    ;; the two halves of a mutual recursion meet through the vocabulary. That
-    ;; is the same shape `coll-assoc` has, and for the same reason.
+    ;; THE TWO THAT STAY, and why they are not a shortcut.
+    ;;
+    ;; A forward reference WITHIN a file is `declare`'s job now, and every
+    ;; entry that was here for that reason is gone -- `coll-assoc`,
+    ;; `coll-dissoc` and `val-cmp` each declare themselves in their own
+    ;; source and need nothing here.
+    ;;
+    ;; These two are a different thing. `val-eq` and `hash-value` are the
+    ;; UNIVERSAL DISPATCHERS: every collection needs them to compare and to
+    ;; hash a key, and they in turn need every collection to compare or hash
+    ;; one. Reached through requires, `valeq` and `valhash` land in one knot
+    ;; with `mapread`, `mapwrite`, `assoc`, `dissoc`, `find`, `collhash`,
+    ;; `setcore`, `seqwalk` and `tableref` -- and kin refuses a namespace
+    ;; cycle, as Clojure does.
+    ;;
+    ;; `declare` does not reach it: that breaks a cycle inside ONE namespace,
+    ;; and this one runs across eleven. So the declaration lives here, which
+    ;; is what a declaration is for. Merging the eleven would be the only
+    ;; other honest answer, and they are eleven different subjects.
     'val-eq (own "val_eq" "valEq" 2)
-    ;; `hash-value` IS `flint.rt.valhash`'s OWN, for the reason `val-eq` is
-    ;; `valeq`'s: `hash-ordered` calls it from above its definition, and kin
-    ;; resolves a file's `defn`s in order.
     'hash-value (own "hash_value" "hashValue" 1)
-    'bn-datamap (own "bn_datamap" "bnDatamap" 1)
-    'bn-nodemap (own "bn_nodemap" "bnNodemap" 1)
-    'bn-key (own "bn_key" "bnKey" 2)
-    'bn-val (own "bn_val" "bnVal" 2)
-    'bn-node (own "bn_node" "bnNode" 2)
     ;; Population count. Three intrinsics for one idea -- the shape a
     ;; vocabulary exists for.
     'popcount (core/call {:rust "{0}.count_ones()"
@@ -949,22 +929,13 @@
     ;; when absence stopped being a sentinel each caller had to know; this
     ;; entry said 2 for a while after the function said 3, which would have
     ;; generated a call that does not compile the moment a source used it.
-    'vec-nth (sibling "vec_nth" "Vec" "nth" 3)
-    'vec-conj (sibling "vec_conj" "Vec" "conj" 2)
-    'vec-assoc (sibling "vec_assoc" "Vec" "assoc" 3)
-    'vec-pop (sibling "vec_pop" "Vec" "pop" 1)
     ;; The CHARACTER lookup, with the same `dflt` shape. Rust calls it
     ;; `char_at`; both ports call it `Str.nth`, camel on the JVM and Pascal on
     ;; the CLR, which is what the four-argument `sibling` is for.
-    'char-at (sibling "char_at" "Str" "nth" "Nth" 3)
     ;; TABLES. Both ports spell these camelCase -- `tableRef`, not `TableRef`
     ;; -- so the C# name is given explicitly rather than pascalised.
-    'table-ref (sibling "table_ref" "Table" "tableRef" "tableRef" 2)
-    'table-count (sibling "table_count" "Table" "tableCount" "tableCount" 1)
-    'num-add (sibling "num_add" "Num" "add" "Add" 2)
     ;; A TAGGED INTEGER from a host `i64`: a fixnum when it fits and a boxed
     ;; bigint when it does not, which is what makes integers CANONICAL.
-    'integer (sibling "integer" "Num" "integer" "Integer" 1)
     ;; A DOUBLE as a value. Takes the `f64` and not a value, so it is a `call`
     ;; rather than a sibling: there is no receiver.
     'of-double (core/call {:rust "Value::from_f64({0})"
@@ -1043,15 +1014,11 @@
                                     :java "Num.notNumber({0}, {1}, {2})"
                                     :csharp "Num.NotNumber({0}, {1}, {2})"}
                                    {:tag Value})
-    'maps-eq (sibling "map_eq" "Maps" "eq" "Eq" 2)
     ;; `set-eq` STAYS HAND-WRITTEN because it walks the set's elements, and
     ;; walking needs a callback -- the closure hole. `map-eq` is here for the
     ;; same reason and neither is a candidate until that is answered.
-    'set-eq (sibling "set_eq" "Sets" "eq" "Eq" 2)
     ;; `hash-map` and `hash-set` walk their contents through a callback, so
     ;; they stay hand-written for the same reason `map-eq` and `set-eq` do.
-    'hash-map (sibling "hash_map" "Maps" "hash" "Hash" 1)
-    'hash-set (sibling "hash_set" "Sets" "hash" "Hash" 1)
     ;; THE STRING AND KEYWORD HASHES, each of which READS A CACHE. Both ports
     ;; had the cache and used neither: `strHash` was written during interning
     ;; and never read, and a keyword's slot 2 was set to nil rather than to the
@@ -1067,7 +1034,6 @@
     ;; `hash-value` are theirs: its two helpers call it from above its
     ;; definition. The RUST spelling stays `compare`, which is what every
     ;; native caller already says.
-    'val-cmp (own "val_cmp" "valCmp" 2)
     'str-cmp (core/call {:rust "{0}.str_cmp({1}, {2})"
                          :java "Str.compareUtf16({0}, {1}, {2})"
                          :csharp "Str.CompareUtf16({0}, {1}, {2})"}
@@ -1077,8 +1043,6 @@
                          :java "Num.cmp({0}, {1}, {2})"
                          :csharp "Num.Cmp({0}, {1}, {2})"}
                         {:tag Cmp})
-    'string-hash (sibling "string_hash" "Str" "stringHash" "StringHash" 1)
-    'keyword-hash (sibling "keyword_hash" "Str" "keywordHash" "KeywordHash" 1)
     ;; `hash-double` takes the DOUBLE, not the value: the bit pattern of a NaN
     ;; is not the question, the number is.
     ;; FULLY QUALIFIED, and not optional: a GENERATED `Hash` lives beside
@@ -1183,10 +1147,6 @@
     'kind-of (core/call {:rust "{0}.kind_of({1})"
                          :java "{0}.kindOf({1})" :csharp "{0}.KindOf({1})"}
                         {:tag Value})
-    'type-ok (core/call {:rust "{0}.type_ok({1}, {2})"
-                         :java "Table.typeOk({0}, {1}, {2})"
-                         :csharp "global::Flint.Rt.Table.typeOk({0}, {1}, {2})"}
-                        {:tag Bool})
     'text (core/call {:rust "alloc::string::String::from({0})"
                       :java "{0}" :csharp "{0}"}
                      {:tag Text})
@@ -1221,7 +1181,6 @@
     ;; has to decode UTF-8 for the other two tiers, which needs a host slice.
     ;; `s-count` and `s-ascii` are exactly the numbers a rope node caches, so a
     ;; generated `rope-node` asks for them rather than recomputing them.
-    's-bytes (sibling "s_bytes" "Str" "sBytes" "SBytes" 1)
     ;; `count` ON A STRING IS IN CODE POINTS, not UTF-16 code units. Clojure
     ;; counts UTF-16, so an astral character counts 2 there and 1 here -- a
     ;; deliberate divergence, recorded in the README.
@@ -1230,16 +1189,11 @@
     ;; and this -- and the first two reached a hand-written function on the
     ;; ports that walked the whole rope where this reads a slot. An alias is
     ;; how the implementations got to differ; one word is how they cannot.
-    's-count (sibling "s_count" "Str" "sCount" "SCount" 1)
-    's-ascii (sibling "s_ascii" "Str" "sAscii" "SAscii" 1)
-    's-concat-copy (sibling "copy_concat" "Str" "copyConcat" "CopyConcat" 2)
     ;; The empty string is INTERNED, not allocated -- an inline value with
     ;; nothing on the heap -- so unlike `b-empty` the generated half cannot
     ;; build one and asks for it.
-    's-empty (sibling "s_empty" "Str" "sEmpty" "SEmpty" 0)
     ;; The other hand-written half: copying a RANGE out into a fresh string,
     ;; which needs a byte sink AND a UTF-8 decode.
-    's-copy-range (sibling "s_copy_range" "Str" "sCopyRange" "SCopyRange" 3)
 
     ;; ONE BYTE out of the heap, at an absolute address. Rust reads a leaf
     ;; through `raw_bytes`, which hands back a borrowed slice -- hole 6, and
@@ -1334,10 +1288,6 @@
     ;; closure hole genuinely blocks -- it walks a CHAMP with a host callback --
     ;; and `set-element-vector` is its twin. Reached as calls until that hole
     ;; closes.
-    'map-entry-vector (core/call {:rust "{0}.map_entry_vector({1})"
-                                  :java "Maps.entryVector({0}, {1})"
-                                  :csharp "Maps.EntryVector({0}, {1})"}
-                                 {:tag Value})
     ;; A MAP ENTRY AS A TWO-ELEMENT VECTOR -- which is NOT `map-entry-vector`
     ;; above, and the two are one letter apart in use. That one turns a MAP
     ;; into a vector OF entries; this one turns ONE entry into a vector of its
@@ -1347,10 +1297,6 @@
                                   :java "Vec.mapEntryAsVec({0}, {1})"
                                   :csharp "Vec.MapEntryAsVec({0}, {1})"}
                                  {:tag Value})
-    'set-element-vector (core/call {:rust "{0}.set_element_vector({1})"
-                                    :java "Sets.elementVector({0}, {1})"
-                                    :csharp "Sets.ElementVector({0}, {1})"}
-                                   {:tag Value})
     'invoke-roots (core/call {:rust "{0}.invoke_roots({1}, {2}, {3})"
                               :java "{0}.invokeRoots({1}, {2}, {3})"
                               :csharp "{0}.InvokeRoots({1}, {2}, {3})"}

@@ -27,15 +27,16 @@
 ;; the shape that costs a session.
 (ns flint.rt.collhash
   (:require [flint.impl.rt :refer [defn return if let local set do comment doc
-                                   for == != not or and +
-                                   mark push r pop-to slot set-slot ty as-heap
-                                   nil? is-fixnum as-fixnum fixnum to-i32
-                                   popcount is-bmnode wadd hash-value charge-work
-                                   bn-datamap bn-nodemap bn-key bn-val bn-node
-                                   cn-count cn-key cn-val
-                                   Rt Value RootIx I32 U32 Ty NIL
-                                   AM_HASH HM_HASH HM_ROOT S_HASH S_MAP
-                                   TY_ARRAYMAP TY_HASHMAP]]
+                                   for == != not or and + mark push r pop-to
+                                   slot set-slot ty as-heap nil? is-fixnum
+                                   as-fixnum fixnum to-i32 popcount wadd
+                                   hash-value charge-work Rt Value RootIx I32
+                                   U32 Ty NIL AM_HASH HM_HASH HM_ROOT S_HASH
+                                   S_MAP TY_ARRAYMAP TY_HASHMAP]]
+            [flint.rt.nodeclass :refer [is-bmnode]]
+            [flint.rt.collnode :refer [cn-count cn-key cn-val]]
+            [flint.rt.champ :refer [bn-datamap bn-key bn-node bn-nodemap
+                                    bn-val]]
             [flint.rt.mapcore :refer [map-count am-key am-val]]
             [flint.rt.setcore :refer [set-count]]
             [flint.rt.hash    :refer [ordered-step mix-coll-hash]]))

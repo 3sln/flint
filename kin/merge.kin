@@ -12,17 +12,15 @@
 ;; build the intermediate nodes -- or they have the same 32-bit hash all the
 ;; way down, and go side by side in a collision node.
 (ns flint.rt.merge
-  (:require [flint.impl.rt :refer [set-slot defn return if let local set do comment
-                                   mark push r pop-to nil? not
-                                   cn-new   bn-set-key bn-set-val
-                                   bn-set-node hash-mask
-                                   + >= != < shl bit-or
-                                   Rt Value RootIx I32 NIL
+  (:require [flint.impl.rt :refer [set-slot defn return if let local set do
+                                   comment mark push r pop-to nil? not + >= !=
+                                   < shl bit-or Rt Value RootIx I32 NIL
                                    CN_BASE HASH_BITS]]
-            [flint.rt.collnode :refer [bn-new]]))
+            [flint.rt.maps :refer [hash-mask]]
+            [flint.rt.champ :refer [bn-set-key bn-set-node bn-set-val]]
+            [flint.rt.collnode :refer [bn-new cn-new]]))
 
-(defn ^:method ^Value merge-two
-  [^:mut ^Rt rt ^I32 shift ^Value k0 ^Value v0 ^I32 h0
+(defn ^:pub ^:method ^Value merge-two [^:mut ^Rt rt ^I32 shift ^Value k0 ^Value v0 ^I32 h0
    ^Value k1 ^Value v1 ^I32 h1 ^Value edit]
   (let [^RootIx mk (mark rt)
         ^RootIx ik0 (push rt k0)

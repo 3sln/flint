@@ -47,7 +47,7 @@ public final class Tableref {
         int ti = rt.push(t);
         int at = i + tableOffset(rt, rt.r(ti));
         long chunks = rt.slot(rt.r(ti), Table.TB_CHUNKS);
-        long ch = Vec.nth(rt, chunks, at >>> Table.CHUNK_SHIFT, Val.NIL);
+        long ch = vecNth(rt, chunks, at >>> Table.CHUNK_SHIFT, Val.NIL);
         int chi = rt.push(ch);
         long rf = Val.heap(rt.alloc(TY_TABLEREF, Table.RF_LEN));
         int ri = rt.push(rf);

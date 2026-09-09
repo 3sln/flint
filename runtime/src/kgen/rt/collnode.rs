@@ -18,7 +18,7 @@ use crate::kgen::rt::pike::*;
 use crate::kgen::rt::casetable::*;
 
 impl Rt {
-    pub(crate) fn cn_new(&mut self, h: u32, npairs: u32, edit: Value) -> Value {
+    pub fn cn_new(&mut self, h: u32, npairs: u32, edit: Value) -> Value {
         // `edit` is rooted across the allocation and read back after it:
         // `alloc` collects, and a host local does not survive that.
         let e: usize = self.push(edit);
@@ -33,18 +33,18 @@ impl Rt {
         return Value::heap(a);
     }
     #[inline]
-    pub(crate) fn cn_count(&self, n: Value) -> u32 {
+    pub fn cn_count(&self, n: Value) -> u32 {
         return (self.olen(n) - CN_BASE) / 2;
     }
-    pub(crate) fn cn_hash(&self, n: Value) -> u32 {
+    pub fn cn_hash(&self, n: Value) -> u32 {
         return self.slot(n, CN_HASH).as_fixnum() as u32;
     }
     #[inline]
-    pub(crate) fn cn_key(&self, n: Value, i: u32) -> Value {
+    pub fn cn_key(&self, n: Value, i: u32) -> Value {
         return self.slot(n, CN_BASE + (2 * i));
     }
     #[inline]
-    pub(crate) fn cn_val(&self, n: Value, i: u32) -> Value {
+    pub fn cn_val(&self, n: Value, i: u32) -> Value {
         return self.slot(n, (CN_BASE + (2 * i)) + 1);
     }
     /// A BITMAP NODE, allocated and stamped with its two maps.

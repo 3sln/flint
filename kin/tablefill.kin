@@ -12,8 +12,8 @@
                                    mark push r pop-to
                                    Rt Value I32 Bool RootIx
                                    TY_NODE CHUNK CH_BASE CH_ENC ENC_CONST]]
-            [flint.rt.tablemeta :refer [schema-len schema-width schema-id-at
-                                        chunk-rows chunk-enc chunk-get]]
+            [flint.rt.tablemeta :refer [chunk-enc chunk-get chunk-rows
+                                        schema-id-at schema-len schema-width]]
             [flint.rt.tablecell :refer [new-chunk collapse row-column]]))
 
 (doc "Write row `k` of `ch` from `row`, column by column."

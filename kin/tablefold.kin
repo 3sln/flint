@@ -11,12 +11,11 @@
 ;; allocates nothing per row. A host argument array would have been built once
 ;; per iteration, and a generated source cannot hold one anyway.
 (ns flint.rt.tablefold
-  (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   >= not
+  (:require [flint.impl.rt :refer [defn return if let do comment doc >= not
                                    slot mark push r set-r pop-to for
                                    charge-tick throw-str str-cat static-text
-                                   invoke-roots is-thrown
-                                   Rt Value I32 RootIx Text NIL TB_SCHEMA]]
+                                   invoke-roots is-thrown Rt Value I32 RootIx
+                                   Text NIL TB_SCHEMA]]
             [flint.rt.tablemeta :refer [schema-width table-count]]
             [flint.rt.tableref :refer [schema-id]]
             [flint.rt.tablecell :refer [table-cell]]

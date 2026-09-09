@@ -16,21 +16,23 @@
 (ns flint.rt.valhash
   (:require [flint.impl.rt :refer [defn return if let do comment doc local set
                                    == not nil? is-heap as-heap ty is-fixnum
-                                   as-fixnum to-i32 fixnum slot set-slot
-                                   mark push r set-r pop-to forever break while + *
-                                   charge-tick hash-value to-i64 bit-or bit-xor
-                                   is-double num-f64 is-fixnum <
-                                   is-inline-str is-inline-kw
-                                   i64-of hash-double string-hash keyword-hash
-                                   hash-map hash-set ref-to-map table-ref
-                                   table-count wadd wmul or
-                                   Rt Value I32 U32 Ty Bool RootIx NIL F64 TRUE FALSE
-                                   TY_VEC TY_STR TY_ROPE TY_KW TY_SYM
+                                   as-fixnum to-i32 fixnum slot set-slot mark
+                                   push r set-r pop-to forever break while + *
+                                   charge-tick hash-value to-i64 bit-or
+                                   bit-xor is-double num-f64 is-fixnum <
+                                   is-inline-str is-inline-kw i64-of
+                                   hash-double ref-to-map wadd wmul or Rt
+                                   Value I32 U32 Ty Bool RootIx NIL F64 TRUE
+                                   FALSE TY_VEC TY_STR TY_ROPE TY_KW TY_SYM
                                    TY_BIGINT TY_MAPENTRY TY_CONS TY_EMPTY_LIST
                                    TY_LAZYSEQ TY_VECSEQ TY_STRSEQ TY_RANGE
                                    TY_ARRAYMAP TY_HASHMAP TY_SET TY_BYTES
                                    TY_BROPE TY_OPAQUE TY_TABLE TY_TABLEREF
                                    TY_TAGGED V_HASH]]
+            [flint.rt.tableref :refer [table-ref]]
+            [flint.rt.tablemeta :refer [table-count]]
+            [flint.rt.collhash :refer [hash-map hash-set]]
+            [flint.rt.strs :refer [keyword-hash string-hash]]
             [flint.rt.hash :refer [ordered-step mix-coll-hash hash-long hash-int
                                    HASH_TRUE HASH_FALSE]]
             [flint.rt.names :refer [symbol-hash]]

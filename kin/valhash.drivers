@@ -281,7 +281,9 @@ fn main() {
     static int ropeHash(Rt rt, long v) { return 0x5400 | (int) (v & 0xFF); }
     static int bHash(Rt rt, long v) { return 0x5500 | (int) (v & 0xFF); }
     static final class Maps { static int hash(Rt rt, long v) { return 0x5600 | (int) (v & 0xFF); } }
+    static int hashMap(Rt rt, long v) { return Maps.hash(rt, v); }
     static final class Sets { static int hash(Rt rt, long v) { return 0x5700 | (int) (v & 0xFF); } }
+    static int hashSet(Rt rt, long v) { return Sets.hash(rt, v); }
     static final class Num {
         static double f64(Rt rt, long v) { return rt.doubles[(int) (v & 0xFF)]; }
         static long i64Of(Rt rt, long v) { return v & 0xFFFF; }
@@ -298,6 +300,8 @@ fn main() {
             return m;
         }
     }
+    static int tableCount(Rt rt, long t) { return Table.tableCount(rt, t); }
+    static long tableRef(Rt rt, long t, int i) { return Table.tableRef(rt, t, i); }
     static long seq(Rt rt, long c) {
         int n = (Val.isHeap(c) && ty(rt.gc.sp, Val.asHeap(c)) == TY_VEC)
                 ? (int) rt.slots[(int) c][1] : rt.seqn;
@@ -485,7 +489,9 @@ namespace Flint.Rt {
     internal static int RopeHash(Rt rt, long v) { return 0x5400 | (int) (v & 0xFF); }
     internal static int BHash(Rt rt, long v) { return 0x5500 | (int) (v & 0xFF); }
     internal static class Maps { internal static int Hash(Rt rt, long v) { return 0x5600 | (int) (v & 0xFF); } }
+    internal static int HashMap(Rt rt, long v) { return Maps.Hash(rt, v); }
     internal static class Sets { internal static int Hash(Rt rt, long v) { return 0x5700 | (int) (v & 0xFF); } }
+    internal static int HashSet(Rt rt, long v) { return Sets.Hash(rt, v); }
     internal static class Num {
         internal static double F64(Rt rt, long v) { return rt.doubles[(int) (v & 0xFF)]; }
         internal static long I64Of(Rt rt, long v) { return v & 0xFFFF; }
@@ -497,6 +503,8 @@ namespace Flint.Rt {
             return Val.Fixnum(rt.slots[(int) t, 1] * 100 + i);
         }
     }
+    internal static long TableRef(Rt rt, long t, int i) { return Table.tableRef(rt, t, i); }
+    internal static int TableCount(Rt rt, long t) { return Table.tableCount(rt, t); }
     internal static long Seq(Rt rt, long c) {
         int n = (Val.IsHeap(c) && Obj.Ty(rt.gc.sp, Val.AsHeap(c)) == Obj.TyVec)
                 ? (int) rt.slots[(int) c, 1] : rt.seqn;

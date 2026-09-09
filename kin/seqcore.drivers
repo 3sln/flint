@@ -197,6 +197,7 @@ fn main() {
         static final int RF_SCHEMA = 0;
         static int schemaLen(Rt rt, long s) { return (int) rt.h[(int) s]; }
     }
+    static int schemaLen(Rt rt, long s) { return Table.schemaLen(rt, s); }
     static int ty(int[] sp, long a) { return sp[(int) a]; }
 --java
     static long mkRange(Rt rt, long st, long en, long step) {
@@ -336,6 +337,7 @@ namespace Flint.Rt {
                 internal const int RF_SCHEMA = 0;
                 internal static int schemaLen(Probe.Rt rt, long s) { return (int) rt.h[(int) s]; }
             }
+            internal static int SchemaLen(Probe.Rt rt, long s) { return Table.schemaLen(rt, s); }
         }
     }
 --csharp

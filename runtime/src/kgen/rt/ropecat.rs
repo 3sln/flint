@@ -18,13 +18,6 @@ use crate::kgen::rt::pike::*;
 use crate::kgen::rt::casetable::*;
 
 impl Rt {
-    /// Is `v` the NODE tier -- a tree rather than a leaf or an inline string?
-    pub fn is_rope(&self, v: Value) -> bool {
-        if !v.is_heap() {
-            return false;
-        }
-        return ty(&self.gc.sp, v.as_heap()) == TY_ROPE;
-    }
     /// How many children this node has.
     pub fn rope_kids(&self, v: Value) -> u32 {
         return self.olen(v) - crate::obj::RP_KIDS;

@@ -20,7 +20,7 @@ public static class Ropeeq {
         if (a == b) {
             return true;
         }
-        if (Str.SBytes(rt, a) != Str.SBytes(rt, b)) {
+        if (SBytes(rt, a) != SBytes(rt, b)) {
             return false;
         }
         int wa = rt.WalkOpen(a);

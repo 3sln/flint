@@ -18,9 +18,9 @@
 ;; the impl, where `pred-hit`'s call to `word-cp` no longer resolves. One
 ;; receiver-ness per source.
 (ns flint.rt.pikegas
-  (:require [flint.impl.rt :refer [defn return doc do let
-                                   charge-work charge-bytes s-bytes
-                                   Rt Value I32]]))
+  (:require [flint.impl.rt :refer [defn return doc do let charge-work
+                                   charge-bytes Rt Value I32]]
+            [flint.rt.ropemeas :refer [s-bytes]]))
 
 (doc "What COMPILING a regex program costs: one unit per program word."
      ""

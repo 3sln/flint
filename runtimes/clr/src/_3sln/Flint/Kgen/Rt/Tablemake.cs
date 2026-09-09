@@ -43,7 +43,7 @@ public static class Tablemake {
         long ids0 = Vec.Empty(rt);
         int di = rt.Push(ids0);
         for (int i = 0; i < n; i++) {
-            long pair = Vec.Nth(rt, rt.R(pi), i, Val.Nil);
+            long pair = VecNth(rt, rt.R(pi), i, Val.Nil);
             int pj = rt.Push(pair);
             if (!IsVectorLike(rt, rt.R(pj))) {
                 rt.PopTo(@base);
@@ -53,8 +53,8 @@ public static class Tablemake {
                 rt.PopTo(@base);
                 return rt.ThrowStr("IllegalArgumentException", "a schema is [[name type] ...]; this entry is not a name and a type");
             }
-            long nm = Vec.Nth(rt, rt.R(pj), 0, Val.Nil);
-            long tp = Vec.Nth(rt, rt.R(pj), 1, Val.Nil);
+            long nm = VecNth(rt, rt.R(pj), 0, Val.Nil);
+            long tp = VecNth(rt, rt.R(pj), 1, Val.Nil);
             if (!IsKeyword(rt, nm)) {
                 rt.PopTo(@base);
                 return rt.ThrowStr("IllegalArgumentException", "a column name must be a keyword");
@@ -72,13 +72,13 @@ public static class Tablemake {
                 rt.PopTo(@base);
                 return rt.ThrowStr("IllegalArgumentException", "the column :" + shown + " is named twice");
             }
-            long nv = Vec.Conj(rt, rt.R(ni), nm);
+            long nv = VecConj(rt, rt.R(ni), nm);
             rt.SetR(ni, nv);
-            long tv = Vec.Conj(rt, rt.R(ti), tp);
+            long tv = VecConj(rt, rt.R(ti), tp);
             rt.SetR(ti, tv);
             long m = MapAssoc(rt, rt.R(ii), nm, Val.Fixnum(i & 0xFFFFFFFFL));
             rt.SetR(ii, m);
-            long dv = Vec.Conj(rt, rt.R(di), Val.Fixnum(i & 0xFFFFFFFFL));
+            long dv = VecConj(rt, rt.R(di), Val.Fixnum(i & 0xFFFFFFFFL));
             rt.SetR(di, dv);
             rt.PopTo(pj);
         }
@@ -134,7 +134,7 @@ public static class Tablemake {
         int oi = rt.Push(out0);
         for (int i = 0; i < n; i++) {
             long v = TableCell(rt, rt.R(ti), id, i);
-            long nv = Vec.Conj(rt, rt.R(oi), v);
+            long nv = VecConj(rt, rt.R(oi), v);
             rt.SetR(oi, nv);
         }
         long @out = rt.R(oi);

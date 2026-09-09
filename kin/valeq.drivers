@@ -306,10 +306,14 @@ fn main() {
             return anInt(rt.slot(t, 1) * 100 + i);
         }
     }
+    static int tableCount(Rt rt, long t) { return Table.tableCount(rt, t); }
+    static long tableRef(Rt rt, long t, int i) { return Table.tableRef(rt, t, i); }
     static final class Str { static int sBytes(Rt rt, long v) { return (int) rt.slot(v, 0); } }
+    static int sBytes(Rt rt, long v) { return Str.sBytes(rt, v); }
     static boolean treeEq(Rt rt, long a, long b) { return rt.treeq; }
     static boolean bEq(Rt rt, long a, long b) { return rt.beq; }
     static final class Maps { static boolean eq(Rt rt, long a, long b) { return rt.mapeq; } }
+    static boolean mapEq(Rt rt, long a, long b) { return Maps.eq(rt, a, b); }
     static final class Sets { static boolean eq(Rt rt, long a, long b) { return rt.seteq; } }
     static boolean schemaEq(Rt rt, long a, long b) { return rt.scheq; }
     static final class Vec { static int count(Rt rt, long v) { return (int) rt.slot(v, 0); } }
@@ -507,9 +511,13 @@ namespace Flint.Rt {
             return AnInt(rt.Slot(t, 1) * 100 + i);
         }
     }
+    internal static long TableRef(Rt rt, long t, int i) { return Table.tableRef(rt, t, i); }
+    internal static int TableCount(Rt rt, long t) { return Table.tableCount(rt, t); }
     internal static class Str { internal static int SBytes(Rt rt, long v) { return (int) rt.Slot(v, 0); } }
+    internal static int SBytes(Rt rt, long v) { return Str.SBytes(rt, v); }
     // `maps-eq` and `set-eq` are BARE siblings, so these sit inside `Probe`.
     internal static class Maps { internal static bool Eq(Rt rt, long a, long b) { return rt.mapeq; } }
+    internal static bool MapEq(Rt rt, long a, long b) { return Maps.Eq(rt, a, b); }
     internal static class Sets { internal static bool Eq(Rt rt, long a, long b) { return rt.seteq; } }
     internal static bool TreeEq(Rt rt, long a, long b) { return rt.treeq; }
     internal static bool BEq(Rt rt, long a, long b) { return rt.beq; }

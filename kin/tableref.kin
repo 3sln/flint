@@ -8,17 +8,16 @@
 ;; `ref-to-map` is the escape hatch, built ONLY when someone actually asks for
 ;; a map.
 (ns flint.rt.tableref
-  (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   == >= < + - ushr bit-and not nil?
-                                   alloc heap slot set-slot as-fixnum to-i32
-                                   fixnum vec-nth is-fixnum empty-map
-                                   mark push r set-r pop-to for
-                                   Rt Value I32 RootIx NIL
-                                   TY_TABLEREF CHUNK CHUNK_SHIFT
-                                   SC_INDEX TB_SCHEMA TB_CHUNKS
+  (:require [flint.impl.rt :refer [defn return if let do comment doc == >= < +
+                                   - ushr bit-and not nil? alloc heap slot
+                                   set-slot as-fixnum to-i32 fixnum is-fixnum
+                                   empty-map mark push r set-r pop-to for Rt
+                                   Value I32 RootIx NIL TY_TABLEREF CHUNK
+                                   CHUNK_SHIFT SC_INDEX TB_SCHEMA TB_CHUNKS
                                    RF_SCHEMA RF_CHUNK RF_ROW RF_LEN]]
-            [flint.rt.tablemeta :refer [schema-len schema-width schema-name-at
-                                        table-count table-offset chunk-get]]
+            [flint.rt.vecread :refer [vec-nth]]
+            [flint.rt.tablemeta :refer [chunk-get schema-len schema-name-at
+                                        schema-width table-count table-offset]]
             [flint.rt.mapread :refer [map-get]]
             [flint.rt.mapwrite :refer [map-assoc]]))
 

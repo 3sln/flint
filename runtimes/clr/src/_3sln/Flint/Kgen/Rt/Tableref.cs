@@ -49,7 +49,7 @@ public static class Tableref {
         int ti = rt.Push(t);
         int at = i + TableOffset(rt, rt.R(ti));
         long chunks = rt.Slot(rt.R(ti), global::Flint.Rt.Table.TB_CHUNKS);
-        long ch = Vec.Nth(rt, chunks, (int)((uint) at >> global::Flint.Rt.Table.CHUNK_SHIFT), Val.Nil);
+        long ch = VecNth(rt, chunks, (int)((uint) at >> global::Flint.Rt.Table.CHUNK_SHIFT), Val.Nil);
         int chi = rt.Push(ch);
         long rf = Val.Heap(rt.Alloc(Obj.TyTableref, global::Flint.Rt.Table.RF_LEN));
         int ri = rt.Push(rf);

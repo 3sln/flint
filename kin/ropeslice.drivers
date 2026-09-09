@@ -172,6 +172,9 @@ fn main() {
                         sAscii(rt, a) && sAscii(rt, b));
         }
     }
+    static boolean sAscii(Rt rt, long v) { return Str.sAscii(rt, v); }
+    static int sCount(Rt rt, long v) { return Str.sCount(rt, v); }
+    static int sBytes(Rt rt, long v) { return Str.sBytes(rt, v); }
     static final class Val {
         static final long NIL = Probe.NIL;
         static boolean isHeap(long v) { return v >= 100 && v != NIL; }
@@ -311,6 +314,9 @@ namespace Flint.Rt {
                         SAsciiOf(rt, a) && SAsciiOf(rt, b));
         }
     }
+    internal static bool SAscii(Rt rt, long v) { return Str.SAscii(rt, v); }
+    internal static int SCount(Rt rt, long v) { return Str.SCount(rt, v); }
+    internal static int SBytes(Rt rt, long v) { return Str.SBytes(rt, v); }
     internal static class Rope { internal const int FANOUT = 3; }
     internal static class Val {
         internal const long Nil = 0xFFFFL;

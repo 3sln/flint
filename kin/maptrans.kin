@@ -19,12 +19,11 @@
 ;; -- so the two runtimes refused the same program through different slots.
 (ns flint.rt.maptrans
   (:require [flint.impl.rt :refer [defn return if let local set do comment doc
-                                   not == != nil? mark push r pop-to
-                                   alloc set-at set-slot slot heap fixnum
-                                   as-fixnum to-i32 local + - .
-                                   hash-value throw-str empty-map
-                                   Rt Value Addr RootIx I32 Bool NIL NOT_FOUND
-                                   TY_TMAP TY_TSET HM_ROOT S_MAP
+                                   not == != nil? mark push r pop-to alloc
+                                   set-at set-slot slot heap fixnum as-fixnum
+                                   to-i32 local + - . hash-value throw-str
+                                   empty-map Rt Value Addr RootIx I32 Bool NIL
+                                   NOT_FOUND TY_TMAP TY_TSET HM_ROOT S_MAP
                                    TM_CNT TM_ROOT TM_EDIT TS_MAP TS_EDIT]]
             [flint.rt.mapcore :refer [is-array-map map-count new-hash-map]]
             [flint.rt.mapwrite :refer [promote]]
