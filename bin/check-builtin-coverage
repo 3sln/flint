@@ -85,9 +85,12 @@ for _n in ["flint/sin", "flint/cos", "flint/tan", "flint/asin", "flint/acos",
 # a thread that fails, its state, and the value it threw. Worth saying: the
 # list is a list of unknowns, not a list of suspects, and four of them turning
 # out fine is the same kind of answer as the four that did not.
+# `flint/open` and `flint/port-state` were never unwatched -- this census could
+# not SEE the program exercising them, because it globbed one conformance
+# directory and there are two. An excuse that is wrong about the facts is worse
+# than no excuse, and the stale check is what surfaced it.
 for _n in ["flint/bindings", "flint/set-bindings", "flint/gc-stats",
-           "flint/open", "flint/port-bridge?",
-           "flint/port-close", "flint/port-id", "flint/port-state",
+           "flint/port-bridge?", "flint/port-close", "flint/port-id",
            "flint/request"]:
     ACCOUNTED[_n] = "UNWATCHED -- no conformance program reaches it"
 
@@ -157,12 +160,19 @@ def main():
     subprocess.run(["rm", "-rf", out], check=True)
     os.makedirs(out, exist_ok=True)
     built = 0
-    for src in sorted(glob.glob("runtimes/conform/*.cljc")):
-        ns = os.path.basename(src)[:-5].replace("_", "-")
-        if subprocess.run(["./bin/flint", ":src", "runtimes/conform", ":fn", f"{ns}/main",
-                           "--emit-image", ":out", f"{out}/{ns}.img"],
-                          capture_output=True).returncode == 0:
-            built += 1
+    # BOTH conformance directories. `runtimes/conform-host` holds the programs a
+    # HOST drives -- `hostport.cljc` opens a port the host grants and sends
+    # through it -- and they are conformance programs like any other: compiled
+    # the same way, run on all three runtimes, compared the same way. Missing
+    # them made this census UNDER-REPORT, and in the direction that matters: it
+    # listed six port builtins as unwatched when a program was exercising them.
+    for d in ("runtimes/conform", "runtimes/conform-host"):
+        for src in sorted(glob.glob(f"{d}/*.cljc")):
+            ns = os.path.basename(src)[:-5].replace("_", "-")
+            if subprocess.run(["./bin/flint", ":src", d, ":fn", f"{ns}/main",
+                               "--emit-image", ":out", f"{out}/{ns}.img"],
+                              capture_output=True).returncode == 0:
+                built += 1
     if subprocess.run(["./bin/flint", "test", ":src", "test/common",
                        "--emit-image", ":out", f"{out}/common.img"],
                       capture_output=True).returncode == 0:
