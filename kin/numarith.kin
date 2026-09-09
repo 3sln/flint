@@ -1,0 +1,110 @@
+;; `+`, `-` and `*`, and the overflow each of them can reach.
+;;
+;; THE SHAPE IS `numdiv`'s and so is the reason. Each host has a checked
+;; arithmetic idiom -- Rust's `checked_add`, Java's `Math.addExact` inside a
+;; `try`, the CLR's `checked` block -- and three idioms are three chances to
+;; disagree. `numdiv` already found that: `(quot MIN -1)` panicked on one
+;; runtime and answered MIN silently on another, because each host's
+;; arithmetic decided the edge for itself.
+;;
+;; So the guard is a COMPARISON here, computed before the operation rather
+;; than caught after it. It is the same answer everywhere because it is the
+;; same source, and it needs no host to own it.
+;;
+;; None of the guards can themselves overflow, which is the thing to check
+;; when reading them: every subtraction is of a value with the opposite sign
+;; of the bound it is taken from, and every division has a divisor that is
+;; never zero and never the `MIN / -1` pair.
+(ns flint.rt.numarith
+  (:require [flint.impl.rt :refer [defn return if let do comment doc == != < >
+                                   and or not i64-of num-f64 of-double
+                                   throw-str throw-not-a-number + - * quot
+                                   Rt Value I64 Bool I64_MIN I64_MAX]]
+            [flint.rt.num :refer [integer]]
+            [flint.rt.numkind :refer [both-ints is-number]]))
+
+(doc "Does `x + y` overflow?"
+     ""
+     "Adding a positive can only pass the top, and adding a negative can only"
+     "pass the bottom -- so each side is one comparison against the room that"
+     "is left. `I64_MAX - y` for a positive `y` and `I64_MIN - y` for a"
+     "negative one are both in range, which is why the guard is safe to"
+     "compute.")
+(defn ^:method ^Bool add-overflows [^:mut ^Rt rt ^I64 x ^I64 y]
+  (if (> y 0)
+    (return (> x (- I64_MAX y))))
+  (if (< y 0)
+    (return (< x (- I64_MIN y))))
+  (return false))
+
+(doc "Does `x - y` overflow?"
+     ""
+     "The mirror of `add-overflows`: subtracting a positive reaches for the"
+     "bottom and subtracting a negative reaches for the top.")
+(defn ^:method ^Bool sub-overflows [^:mut ^Rt rt ^I64 x ^I64 y]
+  (if (> y 0)
+    (return (< x (+ I64_MIN y))))
+  (if (< y 0)
+    (return (> x (+ I64_MAX y))))
+  (return false))
+
+(doc "Does `x * y` overflow?"
+     ""
+     "FOUR QUADRANTS AND A ZERO, because multiplication has no single bound"
+     "to compare against the way addition does. Each quadrant asks the same"
+     "question -- is the other operand past what fits alongside this one --"
+     "and the division that answers it is exact in the direction that"
+     "matters, because truncation only ever makes the bound LARGER in"
+     "magnitude and so can only miss in the safe direction."
+     ""
+     "`MIN * -1` is not a special case here, and that is worth checking"
+     "rather than trusting: it lands in the both-negative quadrant, where"
+     "`I64_MAX / -1` is `-I64_MAX`, and `MIN < -I64_MAX` is true. The pair is"
+     "refused by the general rule.")
+(defn ^:method ^Bool mul-overflows [^:mut ^Rt rt ^I64 x ^I64 y]
+  (if (or (== x 0) (== y 0))
+    (return false))
+  (if (> x 0)
+    (do (if (> y 0)
+          (return (> x (quot I64_MAX y))))
+        (return (< y (quot I64_MIN x)))))
+  (if (> y 0)
+    (return (< x (quot I64_MIN y))))
+  (return (< y (quot I64_MAX x))))
+
+(doc "`+`. Two integers add as integers; anything else numeric adds as"
+     "doubles; anything else at all is an error naming both operands.")
+(defn ^:pub ^:method ^Value num-add [^:mut ^Rt rt ^Value a ^Value b]
+  (if (both-ints rt a b)
+    (let [^I64 x (i64-of rt a)
+          ^I64 y (i64-of rt b)]
+      (if (add-overflows rt x y)
+        (return (throw-str rt "ArithmeticException" "integer overflow")))
+      (return (integer rt (+ x y)))))
+  (if (and (is-number rt a) (is-number rt b))
+    (return (of-double (+ (num-f64 rt a) (num-f64 rt b)))))
+  (return (throw-not-a-number rt a b)))
+
+(doc "`-`, in the same three arms as `+`.")
+(defn ^:pub ^:method ^Value num-sub [^:mut ^Rt rt ^Value a ^Value b]
+  (if (both-ints rt a b)
+    (let [^I64 x (i64-of rt a)
+          ^I64 y (i64-of rt b)]
+      (if (sub-overflows rt x y)
+        (return (throw-str rt "ArithmeticException" "integer overflow")))
+      (return (integer rt (- x y)))))
+  (if (and (is-number rt a) (is-number rt b))
+    (return (of-double (- (num-f64 rt a) (num-f64 rt b)))))
+  (return (throw-not-a-number rt a b)))
+
+(doc "`*`, in the same three arms as `+`.")
+(defn ^:pub ^:method ^Value num-mul [^:mut ^Rt rt ^Value a ^Value b]
+  (if (both-ints rt a b)
+    (let [^I64 x (i64-of rt a)
+          ^I64 y (i64-of rt b)]
+      (if (mul-overflows rt x y)
+        (return (throw-str rt "ArithmeticException" "integer overflow")))
+      (return (integer rt (* x y)))))
+  (if (and (is-number rt a) (is-number rt b))
+    (return (of-double (* (num-f64 rt a) (num-f64 rt b)))))
+  (return (throw-not-a-number rt a b)))

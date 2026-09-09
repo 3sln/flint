@@ -70,45 +70,14 @@ impl Rt {
         self.throw_str("ArithmeticException", "integer overflow")
     }
 
-    // @kin:link:form:num-add: {:template "{0}.num_add({1}, {2})"}
-    pub fn num_add(&mut self, a: Value, b: Value) -> Value {
-        if let (Some(x), Some(y)) = (self.as_i64(a), self.as_i64(b)) {
-            match x.checked_add(y) {
-                Some(r) => self.integer(r),
-                None => self.overflow(),
-            }
-        } else if self.is_number(a) && self.is_number(b) {
-            Value::from_f64(self.num_f64(a) + self.num_f64(b))
-        } else {
-            self.throw_not_a_number(a, b)
-        }
-    }
-
-    pub fn num_sub(&mut self, a: Value, b: Value) -> Value {
-        if let (Some(x), Some(y)) = (self.as_i64(a), self.as_i64(b)) {
-            match x.checked_sub(y) {
-                Some(r) => self.integer(r),
-                None => self.overflow(),
-            }
-        } else if self.is_number(a) && self.is_number(b) {
-            Value::from_f64(self.num_f64(a) - self.num_f64(b))
-        } else {
-            self.throw_not_a_number(a, b)
-        }
-    }
-
-    pub fn num_mul(&mut self, a: Value, b: Value) -> Value {
-        if let (Some(x), Some(y)) = (self.as_i64(a), self.as_i64(b)) {
-            match x.checked_mul(y) {
-                Some(r) => self.integer(r),
-                None => self.overflow(),
-            }
-        } else if self.is_number(a) && self.is_number(b) {
-            Value::from_f64(self.num_f64(a) * self.num_f64(b))
-        } else {
-            self.throw_not_a_number(a, b)
-        }
-    }
+    // `num_add`, `num_sub` and `num_mul` are GENERATED, from
+    // `kin/numarith.kin`. They are methods on this same `impl Rt`, so every
+    // `rt.num_add(..)` in `builtins.rs` and `vm.rs` reaches them unchanged.
+    //
+    // The overflow guard moved with them and stopped being `checked_add`.
+    // Three hosts had three checked-arithmetic idioms and that is three
+    // chances to decide an edge differently -- which is exactly what
+    // `(quot MIN -1)` did below.
 
     // `num_div`, `num_quot`, `num_rem` and `num_neg` are GENERATED, from
     // `kin/numdiv.kin`. `(quot MIN -1)` overflows, and all three runtimes got

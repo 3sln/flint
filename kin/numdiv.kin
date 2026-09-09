@@ -24,15 +24,7 @@
                                    throw-not-a-number - * fdiv Rt Value I64
                                    F64 Bool NIL I64_MIN]]
             [flint.rt.num :refer [integer]]
-            [flint.rt.numkind :refer [is-int is-number]]))
-
-(doc "Both integers? Then the pair is the integer path."
-     ""
-     "`is-int` covers a BIGINT as well as a fixnum, and `i64-of` reads the"
-     "real number out of either -- which is the pair that replaced an"
-     "`Option<i64>` neither port has.")
-(defn ^:method ^Bool both-ints [^:mut ^Rt rt ^Value a ^Value b]
-  (return (and (is-int rt a) (is-int rt b))))
+            [flint.rt.numkind :refer [both-ints is-int is-number]]))
 
 (doc "Does `x / y` overflow? Only for the most negative integer over -1."
      ""

@@ -32,11 +32,11 @@
                                    throw-str str-cat static-text Text
                                    TY_EMPTY_LIST TY_VEC TY_LAZYSEQ TY_ARRAYMAP
                                    TY_HASHMAP TY_SET TY_TABLEREF]]
+            [flint.rt.numarith :refer [num-add]]
             [flint.rt.collvec :refer [map-entry-vector set-element-vector]]
             [flint.rt.vecread :refer [vec-nth]]
             [flint.rt.tableref :refer [table-ref]]
             [flint.rt.tablemeta :refer [table-count]]
-            [flint.rt.num :refer [num-add]]
             [flint.rt.strs :refer [char-at]]
             [flint.rt.vector :refer [vec-count]]
             [flint.rt.seqs :refer [vecseq strseq range range-empty]]

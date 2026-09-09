@@ -135,11 +135,22 @@ bb test/capability.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; 
 # Privacy is enforced, not documented. Paired refusals and positive controls:
 # a check that refuses everything passes its own test and breaks the build.
 bb test/visibility.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/visibility.clj"; }
-bb test/cycles.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/cycles.clj"; }
-bb test/requires.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/requires.clj"; }
 sed 's/^/  /' /tmp/flint-test.out
 grep -E "^    |FAIL" /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
+
+# The namespace GRAPH, which is two rules rather than one. A cycle is refused
+# and named; a qualified reference resolves without a require, because reading
+# every source before analysing any makes existence not a require's business.
+#
+# EACH TO ITS OWN FILE. The block above prints `/tmp/flint-test.out`, so a
+# later test writing to it replaces what that block reports -- which is how
+# `visibility`'s summary silently stopped being shown when these two were
+# first added here.
+bb test/cycles.clj > /tmp/flint-cycles.out 2>&1 || { cat /tmp/flint-cycles.out; fail "test/cycles.clj"; }
+tail -1 /tmp/flint-cycles.out
+bb test/requires.clj > /tmp/flint-requires.out 2>&1 || { cat /tmp/flint-requires.out; fail "test/requires.clj"; }
+tail -1 /tmp/flint-requires.out
 
 echo "== cli: the command surface, tasks, and running an image directly (0021)"
 bb test/cli.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/cli.clj"; }

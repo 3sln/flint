@@ -1,0 +1,252 @@
+--rust-head
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+struct Rt { thrown: String, boxes: Vec<i64> }
+// `f-trunc` resolves to `crate::fmath::trunc`, so the probe declares that
+// module rather than a bare function.
+pub mod fmath { pub fn trunc(d: f64) -> f64 { if d < 0.0 { libm_ceil(d) } else { libm_floor(d) } }
+    fn libm_floor(d: f64) -> f64 { let t = d as i64 as f64; if t > d { t - 1.0 } else { t } }
+    fn libm_ceil(d: f64) -> f64 { let t = d as i64 as f64; if t < d { t + 1.0 } else { t } } }
+// A FIXNUM holds its value; a BIGINT is an index into `boxes`, so the probe
+// can hand `is-int` a value that is not a fixnum and still get a real number
+// out of `i64-of` -- which is the pair that replaced `Option<i64>`.
+impl Value {
+    fn is_double(self) -> bool { (self.0 >> 60) == 2 }
+}
+fn fix(n: i64) -> Value { Value(0x1000_0000_0000_0000u64 | (n as u64 & 0x0FFF_FFFF_FFFF_FFFF)) }
+fn big(i: u64) -> Value { Value(0x3000_0000_0000_0000u64 | i) }
+fn dbl(i: u64) -> Value { Value(0x2000_0000_0000_0000u64 | i) }
+impl Rt {
+    fn is_int(&self, v: Value) -> bool { (v.0 >> 60) == 1 || (v.0 >> 60) == 3 }
+    fn i64_of(&self, v: Value) -> i64 {
+        if (v.0 >> 60) == 3 { return self.boxes[(v.0 & 0xFF) as usize]; }
+        ((v.0 & 0x0FFF_FFFF_FFFF_FFFF) << 4) as i64 >> 4
+    }
+    fn is_number(&self, v: Value) -> bool { self.is_int(v) || v.is_double() }
+    fn num_f64(&self, v: Value) -> f64 {
+        if v.is_double() { return (v.0 & 0xFF) as f64 / 2.0; }
+        self.i64_of(v) as f64
+    }
+    // The ANSWERS are tagged so the probe can tell an integer result from a
+    // double one without a printer.
+    // A 60-BIT FIXNUM CANNOT HOLD AN ANSWER NEAR THE 64-BIT EDGE, and every
+    // interesting case here is near it. Spilling to a BIGINT is what makes
+    // `maxok` and `minok` report the number they computed rather than the
+    // low sixty bits of it -- without this the probe still agrees across
+    // three targets, and agrees on a truncation.
+    fn integer(&mut self, n: i64) -> Value {
+        if n >= -(1i64 << 59) && n < (1i64 << 59) { return fix(n); }
+        self.boxes.push(n); big((self.boxes.len() - 1) as u64)
+    }
+    fn throw_str(&mut self, class: &str, msg: &str) -> Value {
+        self.thrown = format!("{}/{}", class, msg); NIL
+    }
+    fn throw_not_a_number(&mut self, _a: Value, _b: Value) -> Value {
+        self.thrown = alloc::string::String::from("ClassCastException/not a number"); NIL
+    }
+}
+impl Value {
+    fn from_f64(d: f64) -> Value { Value(0x2000_0000_0000_0000u64 | ((d * 2.0) as i64 as u64 & 0xFF)) }
+}
+impl Rt {
+    fn both_ints(&mut self, a: Value, b: Value) -> bool { self.is_int(a) && self.is_int(b) }
+--rust
+}
+extern crate alloc;
+fn show(rt: &Rt, v: Value) -> String {
+    if v.0 == NIL.0 { return String::from("!"); }
+    if v.is_double() { return format!("d{}", rt.num_f64(v)); }
+    format!("i{}", rt.i64_of(v))
+}
+fn main() {
+    // Index 0 is the MOST NEGATIVE integer, and it is a BIGINT so that the
+    // `is-int`/`i64-of` pair is what finds it rather than `is-fixnum`.
+    let mut rt = Rt { thrown: String::new(), boxes: vec![i64::MIN, i64::MAX, 2] };
+    let mut o = String::new();
+    let (min, max, two) = (big(0), big(1), big(2));
+    let one = fix(1);
+    let negone = fix(-1);
+    let bad = Value(0);
+    macro_rules! go { ($label:expr, $e:expr) => {{
+        rt.thrown = String::new();
+        let r = $e;
+        o.push_str(&format!(" {}={}", $label, if rt.thrown.is_empty() { show(&rt, r) } else { rt.thrown.clone() }));
+    }}; }
+    go!("add", rt.num_add(fix(2), fix(3)));
+    go!("sub", rt.num_sub(fix(7), fix(3)));
+    go!("mul", rt.num_mul(fix(6), fix(7)));
+    // THE EDGES, each of which a host's own checked arithmetic used to own.
+    go!("maxinc", rt.num_add(max, one));
+    go!("mindec", rt.num_sub(min, one));
+    go!("maxok", rt.num_add(max, negone));
+    go!("minok", rt.num_sub(min, negone));
+    go!("mulmax", rt.num_mul(max, two));
+    go!("mulmin", rt.num_mul(min, two));
+    // `MIN * -1` is the pair with no positive answer, and it is NOT a special
+    // case in the source -- it falls out of the both-negative quadrant.
+    go!("minneg", rt.num_mul(min, negone));
+    go!("negmin", rt.num_mul(negone, min));
+    go!("mulok", rt.num_mul(max, one));
+    go!("mulzero", rt.num_mul(min, fix(0)));
+    // The double arm, and the mixed arm that promotes.
+    go!("dbl", rt.num_add(dbl(3), dbl(5)));
+    go!("mixed", rt.num_mul(dbl(4), fix(3)));
+    go!("notnum", rt.num_add(bad, fix(1)));
+    println!("{}", o.trim());
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static boolean isDouble(long v) { return (v >>> 60) == 2; }
+        static long ofDouble(double d) { return 0x2000000000000000L | (((long) (d * 2.0)) & 0xFF); }
+    }
+    static long fix(long n) { return 0x1000000000000000L | (n & 0x0FFFFFFFFFFFFFFFL); }
+    static long big(long i) { return 0x3000000000000000L | i; }
+    static long dbl(long i) { return 0x2000000000000000L | i; }
+    static final class Rt {
+        String thrown = "";
+        long[] boxes = new long[32];
+        int used = 3;
+        long throwStr(String cls, String msg) { thrown = cls + "/" + msg; return NIL; }
+    }
+    static final class Num {
+        static long i64Of(Rt rt, long v) {
+            if ((v >>> 60) == 3) return rt.boxes[(int) (v & 0xFF)];
+            return (v << 4) >> 4;
+        }
+        static double f64(Rt rt, long v) {
+            if (Val.isDouble(v)) return (v & 0xFF) / 2.0;
+            return (double) i64Of(rt, v);
+        }
+        static long integer(Rt rt, long n) {
+            if (n >= -(1L << 59) && n < (1L << 59)) return fix(n);
+            rt.boxes[rt.used] = n; return big(rt.used++);
+        }
+        static double trunc(double d) { return d < 0 ? Math.ceil(d) : Math.floor(d); }
+        static long notNumber(Rt rt, long a, long b) {
+            rt.thrown = "ClassCastException/not a number"; return NIL;
+        }
+    }
+    static String show(Rt rt, long v) {
+        if (v == NIL) return "!";
+        if (Val.isDouble(v)) return "d" + fmt(Num.f64(rt, v));
+        return "i" + Num.i64Of(rt, v);
+    }
+    static String fmt(double d) {
+        if (d == Math.rint(d) && !Double.isInfinite(d)) return String.valueOf((long) d);
+        return String.valueOf(d);
+    }
+    static boolean isInt(Rt rt, long v) { return (v >>> 60) == 1 || (v >>> 60) == 3; }
+    static boolean isNumber(Rt rt, long v) { return isInt(rt, v) || Val.isDouble(v); }
+    static boolean bothInts(Rt rt, long a, long b) { return isInt(rt, a) && isInt(rt, b); }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        rt.boxes[0] = Long.MIN_VALUE; rt.boxes[1] = Long.MAX_VALUE; rt.boxes[2] = 2;
+        StringBuilder o = new StringBuilder();
+        long min = big(0), max = big(1), two = big(2);
+        long one = fix(1), negone = fix(-1), bad = 0L;
+        o.append(" add=").append(run(rt, () -> numAdd(rt, fix(2), fix(3))));
+        o.append(" sub=").append(run(rt, () -> numSub(rt, fix(7), fix(3))));
+        o.append(" mul=").append(run(rt, () -> numMul(rt, fix(6), fix(7))));
+        o.append(" maxinc=").append(run(rt, () -> numAdd(rt, max, one)));
+        o.append(" mindec=").append(run(rt, () -> numSub(rt, min, one)));
+        o.append(" maxok=").append(run(rt, () -> numAdd(rt, max, negone)));
+        o.append(" minok=").append(run(rt, () -> numSub(rt, min, negone)));
+        o.append(" mulmax=").append(run(rt, () -> numMul(rt, max, two)));
+        o.append(" mulmin=").append(run(rt, () -> numMul(rt, min, two)));
+        o.append(" minneg=").append(run(rt, () -> numMul(rt, min, negone)));
+        o.append(" negmin=").append(run(rt, () -> numMul(rt, negone, min)));
+        o.append(" mulok=").append(run(rt, () -> numMul(rt, max, one)));
+        o.append(" mulzero=").append(run(rt, () -> numMul(rt, min, fix(0))));
+        o.append(" dbl=").append(run(rt, () -> numAdd(rt, dbl(3), dbl(5))));
+        o.append(" mixed=").append(run(rt, () -> numMul(rt, dbl(4), fix(3))));
+        o.append(" notnum=").append(run(rt, () -> numAdd(rt, bad, fix(1))));
+        System.out.println(o.toString().trim());
+    }
+    interface Thunk { long get(); }
+    static String run(Rt rt, Thunk t) {
+        rt.thrown = "";
+        long r = t.get();
+        return rt.thrown.isEmpty() ? show(rt, r) : rt.thrown;
+    }
+--csharp-pre
+
+--csharp-head
+    internal const long NIL = 0xFFFFL;
+    internal static class Val {
+        internal const long Nil = Probe.NIL;
+        internal static bool IsDouble(long v) { return (v >> 60) == 2; }
+        internal static long OfDouble(double d) { return 0x2000000000000000L | (((long) (d * 2.0)) & 0xFF); }
+    }
+    internal static long Fix(long n) { return 0x1000000000000000L | (n & 0x0FFFFFFFFFFFFFFFL); }
+    internal static long Big(long i) { return 0x3000000000000000L | i; }
+    internal static long Dbl(long i) { return 0x2000000000000000L | i; }
+    internal sealed class Rt {
+        internal string thrown = "";
+        internal long[] boxes = new long[32];
+        internal int used = 3;
+        internal long ThrowStr(string cls, string msg) { thrown = cls + "/" + msg; return NIL; }
+    }
+    internal static class Num {
+        internal static long I64Of(Rt rt, long v) {
+            if ((v >> 60) == 3) return rt.boxes[(int) (v & 0xFF)];
+            return (v << 4) >> 4;
+        }
+        internal static double F64(Rt rt, long v) {
+            if (Val.IsDouble(v)) return (v & 0xFF) / 2.0;
+            return (double) I64Of(rt, v);
+        }
+        internal static long Integer(Rt rt, long n) {
+            if (n >= -(1L << 59) && n < (1L << 59)) return Fix(n);
+            rt.boxes[rt.used] = n; return Big(rt.used++);
+        }
+        internal static double Trunc(double d) { return d < 0 ? System.Math.Ceiling(d) : System.Math.Floor(d); }
+        internal static long NotNumber(Rt rt, long a, long b) {
+            rt.thrown = "ClassCastException/not a number"; return NIL;
+        }
+    }
+    internal static string Show(Rt rt, long v) {
+        if (v == NIL) return "!";
+        if (Val.IsDouble(v)) return "d" + Fmt(Num.F64(rt, v));
+        return "i" + Num.I64Of(rt, v);
+    }
+    internal static string Fmt(double d) {
+        if (d == System.Math.Round(d) && !double.IsInfinity(d)) return ((long) d).ToString();
+        return d.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+    internal static bool IsInt(Rt rt, long v) { return (v >> 60) == 1 || (v >> 60) == 3; }
+    internal static bool IsNumber(Rt rt, long v) { return IsInt(rt, v) || Val.IsDouble(v); }
+    internal static bool BothInts(Rt rt, long a, long b) { return IsInt(rt, a) && IsInt(rt, b); }
+--csharp
+    public static void Main(string[] args) {
+        var rt = new Rt();
+        rt.boxes[0] = long.MinValue; rt.boxes[1] = long.MaxValue; rt.boxes[2] = 2;
+        var o = new System.Text.StringBuilder();
+        long min = Big(0), max = Big(1), two = Big(2);
+        long one = Fix(1), negone = Fix(-1), bad = 0L;
+        o.Append(" add=").Append(Run(rt, () => NumAdd(rt, Fix(2), Fix(3))));
+        o.Append(" sub=").Append(Run(rt, () => NumSub(rt, Fix(7), Fix(3))));
+        o.Append(" mul=").Append(Run(rt, () => NumMul(rt, Fix(6), Fix(7))));
+        o.Append(" maxinc=").Append(Run(rt, () => NumAdd(rt, max, one)));
+        o.Append(" mindec=").Append(Run(rt, () => NumSub(rt, min, one)));
+        o.Append(" maxok=").Append(Run(rt, () => NumAdd(rt, max, negone)));
+        o.Append(" minok=").Append(Run(rt, () => NumSub(rt, min, negone)));
+        o.Append(" mulmax=").Append(Run(rt, () => NumMul(rt, max, two)));
+        o.Append(" mulmin=").Append(Run(rt, () => NumMul(rt, min, two)));
+        o.Append(" minneg=").Append(Run(rt, () => NumMul(rt, min, negone)));
+        o.Append(" negmin=").Append(Run(rt, () => NumMul(rt, negone, min)));
+        o.Append(" mulok=").Append(Run(rt, () => NumMul(rt, max, one)));
+        o.Append(" mulzero=").Append(Run(rt, () => NumMul(rt, min, Fix(0))));
+        o.Append(" dbl=").Append(Run(rt, () => NumAdd(rt, Dbl(3), Dbl(5))));
+        o.Append(" mixed=").Append(Run(rt, () => NumMul(rt, Dbl(4), Fix(3))));
+        o.Append(" notnum=").Append(Run(rt, () => NumAdd(rt, bad, Fix(1))));
+        System.Console.WriteLine(o.ToString().Trim());
+    }
+    static string Run(Rt rt, System.Func<long> t) {
+        rt.thrown = "";
+        long r = t();
+        return rt.thrown.Length == 0 ? Show(rt, r) : rt.thrown;
+    }

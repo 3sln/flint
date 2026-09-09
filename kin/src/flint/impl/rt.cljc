@@ -386,6 +386,7 @@
    ;; two integer operations that OVERFLOW, and naming the bound is how the
    ;; guard gets written once instead of three host idioms deep.
    'I64_MIN {:rust "i64::MIN" :java "Long.MIN_VALUE" :csharp "long.MinValue"}
+   'I64_MAX {:rust "i64::MAX" :java "Long.MAX_VALUE" :csharp "long.MaxValue"}
    ;; THE TWO DOUBLES WITH NO LITERAL. `1.0 / 0.0` and `0.0 / 0.0` produce
    ;; them on every one of these hosts, but writing that is a puzzle where a
    ;; name will do, and one of the three spells division by zero as an error

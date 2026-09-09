@@ -24,6 +24,7 @@ impl Rt {
         ((v.0 & 0x0FFF_FFFF_FFFF_FFFF) << 4) as i64 >> 4
     }
     fn is_number(&self, v: Value) -> bool { self.is_int(v) || v.is_double() }
+    fn both_ints(&mut self, a: Value, b: Value) -> bool { self.is_int(a) && self.is_int(b) }
     fn num_f64(&self, v: Value) -> f64 {
         if v.is_double() { return (v.0 & 0xFF) as f64 / 2.0; }
         self.i64_of(v) as f64
@@ -163,6 +164,7 @@ fn main() {
     }
     static boolean isInt(Rt rt, long v) { return (v >>> 60) == 1 || (v >>> 60) == 3; }
     static boolean isNumber(Rt rt, long v) { return isInt(rt, v) || Val.isDouble(v); }
+    static boolean bothInts(Rt rt, long a, long b) { return isInt(rt, a) && isInt(rt, b); }
 --java
     public static void main(String[] args) {
         Rt rt = new Rt();
@@ -261,6 +263,7 @@ fn main() {
     }
     internal static bool IsInt(Rt rt, long v) { return (v >> 60) == 1 || (v >> 60) == 3; }
     internal static bool IsNumber(Rt rt, long v) { return IsInt(rt, v) || Val.IsDouble(v); }
+    internal static bool BothInts(Rt rt, long a, long b) { return IsInt(rt, a) && IsInt(rt, b); }
 --csharp
     public static void Main() {
         Rt rt = new Rt();

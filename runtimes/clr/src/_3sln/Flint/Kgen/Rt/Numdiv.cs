@@ -14,14 +14,6 @@ using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Numkind;
 
 public static class Numdiv {
-    /// Both integers? Then the pair is the integer path.
-    /// 
-    /// `is-int` covers a BIGINT as well as a fixnum, and `i64-of` reads the
-    /// real number out of either -- which is the pair that replaced an
-    /// `Option<i64>` neither port has.
-    internal static bool BothInts(Rt rt, long a, long b) {
-        return IsInt(rt, a) && IsInt(rt, b);
-    }
     /// Does `x / y` overflow? Only for the most negative integer over -1.
     /// 
     /// There is exactly one such pair, so the guard is a comparison rather

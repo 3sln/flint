@@ -13,6 +13,7 @@ using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Collvec;
 using static global::_3sln.Flint.Kgen.Rt.Nouns;
+using static global::_3sln.Flint.Kgen.Rt.Numarith;
 using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 using static global::_3sln.Flint.Kgen.Rt.Seqcore;
 using static global::_3sln.Flint.Kgen.Rt.Seqs;
@@ -94,7 +95,7 @@ public static class Seqwalk {
             // HOISTED. `seq-of` and `range` both take `&mut self` in
             // Rust, so nesting them is two mutable borrows at once. The
             // other two targets read the hoisted form fine.
-            long nstart = Num.Add(rt, rt.Slot(s, 0), rt.Slot(s, 2));
+            long nstart = NumAdd(rt, rt.Slot(s, 0), rt.Slot(s, 2));
             long r = Range(rt, nstart, rt.Slot(s, 1), rt.Slot(s, 2));
             return global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, r);
         }

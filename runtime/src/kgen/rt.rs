@@ -43,6 +43,7 @@ pub mod dblstr;
 pub mod strnum;
 pub mod names;
 pub mod nouns;
+pub mod numarith;
 pub mod numdiv;
 pub mod opaque;
 pub mod dissoc;

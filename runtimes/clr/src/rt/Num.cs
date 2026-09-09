@@ -94,36 +94,21 @@ public static class Num {
     static long MulExact(long a, long b) { checked { return a * b; } }
     static long NegExact(long a) { checked { return -a; } }
 
-    // @kin:link:form:num-add: {:template "Num.Add({0}, {1}, {2})"}
-    public static long Add(Rt rt, long a, long b) {
-        long? x = AsI64(rt, a), y = AsI64(rt, b);
-        if (x != null && y != null) {
-            try { return Integer(rt, AddExact(x.Value, y.Value)); }
-            catch (System.OverflowException) { return Overflow(rt); }
-        }
-        if (IsNumber(rt, a) && IsNumber(rt, b)) return Val.OfDouble(F64(rt, a) + F64(rt, b));
-        return NotNumber(rt, a, b);
-    }
-
-    public static long Sub(Rt rt, long a, long b) {
-        long? x = AsI64(rt, a), y = AsI64(rt, b);
-        if (x != null && y != null) {
-            try { return Integer(rt, SubExact(x.Value, y.Value)); }
-            catch (System.OverflowException) { return Overflow(rt); }
-        }
-        if (IsNumber(rt, a) && IsNumber(rt, b)) return Val.OfDouble(F64(rt, a) - F64(rt, b));
-        return NotNumber(rt, a, b);
-    }
-
-    public static long Mul(Rt rt, long a, long b) {
-        long? x = AsI64(rt, a), y = AsI64(rt, b);
-        if (x != null && y != null) {
-            try { return Integer(rt, MulExact(x.Value, y.Value)); }
-            catch (System.OverflowException) { return Overflow(rt); }
-        }
-        if (IsNumber(rt, a) && IsNumber(rt, b)) return Val.OfDouble(F64(rt, a) * F64(rt, b));
-        return NotNumber(rt, a, b);
-    }
+    /// `+`, `-` and `*`. GENERATED, from `kin/numarith.kin` -- delegators
+    /// rather than copies, so hand-written code here keeps saying `Num.Add`
+    /// while there is one body under it.
+    ///
+    /// The overflow guard went with them and stopped being a `checked` block
+    /// caught as `OverflowException`. Three hosts had three idioms for that,
+    /// which is three chances to decide an edge differently -- see `Quot`
+    /// below, where this port raised a HOST exception a flint program could
+    /// not catch.
+    public static long Add(Rt rt, long a, long b) =>
+        global::_3sln.Flint.Kgen.Rt.Numarith.NumAdd(rt, a, b);
+    public static long Sub(Rt rt, long a, long b) =>
+        global::_3sln.Flint.Kgen.Rt.Numarith.NumSub(rt, a, b);
+    public static long Mul(Rt rt, long a, long b) =>
+        global::_3sln.Flint.Kgen.Rt.Numarith.NumMul(rt, a, b);
 
     /// `/`. See the class note: integer division that does not divide evenly
     /// yields a DOUBLE here, where Clojure would yield a Ratio.

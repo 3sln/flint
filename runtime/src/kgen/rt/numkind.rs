@@ -37,4 +37,12 @@ impl Rt {
     pub fn is_number(&self, v: Value) -> bool {
         return v.is_double() || self.is_int(v);
     }
+    /// Both integers? Then the pair is the integer path.
+    /// 
+    /// `is-int` covers a BIGINT as well as a fixnum, and `i64-of` reads the
+    /// real number out of either -- which is the pair that replaced an
+    /// `Option<i64>` neither port has.
+    pub fn both_ints(&mut self, a: Value, b: Value) -> bool {
+        return self.is_int(a) && self.is_int(b);
+    }
 }

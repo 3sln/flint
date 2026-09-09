@@ -18,14 +18,6 @@ use crate::kgen::rt::pike::*;
 use crate::kgen::rt::casetable::*;
 
 impl Rt {
-    /// Both integers? Then the pair is the integer path.
-    /// 
-    /// `is-int` covers a BIGINT as well as a fixnum, and `i64-of` reads the
-    /// real number out of either -- which is the pair that replaced an
-    /// `Option<i64>` neither port has.
-    pub(crate) fn both_ints(&mut self, a: Value, b: Value) -> bool {
-        return self.is_int(a) && self.is_int(b);
-    }
     /// Does `x / y` overflow? Only for the most negative integer over -1.
     /// 
     /// There is exactly one such pair, so the guard is a comparison rather

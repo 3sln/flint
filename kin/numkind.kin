@@ -13,8 +13,8 @@
 ;; read and no second tier, so there is nothing for three runtimes to disagree
 ;; about.
 (ns flint.rt.numkind
-  (:require [flint.impl.rt :refer [defn return if let comment doc
-                                   not or == is-heap as-heap ty is-fixnum is-double
+  (:require [flint.impl.rt :refer [defn return if let comment doc not and or
+                                   == is-heap as-heap ty is-fixnum is-double
                                    Rt Value Ty Bool TY_BIGINT]]))
 
 (doc "Is `v` an INTEGER -- a fixnum or a bigint?"
@@ -33,3 +33,11 @@
      "The double first, for the same reason: it is the value-word test.")
 (defn ^:pub ^:method ^Bool is-number [^Rt rt ^Value v]
   (return (or (is-double rt v) (is-int rt v))))
+
+(doc "Both integers? Then the pair is the integer path."
+     ""
+     "`is-int` covers a BIGINT as well as a fixnum, and `i64-of` reads the"
+     "real number out of either -- which is the pair that replaced an"
+     "`Option<i64>` neither port has.")
+(defn ^:pub ^:method ^Bool both-ints [^:mut ^Rt rt ^Value a ^Value b]
+  (return (and (is-int rt a) (is-int rt b))))

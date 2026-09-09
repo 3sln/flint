@@ -103,35 +103,23 @@ public final class Num {
         return rt.throwStr("ArithmeticException", "Divide by zero");
     }
 
-    // @kin:link:form:num-add: {:template "Num.add({0}, {1}, {2})"}
+    /// `+`, `-` and `*`. GENERATED, from `kin/numarith.kin` -- delegators
+    /// rather than copies, for the reason `isInt` above is one: hand-written
+    /// code here says `Num.add`, the generated tree says `numAdd`, and there
+    /// is one body under both.
+    ///
+    /// The overflow guard went with them and stopped being `Math.addExact`
+    /// in a `try`. Three hosts had three idioms for that, which is three
+    /// chances to decide an edge differently -- see `quot` below, where they
+    /// did.
     public static long add(Rt rt, long a, long b) {
-        Long x = asI64(rt, a), y = asI64(rt, b);
-        if (x != null && y != null) {
-            try { return integer(rt, Math.addExact(x, y)); }
-            catch (ArithmeticException e) { return overflow(rt); }
-        }
-        if (isNumber(rt, a) && isNumber(rt, b)) return Val.ofDouble(f64(rt, a) + f64(rt, b));
-        return notNumber(rt, a, b);
+        return com._3sln.flint.kgen.rt.Numarith.numAdd(rt, a, b);
     }
-
     public static long sub(Rt rt, long a, long b) {
-        Long x = asI64(rt, a), y = asI64(rt, b);
-        if (x != null && y != null) {
-            try { return integer(rt, Math.subtractExact(x, y)); }
-            catch (ArithmeticException e) { return overflow(rt); }
-        }
-        if (isNumber(rt, a) && isNumber(rt, b)) return Val.ofDouble(f64(rt, a) - f64(rt, b));
-        return notNumber(rt, a, b);
+        return com._3sln.flint.kgen.rt.Numarith.numSub(rt, a, b);
     }
-
     public static long mul(Rt rt, long a, long b) {
-        Long x = asI64(rt, a), y = asI64(rt, b);
-        if (x != null && y != null) {
-            try { return integer(rt, Math.multiplyExact(x, y)); }
-            catch (ArithmeticException e) { return overflow(rt); }
-        }
-        if (isNumber(rt, a) && isNumber(rt, b)) return Val.ofDouble(f64(rt, a) * f64(rt, b));
-        return notNumber(rt, a, b);
+        return com._3sln.flint.kgen.rt.Numarith.numMul(rt, a, b);
     }
 
     /// `/`. See the class note: integer division that does not divide evenly
