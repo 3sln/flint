@@ -67,6 +67,14 @@ impl Rt {
         self.pop_to(base);
         out
     }
+    // @kin:link:ns: flint.rt.vector
+    //
+    // THE SPELLING LIVES WITH THE FUNCTION. This said the same thing in
+    // `flint.impl.rt` as `(sibling "vec_count" "Vec" "count" 1)`, one table
+    // away in another repository, where renaming the function below left it
+    // silently wrong. Here the two cannot drift apart without the rename
+    // walking straight past the line that has to change with it.
+    // @kin:link:form:vec-count: {:template "{0}.vec_count({1})"}
     #[inline]
     pub fn vec_count(&self, v: Value) -> u32 {
         slot(&self.gc.sp, v.as_heap(), V_CNT).as_fixnum() as u32

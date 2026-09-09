@@ -12,12 +12,12 @@
 ;; the parameter. A parameter with one possible value is not a parameter.
 (ns flint.rt.vecwrite
   (:require [flint.impl.rt :refer [defn return if let local set do comment doc
-                                   not == < > -  + bit-and shl ushr
-                                   mark push r pop-to alloc set-at slot heap
-                                   fixnum nil? vec-count
-                                   Rt Value Addr RootIx I32 Bool NIL
-                                   BITS WIDTH MASK TY_VEC
-                                   V_CNT V_SHIFT V_ROOT V_TAIL V_META V_HASH]]
+                                   not == < > - + bit-and shl ushr mark push r
+                                   pop-to alloc set-at slot heap fixnum nil?
+                                   Rt Value Addr RootIx I32 Bool NIL BITS
+                                   WIDTH MASK TY_VEC V_CNT V_SHIFT V_ROOT
+                                   V_TAIL V_META V_HASH]]
+            [flint.rt.vector :refer [vec-count]]
             [flint.rt.vecnode :refer [new-node node-get node-set]]
             [flint.rt.vecread :refer [node-clone vec-shift tail-off]]))
 

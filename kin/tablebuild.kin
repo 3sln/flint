@@ -12,15 +12,15 @@
 ;; still CHECKED: a decoder that skipped that would be a way to make a table
 ;; that is not closed, which is the one property everything else rests on.
 (ns flint.rt.tablebuild
-  (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   == < > + - not
-                                   alloc heap slot set-slot fixnum
-                                   vec-count vec-nth vec-conj empty-vec new-obj
-                                   mark push r set-r pop-to for local set while
-                                   charge-checked throw-str static-text
-                                   Rt Value I32 RootIx Text NIL
-                                   TY_NODE TY_TABLE CHUNK CH_BASE SC_TYPES
-                                   TB_SCHEMA TB_CHUNKS TB_COUNT TB_OFFSET TB_LEN]]
+  (:require [flint.impl.rt :refer [defn return if let do comment doc == < > +
+                                   - not alloc heap slot set-slot fixnum
+                                   vec-nth vec-conj empty-vec new-obj mark
+                                   push r set-r pop-to for local set while
+                                   charge-checked throw-str static-text Rt
+                                   Value I32 RootIx Text NIL TY_NODE TY_TABLE
+                                   CHUNK CH_BASE SC_TYPES TB_SCHEMA TB_CHUNKS
+                                   TB_COUNT TB_OFFSET TB_LEN]]
+            [flint.rt.vector :refer [vec-count]]
             [flint.rt.tablemeta :refer [schema-len schema-width schema-id-at
                                         schema-name-at]]
             [flint.rt.tablecell :refer [new-chunk collapse]]

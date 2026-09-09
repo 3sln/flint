@@ -12,16 +12,16 @@
 ;; time and 12 500x the peak roots.
 (ns flint.rt.collwrite
   (:require [flint.impl.rt :refer [defn return if let do comment doc local set
-                                   == != >= <= < not or nil? is-heap as-heap ty
-                                   mark push r set-r pop-to while break + to-i32
-                                   slot  char-at vec-nth vec-assoc
-                                   vec-count  i64-of bare-kw name-of
-                                   value-text throw-str str-cat static-text
-                                   empty-map map-entry-as-vec
-                                   Rt Value I32 I64 Ty Bool RootIx Text
-                                   NIL NOT_FOUND
-                                   TY_ARRAYMAP TY_HASHMAP TY_VEC TY_TAGGED
-                                   TY_TABLE TY_TABLEREF TY_MAPENTRY]]
+                                   == != >= <= < not or nil? is-heap as-heap
+                                   ty mark push r set-r pop-to while break +
+                                   to-i32 slot char-at vec-nth vec-assoc
+                                   i64-of bare-kw name-of value-text throw-str
+                                   str-cat static-text empty-map
+                                   map-entry-as-vec Rt Value I32 I64 Ty Bool
+                                   RootIx Text NIL NOT_FOUND TY_ARRAYMAP
+                                   TY_HASHMAP TY_VEC TY_TAGGED TY_TABLE
+                                   TY_TABLEREF TY_MAPENTRY]]
+            [flint.rt.vector :refer [vec-count]]
             [flint.rt.mapwrite :refer [map-assoc]]
             [flint.rt.names :refer [is-symbol]]
             [flint.rt.opaque :refer [new-tagged]]

@@ -21,17 +21,14 @@
   (:require [flint.impl.rt :refer [defn return if let do comment doc local set
                                    == != <= < + not or and is-heap as-heap ty
                                    nil? mark push r set-r pop-to while break
-                                   forever
-                                   slot is-double num-f64  i64-of
-                                    s-bytes charge-work
-                                   vec-count ref-to-map table-ref table-count
-                                   set-eq maps-eq val-eq
-                                   Rt Value I32 I64 Ty Bool Cat RootIx F64
-                                   NIL INTERN_MAX
-                                   CAT_SEQUENTIAL CAT_MAP CAT_SET
-                                   TY_VEC TY_STR TY_ROPE TY_SYM
-                                   TY_BYTES TY_BROPE TY_TABLE TY_TAGGED
-                                   TB_SCHEMA]]
+                                   forever slot is-double num-f64 i64-of
+                                   s-bytes charge-work ref-to-map table-ref
+                                   table-count set-eq maps-eq val-eq Rt Value
+                                   I32 I64 Ty Bool Cat RootIx F64 NIL
+                                   INTERN_MAX CAT_SEQUENTIAL CAT_MAP CAT_SET
+                                   TY_VEC TY_STR TY_ROPE TY_SYM TY_BYTES
+                                   TY_BROPE TY_TABLE TY_TAGGED TB_SCHEMA]]
+            [flint.rt.vector :refer [vec-count]]
             [flint.rt.eq :refer [category]]
             [flint.rt.seqwalk :refer [seq first next]]
             [flint.rt.byteeq :refer [b-eq]]

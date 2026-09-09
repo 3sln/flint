@@ -22,13 +22,12 @@
   (:require [flint.impl.rt :refer [defn return if let local set do comment doc
                                    not == != < > >= - + bit-and shl ushr while
                                    mark push r pop-to alloc set-at slot heap
-                                   fixnum nil? as-fixnum to-i32 is-heap as-heap
-                                   ty vec-count
-                                   Rt Value Addr RootIx I32 Bool NIL
-                                   BITS WIDTH MASK
-                                   TY_TVEC TY_VOLATILE
-                                   V_ROOT V_TAIL
-                                   T_CNT T_SHIFT T_ROOT T_TAIL T_EDIT]]
+                                   fixnum nil? as-fixnum to-i32 is-heap
+                                   as-heap ty Rt Value Addr RootIx I32 Bool
+                                   NIL BITS WIDTH MASK TY_TVEC TY_VOLATILE
+                                   V_ROOT V_TAIL T_CNT T_SHIFT T_ROOT T_TAIL
+                                   T_EDIT]]
+            [flint.rt.vector :refer [vec-count]]
             [flint.rt.vecnode :refer [node-get node-edit node-len]]
             [flint.rt.vecread :refer [node-clone vec-shift]]))
 

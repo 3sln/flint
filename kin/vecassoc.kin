@@ -17,10 +17,9 @@
   (:require [flint.impl.rt :refer [defn return if let local set do comment doc
                                    not and == != < > >= - + bit-and shl ushr
                                    mark push r set-r pop-to slot nil?
-                                   vec-count empty-vec
-                                   Rt Value RootIx I32 Bool NIL
-                                   BITS WIDTH MASK
-                                   V_ROOT V_TAIL V_META]]
+                                   empty-vec Rt Value RootIx I32 Bool NIL BITS
+                                   WIDTH MASK V_ROOT V_TAIL V_META]]
+            [flint.rt.vector :refer [vec-count]]
             [flint.rt.vecnode  :refer [new-node node-len node-get node-set]]
             [flint.rt.vecread  :refer [node-clone vec-shift tail-off array-for]]
             [flint.rt.vecwrite :refer [new-vec vec-conj]]))

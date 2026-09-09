@@ -9,16 +9,17 @@
 ;; `(assoc t -1 row)` is a thing to refuse, and refusing it means being able to
 ;; hold it.
 (ns flint.rt.tablerow
-  (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   == != < > >= + - not and or bit-and ushr
-                                   alloc heap slot set-slot fixnum to-i32 to-i64
-                                   vec-count vec-nth vec-conj vec-assoc empty-vec
-                                   new-obj  i64-of kind-of check-row
-                                   mark push r set-r pop-to for local set
-                                   throw-str str-cat static-text
+  (:require [flint.impl.rt :refer [defn return if let do comment doc == != < >
+                                   >= + - not and or bit-and ushr alloc heap
+                                   slot set-slot fixnum to-i32 to-i64 vec-nth
+                                   vec-conj vec-assoc empty-vec new-obj i64-of
+                                   kind-of check-row mark push r set-r pop-to
+                                   for local set throw-str str-cat static-text
                                    Rt Value I32 I64 RootIx Text Bool NIL
                                    TY_NODE TY_TABLE CHUNK CHUNK_SHIFT CH_BASE
-                                   TB_SCHEMA TB_CHUNKS TB_COUNT TB_OFFSET TB_LEN]]
+                                   TB_SCHEMA TB_CHUNKS TB_COUNT TB_OFFSET
+                                   TB_LEN]]
+            [flint.rt.vector :refer [vec-count]]
             [flint.rt.tablemeta :refer [schema-len schema-width schema-id-at
                                         table-count table-offset]]
             [flint.rt.tablecell :refer [new-chunk collapse]]

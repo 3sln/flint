@@ -26,6 +26,7 @@
   nothing left to look up. `unit`, `rust-file` and `deep-rust` went with the
   regions."
   (:require [clojure.string :as str]
+            [kin.lang :as lang]
             [kin]
             [kin.vfs :as vfs]
             [kin.lang]
@@ -140,7 +141,14 @@
   a project value -- and `project` requires THIS file. Stating the list twice
   to break the cycle would be two statements of one fact, which is the defect
   `defines-symbol` had in the first place."
-  '[flint.impl.rt flint.impl.hash flint.impl.host])
+  ;; TWO, not three. `flint.impl.host` was a hand-written table standing in
+  ;; for "the runtime kin did not write", and its own docstring said it was
+  ;; expected to shrink to nothing. It had: both forms it still declared --
+  ;; `bn-new` and `cn-copy-set-val` -- are `^:pub` in `kin/collnode.kin` and
+  ;; generated, both callers already require them from there, and no source
+  ;; named the namespace at all. It was describing functions that had moved
+  ;; out from under it.
+  '[flint.impl.rt flint.impl.hash])
 
 (declare targets)
 
@@ -454,6 +462,19 @@
   {:rust (merge
           target/rust
           {:vfs (vfs/disk-vfs (:rust module-roots))
+           ;; WHAT A HOST ANNOTATION MEANS HERE. kin reads the marker and the
+           ;; name and hands the payload back untouched -- the payload's shape
+           ;; is this project's invention, and this is where it is invented.
+           ;;
+           ;; It is the smallest thing that can say a call: the template this
+           ;; target fills, which is exactly what a `core/call` entry held when
+           ;; the same fact lived in `flint.impl.rt`. Moving it here moves it
+           ;; NEXT TO THE FUNCTION IT NAMES, which is the whole point: a
+           ;; `runtime/src/vector.rs` that renames `vec_count` now has the
+           ;; declaration in front of it rather than in another repository's
+           ;; table.
+           :link (fn [data _ _]
+                   {:link-fn (lang/call {:rust (:template data)})})
            ;; WHICH EMITTER RENDERS A `defdata`, looked up by the qualified
            ;; symbol its declaration names. An ordinary target key, read back
            ;; with `(get-in ctx [:targets (:target ctx) :data-emitters])` --
@@ -475,6 +496,19 @@
    :java (merge
           target/java
           {:vfs (vfs/disk-vfs (:java module-roots))
+           ;; WHAT A HOST ANNOTATION MEANS HERE. kin reads the marker and the
+           ;; name and hands the payload back untouched -- the payload's shape
+           ;; is this project's invention, and this is where it is invented.
+           ;;
+           ;; It is the smallest thing that can say a call: the template this
+           ;; target fills, which is exactly what a `core/call` entry held when
+           ;; the same fact lived in `flint.impl.rt`. Moving it here moves it
+           ;; NEXT TO THE FUNCTION IT NAMES, which is the whole point: a
+           ;; `runtime/src/vector.rs` that renames `vec_count` now has the
+           ;; declaration in front of it rather than in another repository's
+           ;; table.
+           :link (fn [data _ _]
+                   {:link-fn (lang/call {:java (:template data)})})
            ;; WHICH EMITTER RENDERS A `defdata`, looked up by the qualified
            ;; symbol its declaration names. An ordinary target key, read back
            ;; with `(get-in ctx [:targets (:target ctx) :data-emitters])` --
@@ -492,6 +526,19 @@
    :csharp (merge
             target/csharp
             {:vfs (vfs/disk-vfs (:csharp module-roots))
+           ;; WHAT A HOST ANNOTATION MEANS HERE. kin reads the marker and the
+           ;; name and hands the payload back untouched -- the payload's shape
+           ;; is this project's invention, and this is where it is invented.
+           ;;
+           ;; It is the smallest thing that can say a call: the template this
+           ;; target fills, which is exactly what a `core/call` entry held when
+           ;; the same fact lived in `flint.impl.rt`. Moving it here moves it
+           ;; NEXT TO THE FUNCTION IT NAMES, which is the whole point: a
+           ;; `runtime/src/vector.rs` that renames `vec_count` now has the
+           ;; declaration in front of it rather than in another repository's
+           ;; table.
+           :link (fn [data _ _]
+                   {:link-fn (lang/call {:csharp (:template data)})})
            ;; WHICH EMITTER RENDERS A `defdata`, looked up by the qualified
            ;; symbol its declaration names. An ordinary target key, read back
            ;; with `(get-in ctx [:targets (:target ctx) :data-emitters])` --

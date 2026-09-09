@@ -36,6 +36,8 @@ public static class Vec {
     /// and they agreed with each other while both disagreed with native.
     public const int V_HASH = 5;
 
+    // @kin:link:ns: flint.rt.vector
+    // @kin:link:form:vec-count: {:template "Vec.Count({0}, {1})"}
     public static int Count(Rt rt, long v) => (int) Val.AsFixnum(rt.Slot(v, V_CNT));
 
 

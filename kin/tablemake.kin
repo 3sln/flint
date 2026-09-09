@@ -5,16 +5,15 @@
 ;; knows. Two columns of one name would make `get` ambiguous and the index
 ;; would silently keep only the later one.
 (ns flint.rt.tablemake
-  (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   == != >= not nil?  
-                                   alloc heap slot set-slot fixnum
-                                   vec-count vec-nth vec-conj empty-vec empty-map
-                                   mark push r set-r pop-to for
-                                   charge-checked throw-str str-cat static-text
-                                   own-text
-                                   Rt Value I32 RootIx Text NIL
-                                   TY_SCHEMA SC_NAMES SC_TYPES SC_INDEX SC_IDS
-                                   SC_WIDTH SC_LEN TB_SCHEMA]]
+  (:require [flint.impl.rt :refer [defn return if let do comment doc == != >=
+                                   not nil? alloc heap slot set-slot fixnum
+                                   vec-nth vec-conj empty-vec empty-map mark
+                                   push r set-r pop-to for charge-checked
+                                   throw-str str-cat static-text own-text Rt
+                                   Value I32 RootIx Text NIL TY_SCHEMA
+                                   SC_NAMES SC_TYPES SC_INDEX SC_IDS SC_WIDTH
+                                   SC_LEN TB_SCHEMA]]
+            [flint.rt.vector :refer [vec-count]]
             [flint.rt.tablemeta :refer [schema-width table-count]]
             [flint.rt.tableref :refer [schema-id ref-to-map]]
             [flint.rt.tablecell :refer [table-cell]]

@@ -18,14 +18,12 @@
 ;; behaves exactly as it did.
 (ns flint.rt.vecread
   (:require [flint.impl.rt :refer [defn return if let local set do comment doc
-                                   for while not == < > >= -
-                                   bit-and shl ushr
+                                   for while not == < > >= - bit-and shl ushr
                                    push r pop-to slot as-fixnum to-i32 nil?
-                                   vec-count
-                                   is-heap as-heap ty or
-                                   Rt Value RootIx I32 Bool Ty NIL
-                                   BITS WIDTH MASK V_SHIFT V_ROOT V_TAIL
-                                   TY_VEC TY_MAPENTRY]]
+                                   is-heap as-heap ty or Rt Value RootIx I32
+                                   Bool Ty NIL BITS WIDTH MASK V_SHIFT V_ROOT
+                                   V_TAIL TY_VEC TY_MAPENTRY]]
+            [flint.rt.vector :refer [vec-count]]
             [flint.rt.vecnode :refer [new-node node-len node-get node-set]]))
 
 (doc "`vector?` AS THE GUEST SEES IT, which includes a MAP ENTRY."

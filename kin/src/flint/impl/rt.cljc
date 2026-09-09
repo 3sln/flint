@@ -945,7 +945,6 @@
                           :csharp "System.Numerics.BitOperations.PopCount((uint)({0}))"})
 
     ;; The siblings these files actually reach for.
-    'vec-count (sibling "vec_count" "Vec" "count" 1)
     ;; THREE arguments after the receiver, not two. `nth` gained a `dflt`
     ;; when absence stopped being a sentinel each caller had to know; this
     ;; entry said 2 for a while after the function said 3, which would have

@@ -21,24 +21,21 @@
 ;; is what a total `match` needs in Rust and what the probe says can never be
 ;; seen.
 (ns flint.rt.seqwalk
-  (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   not and == + >= local set while break set-slot
-                                   slot as-fixnum to-i32 nil? as-heap ty
-                                   seq-of vec-nth vec-count char-at s-count
-                                   table-ref table-count num-add
-                                   empty-list invoke-thunk
-                                   mark push r set-r pop-to is-heap
-                                   is-fixnum
-                                   TY_LAZYSEQ LS_THUNK LS_SEQ RootIx
-                                   Rt Value I32 Ty NIL
-                                   C_FIRST C_REST
-                                   TY_CONS TY_VECSEQ TY_STRSEQ TY_RANGE
-                                   TY_MAPENTRY TY_TABLE
-                                   or  vec-count ref-to-map
-                                   map-entry-vector set-element-vector
-                                   throw-str str-cat static-text Text
-                                   TY_EMPTY_LIST TY_VEC TY_LAZYSEQ
-                                   TY_ARRAYMAP TY_HASHMAP TY_SET TY_TABLEREF]]
+  (:require [flint.impl.rt :refer [defn return if let do comment doc not and
+                                   == + >= local set while break set-slot slot
+                                   as-fixnum to-i32 nil? as-heap ty seq-of
+                                   vec-nth char-at s-count table-ref
+                                   table-count num-add empty-list invoke-thunk
+                                   mark push r set-r pop-to is-heap is-fixnum
+                                   TY_LAZYSEQ LS_THUNK LS_SEQ RootIx Rt Value
+                                   I32 Ty NIL C_FIRST C_REST TY_CONS TY_VECSEQ
+                                   TY_STRSEQ TY_RANGE TY_MAPENTRY TY_TABLE or
+                                   ref-to-map map-entry-vector
+                                   set-element-vector throw-str str-cat
+                                   static-text Text TY_EMPTY_LIST TY_VEC
+                                   TY_LAZYSEQ TY_ARRAYMAP TY_HASHMAP TY_SET
+                                   TY_TABLEREF]]
+            [flint.rt.vector :refer [vec-count]]
             [flint.rt.seqs :refer [vecseq strseq range range-empty]]
             [flint.rt.seqcore :refer [count-hint]]
             [flint.rt.nouns :refer [describe]]

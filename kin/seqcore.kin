@@ -11,18 +11,16 @@
 ;; whole of why both exist: a vector is not a seq but `seq` accepts one, and a
 ;; string is neither a heap seq nor excluded.
 (ns flint.rt.seqcore
-  (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   not or == !=
-                                   mark push r set-r pop-to alloc set-at slot heap
-                                   for as-idx empty-list
-                                   fixnum as-fixnum nil? is-heap as-heap ty
-                                   vec-count is-fixnum
-                                   + -
-                                   Rt Value Addr RootIx I32 Ty Bool NIL
-                                   C_FIRST C_REST C_META C_COUNT
-                                   TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ
-                                   TY_STRSEQ TY_RANGE TY_VEC
-                                   is-fixnum as-fixnum quot I64 and not > < local set]]))
+  (:require [flint.impl.rt :refer [defn return if let do comment doc not or ==
+                                   != mark push r set-r pop-to alloc set-at
+                                   slot heap for as-idx empty-list fixnum
+                                   as-fixnum nil? is-heap as-heap ty is-fixnum
+                                   + - Rt Value Addr RootIx I32 Ty Bool NIL
+                                   C_FIRST C_REST C_META C_COUNT TY_CONS
+                                   TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ
+                                   TY_STRSEQ TY_RANGE TY_VEC is-fixnum
+                                   as-fixnum quot I64 and not > < local set]]
+            [flint.rt.vector :refer [vec-count]]))
 
 (doc "Is this a SEQ? Six heap tags and nothing else."
      ""

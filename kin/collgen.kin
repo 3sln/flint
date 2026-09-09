@@ -21,18 +21,17 @@
 ;; an astral character counts 2 there and 1 here -- deliberate, and recorded in
 ;; the README rather than here.
 (ns flint.rt.collgen
-  (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   == not or nil? is-heap as-heap ty -
-                                   slot throw-str str-cat static-text own-text
-                                    s-count
-                                   vec-count vec-nth vec-pop schema-len
-                                   empty-vec empty-map empty-set empty-list
-                                   Rt Value I32 Ty Bool Text NIL
-                                   RF_SCHEMA TY_VEC TY_MAPENTRY TY_TAGGED
-                                   TY_TABLE TY_TTABLE TY_TABLEREF
-                                   TY_ARRAYMAP TY_HASHMAP TY_SET
+  (:require [flint.impl.rt :refer [defn return if let do comment doc == not or
+                                   nil? is-heap as-heap ty - slot throw-str
+                                   str-cat static-text own-text s-count
+                                   vec-nth vec-pop schema-len empty-vec
+                                   empty-map empty-set empty-list Rt Value I32
+                                   Ty Bool Text NIL RF_SCHEMA TY_VEC
+                                   TY_MAPENTRY TY_TAGGED TY_TABLE TY_TTABLE
+                                   TY_TABLEREF TY_ARRAYMAP TY_HASHMAP TY_SET
                                    TY_BYTES TY_BROPE TY_TVEC TY_TMAP TY_TSET
                                    TY_EMPTY_LIST]]
+            [flint.rt.vector :refer [vec-count]]
             [flint.rt.nouns :refer [describe]]
             [flint.rt.seqcore :refer [is-seq]]
             [flint.rt.mapcore :refer [map-count]]
