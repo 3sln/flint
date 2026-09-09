@@ -1162,12 +1162,45 @@ public sealed class Rt : System.IDisposable {
             long got = Vec.Nth(this, callee, (int) Val.AsFixnum(roots.Stack[calleeAt + 1]), Val.NotFound);
             return got == Val.NotFound ? Val.Nil : got;
         }
-        // Say WHAT was called: "value is not a function" with no subject is
-        // the least useful message in the runtime.
+        // Say WHAT was called, AND WHERE. "value is not a function" with no
+        // subject is the least useful message in the runtime, and "object type
+        // inline" was barely better -- it named an implementation detail for a
+        // value and nothing at all for the call path. Native says
+        //
+        //     value is not a function (an integer, 1 args) in inner <- main
+        //
+        // and this now says the same, from the same generated `Describe` and
+        // the same frame walk.
         return ThrowStr("ClassCastException",
-            "value is not a function (object type "
-            + (Val.IsHeap(callee) ? Ty(gc.sp, Val.AsHeap(callee)).ToString() : "inline")
-            + ", " + argc + " args)");
+            "value is not a function (" + Describe(callee) + ", " + argc + " args) in "
+            + WhereAmI());
+    }
+
+    /// The frame names, innermost first, for attaching to a runtime error.
+    ///
+    /// A frame does not cache its closure -- `stack[RetTo]` IS it until the
+    /// frame returns -- which is the same reason `UPVAL` and `SELF` read it
+    /// from there rather than from the frame.
+    public string WhereAmI() {
+        var outp = new System.Text.StringBuilder();
+        int n = frames.Count;
+        for (int i = n - 1; i >= 0 && n - i <= 12; i--) {
+            string name = "?";
+            long c = roots.Stack[frames[i].RetTo];
+            if (Val.IsHeap(c)) {
+                int fnIdx = (int) Val.AsFixnum(Slot(c, 0));
+                if (fnIdx >= 0 && fnIdx < fns.Length) {
+                    int namec = fns[fnIdx].Name;
+                    if (namec >= 0 && namec < roots.shared.Consts.Length) {
+                        long v = roots.shared.Consts[namec];
+                        if (!Val.IsNil(v)) name = Str.Text(this, v);
+                    }
+                }
+            }
+            if (outp.Length > 0) outp.Append(" <- ");
+            outp.Append(name);
+        }
+        return outp.ToString();
     }
 
     /// `get`, for the collections that are ported.

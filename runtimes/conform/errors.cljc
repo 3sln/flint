@@ -46,13 +46,12 @@
     ;; a failed `enter` instead of unwinding, so even a real exception skipped
     ;; every handler the guest had installed.
     :calls [(boom #((fn [a] a))) (boom #((fn [a] a) 1 2))]
-    ;; CALLING A NON-FUNCTION is a class all three agree on and a MESSAGE they
-    ;; do not: native names the value and the call path it happened in, the
-    ;; ports say "object type inline". Left out rather than asserted, because
-    ;; converging it means teaching both ports a frame walk -- a real job, and
-    ;; a worse message is not a wrong answer.
-    :not-callable [(flint.rt/ex-kind (try (1 2) (catch Exception e e)))
-                   (flint.rt/ex-kind (try (nil 1) (catch Exception e e)))]
+    ;; CALLING A NON-FUNCTION, message and all. Native named the value and the
+    ;; call path while the ports said "object type inline" -- an implementation
+    ;; detail for the value and nothing for the path. All three walk the frames
+    ;; now and describe the value the same generated way, so the whole message
+    ;; is comparable rather than just the class.
+    :not-callable [(boom #(1 2)) (boom #(nil 1))]
     ;; REFERENCE types asked to be something else.
     :refs [(boom #(deref 1)) (boom #(swap! 1 inc)) (boom #(reset! [1] 2))]
     ;; MAPS and keywords.

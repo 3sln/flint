@@ -617,11 +617,13 @@ impl Rt {
                 return self.apply_keyword(callee_at, argc);
             }
             self.roots.stack_top = callee_at;
+            // `describe` AND NOT `{:?}`, so the two ports can say the same
+            // thing. It is generated from one source and identical on all
+            // three; a Rust `Debug` is not portable and the heap arm below was
+            // printing a raw type NUMBER for want of anything better.
+            let what = self.describe(callee);
             let w = self.where_am_i();
-            let msg = alloc::format!(
-                "value is not a function ({:?}, {argc} args) in {w}",
-                callee
-            );
+            let msg = alloc::format!("value is not a function ({what}, {argc} args) in {w}");
             return self.throw_str("ClassCastException", &msg);
         }
         match ty(&self.gc.sp, callee.as_heap()) {
@@ -722,12 +724,10 @@ impl Rt {
             _ => {
                 // Say WHAT was called: "value is not a function" with no subject
                 // is the least useful message in the runtime.
-                let t = ty(&self.gc.sp, callee.as_heap());
                 self.roots.stack_top = callee_at;
+                let what = self.describe(callee);
                 let w = self.where_am_i();
-                let msg = alloc::format!(
-                    "value is not a function (object type {t}, {argc} args) in {w}"
-                );
+                let msg = alloc::format!("value is not a function ({what}, {argc} args) in {w}");
                 self.throw_str("ClassCastException", &msg)
             }
         }

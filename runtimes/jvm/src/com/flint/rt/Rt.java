@@ -1296,12 +1296,45 @@ public final class Rt {
             long got = Vec.nth(this, callee, (int) Val.asFixnum(roots.stack[calleeAt + 1]), Val.NOT_FOUND);
             return got == Val.NOT_FOUND ? Val.NIL : got;
         }
-        // Say WHAT was called: "value is not a function" with no subject is
-        // the least useful message in the runtime.
+        // Say WHAT was called, AND WHERE. "value is not a function" with no
+        // subject is the least useful message in the runtime, and "object type
+        // inline" was barely better -- it named an implementation detail for a
+        // value and nothing at all for the call path. Native says
+        //
+        //     value is not a function (an integer, 1 args) in inner <- main
+        //
+        // and this now says the same, from the same generated `describe` and
+        // the same frame walk.
         return throwStr("ClassCastException",
-            "value is not a function (object type "
-            + (Val.isHeap(callee) ? String.valueOf(ty(gc.sp, Val.asHeap(callee))) : "inline")
-            + ", " + argc + " args)");
+            "value is not a function (" + describe(callee) + ", " + argc + " args) in "
+            + whereAmI());
+    }
+
+    /// The frame names, innermost first, for attaching to a runtime error.
+    ///
+    /// A frame does not cache its closure -- `stack[retTo]` IS it until the
+    /// frame returns -- which is the same reason `UPVAL` and `SELF` read it
+    /// from there rather than from the frame.
+    public String whereAmI() {
+        StringBuilder out = new StringBuilder();
+        int n = frames.size();
+        for (int i = n - 1; i >= 0 && n - i <= 12; i--) {
+            String name = "?";
+            long c = roots.stack[frames.get(i).retTo];
+            if (Val.isHeap(c)) {
+                int fnIdx = (int) Val.asFixnum(slot(c, 0));
+                if (fnIdx >= 0 && fnIdx < fns.length) {
+                    int namec = fns[fnIdx].name;
+                    if (namec >= 0 && namec < roots.shared.consts.length) {
+                        long v = roots.shared.consts[namec];
+                        if (!Val.isNil(v)) name = Str.text(this, v);
+                    }
+                }
+            }
+            if (out.length() > 0) out.append(" <- ");
+            out.append(name);
+        }
+        return out.toString();
     }
 
     /// `get`, for the collections that are ported.
