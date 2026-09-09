@@ -142,27 +142,40 @@ are named. Splitting the implementation column by whether a function is one:
 | `Snap` | 795 | 0 | 0% |
 | `Codec` | 757 | 16 | 2% |
 | `Pike` | 319 | 0 | 0% |
-| `Str` | 307 | 68 | 18% |
+| `Str` | 279 | 96 | 26% |
 | `Maps` | 237 | 0 | 0% |
 | `Aot` | 218 | 0 | 0% |
 | `Obj` | 201 | 22 | 10% |
-| `Num` | 90 | 33 | 27% |
-| `Vec` | 60 | 8 | 12% |
-| `Sets` | 42 | 0 | 0% |
+| `Num` | 67 | 56 | 46% |
+| `Vec` | 57 | 11 | 16% |
 | `Eq` | 41 | 5 | 11% |
 | **`Bytes`** | **39** | **133** | **77%** |
+| `Sets` | 34 | 8 | 19% |
 | `Table` | 31 | 0 | 0% |
 | `Seqs` | 10 | 0 | 0% |
 
-`Bytes` is the one this changes: 172 lines that looked like work are 39 lines
-of logic and 133 of walk, cursor, sink and leaf primitives -- the ones
+`Bytes` is the one this changes most: 172 lines that looked like work are 39
+lines of logic and 133 of walk, cursor, sink and leaf primitives -- the ones
 `dblstr.kin` and `casechange.kin` call. Eleven `byte*.kin` sources took the
 rest. It is finished, and only a count that could not see the boundary said
 otherwise.
 
-The detection is name matching against the vocabulary, so read it as a strong
-hint rather than a proof; a runtime function that happens to share a name with
-a hole would be miscounted. Nothing in the table above turns on a single row.
+Reading the vocabulary takes four constructors, not one, and the first version
+of this table read one. `core/call` carries a literal `:rust` template a grep
+can find; `sibling`, `own` and `own-static` BUILD theirs at load time from a
+Rust name in their first argument, so `(sibling "string_hash" "Str" ...)` has
+no `:rust` string in it anywhere. Fifty-six of the hundred and fifty-five
+holes are declared that way, and missing them counted `string_hash` as shared
+logic waiting to be ported. It has been generated for some time.
+
+The templates cannot simply be read back out of the loaded vocabulary either
+-- `core/call` returns a closure, so by then the strings are captured and
+gone. The names come from the source text with the three constructors
+expanded.
+
+What remains is name matching, so read it as a strong hint rather than a
+proof: a runtime function sharing a name with a hole would be miscounted.
+Nothing above turns on a single row.
 
 **Three passes, three different answers, and each one moved a subject.** Raw
 lines said `Vec` was 81% divergent. Minus tests it is 4%. Minus host holes
