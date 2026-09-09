@@ -166,7 +166,11 @@ can find; `sibling`, `own` and `own-static` BUILD theirs at load time from a
 Rust name in their first argument, so `(sibling "string_hash" "Str" ...)` has
 no `:rust` string in it anywhere. Fifty-six of the hundred and fifty-five
 holes are declared that way, and missing them counted `string_hash` as shared
-logic waiting to be ported. It has been generated for some time.
+logic waiting to be ported. It is not: it is hand-written in `strs.rs` and
+DECLARED to the vocabulary as a hole, which is the whole point -- kin
+generates the calls and the runtime supplies the callee. Counting a declared
+hole as unported logic is the error; whether the callee happens to be
+generated elsewhere is a different question and, here, the answer is no.
 
 The templates cannot simply be read back out of the loaded vocabulary either
 -- `core/call` returns a closure, so by then the strings are captured and
