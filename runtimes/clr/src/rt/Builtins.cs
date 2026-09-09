@@ -499,7 +499,10 @@ public static class Builtins {
         Def("flint/to-long", (rt, at, n) => {
             long v = rt.VAt(at);
             if (Num.IsInt(rt, v)) return v;
-            if (!Val.IsDouble(v)) return rt.ThrowStr("IllegalArgumentException", "not a number: " + rt.Describe(v));
+            // `ClassCastException`, as Clojure throws for `(long "x")` and as
+            // native throws -- this port said `IllegalArgumentException`, and
+            // the class is the part a `catch` selects on.
+            if (!Val.IsDouble(v)) return rt.ThrowStr("ClassCastException", "not a number: " + rt.Describe(v));
             double d = System.Math.Truncate(Val.AsDouble(v));
             if (!double.IsFinite(d) || d < -9.223372036854776e18 || d > 9.223372036854776e18)
                 return rt.ThrowStr("IllegalArgumentException", "value out of long range");
@@ -766,15 +769,16 @@ public static class Builtins {
         // that the next change to it lands in one place.
         Def("flint/array-map", (rt, at, n) =>
             global::_3sln.Flint.Kgen.Rt.Mapmake.OrderedMap(rt, rt.VAt(at)));
-        Def("flint/unchecked-add", (rt, at, n) => {
-            unchecked { return Num.Integer(rt, Val.AsFixnum(rt.VAt(at)) + Val.AsFixnum(rt.VAt(at + 1))); }
-        });
-        Def("flint/unchecked-sub", (rt, at, n) => {
-            unchecked { return Num.Integer(rt, Val.AsFixnum(rt.VAt(at)) - Val.AsFixnum(rt.VAt(at + 1))); }
-        });
-        Def("flint/unchecked-mul", (rt, at, n) => {
-            unchecked { return Num.Integer(rt, Val.AsFixnum(rt.VAt(at)) * Val.AsFixnum(rt.VAt(at + 1))); }
-        });
+        // `AsFixnum` IS NOT `I64Of`. It is the low bits of the VALUE WORD,
+        // sign-extended, so for a BIGINT it sign-extends the heap address and
+        // does arithmetic on a pointer. `unchecked-add` of `long.MaxValue` and
+        // 1 answered a small positive number rather than wrapping -- not an
+        // overflow, not an error, a different number with nothing to say it
+        // was wrong. Every operand too big for a fixnum went through it, which
+        // is the range `unchecked-*` exists to be used in.
+        Def("flint/unchecked-add", (rt, at, n) => UncheckedOp(rt, at, 0));
+        Def("flint/unchecked-sub", (rt, at, n) => UncheckedOp(rt, at, 1));
+        Def("flint/unchecked-mul", (rt, at, n) => UncheckedOp(rt, at, 2));
 
         // --- byte strings (`doc/decisions/0024`) ------------------------------
         Def("flint/b-count", (rt, at, n) => Val.Fixnum(Bytes.Count(rt, rt.VAt(at))));
@@ -1185,6 +1189,28 @@ public static class Builtins {
     /// Equality lives in `Eq` now, because maps need it and it needs maps --
     /// a map's `=` compares entries and an entry's key can be a map. One
     /// implementation, not two that drift.
+    /// `unchecked-add`, `-sub` and `-mul`, over the WHOLE integer range.
+    ///
+    /// Mirrors native's `unchecked2`: both operands as `i64` when both are
+    /// integers -- fixnum or bigint -- and wrapping arithmetic on those; two
+    /// numbers that are not both integers promote to double; anything else is
+    /// refused. The `unchecked` block is what makes the wrap a wrap here.
+    static long UncheckedOp(Rt rt, int at, int which) {
+        long x = rt.VAt(at), y = rt.VAt(at + 1);
+        if (Num.IsInt(rt, x) && Num.IsInt(rt, y)) {
+            long p = Num.I64Of(rt, x), q = Num.I64Of(rt, y);
+            unchecked {
+                long r = which == 0 ? p + q : which == 1 ? p - q : p * q;
+                return Num.Integer(rt, r);
+            }
+        }
+        if (Num.IsNumber(rt, x) && Num.IsNumber(rt, y)) {
+            double p = Num.F64(rt, x), q = Num.F64(rt, y);
+            return Val.OfDouble(which == 0 ? p + q : which == 1 ? p - q : p * q);
+        }
+        return Num.NotNumber(rt, x, y);
+    }
+
     static bool Eq(Rt rt, long a, long b) => global::_3sln.Flint.Kgen.Rt.Valeq.ValEq(rt, a, b);
 
     /// A CHAIN, as Clojure's comparisons are: `(< 1 2 3)` is one call, not two.

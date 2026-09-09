@@ -115,6 +115,20 @@ impl Rt {
         self.throw_str("ClassCastException", &msg)
     }
 
+    /// The ONE-OPERAND form. `to-long` reached for the pair above and passed
+    /// the same value twice, so converting a string reported "not a number: a
+    /// string and a string" -- describing an operand that does not exist. The
+    /// ports said "not a number: a string" and threw a DIFFERENT class, so
+    /// this was two divergences reading as one.
+    ///
+    /// `ClassCastException` and not `IllegalArgumentException`, because that
+    /// is what Clojure throws for `(long "x")` and the class is the part a
+    /// `catch` selects on.
+    pub fn throw_not_a_number1(&mut self, a: Value) -> Value {
+        let msg = alloc::format!("not a number: {}", self.describe(a));
+        self.throw_str("ClassCastException", &msg)
+    }
+
     pub fn ex_message(&self, e: Value) -> Value {
         if self.is_exception(e) {
             self.slot(e, EX_MSG)

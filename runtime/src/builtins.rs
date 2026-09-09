@@ -1048,7 +1048,7 @@ builtins! {
                     rt.throw_str("IllegalArgumentException", "value out of long range")
                 }
             }
-            None => rt.throw_not_a_number(v, v),
+            None => rt.throw_not_a_number1(v),
         }
     };
     "flint/signum", flint_b_m_signum, b_m_signum, |rt, a, n| {

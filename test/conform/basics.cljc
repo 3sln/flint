@@ -72,6 +72,14 @@
    ;; that broke: the constant pool is a map and `(= 0.0 -0.0)` is true, so
    ;; whichever appeared second reused the first one's slot.
    (c "both zeros in one module" (mapv str [0.0 -0.0 0.0]) ["0.0" "-0.0" "0.0"])
+   ;; THE MOST NEGATIVE LONG AS A LITERAL. The reader read the digits as a
+   ;; magnitude and negated afterwards, so this overflowed before the sign was
+   ;; ever applied and flint refused a literal Clojure reads. The positive
+   ;; bound is beside it because a fix that accumulates downward always would
+   ;; break that one instead.
+   (c "the most negative long reads" (str -9223372036854775808) "-9223372036854775808")
+   (c "and the most positive" (str 9223372036854775807) "9223372036854775807")
+   (c "negative hex still reads" [(str -0x10) (str 0x1f)] ["-16" "31"])
    ;; THE SPECIALS ARE SPELLED TWICE. `str` of a bare one gives the host
    ;; name; everything that goes through the PRINTER gives the readable one,
    ;; including `str` of a collection containing it. Built by multiplying

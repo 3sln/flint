@@ -659,7 +659,7 @@ done
 # agreeing about maps, vectors, sets, strings, seqs and doubles at once -- and
 # `maps` prints its keys in trie order, so matching means the ported CHAMP
 # ITERATES the way the Rust's does, which nothing asserts directly.
-for prog in bytes churn collections control green hosted lazy maps mathfns numbers opcodes regex strings tables threads; do
+for prog in bytes churn collections control green hosted lazy maps mathfns numedge numbers opcodes regex strings tables threads; do
   # A FIXTURE THAT DOES NOT COMPILE IS A FAILURE, NOT A SKIP. This used to
   # `continue`, so a broken fixture removed its own checks and the gate still
   # exited 0 -- thirteen programs, each worth several checks on two hosts. It

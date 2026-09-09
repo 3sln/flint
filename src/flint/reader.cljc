@@ -120,13 +120,26 @@
           (and (>= v 65) (<= v 70)) (- v 55)
           :else nil)))
 
-(defn parse-int-radix [s radix]
-  (loop [i 0 acc 0]
-    (if (>= i (count s))
-      (when (> (count s) 0) acc)
-      (let [d (hex-digit-value (ch s i))]
-        (when (and (some? d) (< d radix))
-          (recur (inc i) (+ (* acc radix) d)))))))
+;; TAKES THE SIGN, and builds the value DOWNWARD when it is negative.
+;;
+;; Reading the digits as a magnitude and negating afterwards cannot represent
+;; the most negative integer -- it has no positive counterpart -- so
+;; `-9223372036854775808` was a valid literal that flint refused to read, with
+;; "long overflow", while Clojure reads it. The overflow happened before the
+;; sign was ever applied.
+;;
+;; Same edge as `numdiv.kin`'s `quot MIN -1` and `strnum.kin`'s integer arm,
+;; and the same answer in all three: accumulate on the side that has room.
+(defn parse-int-radix
+  ([s radix] (parse-int-radix s radix false))
+  ([s radix neg?]
+   (loop [i 0 acc 0]
+     (if (>= i (count s))
+       (when (> (count s) 0) acc)
+       (let [d (hex-digit-value (ch s i))]
+         (when (and (some? d) (< d radix))
+           (recur (inc i)
+                  (if neg? (- (* acc radix) d) (+ (* acc radix) d)))))))))
 
 (defn- parse-number [t]
   (let [n (count t)]
@@ -141,8 +154,7 @@
             ;; hex
             (and (> bn 2) (= "0" (ch body 0))
                  (or (= "x" (ch body 1)) (= "X" (ch body 1))))
-            (when-let [v (parse-int-radix (subs body 2) 16)]
-              (if neg? (- v) v))
+            (parse-int-radix (subs body 2) 16 neg?)
 
             :else
             (let [body (if (and (> bn 0) (= "N" (ch body (dec bn)))) (subs body 0 (dec bn)) body)
@@ -153,7 +165,7 @@
                                          (digit? (ch body i)) (recur (inc i))
                                          :else false))]
               (if int?
-                (let [v (parse-int-radix body 10)] (if neg? (- v) v))
+                (parse-int-radix body 10 neg?)
                 (let [v (flint.rt/str->num (if neg? (flint.rt/str2 "-" body) body))]
                   ;; `* 1.0` AND NOT `+ 0.0`, which is the same coercion and
                   ;; loses NEGATIVE ZERO: IEEE 754 says -0.0 + 0.0 is +0.0, so

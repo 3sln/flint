@@ -528,7 +528,10 @@ public final class Builtins {
         def("flint/to-long", (rt, at, n) -> {
             long v = rt.vat(at);
             if (Num.isInt(rt, v)) return v;
-            if (!Val.isDouble(v)) return rt.throwStr("IllegalArgumentException",
+            // `ClassCastException`, as Clojure throws for `(long "x")` and as
+            // native throws -- this port said `IllegalArgumentException`, and
+            // the class is the part a `catch` selects on.
+            if (!Val.isDouble(v)) return rt.throwStr("ClassCastException",
 "not a number: " + rt.describe(v));
             double d = Val.asDouble(v);
             d = d < 0 ? Math.ceil(d) : Math.floor(d);
@@ -838,12 +841,18 @@ public final class Builtins {
         // WRAPS rather than throwing, which is the whole point of asking for
         // it: `hash` and the bit-mixing in `map.rs` rely on wrapping, and the
         // checked forms would refuse the very operations those are made of.
-        def("flint/unchecked-add", (rt, at, n) ->
-            Num.integer(rt, Val.asFixnum(rt.vat(at)) + Val.asFixnum(rt.vat(at + 1))));
-        def("flint/unchecked-sub", (rt, at, n) ->
-            Num.integer(rt, Val.asFixnum(rt.vat(at)) - Val.asFixnum(rt.vat(at + 1))));
-        def("flint/unchecked-mul", (rt, at, n) ->
-            Num.integer(rt, Val.asFixnum(rt.vat(at)) * Val.asFixnum(rt.vat(at + 1))));
+        // `asFixnum` IS NOT `asI64`. It is `(v << 16) >> 16` -- the low bits of
+        // the VALUE WORD, sign-extended -- so for a BIGINT it sign-extends the
+        // heap address and does arithmetic on a pointer. `unchecked-add` of
+        // `Long.MAX_VALUE` and 1 answered 70969 here and
+        // -9223372036854775808 on native: not an overflow, not an error, a
+        // different number with nothing to say it was wrong.
+        //
+        // Every operand that does not fit a fixnum went through it, which is
+        // exactly the range `unchecked-*` exists to be used in.
+        def("flint/unchecked-add", (rt, at, n) -> uncheckedOp(rt, at, 0));
+        def("flint/unchecked-sub", (rt, at, n) -> uncheckedOp(rt, at, 1));
+        def("flint/unchecked-mul", (rt, at, n) -> uncheckedOp(rt, at, 2));
 
         // --- byte strings (`doc/decisions/0024`) ------------------------------
         //
@@ -1263,6 +1272,27 @@ public final class Builtins {
     /// Equality lives in `Eq` now, because maps need it and it needs maps --
     /// a map's `=` compares entries and an entry's key can be a map. One
     /// implementation, not two that drift.
+    /// `unchecked-add`, `-sub` and `-mul`, over the WHOLE integer range.
+    ///
+    /// Mirrors native's `unchecked2`: both operands as `i64` when both are
+    /// integers -- fixnum or bigint -- and wrapping arithmetic on those; two
+    /// numbers that are not both integers promote to double; anything else is
+    /// refused. Java's `+`, `-` and `*` on `long` already wrap, which is the
+    /// whole of "unchecked" here.
+    static long uncheckedOp(Rt rt, int at, int which) {
+        long x = rt.vat(at), y = rt.vat(at + 1);
+        if (Num.isInt(rt, x) && Num.isInt(rt, y)) {
+            long p = Num.i64Of(rt, x), q = Num.i64Of(rt, y);
+            long r = which == 0 ? p + q : which == 1 ? p - q : p * q;
+            return Num.integer(rt, r);
+        }
+        if (Num.isNumber(rt, x) && Num.isNumber(rt, y)) {
+            double p = Num.f64(rt, x), q = Num.f64(rt, y);
+            return Val.ofDouble(which == 0 ? p + q : which == 1 ? p - q : p * q);
+        }
+        return Num.notNumber(rt, x, y);
+    }
+
     static boolean eq(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Valeq.valEq(rt, a, b); }
 
     /// A CHAIN, as Clojure's comparisons are: `(< 1 2 3)` is one call, not two.
