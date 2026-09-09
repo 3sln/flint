@@ -107,8 +107,42 @@
               (try (t/join b) :no-throw (catch Exception e (ex-message e)))
               (let [r (t/result b)] (if (nil? r) :nil (ex-message r)))]}))
 
+(defn- closing
+  "WHAT A CLOSED PORT DOES, and what a port says about itself.
+
+  `bridge?`, `port-id` and `close` were three more of the builtins nothing
+  reached. Closing is the interesting one: `close` wakes anybody parked and
+  they read end-of-stream, so the answers here are about a decision each
+  runtime had to make separately -- what a receive after close gives, what a
+  send after close does, and what the state becomes.
+
+  A channel is NOT a bridge, which is the distinction `bridge?` exists to
+  draw: both ends of a channel live in this heap and nothing is encoded.
+
+  Ids are compared to each OTHER and never printed, for the reason the thread
+  ids are: an absolute one is a counter, and asserting it would pin this file
+  to how many ports happened to exist first."
+  []
+  (let [[a b] (p/channel 2 "closing")
+        [c d] (p/channel 1 "other")]
+    (p/send a :before)
+    (p/close a)
+    {:not-a-bridge [(p/bridge? a) (p/bridge? b)]
+     ;; The two ENDS of one channel are distinct ports, and two different
+     ;; channels are distinct again.
+     :ids [(= (p/port-id a) (p/port-id a)) (= (p/port-id a) (p/port-id c))]
+     :closed [(p/closed? a) (p/state a)]
+     ;; A MESSAGE ALREADY SENT SURVIVES THE CLOSE, and the reader sees
+     ;; end-of-stream only once the buffer is empty.
+     :drains [(str (p/receive b)) (str (p/receive b))]
+     :send-after (try (p/send a :after) :sent
+                      (catch Exception e (flint.rt/ex-kind e)))
+     ;; Closing the OTHER end of an untouched channel, then reading.
+     :other (do (p/close d) [(p/closed? d) (str (p/receive c))])}))
+
 (defn main [_]
   (pr-str {:joined  (joined)
+           :closing (closing)
            :identity (identity-of)
            :channel (through-a-channel)
            :order   (interleaving)

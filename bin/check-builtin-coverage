@@ -89,8 +89,15 @@ for _n in ["flint/sin", "flint/cos", "flint/tan", "flint/asin", "flint/acos",
 # not SEE the program exercising them, because it globbed one conformance
 # directory and there are two. An excuse that is wrong about the facts is worse
 # than no excuse, and the stale check is what surfaced it.
+# `port-bridge?`, `port-close` and `port-id` came off when `green.cljc` grew a
+# `closing` section. Clean, like the thread accessors: what a receive after a
+# close gives, what a send after one throws, that a channel is not a bridge --
+# all three runtimes already agreed. Two probes in a row finding nothing is
+# what a list of unknowns looks like when it is being worked honestly.
+#
+# `flint/request` stays: it needs a HOST that answers requests, so covering it
+# means teaching three separate drivers, not writing a conformance program.
 for _n in ["flint/bindings", "flint/set-bindings", "flint/gc-stats",
-           "flint/port-bridge?", "flint/port-close", "flint/port-id",
            "flint/request"]:
     ACCOUNTED[_n] = "UNWATCHED -- no conformance program reaches it"
 
