@@ -1,11 +1,16 @@
 #!/bin/sh
 # The opcode-coverage gate for the kin port (`doc/goals/kin-port.md`, gate 4).
 #
-# It builds the FIFTEEN conformance programs plus the conformance runner into
-# a directory of their own and runs `opcov` over exactly those. The set is
-# fixed by this script rather than by whatever happens to be in `out/`, which
-# is the whole point: the gate is a before/after comparison, and a comparison
-# over two different image sets is not one.
+# It builds EVERY conformance program plus the conformance runner into a
+# directory of their own and runs `opcov` over exactly those. The set is fixed
+# by this script rather than by whatever happens to be in `out/`, which is the
+# whole point: the gate is a before/after comparison, and a comparison over
+# two different image sets is not one.
+#
+# The count below is a FLOOR and not the number there are -- it was written as
+# fifteen and there are sixteen now, because the loop globs the directory and
+# a new program joins the census by existing. The floor is here to catch the
+# opposite: a build that quietly stopped producing them.
 #
 # Two ways to get this wrong, both of which cost a run to find out:
 #
