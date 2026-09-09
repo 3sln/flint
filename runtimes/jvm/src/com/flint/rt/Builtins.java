@@ -264,8 +264,13 @@ public final class Builtins {
             Val.bool(rt.isHeapTy(rt.vat(at), Obj.TY_TAGGED)));
 
 
-        def("flint/opaque?", (rt, at, n) -> Val.FALSE);
-        def("flint/opaque-label", (rt, at, n) -> Val.NIL);
+        // NOT STUBS. These answered `false` and `nil` for everything, including
+        // for an opaque value this same file had just minted -- so `0022` held
+        // on native and was decoration here: `(opaque? (opaque))` was false and
+        // a label was never readable. `Opaque` is GENERATED and both ports
+        // already carried it; nothing called it.
+        def("flint/opaque?", (rt, at, n) -> Val.bool(rt.isOpaque(rt.vat(at))));
+        def("flint/opaque-label", (rt, at, n) -> rt.opaqueLabel(rt.vat(at)));
         /// The metadata slot, or nil. This was a STUB answering nil, which is
         /// indistinguishable from "no metadata" and so passed every test that
         /// did not set any.

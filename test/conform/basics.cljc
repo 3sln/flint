@@ -80,6 +80,27 @@
    (c "the most negative long reads" (str -9223372036854775808) "-9223372036854775808")
    (c "and the most positive" (str 9223372036854775807) "9223372036854775807")
    (c "negative hex still reads" [(str -0x10) (str 0x1f)] ["-16" "31"])
+   ;; A DELAY WHOSE THUNK THREW. Catching it at all is the fix: reaching it
+   ;; through a `try` USED TO CRASH the runtime -- a panic on native and an
+   ;; `unreachable` trap on wasm -- because the VM unwound to the handler
+   ;; while a native frame was still holding shadow-stack roots. Without a
+   ;; surrounding `catch` there was no handler to find and it behaved, which
+   ;; is why it took this shape to see.
+   (c "a delay that throws is catchable, and throws the same thing twice"
+      (let [d (delay (throw (ex-info "no" {})))]
+        [(try @d (catch Exception e (ex-message e)))
+         (try @d (catch Exception e (ex-message e)))])
+      ["no" "no"])
+   ;; AND IS STILL UNFORCED AFTERWARDS, which Clojure is not: Clojure caches
+   ;; the exception and reports the delay realised. Flint leaves it retryable,
+   ;; which is what the ports were changed TO when they were caching a failed
+   ;; thunk's nil forever. All four runtimes agree; Clojure does not, and both
+   ;; answers are recorded rather than one of them quietly winning.
+   (d "a failed delay stays unrealised"
+      (let [d (delay (throw (ex-info "no" {})))]
+        (try @d (catch Exception e nil))
+        (realized? d))
+      false true)
    ;; THE SPECIALS ARE SPELLED TWICE. `str` of a bare one gives the host
    ;; name; everything that goes through the PRINTER gives the readable one,
    ;; including `str` of a collection containing it. Built by multiplying

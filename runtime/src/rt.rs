@@ -193,7 +193,10 @@ pub struct Rt {
     /// The `base_depth` the innermost `run` was called with. `parked` needs it
     /// -- a park is illegal when Rust frames are live underneath -- and compiled
     /// code cannot be passed it, so the loop leaves it here.
-    #[cfg(feature = "aot")]
+    ///
+    /// UNCONDITIONAL, not `aot`-only: `unwind` needs it too, and for the same
+    /// underlying reason. A throw must not travel past a `run` that a NATIVE
+    /// frame is waiting inside, whether or not anything is compiled.
     pub run_base: usize,
     pub steps: u64,
     /// Hard budget. 0 means unlimited. Exceeding it is a **catchable error**
@@ -343,7 +346,6 @@ impl Rt {
             next_opaque: 1,
             str_cursor: StrCursor::none(),
             restored_host_opaques: 0,
-            #[cfg(feature = "aot")]
             run_base: 0,
             steps: 0,
             gas_limit: 0,

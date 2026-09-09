@@ -245,8 +245,13 @@ public static class Builtins {
             Val.Bool(rt.IsHeapTy(rt.VAt(at), Obj.TyTagged)));
 
 
-        Def("flint/opaque?", (rt, at, n) => Val.False);
-        Def("flint/opaque-label", (rt, at, n) => Val.Nil);
+        // NOT STUBS. These answered `false` and `nil` for everything, including
+        // for an opaque value this same file had just minted -- so `0022` held
+        // on native and was decoration here: `(opaque? (opaque))` was false and
+        // a label was never readable. `Opaque` is GENERATED and both ports
+        // already carried it; nothing called it.
+        Def("flint/opaque?", (rt, at, n) => Val.Bool(rt.IsOpaque(rt.VAt(at))));
+        Def("flint/opaque-label", (rt, at, n) => rt.OpaqueLabel(rt.VAt(at)));
         /// The metadata slot, or nil. This was a STUB answering nil, which is
         /// indistinguishable from "no metadata" and so passed every test that
         /// did not set any.

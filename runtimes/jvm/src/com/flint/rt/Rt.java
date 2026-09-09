@@ -728,6 +728,21 @@ public final class Rt {
 
     /// Run until the frame stack is back down to `baseDepth`.
     public long run(int baseDepth) {
+        // SAVED AND RESTORED, because `run` re-enters: a delay's thunk and a
+        // table fold's callback are called from NATIVE frames that are still
+        // holding shadow-stack roots. `unwind` needs to know where this
+        // invocation began so it does not jump to a handler on the other side
+        // of one. The field existed and nothing ever assigned it.
+        int outerBase = runBase;
+        runBase = baseDepth;
+        try {
+            return runLoop(baseDepth);
+        } finally {
+            runBase = outerBase;
+        }
+    }
+
+    private long runLoop(int baseDepth) {
         for (;;) {
             if (frames.size() <= baseDepth) return vpop();
             Frame f = frames.get(frames.size() - 1);
@@ -1777,6 +1792,14 @@ public final class Rt {
     /// throw out of arbitrarily deep code leave no residue.
     public boolean unwind() {
         while (!handlers.isEmpty()) {
+            // A HANDLER BELOW THIS `run` IS NOT THIS `run`'S TO JUMP TO.
+            // Unwinding past a native frame truncates the shadow stack under
+            // it and then returns to code holding indices into what was
+            // truncated. `(try @(delay (throw ...)) (catch ...))` read a stale
+            // root here and answered `#<unprintable>` on the second deref;
+            // native panicked outright. Hand the throw back instead -- the
+            // re-entrant callers ask `is-thrown` and clean up their own roots.
+            if (handlers.get(handlers.size() - 1).frame < runBase) return false;
             Handler h = handlers.remove(handlers.size() - 1);
             // The frame that installed it may already be gone -- a handler
             // outlives its frame when the throw came from further out.

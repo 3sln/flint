@@ -915,13 +915,9 @@ impl Rt {
     fn run_with<B: BudgetPolicy>(&mut self, base_depth: usize) -> Value {
         // Saved and restored: `run` re-enters for a lazy-seq force, a
         // comparator, `map`.
-        #[cfg(feature = "aot")]
         let outer_base = core::mem::replace(&mut self.run_base, base_depth);
         let out = self.run_inner::<B>(base_depth);
-        #[cfg(feature = "aot")]
-        {
-            self.run_base = outer_base;
-        }
+        self.run_base = outer_base;
         out
     }
 
@@ -1763,7 +1759,30 @@ impl Rt {
             self.thrown = NIL;
             self.oom_unwind();
         }
-        while let Some(h) = self.handlers.pop() {
+        // A HANDLER BELOW THIS `run` IS NOT THIS `run`'s TO JUMP TO.
+        //
+        // `run` re-enters for a delay's thunk and a table fold's callback, and
+        // when it does there is a NATIVE frame waiting underneath holding
+        // shadow-stack indices. Unwinding to a handler installed on the other
+        // side of that frame truncates the shadow stack under it, resumes the
+        // guest, and eventually returns to native code that reads a root which
+        // is no longer there:
+        //
+        //     (try @(delay (throw (ex-info "no" {}))) (catch Exception e :caught))
+        //
+        // panicked "index out of bounds: the len is 2 but the index is 2" on
+        // native and trapped `unreachable` on wasm, where Clojure catches it.
+        // Without the surrounding `try` there was no handler to find and the
+        // throw propagated correctly, which is why it took a `catch` to see.
+        //
+        // Handing the throw BACK instead is what the re-entrant callers already
+        // expect: both ask `is-thrown` immediately and unwind their own roots.
+        // The outer `run` then finds the handler with its own frames intact.
+        while let Some(frame) = self.handlers.last().map(|h| h.frame) {
+            if frame < self.run_base {
+                return false;
+            }
+            let h = self.handlers.pop().unwrap();
             if h.frame >= self.frames.len() {
                 continue; // the frame that installed it is already gone
             }

@@ -602,6 +602,21 @@ public sealed class Rt : System.IDisposable {
 
     /// Run until the frame stack is back down to `baseDepth`.
     public long Run(int baseDepth) {
+        // SAVED AND RESTORED, because `Run` re-enters: a delay's thunk and a
+        // table fold's callback are called from NATIVE frames that are still
+        // holding shadow-stack roots. `Unwind` needs to know where this
+        // invocation began so it does not jump to a handler on the other side
+        // of one. The field existed and nothing ever assigned it.
+        int outerBase = runBase;
+        runBase = baseDepth;
+        try {
+            return RunLoop(baseDepth);
+        } finally {
+            runBase = outerBase;
+        }
+    }
+
+    long RunLoop(int baseDepth) {
         for (;;) {
             if (frames.Count <= baseDepth) return VPop();
             Frame f = frames[frames.Count - 1];
@@ -1200,6 +1215,14 @@ public sealed class Rt : System.IDisposable {
     /// throw out of arbitrarily deep code leave no residue.
     public bool Unwind() {
         while (handlers.Count != 0) {
+            // A HANDLER BELOW THIS `Run` IS NOT THIS `Run`'S TO JUMP TO.
+            // Unwinding past a native frame truncates the shadow stack under
+            // it and then returns to code holding indices into what was
+            // truncated. `(try @(delay (throw ...)) (catch ...))` read a stale
+            // root here; native panicked outright. Hand the throw back instead
+            // -- the re-entrant callers ask `is-thrown` and clean up their own
+            // roots.
+            if (handlers[handlers.Count - 1].frame < runBase) return false;
             Handler h = handlers[handlers.Count - 1];
             handlers.RemoveAt(handlers.Count - 1);
             // The frame that installed it may already be gone -- a handler
