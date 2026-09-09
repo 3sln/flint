@@ -56,6 +56,75 @@ one), a lifetime on `Reader<'a>`, `matches!` against a switch, `to_le_bytes`
 against four pushes, `Result` against exceptions. **The ordering should be
 redone against Rust before phase 3 is trusted.**
 
+### Redone against Rust
+
+Implementation lines only. Rust keeps its unit tests IN the source file and the
+ports keep theirs in a separate tree, so counting a `.rs` whole compares an
+implementation against an implementation-plus-suite -- the same wrong-pair
+error one layer along, and the first version of this table made it. It
+reported `Vec` as 81% divergent; `Vec` is 4%. The `(tests)` column is what was
+being counted as implementation.
+
+| subject | rust | (tests) | jvm | clr | jvm~clr | rust~jvm |
+| --- | --- | --- | --- | --- | --- | --- |
+| `Rt`/`Vm` | 2168 | 14 | 1173 | 1158 | 1% | 46% |
+| `Conc` | 2113 | 0 | 1295 | 1285 | 1% | 39% |
+| `Gc` | 1161 | 363 | 297 | 299 | 1% | 74% |
+| `Snap` | 795 | 14 | 449 | 456 | 2% | 44% |
+| `Codec` | 773 | 260 | 312 | 313 | 0% | 60% |
+| `Str` | 375 | 243 | 307 | 307 | 0% | 18% |
+| `Pike` | 319 | 0 | 190 | 188 | 1% | 40% |
+| `Maps` | 237 | 343 | 86 | 83 | 3% | 64% |
+| `Obj` | 223 | 22 | 120 | 80 | 33% | 46% |
+| `Aot` | 218 | 0 | 106 | 104 | 2% | 51% |
+| `Bytes` | 172 | 86 | 53 | 50 | 6% | 69% |
+| `Num` | 123 | 109 | 90 | 85 | 6% | 27% |
+| `Vec` | 68 | 272 | 65 | 63 | 3% | 4% |
+| `Eq` | 46 | 170 | 22 | 24 | 8% | 52% |
+| `Sets` | 42 | 100 | 42 | 37 | 12% | 0% |
+| `Table` | 31 | 0 | 72 | 68 | 6% | 57% |
+| `Seqs` | 10 | 144 | 18 | 16 | 11% | 44% |
+
+`jvm~clr` is 0-12% across every row and `rust~jvm` reaches 74%, which is the
+claim this section was asked to test, now with a number on it: the two ports
+are copies of each other and neither is a measure of the original.
+
+**Size is not difficulty**, and the blockers listed above are constructs rather
+than lines. Counting the ones actually met, in implementation code only:
+
+| subject | `Result` | `Option` | lifetime | `&mut self` | `unsafe` | wasm cfg |
+| --- | --- | --- | --- | --- | --- | --- |
+| `Rt`/`Vm` | 1 | 11 | 1 | 77 | 35 | 10 |
+| `Conc` | 2 | 1 | 0 | 58 | 2 | 0 |
+| `Gc` | 1 | 1 | 0 | 45 | 16 | 2 |
+| `Codec` | 10 | 2 | 3 | 10 | 1 | 0 |
+| `Snap` | 0 | 1 | 3 | 15 | 12 | 2 |
+| `Str` | 0 | 4 | 0 | 18 | 2 | 0 |
+| `Bytes` | 0 | 0 | 0 | 20 | 0 | 0 |
+| `Maps` | 0 | 0 | 0 | 13 | 0 | 0 |
+| `Pike` | 0 | 3 | 0 | 6 | 0 | 0 |
+| `Num` | 0 | 1 | 0 | 6 | 0 | 0 |
+| `Sets` | 0 | 0 | 0 | 4 | 0 | 0 |
+| `Vec` | 0 | 0 | 0 | 3 | 0 | 0 |
+| `Eq` | 0 | 0 | 0 | 2 | 0 | 0 |
+| `Obj`, `Table`, `Seqs` | 0 | 0 | 0 | 0 | 0 | 0 |
+
+Read together the two tables say something the first one could not. The three
+largest remainders -- `Rt`/`Vm`, `Conc`, `Gc` -- are also where every hard
+construct lives: 35 `unsafe` and 10 wasm splits in the interpreter, 58 mutable
+receivers in the scheduler, 16 `unsafe` in the collector. Those are the host,
+not the shared logic, and they are the LAST things to port rather than the
+biggest prize.
+
+What is left in the data structures is small and nearly free of them: `Str`
+375 lines with no `Result` and no lifetime, `Bytes` 172 with neither, `Maps`
+237 with neither. `Codec` is the outlier -- 773 lines and ten `Result`s and
+three lifetimes -- which is consistent with `codec.kin` having been written
+and shipping nowhere.
+
+`Vec` at 68 lines and `Sets` at 42 and `Seqs` at 10 are not prizes at all any
+more; they are what is left after the generated code took the rest.
+
 **About 4,500 lines per runtime.** Opcode bodies, which is where this started,
 are a few dozen lines and were never the prize.
 
