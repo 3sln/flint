@@ -386,6 +386,13 @@
    ;; two integer operations that OVERFLOW, and naming the bound is how the
    ;; guard gets written once instead of three host idioms deep.
    'I64_MIN {:rust "i64::MIN" :java "Long.MIN_VALUE" :csharp "long.MinValue"}
+   ;; THE TWO DOUBLES WITH NO LITERAL. `1.0 / 0.0` and `0.0 / 0.0` produce
+   ;; them on every one of these hosts, but writing that is a puzzle where a
+   ;; name will do, and one of the three spells division by zero as an error
+   ;; for integers -- so a reader has to stop and check which this is.
+   'F64_INF {:rust "f64::INFINITY" :java "Double.POSITIVE_INFINITY"
+             :csharp "double.PositiveInfinity"}
+   'F64_NAN {:rust "f64::NAN" :java "Double.NaN" :csharp "double.NaN"}
    'INTERN_MAX {:rust "crate::strs::INTERN_MAX"
                 :java "com.flint.rt.Interns.INTERN_MAX"
                 :csharp "global::Flint.Rt.Interns.InternMax"}
@@ -1001,6 +1008,18 @@
     'f64-digits (core/call {:rust "{0}.f64_digits({1}, {2})"
                             :java "Str.f64Digits({0}, {1}, {2})"
                             :csharp "Str.F64Digits({0}, {1}, {2})"})
+    ;; A VALIDATED DECIMAL AS A DOUBLE, over the code-point range `from`..`to`.
+    ;; The mirror of `f64-digits`, and the same bargain: correctly rounded
+    ;; decimal-to-binary conversion is worth borrowing and nothing else is.
+    ;; `strnum.kin` has already decided the run is a number, so the host is
+    ;; never asked what one looks like -- which matters, because Rust accepts
+    ;; `inf` and `infinity`, Java accepts a trailing `d`, and the CLR accepts
+    ;; a third set. The range is in code points and the run is ASCII by
+    ;; construction, so those are byte offsets too.
+    'f64-of-str (core/call {:rust "{0}.f64_of_str({1}, {2}, {3})"
+                            :java "Str.f64OfStr({0}, {1}, {2}, {3})"
+                            :csharp "Str.F64OfStr({0}, {1}, {2}, {3})"}
+                           {:tag F64})
     ;; A STRING FROM A LITERAL. The vocabulary could not spell one, so a
     ;; constant answer like `##NaN` had to be assembled byte by byte through a
     ;; sink -- which is part of why each runtime kept its own copy of the

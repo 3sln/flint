@@ -539,6 +539,20 @@ public static class Str {
     /// to call an infinity -- is generated from `kin/dblstr.kin` and shared
     /// with the other two runtimes, which is why this port no longer has a
     /// `FmtDouble` of its own to disagree with them.
+    /// A validated decimal as a double, over the code-point range `from`..`to`.
+    ///
+    /// The other half of the hole `F64Digits` opens. `strnum.kin` has already
+    /// decided this run is a number and which characters it may contain, so
+    /// the parse cannot fail -- and this port no longer decides for itself,
+    /// which it used to do by asking whether the text contained a `.` or an
+    /// `e` and handing the rest to `double.Parse`.
+    internal static double F64OfStr(Rt rt, long v, int from, int to) {
+        string s = Text(rt, v);
+        return double.Parse(s.Substring(from, to - from),
+                            System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture);
+    }
+
     internal static void F64Digits(Rt rt, int c, double d) {
         string s = d.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
         for (int i = 0; i < s.Length; i++) rt.CpsPut(c, s[i]);

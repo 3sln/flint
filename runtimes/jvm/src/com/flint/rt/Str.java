@@ -590,6 +590,19 @@ public final class Str {
     /// to call an infinity -- is generated from `kin/dblstr.kin` and shared
     /// with the other two runtimes, which is why this port no longer has a
     /// `fmtDouble` of its own to disagree with them.
+    /// A validated decimal as a double, over the code-point range `from`..`to`.
+    ///
+    /// The other half of the hole `f64Digits` opens. `strnum.kin` has already
+    /// decided this run is a number and which characters it may contain, so
+    /// the parse cannot fail -- and this port no longer decides for itself,
+    /// which it used to do by asking whether the text contained a `.` or an
+    /// `e` and handing the rest to `Double.parseDouble`.
+    public static double f64OfStr(Rt rt, long v, int from, int to) {
+        String s = text(rt, v);
+        return Double.parseDouble(s.substring(s.offsetByCodePoints(0, from),
+                                              s.offsetByCodePoints(0, to)));
+    }
+
     public static void f64Digits(Rt rt, int c, double d) {
         String s = Double.toString(d);
         for (int i = 0; i < s.length(); i++) rt.cpsPut(c, s.charAt(i));

@@ -590,16 +590,8 @@ public static class Builtins {
             int bs = OffsetByCodePoints(s, start), be = OffsetByCodePoints(s, end);
             return Str.Of(rt, s.Substring(bs, be - bs));
         });
-        Def("flint/str->num", (rt, at, n) => {
-            string s = Str.Text(rt, rt.VAt(at)).Trim();
-            var inv = System.Globalization.CultureInfo.InvariantCulture;
-            if (s.IndexOf('.') < 0 && s.IndexOf('e') < 0 && s.IndexOf('E') < 0) {
-                return long.TryParse(s, System.Globalization.NumberStyles.Integer, inv, out long l)
-                    ? Num.Integer(rt, l) : Val.Nil;
-            }
-            return double.TryParse(s, System.Globalization.NumberStyles.Float, inv, out double d)
-                ? Val.OfDouble(d) : Val.Nil;   // nil, not a throw: this is a PARSE attempt
-        });
+        Def("flint/str->num", (rt, at, n) =>
+            global::_3sln.Flint.Kgen.Rt.Strnum.StrToNum(rt, rt.VAt(at)));
         Def("flint/str-index-of", (rt, at, n) => {
             string h = Str.Text(rt, rt.VAt(at));
             string needle = Str.Text(rt, rt.VAt(at + 1));

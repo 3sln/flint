@@ -1,0 +1,221 @@
+--rust-head
+// THE INPUTS ARE FED AS TEXT AND THE ANSWERS PRINTED AS TEXT, so this probe
+// checks that the parse is RIGHT and not merely that three targets did the
+// same thing. `numdiv.drivers` is the cautionary case: it passed a `num-neg`
+// that lost negative zero on all three at once, because agreement is not
+// correctness.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_FFFF_FFFF_FFFF);
+struct Rt { ints: Vec<i64>, strs: Vec<String>, cps: Vec<Vec<u32>> }
+// NAN-BOXED, because `of-double` takes no runtime: there is nowhere to put a
+// double except in the value itself. A double is its own bits; everything else
+// sets the quiet-NaN pattern with the sign bit, which no real double does.
+const BOX: u64 = 0xFFF8_0000_0000_0000;
+impl Value {
+    fn boxed(self) -> bool { (self.0 & BOX) == BOX }
+    fn tag(self) -> u64 { if self.boxed() { (self.0 >> 32) & 0xFF } else { 9 } }
+    fn idx(self) -> usize { (self.0 & 0xFFFF_FFFF) as usize }
+    fn as_f64(self) -> f64 { f64::from_bits(self.0) }
+    fn from_f64(d: f64) -> Value { Value(d.to_bits()) }
+}
+impl Rt {
+    fn text(&mut self, s: &str) -> Value { self.strs.push(String::from(s)); Value(BOX | (3u64 << 32) | (self.strs.len() - 1) as u64) }
+    fn is_string(&self, v: Value) -> bool { v.tag() == 3 }
+    fn integer(&mut self, n: i64) -> Value { self.ints.push(n); Value(BOX | (1u64 << 32) | (self.ints.len() - 1) as u64) }
+    fn f64_of_str(&mut self, s: Value, from: u32, to: u32) -> f64 {
+        self.strs[s.idx()][from as usize..to as usize].parse::<f64>().unwrap_or(0.0)
+    }
+    fn code_points(&mut self, v: Value) -> u32 {
+        let cs: Vec<u32> = self.strs[v.idx()].chars().map(|c| c as u32).collect();
+        self.cps.push(cs); (self.cps.len() - 1) as u32
+    }
+    fn cps_len(&self, c: u32) -> u32 { self.cps[c as usize].len() as u32 }
+    fn cps_at(&self, c: u32, i: u32) -> u32 { self.cps[c as usize][i as usize] }
+    fn cps_close(&mut self, c: u32) { self.cps.truncate(c as usize); }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { ints: Vec::new(), strs: Vec::new(), cps: Vec::new() };
+    let inputs = ["42", "-42", " 7 ", "1.5", "-1.5", "1e3", "1E3", "0x1f", "0X1f",
+                  "-0x10", "##Inf", "##-Inf", "##NaN", "Infinity", "NaN", "abc",
+                  "", "  ", "1.5.2", "99999999999999999999", "+5", "5N", "1.5M",
+                  "9223372036854775807", "-9223372036854775808", "9223372036854775808",
+                  "0", "-0", "0.0", "-0.0", ".5", "5.", "1e", "1e+3", "1e-3", "##", "##Infx"];
+    let mut o = String::new();
+    for t in inputs {
+        let v = rt.text(t);
+        let r = rt.str_to_num(v);
+        if r == NIL { o.push_str("nil"); }
+        else if r.tag() == 1 { o.push_str(&format!("i{}", rt.ints[r.idx()])); }
+        else { let d = r.as_f64(); o.push_str(&format!("d{}", if d.is_nan() { String::from("NaN") } else if d.is_infinite() { String::from(if d > 0.0 { "Inf" } else { "-Inf" }) } else { format!("{:e}", d) })); }
+        o.push(' ');
+    }
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFFFFFFFFFFFFFL;
+    // NAN-BOXED, because `of-double` takes no runtime: there is nowhere to put
+    // a double except in the value itself. A double is its own bits; every
+    // other kind sets the quiet-NaN pattern with the sign bit, which no real
+    // double does.
+    static final long BOX = 0xFFF8000000000000L;
+    static final class Rt {
+        java.util.ArrayList<Long> ints = new java.util.ArrayList<>();
+        java.util.ArrayList<String> strs = new java.util.ArrayList<>();
+        java.util.ArrayList<java.util.ArrayList<Integer>> cps = new java.util.ArrayList<>();
+        long text(String s) { strs.add(s); return BOX | (3L << 32) | (strs.size() - 1); }
+        int cpsLen(int c) { return cps.get(c).size(); }
+        int cpsAt(int c, int i) { return cps.get(c).get(i); }
+        void cpsClose(int c) { while (cps.size() > c) cps.remove(cps.size() - 1); }
+    }
+    static int idx(long v) { return (int) (v & 0xFFFFFFFFL); }
+    static boolean boxed(long v) { return (v & BOX) == BOX; }
+    static int tag(long v) { return boxed(v) ? (int) ((v >>> 32) & 0xFF) : 9; }
+    static boolean isString(Rt rt, long v) { return tag(v) == 3; }
+    static int codePoints(Rt rt, long v) {
+        rt.cps.add(new java.util.ArrayList<>());
+        int c = rt.cps.size() - 1;
+        rt.strs.get(idx(v)).codePoints().forEach(cp -> rt.cps.get(c).add(cp));
+        return c;
+    }
+    static final class Str {
+        static double f64OfStr(Rt rt, long v, int from, int to) {
+            String s = rt.strs.get(idx(v));
+            return Double.parseDouble(s.substring(s.offsetByCodePoints(0, from),
+                                                  s.offsetByCodePoints(0, to)));
+        }
+    }
+    static final class Num {
+        static long integer(Rt rt, long n) { rt.ints.add(n); return BOX | (1L << 32) | (rt.ints.size() - 1); }
+    }
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static long ofDouble(double d) { return Double.doubleToRawLongBits(d); }
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        String[] inputs = { "42", "-42", " 7 ", "1.5", "-1.5", "1e3", "1E3", "0x1f", "0X1f",
+                            "-0x10", "##Inf", "##-Inf", "##NaN", "Infinity", "NaN", "abc",
+                            "", "  ", "1.5.2", "99999999999999999999", "+5", "5N", "1.5M",
+                            "9223372036854775807", "-9223372036854775808", "9223372036854775808",
+                            "0", "-0", "0.0", "-0.0", ".5", "5.", "1e", "1e+3", "1e-3", "##", "##Infx" };
+        StringBuilder o = new StringBuilder();
+        for (String t : inputs) {
+            long r = strToNum(rt, rt.text(t));
+            if (r == NIL) o.append("nil");
+            else if (tag(r) == 1) o.append("i").append(rt.ints.get(idx(r)));
+            else o.append("d").append(show(Double.longBitsToDouble(r)));
+            o.append(' ');
+        }
+        System.out.println(o.toString());
+    }
+    // The SAME spelling as Rust's `{:e}`, so three targets can be compared
+    // without the answer depending on how each host prints a double.
+    static String show(double d) {
+        if (Double.isNaN(d)) return "NaN";
+        if (Double.isInfinite(d)) return d > 0 ? "Inf" : "-Inf";
+        java.math.BigDecimal b = new java.math.BigDecimal(Double.toString(d));
+        String digits = b.unscaledValue().abs().toString();
+        while (digits.length() > 1 && digits.endsWith("0")) digits = digits.substring(0, digits.length() - 1);
+        int exp = b.precision() - b.scale() - 1;
+        if (b.unscaledValue().signum() == 0) { digits = "0"; exp = 0; }
+        StringBuilder m = new StringBuilder();
+        if (d < 0 || (d == 0.0 && 1 / d < 0)) m.append('-');
+        m.append(digits.charAt(0));
+        if (digits.length() > 1) m.append('.').append(digits, 1, digits.length());
+        return m + "e" + exp;
+    }
+--csharp-head
+    const long NIL = unchecked((long) 0xFFFFFFFFFFFFFFFFUL);
+    // NAN-BOXED, because `of-double` takes no runtime: there is nowhere to put
+    // a double except in the value itself. A double is its own bits; every
+    // other kind sets the quiet-NaN pattern with the sign bit, which no real
+    // double does.
+    internal const long BOX = unchecked((long) 0xFFF8000000000000UL);
+    internal sealed class Rt {
+        internal System.Collections.Generic.List<long> Ints = new System.Collections.Generic.List<long>();
+        internal System.Collections.Generic.List<string> Strs = new System.Collections.Generic.List<string>();
+        internal System.Collections.Generic.List<System.Collections.Generic.List<int>> Cps
+            = new System.Collections.Generic.List<System.Collections.Generic.List<int>>();
+        internal long Text(string s) { Strs.Add(s); return BOX | (3L << 32) | (Strs.Count - 1); }
+        internal int CpsLen(int c) { return Cps[c].Count; }
+        internal int CpsAt(int c, int i) { return Cps[c][i]; }
+        internal void CpsClose(int c) { while (Cps.Count > c) Cps.RemoveAt(Cps.Count - 1); }
+    }
+    internal static int Idx(long v) { return (int) (v & 0xFFFFFFFFL); }
+    internal static bool Boxed(long v) { return (v & BOX) == BOX; }
+    internal static int Tag(long v) { return Boxed(v) ? (int) (((ulong) v >> 32) & 0xFF) : 9; }
+    internal static bool IsString(Rt rt, long v) { return Tag(v) == 3; }
+    internal static int CodePoints(Rt rt, long v) {
+        rt.Cps.Add(new System.Collections.Generic.List<int>());
+        int c = rt.Cps.Count - 1;
+        foreach (var ch in rt.Strs[Idx(v)]) rt.Cps[c].Add(ch);
+        return c;
+    }
+    internal static class Str {
+        internal static double F64OfStr(Rt rt, long v, int from, int to) {
+            return double.Parse(rt.Strs[Idx(v)].Substring(from, to - from),
+                                System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture);
+        }
+    }
+    internal static class Num {
+        internal static long Integer(Rt rt, long n) { rt.Ints.Add(n); return BOX | (1L << 32) | (rt.Ints.Count - 1); }
+    }
+    internal static class Val {
+        internal const long Nil = NIL;
+        internal static long OfDouble(double d) { return System.BitConverter.DoubleToInt64Bits(d); }
+    }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        string[] inputs = { "42", "-42", " 7 ", "1.5", "-1.5", "1e3", "1E3", "0x1f", "0X1f",
+                            "-0x10", "##Inf", "##-Inf", "##NaN", "Infinity", "NaN", "abc",
+                            "", "  ", "1.5.2", "99999999999999999999", "+5", "5N", "1.5M",
+                            "9223372036854775807", "-9223372036854775808", "9223372036854775808",
+                            "0", "-0", "0.0", "-0.0", ".5", "5.", "1e", "1e+3", "1e-3", "##", "##Infx" };
+        var o = new System.Text.StringBuilder();
+        foreach (string t in inputs) {
+            long r = StrToNum(rt, rt.Text(t));
+            if (r == NIL) o.Append("nil");
+            else if (Tag(r) == 1) o.Append("i").Append(rt.Ints[Idx(r)]);
+            else o.Append("d").Append(Show(System.BitConverter.Int64BitsToDouble(r)));
+            o.Append(' ');
+        }
+        System.Console.WriteLine(o.ToString());
+    }
+    // The SAME spelling as Rust's `{:e}`, so three targets can be compared
+    // without the answer depending on how each host prints a double.
+    static string Show(double d) {
+        if (double.IsNaN(d)) return "NaN";
+        if (double.IsInfinity(d)) return d > 0 ? "Inf" : "-Inf";
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        // "R" AND NOT "E16": the point is the SHORTEST digits, which is what
+        // the other two targets print. `E16` pads to seventeen significant
+        // figures and made this probe disagree about a value all three had
+        // parsed identically.
+        string r = d.ToString("R", inv);
+        bool neg = r.StartsWith("-");
+        if (neg) r = r.Substring(1);
+        int ei = r.IndexOf('E');
+        int exp = 0;
+        string mant = r;
+        if (ei >= 0) { exp = int.Parse(r.Substring(ei + 1), inv); mant = r.Substring(0, ei); }
+        int dot = mant.IndexOf('.');
+        int intLen = dot < 0 ? mant.Length : dot;
+        string digits = mant.Replace(".", "");
+        int lead = 0;
+        while (lead < digits.Length - 1 && digits[lead] == '0') lead++;
+        exp += intLen - 1 - lead;
+        digits = digits.Substring(lead).TrimEnd('0');
+        if (digits.Length == 0) { digits = "0"; exp = 0; }
+        var m = new System.Text.StringBuilder();
+        if (neg) m.Append('-');
+        m.Append(digits[0]);
+        if (digits.Length > 1) m.Append('.').Append(digits.Substring(1));
+        return m + "e" + exp;
+    }

@@ -649,17 +649,8 @@ public final class Builtins {
             int be = s.offsetByCodePoints(0, end);
             return Str.of(rt, s.substring(bs, be));
         });
-        def("flint/str->num", (rt, at, n) -> {
-            String s = Str.text(rt, rt.vat(at)).trim();
-            try {
-                if (s.indexOf('.') < 0 && s.indexOf('e') < 0 && s.indexOf('E') < 0) {
-                    return Num.integer(rt, Long.parseLong(s));
-                }
-                return Val.ofDouble(Double.parseDouble(s));
-            } catch (NumberFormatException e) {
-                return Val.NIL;   // nil, not a throw: `str->num` is a PARSE attempt
-            }
-        });
+        def("flint/str->num", (rt, at, n) ->
+            com._3sln.flint.kgen.rt.Strnum.strToNum(rt, rt.vat(at)));
         def("flint/str-index-of", (rt, at, n) -> {
             String h = Str.text(rt, rt.vat(at));
             String needle = Str.text(rt, rt.vat(at + 1));

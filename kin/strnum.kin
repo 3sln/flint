@@ -1,0 +1,233 @@
+;; TEXT AS A NUMBER: the direction `dblstr.kin` does not cover.
+;;
+;; Printing a number is generated and shared. Reading one was three
+;; hand-written parsers that did not agree about what a number even looks
+;; like. Measured, before this file, by running the same list on all three:
+;;
+;;                       native      ports
+;;     "0x1f"            31          nil
+;;     "##Inf"           ##Inf       nil
+;;     "##NaN"           ##NaN       nil
+;;     "Infinity"        ##Inf       nil
+;;     "NaN"             ##NaN       nil
+;;     "99999999999999999999"        1.0E20      nil
+;;
+;; Both ports ask whether the text contains a `.` or an `e` and hand the rest
+;; to the host's own parser, so hex literals and the `##` names are native-only
+;; and an integer too big for 64 bits is a number on one runtime and `nil` on
+;; the others. A program that reads EDN gets different answers depending on
+;; who is running it.
+;;
+;; WHAT COUNTS AS A NUMBER IS DECIDED HERE, and that is the point. Native's
+;; last resort is Rust's `f64::from_str`, which also accepts `inf`, `+inf` and
+;; `infinity` in any case -- none of which flint spells that way. Java's parser
+;; accepts a trailing `d` or `f`; the CLR's accepts a different set again. So
+;; the shape is validated before any host sees it, and the host is left with
+;; the one job worth borrowing: turning a decimal that is already known to be
+;; well formed into the nearest double, correctly rounded.
+;;
+;; THE ORDER IS NATIVE'S, because it is the one that was right: an integer
+;; first, then hex, then the three `##` names, then a decimal. An integer too
+;; wide for 64 bits falls through to the decimal path rather than failing,
+;; which is how `99999999999999999999` becomes `1.0E20` rather than nothing.
+(ns flint.rt.strnum
+  (:require [flint.impl.rt :refer [defn return if let do local set forever break
+                                   comment doc not and or == != < <= > >= + - *
+                                   quot to-i64 cps-len cps-at cps-close
+                                   integer of-double f64-of-str
+                                   Rt Bool I32 I64 F64 Value Cps NIL
+                                   I64_MIN F64_INF F64_NAN]]
+            [flint.rt.codepoints :refer [code-points]]
+            [flint.rt.ropemeas :refer [is-string]]))
+
+(doc "Is `ch` a space, tab, newline, carriage return or form feed?"
+     ""
+     "ASCII ONLY, deliberately. Native trimmed with Rust's `trim`, which"
+     "strips every Unicode space -- so a non-breaking space before a number"
+     "made it a number there and nothing anywhere else. Flint's own reader"
+     "has never treated one as whitespace.")
+(defn ^:method ^Bool is-blank [^Rt rt ^I32 ch]
+  (return (or (== ch 32) (or (== ch 9) (or (== ch 10) (or (== ch 13) (== ch 12)))))))
+
+(doc "The value of `ch` as a hex digit, or 16 if it is not one."
+     ""
+     "SIXTEEN AND NOT MINUS ONE. `I32` is `u32` on one of the three targets,"
+     "where a negative sentinel does not exist -- and an out-of-range digit"
+     "says the same thing in a type every target has.")
+(defn ^:method ^I32 hex-val [^Rt rt ^I32 ch]
+  (if (and (>= ch 48) (<= ch 57)) (return (- ch 48)))
+  (if (and (>= ch 97) (<= ch 102)) (return (+ (- ch 97) 10)))
+  (if (and (>= ch 65) (<= ch 70)) (return (+ (- ch 65) 10)))
+  (return 16))
+
+(doc "The trimmed run `lo`..`hi` of `v` as a number, or nil."
+     ""
+     "FOUR SHAPES, and they cannot overlap, so the order among them is a"
+     "matter of what reads well rather than of what is correct: the three"
+     "`##` names, a decimal integer, a hex integer, and a decimal fraction."
+     ""
+     "The integer arm ACCUMULATES ON THE NEGATIVE SIDE for the reason"
+     "`numdiv.kin` exists: the most negative integer has no positive"
+     "counterpart, so building the magnitude first cannot represent"
+     "`-9223372036854775808` and silently wraps on two of the three hosts."
+     "Overflowing is not an error here -- it falls through to the decimal"
+     "arm, which is how a twenty-digit integer becomes a double rather than"
+     "nothing.")
+(defn ^:method ^Value parse-run [^:mut ^Rt rt ^Value v ^Cps c ^I32 lo ^I32 hi]
+  (let [^I32 len (- hi lo)]
+    (comment "THE THREE NAMES, matched exactly and not by prefix: `##Infx` is"
+             "not a number and neither is `##`.")
+    (if (and (> len 2)
+             (and (== (cps-at rt c lo) 35) (== (cps-at rt c (+ lo 1)) 35)))
+      (do
+        (if (and (== len 5)
+                 (and (== (cps-at rt c (+ lo 2)) 73)
+                      (and (== (cps-at rt c (+ lo 3)) 110)
+                           (== (cps-at rt c (+ lo 4)) 102))))
+          (return (of-double F64_INF)))
+        (if (and (== len 5)
+                 (and (== (cps-at rt c (+ lo 2)) 78)
+                      (and (== (cps-at rt c (+ lo 3)) 97)
+                           (== (cps-at rt c (+ lo 4)) 78))))
+          (return (of-double F64_NAN)))
+        (if (and (== len 6)
+                 (and (== (cps-at rt c (+ lo 2)) 45)
+                      (and (== (cps-at rt c (+ lo 3)) 73)
+                           (and (== (cps-at rt c (+ lo 4)) 110)
+                                (== (cps-at rt c (+ lo 5)) 102)))))
+          (return (of-double (* -1.0 F64_INF))))
+        (return NIL)))
+    (comment "A SIGN, which the hex arm does not get: native reached hex by"
+             "stripping a `0x` prefix from the whole token, so `-0x10` was"
+             "never a number there either. Kept, because a negative hex"
+             "literal is not something flint spells.")
+    (local ^:mut ^I32 p)
+    (set p lo)
+    (local ^:mut ^Bool neg)
+    (set neg false)
+    (if (and (< p hi) (== (cps-at rt c p) 45))
+      (do (set neg true) (set p (+ p 1))))
+    (if (and (and (< p hi) (not neg)) (== (cps-at rt c p) 43))
+      (set p (+ p 1)))
+    (if (== p hi) (return NIL))
+    (comment "HEX, only with no sign and only when every remaining character"
+             "is a hex digit.")
+    (if (and (and (== p lo) (> (- hi p) 2))
+             (and (== (cps-at rt c p) 48)
+                  (or (== (cps-at rt c (+ p 1)) 120) (== (cps-at rt c (+ p 1)) 88))))
+      (do (comment "DOWNWARD, like the decimal arm and for the same reason:"
+                   "it is the direction with room for the whole range, and it"
+                   "means the overflow guard is one comparison rather than a"
+                   "bound that no target can spell as a literal.")
+          (local ^:mut ^I64 hv)
+          (set hv 0)
+          (local ^:mut ^I32 h)
+          (set h (+ p 2))
+          (local ^:mut ^Bool ok)
+          (set ok true)
+          (forever
+            (if (== h hi) (break))
+            (let [^I32 dh (hex-val rt (cps-at rt c h))]
+              (if (> dh 15) (do (set ok false) (break)))
+              (let [^I64 d (to-i64 dh)]
+                (if (< hv (quot (+ I64_MIN d) 16)) (do (set ok false) (break)))
+                (set hv (- (* hv 16) d))))
+            (set h (+ h 1)))
+          (if (and ok (!= hv I64_MIN)) (return (integer rt (- 0 hv))))
+          (return NIL)))
+    (comment "A DECIMAL INTEGER: every remaining character a digit, and the"
+             "value built downward so the most negative one is reachable.")
+    (local ^:mut ^I64 acc)
+    (set acc 0)
+    (local ^:mut ^Bool whole)
+    (set whole true)
+    (local ^:mut ^I32 i)
+    (set i p)
+    (forever
+      (if (== i hi) (break))
+      (let [^I32 ch (cps-at rt c i)]
+        (if (or (< ch 48) (> ch 57)) (do (set whole false) (break)))
+        (let [^I64 d (to-i64 (- ch 48))]
+          (if (< acc (quot (+ I64_MIN d) 10)) (do (set whole false) (break)))
+          (set acc (- (* acc 10) d))))
+      (set i (+ i 1)))
+    (comment "THE ONE VALUE WHOSE NEGATION DOES NOT EXIST falls through to the"
+             "decimal arm rather than failing. A positive token that"
+             "accumulated to the most negative integer is `9223372036854775808`"
+             "-- one past the range, and a double is a better answer for it"
+             "than nothing, which is what native already did by trying `i64`"
+             "first and `f64` afterwards.")
+    (if (and whole (or neg (!= acc I64_MIN)))
+      (do (if neg (return (integer rt acc)))
+          (return (integer rt (- 0 acc)))))
+    (comment "A DECIMAL FRACTION, validated here so that no host is ever"
+             "asked what it thinks a number looks like. Digits, then an"
+             "optional point with digits, then an optional exponent -- and at"
+             "least one digit somewhere in the mantissa.")
+    (local ^:mut ^I32 digits)
+    (set digits 0)
+    (set i p)
+    (forever
+      (if (== i hi) (break))
+      (let [^I32 ch (cps-at rt c i)]
+        (if (or (< ch 48) (> ch 57)) (break))
+        (set digits (+ digits 1)))
+      (set i (+ i 1)))
+    (if (and (< i hi) (== (cps-at rt c i) 46))
+      (do (set i (+ i 1))
+          (forever
+            (if (== i hi) (break))
+            (let [^I32 ch (cps-at rt c i)]
+              (if (or (< ch 48) (> ch 57)) (break))
+              (set digits (+ digits 1)))
+            (set i (+ i 1)))))
+    (if (== digits 0) (return NIL))
+    (if (and (< i hi)
+             (or (== (cps-at rt c i) 101) (== (cps-at rt c i) 69)))
+      (do (set i (+ i 1))
+          (if (and (< i hi)
+                   (or (== (cps-at rt c i) 45) (== (cps-at rt c i) 43)))
+            (set i (+ i 1)))
+          (local ^:mut ^I32 ed)
+          (set ed 0)
+          (forever
+            (if (== i hi) (break))
+            (let [^I32 ch (cps-at rt c i)]
+              (if (or (< ch 48) (> ch 57)) (break))
+              (set ed (+ ed 1)))
+            (set i (+ i 1)))
+          (if (== ed 0) (return NIL))))
+    (comment "ANYTHING LEFT OVER means the token was not a number: `1.5.2`"
+             "and `5N` and `1.5M` all reach here with characters unread.")
+    (if (!= i hi) (return NIL))
+    (return (of-double (f64-of-str rt v lo hi)))))
+
+(doc "`v` as a number, or nil when it does not read as one."
+     ""
+     "NIL RATHER THAN A THROW: this is a parse ATTEMPT, and every caller of"
+     "it -- the reader, `edn` -- has somewhere to go when the answer is that"
+     "the text was not a number.")
+(defn ^:pub ^:method ^Value str-to-num [^:mut ^Rt rt ^Value v]
+  (if (not (is-string rt v)) (return NIL))
+  (let [^Cps c (code-points rt v)
+        ^I32 n (cps-len rt c)]
+    (local ^:mut ^I32 lo)
+    (set lo 0)
+    (forever
+      (if (== lo n) (break))
+      (if (not (is-blank rt (cps-at rt c lo))) (break))
+      (set lo (+ lo 1)))
+    (local ^:mut ^I32 hi)
+    (set hi n)
+    (forever
+      (if (== hi lo) (break))
+      (if (not (is-blank rt (cps-at rt c (- hi 1)))) (break))
+      (set hi (- hi 1)))
+    (comment "ONE EXIT, so the buffer is closed exactly once however the"
+             "walk decided.")
+    (local ^:mut ^Value out)
+    (set out NIL)
+    (if (!= lo hi)
+      (set out (parse-run rt v c lo hi)))
+    (cps-close rt c)
+    (return out)))

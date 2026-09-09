@@ -526,7 +526,7 @@ builtins! {
         let _ = n; let v = arg(rt, a, 0); rt.num_to_str(v)
     };
     "flint/str->num", flint_b_str2num, b_str2num, |rt, a, n| {
-        let _ = n; let v = arg(rt, a, 0); rt.string_to_number(v)
+        let _ = n; let v = arg(rt, a, 0); rt.str_to_num(v)
     };
     "flint/code-point-at", flint_b_cpat, b_cpat, |rt, a, n| {
         let _ = n;

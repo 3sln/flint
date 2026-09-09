@@ -10,6 +10,23 @@
     :astral [(count "aéz") (count "hello")]
     :name [(name :a) (name :my.ns/a) (namespace :my.ns/a) (namespace :a)]
 
+    ;; PARSING A NUMBER, the direction `dblstr.kin` did not cover until
+    ;; `strnum.kin` did. This row is what caught the gap: the hex literals and
+    ;; the three `##` names were native-only, because both ports asked whether
+    ;; the text contained a `.` or an `e` and handed the rest to the host's
+    ;; parser -- so `(read-string "##Inf")` was a number on one runtime and
+    ;; nil on two others.
+    ;;
+    ;; `Infinity` and `NaN` are nil ON PURPOSE and on all four now. Native
+    ;; used to accept them because its last resort was Rust's `f64::from_str`,
+    ;; which also takes `inf`, `+inf` and `infinity` in any case -- none of
+    ;; which flint spells that way. What counts as a number is decided by
+    ;; flint now rather than inherited from whichever parser was underneath.
+    :str->num (mapv (fn [t] (pr-str (flint.rt/str->num t)))
+                    ["42" "-42" " 7 " "1.5" "-1.5" "1e3" "1E3" "0x1f" "0X1f"
+                     "-0x10" "##Inf" "##-Inf" "##NaN" "Infinity" "NaN" "abc"
+                     "" "  " "1.5.2" "99999999999999999999" "+5" "5N" "1.5M"])
+
     ;; SEQ OVER A ROPE, which nothing here reached before.
     ;;
     ;; A big `str` is a rope (`doc/decisions/0011`), and a rope's body is not

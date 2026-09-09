@@ -413,6 +413,25 @@ impl Rt {
 
     // --- numbers to and from text ---------------------------------------------
 
+    /// A validated decimal as a double, over the byte range `from`..`to`.
+    ///
+    /// The other half of the hole `f64_digits` opens. `strnum.kin` has already
+    /// decided this run is a number and which characters it may contain, so
+    /// the parse cannot fail and `unwrap_or` is not hiding anything -- what it
+    /// stands in for is the case this runtime used to decide by itself, when
+    /// `str::parse::<f64>` was the whole of what flint considered a number and
+    /// therefore accepted `inf` and `infinity` as well.
+    pub fn f64_of_str(&mut self, s: Value, from: u32, to: u32) -> f64 {
+        let mut buf = crate::rt::sbuf();
+        let t: alloc::string::String = match self.as_str(s, &mut buf) {
+            Some(x) => x.into(),
+            None => return 0.0,
+        };
+        t.get(from as usize..to as usize)
+            .and_then(|x| x.parse::<f64>().ok())
+            .unwrap_or(0.0)
+    }
+
     /// The shortest decimal that reads back as `d`, as characters in `c`.
     ///
     /// THE WHOLE HOLE. Rendering used to live here, and in two more places in
@@ -433,36 +452,6 @@ impl Rt {
         }
     }
 
-    pub fn string_to_number(&mut self, v: Value) -> Value {
-        let mut buf = crate::rt::sbuf();
-        let owned: alloc::string::String = match self.as_str(v, &mut buf) {
-            Some(s) => s.into(),
-            None => return NIL,
-        };
-        let t = owned.trim();
-        if t.is_empty() {
-            return NIL;
-        }
-        if let Ok(n) = t.parse::<i64>() {
-            return self.integer(n);
-        }
-        // Hex/octal/binary literals, as the reader needs them.
-        if let Some(rest) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
-            if let Ok(n) = i64::from_str_radix(rest, 16) {
-                return self.integer(n);
-            }
-        }
-        match t {
-            "##Inf" => return Value::from_f64(f64::INFINITY),
-            "##-Inf" => return Value::from_f64(f64::NEG_INFINITY),
-            "##NaN" => return Value::from_f64(f64::NAN),
-            _ => {}
-        }
-        match t.parse::<f64>() {
-            Ok(d) => Value::from_f64(d),
-            Err(_) => NIL,
-        }
-    }
 
     /// Concatenate a collection of strings in one pass. Without this, building
     /// a string by repeated `str` is quadratic, which shows up immediately in

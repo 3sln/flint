@@ -45,14 +45,6 @@
 
 (def failures (atom 0))
 
-(defn check [what nm target spelling]
-  (let [id (ident spelling)]
-    (when-not (str/includes? (get text target) id)
-      (swap! failures inc)
-      (println (format "  FAIL %s `%s` emits `%s` for %s, and no file under %s defines `%s`"
-                       what nm spelling (name target)
-                       (str/join ", " (get trees target)) id)))))
-
 ;; ---------------------------------------------------------------------------
 ;; AND EVERY CALL TEMPLATE, which was HALF THE VOCABULARY going unchecked.
 ;;
@@ -80,7 +72,23 @@
   answers already, and a flint spelling of it would be three copies of
   `d != d` waiting to disagree."
   #{"divideUnsigned" "remainderUnsigned"
-    "isNaN" "IsNaN" "isInfinite" "IsInfinity"})
+    "isNaN" "IsNaN" "isInfinite" "IsInfinity"
+    "POSITIVE_INFINITY" "PositiveInfinity"})
+
+(defn check [what nm target spelling]
+  (let [id (ident spelling)]
+    ;; `host-library` APPLIES HERE TOO. A name can be the host's as easily as
+    ;; a call can -- `Double.POSITIVE_INFINITY` is not something a flint
+    ;; runtime defines and never will be -- and this half of the gate did not
+    ;; ask. `I64_MIN` passed it only because `MIN_VALUE` happens to appear in
+    ;; a port source somewhere, which is a pass by coincidence rather than by
+    ;; assertion; declaring the host's names makes the difference visible.
+    (when-not (or (host-library id) (str/includes? (get text target) id))
+      (swap! failures inc)
+      (println (format "  FAIL %s `%s` emits `%s` for %s, and no file under %s defines `%s`"
+                       what nm spelling (name target)
+                       (str/join ", " (get trees target)) id)))))
+
 
 (def templates
   (let [src (slurp "kin/src/flint/impl/rt.cljc")]
