@@ -165,10 +165,41 @@
             :workspace (:name w) :tags (:tags w)
             :grants (set (:grants w)) :guard (set (:guard w))})))))))
 
+(defn- a-cycle
+  "One concrete loop among `pending`, as `[a b .. a]`.
+
+  NAMING THE LOOP is the whole point. \"There is a cycle\" sends a reader to
+  find it by hand across a hundred namespaces; `a -> b -> a` is the answer.
+  Depth-first from any node still pending: every one of them is in or behind a
+  cycle, so the first repeat closes a real one."
+  [deps pending]
+  (let [in? (set pending)]
+    (loop [node (first pending) path [] seen #{}]
+      (if (contains? seen node)
+        (conj (vec (drop-while #(not= % node) path)) node)
+        (let [nexts (filter in? (get deps node))]
+          (if (empty? nexts)
+            (conj (vec path) node)
+            (recur (first nexts) (conj path node) (conj seen node))))))))
+
 (defn topo-order
-  "Dependencies before dependents. A cycle does not stop the build -- it picks
-  one and carries on -- because Clojure allows mutual reference through vars
-  and refusing here would refuse programs that work."
+  "Dependencies before dependents. A namespace cycle is REFUSED, naming the
+  loop.
+
+  It used to pick one and carry on, justified by \"Clojure allows mutual
+  reference through vars\". That is true WITHIN a namespace -- which is what
+  `declare` is for -- and false ACROSS them: Clojure refuses a namespace-level
+  require cycle outright, and names it:
+
+      Cyclic load dependency: [ /aa ]->/bb->[ /aa ]
+
+  So carrying on was not matching Clojure, it was diverging from it, and it
+  cost a real bug. `clojure.core` requiring `flint.protocols` while
+  `flint.protocols` required `clojure.core` produced no error and no loop --
+  it produced an EMPTY protocol map, which surfaced four hundred lines away
+  as \"the protocol  has no method named print-data; its methods are []\".
+  A silent cycle does not stay silent; it re-emerges somewhere with no
+  information attached."
   [sources]
   (let [deps (into {} (for [[n {:keys [forms]}] sources]
                         [n (set (compiler/ns-requires (or (ns-form forms) '(ns x))))]))]
@@ -179,7 +210,18 @@
                                                          (not (contains? deps d))))
                                              (get deps n)))
                              pending)
-              ready (if (seq ready) ready [(first pending)])
+              _ (when (empty? ready)
+                  (let [loop- (a-cycle deps pending)]
+                    (throw (ex-info
+                            (str "cyclic namespace dependency: "
+                                 (str/join " -> " (map str loop-))
+                                 ". Namespace requires must form a DAG, as they"
+                                 " do in Clojure. Mutual reference WITHIN a"
+                                 " namespace is what `declare` is for; across"
+                                 " namespaces, move what both halves need into"
+                                 " a third namespace they can each require.")
+                            {:cycle (vec loop-)
+                             :pending (vec (sort pending))}))))
               rs (set ready)]
           (recur (into done ready) (into seen ready)
                  (vec (remove (fn [x] (contains? rs x)) pending))))))))

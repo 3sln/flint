@@ -217,6 +217,23 @@
               (System/exit 1))))
       [sources order])))
 
+(defn- a-cycle
+  "One concrete loop among `pending`, as `[a b .. a]`.
+
+  NAMING THE LOOP is the whole point. \"There is a cycle\" sends a reader to
+  find it by hand across a hundred namespaces; `a -> b -> a` is the answer.
+  Depth-first from any node still pending: every one of them is in or behind a
+  cycle, so the first repeat closes a real one."
+  [deps pending]
+  (let [in? (set pending)]
+    (loop [node (first pending) path [] seen #{}]
+      (if (contains? seen node)
+        (conj (vec (drop-while #(not= % node) path)) node)
+        (let [nexts (filter in? (get deps node))]
+          (if (empty? nexts)
+            (conj (vec path) node)
+            (recur (first nexts) (conj path node) (conj seen node))))))))
+
 (defn topo-order [sources features]
   ;; Dependencies before dependents; clojure.core always first.
   (let [deps (into {} (for [[n {:keys [src file tags]}] sources]
@@ -228,7 +245,14 @@
       (if (empty? pending)
         done
         (let [ready (filter #(every? (fn [d] (or (seen d) (not (contains? deps d)))) (deps %)) pending)
-              ready (if (seq ready) ready [(first pending)])]
+              _ (when (empty? ready)
+                  (let [loop- (a-cycle deps pending)]
+                    (throw (ex-info
+                            (str "cyclic namespace dependency: "
+                                 (str/join " -> " (map str loop-))
+                                 ". Namespace requires must form a DAG, as they"
+                                 " do in Clojure.")
+                            {:cycle (vec loop-)}))))]
           (recur (into done ready) (into seen ready) (vec (remove (set ready) pending))))))))
 
 (defn refuse-guarded-requires!
