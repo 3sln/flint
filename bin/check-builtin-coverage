@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""Which builtins does the cross-runtime suite actually CALL?
+
+`bin/check-builtins` asks whether each port IMPLEMENTS every builtin. This
+asks the other half, and it is the half that finds bugs: an implemented
+builtin no conformance program reaches can be wrong in all the ways nobody is
+looking at. `runtime/examples/opcov.rs` makes exactly this argument for
+opcodes; there are 39 of those and 192 builtins, and most of the builtins are
+hand-written three times.
+
+It is not hypothetical. Asking this question once turned up, in one sitting:
+
+  * `unchecked-add`, `-sub` and `-mul` reading operands through `asFixnum` on
+    BOTH ports, so a bigint operand meant arithmetic on a heap address --
+    `unchecked-add(MAX, 1)` answered 70969 instead of wrapping.
+  * `rint(-0.5)` answering 0.0 in the native build and -0.0 in the wasm one,
+    from a hand-rolled round-half-to-even that negated by subtracting.
+  * `signum(-0.0)` answering 0.0 on the CLR, which reached it through
+    `Math.Sign` -- an INT, with no -0.0 to return -- and which throws on NaN.
+  * `hypot(1e300, 1e300)` answering Infinity on the CLR, from `Sqrt(x*x+y*y)`
+    overflowing before it took the root.
+
+None of those was subtle once looked at. Nothing was looking.
+
+A builtin is counted as REACHED if a conformance image names it in its native
+table. That is "the suite could call it", not "the suite did call it" -- a
+weaker claim than the opcode census makes, and the honest one to make from an
+image without running it.
+
+Run from the repo root. Exit 1 if an unexercised builtin is not accounted for
+below, or if an entry below has become exercised and should be removed.
+"""
+import glob
+import json
+import os
+import struct
+import subprocess
+import sys
+
+# Why each unexercised builtin is unexercised. An entry here is a claim, and
+# the gate fails when one goes stale, because a list of excuses nobody rechecks
+# is how the question stops being asked.
+ACCOUNTED = {}
+
+# COMPILED TO AN OPCODE rather than called. `opcov-gate` asserts TYPE_P, APPLY
+# and MAP are all warm, so these are covered -- by the other census.
+for _n in ["boolean?", "float?", "fn?", "int?", "keyword?", "map?", "nil?",
+           "number?", "seq?", "sequential?", "set?", "string?", "symbol?",
+           "vector?"]:
+    ACCOUNTED[_n] = "compiled to the TYPE_P opcode, which opcov-gate asserts"
+ACCOUNTED["flint/apply"] = "compiled to the APPLY opcode, which opcov-gate asserts"
+ACCOUNTED["flint/array-map"] = "compiled to the MAP opcode, which opcov-gate asserts"
+
+# PROVIDED BY THE HOST, not by a runtime. The three self-contained runtimes
+# carry no implementation and refuse by name when an image needs one: "this
+# runtime does not carry the builtin `flint/json-parse`", identically on
+# native, the JVM and the CLR. The JS host supplies them.
+for _n in ["flint/json-parse", "flint/xml-parse", "flint/html-parse"]:
+    ACCOUNTED[_n] = "host-provided; the self-contained runtimes refuse it by name"
+
+# DELIBERATELY NOT ASSERTED. These are permitted to differ in the last ulp and
+# all four runtimes do -- `libm` on wasm, the platform's libm on native,
+# `Math` on the JVM, `System.Math` on the CLR. Which is authoritative is an
+# open question, written up in `runtimes/conform/mathfns.cljc` with the
+# measurements. Asserting whichever runtime was measured first would answer it
+# by accident.
+for _n in ["flint/sin", "flint/cos", "flint/tan", "flint/asin", "flint/acos",
+           "flint/atan", "flint/atan2", "flint/sinh", "flint/cosh",
+           "flint/tanh", "flint/exp", "flint/expm1", "flint/log",
+           "flint/log10", "flint/log1p", "flint/cbrt", "flint/trunc"]:
+    ACCOUNTED[_n] = "transcendental; last-ulp divergence is an open decision"
+
+# NOT COVERED, AND NOTHING SAYS WHY. This is the backlog the file exists to
+# keep visible: every one of them is a place a bug would go unnoticed, and the
+# four found above all came off a list exactly like it.
+for _n in ["flint/bindings", "flint/set-bindings", "flint/delay?",
+           "flint/realized?", "flint/volatile?", "flint/gc-stats",
+           "flint/opaque", "flint/self", "flint/open", "flint/port-bridge?",
+           "flint/port-close", "flint/port-id", "flint/port-state",
+           "flint/request", "flint/thread-id", "flint/thread-result",
+           "flint/thread?"]:
+    ACCOUNTED[_n] = "UNWATCHED -- no conformance program reaches it"
+
+CONST_KINDS_EMPTY = (0, 1, 2)
+CONST_KINDS_8 = (3, 4)
+CONST_STRING = 5
+CONST_KINDS_2U32 = (6, 7, 13, 17)
+CONST_KINDS_SEQ = (8, 9, 11)
+CONST_MAP = 10
+CONST_FN = 12
+
+
+def names_in(path):
+    """The builtins an image names, read out of its own const pool.
+
+    The natives table stores a const INDEX and a slot, and the slot is zero
+    until the linker patches it -- so the name is the only thing an unlinked
+    image can be asked. Reading it means walking the const pool, which is why
+    every kind below has to be skipped correctly: get one width wrong and the
+    walk desynchronises and the answer is silently empty.
+    """
+    b = open(path, "rb").read()
+    n_nat = struct.unpack_from("<I", b, 12)[0]
+    o = 16 + n_nat * 8
+    n_const = struct.unpack_from("<I", b, o)[0]
+    o += 4
+    strings = {}
+    for i in range(n_const):
+        tag = b[o]
+        o += 1
+        if tag in CONST_KINDS_EMPTY:
+            pass
+        elif tag in CONST_KINDS_8:
+            o += 8
+        elif tag == CONST_STRING:
+            ln = struct.unpack_from("<I", b, o)[0]
+            o += 4
+            strings[i] = b[o:o + ln].decode("utf-8", "replace")
+            o += ln
+        elif tag in CONST_KINDS_2U32:
+            o += 8
+        elif tag in CONST_KINDS_SEQ:
+            o += 4 + 4 * struct.unpack_from("<I", b, o)[0]
+        elif tag == CONST_MAP:
+            o += 4 + 8 * struct.unpack_from("<I", b, o)[0]
+        elif tag == CONST_FN:
+            o += 4
+        else:
+            sys.exit(f"check-builtin-coverage: unknown const kind {tag} in {path}")
+    out = set()
+    for i in range(n_nat):
+        idx = struct.unpack_from("<I", b, 16 + i * 8)[0]
+        if idx in strings:
+            out.add(strings[idx])
+    return out
+
+
+def main():
+    if not os.path.exists("dist/slots.json"):
+        sys.exit("check-builtin-coverage: no dist/slots.json; run bin/build-dist")
+    slots = set(json.load(open("dist/slots.json")))
+
+    # BUILT FRESH, not read out of whatever `out/` happens to hold. A census
+    # over stale images is a census of a program nobody is running, and it
+    # reads exactly like a real answer.
+    out = "out/bcov"
+    subprocess.run(["rm", "-rf", out], check=True)
+    os.makedirs(out, exist_ok=True)
+    built = 0
+    for src in sorted(glob.glob("runtimes/conform/*.cljc")):
+        ns = os.path.basename(src)[:-5].replace("_", "-")
+        if subprocess.run(["./bin/flint", ":src", "runtimes/conform", ":fn", f"{ns}/main",
+                           "--emit-image", ":out", f"{out}/{ns}.img"],
+                          capture_output=True).returncode == 0:
+            built += 1
+    if subprocess.run(["./bin/flint", "test", ":src", "test/common",
+                       "--emit-image", ":out", f"{out}/common.img"],
+                      capture_output=True).returncode == 0:
+        built += 1
+    print(f"images built: {built}")
+    if built < 15:
+        sys.exit(f"check-builtin-coverage: only {built} images built, expected >= 15")
+
+    used = set()
+    for img in sorted(glob.glob(f"{out}/*.img")):
+        used |= names_in(img)
+    if not used & slots:
+        sys.exit("check-builtin-coverage: no image named ANY builtin -- the walk is wrong")
+
+    cold = sorted(slots - used)
+    print(f"{len(slots & used)} of {len(slots)} builtins reached by a conformance image")
+
+    fails = 0
+    for name in cold:
+        if name not in ACCOUNTED:
+            print(f"  FAIL {name} is reached by no conformance program, and nothing says why.")
+            fails += 1
+    stale = sorted(n for n in ACCOUNTED if n in used)
+    for name in stale:
+        print(f"  FAIL {name} is accounted for as unexercised and IS exercised now."
+              f"\n        Remove it from ACCOUNTED -- the reason given is out of date.")
+        fails += 1
+
+    unwatched = [n for n in cold if ACCOUNTED.get(n, "").startswith("UNWATCHED")]
+    print(f"  {len(unwatched)} unwatched, {len(cold) - len(unwatched)} accounted for with a reason")
+    if fails:
+        sys.exit(f"\ncheck-builtin-coverage: {fails} FAILURE(S)\n")
+    print("\ncheck-builtin-coverage: every unexercised builtin is accounted for\n")
+
+
+main()

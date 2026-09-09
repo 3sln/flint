@@ -399,6 +399,19 @@ else
   sed 's/^/  /' "$TMPDIR/flint-builtins.out"; fail "check-builtins"
 fi
 
+# AND THE OTHER HALF OF THE QUESTION: `check-builtins` asks whether every port
+# implements each builtin; this asks whether anything CALLS it. An implemented
+# builtin no conformance program reaches can be wrong in every way nobody is
+# looking at, which is how `unchecked-add` came to do arithmetic on a heap
+# address on both ports without a single test noticing.
+#
+# Same pipeline trap as above, so same shape: redirect, then branch on status.
+if ./bin/check-builtin-coverage > "$TMPDIR/flint-bcov.out" 2>&1; then
+  sed 's/^/  /' "$TMPDIR/flint-bcov.out"
+else
+  sed 's/^/  /' "$TMPDIR/flint-bcov.out"; fail "check-builtin-coverage"
+fi
+
 echo
 echo "== global ports: the host owns them, and passes one IN (0027)"
 bb test/globalport.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/globalport.clj"; }
