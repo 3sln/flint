@@ -568,10 +568,40 @@ if [ -n "$CLR" ]; then
          echo "  FAIL the two ports shelve differently"; exit 1; }
 fi
 
+# A LIVE SNAPSHOT ACROSS RUNTIMES, in both directions.
+#
+# `0015` says the snapshot is "a serialised internal layout, not an interchange
+# format" and that a mismatch must be refused loudly rather than read as "a
+# plausible-looking heap that means something else". The stamp it refuses on is
+# MAGIC and VERSION -- and those are IDENTICAL on all three runtimes, so a
+# crossing is ATTEMPTED rather than refused, and nothing here had ever tried
+# one. `RtSnapshot` compares the two PORTS; native was never in it.
+#
+# It works. Measured, on the same 918-object heap:
+#
+#     native  65 918 bytes
+#     jvm     33 754 bytes
+#     clr     33 754 bytes
+#
+# and the object sections are BYTE-IDENTICAL for all 33 676 bytes they share.
+# The whole difference is the intern tables, which are open-addressed and
+# written slot for slot including the empty ones -- a capacity, carried in a
+# self-describing count, not a shape.
+#
+# So the crossing is real and it was working by accident: no test crossed one,
+# and the stamp could not have said it had stopped. This is what makes it a
+# property rather than a coincidence.
+mkdir -p out/snapcross
+cargo run -p flint-rt --release --quiet --features diagnostics --example livedump \
+  -- out/snapcross/native.bin > /tmp/flint-livedump.out 2>/dev/null \
+  || { cat /tmp/flint-livedump.out; echo "  FAIL native could not write a live snapshot"; exit 1; }
+
+FLINT_LIVEDUMP=out/snapcross/jvm.bin FLINT_LIVEIMPORT=out/snapcross/native.bin \
 "$JDK/bin/java" -cp runtimes/jvm/classes RtSnapshot > /tmp/flint-snap-jvm.out 2>&1 \
   || { cat /tmp/flint-snap-jvm.out; echo "  FAIL snapshots on the ported runtime [jvm]"; exit 1; }
 sed 's/$/ [jvm]/' /tmp/flint-snap-jvm.out
 if [ -n "$CLR" ]; then
+  FLINT_LIVEDUMP=out/snapcross/clr.bin FLINT_LIVEIMPORT=out/snapcross/native.bin \
   "$CLR" --rt-snapshot > /tmp/flint-snap-clr.out 2>&1 \
     || { cat /tmp/flint-snap-clr.out; echo "  FAIL snapshots on the ported runtime [clr]"; exit 1; }
   sed 's/$/ [clr]/' /tmp/flint-snap-clr.out
@@ -582,12 +612,34 @@ if [ -n "$CLR" ]; then
   # width or in a different order.
   if cmp -s /tmp/flint-snap-jvm.out /tmp/flint-snap-clr.out; then
     echo "  ok   the two ported runtimes snapshot identically, byte counts included"
+    cmp -s out/snapcross/jvm.bin out/snapcross/clr.bin \
+      || { echo "  FAIL the two ports write different live-snapshot BYTES"; exit 1; }
+    echo "  ok   ... and the live snapshots they write are byte for byte the same"
   else
     diff /tmp/flint-snap-jvm.out /tmp/flint-snap-clr.out | head -20
     echo "  FAIL the two ported runtimes disagree about snapshots"
     exit 1
   fi
 fi
+
+# AND NATIVE READS WHAT THE PORTS WROTE. The ports check the other direction
+# themselves, above, under `FLINT_LIVEIMPORT`.
+for who in jvm clr; do
+  [ -f "out/snapcross/$who.bin" ] || continue
+  LIVEDUMP_IMPORT="out/snapcross/$who.bin" \
+    cargo run -p flint-rt --release --quiet --features diagnostics --example livedump \
+    > /tmp/flint-cross.out 2>/dev/null
+  grep -q "accepted=true" /tmp/flint-cross.out \
+    || { cat /tmp/flint-cross.out; echo "  FAIL native refused the $who live snapshot"; exit 1; }
+  # THE WHOLE STRUCTURE, not a prefix. `livedump` rebuilds it and compares,
+  # because checking `accepted` and the first few characters passed a real
+  # port snapshot with a byte flipped in the middle of it -- the import still
+  # succeeded and the first element still read `0=item-0`.
+  grep -q "matches=true" /tmp/flint-cross.out \
+    || { cat /tmp/flint-cross.out
+         echo "  FAIL native read the $who live snapshot and got something else"; exit 1; }
+  echo "  ok   native reads the live snapshot the $who runtime wrote"
+done
 
 # EVERY conformance program the ported runtimes can run, each checked against
 # the NATIVE answer and then the two ports against each other.

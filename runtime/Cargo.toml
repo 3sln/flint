@@ -65,5 +65,9 @@ name = "opcov"
 required-features = ["diagnostics"]
 
 [[example]]
+name = "livedump"
+required-features = ["diagnostics"]
+
+[[example]]
 name = "iterbench"
 required-features = ["bench"]

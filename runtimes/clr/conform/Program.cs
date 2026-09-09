@@ -138,6 +138,14 @@ public static class Program {
         long croot = SnapBuild(c, N);
         c.roots.shared.Globals = new long[]{ croot };
         byte[] live = Flint.Rt.Snap.ExportLive(c);
+        // WRITTEN OUT WHEN ASKED, so the gate can compare this runtime's live
+        // format against native's rather than only against the other port. It
+        // touches no stdout, because the JVM/CLR comparison is a byte diff of
+        // exactly that.
+        {
+            string dump = System.Environment.GetEnvironmentVariable("FLINT_LIVEDUMP");
+            if (dump != null) System.IO.File.WriteAllBytes(dump, live);
+        }
         SnapOk("exportLive agrees with the collector about what is live", live != null);
         SnapOk("and is smaller than the memcpy, being the data rather than the heap: "
                + live.Length + " < " + verbatim.Length, live.Length < verbatim.Length);
@@ -151,6 +159,27 @@ public static class Program {
         d.roots.shared.Globals = new long[1];
         SnapOk("importLive accepts it", Flint.Rt.Snap.ImportLive(d, live));
         SnapOk("the rehydrated heap reads back identically", SnapRender(d, d.roots.shared.Globals[0]) == before);
+
+        // THE CROSSING, when the gate asks for it: a live snapshot written by
+        // a DIFFERENT runtime, read here. `0015` calls this format "a
+        // serialised internal layout, not an interchange format" and says a
+        // mismatch must be refused loudly -- but the stamp it refuses on is
+        // MAGIC and VERSION, and those are identical on all three runtimes, so
+        // a crossing is ATTEMPTED rather than refused. It turns out to work;
+        // nothing was checking that it kept working.
+        {
+            string cross = System.Environment.GetEnvironmentVariable("FLINT_LIVEIMPORT");
+            if (cross != null) {
+                byte[] other = System.IO.File.ReadAllBytes(cross);
+                var e = new Flint.Rt.Rt(3 * 1024 * 1024, 64L * 1024 * 1024);
+                e.fingerprint = c.fingerprint;
+                e.roots.shared.Globals = new long[1];
+                SnapOk("imports a live snapshot written by another runtime",
+                       Flint.Rt.Snap.ImportLive(e, other));
+                SnapOk("and reads back what that runtime had",
+                       SnapRender(e, e.roots.shared.Globals[0]) == before);
+            }
+        }
         SnapOk("at a DIFFERENT address, which is what relocating means",
                Flint.Rt.Val.AsHeap(d.roots.shared.Globals[0]) != Flint.Rt.Val.AsHeap(croot));
 

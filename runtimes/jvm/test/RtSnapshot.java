@@ -100,6 +100,16 @@ public class RtSnapshot {
     long croot = build(c, N);
     c.roots.shared.globals = new long[]{croot};
     byte[] live = Snap.exportLive(c);
+    // WRITTEN OUT WHEN ASKED, so the gate can compare this runtime's live
+    // format against native's rather than only against the other port. It
+    // touches no stdout, because the JVM/CLR comparison is a byte diff of
+    // exactly that.
+    try {
+      String dump = System.getenv("FLINT_LIVEDUMP");
+      if (dump != null) java.nio.file.Files.write(java.nio.file.Path.of(dump), live);
+    } catch (java.io.IOException e) {
+      System.out.println("  FAIL could not write the live dump: " + e.getMessage());
+    }
     ok("exportLive agrees with the collector about what is live", live != null);
     ok("and is smaller than the memcpy, being the data rather than the heap: "
        + live.length + " < " + verbatim.length, live.length < verbatim.length);
@@ -113,6 +123,27 @@ public class RtSnapshot {
     d.roots.shared.globals = new long[1];
     ok("importLive accepts it", Snap.importLive(d, live));
     ok("the rehydrated heap reads back identically", render(d, d.roots.shared.globals[0]).equals(before));
+
+    // THE CROSSING, when the gate asks for it: a live snapshot written by a
+    // DIFFERENT runtime, read here. `0015` calls this format "a serialised
+    // internal layout, not an interchange format" and says a mismatch must be
+    // refused loudly -- but the stamp it refuses on is MAGIC and VERSION, and
+    // those are identical on all three runtimes, so a crossing is ATTEMPTED
+    // rather than refused. It turns out to work; nothing was checking that it
+    // kept working, and the stamp could not have told anyone it stopped.
+    String cross = System.getenv("FLINT_LIVEIMPORT");
+    if (cross != null) {
+      try {
+        byte[] other = java.nio.file.Files.readAllBytes(java.nio.file.Path.of(cross));
+        Rt e = new Rt(3 * 1024 * 1024, 64L * 1024 * 1024);
+        e.fingerprint = c.fingerprint;
+        e.roots.shared.globals = new long[1];
+        ok("imports a live snapshot written by another runtime", Snap.importLive(e, other));
+        ok("and reads back what that runtime had", render(e, e.roots.shared.globals[0]).equals(before));
+      } catch (java.io.IOException ex) {
+        ok("could not read the crossing snapshot: " + ex.getMessage(), false);
+      }
+    }
     ok("at a DIFFERENT address, which is what relocating means",
        Val.asHeap(d.roots.shared.globals[0]) != Val.asHeap(croot));
 
