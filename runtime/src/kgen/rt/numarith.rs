@@ -121,4 +121,40 @@ impl Rt {
         }
         return self.throw_not_a_number(a, b);
     }
+    /// `==`: numeric equality, which compares ACROSS the integer/double divide
+    /// where `=` does not.
+    /// 
+    /// Not an arm of `=`, and deliberately: `(= 1 1.0)` is false in Clojure and
+    /// here, while `(== 1 1.0)` is true in both. Two questions that a single
+    /// function would have to take a flag to tell apart.
+    pub fn num_eq(&mut self, a: Value, b: Value) -> bool {
+        if self.both_ints(a, b) {
+            return self.i64_of(a) == self.i64_of(b);
+        }
+        if self.is_number(a) && self.is_number(b) {
+            return self.num_f64(a) == self.num_f64(b);
+        }
+        // FALSE RATHER THAN A THROW, unlike the arithmetic above. `==` on a
+        // non-number is a question with an answer; `+` on one is a mistake.
+        return false;
+    }
+    /// A number's hash.
+    /// 
+    /// THE TWO TIERS HASH SEPARATELY. A double goes through `hash-double` and
+    /// an integer through `hash-long`, which is what makes `(= 1 1.0)` false
+    /// and their hashes free to differ -- the invariant is that EQUAL values
+    /// hash alike, and these two are not equal.
+    pub fn num_hash(&mut self, v: Value) -> u32 {
+        if v.is_double() {
+            return crate::hash::hash_double(self.num_f64(v));
+        }
+        if self.is_int(v) {
+            return hash_long(self.i64_of(v));
+        }
+        // NOT A NUMBER AT ALL hashes as zero. All three did this already --
+        // native through `unwrap_or(0)`, both ports through a null check --
+        // and it is reachable because `hash` is called on a value before
+        // anything has asked what it is.
+        return hash_long(0);
+    }
 }

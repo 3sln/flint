@@ -11,6 +11,7 @@ using static global::Flint.Rt.Eq;
 using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
+using static global::_3sln.Flint.Kgen.Rt.Hash;
 using static global::_3sln.Flint.Kgen.Rt.Numkind;
 
 public static class Numarith {
@@ -116,5 +117,41 @@ public static class Numarith {
             return Val.OfDouble(Num.F64(rt, a) * Num.F64(rt, b));
         }
         return Num.NotNumber(rt, a, b);
+    }
+    /// `==`: numeric equality, which compares ACROSS the integer/double divide
+    /// where `=` does not.
+    /// 
+    /// Not an arm of `=`, and deliberately: `(= 1 1.0)` is false in Clojure and
+    /// here, while `(== 1 1.0)` is true in both. Two questions that a single
+    /// function would have to take a flag to tell apart.
+    public static bool NumEq(Rt rt, long a, long b) {
+        if (BothInts(rt, a, b)) {
+            return Num.I64Of(rt, a) == Num.I64Of(rt, b);
+        }
+        if (IsNumber(rt, a) && IsNumber(rt, b)) {
+            return Num.F64(rt, a) == Num.F64(rt, b);
+        }
+        // FALSE RATHER THAN A THROW, unlike the arithmetic above. `==` on a
+        // non-number is a question with an answer; `+` on one is a mistake.
+        return false;
+    }
+    /// A number's hash.
+    /// 
+    /// THE TWO TIERS HASH SEPARATELY. A double goes through `hash-double` and
+    /// an integer through `hash-long`, which is what makes `(= 1 1.0)` false
+    /// and their hashes free to differ -- the invariant is that EQUAL values
+    /// hash alike, and these two are not equal.
+    public static int NumHash(Rt rt, long v) {
+        if (Val.IsDouble(v)) {
+            return global::Flint.Rt.Hash.HashDouble(Num.F64(rt, v));
+        }
+        if (IsInt(rt, v)) {
+            return HashLong(Num.I64Of(rt, v));
+        }
+        // NOT A NUMBER AT ALL hashes as zero. All three did this already --
+        // native through `unwrap_or(0)`, both ports through a null check --
+        // and it is reachable because `hash` is called on a value before
+        // anything has asked what it is.
+        return HashLong(0);
     }
 }

@@ -92,9 +92,6 @@ public final class Num {
     // flint's `try` with nothing to catch: the failure would never enter the
     // flint machinery at all, and `(try (/ 1 0) (catch ...))` could not work
     // however correct the opcode handling was.
-    static long overflow(Rt rt) {
-        return rt.throwStr("ArithmeticException", "integer overflow");
-    }
     public static long notNumber(Rt rt, long a, long b) {
         return rt.throwStr("ClassCastException",
             "not a number: " + rt.describe(a) + " and " + rt.describe(b));
@@ -130,11 +127,10 @@ public final class Num {
     // CLR raised a host `OverflowException`; three runtimes, three answers.
 
     /// Numeric equality (`==`): compares ACROSS int and float, unlike `=`.
+    /// `==`, GENERATED from `kin/numarith.kin`. Numeric equality compares
+    /// ACROSS the integer/double divide, where `=` does not.
     public static boolean numEq(Rt rt, long a, long b) {
-        Long x = asI64(rt, a), y = asI64(rt, b);
-        if (x != null && y != null) return x.longValue() == y.longValue();
-        if (isNumber(rt, a) && isNumber(rt, b)) return f64(rt, a) == f64(rt, b);
-        return false;
+        return com._3sln.flint.kgen.rt.Numarith.numEq(rt, a, b);
     }
 
     /// -1, 0 or 1. NaN sorts as EQUAL to everything, matching `Double.compare`'s
@@ -146,9 +142,8 @@ public final class Num {
         return p < q ? -1 : p > q ? 1 : 0;
     }
 
+    /// A number's hash, GENERATED from `kin/numarith.kin`.
     public static int hash(Rt rt, long v) {
-        if (Val.isDouble(v)) return Hash.hashDouble(Val.asDouble(v));
-        Long n = asI64(rt, v);
-        return com._3sln.flint.kgen.rt.Hash.hashLong(n == null ? 0 : n);
+        return com._3sln.flint.kgen.rt.Numarith.numHash(rt, v);
     }
 }

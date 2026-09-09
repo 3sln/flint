@@ -79,6 +79,30 @@ mv "$work/probe.rs" "$work/gen.rs"
 { echo 'import java.io.ByteArrayOutputStream; import java.nio.charset.StandardCharsets;'
   echo 'public class Probe {'; section java-head; cat "$work/gen.java"
   section java; echo '}'; } > "$work/Probe.java"
+
+# A `--java-pre` section, for the same reason `--csharp-pre` exists.
+#
+# Some vocabulary entries name a host function FULLY QUALIFIED, because a
+# generated module lives in a different package from the hand-written runtime
+# and a bare name would not resolve there: `hash-double` is
+# `com.flint.rt.Hash.hashDouble` on this target. A class nested inside `Probe`
+# cannot answer to that -- Java allows many classes in a file and exactly one
+# package -- so a fixture needing one writes its own file.
+#
+# `javac -d` places a class by its DECLARED package rather than by where the
+# source sat, so the file needs no directory to match it.
+# NAMED AFTER THE CLASS IT DECLARES, because javac insists a public class sit
+# in a file of its own name -- the one rule that makes this section awkward and
+# the reason it cannot simply be `pre.java`.
+section java-pre > "$work/pre.java"
+if [ -s "$work/pre.java" ]; then
+  pre_class=$(sed -n 's/^public class \([A-Za-z_][A-Za-z0-9_]*\).*/\1/p' "$work/pre.java" | head -1)
+  [ -n "$pre_class" ] || { echo "  FAIL --java-pre must declare one \`public class X\`"; exit 1; }
+  mv "$work/pre.java" "$work/$pre_class.java"
+  pre_java="$work/$pre_class.java"
+else
+  rm -f "$work/pre.java"
+fi
 # A `--csharp-pre` section, emitted OUTSIDE the probe class.
 #
 # The generated C# reaches the runtime as `global::Flint.Rt.X`, because its own
@@ -112,7 +136,7 @@ for t in $present; do
     java)
       JDK=/opt/homebrew/opt/openjdk
       [ -x "$JDK/bin/javac" ] || JDK=$(/usr/libexec/java_home 2>/dev/null)
-      "$JDK/bin/javac" -d "$work" "$work/Probe.java" 2>&1 | head -20
+      "$JDK/bin/javac" -d "$work" ${pre_java:+"$pre_java"} "$work/Probe.java" 2>&1 | head -20
       echo "java $("$JDK/bin/java" -cp "$work" Probe)" >> "$work/answers" ;;
     csharp)
       mkdir -p "$work/cs" && (cd "$work/cs" && dotnet new console -o . --force >/dev/null 2>&1)

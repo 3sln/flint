@@ -1,6 +1,8 @@
 --rust-head
 #[derive(Clone, Copy, PartialEq)]
 struct Value(u64);
+pub mod hash { pub fn hash_double(d: f64) -> u32 { (d as i64 as u32) ^ 0xd0b1 } }
+fn hash_long(n: i64) -> u32 { (n as u32) ^ 0x5eed }
 const NIL: Value = Value(0xFFFF);
 struct Rt { thrown: String, boxes: Vec<i64> }
 // `f-trunc` resolves to `crate::fmath::trunc`, so the probe declares that
@@ -93,7 +95,26 @@ fn main() {
     go!("dbl", rt.num_add(dbl(3), dbl(5)));
     go!("mixed", rt.num_mul(dbl(4), fix(3)));
     go!("notnum", rt.num_add(bad, fix(1)));
+    // `==` ACROSS THE TIERS, which is the whole difference from `=`.
+    o.push_str(&format!(" eqii={}", rt.num_eq(fix(3), fix(3))));
+    o.push_str(&format!(" nei={}", rt.num_eq(fix(3), fix(4))));
+    o.push_str(&format!(" eqid={}", rt.num_eq(fix(2), dbl(4))));
+    o.push_str(&format!(" eqbad={}", rt.num_eq(bad, fix(1))));
+    o.push_str(&format!(" eqmin={}", rt.num_eq(min, min)));
+    // The two tiers hash SEPARATELY, and a non-number hashes as zero.
+    o.push_str(&format!(" hi={}", rt.num_hash(fix(7))));
+    o.push_str(&format!(" hd={}", rt.num_hash(dbl(4))));
+    o.push_str(&format!(" hbad={}", rt.num_hash(bad)));
     println!("{}", o.trim());
+}
+--java-pre
+// `hash-double` is `com.flint.rt.Hash.hashDouble` on this target -- fully
+// qualified, because a generated module sits in a different package from the
+// hand-written runtime. A class nested in `Probe` cannot answer to that name,
+// so the shim is a real file in a real package.
+package com.flint.rt;
+public class Hash {
+    public static int hashDouble(double d) { return (int) (long) d ^ 0xd0b1; }
 }
 --java-head
     static final long NIL = 0xFFFFL;
@@ -141,6 +162,7 @@ fn main() {
     static boolean isInt(Rt rt, long v) { return (v >>> 60) == 1 || (v >>> 60) == 3; }
     static boolean isNumber(Rt rt, long v) { return isInt(rt, v) || Val.isDouble(v); }
     static boolean bothInts(Rt rt, long a, long b) { return isInt(rt, a) && isInt(rt, b); }
+    static int hashLong(long n) { return (int) n ^ 0x5eed; }
 --java
     public static void main(String[] args) {
         Rt rt = new Rt();
@@ -164,6 +186,14 @@ fn main() {
         o.append(" dbl=").append(run(rt, () -> numAdd(rt, dbl(3), dbl(5))));
         o.append(" mixed=").append(run(rt, () -> numMul(rt, dbl(4), fix(3))));
         o.append(" notnum=").append(run(rt, () -> numAdd(rt, bad, fix(1))));
+        o.append(" eqii=").append(numEq(rt, fix(3), fix(3)));
+        o.append(" nei=").append(numEq(rt, fix(3), fix(4)));
+        o.append(" eqid=").append(numEq(rt, fix(2), dbl(4)));
+        o.append(" eqbad=").append(numEq(rt, bad, fix(1)));
+        o.append(" eqmin=").append(numEq(rt, min, min));
+        o.append(" hi=").append(numHash(rt, fix(7)));
+        o.append(" hd=").append(numHash(rt, dbl(4)));
+        o.append(" hbad=").append(numHash(rt, bad));
         System.out.println(o.toString().trim());
     }
     interface Thunk { long get(); }
@@ -173,6 +203,11 @@ fn main() {
         return rt.thrown.isEmpty() ? show(rt, r) : rt.thrown;
     }
 --csharp-pre
+namespace Flint.Rt {
+    public static class Hash {
+        public static int HashDouble(double d) { return (int) (long) d ^ 0xd0b1; }
+    }
+}
 
 --csharp-head
     internal const long NIL = 0xFFFFL;
@@ -220,6 +255,7 @@ fn main() {
     internal static bool IsInt(Rt rt, long v) { return (v >> 60) == 1 || (v >> 60) == 3; }
     internal static bool IsNumber(Rt rt, long v) { return IsInt(rt, v) || Val.IsDouble(v); }
     internal static bool BothInts(Rt rt, long a, long b) { return IsInt(rt, a) && IsInt(rt, b); }
+    internal static int HashLong(long n) { return (int) n ^ 0x5eed; }
 --csharp
     public static void Main(string[] args) {
         var rt = new Rt();
@@ -243,6 +279,14 @@ fn main() {
         o.Append(" dbl=").Append(Run(rt, () => NumAdd(rt, Dbl(3), Dbl(5))));
         o.Append(" mixed=").Append(Run(rt, () => NumMul(rt, Dbl(4), Fix(3))));
         o.Append(" notnum=").Append(Run(rt, () => NumAdd(rt, bad, Fix(1))));
+        o.Append(" eqii=").Append(NumEq(rt, Fix(3), Fix(3)) ? "true" : "false");
+        o.Append(" nei=").Append(NumEq(rt, Fix(3), Fix(4)) ? "true" : "false");
+        o.Append(" eqid=").Append(NumEq(rt, Fix(2), Dbl(4)) ? "true" : "false");
+        o.Append(" eqbad=").Append(NumEq(rt, bad, Fix(1)) ? "true" : "false");
+        o.Append(" eqmin=").Append(NumEq(rt, min, min) ? "true" : "false");
+        o.Append(" hi=").Append(NumHash(rt, Fix(7)));
+        o.Append(" hd=").Append(NumHash(rt, Dbl(4)));
+        o.Append(" hbad=").Append(NumHash(rt, bad));
         System.Console.WriteLine(o.ToString().Trim());
     }
     static string Run(Rt rt, System.Func<long> t) {

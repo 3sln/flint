@@ -81,7 +81,6 @@ public static class Num {
     // with nothing to catch: the failure would never enter the flint machinery
     // at all, and `(try (/ 1 0) (catch ...))` could not work however correct
     // the opcode handling was.
-    static long Overflow(Rt rt) => rt.ThrowStr("ArithmeticException", "integer overflow");
     public static long NotNumber(Rt rt, long a, long b) =>
         rt.ThrowStr("ClassCastException",
                     "not a number: " + rt.Describe(a) + " and " + rt.Describe(b));
@@ -89,10 +88,6 @@ public static class Num {
 
     /// flint's integers OVERFLOW rather than wrap; .NET's `checked` is the
     /// analogue of the JVM's `Math.*Exact`.
-    static long AddExact(long a, long b) { checked { return a + b; } }
-    static long SubExact(long a, long b) { checked { return a - b; } }
-    static long MulExact(long a, long b) { checked { return a * b; } }
-    static long NegExact(long a) { checked { return -a; } }
 
     /// `+`, `-` and `*`. GENERATED, from `kin/numarith.kin` -- delegators
     /// rather than copies, so hand-written code here keeps saying `Num.Add`
@@ -118,12 +113,9 @@ public static class Num {
     // catch it. Native panicked and the JVM answered MIN silently.
 
     /// Numeric equality (`==`): compares ACROSS int and float, unlike `=`.
-    public static bool NumEq(Rt rt, long a, long b) {
-        long? x = AsI64(rt, a), y = AsI64(rt, b);
-        if (x != null && y != null) return x.Value == y.Value;
-        if (IsNumber(rt, a) && IsNumber(rt, b)) return F64(rt, a) == F64(rt, b);
-        return false;
-    }
+    /// `==`, GENERATED from `kin/numarith.kin`.
+    public static bool NumEq(Rt rt, long a, long b) =>
+        global::_3sln.Flint.Kgen.Rt.Numarith.NumEq(rt, a, b);
 
     /// -1, 0 or 1. NaN sorts as EQUAL to everything, matching `Double.compare`'s
     /// use inside Clojure's `compare`.
@@ -136,9 +128,7 @@ public static class Num {
 
     /// Fully qualified because `Num` declares its own `Hash`, which shadows the
     /// `Hash` CLASS inside this file -- the same clash `Maps` has.
-    public static int Hash(Rt rt, long v) {
-        if (Val.IsDouble(v)) return Flint.Rt.Hash.HashDouble(Val.AsDouble(v));
-        long? n = AsI64(rt, v);
-        return _3sln.Flint.Kgen.Rt.Hash.HashLong(n == null ? 0 : n.Value);
-    }
+    /// A number's hash, GENERATED from `kin/numarith.kin`.
+    public static int Hash(Rt rt, long v) =>
+        global::_3sln.Flint.Kgen.Rt.Numarith.NumHash(rt, v);
 }

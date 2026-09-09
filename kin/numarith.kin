@@ -18,10 +18,12 @@
 (ns flint.rt.numarith
   (:require [flint.impl.rt :refer [defn return if let do comment doc == != < >
                                    and or not i64-of num-f64 of-double
+                                   is-double hash-double
                                    throw-str throw-not-a-number + - * quot
-                                   Rt Value I64 Bool I64_MIN I64_MAX]]
+                                   Rt Value I64 U32 Bool I64_MIN I64_MAX]]
             [flint.rt.num :refer [integer]]
-            [flint.rt.numkind :refer [both-ints is-number]]))
+            [flint.rt.hash :refer [hash-long]]
+            [flint.rt.numkind :refer [both-ints is-int is-number]]))
 
 (doc "Does `x + y` overflow?"
      ""
@@ -108,3 +110,35 @@
   (if (and (is-number rt a) (is-number rt b))
     (return (of-double (* (num-f64 rt a) (num-f64 rt b)))))
   (return (throw-not-a-number rt a b)))
+
+(doc "`==`: numeric equality, which compares ACROSS the integer/double divide"
+     "where `=` does not."
+     ""
+     "Not an arm of `=`, and deliberately: `(= 1 1.0)` is false in Clojure and"
+     "here, while `(== 1 1.0)` is true in both. Two questions that a single"
+     "function would have to take a flag to tell apart.")
+(defn ^:pub ^:method ^Bool num-eq [^:mut ^Rt rt ^Value a ^Value b]
+  (if (both-ints rt a b)
+    (return (== (i64-of rt a) (i64-of rt b))))
+  (if (and (is-number rt a) (is-number rt b))
+    (return (== (num-f64 rt a) (num-f64 rt b))))
+  (comment "FALSE RATHER THAN A THROW, unlike the arithmetic above. `==` on a"
+           "non-number is a question with an answer; `+` on one is a mistake.")
+  (return false))
+
+(doc "A number's hash."
+     ""
+     "THE TWO TIERS HASH SEPARATELY. A double goes through `hash-double` and"
+     "an integer through `hash-long`, which is what makes `(= 1 1.0)` false"
+     "and their hashes free to differ -- the invariant is that EQUAL values"
+     "hash alike, and these two are not equal.")
+(defn ^:pub ^:method ^U32 num-hash [^:mut ^Rt rt ^Value v]
+  (if (is-double rt v)
+    (return (hash-double (num-f64 rt v))))
+  (if (is-int rt v)
+    (return (hash-long (i64-of rt v))))
+  (comment "NOT A NUMBER AT ALL hashes as zero. All three did this already --"
+           "native through `unwrap_or(0)`, both ports through a null check --"
+           "and it is reachable because `hash` is called on a value before"
+           "anything has asked what it is.")
+  (return (hash-long 0)))

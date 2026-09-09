@@ -66,12 +66,9 @@ impl Rt {
         }
     }
 
-    fn overflow(&mut self) -> Value {
-        self.throw_str("ArithmeticException", "integer overflow")
-    }
 
-    // `num_add`, `num_sub` and `num_mul` are GENERATED, from
-    // `kin/numarith.kin`. They are methods on this same `impl Rt`, so every
+    // `num_add`, `num_sub`, `num_mul`, `num_eq` and `num_hash` are
+    // GENERATED, from `kin/numarith.kin`. They are methods on this same `impl Rt`, so every
     // `rt.num_add(..)` in `builtins.rs` and `vm.rs` reaches them unchanged.
     //
     // The overflow guard moved with them and stopped being `checked_add`.
@@ -85,18 +82,6 @@ impl Rt {
     // the division does, so the guard has to precede the remainder.
 
     /// Numeric equality (`==`): compares across int/float, unlike `=`.
-    pub fn num_eq(&self, a: Value, b: Value) -> bool {
-        match (self.as_i64(a), self.as_i64(b)) {
-            (Some(x), Some(y)) => x == y,
-            _ => {
-                if self.is_number(a) && self.is_number(b) {
-                    self.num_f64(a) == self.num_f64(b)
-                } else {
-                    false
-                }
-            }
-        }
-    }
 
     /// `compare` for numbers: -1, 0 or 1. NaN sorts as equal to everything,
     /// matching `Double.compare`'s use inside Clojure's `compare`.
@@ -124,13 +109,6 @@ impl Rt {
         }
     }
 
-    pub fn num_hash(&mut self, v: Value) -> u32 {
-        if v.is_double() {
-            crate::hash::hash_double(v.as_f64())
-        } else {
-            crate::hash::hash_long(self.as_i64(v).unwrap_or(0))
-        }
-    }
 }
 
 #[cfg(test)]
