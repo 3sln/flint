@@ -125,6 +125,52 @@ and shipping nowhere.
 `Vec` at 68 lines and `Sets` at 42 and `Seqs` at 10 are not prizes at all any
 more; they are what is left after the generated code took the rest.
 
+### And a third of it is not portable at all
+
+A vocabulary entry's `:rust` template NAMES the function the runtime has to
+supply: `sink-open` is `{0}.sink_open()`, `cps-at` is `{0}.cps_at({1}, {2})`.
+Those are host holes by construction -- kin generates the caller and each
+runtime writes the callee -- so counting them as work remaining counts the
+boundary as if it were the thing on the far side of it. Ninety-nine of them
+are named. Splitting the implementation column by whether a function is one:
+
+| subject | logic | holes | holes are |
+| --- | --- | --- | --- |
+| `Conc` | 2113 | 0 | 0% |
+| `Rt`/`Vm` | 2050 | 118 | 5% |
+| `Gc` | 1084 | 77 | 7% |
+| `Snap` | 795 | 0 | 0% |
+| `Codec` | 757 | 16 | 2% |
+| `Pike` | 319 | 0 | 0% |
+| `Str` | 307 | 68 | 18% |
+| `Maps` | 237 | 0 | 0% |
+| `Aot` | 218 | 0 | 0% |
+| `Obj` | 201 | 22 | 10% |
+| `Num` | 90 | 33 | 27% |
+| `Vec` | 60 | 8 | 12% |
+| `Sets` | 42 | 0 | 0% |
+| `Eq` | 41 | 5 | 11% |
+| **`Bytes`** | **39** | **133** | **77%** |
+| `Table` | 31 | 0 | 0% |
+| `Seqs` | 10 | 0 | 0% |
+
+`Bytes` is the one this changes: 172 lines that looked like work are 39 lines
+of logic and 133 of walk, cursor, sink and leaf primitives -- the ones
+`dblstr.kin` and `casechange.kin` call. Eleven `byte*.kin` sources took the
+rest. It is finished, and only a count that could not see the boundary said
+otherwise.
+
+The detection is name matching against the vocabulary, so read it as a strong
+hint rather than a proof; a runtime function that happens to share a name with
+a hole would be miscounted. Nothing in the table above turns on a single row.
+
+**Three passes, three different answers, and each one moved a subject.** Raw
+lines said `Vec` was 81% divergent. Minus tests it is 4%. Minus host holes
+`Bytes` goes from 172 to 39. The first number was wrong in the direction that
+would have sent someone to port a file that is already done -- which is what
+the paragraph at the top of this section is about, and why it is worth three
+passes rather than one.
+
 **About 4,500 lines per runtime.** Opcode bodies, which is where this started,
 are a few dozen lines and were never the prize.
 
