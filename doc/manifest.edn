@@ -23,7 +23,6 @@
     and
     any?
     apply
-    apply2
     array-map
     as->
     assert
@@ -160,14 +159,12 @@
     integer?
     interleave
     interleave-all
-    interleave2
     interpose
     into
     iterate
     juxt
     keep
     keep-indexed
-    keep2
     key
     keys
     keyword
@@ -186,10 +183,8 @@
     map
     map-entry?
     map-indexed
-    map2
     map?
     mapcat
-    mapcat2
     mapv
     max
     max-key
@@ -267,7 +262,6 @@
     remove
     repeat
     repeat-forever
-    repeat2
     repeatedly
     replace
     reset!
@@ -301,14 +295,12 @@
     sort-by
     split-at
     split-with
-    spread
     str
     str-bytes
     str-join
     string?
     subs
     subvec
-    subvec2
     swap!
     swap-vals!
     symbol
@@ -403,7 +395,7 @@
     when-not
     when-some
     while},
-  :count 352,
+  :count 344,
   :absent
   #{*'
     *1
@@ -783,7 +775,6 @@
     xml-seq},
   :extra
   #{->str-builder
-    apply2
     bigdec?
     bytes->str
     cond-chain
@@ -792,11 +783,7 @@
     form
     int-of-char
     interleave-all
-    interleave2
-    keep2
     kind
-    map2
-    mapcat2
     methods-of
     nil-or
     opaque
@@ -805,13 +792,10 @@
     protocol-miss
     re-quote-replacement
     repeat-forever
-    repeat2
     sb-append!
     sb-str
-    spread
     str-bytes
     str-join
-    subvec2
     tag},
   :compared-with clojure.core},
  clojure.core.protocols

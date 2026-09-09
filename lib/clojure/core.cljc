@@ -170,7 +170,7 @@
                              :default nil)}
   sequential? [x] (flint.rt/sequential? x))
 
-(defn apply2 [f args] (flint.rt/apply f args))
+(defn- apply2 [f args] (flint.rt/apply f args))
 
 (defn second [coll] (flint.rt/first (flint.rt/next coll)))
 (defn ffirst [coll] (flint.rt/first (flint.rt/first coll)))
@@ -259,7 +259,7 @@
   ([f a b c d & more]
    (flint.rt/apply f (cons a (cons b (cons c (cons d (spread more))))))))
 
-(defn spread [args]
+(defn- spread [args]
   (cond (nil? args) nil
         (nil? (next args)) (seq (first args))
         :else (cons (first args) (spread (next args)))))
@@ -280,7 +280,7 @@
       (cons (f (flint.rt/nth v i)) (map-over-vec f v (flint.rt/add i 1) n))
       nil)))
 
-(defn map2
+(defn- map2
   "Two-argument map over one collection, defined before `map` so that macros
   above can use it."
   [f coll]
@@ -819,7 +819,7 @@
                            (cons (f (first s1) (first s2))
                                  (map f (rest s1) (rest s2))))))))
 
-(defn mapcat2
+(defn- mapcat2
   "Lazily, one element at a time.
 
   Not `(apply concat (map f coll))`, which is what this was. That applies
@@ -833,7 +833,7 @@
      (when s
        (concat (f (first s)) (mapcat2 f (rest s)))))))
 
-(defn keep2 [f coll]
+(defn- keep2 [f coll]
   (lazy-seq (let [s (seq coll)]
               (when s
                 (let [v (f (first s))]
@@ -895,13 +895,13 @@
   ([start end] (flint.rt/range3 start end 1))
   ([start end step] (flint.rt/range3 start end step)))
 
-(defn repeat2 [n x] (take n (repeat-forever x)))
+(defn- repeat2 [n x] (take n (repeat-forever x)))
 (defn repeat-forever [x] (lazy-seq (cons x (repeat-forever x))))
 (defn repeat
   ([x] (repeat-forever x))
   ([n x] (repeat2 n x)))
 
-(defn interleave2 [a b]
+(defn- interleave2 [a b]
   (lazy-seq (let [sa (seq a) sb (seq b)]
               (when (and sa sb)
                 (cons (first sa) (cons (first sb) (interleave2 (rest sa) (rest sb))))))))
@@ -1152,7 +1152,7 @@
                   acc)))
             (flint.rt/add width width)))))))
 
-(defn subvec2 [v start end]
+(defn- subvec2 [v start end]
   (loop [acc [] i start] (if (< i end) (recur (conj acc (nth v i)) (inc i)) acc)))
 (defn subvec
   ([v start] (subvec2 v start (count v)))
