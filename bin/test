@@ -136,6 +136,7 @@ bb test/capability.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; 
 # a check that refuses everything passes its own test and breaks the build.
 bb test/visibility.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/visibility.clj"; }
 bb test/cycles.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/cycles.clj"; }
+bb test/requires.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/requires.clj"; }
 sed 's/^/  /' /tmp/flint-test.out
 grep -E "^    |FAIL" /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
