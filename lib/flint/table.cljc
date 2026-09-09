@@ -12,7 +12,8 @@
   have, and a program that defines its own `table` must not collide with one it
   never asked for. The row API needs nothing from this namespace anyway:
   `count`, `get` and `(:col row)` are the ordinary collection functions, and a
-  row ref answers them as the map it is.")
+  row ref answers them as the map it is."
+  (:require [flint.protocols]))
 
 (defn schema
   "`[[:name :type] ...]` -> a schema.
@@ -89,7 +90,7 @@
 ;; -- it is a program that cannot have made one -- but a table arriving over a
 ;; PORT will be able to, and the codec that decodes one lives here too, so
 ;; requiring the decoder is what brings the printer with it.
-(extend-protocol clojure.core/Printable
+(extend-protocol flint.protocols/Printable
   ;; As DATA: the form that reads back.
   :table (print-data [t]
                      (clojure.core/str "#flint/table {:schema "

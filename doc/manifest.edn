@@ -19,7 +19,6 @@
     >
     >=
     NaN?
-    Printable
     abs
     and
     any?
@@ -241,8 +240,6 @@
     pos-int?
     pos?
     pr-str
-    print-data
-    print-human
     print-str
     println-str
     prn-str
@@ -406,7 +403,7 @@
     when-not
     when-some
     while},
-  :count 355,
+  :count 352,
   :absent
   #{*'
     *1
@@ -716,7 +713,6 @@
     xml-seq},
   :extra
   #{->str-builder
-    Printable
     apply2
     bigdec?
     bytes->str
@@ -737,8 +733,6 @@
     opaque
     opaque-label
     opaque?
-    print-data
-    print-human
     println-str
     protocol-miss
     re-quote-replacement
@@ -1007,6 +1001,11 @@
     with-open},
   :macros #{with-open},
   :count 12},
+ flint.protocols
+ {:file "lib/flint/protocols.cljc",
+  :present #{Printable print-data print-human printer-for},
+  :macros #{},
+  :count 4},
  flint.regex
  {:file "lib/flint/regex.cljc",
   :present

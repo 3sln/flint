@@ -6,7 +6,7 @@
   never calls `partition-by` does not carry it. A var whose whole body is one
   `flint.rt/x` call is detected by the compiler and called directly, so the
   wrapper layer costs nothing at the call site."
-  (:require [flint.regex]))
+  (:require [flint.protocols] [flint.regex]))
 
 ;; ---------------------------------------------------------------- primitives
 
@@ -1422,59 +1422,6 @@
                (next s) false))
       acc)))
 
-(def Printable__impls (atom {}))
-
-;; `Printable`: how a value writes ITSELF.
-;;
-;; `pr-str` and `str` fall through to this for anything `clojure.core` does not
-;; define itself, so a library type specialises its own printing without the
-;; printer learning what it is.
-;;
-;; TWO METHODS. `print-data` is the form that READS BACK -- what `pr-str` wants.
-;; `print-human` is the form for a person, with no quoting and nothing there for
-;; a reader -- what `print-str` wants. They are separate rather than one method
-;; taking a `readable?` flag, because they are separate jobs and a flag argument
-;; is two functions sharing a name. An implementation may give only
-;; `print-data`; `print-human` falls back to it, never the other way round.
-;;
-;; A method recurses into its children through `pr-str` or `print-str`, which
-;; are the same two things it is choosing between, so no flag has to travel.
-;;
-;; Written LONGHAND rather than with `defprotocol`, for the reason recorded on
-;; `def-form-names`: top-level `def` names are collected before macros are
-;; expanded, so a name a macro would have produced cannot be referenced earlier
-;; in the file -- and the printer is four hundred lines above `defprotocol`.
-;; The alternative was moving the printer below the protocol section, which
-;; would put the printer nowhere in particular to save four lines. This is the
-;; second time that limit has cost something (the first was `defpred`), which
-;; is worth knowing when it is next weighed.
-;;
-;; The shape is exactly what `defprotocol` emits, so `extend`, `extend-method`,
-;; `extend-protocol` and `satisfies?` all work on it unchanged.
-(def Printable
-  (hash-map :flint/protocol 'clojure.core/Printable
-            :impls Printable__impls
-            :method-keys '[clojure.core/print-data clojure.core/print-human]))
-
-(defn print-data
-  "`x` as DATA: a form meant to be read back. This is what `pr-str` reaches."
-  [x]
-  (let [f (find-protocol-method Printable__impls 'clojure.core/print-data x)]
-    (if f (f x) (protocol-miss 'clojure.core/Printable 'clojure.core/print-data x))))
-
-(defn print-human
-  "`x` FOR A PERSON: no quoting, no escaping, nothing there to satisfy a reader.
-  This is what `print-str` reaches.
-
-  A kind that gives only `print-data` gets it used here too, because a readable
-  form is a serviceable human one. The reverse is NOT true and is not done: a
-  human form promoted into `pr-str` would produce something that does not read
-  back, which is the one thing `pr-str` promises."
-  [x]
-  (let [f (or (find-protocol-method Printable__impls 'clojure.core/print-human x)
-              (find-protocol-method Printable__impls 'clojure.core/print-data x))]
-    (if f (f x) (protocol-miss 'clojure.core/Printable 'clojure.core/print-human x))))
-
 (defn- pr-str* [x readable?]
   (cond
     (nil? x) "nil"
@@ -1515,15 +1462,12 @@
     ;; supply only the data half, which is the common case, and `print-human`
     ;; falls back to it.
     ;;
-    ;; `find-protocol-method` rather than the generated `print-data`, because a
-    ;; miss here is a FALLBACK and not an error: an unprintable value should
-    ;; print as one rather than throw out of `str`. Metadata is consulted first,
-    ;; which is `0005`'s primary mechanism -- so one value can carry its own
-    ;; printer without its kind having one.
-    :else (let [f (if readable?
-                    (find-protocol-method Printable__impls 'clojure.core/print-data x)
-                    (or (find-protocol-method Printable__impls 'clojure.core/print-human x)
-                        (find-protocol-method Printable__impls 'clojure.core/print-data x)))]
+    ;; `printer-for` rather than the generated `print-data`, because a miss here
+    ;; is a FALLBACK and not an error: an unprintable value should print as one
+    ;; rather than throw out of `str`. Metadata is consulted first, which is
+    ;; `0005`'s primary mechanism -- so one value can carry its own printer
+    ;; without its kind having one.
+    :else (let [f (flint.protocols/printer-for x readable?)]
             (if f (f x) "#<unprintable>"))))
 
 (defn pr-str [x] (pr-str* x true))
