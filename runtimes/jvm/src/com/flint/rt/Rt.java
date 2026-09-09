@@ -681,8 +681,20 @@ public final class Rt {
         FnDef def = fns[fnIdx];
         Arity a = def.select(argc);
         if (a == null) {
+            // AN EXCEPTION, not a fixnum. This threw `Val.fixnum(-1)` with a
+            // note that the real message needed strings, and the note stayed:
+            // an arity error was not an exception object at all, so
+            // `(catch Exception e ...)` did not catch it and the program died
+            // with "the program threw an integer" where native answers
+            // `ArityException: wrong number of arguments (0) to fn`.
+            //
+            // `FnDef.name` is the const index of the function's name and was
+            // already kept for a different message, so the subject is here.
             roots.stackTop = calleeAt;
-            thrown = Val.fixnum(-1);   // an arity error; the real message needs strings
+            long nameV = def.name >= 0 && def.name < roots.shared.consts.length
+                    ? roots.shared.consts[def.name] : Val.NIL;
+            String n = Val.isNil(nameV) ? "fn" : Str.text(this, nameV);
+            throwStr("ArityException", "wrong number of arguments (" + argc + ") to " + n);
             return false;
         }
         int fp = calleeAt + 1;
@@ -903,7 +915,15 @@ public final class Rt {
                     int calleeAt = roots.stackTop - argc - 1;
                     long callee = roots.stack[calleeAt];
                     if (Val.isHeap(callee) && ty(gc.sp, Val.asHeap(callee)) == TY_CLOSURE) {
-                        if (!enter(callee, calleeAt, argc)) return Val.NIL;
+                        // UNWIND, do not return. A failed `enter` is a THROW --
+                        // an arity error, or the frame limit -- and returning
+                        // straight out of the loop skips every handler the guest
+                        // installed, so `(try ((fn [a] a)) (catch ...))` never
+                        // caught one. Native unwinds here and only gives up when
+                        // there is nothing to unwind to.
+                        if (!enter(callee, calleeAt, argc)) {
+                            if (!unwind()) return Val.NIL;
+                        }
                         continue;
                     }
                     // Everything else completes IN PLACE: a builtin held in a
@@ -976,7 +996,9 @@ public final class Rt {
                         popTo(si);
                         int total = argc - 1 + spread;
                         int at = roots.stackTop - total - 1;
-                        if (!enter(applyCallee, at, total)) return Val.NIL;
+                        if (!enter(applyCallee, at, total)) {
+                            if (!unwind()) return Val.NIL;
+                        }
                         continue;
                     }
                     // The native path: copy `callee, a1..` above the operands
@@ -1040,7 +1062,9 @@ public final class Rt {
                         int dest = f.retTo;
                         for (int i = 0; i <= argc; i++) roots.stack[dest + i] = roots.stack[calleeAt + i];
                         roots.stackTop = dest + argc + 1;
-                        if (!enter(callee, dest, argc)) return Val.NIL;
+                        if (!enter(callee, dest, argc)) {
+                            if (!unwind()) return Val.NIL;
+                        }
                         continue;
                     }
                     // A tail call to something that is NOT a closure: a builtin

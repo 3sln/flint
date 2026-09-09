@@ -64,9 +64,20 @@ public static class Builtins {
         // in the operands makes the whole expression a double. These read every
         // argument as a fixnum once, which silently read a double's MANTISSA as
         // an integer -- `(+ 1.5 2.5)` came back 0 and agreed with nothing.
+        // FROM THE FIRST ARGUMENT, and STOPPING when one fails. Starting from
+        // the identity and folding every argument into it gives the same answer
+        // for valid input and a WRONG MESSAGE for invalid: `(* [1] 2)` failed on
+        // `(1, [1])`, kept going with the nil that failure returned, and
+        // reported "not a number: nil and an integer" -- naming an operand the
+        // program never wrote. Continuing after a throw is also work done inside
+        // a runtime that is already unwinding.
         Def("flint/add", (rt, at, n) => {
-            long acc = Val.Fixnum(0);
-            for (int i = 0; i < n; i++) acc = Num.Add(rt, acc, rt.VAt(at + i));
+            if (n == 0) return Val.Fixnum(0);
+            long acc = rt.VAt(at);
+            for (int i = 1; i < n; i++) {
+                acc = Num.Add(rt, acc, rt.VAt(at + i));
+                if (!Val.IsNil(rt.thrown)) return Val.Nil;
+            }
             return acc;
         });
         Def("+", (rt, at, n) => ByName("flint/add")(rt, at, n));
@@ -78,8 +89,12 @@ public static class Builtins {
         });
         Def("-", (rt, at, n) => ByName("flint/sub")(rt, at, n));
         Def("flint/mul", (rt, at, n) => {
-            long acc = Val.Fixnum(1);
-            for (int i = 0; i < n; i++) acc = Num.Mul(rt, acc, rt.VAt(at + i));
+            if (n == 0) return Val.Fixnum(1);
+            long acc = rt.VAt(at);
+            for (int i = 1; i < n; i++) {
+                acc = Num.Mul(rt, acc, rt.VAt(at + i));
+                if (!Val.IsNil(rt.thrown)) return Val.Nil;
+            }
             return acc;
         });
         Def("*", (rt, at, n) => ByName("flint/mul")(rt, at, n));
@@ -323,6 +338,14 @@ public static class Builtins {
                 long acc = Val.IsNil(v) ? Seqs.EmptyList(rt) : v;
                 for (int i = 1; i < n; i++) acc = Seqs.Cons(rt, rt.VAt(at + i), acc);
                 return acc;
+            }
+            // A NON-HEAP VALUE IS NOT A COLLECTION, and never will be, so it is
+            // a TYPE ERROR and not a missing feature. The message below means
+            // "this port has not got that data structure yet", which is true of
+            // a map or a set and nonsense about an integer. Clojure throws
+            // `ClassCastException` and native does now.
+            if (!Val.IsHeap(v)) {
+                return rt.ThrowStr("ClassCastException", "cannot conj onto " + rt.Describe(v));
             }
             return rt.ThrowStr("UnsupportedOperationException", "conj onto " + rt.Describe(v) + " needs more of the data structures");
         });

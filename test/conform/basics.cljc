@@ -80,6 +80,24 @@
    (c "the most negative long reads" (str -9223372036854775808) "-9223372036854775808")
    (c "and the most positive" (str 9223372036854775807) "9223372036854775807")
    (c "negative hex still reads" [(str -0x10) (str 0x1f)] ["-16" "31"])
+   ;; `conj` ONTO A NON-COLLECTION. Native read a type tag through a fixnum's
+   ;; payload, missed every arm and consed, so `(conj 1 2)` answered `(2)` --
+   ;; a type read off a value with no type to read. Clojure throws, and
+   ;; `(conj nil 2)` really is `(2)`, which is the rule it was over-applying.
+   ;; THAT it throws, not what it SAYS. Clojure's wording is
+   ;; "java.lang.Long cannot be cast to clojure.lang.IPersistentCollection",
+   ;; which is a fact about Clojure's implementation and not about the
+   ;; language. Flint's own message is pinned across its four runtimes by
+   ;; `runtimes/conform/errors.cljc`, which is where a message belongs.
+   (c "conj onto a non-collection throws"
+      (try (conj 1 2) :no-throw (catch Exception e :threw))
+      :threw)
+   (c "conj onto nil is still a list" (pr-str (conj nil 2)) "(2)")
+   ;; AN ARITY ERROR IS CATCHABLE. Both ports threw the fixnum -1 instead of an
+   ;; exception, so `catch` did not see it and the program died.
+   (c "an arity error is an exception"
+      (try ((fn [a] a)) :no-throw (catch Exception e :threw))
+      :threw)
    ;; A DELAY WHOSE THUNK THREW. Catching it at all is the fix: reaching it
    ;; through a `try` USED TO CRASH the runtime -- a panic on native and an
    ;; `unreachable` trap on wasm -- because the VM unwound to the handler

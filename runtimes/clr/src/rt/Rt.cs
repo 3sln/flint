@@ -555,8 +555,20 @@ public sealed class Rt : System.IDisposable {
         FnDef def = fns[fnIdx];
         Arity a = def.Select(argc);
         if (a == null) {
+            // AN EXCEPTION, not a fixnum. This threw `Val.Fixnum(-1)` with a note
+            // that the real message needed strings, and the note stayed: an arity
+            // error was not an exception object at all, so `(catch Exception e
+            // ...)` did not catch it and the program died with "the program threw
+            // an integer" where native answers `ArityException: wrong number of
+            // arguments (0) to fn`.
+            //
+            // `FnDef.Name` is the const index of the function's name and was
+            // already kept for a different message, so the subject is here.
             roots.StackTop = calleeAt;
-            thrown = Val.Fixnum(-1);   // an arity error; the real message needs strings
+            long nameV = def.Name >= 0 && def.Name < roots.shared.Consts.Length
+                    ? roots.shared.Consts[def.Name] : Val.Nil;
+            string nm = Val.IsNil(nameV) ? "fn" : Str.Text(this, nameV);
+            ThrowStr("ArityException", "wrong number of arguments (" + argc + ") to " + nm);
             return false;
         }
         int fp = calleeAt + 1;
@@ -773,7 +785,14 @@ public sealed class Rt : System.IDisposable {
                     int calleeAt = roots.StackTop - argc - 1;
                     long callee = roots.Stack[calleeAt];
                     if (Val.IsHeap(callee) && Ty(gc.sp, Val.AsHeap(callee)) == TyClosure) {
-                        if (!Enter(callee, calleeAt, argc)) return Val.Nil;
+                        // UNWIND, do not return. A failed `Enter` is a THROW --
+                        // an arity error, or the frame limit -- and returning
+                        // straight out of the loop skips every handler the guest
+                        // installed. Native unwinds here and only gives up when
+                        // there is nothing to unwind to.
+                        if (!Enter(callee, calleeAt, argc)) {
+                            if (!Unwind()) return Val.Nil;
+                        }
                         continue;
                     }
                     // Everything else completes IN PLACE: a builtin held in a
@@ -844,7 +863,9 @@ public sealed class Rt : System.IDisposable {
                         PopTo(csi);
                         int ctotal = argc - 1 + cspread;
                         int cat = roots.StackTop - ctotal - 1;
-                        if (!Enter(applyCallee, cat, ctotal)) return Val.Nil;
+                        if (!Enter(applyCallee, cat, ctotal)) {
+                            if (!Unwind()) return Val.Nil;
+                        }
                         continue;
                     }
                     // The native path: copy `callee, a1..` above the operands
@@ -908,7 +929,9 @@ public sealed class Rt : System.IDisposable {
                         int dest = f.RetTo;
                         for (int i = 0; i <= argc; i++) roots.Stack[dest + i] = roots.Stack[calleeAt + i];
                         roots.StackTop = dest + argc + 1;
-                        if (!Enter(callee, dest, argc)) return Val.Nil;
+                        if (!Enter(callee, dest, argc)) {
+                            if (!Unwind()) return Val.Nil;
+                        }
                         continue;
                     }
                     // A tail call to something that is NOT a closure: a builtin

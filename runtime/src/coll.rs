@@ -54,6 +54,21 @@ impl Rt {
             let e = self.empty_list();
             return self.cons(x, e);
         }
+        // A NON-HEAP VALUE IS NOT A COLLECTION, and the line below reads a type
+        // tag through `as_heap`. `(conj 1 2)` took a fixnum's payload as an
+        // address, read whatever `ty` found there, missed every arm and consed:
+        // the answer was `(2)`, from a type read off a value that has no type
+        // to read. Clojure throws `ClassCastException` here, both ports throw,
+        // and native was the one making something up.
+        //
+        // Only NON-HEAP is refused: every heap type that reaches the default
+        // arm -- a list, a cons, a lazy seq -- still conses, which is what
+        // `conj` means on them.
+        if !coll.is_heap() {
+            let what = self.describe(coll);
+            let msg = alloc::format!("cannot conj onto {what}");
+            return self.throw_str("ClassCastException", &msg);
+        }
         match ty(&self.gc.sp, coll.as_heap()) {
             TY_VEC => self.vec_conj(coll, x),
             TY_SET => self.set_conj(coll, x),

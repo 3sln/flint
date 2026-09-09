@@ -81,9 +81,20 @@ public final class Builtins {
         // every argument as a fixnum once, which silently read a double's
         // MANTISSA as an integer -- `(+ 1.5 2.5)` came back 0 and agreed with
         // nothing.
+        // FROM THE FIRST ARGUMENT, and STOPPING when one fails. Starting from
+        // the identity and folding every argument into it gives the same answer
+        // for valid input and a WRONG MESSAGE for invalid: `(* [1] 2)` failed
+        // on `(1, [1])`, kept going with the nil that failure returned, and
+        // reported "not a number: nil and an integer" -- naming an operand the
+        // program never wrote. Continuing after a throw is also work done
+        // inside a runtime that is already unwinding.
         def("flint/add", (rt, at, n) -> {
-            long acc = Val.fixnum(0);
-            for (int i = 0; i < n; i++) acc = Num.add(rt, acc, rt.vat(at + i));
+            if (n == 0) return Val.fixnum(0);
+            long acc = rt.vat(at);
+            for (int i = 1; i < n; i++) {
+                acc = Num.add(rt, acc, rt.vat(at + i));
+                if (!Val.isNil(rt.thrown)) return Val.NIL;
+            }
             return acc;
         });
         def("+", (rt, at, n) -> byName("flint/add").apply(rt, at, n));
@@ -95,8 +106,12 @@ public final class Builtins {
         });
         def("-", (rt, at, n) -> byName("flint/sub").apply(rt, at, n));
         def("flint/mul", (rt, at, n) -> {
-            long acc = Val.fixnum(1);
-            for (int i = 0; i < n; i++) acc = Num.mul(rt, acc, rt.vat(at + i));
+            if (n == 0) return Val.fixnum(1);
+            long acc = rt.vat(at);
+            for (int i = 1; i < n; i++) {
+                acc = Num.mul(rt, acc, rt.vat(at + i));
+                if (!Val.isNil(rt.thrown)) return Val.NIL;
+            }
             return acc;
         });
         def("*", (rt, at, n) -> byName("flint/mul").apply(rt, at, n));
@@ -343,6 +358,14 @@ public final class Builtins {
                 long acc = Val.isNil(v) ? Seqs.emptyList(rt) : v;
                 for (int i = 1; i < n; i++) acc = Seqs.cons(rt, rt.vat(at + i), acc);
                 return acc;
+            }
+            // A NON-HEAP VALUE IS NOT A COLLECTION, and never will be, so it is
+            // a TYPE ERROR and not a missing feature. The message below means
+            // "this port has not got that data structure yet", which is true of
+            // a map or a set and nonsense about an integer. Clojure throws
+            // `ClassCastException` and native does now.
+            if (!Val.isHeap(v)) {
+                return rt.throwStr("ClassCastException", "cannot conj onto " + rt.describe(v));
             }
             return rt.throwStr("UnsupportedOperationException",
 "conj onto " + rt.describe(v) + " needs more of the data structures");
