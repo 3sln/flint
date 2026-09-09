@@ -38,14 +38,16 @@
   (:require [flint.impl.rt :refer [defn return if let local set do comment doc
                                    for == != < not or and + mark push r pop-to
                                    slot ty as-heap nil? popcount charge-work
-                                   val-eq Rt Value RootIx I32 Bool Ty HM_ROOT
-                                   TY_HASHMAP TY_ARRAYMAP NOT_FOUND]]
+                                   Rt Value RootIx I32 Bool Ty HM_ROOT
+                                   TY_HASHMAP TY_ARRAYMAP NOT_FOUND declarefn]]
             [flint.rt.nodeclass :refer [is-bmnode]]
             [flint.rt.collnode :refer [cn-count cn-hash cn-key cn-val]]
             [flint.rt.champ :refer [bn-datamap bn-key bn-node bn-nodemap
                                     bn-val]]
             [flint.rt.mapcore :refer [map-count am-key am-val]]
             [flint.rt.mapread :refer [map-get]]))
+
+(declarefn flint.rt.valeq/val-eq)
 
 (doc "One key/value pair from each side."
      ""

@@ -30,9 +30,9 @@
                                    for == != not or and + mark push r pop-to
                                    slot set-slot ty as-heap nil? is-fixnum
                                    as-fixnum fixnum to-i32 popcount wadd
-                                   hash-value charge-work Rt Value RootIx I32
-                                   U32 Ty NIL AM_HASH HM_HASH HM_ROOT S_HASH
-                                   S_MAP TY_ARRAYMAP TY_HASHMAP]]
+                                   charge-work Rt Value RootIx I32 U32 Ty NIL
+                                   AM_HASH HM_HASH HM_ROOT S_HASH S_MAP
+                                   TY_ARRAYMAP TY_HASHMAP declarefn]]
             [flint.rt.nodeclass :refer [is-bmnode]]
             [flint.rt.collnode :refer [cn-count cn-key cn-val]]
             [flint.rt.champ :refer [bn-datamap bn-key bn-node bn-nodemap
@@ -40,6 +40,8 @@
             [flint.rt.mapcore :refer [map-count am-key am-val]]
             [flint.rt.setcore :refer [set-count]]
             [flint.rt.hash    :refer [ordered-step mix-coll-hash]]))
+
+(declarefn flint.rt.valhash/hash-value)
 
 (doc "One entry's contribution: the ordered hash of the pair [k v], which is"
      "what a MapEntry hashes to, mixed as a two-element collection.")

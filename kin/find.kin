@@ -24,14 +24,16 @@
 (ns flint.rt.find
   (:require [flint.impl.rt :refer [defn return if let local set do comment
                                    forever for break mark push r set-r pop-to
-                                   not == != < val-eq + bit-and Rt Value
-                                   RootIx I32 Bool NOT_FOUND HASH_BITS]]
+                                   not == != < + bit-and Rt Value RootIx I32
+                                   Bool NOT_FOUND HASH_BITS declarefn]]
             [flint.rt.nodeclass :refer [is-bmnode]]
             [flint.rt.eqalloc :refer [eq-may-alloc]]
             [flint.rt.collnode :refer [cn-count cn-hash cn-key cn-val]]
             [flint.rt.champ :refer [bn-datamap bn-key bn-node bn-nodemap
                                     bn-val]]
             [flint.rt.maps :refer [bitpos index-of]]))
+
+(declarefn flint.rt.valeq/val-eq)
 
 (defn ^:pub ^:method ^Value node-find-scalar
   [^:mut ^Rt rt ^Value n ^:mut ^I32 shift ^I32 h ^Value key]

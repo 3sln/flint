@@ -18,17 +18,16 @@
                                    == not nil? is-heap as-heap ty is-fixnum
                                    as-fixnum to-i32 fixnum slot set-slot mark
                                    push r set-r pop-to forever break while + *
-                                   charge-tick hash-value to-i64 bit-or
-                                   bit-xor is-double num-f64 is-fixnum <
-                                   is-inline-str is-inline-kw i64-of
-                                   hash-double ref-to-map wadd wmul or Rt
-                                   Value I32 U32 Ty Bool RootIx NIL F64 TRUE
-                                   FALSE TY_VEC TY_STR TY_ROPE TY_KW TY_SYM
-                                   TY_BIGINT TY_MAPENTRY TY_CONS TY_EMPTY_LIST
-                                   TY_LAZYSEQ TY_VECSEQ TY_STRSEQ TY_RANGE
-                                   TY_ARRAYMAP TY_HASHMAP TY_SET TY_BYTES
-                                   TY_BROPE TY_OPAQUE TY_TABLE TY_TABLEREF
-                                   TY_TAGGED V_HASH]]
+                                   charge-tick to-i64 bit-or bit-xor is-double
+                                   num-f64 is-fixnum < is-inline-str
+                                   is-inline-kw i64-of hash-double ref-to-map
+                                   wadd wmul or Rt Value I32 U32 Ty Bool
+                                   RootIx NIL F64 TRUE FALSE TY_VEC TY_STR
+                                   TY_ROPE TY_KW TY_SYM TY_BIGINT TY_MAPENTRY
+                                   TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ
+                                   TY_STRSEQ TY_RANGE TY_ARRAYMAP TY_HASHMAP
+                                   TY_SET TY_BYTES TY_BROPE TY_OPAQUE TY_TABLE
+                                   TY_TABLEREF TY_TAGGED V_HASH declarefn]]
             [flint.rt.tableref :refer [table-ref]]
             [flint.rt.tablemeta :refer [table-count]]
             [flint.rt.collhash :refer [hash-map hash-set]]
@@ -39,6 +38,8 @@
             [flint.rt.bytehash :refer [b-hash]]
             [flint.rt.ropeflat :refer [rope-hash]]
             [flint.rt.seqwalk :refer [seq first next]]))
+
+(declarefn ^:pub hash-value)
 
 (doc "Is `v` a VECTOR, strictly? Only a vector has a slot to cache in.")
 (defn ^:method ^Bool has-hash-slot [^Rt rt ^Value v]

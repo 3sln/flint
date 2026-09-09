@@ -916,8 +916,6 @@
     ;; and this one runs across eleven. So the declaration lives here, which
     ;; is what a declaration is for. Merging the eleven would be the only
     ;; other honest answer, and they are eleven different subjects.
-    'val-eq (own "val_eq" "valEq" 2)
-    'hash-value (own "hash_value" "hashValue" 1)
     ;; Population count. Three intrinsics for one idea -- the shape a
     ;; vocabulary exists for.
     'popcount (core/call {:rust "{0}.count_ones()"

@@ -5,16 +5,17 @@
 ;; 23 collections against 3.2 MB and 4 for the bulk path. What is here is the
 ;; correct-and-slow half; `seal` is the fast half's last step.
 (ns flint.rt.tablefill
-  (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   == < > + and not
-                                   slot set-slot fixnum new-obj charge-work
-                                   val-eq local set for continue
-                                   mark push r pop-to
-                                   Rt Value I32 Bool RootIx
-                                   TY_NODE CHUNK CH_BASE CH_ENC ENC_CONST]]
+  (:require [flint.impl.rt :refer [defn return if let do comment doc == < > +
+                                   and not slot set-slot fixnum new-obj
+                                   charge-work local set for continue mark
+                                   push r pop-to Rt Value I32 Bool RootIx
+                                   TY_NODE CHUNK CH_BASE CH_ENC ENC_CONST
+                                   declarefn]]
             [flint.rt.tablemeta :refer [chunk-enc chunk-get chunk-rows
                                         schema-id-at schema-len schema-width]]
             [flint.rt.tablecell :refer [new-chunk collapse row-column]]))
+
+(declarefn flint.rt.valeq/val-eq)
 
 (doc "Write row `k` of `ch` from `row`, column by column."
      ""

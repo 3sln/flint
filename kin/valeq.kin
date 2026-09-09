@@ -22,11 +22,11 @@
                                    == != <= < + not or and is-heap as-heap ty
                                    nil? mark push r set-r pop-to while break
                                    forever slot is-double num-f64 i64-of
-                                   charge-work ref-to-map val-eq Rt Value I32
-                                   I64 Ty Bool Cat RootIx F64 NIL INTERN_MAX
+                                   charge-work ref-to-map Rt Value I32 I64 Ty
+                                   Bool Cat RootIx F64 NIL INTERN_MAX
                                    CAT_SEQUENTIAL CAT_MAP CAT_SET TY_VEC
                                    TY_STR TY_ROPE TY_SYM TY_BYTES TY_BROPE
-                                   TY_TABLE TY_TAGGED TB_SCHEMA]]
+                                   TY_TABLE TY_TAGGED TB_SCHEMA declarefn]]
             [flint.rt.mapeq :refer [map-eq]]
             [flint.rt.tableref :refer [table-ref]]
             [flint.rt.sets :refer [set-eq]]
@@ -38,6 +38,8 @@
             [flint.rt.tablemeta :refer [is-table-ref schema-eq table-count]]
             [flint.rt.ropemeas :refer [is-string s-bytes]]
             [flint.rt.numkind :refer [is-int]]))
+
+(declarefn ^:pub val-eq)
 
 (doc "Is `v` a VECTOR, strictly -- not a map entry, which is vector-LIKE."
      ""

@@ -22,7 +22,7 @@
                                    str-cmp name-of throw-str str-cat -
                                    static-text to-i32 Rt Value I32 Cmp Ty Cat
                                    Bool RootIx Text NIL CAT_SEQUENTIAL TRUE
-                                   TY_SYM declare]]
+                                   TY_SYM declarefn]]
             [flint.rt.nouns :refer [describe]]
             [flint.rt.names :refer [is-keyword ns-of is-symbol]]
             [flint.rt.seqcore :refer [is-seq]]
@@ -31,7 +31,7 @@
             [flint.rt.ropemeas :refer [is-string]]
             [flint.rt.numkind :refer [is-number]]))
 
-(declare ^:pub val-cmp)
+(declarefn ^:pub val-cmp)
 
 (doc "Two NAMED things -- keywords or symbols -- by namespace then name."
      ""
