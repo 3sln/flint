@@ -604,9 +604,24 @@ public static class Builtins {
             string h = Str.Text(rt, rt.VAt(at));
             string needle = Str.Text(rt, rt.VAt(at + 1));
             int from = n > 2 ? (int) Val.AsFixnum(rt.VAt(at + 2)) : 0;
+            // BOUNDED BEFORE THE SEARCH AND BILLED AFTER IT, which are two
+            // different jobs and native does both. The pre-charge is the worst
+            // case and is handed straight back, so a search that cannot be paid
+            // for never starts while the count stays the distance actually
+            // walked. This port did neither, so a scan was free here.
+            int hn = Str.SBytes(rt, rt.VAt(at));
+            long pre = (hn / 8) + 1;
+            if (!rt.ChargeChecked(pre, "str-index-of")) return Val.Nil;
+            rt.steps -= pre;
             int at16 = from <= 0 ? 0 : OffsetByCodePoints(h, System.Math.Min(from, CodePointCount(h)));
             int i = h.IndexOf(needle, at16, System.StringComparison.Ordinal);
-            return i < 0 ? Val.Nil : Val.Fixnum(CodePointCount(h.Substring(0, i)));
+            int found = i < 0 ? -1 : CodePointCount(h.Substring(0, i));
+            int skip = System.Math.Max(from, 0);
+            // The distance WALKED: to the match and one past it, or the rest of
+            // the haystack when there is no match.
+            rt.ChargeBytes(found >= 0 ? System.Math.Max(found - skip, 0) + 1
+                                      : System.Math.Max(hn - skip, 0));
+            return i < 0 ? Val.Nil : Val.Fixnum(found);
         });
         Def("flint/str-join", (rt, at, n) => {
             var sb = new System.Text.StringBuilder();
@@ -642,7 +657,12 @@ public static class Builtins {
             return Str.Of(rt, char.ConvertFromUtf32((int) c));
         });
         Def("flint/str-bytes", (rt, at, n) => {
+            // REFUSED BEFORE THE VECTOR IS BUILT, not billed after it. This
+            // builds one element per byte, and billing afterwards is how the
+            // worst of these ran 11 937 109 steps past an exhausted budget on
+            // native before it was bounded. This port was not bounded at all.
             byte[] b = Str.Bytes(rt, rt.VAt(at));
+            if (!rt.ChargeChecked(b.Length, "str-bytes")) return Val.Nil;
             int bas = rt.Mark();
             int vi = rt.Push(Vec.Empty(rt));
             foreach (byte x in b) rt.SetR(vi, Vec.Conj(rt, rt.R(vi), Val.Fixnum(x & 0xFF)));

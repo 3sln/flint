@@ -664,9 +664,24 @@ public final class Builtins {
             String h = Str.text(rt, rt.vat(at));
             String needle = Str.text(rt, rt.vat(at + 1));
             int from = n > 2 ? (int) Val.asFixnum(rt.vat(at + 2)) : 0;
+            // BOUNDED BEFORE THE SEARCH AND BILLED AFTER IT, which are two
+            // different jobs and native does both. The pre-charge is the worst
+            // case and is handed straight back, so a search that cannot be paid
+            // for never starts while the count stays the distance actually
+            // walked. This port did neither, so a scan was free here.
+            int hn = Str.sBytes(rt, rt.vat(at));
+            long pre = (hn / 8) + 1;
+            if (!rt.chargeChecked(pre, "str-index-of")) return Val.NIL;
+            rt.steps -= pre;
             int at16 = from <= 0 ? 0 : h.offsetByCodePoints(0, Math.min(from, h.codePointCount(0, h.length())));
             int i = h.indexOf(needle, at16);
-            return i < 0 ? Val.NIL : Val.fixnum(h.codePointCount(0, i));
+            int found = i < 0 ? -1 : h.codePointCount(0, i);
+            int skip = Math.max(from, 0);
+            // The distance WALKED: to the match and one past it, or the rest of
+            // the haystack when there is no match.
+            rt.chargeBytes(found >= 0 ? Math.max(found - skip, 0) + 1
+                                      : Math.max(hn - skip, 0));
+            return i < 0 ? Val.NIL : Val.fixnum(found);
         });
         def("flint/str-join", (rt, at, n) -> {
             StringBuilder sb = new StringBuilder();
@@ -711,7 +726,12 @@ public final class Builtins {
             return Str.of(rt, new String(Character.toChars((int) c)));
         });
         def("flint/str-bytes", (rt, at, n) -> {
+            // REFUSED BEFORE THE VECTOR IS BUILT, not billed after it. This
+            // builds one element per byte, and billing afterwards is how the
+            // worst of these ran 11 937 109 steps past an exhausted budget on
+            // native before it was bounded. This port was not bounded at all.
             byte[] b = Str.bytes(rt, rt.vat(at));
+            if (!rt.chargeChecked(b.length, "str-bytes")) return Val.NIL;
             int base = rt.mark();
             int vi = rt.push(Vec.empty(rt));
             for (byte x : b) rt.setR(vi, Vec.conj(rt, rt.r(vi), Val.fixnum(x & 0xFF)));

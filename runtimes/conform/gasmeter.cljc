@@ -16,7 +16,8 @@
 
   A budget that fits on one runtime has to fit on the others, or the mirror
   stops at the answers."
-  (:require [flint.table :as ft]))
+  (:require [flint.table :as ft]
+            [clojure.string :as str]))
 
 (def S (ft/schema [[:id :int] [:name :string]]))
 
@@ -42,7 +43,16 @@
      (+ (count (subs s 0 half))
         (count (subs s half))
         (reduce + 0 (mapv (fn [i] (count (subs s i (+ i 2))))
-                          (range (quot n 8))))))])
+                          (range (quot n 8))))
+        ;; A SEARCH THAT FINDS AND ONE THAT DOES NOT, because native prices
+        ;; them differently: it pre-charges the whole haystack so a long scan
+        ;; cannot be free, then bills the distance actually walked -- which is
+        ;; the whole string when the needle is absent.
+        (or (str/index-of s "789") 0)
+        (count (str/split s #"z"))
+        ;; The BYTES of a string, which native refuses at n rather than
+        ;; billing after building a vector of every one of them.
+        (count (str-bytes s))))])
 
 ; TWO ENTRY POINTS, compiled and measured separately. The comparison is
 ;; `big - small`, so whatever each runtime spends starting up cancels and what
