@@ -64,8 +64,31 @@ this table lie if it is regenerated naively:
    collection logic, and all four `*_entries` walks -- the ones that looked
    like the obvious next port -- exist only under the bench feature. Excluding
    them, `map.rs` has three functions left and none is portable.
+4. **A `Value -> Value` SIGNATURE DOES NOT IMPLY PORTABLE LOGIC**, and this is
+   the trap that survives all the others. `coll.rs` has nine functions taking
+   `Value` and answering `Value` -- `join_strings`, `str_index_of`,
+   `str_concat2` and the rest -- which reads as nine ports waiting to happen.
+   Look at what the ports do with the same builtins:
 
-The table above already excludes all three.
+       flint/str-join       native builds a ROPE     the JVM uses StringBuilder
+       flint/str-index-of   native walks the bytes   the JVM materialises a
+                                                     String and calls indexOf
+       compare on strings   native's `utf16_cmp`     Java's String.compareTo
+
+   These are not three copies of one algorithm that drifted. They are three
+   implementations that each use what their host actually has, and the ports
+   have real host strings while native does not. Unifying them into one kin
+   source would force every runtime onto the algorithm of the one with the
+   fewest facilities -- which is a PERFORMANCE decision wearing the clothes of
+   a deduplication.
+
+   The `conj!`/`assoc!`/`dissoc!` family was the opposite case and that is why
+   it was worth doing: same algorithm, three copies, drifted. The test is not
+   the signature. It is whether the three bodies are trying to be the same
+   thing.
+
+The table above already excludes the first three. The fourth cannot be
+excluded mechanically -- it needs the bodies read.
 
 #### `coll.rs`, looked at properly
 
