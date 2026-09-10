@@ -12,6 +12,7 @@ import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Champ.*;
 import static com._3sln.flint.kgen.rt.Collnode.*;
 import static com._3sln.flint.kgen.rt.Copies.*;
+import static com._3sln.flint.kgen.rt.Find.*;
 import static com._3sln.flint.kgen.rt.Merge.*;
 import static com._3sln.flint.kgen.rt.Nodeclass.*;
 import static com._3sln.flint.kgen.rt.Valeq.*;
@@ -111,32 +112,18 @@ public final class Assoc {
             rt.popTo(wbase);
             return wrapped;
         }
-        // THE SCAN. `hit` is left at `cnt` when nothing matched -- one past
-        // the last valid index, so it cannot collide with an answer.
+        // ONE SCAN, SHARED WITH `dissoc`. This loop was written out
+        // in both files, twenty-four lines apiece, and the only difference
+        // between them was whether the local was called `hit` or `found`.
+        // 
+        // The per-entry gas charge that closes the hash-flooding hole had
+        // to be added to BOTH. It is `cn-index-of` now, so there is one
+        // place left to get that wrong.
         int scan = rt.mark();
         int sni = rt.push(n);
         int ski = rt.push(key);
         int cnt = cnCount(rt, rt.r(sni));
-        int hit;
-        hit = cnt;
-        for (int i = 0; i < cnt; i++) {
-            // CHARGED PER ENTRY, like `mapeq` and unlike the version this
-            // replaces. A collision node is the one part of a CHAMP whose
-            // width an attacker chooses: flint's string hash is a base-31
-            // polynomial, so 2^k strings can be made to share one hash.
-            // Scanning it for free is a metering hole rather than a slow
-            // path (`0009`, `doc/goals/hash-flooding.md`).
-            // The key is rooted across `eq`, which allocates when either
-            // side is a row ref.
-            rt.chargeWork(1);
-            int kk = rt.push(cnKey(rt, rt.r(sni), i));
-            boolean same = valEq(rt, rt.r(kk), rt.r(ski));
-            rt.popTo(kk);
-            if (same) {
-                hit = i;
-                break;
-            }
-        }
+        int hit = cnIndexOf(rt, sni, ski);
         long nn = rt.r(sni);
         long kk2 = rt.r(ski);
         rt.popTo(scan);

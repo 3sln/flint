@@ -29,6 +29,7 @@
                                     bn-set-key bn-set-val bn-val]]
             [flint.rt.nodeclass :refer [is-bmnode node-size-class]]
             [flint.rt.maps :refer [bitpos index-of]]
+            [flint.rt.find :refer [cn-index-of]]
             [flint.rt.collnode :refer [bn-new cn-count cn-hash cn-key cn-new
                                        cn-val]]))
 
@@ -112,30 +113,18 @@
       (return out))))
 
 (defn ^:pub ^:method ^Value coll-dissoc [^:mut ^Rt rt ^Value n ^Value key ^Value edit]
+  (comment "ONE SCAN, SHARED WITH `assoc`. This loop was written out"
+           "in both files, twenty-four lines apiece, and the only difference"
+           "between them was whether the local was called `hit` or `found`."
+           ""
+           "The per-entry gas charge that closes the hash-flooding hole had"
+           "to be added to BOTH. It is `cn-index-of` now, so there is one"
+           "place left to get that wrong.")
   (let [^RootIx scan (mark rt)
         ^RootIx sni (push rt n)
         ^RootIx ski (push rt key)
-        ^I32 cnt (cn-count rt (r rt sni))]
-    (local ^:mut ^I32 found)
-    (set found cnt)
-    (for [^I32 i 0 cnt]
-      (do
-        (comment "CHARGED PER ENTRY, like `mapeq` and unlike the version this"
-                 "replaces. A collision node is the one part of a CHAMP whose"
-                 "width an attacker chooses: flint's string hash is a base-31"
-                 "polynomial, so 2^k strings can be made to share one hash."
-                 "Scanning it for free is a metering hole rather than a slow"
-                 "path (`0009`, `doc/goals/hash-flooding.md`).")
-        (comment "The key is rooted across `eq`, which allocates when either"
-                 "side is a row ref.")
-        (charge-work rt 1)
-        (let [^RootIx kk (push rt (cn-key rt (r rt sni) i))
-              ^Bool same (val-eq rt (r rt kk) (r rt ski))]
-          (pop-to rt kk)
-          (if same
-            (do
-              (set found i)
-              (break))))))
+        ^I32 cnt (cn-count rt (r rt sni))
+        ^I32 found (cn-index-of rt sni ski)]
     (let [^Value nn (r rt sni)]
       (pop-to rt scan)
       (if (== found cnt)

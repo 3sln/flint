@@ -18,6 +18,48 @@ use crate::kgen::rt::pike::*;
 use crate::kgen::rt::casetable::*;
 
 impl Rt {
+    /// The index of the key at `ski` in the collision node at `sni`, or
+    /// `cn-count` when it is not there.
+    /// 
+    /// ONE SCAN, WHERE THERE WERE TWO. `assoc` and `dissoc` each carried this
+    /// loop -- twenty-four lines apiece, and the only difference between them
+    /// was whether the local was called `hit` or `found`. Not a
+    /// parameterisation, an extraction: nothing about the two callers differs.
+    /// 
+    /// IT TAKES ROOT INDICES, NOT VALUES, and that is not a style choice.
+    /// `val-eq` allocates when either side is a row ref, so the node and the
+    /// key must be re-read from the root stack after every comparison. Both
+    /// callers have already pushed them for their own use, so taking `Value`s
+    /// would push the same two values a SECOND time and pop them again per
+    /// call -- paying twice for the rooting the caller already did.
+    /// 
+    /// `cn-count` MEANS ABSENT, one past the last valid index, so no sentinel
+    /// has to be invented and none can collide with an answer -- the same trick
+    /// `rope-byte-of-cp` uses with `s-bytes`.
+    /// 
+    /// CHARGED PER ENTRY. A collision node is the one part of a CHAMP whose
+    /// width an attacker chooses: flint's string hash is a base-31 polynomial,
+    /// so 2^k strings can be made to share one hash, and scanning one for free
+    /// is a metering hole rather than a slow path (`0009`,
+    /// `doc/goals/hash-flooding.md`). THAT is what this extraction is for: the
+    /// charge was added to both copies by hand, and missing one would have left
+    /// half the hole open. There is one place to get it wrong now.
+    pub fn cn_index_of(&mut self, sni: usize, ski: usize) -> u32 {
+        let cnt: u32 = self.cn_count(self.r(sni));
+        let mut at: u32;
+        at = cnt;
+        for i in 0..cnt {
+            self.charge_work(1 as u64);
+            let kk: usize = self.push(self.cn_key(self.r(sni), i));
+            let same: bool = self.val_eq(self.r(kk), self.r(ski));
+            self.pop_to(kk);
+            if same {
+                at = i;
+                break;
+            }
+        }
+        return at;
+    }
     pub fn node_find_scalar(&mut self, n: Value, mut shift: u32, h: u32, key: Value) -> Value {
         // No rooting anywhere in here: the key is a scalar, so `eq` cannot
         // allocate, so nothing can move while this walks.

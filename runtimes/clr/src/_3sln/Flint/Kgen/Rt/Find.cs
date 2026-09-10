@@ -18,6 +18,48 @@ using static global::_3sln.Flint.Kgen.Rt.Nodeclass;
 using static global::_3sln.Flint.Kgen.Rt.Valeq;
 
 public static class Find {
+    /// The index of the key at `ski` in the collision node at `sni`, or
+    /// `cn-count` when it is not there.
+    /// 
+    /// ONE SCAN, WHERE THERE WERE TWO. `assoc` and `dissoc` each carried this
+    /// loop -- twenty-four lines apiece, and the only difference between them
+    /// was whether the local was called `hit` or `found`. Not a
+    /// parameterisation, an extraction: nothing about the two callers differs.
+    /// 
+    /// IT TAKES ROOT INDICES, NOT VALUES, and that is not a style choice.
+    /// `val-eq` allocates when either side is a row ref, so the node and the
+    /// key must be re-read from the root stack after every comparison. Both
+    /// callers have already pushed them for their own use, so taking `Value`s
+    /// would push the same two values a SECOND time and pop them again per
+    /// call -- paying twice for the rooting the caller already did.
+    /// 
+    /// `cn-count` MEANS ABSENT, one past the last valid index, so no sentinel
+    /// has to be invented and none can collide with an answer -- the same trick
+    /// `rope-byte-of-cp` uses with `s-bytes`.
+    /// 
+    /// CHARGED PER ENTRY. A collision node is the one part of a CHAMP whose
+    /// width an attacker chooses: flint's string hash is a base-31 polynomial,
+    /// so 2^k strings can be made to share one hash, and scanning one for free
+    /// is a metering hole rather than a slow path (`0009`,
+    /// `doc/goals/hash-flooding.md`). THAT is what this extraction is for: the
+    /// charge was added to both copies by hand, and missing one would have left
+    /// half the hole open. There is one place to get it wrong now.
+    public static int CnIndexOf(Rt rt, int sni, int ski) {
+        int cnt = CnCount(rt, rt.R(sni));
+        int at;
+        at = cnt;
+        for (int i = 0; i < cnt; i++) {
+            rt.ChargeWork(1);
+            int kk = rt.Push(CnKey(rt, rt.R(sni), i));
+            bool same = ValEq(rt, rt.R(kk), rt.R(ski));
+            rt.PopTo(kk);
+            if (same) {
+                at = i;
+                break;
+            }
+        }
+        return at;
+    }
     public static long NodeFindScalar(Rt rt, long n, int shift, int h, long key) {
         // No rooting anywhere in here: the key is a scalar, so `eq` cannot
         // allocate, so nothing can move while this walks.

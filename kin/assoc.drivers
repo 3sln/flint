@@ -43,6 +43,19 @@ impl Rt {
     fn cn_hash(&self, n: Value) -> u32 { self.h[n.0 as usize] as u32 }
     fn cn_count(&self, n: Value) -> u32 { self.h[n.0 as usize + 1] as u32 }
     fn cn_key(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + 2 + 2 * i as usize]) }
+    // A REAL SCAN, not a constant: the callers use the index it returns to
+    // decide between replacing an entry and appending one, so a stub that
+    // always answered "absent" would leave half of each caller untested.
+    fn cn_index_of(&mut self, sni: usize, ski: usize) -> u32 {
+        let cnt = self.cn_count(self.r(sni));
+        let mut at = cnt;
+        for i in 0..cnt {
+            self.charge_work(1);
+            let k = self.cn_key(self.r(sni), i);
+            if self.val_eq(k, self.r(ski)) { at = i; break; }
+        }
+        at
+    }
     fn cn_val(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + 3 + 2 * i as usize]) }
     fn cn_new(&mut self, hh: u32, npairs: u32, _e: Value) -> Value {
         if self.starve { self.log.push_str("x"); return NIL; }
@@ -179,6 +192,15 @@ fn main() {
     static int cnHash(Rt rt, long n) { return (int) rt.h[(int) n]; }
     static int cnCount(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
     static long cnKey(Rt rt, long n, int i) { return rt.h[(int) n + 2 + 2 * i]; }
+    static int cnIndexOf(Rt rt, int sni, int ski) {
+        int cnt = cnCount(rt, rt.r(sni));
+        int at = cnt;
+        for (int i = 0; i < cnt; i++) {
+            rt.chargeWork(1);
+            if (valEq(rt, cnKey(rt, rt.r(sni), i), rt.r(ski))) { at = i; break; }
+        }
+        return at;
+    }
     static long cnVal(Rt rt, long n, int i) { return rt.h[(int) n + 3 + 2 * i]; }
     static long cnNew(Rt rt, int hh, int npairs, long e) {
         if (rt.starve) { rt.log.append("x"); return NIL; }
@@ -297,6 +319,15 @@ namespace Flint.Rt {
     static int CnHash(Rt rt, long n) { return (int) rt.h[(int) n]; }
     static int CnCount(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
     static long CnKey(Rt rt, long n, int i) { return rt.h[(int) n + 2 + 2 * i]; }
+    static int CnIndexOf(Rt rt, int sni, int ski) {
+        int cnt = CnCount(rt, rt.R(sni));
+        int at = cnt;
+        for (int i = 0; i < cnt; i++) {
+            rt.ChargeWork(1);
+            if (ValEq(rt, CnKey(rt, rt.R(sni), i), rt.R(ski))) { at = i; break; }
+        }
+        return at;
+    }
     static long CnVal(Rt rt, long n, int i) { return rt.h[(int) n + 3 + 2 * i]; }
     static long CnNew(Rt rt, int hh, int npairs, long e) {
         if (rt.starve) { rt.log.Append("x"); return NIL; }

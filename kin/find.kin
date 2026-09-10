@@ -43,8 +43,9 @@
 ;; the loop more than once, so its gas moves by the one unit it always should
 ;; have paid.
 (ns flint.rt.find
-  (:require [flint.impl.rt :refer [defn return if let local set do comment
-                                   forever for break mark push r set-r pop-to
+  (:require [flint.impl.rt :refer [defn return if let local set do comment doc
+                                   forever for break local set mark push r
+                                   set-r pop-to
                                    not == != < + bit-and charge-work Rt Value
                                    RootIx I32 Bool NOT_FOUND HASH_BITS
                                    declarefn]]
@@ -56,6 +57,48 @@
             [flint.rt.maps :refer [bitpos index-of]]))
 
 (declarefn flint.rt.valeq/val-eq)
+
+(doc "The index of the key at `ski` in the collision node at `sni`, or"
+     "`cn-count` when it is not there."
+     ""
+     "ONE SCAN, WHERE THERE WERE TWO. `assoc` and `dissoc` each carried this"
+     "loop -- twenty-four lines apiece, and the only difference between them"
+     "was whether the local was called `hit` or `found`. Not a"
+     "parameterisation, an extraction: nothing about the two callers differs."
+     ""
+     "IT TAKES ROOT INDICES, NOT VALUES, and that is not a style choice."
+     "`val-eq` allocates when either side is a row ref, so the node and the"
+     "key must be re-read from the root stack after every comparison. Both"
+     "callers have already pushed them for their own use, so taking `Value`s"
+     "would push the same two values a SECOND time and pop them again per"
+     "call -- paying twice for the rooting the caller already did."
+     ""
+     "`cn-count` MEANS ABSENT, one past the last valid index, so no sentinel"
+     "has to be invented and none can collide with an answer -- the same trick"
+     "`rope-byte-of-cp` uses with `s-bytes`."
+     ""
+     "CHARGED PER ENTRY. A collision node is the one part of a CHAMP whose"
+     "width an attacker chooses: flint's string hash is a base-31 polynomial,"
+     "so 2^k strings can be made to share one hash, and scanning one for free"
+     "is a metering hole rather than a slow path (`0009`,"
+     "`doc/goals/hash-flooding.md`). THAT is what this extraction is for: the"
+     "charge was added to both copies by hand, and missing one would have left"
+     "half the hole open. There is one place to get it wrong now.")
+(defn ^:pub ^:method ^I32 cn-index-of [^:mut ^Rt rt ^RootIx sni ^RootIx ski]
+  (let [^I32 cnt (cn-count rt (r rt sni))]
+    (local ^:mut ^I32 at)
+    (set at cnt)
+    (for [^I32 i 0 cnt]
+      (do
+        (charge-work rt 1)
+        (let [^RootIx kk (push rt (cn-key rt (r rt sni) i))
+              ^Bool same (val-eq rt (r rt kk) (r rt ski))]
+          (pop-to rt kk)
+          (if same
+            (do
+              (set at i)
+              (break))))))
+    (return at)))
 
 (defn ^:pub ^:method ^Value node-find-scalar
   [^:mut ^Rt rt ^Value n ^:mut ^I32 shift ^I32 h ^Value key]

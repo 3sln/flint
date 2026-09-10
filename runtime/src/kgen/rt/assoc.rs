@@ -111,32 +111,18 @@ impl Rt {
             self.pop_to(wbase);
             return wrapped;
         }
-        // THE SCAN. `hit` is left at `cnt` when nothing matched -- one past
-        // the last valid index, so it cannot collide with an answer.
+        // ONE SCAN, SHARED WITH `dissoc`. This loop was written out
+        // in both files, twenty-four lines apiece, and the only difference
+        // between them was whether the local was called `hit` or `found`.
+        // 
+        // The per-entry gas charge that closes the hash-flooding hole had
+        // to be added to BOTH. It is `cn-index-of` now, so there is one
+        // place left to get that wrong.
         let scan: usize = self.mark();
         let sni: usize = self.push(n);
         let ski: usize = self.push(key);
         let cnt: u32 = self.cn_count(self.r(sni));
-        let mut hit: u32;
-        hit = cnt;
-        for i in 0..cnt {
-            // CHARGED PER ENTRY, like `mapeq` and unlike the version this
-            // replaces. A collision node is the one part of a CHAMP whose
-            // width an attacker chooses: flint's string hash is a base-31
-            // polynomial, so 2^k strings can be made to share one hash.
-            // Scanning it for free is a metering hole rather than a slow
-            // path (`0009`, `doc/goals/hash-flooding.md`).
-            // The key is rooted across `eq`, which allocates when either
-            // side is a row ref.
-            self.charge_work(1 as u64);
-            let kk: usize = self.push(self.cn_key(self.r(sni), i));
-            let same: bool = self.val_eq(self.r(kk), self.r(ski));
-            self.pop_to(kk);
-            if same {
-                hit = i;
-                break;
-            }
-        }
+        let hit: u32 = self.cn_index_of(sni, ski);
         let nn: Value = self.r(sni);
         let kk2: Value = self.r(ski);
         self.pop_to(scan);
