@@ -111,7 +111,20 @@ public static class Transients {
     public static long TransientConj(Rt rt, long t, long x) {
         if (Val.IsHeap(t)) {
             int tt = Obj.Ty(rt.gc.sp, Val.AsHeap(t));
+            // ALIVE FIRST. A transient whose `persistent!` has been called
+            // owns nothing: its nodes belong to the value that was handed
+            // out. Writing through it corrupts that value, and native did
+            // -- `(conj! t 1)` on a spent handle answered `#<unprintable>`
+            // where both ports threw, because both ports carried this check
+            // by hand in their `conj!` builtin and the generated one they
+            // were supposed to share did not have it.
+            // 
+            // `to-persistent` below has the same guard for the same reason,
+            // which is what made the omission here look deliberate.
             if (tt == Obj.TyTvec) {
+                if (!TvecAlive(rt, t)) {
+                    return rt.ThrowStr("IllegalStateException", "conj! on a transient already made persistent");
+                }
                 return TvecConj(rt, t, x);
             }
             if (tt == Obj.TyTset) {

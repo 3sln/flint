@@ -109,7 +109,20 @@ public final class Transients {
     public static long transientConj(Rt rt, long t, long x) {
         if (Val.isHeap(t)) {
             int tt = ty(rt.gc.sp, Val.asHeap(t));
+            // ALIVE FIRST. A transient whose `persistent!` has been called
+            // owns nothing: its nodes belong to the value that was handed
+            // out. Writing through it corrupts that value, and native did
+            // -- `(conj! t 1)` on a spent handle answered `#<unprintable>`
+            // where both ports threw, because both ports carried this check
+            // by hand in their `conj!` builtin and the generated one they
+            // were supposed to share did not have it.
+            // 
+            // `to-persistent` below has the same guard for the same reason,
+            // which is what made the omission here look deliberate.
             if (tt == TY_TVEC) {
+                if (!tvecAlive(rt, t)) {
+                    return rt.throwStr("IllegalStateException", "conj! on a transient already made persistent");
+                }
                 return tvecConj(rt, t, x);
             }
             if (tt == TY_TSET) {

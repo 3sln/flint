@@ -91,25 +91,35 @@ have shared a fix for.
 It also builds its error message with `alloc::format!`, which kin cannot
 express; that arm needs the vocabulary's string primitives instead.
 
-#### `conj!`'s map arm is a hand-written duplicate of generated code
+#### `conj!`'s hand-written arms: half removed, half still there
 
-`kin/transients.kin` defines `transient-conj`, which dispatches over every
-transient kind and validates that what is conj'd onto a transient map is an
-entry. Both ports ALSO carry a hand-written version of that arm inside their
-`conj!` builtin, and it had drifted: it took `first` and `first (rest ..)` of
-anything, so `(into {} [7])` answered `{nil nil}`.
+`kin/transients.kin` defines `transient-conj`, and both ports ALSO carry a
+hand-written version of it inside their `conj!` builtin. That duplication was
+found while fixing `(into {} [7])`, which the hand-written copies got wrong.
 
-Fixed in place rather than delegated, deliberately. The hand-written arm also
-carries an aliveness check -- `conj!` on a transient already made persistent
--- that `transient-conj` does not, so delegating wholesale would have dropped
-it silently. That is the same shape as the bug being fixed, and doing it
-while fixing that bug would have been hard to argue with later.
+I DECLINED TO DELEGATE THEM AT THE TIME, on the grounds that the hand-written
+arm carried an aliveness check the generated one did not, and deleting it
+silently would be the same shape as the bug I was fixing. A probe then showed
+that was not caution but the actual state of things:
 
-THE RIGHT FIX is to move the aliveness check into `transients.kin` and have
-both ports call `transientConj`, which removes the duplicate rather than
-repairing it. It needs its own probe first, because nothing currently
-compares what the three runtimes do to a transient used after
-`persistent!`.
+    (conj! t 1) on a spent handle    native #<unprintable>    both ports threw
+
+The hand-written duplicate was THE ONLY CORRECT COPY on two of three
+runtimes. Removing the duplication -- which is what tidying it up means --
+would have deleted the check from the two runtimes that had it and left all
+three corrupting values, under a commit message about deduplication.
+
+HALF DONE NOW. The aliveness check is in `transients.kin`, beside the
+identical guard `to-persistent` already had two functions below, and all four
+runtimes agree. What remains is deleting the ports' hand-written arms and
+calling `transientConj`, which is now safe because the generated function has
+everything they check. `runtimes/conform/transhapes.cljc` pins the behaviour
+either way.
+
+ONE PREDICTION THAT WAS WRONG, kept because it cost a test case and the case
+is worth having: native's `conj!` builtin reads `let _ = n`, which looked
+like it ignored arguments past the second. It does not -- arity is checked
+upstream and `(conj! t 1 2)` raises `ArityException` on all four runtimes.
 
 #### Five divergences from Clojure, found by `seqshapes`, needing a decision
 

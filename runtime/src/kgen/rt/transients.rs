@@ -109,7 +109,20 @@ impl Rt {
     pub fn transient_conj(&mut self, t: Value, x: Value) -> Value {
         if t.is_heap() {
             let tt: u8 = ty(&self.gc.sp, t.as_heap());
+            // ALIVE FIRST. A transient whose `persistent!` has been called
+            // owns nothing: its nodes belong to the value that was handed
+            // out. Writing through it corrupts that value, and native did
+            // -- `(conj! t 1)` on a spent handle answered `#<unprintable>`
+            // where both ports threw, because both ports carried this check
+            // by hand in their `conj!` builtin and the generated one they
+            // were supposed to share did not have it.
+            // 
+            // `to-persistent` below has the same guard for the same reason,
+            // which is what made the omission here look deliberate.
             if tt == TY_TVEC {
+                if !self.tvec_alive(t) {
+                    return self.throw_str("IllegalStateException", &"conj! on a transient already made persistent");
+                }
                 return self.tvec_conj(t, x);
             }
             if tt == TY_TSET {
