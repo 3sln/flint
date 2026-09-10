@@ -61,6 +61,49 @@ public final class Ropecat {
             rt.popTo(base);
             return out;
         }
+        // MERGE BEFORE CREATE, which is the rule a CHAMP already follows
+        // and this did not. `s-concat`'s copy tier asks whether the WHOLE
+        // RESULT fits in a leaf, so it stops firing once the string passes
+        // FLAT_MAX -- and from then on every append, however small, became
+        // its own leaf. Building a 38 KB string out of 8-byte pieces made
+        // 4 000 leaves and cost 19 475 allocations, and allocations PER
+        // PIECE grew with the string (2.97 at 100 pieces, 4.87 at 4 000)
+        // because each append also rebuilt the right spine.
+        // 
+        // The question that matters is not whether the result is small; it
+        // is whether `b` FITS IN THE LEAF ALREADY THERE.
+        // 
+        // AND ON ITS OWN THRESHOLD. `FLAT_MAX` is paid ONCE for a result;
+        // this bound is paid on EVERY append into the same leaf, so a leaf
+        // of T bytes filled from p-byte pieces copies T^2/2p bytes to hold
+        // T of them -- 64x at 1024, 16x at 256, 8x at 128. Fewer leaves
+        // pull the other way, so `MERGE_MAX` is measured, not assumed.
+        // 
+        // BEFORE THE FANOUT TEST ON PURPOSE: merging is better than adding
+        // a sibling even when there is room for one, and when there is NOT
+        // it also avoids returning NIL, which is what grows the depth.
+        // 
+        // LEAF INTO LEAF ONLY. A rope `b` would need its leftmost leaf
+        // merged instead, which is the same rule at the other end and is
+        // NOT done here -- see the note in `s-concat`.
+        if (Val.isNil(deeper)) {
+            if (!isRope(rt, rt.r(li))) {
+                if (!isRope(rt, rt.r(bi))) {
+                    if ((sBytes(rt, rt.r(li)) + sBytes(rt, rt.r(bi))) <= Str.MERGE_MAX) {
+                        long merged = Str.copyConcat(rt, rt.r(li), rt.r(bi));
+                        int mi = rt.push(merged);
+                        int kbase = rt.mark();
+                        for (int i = 0; i < n - 1; i++) {
+                            rt.push(rt.slot(rt.r(ai), Str.RP_KIDS + i));
+                        }
+                        rt.push(rt.r(mi));
+                        long out = ropeNode(rt, kbase, n);
+                        rt.popTo(base);
+                        return out;
+                    }
+                }
+            }
+        }
         if (n < Str.FANOUT) {
             // The spine is full below, but this node has room: `b` joins
             // as a sibling, LIFTED to the height its siblings stand at, or

@@ -142,6 +142,25 @@ public sealed class Rt : System.IDisposable {
     }
     public byte[] SinkArray(int s) { return sinks[s].ToArray(); }
     /// How many bytes a LEAF holds, whichever tier it is.
+    /// The first offset at or after `i` where LEAF `v` holds byte `b`, or
+    /// `LeafLen(v)` when it holds none. `RunEq`'s sibling -- see the JVM port
+    /// for the measurement that made it necessary.
+    public int LeafFind(long v, int b, int i) {
+        int n = LeafLen(v);
+        if (i >= n) return n;
+        int target = b & 0xFF;
+        if (Val.IsInlineStr(v)) {
+            byte[] bs = Val.InlineBytes(v);
+            for (int k = i; k < bs.Length; k++) if ((bs[k] & 0xFF) == target) return k;
+            return n;
+        }
+        if (!Val.IsHeap(v)) return n;
+        long a = Val.AsHeap(v);
+        long bse = Obj.Ty(gc.sp, a) == Obj.TyStr ? a + Obj.StrData : a + Obj.Hdr;
+        for (int k = i; k < n; k++) if (gc.sp.ReadU8(bse + k) == target) return k;
+        return n;
+    }
+
     public int LeafLen(long v) {
         if (Val.IsInlineStr(v)) return Val.InlineLen(v);
         if (Val.IsHeap(v)) return Obj.Len(gc.sp, Val.AsHeap(v));

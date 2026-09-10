@@ -78,6 +78,7 @@ pub mod pike;
 pub mod ropecat;
 pub mod ropecp;
 pub mod ropeeq;
+pub mod ropefind;
 pub mod ropeflat;
 pub mod ropemeas;
 pub mod tablebuild;

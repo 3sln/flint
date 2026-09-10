@@ -35,6 +35,20 @@ use crate::value::Value;
 /// A concatenation at or below this copies into a flat string instead of
 /// building a node.
 pub const FLAT_MAX: u32 = 1024;
+
+/// How much may be COPIED to avoid making a new leaf.
+///
+/// `FLAT_MAX` answers "is the whole result small enough to be one leaf"; this
+/// answers "does the new piece fit in the leaf already there". They are
+/// different questions and were the same number, which is why appending past
+/// `FLAT_MAX` made one leaf per piece.
+///
+/// SMALLER THAN `FLAT_MAX`, because this bound is paid REPEATEDLY. Filling a
+/// leaf of size T from p-byte pieces copies T^2/2p bytes to store T of them --
+/// 64x write amplification at 1024 with 8-byte pieces, 16x at 256, 8x at 128.
+/// The leaf count moves the other way, so the number is a trade and was
+/// measured rather than picked.
+pub const MERGE_MAX: u32 = 256;
 /// Children per internal node.
 pub const FANOUT: u32 = 16;
 

@@ -602,28 +602,13 @@ public static class Builtins {
         });
         Def("flint/str->num", (rt, at, n) =>
             global::_3sln.Flint.Kgen.Rt.Strnum.StrToNum(rt, rt.VAt(at)));
+        // ONE CALL -- see the note in the JVM port. What was here also
+        // allocated `h.Substring(0, i)` on every successful search purely to
+        // count code points, which is gone with the rest of it.
         Def("flint/str-index-of", (rt, at, n) => {
-            string h = Str.Text(rt, rt.VAt(at));
-            string needle = Str.Text(rt, rt.VAt(at + 1));
-            int from = n > 2 ? (int) Val.AsFixnum(rt.VAt(at + 2)) : 0;
-            // BOUNDED BEFORE THE SEARCH AND BILLED AFTER IT, which are two
-            // different jobs and native does both. The pre-charge is the worst
-            // case and is handed straight back, so a search that cannot be paid
-            // for never starts while the count stays the distance actually
-            // walked. This port did neither, so a scan was free here.
-            int hn = Str.SBytes(rt, rt.VAt(at));
-            long pre = (hn / 8) + 1;
-            if (!rt.ChargeChecked(pre, "str-index-of")) return Val.Nil;
-            rt.steps -= pre;
-            int at16 = from <= 0 ? 0 : OffsetByCodePoints(h, System.Math.Min(from, CodePointCount(h)));
-            int i = h.IndexOf(needle, at16, System.StringComparison.Ordinal);
-            int found = i < 0 ? -1 : CodePointCount(h.Substring(0, i));
-            int skip = System.Math.Max(from, 0);
-            // The distance WALKED: to the match and one past it, or the rest of
-            // the haystack when there is no match.
-            rt.ChargeBytes(found >= 0 ? System.Math.Max(found - skip, 0) + 1
-                                      : System.Math.Max(hn - skip, 0));
-            return i < 0 ? Val.Nil : Val.Fixnum(found);
+            long from = n > 2 ? Val.AsFixnum(rt.VAt(at + 2)) : 0;
+            int skip = from <= 0 ? 0 : (int) System.Math.Min(from, int.MaxValue);
+            return global::_3sln.Flint.Kgen.Rt.Ropefind.SIndexOf(rt, rt.VAt(at), rt.VAt(at + 1), skip);
         });
         Def("flint/str-join", (rt, at, n) => {
             var sb = new System.Text.StringBuilder();

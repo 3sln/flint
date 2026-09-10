@@ -162,6 +162,51 @@ impl Rt {
         self.gc.sp.bytes(a, len) == self.gc.sp.bytes(b, len)
     }
 
+    /// The first offset at or after `i` where LEAF `v` holds byte `b`, or
+    /// `leaf_len(v)` when it holds none.
+    ///
+    /// `run_eq`'s sibling, and it exists for the same reason: a search that
+    /// asked `leaf_byte` per byte cost about 9ns a byte, because every one of
+    /// them is a call that branches on which tier the leaf is. Measured
+    /// against the flatten it replaced, that made `index-of` on a 34 KB rope
+    /// SIX TIMES SLOWER -- the walk was right and the inner loop was not.
+    ///
+    /// Here the tier is decided ONCE and the scan over a flat leaf is
+    /// `iter().position()`, which is a memchr. `ropefind` then pays the
+    /// per-byte cost only at the positions that can actually start a match.
+    pub fn leaf_find(&self, v: Value, b: u32, i: u32) -> u32 {
+        let n = self.leaf_len(v);
+        if i >= n {
+            return n;
+        }
+        let target = b as u8;
+        if v.is_inline_str() {
+            let mut buf = crate::rt::sbuf();
+            let bs = v.inline_bytes(&mut buf);
+            let mut k = i as usize;
+            while k < bs.len() {
+                if bs[k] == target {
+                    return k as u32;
+                }
+                k += 1;
+            }
+            return n;
+        }
+        if !v.is_heap() {
+            return n;
+        }
+        let base = if ty(&self.gc.sp, v.as_heap()) == crate::obj::TY_STR {
+            v.as_heap() + crate::obj::STR_DATA
+        } else {
+            v.as_heap() + HDR
+        };
+        let hay = self.gc.sp.bytes(base + i as crate::mem::Addr, n - i);
+        match hay.iter().position(|c| *c == target) {
+            Some(off) => i + off as u32,
+            None => n,
+        }
+    }
+
 
 
 

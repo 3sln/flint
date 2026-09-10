@@ -656,28 +656,22 @@ public final class Builtins {
         });
         def("flint/str->num", (rt, at, n) ->
             com._3sln.flint.kgen.rt.Strnum.strToNum(rt, rt.vat(at)));
+        // ONE CALL, because the search is `kin/ropefind.kin` now and all four
+        // runtimes run that source. What was here searched a
+        // `java.lang.String` in UTF-16, while native flattened the rope and
+        // searched UTF-8 and the CLR allocated a substring to count code
+        // points -- three algorithms over three representations, agreeing on
+        // the answer and on nothing else, which is why the same program cost
+        // different gas on each. A rope is the only representation all of
+        // them share.
+        //
+        // `from` is clamped HERE because kin's `I32` is unsigned on every
+        // target, so a negative `from` must lose its sign while it still has
+        // one.
         def("flint/str-index-of", (rt, at, n) -> {
-            String h = Str.text(rt, rt.vat(at));
-            String needle = Str.text(rt, rt.vat(at + 1));
-            int from = n > 2 ? (int) Val.asFixnum(rt.vat(at + 2)) : 0;
-            // BOUNDED BEFORE THE SEARCH AND BILLED AFTER IT, which are two
-            // different jobs and native does both. The pre-charge is the worst
-            // case and is handed straight back, so a search that cannot be paid
-            // for never starts while the count stays the distance actually
-            // walked. This port did neither, so a scan was free here.
-            int hn = Str.sBytes(rt, rt.vat(at));
-            long pre = (hn / 8) + 1;
-            if (!rt.chargeChecked(pre, "str-index-of")) return Val.NIL;
-            rt.steps -= pre;
-            int at16 = from <= 0 ? 0 : h.offsetByCodePoints(0, Math.min(from, h.codePointCount(0, h.length())));
-            int i = h.indexOf(needle, at16);
-            int found = i < 0 ? -1 : h.codePointCount(0, i);
-            int skip = Math.max(from, 0);
-            // The distance WALKED: to the match and one past it, or the rest of
-            // the haystack when there is no match.
-            rt.chargeBytes(found >= 0 ? Math.max(found - skip, 0) + 1
-                                      : Math.max(hn - skip, 0));
-            return i < 0 ? Val.NIL : Val.fixnum(found);
+            long from = n > 2 ? Val.asFixnum(rt.vat(at + 2)) : 0;
+            int skip = from <= 0 ? 0 : (int) Math.min(from, Integer.MAX_VALUE);
+            return com._3sln.flint.kgen.rt.Ropefind.sIndexOf(rt, rt.vat(at), rt.vat(at + 1), skip);
         });
         def("flint/str-join", (rt, at, n) -> {
             StringBuilder sb = new StringBuilder();

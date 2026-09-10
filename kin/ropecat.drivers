@@ -9,7 +9,10 @@ pub mod obj {
     pub const RP_BYTES: u32 = 0; pub const RP_CPS: u32 = 1;
     pub const RP_FLAT: u32 = 2; pub const RP_HASH: u32 = 3; pub const RP_KIDS: u32 = 4;
 }
-pub mod rope { pub const FANOUT: u32 = 3; pub const FLAT_MAX: u32 = 8; }
+pub mod rope { pub const FANOUT: u32 = 3; pub const FLAT_MAX: u32 = 8;
+               // Below FLAT_MAX, as in the runtime: this bound is paid on
+               // every append into the same leaf, not once per result.
+               pub const MERGE_MAX: u32 = 4; }
 impl Value {
     fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 }
     fn as_heap(self) -> Addr { self.0 as Addr }
@@ -141,7 +144,7 @@ fn main() {
     static final int TY_ROPE = 26, TY_STR = 2;
     static final class Str {
         static final int RP_BYTES = 0, RP_CPS = 1, RP_FLAT = 2, RP_HASH = 3, RP_KIDS = 4;
-        static final int FANOUT = 3, FLAT_MAX = 8;
+        static final int FANOUT = 3, FLAT_MAX = 8, MERGE_MAX = 4;
         static int sBytes(Rt rt, long v) {
             if (isRope(rt, v)) return (int) rt.slot(v, RP_BYTES);
             return rt.lens[(int) v];
@@ -269,7 +272,7 @@ fn main() {
 namespace Flint.Rt {
     internal static class Str {
         internal const int RP_BYTES = 0, RP_CPS = 1, RP_FLAT = 2, RP_HASH = 3, RP_KIDS = 4;
-        internal const int FANOUT = 3, FLAT_MAX = 8;
+        internal const int FANOUT = 3, FLAT_MAX = 8, MERGE_MAX = 4;
         internal static int SBytes(Probe.Rt rt, long v) { return Probe.SBytesOf(rt, v); }
         internal static int SCount(Probe.Rt rt, long v) { return Probe.SCountOf(rt, v); }
         internal static bool SAscii(Probe.Rt rt, long v) { return Probe.SAsciiOf(rt, v); }

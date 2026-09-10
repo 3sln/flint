@@ -120,13 +120,13 @@
 ;; file about two builds agreeing, for a reason that has nothing to do with
 ;; two builds agreeing.
 ;;
-;; MOVED AGAIN 2026-09-10, to 318 000, for a plain vector ceasing to be walked
-;; as a seq by `=` and by `hash`: 1 934 bytes in two steps, decomposed in the
-;; comment above the other floor along with the speedups and the per-element
-;; allocations it removes. And the warning above stopped being hypothetical a
+;; MOVED AGAIN 2026-09-10, to 319 000, for a plain vector ceasing to be walked
+;; as a seq by `=` and by `hash` (1 934 bytes) and for `str-index-of` becoming
+;; one kin source instead of three hand-written searches (984 more). Both are
+;; decomposed in the comment above the other floor. And the warning above stopped being hypothetical a
 ;; second time -- this floor is where that change was caught, after the one in
 ;; `test/threads.clj` had already been raised and this one had not.
-(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 318000))
+(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 319000))
 
 ;; --- absent, by name -------------------------------------------------------
 (doseq [sym ["flint_snapshot_capture" "flint_snapshot_restore" "flint_snapshot_ptr"

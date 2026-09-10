@@ -447,6 +447,10 @@
    ;; means the same thing in all three. Pointing it at `Bytes` compiled for as
    ;; long as only byte sources used it and broke the first time a rope one did.
    'FLAT_MAX {:rust "crate::rope::FLAT_MAX" :java "Str.FLAT_MAX" :csharp "global::Flint.Rt.Str.FLAT_MAX"}
+   ;; What may be COPIED to avoid making a new leaf -- see `rope.rs`. Not
+   ;; `FLAT_MAX`: that bound is paid once for a result, this one is paid on
+   ;; every append into the same leaf.
+   'MERGE_MAX {:rust "crate::rope::MERGE_MAX" :java "Str.MERGE_MAX" :csharp "global::Flint.Rt.Str.MERGE_MAX"}
    'FANOUT {:rust "crate::rope::FANOUT" :java "Str.FANOUT" :csharp "global::Flint.Rt.Str.FANOUT"}
    ;; The object header's width. A leaf's bytes begin `HDR` past its address,
    ;; which is the one place a generated source does address arithmetic.
@@ -1249,6 +1253,16 @@
     ;; A RUN comparison rather than a byte loop: this is `b-eq`'s inner loop
     ;; over two 500 KB sections, and one `memcmp` against half a million calls
     ;; is the whole cost of the operation.
+    ;; `run-eq`'s sibling, for the same reason one function along: a scan that
+    ;; asked `leaf-byte` per byte cost about 9ns a byte -- every one a call
+    ;; that branches on the leaf's tier -- and made `index-of` on a 34 KB rope
+    ;; six times slower than the flatten it replaced. This decides the tier
+    ;; ONCE and scans the backing store, so the per-byte cost is paid only at
+    ;; positions that can start a match.
+    'leaf-find (core/call {:rust "{0}.leaf_find({1}, {2}, {3})"
+                           :java "{0}.leafFind({1}, {2}, {3})"
+                           :csharp "{0}.LeafFind({1}, {2}, {3})"}
+                          {:tag I32})
     'run-eq (core/call {:rust "{0}.run_eq({1}, {2}, {3})"
                         :java "{0}.runEq({1}, {2}, {3})"
                         :csharp "{0}.RunEq({1}, {2}, {3})"}

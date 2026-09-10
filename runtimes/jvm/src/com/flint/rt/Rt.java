@@ -190,6 +190,30 @@ public final class Rt {
     public byte[] sinkArray(int s) { return sinks.get(s).toByteArray(); }
 
     /// How many bytes a LEAF holds, whichever tier it is. See the Rust copy.
+    /// The first offset at or after `i` where LEAF `v` holds byte `b`, or
+    /// `leafLen(v)` when it holds none.
+    ///
+    /// `runEq`'s sibling. A search that asked `leafByte` per byte cost about
+    /// 9ns a byte because every one is a call that branches on the leaf's
+    /// tier, which made `index-of` on a 34 KB rope six times slower than the
+    /// flatten it replaced. Here the tier is decided ONCE and the scan is a
+    /// tight loop over the backing store.
+    public int leafFind(long v, int b, int i) {
+        int n = leafLen(v);
+        if (i >= n) return n;
+        int target = b & 0xFF;
+        if (Val.isInlineStr(v)) {
+            byte[] bs = Val.inlineBytes(v);
+            for (int k = i; k < bs.length; k++) if ((bs[k] & 0xFF) == target) return k;
+            return n;
+        }
+        if (!Val.isHeap(v)) return n;
+        long a = Val.asHeap(v);
+        long base = Obj.ty(gc.sp, a) == Obj.TY_STR ? a + Obj.STR_DATA : a + Obj.HDR;
+        for (int k = i; k < n; k++) if (gc.sp.readU8(base + k) == target) return k;
+        return n;
+    }
+
     public int leafLen(long v) {
         if (Val.isInlineStr(v)) return Val.inlineLen(v);
         if (Val.isHeap(v)) return Obj.len(gc.sp, Val.asHeap(v));

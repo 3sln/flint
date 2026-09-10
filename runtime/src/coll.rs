@@ -519,87 +519,31 @@ impl Rt {
     }
 
     /// Byte offset -> code-point index search. Returns nil when absent.
+    ///
+    /// ONE LINE, because the search itself is `kin/ropefind.kin` now and every
+    /// runtime runs that same source. What was here was a THIRD algorithm:
+    /// this one flattened the haystack with `string_arg` and searched UTF-8,
+    /// the JVM built a `java.lang.String` and searched UTF-16, and the CLR
+    /// built a .NET `string` and then allocated `h.Substring(0, i)` just to
+    /// count code points. Three implementations over three representations,
+    /// agreeing on the answer and on nothing else -- which is why the same
+    /// program cost different gas on each, and why no charge could be moved to
+    /// fix it. A rope is the only representation all of them share.
+    ///
+    /// THE FLATTEN IS GONE WITH THEM. `doc/decisions/0011` lists `index-of`
+    /// under what must walk the structure rather than materialise it, and
+    /// warned that "a rope that flattens on every `index-of` passes every
+    /// correctness test and is slower than the flat string it replaced".
+    ///
+    /// `from` IS CLAMPED HERE because kin's `I32` is unsigned on all three
+    /// targets, so a negative `from` has to lose its sign where the sign still
+    /// exists.
     pub fn str_index_of(&mut self, haystack: Value, needle: Value, from: i64) -> Value {
-        let haystack = self.string_arg(haystack);
-        let needle = self.string_arg(needle);
-        // A naive search is O(haystack x needle); charging the haystack keeps a
-        // long scan from being free.
-        let hn = if self.is_string(haystack) { self.s_bytes(haystack) } else { 0 };
-        // BOUNDED before the search and BILLED after it, which are two
-        // different jobs. The pre-charge is the worst case and is refunded
-        // below, so the count stays the distance actually scanned -- the
-        // accounting the comment below fought for -- while a search that cannot
-        // be paid for never starts. Billing after alone ran 148 114 steps past
-        // an exhausted budget.
-        let pre = (hn as u64 / 8) + 1;
-        if !self.charge_checked(pre, "str-index-of") {
-            return NIL;
+        if !self.is_string(haystack) || !self.is_string(needle) {
+            return self.throw_str("ClassCastException", "not a string");
         }
-        self.steps = self.steps.saturating_sub(pre);
-        // Charged AFTER the search, for the distance actually scanned -- see
-        // below. Charging the whole haystack made the counter quadratic;
-        // charging what remained after `from` still did, because a scan that
-        // stops at the first match walks a few bytes and was billed for the
-        // rest of the string. Same defect, third variation, same session.
-        // The header already carries this bit (`str_is_ascii`), set once when
-        // the string was built. Asking `&str::is_ascii()` instead rescanned the
-        // WHOLE haystack on every call, which made `str/split` quadratic: 6 800
-        // calls over a 32 799-character corpus is 223 million byte checks, and
-        // it was 37 ms of a 55 ms benchmark. The comment four lines down
-        // claimed the search was O(n) rather than O(n) per position; this is
-        // what made that true.
-        let ascii = self.str_indexable(haystack);
-        let mut bh = crate::rt::sbuf();
-        let mut bn = crate::rt::sbuf();
-        let found = {
-            let hb: &[u8] = if haystack.is_inline_str() {
-                haystack.inline_bytes(&mut bh)
-            } else if haystack.is_heap() && ty(&self.gc.sp, haystack.as_heap()) == TY_STR {
-                str_bytes(&self.gc.sp, haystack.as_heap())
-            } else {
-                return self.throw_str("ClassCastException", "not a string");
-            };
-            let nb: &[u8] = if needle.is_inline_str() {
-                needle.inline_bytes(&mut bn)
-            } else if needle.is_heap() && ty(&self.gc.sp, needle.as_heap()) == TY_STR {
-                str_bytes(&self.gc.sp, needle.as_heap())
-            } else {
-                return self.throw_str("ClassCastException", "not a string");
-            };
-            // `from` is a code-point index, and so is the answer. For ASCII
-            // those are byte offsets, so the search is over BYTES and never
-            // needs a `&str` -- which matters because `from_utf8` validates the
-            // whole haystack, and doing that per call made `str/split`
-            // quadratic a second time after the `is_ascii` rescan was removed.
-            // 6 800 calls over a 32 799-byte corpus is 223 million bytes
-            // validated to find 6 800 spaces.
-            let skip = from.max(0) as usize;
-            if ascii {
-                if skip > hb.len() {
-                    None
-                } else {
-                    find_bytes(&hb[skip..], nb).map(|b| skip + b)
-                }
-            } else {
-                // Only here is a `&str` needed at all, because only here do
-                // byte offsets and code-point indices differ.
-                let h = core::str::from_utf8(hb).unwrap_or("");
-                let nd = core::str::from_utf8(nb).unwrap_or("");
-                let start_byte = h.char_indices().nth(skip).map(|(i, _)| i).unwrap_or(h.len());
-                h[start_byte..].find(nd).map(|b| h[..start_byte + b].chars().count())
-            }
-        };
-        let skip = from.max(0) as u32;
-        let scanned = match found {
-            Some(i) => (i as u32).saturating_sub(skip) + 1,
-            None => hn.saturating_sub(skip),
-        };
-        self.charge_bytes(scanned);
-        match found {
-            Some(i) => Value::fixnum(i as i64),
-            None => NIL,
-        }
-        // (the pre-charge that bounds this is above, before the search)
+        let skip = from.max(0).min(u32::MAX as i64) as u32;
+        self.s_index_of(haystack, needle, skip)
     }
 
     /// The UTF-8 bytes of a string, as a vector of integers. The image writer

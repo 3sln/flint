@@ -472,6 +472,8 @@ public final class Str {
     /// children's (`doc/decisions/0011`).
     public static final int RP_BYTES = 0, RP_CPS = 1, RP_FLAT = 2, RP_HASH = 3, RP_KIDS = 4;
     public static final int FLAT_MAX = 1024, FANOUT = 16;
+    /// What may be COPIED to avoid a new leaf; see `runtime/src/rope.rs`.
+    public static final int MERGE_MAX = 256;
     /// A slice smaller than this COPIES rather than sharing, so a small `subs`
     /// cannot retain a large parent. Not a performance choice -- the retention
     /// fix (`doc/decisions/0011`).

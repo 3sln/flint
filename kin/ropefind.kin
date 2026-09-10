@@ -1,0 +1,307 @@
+;; SEARCHING A STRING TREE WITHOUT MATERIALISING IT.
+;;
+;; `doc/decisions/0011` names this operation in the list of things that must
+;; use the structure rather than flatten:
+;;
+;;   `index-of`, `split`, `replace`, comparison -- walk leaves through the
+;;   cursor. None of them needs contiguous bytes.
+;;
+;; and then predicts, in the next paragraph, exactly what was here instead:
+;;
+;;   A rope that flattens on every `index-of` passes every correctness test
+;;   and is slower than the flat string it replaced.
+;;
+;; It did. Native called `string_arg` on the HAYSTACK, which flattens the tree
+;; into a flat string, caches it and charges for the copy. Measured on a 3.5 KB
+;; rope: 897 steps for the first search and 26 for the second, against 21 and
+;; 26 on the JVM, which never flattened at all. The gap was not a mispriced
+;; charge -- it was a copy one runtime made and the others did not.
+;;
+;; WHERE THE BAD JUSTIFICATION CAME FROM, because it was not carelessness.
+;; `0011` DOES conclude "flatten before matching" -- in the section about HOST
+;; REGEX ENGINES, where .NET wants a `string`, JavaScript wants a `string` and
+;; Rust's `regex` wants a `&str`. That is a real constraint and it is not this
+;; operation's. A substring search needs no contiguous bytes, and the
+;; conclusion was carried across to a function that never asked for it.
+;;
+;; AND THIS IS WHY THE THREE RUNTIMES DISAGREED ON GAS. There were three
+;; implementations: Rust searched UTF-8 bytes off a flattened flint string; the
+;; JVM built a `java.lang.String` and searched UTF-16; the CLR built a .NET
+;; `string`, searched UTF-16, and then allocated `h.Substring(0, i)` purely to
+;; count code points. Three algorithms over three representations, agreeing on
+;; the answer and on nothing else. One source is the only fix that makes gas
+;; agree BY CONSTRUCTION rather than by patching three charge sites.
+;;
+;; THE NEEDLE IS MADE CONTIGUOUS AND THE HAYSTACK IS NOT, which is the whole
+;; distinction. A needle is bounded by the pattern the caller is looking for; a
+;; haystack is bounded by the data. Flattening the first is a copy of something
+;; small and known, and it is the same trade `0011` already accepts when a
+;; small slice of a large rope copies down into flat.
+;;
+;; ONE PATH, NOT TWO. Native had an ASCII branch over bytes and a non-ASCII
+;; branch that built a `&str` and counted `chars()`. Counting code-point STARTS
+;; -- every byte that is not a continuation byte -- is correct for both and
+;; needs neither branch, so the ASCII/non-ASCII split is gone with the flatten.
+(ns flint.rt.ropefind
+  (:require [flint.impl.rt :refer [defn return if let do comment doc == != < >
+                                   >= not nil? + - bit-and local set forever
+                                   break continue while <= leaf-len leaf-byte
+                                   leaf-find
+                                   walk-open
+                                   walk-close walk-dup walk-next charge-tick
+                                   charge-work to-i64 fixnum and is-heap
+                                   as-heap to-addr run-eq Rt Value I32 Bool
+                                   Walk NIL STR_DATA]]
+            [flint.rt.ropemeas :refer [is-rope s-count s-ascii]]
+            [flint.rt.ropecp :refer [rope-byte-of-cp]]
+            [flint.rt.ropeflat :refer [s-flatten]]))
+
+(doc "Do the `nn` bytes of `nd` sit at (`leaf0`, `p0`) and onward?"
+     ""
+     "A DUPLICATE CURSOR, which is what `walk-dup` exists for -- `tree-eq`"
+     "uses it to peek the other side. The match may run off the end of the"
+     "current leaf and into the next ones, and the outer walk must not move"
+     "while it does, because a failed match resumes at the very next byte."
+     ""
+     "CHARGED PER BYTE COMPARED. The outer loop's `charge-tick` is what STOPS"
+     "a scan that cannot be paid for; this bills the work the match itself"
+     "does, which is bounded by the needle and would otherwise be the same"
+     "kind of hole a collision scan was.")
+(defn ^:method ^Bool match-at [^:mut ^Rt rt ^Walk wh ^Value leaf0 ^I32 p0
+                               ^Value nd ^I32 nn]
+  (comment "THE WHOLE NEEDLE INSIDE ONE LEAF, WITH NO CURSOR AT ALL, which is"
+           "almost every candidate and was the cost of the whole search."
+           "`walk-dup` CLONES the cursor's stack, so taking one per candidate"
+           "allocated once per position where the first byte matched --"
+           "searching 34 KB for a needle starting with `p`, in a haystack of"
+           "`piece0-piece1-...`, is four thousand clones to answer four"
+           "thousand comparisons that never leave the leaf they started in."
+           ""
+           "So the boundary-crossing cursor below is now the RARE path, taken"
+           "only when the match would actually run off the end of this leaf.")
+  (if (<= (+ p0 nn) (leaf-len rt leaf0))
+    (do
+      (local ^:mut ^I32 k)
+      (local ^:mut ^Bool hit)
+      (set k 0)
+      (set hit true)
+      (comment "A MEMCMP WHEN BOTH SIDES HAVE AN ADDRESS, which is what"
+               "`run-eq` is for and what `tree-eq` already does one file"
+               "along. The byte loop below was ~14 `leaf-byte` calls per"
+               "candidate -- searching 34 KB of `piece0-piece1-...` for a"
+               "needle starting with `p` means four thousand candidates, so"
+               "fifty-six thousand calls through the tier branch, and that"
+               "was the search."
+               ""
+               "AN INLINE LEAF HAS NO ADDRESS, so a pair with one on either"
+               "side still goes a byte at a time -- at most seven bytes, and"
+               "rare.")
+      (if (and (is-heap leaf0) (is-heap nd))
+        (do
+          (charge-work rt (to-i64 nn))
+          (return (run-eq rt (+ (+ (as-heap leaf0) STR_DATA) (to-addr p0))
+                          (+ (as-heap nd) STR_DATA)
+                          nn))))
+      (while (< k nn)
+        (do
+          (comment "CHARGED PER BYTE COMPARED, exactly as the cursor path"
+                   "below does. Billing `nn` flat would be simpler and would"
+                   "over-charge every early mismatch, which is safe for a"
+                   "budget and untrue about the work -- and `0009` asks for"
+                   "the second thing.")
+          (charge-work rt 1)
+          (if (!= (leaf-byte rt leaf0 (+ p0 k)) (leaf-byte rt nd k))
+            (do (set hit false)
+                (set k nn))
+            (set k (+ k 1)))))
+      (return hit)))
+  (let [^Walk wd (walk-dup rt wh)]
+    (local ^:mut ^Value ml)
+    (local ^:mut ^I32 q)
+    (local ^:mut ^I32 m)
+    (local ^:mut ^I32 j)
+    (local ^:mut ^Bool ok)
+    (set ml leaf0)
+    (set q p0)
+    (set m (leaf-len rt leaf0))
+    (set j 0)
+    (set ok true)
+    (forever
+      (if (== j nn)
+        (break))
+      (if (== q m)
+        (do
+          (let [^Value v (walk-next rt wd)]
+            (if (nil? rt v)
+              (do (set ok false)
+                  (break)))
+            (set ml v)
+            (set q 0)
+            (set m (leaf-len rt v))
+            (continue))))
+      (charge-work rt 1)
+      (if (!= (leaf-byte rt ml q) (leaf-byte rt nd j))
+        (do (set ok false)
+            (break)))
+      (set q (+ q 1))
+      (set j (+ j 1)))
+    (walk-close rt wd)
+    (return ok)))
+
+(doc "The CODE-POINT index of `needle` in `hay` at or after code point"
+     "`from`, as a fixnum, or NIL when it is not there."
+     ""
+     "A VALUE RATHER THAN AN INT, because `I32` is UNSIGNED on all three"
+     "targets: there is no -1 to return, and the first version of this tried"
+     "to. A fixnum-or-nil is also exactly what the three builtins want to hand"
+     "back, so the conversion disappears rather than moving."
+     ""
+     "`from` IS CLAMPED BY THE CALLER for the same reason -- a negative"
+     "`from` arrives here as a very large number, so the builtins do the"
+     "`max(from, 0)` where the sign still exists."
+     ""
+     "NOTHING ALLOCATES ONCE THE WALK IS OPEN. The needle is flattened first,"
+     "before `walk-open`, so every read after that is a byte out of a leaf"
+     "that cannot move -- which is why no leaf here is rooted (`0031`).")
+(defn ^:pub ^:method ^Value s-index-of
+  [^:mut ^Rt rt ^Value hay ^Value needle ^I32 from]
+  (comment "A LOCAL AND A `set`, because kin's `if` is a statement: it cannot"
+           "sit in a `let` binding, which is what the first version tried.")
+  (local ^:mut ^Value nd)
+  (local ^:mut ^I32 at)
+  (set nd needle)
+  (if (is-rope rt needle)
+    (set nd (s-flatten rt needle)))
+  (let [^I32 skip from
+        ^I32 nn (leaf-len rt nd)]
+    (comment "AN EMPTY NEEDLE IS FOUND WHERE THE SEARCH STARTS, CLAMPED TO"
+             "THE END -- `(str/index-of \"abc\" \"\" 100)` is 3 in Clojure, not"
+             "nil, because Java's `indexOf` answers the length when the needle"
+             "is empty and `from` is past it."
+             ""
+             "THE THREE RUNTIMES DISAGREED HERE and nothing caught it. Native's"
+             "ASCII path returned NIL, native's non-ASCII path returned the"
+             "count, and both ports returned the count -- so the answer"
+             "depended on whether the haystack happened to be ASCII, and"
+             "native contradicted its own ports for the ASCII half. Found by"
+             "differencing 1 560 cases against the old implementations; the"
+             "conformance probes had never asked.")
+    (if (== nn 0)
+      (do
+        (set at skip)
+        (if (> at (s-count rt hay))
+          (set at (s-count rt hay)))
+        (return (fixnum (to-i64 at)))))
+    (comment "SEEK TO `from` BY DESCENT, NOT BY SCANNING, which is what made"
+             "`str/split` quadratic the moment this stopped flattening. Each"
+             "successive `index-of` starts further in, and a walk that opens"
+             "at the root and scans forward re-reads the whole prefix every"
+             "time: `test/scaling.clj` measured 3.56x for a doubled input"
+             "where linear is 2x, and caught it."
+             ""
+             "`rope-byte-of-cp` answers the byte offset in O(depth) using the"
+             "per-node code-point counts `0011` created for this and which,"
+             "as `ropecp` notes, nothing used because every path flattened"
+             "first. Leaves entirely before that offset are then skipped by"
+             "LENGTH -- one `leaf-len` each, no bytes read.")
+    (let [^Walk wh (walk-open rt hay)
+          ^Bool ascii (s-ascii rt hay)
+          ^I32 startbyte (rope-byte-of-cp rt hay skip)]
+      (local ^:mut ^I32 base)
+      (set base 0)
+      (local ^:mut ^Value leaf)
+      (local ^:mut ^I32 p)
+      (local ^:mut ^I32 n)
+      (local ^:mut ^I32 cp)
+      (local ^:mut ^Value out)
+      (local ^:mut ^I32 ticks)
+      (set leaf NIL)
+      (set p 0)
+      (set n 0)
+      (set cp 0)
+      (set out NIL)
+      (set ticks 0)
+      (forever
+        (if (== p n)
+          (do
+            (let [^Value v (walk-next rt wh)]
+              (if (nil? rt v)
+                (break))
+              (set base (+ base n))
+              (set leaf v)
+              (set p 0)
+              (set n (leaf-len rt v))
+              (comment "WHOLLY BEFORE THE START: skipped by length, without"
+                       "reading a byte of it.")
+              (if (<= (+ base n) startbyte)
+                (do (set p n)
+                    (continue)))
+              (comment "THE LEAF THAT CONTAINS IT: jump in, and the code-point"
+                       "index is `skip` by construction -- that is what"
+                       "`rope-byte-of-cp` was asked."
+                       ""
+                       "`<=` AND NOT `<`. A leaf that begins exactly AT the"
+                       "seek offset needs no jump but does need `cp` set, and"
+                       "with `<` it did not get one -- the walk resumed"
+                       "believing it was at code point zero, and `from=1` on"
+                       "`abcabc` answered 2 instead of 3. Later leaves have"
+                       "`base > startbyte`, so this fires once.")
+              (if (<= base startbyte)
+                (do (set p (- startbyte base))
+                    (set cp skip)))
+              (continue))))
+        (comment "BOUNDED HERE. A haystack is as long as the data says, so the"
+                 "check has to be inside the walk rather than a pre-charge"
+                 "against a length that is known but arbitrary.")
+        (comment "THE TICK CHECKS AND DOES NOT CHARGE -- `charge-work` below"
+                 "bills the bytes. Ticking once per LEAF and charging there"
+                 "made the same bytes cost different gas in different shapes:"
+                 "a three-leaf rope ticked three times where a flat string"
+                 "ticked once, and the probe printed `gas=4,5` for what had"
+                 "been `6,6`. The BYTES are what the work is, and they do not"
+                 "depend on how the tree was built.")
+        (if (not (charge-tick rt (to-i64 ticks) 0 "str-index-of"))
+          (break))
+        (set ticks (+ ticks 1))
+        (comment "THE SKIP. Every byte between here and the next occurrence of"
+                 "the needle's first byte can start no match, but each one"
+                 "still has to be COUNTED if it is a code-point start. So the"
+                 "run is found in one call and then counted, rather than"
+                 "tested one byte at a time -- which is the difference between"
+                 "a memchr and a call per byte, and was six times the runtime"
+                 "of the flatten this replaced.")
+        (let [^I32 hit (leaf-find rt leaf (leaf-byte rt nd 0) p)]
+          (charge-work rt (to-i64 (- hit p)))
+          (comment "ASCII SKIPS THE COUNTING TOO, and this is most of the"
+                   "cost. `leaf-find` jumps over a run in one call, and then"
+                   "the run still had to be walked BYTE BY BYTE to count code"
+                   "points -- 34 KB of flat ASCII took 142us, 4.2ns a byte,"
+                   "for a scan that should be a memchr. When every byte is a"
+                   "code point the count IS the distance, and the header"
+                   "already knows (`s-ascii`, set once when the string was"
+                   "built).")
+          (if ascii
+            (do
+              (set cp (+ cp (- hit p)))
+              (set p hit))
+            (while (< p hit)
+              (do
+                (if (!= (bit-and (leaf-byte rt leaf p) 192) 128)
+                  (set cp (+ cp 1)))
+                (set p (+ p 1)))))
+          (if (< p n)
+            (do
+              (charge-work rt 1)
+              (comment "A CONTINUATION BYTE IS 10xxxxxx and starts nothing, so"
+                       "it advances the byte position and not the code-point"
+                       "index. This is the whole of the multi-byte handling.")
+              (if (!= (bit-and (leaf-byte rt leaf p) 192) 128)
+                (do
+                  (if (>= cp skip)
+                    (if (match-at rt wh leaf p nd nn)
+                      (do (set out (fixnum (to-i64 cp)))
+                          (break))))
+                  (set cp (+ cp 1))))
+              (set p (+ p 1))))))
+      (walk-close rt wh)
+      (return out))))

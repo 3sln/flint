@@ -36,8 +36,24 @@ JUSTIFIED = {
         ("runtimes/jvm/src/com/flint/rt/Str.java", "flatten"),
         ("runtimes/clr/src/rt/Str.cs", "Flatten"),
     ],
-    "a search needs contiguous bytes, and caching pays off when the same "
-    "string is searched again": [
+    # WAS: "a search needs contiguous bytes, and caching pays off when the
+    # same string is searched again". That justification was WRONG, and it is
+    # worth saying how rather than just deleting it.
+    #
+    # `0011` lists `index-of` under what must WALK the structure -- "none of
+    # them needs contiguous bytes" -- and warns in the next breath that "a
+    # rope that flattens on every `index-of` passes every correctness test and
+    # is slower than the flat string it replaced". The conclusion that got
+    # borrowed here, "flatten before matching", is from `0011` §3 and is about
+    # HOST REGEX ENGINES, which genuinely do want a `&str`/`string`. A
+    # substring search does not, and the search is `kin/ropefind.kin` now.
+    #
+    # It also hid a divergence: this file says a justification holding for Rust
+    # and not for the JVM is a port that has drifted, and this entry was listed
+    # for Rust ALONE. The ports never called anything named `flatten` -- they
+    # built a host `String` instead -- so the checker could not see that they
+    # were materialising too.
+    "the non-rope fallthrough, where `string_arg` cannot flatten anything": [
         ("runtime/src/coll.rs", "string_arg"),
     ],
     "byte strings: the same three reasons, one type down": [

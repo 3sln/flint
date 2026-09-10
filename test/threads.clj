@@ -217,6 +217,40 @@
 ;; TO REVERSE IT: drop `vec-eq-indexed` from `kin/valeq.kin` and
 ;; `hash-vec-indexed` from `kin/valhash.kin`, and put this number back to
 ;; 316 000. The gate is the only thing holding the decision.
+;;
+;; AND AGAIN, by 984 bytes, when `str-index-of` became `kin/ropefind.kin` --
+;; ONE implementation replacing three. 317 320 -> 318 304.
+;;
+;; WHAT WAS THERE: native flattened the rope and searched UTF-8, the JVM built
+;; a `java.lang.String` and searched UTF-16, and the CLR built a .NET `string`
+;; and then allocated `h.Substring(0, i)` purely to count code points. Three
+;; algorithms over three representations, agreeing on the answer and on
+;; nothing else -- so the same program cost DIFFERENT GAS on each, and no
+;; charge could be moved to fix it because they were not doing the same work.
+;;
+;; WHAT IT BUYS, all of it measured:
+;;
+;;   * gas agrees. The same search cost 897 steps native against 21 on the
+;;     JVM; it is now 113 on both, and the same on a flat string as on a
+;;     three-leaf rope holding the same bytes.
+;;   * the haystack is never materialised. `0011` lists `index-of` under what
+;;     must WALK rather than flatten; an early match on a 34 KB rope now costs
+;;     0.06ms and ZERO allocations, where flattening copied all 34 KB before
+;;     looking at the first byte.
+;;   * a real divergence died with it. `(str/index-of "abc" "" 100)` was nil
+;;     on native's ASCII path, the count on its non-ASCII path, and the count
+;;     on both ports -- the answer depended on whether the haystack happened
+;;     to be ASCII, and native contradicted its own ports. Clojure says 3.
+;;     Found by differencing 1 560 cases; 1 536 were byte-identical.
+;;
+;; WHAT IT COSTS BESIDES THE BYTES: a full scan is ~1.7x the old
+;; flatten-and-search (41us against 25us on 34 KB). It started at 158us and
+;; came down in three measured steps -- an ASCII skip, dropping the cursor
+;; clone for matches that stay inside one leaf, and `run-eq` for the compare.
+;; The remaining gap is the price of not copying the haystack.
+;;
+;; TO REVERSE IT: the three builtins would each need their own search back,
+;; which is the thing worth not doing.
 (check-that "the floor is within the budget 0009, 0011, specialisation, bytes and call chose"
 ;; TABLES (`doc/decisions/0026`) cost 22 857 bytes here when they landed --
 ;; 287 854 shipped against 264 997 -- and then gave 15 832 of it back, which is
@@ -294,7 +328,7 @@
 ;; slice, which is what makes the rooting above expressible in all three at
 ;; once. It is a fixed cost, and the next generated caller of a value pays none
 ;; of it.
-            (< pure-size 318000))
+            (< pure-size 319000))
 
 ;; RE-BASELINED AGAIN, and this one is a decision rather than a drift:
 ;; 300 281 against 280 781, and 18 917 of it is ONE ARM IN THE WIRE CODEC.
