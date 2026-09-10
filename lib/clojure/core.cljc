@@ -6,7 +6,10 @@
   never calls `partition-by` does not carry it. A var whose whole body is one
   `flint.rt/x` call is detected by the compiler and called directly, so the
   wrapper layer costs nothing at the call site."
-  (:require [flint.protocols] [flint.regex]))
+  (:require [flint.protocols] [flint.regex]
+            ;; A REFER RATHER THAN A QUALIFIED CALL at every site: a refer is not
+            ;; a definition, so what this namespace PUBLISHES is unchanged.
+            [flint.core :refer [form kind opaque-label opaque? tag]]))
 
 ;; ---------------------------------------------------------------- primitives
 
@@ -566,11 +569,6 @@
 (defn tagged-literal? [x] (flint.rt/tagged-literal? x))
 
 
-
-;; `:tag` and `:form`, the names Clojure's own `tagged-literal` answers to.
-(defn tag [x] (flint.rt/get x :tag))
-(defn form [x] (flint.rt/get x :form))
-
 (defn parse-long [s] (let [v (flint.rt/str->num s)] (if (int? v) v nil)))
 (defn parse-double [s] (let [v (flint.rt/str->num s)] (if (number? v) (flint.rt/add v 0.0) nil)))
 
@@ -582,7 +580,7 @@
 (defn num [x] x)
 
 (defn char [n] (flint.rt/from-code-point n))
-(defn int-of-char [c] (flint.rt/code-point-at c 0))
+
 
 ;; -------------------------------------------------------------- more macros
 
@@ -743,7 +741,7 @@
               (recur nil (first cs) seen)
               (recur (nnext cs) acc (conj seen [(first cs) (second cs)])))))))
 
-(defmacro cond-chain [g pairs default]
+(defmacro ^:private cond-chain [g pairs default]
   (loop [ps (reverse pairs) acc default]
     (if (nil? (seq ps))
       acc
@@ -896,7 +894,7 @@
   ([start end step] (flint.rt/range3 start end step)))
 
 (defn- repeat2 [n x] (take n (repeat-forever x)))
-(defn repeat-forever [x] (lazy-seq (cons x (repeat-forever x))))
+(defn- repeat-forever [x] (lazy-seq (cons x (repeat-forever x))))
 (defn repeat
   ([x] (repeat-forever x))
   ([n x] (repeat2 n x)))
@@ -908,7 +906,7 @@
 (defn interleave
   ([a b] (interleave2 a b))
   ([a b & more] (apply2 interleave-all (cons a (cons b more)))))
-(defn interleave-all [colls]
+(defn- interleave-all [colls]
   (lazy-seq (let [ss (map2 seq colls)]
               (when (every? some? ss)
                 (concat (map2 first ss) (interleave-all (map2 rest ss)))))))
@@ -1358,10 +1356,10 @@
   ([p] (fn [& args] (some (fn [x] (p x)) args)))
   ([p q] (fn [& args] (or (some (fn [x] (p x)) args) (some (fn [x] (q x)) args)))))
 
-(defn count-matching [pred coll] (reduce (fn [n x] (if (pred x) (inc n) n)) 0 coll))
+(defn- count-matching [pred coll] (reduce (fn [n x] (if (pred x) (inc n) n)) 0 coll))
 
 (defn ratio? [x] false)
-(defn bigdec? [x] false)
+
 (defn decimal? [x] false)
 (defn rational? [x] (int? x))
 (defn nat-int? [x] (and (int? x) (>= x 0)))
@@ -1377,7 +1375,7 @@
         (vector? x) :vector (map? x) :map (set? x) :set (seq? x) :seq (fn? x) :fn
         :else :unknown))
 
-(defn nil-or [x d] (if (nil? x) d x))
+(defn- nil-or [x d] (if (nil? x) d x))
 
 ;; ------------------------------------------------------------------ printing
 
@@ -1641,23 +1639,7 @@
 ;; can collide with, how a protocol keeps a private marker. flint has no host
 ;; classes, so it had no way to say it.
 
-(defn opaque
-  "A value equal only to itself. `(opaque)` twice gives two different values.
 
-  The optional label is for PRINTING and plays no part in identity: two opaque
-  values with the same label are still distinct, which is the point.
-
-  Minting one grants nothing -- see 0022. Anyone can, so possession of *an*
-  opaque value is never authority; only the host recognising a specific one is."
-  ([] (flint.rt/opaque nil))
-  ([label] (flint.rt/opaque label)))
-
-(defn opaque? [x] (flint.rt/opaque? x))
-
-(defn opaque-label
-  "The label an opaque value was given, or nil. Printing only."
-  [x]
-  (flint.rt/opaque-label x))
 (defn vswap!
   ([v f] (flint.rt/reset! v (f (flint.rt/deref v))))
   ([v f a] (flint.rt/reset! v (f (flint.rt/deref v) a)))
@@ -1680,18 +1662,13 @@
 
 ;; ------------------------------------------------------------------- strings
 
-(defn str-join [xs] (flint.rt/str-join xs))
-(defn str-bytes [s] (flint.rt/str-bytes s))
-(defn bytes->str [bs] (flint.rt/bytes->str bs))
 
 ;; ---------------------------------------------------------------- interop-free
 ;;
 ;; `read-string` and `eval` do not exist: a flint module carries no compiler.
 ;; `clojure.edn/read-string` is the way to turn text into data.
 
-(defn ->str-builder [] (volatile! []))
-(defn sb-append! [sb s] (vswap! sb conj s) sb)
-(defn sb-str [sb] (flint.rt/str-join @sb))
+
 (defn println-str [& xs] (flint.rt/str2 (join-with* " " xs false) "\n"))
 
 ;; --------------------------------------------------------------- protocols
@@ -1726,12 +1703,6 @@
 ;; nowhere to hang a map, and neither do numbers or functions. Those dispatch by
 ;; kind, which is what kinds are for.
 
-(defn kind
-  "The dispatch kind of `x`: one of `:nil :boolean :number :string :keyword
-  :symbol :vector :map :set :list :fn :port :thread :atom :var :regex
-  :exception :other`. A closed set, because flint has no types."
-  [x]
-  (flint.rt/kind x))
 
 ;; PUBLIC, and it has to be: `defprotocol` EMITS a call to this into its
 ;; expansion, so the reference lands in whatever namespace used the macro. A

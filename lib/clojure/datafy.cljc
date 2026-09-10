@@ -11,7 +11,8 @@
   `:clojure.datafy/obj` and the original's CLASS NAME under
   `:clojure.datafy/class`. flint has no classes, so the second is
   `:clojure.datafy/kind` and holds a `clojure.core/kind` keyword."
-  (:require [clojure.core.protocols :as p]))
+  (:require [clojure.core.protocols :as p]
+            [flint.core :refer [kind]]))
 
 ;; Not every value can carry metadata: numbers, and the short strings,
 ;; keywords and chars that live in the value word itself, have nowhere to hang

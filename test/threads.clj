@@ -350,7 +350,7 @@
 ;; copy, or as a handle to nothing, fails here rather than merely looking
 ;; wrong.
 (src! "delegate"
-      (str "(ns delegate (:require [flint.thread :as t] [flint.port :as p]))\n"
+      (str "(ns delegate (:require [flint.thread :as t] [flint.port :as p] [flint.core :refer [opaque]]))\n"
            "(defn main [_]\n"
            "  (let [[oa ob] (p/channel 4 \"outer\")\n"
            "        [ia ib] (p/channel 4 \"inner\")\n"
@@ -364,7 +364,7 @@
        "[:delegated [true \"inner\"]]")
 
 (src! "closed"
-      (str "(ns closed (:require [flint.thread :as t] [flint.port :as p]))\n"
+      (str "(ns closed (:require [flint.thread :as t] [flint.port :as p] [flint.core :refer [opaque]]))\n"
            "(defn main [_]\n"
            "  (let [[a b] (p/channel 2)]\n"
            "    (p/send a 1) (p/close a)\n"
@@ -379,7 +379,7 @@
             (str/includes? closed-out "the other end has closed"))
 
 (src! "orphan"
-      (str "(ns orphan (:require [flint.thread :as t] [flint.port :as p]))\n"
+      (str "(ns orphan (:require [flint.thread :as t] [flint.port :as p] [flint.core :refer [opaque]]))\n"
            "(defn only-b [] (let [[a b] (p/channel 1)] b))\n"
            "(defn main [_]\n"
            "  (let [b (only-b)]\n"
@@ -397,7 +397,7 @@
 ;; ---------------------------------------------------------------- what crosses
 
 (src! "crossing"
-      (str "(ns crossing (:require [flint.port :as p]))\n"
+      (str "(ns crossing (:require [flint.port :as p] [flint.core :refer [opaque]]))\n"
            "(defn helper [x] x)\n"
            "(defn- try! [f] (try (f) (catch Throwable e (ex-message e))))\n"
            "(defn main [_]\n"

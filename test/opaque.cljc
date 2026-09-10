@@ -10,7 +10,8 @@
   when the object moved, and a value used as a map key would stop being findable
   by the key that put it there. 0022 names it as the single most likely thing to
   get wrong, and the reason is that it fails intermittently and under load."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [flint.core :refer [opaque opaque? opaque-label]]))
 
 (defn- churn
   "Allocate enough to force several collections, and return something so the

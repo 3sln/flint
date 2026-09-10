@@ -10,7 +10,8 @@
   is given and the host decides, which is the point of the cutover: `open`
   takes arguments, and a capability is one of the things those arguments can
   be."
-  (:require [flint.port :as p]))
+  (:require [flint.port :as p]
+            [flint.core :refer [opaque]]))
 
 (defn try-open [name opts]
   (try (do (p/open name opts) "opened") (catch Throwable e (ex-message e))))

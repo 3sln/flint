@@ -1216,7 +1216,7 @@ claim fails the build.
 <!-- BEGIN GENERATED COVERAGE -->
 | namespace | vars | macros | missing vs Clojure | flint-only |
 |---|---:|---:|---:|---:|
-| `clojure.core` | 344 | 45 | 376 | 23 |
+| `clojure.core` | 325 | 45 | 376 | 4 |
 | `clojure.core.protocols` | 4 | 0 | n/a | n/a |
 | `clojure.data` | 5 | 0 | n/a | n/a |
 | `clojure.datafy` | 2 | 0 | n/a | n/a |
@@ -1226,6 +1226,7 @@ claim fails the build.
 | `clojure.string` | 23 | 0 | 0 | 2 |
 | `clojure.walk` | 7 | 0 | 3 | 0 |
 | `clojure.zip` | 28 | 0 | 0 | 0 |
+| `flint.core` | 14 | 0 | n/a | n/a |
 | `flint.data.html` | 12 | 0 | n/a | n/a |
 | `flint.data.json` | 3 | 0 | n/a | n/a |
 | `flint.data.transit` | 2 | 0 | n/a | n/a |
@@ -1257,7 +1258,7 @@ hierarchies (`derive`, `isa?`, `parents`, `prefer-method`);
 transducers (`transduce`, `eduction`, `cat`, `completing`, `halt-when`, and the 1-arity transducer forms of `map`/`filter`/`take`/...);
 and sorted collections (`sorted-map`, `sorted-set`, `subseq`, `rsubseq`).
 
-*Added by flint:* `->str-builder` `bigdec?` `bytes->str` `cond-chain` `count-matching` `extend-method` `form` `int-of-char` `interleave-all` `kind` `methods-of` `nil-or` `opaque` `opaque-label` `opaque?` `protocol-miss` `re-quote-replacement` `repeat-forever` `sb-append!` `sb-str` `str-bytes` `str-join` `tag`
+*Added by flint:* `extend-method` `methods-of` `protocol-miss` `re-quote-replacement`
 
 *Absent:* 376 names -- see `doc/manifest.edn` for all of them.
 

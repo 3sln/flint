@@ -13,7 +13,8 @@
   ports cached a failed thunk's nil and answered it forever, where native
   left the delay unforced and retryable (`0031`, and the atoms work that
   followed it)."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [flint.core :refer [opaque opaque? opaque-label]]))
 
 (defn- attempt [f]
   (try (str (f)) (catch Exception e (str "threw " (flint.rt/ex-kind e) " " (ex-message e)))))

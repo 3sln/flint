@@ -10,7 +10,6 @@
     -
     ->
     ->>
-    ->str-builder
     /
     <
     <=
@@ -31,7 +30,6 @@
     assoc-in
     associative?
     atom
-    bigdec?
     bit-and
     bit-and-not
     bit-clear
@@ -47,7 +45,6 @@
     boolean?
     bounded-count
     butlast
-    bytes->str
     bytes?
     case
     char
@@ -63,7 +60,6 @@
     cond
     cond->
     cond->>
-    cond-chain
     condp
     conj
     conj!
@@ -71,7 +67,6 @@
     constantly
     contains?
     count
-    count-matching
     counted?
     cycle
     dec
@@ -131,7 +126,6 @@
     fnil
     for
     force
-    form
     format
     frequencies
     gensym
@@ -154,11 +148,9 @@
     indexed?
     infinite?
     int
-    int-of-char
     int?
     integer?
     interleave
-    interleave-all
     interpose
     into
     iterate
@@ -169,7 +161,6 @@
     keys
     keyword
     keyword?
-    kind
     last
     lazy-cat
     lazy-seq
@@ -203,7 +194,6 @@
     neg?
     next
     nfirst
-    nil-or
     nil?
     nnext
     not
@@ -217,9 +207,6 @@
     num
     number?
     odd?
-    opaque
-    opaque-label
-    opaque?
     or
     parse-boolean
     parse-double
@@ -261,7 +248,6 @@
     rem
     remove
     repeat
-    repeat-forever
     repeatedly
     replace
     reset!
@@ -272,8 +258,6 @@
     rseq
     run!
     satisfies?
-    sb-append!
-    sb-str
     second
     select-keys
     seq
@@ -296,8 +280,6 @@
     split-at
     split-with
     str
-    str-bytes
-    str-join
     string?
     subs
     subvec
@@ -305,7 +287,6 @@
     swap-vals!
     symbol
     symbol?
-    tag
     tagged-literal
     tagged-literal?
     take
@@ -395,7 +376,7 @@
     when-not
     when-some
     while},
-  :count 344,
+  :count 325,
   :absent
   #{*'
     *1
@@ -774,29 +755,7 @@
     with-redefs-fn
     xml-seq},
   :extra
-  #{->str-builder
-    bigdec?
-    bytes->str
-    cond-chain
-    count-matching
-    extend-method
-    form
-    int-of-char
-    interleave-all
-    kind
-    methods-of
-    nil-or
-    opaque
-    opaque-label
-    opaque?
-    protocol-miss
-    re-quote-replacement
-    repeat-forever
-    sb-append!
-    sb-str
-    str-bytes
-    str-join
-    tag},
+  #{extend-method methods-of protocol-miss re-quote-replacement},
   :compared-with clojure.core},
  clojure.core.protocols
  {:file "lib/clojure/core/protocols.cljc",
@@ -978,6 +937,25 @@
   :absent #{},
   :extra #{},
   :compared-with clojure.zip},
+ flint.core
+ {:file "lib/flint/core.cljc",
+  :present
+  #{->str-builder
+    bigdec?
+    bytes->str
+    form
+    int-of-char
+    kind
+    opaque
+    opaque-label
+    opaque?
+    sb-append!
+    sb-str
+    str-bytes
+    str-join
+    tag},
+  :macros #{},
+  :count 14},
  flint.data.html
  {:file "lib/flint/data/html.cljc",
   :present

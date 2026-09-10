@@ -21,6 +21,7 @@
     clojure.walk      "lib/clojure/walk.cljc"
     clojure.zip       "lib/clojure/zip.cljc"
     clojure.edn       "lib/clojure/edn.cljc"
+    flint.core        "lib/flint/core.cljc"
     flint.protocols   "lib/flint/protocols.cljc"
     flint.regex       "lib/flint/regex.cljc"
     flint.thread      "lib/flint/thread.cljc"

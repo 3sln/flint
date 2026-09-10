@@ -93,6 +93,27 @@ not the draft's to answer:
 * **Two names are misplaced rather than invented.** `re-quote-replacement` is
   `clojure.string`'s in real Clojure; `spread` exists there but is private.
 
+## Adding a library namespace: three registration points, one of them obvious
+
+A new `lib/` file is not reachable by writing it. It has to be registered in
+three places, and only the first announces itself:
+
+1. **`bin/manifest`'s `shipped` map** -- or `doc/manifest.edn` and `README.md`
+   never mention it.
+2. **`sdks/esm/gen/stdlib.json`**, by running `./sdks/esm/build`. The ESM SDK
+   embeds every library source and resolves namespaces from that bundle, so an
+   unbundled namespace fails at RUN time with "no source for x. Every
+   namespace a program requires has to be resolvable" -- nowhere near the file
+   you added.
+3. **The native runtime**, which needs rebuilding before `flint run` sees a
+   new library file.
+
+And when MOVING a name between namespaces, the consumers are not all in
+`*.cljc`. `test/threads.clj` builds four flint programs as STRING LITERALS --
+`delegate`, `closed`, `orphan`, `crossing` -- and a grep over source files
+cannot see them. Moving `opaque` to `flint.core` broke all four, and the suite
+was what found it.
+
 ## What is NOT pending, recorded so it is not reopened
 
 * **Qualified references as dependency edges.** Measured and declined:

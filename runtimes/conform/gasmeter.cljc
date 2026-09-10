@@ -17,7 +17,8 @@
   A budget that fits on one runtime has to fit on the others, or the mirror
   stops at the answers."
   (:require [flint.table :as ft]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [flint.core :refer [str-bytes]]))
 
 (def S (ft/schema [[:id :int] [:name :string]]))
 

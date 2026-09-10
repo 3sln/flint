@@ -7,7 +7,8 @@
   namespace wherever the key had to become a string. Both of those are
   serialisation problems, so most of what is asserted here is about being
   DISTINGUISHABLE, not about being convenient."
-  (:require [flint.check :refer [expect]]))
+  (:require [flint.check :refer [expect]]
+            [flint.core :refer [tag form]]))
 
 (defn ^:flint.check/test reads-as-a-value []
   (expect tagged-literal? (tagged-literal 'my.ns/thing [1 2]))
