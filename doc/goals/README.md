@@ -31,7 +31,7 @@ three times.
 
 | file | fns | lines | verdict, from reading the bodies |
 | --- | ---: | ---: | --- |
-| `err.rs` | 8 | 92 | **PORT THIS.** `ex_info` is the same algorithm line for line in Rust and Java -- mark, push four, alloc, check zero, set slots, pop. Verified, not inferred. |
+| `err.rs` | 3 | ~44 | **PORTED** -- `kin/exinfo.kin` has `ex-info`, `is-exception`, `ex-message`, `ex-data`, `ex-kind`. What is left is `ex_matches` (Rust `String` and `ends_with`, Java string methods on the ports -- trap 4 at FUNCTION granularity, in the same file), `make_error` (takes `&str`) and `failed`/`clear_error` (runtime state). |
 | `num.rs` | 2 | 16 | host -- value-representation predicates |
 | `bytes.rs` | 2 | 28 | unread |
 | `set.rs` | 2 | 30 | host -- `set_for_each` takes a Rust closure |
@@ -47,6 +47,11 @@ three times.
 | `pike.rs` | 8 | 339 | **NOT A PORT.** `doc/decisions/0012` says it: "Per host, native -- the simulator." The NFA compiler is the shared half and already is. |
 | `coll.rs` | 17 | 619 | mostly host -- see trap 4; nine `Value -> Value` functions that use `StringBuilder` and `String.indexOf` on the ports |
 | `builtins.rs` | 6 | 1097 | host -- the builtin table |
+
+ONE ROW WENT THE OTHER WAY. `err.rs` read as unremarkable at 92 lines and was
+the only verified YES in the table -- three bodies trying to be the same
+thing, typed out separately, with `ex_info`'s pop landing at a different point
+in each. It is `kin/exinfo.kin` now.
 
 TWO ROWS THAT WERE BACKLOG THIS MORNING AND ARE NOT. `pike.rs` at 339 lines
 is a documented architectural decision, not unported work. `coll.rs`'s nine

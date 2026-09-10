@@ -48,6 +48,7 @@ pub mod numdiv;
 pub mod opaque;
 pub mod dissoc;
 pub mod eq;
+pub mod exinfo;
 pub mod eqalloc;
 pub mod typep;
 pub mod pikegas;

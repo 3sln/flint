@@ -15,31 +15,20 @@ use crate::obj::*;
 use crate::rt::Rt;
 use crate::value::{Value, NIL};
 
+// `ex_info`, `is_exception`, `ex_message`, `ex_data` and `ex_kind` are
+// GENERATED, from `kin/exinfo.kin`. They were the same algorithm in all three
+// runtimes -- mark, push four, allocate, check for a failed allocation, fill
+// the slots, pop -- written out three times, which is the case `join_strings`
+// next door is NOT: that one is three implementations using what each host
+// has, and unifying it would slow every runtime to the least equipped.
+//
+// The slot constants stay here: they are what the generated code reaches for.
 pub const EX_KIND: u32 = 0;
 pub const EX_MSG: u32 = 1;
 pub const EX_DATA: u32 = 2;
 pub const EX_CAUSE: u32 = 3;
 
 impl Rt {
-    pub fn ex_info(&mut self, kind: Value, msg: Value, data: Value, cause: Value) -> Value {
-        let base = self.mark();
-        let k = self.push(kind);
-        let m = self.push(msg);
-        let d = self.push(data);
-        let c = self.push(cause);
-        let a = self.alloc(TY_EXINFO, 4);
-        if a == 0 {
-            self.pop_to(base);
-            return NIL;
-        }
-        let (kind, msg, data, cause) = (self.r(k), self.r(m), self.r(d), self.r(c));
-        self.pop_to(base);
-        self.set_slot(a, EX_KIND, kind);
-        self.set_slot(a, EX_MSG, msg);
-        self.set_slot(a, EX_DATA, data);
-        self.set_slot(a, EX_CAUSE, cause);
-        Value::heap(a)
-    }
 
     /// Does an exception match a `catch` clause's name?
     ///
@@ -77,9 +66,6 @@ impl Rt {
         Value::boolean(hit)
     }
 
-    pub fn is_exception(&self, v: Value) -> bool {
-        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_EXINFO
-    }
 
     /// Build an exception value without throwing it. The scheduler needs this:
     /// it hands an error to a *parked* thread, to be raised when that thread is
@@ -129,27 +115,6 @@ impl Rt {
         self.throw_str("ClassCastException", &msg)
     }
 
-    pub fn ex_message(&self, e: Value) -> Value {
-        if self.is_exception(e) {
-            self.slot(e, EX_MSG)
-        } else {
-            NIL
-        }
-    }
-    pub fn ex_data(&self, e: Value) -> Value {
-        if self.is_exception(e) {
-            self.slot(e, EX_DATA)
-        } else {
-            NIL
-        }
-    }
-    pub fn ex_kind(&self, e: Value) -> Value {
-        if self.is_exception(e) {
-            self.slot(e, EX_KIND)
-        } else {
-            NIL
-        }
-    }
 
     #[inline]
     pub fn failed(&self) -> bool {

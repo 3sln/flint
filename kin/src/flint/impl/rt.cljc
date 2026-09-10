@@ -371,6 +371,16 @@
    ;; is a slot rather than the object.
    'S_MAP {:rust "crate::set::S_MAP"
           :java "Sets.S_MAP" :csharp "global::Flint.Rt.Sets.S_MAP"}
+   ;; THE EXCEPTION SLOTS. Four, and `EX_CAUSE` is the one that makes an
+   ;; exception a chain rather than a leaf.
+   'EX_KIND {:rust "crate::err::EX_KIND"
+             :java "Rt.EX_KIND" :csharp "global::Flint.Rt.Rt.ExKindSlot"}
+   'EX_MSG {:rust "crate::err::EX_MSG"
+            :java "Rt.EX_MSG" :csharp "global::Flint.Rt.Rt.ExMsgSlot"}
+   'EX_DATA {:rust "crate::err::EX_DATA"
+             :java "Rt.EX_DATA" :csharp "global::Flint.Rt.Rt.ExDataSlot"}
+   'EX_CAUSE {:rust "crate::err::EX_CAUSE"
+              :java "Rt.EX_CAUSE" :csharp "global::Flint.Rt.Rt.ExCauseSlot"}
    'S_META {:rust "crate::set::S_META"
            :java "Sets.S_META" :csharp "global::Flint.Rt.Sets.S_META"}
    'S_HASH {:rust "crate::set::S_HASH"

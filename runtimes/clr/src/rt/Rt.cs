@@ -1334,18 +1334,10 @@ public sealed class Rt : System.IDisposable {
 
     public const int ExKindSlot = 0, ExMsgSlot = 1, ExDataSlot = 2, ExCauseSlot = 3;
 
-    public static long ExInfo(Rt rt, long kind, long msg, long data, long cause) {
-        int bas = rt.Mark();
-        int k = rt.Push(kind), m = rt.Push(msg), d = rt.Push(data), c = rt.Push(cause);
-        long a = rt.Alloc(Obj.TyExinfo, 4);
-        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
-        rt.SetSlot(a, ExKindSlot, rt.R(k));
-        rt.SetSlot(a, ExMsgSlot, rt.R(m));
-        rt.SetSlot(a, ExDataSlot, rt.R(d));
-        rt.SetSlot(a, ExCauseSlot, rt.R(c));
-        rt.PopTo(bas);
-        return Val.Heap(a);
-    }
+    /// GENERATED, from `kin/exinfo.kin`; the body here was native's algorithm
+    /// written a third time by hand.
+    public static long ExInfo(Rt rt, long kind, long msg, long data, long cause) =>
+        global::_3sln.Flint.Kgen.Rt.Exinfo.ExInfo(rt, kind, msg, data, cause);
 
     /// Build an exception without throwing it. The scheduler needs this: it
     /// hands an error to a PARKED thread, to be raised when that thread next
@@ -1366,10 +1358,10 @@ public sealed class Rt : System.IDisposable {
         return Val.Nil;
     }
 
-    public bool IsException(long v) => IsHeapTy(v, Obj.TyExinfo);
-    public long ExMessage(long e) => IsException(e) ? Slot(e, ExMsgSlot) : Val.Nil;
-    public long ExData(long e) => IsException(e) ? Slot(e, ExDataSlot) : Val.Nil;
-    public long ExKind(long e) => IsException(e) ? Slot(e, ExKindSlot) : Val.Nil;
+    public bool IsException(long v) => global::_3sln.Flint.Kgen.Rt.Exinfo.IsException(this, v);
+    public long ExMessage(long e) => global::_3sln.Flint.Kgen.Rt.Exinfo.ExMessage(this, e);
+    public long ExData(long e) => global::_3sln.Flint.Kgen.Rt.Exinfo.ExData(this, e);
+    public long ExKind(long e) => global::_3sln.Flint.Kgen.Rt.Exinfo.ExKind(this, e);
 
     /// Does an exception match a `catch` clause's name?
     ///

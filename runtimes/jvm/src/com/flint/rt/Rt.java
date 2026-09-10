@@ -1417,17 +1417,11 @@ public final class Rt {
 
     public static final int EX_KIND = 0, EX_MSG = 1, EX_DATA = 2, EX_CAUSE = 3;
 
+    /// GENERATED, from `kin/exinfo.kin`. The body here was the same algorithm
+    /// as native's, written twice by hand: mark, push four, allocate, check
+    /// for a failed allocation, fill the slots, pop.
     public static long exInfo(Rt rt, long kind, long msg, long data, long cause) {
-        int base = rt.mark();
-        int k = rt.push(kind), m = rt.push(msg), d = rt.push(data), c = rt.push(cause);
-        long a = rt.alloc(Obj.TY_EXINFO, 4);
-        if (a == 0) { rt.popTo(base); return Val.NIL; }
-        rt.setSlot(a, EX_KIND, rt.r(k));
-        rt.setSlot(a, EX_MSG, rt.r(m));
-        rt.setSlot(a, EX_DATA, rt.r(d));
-        rt.setSlot(a, EX_CAUSE, rt.r(c));
-        rt.popTo(base);
-        return Val.heap(a);
+        return com._3sln.flint.kgen.rt.Exinfo.exInfo(rt, kind, msg, data, cause);
     }
 
     /// Build an exception without throwing it. The scheduler needs this: it
@@ -1449,10 +1443,10 @@ public final class Rt {
         return Val.NIL;
     }
 
-    public boolean isException(long v) { return isHeapTy(v, Obj.TY_EXINFO); }
-    public long exMessage(long e) { return isException(e) ? slot(e, EX_MSG) : Val.NIL; }
-    public long exData(long e) { return isException(e) ? slot(e, EX_DATA) : Val.NIL; }
-    public long exKind(long e) { return isException(e) ? slot(e, EX_KIND) : Val.NIL; }
+    public boolean isException(long v) { return com._3sln.flint.kgen.rt.Exinfo.isException(this, v); }
+    public long exMessage(long e) { return com._3sln.flint.kgen.rt.Exinfo.exMessage(this, e); }
+    public long exData(long e) { return com._3sln.flint.kgen.rt.Exinfo.exData(this, e); }
+    public long exKind(long e) { return com._3sln.flint.kgen.rt.Exinfo.exKind(this, e); }
 
     /// Does an exception match a `catch` clause's name?
     ///

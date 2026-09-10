@@ -1,0 +1,195 @@
+--rust-head
+extern crate alloc;
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_EXINFO: u8 = 44;
+// `EX_KIND` and friends resolve to `crate::err::X`, so the probe declares that
+// module rather than four bare constants.
+pub mod err {
+    pub const EX_KIND: u32 = 0; pub const EX_MSG: u32 = 1;
+    pub const EX_DATA: u32 = 2; pub const EX_CAUSE: u32 = 3;
+}
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+}
+struct Space { m: Vec<u8> }
+struct Gc { sp: Space }
+struct Rt { h: Vec<u64>, gc: Gc, bump: u64, roots: Vec<Value>, starve: bool }
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn slot(&self, v: Value, i: u32) -> Value { Value(self.h[v.0 as usize + i as usize]) }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.h[v.0 as usize + i as usize] = x.0; }
+    // STARVE IS THE POINT of half this fixture: `alloc` answering 0 is the arm
+    // that has to unwind the root stack before answering NIL.
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        if self.starve { return 0; }
+        let a = self.bump; self.bump += n as u64 + 8;
+        self.gc.sp.m[a as usize] = t;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
+        a
+    }
+}
+impl Rt {
+--rust
+}
+fn show(rt: &Rt, v: Value) -> alloc::string::String {
+    if v.0 == NIL.0 { return alloc::string::String::from("nil"); }
+    alloc::format!("{}", v.0)
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 4096], gc: Gc { sp: Space { m: vec![0; 4096] } },
+                      bump: 100, roots: Vec::new(), starve: false };
+    let mut o = alloc::string::String::new();
+    let (k, m, d, c) = (Value(200), Value(201), Value(202), Value(203));
+    let e = rt.ex_info(k, m, d, c);
+    o.push_str(&alloc::format!(" made={}", show(&rt, e)));
+    o.push_str(&alloc::format!(" isex={}", rt.is_exception(e)));
+    o.push_str(&alloc::format!(" kind={}", show(&rt, rt.ex_kind(e))));
+    o.push_str(&alloc::format!(" msg={}", show(&rt, rt.ex_message(e))));
+    o.push_str(&alloc::format!(" data={}", show(&rt, rt.ex_data(e))));
+    // THE ROOT STACK MUST BE BACK WHERE IT STARTED. A push that is not popped
+    // is a leak the answer never shows.
+    o.push_str(&alloc::format!(" roots={}", rt.roots.len()));
+    // NOT AN EXCEPTION: every accessor answers nil rather than reading the
+    // slot off whatever is there.
+    let notex = Value(300);
+    rt.gc.sp.m[300] = 9;
+    o.push_str(&alloc::format!(" other-isex={}", rt.is_exception(notex)));
+    o.push_str(&alloc::format!(" other-kind={}", show(&rt, rt.ex_kind(notex))));
+    o.push_str(&alloc::format!(" nil-msg={}", show(&rt, rt.ex_message(NIL))));
+    // A FAILED ALLOCATION answers nil AND leaves the root stack clean.
+    rt.starve = true;
+    let none = rt.ex_info(k, m, d, c);
+    o.push_str(&alloc::format!(" starved={}", show(&rt, none)));
+    o.push_str(&alloc::format!(" starved-roots={}", rt.roots.len()));
+    println!("{}", o.trim());
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_EXINFO = 44;
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static boolean isHeap(long v) { return v >= 100 && v != NIL; }
+        static long asHeap(long v) { return v; }
+        static long heap(long a) { return a; }
+    }
+    static final class Rt {
+        static final int EX_KIND = 0, EX_MSG = 1, EX_DATA = 2, EX_CAUSE = 3;
+        long[] h = new long[4096];
+        Gc gc = new Gc();
+        long bump = 100;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        boolean starve = false;
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long slot(long v, int i) { return h[(int) v + i]; }
+        void setSlot(long v, int i, long x) { h[(int) v + i] = x; }
+        long alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 8;
+            gc.sp.m[(int) a] = (byte) t;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;
+            return a;
+        }
+    }
+    static final class Space { byte[] m = new byte[4096]; }
+    static final class Gc { Space sp = new Space(); }
+    static int ty(Space sp, long a) { return sp.m[(int) a]; }
+--java
+    static String show(long v) { return v == NIL ? "nil" : String.valueOf(v); }
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long k = 200, m = 201, d = 202, c = 203;
+        long e = exInfo(rt, k, m, d, c);
+        o.append(" made=").append(show(e));
+        o.append(" isex=").append(isException(rt, e));
+        o.append(" kind=").append(show(exKind(rt, e)));
+        o.append(" msg=").append(show(exMessage(rt, e)));
+        o.append(" data=").append(show(exData(rt, e)));
+        o.append(" roots=").append(rt.roots.size());
+        long notex = 300;
+        rt.gc.sp.m[300] = 9;
+        o.append(" other-isex=").append(isException(rt, notex));
+        o.append(" other-kind=").append(show(exKind(rt, notex)));
+        o.append(" nil-msg=").append(show(exMessage(rt, NIL)));
+        rt.starve = true;
+        o.append(" starved=").append(show(exInfo(rt, k, m, d, c)));
+        o.append(" starved-roots=").append(rt.roots.size());
+        System.out.println(o.toString().trim());
+    }
+--csharp-pre
+namespace Flint.Rt {
+    public static class Rt {
+        public const int ExKindSlot = 0, ExMsgSlot = 1, ExDataSlot = 2, ExCauseSlot = 3;
+    }
+}
+--csharp-head
+    internal const long Nil = 0xFFFFL;
+    internal const int TyExinfo = 44;
+    internal static class Val {
+        internal const long Nil = Probe.Nil;
+        internal static bool IsHeap(long v) { return v >= 100 && v != Nil; }
+        internal static long AsHeap(long v) { return v; }
+        internal static long Heap(long a) { return a; }
+    }
+    internal class Space { internal byte[] m = new byte[4096]; }
+    internal class Gc { internal Space sp = new Space(); }
+    internal class Rt {
+        internal long[] h = new long[4096];
+        internal Gc gc = new Gc();
+        internal long bump = 100;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal bool starve = false;
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { while (roots.Count > n) roots.RemoveAt(roots.Count - 1); }
+        internal long Slot(long v, int i) { return h[(int) v + i]; }
+        internal void SetSlot(long v, int i, long x) { h[(int) v + i] = x; }
+        internal long Alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 8;
+            gc.sp.m[(int) a] = (byte) t;
+            for (int i = 0; i < n; i++) h[(int) a + i] = Nil;
+            return a;
+        }
+    }
+    internal static class Obj {
+        internal const int TyExinfo = TyExinfo_;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a]; }
+    }
+    internal const int TyExinfo_ = 44;
+--csharp
+    static string Show(long v) { return v == Nil ? "nil" : v.ToString(); }
+    public static void Main(string[] args) {
+        var rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long k = 200, m = 201, d = 202, c = 203;
+        long e = ExInfo(rt, k, m, d, c);
+        o.Append(" made=").Append(Show(e));
+        o.Append(" isex=").Append(IsException(rt, e) ? "true" : "false");
+        o.Append(" kind=").Append(Show(ExKind(rt, e)));
+        o.Append(" msg=").Append(Show(ExMessage(rt, e)));
+        o.Append(" data=").Append(Show(ExData(rt, e)));
+        o.Append(" roots=").Append(rt.roots.Count);
+        long notex = 300;
+        rt.gc.sp.m[300] = 9;
+        o.Append(" other-isex=").Append(IsException(rt, notex) ? "true" : "false");
+        o.Append(" other-kind=").Append(Show(ExKind(rt, notex)));
+        o.Append(" nil-msg=").Append(Show(ExMessage(rt, Nil)));
+        rt.starve = true;
+        o.Append(" starved=").Append(Show(ExInfo(rt, k, m, d, c)));
+        o.Append(" starved-roots=").Append(rt.roots.Count);
+        System.Console.WriteLine(o.ToString().Trim());
+    }

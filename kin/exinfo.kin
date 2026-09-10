@@ -1,0 +1,76 @@
+;; An exception VALUE: how one is built and how it is read.
+;;
+;; Four slots and five functions, and they were written three times. The
+;; bodies were already the same algorithm line for line -- mark, push four,
+;; allocate, check for a failed allocation, fill the slots, pop -- which is
+;; what made this worth doing where `join_strings` next door is not. That one
+;; is three implementations using what each host has; this one is one
+;; implementation somebody typed three times.
+;;
+;; THE ORDER AROUND THE ALLOCATION IS THE WHOLE OF THE CARE HERE.
+;; `doc/decisions/0031`: a value held in a host local does not survive an
+;; allocation, because the collector may move it. So all four arguments are
+;; rooted BEFORE `alloc`, and read back through `r` after -- never held across
+;; it. Native and the JVM had reached that arrangement separately and by
+;; different routes; now there is one of it.
+(ns flint.rt.exinfo
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == not is-heap as-heap ty alloc heap slot
+                                   set-slot mark push r pop-to
+                                   Rt Value Addr Ty Bool RootIx NIL
+                                   TY_EXINFO EX_KIND EX_MSG EX_DATA EX_CAUSE]]))
+
+(doc "Is `v` an exception value?"
+     ""
+     "The tag test, and every accessor below is guarded by it -- reading a"
+     "slot off something that is not an exception reads whatever is at that"
+     "offset, which is the class of bug `(conj 1 2)` was.")
+(defn ^:pub ^:method ^Bool is-exception [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return false))
+  (return (== (ty rt (as-heap v)) TY_EXINFO)))
+
+(doc "Build an exception value WITHOUT throwing it."
+     ""
+     "The scheduler needs this: it hands an error to a PARKED thread, to be"
+     "raised when that thread next resumes rather than in whatever thread"
+     "noticed the problem."
+     ""
+     "A FAILED ALLOCATION ANSWERS NIL rather than throwing, because throwing"
+     "is what the caller is in the middle of arranging.")
+(defn ^:pub ^:method ^Value ex-info [^:mut ^Rt rt ^Value kind ^Value msg
+                                         ^Value data ^Value cause]
+  (let [^RootIx base (mark rt)
+        ^RootIx k (push rt kind)
+        ^RootIx m (push rt msg)
+        ^RootIx d (push rt data)
+        ^RootIx c (push rt cause)
+        ^Addr a (alloc rt TY_EXINFO 4)]
+    (if (== a 0)
+      (do (pop-to rt base)
+          (return NIL)))
+    (comment "READ BACK THROUGH `r`, because `alloc` may have moved all four.")
+    (set-slot rt (heap a) EX_KIND (r rt k))
+    (set-slot rt (heap a) EX_MSG (r rt m))
+    (set-slot rt (heap a) EX_DATA (r rt d))
+    (set-slot rt (heap a) EX_CAUSE (r rt c))
+    (pop-to rt base)
+    (return (heap a))))
+
+(doc "The message, or nil when `e` is not an exception.")
+(defn ^:pub ^:method ^Value ex-message [^Rt rt ^Value e]
+  (if (is-exception rt e)
+    (return (slot rt e EX_MSG)))
+  (return NIL))
+
+(doc "The data map, or nil.")
+(defn ^:pub ^:method ^Value ex-data [^Rt rt ^Value e]
+  (if (is-exception rt e)
+    (return (slot rt e EX_DATA)))
+  (return NIL))
+
+(doc "The kind -- the class name a `catch` selects on -- or nil.")
+(defn ^:pub ^:method ^Value ex-kind [^Rt rt ^Value e]
+  (if (is-exception rt e)
+    (return (slot rt e EX_KIND)))
+  (return NIL))
