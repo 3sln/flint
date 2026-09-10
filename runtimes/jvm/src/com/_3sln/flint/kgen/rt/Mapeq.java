@@ -41,7 +41,21 @@ public final class Mapeq {
     /// Two collision nodes, compared WITHOUT regard to order.
     /// Their pairs sit in insertion order, which is the one part of a CHAMP
     /// that is not canonical. The loop is quadratic in the number of keys
-    /// sharing a single hash, which is two or three.
+    /// sharing a single hash.
+    /// 
+    /// THAT NUMBER IS NOT `two or three`, which is what this said and which
+    /// was a guess. Flint's string hash is a base-31 polynomial, so `Aa` and
+    /// `BB` hash alike and the property composes: 2^k strings can be made to
+    /// share one hash, and whoever supplies the keys picks k. Sixteen
+    /// thousand in one node is constructible
+    /// (`doc/goals/hash-flooding.md`).
+    /// 
+    /// WHAT MAKES THE QUADRATIC LOOP SAFE IS THE CHARGE, not the premise.
+    /// `charge-work` sits in the INNER loop, so O(n^2) work is billed O(n^2)
+    /// and gas bounds it. Measured: 1 276 units at 50 colliding keys, 5 051
+    /// at 100, 20 101 at 200, 80 201 at 400 -- 3.96x, 3.98x, 3.99x per
+    /// doubling. Moving that charge out to the outer loop for speed would
+    /// reopen exactly the hole `find`, `assoc` and `dissoc` had.
     public static boolean collEq(Rt rt, long a, long b) {
         int n = cnCount(rt, a);
         if (n != cnCount(rt, b)) {
