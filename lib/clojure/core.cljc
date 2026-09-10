@@ -1483,7 +1483,6 @@
   ([re s from] (flint.regex/re-find (re-pattern re) s from)))
 (defn re-matches [re s] (flint.regex/re-matches (re-pattern re) s))
 (defn re-seq [re s] (flint.regex/re-seq (re-pattern re) s))
-(defn re-quote-replacement [s] s)
 
 ;; ------------------------------------------------------------------- delays
 
@@ -1534,7 +1533,6 @@
           (list 'clojure.core/assoc (list 'clojure.core/deref tbl) dispatch-val
                 (cons 'clojure.core/fn fn-tail)))))
 
-(defn methods-of [tbl] @tbl)
 
 ;; ---------------------------------------------------------- unchecked & misc
 
@@ -1704,24 +1702,6 @@
 ;; kind, which is what kinds are for.
 
 
-;; PUBLIC, and it has to be: `defprotocol` EMITS a call to this into its
-;; expansion, so the reference lands in whatever namespace used the macro. A
-;; var that appears in an expansion cannot be private, because the caller is
-;; the one who names it.
-;;
-;; It was `defn-` until privacy was actually enforced, at which point every
-;; namespace using `defprotocol` stopped compiling. That is the mark being
-;; wrong rather than the check: it had been documentation, and documentation
-;; can be wrong without anything noticing.
-(defn protocol-miss [pname mname x]
-  (throw (ex-info (flint.rt/str-join
-                   ["no implementation of " (str mname) " (protocol " (str pname)
-                    ") for a value of kind " (str (kind x))
-                    ". Extend the protocol to that kind, or attach "
-                    (str mname)
-                    " as metadata on the value."])
-                  {:protocol pname :method mname :kind (kind x) :value x})))
-
 (defn find-protocol-method
   "The implementation of `mkey` (a fully-qualified SYMBOL) for `x`: metadata
   first, then the protocol's table for `x`'s kind. `nil` when there is none.
@@ -1739,7 +1719,6 @@
   [protocol kind mmap]
   (swap! (:impls protocol) update kind merge mmap)
   nil)
-
 (defn- method-key
   "The protocol's OWN key for the method named `n`.
 
@@ -1765,6 +1744,7 @@
   a string, resolved against the protocol rather than against the caller."
   [protocol kind mname f]
   (extend protocol kind (hash-map (method-key protocol mname) f)))
+
 
 (defn satisfies?
   "Does `x` have an implementation of every method of `protocol`, by metadata or
@@ -1813,7 +1793,7 @@
                                                       impls-sym (list 'quote (:key m)) (first args))]
                                             (list 'if 'f
                                                   (list* 'f args)
-                                                  (list 'clojure.core/protocol-miss
+                                                  (list 'flint.protocols/protocol-miss
                                                         (list 'quote qual)
                                                         (list 'quote (symbol nsname (name (:name m))))
                                                         (first args))))))

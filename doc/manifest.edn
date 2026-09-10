@@ -183,7 +183,6 @@
     merge
     merge-with
     meta
-    methods-of
     min
     min-key
     mod
@@ -225,7 +224,6 @@
     print-str
     println-str
     prn-str
-    protocol-miss
     qualified-ident?
     qualified-keyword?
     qualified-symbol?
@@ -236,7 +234,6 @@
     re-find
     re-matches
     re-pattern
-    re-quote-replacement
     re-seq
     realized?
     record?
@@ -376,7 +373,7 @@
     when-not
     when-some
     while},
-  :count 325,
+  :count 322,
   :absent
   #{*'
     *1
@@ -754,8 +751,7 @@
     with-redefs
     with-redefs-fn
     xml-seq},
-  :extra
-  #{extend-method methods-of protocol-miss re-quote-replacement},
+  :extra #{extend-method},
   :compared-with clojure.core},
  clojure.core.protocols
  {:file "lib/clojure/core/protocols.cljc",
@@ -1032,9 +1028,15 @@
   :count 12},
  flint.protocols
  {:file "lib/flint/protocols.cljc",
-  :present #{Printable print-data print-human printer-for},
+  :present
+  #{Printable
+    methods-of
+    print-data
+    print-human
+    printer-for
+    protocol-miss},
   :macros #{},
-  :count 4},
+  :count 6},
  flint.regex
  {:file "lib/flint/regex.cljc",
   :present

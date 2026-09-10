@@ -116,12 +116,46 @@ was what found it.
 
 ## What is NOT pending, recorded so it is not reopened
 
-* **Qualified references as dependency edges.** Measured and declined:
-  `read-namespace!` registers every definition across every namespace before
-  analysing any, so a require never establishes existence. The change would be
-  a no-op, and under it a single `(clojure.core/str ..)` added to
-  `flint.regex` would turn the build into a refused cycle. Pinned by
-  `test/requires.clj`.
-* **The vocabulary's cross-module templates.** All 47 are gone. Two genuine
-  cross-namespace mutual recursions remain and are `declarefn` declarations in
-  the sources that need them, which is what a declaration is for.
+* **The vocabulary's cross-module templates.** All 47 are gone.
+  Two genuine cross-namespace mutual recursions remain and are `declarefn`
+  declarations in the sources that need them, which is what a declaration is
+  for.
+
+## Reopened: what a qualified reference does NOT do
+
+I measured this, declined the change, and was wrong -- recorded here rather
+than quietly fixed, because the wrong answer is written into
+`test/requires.clj` and into commit `c36afd0`.
+
+THE CLAIM WAS that a `:require` never establishes existence, so treating a
+qualified reference as a dependency edge would be a no-op.
+`read-namespace!` does register every definition across every namespace before
+analysing any, and three probes passed: a function call, a top-level `def`
+reading another namespace at initialisation, and a macro. All already worked.
+
+WHAT WAS NEVER PROBED is a top-level SIDE EFFECT calling into a namespace that
+must already be INITIALISED. That case fails. Moving `extend-method` to
+`flint.protocols` -- reached only through `extend-protocol`'s expansion, which
+never names it -- gives
+
+    ClassCastException: value is not a function (nil, 4 args)
+
+because `flint.protocols` has not run when the using namespace's top-level
+`extend-protocol` does. It is the same silent-uninitialised shape as the
+bootstrap cycle that produced an empty protocol map, wearing a different
+symptom.
+
+AND AN EXPLICIT `(:require [flint.protocols])` DOES NOT FIX IT. That is the
+part that makes this a question rather than a task: the obvious remedy --
+"make a require order initialisation" -- is not available, because a require
+apparently already does not. What orders initialisation, and whether a
+qualified reference could participate, needs understanding before anything is
+changed.
+
+Until then `extend-method` stays in `clojure.core`, which is the one name it
+still publishes that Clojure does not, and the reason is real rather than
+inertia.
+
+MISSING TEST: `test/requires.clj` pins three cases that pass and omits the one
+that fails. It should gain the failing case, marked as the open question it
+is, so the file stops reading as a proof of something broader than it checked.

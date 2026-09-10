@@ -17,7 +17,8 @@
   Protocols that are CLOJURE'S do not belong here. `Datafiable` and
   `Navigable` stay in `clojure.core.protocols`, `EqualityPartition` and `Diff`
   in `clojure.data`: those are ports, and a port that renames its subject is
-  no longer a port.")
+  no longer a port."
+  (:require [flint.core :refer [kind]]))
 
 ;; NO `:require` of `clojure.core` above: it is referred everywhere already,
 ;; and naming it here would make a require CYCLE with `clojure.core`'s own
@@ -91,3 +92,35 @@
     (find-protocol-method Printable__impls 'flint.protocols/print-data x)
     (or (find-protocol-method Printable__impls 'flint.protocols/print-human x)
         (find-protocol-method Printable__impls 'flint.protocols/print-data x))))
+
+;; --------------------------------------------------------- the machinery
+;;
+;; `defprotocol` EMITS calls to these into whatever namespace expands it, so
+;; they cannot be private and cannot live in `clojure.core` -- Clojure has no
+;; `protocol-miss` or `extend-method`, and a port that invents them there is
+;; publishing under somebody else's name.
+;;
+;; `find-protocol-method` and `extend` STAY in `clojure.core`: real Clojure
+;; has both, and a port that moves what its subject does have is no longer a
+;; port.
+
+
+(defn methods-of [tbl] @tbl)
+
+;; PUBLIC, and it has to be: `defprotocol` EMITS a call to this into its
+;; expansion, so the reference lands in whatever namespace used the macro. A
+;; var that appears in an expansion cannot be private, because the caller is
+;; the one who names it.
+;;
+;; It was `defn-` until privacy was actually enforced, at which point every
+;; namespace using `defprotocol` stopped compiling. That is the mark being
+;; wrong rather than the check: it had been documentation, and documentation
+;; can be wrong without anything noticing.
+(defn protocol-miss [pname mname x]
+  (throw (ex-info (flint.rt/str-join
+                   ["no implementation of " (str mname) " (protocol " (str pname)
+                    ") for a value of kind " (str (kind x))
+                    ". Extend the protocol to that kind, or attach "
+                    (str mname)
+                    " as metadata on the value."])
+                  {:protocol pname :method mname :kind (kind x) :value x})))
