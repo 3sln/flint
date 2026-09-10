@@ -29,24 +29,43 @@ counting only functions no `@kin:link:` tag or vocabulary template names.
 one shape became one source, and the overflow edge got decided once instead of
 three times.
 
-| file | fns | lines | notes |
+| file | fns | lines | what they are |
 | --- | ---: | ---: | --- |
-| `eq.rs` | 3 | 33 | `eq_value`, `utf16_cmp`, `nil_or` |
-| `set.rs` | 3 | 33 | `set_for_each` takes a closure — not portable as-is |
-| `vector.rs` | 3 | 47 | `init_vector`, `is_vector`, `vec_from_roots` |
-| `num.rs` | 4 | ~40 | `is_float`, `as_i64`, `num_eq`, `num_hash` |
-| `map.rs` | 13 | 232 | |
-| `strs.rs` | 10 | 275 | interning — likely genuinely host |
-| `pike.rs` | 8 | 339 | 0% holes: real unported logic |
+| `num.rs` | 2 | 16 | value-representation predicates -- host |
+| `bytes.rs` | 2 | 28 | |
+| `set.rs` | 2 | 30 | `set_for_each` takes a Rust closure -- not portable as-is |
+| `fmath.rs` | 2 | 31 | |
+| `eq.rs` | 3 | 33 | two one-liners; `utf16_cmp` is host (Java/C# get it from `String.compareTo`) |
+| `hash.rs` | 4 | 36 | |
+| `rope.rs` | 2 | 42 | |
+| `vector.rs` | 3 | 47 | construction and a predicate -- mostly host |
+| `map.rs` | 3 | 91 | `init_map` plus two taking Rust closures -- **effectively done** |
+| `err.rs` | 8 | 92 | |
+| `obj.rs` | 12 | 113 | |
+| `value.rs` | 6 | 150 | |
+| `strs.rs` | 10 | 275 | interning -- likely genuinely host |
+| `pike.rs` | 8 | 339 | the Pike VM simulator; 0% holes, real logic |
+| `coll.rs` | 17 | 619 | **the largest genuinely portable one** |
+| `builtins.rs` | 6 | 1097 | the builtin table -- host by nature |
 
 `Seqs` and `Table` no longer appear at all — those are finished. `Conc`,
 `Rt`/`Vm` and `Gc` are host and stay last, by standing instruction.
 
-TWO MEASUREMENT TRAPS, both of which I fell into: Rust's inline `#[test]`
-functions are not logic (they made `Vec` look 81% divergent when it is 4%),
-and a function named by a `@kin:link:` tag is a deliberate BOUNDARY rather
-than unported work (counting them made `Bytes` look like 172 lines of work
-when it was 39).
+THREE MEASUREMENT TRAPS, each of which I fell into, and each of which makes
+this table lie if it is regenerated naively:
+
+1. **Rust's inline `#[test]` functions are not logic.** Counting them made
+   `Vec` look 81% divergent from the ports when it is 4%.
+2. **A function named by a `@kin:link:` tag is a BOUNDARY**, not unported
+   work. Counting them made `Bytes` look like 172 lines of work when it was
+   39.
+3. **`#[cfg(feature = "bench")]` functions are benchmark scaffolding.** This
+   one nearly cost a session: `map.rs` read as 13 functions and 232 lines of
+   collection logic, and all four `*_entries` walks -- the ones that looked
+   like the obvious next port -- exist only under the bench feature. Excluding
+   them, `map.rs` has three functions left and none is portable.
+
+The table above already excludes all three.
 
 ### 2. `Equiv` / `Hash` / `EquivHash`
 
