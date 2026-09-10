@@ -328,12 +328,14 @@ decided**; what remains is design work rather than judgement calls.
   a type arrives over a port, is extended, leaves, and an equal one returns.
   Weakly held, the extension is there or gone by GC timing, so two identical
   runs dispatch differently.
-  *What it requires:* extern-types INTERNED BY NAME, because a type identified
-  by slot index gets a fresh one on re-entry and misses its own extension.
-  *What it may not require:* new machinery. `find-protocol-method` already
-  resolves through `kind` into an atom-held map that is permanent and
-  deterministic; if `kind` of an extern answers its interned type, this is a
-  wrapper rather than a second dispatch path.
+  *And it needs no new machinery:* `kind` answers `:extern/<host-name>`. A
+  keyword already interns by name, so a type crossing a port twice yields the
+  identical keyword and finds its extension -- the stable-identity constraint
+  dissolves rather than being satisfied. `flint.interop/extend` is then
+  `clojure.core/extend` with no wrapper and no second dispatch path.
+  *A kind per host type is `0005`'s rule, not an exception:* `kind-of` already
+  records that `:other` was a hole because one extension written for one type
+  caught them all. A single `:extern` kind would be that hole again.
 
 ### 4. Smaller, and written down so they are not lost
 

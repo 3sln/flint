@@ -1377,22 +1377,53 @@ least be consistent: it is a heisenbug.
 So `flint.interop/extend` writes into a table that lives as long as the
 sandbox.
 
-**WHICH REQUIRES A STABLE TYPE IDENTITY, and that is the real constraint the
-decision carries.** "Still there when it comes back" means nothing unless the
-returning type is recognisably the same one. An extern-type identified by slot
-or block index gets a FRESH index on re-entry and silently misses its own
-extension — the same failure, relocated. So extern-types are **interned by a
-host-supplied name**, the way keywords are, and `flint.interop/type` answers the
-interned handle.
+**AND IT NEEDS NO NEW MACHINERY AT ALL: `kind` ANSWERS
+`:extern/<host-name>`.**
 
-**AND IT MAY NEED NO NEW MACHINERY.** `find-protocol-method` already resolves
-through `(flint.rt/kind x)` into a map held in an atom on the protocol — which
-is permanent for the sandbox's life, is an ordinary flint map, and is already
-deterministic. If `kind` of an extern answers its interned extern-type, then
-`flint.interop/extend` is a thin wrapper over the table that already exists
-rather than a second dispatch path. That should be checked before anything is
-built: a parallel path would need its own `satisfies?`, its own `extends?` and
-its own `protocol-miss`, and three of those is how they drift.
+The constraint this decision looked like it carried was a stable type identity
+— "still there when it comes back" means nothing unless the returning type is
+recognisably the same one, and an extern-type identified by slot or block index
+gets a FRESH index on re-entry and silently misses its own extension. That
+looked like it needed an interning table keyed by host name.
+
+**It does not, because keywords already are one.** A keyword interns by name,
+so a host type crossing a port twice yields the identical keyword both times.
+`find-protocol-method` resolves through `(flint.rt/kind x)` into a map held in
+an atom on the protocol — permanent for the sandbox's life, an ordinary flint
+map, already deterministic. So `flint.interop/extend` is `clojure.core/extend`,
+with no wrapper, no second dispatch path, and no separate `satisfies?`,
+`extends?` or `protocol-miss` to drift apart from the originals.
+
+**A KIND PER HOST TYPE, WHICH IS `0005`'s RULE AND NOT AN EXCEPTION TO IT.**
+`kind-of` already says why one `:extern` kind would be wrong:
+
+> A CLOSED SET. `0005` says a value a guest can hold needs a kind of its own or
+> it cannot be dispatched on at all -- so `:other` is not a kind, it is the
+> ABSENCE of one, and four types answered it until the printer moved onto a
+> protocol and the hole showed. An `extend-protocol :other` written for one of
+> them would have caught all of them, and every future type besides.
+
+A single `:extern` is that hole precisely: one implementation written for a
+file handle would catch every socket, connection and widget the host ever
+grants. The namespace also keeps host names clear of the built-in kinds — a
+host type called `vector` is `:extern/vector` and cannot be mistaken for
+`:vector`.
+
+**IT IS A SLOT READ, NOT A CONSTRUCTION.** The keyword is minted once when the
+extern-type is interned and stored on it; `kind-of` returns that slot. `kind`
+is on the protocol dispatch path and cannot afford to build a keyword per call.
+
+TWO WRINKLES, NAMED RATHER THAN DISCOVERED:
+
+* **A guest can write the keyword itself.** `(extend P :extern/java.io.File …)`
+  works with no extern in sight. Benign: extending a protocol grants no
+  authority over a value nobody handed you, and pre-extending before receipt is
+  indistinguishable from extending after. Two libraries extending the same host
+  type collide the way any two protocol extensions collide.
+* **The host's name needs a constraint.** Built through `keyword(ns, name)`
+  rather than read, so dots and `$` are fine and `:extern/com.foo.Bar$Inner` is
+  well-formed. A name containing `/` is representable but prints ambiguously,
+  so the PORT should reject it — cheaper there than in the printer.
 
 **Growth lands in the right place.** Externs enter only through a PORT, so the
 number of distinct extern types is bounded by what the host admits, not by
