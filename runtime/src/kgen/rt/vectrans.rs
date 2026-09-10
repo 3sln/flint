@@ -36,22 +36,43 @@ impl Rt {
         }
         return ty(&self.gc.sp, v.as_heap()) == TY_TVEC;
     }
+    /// THE FOUR READERS BELOW ARE THE VECTOR'S, AND THAT IS DELIBERATE.
+    /// 
+    /// A TRANSIENT'S HEADER IS A VECTOR'S HEADER, PREFIX-WISE:
+    /// 
+    ///     TY_VEC   [cnt, shift, root, tail, meta, hash]
+    ///     TY_TVEC  [cnt, shift, root, tail, edit]
+    /// 
+    /// `T_CNT`, `T_SHIFT`, `T_ROOT` and `T_TAIL` are 0, 1, 2 and 3 -- the same
+    /// numbers as `V_CNT`, `V_SHIFT`, `V_ROOT` and `V_TAIL`. The layouts part
+    /// company only at slot 4, where a vector keeps its metadata and a
+    /// transient its edit token, and no reader below looks that far.
+    /// 
+    /// SO THE BODIES WERE IDENTICAL, four of them, differing only in whether
+    /// the parameter was called `v` or `t` -- `tvec-shift` was a byte-for-byte
+    /// copy of `vec-shift` in a file that ALREADY IMPORTED `vec-shift` and used
+    /// it eleven lines further down. The names stay, because `(tvec-count rt t)`
+    /// says what `(vec-count rt t)` would only imply, and `^:inline` means
+    /// saying it costs nothing.
+    /// 
+    /// THE PREFIX IS NOW LOAD-BEARING, and it was not written down anywhere
+    /// before this comment. `runtime/src/vector.rs` asserts it at COMPILE TIME
+    /// rather than trusting the reader: put `T_EDIT` in front of `T_TAIL` one
+    /// day and the build stops, instead of four readers quietly returning the
+    /// wrong slot.
     #[inline]
     pub fn tvec_count(&self, t: Value) -> u32 {
-        return self.slot(t, T_CNT).as_fixnum() as u32;
+        return self.vec_count(t);
     }
     #[inline]
     pub fn tvec_shift(&self, t: Value) -> u32 {
-        return self.slot(t, T_SHIFT).as_fixnum() as u32;
+        return self.vec_shift(t);
     }
-    /// Where the transient's tail starts, on the same rule as a vector's.
+    /// Where the transient's tail starts, on the same rule as a vector's --
+    /// which is now the same CODE as a vector's.
     #[inline]
     pub fn tvec_tail_off(&self, t: Value) -> u32 {
-        let c: u32 = self.tvec_count(t);
-        if c < WIDTH {
-            return 0;
-        }
-        return ((c - 1) >> BITS) << BITS;
+        return self.tail_off(t);
     }
     /// Is this transient still usable? `persistent!` clears the token, and a
     /// transient without one has been handed over and must not be written.
@@ -101,26 +122,13 @@ impl Rt {
         }
         return self.node_clone(node, WIDTH, edit);
     }
-    /// The leaf holding index `i` of a transient.
+    /// The leaf holding index `i` of a transient -- the vector's descent, for
+    /// the reason at the top of this file.
     pub fn t_array_for(&self, t: Value, i: u32) -> Value {
-        if i >= self.tvec_tail_off(t) {
-            return self.slot(t, T_TAIL);
-        }
-        let mut node: Value;
-        node = self.slot(t, T_ROOT);
-        let mut level: u32;
-        level = self.tvec_shift(t);
-        while level > 0 {
-            node = self.node_get(node, (i >> level) & MASK);
-            level -= BITS;
-        }
-        return node;
+        return self.array_for(t, i);
     }
     /// Element `i` of a transient, or `dflt`. Same convergence as `vec-nth`.
     pub fn tvec_nth(&self, t: Value, i: u32, dflt: Value) -> Value {
-        if i >= self.tvec_count(t) {
-            return dflt;
-        }
-        return self.node_get(self.t_array_for(t, i), i & MASK);
+        return self.vec_nth(t, i, dflt);
     }
 }

@@ -31,19 +31,40 @@ public final class Vectrans {
         }
         return ty(rt.gc.sp, Val.asHeap(v)) == TY_TVEC;
     }
+    /// THE FOUR READERS BELOW ARE THE VECTOR'S, AND THAT IS DELIBERATE.
+    /// 
+    /// A TRANSIENT'S HEADER IS A VECTOR'S HEADER, PREFIX-WISE:
+    /// 
+    ///     TY_VEC   [cnt, shift, root, tail, meta, hash]
+    ///     TY_TVEC  [cnt, shift, root, tail, edit]
+    /// 
+    /// `T_CNT`, `T_SHIFT`, `T_ROOT` and `T_TAIL` are 0, 1, 2 and 3 -- the same
+    /// numbers as `V_CNT`, `V_SHIFT`, `V_ROOT` and `V_TAIL`. The layouts part
+    /// company only at slot 4, where a vector keeps its metadata and a
+    /// transient its edit token, and no reader below looks that far.
+    /// 
+    /// SO THE BODIES WERE IDENTICAL, four of them, differing only in whether
+    /// the parameter was called `v` or `t` -- `tvec-shift` was a byte-for-byte
+    /// copy of `vec-shift` in a file that ALREADY IMPORTED `vec-shift` and used
+    /// it eleven lines further down. The names stay, because `(tvec-count rt t)`
+    /// says what `(vec-count rt t)` would only imply, and `^:inline` means
+    /// saying it costs nothing.
+    /// 
+    /// THE PREFIX IS NOW LOAD-BEARING, and it was not written down anywhere
+    /// before this comment. `runtime/src/vector.rs` asserts it at COMPILE TIME
+    /// rather than trusting the reader: put `T_EDIT` in front of `T_TAIL` one
+    /// day and the build stops, instead of four readers quietly returning the
+    /// wrong slot.
     public static int tvecCount(Rt rt, long t) {
-        return (int) Val.asFixnum(rt.slot(t, T_CNT));
+        return Vec.count(rt, t);
     }
     public static int tvecShift(Rt rt, long t) {
-        return (int) Val.asFixnum(rt.slot(t, T_SHIFT));
+        return vecShift(rt, t);
     }
-    /// Where the transient's tail starts, on the same rule as a vector's.
+    /// Where the transient's tail starts, on the same rule as a vector's --
+    /// which is now the same CODE as a vector's.
     public static int tvecTailOff(Rt rt, long t) {
-        int c = tvecCount(rt, t);
-        if (c < WIDTH) {
-            return 0;
-        }
-        return ((c - 1) >>> BITS) << BITS;
+        return tailOff(rt, t);
     }
     /// Is this transient still usable? `persistent!` clears the token, and a
     /// transient without one has been handed over and must not be written.
@@ -92,26 +113,13 @@ public final class Vectrans {
         }
         return nodeClone(rt, node, WIDTH, edit);
     }
-    /// The leaf holding index `i` of a transient.
+    /// The leaf holding index `i` of a transient -- the vector's descent, for
+    /// the reason at the top of this file.
     public static long tArrayFor(Rt rt, long t, int i) {
-        if (i >= tvecTailOff(rt, t)) {
-            return rt.slot(t, T_TAIL);
-        }
-        long node;
-        node = rt.slot(t, T_ROOT);
-        int level;
-        level = tvecShift(rt, t);
-        while (level > 0) {
-            node = nodeGet(rt, node, (i >>> level) & MASK);
-            level -= BITS;
-        }
-        return node;
+        return arrayFor(rt, t, i);
     }
     /// Element `i` of a transient, or `dflt`. Same convergence as `vec-nth`.
     public static long tvecNth(Rt rt, long t, int i, long dflt) {
-        if (i >= tvecCount(rt, t)) {
-            return dflt;
-        }
-        return nodeGet(rt, tArrayFor(rt, t, i), i & MASK);
+        return vecNth(rt, t, i, dflt);
     }
 }

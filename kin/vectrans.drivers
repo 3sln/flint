@@ -133,6 +133,15 @@ impl Rt {
         while level > 0 { node = self.node_get(node, (i >> level) & MASK); level -= BITS; }
         node
     }
+    // THE VECTOR'S READER, applied to a TRANSIENT, which is the whole point of
+    // the change under test: `T_CNT`..`T_TAIL` are `V_CNT`..`V_TAIL`, so the
+    // probe reads the transient through the vector's slots exactly as the
+    // source now does. If the two layouts ever stop agreeing, this stub reads
+    // the wrong slot and the case below says so.
+    fn vec_nth(&self, v: Value, i: u32, dflt: Value) -> Value {
+        if i >= self.vec_count(v) { return dflt; }
+        self.node_get(self.array_for(v, i), i & MASK)
+    }
 }
 fn ty(sp: &Vec<u8>, a: Addr) -> u8 { sp[a as usize] }
 impl Rt {
@@ -306,6 +315,11 @@ fn main() {
         return out;
     }
     static long get(Rt rt, long v, int i) { return nodeGet(rt, arrayFor(rt, v, i), i & MASK); }
+    // The VECTOR's reader applied to a TRANSIENT; see the note in the Rust.
+    static long vecNth(Rt rt, long v, int i, long dflt) {
+        if (i >= Vec.count(rt, v)) return dflt;
+        return nodeGet(rt, arrayFor(rt, v, i), i & MASK);
+    }
     static long arrayFor(Rt rt, long v, int i) {
         if (i >= tailOff(rt, v)) return rt.slot(v, V_TAIL);
         long node = rt.slot(v, V_ROOT);
@@ -472,6 +486,10 @@ fn main() {
         return outv;
     }
     static long Get(Rt rt, long v, int i) { return NodeGet(rt, ArrayFor(rt, v, i), i & MASK); }
+    static long VecNth(Rt rt, long v, int i, long dflt) {
+        if (i >= Vec.Count(rt, v)) return dflt;
+        return NodeGet(rt, ArrayFor(rt, v, i), i & MASK);
+    }
     static long ArrayFor(Rt rt, long v, int i) {
         if (i >= TailOff(rt, v)) return rt.Slot(v, V_TAIL);
         long node = rt.Slot(v, V_ROOT);

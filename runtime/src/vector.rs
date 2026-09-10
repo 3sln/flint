@@ -123,6 +123,24 @@ pub const T_ROOT: u32 = 2;
 pub const T_TAIL: u32 = 3;
 pub const T_EDIT: u32 = 4;
 
+// A TRANSIENT'S HEADER IS A VECTOR'S HEADER, PREFIX-WISE, AND THAT IS NOW
+// LOAD-BEARING RATHER THAN A COINCIDENCE.
+//
+// `kin/vectrans.kin` reads a transient with the VECTOR's readers -- `vec-nth`,
+// `array-for`, `tail-off`, `vec-shift` -- because the four bodies were
+// byte-identical once the parameter was renamed. That is only sound while
+// these four slots agree, and nothing said so out loud until now.
+//
+// Asserted at COMPILE TIME rather than trusted: put `T_EDIT` in front of
+// `T_TAIL` one day and the build stops here, instead of four readers quietly
+// returning the wrong slot on every transient in the system. The layouts are
+// free to differ from slot 4 on, which is where they already do -- a vector
+// keeps `meta` and `hash`, a transient its `edit` token.
+const _: () = assert!(T_CNT == V_CNT);
+const _: () = assert!(T_SHIFT == V_SHIFT);
+const _: () = assert!(T_ROOT == V_ROOT);
+const _: () = assert!(T_TAIL == V_TAIL);
+
 impl Rt {
 
 
