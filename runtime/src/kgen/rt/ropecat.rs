@@ -32,105 +32,114 @@ impl Rt {
         }
         return 1 + self.rope_height(self.slot(v, crate::obj::RP_KIDS));
     }
-    /// Append `b` into the rightmost subtree of `a` that has room.
+    /// Graft `piece` onto the EDGE of `node`: the left edge when `front`, the
+    /// right edge otherwise. NIL when it does not fit anywhere along that edge.
     /// 
-    /// NIL when the right spine is full at every level, which is the ONLY time
-    /// the caller adds one -- so depth grows O(log n) times over n appends
+    /// ONE FUNCTION FOR BOTH DIRECTIONS, because they are the same walk. The
+    /// prepend side was first written as its own mirror of the append side and
+    /// cost 2 090 bytes -- a second recursive descent, a second set of rebuilds
+    /// and a second lift, to do the same three things at the other end. Shared,
+    /// the second direction is a handful of branches: which child to descend,
+    /// which way round the merge concatenates, and which end the new sibling
+    /// goes.
+    /// 
+    /// THREE THINGS IN ORDER, deepest first. Room further down costs no depth;
+    /// a leaf that can absorb `piece` costs no node either; and only when
+    /// neither holds does it become a sibling, LIFTED to the height its
+    /// siblings stand at or the tree goes ragged.
+    /// 
+    /// NIL when the edge is full at every level, which is the ONLY time
+    /// `s-concat` adds one -- so depth grows O(log n) times over n joins
     /// rather than O(n/FANOUT) times.
-    /// 
-    /// DEEPEST FIRST: room further down costs no depth at all, and only when
-    /// nothing below has room does this node take `b` as a sibling.
-    pub fn rope_append(&mut self, a: Value, b: Value) -> Value {
-        if !self.is_rope(a) {
+    pub fn rope_graft(&mut self, node: Value, piece: Value, front: bool) -> Value {
+        if !self.is_rope(node) {
             return NIL;
         }
-        let n: u32 = self.rope_kids(a);
+        let n: u32 = self.rope_kids(node);
         let base: usize = self.mark();
-        let ai: usize = self.push(a);
-        let bi: usize = self.push(b);
-        let last: Value = self.slot(self.r(ai), crate::obj::RP_KIDS + (n - 1));
-        let li: usize = self.push(last);
-        let mut deeper: Value;
-        deeper = NIL;
-        if self.is_rope(self.r(li)) {
-            deeper = self.rope_append(self.r(li), self.r(bi));
+        let ni: usize = self.push(node);
+        let pi: usize = self.push(piece);
+        let mut edge: u32;
+        edge = n - 1;
+        if front {
+            edge = 0;
         }
-        if !deeper.is_nil() {
-            let ni: usize = self.push(deeper);
-            let kbase: usize = self.mark();
-            for i in 0..n - 1 {
-                self.push(self.slot(self.r(ai), crate::obj::RP_KIDS + i));
-            }
-            self.push(self.r(ni));
-            let out: Value = self.rope_node(kbase, n);
-            self.pop_to(base);
-            return out;
+        let kid: Value = self.slot(self.r(ni), crate::obj::RP_KIDS + edge);
+        let ki: usize = self.push(kid);
+        let mut fixed: Value;
+        fixed = NIL;
+        // DEEPEST FIRST: room further down costs no depth at all.
+        if self.is_rope(self.r(ki)) {
+            fixed = self.rope_graft(self.r(ki), self.r(pi), front);
         }
-        // MERGE BEFORE CREATE, which is the rule a CHAMP already follows
-        // and this did not. `s-concat`'s copy tier asks whether the WHOLE
-        // RESULT fits in a leaf, so it stops firing once the string passes
-        // FLAT_MAX -- and from then on every append, however small, became
-        // its own leaf. Building a 38 KB string out of 8-byte pieces made
-        // 4 000 leaves and cost 19 475 allocations, and allocations PER
-        // PIECE grew with the string (2.97 at 100 pieces, 4.87 at 4 000)
-        // because each append also rebuilt the right spine.
-        // 
-        // The question that matters is not whether the result is small; it
-        // is whether `b` FITS IN THE LEAF ALREADY THERE.
-        // 
-        // AND ON ITS OWN THRESHOLD. `FLAT_MAX` is paid ONCE for a result;
-        // this bound is paid on EVERY append into the same leaf, so a leaf
-        // of T bytes filled from p-byte pieces copies T^2/2p bytes to hold
-        // T of them -- 64x at 1024, 16x at 256, 8x at 128. Fewer leaves
-        // pull the other way, so `MERGE_MAX` is measured, not assumed.
-        // 
-        // BEFORE THE FANOUT TEST ON PURPOSE: merging is better than adding
-        // a sibling even when there is room for one, and when there is NOT
-        // it also avoids returning NIL, which is what grows the depth.
-        // 
-        // LEAF INTO LEAF ONLY. A rope `b` would need its leftmost leaf
-        // merged instead, which is the same rule at the other end and is
-        // NOT done here -- see the note in `s-concat`.
-        if deeper.is_nil() {
-            if !self.is_rope(self.r(li)) {
-                if !self.is_rope(self.r(bi)) {
-                    if (self.s_bytes(self.r(li)) + self.s_bytes(self.r(bi))) <= crate::rope::MERGE_MAX {
-                        let merged: Value = self.copy_concat(self.r(li), self.r(bi));
-                        let mi: usize = self.push(merged);
-                        let kbase: usize = self.mark();
-                        for i in 0..n - 1 {
-                            self.push(self.slot(self.r(ai), crate::obj::RP_KIDS + i));
+        // THEN MERGE BEFORE CREATE, which is the rule a CHAMP already
+        // follows and this did not. `s-concat`'s copy tier asks whether
+        // the WHOLE RESULT fits a leaf, so past FLAT_MAX every join,
+        // however small, became its own leaf. The question that matters
+        // is whether `piece` fits the leaf ALREADY THERE.
+        if fixed.is_nil() {
+            if !self.is_rope(self.r(ki)) {
+                if !self.is_rope(self.r(pi)) {
+                    if (self.s_bytes(self.r(ki)) + self.s_bytes(self.r(pi))) <= crate::rope::MERGE_MAX {
+                        if front {
+                            fixed = self.copy_concat(self.r(pi), self.r(ki));
+                        } else {
+                            fixed = self.copy_concat(self.r(ki), self.r(pi));
                         }
-                        self.push(self.r(mi));
-                        let out: Value = self.rope_node(kbase, n);
-                        self.pop_to(base);
-                        return out;
                     }
                 }
             }
         }
+        if !fixed.is_nil() {
+            let fi: usize = self.push(fixed);
+            let kbase: usize = self.mark();
+            for i in 0..n {
+                if i == edge {
+                    self.push(self.r(fi));
+                } else {
+                    self.push(self.slot(self.r(ni), crate::obj::RP_KIDS + i));
+                }
+            }
+            let out: Value = self.rope_node(kbase, n);
+            self.pop_to(base);
+            return out;
+        }
+        // THEN A SIBLING, if this node has room.
         if n < crate::rope::FANOUT {
-            // The spine is full below, but this node has room: `b` joins
-            // as a sibling, LIFTED to the height its siblings stand at, or
-            // the tree goes ragged and the depth grows linearly again.
-            let h: u32 = self.rope_height(self.r(li));
-            let lifted: Value = self.rope_lift(self.r(bi), h);
+            let h: u32 = self.rope_height(self.r(ki));
+            let lifted: Value = self.rope_lift(self.r(pi), h);
             if lifted.is_nil() {
                 self.pop_to(base);
                 return NIL;
             }
-            let ni: usize = self.push(lifted);
+            let li: usize = self.push(lifted);
             let kbase: usize = self.mark();
-            for i in 0..n {
-                self.push(self.slot(self.r(ai), crate::obj::RP_KIDS + i));
+            if front {
+                self.push(self.r(li));
             }
-            self.push(self.r(ni));
+            for i in 0..n {
+                self.push(self.slot(self.r(ni), crate::obj::RP_KIDS + i));
+            }
+            if !front {
+                self.push(self.r(li));
+            }
             let out: Value = self.rope_node(kbase, n + 1);
             self.pop_to(base);
             return out;
         }
         self.pop_to(base);
         return NIL;
+    }
+    /// Append `b` into the rightmost subtree of `a` that has room.
+    pub fn rope_append(&mut self, a: Value, b: Value) -> Value {
+        return self.rope_graft(a, b, false);
+    }
+    /// Prepend `a` into the leftmost subtree of `b` that has room.
+    /// 
+    /// NOTE THE ARGUMENT ORDER: `a` is the piece and `b` is the tree, which is
+    /// the reverse of `rope-append` and follows `s-concat`'s `a` then `b`.
+    pub fn rope_prepend(&mut self, a: Value, b: Value) -> Value {
+        return self.rope_graft(b, a, true);
     }
     /// `a` followed by `b`, as a string.
     pub fn s_concat(&mut self, a: Value, b: Value) -> Value {
@@ -149,17 +158,60 @@ impl Rt {
         if !appended.is_nil() {
             return appended;
         }
-        // A NEW LEVEL, and `b` is lifted to stand as tall as the old root so
-        // the leaves stay at one depth on this side too.
+        // AND THE OTHER END, before a level is added. Sharing the walk with
+        // the append side is what made this affordable -- as its own mirror
+        // it cost 2 090 bytes and was removed for it.
+        if !self.is_rope(a) {
+            let prepended: Value = self.rope_prepend(a, b);
+            if !prepended.is_nil() {
+                return prepended;
+            }
+        }
+        // A NEW LEVEL, with THE SHORTER SIDE LIFTED to meet the taller.
+        // 
+        // This used to lift `b` by `rope-height(a)` outright, which is only
+        // right when `b` is a LEAF -- the append case, where `b` is the new
+        // piece. Reverse the arguments and it is wrong twice over: a short
+        // `a` in front of a tall `b` lifts `b` by ZERO and builds
+        // `[leaf, deep-rope]`, which is RAGGED.
+        // 
+        // That is the exact shape this file's header says was fixed for
+        // append -- `[old, new]` with the whole old tree as a child, depth
+        // growing linearly -- still live at the other end. Measured in the
+        // probe: twelve appends of six bytes give height 3, twelve PREPENDS
+        // of six bytes gave height 1 over a right-leaning chain, and
+        // `rope-height` could not even report it because it reads child zero
+        // and trusts that children are the same height.
+        // 
+        // AND IT IS NOW REACHABLE. The header says the ragged tree `never
+        // showed while nothing indexed a rope, because every path flattened
+        // first; the moment indexing descends instead, an O(n)-deep tree
+        // makes the walk quadratic in a new place`. `str-index-of` descends
+        // now, so this stopped being latent.
         let base: usize = self.mark();
         let ai: usize = self.push(a);
         let bi: usize = self.push(b);
-        let h: u32 = self.rope_height(self.r(ai));
-        let lifted: Value = self.rope_lift(self.r(bi), h);
-        let li: usize = self.push(lifted);
+        let ha: u32 = self.rope_height(self.r(ai));
+        let hb: u32 = self.rope_height(self.r(bi));
+        if ha < hb {
+            let la: Value = self.rope_lift(self.r(ai), hb - ha);
+            if la.is_nil() {
+                self.pop_to(base);
+                return NIL;
+            }
+            self.set_r(ai, la);
+        }
+        if ha > hb {
+            let lb: Value = self.rope_lift(self.r(bi), ha - hb);
+            if lb.is_nil() {
+                self.pop_to(base);
+                return NIL;
+            }
+            self.set_r(bi, lb);
+        }
         let kbase: usize = self.mark();
         self.push(self.r(ai));
-        self.push(self.r(li));
+        self.push(self.r(bi));
         let out: Value = self.rope_node(kbase, 2);
         self.pop_to(base);
         return out;

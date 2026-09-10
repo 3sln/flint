@@ -29,105 +29,114 @@ public static class Ropecat {
         }
         return 1 + RopeHeight(rt, rt.Slot(v, global::Flint.Rt.Str.RP_KIDS));
     }
-    /// Append `b` into the rightmost subtree of `a` that has room.
+    /// Graft `piece` onto the EDGE of `node`: the left edge when `front`, the
+    /// right edge otherwise. NIL when it does not fit anywhere along that edge.
     /// 
-    /// NIL when the right spine is full at every level, which is the ONLY time
-    /// the caller adds one -- so depth grows O(log n) times over n appends
+    /// ONE FUNCTION FOR BOTH DIRECTIONS, because they are the same walk. The
+    /// prepend side was first written as its own mirror of the append side and
+    /// cost 2 090 bytes -- a second recursive descent, a second set of rebuilds
+    /// and a second lift, to do the same three things at the other end. Shared,
+    /// the second direction is a handful of branches: which child to descend,
+    /// which way round the merge concatenates, and which end the new sibling
+    /// goes.
+    /// 
+    /// THREE THINGS IN ORDER, deepest first. Room further down costs no depth;
+    /// a leaf that can absorb `piece` costs no node either; and only when
+    /// neither holds does it become a sibling, LIFTED to the height its
+    /// siblings stand at or the tree goes ragged.
+    /// 
+    /// NIL when the edge is full at every level, which is the ONLY time
+    /// `s-concat` adds one -- so depth grows O(log n) times over n joins
     /// rather than O(n/FANOUT) times.
-    /// 
-    /// DEEPEST FIRST: room further down costs no depth at all, and only when
-    /// nothing below has room does this node take `b` as a sibling.
-    public static long RopeAppend(Rt rt, long a, long b) {
-        if (!IsRope(rt, a)) {
+    public static long RopeGraft(Rt rt, long node, long piece, bool front) {
+        if (!IsRope(rt, node)) {
             return Val.Nil;
         }
-        int n = RopeKids(rt, a);
+        int n = RopeKids(rt, node);
         int @base = rt.Mark();
-        int ai = rt.Push(a);
-        int bi = rt.Push(b);
-        long last = rt.Slot(rt.R(ai), global::Flint.Rt.Str.RP_KIDS + (n - 1));
-        int li = rt.Push(last);
-        long deeper;
-        deeper = Val.Nil;
-        if (IsRope(rt, rt.R(li))) {
-            deeper = RopeAppend(rt, rt.R(li), rt.R(bi));
+        int ni = rt.Push(node);
+        int pi = rt.Push(piece);
+        int edge;
+        edge = n - 1;
+        if (front) {
+            edge = 0;
         }
-        if (!Val.IsNil(deeper)) {
-            int ni = rt.Push(deeper);
-            int kbase = rt.Mark();
-            for (int i = 0; i < n - 1; i++) {
-                rt.Push(rt.Slot(rt.R(ai), global::Flint.Rt.Str.RP_KIDS + i));
-            }
-            rt.Push(rt.R(ni));
-            long @out = RopeNode(rt, kbase, n);
-            rt.PopTo(@base);
-            return @out;
+        long kid = rt.Slot(rt.R(ni), global::Flint.Rt.Str.RP_KIDS + edge);
+        int ki = rt.Push(kid);
+        long @fixed;
+        @fixed = Val.Nil;
+        // DEEPEST FIRST: room further down costs no depth at all.
+        if (IsRope(rt, rt.R(ki))) {
+            @fixed = RopeGraft(rt, rt.R(ki), rt.R(pi), front);
         }
-        // MERGE BEFORE CREATE, which is the rule a CHAMP already follows
-        // and this did not. `s-concat`'s copy tier asks whether the WHOLE
-        // RESULT fits in a leaf, so it stops firing once the string passes
-        // FLAT_MAX -- and from then on every append, however small, became
-        // its own leaf. Building a 38 KB string out of 8-byte pieces made
-        // 4 000 leaves and cost 19 475 allocations, and allocations PER
-        // PIECE grew with the string (2.97 at 100 pieces, 4.87 at 4 000)
-        // because each append also rebuilt the right spine.
-        // 
-        // The question that matters is not whether the result is small; it
-        // is whether `b` FITS IN THE LEAF ALREADY THERE.
-        // 
-        // AND ON ITS OWN THRESHOLD. `FLAT_MAX` is paid ONCE for a result;
-        // this bound is paid on EVERY append into the same leaf, so a leaf
-        // of T bytes filled from p-byte pieces copies T^2/2p bytes to hold
-        // T of them -- 64x at 1024, 16x at 256, 8x at 128. Fewer leaves
-        // pull the other way, so `MERGE_MAX` is measured, not assumed.
-        // 
-        // BEFORE THE FANOUT TEST ON PURPOSE: merging is better than adding
-        // a sibling even when there is room for one, and when there is NOT
-        // it also avoids returning NIL, which is what grows the depth.
-        // 
-        // LEAF INTO LEAF ONLY. A rope `b` would need its leftmost leaf
-        // merged instead, which is the same rule at the other end and is
-        // NOT done here -- see the note in `s-concat`.
-        if (Val.IsNil(deeper)) {
-            if (!IsRope(rt, rt.R(li))) {
-                if (!IsRope(rt, rt.R(bi))) {
-                    if ((SBytes(rt, rt.R(li)) + SBytes(rt, rt.R(bi))) <= global::Flint.Rt.Str.MERGE_MAX) {
-                        long merged = Str.CopyConcat(rt, rt.R(li), rt.R(bi));
-                        int mi = rt.Push(merged);
-                        int kbase = rt.Mark();
-                        for (int i = 0; i < n - 1; i++) {
-                            rt.Push(rt.Slot(rt.R(ai), global::Flint.Rt.Str.RP_KIDS + i));
+        // THEN MERGE BEFORE CREATE, which is the rule a CHAMP already
+        // follows and this did not. `s-concat`'s copy tier asks whether
+        // the WHOLE RESULT fits a leaf, so past FLAT_MAX every join,
+        // however small, became its own leaf. The question that matters
+        // is whether `piece` fits the leaf ALREADY THERE.
+        if (Val.IsNil(@fixed)) {
+            if (!IsRope(rt, rt.R(ki))) {
+                if (!IsRope(rt, rt.R(pi))) {
+                    if ((SBytes(rt, rt.R(ki)) + SBytes(rt, rt.R(pi))) <= global::Flint.Rt.Str.MERGE_MAX) {
+                        if (front) {
+                            @fixed = Str.CopyConcat(rt, rt.R(pi), rt.R(ki));
+                        } else {
+                            @fixed = Str.CopyConcat(rt, rt.R(ki), rt.R(pi));
                         }
-                        rt.Push(rt.R(mi));
-                        long @out = RopeNode(rt, kbase, n);
-                        rt.PopTo(@base);
-                        return @out;
                     }
                 }
             }
         }
+        if (!Val.IsNil(@fixed)) {
+            int fi = rt.Push(@fixed);
+            int kbase = rt.Mark();
+            for (int i = 0; i < n; i++) {
+                if (i == edge) {
+                    rt.Push(rt.R(fi));
+                } else {
+                    rt.Push(rt.Slot(rt.R(ni), global::Flint.Rt.Str.RP_KIDS + i));
+                }
+            }
+            long @out = RopeNode(rt, kbase, n);
+            rt.PopTo(@base);
+            return @out;
+        }
+        // THEN A SIBLING, if this node has room.
         if (n < global::Flint.Rt.Str.FANOUT) {
-            // The spine is full below, but this node has room: `b` joins
-            // as a sibling, LIFTED to the height its siblings stand at, or
-            // the tree goes ragged and the depth grows linearly again.
-            int h = RopeHeight(rt, rt.R(li));
-            long lifted = RopeLift(rt, rt.R(bi), h);
+            int h = RopeHeight(rt, rt.R(ki));
+            long lifted = RopeLift(rt, rt.R(pi), h);
             if (Val.IsNil(lifted)) {
                 rt.PopTo(@base);
                 return Val.Nil;
             }
-            int ni = rt.Push(lifted);
+            int li = rt.Push(lifted);
             int kbase = rt.Mark();
-            for (int i = 0; i < n; i++) {
-                rt.Push(rt.Slot(rt.R(ai), global::Flint.Rt.Str.RP_KIDS + i));
+            if (front) {
+                rt.Push(rt.R(li));
             }
-            rt.Push(rt.R(ni));
+            for (int i = 0; i < n; i++) {
+                rt.Push(rt.Slot(rt.R(ni), global::Flint.Rt.Str.RP_KIDS + i));
+            }
+            if (!front) {
+                rt.Push(rt.R(li));
+            }
             long @out = RopeNode(rt, kbase, n + 1);
             rt.PopTo(@base);
             return @out;
         }
         rt.PopTo(@base);
         return Val.Nil;
+    }
+    /// Append `b` into the rightmost subtree of `a` that has room.
+    public static long RopeAppend(Rt rt, long a, long b) {
+        return RopeGraft(rt, a, b, false);
+    }
+    /// Prepend `a` into the leftmost subtree of `b` that has room.
+    /// 
+    /// NOTE THE ARGUMENT ORDER: `a` is the piece and `b` is the tree, which is
+    /// the reverse of `rope-append` and follows `s-concat`'s `a` then `b`.
+    public static long RopePrepend(Rt rt, long a, long b) {
+        return RopeGraft(rt, b, a, true);
     }
     /// `a` followed by `b`, as a string.
     public static long SConcat(Rt rt, long a, long b) {
@@ -146,17 +155,60 @@ public static class Ropecat {
         if (!Val.IsNil(appended)) {
             return appended;
         }
-        // A NEW LEVEL, and `b` is lifted to stand as tall as the old root so
-        // the leaves stay at one depth on this side too.
+        // AND THE OTHER END, before a level is added. Sharing the walk with
+        // the append side is what made this affordable -- as its own mirror
+        // it cost 2 090 bytes and was removed for it.
+        if (!IsRope(rt, a)) {
+            long prepended = RopePrepend(rt, a, b);
+            if (!Val.IsNil(prepended)) {
+                return prepended;
+            }
+        }
+        // A NEW LEVEL, with THE SHORTER SIDE LIFTED to meet the taller.
+        // 
+        // This used to lift `b` by `rope-height(a)` outright, which is only
+        // right when `b` is a LEAF -- the append case, where `b` is the new
+        // piece. Reverse the arguments and it is wrong twice over: a short
+        // `a` in front of a tall `b` lifts `b` by ZERO and builds
+        // `[leaf, deep-rope]`, which is RAGGED.
+        // 
+        // That is the exact shape this file's header says was fixed for
+        // append -- `[old, new]` with the whole old tree as a child, depth
+        // growing linearly -- still live at the other end. Measured in the
+        // probe: twelve appends of six bytes give height 3, twelve PREPENDS
+        // of six bytes gave height 1 over a right-leaning chain, and
+        // `rope-height` could not even report it because it reads child zero
+        // and trusts that children are the same height.
+        // 
+        // AND IT IS NOW REACHABLE. The header says the ragged tree `never
+        // showed while nothing indexed a rope, because every path flattened
+        // first; the moment indexing descends instead, an O(n)-deep tree
+        // makes the walk quadratic in a new place`. `str-index-of` descends
+        // now, so this stopped being latent.
         int @base = rt.Mark();
         int ai = rt.Push(a);
         int bi = rt.Push(b);
-        int h = RopeHeight(rt, rt.R(ai));
-        long lifted = RopeLift(rt, rt.R(bi), h);
-        int li = rt.Push(lifted);
+        int ha = RopeHeight(rt, rt.R(ai));
+        int hb = RopeHeight(rt, rt.R(bi));
+        if (ha < hb) {
+            long la = RopeLift(rt, rt.R(ai), hb - ha);
+            if (Val.IsNil(la)) {
+                rt.PopTo(@base);
+                return Val.Nil;
+            }
+            rt.SetR(ai, la);
+        }
+        if (ha > hb) {
+            long lb = RopeLift(rt, rt.R(bi), ha - hb);
+            if (Val.IsNil(lb)) {
+                rt.PopTo(@base);
+                return Val.Nil;
+            }
+            rt.SetR(bi, lb);
+        }
         int kbase = rt.Mark();
         rt.Push(rt.R(ai));
-        rt.Push(rt.R(li));
+        rt.Push(rt.R(bi));
         long @out = RopeNode(rt, kbase, 2);
         rt.PopTo(@base);
         return @out;

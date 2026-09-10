@@ -251,6 +251,44 @@
 ;;
 ;; TO REVERSE IT: the three builtins would each need their own search back,
 ;; which is the thing worth not doing.
+;;
+;; AND AGAIN, by 245 bytes, for two rope fixes at the PREPEND end --
+;; 318 304 -> 318 549 -- which is the smallest entry here and was very nearly
+;; the largest.
+;;
+;; RAGGED TREES. `s-concat` lifted `b` by `rope-height(a)`, right only when
+;; `b` is a LEAF -- the append case. Reversed it lifts the TALL side by zero
+;; and builds `[leaf, deep-rope]`: children at different heights, breaking the
+;; invariant `rope-height` states it depends on ("exact because a node's
+;; children are all the same height"). It was reading child zero and reporting
+;; 1 for a chain twelve deep. No measurement justifies this half and none was
+;; looked for; an invariant either holds or the code trusting it is wrong.
+;;
+;; LINEAR DEPTH. There was no left-spine counterpart to `rope-append`, so
+;; every prepend added a level: twelve prepends gave depth 12 where twelve
+;; appends give 3.
+;;
+;; HOW IT CAME TO COST ALMOST NOTHING, which is the part worth keeping. The
+;; prepend was first written as its own mirror of the append -- a second
+;; descent, a second set of rebuilds, a second lift -- and cost 2 090 bytes.
+;; Measured against the shape that actually occurs, it earned none of them:
+;; printing a WIDE structure (2 000 elements at depth 4, 500 at 8, 100 at 12)
+;; was within 0.03% with it and without, because each level prepends ONCE onto
+;; its own content. It pays only past ~400 levels of nesting, where depth 800
+;; printed in 1.01ms against 5.94ms. So it was removed.
+;;
+;; Then the two directions were made ONE WALK -- `rope-graft`, with a `front`
+;; flag choosing which child to descend, which way the merge concatenates and
+;; which end a sibling joins. The second direction is now a handful of
+;; branches, and the shared function is SMALLER THAN THE OLD `rope-append`
+;; ALONE: 318 549 against 318 636 with no prepend at all. A feature that cost
+;; 2 090 bytes as a copy costs -87 as a parameter.
+;;
+;; THE SESSION TOTAL, because a budget raised once per fix is not a budget:
+;; 315 386 -> 318 549 is 3 163 bytes, 1.00%, over three entries. The question
+;; worth asking is whether they are worth it together, not whether the next
+;; one is worth its own -- which is the question that turned 2 090 bytes into
+;; nothing.
 (check-that "the floor is within the budget 0009, 0011, specialisation, bytes and call chose"
 ;; TABLES (`doc/decisions/0026`) cost 22 857 bytes here when they landed --
 ;; 287 854 shipped against 264 997 -- and then gave 15 832 of it back, which is

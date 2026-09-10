@@ -136,6 +136,51 @@ fn main() {
                         rt.s_ascii(mixed) as u32));
     // A LEAF declines the append -- there is no spine to walk.
     o.push_str(&format!("leafdecl={} ", rt.rope_append(s3, s3).is_nil() as u32));
+    // MERGE BEFORE CREATE, at both ends. `acc` above was built from 6-byte
+    // pieces, so its leaves are 6 and MERGE_MAX is 4 -- nothing merges into
+    // them, and the counts below are the ones to watch when that changes.
+    // `tiny` is 2 bytes, so it fits a 2-byte leaf and not a 6-byte one.
+    let two = rt.leaf(2, 2, true);
+    let mut racc = rt.leaf(2, 2, true);
+    for _ in 0..8 {
+        let base = rt.mark();
+        rt.push(racc); rt.push(two);
+        let out = rt.s_concat(rt.r(base), rt.r(base + 1));
+        rt.pop_to(base);
+        racc = out;
+    }
+    // Eighteen bytes of 2-byte pieces. Without merging every piece past
+    // FLAT_MAX is its own leaf; with it they coalesce up to MERGE_MAX.
+    o.push_str(&format!("merged={},{},{} ", rt.s_bytes(racc), rt.rope_kids(racc),
+                        rt.rope_height(racc)));
+    // PREPEND: a short piece in front of a tree must merge into its leftmost
+    // leaf rather than becoming a leaf of its own.
+    let pre = rt.s_concat(two, racc);
+    o.push_str(&format!("prepend={},{},{} ", rt.s_bytes(pre), rt.rope_kids(pre),
+                        rt.rope_height(pre)));
+    // REPEATED PREPEND, and the number below is a KNOWN PATHOLOGY rather than
+    // a pass: twelve prepends give depth 12 where twelve APPENDS give 3.
+    //
+    // It is here so that it is WATCHED. `rope-prepend` was written and then
+    // removed -- 2 090 bytes for a case that only appears past ~400 levels of
+    // nesting, where printing a wide structure was within 0.03% with it and
+    // without. The reasoning is in `ropecat.kin`. If this row ever needs to
+    // become log-depth, that is the code to bring back.
+    //
+    // WHAT IS NOT PATHOLOGICAL any more is the raggedness: `prepend=` above
+    // reports an honest height because the shorter side is lifted to meet the
+    // taller. It used to say 1 for a chain twelve deep.
+    let mut pacc = rt.leaf(6, 6, true);
+    for _ in 0..12 {
+        let piece = rt.leaf(6, 6, true);
+        let base = rt.mark();
+        rt.push(pacc); rt.push(piece);
+        let out = rt.s_concat(rt.r(base + 1), rt.r(base));
+        rt.pop_to(base);
+        pacc = out;
+    }
+    o.push_str(&format!("prebuilt={},{},{} ", rt.s_bytes(pacc), rt.rope_kids(pacc),
+                        rt.rope_height(pacc)));
     o.push_str(&format!("kids={} ", rt.rope_kids(acc)));
     println!("{}", o);
 }
@@ -265,7 +310,32 @@ fn main() {
         o.append("mixed=").append(Str.sBytes(rt, mixed)).append(',')
          .append(Str.sCount(rt, mixed)).append(',').append(Str.sAscii(rt, mixed) ? 1 : 0).append(' ');
         o.append("leafdecl=").append(Val.isNil(ropeAppend(rt, s3, s3)) ? 1 : 0).append(' ');
-        o.append("kids=").append(ropeKids(rt, acc)).append(' ');
+        long two = leaf(rt, 2, 2, true);
+        long racc = leaf(rt, 2, 2, true);
+        for (int i = 0; i < 8; i++) {
+            int base = rt.mark();
+            rt.push(racc); rt.push(two);
+            long out = sConcat(rt, rt.r(base), rt.r(base + 1));
+            rt.popTo(base);
+            racc = out;
+        }
+        o.append("merged=").append(sBytes(rt, racc)).append(",")
+         .append(ropeKids(rt, racc)).append(",").append(ropeHeight(rt, racc)).append(" ");
+        long pre = sConcat(rt, two, racc);
+        o.append("prepend=").append(sBytes(rt, pre)).append(",")
+         .append(ropeKids(rt, pre)).append(",").append(ropeHeight(rt, pre)).append(" ");
+        long pacc = leaf(rt, 6, 6, true);
+        for (int i = 0; i < 12; i++) {
+            long piece = leaf(rt, 6, 6, true);
+            int base = rt.mark();
+            rt.push(pacc); rt.push(piece);
+            long out = sConcat(rt, rt.r(base + 1), rt.r(base));
+            rt.popTo(base);
+            pacc = out;
+        }
+        o.append("prebuilt=").append(sBytes(rt, pacc)).append(",")
+         .append(ropeKids(rt, pacc)).append(",").append(ropeHeight(rt, pacc)).append(" ");
+        o.append("kids=").append(ropeKids(rt, acc)).append(" ");
         System.out.println(o.toString());
     }
 --csharp-pre
@@ -413,6 +483,31 @@ namespace Flint.Rt {
         o.Append("mixed=").Append(SBytesOf(rt, mixed)).Append(',')
          .Append(SCountOf(rt, mixed)).Append(',').Append(SAsciiOf(rt, mixed) ? 1 : 0).Append(' ');
         o.Append("leafdecl=").Append(Val.IsNil(RopeAppend(rt, s3, s3)) ? 1 : 0).Append(' ');
-        o.Append("kids=").Append(RopeKids(rt, acc)).Append(' ');
+        long two = Leaf(rt, 2, 2, true);
+        long racc = Leaf(rt, 2, 2, true);
+        for (int i = 0; i < 8; i++) {
+            int bas = rt.Mark();
+            rt.Push(racc); rt.Push(two);
+            long outv = SConcat(rt, rt.R(bas), rt.R(bas + 1));
+            rt.PopTo(bas);
+            racc = outv;
+        }
+        o.Append("merged=").Append(SBytes(rt, racc)).Append(",")
+         .Append(RopeKids(rt, racc)).Append(",").Append(RopeHeight(rt, racc)).Append(" ");
+        long pre = SConcat(rt, two, racc);
+        o.Append("prepend=").Append(SBytes(rt, pre)).Append(",")
+         .Append(RopeKids(rt, pre)).Append(",").Append(RopeHeight(rt, pre)).Append(" ");
+        long pacc = Leaf(rt, 6, 6, true);
+        for (int i = 0; i < 12; i++) {
+            long piece = Leaf(rt, 6, 6, true);
+            int bas = rt.Mark();
+            rt.Push(pacc); rt.Push(piece);
+            long outv = SConcat(rt, rt.R(bas + 1), rt.R(bas));
+            rt.PopTo(bas);
+            pacc = outv;
+        }
+        o.Append("prebuilt=").Append(SBytes(rt, pacc)).Append(",")
+         .Append(RopeKids(rt, pacc)).Append(",").Append(RopeHeight(rt, pacc)).Append(" ");
+        o.Append("kids=").Append(RopeKids(rt, acc)).Append(" ");
         System.Console.WriteLine(o.ToString());
     }
