@@ -111,6 +111,28 @@ repairing it. It needs its own probe first, because nothing currently
 compares what the three runtimes do to a transient used after
 `persistent!`.
 
+#### Five divergences from Clojure, found by `seqshapes`, needing a decision
+
+All four runtimes AGREE on these -- they are not port bugs. They are places
+flint answers something Clojure does not, consistently, and nobody has
+decided whether that is intended:
+
+| expression | Clojure | flint |
+| --- | --- | --- |
+| `(pop nil)` | `nil` | `IllegalStateException: cannot pop nil` |
+| `(subvec [1 2 3] 2 1)` | `IndexOutOfBoundsException` | `[]` |
+| `(peek #{1})` | `ClassCastException` | `1` |
+| `(nth {:a 1} 0)` | `UnsupportedOperationException` | `[:a 1]` |
+| `(contains? '(1 2) 0)` | `IllegalArgumentException` | `false` |
+
+`(pop nil)` is the one a program meets by accident, and it is flint being
+STRICTER. The other four are flint being permissive where Clojure refuses --
+the safer direction, but still a difference.
+
+`test/conform_vs_clojure.clj` is the harness that would catch these
+automatically; it runs `test/conform/basics.cljc` only. Either these move
+there as marked `:divergence` cases, or they get fixed. Both are decisions.
+
 ### 2. `Equiv` / `Hash` / `EquivHash`
 
 Designed in [equiv-hash](equiv-hash.md), not started. The first step is not an
@@ -155,6 +177,32 @@ not the draft's to answer:
   makes the inlining argument.
 * **Two names are misplaced rather than invented.** `re-quote-replacement` is
   `clojure.string`'s in real Clojure; `spread` exists there but is private.
+
+## Reached is not exercised
+
+`bin/check-builtin-coverage` reports 152 of 192 builtins reached by a
+conformance image, 38 accounted for with a reason, 2 unwatched. That gate is
+healthy and it measures the wrong axis for the bugs found on 2026-09-09.
+
+`dissoc` was REACHED. Twelve calls in `test/common`, all passing. It was also
+wrong on every runtime, in three different ways, for a shape nobody had
+tried -- `(dissoc [1 2] 0)`. `conj` was reached by `collections.cljc`, which
+conjes onto a vector and a set, and was silently corrupting maps on two
+runtimes.
+
+REACHABILITY SAYS A BUILTIN RAN. It does not say which of its branches ran,
+and the branch that matters is usually the one that should REFUSE. All four
+bugs that day were a fall-through producing a plausible value -- `[1 2]`,
+`nil`, `#{}`, `{nil nil}` -- rather than an error. None crashed, so none was
+found by anything.
+
+The probes that found them (`conjshapes`, `mapshapes`, `seqshapes`) are built
+the other way round: every case that should be refused, and the refusal
+recorded as the answer. That is the shape worth copying for the next family.
+
+And the third probe found NOTHING, which is also a result: `contains?`,
+`peek`, `pop`, `subvec` and `nth` agree everywhere. The fall-through cluster
+was in the map/set WRITE family, not general.
 
 ## Adding a library namespace: three registration points, one of them obvious
 
