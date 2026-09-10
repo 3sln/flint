@@ -67,6 +67,30 @@ this table lie if it is regenerated naively:
 
 The table above already excludes all three.
 
+#### `coll.rs`, looked at properly
+
+Seventeen functions, and most are host-bound by their SIGNATURES rather than
+their subject: `find_bytes(&[u8], &[u8]) -> Option<usize>`, `cp_bytes_at(..,
+&mut [u8; 4])`, `fmt_i64(.., &mut [u8; 24]) -> &str`, `hash_of_str(&str)`,
+and the two `substring` arms taking `Option<i64>`. kin has no slices, no
+`Option` and no borrowed buffers, so those are the boundary.
+
+WHAT IS ACTUALLY PORTABLE takes `Value` and answers `Value`: `conj`,
+`str_concat2`, `code_point_at`, `keyword_from_values`, `symbol_from_values`,
+`join_strings`, `str_index_of`, `string_bytes_vector`, `gc_stats_map`.
+
+`conj` IS THE ONE WORTH DOING and it is not mechanical. It is ~70 lines of
+dispatch over collection types, it is triplicated, and the three copies are
+STRUCTURALLY DIFFERENT: a named function in `coll.rs`, and inlined into the
+builtin table in both ports (`Builtins.java:368`, `Builtins.cs:348`). Porting
+it means extracting the ports' inline arms into a call, which is the value --
+the Rust copy carries a comment about `(conj 1 2)` reading a fixnum's payload
+as an address and answering `(2)`, a bug the ports did not have and could not
+have shared a fix for.
+
+It also builds its error message with `alloc::format!`, which kin cannot
+express; that arm needs the vocabulary's string primitives instead.
+
 ### 2. `Equiv` / `Hash` / `EquivHash`
 
 Designed in [equiv-hash](equiv-hash.md), not started. The first step is not an
