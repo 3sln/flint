@@ -402,20 +402,9 @@ public static class Builtins {
         // aliveness check the generated one lacked, and neither had the upper
         // bound check that `(assoc! (transient [1 2]) 5 :d)` needs.
         Def("assoc!", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Transients.TransientAssoc(rt, rt.VAt(at), rt.VAt(at + 1), rt.VAt(at + 2)));
-        Def("dissoc!", (rt, at, n) => {
-            long v = rt.VAt(at);
-            if (Maps.IsTransient(rt, v)) {
-                long acc = v;
-                for (int i = 1; i < n; i++) acc = Maptrans.TmapDissoc(rt, acc, rt.VAt(at + i));
-                return acc;
-            }
-            if (Sets.IsTransient(rt, v)) {
-                long acc = v;
-                for (int i = 1; i < n; i++) acc = Maptrans.TsetDisj(rt, acc, rt.VAt(at + i));
-                return acc;
-            }
-            return rt.ThrowStr("ClassCastException", "disj! wants a transient, got " + rt.Describe(v));
-        });
+        // GENERATED, from `kin/transients.kin`; the hand-written copy named
+        // `disj!` in a refusal that `dissoc!` reaches too.
+        Def("dissoc!", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Transients.TransientDissoc(rt, rt.VAt(at), rt.VAt(at + 1)));
 
         // Maps.
         // GENERATED, from `kin/collread.kin`. The hand-written body had no

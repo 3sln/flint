@@ -91,35 +91,33 @@ have shared a fix for.
 It also builds its error message with `alloc::format!`, which kin cannot
 express; that arm needs the vocabulary's string primitives instead.
 
-#### `conj!`'s hand-written arms: half removed, half still there
+#### The transient builtins: duplicates gone, and what they cost on the way
 
-`kin/transients.kin` defines `transient-conj`, and both ports ALSO carry a
-hand-written version of it inside their `conj!` builtin. That duplication was
-found while fixing `(into {} [7])`, which the hand-written copies got wrong.
+`conj!`, `assoc!` and `dissoc!` each had a hand-written copy of a generated
+function inside both ports' builtin tables. All three are now one-line calls
+into `kin/transients.kin`, about 190 lines deleted -- but the deletions came
+LAST, and that order was not tidiness. Each duplicate turned out to be right
+about something the generated function was wrong about:
 
-I DECLINED TO DELEGATE THEM AT THE TIME, on the grounds that the hand-written
-arm carried an aliveness check the generated one did not, and deleting it
-silently would be the same shape as the bug I was fixing. A probe then showed
-that was not caution but the actual state of things:
+| door | the duplicate had | the generated one had |
+| --- | --- | --- |
+| `conj!` | the aliveness check | entry validation |
+| `assoc!` | the aliveness check | (neither had the upper bound) |
+| `dissoc!` | -- | the right operation name, sort of |
 
-    (conj! t 1) on a spent handle    native #<unprintable>    both ports threw
+DELETING FIRST WOULD HAVE SHIPPED CORRUPTION each time, under a diff that was
+pure subtraction and a message about removing duplication. What made it safe
+was probing the door, fixing `transients.kin`, and only then cutting.
 
-The hand-written duplicate was THE ONLY CORRECT COPY on two of three
-runtimes. Removing the duplication -- which is what tidying it up means --
-would have deleted the check from the two runtimes that had it and left all
-three corrupting values, under a commit message about deduplication.
+`(dissoc! 7 :a)` and `(disj! 7 :a)` deserve a note. `clojure.core` defines
+`disj!` as a call to `flint.rt/dissoc!` -- ONE builtin, two library names --
+so the runtime cannot know which the caller wrote. Every runtime named one
+and was wrong half the time, and they had picked differently. The refusal
+names both now, which is the truth about what arrived.
 
-HALF DONE NOW. The aliveness check is in `transients.kin`, beside the
-identical guard `to-persistent` already had two functions below, and all four
-runtimes agree. What remains is deleting the ports' hand-written arms and
-calling `transientConj`, which is now safe because the generated function has
-everything they check. `runtimes/conform/transhapes.cljc` pins the behaviour
-either way.
-
-ONE PREDICTION THAT WAS WRONG, kept because it cost a test case and the case
-is worth having: native's `conj!` builtin reads `let _ = n`, which looked
-like it ignored arguments past the second. It does not -- arity is checked
-upstream and `(conj! t 1 2)` raises `ArityException` on all four runtimes.
+MAKING IT EXACT means giving them separate builtins, which costs an entry in
+the native slot table and the ABI. That is a lot to spend on one word, and it
+is written in the source rather than left as a puzzle.
 
 #### Five divergences from Clojure, found by `seqshapes`, needing a decision
 

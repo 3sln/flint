@@ -193,6 +193,22 @@ public static class Transients {
         return rt.ThrowStr("ClassCastException", "not an associative transient");
     }
     /// `dissoc!` on a transient map, and `disj!` on a transient set.
+    /// `dissoc!` and `disj!`, which are one operation over two shapes.
+    /// 
+    /// THE REFUSAL NAMES BOTH, and that is not vagueness -- it is the truth
+    /// about what arrived. `clojure.core` defines `disj!` as a call to
+    /// `flint.rt/dissoc!`, so there is ONE builtin and two library names, and
+    /// by the time control is here the runtime cannot tell which was written.
+    /// 
+    /// It used to pick one and be wrong half the time, differently per
+    /// runtime: native said `dissoc!` for both, and the ports kept a
+    /// hand-written copy that said `disj!` for both. So `(disj! 7 :a)` was
+    /// explained in terms of `dissoc!` on one runtime, and `(dissoc! 7 :a)` in
+    /// terms of `disj!` on another.
+    /// 
+    /// Giving them separate builtins would let the message be exact. That
+    /// costs an entry in the native slot table and the ABI, which is a lot to
+    /// spend on a word.
     public static long TransientDissoc(Rt rt, long t, long k) {
         if (Val.IsHeap(t)) {
             int tt = Obj.Ty(rt.gc.sp, Val.AsHeap(t));
@@ -203,7 +219,7 @@ public static class Transients {
                 return TsetDisj(rt, t, k);
             }
         }
-        return NotATransient(rt, "dissoc!", t);
+        return NotATransient(rt, "dissoc!/disj!", t);
     }
     /// `pop!`: a transient vector one shorter.
     /// 

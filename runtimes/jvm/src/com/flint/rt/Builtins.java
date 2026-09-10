@@ -438,21 +438,11 @@ public final class Builtins {
         // The fold over pairs was vestigial: `assoc!` arity is capped at
         // three upstream, so `n` is always 3.
         def("assoc!", (rt, at, n) -> Transients.transientAssoc(rt, rt.vat(at), rt.vat(at + 1), rt.vat(at + 2)));
-        def("dissoc!", (rt, at, n) -> {
-            long v = rt.vat(at);
-            if (Maps.isTransient(rt, v)) {
-                long acc = v;
-                for (int i = 1; i < n; i++) acc = Maptrans.tmapDissoc(rt, acc, rt.vat(at + i));
-                return acc;
-            }
-            if (Sets.isTransient(rt, v)) {
-                long acc = v;
-                for (int i = 1; i < n; i++) acc = Maptrans.tsetDisj(rt, acc, rt.vat(at + i));
-                return acc;
-            }
-            return rt.throwStr("ClassCastException",
-                "disj! wants a transient, got " + rt.describe(v));
-        });
+        // GENERATED, from `kin/transients.kin`. The hand-written copy threw
+        // "disj! wants a transient" for BOTH doors, where native threw
+        // "dissoc!" for both -- one builtin serves `dissoc!` and `disj!`, and
+        // each runtime had picked a different one to name.
+        def("dissoc!", (rt, at, n) -> Transients.transientDissoc(rt, rt.vat(at), rt.vat(at + 1)));
 
         def("pop!", (rt, at, n) -> Transients.transientPop(rt, rt.vat(at)));
 
