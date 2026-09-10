@@ -412,76 +412,22 @@ public final class Builtins {
         // choose between them in one place.
         def("transient", (rt, at, n) -> Transients.toTransient(rt, rt.vat(at)));
         def("persistent!", (rt, at, n) -> Transients.toPersistent(rt, rt.vat(at)));
-        def("conj!", (rt, at, n) -> {
-            long v = rt.vat(at);
-            if (Table.isTtable(rt, v)) {
-                long acc = v;
-                for (int i = 1; i < n; i++) acc = Table.ttableConj(rt, acc, rt.vat(at + i));
-                return acc;
-            }
-            if (Vec.isTransient(rt, v)) {
-                if (!Vec.alive(rt, v)) {
-                    return rt.throwStr("IllegalStateException",
-"conj! on a transient already made persistent");
-                }
-                long acc = v;
-                for (int i = 1; i < n; i++) acc = Vec.tconj(rt, acc, rt.vat(at + i));
-                return acc;
-            }
-            if (Sets.isTransient(rt, v)) {
-                long acc = v;
-                for (int i = 1; i < n; i++) acc = Maptrans.tsetConj(rt, acc, rt.vat(at + i));
-                return acc;
-            }
-            if (Maps.isTransient(rt, v)) {
-                // `conj!` onto a map takes an ENTRY or a two-element vector.
-                //
-                // THE ACCUMULATOR IS ROOTED. It was a bare Java local passed as
-                // the first argument, and Java evaluates arguments LEFT TO
-                // RIGHT -- so `acc` was read, and then `Seqs.rest` and
-                // `Seqs.first` allocated (a map entry becomes a vector and a
-                // seq over it), and `tassoc` wrote through a forwarded pointer.
-                //
-                // `doc/decisions/0031`: a value in a host local does not
-                // survive an allocation. It surfaced as `(into {} m)` inside a
-                // `mapv` over a few hundred elements answering "object type 1
-                // is not a transient" -- type 1 being `TY_FWD` -- and only
-                // under enough allocation to collect, which is why nothing here
-                // had ever hit it.
-                //
-                // AND THE ENTRY IS CHECKED, which it was not. `first` and
-                // `first (rest ..)` of a value that is neither an entry nor a
-                // two-element vector are both `nil`, so `(into {} [7])`
-                // answered `{nil nil}` -- a corrupt map, silently, where
-                // native throws. `kin/transients.kin` already gets this right
-                // for `transient-conj`; this arm is a hand-written duplicate
-                // of it that drifted. Delegating wholesale would lose the
-                // aliveness check above, so the check is repeated here and
-                // the duplication is noted in `doc/goals`.
-                int base = rt.mark();
-                int ai = rt.push(v);
-                for (int i = 1; i < n; i++) {
-                    long e = rt.vat(at + i);
-                    if (!(rt.isHeapTy(e, TY_MAPENTRY) || rt.isHeapTy(e, TY_VEC))) {
-                        rt.popTo(base);
-                        return rt.throwStr("IllegalArgumentException",
-                                           "conj! on a map wants a map entry");
-                    }
-                    int ei = rt.push(e);
-                    long k = rt.slotOrNth(rt.r(ei), 0);
-                    int ki = rt.push(k);
-                    long val = rt.slotOrNth(rt.r(ei), 1);
-                    int vi2 = rt.push(val);
-                    rt.setR(ai, Maptrans.tmapAssoc(rt, rt.r(ai), rt.r(ki), rt.r(vi2)));
-                    rt.popTo(ei);
-                }
-                long out = rt.r(ai);
-                rt.popTo(base);
-                return out;
-            }
-            return rt.throwStr("ClassCastException",
-                "conj! wants a transient, got " + rt.describe(v));
-        });
+        // GENERATED, from `kin/transients.kin`. This was fifty lines of
+        // hand-written arms duplicating `transientConj` -- and the duplicate
+        // had DRIFTED: it took `first` and `first (rest ..)` of whatever was
+        // conj'd onto a transient map, so `(into {} [7])` answered
+        // `{nil nil}`.
+        //
+        // It could not be deleted until the generated function had the
+        // aliveness check this copy carried, because for a while the
+        // duplicate was the only correct copy -- native answered
+        // `#<unprintable>` for `conj!` on a spent handle. That check is in
+        // `transients.kin` now, so all four runtimes get both guards from one
+        // place and this is a call.
+        //
+        // Arity is checked upstream: `(conj! t 1 2)` raises `ArityException`
+        // before reaching here, which is why there is no fold.
+        def("conj!", (rt, at, n) -> Transients.transientConj(rt, rt.vat(at), rt.vat(at + 1)));
         def("assoc!", (rt, at, n) -> {
             long v = rt.vat(at);
             if (Vec.isTransient(rt, v)) {

@@ -387,61 +387,16 @@ public static class Builtins {
         // choose between them in one place.
         Def("transient", (rt, at, n) => Transients.ToTransient(rt, rt.VAt(at)));
         Def("persistent!", (rt, at, n) => Transients.ToPersistent(rt, rt.VAt(at)));
-        Def("conj!", (rt, at, n) => {
-            long v = rt.VAt(at);
-            if (Flint.Rt.Table.isTtable(rt, v)) {
-                long tacc = v;
-                for (int i = 1; i < n; i++) tacc = Flint.Rt.Table.ttableConj(rt, tacc, rt.VAt(at + i));
-                return tacc;
-            }
-            if (Vec.IsTransient(rt, v)) {
-                if (!Vec.Alive(rt, v))
-                    return rt.ThrowStr("IllegalStateException", "conj! on a transient already made persistent");
-                long acc = v;
-                for (int i = 1; i < n; i++) acc = Vec.TConj(rt, acc, rt.VAt(at + i));
-                return acc;
-            }
-            if (Sets.IsTransient(rt, v)) {
-                long acc = v;
-                for (int i = 1; i < n; i++) acc = Maptrans.TsetConj(rt, acc, rt.VAt(at + i));
-                return acc;
-            }
-            if (Maps.IsTransient(rt, v)) {
-                // `conj!` onto a map takes an ENTRY or a two-element vector.
-                //
-                // THE ACCUMULATOR IS ROOTED. It was a bare local passed as the
-                // first argument, and C# evaluates arguments LEFT TO RIGHT --
-                // so `acc` was read, then `Seqs.Rest` and `Seqs.First`
-                // allocated, and `TAssoc` wrote through a forwarded pointer
-                // (`doc/decisions/0031`).
-                //
-                // AND THE ENTRY IS CHECKED, which it was not: `First` and
-                // `First (Rest ..)` of a value that is neither an entry nor a
-                // two-element vector are both nil, so `(into {} [7])` answered
-                // `{nil nil}` -- a corrupt map, silently.
-                int bas = rt.Mark();
-                int ai = rt.Push(v);
-                for (int i = 1; i < n; i++) {
-                    long e = rt.VAt(at + i);
-                    if (!(rt.IsHeapTy(e, Obj.TyMapentry) || rt.IsHeapTy(e, Obj.TyVec))) {
-                        rt.PopTo(bas);
-                        return rt.ThrowStr("IllegalArgumentException",
-                                           "conj! on a map wants a map entry");
-                    }
-                    int ei = rt.Push(e);
-                    long k = rt.SlotOrNth(rt.R(ei), 0);
-                    int ki = rt.Push(k);
-                    long val = rt.SlotOrNth(rt.R(ei), 1);
-                    int vi2 = rt.Push(val);
-                    rt.SetR(ai, Maptrans.TmapAssoc(rt, rt.R(ai), rt.R(ki), rt.R(vi2)));
-                    rt.PopTo(ei);
-                }
-                long outv = rt.R(ai);
-                rt.PopTo(bas);
-                return outv;
-            }
-            return rt.ThrowStr("ClassCastException", "conj! wants a transient, got " + rt.Describe(v));
-        });
+        // GENERATED, from `kin/transients.kin`. Fifty lines of hand-written
+        // arms duplicating `TransientConj`, and the duplicate had drifted:
+        // `(into {} [7])` answered `{nil nil}` because nothing checked that
+        // what arrived was an entry.
+        //
+        // Not deletable until the generated function carried the aliveness
+        // check this copy had -- for a while the duplicate was the only
+        // correct copy, native answering `#<unprintable>` for `conj!` on a
+        // spent handle. Both guards live in `transients.kin` now.
+        Def("conj!", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Transients.TransientConj(rt, rt.VAt(at), rt.VAt(at + 1)));
         Def("assoc!", (rt, at, n) => {
             long v = rt.VAt(at);
             if (Vec.IsTransient(rt, v)) {
