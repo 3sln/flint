@@ -29,27 +29,30 @@ counting only functions no `@kin:link:` tag or vocabulary template names.
 one shape became one source, and the overflow edge got decided once instead of
 three times.
 
-| file | fns | lines | what they are |
+| file | fns | lines | verdict, from reading the bodies |
 | --- | ---: | ---: | --- |
-| `num.rs` | 2 | 16 | value-representation predicates -- host |
-| `bytes.rs` | 2 | 28 | |
-| `set.rs` | 2 | 30 | `set_for_each` takes a Rust closure -- not portable as-is |
-| `fmath.rs` | 2 | 31 | |
-| `eq.rs` | 3 | 33 | two one-liners; `utf16_cmp` is host (Java/C# get it from `String.compareTo`) |
-| `hash.rs` | 4 | 36 | |
-| `rope.rs` | 2 | 42 | |
-| `vector.rs` | 3 | 47 | construction and a predicate -- mostly host |
-| `map.rs` | 3 | 91 | `init_map` plus two taking Rust closures -- **effectively done** |
-| `err.rs` | 8 | 92 | |
-| `obj.rs` | 12 | 113 | |
-| `value.rs` | 6 | 150 | |
-| `strs.rs` | 10 | 275 | interning -- likely genuinely host |
-| `pike.rs` | 8 | 339 | the Pike VM simulator; 0% holes, real logic |
-| `coll.rs` | 17 | 619 | **the largest genuinely portable one** |
-| `builtins.rs` | 6 | 1097 | the builtin table -- host by nature |
+| `err.rs` | 8 | 92 | **PORT THIS.** `ex_info` is the same algorithm line for line in Rust and Java -- mark, push four, alloc, check zero, set slots, pop. Verified, not inferred. |
+| `num.rs` | 2 | 16 | host -- value-representation predicates |
+| `bytes.rs` | 2 | 28 | unread |
+| `set.rs` | 2 | 30 | host -- `set_for_each` takes a Rust closure |
+| `fmath.rs` | 2 | 31 | unread |
+| `eq.rs` | 3 | 33 | host -- two one-liners, and `utf16_cmp` is `String.compareTo` on the ports |
+| `hash.rs` | 4 | 36 | unread |
+| `rope.rs` | 2 | 42 | unread |
+| `vector.rs` | 3 | 47 | host -- construction and a predicate |
+| `map.rs` | 3 | 91 | **done** -- `init_map` plus two taking Rust closures |
+| `obj.rs` | 12 | 113 | host -- object header accessors |
+| `value.rs` | 6 | 150 | host -- value representation |
+| `strs.rs` | 10 | 275 | host -- interning, with thread-safe publication |
+| `pike.rs` | 8 | 339 | **NOT A PORT.** `doc/decisions/0012` says it: "Per host, native -- the simulator." The NFA compiler is the shared half and already is. |
+| `coll.rs` | 17 | 619 | mostly host -- see trap 4; nine `Value -> Value` functions that use `StringBuilder` and `String.indexOf` on the ports |
+| `builtins.rs` | 6 | 1097 | host -- the builtin table |
 
-`Seqs` and `Table` no longer appear at all — those are finished. `Conc`,
-`Rt`/`Vm` and `Gc` are host and stay last, by standing instruction.
+TWO ROWS THAT WERE BACKLOG THIS MORNING AND ARE NOT. `pike.rs` at 339 lines
+is a documented architectural decision, not unported work. `coll.rs`'s nine
+portable-looking functions would make every runtime slower if unified. Both
+were found by reading rather than counting, which is what the fourth trap
+below is about.
 
 THREE MEASUREMENT TRAPS, each of which I fell into, and each of which makes
 this table lie if it is regenerated naively:
