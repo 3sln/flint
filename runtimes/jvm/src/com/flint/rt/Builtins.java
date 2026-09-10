@@ -326,12 +326,38 @@ public final class Builtins {
                 return acc;
             }
             if (Mapcore.isMap(rt, v)) {
-                // `conj` onto a map takes an ENTRY or a two-element vector.
+                // `conj` onto a map takes an ENTRY, a two-element vector, or
+                // ANOTHER MAP, which merges. Anything else is refused.
+                //
+                // It used to take `first` and `first (rest ..)` of whatever
+                // arrived, which answers `nil` for both halves of a value that
+                // is neither -- so `(conj {:a 1} 7)` produced `{:a 1, nil nil}`
+                // and `(conj {:a 1} {:b 2})` produced `{:a 1, [:b 2] nil}`,
+                // silently, where native and Clojure throw and merge. Nothing
+                // compared the three: `collections.cljc` conjes onto a vector
+                // and a set, which were never in doubt.
                 int base = rt.mark();
                 int ai = rt.push(v);
                 for (int i = 1; i < n; i++) {
                     long e = rt.vat(at + i);
-                    rt.setR(ai, Mapwrite.mapAssoc(rt, rt.r(ai), Seqwalk.first(rt, e), Seqwalk.first(rt, Seqwalk.rest(rt, e))));
+                    if (rt.isHeapTy(e, TY_MAPENTRY) || rt.isHeapTy(e, TY_VEC)) {
+                        rt.setR(ai, Mapwrite.mapAssoc(rt, rt.r(ai),
+                                                      rt.slotOrNth(e, 0),
+                                                      rt.slotOrNth(e, 1)));
+                    } else if (Mapcore.isMap(rt, e)) {
+                        int ei = rt.push(Seqwalk.seq(rt, e));
+                        while (!Val.isNil(rt.r(ei))) {
+                            long ent = Seqwalk.first(rt, rt.r(ei));
+                            rt.setR(ai, Mapwrite.mapAssoc(rt, rt.r(ai),
+                                                          rt.slotOrNth(ent, 0),
+                                                          rt.slotOrNth(ent, 1)));
+                            rt.setR(ei, Seqwalk.next(rt, rt.r(ei)));
+                        }
+                    } else {
+                        rt.popTo(base);
+                        return rt.throwStr("IllegalArgumentException",
+                                           "conj on a map wants a map entry");
+                    }
                 }
                 long out = rt.r(ai);
                 rt.popTo(base);

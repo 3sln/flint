@@ -306,12 +306,34 @@ public static class Builtins {
                 return acc2;
             }
             if (Mapcore.IsMap(rt, v)) {
-                // `conj` onto a map takes an ENTRY or a two-element vector.
+                // `conj` onto a map takes an ENTRY, a two-element vector, or
+                // ANOTHER MAP, which merges. Anything else is refused.
+                //
+                // It used to take `first` and `first (rest ..)` of whatever
+                // arrived, which answers `nil` for both halves of a value that
+                // is neither -- so `(conj {:a 1} 7)` produced `{:a 1, nil nil}`
+                // and `(conj {:a 1} {:b 2})` produced `{:a 1, [:b 2] nil}`,
+                // silently, where native and Clojure throw and merge.
                 int bas = rt.Mark();
                 int ai = rt.Push(v);
                 for (int i = 1; i < n; i++) {
                     long e = rt.VAt(at + i);
-                    rt.SetR(ai, Mapwrite.MapAssoc(rt, rt.R(ai), global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, e), global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, global::_3sln.Flint.Kgen.Rt.Seqwalk.Rest(rt, e))));
+                    if (rt.IsHeapTy(e, Obj.TyMapentry) || rt.IsHeapTy(e, Obj.TyVec)) {
+                        rt.SetR(ai, Mapwrite.MapAssoc(rt, rt.R(ai),
+                                                      rt.SlotOrNth(e, 0), rt.SlotOrNth(e, 1)));
+                    } else if (Mapcore.IsMap(rt, e)) {
+                        int ei = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, e));
+                        while (!Val.IsNil(rt.R(ei))) {
+                            long ent = global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(ei));
+                            rt.SetR(ai, Mapwrite.MapAssoc(rt, rt.R(ai),
+                                                          rt.SlotOrNth(ent, 0), rt.SlotOrNth(ent, 1)));
+                            rt.SetR(ei, global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, rt.R(ei)));
+                        }
+                    } else {
+                        rt.PopTo(bas);
+                        return rt.ThrowStr("IllegalArgumentException",
+                                           "conj on a map wants a map entry");
+                    }
                 }
                 long outc = rt.R(ai);
                 rt.PopTo(bas);
