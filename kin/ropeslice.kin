@@ -5,6 +5,24 @@
 ;; `SLICE_MIN` is COPIED on purpose so a three-byte slice cannot keep a 509 KB
 ;; section alive.
 ;;
+;; MERGE-BEFORE-CREATE DOES NOT APPLY HERE, and that is measured rather than
+;; assumed. `kin/ropecat.kin` gained that rule because joining left EVERY
+;; piece as its own leaf -- O(n) short leaves in one tree, which is what made
+;; a descent slow. A slice leaves at most TWO short leaves, one per boundary,
+;; and they do not accumulate: slicing a slice replaces them rather than
+;; adding to them. One short leaf among a hundred long ones costs nothing.
+;;
+;; MEASURED, on the shape most likely to degenerate: a thousand repeated
+;; `(subs s 1)` on a 34 KB rope, each trimming one byte off the leading leaf.
+;; The gas to SEARCH the result was 38 993 at zero trims and 37 993 at a
+;; thousand -- flat, and drifting down with the shrinking string rather than
+;; up with the fragmentation.
+;;
+;; AND MERGING WOULD COST THE THING SLICE EXISTS FOR. A boundary piece sits
+;; beside a SHARED subtree; folding it in means copying the neighbour, which
+;; is the sharing this file is written to preserve. The append side has no
+;; such trade, which is why the rule belongs there and not here.
+;;
 ;; THE BOUNDS ARE BYTES, not code points. That is not a shortcut -- `subs` is
 ;; code points and converts first, through `rope-byte-of-cp`, because the tree
 ;; carries per-node code-point counts for exactly that descent. What arrives

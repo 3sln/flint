@@ -208,46 +208,33 @@ COST: 1 934 bytes on the module floor, 0.61%, which moved two size budgets.
 Priced and reversible -- `test/threads.clj` carries the decomposition and the
 one-line reversal.
 
-#### Gas diverges on ropes, and `0009` says it must not
+#### Gas diverged on ropes -- DISSOLVED, not decided
 
-MEASURED, then reverted, because the fix is a decision rather than a patch.
-Adding a rope workload to `gasmeter` -- one big enough to actually BE a rope,
-read several times -- produces:
+RECORDED EARLIER TODAY as needing a choice between three options: the ports
+adopt native's flatten-and-cache, native adopts the ports' walk, or `0009`
+gains a documented exception for rope materialisation. None of them was taken,
+because the question stopped existing.
 
-    FAIL gas differs by 1350: 425020 native against 423670 [jvm]
+The measurement was `FAIL gas differs by 1350: 425020 native against 423670
+[jvm]`, and the diagnosis was right as far as it went: native's `string_arg`
+flattened a rope, cached it in `RP_FLAT` and charged for the copy, while the
+JVM built a `java.lang.String` and charged nothing. What that diagnosis MISSED
+is that this was not two prices for one operation -- it was three
+implementations of `str-index-of`, one per runtime, over three different
+string representations. There was no charge to move because they were not
+doing the same work.
 
-WHY `gasmeter` COULD NOT SEE IT. Everything it concatenates is a few dozen
-short pieces, and `0011`'s threshold COPIES a small result into a flat string
-rather than building a tree. The file that exists to price strings never
-reached the rope path. Its own docstring records the same shape one layer up:
-the string-pricing divergence it does catch "survived this file because
-nothing else in `work` calls a string builtin that charges at all".
+`kin/ropefind.kin` made it one algorithm over the rope, which every runtime
+shares. Gas now agrees by construction rather than by agreement: 113 steps on
+both, and the same for a flat string as for a three-leaf rope holding the same
+bytes.
 
-WHY MOVING THE CHARGE DOES NOT FIX IT, which is what I tried first. The two
-runtimes do DIFFERENT WORK:
-
-* native's `string_arg` is the door "every builtin that reaches for bytes
-  goes through" -- it flattens a rope into a flat FLINT string, caches it in
-  `RP_FLAT`, and charges `bytes/8 + 1` once per materialisation.
-* the JVM never calls `sFlatten` for these paths at all. `subs` descends the
-  rope by code point (`ropeByteOfCp`), `Str.bytes` walks it into a sink, and
-  `str-index-of` materialises a JAVA String and charges a pre-computed bound.
-
-So there is no place to move the charge to: the JVM is not performing the
-operation native is billing for. Putting the charge in the generated
-`s-flatten` leaves it dead on the ports, which is what the attempt showed.
-
-THREE WAYS OUT, none of them mine to pick: the ports adopt flatten-and-cache
-and pay native's cost; native adopts the ports' walk and loses the cache;
-or `0009` gains a documented exception for rope materialisation. The first
-two are performance decisions, the third is a promise being narrowed.
-
-TO REPRODUCE: add to `gasmeter`'s `work`, which is where it belongs once the
-answer is known --
-
-    (let [r (apply str (mapv (fn [i] (str "piece" i "-")) (range (* n 2))))]
-      (+ (count (subs r 0 10)) (count (subs r 0 10)) (count (subs r 10 20))
-         (or (str/index-of r "piece7-") 0) (count (str-bytes r))))
+THE THING WORTH KEEPING is the shape of the error. A divergence between two
+runtimes looks like a pricing question and can be a DUPLICATION question. The
+fix was not to reconcile the numbers but to delete two of the three
+implementations -- and the same shape then appeared twice more the same day,
+in `rope-append`/`rope-prepend` and in whatever the duplication audit turns
+up.
 
 #### Five divergences from Clojure, found by `seqshapes`, needing a decision
 
