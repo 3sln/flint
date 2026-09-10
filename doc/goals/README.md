@@ -121,41 +121,55 @@ was what found it.
   declarations in the sources that need them, which is what a declaration is
   for.
 
-## Reopened: what a qualified reference does NOT do
+## Reopened: moving `extend-method` fails, and I do not know why
 
-I measured this, declined the change, and was wrong -- recorded here rather
-than quietly fixed, because the wrong answer is written into
-`test/requires.clj` and into commit `c36afd0`.
+I measured "should a qualified reference be a dependency edge", declined the
+change, and was wrong -- recorded here rather than quietly fixed, because the
+wrong answer is written into `test/requires.clj` and commit `c36afd0`.
 
-THE CLAIM WAS that a `:require` never establishes existence, so treating a
-qualified reference as a dependency edge would be a no-op.
-`read-namespace!` does register every definition across every namespace before
-analysing any, and three probes passed: a function call, a top-level `def`
-reading another namespace at initialisation, and a macro. All already worked.
+WHAT IS OBSERVED, and only this:
 
-WHAT WAS NEVER PROBED is a top-level SIDE EFFECT calling into a namespace that
-must already be INITIALISED. That case fails. Moving `extend-method` to
-`flint.protocols` -- reached only through `extend-protocol`'s expansion, which
-never names it -- gives
+* Moving `extend-method` to `flint.protocols` -- reached only through
+  `extend-protocol`'s expansion, which never names it -- makes a top-level
+  `(extend-protocol ...)` in a using namespace fail with
+  `ClassCastException: value is not a function (nil, 4 args)`.
+* An explicit `(:require [flint.protocols])` in the using namespace does NOT
+  fix it.
+* At one point the same move reported `no slot for var
+  flint.protocols/extend-method -- it was reached but not emitted`, which
+  points at emission or reachability rather than at load order.
+* `methods-of` and `protocol-miss` moved to the same namespace with no
+  trouble. They are called at runtime; `extend-method` is called while a
+  using namespace is loading.
 
-    ClassCastException: value is not a function (nil, 4 args)
+WHERE IT IS NOT. The error comes from `var-slot!` in `src/flint/emitter.cljc`,
+which reads the EMITTER's slot table -- so this is about what gets emitted,
+not about initialisation order, and my first explanation was looking in the
+wrong pass entirely.
 
-because `flint.protocols` has not run when the using namespace's top-level
-`extend-protocol` does. It is the same silent-uninitialised shape as the
-bootstrap cycle that produced an empty protocol map, wearing a different
-symptom.
+TWO HYPOTHESES, BOTH DISPROVED BY PROBE rather than argued away:
 
-AND AN EXPLICIT `(:require [flint.protocols])` DOES NOT FIX IT. That is the
-part that makes this a question rather than a task: the obvious remedy --
-"make a require order initialisation" -- is not available, because a require
-apparently already does not. What orders initialisation, and whether a
-qualified reference could participate, needs understanding before anything is
-changed.
+| probe | result |
+| --- | --- |
+| a top-level side effect into a never-required namespace | works |
+| a macro expanding to a qualified call, invoked at top level | works |
 
-Until then `extend-method` stays in `clojure.core`, which is the one name it
-still publishes that Clojure does not, and the reason is real rather than
-inertia.
+The first is the explanation I originally wrote here and had to retract. The
+second was the obvious next guess. Neither reproduces it, so whatever
+separates the `extend-method` case, it is not "top-level effect" and it is not
+"reached through a macro expansion".
 
-MISSING TEST: `test/requires.clj` pins three cases that pass and omits the one
-that fails. It should gain the failing case, marked as the open question it
-is, so the file stops reading as a proof of something broader than it checked.
+WHAT IS LEFT UNTESTED is the bootstrap relationship itself: `clojure.core`
+REQUIRES `flint.protocols`, and the macro that expands to the call
+(`extend-protocol`) is defined in `clojure.core`. Neither probe had an
+equivalent, and neither can be built without editing `lib/`.
+
+SO THE MECHANISM IS UNKNOWN, and this section says so rather than offering a
+third guess. Two disproofs narrow it; they do not close it. `extend-method` stays in `clojure.core`. It is the one name that
+namespace publishes which Clojure does not.
+
+MISSING TEST: `test/requires.clj` pins three cases that pass -- a function
+call, a top-level `def`, a macro -- and a fourth added since, a top-level
+effect. All four work. None reproduces the failure, so the file should not be
+read as proof that qualified references are always sufficient. It checks four
+shapes that are.

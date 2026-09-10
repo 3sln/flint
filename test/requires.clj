@@ -1,4 +1,10 @@
-;; A REQUIRE IS FOR ORDERING AND ALIASING, NOT FOR EXISTENCE.
+;; FOUR SHAPES THAT RESOLVE WITHOUT A REQUIRE.
+;;
+;; The title used to be "a require is for ordering and aliasing, not for
+;; existence", which is more than this file checks. A case has since been
+;; found where a qualified reference is NOT sufficient -- see the note on
+;; case 4 -- and the mechanism is not understood. What is below is four
+;; shapes that do work, which is worth pinning and is not the same claim.
 ;;
 ;; flint reads every source on the path and registers every name it defines
 ;; BEFORE analysing any of them -- `read-namespace!` says so: "forward
@@ -65,7 +71,24 @@
                               "  #?(:flint/check (expect = 84 (zzz/twice-it 42))))")})]
   (check "3. a macro in a never-required namespace expands" (= 0 (:exit r))))
 
-;; 4. AND THE HALF A QUALIFIED REFERENCE CANNOT REPLACE. A require runs the
+;; 4. A TOP-LEVEL SIDE EFFECT into a never-required namespace.
+;;
+;; Added after a case that FAILS was found and this one was assumed to be it.
+;; It is not: this works. Moving `extend-method` to `flint.protocols` fails
+;; with `value is not a function (nil, 4 args)` and an explicit require does
+;; not fix it, but the distinguishing factor is NOT "top-level effect" --
+;; that is what this pins, by working.
+;;
+;; So these four cases are four shapes that ARE sufficient, and not a proof
+;; that a qualified reference always is. See `doc/goals/README.md`.
+(let [r (run {"zzz.cljc" "(ns zzz)\n(def sink (atom []))\n(defn record! [x] (swap! sink conj x))"
+              "aaa.cljc" (str "(ns aaa (:require [flint.check :refer [expect]]))\n"
+                              "(zzz/record! :from-aaa)\n"
+                              "(defn ^:flint.check/test t []\n"
+                              "  #?(:flint/check (expect = [:from-aaa] @zzz/sink)))")})]
+  (check "4. a top-level effect into a never-required namespace runs" (= 0 (:exit r))))
+
+;; 5. AND THE HALF A QUALIFIED REFERENCE CANNOT REPLACE. A require runs the
 ;; required namespace's top-level effects. `clojure.string` deliberately does
 ;; NOT name `flint.regex` -- a static call would make the regex engine live
 ;; for every program that splits on a comma -- and `flint.regex` registers
@@ -76,9 +99,9 @@
                               "                  [flint.check :refer [expect]]))\n"
                               "(defn ^:flint.check/test t []\n"
                               "  #?(:flint/check (expect = [\"a\" \"b\"] (vec (s/split \"a,b\" \",\")))))")})]
-  (check "4. splitting on a literal works without the regex engine" (= 0 (:exit r))))
+  (check "5. splitting on a literal works without the regex engine" (= 0 (:exit r))))
 
 (println)
 (if (zero? @fails)
-  (println "requires: existence is not what a require establishes\n")
+  (println "requires: four shapes that resolve without one\n")
   (do (println (format "requires: %d FAILURE(S)\n" @fails)) (System/exit 1)))
