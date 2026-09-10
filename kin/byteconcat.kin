@@ -104,6 +104,12 @@
             (comment "Promoted to this node's CHILD depth, so every child"
                      "stays the same depth and the next append can descend.")
             (let [^Value bb (b-wrap-to rt (r rt (+ base 1)) (- da 1))]
+              (comment "NIL means the heap is full. Pushing it would put a"
+                       "non-value in the tree as a child; `b-wrap-to` used to"
+                       "hang here instead of answering it at all.")
+              (if (nil? rt bb)
+                (do (pop-to rt base)
+                    (return NIL)))
               (push rt bb)
               (let [^RootIx kbase (mark rt)]
                 (for [^I32 i 0 n]
@@ -148,8 +154,14 @@
       (if (< dd (b-depth rt (r rt (+ base 1))))
         (set dd (b-depth rt (r rt (+ base 1)))))
       (let [^Value pa (b-wrap-to rt (r rt base) dd)]
+        (if (nil? rt pa)
+          (do (pop-to rt base)
+              (return NIL)))
         (push rt pa)
         (let [^Value pb (b-wrap-to rt (r rt (+ base 1)) dd)]
+          (if (nil? rt pb)
+            (do (pop-to rt base)
+                (return NIL)))
           (push rt pb)
           (let [^Value out (b-node rt (+ base 2) 2)]
             (pop-to rt base)

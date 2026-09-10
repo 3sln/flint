@@ -100,6 +100,13 @@ impl Rt {
             // Promoted to this node's CHILD depth, so every child
             // stays the same depth and the next append can descend.
             let bb: Value = self.b_wrap_to(self.r(base + 1), da - 1);
+            // NIL means the heap is full. Pushing it would put a
+            // non-value in the tree as a child; `b-wrap-to` used to
+            // hang here instead of answering it at all.
+            if bb.is_nil() {
+                self.pop_to(base);
+                return NIL;
+            }
             self.push(bb);
             let kbase: usize = self.mark();
             for i in 0..n {
@@ -153,8 +160,16 @@ impl Rt {
             dd = self.b_depth(self.r(base + 1));
         }
         let pa: Value = self.b_wrap_to(self.r(base), dd);
+        if pa.is_nil() {
+            self.pop_to(base);
+            return NIL;
+        }
         self.push(pa);
         let pb: Value = self.b_wrap_to(self.r(base + 1), dd);
+        if pb.is_nil() {
+            self.pop_to(base);
+            return NIL;
+        }
         self.push(pb);
         let out: Value = self.b_node(base + 2, 2);
         self.pop_to(base);

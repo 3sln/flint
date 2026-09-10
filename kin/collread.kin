@@ -19,11 +19,13 @@
   (:require [flint.impl.rt :refer [defn return if let do comment doc == != >=
                                    < or not nil? is-heap as-heap ty slot
                                    to-i32 u< i64-of bare-kw static-text
+                                   throw-str
                                    ref-get Rt Value I32 I64 Ty Bool NIL
                                    NOT_FOUND TY_ARRAYMAP TY_HASHMAP TY_SET
                                    TY_VEC TY_MAPENTRY TY_TABLE TY_TABLEREF
                                    TY_TAGGED TY_BYTES TY_BROPE TY_TVEC TY_TMAP
-                                   TY_TSET]]
+                                   TY_TSET TY_CONS TY_EMPTY_LIST
+                                   TY_LAZYSEQ TY_VECSEQ TY_STRSEQ]]
             [flint.rt.vecread :refer [vec-nth]]
             [flint.rt.tableref :refer [table-ref]]
             [flint.rt.strs :refer [char-at]]
@@ -133,5 +135,28 @@
                 (if (< i 0)
                   (return false))
                 (return (u< (to-i32 i) (vec-count rt coll)))))
-            (return false)))))
+            (return false)))
+      (comment "A LIST AND A SEQ REFUSE, which Clojure says with"
+               "`IllegalArgumentException: contains? not supported on type`."
+               "Answering `false` -- which is what falling through to"
+               "`coll-get` did -- is the wrong kind of wrong: `(contains?"
+               "'(1 2) 0)` reads as `this list has no key 0` when the truth is"
+               "`a list has no keys`, and the caller who wrote it meant"
+               "`(some #{0} '(1 2))` and got a plausible answer instead of a"
+               "correction."
+               ""
+               "STRINGS AND BYTE STRINGS STILL ANSWER, because they ARE"
+               "indexed: `(contains? \"ab\" 0)` is true in Clojure. So the"
+               "refusal names the seq tags rather than everything that is not"
+               "a map, a set or a vector.")
+      (if (or (or (== t TY_CONS) (== t TY_EMPTY_LIST))
+              (or (== t TY_LAZYSEQ) (or (== t TY_VECSEQ) (== t TY_STRSEQ))))
+        (do
+          (comment "THROWN AS A STATEMENT, then a value, because this answers"
+                   "`Bool` and `throw-str` answers `Value` -- the same shape"
+                   "`ttable-live` uses. The `false` is never read: the caller"
+                   "checks the thrown flag first.")
+          (throw-str rt "IllegalArgumentException"
+                     (static-text "contains? is not supported on a list or a seq"))
+          (return false)))))
   (return (!= (coll-get rt coll k NOT_FOUND) NOT_FOUND)))

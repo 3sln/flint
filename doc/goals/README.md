@@ -236,27 +236,47 @@ implementations -- and the same shape then appeared twice more the same day,
 in `rope-append`/`rope-prepend` and in whatever the duplication audit turns
 up.
 
-#### Five divergences from Clojure, found by `seqshapes`, needing a decision
+#### Five divergences from Clojure -- FIXED
 
-All four runtimes AGREE on these -- they are not port bugs. They are places
-flint answers something Clojure does not, consistently, and nobody has
-decided whether that is intended:
+All five now answer what Clojure answers. The direction was the obvious one and
+it did not need a decision: a standard function that is compatible is worth
+more than one that is defensible.
 
-| expression | Clojure | flint |
+| expression | was | now, and Clojure |
 | --- | --- | --- |
-| `(pop nil)` | `nil` | `IllegalStateException: cannot pop nil` |
-| `(subvec [1 2 3] 2 1)` | `IndexOutOfBoundsException` | `[]` |
-| `(peek #{1})` | `ClassCastException` | `1` |
-| `(nth {:a 1} 0)` | `UnsupportedOperationException` | `[:a 1]` |
-| `(contains? '(1 2) 0)` | `IllegalArgumentException` | `false` |
+| `(pop nil)` | `IllegalStateException` | `nil` |
+| `(subvec [1 2 3] 2 1)` | `[]` | throws |
+| `(peek #{1})` | `1` | `ClassCastException` |
+| `(nth {:a 1} 0)` | `[:a 1]` | `UnsupportedOperationException` |
+| `(contains? '(1 2) 0)` | `false` | `IllegalArgumentException` |
 
-`(pop nil)` is the one a program meets by accident, and it is flint being
-STRICTER. The other four are flint being permissive where Clojure refuses --
-the safer direction, but still a difference.
+`(pop nil)` was the only one where flint was STRICTER, and so the only one a
+working program could meet by accident. The other four were flint answering
+something plausible to a question that has no answer -- `(contains? '(1 2) 0)`
+read as "this list has no key 0" when the truth is "a list has no keys", and
+the caller who wrote it meant `(some #{0} '(1 2))`.
 
-`test/conform_vs_clojure.clj` is the harness that would catch these
-automatically; it runs `test/conform/basics.cljc` only. Either these move
-there as marked `:divergence` cases, or they get fixed. Both are decisions.
+TWO THINGS THE TABLE DID NOT CAPTURE, both found by asking Clojure rather than
+reading the row:
+
+* **An empty range is not an inverted one.** `(subvec [1 2 3] 3 3)` is `[]` and
+  must stay `[]`; `(subvec [1 2 3] 4 4)` throws. So the bound is checked
+  against the length BEFORE the two ends are compared.
+* **`(contains? "ab" 0)` is `true`** -- strings are indexed. The refusal names
+  the seq tags rather than everything that is not a map, set or vector.
+
+AND `peek` IS STRICTER THAN THE ROW SAID. Clojure casts to `IPersistentStack`,
+which a set is not -- and neither is a map, a string, or any SEQ:
+`(peek (map inc [1]))` and `(peek "ab")` both throw there. `seqshapes` only
+asked about the set, so only the set was on the list. The fix draws the line
+where Clojure draws it, except that a CONS is treated as a list here, because
+flint has one list type where Clojure separates `PersistentList` from `Cons`
+and refuses the second -- refusing it here would break `(peek (conj '(1) 2))`,
+which Clojure accepts.
+
+`runtimes/conform/seqshapes.cljc` already had a case for every one of the five
+(`:pop-nil`, `:sub-rev`, `:peek-set`, `:nth-map`, `:has-list`), so all four
+runtimes are held to the new answers.
 
 ### 2. `Equiv` / `Hash` / `EquivHash`
 
@@ -271,18 +291,36 @@ attach to.
 
 ### 3. Extern refs
 
-Drafted in [extern-refs](extern-refs.md), three questions left open that are
-not the draft's to answer:
+Drafted in [extern-refs](extern-refs.md). **All three open questions are now
+decided**; what remains is design work rather than judgement calls.
 
-* **The `map` cliff.** An interop call cannot park inside a native frame, so
-  `(map the-getter xs)` over pinned externs throws — a failure conditional on
-  data, which is the worst shape for a surprise. A batching form is proposed
-  and undesigned, and wasm needs the same thing independently.
-* **Determinism.** `0005` promises a deterministic scheduler. A pinned park
-  makes a green thread runnable on one executor, so a multi-executor sandbox
-  cannot stay deterministic. Single-executor and `owner = 0` survive.
-* **`flint.interop` is a capability hole the size of the host** — `type`
-  reaches the `Class`, and from a `Class` the classloader.
+* **The `map` cliff -- decided, and not by any of the three options the draft
+  offered.** The park moves to the operation's ENTRY: a collection that
+  receives an extern is pinned at its top level, and every builtin that would
+  otherwise park inside a native frame checks the pin on entry and parks there,
+  which is legal. That removes the cliff rather than giving programmers a way
+  around it, and the failure conditional on data stops existing.
+  *Open piece:* pins must PROPAGATE on nesting -- a pinned collection inside
+  another obliges the parent -- which is `equiv-hash`'s node bit in different
+  clothes, including the same conservative answer on removal.
+  *And in the common case none of it exists:* a sandbox with no thread pool
+  marks its externs global and maintains nothing. That is the HOST'S
+  declaration, not an inference from the executor count, because thread
+  affinity belongs to the host object.
+* **Determinism -- decided: a property of a CONFIGURATION, and opt-in.** The
+  deterministic sandbox is unchanged and stays the default; externs with a pool
+  are additive. `0005` is scoped rather than weakened. It becomes an
+  ENFORCEMENT question: the SDK must refuse pinned externs in a sandbox
+  configured deterministic instead of silently degrading it.
+* **The capability hole -- decided, and closed.** Externs enter only through a
+  port; `flint.interop/type` rather than `clojure.core/type`, so it is not
+  reachable from any code that happens to call `type`; and it yields an opaque
+  extern-type from which opaque CLOSURES are obtained as accessors. No `Class`
+  is ever handed back, so the path to the classloader is gone. The closure IS
+  the capability, which turns ambient authority into ordinary capability
+  discipline.
+  *Still design work:* the accessor-construction protocol, the SDK override,
+  and revoking a grant already handed out.
 
 ### 4. Smaller, and written down so they are not lost
 

@@ -19,7 +19,8 @@
                                    empty-map map-entry-as-vec Rt Value I32 I64
                                    Ty Bool RootIx Text NIL NOT_FOUND
                                    TY_ARRAYMAP TY_HASHMAP TY_VEC TY_TAGGED
-                                   TY_TABLE TY_TABLEREF TY_MAPENTRY]]
+                                   TY_TABLE TY_TABLEREF TY_MAPENTRY
+                                   TY_SET]]
             [flint.rt.vecread :refer [vec-nth]]
             [flint.rt.vecassoc :refer [vec-assoc]]
             [flint.rt.strs :refer [char-at]]
@@ -150,6 +151,21 @@
               (if (!= dflt NOT_FOUND)
                 (return dflt))
               (return (throw-str rt "IndexOutOfBoundsException" "index out of range")))))
+      (comment "A MAP AND A SET ARE NOT INDEXED, which Clojure says with"
+               "`UnsupportedOperationException: nth not supported on this"
+               "type`. Falling through to the walk below answered `[:a 1]` for"
+               "`(nth {:a 1} 0)` and `1` for `(nth #{1} 0)` -- a real answer,"
+               "in an order the caller has no reason to expect, to a question"
+               "about a structure that has no first element."
+               ""
+               "THE DEFAULT DOES NOT RESCUE IT. `(nth {:a 1} 0 :d)` is the"
+               "same exception in Clojure: a default answers an index that is"
+               "OUT OF RANGE, not a type that has no indices.")
+      (if (is-heap coll)
+        (let [^Ty t (ty rt (as-heap coll))]
+          (if (or (or (== t TY_ARRAYMAP) (== t TY_HASHMAP)) (== t TY_SET))
+            (return (throw-str rt "UnsupportedOperationException"
+                               "nth is not supported on a map or a set")))))
       (comment "WALK. O(n), as it is in Clojure for a seq.")
       (let [^RootIx base (mark rt)
             ^Value s0 (seq rt coll)

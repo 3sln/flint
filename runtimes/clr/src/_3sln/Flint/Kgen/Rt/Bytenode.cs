@@ -49,12 +49,27 @@ public static class Bytenode {
     /// 
     /// A leaf joining a deeper node is PROMOTED rather than sitting beside
     /// subtrees, because a node's children must all be the same depth.
+    /// 
+    /// NIL WHEN THE HEAP IS FULL, and without that this LOOPED FOREVER.
+    /// `b-node` answers NIL when `alloc` fails; `b-depth` of NIL is 0, because
+    /// NIL is not a heap value; so the loop below re-read a depth of 0 against
+    /// a `d` it could never reach and span. A hang rather than a crash, in a
+    /// runtime that meters untrusted code and therefore treats an exhausted
+    /// heap as an ordinary condition.
+    /// 
+    /// `rope-lift` -- the same function for string trees -- has always checked
+    /// (`kin/ropenode.kin`). This is the sibling that did not, found by
+    /// diffing the two.
     public static long BWrapTo(Rt rt, long v, int d) {
         int @base = rt.Mark();
         int ci = rt.Push(v);
         while (BDepth(rt, rt.R(ci)) < d) {
             // The cursor lives in the ROOT across `b-node`, which allocates.
             long wrapped = BNode(rt, ci, 1);
+            if (Val.IsNil(wrapped)) {
+                rt.PopTo(@base);
+                return Val.Nil;
+            }
             rt.SetR(ci, wrapped);
         }
         long @out = rt.R(ci);

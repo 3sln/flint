@@ -9,9 +9,12 @@ const TY_VEC: u8 = 13; const TY_MAPENTRY: u8 = 14; const TY_TABLE: u8 = 15;
 const TY_TABLEREF: u8 = 16; const TY_TAGGED: u8 = 17; const TY_BYTES: u8 = 18;
 const TY_BROPE: u8 = 19; const TY_TVEC: u8 = 20; const TY_TMAP: u8 = 21;
 const TY_TSET: u8 = 22; const TY_STR: u8 = 23; const TY_OTHER: u8 = 24;
+// The seq tags, which `contains?` must REFUSE rather than answer `false` for.
+const TY_CONS: u8 = 25; const TY_EMPTY_LIST: u8 = 26; const TY_LAZYSEQ: u8 = 27;
+const TY_VECSEQ: u8 = 28; const TY_STRSEQ: u8 = 29;
 struct Space { m: Vec<u8> }
 struct Gc { sp: Space }
-struct Rt { gc: Gc, bump: u64, vn: u32, rowmiss: bool }
+struct Rt { gc: Gc, bump: u64, vn: u32, rowmiss: bool, thrown: String }
 fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
 // A KEY IS AN INTEGER WHEN ITS TOP BITS SAY SO, and the payload sign-extends.
 // An index of -1 that does not sign-extend prints as four billion, and every
@@ -23,6 +26,13 @@ impl Value {
 }
 fn int(n: i64) -> Value { Value(0x100_0000_0000u64 | (n as u64 & 0xFFFF_FFFF)) }
 impl Rt {
+    // Recorded rather than raised: the probe compares the CLASS and MESSAGE
+    // across three targets, and a refusal that is not printed is a refusal
+    // nobody checked.
+    fn throw_str(&mut self, class: &str, msg: &str) -> Value {
+        self.thrown = format!("{}/{}", class, msg);
+        NIL
+    }
     fn slot(&self, _v: Value, i: u32) -> Value { Value(0x700 + i as u64) }
     fn obj(&mut self, t: u8) -> Value {
         let a = self.bump; self.bump += 8;
@@ -58,7 +68,7 @@ impl Rt {
 }
 fn main() {
     let mut rt = Rt { gc: Gc { sp: Space { m: vec![0u8; 4000] } }, bump: 100, vn: 3,
-                      rowmiss: false };
+                      rowmiss: false, thrown: String::new() };
     let mut o = String::new();
     let d = Value(0x11);
     let kw = Value(0x8C);
@@ -119,6 +129,8 @@ fn main() {
     static final int TY_TABLEREF = 16, TY_TAGGED = 17, TY_BYTES = 18;
     static final int TY_BROPE = 19, TY_TVEC = 20, TY_TMAP = 21;
     static final int TY_TSET = 22, TY_STR = 23, TY_OTHER = 24;
+    static final int TY_CONS = 25, TY_EMPTY_LIST = 26, TY_LAZYSEQ = 27;
+    static final int TY_VECSEQ = 28, TY_STRSEQ = 29;
     static final class Val {
         static final long NIL = Probe.NIL;
         static final long NOT_FOUND = Probe.NOT_FOUND;
@@ -134,6 +146,8 @@ fn main() {
         long bump = 100;
         int vn = 3;
         boolean rowmiss = false;
+        String thrown = "";
+        long throwStr(String cls, String msg) { thrown = cls + "/" + msg; return NIL; }
         long slot(long v, int i) { return 0x700L + i; }
         long obj(int t) { long a = bump; bump += 8; gc.sp.m[(int) a] = (byte) t; return a; }
     }
@@ -236,6 +250,8 @@ namespace Flint.Rt {
         internal const int TyTableref = 16, TyTagged = 17, TyBytes = 18;
         internal const int TyBrope = 19, TyTvec = 20, TyTmap = 21;
         internal const int TyTset = 22, TyStr = 23, TyOther = 24;
+        internal const int TyCons = 25, TyEmptyList = 26, TyLazyseq = 27;
+        internal const int TyVecseq = 28, TyStrseq = 29;
         internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
     }
     internal static class Val {
@@ -253,6 +269,8 @@ namespace Flint.Rt {
         internal long bump = 100;
         internal int vn = 3;
         internal bool rowmiss = false;
+        internal string thrown = "";
+        internal long ThrowStr(string cls, string msg) { thrown = cls + "/" + msg; return Val.Nil; }
         internal long Slot(long v, int i) { return 0x700L + i; }
         internal long Obj_(int t) { long a = bump; bump += 8; gc.sp.m[(int) a] = (byte) t; return a; }
     }

@@ -19,6 +19,7 @@ pub mod bytes {
 }
 impl Value {
     fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 && self.0 != TRUE.0 }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
     fn as_heap(self) -> Addr { self.0 as Addr }
     fn as_fixnum(self) -> i64 { self.0 as i64 }
     fn fixnum(n: i64) -> Value { Value(n as u64) }
@@ -95,6 +96,17 @@ fn main() {
     rt.push(l1);
     rt.starve = true;
     let n2 = rt.b_node(before, 1);
+    // STARVED WHILE IT MUST ALLOCATE, which is the case that used to HANG.
+    // `b_node` answers NIL on a full heap, `b_depth` of NIL is 0, so the loop
+    // in `b_wrap_to` re-read a depth it could never raise. The `noop=` case
+    // above calls it at a depth it has already reached, so nothing allocates
+    // and nothing spins -- which is why this went unseen.
+    //
+    // A REGRESSION HERE HANGS RATHER THAN FAILS. That is worth the coverage:
+    // an unbounded loop on an exhausted heap is a denial of service in a
+    // runtime that meters untrusted code, and no cheaper test reaches it.
+    let n3 = rt.b_wrap_to(l1, 3);
+    o.push_str(&format!("wstarved={} ", (n3.0 == NIL.0) as u32));
     o.push_str(&format!("starved={} roots={} ", (n2.0 == NIL.0) as u32,
                         (rt.mark() == before + 1) as u32));
     println!("{}", o);
@@ -110,6 +122,7 @@ fn main() {
     }
     static final class Val {
         static boolean isHeap(long v) { return v >= 100 && v != NIL && v != TRUE; }
+        static boolean isNil(long v) { return v == NIL; }
         static long asHeap(long v) { return v; }
         static long asFixnum(long v) { return v; }
         static long fixnum(long n) { return n; }
@@ -180,6 +193,8 @@ fn main() {
         rt.push(l1);
         rt.starve = true;
         long n2 = bNode(rt, before, 1);
+        long n3 = bWrapTo(rt, l1, 3);
+        o.append("wstarved=").append(n3 == NIL ? 1 : 0).append(' ');
         o.append("starved=").append(n2 == NIL ? 1 : 0)
          .append(" roots=").append(rt.mark() == before + 1 ? 1 : 0).append(' ');
         System.out.println(o.toString());
@@ -202,6 +217,7 @@ namespace Flint.Rt {
     internal static class Val {
         internal const long Nil = 0xFFFFL, True = 0xFFFEL;
         internal static bool IsHeap(long v) { return v >= 100 && v != Nil && v != True; }
+        internal static bool IsNil(long v) { return v == Nil; }
         internal static long AsHeap(long v) { return v; }
         internal static long AsFixnum(long v) { return v; }
         internal static long Fixnum(long n) { return n; }
@@ -270,6 +286,8 @@ namespace Flint.Rt {
         rt.Push(l1);
         rt.starve = true;
         long n2 = BNode(rt, before, 1);
+        long n3 = BWrapTo(rt, l1, 3);
+        o.Append("wstarved=").Append(n3 == Val.Nil ? 1 : 0).Append(' ');
         o.Append("starved=").Append(n2 == Val.Nil ? 1 : 0)
          .Append(" roots=").Append(rt.Mark() == before + 1 ? 1 : 0).Append(' ');
         System.Console.WriteLine(o.ToString());

@@ -29,7 +29,7 @@
                                    TY_MAPENTRY TY_TAGGED TY_TABLE TY_TTABLE
                                    TY_TABLEREF TY_ARRAYMAP TY_HASHMAP TY_SET
                                    TY_BYTES TY_BROPE TY_TVEC TY_TMAP TY_TSET
-                                   TY_EMPTY_LIST]]
+                                   TY_EMPTY_LIST TY_CONS]]
             [flint.rt.vecread :refer [vec-nth]]
             [flint.rt.vecassoc :refer [vec-pop]]
             [flint.rt.vector :refer [vec-count]]
@@ -100,8 +100,14 @@
      "two ends because it is the same word in Clojure: `pop` takes off"
      "whichever end `conj` puts on.")
 (defn ^:pub ^:method ^Value pop-of [^:mut ^Rt rt ^Value coll]
+  (comment "NIL POPS TO NIL, which is Clojure: `RT.pop` answers null for null"
+           "before it casts to `IPersistentStack`. This threw"
+           "`IllegalStateException: cannot pop nil`, and of the five places"
+           "flint answered differently from Clojure it was the only one where"
+           "flint was STRICTER -- and so the only one a working program could"
+           "meet by accident.")
   (if (nil? rt coll)
-    (return (throw-str rt "IllegalStateException" "cannot pop nil")))
+    (return NIL))
   (if (is-heap coll)
     (let [^Ty t (ty rt (as-heap coll))]
       (if (== t TY_VEC)
@@ -122,12 +128,34 @@
   (if (nil? rt coll)
     (return NIL))
   (if (is-heap coll)
-    (if (== (ty rt (as-heap coll)) TY_VEC)
-      (let [^I32 n (vec-count rt coll)]
-        (if (== n 0)
+    (do
+      (let [^Ty t (ty rt (as-heap coll))]
+        (if (== t TY_VEC)
+          (do
+            (let [^I32 n (vec-count rt coll)]
+              (if (== n 0)
+                (return NIL))
+              (return (vec-nth rt coll (- n 1) NIL)))))
+        (comment "A STACK OR NOTHING. Clojure's `peek` casts to"
+                 "`IPersistentStack`, which a vector and a LIST are and a set,"
+                 "a map, a string and every SEQ are not -- `(peek #{1})` was 1"
+                 "here and is a ClassCastException there, and so are"
+                 "`(peek (map inc [1]))` and `(peek \"ab\")`, which the"
+                 "five-divergence table never listed because `seqshapes` only"
+                 "asked about the set."
+                 ""
+                 "A CONS IS A LIST HERE. Clojure separates `PersistentList`"
+                 "from `Cons` and refuses the second; flint has one list type"
+                 "and refusing it would break `(peek (conj '(1) 2))`, which"
+                 "Clojure accepts. So the line is drawn at seqs and"
+                 "non-collections, which is where a program notices.")
+        (if (== t TY_CONS)
+          (return (first rt coll)))
+        (if (== t TY_EMPTY_LIST)
           (return NIL))
-        (return (vec-nth rt coll (- n 1) NIL)))))
-  (return (first rt coll)))
+        (return (throw-str rt "ClassCastException"
+                           "peek wants a vector or a list")))))
+  (return (throw-str rt "ClassCastException" "peek wants a vector or a list")))
 
 (doc "An empty collection of the same KIND, and NIL when there is no kind."
      ""

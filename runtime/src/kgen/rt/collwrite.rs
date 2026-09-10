@@ -159,6 +159,22 @@ impl Rt {
                 return self.throw_str("IndexOutOfBoundsException", &"index out of range");
             }
         }
+        // A MAP AND A SET ARE NOT INDEXED, which Clojure says with
+        // `UnsupportedOperationException: nth not supported on this
+        // type`. Falling through to the walk below answered `[:a 1]` for
+        // `(nth {:a 1} 0)` and `1` for `(nth #{1} 0)` -- a real answer,
+        // in an order the caller has no reason to expect, to a question
+        // about a structure that has no first element.
+        // 
+        // THE DEFAULT DOES NOT RESCUE IT. `(nth {:a 1} 0 :d)` is the
+        // same exception in Clojure: a default answers an index that is
+        // OUT OF RANGE, not a type that has no indices.
+        if coll.is_heap() {
+            let t: u8 = ty(&self.gc.sp, coll.as_heap());
+            if ((t == TY_ARRAYMAP) || (t == TY_HASHMAP)) || (t == TY_SET) {
+                return self.throw_str("UnsupportedOperationException", &"nth is not supported on a map or a set");
+            }
+        }
         // WALK. O(n), as it is in Clojure for a seq.
         let base: usize = self.mark();
         let s0: Value = self.seq(coll);

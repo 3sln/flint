@@ -98,6 +98,13 @@ public static class Byteconcat {
             // Promoted to this node's CHILD depth, so every child
             // stays the same depth and the next append can descend.
             long bb = BWrapTo(rt, rt.R(@base + 1), da - 1);
+            // NIL means the heap is full. Pushing it would put a
+            // non-value in the tree as a child; `b-wrap-to` used to
+            // hang here instead of answering it at all.
+            if (Val.IsNil(bb)) {
+                rt.PopTo(@base);
+                return Val.Nil;
+            }
             rt.Push(bb);
             int kbase = rt.Mark();
             for (int i = 0; i < n; i++) {
@@ -151,8 +158,16 @@ public static class Byteconcat {
             dd = BDepth(rt, rt.R(@base + 1));
         }
         long pa = BWrapTo(rt, rt.R(@base), dd);
+        if (Val.IsNil(pa)) {
+            rt.PopTo(@base);
+            return Val.Nil;
+        }
         rt.Push(pa);
         long pb = BWrapTo(rt, rt.R(@base + 1), dd);
+        if (Val.IsNil(pb)) {
+            rt.PopTo(@base);
+            return Val.Nil;
+        }
         rt.Push(pb);
         long @out = BNode(rt, @base + 2, 2);
         rt.PopTo(@base);

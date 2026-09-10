@@ -87,8 +87,14 @@ impl Rt {
     /// two ends because it is the same word in Clojure: `pop` takes off
     /// whichever end `conj` puts on.
     pub fn pop_of(&mut self, coll: Value) -> Value {
+        // NIL POPS TO NIL, which is Clojure: `RT.pop` answers null for null
+        // before it casts to `IPersistentStack`. This threw
+        // `IllegalStateException: cannot pop nil`, and of the five places
+        // flint answered differently from Clojure it was the only one where
+        // flint was STRICTER -- and so the only one a working program could
+        // meet by accident.
         if coll.is_nil() {
-            return self.throw_str("IllegalStateException", &"cannot pop nil");
+            return NIL;
         }
         if coll.is_heap() {
             let t: u8 = ty(&self.gc.sp, coll.as_heap());
@@ -114,15 +120,36 @@ impl Rt {
             return NIL;
         }
         if coll.is_heap() {
-            if ty(&self.gc.sp, coll.as_heap()) == TY_VEC {
+            let t: u8 = ty(&self.gc.sp, coll.as_heap());
+            if t == TY_VEC {
                 let n: u32 = self.vec_count(coll);
                 if n == 0 {
                     return NIL;
                 }
                 return self.vec_nth(coll, n - 1, NIL);
             }
+            // A STACK OR NOTHING. Clojure's `peek` casts to
+            // `IPersistentStack`, which a vector and a LIST are and a set,
+            // a map, a string and every SEQ are not -- `(peek #{1})` was 1
+            // here and is a ClassCastException there, and so are
+            // `(peek (map inc [1]))` and `(peek "ab")`, which the
+            // five-divergence table never listed because `seqshapes` only
+            // asked about the set.
+            // 
+            // A CONS IS A LIST HERE. Clojure separates `PersistentList`
+            // from `Cons` and refuses the second; flint has one list type
+            // and refusing it would break `(peek (conj '(1) 2))`, which
+            // Clojure accepts. So the line is drawn at seqs and
+            // non-collections, which is where a program notices.
+            if t == TY_CONS {
+                return self.first(coll);
+            }
+            if t == TY_EMPTY_LIST {
+                return NIL;
+            }
+            return self.throw_str("ClassCastException", &"peek wants a vector or a list");
         }
-        return self.first(coll);
+        return self.throw_str("ClassCastException", &"peek wants a vector or a list");
     }
     /// An empty collection of the same KIND, and NIL when there is no kind.
     /// 

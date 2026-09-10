@@ -18,7 +18,7 @@
                                    mark push r set-r pop-to alloc set-at heap fixnum
                                    Rt Value Addr RootIx I32 NIL
                                    TY_BROPE
-                                   BB_BYTES BB_FLAT BB_HASH BB_DEPTH BB_KIDS]]
+                                   BB_BYTES BB_FLAT BB_HASH BB_DEPTH BB_KIDS nil?]]
             [flint.rt.bytecore :refer [b-count b-depth]]))
 
 (doc "A node over the `n` values already rooted at `base`."
@@ -52,13 +52,27 @@
 (doc "`v`, wrapped in single-child nodes until it is `d` deep."
      ""
      "A leaf joining a deeper node is PROMOTED rather than sitting beside"
-     "subtrees, because a node's children must all be the same depth.")
+     "subtrees, because a node's children must all be the same depth."
+     ""
+     "NIL WHEN THE HEAP IS FULL, and without that this LOOPED FOREVER."
+     "`b-node` answers NIL when `alloc` fails; `b-depth` of NIL is 0, because"
+     "NIL is not a heap value; so the loop below re-read a depth of 0 against"
+     "a `d` it could never reach and span. A hang rather than a crash, in a"
+     "runtime that meters untrusted code and therefore treats an exhausted"
+     "heap as an ordinary condition."
+     ""
+     "`rope-lift` -- the same function for string trees -- has always checked"
+     "(`kin/ropenode.kin`). This is the sibling that did not, found by"
+     "diffing the two.")
 (defn ^:pub ^:method ^Value b-wrap-to [^:mut ^Rt rt ^Value v ^I32 d]
   (let [^RootIx base (mark rt)
         ^RootIx ci (push rt v)]
     (while (< (b-depth rt (r rt ci)) d)
       (comment "The cursor lives in the ROOT across `b-node`, which allocates.")
       (let [^Value wrapped (b-node rt ci 1)]
+        (if (nil? rt wrapped)
+          (do (pop-to rt base)
+              (return NIL)))
         (set-r rt ci wrapped)))
     (let [^Value out (r rt ci)]
       (pop-to rt base)

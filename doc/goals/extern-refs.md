@@ -428,7 +428,54 @@ Three possible answers, and this draft does not pick one:
 3. **Make `map`, `filter` and friends re-executable**, which is a change to the
    VM's park rule and much bigger than it sounds.
 
-**Open.** (2) is the most attractive and the least designed.
+**DECIDED, and none of the three.** The park moves to the operation's ENTRY.
+
+A collection that receives an extern is PINNED at its top level to that
+extern's thread, and adding an extern owned by a different thread to the same
+collection throws. Every builtin that would otherwise park inside a native
+frame -- `map`, `filter`, `reduce`, `sort`, `group-by`, a lazy seq, `apply` --
+checks the pin ON ENTRY and parks there, which is green-thread code and legal.
+`vm.rs:568` never sees it.
+
+WHY THIS BEATS THE BATCHING FORM it replaces. `flint.interop/on` gave the
+programmer a way to AVOID the cliff; this removes the cliff. The failure
+conditional on data -- works with a JVM object in the test, throws on a worker
+in production -- stops existing rather than becoming documented. `on` survives
+as an optimisation for batching several operations into one crossing, which is
+what it should have been.
+
+THE OPEN PIECE, and it is the Equiv/Hash node bit wearing different clothes:
+**pins must propagate on nesting.** A vector pinned to thread A placed inside a
+map obliges that map to be pinned to A, or an operation on the map reaches A's
+externs from anywhere. So a collection carries the UNION of its children's
+pins, maintained at insert, and the throw generalises from "an extern owned by
+another thread" to "anything pinned to another thread". Two consequences fall
+out:
+
+* **Persistence.** `(conj pinned x)` inherits the pin. Removing the last
+  extern LEAVES IT SET -- a conservative over-approximation costs a slower path
+  and never a wrong answer, which is exactly how `doc/goals/equiv-hash.md`
+  reasons about `dissoc` and the leaf bit.
+* **Where it lives.** Free, if it rides the variant node this document already
+  describes -- "that node morphs into a variant of the same thing, with an
+  externs slot". A collection holding no externs allocates nothing for this.
+
+THE COST WORTH NAMING RATHER THAN DISCOVERING: blocking on entry runs the whole
+traversal on the owner thread, so a `map` over a million elements containing
+ONE extern is a million elements of work on one host thread. That is throughput
+and not correctness, and it is a cliff of a different shape.
+
+AND IN THE COMMON CASE NONE OF THIS EXISTS. A sandbox with no thread pool marks
+its externs GLOBAL (`owner = 0`), and then there are no collection pins, no
+entry guards and no propagation to maintain -- the machinery is conditional on
+there being a pool to need it.
+
+> **Global is the HOST'S DECLARATION, not an inference from the executor
+> count.** Thread affinity belongs to the host OBJECT, not to flint's
+> scheduler: a single-threaded sandbox embedded in a multi-threaded host that
+> passes in EDT-confined widgets or a thread-bound database handle still needs
+> pins. So the SDK setting defaults to global for a single-threaded sandbox and
+> the host may say otherwise; the runtime never guesses.
 
 ### Determinism, which this spends
 
@@ -455,6 +502,18 @@ What survives, exactly:
 
 That is a real cost against a stated project value, and it is worth saying out
 loud that it is being paid rather than discovered later.
+
+**DECIDED: determinism is a property of a CONFIGURATION, and externs are
+opt-in.** The deterministic sandbox stays exactly as it is and remains the
+default; externs with a thread pool are an additive extension that spends
+determinism knowingly. `0005` is not weakened -- it is scoped, and the scope is
+the configuration that promises it.
+
+WHICH MAKES IT AN ENFORCEMENT QUESTION RATHER THAN A DOCUMENTATION ONE. The SDK
+should REFUSE to enable pinned externs in a sandbox configured deterministic,
+rather than silently degrading it: a promise that quietly stops holding is
+worse than one that was never made. And the README must name the
+configurations that hold it instead of claiming it flatly.
 
 ### Deadlock between green threads is not reachable
 
@@ -1017,6 +1076,40 @@ can mint them. With externs the hazard is that a *legitimately granted* extern
 is a path to types nobody granted. A host that allows `type` on anything has
 allowed everything. That sentence should be in the README before the feature
 ships, not after.
+
+**DECIDED, and the sentence above stops being true.** The surface is
+deliberately narrow at three points:
+
+* **Externs enter only through a PORT**, which is already a point of
+  regulation. There is no other door.
+* **`flint.interop/type`, NOT `clojure.core/type`.** `type` in core is a total
+  function on every value, so overloading it would put the interop surface
+  within reach of any code that happens to call it. In its own namespace it is
+  something a workspace must have REQUIRED, which the capability guard can
+  gate.
+* **It yields an OPAQUE EXTERN-TYPE, not a host `Class`.** From that handle a
+  guest obtains opaque CLOSURES that act as accessors on values of the same
+  type. The path from an extern to the classloader is gone, because nothing
+  hands back a `Class` to walk.
+
+WHICH TURNS AMBIENT AUTHORITY INTO ORDINARY CAPABILITY DISCIPLINE. The accessor
+closure IS the capability: holding one is the grant. It is a value, so it can
+be passed, stored, withheld and revoked by not sharing it, and the SDK builds
+them -- so a host may regulate how they are constructed, override them, or
+switch the feature off entirely. One resolution per TYPE serves every instance,
+so the cost is per-type rather than per-access.
+
+THE CHECK THAT MUST EXIST: an accessor built for type `T` and applied to a
+value of type `U` refuses at call time. The closure outlives the resolution
+that produced it, so the type it was built for travels with it.
+
+AND IT COMPOSES WITH (1) RATHER THAN MERELY COEXISTING: `(map getter xs)` works
+because the entry guard parks before the traversal, so an accessor is an
+ordinary function everywhere an ordinary function goes.
+
+**Still design work**, and named as such: the accessor-construction protocol,
+what the SDK's override looks like, and how a host revokes a grant already
+handed out.
 
 ## What each runtime supplies, and what stays in `kin`
 

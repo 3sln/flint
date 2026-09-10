@@ -53,12 +53,27 @@ impl Rt {
     /// 
     /// A leaf joining a deeper node is PROMOTED rather than sitting beside
     /// subtrees, because a node's children must all be the same depth.
+    /// 
+    /// NIL WHEN THE HEAP IS FULL, and without that this LOOPED FOREVER.
+    /// `b-node` answers NIL when `alloc` fails; `b-depth` of NIL is 0, because
+    /// NIL is not a heap value; so the loop below re-read a depth of 0 against
+    /// a `d` it could never reach and span. A hang rather than a crash, in a
+    /// runtime that meters untrusted code and therefore treats an exhausted
+    /// heap as an ordinary condition.
+    /// 
+    /// `rope-lift` -- the same function for string trees -- has always checked
+    /// (`kin/ropenode.kin`). This is the sibling that did not, found by
+    /// diffing the two.
     pub fn b_wrap_to(&mut self, v: Value, d: u32) -> Value {
         let base: usize = self.mark();
         let ci: usize = self.push(v);
         while self.b_depth(self.r(ci)) < d {
             // The cursor lives in the ROOT across `b-node`, which allocates.
             let wrapped: Value = self.b_node(ci, 1);
+            if wrapped.is_nil() {
+                self.pop_to(base);
+                return NIL;
+            }
             self.set_r(ci, wrapped);
         }
         let out: Value = self.r(ci);

@@ -96,6 +96,13 @@ public final class Byteconcat {
             // Promoted to this node's CHILD depth, so every child
             // stays the same depth and the next append can descend.
             long bb = bWrapTo(rt, rt.r(base + 1), da - 1);
+            // NIL means the heap is full. Pushing it would put a
+            // non-value in the tree as a child; `b-wrap-to` used to
+            // hang here instead of answering it at all.
+            if (Val.isNil(bb)) {
+                rt.popTo(base);
+                return Val.NIL;
+            }
             rt.push(bb);
             int kbase = rt.mark();
             for (int i = 0; i < n; i++) {
@@ -149,8 +156,16 @@ public final class Byteconcat {
             dd = bDepth(rt, rt.r(base + 1));
         }
         long pa = bWrapTo(rt, rt.r(base), dd);
+        if (Val.isNil(pa)) {
+            rt.popTo(base);
+            return Val.NIL;
+        }
         rt.push(pa);
         long pb = bWrapTo(rt, rt.r(base + 1), dd);
+        if (Val.isNil(pb)) {
+            rt.popTo(base);
+            return Val.NIL;
+        }
         rt.push(pb);
         long out = bNode(rt, base + 2, 2);
         rt.popTo(base);

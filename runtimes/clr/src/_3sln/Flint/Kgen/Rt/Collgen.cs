@@ -95,8 +95,14 @@ public static class Collgen {
     /// two ends because it is the same word in Clojure: `pop` takes off
     /// whichever end `conj` puts on.
     public static long PopOf(Rt rt, long coll) {
+        // NIL POPS TO NIL, which is Clojure: `RT.pop` answers null for null
+        // before it casts to `IPersistentStack`. This threw
+        // `IllegalStateException: cannot pop nil`, and of the five places
+        // flint answered differently from Clojure it was the only one where
+        // flint was STRICTER -- and so the only one a working program could
+        // meet by accident.
         if (Val.IsNil(coll)) {
-            return rt.ThrowStr("IllegalStateException", "cannot pop nil");
+            return Val.Nil;
         }
         if (Val.IsHeap(coll)) {
             int t = Obj.Ty(rt.gc.sp, Val.AsHeap(coll));
@@ -122,15 +128,36 @@ public static class Collgen {
             return Val.Nil;
         }
         if (Val.IsHeap(coll)) {
-            if (Obj.Ty(rt.gc.sp, Val.AsHeap(coll)) == Obj.TyVec) {
+            int t = Obj.Ty(rt.gc.sp, Val.AsHeap(coll));
+            if (t == Obj.TyVec) {
                 int n = Vec.Count(rt, coll);
                 if (n == 0) {
                     return Val.Nil;
                 }
                 return VecNth(rt, coll, n - 1, Val.Nil);
             }
+            // A STACK OR NOTHING. Clojure's `peek` casts to
+            // `IPersistentStack`, which a vector and a LIST are and a set,
+            // a map, a string and every SEQ are not -- `(peek #{1})` was 1
+            // here and is a ClassCastException there, and so are
+            // `(peek (map inc [1]))` and `(peek "ab")`, which the
+            // five-divergence table never listed because `seqshapes` only
+            // asked about the set.
+            // 
+            // A CONS IS A LIST HERE. Clojure separates `PersistentList`
+            // from `Cons` and refuses the second; flint has one list type
+            // and refusing it would break `(peek (conj '(1) 2))`, which
+            // Clojure accepts. So the line is drawn at seqs and
+            // non-collections, which is where a program notices.
+            if (t == Obj.TyCons) {
+                return First(rt, coll);
+            }
+            if (t == Obj.TyEmptyList) {
+                return Val.Nil;
+            }
+            return rt.ThrowStr("ClassCastException", "peek wants a vector or a list");
         }
-        return First(rt, coll);
+        return rt.ThrowStr("ClassCastException", "peek wants a vector or a list");
     }
     /// An empty collection of the same KIND, and NIL when there is no kind.
     /// 

@@ -8,6 +8,8 @@ const TY_ARRAYMAP: u8 = 10; const TY_HASHMAP: u8 = 11; const TY_VEC: u8 = 12;
 const TY_TAGGED: u8 = 13; const TY_TABLE: u8 = 14; const TY_TABLEREF: u8 = 15;
 const TY_MAPENTRY: u8 = 16; const TY_STR: u8 = 17; const TY_BYTES: u8 = 18;
 const TY_CONS: u8 = 19; const TY_OTHER: u8 = 20; const TY_SYM: u8 = 21;
+// A SET, which `nth` must refuse alongside a map rather than walking it.
+const TY_SET: u8 = 22;
 struct Space { m: Vec<u8> }
 struct Gc { sp: Space }
 // `seqn` is how long the walked seq is, and `strn`/`bytn`/`vecn` are the
@@ -169,6 +171,7 @@ fn main() {
     static final int TY_TAGGED = 13, TY_TABLE = 14, TY_TABLEREF = 15;
     static final int TY_MAPENTRY = 16, TY_STR = 17, TY_BYTES = 18;
     static final int TY_CONS = 19, TY_OTHER = 20, TY_SYM = 21;
+    static final int TY_SET = 22;
     static final class Val {
         static final long NIL = Probe.NIL;
         static final long NOT_FOUND = Probe.NOT_FOUND;
@@ -320,6 +323,7 @@ namespace Flint.Rt {
         internal const int TyTagged = 13, TyTable = 14, TyTableref = 15;
         internal const int TyMapentry = 16, TyStr = 17, TyBytes = 18;
         internal const int TyCons = 19, TyOther = 20, TySym = 21;
+        internal const int TySet = 22;
         internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
     }
     internal static class Val {

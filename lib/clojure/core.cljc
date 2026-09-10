@@ -1152,9 +1152,46 @@
 
 (defn- subvec2 [v start end]
   (loop [acc [] i start] (if (< i end) (recur (conj acc (nth v i)) (inc i)) acc)))
+
+(defn- check-subvec
+  "Throw a subvector range error that says which end was wrong, and by how much.
+
+  The same shape as `check-subs` one screen up, and for the same reason: an
+  inverted range used to answer `[]` here, which is Clojure throwing and flint
+  quietly agreeing to something. `(subvec [1 2 3] 2 1)` is a program with a bug
+  in it, and the empty vector it got back was indistinguishable from a slice
+  that really was empty.
+
+  AN EMPTY RANGE IS NOT AN INVERTED ONE. `(subvec [1 2 3] 3 3)` is `[]` in
+  Clojure and must stay `[]` here; `(subvec [1 2 3] 4 4)` throws, because the
+  start is past the end of the vector even though the range is empty. So the
+  bound is checked against `n` before the two ends are compared."
+  [v start end]
+  (let [n (count v)]
+    (cond
+      (not (int? start))
+      (throw (ex-info (str "subvec start must be an integer, got "
+                           (name (flint.rt/kind start)))
+                      {:start start}))
+      (not (int? end))
+      (throw (ex-info (str "subvec end must be an integer, got "
+                           (name (flint.rt/kind end)))
+                      {:end end}))
+      (neg? start)
+      (throw (ex-info (str "subvec start is negative: " start)
+                      {:start start :end end :length n}))
+      (> end n)
+      (throw (ex-info (str "subvec end is " end ", past the end of a vector of "
+                           n " element" (if (= n 1) "" "s"))
+                      {:start start :end end :length n}))
+      (> start end)
+      (throw (ex-info (str "subvec start " start " is past its end " end)
+                      {:start start :end end :length n}))
+      :else nil)))
+
 (defn subvec
-  ([v start] (subvec2 v start (count v)))
-  ([v start end] (subvec2 v start end)))
+  ([v start] (subvec v start (count v)))
+  ([v start end] (check-subvec v start end) (subvec2 v start end)))
 
 (defn sort-by
   ([kf coll] (merge-sort (fn [a b] (compare (kf a) (kf b))) (vec coll)))

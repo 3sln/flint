@@ -153,6 +153,27 @@ public final class Collread {
                 }
                 return false;
             }
+            // A LIST AND A SEQ REFUSE, which Clojure says with
+            // `IllegalArgumentException: contains? not supported on type`.
+            // Answering `false` -- which is what falling through to
+            // `coll-get` did -- is the wrong kind of wrong: `(contains?
+            // '(1 2) 0)` reads as `this list has no key 0` when the truth is
+            // `a list has no keys`, and the caller who wrote it meant
+            // `(some #{0} '(1 2))` and got a plausible answer instead of a
+            // correction.
+            // 
+            // STRINGS AND BYTE STRINGS STILL ANSWER, because they ARE
+            // indexed: `(contains? "ab" 0)` is true in Clojure. So the
+            // refusal names the seq tags rather than everything that is not
+            // a map, a set or a vector.
+            if (((t == TY_CONS) || (t == TY_EMPTY_LIST)) || ((t == TY_LAZYSEQ) || ((t == TY_VECSEQ) || (t == TY_STRSEQ)))) {
+                // THROWN AS A STATEMENT, then a value, because this answers
+                // `Bool` and `throw-str` answers `Value` -- the same shape
+                // `ttable-live` uses. The `false` is never read: the caller
+                // checks the thrown flag first.
+                rt.throwStr("IllegalArgumentException", "contains? is not supported on a list or a seq");
+                return false;
+            }
         }
         return collGet(rt, coll, k, Val.NOT_FOUND) != Val.NOT_FOUND;
     }
