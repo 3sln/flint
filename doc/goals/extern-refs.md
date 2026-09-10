@@ -1349,12 +1349,61 @@ of allocation history, heap size and host timing. It is exactly the property
 decision rather than a slide.
 
 So: **weakness may be used where the observation is not part of the answer** — a
-cache, a protocol table, an interning map, where a miss is recomputed and
-nothing downstream can tell. Weakness may not be *observed*. `flint.gc/weak-map`
-is defensible with get-that-may-miss-and-recompute semantics and a `count` that
-is deliberately not exposed; `flint.gc/weak-ref` with an observable nil is not,
-unless flint decides to spend more of `0005`'s determinism and says so in the
-README. **This draft does not spend it, and flags the decision as the user's.**
+cache, an interning map, where a miss is recomputed and nothing downstream can
+tell. Weakness may not be *observed*. `flint.gc/weak-map` is defensible with
+get-that-may-miss-and-recompute semantics and a `count` that is deliberately not
+exposed; `flint.gc/weak-ref` with an observable nil is not, unless flint decides
+to spend more of `0005`'s determinism and says so in the README. **This draft
+does not spend it, and flags the decision as the user's.**
+
+### DECIDED: protocol extension is PERMANENT, and is not a weak map at all
+
+The recommendation above named "a protocol table" as a place weakness is safe.
+**It is not**, and the third objection two paragraphs up is the reason — the
+section argued itself into a corner and this is the way out.
+
+A protocol extension is not a cache: **a miss is not recomputed, it is a
+different answer.** `(satisfies? P x)` going from true to false because a
+collection ran between two calls is the observation `0005` refuses, arriving
+through the door this document had just finished closing.
+
+**The scenario that decides it.** A type arrives over a port, a guest extends a
+protocol to it, the value leaves the sandbox, and an equal one comes back
+later. With a weak map the extension is there or gone depending on whether a
+collection happened in the gap — so two identical runs of the same program
+dispatch differently. That is worse than losing the extension, which would at
+least be consistent: it is a heisenbug.
+
+So `flint.interop/extend` writes into a table that lives as long as the
+sandbox.
+
+**WHICH REQUIRES A STABLE TYPE IDENTITY, and that is the real constraint the
+decision carries.** "Still there when it comes back" means nothing unless the
+returning type is recognisably the same one. An extern-type identified by slot
+or block index gets a FRESH index on re-entry and silently misses its own
+extension — the same failure, relocated. So extern-types are **interned by a
+host-supplied name**, the way keywords are, and `flint.interop/type` answers the
+interned handle.
+
+**AND IT MAY NEED NO NEW MACHINERY.** `find-protocol-method` already resolves
+through `(flint.rt/kind x)` into a map held in an atom on the protocol — which
+is permanent for the sandbox's life, is an ordinary flint map, and is already
+deterministic. If `kind` of an extern answers its interned extern-type, then
+`flint.interop/extend` is a thin wrapper over the table that already exists
+rather than a second dispatch path. That should be checked before anything is
+built: a parallel path would need its own `satisfies?`, its own `extends?` and
+its own `protocol-miss`, and three of those is how they drift.
+
+**Growth lands in the right place.** Externs enter only through a PORT, so the
+number of distinct extern types is bounded by what the host admits, not by
+anything a guest can do in a loop. A permanent table that grew with guest
+activity would be a leak; one that grows with the host's declared type surface
+is a fixed cost the host already controls.
+
+**What this leaves for `flint.gc/weak-map`:** the host-side identity map, which
+is per-port and not guest-visible, and caches. Protocol extension was the use
+case that justified shipping a guest-visible weak map first, and it no longer
+needs one.
 
 ---
 

@@ -321,6 +321,19 @@ decided**; what remains is design work rather than judgement calls.
   discipline.
   *Still design work:* the accessor-construction protocol, the SDK override,
   and revoking a grant already handed out.
+* **Extending protocols to extern types -- decided: PERMANENT, not a weak
+  map.** A protocol extension is not a cache, so a miss is not recomputed, it
+  is a different answer -- and a weak map would make `(satisfies? P x)` depend
+  on whether a collection ran between two calls. The scenario that decides it:
+  a type arrives over a port, is extended, leaves, and an equal one returns.
+  Weakly held, the extension is there or gone by GC timing, so two identical
+  runs dispatch differently.
+  *What it requires:* extern-types INTERNED BY NAME, because a type identified
+  by slot index gets a fresh one on re-entry and misses its own extension.
+  *What it may not require:* new machinery. `find-protocol-method` already
+  resolves through `kind` into an atom-held map that is permanent and
+  deterministic; if `kind` of an extern answers its interned type, this is a
+  wrapper rather than a second dispatch path.
 
 ### 4. Smaller, and written down so they are not lost
 
