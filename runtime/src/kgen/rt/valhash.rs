@@ -201,6 +201,28 @@ impl Rt {
         // The RECURSION keeps the raw accumulator -- `rope-hash` calls
         // itself, not this -- because a parent combines its children's
         // with `pow31` and a finalised child cannot be combined.
+        // ONE WALK FOR EVERY TIER. A string hashes as a 31-walk over its
+        // UTF-8 BYTES whether it is inline, flat or a tree -- `string-hash`
+        // does it for the first two and caches in the header, `rope-hash`
+        // does it for the third and caches per node.
+        // 
+        // IT USED TO BE TWO. Flat strings walked UTF-16 UNITS, to match
+        // Java's `String.hashCode`, and trees walked bytes -- so a
+        // non-ASCII string hashed one way while it was flat and another
+        // once it passed FLAT_MAX. Measured at the boundary with `é`
+        // repeated: 1 024 bytes agreed with Clojure and 1 026 did not.
+        // Nothing caught it. All four runtimes were wrong together, so no
+        // cross-runtime check could see it, and flint's own tier rule held
+        // as well, because no short string is EQUAL to a long one.
+        // 
+        // AND BYTES ARE THE RIGHT BASIS, not merely the cheaper fix.
+        // Matching Clojure's NUMBERS buys nothing that is promised --
+        // Clojure changed its own hash in 1.6 and documents no stability
+        // across versions -- while a UTF-16 walk cannot compose with
+        // `pow31`, because that needs the child's length in the units the
+        // walk counts and no node carries a UTF-16 count. Bytes compose,
+        // so a rope keeps its per-node cache. ASCII still agrees with
+        // Clojure, because there a byte IS a unit.
         if t == TY_ROPE {
             return hash_int((self.rope_hash(v) as i64) as u32);
         }

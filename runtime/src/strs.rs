@@ -128,7 +128,17 @@ impl Rt {
         if s.len() as u32 > INTERN_MAX {
             return self.raw_string(s);
         }
-        let h = hash::hash_string(s);
+        // THE SAME WALK THE VALUE HASH USES, which is now the only one. It
+        // was `hash_string` -- the UTF-16 walk -- and this line is why
+        // switching `string_hash` alone was not enough: an interned string
+        // carries its hash in the header, set HERE, so `string_hash` handed
+        // back the old basis for every string short enough to intern and
+        // computed the new one for every string that was not. Two tiers
+        // again, one line further down.
+        //
+        // One function now serves the intern bucket AND the value hash, so a
+        // string is walked once rather than twice.
+        let h = hash::hash_bytes(s.as_bytes());
         let want = s.as_bytes().to_vec();
         let matches = move |sp: &crate::mem::Space, v: Value| {
             v.is_heap() && ty(sp, v.as_heap()) == TY_STR && str_bytes(sp, v.as_heap()) == &want[..]
@@ -247,21 +257,39 @@ impl Rt {
     /// Hash of a string value, cached in the object for heap strings.
     // @kin:link:ns: flint.rt.strs
     // @kin:link:form:string-hash: {:template "{0}.string_hash({1})"}
+    /// The hash of a flat string, cached in the header.
+    ///
+    /// A 31-WALK OVER UTF-8 BYTES, and it used to be over UTF-16 UNITS to
+    /// match Java's `String.hashCode`. Two reasons it does not any more.
+    ///
+    /// THE TIERS DISAGREED. A tree hashes with `rope_hash`, which walks
+    /// BYTES, so a non-ASCII string past `FLAT_MAX` hashed differently from
+    /// the same content while it was still flat -- measured at the boundary,
+    /// `\u00e9` repeated: 1 024 bytes agreed with Clojure and 1 026 did not.
+    /// Nothing caught it, because all four runtimes were wrong together and
+    /// no short string is EQUAL to a long one.
+    ///
+    /// AND UTF-16 WAS THE WRONG BASIS TO CONVERGE ON. Matching Clojure's
+    /// NUMBERS buys nothing that is promised -- Clojure changed its own hash
+    /// in 1.6 and documents no stability across versions -- while costing a
+    /// UTF-16 derivation on every hash and, worse, the per-node caching:
+    /// `pow31` composition needs the child's length in the SAME units as the
+    /// walk, and no node carries a UTF-16 count. Bytes compose; units do not.
+    ///
+    /// So one walk serves every tier, `(hash s)` is the same function whether
+    /// a string is inline, flat or a tree, and ASCII still agrees with
+    /// Clojure because there a byte IS a unit.
     pub fn string_hash(&mut self, v: Value) -> u32 {
         if v.is_inline_str() {
             let mut b = [0u8; INLINE_MAX];
-            let s = core::str::from_utf8(v.inline_bytes(&mut b)).unwrap_or("");
-            return hash::hash_string(s);
+            return hash::hash_bytes(v.inline_bytes(&mut b));
         }
         let a = v.as_heap();
         let cached = str_hash(&self.gc.sp, a);
         if cached != 0 {
             return cached;
         }
-        let h = {
-            let bytes = str_bytes(&self.gc.sp, a);
-            hash::hash_string(core::str::from_utf8(bytes).unwrap_or(""))
-        };
+        let h = hash::hash_bytes(str_bytes(&self.gc.sp, a));
         let h = if h == 0 { 1 } else { h };
         set_str_hash(&self.gc.sp, a, h);
         h

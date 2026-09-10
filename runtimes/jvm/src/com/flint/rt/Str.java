@@ -132,7 +132,10 @@ public final class Str {
         byte[] b = s.getBytes(StandardCharsets.UTF_8);
         if (b.length <= Val.INLINE_MAX) return Val.inlineStr(b);
         if (b.length > Interns.INTERN_MAX) return rawString(rt, b);
-        int h = Hash.hashString(b);
+        // THE SAME WALK THE VALUE HASH USES; see the note in the Rust's
+        // `intern_string`. An interned string carries its hash in the header,
+        // set here, so changing `stringHash` alone left two bases in play.
+        int h = Hash.hashBytes(b);
         long found = probe(rt, Interns.STR, h,
             v -> Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR
                  && sameBytes(bytes(rt, v), b));
@@ -276,12 +279,17 @@ public final class Str {
     /// length per lookup.
     // @kin:link:ns: flint.rt.strs
     // @kin:link:form:string-hash: {:template "Str.stringHash({0}, {1})"}
+    /// A 31-WALK OVER UTF-8 BYTES; see `Rt::string_hash` in the Rust for why
+    /// it is not over UTF-16 units any more. In short: a tree already walked
+    /// bytes, so the two tiers disagreed for non-ASCII past FLAT_MAX; bytes
+    /// are what `pow31` composes for per-node caching; and Clojure's hash
+    /// NUMBERS are not a contract it offers.
     public static int stringHash(Rt rt, long v) {
-        if (Val.isInlineStr(v)) return Hash.hashString(Val.inlineBytes(v));
+        if (Val.isInlineStr(v)) return Hash.hashBytes(Val.inlineBytes(v));
         long a = Val.asHeap(v);
         int cached = Obj.strHash(rt.gc.sp, a);
         if (cached != 0) return cached;
-        int h = Hash.hashString(bytes(rt, v));
+        int h = Hash.hashBytes(bytes(rt, v));
         if (h == 0) h = 1;
         Obj.setStrHash(rt.gc.sp, a, h);
         return h;

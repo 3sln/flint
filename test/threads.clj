@@ -284,8 +284,45 @@
 ;; ALONE: 318 549 against 318 636 with no prepend at all. A feature that cost
 ;; 2 090 bytes as a copy costs -87 as a parameter.
 ;;
+;;
+;; AND AGAIN, by 481 bytes, for ONE STRING HASH INSTEAD OF THREE.
+;; 318 549 -> 319 030.
+;;
+;; There were three bases in play, not two. A flat string walked UTF-16 UNITS
+;; to match Java's `String.hashCode`; a tree walked BYTES; and an INTERNED
+;; string carried a UTF-16 hash written into its header at intern time. So a
+;; non-ASCII string hashed one way while short, another once past FLAT_MAX,
+;; and the intern path decided which for anything short enough to intern.
+;; Measured with `\u00e9` repeated: 1 024 bytes agreed with Clojure, 1 026 did
+;; not. Nothing caught it -- all four runtimes were wrong together, and no
+;; short string is EQUAL to a long one, so flint's own tier rule held.
+;;
+;; IT IS BYTES NOW, EVERYWHERE. Matching Clojure's NUMBERS is not a contract
+;; Clojure offers -- it changed its own hash in 1.6 and documents no stability
+;; -- and the UTF-16 basis cost more than it bought: a derivation on every
+;; hash, and no per-node caching, because `pow31` composition needs the
+;; child's length in the units the walk counts and no node carries a UTF-16
+;; count. Bytes compose. ASCII still agrees with Clojure exactly, because
+;; there a byte IS a unit; of the five pinned values in `RtHash.java` only
+;; the non-ASCII one moved.
+;;
+;; WHY IT COSTS ANYTHING AT ALL, since the byte walk is the simpler function.
+;; Interning must hash a byte SLICE to probe the table before a Value exists,
+;; so a slice walk ships beside the kin tree walk. Removing the dead UTF-16
+;; string functions bought nothing back -- the shaker was never shipping them.
+;; The UTF-16 machinery still ships because a SYMBOL's hash combines
+;; `java_string_hash` of the namespace with the murmur of the name, and that
+;; is a different question from a string's content.
+;;
+;; WHAT WOULD PAY IT BACK: giving symbols and keywords the same treatment
+;; would delete `Utf16Units`, `java_string_hash` and `hash_unencoded_chars`
+;; outright. Not done here, because murmur buys DISTRIBUTION for the values
+;; most used as map keys, and trading that away needs a measurement rather
+;; than a tidy-up.
+;;
+;; FIFTH RAISE IN ONE SESSION. The four before it are above.
 ;; THE SESSION TOTAL, because a budget raised once per fix is not a budget:
-;; 315 386 -> 318 549 is 3 163 bytes, 1.00%, over three entries. The question
+;; 315 386 -> 319 030 is 3 644 bytes, 1.16%, over four entries. The question
 ;; worth asking is whether they are worth it together, not whether the next
 ;; one is worth its own -- which is the question that turned 2 090 bytes into
 ;; nothing.
@@ -366,7 +403,7 @@
 ;; slice, which is what makes the rooting above expressible in all three at
 ;; once. It is a fixed cost, and the next generated caller of a value pays none
 ;; of it.
-            (< pure-size 319000))
+            (< pure-size 320000))
 
 ;; RE-BASELINED AGAIN, and this one is a decision rather than a drift:
 ;; 300 281 against 280 781, and 18 917 of it is ONE ARM IN THE WIRE CODEC.

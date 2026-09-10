@@ -14,6 +14,7 @@ public final class Hash {
     public static final int C1 = 0xcc9e2d51;
     public static final int C2 = 0x1b873593;
     public static final int SEED = 0;
+    public static final int KW_SHIFT = 0x9e3779b9;
     public static int mixK1(int k1) {
         return Integer.rotateLeft(k1 * C1, 15) * C2;
     }

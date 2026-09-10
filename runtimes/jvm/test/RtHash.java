@@ -43,12 +43,15 @@ public class RtHash {
     eq("(hash -2.75)", Hash.hashDouble(-2.75), -1073348608);
     System.out.println("  ok   doubles too, and -0.0 hashes as 0.0");
 
-    eq("(hash \"\")", Hash.hashString(b("")), 0);
-    eq("(hash \"a\")", Hash.hashString(b("a")), 1455541201);
-    eq("(hash \"abc\")", Hash.hashString(b("abc")), 74834163);
-    eq("(hash \"hello, world\")", Hash.hashString(b("hello, world")), 136167191);
-    eq("(hash \"日本語\")", Hash.hashString(b("日本語")), 1333041691);
-    System.out.println("  ok   strings, including non-ASCII over UTF-16 units");
+    eq("(hash \"\")", Hash.hashBytes(b("")), 0);
+    eq("(hash \"a\")", Hash.hashBytes(b("a")), 1455541201);
+    eq("(hash \"abc\")", Hash.hashBytes(b("abc")), 74834163);
+    eq("(hash \"hello, world\")", Hash.hashBytes(b("hello, world")), 136167191);
+    eq("(hash \"日本語\")", Hash.hashBytes(b("日本語")), 1534549342);
+    System.out.println("  ok   strings, over UTF-8 BYTES at every tier");
+    // The ASCII rows above are UNCHANGED from when this walked UTF-16 units,
+    // because there a byte IS a unit. Only the last row moved, which is the
+    // whole width of the divergence from Clojure's numbers.
 
     eq("(hash 'a)", Hash.hashSymbol(null, b("a")), -482876059);
     eq("(hash 'abc)", Hash.hashSymbol(null, b("abc")), 408495850);

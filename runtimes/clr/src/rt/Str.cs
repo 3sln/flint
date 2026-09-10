@@ -105,7 +105,8 @@ public static class Str {
         byte[] b = Encoding.UTF8.GetBytes(s);
         if (b.Length <= Val.InlineMax) return Val.InlineStr(b);
         if (b.Length > Interns.InternMax) return RawString(rt, b);
-        int h = Hash.HashString(b);
+        // THE SAME WALK THE VALUE HASH USES; see the note in the Rust.
+        int h = Hash.HashBytes(b);
         Interns.Match matches = v => Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr
                                      && SameBytes(Bytes(rt, v), b);
         long found = Probe(rt, Interns.STR, h, matches);
@@ -343,12 +344,13 @@ public static class Str {
     /// where native reads the slot. A long string used as a map key paid its
     /// length per lookup.
     // @kin:link:form:string-hash: {:template "Str.StringHash({0}, {1})"}
+    /// A 31-WALK OVER UTF-8 BYTES; see `Rt::string_hash` in the Rust for why.
     public static int StringHash(Rt rt, long v) {
-        if (Val.IsInlineStr(v)) return Hash.HashString(Val.InlineBytes(v));
+        if (Val.IsInlineStr(v)) return Hash.HashBytes(Val.InlineBytes(v));
         long a = Val.AsHeap(v);
         int cached = Obj.StrHash(rt.gc.sp, a);
         if (cached != 0) return cached;
-        int h = Hash.HashString(Bytes(rt, v));
+        int h = Hash.HashBytes(Bytes(rt, v));
         if (h == 0) h = 1;
         Obj.SetStrHash(rt.gc.sp, a, h);
         return h;

@@ -670,10 +670,6 @@ impl Rt {
     // `tmap_persistent`, `set_transient`, `tset_conj`, `tset_disj`,
     // `tset_count`, `tset_get` and `tset_persistent` are GENERATED, from
     // `kin/maptrans.kin`.
-
-    pub fn hash_of_str(&mut self, s: &str) -> u32 {
-        hash::hash_string(s)
-    }
 }
 
 /// A scratch buffer type used by string builtins.

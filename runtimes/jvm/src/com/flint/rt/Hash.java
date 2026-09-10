@@ -91,7 +91,18 @@ public final class Hash {
         return fmix(h1, 2 * us.length);
     }
 
-    public static int hashString(byte[] b) { return hashInt(javaStringHash(b)); }
+    // `hashString` -- the UTF-16 walk -- was here and is gone. A string's
+    // hash is `hashBytes` now, at every tier; see `Str.stringHash`.
+    // `javaStringHash` STAYS: a symbol's hash still combines it with the
+    // murmur of the name.
+
+    /// `hashInt(h*31 + byte ...)`, which is what a rope's walk produces once
+    /// finalised. The string hash is defined over BYTES; see `Str.stringHash`.
+    public static int hashBytes(byte[] b) {
+        int h = 0;
+        for (byte x : b) h = h * 31 + (x & 0xFF);
+        return hashInt(h);
+    }
 
     /// `ns` is the RAW Java string hash here, not the murmur'd one. That
     /// asymmetry is real, and the Rust records that it was found by solving for

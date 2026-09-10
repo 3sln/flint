@@ -19,7 +19,8 @@ struct Gc { sp: Space }
 // `budget` is how many ticks the walk may take before it starves, which is
 // the half both ports were missing for a vector: they charged nothing there.
 struct Rt { gc: Gc, bump: u64, roots: Vec<Value>, slots: Vec<[u64; 2]>,
-            budget: i32, ticks: u32, seqn: u32, doubles: Vec<f64> }
+            budget: i32, ticks: u32, seqn: u32, doubles: Vec<f64>,
+            asc: Vec<u8>, jsh: u32 }
 fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
 impl Value {
     fn is_heap(self) -> bool { self.0 >= 100 && self.0 < 0x1000_0000 && self.0 != NIL.0 }
@@ -40,6 +41,11 @@ fn hash_int(h: u32) -> u32 { h ^ (h >> 16) }
 // that module rather than a bare function.
 pub mod hash { pub fn hash_double(d: f64) -> u32 { if d.is_nan() { 7 } else { (d as i64) as u32 } } }
 impl Rt {
+    // A NON-ASCII TREE takes the UTF-16 walk; the probe answers both by
+    // inspection so the ROUTING is what is under test, not the arithmetic
+    // (which `kin/strhash.drivers` pins against canonical Clojure).
+    fn s_ascii(&self, v: Value) -> bool { self.asc[v.0 as usize] != 0 }
+    fn java_string_hash(&mut self, v: Value) -> u32 { 0x7700 | (v.0 as u32 & 0xFF) }
     fn mark(&self) -> usize { self.roots.len() }
     fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
     fn r(&self, i: usize) -> Value { self.roots[i] }
@@ -108,7 +114,7 @@ fn main() {
     let mut rt = Rt { gc: Gc { sp: Space { m: vec![0u8; 400] } }, bump: 100,
                       roots: Vec::new(), slots: vec![[0u64; 2]; 400],
                       budget: 1000, ticks: 0, seqn: 3,
-                      doubles: vec![1.5, f64::NAN, 0.0] };
+                      doubles: vec![1.5, f64::NAN, 0.0] , asc: vec![0; 400], jsh: 0 };
     let mut o = String::new();
 
     // A VECTOR IS WALKED, CHARGED and CACHED. The charge is the half both
@@ -184,6 +190,16 @@ fn main() {
     }
     o.push_str(&format!("tags={} ", tags));
 
+    // BOTH ROPE BRANCHES. The loop above leaves `asc` at zero, so it exercises
+    // the non-ASCII walk only -- and a regression that dropped the `s-ascii`
+    // test entirely would still pass it. An ASCII rope must take `rope-hash`
+    // (0x54xx) and a non-ASCII one `java-string-hash` (0x77xx).
+    let ar = rt.obj(TY_ROPE);
+    rt.asc[ar.0 as usize] = 1;
+    let nr = rt.obj(TY_ROPE);
+    o.push_str(&format!("ropeascii={:x} ropewide={:x} ",
+                        rt.hash_value(ar), rt.hash_value(nr)));
+
     // EVERY SEQUENTIAL TAG goes to the ordered walk, which is the agreement
     // `val-eq` needs: `=` treats them as one category, so `hash` must too.
     let mut seqs = String::new();
@@ -253,6 +269,7 @@ fn main() {
         GcT gc = new GcT();
         long bump = 100;
         long[][] slots = new long[400][2];
+        int[] asc = new int[400];
         int budget = 1000, ticks = 0, seqn = 3;
         double[] doubles = { 1.5, Double.NaN, 0.0 };
         java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
@@ -288,6 +305,11 @@ fn main() {
     }
     static int symbolHash(Rt rt, long v) { return 0x5300 | (int) (v & 0xFF); }
     static int ropeHash(Rt rt, long v) { return 0x5400 | (int) (v & 0xFF); }
+    // The ROUTING is what this file tests; `kin/strhash.drivers` pins the
+    // arithmetic against canonical Clojure. Distinct constants so the two
+    // branches are told apart in the output.
+    static boolean sAscii(Rt rt, long v) { return rt.asc[(int) v] != 0; }
+    static int javaStringHash(Rt rt, long v) { return 0x7700 | (int) (v & 0xFF); }
     static int bHash(Rt rt, long v) { return 0x5500 | (int) (v & 0xFF); }
     static final class Maps { static int hash(Rt rt, long v) { return 0x5600 | (int) (v & 0xFF); } }
     static int hashMap(Rt rt, long v) { return Maps.hash(rt, v); }
@@ -390,6 +412,11 @@ fn main() {
         StringBuilder tags = new StringBuilder();
         for (int t : htags) tags.append(Integer.toHexString(hashValue(rt, rt.obj(t)))).append(',');
         o.append("tags=").append(tags).append(' ');
+        long ar = rt.obj(TY_ROPE);
+        rt.asc[(int) ar] = 1;
+        long nr = rt.obj(TY_ROPE);
+        o.append("ropeascii=").append(Integer.toHexString(hashValue(rt, ar)))
+         .append(" ropewide=").append(Integer.toHexString(hashValue(rt, nr))).append(' ');
 
         int[] stags = { TY_VEC, TY_MAPENTRY, TY_CONS, TY_EMPTY_LIST, TY_LAZYSEQ,
                         TY_VECSEQ, TY_STRSEQ, TY_RANGE };
@@ -472,6 +499,7 @@ namespace Flint.Rt {
         internal GcT gc = new GcT();
         internal long bump = 100;
         internal long[,] slots = new long[400, 2];
+        internal int[] asc = new int[400];
         internal int budget = 1000, ticks = 0, seqn = 3;
         internal double[] doubles = { 1.5, double.NaN, 0.0 };
         internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
@@ -504,6 +532,8 @@ namespace Flint.Rt {
     }
     internal static int SymbolHash(Rt rt, long v) { return 0x5300 | (int) (v & 0xFF); }
     internal static int RopeHash(Rt rt, long v) { return 0x5400 | (int) (v & 0xFF); }
+    internal static bool SAscii(Rt rt, long v) { return rt.asc[(int) v] != 0; }
+    internal static int JavaStringHash(Rt rt, long v) { return 0x7700 | (int) (v & 0xFF); }
     internal static int BHash(Rt rt, long v) { return 0x5500 | (int) (v & 0xFF); }
     internal static class Maps { internal static int Hash(Rt rt, long v) { return 0x5600 | (int) (v & 0xFF); } }
     internal static int HashMap(Rt rt, long v) { return Maps.Hash(rt, v); }
@@ -601,6 +631,11 @@ namespace Flint.Rt {
         var tags = new System.Text.StringBuilder();
         foreach (int t in htags) tags.Append(HEX(HashValue(rt, rt.Obj_(t)))).Append(',');
         o.Append("tags=").Append(tags).Append(' ');
+        long ar = rt.Obj_(Obj.TyRope);
+        rt.asc[(int) ar] = 1;
+        long nr = rt.Obj_(Obj.TyRope);
+        o.Append("ropeascii=").Append(HashValue(rt, ar).ToString("x"))
+         .Append(" ropewide=").Append(HashValue(rt, nr).ToString("x")).Append(' ');
 
         int[] stags = { Obj.TyVec, Obj.TyMapentry, Obj.TyCons, Obj.TyEmptyList, Obj.TyLazyseq,
                         Obj.TyVecseq, Obj.TyStrseq, Obj.TyRange };

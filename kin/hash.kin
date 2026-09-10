@@ -24,13 +24,20 @@
 (defconst ^U32 C2 (hex 0x1b873593))
 (defconst ^:pub ^U32 SEED 0)
 
-(defn ^:inline ^:unchecked ^U32 mix-k1 [^U32 k1]
+;; The golden-ratio constant Clojure's keyword hash adds to its symbol hash.
+;; IT LIVES HERE because `hex` is this file's vocabulary and `flint.impl.rt`
+;; has none: spelled as decimal 2654435769 in a file that speaks `rt`, it is a
+;; valid `u32` in Rust and "integer number too large" in Java, where an `int`
+;; literal stops at 2147483647.
+(defconst ^:pub ^U32 KW_SHIFT (hex 0x9e3779b9))
+
+(defn ^:pub ^:inline ^:unchecked ^U32 mix-k1 [^U32 k1]
   (return (mul32 (rotl (mul32 k1 C1) 15) C2)))
 
-(defn ^:inline ^:unchecked ^U32 mix-h1 [^U32 h1 ^U32 k1]
+(defn ^:pub ^:inline ^:unchecked ^U32 mix-h1 [^U32 h1 ^U32 k1]
   (return (add32 (mul32 (rotl (bit-xor h1 k1) 13) 5) (hex 0xe6546b64))))
 
-(defn ^:inline ^:unchecked ^U32 fmix [^:mut ^U32 h1 ^U32 len]
+(defn ^:pub ^:inline ^:unchecked ^U32 fmix [^:mut ^U32 h1 ^U32 len]
   (set h1 (bit-xor h1 len))
   (set h1 (bit-xor h1 (ushr h1 16)))
   (set h1 (mul32 h1 (hex 0x85ebca6b)))
@@ -55,7 +62,7 @@
 ;; `boost::hash_combine`, as Clojure's `Util.hashCombine`. The `sar` is the
 ;; point of interest: an ARITHMETIC shift, which Rust can only reach by going
 ;; through `i32` and back.
-(defn ^:inline ^:unchecked ^U32 hash-combine [^U32 seed ^U32 h]
+(defn ^:pub ^:inline ^:unchecked ^U32 hash-combine [^U32 seed ^U32 h]
   (return (bit-xor seed (add32 (add32 (add32 h (hex 0x9e3779b9))
                                       (shl seed 6))
                                (sar seed 2)))))

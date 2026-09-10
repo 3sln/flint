@@ -112,8 +112,24 @@ pub fn hash_unencoded_chars(s: &str) -> u32 {
 
 // --- the value-level entry points ------------------------------------------
 
-pub fn hash_string(s: &str) -> u32 {
-    hash_int(java_string_hash(s))
+// `hash_string` -- `hash_int(java_string_hash(s))`, the UTF-16 walk -- was
+// here and is gone. A string's hash is `hash_bytes` now, at every tier; see
+// `Rt::string_hash`. `java_string_hash` STAYS, because a symbol's hash still
+// combines it with the murmur of the name, and a symbol's name is a different
+// question from a string's content.
+
+/// `h = h*31 + byte`, the walk `rope_hash` does over a tree's leaves.
+///
+/// THE STRING HASH IS DEFINED OVER BYTES, not over UTF-16 units. See
+/// `Rt::string_hash` for why; the short version is that a tree already walked
+/// bytes, bytes are what `pow31` can compose for per-node caching, and
+/// matching Clojure's numbers is not a contract Clojure offers.
+pub fn hash_bytes(bs: &[u8]) -> u32 {
+    let mut h: u32 = 0;
+    for b in bs {
+        h = h.wrapping_mul(31).wrapping_add(*b as u32);
+    }
+    hash_int(h)
 }
 
 /// `ns` is the *raw* Java string hash here, not the murmur'd one. That
@@ -152,14 +168,19 @@ mod tests {
         assert_eq!(hash_double(-2.75) as i32, -1073348608);
     }
 
+    /// A string hashes over its UTF-8 BYTES, at every tier.
+    ///
+    /// THE ASCII ROWS ARE UNCHANGED from when this walked UTF-16 units,
+    /// because there a byte IS a unit -- which is the whole width of the
+    /// divergence from Clojure's numbers. The last row is the one that moved,
+    /// and it is here so that a silent return to the UTF-16 basis fails.
     #[test]
-    fn strings_match_clojure() {
-        assert_eq!(hash_string("") as i32, 0);
-        assert_eq!(hash_string("a") as i32, 1455541201);
-        assert_eq!(hash_string("abc") as i32, 74834163);
-        assert_eq!(hash_string("hello, world") as i32, 136167191);
-        // Non-ASCII: proves the UTF-16 view, since the UTF-8 bytes differ.
-        assert_eq!(hash_string("日本語") as i32, 1333041691);
+    fn strings_hash_over_bytes() {
+        assert_eq!(hash_bytes(b"a") as i32, 1455541201);
+        assert_eq!(hash_bytes(b"hello, world") as i32, 136167191);
+        assert_eq!(hash_bytes("日本語".as_bytes()) as i32, 1534549342);
+        // And the empty string is zero, which `hash_int` short-circuits.
+        assert_eq!(hash_bytes(b"") as i32, 0);
     }
 
     #[test]

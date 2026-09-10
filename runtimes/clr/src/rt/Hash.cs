@@ -85,7 +85,16 @@ public static class Hash {
         unchecked { return Fmix(h1, 2 * us.Length); }
     }
 
-    public static int HashString(byte[] b) => HashInt(JavaStringHash(b));
+    // `HashString` -- the UTF-16 walk -- was here and is gone; see
+    // `Str.StringHash`. `JavaStringHash` stays for the symbol hash.
+
+    /// `HashInt(h*31 + byte ...)`. The string hash is defined over BYTES;
+    /// see `Str.StringHash`.
+    public static int HashBytes(byte[] b) {
+        int h = 0;
+        foreach (byte x in b) h = unchecked(h * 31 + x);
+        return HashInt(h);
+    }
 
     /// `ns` is the RAW Java string hash here, not the murmur'd one. That
     /// asymmetry is real, and the Rust records that it was found by solving for

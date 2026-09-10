@@ -19,16 +19,17 @@ use crate::kgen::rt::casetable::*;
 pub(crate) const C1: u32 = 0xcc9e2d51;
 pub(crate) const C2: u32 = 0x1b873593;
 pub const SEED: u32 = 0;
+pub const KW_SHIFT: u32 = 0x9e3779b9;
 #[inline]
-pub(crate) fn mix_k1(k1: u32) -> u32 {
+pub fn mix_k1(k1: u32) -> u32 {
     return k1.wrapping_mul(C1).rotate_left(15).wrapping_mul(C2);
 }
 #[inline]
-pub(crate) fn mix_h1(h1: u32, k1: u32) -> u32 {
+pub fn mix_h1(h1: u32, k1: u32) -> u32 {
     return (h1 ^ k1).rotate_left(13).wrapping_mul(5).wrapping_add(0xe6546b64);
 }
 #[inline]
-pub(crate) fn fmix(mut h1: u32, len: u32) -> u32 {
+pub fn fmix(mut h1: u32, len: u32) -> u32 {
     h1 ^= len;
     h1 ^= h1 >> 16;
     h1 = h1.wrapping_mul(0x85ebca6b);
@@ -53,7 +54,7 @@ pub fn hash_long(input: i64) -> u32 {
     return fmix(h2, 8);
 }
 #[inline]
-pub(crate) fn hash_combine(seed: u32, h: u32) -> u32 {
+pub fn hash_combine(seed: u32, h: u32) -> u32 {
     return seed ^ h.wrapping_add(0x9e3779b9).wrapping_add(seed << 6).wrapping_add(((seed as i32) >> 2) as u32);
 }
 pub fn mix_coll_hash(hash: u32, count: u32) -> u32 {

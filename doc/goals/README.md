@@ -33,12 +33,12 @@ three times.
 | --- | ---: | ---: | --- |
 | `err.rs` | 3 | ~44 | **PORTED** -- `kin/exinfo.kin` has `ex-info`, `is-exception`, `ex-message`, `ex-data`, `ex-kind`. What is left is `ex_matches` (Rust `String` and `ends_with`, Java string methods on the ports -- trap 4 at FUNCTION granularity, in the same file), `make_error` (takes `&str`) and `failed`/`clear_error` (runtime state). |
 | `num.rs` | 2 | 16 | host -- value-representation predicates |
-| `bytes.rs` | 2 | 28 | unread |
+| `bytes.rs` | 2 | 28 | **host** -- `new_bytes` takes a Rust slice and `b_to_vec` answers one. Everything else in the file is `@kin:link` vocabulary: the walk, the sink, the code-point buffer, `run_eq`, `leaf_find`. Trap 2, at file scale. |
 | `set.rs` | 2 | 30 | host -- `set_for_each` takes a Rust closure |
-| `fmath.rs` | 2 | 31 | unread |
+| `fmath.rs` | 2 | 31 | **host** -- the `f1!`/`f2!` macros are `libm` under wasm and `std` natively; on the ports they are `Math.sqrt` and friends. Only `abs` and `signum` are pure arithmetic, and the ports get both from `Math`, where `Math.abs(-0.0)` and `Math.signum(-0.0)` already agree with the Rust. Porting them would trade a JIT intrinsic for a hand-rolled bit twiddle. |
 | `eq.rs` | 3 | 33 | host -- two one-liners, and `utf16_cmp` is `String.compareTo` on the ports |
-| `hash.rs` | 4 | 36 | unread |
-| `rope.rs` | 2 | 42 | unread |
+| `hash.rs` | 4 | 36 | **not a port, a SEMANTICS fix.** Read as the strongest candidate in the table -- three hand-written copies of an arithmetic that must agree, with the JVM port arguing against the host shortcut in its own comments. Reading it found that the three had already drifted: a string hashed over UTF-16 units when flat, bytes when a tree, and whichever the intern path chose when short. Resolved by defining the hash over BYTES everywhere rather than by porting. `hash_double` was already vocabulary; `java_string_hash` and `hash_unencoded_chars` still serve the SYMBOL hash and stay. |
+| `rope.rs` | 2 | 42 | **host** -- `value_text` answers a Rust `String` and `s_to_vec` a `Vec<u8>`; `flatten` is diagnostics, a gas charge and a delegation to the generated `s_flatten`. The tier constants and `@kin:link` forms above them are vocabulary. |
 | `vector.rs` | 3 | 47 | host -- construction and a predicate |
 | `map.rs` | 3 | 91 | **done** -- `init_map` plus two taking Rust closures |
 | `obj.rs` | 12 | 113 | host -- object header accessors |
@@ -47,6 +47,13 @@ three times.
 | `pike.rs` | 8 | 339 | **NOT A PORT.** `doc/decisions/0012` says it: "Per host, native -- the simulator." The NFA compiler is the shared half and already is. |
 | `coll.rs` | 17 | 619 | mostly host -- see trap 4; nine `Value -> Value` functions that use `StringBuilder` and `String.indexOf` on the ports |
 | `builtins.rs` | 6 | 1097 | host -- the builtin table |
+
+THE FOUR UNREAD ROWS ARE READ, and none was a port. Three are host boundaries
+that counting could not tell from backlog, and the fourth -- `hash.rs` -- was a
+real candidate that turned into a correctness fix instead: the three copies had
+drifted, and the answer was to define the hash over bytes rather than to unify
+three walks over UTF-16. A table row saying "unread" is the only kind that can
+lie in both directions at once, and there are none left.
 
 ONE ROW WENT THE OTHER WAY. `err.rs` read as unremarkable at 92 lines and was
 the only verified YES in the table -- three bodies trying to be the same
@@ -149,6 +156,42 @@ names both now, which is the truth about what arrived.
 MAKING IT EXACT means giving them separate builtins, which costs an entry in
 the native slot table and the ABI. That is a lot to spend on one word, and it
 is written in the source rather than left as a puzzle.
+
+#### A string hashed three ways depending on its tier -- FIXED
+
+`(hash s)` for a non-ASCII string disagreed with itself either side of
+`FLAT_MAX`. Measured at the boundary, `\u00e9` repeated: 1 024 bytes hashed
+1656509768, 1 026 bytes hashed 1603365571 where Clojure says 1433180138.
+
+THREE BASES, not two. A flat string walked UTF-16 UNITS, to match Java's
+`String.hashCode`; a tree walked BYTES; and an INTERNED string carried a
+UTF-16 hash written into its header at intern time, which decided the answer
+for anything short enough to intern. Changing the flat walk alone moved the
+seam one line down rather than closing it -- the intern path kept handing back
+the old basis.
+
+WHY NOTHING CAUGHT IT. All four runtimes agreed with each other, so
+`conform-hosts` was green: they were wrong together. And flint's own tier rule
+-- two values that are `=` must hash alike -- held as well, because no short
+string is ever EQUAL to a long one. The bug lived exactly in the gap between
+"the runtimes agree" and "the answer is right".
+
+FIXED AS ONE WALK OVER UTF-8 BYTES at every tier, verified against an
+independent computation for inline, interned, flat, rope, astral-plane and
+mixed content.
+
+THE TARGET WAS THE INTERESTING PART. The first fix made trees walk UTF-16 so
+everything matched Clojure -- and that was solving the right problem against
+the wrong target. Clojure changed its own hash in 1.6 and documents no
+stability across versions, nothing in this tree depends on the numbers, and
+the UTF-16 basis cannot compose with `pow31`, so a non-ASCII rope lost its
+per-node cache. The tree had already said so: the first fix kept a byte fast
+path for ASCII BECAUSE the unit walk could not compose, which was evidence
+read as an optimisation.
+
+ASCII still agrees with Clojure exactly, because there a byte IS a unit. Of
+the five pinned values in `runtimes/jvm/test/RtHash.java`, only the non-ASCII
+one moved. Recorded as a deliberate divergence rather than a bug.
 
 #### A collision node was scanned for free -- FIXED
 

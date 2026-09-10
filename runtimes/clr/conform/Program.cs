@@ -747,12 +747,12 @@ public static class Program {
         HEq("(hash -2.75)", Flint.Rt.Hash.HashDouble(-2.75), -1073348608);
         Console.WriteLine("  ok   doubles too, and -0.0 hashes as 0.0");
 
-        HEq("(hash \"\")", Flint.Rt.Hash.HashString(HB("")), 0);
-        HEq("(hash \"a\")", Flint.Rt.Hash.HashString(HB("a")), 1455541201);
-        HEq("(hash \"abc\")", Flint.Rt.Hash.HashString(HB("abc")), 74834163);
-        HEq("(hash \"hello, world\")", Flint.Rt.Hash.HashString(HB("hello, world")), 136167191);
-        HEq("(hash \"日本語\")", Flint.Rt.Hash.HashString(HB("日本語")), 1333041691);
-        Console.WriteLine("  ok   strings, including non-ASCII over UTF-16 units");
+        HEq("(hash \"\")", Flint.Rt.Hash.HashBytes(HB("")), 0);
+        HEq("(hash \"a\")", Flint.Rt.Hash.HashBytes(HB("a")), 1455541201);
+        HEq("(hash \"abc\")", Flint.Rt.Hash.HashBytes(HB("abc")), 74834163);
+        HEq("(hash \"hello, world\")", Flint.Rt.Hash.HashBytes(HB("hello, world")), 136167191);
+        HEq("(hash \"日本語\")", Flint.Rt.Hash.HashBytes(HB("日本語")), 1534549342);
+        Console.WriteLine("  ok   strings, over UTF-8 BYTES at every tier");
 
         HEq("(hash 'a)", Flint.Rt.Hash.HashSymbol(null, HB("a")), -482876059);
         HEq("(hash 'abc)", Flint.Rt.Hash.HashSymbol(null, HB("abc")), 408495850);
@@ -855,7 +855,7 @@ public static class Program {
     byte[] aa = System.Text.Encoding.UTF8.GetBytes("Aa");
     byte[] bb = System.Text.Encoding.UTF8.GetBytes("BB");
     MOk("\"Aa\" and \"BB\" collide, as they do in Java",
-       Flint.Rt.Hash.HashString(aa) == Flint.Rt.Hash.HashString(bb));
+       Flint.Rt.Hash.HashBytes(aa) == Flint.Rt.Hash.HashBytes(bb));
     {
       int c = rt.Push(Flint.Rt.Maps.Empty(rt));
       // Padded past the array-map, or the collision never reaches a trie node
