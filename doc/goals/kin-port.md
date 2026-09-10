@@ -191,6 +191,42 @@ passes rather than one.
 **About 4,500 lines per runtime.** Opcode bodies, which is where this started,
 are a few dozen lines and were never the prize.
 
+## Four ways this measurement lies, three of them mechanical
+
+Every count in this document has been wrong at least once, and always in the
+same direction: it made unported work look larger than it is. The first three
+can be excluded by a script. The fourth cannot.
+
+1. **Rust's inline `#[test]` functions are not logic.** Counting them made
+   `Vec` look 81% divergent from the ports when it is 4%.
+2. **A function named by a `@kin:link:` tag or a vocabulary template is a
+   BOUNDARY.** Counting those made `Bytes` read as 172 lines of work when it
+   was 39 -- the rest is the far side of a hole kin generates the caller for.
+3. **`#[cfg(feature = "bench")]` functions ship in no runtime.** `map.rs` read
+   as 13 functions and 232 lines, and all four `*_entries` walks -- the
+   obvious next port -- exist only under the bench feature. Excluding them,
+   `map.rs` has three functions left and none is portable.
+
+4. **A `Value -> Value` signature does not imply portable logic.** `coll.rs`
+   has nine functions taking `Value` and answering `Value`, which reads as
+   nine ports waiting to happen. What the ports do with the same builtins:
+
+       flint/str-join       native builds a ROPE     the JVM uses StringBuilder
+       flint/str-index-of   native walks the bytes   the JVM materialises a
+                                                     String and calls indexOf
+       string compare       native's `utf16_cmp`     Java's String.compareTo
+
+   Three implementations, each using what its host actually has -- and the
+   ports have real host strings while native does not. One kin source would
+   force every runtime onto the algorithm of the one with the fewest
+   facilities. That is a PERFORMANCE decision wearing the clothes of a
+   deduplication.
+
+   THE TEST IS WHETHER THE THREE BODIES ARE TRYING TO BE THE SAME THING.
+   `conj!`, `assoc!` and `dissoc!` were: same algorithm, three copies, drifted
+   apart, and each copy right about something the others were wrong about.
+   `join_strings` is not, and never was.
+
 ## CODE FIRST, THEN TESTS — and the reason matters
 
 The tests are the ORACLE. Porting them at the same time as the code would mean a
