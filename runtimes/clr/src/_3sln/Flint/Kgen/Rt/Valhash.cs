@@ -19,8 +19,70 @@ using static global::_3sln.Flint.Kgen.Rt.Ropeflat;
 using static global::_3sln.Flint.Kgen.Rt.Seqwalk;
 using static global::_3sln.Flint.Kgen.Rt.Tablemeta;
 using static global::_3sln.Flint.Kgen.Rt.Tableref;
+using static global::_3sln.Flint.Kgen.Rt.Vecread;
 
 public static class Valhash {
+    /// A PLAIN VECTOR IS HASHED BY INDEX, not by walking a seq.
+    /// 
+    /// The same defect `kin/valeq.kin` carries the fix for, in the sibling
+    /// function, found by the same benchmark. `bench/equiv.mjs` reported
+    /// `hash-vec` at TWO ALLOCATIONS for a two-element vector -- one seq cell
+    /// per element -- on an operation that should allocate nothing.
+    /// 
+    /// THE CACHE HIDES IT AND DOES NOT REMOVE IT. A vector used repeatedly as a
+    /// map key hashes once, which is what the cache above is for. But the FIRST
+    /// hash still walks, and a vector hashed exactly once -- every element going
+    /// into a set, every key inserted rather than looked up -- never reaches the
+    /// cache at all. Those are the cases that allocate per element.
+    /// 
+    /// `has-hash-slot` is already the test for `is this a plain vector`, since
+    /// only a vector has somewhere to cache. So this needed no new predicate.
+    /// 
+    /// GAS IS UNCHANGED, and the tick order is not the same as `seq-eq`'s. This
+    /// loop checks the END FIRST and charges after, so a vector of n elements
+    /// ticks n times and not n+1 -- the final round that finds the seq empty
+    /// breaks before charging. `n` is both the index and the count ticked so
+    /// far, exactly as the seq version uses it, and STARVATION returns 0 with
+    /// nothing written to the cache, which is the behaviour that matters: a
+    /// half-computed hash must never be cached.
+    /// 
+    /// THE CACHE WRITE RE-READS `v` FROM THE ROOT STACK, because `hash-value`
+    /// on an element allocates -- a row ref materialises as a map -- and a raw
+    /// address held across it is `0031`.
+    internal static int HashVecIndexed(Rt rt, long v) {
+        int @base = rt.Mark();
+        int vi = rt.Push(v);
+        int total = Vec.Count(rt, v);
+        int acc;
+        int n;
+        bool starved;
+        acc = 1;
+        n = 0;
+        starved = false;
+        for (;;) {
+            if (n == total) {
+                break;
+            }
+            if (!rt.ChargeTick((long) n, 1, "hash")) {
+                starved = true;
+                break;
+            }
+            long f = VecNth(rt, rt.R(vi), n, Val.Nil);
+            int fi = rt.Push(f);
+            int h = HashValue(rt, rt.R(fi));
+            rt.PopTo(fi);
+            acc = OrderedStep(acc, h);
+            n += 1;
+        }
+        if (starved) {
+            rt.PopTo(@base);
+            return 0;
+        }
+        int @out = MixCollHash(acc, n);
+        rt.SetSlot(Val.AsHeap(rt.R(vi)), V_HASH, Val.Fixnum(((long) @out) & 0xFFFFFFFFL));
+        rt.PopTo(@base);
+        return @out;
+    }
     /// Is `v` a VECTOR, strictly? Only a vector has a slot to cache in.
     internal static bool HasHashSlot(Rt rt, long v) {
         if (!Val.IsHeap(v)) {
@@ -40,6 +102,9 @@ public static class Valhash {
             if (Val.IsFixnum(cached)) {
                 return (int) Val.AsFixnum(cached);
             }
+        }
+        if (HasHashSlot(rt, v)) {
+            return HashVecIndexed(rt, v);
         }
         int @base = rt.Mark();
         int vi = rt.Push(v);

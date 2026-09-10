@@ -267,6 +267,39 @@ awk '/^  sort /{a=$4; n=20000} END{gsub(",","",a);
 awk '/^  conj  /{p=$4} /^  conj! /{t=$4} END{gsub(",","",p); gsub(",","",t);
   if (t+0 >= p+0) { print "  FAIL conj! allocates " t " against conj " p; exit 1 }
   else print "  ok   conj! allocates " t " where conj allocates " p }' /tmp/flint-test.out || fail "transients stopped helping"
+
+# EQUALITY AND HASH ALLOCATE NOTHING, which is a gate and not a benchmark.
+#
+# The timings in `bench/equiv.mjs` are machine-dependent and not assertable.
+# The ALLOCATION counts are exact, and they are what caught the defect this
+# gate exists to keep out: `=` on two vectors walked two seqs and allocated a
+# cell per element per side -- forty thousand objects to compare two
+# 20 000-element vectors -- while `=` on two MAPS of the same size allocated
+# none. `hash` of a vector did the same, one cell per element, hidden behind
+# the hash cache for keys that get reused and fully exposed for a vector
+# hashed once, which is every element going into a set.
+#
+# NOTHING ELSE HERE WOULD HAVE CAUGHT EITHER. Both were correct, identical
+# across all four runtimes, and inside every size and gas budget. They were
+# only slow and allocating, and `check-builtin-coverage` reported `=` as
+# reached the whole time. That is the same shape as `sort` at 74.7
+# allocations per element above: the number a wall-clock reading cannot see.
+#
+# `EQUIV_TARGET_MS` is lowered because an allocation count needs no signal to
+# separate -- it is exact -- so the gate does not spend a second per row
+# building one. Four modes, well under two seconds.
+./bin/flint :src bench/progs :fn equiv/main :out out/equiv-diag.wasm > /dev/null 2>&1 || fail "build equiv"
+EQUIV_TARGET_MS=25 node bench/equiv.mjs 2000 vec noshare hash-bigvec set-member \
+  > /tmp/flint-equiv.out 2>&1 || { cat /tmp/flint-equiv.out; fail "bench/equiv.mjs"; }
+grep -E "^  (vec|noshare|hash-bigvec|set-member) " /tmp/flint-equiv.out | sed 's/^/  /'
+awk '/^  (vec|noshare|hash-bigvec|set-member) /{
+       a = $9 + 0; if (a < 0) a = -a;
+       if (a >= 0.5) { print "  FAIL " $1 " allocates " $9 " per operation"; bad = 1 }
+       else seen++ }
+     END{ if (bad) exit 1;
+          if (seen != 4) { print "  FAIL only " seen " of 4 equality rows were read"; exit 1 }
+          else print "  ok   = and hash allocate nothing, on " seen " shapes" }' \
+  /tmp/flint-equiv.out || fail "= or hash started allocating per element"
 ./bin/build-units > /dev/null 2>&1 || fail "build-units"
 
 echo

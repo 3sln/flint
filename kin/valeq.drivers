@@ -83,6 +83,15 @@ impl Rt {
         int((self.slot(t, 1).0 * 100 + i as u64) as i64)
     }
     fn vec_count(&mut self, v: Value) -> u32 { self.slot(v, 0).0 as u32 }
+    // INDEXED READ, agreeing with the seq walk below by construction. The
+    // probe's `first` gives `0xE000 + k` for a seq with `k` left, so element
+    // `i` of a vector of length `n` is `0xE000 + (n - i)`. Spelling it any
+    // other way would compare the indexed path against different data than
+    // the seq path and prove nothing about the two agreeing.
+    fn vec_nth(&mut self, v: Value, i: u32, dflt: Value) -> Value {
+        let n = self.vec_count(v);
+        if i >= n { dflt } else { Value(0xE000 + (n - i) as u64) }
+    }
     // A seq is a COUNTDOWN in the value: `0xC000 + k` has `k` left, and its
     // first element is `0xE000 + k` so two seqs of the same length agree.
     fn seq(&mut self, c: Value) -> Value {
@@ -316,7 +325,14 @@ fn main() {
     static boolean mapEq(Rt rt, long a, long b) { return Maps.eq(rt, a, b); }
     static final class Sets { static boolean eq(Rt rt, long a, long b) { return rt.seteq; } }
     static boolean schemaEq(Rt rt, long a, long b) { return rt.scheq; }
-    static final class Vec { static int count(Rt rt, long v) { return (int) rt.slot(v, 0); } }
+    static final class Vec {
+        static int count(Rt rt, long v) { return (int) rt.slot(v, 0); }
+        static long nth(Rt rt, long v, int i, long dflt) {
+            int n = count(rt, v);
+            return i >= n ? dflt : 0xE000L + (n - i);
+        }
+    }
+    static long vecNth(Rt rt, long v, int i, long dflt) { return Vec.nth(rt, v, i, dflt); }
     static long seq(Rt rt, long c) {
         int n = (Val.isHeap(c) && ty(rt.gc.sp, Val.asHeap(c)) == TY_VEC)
                 ? (int) rt.slot(c, 0) : rt.seqn;
@@ -522,7 +538,14 @@ namespace Flint.Rt {
     internal static bool TreeEq(Rt rt, long a, long b) { return rt.treeq; }
     internal static bool BEq(Rt rt, long a, long b) { return rt.beq; }
     internal static bool SchemaEq(Rt rt, long a, long b) { return rt.scheq; }
-    internal static class Vec { internal static int Count(Rt rt, long v) { return (int) rt.Slot(v, 0); } }
+    internal static class Vec {
+        internal static int Count(Rt rt, long v) { return (int) rt.Slot(v, 0); }
+        internal static long Nth(Rt rt, long v, int i, long dflt) {
+            int n = Count(rt, v);
+            return i >= n ? dflt : 0xE000L + (n - i);
+        }
+    }
+    internal static long VecNth(Rt rt, long v, int i, long dflt) { return Vec.Nth(rt, v, i, dflt); }
     internal static long Seq(Rt rt, long c) {
         int n = (Val.IsHeap(c) && Obj.Ty(rt.gc.sp, Val.AsHeap(c)) == Obj.TyVec)
                 ? (int) rt.Slot(c, 0) : rt.seqn;

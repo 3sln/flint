@@ -119,7 +119,14 @@
 ;; this one is what the run before this commit did, and it failed here, in a
 ;; file about two builds agreeing, for a reason that has nothing to do with
 ;; two builds agreeing.
-(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 316000))
+;;
+;; MOVED AGAIN 2026-09-10, to 318 000, for a plain vector ceasing to be walked
+;; as a seq by `=` and by `hash`: 1 934 bytes in two steps, decomposed in the
+;; comment above the other floor along with the speedups and the per-element
+;; allocations it removes. And the warning above stopped being hypothetical a
+;; second time -- this floor is where that change was caught, after the one in
+;; `test/threads.clj` had already been raised and this one had not.
+(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 318000))
 
 ;; --- absent, by name -------------------------------------------------------
 (doseq [sym ["flint_snapshot_capture" "flint_snapshot_restore" "flint_snapshot_ptr"

@@ -37,11 +37,66 @@ impl Rt {
     /// CHARGED PER ELEMENT. `=` on two big vectors is ONE bytecode instruction
     /// and O(n) work, and a budget that does not see that does not bound the
     /// thing worth bounding (`0009`).
+    /// TWO PLAIN VECTORS ARE COMPARED BY INDEX, not by walking two seqs.
+    /// 
+    /// MEASURED, which is the only reason this exists. `bench/equiv.mjs` reports
+    /// `=` on two 20 000-element vectors at 1.33ms and FORTY THOUSAND
+    /// allocations -- two per element, one seq cell per side -- against `=` on
+    /// two 20 000-entry maps at 0.42ms and ZERO. `mapeq` was given a structural
+    /// comparison and this was left on the generic seq path, so the indexable
+    /// case was the slow one.
+    /// 
+    /// The count check above already establishes both sides are plain vectors,
+    /// so the fast path was one branch away from where the code already stood.
+    /// 
+    /// GAS IS UNCHANGED, and that is the whole difficulty. The seq loop charges
+    /// ONE AT THE TOP OF EVERY ITERATION INCLUDING THE LAST, the one that finds
+    /// both sides nil -- so equal vectors cost n+1 and a pair differing at index
+    /// k costs k+1. A pre-charge of n+1 would be cheaper and would diverge on
+    /// every early exit. So this charges inside the loop and once more on the
+    /// way out, which reproduces both numbers exactly. `0009` says gas agrees to
+    /// the instruction, and a faster path that quietly reprices is not a
+    /// speedup, it is the same defect this repo has already paid for once.
+    /// 
+    /// ROOTED LIKE THE SEQ PATH, for the same reason: `val-eq` materialises a
+    /// row ref as a map, so both vectors are re-read from the root stack after
+    /// every element comparison (`0031`).
+    pub(crate) fn vec_eq_indexed(&mut self, a: Value, b: Value) -> bool {
+        let base: usize = self.mark();
+        let ai: usize = self.push(a);
+        let bi: usize = self.push(b);
+        let n: u32 = self.vec_count(a);
+        let mut out: bool;
+        let mut i: u32;
+        out = true;
+        i = 0;
+        loop {
+            if i == n {
+                self.charge_work(1 as u64);
+                break;
+            }
+            self.charge_work(1 as u64);
+            let ea: Value = self.vec_nth(self.r(ai), i, NIL);
+            let ei: usize = self.push(ea);
+            let eb: Value = self.vec_nth(self.r(bi), i, NIL);
+            let ebi: usize = self.push(eb);
+            let same: bool = self.val_eq(self.r(ei), self.r(ebi));
+            self.pop_to(ei);
+            if !same {
+                out = false;
+                break;
+            }
+            i += 1;
+        }
+        self.pop_to(base);
+        return out;
+    }
     pub(crate) fn seq_eq(&mut self, a: Value, b: Value) -> bool {
         if self.is_plain_vector(a) && self.is_plain_vector(b) {
             if self.vec_count(a) != self.vec_count(b) {
                 return false;
             }
+            return self.vec_eq_indexed(a, b);
         }
         let base: usize = self.mark();
         let ai: usize = self.push(a);

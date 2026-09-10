@@ -87,6 +87,15 @@ impl Rt {
         } else { self.seqn };
         if n == 0 { NIL } else { Value(0xC000 + n as u64) }
     }
+    fn vec_count(&mut self, v: Value) -> u32 { self.slots[v.0 as usize][1] as u32 }
+    // AGREEING WITH `first` BY CONSTRUCTION: the seq walk sees fixnum(n - i)
+    // at index `i`, so the indexed read gives the same. Spelling it otherwise
+    // would hash different data down the two paths and prove nothing about
+    // them agreeing.
+    fn vec_nth(&mut self, v: Value, i: u32, dflt: Value) -> Value {
+        let n = self.vec_count(v);
+        if i >= n { dflt } else { Value::fixnum((n - i) as i64) }
+    }
     fn first(&mut self, s: Value) -> Value { Value::fixnum((s.0 - 0xC000) as i64) }
     fn next(&mut self, s: Value) -> Value {
         if s.0 == 0xC001 { NIL } else { Value(s.0 - 1) }
@@ -307,6 +316,14 @@ fn main() {
                 ? (int) rt.slots[(int) c][1] : rt.seqn;
         return n == 0 ? NIL : 0xC000L + n;
     }
+    static final class Vec {
+        static int count(Rt rt, long v) { return (int) rt.slots[(int) v][1]; }
+        static long nth(Rt rt, long v, int i, long dflt) {
+            int n = count(rt, v);
+            return i >= n ? dflt : Val.fixnum(n - i);
+        }
+    }
+    static long vecNth(Rt rt, long v, int i, long dflt) { return Vec.nth(rt, v, i, dflt); }
     static long first(Rt rt, long s) { return Val.fixnum(s - 0xC000L); }
     static long next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
 --java
@@ -512,6 +529,14 @@ namespace Flint.Rt {
     }
     internal static long First(Rt rt, long s) { return Val.Fixnum(s - 0xC000L); }
     internal static long Next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
+    internal static class Vec {
+        internal static int Count(Rt rt, long v) { return (int) rt.slots[(int) v, 1]; }
+        internal static long Nth(Rt rt, long v, int i, long dflt) {
+            int n = Count(rt, v);
+            return i >= n ? dflt : Val.Fixnum(n - i);
+        }
+    }
+    internal static long VecNth(Rt rt, long v, int i, long dflt) { return Vec.Nth(rt, v, i, dflt); }
 --csharp
     public static void Main() {
         Rt rt = new Rt();

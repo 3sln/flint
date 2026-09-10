@@ -18,6 +18,67 @@ use crate::kgen::rt::pike::*;
 use crate::kgen::rt::casetable::*;
 
 impl Rt {
+    /// A PLAIN VECTOR IS HASHED BY INDEX, not by walking a seq.
+    /// 
+    /// The same defect `kin/valeq.kin` carries the fix for, in the sibling
+    /// function, found by the same benchmark. `bench/equiv.mjs` reported
+    /// `hash-vec` at TWO ALLOCATIONS for a two-element vector -- one seq cell
+    /// per element -- on an operation that should allocate nothing.
+    /// 
+    /// THE CACHE HIDES IT AND DOES NOT REMOVE IT. A vector used repeatedly as a
+    /// map key hashes once, which is what the cache above is for. But the FIRST
+    /// hash still walks, and a vector hashed exactly once -- every element going
+    /// into a set, every key inserted rather than looked up -- never reaches the
+    /// cache at all. Those are the cases that allocate per element.
+    /// 
+    /// `has-hash-slot` is already the test for `is this a plain vector`, since
+    /// only a vector has somewhere to cache. So this needed no new predicate.
+    /// 
+    /// GAS IS UNCHANGED, and the tick order is not the same as `seq-eq`'s. This
+    /// loop checks the END FIRST and charges after, so a vector of n elements
+    /// ticks n times and not n+1 -- the final round that finds the seq empty
+    /// breaks before charging. `n` is both the index and the count ticked so
+    /// far, exactly as the seq version uses it, and STARVATION returns 0 with
+    /// nothing written to the cache, which is the behaviour that matters: a
+    /// half-computed hash must never be cached.
+    /// 
+    /// THE CACHE WRITE RE-READS `v` FROM THE ROOT STACK, because `hash-value`
+    /// on an element allocates -- a row ref materialises as a map -- and a raw
+    /// address held across it is `0031`.
+    pub(crate) fn hash_vec_indexed(&mut self, v: Value) -> u32 {
+        let base: usize = self.mark();
+        let vi: usize = self.push(v);
+        let total: u32 = self.vec_count(v);
+        let mut acc: u32;
+        let mut n: u32;
+        let mut starved: bool;
+        acc = 1;
+        n = 0;
+        starved = false;
+        loop {
+            if n == total {
+                break;
+            }
+            if !self.charge_tick((n as i64) as u64, 1 as u64, "hash") {
+                starved = true;
+                break;
+            }
+            let f: Value = self.vec_nth(self.r(vi), n, NIL);
+            let fi: usize = self.push(f);
+            let h: u32 = self.hash_value(self.r(fi));
+            self.pop_to(fi);
+            acc = ordered_step(acc, h);
+            n += 1;
+        }
+        if starved {
+            self.pop_to(base);
+            return 0;
+        }
+        let out: u32 = mix_coll_hash(acc, n);
+        self.set(self.r(vi), V_HASH, Value::fixnum((out as i64) as i64));
+        self.pop_to(base);
+        return out;
+    }
     /// Is `v` a VECTOR, strictly? Only a vector has a slot to cache in.
     pub(crate) fn has_hash_slot(&self, v: Value) -> bool {
         if !v.is_heap() {
@@ -37,6 +98,9 @@ impl Rt {
             if cached.is_fixnum() {
                 return cached.as_fixnum() as u32;
             }
+        }
+        if self.has_hash_slot(v) {
+            return self.hash_vec_indexed(v);
         }
         let base: usize = self.mark();
         let vi: usize = self.push(v);

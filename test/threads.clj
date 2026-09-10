@@ -175,6 +175,48 @@
 ;; hashes, one collecting entries and one collecting keys -- and they cannot
 ;; share, because the only difference is what to do per entry, and passing
 ;; that IS a closure. Four walks where two would do is most of the 2 076.
+;; IT MOVED AGAIN, by 1 934 bytes, when A PLAIN VECTOR STOPPED BEING WALKED AS
+;; A SEQ -- once for `=` and once for `hash` (`kin/valeq.kin`,
+;; `kin/valhash.kin`). As with the 2 076 above, the number is the price of a
+;; decision and not drift, so here is the decision.
+;;
+;; WHAT IT COSTS: 315 386 -> 317 320 on this floor, which is 0.61%, in two
+;; steps of 1 093 and 841. It lands on EVERY module including this one --
+;; `(defn main [_] "nothing")` -- because `=` and `hash` are in the floor and
+;; now reach `vec-nth`'s trie descent. A program that never touches a vector
+;; still pays. The second step is smaller than the first because the descent
+;; was already linked by then; the two fixes share it.
+;;
+;; WHAT IT BUYS, measured by `bench/equiv.mjs`:
+;;
+;;     operation              before        after     allocations
+;;     = on 32 elements      2 061 ns      330 ns       64 -> 0
+;;     = on 2 000          127 005 ns   20 098 ns    4 000 -> 0
+;;     = on 20 000       1 273 190 ns  203 818 ns   40 000 -> 0
+;;     hash of 2                80 ns       13 ns        2 -> 0
+;;     hash of 2 000        74 927 ns   19 181 ns    2 000 -> 0
+;;
+;; The clock is the smaller half. The seq walk allocated a cell PER ELEMENT --
+;; two for `=`, one per side, and one for `hash` -- so comparing two
+;; 32-element vectors, an ordinary thing to do, allocated 64 objects. That is
+;; the shape `bench/progs/colls.cljc` exists to catch and wall-clock cannot
+;; see, and in a 128 MiB isolate it is entirely real.
+;;
+;; WHY IT WAS THERE AT ALL: `mapeq` was given a structural comparison and the
+;; SEQUENTIAL paths were left generic, so the INDEXABLE case was the slow one
+;; -- `=` on 20 000 vector elements cost 1.27ms against 0.42ms for a
+;; 20 000-entry MAP. For `hash` the cache hid it: a vector used repeatedly as
+;; a map key hashes once. But the first hash still walked, and a vector hashed
+;; exactly once -- every element going into a set -- never reached the cache.
+;;
+;; NEITHER GATE HERE WOULD HAVE CAUGHT IT, which is the part worth keeping.
+;; Both operations were correct, cross-runtime identical and inside every
+;; budget; they were only slow and allocating, and nothing in the tree was
+;; asking that question until `bench/equiv.mjs` existed.
+;;
+;; TO REVERSE IT: drop `vec-eq-indexed` from `kin/valeq.kin` and
+;; `hash-vec-indexed` from `kin/valhash.kin`, and put this number back to
+;; 316 000. The gate is the only thing holding the decision.
 (check-that "the floor is within the budget 0009, 0011, specialisation, bytes and call chose"
 ;; TABLES (`doc/decisions/0026`) cost 22 857 bytes here when they landed --
 ;; 287 854 shipped against 264 997 -- and then gave 15 832 of it back, which is
@@ -252,7 +294,7 @@
 ;; slice, which is what makes the rooting above expressible in all three at
 ;; once. It is a fixed cost, and the next generated caller of a value pays none
 ;; of it.
-            (< pure-size 316000))
+            (< pure-size 318000))
 
 ;; RE-BASELINED AGAIN, and this one is a decision rather than a drift:
 ;; 300 281 against 280 781, and 18 917 of it is ONE ARM IN THE WIRE CODEC.

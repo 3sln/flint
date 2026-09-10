@@ -20,6 +20,7 @@ using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 using static global::_3sln.Flint.Kgen.Rt.Seqwalk;
 using static global::_3sln.Flint.Kgen.Rt.Tablemeta;
 using static global::_3sln.Flint.Kgen.Rt.Tableref;
+using static global::_3sln.Flint.Kgen.Rt.Vecread;
 
 public static class Valeq {
     /// Is `v` a VECTOR, strictly -- not a map entry, which is vector-LIKE.
@@ -41,11 +42,66 @@ public static class Valeq {
     /// CHARGED PER ELEMENT. `=` on two big vectors is ONE bytecode instruction
     /// and O(n) work, and a budget that does not see that does not bound the
     /// thing worth bounding (`0009`).
+    /// TWO PLAIN VECTORS ARE COMPARED BY INDEX, not by walking two seqs.
+    /// 
+    /// MEASURED, which is the only reason this exists. `bench/equiv.mjs` reports
+    /// `=` on two 20 000-element vectors at 1.33ms and FORTY THOUSAND
+    /// allocations -- two per element, one seq cell per side -- against `=` on
+    /// two 20 000-entry maps at 0.42ms and ZERO. `mapeq` was given a structural
+    /// comparison and this was left on the generic seq path, so the indexable
+    /// case was the slow one.
+    /// 
+    /// The count check above already establishes both sides are plain vectors,
+    /// so the fast path was one branch away from where the code already stood.
+    /// 
+    /// GAS IS UNCHANGED, and that is the whole difficulty. The seq loop charges
+    /// ONE AT THE TOP OF EVERY ITERATION INCLUDING THE LAST, the one that finds
+    /// both sides nil -- so equal vectors cost n+1 and a pair differing at index
+    /// k costs k+1. A pre-charge of n+1 would be cheaper and would diverge on
+    /// every early exit. So this charges inside the loop and once more on the
+    /// way out, which reproduces both numbers exactly. `0009` says gas agrees to
+    /// the instruction, and a faster path that quietly reprices is not a
+    /// speedup, it is the same defect this repo has already paid for once.
+    /// 
+    /// ROOTED LIKE THE SEQ PATH, for the same reason: `val-eq` materialises a
+    /// row ref as a map, so both vectors are re-read from the root stack after
+    /// every element comparison (`0031`).
+    internal static bool VecEqIndexed(Rt rt, long a, long b) {
+        int @base = rt.Mark();
+        int ai = rt.Push(a);
+        int bi = rt.Push(b);
+        int n = Vec.Count(rt, a);
+        bool @out;
+        int i;
+        @out = true;
+        i = 0;
+        for (;;) {
+            if (i == n) {
+                rt.ChargeWork(1);
+                break;
+            }
+            rt.ChargeWork(1);
+            long ea = VecNth(rt, rt.R(ai), i, Val.Nil);
+            int ei = rt.Push(ea);
+            long eb = VecNth(rt, rt.R(bi), i, Val.Nil);
+            int ebi = rt.Push(eb);
+            bool same = ValEq(rt, rt.R(ei), rt.R(ebi));
+            rt.PopTo(ei);
+            if (!same) {
+                @out = false;
+                break;
+            }
+            i += 1;
+        }
+        rt.PopTo(@base);
+        return @out;
+    }
     internal static bool SeqEq(Rt rt, long a, long b) {
         if (IsPlainVector(rt, a) && IsPlainVector(rt, b)) {
             if (Vec.Count(rt, a) != Vec.Count(rt, b)) {
                 return false;
             }
+            return VecEqIndexed(rt, a, b);
         }
         int @base = rt.Mark();
         int ai = rt.Push(a);

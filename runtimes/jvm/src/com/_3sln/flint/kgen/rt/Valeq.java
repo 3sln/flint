@@ -18,6 +18,7 @@ import static com._3sln.flint.kgen.rt.Ropemeas.*;
 import static com._3sln.flint.kgen.rt.Seqwalk.*;
 import static com._3sln.flint.kgen.rt.Tablemeta.*;
 import static com._3sln.flint.kgen.rt.Tableref.*;
+import static com._3sln.flint.kgen.rt.Vecread.*;
 
 public final class Valeq {
     /// Is `v` a VECTOR, strictly -- not a map entry, which is vector-LIKE.
@@ -39,11 +40,66 @@ public final class Valeq {
     /// CHARGED PER ELEMENT. `=` on two big vectors is ONE bytecode instruction
     /// and O(n) work, and a budget that does not see that does not bound the
     /// thing worth bounding (`0009`).
+    /// TWO PLAIN VECTORS ARE COMPARED BY INDEX, not by walking two seqs.
+    /// 
+    /// MEASURED, which is the only reason this exists. `bench/equiv.mjs` reports
+    /// `=` on two 20 000-element vectors at 1.33ms and FORTY THOUSAND
+    /// allocations -- two per element, one seq cell per side -- against `=` on
+    /// two 20 000-entry maps at 0.42ms and ZERO. `mapeq` was given a structural
+    /// comparison and this was left on the generic seq path, so the indexable
+    /// case was the slow one.
+    /// 
+    /// The count check above already establishes both sides are plain vectors,
+    /// so the fast path was one branch away from where the code already stood.
+    /// 
+    /// GAS IS UNCHANGED, and that is the whole difficulty. The seq loop charges
+    /// ONE AT THE TOP OF EVERY ITERATION INCLUDING THE LAST, the one that finds
+    /// both sides nil -- so equal vectors cost n+1 and a pair differing at index
+    /// k costs k+1. A pre-charge of n+1 would be cheaper and would diverge on
+    /// every early exit. So this charges inside the loop and once more on the
+    /// way out, which reproduces both numbers exactly. `0009` says gas agrees to
+    /// the instruction, and a faster path that quietly reprices is not a
+    /// speedup, it is the same defect this repo has already paid for once.
+    /// 
+    /// ROOTED LIKE THE SEQ PATH, for the same reason: `val-eq` materialises a
+    /// row ref as a map, so both vectors are re-read from the root stack after
+    /// every element comparison (`0031`).
+    public static boolean vecEqIndexed(Rt rt, long a, long b) {
+        int base = rt.mark();
+        int ai = rt.push(a);
+        int bi = rt.push(b);
+        int n = Vec.count(rt, a);
+        boolean out;
+        int i;
+        out = true;
+        i = 0;
+        for (;;) {
+            if (i == n) {
+                rt.chargeWork(1);
+                break;
+            }
+            rt.chargeWork(1);
+            long ea = vecNth(rt, rt.r(ai), i, Val.NIL);
+            int ei = rt.push(ea);
+            long eb = vecNth(rt, rt.r(bi), i, Val.NIL);
+            int ebi = rt.push(eb);
+            boolean same = valEq(rt, rt.r(ei), rt.r(ebi));
+            rt.popTo(ei);
+            if (!same) {
+                out = false;
+                break;
+            }
+            i += 1;
+        }
+        rt.popTo(base);
+        return out;
+    }
     public static boolean seqEq(Rt rt, long a, long b) {
         if (isPlainVector(rt, a) && isPlainVector(rt, b)) {
             if (Vec.count(rt, a) != Vec.count(rt, b)) {
                 return false;
             }
+            return vecEqIndexed(rt, a, b);
         }
         int base = rt.mark();
         int ai = rt.push(a);

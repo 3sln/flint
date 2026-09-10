@@ -150,6 +150,39 @@ MAKING IT EXACT means giving them separate builtins, which costs an entry in
 the native slot table and the ABI. That is a lot to spend on one word, and it
 is written in the source rather than left as a puzzle.
 
+#### A plain vector was walked as a seq by `=` and by `hash` -- FIXED
+
+Both found by `bench/equiv.mjs`, which exists because `doc/goals/equiv-hash.md`
+said its own first implementation step was a baseline and not an
+implementation. The baseline found two defects before the design it was taken
+for got its first line of code.
+
+`mapeq` had been given a structural comparison; the SEQUENTIAL paths were left
+generic. So the INDEXABLE case was the slow one -- `=` on 20 000 vector
+elements cost 1.27ms against 0.42ms for a 20 000-entry MAP -- and both
+allocated a seq cell per element, two per element for `=` and one for `hash`.
+
+| operation | before | after | allocations |
+| --- | --- | --- | --- |
+| `=` on 32 | 2 061 ns | 330 ns | 64 -> 0 |
+| `=` on 20 000 | 1 273 190 ns | 203 818 ns | 40 000 -> 0 |
+| `hash` of 2 000 | 74 927 ns | 19 181 ns | 2 000 -> 0 |
+
+WHY NOTHING CAUGHT IT, which is the part that generalises. Both operations
+were CORRECT, identical across all four runtimes, and inside every size and
+gas budget. `check-builtin-coverage` reported `=` as reached the whole time.
+They were only slow and allocating, and no gate was asking that question.
+This is "reached is not exercised" in a third form: not a wrong answer, not an
+unmetered path, but a right answer computed wastefully.
+
+There is now a gate. `bin/test` asserts `=` and `hash` allocate NOTHING on
+four shapes, and it was verified to FAIL against the pre-fix code rather than
+merely to pass against the fixed code.
+
+COST: 1 934 bytes on the module floor, 0.61%, which moved two size budgets.
+Priced and reversible -- `test/threads.clj` carries the decomposition and the
+one-line reversal.
+
 #### Gas diverges on ropes, and `0009` says it must not
 
 MEASURED, then reverted, because the fix is a decision rather than a patch.

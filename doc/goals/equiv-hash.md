@@ -140,6 +140,104 @@ lookup moves to attach time and the node bit keeps it off the descent.
   the same way, so this looks like one change rather than three. Unverified.
 * **What `hash` does for a value whose `Hash` throws.** `=` has an answer
   (propagate); `hash` is called from inside bucket selection and has less room.
-* **No benchmark exists.** Every cost claim in §2 and §3 is read rather than
-  run. The first implementation step is a benchmark that can show the
-  unextended path is unchanged, not an implementation.
+* ~~**No benchmark exists.**~~ ANSWERED for wasm -- see §7. It is still
+  unanswered for the two ports, which is the same gap as the third bullet
+  above.
+
+## 7. The baseline, which now exists
+
+`bench/progs/equiv.cljc` and `bench/equiv.mjs`, taken BEFORE the header bit, on
+wasm at n=20 000. §6's last bullet asked for exactly this and it is now answered
+for one runtime.
+
+| mode | per op | what it is |
+| --- | --- | --- |
+| `reject-hi` | 75 ns | root count mismatch, O(1) -- the floor |
+| `arraymap` | 176 ns | the tier below CHAMP, and most maps in a real program |
+| `reject-shared` | 533 ns | rejection after a ONE-PATH descent |
+| `nested` | 744 ns | 12 levels deep, two entries per level |
+| `share` | 947 ns | 20 000 entries, one path differing -- the short-circuit |
+| `identical` | 73 ns | same pointer |
+| `fixnum` | 73 ns | returns before the header word is read |
+| `reject-deep` | 65 us | shares nothing, differs at one leaf |
+| `noshare` | 420 us | shares nothing, fully equal -- the pairwise walk |
+
+REPEATABLE TO UNDER 2% on an unchanged tree, which took two attempts to get.
+The first version used a fixed repetition count for every mode, and the modes
+span four orders of magnitude; a 2ms signal sitting on a 50ms map build moved
+`share` between 477ns and 1119ns across two runs of identical code. The driver
+now calibrates per mode and prints the base arm beside the signal, so a row
+that did not separate says so instead of printing a number the next run
+contradicts.
+
+**ZERO ALLOCATIONS on every row.** That is the fact the design should be held
+to: an implementation that allocates per comparison is visible here even where
+the clock is not.
+
+WHAT THE ROWS SAY ABOUT THE DESIGN. The 880x between `share` and `noshare` is
+the whole argument for the node bit, and it is bigger than the 840us -> 1.2us
+that has been quoted at this design from `mapeq.kin`. But note WHICH exits are
+actually at risk: `share`, `reject-hi` and `reject-shared` all resolve on
+pointer or bitmap comparison and never read a leaf header, so the bit cannot
+reach them. `noshare` and `reject-deep` are the rows to watch, and `nested` is
+where "once at the root" would become "once per level".
+
+NOT COVERED, and left uncovered on purpose rather than faked: collision nodes
+(engineering a collision needs flint's hash rather than a guess, and a mode
+that believes it collides and does not would report a clean baseline for a path
+never taken), and the two ports (this measures wasm; §6's third bullet stays
+open).
+
+### What the baseline found on its way to existing
+
+A benchmark's first job is to be wrong about something. This one was wrong
+twice, and the second time it was the RUNTIME that was wrong.
+
+**`reject-lo` was mislabelled.** It was written as "the worst case" -- two maps
+differing at the last leaf, forcing a walk to the bottom -- and measured 40ns,
+faster than the O(1) root rejection. It was built by `assoc` from the same map,
+so it shared every node but one path and the walk pruned the rest. It does
+descend to the bottom; down ONE path. Renamed `reject-shared`, and a real
+`reject-deep` added beside it.
+
+**`=` ON TWO VECTORS WALKED TWO SEQS.** 20 000 elements cost 1.27ms and FORTY
+THOUSAND allocations -- two per element, one seq cell per side -- against
+0.42ms and ZERO for a 20 000-entry MAP. `mapeq` had been given a structural
+comparison and `seq-eq` was left generic, so the indexable case was the slow
+one. `valhash` had already made this move for hashing, which is why hashing a
+vector was an indexed loop while comparing two was not.
+
+**AND `hash` OF A VECTOR DID THE SAME THING**, found by the same benchmark one
+row later: two allocations to hash a TWO-ELEMENT vector. The cache hid it --
+a vector used repeatedly as a map key hashes once -- but the first hash still
+walked, and a vector hashed exactly once, every element going into a set,
+never reaches the cache at all.
+
+Fixed as `vec-eq-indexed` in `kin/valeq.kin` and `hash-vec-indexed` in
+`kin/valhash.kin`:
+
+| operation | before | after | allocations |
+| --- | --- | --- | --- |
+| `=` on 32 elements | 2 061 ns | 330 ns | 64 -> 0 |
+| `=` on 2 000 | 127 005 ns | 20 098 ns | 4 000 -> 0 |
+| `=` on 20 000 | 1 273 190 ns | 203 818 ns | 40 000 -> 0 |
+| `hash` of 2 | 80 ns | 13 ns | 2 -> 0 |
+| `hash` of 2 000 | 74 927 ns | 19 181 ns | 2 000 -> 0 |
+
+GAS IS UNCHANGED TO THE INSTRUCTION, which is the whole difficulty, and the
+two functions needed DIFFERENT tick counts. `seq-eq` charges at the top of
+every iteration INCLUDING the last one that finds both sides nil, so equal
+vectors cost n+1 and a pair differing at index k costs k+1. `hash-ordered`
+checks the end FIRST and charges after, so it ticks n and not n+1. A
+pre-charge would be cheaper than either and would diverge on every early
+exit. Both were verified by diffing probe output against the pre-change code
+rather than by reading.
+
+It costs 1 934 bytes on the module floor, priced and recorded in
+`test/threads.clj`, which moved two budgets to hold it.
+
+This is the argument for taking baselines before implementations rather than
+after. The defect had been in all three runtimes since vectors were written,
+`check-builtin-coverage` reported `=` as reached, and the conformance suite was
+green on it -- because it was never WRONG, only slow and allocating. Nothing in
+the tree was asking the question this file asks.

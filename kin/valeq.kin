@@ -31,6 +31,7 @@
             [flint.rt.tableref :refer [table-ref]]
             [flint.rt.sets :refer [set-eq]]
             [flint.rt.vector :refer [vec-count]]
+            [flint.rt.vecread :refer [vec-nth]]
             [flint.rt.eq :refer [category]]
             [flint.rt.seqwalk :refer [seq first next]]
             [flint.rt.byteeq :refer [b-eq]]
@@ -59,10 +60,62 @@
      "CHARGED PER ELEMENT. `=` on two big vectors is ONE bytecode instruction"
      "and O(n) work, and a budget that does not see that does not bound the"
      "thing worth bounding (`0009`).")
+(doc "TWO PLAIN VECTORS ARE COMPARED BY INDEX, not by walking two seqs."
+     ""
+     "MEASURED, which is the only reason this exists. `bench/equiv.mjs` reports"
+     "`=` on two 20 000-element vectors at 1.33ms and FORTY THOUSAND"
+     "allocations -- two per element, one seq cell per side -- against `=` on"
+     "two 20 000-entry maps at 0.42ms and ZERO. `mapeq` was given a structural"
+     "comparison and this was left on the generic seq path, so the indexable"
+     "case was the slow one."
+     ""
+     "The count check above already establishes both sides are plain vectors,"
+     "so the fast path was one branch away from where the code already stood."
+     ""
+     "GAS IS UNCHANGED, and that is the whole difficulty. The seq loop charges"
+     "ONE AT THE TOP OF EVERY ITERATION INCLUDING THE LAST, the one that finds"
+     "both sides nil -- so equal vectors cost n+1 and a pair differing at index"
+     "k costs k+1. A pre-charge of n+1 would be cheaper and would diverge on"
+     "every early exit. So this charges inside the loop and once more on the"
+     "way out, which reproduces both numbers exactly. `0009` says gas agrees to"
+     "the instruction, and a faster path that quietly reprices is not a"
+     "speedup, it is the same defect this repo has already paid for once."
+     ""
+     "ROOTED LIKE THE SEQ PATH, for the same reason: `val-eq` materialises a"
+     "row ref as a map, so both vectors are re-read from the root stack after"
+     "every element comparison (`0031`).")
+(defn ^:method ^Bool vec-eq-indexed [^:mut ^Rt rt ^Value a ^Value b]
+  (let [^RootIx base (mark rt)
+        ^RootIx ai (push rt a)
+        ^RootIx bi (push rt b)
+        ^I32 n (vec-count rt a)]
+    (local ^:mut ^Bool out)
+    (local ^:mut ^I32 i)
+    (set out true)
+    (set i 0)
+    (forever
+      (do (if (== i n)
+            (do (charge-work rt 1)
+                (break)))
+          (charge-work rt 1)
+          (let [^Value ea (vec-nth rt (r rt ai) i NIL)
+                ^RootIx ei (push rt ea)
+                ^Value eb (vec-nth rt (r rt bi) i NIL)
+                ^RootIx ebi (push rt eb)
+                ^Bool same (val-eq rt (r rt ei) (r rt ebi))]
+            (pop-to rt ei)
+            (if (not same)
+              (do (set out false)
+                  (break))))
+          (set i (+ i 1))))
+    (pop-to rt base)
+    (return out)))
+
 (defn ^:method ^Bool seq-eq [^:mut ^Rt rt ^Value a ^Value b]
   (if (and (is-plain-vector rt a) (is-plain-vector rt b))
-    (if (!= (vec-count rt a) (vec-count rt b))
-      (return false)))
+    (do (if (!= (vec-count rt a) (vec-count rt b))
+          (return false))
+        (return (vec-eq-indexed rt a b))))
   (let [^RootIx base (mark rt)
         ^RootIx ai (push rt a)
         ^RootIx bi (push rt b)

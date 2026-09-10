@@ -37,9 +37,68 @@
             [flint.rt.names :refer [symbol-hash]]
             [flint.rt.bytehash :refer [b-hash]]
             [flint.rt.ropeflat :refer [rope-hash]]
-            [flint.rt.seqwalk :refer [seq first next]]))
+            [flint.rt.seqwalk :refer [seq first next]]
+            [flint.rt.vector :refer [vec-count]]
+            [flint.rt.vecread :refer [vec-nth]]))
 
 (declarefn ^:pub hash-value)
+
+(doc "A PLAIN VECTOR IS HASHED BY INDEX, not by walking a seq."
+     ""
+     "The same defect `kin/valeq.kin` carries the fix for, in the sibling"
+     "function, found by the same benchmark. `bench/equiv.mjs` reported"
+     "`hash-vec` at TWO ALLOCATIONS for a two-element vector -- one seq cell"
+     "per element -- on an operation that should allocate nothing."
+     ""
+     "THE CACHE HIDES IT AND DOES NOT REMOVE IT. A vector used repeatedly as a"
+     "map key hashes once, which is what the cache above is for. But the FIRST"
+     "hash still walks, and a vector hashed exactly once -- every element going"
+     "into a set, every key inserted rather than looked up -- never reaches the"
+     "cache at all. Those are the cases that allocate per element."
+     ""
+     "`has-hash-slot` is already the test for `is this a plain vector`, since"
+     "only a vector has somewhere to cache. So this needed no new predicate."
+     ""
+     "GAS IS UNCHANGED, and the tick order is not the same as `seq-eq`'s. This"
+     "loop checks the END FIRST and charges after, so a vector of n elements"
+     "ticks n times and not n+1 -- the final round that finds the seq empty"
+     "breaks before charging. `n` is both the index and the count ticked so"
+     "far, exactly as the seq version uses it, and STARVATION returns 0 with"
+     "nothing written to the cache, which is the behaviour that matters: a"
+     "half-computed hash must never be cached."
+     ""
+     "THE CACHE WRITE RE-READS `v` FROM THE ROOT STACK, because `hash-value`"
+     "on an element allocates -- a row ref materialises as a map -- and a raw"
+     "address held across it is `0031`.")
+(defn ^:method ^U32 hash-vec-indexed [^:mut ^Rt rt ^Value v]
+  (let [^RootIx base (mark rt)
+        ^RootIx vi (push rt v)
+        ^I32 total (vec-count rt v)]
+    (local ^:mut ^U32 acc)
+    (local ^:mut ^I32 n)
+    (local ^:mut ^Bool starved)
+    (set acc 1)
+    (set n 0)
+    (set starved false)
+    (forever
+      (do (if (== n total)
+            (break))
+          (if (not (charge-tick rt (to-i64 n) 1 "hash"))
+            (do (set starved true)
+                (break)))
+          (let [^Value f (vec-nth rt (r rt vi) n NIL)
+                ^RootIx fi (push rt f)
+                ^U32 h (hash-value rt (r rt fi))]
+            (pop-to rt fi)
+            (set acc (ordered-step acc h)))
+          (set n (+ n 1))))
+    (if starved
+      (do (pop-to rt base)
+          (return 0)))
+    (let [^U32 out (mix-coll-hash acc n)]
+      (set-slot rt (r rt vi) V_HASH (fixnum (to-i64 out)))
+      (pop-to rt base)
+      (return out))))
 
 (doc "Is `v` a VECTOR, strictly? Only a vector has a slot to cache in.")
 (defn ^:method ^Bool has-hash-slot [^Rt rt ^Value v]
@@ -58,6 +117,8 @@
     (let [^Value cached (slot rt v V_HASH)]
       (if (is-fixnum rt cached)
         (return (to-i32 (as-fixnum cached))))))
+  (if (has-hash-slot rt v)
+    (return (hash-vec-indexed rt v)))
   (let [^RootIx base (mark rt)
         ^RootIx vi (push rt v)
         ^Value s0 (seq rt (r rt vi))
