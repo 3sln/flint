@@ -414,13 +414,24 @@ public static class Builtins {
                 // so `acc` was read, then `Seqs.Rest` and `Seqs.First`
                 // allocated, and `TAssoc` wrote through a forwarded pointer
                 // (`doc/decisions/0031`).
+                //
+                // AND THE ENTRY IS CHECKED, which it was not: `First` and
+                // `First (Rest ..)` of a value that is neither an entry nor a
+                // two-element vector are both nil, so `(into {} [7])` answered
+                // `{nil nil}` -- a corrupt map, silently.
                 int bas = rt.Mark();
                 int ai = rt.Push(v);
                 for (int i = 1; i < n; i++) {
-                    int ei = rt.Push(rt.VAt(at + i));
-                    long k = global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(ei));
+                    long e = rt.VAt(at + i);
+                    if (!(rt.IsHeapTy(e, Obj.TyMapentry) || rt.IsHeapTy(e, Obj.TyVec))) {
+                        rt.PopTo(bas);
+                        return rt.ThrowStr("IllegalArgumentException",
+                                           "conj! on a map wants a map entry");
+                    }
+                    int ei = rt.Push(e);
+                    long k = rt.SlotOrNth(rt.R(ei), 0);
                     int ki = rt.Push(k);
-                    long val = global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, global::_3sln.Flint.Kgen.Rt.Seqwalk.Rest(rt, rt.R(ei)));
+                    long val = rt.SlotOrNth(rt.R(ei), 1);
                     int vi2 = rt.Push(val);
                     rt.SetR(ai, Maptrans.TmapAssoc(rt, rt.R(ai), rt.R(ki), rt.R(vi2)));
                     rt.PopTo(ei);
@@ -489,6 +500,11 @@ public static class Builtins {
         Def("dissoc", (rt, at, n) => {
             long acc = rt.VAt(at);
             if (Val.IsNil(acc)) return Val.Nil;
+            // A NON-MAP IS A TYPE ERROR, not a fall-through. Three runtimes
+            // each answered something different for `(dissoc [1 2] 0)`.
+            if (!Mapcore.IsMap(rt, acc)) {
+                return rt.ThrowStr("ClassCastException", "cannot dissoc from " + rt.Describe(acc));
+            }
             int bas = rt.Mark();
             int ai = rt.Push(acc);
             for (int i = 1; i < n; i++) {
@@ -1162,6 +1178,9 @@ public static class Builtins {
         Def("disj", (rt, at, n) => {
             long acc = rt.VAt(at);
             if (Val.IsNil(acc)) return Val.Nil;
+            if (!Sets.IsSet(rt, acc)) {
+                return rt.ThrowStr("ClassCastException", "cannot disj from " + rt.Describe(acc));
+            }
             int bas = rt.Mark();
             int ai = rt.Push(acc);
             for (int i = 1; i < n; i++) rt.SetR(ai, Sets.Disj(rt, rt.R(ai), rt.VAt(at + i)));

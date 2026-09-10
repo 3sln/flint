@@ -448,13 +448,29 @@ public final class Builtins {
                 // is not a transient" -- type 1 being `TY_FWD` -- and only
                 // under enough allocation to collect, which is why nothing here
                 // had ever hit it.
+                //
+                // AND THE ENTRY IS CHECKED, which it was not. `first` and
+                // `first (rest ..)` of a value that is neither an entry nor a
+                // two-element vector are both `nil`, so `(into {} [7])`
+                // answered `{nil nil}` -- a corrupt map, silently, where
+                // native throws. `kin/transients.kin` already gets this right
+                // for `transient-conj`; this arm is a hand-written duplicate
+                // of it that drifted. Delegating wholesale would lose the
+                // aliveness check above, so the check is repeated here and
+                // the duplication is noted in `doc/goals`.
                 int base = rt.mark();
                 int ai = rt.push(v);
                 for (int i = 1; i < n; i++) {
-                    int ei = rt.push(rt.vat(at + i));
-                    long k = Seqwalk.first(rt, rt.r(ei));
+                    long e = rt.vat(at + i);
+                    if (!(rt.isHeapTy(e, TY_MAPENTRY) || rt.isHeapTy(e, TY_VEC))) {
+                        rt.popTo(base);
+                        return rt.throwStr("IllegalArgumentException",
+                                           "conj! on a map wants a map entry");
+                    }
+                    int ei = rt.push(e);
+                    long k = rt.slotOrNth(rt.r(ei), 0);
                     int ki = rt.push(k);
-                    long val = Seqwalk.first(rt, Seqwalk.rest(rt, rt.r(ei)));
+                    long val = rt.slotOrNth(rt.r(ei), 1);
                     int vi2 = rt.push(val);
                     rt.setR(ai, Maptrans.tmapAssoc(rt, rt.r(ai), rt.r(ki), rt.r(vi2)));
                     rt.popTo(ei);
@@ -530,6 +546,13 @@ public final class Builtins {
         def("dissoc", (rt, at, n) -> {
             long acc = rt.vat(at);
             if (Val.isNil(acc)) return Val.NIL;
+            // A NON-MAP IS A TYPE ERROR. This used to fall through to
+            // `mapDissoc` on anything, so `(dissoc [1 2] 0)` answered `nil`
+            // -- native answered the vector back and the CLR something else
+            // again. Clojure throws.
+            if (!Mapcore.isMap(rt, acc)) {
+                return rt.throwStr("ClassCastException", "cannot dissoc from " + rt.describe(acc));
+            }
             int base = rt.mark();
             int ai = rt.push(acc);
             for (int i = 1; i < n; i++) {
@@ -1259,6 +1282,11 @@ public final class Builtins {
         def("disj", (rt, at, n) -> {
             long acc = rt.vat(at);
             if (Val.isNil(acc)) return Val.NIL;
+            // The same fall-through `dissoc` had: `(disj [1 2] 1)` answered
+            // `#{}` here and the vector on native.
+            if (!Sets.isSet(rt, acc)) {
+                return rt.throwStr("ClassCastException", "cannot disj from " + rt.describe(acc));
+            }
             int base = rt.mark();
             int ai = rt.push(acc);
             for (int i = 1; i < n; i++) rt.setR(ai, Sets.disj(rt, rt.r(ai), rt.vat(at + i)));

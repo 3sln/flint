@@ -442,23 +442,47 @@ builtins! {
         }
         acc = rt.r(ai); rt.pop_to(ai); acc
     };
+    // A NON-MAP IS A TYPE ERROR, not a no-op. This used to be
+    // `if rt.is_map(m) { .. }` with no else, so `(dissoc [1 2] 0)` answered
+    // the vector back -- a wrong answer that looks like a right one and
+    // travels. Clojure throws `ClassCastException`; the JVM port answered
+    // `nil` and the CLR port something else again, which is what three
+    // silent fall-throughs look like when nobody compares them.
+    //
+    // `nil` still passes through: `(dissoc nil :a)` is `nil` in Clojure.
     "dissoc", flint_b_dissoc, b_dissoc, |rt, a, n| {
         let mut acc = arg(rt, a, 0);
+        if acc.is_nil() { return NIL; }
+        if !rt.is_map(acc) {
+            let what = rt.describe(acc);
+            let msg = alloc::format!("cannot dissoc from {what}");
+            return rt.throw_str("ClassCastException", &msg);
+        }
         let ai = rt.push(acc);
         for i in 1..n {
             let k = arg(rt, a, i);
             let m = rt.r(ai);
-            if rt.is_map(m) { let nv = rt.map_dissoc(m, k); rt.set_r(ai, nv); }
+            let nv = rt.map_dissoc(m, k);
+            rt.set_r(ai, nv);
         }
         acc = rt.r(ai); rt.pop_to(ai); acc
     };
+    // The same fall-through `dissoc` had, and the same fix. `(disj [1 2] 1)`
+    // answered the vector on native and `#{}` on the JVM.
     "disj", flint_b_disj, b_disj, |rt, a, n| {
         let mut acc = arg(rt, a, 0);
+        if acc.is_nil() { return NIL; }
+        if !rt.is_set(acc) {
+            let what = rt.describe(acc);
+            let msg = alloc::format!("cannot disj from {what}");
+            return rt.throw_str("ClassCastException", &msg);
+        }
         let ai = rt.push(acc);
         for i in 1..n {
             let k = arg(rt, a, i);
-            let s = rt.r(ai);
-            if rt.is_set(s) { let nv = rt.set_disj(s, k); rt.set_r(ai, nv); }
+            let st = rt.r(ai);
+            let nv = rt.set_disj(st, k);
+            rt.set_r(ai, nv);
         }
         acc = rt.r(ai); rt.pop_to(ai); acc
     };

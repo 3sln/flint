@@ -91,6 +91,26 @@ have shared a fix for.
 It also builds its error message with `alloc::format!`, which kin cannot
 express; that arm needs the vocabulary's string primitives instead.
 
+#### `conj!`'s map arm is a hand-written duplicate of generated code
+
+`kin/transients.kin` defines `transient-conj`, which dispatches over every
+transient kind and validates that what is conj'd onto a transient map is an
+entry. Both ports ALSO carry a hand-written version of that arm inside their
+`conj!` builtin, and it had drifted: it took `first` and `first (rest ..)` of
+anything, so `(into {} [7])` answered `{nil nil}`.
+
+Fixed in place rather than delegated, deliberately. The hand-written arm also
+carries an aliveness check -- `conj!` on a transient already made persistent
+-- that `transient-conj` does not, so delegating wholesale would have dropped
+it silently. That is the same shape as the bug being fixed, and doing it
+while fixing that bug would have been hard to argue with later.
+
+THE RIGHT FIX is to move the aliveness check into `transients.kin` and have
+both ports call `transientConj`, which removes the duplicate rather than
+repairing it. It needs its own probe first, because nothing currently
+compares what the three runtimes do to a transient used after
+`persistent!`.
+
 ### 2. `Equiv` / `Hash` / `EquivHash`
 
 Designed in [equiv-hash](equiv-hash.md), not started. The first step is not an
