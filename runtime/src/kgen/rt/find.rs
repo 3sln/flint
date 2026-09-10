@@ -32,6 +32,7 @@ impl Rt {
                 }
                 let cnt: u32 = self.cn_count(node);
                 for i in 0..cnt {
+                    self.charge_work(1 as u64);
                     if self.val_eq(self.cn_key(node, i), key) {
                         out = self.cn_val(node, i);
                         break;
@@ -76,6 +77,7 @@ impl Rt {
                 }
                 let cnt: u32 = self.cn_count(self.r(ni));
                 for i in 0..cnt {
+                    self.charge_work(1 as u64);
                     let kk: usize = self.push(self.cn_key(self.r(ni), i));
                     let same: bool = self.val_eq(self.r(kk), self.r(ki));
                     self.pop_to(kk);

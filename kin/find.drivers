@@ -6,7 +6,7 @@ const HASH_BITS: u32 = 5;
 fn mask(h: u32, shift: u32) -> u32 { (h >> shift) & 0x1f }
 fn bitpos(h: u32, shift: u32) -> u32 { 1 << mask(h, shift) }
 fn index_of(bm: u32, bit: u32) -> u32 { (bm & (bit - 1)).count_ones() }
-struct Rt { h: Vec<u64>, kind: Vec<u8>, roots: Vec<Value>, eqs: u32, maxroots: usize }
+struct Rt { h: Vec<u64>, kind: Vec<u8>, roots: Vec<Value>, eqs: u32, gas: u64, maxroots: usize }
 impl Rt {
     fn mark(&self) -> usize { self.roots.len() }
     fn push(&mut self, v: Value) -> usize {
@@ -30,6 +30,11 @@ impl Rt {
     // Counted, so the driver can show that the two walks do the SAME
     // comparisons -- the fast path must be an optimisation, not a shortcut.
     fn val_eq(&mut self, a: Value, b: Value) -> bool { self.eqs += 1; a == b }
+    // GAS, counted so the driver can show a collision scan is BILLED for what
+    // it walks. `gas` tracking `eqs` on the collision arm is the whole point
+    // of the charge; a probe that stubbed this to a no-op would pass while
+    // the metering hole stayed open.
+    fn charge_work(&mut self, n: u64) { self.gas += n; }
     // A key of 900 or more is "compound", so `node_find` takes the rooted walk.
     fn eq_may_alloc(&self, v: Value) -> bool { v.0 >= 900 }
 }
@@ -37,7 +42,7 @@ impl Rt {
 --rust
 }
 fn main() {
-    let mut rt = Rt { h: vec![0; 400], kind: vec![0; 400], roots: Vec::new(), eqs: 0, maxroots: 0 };
+    let mut rt = Rt { h: vec![0; 400], kind: vec![0; 400], roots: Vec::new(), eqs: 0, gas: 0, maxroots: 0 };
     // Root at 1: one entry (bit for mask(0x01,0)) and one sub-node.
     rt.kind[1] = 1; rt.h[1] = 2; rt.h[2] = 4;
     rt.h[3] = 100; rt.h[4] = 101;
@@ -66,7 +71,7 @@ fn main() {
     o.push_str(&format!("| {},", rt.node_find_scalar(Value(1), 0, 0x01, Value(100)).0));
     o.push_str(&format!("{},", rt.node_find_scalar(Value(1), 0, 0x02, Value(900)).0));
     o.push_str(&format!("{},", rt.node_find_scalar(Value(80), 0, 0x77, Value(300)).0));
-    o.push_str(&format!(" eqs={} maxroots={} roots={}", rt.eqs, rt.maxroots, rt.roots.len()));
+    o.push_str(&format!(" eqs={} gas={} maxroots={} roots={}", rt.eqs, rt.gas, rt.maxroots, rt.roots.len()));
     println!("{}", o);
 }
 --java-head
@@ -85,6 +90,10 @@ fn main() {
         int[] kind = new int[400];
         java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
         int eqs = 0, maxroots = 0;
+        long gas = 0;
+        // Counted, not stubbed to a no-op: a probe that ignored the charge
+        // would pass while the metering hole stayed open.
+        void chargeWork(long n) { gas += n; }
         int mark() { return roots.size(); }
         int push(long v) {
             roots.add(v);
@@ -138,7 +147,7 @@ fn main() {
         o.append("| ").append(nodeFindScalar(rt, 1, 0, 0x01, 100)).append(',');
         o.append(nodeFindScalar(rt, 1, 0, 0x02, 900)).append(',');
         o.append(nodeFindScalar(rt, 80, 0, 0x77, 300)).append(',');
-        o.append(" eqs=").append(rt.eqs).append(" maxroots=").append(rt.maxroots)
+        o.append(" eqs=").append(rt.eqs).append(" gas=").append(rt.gas).append(" maxroots=").append(rt.maxroots)
          .append(" roots=").append(rt.roots.size());
         System.out.println(o);
     }
@@ -169,6 +178,8 @@ namespace Flint.Rt {
         internal int[] kind = new int[400];
         internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
         internal int eqs = 0, maxroots = 0;
+        internal long gas = 0;
+        internal void ChargeWork(long n) { gas += n; }
         internal int Mark() { return roots.Count; }
         internal int Push(long v) {
             roots.Add(v);
@@ -210,7 +221,7 @@ namespace Flint.Rt {
         o.Append("| ").Append(NodeFindScalar(rt, 1, 0, 0x01, 100)).Append(',');
         o.Append(NodeFindScalar(rt, 1, 0, 0x02, 900)).Append(',');
         o.Append(NodeFindScalar(rt, 80, 0, 0x77, 300)).Append(',');
-        o.Append(" eqs=").Append(rt.eqs).Append(" maxroots=").Append(rt.maxroots)
+        o.Append(" eqs=").Append(rt.eqs).Append(" gas=").Append(rt.gas).Append(" maxroots=").Append(rt.maxroots)
          .Append(" roots=").Append(rt.roots.Count);
         Console.WriteLine(o.ToString());
     }

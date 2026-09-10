@@ -30,6 +30,7 @@ public final class Find {
                 }
                 int cnt = cnCount(rt, node);
                 for (int i = 0; i < cnt; i++) {
+                    rt.chargeWork(1);
                     if (valEq(rt, cnKey(rt, node, i), key)) {
                         out = cnVal(rt, node, i);
                         break;
@@ -74,6 +75,7 @@ public final class Find {
                 }
                 int cnt = cnCount(rt, rt.r(ni));
                 for (int i = 0; i < cnt; i++) {
+                    rt.chargeWork(1);
                     int kk = rt.push(cnKey(rt, rt.r(ni), i));
                     boolean same = valEq(rt, rt.r(kk), rt.r(ki));
                     rt.popTo(kk);

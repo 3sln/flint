@@ -21,11 +21,33 @@
 ;; an `out` variable and `break` plain. `forever` is new vocabulary for the
 ;; loop itself -- `(while true ...)` would emit `while true`, which rustc lints
 ;; and which does not tell the type checker the loop diverges.
+;; A COLLISION NODE COSTS WHAT IT SCANS.
+;;
+;; Both loops below charge one unit per entry examined, which is what
+;; `kin/mapeq.kin` already does and what these two did not. Without it a
+;; lookup on a map whose keys share a hash scans the whole node and is billed
+;; a FLAT 16 STEPS -- measured at 1 024, 4 096 and 16 384 colliding keys, and
+;; flat at every one of them. At 16 384 that is 179us of work billed the same
+;; as 1.70us: 105x, with the multiplier chosen by whoever supplies the keys.
+;;
+;; REACHABLE, not theoretical. Flint's string hash is a base-31 polynomial, so
+;; `Aa` and `BB` hash alike and the property composes -- a choice of `Aa` or
+;; `BB` at each of k positions gives 2^k strings with one hash. Any map holding
+;; attacker-influenced strings can be made to do unbounded uncharged work.
+;;
+;; `0009` is the promise this restores, and `kin/collhash.kin` names the class
+;; about a defect fixed the same way: "it is not a slow path, it is a metering
+;; hole". Full measurement and reproduction in `doc/goals/hash-flooding.md`.
+;;
+;; NEARLY FREE FOR LEGITIMATE CODE: a map with no collisions never goes round
+;; the loop more than once, so its gas moves by the one unit it always should
+;; have paid.
 (ns flint.rt.find
   (:require [flint.impl.rt :refer [defn return if let local set do comment
                                    forever for break mark push r set-r pop-to
-                                   not == != < + bit-and Rt Value RootIx I32
-                                   Bool NOT_FOUND HASH_BITS declarefn]]
+                                   not == != < + bit-and charge-work Rt Value
+                                   RootIx I32 Bool NOT_FOUND HASH_BITS
+                                   declarefn]]
             [flint.rt.nodeclass :refer [is-bmnode]]
             [flint.rt.eqalloc :refer [eq-may-alloc]]
             [flint.rt.collnode :refer [cn-count cn-hash cn-key cn-val]]
@@ -50,10 +72,12 @@
           (break))
         (let [^I32 cnt (cn-count rt node)]
           (for [^I32 i 0 cnt]
-            (if (val-eq rt (cn-key rt node i) key)
-              (do
-                (set out (cn-val rt node i))
-                (break)))))
+            (do
+              (charge-work rt 1)
+              (if (val-eq rt (cn-key rt node i) key)
+                (do
+                  (set out (cn-val rt node i))
+                  (break))))))
         (break)))
     (let [^I32 bit (bitpos h shift)
           ^I32 dm (bn-datamap rt node)]
@@ -89,13 +113,15 @@
             (break))
           (let [^I32 cnt (cn-count rt (r rt ni))]
             (for [^I32 i 0 cnt]
-              (let [^RootIx kk (push rt (cn-key rt (r rt ni) i))
-                    ^Bool same (val-eq rt (r rt kk) (r rt ki))]
-                (pop-to rt kk)
-                (if same
-                  (do
-                    (set out (cn-val rt (r rt ni) i))
-                    (break))))))
+              (do
+                (charge-work rt 1)
+                (let [^RootIx kk (push rt (cn-key rt (r rt ni) i))
+                      ^Bool same (val-eq rt (r rt kk) (r rt ki))]
+                  (pop-to rt kk)
+                  (if same
+                    (do
+                      (set out (cn-val rt (r rt ni) i))
+                      (break)))))))
           (break)))
       (let [^I32 bit (bitpos h shift)
             ^I32 dm (bn-datamap rt (r rt ni))]

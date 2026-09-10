@@ -33,10 +33,15 @@
   WHAT THIS DOES NOT COVER, said plainly rather than left to be discovered:
 
     COLLISION NODES. `mapeq` compares them unordered and that is a real path,
-    but engineering a collision needs flint's hash function rather than a
-    guess -- `Aa`/`BB` collide under Java's `String.hashCode` and mean
-    nothing here. A mode that believes it collides and does not would report
-    a clean baseline for a path never taken, which is worse than no row.
+    still not measured here. This paragraph USED TO SAY that engineering a
+    collision needed flint's hash rather than a guess, and that `Aa`/`BB`
+    "collide under Java's `String.hashCode` and mean nothing here". The first
+    half was right and the second was a guess -- flint's string hash is a
+    base-31 polynomial too, every such pair collides, and asking flint for the
+    hashes took one probe. That unverified aside was hiding a metering hole:
+    a collision scan was billed a flat 16 steps whatever its width
+    (`doc/goals/hash-flooding.md`). The row still is not here, but the reason
+    is now scheduling rather than impossibility.
     THE PORTS. Native and the two ports differ on which of these paths they
     even run, and this file measures wasm. The design's third open bullet --
     that all three runtimes read the header the same way -- stays unverified.

@@ -150,6 +150,31 @@ MAKING IT EXACT means giving them separate builtins, which costs an entry in
 the native slot table and the ABI. That is a lot to spend on one word, and it
 is written in the source rather than left as a puzzle.
 
+#### A collision node was scanned for free -- FIXED
+
+Hash flooding. A map lookup on keys sharing a hash scanned the whole collision
+node and was billed a FLAT 16 STEPS -- flat at 1 024, 4 096 and 16 384
+colliding keys alike, where 16 384 was 179us of work billed the same as
+1.70us. 105x the work, the same bill, with the multiplier chosen by whoever
+supplies the keys.
+
+Reachable rather than theoretical: flint's string hash is a base-31
+polynomial, so `Aa`/`BB` collide and the property composes -- 2^k strings with
+one hash. Any map holding attacker-influenced strings could be made to do
+unbounded uncharged work.
+
+Fixed by charging per entry, matching what `kin/mapeq.kin` already did. Now
+`16 + entries scanned`, with legitimate code unchanged to the step. Pinned by
+`test/gas.clj`, verified to fail against the unfixed runtime. Full write-up in
+`doc/goals/hash-flooding.md`.
+
+FOUND WHILE CLOSING A COMMENT. `bench/progs/equiv.cljc` said collision
+coverage was out of reach because `Aa`/`BB` "collide under Java's
+`String.hashCode` and mean nothing here". That was a guess in the direction of
+not testing, and it was wrong -- asking flint for the hashes took one probe.
+The lesson is not about hashing: an unverified aside in a comment is where the
+next one of these will be.
+
 #### A plain vector was walked as a seq by `=` and by `hash` -- FIXED
 
 Both found by `bench/equiv.mjs`, which exists because `doc/goals/equiv-hash.md`

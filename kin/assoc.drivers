@@ -16,9 +16,12 @@ fn mask(h: u32, shift: u32) -> u32 { (h >> shift) & 0x1f }
 fn bitpos(h: u32, shift: u32) -> u32 { 1 << mask(h, shift) }
 fn index_of(bm: u32, bit: u32) -> u32 { (bm & (bit - 1)).count_ones() }
 struct Rt { h: Vec<u64>, bump: u64, roots: Vec<Value>, log: String,
-            champ_added: bool, starve: bool }
+            champ_added: bool, starve: bool, gas: u64 }
 impl Rt {
     fn mark(&self) -> usize { self.roots.len() }
+    // Counted rather than ignored: a collision scan must be BILLED for what it
+    // walks, and a probe that no-oped this would pass with the hole open.
+    fn charge_work(&mut self, n: u64) { self.gas += n; }
     fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
     fn r(&self, i: usize) -> Value { self.roots[i] }
     fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
@@ -61,7 +64,7 @@ impl Rt {
 }
 fn fresh() -> Rt {
     Rt { h: vec![0; 400], bump: 200, roots: Vec::new(), log: String::new(),
-         champ_added: false, starve: false }
+         champ_added: false, starve: false, gas: 0 }
 }
 fn probe_node_assoc(o: &mut String) {
     let mut rt = fresh();
@@ -143,6 +146,8 @@ fn main() {
         long bump = 200;
         java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
         StringBuilder log = new StringBuilder();
+        long gas = 0;
+        void chargeWork(long n) { gas += n; }
         boolean champAdded = false;
         boolean starve = false;
         int mark() { return roots.size(); }
@@ -270,6 +275,8 @@ namespace Flint.Rt {
         internal long bump = 200;
         internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
         internal StringBuilder log = new StringBuilder();
+        internal long gas = 0;
+        internal void ChargeWork(long n) { gas += n; }
         internal bool champAdded = false;
         internal bool starve = false;
         internal int Mark() { return roots.Count; }

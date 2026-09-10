@@ -32,6 +32,7 @@ public static class Find {
                 }
                 int cnt = CnCount(rt, node);
                 for (int i = 0; i < cnt; i++) {
+                    rt.ChargeWork(1);
                     if (ValEq(rt, CnKey(rt, node, i), key)) {
                         @out = CnVal(rt, node, i);
                         break;
@@ -76,6 +77,7 @@ public static class Find {
                 }
                 int cnt = CnCount(rt, rt.R(ni));
                 for (int i = 0; i < cnt; i++) {
+                    rt.ChargeWork(1);
                     int kk = rt.Push(CnKey(rt, rt.R(ni), i));
                     bool same = ValEq(rt, rt.R(kk), rt.R(ki));
                     rt.PopTo(kk);

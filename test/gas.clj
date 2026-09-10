@@ -58,6 +58,29 @@
    ["a table is appended to" "(range n)"
                              "(reduce (fn [t i] (ft/add-row t {:id i})) (ft/table S []) v)" true]
    ["a table is built transiently" "(range n)"              "(ft/build S v (fn [i] {:id i}))" true]
+   ;; HASH FLOODING. A lookup on keys that all share one hash scans the whole
+   ;; collision node, and used to be billed a FLAT 16 STEPS however wide the
+   ;; node was -- measured flat at 1 024, 4 096 and 16 384 colliding keys,
+   ;; where 16 384 was 179us of work billed the same as 1.70us. The width is
+   ;; chosen by whoever supplies the keys, so that is unbounded work for
+   ;; bounded gas, which is the one thing this file exists to refuse.
+   ;; See `doc/goals/hash-flooding.md`.
+   ;; THE PROBE KEY IS BUILT IN THE SETUP, not in the op. Built in the op it
+   ;; added a FIXED ~1 021 gas -- twelve rounds of `str` -- which is in the
+   ;; measured arm and not the baseline, so it swamped the ratio: 1 221 at
+   ;; n=200 against 2 621 at n=1600 read as 2.1x and failed, while the
+   ;; difference of exactly 1 400 for exactly 1 400 more entries showed the
+   ;; scan was already billed per entry. The measurement was wrong, not the
+   ;; charge.
+   ["a flooded lookup is billed"
+    "[(into {} (map (fn [i] [(ckey i) i]) (range n))) (ckey (dec n))]"
+    "(get (nth v 0) (nth v 1) 0)"                                                       true]
+   ;; The control that makes the row above mean something: the SAME shape with
+   ;; distinct keys must stay O(1). Without it, a runtime that charged by map
+   ;; SIZE rather than by work scanned would pass the case and still be wrong.
+   ["and a normal lookup is still O(1)"
+    "[(into {} (map (fn [i] [(str \"d-\" i) i]) (range n))) (str \"d-\" (dec n))]"
+    "(get (nth v 0) (nth v 1) 0)"                                                       false]
    ;; The controls. Both are O(1) claims this project makes elsewhere, so they
    ;; are pinned here as gas rather than only asserted in prose.
    ["counting a vector is O(1)" "(vec (range n))"           "(count v)"                  false]
@@ -70,6 +93,15 @@
            ;; O(1), and it FORCES the value: without a consumer a lazy result
            ;; could go unrealised and the case would measure nothing.
            "(defn- sink [x] (if (nil? x) 0 1))\n"
+           ;; A KEY THAT COLLIDES WITH EVERY OTHER ONE. Flint's string hash is
+           ;; a base-31 polynomial, so `Aa` and `BB` hash alike and the
+           ;; property composes: choosing one or the other at each of 12
+           ;; positions gives 4 096 distinct strings sharing a single hash.
+           ;; That is the input an attacker supplies, and it is the only way
+           ;; to make a collision node wide enough to measure.
+           "(defn- ckey [i]\n"
+           "  (loop [j 0 acc \"\" x i]\n"
+           "    (if (< j 12) (recur (inc j) (str acc (if (odd? x) \"BB\" \"Aa\")) (quot x 2)) acc)))\n"
            (apply str
                   (map-indexed
                    (fn [i [_ setup op _]]

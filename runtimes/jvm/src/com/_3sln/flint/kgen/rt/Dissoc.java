@@ -103,8 +103,15 @@ public final class Dissoc {
         int found;
         found = cnt;
         for (int i = 0; i < cnt; i++) {
+            // CHARGED PER ENTRY, like `mapeq` and unlike the version this
+            // replaces. A collision node is the one part of a CHAMP whose
+            // width an attacker chooses: flint's string hash is a base-31
+            // polynomial, so 2^k strings can be made to share one hash.
+            // Scanning it for free is a metering hole rather than a slow
+            // path (`0009`, `doc/goals/hash-flooding.md`).
             // The key is rooted across `eq`, which allocates when either
             // side is a row ref.
+            rt.chargeWork(1);
             int kk = rt.push(cnKey(rt, rt.r(sni), i));
             boolean same = valEq(rt, rt.r(kk), rt.r(ski));
             rt.popTo(kk);

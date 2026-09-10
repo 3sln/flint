@@ -120,8 +120,15 @@ impl Rt {
         let mut hit: u32;
         hit = cnt;
         for i in 0..cnt {
+            // CHARGED PER ENTRY, like `mapeq` and unlike the version this
+            // replaces. A collision node is the one part of a CHAMP whose
+            // width an attacker chooses: flint's string hash is a base-31
+            // polynomial, so 2^k strings can be made to share one hash.
+            // Scanning it for free is a metering hole rather than a slow
+            // path (`0009`, `doc/goals/hash-flooding.md`).
             // The key is rooted across `eq`, which allocates when either
             // side is a row ref.
+            self.charge_work(1 as u64);
             let kk: usize = self.push(self.cn_key(self.r(sni), i));
             let same: bool = self.val_eq(self.r(kk), self.r(ski));
             self.pop_to(kk);
