@@ -397,24 +397,11 @@ public static class Builtins {
         // correct copy, native answering `#<unprintable>` for `conj!` on a
         // spent handle. Both guards live in `transients.kin` now.
         Def("conj!", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Transients.TransientConj(rt, rt.VAt(at), rt.VAt(at + 1)));
-        Def("assoc!", (rt, at, n) => {
-            long v = rt.VAt(at);
-            if (Vec.IsTransient(rt, v)) {
-                if (!Vec.Alive(rt, v))
-                    return rt.ThrowStr("IllegalStateException", "assoc! on a transient already made persistent");
-                long acc = v;
-                for (int i = 1; i + 1 < n; i += 2) {
-                    acc = Vec.TAssoc(rt, acc, (int) Val.AsFixnum(rt.VAt(at + i)), rt.VAt(at + i + 1));
-                }
-                return acc;
-            }
-            if (Maps.IsTransient(rt, v)) {
-                long acc = v;
-                for (int i = 1; i + 1 < n; i += 2) acc = Maptrans.TmapAssoc(rt, acc, rt.VAt(at + i), rt.VAt(at + i + 1));
-                return acc;
-            }
-            return rt.ThrowStr("ClassCastException", "assoc! wants a transient, got " + rt.Describe(v));
-        });
+        // GENERATED, from `kin/transients.kin`. A hand-written duplicate of
+        // `TransientAssoc` that had drifted both ways -- it carried an
+        // aliveness check the generated one lacked, and neither had the upper
+        // bound check that `(assoc! (transient [1 2]) 5 :d)` needs.
+        Def("assoc!", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Transients.TransientAssoc(rt, rt.VAt(at), rt.VAt(at + 1), rt.VAt(at + 2)));
         Def("dissoc!", (rt, at, n) => {
             long v = rt.VAt(at);
             if (Maps.IsTransient(rt, v)) {

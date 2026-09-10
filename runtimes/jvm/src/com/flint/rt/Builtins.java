@@ -428,27 +428,16 @@ public final class Builtins {
         // Arity is checked upstream: `(conj! t 1 2)` raises `ArityException`
         // before reaching here, which is why there is no fold.
         def("conj!", (rt, at, n) -> Transients.transientConj(rt, rt.vat(at), rt.vat(at + 1)));
-        def("assoc!", (rt, at, n) -> {
-            long v = rt.vat(at);
-            if (Vec.isTransient(rt, v)) {
-                if (!Vec.alive(rt, v)) {
-                    return rt.throwStr("IllegalStateException",
-"assoc! on a transient already made persistent");
-                }
-                long acc = v;
-                for (int i = 1; i + 1 < n; i += 2) {
-                    acc = Vec.tassoc(rt, acc, (int) Val.asFixnum(rt.vat(at + i)), rt.vat(at + i + 1));
-                }
-                return acc;
-            }
-            if (Maps.isTransient(rt, v)) {
-                long acc = v;
-                for (int i = 1; i + 1 < n; i += 2) acc = Maptrans.tmapAssoc(rt, acc, rt.vat(at + i), rt.vat(at + i + 1));
-                return acc;
-            }
-            return rt.throwStr("ClassCastException",
-                "assoc! wants a transient, got " + rt.describe(v));
-        });
+        // GENERATED, from `kin/transients.kin`, for the reason `conj!`
+        // above is: this was a hand-written duplicate of `transientAssoc`,
+        // and the two had drifted apart in BOTH directions -- this copy had
+        // the aliveness check the generated one lacked, and the generated one
+        // now has the upper bound check neither had. `(assoc! (transient
+        // [1 2]) 5 :d)` answered the transient back, unrefused, everywhere.
+        //
+        // The fold over pairs was vestigial: `assoc!` arity is capped at
+        // three upstream, so `n` is always 3.
+        def("assoc!", (rt, at, n) -> Transients.transientAssoc(rt, rt.vat(at), rt.vat(at + 1), rt.vat(at + 2)));
         def("dissoc!", (rt, at, n) -> {
             long v = rt.vat(at);
             if (Maps.isTransient(rt, v)) {

@@ -162,12 +162,28 @@ public static class Transients {
                 return TmapAssoc(rt, t, k, v);
             }
             if (tt == Obj.TyTvec) {
+                // ALIVE FIRST, for the reason `transient-conj` above says:
+                // a spent handle owns nothing, and writing through it
+                // corrupts the value `persistent!` handed out. Native
+                // answered `#<unprintable>` here where both ports threw.
+                if (!TvecAlive(rt, t)) {
+                    return rt.ThrowStr("IllegalStateException", "assoc! on a transient already made persistent");
+                }
                 // THE INDEX IS HELD AS A SIGNED 64-BIT VALUE. A program
                 // may hand over -1, and refusing it means being able to
                 // hold it -- `to-i32` of that is not the same number.
+                // 
+                // AND THE UPPER BOUND IS CHECKED, which it was not: only
+                // `>= 0` was, so `(assoc! (transient [1 2]) 5 :d)`
+                // answered the transient BACK, unchanged and unrefused,
+                // on all four runtimes. The persistent `assoc` throws for
+                // the same index and so does Clojure.
+                // 
+                // `<= count` rather than `<`: writing AT the end appends,
+                // which is what `(assoc [1 2] 2 :c)` means.
                 if (IsInt(rt, k)) {
                     long i = Num.I64Of(rt, k);
-                    if (i >= 0) {
+                    if ((i >= 0) && (i <= ((long) TvecCount(rt, t)))) {
                         return TvecAssoc(rt, t, (int) i, v);
                     }
                 }
