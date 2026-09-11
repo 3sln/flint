@@ -122,30 +122,55 @@ against the gate as it stands.
 "29 hand-written fns in bytes/strs/vector/pike" is the number the work reminder
 carries, and it overstates the problem: most of those are `#[test]`. The
 boundary that MATTERS is the one kin calls into, and it is declared in the
-sources themselves as `@kin:link:form:`. Counted across the three runtimes:
+sources themselves as a link form. It was twelve forms in five namespaces; it
+is SEVEN in two now, and the three that moved took their whole namespace with
+them rather than shrinking it — `flint.rt.maps`, `flint.rt.sets`,
+`flint.rt.vector` are gone.
 
-    native 12    CLR 12    JVM 12    identical set
+    char-at  s-copy-range  s-concat-copy  s-empty      genuinely primitive
+    integer  string-hash  keyword-hash                 portable, blocked
 
-    bitpos  char-at  hash-mask  index-of  integer  keyword-hash
-    s-concat-copy  s-copy-range  s-empty  set-eq  string-hash  vec-count
+That the three runtimes declare the SAME set is itself worth having: a
+primitive on one runtime and not another is a divergence waiting to be found by
+a user.
 
-That the three lists are the same set is itself worth having: a primitive that
-exists on one runtime and not another is a divergence waiting to be found by a
-user.
+WHAT MOVED, AND WHAT IT WAS WORTH. `hash-mask`, `bitpos`, `index-of` (the
+HAMT's bit arithmetic), `set-eq` (a count compare and a delegation to generated
+`map-eq`), and `vec-count` (one slot read). Every one of them was CORRECT in
+all three runtimes before it moved, checked rather than assumed, and that is
+the argument for moving them rather than against. `hash-mask` is the example:
+Java's `>>` is arithmetic, so a mask written with it would pick a different
+SLOT for any hash with the top bit set, losing map entries rather than slowing
+anything down. All three spelled it `>>>`. Being right three times by hand is
+not the same as being right once.
 
-THREE OF THEM ARE NOT PRIMITIVE. `hash-mask`, `bitpos` and `index-of` are the
-HAMT's bit arithmetic -- `(h >>> shift) & 0x1f`, `1 << mask`, and
-`popcount(bitmap & (bit - 1))`. Nothing about them needs a host; the first two
-are already sayable in kin's vocabulary today, and the third needs a popcount
-link and nothing else.
+AND THE FOUR THAT STAY ARE NOT A JUDGEMENT CALL. `char-at` reads memory at a
+computed offset; `s-copy-range` and `s-concat-copy` are memcpy; `s-empty`
+constructs a string. Those want the host.
 
-They are all three CORRECT right now -- checked, because this is exactly where
-a shift is easy to get wrong: Java's `>>` is arithmetic and would silently
-corrupt a hash with the top bit set. All three spell it `>>>` (or `>>` on
-Rust's unsigned). That they are right is not an argument for leaving them
-hand-written; it is the argument for moving them, because this is the class of
-function where being wrong is invisible until a hash collides in one runtime
-and not another.
+THE OTHER THREE ARE BLOCKED ON THE VOCABULARY, NOT ON BEING PRIMITIVE, and the
+blockage is small and nameable:
+
+* `string-hash` and `keyword-hash` walk bytes, which kin says fine — but the
+  flat string's hash cache is a RAW u32 at `a + HDR`, and kin has `read-u8` and
+  `write-u8` and nothing wider. (The rope's cache is an ordinary `Value` slot,
+  which is why `rope-hash` is already generated and these are not: two
+  different caching mechanisms, not two different walks.)
+* `integer` is a range test, an `alloc`, and a 64-bit write. Both ports spell
+  the test `n >= -(1L << 47) && n < (1L << 47)` and Rust spells it
+  `n >= FIXNUM_MIN && n <= FIXNUM_MAX`; since `FIXNUM_MAX` is `(1 << 47) - 1`
+  those are the identical set, checked. It needs `write-u64`, and it needs a
+  way to SAY 2^47: `flint.impl.rt` has no `hex`, and `hash.kin` records what
+  that costs — a constant spelled in decimal is "a valid `u32` in Rust and
+  `integer number too large` in Java, where an `int` literal stops at
+  2147483647".
+
+All three runtimes already have the accessors (`read_u32`/`write_u32`,
+`read_u64`/`write_u64`, and the camel/Pascal spellings on the ports), so the
+additions are template entries beside the `u8` ones. They are ADDITIVE — no
+existing source says `hex` in an `rt` file — but they change the vocabulary all
+88 sources share, which is a different kind of change from moving a function.
+Recorded here rather than done for that reason.
 
 ## One algorithm, two GENERATED sources
 
