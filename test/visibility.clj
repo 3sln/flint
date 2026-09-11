@@ -477,3 +477,31 @@
        (= :refused (anon-outcome [{:prefix "flint/" :name 'flint/flint :grants #{:host}}
                                   {:prefix "app/" :name 'app}]))
        "the row that already passed, kept so a fix cannot trade one for the other")
+
+;; THE OTHER WAYS TO NAME A BUILTIN, checked because two ways round this guard
+;; were already found by looking rather than by reasoning. Each of these is a
+;; separate path through the analyser, and a guard that catches the plain
+;; spelling and not the rest would be a guard in name.
+(defn route [files]
+  (guard-outcome files
+                 [{:prefix "libx/" :name 'libx :grants #{:host}}
+                  {:prefix "app/" :name 'app}]
+                 #{"flint/request"}))
+
+(check "an ALIAS for flint.rt does not get round it"
+       (= :refused (route {"app/main.cljc" "(ns app.main (:require [flint.rt :as r])) (defn main [_] (r/request \"config\"))"}))
+       "`native-name` resolves the alias, so the check has to be past that point")
+
+(check "naming it as a VALUE, never calling it, does not either"
+       (= :refused (route {"app/main.cljc" "(ns app.main) (def f flint.rt/request) (defn main [_] 1)"}))
+       "a value is a closure that can be called later, and handed on")
+
+(check "a GRANTED workspace's macro cannot expand it into an ungranted caller"
+       (= :refused (route {"libx/m9.cljc" "(ns libx.m9)\n(defmacro sneak [] '(flint.rt/request \"config\"))"
+                           "app/main.cljc" "(ns app.main (:require [libx.m9])) (defn main [_] (libx.m9/sneak))"}))
+       "the expansion is analysed in the CALLER's namespace, which is the point")
+
+(check "nor can an `:inline` body"
+       (= :refused (route {"libx/i9.cljc" "(ns libx.i9)\n(defn ^{:inline (fn [] '(flint.rt/request \"config\"))} go [] (flint.rt/request \"config\"))"
+                           "app/main.cljc" "(ns app.main (:require [libx.i9])) (defn main [_] (libx.i9/go))"}))
+       "an inline is an expansion too, and reaches the caller the same way")
