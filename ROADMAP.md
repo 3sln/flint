@@ -409,6 +409,23 @@ be judged against it. Since npm-only is the decided path for now, that is the
 same order the work was going in anyway — build it, then measure, then decide
 whether the native binary earns its keep.
 
+### Dialects and pluggable preludes (spec only, nothing built)
+
+Recorded 2026-09-11. Full spec at `DECISIONS.md#dialects-and-preludes`.
+
+- [ ] `.fl` extension recognised alongside `.cljc`/`.clj` — in BOTH
+      `src/flint/project.cljc` and `cli/src/main.rs`, plus `bin/flint`
+- [ ] `:dialect` on the resolver's per-namespace record, beside `:workspace`,
+      `:tags`, `:grants`, `:guard`, `:virtual`
+- [ ] Edge rule: a portable namespace may not require a flint-only one,
+      enforced where workspace guards already are
+- [ ] `:flint/prelude` in workspace config, replacing the `core-first` pin
+      duplicated in `src/flint/project.cljc` and `bin/flint` — default must be
+      the existing list in the existing order, which is load-bearing
+- [ ] Later prelude entries override earlier; a shadow is reported, not refused
+- [ ] Custom preludes apply to `.fl` only
+- [ ] Audit `lib/`'s 33 namespaces for which are genuinely flint-only
+
 ### Standalone scripts (spec only, nothing built)
 
 Recorded 2026-09-11. Full spec at `DECISIONS.md#standalone-scripts`.

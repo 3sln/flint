@@ -1294,7 +1294,8 @@
           ;; makes a misspelled `:require` into a namespace with no
           ;; dependencies, which fails much later as an unresolved var and
           ;; names nothing that would lead a reader back to the `ns` form.
-          (throw (ex-info (str "an ns form has no " (first c) " clause -- flint takes "
+          (throw (ex-info (str "(ns " nsname ") has no " (pr-str (first c))
+                               " clause -- flint takes "
                                (str/join ", " (sort (map str known-ns-clauses))))
-                          {:form c :known known-ns-clauses})))))
+                          {:form c :ns nsname :known known-ns-clauses})))))
     {:op :const :val nil}))

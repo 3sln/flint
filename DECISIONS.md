@@ -4278,3 +4278,105 @@ entry (`^{:script main}`) or whether a fixed convention does.
 * **Whether a script may be a dependency.** If yes, `^:script` becomes a thing
   other code can reach, and the "src is just this file" rule needs to say what
   happens from the other side.
+
+## dialects-and-preludes
+
+**Portable `.cljc` and flint-only `.fl`, and a prelude a workspace can extend**
+
+**Ratified:** ☐ not signed off
+
+**Status: SPEC, nothing built.** Recorded 2026-09-11 at the user's request.
+Claims about current behaviour were checked against the code; the design is a
+proposal awaiting sign-off.
+
+### What was decided
+
+**Two dialects, distinguished by file extension.**
+
+* `.cljc` (and `.clj`) — **portable**. Must mean the same thing under Clojure.
+  No flint-only reader tags, no custom prelude, no flint-only namespaces.
+* `.fl` — **flint**. May use everything: `#table [...]` and other custom reader
+  tags, the table namespace, and whatever the workspace's prelude adds.
+
+**The resolver tags every namespace with its dialect.** `project/collect`
+already answers a per-namespace map carrying `:workspace`, `:tags`, `:grants`,
+`:guard` and `:virtual`; `:dialect` joins them. This is deliberately not a new
+mechanism — it is one more field on a record that already describes what a
+namespace is and what it may do.
+
+**The constraint is an edge rule on the require graph, in one direction:**
+
+> A portable namespace may not require a flint-only one.
+
+That single rule is what makes "portable" mean anything. Without it a `.cljc`
+file could `:require` a `.fl` one and be portable in name only, which is the
+failure the split exists to prevent. `.fl` requiring `.cljc` is fine and
+expected — flint code uses the portable library freely.
+
+The check belongs where workspace guards are already enforced, walking the same
+edges (`src/flint/project.cljc`). A refused edge is reported the way a refused
+guard is.
+
+**The prelude becomes a workspace's ordered list.** Today it is pinned in code:
+`project/core-first` hardcodes `clojure.core`, `flint.core`, `flint.protocols`,
+`flint.check` — analysed before everything, referable without a `:require`. That
+list is duplicated in `bin/flint`. Making it configuration replaces two
+hardcoded copies with one declaration:
+
+```clojure
+{:flint/prelude [clojure.core flint.core my.lib.prelude]}
+```
+
+Names from every listed namespace resolve without a `:require`, which is exactly
+what `clojure.core` gets today — generalised rather than invented.
+
+**Ordering: later entries override earlier ones.** The author wrote the order,
+so appending is how you extend, and a workspace can deliberately shadow a core
+name. A later entry shadowing an earlier one is **reported, not refused** — it
+is legal and occasionally the point, but it is also how `count` silently becomes
+something else, so it must not be invisible. Same shape as a coordinate carrying
+a key its kind does not understand.
+
+**A custom prelude applies to `.fl` ONLY.** A portable namespace gets exactly
+the prelude Clojure gives it. A `.cljc` file whose meaning depended on a
+workspace's prelude would not compile under Clojure, which is the whole
+distinction.
+
+### Why
+
+flint has accumulated features Clojure does not have — reader tags bound per
+project, tables, ports, capability guards — and nothing marks which code depends
+on them. "Portable" is currently a property a file has by inspection and
+convention, so it decays silently: the failure shows up when someone runs the
+file under Clojure, far from whoever introduced the dependency.
+
+An extension makes the claim explicit, and a resolver tag makes it checkable.
+
+### What this collides with in the code today
+
+* **Two places resolve extensions**, and both must learn `.fl`:
+  `src/flint/project.cljc` tries `[base.cljc, base.clj]`, and
+  `cli/src/main.rs` collects files ending `.cljc`/`.clj`. A third reader,
+  `bin/flint`, duplicates the compiler's source handling deliberately.
+* **`core-first` is duplicated** in `src/flint/project.cljc` and `bin/flint`,
+  and order within the pin is load-bearing — `flint.protocols` must precede
+  `flint.check`, which uses `extend-protocol` at top level. A configurable
+  prelude must preserve that, so the default value has to be the existing list
+  in the existing order.
+* **`lib/` is 33 namespaces with no dialect marking.** Ten are `clojure.*` and
+  presumptively portable; the rest are `flint.*` and a mix. Which are genuinely
+  flint-only is an audit, not a guess.
+
+### Open, and needing sign-off
+
+* **Ordering.** Recorded as later-overrides-earlier above; the alternative is
+  earlier-wins, which makes the prelude a base nobody can shadow.
+* **Whether `.fl` is the extension.** It is short and unclaimed; `.flc` and
+  `.flint` are the alternatives.
+* **Whether portability is checkable beyond the edge rule.** The edge rule
+  catches dependencies. It does not catch a `.cljc` file using a reader tag its
+  workspace binds — which is a separate check, at the reader rather than the
+  graph.
+* **What `clojure.core` means for `.fl`.** Presumably still the first prelude
+  entry, but a flint-only dialect could in principle start from a different
+  base.

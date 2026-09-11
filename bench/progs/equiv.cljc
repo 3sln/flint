@@ -35,7 +35,7 @@
     COLLISION NODES. `mapeq` compares them unordered and that is a real path,
     still not measured here. This paragraph USED TO SAY that engineering a
     collision needed flint's hash rather than a guess, and that `Aa`/`BB`
-    "collide under Java's `String.hashCode` and mean nothing here". The first
+    \"collide under Java's `String.hashCode` and mean nothing here\". The first
     half was right and the second was a guess -- flint's string hash is a
     base-31 polynomial too, every such pair collides, and asking flint for the
     hashes took one probe. That unverified aside was hiding a metering hole:
