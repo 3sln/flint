@@ -479,22 +479,47 @@ which reads the EMITTER's slot table -- so this is about what gets emitted,
 not about initialisation order, and my first explanation was looking in the
 wrong pass entirely.
 
-TWO HYPOTHESES, BOTH DISPROVED BY PROBE rather than argued away:
+SIX HYPOTHESES, ALL DISPROVED BY PROBE rather than argued away:
 
 | probe | result |
 | --- | --- |
 | a top-level side effect into a never-required namespace | works |
 | a macro expanding to a qualified call, invoked at top level | works |
+| A requires B; a macro in A expands to `B/f`; U calls it at top level | works |
+| the full `extend-protocol` shape -- `do`, a user-namespace var, a keyword, a name, a `fn` form | works |
+| `B/f`'s body back-references A without requiring it | works |
+| ...and the back-referenced name is private | works |
 
 The first is the explanation I originally wrote here and had to retract. The
-second was the obvious next guess. Neither reproduces it, so whatever
-separates the `extend-method` case, it is not "top-level effect" and it is not
-"reached through a macro expansion".
+rest are the obvious next guesses, taken in order. None reproduces it, so the
+cause is not "top-level effect", not "reached through a macro expansion", not
+the SHAPE of the expansion, not an unrequirable back-reference, and not
+privacy.
 
-WHAT IS LEFT UNTESTED is the bootstrap relationship itself: `clojure.core`
-REQUIRES `flint.protocols`, and the macro that expands to the call
-(`extend-protocol`) is defined in `clojure.core`. Neither probe had an
-equivalent, and neither can be built without editing `lib/`.
+AND ONE CONFOUND HAS BEEN REMOVED. Moving `extend-method` really did contain a
+second, unrelated fault: its body calls `clojure.core/method-key`, which is
+`defn-`, and privacy used to be ORDER-DEPENDENT -- `flint.protocols` is
+analysed BEFORE `clojure.core`, because `clojure.core` requires it, so the
+reference passed silently. With that fixed the compiler now says
+`clojure.core/method-key is private to clojure.core; flint.protocols may not
+name it`, which is a real answer where there used to be a silent pass and a
+mystery downstream.
+
+IT IS NOT THE ANSWER, THOUGH, and that is worth being exact about. Making
+`method-key` public and moving `extend-method` anyway builds the compiler
+clean -- and `(extend-protocol ...)` at top level still fails with the same
+`ClassCastException: value is not a function (nil, 4 args)`. So privacy was a
+blocker, not THE blocker. What the experiment bought is a cleaner starting
+point: the next person is no longer chasing a failure with a silent privacy
+violation mixed into it.
+
+WHAT IS LEFT UNTESTED is what `clojure.core` IS, rather than how it is
+arranged. The third and fourth probes above build the bootstrap SHAPE in
+ordinary namespaces -- A requires B, the macro lives in A, the user namespace
+names neither -- and it works. So the difference is not the shape of the
+dependency; it is something about `clojure.core` specifically: auto-referred
+into every namespace, bootstrapped, and the one namespace whose own analysis
+order is not a free variable.
 
 SO THE MECHANISM IS UNKNOWN, and this section says so rather than offering a
 third guess. Two disproofs narrow it; they do not close it. `extend-method` stays in `clojure.core`. It is the one name that
