@@ -340,6 +340,37 @@ them to, because it does not depend on an ecosystem accepting git. It depends
 only on a repository CONTAINING a manifest once it is on disk, which is exactly
 what separating the scanners from the downloaders buys.
 
+### Design: how the CLI itself ships
+
+Recorded 2026-09-11. Two forms, and for now only the first.
+
+**`@3sln/flint-cli`, installed with `npm install -g`.** The CLI is a WASM build
+and node hosts it — which settles the wasm-fallback problem for free, because
+the same node is then available as the wasm runtime for any pod with no native
+artifact. One host, both jobs, nothing embedded.
+
+Most of this exists. `dist/flintc.wasm` is the compiler compiled by itself, and
+`host/flint.mjs` already runs flint wasm under node; `bin/conform-hosts` drives
+exactly that path. What is missing is the packaging, not the capability.
+
+**A pure native Rust build** is the second form, and it is where the wasm
+question comes back: (1) do not support wasm pods there, (2) build an engine
+like wasmtime into the binary, or (3) fetch and link a wasm runtime lazily so
+it is not part of the base CLI. Undecided, and deliberately deferred — for now
+the npm package is the only shipped form.
+
+**THE COST TO WEIGH, because it is measured and it cuts against this.**
+`cli/Cargo.toml` says why the native binary exists, in a comment beside the
+dependency that makes it possible: running the compiler natively "is 2.7 s
+against 15.6 s through a wasm engine". That is a 5.8× difference on the same
+compile, and it is the entire argument for `other-hosts`' native path.
+
+Shipping the CLI as wasm-on-node takes that hit on every invocation. Nobody has
+re-measured it under a modern node, and the figure may have moved — but it
+should be re-measured rather than assumed either way before the native form is
+dropped rather than merely deferred. The native binary is not dead weight; it
+is the fast path, and the npm form is the portable one.
+
 ### Design: a first-party pod registry, in this repo
 
 Recorded 2026-09-11. This is the piece that makes "the drivers are pods" work
