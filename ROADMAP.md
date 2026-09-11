@@ -278,8 +278,13 @@ ecosystem in how it is written, so there is nothing to guess:
 
 This is also what makes **local pods** work, which is the case that prompted
 the rule: a pod under development is a directory, not a registry entry, and
-`:pod/path` says both where it is and what to read. Only `:local/root` exists
-today; the other three are new coordinates.
+`:pod/path` says both where it is and what to read.
+
+**`:local/root` and `:pod/path` are BUILT** (2026-09-11). A pod is an ordinary
+`:deps` entry, `:pod/path` names a directory holding `manifest.edn`, and the
+manifest selects a per-platform `:artifact/executable`. `:npm/path` and
+`:mvn/path` remain new coordinates. `:pod/version` is recognised and refused
+with a sentence naming the missing registry.
 
 *Fetched from a registry? WHAT IS THERE says*, by precedence — `deps.edn`
 first, then the ecosystem's own manifest. A flint library published to npm
@@ -541,10 +546,18 @@ makes the dependency drivers THEMSELVES pods.
 `Pod::boot(ns, program, args)` starts one with `BABASHKA_POD=true`, so a pod
 that is already on disk works. `flint deps add` accepts `pod` as a kind.
 
-**What does not:** resolving one. `cli/src/depscmd.rs` bails outright — *"pods
-are not resolvable yet"* — and `:pod/version` appears nowhere in the code at
-all, only in prose. So a pod can be booted but not fetched, and the coordinate
-that is supposed to name it is not read by anything.
+**A LOCAL POD IS BUILT** (2026-09-11). `:pod/path` is an ordinary `:deps`
+coordinate naming a directory that holds `manifest.edn`; the manifest selects a
+per-platform `:artifact/executable`; the CLI reads it and boots the pod before
+compiling, since only a running pod can say what it holds. The old
+`:flint/pods` key — a second declaration mechanism beside `:deps`, naming an
+executable directly and so with nowhere to express per-platform artifacts — is
+gone.
+
+**What does not:** resolving a pod from a REGISTRY. `:pod/version` is now
+recognised as a coordinate and refused with a sentence naming the missing
+registry, rather than falling through to a generic message. So a pod can be
+declared, booted and reasoned about; it still cannot be FETCHED.
 
 **THE BOOTSTRAP IS SETTLED, and it is the reason to want pods here at all.**
 The POD manager — resolver, downloader, the thing that boots one — is the ONLY
@@ -561,10 +574,14 @@ project with three git dependencies never downloads the Maven driver. The CLI
 stays small and the driver set becomes open: a fourth ecosystem is a new pod,
 not a new release of flint.
 
-WHICH MAKES `depscmd.rs`'s "pods are not resolvable yet" THE LOAD-BEARING GAP.
-It reads today like one unfinished kind among four. Under this plan every other
-kind is downstream of it: until a pod can be resolved, nothing else can be
-fetched by the thing that is supposed to fetch it.
+WHICH MAKES POD *FETCHING* THE LOAD-BEARING GAP. It reads like one unfinished
+kind among four. Under this plan every other kind is downstream of it: until a
+pod can be fetched, nothing else can be fetched by the thing that is supposed
+to fetch it.
+
+And the registry it resolves against comes first, since there is nothing to
+resolve into otherwise — noting that the in-repo registry serves CLI tooling
+only, while user dependencies resolve against the community registry.
 
 **Open questions, recorded as open:**
 
