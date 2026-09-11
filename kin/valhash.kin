@@ -3,7 +3,7 @@
 ;; ONE WALK, and both ports had TWO. Their `hashValue` hashed a VECTOR with an
 ;; indexed loop that CACHED but charged nothing, and everything else sequential
 ;; with a seq walk that CHARGED but did not cache. Native had this, which does
-;; both -- and the uncharged half is the defect `0009` records costing 998 068
+;; both -- and the uncharged half is the defect `resource-limits` records costing 998 068
 ;; steps past an exhausted budget, still live on the JVM and the CLR for the
 ;; one shape most likely to be big.
 ;;
@@ -12,7 +12,7 @@
 ;;
 ;; `v` IS ROOTED FOR THE WHOLE WALK. `seq`, `first` and `next` allocate, and
 ;; the cache write at the end would otherwise land on a stale address -- which
-;; is not a wrong hash, it is a corrupted heap (`0031`).
+;; is not a wrong hash, it is a corrupted heap (`a-vec-of-values-is-not-a-root`).
 (ns flint.rt.valhash
   (:require [flint.impl.rt :refer [defn return if let do comment doc local set
                                    == not nil? is-heap as-heap ty is-fixnum
@@ -69,7 +69,7 @@
      ""
      "THE CACHE WRITE RE-READS `v` FROM THE ROOT STACK, because `hash-value`"
      "on an element allocates -- a row ref materialises as a map -- and a raw"
-     "address held across it is `0031`.")
+     "address held across it is `a-vec-of-values-is-not-a-root`.")
 (defn ^:method ^U32 hash-vec-indexed [^:mut ^Rt rt ^Value v]
   (let [^RootIx base (mark rt)
         ^RootIx vi (push rt v)
@@ -191,12 +191,12 @@
              "here for the caching, which is real: a rope used as a map key"
              "must not rehash every lookup. `RP_HASH` gives the same caching"
              "per node and keeps the tree, so the trade is gone rather than"
-             "chosen (`0011`).")
+             "chosen (`strings-and-matching`).")
     (comment "THROUGH `hash-int`, which a FLAT string's hash also goes"
              "through -- `string-hash` is `hash-int(java-string-hash(s))` and"
              "`rope-hash` is the raw 31-walk. Without the finaliser here a"
              "rope and an equal flat string hashed DIFFERENTLY, which breaks"
-             "the one rule `0011` states about tiers: two values that are `=`"
+             "the one rule `strings-and-matching` states about tiers: two values that are `=`"
              "must hash alike or a map keyed by one is not found by the"
              "other. All three runtimes agreed, so no cross-runtime check"
              "could see it; `(= x (read-string (pr-str x)))` did."
@@ -246,7 +246,7 @@
     (if (== t TY_SET)
       (return (hash-set rt v)))
     (comment "AN OPAQUE VALUE CARRIES ITS OWN IDENTITY, assigned at creation"
-             "and STORED (`0022`). The per-type constant below would be"
+             "and STORED (`opaque-values`). The per-type constant below would be"
              "correct -- equality is identity, so collisions only cost time --"
              "but it would put every opaque value in one bucket, and the whole"
              "point of the type is to be a distinct key.")
@@ -258,7 +258,7 @@
     (comment "COLUMNAR is available precisely because a table is not `=` to a"
              "vector of maps, so this need not agree with what one would"
              "hash. ROOTED for the reason the equality arm is: `table-ref`"
-             "allocates and `v` is a host local (`0031`).")
+             "allocates and `v` is a host local (`a-vec-of-values-is-not-a-root`).")
     (if (== t TY_TABLE)
       (let [^RootIx base (mark rt)
             ^RootIx vi (push rt v)

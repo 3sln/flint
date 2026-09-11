@@ -1,5 +1,5 @@
 (ns capability
-  "Capabilities as host-minted opaque values (`doc/decisions/0021`, `0022`).
+  "Capabilities as host-minted opaque values (`DECISIONS.md#cli`, `opaque-values`).
 
   The property under test is the one 0022 records as the hazard the whole
   generalisation creates: because guest code CAN mint opaque values, authority

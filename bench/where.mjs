@@ -22,7 +22,7 @@
 // with the predicate opcode on and off and subtracts, which is a measurement
 // on the workload rather than an estimate carried in from another one.
 import { load, instantiate } from '../host/flint.mjs';
-// Built `:fn construe.bench.main/main`; a call names it (`0025` step 5).
+// Built `:fn construe.bench.main/main`; a call names it (`structured-ports` step 5).
 const FN = 'construe.bench.main/main';
 
 const NB = 20, NCOUNT = 28, C = NB * 4, OPS_AT = C + NCOUNT, NAT_AT = OPS_AT + 256;

@@ -1,4 +1,4 @@
-// The wire codec (`doc/decisions/0025`).
+// The wire codec (`DECISIONS.md#structured-ports`).
 //
 // One encoding for every flint value crossing the boundary: a call's arguments,
 // its return, and everything a port carries. It is a CODEC rather than a
@@ -99,7 +99,7 @@ export const codec = {
   /// could recognise a capability it had never had any way to issue. The
   /// asymmetry is why the `allow` hook in `guest.js` had no users.
   ///
-  /// `doc/decisions/0022`: the id is the whole authority. It is meaningful
+  /// `DECISIONS.md#opaque-values`: the id is the whole authority. It is meaningful
   /// only to the host that issued it, the guest can carry it and compare it
   /// and nothing else, and an id the guest MINTS is 0 -- which is why 0 must
   /// never be issued, or a forgery is indistinguishable from a grant.

@@ -1,16 +1,16 @@
-//! The pump: run a program, serve what it asks for, resume (`0037`).
+//! The pump: run a program, serve what it asks for, resume (`system-namespaces-and-deps`).
 //!
 //! The Rust CLI had no such loop. `run_with` ran a program to completion and a
 //! program that opened a port simply parked for ever, because nothing drained
 //! the event queue -- so `flint run` could execute logic and could not execute
-//! anything that talked to the world. Everything in `0037` needs this before it
+//! anything that talked to the world. Everything in `system-namespaces-and-deps` needs this before it
 //! needs anything else.
 //!
 //! It mirrors `sdks/esm/src/guest.js`, which is the reference driver, and the
 //! ordering rules are the ones that file records:
 //!
 //! * a grant NAMES a port, because there is no port until the host says which
-//!   one (`0027`);
+//!   one (`ports-are-the-hosts`);
 //! * routing is set before the grant is answered, so a message cannot arrive
 //!   for a port the host does not yet know;
 //! * `resume` is called until the program settles or stops asking.
@@ -42,7 +42,7 @@ pub struct Host {
     /// The port `open` requests go out on, when anything is served.
     system: Option<u32>,
     /// How many sandboxes hold each port. The runtime pushes exactly one retain
-    /// and one release per port per sandbox (`0027`), so this reaching zero is
+    /// and one release per port per sandbox (`ports-are-the-hosts`), so this reaching zero is
     /// what says the resource can go -- a count of ARRIVALS would not.
     holders: HashMap<u32, i64>,
 }
@@ -78,7 +78,7 @@ impl Host {
         // THE SYSTEM PORT FIRST. A sandbox asks for a capability by sending on
         // the port it was given at construction, and one that was given none
         // cannot ask at all -- it is told so rather than parked, which is the
-        // honest failure (`0027`) and is exactly what a program requiring
+        // honest failure (`ports-are-the-hosts`) and is exactly what a program requiring
         // `flint.sys.fs` hit before this line existed:
         //
         //     SecurityException: this sandbox was given no system port,
@@ -166,7 +166,7 @@ impl Host {
     fn handle(&mut self, p: &mut Program, ev: Event) {
         match ev.kind {
             EV_OPEN => {
-                // The payload is `[name & args]`, encoded (`0027`).
+                // The payload is `[name & args]`, encoded (`ports-are-the-hosts`).
                 let name = codec::parse(&ev.payload)
                     .ok()
                     .and_then(|v| v.as_slice().and_then(|s| s.first().cloned()))
@@ -187,7 +187,7 @@ impl Host {
                             // Counted here rather than from an event: this host
                             // granted the port, so it knows, and the runtime
                             // does not push a retain for what the host did
-                            // itself (`0027`).
+                            // itself (`ports-are-the-hosts`).
                             *self.holders.entry(port).or_insert(0) += 1;
                         } else {
                             self.routes.remove(&port);
@@ -210,7 +210,7 @@ impl Host {
                 let reply = sys::serve(self.services[i].as_mut(), &req, &self.policy);
                 // Back-pressure is real: a full guest buffer answers false, and
                 // the message has to be offered again after the next pump
-                // (`0027`). One retry after a resume covers the case that
+                // (`ports-are-the-hosts`). One retry after a resume covers the case that
                 // actually happens -- a buffer drained by the reader thread --
                 // and a queue here would be a second scheduler.
                 if !p.host_deliver(port, &reply) {

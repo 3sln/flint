@@ -6,7 +6,7 @@
   histogram on and reports which of the compiler's 45 opcodes were never
   executed. Nine were. Two of those are reachable and are exercised here; the
   other seven are emitted by nothing at all, which is a different problem
-  (`doc/decisions/0038`).
+  (`DECISIONS.md#kin`).
 
   This matters before anything is REGENERATED: an opcode the cross-runtime
   suite does not run is one where all three implementations could be wrong

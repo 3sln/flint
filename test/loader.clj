@@ -1,4 +1,4 @@
-;; Compiling without linking (`doc/decisions/0023`).
+;; Compiling without linking (`DECISIONS.md#construe-integration-bar`).
 ;;
 ;; 0023 asks whether a Worker has to produce a MODULE. Emitting a `.wasm` needs
 ;; `rust-lld`, which will not run there -- but the compiler's output is a
@@ -67,7 +67,7 @@
      };
      const res = [];
      // `path=arg=ns/fn`: the FUNCTION IS NAMED, because a loaded image has no
-     // entry point -- nothing is called automatically (`doc/decisions/0025`
+     // entry point -- nothing is called automatically (`DECISIONS.md#structured-ports`
      // step 5) and the loader module cannot know what the image calls itself.
      for (const spec of process.argv.slice(2)) {
        const [path, arg, fname] = spec.split('=');

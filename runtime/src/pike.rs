@@ -1,4 +1,4 @@
-//! The native Pike VM (`doc/decisions/0012`).
+//! The native Pike VM (`DECISIONS.md#matching-over-ropes`).
 //!
 //! One left-to-right pass carrying a list of live threads, consuming each
 //! character exactly once and never rewinding. That is what lets it read a ROPE:
@@ -73,7 +73,7 @@ fn class_hit(classes: &[u32], off: usize, v: u32) -> bool {
 ///
 /// A rope is walked leaf by leaf; the leaves are collected once as VALUES, not
 /// as bytes, so nothing is copied and `stat_flattens` stays at zero. That is the
-/// property `doc/decisions/0012` asks to be asserted rather than assumed.
+/// property `DECISIONS.md#matching-over-ropes` asks to be asserted rather than assumed.
 struct Cursor {
     leaves: alloc::vec::Vec<Value>,
     leaf: usize,
@@ -266,7 +266,7 @@ impl Rt {
     /// instruction.
     ///
     /// Gas is charged HERE, on every call, hit or miss -- see
-    /// `doc/decisions/0012`: if compiling charged only on a miss, whether a
+    /// `DECISIONS.md#matching-over-ropes`: if compiling charged only on a miss, whether a
     /// compile happened would depend on whether a collection had run, and the
     /// same program would report two different instruction counts. That is
     /// exactly the flakiness 0009's counter exists to replace.

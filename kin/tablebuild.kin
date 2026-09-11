@@ -2,10 +2,10 @@
 ;;
 ;; TWO SHAPES OF THE SAME LOOP. Both fill one chunk of at most `CHUNK` rows at
 ;; a time, collapse each column as it is finished, and refuse a value that does
-;; not match its declared type -- naming the row and the column, because `0032`
+;; not match its declared type -- naming the row and the column, because `checks`
 ;; says "bad row" is the message this codebase keeps replacing.
 ;;
-;; THE COLUMN FORM IS WHAT THE WIRE DECODER BUILDS INTO (`0026` step 9). Going
+;; THE COLUMN FORM IS WHAT THE WIRE DECODER BUILDS INTO (`tables` step 9). Going
 ;; through rows would mean building a map per row only to take it apart again,
 ;; which is the shape the type exists to avoid -- and on the decode path it
 ;; would be the receiver paying for the sender's compactness. The values are

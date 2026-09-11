@@ -1,4 +1,4 @@
-//! One port, two executors (`doc/decisions/0028`).
+//! One port, two executors (`DECISIONS.md#drivers`).
 //!
 //! A port's inbox used to be a persistent vector and a read cursor, and
 //! `conj`-then-store is a read-modify-write with an ALLOCATION in the middle --

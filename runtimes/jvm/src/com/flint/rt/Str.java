@@ -7,7 +7,7 @@ import static com._3sln.flint.kgen.rt.Interns.*;
 
 /// Strings, ported from `runtime/src/strs.rs`.
 ///
-/// Three tiers, and the first two are here (`doc/decisions/0011`'s ropes are
+/// Three tiers, and the first two are here (`DECISIONS.md#strings-and-matching`'s ropes are
 /// the third and come with the rest of that file):
 ///
 /// * five bytes or fewer live IN the value -- no allocation, and a comparison
@@ -31,7 +31,7 @@ public final class Str {
     ///
     /// A LONG NON-ASCII STRING ARRIVES AS A TREE. The tier transitions fire on
     /// CONCATENATION, so a string that arrives whole from outside never became
-    /// a rope however big it was -- and `0011` then says, correctly, that "a
+    /// a rope however big it was -- and `strings-and-matching` then says, correctly, that "a
     /// flat string carries one total count, which does not locate code point
     /// k". Nothing covered a flat string that is not ASCII, and every reader in
     /// the language indexes by code point, so one non-ASCII character in a
@@ -123,7 +123,7 @@ public final class Str {
 
     /// The CANONICAL value for a string.
     ///
-    /// Three tiers (`doc/decisions/0011`): inline up to 5 bytes, interned up to
+    /// Three tiers (`DECISIONS.md#strings-and-matching`): inline up to 5 bytes, interned up to
     /// `INTERN_MAX`, and plain heap beyond. Inline is canonical by
     /// construction and interning is guaranteed in its range, so two strings in
     /// either range are `=` exactly when they are bit-equal. Past the range a
@@ -266,7 +266,7 @@ public final class Str {
     /// GENERATED NOW, from `kin/ropecmp.kin`. This flattened both operands --
     /// `text` opens a sink and appends the whole rope -- and then compared
     /// UTF-16 code units to reproduce `String.compareTo`. UTF-8 byte order is
-    /// already code point order, and `0011` lists comparison among the
+    /// already code point order, and `strings-and-matching` lists comparison among the
     /// operations that must WALK.
 
     /// The hash of a STRING value, cached in the object for a heap string.
@@ -373,7 +373,7 @@ public final class Str {
     static boolean isAscii(Rt rt, long v) { return sAscii(rt, v); }
 
     /// The code point at index `i`, as a single-character string. NOT a char
-    /// type: flint has no char, and `doc/decisions/0010` counts that among the
+    /// type: flint has no char, and `DECISIONS.md#other-hosts` counts that among the
     /// documented divergences rather than a gap.
     /// The one-character string at code point `i`, or `dflt` past the end.
     ///
@@ -392,7 +392,7 @@ public final class Str {
 
     /// The bytes of the code point at index `i`, or -1.
     ///
-    /// WHICH MECHANISM, AND WHY -- `0011` calls them complementary and this is
+    /// WHICH MECHANISM, AND WHY -- `strings-and-matching` calls them complementary and this is
     /// the line where that is acted on. ASCII: flatten once and index by byte,
     /// which is O(1) forever after; descending instead costs O(depth) EVERY
     /// time and made a linear operation superlinear. Non-ASCII: descend, and
@@ -402,7 +402,7 @@ public final class Str {
     /// This replaced a one-entry cursor. The cursor had to be invalidated by
     /// the collector, so the same walk cost different GAS depending on when a
     /// collection happened -- and under parallel executors that collection
-    /// belongs to another thread. `doc/decisions/0009` says gas is
+    /// belongs to another thread. `DECISIONS.md#resource-limits` says gas is
     /// deterministic; a memo keyed on collector state is not.
     static int cpBytesAt(Rt rt, long v, int i, byte[] out) {
         if (i < 0) return -1;
@@ -411,7 +411,7 @@ public final class Str {
             // index IS a byte index, so the descent is this same walk with the
             // lookup skipped -- while FLATTENING turns an O(log n) descent into
             // an O(n) copy AND caches the flat form, undoing the tree for every
-            // later read. Native has descended for every rope since `0011`; the
+            // later read. Native has descended for every rope since `strings-and-matching`; the
             // ports kept the older policy, so `(nth s i)` on a large ASCII rope
             // materialised it here and not there. Measured: RP_FLAT went from
             // nil to non-nil across one `nth` on a 2,700-character rope.
@@ -459,7 +459,7 @@ public final class Str {
     }
 
 
-    // --- ropes (`doc/decisions/0011`) ---------------------------------------
+    // --- ropes (`DECISIONS.md#strings-and-matching`) ---------------------------------------
     //
     // The THIRD tier: a shallow tree of string pieces, so `str` of two large
     // strings is a tree join rather than a copy. A node carries its subtree's
@@ -475,14 +475,14 @@ public final class Str {
     /// one, so hashing a rope FLATTENED it -- which bought the caching by
     /// spending the sharing the tree exists for. Clojure's string hash
     /// composes, `h(A.B) = h(A)*31^|B| + h(B)`, so a node combines its
-    /// children's (`doc/decisions/0011`).
+    /// children's (`DECISIONS.md#strings-and-matching`).
     public static final int RP_BYTES = 0, RP_CPS = 1, RP_FLAT = 2, RP_HASH = 3, RP_KIDS = 4;
     public static final int FLAT_MAX = 1024, FANOUT = 16;
     /// What may be COPIED to avoid a new leaf; see `runtime/src/rope.rs`.
     public static final int MERGE_MAX = 256;
     /// A slice smaller than this COPIES rather than sharing, so a small `subs`
     /// cannot retain a large parent. Not a performance choice -- the retention
-    /// fix (`doc/decisions/0011`).
+    /// fix (`DECISIONS.md#strings-and-matching`).
     public static final int SLICE_MIN = 256;
 
     /// LEAF SIZE FOR A STRING THAT ARRIVES NON-ASCII AND WHOLE. See
@@ -508,7 +508,7 @@ public final class Str {
     ///
     /// Both `subs` paths used to copy every byte and one flattened first, which
     /// spends the sharing that is half the point of a rope on the operation
-    /// that most wants it (`doc/decisions/0011`).
+    /// that most wants it (`DECISIONS.md#strings-and-matching`).
     public static long ropeSlice(Rt rt, long v, int from, int to) { return com._3sln.flint.kgen.rt.Ropeslice.ropeSlice(rt, v, from, to); }
 
     /// `31^n`, by squaring: the multiplier that lets two cached hashes join.
@@ -584,7 +584,7 @@ public final class Str {
 
 
     /// Contiguous bytes for a string of any tier. Identity for inline and flat;
-    /// materialises a rope ONCE and remembers it. `0011`: count the flattens,
+    /// materialises a rope ONCE and remembers it. `strings-and-matching`: count the flattens,
     /// do not hope about them -- a rope that flattens on every `index-of`
     /// passes every correctness test and is slower than the flat string it
     /// replaced.

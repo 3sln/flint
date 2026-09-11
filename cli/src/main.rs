@@ -3,7 +3,7 @@
 //! Everything is embedded: the compiler, two runtime modules, their builtin
 //! slot maps, and the standard library sources. There is nothing to install
 //! and nothing to find on disk -- no babashka, no JVM, no Rust toolchain and
-//! no linker (`doc/decisions/0024`).
+//! no linker (`DECISIONS.md#no-runtime-linking`).
 //!
 //! The compiler runs NATIVELY. flint's runtime is Rust, so it already compiles
 //! through LLVM for every target cargo does -- the collector, the interpreter
@@ -11,7 +11,7 @@
 //! binary carries the compiler as a bytecode IMAGE and runs it directly, with
 //! no wasm engine in the binary at all.
 //!
-//! It is worth 2.7 s against 15.6 s on the same compile (`doc/decisions/0010`).
+//! It is worth 2.7 s against 15.6 s on the same compile (`DECISIONS.md#other-hosts`).
 //! The output is still wasm: what changed is what the compiler runs ON.
 
 mod deps;
@@ -197,8 +197,8 @@ fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
         }
         out.push(']');
     }
-    // The VIRTUAL namespaces this binary serves (`doc/decisions/0036` step 4,
-    // `0037`). They have no source, so the resolver has to be told they exist
+    // The VIRTUAL namespaces this binary serves (`DECISIONS.md#workspace-capabilities` step 4,
+    // `system-namespaces-and-deps`). They have no source, so the resolver has to be told they exist
     // or a `:require` of one is reported missing -- and it has to be told what
     // they HOLD, so an unknown var is a compile error rather than a run-time
     // one. The CLI knows its own surface, so taking it on trust would be
@@ -206,7 +206,7 @@ fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
     out.push_str(" :workspaces [");
     // POD namespaces, if any were declared. A pod's surface is discovered by
     // BOOTING it, so this is the one virtual namespace whose var list costs a
-    // process -- which is why `0036` made the list optional and why a build
+    // process -- which is why `workspace-capabilities` made the list optional and why a build
     // that boots is a choice made in the open rather than a default.
     for (ns, vars) in pods {
         out.push_str("{:prefix ");
@@ -253,7 +253,7 @@ fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
     }
     if !meta.is_empty() {
         // Arbitrary, and never read: flint carries what the host put there
-        // (`doc/decisions/0025`). Declared capabilities live here by
+        // (`DECISIONS.md#structured-ports`). Declared capabilities live here by
         // convention, and the convention belongs to whoever reads them.
         out.push_str(" :meta {");
         for (k, v) in meta {
@@ -351,7 +351,7 @@ fn run_source(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
 fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
                 roots: Option<&[String]>, quiet: bool) -> Result<(i32, String)> {
     // PODS ARE BOOTED FIRST, because their surface is what the compiler needs
-    // and only a running pod can say what it is (`doc/decisions/0037`). A build
+    // and only a running pod can say what it is (`DECISIONS.md#system-namespaces-and-deps`). A build
     // with no `:flint/pods` boots nothing and this costs a map lookup.
     let mut pods: Vec<crate::pod::Pod> = Vec::new();
     for (ns, program, pargs) in declared_pods(srcs)? {
@@ -401,9 +401,9 @@ fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
     // SERVED, not just run. `run_with` alone leaves a program that opens a port
     // parked for ever, because nothing drains the event queue -- so `flint run`
     // could execute logic and nothing that talked to the world
-    // (`doc/decisions/0037`).
+    // (`DECISIONS.md#system-namespaces-and-deps`).
     //
-    // The opaque values `:with` mints stay: they are `0022`'s capabilities, a
+    // The opaque values `:with` mints stay: they are `opaque-values`'s capabilities, a
     // different mechanism from the served namespaces, and a host may hand over
     // both. What each `:with` entry now ALSO does is carry the policy for the
     // namespace of that name.
@@ -567,7 +567,7 @@ no linker."
     std::process::exit(2)
 }
 
-/// `:path [a b] :fn ns/f :to :wasm :out o`, in the style `0021` describes.
+/// `:path [a b] :fn ns/f :to :wasm :out o`, in the style `cli` describes.
 ///
 /// A value may be a bracketed list or a repeated key; both mean the same
 /// thing. Brackets are written the way they are read aloud, and a shell splits
@@ -713,7 +713,7 @@ fn main() -> Result<()> {
             // arrive later, so what a program needs has to survive until then,
             // and metadata is where it survives. flint does not read it -- this
             // is the CLI writing down its own convention where the next tool
-            // can find it (`doc/decisions/0021`).
+            // can find it (`DECISIONS.md#cli`).
             let mut meta = a.meta.clone();
             if !a.grants.is_empty() {
                 meta.push(("capabilities".to_string(), a.grants.join(" ")));
@@ -742,7 +742,7 @@ fn main() -> Result<()> {
             // suite is a test command CI cannot use.
             std::process::exit(if code != 0 || out.contains("FAILED") { 1 } else { 0 });
         }
-        // `deps` -- the dependency surface (`doc/decisions/0037`). The
+        // `deps` -- the dependency surface (`DECISIONS.md#system-namespaces-and-deps`). The
         // RESOLUTION is `flint.deps.resolve`, run as a program, so what `add`
         // writes and what a build picks cannot disagree.
         "deps" => {

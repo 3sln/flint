@@ -4,7 +4,7 @@ import static com.flint.rt.Obj.*;
 import java.util.ArrayList;
 import static com._3sln.flint.kgen.rt.Pike.*;
 
-/// The Pike VM, ported from `runtime/src/pike.rs` (`doc/decisions/0012`).
+/// The Pike VM, ported from `runtime/src/pike.rs` (`DECISIONS.md#matching-over-ropes`).
 ///
 /// One left-to-right pass carrying a list of live threads, consuming each
 /// character exactly once and never rewinding.

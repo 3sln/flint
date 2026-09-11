@@ -3,7 +3,7 @@ package com.flint.rt;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
-/// Several executors inside one sandbox (`doc/decisions/0028`), ported from
+/// Several executors inside one sandbox (`DECISIONS.md#drivers`), ported from
 /// `runtime/src/par.rs`.
 ///
 /// One heap, K host threads on it. Everything here exists to make three things
@@ -43,7 +43,7 @@ public final class Parallel {
     /// costs more than the work it is counting.
     ///
     /// The price is that a limit stops the program a little late -- by at most
-    /// this times the number of executors (`doc/decisions/0009`).
+    /// this times the number of executors (`DECISIONS.md#resource-limits`).
     public static final long GAS_BATCH = 4096;
 
     /// Non-zero while an executor is staging a collection and wants everyone

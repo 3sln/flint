@@ -64,7 +64,7 @@ public sealed unsafe class Space : System.IDisposable {
     // what makes an interlocked operation on it legal.
     //
     // These exist for ONE thing: a port's inbox, where two executors reserve
-    // and publish without a lock (`doc/decisions/0028`). Nothing else in the
+    // and publish without a lock (`DECISIONS.md#drivers`). Nothing else in the
     // heap is written by two threads at once -- a collection is stop-the-world
     // at a safepoint -- so ordinary slots need no synchronisation.
     public long AtomicLoad(long addr) =>

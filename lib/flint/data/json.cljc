@@ -150,7 +150,7 @@
   than being coerced. That is the mode a `:json` port uses by default: a
   keyword that comes back a string does not round-trip, and finding that out at
   the other end is much worse than finding it out at the send
-  (`doc/decisions/0006`)."
+  (`DECISIONS.md#host-abi`)."
   [x & opts]
   (let [o (apply hash-map opts)]
     (flint.rt/str-join (write-value x o 0 []))))

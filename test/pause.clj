@@ -1,4 +1,4 @@
-;; The collector collects little and often (`doc/decisions/0018`).
+;; The collector collects little and often (`DECISIONS.md#cross-runtime-benchmarks`).
 ;;
 ;; `bin/bench-image` measures the consequence -- a p99/p50 of 1.06 under load,
 ;; tighter than the 1.21 at idle. This asserts the CAUSE, because the cause is

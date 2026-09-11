@@ -39,7 +39,7 @@
 ;; what this assertion exists to prevent a repeat of.
 ;;
 ;; It is read-only and allocates nothing, so unlike a snapshot it cannot perturb
-;; the run it is checking. Production carries none of it (doc/decisions/0016).
+;; the run it is checking. Production carries none of it (DECISIONS.md#two-builds).
 (println "gc: the generational invariant holds")
 (let [r (sh "node" "-e"
             (str "import('./host/flint.mjs').then(async (m) => {"

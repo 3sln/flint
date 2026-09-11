@@ -1,4 +1,4 @@
-;; Two builds (doc/decisions/0016).
+;; Two builds (DECISIONS.md#two-builds).
 ;;
 ;; A production module contains no diagnostic machinery -- absent, not disabled.
 ;; A runtime flag would leave the code linked and branched on, and "absent" is a
@@ -36,7 +36,7 @@
 (def prod (String. (fs/read-all-bytes "out/tb-prod.wasm") "ISO-8859-1"))
 ;; And the SHIPPING build, which is what the floor below is a claim about.
 ;; `:optimize [perf]` removes `:flint/check` before the source is read
-;; (`doc/decisions/0032`), and `:features [flint]` does only that -- perf also
+;; (`DECISIONS.md#checks`), and `:features [flint]` does only that -- perf also
 ;; compiles every arity, and a floor that moved for two reasons at once would
 ;; measure neither. `test/threads.clj` makes the same split for the same
 ;; reason.
@@ -51,7 +51,7 @@
 ;; really measuring the size of the instrumentation, and it moved the day the
 ;; instrumentation grew.
 ;;
-;; Raised by 6 310 bytes for ropes (`doc/decisions/0011`). Deliberately, and with
+;; Raised by 6 310 bytes for ropes (`DECISIONS.md#strings-and-matching`). Deliberately, and with
 ;; the number that bought it: repeated concatenation went from 57.17 ms to
 ;; 2.31 ms, which is 24.7x and takes flint from 3.1x slower than babashka to
 ;; 7.9x faster. `test/threads.clj` carries the same note; both floors move
@@ -63,14 +63,14 @@
 ;; What it buys is 1.90x on arithmetic at an IDENTICAL instruction count --
 ;; `bench/progs/spec.cljc`, 22.4 ns per operation, which is what reaching a
 ;; builtin through the table and re-reading its arguments costs.
-;; Raised 2 360 bytes for byte strings (`doc/decisions/0024`): pinned by the
+;; Raised 2 360 bytes for byte strings (`DECISIONS.md#no-runtime-linking`): pinned by the
 ;; generic collection surface, and worth 217x the memory on the bytes they
 ;; exist to hold.
-;; Raised 20 589 bytes for `flint_call` (`doc/decisions/0025`): the wire codec
+;; Raised 20 589 bytes for `flint_call` (`DECISIONS.md#structured-ports`): the wire codec
 ;; and the map an error reply is built from, carried by every module because
 ;; every module can be called by name.
 ;; Raised 5 040 bytes for the write barrier carrying its remembered set
-;; (`doc/decisions/0028`), MEASURED at 249 490 against 244 450. Per-executor is
+;; (`DECISIONS.md#drivers`), MEASURED at 249 490 against 244 450. Per-executor is
 ;; what makes the barrier safe with several threads on one heap; the
 ;; alternative was a second copy of a twenty-five line function, and
 ;; `flint.strs` records what two copies of a subtle function cost.
@@ -82,7 +82,7 @@
 ;; The change that matters more than the number: it used to measure the build
 ;; with checks IN, so development machinery was spending the production budget.
 ;; The two now move independently.
-;; Raised again for the TAGGED LITERAL type (`doc/decisions/0034`): the shipped
+;; Raised again for the TAGGED LITERAL type (`DECISIONS.md#tagged-literals`): the shipped
 ;; floor measured 264 997 where it had been 261 363. That net is not all of it
 ;; -- the ring simplifications in `8f33c76` and `4b4bfb6` moved it DOWN in
 ;; between -- but the direction and the reason are clear: a new heap type puts

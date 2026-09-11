@@ -1,4 +1,4 @@
-;; Byte strings (`doc/decisions/0024`).
+;; Byte strings (`DECISIONS.md#no-runtime-linking`).
 ;;
 ;; The logic under test is `test/bytes.cljc`, which runs inside the module.
 ;; What this file adds is the number the type exists for: the same bytes held

@@ -6,7 +6,7 @@ import java.util.ArrayList;
 ///
 /// ## The decision everything else rests on
 ///
-/// `doc/decisions/0001`: values live in explicit arrays the collector walks,
+/// `DECISIONS.md#dispatch`: values live in explicit arrays the collector walks,
 /// never in host locals. On wasm that was forced -- wasm locals are not
 /// scannable. Here it is a CHOICE, and the same one, because it is what makes
 /// the collector identical across the three runtimes rather than merely
@@ -94,7 +94,7 @@ public final class Roots {
         for (int i = 0; i < g.length; i++) g[i] = f.visit(g[i]);
         for (int i = 0; i < c.length; i++) c[i] = f.visit(c[i]);
         for (int i = 0; i < sg.length; i++) sg[i] = f.visit(sg[i]);
-        // Every OTHER executor in this sandbox (`doc/decisions/0028`). A
+        // Every OTHER executor in this sandbox (`DECISIONS.md#drivers`). A
         // collection happens with all of them PARKED at a safepoint, so nothing
         // is mutating these while they are walked.
         //

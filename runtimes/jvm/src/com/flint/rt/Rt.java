@@ -21,8 +21,8 @@ import static com.flint.rt.Obj.*;
 /// worked and cost three things this does not: every value was boxed, the
 /// collector could not see the stack, and a continuation could not be
 /// serialised. Here the stack is `Roots.stack` -- scanned, movable, and
-/// capturable -- which is what `doc/decisions/0015` needs and what
-/// `doc/decisions/0005` needs.
+/// capturable -- which is what `DECISIONS.md#snapshots` needs and what
+/// `DECISIONS.md#threads-and-ports` needs.
 ///
 /// The frame stack is DATA, so a green thread is a saved copy of it and a
 /// snapshot carries it. Neither is bolted on afterwards; both fall out.
@@ -281,7 +281,7 @@ public final class Rt {
 
     /// How the decoder turns a `K_PORT` into a handle -- an indirection kept
     /// because the RUST needs it, and mirrored so the three runtimes stay one
-    /// implementation (`doc/decisions/0027`).
+    /// implementation (`DECISIONS.md#ports-are-the-hosts`).
     ///
     /// There it is a size decision: calling `installBridgePort` straight from
     /// the codec made the scheduler, the ring, the event queue and the port
@@ -325,7 +325,7 @@ public final class Rt {
     /// scheduler's slice -- so the native runtime bounded a runaway program and
     /// these two did not. Conformance could not see it: it diffs ANSWERS, and a
     /// program that is allowed to run forever eventually produces the right one
-    /// (`doc/decisions/0009`).
+    /// (`DECISIONS.md#resource-limits`).
     public void refreshCheckpoint() {
         long a = gasLimit == 0 ? Long.MAX_VALUE : gasLimit;
         long b = sliceEnd == 0 ? Long.MAX_VALUE : sliceEnd;
@@ -357,7 +357,7 @@ public final class Rt {
     /// The rest of the interpreter's state, all of it snapshot-visible.
     ///
     /// These are here rather than spread across the classes that use them for
-    /// the reason `doc/decisions/0015` gives: a snapshot is a COPY of the VM,
+    /// the reason `DECISIONS.md#snapshots` gives: a snapshot is a COPY of the VM,
     /// so anything that survives a park has to be findable in one place. The
     /// Rust keeps exactly this set on its `Rt`, and the port keeps it in the
     /// same order so the two write byte-identical snapshots.
@@ -388,7 +388,7 @@ public final class Rt {
     public Builtins.Fn[] natives = new Builtins.Fn[0];
     public String[] nativeNames = new String[0];
 
-    /// Another executor on THIS sandbox's heap (`doc/decisions/0028`).
+    /// Another executor on THIS sandbox's heap (`DECISIONS.md#drivers`).
     ///
     /// One heap, one set of shared roots, one safepoint protocol -- and its own
     /// value stack, shadow stack and remembered set, because those are per
@@ -467,7 +467,7 @@ public final class Rt {
     /// array-map, and an empty vector cost three objects.
     ///
     /// A budget that fits on one runtime has to fit on the others, or "verbatim
-    /// mirror" stops at the answers (`doc/decisions/0009`).
+    /// mirror" stops at the answers (`DECISIONS.md#resource-limits`).
     void initSingletons() {
         long el = alloc(Obj.TY_EMPTY_LIST, 1);
         roots.shared.singletons[SING_EMPTY_LIST] = Val.heap(el);
@@ -530,7 +530,7 @@ public final class Rt {
     // --- allocation, with the rooting discipline ---------------------------
 
     /// Allocate. With one executor this is `gc.alloc` and nothing else; with
-    /// several it is the whole safepoint protocol (`doc/decisions/0028`).
+    /// several it is the whole safepoint protocol (`DECISIONS.md#drivers`).
     ///
     /// The allocation lock keeps two threads out of the collector's
     /// bookkeeping. The safepoint is staged ONLY when this allocation would
@@ -544,7 +544,7 @@ public final class Rt {
         // 137 207 steps against 100 410 on an allocation-heavy one, a 37% gap,
         // while a loop-heavy program agreed to 0.07%. "Verbatim mirror" has to
         // mean the counter too, or a budget that fits on one runtime does not
-        // fit on another (`doc/decisions/0009`).
+        // fit on another (`DECISIONS.md#resource-limits`).
         //
         // Only when COUNTING: an unbudgeted sandbox does not count, which is
         // what the second interpreter instantiation exists to express.
@@ -601,7 +601,7 @@ public final class Rt {
     public void setSlot(long obj, int i, long v) { gc.setSlot(obj, i, v, roots); }
     public long slot(long v, int i) { return Obj.slot(gc.sp, Val.asHeap(v), i); }
 
-    /// The CLOSED SET of `0005`, generated from `kin/tablekind.kin`.
+    /// The CLOSED SET of `threads-and-ports`, generated from `kin/tablekind.kin`.
     public long kindOf(long v) { return com._3sln.flint.kgen.rt.Tablekind.kindOf(this, v); }
 
     /// Slot `i` of a MAP ENTRY, or element `i` of anything else.
@@ -620,7 +620,7 @@ public final class Rt {
     /// ROOT `v`, and in a diagnostic build check that it is not already stale.
     ///
     /// The native runtime has had this check since rooting bugs were first
-    /// hunted (`doc/decisions/0031`); the ports had NOTHING equivalent, which
+    /// hunted (`DECISIONS.md#a-vec-of-values-is-not-a-root`); the ports had NOTHING equivalent, which
     /// is why a rooting bug here has to be found by bisecting a conformance
     /// suite instead of being named at the moment it happens.
     ///
@@ -806,7 +806,7 @@ public final class Rt {
             // One comparison against a precomputed value, and only when
             // something is counting: `checkpoint` is 0 in a program with no
             // scheduler, so that loop has no counter in it at all.
-            // THE SAFEPOINT (`doc/decisions/0028`), and the slice check, at the
+            // THE SAFEPOINT (`DECISIONS.md#drivers`), and the slice check, at the
             // same place -- because they want the same place. `ip` has been
             // written back and every live value is on the value stack by
             // construction, which is what makes it safe to stop here and
@@ -984,7 +984,7 @@ public final class Rt {
                     vpush(cv);
                 }
                 case Op.APPLY -> {
-                    // `(apply f xs)` in head position (`doc/decisions/0037`).
+                    // `(apply f xs)` in head position (`DECISIONS.md#system-namespaces-and-deps`).
                     //
                     // TWO PATHS, because a park has to be survivable on both and
                     // they survive it differently. A CLOSURE is ENTERED, exactly
@@ -1366,12 +1366,12 @@ public final class Rt {
         if (Val.isNil(coll)) return dflt;
         if (Mapcore.isMap(this, coll)) return Mapread.mapGet(this, coll, k, dflt);
         if (Sets.isSet(this, coll)) return Sets.get(this, coll, k, dflt);
-        // `(:tag x)` and `(:form x)` (`doc/decisions/0034`). Without this the
+        // `(:tag x)` and `(:form x)` (`DECISIONS.md#tagged-literals`). Without this the
         // same lookup by two spellings disagrees: `(get x :tag)` answers and
         // `(:tag x)` falls through to the default.
         if (isHeapTy(coll, Obj.TY_TAGGED)) return Builtins.taggedGet(this, coll, k, dflt);
         // A TABLE indexes by ROW and hands back a ref, which materialises
-        // nothing (`doc/decisions/0026`).
+        // nothing (`DECISIONS.md#tables`).
         if (isHeapTy(coll, Obj.TY_TABLE)) {
             if (!Val.isFixnum(k)) return dflt;
             long r = Table.tableRef(this, coll, (int) Val.asFixnum(k));
@@ -1492,7 +1492,7 @@ public final class Rt {
         return hit ? Val.TRUE : Val.FALSE;
     }
 
-    // --- opaque values (`doc/decisions/0022`) --------------------------------
+    // --- opaque values (`DECISIONS.md#opaque-values`) --------------------------------
 
     /// The next identity to hand out. STORED in the object rather than derived
     /// from its address: the nursery is a copying collector, so an
@@ -1511,7 +1511,7 @@ public final class Rt {
     /// `[label, id, host-id]`. Guest code can mint one only with host id 0, and
     /// there is deliberately no builtin that reads an id back -- so a host id is
     /// a thing the HOST wrote and only the host can read.
-    /// `#my.ns/thing v` (`doc/decisions/0034`): `[tag, form]`, tag a symbol.
+    /// `#my.ns/thing v` (`DECISIONS.md#tagged-literals`): `[tag, form]`, tag a symbol.
     public long newTagged(long tag, long form) { return com._3sln.flint.kgen.rt.Opaque.newTagged(this, tag, form); }
 
     public long newOpaque(long label, long hostId) { return com._3sln.flint.kgen.rt.Opaque.newOpaque(this, label, hostId); }
@@ -1524,7 +1524,7 @@ public final class Rt {
     public long opaqueLabel(long v) { return com._3sln.flint.kgen.rt.Opaque.opaqueLabel(this, v); }
 
 
-    /// Gas for work that is not O(1) (`doc/decisions/0009`).
+    /// Gas for work that is not O(1) (`DECISIONS.md#resource-limits`).
     ///
     /// The counter is meant to be proportional to WORK and reproducible, and
     /// that is a property of the language rather than of one runtime: a port
@@ -1544,7 +1544,7 @@ public final class Rt {
     /// CHARGE INSIDE THE LOOP, not before it: `chargeWork` only adds to a
     /// counter, and nothing reads that counter until the next interpreter
     /// instruction, so a native that charges a million and then loops a million
-    /// times still burns a million iterations (`doc/decisions/0009`).
+    /// times still burns a million iterations (`DECISIONS.md#resource-limits`).
     public boolean chargeTick(long i, long n, String where) {
         steps += n;
         if ((i & TICK_MASK) != 0) return true;
@@ -1610,7 +1610,7 @@ public final class Rt {
         return aot.length;
     }
 
-    // --- AOT (`doc/decisions/0013`) ------------------------------------------
+    // --- AOT (`DECISIONS.md#emit-wasm-instead-of-dispatch`) ------------------------------------------
     //
     // PORTED from `runtime/src/vm.rs`, and it is a port rather than a rewrite
     // because the machine is the same: a flat byte-addressed heap, NaN-boxed
@@ -1747,7 +1747,7 @@ public final class Rt {
     /// emitted INLINE, and this is where a bigint operand, an overflow, or a
     /// result past the fixnum range ends up. A helper rather than a bail so that
     /// no chunk boundary is needed after arithmetic -- a boundary per arithmetic
-    /// instruction is the shape `0013` measured and rejected.
+    /// instruction is the shape `emit-wasm-instead-of-dispatch` measured and rejected.
     public int aotIntBinopAt(int opcode, int ip, int block, int nextIp, int nextBlock) {
         int keepTop = roots.stackTop;
         int base = keepTop - 2;

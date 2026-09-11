@@ -1,5 +1,5 @@
 (ns bytes
-  "Byte strings (`doc/decisions/0024`).
+  "Byte strings (`DECISIONS.md#no-runtime-linking`).
 
   The same two tiers as text: flat below the threshold, a shallow tree above
   it. What has to be true is that the TIER IS INVISIBLE -- a flat and a tree

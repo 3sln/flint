@@ -1,4 +1,4 @@
-// The image-per-call shape across engines (`doc/decisions/0018`, `0021`, `0023`).
+// The image-per-call shape across engines (`DECISIONS.md#cross-runtime-benchmarks`, `cli`, `construe-integration-bar`).
 //
 // A resident loader instantiated once, an image loaded per call, nothing shared
 // between runs. This is what flint's first real consumer deploys, and under it

@@ -1,6 +1,6 @@
 package com.flint.rt;
 
-/// The runtime half of `doc/decisions/0013`: what compiled code calls back into.
+/// The runtime half of `DECISIONS.md#emit-wasm-instead-of-dispatch`: what compiled code calls back into.
 ///
 /// PORTED VERBATIM from `runtime/src/aot.rs`. That file is about wasm and this
 /// one is about JVM bytecode, and almost none of it had to change -- because the
@@ -11,7 +11,7 @@ package com.flint.rt;
 /// ## A compiled arity holds nothing of its own
 ///
 /// It manipulates the same value stack the interpreter does. That is the whole
-/// reason this is admissible (`doc/decisions/0001`): a design that kept flint
+/// reason this is admissible (`DECISIONS.md#dispatch`): a design that kept flint
 /// values in host locals across an allocation would need a shadow-stack spill
 /// around every one. Here there is nothing to spill, which is also why leaving
 /// compiled code costs nothing and why re-entering it mid-body is possible.
@@ -27,7 +27,7 @@ package com.flint.rt;
 /// HOST stack, which cannot be suspended -- so a green thread could not park at
 /// depth and deep recursion would blow the host stack instead of raising a
 /// catchable `StackOverflowError`. Both are load-bearing
-/// (`doc/decisions/0005`), and they are why the two boundary crossings per call
+/// (`DECISIONS.md#threads-and-ports`), and they are why the two boundary crossings per call
 /// are worth paying.
 public final class Aot {
 

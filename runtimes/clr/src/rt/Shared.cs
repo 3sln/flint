@@ -1,6 +1,6 @@
 namespace Flint.Rt;
 
-/// What every executor in one sandbox SHARES (`doc/decisions/0028`).
+/// What every executor in one sandbox SHARES (`DECISIONS.md#drivers`).
 ///
 /// The split is the whole of what makes several host threads on one heap
 /// possible. A value stack and a shadow stack are one PER THREAD -- two threads

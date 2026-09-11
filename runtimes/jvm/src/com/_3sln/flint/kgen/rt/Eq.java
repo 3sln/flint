@@ -21,7 +21,7 @@ public final class Eq {
                 return CAT_SEQUENTIAL;
             // A ROW REF is in the MAP category: it is `=` to a map with the
             // same entries, and `category` is what decides that
-            // (`doc/decisions/0026`).
+            // (`DECISIONS.md#tables`).
             case TY_ARRAYMAP: case TY_HASHMAP: case TY_TABLEREF:
                 return CAT_MAP;
             case TY_SET:

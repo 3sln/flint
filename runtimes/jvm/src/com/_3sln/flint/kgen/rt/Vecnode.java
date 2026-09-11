@@ -33,7 +33,7 @@ public final class Vecnode {
     /// 
     /// `edit` is rooted across the allocation and read back afterwards, because
     /// a value in a host local does not survive an allocation
-    /// (`doc/decisions/0031`) -- and `alloc` is the allocation.
+    /// (`DECISIONS.md#a-vec-of-values-is-not-a-root`) -- and `alloc` is the allocation.
     public static long newNode(Rt rt, int n, long edit) {
         int e = rt.push(edit);
         long a = rt.alloc(TY_NODE, n + 1);

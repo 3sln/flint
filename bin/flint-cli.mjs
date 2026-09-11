@@ -2,7 +2,7 @@
 // npm entry point for `flint`.
 //
 // The compiler itself is `bin/flint`, a babashka script — flint is written in
-// portable cljc and bootstraps on babashka (doc/decisions/0003). npm can install
+// portable cljc and bootstraps on babashka (DECISIONS.md#namespace-units). npm can install
 // the package but cannot install babashka, so this shim exists to fail with a
 // sentence a reader can act on rather than with `env: bb: No such file`.
 import {spawnSync} from 'node:child_process';

@@ -1,7 +1,7 @@
 ;; Building rope NODES, promoting a string to a height, and folding a run.
 ;;
 ;; The text mirror of `bytenode` and `bytefold`, and deliberately the same
-;; shapes: `doc/decisions/0011` designed one tree and `0024` applied it to
+;; shapes: `DECISIONS.md#strings-and-matching` designed one tree and `no-runtime-linking` applied it to
 ;; bytes with less to carry. What a rope node carries and a byte node does not
 ;; is the CODE-POINT COUNT and the ASCII bit, packed into one slot -- the count
 ;; shifted up by one and the bit in the low position, because a string that is

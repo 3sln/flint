@@ -92,7 +92,7 @@ impl Rt {
     /// `(assoc row-ref k v)` -> a MAP.
     /// 
     /// A REF IS A VIEW. Changing it makes an independent value, and neither the
-    /// chunk nor the table it came from moves (`0026`). The schema does not
+    /// chunk nor the table it came from moves (`tables`). The schema does not
     /// constrain the result, because the result is no longer a row.
     pub fn ref_assoc(&mut self, rf: Value, k: Value, v: Value) -> Value {
         let base: usize = self.mark();

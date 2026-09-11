@@ -45,7 +45,7 @@
 (check "tag metadata" (:tag (meta (reads "^long x"))) 'long)
 (check "regex literal" (reads "#\"a.c\"") {:flint/regex "a.c"})
 (check "regex keeps escapes" (reads "#\"\\d+\"") {:flint/regex "\\d+"})
-;; A tagged literal is a VALUE, not a two-key map (`doc/decisions/0034`) -- but
+;; A tagged literal is a VALUE, not a two-key map (`DECISIONS.md#tagged-literals`) -- but
 ;; the SOURCE READER does not make one, because an unknown tag is an error here
 ;; as it is in Clojure. That is asserted at the bottom of this file. What a
 ;; tagged literal is, and that it keeps its namespace, is `lang.tagged`, which
@@ -188,7 +188,7 @@
        (some? (re-find #"no reader for the tag #a/b" (read-err "#a/b [1]"))) true)
 ;; A refusal that only says no is half a message: this one says how to get a
 ;; tagged literal as a VALUE, and how to read one from DATA, which are the two
-;; things somebody who wrote this actually wanted (`doc/decisions/0032`).
+;; things somebody who wrote this actually wanted (`DECISIONS.md#checks`).
 (check "  ... and says how to make one as a value"
        (some? (re-find #"tagged-literal 'a/b" (read-err "#a/b [1]"))) true)
 (check "  ... and how to read one from data"

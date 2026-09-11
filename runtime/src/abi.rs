@@ -43,7 +43,7 @@ pub static mut FLINT_IMAGE_DESC: [u32; 2] = [0, 0];
 /// the name's bytes. It exists so that a module can load an image it was NOT
 /// linked against: the slots in an image belong to whichever module compiled it,
 /// and the only durable identifier a builtin has is its name
-/// (`doc/decisions/0023`).
+/// (`DECISIONS.md#construe-integration-bar`).
 ///
 /// Absent unless the module was built with `--loader`, so nothing pays for it.
 #[no_mangle]
@@ -156,7 +156,7 @@ pub extern "C" fn arg_push(ptr: u32, len: u32) {
 
 // `flint_main` used to live here: the module's ONE entry point, invoked by the
 // runtime with `[argv caps]` and its answer rendered into `OUT`. It is gone
-// (`doc/decisions/0025` step 5). Nothing is called automatically, a module has
+// (`DECISIONS.md#structured-ports` step 5). Nothing is called automatically, a module has
 // no distinguished function, and a caller names the one it wants -- through
 // `flint_call` below when the call cannot park, or as a message on the system
 // port when it can.
@@ -165,7 +165,7 @@ pub extern "C" fn arg_push(ptr: u32, len: u32) {
 // vector through the same buffer.
 
 /// Call a named function with encoded arguments, and encode what it returns
-/// (`doc/decisions/0025`).
+/// (`DECISIONS.md#structured-ports`).
 ///
 /// The input is one encoded value: `[fn-name, arg, arg, …]`. The output is one
 /// encoded value, or -- when the call failed -- an encoded map
@@ -389,7 +389,7 @@ pub extern "C" fn set_step_limit(want: u64) {
 ///
 /// Tolerated, and only here, for two reasons: these are bisection aids that a
 /// person reads during a debugging session, and they are absent from a
-/// production build entirely (`doc/decisions/0016`). If a diagnostic ever has
+/// production build entirely (`DECISIONS.md#two-builds`). If a diagnostic ever has
 /// to name an address above 4 GB, the fix is to widen the export rather than to
 /// trust this.
 #[cfg(feature = "diagnostics")]
@@ -679,7 +679,7 @@ pub extern "C" fn builtin_registry_addr() -> u32 {
 
 /// Load an image produced at RUN time and make it this instance's program.
 ///
-/// This is what `doc/decisions/0023` asks about: emitting a `.wasm` needs
+/// This is what `DECISIONS.md#construe-integration-bar` asks about: emitting a `.wasm` needs
 /// `rust-lld`, which will not run in a Worker, but the compiler's output is a
 /// bytecode image -- so a resident module that can load one lets a Worker
 /// compile a candidate and run it with no linking step anywhere.
@@ -699,7 +699,7 @@ pub extern "C" fn flint_load_image(ptr: u32, len: u32) -> i32 {
         rt.handlers.clear();
         // NOR ITS INITIALISERS. `ensure_started` runs a program's `init`
         // functions ONCE, and that once was per SANDBOX; with `main` gone a
-        // call is what triggers them (`doc/decisions/0025` step 5), so a
+        // call is what triggers them (`DECISIONS.md#structured-ports` step 5), so a
         // swapped image found the flag already set, never bound its vars, and
         // answered "`two/main` is not a function". `run_program` used to run
         // `image.init` unconditionally on every entry, which hid it.
@@ -776,7 +776,7 @@ pub extern "C" fn stat_stale_push(i: u32) -> u32 {
     unsafe { narrow(*crate::gc::STALE_PUSH.get(i as usize).unwrap_or(&0)) }
 }
 
-/// The region histogram of `doc/decisions/0013`. One export rather than one per
+/// The region histogram of `DECISIONS.md#emit-wasm-instead-of-dispatch`. One export rather than one per
 /// array: `i < 20` is the per-frame histogram, `20..40` the per-run one,
 /// `40..60` the resumed-frame one, `60..` the counters.
 #[cfg(feature = "diagnostics")]
@@ -812,7 +812,7 @@ pub extern "C" fn stat_sync_drift(i: u32) -> u64 {
 }
 
 /// How often a rope has been materialised. 0 calls, 1 actually materialised,
-/// 2 bytes copied. `doc/decisions/0011`: a rope that flattens on every operation
+/// 2 bytes copied. `DECISIONS.md#strings-and-matching`: a rope that flattens on every operation
 /// passes every correctness test and is slower than the flat string it replaced,
 /// and only a counter tells the difference.
 #[cfg(feature = "diagnostics")]

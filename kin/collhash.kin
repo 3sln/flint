@@ -23,7 +23,7 @@
 ;;
 ;; ROOTING. `hash-value` allocates -- hashing a row ref materialises it as a
 ;; map -- so the node being walked is pushed and re-read from the root stack
-;; after every call. A node held in a host local across a hash is `0031` in
+;; after every call. A node held in a host local across a hash is `a-vec-of-values-is-not-a-root` in
 ;; the shape that costs a session.
 (ns flint.rt.collhash
   (:require [flint.impl.rt :refer [defn return if let local set do comment doc

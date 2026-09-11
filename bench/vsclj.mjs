@@ -12,7 +12,7 @@ const path = process.argv[2];
 const module = new WebAssembly.Module(readFileSync(path));
 const inst = instantiate(module);
 // Built `:fn <prog>/main` into `out/vsclj/<prog>{,-aot}.wasm`; a call names it
-// (`doc/decisions/0025` step 5).
+// (`DECISIONS.md#structured-ports` step 5).
 const FN = `${/vsclj\/([a-z0-9-]+?)(?:-aot)?\.wasm$/.exec(path)[1]}/main`;
 const main = () => inst.run(FN, []);
 

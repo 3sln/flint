@@ -14,7 +14,7 @@
 ;; contents are addresses in a space that has been reused.
 ;;
 ;; It needed a map big enough to span a collection, which is why it survived --
-;; and the compiler's own literals are the big ones (`doc/decisions/0031`).
+;; and the compiler's own literals are the big ones (`DECISIONS.md#a-vec-of-values-is-not-a-root`).
 (ns flint.rt.mapmake
   (:require [flint.impl.rt :refer [defn return if let do comment doc local set
                                    == != < + - * quot rem forever break while
@@ -38,7 +38,7 @@
             (break))
           (comment "PUSHED BEFORE THE NEXT STEP, because `next` can collect"
                    "and a value held anywhere but the shadow stack does not"
-                   "survive that (`0031`).")
+                   "survive that (`a-vec-of-values-is-not-a-root`).")
           (let [^Value x (first rt (r rt si))]
             (push rt x))
           (set count (+ count 1))

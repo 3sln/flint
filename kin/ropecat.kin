@@ -10,7 +10,7 @@
 ;; Tier 3 is the one with history. It used to widen the root while it had room
 ;; and otherwise build `[old, new]`, which put the whole old tree back as child
 ;; zero and grew the depth by one every `FANOUT` appends -- so depth was O(n),
-;; not O(log n), and `doc/decisions/0011`'s "fanout 16-32, depth is what random
+;; not O(log n), and `DECISIONS.md#strings-and-matching`'s "fanout 16-32, depth is what random
 ;; access pays for" described a tree this did not build. It never showed while
 ;; nothing indexed a rope, because every path flattened first; the moment
 ;; indexing descends instead, an O(n)-deep tree makes the walk quadratic in a

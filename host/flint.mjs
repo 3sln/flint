@@ -17,7 +17,7 @@ export async function load(path) {
 /// Run `fn` in the module at `path`, and hand back what it returned.
 ///
 /// **The caller names the function.** Nothing is called automatically
-/// (`doc/decisions/0025` step 5): a module has no entry point, the runtime
+/// (`DECISIONS.md#structured-ports` step 5): a module has no entry point, the runtime
 /// invokes nothing, and a call is a message on the system port. There used to
 /// be a `main` here that the runtime ran on its own, and the name it ran was
 /// recorded in the module's metadata so a runner could find it -- both are gone.
@@ -34,7 +34,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // `node host/flint.mjs <module> <ns/fn> [args...]`. The FUNCTION IS NAMED,
   // because a module has none that is special: nothing is called automatically
   // and there is no entry recorded for a runner to find
-  // (`doc/decisions/0025` step 5).
+  // (`DECISIONS.md#structured-ports` step 5).
   const [, , path, fn, ...args] = process.argv;
   if (!fn) {
     process.stderr.write('usage: flint.mjs <module.wasm> <ns/fn> [args...]\n');

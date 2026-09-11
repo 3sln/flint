@@ -12,7 +12,7 @@ FLINT_JDK=/path/to/jdk bin/conform-hosts
 
 This section used to say the collector was gone, and that a flint value was a
 Java object — `nil` a `null`, an integer a `Long`, a vector a `List`. That was
-true, it was `0029`'s design, and it is no longer how this port works.
+true, it was `jvm-runtime`'s design, and it is no longer how this port works.
 
 Since `9f6f70e` (2026-08-29) a flint value here is a NaN-boxed `long` over a
 flat `Space`, and `Gc.java` is `runtime/src/gc.rs` ported verbatim:
@@ -57,7 +57,7 @@ Two things worth knowing before relying on it:
 
 **There is no cross-compilation.** Unlike the wasm backend -- which is
 `src/flint/aot.cljc`, written in flint -- this emitter is Java, so producing
-JVM bytecode needs a JVM present. Deliberate; see `doc/decisions/0029`.
+JVM bytecode needs a JVM present. Deliberate; see `DECISIONS.md#jvm-runtime`.
 
 **It is not ahead of deployment.** Each arity is compiled the first time it is
 called, into a hidden class in memory. Nothing is written out. The wasm

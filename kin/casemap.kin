@@ -4,7 +4,7 @@
 ;; `nil` for anything that was not ASCII, the JVM used `toUpperCase` under the
 ;; DEFAULT LOCALE -- so `(upper-case "i")` was "Ä°" on a machine set to Turkish
 ;; -- and the CLR used the invariant culture. Three answers, one of them
-;; depending on where the program ran, which is the thing `0009`'s determinism
+;; depending on where the program ran, which is the thing `resource-limits`'s determinism
 ;; exists to rule out.
 ;;
 ;; THE TABLE IS DATA IN THREE PLACES AND THE SEARCH IS IN ONE. `bin/casetable`

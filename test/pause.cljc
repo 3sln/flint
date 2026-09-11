@@ -1,6 +1,6 @@
 (ns pause
   "The collector collects LITTLE AND OFTEN, and that is why the latency tail is
-  tight (`doc/decisions/0018`).
+  tight (`DECISIONS.md#cross-runtime-benchmarks`).
 
   `bin/bench-image` measures the consequence -- p99/p50 of 1.06 under
   allocation-heavy load, tighter than the 1.21 at idle -- but a benchmark run is

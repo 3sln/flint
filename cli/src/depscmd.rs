@@ -1,4 +1,4 @@
-//! `flint deps` -- the command surface (`doc/decisions/0037`).
+//! `flint deps` -- the command surface (`DECISIONS.md#system-namespaces-and-deps`).
 //!
 //! ```text
 //! flint deps add npm:left-pad          resolve latest, pin, write
@@ -172,7 +172,7 @@ mod tests {
 /// Generated rather than written, and RUN rather than reimplemented: the
 /// version `add` writes has to be the version a build picks, and the only way
 /// to guarantee that is to ask the same code. A second resolver here would be
-/// the `0035` mistake with a new subject.
+/// the `reader-tags` mistake with a new subject.
 fn resolve_program(kind: &str, name: &str, range: &str) -> String {
     let coord = match kind {
         "npm" => format!("{{:npm/version {range:?}}}"),
@@ -283,7 +283,7 @@ pub fn set_version(text: &str, dep: &str, to: &str) -> String {
 fn agree_program(apply: bool) -> String {
     let tail = if apply {
         // The OVERRIDES that settle it, ready to write. A pin and an agreement
-        // are the same operation (`doc/decisions/0037`), so they produce the
+        // are the same operation (`DECISIONS.md#system-namespaces-and-deps`), so they produce the
         // same thing.
         r#"(pr-str (reduce (fn [m row]
                              (if (:to row)
@@ -356,7 +356,7 @@ pub fn add(
 ) -> Result<()> {
     let s = parse_spec(spec)?;
     if s.kind == "pod" {
-        bail!("pods are not resolvable yet (`doc/decisions/0037` step 9)");
+        bail!("pods are not resolvable yet (`DECISIONS.md#system-namespaces-and-deps` step 9)");
     }
     let range = s.range.clone().unwrap_or_else(|| "*".to_string());
     let src = resolve_program(&s.kind, &s.name, &range);
@@ -365,7 +365,7 @@ pub fn add(
     // in that list and must not be -- but somebody typing
     // `flint deps add git:github.com/org/x` has said which host they mean, on
     // the command line, which is exactly the invoker being the top of the
-    // narrowing chain (`doc/decisions/0037`). Nothing wider is granted: the
+    // narrowing chain (`DECISIONS.md#system-namespaces-and-deps`). Nothing wider is granted: the
     // allowlist entry is that URL and its children.
     let mut caps = vec!["deps".to_string()];
     if s.kind == "git" {

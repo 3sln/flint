@@ -70,7 +70,7 @@ impl Rt {
         Value::heap(a)
     }
     // ROOTS. `table-ref` and `ref-to-map` allocate, so the shadow stack is the
-    // one thing the probe cannot leave out: `0031` says a value in a host
+    // one thing the probe cannot leave out: `a-vec-of-values-is-not-a-root` says a value in a host
     // local does not survive an allocation.
     fn mark(&self) -> usize { self.roots.len() }
     fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }

@@ -1,4 +1,4 @@
-//! Byte strings (`doc/decisions/0024`).
+//! Byte strings (`DECISIONS.md#no-runtime-linking`).
 //!
 //! The same shape as the text ropes in `rope.rs`, for bytes. **Flat** is a
 //! contiguous `TY_BYTES`; **rope** is a shallow B-tree of byte pieces with
@@ -32,7 +32,7 @@ use crate::value::{Value, NIL};
 /// Total byte length of this node's subtree.
 pub const BB_BYTES: u32 = 0;
 /// A cached flattening, or NIL. Materialising a rope repeatedly is the failure
-/// `0011` names -- "count the flattens, do not hope about them" -- and this is
+/// `strings-and-matching` names -- "count the flattens, do not hope about them" -- and this is
 /// the same cache for the same reason.
 pub const BB_FLAT: u32 = 1;
 /// The subtree's depth: 1 for a node whose children are all leaves, and one

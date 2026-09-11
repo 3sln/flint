@@ -134,7 +134,7 @@ fn show(evs: &[Event]) -> String {
 
 /// The host's id for this sandbox's system port, and for the port it grants.
 /// The HOST picks both: a sandbox no longer mints port ids, which is the whole
-/// of `doc/decisions/0027`.
+/// of `DECISIONS.md#ports-are-the-hosts`.
 const SYSTEM: u32 = 1;
 const GRANTED: u32 = 500;
 
@@ -151,7 +151,7 @@ fn main() {
     // no grant table, no declaration, and nothing in the runtime that knows what
     // the value is for.
     // A SYSTEM PORT, installed before anything runs: `open` is a request ON
-    // one (`doc/decisions/0027`), and a sandbox given none can ask for nothing.
+    // one (`DECISIONS.md#ports-are-the-hosts`), and a sandbox given none can ask for nothing.
     p.install_port(SYSTEM, "system", true);
     let out = p.run_with(&[], &[("fs", 7)]);
     println!("  ok   the program parked on the host: status {}", out.code);

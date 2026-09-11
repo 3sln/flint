@@ -24,7 +24,7 @@ public static class Mapeq {
     /// ALL FOUR ARE ROOTED BEFORE ANY COMPARISON, not two and then two.
     /// `val-eq` allocates -- a row ref materialises as a map -- so comparing
     /// the keys first would leave the two VALUES sitting in host locals across
-    /// that allocation, and `doc/decisions/0031` is that a value in a host
+    /// that allocation, and `DECISIONS.md#a-vec-of-values-is-not-a-root` is that a value in a host
     /// local does not survive one. The first draft of this did exactly that.
     internal static bool PairEq(Rt rt, long ka, long kb, long va, long vb) {
         int @base = rt.Mark();

@@ -1,4 +1,4 @@
-// doc/decisions/0013's region histogram, measured rather than assumed.
+// DECISIONS.md#emit-wasm-instead-of-dispatch's region histogram, measured rather than assumed.
 //
 // 0013 gates the whole AOT decision on one distribution: how long are the
 // regions in real code, and what does entering one cost? Two models are counted
@@ -136,7 +136,7 @@ const WORKLOADS = [
 ];
 
 const wasm = process.argv[2] ?? 'out/cb-diag.wasm';
-console.log('region histogram (doc/decisions/0013)');
+console.log('region histogram (DECISIONS.md#emit-wasm-instead-of-dispatch)');
 console.log();
 
 const boundaryNs = await measureBoundary();

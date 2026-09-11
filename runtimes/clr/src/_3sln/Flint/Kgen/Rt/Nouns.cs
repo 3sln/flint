@@ -155,7 +155,7 @@ public static class Nouns {
     /// heap string are both `"a string"`, and an inline keyword and a heap one
     /// are both `"a keyword"` -- these used to say `"an inline keyword"`, which
     /// tells a reader about a representation they cannot see from the language
-    /// and cannot act on. `doc/decisions/0011` makes the tiers invisible to
+    /// and cannot act on. `DECISIONS.md#strings-and-matching` makes the tiers invisible to
     /// every other operation; an error message is not the place to leak them.
     /// 
     /// The last arm names the NUMBER of a tag it does not know. A tag added to

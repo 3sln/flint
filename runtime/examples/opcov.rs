@@ -1,7 +1,7 @@
 //! Which opcodes does a program actually execute?
 //!
 //! The question this exists for is coverage: before three runtimes' opcode
-//! bodies are REGENERATED from one source (`doc/decisions/0038`), it has to be
+//! bodies are REGENERATED from one source (`DECISIONS.md#kin`), it has to be
 //! known which of them the cross-runtime suite would notice a mistake in. An
 //! opcode no conformance program reaches can be regenerated wrongly and nothing
 //! will say so.

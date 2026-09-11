@@ -80,7 +80,7 @@ public final class Space implements AutoCloseable {
     // modes only for aligned addresses, which is the same requirement.
     //
     // These exist for ONE thing: a port's inbox, where two executors reserve
-    // and publish without a lock (`doc/decisions/0028`). Nothing else in the
+    // and publish without a lock (`DECISIONS.md#drivers`). Nothing else in the
     // heap is written by two threads at once -- a collection is stop-the-world
     // at a safepoint -- so ordinary slots need no synchronisation.
     private static final java.lang.invoke.VarHandle I64_ATOMIC =

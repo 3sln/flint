@@ -1,7 +1,7 @@
 /* flint for C.
  *
  * Compile pure Clojure and run it in a sandbox. The shape is the JavaScript
- * and Rust SDKs' (doc/decisions/0025): resolve namespaces, compile to an
+ * and Rust SDKs' (DECISIONS.md#structured-ports): resolve namespaces, compile to an
  * image, instantiate a sandbox, call functions by name.
  *
  * Two rules cover the whole header, so there is no per-function ownership to
@@ -59,7 +59,7 @@ typedef struct {
 
   /* Additionally callable names, as "namespace/function".
    *
-   * Only reachable code ships (doc/decisions/0002), so a function nobody calls
+   * Only reachable code ships (DECISIONS.md#modularity), so a function nobody calls
    * from the entry is exactly the one that has to be named here in order to
    * survive into the artifact. */
   const char *const *exports;
@@ -92,7 +92,7 @@ FlintImage *flint_compile(const FlintCompiler *c, const FlintCompileOpts *opts, 
 const uint8_t *flint_image_wasm(const FlintImage *img, size_t *len);
 void flint_image_free(FlintImage *img);
 
-/* --- drivers (doc/decisions/0028) ---------------------------------------- */
+/* --- drivers (DECISIONS.md#drivers) ---------------------------------------- */
 
 /* Who advances a sandbox, and when.
  *
@@ -135,19 +135,27 @@ uint64_t flint_sandbox_parallel_dispatches(const FlintSandbox *s);
 
 /* A sandbox from a .wasm artifact somebody else compiled -- no compiler
  * needed. The module carries its program inside it, and this runs it natively
- * (doc/decisions/0010) rather than through a wasm engine. */
+ * (DECISIONS.md#other-hosts) rather than through a wasm engine. */
 FlintSandbox *flint_sandbox_from_wasm(const uint8_t *wasm, size_t len, char **err);
 
-/* Lend a capability by name.
+/* `flint_sandbox_grant` WAS DECLARED HERE AND NEVER IMPLEMENTED.
  *
- * Authority is never a type test (doc/decisions/0022): a program holds a
- * capability because the host gave it one. Granting nothing -- the default --
- * means the program can reach nothing. */
-void flint_sandbox_grant(const FlintSandbox *s, const char *name);
+ * It was removed from the Rust SDK when capabilities stopped being a runtime
+ * concept -- "the runtime does not know the word" -- and this header did not
+ * follow. The declaration stayed, `flint.hpp` kept calling it from
+ * `Sandbox::grant`, and no definition exists in `src/`: any program that
+ * called it failed to LINK. Nothing caught it because neither selftest calls
+ * it, and a declaration with no definition costs nothing until somebody links.
+ *
+ * What replaces it: the host PROJECTS opaque values into the sandbox as the
+ * entry's second argument (DECISIONS.md#opaque-values). Guest code cannot mint
+ * the id you chose, so you recognise your own and nothing else. Whether one
+ * means a capability is yours to decide; a host that requires none passes
+ * nothing. */
 
 /* Stop a call after n instructions, and turn COUNTING ON.
  *
- * Gas is deterministic (doc/decisions/0009): the same call stops in the same
+ * Gas is deterministic (DECISIONS.md#resource-limits): the same call stops in the same
  * place on every engine and every machine. Without a limit the interpreter
  * carries no counter at all, which is why flint_sandbox_gas reads 0 until this
  * is called. */
@@ -161,7 +169,7 @@ uint64_t flint_sandbox_gas(const FlintSandbox *s);
  *
  * The SDK takes a name and positional arguments and nothing more: an argument
  * map, capabilities-as-arguments and the rest are a CLI's conventions
- * (doc/decisions/0025), not this layer's. */
+ * (DECISIONS.md#structured-ports), not this layer's. */
 /* Blocking: it queues the request with the sandbox's driver and waits.
  * Under the default inline driver that is the same thread and the same
  * instant. C gets no promise back because inventing one would be inventing an
@@ -174,7 +182,7 @@ void flint_sandbox_free(FlintSandbox *s);
 /* --- values ------------------------------------------------------------- */
 
 /* A flint value is NaN-boxed and its representation is a runtime detail
- * (doc/decisions/0001), so it is opaque here: exposing a struct would freeze
+ * (DECISIONS.md#dispatch), so it is opaque here: exposing a struct would freeze
  * that detail into an ABI. It is also what lets a value hold a port or a
  * sentinel that C has no way to fabricate. */
 typedef enum {
@@ -191,14 +199,14 @@ typedef enum {
   FLINT_SET = 10,
   FLINT_MAP = 11,
   /* A live thing, by identity. You may receive one and hand it back; nothing
-   * here can MAKE one, which is the sandbox rule (doc/decisions/0025). */
+   * here can MAKE one, which is the sandbox rule (DECISIONS.md#structured-ports). */
   FLINT_PORT = 12,
   FLINT_SENTINEL = 13,
-  /* A tagged literal (doc/decisions/0034): a namespaced symbol and a form.
+  /* A tagged literal (DECISIONS.md#tagged-literals): a namespaced symbol and a form.
    * Its own tag rather than a two-key map, because a host meeting one has to
    * be able to tell it from a map that happens to have those keys. */
   FLINT_TAGGED = 14,
-  /* A table (doc/decisions/0026). COLUMNAR, here as on the wire: ask for the
+  /* A table (DECISIONS.md#tables). COLUMNAR, here as on the wire: ask for the
    * schema, then for one column at a time. Handing rows across would rebuild a
    * map per row and spend on arrival exactly what the sender saved. */
   FLINT_TABLE = 15

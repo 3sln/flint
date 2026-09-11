@@ -327,7 +327,7 @@ public final class AotEmit {
     /// and not fixnum -- a value past the fixnum range is a boxed bigint and
     /// still answers `int?` -- so the tags are still tested, and everything else
     /// goes to a helper rather than a bail, because a boundary per arithmetic
-    /// instruction is the shape `0013` measured and rejected.
+    /// instruction is the shape `emit-wasm-instead-of-dispatch` measured and rejected.
     static void intOp(CodeBuilder x, AotPlan.Ins i, AotPlan.Chunk c, Map<Integer,Integer> chunkOf) {
         x.iinc(L_TOP, -2);
         x.aload(L_STACK).iload(L_TOP).laload().lstore(L_X);

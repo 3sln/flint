@@ -32,7 +32,7 @@ public class RtSnapshot {
       // so writing `Vec.conj(rt, rt.r(inner), Str.of(rt, ...))` reads the
       // vector and THEN allocates the string -- and under
       // `-Dflint.gcstress=1` that allocation collects and moves the vector
-      // out from under the value already read. `0031`, in the test rather
+      // out from under the value already read. `a-vec-of-values-is-not-a-root`, in the test rather
       // than the runtime.
       int si = rt.push(Str.of(rt, "item-" + i));
       rt.setR(inner, Vec.conj(rt, rt.r(inner), rt.r(si)));
@@ -125,7 +125,7 @@ public class RtSnapshot {
     ok("the rehydrated heap reads back identically", render(d, d.roots.shared.globals[0]).equals(before));
 
     // THE CROSSING, when the gate asks for it: a live snapshot written by a
-    // DIFFERENT runtime, read here. `0015` calls this format "a serialised
+    // DIFFERENT runtime, read here. `snapshots` calls this format "a serialised
     // internal layout, not an interchange format" and says a mismatch must be
     // refused loudly -- but the stamp it refuses on is MAGIC and VERSION, and
     // those are identical on all three runtimes, so a crossing is ATTEMPTED

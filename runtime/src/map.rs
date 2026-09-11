@@ -299,7 +299,7 @@ impl Rt {
     /// The ports root each node handle and then slide the whole subtree down
     /// over it. Iteration allocates nothing, so no collection can happen
     /// mid-walk and the handle never needed rooting -- a host local is safe
-    /// here, which is the one case `0031` does not cover. This is the buffer
+    /// here, which is the one case `a-vec-of-values-is-not-a-root` does not cover. This is the buffer
     /// shape's honest best case, so that the comparison indicts the SHAPE and
     /// not my transcription of it.
     #[cfg(feature = "bench")]

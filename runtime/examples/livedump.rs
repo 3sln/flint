@@ -1,6 +1,6 @@
 //! Does a live snapshot mean the same thing on every runtime?
 //!
-//! `0015` says the snapshot is "a serialised internal layout, not an
+//! `snapshots` says the snapshot is "a serialised internal layout, not an
 //! interchange format", and that a mismatch must be refused loudly rather than
 //! read as "a plausible-looking heap that means something else". The stamp it
 //! refuses on is `MAGIC` and `VERSION` -- and those are IDENTICAL on all three
@@ -33,7 +33,7 @@ fn build(rt: &mut Rt, n: i64) -> Value {
         rt.set_r(inner, joined);
         // ROOTED BEFORE THE READ, the same way the ports have to do it: the
         // string allocates, and an allocation can move the vector that was
-        // already read out from under the value (`0031`).
+        // already read out from under the value (`a-vec-of-values-is-not-a-root`).
         let s = rt.string(&alloc_name(i));
         let si = rt.push(s);
         let v = rt.r(inner);
@@ -74,7 +74,7 @@ fn render(rt: &mut Rt, v: Value) -> String {
 
 fn main() {
     // THE CROSSING, when asked: read a live snapshot written by ANOTHER
-    // runtime and see what happens. `0015` says the format is "a serialised
+    // runtime and see what happens. `snapshots` says the format is "a serialised
     // internal layout, not an interchange format" and that a mismatch must be
     // refused loudly -- but the stamp it refuses on is `MAGIC` and `VERSION`,
     // and those are identical on all three. So this is the question nobody had

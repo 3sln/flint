@@ -1,6 +1,6 @@
 // AOT against the interpreter, on the same payloads, in the same process.
 //
-// `doc/decisions/0013` is a bet that removing dispatch is worth the module
+// `DECISIONS.md#emit-wasm-instead-of-dispatch` is a bet that removing dispatch is worth the module
 // bytes and the cold start. Both halves are measured here, and a case that gets
 // SLOWER is printed as such -- a benchmark section containing only wins is a
 // marketing page, which is this project's own rule from `bench/construe.mjs`.
@@ -33,7 +33,7 @@ for (const [k, f] of [['interpreter', 'out/cb-int.wasm'], ['aot', 'out/cb-aot.wa
   mods[k] = { module, bytes: statSync(f).size, file: f };
 }
 
-console.log('aot vs interpreter (doc/decisions/0013)');
+console.log('aot vs interpreter (DECISIONS.md#emit-wasm-instead-of-dispatch)');
 console.log();
 console.log(`  module: interpreter ${kb(mods.interpreter.bytes)}, ` +
             `aot ${kb(mods.aot.bytes)} ` +

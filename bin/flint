@@ -38,7 +38,7 @@
         (= k ":exclude") (let [[vs rest-a] (take-list (rest a))]
                            (recur rest-a (update m :exclude (fnil into #{}) (map symbol vs))))
         ;; MORE ROOTS, so a function nobody calls from inside the module is
-        ;; still reachable from OUTSIDE it (`doc/decisions/0025` step 5).
+        ;; still reachable from OUTSIDE it (`DECISIONS.md#structured-ports` step 5).
         ;; Nothing runs automatically any more: a host asks for a function by
         ;; name over the system port, and a name the linker dropped is a name
         ;; that cannot be asked for.
@@ -46,7 +46,7 @@
                            (recur rest-a (update m :exports (fnil into []) (map symbol vs))))
         ;; `:wasm-ld` shipped once under that name and reads like "flags for the
         ;; linker"; `:wasm-path` says what it is. The old spelling stays as a
-        ;; deprecated alias for one release (doc/decisions/0005, section 7).
+        ;; deprecated alias for one release (DECISIONS.md#threads-and-ports, section 7).
         (= k ":features") (let [[vs rest-a] (take-list (rest a))]
                             (recur rest-a (assoc m :features (into #{} (map keyword vs)))))
         (= k ":wasm-path") (let [[vs rest-a] (take-list (rest a))]
@@ -61,11 +61,11 @@
         (= k "--explain") (recur (drop 2 a) (assoc m :explain (symbol (second a))))
         (= k "--disasm") (recur (drop 2 a) (assoc m :disasm (second a)))
         (= k "--self") (recur (rest a) (assoc m :self true))
-        ;; doc/decisions/0013. A flag rather than a default until the
+        ;; DECISIONS.md#emit-wasm-instead-of-dispatch. A flag rather than a default until the
         ;; benchmarks say which way round the numbers fall. `FLINT_AOT=1` turns
         ;; it on for every build, which is how the whole existing suite gets run
         ;; against compiled code without a single test knowing about it.
-        ;; `:optimize` is the config `doc/decisions/0025` describes: an ORDERED
+        ;; `:optimize` is the config `DECISIONS.md#structured-ports` describes: an ORDERED
         ;; PREFERENCE, not a switch. The first token this build understands
         ;; decides and the rest are ignored, which is what lets a script written
         ;; against a newer flint still get an older one's best effort.
@@ -74,7 +74,7 @@
         ;; The older spelling, kept because it is in scripts and in the AOT
         ;; bisection handles. `:optimize [perf]` is the one to write.
         (= k "--aot") (recur (rest a) (assoc m :aot true))
-        ;; doc/decisions/0023: a module that can be handed an IMAGE at run time,
+        ;; DECISIONS.md#construe-integration-bar: a module that can be handed an IMAGE at run time,
         ;; so a Worker can compile a candidate and run it without linking.
         (= k "--loader") (recur (rest a) (assoc m :loader true))
         ;; Emit the bytecode IMAGE and stop -- no linker, no module. This is the
@@ -82,7 +82,7 @@
         (= k "--emit-image") (recur (rest a) (assoc m :emit-image true))
         ;; The compiler's INPUT, written out. `out/flintc-gen0.wasm` takes this
         ;; and nothing else, so it is what a Worker has to be handed
-        ;; (doc/decisions/0023).
+        ;; (DECISIONS.md#construe-integration-bar).
         (= k "--emit-spec") (recur (rest a) (assoc m :emit-spec true))
         (= k "--const") (recur (drop 2 a) (assoc m :const (parse-long (second a))))
         :else (do (println "unknown argument:" k) (System/exit 2)))
@@ -103,7 +103,7 @@
 
 (defn- root-of
   "Which search-path dir a file came from. A file belongs to the project that
-  owns its root, and reader tags are bound per PROJECT (`doc/decisions/0035`),
+  owns its root, and reader tags are bound per PROJECT (`DECISIONS.md#reader-tags`),
   so this is what a tag lookup keys on."
   [dirs f]
   (first (filter (clojure.core/fn [d] (str/starts-with? (str f) (str d))) dirs)))
@@ -117,10 +117,10 @@
     {:src (slurp (io/file f)) :file f :root (root-of dirs f)}))
 
 (defn project-of
-  "What a source root's OWN project file says about it (`doc/decisions/0036`).
+  "What a source root's OWN project file says about it (`DECISIONS.md#workspace-capabilities`).
 
       {:name       who this workspace is
-       :tags       the reader tags its sources are read under (`0035`)
+       :tags       the reader tags its sources are read under (`reader-tags`)
        :grants     the capabilities it holds
        :guard      what another workspace must hold to require it}
 
@@ -286,7 +286,7 @@
 
 (defn refuse-guarded-requires!
   "Stop the build on a `:require` a workspace guard refuses
-  (`doc/decisions/0036`).
+  (`DECISIONS.md#workspace-capabilities`).
 
   Level one of two, and the one checkable from the dependency graph alone --
   before a line of the guarded workspace has been analysed. Level two is on the
@@ -436,9 +436,9 @@
 ;; `flint run <file> <ns/fn> [args]` -- a module or a bytecode IMAGE. THE
 ;; FUNCTION IS NAMED: a module has no entry point, nothing is called
 ;; automatically, and no name is recorded for a runner to find
-;; (`doc/decisions/0025` step 5). The image path is
+;; (`DECISIONS.md#structured-ports` step 5). The image path is
 ;; what construe's sandbox binding settled on and needs no linker anywhere
-;; (doc/decisions/0021, 0023); it is here rather than in `lib/flint/cli.cljc`
+;; (DECISIONS.md#cli, 0023); it is here rather than in `lib/flint/cli.cljc`
 ;; because running an image means instantiating a SECOND module, which is the
 ;; host's job and not the guest's.
 (when (= "run" (first *command-line-args*))
@@ -468,7 +468,7 @@
     (System/exit (.waitFor p))))
 
 ;; `flint inspect <file.wasm>` -- what a module says about itself
-;; (doc/decisions/0020). Read from the BYTES, with no instantiation: a runner
+;; (DECISIONS.md#module-metadata-and-shards). Read from the BYTES, with no instantiation: a runner
 ;; has to decide whether to instantiate at all, and on what glue, and that
 ;; decision cannot depend on having already done it.
 (when (= "inspect" (first *command-line-args*))
@@ -488,7 +488,7 @@
       (do
         ;; No entry. There is not one to print any more -- nothing is called
         ;; automatically and a caller names the function it wants
-        ;; (`doc/decisions/0025`) -- and this went on printing the label with
+        ;; (`DECISIONS.md#structured-ports`) -- and this went on printing the label with
         ;; nothing after it, which reads as an artifact that lost its entry
         ;; rather than one that never had the concept. `exports` below is the
         ;; honest answer to "what can I call".
@@ -508,7 +508,7 @@
                       "   (+" (:builtins m) " builtins)"))
         (println (str "imports: " (if (seq (:imports m)) (str/join " " (:imports m)) "none")))
         ;; Last, and only when there is any. flint carries this and never reads
-        ;; it (`doc/decisions/0025`), which is exactly why it has to be VISIBLE:
+        ;; it (`DECISIONS.md#structured-ports`), which is exactly why it has to be VISIBLE:
         ;; the declared capabilities of a program live here by convention, and a
         ;; convention nobody can read from the artifact is not one.
         (when (seq (:meta m))
@@ -826,7 +826,7 @@
         [sources order] (collect dirs roots features)
         ;; BEFORE ordering and before compiling: a refused require is an answer
         ;; about the dependency graph, and there is no point analysing a program
-        ;; that may not have what it asked for (`doc/decisions/0036`).
+        ;; that may not have what it asked for (`DECISIONS.md#workspace-capabilities`).
         _ (refuse-guarded-requires! sources features)
         order (core-first (topo-order sources features))
         out (or out "out.wasm")
@@ -939,7 +939,7 @@
         needed (if self (:natives selfres) (img/natives builder))
         ;; A loader module runs images it has never seen, so it has to carry
         ;; every builtin one of them might import. That is the whole trade: a
-        ;; bigger module, and no linker at run time (doc/decisions/0023).
+        ;; bigger module, and no linker at run time (DECISIONS.md#construe-integration-bar).
         needed (if loader (vec (sort (builtin-names unit-path))) needed)
         _ (when emit-image
             ;; Slots are left at zero on purpose: they belong to whichever module

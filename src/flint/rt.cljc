@@ -98,12 +98,12 @@
 (def namespace clojure.core/namespace)
 (defn keyword2 ([n] (clojure.core/keyword n)) ([ns n] (clojure.core/keyword ns n)))
 
-;; A tagged literal (`doc/decisions/0034`). On flint this is `TY_TAGGED`, its
+;; A tagged literal (`DECISIONS.md#tagged-literals`). On flint this is `TY_TAGGED`, its
 ;; own two-slot type; on this host it is Clojure's own, which answers `:tag`
 ;; and `:form` exactly as flint's does -- which is why those are the names.
 (defn tagged-literal [tag form] (clojure.core/tagged-literal tag form))
 
-;; Tables (`doc/decisions/0026`) exist only on flint: the compile-time host has
+;; Tables (`DECISIONS.md#tables`) exist only on flint: the compile-time host has
 ;; no columnar store and no program compiled here builds one, so these refuse
 ;; rather than pretend. A table literal in SOURCE would need them; there is no
 ;; such literal yet.
@@ -144,7 +144,7 @@
 (defn str-index-of
   ([s v] (cstr/index-of s v))
   ([s v from] (cstr/index-of s v from)))
-;; --- byte strings (doc/decisions/0024) --------------------------------------
+;; --- byte strings (DECISIONS.md#no-runtime-linking) --------------------------------------
 ;;
 ;; On the host a byte string is a Java byte array: this half exists so a MACRO
 ;; can call these while a program is being compiled, and nothing here ships.
@@ -192,7 +192,7 @@
 (defn volatile [x] (clojure.core/volatile! x))
 (defn volatile? [x] (instance? clojure.lang.Volatile x))
 
-;; Opaque values (doc/decisions/0022), for the bootstrap host. On the JVM the
+;; Opaque values (DECISIONS.md#opaque-values), for the bootstrap host. On the JVM the
 ;; thing flint is reproducing already exists, so a label carried alongside an
 ;; `(Object.)` is the whole implementation.
 (defrecord ^:private Opaque [id label])

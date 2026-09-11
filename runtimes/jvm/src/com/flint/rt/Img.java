@@ -31,7 +31,7 @@ public final class Img {
         K_STRING = 5, K_KEYWORD = 6, K_SYMBOL = 7, K_VECTOR = 8, K_LIST = 9,
         K_MAP = 10, K_SET = 11, K_FN = 12, K_NATIVE = 13,
         /// 17, not 14: the image's tags and the wire codec's share a numbering
-        /// space, and 14/15/16 are bytes, port and sentinel (`0025`, `0034`).
+        /// space, and 14/15/16 are bytes, port and sentinel (`structured-ports`, `tagged-literals`).
         K_TAGGED = 17;
     static final long NO_CONST = 0xFFFF_FFFFL;
 

@@ -69,13 +69,13 @@ pub const TY_TYPE: u8 = 38; // [name, basis, protocols(map)]  runtime type objec
 pub const TY_THREAD: u8 = 39; // see conc::TH_*
 pub const TY_PORT: u8 = 40; // see conc::PT_*
 pub const TY_SCHED: u8 = 41; // see conc::SC_*
-/// A rope node (`doc/decisions/0011`): [bytes, cp<<1|ascii, flat-cache, ...kids]
+/// A rope node (`DECISIONS.md#strings-and-matching`): [bytes, cp<<1|ascii, flat-cache, ...kids]
 /// where every child is itself a string of any tier. The aggregates are stored
 /// rather than derived, and they are RELATIVE -- a node knows the size of its own
 /// subtree and never where it sits, because the same leaf appears at different
 /// offsets in `(str a b)` and `(str b a)` and sharing is the point.
 pub const TY_ROPE: u8 = 42;
-/// An opaque value (`doc/decisions/0022`): `[label, hash, host-id]`.
+/// An opaque value (`DECISIONS.md#opaque-values`): `[label, hash, host-id]`.
 ///
 /// Identity without structure -- flint's replacement for Clojure's `(Object.)`,
 /// which it cannot have because it has no host classes. Two of them are `=`
@@ -104,7 +104,7 @@ pub const TY_BROPE: u8 = 45;
 pub const TY_TBYTES: u8 = 46;
 /// A tagged literal: `[tag, form]`, where `tag` is a namespaced SYMBOL.
 ///
-/// Its own type rather than a two-key map (`doc/decisions/0034`). A map is
+/// Its own type rather than a two-key map (`DECISIONS.md#tagged-literals`). A map is
 /// ambiguous with a map in every format that has tags -- a codec meeting one
 /// cannot tell a tagged literal from a map that happens to have those keys --
 /// and it loses the namespace when the key has to become a string.
@@ -114,12 +114,12 @@ pub const TY_TBYTES: u8 = 46;
 pub const TY_TAGGED: u8 = 47;
 /// A SCHEMA: `[names, types, index]` -- a vector of column names, a vector of
 /// column types, and a map from name to position. One per table, shared by
-/// every chunk (`doc/decisions/0026`).
+/// every chunk (`DECISIONS.md#tables`).
 pub const TY_SCHEMA: u8 = 48;
 /// A TABLE: `[schema, chunks, count]`.
 ///
 /// `chunks` is an ordinary flint VECTOR, which is already a 32-way
-/// path-copying trie -- so the "B-tree keyed by row index" `0026` asks for is
+/// path-copying trie -- so the "B-tree keyed by row index" `tables` asks for is
 /// the vector we have, with chunks as its elements. `get` descends it and
 /// `assoc` gets its path copy for free; no new tree is written.
 pub const TY_TABLE: u8 = 49;
@@ -135,7 +135,7 @@ pub const TY_TABLEREF: u8 = 50;
 /// place, until it fills -- at which point it is collapsed, sealed and conj'd
 /// onto `chunks`. Appending through the persistent path copies the chunk per
 /// row, which is 256 copies per chunk and 49 MB to build 20 000 rows; measured
-/// against 3.25 MB for the bulk path (`doc/decisions/0026` step 7).
+/// against 3.25 MB for the bulk path (`DECISIONS.md#tables` step 7).
 ///
 /// Like every transient it is NOT a value: no `eq`, no `hash`, no `kind`. It is
 /// a building site, and `persistent!` is what turns it back into a table.
@@ -315,7 +315,7 @@ pub fn set_marked(sp: &Space, a: Addr, m: bool) {
 pub const RP_BYTES: u32 = 0;
 pub const RP_CPS: u32 = 1;
 /// The flattened form, once something has asked for contiguous bytes. `nil`
-/// until then. This is the cache `doc/decisions/0011` calls the important part
+/// until then. This is the cache `DECISIONS.md#strings-and-matching` calls the important part
 /// of the design -- and the thing whose hit rate has to be COUNTED, because a
 /// rope that flattens on every operation passes every correctness test and is
 /// slower than the flat string it replaced.

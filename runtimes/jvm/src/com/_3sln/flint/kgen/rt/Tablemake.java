@@ -94,7 +94,7 @@ public final class Tablemake {
     /// `(assoc row-ref k v)` -> a MAP.
     /// 
     /// A REF IS A VIEW. Changing it makes an independent value, and neither the
-    /// chunk nor the table it came from moves (`0026`). The schema does not
+    /// chunk nor the table it came from moves (`tables`). The schema does not
     /// constrain the result, because the result is no longer a row.
     public static long refAssoc(Rt rt, long rf, long k, long v) {
         int base = rt.mark();

@@ -62,7 +62,7 @@ public static class Ropefind {
                 // CHARGED PER BYTE COMPARED, exactly as the cursor path
                 // below does. Billing `nn` flat would be simpler and would
                 // over-charge every early mismatch, which is safe for a
-                // budget and untrue about the work -- and `0009` asks for
+                // budget and untrue about the work -- and `resource-limits` asks for
                 // the second thing.
                 rt.ChargeWork(1);
                 if (rt.LeafByte(leaf0, p0 + k) != rt.LeafByte(nd, k)) {
@@ -125,7 +125,7 @@ public static class Ropefind {
     /// 
     /// NOTHING ALLOCATES ONCE THE WALK IS OPEN. The needle is flattened first,
     /// before `walk-open`, so every read after that is a byte out of a leaf
-    /// that cannot move -- which is why no leaf here is rooted (`0031`).
+    /// that cannot move -- which is why no leaf here is rooted (`a-vec-of-values-is-not-a-root`).
     public static long SIndexOf(Rt rt, long hay, long needle, int from) {
         // A LOCAL AND A `set`, because kin's `if` is a statement: it cannot
         // sit in a `let` binding, which is what the first version tried.
@@ -164,7 +164,7 @@ public static class Ropefind {
         // where linear is 2x, and caught it.
         // 
         // `rope-byte-of-cp` answers the byte offset in O(depth) using the
-        // per-node code-point counts `0011` created for this and which,
+        // per-node code-point counts `strings-and-matching` created for this and which,
         // as `ropecp` notes, nothing used because every path flattened
         // first. Leaves entirely before that offset are then skipped by
         // LENGTH -- one `leaf-len` each, no bytes read.

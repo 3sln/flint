@@ -21,10 +21,10 @@ use crate::kgen::rt::hamt::*;
 impl Rt {
     /// What COMPILING a regex program costs: one unit per program word.
     /// 
-    /// CHARGED ON EVERY COMPILE, hit or miss. `0012`: if a compile charged only
+    /// CHARGED ON EVERY COMPILE, hit or miss. `matching-over-ropes`: if a compile charged only
     /// on a miss, whether it happened would depend on whether a collection had
     /// run, and the same program would report two different instruction counts
-    /// -- exactly the flakiness `0009`'s counter exists to replace.
+    /// -- exactly the flakiness `resource-limits`'s counter exists to replace.
     /// 
     /// Answers what it charged, so a test can say so.
     pub fn charge_compile(&mut self, n: u32) -> u32 {

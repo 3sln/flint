@@ -1,4 +1,4 @@
-;; Opaque values (`doc/decisions/0022`).
+;; Opaque values (`DECISIONS.md#opaque-values`).
 ;;
 ;; The logic under test is in `test/opaque.cljc`, which runs inside the module;
 ;; this drives it and checks the answers. Sending one through a port is checked

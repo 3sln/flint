@@ -42,8 +42,8 @@ pub mod image;
 pub mod map;
 pub mod num;
 pub mod obj;
-/// Emitted-wasm support (`doc/decisions/0013`). Optional by the same rule as
-/// diagnostics (`doc/decisions/0016`): a module with nothing compiled should
+/// Emitted-wasm support (`DECISIONS.md#emit-wasm-instead-of-dispatch`). Optional by the same rule as
+/// diagnostics (`DECISIONS.md#two-builds`): a module with nothing compiled should
 /// not carry the machinery that would run it.
 #[cfg(feature = "aot")]
 pub mod aot;
@@ -58,11 +58,11 @@ pub mod native;
 pub mod rt;
 pub mod seqs;
 pub mod set;
-// Snapshots are diagnostic machinery (doc/decisions/0016): absent from a
+// Snapshots are diagnostic machinery (DECISIONS.md#two-builds): absent from a
 // production build, not merely disabled.
 #[cfg(feature = "diagnostics")]
 pub mod snap;
-/// The region histogram `doc/decisions/0013` is gated on. Diagnostic by the same
+/// The region histogram `DECISIONS.md#emit-wasm-instead-of-dispatch` is gated on. Diagnostic by the same
 /// rule: it exists to decide whether to build the AOT compiler, not to run.
 #[cfg(feature = "diagnostics")]
 pub mod aotstat;

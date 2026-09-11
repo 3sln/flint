@@ -12,7 +12,7 @@
 
 ;; Image FLAGS, a trailing u32. What the compiler DECIDED, not what it was
 ;; asked: `:optimize` is an ordered preference and the answer to it is a
-;; boolean (`doc/decisions/0025`).
+;; boolean (`DECISIONS.md#structured-ports`).
 ;;
 ;; It exists because `:optimize [perf]` has to mean the same thing on all three
 ;; runtimes and cannot be carried the same way on any two of them. On wasm it
@@ -28,7 +28,7 @@
 ;;
 ;; This was briefly written as a bare literal, because adding this one `def`
 ;; made the self-compile trap. That turned out to be a stale-pointer bug in
-;; `array-map` rather than anything about `def` -- `doc/decisions/0031` -- and
+;; `array-map` rather than anything about `def` -- `DECISIONS.md#a-vec-of-values-is-not-a-root` -- and
 ;; the constant came back the moment it was fixed.
 (def FLAG-PERF 1)
 
@@ -36,7 +36,7 @@
 (def K-STRING 5) (def K-KEYWORD 6) (def K-SYMBOL 7) (def K-VECTOR 8)
 (def K-LIST 9) (def K-MAP 10) (def K-SET 11) (def K-FN 12) (def K-NATIVE 13)
 ;; 17, not 14: these tags and `codec.rs`'s wire tags share a numbering space,
-;; and 14/15/16 are bytes, port and sentinel over there (`0025`, `0034`).
+;; and 14/15/16 are bytes, port and sentinel over there (`structured-ports`, `tagged-literals`).
 (def K-TAGGED 17)
 
 (def NO-CONST 0xFFFFFFFF)
@@ -104,7 +104,7 @@
     (map? v) (intern-const b (into [:map] (mapcat (fn [e] [(const b (first e)) (const b (second e))])
                                                  (canon/sorted-entries v))))
     (seq? v) (intern-const b (into [:list] (mapv #(const b %) v)))
-    ;; A tagged literal is a VALUE (`0034`), so a literal one is a constant
+    ;; A tagged literal is a VALUE (`tagged-literals`), so a literal one is a constant
     ;; like any other: the tag symbol and the form, each interned.
     (tagged-literal? v) (intern-const b [:tagged (const b (:tag v)) (const b (:form v))])
     :else (throw (ex-info "not a constant" {:v v :type (type v)}))))
@@ -232,7 +232,7 @@
       (u32 (count code)) code
       (u32 entry)
       (u32 (count init)) (map u32 init)
-      ;; Compiled arities (doc/decisions/0013). A module built without AOT
+      ;; Compiled arities (DECISIONS.md#emit-wasm-instead-of-dispatch). A module built without AOT
       ;; writes a zero here and nothing else, and an empty table is what lets the
       ;; interpreter monomorphise the re-entry check away entirely.
       (u32 (count aot))

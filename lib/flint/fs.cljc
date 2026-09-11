@@ -1,9 +1,9 @@
 (ns flint.fs
-  "The filesystem, as a capability (`doc/decisions/0021`).
+  "The filesystem, as a capability (`DECISIONS.md#cli`).
 
   Nothing here is privileged. It is an ordinary port opened by name, so a
   program the host granted nothing simply cannot open it -- which is the whole
-  of the mechanism and the reason `0021` calls capabilities nearly free.
+  of the mechanism and the reason `cli` calls capabilities nearly free.
 
   Every path is relative to the ROOT the host granted. A path that escapes it
   comes back as an error rather than being clamped, because quietly rewriting a

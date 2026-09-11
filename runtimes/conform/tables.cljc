@@ -1,5 +1,5 @@
 (ns tables
-  "Tables on all three runtimes (`doc/decisions/0026`).
+  "Tables on all three runtimes (`DECISIONS.md#tables`).
 
   Everything a table is: the closed schema and its refusals, the row ref that
   materialises nothing, the constant column encoding, the sharing slice, the

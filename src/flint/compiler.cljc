@@ -163,14 +163,14 @@
               ;; Vars whose result inverts an argument's truthiness.
               :inversions {}
               ;; `{ns {:workspace w :grants #{..}}}` -- who owns each namespace
-              ;; and what they hold (`doc/decisions/0036`). The analyzer reads
+              ;; and what they hold (`DECISIONS.md#workspace-capabilities`). The analyzer reads
               ;; it to decide whether a reference crosses a workspace boundary,
               ;; and what the referencing side may claim when it does. Empty is
               ;; the anonymous workspace, which is every program that declares
               ;; none, and nothing is ever checked within one.
               :workspaces (or (:workspaces opts) {})
               ;; `{ns {:vars {name {..}} :checked? bool}}` -- the namespaces with
-              ;; no source, spoken to over a port (`doc/decisions/0036` step 4).
+              ;; no source, spoken to over a port (`DECISIONS.md#workspace-capabilities` step 4).
               ;; `:checked?` records whether the resolver gave a var list, which
               ;; is what decides whether an unknown var is a compile error or a
               ;; run-time one -- and a build has to be able to SAY which it got.
@@ -182,7 +182,7 @@
 
   `m-defn` wraps the function when the `defn` carried `:flint/value-meta` --
   metadata that has to land on the VALUE rather than the var, which is how a
-  predicate explains itself (`doc/decisions/0032`). Everything that INSPECTS an
+  predicate explains itself (`DECISIONS.md#checks`). Everything that INSPECTS an
   init has to look through that wrapper, and the failure when it does not is
   silent: `register-native-aliases!` saw an `:invoke` instead of a `:fn`, so the
   fifteen core predicates stopped compiling to their builtins and occurrence
@@ -449,7 +449,7 @@
         ;; defaulted here for the same reason `:features` cannot -- and for the
         ;; reason `default-features` records: this file is read THREE times, by
         ;; `collect`, by `topo-order` and by here, and a value only one of them
-        ;; knows about is a value the other two get wrong (`doc/decisions/0035`).
+        ;; knows about is a value the other two get wrong (`DECISIONS.md#reader-tags`).
         st (reader/reader src {:file file
                                :features (or (:features spec) reader/default-features)
                                :tags tags
@@ -708,7 +708,7 @@
                                                    :grants (set (:grants (val e)))}])
                                        sources))})]
     ;; VIRTUAL namespaces first, and before anything is read: a reference to one
-    ;; compiles to a call rather than to a var (`doc/decisions/0036` step 4), and
+    ;; compiles to a call rather than to a var (`DECISIONS.md#workspace-capabilities` step 4), and
     ;; the analyzer has to know that while it is analysing the namespace that
     ;; makes the reference -- which may be the first one it reads.
     (vswap! cc assoc :virtual
@@ -768,7 +768,7 @@
     ;; is reachable only because this shim uses it -- not because the runtime
     ;; carries one.
     (let [shim-ns 'flint.main
-          ;; `0021`: capabilities arrive as a SECOND argument to the entry
+          ;; `cli`: capabilities arrive as a SECOND argument to the entry
           ;; function -- `(the-fn argv {:fs <cap>})` -- so that a program holds
           ;; them because it was handed them, not because it can ask. They are
           ;; passed only when the entry has a 2-arity, because every entry
@@ -784,7 +784,7 @@
                                      entry-arities))
           ;; The entry is handed `[args caps]` -- what the host projected in,
           ;; and nothing the runtime decided. `caps` is an ordinary map of
-          ;; opaque values (`doc/decisions/0022`); it used to be
+          ;; opaque values (`DECISIONS.md#opaque-values`); it used to be
           ;; `(flint.rt/capabilities)`, read out of a grant table the runtime
           ;; kept, which made the runtime the arbiter of a concept that belongs
           ;; to the host.
@@ -802,7 +802,7 @@
     (let [entry-var 'flint.main/-main
           ;; Everything that must stay CALLABLE, not just the default entry.
           ;;
-          ;; A sandbox serves many calls (`doc/decisions/0025`), so an image is
+          ;; A sandbox serves many calls (`DECISIONS.md#structured-ports`), so an image is
           ;; a set of callable functions rather than a program with one way in.
           ;; Reachability from a single entry is right for the second and wrong
           ;; for the first: a function nobody calls from `main` is exactly the

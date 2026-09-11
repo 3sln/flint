@@ -2,17 +2,17 @@
   "Asking the host for something, and the capability that gates it.
 
   A sandbox has no ambient anything. It holds logic, and the only way out is a
-  port the host passed in (`doc/decisions/0027`). `flint.port/open` is one shape
+  port the host passed in (`DECISIONS.md#ports-are-the-hosts`). `flint.port/open` is one shape
   of asking -- \"lend me a port called this\" -- and it is the shape whose answer
   has to be a port, because a port is granted by id and never encoded.
 
-  `request` is the general shape (`doc/decisions/0036` step 7). It asks for
+  `request` is the general shape (`DECISIONS.md#workspace-capabilities` step 7). It asks for
   something and gets a VALUE back: a number, a map, nil, whatever the host chose
   to answer. Same system port, same park, same refusal.
 
   **Guarded.** Only a workspace granted `:host` may reference `request`, and
   that is checked where the reference is written, against the grants its own
-  project declared (`doc/decisions/0036` step 8). The check emits nothing -- a
+  project declared (`DECISIONS.md#workspace-capabilities` step 8). The check emits nothing -- a
   guard is a compile-time construct and costs a run nothing.
 
   What it buys is coarse and worth being precise about: it answers \"may this
@@ -39,7 +39,7 @@
   if this sandbox was given no system port -- saying so is more honest than
   parking for ever on an answer that cannot come.
 
-  Anything in `args` that is an opaque value (`doc/decisions/0022`) crosses
+  Anything in `args` that is an opaque value (`DECISIONS.md#opaque-values`) crosses
   carrying the host id it was ISSUED with, so a host recognises what it lent and
   nothing else. The runtime takes no view of what any of it means."
   ([what] (flint.rt/request what))

@@ -301,7 +301,7 @@
   ;;
   ;; `rope-hash` is the raw 31-walk and `string-hash` is that walk through
   ;; `hash-int`. Without the finaliser the two tiers hashed differently and a
-  ;; map keyed by one did not find the other -- the one rule `0011` states
+  ;; map keyed by one did not find the other -- the one rule `strings-and-matching` states
   ;; about tiers. All three runtimes agreed, so no cross-runtime check could
   ;; see it.
   (doseq [n [10 1024 1025 2000]]

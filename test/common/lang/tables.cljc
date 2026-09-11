@@ -27,7 +27,7 @@
 (defn ^:flint.check/test row-ref-equality-survives-a-collection-inside-eq []
   ;; Comparing a row ref to a map materialises the ref with `refToMap`, which
   ;; allocates a map and assoc's every column into it -- so it can COLLECT
-  ;; part way through the comparison. `0031`: a value in a host local does not
+  ;; part way through the comparison. `a-vec-of-values-is-not-a-root`: a value in a host local does not
   ;; survive an allocation. Reading the second operand after materialising the
   ;; first was reading the address it used to be at.
   ;;

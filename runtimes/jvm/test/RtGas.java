@@ -1,7 +1,7 @@
 import com.flint.rt.*;
 import java.nio.file.*;
 
-/// GAS IS A BOUND, on the ports too (`doc/decisions/0009`).
+/// GAS IS A BOUND, on the ports too (`DECISIONS.md#resource-limits`).
 ///
 /// This test exists because it did not, and the hole it leaves is invisible to
 /// everything else: `gasLimit` was a field these runtimes wrote into snapshots

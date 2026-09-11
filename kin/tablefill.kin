@@ -1,7 +1,7 @@
 ;; Filling a chunk, and rewriting one with a row replaced or appended.
 ;;
 ;; A CHUNK IS COPIED PER WRITE on the persistent path, which is why the
-;; transient exists: `0026` measured filling 20 000 rows this way at 49 MB and
+;; transient exists: `tables` measured filling 20 000 rows this way at 49 MB and
 ;; 23 collections against 3.2 MB and 4 for the bulk path. What is here is the
 ;; correct-and-slow half; `seal` is the fast half's last step.
 (ns flint.rt.tablefill
@@ -57,7 +57,7 @@
      ""
      "ONLY THE COLUMNS THE SCHEMA NAMES ARE CARRIED OVER. A slot the schema has"
      "dropped is left empty, which is where the `data stays resident and"
-     "invisible until a chunk is next rewritten` trade in `0026` is paid back:"
+     "invisible until a chunk is next rewritten` trade in `tables` is paid back:"
      "a migration is head-only, and the first write to a chunk after it is what"
      "actually reclaims."
      ""

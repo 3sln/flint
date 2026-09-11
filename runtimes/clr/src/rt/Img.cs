@@ -27,7 +27,7 @@ public static class Img {
         KString = 5, KKeyword = 6, KSymbol = 7, KVector = 8, KList = 9,
         KMap = 10, KSet = 11, KFn = 12, KNative = 13,
         /// 17, not 14: the image's tags and the wire codec's share a numbering
-        /// space, and 14/15/16 are bytes, port and sentinel (`0025`, `0034`).
+        /// space, and 14/15/16 are bytes, port and sentinel (`structured-ports`, `tagged-literals`).
         KTagged = 17;
     const long NoConst = 0xFFFF_FFFFL;
 

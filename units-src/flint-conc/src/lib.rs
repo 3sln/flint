@@ -1,7 +1,7 @@
 //! `flint.conc` — the builtins for green threads and ports, plus the host-facing
 //! exports that let a host service a parked thread.
 //!
-//! This is a **unit** (`doc/decisions/0003`), which is the whole point: a
+//! This is a **unit** (`DECISIONS.md#namespace-units`), which is the whole point: a
 //! program that never mentions `spawn`, `channel` or `open` never reaches any of
 //! these symbols, so `--gc-sections` deletes them and the module is the size it
 //! was before green threads existed. `test/threads.clj` asserts that.
@@ -9,7 +9,7 @@
 //! Nothing here suspends a wasm frame. `receive` on an empty port does not block
 //! the host and does not unwind the module's stack: it marks the green thread as
 //! not-runnable and returns to the scheduler, which is a loop inside the
-//! interpreter. See `doc/decisions/0005`, section 1.
+//! interpreter. See `DECISIONS.md#threads-and-ports`, section 1.
 
 #![cfg_attr(not(feature = "host-tools"), no_std)]
 
@@ -144,7 +144,7 @@ builtin!(flint_b_open, b_open, |rt, a, n| {
     // EVERY REMAINING ARGUMENT IS FORWARDED, and the runtime takes no view of
     // any of them. A capability is an opaque value like any other and travels
     // as one; there is nothing here that knows the word, which is the point
-    // (`doc/decisions/0022`). The host decodes what it was sent and decides.
+    // (`DECISIONS.md#opaque-values`). The host decodes what it was sent and decides.
     let base = rt.mark();
     let ni = rt.push(name);
     let v = rt.empty_vec();
@@ -168,7 +168,7 @@ builtin!(flint_b_request, b_request, |rt, a, n| {
     }
     // Identical to `open` above, and deliberately so: same forwarding, same
     // no-view-of-the-arguments. What differs is what comes back
-    // (`doc/decisions/0036` step 7).
+    // (`DECISIONS.md#workspace-capabilities` step 7).
     let base = rt.mark();
     let ni = rt.push(what);
     let v = rt.empty_vec();
@@ -212,7 +212,7 @@ builtin!(flint_b_port_state, b_port_state, |rt, a, n| {
     if !rt.is_port(p) {
         return rt.throw_str("ClassCastException", "port-state wants a port");
     }
-    // The query is the truth (doc/decisions/0006), so it resolves the peer
+    // The query is the truth (DECISIONS.md#host-abi), so it resolves the peer
     // rather than reporting a state that reaping has not caught up with yet.
     let s = rt.port_state_now(p);
     let name = match s {
@@ -261,7 +261,7 @@ builtin!(flint_b_port_id, b_port_id, |rt, a, n| {
 ///
 /// `CATALOGUE` above maps a builtin to a linker symbol, which is what a wasm
 /// module needs and what a natively-linked host cannot use. The native CLI
-/// links this crate directly (`doc/decisions/0021`), so it needs the functions
+/// links this crate directly (`DECISIONS.md#cli`), so it needs the functions
 /// themselves -- otherwise `flint run` cannot execute a program that spawns a
 /// thread, and the conformance gate has no native answer to compare the ports
 /// against.
@@ -376,7 +376,7 @@ mod host {
         rt().host_continue(token as i64, ok != 0) as u32
     }
 
-    /// Install a BRIDGE the host owns (`doc/decisions/0027`), and say whether
+    /// Install a BRIDGE the host owns (`DECISIONS.md#ports-are-the-hosts`), and say whether
     /// it worked. The label is read out of the inbound buffer.
     ///
     /// `system` non-zero makes it the sandbox's SYSTEM port: the one it can ask
@@ -429,7 +429,7 @@ mod host {
     }
 
     /// Grant an `open`: hand the waiting thread a handle on the host's port
-    /// `port` (`doc/decisions/0027`).
+    /// `port` (`DECISIONS.md#ports-are-the-hosts`).
     ///
     /// This is the half `flint_continue` cannot do. A grant has to NAME a port,
     /// because there is no port until the host says which one -- the sandbox no
@@ -441,7 +441,7 @@ mod host {
     }
 
     /// Answer an `EV_REQUEST`: the bytes in the inbound buffer are the value
-    /// (`doc/decisions/0036` step 7).
+    /// (`DECISIONS.md#workspace-capabilities` step 7).
     ///
     /// The counterpart of `flint_grant`, for the requests whose answer is not a
     /// port. A port is granted BY ID and never encoded; anything else crosses
@@ -516,7 +516,7 @@ mod host {
     /// Returns the STATUS and renders nothing. It used to hand the value back
     /// through `finish_run`, which was `main`'s shape: one entry function, one
     /// answer, rendered as a string into `OUT`. With `main` gone
-    /// (`doc/decisions/0025` step 5) a resume has no single answer to render --
+    /// (`DECISIONS.md#structured-ports` step 5) a resume has no single answer to render --
     /// a call's result goes back as a message on the system port, carrying its
     /// `:tx`, and there may be several in flight. Rendering here reported 1
     /// ("that is not a string") for a sandbox that had simply run out of work.

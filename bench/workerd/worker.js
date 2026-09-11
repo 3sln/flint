@@ -50,9 +50,9 @@ export default {
 };
 
 // `[name []]` in the wire format, written by hand: these drivers use nothing but
-// a `WebAssembly.Instance` on purpose (`doc/decisions/0018`), so there is no SDK
+// a `WebAssembly.Instance` on purpose (`DECISIONS.md#cross-runtime-benchmarks`), so there is no SDK
 // to encode for them, and nothing is called automatically any more
-// (`doc/decisions/0025` step 5).
+// (`DECISIONS.md#structured-ports` step 5).
 function wireCall(e, fn) {
   var enc = function (s) {
     var u = new TextEncoder().encode(s);

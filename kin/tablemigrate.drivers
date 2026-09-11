@@ -466,7 +466,7 @@ fn main() {
                         rt.slot(t2, table::TB_COUNT).as_fixnum(), encb, encc,
                         bt, cellc.as_fixnum()));
     // THE CARRIED COLUMN IS THE SAME OBJECT, not a copy. That is the head-only
-    // edit `0026` is about.
+    // edit `tables` is about.
     let och = rt.slot(rt.slot(t, table::TB_CHUNKS), 0);
     let oldb = rt.slot(och, table::CH_BASE + 1);
     let newb = rt.slot(ch0, table::CH_BASE + idb);

@@ -1,4 +1,4 @@
-;; VM snapshots (doc/decisions/0015).
+;; VM snapshots (DECISIONS.md#snapshots).
 ;;
 ;; The point of a snapshot is that it is a COPY, not a question: every ad-hoc
 ;; probe answers one thing and can answer it confidently wrong, while a snapshot
@@ -30,7 +30,7 @@
 
 ;; ------------------------------------------------------------- module size
 ;;
-;; `0005`'s rule: none of this may grow a pure module. The snapshot surface is a
+;; `threads-and-ports`'s rule: none of this may grow a pure module. The snapshot surface is a
 ;; unit like any other, so a program that never asks for one does not carry it.
 (src! "pure" "(ns pure)\n(defn main [_] \"nothing\")")
 (src! "snapped"

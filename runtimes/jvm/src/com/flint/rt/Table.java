@@ -9,7 +9,7 @@ import com._3sln.flint.kgen.rt.Mapcore;
 import static com.flint.rt.Obj.*;
 
 /// Tables: columnar storage that is a value, ported from `runtime/src/table.rs`
-/// (`doc/decisions/0026`).
+/// (`DECISIONS.md#tables`).
 ///
 /// A vector of maps from the outside; columnar chunks in a trie underneath,
 /// with a CLOSED schema fixed when the table is built. Closed is the whole
@@ -77,11 +77,11 @@ public final class Table {
     public static long refAssoc(Rt rt, long r, long k, long v) { return com._3sln.flint.kgen.rt.Tablemake.refAssoc(rt, r, k, v); }
     public static long tableColumn(Rt rt, long t, long name) { return com._3sln.flint.kgen.rt.Tablemake.tableColumn(rt, t, name); }
 
-    // THE CLOSED SET of `0005`, generated from `kin/tablekind.kin`.
+    // THE CLOSED SET of `threads-and-ports`, generated from `kin/tablekind.kin`.
     static boolean knownType(Rt rt, long t) { return com._3sln.flint.kgen.rt.Tablekind.knownType(rt, t); }
     public static boolean typeOk(Rt rt, long t, long v) { return com._3sln.flint.kgen.rt.Tablekind.typeOk(rt, t, v); }
 
-    // THE REFUSALS, generated from `kin/tablesay.kin` -- `0032`.
+    // THE REFUSALS, generated from `kin/tablesay.kin` -- `checks`.
     static String kwName(Rt rt, long v) { return com._3sln.flint.kgen.rt.Tablesay.kwName(rt, v); }
     static String columnList(Rt rt, long s) { return com._3sln.flint.kgen.rt.Tablesay.columnList(rt, s); }
     static String columnTypeError(Rt rt, long name, long want, long got, int row) { return com._3sln.flint.kgen.rt.Tablesay.columnTypeError(rt, name, want, got, row); }
@@ -158,6 +158,6 @@ public final class Table {
     //
     // Appending through the persistent path copies the chunk per row, which is
     // 256 copies per chunk: 49 061 464 bytes to build 20 000 rows against
-    // 3 082 984 through here (`doc/decisions/0026` step 7).
+    // 3 082 984 through here (`DECISIONS.md#tables` step 7).
 
 }

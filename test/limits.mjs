@@ -1,4 +1,4 @@
-// Hard limits (doc/decisions/0009).
+// Hard limits (DECISIONS.md#resource-limits).
 //
 // The interpreter costs speed against JIT'd native code; deterministic resource
 // limits are a large part of what it buys back. A wall-clock timeout bounds
@@ -100,7 +100,7 @@ console.log('limits');
 // right answer for a backtracking engine: the bound was exact rather than
 // heuristic because the backtracking was itself bytecode.
 //
-// It is the wrong answer now. `doc/decisions/0012` replaced the backtracker with
+// It is the wrong answer now. `DECISIONS.md#matching-over-ropes` replaced the backtracker with
 // a Pike VM, which never rewinds and deduplicates threads by program counter --
 // so the pattern is LINEAR and there is nothing for the limit to stop. The
 // hazard is gone rather than mitigated, and the test should say which.

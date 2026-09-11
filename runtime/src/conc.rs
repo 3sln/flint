@@ -8,7 +8,7 @@
 //! and speed on every function, forever). flint needs **neither**, because it is
 //! an interpreter: a green thread is a VM state, the scheduler picks a runnable
 //! one, and *blocking* means *not runnable yet*. The interpreter never leaves
-//! its own loop and the host is never blocked. See `doc/decisions/0005`.
+//! its own loop and the host is never blocked. See `DECISIONS.md#threads-and-ports`.
 //!
 //! # Nothing here is in a pure module
 //!
@@ -16,7 +16,7 @@
 //! builtins, or through `Rt::sched_hook`, which is `None` until one of those
 //! builtins runs. A program that never mentions `spawn`, `channel` or `open`
 //! never exports any of them, so `--gc-sections` deletes the lot -- the same
-//! mechanism that keeps the XML parser out (`doc/decisions/0003`).
+//! mechanism that keeps the XML parser out (`DECISIONS.md#namespace-units`).
 //!
 //! # And nothing here is new work for the collector
 //!
@@ -47,7 +47,7 @@ pub const TH_STACK: u32 = 3;
 /// in here for the collector to find, and a raw blob is the honest encoding.
 pub const TH_FRAMES: u32 = 4;
 /// Bytes per saved frame. Five interpreter words plus the two the AOT entry
-/// needs (`doc/decisions/0013`): which compiled arity, and which block to come
+/// needs (`DECISIONS.md#emit-wasm-instead-of-dispatch`): which compiled arity, and which block to come
 /// back at.
 pub const FRAME_REC: usize = 28;
 pub const TH_HANDLERS: u32 = 5;
@@ -59,7 +59,7 @@ pub const TH_ENTRY: u32 = 8;
 /// after the park finds the same request rather than making a second one.
 pub const TH_PENDING: u32 = 9;
 /// The waiter token this thread is parked on, or -1. One token type for every
-/// kind of park (`doc/decisions/0006`).
+/// kind of park (`DECISIONS.md#host-abi`).
 pub const TH_TOKEN: u32 = 10;
 /// An error handed to a parked thread, to be raised when it next runs. The
 /// scheduler uses it to say "the other end of your port is gone" in the thread
@@ -67,7 +67,7 @@ pub const TH_TOKEN: u32 = 10;
 pub const TH_FAIL: u32 = 11;
 /// Arguments for the thread's entry, or nil for the no-argument case a
 /// `spawn` makes. A CALL from the host arrives with them
-/// (`doc/decisions/0025`), and a green thread is what runs it -- the called
+/// (`DECISIONS.md#structured-ports`), and a green thread is what runs it -- the called
 /// function may open a port and park, and a call that ran on the host's stack
 /// could not.
 pub const TH_ARGS: u32 = 12;
@@ -92,7 +92,7 @@ pub const PARK_YIELD: Value = Value((crate::value::TAG_FIXNUM << 48) | 0);
 // --- port ------------------------------------------------------------------
 //
 // A port is one END, and there are exactly two kinds of them
-// (`doc/decisions/0027`).
+// (`DECISIONS.md#ports-are-the-hosts`).
 //
 // * A **channel** end joins two green threads inside one sandbox. Both ends are
 //   in this heap, so a message is a pointer move: nothing is encoded, nothing
@@ -194,7 +194,7 @@ pub const CARRY_CROSSING: u8 = 1;
 
 /// One end of a `channel` pair: no host involvement at all.
 pub const K_CHANNEL: i64 = 0;
-/// A handle on a port the HOST owns (`doc/decisions/0027`).
+/// A handle on a port the HOST owns (`DECISIONS.md#ports-are-the-hosts`).
 ///
 /// The id is the host's, not this sandbox's. Everything queued on it lives in
 /// host memory as encoded bytes, so no collector ever holds a pointer it does
@@ -218,7 +218,7 @@ pub const P_REFUSED: i64 = 3;
 /// The peer closed cleanly; this end may still drain what is already buffered
 /// and then reads end-of-stream. A channel is freed only when BOTH ends are
 /// done, so this is a real, describable state rather than a race
-/// (`doc/decisions/0006`).
+/// (`DECISIONS.md#host-abi`).
 pub const P_HALF: i64 = 4;
 /// The peer went away without closing -- collected, or a host that hung up.
 /// Unlike `P_HALF` nobody said goodbye, so a receive here **errors** rather than
@@ -251,7 +251,7 @@ pub const WK_SEND: i64 = 2;
 pub const WK_RECEIVE: i64 = 3;
 pub const WK_JOIN: i64 = 4;
 /// Parked on `host_request`, which is `WK_OPEN` generalised: the answer is a
-/// VALUE rather than necessarily a port (`doc/decisions/0036` step 7).
+/// VALUE rather than necessarily a port (`DECISIONS.md#workspace-capabilities` step 7).
 pub const WK_REQUEST: i64 = 5;
 
 // --- scheduler state -------------------------------------------------------
@@ -270,7 +270,7 @@ pub const SC_PORTS: u32 = 5;
 pub const SC_PAIRS: u32 = 6;
 pub const SC_WAITERS: u32 = 7;
 pub const SC_WFREE: u32 = 8;
-/// The SYSTEM port, if this sandbox was given one (`doc/decisions/0027`).
+/// The SYSTEM port, if this sandbox was given one (`DECISIONS.md#ports-are-the-hosts`).
 ///
 /// A sandbox no longer manufactures its own end and offers it up: the host owns
 /// the port, keeps one end, and passes the other in at construction. Absent is
@@ -279,7 +279,7 @@ pub const SC_WFREE: u32 = 8;
 /// code rather than a degraded mode.
 pub const SC_SYSTEM: u32 = 9;
 /// Host ids of every BRIDGE this sandbox holds a handle for -- ids, not
-/// references, so the list pins nothing (`doc/decisions/0027`).
+/// references, so the list pins nothing (`DECISIONS.md#ports-are-the-hosts`).
 ///
 /// This is the walk that turns a collection into a release. The handle objects
 /// live in the weak `INTERN_PORT` table; after a collection an id whose lookup
@@ -300,7 +300,7 @@ pub const EV_RETAIN: i64 = 4;
 /// handle unreachable, or the script closed it. Exactly one per `EV_RETAIN`.
 pub const EV_RELEASE: i64 = 5;
 /// The guest is asking the host for SOMETHING, and the answer is an ordinary
-/// value rather than a port (`doc/decisions/0036` step 7).
+/// value rather than a port (`DECISIONS.md#workspace-capabilities` step 7).
 ///
 /// `EV_OPEN` is the special case of this whose answer happens to be a port, and
 /// it stays: a port is granted by id through `host_grant` and never encoded, so
@@ -378,7 +378,7 @@ impl Rt {
         //
         // UNLESS NOTHING IS RUNNING. A scheduler can now be created before any
         // program has started -- a host that installs a port at construction
-        // makes one (`doc/decisions/0027`) -- and then thread 0 represents no
+        // makes one (`DECISIONS.md#ports-are-the-hosts`) -- and then thread 0 represents no
         // stack at all. Left RUNNABLE it would be picked, restored from a
         // `TH_STACK` of nil, and run off the end of an empty value stack. An
         // empty frame stack is what says which case this is.
@@ -426,7 +426,7 @@ impl Rt {
     // --- saving and restoring a VM state -----------------------------------
 
     /// Save the live VM state into `th`. Public so that the collector tests can
-    /// build the exact situation section 3 of `doc/decisions/0005` warns about:
+    /// build the exact situation section 3 of `DECISIONS.md#threads-and-ports` warns about:
     /// a parked thread holding the only reference to a value.
     pub fn save_thread_state(&mut self, th: Value) {
         self.save_current_state(th)
@@ -792,7 +792,7 @@ impl Rt {
     }
 
     /// The handle in THIS sandbox for the host's port `host_id`, minting one if
-    /// this sandbox does not hold it yet (`doc/decisions/0027`).
+    /// this sandbox does not hold it yet (`DECISIONS.md#ports-are-the-hosts`).
     ///
     /// **This is the reference count, and it is a count of HOLDERS.** The weak
     /// intern table is what makes that possible: one handle object per host id
@@ -887,7 +887,7 @@ impl Rt {
     /// is driven over: calls in arrive on it, and requests out -- for a
     /// capability, for another port -- leave on it. Handing it to guest code
     /// would make it ambient authority inside the sandbox, which is the thing
-    /// `doc/decisions/0022` and `0027` both exist to prevent. There is no
+    /// `DECISIONS.md#opaque-values` and `ports-are-the-hosts` both exist to prevent. There is no
     /// builtin that answers it; only the runtime looks it up.
     /// The system port's id, or -1. What a HOST asks, since it cannot hold the
     /// port itself -- the value is deliberately not reachable from outside.
@@ -1358,8 +1358,8 @@ impl Rt {
             TY_ATOM => Err("a port carries data only; this is an atom".into()),
             TY_VAR => Err("a port carries data only; this is a var".into()),
             TY_THREAD => Err("a port carries data only; this is a thread".into()),
-            // `doc/decisions/0006` refused this outright -- "an endpoint cannot
-            // be delegated at run time" -- and `0025` REVERSES it, which is the
+            // `DECISIONS.md#host-abi` refused this outright -- "an endpoint cannot
+            // be delegated at run time" -- and `structured-ports` REVERSES it, which is the
             // point: a capability a program holds becomes something it can hand
             // on rather than only use.
             //
@@ -1408,7 +1408,7 @@ impl Rt {
                      opened with :format :flint."
                     .into())
             }
-            // An opaque value is identity and nothing else (doc/decisions/0022).
+            // An opaque value is identity and nothing else (DECISIONS.md#opaque-values).
             // The old rule refused it outright, and the reasoning was: anything
             // a codec could write down is something the RECEIVER could write
             // down too, and then it is mintable -- the whole property gone.
@@ -1424,7 +1424,7 @@ impl Rt {
             // no way to turn an integer into one.
             //
             // A port is still refused on both, and not for a serialisation
-            // reason: `doc/decisions/0006` says an endpoint is not transferable
+            // reason: `DECISIONS.md#host-abi` says an endpoint is not transferable
             // and cannot be delegated at run time. That is a design decision
             // about ownership, which the encoding does not change.
             crate::obj::TY_OPAQUE => Ok(()),
@@ -1743,7 +1743,7 @@ pub fn drive(rt: &mut Rt) -> Value {
     loop {
         // What the collector left behind is the lifetime rule: a flint end that
         // nothing refers to any more has been closed, whether or not anybody
-        // said so (doc/decisions/0006).
+        // said so (DECISIONS.md#host-abi).
         rt.reap_ports();
         match pick(rt) {
             Some(i) => run_one(rt, i),
@@ -1754,7 +1754,7 @@ pub fn drive(rt: &mut Rt) -> Value {
                 // It used to be the other way round: thread 0 was `main`, its
                 // value was the answer, and once it had returned everything else
                 // was torn down "whatever a service thread may still be parked
-                // on". With `main` gone (`doc/decisions/0025` step 5) a sandbox
+                // on". With `main` gone (`DECISIONS.md#structured-ports` step 5) a sandbox
                 // is a thing the host CALLS, and the only reason to stop is that
                 // nothing can proceed. Asking `main_finished` first here closed
                 // the system port out from under a call that had just parked on
@@ -1846,7 +1846,7 @@ impl Rt {
     /// Start a thread's entry closure with the frame stack empty.
     ///
     /// `args` is nil for a `spawn`, which takes a function of no arguments, and
-    /// a vector for a CALL the host asked for (`doc/decisions/0025`).
+    /// a vector for a CALL the host asked for (`DECISIONS.md#structured-ports`).
     fn run_thread_entry(&mut self, f: Value, args: Value) -> Value {
         if !self.is_callable(f) {
             self.throw_str("ClassCastException", "spawn wants a function of no arguments");
@@ -2123,7 +2123,7 @@ impl Rt {
             );
         }
         // A BRIDGE has no peer OBJECT to ask about: the far end is the
-        // host's registry and is not in any heap (`doc/decisions/0027`). Its own
+        // host's registry and is not in any heap (`DECISIONS.md#ports-are-the-hosts`). Its own
         // state is the whole answer, and the states above have already covered
         // every way that can say "no more" -- so an empty buffer here means
         // "nothing yet", which is what parking is for.
@@ -2160,7 +2160,7 @@ impl Rt {
     /// to fill the table -- so a host could not decide for itself what a
     /// capability meant, because three layers had already decided.
     ///
-    /// A capability is an OPAQUE VALUE (`doc/decisions/0022`) and nothing more.
+    /// A capability is an OPAQUE VALUE (`DECISIONS.md#opaque-values`) and nothing more.
     /// The host projects one into a sandbox by any means it likes -- an
     /// argument, a call, a port -- and a program that wants something a
     /// capability enables PRESENTS it with the request. This function forwards
@@ -2177,7 +2177,7 @@ impl Rt {
     /// never hands one back. It is told the token to answer with and the id of
     /// the end it will hold.
     /// Ask for a port. **A REQUEST ON THE SYSTEM PORT**, not a construction
-    /// (`doc/decisions/0027`).
+    /// (`DECISIONS.md#ports-are-the-hosts`).
     ///
     /// A sandbox cannot make a bridge. It used to: `open` allocated a PAIR of
     /// ends here, kept one and offered the other up as "the host's", which made
@@ -2186,7 +2186,7 @@ impl Rt {
     /// until the host answers, and what comes back is a handle on a port the
     /// host already owns.
     ///
-    /// Combined with `0025`'s rule -- flint is given no way to turn an integer
+    /// Combined with `structured-ports`'s rule -- flint is given no way to turn an integer
     /// into a port -- this is stronger than either piece alone: a sandbox can
     /// obtain a port neither by fabrication NOR by construction. Every port it
     /// will ever hold was handed to it.
@@ -2287,7 +2287,7 @@ impl Rt {
 
     /// Ask the host for something, and get a VALUE back.
     ///
-    /// `port_open` generalised (`doc/decisions/0036` step 7). The two differ in
+    /// `port_open` generalised (`DECISIONS.md#workspace-capabilities` step 7). The two differ in
     /// exactly one place -- what the answer may be -- and that difference is
     /// load-bearing, so they are two functions rather than one with a flag: a
     /// port is granted BY ID through `host_grant` and never encoded, because
@@ -2297,7 +2297,7 @@ impl Rt {
     ///
     /// The guest cannot construct a request it was not compiled to make: the
     /// capability guard on the wrapper is a compile-time construct
-    /// (`doc/decisions/0036` step 8), and this primitive is the thing it
+    /// (`DECISIONS.md#workspace-capabilities` step 8), and this primitive is the thing it
     /// guards. What the host does with the request is the host's business, and
     /// it may refuse -- which is a normal outcome and arrives catchably.
     pub fn host_request(&mut self, what: Value, args: Value) -> Value {
@@ -2389,7 +2389,7 @@ impl Rt {
     /// The host's answer to an `EV_REQUEST`, as encoded bytes.
     ///
     /// Decoded HERE, at the boundary, like every other thing crossing a bridge
-    /// (`doc/decisions/0027`): the guest gets a value and never a codec.
+    /// (`DECISIONS.md#ports-are-the-hosts`): the guest gets a value and never a codec.
     pub fn host_answer(&mut self, token: i64, bytes: &[u8]) -> bool {
         let w = self.waiter_at(token);
         if w.is_nil() {
@@ -2536,7 +2536,7 @@ impl Rt {
     pub fn host_continue(&mut self, token: i64, ok: bool) -> bool {
         if ok {
             // A GRANT HAS TO NAME A PORT. There is no port to grant until the
-            // host says which one -- that is what `0027` inverted -- so this
+            // host says which one -- that is what `ports-are-the-hosts` inverted -- so this
             // form can only ever mean a refusal, and a host that means to grant
             // calls `host_grant`. Answering `true` here would have to invent a
             // port, which is exactly the construction the sandbox may not do
@@ -2559,7 +2559,7 @@ impl Rt {
     }
 
     /// Grant an open: hand the waiting thread a handle on the host's port
-    /// `host_port_id` (`doc/decisions/0027`).
+    /// `host_port_id` (`DECISIONS.md#ports-are-the-hosts`).
     ///
     /// The id is the HOST's. It is the same id in every sandbox that holds this
     /// port, which is what makes a handle sendable between two of them at all,
@@ -2597,7 +2597,7 @@ impl Rt {
     }
 
     /// A message on the SYSTEM PORT is a request to the runtime, not a message
-    /// for the guest (`doc/decisions/0025`, `0027`).
+    /// for the guest (`DECISIONS.md#structured-ports`, `ports-are-the-hosts`).
     ///
     /// The guest cannot name the system port, so nothing there could ever
     /// receive one. This is where the host asks for work instead:
@@ -2712,7 +2712,7 @@ impl Rt {
         if threw {
             // The thrown value is rendered into two strings rather than sent as
             // itself: an exception is an object with a stack in it, and what
-            // crosses a boundary is data (`doc/decisions/0006`).
+            // crosses a boundary is data (`DECISIONS.md#host-abi`).
             let e = if self.failed() { self.clear_error() } else { self.r(vi) };
             let ei = self.push(e);
             let kindv = self.ex_kind(self.r(ei));
@@ -2802,7 +2802,7 @@ impl Rt {
         // A bridge is ONE object and the id is its own, so the lookup above has
         // already found the end to deliver into. There is no pair and no peer
         // hop: that indirection existed only because a host port kept its
-        // bookkeeping on a second object (`doc/decisions/0027`).
+        // bookkeeping on a second object (`DECISIONS.md#ports-are-the-hosts`).
         let pi = {
             let pv = self.r(hi);
             self.push(pv)
@@ -3055,7 +3055,7 @@ impl Rt {
         // The handle is ordinary memory and is not rooted, so the collector
         // finding it unreachable IS this sandbox letting the port go. One
         // `EV_RELEASE` per `EV_RETAIN`, which is what makes the host's count a
-        // count of holders rather than of arrivals (`doc/decisions/0027`).
+        // count of holders rather than of arrivals (`DECISIONS.md#ports-are-the-hosts`).
         let brs = self.slot(self.r(si), SC_BRIDGES);
         let bi = self.push(brs);
         let bn = self.vec_count(self.r(bi));
@@ -3065,7 +3065,7 @@ impl Rt {
             let id = fx(self.vec_nth(self.r(bi), k, NIL));
             if self.port_by_id(id).is_nil() {
                 // CLOSED as well as released, and the two say different things.
-                // `doc/decisions/0006`: an end the collector finds unreachable
+                // `DECISIONS.md#host-abi`: an end the collector finds unreachable
                 // IS the script having called `close`, so the host hears the
                 // same pair it would have heard from an explicit close -- this
                 // sandbox is finished with the port, and it has let go of its

@@ -3,7 +3,7 @@
 
 Only the `--diagnostics` build declares these, which is what keeps a production
 module free of them without `flint` needing a flag of its own
-(doc/decisions/0016).
+(DECISIONS.md#two-builds).
 """
 import sys
 

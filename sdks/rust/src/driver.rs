@@ -1,4 +1,4 @@
-//! Who advances a sandbox, and when (`doc/decisions/0028`).
+//! Who advances a sandbox, and when (`DECISIONS.md#drivers`).
 //!
 //! A sandbox does not run because someone called into it. It runs because it
 //! has work and a driver decided to give it a thread. That indirection is the

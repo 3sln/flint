@@ -756,7 +756,7 @@ fn arguments_survive_the_module_initialisers() {
     );
 }
 
-// --- snapshots (doc/decisions/0015) ----------------------------------------
+// --- snapshots (DECISIONS.md#snapshots) ----------------------------------------
 
 /// Round trip must be byte-identical. Anything that differs is state the format
 /// is dropping, and a format that drops state is the next instrument that lies.
@@ -793,7 +793,7 @@ fn a_snapshot_round_trips_byte_for_byte() {
 /// holding a handle to nothing, and no host could put it right, because the
 /// identity it would rehydrate against had been erased.
 ///
-/// Possession was never the check (`doc/decisions/0022`); the GRANT TABLE is.
+/// Possession was never the check (`DECISIONS.md#opaque-values`); the GRANT TABLE is.
 /// A host that no longer honours id 7 refuses it exactly as it refuses a
 /// forgery, and a host that wants the shelved sandbox to carry on rebinds 7 to
 /// a live resource. The sandbox cannot exploit the preserved id either way,

@@ -14,8 +14,8 @@ using static Flint.Rt.Obj;
 /// worked and cost three things this does not: every value was boxed, the
 /// collector could not see the stack, and a continuation could not be
 /// serialised. Here the stack is `Roots.stack` -- scanned, movable, and
-/// capturable -- which is what `doc/decisions/0015` needs and what
-/// `doc/decisions/0005` needs.
+/// capturable -- which is what `DECISIONS.md#snapshots` needs and what
+/// `DECISIONS.md#threads-and-ports` needs.
 ///
 /// The frame stack is DATA, so a green thread is a saved copy of it and a
 /// snapshot carries it. Neither is bolted on afterwards; both fall out.
@@ -212,7 +212,7 @@ public sealed class Rt : System.IDisposable {
 
     /// How the decoder turns a `K_PORT` into a handle -- an indirection kept
     /// because the RUST needs it, and mirrored so the three runtimes stay one
-    /// implementation (`doc/decisions/0027`).
+    /// implementation (`DECISIONS.md#ports-are-the-hosts`).
     ///
     /// There it is a size decision: calling `InstallBridgePort` straight from
     /// the codec made the scheduler, the ring, the event queue and the port
@@ -257,7 +257,7 @@ public sealed class Rt : System.IDisposable {
     /// slice -- so the native runtime bounded a runaway program and this one did
     /// not. Conformance could not see it: it diffs ANSWERS, and a program
     /// allowed to run forever eventually produces the right one
-    /// (`doc/decisions/0009`).
+    /// (`DECISIONS.md#resource-limits`).
     public void RefreshCheckpoint() {
         long a = gasLimit == 0 ? long.MaxValue : gasLimit;
         long b = sliceEnd == 0 ? long.MaxValue : sliceEnd;
@@ -293,7 +293,7 @@ public sealed class Rt : System.IDisposable {
     /// The rest of the interpreter's state, all of it snapshot-visible.
     ///
     /// Here rather than spread across the classes that use them, for the reason
-    /// `doc/decisions/0015` gives: a snapshot is a COPY of the VM, so anything
+    /// `DECISIONS.md#snapshots` gives: a snapshot is a COPY of the VM, so anything
     /// that survives a park has to be findable in one place. The Rust and the
     /// JVM keep exactly this set in exactly this order, so all three write
     /// byte-identical snapshots.
@@ -378,7 +378,7 @@ public sealed class Rt : System.IDisposable {
     // --- allocation, with the rooting discipline ---------------------------
 
     /// Allocate. With one executor this is `gc.Alloc` and nothing else; with
-    /// several it is the whole safepoint protocol (`doc/decisions/0028`).
+    /// several it is the whole safepoint protocol (`DECISIONS.md#drivers`).
     ///
     /// The allocation lock keeps two threads out of the collector's
     /// bookkeeping. The safepoint is staged ONLY when this allocation would
@@ -387,7 +387,7 @@ public sealed class Rt : System.IDisposable {
     public long Alloc(int ty, int len) {
         // ALLOCATION CHARGES GAS, one unit per 8 bytes, mirroring `Rt::alloc`
         // in the Rust runtime. Without it the three runtimes bill differently
-        // for the same program (`doc/decisions/0009`). Only when COUNTING.
+        // for the same program (`DECISIONS.md#resource-limits`). Only when COUNTING.
         if (checkpoint != 0) ChargeWork(Obj.SizeFor(ty, len) >> 3);
         return AllocUnbilled(ty, len);
     }
@@ -428,7 +428,7 @@ public sealed class Rt : System.IDisposable {
         return a;
     }
 
-    /// Another executor on THIS sandbox's heap (`doc/decisions/0028`).
+    /// Another executor on THIS sandbox's heap (`DECISIONS.md#drivers`).
     ///
     /// One heap, one set of shared roots, one safepoint protocol -- and its own
     /// value stack, shadow stack and remembered set, because those are per
@@ -482,7 +482,7 @@ public sealed class Rt : System.IDisposable {
     public void SetSlot(long obj, int i, long v) { gc.SetSlot(obj, i, v, roots); }
     public long Slot(long v, int i) { return Obj.Slot(gc.sp, Val.AsHeap(v), i); }
 
-    /// The CLOSED SET of `0005`, generated from `kin/tablekind.kin`.
+    /// The CLOSED SET of `threads-and-ports`, generated from `kin/tablekind.kin`.
     public long KindOf(long v) { return global::_3sln.Flint.Kgen.Rt.Tablekind.KindOf(this, v); }
 
     /// Slot `i` of a MAP ENTRY, or element `i` of anything else -- see the
@@ -498,7 +498,7 @@ public sealed class Rt : System.IDisposable {
     /// Native has had this check since rooting bugs were first hunted, and the
     /// JVM port has had it behind `-Dflint.stale`. This port had NEITHER, which
     /// is why it is here: the ports do the same `Mark`/`Push`/`R` dance by hand
-    /// in hundreds of places, and `0031` -- a value in a host local does not
+    /// in hundreds of places, and `a-vec-of-values-is-not-a-root` -- a value in a host local does not
     /// survive an allocation -- binds them exactly as hard.
     ///
     /// `doc/HANDOFF.md` is the reason it is worth the branch: a stale address
@@ -673,7 +673,7 @@ public sealed class Rt : System.IDisposable {
             //
             // One comparison against a precomputed value, and only when
             // something is counting.
-            // THE SAFEPOINT (`doc/decisions/0028`), and the slice check, at the
+            // THE SAFEPOINT (`DECISIONS.md#drivers`), and the slice check, at the
             // same place -- because they want the same place. `Ip` has been
             // written back and every live value is on the value stack by
             // construction, which is what makes it safe to stop here and
@@ -846,7 +846,7 @@ public sealed class Rt : System.IDisposable {
                     VPush(cv);
                 } break;
                 case Op.Apply: {
-                    // `(apply f xs)` in head position (`doc/decisions/0037`).
+                    // `(apply f xs)` in head position (`DECISIONS.md#system-namespaces-and-deps`).
                     //
                     // TWO PATHS, because a park has to be survivable on both and
                     // they survive it differently. A CLOSURE is ENTERED, exactly
@@ -1123,7 +1123,7 @@ public sealed class Rt : System.IDisposable {
     }
 
     /// flint's integers OVERFLOW rather than wrap. The JVM has `Math.*Exact`;
-    /// .NET has `checked`, and `doc/decisions/0010` names silent wrapping as one
+    /// .NET has `checked`, and `DECISIONS.md#other-hosts` names silent wrapping as one
     /// of the ways two hosts quietly disagree.
     static long AddExact(long a, long b) { checked { return a + b; } }
     static long SubExact(long a, long b) { checked { return a - b; } }
@@ -1227,10 +1227,10 @@ public sealed class Rt : System.IDisposable {
         if (Val.IsNil(coll)) return dflt;
         if (Mapcore.IsMap(this, coll)) return Mapread.MapGet(this, coll, k, dflt);
         if (Sets.IsSet(this, coll)) return Sets.Get(this, coll, k, dflt);
-        // `(:tag x)` and `(:form x)` (`doc/decisions/0034`). Without this
+        // `(:tag x)` and `(:form x)` (`DECISIONS.md#tagged-literals`). Without this
         // `(get x :tag)` answers and `(:tag x)` does not.
         if (IsHeapTy(coll, Obj.TyTagged)) return Builtins.TaggedGet(this, coll, k, dflt);
-        // A TABLE indexes by ROW and hands back a ref (`doc/decisions/0026`).
+        // A TABLE indexes by ROW and hands back a ref (`DECISIONS.md#tables`).
         if (IsHeapTy(coll, Obj.TyTable)) {
             if (!Val.IsFixnum(k)) return dflt;
             long r = Table.tableRef(this, coll, (int) Val.AsFixnum(k));
@@ -1314,7 +1314,7 @@ public sealed class Rt : System.IDisposable {
             // A handler target is a jump target, so it is a CHUNK START -- but
             // only the compiled arity knows which chunk, and an unwind is the
             // one path that arrives without having been told. The Rust runtime
-            // does this and the ports did not (`doc/decisions/0029`, `0030`).
+            // does this and the ports did not (`DECISIONS.md#jvm-runtime`, `clr-runtime`).
             if (hf.AotIdx != Aot.NONE) {
                 hf.AotIp = h.target;
                 hf.AotBlock = Aot.LOOKUP;
@@ -1402,7 +1402,7 @@ public sealed class Rt : System.IDisposable {
         return hit ? Val.True : Val.False;
     }
 
-    // --- opaque values (`doc/decisions/0022`) --------------------------------
+    // --- opaque values (`DECISIONS.md#opaque-values`) --------------------------------
 
     /// The next identity to hand out. STORED in the object rather than derived
     /// from its address: the nursery is a copying collector, so an
@@ -1421,7 +1421,7 @@ public sealed class Rt : System.IDisposable {
     /// `[label, id, host-id]`. Guest code can mint one only with host id 0, and
     /// there is deliberately no builtin that reads an id back -- so a host id is
     /// a thing the HOST wrote and only the host can read.
-    /// `#my.ns/thing v` (`doc/decisions/0034`): `[tag, form]`.
+    /// `#my.ns/thing v` (`DECISIONS.md#tagged-literals`): `[tag, form]`.
         public long NewTagged(long tag, long form) { return global::_3sln.Flint.Kgen.Rt.Opaque.NewTagged(this, tag, form); }
 
         public long NewOpaque(long label, long hostId) { return global::_3sln.Flint.Kgen.Rt.Opaque.NewOpaque(this, label, hostId); }
@@ -1434,7 +1434,7 @@ public sealed class Rt : System.IDisposable {
     public long OpaqueLabel(long v) => global::_3sln.Flint.Kgen.Rt.Opaque.OpaqueLabel(this, v);
 
 
-    /// Gas for work that is not O(1) (`doc/decisions/0009`).
+    /// Gas for work that is not O(1) (`DECISIONS.md#resource-limits`).
     ///
     /// The counter is meant to be proportional to WORK and reproducible, and
     /// that is a property of the language rather than of one runtime: a port
@@ -1449,7 +1449,7 @@ public sealed class Rt : System.IDisposable {
     /// Charge one iteration and say whether to keep going. `false` means the
     /// budget is gone AND the error is already thrown. CHARGE INSIDE THE LOOP:
     /// `ChargeWork` only adds to a counter nobody reads until the next
-    /// instruction (`doc/decisions/0009`).
+    /// instruction (`DECISIONS.md#resource-limits`).
     public bool ChargeTick(long i, long n, string where) {
         steps += n;
         if ((i & TICK_MASK) != 0) return true;
@@ -1489,7 +1489,7 @@ public sealed class Rt : System.IDisposable {
         }
     }
 
-    // --- AOT (`doc/decisions/0013`) ------------------------------------------
+    // --- AOT (`DECISIONS.md#emit-wasm-instead-of-dispatch`) ------------------------------------------
     //
     // A MIRROR of the JVM port, which is a port of `runtime/src/vm.rs`. The
     // machine is the same at every hop: a flat heap, NaN-boxed values, and an
@@ -1598,7 +1598,7 @@ public sealed class Rt : System.IDisposable {
 
     /// The out-of-line half of a specialised integer operation. A helper rather
     /// than a bail so that no chunk boundary is needed after arithmetic -- a
-    /// boundary per arithmetic instruction is the shape `0013` rejected.
+    /// boundary per arithmetic instruction is the shape `emit-wasm-instead-of-dispatch` rejected.
     public int AotIntBinopAt(int opcode, int ip, int block, int nextIp, int nextBlock) {
         int keepTop = roots.StackTop;
         int bas = keepTop - 2;
@@ -1782,7 +1782,7 @@ public sealed class Rt : System.IDisposable {
     /// fresh empty every time, where the Rust runtime returns a singleton --
     /// 24 bytes per map literal and three objects per empty vector, which with
     /// allocation charged as gas made the same program bill differently on each
-    /// runtime (`doc/decisions/0009`).
+    /// runtime (`DECISIONS.md#resource-limits`).
     void InitSingletons() {
         long el = Alloc(Obj.TyEmptyList, 1);
         roots.shared.Singletons[SingEmptyList] = Val.Heap(el);

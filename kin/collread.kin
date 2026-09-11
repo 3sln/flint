@@ -73,7 +73,7 @@
                 (return (slot rt coll 1)))))
           (return dflt)))
     (comment "A TABLE INDEXES BY ROW and hands back a REF, which materialises"
-             "nothing (`0026`).")
+             "nothing (`tables`).")
     (if (== t TY_TABLE)
       (do (if (is-int rt k)
             (let [^I64 i (i64-of rt k)]
@@ -87,7 +87,7 @@
       (return (ref-get rt coll k dflt)))
     (comment "A TAGGED LITERAL READS LIKE A TWO-KEY MAP, so `(:tag x)` and"
              "`(get x :form)` work and nothing treating one as a map has to"
-             "learn a different way in (`0034`).")
+             "learn a different way in (`tagged-literals`).")
     (if (== t TY_TAGGED)
       (do (if (== k (bare-kw rt (static-text "tag")))
             (return (slot rt coll 0)))

@@ -1,6 +1,6 @@
 //! flint for Rust: compile pure Clojure, and call it in a sandbox.
 //!
-//! The same shape as the JavaScript SDK (`doc/decisions/0025`), because the
+//! The same shape as the JavaScript SDK (`DECISIONS.md#structured-ports`), because the
 //! shape is the design rather than a language's convenience:
 //!
 //! | | |
@@ -34,7 +34,7 @@
 //!
 //! The compiler and the runtime are compiled in. There is no babashka, no JVM,
 //! no Rust toolchain at run time and no linker: the runtime module was linked
-//! once, when flint was built (`doc/decisions/0024`).
+//! once, when flint was built (`DECISIONS.md#no-runtime-linking`).
 
 use flint_rt::native::Program;
 use std::collections::BTreeMap;
@@ -122,7 +122,7 @@ pub struct Compile<'a> {
     /// The function a default run would call, as `"my.ns/main"`.
     pub fn_name: &'a str,
     /// Every OTHER function that must stay callable. Only reachable code ships
-    /// (`doc/decisions/0002`), and a function nobody calls from the entry is
+    /// (`DECISIONS.md#modularity`), and a function nobody calls from the entry is
     /// exactly the one a host wants to call.
     pub exports: &'a [&'a str],
     /// An ORDERED preference list, not a switch. `[Perf]` compiles every
@@ -253,7 +253,7 @@ impl Image {
 
     /// Instantiate under a driver of your choosing -- a pool, for instance.
     /// The driver decides the thread, and eventually the threads
-    /// (`doc/decisions/0028`).
+    /// (`DECISIONS.md#drivers`).
     pub fn sandbox_with(&self, driver: std::sync::Arc<dyn Driver>) -> Result<Sandbox> {
         Sandbox::from_wasm_with(&self.wasm, driver)
     }
@@ -321,7 +321,7 @@ fn build_spec(
     if !meta.is_empty() {
         // Recorded IN the artifact, not just kept beside it: an image written
         // to disk has to still say what it needs. flint never reads it
-        // (`doc/decisions/0025`).
+        // (`DECISIONS.md#structured-ports`).
         out.push_str(" :meta {");
         for (k, v) in meta {
             out.push_str(&edn_string(k));
@@ -380,14 +380,14 @@ fn edn_value(v: &Value) -> String {
             edn_string("<not representable in metadata>")
         }
         // EDN HAS TAGS, so a tagged literal is written as one -- which is the
-        // format-level half of why `0034` made it a type rather than a map: a
+        // format-level half of why `tagged-literals` made it a type rather than a map: a
         // map would have come out here as a map and read back as one.
         Value::Tagged { tag, form } => {
             format!("#{} {}", qualified(&tag.0, &tag.1), edn_value(form))
         }
         // COLUMNAR, so a table survives as a table rather than flattening into
         // a vector of maps on the way out -- which would lose exactly what the
-        // type is for (`doc/decisions/0026`).
+        // type is for (`DECISIONS.md#tables`).
         Value::Table { schema, columns } => {
             let cols: Vec<String> = schema
                 .iter()

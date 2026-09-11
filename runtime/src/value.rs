@@ -49,7 +49,7 @@ const SPECIAL_TRUE: u64 = 2;
 const SPECIAL_NOT_FOUND: u64 = 3;
 /// A green thread asked to park. It travels in `Rt::thrown` so that the check
 /// the VM already makes after every native call catches it -- parking costs the
-/// interpreter's fast path nothing at all (`doc/decisions/0005`).
+/// interpreter's fast path nothing at all (`DECISIONS.md#threads-and-ports`).
 const SPECIAL_PARK: u64 = 4;
 /// An allocation failed. Travels in `Rt::thrown` for the same reason `PARK`
 /// does: the check the VM already makes finds it, and the *cold* path turns it

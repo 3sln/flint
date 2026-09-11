@@ -26,13 +26,13 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
   /// Run `fn`, and render what it returned the way a command line would.
   ///
   /// **The caller names the function.** There is no entry point: nothing is
-  /// called automatically (`doc/decisions/0025` step 5), and a module's
+  /// called automatically (`DECISIONS.md#structured-ports` step 5), and a module's
   /// functions are all equally callable by name. This is the shape the old
   /// `main` had -- string arguments in, a rendered string and an exit code out
   /// -- kept because a runner wants it, but it is now one caller of `call`
   /// rather than a thing the runtime does on its own.
   function run(fn, args = []) {
-    // A gas limit, if one was asked for. `0009`'s counting is deterministic,
+    // A gas limit, if one was asked for. `resource-limits`'s counting is deterministic,
     // so this is a bound on WORK rather than on time -- the same program stops
     // at the same instruction on every machine.
     if (stepLimit && e.set_step_limit) e.set_step_limit(stepLimit);
@@ -105,7 +105,7 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
         const [name, ...rest] = Array.isArray(argv) ? argv : [String(argv)];
         // `b` is the SYSTEM port the request came out on, not a port that was
         // made for it -- there is no port until this host grants one
-        // (`doc/decisions/0027`).
+        // (`DECISIONS.md#ports-are-the-hosts`).
         out.push({ kind: 'open-request', token: a, system: b, name, args: rest });
       }
       else if (kind === 2) {
@@ -119,7 +119,7 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
       }
       else if (kind === 6) {
         // A REQUEST, whose answer is an ordinary value rather than a port
-        // (`doc/decisions/0036` step 7). Decoded exactly like an open, because
+        // (`DECISIONS.md#workspace-capabilities` step 7). Decoded exactly like an open, because
         // it carries exactly the same payload -- what differs is what goes back.
         let argv;
         try { argv = codec.decode(data); } catch { argv = []; }
@@ -202,7 +202,7 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
   // error rather than a crash.
   let capabilities = {};
 
-  /// What the host is willing to ANSWER (`doc/decisions/0036` step 7). A name
+  /// What the host is willing to ANSWER (`DECISIONS.md#workspace-capabilities` step 7). A name
   /// to `(args, name, api) => value`; `'*'` catches whatever no name did.
   ///
   /// Separate from `capabilities` because the two answer different questions. A
@@ -224,7 +224,7 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
   const openPorts = new Map();
 
   /// Ids for the ports THIS HOST owns. A sandbox no longer mints them
-  /// (`doc/decisions/0027`), so somebody outside has to, and the id has to mean
+  /// (`DECISIONS.md#ports-are-the-hosts`), so somebody outside has to, and the id has to mean
   /// the same thing in every sandbox that holds the port -- which is what makes
   /// a handle passable from one to another.
   ///
@@ -236,7 +236,7 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
   /// What each port this host owns is FOR, and how many sandboxes hold it.
   ///
   /// The count is maintained by `retain`/`release`, which the runtime pushes
-  /// exactly once each per sandbox (`doc/decisions/0027`): a port arriving
+  /// exactly once each per sandbox (`DECISIONS.md#ports-are-the-hosts`): a port arriving
   /// twice is one holder, because the handle is interned by id. At zero the
   /// host may let the resource go, and that is the whole point of counting --
   /// a number that says "how many arrivals" would not answer that question.
@@ -277,7 +277,7 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
       // count is maintained, and `holders` reads 1 inside `open` rather than 0.
       // Counted HERE, not from an event: this host granted the port, so it
       // knows, and the runtime does not push a retain for something the host
-      // did itself (`doc/decisions/0027`). The retain event carries only the
+      // did itself (`DECISIONS.md#ports-are-the-hosts`). The retain event carries only the
       // case the host could not have known -- a port arriving inside a message.
       ports.get(port).holders++;
       openPorts.set(port, cap);
@@ -343,7 +343,7 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
   ///
   /// A host that names capabilities has said it wants to be ASKED, and an
   /// `open` request goes out on the system port -- a sandbox given none cannot
-  /// ask at all (`doc/decisions/0027`). Requiring every host to remember that
+  /// ask at all (`DECISIONS.md#ports-are-the-hosts`). Requiring every host to remember that
   /// would make "I granted a capability and nothing happened" the common first
   /// experience, so declaring one installs the transport it needs.
   ///
@@ -371,7 +371,7 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     return true;
   }
 
-  /// Ask the module to run a function, BY NAME (`doc/decisions/0025` step 5).
+  /// Ask the module to run a function, BY NAME (`DECISIONS.md#structured-ports` step 5).
   ///
   /// Nothing is called automatically. A call is a message on the system port:
   /// `{:tx n :op :call :fn "ns/name" :args [...]}`, and the answer comes back on
@@ -391,7 +391,7 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     // encoded arguments in, an encoded answer out, synchronous.
     //
     // This is what keeps "none of it is in a pure module" true
-    // (`doc/decisions/0003`). Routing every call through the system port would
+    // (`DECISIONS.md#namespace-units`). Routing every call through the system port would
     // put a scheduler, a ring and an event queue in a module whose whole source
     // is `(defn f [x] x)` -- 300,801 bytes becoming 335,320, which is the
     // budget `test/threads.clj` holds.

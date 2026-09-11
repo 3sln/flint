@@ -27,7 +27,7 @@ impl Rt {
             TY_CONS | TY_EMPTY_LIST | TY_LAZYSEQ | TY_VECSEQ | TY_STRSEQ | TY_RANGE | TY_VEC | TY_MAPENTRY => CAT_SEQUENTIAL,
             // A ROW REF is in the MAP category: it is `=` to a map with the
             // same entries, and `category` is what decides that
-            // (`doc/decisions/0026`).
+            // (`DECISIONS.md#tables`).
             TY_ARRAYMAP | TY_HASHMAP | TY_TABLEREF => CAT_MAP,
             TY_SET => CAT_SET,
             _ => CAT_SCALAR,

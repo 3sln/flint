@@ -1,7 +1,7 @@
-//! The snapshot unit (`doc/decisions/0015`).
+//! The snapshot unit (`DECISIONS.md#snapshots`).
 //!
 //! A unit like any other, so a program that never asks for a snapshot never
-//! links one and the pure-module floor is untouched (`doc/decisions/0005`).
+//! links one and the pure-module floor is untouched (`DECISIONS.md#threads-and-ports`).
 //! Capture and restore live in the runtime; what is here is the host-facing
 //! surface and the buffer the bytes cross in.
 #![no_std]

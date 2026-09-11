@@ -24,7 +24,7 @@ impl Rt {
     /// 
     /// The accumulator lives in a ROOT and not a local because `map-entry` and
     /// `vec-conj` both allocate: a vector read into a host local before either
-    /// of them does not survive it (`0031`). The node is rooted for the same
+    /// of them does not survive it (`a-vec-of-values-is-not-a-root`). The node is rooted for the same
     /// reason -- the walk keeps using it after the allocation.
     pub(crate) fn node_entries_into(&mut self, n: Value, ai: usize) {
         let base: usize = self.mark();

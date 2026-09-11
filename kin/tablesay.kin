@@ -1,12 +1,12 @@
 ;; Saying what was wrong with a row.
 ;;
-;; `0032` IS THE WHOLE POINT OF THIS FILE. A closed table refuses ordinary
+;; `checks` IS THE WHOLE POINT OF THIS FILE. A closed table refuses ordinary
 ;; rows for ordinary reasons, and "bad row" is the message this codebase keeps
 ;; replacing: what a caller needs is which ROW, which COLUMN, what the column
 ;; HOLDS and what it was GIVEN. Every refusal here names all four.
 ;;
 ;; These are ORDINARY errors and not `#?(:flint/check ...)`: a closed table
-;; that accepted a bad row in a release build would not be closed (`0026`).
+;; that accepted a bad row in a release build would not be closed (`tables`).
 (ns flint.rt.tablesay
   (:require [flint.impl.rt :refer [defn return if let do comment doc == != >
                                    >= < not nil? slot mark push r set-r pop-to

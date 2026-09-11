@@ -1,5 +1,5 @@
 (ns flint.modmeta
-  "What a module says about itself (`doc/decisions/0020`, part 1).
+  "What a module says about itself (`DECISIONS.md#module-metadata-and-shards`, part 1).
 
   A runner handed a pre-built `.wasm` needs two different things from it, and
   0020 is emphatic that conflating them is the trap:
@@ -12,7 +12,7 @@
   exports, which host imports it needs, whether diagnostics or snapshots are
   present. These must NOT gate compatibility.
 
-  The trap is concrete: `0016` ships two builds that differ only in diagnostics.
+  The trap is concrete: `two-builds` ships two builds that differ only in diagnostics.
   If the compatibility check were equality over one flat config blob, turning
   diagnostics on would invalidate every shard for no reason. So the key hashes
   the ABI-affecting subset ONLY, and everything else rides beside it
@@ -85,7 +85,7 @@
            ;;
            ;; THERE IS NO `:entry`. A module has no entry point: nothing is
            ;; called automatically, and a caller names the function it wants
-           ;; (`doc/decisions/0025` step 5). Recording one here made the module
+           ;; (`DECISIONS.md#structured-ports` step 5). Recording one here made the module
            ;; look like it had a distinguished function, which is exactly the
            ;; idea being removed.
            ;;
@@ -103,7 +103,7 @@
            :features features
            ;; Whatever the host put there, carried and NOT read. flint has no
            ;; opinion about what belongs in it -- an open map is open
-           ;; (`doc/decisions/0025`) -- and the declared capabilities of a
+           ;; (`DECISIONS.md#structured-ports`) -- and the declared capabilities of a
            ;; program live here by convention, which makes them the reader's
            ;; business rather than the compiler's.
            ;;

@@ -1,4 +1,4 @@
-// The inspector, exercised on a real heap (doc/decisions/0015).
+// The inspector, exercised on a real heap (DECISIONS.md#snapshots).
 //
 // These assertions are about the two capabilities this project needed for four
 // sessions and did not have: whole-heap validation in ONE pass, and reverse
@@ -134,7 +134,7 @@ ok('  ... while its own program still accepts it',
 // the right instrument for a post-mortem and the wrong one for SHELVING a
 // sandbox. `flint_snapshot_export` walks the live set instead -- and the walk is
 // the COLLECTOR's, not a second one written here, which is what keeps
-// `doc/decisions/0015`'s objection to traversals from applying.
+// `DECISIONS.md#snapshots`'s objection to traversals from applying.
 const { module: liveModule } = await load('out/sn-work.wasm');
 const live = instantiate(liveModule);
 const le = live.exports;

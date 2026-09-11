@@ -1,4 +1,4 @@
-// Resident memory per engine (`doc/decisions/0018`).
+// Resident memory per engine (`DECISIONS.md#cross-runtime-benchmarks`).
 //
 // 0018 asks for resident AND reserved, "since engines differ on whether a 6.4 MB
 // reservation is committed". flint reserves a 6.3 MB linear memory; what that

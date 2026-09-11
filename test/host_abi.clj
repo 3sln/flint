@@ -63,7 +63,7 @@
 ;; This used to be three programs opening three ports with three codecs -- EDN,
 ;; JSON and Transit-over-msgpack -- because a port carried BYTES and the guest
 ;; chose how to write them. There is no codec to choose any more
-;; (`doc/decisions/0027`): a bridge encodes and decodes in the runtime, and the
+;; (`DECISIONS.md#ports-are-the-hosts`): a bridge encodes and decodes in the runtime, and the
 ;; guest hands over a value and is handed one back.
 ;;
 ;; The values are the ones that used to separate the three: a set and a keyword,

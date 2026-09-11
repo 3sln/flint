@@ -15,7 +15,7 @@ using static global::_3sln.Flint.Kgen.Rt.Tablemeta;
 
 public static class Mapcore {
     /// Is this a map? A ROW REF answers yes, which is what lets code that does
-    /// not know it holds a table keep working (`doc/decisions/0026`).
+    /// not know it holds a table keep working (`DECISIONS.md#tables`).
     public static bool IsMap(Rt rt, long v) {
         if (!Val.IsHeap(v)) {
             return false;
@@ -78,7 +78,7 @@ public static class Mapcore {
     /// 
     /// `root` and `meta` are ROOTED across the allocation and read back after
     /// it: `alloc` collects, and a value in a host local does not survive that
-    /// (`doc/decisions/0031`).
+    /// (`DECISIONS.md#a-vec-of-values-is-not-a-root`).
     public static long NewHashMap(Rt rt, int cnt, long root, long meta) {
         int @base = rt.Mark();
         int ri = rt.Push(root);

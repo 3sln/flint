@@ -26,7 +26,7 @@ public final class Mapmake {
             }
             // PUSHED BEFORE THE NEXT STEP, because `next` can collect
             // and a value held anywhere but the shadow stack does not
-            // survive that (`0031`).
+            // survive that (`a-vec-of-values-is-not-a-root`).
             long x = first(rt, rt.r(si));
             rt.push(x);
             count += 1;

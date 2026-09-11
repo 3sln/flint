@@ -2,7 +2,7 @@
 
 **Status:** phase 1 begun — the codec's primitive writers are generated and
 verified byte-identical on all three targets.
-**Design:** `doc/decisions/0038-kin.md`. **Tool:** `kin/`.
+**Design:** `DECISIONS.md#kin`. **Tool:** `kin/`.
 
 ## The objective
 
@@ -669,7 +669,7 @@ Three more things it surfaced:
   split the design anticipated, arriving in the first place it bites.
 * **A generator that drops comments is a generator that throws away the
   expensive part.** `category` carries the explanation of why a row ref is in
-  the map category, with a pointer to `0026`, and the first emit silently
+  the map category, with a pointer to `tables`, and the first emit silently
   deleted it from two runtimes. `;;` in a kin source is for the source and
   never reaches the output -- the reader discards it -- so a comment meant for
   a reader of the GENERATED file has to be said as a form. That distinction is
@@ -1697,7 +1697,7 @@ the result in a `let` first.
 **Two diagnoses were made and both were wrong, which is the part worth
 keeping.** The first was "a rooting bug, exposed by different allocation
 timing". Testing it meant building the ports a stale-push detector they did
-not have -- the native runtime has had one since `0031` and the ports had
+not have -- the native runtime has had one since `a-vec-of-values-is-not-a-root` and the ports had
 NOTHING equivalent, which is why a bug like this has to be found by bisecting
 a conformance suite rather than being named where it happens. It reports zero
 stale pushes on the failing run.
@@ -1960,7 +1960,7 @@ It cannot be that shape as it stands. `walks` is
 globals, and nothing else. It is safe for `b-eq` and `tree-eq` because neither
 ALLOCATES while walking. Every blocked map function does: `map-eq` calls
 `map-get` and `=`, `hash-map` calls `hash`. The node addresses parked in that
-stack would be stale at the first collection, which is `0031` exactly.
+stack would be stale at the first collection, which is `a-vec-of-values-is-not-a-root` exactly.
 
 So there are two designs, not one, and the difference is where the walk keeps
 its path:
@@ -1984,7 +1984,7 @@ true of the one that stores Values.
 What is left in `rope.rs` is five functions and every one of them is a host
 boundary rather than a blocker: `s_copy_range` and `copy_concat` are a UTF-8
 decode, `s_empty` interns, `s_to_vec` answers a host vector, and `flatten` is
-the gas-and-counter wrapper `0011` asks for. `Table` is what remains of row 8.
+the gas-and-counter wrapper `strings-and-matching` asks for. `Table` is what remains of row 8.
 
 Rows 1, 3 and 7 have shipped, and so has `nodeAssoc`, which this table never
 listed. The three analyses put it in a block -- `node_assoc`, `coll_assoc`,
@@ -2395,7 +2395,7 @@ Two things fell out of building it:
   and `Conc` on both ports, independent of kin and independent of this
   decision, since the ports are going to keep the buffer shape until kin can
   replace it.
-* **`0031` enforced itself.** The first draft left the map in a Rust local
+* **`a-vec-of-values-is-not-a-root` enforced itself.** The first draft left the map in a Rust local
   across the entry-vector rounds, which allocate, and got an empty vector back.
   The rule is not a style preference.
 
@@ -2420,7 +2420,7 @@ the file.
   `Frame` and raw-memory access -- the list phase 5 already names. Its 1%
   jvm-clr delta is the purest example of the old table's failure.
 * **`Seqs.force`** -- the most alike function in the file, and it must not be
-  ported. `0037` says the park fix turns it into a re-entry state machine.
+  ported. `system-namespaces-and-deps` says the park fix turns it into a re-entry state machine.
   Generating it now would freeze a shape known to be about to change.
 * **`Str`'s constructor half** -- five stacked blockers, and two Rust
   functions there do not exist in the ports at all.
@@ -2447,7 +2447,7 @@ stay meaningful. 1 and 8 are done.
 | | item |
 | --- | --- |
 | A | the `/goal` hook still names `doc/goals/splint-port.md`; this file moved |
-| B | the lazy-seq park crash, documented with a repro in `0038` |
+| B | the lazy-seq park crash, documented with a repro in `kin` |
 
 ## Rules that govern this, each learned by breaking it
 
@@ -2583,7 +2583,7 @@ above, not the placement.
 
 The instrument caught a real rooting bug on the way: the probe written to
 exercise it read `rt.r(vi)` before `Str.of(...)` allocated, because Java
-evaluates arguments left to right. `0031` in the test rather than the
+evaluates arguments left to right. `a-vec-of-values-is-not-a-root` in the test rather than the
 runtime, found one step before it mattered.
 
 ### And the reason it cannot be checked at all, which is a real divergence
@@ -2623,7 +2623,7 @@ why, the ports cannot ask the question native asks.
   numeric casts, assignment-to-a-place — all Rust-only, all in the vocabulary.
   Expect each new file to surface one or two more.
 * **`:require` resolution is real but the driver wires vocabularies directly.**
-  Making it load them properly is unfinished, and is the same question `0036`'s
+  Making it load them properly is unfinished, and is the same question `workspace-capabilities`'s
   namespace resolver answers.
 * **A form that must emit a statement while being used as an expression** has
   `kin-emit-anchor!` and nothing else. Untested beyond hoisting.
@@ -2711,7 +2711,7 @@ all three SHARE, and two of the worst found here were shared.
 value against itself rather than against another runtime, and it found that a
 ROPE and an equal FLAT string hashed differently -- `string-hash` finalises
 through `hash-int` and `rope-hash` did not. All three agreed, so
-`conform-hosts` was silent. The rule it breaks is the only one `0011` states
+`conform-hosts` was silent. The rule it breaks is the only one `strings-and-matching` states
 about tiers.
 
 **The shape behind it: TWO FUNCTIONS COMPUTING ONE MEANING.** Byte strings were

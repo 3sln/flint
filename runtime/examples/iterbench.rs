@@ -39,7 +39,7 @@ fn main() {
     let built = build(&mut rt, n);
     // Rooted for the whole run and never popped. The entry-vector rounds below
     // allocate, and a map held only in a Rust local does not survive that
-    // (`doc/decisions/0031`) -- the first draft of this harness left it bare and
+    // (`DECISIONS.md#a-vec-of-values-is-not-a-root`) -- the first draft of this harness left it bare and
     // got an empty vector back, which is the rule enforcing itself.
     let mi = rt.push(built);
     let m = rt.r(mi);

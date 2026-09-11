@@ -1,6 +1,6 @@
 //! The interpreter.
 //!
-//! # Why an interpreter at all (doc/decisions/0001)
+//! # Why an interpreter at all (DECISIONS.md#dispatch)
 //!
 //! Compiling each Clojure fn to a real wasm function would be much faster — the
 //! host JIT does the work and there is no dispatch. It collides with the rooting
@@ -46,7 +46,7 @@ pub mod op {
     // `nop`, `jump-if-true`, `list`, the two `*-keep` jumps, `pop-n` and
     // `set-local-keep` were defined here and implemented in all three
     // interpreters, and the compiler emitted NONE of them -- found by running
-    // the conformance suite under the opcode census (`doc/decisions/0038`).
+    // the conformance suite under the opcode census (`DECISIONS.md#kin`).
     // They are removed rather than ported, because maintaining three copies of
     // unreachable code is worse than not having it.
     //
@@ -172,7 +172,7 @@ pub struct Image {
     /// A fingerprint of the image bytes this was loaded from.
     ///
     /// A snapshot carries the heap and the VM state and NOT the code
-    /// (`doc/decisions/0015`), which is what keeps it small and is the whole
+    /// (`DECISIONS.md#snapshots`), which is what keeps it small and is the whole
     /// reason it can be moved. But every frame's `ip`, every constant index and
     /// every var slot in one is an index INTO an image -- so restoring a
     /// snapshot against a different program does not fail, it means something
@@ -183,7 +183,7 @@ pub struct Image {
     /// reads this and does, which is how one config means the same thing on
     /// three runtimes that cannot carry it the same way.
     pub flags: u32,
-    /// One entry per compiled arity (`doc/decisions/0013`). Empty in a module
+    /// One entry per compiled arity (`DECISIONS.md#emit-wasm-instead-of-dispatch`). Empty in a module
     /// built without AOT, which is what lets the interpreter's own loop be
     /// monomorphised free of the re-entry check.
     #[cfg(feature = "aot")]
@@ -747,7 +747,7 @@ impl Rt {
                 self.coll_get(coll, kw, dflt)
             } else if self.is_tagged(coll) {
                 // `(:tag x)` and `(:form x)`, which is how anyone actually
-                // reads one (`doc/decisions/0034`). This arm used to fall to
+                // reads one (`DECISIONS.md#tagged-literals`). This arm used to fall to
                 // `dflt` for everything that was not a map or a set, so
                 // `(get x :tag)` answered and `(:tag x)` did not -- the same
                 // lookup by two spellings disagreeing.
@@ -874,7 +874,7 @@ impl Rt {
     /// Run until the frame stack drops back to `base_depth`.
     ///
     /// Two instantiations, chosen **once at entry** rather than branched on per
-    /// instruction (`doc/decisions/0009`). With no gas limit and no scheduler
+    /// instruction (`DECISIONS.md#resource-limits`). With no gas limit and no scheduler
     /// slice, `NoBudget::tick` is a `false` the optimiser deletes along with the
     /// counter, and the loop has no budget machinery in it at all.
     pub fn run(&mut self, base_depth: usize) -> Value {
@@ -888,7 +888,7 @@ impl Rt {
         // for it forever. `Counting` is the policy that polls, so having
         // another executor turns counting on the same way a gas limit does.
         //
-        // This is what keeps `doc/decisions/0009`'s free loop free where it
+        // This is what keeps `DECISIONS.md#resource-limits`'s free loop free where it
         // matters: one executor with no limit still runs `NoBudget`, whose
         // `tick` is a constant the optimiser deletes. The poll is compiled in
         // only when there is something to poll FOR.
@@ -924,7 +924,7 @@ impl Rt {
     fn run_inner<B: BudgetPolicy>(&mut self, base_depth: usize) -> Value {
         #[cfg(feature = "aot")]
         let aot_on = !self.image.aot.is_empty();
-        // doc/decisions/0013's region histogram. `run` is Model A -- the
+        // DECISIONS.md#emit-wasm-instead-of-dispatch's region histogram. `run` is Model A -- the
         // distance from one call to the next. `last_ip`/`last_depth` detect a
         // TAKEN backward jump without knowing anything about which opcodes jump,
         // which matters because "was it taken" is not readable from the opcode.
@@ -1373,7 +1373,7 @@ impl Rt {
                         // A park travels as a distinguished `thrown` value, so
                         // that this branch -- which already exists -- is the
                         // whole cost of green threads to the interpreter's hot
-                        // path. See doc/decisions/0005.
+                        // path. See DECISIONS.md#threads-and-ports.
                         if self.thrown.bits() == crate::value::PARK.bits() {
                             match self.parked(opcode_at, base + argc, base_depth, true) {
                                 Parked::Saved => return NIL,
@@ -1496,7 +1496,7 @@ impl Rt {
                         && ty(&self.gc.sp, apply_callee.as_heap()) == TY_CLOSURE;
 
                     // TWO PATHS, because a park has to be survivable on both
-                    // and they survive it differently (`doc/decisions/0037`).
+                    // and they survive it differently (`DECISIONS.md#system-namespaces-and-deps`).
                     //
                     // A CLOSURE IS ENTERED, not called -- exactly as `op::CALL`
                     // does it, and for the reason `op::CALL` states: "inline
@@ -1848,7 +1848,7 @@ impl Rt {
         //
         // A slice is armed the moment a scheduler exists, and a scheduler can
         // exist before this function is ever entered -- a host that installs a
-        // port at construction (`doc/decisions/0027`) creates one. The loop
+        // port at construction (`DECISIONS.md#ports-are-the-hosts`) creates one. The loop
         // below then ran namespace initialisers under a live slice, and a yield
         // inside one is DISCARDED here (`let _ =`): the thread came back with
         // `park_on` still set, `settle` read it as a yield, saved a half-built
@@ -1874,7 +1874,7 @@ impl Rt {
             // half-built program that reported "the entry function returned
             // nil" for an entry that was never reached.
             //
-            // `0027` says a sandbox that cannot ask is TOLD so rather than
+            // `ports-are-the-hosts` says a sandbox that cannot ask is TOLD so rather than
             // parked. This is the same sentence one phase earlier: it cannot
             // ask HERE, so say that, at the form that asked.
             if !self.park_on.is_nil() && !self.failed() {
@@ -1934,7 +1934,7 @@ impl Rt {
     }
 
     /// Run the image's initialisers, once. A sandbox serves many calls
-    /// (`doc/decisions/0025`) and they must not re-run per call -- the state a
+    /// (`DECISIONS.md#structured-ports`) and they must not re-run per call -- the state a
     /// program sets up at load is the state every call after it sees.
     pub fn ensure_started(&mut self) -> bool {
         if self.started() {
@@ -1948,7 +1948,7 @@ impl Rt {
         // other thread can be runnable until the program is initialised.
         //
         // It matters more here than there. A CALL runs the initialisers on
-        // first use (`doc/decisions/0025` step 5), so this now happens with a
+        // first use (`DECISIONS.md#structured-ports` step 5), so this now happens with a
         // scheduler already built and a slice already counting down.
         let slice = self.slice_end;
         self.set_slice_end(0);
@@ -1969,7 +1969,7 @@ impl Rt {
     ///
     /// Names are compared as text because that is the only durable identifier
     /// a var has across a compile: a slot index belongs to whichever image
-    /// produced it (the same argument `0023` makes for builtins).
+    /// produced it (the same argument `construe-integration-bar` makes for builtins).
     pub fn var_named(&mut self, want: &str) -> Option<u32> {
         for i in 0..self.image.var_names.len() {
             let namec = self.image.var_names[i] as usize;
@@ -2015,7 +2015,7 @@ impl Rt {
 }
 
 // ---------------------------------------------------------------------------
-// The runtime half of the emitted code (`doc/decisions/0013`).
+// The runtime half of the emitted code (`DECISIONS.md#emit-wasm-instead-of-dispatch`).
 //
 // A separate `impl` behind its own feature, so that a module which never asks
 // for compiled arities carries none of this. That is 0016's rule applied to an

@@ -56,7 +56,7 @@ public final class Tablefill {
     /// 
     /// ONLY THE COLUMNS THE SCHEMA NAMES ARE CARRIED OVER. A slot the schema has
     /// dropped is left empty, which is where the `data stays resident and
-    /// invisible until a chunk is next rewritten` trade in `0026` is paid back:
+    /// invisible until a chunk is next rewritten` trade in `tables` is paid back:
     /// a migration is head-only, and the first write to a chunk after it is what
     /// actually reclaims.
     /// 

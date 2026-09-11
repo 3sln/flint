@@ -12,7 +12,7 @@ using _3sln.Flint.Kgen.Rt;
 public static class Builtins {
     public delegate long Fn(Rt rt, int at, int argc);
 
-    /// `:tag` and `:form` on a tagged literal (`doc/decisions/0034`). Shared
+    /// `:tag` and `:form` on a tagged literal (`DECISIONS.md#tagged-literals`). Shared
     /// with the keyword-apply path, or the same lookup by two spellings
     /// disagrees.
     /// A keyword's name, for a message that has to say WHICH key.
@@ -50,7 +50,7 @@ public static class Builtins {
     static void Def(string n, Fn f) => Table[n] = f;
 
     /// flint's integers OVERFLOW rather than wrap. The JVM has `Math.*Exact`;
-    /// .NET has `checked`, and `doc/decisions/0010` names silent wrapping as
+    /// .NET has `checked`, and `DECISIONS.md#other-hosts` names silent wrapping as
     /// one of the ways two hosts quietly disagree -- so every one of these is
     /// checked.
     static long AddExact(long a, long b) { checked { return a + b; } }
@@ -137,7 +137,7 @@ public static class Builtins {
         Def("quot", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Numdiv.NumQuot(rt, rt.VAt(at), rt.VAt(at + 1)));
         Def("rem", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Numdiv.NumRem(rt, rt.VAt(at), rt.VAt(at + 1)));
         // `/` on two integers that do not divide evenly is a DOUBLE here, not a
-        // Ratio: flint has no rational type, and `doc/decisions/0010` counts
+        // Ratio: flint has no rational type, and `DECISIONS.md#other-hosts` counts
         // this among the documented divergences from Clojure rather than a bug.
         Def("flint/div", (rt, at, n) => {
             if (n == 1) return global::_3sln.Flint.Kgen.Rt.Numdiv.NumDiv(rt, Val.Fixnum(1), rt.VAt(at));
@@ -174,20 +174,20 @@ public static class Builtins {
         });
 
         // A ROPE join, not a copy. `str` in a loop is what
-        // `doc/decisions/0011` exists for: copying makes it quadratic, and the
+        // `DECISIONS.md#strings-and-matching` exists for: copying makes it quadratic, and the
         // compiler builds its whole output this way.
         Def("flint/str2", (rt, at, n) => Str.Concat(rt, rt.VAt(at), rt.VAt(at + 1)));
         Def("flint/num->str", (rt, at, n) =>
             global::_3sln.Flint.Kgen.Rt.Dblstr.NumToStr(rt, rt.VAt(at)));
 
-        /// The CLOSED SET protocol dispatch runs on (`doc/decisions/0005`).
+        /// The CLOSED SET protocol dispatch runs on (`DECISIONS.md#threads-and-ports`).
         /// Small on purpose: three string tiers and eight seq representations
         /// answer with ONE keyword each. It was MISSING from this port, so no
         /// program using a protocol could run here -- found by the language
         /// suite in `test/common`, which is what that suite is for.
         Def("flint/kind", (rt, at, n) => rt.KindOf(rt.VAt(at)));
 
-        // --- tables (`doc/decisions/0026`) -----------------------------------
+        // --- tables (`DECISIONS.md#tables`) -----------------------------------
         Def("flint/schema", (rt, at, n) => Flint.Rt.Table.newSchema(rt, rt.VAt(at)));
         Def("flint/table", (rt, at, n) => {
             long s2 = rt.VAt(at);
@@ -261,7 +261,7 @@ public static class Builtins {
 
 
         // NOT STUBS. These answered `false` and `nil` for everything, including
-        // for an opaque value this same file had just minted -- so `0022` held
+        // for an opaque value this same file had just minted -- so `opaque-values` held
         // on native and was decoration here: `(opaque? (opaque))` was false and
         // a label was never readable. `Opaque` is GENERATED and both ports
         // already carried it; nothing called it.
@@ -617,7 +617,7 @@ public static class Builtins {
             long ticks = 0;
             while (!Val.IsNil(rt.R(s))) {
                 // CHARGED AND CHECKED INSIDE THE LOOP: the length is not known
-                // until the walk ends (`doc/decisions/0009`).
+                // until the walk ends (`DECISIONS.md#resource-limits`).
                 if (!rt.ChargeTick(ticks++, 1, "str-join")) { rt.PopTo(bas); return Val.Nil; }
                 sb.Append(Str.Text(rt, global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(s))));
                 rt.SetR(s, global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, rt.R(s)));
@@ -722,7 +722,7 @@ public static class Builtins {
             return Val.True;
         });
 
-        // --- opaque values (`doc/decisions/0022`) -----------------------------
+        // --- opaque values (`DECISIONS.md#opaque-values`) -----------------------------
         //
         // Guest code can mint one only with id 0 and no builtin reads an id
         // back, so an id is a thing the HOST wrote and only the host can read.
@@ -745,7 +745,7 @@ public static class Builtins {
         /// array first. Both calls in the loop can collect -- `first` forces a
         /// lazy seq and `next` forces the tail -- so anything already gathered
         /// would go stale at the first collection. That is
-        /// `doc/decisions/0031`.
+        /// `DECISIONS.md#a-vec-of-values-is-not-a-root`.
         // GENERATED, from `kin/mapmake.kin`. This port already said it line
         // for line, which is why generating it found nothing -- the value is
         // that the next change to it lands in one place.
@@ -762,7 +762,7 @@ public static class Builtins {
         Def("flint/unchecked-sub", (rt, at, n) => UncheckedOp(rt, at, 1));
         Def("flint/unchecked-mul", (rt, at, n) => UncheckedOp(rt, at, 2));
 
-        // --- byte strings (`doc/decisions/0024`) ------------------------------
+        // --- byte strings (`DECISIONS.md#no-runtime-linking`) ------------------------------
         Def("flint/b-count", (rt, at, n) => Val.Fixnum(Bytes.Count(rt, rt.VAt(at))));
         Def("flint/b-at", (rt, at, n) => {
             // REFUSED past either end -- see the Java copy.
@@ -907,7 +907,7 @@ public static class Builtins {
             // EVERY REMAINING ARGUMENT IS FORWARDED, and the runtime takes no
             // view of any of them. A capability is an opaque value like any
             // other and travels as one; nothing here knows the word, which is
-            // the point (`doc/decisions/0022`).
+            // the point (`DECISIONS.md#opaque-values`).
             int bas = rt.Mark();
             int ni = rt.Push(name);
             int vi = rt.Push(Vec.Empty(rt));
@@ -922,7 +922,7 @@ public static class Builtins {
                 return rt.ThrowStr("ClassCastException", "request wants a name (a string)");
             // Identical to `open` above, and deliberately so: same forwarding,
             // same no-view-of-the-arguments. What differs is what comes back
-            // (`doc/decisions/0036` step 7).
+            // (`DECISIONS.md#workspace-capabilities` step 7).
             int bas = rt.Mark();
             int ni = rt.Push(what);
             int vi = rt.Push(Vec.Empty(rt));
@@ -956,7 +956,7 @@ public static class Builtins {
         Def("flint/port-state", (rt, at, n) => {
             long p = rt.VAt(at);
             if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-state wants a port");
-            // THE QUERY IS THE TRUTH (`doc/decisions/0006`), so it resolves the
+            // THE QUERY IS THE TRUTH (`DECISIONS.md#host-abi`), so it resolves the
             // peer rather than reporting a state that reaping has not caught up
             // with yet.
             switch ((int) Conc.PortStateNow(rt, p)) {
@@ -1074,7 +1074,7 @@ public static class Builtins {
             for (int i = 0; i < GcStatKeys.Length; i++) {
                 // The keyword stays ROOTED across `Integer` and `Assoc`, both
                 // of which allocate. A value in a host local does not survive
-                // an allocation (`doc/decisions/0031`).
+                // an allocation (`DECISIONS.md#a-vec-of-values-is-not-a-root`).
                 int ki = rt.Push(Str.Keyword(rt, null, GcStatKeys[i]));
                 long vv = Num.Integer(rt, vals[i]);
                 rt.SetR(mi, Mapwrite.MapAssoc(rt, rt.R(mi), rt.R(ki), vv));

@@ -41,7 +41,7 @@ impl Rt {
     /// 
     /// `edit` is rooted across the allocation and read back afterwards, because
     /// a value in a host local does not survive an allocation
-    /// (`doc/decisions/0031`) -- and `alloc` is the allocation.
+    /// (`DECISIONS.md#a-vec-of-values-is-not-a-root`) -- and `alloc` is the allocation.
     pub fn new_node(&mut self, n: u32, edit: Value) -> Value {
         let e: usize = self.push(edit);
         let a: Addr = self.alloc(TY_NODE, n + 1);

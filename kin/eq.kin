@@ -6,7 +6,7 @@
 ;; is what had kept `Eq` and the bulk behind it out of reach.
 ;;
 ;; What it decides is load-bearing: a ROW REF is in the MAP category, because
-;; it is `=` to a map with the same entries (`doc/decisions/0026`), and this
+;; it is `=` to a map with the same entries (`DECISIONS.md#tables`), and this
 ;; function is where that is said.
 (ns flint.rt.eq
   (:require [flint.impl.rt :refer [defn if return case comment not
@@ -25,7 +25,7 @@
     CAT_SEQUENTIAL
     (comment "A ROW REF is in the MAP category: it is `=` to a map with the"
              "same entries, and `category` is what decides that"
-             "(`doc/decisions/0026`).")
+             "(`DECISIONS.md#tables`).")
     [TY_ARRAYMAP TY_HASHMAP TY_TABLEREF] CAT_MAP
     [TY_SET] CAT_SET
     :else CAT_SCALAR))

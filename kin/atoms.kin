@@ -80,7 +80,7 @@
      "updates the moment two threads are inside it at once, and loses them"
      "SILENTLY: the counter is simply smaller than it should be. That was"
      "invisible while one thread ran a sandbox and became reachable the day two"
-     "could (`0028`)."
+     "could (`drivers`)."
      ""
      "COMPARES BY IDENTITY, as Clojure's does. A value-equal but distinct"
      "object means someone else has been here, and the retry is cheaper than a"

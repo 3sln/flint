@@ -76,7 +76,7 @@ fn main() {
     o.push_str(&format!("reset={}/{} ", r.0, rt.deref(a).0));
     // COMPARE-AND-SET BY IDENTITY: the right expectation wins, a stale one
     // loses and changes nothing. That is what makes `swap!` safe under two
-    // threads, where read-modify-write silently lost updates (`0028`).
+    // threads, where read-modify-write silently lost updates (`drivers`).
     let ok = rt.compare_and_set_atom(a, Value(0x22), Value(0x33));
     let stale = rt.compare_and_set_atom(a, Value(0x22), Value(0x44));
     o.push_str(&format!("cas={}{}/{} ", (ok.0 == TRUE.0) as u32,

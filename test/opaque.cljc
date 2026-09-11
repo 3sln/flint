@@ -1,5 +1,5 @@
 (ns opaque
-  "Opaque values: identity without structure (`doc/decisions/0022`).
+  "Opaque values: identity without structure (`DECISIONS.md#opaque-values`).
 
   flint has no host classes, so it had no `(Object.)` -- and no way to say the
   things `(Object.)` says in Clojure: this key is absent rather than present

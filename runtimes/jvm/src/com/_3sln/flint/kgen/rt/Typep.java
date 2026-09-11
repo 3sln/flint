@@ -80,7 +80,7 @@ public final class Typep {
             // A ROW REF is a map here, and `is-map` is where that is said.
             // Wiring only the other one left `(map? row)` false while
             // `(get row :k)` worked, and the printer -- which dispatches on
-            // `map?` -- printed a row as `#<unprintable>` (`0026`).
+            // `map?` -- printed a row as `#<unprintable>` (`tables`).
             case 9:
                 return isMap(rt, v);
             case 10:

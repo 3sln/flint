@@ -16,7 +16,7 @@
 (defn expose!
   "Bind `f` to the var `sym`, so a host can CALL it by name.
 
-  Nothing is called automatically (`doc/decisions/0025` step 5): a module has no
+  Nothing is called automatically (`DECISIONS.md#structured-ports` step 5): a module has no
   entry point, so a function nobody can name is a function nobody can run. These
   images are assembled by hand and had only `set-entry!`, which is why they were
   the last thing still relying on `main`. One initialiser per image binds the
@@ -59,7 +59,7 @@
       ;; ONE `first`, and it went back to one when `main` did. The entry used to
       ;; be handed `[argv caps]`, a pair that existed because the runtime was
       ;; the thing invoking it and had to say something about the host. Nothing
-      ;; invokes anything now (`doc/decisions/0025` step 5): a caller names a
+      ;; invokes anything now (`DECISIONS.md#structured-ports` step 5): a caller names a
       ;; function and passes its arguments, so this function takes what it was
       ;; given and the pair is gone with the entry point that needed it.
       (let [fst (img/native-slot b "first")

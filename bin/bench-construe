@@ -1,6 +1,6 @@
 #!/bin/sh
 # The DECISION benchmark: construe's real fixtures against the incumbent it
-# would replace (doc/decisions/0007). Separate from `bin/bench` because it
+# would replace (DECISIONS.md#construe-benchmarks). Separate from `bin/bench` because it
 # answers a different question -- not "is flint fast" but "is flint better,
 # worse or irrelevant here, and what does that do to the bill".
 #

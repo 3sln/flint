@@ -4,7 +4,7 @@ import { readFileSync } from 'fs';
 import { instantiate } from './flint.mjs';
 
 const [, , wasmPath, argPath, fnArg] = process.argv;
-// THE FUNCTION, named. A module has no entry point (`doc/decisions/0025`
+// THE FUNCTION, named. A module has no entry point (`DECISIONS.md#structured-ports`
 // step 5). Every caller of this file compiles `flint.selfhost/main` -- it is
 // what `bin/build-dist`, `bin/flint` and `test/selfhost.clj` all build -- so it
 // is the default rather than something three call sites repeat.

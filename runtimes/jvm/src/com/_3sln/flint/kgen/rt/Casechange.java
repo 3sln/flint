@@ -74,7 +74,7 @@ public final class Casechange {
             // HOISTED, and not style: `put-utf8` takes the runtime
             // mutably while `cps-at` and `case-map` take it shared, so
             // nesting them in the argument list is two borrows at once --
-            // the shape `0031` is about.
+            // the shape `a-vec-of-values-is-not-a-root` is about.
             int cp = rt.cpsAt(c, i);
             int fx = fullIndex(rt, cp, up);
             if (fx < 0) {

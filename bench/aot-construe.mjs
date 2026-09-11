@@ -11,7 +11,7 @@
 // asserted rather than assumed: if they differ, the two are not running the
 // same program and the times are not comparable.
 import { load, instantiate } from '../host/flint.mjs';
-// Built `:fn construe.bench.main/main`; a call names it (`0025` step 5).
+// Built `:fn construe.bench.main/main`; a call names it (`structured-ports` step 5).
 const FN = 'construe.bench.main/main';
 import { statSync } from 'fs';
 

@@ -40,7 +40,7 @@ public class RtSelfHost {
     // is a copying collector -- so a spec held in a Java local across it comes
     // back holding the address the string had BEFORE the flip. Java evaluates
     // arguments left to right, so `makeClosure` runs first and `spec` is read
-    // after it. That is `doc/decisions/0031`, in the test harness rather than
+    // after it. That is `DECISIONS.md#a-vec-of-values-is-not-a-root`, in the test harness rather than
     // in the runtime, and it read back as the compiler's reader failing at
     // column 2 of its input.
     // `flint.selfhost/main` is a VAR, not a named entry in the function table
@@ -64,7 +64,7 @@ public class RtSelfHost {
     System.out.println("  ok   flint.selfhost/main is bound: " + rt.describe(compiler));
     // ROOTED. `Str.of` on a 97 KB spec allocates, and so does anything after
     // it: a value held in a Java local across an allocation comes back holding
-    // the address it had before the collector moved it. `doc/decisions/0031`.
+    // the address it had before the collector moved it. `DECISIONS.md#a-vec-of-values-is-not-a-root`.
     int sbase = rt.mark();
     int ci = rt.push(compiler);
     int si = rt.push(Str.of(rt, new String(Files.readAllBytes(Path.of(a[0])),

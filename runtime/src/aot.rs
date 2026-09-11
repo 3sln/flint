@@ -1,4 +1,4 @@
-//! The runtime half of `doc/decisions/0013`: what compiled wasm calls back into.
+//! The runtime half of `DECISIONS.md#emit-wasm-instead-of-dispatch`: what compiled wasm calls back into.
 //!
 //! A compiled arity is a wasm function
 //!
@@ -8,7 +8,7 @@
 //!
 //! It manipulates the same linear-memory value stack the interpreter does, and
 //! holds nothing of its own. That is the whole reason this is admissible at all
-//! (`doc/decisions/0001`): wasm locals are not scannable, so a design that kept
+//! (`DECISIONS.md#dispatch`): wasm locals are not scannable, so a design that kept
 //! values in them would need a shadow-stack spill around every allocation. Here
 //! there is nothing to spill, which is also why leaving compiled code costs
 //! nothing and why re-entering it mid-body is possible at all.
@@ -19,7 +19,7 @@
 //! several wasm frames. That cannot be right here: Clojure recursion would then
 //! live on the wasm stack, which cannot be suspended -- so a green thread could
 //! not park at depth, and deep recursion would trap instead of raising a
-//! catchable `StackOverflowError`. Both are load-bearing (`doc/decisions/0005`).
+//! catchable `StackOverflowError`. Both are load-bearing (`DECISIONS.md#threads-and-ports`).
 //!
 //! So `aot_call` does exactly what the interpreter's `CALL` does -- push a frame
 //! -- and returns. The interpreter loop enters the callee, which may itself be
@@ -56,7 +56,7 @@ pub struct AotSync {
     pub heap: u32,
     /// Address of `Rt::steps` and of `Rt::checkpoint`. Gas is charged inline,
     /// per chunk, so compiled code needs to reach both without a call
-    /// (`doc/decisions/0016` makes gas a production feature, and construe's
+    /// (`DECISIONS.md#two-builds` makes gas a production feature, and construe's
     /// gates depend on the count being the same as the interpreter's).
     pub steps: u32,
     pub checkpoint: u32,
@@ -352,9 +352,9 @@ pub extern "C" fn aot_tick(rt: *mut Rt, gas: u32, top: u32, ip: u32, block: u32)
         // it straight back, so the trip lands on the same instruction either
         // way.
         //
-        // Worth one gas unit of care because `0013` treats interpreted and
+        // Worth one gas unit of care because `emit-wasm-instead-of-dispatch` treats interpreted and
         // compiled charging the same as the evidence that the chunking is
-        // right, and `0009` makes gas a bound on WORK -- a program that costs
+        // right, and `resource-limits` makes gas a bound on WORK -- a program that costs
         // more compiled hits a limit the interpreter would not. It showed up
         // as exactly +1 on any program that spawns a thread, because a slice
         // is what makes this path run at all.

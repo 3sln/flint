@@ -8,7 +8,7 @@ import { load, instantiate } from '../host/flint.mjs';
 
 const { module } = await load(process.argv[2]);
 const i = instantiate(module);
-// A SYSTEM PORT first: `open` is a request ON one (`doc/decisions/0027`), and a
+// A SYSTEM PORT first: `open` is a request ON one (`DECISIONS.md#ports-are-the-hosts`), and a
 // sandbox given none cannot ask for anything at all.
 i.install(1, { label: 'system', system: true });
 i.capabilities({ thing: { open() {}, message() {} } });

@@ -109,7 +109,7 @@
 ;;
 ;; `reduce` ends `(reduce-seq f init coll)`, and under `--aot` it answered
 ;; `coll` instead of `init`: `into` then handed `persistent!` the empty list it
-;; had been reducing over. `doc/decisions/0013`.
+;; had been reducing over. `DECISIONS.md#emit-wasm-instead-of-dispatch`.
 ;;
 ;; Asserted on the RULE rather than on the emitted bytes: the bug was a decision,
 ;; and a test that reads bytes would pass again the moment the encoding changed.

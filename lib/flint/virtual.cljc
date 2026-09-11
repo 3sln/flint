@@ -1,6 +1,6 @@
 (ns flint.virtual
-  "Namespaces with no source, spoken to over a port (`doc/decisions/0036` step
-  4, `0037`).
+  "Namespaces with no source, spoken to over a port (`DECISIONS.md#workspace-capabilities` step
+  4, `system-namespaces-and-deps`).
 
   Nothing here is written by hand. A program says
 
@@ -15,7 +15,7 @@
 
   ## What is here, and what is deliberately not
 
-  Three operations, matching `0036`'s protocol:
+  Three operations, matching `workspace-capabilities`'s protocol:
 
       (call 'ns/f a b)     invoke, and return the answer
       (fn-for 'ns/f)       the same thing as a value, for `(map f xs)`
@@ -31,7 +31,7 @@
   ## It carries DATA
 
   Arguments and results cross a bridge, so they go through the wire codec: a
-  closure cannot cross one (`0006`, `0025`). That is not new, but this is the
+  closure cannot cross one (`host-abi`, `structured-ports`). That is not new, but this is the
   first place it becomes visible in the language surface -- `(fs/walk-with f)`
   looks like an ordinary higher-order call and cannot be one -- so the refusal
   says so rather than leaving it to be discovered.
@@ -60,7 +60,7 @@
   **A park inside a lazy seq currently CRASHES both runtimes** rather than
   throwing that error, and it is not this namespace's doing in any way: a plain
   in-heap channel receive inside a `for` does it too, as does `thread/join`.
-  `doc/decisions/0037` records the reproduction. Until it is fixed, the eager
+  `DECISIONS.md#system-namespaces-and-deps` records the reproduction. Until it is fixed, the eager
   forms above are not merely the ones that work; they are the ones that fail
   safely.
 
@@ -134,7 +134,7 @@
     ([a b c d & more] (apply call q a b c d more))))
 
 (defn value-of
-  "Read `q` as a value rather than calling it -- `0036`'s `:get`.
+  "Read `q` as a value rather than calling it -- `workspace-capabilities`'s `:get`.
 
   Separate from a bare reference on purpose: nearly every var behind one of
   these namespaces is a function, so a bare reference means the function and

@@ -1,4 +1,4 @@
-//! Tables: columnar storage that is a value (`doc/decisions/0026`).
+//! Tables: columnar storage that is a value (`DECISIONS.md#tables`).
 //!
 //! A vector of maps from the outside; columnar chunks in a trie underneath,
 //! with a CLOSED schema fixed when the table is built.
@@ -34,7 +34,7 @@ pub const CHUNK_SHIFT: u32 = 8;
 // schema. `SC_IDS` is parallel to `SC_NAMES`, `SC_INDEX` maps name -> id, and
 // `SC_WIDTH` is how many column slots a chunk carries. At construction the id
 // IS the position and the width is the column count; they part company under
-// migration, which is the point (`doc/decisions/0026`): dropping a column is
+// migration, which is the point (`DECISIONS.md#tables`): dropping a column is
 // then a head-only edit that leaves every chunk shared and unchanged.
 pub const SC_NAMES: u32 = 0;
 pub const SC_TYPES: u32 = 1;
@@ -67,7 +67,7 @@ pub const TB_LEN: u32 = 4;
 // their stable schema id.
 //
 // The ENCODINGS node says how each column is written down, and it is what makes
-// the separation `0026` draws possible: the schema decides what a column MEANS,
+// the separation `tables` draws possible: the schema decides what a column MEANS,
 // the chunk decides how it is stored, and may change its mind per chunk without
 // the table's meaning moving. Nothing above `chunk_get` can tell the difference.
 pub const CH_ROWS: u32 = 0;
@@ -79,7 +79,7 @@ pub const ENC_FLAT: u32 = 0;
 /// ONE value for every row: the column slot holds the value itself rather than
 /// a run. Adding a column with a constant default to a million-row table
 /// therefore writes one value per chunk, which is what makes that migration
-/// cheap (`doc/decisions/0026`).
+/// cheap (`DECISIONS.md#tables`).
 pub const ENC_CONST: u32 = 1;
 
 // Transient-table slots.
@@ -101,8 +101,8 @@ impl Rt {
     //
     // `assoc` and `update`, and the refusals. These are ORDINARY errors and not
     // `#?(:flint/check ...)`: a closed table that accepted a bad row in a
-    // release build would not be closed (`doc/decisions/0026`). What they take
-    // from `0032` is the quality of the message -- expected, actual, and the
+    // release build would not be closed (`DECISIONS.md#tables`). What they take
+    // from `checks` is the quality of the message -- expected, actual, and the
     // column -- rather than the mechanism.
 
     // ---------------------------------------------------------------- step 6

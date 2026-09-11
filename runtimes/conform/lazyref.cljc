@@ -11,7 +11,7 @@
 
   The delay-that-threw case is here because it has been wrong before: both
   ports cached a failed thunk's nil and answered it forever, where native
-  left the delay unforced and retryable (`0031`, and the atoms work that
+  left the delay unforced and retryable (`a-vec-of-values-is-not-a-root`, and the atoms work that
   followed it)."
   (:require [clojure.string :as str]
             [flint.core :refer [opaque opaque? opaque-label]]))
@@ -39,7 +39,7 @@
       :threw [(attempt #(deref bad)) (attempt #(deref bad)) (realized? bad)]
       :volatile [(volatile? v) (volatile? (atom 1)) (volatile? 1)
                  (attempt #(deref v)) (attempt #(vreset! v 2)) (attempt #(deref v))]
-      ;; AN OPAQUE VALUE IS ITSELF AND NOTHING ELSE (`0022`): minting one
+      ;; AN OPAQUE VALUE IS ITSELF AND NOTHING ELSE (`opaque-values`): minting one
       ;; grants nothing, two are never equal, and one equals itself.
       :opaque [(opaque? o) (opaque? lbl) (opaque? 1) (opaque? nil)
                (= o o) (= o lbl) (= o (opaque))

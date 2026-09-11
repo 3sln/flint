@@ -1,7 +1,7 @@
 # Decisions
 
 This file consolidates the decision records that used to live as 38 separate
-numbered files in `doc/decisions/`. Each section below is one decision, with
+numbered files in `DECISIONS.md`. Each section below is one decision, with
 its reasoning kept rather than trimmed to a conclusion — several of these
 records hold hard-won findings (numbers measured, approaches tried and
 abandoned, bugs that motivated a rule), and the reasoning is the part worth
@@ -21,7 +21,7 @@ it.
 Sections are grouped by topic rather than by the numeric order they were
 written in, which was mostly an accident of when a question came up. Each
 heading's anchor is the decision's old filename slug, so existing citations
-(`` `0011` ``-style references in code comments, commit messages, and other
+(`` `strings-and-matching` ``-style references in code comments, commit messages, and other
 docs) resolve to the right section once rewritten against this file; the
 original number is noted under each heading for anyone cross-referencing
 material that predates that rewrite.
@@ -102,7 +102,7 @@ describes a generator that now emits 89 modules into three runtimes; another
 says a data type "does not exist" beside 552 lines implementing it; a pair of
 runtime ports were designed to lean on their host's own collector and both
 now carry a verbatim port of the collector instead. The old project status
-index (the `doc/decisions/README.md` table this file replaces) is not a safe
+index (the the decision index (now folded into `DECISIONS.md`) table this file replaces) is not a safe
 tiebreaker either -- it contradicted the decision files it was summarising in
 more than one row, and in at least one place contradicted itself between
 adjacent rows. Where a section below repeats a status claim from its source
@@ -118,7 +118,7 @@ should be treated as superseded rather than final.
 ## dispatch
 
 **Interpreter vs AOT, and stack vs register**
-*(formerly `0001`)*
+*(formerly `dispatch`)*
 
 **Ratified:** ☐ not signed off
 
@@ -188,7 +188,7 @@ own, independent of AOT.
 ## emit-wasm-instead-of-dispatch
 
 **AOT regions instead of a dispatch loop, and why it under-delivered**
-*(formerly `0013`)*
+*(formerly `emit-wasm-instead-of-dispatch`)*
 
 **Ratified:** ☐ not signed off
 
@@ -389,7 +389,7 @@ picking this back up.
 ## resource-limits
 
 **Hard limits, and the loop that does not count**
-*(formerly `0009`)*
+*(formerly `resource-limits`)*
 
 **Ratified:** ☐ not signed off
 
@@ -516,7 +516,7 @@ passed while measuring nothing but its own baseline error.
 ## two-builds
 
 **A stripped production VM, and everything diagnostic optional**
-*(formerly `0016`)*
+*(formerly `two-builds`)*
 
 **Ratified:** ☐ not signed off
 
@@ -580,7 +580,7 @@ person who needs it finds it broken.
 ## debug-runner
 
 **DAP, nREPL, and `(break)`**
-*(formerly `0014`)*
+*(formerly `debug-runner`)*
 
 **Ratified:** ☐ not signed off
 
@@ -635,7 +635,7 @@ scheduler's whole value.
 ## snapshots
 
 **VM snapshots: instant, exportable, inspectable**
-*(formerly `0015`)*
+*(formerly `snapshots`)*
 
 **Ratified:** ☐ not signed off
 
@@ -685,28 +685,24 @@ same instruction count* as one that ran through uninterrupted — which the
 deterministic scheduler and deterministic gas together make a testable
 equality rather than a hope.
 
-**`(snap "name")` must not allocate, and this is not a performance note — it
-cost a debugging session.** Taking a snapshot once hid the port bug outright:
-capture grew a buffer, which changed allocation timing, and the bug was
-sensitive to precisely that. A snapshot that perturbs the thing it is
-investigating is the observer effect the whole tool exists to escape, so the
-capture buffer is reserved once, sized to the maximum heap, outside anything
-being measured — and this is asserted by a test that captures repeatedly
-inside a loop and checks the allocation count is unchanged, because without
-that assertion the guarantee silently erodes.
-
-`(snap "x")` is capture-and-continue, deliberately a separate form from
-`(break)` rather than an option on it (`(break :snap "name")` was the first
-version, and reads wrong: a form that does not break should not be called
-`break`). Repeated hits on one name keep the latest and record the hit count
-rather than silently accumulating or silently overwriting. In a production
-build both forms compile to nothing — not a no-op call — and the compiler
-reports how many of each it elided, so silent elision cannot ship unnoticed.
-One consequence worth stating plainly: **instruction counts are only
-comparable within one build configuration**, since a build with breakpoints
-compiled in for diagnostics executes more instructions than the same source
-built for production, and both counts are legitimately deterministic without
-being the same number.
+> **NOT BUILT, and the record said otherwise.** A subsection here described
+> `(snap "name")` — capture-and-continue as its own form, a per-name ring
+> buffer keeping the latest hit with a count, compiling to nothing in a
+> production build with the compiler reporting how many it elided — as settled
+> design. None of it exists. There is no `snap` form in the analyser and none
+> in `lib/flint/snapshot.cljc`; the real API is `flint.snapshot/snapshot!`, a
+> single anonymous snapshot.
+>
+> Two commits put that prose here. "Named snapshots from inside the program,
+> and the rule they inherit" (`1c7a061`) changed ONE file: this record, +54
+> lines. "snap is its own form, and the guard makes the AOT unit a whole
+> function" (`426af38`) changed two documents and zero lines of code.
+>
+> It is removed rather than corrected, because there is nothing to correct —
+> it was never a decision that was later reversed, it was a description of
+> work that did not happen, written in a voice that reads as though it had.
+> The idea may still be worth building; it is tracked in `ROADMAP.md` as an
+> unbuilt item rather than recorded here as a settled one.
 
 **And it is not only for debugging.** Snapshot-restore doubles as the fix for
 flint's per-invocation cold-start cost: snapshot after top-level
@@ -745,7 +741,7 @@ move a sandbox, memcpy to debug one.**
 ## profiler
 
 **Named blocks, and CPU told apart from waiting**
-*(formerly `0017`)*
+*(formerly `profiler`)*
 
 **Ratified:** ☐ not signed off
 
@@ -794,7 +790,7 @@ is already known from the self-hosting fixpoint test.
 ## a-vec-of-values-is-not-a-root
 
 **A Rust `Vec<Value>` is not a root, and it cost a day**
-*(formerly `0031`)*
+*(formerly `a-vec-of-values-is-not-a-root`)*
 
 **Ratified:** ☐ not signed off
 
@@ -870,7 +866,7 @@ just the shared conformance fixtures).
 ## modularity
 
 **Only reachable code ships, builtins included**
-*(formerly `0002`)*
+*(formerly `modularity`)*
 
 **Ratified:** ☐ not signed off
 
@@ -908,7 +904,7 @@ proposed answers lost.
 ## namespace-units
 
 **A namespace is a compilation unit, and linking composes them**
-*(formerly `0003`)*
+*(formerly `namespace-units`)*
 
 **Ratified:** ☐ not signed off
 
@@ -970,7 +966,7 @@ namespace compilation immediately, only not making it impossible.
 ## exclude-and-unit-path
 
 **`:exclude` as an assertion, and `:wasm-path`**
-*(formerly `0004`)*
+*(formerly `exclude-and-unit-path`)*
 
 **Ratified:** ☐ not signed off
 
@@ -1025,7 +1021,7 @@ exercised by every ordinary compile, not just a special test.
 ## module-metadata-and-shards
 
 **What a module says about itself, and shards**
-*(formerly `0020`)*
+*(formerly `module-metadata-and-shards`)*
 
 **Ratified:** ☐ not signed off
 
@@ -1133,7 +1129,7 @@ is comparatively straightforward.
 ## no-runtime-linking
 
 **No linking at compile time; byte strings and transient ropes**
-*(formerly `0024`)*
+*(formerly `no-runtime-linking`)*
 
 **Ratified:** ☐ not signed off
 
@@ -1236,7 +1232,7 @@ do with wasm and had been costing every `for` over a large collection.
 ## strings-and-matching
 
 **Rope strings, and what to do about regex**
-*(formerly `0011`)*
+*(formerly `strings-and-matching`)*
 
 **Ratified:** ☐ not signed off
 
@@ -1405,7 +1401,7 @@ kind of thing it must never be able to observe.
 ## matching-over-ropes
 
 **The matcher must consume a rope, which decides the whole design → a Pike VM**
-*(formerly `0012`)*
+*(formerly `matching-over-ropes`)*
 
 **Ratified:** ☐ not signed off
 
@@ -1514,7 +1510,7 @@ of memory.
 ## tables
 
 **Columnar storage that is a value**
-*(formerly `0026`)*
+*(formerly `tables`)*
 
 **Ratified:** ☐ not signed off
 
@@ -1681,7 +1677,7 @@ port at all — half of what each type existed for.
 ## tagged-literals
 
 **A tagged literal is a value, not a map**
-*(formerly `0034`)*
+*(formerly `tagged-literals`)*
 
 **Ratified:** ☐ not signed off
 
@@ -1731,7 +1727,7 @@ tag — see `reader-tags`, immediately below, for why and what changed.
 ## reader-tags
 
 **A reader tag is a name; the var it names is the identity**
-*(formerly `0035`)*
+*(formerly `reader-tags`)*
 
 **Ratified:** ☐ not signed off
 
@@ -1843,7 +1839,7 @@ the positive case is not merely "tags appear from nowhere and are accepted."
 ## checks
 
 **Checks that cost nothing in the build that ships**
-*(formerly `0032`)*
+*(formerly `checks`)*
 
 **Ratified:** ☐ not signed off
 
@@ -1921,7 +1917,7 @@ integer.
 ## threads-and-ports
 
 **Green threads, ports, and protocols**
-*(formerly `0005`)*
+*(formerly `threads-and-ports`)*
 
 **Ratified:** ☐ not signed off
 
@@ -2062,7 +2058,7 @@ metadata map at all.
 ## host-abi
 
 **Tokens, one event queue, and where the marshalling cost actually is**
-*(formerly `0006`)*
+*(formerly `host-abi`)*
 
 **Ratified:** ☐ not signed off
 
@@ -2194,7 +2190,7 @@ survive into that redesign essentially unchanged.
 ## structured-ports
 
 **A wire codec, and structured ports**
-*(formerly `0025`)*
+*(formerly `structured-ports`)*
 
 **Ratified:** ☐ not signed off
 
@@ -2298,11 +2294,11 @@ no notion of "capability" at all.
 ### A discrepancy worth flagging
 
 This file's own banner reads "NOT BUILT — a proposal," and the project
-status table (formerly the `doc/decisions/README.md` index) likewise lists
+status table (formerly the the decision index (now folded into `DECISIONS.md`) index) likewise lists
 it as "Roadmap." **The current runtime source treats several of its central
 rules as already-shipped, settled fact, not as a proposal.**
 `runtime/src/codec.rs` states outright, in a normal doc comment rather than
-a TODO, "This is the whole of `0025`'s safety rule, and it is one line: a
+a TODO, "This is the whole of `structured-ports`'s safety rule, and it is one line: a
 guest..."; `runtime/src/conc.rs` says a capability "REVERSES [`host-abi`'s
 no-transfer rule], which is the [mechanism]"; `lib/flint/port.cljc` and
 `lib/flint/virtual.cljc` both build on port delegation as a working feature,
@@ -2324,7 +2320,7 @@ API — which do still read as proposed rather than shipped.
 ## ports-are-the-hosts
 
 **Ports belong to the host, not to a sandbox**
-*(formerly `0027`)*
+*(formerly `ports-are-the-hosts`)*
 
 **Ratified:** ☐ not signed off
 
@@ -2461,7 +2457,7 @@ a real, named, and still-open cost.
 ## bridges
 
 **A bridge owns its messages, and a port is six verbs**
-*(formerly `0033`)*
+*(formerly `bridges`)*
 
 **Ratified:** ☐ not signed off
 
@@ -2563,7 +2559,7 @@ the format's own compactness argument intact all the way out to the wire.
 ## drivers
 
 **A driver: ports are the only way to drive a sandbox**
-*(formerly `0028`)*
+*(formerly `drivers`)*
 
 **Ratified:** ☐ not signed off
 
@@ -2719,7 +2715,7 @@ while still referenced.
 ## thread-pool
 
 **A thread pool: two models, and only one of them is close**
-*(formerly `0019`)*
+*(formerly `thread-pool`)*
 
 **Ratified:** ☐ not signed off
 
@@ -2800,7 +2796,7 @@ making the *core* depend on it either way.
 ## cli
 
 **A native CLI: cross compiler, interpreter, and capabilities**
-*(formerly `0021`)*
+*(formerly `cli`)*
 
 **Ratified:** ☐ not signed off
 
@@ -2935,7 +2931,7 @@ graph, and version-conflict resolution.
 ## opaque-values
 
 **Opaque values: identity without structure**
-*(formerly `0022`)*
+*(formerly `opaque-values`)*
 
 **Ratified:** ☐ not signed off
 
@@ -3013,7 +3009,7 @@ by import.
 ## workspace-capabilities
 
 **Capabilities are granted per workspace, and guarded per dependency**
-*(formerly `0036`)*
+*(formerly `workspace-capabilities`)*
 
 **Ratified:** ☐ not signed off
 
@@ -3174,7 +3170,7 @@ compiler this system trusts at all.
 ## system-namespaces-and-deps
 
 **System access and dependencies are virtual namespaces the CLI serves**
-*(formerly `0037`)*
+*(formerly `system-namespaces-and-deps`)*
 
 **Ratified:** ☐ not signed off
 
@@ -3385,7 +3381,7 @@ would plausibly be fetching source from git at all.
 ## other-hosts
 
 **SDKs, and other host targets**
-*(formerly `0010`)*
+*(formerly `other-hosts`)*
 
 **Ratified:** ☐ not signed off
 
@@ -3489,7 +3485,7 @@ than not porting at all.
 ## jvm-runtime
 
 **The JVM runtime**
-*(formerly `0029`)*
+*(formerly `jvm-runtime`)*
 
 **Ratified:** ☐ not signed off
 
@@ -3587,7 +3583,7 @@ a stale-build artefact).
 ## clr-runtime
 
 **The CLR runtime**
-*(formerly `0030`)*
+*(formerly `clr-runtime`)*
 
 **Ratified:** ☐ not signed off
 
@@ -3661,7 +3657,7 @@ dialect with its own edge cases.
 ## kin
 
 **kin: write a runtime's shared logic once**
-*(formerly `0038`)*
+*(formerly `kin`)*
 
 **Ratified:** ☐ not signed off
 
@@ -3848,7 +3844,7 @@ is deliberately not a claim about the whole runtime.
 ## cross-runtime-benchmarks
 
 **Benchmark across wasm runtimes, because every number so far was V8**
-*(formerly `0018`)*
+*(formerly `cross-runtime-benchmarks`)*
 
 **Ratified:** ☐ not signed off
 
@@ -3955,7 +3951,7 @@ reading it has to make a real deployment decision with these numbers.
 ## construe-benchmarks
 
 **Benchmark the decision, not the runtime**
-*(formerly `0007`)*
+*(formerly `construe-benchmarks`)*
 
 **Ratified:** ☐ not signed off
 
@@ -4019,7 +4015,7 @@ the person reading it has to make a real decision with these numbers.
 ## document-resource
 
 **Documents: structure eagerly, content on demand**
-*(formerly `0008`)*
+*(formerly `document-resource`)*
 
 **Ratified:** ☐ not signed off
 
@@ -4113,7 +4109,7 @@ in this system.
 ## construe-integration-bar
 
 **What "ready for construe" means, concretely**
-*(formerly `0023`)*
+*(formerly `construe-integration-bar`)*
 
 **Ratified:** ☐ not signed off
 

@@ -1,6 +1,6 @@
 // A document store capability, and the fetch planner that lives with it.
 //
-// `doc/decisions/0008` puts planning on the HOST on purpose: only the host knows
+// `DECISIONS.md#document-resource` puts planning on the HOST on purpose: only the host knows
 // the storage's latency and bandwidth and the memory budget, so only the host
 // can decide how many requests to make and how wide each one should be. The
 // script asks for pieces; this decides how to get them.
@@ -217,7 +217,7 @@ export class DocStore {
 
 /// The capability handler `host/flint.mjs` expects. Requests and replies are
 /// VALUES: a bridge encodes and decodes in the runtime
-/// (`doc/decisions/0027`), so a message arrives here already decoded and a
+/// (`DECISIONS.md#ports-are-the-hosts`), so a message arrives here already decoded and a
 /// reply is handed over as an ordinary JS object. Keyword keys read as `:name`
 /// strings, which is what `codec.from` writes back as keywords.
 export function documentCapability(store) {

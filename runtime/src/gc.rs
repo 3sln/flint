@@ -171,7 +171,7 @@ impl InternTable {
 
 /// One EXECUTOR's roots.
 ///
-/// A sandbox may have several threads inside it (`doc/decisions/0028`), and
+/// A sandbox may have several threads inside it (`DECISIONS.md#drivers`), and
 /// each has its own value stack and its own shadow stack. These are the roots
 /// that come in Ks; everything in `Roots` beside them is one per sandbox.
 ///
@@ -223,7 +223,7 @@ impl Default for ExecRoots {
 ///
 /// Sound because of WHEN it is read, not because of what it points at. A
 /// collection runs with every other executor stopped at a safepoint
-/// (`doc/decisions/0028`), so for the instant the collector walks these,
+/// (`DECISIONS.md#drivers`), so for the instant the collector walks these,
 /// nothing else is touching them. Outside a safepoint the list is empty.
 #[cfg(feature = "parallel")]
 #[derive(Clone, Copy)]
@@ -240,7 +240,7 @@ unsafe impl Send for ParkedRoots {}
 ///
 /// Globals, constants, the intern tables and the singletons belong to the
 /// program, not to whichever thread is running it, so several executors share
-/// exactly this (`doc/decisions/0028`).
+/// exactly this (`DECISIONS.md#drivers`).
 /// One var slot.
 ///
 /// A newtype so the atomic access is in one place and the ordering argument is
@@ -250,7 +250,7 @@ unsafe impl Send for ParkedRoots {}
 /// With one executor there is no one to race, and the atomic costs 7 277 bytes
 /// of module -- MEASURED (249 542 against 242 265 on the pure module). Same
 /// rule as the multi-executor root scan: absent rather than disabled
-/// (`doc/decisions/0016`), because wasm cannot have a second executor at all.
+/// (`DECISIONS.md#two-builds`), because wasm cannot have a second executor at all.
 ///
 /// Both spellings are `#[repr(transparent)]` over eight bytes, which is not
 /// cosmetic: compiled code reads this array through a raw base pointer
@@ -302,7 +302,7 @@ pub struct SharedRoots {
     ///
     /// Absent without the `parallel` feature rather than empty, because a
     /// module that can only ever have one executor should not carry the loop
-    /// that walks the others -- 1 056 bytes, measured (`doc/decisions/0016`).
+    /// that walks the others -- 1 056 bytes, measured (`DECISIONS.md#two-builds`).
     #[cfg(feature = "parallel")]
     pub others: Vec<ParkedRoots>,
     /// Var slots, read by `GET_VAR` and written by `SET_VAR`.
@@ -394,7 +394,7 @@ impl core::ops::DerefMut for Roots {
 pub const INTERN_STR: usize = 0;
 pub const INTERN_KW: usize = 1;
 pub const INTERN_SYM: usize = 2;
-/// Ports, keyed by id. **Weak on purpose** (`doc/decisions/0006`): the flint end
+/// Ports, keyed by id. **Weak on purpose** (`DECISIONS.md#host-abi`): the flint end
 /// of a port is ordinary reachable memory, and when the collector finds it
 /// unreachable that *means* the script is finished with it -- the scheduler
 /// notices the entry has gone and raises `:closed` on the script's behalf. A
@@ -445,7 +445,7 @@ pub struct Heap {
     pub host_natives: Vec<crate::vm::NativeFn>,
     /// What the host lent THIS SANDBOX. Per-sandbox, not per-executor: a
     /// capability is lent to a sandbox, and its threads are not separate
-    /// tenants (`doc/decisions/0022`).
+    /// tenants (`DECISIONS.md#opaque-values`).
     /// Have the image's initialisers run? Once per sandbox, not per executor
     /// and not per call.
     pub started: bool,
@@ -489,7 +489,7 @@ impl core::ops::DerefMut for GcPtr {
     }
 }
 /// Sound for the same reason `SharedPtr` is: exclusivity while a collection
-/// runs is the safepoint's job (`doc/decisions/0028`), not this impl's.
+/// runs is the safepoint's job (`DECISIONS.md#drivers`), not this impl's.
 unsafe impl Send for GcPtr {}
 
 impl Roots {
@@ -560,7 +560,7 @@ impl Roots {
             f(v);
         }
         // Every OTHER executor in this sandbox. A collection happens with all
-        // of them parked at a safepoint (`doc/decisions/0028`), so nothing is
+        // of them parked at a safepoint (`DECISIONS.md#drivers`), so nothing is
         // mutating these while they are walked.
         //
         // Skipping one would not fail here. It would collect that thread's
@@ -618,7 +618,7 @@ pub struct GcStats {
     /// nursery -- sampled at every collection. This is the number a memory
     /// claim has to be made against: "peak memory is proportional to content
     /// actually fetched" is a statement about *this*, not about how much has
-    /// been allocated over a run (`doc/decisions/0008`).
+    /// been allocated over a run (`DECISIONS.md#document-resource`).
     pub peak_live: u64,
 }
 
@@ -702,7 +702,7 @@ pub struct Gc {
     /// entirely.
     ///
     /// It is read-only and allocates nothing, so unlike a snapshot it cannot
-    /// perturb the run it is inspecting. Under `0016` a production build carries
+    /// perturb the run it is inspecting. Under `two-builds` a production build carries
     /// none of it; within a diagnostics build it is a flag because the walk is
     /// O(old heap) per collection.
     #[cfg(feature = "diagnostics")]
@@ -1050,7 +1050,7 @@ impl Gc {
     /// Failing while there is still garbage to reclaim would make the memory cap
     /// depend on when the collector last ran, which is exactly the kind of
     /// timing dependence a deterministic limit exists to avoid
-    /// (`doc/decisions/0009`).
+    /// (`DECISIONS.md#resource-limits`).
     fn alloc_old_collecting(&mut self, roots: &mut Roots, ty: u8, len_: u32) -> Addr {
         let a = self.alloc_old(ty, len_);
         if a != 0 || self.collecting {
@@ -1274,7 +1274,7 @@ impl Gc {
             }
             return v;
         }
-        // A FEATURE, not a runtime flag (doc/decisions/0016): a flag would leave
+        // A FEATURE, not a runtime flag (DECISIONS.md#two-builds): a flag would leave
         // this linked and branched on in production, and it is 357 bytes. The
         // capability survives for dev and staging; production does not pay.
         #[cfg(feature = "diagnostics")]

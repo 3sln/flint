@@ -1,4 +1,4 @@
-// Benchmark flint across wasm ENGINES (`doc/decisions/0018`).
+// Benchmark flint across wasm ENGINES (`DECISIONS.md#cross-runtime-benchmarks`).
 //
 // Every number in the README is V8. The claim on the tin is "runs anywhere",
 // and 0018's point is that the answers -- not just the numbers -- are
@@ -24,7 +24,7 @@
 // with work from what does not:
 //
 //   slope     = time per iteration once running. Divided by the iteration's
-//               instruction count -- which `0009` guarantees is identical on
+//               instruction count -- which `resource-limits` guarantees is identical on
 //               every engine and every machine -- this is ns/instruction, the
 //               apples-to-apples metric 0018 asks for.
 //   intercept = everything that does not scale: process start, wasm compile,
@@ -135,7 +135,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     }
   }
   const size = statSync(mod(COUNTS[COUNTS.length - 1])).size;
-  console.log('flint across wasm engines (doc/decisions/0018)');
+  console.log('flint across wasm engines (DECISIONS.md#cross-runtime-benchmarks)');
   console.log(`  one module, ${size} bytes, no imports, entry exported as \`main\`.`);
   console.log(`  every engine runs the SAME bytes; wasmtime and wasm3 need no host code.`);
   console.log(`  workload: construe's seed interpreter over 4 real contexts,`);
@@ -156,7 +156,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
   console.log('  ' + pad0('chicory (JVM)', 24) + 'measured separately: bin/bench-chicory');
   console.log();
-  // `0018` says the AOT ratio is the number that varies most between engines,
+  // `cross-runtime-benchmarks` says the AOT ratio is the number that varies most between engines,
   // and names the reason: on V8 TurboFan optimises the dispatch loop hard, so
   // eliminating dispatch looked marginal -- while on an engine with no tier-up
   // dispatch could dominate completely. It is measured here rather than argued,

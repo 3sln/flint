@@ -11,12 +11,12 @@
   passes one backed by the filesystem; a host driving `flintc.wasm` passes one
   backed by a map it already has. Neither of them is the compiler's business.
 
-  That function is the NAMESPACE RESOLVER (`doc/decisions/0036`), and it
+  That function is the NAMESPACE RESOLVER (`DECISIONS.md#workspace-capabilities`), and it
   answers more than source text. A namespace belongs to a WORKSPACE, and the
   workspace is what carries identity: which reader tags the source is read
   under, and -- once capabilities land -- what it was granted and what it may
   require. The alternative was for each front end to answer those separately,
-  which is what `0035` did with reader tags, and the result was that tags
+  which is what `reader-tags` did with reader tags, and the result was that tags
   worked from the CLI and silently did not through the SDK, because only one
   of the two front doors had been taught the concept.
 
@@ -50,11 +50,11 @@
       {:src       the source text
        :file      what to name it in a diagnostic
        :workspace who owns it -- a symbol, nil for the anonymous one
-       :tags      the reader tags its workspace binds (`doc/decisions/0035`)
+       :tags      the reader tags its workspace binds (`DECISIONS.md#reader-tags`)
        :grants    what its workspace HOLDS -- a set of capability keywords
-       :guard     what a workspace must hold to require it (`doc/decisions/0036`)
+       :guard     what a workspace must hold to require it (`DECISIONS.md#workspace-capabilities`)
        :virtual   true when the namespace has NO SOURCE and is spoken to over a
-                  port (`doc/decisions/0036` step 4, `0037`)
+                  port (`DECISIONS.md#workspace-capabilities` step 4, `system-namespaces-and-deps`)
        :vars      what a virtual namespace holds, OPTIONALLY:
                   [{:name f :arities [..]} ..]. Present, an unknown var is a
                   compile error; absent, it is a run-time one}
@@ -84,7 +84,7 @@
           :else
           (if-let [s (resolve-ns n)]
             ;; A VIRTUAL namespace has no source to read and no requires to
-            ;; follow (`doc/decisions/0036` step 4). It is recorded rather than
+            ;; follow (`DECISIONS.md#workspace-capabilities` step 4). It is recorded rather than
             ;; skipped, because the compiler has to know a name is virtual --
             ;; that is what decides whether a reference to it compiles to a var
             ;; or to a call over a port -- and because it is not missing, which
@@ -112,7 +112,7 @@
 
 (defn files-resolver
   "A namespace resolver over a flat map of `path -> source`, which is what a
-  host driving `flintc.wasm` has (`doc/decisions/0023`).
+  host driving `flintc.wasm` has (`DECISIONS.md#construe-integration-bar`).
 
   `workspaces` says who owns what, as a vector searched in order:
 
@@ -122,7 +122,7 @@
         :vars [{:name list-dir :arities [1]} ..]} ..]
 
   An entry with `:virtual true` declares that everything under its prefix has no
-  source and is spoken to over a port (`doc/decisions/0036` step 4). `:vars` is
+  source and is spoken to over a port (`DECISIONS.md#workspace-capabilities` step 4). `:vars` is
   optional and buys compile-time checking; without it any name resolves and an
   unknown one fails at run time.
 
@@ -142,7 +142,7 @@
    (fn [n]
      (let [base (ns->path n)
            ;; A workspace entry may declare a namespace VIRTUAL rather than
-           ;; supply source for it (`doc/decisions/0036` step 4). Checked before
+           ;; supply source for it (`DECISIONS.md#workspace-capabilities` step 4). Checked before
            ;; the files, because a virtual namespace has no file to find and
            ;; looking for one would report it missing.
            virt (first (filter (fn [w] (and (:virtual w)
@@ -285,7 +285,7 @@
                  (vec (remove (fn [x] (contains? rs x)) pending))))))))
 
 (defn refused-requires
-  "Every `:require` a workspace guard refuses (`doc/decisions/0036`).
+  "Every `:require` a workspace guard refuses (`DECISIONS.md#workspace-capabilities`).
 
   Level one of two. A workspace may declare `:flint/capabilities-guard`, and
   then only a workspace holding those capabilities may require it AT ALL. The
@@ -393,7 +393,7 @@
     ;; only from the entry collects a program whose `str` resolves to nothing.
     ;;
     ;; `flint.check` is a root for the same reason and only when checks are on
-    ;; (`doc/decisions/0032`). A module writes `#?(:flint/check (expect ...))`
+    ;; (`DECISIONS.md#checks`). A module writes `#?(:flint/check (expect ...))`
     ;; without requiring anything, because the branch does not exist in a build
     ;; where the namespace does not either -- so there is nothing to require and
     ;; nothing left behind. Under `:optimize [perf]` this root is simply not
@@ -405,13 +405,13 @@
           ;; A virtual namespace compiles to CALLS on `flint.virtual`, so that
           ;; namespace has to be in the program -- and nothing `:require`s it,
           ;; because the requires were written against `flint.sys.fs` and the
-          ;; rewrite happens later, in the analyzer (`doc/decisions/0036` step
+          ;; rewrite happens later, in the analyzer (`DECISIONS.md#workspace-capabilities` step
           ;; 4). So the graph has no edge to it and this supplies one, the same
           ;; way `core-first` supplies one for `flint.check`.
           ;;
           ;; Only when one was actually found. Adding it unconditionally would
           ;; put an RPC client and a port in every program that has no virtual
-          ;; namespace at all, which is the cost `0003` exists to avoid.
+          ;; namespace at all, which is the cost `namespace-units` exists to avoid.
           virtual? (some (fn [e] (:virtual (val e))) sources)
           {:keys [sources order missing]}
           (if (and virtual? (not (contains? sources 'flint.virtual)))

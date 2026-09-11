@@ -106,7 +106,7 @@
 (if (every? #(nil? (measured (:allocated %))) results)
   (println "  NOT MEASURED: `stat_bytes_allocated` and `stat_collections` are\n"
            " diagnostic exports and a production module does not carry them\n"
-           " (doc/decisions/0016). Re-run after `./bin/build-units --diagnostics`.")
+           " (DECISIONS.md#two-builds). Re-run after `./bin/build-units --diagnostics`.")
   (do
     (println (format "%-32s %14s %12s" "program" "bytes alloc" "collections"))
     (doseq [r results]

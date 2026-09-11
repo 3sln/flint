@@ -1,4 +1,4 @@
-;; The Pike VM (`doc/decisions/0012`).
+;; The Pike VM (`DECISIONS.md#matching-over-ropes`).
 ;;
 ;; Three things this has to establish, and only the first is about answers:
 ;;
@@ -91,7 +91,7 @@
     o))
 
 ;; THE FUNCTION IS NAMED at the run, because a module has no entry point
-;; (`doc/decisions/0025` step 5). `build!` knows the namespace, so this derives
+;; (`DECISIONS.md#structured-ports` step 5). `build!` knows the namespace, so this derives
 ;; the name from the artifact it made rather than repeating it at every call.
 (defn fn-of [wasm]
   (str (second (re-find #"out/pike-([a-z]+)\.wasm" wasm)) "/main"))
@@ -127,7 +127,7 @@
   (check "the native simulator agrees with the cljc reference, span for span" n r))
 
 ;; A subject built from many pieces is a ROPE. The simulator reads it through a
-;; cursor, so nothing should be materialised -- which `doc/decisions/0012` asks
+;; cursor, so nothing should be materialised -- which `DECISIONS.md#matching-over-ropes` asks
 ;; to be asserted rather than assumed.
 (spit (str d "/ropey.cljc")
       (str "(ns ropey (:require [flint.regex :as rx]))\n"

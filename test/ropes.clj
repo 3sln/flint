@@ -1,4 +1,4 @@
-;; Rope strings (`doc/decisions/0011` §2).
+;; Rope strings (`DECISIONS.md#strings-and-matching` §2).
 ;;
 ;; Three tiers -- inline, flat, rope -- and ONE string. Everything here is a
 ;; property that survives a naive implementation: the answers are all checked

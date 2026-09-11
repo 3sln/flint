@@ -24,7 +24,7 @@ public static class Obj {
                      TyDelay = 33, TyVolatile = 34, TyRaw = 35, TyIterseq = 36,
                      TyChunkseq = 37, TyType = 38, TyThread = 39, TyPort = 40,
                      TySched = 41, TyRope = 42,
-                     /// A host-minted reference (`doc/decisions/0022`). Guest code
+                     /// A host-minted reference (`DECISIONS.md#opaque-values`). Guest code
                      /// can mint one only with id 0 and no builtin reads an id
                      /// back, so an id is a thing the HOST wrote and only the host
                      /// can read. That is what lets a snapshot preserve identities
@@ -33,11 +33,11 @@ public static class Obj {
                      TyBytes = 44, TyBrope = 45, TyTbytes = 46,
                      /// A tagged literal: `[tag, form]`, tag a namespaced
                      /// SYMBOL. Its own type rather than a two-key map
-                     /// (`doc/decisions/0034`), because a map is ambiguous with
+                     /// (`DECISIONS.md#tagged-literals`), because a map is ambiguous with
                      /// a map in every format that has tags and loses the
                      /// namespace wherever the key must become a string.
                      TyTagged = 47,
-                     // `doc/decisions/0026`: a schema addresses columns by a
+                     // `DECISIONS.md#tables`: a schema addresses columns by a
                      // stable id, a table carries a row offset so `slice`
                      // shares its chunks, a row ref holds the chunk and not the
                      // table, and the transient writes into an open chunk.

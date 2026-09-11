@@ -107,7 +107,7 @@ impl Rt {
     }
     // The probe COUNTS the charges rather than enforcing a budget: what the
     // fixture checks is that all three charge the same amount for the same
-    // walk, which is what `0009` actually asks of them.
+    // walk, which is what `resource-limits` actually asks of them.
     fn charge_work(&mut self, n: u64) { self.steps += n; }
     fn charge_bytes(&mut self, n: u32) { self.charge_work((n as u64 / 8) + 1); }
     fn sink_open(&mut self) -> u32 { self.sinks.push(Vec::new()); (self.sinks.len() - 1) as u32 }

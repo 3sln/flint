@@ -1,5 +1,5 @@
 (ns flint.snapshot
-  "Capture the whole VM state, and put it back (`doc/decisions/0015`).
+  "Capture the whole VM state, and put it back (`DECISIONS.md#snapshots`).
 
   A snapshot is a **copy, not a question**. Every ad-hoc probe answers one
   thing, and can answer it confidently wrong; a snapshot is raw state you

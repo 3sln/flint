@@ -1,5 +1,5 @@
 (ns construe.bench.xrt25
-  "One point on the cross-runtime benchmark family (`doc/decisions/0018`).
+  "One point on the cross-runtime benchmark family (`DECISIONS.md#cross-runtime-benchmarks`).
 
   The iteration count is BAKED IN and the entry takes no arguments, because
   wasmtime and wasm3 invoke an export from the command line and cannot drive

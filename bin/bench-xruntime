@@ -1,5 +1,5 @@
 #!/bin/sh
-# flint across wasm ENGINES (doc/decisions/0018).
+# flint across wasm ENGINES (DECISIONS.md#cross-runtime-benchmarks).
 #
 # Every number in the README is V8. This builds the module family and runs it on
 # every engine present, reporting ns/instruction -- which is comparable across

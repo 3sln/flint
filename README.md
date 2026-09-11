@@ -49,7 +49,8 @@ module itself needs no host support at all.
 ## Contents
 
 - [Status](#status) — what works, what does not
-- [CHANGELOG](CHANGELOG.md) — what changed, with the measurement rather than the intent
+- [ROADMAP](ROADMAP.md) — what is built, what is not, and what was dropped
+- [DECISIONS](DECISIONS.md) — every decision, with its rationale and its sign-off
 - [How it fits together](#how-it-fits-together)
 - [The value encoding](#the-value-encoding)
 - [The collector](#the-collector) — and the rooting decision everything rests on
@@ -102,8 +103,8 @@ Working, end to end, and tested:
   [What this means for construe](#what-this-means-for-construe).
 
 - **It runs on three runtimes, and they agree.** The same bytecode runs on the
-  native/wasm runtime, on the JVM ([`0029`](doc/decisions/0029-jvm-runtime.md))
-  and on the CLR ([`0030`](doc/decisions/0030-clr-runtime.md)). All three carry
+  native/wasm runtime, on the JVM ([`jvm-runtime`](DECISIONS.md#jvm-runtime))
+  and on the CLR ([`clr-runtime`](DECISIONS.md#clr-runtime)). All three carry
   the same 155 builtins, all nine conformance programs give the same answers on
   all three — interpreted *and* compiled — and **both ports run the flint
   compiler and emit byte-identical images**. That is the difference between
@@ -113,7 +114,7 @@ Working, end to end, and tested:
 
 - **`:optimize [perf]` means the same thing on all three.** It compiles arities
   ahead of time rather than dispatching them
-  ([`0013`](doc/decisions/0013-emit-wasm-instead-of-dispatch.md)): 2.97× over the
+  ([`emit-wasm-instead-of-dispatch`](DECISIONS.md#emit-wasm-instead-of-dispatch)): 2.97× over the
   wasm interpreter, 12× over the JVM's, 1.8× over the CLR's. It is a preference
   rather than a switch — ask for what you want, read what you got.
 
@@ -138,8 +139,8 @@ at runtime; a capability cannot be delegated at run time; the regex engine is
 ```
 
 Two tiers, and the split is deliberate
-([`doc/decisions/0002`](doc/decisions/0002-modularity.md),
-[`0003`](doc/decisions/0003-namespace-units.md)):
+([`DECISIONS.md#modularity`](DECISIONS.md#modularity),
+[`namespace-units`](DECISIONS.md#namespace-units)):
 
 - **Tier 1 — Rust, precompiled to relocatable wasm objects.** Only what cannot
   be expressed in the language: memory, the collector, the value encoding,
@@ -225,7 +226,7 @@ to wasm functions. Under AOT, live references sit in wasm locals where the
 collector cannot see them, and you need a shadow-stack spill around every
 allocation site — which hands back most of the speed. WasmGC exists to close
 this gap; until it can be relied on, the interpreter is the honest choice.
-([`doc/decisions/0001`](doc/decisions/0001-dispatch.md).)
+([`DECISIONS.md#dispatch`](DECISIONS.md#dispatch).)
 
 The design has already paid for itself once. A VM frame used to *cache* its
 closure, and that copy was a root the collector could not see; after a collection
@@ -370,7 +371,7 @@ diluted by real work.
 > wasm3** (a pure interpreter) and **426 on Chicory** (a wasm engine written in
 > Java). The spread between JIT engines is about 1.5×, so a browser gets within
 > 1.5× wherever it runs; an embedded interpreter costs 15×. `bin/bench-xruntime`,
-> and `doc/decisions/0018` for the tables and what they decide. So dispatch is roughly a third of the time on
+> and `DECISIONS.md#cross-runtime-benchmarks` for the tables and what they decide. So dispatch is roughly a third of the time on
 allocation-light code and much less elsewhere: superinstructions would help the
 tight-loop case and little else. The number comes from timing a workload with
 the step counter off and counting it with the counter on — the counter is gated
@@ -402,7 +403,7 @@ This is harder than it sounds, because the program is *interpreted*: every
 builtin is reached through a dispatch table, so no linker can prove one dead —
 they are all live by construction. Two obvious routes (rebuild the runtime per
 compile with cargo features; null the table entries and run wasm DCE) were
-rejected in [`doc/decisions/0003`](doc/decisions/0003-namespace-units.md) in
+rejected in [`DECISIONS.md#namespace-units`](DECISIONS.md#namespace-units) in
 favour of a third:
 
 **A namespace is a compilation unit.** Each is precompiled — Rust namespaces to
@@ -556,7 +557,7 @@ What it is for:
 - **Keeping a module small on purpose**, with a build failure if a refactor
   quietly reintroduces the dependency.
 
-One honest caveat, because [`doc/decisions/0004`](doc/decisions/0004-exclude-and-unit-path.md)
+One honest caveat, because [`DECISIONS.md#exclude-and-unit-path`](DECISIONS.md#exclude-and-unit-path)
 asks for "excluding something unreachable makes the module smaller" and that is
 not quite true here. flint already shakes **per var**, so a namespace nothing
 reaches was never in the module and excluding it removes nothing: the flag's
@@ -623,7 +624,7 @@ the interpreter that picks a runnable thread and runs it for a fixed slice.
 "Blocked" means "not runnable yet", which an interpreter can simply say.
 **Nothing suspends a wasm frame and nothing blocks the host**, because the
 interpreter never left its own loop. This is the leverage the dispatch decision
-in [`doc/decisions/0001`](doc/decisions/0001-dispatch.md) was already paying for.
+in [`DECISIONS.md#dispatch`](DECISIONS.md#dispatch) was already paying for.
 
 ```clojure
 (require '[flint.thread :as t] '[flint.port :as p])
@@ -698,7 +699,7 @@ host *lends* it a capability, and how two green threads talk.
 ```
 
 `open` is a **request on the system port** the sandbox was given at construction
-([`doc/decisions/0027`](doc/decisions/0027-ports-are-the-hosts.md)): the sandbox
+([`DECISIONS.md#ports-are-the-hosts`](DECISIONS.md#ports-are-the-hosts)): the sandbox
 cannot make a port, it asks for one. The host **allows or refuses**, and a
 refusal is a normal, expected outcome that arrives as a catchable
 `SecurityException` — not a crash, and not something a program has to guess at. A
@@ -870,8 +871,8 @@ codec to pass, attach, or get wrong:
 ```
 
 That is a safety rule rather than a convenience
-([`doc/decisions/0025`](doc/decisions/0025-structured-ports.md),
-[`0027`](doc/decisions/0027-ports-are-the-hosts.md)). The wire format writes an
+([`DECISIONS.md#structured-ports`](DECISIONS.md#structured-ports),
+[`ports-are-the-hosts`](DECISIONS.md#ports-are-the-hosts)). The wire format writes an
 opaque value's host id inline, and bytes are integers a guest can write; a codec
 running inside the sandbox would therefore be an integer-to-capability
 conversion, and an opaque value's whole meaning is that no such conversion
@@ -933,7 +934,7 @@ Without the grant the build stops, naming the var, the workspace that guards it
 and the capability that is missing. The check emits nothing into the module — a
 guard is a compile-time construct with no callable behind it, so a run costs
 nothing, and that is a security property before it is a performance one
-([`doc/decisions/0036`](doc/decisions/0036-workspace-capabilities.md)).
+([`DECISIONS.md#workspace-capabilities`](DECISIONS.md#workspace-capabilities)).
 
 The **reference** is guarded, not the call, so `(map h/request xs)` is refused
 too. Guarding calls would put the guard one line of indirection deep.
@@ -959,7 +960,7 @@ believed to do them is worse than none:
 ### None of it is in a pure module
 
 Threads and ports are namespace units like any other
-([`doc/decisions/0003`](doc/decisions/0003-namespace-units.md)), so a program
+([`DECISIONS.md#namespace-units`](DECISIONS.md#namespace-units)), so a program
 that never mentions `spawn`, `channel` or `open` carries **no scheduler, no port
 machinery and no host-callback surface**. `test/threads.clj` asserts that by
 symbol name and reports the number:
@@ -981,7 +982,7 @@ Threads and ports are still not in it.
 ### Two builds
 
 A production module carries **no diagnostic machinery** — absent, not disabled
-(`doc/decisions/0016`). Not a runtime flag: a flag leaves the code linked, still
+(`DECISIONS.md#two-builds`). Not a runtime flag: a flag leaves the code linked, still
 costing bytes and still branching somewhere hot. It is a cargo feature, so the
 code is not there at all.
 
@@ -1498,7 +1499,7 @@ the loop is real and not folded away.)
 goes into CHAMP inserts that both runtimes genuinely perform.
 
 **String building is flint's, by 8×.** Not a constant factor — an algorithm.
-`str` is a rope ([`0011`](doc/decisions/0011-strings-and-matching.md)), so
+`str` is a rope ([`strings-and-matching`](DECISIONS.md#strings-and-matching)), so
 repeated concatenation is not the O(n²) copy it is with flat strings. Same
 program, same answer, different asymptotics.
 
@@ -1609,7 +1610,7 @@ here: it is 6.4 ms of fixed cost on wasmtime and 4.3 ms on wasm3, against 32 ms
 for a node process. What *is* portable is the resident cost — flint adds 0.5 MB
 on an engine that interprets its module and 20–27 MB on ones that compile it,
 because it is the compiled code and not the 6.4 MB reservation that gets paid
-for (`doc/decisions/0018`).
+for (`DECISIONS.md#cross-runtime-benchmarks`).
 
 **15× faster to first answer**, and it lines up with construe's own measurement
 of 23 ms cold on workerd. This is an argument about *sandboxing cost*, not
@@ -1763,7 +1764,7 @@ The honest list. Nothing here is stubbed and reported as working.
   ordinary reference, within the runtime. That buys no ownership transfer to
   reason about, no capability leaking through a message, and a wire format that
   never has to represent a port. Transfer can be added later; it could not be
-  removed. (`doc/decisions/0006`.)
+  removed. (`DECISIONS.md#host-abi`.)
 - **A parked thread cannot be inside native code.** `map`, `sort`, a comparator
   and a lazy-seq force re-enter the interpreter with Rust frames underneath, and
   those are not a continuation anybody can save. Parking there is a clean error,
@@ -1779,7 +1780,7 @@ The honest list. Nothing here is stubbed and reported as working.
   where it is the one result that would rule flint out of a job. It is a backtracking matcher written in cljc — which is what makes
   it tree-shake away when unused — using continuation closures, so it allocates
   per match step. A first-character skip cut a third off; the remaining cost is
-  structural. [`doc/decisions/0002`](doc/decisions/0002-modularity.md) said to
+  structural. [`DECISIONS.md#modularity`](DECISIONS.md#modularity) said to
   measure before moving something to Rust, and this is the measurement that
   would justify it: a Rust regex unit would cost nothing for programs that do
   not use one, because the unit mechanism already exists — and now that
@@ -1826,7 +1827,7 @@ The honest list. Nothing here is stubbed and reported as working.
   that ignores it still reads correct data.
 - **A binary port's payload used to be a vector of byte-sized integers**, one
   boxed fixnum per byte through the codec, because flint had no byte type when
-  that path was written. [`0024`](doc/decisions/0024-no-runtime-linking.md) gave
+  that path was written. [`no-runtime-linking`](DECISIONS.md#no-runtime-linking) gave
   it one, and Transit and the port boundary now use it: encoding and decoding
   400 records went from 55.5 ms to 39.4 ms, 198 728 allocations to 104 951, and
   11.2 MB allocated to 4.1 MB — for the same bytes on the wire. A vector of
@@ -1918,31 +1919,29 @@ doc/              decisions, unit format, generated manifest, benchmark output
 
 Written down where somebody will find them, with the reasoning:
 
-- [`doc/decisions/0001-dispatch.md`](doc/decisions/0001-dispatch.md) — interpreter
+- [`DECISIONS.md#dispatch`](DECISIONS.md#dispatch) — interpreter
   vs AOT, stack vs register. Both argued, and the dispatch cost measured.
-- [`doc/decisions/0002-modularity.md`](doc/decisions/0002-modularity.md) — only
+- [`DECISIONS.md#modularity`](DECISIONS.md#modularity) — only
   reachable code ships, builtins included.
-- [`doc/decisions/0003-namespace-units.md`](doc/decisions/0003-namespace-units.md)
+- [`DECISIONS.md#namespace-units`](DECISIONS.md#namespace-units)
   — a namespace is a compilation unit, and linking composes them.
-- [`doc/decisions/0004-exclude-and-unit-path.md`](doc/decisions/0004-exclude-and-unit-path.md)
+- [`DECISIONS.md#exclude-and-unit-path`](DECISIONS.md#exclude-and-unit-path)
   — `:exclude` as an assertion with a reference chain, and `:wasm-path` as a
   namespace-resolved search path with `units/` as its last entry.
-- [`doc/decisions/0005-threads-and-ports.md`](doc/decisions/0005-threads-and-ports.md)
+- [`DECISIONS.md#threads-and-ports`](DECISIONS.md#threads-and-ports)
   — green threads, ports and protocols, and the point that governs them: `open`
   parks a thread, it does not suspend wasm.
-- [`doc/decisions/0006-host-abi.md`](doc/decisions/0006-host-abi.md) — the host
+- [`DECISIONS.md#host-abi`](DECISIONS.md#host-abi) — the host
   ABI: continuation tokens with generations, one event queue, where the cost
   really is, and the two lifetimes of a port's two ends.
-- [`doc/decisions/0007-construe-benchmarks.md`](doc/decisions/0007-construe-benchmarks.md)
+- [`DECISIONS.md#construe-benchmarks`](DECISIONS.md#construe-benchmarks)
   — benchmark the decision, not the runtime: what the numbers have to answer
   for somebody choosing whether to adopt this.
-- [`doc/decisions/0008-document-resource.md`](doc/decisions/0008-document-resource.md)
+- [`DECISIONS.md#document-resource`](DECISIONS.md#document-resource)
   — documents: structure eagerly, content on demand, and the fetch planning
   that follows from measuring latency against bandwidth.
 - [`doc/unit-format.md`](doc/unit-format.md) — what a unit is, and what would
   have to change to admit a user-compiled one.
-- [`PLAN.md`](PLAN.md) — the build order, and what was settled before any code
-  depended on it.
-
-`BRIEF.md` is kept for provenance. This file supersedes it as the description of
-what exists.
+- [`ROADMAP.md`](ROADMAP.md) — the build order and current state, by feature
+  area. It replaces `PLAN.md`, `BRIEF.md` and `CHANGELOG.md`, which recorded
+  intent and history that had drifted from the tree.

@@ -1,4 +1,4 @@
-//! Several executors inside one sandbox (`doc/decisions/0028`).
+//! Several executors inside one sandbox (`DECISIONS.md#drivers`).
 //!
 //! One heap, K threads on it. Everything here exists to make three things true
 //! at once: only one thread mutates the heap's structure at a time, no thread
@@ -45,7 +45,7 @@ pub const MAX_EXECUTORS: usize = 64;
 /// more than the work it is counting.
 ///
 /// The price is that a limit stops the program a little late -- by at most
-/// this times the number of executors (`doc/decisions/0009`).
+/// this times the number of executors (`DECISIONS.md#resource-limits`).
 pub const GAS_BATCH: u64 = 4096;
 
 pub struct Parallel {

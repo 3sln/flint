@@ -1,6 +1,6 @@
-;; Tables: columnar storage that is a value (`doc/decisions/0026`).
+;; Tables: columnar storage that is a value (`DECISIONS.md#tables`).
 ;;
-;; `0026` puts a MEASUREMENT GATE at step 3, before the path copy and the
+;; `tables` puts a MEASUREMENT GATE at step 3, before the path copy and the
 ;; transient, because the whole justification is a memory and scan win and this
 ;; is the cheapest moment to learn it is not there. This file is that gate.
 ;;
@@ -79,7 +79,7 @@
   (println (format "    %-12s %10d %10d %6d %12d"
                    nm (get m "allocated") (get m "peak") (get m "collections") (get m "gas"))))
 
-;; The four claims `0026` rests on, each as a ratio rather than an absolute, so
+;; The four claims `tables` rests on, each as a ratio rather than an absolute, so
 ;; the test survives the numbers moving and fails if the SHAPE changes.
 (check-that "it is resident in far less memory"
             (< (* 4 (get t "peak")) (get v "peak"))
@@ -298,7 +298,7 @@
 (check "  ... and a mapper recomputes them"
        (get (get mig "map") "answer") "[50000 :y 6]")
 
-;; The measurement `0026` rests on. Every run builds the same 50 000-row table
+;; The measurement `tables` rests on. Every run builds the same 50 000-row table
 ;; first, so what differs is the migration and nothing else. A head-only edit
 ;; must not scale with the rows; the mapper is the case that does, and it is
 ;; here as the CONTROL -- without it "cheap" has nothing to be cheap against.
@@ -342,7 +342,7 @@
 ;; --------------------------------------------------------------- step 4
 ;;
 ;; `assoc`, `conj`, iteration, printing and the REFUSALS. The refusals are
-;; asserted on their MESSAGE, not on the fact that something threw: `0026` says
+;; asserted on their MESSAGE, not on the fact that something threw: `tables` says
 ;; a closed table's value is that it says what was wrong, and a test that only
 ;; checks for an exception would pass on "invalid row" -- which is the message
 ;; this codebase keeps replacing.
@@ -416,7 +416,7 @@
 (check "  ... and it may elide, which the readable form must never do"
        (:human-big ops)
        "#flint/table [{:id 0, :name n} {:id 1, :name n} {:id 2, :name n} {:id 3, :name n} {:id 4, :name n}] (9 rows)")
-;; THE ROUND TRIP, run rather than claimed. `0026` first said the form was
+;; THE ROUND TRIP, run rather than claimed. `tables` first said the form was
 ;; `#flint/table [{:a 1}]`, which cannot read back: the types are half of a
 ;; table's identity and nothing in a row says which they were.
 (check "  ... and the readable form READS BACK to an equal table"

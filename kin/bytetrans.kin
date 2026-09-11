@@ -7,7 +7,7 @@
 ;;
 ;; THE TAIL IS ALLOCATED BEFORE THE HEADER, and both are rooted before either
 ;; slot is written. That ordering is the whole of what makes this correct
-;; under `doc/decisions/0031`: `alloc` can collect, so `v` read into a host
+;; under `DECISIONS.md#a-vec-of-values-is-not-a-root`: `alloc` can collect, so `v` read into a host
 ;; local before the first allocation would be stale by the second. Both ports
 ;; already wrote it this way and Rust did too; what differed was only which
 ;; spelling of "the slot I pushed it into" each used.

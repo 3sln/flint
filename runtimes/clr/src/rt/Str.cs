@@ -6,7 +6,7 @@ using static _3sln.Flint.Kgen.Rt.Interns;
 
 /// Strings, ported from `runtime/src/strs.rs`.
 ///
-/// Three tiers, and the first two are here (`doc/decisions/0011`'s ropes are
+/// Three tiers, and the first two are here (`DECISIONS.md#strings-and-matching`'s ropes are
 /// the third and come with the rest of that file):
 ///
 /// * five bytes or fewer live IN the value -- no allocation, and a comparison
@@ -24,7 +24,7 @@ public static class Str {
     /// A bare, UNINTERNED heap string. `Of` is the canonical constructor.
     /// A LONG NON-ASCII STRING ARRIVES AS A TREE. The tier transitions fire on
     /// CONCATENATION, so a string that arrives whole from outside never became
-    /// a rope however big it was -- and `0011` then says, correctly, that "a
+    /// a rope however big it was -- and `strings-and-matching` then says, correctly, that "a
     /// flat string carries one total count, which does not locate code point
     /// k". Nothing covered a flat string that is not ASCII, and every reader in
     /// the language indexes by code point, so one non-ASCII character in a
@@ -96,7 +96,7 @@ public static class Str {
 
     /// The CANONICAL value for a string.
     ///
-    /// Three tiers (`doc/decisions/0011`): inline up to 5 bytes, interned up to
+    /// Three tiers (`DECISIONS.md#strings-and-matching`): inline up to 5 bytes, interned up to
     /// `INTERN_MAX`, and plain heap beyond. Inline is canonical by construction
     /// and interning is guaranteed in its range, so two strings in either range
     /// are `=` exactly when they are bit-equal. Past the range a string is
@@ -191,7 +191,7 @@ public static class Str {
     static bool IsAscii(Rt rt, long v) => SAscii(rt, v);
 
     /// The code point at index `i`, as a single-character string. NOT a char
-    /// type: flint has no char, and `doc/decisions/0010` counts that among the
+    /// type: flint has no char, and `DECISIONS.md#other-hosts` counts that among the
     /// documented divergences rather than a gap.
     /// The character at code point `i`, or `dflt`. See the JVM's `nth`.
     // @kin:link:ns: flint.rt.strs
@@ -208,14 +208,14 @@ public static class Str {
     /// The byte offset of code point `k` in a rope, BY DESCENDING its per-node
     /// code-point counts.
     ///
-    /// `doc/decisions/0011` designed those counts for exactly this and nothing
+    /// `DECISIONS.md#strings-and-matching` designed those counts for exactly this and nothing
     /// used them: every indexing path flattened first, so the counts were
     /// computed, stored, traced by the collector, and thrown away before the
     /// one question they answer.
 
     /// The bytes of the code point at index `i`, or -1.
     ///
-    /// WHICH MECHANISM, AND WHY -- `0011` calls them complementary and this is
+    /// WHICH MECHANISM, AND WHY -- `strings-and-matching` calls them complementary and this is
     /// the line where that is acted on. ASCII: flatten once and index by byte,
     /// which is O(1) forever after; descending instead costs O(depth) EVERY
     /// time and made a linear operation superlinear. Non-ASCII: descend, and
@@ -225,14 +225,14 @@ public static class Str {
     /// This replaced a one-entry cursor. The cursor had to be invalidated by
     /// the collector, so the same walk cost different GAS depending on when a
     /// collection happened -- and under parallel executors that collection
-    /// belongs to another thread. `doc/decisions/0009` says gas is
+    /// belongs to another thread. `DECISIONS.md#resource-limits` says gas is
     /// deterministic; a memo keyed on collector state is not.
     static int CpBytesAt(Rt rt, long v, int i, byte[] outb) {
         if (i < 0) return -1;
         if (IsRope(rt, v)) {
             // ASCII INCLUDED, and it used not to be -- see the JVM's
             // `cpBytesAt` for why and for the measurement. Native has descended
-            // for every rope since `0011`; flattening here turns an O(log n)
+            // for every rope since `strings-and-matching`; flattening here turns an O(log n)
             // descent into an O(n) copy and caches the flat form.
             //
             // PAST THE END NEEDS NO CHECK HERE -- see the Java and Rust copies.
@@ -332,7 +332,7 @@ public static class Str {
     /// GENERATED NOW, from `kin/ropecmp.kin`. This flattened both operands --
     /// `text` opens a sink and appends the whole rope -- and then compared
     /// UTF-16 code units to reproduce `String.compareTo`. UTF-8 byte order is
-    /// already code point order, and `0011` lists comparison among the
+    /// already code point order, and `strings-and-matching` lists comparison among the
     /// operations that must WALK.
 
     /// The hash of a STRING value, cached in the object for a heap string.
@@ -414,7 +414,7 @@ public static class Str {
         return Val.Heap(a);
     }
 
-    // --- ropes (`doc/decisions/0011`) ---------------------------------------
+    // --- ropes (`DECISIONS.md#strings-and-matching`) ---------------------------------------
     //
     // The THIRD tier: a shallow tree of string pieces, so `str` of two large
     // strings is a tree join rather than a copy. A node carries its subtree's
@@ -427,14 +427,14 @@ public static class Str {
 
     // `RP_HASH` is the subtree's content hash, or nil until asked. Hashing a
     // rope used to FLATTEN it to reach the flat string's cached hash, which
-    // bought the caching by spending the sharing (`doc/decisions/0011`).
+    // bought the caching by spending the sharing (`DECISIONS.md#strings-and-matching`).
     public const int RP_BYTES = 0, RP_CPS = 1, RP_FLAT = 2, RP_HASH = 3, RP_KIDS = 4;
     public const int FLAT_MAX = 1024, FANOUT = 16;
     /// What may be COPIED to avoid a new leaf; see `runtime/src/rope.rs`.
     public const int MERGE_MAX = 256;
     /// A slice smaller than this COPIES rather than sharing, so a small `subs`
     /// cannot retain a large parent -- the retention fix, not a performance
-    /// choice (`doc/decisions/0011`).
+    /// choice (`DECISIONS.md#strings-and-matching`).
     public const int SLICE_MIN = 256;
 
     /// LEAF SIZE FOR A STRING THAT ARRIVES NON-ASCII AND WHOLE. See
@@ -528,7 +528,7 @@ public static class Str {
     /// Walk the leaves in order, appending their bytes.
 
     /// Contiguous bytes for a string of any tier. Materialises a rope ONCE and
-    /// remembers it: `0011`'s rule is to count the flattens rather than hope
+    /// remembers it: `strings-and-matching`'s rule is to count the flattens rather than hope
     /// about them, because a rope that flattens on every `index-of` passes
     /// every correctness test and is slower than the flat string it replaced.
     public static long Flatten(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Ropeflat.SFlatten(rt, v); }

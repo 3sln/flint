@@ -1,4 +1,4 @@
-;; Green threads, ports and the host ABI (doc/decisions/0005 and 0006).
+;; Green threads, ports and the host ABI (DECISIONS.md#threads-and-ports and 0006).
 ;;
 ;; The two properties that govern everything else are asserted first: a pure
 ;; program is not made bigger by any of this, and nothing in a flint module
@@ -26,7 +26,7 @@
     (when-not (zero? (:exit r))
       (println "build failed for" ns-name ":" (:all r)) (System/exit 1))
     ;; The artifact AND the function to call. Nothing is called automatically
-    ;; (`doc/decisions/0025` step 5), so a runner has to name one, and `build!`
+    ;; (`DECISIONS.md#structured-ports` step 5), so a runner has to name one, and `build!`
     ;; is the only place that knows the namespace.
     [o (str ns-name "/main")]))
 
@@ -55,7 +55,7 @@
 (def threaded-wasm (build! "threaded"))
 ;; The FLOOR is what ships, and what ships has no checks in it: `:optimize
 ;; [perf]` removes `:flint/check` before the source is read
-;; (`doc/decisions/0032`). Measuring the default build against a shipping floor
+;; (`DECISIONS.md#checks`). Measuring the default build against a shipping floor
 ;; charges the production budget for development machinery, which is how this
 ;; guard came to be 9 KB over its budget without anyone being told.
 ;;
@@ -79,7 +79,7 @@
 ;; the bound here is that it is a BUDGET somebody chose, not a number that
 ;; drifts.
 ;;
-;; It moved again for ropes (`doc/decisions/0011`), by 6 310 bytes, and that is
+;; It moved again for ropes (`DECISIONS.md#strings-and-matching`), by 6 310 bytes, and that is
 ;; also a budget rather than drift: repeated concatenation -- the case 0011
 ;; names as quadratic with flat strings -- went from 57.17 ms to 2.31 ms on
 ;; `bench/progs/concat.cljc`, which is 24.7x, and from 3.1x slower than babashka
@@ -96,13 +96,13 @@
 ;; the operands were integers -- 22.4 ns per arithmetic operation, which is the
 ;; cost of reaching a builtin through the table and having it re-read its
 ;; arguments off the value stack.
-;; And 2 360 bytes for byte strings (`doc/decisions/0024`), which a program
+;; And 2 360 bytes for byte strings (`DECISIONS.md#no-runtime-linking`), which a program
 ;; using none of them still pays: `count`, `nth`, `=` and `hash` all reference
 ;; the byte paths, so the type is pinned by the generic collection surface
 ;; rather than by anyone calling it. What it buys, on 200 000 bytes: 43.5 MB
 ;; and 28 collections held as a vector of integers, against 0.2 MB and none
 ;; held as a byte string.
-;; And 20 589 bytes for `flint_call` (`doc/decisions/0025`), MEASURED by
+;; And 20 589 bytes for `flint_call` (`DECISIONS.md#structured-ports`), MEASURED by
 ;; building the same module with the export and without it (221 082 against
 ;; 241 671). It is the wire codec and the map building an error reply needs,
 ;; and every module carries it because every module can be called.
@@ -113,14 +113,14 @@
 ;; not work without a way in that takes a name.
 ;;
 ;; It went DOWN by 2 580 bytes when the grant table stopped being a `static mut`
-;; and moved onto the `Rt` (`doc/decisions/0022`). That change was made because
+;; and moved onto the `Rt` (`DECISIONS.md#opaque-values`). That change was made because
 ;; the static leaked capabilities between native sandboxes; it being smaller
 ;; too is a bonus and not the reason.
 ;;
-;; Several executors in one sandbox (`doc/decisions/0028`) costs 1 056 bytes of
+;; Several executors in one sandbox (`DECISIONS.md#drivers`) costs 1 056 bytes of
 ;; root-scanning loop, MEASURED by building this module with it and without
 ;; (245 901 against 244 845). It is behind the `parallel` feature and so is
-;; ABSENT here rather than disabled (`doc/decisions/0016`): wasm cannot have a
+;; ABSENT here rather than disabled (`DECISIONS.md#two-builds`): wasm cannot have a
 ;; second executor until it has the threads proposal and a shared memory, and a
 ;; module that can only ever have one should not carry the loop that walks the
 ;; others.
@@ -136,7 +136,7 @@
 ;; function. `flint.strs` records what that costs: `symbol` and `keyword` had
 ;; the same four lines and the same rooting bug, and only one of them surfaced.
 ;; Two copies of the write barrier is a worse trade than 5 040 bytes.
-;; Raised again for the TAGGED LITERAL type (`doc/decisions/0034`): the shipped
+;; Raised again for the TAGGED LITERAL type (`DECISIONS.md#tagged-literals`): the shipped
 ;; floor measured 264 997 where it had been 261 363. That net is not all of it
 ;; -- the ring simplifications in `8f33c76` and `4b4bfb6` moved it DOWN in
 ;; between -- but the direction and the reason are clear: a new heap type puts
@@ -233,7 +233,7 @@
 ;;   * gas agrees. The same search cost 897 steps native against 21 on the
 ;;     JVM; it is now 113 on both, and the same on a flat string as on a
 ;;     three-leaf rope holding the same bytes.
-;;   * the haystack is never materialised. `0011` lists `index-of` under what
+;;   * the haystack is never materialised. `strings-and-matching` lists `index-of` under what
 ;;     must WALK rather than flatten; an early match on a 34 KB rope now costs
 ;;     0.06ms and ZERO allocations, where flattening copied all 34 KB before
 ;;     looking at the first byte.
@@ -352,7 +352,7 @@
 ;; one is worth its own -- which is the question that turned 2 090 bytes into
 ;; nothing.
 (check-that "the floor is within the budget 0009, 0011, specialisation, bytes and call chose"
-;; TABLES (`doc/decisions/0026`) cost 22 857 bytes here when they landed --
+;; TABLES (`DECISIONS.md#tables`) cost 22 857 bytes here when they landed --
 ;; 287 854 shipped against 264 997 -- and then gave 15 832 of it back, which is
 ;; the more interesting number and the reason both are recorded.
 ;;
@@ -374,7 +374,7 @@
 ;;
 ;; The 6 922 bytes tables still cost every module are the runtime arms in `eq`,
 ;; `hash`, `kind`, `get`, `count`, `map_get` and `seq`, which are Rust and do
-;; not shake. A table remains a candidate for a UNIT (`doc/decisions/0023`); the
+;; not shake. A table remains a candidate for a UNIT (`DECISIONS.md#construe-integration-bar`); the
 ;; printer is no longer the thing standing in the way.
 ;; RAISED 2026-09-08, from 312 000, for NUMBER FORMATTING becoming generated.
 ;;
@@ -419,7 +419,7 @@
 ;; whose thunk failed cached nil forever where native left it unforced and
 ;; retryable. Native's own `deref` held the delay in a HOST LOCAL across the
 ;; thunk call and then wrote through it -- and running a thunk can collect, so
-;; the box it wrote to may have moved (`doc/decisions/0031`). And both ports
+;; the box it wrote to may have moved (`DECISIONS.md#a-vec-of-values-is-not-a-root`). And both ports
 ;; implemented atoms inline in `Builtins` as lambdas, which is why neither bug
 ;; was visible next to the other two runtimes.
 ;;
@@ -448,7 +448,7 @@
 ;;
 ;; It is also 6.7% of a module, paid by every program in the world that never
 ;; uses a table, and that is the strongest argument yet for the UNIT this file
-;; has been recommending since tables landed (`doc/decisions/0023`). The shape
+;; has been recommending since tables landed (`DECISIONS.md#construe-integration-bar`). The shape
 ;; is clear: a module that does not link the table unit refuses a `K_TABLE` on
 ;; the wire with a message naming what it cannot decode, which is honest to the
 ;; sender and free to everyone else. Recorded with the number attached rather
@@ -460,17 +460,17 @@
 ;; number because it is one decision -- three bounds this runtime claimed and
 ;; did not have:
 ;;
-;; * THE TRANSIENT TABLE (`0026` step 7). Appending 20 000 rows through the
+;; * THE TRANSIENT TABLE (`tables` step 7). Appending 20 000 rows through the
 ;;   persistent path allocated 49 061 464 bytes and collected 23 times, against
 ;;   3 082 984 and once through the transient.
 ;;
-;; * GAS THAT BOUNDS RATHER THAN BILLS (`0009`). `charge_tick`/`charge_checked`
+;; * GAS THAT BOUNDS RATHER THAN BILLS (`resource-limits`). `charge_tick`/`charge_checked`
 ;;   at every loop a guest can make big, plus a charge on allocation itself.
 ;;   Thirteen operations ran past an exhausted budget before this -- `apply` by
-;;   2 698 032 steps, `str-bytes` by 11 937 109 -- and `0009` had said natives
+;;   2 698 032 steps, `str-bytes` by 11 937 109 -- and `resource-limits` had said natives
 ;;   must charge since it was written.
 ;;
-;; * ROPES THAT SHARE (`0011`). `subs` copied every byte on both paths and
+;; * ROPES THAT SHARE (`strings-and-matching`). `subs` copied every byte on both paths and
 ;;   flattened on one; equality copied BOTH sides in full before comparing a
 ;;   byte; hashing flattened to get a cache. `SLICE_MIN` -- the constant naming
 ;;   the sharing policy -- had one reference in the tree, and it was
@@ -490,7 +490,7 @@
 ;; What the split buys is that the two now move independently: development
 ;; machinery growing cannot spend the production budget.
 
-;; And what checks cost, as a number rather than as a claim. `0032` says a
+;; And what checks cost, as a number rather than as a claim. `checks` says a
 ;; check costs nothing in the build that ships; this is the assertion of it,
 ;; and it caught a real violation the first time it ran -- the fifteen core
 ;; predicates carried their ``flint.check/explain`` UNCONDITIONALLY, which was
@@ -516,7 +516,7 @@
        (run! (build! "chan"))
        "{:got [0 1 2 3 4], :worker :sent, :state :done}")
 
-;; DELEGATION (`doc/decisions/0025`), which `0006` refused: an endpoint sent
+;; DELEGATION (`DECISIONS.md#structured-ports`), which `host-abi` refused: an endpoint sent
 ;; through a channel and then USED by whoever received it.
 ;;
 ;; Between green threads no encoding is involved -- both ends are in one heap,
@@ -597,14 +597,14 @@
 (def crossing (run! (build! "crossing") "test/delegate.mjs"))
 
 ;; A FUNCTION never crosses, on any port: a closure's meaning is its
-;; environment, and that does not travel. This is the part `0025` did not
+;; environment, and that does not travel. This is the part `structured-ports` did not
 ;; change, and it is checked by NAME so the message stays useful.
 (check-that "a function is refused at the send, by name"
             (str/includes? crossing "helper is a function"))
 (check-that "  ... and nested inside a value too"
             (= 2 (count (re-seq #"helper is a function" crossing))))
 
-;; DELEGATION (`0025` reversing `0006`): an endpoint is something a program can
+;; DELEGATION (`structured-ports` reversing `host-abi`): an endpoint is something a program can
 ;; hand on. Which endpoint may go where is not symmetric, and the asymmetry is
 ;; the point rather than an omission -- see the table in `check_sendable_at`.
 (check-that "a channel carries a channel endpoint"
@@ -620,7 +620,7 @@
 (check-that "a channel endpoint cannot leave the sandbox"
             (str/includes? crossing "a channel endpoint cannot be sent to the host"))
 
-;; An opaque value is identity (`0022`). It crosses for the same reason a port
+;; An opaque value is identity (`opaque-values`). It crosses for the same reason a port
 ;; does: the guest hands over a VALUE and the runtime encodes it, so holding it
 ;; is the proof, and no decoder for the wire format is reachable from guest
 ;; code.

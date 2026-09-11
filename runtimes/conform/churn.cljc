@@ -1,5 +1,5 @@
 (ns churn
-  "The same answers, UNDER COLLECTION (`doc/decisions/0031`).
+  "The same answers, UNDER COLLECTION (`DECISIONS.md#a-vec-of-values-is-not-a-root`).
 
   Every other conformance program is small enough to run inside one nursery.
   That is a hole: a rooting bug -- a value held in a HOST local across an

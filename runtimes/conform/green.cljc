@@ -7,7 +7,7 @@
 
   Every answer here has to be the same on all three runtimes, and one of them
   is about ORDER rather than values: the scheduler is deterministic
-  (`doc/decisions/0005`), so `:order` is a fact and not a race. If two ports
+  (`DECISIONS.md#threads-and-ports`), so `:order` is a fact and not a race. If two ports
   ever disagree on it, they disagree about scheduling and the answers to
   everything else are luck."
   (:require [flint.thread :as t] [flint.port :as p]))
@@ -31,7 +31,7 @@
   was only in the docstring.
 
   The rebinding case needs the child to still be running when the spawner
-  rebinds, so it yields first: the scheduler is deterministic (`0005`), so
+  rebinds, so it yields first: the scheduler is deterministic (`threads-and-ports`), so
   `yield` puts it back in the queue and the spawner reaches the rebinding
   before the child reads. Reading `:first` there is the snapshot; reading
   `:second` would mean it had a reference to a binding stack that moved."
@@ -92,8 +92,8 @@
 (defn- delegated
   "An ENDPOINT sent through a channel, and then used by whoever received it.
 
-  `doc/decisions/0006` refused this outright -- \"an endpoint cannot be
-  delegated at run time\" -- and `0025` reverses it, which is what makes a
+  `DECISIONS.md#host-abi` refused this outright -- \"an endpoint cannot be
+  delegated at run time\" -- and `structured-ports` reverses it, which is what makes a
   capability something a program can hand on rather than only hold. Between two
   green threads there is no encoding involved at all: both ends live in one
   heap, so the port that arrives IS the port that was sent.

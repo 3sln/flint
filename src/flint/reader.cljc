@@ -492,11 +492,11 @@
   "Reader tags every project can read without asking.
 
   Empty for now, and named rather than left implicit because the list is the
-  thing `doc/decisions/0035` is about: a tag is a NAME BOUND IN A SCOPE, the
+  thing `DECISIONS.md#reader-tags` is about: a tag is a NAME BOUND IN A SCOPE, the
   built-ins are the ones bound in every scope, and they are the ones a value may
   PRINT as -- a project-local rename is an addition, never a replacement, so
   that a printed form reads back everywhere rather than only where it was made. `#flint/table` joins it when a
-  table can be a constant (`0026` step 9); `#\"...\"`, `#{}`, `#()`, `#_` and
+  table can be a constant (`tables` step 9); `#\"...\"`, `#{}`, `#()`, `#_` and
   `#?` are reader SYNTAX rather than tags and are handled above."
   {'flint/table 'flint.table/read-table})
 
@@ -511,7 +511,7 @@
          " :flint/tag-readers in deps.edn, mapping the tag NAME to the VAR that"
          " reads it -- {" tag " my.ns/read-it}. Using another project's tag is"
          " opt-in, which is why yours are not in scope here by default"
-         " (doc/decisions/0035). To make a tagged literal as a VALUE instead,"
+         " (DECISIONS.md#reader-tags). To make a tagged literal as a VALUE instead,"
          " call (tagged-literal '" tag " form); to read one from data, use"
          " clojure.edn/read-string with :readers or :default.")))
 
@@ -558,13 +558,13 @@
             ;; a macro expands at compile time and can fold to a constant, a
             ;; function is an ordinary call. That is why there is no
             ;; bootstrapping problem here and why a tag reader need not be a
-            ;; macro (`doc/decisions/0035`).
+            ;; macro (`DECISIONS.md#reader-tags`).
             ;;
             ;; It carries what it WAS. A rewrite that forgets its origin reports
             ;; errors against code nobody wrote, which is the `#?` bug one layer
             ;; down: reader conditionals used to relabel their result with the
             ;; position of the `#?`, and every failure inside one pointed at the
-            ;; conditional. `:flint/read-form` is a `0034` tagged literal
+            ;; conditional. `:flint/read-form` is a `tagged-literals` tagged literal
             ;; holding the tag AS WRITTEN, so `pr-str` gives back what was
             ;; typed; `:flint/read-var` is what it resolved to, because "no
             ;; reader for #x" and "lib.a/read-x threw" name different things.
@@ -716,7 +716,7 @@
   same shape as the two EDN readers that both had to learn `#:ns{...}`.
 
   `:flint/check` is ON by default and removed by `:optimize [perf]`
-  (`doc/decisions/0032`). A check that has to be asked for is a check nobody
+  (`DECISIONS.md#checks`). A check that has to be asked for is a check nobody
   turns on, and one that survives into production is a tax on every call --
   so the default is the developer's build and the release build is the
   exception. Everything inside `#?(:flint/check ...)` then does not merely
@@ -735,7 +735,7 @@
      ;; PER PROJECT, merged over the built-ins. A dependency is read with its
      ;; own `:tags` and not with this project's, which is the whole point:
      ;; using a library's tag has to be something a project opts into
-     ;; (`doc/decisions/0035`).
+     ;; (`DECISIONS.md#reader-tags`).
      (vswap! st assoc :tags (merge builtin-tags (:tags opts)))
      st)))
 

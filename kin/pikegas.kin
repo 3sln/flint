@@ -3,7 +3,7 @@
 ;; This was Rust's alone. `pike.rs` charged at three sites -- a compile, and
 ;; the subject of a run and of a find-all -- and NEITHER PORT CHARGED ANYTHING,
 ;; so a program the native runtime refused on gas ran to completion on the JVM
-;; and the CLR. `0009` says the counter is deterministic and proportional; two
+;; and the CLR. `resource-limits` says the counter is deterministic and proportional; two
 ;; runtimes out of three were neither.
 ;;
 ;; It is here, rather than fixed in each port, because what diverged is the
@@ -24,10 +24,10 @@
 
 (doc "What COMPILING a regex program costs: one unit per program word."
      ""
-     "CHARGED ON EVERY COMPILE, hit or miss. `0012`: if a compile charged only"
+     "CHARGED ON EVERY COMPILE, hit or miss. `matching-over-ropes`: if a compile charged only"
      "on a miss, whether it happened would depend on whether a collection had"
      "run, and the same program would report two different instruction counts"
-     "-- exactly the flakiness `0009`'s counter exists to replace."
+     "-- exactly the flakiness `resource-limits`'s counter exists to replace."
      ""
      "Answers what it charged, so a test can say so.")
 (defn ^:pub ^:method ^I32 charge-compile [^:mut ^Rt rt ^I32 n]

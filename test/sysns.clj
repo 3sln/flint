@@ -1,4 +1,4 @@
-;; `flint.sys.*`: virtual namespaces served by the binary (`doc/decisions/0037`).
+;; `flint.sys.*`: virtual namespaces served by the binary (`DECISIONS.md#system-namespaces-and-deps`).
 ;;
 ;; Run against `target/release/flint` -- the binary that SHIPS -- for the reason
 ;; the SDK selftest gives: a test against something else passes with the shipped
@@ -103,10 +103,10 @@
              (str/includes? (slurp (str p3 "/deps.edn")) ":npm/version \"1.2.0\"")
              (slurp (str p3 "/deps.edn"))))))
 
-;; --- pods (`doc/decisions/0037` step 9) ------------------------------------
+;; --- pods (`DECISIONS.md#system-namespaces-and-deps` step 9) ------------------------------------
 ;;
 ;; A pod is one implementation of the SAME interface `flint.sys.fs` implements,
-;; which is the whole reason `0036` made the var list optional and sourced from
+;; which is the whole reason `workspace-capabilities` made the var list optional and sourced from
 ;; `:list`. `test/fixtures/demopod` is a real babashka pod: bencode over stdio,
 ;; JSON payloads, `describe` and `invoke`.
 (let [p4 (str (fs/create-temp-dir))]
@@ -128,7 +128,7 @@
     (check "and its var list makes an unknown var a COMPILE error"
            (str/includes? (:out r) "does not hold subtract") (:out r))))
 
-;; --- git tags that disagree (`doc/decisions/0037`) ---------------------------
+;; --- git tags that disagree (`DECISIONS.md#system-namespaces-and-deps`) ---------------------------
 ;;
 ;; `:git/version` was built and then REMOVED: a semver range re-resolves on
 ;; every build, and it answered the wrong question anyway. The question is two
@@ -214,7 +214,7 @@
 ;;
 ;; The comment above that loop already said this happens for a YIELD, and
 ;; disarms preemption so none can occur. A park is the other thing and was
-;; still discarded. `0027` says a sandbox that cannot ask is TOLD so rather
+;; still discarded. `ports-are-the-hosts` says a sandbox that cannot ask is TOLD so rather
 ;; than parked; this is that sentence one phase earlier.
 ;;
 ;; IN-SANDBOX PARKING AT LOAD TIME IS UNAFFECTED, which is the line between the

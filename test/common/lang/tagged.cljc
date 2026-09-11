@@ -1,7 +1,7 @@
 (ns lang.tagged
   "Tagged literals, which are a VALUE rather than a two-key map.
 
-  `doc/decisions/0034`. The map representation was ambiguous with an ordinary
+  `DECISIONS.md#tagged-literals`. The map representation was ambiguous with an ordinary
   map in every format that has tags -- a codec meeting one could not tell a
   tagged literal from a map that happened to have those keys -- and it lost the
   namespace wherever the key had to become a string. Both of those are

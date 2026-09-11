@@ -44,7 +44,7 @@ public static class Collgen {
                 return VecCount(rt, v);
             }
             // A MAP ENTRY COUNTS 2, and so does a tagged literal, which
-            // reads like a two-key map (`0034`). The ports threw for a map
+            // reads like a two-key map (`tagged-literals`). The ports threw for a map
             // entry -- a value `(seq some-map)` hands out -- so ordinary
             // guest code could not count one.
             if ((t == Obj.TyMapentry) || (t == Obj.TyTagged)) {

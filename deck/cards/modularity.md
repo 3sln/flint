@@ -9,7 +9,7 @@ This is harder than it sounds, because the program is *interpreted*: every
 builtin is reached through a dispatch table, so no linker can prove one dead —
 they are all live by construction. Two obvious routes (rebuild the runtime per
 compile with cargo features; null the table entries and run wasm DCE) were
-rejected in `doc/decisions/0003` in
+rejected in `DECISIONS.md#namespace-units` in
 favour of a third:
 
 **A namespace is a compilation unit.** Each is precompiled — Rust namespaces to
@@ -163,7 +163,7 @@ What it is for:
 - **Keeping a module small on purpose**, with a build failure if a refactor
   quietly reintroduces the dependency.
 
-One honest caveat, because `doc/decisions/0004`
+One honest caveat, because `DECISIONS.md#exclude-and-unit-path`
 asks for "excluding something unreachable makes the module smaller" and that is
 not quite true here. flint already shakes **per var**, so a namespace nothing
 reaches was never in the module and excluding it removes nothing: the flag's

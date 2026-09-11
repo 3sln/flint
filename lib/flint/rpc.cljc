@@ -4,7 +4,7 @@
   A port is a **one-way** message stream, and almost every real capability is
   request/response: a document store, a key-value store, an HTTP client. Without
   this every driver reinvents correlation ids, and reinvents them differently —
-  so it is here once (`doc/decisions/0008`).
+  so it is here once (`DECISIONS.md#document-resource`).
 
       (let [c (rpc/client port)]
         (rpc/call c {:op :get :key \"a\"})        ; parks until the reply arrives

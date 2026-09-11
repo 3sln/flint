@@ -1,4 +1,4 @@
-;; Gas is a BOUND, not a statistic (`doc/decisions/0009`).
+;; Gas is a BOUND, not a statistic (`DECISIONS.md#resource-limits`).
 ;;
 ;; The property: no operation may do unbounded work for bounded gas. A budget a
 ;; single call can escape is worse than no budget, because somebody will trust

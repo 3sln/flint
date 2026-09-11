@@ -68,16 +68,16 @@ Every fallible call takes a `char **err`, sets it only on failure, and returns
 ## Why values are opaque
 
 A flint value is NaN-boxed and its representation is a runtime detail
-(`doc/decisions/0001`). A struct in this header would freeze that detail into
+(`DECISIONS.md#dispatch`). A struct in this header would freeze that detail into
 an ABI that could then never change. It is also what keeps C from fabricating a
 port or a sentinel: you can receive one and hand it back, and there is no
-constructor that makes one out of an integer (`doc/decisions/0025`).
+constructor that makes one out of an integer (`DECISIONS.md#structured-ports`).
 
 ## No wasm engine
 
 The runtime is Rust, so it already compiles natively through LLVM — the
 collector, the interpreter and every builtin are the same code the wasm module
-is built from (`doc/decisions/0010`). This library carries no wasm engine.
+is built from (`DECISIONS.md#other-hosts`). This library carries no wasm engine.
 
 It still *reads* a `.wasm` artifact: a module carries its program as a data
 segment and `FLINT_IMAGE_DESC` says where, so `flint_sandbox_from_wasm` is a

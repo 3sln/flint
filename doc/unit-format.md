@@ -6,7 +6,7 @@ from `:fn` and composes exactly those into a single wasm module.
 Nothing in this format says "built-in". A unit is described by what it *is* —
 artifact, exports, dependencies, compatibility — not by who shipped it. Compiling
 a user namespace ahead of time produces the same shape; that is deliberate
-(`doc/decisions/0003-namespace-units.md`).
+(`DECISIONS.md#namespace-units`).
 
 ## Where a unit lives
 

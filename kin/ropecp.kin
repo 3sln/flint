@@ -1,6 +1,6 @@
 ;; Code-point indexing over a string tree, WITHOUT flattening it.
 ;;
-;; `doc/decisions/0011` designed the per-node code-point counts for exactly
+;; `DECISIONS.md#strings-and-matching` designed the per-node code-point counts for exactly
 ;; this and nothing ever used them: every indexing path called `string_arg`
 ;; first, which flattens, so the counts were computed, stored, traced by the
 ;; collector, and then thrown away before the one question they answer.

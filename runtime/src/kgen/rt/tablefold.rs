@@ -25,7 +25,7 @@ impl Rt {
     /// gone, and the fold answers NIL rather than running on.
     /// 
     /// AND ASKED AFTER EVERY CALL WHETHER SOMETHING WAS THROWN. A flint throw
-    /// does not unwind the host stack -- it sets a field (`0026`) -- so a native
+    /// does not unwind the host stack -- it sets a field (`tables`) -- so a native
     /// caller that invokes guest code and then keeps going would be running
     /// inside an exception that has already happened.
     pub fn table_reduce_column(&mut self, t: Value, name: Value, f: Value, init: Value) -> Value {

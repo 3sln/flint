@@ -1,6 +1,6 @@
 ;; Byte strings: which tier a value is, and how long it is.
 ;;
-;; Three heap shapes, the same argument `doc/decisions/0011` makes for string
+;; Three heap shapes, the same argument `DECISIONS.md#strings-and-matching` makes for string
 ;; ropes applied to bytes:
 ;;
 ;;     TY_BYTES    a flat leaf -- the bytes, and the object's length IS the count

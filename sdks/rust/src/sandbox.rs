@@ -1,5 +1,5 @@
 //! A sandbox, and the inbox that is the only way into it
-//! (`doc/decisions/0027`, `0028`).
+//! (`DECISIONS.md#ports-are-the-hosts`, `drivers`).
 //!
 //! `Sandbox` is a HANDLE, not an instance. The instance lives wherever its
 //! driver put it, and the handle is an id plus a way to reach it -- which is
@@ -32,7 +32,7 @@ struct Request {
 /// behind a lock. **That lock is the whole of what stands between this and
 /// several threads running one heap in parallel.** Removing it needs a
 /// collector with per-thread allocation buffers and safepoints
-/// (`doc/decisions/0028`); it does not need a different interface, which is
+/// (`DECISIONS.md#drivers`); it does not need a different interface, which is
 /// why the interface is already written for K > 1.
 pub struct Core {
     /// One executor per extra driver thread, each on the SAME heap.
@@ -45,7 +45,7 @@ pub struct Core {
     /// Handed out one-per-thread and never shared, which is the invariant that
     /// makes them safe: an executor is one thread's value stack, frames and
     /// gas, and the heap underneath is what the safepoint and the allocation
-    /// lock coordinate (`doc/decisions/0028`).
+    /// lock coordinate (`DECISIONS.md#drivers`).
     ///
     /// `Mutex<Option<Box<Rt>>>` per slot rather than one lock over all of them,
     /// so two threads claiming different executors never meet.
@@ -304,7 +304,7 @@ impl Sandbox {
     ///
     /// What an argument MEANS is the caller's business: there is no entry map
     /// here and no capability argument. Those are the CLI's convention
-    /// (`doc/decisions/0025`).
+    /// (`DECISIONS.md#structured-ports`).
     pub fn call(&self, name: &str, args: &[Value]) -> Pending<Value> {
         let (tx, rx) = mpsc::channel();
         {
@@ -359,13 +359,13 @@ impl Sandbox {
     /// This used to be `grant(name)`, backed by a table the RUNTIME kept -- and
     /// that made the runtime the arbiter of what a capability was. It is not,
     /// and now it does not know the word. What crosses is an ordinary opaque
-    /// value (`doc/decisions/0022`) carrying an id you chose; guest code cannot
+    /// value (`DECISIONS.md#opaque-values`) carrying an id you chose; guest code cannot
     /// mint that id, so you recognise your own and nothing else. Whether it
     /// means a capability is entirely yours to decide, and a host that requires
     /// none passes nothing.
 
     /// A bound on WORK, in instructions. Deterministic
-    /// (`doc/decisions/0009`), so the same program stops at the same
+    /// (`DECISIONS.md#resource-limits`), so the same program stops at the same
     /// instruction on every machine.
     pub fn set_step_limit(&self, n: u64) {
         self.core.program.lock().unwrap().set_step_limit(n);
@@ -377,7 +377,7 @@ impl Sandbox {
     /// around. Counting every instruction would put an increment and a compare
     /// in the interpreter's inner loop for every program, including the ones
     /// that never ask; instead the unbudgeted loop has no counter at all and
-    /// the optimiser deletes the check (`doc/decisions/0009`). So
+    /// the optimiser deletes the check (`DECISIONS.md#resource-limits`). So
     /// `set_step_limit` is what turns counting on.
     ///
     /// It is exact because the program lock makes it exact. When several

@@ -1,4 +1,4 @@
-;; Capabilities as host-minted opaque values (`doc/decisions/0021`, `0022`).
+;; Capabilities as host-minted opaque values (`DECISIONS.md#cli`, `opaque-values`).
 ;;
 ;; REWRITTEN 2026-08-30, and what it used to assert is worth recording.
 ;;
@@ -100,7 +100,7 @@
 ;; so an `open` inside a `call` never reached a handler and answered nil. It does
 ;; now: a host that names a capability gets a SYSTEM PORT, and a call over the
 ;; system port is a message the pump serves, so the whole open-grant-send round
-;; trip happens inside one `call` (`doc/decisions/0027`).
+;; trip happens inside one `call` (`DECISIONS.md#ports-are-the-hosts`).
 ;;
 ;; Asserted as the round trip rather than as "open returned something", because
 ;; a port that cannot carry a message is not a granted capability.
@@ -119,7 +119,7 @@
 ;; cannot hold an opaque the host minted and hand it back.
 ;;
 ;; The way in exists now and is not wired: `flint.host/request` can answer with
-;; any value, an opaque among them (`doc/decisions/0036` step 7). A guest could
+;; any value, an opaque among them (`DECISIONS.md#workspace-capabilities` step 7). A guest could
 ;; ask for its capability and present what it was given. That is worth doing,
 ;; and it is what the row below would then assert instead of `allow: () => true`.
 ;;

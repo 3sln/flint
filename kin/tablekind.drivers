@@ -104,7 +104,7 @@ fn main() {
     }
     o.push_str(&format!("flat={} ", flat.join(".")));
     // NOTHING FALLS THROUGH: `:other` appears exactly once, for the tag no
-    // kind is claimed for. `0005` says a value a guest can hold needs a kind
+    // kind is claimed for. `threads-and-ports` says a value a guest can hold needs a kind
     // of its own or it cannot be dispatched on at all.
     let others = words.iter().chain(flat.iter()).filter(|w| *w == "other").count();
     o.push_str(&format!("others={} ", others));

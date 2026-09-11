@@ -3,7 +3,7 @@ name: Test
 # Runs the full suite on pull requests only.
 #
 # Deliberately not on every push to main: `bin/test` builds both configurations
-# of the runtime (doc/decisions/0016), compiles the units with rustc, and runs
+# of the runtime (DECISIONS.md#two-builds), compiles the units with rustc, and runs
 # the self-hosting fixpoint — several minutes of work. The gate belongs on the
 # proposal, not on every commit that lands after it has already passed.
 #

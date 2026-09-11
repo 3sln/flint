@@ -87,7 +87,7 @@ import { readFileSync } from 'node:fs';
 import { instantiate } from './../../host/flint.mjs';
 const path = process.argv[2];
 const inst = instantiate(new WebAssembly.Module(readFileSync(path)));
-// Built `:fn <prog>/main`; a call names it (`doc/decisions/0025` step 5).
+// Built `:fn <prog>/main`; a call names it (`DECISIONS.md#structured-ports` step 5).
 const FN = `${/vsclj\/([a-z0-9-]+?)(?:-aot)?\.wasm$/.exec(path)[1]}/main`;
 process.stdout.write(String(inst.run(FN, []).out));
 EOF

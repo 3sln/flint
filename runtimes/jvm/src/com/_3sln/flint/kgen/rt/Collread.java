@@ -69,7 +69,7 @@ public final class Collread {
             return dflt;
         }
         // A TABLE INDEXES BY ROW and hands back a REF, which materialises
-        // nothing (`0026`).
+        // nothing (`tables`).
         if (t == TY_TABLE) {
             if (isInt(rt, k)) {
                 long i = Num.i64Of(rt, k);
@@ -88,7 +88,7 @@ public final class Collread {
         }
         // A TAGGED LITERAL READS LIKE A TWO-KEY MAP, so `(:tag x)` and
         // `(get x :form)` work and nothing treating one as a map has to
-        // learn a different way in (`0034`).
+        // learn a different way in (`tagged-literals`).
         if (t == TY_TAGGED) {
             if (k == Str.keyword(rt, null, "tag")) {
                 return rt.slot(coll, 0);

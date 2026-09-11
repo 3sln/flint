@@ -50,7 +50,7 @@ On an arithmetic loop, `aot` runs in 1.6 ms against 11.2 ms. Shaking takes a
 
 **No linker is involved**, which is what makes this possible at all: the
 runtime module was linked once, when flint was built, and compiling splices an
-image into it (`doc/decisions/0024`).
+image into it (`DECISIONS.md#no-runtime-linking`).
 
 ## What it does not do
 

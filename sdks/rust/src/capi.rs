@@ -1,6 +1,6 @@
 //! flint for C, and through C for C++ and everything else with an FFI.
 //!
-//! The same shape as the JavaScript and Rust SDKs (`doc/decisions/0025`):
+//! The same shape as the JavaScript and Rust SDKs (`DECISIONS.md#structured-ports`):
 //! resolve namespaces, compile to an Image, instantiate a Sandbox, call
 //! functions by name. What C adds is only the bookkeeping C always adds --
 //! every pointer returned here is owned by the caller and has a matching
@@ -10,7 +10,7 @@
 //! ## Values are opaque, and that is deliberate
 //!
 //! A flint value is NaN-boxed and its representation is a runtime detail
-//! (`doc/decisions/0001`). Exposing it as a struct would freeze that detail
+//! (`DECISIONS.md#dispatch`). Exposing it as a struct would freeze that detail
 //! into an ABI. So C builds values through constructors, reads them through
 //! accessors, and never sees a layout -- which is also what lets a value hold
 //! a port or a sentinel that C has no way to fabricate.
@@ -59,7 +59,7 @@ pub unsafe extern "C" fn flint_string_free(s: *mut c_char) {
 
 /// How a namespace becomes source.
 ///
-/// There is no filesystem here (`doc/decisions/0025`): a resolver is asked for
+/// There is no filesystem here (`DECISIONS.md#structured-ports`): a resolver is asked for
 /// a namespace and answers with source or with nothing, which is what lets a
 /// caller compile out of a database, a zip, or memory. Return 0 and leave
 /// `*out` alone for "no such namespace".
@@ -101,7 +101,7 @@ pub struct FlintCompileOpts {
     /// Passed back to `resolve` untouched.
     pub resolve_ctx: *mut c_void,
     /// Additionally callable names, as `namespace/function`. Only reachable
-    /// code ships (`doc/decisions/0002`), so a function nobody calls from the
+    /// code ships (`DECISIONS.md#modularity`), so a function nobody calls from the
     /// entry is exactly the one that has to be named here to survive.
     pub exports: *const *const c_char,
     pub exports_len: usize,
@@ -220,7 +220,7 @@ pub unsafe extern "C" fn flint_image_free(img: *mut Image) {
     }
 }
 
-// --- drivers (`doc/decisions/0028`) ----------------------------------------
+// --- drivers (`DECISIONS.md#drivers`) ----------------------------------------
 
 /// Who advances a sandbox, and when.
 ///
@@ -331,7 +331,7 @@ pub unsafe extern "C" fn flint_sandbox_parallel_dispatches(s: *const Sandbox) ->
 
 /// A sandbox from a `.wasm` artifact somebody else compiled -- no compiler
 /// needed. The module carries its program as a data segment, and this runs it
-/// natively (`doc/decisions/0010`).
+/// natively (`DECISIONS.md#other-hosts`).
 ///
 /// # Safety
 /// `wasm` must be valid for `len` bytes.
@@ -352,7 +352,7 @@ pub unsafe extern "C" fn flint_sandbox_from_wasm(
 
 
 /// Stop a call after `n` instructions. Gas is deterministic
-/// (`doc/decisions/0009`), so the same call stops in the same place on every
+/// (`DECISIONS.md#resource-limits`), so the same call stops in the same place on every
 /// engine and every machine.
 ///
 /// # Safety
@@ -378,7 +378,7 @@ pub unsafe extern "C" fn flint_sandbox_gas(s: *const Sandbox) -> u64 {
 ///
 /// The SDK takes a name and positional arguments and nothing more: an argument
 /// map, capabilities-as-arguments and the rest are a CLI's conventions
-/// (`doc/decisions/0025`), not this layer's.
+/// (`DECISIONS.md#structured-ports`), not this layer's.
 ///
 /// # Safety
 /// `s` must be a sandbox from this library; `args` must be valid for `nargs`
@@ -406,7 +406,7 @@ pub unsafe extern "C" fn flint_call(
     }
     // Blocking, because C has no promise to hand back and inventing one here
     // would be inventing an async runtime for C. A driver-aware C API is a
-    // separate surface (`doc/decisions/0028`); this is the one that works with
+    // separate surface (`DECISIONS.md#drivers`); this is the one that works with
     // the inline driver, which is what a C caller gets by default.
     match s.call_blocking(name, &vs) {
         Ok(v) => Box::into_raw(Box::new(v)),
@@ -443,13 +443,13 @@ pub enum FlintTag {
     Set = 10,
     Map = 11,
     /// A live thing, by identity. C can receive one and hand it back; nothing
-    /// here can MAKE one, which is the sandbox rule (`doc/decisions/0025`).
+    /// here can MAKE one, which is the sandbox rule (`DECISIONS.md#structured-ports`).
     Port = 12,
     Sentinel = 13,
-    /// A tagged literal (`doc/decisions/0034`). C reads its tag with
+    /// A tagged literal (`DECISIONS.md#tagged-literals`). C reads its tag with
     /// `flint_value_tag_symbol` and its form with `flint_value_form`.
     Tagged = 14,
-    /// A table (`doc/decisions/0026`), COLUMNAR here as on the wire: C asks for
+    /// A table (`DECISIONS.md#tables`), COLUMNAR here as on the wire: C asks for
     /// the schema and then for a column at a time. Handing it rows would mean
     /// building a map per row on the way out, which is exactly what the type
     /// exists to avoid.

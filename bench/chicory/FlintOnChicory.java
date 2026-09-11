@@ -1,6 +1,6 @@
 // flint on Chicory: a wasm interpreter written in Java, so this is flint's
-// interpreter running inside one. `doc/decisions/0018` says this row decides
-// whether `0010`'s tier 1 -- an SDK over the wasm module -- is viable on the
+// interpreter running inside one. `DECISIONS.md#cross-runtime-benchmarks` says this row decides
+// whether `other-hosts`'s tier 1 -- an SDK over the wasm module -- is viable on the
 // JVM, or whether porting the VM is the route rather than a later luxury.
 import com.dylibso.chicory.runtime.Instance;
 import com.dylibso.chicory.wasm.Parser;

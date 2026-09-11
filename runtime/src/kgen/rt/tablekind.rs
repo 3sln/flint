@@ -21,7 +21,7 @@ use crate::kgen::rt::hamt::*;
 impl Rt {
     /// The kind of a value, as the keyword protocol dispatch uses.
     /// 
-    /// A CLOSED SET. `0005` says a value a guest can hold needs a kind of its
+    /// A CLOSED SET. `threads-and-ports` says a value a guest can hold needs a kind of its
     /// own or it cannot be dispatched on at all -- so `:other` is not a kind,
     /// it is the ABSENCE of one, and four types answered it until the printer
     /// moved onto a protocol and the hole showed. An `extend-protocol :other`

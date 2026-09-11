@@ -71,7 +71,7 @@ public static class Collread {
             return dflt;
         }
         // A TABLE INDEXES BY ROW and hands back a REF, which materialises
-        // nothing (`0026`).
+        // nothing (`tables`).
         if (t == Obj.TyTable) {
             if (IsInt(rt, k)) {
                 long i = Num.I64Of(rt, k);
@@ -90,7 +90,7 @@ public static class Collread {
         }
         // A TAGGED LITERAL READS LIKE A TWO-KEY MAP, so `(:tag x)` and
         // `(get x :form)` work and nothing treating one as a map has to
-        // learn a different way in (`0034`).
+        // learn a different way in (`tagged-literals`).
         if (t == Obj.TyTagged) {
             if (k == Str.Keyword(rt, null, "tag")) {
                 return rt.Slot(coll, 0);

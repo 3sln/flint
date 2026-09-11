@@ -24,7 +24,7 @@ under Limits.
 An **extern ref** is a flint value that names a host object — a
 `java.io.File`, a `System.Net.Sockets.Socket`, a `Class`, a `MethodHandle`. It
 is the one thing on that list that stops being true, and it stops being true in
-the way `0022` made `(Object.)` stop being true: **as a value, never as
+the way `opaque-values` made `(Object.)` stop being true: **as a value, never as
 syntax.** There is still no `.` and no `new`. There is a namespace of ordinary
 functions:
 
@@ -60,9 +60,9 @@ pointers and a shadow stack (`Gc.java:7-14`, `Roots.java:5-28`). The CLR is the
 same over `NativeMemory.AllocZeroed` and a raw `byte*` (`Space.cs:20-36`,
 `Gc.cs:7-15`).
 
-> **A stale claim to fix while doing this.** `0010`'s tier-2 paragraph says a
+> **A stale claim to fix while doing this.** `other-hosts`'s tier-2 paragraph says a
 > port leans on "its garbage collector (the generational collector here was
-> among the hardest parts and simply disappears)", `0029` and `0030` say the
+> among the hardest parts and simply disappears)", `jvm-runtime` and `clr-runtime` say the
 > same, and both runtime READMEs say "The collector is gone." None of that has
 > been true since 2026-08-29. Both ports have their own moving collector over
 > their own linear memory. A design that assumed otherwise — and the first
@@ -101,7 +101,7 @@ alive; only one thread can *touch* it.
 one. **The flint collector never sees it, never traces it and never moves it**,
 which is the whole answer to "how does a moving collector cope with references
 it must not move": it does not cope with them, because it never meets one.
-`0022` needed a stored identity hash because an opaque value *is* a heap object
+`opaque-values` needed a stored identity hash because an opaque value *is* a heap object
 that moves; an extern's host reference is not in the heap at all.
 
 `flint[i]` is weak, and the collector already knows how to do this: `refresh`
@@ -191,7 +191,7 @@ are dense small integers, so they must go through `hash-long` rather than be
 used raw.
 
 **Both are stable across collection**, because an index is not an address. Same
-conclusion as `0022`, by a different route, and worth stating in `0022`'s own
+conclusion as `opaque-values`, by a different route, and worth stating in `opaque-values`'s own
 terms: *the hash must be stored, not derived from the address* — here the index
 **is** the stored identity, doing double duty as the table key.
 
@@ -264,7 +264,7 @@ the lock, re-probe inside it, adopt the winner:
       (comment "Phase 3: publish. RE-PROBE, because taking the lock can park,"
                "and parking permits a peer's collection to MOVE the object --"
                "so `v` is read back from the shadow stack and never from a"
-               "host local (`0031`, and `strs.rs:180-190` for the same"
+               "host local (`a-vec-of-values-is-not-a-root`, and `strs.rs:180-190` for the same"
                "sentence about the same hazard).")
       (lock-extern rt)
       (let [^I32 again (host-index-of rt h)]
@@ -287,14 +287,14 @@ the lock, re-probe inside it, adopt the winner:
 **How much contention does this actually remove today?** Honestly: none,
 because there is none. Green threads are cooperatively scheduled inside one
 interpreter loop (`conc.rs:21-27`), and the multi-executor build is the only
-thing that makes two host threads touch one sandbox — `0028` still lists the
+thing that makes two host threads touch one sandbox — `drivers` still lists the
 intern tables among what is "not yet safe" under real parallelism. So the block
 is not solving a measured problem; it is written this way so that the problem,
-when it arrives, is already solved in the idiom `0019` chose for gas: *"each
+when it arrives, is already solved in the idiom `thread-pool` chose for gas: *"each
 thread draws a block from the global budget and spends it locally, drawing
 again when it runs out. Contention drops by the block size, and the local spend
 stays a plain non-atomic decrement."* Same sentence, different counter. It
-would be a mistake to claim a contention number for it before `0028` closes.
+would be a mistake to claim a contention number for it before `drivers` closes.
 
 `EXTERN_BLOCK` starts at 32 and is a knob. Waste is at most `EXTERN_BLOCK - 1`
 indices per executor, and the sweep returns block tails that were never filled.
@@ -479,7 +479,7 @@ there being a pool to need it.
 
 ### Determinism, which this spends
 
-`0005` is unambiguous: *"A pure logic executor whose answer depends on
+`threads-and-ports` is unambiguous: *"A pure logic executor whose answer depends on
 scheduling order is no longer worth its name. The scheduler must be
 deterministic... Reproducibility is a large part of what makes this project
 valuable; do not spend it here."*
@@ -495,7 +495,7 @@ What survives, exactly:
 * **A single-executor sandbox is fully deterministic**, pinned externs or not,
   because there is one queue and a pinned park either can run or can never run.
 * **A multi-executor sandbox using only global externs (`owner = 0`) is exactly
-  as deterministic as it is today**, which is to say: `0028` already had this
+  as deterministic as it is today**, which is to say: `drivers` already had this
   question and this design does not make it worse.
 * **A multi-executor sandbox with pinned externs is not deterministic**, and
   the README's determinism claim needs a clause rather than a footnote.
@@ -506,7 +506,7 @@ loud that it is being paid rather than discovered later.
 **DECIDED: determinism is a property of a CONFIGURATION, and externs are
 opt-in.** The deterministic sandbox stays exactly as it is and remains the
 default; externs with a thread pool are an additive extension that spends
-determinism knowingly. `0005` is not weakened -- it is scoped, and the scope is
+determinism knowingly. `threads-and-ports` is not weakened -- it is scoped, and the scope is
 the configuration that promises it.
 
 WHICH MAKES IT AN ENFORCEMENT QUESTION RATHER THAN A DOCUMENTATION ONE. The SDK
@@ -668,7 +668,7 @@ failure modes and this design takes neither.
 ### What the throw says
 
 Following the house convention that an error names what a reader can act on
-(`0026`'s rejections, `0032`'s quality bar):
+(`tables`'s rejections, `checks`'s quality bar):
 
 ```text
 extern 4711 (java.sql.Connection) is orphaned: the host thread that owned it
@@ -727,7 +727,7 @@ and the metadata read is on the same code path immediately before it.
 
 **A program with no interop pays nothing at all**, not "nearly nothing": the
 check lives in builtins reachable only from `flint.interop`, which is a
-namespace unit shaken per var (`README.md:426`, `0003`, `0024`). A program that
+namespace unit shaken per var (`README.md:426`, `namespace-units`, `no-runtime-linking`). A program that
 never requires it never had it.
 
 ---
@@ -867,7 +867,7 @@ whichever executor triggered the collection, and that executor may not touch
 another owner's `host[i]`. So a swept slot whose owner is not the collecting
 executor is pushed onto that **owner's release queue**, drained by the owner at
 its next safepoint. The queue is a plain per-executor `Vec<u32>` of indices —
-not flint values, so `0031` does not apply to it — and draining it is a loop of
+not flint values, so `a-vec-of-values-is-not-a-root` does not apply to it — and draining it is a loop of
 array stores. For `owner = 0` slots there is no queue and the sweep clears them
 directly, which is every slot on the JVM and CLR.
 
@@ -906,7 +906,7 @@ Extern refs take the same rule and the same words. Three things follow:
 
 **Flint has no pinning of its own**: no pin bit, no handle table, no address
 stability for anything young. The three existing substitutes are "be old", the
-stored-id trick (`0022`), and `Gc::epoch`. This design uses the second, and the
+stored-id trick (`opaque-values`), and `Gc::epoch`. This design uses the second, and the
 word "pinned" in this document always means *pinned to a host thread*, never
 *pinned in memory*. That collision of terms is unfortunate and worth a sentence
 in the README.
@@ -946,12 +946,12 @@ That asymmetry is the argument.
 * `hash` — `hash-long(index)`. Stable for the life of the extern, agrees with
   `=` by construction, unaffected by owner or by orphaning, and needs no host
   identity hash (which JS does not have).
-* `kind` — `:extern`, one new arm in `kin/tablekind.kin`. `0005`'s rule
+* `kind` — `:extern`, one new arm in `kin/tablekind.kin`. `threads-and-ports`'s rule
   requires it: *"anything a guest can hold gets a kind of its own"*, because a
   type answering `:other` cannot be dispatched on and would be caught by every
   future `extend-protocol :other`.
 * Printing — `#<extern java.io.File>`, or `#<extern java.io.File ORPHANED>`,
-  from the cached type name. **No read syntax**, for `0022`'s reason exactly: a
+  from the cached type name. **No read syntax**, for `opaque-values`'s reason exactly: a
   value whose printed form can be read back is forgeable by construction.
 
 ### Passing through ports
@@ -963,8 +963,8 @@ exactly this shape for ports themselves. Externs add one row:
 | sent | through | | why |
 |---|---|---|---|
 | extern | channel | **yes** | both ends are in this heap, so the index means the same thing at both. Free — a channel send is a pointer move. Pinning is irrelevant: the receiver may hold and compare it; only an interop call parks. |
-| extern | host port, `:format :flint` | **yes** | the runtime is the encoder (`0025`), and the far end is the host that owns the table. `K_EXTERN = 19` carries index **and owner and state**, because the host needs to know which of its threads may touch it and whether it is orphaned. |
-| extern | any codec reachable from the guest | **no** | the receiver could write the same bytes, and then a host object is mintable from an integer. `0025`'s rule for ports and `0022`'s for opaque values, unchanged. |
+| extern | host port, `:format :flint` | **yes** | the runtime is the encoder (`structured-ports`), and the far end is the host that owns the table. `K_EXTERN = 19` carries index **and owner and state**, because the host needs to know which of its threads may touch it and whether it is orphaned. |
+| extern | any codec reachable from the guest | **no** | the receiver could write the same bytes, and then a host object is mintable from an integer. `structured-ports`'s rule for ports and `opaque-values`'s for opaque values, unchanged. |
 | extern | a bridge to **another sandbox** | **no** | a different heap has a different table; the index would name one of our objects from outside. Identical to the channel-endpoint refusal, with the same error shape. |
 
 **"Ports may cross real host threads" — and the index survives that.** An
@@ -983,10 +983,10 @@ it global. That belongs in the README's Limits beside the others.
 
 ### Snapshots
 
-`0015` exports and imports VM state, and an extern cannot survive it: the host
+`snapshots` exports and imports VM state, and an extern cannot survive it: the host
 object is not in the heap being copied, and neither is the thread that owned it.
 
-The answer is `0022`'s amended answer, which was arrived at painfully and should
+The answer is `opaque-values`'s amended answer, which was arrived at painfully and should
 not be re-derived: **preserve the index, do not erase it.** An imported extern
 is **dangling**, and:
 
@@ -997,7 +997,7 @@ is **dangling**, and:
   can say *"extern 4711 (was `java.io.File`) did not survive the snapshot"*
   instead of naming a number.
 
-Erasure was tried for opaque values and `0022` records why it was wrong:
+Erasure was tried for opaque values and `opaque-values` records why it was wrong:
 *"Erasure also made shelving useless... a sandbox holding a file handle comes
 back holding a handle to nothing, and there is no identity left to rehydrate
 against."* The same argument, more literally.
@@ -1059,18 +1059,18 @@ This is the classic escape and it is not hypothetical.
 Two gates, both required, neither sufficient:
 
 * **A workspace guard on the namespace**, `^{:flint/capabilities-guard
-  [:interop]}`, in the shape `flint.host/request` already uses (`0036` step 8).
+  [:interop]}`, in the shape `flint.host/request` already uses (`workspace-capabilities` step 8).
   Checked where the reference is written; emits nothing. It answers "may this
   workspace do interop at all", which is coarse and worth having.
 * **A host policy hook on every member resolution.** `type`, `getter`, `setter`
   and `dispatcher` all ask the host, by type name and member name, and the host
-  answers. The host decides; the runtime takes no view. This is `0022`'s central
+  answers. The host decides; the runtime takes no view. This is `opaque-values`'s central
   claim one level down: *"a capability check is the host recognising this
   specific object in its own grant table — never a type test"*, and here a type
   test would be worse than useless, because the dangerous types are ordinary
   ones.
 
-**The trap `0022` names is the trap here too, and sharper.** With opaque values
+**The trap `opaque-values` names is the trap here too, and sharper.** With opaque values
 the hazard was that "is it opaque" stops being an authority check once guests
 can mint them. With externs the hazard is that a *legitimately granted* extern
 is a path to types nobody granted. A host that allows `type` on anything has
@@ -1163,7 +1163,7 @@ job.
 ### wasm and native Rust, deliberately omitted, and what would change
 
 **wasm.** There is no in-process host object. The table's host half lives on the
-*embedder's* side of the ABI (`0006`), an index is issued by the embedder much
+*embedder's* side of the ABI (`host-abi`), an index is issued by the embedder much
 as an opaque host id already is, and every getter, setter and dispatcher call is
 an ABI round trip. Which means **every interop call parks**, whether or not it
 is pinned — and that collides head-on with the native-frame cliff, because now
@@ -1206,7 +1206,7 @@ foreclosed for the sake of the expensive one.
 
 ## Cost when unused
 
-`0005` §2 states the requirement and this design has to meet it: *"a program
+`threads-and-ports` §2 states the requirement and this design has to meet it: *"a program
 that never mentions `open`, `channel` or thread spawning must produce a module
 with no scheduler, no port machinery and no host callback surface — the same
 size as today, within noise. Assert it with a test and report the number."*
@@ -1246,7 +1246,7 @@ design, not a result.
 * A host object handed in twice is **one** flint value: `identical?`, `=`, and
   the same hash. Tested by asking twice and by round-tripping through a map.
 * An extern used as a **map key is still findable after a collection**,
-  including a major one that moves the `TY_EXTERN` object — `0022`'s test, with
+  including a major one that moves the `TY_EXTERN` object — `opaque-values`'s test, with
   a forced collection between `assoc` and `get`.
 * **Dropping the last reference releases the host object**, asserted by the host
   observing its own reference queue, not by flint asserting about itself.
@@ -1272,7 +1272,7 @@ design, not a result.
 * **Every codec reachable from a guest refuses an extern**, with the same error
   shape a port gets.
 * **A guest cannot mint one.** No builtin turns an integer into an extern;
-  asserted directly, as `0022` asserts it for host ids.
+  asserted directly, as `opaque-values` asserts it for host ids.
 * **The member policy hook is consulted**, with a test where the host refuses
   `getClassLoader` and the refusal is a clean `SecurityException`.
 * **A snapshot round trip leaves a dangling extern that throws by name**, a
@@ -1290,11 +1290,11 @@ design, not a result.
    VM's park rule. Batching looks right and is undesigned, and wasm needs it
    independently.
 2. **Determinism.** Pinned parks in a multi-executor sandbox are not
-   deterministic and cannot be. `0005`'s claim needs a clause; whether that
+   deterministic and cannot be. `threads-and-ports`'s claim needs a clause; whether that
    clause is acceptable is the user's call, not this document's.
 3. **The promptness gap.** Releasing at collection is the house rule for ports,
    extended to file handles and sockets by analogy. Good enough, or does an
-   extern want a stronger default? Refcounting is where `0031`'s whole class of
+   extern want a stronger default? Refcounting is where `a-vec-of-values-is-not-a-root`'s whole class of
    bug lives, so it is not free.
 4. **Whether `export` refuses live externs by default**, and the snapshot ABA
    case above, which is the one place "the slot is authoritative" is not
@@ -1302,16 +1302,16 @@ design, not a result.
 5. **Integers wider than a fixnum**, at the marshalling boundary.
 6. **Whether the extern table is per sandbox or per host runtime.** Per sandbox,
    here, so an extern cannot cross a sandbox-to-sandbox bridge. A process-wide
-   table would let it and would immediately raise the forgery question `0022`
+   table would let it and would immediately raise the forgery question `opaque-values`
    answers for opaque ids — with a worse answer, because the guest would be
    naming a slot another sandbox filled.
 7. **What `(flint.interop/type x)` does for a non-extern.** Throwing is
    defensible; answering the flint kind is defensible; nil is probably wrong.
 8. **The wasm batching shape**, which decides whether the JS port shares the
    wasm interop path or has its own.
-9. **Whether an extern may carry metadata.** `0022` said no for opaque values,
+9. **Whether an extern may carry metadata.** `opaque-values` said no for opaque values,
    deliberately, and said it was additive later. Here the answer may want to be
-   yes, because metadata is how a protocol is extended per value (`0005` §6) —
+   yes, because metadata is how a protocol is extended per value (`threads-and-ports` §6) —
    which is the next part's subject and exactly what the weak map is for.
 10. **Whether minting a pinned extern into a single-executor sandbox should be
     refused at the mint.** It is a guaranteed future deadlock, and refusing
@@ -1341,10 +1341,10 @@ extension actually needs; general ephemerons are a separate, separately costed
 project.
 
 **Third, and this is the objection that matters: an observable weak reference
-breaks determinism.** `0005` again — a `weak-ref` whose `deref` may answer nil
+breaks determinism.** `threads-and-ports` again — a `weak-ref` whose `deref` may answer nil
 makes a program's answer depend on when the collector ran, which is a function
 of allocation history, heap size and host timing. It is exactly the property
-`0005` refuses, arriving through a different door — and note that pinning has
+`threads-and-ports` refuses, arriving through a different door — and note that pinning has
 *already* spent some of that budget, above, which makes spending more of it a
 decision rather than a slide.
 
@@ -1353,7 +1353,7 @@ cache, an interning map, where a miss is recomputed and nothing downstream can
 tell. Weakness may not be *observed*. `flint.gc/weak-map` is defensible with
 get-that-may-miss-and-recompute semantics and a `count` that is deliberately not
 exposed; `flint.gc/weak-ref` with an observable nil is not, unless flint decides
-to spend more of `0005`'s determinism and says so in the README. **This draft
+to spend more of `threads-and-ports`'s determinism and says so in the README. **This draft
 does not spend it, and flags the decision as the user's.**
 
 ### DECIDED: protocol extension is PERMANENT, and is not a weak map at all
@@ -1364,7 +1364,7 @@ section argued itself into a corner and this is the way out.
 
 A protocol extension is not a cache: **a miss is not recomputed, it is a
 different answer.** `(satisfies? P x)` going from true to false because a
-collection ran between two calls is the observation `0005` refuses, arriving
+collection ran between two calls is the observation `threads-and-ports` refuses, arriving
 through the door this document had just finished closing.
 
 **The scenario that decides it.** A type arrives over a port, a guest extends a
@@ -1394,10 +1394,10 @@ map, already deterministic. So `flint.interop/extend` is `clojure.core/extend`,
 with no wrapper, no second dispatch path, and no separate `satisfies?`,
 `extends?` or `protocol-miss` to drift apart from the originals.
 
-**A KIND PER HOST TYPE, WHICH IS `0005`'s RULE AND NOT AN EXCEPTION TO IT.**
+**A KIND PER HOST TYPE, WHICH IS `threads-and-ports`'s RULE AND NOT AN EXCEPTION TO IT.**
 `kind-of` already says why one `:extern` kind would be wrong:
 
-> A CLOSED SET. `0005` says a value a guest can hold needs a kind of its own or
+> A CLOSED SET. `threads-and-ports` says a value a guest can hold needs a kind of its own or
 > it cannot be dispatched on at all -- so `:other` is not a kind, it is the
 > ABSENCE of one, and four types answered it until the printer moved onto a
 > protocol and the hole showed. An `extend-protocol :other` written for one of
@@ -1452,7 +1452,7 @@ needs one.
 On a miss in metadata — the common case — that is: a `meta` builtin call, a map
 `get`, an atom `deref`, a `kind` call, a map `get`, a map `get`, and then an
 invoke of whatever it found. Against a direct builtin, which is one
-`call_indirect` through the table `0003` describes.
+`call_indirect` through the table `namespace-units` describes.
 
 And `kind` is itself a **linear chain of about twenty-five type tests**, with no
 `case`, for a reason recorded in place (`kin/tablekind.kin`: *"hole 3 is still
@@ -1479,7 +1479,7 @@ that owns the type, never by core on its behalf.** `flint.table` extends
 
 ClojureDart has types. A protocol method compiles to Dart dispatch — an
 interface call or an extension resolved statically — and Dart's AOT compiler can
-devirtualise a monomorphic site. flint has no types (`0005` §6: *"no deftype, no
+devirtualise a monomorphic site. flint has no types (`threads-and-ports` §6: *"no deftype, no
 defrecord, no types at all"*), so the only keys available are a **kind keyword**
 and a **metadata map**, and both are hash lookups. And flint is an interpreter,
 so there is no JIT to notice that a call site only ever sees one kind.
@@ -1565,7 +1565,7 @@ who cannot see the other half.
   because both sides are the runtime's own. **The strongest "no" in the
   document** — and note that extern refs are what tempts it, since a host
   `equals` is exactly what a user will ask for, and it would have to park.
-* **`meta` and `with-meta`.** Metadata *is* the dispatch mechanism (`0005` §6).
+* **`meta` and `with-meta`.** Metadata *is* the dispatch mechanism (`threads-and-ports` §6).
   A protocol here is a cycle.
 * **Arithmetic.** `+` on two fixnums must stay an add. There is no cold arm to
   hang anything on, because the failure case is a type error, and a protocol
@@ -1590,7 +1590,7 @@ Three cheap changes, all of which help every protocol and none speculative:
 And one rule to write down with them: **core does not extend a protocol on
 behalf of a namespace the program did not require.** Otherwise the protocol
 drags in exactly what the closed switch would have shaken out, and the module
-gets bigger for a feature nobody used — which is what `0002`, `0003` and `0024`
+gets bigger for a feature nobody used — which is what `modularity`, `namespace-units` and `no-runtime-linking`
 exist to prevent.
 
 ## Open

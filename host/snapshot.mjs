@@ -1,4 +1,4 @@
-// Reading a flint snapshot (doc/decisions/0015).
+// Reading a flint snapshot (DECISIONS.md#snapshots).
 //
 // A binary snapshot nobody can read is a core dump. This is the reader, and it
 // is deliberately the same object model the debugger needs, so it is written

@@ -10,13 +10,13 @@ using static Flint.Rt.Obj;
 /// Generational and copying in the nursery, mark-and-sweep in the old space,
 /// with a write barrier and a remembered set. Identical to the Rust because it
 /// is the same design over the same flat memory -- which is the point of the
-/// port: `doc/decisions/0010` says the bytecode makes a port cheap and does
+/// port: `DECISIONS.md#other-hosts` says the bytecode makes a port cheap and does
 /// nothing to make two ports AGREE, and two collectors written two ways would
 /// have to be argued into agreement rather than being the same thing.
 public sealed class Gc : System.IDisposable {
     /// Objects surviving this many minors are promoted.
     /// TWO, NOT THREE, AND IT IS LOAD-BEARING -- see the JVM's `Gc` for the
-    /// measurement. `doc/decisions/0018` bounds the largest single copy at
+    /// measurement. `DECISIONS.md#cross-runtime-benchmarks` bounds the largest single copy at
     /// 512 KB and `test/pause.clj` asserts it; at three it measures 518.1 KB.
     const int PROMOTE_AGE = 2;
     /// Bigger than this goes straight to the old space: copying it twice costs
@@ -187,7 +187,7 @@ public sealed class Gc : System.IDisposable {
         // switch, so half the port could not be stressed at all.
         //
         // It turns a timing-dependent rooting bug into a deterministic one. It
-        // found a `0031` violation in `RtSnapshot`'s own builder the first time
+        // found a `a-vec-of-values-is-not-a-root` violation in `RtSnapshot`'s own builder the first time
         // it was pointed at the JVM's suites.
         if (Stress) Minor(roots);
         if (bump + size > fromEnd) {

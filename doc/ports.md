@@ -18,10 +18,10 @@ runs on it and emits byte for byte what the wasm compiler emits.
 
 It also carries the two things this file used to say only the boxed port had:
 
-* **Parallel executors** (`doc/decisions/0028`) — K REAL host threads driving one
+* **Parallel executors** (`DECISIONS.md#drivers`) — K REAL host threads driving one
   heap, with the interpreter's checkpoint as the only safepoint. That is the
   host-thread question, asked properly and answered.
-* **Host ports** (`doc/decisions/0006`, `0027`) — `open`, `hostContinue`,
+* **Host ports** (`DECISIONS.md#host-abi`, `ports-are-the-hosts`) — `open`, `hostContinue`,
   `hostDeliver`, `hostClosePort`, `drainEvents`, `reapPorts`, the weak port
   registry and the generation-tagged waiter tokens. Three drivers run one image
   through one script and `bin/conform-hosts` compares the transcripts byte for
@@ -81,7 +81,7 @@ interpreter agrees with itself. `entries=0` is a failure.
     regex     interpreted  4.16 ms   compiled  6.07 ms   0.68x
 
 Regex is SLOWER, and that is not a defect to hide: it is dominated by natives,
-where compiled code removes no dispatch and adds a crossing. `doc/decisions/0013`
+where compiled code removes no dispatch and adds a crossing. `DECISIONS.md#emit-wasm-instead-of-dispatch`
 predicts exactly that.
 
 ### Tuning, left for later
@@ -95,12 +95,12 @@ against the gate as it stands.
   histogram needed to decide is already computed -- `AotPlan` knows every
   instruction's opcode before anything is emitted.
 * **The `need` analysis.** The wasm emitter reloads only what a body actually
-  reads; both ports reload unconditionally after every crossing. `0013` records
+  reads; both ports reload unconditionally after every crossing. `emit-wasm-instead-of-dispatch` records
   measuring that on a four-instruction callee and finding it pure overhead.
 * **Nested compiled calls.** `aot_call_at` runs a compiled callee on the host
   stack to `AOT_MAX_DEPTH`; the ports carry the mechanism but nothing has
   measured what the cap should be here.
-* **Specialisation and unboxed locals**, which `0013` lists as the remaining
+* **Specialisation and unboxed locals**, which `emit-wasm-instead-of-dispatch` lists as the remaining
   wins for wasm and which apply unchanged to a host that has real registers.
 
 ## What the cutover removed

@@ -1,4 +1,4 @@
-// Where would a specialising compiler actually pay? (doc/decisions/0013's
+// Where would a specialising compiler actually pay? (DECISIONS.md#emit-wasm-instead-of-dispatch's
 // "what would make it win", turned into a distribution.)
 //
 // 0013 ends by naming three things the emitter does not do — type

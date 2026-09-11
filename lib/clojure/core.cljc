@@ -2,7 +2,7 @@
   "flint's clojure.core.
 
   Written in cljc on top of the Rust primitives, for the reason in
-  doc/decisions/0002: a cljc function tree-shakes per var, so a program that
+  DECISIONS.md#modularity: a cljc function tree-shakes per var, so a program that
   never calls `partition-by` does not carry it. A var whose whole body is one
   `flint.rt/x` call is detected by the compiler and called directly, so the
   wrapper layer costs nothing at the call site."
@@ -118,7 +118,7 @@
   Every call site is inside `#?(:flint/check ...)`, and that is MEASURED rather
   than tidy: attaching these fifteen explanations unconditionally cost 3 578
   bytes in a module that calls none of them (264 941 against 261 363, a pure
-  `(defn main [_] \"nothing\")`). `doc/decisions/0032` says a check costs
+  `(defn main [_] \"nothing\")`). `DECISIONS.md#checks` says a check costs
   nothing in the build that ships, and metadata that ships is a cost -- so the
   reader removes the map and `m-defn` emits no `with-meta` at all."
   [expected]
@@ -559,7 +559,7 @@
 (defn tagged-literal
   "`#my.ns/thing form`, as a value.
 
-  Its own type rather than a map (`doc/decisions/0034`): a map is ambiguous
+  Its own type rather than a map (`DECISIONS.md#tagged-literals`): a map is ambiguous
   with a map in every format that has tags, and loses the namespace wherever
   the key has to become a string. It still READS like a two-key map on `:tag`
   and `:form`, so nothing treating one as a map needs a different way in."
@@ -961,7 +961,7 @@
   read-modify-write loses updates the moment two threads are inside it at once,
   and loses them silently -- the counter is simply smaller than it should be.
   That was unreachable while one thread ran a sandbox and became reachable the
-  day two could (`doc/decisions/0028`).
+  day two could (`DECISIONS.md#drivers`).
 
   `f` may therefore run more than once, which is the same contract Clojure
   gives and the reason it wants a pure function."
@@ -1500,7 +1500,7 @@
     ;; `printer-for` rather than the generated `print-data`, because a miss here
     ;; is a FALLBACK and not an error: an unprintable value should print as one
     ;; rather than throw out of `str`. Metadata is consulted first, which is
-    ;; `0005`'s primary mechanism -- so one value can carry its own printer
+    ;; `threads-and-ports`'s primary mechanism -- so one value can carry its own printer
     ;; without its kind having one.
     :else (let [f (flint.protocols/printer-for x readable?)]
             (if f (f x) "#<unprintable>"))))
@@ -1669,7 +1669,7 @@
 
 ;; --------------------------------------------------------- opaque values
 ;;
-;; `doc/decisions/0022`. Clojure's unique-sentinel idiom is `(Object.)` --
+;; `DECISIONS.md#opaque-values`. Clojure's unique-sentinel idiom is `(Object.)` --
 ;; how you tell ABSENT from present-and-nil, how a library gets a key nobody
 ;; can collide with, how a protocol keeps a private marker. flint has no host
 ;; classes, so it had no way to say it.

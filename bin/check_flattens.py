@@ -1,6 +1,6 @@
 """Every materialisation of a rope must say why it is one.
 
-`doc/decisions/0011` buys two things with a tree: concatenation that is not
+`DECISIONS.md#strings-and-matching` buys two things with a tree: concatenation that is not
 quadratic, and SHARING. Flattening spends the second to get the first back, and
 it is always the easy move -- the platform's own string functions want
 contiguous bytes, so "flatten first" is what a tired hand writes.
@@ -49,11 +49,11 @@ JUSTIFIED = {
     # same string is searched again". That justification was WRONG, and it is
     # worth saying how rather than just deleting it.
     #
-    # `0011` lists `index-of` under what must WALK the structure -- "none of
+    # `strings-and-matching` lists `index-of` under what must WALK the structure -- "none of
     # them needs contiguous bytes" -- and warns in the next breath that "a
     # rope that flattens on every `index-of` passes every correctness test and
     # is slower than the flat string it replaced". The conclusion that got
-    # borrowed here, "flatten before matching", is from `0011` §3 and is about
+    # borrowed here, "flatten before matching", is from `strings-and-matching` §3 and is about
     # HOST REGEX ENGINES, which genuinely do want a `&str`/`string`. A
     # substring search does not, and the search is `kin/ropefind.kin` now.
     #

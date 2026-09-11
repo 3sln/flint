@@ -29,7 +29,7 @@
 
     ;; SEQ OVER A ROPE, which nothing here reached before.
     ;;
-    ;; A big `str` is a rope (`doc/decisions/0011`), and a rope's body is not
+    ;; A big `str` is a rope (`DECISIONS.md#strings-and-matching`), and a rope's body is not
     ;; string bytes. The native runtime built its string seq on BYTE OFFSETS
     ;; and read a rope as though it were flat, so `(first (seq rope))`
     ;; answered `" "` for `"x"` and a full walk of an 8 000-character rope

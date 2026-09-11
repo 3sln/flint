@@ -1,6 +1,6 @@
 ;; Comparing two strings without materialising either.
 ;;
-;; `0011` lists comparison among the operations that "must walk leaves through
+;; `strings-and-matching` lists comparison among the operations that "must walk leaves through
 ;; the cursor -- none of them needs contiguous bytes", beside `index-of`.
 ;; `index-of` was fixed. This was not: `str-cmp` was a hand-written call on all
 ;; three runtimes, and every one of them FLATTENED BOTH OPERANDS first --

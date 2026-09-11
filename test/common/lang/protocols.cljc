@@ -33,7 +33,7 @@
   (expect = "hello 2 things" (greet [:a :b])))
 
 (defn ^:flint.check/test kind-is-a-closed-set []
-  ;; `kind` is what dispatch runs on (`doc/decisions/0005`), so it has to be a
+  ;; `kind` is what dispatch runs on (`DECISIONS.md#threads-and-ports`), so it has to be a
   ;; SMALL CLOSED SET rather than a type name -- three string tiers and eight
   ;; seq representations all have to answer with one keyword each, or
   ;; `extend-protocol :string` would work for some strings and not others
@@ -60,7 +60,7 @@
   (expect = :list (flint.rt/kind (range 3)))
   (expect = :fn (flint.rt/kind (fn [] nil)))
   (expect = :atom (flint.rt/kind (atom 1)))
-  ;; `:tagged`, not `:map` (`doc/decisions/0034`). A tagged literal READS like
+  ;; `:tagged`, not `:map` (`DECISIONS.md#tagged-literals`). A tagged literal READS like
   ;; a two-key map, and if it answered `:map` here every `extend-protocol :map`
   ;; in every program would silently start catching them.
   (expect = :tagged (flint.rt/kind (tagged-literal 'a/b [1])))

@@ -39,4 +39,4 @@ repeated concatenation, 4000 x 16B         237389       2.00 ms          8.4
 allocation and collection per warm run
   NOT MEASURED: `stat_bytes_allocated` and `stat_collections` are
   diagnostic exports and a production module does not carry them
-  (doc/decisions/0016). Re-run after `./bin/build-units --diagnostics`.
+  (DECISIONS.md#two-builds). Re-run after `./bin/build-units --diagnostics`.

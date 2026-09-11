@@ -1,7 +1,7 @@
 ;; TAGGED forms and OPAQUE values -- the two wrappers a guest can hold but not
 ;; look inside.
 ;;
-;; `0022`: AN OPAQUE VALUE IS ITS IDENTITY. A host hands one out to stand for
+;; `opaque-values`: AN OPAQUE VALUE IS ITS IDENTITY. A host hands one out to stand for
 ;; something the guest has no representation for -- a file, a socket, a handle
 ;; -- and the only thing the guest may do with it is pass it back. So the one
 ;; property that has to hold is that it stays the same value: equal to itself,
@@ -29,7 +29,7 @@
      "rather than a slot count, and adding a slot must not move it."
      ""
      "NOT A SUBSTITUTE FOR A TYPE. The slot exists because metadata is how a"
-     "protocol is extended per VALUE (`0005` §6), not because a tagged form is"
+     "protocol is extended per VALUE (`threads-and-ports` §6), not because a tagged form is"
      "how a user should define one; that question is open and this does not"
      "answer it.")
 (defn ^:pub ^:method ^Value new-tagged [^:mut ^Rt rt ^Value tag ^Value form]

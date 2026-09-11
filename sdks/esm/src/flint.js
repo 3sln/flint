@@ -9,7 +9,7 @@
 //
 // Neither needs babashka, a JVM, a Rust toolchain or a linker: the runtime was
 // linked once, when flint was built, and compiling splices into it
-// (`doc/decisions/0024`).
+// (`DECISIONS.md#no-runtime-linking`).
 //
 // The artifacts are imported with `with { type: 'bytes' }`, which esbuild
 // turns into an inline `Uint8Array` -- so the published package is one file
@@ -159,7 +159,7 @@ export class Compiler {
     const table = slots ?? (aot ? aotRuntimeSlots() : runtimeSlots());
     const { files: all, workspaces: spaces } =
       collectSources({ resolve, files, workspaces, target, withLib });
-    // Everything that must stay CALLABLE. Only reachable code ships (`0002`),
+    // Everything that must stay CALLABLE. Only reachable code ships (`modularity`),
     // and a function nobody calls from the entry is exactly the one a host
     // wants to call -- so a sandbox's callable set has to be declared. The
     // default is every function in the entry's own namespace, because that is
@@ -176,7 +176,7 @@ export class Compiler {
                  (shake ? ' :shake true' : '') +
                  // Recorded IN the artifact, not just kept beside it: an image
                  // written to disk has to still say what it needs. flint never
-                 // reads it (`0025`).
+                 // reads it (`structured-ports`).
                  (meta ? ` :meta ${edn(meta)}` : '') +
                  (spaces.length ? ` :workspaces ${ednWorkspaces(spaces)}` : '') +
                  (features ? ` :features ${edn(new Set(features.map((f) => sym(`:${f}`))))}` : '') +
@@ -201,7 +201,7 @@ export class Compiler {
         'Every namespace a program requires has to be resolvable.');
     }
     // REFUSED is not missing. The source was found and read; the answer is that
-    // this workspace may not require it (`doc/decisions/0036`).
+    // this workspace may not require it (`DECISIONS.md#workspace-capabilities`).
     if (r.out.startsWith('!refused')) {
       const refused = r.out.split('\n').slice(1).filter(Boolean);
       const err = new Error(`flint: ${refused.join('\n        ')}`);
@@ -255,7 +255,7 @@ function collectSources({ resolve, files, workspaces, target, withLib }) {
   // through the SDK: a guard is only checked ACROSS workspaces, and a program
   // that declared none would share the anonymous workspace with the library it
   // is being guarded against. `flint.host/request` is the first var this
-  // matters for (`doc/decisions/0036`).
+  // matters for (`DECISIONS.md#workspace-capabilities`).
   //
   // AND IT HOLDS `:host`, which it did not used to. This said "It grants
   // nothing", and that was true while the guard was only on the VAR --
@@ -294,12 +294,12 @@ function ednWorkspaces(spaces) {
     const parts = [`:prefix ${edn(String(w.prefix ?? ''))}`];
     if (w.name) parts.push(`:name ${String(w.name)}`);
     // KEYWORDS, and a set: a capability is a name, and holding one twice is
-    // not a thing (`doc/decisions/0036`).
+    // not a thing (`DECISIONS.md#workspace-capabilities`).
     const caps = (xs) => `#{${xs.map((c) => `:${String(c).replace(/^:/, '')}`).join(' ')}}`;
     if (w.grants?.length) parts.push(`:grants ${caps(w.grants)}`);
     if (w.guard?.length) parts.push(`:guard ${caps(w.guard)}`);
     // A VIRTUAL workspace has no files: everything under its prefix is spoken
-    // to over a port (`doc/decisions/0036` step 4). `vars` is optional and buys
+    // to over a port (`DECISIONS.md#workspace-capabilities` step 4). `vars` is optional and buys
     // compile-time checking of names.
     if (w.virtual) parts.push(':virtual true');
     if (w.vars?.length) {
@@ -335,7 +335,7 @@ export class Image {
   get metadata() { return this._meta ?? {}; }
 
   /// What the CLI's convention says this image will ask for. A REQUEST, not a
-  /// grant: the host still decides (`doc/decisions/0022`).
+  /// grant: the host still decides (`DECISIONS.md#opaque-values`).
   get capabilities() { return this.metadata.capabilities ?? []; }
 
   /// Instantiate it. A sandbox holds state and serves many calls.
@@ -350,7 +350,7 @@ export class Image {
 /// A sandbox serves MANY calls, and they share the state the image set up when
 /// it loaded -- initialisers run once, not per call, which is what makes
 /// instantiate-once-call-per-request work.
-/// Who advances a sandbox, and when (`doc/decisions/0028`).
+/// Who advances a sandbox, and when (`DECISIONS.md#drivers`).
 ///
 /// A sandbox does not run because someone called into it. It runs because it
 /// has work and a driver decided to give it a thread. The indirection is the
@@ -466,7 +466,7 @@ export class Sandbox {
   /// the driver, which decides when a runnable sandbox runs. The inline driver
   /// may finish before the returned promise is awaited, but the TYPE is
   /// asynchronous either way, because a synchronous API cannot be made
-  /// asynchronous later without breaking every caller (`doc/decisions/0028`).
+  /// asynchronous later without breaking every caller (`DECISIONS.md#drivers`).
   ///
   /// What an argument MEANS is the caller's business -- no entry map, no
   /// capability argument; those are the CLI's convention.
@@ -493,7 +493,7 @@ export class Sandbox {
     // DELEGATED, rather than a second copy of the call path.
     //
     // There are two ways to make a call and which is right depends on whether
-    // the sandbox has a system port (`doc/decisions/0025` step 5): with one, a
+    // the sandbox has a system port (`DECISIONS.md#structured-ports` step 5): with one, a
     // call is a message and can park; without one, `flint_call` is synchronous
     // and cannot. This used to drive `flint_call` itself and got the choice
     // wrong for every sandbox with a capability -- the guest opened a port, the
@@ -503,7 +503,7 @@ export class Sandbox {
   }
 
   /// What the build measures, read after a call rather than printed
-  /// (`doc/decisions/0025`). Gas is in every build because it is resource
+  /// (`DECISIONS.md#structured-ports`). Gas is in every build because it is resource
   /// control; the rest appears only when the module carries it, and an absent
   /// counter reads as ABSENT rather than as zero.
   get diagnostics() {
@@ -523,7 +523,7 @@ export class Sandbox {
   /// The raw instance, for a caller that wants the module's own exports.
   get exports() { return this.inst.exports; }
   /// Run a named function, rendering its answer the way a command line would.
-  /// There is no entry point to default to (`doc/decisions/0025` step 5).
+  /// There is no entry point to default to (`DECISIONS.md#structured-ports` step 5).
   ///
   /// There is deliberately no `call` here. There WAS -- a passthrough to
   /// `this.inst.call` added beside `run` when the entry point went away -- and

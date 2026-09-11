@@ -161,7 +161,7 @@
 ;; EVERY WAY OF NAMING IT, not just calling it. Privacy that covered calls
 ;; and not value references would be a hole a `(map l/helper xs)` walks
 ;; straight through. It holds because `record-dep!` sits on symbol RESOLUTION
-;; rather than on the call path -- the same property that makes `0036`'s
+;; rather than on the call path -- the same property that makes `workspace-capabilities`'s
 ;; guards sound, and the reason it insists anything resolving authority be a
 ;; compile-time construct and never a callable.
 (check "refused when bound to a local, not called"
@@ -270,7 +270,7 @@
 ;;
 ;; `flint.host/request` is guarded `[:host]` and forwards to `flint/request`.
 ;; It and `flint.host/ask` were the only guarded vars in all of `lib/`, so
-;; level two of `0036` protected exactly one call and that call had a bypass.
+;; level two of `workspace-capabilities` protected exactly one call and that call had a bypass.
 ;;
 ;; The catalogue is passed explicitly here. Without it `native-name` returns
 ;; the name unchecked and every `flint.rt/..` row would pass whether or not

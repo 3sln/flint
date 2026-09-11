@@ -10,7 +10,7 @@
 //! That is what lets `wasm-ld --gc-sections` delete an unused builtin: with no
 //! static registry naming it, and no direct call, nothing references it.
 //! A single direct call from anywhere would silently pin it — and, worse, pin
-//! whatever it transitively uses. See `doc/decisions/0003-namespace-units.md`.
+//! whatever it transitively uses. See `DECISIONS.md#namespace-units`.
 //!
 //! Each builtin is therefore a pair: a plain Rust `fn` with the real body, and a
 //! thin `#[no_mangle] extern "C"` wrapper that is the linker-visible symbol.
@@ -21,7 +21,7 @@
 //! Only what cannot be written in the language: allocation, hashing, the number
 //! tower, UTF-8, collection internals. Everything composite — `map`, `filter`,
 //! `merge`, `clojure.string`, the printer, the readers — is cljc, so it
-//! tree-shakes per var. See `doc/decisions/0002-modularity.md`.
+//! tree-shakes per var. See `DECISIONS.md#modularity`.
 
 
 use crate::rt::Rt;
@@ -185,7 +185,7 @@ builtins! {
     "boolean?", flint_b_boolp, b_boolp, |rt, a, n| { let _ = n; Value::boolean(arg(rt, a, 0).is_bool()) };
     "sequential?", flint_b_sequentialp, b_sequentialp, |rt, a, n| { let _ = n; let v = arg(rt, a, 0); Value::boolean(rt.is_sequential(v)) };
 
-    // --- byte strings (doc/decisions/0024) ----------------------------------
+    // --- byte strings (DECISIONS.md#no-runtime-linking) ----------------------------------
     //
     // The same two tiers as text: flat below `FLAT_MAX`, a shallow B-tree above
     // it. Named `flint/b-*` rather than overloading the string builtins because
@@ -718,7 +718,7 @@ builtins! {
         let v = arg(rt, a, 0);
         rt.new_volatile(v)
     };
-    // Opaque values (doc/decisions/0022): flint's replacement for Clojure's
+    // Opaque values (DECISIONS.md#opaque-values): flint's replacement for Clojure's
     // `(Object.)`, which it cannot have because it has no host classes.
     "flint/opaque", flint_b_opaque, b_opaque, |rt, a, n| {
         // The label is for PRINTING and plays no part in identity: two opaque
@@ -734,10 +734,10 @@ builtins! {
     // The LABEL is readable; the host id is not, and there is deliberately no
     // builtin that returns it. Reading provenance from guest code would invite
     // exactly the check 0022 forbids.
-    // `#my.ns/thing v` (`doc/decisions/0034`). The tag must be a SYMBOL, and a
+    // `#my.ns/thing v` (`DECISIONS.md#tagged-literals`). The tag must be a SYMBOL, and a
     // namespaced one in practice, because an unqualified tag is reserved for
     // the reader's own literals.
-    // --- tables (`doc/decisions/0026`) --------------------------------------
+    // --- tables (`DECISIONS.md#tables`) --------------------------------------
     "flint/schema", flint_b_schema, b_schema, |rt, a, n| {
         let _ = n;
         let pairs = arg(rt, a, 0);
@@ -903,7 +903,7 @@ builtins! {
     // The closed set protocols dispatch on. flint has no types, so "which type
     // is this?" has no general answer -- but the *built-in* kinds are a small
     // fixed list, and everything else dispatches on metadata
-    // (doc/decisions/0005, section 6). This lives in the runtime rather than in
+    // (DECISIONS.md#threads-and-ports, section 6). This lives in the runtime rather than in
     // cljc so that naming `:port` costs nothing: the type tag is here whether or
     // not the concurrency unit is linked.
     "flint/kind", flint_b_kind, b_kind, |rt, a, n| {

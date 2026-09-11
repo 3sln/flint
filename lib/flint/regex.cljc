@@ -1,17 +1,17 @@
 (ns flint.regex
   "Regular expressions: a shared NFA compiler and a Pike VM
-  (`doc/decisions/0012`).
+  (`DECISIONS.md#matching-over-ropes`).
 
   The parser and the NFA compiler are cljc and shared, so every host executes
   the same compiled program and there is no per-host dialect to drift. The
   simulator is native, makes ONE left-to-right pass and never rewinds -- which is
-  what lets the subject be a rope (`doc/decisions/0011`) and what makes
+  what lets the subject be a rope (`DECISIONS.md#strings-and-matching`) and what makes
   `(a+)+b` linear rather than exponential.
 
   `flint.pike` is the same simulator in cljc: the conformance oracle, and what a
   new host runs before it has its own.
 
-  It is here rather than in Rust for the reason in doc/decisions/0002: written
+  It is here rather than in Rust for the reason in DECISIONS.md#modularity: written
   in the language it tree-shakes per var, so a program with no regex literal
   carries no regex engine at all. It is also the thing a text-processing
   language should be able to express about itself.
@@ -273,7 +273,7 @@
   "Compile `src`. Memoised, so a #\"...\" literal costs one map lookup per use.
 
   The AST is parsed here and handed to `flint.nfa`, which is SHARED across
-  hosts -- the point of `doc/decisions/0012` being that every host executes the
+  hosts -- the point of `DECISIONS.md#matching-over-ropes` being that every host executes the
   same compiled program, so there is no per-host pattern parser to disagree
   about `\\w`. The program then goes to the native simulator, which reads a rope
   through a cursor and never materialises it."

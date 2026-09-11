@@ -1,4 +1,4 @@
-// The document resource (doc/decisions/0008): structure once, content on
+// The document resource (DECISIONS.md#document-resource): structure once, content on
 // demand, planned by the host, delivered in waves.
 //
 // Almost every claim here is about MEMORY or about TRAFFIC, so almost every
@@ -55,7 +55,7 @@ function makeDoc({ pages = 2, blocks = 4, leaves = 8, leafBytes = 200 } = {}) {
 /// numbers below are what was always resident, not a regression being hidden.
 /// The module's namespace, from the file it was built into. Each is compiled
 /// `:fn <ns>/main`, and the FUNCTION IS NAMED at the call now: a module has no
-/// entry point (`doc/decisions/0025` step 5).
+/// entry point (`DECISIONS.md#structured-ports` step 5).
 const fnOf = (wasm) => `${/out\/doc-([a-z]+)\.wasm$/.exec(wasm)[1]}/main`;
 
 async function runWith(wasm, store, args = [], { stress = false } = {}) {

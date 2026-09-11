@@ -38,7 +38,7 @@ public final class Builtins {
     }
 
     /// `:tag` and `:form` on a tagged literal, which is how anyone reads one
-    /// (`doc/decisions/0034`). Kept beside the `get` builtin because the
+    /// (`DECISIONS.md#tagged-literals`). Kept beside the `get` builtin because the
     /// keyword-apply path needs the same two keys.
     static long taggedGet(Rt rt, long t, long k, long dflt) {
         if (k == Str.keyword(rt, null, "tag")) return rt.slot(t, 0);
@@ -73,7 +73,7 @@ public final class Builtins {
     /// gives vector semantics: `conj` appends, `assoc` replaces.
     static {
         // Arithmetic. flint's integers OVERFLOW rather than wrap, which
-        // `doc/decisions/0010` names as one of the ways two hosts quietly
+        // `DECISIONS.md#other-hosts` names as one of the ways two hosts quietly
         // disagree -- so every one of these is checked.
         // Arithmetic goes through `Num`, which owns the PROMOTION RULE:
         // integers stay integers and overflow rather than wrap, and any double
@@ -154,7 +154,7 @@ public final class Builtins {
         def("quot", (rt, at, n) -> com._3sln.flint.kgen.rt.Numdiv.numQuot(rt, rt.vat(at), rt.vat(at + 1)));
         def("rem", (rt, at, n) -> com._3sln.flint.kgen.rt.Numdiv.numRem(rt, rt.vat(at), rt.vat(at + 1)));
         // `/` on two integers that do not divide evenly is a DOUBLE here, not a
-        // Ratio: flint has no rational type, and `doc/decisions/0010` counts
+        // Ratio: flint has no rational type, and `DECISIONS.md#other-hosts` counts
         // this among the documented divergences from Clojure rather than a bug.
         def("flint/div", (rt, at, n) -> {
             if (n == 1) return com._3sln.flint.kgen.rt.Numdiv.numDiv(rt, Val.fixnum(1), rt.vat(at));
@@ -188,14 +188,14 @@ public final class Builtins {
             return Val.NIL;
         });
 
-        // A ROPE join, not a copy. `str` in a loop is what `doc/decisions/0011`
+        // A ROPE join, not a copy. `str` in a loop is what `DECISIONS.md#strings-and-matching`
         // exists for: copying makes it quadratic, and the compiler builds its
         // whole output this way.
         def("flint/str2", (rt, at, n) -> Str.concat(rt, rt.vat(at), rt.vat(at + 1)));
         def("flint/num->str", (rt, at, n) ->
             com._3sln.flint.kgen.rt.Dblstr.numToStr(rt, rt.vat(at)));
 
-        /// The CLOSED SET protocol dispatch runs on (`doc/decisions/0005`).
+        /// The CLOSED SET protocol dispatch runs on (`DECISIONS.md#threads-and-ports`).
         ///
         /// Small on purpose: three string tiers and eight seq representations
         /// all answer with ONE keyword each, or `extend-protocol :string` would
@@ -205,7 +205,7 @@ public final class Builtins {
         /// suite in `test/common`, which is what that suite is for.
         def("flint/kind", (rt, at, n) -> rt.kindOf(rt.vat(at)));
 
-        // --- tables (`doc/decisions/0026`) -----------------------------------
+        // --- tables (`DECISIONS.md#tables`) -----------------------------------
         def("flint/schema", (rt, at, n) -> Table.newSchema(rt, rt.vat(at)));
         def("flint/table", (rt, at, n) -> {
             long s = rt.vat(at);
@@ -280,7 +280,7 @@ public final class Builtins {
 
 
         // NOT STUBS. These answered `false` and `nil` for everything, including
-        // for an opaque value this same file had just minted -- so `0022` held
+        // for an opaque value this same file had just minted -- so `opaque-values` held
         // on native and was decoration here: `(opaque? (opaque))` was false and
         // a label was never readable. `Opaque` is GENERATED and both ports
         // already carried it; nothing called it.
@@ -604,7 +604,7 @@ public final class Builtins {
             // `Str.text`, which materialises the whole string into a Java
             // `String` -- the same defect the Rust runtime had, in a different
             // shape, and on the operation that most wants sharing
-            // (`doc/decisions/0011`).
+            // (`DECISIONS.md#strings-and-matching`).
             if (Str.isRope(rt, v0)) {
                 int cps = Str.sCount(rt, v0);
                 int st = (int) Val.asFixnum(rt.vat(at + 1));
@@ -680,7 +680,7 @@ public final class Builtins {
             long ticks = 0;
             while (!Val.isNil(rt.r(s))) {
                 // CHARGED AND CHECKED INSIDE THE LOOP: the length is not known
-                // until the walk ends (`doc/decisions/0009`).
+                // until the walk ends (`DECISIONS.md#resource-limits`).
                 if (!rt.chargeTick(ticks++, 1, "str-join")) { rt.popTo(base); return Val.NIL; }
                 sb.append(Str.text(rt, Seqwalk.first(rt, rt.r(s))));
                 rt.setR(s, com._3sln.flint.kgen.rt.Seqwalk.next(rt, rt.r(s)));
@@ -798,7 +798,7 @@ public final class Builtins {
             return Val.TRUE;
         });
 
-        // --- opaque values (`doc/decisions/0022`) -----------------------------
+        // --- opaque values (`DECISIONS.md#opaque-values`) -----------------------------
         //
         // Guest code can mint one only with id 0 and there is deliberately no
         // builtin that reads an id back, so an id is a thing the HOST wrote and
@@ -824,7 +824,7 @@ public final class Builtins {
         /// lazy seq and `next` forces the tail, which runs arbitrary flint code
         /// -- so anything already gathered would go stale at the first
         /// collection and be written into the map as an address in a space that
-        /// has been reused. That is `doc/decisions/0031`, and it needed a map
+        /// has been reused. That is `DECISIONS.md#a-vec-of-values-is-not-a-root`, and it needed a map
         /// big enough to span a collection, which is why it survived so long.
         // GENERATED, from `kin/mapmake.kin`. This port already said it line
         // for line, which is why generating it found nothing -- the value is
@@ -850,7 +850,7 @@ public final class Builtins {
         def("flint/unchecked-sub", (rt, at, n) -> uncheckedOp(rt, at, 1));
         def("flint/unchecked-mul", (rt, at, n) -> uncheckedOp(rt, at, 2));
 
-        // --- byte strings (`doc/decisions/0024`) ------------------------------
+        // --- byte strings (`DECISIONS.md#no-runtime-linking`) ------------------------------
         //
         // Not a vector of integers: a flint vector holds NaN-boxed 64-bit
         // values, so a byte would cost eight bytes plus trie overhead. A byte
@@ -1017,7 +1017,7 @@ public final class Builtins {
             // EVERY REMAINING ARGUMENT IS FORWARDED, and the runtime takes no
             // view of any of them. A capability is an opaque value like any
             // other and travels as one; nothing here knows the word, which is
-            // the point (`doc/decisions/0022`).
+            // the point (`DECISIONS.md#opaque-values`).
             int base = rt.mark();
             int ni = rt.push(name);
             int vi = rt.push(Vec.empty(rt));
@@ -1035,7 +1035,7 @@ public final class Builtins {
             }
             // Identical to `open` above, and deliberately so: same forwarding,
             // same no-view-of-the-arguments. What differs is what comes back
-            // (`doc/decisions/0036` step 7).
+            // (`DECISIONS.md#workspace-capabilities` step 7).
             int base = rt.mark();
             int ni = rt.push(what);
             int vi = rt.push(Vec.empty(rt));
@@ -1071,7 +1071,7 @@ public final class Builtins {
         def("flint/port-state", (rt, at, n) -> {
             long p = rt.vat(at);
             if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-state wants a port");
-            // THE QUERY IS THE TRUTH (`doc/decisions/0006`), so it resolves the
+            // THE QUERY IS THE TRUTH (`DECISIONS.md#host-abi`), so it resolves the
             // peer rather than reporting a state that reaping has not caught up
             // with yet.
             switch ((int) Conc.portStateNow(rt, p)) {
@@ -1181,7 +1181,7 @@ public final class Builtins {
             for (int i = 0; i < GC_STAT_KEYS.length; i++) {
                 // The keyword stays ROOTED across `integer` and `assoc`, both
                 // of which allocate. A value in a host local does not survive
-                // an allocation (`doc/decisions/0031`).
+                // an allocation (`DECISIONS.md#a-vec-of-values-is-not-a-root`).
                 int ki = rt.push(Str.keyword(rt, null, GC_STAT_KEYS[i]));
                 long vv = Num.integer(rt, vals[i]);
                 rt.setR(mi, Mapwrite.mapAssoc(rt, rt.r(mi), rt.r(ki), vv));

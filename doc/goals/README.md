@@ -44,7 +44,7 @@ three times.
 | `obj.rs` | 12 | 113 | host -- object header accessors |
 | `value.rs` | 6 | 150 | host -- value representation |
 | `strs.rs` | 10 | 275 | host -- interning, with thread-safe publication |
-| `pike.rs` | 8 | 339 | **NOT A PORT.** `doc/decisions/0012` says it: "Per host, native -- the simulator." The NFA compiler is the shared half and already is. |
+| `pike.rs` | 8 | 339 | **NOT A PORT.** `DECISIONS.md#matching-over-ropes` says it: "Per host, native -- the simulator." The NFA compiler is the shared half and already is. |
 | `coll.rs` | 17 | 619 | mostly host -- see trap 4; nine `Value -> Value` functions that use `StringBuilder` and `String.indexOf` on the ports |
 | `builtins.rs` | 6 | 1097 | host -- the builtin table |
 
@@ -254,7 +254,7 @@ one-line reversal.
 #### Gas diverged on ropes -- DISSOLVED, not decided
 
 RECORDED EARLIER TODAY as needing a choice between three options: the ports
-adopt native's flatten-and-cache, native adopts the ports' walk, or `0009`
+adopt native's flatten-and-cache, native adopts the ports' walk, or `resource-limits`
 gains a documented exception for rope materialisation. None of them was taken,
 because the question stopped existing.
 
@@ -352,7 +352,7 @@ decided**; what remains is design work rather than judgement calls.
   affinity belongs to the host object.
 * **Determinism -- decided: a property of a CONFIGURATION, and opt-in.** The
   deterministic sandbox is unchanged and stays the default; externs with a pool
-  are additive. `0005` is scoped rather than weakened. It becomes an
+  are additive. `threads-and-ports` is scoped rather than weakened. It becomes an
   ENFORCEMENT question: the SDK must refuse pinned externs in a sandbox
   configured deterministic instead of silently degrading it.
 * **The capability hole -- decided, and closed.** Externs enter only through a
@@ -376,7 +376,7 @@ decided**; what remains is design work rather than judgement calls.
   identical keyword and finds its extension -- the stable-identity constraint
   dissolves rather than being satisfied. `flint.interop/extend` is then
   `clojure.core/extend` with no wrapper and no second dispatch path.
-  *A kind per host type is `0005`'s rule, not an exception:* `kind-of` already
+  *A kind per host type is `threads-and-ports`'s rule, not an exception:* `kind-of` already
   records that `:other` was a hole because one extension written for one type
   caught them all. A single `:extern` kind would be that hole again.
 
@@ -595,7 +595,7 @@ It is refused now, at the form that asked:
     was still initialising, and cannot wait for the answer there. Move the call
     into a function the entry reaches.
 
-Which is `0027` one phase earlier: a sandbox that cannot ask is TOLD so rather
+Which is `ports-are-the-hosts` one phase earlier: a sandbox that cannot ask is TOLD so rather
 than parked.
 
 THE LINE IS "CAN IT BE RESUMED", not "did it park". A channel round-trip in a

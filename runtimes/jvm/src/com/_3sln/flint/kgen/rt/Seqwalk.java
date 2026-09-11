@@ -36,7 +36,7 @@ public final class Seqwalk {
             // A MAP ENTRY rides the same vecseq, read directly. A
             // TABLE rides it too and answers a ROW REF, which is the
             // one thing about a table seq that differs
-            // (`doc/decisions/0026`).
+            // (`DECISIONS.md#tables`).
             if (ty(rt.gc.sp, Val.asHeap(coll)) == TY_MAPENTRY) {
                 return rt.slot(coll, i);
             }
@@ -164,7 +164,7 @@ public final class Seqwalk {
     /// because both answers are right.
     /// 
     /// The cursor lives in the ROOT, not a host local: `next` forces a lazy
-    /// seq, forcing allocates, and `doc/decisions/0031` is that a value in a
+    /// seq, forcing allocates, and `DECISIONS.md#a-vec-of-values-is-not-a-root` is that a value in a
     /// host local does not survive an allocation.
     public static int seqCount(Rt rt, long v) {
         long hint = countHint(rt, v);
@@ -192,7 +192,7 @@ public final class Seqwalk {
     /// through to.
     /// 
     /// ITERATING A TABLE HANDS BACK REFS, one per row, materialising nothing --
-    /// which is the point of the ref type and not a detail of it (`0026`). It
+    /// which is the point of the ref type and not a detail of it (`tables`). It
     /// rides on `TY_VECSEQ` because a table is indexed and counted exactly as a
     /// vector is; only `first` differs, and it differs by calling `table-ref`.
     /// 

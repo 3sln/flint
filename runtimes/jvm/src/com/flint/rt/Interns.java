@@ -10,7 +10,7 @@ import static com._3sln.flint.kgen.rt.Interns.*;
 ///
 /// ## Why interning is correctness here, not a saving
 ///
-/// `doc/decisions/0011`'s rule is that a value in the interned range has ONE
+/// `DECISIONS.md#strings-and-matching`'s rule is that a value in the interned range has ONE
 /// representation. `=` on two heap keywords is then a pointer compare, and
 /// symbol equality is slot equality on interned strings. Two interned copies of
 /// one string is therefore a CORRECTNESS bug and not a wasted allocation: `eq`

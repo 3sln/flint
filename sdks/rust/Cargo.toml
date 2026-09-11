@@ -8,8 +8,8 @@ license = "MIT"
 [dependencies]
 # The runtime, compiled NATIVELY. It is the same Rust the wasm module is built
 # from -- same collector, same interpreter, same builtins -- so a sandbox here
-# is not a wasm engine wrapped in Rust (`doc/decisions/0010`).
-# `parallel`: several executors inside one sandbox (`doc/decisions/0028`).
+# is not a wasm engine wrapped in Rust (`DECISIONS.md#other-hosts`).
+# `parallel`: several executors inside one sandbox (`DECISIONS.md#drivers`).
 # On here and off in the wasm build, because that is the target that can use
 # it -- native threads on a real shared heap, no wasm threads proposal needed.
 flint-rt = { path = "../../runtime", features = ["parallel"] }

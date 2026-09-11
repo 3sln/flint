@@ -2,7 +2,7 @@ package com.flint.rt;
 
 import java.util.*;
 
-/// The analysis half of `doc/decisions/0013`, ported from `src/flint/aot.cljc`.
+/// The analysis half of `DECISIONS.md#emit-wasm-instead-of-dispatch`, ported from `src/flint/aot.cljc`.
 ///
 /// Decoding, chunk boundaries and gas charge are decisions about FLINT
 /// BYTECODE, so they have nothing to do with which machine the result is
@@ -14,7 +14,7 @@ public final class AotPlan {
     /// mis-strides produces plausible nonsense rather than an error -- so an
     /// unknown opcode refuses the whole arity instead.
     static final int[] OPERANDS = new int[256];
-    /// Emitted inline. `0013`'s opcode histogram says these are 98.7% of
+    /// Emitted inline. `emit-wasm-instead-of-dispatch`'s opcode histogram says these are 98.7% of
     /// executed instructions; the rest go back to the interpreter one at a time.
     static final boolean[] INLINED = new boolean[256];
     /// Can leave compiled code. `CALL` often does NOT -- a callee that is not a

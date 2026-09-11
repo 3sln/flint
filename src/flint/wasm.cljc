@@ -18,7 +18,7 @@
 ;;
 ;; Every byte sequence here is a `flint.rt` BYTE STRING, and that is what lets
 ;; this namespace compile for flint as well as for the bootstrap host
-;; (`doc/decisions/0024`). It used to be Java byte arrays -- `aget`, `alength`,
+;; (`DECISIONS.md#no-runtime-linking`). It used to be Java byte arrays -- `aget`, `alength`,
 ;; `ByteArrayOutputStream` -- which is why the compiler compiled to wasm could
 ;; produce a bytecode image and not a module: it could not read or write one.
 ;;
@@ -109,7 +109,7 @@
   ;; compiler does not link, so `flint.wasm` never shipped. It will the moment
   ;; the CLI links for itself. `test/reader_test.clj` now asserts the shape.
   ;; No longer a conditional at all: `flint.rt/str->b` is implemented on both
-  ;; sides now, which is the point of `0024`'s byte strings. The `:flint`
+  ;; sides now, which is the point of `no-runtime-linking`'s byte strings. The `:flint`
   ;; branch used to answer with a VECTOR of integers while `:clj` answered with
   ;; a byte array, and everything downstream had to tolerate both.
   (flint.rt/str->b s))
@@ -285,7 +285,7 @@
 
 (defn imports
   "Every import, as `{:module :name :kind}`. A flint program imports nothing;
-  this exists because `0020`'s capability descriptor is precisely `how to spin
+  this exists because `module-metadata-and-shards`'s capability descriptor is precisely `how to spin
   up the glue`, and a descriptor derived from the module cannot drift from it."
   [m]
   (if-let [{:keys [payload]} (section m 2)]
@@ -316,7 +316,7 @@
 (defn add-custom
   "Add a custom section named `nm` carrying `payload`, placed EARLY.
 
-  Early matters (`doc/decisions/0020`): a runner deciding whether it can load a
+  Early matters (`DECISIONS.md#module-metadata-and-shards`): a runner deciding whether it can load a
   module at all, and how to build its glue, should not have to stream past a
   megabyte of code section first. It goes before the code section (id 10) and
   after the type section, which is the earliest point that keeps the canonical
@@ -373,7 +373,7 @@
 ;; ------------------------------------------------------- appending functions
 ;;
 ;; Everything above reads or patches what the linker produced. This adds code
-;; that never went through the linker at all, which is what `doc/decisions/0013`
+;; that never went through the linker at all, which is what `DECISIONS.md#emit-wasm-instead-of-dispatch`
 ;; needs: compiled arities are emitted after the link, because only then are the
 ;; helper functions' indices known.
 

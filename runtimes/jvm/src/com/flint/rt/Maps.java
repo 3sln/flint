@@ -125,7 +125,7 @@ public final class Maps {
     /// `map_for_each` and the cost goes away.
     ///
     /// NOTHING HERE ALLOCATES, which is why no node handle is rooted. A value
-    /// in a host local does not survive an allocation (`doc/decisions/0031`);
+    /// in a host local does not survive an allocation (`DECISIONS.md#a-vec-of-values-is-not-a-root`);
     /// it survives fine when there is none, and no collection can happen
     /// between the first push and the last. The earlier version rooted each
     /// node and then slid the whole subtree down over it, and that slide was

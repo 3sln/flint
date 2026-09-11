@@ -45,7 +45,7 @@ impl Rt {
     /// 
     /// THE CACHE WRITE RE-READS `v` FROM THE ROOT STACK, because `hash-value`
     /// on an element allocates -- a row ref materialises as a map -- and a raw
-    /// address held across it is `0031`.
+    /// address held across it is `a-vec-of-values-is-not-a-root`.
     pub(crate) fn hash_vec_indexed(&mut self, v: Value) -> u32 {
         let base: usize = self.mark();
         let vi: usize = self.push(v);
@@ -189,12 +189,12 @@ impl Rt {
         // here for the caching, which is real: a rope used as a map key
         // must not rehash every lookup. `RP_HASH` gives the same caching
         // per node and keeps the tree, so the trade is gone rather than
-        // chosen (`0011`).
+        // chosen (`strings-and-matching`).
         // THROUGH `hash-int`, which a FLAT string's hash also goes
         // through -- `string-hash` is `hash-int(java-string-hash(s))` and
         // `rope-hash` is the raw 31-walk. Without the finaliser here a
         // rope and an equal flat string hashed DIFFERENTLY, which breaks
-        // the one rule `0011` states about tiers: two values that are `=`
+        // the one rule `strings-and-matching` states about tiers: two values that are `=`
         // must hash alike or a map keyed by one is not found by the
         // other. All three runtimes agreed, so no cross-runtime check
         // could see it; `(= x (read-string (pr-str x)))` did.
@@ -249,7 +249,7 @@ impl Rt {
             return self.hash_set(v);
         }
         // AN OPAQUE VALUE CARRIES ITS OWN IDENTITY, assigned at creation
-        // and STORED (`0022`). The per-type constant below would be
+        // and STORED (`opaque-values`). The per-type constant below would be
         // correct -- equality is identity, so collisions only cost time --
         // but it would put every opaque value in one bucket, and the whole
         // point of the type is to be a distinct key.
@@ -263,7 +263,7 @@ impl Rt {
         // COLUMNAR is available precisely because a table is not `=` to a
         // vector of maps, so this need not agree with what one would
         // hash. ROOTED for the reason the equality arm is: `table-ref`
-        // allocates and `v` is a host local (`0031`).
+        // allocates and `v` is a host local (`a-vec-of-values-is-not-a-root`).
         if t == TY_TABLE {
             let base: usize = self.mark();
             let vi: usize = self.push(v);

@@ -204,7 +204,7 @@ int main(void) {
     }
   }
 
-  /* --- drivers (doc/decisions/0028) --------------------------------------
+  /* --- drivers (DECISIONS.md#drivers) --------------------------------------
    *
    * The same fifth noun as the Rust and JavaScript SDKs, by the same names.
    * Here the answer is real: this target runs guest code on several executors

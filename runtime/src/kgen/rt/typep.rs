@@ -72,7 +72,7 @@ impl Rt {
             // A ROW REF is a map here, and `is-map` is where that is said.
             // Wiring only the other one left `(map? row)` false while
             // `(get row :k)` worked, and the printer -- which dispatches on
-            // `map?` -- printed a row as `#<unprintable>` (`0026`).
+            // `map?` -- printed a row as `#<unprintable>` (`tables`).
             9 => self.is_map(v),
             10 => self.is_set(v),
             11 => self.is_seq(v),

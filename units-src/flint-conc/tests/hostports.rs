@@ -89,7 +89,7 @@ struct Ev {
 ///
 /// A drain is no longer one event: installing a bridge pushes an `EV_RETAIN`
 /// first, because the host's count is maintained in exactly one place and that
-/// place is the event stream (`doc/decisions/0027`). Finding the request by
+/// place is the event stream (`DECISIONS.md#ports-are-the-hosts`). Finding the request by
 /// KIND rather than by index is what a host does anyway.
 fn open_ev(evs: &[Ev]) -> &Ev {
     evs.iter()
@@ -170,7 +170,7 @@ fn opener(cap_host_id: Option<u64>) -> Rt {
         }
         None => NIL,
     };
-    // A SYSTEM PORT, because `open` is a request ON one (`doc/decisions/0027`).
+    // A SYSTEM PORT, because `open` is a request ON one (`DECISIONS.md#ports-are-the-hosts`).
     // A sandbox given none cannot ask for anything, which the last test here
     // checks; every other test needs one installed before the program runs.
     let l = rt.string("system");
@@ -180,7 +180,7 @@ fn opener(cap_host_id: Option<u64>) -> Rt {
 }
 
 /// The host's id for this sandbox's system port. The HOST picks it: a sandbox
-/// no longer mints port ids, which is the whole of `0027`.
+/// no longer mints port ids, which is the whole of `ports-are-the-hosts`.
 const SYSTEM: i64 = 1;
 /// The host's id for the port these tests grant when asked.
 const GRANTED: i64 = 500;
@@ -247,7 +247,7 @@ fn open_asks_the_host_and_parks_until_it_answers() {
     // so it already knows it holds it, and an event it does not need is traffic
     // queued before the program has even started -- which makes the first run
     // come back "the host is needed" when nothing is parked
-    // (`doc/decisions/0027`). The retain carries only what a host could not have
+    // (`DECISIONS.md#ports-are-the-hosts`). The retain carries only what a host could not have
     // known: a port arriving inside a message.
     assert!(
         !evs.iter().any(|e| e.kind == conc::EV_RETAIN as u32),
@@ -417,8 +417,8 @@ fn a_send_leaves_as_one_event_carrying_its_bytes() {
 /// A CHANNEL end never crosses a bridge: the host has never been told it exists
 /// and its id would name one of our objects from outside. A BRIDGE handle does
 /// cross, because its id is the host's own and means the same thing on the far
-/// side -- that is how a capability is delegated, which `0025` made the point
-/// rather than the omission `0006` called the right default.
+/// side -- that is how a capability is delegated, which `structured-ports` made the point
+/// rather than the omission `host-abi` called the right default.
 ///
 /// An opaque value crosses a bridge, and the runtime owning the encoding is
 /// what makes that safe: the guest cannot mint one from bytes, which is what the
@@ -468,7 +468,7 @@ fn what_may_cross_depends_on_the_carrier() {
 
 /// A KEYWORD delivered from the host arrives as a keyword.
 ///
-/// The decoder is new on this side of the boundary (`doc/decisions/0027`): the
+/// The decoder is new on this side of the boundary (`DECISIONS.md#ports-are-the-hosts`): the
 /// guest never decoded anything before, so this is the first time the runtime
 /// builds a value out of bytes it did not write.
 #[test]
@@ -491,7 +491,7 @@ fn a_keyword_crosses_a_bridge_inbound() {
 }
 
 /// A CALL is a message on the system port, and its answer is one too
-/// (`doc/decisions/0025` step 5).
+/// (`DECISIONS.md#structured-ports` step 5).
 ///
 /// Nothing here invokes an entry point. The host asks for a function by name,
 /// the runtime runs it as a green thread, and the result comes back on the same

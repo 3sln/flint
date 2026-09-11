@@ -184,7 +184,7 @@ public class RtHostPorts {
 
   /// The host's id for this sandbox's system port, and for the port it grants.
   /// The HOST picks both: a sandbox no longer mints port ids, which is the
-  /// whole of `doc/decisions/0027`.
+  /// whole of `DECISIONS.md#ports-are-the-hosts`.
   static final int SYSTEM = 1, GRANTED = 500;
 
   /// One string, as the host writes it: the wire format, which is what the
@@ -207,7 +207,7 @@ public class RtHostPorts {
     if (img == null) { System.out.println("  FAIL not a flint image"); System.exit(1); }
 
     // A SYSTEM PORT, installed before anything runs: `open` is a request ON one
-    // (`doc/decisions/0027`), and a sandbox given none can ask for nothing.
+    // (`DECISIONS.md#ports-are-the-hosts`), and a sandbox given none can ask for nothing.
     Conc.installSystemPort(rt, SYSTEM, Str.of(rt, "system"));
 
     // 1. The program runs until it asks for something only the host has.

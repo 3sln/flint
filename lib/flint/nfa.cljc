@@ -1,5 +1,5 @@
 (ns flint.nfa
-  "Regex AST to a Thompson NFA program (`doc/decisions/0012`).
+  "Regex AST to a Thompson NFA program (`DECISIONS.md#matching-over-ropes`).
 
   This is the SHARED half, and being shared is the point: every host executes
   the same compiled program, so there is no per-host pattern parser to disagree
@@ -11,7 +11,7 @@
   A program is a flat vector of integers, three per instruction, so an
   instruction index is a program counter and `pc * 3` is where it starts. Flat
   and fixed-width because the native simulator reads it as raw words and
-  `0012` requires the same pattern to compile to a byte-identical program on
+  `matching-over-ropes` requires the same pattern to compile to a byte-identical program on
   every host -- a representation with nesting or optional fields would have
   several encodings of one program.
 

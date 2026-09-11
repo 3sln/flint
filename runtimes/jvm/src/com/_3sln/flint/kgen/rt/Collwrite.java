@@ -54,7 +54,7 @@ public final class Collwrite {
         }
         // A TAGGED LITERAL HAS EXACTLY TWO SLOTS and there is nowhere for
         // a third, so `assoc` on either key PRESERVES the type and
-        // anything else is refused (`0034`). The alternative is silently
+        // anything else is refused (`tagged-literals`). The alternative is silently
         // promoting to a map and losing the taggedness, which is the quiet
         // coercion this codebase refuses elsewhere.
         if (t == TY_TAGGED) {
@@ -71,13 +71,13 @@ public final class Collwrite {
             }
             // THE KEY IS NAMED. "wrong key" without saying which one
             // is the error message this codebase keeps replacing
-            // (`0032`).
+            // (`checks`).
             long nm = rt.nameOf(k);
             String shown = Str.text(rt, nm);
             return rt.throwStr("IllegalArgumentException", "a tagged literal has :tag and :form and nothing else, so it cannot take :" + shown);
         }
         // A TABLE IS INDEXED BY ROW and its schema is CLOSED, so the
-        // refusals live in `table-assoc` where the schema is (`0026`).
+        // refusals live in `table-assoc` where the schema is (`tables`).
         if (t == TY_TABLE) {
             return tableAssoc(rt, coll, k, v);
         }

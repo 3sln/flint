@@ -1,4 +1,4 @@
-//! The wire codec (`doc/decisions/0025`).
+//! The wire codec (`DECISIONS.md#structured-ports`).
 //!
 //! One encoding for every flint value that crosses the host boundary: a call's
 //! arguments, its return, and everything a port carries. It is a **codec**
@@ -41,28 +41,28 @@ pub use crate::image::{
     K_VECTOR,
 };
 
-/// A byte string (`doc/decisions/0024`), so binary crosses without base64.
+/// A byte string (`DECISIONS.md#no-runtime-linking`), so binary crosses without base64.
 pub const K_BYTES: u8 = 14;
 /// A port. The payload is its id; see the note above on why that is safe.
 pub const K_PORT: u8 = 15;
 /// An opaque identity: host id, then the label. A guest-minted one has host id
-/// 0 (`doc/decisions/0022`), which is what makes it recognisable as not the
+/// 0 (`DECISIONS.md#opaque-values`), which is what makes it recognisable as not the
 /// host's own.
 pub const K_SENTINEL: u8 = 16;
-/// A tagged literal (`doc/decisions/0034`): the tag symbol, then the form.
+/// A tagged literal (`DECISIONS.md#tagged-literals`): the tag symbol, then the form.
 ///
 /// 17 here and 17 in `image.rs`, because the two SHARE a numbering space. It
 /// was defined for the image and not for the wire, so a tagged literal could be
-/// an image constant and could not cross a port -- which is half of what `0034`
+/// an image constant and could not cross a port -- which is half of what `tagged-literals`
 /// said the type was for.
 pub const K_TAGGED: u8 = 17;
-/// A table (`doc/decisions/0026`), COLUMNAR: the schema, the row count, then
+/// A table (`DECISIONS.md#tables`), COLUMNAR: the schema, the row count, then
 /// each column's values in full before the next one starts.
 ///
 /// Row-major would be a vector of maps with extra steps, and would lose exactly
 /// what the type is for -- the receiver would rebuild a map per row to read one
 /// field. Column-major means a decoder can fill chunk runs directly, and it is
-/// what `0033`'s columnar JSON mirrors at the format layer.
+/// what `bridges`'s columnar JSON mirrors at the format layer.
 pub const K_TABLE: u8 = 18;
 
 /// `None` means the namespace is absent, which is not the same as empty.
@@ -127,7 +127,7 @@ impl Rt {
             // this hit the ordinary case of answering a call with rendered
             // text. The host boundary is the legitimate place to flatten, and
             // it is what `port_send` already does for its own bytes
-            // (`doc/decisions/0011`).
+            // (`DECISIONS.md#strings-and-matching`).
             let base = self.mark();
             let vi = self.push(v);
             let flat = self.string_arg(self.r(vi));
@@ -297,7 +297,7 @@ impl Rt {
         // tail, which runs arbitrary flint code and can collect -- so every item
         // gathered so far went stale, in a `Vec` the collector does not scan.
         // Same fault as `Rt::ordered_map`, same shape, found by the same hunt
-        // (`doc/decisions/0031`).
+        // (`DECISIONS.md#a-vec-of-values-is-not-a-root`).
         let base = self.mark();
         self.push(v);
         let mut cur = self.seq(self.r(base));
@@ -374,7 +374,7 @@ impl Rt {
 
     /// Decode a value the GUEST produced, where the live tags are refused.
     ///
-    /// This is the whole of `0025`'s safety rule, and it is one line: a guest
+    /// This is the whole of `structured-ports`'s safety rule, and it is one line: a guest
     /// that could decode arbitrary bytes into a port would have exactly the
     /// integer-to-port conversion the sandbox forbids. Nothing calls this yet;
     /// it exists so that whoever adds a guest-callable decoder finds it rather
@@ -542,7 +542,7 @@ impl Rt {
                 let id = r.u32()?;
                 // INTERN OR MINT. A port the host names in a message is a port
                 // it is handing to this sandbox, and that is how a capability
-                // gets delegated (`doc/decisions/0027`). It used to be refused
+                // gets delegated (`DECISIONS.md#ports-are-the-hosts`). It used to be refused
                 // unless the sandbox already held it, which made delegation
                 // impossible and was the pre-0027 rule that a port could only
                 // ever be one the sandbox had asked for.
@@ -683,7 +683,7 @@ mod tests {
         assert!(rt.encode(a).is_err(), "an atom crossed a boundary");
     }
 
-    /// `0025`'s whole safety rule, as a test rather than a comment.
+    /// `structured-ports`'s whole safety rule, as a test rather than a comment.
     ///
     /// A guest that could decode arbitrary bytes into a port would have the
     /// integer-to-port conversion the sandbox forbids -- so the guest decoder
@@ -724,13 +724,13 @@ mod tests {
     /// A table crosses as a TABLE, columnar, and comes back one.
     ///
     /// The wire codec had no arm for a table or for a tagged literal, so both
-    /// of the types `0026` and `0034` added could be image constants and could
+    /// of the types `tables` and `tagged-literals` added could be image constants and could
     /// not cross a port -- which is half of what each was for.
     #[test]
     fn a_table_crosses_columnar_and_returns_a_table() {
         let mut rt = Rt::new();
         // Built by conj, with everything on the ROOT STACK: a `Vec<Value>` is
-        // not a root (`doc/decisions/0031`) and these allocate.
+        // not a root (`DECISIONS.md#a-vec-of-values-is-not-a-root`) and these allocate.
         let vec2 = |rt: &mut Rt, a: Value, b: Value| {
             let base = rt.mark();
             let ai = rt.push(a);
@@ -804,7 +804,7 @@ mod tests {
     }
 
     /// A tagged literal crosses too, which is the point of it being a type
-    /// rather than a two-key map (`doc/decisions/0034`).
+    /// rather than a two-key map (`DECISIONS.md#tagged-literals`).
     #[test]
     fn a_tagged_literal_crosses_as_itself() {
         let mut rt = Rt::new();
@@ -837,7 +837,7 @@ mod tests {
 // `Rt::encode` turns a value in the sandbox into bytes; this turns a host's own
 // data into the same bytes, with no runtime involved at all.
 //
-// This is the LOW-LEVEL half, deliberately (`doc/decisions/0027`). A host that
+// This is the LOW-LEVEL half, deliberately (`DECISIONS.md#ports-are-the-hosts`). A host that
 // wants to hand over a capability, or a port, or a table has to say so exactly;
 // a host that just wants to send a string or a map of them uses the shorthands
 // at the bottom. The guest gets neither half -- it hands over a value and is
@@ -941,7 +941,7 @@ impl Wire {
 
     /// An OPAQUE value the host owns: an id it issued, and a label for reading.
     ///
-    /// `doc/decisions/0022`: the id is the whole authority. It is meaningful
+    /// `DECISIONS.md#opaque-values`: the id is the whole authority. It is meaningful
     /// only to the host that issued it, the guest can carry it and compare it
     /// and nothing else, and an id the guest MINTS is 0 -- which is why 0 must
     /// never be issued, or a forgery is indistinguishable from a grant.
@@ -985,7 +985,7 @@ impl Wire {
         self
     }
 
-    /// The tag SYMBOL, then the form (`doc/decisions/0034`).
+    /// The tag SYMBOL, then the form (`DECISIONS.md#tagged-literals`).
     pub fn tagged(&mut self) -> &mut Wire {
         self.b.push(K_TAGGED);
         self
@@ -1021,7 +1021,7 @@ impl Wire {
 // The other half of `Wire`, and it was missing.
 //
 // A host could WRITE the wire format and not read it, which is the same
-// asymmetry the JVM and CLR runtimes had until `0027` was finished: an encoder
+// asymmetry the JVM and CLR runtimes had until `ports-are-the-hosts` was finished: an encoder
 // without a decoder means a host can send a value and cannot serve a request.
 // Everything the guest sends -- an RPC call into a virtual namespace, a message
 // on any bridge -- arrives here as bytes, and a host that must decode them by
@@ -1228,7 +1228,7 @@ impl<'a> HostReader<'a> {
                 Val::Tagged(alloc::boxed::Box::new(tag), alloc::boxed::Box::new(form))
             }
             // A TABLE is columnar and its decode needs the schema machinery
-            // (`doc/decisions/0026`). Refused by name rather than mis-read:
+            // (`DECISIONS.md#tables`). Refused by name rather than mis-read:
             // a host that gets "unsupported" can act on it, and one that gets a
             // wrong value cannot.
             K_TABLE => return Err("wire: a table cannot be read host-side yet".into()),

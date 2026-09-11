@@ -1,4 +1,4 @@
-// Benchmark the DECISION, not the runtime (doc/decisions/0007).
+// Benchmark the DECISION, not the runtime (DECISIONS.md#construe-benchmarks).
 //
 // The question is not "is flint fast". It is: for each place construe runs code,
 // is flint better, worse, or irrelevant — and what does that do to the bill? Two
@@ -100,7 +100,7 @@ console.log(row(['', 'per call', 'vs cherry']));
 const { mod: cherryParse } = await cherryModule('parse');
 const { module: cbModule } = await load('out/cb.wasm');
 // The module is built `:fn construe.bench.main/main` at line 77; a call names it
-// (`doc/decisions/0025` step 5).
+// (`DECISIONS.md#structured-ports` step 5).
 const FN = 'construe.bench.main/main';
 const flintInst = instantiate(cbModule);
 
@@ -148,7 +148,7 @@ const coldFlint = await bestAsync(7, async () => {
   inst.run(FN, ['parse', '1']);
 });
 // `collect_now` and `stat_peak_live` are diagnostic exports and a production
-// module does not carry them (doc/decisions/0016). This used to call them
+// module does not carry them (DECISIONS.md#two-builds). This used to call them
 // unconditionally and crash with `collect_now is not a function`, taking the
 // cold-start and footprint section -- flint's largest measured win -- with it.
 const DIAG = !!(flintInst.exports.collect_now && flintInst.exports.stat_peak_live

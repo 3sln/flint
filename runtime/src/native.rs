@@ -1,4 +1,4 @@
-//! Running a flint program natively (`doc/decisions/0010`).
+//! Running a flint program natively (`DECISIONS.md#other-hosts`).
 //!
 //! The runtime is Rust, so it already compiles to native code through LLVM --
 //! the collector, the value representation, the interpreter and every builtin
@@ -17,7 +17,7 @@
 //! they are indices into `__indirect_function_table`. Natively there is no
 //! table, so a slot means nothing. `resolve_natives` re-points them by name
 //! against a registry, which is exactly what a loader module does
-//! (`doc/decisions/0023`) -- the registry is just built from Rust here rather
+//! (`DECISIONS.md#construe-integration-bar`) -- the registry is just built from Rust here rather
 //! than spliced into a data segment.
 
 use crate::rt::Rt;
@@ -28,7 +28,7 @@ use alloc::vec::Vec;
 /// flint's bytecode, extracted from a compiled `.wasm` artifact.
 ///
 /// The module carries its program as a data segment, and the descriptor
-/// `FLINT_IMAGE_DESC` says where (`doc/decisions/0023`). Reading it back lets a
+/// `FLINT_IMAGE_DESC` says where (`DECISIONS.md#construe-integration-bar`). Reading it back lets a
 /// native host run a wasm artifact without a wasm engine -- the artifact is for
 /// whoever has one, and this is the same program by another road.
 ///
@@ -374,7 +374,7 @@ impl Program {
     /// check inside the SDK. Four places knowing a concept that belongs to the
     /// host.
     ///
-    /// What crosses is an ordinary opaque value (`doc/decisions/0022`) carrying
+    /// What crosses is an ordinary opaque value (`DECISIONS.md#opaque-values`) carrying
     /// an id the host chose. Guest code cannot mint that id -- `flint/opaque`
     /// gives 0 -- so a host recognises its own and nothing else. Whether it
     /// MEANS a capability is entirely the host's business, and a host that
@@ -472,7 +472,7 @@ impl Program {
     }
 
     /// Grant an open: hand the waiting thread a handle on the host's port
-    /// `port_id` (`doc/decisions/0027`).
+    /// `port_id` (`DECISIONS.md#ports-are-the-hosts`).
     ///
     /// The half `host_continue` cannot do. A grant has to NAME a port, because
     /// there is no port until the host says which one -- the sandbox no longer
@@ -483,7 +483,7 @@ impl Program {
     }
 
     /// Answer a request: the bytes are the value the guest asked for
-    /// (`doc/decisions/0036` step 7).
+    /// (`DECISIONS.md#workspace-capabilities` step 7).
     ///
     /// The counterpart of `host_grant`, for the requests whose answer is not a
     /// port. A port is granted BY ID and never encoded; anything else crosses
@@ -494,7 +494,7 @@ impl Program {
         self.rt.host_answer(token as i64, bytes)
     }
 
-    /// One slot of the diagnostics census (`doc/decisions/0013`).
+    /// One slot of the diagnostics census (`DECISIONS.md#emit-wasm-instead-of-dispatch`).
     ///
     /// Exposed natively as well as through the wasm ABI so that a coverage
     /// question -- WHICH OPCODES DOES OUR CROSS-RUNTIME SUITE ACTUALLY RUN --
@@ -561,14 +561,14 @@ impl Program {
 
 
     /// Call a named function with encoded arguments, and encode the answer
-    /// (`doc/decisions/0025`). Same contract as the wasm `flint_call`: one
+    /// (`DECISIONS.md#structured-ports`). Same contract as the wasm `flint_call`: one
     /// encoded value in, one encoded value out, and a failure is data --
     /// `{:error kind :message text}` -- rather than a second channel.
     pub fn call(&mut self, encoded_call: &[u8]) -> Result<Vec<u8>, String> {
         call_on(&mut self.rt, encoded_call)
     }
 
-    /// A second executor on this program's heap (`doc/decisions/0028`).
+    /// A second executor on this program's heap (`DECISIONS.md#drivers`).
     ///
     /// It shares the heap, the image, the globals, the intern tables and the
     /// grants, and gets its own value stack, frames and gas. Run calls on it
@@ -587,7 +587,7 @@ impl Program {
         self.rt.var_named(name).is_some()
     }
 
-    /// The instruction count, which is deterministic (`doc/decisions/0009`) and
+    /// The instruction count, which is deterministic (`DECISIONS.md#resource-limits`) and
     /// therefore the same here as under any wasm engine.
     pub fn steps(&self) -> u64 {
         self.rt.steps
@@ -608,7 +608,7 @@ impl Program {
 /// Run an encoded call on a given executor.
 ///
 /// Free rather than a method because a `Program` owns ONE executor and a
-/// sandbox may have several (`doc/decisions/0028`). Every executor runs a call
+/// sandbox may have several (`DECISIONS.md#drivers`). Every executor runs a call
 /// the same way, and a second copy of this would be a second place for the
 /// call protocol to drift.
 pub fn call_on(rt: &mut Rt, encoded_call: &[u8]) -> Result<Vec<u8>, String> {

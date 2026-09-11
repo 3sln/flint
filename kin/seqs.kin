@@ -7,7 +7,7 @@
 ;; That shape is where a rooting bug lives, which is why generating it is
 ;; worth more than the line count suggests. `alloc` can collect, so every
 ;; argument has to be on the shadow stack across it and re-read afterwards --
-;; `doc/decisions/0031`: a value in a host local does not survive an
+;; `DECISIONS.md#a-vec-of-values-is-not-a-root`: a value in a host local does not survive an
 ;; allocation. Written once, that rule is obeyed once.
 ;;
 ;; The shadow-stack mark is `mk`, not `base`: `base` is a keyword in C#, and

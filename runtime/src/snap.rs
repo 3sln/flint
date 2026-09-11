@@ -1,4 +1,4 @@
-//! VM snapshots: capture, export, import (`doc/decisions/0015`).
+//! VM snapshots: capture, export, import (`DECISIONS.md#snapshots`).
 //!
 //! **Capture is a memcpy, not a traversal.** A capture that walked the object
 //! graph could be wrong exactly as an ad-hoc probe can be wrong -- a missed
@@ -178,7 +178,7 @@ pub fn capture_into(rt: &Rt, out: &mut Vec<u8>) {
     // bytes below, in each object's header. This investigation turned on those
     // two being able to disagree, so both are captured and neither is derived.
     //
-    // It is PER-EXECUTOR now (`doc/decisions/0028`), so what is captured is
+    // It is PER-EXECUTOR now (`DECISIONS.md#drivers`), so what is captured is
     // this executor's plus whatever the last collection handed back. A
     // snapshot is taken from one executor and describes what it can see.
     w.addrs(&rt.roots.own.remembered);
@@ -275,7 +275,7 @@ pub fn capture(rt: &Rt) -> Vec<u8> {
 /// handle to nothing, and no host can put it right because the identity it
 /// would rehydrate against has been erased.
 ///
-/// The check belongs where `doc/decisions/0022` always said it belongs -- the
+/// The check belongs where `DECISIONS.md#opaque-values` always said it belongs -- the
 /// GRANT TABLE, not possession. A host that no longer honours id 7 refuses it
 /// exactly as it refuses a forgery, and a host that wants the shelved sandbox
 /// to carry on rebinds 7 to a live resource. Erasing the id took that choice
@@ -546,7 +546,7 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
 //     "would mean a traversal, which is the thing this design exists to avoid".
 //     Shelving needs the opposite: rehydrate in another process, another heap.
 //
-// So this one traverses. `doc/decisions/0015`'s objection to a traversal is
+// So this one traverses. `DECISIONS.md#snapshots`'s objection to a traversal is
 // that one which misses an edge yields a snapshot missing an object, and then
 // the capture is what needs debugging. That objection is fatal to a BESPOKE
 // traversal and not to this one, because **the collector decides what is live
@@ -812,7 +812,7 @@ pub fn import_live(rt: &mut Rt, bytes: &[u8]) -> bool {
     //
     // The addresses are held on the SHADOW STACK rather than in a Rust vector,
     // because allocating can collect and a collection moves what it has already
-    // built. That is not a hypothetical: it is `doc/decisions/0031`, one file
+    // built. That is not a hypothetical: it is `DECISIONS.md#a-vec-of-values-is-not-a-root`, one file
     // over, and the shadow stack is what makes it a non-question here.
     let n = r.usz();
     let base = rt.mark();
@@ -1009,7 +1009,7 @@ pub fn import_live(rt: &mut Rt, bytes: &[u8]) -> bool {
 }
 
 /// `main` should report "this sandbox was shelved", not "here is your answer".
-/// 0 is a normal return and 2 is "I need the host" (`doc/decisions/0005`), so
+/// 0 is a normal return and 2 is "I need the host" (`DECISIONS.md#threads-and-ports`), so
 /// this takes the next free code rather than overloading either.
 pub const STATUS_SHELVED: i32 = 3;
 

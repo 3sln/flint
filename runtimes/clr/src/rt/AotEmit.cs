@@ -397,7 +397,7 @@ public static class AotEmit {
     /// not fixnum -- a value past the fixnum range is a boxed bigint and still
     /// answers `int?` -- so the tags are still tested, and everything else goes
     /// to a HELPER rather than a bail, because a boundary per arithmetic
-    /// instruction is the shape `0013` measured and rejected.
+    /// instruction is the shape `emit-wasm-instead-of-dispatch` measured and rejected.
     static void IntOp(Ctx c, AotPlan.Ins i, AotPlan.Chunk ch) {
         var il = c.il;
         Inc(c, c.top, -2);

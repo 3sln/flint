@@ -1,8 +1,8 @@
-//! `flint.deps.pod`: babashka pods as virtual namespaces (`doc/decisions/0037`).
+//! `flint.deps.pod`: babashka pods as virtual namespaces (`DECISIONS.md#system-namespaces-and-deps`).
 //!
 //! A pod is a subprocess speaking bencode over stdio. It is one implementation
 //! of the SAME interface `flint.sys.fs` implements -- `{:op :invoke}`,
-//! `{:op :get}`, `{:op :list}` -- which is the whole reason `0036` made the var
+//! `{:op :get}`, `{:op :list}` -- which is the whole reason `workspace-capabilities` made the var
 //! list optional and sourced from `:list`: a booted pod can be asked what it
 //! holds, and a build that boots one gets the same compile-time checking as any
 //! other namespace.
@@ -285,7 +285,7 @@ impl Service for Pod {
         // `'static` names because every other service's surface is known at
         // compile time; a pod's is discovered at run time, so it cannot. The
         // var list a BUILD needs comes from `var_names` and is threaded into
-        // the compile spec, which is where it matters -- `0036` says the list
+        // the compile spec, which is where it matters -- `workspace-capabilities` says the list
         // buys checking, not codegen.
         Vec::new()
     }
@@ -298,7 +298,7 @@ impl Service for Pod {
         // ARGUMENTS CROSS AS JSON, because that is the format declared at
         // describe time. A value the codec carries and JSON does not -- a set, a
         // keyword key -- is lossy here, and that is the pod protocol's
-        // limitation rather than flint's (`0033`).
+        // limitation rather than flint's (`bridges`).
         let json = to_json(args);
         self.send(Ben::Dict(vec![
             (b"op".to_vec(), Ben::s("invoke")),

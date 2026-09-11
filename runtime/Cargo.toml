@@ -15,7 +15,7 @@ crate-type = ["rlib"]
 # the runtime's own panic handler under wasm32.
 host-tools = []
 
-# Several executors inside one sandbox (doc/decisions/0028). ABSENT by default,
+# Several executors inside one sandbox (DECISIONS.md#drivers). ABSENT by default,
 # on the same rule as `aot` and `diagnostics`: it costs 1 056 bytes of module,
 # MEASURED by building the pure module with the multi-executor root scan and
 # without it (245 901 against 244 845), and wasm cannot use it at all until it
@@ -23,13 +23,13 @@ host-tools = []
 # have one executor should not carry the loop that walks the others.
 parallel = []
 
-# Compiled arities (doc/decisions/0013). ABSENT by default, for the same reason
+# Compiled arities (DECISIONS.md#emit-wasm-instead-of-dispatch). ABSENT by default, for the same reason
 # diagnostics are: it costs 7 002 bytes of production module, and 0009 already
 # spent a chosen budget on instantiating the loop twice. A module that never asks
 # for compiled code should not carry the machinery that runs it.
 aot = []
 
-# Diagnostic machinery (doc/decisions/0016). ABSENT by default, not disabled:
+# Diagnostic machinery (DECISIONS.md#two-builds). ABSENT by default, not disabled:
 # a runtime flag leaves the code linked and branched on, and "absent" is a
 # different guarantee from "off" -- which matters most for a VM whose strongest
 # case is sandboxing code somebody else wrote. Gas, the memory cap and the

@@ -1,4 +1,4 @@
-//! The region histogram `doc/decisions/0013` is gated on.
+//! The region histogram `DECISIONS.md#emit-wasm-instead-of-dispatch` is gated on.
 //!
 //! 0013 says, in the section that decides everything else in it: *"the whole
 //! thing turns on a distribution nobody has looked at: how long are the regions
@@ -200,7 +200,7 @@ pub fn read(i: u32) -> u64 {
 //
 // Re-entry points are nearly free at run time -- a compiled body is entered by
 // a `br_table` and every value is already in the linear-memory stack, so there
-// is nothing to reconstruct (`doc/decisions/0001`, and 0013's section on why
+// is nothing to reconstruct (`DECISIONS.md#dispatch`, and 0013's section on why
 // deopt is cheap here). What they are NOT free in is module bytes, and 0003's
 // whole modularity story is measured in bytes. So the count that sizes the
 // chunks is a static one: how many re-entry points does real code actually

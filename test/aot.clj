@@ -1,8 +1,8 @@
-;; Compiled arities against the interpreter (`doc/decisions/0013`).
+;; Compiled arities against the interpreter (`DECISIONS.md#emit-wasm-instead-of-dispatch`).
 ;;
 ;; The bar is the one 0015 set for snapshots and it is the right one here too:
 ;; not "close enough" but **the same answer and the same instruction count**.
-;; Gas is a production feature (`doc/decisions/0016`) and construe's gates depend
+;; Gas is a production feature (`DECISIONS.md#two-builds`) and construe's gates depend
 ;; on the count, so a compiler that changed it by one would be wrong even if
 ;; every answer matched.
 (require '[clojure.string :as str] '[babashka.fs :as fs] '[cheshire.core :as json])
@@ -71,7 +71,7 @@
        "i.exports.set_step_limit(0x7ffffff000000000n);"
        ;; The FUNCTION IS NAMED, and its name is derivable from the artifact:
        ;; `build!` writes `out/aot-<ns>-{a,i}.wasm`. Nothing is called
-       ;; automatically (`doc/decisions/0025` step 5).
+       ;; automatically (`DECISIONS.md#structured-ports` step 5).
        "const fn = /out\\/aot-([a-z]+)-[ai]\\.wasm$/.exec(process.argv[1])[1] + '/main';"
        "const r = i.run(fn, []);"
        "console.log(JSON.stringify({out: r.out.trim(), code: r.code,"
@@ -91,7 +91,7 @@
 
 ;; And the rule that makes all of it optional: a module built without `--aot`
 ;; carries no compiled arities at all, which is what lets the interpreter's own
-;; loop monomorphise the re-entry check away (`doc/decisions/0016`'s reasoning,
+;; loop monomorphise the re-entry check away (`DECISIONS.md#two-builds`'s reasoning,
 ;; applied to a production feature rather than a diagnostic one).
 (let [plain (fs/size (build! "arith" false))
       compiled (fs/size (build! "arith" true))]

@@ -69,7 +69,7 @@ jobs:
           echo "$TAG matches package.json."
 
       # The suite leaves the tree in the PRODUCTION configuration on its way
-      # out (doc/decisions/0016), which is the one that must ship. Running it
+      # out (DECISIONS.md#two-builds), which is the one that must ship. Running it
       # here is both the gate and the build: `units/` is generated, not
       # tracked, and the published tarball needs it.
       - name: Test, and build the units that ship

@@ -6,7 +6,7 @@ public final class Op {
     // 0x00, 0x10, 0x1D and 0x1F..0x22 are RETIRED, not free. `nop`,
     // `jump-if-true`, `list`, the two `*-keep` jumps, `pop-n` and
     // `set-local-keep` were implemented in all three runtimes and emitted by
-    // nothing (`doc/decisions/0038`). The numbers are not reused, so an image
+    // nothing (`DECISIONS.md#kin`). The numbers are not reused, so an image
     // built before this cannot be silently misread as something else.
     public static final int CONST = 0x01, NIL = 0x02, TRUE = 0x03, FALSE = 0x04,
         INT = 0x05, LOCAL = 0x06, LOCAL_W = 0x07, SET_LOCAL = 0x08, UPVAL = 0x09,

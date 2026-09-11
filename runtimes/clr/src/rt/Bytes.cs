@@ -1,7 +1,7 @@
 namespace Flint.Rt;
 
 
-/// Byte strings, ported from `runtime/src/bytes.rs` (`doc/decisions/0024`).
+/// Byte strings, ported from `runtime/src/bytes.rs` (`DECISIONS.md#no-runtime-linking`).
 ///
 /// FLAT is a contiguous `Obj.TyBytes`; ROPE is a shallow B-tree of byte pieces
 /// with structure sharing, so concatenation is a tree join and a slice of a
@@ -28,7 +28,7 @@ public static class Bytes {
     /// Total byte length of this node's subtree.
     public const int BB_BYTES = 0;
     /// A cached flattening, or NIL. Materialising a rope repeatedly is the
-    /// failure `0011` names -- count the flattens, do not hope about them.
+    /// failure `strings-and-matching` names -- count the flattens, do not hope about them.
     public const int BB_FLAT = 1;
     /// The subtree's depth: 1 for a node whose children are all leaves, and one
     /// more per level. EVERY CHILD OF A NODE HAS THE SAME DEPTH, which is what
@@ -102,7 +102,7 @@ public static class Bytes {
     public static bool IsBrope(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Bytecore.IsBrope(rt, v);
 
     /// SHARES, like `Str.RopeSlice`. This descended to the range and then
-    /// COPIED it (`doc/decisions/0011`).
+    /// COPIED it (`DECISIONS.md#strings-and-matching`).
     public static long Slice(Rt rt, long v, int from, int to) { return global::_3sln.Flint.Kgen.Rt.Byteslice.BSlice(rt, v, from, to); }
 
     static long FromRoots(Rt rt, int bas, int n) { return global::_3sln.Flint.Kgen.Rt.Bytefold.BFromRoots(rt, bas, n); }

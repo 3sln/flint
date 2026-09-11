@@ -78,7 +78,7 @@
             q (symbol (str target) (name sym))
             v (get (:virtual cc) target)]
         (cond
-          ;; A VIRTUAL namespace has no vars to look up (`doc/decisions/0036`
+          ;; A VIRTUAL namespace has no vars to look up (`DECISIONS.md#workspace-capabilities`
           ;; step 4). Whether an unknown name here is caught depends on what the
           ;; resolver could say, and both answers are legitimate:
           ;;
@@ -141,7 +141,7 @@
 (defn- virtual-var
   "The qualified symbol `sym` names, when its namespace is VIRTUAL, else nil.
 
-  A virtual namespace has no source and no vars (`doc/decisions/0036` step 4);
+  A virtual namespace has no source and no vars (`DECISIONS.md#workspace-capabilities` step 4);
   a reference to one compiles to a call over a port. Resolving it is the same
   `qualify` every other reference goes through -- aliases included, so
   `(:require [flint.sys.fs :as fs])` and `fs/list-dir` work exactly as they
@@ -230,7 +230,7 @@
 (def builtin-guards
   "Capabilities a BUILTIN demands of the workspace naming it.
 
-  `0036` level two guards a VAR. Builtins are not vars, and the catalogue is
+  `workspace-capabilities` level two guards a VAR. Builtins are not vars, and the catalogue is
   reachable from anywhere: `native-name` turns `flint.rt/<x>` into a direct
   native call for any `x` the loader carries. So a guard on a stdlib var that
   merely FORWARDS to a builtin is decorative -- the caller can skip the wrapper
@@ -257,7 +257,7 @@
   {"flint/request" #{:host}})
 
 (defn- guard-check!
-  "Refuse a reference to a var its workspace guards (`doc/decisions/0036`).
+  "Refuse a reference to a var its workspace guards (`DECISIONS.md#workspace-capabilities`).
 
   Level two of two. Level one is the `:require` edge and is checked from the
   dependency graph; this is the reference itself, so a workspace may be depended
@@ -401,7 +401,7 @@
   namespaces has helpers that all six need and nobody outside should touch,
   and before this the only way to say that was to make them public and hope.
 
-  A workspace is the same boundary `0036` guards capabilities across, and the
+  A workspace is the same boundary `workspace-capabilities` guards capabilities across, and the
   two questions compose without interfering: `^:internal` asks WHO MAY NAME
   THIS, a guard asks WHAT MAY THIS CODE DO. A var can be both.
 
@@ -464,7 +464,7 @@
     ;; IN VALUE POSITION, a virtual var becomes a closure that invokes it
     ;; remotely -- not a `:get` on the far side.
     ;;
-    ;; `0036` wrote the two operations as `call` and `get`, and taking a bare
+    ;; `workspace-capabilities` wrote the two operations as `call` and `get`, and taking a bare
     ;; reference to mean `get` would break `(mapv fs/list-dir xs)`, and storing
     ;; one in a local, and putting one in a map. Nearly every var behind one of
     ;; these namespaces is a
@@ -483,7 +483,7 @@
           (if (get-in @(:cc env) [:dynamic q])
             ;; A dynamic var reads through the current thread's binding map,
             ;; falling back to the root value. `binding` is per GREEN thread
-            ;; (doc/decisions/0005, section 4).
+            ;; (DECISIONS.md#threads-and-ports, section 4).
             (do (record-dep! env (symbol "flint.native" "flint/dyn-get"))
                 {:op :native :name "flint/dyn-get"
                  :args [(const-node q) {:op :var :sym q}]})
@@ -644,7 +644,7 @@
       ;; point of it. Depth is counted rather than the var being blocked: the
       ;; nested call in `(f (f x) y)` is a different call and must still
       ;; A VIRTUAL var IN HEAD POSITION becomes one call, not a closure and
-      ;; then a call (`doc/decisions/0036` step 4).
+      ;; then a call (`DECISIONS.md#workspace-capabilities` step 4).
       ;;
       ;; `analyze-symbol` would already turn the head into `fn-for`, and
       ;; `((fn-for 'ns/f) a b)` is correct -- and allocates a closure per call

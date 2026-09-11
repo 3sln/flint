@@ -5,7 +5,7 @@ using _3sln.Flint.Kgen.Rt;
 
 
 /// Green threads, ports, and the scheduler. Ported from `runtime/src/conc.rs`
-/// (`doc/decisions/0005`).
+/// (`DECISIONS.md#threads-and-ports`).
 ///
 /// # Nothing here suspends a host frame
 ///
@@ -70,7 +70,7 @@ public static class Conc {
     /// sending into one channel lost exactly half the traffic. See the Rust
     /// `port_enqueue` for the protocol, which this mirrors step for step.
     /// `PT_ROOT`, `PT_FORMAT`, `PT_OPTS` and `PT_BINARY` are GONE
-    /// (`doc/decisions/0027`). A bridge handle is ordinary memory -- a handle
+    /// (`DECISIONS.md#ports-are-the-hosts`). A bridge handle is ordinary memory -- a handle
     /// nothing refers to is precisely what a release is for, so rooting it would
     /// defeat the count -- and a bridge is always the runtime's wire format, so
     /// there is no format, no options and no binary flag to remember.
@@ -94,7 +94,7 @@ public static class Conc {
     /// with every host that reads them.
     public const int P_PENDING = 0, P_OPEN = 1, P_CLOSED = 2, P_REFUSED = 3,
                      P_HALF = 4, P_ORPHANED = 5;
-    /// Two kinds, and no third (`doc/decisions/0027`). `K_CHANNEL` joins two
+    /// Two kinds, and no third (`DECISIONS.md#ports-are-the-hosts`). `K_CHANNEL` joins two
     /// green threads inside one sandbox and passes values by reference;
     /// `K_BRIDGE` is a HANDLE on a port the host owns, carrying the host's id
     /// and encoded messages.
@@ -114,11 +114,11 @@ public static class Conc {
     /// `EV_RETAIN` says this sandbox now holds the host's port `a`, pushed
     /// exactly once per port per sandbox on the miss that mints the handle;
     /// `EV_RELEASE` says it no longer does. One per retain, so the host's count
-    /// is of HOLDERS (`doc/decisions/0027`).
+    /// is of HOLDERS (`DECISIONS.md#ports-are-the-hosts`).
     public const int EV_OPEN = 1, EV_MESSAGE = 2, EV_CLOSED = 3,
                      EV_RETAIN = 4, EV_RELEASE = 5,
     /// The guest is asking the host for SOMETHING, and the answer is an
-    /// ordinary value rather than a port (`doc/decisions/0036` step 7).
+    /// ordinary value rather than a port (`DECISIONS.md#workspace-capabilities` step 7).
     /// `EV_OPEN` is the special case whose answer is a port, and it stays: a
     /// port is granted by id and never encoded.
                      EV_REQUEST = 6;
@@ -135,7 +135,7 @@ public static class Conc {
                      W_NEXT = 4, W_LEN = 5;
     public const int WK_OPEN = 1, WK_SEND = 2, WK_RECEIVE = 3, WK_JOIN = 4,
     /// Parked on `HostRequest`, which is `WK_OPEN` generalised: the answer is a
-    /// VALUE rather than necessarily a port (`doc/decisions/0036` step 7).
+    /// VALUE rather than necessarily a port (`DECISIONS.md#workspace-capabilities` step 7).
                      WK_REQUEST = 5;
 
     // --- scheduler ---------------------------------------------------------
@@ -145,7 +145,7 @@ public static class Conc {
         SC_WAITERS = 7, SC_WFREE = 8, SC_SYSTEM = 9,
         /// Host ids of every BRIDGE this sandbox holds a handle for -- ids, not
         /// references, so the list pins nothing. This is the walk that turns a
-        /// collection into a release (`doc/decisions/0027`).
+        /// collection into a release (`DECISIONS.md#ports-are-the-hosts`).
         SC_BRIDGES = 10, SC_LEN = 11;
 
     /// Instructions a thread runs before the scheduler takes the slice back.
@@ -231,7 +231,7 @@ public static class Conc {
         int n = rt.roots.StackTop;
         // UNBILLED: the size of a saved stack is a property of the calling
         // convention, not of the program. Billing it makes the same program
-        // cost more interpreted than compiled (`doc/decisions/0009`).
+        // cost more interpreted than compiled (`DECISIONS.md#resource-limits`).
         long a0 = rt.AllocUnbilled(Obj.TyNode, n);
         long sv = a0 == 0 ? Val.Nil : Val.Heap(a0);
         if (Val.IsNil(sv)) { rt.PopTo(bas); return; }
@@ -523,7 +523,7 @@ public static class Conc {
     }
 
     /// The handle in THIS sandbox for the host's port `hostId`, minting one if
-    /// this sandbox does not hold it yet (`doc/decisions/0027`).
+    /// this sandbox does not hold it yet (`DECISIONS.md#ports-are-the-hosts`).
     ///
     /// THIS IS THE REFERENCE COUNT, and it is a count of HOLDERS. The weak
     /// intern table is what makes that possible: one handle object per host id
@@ -592,7 +592,7 @@ public static class Conc {
     /// sandbox is driven over: calls in arrive on it, and requests out -- for a
     /// capability, for another port -- leave on it. Handing it to guest code
     /// would make it ambient authority inside the sandbox, which is the thing
-    /// `doc/decisions/0022` and `0027` both exist to prevent. There is no
+    /// `DECISIONS.md#opaque-values` and `ports-are-the-hosts` both exist to prevent. There is no
     /// builtin that answers it; only the runtime looks it up.
     public static long SystemPort(Rt rt) {
         long s = Sched(rt);
@@ -631,7 +631,7 @@ public static class Conc {
         rt.SetSlot(p, PT_BYTES, Val.Fixnum(0));
         // PEERS ARE LINKED BY ID, never by object. When one end is collected
         // its object is gone, and a field holding the peer would keep it alive
-        // -- which is exactly what `doc/decisions/0006` says must not happen:
+        // -- which is exactly what `DECISIONS.md#host-abi` says must not happen:
         // an unreachable flint end MEANS the script is finished with it.
         rt.SetSlot(p, PT_PEER, Val.Fixnum(-1));
         rt.SetSlot(p, PT_LABEL, rt.R(li));
@@ -642,7 +642,7 @@ public static class Conc {
         return outv;
     }
 
-    /// The registry. WEAK on purpose (`doc/decisions/0006`): the flint end of a
+    /// The registry. WEAK on purpose (`DECISIONS.md#host-abi`): the flint end of a
     /// port is ordinary reachable memory, and when the collector finds it
     /// unreachable that MEANS the script is finished with it. The scheduler
     /// keeps IDS, not references -- a strong list would pin every port for ever
@@ -839,8 +839,8 @@ public static class Conc {
             case Obj.TyAtom:   return "a port carries data only; this is an atom";
             case Obj.TyVar:    return "a port carries data only; this is a var";
             case Obj.TyThread: return "a port carries data only; this is a thread";
-            // `doc/decisions/0006` refused this outright -- "an endpoint cannot
-            // be delegated at run time" -- and `0025` REVERSES it: a capability
+            // `DECISIONS.md#host-abi` refused this outright -- "an endpoint cannot
+            // be delegated at run time" -- and `structured-ports` REVERSES it: a capability
             // a program holds becomes something it can hand on.
             //
             // WHICH port may go WHERE is not symmetric. A channel is internal:
@@ -857,7 +857,7 @@ public static class Conc {
                      + " so its id would name one of our objects from outside. A bridge"
                      + " can be sent, because its id is the host's own.";
             // An opaque value is identity and nothing else
-            // (`doc/decisions/0022`), so there is nothing to serialise that
+            // (`DECISIONS.md#opaque-values`), so there is nothing to serialise that
             // would still BE it. Anything a codec could write down is something
             // the receiver could write down too, and then it is mintable --
             // which is the entire property gone.
@@ -875,7 +875,7 @@ public static class Conc {
             // Materialised ON THE SHADOW STACK, not into a host list. The walk
             // below allocates, so anything held in a host `List<long>` across
             // it comes back naming the address the object had before the
-            // nursery flipped -- `doc/decisions/0031`, which is exactly the rule
+            // nursery flipped -- `DECISIONS.md#a-vec-of-values-is-not-a-root`, which is exactly the rule
             // a list of raw `long`s is invisible to.
             int at = rt.Mark();
             int en = Maps.Entries(rt, rt.R(vi));
@@ -1075,7 +1075,7 @@ public static class Conc {
                 "receive: the other end of this port is gone, so this can never complete");
         }
         // A BRIDGE has no peer OBJECT to ask about: the far end is the
-        // host's registry and is not in any heap (`doc/decisions/0027`). Its own
+        // host's registry and is not in any heap (`DECISIONS.md#ports-are-the-hosts`). Its own
         // state is the whole answer, and the states above have already covered
         // every way that can say "no more" -- so an empty buffer here means
         // "nothing yet", which is what parking is for.
@@ -1171,7 +1171,7 @@ public static class Conc {
     /// SDK -- four places knowing a concept that belongs to whoever is lending
     /// the authority.
     ///
-    /// A capability is an OPAQUE VALUE (`doc/decisions/0022`) and nothing more.
+    /// A capability is an OPAQUE VALUE (`DECISIONS.md#opaque-values`) and nothing more.
     /// The host projects one in by any means it likes, and a program that wants
     /// something a capability enables PRESENTS it with the request. This
     /// forwards whatever it was given and takes no view. What makes that safe
@@ -1247,7 +1247,7 @@ public static class Conc {
 
     /// Ask the host for something, and get a VALUE back.
     ///
-    /// `PortOpen` generalised (`doc/decisions/0036` step 7). The two differ in
+    /// `PortOpen` generalised (`DECISIONS.md#workspace-capabilities` step 7). The two differ in
     /// exactly one place -- what the answer may be -- and that difference is
     /// load-bearing, so they are two methods rather than one with a flag: a
     /// port is granted BY ID through `HostGrant` and never encoded, because
@@ -1332,7 +1332,7 @@ public static class Conc {
     public static bool HostContinue(Rt rt, long token, bool ok) {
         if (ok) {
             // A GRANT HAS TO NAME A PORT. There is no port to grant until the
-            // host says which one -- that is what `0027` inverted -- so this
+            // host says which one -- that is what `ports-are-the-hosts` inverted -- so this
             // form can only ever mean a refusal, and a host that means to grant
             // calls `HostGrant`. Answering `true` here would have to invent a
             // port, which is exactly the construction the sandbox may not do and
@@ -1352,7 +1352,7 @@ public static class Conc {
     }
 
     /// Grant an open: hand the waiting thread a handle on the host's port
-    /// `hostPortId` (`doc/decisions/0027`).
+    /// `hostPortId` (`DECISIONS.md#ports-are-the-hosts`).
     ///
     /// The id is the HOST's. It is the same id in every sandbox that holds this
     /// port, which is what makes a handle sendable between two of them at all,
@@ -1381,7 +1381,7 @@ public static class Conc {
     /// The host's answer to an `EV_REQUEST`, as encoded bytes.
     ///
     /// Decoded HERE, at the boundary, like every other thing crossing a bridge
-    /// (`doc/decisions/0027`): the guest gets a value and never a codec.
+    /// (`DECISIONS.md#ports-are-the-hosts`): the guest gets a value and never a codec.
     ///
     /// To REFUSE, call `HostContinue(token, false)` as with an open -- a
     /// refusal carries no value and needs no bytes.
@@ -1426,7 +1426,7 @@ public static class Conc {
         // A bridge is ONE object and the id is its own, so the lookup above has
         // already found the end to deliver into. There is no pair and no peer
         // hop: that indirection existed only because a host port kept its
-        // bookkeeping on a second object (`doc/decisions/0027`).
+        // bookkeeping on a second object (`DECISIONS.md#ports-are-the-hosts`).
         int pi = rt.Push(rt.R(hi));
         // BACK-PRESSURE in bytes, CLAIMED ATOMICALLY: two host threads
         // delivering into one end would both read the same `queued`, both find
@@ -1633,14 +1633,14 @@ public static class Conc {
         // The handle is ordinary memory and is not rooted, so the collector
         // finding it unreachable IS this sandbox letting the port go. One
         // release per retain, which is what makes the host's count a count of
-        // holders rather than of arrivals (`doc/decisions/0027`).
+        // holders rather than of arrivals (`DECISIONS.md#ports-are-the-hosts`).
         int bri = rt.Push(rt.Slot(rt.R(si), SC_BRIDGES));
         int brn = Vec.Count(rt, rt.R(bri));
         int hli = rt.Push(Vec.Empty(rt));
         for (int k = 0; k < brn; k++) {
             long bid = Fx(Vec.Nth(rt, rt.R(bri), k, Val.NotFound));
             if (Val.IsNil(PortById(rt, bid))) {
-                // CLOSED as well as released. `doc/decisions/0006`: an end the
+                // CLOSED as well as released. `DECISIONS.md#host-abi`: an end the
                 // collector finds unreachable IS the script having called
                 // `Close`, so the host hears the same pair either way.
                 PushEvent(rt, EV_CLOSED, bid, 0, Val.Nil);
@@ -1935,7 +1935,7 @@ public static class Conc {
         for (;;) {
             // What the collector left behind IS the lifetime rule: a flint end
             // that nothing refers to any more has been closed, whether or not
-            // anybody said so (`doc/decisions/0006`).
+            // anybody said so (`DECISIONS.md#host-abi`).
             ReapPorts(rt);
             int i = Pick(rt);
             if (i >= 0) { RunOne(rt, i); continue; }

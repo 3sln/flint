@@ -5,7 +5,7 @@
 
   Ported because the Clojars survey named it: `clojure.zip` unblocks more
   third-party code than transitive maven resolution would have, which is why
-  that half of `0021` is cancelled and this is here instead.
+  that half of `cli` is cancelled and this is here instead.
 
   The shape is Clojure's, deliberately, and `test/conform/basics.cljc` checks
   it against real Clojure's answers rather than against a reading of the

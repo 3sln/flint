@@ -42,7 +42,7 @@ public static class Valeq {
     /// 
     /// CHARGED PER ELEMENT. `=` on two big vectors is ONE bytecode instruction
     /// and O(n) work, and a budget that does not see that does not bound the
-    /// thing worth bounding (`0009`).
+    /// thing worth bounding (`resource-limits`).
     /// TWO PLAIN VECTORS ARE COMPARED BY INDEX, not by walking two seqs.
     /// 
     /// MEASURED, which is the only reason this exists. `bench/equiv.mjs` reports
@@ -60,13 +60,13 @@ public static class Valeq {
     /// both sides nil -- so equal vectors cost n+1 and a pair differing at index
     /// k costs k+1. A pre-charge of n+1 would be cheaper and would diverge on
     /// every early exit. So this charges inside the loop and once more on the
-    /// way out, which reproduces both numbers exactly. `0009` says gas agrees to
+    /// way out, which reproduces both numbers exactly. `resource-limits` says gas agrees to
     /// the instruction, and a faster path that quietly reprices is not a
     /// speedup, it is the same defect this repo has already paid for once.
     /// 
     /// ROOTED LIKE THE SEQ PATH, for the same reason: `val-eq` materialises a
     /// row ref as a map, so both vectors are re-read from the root stack after
-    /// every element comparison (`0031`).
+    /// every element comparison (`a-vec-of-values-is-not-a-root`).
     internal static bool VecEqIndexed(Rt rt, long a, long b) {
         int @base = rt.Mark();
         int ai = rt.Push(a);
@@ -164,7 +164,7 @@ public static class Valeq {
         }
         // A ROW REF IS COMPARED AS THE MAP IT IS, and BOTH operands are
         // rooted before either is materialised. `ref-to-map` allocates a map
-        // and assocs every column into it, so it collects -- and `0031` is
+        // and assocs every column into it, so it collects -- and `a-vec-of-values-is-not-a-root` is
         // that a value in a host local does not survive an allocation.
         // Reading `b` after materialising `a` was reading the address `b`
         // used to be at: measured, one miscompare in four thousand
@@ -210,7 +210,7 @@ public static class Valeq {
         int tb = Obj.Ty(rt.gc.sp, Val.AsHeap(b));
         // A STRING IS A STRING WHATEVER TIER IT IS IN: `(str a b)` and a
         // flat string of the same bytes must be `=` and must hash alike,
-        // or a map keyed by one is not found by the other (`0011`). This
+        // or a map keyed by one is not found by the other (`strings-and-matching`). This
         // is BEFORE the tag comparison, because the tags differ and the
         // values do not. Byte strings compare by content across both tiers
         // for the same reason.
@@ -228,13 +228,13 @@ public static class Valeq {
             // first cost two megabytes to tell two megabyte strings
             // apart that differ at byte 0. `tree-eq` stops at the first
             // mismatch and short-circuits on NODE IDENTITY, which
-            // matters more now that `subs` shares (`0011`).
+            // matters more now that `subs` shares (`strings-and-matching`).
             return TreeEq(rt, a, b);
         }
         if (((ta == Obj.TyBytes) || (ta == Obj.TyBrope)) && ((tb == Obj.TyBytes) || (tb == Obj.TyBrope))) {
             return BEq(rt, a, b);
         }
-        // A TABLE IS NOT A VECTOR OF MAPS (`0026`). Refusing that equality
+        // A TABLE IS NOT A VECTOR OF MAPS (`tables`). Refusing that equality
         // is what frees `hash` to be columnar -- it no longer has to agree
         // with what a vector of maps would produce -- and it is why a
         // table prints as its own literal.
@@ -253,7 +253,7 @@ public static class Valeq {
                 return false;
             }
             // BOTH SIDES ROOTED. `table-ref` allocates, and `a` and
-            // `b` are host locals (`0031`). This was latent and
+            // `b` are host locals (`a-vec-of-values-is-not-a-root`). This was latent and
             // surfaced on the JVM as "object type 1 is not a
             // transient" -- type 1 being `TY_FWD` -- because that
             // runtime's nursery happened to fill during the compare.
@@ -279,7 +279,7 @@ public static class Valeq {
             rt.PopTo(@base);
             return same;
         }
-        // TWO TAGGED LITERALS ARE EQUAL WHEN BOTH HALVES ARE (`0034`).
+        // TWO TAGGED LITERALS ARE EQUAL WHEN BOTH HALVES ARE (`tagged-literals`).
         // Structural, like the collections, and NOT equal to a two-key
         // map -- which is the whole reason it is a type: a codec has to be
         // able to tell them apart.

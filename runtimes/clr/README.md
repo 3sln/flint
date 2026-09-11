@@ -6,7 +6,7 @@ with `dotnet build`; run through `bin/conform-hosts`.
 ## The collector came back
 
 This section used to say the collector was gone, and that a flint value was a
-.NET object. That was `0030`'s design and it is no longer how this port works.
+.NET object. That was `clr-runtime`'s design and it is no longer how this port works.
 
 Since `9f6f70e` (2026-08-29) a flint value here is a NaN-boxed `long` over a
 flat `Space`, and `Gc.cs` is `runtime/src/gc.rs` ported verbatim — the same
@@ -16,7 +16,7 @@ they part, which is the check: not that each works, but that both make the
 same decisions at the same points.
 
 Calls still use the CLR's own stack, which it scans — exactly what wasm cannot
-do (`doc/decisions/0001`) and why flint is an interpreter there at all.
+do (`DECISIONS.md#dispatch`) and why flint is an interpreter there at all.
 `TAIL_CALL` loops rather than recursing, because the CLR will not do that for
 us.
 
@@ -46,13 +46,13 @@ safepoint to build because there is no collector of ours to stop.
 
 `swap!` still loses updates under contention — it is a read-modify-write in
 `lib/clojure/core.cljc`, and the test says so rather than wishing otherwise.
-Not a CLR problem; see `doc/decisions/0013`.
+Not a CLR problem; see `DECISIONS.md#emit-wasm-instead-of-dispatch`.
 
 ## The emitter is C#, and compiles on first call
 
 `Reflection.Emit` builds a `DynamicMethod` per arity, the first time it is
 called. So there is no cross-compilation -- emitting IL needs .NET present --
-and nothing shippable is produced. Deliberate; see `doc/decisions/0030`.
+and nothing shippable is produced. Deliberate; see `DECISIONS.md#clr-runtime`.
 
 ## What is missing
 

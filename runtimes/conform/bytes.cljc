@@ -1,5 +1,5 @@
 (ns bytes
-  "BYTE STRINGS (`doc/decisions/0024`), which had no conformance program at
+  "BYTE STRINGS (`DECISIONS.md#no-runtime-linking`), which had no conformance program at
   all until this one.
 
   That is the gap the `subs` gas divergence came through, in a different
@@ -9,7 +9,7 @@
   programs cover collections, maps, numbers, regex, strings and tables; a
   byte string was reachable from flint and checked on one runtime only.
 
-  TWO TIERS, as `0024` requires, so the interesting cases are the ones that
+  TWO TIERS, as `no-runtime-linking` requires, so the interesting cases are the ones that
   cross the boundary: a concatenation deep enough to be a tree, a slice that
   starts inside one chunk and ends inside another, and equality between the
   same bytes arranged two different ways.
@@ -21,7 +21,7 @@
 
 (defn- b-of [& xs] (flint.rt/vec->b (vec xs)))
 
-;; A TREE, not a flat run: `0024`'s two tiers mean a long concatenation stops
+;; A TREE, not a flat run: `no-runtime-linking`'s two tiers mean a long concatenation stops
 ;; being a copy, and every read below has to work on both shapes.
 (defn- chunk-text [i] (apply str (repeat 40 (str (mod i 10)))))
 (defn- deep [n]

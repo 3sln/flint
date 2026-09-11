@@ -1,5 +1,5 @@
 (ns flint.bytes
-  "Byte strings (`doc/decisions/0024`).
+  "Byte strings (`DECISIONS.md#no-runtime-linking`).
 
   A string of bytes, in the same two tiers as text: flat below the threshold, a
   shallow tree above it, with structure sharing so concatenation is a tree join

@@ -23,7 +23,7 @@ fi
 DEPS=target/wasm32-unknown-unknown/release/deps
 FLAGS="--target wasm32-unknown-unknown --edition 2021 -C opt-level=3 -C panic=abort -C debuginfo=0"
 
-# Two builds (doc/decisions/0016). A production module carries NO diagnostic
+# Two builds (DECISIONS.md#two-builds). A production module carries NO diagnostic
 # machinery -- absent, not disabled -- so it is a cargo feature rather than a
 # runtime flag. `--diagnostics` builds the instrumented runtime and the units
 # that need it.
@@ -35,7 +35,7 @@ for arg in "$@"; do
       DIAG=1
       FLAGS="$FLAGS --cfg feature=\"diagnostics\""
       echo "  (diagnostics build)" ;;
-    # Compiled arities (doc/decisions/0013). Absent by default for the same
+    # Compiled arities (DECISIONS.md#emit-wasm-instead-of-dispatch). Absent by default for the same
     # reason diagnostics are: measured at 7 002 bytes of production module, for
     # machinery a module without compiled code never runs.
     --aot)
@@ -125,7 +125,7 @@ UNIT
 
 # The concurrency unit: green threads, ports, the scheduler, and the host-facing
 # exports that let a host answer a parked thread. A unit like any other, so a
-# program that never spawns or opens never links it (doc/decisions/0005).
+# program that never spawns or opens never links it (DECISIONS.md#threads-and-ports).
 echo "  flint.conc"
 mkdir -p units/flint
 $RUSTC $FLAGS --crate-type rlib --crate-name flint_conc \
@@ -133,7 +133,7 @@ $RUSTC $FLAGS --crate-type rlib --crate-name flint_conc \
   --emit=obj units-src/flint-conc/src/lib.rs -o units/flint/conc.o
 cargo run -q -p flint-conc --features host-tools --bin manifest > units/flint/conc.unit.edn
 
-# The snapshot unit (doc/decisions/0015). Capture and restore live in the
+# The snapshot unit (DECISIONS.md#snapshots). Capture and restore live in the
 # runtime; this carries the host-facing surface, so a program that never asks
 # for a snapshot never links one and the pure-module floor is untouched.
 if [ -n "$DIAG" ]; then
@@ -155,7 +155,7 @@ cat > units/flint/snapshot.unit.edn <<'UNIT'
 UNIT
 else
   # A production build must not leave a linkable snapshot unit behind: absent is
-  # a different guarantee from disabled (doc/decisions/0016).
+  # a different guarantee from disabled (DECISIONS.md#two-builds).
   rm -f units/flint/snapshot.o units/flint/snapshot.unit.edn
 fi
 

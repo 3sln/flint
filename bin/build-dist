@@ -52,7 +52,7 @@ echo "==> the runtime module, and the slot map that points an image at it"
 # every one of them, as VALUES rather than calls, which pins them without
 # needing to know any arities.
 #
-# AND IT NAMES GUARDED ONES. `flint.rt/request` carries `0036`'s `[:host]`
+# AND IT NAMES GUARDED ONES. `flint.rt/request` carries `workspace-capabilities`'s `[:host]`
 # guard, because `flint.host/request` -- the var it stands behind -- does, and
 # a guard on a wrapper that a caller can step around by naming the builtin is
 # no guard. `bin/flint` makes `dist/src` a WORKSPACE (a root's name defaults to
@@ -69,7 +69,7 @@ const fs = require("fs");
 const names = JSON.parse(fs.readFileSync("dist/builtins.json", "utf8"));
 fs.writeFileSync("dist/src/deps.edn",
   "{;; The loader names every builtin in the distributable, so it holds every\n" +
-  " ;; capability any of them is guarded with (doc/decisions/0036). Generated\n" +
+  " ;; capability any of them is guarded with (DECISIONS.md#workspace-capabilities). Generated\n" +
   " ;; by bin/build-dist; do not edit.\n" +
   " :flint/capabilities-grant [:host]}\n");
 const refs = names.map((n) => "flint.rt/" + (n.startsWith("flint/") ? n.slice(6) : n));

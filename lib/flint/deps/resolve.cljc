@@ -1,6 +1,6 @@
 (ns flint.deps.resolve
   "The dependency PLAN: which version of what, and where it came from
-  (`doc/decisions/0037`).
+  (`DECISIONS.md#system-namespaces-and-deps`).
 
   This is the half that decides. `flint.deps.npm`, `flint.deps.git` and
   `flint.deps.mvn` are virtual namespaces served by the CLI, and every one of
@@ -12,7 +12,7 @@
   That rule is not tidiness. Version arithmetic exists in two places now:
   `semver` in the binary, comparing at fetch time, and this file, comparing at
   plan time where the graph is. Two implementations of *which version wins* is
-  the shape `0035` records going wrong -- a value only one of three readers knew
+  the shape `reader-tags` records going wrong -- a value only one of three readers knew
   about -- so there is exactly one, and it is this.
 
   ## The conflict rule, stated once
@@ -98,7 +98,7 @@
   "Which sort of coordinate this is, by the key that identifies it.
 
   `:git/version` and `:git/tag` both mean git, which is the whole point of
-  `0037`'s git support: a version is a first-class way to name a git dependency
+  `system-namespaces-and-deps`'s git support: a version is a first-class way to name a git dependency
   rather than a second-class alias for a sha."
   [c]
   (cond
@@ -200,7 +200,7 @@
     :git (resolve-git nm c)
     :local {:kind :local :name (str nm) :root (str (:local/root c))}
     ;; Maven resolves to the version it was given: flint does not walk a POM
-    ;; graph, and `0021` prices that work and states the reason -- resolving a
+    ;; graph, and `cli` prices that work and states the reason -- resolving a
     ;; coordinate gets you SOURCE, not something that compiles. Said here rather
     ;; than pretended.
     :mvn {:kind :mvn :name (str nm) :version (str (:mvn/version c))}
@@ -299,7 +299,7 @@
 
 ;; ------------------------------------------------------------- capabilities
 ;;
-;; `0036` gives a WORKSPACE two keys: `:flint/capabilities-grant`, what it
+;; `workspace-capabilities` gives a WORKSPACE two keys: `:flint/capabilities-grant`, what it
 ;; holds, and `:flint/capabilities-guard`, what a requirer must hold. A
 ;; dependency ENTRY takes a third relation, and it is the one that makes a
 ;; dependency graph auditable:
@@ -314,10 +314,10 @@
 (defn- names-of
   "A grant in either form as a set of capability NAMES.
 
-  `0037` lets a grant be a map of name to policy as well as a set of names,
+  `system-namespaces-and-deps` lets a grant be a map of name to policy as well as a set of names,
   because a name says what KIND of authority and the policy says which routes.
   Only the names matter here: the policy is the host's, checked when a call
-  happens, and this is the compile-time half (`0036`)."
+  happens, and this is the compile-time half (`workspace-capabilities`)."
   [g]
   (cond
     (map? g) (set (keys g))
@@ -328,7 +328,7 @@
 (defn lending-errors
   "Every rule a `deps.edn`'s capability delegation breaks.
 
-  Two of the three rules `0037` states; the third is `flint deps add` writing
+  Two of the three rules `system-namespaces-and-deps` states; the third is `flint deps add` writing
   the grant it found, which is the tool's job and not this one's.
 
   1. **You cannot lend what you do not hold.** A grant on a dependency entry
@@ -337,7 +337,7 @@
      dependency `:fs` it never had, and the whole chain stops being auditable
      from the top.
 
-  2. **A dependency declaring a guard must be granted it.** This is `0036` level
+  2. **A dependency declaring a guard must be granted it.** This is `workspace-capabilities` level
      one moved to where the coordinate is. The guard already refuses the
      `:require`; refusing here as well says so at the place a person can fix it,
      with the dependency's name in front of them rather than a namespace three
@@ -458,7 +458,7 @@
    ;; So this walks eagerly. `mapv` and `reduce` over a vector are eager and
    ;; carry a parking call happily; `for` and `map` do not. The panic is a
    ;; runtime bug rather than a rule of the language, and it is written up in
-   ;; `doc/decisions/0037` with a one-line reproduction -- but code that has to
+   ;; `DECISIONS.md#system-namespaces-and-deps` with a one-line reproduction -- but code that has to
    ;; work today is written the way that works today, and says why.
    (reduce
     (fn [acc e]
@@ -549,7 +549,7 @@
 
   `[{:url :from {tag [dep ..]} :to tag :sha sha}]`, and `:to` is nil when the
   tags cannot be compared. The SHA is resolved for the chosen tag, so the
-  overrides this produces carry the integrity that `0037` says a pin must --
+  overrides this produces carry the integrity that `system-namespaces-and-deps` says a pin must --
   which is the other half of the request: agree on a tag, then update the
   truncated sha to match."
   [deps]

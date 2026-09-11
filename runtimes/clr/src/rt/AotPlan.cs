@@ -2,7 +2,7 @@ namespace Flint.Rt;
 
 using System.Collections.Generic;
 
-/// The analysis half of `doc/decisions/0013`, a MIRROR of the JVM port's
+/// The analysis half of `DECISIONS.md#emit-wasm-instead-of-dispatch`, a MIRROR of the JVM port's
 /// `AotPlan.java` which is itself a port of `src/flint/aot.cljc`.
 ///
 /// Decoding, chunk boundaries and the gas charge are decisions about FLINT
@@ -15,7 +15,7 @@ public static class AotPlan {
     /// mis-strides produces plausible nonsense rather than an error -- so an
     /// unknown opcode refuses the whole arity instead.
     internal static readonly int[] OPERANDS = new int[256];
-    /// Emitted inline. `0013`'s opcode histogram says these are 98.7% of
+    /// Emitted inline. `emit-wasm-instead-of-dispatch`'s opcode histogram says these are 98.7% of
     /// executed instructions; the rest go back to the interpreter one at a time.
     internal static readonly bool[] INLINED = new bool[256];
     /// Can leave compiled code. `Call` often does NOT -- a callee that is not a

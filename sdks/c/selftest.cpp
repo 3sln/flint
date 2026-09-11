@@ -92,7 +92,7 @@ int main() {
     idle.call("app/echo", {flint::Value::integer(1)});
     ok(idle.gas() > 0, "a budgeted one does");
 
-    // --- drivers (`doc/decisions/0028`) ---------------------------------
+    // --- drivers (`DECISIONS.md#drivers`) ---------------------------------
     ok(flint::Driver::inline_().parallelism() == 1, "an inline driver is one thread");
     ok(flint::Driver::pool(4).parallelism() == 4, "a pool of four is four here");
 

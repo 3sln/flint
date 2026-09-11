@@ -1,5 +1,5 @@
 (ns cc
-  "Repeated concatenation -- the case doc/decisions/0011 names as O(n^2) with
+  "Repeated concatenation -- the case DECISIONS.md#strings-and-matching names as O(n^2) with
   flat strings, and the reason `str` should be a tree join.")
 (defn build [n]
   (loop [i 0 acc ""] (if (< i n) (recur (inc i) (str acc "0123456789abcdef")) acc)))

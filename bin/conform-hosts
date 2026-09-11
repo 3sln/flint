@@ -1,7 +1,7 @@
 #!/bin/sh
 # Differential conformance: the SAME program on two runtimes, diffed.
 #
-# `doc/decisions/0010` is explicit that the bytecode makes a port cheap and
+# `DECISIONS.md#other-hosts` is explicit that the bytecode makes a port cheap and
 # does nothing to make two ports AGREE. This is the agreement: one source,
 # compiled once, run on the native runtime and on the JVM, and the answers
 # compared byte for byte.
@@ -154,7 +154,7 @@ fi
 # THE PORTED RUNTIME'S FOUNDATION, on both hosts, with the same assertions in
 # the same order.
 #
-# `doc/decisions/0010` says the bytecode makes a port cheap and does nothing to
+# `DECISIONS.md#other-hosts` says the bytecode makes a port cheap and does nothing to
 # make two ports AGREE. These files are meant to be verbatim mirrors of the Rust
 # and of each other, and the only way to know that is to run the same checks on
 # both rather than to intend it.
@@ -281,7 +281,7 @@ if [ -n "$CLR" ]; then
     || { echo "  FAIL the two ports hash differently"; exit 1; }
 fi
 
-# THE SAME PROGRAM COSTS THE SAME GAS ON EVERY RUNTIME (`doc/decisions/0009`).
+# THE SAME PROGRAM COSTS THE SAME GAS ON EVERY RUNTIME (`DECISIONS.md#resource-limits`).
 #
 # Two workloads, one a scaled-up version of the other, and what is compared is
 # the DIFFERENCE -- which cancels whatever each runtime spends starting up and
@@ -319,7 +319,7 @@ for (const k of ['small', 'big']) {
   const { module } = await load(`out/gm-${k}.wasm`);
   const i = instantiate(module);
   i.exports.set_step_limit(0x7ffffff0n);
-  // Named: `gasmeter/small` and `gasmeter/big` (`doc/decisions/0025` step 5).
+  // Named: `gasmeter/small` and `gasmeter/big` (`DECISIONS.md#structured-ports` step 5).
   i.run(`gasmeter/${k}`, ['']);
   o[k] = Number(i.exports.stat_steps());
 }
@@ -362,7 +362,7 @@ GMJS
 fi
 
 # GAS IS A BOUND ON EVERY RUNTIME, not just the native one
-# (`doc/decisions/0009`).
+# (`DECISIONS.md#resource-limits`).
 #
 # This row exists because its absence hid a real hole for a long time: both
 # ports had a `gasLimit` field they wrote into snapshots and never read, so a
@@ -385,7 +385,7 @@ if [ -n "$CLR" ]; then
   echo "  ok   and both stop at the same instruction, which is the parity claim"
 fi
 
-# PARALLEL EXECUTORS (`doc/decisions/0028`): K REAL HOST THREADS on one flint
+# PARALLEL EXECUTORS (`DECISIONS.md#drivers`): K REAL HOST THREADS on one flint
 # heap, which is a different thing from the green threads next door and both
 # exist. Green threads are how one sandbox interleaves its own work
 # deterministically; this is how a host drives one sandbox with a pool.
@@ -484,7 +484,7 @@ for pair in "RtFoundation --rt-foundation" "RtMaps --rt-maps" "RtSnapshot --rt-s
 done
 echo "  ok   three port suites re-run collecting at every allocation, both hosts"
 
-# HOST PORTS (`doc/decisions/0006`, `0027`): the half of the port protocol the
+# HOST PORTS (`DECISIONS.md#host-abi`, `ports-are-the-hosts`): the half of the port protocol the
 # HOST drives, on all three runtimes at once.
 #
 # `green` next door covers what a program can do on its own -- spawn, join, a
@@ -570,7 +570,7 @@ fi
 
 # A LIVE SNAPSHOT ACROSS RUNTIMES, in both directions.
 #
-# `0015` says the snapshot is "a serialised internal layout, not an interchange
+# `snapshots` says the snapshot is "a serialised internal layout, not an interchange
 # format" and that a mismatch must be refused loudly rather than read as "a
 # plausible-looking heap that means something else". The stamp it refuses on is
 # MAGIC and VERSION -- and those are IDENTICAL on all three runtimes, so a
@@ -668,7 +668,7 @@ for prog in assocshapes bytes churn collections conjshapes control errors green 
   # checks to 213 without a single FAIL line.
   #
   # `missing` exists for a toolchain that is genuinely absent. A fixture that
-  # will not build is the other thing, and `doc/decisions/0010` is that the
+  # will not build is the other thing, and `DECISIONS.md#other-hosts` is that the
   # bytecode makes a port cheap and does nothing to make two ports AGREE --
   # which is only true while the fixtures actually run.
   ./bin/flint :src runtimes/conform :fn "$prog/main" --emit-image \
@@ -770,7 +770,7 @@ else
   echo "  FAIL the language suite does not compile"; exit 1
 fi
 
-# AOT (`doc/decisions/0013`) on the ported runtime: the same program
+# AOT (`DECISIONS.md#emit-wasm-instead-of-dispatch`) on the ported runtime: the same program
 # interpreted and compiled, and the answers diffed.
 #
 # The only thing worth asserting about a backend is that IT DID NOT CHANGE THE
@@ -783,7 +783,7 @@ fi
 #     because a failure that survives it is the second kind;
 #   * the GAS COUNT. Compiled code charges per chunk from a static instruction
 #     count and the interpreter charges per instruction, so the two agreeing is
-#     a statement that the chunking is right. `0013` records the bug that found:
+#     a statement that the chunking is right. `emit-wasm-instead-of-dispatch` records the bug that found:
 #     every answer matched and the counts did not.
 #
 # And that compiled code was ENTERED. The first version of this port left the

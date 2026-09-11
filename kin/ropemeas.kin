@@ -1,6 +1,6 @@
 ;; What a string MEASURES: its bytes, its code points, and whether it is ASCII.
 ;;
-;; ALL THREE ARE O(1) FOR A ROPE and that is the whole design of `0011`. A node
+;; ALL THREE ARE O(1) FOR A ROPE and that is the whole design of `strings-and-matching`. A node
 ;; keeps its byte count in `RP_BYTES` and its code-point count and ascii flag
 ;; PACKED into `RP_CPS` -- count in the high bits, the flag in bit 0 -- so
 ;; asking any of the three is a slot read rather than a walk.

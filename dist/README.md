@@ -48,7 +48,7 @@ const fast = compiler.compileToWasm({ files, entry: 'app/main',           // 638
 
 No linker in either path. The runtime module was linked once, when flint was
 built; splicing an image into it and appending compiled arities is byte
-manipulation on a finished module (`doc/decisions/0024`). `--aot` is **7×
+manipulation on a finished module (`DECISIONS.md#no-runtime-linking`). `--aot` is **7×
 faster** on arithmetic — 11.2 ms against 1.6 ms — for 38 KB more.
 
 ## What it cannot do, and why

@@ -1,4 +1,4 @@
-//! A value crossing the boundary (`doc/decisions/0025`).
+//! A value crossing the boundary (`DECISIONS.md#structured-ports`).
 //!
 //! The same encoding the JavaScript SDK uses and the same one the runtime
 //! reads: a call's arguments, its return, and everything a port carries.
@@ -47,15 +47,15 @@ pub enum Value {
     /// always strings and order is worth keeping through a round trip.
     Map(Vec<(Value, Value)>),
     /// A live thing, by identity. A host may hand one back; nothing here can
-    /// make one from an integer, which is the sandbox rule (`0025`).
+    /// make one from an integer, which is the sandbox rule (`structured-ports`).
     Port(u32),
     Sentinel { host_id: u64, label: String },
-    /// A tagged literal (`doc/decisions/0034`): a namespaced symbol and a form.
+    /// A tagged literal (`DECISIONS.md#tagged-literals`): a namespaced symbol and a form.
     /// Its own variant rather than a two-key map, for the reason the type
     /// exists -- a host meeting one must be able to tell it from a map that
     /// happens to have those keys.
     Tagged { tag: (Option<String>, String), form: Box<Value> },
-    /// A table (`doc/decisions/0026`), COLUMNAR both on the wire and here.
+    /// A table (`DECISIONS.md#tables`), COLUMNAR both on the wire and here.
     ///
     /// Columns rather than rows because that is what the type is for: a host
     /// reading one field should read one run, and rebuilding a map per row to
@@ -465,7 +465,7 @@ impl std::fmt::Display for Value {
             }
             // An identity in one process, and deliberately not readable: a
             // printed port that read back as a port would be authority nobody
-            // granted (`doc/decisions/0025`).
+            // granted (`DECISIONS.md#structured-ports`).
             Value::Port(id) => write!(f, "#port[{id}]"),
             Value::Sentinel { label, .. } => write!(f, "#sentinel[{label}]"),
             Value::Tagged { tag, form } => {

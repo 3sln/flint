@@ -19,7 +19,7 @@ public final class Codepoints {
     /// 
     /// MALFORMED INPUT IS NOT VALIDATED. Every string that reaches here was
     /// built by a constructor that validated it, and a decoder that also
-    /// checked would be the second opinion `0011` warns about: two places
+    /// checked would be the second opinion `strings-and-matching` warns about: two places
     /// deciding what a string is, drifting apart.
     public static int codePoints(Rt rt, long s) {
         int out = rt.cpsOpen();

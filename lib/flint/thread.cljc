@@ -6,7 +6,7 @@
   picks a runnable thread and runs it for a fixed slice. **Nothing here suspends
   a wasm frame and nothing blocks the host** — \"blocked\" means \"not runnable
   yet\", which an interpreter can express directly. That is the leverage
-  `doc/decisions/0001` was already paying for; `doc/decisions/0005` spends it.
+  `DECISIONS.md#dispatch` was already paying for; `DECISIONS.md#threads-and-ports` spends it.
 
   Scheduling is deterministic: round-robin from the thread that just ran, with a
   fixed instruction slice, no randomness and no clock. The same program with the

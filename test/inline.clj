@@ -73,7 +73,7 @@
 ;;
 ;; `(int? x)` compiles to the `type-p` builtin rather than a call, because
 ;; `register-native-aliases!` recognises a var whose body is exactly one
-;; `flint.rt/` call. `doc/decisions/0032` gave the fifteen core predicates
+;; `flint.rt/` call. `DECISIONS.md#checks` gave the fifteen core predicates
 ;; `:flint/value-meta`, which `m-defn` attaches by WRAPPING the function in
 ;; `with-meta` -- and the wrapper is where the pass wanted a `:fn`, so it
 ;; silently stopped aliasing them.

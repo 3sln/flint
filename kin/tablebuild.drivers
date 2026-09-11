@@ -367,7 +367,7 @@ fn main() {
     let t = rt.new_table(s, rv);
     let shown = rt.show_table(t, 2);
     o.push_str(&format!("rows={} ", shown));
-    // FROM COLUMNS, the same table. `0026` step 9: the decoder builds this way
+    // FROM COLUMNS, the same table. `tables` step 9: the decoder builds this way
     // rather than making a map per row only to take it apart again.
     let c0: alloc::vec::Vec<Value> = (0..6i64).map(|i| Value::fixnum(10 + i)).collect();
     let col0 = rt.vector(&c0);

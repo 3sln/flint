@@ -25,7 +25,7 @@
   (let [;; PRESENT what the host projected in. The runtime forwards it and takes
         ;; no view of it: it crosses as a sentinel carrying the id the host
         ;; issued, and the host recognises its own. Nothing in the sandbox knows
-        ;; the word "capability" (`doc/decisions/0022`).
+        ;; the word "capability" (`DECISIONS.md#opaque-values`).
         fs (p/open "fs" {:capability (:fs caps)})
         ;; What the host pushed in while we were away.
         a (p/receive fs)

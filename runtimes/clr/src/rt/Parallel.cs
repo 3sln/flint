@@ -2,7 +2,7 @@ namespace Flint.Rt;
 
 using System.Threading;
 
-/// Several executors inside one sandbox (`doc/decisions/0028`), ported from
+/// Several executors inside one sandbox (`DECISIONS.md#drivers`), ported from
 /// `runtime/src/par.rs`.
 ///
 /// One heap, K host threads on it. Everything here exists to make three things

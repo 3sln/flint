@@ -1,5 +1,5 @@
 (ns flint.aot
-  "Bytecode to wasm, one arity at a time (`doc/decisions/0013`).
+  "Bytecode to wasm, one arity at a time (`DECISIONS.md#emit-wasm-instead-of-dispatch`).
 
   ## The shape, and why it is this shape
 
@@ -49,7 +49,7 @@
   is exact because a chunk has no internal branch, so either all of it runs or
   none of it does. A chunk that ends by handing an instruction back to the
   interpreter does not charge for that instruction, because the interpreter is
-  about to. `doc/decisions/0016` makes gas a production feature and construe's
+  about to. `DECISIONS.md#two-builds` makes gas a production feature and construe's
   gates depend on the count, so `test/aot.clj` asserts the count is IDENTICAL
   with and without compilation rather than merely close."
   (:require [flint.wasm :as w]))
@@ -62,7 +62,7 @@
   so an unknown opcode refuses the whole arity instead."
   ;; 0x00, 0x10, 0x1D and 0x1F..0x22 are RETIRED and deliberately absent, so a
   ;; walk that meets one refuses the arity rather than striding over something
-  ;; no compiler emits (`doc/decisions/0038`).
+  ;; no compiler emits (`DECISIONS.md#kin`).
   {0x01 [:const 2]    0x02 [:nil 0]      0x03 [:true 0]
    0x04 [:false 0]    0x05 [:int 2]     0x06 [:local 1]    0x07 [:local-w 2]
    0x08 [:set-local 1] 0x09 [:upval 1]  0x0A [:var 2]      0x0B [:set-var 2]
@@ -414,7 +414,7 @@
   What that cost: `reduce`'s `(reduce-seq f init coll)` answered `coll` instead
   of `init`, so `into` handed `persistent!` the empty list it had been reducing
   over -- `ClassCastException: not a transient`, several frames and one tail
-  call away from the emitter that caused it. `doc/decisions/0013`."
+  call away from the emitter that caused it. `DECISIONS.md#emit-wasm-instead-of-dispatch`."
   [op ip len chunk-of]
   (if (= op :tail-call)
     [AOT-NEVER 0]

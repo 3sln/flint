@@ -1,5 +1,5 @@
 (ns flint.table
-  "Tables: columnar storage that is a value (`doc/decisions/0026`).
+  "Tables: columnar storage that is a value (`DECISIONS.md#tables`).
 
   A vector of maps from the outside, columnar chunks underneath, and a CLOSED
   schema fixed when the table is built. Closed is the whole design: a key
@@ -80,7 +80,7 @@
 ;; ------------------------------------------------------------------ printing
 ;;
 ;; A table prints as `#flint/table [...]` and reads back, because a table is
-;; NOT `=` to a vector of maps and must not print as one (`doc/decisions/0026`).
+;; NOT `=` to a vector of maps and must not print as one (`DECISIONS.md#tables`).
 ;;
 ;; It is registered HERE rather than branched on in `clojure.core`'s printer.
 ;; The printer is linked by every program; a branch there would make every
@@ -115,7 +115,7 @@
 ;;
 ;; A schema change makes a NEW TABLE. There is no in-place evolution and no
 ;; inference: what the new table's columns are is said, not guessed
-;; (`doc/decisions/0026`).
+;; (`DECISIONS.md#tables`).
 
 (defn migrate
   "`t` under `s`, a new schema.
@@ -216,10 +216,10 @@
 
 
 (defn read-table
-  "The reader for `#flint/table`, bound in every project (`doc/decisions/0035`).
+  "The reader for `#flint/table`, bound in every project (`DECISIONS.md#reader-tags`).
 
   It takes what the printer wrote -- `{:schema [[:name :type] ...] :rows [...]}`
-  -- and not a bare vector of rows. `0026` originally said the form was
+  -- and not a bare vector of rows. `tables` originally said the form was
   `#flint/table [{:a 1}]`, and that CANNOT read back: the types are half of a
   table's identity, an `:int` column and an `:any` column holding the same
   values are different tables, and nothing in a row says which it was. A form

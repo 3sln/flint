@@ -34,7 +34,7 @@ pub const SING_SCHED: usize = 4;
 /// single-threaded program nothing at all: the scheduler *saves and restores
 /// this slot* when it switches threads, which is what makes the discipline
 /// per green thread without dragging the scheduler into every program that
-/// rebinds a var (`doc/decisions/0005`, section 4).
+/// rebinds a var (`DECISIONS.md#threads-and-ports`, section 4).
 pub const SING_BINDINGS: usize = 5;
 pub const SING_COUNT: usize = 6;
 
@@ -60,7 +60,7 @@ pub struct Rt {
     /// The heap, when this `Rt` is the one that made it.
     ///
     /// A sandbox has ONE heap and may have several executors on it
-    /// (`doc/decisions/0028`). The first `Rt` owns it; the rest point at it and
+    /// (`DECISIONS.md#drivers`). The first `Rt` owns it; the rest point at it and
     /// hold `None`, so the heap outlives every executor by construction rather
     /// than by anyone remembering an order.
     owned_heap: Option<alloc::boxed::Box<crate::gc::Heap>>,
@@ -99,7 +99,7 @@ pub struct Rt {
     /// a generated source names one rather than holding it. The regex engine
     /// wants random access to code points, and the alternative to this was
     /// materialising the subject into contiguous bytes -- a rope FLATTEN,
-    /// which is what both ports did and `0011` says to count rather than hope
+    /// which is what both ports did and `strings-and-matching` says to count rather than hope
     /// about.
     pub(crate) cps: alloc::vec::Vec<alloc::vec::Vec<u32>>,
     /// TREE WALKS IN PROGRESS, owned by the runtime and addressed by index.
@@ -117,7 +117,7 @@ pub struct Rt {
     /// The loaded program: bytecode, function table, native imports.
     pub image: crate::gc::SandboxRef<crate::vm::Image>,
     /// How the decoder turns a `K_PORT` into a handle -- **an indirection on
-    /// purpose, and it is a SIZE decision** (`doc/decisions/0027`).
+    /// purpose, and it is a SIZE decision** (`DECISIONS.md#ports-are-the-hosts`).
     ///
     /// A port arriving in a message must be interned-or-minted, which is
     /// `install_bridge_port`, which reaches the scheduler, the ring, the event
@@ -144,7 +144,7 @@ pub struct Rt {
     #[cfg(not(target_arch = "wasm32"))]
     pub host_natives: crate::gc::SandboxRef<alloc::vec::Vec<crate::vm::NativeFn>>,
     /// Work done: one per dispatched bytecode instruction, plus what natives
-    /// charge for work that is not O(1) (`doc/decisions/0009`).
+    /// charge for work that is not O(1) (`DECISIONS.md#resource-limits`).
     ///
     /// This is **gas**, and the point of it is that it is deterministic. A
     /// wall-clock timeout bounds *time* and varies with machine load; this
@@ -152,7 +152,7 @@ pub struct Rt {
     /// reproducible fact rather than a flaky one.
     /// An uncaught throw unwound out of compiled code. The interpreter's own
     /// arms answer this by returning from `run`; compiled code cannot, so it
-    /// says so here (`doc/decisions/0013`).
+    /// says so here (`DECISIONS.md#emit-wasm-instead-of-dispatch`).
     #[cfg(feature = "aot")]
     pub aot_unwound_out: bool,
     /// How many compiled frames are live on the WASM stack right now.
@@ -165,7 +165,7 @@ pub struct Rt {
     /// handler with an unwound stack.
     #[cfg(feature = "aot")]
     pub unwinds: u64,
-    /// The next identity for an opaque value (`doc/decisions/0022`). A counter
+    /// The next identity for an opaque value (`DECISIONS.md#opaque-values`). A counter
     /// rather than the address, because the nursery moves objects and an
     /// identity hash that changes under collection makes a map key unfindable.
     pub next_opaque: u64,
@@ -230,7 +230,7 @@ pub struct Rt {
     /// the scheduler out of a pure build.
     pub sched_hook: Option<fn(&mut Rt, Value) -> Value>,
     /// Non-zero when `main` should report something other than "here is your
-    /// answer" -- 2 means "I need the host" (`doc/decisions/0005`, section 1).
+    /// answer" -- 2 means "I need the host" (`DECISIONS.md#threads-and-ports`, section 1).
     pub status: i32,
 }
 
@@ -253,7 +253,7 @@ macro_rules! rooted {
 /// Not `Sync`, deliberately: two threads sharing one executor would share its
 /// value stack and its frames, which is nonsense. What they share is the HEAP,
 /// and that sharing is mediated by the allocation lock and the safepoint
-/// (`doc/decisions/0028`) rather than by this impl.
+/// (`DECISIONS.md#drivers`) rather than by this impl.
 ///
 /// The raw pointers inside are to the heap and to the shared roots, which
 /// outlive every executor by construction: the primary owns the heap in a box
@@ -510,13 +510,13 @@ impl Rt {
         // path that allocated 3.25 MB. Gas said the expensive one was cheap.
         //
         // A budget that a single call can escape is worse than no budget,
-        // because somebody will trust it (`doc/decisions/0009`). One place
+        // because somebody will trust it (`DECISIONS.md#resource-limits`). One place
         // covers every builtin that exists and every one added later.
         //
         // The COLLECTOR does not come through here -- promotion uses
         // `alloc_old` directly -- which is what keeps gas independent of when a
         // collection ran, as `determinism.rs` requires.
-        // Only when the sandbox is COUNTING. `0009` says an unbudgeted sandbox
+        // Only when the sandbox is COUNTING. `resource-limits` says an unbudgeted sandbox
         // does not count -- the interpreter is instantiated twice so a run with
         // no budget carries no counter at all -- and charging here regardless
         // put 1 231 steps on a sandbox that the SDK asserts reports zero.
@@ -533,7 +533,7 @@ impl Rt {
         if a == 0 && self.thrown.is_nil() {
             // A failed allocation must not read as `nil` to the program. It
             // used to, and a capped run then carried on and reported a WRONG
-            // ANSWER rather than an error (doc/decisions/0009).
+            // ANSWER rather than an error (DECISIONS.md#resource-limits).
             self.thrown = crate::value::OOM;
         }
         a
@@ -601,7 +601,7 @@ impl Rt {
     /// Called ONLY from the interpreter's checkpoint, where `ip` is written
     /// back and every live value is on the value stack. A thread that stopped
     /// anywhere else would resume holding a stale pointer, because the
-    /// collector it stopped for moves objects (`doc/decisions/0028`).
+    /// collector it stopped for moves objects (`DECISIONS.md#drivers`).
     #[cfg(feature = "parallel")]
     #[inline]
     pub fn safepoint(&mut self) {
@@ -645,7 +645,7 @@ impl Rt {
     ///
     /// It shares the heap, the globals, the constants, the intern tables and
     /// the singletons, and gets its own value stack, frames and gas -- which
-    /// is the split `doc/decisions/0028` is about.
+    /// is the split `DECISIONS.md#drivers` is about.
     ///
     /// Boxed because it registers its own root stack with the collector, and
     /// that address has to stay put.
@@ -858,7 +858,7 @@ impl Rt {
     /// a native that charges a billion and then loops a billion times still
     /// burns a billion iterations of real CPU before anyone looks. A budget a
     /// single call can outrun is worse than no budget, because somebody will
-    /// trust it (`doc/decisions/0009`).
+    /// trust it (`DECISIONS.md#resource-limits`).
     ///
     /// The budget is examined every 64 iterations rather than every one,
     /// because the check is a branch on a hot path and 64 iterations of

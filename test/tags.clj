@@ -1,4 +1,4 @@
-;; Reader tags are bound per PROJECT (`doc/decisions/0035`).
+;; Reader tags are bound per PROJECT (`DECISIONS.md#reader-tags`).
 ;;
 ;; The case the mechanism exists for is two libraries that both want `#x`. That
 ;; only works if a tag a project binds is in scope for ITS sources and nobody

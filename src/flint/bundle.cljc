@@ -105,7 +105,7 @@
   (bytes). Returns the bytes of a module that runs it.
 
   `opts` may carry `:entry`, `:version` and `:aot?` -- which only affect the
-  metadata section (`doc/decisions/0020`) -- and `:slots`, the builtin table
+  metadata section (`DECISIONS.md#module-metadata-and-shards`) -- and `:slots`, the builtin table
   the base module carries.
 
   `:slots` is not optional in practice, and the reason is a bug worth
@@ -132,7 +132,7 @@
                          (w/->bytes [(img/u32 img-addr) (img/u32 (b-count image))]))
         ;; The builtin registry, rewritten PAST the new image. `(slot, name
         ;; length, name)` per builtin, which is how an image compiled elsewhere
-        ;; is re-pointed at this module's table by name (`doc/decisions/0023`).
+        ;; is re-pointed at this module's table by name (`DECISIONS.md#construe-integration-bar`).
         m (if-let [slots (:slots opts)]
             (let [addr (global-addr m exp "FLINT_BUILTIN_REGISTRY")
                   blob (w/->bytes
@@ -147,7 +147,7 @@
         ;; No `main` is renamed into place. This used to point a `main` export
         ;; at `flint_main` because "the entry has to become `main`, which is
         ;; what a host calls" -- and there is no `flint_main` any more, so the
-        ;; rename found nothing and quietly did nothing (`doc/decisions/0025`
+        ;; rename found nothing and quietly did nothing (`DECISIONS.md#structured-ports`
         ;; step 5). A host calls a function by name through `flint_call`.
         all-exported (vec (keys (w/exports m)))
         builtin? (fn [n] (str/starts-with? n "flint_b_"))

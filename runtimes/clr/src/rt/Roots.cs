@@ -4,7 +4,7 @@ namespace Flint.Rt;
 
 /// Everything the collector must find, ported from `runtime/src/gc.rs`.
 ///
-/// `doc/decisions/0001`: values live in explicit arrays the collector walks,
+/// `DECISIONS.md#dispatch`: values live in explicit arrays the collector walks,
 /// never in host locals. On wasm that was forced -- wasm locals are not
 /// scannable. Here it is a CHOICE, and the same one, because it is what makes
 /// the collector identical across the three runtimes rather than merely
@@ -70,7 +70,7 @@ public sealed class Roots {
         for (int i = 0; i < g.Length; i++) g[i] = f(g[i]);
         for (int i = 0; i < c.Length; i++) c[i] = f(c[i]);
         for (int i = 0; i < sg.Length; i++) sg[i] = f(sg[i]);
-        // Every OTHER executor in this sandbox (`doc/decisions/0028`). A
+        // Every OTHER executor in this sandbox (`DECISIONS.md#drivers`). A
         // collection happens with all of them PARKED at a safepoint, so nothing
         // is mutating these while they are walked.
         //

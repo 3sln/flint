@@ -21,8 +21,8 @@
 
   A **bridge may be sent through a bridge**, and that is how a capability is
   delegated: its id is the host's own and means the same thing on the far side,
-  so the receiver ends up holding *the same port*. `0006` called the absence of
-  this the right default and `0025` reversed it.
+  so the receiver ends up holding *the same port*. `host-abi` called the absence of
+  this the right default and `structured-ports` reversed it.
 
   A **channel end may not** cross a bridge. Both its ends live in this heap and
   the host has never been told it exists, so its id would name one of our
@@ -56,7 +56,7 @@
   in, and the runtime is what does it — there is no codec to choose, to attach,
   or to get wrong, and `send` takes the same value a channel would take.
 
-  That is a safety rule, not a convenience (`doc/decisions/0025`). The wire
+  That is a safety rule, not a convenience (`DECISIONS.md#structured-ports`). The wire
   format writes an opaque value's host id inline, and bytes are integers a guest
   can write; a codec running in here would therefore be an integer-to-capability
   conversion, and an opaque value's whole meaning is that no such conversion
@@ -84,14 +84,14 @@
 (defn open
   "Ask the host for a port called `name`, forwarding `opts` to it verbatim.
 
-  **A request, not a construction** (`doc/decisions/0027`). The sandbox cannot
+  **A request, not a construction** (`DECISIONS.md#ports-are-the-hosts`). The sandbox cannot
   make a bridge; it asks on the system port it was given at construction, and
   the host answers with a handle on a port the host already owns — or refuses,
   which is a normal outcome and arrives as a catchable `SecurityException`. A
   sandbox given no system port cannot ask at all, and is told so.
 
   **The runtime takes no view of what `opts` contains.** It crosses as data, and
-  anything in it that is an opaque value (`doc/decisions/0022`) crosses carrying
+  anything in it that is an opaque value (`DECISIONS.md#opaque-values`) crosses carrying
   the host id it was ISSUED with. So a host that lent a capability recognises
   its own and nothing else, and one that requires none simply ignores what it
   was sent.

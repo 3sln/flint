@@ -2,7 +2,7 @@ namespace Flint.Rt;
 
 /// The bytecode, from `runtime/src/vm.rs`. One list, three runtimes.
 public static class Op {
-    // 0x00, 0x10, 0x1D, 0x1F..0x22 are RETIRED, not free (`doc/decisions/0038`).
+    // 0x00, 0x10, 0x1D, 0x1F..0x22 are RETIRED, not free (`DECISIONS.md#kin`).
     public const int Const = 0x01, Nil = 0x02, True = 0x03, False = 0x04,
         Int = 0x05, Local = 0x06, LocalW = 0x07, SetLocal = 0x08, Upval = 0x09,
         Var = 0x0A, SetVar = 0x0B, Pop = 0x0C, Dup = 0x0D, Jump = 0x0E,

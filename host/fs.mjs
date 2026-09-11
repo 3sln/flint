@@ -1,8 +1,8 @@
-// A filesystem capability for the CLI's host half (`doc/decisions/0021`).
+// A filesystem capability for the CLI's host half (`DECISIONS.md#cli`).
 //
-// It is an ordinary port capability (`0005`, `0006`): the guest asks for it by
+// It is an ordinary port capability (`threads-and-ports`, `host-abi`): the guest asks for it by
 // name, the host either lends a port or refuses, and a program granted nothing
-// runs pure. There is no new VM mechanism here, which is the point -- `0021`
+// runs pure. There is no new VM mechanism here, which is the point -- `cli`
 // says capabilities are "nearly free" and this is what that means.
 //
 // ## The root is the authority
@@ -10,11 +10,11 @@
 // A grant carries a ROOT directory and every path is resolved under it. A
 // request that escapes the root is refused rather than clamped: silently
 // rewriting `../../etc/passwd` into something inside the root would answer a
-// question nobody asked. This is `0022`'s "derived capability" in its simplest
+// question nobody asked. This is `opaque-values`'s "derived capability" in its simplest
 // form -- `:fs` narrowed to a subtree -- done by the host at grant time.
 //
 // Requests and replies are VALUES. A bridge encodes and decodes in the runtime
-// (`doc/decisions/0027`), so `data` arrives here already decoded and a reply is
+// (`DECISIONS.md#ports-are-the-hosts`), so `data` arrives here already decoded and a reply is
 // handed over as an ordinary JS object -- there is no codec on either side of
 // this file, and the guest could not have one.
 import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync } from 'fs';

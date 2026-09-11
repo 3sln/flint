@@ -10,7 +10,7 @@ import java.nio.file.*;
 /// Gas is compared too, and that is not decoration. Compiled code charges per
 /// CHUNK from a static instruction count, and the interpreter charges per
 /// instruction -- so the two agreeing is a statement that the chunking is
-/// right. `doc/decisions/0013` records the bug that found: every answer matched
+/// right. `DECISIONS.md#emit-wasm-instead-of-dispatch` records the bug that found: every answer matched
 /// and the counts did not, because a conditional jump in the middle of a chunk
 /// left without running the rest and the chunk charged for them anyway.
 public class RtAot {

@@ -1,4 +1,4 @@
-;; flint's own standard library, as a WORKSPACE (`doc/decisions/0036`).
+;; flint's own standard library, as a WORKSPACE (`DECISIONS.md#workspace-capabilities`).
 ;;
 ;; It is here for the NAME. Without it a workspace's identity falls back to the
 ;; source root's path, which is machine-specific and reads badly in a

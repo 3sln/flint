@@ -1,4 +1,4 @@
-// Global ports and the system port (`doc/decisions/0027`), driven by hand so
+// Global ports and the system port (`DECISIONS.md#ports-are-the-hosts`), driven by hand so
 // each step is visible.
 import { load, instantiate } from '../host/flint.mjs';
 import { codec } from '../sdks/esm/src/codec.js';
@@ -79,7 +79,7 @@ console.log('global ports');
   ok('  ... and a second, ordinary global port', install(e, 8, 'work', 'edn', false) === 1);
 
   // A CALL, by name, on the system port: nothing is called automatically
-  // (`doc/decisions/0025` step 5), and the ANSWER comes back the same way --
+  // (`DECISIONS.md#structured-ports` step 5), and the ANSWER comes back the same way --
   // a message carrying the call's `:tx`, not a string rendered into `out`.
   let code = callOn(e, 7, 'sys/main');
   const seen = [];

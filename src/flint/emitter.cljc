@@ -2,7 +2,7 @@
   "AST to bytecode.
 
   A post-order walk, which is the whole argument for a stack machine on the
-  bootstrap critical path (see `doc/decisions/0001-dispatch.md`): there is no
+  bootstrap critical path (see `DECISIONS.md#dispatch`): there is no
   register allocator here, and there was never a point at which the compiler
   could not compile itself.
 
@@ -18,7 +18,7 @@
   ;; `nop`, `jump-if-true`, `list`, the two `*-keep` jumps, `pop-n` and
   ;; `set-local-keep` were in this table and implemented in all three
   ;; interpreters, and nothing here ever emitted one -- found by running the
-  ;; conformance suite under the opcode census (`doc/decisions/0038`). An
+  ;; conformance suite under the opcode census (`DECISIONS.md#kin`). An
   ;; optimisation implemented before anything uses it is three copies of dead
   ;; code, so they are gone.
   ;;
@@ -309,7 +309,7 @@
     :invoke (emit-invoke ctx buf node tail?)
     :native-value (put! buf (op :const) (img/u16 (img/native-const (:b ctx) (:name node))))
     ;; `flint/apply` with a function and a sequence becomes the APPLY OPCODE
-    ;; rather than a call to the builtin (`doc/decisions/0037`).
+    ;; rather than a call to the builtin (`DECISIONS.md#system-namespaces-and-deps`).
     ;;
     ;; The opcode existed and nothing emitted it, so every `apply` went through
     ;; the builtin -- and the builtin re-enters the interpreter with

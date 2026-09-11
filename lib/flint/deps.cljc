@@ -1,5 +1,5 @@
 (ns flint.deps
-  "`deps.edn`, the parts of it flint can honour (`doc/decisions/0021`).
+  "`deps.edn`, the parts of it flint can honour (`DECISIONS.md#cli`).
 
   ## What is supported, and what is not
 

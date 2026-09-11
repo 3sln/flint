@@ -20,13 +20,13 @@ fn walk_cost(collect_at: Option<u32>) -> u64 {
     rt.steps - before
 }
 
-/// Gas is meant to be REPRODUCIBLE (`doc/decisions/0009`): the counter measures
+/// Gas is meant to be REPRODUCIBLE (`DECISIONS.md#resource-limits`): the counter measures
 /// work, and the same work must cost the same whatever the collector did.
 ///
 /// This exists because a one-entry cursor over the last-indexed string broke it.
 /// The cursor had to be invalidated when the collector moved things, so the same
 /// walk cost 8 000 gas undisturbed and 8 500 with one collection halfway -- and
-/// under parallel executors (`doc/decisions/0028`) that collection belongs to
+/// under parallel executors (`DECISIONS.md#drivers`) that collection belongs to
 /// ANOTHER THREAD, so a program's gas depended on what its neighbours were
 /// doing. Worse than a wrong number: an unreproducible one.
 #[test]
@@ -37,5 +37,5 @@ fn gas_for_a_walk_does_not_depend_on_when_the_collector_ran() {
     // NOT ZERO. An instrument reading zero agrees with everything, which is the
     // other way this check can be worthless.
     assert!(clean > 0, "the walk must be charged for, or this proves nothing");
-    assert_eq!(clean, disturbed, "gas must be reproducible (doc/decisions/0009)");
+    assert_eq!(clean, disturbed, "gas must be reproducible (DECISIONS.md#resource-limits)");
 }

@@ -41,7 +41,7 @@ public static class Find {
     /// CHARGED PER ENTRY. A collision node is the one part of a CHAMP whose
     /// width an attacker chooses: flint's string hash is a base-31 polynomial,
     /// so 2^k strings can be made to share one hash, and scanning one for free
-    /// is a metering hole rather than a slow path (`0009`,
+    /// is a metering hole rather than a slow path (`resource-limits`,
     /// `doc/goals/hash-flooding.md`). THAT is what this extraction is for: the
     /// charge was added to both copies by hand, and missing one would have left
     /// half the hole open. There is one place to get it wrong now.

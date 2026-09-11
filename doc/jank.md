@@ -73,7 +73,7 @@ interesting single result.
 
 `test/jank/cpp` is 514 tests of **C++ interop**, and they are not run.
 
-flint has no host classes at all. That is `doc/decisions/0010`, and it is the
+flint has no host classes at all. That is `DECISIONS.md#other-hosts`, and it is the
 whole point of the project: a flint module is a self-contained wasm binary with
 its own heap, its own collector and its own library, so there is no host to
 interoperate with. There is nothing to be "close to" there, and a runtime that

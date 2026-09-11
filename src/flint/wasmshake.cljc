@@ -27,7 +27,7 @@
 (def ^:private CALL 0x10)
 
 ;; Byte strings, so this compiles for flint as well as for the bootstrap host
-;; (`doc/decisions/0024`). Shaking belongs on the compile path, and the compile
+;; (`DECISIONS.md#no-runtime-linking`). Shaking belongs on the compile path, and the compile
 ;; path is a wasm module.
 (defn- ub [b i] (flint.rt/b-at b i))
 
@@ -116,7 +116,7 @@
   them and nothing here knows which.
 
   The table is where flint's builtins live -- they are reached ONLY through
-  `__indirect_function_table` (`doc/decisions/0003`) -- so `elems` is how a
+  `__indirect_function_table` (`DECISIONS.md#namespace-units`) -- so `elems` is how a
   caller says which builtins the program actually needs. Passing the whole
   table keeps every builtin; passing the reached ones is the precision the
   linker could not have."

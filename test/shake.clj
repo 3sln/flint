@@ -1,4 +1,4 @@
-;; Tree shaking without a linker (`doc/decisions/0024`).
+;; Tree shaking without a linker (`DECISIONS.md#no-runtime-linking`).
 ;;
 ;; The claim: a module that was linked ONCE, when flint was built, can be cut
 ;; down to what a particular program needs by a pass over its bytes -- no

@@ -1,4 +1,4 @@
-;; The ceiling for `doc/decisions/0013`: how much of what the emitter leaves on
+;; The ceiling for `DECISIONS.md#emit-wasm-instead-of-dispatch`: how much of what the emitter leaves on
 ;; the table is the emitter's, and how much is wasm's.
 ;;
 ;; `tight`'s loop, hand-emitted three ways, all doing the SAME work in the same

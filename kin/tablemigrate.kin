@@ -9,7 +9,7 @@
 ;;
 ;; DROPPING A COLUMN IS FREE AND INVISIBLE. The new chunk simply never reaches
 ;; the old slot, so the data stays resident until that chunk is next rewritten
-;; -- the trade `0026` names, and `chunk-with-row` is where it is paid back.
+;; -- the trade `tables` names, and `chunk-with-row` is where it is paid back.
 (ns flint.rt.tablemigrate
   (:require [flint.impl.rt :refer [defn return if let do comment doc == != < +
                                    not alloc heap slot set-slot fixnum

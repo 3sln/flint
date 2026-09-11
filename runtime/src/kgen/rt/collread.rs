@@ -68,7 +68,7 @@ impl Rt {
             return dflt;
         }
         // A TABLE INDEXES BY ROW and hands back a REF, which materialises
-        // nothing (`0026`).
+        // nothing (`tables`).
         if t == TY_TABLE {
             if self.is_int(k) {
                 let i: i64 = self.i64_of(k);
@@ -87,7 +87,7 @@ impl Rt {
         }
         // A TAGGED LITERAL READS LIKE A TWO-KEY MAP, so `(:tag x)` and
         // `(get x :form)` work and nothing treating one as a map has to
-        // learn a different way in (`0034`).
+        // learn a different way in (`tagged-literals`).
         if t == TY_TAGGED {
             if k == self.keyword(None, "tag") {
                 return self.slot(coll, 0);

@@ -1,4 +1,4 @@
-;; `:exclude` and `:wasm-path` (doc/decisions/0004).
+;; `:exclude` and `:wasm-path` (DECISIONS.md#exclude-and-unit-path).
 ;;
 ;; The point of `:exclude` is that it is an ASSERTION: it must FAIL, at compile
 ;; time, when the thing it names is reachable, and the failure must name the

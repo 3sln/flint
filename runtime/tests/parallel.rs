@@ -1,4 +1,4 @@
-//! Two executors, one heap (`doc/decisions/0028`).
+//! Two executors, one heap (`DECISIONS.md#drivers`).
 //!
 //! The claim under test is not "it does not crash". It is that a collection
 //! staged by one thread walks the OTHER thread's roots, so objects that thread

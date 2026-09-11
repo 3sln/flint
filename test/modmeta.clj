@@ -1,4 +1,4 @@
-;; What a module says about itself (`doc/decisions/0020`, part 1).
+;; What a module says about itself (`DECISIONS.md#module-metadata-and-shards`, part 1).
 ;;
 ;; A runner handed a pre-built `.wasm` needs to decide whether it can load it at
 ;; all, and how to build its glue. 0018 made that concrete: five engines now
@@ -49,7 +49,7 @@
             (some? (:meta prod)))
 (check "  ... in the format this reader understands" (:flint/module (:meta prod)) 1)
 ;; NO ENTRY POINT, and its absence is the assertion. A module has no
-;; distinguished function (`doc/decisions/0025` step 5): nothing is called
+;; distinguished function (`DECISIONS.md#structured-ports` step 5): nothing is called
 ;; automatically and a caller names what it wants, so recording one here would
 ;; describe a concept the runtime no longer has. `:exports` is the honest list
 ;; and every name in it is equally callable.
@@ -81,7 +81,7 @@
             (mm/compatible? (:meta prod) (:meta loader)))
 
 ;; 0020's stated trap, and the case that proves the key is drawn correctly.
-;; `0016` ships two builds differing only in diagnostics. If turning diagnostics
+;; `two-builds` ships two builds differing only in diagnostics. If turning diagnostics
 ;; on invalidated shards, the compatibility key would be over the wrong subset.
 (println "  (building the DIAGNOSTICS runtime to check 0016's two builds agree)")
 (when-not (zero? (:exit (sh "./bin/build-units" "--diagnostics")))

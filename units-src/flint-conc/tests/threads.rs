@@ -255,7 +255,7 @@ fn without_the_thread_table_as_a_root_a_parked_stack_would_be_lost() {
     );
 }
 
-/// The case `0005` actually asked for and the suite did not have: a thread that
+/// The case `threads-and-ports` actually asked for and the suite did not have: a thread that
 /// parks **on a waiter** -- a send into a full buffer, a receive on an empty one
 /// -- across a collection, repeatedly, so that waiter slots are recycled.
 ///

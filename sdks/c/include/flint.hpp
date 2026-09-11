@@ -155,7 +155,7 @@ private:
   FlintValue *v_ = nullptr;
 };
 
-/// Who advances a sandbox, and when (`doc/decisions/0028`).
+/// Who advances a sandbox, and when (`DECISIONS.md#drivers`).
 ///
 /// `Driver::inline_()` runs on the calling thread; `Driver::pool(n)` gives a
 /// sandbox several executors on one heap. Ask for what you want and read
@@ -192,8 +192,10 @@ public:
     return Sandbox(s);
   }
 
-  /// Lend a capability by name. A sandbox granted nothing can reach nothing.
-  void grant(const std::string &name) { flint_sandbox_grant(s_.get(), name.c_str()); }
+  /// `grant(name)` WAS HERE and could never have worked: it called
+  /// `flint_sandbox_grant`, which this header declared and no translation unit
+  /// ever defined. See the note in `flint.h`. The host projects opaque values
+  /// into the sandbox instead.
 
   /// Stop a call after `n` instructions, and turn counting on.
   void setStepLimit(uint64_t n) { flint_sandbox_set_step_limit(s_.get(), n); }

@@ -3,7 +3,7 @@
 One source, compiled once, run on every runtime, and the answers diffed byte
 for byte. Run it with `bin/conform-hosts`.
 
-`doc/decisions/0010` is explicit about why this exists:
+`DECISIONS.md#other-hosts` is explicit about why this exists:
 
 > The bytecode makes a port *cheap*. It does nothing to make two ports *agree*.
 

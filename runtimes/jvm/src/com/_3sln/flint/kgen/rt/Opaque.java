@@ -25,7 +25,7 @@ public final class Opaque {
     /// rather than a slot count, and adding a slot must not move it.
     /// 
     /// NOT A SUBSTITUTE FOR A TYPE. The slot exists because metadata is how a
-    /// protocol is extended per VALUE (`0005` §6), not because a tagged form is
+    /// protocol is extended per VALUE (`threads-and-ports` §6), not because a tagged form is
     /// how a user should define one; that question is open and this does not
     /// answer it.
     public static long newTagged(Rt rt, long tag, long form) {

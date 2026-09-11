@@ -9,12 +9,12 @@ import com._3sln.flint.kgen.rt.Mapcore;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 
-/// Values across a boundary (`doc/decisions/0025`), ported from
+/// Values across a boundary (`DECISIONS.md#structured-ports`), ported from
 /// `runtime/src/codec.rs`.
 ///
 /// BOTH HALVES, because a bridge is full duplex: `send` encodes and
 /// `hostDeliver` decodes, and both run in the RUNTIME
-/// (`doc/decisions/0027`). Neither is reachable from a program -- there is no
+/// (`DECISIONS.md#ports-are-the-hosts`). Neither is reachable from a program -- there is no
 /// builtin that encodes and none that decodes -- and that, rather than the
 /// absence of the code, is what keeps a guest from turning arbitrary bytes into
 /// a PORT or an identity. This file used to carry only the encoder and a
@@ -31,11 +31,11 @@ public final class Codec {
         K_DOUBLE = 4, K_STRING = 5, K_KEYWORD = 6, K_SYMBOL = 7, K_VECTOR = 8,
         K_LIST = 9, K_MAP = 10, K_SET = 11, K_BYTES = 14, K_PORT = 15,
         K_SENTINEL = 16,
-        /// A tagged literal (`doc/decisions/0034`): the tag symbol, then the
+        /// A tagged literal (`DECISIONS.md#tagged-literals`): the tag symbol, then the
         /// form. 17 here and 17 in the image's constant tags, because the two
         /// SHARE a numbering space.
         K_TAGGED = 17,
-        /// A table (`doc/decisions/0026`), COLUMNAR: the schema, the row count,
+        /// A table (`DECISIONS.md#tables`), COLUMNAR: the schema, the row count,
         /// then each column's values in full before the next one starts.
         /// Row-major would be a vector of maps with extra steps and would lose
         /// exactly what the type is for.
@@ -197,7 +197,7 @@ public final class Codec {
     // --- decoding ----------------------------------------------------------
     //
     // The mirror of the encoder, and it lives HERE rather than being reachable
-    // from a program: `hostDeliver` is its only caller (`doc/decisions/0027`).
+    // from a program: `hostDeliver` is its only caller (`DECISIONS.md#ports-are-the-hosts`).
     //
     // A bridge carries VALUES. The runtime encodes on the way out and decodes
     // on the way in, and the guest is handed neither half -- because a decoder
@@ -258,7 +258,7 @@ public final class Codec {
 
     /// Decode a value the GUEST produced, where the live tags are refused.
     ///
-    /// This is the whole of `0025`'s safety rule, and it is one line: a guest
+    /// This is the whole of `structured-ports`'s safety rule, and it is one line: a guest
     /// that could decode arbitrary bytes into a port would have exactly the
     /// integer-to-port conversion the sandbox forbids.
     public static long decodeGuest(Rt rt, byte[] bytes) {
@@ -376,7 +376,7 @@ public final class Codec {
                 int id = r.u32();
                 // INTERN OR MINT. A port the host names in a message is a port
                 // it is handing to this sandbox, and that is how a capability
-                // gets delegated (`doc/decisions/0027`). Arriving twice costs
+                // gets delegated (`DECISIONS.md#ports-are-the-hosts`). Arriving twice costs
                 // nothing and counts once: the handle is interned by host id,
                 // so the second arrival finds the first object.
                 //

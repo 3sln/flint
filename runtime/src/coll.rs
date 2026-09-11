@@ -155,7 +155,7 @@ impl Rt {
         if !self.is_string(x) || !self.is_string(y) {
             return self.throw_str("ClassCastException", "not a string");
         }
-        // A tree join, not a copy (`doc/decisions/0011`). Small results still
+        // A tree join, not a copy (`DECISIONS.md#strings-and-matching`). Small results still
         // copy into a flat string -- `s_concat` decides -- because below the
         // threshold the metadata costs more than the copy it saves.
         //
@@ -177,10 +177,10 @@ impl Rt {
     /// and the cursor had to be invalidated by the collector. So the same walk
     /// cost 8 000 gas undisturbed and 8 500 with one collection halfway through
     /// -- and under parallel executors that collection belongs to another
-    /// thread. `doc/decisions/0009` says gas is deterministic; a memo keyed on
+    /// thread. `DECISIONS.md#resource-limits` says gas is deterministic; a memo keyed on
     /// collector state is not. `runtime/tests/determinism.rs` is the guard.
     fn cp_bytes_at(&mut self, s: Value, i: u32, out: &mut [u8; 4]) -> Option<u32> {
-        // WHICH MECHANISM, AND WHY -- `0011` calls them complementary and this
+        // WHICH MECHANISM, AND WHY -- `strings-and-matching` calls them complementary and this
         // is the line where that has to be acted on.
         //
         // EVERY ROPE DESCENDS, ASCII included, and this comment used to say the
@@ -194,13 +194,13 @@ impl Rt {
         // For ASCII a code-point index IS a byte index, so the descent is this
         // same walk with the lookup skipped -- and flattening would turn an
         // O(log n) descent into an O(n) copy that also caches the flat form,
-        // undoing the tree for every later read (`doc/decisions/0011`).
+        // undoing the tree for every later read (`DECISIONS.md#strings-and-matching`).
         if self.is_rope(s) {
             // ASCII included: for ASCII the code-point index IS the byte index,
             // so the descent is the same walk with the lookup skipped. It used
             // to flatten here, which turns an O(log n) descent into an O(n)
             // copy AND caches the flat form, undoing the tree for every later
-            // read (`doc/decisions/0011`).
+            // read (`DECISIONS.md#strings-and-matching`).
             // PAST THE END NEEDS NO CHECK HERE. `rope_byte_of_cp` answers the
             // byte length when there is no such code point, and
             // `rope_bytes_at` answers 0 for an offset at or past the end -- so
@@ -249,7 +249,7 @@ impl Rt {
     ///
     /// NOTE THE MISSING `string_arg`. Every indexing path used to flatten a
     /// rope first, which threw away the per-node code-point counts
-    /// `doc/decisions/0011` computes, stores and traces for exactly this
+    /// `DECISIONS.md#strings-and-matching` computes, stores and traces for exactly this
     /// question -- and then answered it by scanning.
     /// The one-character string at code point `i`, or `dflt` past the end.
     ///
@@ -317,7 +317,7 @@ impl Rt {
         // NO `string_arg` on the non-ASCII path. Flattening first turned a tree
         // into one long run and then walked it with `chars().skip(start)`,
         // which is O(start) per call -- so slicing a string n times was
-        // quadratic, which is the defect `doc/decisions/0011` predicts in the
+        // quadratic, which is the defect `DECISIONS.md#strings-and-matching` predicts in the
         // sentence "without the flag, `nth` and `subs` on a flat string are
         // O(n) and splitting one is quadratic". The tree answers both offsets
         // by descent instead.
@@ -327,7 +327,7 @@ impl Rt {
         // AN ASCII ROPE DESCENDS TOO. This used to fall through to
         // `string_arg`, which flattens -- so the non-ASCII path was careful and
         // the easy path was not, which is the wrong way round and exactly the
-        // "flatten because the platform likes flat things" that `0011` exists
+        // "flatten because the platform likes flat things" that `strings-and-matching` exists
         // to refuse. For ASCII a code point IS a byte, so `append_range` is the
         // whole implementation and it never materialises the tree.
         if self.is_rope(s) {
@@ -530,7 +530,7 @@ impl Rt {
     /// program cost different gas on each, and why no charge could be moved to
     /// fix it. A rope is the only representation all of them share.
     ///
-    /// THE FLATTEN IS GONE WITH THEM. `doc/decisions/0011` lists `index-of`
+    /// THE FLATTEN IS GONE WITH THEM. `DECISIONS.md#strings-and-matching` lists `index-of`
     /// under what must walk the structure rather than materialise it, and
     /// warned that "a rope that flattens on every `index-of` passes every
     /// correctness test and is slower than the flat string it replaced".
@@ -591,12 +591,12 @@ impl Rt {
     // Both ports already said these line for line, so generating them found
     // nothing -- which is the point of doing it last rather than not at all.
 
-    // --- opaque values (doc/decisions/0022) -------------------------------------
+    // --- opaque values (DECISIONS.md#opaque-values) -------------------------------------
 
     /// The next opaque identity, and step the counter.
     ///
     /// A generated source can neither hold the counter nor increment it in
-    /// place, so it asks for one. Identities are never reused: `0022` says an
+    /// place, so it asks for one. Identities are never reused: `opaque-values` says an
     /// opaque value IS its identity, and a recycled id would make two of them
     /// equal.
     pub fn take_opaque_id(&mut self) -> i64 {

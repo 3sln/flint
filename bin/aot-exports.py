@@ -3,7 +3,7 @@
 
 Only the `--aot` build declares these, so a production module neither exports
 them nor carries them -- the same shape `bin/diag-exports.py` uses for
-diagnostics, and the same reasoning (doc/decisions/0016 applied to 0013).
+diagnostics, and the same reasoning (DECISIONS.md#two-builds applied to 0013).
 
 They must be exports rather than ordinary symbols because `--gc-sections` runs
 BEFORE the compiled arities that call them exist: those are appended after the

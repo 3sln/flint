@@ -169,7 +169,7 @@ public class RtFoundation {
     //
     // That reads a root into a raw ADDRESS and then calls `Vec.empty`. If
     // `Vec.empty` ever allocated, the address would be stale before it was
-    // used -- eleven `0031` violations appearing at once, in the runtime
+    // used -- eleven `a-vec-of-values-is-not-a-root` violations appearing at once, in the runtime
     // rather than in a test.
     //
     // Native asserts this (`empty_vector_is_a_shared_singleton`) and RUST

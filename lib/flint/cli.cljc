@@ -1,5 +1,5 @@
 (ns flint.cli
-  "The command surface, as a flint program (`doc/decisions/0021`).
+  "The command surface, as a flint program (`DECISIONS.md#cli`).
 
   It lives here rather than in `bin/flint` because `bin/flint` is a babashka
   script, and 0021's strongest argument is that flint should be usable by
@@ -41,7 +41,7 @@
              ""
              "  and, from the host side, `flint run <file>` runs a MODULE or a"
              "  bytecode IMAGE -- the image path needs no linker anywhere"
-             "  (doc/decisions/0023)."
+             "  (DECISIONS.md#construe-integration-bar)."
              ""
              "Everything reads the project through the :fs capability, so a run"
              "granted nothing can read nothing."]))
@@ -54,13 +54,13 @@
   Stated as data because 0021 makes a point about it that is easy to lose:
   emitting for a target has nothing to do with running on it. Codegen is pure,
   so a macOS binary emits JVM bytecode with no JVM present. The targets differ
-  in their BACKENDS, which is `0010`'s work, not in the toolchain around them."
+  in their BACKENDS, which is `other-hosts`'s work, not in the toolchain around them."
   [{:target "wasm" :ok true
     :note "a self-contained module, or a bytecode image (0023)"}
    {:target "jvm" :ok false
-    :note "needs the JVM backend -- doc/decisions/0010"}
+    :note "needs the JVM backend -- DECISIONS.md#other-hosts"}
    {:target "clr" :ok false
-    :note "needs the CLR backend -- doc/decisions/0010"}])
+    :note "needs the CLR backend -- DECISIONS.md#other-hosts"}])
 
 (defn target-named
   "The target entry for `nm`, or nil."

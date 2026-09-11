@@ -1,4 +1,4 @@
-// The IMAGE-PER-CALL shape (`doc/decisions/0021`, `0023`), across engines.
+// The IMAGE-PER-CALL shape (`DECISIONS.md#cli`, `construe-integration-bar`), across engines.
 //
 // This is what flint's first real consumer runs: a resident loader instantiated
 // once per isolate, a bytecode image loaded per call, and nothing shared
@@ -18,7 +18,7 @@ const read = typeof Deno !== 'undefined'
 
 const [loaderPath, imagePath, itersArg, fnArg] = argv;
 // The FUNCTION, named: a loaded image cannot be asked what it calls itself
-// (`doc/decisions/0025` step 5).
+// (`DECISIONS.md#structured-ports` step 5).
 const FN = fnArg ?? 'construe.bench.xrt25/main';
 const N = Number(itersArg || 2000);
 
@@ -69,9 +69,9 @@ console.log(JSON.stringify({
 }));
 
 // `[name []]` in the wire format, written by hand: these drivers deliberately
-// use nothing but a `WebAssembly.Instance` (`doc/decisions/0018`), so there is
+// use nothing but a `WebAssembly.Instance` (`DECISIONS.md#cross-runtime-benchmarks`), so there is
 // no SDK here to encode for them. Nothing is called automatically any more
-// (`doc/decisions/0025` step 5), so the name has to travel.
+// (`DECISIONS.md#structured-ports` step 5), so the name has to travel.
 function wireCall(e, fn) {
   const enc = (s) => {
     const u = new TextEncoder().encode(s);

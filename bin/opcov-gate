@@ -74,7 +74,7 @@ if [ "$defined_cold" -ne 0 ]; then
   grep '^  cold: ' "$out" >&2
   echo "opcov-gate: $defined_cold defined opcode(s) reached by no conformance program." >&2
   echo "  Either exercise them or remove them -- 0x00, 0x10, 0x1D and 0x1F..0x22" >&2
-  echo "  were removed for exactly this reason (doc/decisions/0038)." >&2
+  echo "  were removed for exactly this reason (DECISIONS.md#kin)." >&2
   exit 1
 fi
 

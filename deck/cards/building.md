@@ -68,25 +68,25 @@ doc/              decisions, unit format, generated manifest, benchmark output
 
 Written down where somebody will find them, with the reasoning:
 
-- `doc/decisions/0001-dispatch.md` — interpreter
+- `DECISIONS.md#dispatch` — interpreter
   vs AOT, stack vs register. Both argued, and the dispatch cost measured.
-- `doc/decisions/0002-modularity.md` — only
+- `DECISIONS.md#modularity` — only
   reachable code ships, builtins included.
-- `doc/decisions/0003-namespace-units.md`
+- `DECISIONS.md#namespace-units`
   — a namespace is a compilation unit, and linking composes them.
-- `doc/decisions/0004-exclude-and-unit-path.md`
+- `DECISIONS.md#exclude-and-unit-path`
   — `:exclude` as an assertion with a reference chain, and `:wasm-path` as a
   namespace-resolved search path with `units/` as its last entry.
-- `doc/decisions/0005-threads-and-ports.md`
+- `DECISIONS.md#threads-and-ports`
   — green threads, ports and protocols, and the point that governs them: `open`
   parks a thread, it does not suspend wasm.
-- `doc/decisions/0006-host-abi.md` — the host
+- `DECISIONS.md#host-abi` — the host
   ABI: continuation tokens with generations, one event queue, where the cost
   really is, and the two lifetimes of a port's two ends.
-- `doc/decisions/0007-construe-benchmarks.md`
+- `DECISIONS.md#construe-benchmarks`
   — benchmark the decision, not the runtime: what the numbers have to answer
   for somebody choosing whether to adopt this.
-- `doc/decisions/0008-document-resource.md`
+- `DECISIONS.md#document-resource`
   — documents: structure eagerly, content on demand, and the fetch planning
   that follows from measuring latency against bandwidth.
 - `doc/unit-format.md` — what a unit is, and what would

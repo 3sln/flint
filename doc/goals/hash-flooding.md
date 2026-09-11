@@ -19,7 +19,7 @@ billed a flat 16 steps, whatever the node holds:
 **105x the work, the same bill.** And 16.0 is flat at 1 024, 4 096 and 16 384
 colliding keys -- the attacker picks the multiplier, and gas does not move.
 
-`doc/decisions/0009` is the promise this breaks. `kin/collhash.kin` names the
+`DECISIONS.md#resource-limits` is the promise this breaks. `kin/collhash.kin` names the
 class exactly, about a defect that was fixed rather than tolerated:
 
 > it is not a slow path, it is a metering hole: the first version of this

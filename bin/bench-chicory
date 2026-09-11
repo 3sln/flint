@@ -1,8 +1,8 @@
 #!/bin/sh
-# flint on Chicory -- a wasm interpreter written in Java (doc/decisions/0018).
+# flint on Chicory -- a wasm interpreter written in Java (DECISIONS.md#cross-runtime-benchmarks).
 #
 # 0018 says this row DECIDES something: flint on Chicory is an interpreter
-# running inside an interpreter, and if it is unusably slow then `0010`'s tier 1
+# running inside an interpreter, and if it is unusably slow then `other-hosts`'s tier 1
 # -- an SDK over the wasm module -- is not the answer for the JVM, and porting
 # the VM becomes the route rather than a later luxury.
 #

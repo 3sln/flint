@@ -101,7 +101,7 @@ try {
 ok('gas is readable after a call, in every build', sandbox.diagnostics.gas > 0,
    JSON.stringify(sandbox.diagnostics));
 
-// --- drivers (`doc/decisions/0028`) -----------------------------------------
+// --- drivers (`DECISIONS.md#drivers`) -----------------------------------------
 //
 // The same four nouns and the same fifth as the Rust SDK, by the same names.
 // What differs is the ANSWER: wasm cannot put two executors in one sandbox
@@ -153,7 +153,7 @@ ok('and the FIRST token this build understands decides',
    sizeOf(['no-such-thing', 'perf', 'size']) === fast, 'a later token won');
 ok('no optimize at all is the interpreter', sizeOf([]) === small, 'it compiled arities');
 
-// --- workspaces (`doc/decisions/0035` step 3, on `0036`'s resolver) ---------
+// --- workspaces (`DECISIONS.md#reader-tags` step 3, on `workspace-capabilities`'s resolver) ---------
 //
 // A reader tag is bound per WORKSPACE, and until now that was true from the CLI
 // and silently false through here: the SDK had no notion of which project a
@@ -185,7 +185,7 @@ ok('no optimize at all is the interpreter', sizeOf([]) === small, 'it compiled a
   ok('and a tag no workspace binds is refused', refused);
 }
 
-// --- workspace capability guards (`doc/decisions/0036`) ---------------------
+// --- workspace capability guards (`DECISIONS.md#workspace-capabilities`) ---------------------
 //
 // Level one of two: a workspace declaring `guard` may be required only by a
 // workspace holding it. The three cases that are easy to get wrong are here
@@ -226,7 +226,7 @@ ok('no optimize at all is the interpreter', sizeOf([]) === small, 'it compiled a
      'the goods');
 }
 
-// --- var capability guards (`doc/decisions/0036`) ---------------------------
+// --- var capability guards (`DECISIONS.md#workspace-capabilities`) ---------------------------
 //
 // Level two: the workspace is NOT guarded and may be depended on freely, and
 // one var in it is. This is what makes a partly privileged library expressible
@@ -300,7 +300,7 @@ ok('no optimize at all is the interpreter', sizeOf([]) === small, 'it compiled a
      'privileged');
 }
 
-// --- asking the host for something (`doc/decisions/0036` step 7) ------------
+// --- asking the host for something (`DECISIONS.md#workspace-capabilities` step 7) ------------
 //
 // `open` asks for a PORT; `request` asks for anything and gets a value. It is
 // guarded with `:host`, and the standard library is its own workspace, which is
@@ -336,7 +336,7 @@ ok('no optimize at all is the interpreter', sizeOf([]) === small, 'it compiled a
   eq('an unhandled request is refused', await sb.call('app.a/opt'), null);
 }
 
-// --- virtual namespaces (`doc/decisions/0036` step 4, `0037`) ---------------
+// --- virtual namespaces (`DECISIONS.md#workspace-capabilities` step 4, `system-namespaces-and-deps`) ---------------
 //
 // A namespace with NO SOURCE, spoken to over a port. The call site reads like
 // any other call, which is the whole design goal -- so the tests below are as
@@ -409,7 +409,7 @@ writeFileSync(`${dir}/m.wasm`, image.wasm);
 const root = new URL('../../', import.meta.url).pathname;
 // The FUNCTION is named, and then its arguments. `x` alone used to be the
 // argument, back when there was an entry point to default to; with `main` gone
-// there is nothing to default to and nothing named `x` (`doc/decisions/0025`).
+// there is nothing to default to and nothing named `x` (`DECISIONS.md#structured-ports`).
 const out = execFileSync('node', [`${root}host/flint.mjs`, `${dir}/m.wasm`, 'app/main', 'x'],
                          { encoding: 'utf8' }).trim();
 ok('the module runs under a different host', out.startsWith('main saw'), out);

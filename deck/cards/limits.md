@@ -41,7 +41,7 @@ The honest list. Nothing here is stubbed and reported as working.
   now be sent through another bridge, which is how a host-lent capability
   gets delegated — see [Concurrency](concurrency.md#channels-vs-bridges).
   This is a later, narrower shape than the original "no transfer at all"
-  default recorded in `doc/decisions/0006`.
+  default recorded in `DECISIONS.md#host-abi`.
 - **A parked thread cannot be inside native code.** `map`, `sort`, a comparator
   and a lazy-seq force re-enter the interpreter with Rust frames underneath, and
   those are not a continuation anybody can save. Parking there is a clean error,
@@ -57,7 +57,7 @@ The honest list. Nothing here is stubbed and reported as working.
   where it is the one result that would rule flint out of a job. It is a backtracking matcher written in cljc — which is what makes
   it tree-shake away when unused — using continuation closures, so it allocates
   per match step. A first-character skip cut a third off; the remaining cost is
-  structural. `doc/decisions/0002` said to
+  structural. `DECISIONS.md#modularity` said to
   measure before moving something to Rust, and this is the measurement that
   would justify it: a Rust regex unit would cost nothing for programs that do
   not use one, because the unit mechanism already exists — and now that

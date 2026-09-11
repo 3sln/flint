@@ -1,4 +1,4 @@
-;; Global ports (`doc/decisions/0027`), and the system port a host passes IN.
+;; Global ports (`DECISIONS.md#ports-are-the-hosts`), and the system port a host passes IN.
 ;;
 ;; The inversion this file exists to check: a sandbox no longer manufactures an
 ;; endpoint and offers it up. The host owns the port, keeps one end, and passes
@@ -27,7 +27,7 @@
 ;; Asserted as a compile failure rather than by reading the source, because
 ;; "there is no such function" is only true while nobody adds one back. It was
 ;; briefly reachable as `flint.port/system`, and that was wrong for the reason
-;; `0022` gives about capabilities: authority is never something the confined
+;; `opaque-values` gives about capabilities: authority is never something the confined
 ;; thing can name for itself.
 (src! "reach"
       (str "(ns reach (:require [flint.port :as p]))\n"

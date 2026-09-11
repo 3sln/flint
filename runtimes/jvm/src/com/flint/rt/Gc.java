@@ -9,13 +9,13 @@ import static com.flint.rt.Obj.*;
 /// Generational and copying in the nursery, mark-and-sweep in the old space,
 /// with a write barrier and a remembered set. Identical to the Rust because it
 /// is the same design over the same flat memory -- which is the point of the
-/// port: `doc/decisions/0010` says the bytecode makes a port cheap and does
+/// port: `DECISIONS.md#other-hosts` says the bytecode makes a port cheap and does
 /// nothing to make two ports AGREE, and two collectors written two ways would
 /// have to be argued into agreement rather than being the same thing.
 public final class Gc {
     /// Objects surviving this many minors are promoted.
     ///
-    /// TWO, NOT THREE, AND IT IS LOAD-BEARING. `doc/decisions/0018` bounds the
+    /// TWO, NOT THREE, AND IT IS LOAD-BEARING. `DECISIONS.md#cross-runtime-benchmarks` bounds the
     /// largest single copy a collection may make at 512 KB, and
     /// `test/pause.clj` asserts it. At three, survivors sit in the nursery for
     /// one more collection and the largest copy measures 518.1 KB -- over the

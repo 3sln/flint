@@ -117,7 +117,7 @@
   `:workspaces` says who OWNS which files, first matching prefix winning. It is
   how a caller with no filesystem says what the CLI reads off a source root:
   which reader tags a file is read under, and -- once capabilities land -- what
-  its workspace was granted (`doc/decisions/0036`). Absent, every file belongs
+  its workspace was granted (`DECISIONS.md#workspace-capabilities`). Absent, every file belongs
   to the anonymous workspace and only the built-in tags are bound, which is
   what this did before workspaces existed.
 
@@ -135,7 +135,7 @@
         features (or (:features spec) flint.reader/default-features)
         entry (:entry spec)
         entry-ns (symbol (namespace entry))
-        ;; The namespace RESOLVER (`doc/decisions/0036`). This used to be a
+        ;; The namespace RESOLVER (`DECISIONS.md#workspace-capabilities`). This used to be a
         ;; lambda here that answered source text and nothing else, which is why
         ;; reader tags worked from the CLI and silently did not through the
         ;; SDK: the CLI knew which project a file belonged to and this did not.
@@ -159,7 +159,7 @@
                     ;; `compiler.cljc` says a file is read three times and a
                     ;; value only one reader knows is one the others get wrong;
                     ;; this was that, and the SDK having no tags at all is why
-                    ;; nothing caught it (`doc/decisions/0035`, `0036`).
+                    ;; nothing caught it (`DECISIONS.md#reader-tags`, `workspace-capabilities`).
                     {:sources (into {} (map (fn [e] [(key e) {:src (:src (val e))
                                                               :file (:file (val e))
                                                               :tags (:tags (val e))
@@ -167,7 +167,7 @@
                                                               :grants (:grants (val e))
                                                               ;; A VIRTUAL namespace has no
                                                               ;; `:src` and must not be read
-                                                              ;; (`doc/decisions/0036` step 4).
+                                                              ;; (`DECISIONS.md#workspace-capabilities` step 4).
                                                               :virtual (:virtual (val e))
                                                               :vars (:vars (val e))}])
                                             sources))
@@ -200,7 +200,7 @@
   character at a time: it took 198 seconds, against 450 milliseconds for all
   the byte handling put together.
 
-  No linking happens and none is needed (`doc/decisions/0024`). Linking merges
+  No linking happens and none is needed (`DECISIONS.md#no-runtime-linking`). Linking merges
   relocatable objects and is `wasm-ld`; the runtime module was linked once,
   when flint was built. Everything after that -- appending the image as a data
   segment, pointing the descriptor at it, appending compiled arities -- is byte
@@ -212,7 +212,7 @@
         entry (:entry spec)
         entry-ns (symbol (namespace entry))
         slots (:slots spec)
-        ;; The namespace RESOLVER (`doc/decisions/0036`). This used to be a
+        ;; The namespace RESOLVER (`DECISIONS.md#workspace-capabilities`). This used to be a
         ;; lambda here that answered source text and nothing else, which is why
         ;; reader tags worked from the CLI and silently did not through the
         ;; SDK: the CLI knew which project a file belonged to and this did not.
@@ -236,7 +236,7 @@
                     ;; `compiler.cljc` says a file is read three times and a
                     ;; value only one reader knows is one the others get wrong;
                     ;; this was that, and the SDK having no tags at all is why
-                    ;; nothing caught it (`doc/decisions/0035`, `0036`).
+                    ;; nothing caught it (`DECISIONS.md#reader-tags`, `workspace-capabilities`).
                     {:sources (into {} (map (fn [e] [(key e) {:src (:src (val e))
                                                               :file (:file (val e))
                                                               :tags (:tags (val e))
@@ -244,7 +244,7 @@
                                                               :grants (:grants (val e))
                                                               ;; A VIRTUAL namespace has no
                                                               ;; `:src` and must not be read
-                                                              ;; (`doc/decisions/0036` step 4).
+                                                              ;; (`DECISIONS.md#workspace-capabilities` step 4).
                                                               :virtual (:virtual (val e))
                                                               :vars (:vars (val e))}])
                                             sources))
@@ -285,7 +285,7 @@
                            ;;
                            ;; At and above them are flint's BUILTINS, which are
                            ;; reached only through the NATIVE opcode with an
-                           ;; index the image carries (`doc/decisions/0003`).
+                           ;; index the image carries (`DECISIONS.md#namespace-units`).
                            ;; Those the image does not name, nothing can call.
                            builtin-slots (set (vals slots))
                            used (set (img/natives builder))
@@ -329,7 +329,7 @@
       (flint.rt/str-join (concat ["!missing\n"] (interpose "\n" (map str (:missing r)))))
       ;; A REFUSED require is not a missing one and must not be reported as
       ;; one: the source is there and readable, and the answer is that this
-      ;; workspace may not have it (`doc/decisions/0036`). Each line names both
+      ;; workspace may not have it (`DECISIONS.md#workspace-capabilities`). Each line names both
       ;; ends and what was missing, because "refused" without the capability is
       ;; a message nobody can act on.
       (:refused r)

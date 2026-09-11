@@ -20,7 +20,7 @@ use crate::kgen::rt::hamt::*;
 
 impl Rt {
     /// Is this a map? A ROW REF answers yes, which is what lets code that does
-    /// not know it holds a table keep working (`doc/decisions/0026`).
+    /// not know it holds a table keep working (`DECISIONS.md#tables`).
     pub fn is_map(&self, v: Value) -> bool {
         if !v.is_heap() {
             return false;
@@ -85,7 +85,7 @@ impl Rt {
     /// 
     /// `root` and `meta` are ROOTED across the allocation and read back after
     /// it: `alloc` collects, and a value in a host local does not survive that
-    /// (`doc/decisions/0031`).
+    /// (`DECISIONS.md#a-vec-of-values-is-not-a-root`).
     pub fn new_hash_map(&mut self, cnt: u32, root: Value, meta: Value) -> Value {
         let base: usize = self.mark();
         let ri: usize = self.push(root);

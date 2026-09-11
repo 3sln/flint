@@ -1,4 +1,4 @@
-// Per-call latency DISTRIBUTION in the image-per-call shape (`doc/decisions/0018`).
+// Per-call latency DISTRIBUTION in the image-per-call shape (`DECISIONS.md#cross-runtime-benchmarks`).
 //
 // A Worker has a CPU budget per request, so what decides whether a deployment
 // works is the tail, not the mean. And flint brings its own collector inside the
@@ -12,7 +12,7 @@ const read = typeof Deno !== 'undefined'
 
 const [loaderPath, imagePath, callsArg, fnArg] = argv;
 // The FUNCTION, named: a loaded image cannot be asked what it calls itself
-// (`doc/decisions/0025` step 5).
+// (`DECISIONS.md#structured-ports` step 5).
 const FN = fnArg ?? 'construe.bench.xrt25/main';
 const CALLS = Number(callsArg || 2000);
 const loader = read(loaderPath);
@@ -53,9 +53,9 @@ console.log(JSON.stringify({
 }
 
 // `[name []]` in the wire format, written by hand: these drivers deliberately
-// use nothing but a `WebAssembly.Instance` (`doc/decisions/0018`), so there is
+// use nothing but a `WebAssembly.Instance` (`DECISIONS.md#cross-runtime-benchmarks`), so there is
 // no SDK here to encode for them. Nothing is called automatically any more
-// (`doc/decisions/0025` step 5), so the name has to travel.
+// (`DECISIONS.md#structured-ports` step 5), so the name has to travel.
 function wireCall(e, fn) {
   const enc = (s) => {
     const u = new TextEncoder().encode(s);

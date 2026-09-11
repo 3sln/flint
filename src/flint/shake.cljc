@@ -2,7 +2,7 @@
   "Tree shaking, as a pass over a FINISHED module.
 
   `--gc-sections` does this at link time, and it is worth 306 KB of code on
-  flint's own runtime -- 777 functions down to 273. `doc/decisions/0024` moves
+  flint's own runtime -- 777 functions down to 273. `DECISIONS.md#no-runtime-linking` moves
   linking out of the compile path entirely, so the shaking has to move with it,
   and the place it lands is here: a mark from a set of roots over a call graph,
   followed by removing what was not marked.

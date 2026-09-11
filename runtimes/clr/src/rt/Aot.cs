@@ -1,6 +1,6 @@
 namespace Flint.Rt;
 
-/// The runtime half of `doc/decisions/0013`: what compiled code calls back into.
+/// The runtime half of `DECISIONS.md#emit-wasm-instead-of-dispatch`: what compiled code calls back into.
 ///
 /// A LINE-FOR-LINE MIRROR of `runtimes/jvm/src/com/flint/rt/Aot.java`, which is
 /// itself a port of `runtime/src/aot.rs`. Almost none of it had to change across
@@ -11,7 +11,7 @@ namespace Flint.Rt;
 /// ## A compiled arity holds nothing of its own
 ///
 /// It manipulates the same value stack the interpreter does. That is the whole
-/// reason this is admissible (`doc/decisions/0001`): a design that kept flint
+/// reason this is admissible (`DECISIONS.md#dispatch`): a design that kept flint
 /// values in host locals across an allocation would need a shadow-stack spill
 /// around every one. Here there is nothing to spill, which is also why leaving
 /// compiled code costs nothing and why re-entering it mid-body is possible.
@@ -23,7 +23,7 @@ namespace Flint.Rt;
 /// recursion on the HOST stack, which cannot be suspended, so a green thread
 /// could not park at depth and deep recursion would blow the host stack instead
 /// of raising a catchable `StackOverflowError`. Both are load-bearing
-/// (`doc/decisions/0005`).
+/// (`DECISIONS.md#threads-and-ports`).
 public static class Aot {
 
     /// No compiled arity for this frame.

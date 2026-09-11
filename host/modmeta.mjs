@@ -1,4 +1,4 @@
-// Read flint's module metadata straight from the bytes (`doc/decisions/0020`).
+// Read flint's module metadata straight from the bytes (`DECISIONS.md#module-metadata-and-shards`).
 //
 // No `WebAssembly.compile`, no instantiate: a runner has to decide WHETHER to
 // instantiate, and on what glue, and that decision cannot depend on having

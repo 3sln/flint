@@ -1,4 +1,4 @@
-//! What a capability grant is allowed to reach (`doc/decisions/0037`).
+//! What a capability grant is allowed to reach (`DECISIONS.md#system-namespaces-and-deps`).
 //!
 //! A capability NAME says what kind of authority; it does not say which routes,
 //! which directories, which variables. This is the other half, and the rule it
@@ -15,9 +15,9 @@
 //! ## Why this is not the compile-time guard
 //!
 //! It is not, and must not be. The guard compares NAMES at the reference
-//! (`0036` step 8); this is checked when a call actually happens, with the URL
+//! (`workspace-capabilities` step 8); this is checked when a call actually happens, with the URL
 //! or the path in hand. A guard that tried to check the route would be checking
-//! a run-time value at compile time, which `0036` refuses at length. What the
+//! a run-time value at compile time, which `workspace-capabilities` refuses at length. What the
 //! policy adds is that the specific question gets a declarative answer a
 //! reviewer can read in a diff, rather than one buried in host code.
 

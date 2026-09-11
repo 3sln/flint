@@ -1,5 +1,5 @@
 (ns regex
-  "The Pike VM (`doc/decisions/0012`), which each port implements itself.
+  "The Pike VM (`DECISIONS.md#matching-over-ropes`), which each port implements itself.
 
   The PATTERN is parsed by `flint.nfa`, in cljc, so every host runs the same
   parser; only the matcher is ported. These cases are chosen where a host's own

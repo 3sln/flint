@@ -1,6 +1,6 @@
-//! `flint.sys.*`: the system surface, served over ports (`doc/decisions/0037`).
+//! `flint.sys.*`: the system surface, served over ports (`DECISIONS.md#system-namespaces-and-deps`).
 //!
-//! These namespaces are **VIRTUAL** (`0036` step 4). A program writes
+//! These namespaces are **VIRTUAL** (`workspace-capabilities` step 4). A program writes
 //!
 //! ```clojure
 //! (:require [flint.sys.fs :as fs])
@@ -26,7 +26,7 @@
 //! because granting one should not grant the other: a program that reads one
 //! configuration file has no business enumerating a disk. That `file://` and
 //! `https://` share `:slurp` is the uncomfortable half and is answered the way
-//! `0036` answered it for `flint.host/request` -- the compile-time guard is
+//! `workspace-capabilities` answered it for `flint.host/request` -- the compile-time guard is
 //! coarse, and the POLICY below is what makes it specific.
 
 use crate::policy::Policy;
@@ -47,7 +47,7 @@ pub trait Service {
     fn name(&self) -> &str;
     /// `[{:name f :arities [..]} ..]`, for `{:op :list}`.
     ///
-    /// Not optional here. `0036` makes the var list optional because a POD may
+    /// Not optional here. `workspace-capabilities` makes the var list optional because a POD may
     /// not be able to answer, but the CLI knows its own surface, so every
     /// namespace in this file gives the compiler what it needs to turn an
     /// unknown var into a compile error. Taking our own API on trust would be
@@ -133,7 +133,7 @@ impl Service for Fs {
                         w.string(&s);
                     }
                     // NOT lossy. A file that is not text comes back as BYTES
-                    // (`doc/decisions/0024`) rather than as a string with
+                    // (`DECISIONS.md#no-runtime-linking`) rather than as a string with
                     // replacement characters in it, because a caller can act on
                     // bytes and cannot undo a lossy conversion.
                     Err(e) => {
@@ -410,7 +410,7 @@ impl Env {
 /// Bytes at a NAME. `file://`, `http://`, `https://`, `data:`.
 ///
 /// One capability for all of them, and that is the uncomfortable decision this
-/// namespace exists to make (`doc/decisions/0037`). `(slurp "file:///etc/x")`
+/// namespace exists to make (`DECISIONS.md#system-namespaces-and-deps`). `(slurp "file:///etc/x")`
 /// and `(slurp "https://example.com/x")` are the same question -- give me the
 /// bytes at this name -- and a program reading one configuration file should
 /// not be holding the thing that can enumerate a disk, which is what `:fs` is.

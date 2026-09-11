@@ -4,7 +4,7 @@
   Paging a document assumes extraction is a linear scan. It is not — you read
   the structure, find the table, and read *that* table's cells. Most of a fifty
   page scan is irrelevant to `{merchant, total, lines}`, and paging pays for all
-  of it (`doc/decisions/0008`).
+  of it (`DECISIONS.md#document-resource`).
 
   So the division is:
 

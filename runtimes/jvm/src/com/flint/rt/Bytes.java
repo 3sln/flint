@@ -3,7 +3,7 @@ package com.flint.rt;
 import static com.flint.rt.Obj.*;
 import java.util.ArrayList;
 
-/// Byte strings, ported from `runtime/src/bytes.rs` (`doc/decisions/0024`).
+/// Byte strings, ported from `runtime/src/bytes.rs` (`DECISIONS.md#no-runtime-linking`).
 ///
 /// FLAT is a contiguous `TY_BYTES`; ROPE is a shallow B-tree of byte pieces
 /// with structure sharing, so concatenation is a tree join and a slice of a
@@ -31,7 +31,7 @@ public final class Bytes {
     /// Total byte length of this node's subtree.
     public static final int BB_BYTES = 0;
     /// A cached flattening, or NIL. Materialising a rope repeatedly is the
-    /// failure `0011` names -- count the flattens, do not hope about them.
+    /// failure `strings-and-matching` names -- count the flattens, do not hope about them.
     public static final int BB_FLAT = 1;
     /// The subtree's depth: 1 for a node whose children are all leaves, and one
     /// more per level. EVERY CHILD OF A NODE HAS THE SAME DEPTH, which is what
@@ -111,7 +111,7 @@ public final class Bytes {
     /// SHARES, like `Str.ropeSlice`. This descended to the range -- which is
     /// what stopped it being quadratic -- and then COPIED it, so slicing a
     /// 509 KB code section allocated a fresh 509 KB minus the trim
-    /// (`doc/decisions/0011`).
+    /// (`DECISIONS.md#strings-and-matching`).
     public static long slice(Rt rt, long v, int from, int to) { return com._3sln.flint.kgen.rt.Byteslice.bSlice(rt, v, from, to); }
 
     /// A balanced byte rope over `n` pieces on the shadow stack, the mirror of

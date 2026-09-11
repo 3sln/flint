@@ -1,5 +1,5 @@
 // The host ABI: tokens, one event queue, and the two lifetimes
-// (doc/decisions/0006). Driven from test/host_abi.clj, which compiles the
+// (DECISIONS.md#host-abi). Driven from test/host_abi.clj, which compiles the
 // modules this exercises.
 import { load, instantiate } from '../host/flint.mjs';
 import { codec } from '../sdks/esm/src/codec.js';
@@ -21,7 +21,7 @@ async function fresh(path) {
 function raw(inst, { system = 1 } = {}) {
   const e = inst.exports;
   const dec = new TextDecoder();
-  // A SYSTEM PORT, because `open` is a request ON one (`doc/decisions/0027`)
+  // A SYSTEM PORT, because `open` is a request ON one (`DECISIONS.md#ports-are-the-hosts`)
   // and a sandbox given none can ask for nothing. Installed before `main`.
   if (system) {
     const b = new TextEncoder().encode('system');
@@ -36,7 +36,7 @@ function raw(inst, { system = 1 } = {}) {
     e,
     grant(token) { const id = next++; return e.flint_grant(token, id) ? id : 0; },
     /// Start a CALL by hand: a message on the system port, which is the only
-    /// way to run anything now (`doc/decisions/0025` step 5). Returns the first
+    /// way to run anything now (`DECISIONS.md#structured-ports` step 5). Returns the first
     /// status, so the caller drives the pump itself as these tests do.
     call(fn, args = []) {
       const bytes = codec.map([
@@ -129,7 +129,7 @@ console.log('host abi');
     const evs = h.drain();
     const t1 = process.hrtime.bigint();
     // NOT the system port: the call's own answer comes back as a message there
-    // (`doc/decisions/0025` step 5), and what is being counted is the traffic
+    // (`DECISIONS.md#structured-ports` step 5), and what is being counted is the traffic
     // the program produced.
     return { msgs: evs.filter((x) => x.kind === 2 && x.a !== 1).length, ns: Number(t1 - t0) };
   };
@@ -188,7 +188,7 @@ console.log('host abi');
   // FOUR: the three the program opened, plus the SYSTEM PORT it was given.
   // A bridge the host installed is a bridge the sandbox holds, so it is closed
   // and released at exit like any other -- which is how the host learns it may
-  // let go of the last reference (`doc/decisions/0027`).
+  // let go of the last reference (`DECISIONS.md#ports-are-the-hosts`).
   eq('  ... and the host is told about every one of them, the system port too',
      closes.length, 4);
 }

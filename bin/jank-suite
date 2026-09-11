@@ -9,7 +9,7 @@
 #   fail-*.jank   must be REJECTED -- a compile error or a throw
 #
 # The `cpp/` directory is EXCLUDED and that is not a dodge: those 514 tests are
-# C++ interop, and flint has no host classes at all (`doc/decisions/0010`).
+# C++ interop, and flint has no host classes at all (`DECISIONS.md#other-hosts`).
 # There is nothing to be "close to" there; a runtime that answered them would
 # not be flint. Everything else -- the special forms, the reader, syntax quote,
 # vars, metadata -- is language, and language is exactly what should port.

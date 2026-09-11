@@ -21,11 +21,11 @@
 
   `:flint/value-meta` is metadata for the VALUE rather than the var: `m-defn`
   attaches it by wrapping the function, which is how a predicate carries its
-  own explanation (`doc/decisions/0032`). A `defn`'s ordinary metadata lands on
+  own explanation (`DECISIONS.md#checks`). A `defn`'s ordinary metadata lands on
   the var, and the callee never sees it.
 
   `:flint/capabilities-guard` says which capabilities a workspace must hold to
-  REFERENCE this var (`doc/decisions/0036`). Read by the analyzer at the
+  REFERENCE this var (`DECISIONS.md#workspace-capabilities`). Read by the analyzer at the
   reference site and emitted nowhere -- a guard is a compile-time construct with
   no callable behind it, which is a security property before it is a
   performance one."

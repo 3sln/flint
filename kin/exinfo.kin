@@ -8,7 +8,7 @@
 ;; implementation somebody typed three times.
 ;;
 ;; THE ORDER AROUND THE ALLOCATION IS THE WHOLE OF THE CARE HERE.
-;; `doc/decisions/0031`: a value held in a host local does not survive an
+;; `DECISIONS.md#a-vec-of-values-is-not-a-root`: a value held in a host local does not survive an
 ;; allocation, because the collector may move it. So all four arguments are
 ;; rooted BEFORE `alloc`, and read back through `r` after -- never held across
 ;; it. Native and the JVM had reached that arrangement separately and by

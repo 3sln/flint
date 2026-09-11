@@ -54,7 +54,7 @@ pub const K_FN: u8 = 12;
 /// A builtin as a first-class value; payload is the native *import* index, so
 /// this does not depend on the natives table having been read yet.
 pub const K_NATIVE: u8 = 13;
-/// A tagged literal (`doc/decisions/0034`): two constant indices, the tag
+/// A tagged literal (`DECISIONS.md#tagged-literals`): two constant indices, the tag
 /// symbol and the form.
 ///
 /// 17 rather than 14, because the image's constant tags and `codec.rs`'s wire
@@ -197,7 +197,7 @@ impl Rt {
         // when the only reader was an error message; it is load-bearing now,
         // because an image loaded at RUN time carries slot numbers from the
         // module it was compiled against and has to be re-resolved by NAME
-        // (`doc/decisions/0023`).
+        // (`DECISIONS.md#construe-integration-bar`).
         let mut native_names = Vec::with_capacity(nnat);
         for _ in 0..nnat {
             native_names.push(r.u32());
@@ -360,7 +360,7 @@ impl Rt {
             init.push(r.u32());
         }
 
-        // Compiled arities (`doc/decisions/0013`). A module built without AOT
+        // Compiled arities (`DECISIONS.md#emit-wasm-instead-of-dispatch`). A module built without AOT
         // writes a zero here and carries nothing else -- and an empty table is
         // what lets the interpreter loop monomorphise the re-entry check away.
         // Read in BOTH builds: the image format does not fork, so a module

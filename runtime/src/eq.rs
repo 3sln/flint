@@ -41,7 +41,7 @@ impl Rt {
     // UTF-16 code units out of the UTF-8 to reproduce `String.compareTo`'s
     // ordering, in which a supplementary character sorts before U+E000..U+FFFF
     // because its surrogates begin at 0xD800. UTF-8 byte order is already code
-    // point order, and `0011` lists comparison among the operations that must
+    // point order, and `strings-and-matching` lists comparison among the operations that must
     // WALK rather than materialise.
 
     // `compare`, `cmp_named` and `cmp_sequential` are GENERATED, from

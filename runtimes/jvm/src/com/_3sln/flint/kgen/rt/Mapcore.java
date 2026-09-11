@@ -13,7 +13,7 @@ import static com._3sln.flint.kgen.rt.Tablemeta.*;
 
 public final class Mapcore {
     /// Is this a map? A ROW REF answers yes, which is what lets code that does
-    /// not know it holds a table keep working (`doc/decisions/0026`).
+    /// not know it holds a table keep working (`DECISIONS.md#tables`).
     public static boolean isMap(Rt rt, long v) {
         if (!Val.isHeap(v)) {
             return false;
@@ -76,7 +76,7 @@ public final class Mapcore {
     /// 
     /// `root` and `meta` are ROOTED across the allocation and read back after
     /// it: `alloc` collects, and a value in a host local does not survive that
-    /// (`doc/decisions/0031`).
+    /// (`DECISIONS.md#a-vec-of-values-is-not-a-root`).
     public static long newHashMap(Rt rt, int cnt, long root, long meta) {
         int base = rt.mark();
         int ri = rt.push(root);

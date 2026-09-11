@@ -11,7 +11,7 @@ const MODES = process.argv.slice(3);
 const N = Number(process.argv[2] ?? 20000);
 const file = 'out/colls-diag.wasm';
 const { module } = await load(file);
-// Built `:fn colls/main`; a call names it (`doc/decisions/0025` step 5).
+// Built `:fn colls/main`; a call names it (`DECISIONS.md#structured-ports` step 5).
 const FN = 'colls/main';
 
 const run = (what) => {

@@ -60,7 +60,7 @@
   (expect = 2 (count (assoc {1 :int} 1.0 :float))))
 
 (defn ^:flint.check/test whole-doubles-keep-their-point []
-  ;; The classic silent divergence (`doc/decisions/0010`): a double that
+  ;; The classic silent divergence (`DECISIONS.md#other-hosts`): a double that
   ;; happens to be whole must not print as an integer, or two hosts disagree
   ;; about a value they both computed correctly.
   (expect = "4.0" (str 4.0))

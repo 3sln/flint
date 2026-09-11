@@ -124,7 +124,7 @@
   the alternative was materialising the subject into contiguous bytes first.
   For a rope that is a FLATTEN, which is what both ports did on every regex
   call while native walked the leaves -- same answers, different work, and
-  `0011` is explicit that this is the thing to count rather than hope about."
+  `strings-and-matching` is explicit that this is the thing to count rather than hope about."
   {:name 'Cps :types {:rust "u32" :java "int" :csharp "int"} :methods {}})
 
 (def Walk
@@ -268,10 +268,10 @@
     ;; What `describe` dispatches over, beyond the above.
     TY_CLOSURE TY_NATIVEFN TY_TMAP TY_TSET TY_ROPE TY_BYTES TY_RECORD
     TY_ATOM TY_VAR TY_DELAY TY_REGEX TY_MULTIFN TY_REDUCED TY_EXINFO
-    ;; The byte-string tiers (`doc/decisions/0011`'s rope argument, applied to
+    ;; The byte-string tiers (`DECISIONS.md#strings-and-matching`'s rope argument, applied to
     ;; bytes): a flat leaf, a B-tree node over leaves, and the transient.
     TY_BROPE TY_TBYTES
-    ;; The rest of what `kind-of` dispatches over. `0005` says a value a guest
+    ;; The rest of what `kind-of` dispatches over. `threads-and-ports` says a value a guest
     ;; can hold needs a KIND of its own or it cannot be dispatched on at all,
     ;; so the closed set has to name every tag -- these are the ones no source
     ;; had needed until it.
@@ -896,7 +896,7 @@
                          :java "Table.refGet({0}, {1}, {2}, {3})"
                          :csharp "global::Flint.Rt.Table.refGet({0}, {1}, {2}, {3})"})
     ;; STILL HAND-WRITTEN, and reached as a call rather than a sibling until
-    ;; it is not: `check-row` builds the refusal messages that `0032` is about,
+    ;; it is not: `check-row` builds the refusal messages that `checks` is about,
     ;; and those are the last part of `Table` to port.
     ;; `eq_may_alloc` is GENERATED, by `eqalloc.kin`, so it is `own` rather
     ;; than a hand-written sibling -- and `own` is now exactly right for one:
@@ -1048,7 +1048,7 @@
     ;; definition. The RUST spelling stays `compare`, which is what every
     ;; native caller already says.
     ;; `str-cmp` WAS HERE, naming a hand-written function on each runtime. All
-    ;; three flattened both operands to compare them -- `0011` lists comparison
+    ;; three flattened both operands to compare them -- `strings-and-matching` lists comparison
     ;; among the operations that must WALK -- and synthesised UTF-16 out of
     ;; UTF-8 to reproduce `String.compareTo`'s ordering. `kin/ropecmp.kin`
     ;; walks and compares bytes, which is code point order already.
@@ -1155,7 +1155,7 @@
                          :java "{0}.nameOf({1})" :csharp "{0}.NameOf({1})"}
                         {:tag Value})
     ;; STILL HAND-WRITTEN, and reached as calls until they are not. `kind-of`
-    ;; is the closed set of `0005` and `type-ok` the schema's type check; both
+    ;; is the closed set of `threads-and-ports` and `type-ok` the schema's type check; both
     ;; want a keyword built from a literal, which the vocabulary cannot spell
     ;; yet.
     'kind-of (core/call {:rust "{0}.kind_of({1})"
@@ -1296,12 +1296,12 @@
     ;; at `HDR`. One question, three places to look -- so it is asked once here
     ;; rather than branched on in every source that walks leaves.
     ;; GAS. Charging is a mutation of the runtime, not of the value, and a
-    ;; generated source has to be able to do it: `0009` says gas is
+    ;; generated source has to be able to do it: `resource-limits` says gas is
     ;; proportional to work, and a loop that scans a leaf has done work whether
     ;; it was written by hand or not. `charge-bytes` is the same charge divided
     ;; by eight, which every runtime already spells for itself.
     ;; CHARGE AND REFUSE. `charge-work` cannot fail; this one answers false
-    ;; when the budget is gone, and the caller unwinds. `0009` wants the two
+    ;; when the budget is gone, and the caller unwinds. `resource-limits` wants the two
     ;; kept apart: a scan that is bounded charges, and one that is not has to
     ;; be stoppable.
     ;; CALL A FLINT CLOSURE, with the arguments taken from a contiguous run of
@@ -1327,7 +1327,7 @@
                              {:tag Value})
     ;; IS AN EXCEPTION IN FLIGHT? A native caller that invokes guest code has to
     ;; ask after every call: the throw does not unwind the host stack, it sets
-    ;; a field (`0026`).
+    ;; a field (`tables`).
     'is-thrown (core/call {:rust "!{0}.thrown.is_nil()"
                            :java "!Val.isNil({0}.thrown)"
                            :csharp "!Val.IsNil({0}.thrown)"}
@@ -1424,7 +1424,7 @@
 
     ;; --- ROOTING --------------------------------------------------------
     ;;
-    ;; The shadow stack (`doc/decisions/0031`): a value in a host local does
+    ;; The shadow stack (`DECISIONS.md#a-vec-of-values-is-not-a-root`): a value in a host local does
     ;; not survive an allocation. These ride the `^:method` receiver, so `{0}`
     ;; is `self` in Rust and `rt` in the other two and no branch is needed.
     'mark (core/call {:rust "{0}.mark()" :java "{0}.mark()" :csharp "{0}.Mark()"})

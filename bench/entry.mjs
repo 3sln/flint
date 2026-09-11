@@ -1,6 +1,6 @@
 // Which function a benchmark module exposes.
 //
-// Nothing is called automatically (`doc/decisions/0025` step 5): a module has
+// Nothing is called automatically (`DECISIONS.md#structured-ports` step 5): a module has
 // no entry point and a caller names the function it wants. Every benchmark
 // module is built `:fn <ns>/main` and written to a path that carries the `<ns>`,
 // so the name is derivable rather than something each script has to repeat.

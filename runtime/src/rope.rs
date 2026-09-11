@@ -1,4 +1,4 @@
-//! Rope strings (`doc/decisions/0011` §2).
+//! Rope strings (`DECISIONS.md#strings-and-matching` §2).
 //!
 //! Three tiers, one interface. **Inline** lives in the value word and allocates
 //! nothing. **Flat** is a contiguous `TY_STR`. **Rope** is a shallow B-tree of
@@ -69,7 +69,7 @@ pub const INDEX_LEAF: u32 = 128;
 pub const SLICE_MIN: u32 = 256;
 
 /// How many times a rope has been materialised into contiguous bytes, and how
-/// many of those hit the cache. `doc/decisions/0011`: *"count the flattens, do
+/// many of those hit the cache. `DECISIONS.md#strings-and-matching`: *"count the flattens, do
 /// not hope about them"* -- a rope that flattens on every `index-of` passes
 /// every correctness test and is slower than the flat string it replaced.
 #[cfg(feature = "diagnostics")]

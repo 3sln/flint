@@ -1,6 +1,6 @@
 import com.flint.rt.*;
 
-/// Two executors, one heap (`doc/decisions/0028`). Ported from
+/// Two executors, one heap (`DECISIONS.md#drivers`). Ported from
 /// `runtime/tests/parallel.rs`.
 ///
 /// The claim under test is not "it does not crash". It is that a collection

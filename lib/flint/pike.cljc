@@ -1,5 +1,5 @@
 (ns flint.pike
-  "The reference Pike VM (`doc/decisions/0012`), in cljc.
+  "The reference Pike VM (`DECISIONS.md#matching-over-ropes`), in cljc.
 
   Not for speed. It is the conformance oracle the native simulator is checked
   against, it lets the shared compiler be tested before any native exists, and it

@@ -16,9 +16,9 @@ const code = wireCall(inst.exports, FN);
 if (typeof Deno !== 'undefined') Deno.exit(code); else process.exitCode = code;
 
 // `[name []]` in the wire format, written by hand: these drivers deliberately
-// use nothing but a `WebAssembly.Instance` (`doc/decisions/0018`), so there is
+// use nothing but a `WebAssembly.Instance` (`DECISIONS.md#cross-runtime-benchmarks`), so there is
 // no SDK here to encode for them. Nothing is called automatically any more
-// (`doc/decisions/0025` step 5), so the name has to travel.
+// (`DECISIONS.md#structured-ports` step 5), so the name has to travel.
 function wireCall(e, fn) {
   const enc = (s) => {
     const u = new TextEncoder().encode(s);

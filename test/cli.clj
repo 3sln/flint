@@ -1,4 +1,4 @@
-;; The CLI surface (`doc/decisions/0021`).
+;; The CLI surface (`DECISIONS.md#cli`).
 ;;
 ;; The logic lives in `lib/flint/cli.cljc` and `lib/flint/deps.cljc` -- as flint
 ;; code, reaching the project through the `:fs` CAPABILITY -- because 0021's
@@ -107,7 +107,7 @@
 ;; the tool runs.
 (check-that "with no :fs grant, the CLI can read nothing"
             ;; TWO refusals now, and which one you get says something real
-            ;; (`doc/decisions/0027`). A host that lent SOMETHING installs a
+            ;; (`DECISIONS.md#ports-are-the-hosts`). A host that lent SOMETHING installs a
             ;; system port, so an `open` it does not recognise comes back
             ;; "refused to open". A host that lent NOTHING installs none, and
             ;; the sandbox has no way to ask anybody anything -- which is the
@@ -173,7 +173,7 @@
 (check-that "targets names what it can and cannot emit"
             (let [o (cli true "targets")]
               (and (str/includes? o "wasm") (str/includes? o "jvm")
-                   (str/includes? o "doc/decisions/0010"))))
+                   (str/includes? o "DECISIONS.md#other-hosts"))))
 (check-that "an unbuilt target is refused by name, not silently"
             (let [o (cli true "build" ":target" "jvm")]
               (and (str/includes? o "cannot emit for jvm")

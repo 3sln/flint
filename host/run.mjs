@@ -1,4 +1,4 @@
-// Run a compiled module, or a bytecode IMAGE (`doc/decisions/0021`, `0023`).
+// Run a compiled module, or a bytecode IMAGE (`DECISIONS.md#cli`, `construe-integration-bar`).
 //
 // The image path is the one construe settled on: a resident loader instantiated
 // once, an image loaded per call, and nothing shared between runs because the
@@ -31,7 +31,7 @@ export function isImage(bytes) {
 ///
 /// **The function is named by the caller.** A module has no entry point:
 /// nothing is called automatically and no name is recorded for a runner to
-/// find (`doc/decisions/0025` step 5).
+/// find (`DECISIONS.md#structured-ports` step 5).
 export async function run(file, args, { loaderPath, capabilities, fn } = {}) {
   if (!fn) throw new Error('run: name the function to call, as "ns/name"');
   const bytes = readFileSync(file);

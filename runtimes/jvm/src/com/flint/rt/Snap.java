@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 
 /// VM snapshots: capture, restore, export, import. Ported verbatim from
-/// `runtime/src/snap.rs` (`doc/decisions/0015`).
+/// `runtime/src/snap.rs` (`DECISIONS.md#snapshots`).
 ///
 /// TWO FORMATS, because they answer two different questions and neither one
 /// can be made to answer the other's:
@@ -19,7 +19,7 @@ import java.util.Arrays;
 ///   what shelving needs: rehydrate in another process, another heap, at
 ///   whatever addresses that heap hands out.
 ///
-/// The objection `0015` raises to a traversal -- that one which misses an edge
+/// The objection `snapshots` raises to a traversal -- that one which misses an edge
 /// yields a snapshot missing an object, and then the CAPTURE is what needs
 /// debugging -- is fatal to a bespoke traversal and not to this one, because
 /// **the collector decides what is live and this only enumerates what
@@ -59,7 +59,7 @@ public final class Snap {
 
     /// `main` should report "this sandbox was shelved", not "here is your
     /// answer". 0 is a normal return and 2 is "I need the host"
-    /// (`doc/decisions/0005`), so this takes the next free code rather than
+    /// (`DECISIONS.md#threads-and-ports`), so this takes the next free code rather than
     /// overloading either.
     public static final int STATUS_SHELVED = 3;
 
@@ -361,7 +361,7 @@ public final class Snap {
     /// holding a handle to nothing, and no host can put it right because the
     /// identity it would rehydrate against has been erased.
     ///
-    /// The check belongs where `doc/decisions/0022` always said it belongs --
+    /// The check belongs where `DECISIONS.md#opaque-values` always said it belongs --
     /// the GRANT TABLE, not possession. A host that no longer honours id 7
     /// refuses it exactly as it refuses a forgery.
     ///
@@ -530,7 +530,7 @@ public final class Snap {
         // The addresses are held on the SHADOW STACK rather than in a Java
         // array, because allocating can collect and a collection MOVES what it
         // has already built. That is not hypothetical: it is
-        // `doc/decisions/0031`, and the shadow stack is what makes it a
+        // `DECISIONS.md#a-vec-of-values-is-not-a-root`, and the shadow stack is what makes it a
         // non-question here.
         int n = r.usz();
         int base = rt.mark();

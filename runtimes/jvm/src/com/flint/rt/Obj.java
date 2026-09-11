@@ -67,7 +67,7 @@ public final class Obj {
     public static final int TY_PORT = 40;
     public static final int TY_SCHED = 41;
     public static final int TY_ROPE = 42;
-    /// A host-minted reference (`doc/decisions/0022`). Guest code can mint one
+    /// A host-minted reference (`DECISIONS.md#opaque-values`). Guest code can mint one
     /// only with id 0 and there is deliberately no builtin that reads an id
     /// back, so an id is a thing the HOST wrote and only the host can read.
     /// That is what lets a snapshot preserve identities without granting any.
@@ -76,12 +76,12 @@ public final class Obj {
     public static final int TY_BROPE = 45;
     public static final int TY_TBYTES = 46;
     /// A tagged literal: `[tag, form]`, tag a namespaced SYMBOL. Its own type
-    /// rather than a two-key map (`doc/decisions/0034`), because a map is
+    /// rather than a two-key map (`DECISIONS.md#tagged-literals`), because a map is
     /// ambiguous with a map in every format that has tags and loses the
     /// namespace wherever the key must become a string. It still ANSWERS the
     /// map protocols on `:tag` and `:form`.
     public static final int TY_TAGGED = 47;
-    /// A SCHEMA: `[names, types, index, ids, width]` (`doc/decisions/0026`).
+    /// A SCHEMA: `[names, types, index, ids, width]` (`DECISIONS.md#tables`).
     /// A column is addressed in a chunk by a stable ID, not by its position,
     /// which is what makes dropping one a head-only edit.
     public static final int TY_SCHEMA = 48;

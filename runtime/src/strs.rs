@@ -38,7 +38,7 @@ impl Rt {
         //
         // The tier transitions in `rope.rs` fire on CONCATENATION -- `flat (+)
         // flat -> rope` past the threshold -- so a string that arrives whole
-        // from outside never became a rope however big it was. `0011` then
+        // from outside never became a rope however big it was. `strings-and-matching` then
         // says, correctly, that "a flat string carries one total count, which
         // does not locate code point k", and leaves the ASCII flag to cover the
         // case where it does not have to. Nothing covered a flat string that is
@@ -49,7 +49,7 @@ impl Rt {
         // there is nothing to locate, and a tree would be pure overhead.
         // The THRESHOLD is `FLAT_MAX`, the same one the concatenation tiering
         // uses, not the leaf size. A 200-byte string as a two-leaf tree is
-        // overhead for a scan `0011` already accepts as bounded; what has to be
+        // overhead for a scan `strings-and-matching` already accepts as bounded; what has to be
         // a tree is the string big enough for that scan to be the quadratic.
         if !s.is_ascii() && s.len() as u32 > crate::rope::FLAT_MAX {
             return self.indexed_string(s);

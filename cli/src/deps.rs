@@ -1,5 +1,5 @@
 //! `flint.deps.*`: dependency resolution, served over ports
-//! (`doc/decisions/0037`).
+//! (`DECISIONS.md#system-namespaces-and-deps`).
 //!
 //! Virtual namespaces like `flint.sys.*`, and served by the same pump. What
 //! makes them a separate file is the rule that governs all of them:
@@ -9,7 +9,7 @@
 //! Version arithmetic ends up in two languages -- `semver` here, resolving at
 //! FETCH time, and `flint.deps` in `.cljc`, comparing at PLAN time where the
 //! graph lives. Two implementations of "which version wins" is exactly the
-//! shape `0035` records going wrong, so there is only one: **`resolve` returns
+//! shape `reader-tags` records going wrong, so there is only one: **`resolve` returns
 //! EVERY matching version and never picks.** The plan is authoritative.
 //!
 //! One capability, `:deps`, for npm, Maven and git together. A build that may
@@ -388,7 +388,7 @@ fn unpack_zip(body: &[u8], dir: &Path) -> Result<(), String> {
 
 // ------------------------------------------------------------- flint.deps.git
 
-/// Git as a FIRST-CLASS package manager (`doc/decisions/0037`).
+/// Git as a FIRST-CLASS package manager (`DECISIONS.md#system-namespaces-and-deps`).
 ///
 /// Canonical `deps.edn` treats a git dependency as a URL and a sha: you pin a
 /// commit and there is no such thing as asking for a version. That is the one
@@ -417,7 +417,7 @@ fn unpack_zip(body: &[u8], dir: &Path) -> Result<(), String> {
 /// operations: list the remote's refs, and get one commit's tree. `git` is
 /// present wherever a developer fetches source from git at all -- the case this
 /// serves -- and shelling out to it keeps the binary small enough to stay the
-/// thing `0021` claims it is. This is a deliberate exception to "pull in the
+/// thing `cli` claims it is. This is a deliberate exception to "pull in the
 /// crates", made once, with the reason recorded rather than left as an
 /// inconsistency; if `git` turns out to be absent in a real environment, the
 /// crate is the answer and the surface here does not change.
@@ -436,7 +436,7 @@ impl Git {
 /// platform is detected and the message says it -- and when the platform is one
 /// nobody has written a line for, it says where to go rather than guessing.
 ///
-/// flint shells out to `git` deliberately (`doc/decisions/0037`): the two
+/// flint shells out to `git` deliberately (`DECISIONS.md#system-namespaces-and-deps`): the two
 /// operations it needs do not justify `gix`'s dependency tree. That is a
 /// reasonable trade only if the failure explains itself, which is what this is.
 fn no_git_message(e: &std::io::Error) -> String {

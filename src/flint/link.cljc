@@ -1,7 +1,7 @@
 (ns flint.link
   "Composes a module from units.
 
-  Reachability decides what is linked (`doc/decisions/0003-namespace-units.md`):
+  Reachability decides what is linked (`DECISIONS.md#namespace-units`):
   only the units the entry point reaches are handed to `rust-lld`, and within a
   linked unit only the builtins the program actually calls are `--export`ed, so
   `--gc-sections` deletes the rest. The registry is then assembled *here*, after
@@ -145,7 +145,7 @@
 (def abi-exports
   ;; The module's outside edge, and the roots --gc-sections keeps.
   ;;
-  ;; PRODUCTION ONLY (doc/decisions/0016). Gas and the memory cap are here
+  ;; PRODUCTION ONLY (DECISIONS.md#two-builds). Gas and the memory cap are here
   ;; because they are resource control rather than instrumentation, and
   ;; construe's gates depend on a deterministic instruction count -- `stat_steps`
   ;; is how a host reads it, so it survives stripping with them. Everything
@@ -158,7 +158,7 @@
   ;; gone with the grant table -- the host projects an opaque value in by any
   ;; means it likes, the guest presents it with a request, and it crosses as a
   ;; sentinel carrying that id. Nothing here decides what any of it MEANS
-  ;; (`doc/decisions/0022`).
+  ;; (`DECISIONS.md#opaque-values`).
   ["flint_call" "arg_alloc" "arg_push" "out_ptr" "out_len"
    "image_desc_addr" "set_step_limit" "stat_steps" "set_memory_limit"
    "flint_opaque_host_id"])
@@ -166,7 +166,7 @@
 (def loader-exports
   "A module built with `--loader` can be handed an image at run time. That needs
   the registry's address (so the linker can write it) and the entry point that
-  reads it (`doc/decisions/0023`)."
+  reads it (`DECISIONS.md#construe-integration-bar`)."
   ["FLINT_BUILTIN_REGISTRY" "builtin_registry_addr" "flint_load_image"])
 
 (defn unit-exports
@@ -368,7 +368,7 @@
                                           (sort-by key slots)))
                            "\n}\n")))
         ;; Compiled arities go in AFTER the link, because only now are the
-        ;; helper functions' indices known (doc/decisions/0013). The builder is
+        ;; helper functions' indices known (DECISIONS.md#emit-wasm-instead-of-dispatch). The builder is
         ;; mutated before `emit-image` runs, so the table it writes is the one
         ;; these slots came from.
         aot-res (when (and aot? builder) (compile-aot m builder exp))
@@ -406,7 +406,7 @@
                                      (flint.image/u32 (count image))]))
         m (w/strip-custom m (if keep-names #{"producers" "target_features"}
                                 #{"producers" "target_features" "name"}))
-        ;; What the module says about itself (`doc/decisions/0020`). Written
+        ;; What the module says about itself (`DECISIONS.md#module-metadata-and-shards`). Written
         ;; LAST, so it describes the module as it actually is -- exports and all
         ;; -- rather than what the link intended, and placed early in the byte
         ;; stream so a runner can read it without downloading the code section.

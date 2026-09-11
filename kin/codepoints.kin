@@ -3,7 +3,7 @@
 ;; The regex engine wants random access to code points. Native built them by
 ;; WALKING THE LEAVES; both ports built them by materialising the whole subject
 ;; into contiguous bytes first -- `Str.bytes`, which for a rope is a FLATTEN --
-;; and then decoding that. Same answers, different work, and `0011` is explicit
+;; and then decoding that. Same answers, different work, and `strings-and-matching` is explicit
 ;; that this is the thing to count rather than hope about: a rope that flattens
 ;; on every operation passes every correctness test and is slower than the flat
 ;; string it replaced.
@@ -33,7 +33,7 @@
      ""
      "MALFORMED INPUT IS NOT VALIDATED. Every string that reaches here was"
      "built by a constructor that validated it, and a decoder that also"
-     "checked would be the second opinion `0011` warns about: two places"
+     "checked would be the second opinion `strings-and-matching` warns about: two places"
      "deciding what a string is, drifting apart.")
 (defn ^:pub ^:method ^Cps code-points [^:mut ^Rt rt ^Value s]
   (let [^Cps out (cps-open rt)

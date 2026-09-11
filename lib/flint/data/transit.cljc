@@ -7,11 +7,11 @@
 
   A value-to-bytes utility, which is a different job from carrying a port's
   messages: a port encodes with the runtime's own wire format and gives a guest
-  no say in it (`doc/decisions/0025`, `0027`). Reach for this when something
+  no say in it (`DECISIONS.md#structured-ports`, `ports-are-the-hosts`). Reach for this when something
   OUTSIDE wants Transit and you are producing bytes to hand it.
 
   Transit rather than a fourth format of our own, for the reason
-  `doc/decisions/0006` gives: it exists for exactly this, it is self-describing,
+  `DECISIONS.md#host-abi` gives: it exists for exactly this, it is self-describing,
   and it already has the extension mechanism tagged values need. Inventing one
   would be a week that bought little.
 
@@ -45,7 +45,7 @@
 
 ;; ------------------------------------------------------------------ msgpack
 
-;; The accumulator is a TRANSIENT BYTE STRING (`doc/decisions/0024`), not a
+;; The accumulator is a TRANSIENT BYTE STRING (`DECISIONS.md#no-runtime-linking`), not a
 ;; vector. It used to be a vector, so every byte of every message was a boxed
 ;; fixnum in a 32-way trie -- allocated, traced by the collector, and walked back
 ;; out again at the boundary. The byte type did not exist when this was written.

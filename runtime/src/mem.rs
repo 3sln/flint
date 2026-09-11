@@ -204,7 +204,7 @@ pub struct Region {
 /// nursery moves objects, so a read on one thread can observe a pointer the
 /// other is in the middle of forwarding. What makes several threads driving
 /// one sandbox safe TODAY is that the driver holds the program behind a lock
-/// (`doc/decisions/0028`), so exactly one is ever inside. Lifting that needs
+/// (`DECISIONS.md#drivers`), so exactly one is ever inside. Lifting that needs
 /// per-thread allocation buffers, safepoints and per-executor root sets -- at
 /// which point this comment is what has to change first.
 ///
@@ -331,7 +331,7 @@ impl Space {
         unsafe { core::ptr::write_unaligned(self.ptr(addr) as *mut u32, v) }
     }
     /// Where object addresses are measured from. Compiled code needs it to read
-    /// a slot without a call back into Rust (`doc/decisions/0013`).
+    /// a slot without a call back into Rust (`DECISIONS.md#emit-wasm-instead-of-dispatch`).
     #[inline(always)]
     pub fn base_addr(&self) -> u32 {
         self.base as u32
@@ -353,7 +353,7 @@ impl Space {
     // serve string and byte payloads, which are not.
     //
     // These exist for ONE thing: a port's inbox, where two executors reserve
-    // and publish without a lock (`doc/decisions/0028`). Nothing else in the
+    // and publish without a lock (`DECISIONS.md#drivers`). Nothing else in the
     // heap is written by two threads at once -- a collection is stop-the-world
     // at a safepoint, so ordinary slots need no synchronisation at all.
     #[inline(always)]

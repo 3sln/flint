@@ -178,7 +178,7 @@ tail -3 /tmp/flint-test.out
 
 echo "== aot: the same answer AND the same instruction count as the interpreter"
 # Its own build, like diagnostics: a production runtime cannot run compiled
-# arities and does not carry the machinery that would (doc/decisions/0013, 0016).
+# arities and does not carry the machinery that would (DECISIONS.md#emit-wasm-instead-of-dispatch, 0016).
 ./bin/build-units --aot > /dev/null || fail "build-units --aot"
 bb test/aot.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; ./bin/build-units > /dev/null; fail "test/aot.clj"; }
 grep -E "^    |FAIL" /tmp/flint-test.out || true
@@ -373,14 +373,14 @@ echo "    compiled a module, and ran the same source NATIVELY: $got"
 [ -z "$(ls /tmp/flint-smoke | grep -v 'smoke.cljc\|out.wasm')" ] \
   || { ls /tmp/flint-smoke; fail "run left an artifact behind"; }
 
-# `flint.sys.*`: the virtual namespaces this binary SERVES (`0037`). Placed here
+# `flint.sys.*`: the virtual namespaces this binary SERVES (`system-namespaces-and-deps`). Placed here
 # because it needs the release binary the section above just built, and because
 # what is being tested is the shipped artifact rather than the source it came
 # from -- the same reason the SDK selftest imports `dist/`.
 bb test/sysns.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/sysns.clj"; }
 grep -E "^ +(ok|FAIL|\()" /tmp/flint-test.out | sed 's/^/  /'
 
-# The surface `doc/decisions/0021` describes: `:path`, `:with`, `:args`, `:to`
+# The surface `DECISIONS.md#cli` describes: `:path`, `:with`, `:args`, `:to`
 # and `:optimize`. A list may be bracketed or the key repeated -- and the
 # bracketed form is QUOTED here on purpose, because in zsh an unquoted `[a b]`
 # is a glob and never reaches flint at all.
@@ -580,13 +580,13 @@ echo "== flattens: every rope materialisation justifies itself (0011)"
 
 echo "== gas: no operation does unbounded work for bounded gas (0009)"
 # Scaling, not absolutes: each case runs at n and 8n with the setup subtracted.
-# The stats are diagnostics-only (`0016`), so the instrumented units are built.
+# The stats are diagnostics-only (`two-builds`), so the instrumented units are built.
 ./bin/build-units --diagnostics > /dev/null 2>&1 || fail "build-units --diagnostics"
 bb test/gas.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/gas.clj"; }
 grep -E "^ +(ok|FAIL|[a-z])" /tmp/flint-test.out | sed 's/^/  /'
 
 echo "== tables: columnar storage that is a value (0026)"
-# The stats it reads are diagnostics-only (`0016`), so the instrumented units
+# The stats it reads are diagnostics-only (`two-builds`), so the instrumented units
 # have to be in place -- same reason `documents` below builds them.
 ./bin/build-units --diagnostics > /dev/null 2>&1 || fail "build-units --diagnostics"
 bb test/tables.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/tables.clj"; }

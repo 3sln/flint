@@ -4,7 +4,7 @@ using _3sln.Flint.Kgen.Rt;
 /// Run an image and print what it returned.
 ///
 /// The same shape as the JVM's runner: one source, compiled once, run on every
-/// runtime, answers diffed. `doc/decisions/0010` is explicit that the bytecode
+/// runtime, answers diffed. `DECISIONS.md#other-hosts` is explicit that the bytecode
 /// makes a port cheap and does nothing to make two ports AGREE.
 public static class Program {
     public static int Main(string[] args) {
@@ -161,7 +161,7 @@ public static class Program {
         SnapOk("the rehydrated heap reads back identically", SnapRender(d, d.roots.shared.Globals[0]) == before);
 
         // THE CROSSING, when the gate asks for it: a live snapshot written by
-        // a DIFFERENT runtime, read here. `0015` calls this format "a
+        // a DIFFERENT runtime, read here. `snapshots` calls this format "a
         // serialised internal layout, not an interchange format" and says a
         // mismatch must be refused loudly -- but the stamp it refuses on is
         // MAGIC and VERSION, and those are identical on all three runtimes, so
@@ -499,7 +499,7 @@ public static class Program {
 
     /// The host's id for this sandbox's system port, and for the port it grants.
     /// The HOST picks both: a sandbox no longer mints port ids, which is the
-    /// whole of `doc/decisions/0027`.
+    /// whole of `DECISIONS.md#ports-are-the-hosts`.
     private const int SYSTEM = 1, GRANTED = 500;
 
     /// One string, as the host writes it: the wire format, which is what the
@@ -522,7 +522,7 @@ public static class Program {
         if (img == null) { Console.WriteLine("  FAIL not a flint image"); return 1; }
 
         // A SYSTEM PORT, installed before anything runs: `open` is a request ON
-        // one (`doc/decisions/0027`), and a sandbox given none can ask for
+        // one (`DECISIONS.md#ports-are-the-hosts`), and a sandbox given none can ask for
         // nothing.
         Flint.Rt.Conc.InstallSystemPort(rt, SYSTEM, Flint.Rt.Str.Of(rt, "system"));
 
@@ -597,7 +597,7 @@ public static class Program {
     /// comparison that is supposed to be about the protocol.
     private static string Low(bool b) => b ? "true" : "false";
 
-    /// GAS IS A BOUND, on this port too (`doc/decisions/0009`).
+    /// GAS IS A BOUND, on this port too (`DECISIONS.md#resource-limits`).
     ///
     /// This existed nowhere, and the hole it left is invisible to everything
     /// else: `gasLimit` was a field this runtime wrote into snapshots and never
@@ -1061,7 +1061,7 @@ public static class Program {
 
 
     // ------------------------------------------------------------------
-    /// Two executors, one heap (`doc/decisions/0028`). A mirror of the JVM's
+    /// Two executors, one heap (`DECISIONS.md#drivers`). A mirror of the JVM's
     /// `RtParallel.java`, printing the same lines so the gate can compare them.
     ///
     /// The claim is not "it does not crash". It is that a collection staged by

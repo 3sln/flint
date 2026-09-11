@@ -23,7 +23,7 @@ public static class Eq {
                 return CAT_SEQUENTIAL;
             // A ROW REF is in the MAP category: it is `=` to a map with the
             // same entries, and `category` is what decides that
-            // (`doc/decisions/0026`).
+            // (`DECISIONS.md#tables`).
             case Obj.TyArraymap: case Obj.TyHashmap: case Obj.TyTableref:
                 return CAT_MAP;
             case Obj.TySet:

@@ -1,5 +1,5 @@
 (ns gasmeter
-  "The same program costs the same GAS on every runtime (`doc/decisions/0009`).
+  "The same program costs the same GAS on every runtime (`DECISIONS.md#resource-limits`).
 
   Two workloads, one a scaled-up version of the other. A caller reports both,
   and what is compared across runtimes is the DIFFERENCE -- which removes

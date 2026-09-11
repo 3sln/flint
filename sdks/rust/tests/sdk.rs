@@ -1,6 +1,6 @@
 //! The Rust SDK, exercised the way a caller uses it.
 //!
-//! The shape is the JavaScript SDK's on purpose (`doc/decisions/0025`):
+//! The shape is the JavaScript SDK's on purpose (`DECISIONS.md#structured-ports`):
 //! compile to an Image, instantiate a Sandbox, call functions by name. What
 //! differs is only that this runs the program NATIVELY rather than through a
 //! wasm engine.
@@ -102,7 +102,7 @@ fn a_thrown_error_reaches_the_caller() {
 }
 
 /// Deterministic, and available in every build because it is resource control
-/// rather than instrumentation (`doc/decisions/0009`).
+/// rather than instrumentation (`DECISIONS.md#resource-limits`).
 ///
 /// Counting is what a STEP LIMIT turns on. Without one the interpreter has no
 /// counter in its inner loop at all, which is the point -- so this pins both
@@ -143,7 +143,7 @@ fn a_step_limit_stops_a_program() {
 }
 
 /// The image carries what the compiler was told to record, and the runtime does
-/// not interpret it (`doc/decisions/0025`).
+/// not interpret it (`DECISIONS.md#structured-ports`).
 #[test]
 fn metadata_is_carried_and_not_interpreted() {
     let img = image();
@@ -166,7 +166,7 @@ fn metadata_is_carried_and_not_interpreted() {
 /// a guest-minted opaque -- which carries id 0 and cannot carry anything else.
 /// `codec.opaque` refusing to issue 0 is the other half.
 
-// --- drivers (`doc/decisions/0028`) -----------------------------------------
+// --- drivers (`DECISIONS.md#drivers`) -----------------------------------------
 
 /// A sandbox does not run because someone called into it; it runs because a
 /// DRIVER gave it a thread. These are the shape the other SDKs mirror.

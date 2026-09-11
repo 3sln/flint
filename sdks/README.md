@@ -20,8 +20,8 @@ shared-memory build.
 
 The last two rows are SDKs, not runtimes, and the distinction matters: the
 runtimes they would wrap are built and self-hosting
-([`0029`](../doc/decisions/0029-jvm-runtime.md),
-[`0030`](../doc/decisions/0030-clr-runtime.md)). What is missing is the
+([`jvm-runtime`](../DECISIONS.md#jvm-runtime),
+[`clr-runtime`](../DECISIONS.md#clr-runtime)). What is missing is the
 idiomatic host-facing layer over them -- the resolver, Compiler, Image, Sandbox
 and Driver nouns -- not the ability to run flint on those platforms.
 
@@ -31,7 +31,7 @@ exceptions, and there is no second implementation to keep in step.
 
 ## The shape they share
 
-Every SDK is the same four nouns (`doc/decisions/0025`):
+Every SDK is the same four nouns (`DECISIONS.md#structured-ports`):
 
 * a **resolver** — namespace to source. There is no filesystem in any SDK, so a
   caller can compile out of a database, a zip, or a string.
@@ -41,7 +41,7 @@ Every SDK is the same four nouns (`doc/decisions/0025`):
 
 A fifth is in all three by the same names: a **Driver**,
 which owns how many threads a sandbox gets and when a runnable one runs
-(`doc/decisions/0028`). Targets differ in what they can honour — native gets
+(`DECISIONS.md#drivers`). Targets differ in what they can honour — native gets
 several threads in one sandbox first, wasm stays at one for now — so a
 `ThreadPool(4)` on a single-threaded target hands back a driver whose
 parallelism reads 1. Ask for what you want, read what you got. Same rule as
@@ -77,7 +77,7 @@ ships in, so `esm/` instantiates the module and marshals across the boundary.
 **Against the runtime compiled natively.** flint's runtime is Rust, so it
 already compiles through LLVM for every target cargo has — the collector, the
 interpreter and every builtin are the same code the wasm module is built from
-(`doc/decisions/0010`). `rust/` and `c/` take that road and carry no wasm
+(`DECISIONS.md#other-hosts`). `rust/` and `c/` take that road and carry no wasm
 engine at all, which is why they are smaller and start faster despite doing
 more. They still READ a `.wasm` artifact: the module carries its program as a
 data segment, and running it is a matter of finding it rather than of executing
