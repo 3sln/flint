@@ -382,11 +382,27 @@ attempt does not repeat them:
   the native run resolved sources and linked a 624 KB module.
 
 The two paths carry different responsibilities in the pipeline, so timing them
-end to end compares pipelines and not hosts. A real answer needs the same
-stage measured on both sides — which is what `bin/bench-xruntime`,
-`bin/bench-image` and `bin/bench-chicory` already exist to do, reporting
-ns/instruction precisely because that IS comparable across engines. That is
-where this belongs, not in a stopwatch around two different commands.
+end to end compares pipelines and not hosts. Both attempts measured something
+real and neither measured this.
+
+**AND THE EXISTING BENCHMARKS ARE THE WRONG INSTRUMENT TOO**, which was my next
+suggestion and is also wrong. `bin/bench-xruntime` and friends report
+ns/instruction, comparable across engines by design — but a CLI invocation is
+SHORT-LIVED, and what a user waits for is dominated by things ns/instruction
+deliberately factors out: process start, wasm instantiation, JIT warmup, module
+load. A steady-state throughput number can be excellent while the invocation
+feels slow, and for a compile that takes a second or two the warmup may be most
+of it.
+
+**THE ONLY NUMBER THAT SETTLES IT is the two shipped CLIs, invoked.** Build
+both, run the same real command through each, and time it the way a user
+experiences it. That is the figure the decision turns on, and nothing measured
+further in does it.
+
+Which sets the order: the npm package has to exist before the native form can
+be judged against it. Since npm-only is the decided path for now, that is the
+same order the work was going in anyway — build it, then measure, then decide
+whether the native binary earns its keep.
 
 ### Design: a first-party pod registry, in this repo
 
