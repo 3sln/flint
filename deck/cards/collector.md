@@ -25,7 +25,7 @@ to wasm functions. Under AOT, live references sit in wasm locals where the
 collector cannot see them, and you need a shadow-stack spill around every
 allocation site — which hands back most of the speed. WasmGC exists to close
 this gap; until it can be relied on, the interpreter is the honest choice.
-([`doc/decisions/0001`](doc/decisions/0001-dispatch.md).)
+(`doc/decisions/0001`.)
 
 The design has already paid for itself once. A VM frame used to *cache* its
 closure, and that copy was a root the collector could not see; after a collection

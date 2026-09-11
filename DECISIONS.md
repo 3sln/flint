@@ -1,0 +1,4242 @@
+# Decisions
+
+This file consolidates the decision records that used to live as 38 separate
+numbered files in `doc/decisions/`. Each section below is one decision, with
+its reasoning kept rather than trimmed to a conclusion — several of these
+records hold hard-won findings (numbers measured, approaches tried and
+abandoned, bugs that motivated a rule), and the reasoning is the part worth
+having.
+
+**Status matters as much as content.** This file mixes descriptions of
+shipped behaviour with plans for work that does not exist, and each section
+says which, as of the date this consolidation was written. A status banner
+can go stale — this project has more than once had a banner claim "nothing
+built yet" long after half of it was, which is the more dangerous direction
+because it is the one that gets something rebuilt by mistake. Where a
+decision was later revised, superseded, or turned out wrong, that is recorded
+in its own section rather than silently dropped: the reasoning that produced
+a wrong answer is usually the reasoning somebody needs in order not to repeat
+it.
+
+Sections are grouped by topic rather than by the numeric order they were
+written in, which was mostly an accident of when a question came up. Each
+heading's anchor is the decision's old filename slug, so existing citations
+(`` `0011` ``-style references in code comments, commit messages, and other
+docs) resolve to the right section once rewritten against this file; the
+original number is noted under each heading for anyone cross-referencing
+material that predates that rewrite.
+
+**Contents**
+
+*I. The execution model*
+[dispatch](#dispatch) ·
+[emit-wasm-instead-of-dispatch](#emit-wasm-instead-of-dispatch) ·
+[resource-limits](#resource-limits) ·
+[two-builds](#two-builds) ·
+[debug-runner](#debug-runner) ·
+[snapshots](#snapshots) ·
+[profiler](#profiler) ·
+[a-vec-of-values-is-not-a-root](#a-vec-of-values-is-not-a-root)
+
+*II. Modularity and the build*
+[modularity](#modularity) ·
+[namespace-units](#namespace-units) ·
+[exclude-and-unit-path](#exclude-and-unit-path) ·
+[module-metadata-and-shards](#module-metadata-and-shards) ·
+[no-runtime-linking](#no-runtime-linking)
+
+*III. Data structures and language surface*
+[strings-and-matching](#strings-and-matching) ·
+[matching-over-ropes](#matching-over-ropes) ·
+[tables](#tables) ·
+[tagged-literals](#tagged-literals) ·
+[reader-tags](#reader-tags) ·
+[checks](#checks)
+
+*IV. Concurrency, ports, and the host boundary*
+[threads-and-ports](#threads-and-ports) ·
+[host-abi](#host-abi) ·
+[structured-ports](#structured-ports) ·
+[ports-are-the-hosts](#ports-are-the-hosts) ·
+[bridges](#bridges) ·
+[drivers](#drivers) ·
+[thread-pool](#thread-pool)
+
+*V. Capabilities, the CLI, and dependencies*
+[cli](#cli) ·
+[opaque-values](#opaque-values) ·
+[workspace-capabilities](#workspace-capabilities) ·
+[system-namespaces-and-deps](#system-namespaces-and-deps)
+
+*VI. Other runtimes*
+[other-hosts](#other-hosts) ·
+[jvm-runtime](#jvm-runtime) ·
+[clr-runtime](#clr-runtime) ·
+[kin](#kin) ·
+[cross-runtime-benchmarks](#cross-runtime-benchmarks)
+
+*VII. construe: the first customer*
+[construe-benchmarks](#construe-benchmarks) ·
+[document-resource](#document-resource) ·
+[construe-integration-bar](#construe-integration-bar)
+
+---
+
+## about this file, and the sign-off
+
+Every decision here carries a **Ratified** box, and none of them is ticked.
+
+THAT IS THE POINT. These records were written in the course of doing the work,
+mostly by an assistant, and most were never reviewed by a human. A decision in
+this file is a record of what was DONE. It is not an agreement, and it does not
+bind anything until somebody signs it off.
+
+**An unratified decision is a proposal with running code behind it.** Treat it
+as evidence of what the tree currently does, not as a rule you have agreed to.
+Where you disagree with one, the code is what has to change -- but the
+disagreement is legitimate and the record does not settle it.
+
+AND THE STATUS CLAIMS IN THESE RECORDS ARE NOT RELIABLE. Several were verified
+wrong: one opens "NOT BUILT -- a spike, nothing in the tree uses it yet" and
+describes a generator that now emits 89 modules into three runtimes; another
+says a data type "does not exist" beside 552 lines implementing it; a pair of
+runtime ports were designed to lean on their host's own collector and both
+now carry a verbatim port of the collector instead. The old project status
+index (the `doc/decisions/README.md` table this file replaces) is not a safe
+tiebreaker either -- it contradicted the decision files it was summarising in
+more than one row, and in at least one place contradicted itself between
+adjacent rows. Where a section below repeats a status claim from its source
+file, read it as REPORTED rather than established, and where it says a claim
+was checked directly against the current code, that check was real and is
+named as such -- the two are marked differently on purpose. A swarm of
+agents is independently re-verifying every status claim in this file against
+the code as it stands; where their findings land, this file's own claims
+should be treated as superseded rather than final.
+
+---
+
+## dispatch
+
+**Interpreter vs AOT, and stack vs register**
+*(formerly `0001`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): shipped.** The stack machine shipped; dispatch is measured at 6.2
+ns/instruction on a tight loop, 8–19 ns diluted by real work. The AOT half of
+the question is its own decision (`emit-wasm-instead-of-dispatch`, below).
+
+### What was decided
+
+flint interprets a stack-machine bytecode rather than compiling straight to
+wasm functions, and the bytecode is a stack design rather than a register
+design.
+
+### Why
+
+**Interpreter over AOT.** The tempting alternative — emit a real wasm
+function per Clojure `fn`, letting the host JIT do the work — collides with
+how flint roots values. wasm locals are not scannable by a collector. Under
+AOT, live references would sit where the collector cannot see them, requiring
+a shadow-stack spill around every allocation site that hands back most of the
+speed gained. The interpreter keeps every live value in linear memory
+instead, which is exactly what makes "the value stack IS the root set" work
+as a rooting design. That gap is what WasmGC exists to close; until a runtime
+has it, the interpreter is the right choice on this constraint alone.
+
+**Stack over register.** The literature (Shi, Casey, Ertl & Gregg, *Virtual
+Machine Showdown: Stack Versus Registers*, VEE 2005 / TACO 2008) shows roughly
+47% fewer dispatched instructions and ~32% faster execution for registers, at
+~25% larger bytecode — and the case for registers is if anything *stronger*
+in wasm than natively, because wasm has no computed goto and no tail-call
+threading, so a `br_table` dispatch loop with an unpredictable branch is what
+a stack design gets stuck with regardless.
+
+Even so, the stack machine won, for two reasons specific to this project
+rather than to stack machines in general:
+
+- **Codegen is a post-order walk.** Register allocation is real engineering
+  work sitting on the bootstrap critical path — the compiler has to compile
+  itself before anything works at all, so anything that delays a working
+  compiler is expensive here in a way it would not be for an established
+  language.
+- **Stale registers retain references.** A stack machine drops a reference
+  the moment it pops; a register slot holds whatever was last written until
+  something overwrites it, so a dead slot keeps an object alive unless the
+  compiler proves liveness or clears it explicitly. That is floating garbage,
+  invisible, and interacts directly with the GC design flint depends on.
+
+The working theory was that dispatch is a *second-order* cost here — HAMT
+traversal, hashing, allocation and GC should dominate real workloads, with
+dispatch mattering most in the self-hosted compiler's own symbol/keyword
+churn. That is roughly what the measured 6.2 ns/instruction confirmed: real
+where it bites, not the dominant cost overall.
+
+### Later
+
+The bytecode format was deliberately designed so hot instruction pairs could
+later be fused into superinstructions without a format break, to recover part
+of the register-machine's dispatch win cheaply. Whether that mattered in
+practice was answered later, empirically, by `register-native-aliases!` (see
+`emit-wasm-instead-of-dispatch`) rather than by superinstructions as such —
+extending native-call aliasing per-arity turned out to be the cheap lever that
+delivered a comparable win, making the **interpreter** 1.85× faster on its
+own, independent of AOT.
+
+---
+
+## emit-wasm-instead-of-dispatch
+
+**AOT regions instead of a dispatch loop, and why it under-delivered**
+*(formerly `0013`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): shelved, and understood.** Built, measured, and parked in favour of
+strings/regex work; the correctness bugs the shelving surfaced are fixed. Off
+by default, behind a cargo feature, so production carries none of it. This
+section is long because it is one of the most heavily instrumented pieces of
+reasoning in the project: multiple rounds of measurement, two real bugs, and
+a final diagnosis of *why* the win was smaller than predicted.
+
+### What was decided
+
+Rather than dispatching bytecode one instruction at a time, compile
+contiguous **regions** of a function's bytecode into real wasm code that
+operates on the same thread structs and the same linear-memory value stack —
+so this does not reopen the rooting problem `dispatch` solved: values never
+leave linear memory, wasm is just used to manipulate it.
+
+### Why, and how the design got here
+
+The naive version — compile whole functions to wasm calls — breaks parking.
+A green thread parks by being VM state the scheduler declines to run; but a
+thread parked deep inside compiled-to-wasm calls has its continuation *on the
+wasm call stack*, which cannot be suspended. That is the JSPI/Asyncify
+problem the interpreter design was built to avoid, arriving through the back
+door. Trampolining every call reintroduces the dispatch cost this design
+exists to remove; statically "colouring" which functions can park spreads
+almost everywhere in a language of higher-order functions, since `map` takes
+a function that might park.
+
+The design that survived, arrived at over several rounds of refinement:
+
+- **Compile contiguous non-parking regions**, cut wherever a park could
+  happen, each a wasm function taking a pointer to the thread struct. No
+  colouring is needed for *correctness*, because the cut point defines the
+  property: a region contains no parking call by construction.
+- **A single runtime guard replaces static colouring entirely.** Every
+  abnormal outcome — park, throw, gas exhaustion — already travels through
+  one distinguished value (`thrown`). So a compiled region emits one
+  load-test-branch after each call: *did anything abnormal happen?* If so,
+  bail to the interpreter. The region never needs to know what parking even
+  is. This works because a parking builtin always decides to park before
+  changing anything, so re-executing the call from the interpreter is always
+  valid, and because — the same GC constraint that forced the interpreter in
+  the first place — every value is already in linear memory, so bailing has
+  nothing to spill. Set the instruction pointer, return.
+- **This makes the compilable unit a whole function, not a short chunk**,
+  since a call no longer has to end a region — only a guard that actually
+  fires does, and at runtime that is rare.
+- **Re-entry points, not per-chunk boundaries.** If compiled code can only be
+  *entered* at a function's start, a bail permanently de-optimises the rest
+  of that invocation to interpretation. That is usually cheap, except for
+  exactly the shape ports exist to serve: a loop that parks per iteration
+  bails on the first iteration and interprets every remaining one forever.
+  The fix is re-entry points at loop back-edges and at the instruction after
+  any call that could bail — a handful of known offsets per function, given
+  an entry dispatch that jumps to the right block. This is cheap for the same
+  reason bailing is: nothing needs reconstructing, because nothing left
+  linear memory.
+
+### The measurement, before building anything
+
+Before writing an emitter, the region-length distribution was measured by
+instrumenting the interpreter to record region-boundary crossings on real
+construe fixtures, and pricing the wasm call boundary directly: **2.02 ns**
+per `call_indirect`, against 6.2 ns/instruction of dispatch. That put the
+break-even region length at 1.33 instructions — any region of two
+instructions or more already pays for itself, which meant the earlier worry
+that "if the average region is three ops, the call eats the saving" was wrong
+by roughly a factor of two.
+
+Two chunking models were compared: ending a region at every call (mean 3.2–3.3
+instructions on construe workloads) versus the guard-only, whole-function
+model (mean 11.3–15.0 instructions). Priced against the measured constants,
+guard-only recovered 88–91% of dispatch cost against 58–60% for the
+per-call model — about 30 points of dispatch cost, on top of an already
+worthwhile option.
+
+### What got built, and the numbers
+
+`flint.aot` emits one wasm function per arity as a chain of fallthrough
+blocks inside a `loop` with a `br_table` at the top — free at runtime for a
+forward jump (later chunks enclose earlier ones), paying the dispatcher only
+on a backward jump (2.4% of instructions). Twelve opcodes cover 98.7% of
+executed instructions and are all inlined; everything else hands one
+instruction back to the interpreter and resumes at the next chunk, which is
+what let the emitter be complete from its first version.
+
+Against the interpreter, same host, same payloads, at shelving time:
+
+| workload | interpreter | compiled | |
+|---|---:|---:|---|
+| `tight` (dispatch-bound loop) | 164.79 ms | 136.54 ms | 1.21× |
+| construe `parse` ×20 | 7.47 ms | 7.01 ms | 1.07× |
+| construe `suggest` | 17.00 ms | 13.63 ms | 1.25× |
+
+Costs: module +98% on the construe payload, cold start +12% (1.00 ms flint
+was measuring as its single largest win against a JIT isolate), production
+build unaffected (the machinery is a cargo feature and compiles to nothing
+when absent). **The prize was smaller than the estimate**: the estimate
+priced dispatch at 6.2 ns/instruction and predicted 88–91% recovered; the
+measured win was 8–25%. The gap turned out to be the estimate's, not the
+implementation's — see "Why it lost" below.
+
+### The two correctness bugs, and what they had in common
+
+A program combining green threads with a host port produced wrong answers
+under `--aot`, tracked down over roughly four days to two faults, both the
+same underlying mistake: **a resume point is a pair** — a bytecode offset
+*and* the block that offset names — and both faults came from carrying one
+half of the pair and inferring the other.
+
+1. **A tail call named a resume point that no longer existed.** `TAIL_CALL`
+   replaces the current frame; the emitter had handed every non-inlined
+   opcode a resume point of "the next instruction", which after a tail call
+   is the `RETURN` that follows it — registered against a frame that no
+   longer existed. `reduce` ended up returning `coll` instead of `init`,
+   surfacing several frames and one tail call away from the cause as a
+   `ClassCastException` on `persistent!`.
+2. **Restoring a parked thread paired the wrong offset with the wrong
+   block.** The thread-save format recorded `ip` and `aot_block` per frame,
+   but never saved `aot_ip` — restore substituted `ip` for it. For a
+   *parked* frame those two offsets coincide, which is why the bug survived
+   as long as it did; for a *bailed* frame they differ by exactly one
+   instruction, so restore re-entered compiled code one chunk early, skipping
+   the instruction that had been handed back.
+
+Both fixes were the same fix: stop inferring the missing half and ask for it
+directly (`AotFn::points` already held every valid re-entry point). Both are
+now regression-tested with a ten-line reproducer (`test/aot.clj`) that needed
+every one of its details — a spawn, a channel receive, specific collection
+sizes — found by delta-debugging over *sets* rather than prefixes, because
+adding or removing any arity shifted what else ran compiled.
+
+### Why it lost, and what would make it win
+
+Written after the fact, because "AOT was only 1.07–1.25×" is not actionable
+on its own. Hand-emitting the same loop three ways in the same engine
+isolated the answer:
+
+| | ns/iteration |
+|---|---:|
+| operands in wasm **locals**, real `loop`, arithmetic inlined | 1.9 |
+| same, through `call_indirect` | 4.8 |
+| memory operand stack + `loop`/`br_table` — what this emitter produces | 6.4 |
+| flint, compiled | 136.9 (50.9 after a later fix, below) |
+
+**The entire emission shape accounts for 6.4 ns.** A compiled `add` does
+exactly what the interpreter's `add` arm does — load, check tags, unbox, add,
+check overflow, box, store — with only the branch and operand decode removed.
+The emitter **transliterated the interpreter; it did not compile the
+program.** It never did type specialisation (knowing both operands are
+fixnums, to skip tag checks and boxing entirely — the largest item), never
+kept unboxed values in wasm locals across allocation-free spans, and never
+inlined. Direct evidence for the last one: the biggest win of the whole
+exercise was extending `register-native-aliases!` to work per-arity — turning
+`+`, `<`, `inc` and friends from real Clojure calls into direct native calls
+— which took `tight` from 1.21× to 1.78× compiled *and made the interpreter
+1.85× faster on its own*, proving the win was never AOT-specific. It also
+turned up a live, previously-unfound bug: `reduced` had never actually worked
+in flint (`reduce` tried to `deref` it, which only knows atoms/volatiles/
+delays), fixed with `(nth acc' 0)` and pinned against Clojure's own answers.
+
+Other candidates were tried and measured away: an inline cache on call-site
+arity selection (24.7% of construe `parse`'s real call sites would miss —
+not worth its miss path) and removing a compiled-to-compiled call boundary
+(the boundary the interpreter already pays too; only ~2 ns of the 28.6 ns a
+Clojure call costs). What did pay: writing only the two `refresh()` fields
+that can actually change instead of all seven (1.21× → 1.24×, proven safe by
+re-deriving all seven on every crossing in a diagnostics build — 8,302
+crossings, 0 drifted) and a conditional prologue that emits only the bases a
+callee's body actually reads (→ 1.25×).
+
+**Revisit when dispatch is the top item in a profile** — after specialisation
+and inlining have been tried, since AOT's ceiling really is higher than the
+interpreter's (you cannot specialise an interpreter), but reaching it needs a
+compiler, not a dispatch-removal pass. `bench/regions.mjs` and the ceiling
+harness (`bench/ceiling.clj`/`.mjs`) are the reproduction path for anyone
+picking this back up.
+
+### Also settled here
+
+- **`swap!` was a plain read-modify-write**, silently losing updates under
+  concurrent sandboxes; it is now a compare-and-swap retry loop, a builtin
+  used across all four runtimes. A build inconsistency that looked like a
+  correctness bug in this area (stale slot tables from a partial rebuild) led
+  to `bin/check-dist`, which now checks build consistency directly instead
+  of letting it surface as a segfault far from the cause.
+- The design **ports to the JVM and CLR runtimes**, because wasm, JVM
+  bytecode and CIL are all stack machines with locals over flat memory — what
+  changes is the opcode table and the container, not the shape. `:optimize
+  [perf]` compiles arities on all four runtimes now, gated by comparing
+  interpreted against compiled output *and* gas counts *and* comparing the
+  two hosts' transcripts character for character.
+
+---
+
+## resource-limits
+
+**Hard limits, and the loop that does not count**
+*(formerly `0009`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): shipped.** Deterministic gas, charged natives, and a catchable
+memory cap. This determinism is what makes every cross-engine number in
+`cross-runtime-benchmarks` comparable, and it is one of the most heavily
+relied-on properties in the codebase.
+
+### What was decided
+
+flint bounds a program's execution by an exact, deterministic **instruction
+count** (gas) rather than a wall-clock timeout, and by an exact memory cap
+enforced by the collector. Both are catchable errors, not crashes.
+
+### Why
+
+A wall-clock timeout bounds *time*, not *work* — it varies with machine load,
+with what else is running, with the weather. A gate built on one is flaky by
+construction: the same candidate passes on a quiet machine and fails on a
+busy one. An instruction count is deterministic: the same program produces
+the same count on every machine, every run — which turns "did this candidate
+hang?" from a flaky timeout into a reproducible fact. For construe, whose
+entire premise is gates measuring model-written code and being believed, that
+distinction is close to the whole point of using flint at all.
+
+### The mechanism, and why it looks the way it does
+
+**Monomorphised, not branched.** The naive shape — a branch checking the
+step count on every instruction — is a branch on every instruction, even
+though predictable. Instead the interpreter loop is generic over a budget
+policy (a const bool / zero-sized type) and instantiated twice: `NoBudget`'s
+increment compiles to nothing and the check disappears entirely; `Counting`
+keeps the check. The instantiation is chosen once at sandbox entry, not
+per-instruction — the same technique `two-builds` later generalised to
+everything diagnostic.
+
+**Per-executor local counters, batched into a shared atomic.** With more than
+one thread able to run inside a sandbox, a shared counter incremented every
+instruction would put an atomic read-modify-write on the hottest line in the
+interpreter. Instead each executor counts into a private `u64`; when a local
+checkpoint fires, it adds its batch to a shared atomic and reads the total
+back. The guarantee weakens from "stops at the limit" to "stops as soon as it
+can after the limit", with overrun bounded by batch size × executor count —
+the right trade, since the point of a limit is that a runaway is stopped, and
+stopping it a few thousand instructions late stops it just as dead. **The
+total consequently stops being exactly deterministic once more than one
+thread runs concurrently in one sandbox** — a property of parallelism, not of
+this design, and worth stating so it is not mistaken for a regression later.
+Every number `cross-runtime-benchmarks` compares is at one executor, so those
+numbers stay exactly comparable.
+
+**The same checkpoint doubles as the collector's safepoint.** A moving
+collector needs every thread to reach a stopping point before it starts; the
+gas checkpoint already polls at a bounded interval, so it costs nothing
+extra to also serve as that poll. This resolves an apparent tension with "the
+unbudgeted loop has no counter at all": the dispatch policy is chosen at
+sandbox-construction time based on what there is to poll *for* — a single
+executor with no gas limit still runs the fully free `NoBudget` loop; having
+a peer thread, or a limit, selects a polling policy.
+
+**Natives must charge for their own work**, or the whole scheme has a hole
+exactly where it matters most: instruction counting bounds *bytecode*, and a
+call into a native builtin is one instruction regardless of what it does
+internally. One `re-find` against a pathological pattern, one `sort` of a
+huge vector, one big `merge` — all one instruction, and all capable of
+running arbitrarily long. Construe has an entire gate for catastrophic
+regex backtracking precisely because this is a live hazard in model-written
+code, and a gas limit a single regex call can escape is worse than no limit,
+because people will trust it. So every builtin whose cost is not O(1) charges
+proportionally to what it actually did (elements touched, comparisons,
+backtracking steps), which is also what makes the regex Pike VM's gas
+accounting exact rather than heuristic.
+
+**Allocation must be charged too, and this was missed for a long time.**
+Natives charged for string bytes, comparisons, and regex steps, but nothing
+charged for allocation itself — so a builtin could allocate without bound for
+a constant gas price. It was found by accident: appending 20,000 rows to a
+table allocated 49,061,464 bytes for 461,232 gas, *less* than the 741,252
+charged by a bulk build that allocated only 3,254,832 bytes — gas was saying
+the more expensive path was cheaper. It is now charged once, centrally, in
+the allocator itself (one unit per 8 bytes, the same rate byte-charging
+already used), deliberately in one place rather than trusted to every
+builtin's author, and deliberately *not* through the path the collector's own
+promotion uses, so gas stays independent of when a collection happened to
+run.
+
+**Billing is not the same as bounding, and that gap had its own bug.**
+`charge_work` adds to a counter; nothing looks at that counter until the next
+*interpreter* instruction, so a native that charges a large amount and then
+loops internally still burns real CPU for the whole internal loop before the
+budget check ever fires. Measured by giving a program exactly enough gas to
+build its input and then run one more operation: `(apply str v)` and
+`(apply + v)` both ran roughly 2.7 million steps past an exhausted budget —
+the same amount, which is what pointed at `apply` (the spreading mechanism)
+rather than either callee as the actual culprit. The fix is checking the
+budget *inside* the loop, not merely charging before it: `charge_tick` checks
+every 64 iterations for a tight inner loop, `charge_checked` checks every
+time for a loop whose iterations are already substantial, and both `apply`
+(the builtin) and the compiled `APPLY` opcode needed the fix, because a bound
+that holds on only one of two paths is not a bound.
+
+The test file (`test/gas.clj`) doubles workload size and asserts gas scales
+proportionally — and its *negative controls* (`count` and a table row ref
+must **not** scale with size) turned out to be load-bearing: the first
+version of the test subtracted its own setup cost incorrectly and every
+operation "scaled," including ones that should not have, which would have
+passed while measuring nothing but its own baseline error.
+
+### Details worth keeping
+
+- Charging is for **allocation, not collection** — collection cost depends on
+  heap size and on when it happened to run, and charging it would make gas
+  depend on the memory limit chosen, which is exactly the kind of
+  non-portable dependency this whole mechanism exists to avoid.
+- Exceeding either limit is a **catchable error** carrying what was spent
+  against what the limit was — never a trap — so a host can distinguish "the
+  program is wrong" from "the budget was too small."
+- **Hitting the memory cap collects first, then fails** — otherwise the cap
+  would depend on GC timing, since a collection might have freed enough to
+  continue.
+
+---
+
+## two-builds
+
+**A stripped production VM, and everything diagnostic optional**
+*(formerly `0016`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): shipped.** Both builds are compiled and tested on every suite run.
+
+### What was decided
+
+A production module contains **no diagnostic machinery at all — not cheap,
+not runtime-gated, absent.** This is a cross-cutting rule that supersedes the
+per-feature "keep it out of the pure module" clauses in `resource-limits`,
+`debug-runner`, and `snapshots`, stating once, for everything, what "keep it
+out" actually means and how it is enforced.
+
+### Why
+
+A runtime flag is tempting and wrong: the code is still linked, still costs
+module bytes, and still puts a branch somewhere hot. `resource-limits`
+already worked this out for gas specifically and monomorphised the counter
+out of the loop; this generalises that conclusion to everything diagnostic.
+**Cargo features and monomorphisation, not runtime flags** — absent code
+cannot be enabled by accident, cannot be branched on, and cannot be measured,
+which is the only guarantee worth having.
+
+The live example that motivated writing this down: the `forward()`
+plausibility check — arguably the single most valuable diagnostic in the
+codebase, the thing that actually found the port bug this project spent a
+fortnight chasing — was gated `cfg!(debug_assertions) || self.stress`, which
+meant a release build paid 357 bytes for the sake of a stress-testing path it
+never used. The fix is not to delete the check; it is to make it a feature,
+so a diagnostics or staging build carries it, production does not pay for it,
+and a host chasing a production fault can deploy the instrumented build and
+reproduce there.
+
+**What counts as diagnostic and what does not, and getting this wrong strips
+something the product needs.** Diagnostics (absent by default): snapshots and
+their export format, the inspector, the root verifier, GC stress mode,
+write-attribution tracing, the forwarding-pointer assertions, every `stat_*`
+export, the debug runner. Production features (always present): gas limits
+and the memory cap, the deterministic scheduler, chained error reporting, the
+`:exclude`/unit machinery. These are resource control and correctness
+properties, not instrumentation — **gas in particular must never be
+stripped**, since construe's gates depend on a deterministic instruction
+count and it already costs nothing when unlimited.
+
+**It is also a security argument, not only a size one.** flint's strongest
+measured case is as a sandbox for untrusted, model-written code — a large
+cold-start win against a V8 isolate, with no host access by default. A
+production module that ships snapshot export is a production module that can
+be asked to dump its entire heap, running code somebody else wrote. Absent is
+a different guarantee from disabled, and that is what settles this even where
+the raw byte count would not.
+
+Enforcement is checked, not merely intended: a symbol-name assertion that a
+production module exports no `snapshot_*`, no `stat_*`, no stress-mode
+setter, no verifier; both builds compiled and exercised in CI, since a
+feature nothing compiles is a feature that silently rots until the first
+person who needs it finds it broken.
+
+---
+
+## debug-runner
+
+**DAP, nREPL, and `(break)`**
+*(formerly `0014`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): roadmap, explicitly not next.** Recorded because the design is
+unusually cheap here for reasons worth knowing before something is built that
+would make it expensive.
+
+### What was decided
+
+An extended runner supporting the Debug Adapter Protocol, an nREPL server,
+and an in-source `(break)` form, all reusing existing machinery rather than
+inventing new suspension, stepping, or transport mechanisms.
+
+### Why this is cheap here
+
+Debugging a compiled language usually means DWARF, source maps, or a JIT that
+can deoptimise — and debugging wasm from a source language is notoriously bad
+for exactly that reason: the thing running is not the thing that was written.
+flint has none of that problem, for the same reasons green threads and
+snapshots are cheap here:
+
+- **Execution state is data in linear memory** — frames, value stack,
+  locals, instruction pointer. A debugger reads them; it does not walk a
+  native stack.
+- **A breakpoint is a park.** Green threads already suspend on demand, hand
+  control to a host, and resume with a value; `(break)` is shaped exactly
+  like `open` — no new suspension mechanism needed.
+- **Stepping is the gas counter.** The instruction count already stops
+  execution at an exact count and reports it as a catchable event; "step one
+  instruction" is a budget of one.
+- **A debug session is a port.** DAP and nREPL are message protocols, and
+  ports already carry messages between host and runtime; the adapter is a
+  driver over the existing ABI, not a new host interface.
+- **`eval` already works** wherever the compiler is linked in, which is what
+  an nREPL needs to be more than a stack viewer.
+
+So the runtime work is close to nothing; the real work is protocol adapters
+and mapping bytecode offsets to source line/column, which the compiler can
+emit because it is flint's own compiler.
+
+Two things to get right, one to avoid: debug info belongs in a separate
+optional unit rather than always-present, the same discipline `two-builds`
+generalised everywhere else; a debug-enabled interpreter loop must be a
+separate monomorphised instantiation with zero cost when absent, not a
+runtime-checked flag; and **debugging must never become a second execution
+mode** — if attaching a debugger changes scheduling, allocation, or ordering,
+bugs move when you look at them, which would spend the deterministic
+scheduler's whole value.
+
+---
+
+## snapshots
+
+**VM snapshots: instant, exportable, inspectable**
+*(formerly `0015`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): shipped.** Capture, export/import, and an inspector, all opt-in
+under `two-builds` (present only in a diagnostics build).
+
+### What was decided
+
+The whole VM state can be captured instantly, exported as bytes and restored,
+and read by an inspector tool — specified after ad-hoc debugging instruments
+had repeatedly and confidently lied about what was happening.
+
+### Why: it is a copy, not a question
+
+Every probe built for the port bug this project spent a fortnight on asked
+*one* question, and more than one answered it wrongly in a way that looked
+clean: a counter hooked on the collector's `forward()` reported zero moves
+and could not have reported anything else given where it was hooked; a watch
+address registered against a young object went stale the instant that object
+was promoted. A snapshot has neither failure mode, because **it is a copy,
+not a question** — ask whatever you like afterwards, re-ask when the question
+changes, compare two snapshots rather than trusting a running probe. The
+instrument cannot misrepresent state it never interpreted.
+
+**Capture must be a memcpy, not a graph traversal**, for the same reason: a
+traversal that misses an edge produces a snapshot silently missing an object,
+which means debugging the capture instead of the bug it was meant to expose.
+So the original capture format copies the raw bytes of both semispaces and
+old space, plus Rust-side state, and interprets *later*. What must be in it
+because omitting any one piece is silently wrong: roots (value stack, shadow
+stack, globals, consts, singletons, intern tables), the frame table and every
+green thread's saved state, the remembered set (both the list *and* the
+per-object flags, since the original investigation turned on those two being
+able to disagree), and scheduler/allocation state.
+
+**The format is tied to a runtime version** and stamped with a fingerprint of
+the image it belongs to, refused loudly on any mismatch rather than read as a
+plausible-looking heap that means something else — every frame's instruction
+pointer, every constant index, every var slot in a snapshot is an index into
+a specific image, and restoring against a different one would otherwise
+silently mean something else.
+
+**Correctness is proven by round-trip, not merely asserted:** snapshot,
+export, import, snapshot again, byte-identical; and a program snapshotted
+mid-run, exported, imported, and resumed produces the same answer *and the
+same instruction count* as one that ran through uninterrupted — which the
+deterministic scheduler and deterministic gas together make a testable
+equality rather than a hope.
+
+**`(snap "name")` must not allocate, and this is not a performance note — it
+cost a debugging session.** Taking a snapshot once hid the port bug outright:
+capture grew a buffer, which changed allocation timing, and the bug was
+sensitive to precisely that. A snapshot that perturbs the thing it is
+investigating is the observer effect the whole tool exists to escape, so the
+capture buffer is reserved once, sized to the maximum heap, outside anything
+being measured — and this is asserted by a test that captures repeatedly
+inside a loop and checks the allocation count is unchanged, because without
+that assertion the guarantee silently erodes.
+
+`(snap "x")` is capture-and-continue, deliberately a separate form from
+`(break)` rather than an option on it (`(break :snap "name")` was the first
+version, and reads wrong: a form that does not break should not be called
+`break`). Repeated hits on one name keep the latest and record the hit count
+rather than silently accumulating or silently overwriting. In a production
+build both forms compile to nothing — not a no-op call — and the compiler
+reports how many of each it elided, so silent elision cannot ship unnoticed.
+One consequence worth stating plainly: **instruction counts are only
+comparable within one build configuration**, since a build with breakpoints
+compiled in for diagnostics executes more instructions than the same source
+built for production, and both counts are legitimately deterministic without
+being the same number.
+
+**And it is not only for debugging.** Snapshot-restore doubles as the fix for
+flint's per-invocation cold-start cost: snapshot after top-level
+initialisation runs once, restore per request, and each request starts from
+a memcpy of a small live set instead of re-running every initialiser. A
+snapshot plus the host's event log is also a complete, deterministic replay,
+and "attach the exact state at the moment a gate failed" is worth more to a
+platform running model-written code than a stack trace.
+
+### Later: two formats, because there turned out to be two jobs
+
+The original argument against a traversal-based format — that a bespoke
+traversal missing an edge silently corrupts the snapshot — does not hold for
+*this* traversal, because the collector, not the exporter, decides what is
+live: a major collection runs first, and the exporter then walks the
+resulting heap linearly, where everything not `TY_FREE` is live by
+construction. A missed edge here would be a collector bug that loses objects
+in ordinary running, which the standing GC-stress suite already checks for
+independently.
+
+That traversal-based "live-set" format was added because the memcpy format
+cannot do three things a second job needs: it copies the whole reserved
+space including dead objects (a small program's memcpy capture was 5.3 MB
+against 38.5 KB of actual live data — 0.7%); it pins the restore to identical
+addresses, by the original design's own admission, so it can restore only
+into the exact same instance; and it is wasm-only in principle, since the JVM
+and CLR ports hold flint values as host objects with no byte range to copy at
+all. The live-set format restores into a *different* instance, which is what
+shelving a running sandbox actually requires — at the cost of being unable to
+capture a heap whose pointers are already known-corrupt, which is precisely
+the situation the memcpy format was built for. Both are kept: **traverse to
+move a sandbox, memcpy to debug one.**
+
+---
+
+## profiler
+
+**Named blocks, and CPU told apart from waiting**
+*(formerly `0017`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): roadmap, not next.** Recorded because two of its dependencies are
+being built elsewhere and one measurement it would give away for free is
+already owed.
+
+### What was decided
+
+An opt-in, development-only profiler recording named, nested, per-green-
+-thread blocks — with **instruction count and wall-clock time kept as two
+separate numbers, never summed.**
+
+### Why
+
+The determinism that makes gas useful makes profiling unusually strong here
+too: the same program profiled in **instructions** reports the identical
+count every run, on any machine, so two profiles can be diffed and the
+difference means something — where a wall-clock profiler gives noise plus
+signal and leaves the reader guessing which is which. And the scheduler
+already knows *exactly* when a thread is parked and on what (a port receive,
+a full send, an `open`) — not a sampling profiler's inference, but state the
+VM already keeps. So CPU-versus-waiting is not a feature to build; it falls
+directly out of reporting the two clocks separately: a block that costs 3,000
+instructions and waits 200 ms has two true facts about it, and collapsing
+them into one "cost" number destroys the one that says what to fix.
+
+Blocks are named, nested (a block's parent is whatever was open when it
+opened, so the call tree falls out of nesting for free), and — critically —
+**the block stack is per green thread**, exactly like dynamic vars; getting
+this wrong would produce a profile that looks entirely plausible while
+attributing work to the wrong thread, which is worse than no profile.
+
+It shares infrastructure deliberately rather than being a new subsystem: a
+cargo feature under `two-builds`; carried inside a `snapshots` capture, read
+by the same inspector object model; and delivered as a port stream rather
+than a new host entry point. It would also give `emit-wasm-instead-of-
+dispatch` its region-length histogram for free, since that is exactly
+per-instruction instrumentation with a grouping. The first real customer
+would be profiling flint's self-hosted compiler compiling itself — a large,
+allocation-heavy, already-in-the-repository program whose instruction count
+is already known from the self-hosting fixpoint test.
+
+---
+
+## a-vec-of-values-is-not-a-root
+
+**A Rust `Vec<Value>` is not a root, and it cost a day**
+*(formerly `0031`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): fixed** (2026-08-28), and heavily cited across the runtime as the
+canonical statement of a rooting rule every port now checks itself against.
+
+### What was decided
+
+**A value held in a host-language local or container across a call that can
+collect a value the collector does not know about, and is unsafe the moment
+that call actually collects.** Concretely: a Rust `Vec<Value>` gathered
+outside the shadow-stack rooting mechanism is not scanned by the collector,
+so anything already in it goes stale the instant a collection moves it.
+
+### Why this is worth a whole record rather than a one-line rule
+
+The bug it names produced `RuntimeError: memory access out of bounds` with no
+flint frame and no message, triggered by adding one unrelated `def` to the
+compiler's own source. The first three hours were spent on the wrong
+question ("why does adding a variable break the compiler?") because the
+compiler compiles itself, so any change to its own source changes the
+program being compiled, and the fault is sensitive to exactly where a
+collection happens to land — which the input size moves. Two plausible-
+looking discriminators turned out to be testing the wrong thing entirely
+("the diagnostics build passes" — because the spec being compiled had also
+changed underneath it; "`--keep-names` fixes it" — same artefact, byte-for-
+byte). **What actually ended it was freezing the pair** — one module, one
+input, both fixed on disk — which is the same lesson `snapshots` draws one
+level up: a moving reproducer defeats careful reasoning, and the fix is to
+stop anything from moving before varying the next thing.
+
+With the pair frozen, a diagnostics build's stale-write instrumentation named
+it directly: `flint/array-map` gathered lazy-seq elements into a plain Rust
+`Vec<Value>` across calls to `first`/`next` that force the seq and can
+therefore collect — 28 stale values out of 24.5 million pushes checked, all
+at one collection, written into one map slot. The fix is to root each value
+**as it is taken**, on the shadow stack, and read it back from there after
+the allocation — the same pattern the runtime's own `cons` and rope-node
+construction already used correctly, and correctly is the point: this is not
+an unknown pattern, it is a known pattern applied inconsistently.
+
+**Why nothing caught it sooner:** the bug needs three things at once — a
+*lazy* input (so the walk actually allocates), *enough* elements to span a
+collection, and a *build that notices* (the stale-write/stale-push
+counters). The counters already existed and were already asserted at zero in
+the GC-stress suite; the suite simply never exercised a large map literal
+built from a lazy seq, which is exactly the shape the compiler's own map
+literals are (the reader deliberately uses `array-map` for source-order
+preservation, since two hosts iterating a hash map differently would break
+the self-hosting fixpoint). The same fault, same shape, was found in the
+codec's collection-gathering code by reading for the pattern rather than
+waiting for a second symptom, and fixed the same way.
+
+### What this says about the discipline going forward
+
+Every other `Vec<Value>` in the runtime was audited at the time and found
+safe, each for a stated reason worth keeping as a checklist: some re-read
+values from the shadow stack after allocating (the correct pattern); some are
+built through an immutable borrow that the type system proves cannot
+allocate; some collect through a callback that itself never allocates and
+roots before doing anything that does. This rule is now the single most
+cited decision in the codebase outside of `strings-and-matching`, `tables`
+and `resource-limits`, and is invoked verbatim across the Rust runtime, both
+ports, and `kin`'s shared vocabulary sources whenever a native holds a value
+across a call site that could collect — including three further rooting bugs
+found later by the same reading discipline (in `Eq`'s sequence-walking and
+table comparison code on the JVM and CLR ports, all fixed, all covered by a
+stress-mode gate that now runs on both ports' own runtime test suites, not
+just the shared conformance fixtures).
+
+---
+
+## modularity
+
+**Only reachable code ships, builtins included**
+*(formerly `0002`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): superseded in mechanism; the requirement it states still stands**,
+met by `namespace-units` below.
+
+### What was decided, and what replaced it
+
+The requirement — only reachable code, including core builtins, should be in
+the output; parsers should be adapted Rust crates rather than hand-written —
+is the owner's original requirement and it stands unchanged. This document's
+own proposed *mechanism* for meeting it does not: it considered rebuilding
+the runtime per compile with cargo features (correct, but puts a full Rust
+build — tens of seconds — on every compile), or keeping one prebuilt runtime
+and having a patcher null out unreached dispatch-table entries before running
+wasm dead-code elimination (clever, but depends on a discipline — "the
+builtin registry is the *only* thing that references an optional Rust
+function" — that nothing enforces and that is impossible to retrofit once
+something calls a parser directly). Both were rejected in favour of the
+linking-based design in `namespace-units`.
+
+### Why it is kept rather than deleted
+
+The reasoning survives even though the mechanism does not: it is what first
+named the actual problem precisely — a prebuilt runtime whose builtins are
+all reached through one interpreter dispatch table is a runtime where a
+linker can prove *nothing* dead, because every builtin is live by
+construction through that one indirection. Every later design in this area
+(`namespace-units`, `no-runtime-linking`) is answering exactly this problem,
+so the statement of it is worth keeping even though both of this file's own
+proposed answers lost.
+
+---
+
+## namespace-units
+
+**A namespace is a compilation unit, and linking composes them**
+*(formerly `0003`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): shipped.** A namespace is a compilation unit and `flint link`
+composes them.
+
+### What was decided
+
+Every namespace compiles ahead of time into its own **relocatable wasm
+object**. The compiler computes the reachable set from the entry function and
+hands only those objects to `wasm-ld --gc-sections`, producing one linked
+module. This is not primarily a tree-shaking trick — it is a **composition
+system**, with built-ins simply being its first customer:
+
+> a pre-compiled wasm module for each built-in namespace... If we have that,
+> then we have a nice wasm composing system already in case we later want to
+> support independently compiling namespaces.
+
+### Why
+
+Compiling per-namespace and linking is fast because there is no `rustc` on
+the compile path at all — only a link step, milliseconds to low hundreds of
+milliseconds — and it still produces a single module, so flint's "runs
+anywhere, no host-side module wiring, no Component Model dependency" contract
+survives untouched. This won over `modularity`'s two proposals directly:
+rebuilding with cargo features is correct but slow; nulling dispatch-table
+entries and running wasm DCE is clever but depends on a discipline
+("everything calls through the registry, nothing calls a builtin directly")
+that nothing enforces and cannot be retrofitted once violated.
+
+**The crux, easy to get wrong: the registry must be assembled *by the
+linker*, not hand-written.** If the runtime holds one static table naming
+every builtin, then every builtin is reachable from that table and
+`--gc-sections` removes nothing — the table itself is the reference keeping
+everything alive, which is precisely the failure mode `modularity`
+described. So each namespace object contributes its *own* registration
+entries into a dedicated linker section, and the runtime walks that section
+at startup: link a namespace and its entries appear, leave it out and they
+simply do not exist. The linker decides what the registry contains, not a
+hand-maintained list.
+
+The same shape applies one tier up for the cljc standard library: each cljc
+namespace precompiles to a bytecode image fragment, and only the reachable
+fragments are concatenated into the final program image — otherwise every
+invocation would recompile `clojure.core` from source on every run.
+
+**The unit format was deliberately designed for the general case from the
+start**, rather than baking in "this is for built-ins": a namespace unit is
+described by what it *is* — its compiled artifact, the symbols/vars it
+exports, the units it depends on, compatibility metadata — never by who
+shipped it. That is what let independently-compiled user namespaces,
+incremental builds, and distributable precompiled libraries become the same
+feature later rather than a rewrite; it cost almost nothing to keep the
+boundary honest from day one, and nothing here required building user-
+namespace compilation immediately, only not making it impossible.
+
+---
+
+## exclude-and-unit-path
+
+**`:exclude` as an assertion, and `:wasm-path`**
+*(formerly `0004`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): shipped.** Both are covered in the CLI options surface. (The flag
+was originally proposed as `:wasm-ld`, renamed to `:wasm-path` in
+`host-abi`, because "flags to pass to wasm-ld" is not what it means — "where
+to find precompiled units" is.)
+
+### What was decided
+
+Two CLI options, both exposing `namespace-units`' composition system to
+users directly. `:exclude [ns ...]` drops namespaces — including built-in
+ones — from a compile; `:wasm-path <dir> ...` is a search path for
+precompiled namespace units, resolved by namespace the same way source
+resolution works (`flint.data.json` → `<dir>/flint/data/json.*`).
+
+### Why `:exclude` is an assertion and not a suggestion
+
+The obvious reading of "leave these out" has a trap in it: if the excluded
+code is genuinely reachable, silently leaving it out produces a module that
+compiles, links, ships, and dies at runtime on a path nobody tested — a build
+flag whose failure mode is a production crash is a bad flag. So an exclusion
+is a **claim the compiler checks**: `:exclude [foo.bar]` means "nothing
+reaches `foo.bar`; tell me if I am wrong." If it *is* reached, that is a
+compile error, not a silent omission — and the error must show the full
+reference chain (which namespace required or called it, and from where), or
+it is unactionable. Reachability is already computed for linking, so this is
+mostly bookkeeping to remember *why* each namespace is in the reachable set,
+by keeping the predecessor edge that makes the chain printable.
+
+That framing is what makes the flag genuinely useful rather than merely
+restrictive: it can *guarantee an absence* ("this module must not contain an
+XML parser," enforced by the build rather than eyeballed by a reviewer), help
+*find what is dragging something in* (exclude it and read the chain), and
+*keep a module small on purpose* with a build failure if a later refactor
+quietly reintroduces the dependency.
+
+### Why `:wasm-path` needed three things settled, not just built
+
+Precedence when a namespace is available as both source and a precompiled
+unit needs a stated answer (either is defensible; silence is not).
+Compatibility — a unit built against a different runtime ABI or image layout
+— must be refused by name and version rather than linked and left to crash,
+using the compatibility metadata `namespace-units`' unit format already
+carries. And built-in namespaces should go through the *same* path as
+user-supplied units, so `units/` is just the default entry on the search
+path rather than a second mechanism — which means the user-supplied case is
+exercised by every ordinary compile, not just a special test.
+
+---
+
+## module-metadata-and-shards
+
+**What a module says about itself, and shards**
+*(formerly `0020`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): part 1 shipped** — every module carries a `flint` custom section,
+readable from the bytes without instantiating, and `flint inspect` prints
+it. **Part 2 (shards) is not built** — the hard part, deciding which
+namespaces may be privately bundled versus which must be imported, remains
+unsolved work rather than solved-and-unbuilt.
+
+### What was decided
+
+Two things, requested together but genuinely different in kind:
+
+1. **Build-time opt-ins go in the module's own bytes**, in a wasm custom
+   section readable without instantiating, so a runner handed a finished
+   `.wasm` can decide how to wire itself up and whether it is even
+   compatible, before running anything.
+2. **The compiler should be able to build a "shard"**: an entry-point
+   namespace compiled into a self-contained, loadable *library* wasm module
+   — no runtime implementation of its own, leaning entirely on a resident
+   program module's.
+
+### Why the custom section is not just a repackaging
+
+`namespace-units`' unit format already has a compatibility check — an
+`:abi {:runtime :value :image}` map checked before every compile, refused by
+name and version on mismatch — but it lives in a sidecar `.unit.edn` file
+consumed by the *compiler* at link time. Nothing is carried in the wasm
+itself, so a *runner* handed a finished module can learn nothing from it
+without a side channel. wasm custom sections are ignored by every engine and
+readable straight from the bytes (`WebAssembly.Module.customSections()` on
+the web), so putting the same facts there — generated from the manifest
+rather than maintained beside it — closes that gap, and putting the section
+*early* in the module lets a streaming reader decide whether to instantiate
+at all before downloading the whole code section.
+
+**The section also gains a free-form metadata map the runtime does not
+interpret.** What a key in it means is between whoever wrote it and whoever
+reads it — a runtime that knew what `:capabilities` meant would have taken a
+decision that belongs to its caller. The CLI's own convention (`cli`,
+`workspace-capabilities`) is to write `{:capabilities [...]}` there from
+`:with`, and read it back on `run` — but that is the CLI's convention, not a
+rule the format enforces.
+
+### The trap: two classes of fact, and conflating them breaks diagnostics builds
+
+The obvious implementation — one blob of build configuration compared for
+equality — is wrong in a way that only shows up once shards exist.
+**Compatibility keys** must match exactly or a module cannot load at all:
+the ABI, whether the program uses shared memory (`thread-pool`), whether gas
+metering is compiled *into* AOT'd code (since that changes what emitted code
+calls, not just what it reports), the heap layout a shard's code assumes.
+**Capability descriptors** are facts a runner inspects to wire itself up and
+must *not* gate compatibility: which host imports are required, whether
+diagnostics/snapshots/profiler are present, what the module exports.
+
+**Conflating them means a diagnostics build invalidates every shard for no
+reason** — turning on `two-builds`' instrumented build only adds side
+tables, changing nothing a shard's code actually depends on, but a flat
+equality check over one config blob would see it as an incompatible change
+and rebuild the world. So the compatibility key is a hash over only the
+ABI-affecting subset, with everything else carried descriptively beside it —
+a hash rather than a hand-maintained version number, because a version
+number gets bumped by memory and a layout change forgets to. `two-builds`'
+two builds are the concrete case that proves the key is drawn correctly:
+they differ only in diagnostics and must remain shard-compatible with each
+other.
+
+### Why shards are genuinely new, not a repackaging of a unit
+
+Today's units are **link inputs**, consumed and absorbed at build time by
+`wasm-ld`; they are never themselves loaded. A shard is a **loadable module
+that resolves against an already-running program** — a fundamentally
+different artifact, not a repackaging of the existing one. It cannot own its
+own linear memory (values live in the program's heap, so a shard's code has
+to *import* memory rather than define it) and should carry no static data
+segments of its own, building any constants at init time through the
+program's own allocator instead — which is exactly the shape that produced
+one of this codebase's real GC bugs (a value held across a module
+initialiser that allocates), so shards inherit that hazard and its standing
+test on day one.
+
+**The genuinely hard problem: "self-contained" conflicts with identity.**
+Bundling pure code privately into a shard is fine. Bundling anything carrying
+identity or mutable state is not: a protocol is identity (a type extended to
+*this* protocol object satisfies *this* one), and if a shard privately
+bundles a namespace defining a protocol while the host program has its own
+copy, there are now two protocols with the same name and dispatch silently
+diverges — a value extended on one side fails `satisfies?` on the other, with
+no error, just a wrong answer somewhere downstream. The same argument covers
+namespace-level vars and atoms. So the rule is: **a shard may privately
+bundle pure code; it must import anything carrying identity or mutable
+state** — which means the manifest and custom section both need three lists
+rather than one (`:provides` — namespaces defined canonically, an error if
+two shards both claim one; `:bundles` — namespaces safely duplicated
+privately, declared so the duplication is auditable rather than implicit;
+`:requires` — namespaces that must come from the program, because a second
+copy would be a second identity). The compiler already knows, for any given
+namespace, whether it defines a protocol or top-level mutable state — **that
+classification is the actual remaining work**; the module format around it
+is comparatively straightforward.
+
+---
+
+## no-runtime-linking
+
+**No linking at compile time; byte strings and transient ropes**
+*(formerly `0024`)*
+
+**Ratified:** ☐ not signed off
+
+**Status: partly built — checked directly, not merely repeated.** `flint.bundle`
+splices an image into a prebuilt module and `flint.shake`/`flint.wasmshake`
+cut it down, both without a linker, both measured. This decision's own file
+banner says byte strings and their transient are built; `runtime/src/bytes.rs`
+is 552 lines, confirming it. **The old project status index disagreed with
+this file about its own decision** — its table row for this entry claimed
+"the byte strings do not exist," which is simply wrong, and is exactly the
+kind of adjacent-source contradiction the swarm verifying this document was
+told to expect. Still not built: emitting a module from `flintc.wasm`
+itself, and the embedded JVM/CLR targets — unverified independently, stated
+as the record has it.
+
+### What was decided
+
+**`wasm-ld` runs exactly once — when flint itself is built. Never when a
+user program is compiled.** flint's own build produces one prebuilt runtime
+module per target, carrying every builtin, linked once. The compiler embeds
+those modules as data. Compiling a *program* becomes: source → bytecode
+image → **splice** the image into the embedded runtime — no link step at
+all. `flint compile wasm` gives an interpreting module; `flint compile
+wasm-aot` appends compiled arities by byte manipulation, which needs no
+linker either, since wasm cannot add a function to an already-linked module
+by any means *but* appending bytes.
+
+### Why
+
+The owner's direction: *"drop the concept of loading/linking external wasm
+stuff... The goal is to get rid of runtime linking within flint altogether,
+offload it to the runtime where possible."* This gives up something real —
+per-program linking via `namespace-units` tree-shakes builtins a program
+never reached, where a prebuilt runtime necessarily carries all of them
+(measured: 219,726 bytes linked for a trivial program versus 573,959 bytes
+for a prebuilt runtime with all 166 builtins) — but `bin/flint` keeps the
+linking path available for anyone who wants the smaller artifact; it is no
+longer what `compile` *means* by default.
+
+**The one real blocker turned out to be self-hosting, not design.**
+`flint.wasm` — the binary wasm reader/writer everything above depends on — is
+written against Java byte arrays (`aget`, `alength`,
+`ByteArrayOutputStream`), which does not compile *under* flint itself. The
+tempting fix, "a flint vector holding ints," is wrong and was rejected
+outright: a flint vector holds NaN-boxed 64-bit values, so a 574 KB module
+would become 4.6 MB of vector payload plus trie overhead just to represent
+bytes.
+
+**So byte strings got the same rope treatment text already had**
+(`strings-and-matching`): flat for small byte strings, a shallow B-tree rope
+above a threshold, simpler than the text rope in one respect — a byte node
+only needs its subtree's byte length, no code-point count to sum and no
+ASCII bit to track. **And a transient was needed for bytes too, which
+canonical Clojure never has a reason to want.** flint's strings/byte-strings
+are trees with a flat-copy threshold below which concatenation *copies*
+rather than building a node — so building one incrementally (`(str acc x)`
+in a loop, or the equivalent for bytes) is quadratic in bytes copied until
+pieces outgrow the threshold, which is exactly what nobody expects a
+persistent rope to do. Measured on 20,000 pieces building an 88,890-
+character result: repeated `str` cost 8.7 ms and 2.1 MB of allocation for
+the same 19,995 allocation *count* as collecting into a transient and
+joining once (0.9 ms, 0.7 MB) — the count being equal is what pins the
+cause as bigger objects, not more of them: the same bytes were being copied
+again and again. A transient tail buffer that appends in place and promotes
+into the tree only when full removes the quadratic, exactly as it already
+does for vectors.
+
+**Tree-shaking does not need a linker either, and this was assumed lost and
+was not.** Shaking is a mark-from-roots pass over a call graph followed by
+removing what was not marked, and none of that inherently needs `wasm-ld` —
+it is a pass over a module that already exists, and the mark phase is
+**target-independent**, worth building once rather than per-target: a call
+graph is a call graph whether it came from a wasm code section, a JVM
+constant pool, or a CLR metadata table. It can even be *more* precise than
+the linker, because by the time shaking runs the image exists and the exact
+set of builtins it imports is a known fact rather than a conservative guess.
+Two pragmatic corners, both proven safe rather than merely convenient: the
+call-edge scan is conservative (scans for the `call` opcode byte rather than
+fully decoding the instruction stream, which can only invent an edge, never
+miss one — safe in the direction that matters), and dead functions are
+**stubbed with `unreachable`, not deleted**, since a wasm function index is
+positional and deleting one would renumber every call site, table entry and
+export after it — an `unreachable` body keeps every index valid while still
+dropping the code section bytes, which are 89% of the module and nearly all
+of the actual prize. Measured on a program using `clojure.string`, `reduce`
+and `filterv`: shaking recovered 57% of what `wasm-ld` removes with no
+linker at all, 79% on a trivial program.
+
+**A shaking-under-load bug found a real bug in `clojure.core`, not in the
+shaker.** At scale, shaking traps inside the self-hosted compiler; a named
+backtrace (`bin/flint --keep-names`) traced it through `apply` — reached
+because `for` compiled to `mapcat`, whose variadic `concat` recursed one
+`apply` frame per argument, *before realising any of it*, so a `for` over
+600 items became 600 nested frames. `mapcat` and `concat`'s variadic case
+were rewritten to be properly lazy/iterative, a defect that had nothing to
+do with wasm and had been costing every `for` over a large collection.
+
+---
+
+## strings-and-matching
+
+**Rope strings, and what to do about regex**
+*(formerly `0011`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): shipped** for sections 1–2 (ropes); **section 5's conclusion is
+superseded** by `matching-over-ropes`, below. This is one of the most
+heavily cited decisions in the codebase and is treated at full length here
+for that reason.
+
+### What was decided
+
+Strings are a **three-tier representation** — inline (packed into the value
+word itself, no allocation), flat (a contiguous byte array with cached
+counts), and rope (a balanced B-tree of flat pieces) — presenting one
+interface, with `(kind s)` answering `:string` for all three. Regex is kept
+as the language surface (no move to PEG), but the *matching engine*
+underneath it changes; see `matching-over-ropes`.
+
+### Why ropes, and why three tiers rather than two
+
+A rope — a tree of string pieces with structure sharing, tiny strings
+inlined directly in the value — is not exotic (Boehm/Atkinson/Plass, 1995;
+V8 ships one today as `ConsString`), and it fits this language unusually
+well: `str` becomes O(1) (a cons node, where flat strings make repeated
+concatenation O(n²), and Clojure code concatenates constantly), `subs`
+becomes O(1) (a slice node over the parent), and sharing is safe *because
+flint values are immutable* — the same property that already made passing
+ports by reference sound. The cost is that random access becomes O(log n),
+which matters less than it sounds for UTF-8, since indexing by code point
+was never O(1) to begin with.
+
+A rope is the wrong answer for `"ok"` — tree metadata would dwarf the
+content, and most strings in a real program are short — so there are three
+tiers rather than two, with **flat as the tier that must not be skipped**:
+between "fits in the value word" and "big enough to want a tree" is most of
+the strings a program actually touches. The transition rules are also the
+retention fix: a small `subs` of a large rope *copies* into flat or inline
+rather than creating a slice node, because a slice node would otherwise
+retain the entire large parent through a three-byte view — tiering and
+retention turned out to be one problem, solved by the same rule.
+
+### The engineering that makes ropes actually work, not just exist
+
+**It must be balanced, and that is not a refinement — a naive cons-rope
+degenerates immediately.** `(reduce str "" xs)` builds a right-leaning spine
+of depth n, making `subs`/`nth` O(n) — *worse* than the flat string it
+replaced, at exactly the operation ropes exist to make cheap. The design
+takes a **B-tree rope with size tables** (wide nodes, shallow tree — at
+fanout 16–32 a megabyte string is two or three levels deep, near-random-
+access in practice) over classic Boehm rebalancing, because it is the same
+technique the RRB vectors already in this codebase use — a sibling
+structure rather than a new idea. Parameters worth defending explicitly:
+fanout 16–32 (depth is what random access pays for), leaves of ~512–1024
+bytes rather than per-fragment (tiny leaves make the tree deep and let
+metadata dominate content), and merging adjacent small leaves on concat (or
+a thousand two-character appends produce a thousand leaves and the balance
+invariant erodes by increments).
+
+**Each node carries a code-point count, not just a byte length**, because
+flint stores UTF-8 and indexes by code point — without a per-node count,
+indexing means scanning, making `nth` and `count` O(n) on a structure built
+specifically to make them cheap. Composing a node must never rescan its
+children's bytes, and it does not have to: a concatenation is all-ASCII
+exactly when every part is (an AND), and the code-point count is a sum —
+both compose in O(fanout), so the byte scan happens exactly once, at leaf
+construction, bounded by the leaf size, and every composition above that is
+pure arithmetic. There was already room for this in the value header: the
+`TY_STR` header has four unused bytes between the hash and the data, and bit
+18 was already an ASCII flag.
+
+**Counts must be relative, never absolute offsets — this is the one detail
+that would be expensive to unwind.** A node stores the size of its own
+subtree, never its start index in the whole string, because structure
+sharing is the entire point: the same leaf can appear in two different
+ropes at two different offsets (`(str a b)` and `(str b a)` share `b`, at
+offset `(count a)` in one and offset 0 in the other), so a node recording an
+absolute position would be correct in at most one of them. Absolute position
+is instead computed during descent, accumulating child counts on the way
+down — the standard B-tree-with-size-tables shape, forced here rather than
+chosen.
+
+**The ASCII flag's justification changes per tier, and both mechanisms stay
+needed rather than one subsuming the other.** With per-node counts, the flag
+buys nothing for indexing *across* a rope — descending the tree already
+locates code point *k* in O(log n) regardless. But a flat string carries
+only one total count, so without the flag `nth`/`subs` on a flat string is
+O(n) (this is precisely what the `words` benchmark exercises); and even
+inside one rope leaf, finding a byte offset for a code point is a scan
+bounded by leaf size, which the flag turns into O(1). So: not needed for
+rope-level indexing, still needed for flat strings, useful-but-bounded
+inside a leaf. **The flag is also a cached, derivable property, and that
+makes it capable of being wrong** — anywhere a `TY_STR` is allocated without
+deriving it correctly, `nth`/`subs` silently use byte offsets as code-point
+offsets and return wrong answers with no error at all. The diagnostics build
+re-derives the bit on every read and asserts agreement, the same technique
+that separately proved a different write-once-field mechanism correct
+across 8,302 crossings with zero drift.
+
+**Operations must actually use the tree structure, and this is not
+hypothetical — it is the shape of a real, already-fixed bug.**
+`str_index_of` once called `is_ascii()`/`from_utf8` on every call, each
+scanning the *whole* haystack, turning a linear scan into 223 million byte
+checks and 37 ms of a 55 ms benchmark — a builtin that looks native and
+therefore free, silently doing O(n) hidden work per call, is exactly the
+failure mode a flatten-on-demand rope invites everywhere unless it is
+actively guarded against. What must genuinely use the structure: `str`/
+concat (a tree join, O(1) or O(log n), never a copy); `count` (O(1) from
+stored counts); `nth`/`subs` (descend, sharing subtrees for a large slice);
+`index-of`/`split`/`replace`/comparison (walk leaves through a cursor — none
+of these needs contiguous bytes); `starts-with?`/`ends-with?` (one leaf at
+each end). **The discipline is to count the flattens, not hope about them**
+— a diagnostics counter incremented on every materialisation, asserted in
+benchmarks, because a rope that silently flattens on every `index-of` passes
+every correctness test while being slower than the flat string it replaced.
+
+**Two correctness requirements that are easy to miss entirely.** Equality
+and hash must be independent of *representation*, not merely of tree shape:
+`"abc"` inline, flat, and as a rope are one string, must compare `=`, hash
+identically, and be found in a map by any of the three forms — getting this
+wrong produces map behaviour that silently depends on how a key happened to
+be built, and (since content-addressed artifacts depend on stable hashing)
+would make hashes differ across hosts, which `other-hosts` separately flags
+as not cosmetic. And a rope must never retain a huge parent through a tiny
+slice — `(subs big 0 3)` holding `big` alive is a memory leak with a
+plausible-looking cause, closed by the copy-small-slices rule above.
+
+### Regex: why the syntax stays and the engine does not
+
+The instinct to abandon regex for PEG is diagnosed as right in spirit and
+wrong in the specifics. flint's regex feature set is already the safe
+subset — `lib/flint/regex.cljc` refuses lookahead, lookbehind,
+backreferences, and named groups, which is roughly RE2's subset and is
+exactly the subset matchable without backtracking at all. **The actual
+hazard is that the implementation is a backtracker regardless of the
+subset**: even with no backreferences, `(a+)+b` is exponential in a
+backtracking engine.
+
+The measured 275× slowdown against JS on a regex split decomposes cleanly
+once broken apart: a literal (no-regex) split was 18× slower than JS — the
+flat cost of running as interpreted bytecode at all, not recoverable except
+by native code — while the regex split was 275×, meaning the **engine
+inefficiency on top of interpretation was roughly 15×**, and that 15× *is*
+recoverable by a better engine written in cljc. That decomposition is what
+correctly redirects the fix from "abandon regex" to "replace the matching
+engine, keep the syntax," which is exactly `matching-over-ropes`'s subject —
+regex `split`/`replace`/`re-find`/`re-seq` all keep working for every ported
+program, nobody has to learn a new notation to split on a comma, and PEG
+remains worth having later as a *complement* for genuinely structured input
+regex cannot express (recursion, balanced delimiters), never as regex's
+replacement.
+
+### What is portable across hosts, and what is a port's own business
+
+UTF-8 representation itself is not a cross-host problem — a byte array with
+code-point semantics on top is straightforward on the JVM and CLR too. What
+*is* the specification, non-negotiably, is **behaviour**: `count`, `subs`,
+equality, hashing, and dispatch must answer identically on every host, while
+*how* a short string is packed into a value word is each port's own
+optimisation (a reference cannot be NaN-boxed on a managed runtime the way
+it can natively, so each port approximates its own way). This is
+`other-hosts`'s rule restated for the case most likely to drift silently: the
+conformance suite is the specification, and representation is precisely the
+kind of thing it must never be able to observe.
+
+---
+
+## matching-over-ropes
+
+**The matcher must consume a rope, which decides the whole design → a Pike VM**
+*(formerly `0012`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): shipped.** One shared NFA compiler with two simulators — a cljc
+reference and a native one — over a rope cursor. `re-pattern`, `re-find`,
+`re-matches`, `re-seq` all run on it; the catastrophic-backtracking case
+stays linear (measured: `(a+)+$` over 24 and 48 characters, 37 ms and 38 ms
+— i.e., not exponential).
+
+### What was decided
+
+Supersedes `strings-and-matching` §5's conclusion (delegate matching to host
+regex engines with a shared normalisation pass). Instead: **flint owns the
+matcher, built as a Pike VM (Thompson NFA simulation) over a rope cursor,
+shared across every host as one compiled NFA program with a per-host native
+simulator.**
+
+### Why the delegation plan died on contact with ropes
+
+The objection that forced the reversal: *"It won't work over our rope
+strings though, the stock regex engines for jvm/clr right?"* — correct, and
+it undoes "flatten before matching" as a strategy, because flattening to
+hand a `String` to `Pattern`/`Regex` materialises the whole rope on every
+host that delegates, at exactly the operation that touches the most text and
+therefore has the most to lose from a rope given back. A short survey of
+whether host engines can even consume an abstraction confirms delegation was
+never viable: Java's `Pattern.matcher` takes a `CharSequence` in principle,
+but matching is random-access and backtracking-heavy, so every `charAt`
+becomes O(log n) and `CharSequence` is UTF-16 against flint's UTF-8 storage
+— a trap, not a solution. .NET, JS, and Rust's own `regex` crate all
+categorically require contiguous memory. **So if ropes are the
+representation, flint controls the matcher — that is settled by the data
+structure, not by preference.**
+
+### Why a Pike VM specifically, and why this also settles PEG vs regex
+
+The real question was never "which notation is nicer" — it is **which
+matcher can consume a rope without rewinding**, since rewinding is
+precisely what a rope is structurally bad at. A backtracking matcher
+rewinds constantly (this is what the current engine, and Java/.NET/JS
+internally, all do). **PEG also rewinds** — ordered choice *is*
+backtracking: try an alternative, fail, restore position, try the next — so
+PEG has exactly the property that hurts here, which reverses the intuition
+that PEG would be the "safer" choice. A **Pike VM** (Thompson NFA
+simulation) never rewinds: one left-to-right pass, a set of live threads,
+each character consumed exactly once. It needs nothing from its input but
+`next-character`, so it runs natively over a rope cursor with no flattening
+and no random access — not merely compatible with ropes, but the shape a
+rope actually wants. It also keeps everything the project needed from
+regex: linear time by construction (the ReDoS hazard is gone rather than
+mitigated), exactly countable for `resource-limits`' gas accounting (a step
+*is* a thread-step), unchanged syntax, and — on the wasm host — agreement
+with Rust's own `regex` crate *by construction*, since that crate is the
+same algorithm over the same subset.
+
+### Why the native simulator was the point, not an optional extra
+
+The owner's course-correction here is worth keeping verbatim as reasoning:
+a cljc-only reference simulator is interpreted, so it pays the 18×
+interpretation tax `strings-and-matching` measured, landing around 25–30×
+slower than JS after recovering the 15× engine-inefficiency component —
+*better* than 275×, but still disqualifying for the annotator-shaped
+workloads this project cares about. **The native simulator is what actually
+reaches parity while still consuming a rope** — the one combination nothing
+else offers, since host engines and the Rust crate are fast but need flat
+buffers, and a cljc simulator reads a rope but is slow. So the shipped
+design is genuinely three parts: a shared cljc pattern compiler (parse, build
+the NFA, emit a program — runs once per pattern, cached, so it need not be
+fast), a cljc reference simulator (the conformance oracle, and what a brand
+new host runs on day one before it has its own), and a native simulator per
+host reading through a rope cursor (a few hundred lines each; the fiddly
+part is capture-group tracking, for which Russ Cox's writing on Pike VMs is
+the reference). A consequence worth stating: this makes the rope itself
+load-bearing in the Rust runtime rather than incidental, since the native
+simulator depends on it existing there.
+
+### The compiled pattern is a cached value, and caching had a determinism trap
+
+A `TY_REGEX` object holds the compiled NFA and is interned on `(source,
+flags)` in a **weak** table — the same mechanism strings and keywords
+already use — so two `(re-pattern "abc")` calls share one object, and an
+unreferenced dynamic pattern (built in a loop from a fresh source string
+each time, e.g. `(re-pattern (str "^" prefix))`) is collected rather than
+leaking forever. A `#"…"` compile-time literal is different and is meant to
+be: it lives as a constant for the module's whole life, strongly rooted by
+construction, which is correct rather than a leak.
+
+**The trap: caching threatens gas determinism in a way that is easy to
+miss.** `resource-limits` made the instruction budget deterministic
+specifically so the same program reports the same count on every machine —
+but *whether a compile happens* now depends on *whether a collection
+happened to run*, which itself depends on unrelated allocation history. So
+gas is charged at every `re-pattern` call, cache hit or not, priced on the
+compiled program's size — the cache then saves wall-clock time and never
+moves the instruction count, which also closes the exact hole
+`resource-limits` names in its own terms (a native whose cost is not O(1)
+must charge for what it actually did). A second, related hazard is bounded
+the same way: counted repetition like `(a{100}){100}` is a tiny pattern
+source producing an enormous NFA — a memory-exhaustion path with an
+innocent-looking source, so the compiled program size is bounded and a
+pattern that would exceed it is refused by name rather than left to run out
+of memory.
+
+---
+
+## tables
+
+**Columnar storage that is a value**
+*(formerly `0026`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): partly built — steps 1–6 of 9.** The value type, row refs,
+`assoc`/`conj`/`update-row`, iteration, the constant-column encoding, and
+`migrate` all ship on the wasm and native runtimes, extensively measured.
+Not built: the transient (step 7 — since built per the source's own later
+notes), the column API, the codec/reader tag, and the JVM/CLR ports
+(deliberately last, so the type is ported once rather than after every
+step). This decision is heavily cited across the runtime and is treated at
+length.
+
+### What was decided
+
+A table is a **vector of maps from the outside** — `(get t 0)` gives
+`{:a 1 :b 2}`, `count`/`assoc`/`update` all work exactly as on a vector of
+maps — backed by **columnar chunks in a persistent trie, with a schema fixed
+at construction (a closed schema).**
+
+### Why: closing the schema is the whole design
+
+A vector of maps stores every key in every row — ten thousand rows of
+`{:a int :b int}` is ten thousand map objects, twenty thousand key
+references, and a hash lookup per field access. The same data stored by
+column is two arrays and an index, and scanning one field touches one
+array — Arrow's argument, not new, except that here it has to be a genuine
+**persistent value**: structurally shared, `=` by content, safe to hold
+across a collection, which Arrow (a mutable buffer with a schema) is not.
+This is flint's own persistent trie with columnar leaves, the same
+technique its vectors and maps already use for the same underlying reason.
+
+**Closing the schema is what makes the rest of the design fall out cleanly
+rather than requiring case analysis.** An earlier draft spent real effort
+deciding what to do about ragged rows, a null bitmap for absent fields, and
+an overflow map for keys outside the schema; closing the schema — column
+names and each column's type are fixed at construction — deletes the
+question entirely rather than answering it: `assoc` to an unknown key is
+rejected, naming the key and which columns actually exist; `assoc` with a
+value of the wrong type is rejected, naming the column, its declared type,
+and what was given. These are ordinary runtime errors, not the optional
+`#?(:flint/check ...)` mechanism of `checks` below — a *closed* table that
+silently accepted a bad row in a release build would not actually be
+closed. What they do borrow from `checks` is the *quality* of the message
+(expected, actual, and which column) rather than a class-cast exception
+three frames removed from the mistake. And because the schema is closed, a
+column's encoding can be chosen freely per chunk — collapsed to a single
+constant, run-length encoded, dictionary-encoded — entirely invisibly to
+`get`, because there is no possibility of an unexpected shape arriving that
+would force the encoding to be re-derived.
+
+### The shape, and why a row is a reference rather than a map
+
+The persistent vector trie already exists and already path-copies for
+`assoc`; a table reuses that exact trie with a different leaf — a **chunk**,
+an array of column objects, each one uniform (an unboxed `i64` run the
+collector never traces, or a `Vals` array traced normally) — so no new tree
+had to be written. Columns are addressed by a **stable id, not position**,
+which is what makes migration cheap (below) at the cost of one indirection.
+
+**Iterating a table yields table refs — schema, chunk, row index — not
+materialised maps.** A ref behaves as a map for every purpose (`get`,
+keyword lookup, `count`, `keys`, `vals`, `seq`, `contains?` all work,
+`map?` is true, `kind` is `:map`, so code that does not know it is holding a
+table keeps working — the same "many kinds answer one `kind`" pattern
+`strings-and-matching` already established for its three string tiers) and
+equals/hashes identically to the equivalent literal map. It does **not**
+hold the table — only the schema and one chunk — so retaining one row out of
+a million-row table retains one chunk, not the table; and because chunks
+are themselves persistent, a ref can never dangle: a later `assoc` on the
+table path-copies rather than mutating the chunk a ref is looking at, so the
+ref keeps seeing exactly the row it was made from. `assoc` on a ref produces
+an ordinary map (a ref is a *view*; changing it makes an independent value,
+touching neither the chunk nor the table). This also quietly deletes a
+special case an earlier draft required: `get-in` needed special-casing to
+avoid materialising a row, but since `(get table 0)` already materialises
+nothing via a ref, the general path already is the fast path.
+
+### Why a table is not `=` to the vector-of-maps it prints as
+
+`(= table [{:a 1}])` is **false** — a table is its own distinct kind of
+value, and this was a real, reconsidered decision rather than an accident:
+refusing that equality is what lets `hash` be genuinely columnar (hashing a
+million-row table can hash column *runs* rather than materialise a million
+maps first), and an `:int` column and an `:any` column holding the same
+numeric values are legitimately different tables, which vector-of-maps
+equality could never express. `flint/table` is deliberately **not** a
+reserved tag in the sense `tagged-literals` and `bridges` use that word —
+reserved there means *confers authority* (forging `flint/port` fabricates a
+claim on something); forging a table only fabricates data, which anyone can
+already do by writing a literal, so it needs no special protection.
+
+**The printer does not know about tables, and that decision saved real
+bytes.** The first implementation branched inside the shared printer
+function directly, and that branch alone cost 15,832 bytes in *every*
+module that prints anything at all, because the shared printer is linked by
+nearly every program and the branch's closure became a `call_indirect`
+target the tree-shaker had to conservatively keep everything reachable
+from. Making the table type implement the existing `Printable` protocol
+instead — exactly the mechanism a protocol exists for — means a program
+that never `require`s `flint.table` prints a table as `#<unprintable>`,
+which is correct: such a program could never have built one in the first
+place, and requiring the decoder (needed if a table can arrive over a
+port) brings the printer in with it for free rather than as a separate cost.
+
+### Migration: explicit, and usually startlingly cheap
+
+A schema change makes a **new table**, never in-place evolution or
+inference — `(migrate t new-schema)`, optionally with a per-row mapper.
+Because chunks address columns by stable id rather than position, two of
+the three cases are **head-only edits that share every existing chunk
+unchanged**: removing a column just omits its id from the new schema
+(measured: dropping a column from a 50,000-row table costs 218 gas, against
+6,750,156 to rewrite every row — roughly 31,000× cheaper); adding a column
+with a constant default is *also* head-only, because a constant column is
+exactly the "collapse to one value" chunk encoding already described (a
+20,000-row column that never varies costs 160,368 bytes less than one that
+does — one 8-byte slot per row, entirely). Only adding a column computed by
+a per-row mapper actually has to rewrite chunks, because those values
+genuinely differ per row — and that cost is explicit and visible in the
+API rather than something `assoc` could accidentally trigger.
+
+### What the measurements say the type is actually for
+
+The two numbers that justify the whole design, on a 40,000-row table with
+build cost subtracted: scanning one field with `reduce-column` costs 200,011
+gas and **32 bytes allocated**, against 2,764,077 gas and 2,912,152 bytes
+doing the same sum by walking materialised rows — the scan touches chunk
+runs directly and never builds a row at all. A `slice` of 38,000 rows costs
+3,871 gas and 30,848 bytes, against 10,480,385 gas and 34,153,240 bytes to
+rebuild the same range from scratch, because `slice` shares every chunk it
+spans (the same "share large, copy small" discipline `strings-and-matching`
+uses for rope slices, achieved here by construction rather than by a
+threshold) and drops chunks outside the range so a slice does not retain
+the whole table. `select` is simply a `migrate` to a narrower schema, so it
+inherits the head-only sharing for free. And the transient, once built,
+turned out to have a real surprise in it: appending 20,000 rows through the
+persistent path allocates 49,061,464 bytes and collects 23 times, against
+3,082,984 bytes and one collection through a transient — but a *full* open
+chunk handed over uncopied on seal turned out to allocate *more* than the
+bulk-build path it was meant to beat, which only the measurement (not the
+design) revealed.
+
+### The wire and print format changed once, because the first one could not read back
+
+An earlier print form, `#flint/table [{:a 1}]`, could not round-trip: it
+loses the schema's declared types, and types are half of a table's identity
+(an `:int` column and an `:any` column holding identical values are
+different tables). The corrected, tested form is
+`#flint/table {:schema [[:a :int]] :rows [{:a 1}]}`, bound as a built-in
+reader tag to `flint.table/read-table` (via the mechanism `reader-tags`
+below provides), with the round trip actually *run* in the test suite
+rather than merely claimed. The wire codec's table tag is **columnar, not
+row-major** — schema, row count, then each column written out in full
+before the next starts — because a row-major encoding would just be a
+vector of maps with extra steps, forcing a receiver to rebuild a map per row
+to read a single field, which defeats the entire point of the type. The
+same commit that added the table wire tag also had to add a wire tag for
+tagged literals (`tagged-literals`), because neither type had one yet and
+without it both were confined to being image constants, unable to cross a
+port at all — half of what each type existed for.
+
+---
+
+## tagged-literals
+
+**A tagged literal is a value, not a map**
+*(formerly `0034`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): shipped.** `TY_TAGGED` on all four runtimes.
+
+### What was decided
+
+`#my.ns/thing v` reads to its own heap type — `TY_TAGGED`, two slots, a
+namespaced symbol and a value — rather than to a two-key map like
+`{:flint/tagged 'my.ns/thing :flint/value v}`.
+
+### Why a map was not good enough
+
+**A tag is structurally ambiguous with a map in every format that has both
+natively.** EDN and CBOR carry tags as a first-class concept, so a codec
+meeting `{:flint/tagged x :flint/value v}` cannot tell whether it is looking
+at a tagged literal that should round-trip as `#x v`, or an ordinary map
+that happens to use those two keys — guessing by shape breaks round-tripping
+in whichever direction is guessed wrong. **JSON loses the namespace
+entirely**, since `#my.ns/thing` is a namespaced symbol and degrading it
+through a string-keyed map either flattens the namespace into the name or
+drops it, so the tag no longer identifies what it identified. And it made
+the `bridges` forgery guard a **shape heuristic rather than a name check**:
+refusing a guest value that would serialise to a reserved tag had to inspect
+every map for two particular keys, where a real type lets the check be one
+comparison on the tag symbol of a value that is unambiguously a tagged
+literal, with no false positives.
+
+`assoc` on `:tag` or `:form` preserves the type; on any other key it
+**refuses, naming the two keys that exist** — the object is exactly two
+slots, so the alternative (silently promoting to a map) would quietly lose
+the taggedness, which is the kind of silent coercion this codebase refuses
+everywhere else. `map?` is **false** and `kind` is `:tagged`, deliberately:
+answering the map-lookup protocols is not the same thing as *being* a map,
+and `kind` is the closed set protocol dispatch runs on
+(`threads-and-ports`) — answering `:map` would make every
+`extend-protocol :map` in every program silently start catching tagged
+literals too.
+
+### Later
+
+The reader itself no longer *invents* a tagged literal for an unrecognised
+tag — see `reader-tags`, immediately below, for why and what changed.
+
+---
+
+## reader-tags
+
+**A reader tag is a name; the var it names is the identity**
+*(formerly `0035`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): partly built.** An unknown reader tag in source is an error, as in
+canonical Clojure. Tags are bound per project in `deps.edn` under
+`:flint/tag-readers`, mapping a short tag name to a fully-qualified var, and
+apply only to that project's own source roots. `#flint/table` is built in.
+Not built: `reader-tag-of`, so a printer can ask what name the current
+build bound to its own reader.
+
+### What was decided
+
+`#foo/bar form` in source used to build a tagged literal out of *any* tag at
+all, whether or not anything had claimed it. That is now an **error**. A tag
+is bound to a reader **var**, per project, in `deps.edn`, and the binding
+applies only when reading that project's *own* source roots — a
+dependency's tags are read under the dependency's own bindings, never the
+requiring project's.
+
+### Why inventing a value for an unknown tag was actively dangerous
+
+It is not merely non-conformant with Clojure — a mistyped tag (`#inst` for
+`#instant`, a namespace misremembered) used to read as a perfectly good
+value and then fail somewhere else entirely, or silently do the wrong
+thing, with the failure arbitrarily far from the typo that caused it. A tag
+is a *request for a reader*, not permission to invent a value. `(tagged-
+literal 'a/b form)` and `clojure.edn/read-string` with explicit `:readers`
+both still work exactly as before and are the two things that should keep
+working — what changed is only the reader's own default behaviour on an
+unclaimed tag.
+
+### Why a global registry (Clojure's answer) does not fit here
+
+Clojure's `data_readers.clj` registry is global and classpath-rooted: two
+libraries that both want `#inst` collide, a project cannot locally rename a
+tag it finds too long, and a dependency's tags are in scope for your source
+whether you asked for them or not (and vice versa) — one namespace of tag
+names, everybody sharing it. **The fix is keeping the tag *name* and the
+reader *identity* strictly apart**: a binding maps a short, convenient,
+*not-necessarily-unique* name to a fully-qualified, therefore-unique var,
+and the binding is scoped to one project's own roots. That makes using a
+library's tag opt-in, renaming one purely local, and lets two libraries that
+both want `#x` coexist without collision, since the root project can bind
+one of them to `#y` while both readers stay reachable.
+
+### Why printing has to ask the same question reading does, and the first draft got this wrong
+
+The first draft assumed printing should always emit the *canonical*
+(fully-qualified) tag, on the theory that an alias is purely a read-side
+convenience — by analogy with `clojure.string` always printing under its
+real name regardless of what a namespace happened to alias it as locally.
+**That analogy only holds for globally-unique qualified names, and a bare
+tag name is not one.** If library A prints values with `#x`, and the root
+project has rebound A's own tag to `#y` locally because library B also
+wanted `#x`, then a value of A's printing itself as `#x` produces a form
+which, read back **in that very same project**, silently calls B's reader
+instead — a plausible-looking wrong answer, which is worse than an
+unreadable one. So printing must ask exactly the question reading answers:
+*in this program, what name is currently bound to this reader?* The answer
+is resolved once, at **build** time (`reader-tag-of`, not yet built, is
+meant to resolve to a literal string at compile time, costing nothing at
+runtime and adding no registry to the image — `tables` already paid 15,832
+bytes once for an unconditional printing branch, and this is deliberately
+avoiding a repeat).
+
+### The rewrite must remember what it was, or errors point at generated code
+
+`#x form` is **rewritten** to `(the-bound-var form)` at read time — the
+reader calls nothing, needs no compiler in scope, and does not care whether
+the var turns out to be a macro (which can fold the whole literal to a
+constant at compile time, which is exactly what `#flint/table` wants) or an
+ordinary function (an ordinary call, evaluated when that code runs). But a
+rewrite that forgets its own origin reports errors against code nobody
+wrote, so the emitted form carries `:flint/read-form` (the tag exactly as
+written, as a `tagged-literals` value — so `pr-str` gives back `#x [1 2]`
+character for character) and `:flint/read-var` (what it actually resolved
+to), because the two errors that matter name different things: "no reader
+bound to `#x`" names the tag, "the reader threw" names the var. This is
+explicitly the same fix, one layer bigger, as an earlier bug where reader
+conditionals used to relabel their expanded result with the position of the
+`#?` itself, breaking every check failure inside a conditional's branches —
+the rule that fixed that bug is the rule applied here: *a form that already
+knows where it came from does not get relabelled by whatever it came out
+of.* The rewrite also has to survive macro expansion (an expansion inherits
+`:flint/read-form` from the form it came from, unless it already carries its
+own), and costs nothing at runtime, since it is metadata on a form and forms
+never ship.
+
+### Why the SDK integration stalled, and what actually unblocked it
+
+This file's own second listed step — "the SDK's equivalent of the
+`deps.edn` key" — sat undone for a long time because the SDK had no notion
+of a *project* at all, only a flat map from path to source with every file
+a peer. The fix that landed was not a second, parallel option carrying
+`{tag-name -> var}` (which this file's own first draft proposed, and which
+would have been a second route to the same fact — precisely how the two
+front doors, CLI and SDK, get out of step with each other in the first
+place). It was `workspace-capabilities`' namespace resolver: one function
+both front doors build, answering `{:src :file :workspace :tags}`, with tags
+becoming one field of a record every namespace already carries rather than
+a value threaded separately beside it. The proof that landed with it: two
+workspaces binding the *same* tag name to *different* readers, compiled
+together, each source reading correctly under its own binding — plus the
+companion assertion that a tag no workspace has bound is still refused, so
+the positive case is not merely "tags appear from nowhere and are accepted."
+
+---
+
+## checks
+
+**Checks that cost nothing in the build that ships**
+*(formerly `0032`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): shipped.** `#?(:flint/check ...)` on by default, removed entirely
+by `:optimize [perf]` before source is even collected.
+
+### What was decided
+
+`(expect pred x)`-style argument checks are written as a **reader
+conditional**, `#?(:flint/check (expect nat-int? n))`, with `:flint/check`
+in the reader's default feature set.
+
+### Why
+
+Good error messages and cheap production code normally pull in opposite
+directions: a library that validates arguments pays for the validation on
+every call forever, while one that does not hands back a null three frames
+from the actual mistake. The usual compromises are both bad — assertions
+behind a runtime flag still cost the branch and still ship every message
+string; a separate "debug build" means the thing that was tested is not the
+thing that ships. Making the check a reader conditional sidesteps both: under
+`:optimize [perf]` it is stripped **before the source is even read**, so the
+branch is never analysed, never appears in the image, and `flint.check`
+itself is absent from the program entirely — not merely "compiled away."
+That is what lets checks be **on by default**, which is the actual point:
+a check nobody remembers to turn on is a check nobody has.
+
+**Predicates carry their own explanation, because a predicate is a
+value, not always a name.** An early version recognised standard-library
+predicates by *name* and looked up a canned message — which handles
+`(expect string? x)` and fails completely on `(expect x 1 2)` where `x` is
+a local bound to some other predicate value. The fix is a `Predicate`
+protocol (`check`/`explain`), dispatched first on a value's metadata and
+falling back to its `kind`, so a plain function still works via `:fn`
+implementing `check` as `apply`, while a function that *carries*
+`flint.check/explain` metadata explains itself specifically. This forced
+two real capability gaps to close: closures previously could not carry
+metadata at all (`with-meta` on a closure silently no-opped, fixed by moving
+the metadata slot to the end of `TY_CLOSURE`'s layout so every existing
+upvalue index stayed unchanged), and a `defn`'s own metadata normally lands
+on its *var*, which a callee never sees — routed instead through a
+dedicated `:flint/value-meta` key that lands on the function itself.
+
+**Error messages are built entirely from `&form` at macro-expansion time —
+no source text is embedded in the image and none is read back at
+runtime.** Getting an accurate caret under the failing sub-expression needed
+two real reader changes, both worth keeping independent of this feature:
+symbols, vectors, maps, and sets now all carry `:line`/`:column` (Clojure
+itself never does this for symbols, which is a limitation with no reason to
+reproduce), and since a literal itself cannot carry metadata, its parent
+collection now carries a flat `:child-pos` array that `expect` reads to
+place the caret. Making positions universal this way surfaced a real
+pre-existing bug: a form returned from inside a `#?(...)` conditional used
+to be stamped with the *conditional's* position rather than its own,
+independent of this feature — existing metadata now correctly wins.
+
+**Tests reuse exactly the same mechanism, deliberately with no separate
+framework.** `^:flint.check/test` on a function is indexed by the compiler
+along with every other var's metadata (not specially — this one key is
+simply one client of the same general index a doc generator or lint pass
+could equally query), and from it the compiler generates
+`flint.check.registry` as source. A test passes by returning and fails by
+throwing, which is exactly what `expect` already does — there is
+deliberately no assertion count and no registration API, because a check
+that has to be manually registered somewhere is a check that can be
+forgotten. The resulting suite (`test/common`, 53 checks running identically
+on all four runtimes) covers a real gap `runtimes/conform` structurally
+cannot: that harness diffs transcripts *across* runtimes, so two ports that
+are wrong in the *same* way agree with each other and silently pass — which
+actually happened once, when both ports read a double's mantissa as an
+integer.
+
+---
+
+## threads-and-ports
+
+**Green threads, ports, and protocols**
+*(formerly `0005`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): shipped** — green threads, ports, protocols, dynamic vars. The
+port bug that ran through this whole phase is closed (`HANDOFF.md` is its
+post-mortem and the source of five standing rules the project still holds
+itself to). This is one of the two or three foundational decisions in the
+codebase and is treated at full length.
+
+### What was decided
+
+`open` (and everything else that can block — a send to a full port, a
+receive on an empty one) **parks a green thread rather than blocking the
+host**, ports are typed endpoints with value semantics, dynamic vars are
+scoped per green thread, and polymorphism is built entirely on protocols
+dispatching on a closed set of built-in kinds plus metadata.
+
+### Why parking, not blocking — the decision that shapes everything after it
+
+The obvious reading of "a blocking `open` that calls out to the host" runs
+straight into the one genuinely hard problem in wasm: a synchronous wasm
+export cannot be suspended mid-execution to await a host answer. The two
+standard escapes are both bad for this project specifically: **JSPI**
+(JavaScript Promise Integration) is JS-hosts-only, which trades away the
+portability that is the entire point of the project; **Asyncify** works
+everywhere but costs code size and speed on *every* function, forever,
+whether or not it ever actually suspends.
+
+**flint needs neither, because it is an interpreter.** A green thread is
+just VM state — its own value stack and frame stack, nothing more — and the
+scheduler is a loop picking a runnable thread and running it for a step
+budget. "Blocking" means *this thread is not runnable until something makes
+it runnable.* Nothing ever blocks the host and nothing ever suspends a wasm
+frame, because the interpreter never actually leaves its own dispatch loop —
+this is the same leverage `dispatch` was already implicitly paying for by
+choosing an interpreter, and this decision is where that leverage gets spent
+deliberately. The module's exported interface grows from "call `main` once,
+get an answer" to: the host calls `main`; the scheduler runs until every
+thread is finished or parked; if any are parked on host ports, `main`
+returns a status meaning "I need the host," with pending requests readable;
+the host services them and calls back in to resume. **The pure case stays
+exactly as simple as it is today** — a program with no ports runs to
+completion in one call with no pump loop and nothing new for the host-side
+caller to think about.
+
+### The rest follows from that one design choice
+
+**None of this may grow a pure module.** Threads and ports are namespace
+units like any other (`namespace-units`), so a program that never mentions
+`open`, `channel`, or spawning a thread must produce a module with no
+scheduler, no port machinery, and no host callback surface at all — the same
+size as before this feature existed, asserted by a test rather than trusted.
+
+**The GC's whole design rests on "the VM's value stack IS the root set,"
+and N threads mean N stacks — including parked ones full of live
+references nothing is currently executing.** The root walk has to iterate
+the thread table, and the thread table is itself a root. The standing
+stress-testing discipline (spawn threads, park some, collect at every
+allocation, check parked threads resume with values intact) exists
+specifically because getting this wrong produces a use-after-collect that
+only appears when a collection lands while a thread happens to be parked —
+exactly the case ordinary tests would never hit by accident.
+
+**Dynamic vars are scoped per green thread, not per host thread** — this
+removes a limit the README used to list, and forced one genuine open
+question to be answered rather than left implicit: does a spawned thread
+inherit its spawner's `binding`s? (Clojure conveys them to `future` and to
+agents.) Either answer is defensible; silence is the actual bug, since it is
+exactly the kind of thing somebody would otherwise discover through a
+production incident at three in the morning.
+
+**Ports: `open` signals the host, which allows or refuses**; refusal must be
+a clean, catchable error, not a crash, since "the capability is not
+available" is an entirely ordinary and expected outcome. A send to a full
+port parks the sender using the *same* parking mechanism as `open`, not a
+second one. What may cross a port is **data, and other ports — nothing
+else**; functions and closures are refused by name at the point of sending.
+
+**Transfer is by value, and passing by reference within one runtime is a
+safe optimisation specifically because flint values are immutable** — the
+same property that later justifies sharing structure in ropes and vectors.
+Ports themselves are the deliberate exception: a port has identity and
+mutable state, so sending a port through a port raises a real design
+question (does the sender keep its own end, or hand it over?) which this
+document leaves as a decision to be made and stated explicitly rather than
+allowed to default silently — later reversed and resolved by
+`structured-ports`.
+
+**The scheduler must be deterministic, and this is treated as close to the
+whole value proposition of the project.** A pure logic executor whose
+answer depends on scheduling order is not worth its name — round-robin, a
+fixed step budget, no randomness, no wall-clock dependence, the same program
+and the same host event order producing the same answer every time. This
+determinism is what `resource-limits`, `debug-runner`, and `snapshots` all
+later depend on and build further guarantees on top of.
+
+### Protocols, and the largest deliberate deviation from Clojure in the language
+
+flint has **no `deftype`, no `defrecord`, no host classes** — so "what type
+is this?" has no general answer the way it does in Clojure, which makes the
+dispatch design here genuinely different, not merely smaller. **Built-in
+kinds are a small, closed set** — nil, number, string, keyword, symbol,
+vector, map, set, list, fn, port, and (as the language grew) thread, atom,
+var, regex, exception, tagged, opaque, bytes, delay, volatile, schema,
+table — and protocols extend to those by kind. The rule that governs the
+set's growth, arrived at after a real near-miss: **`:other` is not a
+kind — it is the absence of one**, and a value answering `:other` cannot be
+dispatched on at all. For a long stretch, four kinds of value a guest could
+actually hold (opaque values, byte strings, delays, volatiles) all answered
+`:other`, which meant a single `extend-protocol :other` written for any one
+of them would have silently caught *all* of them, plus every future type
+added later. The corrected rule: **anything a guest can hold gets a kind of
+its own**; `:other` exists only for what a guest categorically cannot hold.
+
+**Everything else dispatches on metadata**, which Clojure has as
+`extend-via-metadata` — opt-in, and something of a corner case there.
+**Here it is the primary mechanism**, stated plainly as a real deviation
+rather than left for someone to infer, because there is nothing else for a
+user-defined abstraction to be, given the absence of `deftype`/`defrecord`.
+A method key belongs to the protocol that *defines* it, never to whichever
+namespace happens to be doing the extending — `extend-protocol` originally
+built its dispatch key from the *extending* namespace, which meant
+extending a protocol from a namespace other than the one that defined it
+silently wrote an implementation under a key nothing would ever look up,
+failing invisibly (`protocol-miss`) at some unrelated later call. Nothing
+caught this for a long time because every protocol test both defined and
+extended in the same file, where the two namespaces happen to coincide — it
+only surfaced once the printer itself moved onto a protocol so a library
+type could print itself, which is precisely the cross-namespace case the
+mechanism exists to serve. One further hard limit falls directly out of the
+value encoding and is stated rather than left to be discovered: **inline
+values cannot carry metadata** — small strings, keywords, and characters are
+interned directly into the value word itself, so there is nowhere to hang a
+metadata map at all.
+
+---
+
+## host-abi
+
+**Tokens, one event queue, and where the marshalling cost actually is**
+*(formerly `0006`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): shipped** — tokens, one event queue, two lifetimes. Refines
+`threads-and-ports` §5; several of its specific rules were later reversed by
+`structured-ports` and `ports-are-the-hosts`, noted inline below.
+
+### What was decided
+
+A single continuation **token** generalises every parking operation; a
+**single outbound event queue** replaces separate host exports per event
+kind; the runtime creates both ends of a channel pair itself rather than
+round-tripping through the host; `continue` always **enqueues**, never
+re-enters the scheduler; and a port's two ends have genuinely **separate
+lifetimes**, with the host end acting as a strong GC root.
+
+### Why
+
+**The token generalises, because everything that parks parks the same
+way.** `open`, a send to a full port, a receive on an empty one — one
+waiter table, one token type, one resume path; the host never learns what a
+"thread" even is, only that it holds a token to hand back later. The token
+must pack an **index with a generation counter**: a bare index is reusable,
+so a late or duplicated host reply would resume whatever now happens to
+occupy that slot — a wrong thread, silently woken with a stranger's value,
+which is close to unfindable in production. Bumping the generation on free
+and rejecting a mismatched token costs one `u32` and closes that hole
+outright. A host that simply never calls `continue` leaks a parked thread,
+and that has to be made *visible* — countable, nameable in a diagnostic —
+rather than a silent, permanent stall.
+
+**One event queue, not several host exports**, because separate exports
+mean separate calls, separate ordering rules, and multiple chances for a
+host implementation to forget one; draining everything pending in one call
+also amortises the marshalling cost, which turns out to be the actual
+expense (see below), not the call boundary itself.
+
+**`continue` must enqueue, never re-enter.** If a host calls `continue`
+*while the runtime is already running* — from inside a host function
+invoked by wasm — a naive implementation would re-enter the scheduler on top
+of itself. The rule is unconditional: continue only records the answer and
+marks the thread runnable; the scheduler picks it up on its next pump. This
+is cheap to specify correctly up front and a genuinely miserable class of
+bug to find after the fact if it is not.
+
+**Where the cost actually is, and therefore what has to be batched.** A
+wasm↔host call itself is tens of nanoseconds — the expensive part is
+**marshalling**: copying bytes out of linear memory, parsing, allocating
+host objects. So a message is serialised into linear memory at send time
+(the host reads byte ranges and never walks the flint heap or needs to know
+the value encoding at all), the event queue drains everything pending in one
+call so the per-message boundary cost goes to zero, and buffers are bounded
+in **bytes, not message count**, since back-pressure exists to bound memory
+and one 4 MB message is not "one message's worth" of anything. Eagerly
+serialising costs real work even when a host never actually reads a given
+message — accepted deliberately, because it is what makes the drain cheap
+and the byte bound meaningful; if a later benchmark said otherwise, that
+would itself be a real finding worth having.
+
+**Formats: JSON, EDN, and a binary EDN — and JSON's limits must be an
+error, never a silent coercion.** Transit (msgpack) is the recommended
+starting point for binary rather than inventing a fourth format, since it
+already exists for exactly this and already has the extension mechanism
+tagged literals need. The important, load-bearing fact: **JSON cannot
+represent EDN.** Keywords, sets, symbols, tagged values, and non-string map
+keys have no JSON form, and "the runtime will try to convert" hides exactly
+the failures that matter — a keyword silently becoming `"a"` does not
+round-trip; `{:a 1}` becoming `{"a": 1}` is convenient, lossy, and
+asymmetric; a set becoming an array loses its setness. So a value that
+cannot be represented in the chosen format is a **send-time error naming
+the value and the reason**, never a coercion — where a convenience coercion
+is genuinely wanted (keyword map keys to strings is the common case), it is
+an explicit, off-by-default option on the port, the same way
+`clojure.data.json`'s `:key-fn` is the caller's decision to make, not the
+library's.
+
+**Lifetime: two ends, two genuinely separate lifetimes, and a safety net
+under the common failure mode.** The request was for the runtime to signal
+when a port is collected or closed. The first-pass answer — a host-held
+port is rooted by the host end and lives until the host explicitly closes
+it — was correctly called too optimistic: it left explicit `close` as the
+*only* way a script could signal it is finished, and the common failure is
+not a script that forgets to close, it is one that throws, or simply
+returns having dropped its last reference. So: **the host end is a strong
+root** (a port cannot be collected while the host holds a handle — without
+this, every host handle is a use-after-free waiting for a collection), while
+**the flint end is ordinary reachable memory**, and when the collector finds
+it unreachable that is treated as semantically identical to the script
+having called `close` itself — the runtime emits a `:closed` event on the
+script's behalf. This reuses the collector's existing weak-reference
+machinery, applied here to the flint end of a port. Collection-triggered
+close is explicitly a **safety net, not the primary mechanism** — it is
+deterministic but not *prompt*, and a host holding a socket open because a
+script simply has not been collected yet is a real cost, so `with-open`
+remains the documented good path, closing on both the normal exit and a
+throw.
+
+**An event is a notification; the port's own state is the truth, and this
+distinction generalises beyond ports.** The host learns a flint end closed
+two ways and needs *both*: a pushed event for prompt reaction, and a
+queryable state for the case that actually matters — **if an event is the
+only way to learn a durable fact, then an event that is dropped, missed, or
+not yet drained is an unrecoverable leak.** Making the state queryable turns
+the event into an optimisation over polling rather than the sole carrier of
+truth, and this same principle is stated as one worth applying to anything
+else this ABI ever notifies about. It is symmetric: a script can query its
+own end's state the same way, and — more importantly — a send or receive
+against a port whose peer is already gone must **error rather than park**,
+since a script blocking forever on a host that has already hung up is the
+identical failure to a host silently leaking a handle, seen from the other
+side. The same reachability machinery buys **deadlock detection nearly for
+free**: a thread parked on a receive whose peer end has become unreachable
+can never succeed, and rather than hanging forever it is woken with an error
+the moment the collector notices — a genuine liveness property falling out
+of work the collector is already doing for other reasons.
+
+### Later
+
+`structured-ports` reverses the "ports are not transferable" rule this
+document treated as settled (deliberately, as the right *default* rather
+than a permanent limit — "transfer can be added later; it cannot be
+removed"). `ports-are-the-hosts` moves port ownership itself out of the
+sandbox, changing who creates a port and where the queue actually lives,
+though the token/generation mechanism and the two-lifetimes model both
+survive into that redesign essentially unchanged.
+
+---
+
+## structured-ports
+
+**A wire codec, and structured ports**
+*(formerly `0025`)*
+
+**Ratified:** ☐ not signed off
+
+**Status: contradicted by the code, and checked directly rather than repeated.**
+This file's own banner says "NOT BUILT — a proposal," and the old project
+status index agreed. Several of its central rules are demonstrably
+implemented and treated as settled fact by the current runtime today — see
+"A discrepancy worth flagging," below, for the specific files and lines.
+
+### What was decided
+
+Four changes bundled as one: a **single wire codec** for every flint value
+crossing the host boundary; the host calls **any function by name** with a
+positional argument list, rather than one fixed entry point taking an argv;
+arguments are **data, not strings**; and — reversing the rule
+`host-abi` treated as settled — **a port can be sent through a port**, so a
+capability can be delegated.
+
+### Why
+
+**It is a codec, not a message format**, deliberately: the entry argument
+map is not "a message," it is an ordinary function argument that happens to
+arrive in the same encoding, and naming the whole mechanism after one of its
+uses would misdescribe the other. An explicit builder API exists alongside
+a convenience `from` that guesses shape from a host value, because a host
+that can only convert its own native values cannot always *say* what it
+means — `{a: 1}` is ambiguous between a string-keyed and keyword-keyed map,
+`1` between an integer and a double, `[1,2]` between a vector and a list —
+and guessing right most of the time is exactly what makes a guess a latent
+bug.
+
+**Sending a port: identities travel inline, and the first design for this
+was wrong in an instructive way.** The first draft put a transfer table in
+every encoded value — the live things it carried, referenced from the body
+by index — on the theory that a raw port id would let a guest fabricate
+`K_PORT 7` and claim a port it never held. **That defence solves a problem
+that cannot occur**: the forgery it defends against requires the guest to
+*construct an encoding* by hand, and it cannot — when a program does
+`(p/send port v)` it hands over an already-real port *value*, and the
+runtime does the encoding; for `K_PORT` to appear in the output bytes at
+all, the guest must already have legitimately held a port. `7` on its own
+encodes as an ordinary integer. So identities are simply inline —
+`K_PORT <id>`, `K_SENTINEL <host-id> <label>` — with no table, no index
+indirection, and no per-value bookkeeping.
+
+**The actual invariant is stated precisely, and it lives on the sandbox
+side, not the host side**: *flint is given no way to turn an integer into a
+port or a sentinel.* The host itself needs no protecting — it holds the
+memory and can call any export, and if it is compromised there is nothing
+left to protect. The rule this places on the codec is small and exact: the
+runtime encodes ports and sentinels only from real values, by construction;
+if a guest-callable *encoder* is ever added, the live thing itself must be
+supplied (holding it is the proof of legitimacy); and if a guest-callable
+*decoder* is ever added, it must categorically refuse `K_PORT` and
+`K_SENTINEL`, since a decoder is exactly an encoder read backwards and bytes
+are things a guest can freely write. This already held in the one place it
+mattered: `(opaque "label")` hard-codes its host id to zero on the guest
+path, so a guest-minted sentinel is honestly self-describing as
+not-one-of-mine.
+
+**One system port replaces eight separate host ABI exports and a bespoke
+record format.** Every sandbox gets a system port carrying all traffic to
+and from the host; `open` becomes a message with a transaction id on it
+rather than a distinguished export, and so does a send, a close, and
+termination. There is deliberately no special "start the program" message,
+because there is no special *the* program — a **call** names a function, its
+arguments, and a `tx`, which means an artifact is a set of callable
+functions rather than a program with one entry point, and the host decides
+which to call. This reframing renames the two central nouns to say what
+they actually are: an **Image** is the compiled, inert artifact; a
+**Sandbox** is an image instantiated, holding state, serving calls over its
+system port — the Docker image/container analogy, taken deliberately, since
+it names the property that is the whole point of the project and a reader
+who knows nothing else about flint still knows what is guaranteed. `main`
+correspondingly demotes from a mechanism to a mere convention: the function
+`flint run` happens to call when nothing else is named.
+
+**`take` drives the sandbox; `put` usually does not — and this falls
+directly out of what each verb means rather than being a separate design
+choice.** `take` runs the sandbox until it produces a message or terminates,
+so the boundary crossing happens once per *batch* rather than once per
+message; `put` merely enqueues and returns a promise so back-pressure has
+somewhere to live, except when the buffer is genuinely full, in which case
+`put` itself must drive the sandbox, because the only thing that can make
+room is the guest consuming — the same polling-park shape from the other
+side. There is consequently no separate `flush()` and no debounce parameter
+to tune: the two operations already say precisely when work has to happen.
+
+**The CLI's own conventions — an entry map of `{:args ... :capabilities
+...}`, `:with` for granting capabilities, `:optimize` as an ordered
+preference list, `:to` naming a target rather than a filename — are
+explicitly the CLI's house style layered *over* the SDK, never features of
+the SDK itself.** A program called through the raw SDK looks like whatever
+its author wanted; only a program run through the CLI takes `{:keys [args
+capabilities]}`, because the CLI is what passes that shape. This split
+matters because a mechanism that itself knows what `:capabilities` means has
+quietly taken a decision that belongs to whoever is calling it — the same
+principle `workspace-capabilities` later relies on for why the runtime has
+no notion of "capability" at all.
+
+### A discrepancy worth flagging
+
+This file's own banner reads "NOT BUILT — a proposal," and the project
+status table (formerly the `doc/decisions/README.md` index) likewise lists
+it as "Roadmap." **The current runtime source treats several of its central
+rules as already-shipped, settled fact, not as a proposal.**
+`runtime/src/codec.rs` states outright, in a normal doc comment rather than
+a TODO, "This is the whole of `0025`'s safety rule, and it is one line: a
+guest..."; `runtime/src/conc.rs` says a capability "REVERSES [`host-abi`'s
+no-transfer rule], which is the [mechanism]"; `lib/flint/port.cljc` and
+`lib/flint/virtual.cljc` both build on port delegation as a working feature,
+not a future one; and this pattern repeats identically across the Rust
+runtime and both the JVM and CLR ports' source. **The rule that ports and
+sentinels cannot be minted from a bare integer, and that a port can now be
+sent through a port, is real and load-bearing in the shipped runtime today**
+— it is the file's own status banner (and the project index derived from
+it) that is stale here, in the direction the closing note of the original
+decisions index specifically warned is the more dangerous one: understating
+what exists is what gets something rebuilt by someone who trusts the
+banner. What is **not** evidenced as built is the rest of this document's
+scope — the single unified system port replacing the eight `host-abi`
+exports, the `Image`/`Sandbox` renaming, and the resolver-based compiler
+API — which do still read as proposed rather than shipped.
+
+---
+
+## ports-are-the-hosts
+
+**Ports belong to the host, not to a sandbox**
+*(formerly `0027`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): shipped**, on all four runtimes, except two named pieces of
+follow-on work at the end. This file's own banner used to claim the whole
+design was unbuilt long after half of it had shipped and gone unreachable —
+see "A banner that lied," below, which the project's own closing
+documentation held up as its worked example of why a banner must be checked
+against the code rather than trusted.
+
+### What was decided
+
+A port is either **local** (joins two green threads inside one sandbox,
+passes values by reference — unchanged, and still as cheap as ever) or
+**global** (joins two sandboxes, passes values encoded) — and every global
+port, and the registry that owns it, belongs to the **host**, not to any
+one sandbox. A sandbox holds a global port only because it was handed one.
+
+### Why
+
+Ports were originally a sandbox's own property: each runtime instance owned
+its own registry, and a port id was simply an index into it. That coupling
+is fine with one sandbox and breaks the instant there are two: an endpoint
+that exists only inside sandbox A cannot be *held* by sandbox B, because B
+has a different heap, a different collector, and a different id space — A's
+id 3 means something else in B, or nothing at all. Inter-sandbox
+communication is not an extension of the old model, it is a direct
+contradiction of it, so the registry has to move out to something both
+sandboxes can see: the host.
+
+**This is the same inversion `opaque-values` already made for capabilities**
+— authority is never something the thing being confined manufactures for
+itself — applied here to ports specifically, which makes ports capabilities
+in fact rather than merely by analogy. Creating a *global* port becomes a
+dispatch request on the system port rather than an intrinsic a sandbox can
+just do; combined with `structured-ports`' rule that flint has no way to
+turn an integer into a port, this becomes something stronger than either
+half alone: **flint cannot obtain a global port by fabrication or by
+construction — every one it will ever hold was handed to it.**
+
+**A message between two sandboxes must be copied, never shared — and the
+encode step itself is the boundary, not an addition to it.** Two sandboxes
+have separate heaps and separate collectors, so a value cannot cross by
+reference at all, encoding or no encoding; what changes is only *where* the
+existing wire codec's encode/decode pair gets used. The collector interaction
+is the genuinely hard part any shared-registry design has to get right: a
+queued message cannot be a raw pointer into the sender's heap, because the
+nursery is copying (the object moves) and old space is swept (it can be
+freed outright) — a host-owned queue holding sandbox pointers would become a
+queue of dangling addresses after the very next collection. The split that
+avoids this is three strict layers, with no collector ever seeing a pointer
+it does not own: inside a sandbox heap, only a **handle** exists — an
+ordinary traced object carrying a host id and no pointer at all; in host
+memory, the port and every queued message exist purely as **encoded
+bytes**, which neither collector needs to trace because there is nothing
+heap-shaped in them to trace; and consequently **no cross-heap pointer ever
+exists at any point**, so there is no moment at which one can go stale. A
+local port pays none of this cost, deliberately: encoding two green
+threads' messages through a byte buffer when both share one heap and one
+collector would be pure loss, so a local port stays exactly what it always
+was — an ordinary heap object with a value-holding queue the collector
+traces normally.
+
+**Reclaiming a port a sandbox stopped holding needed a real design choice
+between two options, and the one that looks more expensive is actually
+cheaper.** A "box per arrival" (wrap each arriving port in a fresh
+heap object owning one refcount increment) looks like it avoids needing a
+table, but it still has to tell the host when it dies, so it pays for the
+same collector hook anyway — and it adds two costs a table does not have:
+identity breaks (the same port arriving in two separate messages becomes
+two different boxes, so `=` says no and a map keyed by "the" port silently
+holds two entries for it), and needless refcount churn (N arrivals of one
+port cost N atomic increments for a question whose only real content is
+"does this sandbox still hold it *at all*"). The **weak intern table** —
+one canonical handle object per global port per sandbox, incrementing once
+on first arrival and decrementing once when that canonical handle dies —
+answers both directly: each sandbox contributes at most one to a port's
+count, so the count means "how many holders," a number a person can reason
+about, rather than "how many references." Three things this table has to
+get exactly right, each named because a version of this bug has already
+happened once elsewhere in this codebase: weak-through-a-copy fixup (a
+surviving handle must be re-pointed at where the nursery moved it, not
+merely kept-or-cleared); interning itself allocates, and an allocation can
+collect, so anything live across a lookup miss must be rooted exactly as
+`a-vec-of-values-is-not-a-root` requires everywhere else; and a dropped
+sandbox must walk its own table on teardown, or it leaks every global port
+it ever held into a place no collector will ever look again.
+
+**Push must wake, never execute.** A global port supports both a parking
+`take` and a push-style readiness signal, because supporting both costs
+almost nothing over supporting either (same buffer, same lock) — and
+pull-only cannot drive a long-lived sandbox loop at all: if the only way to
+learn something arrived is polling, a host serving several sandboxes ends up
+spinning across all of them just to learn "no," burning a core and adding
+latency proportional to how rarely it asks. But it would be easy, and
+actively wrong, for `put` to run the receiver's waiting code directly on the
+sender's own thread — that would execute guest code inside a heap the
+sender does not own, potentially while that heap's real owner is
+mid-collection, and the collector's whole design assumes exactly one
+mutator per heap at a time. So an arrival does exactly three bookkeeping
+things and nothing else: append to the port's buffer under its own lock,
+mark the parked thread runnable in the *receiving* sandbox's own scheduler,
+and signal that sandbox's readiness — a sandbox is still only ever advanced
+by whoever owns it; what push buys is that the owner can *wait* for the
+signal instead of polling.
+
+### A banner that lied, kept as the project's own cautionary example
+
+This file's banner used to read "QUEUED — nothing in this file exists yet,"
+and kept saying so long after half of the design had actually been built
+and gone silently unreachable: the global-port installation functions, the
+system-port constant, and the `K_GLOBAL` tag all existed in the tree with
+**zero callers on any of the three runtimes**. Two generations of the port
+model were live in the codebase at once, and the stale banner is what let
+that state be misread as "not started" rather than "half-finished and
+orphaned" — it cost a wire-port path that was granted permission on the JVM
+and CLR and then refused by their own `send`, because the newer and older
+models disagreed about what a port even was. This is the concrete worked
+example the project's own closing documentation held up for why a status
+banner must be checked against the code when it is touched, not trusted and
+left for whoever finishes it.
+
+### What is still open
+
+The weak-table fixup through a nursery copy is handled today by a simpler
+mechanism (the sweep walks the bridge table after every collection and
+releases ids whose lookup misses) rather than the full fixup-on-forward
+scheme described above. And **back-references in the codec are not built**
+— a value whose subtree is shared ten times currently encodes ten times,
+a real, named, and still-open cost.
+
+---
+
+## bridges
+
+**A bridge owns its messages, and a port is six verbs**
+*(formerly `0033`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): not built — a proposal.** It settles who owns a message in
+flight, a question `host-abi` and `drivers` both left resting on the
+sandbox, and what the wire codec and terminology work in `structured-ports`
+and `ports-are-the-hosts` are still waiting on.
+
+### What was decided
+
+**A bridge — not a sandbox — owns messages in flight.** A port becomes a
+small six-verb contract (`reserve`/`grow`/`commit`/`abort`,
+`take`/`release`, plus `format()` and `memo()`) that knows nothing about
+sandboxes, heaps, or transports; the same interface is implemented
+completely differently underneath depending on whether the two ends share a
+process (a ring in shared memory) or not (a pipe, socket, or file).
+
+### Why: today's design cannot let a message outlive the sandbox that wrote it
+
+As things stand, every message in flight lives entirely inside the sending
+sandbox's own heap — `port_send` encodes into a byte string *in the sandbox
+heap*, and it sits in a persistent vector there until the host calls
+`drain_events`. Two consequences follow directly, and the first is the
+entire reason this document exists: **a message cannot outlive the sandbox
+that wrote it**, so a bridge cannot be handed off to a different sandbox
+with its traffic intact, and a port cannot be a genuinely durable thing. The
+second is a live, unconfirmed hazard rather than a demonstrated bug: the
+event push is a read-modify-write on a shared persistent vector with an
+allocation in the middle — precisely the shape that already lost half the
+messages on an internal inbox once before this was fixed elsewhere, and
+nothing has yet proven two executors sending across bridges concurrently
+would not reproduce it.
+
+**Ownership is claimed only at `commit`, deliberately never earlier — this
+is the whole reason ownership sits on the *slot*, not on a lease held by the
+writer.** A writer that dies mid-serialisation can therefore never wedge the
+ring; it can only strand the one buffer it was working on, never block
+anyone else. A stranded buffer still matters — exhausting the allocator
+turns every future producer into a blocked one, so an unreclaimed leak
+becomes a deadlock by a different route — and "the sandbox releases it when
+it dies" is not a sufficient answer, because a killed sandbox runs no code
+at all to release anything, and a peer process that segfaults on a
+shared-memory bridge runs none either. So **each participant allocates from
+its own arena inside the bridge**: if a participant dies, the survivor
+reclaims that participant's *entire* arena in one step — no per-buffer
+bookkeeping, no scan, no timer — and it survives even a `SIGKILL`, because
+the party doing the reclaiming is, by construction, the one still alive.
+Three designs were considered and two rejected for stated reasons: rooting a
+value in the sandbox heap until the bridge is done cannot work at all, since
+a root only keeps something alive *inside a heap*, and if the sandbox dies
+the heap is gone with it; the status-quo shared sandbox-side event buffer
+concentrates contention rather than reducing it; and per-buffer leases with
+timeouts solve the same problem as the arena refcount while adding a clock,
+a scanner, and a failure mode where a slow-but-live writer has its buffer
+stolen out from under it.
+
+**Identity tags serialise as themselves, and by *type*, which is what makes
+the design safe rather than merely convenient.** Every supported wire
+format can express identity somehow (EDN has tagged literals, CBOR has
+tags, JSON gets a documented convention), so refusing to let only `:flint`
+name a port would be an invented restriction rather than one the formats
+themselves impose — what a format actually decides is only whether it has
+*any* way to say it at all. A codec emits a port tag because it encountered
+an actual port value, never because it encountered data merely shaped like
+one, and a guest cannot construct a port it does not genuinely hold — this
+is `structured-ports`' invariant, restated at the wire-format layer rather
+than the in-memory one. Two guards are needed, defending opposite
+directions, and neither is redundant with the other: inbound, resolution is
+always mediated through the grant table, never through possession alone
+(`opaque-values`' rule, extended to cover bytes arriving from anywhere); and
+outbound, a guest value that would *serialise* to a reserved tag by any
+route throws, naming the tag — needed specifically because the far side of
+a bridge to a foreign peer (a plain socket, another process, a JSON web
+service) may have no grant table at all to fall back on, so only the
+outbound guard protects a peer that is not flint's own.
+
+**Two JSON dialects, not one with judgement calls, so the caller chooses
+explicitly what it needs.** `:json-strict` degrades best-effort into plain
+JSON and throws for anything that genuinely cannot fit — and the refusal
+list (bigints, non-string map keys, ports, opaque values) is not arbitrary:
+the rule is that *type* loss is acceptable but *value* loss is not, which is
+one rule deciding the whole table (a keyword returning as a string is
+weaker typing over the same data; a bigint through a JSON double comes back
+silently rounded, which is wrong arithmetic, not weaker typing). A plain
+JSON number is exact only to 2^53, but a flint fixnum's range is comfortably
+inside that (±140,737,488,355,327, roughly 64× more headroom than needed),
+so **every fixnum round-trips exactly through `:json-strict`** — it is only
+a bigint that can actually exceed the safe range, which is why only bigints
+are refused rather than all integers. `:json` adds a `$flintTag` convention
+for exactly what plain JSON cannot express (ports, opaque values, bigints,
+tables, sets) — and the table's own tag payload is deliberately
+**columnar**, for the identical reason `tables` chose columnar storage in
+the first place: a row-major vector-of-maps repeats every column name on
+every row, where a columnar payload names each column exactly once, keeping
+the format's own compactness argument intact all the way out to the wire.
+
+---
+
+## drivers
+
+**A driver: ports are the only way to drive a sandbox**
+*(formerly `0028`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): partly built.** The SDK shape exists in Rust — `Driver`,
+`Inline`, `ThreadPool`, an asynchronous `call`, coalesced dispatch (measured:
+200 requests coalesced into 1 dispatch). Underneath, the heap has moved out
+of the single-threaded `Rt` struct and two executors now genuinely share one
+heap across real collections (50 collections, roots fixed up across both
+threads, verified by value) — but this is recorded as **not yet safe**,
+tracked as a deliberately-ignored test rather than left as a silent gap:
+the intern tables, the remembered set, and `globals` are not yet protected,
+so the driver still effectively serialises today — K > 1 is *correct* and
+not yet *faster*.
+
+### What was decided
+
+`Sandbox::call` used to run a program **on the calling thread** directly,
+which forecloses thread pools by construction: a sandbox that only ever
+advances when something calls directly into it cannot be advanced by a
+pool, since a pool's entire job is deciding *when* and *on which thread*
+work happens. So the host stops driving directly: **ports become the only
+way to drive a sandbox**, with a **driver** sitting between the ports and
+the sandbox deciding when and on what thread to actually run it.
+
+### Why
+
+**The only safe place for a thread to stop is the interpreter's own
+checkpoint.** A collection moves objects, so any thread that stops while
+holding a `Value` in a plain host-language local resumes holding a stale
+pointer the instant a collection runs. Under one executor that rule only
+ever applied around your *own* allocations; under several it applies around
+*everyone's* — which is exactly `a-vec-of-values-is-not-a-root`'s rule,
+generalised from "a Rust local across an allocating call" to "any thread
+that might stop while another thread allocates." A thread inside a native
+function does not poll and genuinely cannot stop, so the collector simply
+waits for it — a real latency cost, not a correctness one, and a distinct
+concern from the second point below: **a collector must wait only for
+threads that can actually stop.** The first version of this deadlocked
+outright, and the cause is worth keeping: it waited for every *registered*
+executor, including one that had already finished all its work and was
+polling nothing — "registered" and "actively running" are two different
+questions, the same split a JVM draws between a thread that is "in Java"
+versus one that is "in native."
+
+**Real bugs found while building this, kept because each is a specific,
+recurring shape.** An `Rt` must never move once registered, because what
+gets registered is the *address* of its root stack — wrapping one in a
+`Mutex`/`Arc` after registration let the collector walk freed memory
+(observed as a stack-top value of 14,728,600,375,357,765,408 against an
+actual length of 0), fixed by boxing the `Rt` so the invariant is structural
+rather than merely remembered. Counting "every running executor except me"
+silently assumed the caller is always one of the executors being counted,
+which is false during allocation outside guest code entirely (loading an
+image, running initialisers) — the collector started with a peer still
+executing because the count was off by exactly one in that case.
+
+**Having more than one executor is what selects the counting policy, and
+this directly resolves an apparent tension with `resource-limits`.** The
+safepoint poll lives inside the same checkpoint `resource-limits`
+monomorphises away entirely when nothing is counting — a sandbox with peer
+threads cannot have a thread that never polls at all, so having a peer (or a
+gas limit) selects the counting dispatch policy exactly the way a gas limit
+alone already does; one executor with no limit still runs the fully free
+loop. Gas itself is threaded the same way: it stops being one shared
+counter under K > 1 and becomes per-executor local counters flushed to a
+shared atomic on checkpoint, with the total therefore stopping being exactly
+deterministic once concurrency is real — a property of parallelism, not a
+regression, and the same conclusion `resource-limits` already reached on its
+own.
+
+**`call` had to become asynchronous now, not later, and the cost of getting
+this wrong falls on a public API rather than an internal one.** If ports are
+the only way in, `call` is fundamentally: encode a request onto the system
+port, let the driver schedule the sandbox whenever it chooses, take the
+reply — which cannot return a value synchronously on the caller's own
+thread, because the sandbox may not even run on that thread. A
+`SingleThreadDriver` may resolve the resulting promise before returning, so
+the simple case still *reads* as simple, but the type is asynchronous from
+the very first version, because a synchronous API cannot be made
+asynchronous later without breaking every existing caller — and since
+nothing had been published yet, this was a rewrite of three SDK surfaces
+paid once now rather than an ecosystem-wide break paid later by everyone
+else. A blocking convenience on top is fine for drivers that can honestly
+offer one, but must never be reachable *from inside* a sandbox: a call made
+from guest code, occupying a pool thread, waiting on a reply that itself
+needs a pool thread to arrive, is the oldest deadlock shape there is — from
+inside, a call is simply a port send plus a park, which it already is once
+ports are the only way in at all.
+
+**Shared memory moves from optional to required the moment one sandbox gets
+more than one thread, for a specific mechanical reason, not merely
+tidiness.** A `WebAssembly.Instance` cannot be structured-cloned in a
+browser, so it cannot be handed to a worker — what *can* cross is a compiled
+`WebAssembly.Module` plus a memory, which means a pooled driver has to
+instantiate *on* the worker, which means whatever owns instantiation owns
+the memory. An earlier draft argued a pool needs no shared memory at all, on
+the reasoning that sandboxes can simply be pinned one-per-worker — true, and
+it answers a different question: it makes many sandboxes run concurrently,
+it does not make *one* sandbox run in parallel, and pinning is a reasonable
+intermediate state but a dead end as a destination. So `Sandbox` becomes a
+**handle** (an id, its system port, a reference to its driver) rather than
+the instance itself, and the memory-model field already in
+`module-metadata-and-shards`' compatibility key (`:memory`, `:unshared` in
+every build produced today) becomes a genuine fork: a shared-memory
+build needs the wasm threads proposal, atomics, bulk-memory, its own build
+configuration, and on the web, cross-origin isolation headers from the
+embedder — none of which exists yet. This is also the strongest argument for
+the driver owning memory rather than the module choosing it: an embedder
+that cannot set isolation headers simply gets the single-threaded driver and
+an unshared module, and the identical program runs on both, rather than a
+program having to choose its own deployment constraints at compile time.
+
+**Designing for K > 1 without yet building it: split what a sandbox owns
+from what one execution context owns, while it is still a free refactor.**
+Today one `Rt` conflates the heap itself with the single thread of execution
+running on it — value stack, frames, root stack, gas counter, current green
+thread all live directly beside the heap, globals, intern tables, and port
+registry. Those are genuinely two different lifetimes: one is the *sandbox*,
+the other is an *execution context*, and K > 1 simply means K of the second
+against one of the first. At K = 1 that split is a pure refactor with no
+behaviour change, which is exactly when it is cheap to do — after K > 1
+actually exists, it becomes a rewrite under a deadline. The chosen path:
+**make the multi-threaded entry point exist immediately, correct
+immediately, by serialising** — a driver can already hand K threads to one
+sandbox, with the sandbox taking a lock so K > 1 is correct but not yet
+faster, and the harness becomes real and exercised long before the parallel
+collector exists at all; the later work becomes *removing a lock*, not
+*inventing an interface no one has ever actually called with K > 1*, which
+tends to turn out wrong.
+
+**Two specific shared-mutable-state bugs found and fixed while building
+this, both worth keeping as evidence for the general design.** The intern
+tables (`flint.strs`) needed exactly one lock **per table, not sharded**,
+proven by measurement rather than assumed: on the most string-heavy real
+workload available (flint compiling construe), the tables are probed 18,247
+times across 4.25 seconds, with a probe costing tens of nanoseconds and a
+duty cycle around 0.04% — sharding would be optimising something that is not
+actually happening. Unsynchronised, the race genuinely manifests: with two
+executors interning the same 3,000 strings, 10–17 of them ended up as two
+distinct interned objects on 40 runs out of 40, which is a correctness bug
+(`eq` reads "both interned, not bit-equal" as unequal, so the two objects
+compare unequal while printing identically) rather than merely a wasted
+allocation. The write barrier — the remembered-set list an old object
+holding a young pointer needs to be found by — is the hottest genuinely
+shared structure in the runtime, hotter than allocation itself, so it stays
+strictly **per-executor**, with a collection draining every executor's own
+list; draining only the collecting executor's list failed 12 runs out of 12,
+since young objects another thread had just stored into old ones were freed
+while still referenced.
+
+---
+
+## thread-pool
+
+**A thread pool: two models, and only one of them is close**
+*(formerly `0019`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): not built.** An honest assessment of distance recorded because the
+ask splits into two genuinely different projects that happen to share a
+name.
+
+### What was decided
+
+Two candidate designs, evaluated rather than chosen between outright:
+**Model A**, a shared heap across worker threads, giving genuinely atomic
+cross-worker atoms and real volatile memory ordering; and **Model B**, a
+heap per worker with ports carrying data between them (the Erlang model).
+The recommendation is Model B first, because it is close to what already
+exists and Model A is close to a rewrite of the collector.
+
+### Why
+
+**Model A requires rewriting the collector, which is the hardest component
+in the whole project.** Real cross-worker atomicity needs one heap every
+worker can see, which makes allocation contended (per-worker buffers rather
+than one bump pointer), makes collection require every worker to reach a
+safepoint simultaneously (one worker still running while another evacuates
+is exactly the class of corruption this project has already spent real time
+chasing), turns roots into N value stacks and N shadow stacks (a change of
+degree, not of kind — the existing design already scans precisely, so this
+part is comparatively unfrightening), and puts a genuinely sharp edge at
+compare-and-swap on a pointer the collector might relocate mid-operation,
+constraining where safepoints are even allowed to be.
+
+**Model B needs almost nothing new, because the pieces were already designed
+compatibly.** `host-abi` already established that ports transfer by value,
+with by-reference sharing as merely a within-one-runtime optimisation —
+across two heaps that optimisation simply does not apply, and the semantics
+are otherwise completely unchanged. A green thread is already data, so
+migrating one between workers is just copying a VM state between heaps
+rather than moving a native stack. **The collector needs no changes at
+all** — each worker collects its own heap independently, with no safepoint,
+no shared roots, and no contention whatsoever. What Model B genuinely does
+*not* give is the thing literally asked for: an atom shared across workers
+cannot be atomic if the workers do not share a heap, so atoms stay
+per-worker. Whether that is actually a loss depends on the real intent — if
+the goal is throughput (several documents processed in parallel, several
+independent gate runs at once), Model B delivers it and the isolation is a
+feature rather than a limitation; only genuinely shared mutable state across
+parallel workers needs Model A specifically.
+
+**The cost nobody had priced before this: determinism, and Model B keeps
+most of it while Model A spends essentially all of it.** `threads-and-ports`
+insisted on a deterministic scheduler and `resource-limits` on deterministic
+gas, and construe's gates depend on the second directly. Real parallelism
+spends both: interleaving becomes non-deterministic, so any program touching
+genuinely shared mutable state stops being reproducible; a snapshot plus the
+host's event log stops being a complete replay; "is this candidate cheaper"
+stops being an exact, answerable question. **Model B keeps most of this
+regardless** — a single green thread's own instruction count stays exactly
+deterministic because nothing else can touch its heap, and a program whose
+threads communicate purely through ports has a reproducible *answer* even
+when its *timing* varies run to run. Model A does not get to keep any of
+that. That asymmetry is worth more than it first appears, since determinism
+is one of the few properties flint genuinely has that a JIT-based runtime
+structurally cannot offer at all.
+
+**Deployment reality may decide this before cost does, and should be
+checked first.** wasm multi-threading needs shared linear memory and the
+atomics proposal, which requires `SharedArrayBuffer`, which on the web
+requires cross-origin isolation headers (COOP/COEP) from the embedder — a
+real constraint on where flint can even be deployed. If construe's actual
+target (a Cloudflare Worker) does not offer shared memory and wasm atomics,
+the entire shared-heap model is simply unavailable there regardless of what
+gets built, which is worth checking before costing anything else.
+Standalone runtimes (wasmtime, node workers) do support it, so this is a
+per-host question rather than a universal one — itself an argument against
+making the *core* depend on it either way.
+
+---
+
+## cli
+
+**A native CLI: cross compiler, interpreter, and capabilities**
+*(formerly `0021`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): partly built.** The single native binary exists and is the CLI:
+`run`/`compile` take `:path`/`:fn`/`:with`/`:args`/`:to`/`:optimize`/`:meta`.
+Still to do: `:to :llvm`, the remaining cross-compilation backends, nREPL,
+and the `{:args :capabilities}` entry-map wrapping (arguments arrive today as
+the bare vector, not yet wrapped). Maven's transitive dependency resolution
+is **deliberately cancelled** — see the measurement below.
+
+### What was decided
+
+A per-platform native binary (built via `wasmer create-exe`, with a
+hand-written Rust host embedding a wasm engine costed as the fallback if
+that fights the release matrix), carrying flint's own compiler and
+interpreter, capable of cross-compiling to any supported target, with
+capability injection on the command line and `deps.edn` support for git,
+npm, and Maven dependencies.
+
+### Why a native binary at all
+
+`bin/flint` is a babashka script, which is fine for developing flint itself
+and is a wall for everyone else — the published npm package's entire
+purpose was a shim whose job is to say "install babashka first." A native
+CLI removes that dependency chain entirely, and only because of a property
+specific to this project: flint self-hosts (a byte-identical compilation
+fixpoint, continuously asserted), so the compiler *is* a flint program, a
+flint program compiles to wasm, and a wasm module becomes a native
+executable — the chain ends at one binary with nothing installed underneath
+it. That is a stronger reason to build this than developer convenience:
+today flint is usable if you already have a Clojure toolchain; a binary
+makes it usable if you do not.
+
+### Capabilities: how the design arrived at "a value, not a secret"
+
+This file's original design made a capability a **cryptographic secret
+token**. It worked, and then had to defend the crypto it introduced:
+constant-time comparison, host entropy for generation, tokens recorded to
+guard against replay, secrets sitting inside exported snapshots — four
+separate obligations, every one of them a *consequence of the choice*
+rather than of the underlying problem. **The decision that superseded it: a
+capability is a heap object of its own type, and possession of the object
+is the authority — there is no secret to defend at all.**
+`(p/open "/etc/hosts" [fs-cap] {:codec edn/codec})`: a stranger calling
+`(p/open "/etc/hosts" [])` fails outright, simply because it holds nothing
+to present.
+
+**What makes this unforgeable is the value encoding itself, not a secret
+guarded by policy.** A capability is a heap reference, and guest code has no
+operation that turns a fixnum into a heap pointer, and no way to set the
+NaN-boxed tag that distinguishes one — only the host can ever mint one. That
+is a *stronger* guarantee than an unguessable string, because an unguessable
+string can in principle be guessed given enough tries, and this cannot be
+*constructed* at all, by any means, ever. It keeps every property the secret
+design was bought for regardless: propagation stays explicit (the capability
+is a value the caller must actually hand over), attenuation stays available
+(the entry function chooses exactly what goes into each callee's argument
+list), and it opens a door the string design had actively closed — **derived
+capabilities**, where the host mints a narrower child from a broader one
+(`:fs` restricted to a subtree, `:http` to one origin), which is natural for
+an object and awkward to express for a bare name. Revocation becomes
+trivial too: the host simply marks a capability spent or invalid and
+subsequent opens refuse, with no key rotation and no cache to clear
+anywhere.
+
+**Snapshot import is the one place this design genuinely needs an explicit
+answer, not an automatic one.** A capability is an ordinary heap object, so
+a naive snapshot restore would silently *resurrect live authority* — a
+snapshot taken from a run holding `:fs` would carry `:fs` straight into
+whatever later imports it. So on import, capability objects must be
+re-bound by the host or explicitly invalidated, never restored as live
+authority automatically. (This is the exact rule `opaque-values` later
+finds to be subtly wrong in its original form — see that section for why
+*erasing* the id, rather than *re-binding* it, turned out to defeat the
+whole point of being able to shelve a running sandbox at all.)
+
+**What this design guarantees, stated precisely, and what it does not.**
+The runtime guarantees **unforgeability**: code never given a capability
+cannot construct one and cannot receive one through a message, since ports
+are not transferable under `threads-and-ports`' original rule. It does
+*not* guarantee **containment** — a library handed a capability is simply
+holding a value, and a value can be stashed in a dynamic var, closed over,
+or written into any structure something else later reads; flint has dynamic
+vars, so a caller genuinely can make a capability ambient by binding one,
+and the runtime will not stop it. So the actual, precisely-scoped property
+is: *you cannot reach a capability you were never given* — not *capabilities
+cannot spread*. The first is enforced by the runtime; the second is
+discipline, and the CLI's own job is to make that discipline the path of
+least resistance by handing the entry function a plain map and nothing
+else.
+
+### The `deps.edn` survey, and why maven resolution was cancelled rather than merely deferred
+
+Git, npm, and Maven dependencies are not close to equally expensive: git
+(clone at a sha, add its paths) is cheap and is where a flint-specific
+library ecosystem would actually live; npm (registry metadata, fetch a
+tarball, take the `.cljc` inside it) is moderate; Maven (POM parsing, the
+full transitive graph, version-conflict resolution) is much more expensive
+than the other two and the piece most likely to end up half-built.
+
+A survey of 135 `.cljc` namespaces sampled from 20 well-known Clojure
+libraries — deliberately biased *towards* libraries that already ship cljc,
+so this is closer to a best case than the registry's actual mean — found
+that **only 8.9% compile cleanly** (meaning nothing silently deleted; a
+reader conditional matching nothing quietly deletes the form it stood in,
+so a raw "compiles" figure of 20.7% was overcounting mutilated output before
+that distinction was drawn). Breaking down the 83 missing-require failures
+specifically: 35 need ClojureScript's own runtime (`goog.*`/`cljs.*`), which
+flint will simply never have regardless of dependency resolution; 24 need
+Clojure namespaces flint genuinely lacks (`spec.alpha`, `zip`, `data`,
+`datafy`, `tools.reader`) — not fixable by better *resolution*, but fixable
+by *implementing them*, which is exactly what happened afterward (see
+`construe-integration-bar`); only 24 are the kind transitive resolution
+could actually fix, and only where the resolved artifact itself also
+compiles, which at an 8.9% clean rate is roughly two namespaces. **So
+transitive resolution was worth at most two working namespaces**, while
+implementing `clojure.zip`/`clojure.data`/`clojure.datafy` directly in the
+standard library — pure Clojure, no interop needed — unblocks strictly more
+for strictly less engineering. The conclusion is stated as the opposite of a
+future roadmap item: the expensive half of Maven support is cancelled, and
+the effort it would have taken was redirected into the core library
+instead.
+
+What actually got **built**: git, npm, and Maven all resolve one coordinate
+at one *exact* pinned version (an exact coordinate reduces to a derived URL
+identically for all three, so that half cost almost nothing regardless of
+source). What stayed deliberately unbuilt: POM parsing, the full transitive
+graph, and version-conflict resolution.
+
+---
+
+## opaque-values
+
+**Opaque values: identity without structure**
+*(formerly `0022`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): shipped.** `(opaque)` / `(opaque "label")`, `TY_OPAQUE`,
+host-minted values reaching the entry function as its second argument, never
+sendable, and — reversing this document's own original answer — identities
+**preserved** across a snapshot rather than erased. This decision is
+heavily cited across the runtime as the canonical statement of the
+sentinel-identity pattern.
+
+### What was decided
+
+A single value type, `TY_OPAQUE`, generalising `cli`'s capability design:
+rather than a capability-specific type, **an opaque value in general** —
+identity, and nothing else, mintable by guest code (`(opaque)`,
+`(opaque "label")` — the label is print-only and plays no part in identity)
+or by the host across the ABI, with the two kinds distinguished purely by
+**provenance**.
+
+### Why this generalisation is worth more than the capability it grew out of
+
+flint has no `(Object.)`. In Clojure the unique-sentinel idiom is entirely
+ordinary — a private, un-forgeable marker distinguishing *absent* from
+*present and nil*, a key nobody else could collide with, a private marker a
+protocol can check for. flint has no host classes at all, so there was
+simply no equivalent, which is a real gap in the language having nothing
+inherently to do with the CLI's capability problem. An opaque value is
+exactly that idiom, plus the one extra property `cli` needed.
+
+**The trap this generalisation creates, and it has to be named plainly:**
+once the type is available to guest code, authority can no longer be
+determined by "is it opaque" — a program could simply mint its own and try
+to present it. So a capability check must always be **the host recognising
+this specific object in its own grant table, never a bare type test.** The
+type is necessary and nowhere near sufficient, and this needed stating
+explicitly here precisely because the generalisation is what introduces the
+hazard — with a capability-*only* type, "is it a capability" would have been
+a perfectly sound check, and a later reader could reasonably have assumed it
+still was after the type widened.
+
+**The hash must be a stored field, never derived from the object's
+address.** The nursery is a copying collector, so an object's address
+changes under collection — an address-derived identity hash would silently
+change too, and a value already sitting in a map as a key would become
+unfindable by that very key the moment a collection moved it. A stable id is
+assigned once at creation and stored in the object header instead, exactly
+as the JVM does for its own identity hashes — flagged as the single most
+likely thing to get wrong here, because it fails only intermittently, only
+under load, which is the worst possible way to discover it.
+
+### Later: why erasing the host id on snapshot import was the wrong half of a right instinct
+
+This document originally said a host-minted id must be re-bound *or
+invalidated* on snapshot import, "otherwise importing a snapshot taken from a
+run that held `:fs` grants `:fs`" — correct as a conclusion, and the
+mechanism actually built for it (erasure) was wrong. **Possession was never
+the check; the grant table is** — that is this same document's own central
+claim — and that fact alone settles the import case without erasing
+anything: a host that no longer wishes to honour id 7 simply refuses it,
+exactly as it already refuses an outright forgery, while a host that *does*
+want a shelved sandbox to carry on can rebind 7 to a live resource. Erasing
+the id took that decision away from the only party actually entitled to make
+it. The practical failure that surfaced this: erasure made shelving
+pointless in exactly the case `snapshots`' live-set format exists to serve —
+a sandbox holding a file handle came back holding a handle to *nothing*,
+with no identity left to rehydrate against at all. What keeps a preserved id
+safe is not the import step, but the *surface* around it: guest code can
+only ever mint an id of 0, and there is deliberately no builtin that reads a
+host id back out — so an id remains a thing only the host ever wrote and
+only the host can ever read, whether it arrived by original construction or
+by import.
+
+---
+
+## workspace-capabilities
+
+**Capabilities are granted per workspace, and guarded per dependency**
+*(formerly `0036`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): partly built.** The namespace resolver, grants, workspace guards,
+var guards, and the request primitive are in; virtual namespaces, pods,
+load-time reference-guard binding, and the host-facing half are not. This is
+the densest and most heavily reworked decision in the project — several of
+its own earlier sections are explicitly superseded by later ones within the
+same document — and it is treated at full length here for that reason.
+
+### What was decided
+
+The grain a capability is granted to is the **workspace** (a project, its
+`deps.edn`, its own source roots — the unit of third-party identity, of "who
+wrote this code"), not the whole sandbox and not the individual function.
+`:flint/capabilities-grant` on a dependency says what that dependency's code
+may *do*; `:flint/capabilities-guard` on a project says who may *require*
+it. A cross-workspace reference to a guarded var is checked entirely at
+**compile time**, at the point the reference is resolved — not at
+invocation, and (for the ordinary case of code a trusted compiler actually
+saw) with **no run-time token at all.**
+
+### Why the grain matters: what was missing before this
+
+`opaque-values`/`cli` already gives the right shape at the host↔sandbox
+boundary: a capability a host projects in, which a program *presents* when
+requesting a port. That shape has no way at all to say **which code inside
+one sandbox** may use a capability — a program that opens `fs` can hand the
+resulting handle to any function it calls, including one from a dependency
+it never even read. There is no unit of identity between "the whole
+sandbox" and "this one value," and therefore nothing to attach a policy to.
+Inside one workspace there is genuinely nothing to defend — the author can
+already call their own functions freely, so a boundary there would cost
+indirection and buy nothing — which is exactly why the workspace, and not
+the namespace or the function, is the right grain: every module in one
+workspace shares its capabilities, full stop.
+
+**This directly opens the door to babashka pods, without inventing a shape
+for them specifically.** A pod becomes an ordinary dependency carrying
+`:pod/version`, with an ordinary **virtual namespace** underneath it — the
+compiler emits `flint.virtual/call` at any reference into it, and what makes
+this tractable is specifically the *guard*, not the grant: nothing can
+regulate what a pod does internally, since it is an independent process with
+its own authority, but the guard regulates **who is allowed to depend on it
+at all** — turning "this code can do anything" from an implicit property of
+the build into an explicit decision a project takes and records in its own
+`deps.edn`.
+
+### The SDK blocker, and why it recurs
+
+**The SDK had no notion of a project at all** — `Compiler.compile` took a
+flat map from path to source, every file a peer, no root, no boundary,
+nowhere to hang anything per-project. `reader-tags` had already hit this
+exact wall and only partly gotten past it: its own step 3 ("the SDK's
+equivalent of the `deps.edn` key") sat undone specifically because the SDK
+could not express the concept at all, and the fix that finally lands here —
+a single **namespace resolver** both front doors (CLI and SDK) produce,
+answering `{workspace, identity, reader}` for a real namespace or
+`{workspace, identity, :virtual}` for one served remotely — retroactively
+completes that stalled step too, proven by the same test: two workspaces
+binding the same reader-tag name to two different readers, compiled
+together, each source correctly reading under its own binding. **The
+recurring lesson, stated once and then deliberately reused rather than
+re-derived**: a value scoped per-workspace has to reach *every* reader that
+touches source (`reader-tags` needed three separately-patched call sites
+before this was true of tag bindings; `default-features` had recorded the
+identical defect earlier still for compile-time feature flags) — a value
+only one reader knows about is a value the other readers silently get
+wrong, and the fix each time is to compute it once and carry the single
+record through every consumer, rather than trusting each one to ask
+correctly.
+
+### The virtual-namespace mechanism: what the compiler emits, and why it is almost nothing
+
+Seeing the resolver's `:virtual` flag, any reference into that namespace —
+a call, a value use, a function passed as a value — becomes a call into a
+small library (`flint.virtual/call`, `/get`, `/fn`) naming the target with a
+quoted symbol, and **that is the entirety of the compiler's own part**: no
+stub namespace generated, no new emission path, no port machinery inside the
+emitter at all — an ordinary call to an ordinary function, with the resolved
+name carried as a compile-time constant for any diagnostic that needs it.
+The library, not the compiler, does namespace-to-port resolution (opened
+lazily, on first use, which is the better answer to an earlier open
+question: a program that never actually calls into a pod never even asks
+for the authority to reach it, which is precisely the property a guard is
+supposed to provide), memoisation (a thousand calls into one pod cost
+exactly one port), and request/response correlation over that port.
+
+**The var list a virtual namespace describes is deliberately optional, and
+that single design choice is the whole answer to a harder-looking
+problem.** With a var list, every ordinary compile-time check already works
+untouched — an unknown var is a compile error with the existing message, a
+wrong arity is caught exactly where every other wrong arity is caught.
+Without one, any symbol resolves and both of those become run-time errors
+instead, in a language where they are otherwise compile-time. Crucially, the
+**emission is identical either way** — the var list buys checking, not
+codegen — so a build can choose, and must be able to *say* which mode it got
+for any given namespace, rather than leaving "was this checked, or merely
+trusted" to be discovered only when something throws in production. The
+list itself can come from exactly one place asked in exactly one way,
+deliberately not a second, separately-maintained description format: `:list`
+in the very same protocol used for calls, which a build willing to pay the
+cost of a live pod process during compilation can ask for and cache.
+
+### Guarding the reference, not the invocation — the design that made the run-time half nearly unnecessary
+
+The original worry that forced this file toward run-time tokens in the
+first place: anything a macro can emit, a hostile author can simply read out
+of `--explain` and type by hand, bypassing the macro's own guard entirely.
+The resolution that dissolves most of that worry rather than defending
+against it: **a guard checks the reference to a guarded var, at the one
+static site in source where that reference textually appears — never the
+eventual call.** `(map fs/read paths)` hands a guarded function to `map`,
+which lives in a completely different workspace and does the actual
+invoking — but the reference `fs/read` appears in exactly one place, in the
+*caller's* source, at compile time; guard it there, and once obtaining the
+resulting closure is permitted, the closure is simply an ordinary value
+again, and `map` calling it is fine — the caller chose to hand it over,
+which is delegation, and delegation is allowed everywhere else in this
+design for the identical reason. **Guard every rung and the ladder has no
+unguarded rung**: if the raw builtin underneath a convenience macro is
+*also* guarded, the hand-written bypass is refused at compile time exactly
+as the macro path would have been, which is what makes "read the expansion
+and copy it by hand" no longer a way around anything.
+
+This is a genuine two-part answer, not one substituting for the other:
+**authority to act** is lexical — it travels with the code that was granted
+it, and the caller has nothing to do with it, which is the property a
+dynamic-var-based design was explicitly shown *not* to have (a function from
+workspace A called from B would read B's dynamic bindings, so A would lose
+its own authority merely by being called from somewhere else — a fatal flaw
+on its own, plus a confused-deputy hazard where a caller substitutes its own
+`:net` token where a callee expected `:fs`, with no privilege escalation but
+a real confusion nonetheless). **Permission to call** is a property of the
+*caller*, checked once, at the reference site, against the referencing
+workspace's grants. What makes the emitted form of this safe rather than
+merely convenient is that it must never be a **callable builtin**: a
+`resolve`-style builtin taking a quoted symbol would be a general reflective
+lookup any hostile namespace could invoke directly, defeating the entire
+scheme by the same route a dynamic `*ns*`-based design would have — so it
+has to be an analyzer construct with no builtin and no var behind it at all,
+lowered directly to a load-bound slot at compile time.
+
+### What is undecided, stated candidly rather than left implicit
+
+Whether a grant is transitive (if A grants `fs` to B, and B requires C, does
+C have it? — leaning **no**, since that keeps the dependency graph
+auditable, at the cost of making vendoring more of a chore); what a
+capability *name* actually is at the boundary between a build-time concept
+that must resolve to *some* run-time value and `opaque-values`' rule that
+the runtime itself has no concept of "capability" whatsoever; and whether
+the guard is checkable at build time only, given that an image loaded at
+run time (`cli`'s `flint_load_image` path) arrives having been checked by no
+compiler this system trusts at all.
+
+---
+
+## system-namespaces-and-deps
+
+**System access and dependencies are virtual namespaces the CLI serves**
+*(formerly `0037`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): partly built.** Virtual namespaces, `flint.sys.fs`/`env`/`slurp`,
+`flint.deps.npm`/`mvn`/`git`, the `.cljc` resolution plan, `flint deps add`,
+capability delegation on dependency entries, and pods are all in. Not built:
+the rest of the `flint deps` surface (`bump`/`pin`/`tree`/`why`),
+`flint.sys.net`/`proc`/`clock`, and deleting the old babashka-shelling
+dependency path.
+
+### What was decided
+
+Three previously-separate problems, all really the same shape: `flint.fs`
+looked like an ordinary language namespace (shipping in `lib/`, alongside
+`clojure.core`) while actually being one host's private convention; there
+was no networking at all, not even a partial implementation; and dependency
+fetching was babashka shelling out to `git`/`curl`/`tar`/`unzip`, with the
+shipped 2.6 MB native binary having no dependency surface whatsoever. The
+fix: **`flint.sys.*` and `flint.deps.*` are virtual namespaces
+(`workspace-capabilities`' mechanism) served over RPC by the CLI**, so a
+reader can tell from the *name itself* whether something is served by a
+host or built into the language.
+
+### Why the naming split is the whole point, not a style preference
+
+Three properties fall directly out of making these namespaces genuinely
+virtual rather than merely conventionally separate: they cannot be linked
+into a pure module at all, because there was never any code to shake out in
+the first place — a program mentioning `flint.sys.fs` on a host that does
+not serve it fails honestly when the port simply does not open, rather than
+three calls deep inside code that looked like part of the language;
+`flint inspect` can list exactly what a program asks the world for, because
+a virtual namespace is a *require the artifact records*, not code it
+silently absorbed; and a different host is free to serve the same namespace
+differently, which is not a hole in the design — it is what makes
+`flint.sys.fs` correctly mean "the filesystem this particular host chose to
+lend," rather than implying a filesystem the language itself somehow
+promises.
+
+**The capability split is drawn by authority, not by convenience — two
+operations share a namespace exactly when granting one would already have
+been enough to do the other anyway.** `flint.sys.slurp` (`:slurp`) is
+deliberately split from `flint.sys.fs` (`:fs`) on precisely this basis:
+`slurp` is a pure key-value read and nothing more — `(slurp "file://...")`
+and `(slurp "https://...")` are the identical question, *give me the bytes
+at this name* — while `:fs` alone exposes structure and mutation (list,
+stat, walk, mkdir, write, delete, rename), and a program reading one
+configuration file should never be forced to hold the capability that can
+enumerate an entire disk. That `file://` and `https://` share one capability
+is the genuinely uncomfortable half of this decision, since they are not
+really one authority — a URL fetch sends the URL itself to somewhere — and
+the answer follows `workspace-capabilities`' own already-settled principle
+for exactly this shape: the compile-time guard stays coarse ("this
+workspace may read by name at all"), and the host's *grant* carries the
+actual fine detail (a scheme and host allowlist), because the guard is
+checked where a var is *referenced*, and the URL itself is only ever a
+run-time value — a guard that pretended to vary by scheme would be a check
+that *looks* stronger than it actually is, which this design refuses to do
+anywhere.
+
+**A dependency's capability grant is a delegation, and needs its own three
+explicit rules, each closing a real hole in what would otherwise be a
+loophole in the whole system.** (1) *You cannot lend what you do not hold*
+— a grant written on a dependency entry that the requiring project itself
+was never granted is refused at read time, naming both sides; without this
+one rule, `deps.edn` itself would be a way to mint authority from nothing.
+(2) *A dependency declaring a guard must actually be granted it, or the
+build refuses*, naming the dependency and the missing capability by name —
+the guard already refuses the bare `:require`; refusing it again at the
+dependency-entry level says so at the exact place a person reading the
+manifest can actually fix it. (3) `flint deps add` **writes the grant it
+found**, after explicitly asking, rather than silently either granting or
+withholding it — because granting a capability is a real decision, and this
+tool interaction is the moment that decision should be made visible in a
+diff rather than happening implicitly somewhere else.
+
+**Grants can only narrow as they descend the dependency graph, never
+widen — one rule, applied uniformly from the invoker at the very top all
+the way down to the deepest transitive dependency.** This generalises the
+same rule `:fs`'s root-scoping already followed on its own (a derived grant
+can only ever be a subtree of its parent, never a superset) into the single
+governing rule for the whole delegation chain, which is what keeps the
+entire chain auditable purely from the top: nothing below the root can ever
+add authority that was not already present above it. Enforcing this per
+*workspace* rather than per *whole-program* needed one further real design
+decision, and an initially-obvious answer was tried and specifically
+rejected: wrapping a guarded reference in a closure carrying the referencing
+workspace's options does not work, and not merely as a matter of taste — it
+crashes outright the moment `apply` reaches it, since a park reached through
+`apply` is refused, meaning a wrapper of exactly this shape breaks on the
+very first capability that does any I/O at all, which is effectively all of
+them. **The answer that actually works is binding policy to the *port*
+itself, rather than to any value that travels through the guest.** A
+virtual namespace's port is memoised per **(namespace, workspace)** pair
+rather than merely per namespace, so two different workspaces talking to
+`flint.sys.slurp` each get a genuinely distinct port; the host binds each
+workspace's fully narrowed, effective policy to its own port at grant time;
+and every message arriving on a given port is, by construction, from that
+one workspace and no other. Nothing is allocated per call, no policy value
+ever enters the guest heap at all, `apply` is never involved, and a
+transitive dependency simply gets its own port and its own policy with
+nothing manually threaded through the program to make that true.
+
+### The `flint deps` design: git resolves once, at `add` time, not on every build
+
+`:git/version` — a semver range resolved live against tags — was **built and
+then deliberately removed**, and the removal, not the original addition, is
+the decision worth keeping, because the addition looked obviously
+reasonable at the time. It was wrong in two independent ways: a live range
+makes *every build* into a network resolution, so what a checkout even means
+silently depends on when it happened to run — the exact objection this
+project already raises against tracking a mutable git branch directly — and
+it answers the wrong question regardless, since what actually causes pain in
+practice is not naming *a* version, it is **two different dependencies
+naming two different, disagreeing tags of one shared repository** — a range
+does not resolve that disagreement, it merely gives each dependency its own
+private way to be locally "right." So resolution happens exactly **once**,
+at `flint deps add`, which picks the current highest matching tag and
+writes it down permanently as `:git/tag`, with `:git/sha` recorded
+thereafter purely as **integrity** (the tag must independently resolve to
+that exact commit or the plan is refused outright), never as the identity
+itself. `flint deps agree` is the tool this removal makes necessary — it
+detects two dependencies naming disagreeing tags of the same repository
+(folding equivalent URL spellings together first, since a naive string
+comparison would miss the conflicts that actually occur in practice),
+proposes only a tag *someone already explicitly asked for* rather than going
+looking for something newer on its own initiative, and writes the resolved
+sha alongside the agreed tag.
+
+**Pins live in `deps.edn` itself, under `:flint/overrides`, rather than in a
+second lockfile format — everything is pinned by default, with no floating
+left anywhere.** One file, in the same language as the primary
+declarations, is a deliberate choice: a person can read a pin, edit it
+directly, and understand exactly what it did, where a separate lockfile in
+a different format would be a second thing that has to be kept
+independently true — and `reader-tags` is this very project's own record of
+what that kind of duplication costs when it inevitably drifts. Pinning a
+transitive dependency and forcing a specific version turn out to be the
+identical operation under this design, which is exactly why they share one
+spelling rather than two.
+
+### An honest ledger: what building this actually found, not merely what it claimed to prevent
+
+**A genuinely general park-across-a-Rust-frame bug, discovered here and
+initially miscategorised as a virtual-namespace-specific problem.** The
+first version of this record claimed the crash was specific to virtual-
+namespace calls and was a divergence between the wasm and JVM/CLR ports.
+Both claims were wrong, and the correction is the substantive finding: what
+had actually been measured was one instance of a much more general bug —
+**any park occurring underneath a Rust stack frame crashes, on every
+runtime, with no ports and no virtual namespaces involved at all** —
+demonstrated with a lazy seq containing nothing but an ordinary channel
+receive. `apply` (a Rust opcode) and lazy-seq forcing (which calls back into
+the interpreter from Rust) both crash; `loop`, and higher-order functions
+written in flint itself like `mapv`/`reduce`, do not, because they never
+cross a Rust frame in the first place. The root cause: `apply`'s deep-park
+handling correctly avoids pushing a result on top of an already-saved
+continuation, but never reclaims its *own* operands sitting underneath that
+continuation — every later stack-top computation ends up off by that
+uncorrected amount, and the eventual panic surfaces nowhere near the actual
+park that caused it.
+
+**Refusing to park in these positions was tried as the cheap fix, and
+rejected outright as unacceptable, not merely as unfinished.** Making every
+one of these code paths reach the existing "cannot park here" guard and
+throw a clean, catchable error instead of crashing would make whether
+parking legally works depend on whether a particular form happens to be a
+compiler-emitted opcode versus flint-defined library code — `mapv` would
+work and `map` would not, `reduce` would work and `apply` would not, with
+nothing in a program's own source indicating which is which. A language
+where `(map f xs)` and `(mapv f xs)` silently differ on whether `f` may
+safely block has a leak in it, and moving that leak from "crashes" to
+"throws a confusing exception" does not close it — parking genuinely has to
+work across these frames, which is recorded here as real, unfinished,
+correctly-scoped work rather than closed off with a workaround. Four
+different fix attempts at the stack-bookkeeping level were each tried,
+measured against all three observed symptoms, changed none of them, and
+were reverted rather than left half-working in the tree — because the
+actual problem is that a native function's own execution state cannot be
+saved and resumed at all yet, not that the existing bookkeeping around it is
+subtly wrong.
+
+**The Rust CLI binary's size claim, quoted in its own README for a long
+time, was simply wrong by roughly an order of magnitude, corrected by
+actually measuring rather than continuing to estimate.** This document's own
+first guess for adding an HTTP client, git support, and archive handling was
+"plausibly 15–25 MB." The real, measured cost: `ureq` + `rustls` (the entire
+TLS stack, used by `slurp`) added 1.1 MB; `flate2`/`tar`/`zip`/`semver`/
+`sha2`/`serde_json` together (used by npm and Maven) added a further 0.4 MB
+— and, notably, adding a dependency to `Cargo.toml` changed the binary size
+by *nothing at all* until something actually called it, since link-time
+optimisation and an aggressive size-optimised build profile were already
+removing any crate nobody used. The stated resolution going forward is to
+measure each crate as it actually lands rather than continue predicting in
+a table, and the wrong guess is left visible in this record rather than
+quietly edited away, on the same "measure, don't estimate" principle this
+whole file applies everywhere else. One further deliberate exception to
+"just pull in the crate," recorded so it reads as a considered choice rather
+than an inconsistency: git support shells out to the **`git` program**
+itself rather than depending on `gix` or `git2`, because the only two
+operations actually needed — `ls-remote --tags` and a depth-1 fetch of one
+sha — do not justify pulling in either crate's considerably larger
+dependency tree, and `git` the program is already present wherever anyone
+would plausibly be fetching source from git at all.
+
+---
+
+## other-hosts
+
+**SDKs, and other host targets**
+*(formerly `0010`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): partly built.** The native target (flint's own runtime, compiled
+through LLVM to run with no wasm engine present at all) works, and `bin/flint`
+is built on it — the compiler running as native code took a compile from
+15.6 s to 3.5 s, in a 2.1 MB binary rather than 7.1 MB. Native AOT is not
+built. The JVM and CLR ports are the rest of this document; see
+`jvm-runtime` and `clr-runtime`.
+
+### What was decided
+
+Three tiers for reaching a new host, priced very differently: **tier 1**, a
+thin SDK wrapping the existing wasm ABI (a few hundred lines, works
+anywhere a wasm runtime already exists); **tier 2**, porting the VM itself
+to a host, leaning on that host's own collector and core libraries; **tier
+3**, emitting that host's native bytecode directly. And, orthogonally to all
+three: **the conformance suite is the actual specification, not the
+bytecode** — a host target is finished when it passes it, full stop.
+
+### Why the tiers are priced the way they are, and why measurement overturned the ordering for the JVM specifically
+
+Tier 1 is cheap specifically because the wasm ABI (`host-abi`) was
+deliberately kept tiny — one event queue, one continue call, one drain — so
+an SDK over it is genuinely a few hundred lines rather than a project, and
+almost every language now has *some* wasm runtime available to build one
+over. **This tier was expected to be the default answer for the JVM too**,
+until it was actually measured: Chicory (a wasm interpreter written in
+Java) runs flint at 500× slower than V8 interpreted and 39× slower even
+compiled to JVM bytecode, plus 440 ms of parse-and-compile overhead per
+process — disqualifying for a platform where Clojure already runs
+*natively*. That measurement, taken cheaply and early specifically to avoid
+learning the same thing the expensive way, is what moved the JVM directly to
+tier 2 rather than treating it as a later luxury (see `cross-runtime-
+benchmarks` for the full numbers).
+
+Tier 2 is tractable specifically because **the bytecode is the portable
+artifact** — the reader, analyzer, macro expander, and the entire cljc
+standard library already compile to one shared image, so a new host needs a
+VM loop over roughly 60 opcodes and the builtins, not a second compiler.
+Leaning on the host's own collector and core libraries was the plan that
+made this cheap, and it **partly did not survive contact with reality** —
+see the superseded note below.
+
+Tier 3 is genuinely easier on the JVM/CLR than it would be natively, and the
+reason connects directly back to `dispatch`: flint is an interpreter at all
+specifically because wasm locals are not scannable by a collector, so
+compiling straight to wasm functions would put live references where a
+linear-memory collector cannot see them. **The JVM and CLR scan their own
+stacks**, so that particular constraint simply does not exist there, making
+a native tier-3 backend a legitimate option on those hosts rather than a
+fight against the platform. It was in fact **built for both** (`jvm-runtime`,
+`clr-runtime`), as small host-native emitters (358 lines of Java, 379 of
+C#) that compile arities on first call — giving up the "keep every compiler
+inside flint so cross-compilation is free" property this document argues
+for elsewhere, taken deliberately because writing a class-file encoder and a
+PE/metadata encoder *in flint itself* costs more than it buys today; the
+wasm backend (`flint.aot`) keeps that property intact for the target that
+still has it.
+
+### The superseded plan: "lean on the host's collector" did not hold
+
+**Superseded, 2026-08-29.** Both ports now carry a verbatim port of `gc.rs`
+— generational, copying nursery, mark-and-sweep old space — over a flat
+space of their own, rather than leaning on the JVM's or CLR's collector.
+Leaning on the host collector *worked* and shipped, but it left the two
+ports with **nothing to compare** — and the invariant this whole project
+actually rests on is not "each runtime works," it is that all of them make
+the *same decisions at the same points*, which `conform-hosts` now checks
+directly by comparing collection counts across ports and failing if they
+diverge. The tier judgement itself still stands — porting the VM and only
+later replacing the collector was cheaper than starting at tier 3 outright —
+only the collector-reuse half of the original plan is retired.
+
+### Why the portable guarantee has to be the conformance suite, and not merely "the bytecode ran"
+
+The bytecode makes a port *cheap*; it does nothing on its own to make two
+ports *agree*, and several real hosts diverge in ways that are easy to miss
+entirely because each one looks correct in isolation: regex engines differ
+in lookbehind, backreferences, named groups, and Unicode class handling
+(Rust's own `regex` crate has no backreferences or lookaround at all, which
+is what shapes flint's chosen subset in `strings-and-matching`); the JVM and
+CLR are UTF-16 where flint is UTF-8, so `count`/`subs`/indexing disagree on
+anything outside the BMP unless code-point semantics are pinned and
+enforced explicitly; the JVM's `long` wraps silently on overflow where
+flint's number tower throws, so a port needs checked arithmetic everywhere;
+and — flagged as **not cosmetic** — hash and map-iteration order differing
+between hosts would make `pr-str` of a map differ per host, which would
+break content-addressed artifacts hashing identically across deployments,
+a property construe genuinely depends on. So: a host target is finished
+specifically when it passes the shared conformance suite (started from 130
+expressions run identically on flint and on real Clojure via babashka, so
+expectations are checked against an actual Clojure rather than against
+memory), extended with exactly these drift cases — because they are exactly
+the kind nobody writes into a test suite by accident. Without this, "runs
+anywhere" would only mean "runs everywhere differently," which is worse
+than not porting at all.
+
+---
+
+## jvm-runtime
+
+**The JVM runtime**
+*(formerly `0029`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): partly built.** The image loader, the interpreter over all 46
+opcodes and all 155 builtins, real programs, several threads sharing one
+program, and AOT emitting real bytecode (12× on a counting loop) all work,
+all nine conformance cases agree with the native runtime byte for byte —
+including hashes, forty-key CHAMP ordering, infinite lazy sequences, and
+mutual tail recursion 300,000 deep — and **the flint compiler itself runs on
+the JVM and emits the exact same image the native compiler does, byte for
+byte.**
+
+### What was decided
+
+`other-hosts` chose tier 2 for the JVM specifically on measurement (Chicory:
+500× V8 interpreted, 39× even compiled) rather than on taste — this is that
+port, built with its own generational copying collector (see the superseded
+note in `other-hosts`) over a flat space, rather than leaning on the JVM's
+own GC.
+
+### Why the conformance gate mattered more than the port itself
+
+`bin/conform-hosts` — compile one source, run it on both runtimes, diff the
+output byte for byte — is what actually made this port checkable, and it
+earned that claim on its very first run: **every divergence it ever found
+produced the right elements in the wrong shape, never a crash.** A guessed
+type-code table made `int?` false for *every* integer, so flint's own `str`
+printed a perfectly good number as `#<unprintable>` — the worst possible
+failure for a type predicate, since it makes every type annotation in the
+whole program silently vacuous rather than simply wrong. One shared list
+type for both seqs and vectors made `(rest [1 2 3])` print as `[2 3]` — `=`
+to the correct answer, and visibly different when printed, which is exactly
+how an answer gets compared in this project's own tests. Map iteration order
+diverged because flint's maps are an array-map below eight entries and a
+CHAMP trie above it, so a nine-key map printed the right pairs in the wrong
+sequence — the case `other-hosts` specifically calls out as not cosmetic,
+closed by porting the hash function bit-for-bit and walking the CHAMP
+exactly as the native runtime does.
+
+**Self-hosting the compiler was a strictly better gate than the conformance
+corpus, and running it found seven further bugs the corpus's 8/8 passing
+score had never revealed.** A tail call was only actually a tail call to
+*itself* — both ports optimised self-recursion but took a genuine host
+stack frame for any other call target, so *mutual* tail recursion between
+three of the compiler's own functions grew one frame per hop, ran for
+minutes, and died in a trace of 11.6 million identical frames. `seq?` was
+implemented as `seqable?` (true for a vector, map, set, *and* string) —
+invisible until something actually dispatches on the distinction, which the
+analyzer does: testing `seq?` before `vector?` on an argument vector like
+`[& clauses]` made the analyzer treat its own binding form as a function
+call and descend into it forever. `assoc` on a **vector** silently produced
+a **map** — the right value under the right key, in entirely the wrong kind
+of collection, failing only several calls later on something no longer
+indexed at all. Getting to a byte-identical self-compiled image took getting
+each of these exactly right, because an image that differs even slightly is
+a compiler that differs, and that difference would eventually surface in
+some program no test in the suite happened to exercise.
+
+**Three lessons about how to even measure a bug like this, learned the hard
+way and worth keeping as general technique.** *The depth is the diagnosis*
+— "deep but finite" and "genuinely unbounded" look identical in a raw stack
+trace and want opposite fixes; only actually counting the frames (11.6
+million) separated them, since a large stack alone is not evidence of
+anything on its own. *A call log is not a stack trace* — a ring buffer
+recording the last functions called also records calls that have already
+*returned*, so a `reduce` loop reads back as a repeating cycle and named the
+wrong function as the failure site, twice. *What actually found each bug was
+a backstop that names a value, not merely a location* — depth-limited
+recursion guards in the analyzer and evaluator, each throwing a flint error
+carrying the actual node or form, with the analyzer's error printing the
+innermost twelve forms *by depth* (not by call-log order) — which is what
+caught the vector-turned-map bug directly: the printed trace showed a vector
+literal that had silently become a map entry mid-expression.
+
+### Multi-threading needed almost nothing new, because most of what it needed was already true for other reasons
+
+There is no safepoint machinery to build here at all, because there is no
+collector of flint's own to stop — the JVM's own collector already handles
+that. What genuinely needed care was flint's own shared state, and most of
+it turned out already fine: values are immutable by design, and keywords/
+symbols already intern through a `ConcurrentHashMap`, which gives the "one
+text, one object" property for free that the native runtime spends an
+explicit lock to guarantee (`drivers`). What actually changed: var slots
+became an `AtomicReferenceArray`, since a plain array write is only
+"eventually visible" to another thread, and "eventually" is not a real
+semantics for a language variable. Measured directly: eight threads driving
+200 increments each through one atom lose **none** of them — 1,601 wanted,
+1,601 got — because `swap!` is a compare-and-swap retry loop rather than a
+plain read-modify-write (see `emit-wasm-instead-of-dispatch` for why
+enabling that fix once looked like an AOT-specific failure and was actually
+a stale-build artefact).
+
+---
+
+## clr-runtime
+
+**The CLR runtime**
+*(formerly `0030`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): partly built**, at the same level of completeness as
+`jvm-runtime`: all 155 builtins, all nine conformance cases, several threads
+sharing one program, AOT to real IL (1.8× on a counting loop), and the flint
+compiler self-hosting on .NET to the byte-identical image the native
+compiler produces.
+
+### What was decided
+
+The same tier-2 approach as `jvm-runtime` — port the VM, with its own
+generational copying collector over a flat space (see `other-hosts`'
+superseded note; "lean on the host's collector" was tried and retired on
+both ports for the identical reason).
+
+### Why this port is the more interesting evidence, precisely because it was uneventful
+
+**It passed the entire conformance suite on the first run, and that
+absence-of-drama is itself the finding worth recording.** Every case that
+had cost the JVM port a real debugging session — seqs printing differently
+from vectors, guessed rather than copied type-predicate codes, the
+namespace/name argument order of `keyword`, array-map-to-CHAMP transition
+order — cost this port nothing at all, because `jvm-runtime` and the shared
+conformance harness's own README had already written down exactly what each
+one was before this port started. **That is the argument for the
+conformance harness stated as a measured number rather than as a
+principle**: the first port needed the harness to actively *find* four
+divergences that all shared the same "right elements, wrong shape" signature;
+the second port needed it only to *confirm* there were none left to find.
+
+**Two bugs were genuinely specific to the CLR, both porting-surface
+mismatches rather than design questions, and both worth keeping as examples
+of "the host library that looks equivalent and is not."** `count` originally
+refused to count a cons cell or a lazy seq outright, because neither exposes
+a `.Count` property to read directly — the fix is to actually **walk** them
+instead, which is also what correctly makes counting a genuinely infinite
+sequence hang rather than answer, exactly matching Clojure's own behaviour.
+And an error was being represented as a bare host string rather than a
+structured value, so `ex-message` on one silently answered `nil`, and the
+compiler's own error-rewrapping (catching an error and re-throwing it
+annotated with the form it happened in) produced a message with a location
+and no actual message text in front of it — a real failure whose report said
+nothing at all, which the record calls out explicitly as "the second time
+this codebase has paid for exactly that combination."
+
+**Getting the built-in library semantics *right*, not merely present, was
+the actual work — porting the mechanical bulk of the 155 builtins was
+comparatively easy; matching .NET's own library behaviour to what flint
+means was not**, and each mismatch found is a small, specific trap: `Math.
+Round` defaults to round-half-to-even, which happens to be exactly what
+`rint` needs, but only stays that way if stated explicitly rather than
+assumed — the 2.5 → 2.0, 3.5 → 4.0 pair is what pins it in the test suite.
+`IndexOf` treats `"a"` as found inside `"A"` under some system locales,
+requiring an explicit ordinal comparison rather than trusting the platform
+default. The CLR counts UTF-16 code units where flint counts Unicode code
+points, which `subs` on a string containing "héllo" is what actually
+separates. And `hypot` is deliberately *not* implemented as
+`sqrt(x*x + y*y)`, because that naive form overflows for large operands and
+underflows for small ones — the platform's own numerically-stable
+implementation has to be used instead. The regex implementation, notably,
+is **not** a thin wrapper over `System.Text.RegularExpressions` — that would
+have been a tenth of the code and a fundamentally different set of
+semantics — but the same shared Pike VM (`matching-over-ropes`) every other
+runtime uses, fed a program compiled once in cljc, so one engine's
+semantics reach every host rather than each host bolting on its own regex
+dialect with its own edge cases.
+
+---
+
+## kin
+
+**kin: write a runtime's shared logic once**
+*(formerly `0038`)*
+
+**Ratified:** ☐ not signed off
+
+**Status: contradicted by the code, corrected here.** The decision file's own
+banner reads "NOT BUILT — a spike... Nothing in the tree uses it yet." That
+is false as of this writing, checked directly rather than taken on faith:
+`kin/` holds 89 `.kin`/`.drivers` sources, and they generate 89 Rust modules
+under `runtime/src/kgen/`, 88 Java modules under `runtimes/jvm/.../Kgen/`,
+and 88 C# modules under `runtimes/clr/.../Kgen/` — verified by
+`bin/check-kin`, which exists specifically to fail if a generated file
+drifts from the kin source that produces it, or if a generated file has no
+kin source at all. So the mechanism this file calls a spike nobody uses is,
+in fact, load-bearing across all three ported runtimes' shared logic today.
+What follows below is the *reasoning* the original document recorded while
+building it, which still reads as accurate; only its own top-line status
+claim was stale.
+
+### What was decided (or rather, what was measured, since nothing here is a final decision)
+
+An exploration of whether the logic shared across flint's four runtime
+implementations — kept as verbatim mirrors entirely **by hand** today — can
+be written once, in a small Clojure-like source language, and compiled per
+target by treating per-target knowledge as ordinary **code**, not as a data
+table a generic translator interprets.
+
+### Why this is worth spiking at all: the cost is not theoretical
+
+Fixing the `apply`-across-a-park bug recorded in `system-namespaces-and-deps`
+meant writing the identical thirty lines three times — once each in Rust,
+Java, and C# — and the gate caught a fourth port that simply had not been
+done yet with the message `opcode 0x1e is not ported yet`. The three
+hand-written versions differed only in naming, punctuation, and one
+structural rule each — which is the actual bet this spike tests: if that
+small residue of per-target knowledge can be expressed as data (or, as it
+turned out, as ordinary functions), the much larger shared part can be
+written exactly once.
+
+### Why rules are code, not a data table — a real design reversal, with a concrete reason
+
+The first version of this spike made per-target knowledge a table of format
+strings, got most of the way there, and then leaked in four separate,
+irreducible places: Rust needs call arguments hoisted into temporaries where
+the other two languages do not; a loop test that needs hoisting has to be
+rewritten into the loop body rather than merely relocated; `mut` has to be
+*inferred* from whether a variable's body actually assigns to it, not
+declared; and numeric width is a per-call cast. **A translator that
+correctly knows all four of those special cases is not a translator with a
+configuration file attached — it is a compiler for three languages,
+disguised as one wearing a config file.** With each per-target rule
+expressed as an ordinary function instead, all four become unremarkable code
+living inside exactly the implementation that actually needs them: Rust's
+own `set-r` implementation hoists because Rust's own implementation of it
+says to, and nothing else in the system needs to know that fact at all.
+
+**Position is not a property of a form — it is pushed down, and the
+enclosing form is what actually knows it.** A top-level form inside a method
+body is a statement whether or not the underlying construct could *also* be
+used as an expression, because the body around it is what knows it is a
+body; so the enclosing form scopes `:position` and the implementation reads
+it, rather than a form being tagged with a fixed kind of its own. This
+directly enables the clearest single proof in the whole spike: one identical
+source `if`-expression, compiled three ways, produces a genuine Rust `if`
+*expression* (exactly what a person writes there), a Java/C# ternary
+conditional (exactly what those languages actually have available), and
+braces in all three when the same construct appears in statement position
+instead — the same `if`, emitted correctly and differently, entirely because
+of where it sits rather than what it is.
+
+### The rule that kept the output honest: generated code may not be worse than a person would write
+
+Stated as a standing constraint on the whole spike, not a nice-to-have: *if
+what comes out is worse or less efficient than what a person would have
+written by hand, either the rules are wrong or that part should stay
+hand-written.* This actually caught three real regressions, each found by
+diffing generated output against the pre-existing hand-written original
+rather than merely by reading the generator's code: every `while` loop was
+initially being rewritten into `while true { if !c { break; } ... }` because
+a test that sometimes needs hoisting cannot always stay directly in the loop
+condition — fixed so the rewrite only happens when a test genuinely needs a
+temporary, leaving the natural `while !c { ... }` form everywhere else. Every
+call argument was initially being hoisted into its own temporary, producing
+three named temporaries where a person would write none at all — Rust's own
+two-phase borrows actually accept one level of nesting like
+`self.seq(self.r(si))` without complaint, so hoisting is now applied only
+when an argument is itself a call *containing* another call. And
+`spread = (spread + 1)` was being emitted where a person writes
+`spread += 1`.
+
+### The measurement that actually changed the picture: two "divergences" between the hand-written ports turned out to be nobody's decision at all
+
+Porting real opcodes through the spike surfaced that the three runtimes are
+**not** verbatim mirrors even at the statement level in every place — the
+`TYPE_P` opcode rewrites its top stack slot in place on the JVM and CLR but
+pops-then-pushes on Rust, and `LIST` conses directly off the value stack on
+Rust while the JVM first copies every element to a shadow stack. **Both
+turned out to be incidental rather than deliberate, and finding that out
+mattered more than the port itself.** The `TYPE_P` divergence was originally
+believed to be forced by Rust's borrow checker — checked directly, and it is
+not: the naive in-place form is refused *twice* by the compiler (once for
+the call on the right-hand side, once for the index expression), but reading
+the value and the index into locals first compiles cleanly and is exactly
+what kin generates, so Rust's runtime should genuinely be in-place too, and
+the existing divergence is simply an accident nobody chose. The `LIST`
+divergence carried an explicit justifying comment on the JVM side ("cons
+allocates, and the value stack is where they are now") that does not
+actually hold up: the value stack already *is* a scanned root set in the
+collector's own forwarding pass, so a value sitting in it survives an
+allocation and gets correctly updated in place — and `cons` itself already
+roots both of its arguments before it allocates regardless, so the extra
+shadow-stack copy protects against a hazard that was already handled one
+level down. **The conclusion drawn from this belongs to the whole project,
+not just to kin**: a divergence between runtimes should be treated as
+*incidental until someone can point at the language actually refusing the
+alternative* — both of these divergences looked principled, one of them
+even had a comment explaining itself, and neither survived being actually
+checked.
+
+### Coverage came first, deliberately, before trusting any generated port
+
+Regenerating opcode bodies across three runtimes is only safe if a mistake
+in the regeneration would actually be *noticed* — so the question "which
+opcodes does the cross-runtime conformance suite even execute?" was asked
+and measured **before** porting anything, using the diagnostics build's
+existing opcode histogram. The result: only 36 of 45 defined opcodes were
+ever exercised at all. Tracing each of the nine gaps back through the
+compiler found that seven of the nine are **emitted by no code path
+whatsoever** — present in the opcode table and fully implemented in all
+three interpreters, and produced by nothing. **The port question for those
+seven is consequently the wrong question to be asking at all**: they should
+either be deleted outright, or the compiler should start actually emitting
+them if the optimisation they represent was genuinely intended and simply
+never got wired up — porting unreachable code across three languages would
+be carefully maintaining three copies of dead code, which is a worse outcome
+than the hand-maintenance problem this whole spike exists to fix. The two
+genuinely-reachable gaps were each given targeted coverage once the specific
+trigger was understood (a function needing more than 256 local bindings for
+the wide-local opcode; `==` specifically combined with an `^int` type
+annotation, since generic `=` never reaches the specialised equality opcode
+at all).
+
+### What else turned out to be shared, measured by comparing the JVM and CLR ports file by file
+
+Opcodes were the obvious target for this spike and are not remotely the
+biggest opportunity. Comparing the JVM and CLR mirror implementations file
+by file, counting non-comment lines, files implementing collections, tables,
+strings, byte strings, snapshots, vectors, the wire codec, sequences,
+equality, the regex simulator, and interning all agree to within 0–1% of
+each other in length — for genuinely hand-mirrored code, line counts that
+close mean the underlying *structure* agrees too, not merely the line
+count. That is roughly **4,500 lines per runtime** of logic over data
+structures, against only a few dozen lines of opcode bodies — meaning the
+actual prize this spike is chasing is almost entirely outside the opcode
+interpreter, in the builtins. Rust is measurably the harder third target:
+its counterparts are consistently larger than the JVM/CLR equivalents (a
+vector implementation is 1,013 lines against 383; the collector is 2,137
+against 413), and the difference is ownership — genuinely different work in
+some places, and in others exactly the kind of borrow-checker-driven
+temporary this spike already showed it can generate correctly. The
+recommended attack order is consequently by **ratio, not by size**: the wire
+codec first (self-contained, no allocation subtleties, and the format is
+already specified elsewhere independently); then equality/hashing/interning/
+sequences (small, near-identical, and purely functional); then the larger
+collection types, each large enough to want its own dedicated review; and
+explicitly **not** the object header, frame, space, roots, or collector
+implementations — the divergence in those is fundamentally in what each
+*language* makes cheap, and the measured ratios say plainly to leave them
+alone rather than force convergence.
+
+### What it deliberately does not attempt
+
+The GC write barrier, the wasm ABI shim, and unsafe heap access are named
+explicitly as parts that should **not** be attempted here, because the three
+runtimes are genuinely different by nature at exactly those points —
+pretending a single shared source could honestly express all three would
+produce three things that are each subtly wrong in their own way, which is
+worse than three things that are honestly, visibly separate from each
+other. The claim this spike actually makes is scoped tightly to 1:1 shared
+logic — which is most of an opcode body, most of a builtin, and most of what
+has actually cost real debugging time across the four runtimes so far, but
+is deliberately not a claim about the whole runtime.
+
+---
+
+## cross-runtime-benchmarks
+
+**Benchmark across wasm runtimes, because every number so far was V8**
+*(formerly `0018`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): done**, across eight engines (node, deno, bun, workerd, wasmtime,
+SpiderMonkey, wasm3, Chicory). This decision directly decided
+`other-hosts`' JVM tier, and one of its own central predictions turned out
+to be backwards once actually measured.
+
+### What was decided
+
+Benchmark flint's performance across every engine construe might plausibly
+run on, not only V8 — because flint's determinism (`resource-limits`) gives
+a genuinely apples-to-apples cross-engine metric no ordinary benchmark suite
+can claim: the same program executes the **exact same instruction count** on
+every engine, so nanoseconds-per-instruction isolates engine speed alone
+from any difference in the work being measured.
+
+### Why the answers turned out to be engine-*dependent*, not merely engine-*scaled*
+
+The interpreter's cost concentrates in precisely the construct engines
+differ most sharply on — a hot `br_table` dispatch loop, which some engines
+compile to a real jump table, some to a chain of compares, and which some
+tier up to an optimising compiler and some never do at all. So the same
+measurement genuinely decides *different* things depending on which engine
+answers it: whether `emit-wasm-instead-of-dispatch` is worth it at all
+(marginal-looking on V8's aggressive optimiser, potentially decisive on an
+engine that never tiers up), how large flint's cold-start win actually is
+(near-zero extra with wasmtime's precompiled `.cwasm`, worse on an engine
+that compiles eagerly every time), and how much `namespace-units`' module-
+size work is worth (real latency plus real bytes where compile time scales
+with module size; only bytes where modules are precompiled and mmapped).
+
+### The measured numbers, and the prediction that turned out backwards
+
+Nanoseconds per instruction, `bin/bench-xruntime`, a module importing
+nothing so every engine runs identical bytes with zero host code involved:
+node/V8 11.0, bun/JavaScriptCore 10.8, wasmtime/Cranelift 9.7,
+deno/V8 15.9, SpiderMonkey 15.7, wasm3 (a genuine wasm *interpreter*) 165.0
+— **roughly 15× slower than any JIT engine**, while the spread *between*
+JIT engines is only about 1.5× at worst. The practical reading: anywhere a
+JIT is present, flint costs roughly the same; on a small embedder with no
+JIT at all, it costs an order of magnitude more.
+
+**This document's own prediction about where AOT would help most was
+backwards, and the correction is the actual finding, not a footnote.** It
+argued AOT would matter *least* where TurboFan already optimises the
+dispatch loop aggressively (V8), and *most* on an interpreting engine with
+no tier-up (wasm3) — where AOT would supposedly be "the difference between
+usable and not." Measured with gas held identical between builds (so it is
+provably the same work, not less of it): AOT delivered 1.44–1.64× on the
+JIT engines and only 1.07–1.18× on wasmtime and wasm3. **The JIT engines
+gained the most, and the pure interpreter gained the least** — because on
+wasm3, the wasm *blocks* AOT emits are themselves being interpreted, so the
+trade is interpreted-bytecode-dispatch for interpreted-wasm-execution with
+little difference between them; only on an engine that turns those emitted
+blocks into genuine native code does the dispatch cost actually disappear.
+So AOT is fundamentally a JIT-engine optimisation, not an interpreter
+rescue, confirmed directly at multiple scales on wasm3 rather than merely
+inferred from a curve fit.
+
+**Chicory decided the JVM tier question directly, exactly as intended, and
+cheaply.** flint genuinely runs, correctly, on Chicory (a wasm interpreter
+written in Java) — 500× slower than V8 interpreted, 39× slower even compiled
+to JVM bytecode (Chicory's own compile mode is a real 12.9× speedup over its
+interpreter, so both numbers are reported rather than only the flattering
+one), plus 440 ms of parse-and-compile overhead per process. That settles
+`other-hosts`' tier question the way the document expected: not a viable
+Clojure implementation on a platform where Clojure already runs natively, so
+tier 1 is out specifically for the JVM and tier 2 (porting the VM) is the
+actual route — learned for the cost of a benchmark rather than the cost of
+finishing an SDK first and discovering the same thing afterward.
+
+**Resident memory, measured because it is the actual binding constraint
+under a Worker's isolate limits, not throughput.** flint adds only about 0.5
+MB on the one engine that merely interprets the module (wasm3), but 20–27
+MB on every engine that JIT-compiles it — for the *identical* 257 KB of wasm
+and 6.3 MB of linear memory in both cases. So under a typical 128 MiB
+isolate ceiling, it is specifically the engine's own JIT-compiled code, not
+flint's heap, consuming the bulk of the budget — and module size
+consequently buys latency *and* memory together on a JIT engine, and
+effectively neither on a pure interpreter, which is precisely the mirror
+image of what this document originally expected about compilation time.
+
+**The tail latency finding, under the realistic image-per-call deployment
+shape, is the opposite of the usual worry about a garbage-collected
+runtime.** Under sustained allocation-heavy load, p99 latency sits within
+about 6% of the median; at idle (load-and-initialise only), the spread is
+wider, around 21%. flint's collector runs inside the wasm heap rather than
+depending on the host engine's own pause behaviour, and it collects the
+young generation little and often rather than rarely and at length — so
+there is no single pause large enough to show up distinctly at the tail even
+under real allocation pressure, which is specifically the property a
+per-request CPU budget in a Worker actually needs.
+
+**The discipline that runs through this whole document: report every engine
+separately, never averaged, including where flint does badly.** An average
+across engines describes no deployment anyone actually has — the same rule
+`construe-benchmarks` states independently and for the identical reason: a
+results table that only contains wins is a marketing page, and the person
+reading it has to make a real deployment decision with these numbers.
+
+---
+
+## construe-benchmarks
+
+**Benchmark the decision, not the runtime**
+*(formerly `0007`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): done.** Results are folded into the README; `cross-runtime-
+benchmarks` later re-ran the whole set across eight engines, so every figure
+now states which engine actually produced it.
+
+### What was decided
+
+Benchmarks should be organised around **the question construe is actually
+deciding**, not around "is flint fast" in the abstract: for each place
+construe runs code, is flint better, worse, or simply irrelevant there — and
+what does that do to the bill? Two facts from construe's own spec sharpen
+this considerably: CPU is 96% of what a session actually costs (not tokens,
+not bandwidth, so anything moving parse/suggest CPU moves the unit economics
+directly), and cherry — construe's current compiler — cannot compile inside
+its own deployed Cloudflare Worker at all, which is a live blocker on
+promoting any evolved candidate to production today.
+
+### Why each benchmark exists, and what it specifically decides
+
+Real fixtures only — construe's actual seed interpreter and real annotated
+contexts dumped from its own annotator, never a lookalike, because a
+lookalike measures the wrong shape by construction. **Parse latency** is the
+number that touches the bill directly, and the honest comparison is against
+cherry-compiled-to-JS running JIT-compiled in node — expected to be a loss
+for flint, and reported plainly either way, since an interpreter in wasm
+losing to JIT'd native JS is not a failure of the project, and pretending
+otherwise would be. **Cold start and footprint** is where flint may win
+big instead: a V8 isolate costs real milliseconds to spin up and real
+megabytes to hold, where flint measured 0.11 ms cold in a few hundred KB —
+this decides whether flint is a genuinely *cheaper sandbox* for running
+untrusted, model-written code, which may be the strongest economic case of
+all and has nothing to do with throughput. **The 500+ case suite run**
+measures whether a GC pause appears mid-suite, since construe's own gates
+run exactly this shape on every edit an evolving agent makes, and its own
+spec calls that "how one round consumes a month of sandbox time." **Compile
+time** matters because flint's compiler is itself flint code and self-hosts,
+so it can run *inside* a deployed artifact where cherry demonstrably
+cannot — the number that matters there is whether compiling fits a Worker's
+CPU budget at all, not whether it is fast in absolute terms. **Heavy
+documents** measures memory, not throughput, superseded in its own detail by
+`document-resource` immediately below. **Suggest/prefix scan** is called out
+in construe's own spec as "the most expensive unmeasured number" — assumed
+at 1 ms, suspected nearer 0.2 ms, and 96% of session cost — cheap to
+actually measure here and valuable to construe regardless of what the
+number turns out to be.
+
+**The discipline stated explicitly at the end, and it is the rule this
+whole document is really about**: report a table per question with the
+incumbent placed directly beside flint wherever one exists, close with a
+plain-language "what this means for construe" answering specifically
+whether flint can serve the read path, whether it is a cheaper sandbox,
+whether it unblocks compiling in production, and where adopting it would
+plainly cost more than it saves — and **say where flint loses**, explicitly,
+because a benchmark section containing only wins is a marketing page, and
+the person reading it has to make a real decision with these numbers.
+
+---
+
+## document-resource
+
+**Documents: structure eagerly, content on demand**
+*(formerly `0008`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): shipped.** Both wave assertions pass: 64 waves, 4,194,304 bytes.
+Replaces the paging idea from `construe-benchmarks` §5.
+
+### What was decided
+
+For a document capability (construe's extraction use case — read a
+structure, find a table, read that table's cells), **the document's
+structure loads once into flint memory in full; content crosses a port only
+when something actually asks for it**, fetched in coalesced batches planned
+entirely on the host side.
+
+### Why paging was the wrong model, and what replaced it
+
+Paging assumes extraction is a linear scan through a document; it is not —
+most of a fifty-page document is entirely irrelevant to extracting
+`{merchant, total, lines}`, and paging pays the cost of reading all of it
+regardless. **Memory is the actual bottleneck**, so the whole design is
+shaped around what genuinely has to be resident: a document's structure
+(node id, type, box, page, parent/child) is a small fraction of total bytes,
+and every interesting query runs purely against it — loading it once makes
+tree exploration ordinary in-memory Clojure at full interpreter speed, with
+**zero port traffic**, asserted directly by counting messages during a
+structure walk rather than merely claimed. The alternative — making every
+`children` call itself a message — would be catastrophic: a walk over five
+hundred nodes becomes five hundred network round trips.
+
+**The API states intent; only the host plans the actual fetch**, and this
+split is deliberate rather than incidental: the caller asks for the *pieces*
+it wants, never for byte ranges, and never decides how many requests to
+make — only the host knows the storage backend's real cost characteristics
+and the memory budget, so only the host can actually plan. The identical
+script then runs efficiently against R2, a local disk, or an in-memory test
+fixture, with no code change and no awareness of which one it is talking
+to. This generalises directly into a broader pattern worth having once,
+rather than reinvented per driver: **almost every real host capability is
+request/response** — this document resource, a key-value store, an HTTP
+client — so a small, shared layer over ports (a request id, matching replies
+to callers, parking the calling thread until its reply arrives, with
+cancellation and timeout) is built once rather than reinvented, and
+differently, by every driver that needs it.
+
+**The coalescing math has a genuinely surprising number in it, worth
+keeping as a concrete illustration of why intuition undershoots here.** Merge
+two fetch intervals across a gap exactly when fetching the gap is cheaper
+than a second request: `gap_bytes / bandwidth < request_latency`. Plugged in
+with representative R2 numbers (roughly 20 ms per request, 100 MB/s), one
+round trip costs about **2 MB of bandwidth** — so the break-even gap is
+measured in *megabytes*, and the correct policy is far more aggressive
+coalescing than instinct suggests: fetching `a` through `c` and discarding
+`b` in the middle is correct even for a fairly large `b`. The two constants
+deciding this policy genuinely have to be *measured* per storage backend
+rather than assumed, since they differ by an order of magnitude between R2
+and a local file, and the whole policy follows directly from whichever
+numbers are actually true for the backend in use.
+
+**Memory is the constraint that ultimately caps the aggressive-coalescing
+policy above, and it forces two requirements the naive version of it
+misses.** Bytes fetched purely to bridge a gap and then discarded must
+**never enter the guest heap at all** — otherwise over-fetching costs memory
+as well as bandwidth, and the whole policy inverts on itself. And a wanted
+set larger than the memory budget genuinely cannot be satisfied in one
+batch, so the batch call has to be able to answer **in waves** — the caller
+processes and releases a wave, and the next one arrives — which is a
+multi-response request shape the request/response layer has to support
+deliberately rather than by accident. **Delivery order is defined, not
+incidental**: results arrive in the order they were originally *asked for*,
+regardless of what order the fetch planner internally chose to coalesce
+them in — a script whose observable behaviour depended on the planner's
+internal coalescing choices would not be deterministic, and
+`threads-and-ports` already spent real design effort specifically buying
+determinism, so this is a place that effort would otherwise quietly leak
+back out.
+
+**The driver must not cache by default, and — critically — not even with a
+weak reference cache.** If a script simply keeps every fetched content run
+in memory, memory becomes proportional to the whole document again and the
+entire exercise was pointless; the runtime cannot stop a script from
+retaining values, but the *driver* should not retain them on the script's
+behalf either way. A weak-reference cache is explicitly rejected rather than
+merely omitted, and for a specific reason worth stating: a cache whose
+contents depend on exactly when a garbage collection happened to run would
+make program behaviour depend on GC timing, which is precisely the kind of
+non-determinism `threads-and-ports` was built to eliminate everywhere else
+in this system.
+
+---
+
+## construe-integration-bar
+
+**What "ready for construe" means, concretely**
+*(formerly `0023`)*
+
+**Ratified:** ☐ not signed off
+
+**Status (per the record; not independently verified): live** — a milestone definition rather than a design, existing so
+the handoff to construe is judged against an explicit list rather than a
+feeling, and so the work between here and there stays aimed at what the
+first real customer actually needs.
+
+### What was decided
+
+A concrete bar, grounded in what construe actually *is* rather than in what
+would merely be nice to have: construe is a **deterministic**
+natural-language-to-structured-constraint transform, with no model running
+in its request path at all — the parser is ordinary deterministic code,
+evolved *offline* by a model against a growing corpus, gated by comparing
+every candidate against the incumbent before it ships, and then parsing
+happens per WebSocket frame inside a Cloudflare Worker.
+
+### Why that shape changes which measurements actually matter
+
+Three consequences follow directly from construe's actual shape, and none
+of them is the obvious one a casual reader might assume. **The hot path is
+per-frame parse latency and cold start, not steady-state throughput** — a
+session is a socket, a parse is one frame — which is exactly why flint's
+cold-start win (measured at 1.00 ms against a V8 isolate's 14.59 ms) is
+worth more to construe than any steady-state speedup could be, and why
+`emit-wasm-instead-of-dispatch`'s own +12% cold-start cost for +8%
+throughput was specifically the wrong trade *for construe*, even though it
+might be a perfectly reasonable trade somewhere else. **The gates need an
+exact cost metric, not an approximate one** — they compare a candidate
+directly against the incumbent, so "is this candidate cheaper" has to be an
+*exact* question with an exact answer, which is precisely
+`resource-limits`' deterministic instruction count, and is why determinism
+is a genuine product requirement here rather than merely a nicety. **The
+code being run is model-written**, which is what `cli`'s and
+`workspace-capabilities`' capability work is ultimately in service of: a
+parser candidate should be able to reach nothing whatsoever it was not
+explicitly handed.
+
+### The bar itself, and what was actually found while checking each item
+
+**A real parser candidate must run and agree, byte for byte, with the
+incumbent** across construe's real corpus — not a benchmark standing in for
+this, an actual candidate the evolution loop would produce.
+
+**flint must compile inside the deployed Worker — this is the actual
+blocker construe has today, and it is binary, not a matter of degree.**
+cherry cannot compile inside workerd at all, which is a live constraint on
+promoting any candidate; flint self-hosts, so this is the thing that removes
+the blocker if it holds up under test, and it was genuinely unverified
+before this work. It was verified in two separate, escalating steps. First,
+a flint module was run directly under workerd with no polyfill, no WASI, and
+no host functions of any kind, confirming the runtime itself needs nothing
+special from the deployed environment. Then, decisively, **the flint
+compiler itself — as a flint program — ran inside workerd, compiled a real
+candidate from an EDN spec, and a separate resident module loaded and ran
+the resulting image**, with no linker anywhere in the path. This works
+specifically because an image records each builtin it imports **by name as
+well as by slot** — slots are meaningful only to whichever module originally
+compiled them, but names are portable — so a general-purpose "loader"
+module carrying every builtin on the path can re-resolve any given image's
+imports against its own table, refusing by name if the image needs
+something the loader genuinely lacks. **The consequence for construe's
+actual deployment shape**: a Worker should compile once and run many
+requests against the resulting image rather than producing a fresh module
+per request — compilation (measured at 1,178 ms in workerd for a real
+22-namespace program, the standard library accounting for nearly all of it)
+is a promotion-time cost, appropriate for promoting a vetted candidate, and
+genuinely not something to repeat per request; loading and running an
+already-compiled 8 KB image, by contrast, costs about 2 ms each. The
+explicit trade this makes: a general-purpose loader carries every builtin
+rather than only the ones any one program actually reached, so it is
+considerably larger (555 KB against 214 KB) — the mirror image, in the
+opposite direction, of the tree-shaking trade `namespace-units` makes for a
+single self-contained program.
+
+**Gas must stay exact and must survive actually being useful, not merely
+exist as a mechanism.** `resource-limits` is shipped and asserted in
+isolation; what specifically was not yet demonstrated by this document's own
+bar was that two *candidates*, not just one program run twice, can genuinely
+be compared by instruction count in a way the gates can act on — reproducibly
+across separate runs and across a redeploy.
+
+**The library surface must cover what a parser specifically needs, and the
+question is narrower than "how much of Clojure is implemented."** The
+existing deficiency lists were true without being *aimed* at this bar; what
+actually matters is whether string handling, regex, maps, sequences, and
+sorting are present and not pathologically slow for a parser's specific
+workload shape — with `reduced` having silently never worked at all (found
+elsewhere, during the AOT work) standing as the concrete warning that core
+language features can be entirely absent without a single existing test
+noticing.
+
+**Strings and regex, once construe's single largest known gap, closed
+substantially.** "Word frequency (regex split)" sat at 56× babashka before
+`strings-and-matching` and `matching-over-ropes` shipped, and sits at 11.6×
+now — the same workload with the regex removed entirely runs at 7.3 ms
+against 54.5 ms before those two decisions landed. The decomposition behind
+the original 56× is worth keeping precisely because the first reading of it
+was wrong: the regex engine itself was only 27% of the gap, and the
+remaining majority was two ordinary quadratic scans hiding inside
+`str_index_of` and a per-character `lower-case` — fixing those first made
+the *engine* 88% of what remained, which is what actually justified building
+the Pike VM rather than continuing to chase string-level fixes.
+
+**Memory per parse must be bounded and known, not merely assumed
+reasonable**, since Workers enforce hard memory limits and construe's own
+specification independently calls memory the primary bottleneck for
+document-shaped work — measured directly, peak live memory per parse and
+across a whole session of many parses, rather than estimated from first
+principles.
+
+### What is deliberately not on this bar, and why leaving it off matters
+
+Stated explicitly, so the handoff is not implicitly held up by things
+construe genuinely does not need yet: AOT (shelved, and the wrong trade
+specifically for a cold-start-dominated request path); the CLI (developer
+convenience, not a runtime requirement construe's deployment needs); shards
+and module metadata (matters once several namespaces ship independently,
+which is not construe's current shape); the thread pool (construe parses
+exactly one frame at a time); and snapshots, the debugger, and the profiler
+(development tools, not runtime requirements). Once the bar above is met,
+the flint side of the work continues on its own separate track — the CLI,
+general tooling, and whether the AOT question is ever worth reopening — and
+the integration work itself moves to construe's own side of the boundary.
+

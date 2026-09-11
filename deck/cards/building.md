@@ -68,30 +68,30 @@ doc/              decisions, unit format, generated manifest, benchmark output
 
 Written down where somebody will find them, with the reasoning:
 
-- [`doc/decisions/0001-dispatch.md`](doc/decisions/0001-dispatch.md) — interpreter
+- `doc/decisions/0001-dispatch.md` — interpreter
   vs AOT, stack vs register. Both argued, and the dispatch cost measured.
-- [`doc/decisions/0002-modularity.md`](doc/decisions/0002-modularity.md) — only
+- `doc/decisions/0002-modularity.md` — only
   reachable code ships, builtins included.
-- [`doc/decisions/0003-namespace-units.md`](doc/decisions/0003-namespace-units.md)
+- `doc/decisions/0003-namespace-units.md`
   — a namespace is a compilation unit, and linking composes them.
-- [`doc/decisions/0004-exclude-and-unit-path.md`](doc/decisions/0004-exclude-and-unit-path.md)
+- `doc/decisions/0004-exclude-and-unit-path.md`
   — `:exclude` as an assertion with a reference chain, and `:wasm-path` as a
   namespace-resolved search path with `units/` as its last entry.
-- [`doc/decisions/0005-threads-and-ports.md`](doc/decisions/0005-threads-and-ports.md)
+- `doc/decisions/0005-threads-and-ports.md`
   — green threads, ports and protocols, and the point that governs them: `open`
   parks a thread, it does not suspend wasm.
-- [`doc/decisions/0006-host-abi.md`](doc/decisions/0006-host-abi.md) — the host
+- `doc/decisions/0006-host-abi.md` — the host
   ABI: continuation tokens with generations, one event queue, where the cost
   really is, and the two lifetimes of a port's two ends.
-- [`doc/decisions/0007-construe-benchmarks.md`](doc/decisions/0007-construe-benchmarks.md)
+- `doc/decisions/0007-construe-benchmarks.md`
   — benchmark the decision, not the runtime: what the numbers have to answer
   for somebody choosing whether to adopt this.
-- [`doc/decisions/0008-document-resource.md`](doc/decisions/0008-document-resource.md)
+- `doc/decisions/0008-document-resource.md`
   — documents: structure eagerly, content on demand, and the fetch planning
   that follows from measuring latency against bandwidth.
-- [`doc/unit-format.md`](doc/unit-format.md) — what a unit is, and what would
+- `doc/unit-format.md` — what a unit is, and what would
   have to change to admit a user-compiled one.
-- [`PLAN.md`](PLAN.md) — the build order, and what was settled before any code
+- `PLAN.md` — the build order, and what was settled before any code
   depended on it.
 
 `BRIEF.md` is kept for provenance. This file supersedes it as the description of

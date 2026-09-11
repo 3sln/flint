@@ -9,7 +9,7 @@ This is harder than it sounds, because the program is *interpreted*: every
 builtin is reached through a dispatch table, so no linker can prove one dead —
 they are all live by construction. Two obvious routes (rebuild the runtime per
 compile with cargo features; null the table entries and run wasm DCE) were
-rejected in [`doc/decisions/0003`](doc/decisions/0003-namespace-units.md) in
+rejected in `doc/decisions/0003` in
 favour of a third:
 
 **A namespace is a compilation unit.** Each is precompiled — Rust namespaces to
@@ -163,7 +163,7 @@ What it is for:
 - **Keeping a module small on purpose**, with a build failure if a refactor
   quietly reintroduces the dependency.
 
-One honest caveat, because [`doc/decisions/0004`](doc/decisions/0004-exclude-and-unit-path.md)
+One honest caveat, because `doc/decisions/0004`
 asks for "excluding something unreachable makes the module smaller" and that is
 not quite true here. flint already shakes **per var**, so a namespace nothing
 reaches was never in the module and excluding it removes nothing: the flag's
@@ -182,7 +182,7 @@ A search path for **precompiled wasm namespace units**, resolved by namespace
 exactly the way `:src` resolves source: `demo.shout` →
 `<dir>/demo/shout.unit.edn`, by directory hierarchy. A unit is a manifest, a
 relocatable object, and optionally the rlibs it needs; the format is described in
-[`doc/unit-format.md`](doc/unit-format.md).
+`doc/unit-format.md`.
 
 **flint's own units are the last entry on that path**, not a special case. Every
 compile you run already exercises the mechanism a user-supplied unit uses, and
