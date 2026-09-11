@@ -107,6 +107,39 @@
                               "  #?(:flint/check (expect = [\"a\" \"b\"] (vec (s/split \"a,b\" \",\")))))")})]
   (check "5. splitting on a literal works without the regex engine" (= 0 (:exit r))))
 
+
+;; --- WHAT AN `ns` FORM MAY SAY -------------------------------------------
+;;
+;; The clause heads are one set (`flint.analyzer/known-ns-clauses`), read both
+;; by the analyzer that binds aliases and by `flint.compiler/ns-requires`,
+;; which builds the load-order graph. An unknown head used to be dropped in
+;; silence, which turned a misspelled `:require` into a namespace with no
+;; dependencies -- failing much later, as an unresolved var, naming nothing
+;; that led back to the `ns` form.
+(let [r (run {"zzz.cljc" "(ns zzz)\n(defn twice [x] (* 2 x))"
+              "aaa.cljc" (str "(ns aaa (:requrie [zzz]))\n"
+                              "(defn ^:flint.check/test t [] nil)")})]
+  (check "a misspelled clause is refused rather than dropped"
+         (and (not= 0 (:exit r)) (str/includes? (:text r) ":requrie")))
+  (check "  ... and the refusal lists what an ns form does take"
+         (and (str/includes? (:text r) ":require")
+              (str/includes? (:text r) ":refer-clojure"))))
+
+;; A clause flint KNOWS and rejects is a different answer from one it has never
+;; heard of, and keeps its own reason.
+(let [r (run {"aaa.cljc" (str "(ns aaa (:import java.util.Date))\n"
+                              "(defn ^:flint.check/test t [] nil)")})]
+  (check "an :import still says flint has no host interop"
+         (and (not= 0 (:exit r)) (str/includes? (:text r) "host interop"))))
+
+;; The accepted-and-ignored clause stays accepted.
+(let [r (run {"zzz.cljc" "(ns zzz)\n(defn twice [x] (* 2 x))"
+              "aaa.cljc" (str "(ns aaa (:refer-clojure :exclude [get])\n"
+                              "  (:require [flint.check :refer [expect]]))\n"
+                              "(defn ^:flint.check/test t []\n"
+                              "  #?(:flint/check (expect = 84 (zzz/twice 42))))")})]
+  (check ":refer-clojure is still accepted" (= 0 (:exit r))))
+
 (println)
 (if (zero? @fails)
   (println "requires: four shapes that resolve without one\n")

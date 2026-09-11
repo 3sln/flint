@@ -29,14 +29,14 @@
 (defn ns-requires [form]
   (let [[_ _ & clauses] form]
     (vec (for [c clauses
-               :when (and (seq? c) (#{:require :use} (first c)))
+               :when (and (seq? c) (ana/require-clauses (first c)))
                spec (rest c)
                :let [t (if (symbol? spec) spec (first spec))]]
            t))))
 
 (defn ns-aliases [form]
   (into {} (for [c (drop 2 form)
-                 :when (and (seq? c) (#{:require :use} (first c)))
+                 :when (and (seq? c) (ana/require-clauses (first c)))
                  spec (rest c)
                  :when (vector? spec)
                  :let [opts (apply hash-map (rest spec))]

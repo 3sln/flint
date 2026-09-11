@@ -54,14 +54,21 @@ A decision explains *why*; the roadmap tracks *whether*.
 **Rebuild both arms the same way before comparing anything.** A stale artefact
 does not announce itself; it presents as a real finding.
 
-| What you changed | What must be rebuilt |
+| What you changed | What must be rebuilt, in order |
 |---|---|
-| `src/` or `lib/` | `cargo build --release -p flint-cli` — `lib/` is embedded by `cli/build.rs` |
-| anything, before `flint run` | `cargo build --release -p flint-cli` |
-| runtime/compiler artifacts | `bin/build-dist` |
+| `src/` — the COMPILER | `bin/build-dist`, then `cargo build --release -p flint-cli` |
+| `lib/` — the stdlib | `cargo build --release -p flint-cli` |
 | unit modules | `bin/build-units` |
 
-`bin/build-dist` does **not** rebuild `target/release/flint`.
+The two halves are embedded by different routes, and that is the trap.
+`cli/build.rs` reads `lib/` from source at build time, so a stdlib change needs
+only the cargo build. The compiler is embedded as `dist/flintc.bytecode`, which
+cargo copies but does not produce — so a `src/` change that skips
+`bin/build-dist` gets re-embedded unchanged, and the binary runs the old
+compiler while reporting success.
+
+`bin/build-dist` does **not** rebuild `target/release/flint`, and
+`cargo build` does **not** rebuild `dist/`. Neither step implies the other.
 
 Two symptoms that mean *check freshness* before believing a result: the two arms
 agree **exactly** — a measurement that cannot tell its arms apart is not

@@ -1255,6 +1255,23 @@
 
 ;; ------------------------------------------------------------------- ns
 
+(def require-clauses
+  "The `ns` clauses that NAME NAMESPACES.
+
+  One set, read by everything that needs the answer: this file binds their
+  aliases and refers, and `flint.compiler/ns-requires` and `ns-aliases` build
+  the load-order graph from the same heads. Two spellings of \"which clause
+  names a namespace\" is a graph that disagrees with the bindings."
+  #{:require :use})
+
+(def known-ns-clauses
+  "Every clause head an `ns` form may carry.
+
+  `:import` is included and still REFUSED -- it is a clause flint knows about
+  and rejects with a reason, which is a different answer from one it has never
+  heard of."
+  (into #{:refer-clojure :import} require-clauses))
+
 (defn analyze-ns [env form]
   (let [[_ nsname & clauses] form
         cc (:cc env)]
@@ -1273,5 +1290,11 @@
                 (vswap! cc assoc-in [:namespaces nsname :refers r] (symbol (str target) (name r))))))
           :refer-clojure nil
           :import (throw (ex-info "flint has no host interop, so :import is not supported" {:form c}))
-          nil)))
+          ;; AN UNKNOWN CLAUSE IS AN ERROR, not a no-op. Dropping it silently
+          ;; makes a misspelled `:require` into a namespace with no
+          ;; dependencies, which fails much later as an unresolved var and
+          ;; names nothing that would lead a reader back to the `ns` form.
+          (throw (ex-info (str "an ns form has no " (first c) " clause -- flint takes "
+                               (str/join ", " (sort (map str known-ns-clauses))))
+                          {:form c :known known-ns-clauses})))))
     {:op :const :val nil}))
