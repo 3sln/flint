@@ -86,6 +86,82 @@ Nothing structural varies. No control flow depends on which tree it is.
 * Keep the generated output readable. `bin/check-kin` diffs it, and a person
   reads it when a runtime disagrees.
 
+## Case 3 — the same walk, two ways of stepping
+
+Found twice, independently, in files that know nothing about each other:
+
+* `hash-vec-indexed` vs `hash-ordered` (`valhash.kin`)
+* `vec-eq-indexed` vs `seq-eq` (`valeq.kin`)
+
+In both, the second function DISPATCHES to the first when the value is a plain
+vector, and otherwise carries its own copy of the same walk. The charging, the
+early exit, the accumulation are identical. What differs is how the walk
+STEPS: an index into `vec-nth` against a cursor moved by `first`/`next`, and a
+termination test to match.
+
+Two unrelated authors solved the same problem the same way, which is what makes
+it a case rather than an accident. **And it is a different axis from cases 1 and
+2**: nothing here is an accessor rename. A facility built only for substituting
+names and constants would not cover it.
+
+## Case 4 — the same walk, a different arity at the step
+
+Inside one file. `node-entry-sum` vs `node-key-sum` in `collhash.kin`, and
+`map-entry-sum` vs `map-key-sum` beside them. Identical CHAMP walk -- collision
+loop, datamap loop, nodemap recursion, same charging -- differing only in what
+is accumulated: `entry-hash(key, val)` against `hash-value(key)`.
+
+A two-argument call against a one-argument call. **A third axis.**
+
+## Case 5 — persistent and transient vectors, WHICH MAY NOT NEED THIS AT ALL
+
+`push-tail` / `t-push-tail`, `do-assoc` / `t-do-assoc`, `vec-conj` /
+`tvec-conj`, and the `assoc`/`pop` pairs. Same trie descent; the transient
+threads an `edit` token, swaps `node-clone` for `ensure-editable`, and drops a
+nil-check the persistent path needs because it allocates.
+
+READ THIS ONE WITH THE NEXT SECTION. Maps solved the identical problem without
+duplicating anything, and the vector half may simply be able to follow.
+
+Two details worth keeping either way. `pop-tail` is NOT duplicated -- the
+transient requires it and calls it unmodified -- so whatever the answer is, it
+has to be per-FUNCTION and not per-module. And the transient does LESS defensive
+work than the persistent, not more, so "specialise by adding" is not the only
+direction.
+
+## The boundary: what ordinary kin already handles
+
+This is the most useful thing the audit found, and it scopes the facility more
+than the cases do.
+
+* **Maps and sets, persistent vs transient.** `node-assoc` and `node-dissoc`
+  take an `edit` parameter. `mapwrite.kin` passes `NIL`; `maptrans.kin` passes
+  a token. ONE implementation, two behaviours, no code generation -- just a
+  runtime value. Vectors have the same split and wrote it twice (case 5).
+* **Upper and lower casing.** `change-case` and `case-map` take a `^Bool up`.
+  One walk, two directions.
+* **Sets on maps.** `setcore.kin` delegates -- every operation calls into
+  `mapcore`/`mapread`/`mapwrite`/`mapeq`. Composition, not duplication.
+* **Tables on vectors.** `tableref`/`tablerow` require `vecread`/`vecwrite` and
+  call them. A table is BUILT ON a vector rather than being a second one.
+
+So the question to ask of any proposed case is not "do these look alike" but
+"can a plain parameter already express the difference". Where it can, kin needs
+nothing new. **The facility is for what a value cannot carry**: accessor and
+constant substitution, a step present on one side only, a different way of
+iterating, a different arity at the step.
+
+## Refuted, so nobody re-checks
+
+* maps vs sets -- delegation, no duplicated body
+* vectors vs tables -- tables call vector functions
+* persistent vs transient for MAPS and SETS -- already one implementation
+* persistent vs transient for TABLES -- `tabletrans.kin` is a genuinely
+  different algorithm, a column-batched bulk fill built because the per-row
+  path copied a 256-row chunk 256 times
+* a string twin for `bytetwrite.kin` -- strings have no transient builder at
+  all, so this is an asymmetry in features, not duplication
+
 ## What is NOT evidence for this
 
 `set-eq`, `hash-mask`, `bitpos`, `index-of` and `vec-count` were all written

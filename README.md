@@ -1216,7 +1216,7 @@ claim fails the build.
 <!-- BEGIN GENERATED COVERAGE -->
 | namespace | vars | macros | missing vs Clojure | flint-only |
 |---|---:|---:|---:|---:|
-| `clojure.core` | 322 | 45 | 376 | 1 |
+| `clojure.core` | 321 | 45 | 376 | 0 |
 | `clojure.core.protocols` | 4 | 0 | n/a | n/a |
 | `clojure.data` | 5 | 0 | n/a | n/a |
 | `clojure.datafy` | 2 | 0 | n/a | n/a |
@@ -1233,7 +1233,7 @@ claim fails the build.
 | `flint.data.xml` | 9 | 0 | n/a | n/a |
 | `flint.doc` | 11 | 0 | n/a | n/a |
 | `flint.port` | 12 | 1 | n/a | n/a |
-| `flint.protocols` | 6 | 0 | n/a | n/a |
+| `flint.protocols` | 7 | 0 | n/a | n/a |
 | `flint.regex` | 11 | 0 | n/a | n/a |
 | `flint.rpc` | 6 | 0 | n/a | n/a |
 | `flint.thread` | 8 | 0 | n/a | n/a |
@@ -1257,8 +1257,6 @@ protocols and types (`defprotocol`, `deftype`, `defrecord`, `reify`, `extend`, `
 hierarchies (`derive`, `isa?`, `parents`, `prefer-method`);
 transducers (`transduce`, `eduction`, `cat`, `completing`, `halt-when`, and the 1-arity transducer forms of `map`/`filter`/`take`/...);
 and sorted collections (`sorted-map`, `sorted-set`, `subseq`, `rsubseq`).
-
-*Added by flint:* `extend-method`
 
 *Absent:* 376 names -- see `doc/manifest.edn` for all of them.
 
