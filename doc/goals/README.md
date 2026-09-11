@@ -498,12 +498,20 @@ privacy.
 
 AND ONE CONFOUND HAS BEEN REMOVED. Moving `extend-method` really did contain a
 second, unrelated fault: its body calls `clojure.core/method-key`, which is
-`defn-`, and privacy used to be ORDER-DEPENDENT -- `flint.protocols` is
-analysed BEFORE `clojure.core`, because `clojure.core` requires it, so the
-reference passed silently. With that fixed the compiler now says
-`clojure.core/method-key is private to clojure.core; flint.protocols may not
-name it`, which is a real answer where there used to be a silent pass and a
-mystery downstream.
+`defn-`, so the compiler says `clojure.core/method-key is private to
+clojure.core; flint.protocols may not name it`.
+
+THE REASON I GAVE FOR IT WAS WRONG, and this is the third correction this
+section has taken, so it is worth saying plainly. I wrote that the reference
+"passed silently" because privacy was order-dependent and `flint.protocols` is
+analysed BEFORE `clojure.core`. It is not. `core-first`
+(`src/flint/project.cljc:267`) pins `clojure.core` to the FRONT of the order
+unconditionally -- `(concat pinned (remove pin? order))` -- whatever the
+require graph says. So `clojure.core` is analysed first, its `:var-meta` is
+already filled when `flint.protocols` is analysed, and the old check would have
+refused this too. I asserted the mechanism from a plausible story about
+ordering instead of reading the ordering, which is the same mistake as the
+first retraction in this section, made about a different pass.
 
 IT IS NOT THE ANSWER, THOUGH, and that is worth being exact about. Making
 `method-key` public and moving `extend-method` anyway builds the compiler
@@ -521,8 +529,31 @@ dependency; it is something about `clojure.core` specifically: auto-referred
 into every namespace, bootstrapped, and the one namespace whose own analysis
 order is not a free variable.
 
-SO THE MECHANISM IS UNKNOWN, and this section says so rather than offering a
-third guess. Two disproofs narrow it; they do not close it. `extend-method` stays in `clojure.core`. It is the one name that
+AND `core-first` IS WORTH READING BEFORE GUESSING AGAIN, because it is the one
+place where the load order is not the require graph. It pins two names:
+`clojure.core`, and `flint.check` -- the latter with the comment "`expect` is a
+MACRO, and a macro has to be compiled before the namespace that expands it is
+analysed. Nothing `:require`s `flint.check`, so the graph has no edge to order
+by and this supplies one."
+
+That is a hand-made fix for a general hole, and the hole has since been found
+and closed: a macro used from a namespace analysed before its definer was
+compiled as an ORDINARY CALL, silently, evaluating arguments the macro was
+written to discard. It refuses now. Four more of that family -- a table
+written at analysis and read at a reference -- were found and fixed with it:
+capability guards, `^:private`/`^:internal` on macro-defined vars, and
+`:dynamic`. `extend-method` is the same shape one pass later: not a table read
+before it was filled, but a var READ before its namespace was initialised.
+
+Whether `core-first` hoisting `clojure.core` over the namespaces it requires
+is what leaves `flint.protocols` uninitialised at the moment
+`(extend-protocol ...)` runs is the obvious next probe, and it is a PROBE and
+not a conclusion -- this section has already offered two explanations that did
+not survive contact, and the pattern in both was reasoning about order instead
+of reading it.
+
+SO THE MECHANISM IS STILL NOT ESTABLISHED, and this section says so rather
+than offering a third guess. Two disproofs narrow it; they do not close it. `extend-method` stays in `clojure.core`. It is the one name that
 namespace publishes which Clojure does not.
 
 MISSING TEST: `test/requires.clj` pins three cases that pass -- a function
