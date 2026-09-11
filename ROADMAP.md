@@ -365,11 +365,28 @@ dependency that makes it possible: running the compiler natively "is 2.7 s
 against 15.6 s through a wasm engine". That is a 5.8× difference on the same
 compile, and it is the entire argument for `other-hosts`' native path.
 
-Shipping the CLI as wasm-on-node takes that hit on every invocation. Nobody has
-re-measured it under a modern node, and the figure may have moved — but it
-should be re-measured rather than assumed either way before the native form is
-dropped rather than merely deferred. The native binary is not dead weight; it
-is the fast path, and the npm form is the portable one.
+Shipping the CLI as wasm-on-node takes that hit on every invocation. The figure
+may have moved under a modern node — but it has to be RE-MEASURED PROPERLY, and
+that is harder than it looks.
+
+I tried twice and got two invalid answers, both worth recording so the next
+attempt does not repeat them:
+
+* `./bin/flint` against `./target/release/flint` is not native-versus-wasm at
+  all. `bin/flint` is babashka running the compiler's Clojure SOURCE; there is
+  no wasm engine in it. The tell was the output sizes — 362 KB against 624 KB
+  for the same program.
+* `node host/flint-file.mjs dist/flintc.wasm` against the native CLI is not the
+  same WORK. The node path takes a pre-built spec, so source reading and
+  namespace resolution already happened elsewhere, and it emitted 13 KB where
+  the native run resolved sources and linked a 624 KB module.
+
+The two paths carry different responsibilities in the pipeline, so timing them
+end to end compares pipelines and not hosts. A real answer needs the same
+stage measured on both sides — which is what `bin/bench-xruntime`,
+`bin/bench-image` and `bin/bench-chicory` already exist to do, reporting
+ns/instruction precisely because that IS comparable across engines. That is
+where this belongs, not in a stopwatch around two different commands.
 
 ### Design: a first-party pod registry, in this repo
 
