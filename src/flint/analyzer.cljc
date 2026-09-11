@@ -324,7 +324,33 @@
           (when (not= w-here w-there)
             ;; What is MISSING, not the whole guard: naming three capabilities
             ;; the caller already holds helps nobody find the one it does not.
-            (let [missing (into #{} (remove (or (get-in ws [here :grants]) #{}) guard))]
+            (let [;; A VAR THAT DECLARES A GUARD MAY CALL WHAT IT GUARDS.
+                  ;; `flint.host/request` is guarded `[:host]` and its body is
+                  ;; `(flint.rt/request ..)` -- it IS the implementation of
+                  ;; that capability, and the whole reason the builtin is
+                  ;; guarded is so that this wrapper is the way through.
+                  ;;
+                  ;; The alternative was granting `:host` to the standard
+                  ;; library's workspace, and `lib/deps.edn` says in as many
+                  ;; words why not: "It grants NOTHING ... the standard library
+                  ;; holds no capability of its own." Granting it would have
+                  ;; given every namespace in `lib/` the authority that two
+                  ;; functions need.
+                  ;;
+                  ;; No authority is created. A caller in another workspace
+                  ;; still has to hold `:host` to name the wrapper, so the
+                  ;; chain is unchanged -- what moves is only WHERE the
+                  ;; requirement is stated, from the workspace to the var that
+                  ;; actually does the thing.
+                  own (let [cur (:current-var env)]
+                        (when cur
+                          (:flint/capabilities-guard
+                           (or (get (:var-meta c) cur)
+                               (let [d (get (:declared c) cur)]
+                                 (when (map? d) d))))))
+                  held (into (set (or (get-in ws [here :grants]) #{}))
+                             (or own #{}))
+                  missing (into #{} (remove held guard))]
               (when (seq missing)
                 ;; Name it the way a person WROTE it. `flint.native/flint/add`
                 ;; is the internal coordinate and appears in no source.

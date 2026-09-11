@@ -399,3 +399,42 @@
              (mac-outcome {"a/owner.cljc" (str "(ns a.owner)\n" discards)
                            "app/main.cljc" "(ns app.main (:require [a.owner :as o])) (defn main [_] (a.owner/mm no-such-symbol-here))"}))
        "the control: a macro that expands must not look at what it discards")
+
+;; A GUARDED VAR MAY CALL WHAT IT GUARDS, which is what makes a wrapper
+;; possible at all. `flint.host/request` is guarded `[:host]` and its body is
+;; `(flint.rt/request ..)`; it IS the implementation of that capability, and
+;; guarding the builtin exists precisely so that this wrapper is the way
+;; through.
+;;
+;; The alternative was granting `:host` to the standard library's workspace,
+;; and `lib/deps.edn` says why not in as many words -- "It grants NOTHING ...
+;; the standard library holds no capability of its own." That would hand every
+;; namespace in `lib/` the authority two functions need.
+;;
+;; No authority is created: a caller in another workspace still has to hold
+;; `:host` to name the wrapper. What moves is where the requirement is stated.
+(def wrapper-ws [{:prefix "libx/" :name 'libx} {:prefix "app/" :name 'app}])
+
+(check "a var guarded with X may name a builtin guarded with X"
+       (not= :refused
+             (guard-outcome
+              {"libx/w5.cljc" "(ns libx.w5)\n(defn ^{:flint/capabilities-guard [:host]} req [x] (flint.rt/request x))"
+               "app/main.cljc" "(ns app.main (:require [libx.w5])) (defn main [_] 1)"}
+              wrapper-ws #{"flint/request"}))
+       "without this the standard library cannot implement the capability it guards")
+
+(check "but an UNGUARDED var beside it may not"
+       (= :refused
+          (guard-outcome
+           {"libx/w6.cljc" "(ns libx.w6)\n(defn wide-open [x] (flint.rt/request x))"
+            "app/main.cljc" "(ns app.main (:require [libx.w6])) (defn main [_] 1)"}
+           wrapper-ws #{"flint/request"}))
+       "the exemption is the VAR's own guard, not its workspace's neighbourhood")
+
+(check "and a var guarded with something ELSE may not"
+       (= :refused
+          (guard-outcome
+           {"libx/w7.cljc" "(ns libx.w7)\n(defn ^{:flint/capabilities-guard [:fs]} req [x] (flint.rt/request x))"
+            "app/main.cljc" "(ns app.main (:require [libx.w7])) (defn main [_] 1)"}
+           wrapper-ws #{"flint/request"}))
+       "holding a guard for :fs must not buy :host")
