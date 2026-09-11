@@ -214,6 +214,19 @@ So this is recorded and not done. It is a real instance of the pattern and the
 price is real too; whether ~20 lines of shared structure is worth a per-node
 branch is a judgement about this runtime, not a cleanup.
 
+WHAT THIS COUNT IS NOT. It measures the surface kin CALLS INTO, not everything
+written three times. The runtimes also hold parallel hand-written code kin
+never sees -- memory, the collector, threads, AOT, the codec -- and most of
+that genuinely wants a host.
+
+A NAME-LEVEL CENSUS OF THE REST DOES NOT WORK, tried and recorded so nobody
+repeats it. Normalising for snake/camel/Pascal and intersecting the three trees
+gives 192 shared names, which looks like a finding and is not: the matches
+collide across concepts. `conj` is in all three, and it is a type DISPATCHER in
+`runtime/src/coll.rs`, a byte-transient append in `Bytes.java`, and a vector
+shim in `Vec.java`. Three unrelated functions, one name. Finding real
+duplication out there needs bodies compared, not names.
+
 AND THE 31-WALK EXISTS FOUR TIMES. `hashBytes` / `HashBytes` / `hash_bytes` are
 one rule -- `h * 31 + byte`, then the final mix -- written once per runtime,
 and `kin/bytehash.kin` writes the SAME walk for byte trees, generated. The two
