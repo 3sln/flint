@@ -177,7 +177,7 @@
 (check-that "an unbuilt target is refused by name, not silently"
             (let [o (cli true "build" ":target" "jvm")]
               (and (str/includes? o "cannot emit for jvm")
-                   (str/includes? o "0010"))))
+                   (str/includes? o "other-hosts"))))
 (check-that "an unknown target lists the real ones"
             (str/includes? (cli true "build" ":target" "wat") "no such target: wat"))
 (check-that "build with no entry point says how to give one"
