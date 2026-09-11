@@ -503,7 +503,7 @@ The set it emits is small and was probed in full:
 | `clojure.core/assoc` | `binding` | safe — pinned first |
 | `flint.rt/dyn-bindings`, `dyn-set-bindings` | dynamic vars | safe — `flint.rt` is a builtin, it has no vars to be nil |
 | `flint.protocols/extend-method`, `protocol-miss` | `defprotocol` | FIXED by pinning (`cb8fadd`) |
-| `flint.virtual/fn-for`, `call` | a reference to a virtual namespace | STILL BROKEN |
+| `flint.virtual/fn-for`, `call` | a reference to a virtual namespace | FIXED by `implied-requires` |
 | `flint.regex/pattern` | ANY regex literal | FIXED by `implied-requires` |
 
 THE REGEX ONE IS ORDINARY CODE, which is what makes this worth a section:
@@ -541,14 +541,29 @@ Cycle risk was measured, not assumed: `flint.regex`, `clojure.string` and
 `flint.protocols` requires -- contains no protocol forms. So neither new edge
 can point back into its own chain.
 
-THE VIRTUAL CASE IS NOT FIXED. Its trigger is "this source requires a namespace
-that is VIRTUAL", which the compiler knows from the workspace table and
-`bin/flint` does not: that script carries a hardcoded `#{flint.rt}` and cannot
-see a workspace-declared virtual namespace at all. Deriving it in one of the
-two and not the other would make them disagree about load order, which is the
-defect the duplication comment exists to prevent. Teaching `bin/flint` the
-workspace's virtual set is the prerequisite, and it is a bigger change than
-this one.
+THE VIRTUAL CASE IS FIXED TOO, in the compiler only. Its trigger is "this
+source requires a namespace that is VIRTUAL", which `topo-order` reads from
+`sources`. `bin/flint` has NO counterpart and that is not a divergence: it
+cannot compile such a program at all -- measured, it answers "cannot find
+source for namespace flint.sys.fs", because its workspace model has no
+`:virtual`. Its own `virtual-namespaces` is `#{flint.rt}`, a different thing:
+builtins compiled to native calls, with no `flint.virtual` behind them. Using
+that set for this trigger would add an edge for every `(:require [flint.rt])`
+and be wrong.
+
+AND A SEPARATE GAP CAME OUT OF TESTING IT, recorded rather than asserted away.
+The ordering fix makes an UNGRANTED load-time virtual call refuse for the right
+reason -- "no system port" instead of a nil callee. A GRANTED one at load time
+still does not work: it never returns a value the entry can render, while the
+same call from a function body succeeds, as every granted row in
+`test/sysns.clj` shows. Reaching the server means PARKING on a port, and
+whether a top-level form may park during initialisation is a different question
+from load ORDER. It has a row asserting only that it is not a nil callee.
+
+A TRAP WORTH KEEPING: the first version of that test had `go` ignore the
+top-level `def`, and it passed. The linker had dropped the def as unreachable,
+so the row never ran the thing it was about. A load-time probe has to be READ
+by the entry or it proves nothing.
 
 THE OLD RECORD FOLLOWS, corrected where it was wrong.
 

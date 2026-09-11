@@ -175,6 +175,46 @@
   (check "an unknown dependency kind is refused by name"
          (and (not (zero? (:exit r))) (str/includes? (:out r) "cargo")) (:out r)))
 
+;; A VIRTUAL REFERENCE AT LOAD TIME, which is a different phase from every row
+;; above and used to give a different ERROR. A virtual namespace compiles to
+;; calls on `flint.virtual`, and the using namespace requires `flint.sys.fs` --
+;; the namespace it NAMES -- never the machinery behind it. `flint.virtual` was
+;; added to the program as a ROOT, which puts it in and gives it no edge, so it
+;; could be initialised after the code calling into it:
+;;
+;;   before   "value is not a function (nil, 2 args)"
+;;   after    "no system port, so it cannot ask for \"flint.sys.fs\""
+;;
+;; and requiring `flint.sys.fs` did not help, because that is not what the call
+;; is on. `topo-order` derives the edge now: a source requiring a VIRTUAL
+;; namespace depends on `flint.virtual`.
+;;
+;; UNGRANTED ON PURPOSE. What this row pins is that the call is REACHED and
+;; refused for the right reason. A granted call at load time is a separate
+;; question and does not work -- see the row below.
+(spit (str proj "/app/c.cljc")
+      (str "(ns app.c (:require [flint.sys.fs :as fs]))\n"
+           ;; TOP LEVEL, and READ by `go`, or the linker drops it and the row
+           ;; passes by never running the thing it is about.
+           "(def at-load (try (fs/exists? \"deps.edn\") (catch Throwable e (ex-message e))))\n"
+           "(defn go [_] (str at-load))\n"))
+
+(let [r (sh proj flint "run" ":path" "." ":fn" "app.c/go")]
+  (check "a virtual reference AT LOAD TIME reaches the machinery"
+         (str/includes? (:out r) "no system port") (:out r))
+  (check "and does not fall back to the nil-callee message"
+         (not (str/includes? (:out r) "is not a function")) (:out r)))
+
+;; AND A GRANTED ONE AT LOAD TIME DOES NOT WORK, which is NOT the ordering bug
+;; above and is recorded rather than asserted away. The same call succeeds from
+;; `go` -- every granted row further up does exactly that -- and from a
+;; top-level `def` it never returns a value the entry can render. Reaching the
+;; server means PARKING on a port, and whether a top-level form may park during
+;; initialisation is a question this file cannot answer on its own.
+(let [r (sh proj flint "run" ":path" "." ":fn" "app.c/go" ":with" "[fs]")]
+  (check "a GRANTED virtual call at load time is a known gap, not a nil callee"
+         (not (str/includes? (:out r) "is not a function")) (:out r)))
+
 (if (pos? @fails)
   (do (println "sysns:" @fails "FAILURES") (System/exit 1))
   (println "sysns: ok"))

@@ -238,9 +238,29 @@
   A silent cycle does not stay silent; it re-emerges somewhere with no
   information attached."
   [sources]
-  (let [deps (into {} (for [[n {:keys [forms]}] sources]
-                        [n (into (set (compiler/ns-requires (or (ns-form forms) '(ns x))))
-                                 (implied-requires n forms))]))]
+  (let [;; A VIRTUAL NAMESPACE COMPILES TO CALLS ON `flint.virtual`, and
+        ;; requiring it names the virtual namespace rather than the machinery.
+        ;; `resolve-project` adds `flint.virtual` to the program as a ROOT when
+        ;; one is present -- which puts it in, and gives it no edge, so it
+        ;; could still be initialised after the namespace calling into it.
+        ;; Measured: a top-level `(flint.sys.fs/list-dir "src")` died as "value
+        ;; is not a function (nil, 2 args)" even with `flint.sys.fs` required,
+        ;; because the call is on `flint.virtual` and nothing named that.
+        ;;
+        ;; `bin/flint` HAS NO COUNTERPART, and that is not a divergence: it
+        ;; cannot compile such a program at all -- it answers "cannot find
+        ;; source for namespace flint.sys.fs", because its workspace model has
+        ;; no `:virtual`. Its `virtual-namespaces` is `#{flint.rt}`, which is a
+        ;; different thing: builtins, compiled to native calls, with no
+        ;; `flint.virtual` behind them. Using that set for this trigger would
+        ;; add an edge for every `(:require [flint.rt])` and be wrong.
+        virtuals (set (for [[n e] sources :when (:virtual e)] n))
+        deps (into {} (for [[n {:keys [forms]}] sources]
+                        (let [reqs (set (compiler/ns-requires (or (ns-form forms) '(ns x))))]
+                          [n (cond-> (into reqs (implied-requires n forms))
+                               (and (not= n 'flint.virtual)
+                                    (some virtuals reqs))
+                               (conj 'flint.virtual))])))]
     (loop [done [] seen #{} pending (vec (keys deps))]
       (if (empty? pending)
         done
