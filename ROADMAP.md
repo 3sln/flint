@@ -282,6 +282,28 @@ carrying `:pod/version` with a virtual namespace underneath, and
 plus the pod's asset/file/VFS reader, merged with `deps.edn` in one walk, for
 every kind.
 
+**NOT NEGOTIABLE: fetching must be fast and parallelisable, so every interface
+here is PLAN-BASED.** The `.cljc` coordinates and decides WHAT to fetch; it
+never fetches. It answers with a batch, as data, and the host runs that batch —
+concurrently, because a batch of independent downloads has no reason to be
+serial.
+
+The good news is that the interface already works this way, and the precedent
+is not one case but two. `fetch-plan` in `lib/flint/deps.cljc` says it outright
+— "the guest decides WHAT to fetch and where it goes, which is pure and
+testable, and the host runs `git`" — and it is already iterative for the reason
+that matters: a dependency's own manifest cannot be read until the thing is on
+disk, so an unfetched entry comes back `:fetched? false`, the host fetches, and
+the host asks again until nothing is pending. That fixpoint is what makes each
+round a BATCH rather than a walk. `bench/construe/document-resource.md` draws
+the same split for document content, down to coalescing the batch host-side.
+
+WHAT IS MISSING IS THE PARALLELISM, NOT THE SHAPE. `bin/flint` drives the
+fixpoint with `(doseq [x f] ...)` — it fetches the batch one entry at a time.
+So the architecture already permits what is being asked for and the driver
+declines to use it. Whatever replaces these modules keeps the plan/execute
+split and runs each round concurrently.
+
 ONE CORRECTION TO A PREMISE, since it was raised as a question: npm genuinely
 does accept git dependencies (`git+https://…` in `package.json`), but Maven
 does not resolve from git natively — JitPack and similar are third-party
