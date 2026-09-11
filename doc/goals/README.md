@@ -489,6 +489,54 @@ and the pinned list stops being two special cases and starts being a
 hand-maintained prefix of the order. That is a decision, not a fix, and it is
 left open.
 
+## THE GENERAL CASE: a compiler-emitted reference is not an edge
+
+`extend-method` was one instance of something larger, and the larger thing is
+still open. The load order is built from `:require` EDGES. The COMPILER emits
+references the user never wrote, into the user's namespace, and those are real
+runtime dependencies with no edge behind them.
+
+The set it emits is small and was probed in full:
+
+| emitted | when | state |
+| --- | --- | --- |
+| `clojure.core/assoc` | `binding` | safe — pinned first |
+| `flint.rt/dyn-bindings`, `dyn-set-bindings` | dynamic vars | safe — `flint.rt` is a builtin, it has no vars to be nil |
+| `flint.protocols/extend-method`, `protocol-miss` | `defprotocol` | FIXED by pinning (`cb8fadd`) |
+| `flint.virtual/fn-for`, `call` | a reference to a virtual namespace | BROKEN |
+| `flint.regex/pattern` | ANY regex literal | BROKEN |
+
+THE REGEX ONE IS ORDINARY CODE, which is what makes this worth a section:
+
+    (ns app.main)
+    (def re #"a+b")
+    ;; ClassCastException: value is not a function (nil, 1 args)
+
+`(:require [flint.regex])` fixes it, and that is the whole problem: the user
+must require an implementation-detail namespace they never named to make a
+literal work. The virtual case is worse — requiring `flint.sys.fs`, the
+namespace actually mentioned, does NOT help, because the emitted call is on
+`flint.virtual`.
+
+PINNING DOES NOT REACH THEM, and that is the finding rather than the
+inconvenience. `core-first` went from two entries to four for the protocol fix.
+`flint.regex` requires `clojure.string` and `flint.nfa`; `flint.virtual`
+requires `flint.port`, `flint.rpc` and `flint.thread`. Covering these by
+pinning means hand-writing a large prefix of the stdlib's load order, and the
+next emitted reference reopens it.
+
+WHAT THE FIX LOOKS LIKE. The information already exists before analysis: the
+READ pre-pass walks every top-level form, so it can see the regex literal and
+the `defprotocol` that will become these calls. An emitted reference should
+supply the edge the user did not write, the way `core-first` supplies one for
+`flint.check` — but derived rather than listed.
+
+NOT DONE, and deliberately. It changes the compiler's dependency model; the
+order determines analysis and analysis produces `:deps`, so the edge has to
+come from the pre-pass rather than from the dependency table, and getting that
+framing wrong would be a worse bug than the one it fixes. One ordering change
+has already landed this session.
+
 THE OLD RECORD FOLLOWS, corrected where it was wrong.
 
 WHAT WAS OBSERVED:
