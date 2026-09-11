@@ -21,10 +21,22 @@
                                    for while not == < > >= - bit-and shl ushr
                                    push r pop-to slot as-fixnum to-i32 nil?
                                    is-heap as-heap ty or Rt Value RootIx I32
-                                   Bool Ty NIL BITS WIDTH MASK V_SHIFT V_ROOT
-                                   V_TAIL TY_VEC TY_MAPENTRY]]
-            [flint.rt.vector :refer [vec-count]]
+                                   Bool Ty NIL BITS WIDTH MASK V_CNT V_SHIFT
+                                   V_ROOT V_TAIL TY_VEC TY_MAPENTRY]]
             [flint.rt.vecnode :refer [new-node node-len node-get node-set]]))
+
+(doc "How many elements the vector `v` holds."
+     ""
+     "ONE SLOT READ, and it was a linked form -- written once per runtime and"
+     "declared to kin as a primitive, beside `char-at` and `s-copy-range`"
+     "which really do need the host's memory. This needs a slot and a fixnum,"
+     "both of which kin says already. It sat on the linked side because it is"
+     "SHORT."
+     ""
+     "It lives in `vecread` because that is the module every other vector and"
+     "table source already requires, and because reading a count is reading.")
+(defn ^:pub ^:method ^I32 vec-count [^Rt rt ^Value v]
+  (return (to-i32 (as-fixnum (slot rt v V_CNT)))))
 
 (doc "`vector?` AS THE GUEST SEES IT, which includes a MAP ENTRY."
      ""

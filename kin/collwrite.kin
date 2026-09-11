@@ -21,10 +21,9 @@
                                    TY_ARRAYMAP TY_HASHMAP TY_VEC TY_TAGGED
                                    TY_TABLE TY_TABLEREF TY_MAPENTRY
                                    TY_SET]]
-            [flint.rt.vecread :refer [vec-nth]]
+            [flint.rt.vecread :refer [vec-nth vec-count]]
             [flint.rt.vecassoc :refer [vec-assoc]]
             [flint.rt.strs :refer [char-at]]
-            [flint.rt.vector :refer [vec-count]]
             [flint.rt.mapwrite :refer [map-assoc]]
             [flint.rt.names :refer [is-symbol]]
             [flint.rt.opaque :refer [new-tagged]]

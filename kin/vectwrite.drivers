@@ -308,8 +308,8 @@ fn main() {
     }
     static int olen(Rt rt, long n) { return rt.lens[(int) n]; }
     static int ty(int[] sp, long a) { return sp[(int) a]; }
+    static int vecCount(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_CNT)); }
     static final class Vec {
-        static int count(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_CNT)); }
         static long empty(Rt rt) { return emptyVec(rt); }
     }
     // `flint.rt.vecnode`, STUBBED -- see the note in the Rust head.
@@ -334,7 +334,7 @@ fn main() {
     }
     static int vecShift(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_SHIFT)); }
     static int tailOff(Rt rt, long v) {
-        int c = Vec.count(rt, v);
+        int c = vecCount(rt, v);
         return c < WIDTH ? 0 : ((c - 1) >>> BITS) << BITS;
     }
     // `flint.rt.vecwrite`, STUBBED -- see the Rust head.
@@ -424,7 +424,7 @@ fn main() {
         long tail = nodeClone(rt, rt.slot(v, V_TAIL), WIDTH, edit);
         long root = rt.slot(v, V_ROOT);
         long a = rt.alloc(TY_TVEC, 5);
-        rt.setSlot(a, T_CNT, Vec.count(rt, v)); rt.setSlot(a, T_SHIFT, vecShift(rt, v));
+        rt.setSlot(a, T_CNT, vecCount(rt, v)); rt.setSlot(a, T_SHIFT, vecShift(rt, v));
         rt.setSlot(a, T_ROOT, root); rt.setSlot(a, T_TAIL, tail); rt.setSlot(a, T_EDIT, edit);
         return Val.heap(a);
     }
@@ -476,7 +476,7 @@ fn main() {
         for (int i = 6; i < 30; i++) if (tget(rt, rt.r(ti), i) != 0x1000 + i) bad2++;
         o.append("popwrong=").append(bad2).append(' ');
         long p = tvecPersistent(rt, rt.r(ti));
-        o.append("pcnt=").append(Vec.count(rt, p)).append(" ptail=").append(nodeLen(rt, rt.slot(p, V_TAIL)))
+        o.append("pcnt=").append(vecCount(rt, p)).append(" ptail=").append(nodeLen(rt, rt.slot(p, V_TAIL)))
          .append(" dead=").append(Val.isNil(rt.slot(rt.r(ti), T_EDIT)) ? 1 : 0).append(' ');
         long te = transient_(rt, build(rt, 0, BITS));
         o.append("pop0nil=").append(Val.isNil(tvecPop(rt, te)) ? 1 : 0).append(' ');
@@ -530,8 +530,8 @@ fn main() {
         internal long Slot(long n, int i) { return h[(int) n + i]; }
     }
     static int Olen(Rt rt, long n) { return rt.lens[(int) n]; }
+    internal static int VecCount(Rt rt, long v) { return (int) Val.AsFixnum(rt.Slot(v, V_CNT)); }
     internal static class Vec {
-        internal static int Count(Rt rt, long v) { return (int) Val.AsFixnum(rt.Slot(v, V_CNT)); }
         internal static long Empty(Rt rt) { return EmptyVec(rt); }
     }
     // `flint.rt.vecnode`, STUBBED -- see the note in the Rust head.
@@ -556,7 +556,7 @@ fn main() {
     }
     static int VecShift(Rt rt, long v) { return (int) Val.AsFixnum(rt.Slot(v, V_SHIFT)); }
     static int TailOff(Rt rt, long v) {
-        int c = Vec.Count(rt, v);
+        int c = VecCount(rt, v);
         return c < WIDTH ? 0 : ((int)((uint)(c - 1) >> BITS)) << BITS;
     }
     // `flint.rt.vecwrite`, STUBBED -- see the Rust head.
@@ -648,7 +648,7 @@ fn main() {
         long tail = NodeClone(rt, rt.Slot(v, V_TAIL), WIDTH, edit);
         long root = rt.Slot(v, V_ROOT);
         long a = rt.Alloc(TY_TVEC, 5);
-        rt.SetSlot(a, T_CNT, Vec.Count(rt, v)); rt.SetSlot(a, T_SHIFT, VecShift(rt, v));
+        rt.SetSlot(a, T_CNT, VecCount(rt, v)); rt.SetSlot(a, T_SHIFT, VecShift(rt, v));
         rt.SetSlot(a, T_ROOT, root); rt.SetSlot(a, T_TAIL, tail); rt.SetSlot(a, T_EDIT, edit);
         return Val.Heap(a);
     }
@@ -700,7 +700,7 @@ fn main() {
         for (int i = 6; i < 30; i++) if (TGet(rt, rt.R(ti), i) != 0x1000 + i) bad2++;
         o.Append("popwrong=").Append(bad2).Append(' ');
         long p = TvecPersistent(rt, rt.R(ti));
-        o.Append("pcnt=").Append(Vec.Count(rt, p)).Append(" ptail=").Append(NodeLen(rt, rt.Slot(p, V_TAIL)))
+        o.Append("pcnt=").Append(VecCount(rt, p)).Append(" ptail=").Append(NodeLen(rt, rt.Slot(p, V_TAIL)))
          .Append(" dead=").Append(Val.IsNil(rt.Slot(rt.R(ti), T_EDIT)) ? 1 : 0).Append(' ');
         long te = Transient_(rt, Build(rt, 0, BITS));
         o.Append("pop0nil=").Append(Val.IsNil(TvecPop(rt, te)) ? 1 : 0).Append(' ');

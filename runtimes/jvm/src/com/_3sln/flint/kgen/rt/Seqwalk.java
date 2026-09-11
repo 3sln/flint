@@ -72,7 +72,7 @@ public final class Seqwalk {
             } else if (ty(rt.gc.sp, Val.asHeap(coll)) == TY_TABLE) {
                 n = tableCount(rt, coll);
             } else {
-                n = Vec.count(rt, coll);
+                n = vecCount(rt, coll);
             }
             if ((i + 1) >= n) {
                 return Val.NIL;
@@ -234,7 +234,7 @@ public final class Seqwalk {
             return seq(rt, s);
         }
         if (t == TY_VEC) {
-            if (Vec.count(rt, v) == 0) {
+            if (vecCount(rt, v) == 0) {
                 return Val.NIL;
             }
             return vecseq(rt, v, 0);
@@ -257,7 +257,7 @@ public final class Seqwalk {
             if (Val.isNil(ents)) {
                 return Val.NIL;
             }
-            if (Vec.count(rt, ents) == 0) {
+            if (vecCount(rt, ents) == 0) {
                 return Val.NIL;
             }
             return vecseq(rt, ents, 0);
@@ -267,7 +267,7 @@ public final class Seqwalk {
             if (Val.isNil(ents)) {
                 return Val.NIL;
             }
-            if (Vec.count(rt, ents) == 0) {
+            if (vecCount(rt, ents) == 0) {
                 return Val.NIL;
             }
             return vecseq(rt, ents, 0);

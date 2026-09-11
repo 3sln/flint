@@ -20,7 +20,7 @@
                                    TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ
                                    TY_STRSEQ TY_RANGE TY_VEC is-fixnum
                                    as-fixnum quot I64 and not > < local set]]
-            [flint.rt.vector :refer [vec-count]]))
+            [flint.rt.vecread :refer [vec-count]]))
 
 (doc "Is this a SEQ? Six heap tags and nothing else."
      ""

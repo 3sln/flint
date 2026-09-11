@@ -64,7 +64,7 @@ public static class Tablemeta {
     }
     /// How many columns the schema NAMES.
     public static int SchemaLen(Rt rt, long s) {
-        return Vec.Count(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES));
+        return VecCount(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES));
     }
     /// How many column slots a chunk of this schema carries.
     /// 

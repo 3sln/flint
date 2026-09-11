@@ -162,8 +162,8 @@ fn main() {
     static boolean isSeq(Rt rt, long v) {
         return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_CONS;
     }
+    static int vecCount(Rt rt, long v) { return rt.vn; }
     static final class Vec {
-        static int count(Rt rt, long v) { return rt.vn; }
         static long pop(Rt rt, long v) { return 0x901L; }
         static long nth(Rt rt, long v, int i, long d) { return 0x910L + i; }
         static long empty(Rt rt) { return 0x921L; }
@@ -292,8 +292,8 @@ namespace Flint.Rt {
     internal static bool IsSeq(Rt rt, long v) {
         return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyCons;
     }
+    internal static int VecCount(Rt rt, long v) { return rt.vn; }
     internal static class Vec {
-        internal static int Count(Rt rt, long v) { return rt.vn; }
         internal static long Pop(Rt rt, long v) { return 0x901L; }
         internal static long Nth(Rt rt, long v, int i, long d) { return 0x910L + i; }
         internal static long Empty(Rt rt) { return 0x921L; }

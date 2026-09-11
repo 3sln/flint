@@ -426,12 +426,12 @@ fn main() {
     }
     static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
     static int olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    static int vecCount(Rt rt, long v) { return rt.lens[(int) v]; }
     static final class Vec {
         static long conj(Rt rt, long v, long x) { return vecConj(rt, v, x); }
         static long pop(Rt rt, long v) { return vecPop(rt, v); }
-        static int count(Rt rt, long v) { return rt.lens[(int) v]; }
         static long nth(Rt rt, long v, int i, long dflt) {
-            return i >= count(rt, v) ? dflt : rt.slot(v, i);
+            return i >= vecCount(rt, v) ? dflt : rt.slot(v, i);
         }
     }
     static long vecNth(Rt rt, long v, int i, long dflt) { return Vec.nth(rt, v, i, dflt); }
@@ -447,8 +447,8 @@ fn main() {
             if (a == b) return true;
             if (!Val.isHeap(a) || !Val.isHeap(b)) return false;
             if (ty(rt.gc.sp, a) != TY_VEC || ty(rt.gc.sp, b) != TY_VEC) return false;
-            int n = Vec.count(rt, a);
-            if (n != Vec.count(rt, b)) return false;
+            int n = vecCount(rt, a);
+            if (n != vecCount(rt, b)) return false;
             for (int i = 0; i < n; i++) if (!valEq(rt, rt.slot(a, i), rt.slot(b, i))) return false;
             return true;
         }
@@ -484,7 +484,7 @@ fn main() {
         return out;
     }
     static int mapPairs(Rt rt, long m) { return rt.lens[(int) m] / 2; }
-    static int schemaLen(Rt rt, long s) { return Vec.count(rt, rt.slot(s, Table.SC_NAMES)); }
+    static int schemaLen(Rt rt, long s) { return vecCount(rt, rt.slot(s, Table.SC_NAMES)); }
     static long schemaNameAt(Rt rt, long s, int c) {
         return Vec.nth(rt, rt.slot(s, Table.SC_NAMES), c, NIL);
     }
@@ -572,7 +572,7 @@ fn main() {
         return m;
     }
     static long vecConj(Rt rt, long v, long x) {
-        int n = Vec.count(rt, v);
+        int n = vecCount(rt, v);
         long a = rt.alloc(TY_VEC, n + 1);
         rt.lens[(int) a] = n + 1;
         for (int i = 0; i < n; i++) rt.h[(int) a + i] = rt.h[(int) v + i];
@@ -580,7 +580,7 @@ fn main() {
         return Val.heap(a);
     }
     static long vecPop(Rt rt, long v) {
-        int n = Vec.count(rt, v), m = n == 0 ? 0 : n - 1;
+        int n = vecCount(rt, v), m = n == 0 ? 0 : n - 1;
         long a = rt.alloc(TY_VEC, m == 0 ? 1 : m);
         rt.lens[(int) a] = m;
         for (int i = 0; i < m; i++) rt.h[(int) a + i] = rt.h[(int) v + i];
@@ -645,7 +645,7 @@ fn main() {
         rt.set(tab, Table.TB_OFFSET, Val.fixnum(0));
         long tt = tableTransient(rt, tab);
         long open = rt.slot(tt, Table.TT_OPEN);
-        o.append("carried=").append(Vec.count(rt, rt.slot(tt, Table.TT_CHUNKS)))
+        o.append("carried=").append(vecCount(rt, rt.slot(tt, Table.TT_CHUNKS)))
          .append(" fill=").append(chunkRows(rt, open))
          .append(" count=").append(ttableCount(rt, tt)).append(' ');
         o.append("moved=").append(Val.asFixnum(chunkGet(rt, open, 0, 0))).append('.')
@@ -653,14 +653,14 @@ fn main() {
         long tt2 = tt;
         for (int k = 0; k < 212; k++) tt2 = ttableConj(rt, tt2, mkrow1(rt, 1000 + k));
         long carried2 = rt.slot(tt2, Table.TT_CHUNKS);
-        o.append("afterfill=").append(Vec.count(rt, carried2)).append('/')
+        o.append("afterfill=").append(vecCount(rt, carried2)).append('/')
          .append(chunkRows(rt, rt.slot(tt2, Table.TT_OPEN))).append('/')
          .append(ttableCount(rt, tt2)).append(' ');
         o.append("handedenc=").append(chunkEnc(rt, Vec.nth(rt, carried2, 1, NIL), 1)).append(' ');
         long tt3 = ttableConj(rt, tt2, mkrow1(rt, 9999));
         long out = ttablePersistent(rt, tt3);
         long ochunks = rt.slot(out, Table.TB_CHUNKS);
-        int nout = Vec.count(rt, ochunks);
+        int nout = vecCount(rt, ochunks);
         long lastch = Vec.nth(rt, ochunks, nout - 1, NIL);
         int lastrows = chunkRows(rt, lastch);
         o.append("persist=").append(nout).append('/')
@@ -702,8 +702,8 @@ namespace Flint.Rt {
             if (!Probe.Val.IsHeap(a) || !Probe.Val.IsHeap(b)) return false;
             if (Probe.Obj.Ty(rt.gc.sp, a) != Probe.Obj.TyVec
                 || Probe.Obj.Ty(rt.gc.sp, b) != Probe.Obj.TyVec) return false;
-            int n = Probe.Vec.Count(rt, a);
-            if (n != Probe.Vec.Count(rt, b)) return false;
+            int n = Probe.VecCount(rt, a);
+            if (n != Probe.VecCount(rt, b)) return false;
             for (int i = 0; i < n; i++) if (!Equal(rt, rt.Slot(a, i), rt.Slot(b, i))) return false;
             return true;
         }
@@ -756,12 +756,12 @@ namespace Flint.Rt {
         internal void Set(long n, int i, long v) { h[(int) n + i] = v; }
         internal long Slot(long n, int i) { return h[(int) n + i]; }
     }
+    internal static int VecCount(Rt rt, long v) { return rt.lens[(int) v]; }
     internal static class Vec {
         internal static long Conj(Rt rt, long v, long x) { return VecConj(rt, v, x); }
         internal static long Pop(Rt rt, long v) { return VecPop(rt, v); }
-        internal static int Count(Rt rt, long v) { return rt.lens[(int) v]; }
         internal static long Nth(Rt rt, long v, int i, long dflt) {
-            return i >= Count(rt, v) ? dflt : rt.Slot(v, i);
+            return i >= VecCount(rt, v) ? dflt : rt.Slot(v, i);
         }
     }
     internal static long VecNth(Rt rt, long v, int i, long dflt) { return Vec.Nth(rt, v, i, dflt); }
@@ -793,7 +793,7 @@ namespace Flint.Rt {
         return outv;
     }
     internal static int MapPairs(Rt rt, long m) { return rt.lens[(int) m] / 2; }
-    internal static int SchemaLen(Rt rt, long s) { return Vec.Count(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES)); }
+    internal static int SchemaLen(Rt rt, long s) { return VecCount(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES)); }
     internal static long SchemaNameAt(Rt rt, long s, int c) {
         return Vec.Nth(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES), c, Val.Nil);
     }
@@ -881,7 +881,7 @@ namespace Flint.Rt {
         return m;
     }
     internal static long VecConj(Rt rt, long v, long x) {
-        int n = Vec.Count(rt, v);
+        int n = VecCount(rt, v);
         long a = rt.Alloc(Obj.TyVec, n + 1);
         rt.lens[(int) a] = n + 1;
         for (int i = 0; i < n; i++) rt.h[(int) a + i] = rt.h[(int) v + i];
@@ -889,7 +889,7 @@ namespace Flint.Rt {
         return Val.Heap(a);
     }
     internal static long VecPop(Rt rt, long v) {
-        int n = Vec.Count(rt, v), m = n == 0 ? 0 : n - 1;
+        int n = VecCount(rt, v), m = n == 0 ? 0 : n - 1;
         long a = rt.Alloc(Obj.TyVec, m == 0 ? 1 : m);
         rt.lens[(int) a] = m;
         for (int i = 0; i < m; i++) rt.h[(int) a + i] = rt.h[(int) v + i];
@@ -955,7 +955,7 @@ namespace Flint.Rt {
         rt.Set(tab, global::Flint.Rt.Table.TB_OFFSET, Val.Fixnum(0));
         long tt = TableTransient(rt, tab);
         long open = rt.Slot(tt, global::Flint.Rt.Table.TT_OPEN);
-        o.Append("carried=").Append(Vec.Count(rt, rt.Slot(tt, global::Flint.Rt.Table.TT_CHUNKS)))
+        o.Append("carried=").Append(VecCount(rt, rt.Slot(tt, global::Flint.Rt.Table.TT_CHUNKS)))
          .Append(" fill=").Append(ChunkRows(rt, open))
          .Append(" count=").Append(TtableCount(rt, tt)).Append(' ');
         o.Append("moved=").Append(Val.AsFixnum(ChunkGet(rt, open, 0, 0))).Append('.')
@@ -963,14 +963,14 @@ namespace Flint.Rt {
         long tt2 = tt;
         for (int k = 0; k < 212; k++) tt2 = TtableConj(rt, tt2, Mkrow1(rt, 1000 + k));
         long carried2 = rt.Slot(tt2, global::Flint.Rt.Table.TT_CHUNKS);
-        o.Append("afterfill=").Append(Vec.Count(rt, carried2)).Append('/')
+        o.Append("afterfill=").Append(VecCount(rt, carried2)).Append('/')
          .Append(ChunkRows(rt, rt.Slot(tt2, global::Flint.Rt.Table.TT_OPEN))).Append('/')
          .Append(TtableCount(rt, tt2)).Append(' ');
         o.Append("handedenc=").Append(ChunkEnc(rt, Vec.Nth(rt, carried2, 1, Val.Nil), 1)).Append(' ');
         long tt3 = TtableConj(rt, tt2, Mkrow1(rt, 9999));
         long outv = TtablePersistent(rt, tt3);
         long ochunks = rt.Slot(outv, global::Flint.Rt.Table.TB_CHUNKS);
-        int nout = Vec.Count(rt, ochunks);
+        int nout = VecCount(rt, ochunks);
         long lastch = Vec.Nth(rt, ochunks, nout - 1, Val.Nil);
         int lastrows = ChunkRows(rt, lastch);
         o.Append("persist=").Append(nout).Append('/')

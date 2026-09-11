@@ -12,6 +12,19 @@ import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Vecnode.*;
 
 public final class Vecread {
+    /// How many elements the vector `v` holds.
+    /// 
+    /// ONE SLOT READ, and it was a linked form -- written once per runtime and
+    /// declared to kin as a primitive, beside `char-at` and `s-copy-range`
+    /// which really do need the host's memory. This needs a slot and a fixnum,
+    /// both of which kin says already. It sat on the linked side because it is
+    /// SHORT.
+    /// 
+    /// It lives in `vecread` because that is the module every other vector and
+    /// table source already requires, and because reading a count is reading.
+    public static int vecCount(Rt rt, long v) {
+        return (int) Val.asFixnum(rt.slot(v, V_CNT));
+    }
     /// `vector?` AS THE GUEST SEES IT, which includes a MAP ENTRY.
     /// 
     /// Clojure's `MapEntry` IS a vector -- `vector?` is true, it prints
@@ -101,7 +114,7 @@ public final class Vecread {
     /// Where the tail starts. Below `WIDTH` elements the whole vector IS the
     /// tail, so the answer is 0 and the trie is not consulted at all.
     public static int tailOff(Rt rt, long v) {
-        int c = Vec.count(rt, v);
+        int c = vecCount(rt, v);
         if (c < WIDTH) {
             return 0;
         }
@@ -141,7 +154,7 @@ public final class Vecread {
     /// having its own idea. Every port call site passes `NOT_FOUND` and behaves
     /// exactly as before; what changed is that absence is an argument.
     public static long vecNth(Rt rt, long v, int i, long dflt) {
-        if (i >= Vec.count(rt, v)) {
+        if (i >= vecCount(rt, v)) {
             return dflt;
         }
         return nodeGet(rt, arrayFor(rt, v, i), i & MASK);

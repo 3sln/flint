@@ -58,7 +58,7 @@ public static class Tablerow {
         int which = (int)((uint) phys >> global::Flint.Rt.Table.CHUNK_SHIFT);
         int within = phys & (global::Flint.Rt.Table.CHUNK - 1);
         bool append = idx == TableCount(rt, rt.R(ti));
-        int nchunks = Vec.Count(rt, rt.R(ci));
+        int nchunks = VecCount(rt, rt.R(ci));
         if (append && (which >= nchunks)) {
             // A NEW CHUNK, one row wide. `chunk-with-row` grows an
             // existing one; an empty table has none to grow.

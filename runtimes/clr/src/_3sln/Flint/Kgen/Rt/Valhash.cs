@@ -53,7 +53,7 @@ public static class Valhash {
     internal static int HashVecIndexed(Rt rt, long v) {
         int @base = rt.Mark();
         int vi = rt.Push(v);
-        int total = Vec.Count(rt, v);
+        int total = VecCount(rt, v);
         int acc;
         int n;
         bool starved;

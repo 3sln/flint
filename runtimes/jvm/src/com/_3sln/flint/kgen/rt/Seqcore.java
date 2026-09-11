@@ -9,6 +9,7 @@ import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
+import static com._3sln.flint.kgen.rt.Vecread.*;
 
 public final class Seqcore {
     /// Is this a SEQ? Six heap tags and nothing else.
@@ -95,7 +96,7 @@ public final class Seqcore {
             return rt.slot(v, C_COUNT);
         }
         if (t == TY_VEC) {
-            return Val.fixnum(Vec.count(rt, v) & 0xFFFFFFFFL);
+            return Val.fixnum(vecCount(rt, v) & 0xFFFFFFFFL);
         }
         // A RANGE KNOWS ITS SIZE. Clojure's Range is Counted; this walked
         // instead, so `(count (range 2000000))` cost 11.92s against a

@@ -645,14 +645,14 @@ fn main() {
         long throwStr(String kind, String msg) { thrown = msg; return NIL; }
     }
     static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static int vecCount(Rt rt, long v) { return rt.lens[(int) v]; }
     static final class Vec {
         static long empty(Rt rt) { return vector(rt, new long[]{}); }
         static long conj(Rt rt, long v, long x) { return vecConj(rt, v, x); }
         static long assoc(Rt rt, long v, int i, long x) { return vecAssoc(rt, v, i, x); }
         static boolean isVectorLike(Rt rt, long v) { return Probe.isVectorLike(rt, v); }
-        static int count(Rt rt, long v) { return rt.lens[(int) v]; }
         static long nth(Rt rt, long v, int i, long dflt) {
-            return i >= count(rt, v) ? dflt : rt.slot(v, i);
+            return i >= vecCount(rt, v) ? dflt : rt.slot(v, i);
         }
     }
     static long vecNth(Rt rt, long v, int i, long dflt) { return Vec.nth(rt, v, i, dflt); }
@@ -717,13 +717,13 @@ fn main() {
         return vector(rt, es);
     }
     static long nextOf(Rt rt, long q) {
-        int n = Vec.count(rt, q);
+        int n = vecCount(rt, q);
         if (n <= 1) return NIL;
         long[] rest = new long[n - 1];
         for (int i = 1; i < n; i++) rest[i - 1] = rt.slot(q, i);
         return vector(rt, rest);
     }
-    static int schemaLen(Rt rt, long s) { return Vec.count(rt, rt.slot(s, Table.SC_NAMES)); }
+    static int schemaLen(Rt rt, long s) { return vecCount(rt, rt.slot(s, Table.SC_NAMES)); }
     static int schemaWidth(Rt rt, long s) { return (int) Val.asFixnum(rt.slot(s, Table.SC_WIDTH)); }
     static long schemaNameAt(Rt rt, long s, int c) {
         return Vec.nth(rt, rt.slot(s, Table.SC_NAMES), c, NIL);
@@ -759,7 +759,7 @@ fn main() {
     }
     static long emptyVec(Rt rt) { return vector(rt, new long[]{}); }
     static long vecConj(Rt rt, long v, long x) {
-        int n = Vec.count(rt, v);
+        int n = vecCount(rt, v);
         long[] xs = new long[n + 1];
         for (int i = 0; i < n; i++) xs[i] = rt.slot(v, i);
         xs[n] = x;
@@ -786,7 +786,7 @@ fn main() {
     }
     static String showVec(Rt rt, long v) {
         StringBuilder o = new StringBuilder();
-        for (int i = 0; i < Vec.count(rt, v); i++) {
+        for (int i = 0; i < vecCount(rt, v); i++) {
             if (i > 0) o.append('.');
             long x = rt.slot(v, i);
             o.append(Val.isKw(x) ? kwTextOf(rt, x) : String.valueOf(Val.asFixnum(x)));
@@ -798,7 +798,7 @@ fn main() {
     static String columnList(Rt rt, long s) {
         StringBuilder o = new StringBuilder();
         long names = rt.slot(s, Table.SC_NAMES);
-        for (int c = 0; c < Vec.count(rt, names); c++) {
+        for (int c = 0; c < vecCount(rt, names); c++) {
             if (c > 0) o.append(' ');
             o.append(':').append(kwTextOf(rt, rt.slot(names, c)));
         }
@@ -859,7 +859,7 @@ fn main() {
     static String showTable(Rt rt, long t, int ncols) {
         long chunks = rt.slot(t, Table.TB_CHUNKS);
         StringBuilder out = new StringBuilder();
-        for (int w = 0; w < Vec.count(rt, chunks); w++) {
+        for (int w = 0; w < vecCount(rt, chunks); w++) {
             if (w > 0) out.append(';');
             long ch = rt.slot(chunks, w);
             int rows = (int) Val.asFixnum(rt.slot(ch, Table.CH_ROWS));
@@ -880,7 +880,7 @@ fn main() {
     }
     static long newTable(Rt rt, long schema, long rows) {
         int ncols = schemaLen(rt, schema), width = schemaWidth(rt, schema);
-        int nrows = Vec.count(rt, rows);
+        int nrows = vecCount(rt, rows);
         java.util.ArrayList<Long> chunks = new java.util.ArrayList<>();
         int row = 0;
         while (row < nrows) {
@@ -929,7 +929,7 @@ fn main() {
         static long i64Of(Rt rt, long v) { return Val.isFixnum(v) ? Val.asFixnum(v) : 0L; }
     }
     static long vecAssoc(Rt rt, long v, int i, long x) {
-        int n = Vec.count(rt, v);
+        int n = vecCount(rt, v);
         long[] xs = new long[n];
         for (int k = 0; k < n; k++) xs[k] = rt.slot(v, k);
         xs[i] = x;
@@ -991,7 +991,7 @@ fn main() {
         long t = newTable(rt, s, emptyVec(rt));
         for (int i = 0; i < 6; i++) t = tableConj(rt, t, mkrow(rt, ka, kb, hi, 10 + i));
         o.append("grown=").append(showRows(rt, t, 2)).append('|')
-         .append(Vec.count(rt, rt.slot(t, Table.TB_CHUNKS))).append(' ');
+         .append(vecCount(rt, rt.slot(t, Table.TB_CHUNKS))).append(' ');
         long t2 = tableAssoc(rt, t, Val.fixnum(2), mkrow(rt, ka, kb, hi, 99));
         long t3 = tableAssoc(rt, t2, Val.fixnum(6), mkrow(rt, ka, kb, hi, 77));
         o.append("replaced=").append(showRows(rt, t2, 2))
@@ -1006,16 +1006,16 @@ fn main() {
         o.append("bad=[").append(m1).append("][").append(m2).append("][").append(m3).append("] ");
         long sl = tableSlice(rt, t, 1, 5);
         o.append("slice=").append(showRows(rt, sl, 2)).append('|')
-         .append(Vec.count(rt, rt.slot(sl, Table.TB_CHUNKS))).append('|')
+         .append(vecCount(rt, rt.slot(sl, Table.TB_CHUNKS))).append('|')
          .append(Val.asFixnum(rt.slot(sl, Table.TB_OFFSET))).append(' ');
         long sl2 = tableSlice(rt, t, 4, 6);
         o.append("slice2=").append(showRows(rt, sl2, 2)).append('|')
-         .append(Vec.count(rt, rt.slot(sl2, Table.TB_CHUNKS))).append(' ');
+         .append(vecCount(rt, rt.slot(sl2, Table.TB_CHUNKS))).append(' ');
         o.append("shared=")
          .append(Vec.nth(rt, rt.slot(t, Table.TB_CHUNKS), 1, NIL)
                  == Vec.nth(rt, rt.slot(sl2, Table.TB_CHUNKS), 0, NIL) ? 1 : 0).append(' ');
         long e = tableSlice(rt, t, 3, 3);
-        o.append("empty=").append(Vec.count(rt, rt.slot(e, Table.TB_CHUNKS))).append('/')
+        o.append("empty=").append(vecCount(rt, rt.slot(e, Table.TB_CHUNKS))).append('/')
          .append(Val.asFixnum(rt.slot(e, Table.TB_COUNT))).append(' ');
         tableSlice(rt, t, -1, 3);
         String s1 = rt.thrown;
@@ -1116,14 +1116,14 @@ namespace Flint.Rt {
         internal long KindOf(long v) { return Probe.KindOf(this, v); }
         internal long ThrowStr(string kind, string msg) { thrown = msg; return Val.Nil; }
     }
+    internal static int VecCount(Rt rt, long v) { return rt.lens[(int) v]; }
     internal static class Vec {
         internal static long Empty(Rt rt) { return Vector(rt, new long[]{}); }
         internal static long Conj(Rt rt, long v, long x) { return VecConj(rt, v, x); }
         internal static long Assoc(Rt rt, long v, int i, long x) { return VecAssoc(rt, v, i, x); }
         internal static bool IsVectorLike(Rt rt, long v) { return Probe.IsVectorLike(rt, v); }
-        internal static int Count(Rt rt, long v) { return rt.lens[(int) v]; }
         internal static long Nth(Rt rt, long v, int i, long dflt) {
-            return i >= Count(rt, v) ? dflt : rt.Slot(v, i);
+            return i >= VecCount(rt, v) ? dflt : rt.Slot(v, i);
         }
     }
     internal static long VecNth(Rt rt, long v, int i, long dflt) { return Vec.Nth(rt, v, i, dflt); }
@@ -1175,13 +1175,13 @@ namespace Flint.Rt {
         return Vector(rt, es);
     }
     internal static long NextOf(Rt rt, long q) {
-        int n = Vec.Count(rt, q);
+        int n = VecCount(rt, q);
         if (n <= 1) return Val.Nil;
         long[] rest = new long[n - 1];
         for (int i = 1; i < n; i++) rest[i - 1] = rt.Slot(q, i);
         return Vector(rt, rest);
     }
-    internal static int SchemaLen(Rt rt, long s) { return Vec.Count(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES)); }
+    internal static int SchemaLen(Rt rt, long s) { return VecCount(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES)); }
     internal static int SchemaWidth(Rt rt, long s) { return (int) Val.AsFixnum(rt.Slot(s, global::Flint.Rt.Table.SC_WIDTH)); }
     internal static long SchemaNameAt(Rt rt, long s, int c) {
         return Vec.Nth(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES), c, Val.Nil);
@@ -1217,7 +1217,7 @@ namespace Flint.Rt {
     }
     internal static long EmptyVec(Rt rt) { return Vector(rt, new long[]{}); }
     internal static long VecConj(Rt rt, long v, long x) {
-        int n = Vec.Count(rt, v);
+        int n = VecCount(rt, v);
         long[] xs = new long[n + 1];
         for (int i = 0; i < n; i++) xs[i] = rt.Slot(v, i);
         xs[n] = x;
@@ -1245,7 +1245,7 @@ namespace Flint.Rt {
     }
     internal static string ShowVec(Rt rt, long v) {
         var o = new System.Text.StringBuilder();
-        for (int i = 0; i < Vec.Count(rt, v); i++) {
+        for (int i = 0; i < VecCount(rt, v); i++) {
             if (i > 0) o.Append('.');
             long x = rt.Slot(v, i);
             o.Append(Val.IsKw(x) ? KwTextOf(rt, x) : Val.AsFixnum(x).ToString());
@@ -1257,7 +1257,7 @@ namespace Flint.Rt {
     internal static string ColumnList(Rt rt, long s) {
         var o = new System.Text.StringBuilder();
         long names = rt.Slot(s, global::Flint.Rt.Table.SC_NAMES);
-        for (int c = 0; c < Vec.Count(rt, names); c++) {
+        for (int c = 0; c < VecCount(rt, names); c++) {
             if (c > 0) o.Append(' ');
             o.Append(':').Append(KwTextOf(rt, rt.Slot(names, c)));
         }
@@ -1318,7 +1318,7 @@ namespace Flint.Rt {
     internal static string ShowTable(Rt rt, long t, int ncols) {
         long chunks = rt.Slot(t, global::Flint.Rt.Table.TB_CHUNKS);
         var outb = new System.Text.StringBuilder();
-        for (int w = 0; w < Vec.Count(rt, chunks); w++) {
+        for (int w = 0; w < VecCount(rt, chunks); w++) {
             if (w > 0) outb.Append(';');
             long ch = rt.Slot(chunks, w);
             int rows = (int) Val.AsFixnum(rt.Slot(ch, global::Flint.Rt.Table.CH_ROWS));
@@ -1339,7 +1339,7 @@ namespace Flint.Rt {
     }
     internal static long NewTable(Rt rt, long schema, long rows) {
         int ncols = SchemaLen(rt, schema), width = SchemaWidth(rt, schema);
-        int nrows = Vec.Count(rt, rows);
+        int nrows = VecCount(rt, rows);
         var chunks = new System.Collections.Generic.List<long>();
         int row = 0;
         while (row < nrows) {
@@ -1386,7 +1386,7 @@ namespace Flint.Rt {
         internal static long I64Of(Rt rt, long v) { return Val.IsFixnum(v) ? Val.AsFixnum(v) : 0L; }
     }
     internal static long VecAssoc(Rt rt, long v, int i, long x) {
-        int n = Vec.Count(rt, v);
+        int n = VecCount(rt, v);
         long[] xs = new long[n];
         for (int k = 0; k < n; k++) xs[k] = rt.Slot(v, k);
         xs[i] = x;
@@ -1450,7 +1450,7 @@ namespace Flint.Rt {
         long t = NewTable(rt, s, EmptyVec(rt));
         for (int i = 0; i < 6; i++) t = TableConj(rt, t, Mkrow(rt, ka, kb, hi, 10 + i));
         o.Append("grown=").Append(ShowRows(rt, t, 2)).Append('|')
-         .Append(Vec.Count(rt, rt.Slot(t, global::Flint.Rt.Table.TB_CHUNKS))).Append(' ');
+         .Append(VecCount(rt, rt.Slot(t, global::Flint.Rt.Table.TB_CHUNKS))).Append(' ');
         long t2 = TableAssoc(rt, t, Val.Fixnum(2), Mkrow(rt, ka, kb, hi, 99));
         long t3 = TableAssoc(rt, t2, Val.Fixnum(6), Mkrow(rt, ka, kb, hi, 77));
         o.Append("replaced=").Append(ShowRows(rt, t2, 2))
@@ -1465,17 +1465,17 @@ namespace Flint.Rt {
         o.Append("bad=[").Append(m1).Append("][").Append(m2).Append("][").Append(m3).Append("] ");
         long sl = TableSlice(rt, t, 1, 5);
         o.Append("slice=").Append(ShowRows(rt, sl, 2)).Append('|')
-         .Append(Vec.Count(rt, rt.Slot(sl, global::Flint.Rt.Table.TB_CHUNKS))).Append('|')
+         .Append(VecCount(rt, rt.Slot(sl, global::Flint.Rt.Table.TB_CHUNKS))).Append('|')
          .Append(Val.AsFixnum(rt.Slot(sl, global::Flint.Rt.Table.TB_OFFSET))).Append(' ');
         long sl2 = TableSlice(rt, t, 4, 6);
         o.Append("slice2=").Append(ShowRows(rt, sl2, 2)).Append('|')
-         .Append(Vec.Count(rt, rt.Slot(sl2, global::Flint.Rt.Table.TB_CHUNKS))).Append(' ');
+         .Append(VecCount(rt, rt.Slot(sl2, global::Flint.Rt.Table.TB_CHUNKS))).Append(' ');
         o.Append("shared=")
          .Append(Vec.Nth(rt, rt.Slot(t, global::Flint.Rt.Table.TB_CHUNKS), 1, Val.Nil)
                  == Vec.Nth(rt, rt.Slot(sl2, global::Flint.Rt.Table.TB_CHUNKS), 0, Val.Nil) ? 1 : 0)
          .Append(' ');
         long e = TableSlice(rt, t, 3, 3);
-        o.Append("empty=").Append(Vec.Count(rt, rt.Slot(e, global::Flint.Rt.Table.TB_CHUNKS))).Append('/')
+        o.Append("empty=").Append(VecCount(rt, rt.Slot(e, global::Flint.Rt.Table.TB_CHUNKS))).Append('/')
          .Append(Val.AsFixnum(rt.Slot(e, global::Flint.Rt.Table.TB_COUNT))).Append(' ');
         TableSlice(rt, t, -1, 3);
         string s1 = rt.thrown;

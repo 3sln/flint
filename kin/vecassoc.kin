@@ -19,7 +19,7 @@
                                    mark push r set-r pop-to slot nil?
                                    empty-vec Rt Value RootIx I32 Bool NIL BITS
                                    WIDTH MASK V_ROOT V_TAIL V_META]]
-            [flint.rt.vector :refer [vec-count]]
+            [flint.rt.vecread :refer [vec-count]]
             [flint.rt.vecnode  :refer [new-node node-len node-get node-set]]
             [flint.rt.vecread  :refer [node-clone vec-shift tail-off array-for]]
             [flint.rt.vecwrite :refer [new-vec vec-conj]]))

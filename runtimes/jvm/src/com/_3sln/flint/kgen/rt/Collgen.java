@@ -39,7 +39,7 @@ public final class Collgen {
         if (Val.isHeap(v)) {
             int t = ty(rt.gc.sp, Val.asHeap(v));
             if (t == TY_VEC) {
-                return Vec.count(rt, v);
+                return vecCount(rt, v);
             }
             // A MAP ENTRY COUNTS 2, and so does a tagged literal, which
             // reads like a two-key map (`0034`). The ports threw for a map
@@ -105,7 +105,7 @@ public final class Collgen {
         if (Val.isHeap(coll)) {
             int t = ty(rt.gc.sp, Val.asHeap(coll));
             if (t == TY_VEC) {
-                if (Vec.count(rt, coll) == 0) {
+                if (vecCount(rt, coll) == 0) {
                     return rt.throwStr("IllegalStateException", "cannot pop an empty vector");
                 }
                 return vecPop(rt, coll);
@@ -128,7 +128,7 @@ public final class Collgen {
         if (Val.isHeap(coll)) {
             int t = ty(rt.gc.sp, Val.asHeap(coll));
             if (t == TY_VEC) {
-                int n = Vec.count(rt, coll);
+                int n = vecCount(rt, coll);
                 if (n == 0) {
                     return Val.NIL;
                 }

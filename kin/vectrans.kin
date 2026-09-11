@@ -27,10 +27,8 @@
                                    NIL BITS WIDTH MASK TY_TVEC TY_VOLATILE
                                    V_ROOT V_TAIL T_CNT T_SHIFT T_ROOT T_TAIL
                                    T_EDIT]]
-            [flint.rt.vector :refer [vec-count]]
             [flint.rt.vecnode :refer [node-get node-edit node-len]]
-            [flint.rt.vecread :refer [node-clone vec-shift tail-off
-                                      array-for vec-nth]]))
+            [flint.rt.vecread :refer [node-clone vec-shift tail-off array-for vec-nth vec-count]]))
 
 (doc "A fresh ownership token: an object whose IDENTITY is the whole of it."
      ""

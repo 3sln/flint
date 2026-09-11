@@ -101,7 +101,7 @@ public static class Vecwrite {
         int @base = rt.Mark();
         int vi = rt.Push(v);
         int xi = rt.Push(x);
-        int cnt = Vec.Count(rt, v);
+        int cnt = VecCount(rt, v);
         int tailLen = cnt - TailOff(rt, v);
         long @out;
         if (tailLen < WIDTH) {

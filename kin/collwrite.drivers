@@ -211,9 +211,9 @@ fn main() {
     static boolean isBytes(Rt rt, long v) { return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_BYTES; }
     static boolean isSymbol(Rt rt, long v) { return rt.sym; }
     static long mapAssoc(Rt rt, long m, long k, long v) { return 0x901L; }
+    static int vecCount(Rt rt, long v) { return rt.vecn; }
     static final class Vec {
         static long assoc(Rt rt, long v, int i, long x) { return 0x910L + i; }
-        static int count(Rt rt, long v) { return rt.vecn; }
         static long nth(Rt rt, long v, int i, long d) { return i < rt.vecn ? 0x940L + i : d; }
         static long mapEntryAsVec(Rt rt, long e) { return rt.obj(TY_VEC); }
     }
@@ -364,9 +364,9 @@ namespace Flint.Rt {
     internal static bool IsBytes(Rt rt, long v) { return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyBytes; }
     internal static bool IsSymbol(Rt rt, long v) { return rt.sym; }
     internal static long MapAssoc(Rt rt, long m, long k, long v) { return 0x901L; }
+    internal static int VecCount(Rt rt, long v) { return rt.vecn; }
     internal static class Vec {
         internal static long Assoc(Rt rt, long v, int i, long x) { return 0x910L + i; }
-        internal static int Count(Rt rt, long v) { return rt.vecn; }
         internal static long Nth(Rt rt, long v, int i, long d) { return i < rt.vecn ? 0x940L + i : d; }
         internal static long MapEntryAsVec(Rt rt, long e) { return rt.Obj_(Obj.TyVec); }
     }

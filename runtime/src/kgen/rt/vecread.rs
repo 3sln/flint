@@ -19,6 +19,19 @@ use crate::kgen::rt::casetable::*;
 use crate::kgen::rt::hamt::*;
 
 impl Rt {
+    /// How many elements the vector `v` holds.
+    /// 
+    /// ONE SLOT READ, and it was a linked form -- written once per runtime and
+    /// declared to kin as a primitive, beside `char-at` and `s-copy-range`
+    /// which really do need the host's memory. This needs a slot and a fixnum,
+    /// both of which kin says already. It sat on the linked side because it is
+    /// SHORT.
+    /// 
+    /// It lives in `vecread` because that is the module every other vector and
+    /// table source already requires, and because reading a count is reading.
+    pub fn vec_count(&self, v: Value) -> u32 {
+        return self.slot(v, V_CNT).as_fixnum() as u32;
+    }
     /// `vector?` AS THE GUEST SEES IT, which includes a MAP ENTRY.
     /// 
     /// Clojure's `MapEntry` IS a vector -- `vector?` is true, it prints

@@ -338,10 +338,10 @@ fn main() {
                 ? (int) rt.slots[(int) c][1] : rt.seqn;
         return n == 0 ? NIL : 0xC000L + n;
     }
+    static int vecCount(Rt rt, long v) { return (int) rt.slots[(int) v][1]; }
     static final class Vec {
-        static int count(Rt rt, long v) { return (int) rt.slots[(int) v][1]; }
         static long nth(Rt rt, long v, int i, long dflt) {
-            int n = count(rt, v);
+            int n = vecCount(rt, v);
             return i >= n ? dflt : Val.fixnum(n - i);
         }
     }
@@ -559,10 +559,10 @@ namespace Flint.Rt {
     }
     internal static long First(Rt rt, long s) { return Val.Fixnum(s - 0xC000L); }
     internal static long Next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
+    internal static int VecCount(Rt rt, long v) { return (int) rt.slots[(int) v, 1]; }
     internal static class Vec {
-        internal static int Count(Rt rt, long v) { return (int) rt.slots[(int) v, 1]; }
         internal static long Nth(Rt rt, long v, int i, long dflt) {
-            int n = Count(rt, v);
+            int n = VecCount(rt, v);
             return i >= n ? dflt : Val.Fixnum(n - i);
         }
     }

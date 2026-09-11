@@ -26,10 +26,9 @@
                                    TY_TAGGED TY_BYTES TY_BROPE TY_TVEC TY_TMAP
                                    TY_TSET TY_CONS TY_EMPTY_LIST
                                    TY_LAZYSEQ TY_VECSEQ TY_STRSEQ]]
-            [flint.rt.vecread :refer [vec-nth]]
+            [flint.rt.vecread :refer [vec-nth vec-count]]
             [flint.rt.tableref :refer [table-ref]]
             [flint.rt.strs :refer [char-at]]
-            [flint.rt.vector :refer [vec-count]]
             [flint.rt.mapread :refer [map-get map-contains]]
             [flint.rt.setcore :refer [set-get set-contains]]
             [flint.rt.byteat :refer [b-at]]

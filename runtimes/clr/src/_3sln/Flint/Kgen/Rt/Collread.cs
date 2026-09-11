@@ -151,7 +151,7 @@ public static class Collread {
                     if (i < 0) {
                         return false;
                     }
-                    return (uint) ((int) i) < (uint) Vec.Count(rt, coll);
+                    return (uint) ((int) i) < (uint) VecCount(rt, coll);
                 }
                 return false;
             }

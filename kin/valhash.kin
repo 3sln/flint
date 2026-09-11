@@ -39,8 +39,7 @@
             [flint.rt.ropeflat :refer [rope-hash]]
             [flint.rt.ropemeas :refer [s-ascii]]
             [flint.rt.seqwalk :refer [seq first next]]
-            [flint.rt.vector :refer [vec-count]]
-            [flint.rt.vecread :refer [vec-nth]]))
+            [flint.rt.vecread :refer [vec-nth vec-count]]))
 
 (declarefn ^:pub hash-value)
 

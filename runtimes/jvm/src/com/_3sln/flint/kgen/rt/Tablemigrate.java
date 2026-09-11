@@ -120,7 +120,7 @@ public final class Tablemigrate {
         int ri = rt.push(rebased);
         int width = schemaWidth(rt, rt.r(ri));
         int ci = rt.push(rt.slot(rt.r(ti), Table.TB_CHUNKS));
-        int nch = Vec.count(rt, rt.r(ci));
+        int nch = vecCount(rt, rt.r(ci));
         long out0 = Vec.empty(rt);
         int oi = rt.push(out0);
         for (int k = 0; k < nch; k++) {

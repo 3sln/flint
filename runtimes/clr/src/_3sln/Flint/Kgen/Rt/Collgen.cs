@@ -41,7 +41,7 @@ public static class Collgen {
         if (Val.IsHeap(v)) {
             int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
             if (t == Obj.TyVec) {
-                return Vec.Count(rt, v);
+                return VecCount(rt, v);
             }
             // A MAP ENTRY COUNTS 2, and so does a tagged literal, which
             // reads like a two-key map (`0034`). The ports threw for a map
@@ -107,7 +107,7 @@ public static class Collgen {
         if (Val.IsHeap(coll)) {
             int t = Obj.Ty(rt.gc.sp, Val.AsHeap(coll));
             if (t == Obj.TyVec) {
-                if (Vec.Count(rt, coll) == 0) {
+                if (VecCount(rt, coll) == 0) {
                     return rt.ThrowStr("IllegalStateException", "cannot pop an empty vector");
                 }
                 return VecPop(rt, coll);
@@ -130,7 +130,7 @@ public static class Collgen {
         if (Val.IsHeap(coll)) {
             int t = Obj.Ty(rt.gc.sp, Val.AsHeap(coll));
             if (t == Obj.TyVec) {
-                int n = Vec.Count(rt, coll);
+                int n = VecCount(rt, coll);
                 if (n == 0) {
                     return Val.Nil;
                 }

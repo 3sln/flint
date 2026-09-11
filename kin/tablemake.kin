@@ -13,7 +13,6 @@
                                    Text NIL TY_SCHEMA SC_NAMES SC_TYPES
                                    SC_INDEX SC_IDS SC_WIDTH SC_LEN TB_SCHEMA]]
             [flint.rt.vecwrite :refer [vec-conj]]
-            [flint.rt.vector :refer [vec-count]]
             [flint.rt.tablemeta :refer [schema-width table-count]]
             [flint.rt.tableref :refer [schema-id ref-to-map]]
             [flint.rt.tablecell :refer [table-cell]]
@@ -21,7 +20,7 @@
             [flint.rt.tablesay :refer [kw-name column-list]]
             [flint.rt.mapread :refer [map-get]]
             [flint.rt.mapwrite :refer [map-assoc]]
-            [flint.rt.vecread :refer [is-vector-like vec-nth]]
+            [flint.rt.vecread :refer [is-vector-like vec-nth vec-count]]
             [flint.rt.names :refer [is-keyword]]))
 
 (doc "`[[name type] ...]` -> a schema."

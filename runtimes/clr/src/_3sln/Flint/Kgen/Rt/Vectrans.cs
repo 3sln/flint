@@ -64,7 +64,7 @@ public static class Vectrans {
     /// day and the build stops, instead of four readers quietly returning the
     /// wrong slot.
     public static int TvecCount(Rt rt, long t) {
-        return Vec.Count(rt, t);
+        return VecCount(rt, t);
     }
     public static int TvecShift(Rt rt, long t) {
         return VecShift(rt, t);
@@ -99,7 +99,7 @@ public static class Vectrans {
             return Val.Nil;
         }
         long vv = rt.R(vi);
-        int cnt = Vec.Count(rt, vv);
+        int cnt = VecCount(rt, vv);
         int shift = VecShift(rt, vv);
         rt.SetSlot(a, T_CNT, Val.Fixnum(cnt & 0xFFFFFFFFL));
         rt.SetSlot(a, T_SHIFT, Val.Fixnum(shift & 0xFFFFFFFFL));

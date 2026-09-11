@@ -69,7 +69,7 @@ public final class Valeq {
         int base = rt.mark();
         int ai = rt.push(a);
         int bi = rt.push(b);
-        int n = Vec.count(rt, a);
+        int n = vecCount(rt, a);
         boolean out;
         int i;
         out = true;
@@ -97,7 +97,7 @@ public final class Valeq {
     }
     public static boolean seqEq(Rt rt, long a, long b) {
         if (isPlainVector(rt, a) && isPlainVector(rt, b)) {
-            if (Vec.count(rt, a) != Vec.count(rt, b)) {
+            if (vecCount(rt, a) != vecCount(rt, b)) {
                 return false;
             }
             return vecEqIndexed(rt, a, b);

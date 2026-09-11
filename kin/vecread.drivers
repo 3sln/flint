@@ -38,7 +38,6 @@ impl Rt {
     fn olen(&self, n: Value) -> u32 { self.lens[n.0 as usize] }
     // A vector's count, which the subject reaches as a SIBLING rather than a
     // template -- so the fixture has to supply it with the real signature.
-    fn vec_count(&self, v: Value) -> u32 { self.slot(v, V_CNT).as_fixnum() as u32 }
     // `flint.rt.vecnode`, STUBBED. Each source is verified against stubs of
     // what it requires; `vecnode.drivers` verifies the real ones. The
     // signatures must match what kin generates for them, because that is the
@@ -165,7 +164,6 @@ fn main() {
     static int olen(Rt rt, long n) { return rt.lens[(int) n]; }
     static int ty(int[] sp, long a) { return sp[(int) a]; }
     static final class Vec {
-        static int count(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_CNT)); }
     }
     // `flint.rt.vecnode`, STUBBED -- see the note in the Rust head.
     static long newNode(Rt rt, int n, long edit) {
@@ -276,7 +274,6 @@ fn main() {
     }
     static int Olen(Rt rt, long n) { return rt.lens[(int) n]; }
     internal static class Vec {
-        internal static int Count(Rt rt, long v) { return (int) Val.AsFixnum(rt.Slot(v, V_CNT)); }
     }
     // `flint.rt.vecnode`, STUBBED -- see the note in the Rust head.
     static long NewNode(Rt rt, int n, long edit) {

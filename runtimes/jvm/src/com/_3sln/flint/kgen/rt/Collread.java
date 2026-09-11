@@ -149,7 +149,7 @@ public final class Collread {
                     if (i < 0) {
                         return false;
                     }
-                    return Integer.compareUnsigned((int) i, Vec.count(rt, coll)) < 0;
+                    return Integer.compareUnsigned((int) i, vecCount(rt, coll)) < 0;
                 }
                 return false;
             }

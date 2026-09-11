@@ -74,7 +74,7 @@ public static class Seqwalk {
             } else if (Obj.Ty(rt.gc.sp, Val.AsHeap(coll)) == Obj.TyTable) {
                 n = TableCount(rt, coll);
             } else {
-                n = Vec.Count(rt, coll);
+                n = VecCount(rt, coll);
             }
             if ((i + 1) >= n) {
                 return Val.Nil;
@@ -236,7 +236,7 @@ public static class Seqwalk {
             return Seq(rt, s);
         }
         if (t == Obj.TyVec) {
-            if (Vec.Count(rt, v) == 0) {
+            if (VecCount(rt, v) == 0) {
                 return Val.Nil;
             }
             return Vecseq(rt, v, 0);
@@ -259,7 +259,7 @@ public static class Seqwalk {
             if (Val.IsNil(ents)) {
                 return Val.Nil;
             }
-            if (Vec.Count(rt, ents) == 0) {
+            if (VecCount(rt, ents) == 0) {
                 return Val.Nil;
             }
             return Vecseq(rt, ents, 0);
@@ -269,7 +269,7 @@ public static class Seqwalk {
             if (Val.IsNil(ents)) {
                 return Val.Nil;
             }
-            if (Vec.Count(rt, ents) == 0) {
+            if (VecCount(rt, ents) == 0) {
                 return Val.Nil;
             }
             return Vecseq(rt, ents, 0);

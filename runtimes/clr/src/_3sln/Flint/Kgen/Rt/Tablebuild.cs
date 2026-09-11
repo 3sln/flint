@@ -32,7 +32,7 @@ public static class Tablebuild {
         int ri = rt.Push(rows);
         int ncols = SchemaLen(rt, rt.R(si));
         int width = SchemaWidth(rt, rt.R(si));
-        int nrows = Vec.Count(rt, rt.R(ri));
+        int nrows = VecCount(rt, rt.R(ri));
         long chunks0 = Vec.Empty(rt);
         int ci = rt.Push(chunks0);
         int row;

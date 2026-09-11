@@ -33,7 +33,7 @@ public static class Tablemake {
     public static long NewSchema(Rt rt, long pairs) {
         int @base = rt.Mark();
         int pi = rt.Push(pairs);
-        int n = Vec.Count(rt, rt.R(pi));
+        int n = VecCount(rt, rt.R(pi));
         long names0 = Vec.Empty(rt);
         int ni = rt.Push(names0);
         long types0 = Vec.Empty(rt);
@@ -49,7 +49,7 @@ public static class Tablemake {
                 rt.PopTo(@base);
                 return rt.ThrowStr("IllegalArgumentException", "a schema is [[name type] ...]; this entry is not a name and a type");
             }
-            if (Vec.Count(rt, rt.R(pj)) != 2) {
+            if (VecCount(rt, rt.R(pj)) != 2) {
                 rt.PopTo(@base);
                 return rt.ThrowStr("IllegalArgumentException", "a schema is [[name type] ...]; this entry is not a name and a type");
             }

@@ -39,9 +39,10 @@ public final class Vec {
     /// and they agreed with each other while both disagreed with native.
     public static final int V_HASH = 5;
 
-    // @kin:link:ns: flint.rt.vector
-    // @kin:link:form:vec-count: {:template "Vec.count({0}, {1})"}
-    public static int count(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_CNT)); }
+    // `count` IS A SHIM NOW, the way `Maps.eq` is: `kin/vecread.kin` generates
+    // it, and the hand-written callers in `Builtins`, `Conc` and `Pike` keep
+    // the name they already spell.
+    public static int count(Rt rt, long v) { return com._3sln.flint.kgen.rt.Vecread.vecCount(rt, v); }
 
     /// A NODE carries its OWNERSHIP TOKEN in slot 0 and its elements from 1.
     ///

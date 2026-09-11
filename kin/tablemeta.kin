@@ -14,8 +14,7 @@
                                    TY_TABLE TY_TABLEREF SC_NAMES SC_TYPES
                                    SC_IDS SC_WIDTH TB_COUNT TB_OFFSET CH_ROWS
                                    CH_ENC CH_BASE ENC_CONST declarefn]]
-            [flint.rt.vecread :refer [vec-nth]]
-            [flint.rt.vector :refer [vec-count]]))
+            [flint.rt.vecread :refer [vec-nth vec-count]]))
 
 (declarefn flint.rt.valeq/val-eq)
 

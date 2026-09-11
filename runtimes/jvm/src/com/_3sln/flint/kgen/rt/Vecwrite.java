@@ -99,7 +99,7 @@ public final class Vecwrite {
         int base = rt.mark();
         int vi = rt.push(v);
         int xi = rt.push(x);
-        int cnt = Vec.count(rt, v);
+        int cnt = vecCount(rt, v);
         int tailLen = cnt - tailOff(rt, v);
         long out;
         if (tailLen < WIDTH) {

@@ -30,9 +30,8 @@
                                    TY_TABLEREF TY_ARRAYMAP TY_HASHMAP TY_SET
                                    TY_BYTES TY_BROPE TY_TVEC TY_TMAP TY_TSET
                                    TY_EMPTY_LIST TY_CONS]]
-            [flint.rt.vecread :refer [vec-nth]]
+            [flint.rt.vecread :refer [vec-nth vec-count]]
             [flint.rt.vecassoc :refer [vec-pop]]
-            [flint.rt.vector :refer [vec-count]]
             [flint.rt.nouns :refer [describe]]
             [flint.rt.seqcore :refer [is-seq]]
             [flint.rt.mapcore :refer [map-count]]

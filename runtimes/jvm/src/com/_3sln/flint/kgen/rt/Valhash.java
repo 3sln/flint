@@ -51,7 +51,7 @@ public final class Valhash {
     public static int hashVecIndexed(Rt rt, long v) {
         int base = rt.mark();
         int vi = rt.push(v);
-        int total = Vec.count(rt, v);
+        int total = vecCount(rt, v);
         int acc;
         int n;
         boolean starved;

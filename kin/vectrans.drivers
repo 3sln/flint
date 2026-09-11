@@ -245,8 +245,8 @@ fn main() {
     }
     static int olen(Rt rt, long n) { return rt.lens[(int) n]; }
     static int ty(int[] sp, long a) { return sp[(int) a]; }
+    static int vecCount(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_CNT)); }
     static final class Vec {
-        static int count(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_CNT)); }
         static long empty(Rt rt) { return emptyVec(rt); }
     }
     // `flint.rt.vecnode`, STUBBED -- see the note in the Rust head.
@@ -271,7 +271,7 @@ fn main() {
     }
     static int vecShift(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_SHIFT)); }
     static int tailOff(Rt rt, long v) {
-        int c = Vec.count(rt, v);
+        int c = vecCount(rt, v);
         return c < WIDTH ? 0 : ((c - 1) >>> BITS) << BITS;
     }
     // `flint.rt.vecwrite`, STUBBED -- see the Rust head.
@@ -317,7 +317,7 @@ fn main() {
     static long get(Rt rt, long v, int i) { return nodeGet(rt, arrayFor(rt, v, i), i & MASK); }
     // The VECTOR's reader applied to a TRANSIENT; see the note in the Rust.
     static long vecNth(Rt rt, long v, int i, long dflt) {
-        if (i >= Vec.count(rt, v)) return dflt;
+        if (i >= vecCount(rt, v)) return dflt;
         return nodeGet(rt, arrayFor(rt, v, i), i & MASK);
     }
     static long arrayFor(Rt rt, long v, int i) {
@@ -416,8 +416,8 @@ fn main() {
         internal long Slot(long n, int i) { return h[(int) n + i]; }
     }
     static int Olen(Rt rt, long n) { return rt.lens[(int) n]; }
+    internal static int VecCount(Rt rt, long v) { return (int) Val.AsFixnum(rt.Slot(v, V_CNT)); }
     internal static class Vec {
-        internal static int Count(Rt rt, long v) { return (int) Val.AsFixnum(rt.Slot(v, V_CNT)); }
         internal static long Empty(Rt rt) { return EmptyVec(rt); }
     }
     // `flint.rt.vecnode`, STUBBED -- see the note in the Rust head.
@@ -442,7 +442,7 @@ fn main() {
     }
     static int VecShift(Rt rt, long v) { return (int) Val.AsFixnum(rt.Slot(v, V_SHIFT)); }
     static int TailOff(Rt rt, long v) {
-        int c = Vec.Count(rt, v);
+        int c = VecCount(rt, v);
         return c < WIDTH ? 0 : ((int)((uint)(c - 1) >> BITS)) << BITS;
     }
     // `flint.rt.vecwrite`, STUBBED -- see the Rust head.
@@ -487,7 +487,7 @@ fn main() {
     }
     static long Get(Rt rt, long v, int i) { return NodeGet(rt, ArrayFor(rt, v, i), i & MASK); }
     static long VecNth(Rt rt, long v, int i, long dflt) {
-        if (i >= Vec.Count(rt, v)) return dflt;
+        if (i >= VecCount(rt, v)) return dflt;
         return NodeGet(rt, ArrayFor(rt, v, i), i & MASK);
     }
     static long ArrayFor(Rt rt, long v, int i) {

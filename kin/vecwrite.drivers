@@ -160,8 +160,8 @@ fn main() {
     }
     static int olen(Rt rt, long n) { return rt.lens[(int) n]; }
     static int ty(int[] sp, long a) { return sp[(int) a]; }
+    static int vecCount(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_CNT)); }
     static final class Vec {
-        static int count(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_CNT)); }
     }
     // `flint.rt.vecnode`, STUBBED -- see the note in the Rust head.
     static long newNode(Rt rt, int n, long edit) {
@@ -184,7 +184,7 @@ fn main() {
     }
     static int vecShift(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_SHIFT)); }
     static int tailOff(Rt rt, long v) {
-        int c = Vec.count(rt, v);
+        int c = vecCount(rt, v);
         return c < WIDTH ? 0 : ((c - 1) >>> BITS) << BITS;
     }
     static long arrayFor(Rt rt, long v, int i) {
@@ -214,13 +214,13 @@ fn main() {
             rt.setR(vi, vecConj(rt, rt.r(vi), 0x1000 + i));
             if (i == 0 || i == 31 || i == 32 || i == 1023 || i == 1024 || i == 2047 || i == 2048) {
                 long w = rt.r(vi);
-                o.append(i + 1).append(":cnt=").append(Vec.count(rt, w))
+                o.append(i + 1).append(":cnt=").append(vecCount(rt, w))
                  .append(",sh=").append(vecShift(rt, w))
                  .append(",toff=").append(tailOff(rt, w)).append(' ');
             }
         }
         v = rt.r(vi);
-        o.append("| final cnt=").append(Vec.count(rt, v)).append(" shift=").append(vecShift(rt, v)).append(' ');
+        o.append("| final cnt=").append(vecCount(rt, v)).append(" shift=").append(vecShift(rt, v)).append(' ');
         int bad = 0;
         for (int i = 0; i < 2100; i++) {
             long leaf = arrayFor(rt, v, i);
@@ -228,7 +228,7 @@ fn main() {
         }
         o.append("wrong=").append(bad).append(' ');
         long older = vecConj(rt, v, 0x9999);
-        o.append("older=").append(Vec.count(rt, older)).append(" v=").append(Vec.count(rt, v)).append(' ');
+        o.append("older=").append(vecCount(rt, older)).append(" v=").append(vecCount(rt, v)).append(' ');
         System.out.println(o.toString());
     }
 --csharp-head
@@ -273,8 +273,8 @@ fn main() {
         internal long Slot(long n, int i) { return h[(int) n + i]; }
     }
     static int Olen(Rt rt, long n) { return rt.lens[(int) n]; }
+    internal static int VecCount(Rt rt, long v) { return (int) Val.AsFixnum(rt.Slot(v, V_CNT)); }
     internal static class Vec {
-        internal static int Count(Rt rt, long v) { return (int) Val.AsFixnum(rt.Slot(v, V_CNT)); }
     }
     // `flint.rt.vecnode`, STUBBED -- see the note in the Rust head.
     static long NewNode(Rt rt, int n, long edit) {
@@ -297,7 +297,7 @@ fn main() {
     }
     static int VecShift(Rt rt, long v) { return (int) Val.AsFixnum(rt.Slot(v, V_SHIFT)); }
     static int TailOff(Rt rt, long v) {
-        int c = Vec.Count(rt, v);
+        int c = VecCount(rt, v);
         return c < WIDTH ? 0 : ((int)((uint)(c - 1) >> BITS)) << BITS;
     }
     static long ArrayFor(Rt rt, long v, int i) {
@@ -327,13 +327,13 @@ fn main() {
             rt.SetR(vi, VecConj(rt, rt.R(vi), 0x1000 + i));
             if (i == 0 || i == 31 || i == 32 || i == 1023 || i == 1024 || i == 2047 || i == 2048) {
                 long w = rt.R(vi);
-                o.Append(i + 1).Append(":cnt=").Append(Vec.Count(rt, w))
+                o.Append(i + 1).Append(":cnt=").Append(VecCount(rt, w))
                  .Append(",sh=").Append(VecShift(rt, w))
                  .Append(",toff=").Append(TailOff(rt, w)).Append(' ');
             }
         }
         v = rt.R(vi);
-        o.Append("| final cnt=").Append(Vec.Count(rt, v)).Append(" shift=").Append(VecShift(rt, v)).Append(' ');
+        o.Append("| final cnt=").Append(VecCount(rt, v)).Append(" shift=").Append(VecShift(rt, v)).Append(' ');
         int bad = 0;
         for (int i = 0; i < 2100; i++) {
             long leaf = ArrayFor(rt, v, i);
@@ -341,6 +341,6 @@ fn main() {
         }
         o.Append("wrong=").Append(bad).Append(' ');
         long older = VecConj(rt, v, 0x9999);
-        o.Append("older=").Append(Vec.Count(rt, older)).Append(" v=").Append(Vec.Count(rt, v)).Append(' ');
+        o.Append("older=").Append(VecCount(rt, older)).Append(" v=").Append(VecCount(rt, v)).Append(' ');
         System.Console.WriteLine(o.ToString());
     }

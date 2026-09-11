@@ -11,6 +11,7 @@ using static global::Flint.Rt.Eq;
 using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
+using static global::_3sln.Flint.Kgen.Rt.Vecread;
 
 public static class Seqcore {
     /// Is this a SEQ? Six heap tags and nothing else.
@@ -97,7 +98,7 @@ public static class Seqcore {
             return rt.Slot(v, C_COUNT);
         }
         if (t == Obj.TyVec) {
-            return Val.Fixnum(Vec.Count(rt, v) & 0xFFFFFFFFL);
+            return Val.Fixnum(VecCount(rt, v) & 0xFFFFFFFFL);
         }
         // A RANGE KNOWS ITS SIZE. Clojure's Range is Counted; this walked
         // instead, so `(count (range 2000000))` cost 11.92s against a

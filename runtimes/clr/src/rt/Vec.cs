@@ -36,9 +36,9 @@ public static class Vec {
     /// and they agreed with each other while both disagreed with native.
     public const int V_HASH = 5;
 
-    // @kin:link:ns: flint.rt.vector
-    // @kin:link:form:vec-count: {:template "Vec.Count({0}, {1})"}
-    public static int Count(Rt rt, long v) => (int) Val.AsFixnum(rt.Slot(v, V_CNT));
+    // `Count` IS A SHIM NOW, the way `Maps.Eq` is: `kin/vecread.kin` generates
+    // it, and the hand-written callers keep the name they already spell.
+    public static int Count(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Vecread.VecCount(rt, v);
 
 
 

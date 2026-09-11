@@ -223,8 +223,8 @@ fn main() {
     }
     static int olen(Rt rt, long n) { return rt.lens[(int) n]; }
     static int ty(int[] sp, long a) { return sp[(int) a]; }
+    static int vecCount(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_CNT)); }
     static final class Vec {
-        static int count(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_CNT)); }
         static long empty(Rt rt) { return emptyVec(rt); }
     }
     // `flint.rt.vecnode`, STUBBED -- see the note in the Rust head.
@@ -248,7 +248,7 @@ fn main() {
     }
     static int vecShift(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_SHIFT)); }
     static int tailOff(Rt rt, long v) {
-        int c = Vec.count(rt, v);
+        int c = vecCount(rt, v);
         return c < WIDTH ? 0 : ((c - 1) >>> BITS) << BITS;
     }
     // `flint.rt.vecwrite`, STUBBED -- see the Rust head.
@@ -321,17 +321,17 @@ fn main() {
          .append(" tail=").append(get(rt, a33, 32)).append(" orig=").append(get(rt, v33, 5)).append(' ');
         o.append("append=").append(vecAssoc(rt, v33, 33, 1)).append(' ');
         long p3 = vecPop(rt, v3);
-        o.append("p3=").append(Vec.count(rt, p3)).append(' ').append(get(rt, p3, 0)).append(',')
+        o.append("p3=").append(vecCount(rt, p3)).append(' ').append(get(rt, p3, 0)).append(',')
          .append(get(rt, p3, 1)).append(' ');
         long p33 = vecPop(rt, v33);
-        o.append("p33=").append(Vec.count(rt, p33)).append(" sh=").append(vecShift(rt, p33))
+        o.append("p33=").append(vecCount(rt, p33)).append(" sh=").append(vecShift(rt, p33))
          .append(" toff=").append(tailOff(rt, p33)).append(" last=").append(get(rt, p33, 31)).append(' ');
         long v1025 = build(rt, 1025, BITS + BITS);
         long p1025 = vecPop(rt, v1025);
-        o.append("p1025=").append(Vec.count(rt, p1025)).append(" sh=").append(vecShift(rt, v1025))
+        o.append("p1025=").append(vecCount(rt, p1025)).append(" sh=").append(vecShift(rt, v1025))
          .append("->").append(vecShift(rt, p1025)).append(" last=").append(get(rt, p1025, 1023)).append(' ');
         long v1 = build(rt, 1, BITS);
-        o.append("p1=").append(Vec.count(rt, vecPop(rt, v1))).append(' ');
+        o.append("p1=").append(vecCount(rt, vecPop(rt, v1))).append(' ');
         long v0 = build(rt, 0, BITS);
         o.append("p0nil=").append(Val.isNil(vecPop(rt, v0)) ? 1 : 0).append(' ');
         System.out.println(o.toString());
@@ -379,8 +379,8 @@ fn main() {
         internal long Slot(long n, int i) { return h[(int) n + i]; }
     }
     static int Olen(Rt rt, long n) { return rt.lens[(int) n]; }
+    internal static int VecCount(Rt rt, long v) { return (int) Val.AsFixnum(rt.Slot(v, V_CNT)); }
     internal static class Vec {
-        internal static int Count(Rt rt, long v) { return (int) Val.AsFixnum(rt.Slot(v, V_CNT)); }
         internal static long Empty(Rt rt) { return EmptyVec(rt); }
     }
     // `flint.rt.vecnode`, STUBBED -- see the note in the Rust head.
@@ -404,7 +404,7 @@ fn main() {
     }
     static int VecShift(Rt rt, long v) { return (int) Val.AsFixnum(rt.Slot(v, V_SHIFT)); }
     static int TailOff(Rt rt, long v) {
-        int c = Vec.Count(rt, v);
+        int c = VecCount(rt, v);
         return c < WIDTH ? 0 : ((int)((uint)(c - 1) >> BITS)) << BITS;
     }
     // `flint.rt.vecwrite`, STUBBED -- see the Rust head.
@@ -477,17 +477,17 @@ fn main() {
          .Append(" tail=").Append(Get(rt, a33, 32)).Append(" orig=").Append(Get(rt, v33, 5)).Append(' ');
         o.Append("append=").Append(VecAssoc(rt, v33, 33, 1)).Append(' ');
         long p3 = VecPop(rt, v3);
-        o.Append("p3=").Append(Vec.Count(rt, p3)).Append(' ').Append(Get(rt, p3, 0)).Append(',')
+        o.Append("p3=").Append(VecCount(rt, p3)).Append(' ').Append(Get(rt, p3, 0)).Append(',')
          .Append(Get(rt, p3, 1)).Append(' ');
         long p33 = VecPop(rt, v33);
-        o.Append("p33=").Append(Vec.Count(rt, p33)).Append(" sh=").Append(VecShift(rt, p33))
+        o.Append("p33=").Append(VecCount(rt, p33)).Append(" sh=").Append(VecShift(rt, p33))
          .Append(" toff=").Append(TailOff(rt, p33)).Append(" last=").Append(Get(rt, p33, 31)).Append(' ');
         long v1025 = Build(rt, 1025, BITS + BITS);
         long p1025 = VecPop(rt, v1025);
-        o.Append("p1025=").Append(Vec.Count(rt, p1025)).Append(" sh=").Append(VecShift(rt, v1025))
+        o.Append("p1025=").Append(VecCount(rt, p1025)).Append(" sh=").Append(VecShift(rt, v1025))
          .Append("->").Append(VecShift(rt, p1025)).Append(" last=").Append(Get(rt, p1025, 1023)).Append(' ');
         long v1 = Build(rt, 1, BITS);
-        o.Append("p1=").Append(Vec.Count(rt, VecPop(rt, v1))).Append(' ');
+        o.Append("p1=").Append(VecCount(rt, VecPop(rt, v1))).Append(' ');
         long v0 = Build(rt, 0, BITS);
         o.Append("p0nil=").Append(Val.IsNil(VecPop(rt, v0)) ? 1 : 0).Append(' ');
         System.Console.WriteLine(o.ToString());

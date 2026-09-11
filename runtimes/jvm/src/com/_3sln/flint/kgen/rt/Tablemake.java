@@ -31,7 +31,7 @@ public final class Tablemake {
     public static long newSchema(Rt rt, long pairs) {
         int base = rt.mark();
         int pi = rt.push(pairs);
-        int n = Vec.count(rt, rt.r(pi));
+        int n = vecCount(rt, rt.r(pi));
         long names0 = Vec.empty(rt);
         int ni = rt.push(names0);
         long types0 = Vec.empty(rt);
@@ -47,7 +47,7 @@ public final class Tablemake {
                 rt.popTo(base);
                 return rt.throwStr("IllegalArgumentException", "a schema is [[name type] ...]; this entry is not a name and a type");
             }
-            if (Vec.count(rt, rt.r(pj)) != 2) {
+            if (vecCount(rt, rt.r(pj)) != 2) {
                 rt.popTo(base);
                 return rt.throwStr("IllegalArgumentException", "a schema is [[name type] ...]; this entry is not a name and a type");
             }

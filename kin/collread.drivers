@@ -161,9 +161,9 @@ fn main() {
     }
     static long mapGet(Rt rt, long m, long k, long d) { return 0x921L; }
     static long setGet(Rt rt, long s, long k, long d) { return 0x922L; }
+    static int vecCount(Rt rt, long v) { return rt.vn; }
     static final class Vec {
         static long nth(Rt rt, long v, int i, long d) { return 0x930L + i; }
-        static int count(Rt rt, long v) { return rt.vn; }
     }
     static long vecNth(Rt rt, long v, int i, long d) { return Vec.nth(rt, v, i, d); }
     static final class Table {
@@ -283,9 +283,9 @@ namespace Flint.Rt {
     }
     internal static long MapGet(Rt rt, long m, long k, long d) { return 0x921L; }
     internal static long SetGet(Rt rt, long s, long k, long d) { return 0x922L; }
+    internal static int VecCount(Rt rt, long v) { return rt.vn; }
     internal static class Vec {
         internal static long Nth(Rt rt, long v, int i, long d) { return 0x930L + i; }
-        internal static int Count(Rt rt, long v) { return rt.vn; }
     }
     internal static long VecNth(Rt rt, long v, int i, long d) { return Vec.Nth(rt, v, i, d); }
     // `table-ref` and `ref-get` resolve to a BARE `Table`, so the probe puts

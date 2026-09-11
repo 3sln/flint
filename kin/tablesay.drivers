@@ -302,10 +302,10 @@ fn main() {
         long throwStr(String kind, String msg) { thrown = msg; return NIL; }
     }
     static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static int vecCount(Rt rt, long v) { return rt.lens[(int) v]; }
     static final class Vec {
-        static int count(Rt rt, long v) { return rt.lens[(int) v]; }
         static long nth(Rt rt, long v, int i, long dflt) {
-            return i >= count(rt, v) ? dflt : rt.slot(v, i);
+            return i >= vecCount(rt, v) ? dflt : rt.slot(v, i);
         }
     }
     static long vecNth(Rt rt, long v, int i, long dflt) { return Vec.nth(rt, v, i, dflt); }
@@ -376,13 +376,13 @@ fn main() {
         return vector(rt, es);
     }
     static long nextOf(Rt rt, long q) {
-        int n = Vec.count(rt, q);
+        int n = vecCount(rt, q);
         if (n <= 1) return NIL;
         long[] rest = new long[n - 1];
         for (int i = 1; i < n; i++) rest[i - 1] = rt.slot(q, i);
         return vector(rt, rest);
     }
-    static int schemaLen(Rt rt, long s) { return Vec.count(rt, rt.slot(s, Table.SC_NAMES)); }
+    static int schemaLen(Rt rt, long s) { return vecCount(rt, rt.slot(s, Table.SC_NAMES)); }
     static int schemaWidth(Rt rt, long s) { return (int) Val.asFixnum(rt.slot(s, Table.SC_WIDTH)); }
     static long schemaNameAt(Rt rt, long s, int c) {
         return Vec.nth(rt, rt.slot(s, Table.SC_NAMES), c, NIL);
@@ -514,10 +514,10 @@ namespace _3sln.Flint.Kgen.Rt {
         internal long KindOf(long v) { return Probe.KindOf(this, v); }
         internal long ThrowStr(string kind, string msg) { thrown = msg; return Val.Nil; }
     }
+    internal static int VecCount(Rt rt, long v) { return rt.lens[(int) v]; }
     internal static class Vec {
-        internal static int Count(Rt rt, long v) { return rt.lens[(int) v]; }
         internal static long Nth(Rt rt, long v, int i, long dflt) {
-            return i >= Count(rt, v) ? dflt : rt.Slot(v, i);
+            return i >= VecCount(rt, v) ? dflt : rt.Slot(v, i);
         }
     }
     internal static long VecNth(Rt rt, long v, int i, long dflt) { return Vec.Nth(rt, v, i, dflt); }
@@ -574,13 +574,13 @@ namespace _3sln.Flint.Kgen.Rt {
         return Vector(rt, es);
     }
     internal static long NextOf(Rt rt, long q) {
-        int n = Vec.Count(rt, q);
+        int n = VecCount(rt, q);
         if (n <= 1) return Val.Nil;
         long[] rest = new long[n - 1];
         for (int i = 1; i < n; i++) rest[i - 1] = rt.Slot(q, i);
         return Vector(rt, rest);
     }
-    internal static int SchemaLen(Rt rt, long s) { return Vec.Count(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES)); }
+    internal static int SchemaLen(Rt rt, long s) { return VecCount(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES)); }
     internal static int SchemaWidth(Rt rt, long s) { return (int) Val.AsFixnum(rt.Slot(s, global::Flint.Rt.Table.SC_WIDTH)); }
     internal static long SchemaNameAt(Rt rt, long s, int c) {
         return Vec.Nth(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES), c, Val.Nil);

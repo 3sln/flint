@@ -62,7 +62,7 @@ public final class Vectrans {
     /// day and the build stops, instead of four readers quietly returning the
     /// wrong slot.
     public static int tvecCount(Rt rt, long t) {
-        return Vec.count(rt, t);
+        return vecCount(rt, t);
     }
     public static int tvecShift(Rt rt, long t) {
         return vecShift(rt, t);
@@ -97,7 +97,7 @@ public final class Vectrans {
             return Val.NIL;
         }
         long vv = rt.r(vi);
-        int cnt = Vec.count(rt, vv);
+        int cnt = vecCount(rt, vv);
         int shift = vecShift(rt, vv);
         rt.setSlot(a, T_CNT, Val.fixnum(cnt & 0xFFFFFFFFL));
         rt.setSlot(a, T_SHIFT, Val.fixnum(shift & 0xFFFFFFFFL));

@@ -23,8 +23,7 @@
                                    TB_COUNT TB_OFFSET TB_LEN declarefn]]
             [flint.rt.tablekind :refer [type-ok]]
             [flint.rt.vecwrite :refer [vec-conj]]
-            [flint.rt.vecread :refer [vec-nth]]
-            [flint.rt.vector :refer [vec-count]]
+            [flint.rt.vecread :refer [vec-nth vec-count]]
             [flint.rt.tablemeta :refer [chunk-enc chunk-rows schema-id-at
                                         schema-len schema-name-at
                                         schema-type-at schema-width

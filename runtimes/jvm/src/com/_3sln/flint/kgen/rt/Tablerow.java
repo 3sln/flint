@@ -56,7 +56,7 @@ public final class Tablerow {
         int which = phys >>> Table.CHUNK_SHIFT;
         int within = phys & (Table.CHUNK - 1);
         boolean append = idx == tableCount(rt, rt.r(ti));
-        int nchunks = Vec.count(rt, rt.r(ci));
+        int nchunks = vecCount(rt, rt.r(ci));
         if (append && (which >= nchunks)) {
             // A NEW CHUNK, one row wide. `chunk-with-row` grows an
             // existing one; an empty table has none to grow.

@@ -71,7 +71,7 @@ public static class Valeq {
         int @base = rt.Mark();
         int ai = rt.Push(a);
         int bi = rt.Push(b);
-        int n = Vec.Count(rt, a);
+        int n = VecCount(rt, a);
         bool @out;
         int i;
         @out = true;
@@ -99,7 +99,7 @@ public static class Valeq {
     }
     internal static bool SeqEq(Rt rt, long a, long b) {
         if (IsPlainVector(rt, a) && IsPlainVector(rt, b)) {
-            if (Vec.Count(rt, a) != Vec.Count(rt, b)) {
+            if (VecCount(rt, a) != VecCount(rt, b)) {
                 return false;
             }
             return VecEqIndexed(rt, a, b);

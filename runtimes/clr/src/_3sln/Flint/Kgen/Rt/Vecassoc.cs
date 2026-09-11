@@ -44,7 +44,7 @@ public static class Vecassoc {
     /// `i` equal to the count APPENDS, which is the rule a vector follows in
     /// Clojure and the reason this is not simply a bounds error.
     public static long VecAssoc(Rt rt, long v, int i, long x) {
-        int cnt = Vec.Count(rt, v);
+        int cnt = VecCount(rt, v);
         if (i == cnt) {
             return VecConj(rt, v, x);
         }
@@ -113,7 +113,7 @@ public static class Vecassoc {
     /// trie to become the new tail, and a root left holding a single child
     /// means the tree loses a level.
     public static long VecPop(Rt rt, long v) {
-        int cnt = Vec.Count(rt, v);
+        int cnt = VecCount(rt, v);
         if (cnt == 0) {
             return Val.Nil;
         }

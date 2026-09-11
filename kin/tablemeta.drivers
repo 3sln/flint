@@ -188,10 +188,10 @@ fn main() {
         long slot(long n, int i) { return h[(int) n + i]; }
     }
     static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static int vecCount(Rt rt, long v) { return rt.lens[(int) v]; }
     static final class Vec {
-        static int count(Rt rt, long v) { return rt.lens[(int) v]; }
         static long nth(Rt rt, long v, int i, long dflt) {
-            return i >= count(rt, v) ? dflt : rt.slot(v, i);
+            return i >= vecCount(rt, v) ? dflt : rt.slot(v, i);
         }
     }
     static long vecNth(Rt rt, long v, int i, long dflt) { return Vec.nth(rt, v, i, dflt); }
@@ -204,8 +204,8 @@ fn main() {
             if (a == b) return true;
             if (!Val.isHeap(a) || !Val.isHeap(b)) return false;
             if (ty(rt.gc.sp, a) != TY_VEC || ty(rt.gc.sp, b) != TY_VEC) return false;
-            int n = Vec.count(rt, a);
-            if (n != Vec.count(rt, b)) return false;
+            int n = vecCount(rt, a);
+            if (n != vecCount(rt, b)) return false;
             for (int i = 0; i < n; i++) if (!valEq(rt, rt.slot(a, i), rt.slot(b, i))) return false;
             return true;
         }
@@ -301,8 +301,8 @@ namespace Flint.Rt {
             if (!Probe.Val.IsHeap(a) || !Probe.Val.IsHeap(b)) return false;
             if (Probe.Obj.Ty(rt.gc.sp, a) != Probe.Obj.TyVec
                 || Probe.Obj.Ty(rt.gc.sp, b) != Probe.Obj.TyVec) return false;
-            int n = Probe.Vec.Count(rt, a);
-            if (n != Probe.Vec.Count(rt, b)) return false;
+            int n = Probe.VecCount(rt, a);
+            if (n != Probe.VecCount(rt, b)) return false;
             for (int i = 0; i < n; i++) if (!Equal(rt, rt.Slot(a, i), rt.Slot(b, i))) return false;
             return true;
         }
@@ -341,10 +341,10 @@ namespace Flint.Rt {
         internal void Set(long n, int i, long v) { h[(int) n + i] = v; }
         internal long Slot(long n, int i) { return h[(int) n + i]; }
     }
+    internal static int VecCount(Rt rt, long v) { return rt.lens[(int) v]; }
     internal static class Vec {
-        internal static int Count(Rt rt, long v) { return rt.lens[(int) v]; }
         internal static long Nth(Rt rt, long v, int i, long dflt) {
-            return i >= Count(rt, v) ? dflt : rt.Slot(v, i);
+            return i >= VecCount(rt, v) ? dflt : rt.Slot(v, i);
         }
     }
     internal static long VecNth(Rt rt, long v, int i, long dflt) { return Vec.Nth(rt, v, i, dflt); }

@@ -47,7 +47,7 @@ public static class Collwrite {
             if (IsInt(rt, k)) {
                 long i = Num.I64Of(rt, k);
                 if (i >= 0) {
-                    if (((int) i) <= Vec.Count(rt, coll)) {
+                    if (((int) i) <= VecCount(rt, coll)) {
                         return VecAssoc(rt, coll, (int) i, v);
                     }
                 }

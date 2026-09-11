@@ -122,7 +122,7 @@ public static class Tablemigrate {
         int ri = rt.Push(rebased);
         int width = SchemaWidth(rt, rt.R(ri));
         int ci = rt.Push(rt.Slot(rt.R(ti), global::Flint.Rt.Table.TB_CHUNKS));
-        int nch = Vec.Count(rt, rt.R(ci));
+        int nch = VecCount(rt, rt.R(ci));
         long out0 = Vec.Empty(rt);
         int oi = rt.Push(out0);
         for (int k = 0; k < nch; k++) {

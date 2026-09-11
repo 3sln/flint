@@ -19,9 +19,8 @@
                                    CHUNK_SHIFT CH_BASE TB_SCHEMA TB_CHUNKS
                                    TB_COUNT TB_OFFSET TB_LEN]]
             [flint.rt.vecwrite :refer [vec-conj]]
-            [flint.rt.vecread :refer [vec-nth]]
+            [flint.rt.vecread :refer [vec-nth vec-count]]
             [flint.rt.vecassoc :refer [vec-assoc]]
-            [flint.rt.vector :refer [vec-count]]
             [flint.rt.tablemeta :refer [schema-id-at schema-len schema-width
                                         table-count table-offset]]
             [flint.rt.tablecell :refer [new-chunk collapse]]

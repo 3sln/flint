@@ -325,10 +325,10 @@ fn main() {
     static boolean mapEq(Rt rt, long a, long b) { return Maps.eq(rt, a, b); }
     static boolean setEq(Rt rt, long a, long b) { return rt.seteq; }
     static boolean schemaEq(Rt rt, long a, long b) { return rt.scheq; }
+    static int vecCount(Rt rt, long v) { return (int) rt.slot(v, 0); }
     static final class Vec {
-        static int count(Rt rt, long v) { return (int) rt.slot(v, 0); }
         static long nth(Rt rt, long v, int i, long dflt) {
-            int n = count(rt, v);
+            int n = vecCount(rt, v);
             return i >= n ? dflt : 0xE000L + (n - i);
         }
     }
@@ -538,10 +538,10 @@ namespace Flint.Rt {
     internal static bool TreeEq(Rt rt, long a, long b) { return rt.treeq; }
     internal static bool BEq(Rt rt, long a, long b) { return rt.beq; }
     internal static bool SchemaEq(Rt rt, long a, long b) { return rt.scheq; }
+    internal static int VecCount(Rt rt, long v) { return (int) rt.Slot(v, 0); }
     internal static class Vec {
-        internal static int Count(Rt rt, long v) { return (int) rt.Slot(v, 0); }
         internal static long Nth(Rt rt, long v, int i, long dflt) {
-            int n = Count(rt, v);
+            int n = VecCount(rt, v);
             return i >= n ? dflt : 0xE000L + (n - i);
         }
     }

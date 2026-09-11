@@ -30,7 +30,7 @@ public final class Tablebuild {
         int ri = rt.push(rows);
         int ncols = schemaLen(rt, rt.r(si));
         int width = schemaWidth(rt, rt.r(si));
-        int nrows = Vec.count(rt, rt.r(ri));
+        int nrows = vecCount(rt, rt.r(ri));
         long chunks0 = Vec.empty(rt);
         int ci = rt.push(chunks0);
         int row;

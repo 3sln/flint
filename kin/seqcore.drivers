@@ -192,7 +192,7 @@ fn main() {
         long slot(long n, int i) { return h[(int) n + i]; }
     }
     static int olen(Rt rt, long n) { return rt.lens[(int) n]; }
-    static final class Vec { static int count(Rt rt, long v) { return (int) rt.h[(int) v]; } }
+    static int vecCount(Rt rt, long v) { return (int) rt.h[(int) v]; }
     static final class Table {
         static final int RF_SCHEMA = 0;
         static int schemaLen(Rt rt, long s) { return (int) rt.h[(int) s]; }
@@ -328,7 +328,7 @@ namespace Flint.Rt {
         internal long Slot(long n, int i) { return h[(int) n + i]; }
     }
     static int Olen(Rt rt, long n) { return rt.lens[(int) n]; }
-    internal static class Vec { internal static int Count(Rt rt, long v) { return (int) rt.h[(int) v]; } }
+    internal static int VecCount(Rt rt, long v) { return (int) rt.h[(int) v]; }
     // Nested to reproduce the port's FULLY QUALIFIED `Flint.Rt.Table`, which
     // the real C# needs because a `Table` member would shadow the class.
     internal static class Flint {

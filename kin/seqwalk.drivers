@@ -319,10 +319,10 @@ fn main() {
     }
     static int ty(int[] sp, long a) { return sp[(int) a]; }
     // The stubs -- see the Rust head for what each stands in for.
+    static int vecCount(Rt rt, long v) { return (int) rt.slot(v, 0); }
     static final class Vec {
-        static int count(Rt rt, long v) { return (int) rt.slot(v, 0); }
         static long nth(Rt rt, long v, int i, long dflt) {
-            return i >= count(rt, v) ? dflt : rt.slot(v, i + 1);
+            return i >= vecCount(rt, v) ? dflt : rt.slot(v, i + 1);
         }
     }
     static long vecNth(Rt rt, long v, int i, long dflt) { return Vec.nth(rt, v, i, dflt); }
@@ -359,7 +359,7 @@ fn main() {
         if (!Val.isHeap(v)) return NIL;
         int t = ty(rt.gc.sp, Val.asHeap(v));
         if (t == TY_CONS) return rt.slot(v, C_COUNT);
-        if (t == TY_VEC) return Val.fixnum(Vec.count(rt, v));
+        if (t == TY_VEC) return Val.fixnum(vecCount(rt, v));
         return NIL;
     }
     static long emptyListOf(Rt rt) { return Val.heap(rt.alloc(TY_EMPTY_LIST, 1)); }
@@ -560,10 +560,10 @@ namespace Flint.Rt {
         internal long Call(long f, long[] args) { return Slot(f, 0); }
     }
     // The stubs -- see the Rust head for what each stands in for.
+    internal static int VecCount(Rt rt, long v) { return (int) rt.Slot(v, 0); }
     internal static class Vec {
-        internal static int Count(Rt rt, long v) { return (int) rt.Slot(v, 0); }
         internal static long Nth(Rt rt, long v, int i, long dflt) {
-            return i >= Count(rt, v) ? dflt : rt.Slot(v, i + 1);
+            return i >= VecCount(rt, v) ? dflt : rt.Slot(v, i + 1);
         }
     }
     internal static long VecNth(Rt rt, long v, int i, long dflt) { return Vec.Nth(rt, v, i, dflt); }
@@ -597,7 +597,7 @@ namespace Flint.Rt {
         if (!Val.IsHeap(v)) return Val.Nil;
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
         if (t == Obj.TyCons) return rt.Slot(v, C_COUNT);
-        if (t == Obj.TyVec) return Val.Fixnum(Vec.Count(rt, v));
+        if (t == Obj.TyVec) return Val.Fixnum(VecCount(rt, v));
         return Val.Nil;
     }
     internal static long EmptyListOf(Rt rt) { return Val.Heap(rt.Alloc(Obj.TyEmptyList, 1)); }

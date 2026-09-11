@@ -45,7 +45,7 @@ public final class Collwrite {
             if (isInt(rt, k)) {
                 long i = Num.i64Of(rt, k);
                 if (i >= 0) {
-                    if (((int) i) <= Vec.count(rt, coll)) {
+                    if (((int) i) <= vecCount(rt, coll)) {
                         return vecAssoc(rt, coll, (int) i, v);
                     }
                 }

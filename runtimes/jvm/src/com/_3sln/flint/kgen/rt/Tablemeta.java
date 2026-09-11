@@ -62,7 +62,7 @@ public final class Tablemeta {
     }
     /// How many columns the schema NAMES.
     public static int schemaLen(Rt rt, long s) {
-        return Vec.count(rt, rt.slot(s, Table.SC_NAMES));
+        return vecCount(rt, rt.slot(s, Table.SC_NAMES));
     }
     /// How many column slots a chunk of this schema carries.
     /// 
