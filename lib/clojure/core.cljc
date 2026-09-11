@@ -1756,31 +1756,21 @@
   [protocol kind mmap]
   (swap! (:impls protocol) update kind merge mmap)
   nil)
-(defn- method-key
-  "The protocol's OWN key for the method named `n`.
+(comment
+  "`method-key` and `extend-method` LIVE IN `flint.protocols`, which is where
+  `defprotocol` expands a call to. They are the two names here that only
+  `defprotocol` and `extend-protocol` ever reach, and `methods-of` and
+  `protocol-miss` moved there earlier for the same reason: Clojure has neither,
+  so a port that keeps them here is publishing under somebody else's name.
 
-  A method key is qualified by the namespace that DEFINED the protocol, which
-  is not the namespace doing the extending. Computing it lexically at the
-  extend site -- which is what `extend-protocol` did -- writes an
-  implementation under a key nobody ever reads, so extending a protocol from
-  another namespace was a silent no-op that surfaced later as `protocol-miss`.
-  Silent is the part that made it worth a named function and this comment."
-  [protocol n]
-  (loop [ks (seq (:method-keys protocol))]
-    (cond
-      (nil? ks)
-      (throw (ex-info (str "the protocol " (:flint/protocol protocol)
-                           " has no method named " n "; its methods are "
-                           (pr-str (mapv name (:method-keys protocol))))
-                      {:protocol (:flint/protocol protocol) :method n}))
-      (= n (name (first ks))) (first ks)
-      :else (recur (next ks)))))
+  This namespace now publishes exactly what Clojure does -- `doc/manifest.edn`
+  records that as `:extra #{}`.
 
-(defn extend-method
-  "One method of `protocol` for one `kind`. `mname` is the method's bare name as
-  a string, resolved against the protocol rather than against the caller."
-  [protocol kind mname f]
-  (extend protocol kind (hash-map (method-key protocol mname) f)))
+  It could not move until `flint.protocols` was PINNED. A top-level
+  `(extend-protocol ...)` calls `extend-method` while the using namespace is
+  initialising, and the load order is built from `:require` edges, which that
+  call has none of. `clojure.core` is pinned first by `core-first` and so was
+  the only namespace reachable from there.")
 
 (defn satisfies?
   "Does `x` have an implementation of every method of `protocol`, by metadata or
@@ -1851,7 +1841,7 @@
                      (recur (rest xs) k (conj acc [k (first xs)])))))]
     (list* 'do
            (map (fn [[k mform]]
-                  (list 'clojure.core/extend-method pname k
+                  (list 'flint.protocols/extend-method pname k
                         (name (first mform))
                         (list* 'clojure.core/fn (rest mform))))
                 groups))))

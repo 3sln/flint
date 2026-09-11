@@ -109,7 +109,6 @@
     ex-info
     ex-message
     extend
-    extend-method
     extend-protocol
     false?
     ffirst
@@ -373,7 +372,7 @@
     when-not
     when-some
     while},
-  :count 322,
+  :count 321,
   :absent
   #{*'
     *1
@@ -751,7 +750,7 @@
     with-redefs
     with-redefs-fn
     xml-seq},
-  :extra #{extend-method},
+  :extra #{},
   :compared-with clojure.core},
  clojure.core.protocols
  {:file "lib/clojure/core/protocols.cljc",
@@ -1030,13 +1029,14 @@
  {:file "lib/flint/protocols.cljc",
   :present
   #{Printable
+    extend-method
     methods-of
     print-data
     print-human
     printer-for
     protocol-miss},
   :macros #{},
-  :count 6},
+  :count 7},
  flint.regex
  {:file "lib/flint/regex.cljc",
   :present

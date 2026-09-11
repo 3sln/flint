@@ -100,19 +100,18 @@
 ;;
 ;; THEY SHOULD NOT LIVE IN `clojure.core` EITHER -- Clojure has no
 ;; `protocol-miss` or `extend-method`, and a port that invents them there is
-;; publishing under somebody else's name. `protocol-miss` is here.
-;; `extend-method` IS NOT, and `doc/manifest.edn` records the anomaly as
-;; `:extra #{extend-method}` rather than letting it pass unnamed.
+;; publishing under somebody else's name. Both are here now, and
+;; `doc/manifest.edn` records `clojure.core`'s `:extra` as empty because of it.
 ;;
-;; It stayed there because `core-first` pins `clojure.core` FIRST, so a
-;; top-level `(extend-protocol ...)` can reach it from a namespace that
-;; required nothing -- and this namespace was not pinned, so moving it gave
-;; "value is not a function (nil, 4 args)". This namespace IS pinned now, so
-;; that reason is gone; what remains is that moving a published name is an API
-;; change. `test/common/lang/extending` calls `extend-method` by its bare name
-;; through the implicit refer, and every such caller would have to start
-;; requiring this namespace. Tried, measured, reverted -- see
-;; `doc/goals/README.md`.
+;; `extend-method` ARRIVED LATE. It could not move while this namespace was
+;; unpinned: a top-level `(extend-protocol ...)` calls it during the using
+;; namespace's initialisation, and the load order is built from `:require`
+;; edges, which that call has none of -- so it found a nil. `core-first` pins
+;; this namespace now, which it had to for `protocol-miss` anyway.
+;;
+;; Moving it was an API change, not a tidy-up: a caller naming it through
+;; `clojure.core`'s implicit refer has to require this namespace instead.
+;; `test/common/lang/extending` was the one in tree.
 ;;
 ;; `find-protocol-method` and `extend` STAY in `clojure.core`: real Clojure
 ;; has both, and a port that moves what its subject does have is no longer a
@@ -138,3 +137,29 @@
                     (str mname)
                     " as metadata on the value."])
                   {:protocol pname :method mname :kind (kind x) :value x})))
+
+(defn- method-key
+  "The protocol's OWN key for the method named `n`.
+
+  A method key is qualified by the namespace that DEFINED the protocol, which
+  is not the namespace doing the extending. Computing it lexically at the
+  extend site -- which is what `extend-protocol` did -- writes an
+  implementation under a key nobody ever reads, so extending a protocol from
+  another namespace was a silent no-op that surfaced later as `protocol-miss`.
+  Silent is the part that made it worth a named function and this comment."
+  [protocol n]
+  (loop [ks (seq (:method-keys protocol))]
+    (cond
+      (nil? ks)
+      (throw (ex-info (str "the protocol " (:flint/protocol protocol)
+                           " has no method named " n "; its methods are "
+                           (pr-str (mapv name (:method-keys protocol))))
+                      {:protocol (:flint/protocol protocol) :method n}))
+      (= n (name (first ks))) (first ks)
+      :else (recur (next ks)))))
+
+(defn extend-method
+  "One method of `protocol` for one `kind`. `mname` is the method's bare name as
+  a string, resolved against the protocol rather than against the caller."
+  [protocol kind mname f]
+  (extend protocol kind (hash-map (method-key protocol mname) f)))

@@ -13,7 +13,13 @@
   when `clojure.core`'s printer was moved onto a protocol so that `flint.table`
   could print a table without the printer knowing what a table is."
   (:require [flint.check :refer [expect]]
-            [lang.protocols :as p]))
+            [lang.protocols :as p]
+            ;; `extend-method` MOVED OUT OF `clojure.core`, where the implicit
+            ;; refer used to find it. Clojure has no such name, so a port that
+            ;; publishes one there is publishing under somebody else's name --
+            ;; `doc/manifest.edn` had it as that namespace's only `:extra`.
+            ;; A direct caller names it here now.
+            [flint.protocols :refer [extend-method]]))
 
 (extend-protocol p/Describe
   :keyword (describe [k] (str "a keyword named " (name k)))
