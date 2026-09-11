@@ -563,11 +563,26 @@ IT IS NOT PARKING IN GENERAL, which was the first guess and is wrong. A
 channel round-trip at load time -- `(p/send a 7)` then `(p/receive b)` in a
 top-level `def`, which parks and resumes entirely inside the sandbox -- answers
 `[:got 7]`. So a top-level form MAY park. What fails is reaching the HOST
-during initialisation, and the failure is silent past one line: exit 1 and "the
-entry function did not return a string (no render shim?)", which is about the
-entry and not about what went wrong. Whatever the cause, the message is the
-first thing to fix: it sends the reader to the entry's return type, which is
-fine.
+during initialisation.
+
+AND THE ENTRY NEVER RUNS, which took one more probe to establish and rules out
+the obvious reading. With the load-time call kept reachable and the entry
+returning a LITERAL -- `(defn go [_] (if (= flag 1) "one" "zero"))` -- it still
+fails, so this is not about rendering the value the call produced. Nothing
+errors: `rendered` reports "did not return a string" only after the error
+branch above it declines, so the program neither raised nor completed.
+
+THE MESSAGE IS THE FIRST THING TO FIX whatever the cause is. Exit 1 and "the
+entry function did not return a string (no render shim?)" sends the reader to
+an entry whose return type is fine, and cost several probes here before the
+literal-return one showed the entry was never reached at all. This section has
+now watched a misleading diagnostic send three separate attempts to the wrong
+pass; that is the pattern, not the coincidence.
+
+WHETHER IT SHOULD WORK AT ALL IS THE DESIGN QUESTION. `0027` makes "cannot ask"
+an honest refusal rather than a park, and a program reaching the embedder while
+its own namespaces are still initialising may be a thing to REFUSE clearly
+rather than support. Either answer is better than the present one.
 
 A TRAP WORTH KEEPING: the first version of that test had `go` ignore the
 top-level `def`, and it passed. The linker had dropped the def as unreachable,
