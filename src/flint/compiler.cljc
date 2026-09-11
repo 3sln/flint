@@ -79,6 +79,9 @@
   (let [m (meta sym)]
     (cond-> {:private (boolean (or extra (:private m)))}
       (:internal m) (assoc :internal true)
+      ;; Not a visibility, but read from the same symbol in the same pass, and
+      ;; wrong in the same way when it was read only after analysis.
+      (:dynamic m) (assoc :dynamic true)
       ;; AND THE CAPABILITY GUARD, which is the one that is not hygiene.
       ;; `guard-check!` reads it out of the same map as the two above, and
       ;; read only `:var-meta` -- so a reference from a namespace analysed
@@ -454,7 +457,18 @@
                         (recur (conj acc f))))))]
     (let [forms (flatten-top-level forms)]
       (doseq [f forms, [n vis] (def-form-entries f)]
-        (vswap! cc assoc-in [:declared (symbol (str nsname) (name n))] vis))
+        (let [q (symbol (str nsname) (name n))]
+          (vswap! cc assoc-in [:declared q] vis)
+          ;; `:dynamic` HERE TOO, for the reason the visibility marks moved
+          ;; here. The analyser records it when the `def` is ANALYSED, and a
+          ;; reference reads it to decide between a thread-binding read and a
+          ;; plain one. A namespace analysed BEFORE the definer therefore read
+          ;; an empty table and compiled `*x*` as an ordinary var -- silently
+          ;; ignoring every `binding` around it -- while `binding` on the same
+          ;; var reported that it "is not dynamic, so it cannot be rebound".
+          ;; Both from a var that is plainly dynamic in the source.
+          (when (:dynamic vis)
+            (vswap! cc assoc-in [:dynamic q] true))))
       forms)))
 
 (defn analyze-namespace!

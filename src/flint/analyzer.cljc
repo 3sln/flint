@@ -203,6 +203,35 @@
 
 (defn- const-node [v] {:op :const :val v})
 
+(def builtin-guards
+  "Capabilities a BUILTIN demands of the workspace naming it.
+
+  `0036` level two guards a VAR. Builtins are not vars, and the catalogue is
+  reachable from anywhere: `native-name` turns `flint.rt/<x>` into a direct
+  native call for any `x` the loader carries. So a guard on a stdlib var that
+  merely FORWARDS to a builtin is decorative -- the caller can skip the wrapper
+  and name the builtin.
+
+  That was not hypothetical. `flint.host/request` is guarded `[:host]`, and it
+  and `flint.host/ask` were the ONLY guarded vars in the whole of `lib/`. Both
+  forward to `flint/request`. Measured with the real 192-name catalogue, a
+  workspace holding nothing:
+
+    names the guarded var   -> refused, \"does not hold #{:host}\"
+    names flint.rt/request  -> compiled
+
+  So level two protected nothing that mattered, and the docstring below already
+  named the mechanism -- it cited `flint.rt/<name>` as the reason a guard can
+  never be a callable, without noticing the same reach applied to the builtin
+  the guard was standing in front of.
+
+  THE RULE HERE IS DERIVED, NOT CHOSEN. An entry says: this builtin is what a
+  guarded stdlib var wraps, so it carries that var's guard. It is deliberately
+  not a general policy about which builtins are authority-bearing -- whether
+  the port surface should demand something is a real design question and is
+  not answered here."
+  {"flint/request" #{:host}})
+
 (defn- guard-check!
   "Refuse a reference to a var its workspace guards (`doc/decisions/0036`).
 
@@ -250,10 +279,18 @@
           ;; against an empty table. No cycle is needed, and no `:require` from
           ;; B to A is needed either, because `qualify` resolves through
           ;; `:declared`.
-          guard (:flint/capabilities-guard
-                 (or (get (:var-meta c) q)
-                     (let [d (get (:declared c) q)]
-                       (when (map? d) d))))]
+          ;; BUILTINS COME THROUGH HERE TOO. Both places that resolve a
+          ;; `flint.rt/<x>` reference record it as `flint.native/<catalogue
+          ;; name>`, so checking that namespace here covers the value position
+          ;; and the call position at once, with the workspace comparison
+          ;; below unchanged.
+          builtin? (= "flint.native" (namespace q))
+          guard (if builtin?
+                  (get builtin-guards (name q))
+                  (:flint/capabilities-guard
+                   (or (get (:var-meta c) q)
+                       (let [d (get (:declared c) q)]
+                         (when (map? d) d)))))]
       (when (seq guard)
         (let [here (current-ns env)
               there (symbol (namespace q))
@@ -265,8 +302,13 @@
             ;; the caller already holds helps nobody find the one it does not.
             (let [missing (into #{} (remove (or (get-in ws [here :grants]) #{}) guard))]
               (when (seq missing)
-                (err (str q " is guarded with " (pr-str (into #{} guard))
-                          " by " (or w-there "its workspace")
+                ;; Name it the way a person WROTE it. `flint.native/flint/add`
+                ;; is the internal coordinate and appears in no source.
+                (err (str (if builtin?
+                            (str "flint.rt/" (str/replace (name q) #"^flint/" ""))
+                            q)
+                          " is guarded with " (pr-str (into #{} guard))
+                          " by " (if builtin? "the runtime" (or w-there "its workspace"))
                           "; " (or w-here "this program") " does not hold "
                           (pr-str missing))
                      {:var q :needs missing
@@ -959,7 +1001,45 @@
               doc (when (= n 4) (nth (vec form) 2))]
           (when (and (= n 4) (not (string? doc)))
             (err "the third argument to a 3-argument def must be a docstring" {:form form}))
-          (vswap! (:cc env) assoc-in [:declared q] true)
+          ;; KEEP THE PRE-PASS MAP. `:declared` holds `{:private .. :internal
+          ;; ..}` from the read pass, and assoc'ing `true` over it threw that
+          ;; away the moment a namespace was analysed. Nothing needed it gone:
+          ;; every reader of `:declared` wants either existence or those marks.
+          (vswap! (:cc env) update-in [:declared q] (fn [d] (if (map? d) d true)))
+          ;; AND RECORD THE METADATA FROM THE FORM IN FRONT OF US, which is the
+          ;; EXPANDED one. The other place that fills `:var-meta`
+          ;; (`compiler.cljc`) reads the source form in a pass that runs before
+          ;; any macro expands, so it sees `(my-macro ..)` and not the `def` it
+          ;; becomes -- a var defined BY a macro got no metadata at all, and so
+          ;; no privacy. Measured: the same `(def ^:private hidden 1)` was
+          ;; refused across a namespace boundary when written literally and
+          ;; ACCEPTED when a macro produced it. That is not an ordering
+          ;; problem; it is every order.
+          ;;
+          ;; `defn-` is the case that made this visible once already. It was
+          ;; patched there by special-casing the symbol `defn-`, which fixed
+          ;; one macro. This fixes the reason.
+          ;;
+          ;; A MARK IS NEVER DROPPED. Expansion wins for ordinary keys, but if
+          ;; either the source form or the expansion says private, internal, or
+          ;; guarded, that stands -- a macro that forgets to carry a mark
+          ;; forward must not be able to publish someone's private var.
+          (let [prev (get-in @(:cc env) [:var-meta q])
+                now (meta nm)]
+            (when (or (seq prev) (seq now))
+              (vswap! (:cc env) assoc-in [:var-meta q]
+                      (cond-> (merge prev now)
+                        (or (:private prev) (:private now))
+                        (assoc :private true)
+
+                        (or (:internal prev) (:internal now))
+                        (assoc :internal true)
+
+                        (or (:flint/capabilities-guard prev)
+                            (:flint/capabilities-guard now))
+                        (assoc :flint/capabilities-guard
+                               (or (:flint/capabilities-guard prev)
+                                   (:flint/capabilities-guard now)))))))
           (when (:dynamic (meta nm))
             (vswap! (:cc env) assoc-in [:dynamic q] true))
           {:op :def :sym q :meta (merge (meta nm) (when doc {:doc doc}))

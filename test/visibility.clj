@@ -200,15 +200,22 @@
 ;; guard did not -- so the body was demonstrably analysed, and the guard's
 ;; silence was a bypass rather than a file the compiler never reached.
 (defn guard-outcome
-  "`:refused` only when the capability guard stopped it."
-  [files ws]
+  "`:refused` only when the capability guard stopped it.
+
+  `builtins` is the catalogue `flint.rt/<x>` resolves against. It matters:
+  `native-name` returns the name UNCHECKED when the catalogue is empty, so a
+  probe that forgets it resolves `flint.rt/anything` and proves nothing. The
+  first run of the rows below did exactly that and had to be redone."
+  ([files ws] (guard-outcome files ws #{}))
+  ([files ws builtins]
   (let [r (project/resolve-project (project/files-resolver files ws) 'app.main #{:flint})]
     (try
       (compiler/compile-image {:sources (:sources r) :order (:order r)
+                               :builtins builtins
                                :entry 'app.main/main})
       :compiled
       (catch Exception e
-        (if (str/includes? (ex-message e) "is guarded with") :refused :other)))))
+        (if (str/includes? (ex-message e) "is guarded with") :refused :other))))))
 
 (def guard-ws [{:prefix "libx/" :name 'libx :grants #{:fs}}
                {:prefix "app/" :name 'app}])
@@ -247,3 +254,109 @@
                                      [{:prefix "libx/" :name 'libx :grants #{:fs}}
                                       {:prefix "app/" :name 'app :grants #{:fs}}]))
        "a guard that refuses the granted caller is not a guard, it is a wall")
+
+;; ---------------------------------------------------------------------------
+;; AND THE RUNG BELOW THE VAR, which is where the guard above was standing
+;; in front of an open door.
+;;
+;; `native-name` turns `flint.rt/<x>` into a direct native call for any `x` the
+;; loader carries, from ANY namespace. So a guard on a stdlib var that merely
+;; forwards to a builtin is decorative: skip the wrapper, name the builtin.
+;;
+;; `flint.host/request` is guarded `[:host]` and forwards to `flint/request`.
+;; It and `flint.host/ask` were the only guarded vars in all of `lib/`, so
+;; level two of `0036` protected exactly one call and that call had a bypass.
+;;
+;; The catalogue is passed explicitly here. Without it `native-name` returns
+;; the name unchecked and every `flint.rt/..` row would pass whether or not
+;; anything worked -- which is how the first version of this was wrong.
+(def catalogue #{"flint/request" "flint/port-send"})
+
+(defn rt-files [call]
+  {"app/main.cljc" (str "(ns app.main) (defn main [_] " call ")")})
+
+(check "a fake builtin is still refused as unknown -- the catalogue is LIVE"
+       (= :other (guard-outcome (rt-files "(flint.rt/definitely-not-real 1)")
+                                guard-ws catalogue))
+       "without this row the rows below cannot tell a guard from a typo")
+
+(check "a guarded BUILTIN is refused from a workspace holding nothing"
+       (= :refused (guard-outcome (rt-files "(flint.rt/request \"config\")")
+                                  guard-ws catalogue))
+       "flint.host/request's guard means nothing if this compiles")
+
+(check "and allowed for a workspace that HOLDS the capability"
+       (not= :refused (guard-outcome (rt-files "(flint.rt/request \"config\")")
+                                     [{:prefix "app/" :name 'app :grants #{:host}}]
+                                     catalogue))
+       "the granted caller is the whole point of a grant")
+
+(check "a program declaring NO workspaces is checked nowhere, as before"
+       (not= :refused (guard-outcome (rt-files "(flint.rt/request \"config\")")
+                                     [] catalogue))
+       "this is the stdlib's own position, and flint builds itself from it")
+
+(check "an unguarded builtin is untouched"
+       (not= :refused (guard-outcome (rt-files "(flint.rt/port-send 1 2)")
+                                     guard-ws catalogue))
+       "the table is the two vars' forwarding target, not a policy about ports")
+
+(check "the guarded builtin is one the real catalogue actually carries"
+       (let [f "dist/builtins.json"]
+         (or (not (.exists (java.io.File. f)))
+             (str/includes? (slurp f) "\"flint/request\"")))
+       "a guard on a name no loader carries would be theatre")
+
+;; ---------------------------------------------------------------------------
+;; A MARK THE COMPILER READS ONLY AFTER EXPANSION, and one it read only after
+;; analysis. Same root as everything above: a mark is written in the source and
+;; the compiler looks for it somewhere that is not filled in yet.
+;;
+;; `:var-meta` was built from the SOURCE form, in a pass that runs before any
+;; macro expands. So a var defined BY a macro carried no metadata at all and
+;; was not private, whatever its source said. `defn-` hit this once and was
+;; patched by special-casing the symbol `defn-`, which fixed one macro rather
+;; than the reason -- and `defprotocol` emits `def`s, so this was not exotic.
+(def macro-ns "(ns libx.m)\n(defmacro mk [] '(def ^:private hidden 1))")
+
+(defn mac-files [owner-body]
+  {"libx/m.cljc" macro-ns
+   "libx/owner4.cljc" (str "(ns libx.owner4 (:require [libx.m]))\n" owner-body)
+   "app/main.cljc" "(ns app.main (:require [libx.owner4 :as o])) (defn main [_] libx.owner4/hidden)"})
+
+(check "a MACRO-defined private var is refused, exactly as a literal one is"
+       (= :refused (outcome (mac-files "(libx.m/mk)\n(defn go [x] x)") two))
+       "the pre-expansion pass cannot see this def; the analyser can")
+
+(check "and the literal spelling of the same def is still refused"
+       (= :refused (outcome {"libx/owner4.cljc" "(ns libx.owner4)\n(def ^:private hidden 1)"
+                             "app/main.cljc" "(ns app.main (:require [libx.owner4 :as o])) (defn main [_] libx.owner4/hidden)"}
+                            two))
+       "the pair is the point: one spelling refusing and the other not is the bug")
+
+;; `:dynamic` IS THE SAME MISTAKE ONE TABLE OVER. The analyser records it when
+;; the `def` is analysed; a reference reads it to choose between a thread
+;; binding read and a plain one. A namespace analysed FIRST read an empty table
+;; -- so `*x*` compiled to an ordinary var read that ignores every `binding`
+;; around it, and `binding` itself refused the var for not being dynamic.
+(defn dyn-outcome [files]
+  (let [r (project/resolve-project (project/files-resolver files []) 'app.main #{:flint})]
+    (try
+      (compiler/compile-image {:sources (:sources r) :order (:order r)
+                               :entry 'app.main/main})
+      :compiled
+      (catch Exception e
+        (if (str/includes? (ex-message e) "is not dynamic") :not-dynamic :other)))))
+
+(check "a dynamic var may be rebound from a namespace analysed BEFORE its definer"
+       (not= :not-dynamic
+             (dyn-outcome {"a/owner.cljc" "(ns a.owner (:require [a.back]))\n(def ^:dynamic *x* 1)\n(defn go [y] (a.back/reach y))"
+                           "a/back.cljc" "(ns a.back)\n(defn reach [y] (binding [a.owner/*x* 2] y))"
+                           "app/main.cljc" "(ns app.main (:require [a.owner :as o])) (defn main [_] (o/go 1))"}))
+       "it said `*x* is not dynamic` about a var marked dynamic two lines up")
+
+(check "and a var that really is not dynamic is still refused by `binding`"
+       (= :not-dynamic
+          (dyn-outcome {"a/owner.cljc" "(ns a.owner)\n(def plain 1)"
+                        "app/main.cljc" "(ns app.main (:require [a.owner :as o])) (defn main [_] (binding [a.owner/plain 2] 1))"}))
+       "the control: without it the row above passes by never checking anything")
