@@ -16,6 +16,7 @@ import static com._3sln.flint.kgen.rt.Numkind.*;
 import static com._3sln.flint.kgen.rt.Ropeeq.*;
 import static com._3sln.flint.kgen.rt.Ropemeas.*;
 import static com._3sln.flint.kgen.rt.Seqwalk.*;
+import static com._3sln.flint.kgen.rt.Setcore.*;
 import static com._3sln.flint.kgen.rt.Tablemeta.*;
 import static com._3sln.flint.kgen.rt.Tableref.*;
 import static com._3sln.flint.kgen.rt.Vecread.*;
@@ -201,7 +202,7 @@ public final class Valeq {
             return mapEq(rt, a, b);
         }
         if (ca == CAT_SET) {
-            return Sets.eq(rt, a, b);
+            return setEq(rt, a, b);
         }
         int ta = ty(rt.gc.sp, Val.asHeap(a));
         int tb = ty(rt.gc.sp, Val.asHeap(b));

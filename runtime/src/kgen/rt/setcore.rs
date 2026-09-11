@@ -101,4 +101,19 @@ impl Rt {
         self.pop_to(base);
         return out;
     }
+    /// Two sets are equal exactly when their maps are.
+    /// 
+    /// THE LAST HAND-WRITTEN THING IN THE SET SURFACE, and it was never a
+    /// primitive: a count comparison, two slot reads, and a delegation. Every
+    /// part of it was already generated -- `set-count` here, `map-eq` in
+    /// `mapeq.kin` -- so the three copies were three spellings of a call.
+    /// 
+    /// The count first because it is O(1) and settles most inequal pairs
+    /// without touching a node.
+    pub fn set_eq(&mut self, a: Value, b: Value) -> bool {
+        if self.set_count(a) != self.set_count(b) {
+            return false;
+        }
+        return self.map_eq(self.slot(a, crate::set::S_MAP), self.slot(b, crate::set::S_MAP));
+    }
 }

@@ -29,7 +29,7 @@
                                    TY_TABLE TY_TAGGED TB_SCHEMA declarefn]]
             [flint.rt.mapeq :refer [map-eq]]
             [flint.rt.tableref :refer [table-ref]]
-            [flint.rt.sets :refer [set-eq]]
+            [flint.rt.setcore :refer [set-eq]]
             [flint.rt.vector :refer [vec-count]]
             [flint.rt.vecread :refer [vec-nth]]
             [flint.rt.eq :refer [category]]

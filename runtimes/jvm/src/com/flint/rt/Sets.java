@@ -68,12 +68,12 @@ public final class Sets {
     // `transientOf`, `tconj`, `tdisj`, `tcount`, `tget` and `tpersistent` are
     // GENERATED, from `kin/maptrans.kin`.
 
-    // @kin:link:ns: flint.rt.sets
-    // @kin:link:form:set-eq: {:template "Sets.eq({0}, {1}, {2})"}
-    public static boolean eq(Rt rt, long a, long b) {
-        if (count(rt, a) != count(rt, b)) return false;
-        return Maps.eq(rt, rt.slot(a, S_MAP), rt.slot(b, S_MAP));
-    }
+    // `set-eq` USED TO LIVE HERE, hand-written once per runtime and declared to
+    // kin as a linked form. It was never a primitive: a count comparison, two slot
+    // reads, and a delegation to `map-eq` -- and `set-count` and `map-eq` were
+    // already generated, so the three copies were three spellings of a call.
+    // `kin/setcore.kin` has it now, and this was the last linked form in the set
+    // surface, so the link namespace is gone with it.
 
     /// A set's hash, GENERATED -- see `kin/collhash.kin` and `Maps.hash`.
     public static int hash(Rt rt, long s) {

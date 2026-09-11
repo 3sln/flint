@@ -12,6 +12,7 @@ using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Mapcore;
+using static global::_3sln.Flint.Kgen.Rt.Mapeq;
 using static global::_3sln.Flint.Kgen.Rt.Mapread;
 using static global::_3sln.Flint.Kgen.Rt.Mapwrite;
 
@@ -97,5 +98,20 @@ public static class Setcore {
         long @out = NewSet(rt, rt.R(ni), meta);
         rt.PopTo(@base);
         return @out;
+    }
+    /// Two sets are equal exactly when their maps are.
+    /// 
+    /// THE LAST HAND-WRITTEN THING IN THE SET SURFACE, and it was never a
+    /// primitive: a count comparison, two slot reads, and a delegation. Every
+    /// part of it was already generated -- `set-count` here, `map-eq` in
+    /// `mapeq.kin` -- so the three copies were three spellings of a call.
+    /// 
+    /// The count first because it is O(1) and settles most inequal pairs
+    /// without touching a node.
+    public static bool SetEq(Rt rt, long a, long b) {
+        if (SetCount(rt, a) != SetCount(rt, b)) {
+            return false;
+        }
+        return MapEq(rt, rt.Slot(a, global::Flint.Rt.Sets.S_MAP), rt.Slot(b, global::Flint.Rt.Sets.S_MAP));
     }
 }

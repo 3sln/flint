@@ -57,16 +57,12 @@ impl Rt {
     /// It also cost a CALLBACK, and `set_for_each` is one of the two closures
     /// blocking these functions from being generated. One of the six turns
     /// out not to have needed a walk at all.
-    // @kin:link:ns: flint.rt.sets
-    // @kin:link:form:set-eq: {:template "{0}.set_eq({1}, {2})"}
-    pub fn set_eq(&mut self, a: Value, b: Value) -> bool {
-        if self.set_count(a) != self.set_count(b) {
-            return false;
-        }
-        let am = self.slot(a, S_MAP);
-        let bm = self.slot(b, S_MAP);
-        self.map_eq(am, bm)
-    }
+    // `set-eq` USED TO LIVE HERE, hand-written once per runtime and declared to
+    // kin as a linked form. It was never a primitive: a count comparison, two slot
+    // reads, and a delegation to `map-eq` -- and `set-count` and `map-eq` were
+    // already generated, so the three copies were three spellings of a call.
+    // `kin/setcore.kin` has it now, and this was the last linked form in the set
+    // surface, so the link namespace is gone with it.
 
 
     pub fn set_from_map(&mut self, m: Value) -> Value {

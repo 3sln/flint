@@ -323,7 +323,7 @@ fn main() {
     static boolean bEq(Rt rt, long a, long b) { return rt.beq; }
     static final class Maps { static boolean eq(Rt rt, long a, long b) { return rt.mapeq; } }
     static boolean mapEq(Rt rt, long a, long b) { return Maps.eq(rt, a, b); }
-    static final class Sets { static boolean eq(Rt rt, long a, long b) { return rt.seteq; } }
+    static boolean setEq(Rt rt, long a, long b) { return rt.seteq; }
     static boolean schemaEq(Rt rt, long a, long b) { return rt.scheq; }
     static final class Vec {
         static int count(Rt rt, long v) { return (int) rt.slot(v, 0); }
@@ -534,7 +534,7 @@ namespace Flint.Rt {
     // `maps-eq` and `set-eq` are BARE siblings, so these sit inside `Probe`.
     internal static class Maps { internal static bool Eq(Rt rt, long a, long b) { return rt.mapeq; } }
     internal static bool MapEq(Rt rt, long a, long b) { return Maps.Eq(rt, a, b); }
-    internal static class Sets { internal static bool Eq(Rt rt, long a, long b) { return rt.seteq; } }
+    internal static bool SetEq(Rt rt, long a, long b) { return rt.seteq; }
     internal static bool TreeEq(Rt rt, long a, long b) { return rt.treeq; }
     internal static bool BEq(Rt rt, long a, long b) { return rt.beq; }
     internal static bool SchemaEq(Rt rt, long a, long b) { return rt.scheq; }

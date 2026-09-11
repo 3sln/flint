@@ -16,7 +16,8 @@
                                    TY_SET S_MAP S_META S_HASH]]
             [flint.rt.mapcore :refer [map-count]]
             [flint.rt.mapread :refer [map-get map-contains]]
-            [flint.rt.mapwrite :refer [map-assoc map-dissoc]]))
+            [flint.rt.mapwrite :refer [map-assoc map-dissoc]]
+            [flint.rt.mapeq :refer [map-eq]]))
 
 (doc "Is `v` a set?")
 (defn ^:pub ^:method ^Bool is-set [^Rt rt ^Value v]
@@ -98,3 +99,17 @@
           ^Value out (new-set rt (r rt ni) meta)]
       (pop-to rt base)
       (return out))))
+
+(doc "Two sets are equal exactly when their maps are."
+     ""
+     "THE LAST HAND-WRITTEN THING IN THE SET SURFACE, and it was never a"
+     "primitive: a count comparison, two slot reads, and a delegation. Every"
+     "part of it was already generated -- `set-count` here, `map-eq` in"
+     "`mapeq.kin` -- so the three copies were three spellings of a call."
+     ""
+     "The count first because it is O(1) and settles most inequal pairs"
+     "without touching a node.")
+(defn ^:pub ^:method ^Bool set-eq [^:mut ^Rt rt ^Value a ^Value b]
+  (if (!= (set-count rt a) (set-count rt b))
+    (return false))
+  (return (map-eq rt (slot rt a S_MAP) (slot rt b S_MAP))))

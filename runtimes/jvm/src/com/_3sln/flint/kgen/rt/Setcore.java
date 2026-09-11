@@ -10,6 +10,7 @@ import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Mapcore.*;
+import static com._3sln.flint.kgen.rt.Mapeq.*;
 import static com._3sln.flint.kgen.rt.Mapread.*;
 import static com._3sln.flint.kgen.rt.Mapwrite.*;
 
@@ -95,5 +96,20 @@ public final class Setcore {
         long out = newSet(rt, rt.r(ni), meta);
         rt.popTo(base);
         return out;
+    }
+    /// Two sets are equal exactly when their maps are.
+    /// 
+    /// THE LAST HAND-WRITTEN THING IN THE SET SURFACE, and it was never a
+    /// primitive: a count comparison, two slot reads, and a delegation. Every
+    /// part of it was already generated -- `set-count` here, `map-eq` in
+    /// `mapeq.kin` -- so the three copies were three spellings of a call.
+    /// 
+    /// The count first because it is O(1) and settles most inequal pairs
+    /// without touching a node.
+    public static boolean setEq(Rt rt, long a, long b) {
+        if (setCount(rt, a) != setCount(rt, b)) {
+            return false;
+        }
+        return mapEq(rt, rt.slot(a, Sets.S_MAP), rt.slot(b, Sets.S_MAP));
     }
 }

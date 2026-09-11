@@ -39,6 +39,10 @@ impl Rt {
         Value::heap(a)
     }
     fn map_count(&mut self, m: Value) -> u32 { self.lens[m.0 as usize] / 2 }
+    // `set-eq` delegates to it; the stub compares the toy maps by identity,
+    // which is enough to tell the delegation happened and reached the right
+    // slot. Whether `map-eq` itself is right is `mapeq.kin`'s probe to answer.
+    fn map_eq(&mut self, a: Value, b: Value) -> bool { a.0 == b.0 }
     fn map_find(&mut self, m: Value, k: Value) -> i32 {
         let n = self.lens[m.0 as usize];
         let mut i = 0;
@@ -105,6 +109,12 @@ fn main() {
                         rt.set_contains(s3, a) as u32, (nodisj.0 == s2.0) as u32));
     // THE METADATA RIDES ALONG, and the hash slot starts empty on every new
     // set -- a set that inherited a stale hash would answer the old one.
+    // SET-EQ, both arms. Unequal COUNTS must be refused without consulting the
+    // maps at all -- that is the cheap half and the one a delegation could
+    // skip by accident -- and equal counts must reach `map-eq`, which the stub
+    // answers by identity.
+    o.push_str(&format!("eq={}{} ", rt.set_eq(s2, s2) as u32,
+                        rt.set_eq(s2, s3) as u32));
     o.push_str(&format!("meta={} hash={}",
                         (rt.slot(s3, set::S_META).0 == meta.0) as u32,
                         rt.slot(s3, set::S_HASH).is_nil() as u32));
@@ -155,6 +165,7 @@ fn main() {
         return -1;
     }
         static int mapCount(Rt rt, long m) { return rt.lens[(int) m] / 2; }
+        static boolean mapEq(Rt rt, long a, long b) { return a == b; }
         static boolean mapContains(Rt rt, long m, long k) { return mapFind(rt, m, k) >= 0; }
         static long mapGet(Rt rt, long m, long k, long dflt) {
             int at = mapFind(rt, m, k);
@@ -199,6 +210,8 @@ fn main() {
         o.append("disj=").append(setCount(rt, s3)).append('/')
          .append(setContains(rt, s3, a) ? 1 : 0)
          .append(" disjsame=").append(setDisj(rt, s2, c) == s2 ? 1 : 0).append(' ');
+        o.append("eq=").append(setEq(rt, s2, s2) ? 1 : 0)
+         .append(setEq(rt, s2, s3) ? 1 : 0).append(' ');
         o.append("meta=").append(rt.slot(s3, Sets.S_META) == meta ? 1 : 0)
          .append(" hash=").append(Val.isNil(rt.slot(s3, Sets.S_HASH)) ? 1 : 0);
         System.out.println(o.toString());
@@ -255,6 +268,7 @@ namespace Flint.Rt {
         return -1;
     }
         internal static int MapCount(Rt rt, long m) { return rt.lens[(int) m] / 2; }
+        internal static bool MapEq(Rt rt, long a, long b) { return a == b; }
         internal static bool MapContains(Rt rt, long m, long k) { return MapFind(rt, m, k) >= 0; }
         internal static long MapGet(Rt rt, long m, long k, long dflt) {
             int at = MapFind(rt, m, k);
@@ -299,6 +313,8 @@ namespace Flint.Rt {
         o.Append("disj=").Append(SetCount(rt, s3)).Append('/')
          .Append(SetContains(rt, s3, a) ? 1 : 0)
          .Append(" disjsame=").Append(SetDisj(rt, s2, c) == s2 ? 1 : 0).Append(' ');
+        o.Append("eq=").Append(SetEq(rt, s2, s2) ? 1 : 0)
+         .Append(SetEq(rt, s2, s3) ? 1 : 0).Append(' ');
         o.Append("meta=").Append(rt.Slot(s3, global::Flint.Rt.Sets.S_META) == meta ? 1 : 0)
          .Append(" hash=").Append(Val.IsNil(rt.Slot(s3, global::Flint.Rt.Sets.S_HASH)) ? 1 : 0);
         System.Console.WriteLine(o.ToString());

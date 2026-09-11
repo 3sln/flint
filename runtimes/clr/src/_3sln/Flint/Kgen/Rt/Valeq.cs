@@ -18,6 +18,7 @@ using static global::_3sln.Flint.Kgen.Rt.Numkind;
 using static global::_3sln.Flint.Kgen.Rt.Ropeeq;
 using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 using static global::_3sln.Flint.Kgen.Rt.Seqwalk;
+using static global::_3sln.Flint.Kgen.Rt.Setcore;
 using static global::_3sln.Flint.Kgen.Rt.Tablemeta;
 using static global::_3sln.Flint.Kgen.Rt.Tableref;
 using static global::_3sln.Flint.Kgen.Rt.Vecread;
@@ -203,7 +204,7 @@ public static class Valeq {
             return MapEq(rt, a, b);
         }
         if (ca == CAT_SET) {
-            return Sets.Eq(rt, a, b);
+            return SetEq(rt, a, b);
         }
         int ta = Obj.Ty(rt.gc.sp, Val.AsHeap(a));
         int tb = Obj.Ty(rt.gc.sp, Val.AsHeap(b));
