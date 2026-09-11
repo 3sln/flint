@@ -198,7 +198,12 @@
   more, and the next emitted reference would reopen it.
 
   SELF IS EXCLUDED, because `flint.protocols` defines a protocol and
-  `flint.regex` would otherwise be asked to precede itself."
+  `flint.regex` would otherwise be asked to precede itself.
+
+  `extend-type` IS LISTED AND DOES NOT EXIST YET -- `doc/manifest.edn` has it
+  among the names flint has not ported. It is here because the next person to
+  implement it would have no reason to think about load order, and the edge
+  costing nothing until then is cheaper than the bug costing an afternoon."
   [me forms]
   (let [found (volatile! #{})
         walk (fn walk [x]

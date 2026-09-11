@@ -241,6 +241,10 @@
   ;; them, and the load order is built from requires, so at top level they ran
   ;; before the callee was initialised.
   ;;
+  ;; `extend-type` is listed and does not exist yet: `doc/manifest.edn` has it
+  ;; among the unported names, and the next person to implement it would have
+  ;; no reason to think about load order.
+  ;;
   ;; Kept identical to `flint.project/implied-requires`, for the reason
   ;; `core-first` is duplicated here.
   [me forms]
