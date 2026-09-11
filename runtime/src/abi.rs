@@ -303,6 +303,20 @@ pub fn finish_run(rt: &mut Rt, result: Value) -> i32 {
                 out.extend_from_slice(s.as_bytes());
                 0
             }
+            // NIL IS NAMED SEPARATELY, because it means something different. "no render
+        // shim?" guesses that the program returned a value of a type nothing
+        // knows how to print. A NIL result is the other thing: the entry
+        // produced no value at all, which happens when initialisation did not
+        // finish -- and pointing the reader at the entry's return type then
+        // costs them several probes before they look earlier. Measured: a
+        // top-level form that reaches the host stops the program, and this
+        // message sent three separate attempts to the wrong place.
+            None if result.is_nil() => {
+                out.extend_from_slice(
+                    b"flint: the entry function returned nil, not a string -- if the program has top-level forms, initialisation may not have finished",
+                );
+                1
+            }
             None => {
                 out.extend_from_slice(
                     b"flint: the entry function did not return a string (no render shim?)",

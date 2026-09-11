@@ -724,7 +724,11 @@ fn rendered(rt: &mut Rt, result: Value) -> String {
         Some(s) => s.into(),
         // REFUSED, not printed, because that is what the wasm ABI does. A
         // program that answers differently depending on which entry point it
-        // came through is worse than one that refuses on both.
+        // came through is worse than one that refuses on both -- so the nil
+        // case below is in `abi.rs` too, with the reason.
+        None if result.is_nil() => String::from(
+            "flint: the entry function returned nil, not a string -- if the program has top-level forms, initialisation may not have finished",
+        ),
         None => String::from(
             "flint: the entry function did not return a string (no render shim?)",
         ),

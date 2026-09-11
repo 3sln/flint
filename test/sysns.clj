@@ -213,7 +213,17 @@
 ;; initialisation is a question this file cannot answer on its own.
 (let [r (sh proj flint "run" ":path" "." ":fn" "app.c/go" ":with" "[fs]")]
   (check "a GRANTED virtual call at load time is a known gap, not a nil callee"
-         (not (str/includes? (:out r) "is not a function")) (:out r)))
+         (not (str/includes? (:out r) "is not a function")) (:out r))
+  ;; AND THE MESSAGE SAYS WHERE TO LOOK. It used to read "the entry function
+  ;; did not return a string (no render shim?)", which guesses that the program
+  ;; returned something unprintable -- and sent three separate attempts to the
+  ;; entry, whose return type is fine. The entry never RAN. Nil is realistically
+  ;; the only way to reach that branch at all: a number renders, and even a
+  ;; function renders as `#<unprintable>`.
+  (check "and the message names nil and points at initialisation"
+         (and (str/includes? (:out r) "returned nil")
+              (str/includes? (:out r) "initialisation"))
+         (:out r)))
 
 (if (pos? @fails)
   (do (println "sysns:" @fails "FAILURES") (System/exit 1))
