@@ -284,9 +284,14 @@ every kind.
 
 **NOT NEGOTIABLE: fetching must be fast and parallelisable, so every interface
 here is PLAN-BASED.** The `.cljc` coordinates and decides WHAT to fetch; it
-never fetches. It answers with a batch, as data, and the host runs that batch —
-concurrently, because a batch of independent downloads has no reason to be
-serial.
+never fetches. It answers with a batch, as data, and that batch is run
+concurrently, because independent downloads have no reason to be serial.
+
+**AND THE FETCHING IS NOT CLOJURE.** It belongs in the PM driver — built
+natively, distributed as a pod — not in `bin/flint` and not in `.cljc`. The
+Clojure half plans; the pod executes, natively and in parallel. Today it is the
+other way round in the one place it matters: `bin/flint` does the fetching
+itself, in babashka, one entry at a time.
 
 The good news is that the interface already works this way, and the precedent
 is not one case but two. `fetch-plan` in `lib/flint/deps.cljc` says it outright
@@ -311,6 +316,41 @@ services that build a repository into an artifact. The design does not need
 them to, because it does not depend on an ecosystem accepting git. It depends
 only on a repository CONTAINING a manifest once it is on disk, which is exactly
 what separating the scanners from the downloaders buys.
+
+### Pods are a dependency kind, and the least finished one
+
+Raised 2026-09-11, and it matters more than it looks, because the plan above
+makes the dependency drivers THEMSELVES pods.
+
+**What exists:** the pod protocol is real — `cli/src/pod.rs` speaks bencode and
+`Pod::boot(ns, program, args)` starts one with `BABASHKA_POD=true`, so a pod
+that is already on disk works. `flint deps add` accepts `pod` as a kind.
+
+**What does not:** resolving one. `cli/src/depscmd.rs` bails outright — *"pods
+are not resolvable yet"* — and `:pod/version` appears nowhere in the code at
+all, only in prose. So a pod can be booted but not fetched, and the coordinate
+that is supposed to name it is not read by anything.
+
+**THE BOOTSTRAP PROBLEM, which the plan above creates.** If the npm, Maven and
+git drivers are pods, and pods are fetched like any other dependency, then
+fetching anything requires first fetching a pod — with what? `Pod::boot` takes
+a path to a program that must already exist. Something has to be able to
+acquire the first pod without using a pod, or the drivers have to ship with the
+CLI and only third-party pods get resolved. That choice is not made yet and
+should be made deliberately rather than discovered.
+
+**Open questions, recorded as open:**
+
+* *Can a pod have transitive dependencies?* A pod is a native binary, so what
+  it links is its own affair and invisible to us. But a pod depending on
+  ANOTHER pod is meaningful and would need resolving. Undecided.
+* *Where does a pod come from?* A registry, or git — which raises the question
+  of what distinguishes a pod dependency from a git one. The current answer is
+  the coordinate: `:pod/version` rather than `:git/sha`, plus somewhere to look
+  when it is not in the registry. That is a naming distinction, not a
+  mechanical one, and it may be the right one — but it is worth stating that
+  the FETCH for a git-hosted pod is the git downloader, which the two-axis
+  split above already handles.
 
 | **Transitive resolution, EVERY dependency kind** | git/`:local/root` resolve transitives one way, npm another, Maven not at all | THREE mechanisms where there should be one. `lib/flint/deps.cljc`'s fetch walk reads a fetched dependency's own `deps.edn` and recurses (`(recur (vec (concat (rest todo) (or (:deps sub) {}))))`) — that covers git and `:local/root`, whose deps live in a `deps.edn`. `resolve.cljc`'s `plan`/`deps-of` reads an npm MANIFEST and recurses separately. Maven has neither: a jar's deps are in a POM, and nothing parses one, though `flint.deps.mvn` serves `pom` ready to be called. **`deps-of`'s docstring also describes a caller-side git mechanism that is not what happens** — the git path works, but through the other walk entirely. Every kind needs transitive resolution and it should be ONE walk |
 | ~~Transitive resolution for Maven~~ (superseded by the row above) | not built — npm has it, Maven silently does not | `deps-of` (`lib/flint/deps/resolve.cljc`) returns real transitives for `:npm` from its manifest; `:mvn` falls through to `{}` with no clause and no comment. `flint.deps.mvn` already serves `pom` with real fetches and caching and has never been called. The cancellation recorded under `cli` was **revoked 2026-09-11**: it measured a benefit against a standard library that was missing `spec.alpha`/`zip`/`data`/`datafy`, which were implemented right afterwards |
