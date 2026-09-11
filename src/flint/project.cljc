@@ -43,6 +43,31 @@
 (defn- ns-form [forms]
   (first (filter (fn [f] (and (seq? f) (= 'ns (first f)))) forms)))
 
+(def source-extensions
+  "Every extension a namespace's source may have, MOST SPECIFIC FIRST.
+
+  One list, read by `bin/flint` too rather than copied there. Four places used
+  to enumerate these -- here, `cli/src/main.rs`, and twice in `bin/flint`.
+
+  `.fl` is a PLATFORM extension in the sense `.clj` and `.cljs` are: one
+  namespace may have both a `.fl` and a `.cljc`, and each runtime loads the one
+  it understands (`DECISIONS.md#dialects-and-preludes`). flint prefers its own,
+  exactly as the JVM prefers `.clj` over `.cljc`.
+
+  `.cljc` BEFORE `.clj` is flint's existing order and the reverse of the JVM's.
+  It stays: a `.clj` here is an oddity rather than the native case, so the
+  portable file is the better default when both are present."
+  [".fl" ".cljc" ".clj"])
+
+(defn dialect-of
+  "Which dialect a source file is written in, by its extension.
+
+  `:flint` may use everything the workspace offers -- its own reader tags, its
+  prelude. `:portable` must mean the same thing under Clojure, so it may not.
+  Nothing enforces that yet; this is the field the enforcement will read."
+  [path]
+  (if (str/ends-with? (str path) ".fl") :flint :portable))
+
 (defn collect
   "Read from `roots` outwards. `resolve-ns` takes a namespace symbol and returns
   nil, or what that namespace IS:
@@ -103,6 +128,11 @@
                   reqs (compiler/ns-requires (or (ns-form forms) '(ns x)))]
               (recur (into (vec (rest todo)) reqs)
                      (assoc sources n {:src (:src s) :file (:file s) :forms forms
+                                       ;; A resolver that answers only `{:src :file}` is
+                                       ;; still valid (see this fn's docstring), so the
+                                       ;; dialect is derived from the file it named rather
+                                       ;; than demanded of it.
+                                       :dialect (or (:dialect s) (dialect-of (:file s)))
                                        :workspace (:workspace s) :tags (:tags s)
                                        :grants (:grants s) :guard (:guard s)})
                      (conj order n)
@@ -156,12 +186,12 @@
           :workspace (:name virt)
           :grants (set (:grants virt)) :guard (set (:guard virt))}
        (when-let [path (first (filter (fn [p] (contains? files p))
-                                      [(str base ".cljc") (str base ".clj")]))]
+                                      (mapv (fn [e] (str base e)) source-extensions)))]
          (let [w (first (filter (fn [w] (let [pre (:prefix w)]
                                           (or (nil? pre) (= "" pre)
                                               (str/starts-with? (str path) (str pre)))))
                                 (or workspaces [])))]
-           {:src (get files path) :file path
+           {:src (get files path) :file path :dialect (dialect-of path)
             :workspace (:name w) :tags (:tags w)
             :grants (set (:grants w)) :guard (set (:guard w))})))))))
 

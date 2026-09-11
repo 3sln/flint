@@ -4291,31 +4291,51 @@ proposal awaiting sign-off.
 
 ### What was decided
 
-**Two dialects, distinguished by file extension.**
+**`.fl` is a PLATFORM EXTENSION, not a category of namespace.** It sits beside
+`.clj`, `.cljs` and `.cljd` in the model Clojure already has: one namespace may
+have several implementations, and each runtime loads the one it understands.
+`foo/bar.cljc` and `foo/bar.fl` are the same namespace, and flint prefers the
+`.fl`, exactly as the JVM prefers `.clj` over `.cljc`.
 
-* `.cljc` (and `.clj`) — **portable**. Must mean the same thing under Clojure.
-  No flint-only reader tags, no custom prelude, no flint-only namespaces.
-* `.fl` — **flint**. May use everything: `#table [...]` and other custom reader
-  tags, the table namespace, and whatever the workspace's prelude adds.
+**There is therefore no edge rule on requires**, and an earlier draft of this
+section was wrong to propose one. "A portable namespace may not require a
+flint-only one" mistakes a property of a FILE for a property of a NAMESPACE. A
+`.cljc` file requiring `foo.bar` is fine: under Clojure that resolves to
+`foo/bar.cljc` or `.clj`, under flint to `foo/bar.fl` or `.cljc`. Whether the
+namespace is available is answered by whether an implementation exists on the
+platform doing the loading — which is the consumer's question at load time, not
+a static property of the graph.
 
-**The resolver tags every namespace with its dialect.** `project/collect`
-already answers a per-namespace map carrying `:workspace`, `:tags`, `:grants`,
-`:guard` and `:virtual`; `:dialect` joins them. This is deliberately not a new
-mechanism — it is one more field on a record that already describes what a
-namespace is and what it may do.
+**Divergence has two scales, and the small one already works.** flint's reader
+carries `:features #{:flint}` (`src/flint/reader.cljc`), so `#?(:clj a :flint b)`
+reads today, and `lib/clojure/core.cljc` already uses conditionals in anger.
 
-**The constraint is an edge rule on the require graph, in one direction:**
+* small divergence → a reader conditional inside one `.cljc`
+* wholesale divergence → a separate `.fl` implementation
 
-> A portable namespace may not require a flint-only one.
+**Resolution order gains `.fl` at the front.** `project/collect` tries
+`[base.cljc, base.clj]` today; it becomes `[base.fl, base.cljc, base.clj]`.
+Platform-specific beats portable, which is the established convention.
 
-That single rule is what makes "portable" mean anything. Without it a `.cljc`
-file could `:require` a `.fl` one and be portable in name only, which is the
-failure the split exists to prevent. `.fl` requiring `.cljc` is fine and
-expected — flint code uses the portable library freely.
+Worth noting in passing: flint's existing order prefers `.cljc` over `.clj`,
+the reverse of the JVM's. That is defensible here — a `.clj` in a flint project
+is an oddity rather than the native case — but it is a divergence, and adding a
+third extension is when to decide it was intended.
 
-The check belongs where workspace guards are already enforced, walking the same
-edges (`src/flint/project.cljc`). A refused edge is reported the way a refused
-guard is.
+**Enforcement lives at the READER and the resolver, not the graph.** What makes
+a `.cljc` non-portable is using flint-only surface *in that file*:
+
+* a reader tag the workspace binds (`#table [...]`)
+* a symbol that resolves only through a custom prelude
+
+Both are known at read time for the file being read, which is where the check
+belongs and where the answer is local.
+
+**The prelude rule survives the correction, for a better reason.** A custom
+prelude applies to `.fl` only — not because flint namespaces are a separate
+species, but because a `.cljc` is a file other platforms' readers will read, and
+they know nothing of flint's prelude. A `.cljc` whose meaning depends on one is
+not portable, whatever it says on the tin.
 
 **The prelude becomes a workspace's ordered list.** Today it is pinned in code:
 `project/core-first` hardcodes `clojure.core`, `flint.core`, `flint.protocols`,
@@ -4327,20 +4347,48 @@ hardcoded copies with one declaration:
 {:flint/prelude [clojure.core flint.core my.lib.prelude]}
 ```
 
-Names from every listed namespace resolve without a `:require`, which is exactly
-what `clojure.core` gets today — generalised rather than invented.
+**EACH ENTRY CARRIES ITS OWN `:include`/`:exclude`.** An entry is a plain
+symbol, or a map when something needs saying:
 
-**Ordering: later entries override earlier ones.** The author wrote the order,
-so appending is how you extend, and a workspace can deliberately shadow a core
-name. A later entry shadowing an earlier one is **reported, not refused** — it
-is legal and occasionally the point, but it is also how `count` silently becomes
-something else, so it must not be invisible. Same shape as a coordinate carrying
-a key its kind does not understand.
+```clojure
+{:flint/prelude [{:ns clojure.core :exclude [count]}
+                 flint.core
+                 {:ns my.lib.prelude :include [count nth-or]}]}
+```
 
-**A custom prelude applies to `.fl` ONLY.** A portable namespace gets exactly
-the prelude Clojure gives it. A `.cljc` file whose meaning depended on a
-workspace's prelude would not compile under Clojure, which is the whole
-distinction.
+* omitted `:include` means every name the namespace publishes;
+* omitted `:exclude` means none;
+* a plain symbol is therefore exactly `{:ns sym :include :all :exclude []}`.
+
+The declaration lives on the entry it AFFECTS. That is the half
+`:refer-clojure :exclude` gets right and a shadow declaration gets wrong: the
+list of names dropped from `clojure.core` belongs next to `clojure.core`, not
+next to whichever later namespace happens to supply a replacement.
+
+**Which means there is no shadowing to resolve.** A name excluded from the
+earlier entry is simply not in the prelude, so the later entry's version is the
+only one there. The collision never forms.
+
+**A collision that DOES form is an error, not an order-resolved silent win.**
+Two entries publishing one name, neither excluding it, is ambiguous — and now
+the author has an exact way to say which they meant, so refusing costs them
+nothing and guessing could cost them an afternoon. The message names both
+entries and the exclusion that settles it. This is `:exclude`'s existing posture
+(`DECISIONS.md#exclude-and-unit-path`) and the file's general one: refuse rather
+than quietly pick.
+
+**So ORDER IN THE LIST IS LOAD ORDER, and only that.** The two questions were
+conflated in the earlier draft. Name resolution is settled by `:include` and
+`:exclude`, which are order-independent; the sequence is what `core-first`
+already encodes and must keep encoding — `flint.protocols` before `flint.check`,
+because `flint.check` uses `extend-protocol` at top level and the graph has no
+edge to order by. Separating them means a workspace can reorder for
+initialisation without silently changing what a name means.
+
+**Giving both `:include` and `:exclude` on one entry is refused.** Every such
+list has a shorter unambiguous spelling as an `:include` alone, so accepting
+both would add a second way to write one thing and a question about which
+applies first.
 
 ### Why
 
@@ -4354,15 +4402,19 @@ An extension makes the claim explicit, and a resolver tag makes it checkable.
 
 ### What this collides with in the code today
 
-* **Two places resolve extensions**, and both must learn `.fl`:
-  `src/flint/project.cljc` tries `[base.cljc, base.clj]`, and
-  `cli/src/main.rs` collects files ending `.cljc`/`.clj`. A third reader,
-  `bin/flint`, duplicates the compiler's source handling deliberately.
+* **FOUR places resolve source extensions**, and every one must learn `.fl`:
+  `src/flint/project.cljc` tries `[base.cljc, base.clj]`; `cli/src/main.rs`
+  collects files ending `.cljc`/`.clj`; and `bin/flint` has TWO — its
+  `source-candidates` and its linter's file filter. `bin/flint` puts `src` and
+  `lib` on its classpath, so it can read one shared list rather than keep a
+  fourth hand-copy.
 * **`core-first` is duplicated** in `src/flint/project.cljc` and `bin/flint`,
-  and order within the pin is load-bearing — `flint.protocols` must precede
+  and the order within it is load-bearing: `flint.protocols` must precede
   `flint.check`, which uses `extend-protocol` at top level. A configurable
-  prelude must preserve that, so the default value has to be the existing list
-  in the existing order.
+  prelude must default to exactly that list in exactly that order.
+* **`collect` builds its per-namespace record in two places** — one for virtual
+  namespaces, one for real ones. `:dialect` belongs on the second; a virtual
+  namespace has no file and so no dialect.
 * **`lib/` is 33 namespaces with no dialect marking.** Ten are `clojure.*` and
   presumptively portable; the rest are `flint.*` and a mix. Which are genuinely
   flint-only is an audit, not a guess.

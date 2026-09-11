@@ -6,6 +6,11 @@
 (babashka.classpath/add-classpath (str root "/src:" root "/lib"))
 (require '[flint.compiler :as compiler] '[flint.image :as img] '[flint.link :as link]
          '[flint.reader :as reader] '[flint.lint :as lint]
+         ;; For `source-extensions` ONLY. This file duplicates a good deal of
+         ;; `flint.project` by hand and deliberately, but the list of
+         ;; extensions is the kind of thing that must not be copied: a fourth
+         ;; copy is a fourth chance to disagree about what a source file is.
+         '[flint.project :as project]
          ;; The project surface -- `tasks`, `task`, `build`, `fetch`, ... -- is
          ;; flint code, in `lib/`, because 0021's argument is that it has to
          ;; survive losing babashka. What is in this file is the host half.
@@ -96,7 +101,7 @@
   More than one is not an error -- it is shadowing, and shadowing is reported."
   [dirs n]
   (for [d dirs
-        ext [".cljc" ".clj"]
+        ext project/source-extensions
         :let [f (io/file d (str (ns->path n) ext))]
         :when (.exists f)]
     (str f)))
@@ -535,8 +540,9 @@
                              (when (.isDirectory (io/file d)) (file-seq (io/file d)))))
                    (filter (clojure.core/fn [f]
                              (and (.isFile ^java.io.File f)
-                                  (or (str/ends-with? (.getName ^java.io.File f) ".cljc")
-                                      (str/ends-with? (.getName ^java.io.File f) ".clj")))))
+                                  (some (clojure.core/fn [e]
+                                          (str/ends-with? (.getName ^java.io.File f) e))
+                                        project/source-extensions))))
                    (map (clojure.core/fn [f] (.getPath ^java.io.File f)))
                    sort)
         findings (mapcat (clojure.core/fn [f]
@@ -815,7 +821,17 @@
         ;; never a lambda. Same shape as the note in `aot.cljc` about not
         ;; destructuring `:op` as `op`.
         src-nses (when test-mode?
-                   (->> (mapcat (clojure.core/fn [d] (fs/glob d "**.cljc")) (or src []))
+                   ;; EVERY dialect, not just the portable one. A test that
+                   ;; lives in a `.fl` is still a test, and a namespace that is
+                   ;; never collected is one a qualified reference cannot
+                   ;; resolve -- which surfaces as "is zzz required?" and sends
+                   ;; the reader to the `ns` form rather than to the file list.
+                   (->> (mapcat (clojure.core/fn [d]
+                                  (fs/glob d (str "**.{"
+                                                  (str/join "," (map (clojure.core/fn [e] (subs e 1))
+                                                                     project/source-extensions))
+                                                  "}")))
+                                (or src []))
                         (map (clojure.core/fn [pth] (ns-of (slurp (str pth)))))
                         (remove nil?)
                         vec))
@@ -838,11 +854,22 @@
         ;; they compose rather than compete, so "source or unit?" is not the
         ;; question. What can genuinely conflict is two of the same kind, and
         ;; both resolve the same way -- earlier on the path wins.
+        ;; SAME REASONING ONE STEP FURTHER. A `.fl` and a `.cljc` for one
+        ;; namespace are its flint half and its portable half -- different
+        ;; DIALECTS, chosen by the runtime doing the loading, exactly as
+        ;; `foo.clj` beside `foo.cljc` is ordinary in Clojure and unremarked.
+        ;; They compose. Only two files of the SAME extension, on different
+        ;; path entries, are one hiding the other.
         _ (doseq [n (sort (keys sources))]
-            (let [cs (source-candidates dirs n)]
-              (when (next cs)
-                (println (str "note: " n " has source in " (count cs) " places; using "
-                              (first cs) " (shadowing " (str/join ", " (rest cs)) ")")))))
+            (let [cs (source-candidates dirs n)
+                  ext-of (clojure.core/fn [f]
+                           (first (filter (clojure.core/fn [e] (str/ends-with? f e))
+                                          project/source-extensions)))]
+              (doseq [[e group] (sort-by key (group-by ext-of cs))]
+                (when (next group)
+                  (println (str "note: " n " has " (count group) " " e " sources; using "
+                                (first group) " (shadowing "
+                                (str/join ", " (rest group)) ")"))))))
         _ (doseq [u (link/shadowed-units unit-path)]
             (println (str "note: unit " (:name u) " at " (:manifest u)
                           " is shadowed by " (:by u))))

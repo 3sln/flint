@@ -141,7 +141,11 @@ fn read_sources(dir: &Path, prefix: &str, out: &mut BTreeMap<String, String>) ->
         let rel = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
         if p.is_dir() {
             read_sources(&p, &rel, out)?;
-        } else if rel.ends_with(".cljc") || rel.ends_with(".clj") {
+        // `flint.project/source-extensions` is the same list, and the one that
+        // decides which file WINS for a namespace. This side only decides what
+        // is worth reading off the disk, so order does not matter here and a
+        // superset would merely cost a read.
+        } else if rel.ends_with(".fl") || rel.ends_with(".cljc") || rel.ends_with(".clj") {
             out.insert(rel, fs::read_to_string(&p)?);
         }
     }
