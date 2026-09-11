@@ -358,7 +358,19 @@
   ;; `flint.core` reference was call-time-only was wrong: `protocol-miss` IS
   ;; the load-time caller. `flint.core` requires nothing, so the chain stops
   ;; there.
-  (let [pinned '[clojure.core flint.check flint.core flint.protocols]]
+  ;; ORDER WITHIN THE PIN MATTERS, and it is not the order they were added in.
+  ;; `flint.check` uses `extend-protocol` at top level, so it needs
+  ;; `flint.protocols` INITIALISED before it -- and pinning overrides the
+  ;; require graph, so a derived edge cannot fix this one. With `extend-method`
+  ;; in `clojure.core` that was invisible, because `clojure.core` is first
+  ;; whatever else happens. Moving `extend-method` to `flint.protocols` made
+  ;; `flint.check` call a nil: "value is not a function (nil, 4 args)", from
+  ;; `bin/flint test` on a two-file project.
+  ;;
+  ;; Nothing pinned ahead of `flint.check` uses `expect`, which is what makes
+  ;; putting it last safe -- checked in `clojure.core`, `flint.core` and
+  ;; `flint.protocols`.
+  (let [pinned '[clojure.core flint.core flint.protocols flint.check]]
     (concat (filter (set order) pinned) (remove (set pinned) order))))
 
 (defn b64-decode [s]
