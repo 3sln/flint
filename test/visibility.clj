@@ -69,6 +69,71 @@
        (= :refused (outcome {"libx/core.cljc" lib "app/main.cljc" (app "(l/secret 1)")} one))
        "private is a NAMESPACE boundary, not a workspace one")
 
+;; AND REFUSED WHEN THE DEFINER IS ANALYSED SECOND, which it was not.
+;;
+;; Privacy used to depend on the order the compiler reached the files. A
+;; pre-pass records every top-level def NAME in `:declared` so a forward
+;; reference resolves; it recorded the name and not the visibility, while
+;; `privacy-check!` read `:var-meta`, which is filled in only when a namespace
+;; is ANALYSED. So a reference from a namespace analysed BEFORE the definer
+;; resolved through `:declared` and met no check at all -- `(:private nil)` is
+;; nil, and nil is not a refusal.
+;;
+;; THE TRIGGER IS A REQUIRE POINTING THE OTHER WAY. If A requires B then B is
+;; analysed first, so B could name A's private vars. That is not a corner: it
+;; is what `clojure.core` requiring `flint.protocols` does, and it is why
+;; moving `extend-method` there passed a privacy violation in silence and
+;; failed later as `value is not a function`.
+;;
+;; Same two namespaces as the rows above would not show it -- `app.main`
+;; requires `libx.core`, so the definer is always analysed first. These name
+;; the reverse edge explicitly.
+(def owner "(ns libx.owner (:require [libx.back]))
+(defn- owner-secret [x] x)
+(defn go [x] (libx.back/reach x))")
+
+(def back-private "(ns libx.back)
+(defn reach [x] (libx.owner/owner-secret x))")
+
+(def back-public "(ns libx.back)
+(defn reach [x] x)")
+
+(check "a private var is refused from a namespace that was analysed FIRST"
+       (= :refused (outcome {"libx/owner.cljc" owner "libx/back.cljc" back-private
+                             "app/main.cljc" "(ns app.main (:require [libx.owner :as o])) (defn main [_] (o/go 1))"}
+                            two))
+       "the definer is analysed second here; privacy must not depend on that")
+
+(check "and the same shape is NOT refused when nothing private is named"
+       (not= :refused (outcome {"libx/owner.cljc" owner "libx/back.cljc" back-public
+                                "app/main.cljc" "(ns app.main (:require [libx.owner :as o])) (defn main [_] (o/go 1))"}
+                               two))
+       "the control: the reverse edge itself must stay legal")
+;; AND `^:private` ON A PLAIN `def`, WHICH IS THE OTHER SPELLING. The fix
+;; above first caught only `defn-`, because that is the one the pre-pass could
+;; tell from the form's HEAD. `^:private` is metadata on the name symbol,
+;; which the reader has already attached by the time the pass runs -- so it
+;; was readable all along and simply was not read. Sixty uses of `^:private`
+;; across `lib/` and this direction checked none of them.
+(def owner-def "(ns libx.owner2 (:require [libx.back2]))
+(def ^:private hidden 42)
+(defn go [] (libx.back2/reach))")
+
+(def back-def "(ns libx.back2)
+(defn reach [] libx.owner2/hidden)")
+
+(check "`^:private` on a def is refused across the reverse edge too"
+       (= :refused (outcome {"libx/owner2.cljc" owner-def "libx/back2.cljc" back-def
+                             "app/main.cljc" "(ns app.main (:require [libx.owner2 :as o])) (defn main [_] (o/go))"}
+                            two))
+       "both spellings of private must hold, and in both orders")
+
+;; `not= :refused` AND NOT `= :compiled`, which is what this first asserted.
+;; These synthetic projects carry no `clojure.core`, so nothing here ever
+;; reaches `:compiled` -- the first version of this control failed on
+;; `unable to resolve symbol: nth` and looked like a bug in the fix it was
+;; guarding. Every other control in this file already knew that.
+
 ;; EVERY WAY OF NAMING IT, not just calling it. Privacy that covered calls
 ;; and not value references would be a hole a `(map l/helper xs)` walks
 ;; straight through. It holds because `record-dep!` sits on symbol RESOLUTION
