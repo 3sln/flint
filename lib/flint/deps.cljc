@@ -28,7 +28,7 @@
   -- and its caution is that resolving a coordinate gets you SOURCE, not
   something that compiles. So flint fetches one jar at one version and does not
   pretend to resolve a graph; see `flint.deps/maven-note`."
-  #{:git :npm :maven :local})
+  #{:git :npm :maven :local :pod})
 
 (def default-maven-repos
   "Where a jar is looked for, in order. Clojars first because that is where
@@ -89,6 +89,13 @@
     (:npm/name coord) :npm
     (:npm/version coord) :npm
     (:mvn/version coord) :maven
+    ;; A POD is an ordinary dependency (`DECISIONS.md#workspace-capabilities`),
+    ;; not a second mechanism beside `:deps`. `:pod/path` is the local form and
+    ;; names a directory holding a manifest; `:pod/version` is the registry
+    ;; form, recognised here so it gets a real answer from `incomplete` rather
+    ;; than being reported as a coordinate nobody knows.
+    (:pod/path coord) :pod
+    (:pod/version coord) :pod
     :else :unknown))
 
 (defn read-deps
@@ -152,6 +159,13 @@
                        (str cache "/mvn/"
                             (str/replace (str/replace (str nm) "/" "-") ":" "-") "-" v)))
       (= k :local) (when-not (str/blank? (str (:local/root c))) (:local/root c))
+      ;; NIL ON PURPOSE, and it is the whole reason a pod fits here without a
+      ;; special case downstream. A pod contributes no SOURCE: it is a separate
+      ;; process with its own authority, and its surface is discovered by
+      ;; booting it and asking. `fetch-plan` skips a coordinate whose dir is
+      ;; nil, so a pod never becomes a source root and never gets compiled --
+      ;; which is what it means for the host, not the resolver, to own it.
+      (= k :pod) nil
       :else nil)))
 
 (defn fetch-plan
@@ -250,6 +264,14 @@
                                              " reason it takes a git sha and not a branch")})
                 (and (= k :local) (str/blank? (str (:local/root c))))
                 (conj acc {:dep nm :why "no :local/root"})
+                ;; A pod from a REGISTRY is the half that is not built. Said
+                ;; here rather than left to fail at boot, because the failure
+                ;; would otherwise be "could not start the pod \"\"" -- a
+                ;; message about an empty path that says nothing about why.
+                (and (= k :pod) (str/blank? (str (:pod/path c))))
+                (conj acc {:dep nm :why (str ":pod/version needs a pod registry, which is not built yet"
+                                             " -- a pod is resolvable today only as :pod/path, naming a"
+                                             " directory that holds its manifest")})
                 :else acc)))
           [] (or (:deps d) {})))
 

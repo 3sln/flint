@@ -111,10 +111,16 @@
 ;; JSON payloads, `describe` and `invoke`.
 (let [p4 (str (fs/create-temp-dir))]
   (fs/create-dirs (str p4 "/app"))
-  (fs/copy (str root "/test/fixtures/demopod") (str p4 "/demopod"))
-  (fs/set-posix-file-permissions (str p4 "/demopod") "rwxr-xr-x")
+  ;; A LOCAL POD IS A DIRECTORY holding a manifest, the way `:local/root` is a
+  ;; directory holding a `deps.edn`. The coordinate says which manifest to
+  ;; read, so a pod under development needs no registry entry.
+  (fs/create-dirs (str p4 "/demopod"))
+  (fs/copy (str root "/test/fixtures/demopod") (str p4 "/demopod/run"))
+  (fs/set-posix-file-permissions (str p4 "/demopod/run") "rwxr-xr-x")
+  (spit (str p4 "/demopod/manifest.edn")
+        "{:pod/name pod.demo\n :pod/artifacts [{:artifact/executable \"run\"}]}\n")
   (spit (str p4 "/deps.edn")
-        "{:paths [\".\"]\n :flint/pods {pod.demo {:pod/program \"./demopod\"}}}\n")
+        "{:paths [\".\"]\n :deps {pod.demo {:pod/path \"./demopod\"}}}\n")
   (spit (str p4 "/app/a.cljc")
         "(ns app.a (:require [pod.demo :as d]))\n(defn go [_] (str \"add=\" (d/add 1 2 3) \" greet=\" (d/greet \"flint\")))\n")
   (let [r (sh p4 flint "run" ":path" "." ":fn" "app.a/go")]

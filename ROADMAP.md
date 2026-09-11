@@ -404,6 +404,20 @@ be judged against it. Since npm-only is the decided path for now, that is the
 same order the work was going in anyway — build it, then measure, then decide
 whether the native binary earns its keep.
 
+### Standalone scripts (spec only, nothing built)
+
+Recorded 2026-09-11. Full spec at `DECISIONS.md#standalone-scripts`.
+
+- [ ] Reader skips a `#!` FIRST line (nothing handles it today)
+- [ ] `analyze-ns` ERRORS on an unknown clause instead of silently dropping it
+      — it currently falls through to `nil`, so a `:deps` clause would be
+      ignored rather than rejected, and so would a typo
+- [ ] `(:deps {...})` inside `ns`, meaning what `deps.edn` `:deps` means
+- [ ] `^:script` metadata, and the entry-point rule it implies
+- [ ] Source path is THE FILE plus explicitly named directories — never a scan
+      of the script's own directory
+- [ ] Decide where a script's capability grants live
+
 ### Design: a first-party pod registry, in this repo
 
 Recorded 2026-09-11. This is the piece that makes "the drivers are pods" work
@@ -414,6 +428,27 @@ a competitor to it. It lists the pods that live HERE: the npm, Maven and git
 drivers, and whatever else moves out of the CLI. The CLI links it into pod
 resolution automatically, so a first-party driver is found without a project
 configuring anything and without reaching a third-party service.
+
+**THE IN-REPO REGISTRY IS FOR CLI TOOLING ONLY** (recorded 2026-09-11). It
+serves the pods flint's own toolchain needs — the drivers, and whatever else
+sheds out of the binary. It is NOT where a user's dependencies resolve from:
+**user deps resolve against the community registry**, which is the one with the
+pods people actually publish.
+
+The separation matters because the two registries answer different questions. A
+user asking for `pod.org/postgres` wants what the ecosystem publishes, and a
+first-party registry that shadowed those names would quietly change what a
+coordinate means. Meanwhile flint's own drivers must resolve without depending
+on third-party infrastructure being up, which is the whole reason the in-repo
+one exists. Keeping them to separate jobs gets both properties instead of
+trading one for the other.
+
+**`deps.edn` MAY NAME ALTERNATE REGISTRIES**, including flint's own. A project
+that wants flint's tooling pods as ordinary dependencies says so and gets them;
+the default just does not assume it. This is the same shape `:flint/npm-registry`
+and `:flint/maven-repos` already have — the default is the community one, a
+project can point somewhere else — so pods get the configuration story the
+other ecosystems already have rather than a bespoke one.
 
 **THIS IS WHAT LETS THE DEPENDENCIES LEAVE.** The section below shows the CLI's
 entire third-party surface exists to serve dependency fetching. Those crates

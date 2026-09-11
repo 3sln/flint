@@ -446,44 +446,160 @@ fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
 
 /// The pods a project declares, as `(namespace, program, args)`.
 ///
+/// A pod is an ORDINARY DEPENDENCY, which is what
+/// `DECISIONS.md#workspace-capabilities` said it would be: it sits in `:deps`
+/// beside every other kind, and the symbol that keys it is the namespace a
+/// program `:require`s.
+///
 /// ```clojure
-/// {:flint/pods {pod.org/postgres {:pod/program "pod-babashka-postgresql"
-///                                 :pod/args []}}}
+/// {:deps {pod.demo {:pod/path "./demopod"}}}
 /// ```
 ///
-/// Read from `deps.edn` with a SCAN rather than an EDN parser, for the reason
-/// `depscmd` gives: this is the host's half, and a second reader of a format
-/// the guest already owns is a second thing to keep true. The scan is deliberately
-/// narrow -- it finds `:flint/pods` and reads `symbol {:pod/program "..."}`
-/// pairs -- and anything it cannot read is simply not a pod, which fails as
-/// "no such namespace" rather than as a corrupt build.
+/// `:pod/path` names a DIRECTORY holding a pod manifest, the same way
+/// `:local/root` names a directory holding a `deps.edn`. The coordinate says
+/// which manifest to read -- that is the whole rule for a locally referenced
+/// dependency -- so a pod under development needs no registry entry and no
+/// second declaration mechanism.
+///
+/// There used to be a `:flint/pods` key holding `{ns {:pod/program "..."}}`.
+/// It was a SECOND dependency mechanism beside the real one: a pod declared
+/// there could not be resolved, pinned, or reasoned about by anything that
+/// understands `:deps`, and it named the executable directly, so there was
+/// nowhere to say "this binary on Linux, that one on macOS" -- which is the
+/// entire reason pods are shipped prebuilt per platform. The manifest is where
+/// that answer lives, so the declaration has to point AT a manifest.
+///
+/// Read with a SCAN rather than an EDN parser, for the reason `depscmd` gives
+/// and for a harder one here: pods boot BEFORE the compiler runs, because
+/// their surface is what the compiler needs, so the embedded reader is not
+/// available to read what tells us which pods to boot. The scan is
+/// deliberately narrow and anything it cannot read is simply not a pod, which
+/// fails as "no such namespace" rather than as a corrupt build.
 fn declared_pods(srcs: &[PathBuf]) -> Result<Vec<(String, String, Vec<String>)>> {
     let mut out = Vec::new();
     for s in srcs {
-        let f = if s.is_dir() { s.join("deps.edn") } else { continue };
+        let dir = if s.is_dir() { s } else { continue };
+        let f = dir.join("deps.edn");
         let Ok(text) = fs::read_to_string(&f) else { continue };
-        let Some(at) = text.find(":flint/pods") else { continue };
-        let rest = &text[at..];
-        // Each entry: a symbol, then a map carrying `:pod/program`.
-        for chunk in rest.split(":pod/program").skip(1) {
-            let Some(q1) = chunk.find('"') else { continue };
-            let after = &chunk[q1 + 1..];
-            let Some(q2) = after.find('"') else { continue };
-            let program = after[..q2].to_string();
-            // The NAMESPACE is the symbol before the `{` that opened this entry.
-            let before = &rest[..rest.find(&format!("{program}")).unwrap_or(0)];
-            let ns = before
-                .rsplit('{')
-                .nth(1)
-                .and_then(|seg| seg.split_whitespace().last())
-                .unwrap_or("")
-                .to_string();
-            if !ns.is_empty() && ns != ":flint/pods" {
-                out.push((ns, program, Vec::new()));
-            }
+        for (ns, rel) in scan_pod_paths(&text) {
+            let pod_dir = dir.join(&rel);
+            let manifest = pod_dir.join("manifest.edn");
+            let m = fs::read_to_string(&manifest).with_context(|| {
+                format!("the pod {ns} names {}, which has no manifest.edn",
+                        pod_dir.display())
+            })?;
+            let program = manifest_program(&m).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}: no executable for this platform ({} {})",
+                    manifest.display(), std::env::consts::OS, std::env::consts::ARCH)
+            })?;
+            // The executable is named RELATIVE TO THE MANIFEST, and is made
+            // absolute here. A pod is spawned with the invoking process's
+            // working directory, which is the user's and not the pod's, so a
+            // relative name would resolve against wherever `flint` was run.
+            let exe = pod_dir.join(&program);
+            let exe = exe.canonicalize().unwrap_or(exe);
+            out.push((ns, exe.to_string_lossy().to_string(), manifest_args(&m)));
         }
     }
     Ok(out)
+}
+
+/// Every `symbol {... :pod/path "..." ...}` entry in a `deps.edn`.
+///
+/// The symbol is found by walking BACK from the `{` that opens the entry,
+/// rather than by splitting forward: `:deps` holds entries of every kind and
+/// only some are pods, so there is no fixed distance from the key to the
+/// coordinate.
+fn scan_pod_paths(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut from = 0usize;
+    while let Some(rel) = text[from..].find(":pod/path") {
+        let at = from + rel;
+        from = at + ":pod/path".len();
+        // The value: the next quoted string.
+        let Some(q1) = text[from..].find('"') else { continue };
+        let after = &text[from + q1 + 1..];
+        let Some(q2) = after.find('"') else { continue };
+        let path = after[..q2].to_string();
+        // The key: the symbol before the `{` that opened THIS entry. Scan back
+        // to that brace, then take the last token before it.
+        let Some(open) = text[..at].rfind('{') else { continue };
+        let before = text[..open].trim_end();
+        let ns = before
+            .rsplit(|c: char| c.is_whitespace() || c == '{' || c == ',')
+            .next()
+            .unwrap_or("")
+            .to_string();
+        if !ns.is_empty() && !ns.starts_with(':') {
+            out.push((ns, path));
+        }
+    }
+    out
+}
+
+/// The executable a pod manifest names for THIS platform.
+///
+/// ```clojure
+/// {:pod/name pod.demo
+///  :pod/artifacts [{:os/name "macos" :os/arch "aarch64"
+///                   :artifact/executable "demopod"}]}
+/// ```
+///
+/// `:pod/program "..."` is accepted as the flat form for a pod that is one
+/// script on every platform, which is what a pod under development usually is.
+///
+/// An artifact with no `:os/name` and no `:os/arch` matches anything, so the
+/// vector form degrades to the flat one. The names are flint's own
+/// (`std::env::consts`), NOT babashka's registry values -- that registry keys
+/// on java `os.name` strings matched as regexes, and mapping onto them is a
+/// step for when the registry lands rather than a regex engine invented here.
+fn manifest_program(m: &str) -> Option<String> {
+    if let Some(at) = m.find(":pod/artifacts") {
+        for seg in m[at..].split('{').skip(1) {
+            let seg = &seg[..seg.find('}').unwrap_or(seg.len())];
+            let field = |k: &str| -> Option<String> {
+                let i = seg.find(k)?;
+                let rest = &seg[i + k.len()..];
+                let q1 = rest.find('"')?;
+                let tail = &rest[q1 + 1..];
+                let q2 = tail.find('"')?;
+                Some(tail[..q2].to_string())
+            };
+            let Some(exe) = field(":artifact/executable") else { continue };
+            let ok = |k: &str, actual: &str| {
+                field(k).map(|v| v == actual || v == "*").unwrap_or(true)
+            };
+            if ok(":os/name", std::env::consts::OS) && ok(":os/arch", std::env::consts::ARCH) {
+                return Some(exe);
+            }
+        }
+        return None;
+    }
+    let at = m.find(":pod/program")?;
+    let rest = &m[at + ":pod/program".len()..];
+    let q1 = rest.find('"')?;
+    let tail = &rest[q1 + 1..];
+    let q2 = tail.find('"')?;
+    Some(tail[..q2].to_string())
+}
+
+/// The fixed arguments a manifest gives the pod, if any.
+fn manifest_args(m: &str) -> Vec<String> {
+    let Some(at) = m.find(":pod/args") else { return Vec::new() };
+    let rest = &m[at + ":pod/args".len()..];
+    let Some(open) = rest.find('[') else { return Vec::new() };
+    let rest = &rest[open + 1..];
+    let end = rest.find(']').unwrap_or(0);
+    let mut out = Vec::new();
+    let mut seg = &rest[..end];
+    while let Some(q1) = seg.find('"') {
+        let tail = &seg[q1 + 1..];
+        let Some(q2) = tail.find('"') else { break };
+        out.push(tail[..q2].to_string());
+        seg = &tail[q2 + 1..];
+    }
+    out
 }
 
 /// Every namespace declared under `srcs`, for `test`.

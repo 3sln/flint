@@ -4195,3 +4195,86 @@ the flint side of the work continues on its own separate track — the CLI,
 general tooling, and whether the AOT question is ever worth reopening — and
 the integration work itself moves to construe's own side of the boundary.
 
+
+## standalone-scripts
+
+**A single file that carries its own dependencies, config and entry point**
+
+**Ratified:** ☐ not signed off
+
+**Status: SPEC, nothing built.** Recorded 2026-09-11 at the user's request.
+Every claim below about current behaviour was checked against the code; every
+claim about intended behaviour is a proposal awaiting sign-off.
+
+### What was decided
+
+A script is ONE FILE that runs directly:
+
+```clojure
+#!/usr/bin/env flint
+(ns ^:script the-script-ns
+  (:deps {some/lib {:npm/version "1.2.0"}})
+  (:require [clojure.string :as str]))
+
+(defn main [_] (println "hi"))
+```
+
+**The `ns` form IS the project.** A script has no `deps.edn` and must not need
+one — that is the entire point — so everything `deps.edn` would have said moves
+into the `ns` form: dependencies, and in time whatever else a workspace
+carries. This is not a new configuration language, it is the existing one
+relocated to the only file there is.
+
+**`src` IS THE FILE, PLUS WHAT THE SCRIPT EXPLICITLY NAMES.** A script does not
+scan the directory it sits in. This is the property that makes it standalone:
+dropping a script into a working tree full of `.cljc` must not silently pull
+that tree into the build, and a script mailed to somebody must behave the same
+in their directory as in yours. Directories join the source path only by being
+named in the embedded config.
+
+### Why
+
+The alternative is a script plus a `deps.edn` beside it, which is not a script
+— it is a project with one file in it, and it cannot be copied, mailed, or
+dropped in `~/bin` as a single artifact. The shebang is what makes a file
+executable; carrying configuration in a second file forfeits it.
+
+### What this collides with in the code today
+
+Three concrete obstacles, each verified:
+
+**1. The reader has no `#!` handling.** Nothing in `src/flint/reader.cljc`
+treats a leading `#!` line specially, so the shebang would be read as flint
+source and fail. A script format needs the reader to skip a `#!` FIRST LINE
+only — not `#!` anywhere, which would make a comment syntax out of something
+that is a kernel convention about byte one.
+
+**2. `analyze-ns` SILENTLY IGNORES an unknown clause.** `src/flint/analyzer.cljc`
+dispatches on the clause head and its `case` ends in a bare `nil` fallthrough:
+`:refer-clojure` is accepted and dropped, `:import` throws a real message, and
+anything else — including `(:deps ...)` — is discarded without a word. So today
+a `:deps` clause would not error, it would be *ignored*, and the script would
+fail later with a missing namespace that says nothing about why. Whatever else
+this spec does, that fallthrough has to become an error before `:deps` means
+anything, or the first person to typo `:dpes` gets a mystery.
+
+**3. Nothing names the entry point.** A module deliberately has no entry
+(`DECISIONS.md#structured-ports`); today the CLI takes `:fn` or reads
+`:flint/main` from `deps.edn`. A script has neither. The `^:script` metadata is
+the natural place to answer it, and the open question is whether it names the
+entry (`^{:script main}`) or whether a fixed convention does.
+
+### Open, and needing sign-off
+
+* **The entry point**, per above — metadata, convention, or both.
+* **Capabilities.** Capabilities are declared in workspace config, and a
+  script's `ns` form is its workspace config, so `:flint/capabilities-grant`
+  presumably moves there too. That means a script grants its OWN capabilities,
+  which is a different trust posture from a project whose grants sit in a file
+  the author controls separately. Worth deciding deliberately rather than
+  inheriting by analogy.
+* **The clause spelling.** `:deps` inside `ns` is new surface. `:require`
+  already exists and means something narrower; these must not blur.
+* **Whether a script may be a dependency.** If yes, `^:script` becomes a thing
+  other code can reach, and the "src is just this file" rule needs to say what
+  happens from the other side.

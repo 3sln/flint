@@ -106,6 +106,12 @@
     (:local/root c) :local
     (or (:npm/version c) (:npm/name c)) :npm
     (:mvn/version c) :mvn
+    ;; A POD, in its two forms. `:pod/path` is local and resolves to itself;
+    ;; `:pod/version` needs a registry. Both are recognised HERE so the registry
+    ;; form gets a sentence about the registry rather than the generic
+    ;; "flint cannot resolve this coordinate", which would be true but would
+    ;; send a reader looking for a typo.
+    (or (:pod/path c) (:pod/version c)) :pod
     :else :unknown))
 
 ;; --------------------------------------------------------------- resolution
@@ -204,6 +210,16 @@
     ;; coordinate gets you SOURCE, not something that compiles. Said here rather
     ;; than pretended.
     :mvn {:kind :mvn :name (str nm) :version (str (:mvn/version c))}
+    ;; A LOCAL POD resolves to itself, exactly as `:local` does: it is already
+    ;; on disk and there is nothing to pin. The directory it names holds the
+    ;; manifest, and the CLI reads that at boot -- resolution's job here is to
+    ;; say the coordinate is legitimate, not to open it.
+    :pod (if (str/blank? (str (:pod/path c)))
+           (throw (ex-info (str ":pod/version needs a pod registry, which is not built yet"
+                                " -- a pod is resolvable today only as :pod/path, naming a"
+                                " directory that holds its manifest")
+                           {:dep (str nm)}))
+           {:kind :pod :name (str nm) :root (str (:pod/path c))})
     nil))
 
 ;; ------------------------------------------------------------------- the walk
@@ -394,7 +410,12 @@
   (mapv (fn [nm]
           (let [n (get (:nodes p) nm)]
             (str (apply str (repeat (* 2 (:depth n 0)) " "))
-                 nm " " (or (:version n) (:sha n) "?")
+                 ;; A path-based dependency has no version and never will --
+                 ;; `:local` and `:pod` are both "whatever is in that directory
+                 ;; right now". The ROOT is the identifying fact for them, and
+                 ;; printing it beats printing `?`, which reads as a resolver
+                 ;; that failed rather than as a coordinate with nothing to pin.
+                 nm " " (or (:version n) (:sha n) (:root n) "?")
                  (when (= :git (:kind n)) (str "  " (:url n))))))
         (:order p)))
 
