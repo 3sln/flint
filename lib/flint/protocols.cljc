@@ -96,9 +96,23 @@
 ;; --------------------------------------------------------- the machinery
 ;;
 ;; `defprotocol` EMITS calls to these into whatever namespace expands it, so
-;; they cannot be private and cannot live in `clojure.core` -- Clojure has no
+;; they cannot be private: the caller is the one who names them.
+;;
+;; THEY SHOULD NOT LIVE IN `clojure.core` EITHER -- Clojure has no
 ;; `protocol-miss` or `extend-method`, and a port that invents them there is
-;; publishing under somebody else's name.
+;; publishing under somebody else's name. `protocol-miss` is here.
+;; `extend-method` IS NOT, and `doc/manifest.edn` records the anomaly as
+;; `:extra #{extend-method}` rather than letting it pass unnamed.
+;;
+;; It stayed there because `core-first` pins `clojure.core` FIRST, so a
+;; top-level `(extend-protocol ...)` can reach it from a namespace that
+;; required nothing -- and this namespace was not pinned, so moving it gave
+;; "value is not a function (nil, 4 args)". This namespace IS pinned now, so
+;; that reason is gone; what remains is that moving a published name is an API
+;; change. `test/common/lang/extending` calls `extend-method` by its bare name
+;; through the implicit refer, and every such caller would have to start
+;; requiring this namespace. Tried, measured, reverted -- see
+;; `doc/goals/README.md`.
 ;;
 ;; `find-protocol-method` and `extend` STAY in `clojure.core`: real Clojure
 ;; has both, and a port that moves what its subject does have is no longer a
