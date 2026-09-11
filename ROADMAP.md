@@ -382,6 +382,26 @@ host and the repo ships no binaries. Pods mean a real release process producing
 an artifact per platform. That is a cost of the approach, not a choice within
 it.
 
+**A WASM BUILD AS THE FALLBACK for platforms with no native artifact**, so the
+matrix does not have to be complete: publish natives for the platforms worth
+publishing for, publish one wasm build beside them, and a pod runtime that can
+execute wasm uses that where no native matches. One extra artifact covers the
+tail.
+
+The catch, and it points back at the whole plan: **flint's CLI cannot execute
+wasm today.** It compiles TO wasm, and `runtime/src/native.rs` DECODES wasm --
+but only to lift a flint image out of it, reading the export, global and data
+sections. It is not an engine, and no engine crate is in `cli/Cargo.toml`.
+
+So the fallback works immediately for a pod runtime that already has wasm
+(a JS host, or babashka with one), and for flint's own CLI it would mean
+embedding an engine — which is exactly the class of weight this plan exists to
+remove. Publishing the wasm artifact is still worth doing: it costs one build,
+it serves other runtimes now, and it does not commit flint to carrying an
+engine. Whether the CLI ever gains one is a separate decision with its own
+trade, and should not be smuggled in as an implementation detail of the
+fallback.
+
 ### Design: the heavy parts of the CLI should be pods too
 
 Recorded 2026-09-11, generalising the dependency plan above: anything heavy and
