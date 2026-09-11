@@ -54,6 +54,9 @@ public static class Meta {
         if (t == Obj.TyClosure) {
             return true;
         }
+        if (t == Obj.TyTagged) {
+            return true;
+        }
         return false;
     }
     /// WHICH slot holds `v`'s metadata. Ask `has-meta` first.
@@ -89,6 +92,12 @@ public static class Meta {
         // THE LAST SLOT for a closure -- see the header.
         if (t == Obj.TyClosure) {
             return Olen(rt, v) - 1;
+        }
+        // A TAGGED FORM keeps the tag at 0 and the form at 1, so metadata
+        // goes after them. A raw 2, like `TY_SYM` and `TY_LAZYSEQ` above:
+        // this function is where the slot numbers live.
+        if (t == Obj.TyTagged) {
+            return 2;
         }
         return 0;
     }

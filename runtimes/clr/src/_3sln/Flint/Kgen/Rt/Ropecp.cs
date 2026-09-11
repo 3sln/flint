@@ -113,6 +113,22 @@ public static class Ropecp {
     /// more rather than being handed the leaf. That is deliberate: handing back
     /// a leaf would be handing back a `Value` the caller has to root, and the
     /// second descent is O(depth) against a leaf scan that dominates it.
+    /// 
+    /// IT CHARGES NOTHING, AND THAT IS SOUND ONLY WHILE DEPTH IS LOGARITHMIC.
+    /// The descent is O(depth) and the copy is at most four bytes, so the
+    /// caller's flat per-builtin charge covers it -- the same bargain a map
+    /// lookup makes. That bargain breaks the moment a tree can be made DEEP:
+    /// `nth` in a loop over an O(n)-deep rope is O(n^2) work for O(n) gas,
+    /// which is the shape `doc/goals/hash-flooding.md` describes one structure
+    /// over.
+    /// 
+    /// IT WAS BREAKABLE UNTIL `rope-graft`. Repeated prepends built a tree one
+    /// level deeper each time -- `ropecat`s header records the same defect
+    /// being fixed for APPEND and missing at the other end -- so a guest could
+    /// build an O(n)-deep rope and then index it. The prepend fix was made for
+    /// shape and speed; it closed this too, and nothing said the two were
+    /// connected. If depth ever stops being logarithmic, this function needs a
+    /// charge before that change lands, not after.
     public static int RopeBytesAt(Rt rt, long v, int at0, int s) {
         long node;
         int want;

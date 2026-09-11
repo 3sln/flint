@@ -18,12 +18,28 @@ use crate::kgen::rt::pike::*;
 use crate::kgen::rt::casetable::*;
 
 impl Rt {
-    /// A tagged form: a reader tag and the form it wrapped.
+    /// A tagged form: a reader tag, the form it wrapped, and its metadata.
+    /// 
+    /// THREE SLOTS, AND THE THIRD IS METADATA. A tagged literal could not carry
+    /// any -- `has-meta` named ten types and this was not one of them -- so
+    /// `(with-meta #inst "..." {:a 1})` answered the value back unchanged,
+    /// silently, which is what `with-meta` does for a type that cannot hold it.
+    /// 
+    /// IT IS NIL AT BIRTH and stays out of `=` and `hash`, which already read
+    /// slots 0 and 1 and nothing else: two tagged forms differing only in
+    /// metadata are `=` and hash alike, as Clojure requires. `count` still
+    /// answers 2, because that is the tag and the form -- a semantic answer
+    /// rather than a slot count, and adding a slot must not move it.
+    /// 
+    /// NOT A SUBSTITUTE FOR A TYPE. The slot exists because metadata is how a
+    /// protocol is extended per VALUE (`0005` §6), not because a tagged form is
+    /// how a user should define one; that question is open and this does not
+    /// answer it.
     pub fn new_tagged(&mut self, tag: Value, form: Value) -> Value {
         let base: usize = self.mark();
         let ti: usize = self.push(tag);
         let fi: usize = self.push(form);
-        let v: Value = self.new_obj(TY_TAGGED, 2);
+        let v: Value = self.new_obj(TY_TAGGED, 3);
         // `new-obj` AND NOT `alloc`: it answers NIL when the heap refused.
         // BOTH PORTS CHECKED AND RUST DID NOT -- Rust's `new_opaque`
         // checked and its `new_tagged` did not, so the odd one out was a
@@ -38,6 +54,10 @@ impl Rt {
         // not survive one.
         self.set(v, 0, self.r(ti));
         self.set(v, 1, self.r(fi));
+        // EXPLICITLY NIL: `new-obj` gives no promise about slot contents,
+        // and a metadata slot holding whatever was there is a value the
+        // collector would try to trace.
+        self.set(v, 2, NIL);
         self.pop_to(base);
         return v;
     }

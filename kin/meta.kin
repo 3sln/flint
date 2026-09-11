@@ -18,7 +18,7 @@
                                    Rt Value I32 Bool RootIx Ty NIL
                                    TY_SYM TY_VEC TY_ARRAYMAP TY_HASHMAP TY_SET
                                    TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_ATOM
-                                   TY_CLOSURE
+                                   TY_CLOSURE TY_TAGGED
                                    V_META AM_META HM_META S_META C_META]]))
 
 (doc "Can `v` carry metadata at all?"
@@ -40,7 +40,8 @@
     (if (== t TY_EMPTY_LIST) (return true))
     (if (== t TY_LAZYSEQ) (return true))
     (if (== t TY_ATOM) (return true))
-    (if (== t TY_CLOSURE) (return true)))
+    (if (== t TY_CLOSURE) (return true))
+    (if (== t TY_TAGGED) (return true)))
   (return false))
 
 (doc "WHICH slot holds `v`'s metadata. Ask `has-meta` first.")
@@ -56,7 +57,11 @@
     (if (== t TY_LAZYSEQ) (return 2))
     (if (== t TY_ATOM) (return 1))
     (comment "THE LAST SLOT for a closure -- see the header.")
-    (if (== t TY_CLOSURE) (return (- (olen rt v) 1))))
+    (if (== t TY_CLOSURE) (return (- (olen rt v) 1)))
+    (comment "A TAGGED FORM keeps the tag at 0 and the form at 1, so metadata"
+             "goes after them. A raw 2, like `TY_SYM` and `TY_LAZYSEQ` above:"
+             "this function is where the slot numbers live.")
+    (if (== t TY_TAGGED) (return 2)))
   (return 0))
 
 (doc "The metadata, or nil when the value cannot carry any.")

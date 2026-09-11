@@ -9,7 +9,7 @@ const NIL: Value = Value(0xFFFF);
 const TY_SYM: u8 = 8; const TY_VEC: u8 = 9; const TY_ARRAYMAP: u8 = 16;
 const TY_HASHMAP: u8 = 17; const TY_SET: u8 = 18; const TY_CONS: u8 = 6;
 const TY_EMPTY_LIST: u8 = 7; const TY_LAZYSEQ: u8 = 3; const TY_ATOM: u8 = 32;
-const TY_CLOSURE: u8 = 27; const TY_STR: u8 = 2;
+const TY_CLOSURE: u8 = 27; const TY_STR: u8 = 2; const TY_TAGGED: u8 = 47;
 const V_META: u32 = 3; const AM_META: u32 = 1; const HM_META: u32 = 2;
 const C_META: u32 = 2;
 pub mod set { pub const S_META: u32 = 1; }
@@ -60,11 +60,13 @@ fn main() {
         rt.set(v, at, m);
         v
     };
-    let cases: [(u8, u32, u32); 10] = [
+    let cases: [(u8, u32, u32); 11] = [
         (TY_SYM, 4, 2), (TY_VEC, 5, V_META), (TY_ARRAYMAP, 4, AM_META),
         (TY_HASHMAP, 4, HM_META), (TY_SET, 3, set::S_META),
         (TY_CONS, 4, C_META), (TY_EMPTY_LIST, 1, 0), (TY_LAZYSEQ, 3, 2),
-        (TY_ATOM, 2, 1), (TY_CLOSURE, 6, 5)];
+        (TY_ATOM, 2, 1), (TY_CLOSURE, 6, 5),
+        // A TAGGED FORM: tag at 0, form at 1, metadata at 2.
+        (TY_TAGGED, 3, 2)];
     let mut found = String::new();
     for (t, n, at) in &cases {
         let v = mk(&mut rt, *t, *n, *at);
@@ -107,7 +109,7 @@ fn main() {
     static final long NIL = 0xFFFFL;
     static final int TY_SYM = 8, TY_VEC = 9, TY_ARRAYMAP = 16, TY_HASHMAP = 17,
                      TY_SET = 18, TY_CONS = 6, TY_EMPTY_LIST = 7, TY_LAZYSEQ = 3,
-                     TY_ATOM = 32, TY_CLOSURE = 27, TY_STR = 2;
+                     TY_ATOM = 32, TY_CLOSURE = 27, TY_STR = 2, TY_TAGGED = 47;
     static final int V_META = 3, AM_META = 1, HM_META = 2, C_META = 2;
     static final class Sets { static final int S_META = 1; }
     static final int S_META = Sets.S_META;
@@ -160,7 +162,8 @@ fn main() {
             {TY_SYM, 4, 2}, {TY_VEC, 5, V_META}, {TY_ARRAYMAP, 4, AM_META},
             {TY_HASHMAP, 4, HM_META}, {TY_SET, 3, S_META}, {TY_CONS, 4, C_META},
             {TY_EMPTY_LIST, 1, 0}, {TY_LAZYSEQ, 3, 2}, {TY_ATOM, 2, 1},
-            {TY_CLOSURE, 6, 5}};
+            {TY_CLOSURE, 6, 5},
+            {TY_TAGGED, 3, 2}};
         StringBuilder found = new StringBuilder();
         for (int[] c : cases) found.append(metaOf(rt, mk(rt, c[0], c[1], c[2])) == META ? 1 : 0);
         o.append("meta=").append(found).append(' ');
@@ -196,7 +199,7 @@ namespace Flint.Rt {
     internal static class Obj {
         internal const int TySym = 8, TyVec = 9, TyArraymap = 16, TyHashmap = 17,
                            TySet = 18, TyCons = 6, TyEmptyList = 7, TyLazyseq = 3,
-                           TyAtom = 32, TyClosure = 27, TyStr = 2;
+                           TyAtom = 32, TyClosure = 27, TyStr = 2, TyTagged = 47;
         internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
     }
     internal const int V_META = 3, AM_META = 1, HM_META = 2, C_META = 2;
@@ -250,7 +253,8 @@ namespace Flint.Rt {
             new int[]{Obj.TyArraymap, 4, AM_META}, new int[]{Obj.TyHashmap, 4, HM_META},
             new int[]{Obj.TySet, 3, S_META}, new int[]{Obj.TyCons, 4, C_META},
             new int[]{Obj.TyEmptyList, 1, 0}, new int[]{Obj.TyLazyseq, 3, 2},
-            new int[]{Obj.TyAtom, 2, 1}, new int[]{Obj.TyClosure, 6, 5}};
+            new int[]{Obj.TyAtom, 2, 1}, new int[]{Obj.TyClosure, 6, 5},
+            new int[]{Obj.TyTagged, 3, 2}};
         var found = new System.Text.StringBuilder();
         foreach (int[] c in cases) found.Append(MetaOf(rt, Mk(rt, c[0], c[1], c[2])) == META ? 1 : 0);
         o.Append("meta=").Append(found).Append(' ');

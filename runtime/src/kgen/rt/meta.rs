@@ -59,6 +59,9 @@ impl Rt {
         if t == TY_CLOSURE {
             return true;
         }
+        if t == TY_TAGGED {
+            return true;
+        }
         return false;
     }
     /// WHICH slot holds `v`'s metadata. Ask `has-meta` first.
@@ -94,6 +97,12 @@ impl Rt {
         // THE LAST SLOT for a closure -- see the header.
         if t == TY_CLOSURE {
             return self.olen(v) - 1;
+        }
+        // A TAGGED FORM keeps the tag at 0 and the form at 1, so metadata
+        // goes after them. A raw 2, like `TY_SYM` and `TY_LAZYSEQ` above:
+        // this function is where the slot numbers live.
+        if t == TY_TAGGED {
+            return 2;
         }
         return 0;
     }

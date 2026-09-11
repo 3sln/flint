@@ -11,12 +11,28 @@ import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 
 public final class Opaque {
-    /// A tagged form: a reader tag and the form it wrapped.
+    /// A tagged form: a reader tag, the form it wrapped, and its metadata.
+    /// 
+    /// THREE SLOTS, AND THE THIRD IS METADATA. A tagged literal could not carry
+    /// any -- `has-meta` named ten types and this was not one of them -- so
+    /// `(with-meta #inst "..." {:a 1})` answered the value back unchanged,
+    /// silently, which is what `with-meta` does for a type that cannot hold it.
+    /// 
+    /// IT IS NIL AT BIRTH and stays out of `=` and `hash`, which already read
+    /// slots 0 and 1 and nothing else: two tagged forms differing only in
+    /// metadata are `=` and hash alike, as Clojure requires. `count` still
+    /// answers 2, because that is the tag and the form -- a semantic answer
+    /// rather than a slot count, and adding a slot must not move it.
+    /// 
+    /// NOT A SUBSTITUTE FOR A TYPE. The slot exists because metadata is how a
+    /// protocol is extended per VALUE (`0005` §6), not because a tagged form is
+    /// how a user should define one; that question is open and this does not
+    /// answer it.
     public static long newTagged(Rt rt, long tag, long form) {
         int base = rt.mark();
         int ti = rt.push(tag);
         int fi = rt.push(form);
-        long v = Conc.newObj(rt, TY_TAGGED, 2);
+        long v = Conc.newObj(rt, TY_TAGGED, 3);
         // `new-obj` AND NOT `alloc`: it answers NIL when the heap refused.
         // BOTH PORTS CHECKED AND RUST DID NOT -- Rust's `new_opaque`
         // checked and its `new_tagged` did not, so the odd one out was a
@@ -31,6 +47,10 @@ public final class Opaque {
         // not survive one.
         rt.setSlot(Val.asHeap(v), 0, rt.r(ti));
         rt.setSlot(Val.asHeap(v), 1, rt.r(fi));
+        // EXPLICITLY NIL: `new-obj` gives no promise about slot contents,
+        // and a metadata slot holding whatever was there is a value the
+        // collector would try to trace.
+        rt.setSlot(Val.asHeap(v), 2, Val.NIL);
         rt.popTo(base);
         return v;
     }

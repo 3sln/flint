@@ -13,12 +13,28 @@ using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 
 public static class Opaque {
-    /// A tagged form: a reader tag and the form it wrapped.
+    /// A tagged form: a reader tag, the form it wrapped, and its metadata.
+    /// 
+    /// THREE SLOTS, AND THE THIRD IS METADATA. A tagged literal could not carry
+    /// any -- `has-meta` named ten types and this was not one of them -- so
+    /// `(with-meta #inst "..." {:a 1})` answered the value back unchanged,
+    /// silently, which is what `with-meta` does for a type that cannot hold it.
+    /// 
+    /// IT IS NIL AT BIRTH and stays out of `=` and `hash`, which already read
+    /// slots 0 and 1 and nothing else: two tagged forms differing only in
+    /// metadata are `=` and hash alike, as Clojure requires. `count` still
+    /// answers 2, because that is the tag and the form -- a semantic answer
+    /// rather than a slot count, and adding a slot must not move it.
+    /// 
+    /// NOT A SUBSTITUTE FOR A TYPE. The slot exists because metadata is how a
+    /// protocol is extended per VALUE (`0005` §6), not because a tagged form is
+    /// how a user should define one; that question is open and this does not
+    /// answer it.
     public static long NewTagged(Rt rt, long tag, long form) {
         int @base = rt.Mark();
         int ti = rt.Push(tag);
         int fi = rt.Push(form);
-        long v = Conc.NewObj(rt, Obj.TyTagged, 2);
+        long v = Conc.NewObj(rt, Obj.TyTagged, 3);
         // `new-obj` AND NOT `alloc`: it answers NIL when the heap refused.
         // BOTH PORTS CHECKED AND RUST DID NOT -- Rust's `new_opaque`
         // checked and its `new_tagged` did not, so the odd one out was a
@@ -33,6 +49,10 @@ public static class Opaque {
         // not survive one.
         rt.SetSlot(Val.AsHeap(v), 0, rt.R(ti));
         rt.SetSlot(Val.AsHeap(v), 1, rt.R(fi));
+        // EXPLICITLY NIL: `new-obj` gives no promise about slot contents,
+        // and a metadata slot holding whatever was there is a value the
+        // collector would try to trace.
+        rt.SetSlot(Val.AsHeap(v), 2, Val.Nil);
         rt.PopTo(@base);
         return v;
     }
