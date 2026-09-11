@@ -490,27 +490,30 @@ one: a protocol miss during load reported "value is not a function (nil, 3
 args)" instead of naming the missing implementation, which is a live defect on
 ordinary code.
 
-So the thing that kept `extend-method` in `clojure.core` is gone. It STILL
-stays, and the move was tried and reverted rather than argued about:
+So the thing that kept `extend-method` in `clojure.core` went with it, and
+`extend-method` has MOVED. `clojure.core` publishes exactly what Clojure does;
+`doc/manifest.edn` records its `:extra` as `#{}`.
 
-* It works. A top-level `(extend-protocol ...)` with no require answers
-  correctly once `extend-method` lives in `flint.protocols`.
-* The PIN has to be reordered for it. `flint.check` uses `extend-protocol` at
-  top level and was pinned SECOND, ahead of `flint.protocols` at fourth --
+Three things the move needed, in the order they were found:
+
+* IT WORKS, once `flint.protocols` is pinned. A top-level
+  `(extend-protocol ...)` with no require answers correctly.
+* THE PIN HAD TO BE REORDERED. `flint.check` uses `extend-protocol` at top
+  level and was pinned SECOND, ahead of `flint.protocols` at fourth --
   invisible while the callee was `clojure.core`, which is first whatever else
   happens. Pinning overrides the require graph, so a derived edge cannot fix a
-  pinned namespace: the list must be in dependency order itself. That
-  correction is worth keeping and was kept.
-* And it is an API CHANGE, which is what stopped it. `extend-method` is not
-  only reached through `defprotocol`'s expansion: `test/common/lang/extending`
-  calls it by its bare name, through `clojure.core`'s implicit refer. Moving it
-  means every direct caller must require `flint.protocols`. The manifest
-  records it as `:extra #{extend-method}` -- flint's own addition to that
-  namespace -- and whether to relocate a published name is not a tidying
-  decision.
+  pinned namespace: the list must be in dependency order itself. A first
+  attempt at the move shipped without this and broke `bin/flint test` on a
+  two-file project.
+* IT IS AN API CHANGE, and that is why it waited to be asked rather than
+  decided here. `extend-method` is not reached only through `defprotocol`'s
+  expansion: `test/common/lang/extending` called it by its bare name, through
+  `clojure.core`'s implicit refer. Every direct caller has to require
+  `flint.protocols` now, and that test does.
 
-What the experiment bought is that this is no longer BLOCKED. It is a choice,
-with a known cost and a known prerequisite.
+The first attempt was reverted for the third reason, and the move was made
+once it was asked for. What the experiment bought before that was certainty
+about the first two.
 
 ## THE GENERAL CASE: a compiler-emitted reference is not an edge
 
