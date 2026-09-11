@@ -16,6 +16,7 @@ use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kgen::rt::hash::*;
 use crate::kgen::rt::pike::*;
 use crate::kgen::rt::casetable::*;
+use crate::kgen::rt::hamt::*;
 
 impl Rt {
     /// Do the `nn` bytes of `nd` sit at (`leaf0`, `p0`) and onward?

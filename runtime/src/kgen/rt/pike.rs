@@ -15,6 +15,7 @@ use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kgen::rt::hash::*;
 use crate::kgen::rt::casetable::*;
+use crate::kgen::rt::hamt::*;
 
 #[inline]
 pub(crate) fn word_cp(v: u32) -> bool {

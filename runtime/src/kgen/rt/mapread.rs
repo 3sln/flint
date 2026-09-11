@@ -16,6 +16,7 @@ use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kgen::rt::hash::*;
 use crate::kgen::rt::pike::*;
 use crate::kgen::rt::casetable::*;
+use crate::kgen::rt::hamt::*;
 
 impl Rt {
     /// Where `k` sits in an array map, or `n` when it is not there.

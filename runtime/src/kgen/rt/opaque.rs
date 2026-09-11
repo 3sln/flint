@@ -16,6 +16,7 @@ use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kgen::rt::hash::*;
 use crate::kgen::rt::pike::*;
 use crate::kgen::rt::casetable::*;
+use crate::kgen::rt::hamt::*;
 
 impl Rt {
     /// A tagged form: a reader tag, the form it wrapped, and its metadata.

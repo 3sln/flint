@@ -15,6 +15,7 @@ using static global::_3sln.Flint.Kgen.Rt.Champ;
 using static global::_3sln.Flint.Kgen.Rt.Collnode;
 using static global::_3sln.Flint.Kgen.Rt.Copies;
 using static global::_3sln.Flint.Kgen.Rt.Find;
+using static global::_3sln.Flint.Kgen.Rt.Hamt;
 using static global::_3sln.Flint.Kgen.Rt.Nodeclass;
 using static global::_3sln.Flint.Kgen.Rt.Valeq;
 using static global::_3sln.Flint.Kgen.Rt.Valhash;

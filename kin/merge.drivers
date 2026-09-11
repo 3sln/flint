@@ -5,7 +5,7 @@ const NIL: Value = Value(0xFFFF);
 const CN_BASE: u32 = 2;
 const HASH_BITS: u32 = 5;
 impl Value { fn is_nil(self) -> bool { self.0 == 0xFFFF } }
-fn mask(h: u32, shift: u32) -> u32 { (h >> shift) & 0x1f }
+fn hash_mask(h: u32, shift: u32) -> u32 { (h >> shift) & 0x1f }
 struct Rt { h: Vec<u64>, bump: u64, roots: Vec<Value>, log: String }
 impl Rt {
     fn mark(&self) -> usize { self.roots.len() }
@@ -50,7 +50,7 @@ fn main() {
         static final long NIL = 0xFFFFL;
         static boolean isNil(long v) { return v == NIL; }
     }
-    static int mask(int h, int shift) { return (h >>> shift) & 0x1f; }
+    static int hashMask(int h, int shift) { return (h >>> shift) & 0x1f; }
     static final class Rt {
         long[] h = new long[200];
         void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
@@ -90,7 +90,7 @@ fn main() {
         internal const long Nil = 0xFFFFL;
         internal static bool IsNil(long v) { return v == Nil; }
     }
-    static int Mask(int h, int shift) { return (int)((uint) h >> shift) & 0x1f; }
+    static int HashMask(int h, int shift) { return (int)((uint) h >> shift) & 0x1f; }
     internal sealed class Rt {
         internal long[] h = new long[200];
         internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }

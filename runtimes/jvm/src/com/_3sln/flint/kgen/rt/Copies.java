@@ -11,6 +11,7 @@ import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Champ.*;
 import static com._3sln.flint.kgen.rt.Collnode.*;
+import static com._3sln.flint.kgen.rt.Hamt.*;
 
 public final class Copies {
     public static long bnCopyInsertEntry(Rt rt, long n, int bit, long key, long val, long edit) {

@@ -315,9 +315,14 @@
           ;; ports. `vecread` is the first generated source to name one.
           "use crate::vector::*;\n"
           "use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};\n"
-          ;; The modules whose exports a sibling names UNQUALIFIED. Two are
+          ;; The modules whose exports a sibling names UNQUALIFIED. Three are
           ;; free-function modules; the rest of the generated tree is methods,
           ;; and a method needs no import in Rust at all.
+          ;;
+          ;; THIS LIST IS HAND-KEPT AND JAVA'S IS NOT, which is a trap worth
+          ;; naming: a new free-function source compiles on both ports and
+          ;; fails only on Rust, with "cannot find function" at the CALLER.
+          ;; `hamt` was the third and cost exactly that.
           ;;
           ;; `casetable` is the third and a different kind: a `defdata` emits
           ;; module-level `static`s and `const`s, which a sibling reaches the
@@ -325,7 +330,7 @@
           ;; qualifies for Java and C# and does nothing for Rust -- right for
           ;; an inherent `impl` method, which is what it was written for, and
           ;; not a rule about data. An import is what Rust wants instead.
-          (str/join (for [s ["hash" "pike" "casetable"] :when (not= s self)]
+          (str/join (for [s ["hash" "pike" "casetable" "hamt"] :when (not= s self)]
                       (str "use crate::" (str/join "::" (:rust generated-root))
                            "::" (str/join "::" (first (ns-tail ns-name)))
                            "::" s "::*;\n"))))

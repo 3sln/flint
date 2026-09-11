@@ -16,6 +16,7 @@ use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kgen::rt::hash::*;
 use crate::kgen::rt::pike::*;
 use crate::kgen::rt::casetable::*;
+use crate::kgen::rt::hamt::*;
 
 impl Rt {
     pub fn merge_two(&mut self, shift: u32, k0: Value, v0: Value, h0: u32, k1: Value, v1: Value, h1: u32, edit: Value) -> Value {
@@ -40,8 +41,8 @@ impl Rt {
                 self.set(res, CN_BASE + 3, self.r(iv1));
             }
         } else {
-            let m0: u32 = mask(h0, shift);
-            let m1: u32 = mask(h1, shift);
+            let m0: u32 = hash_mask(h0, shift);
+            let m1: u32 = hash_mask(h1, shift);
             if m0 != m1 {
                 let dm: u32 = (1 << m0) | (1 << m1);
                 res = self.bn_new(dm, 0, self.r(ie));

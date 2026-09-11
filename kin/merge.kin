@@ -16,7 +16,7 @@
                                    comment mark push r pop-to nil? not + >= !=
                                    < shl bit-or Rt Value RootIx I32 NIL
                                    CN_BASE HASH_BITS]]
-            [flint.rt.maps :refer [hash-mask]]
+            [flint.rt.hamt :refer [hash-mask]]
             [flint.rt.champ :refer [bn-set-key bn-set-node bn-set-val]]
             [flint.rt.collnode :refer [bn-new cn-new]]))
 

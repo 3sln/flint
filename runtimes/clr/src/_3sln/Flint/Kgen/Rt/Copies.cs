@@ -13,6 +13,7 @@ using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Champ;
 using static global::_3sln.Flint.Kgen.Rt.Collnode;
+using static global::_3sln.Flint.Kgen.Rt.Hamt;
 
 public static class Copies {
     public static long BnCopyInsertEntry(Rt rt, long n, int bit, long key, long val, long edit) {

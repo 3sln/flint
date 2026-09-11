@@ -28,7 +28,7 @@
             [flint.rt.champ :refer [bn-datamap bn-key bn-node bn-nodemap
                                     bn-set-key bn-set-val bn-val]]
             [flint.rt.nodeclass :refer [is-bmnode node-size-class]]
-            [flint.rt.maps :refer [bitpos index-of]]
+            [flint.rt.hamt :refer [bitpos index-of]]
             [flint.rt.find :refer [cn-index-of]]
             [flint.rt.collnode :refer [bn-new cn-count cn-hash cn-key cn-new
                                        cn-val]]))

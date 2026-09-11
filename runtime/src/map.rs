@@ -79,22 +79,13 @@ pub(crate) const CN_BASE: u32 = 2;
 pub const HASH_BITS: u32 = 5;
 pub const HASH_WIDTH: u32 = 32;
 
-#[inline]
-// @kin:link:ns: flint.rt.maps
-// @kin:link:form:hash-mask: {:template "mask({0}, {1})"}
-pub(crate) fn mask(h: u32, shift: u32) -> u32 {
-    (h >> shift) & 0x1f
-}
-#[inline]
-// @kin:link:form:bitpos: {:template "bitpos({0}, {1})"}
-pub(crate) fn bitpos(h: u32, shift: u32) -> u32 {
-    1u32 << mask(h, shift)
-}
-#[inline]
-// @kin:link:form:index-of: {:template "index_of({0}, {1})"}
-pub(crate) fn index_of(bitmap: u32, bit: u32) -> u32 {
-    (bitmap & (bit - 1)).count_ones()
-}
+// `mask`, `bitpos` and `index_of` USED TO LIVE HERE, hand-written once per
+// runtime and declared to kin as linked forms, alongside primitives that
+// genuinely need a host. They never needed one: `(h >>> shift) & 0x1f`,
+// `1 << mask`, and `popcount(bitmap & (bit - 1))`. They sat on the linked side
+// because they are SHORT, which is a bad reason -- short is what makes a
+// mistake in them invisible. `kin/hamt.kin` generates all three now, and this
+// module's callers use the generated ones.
 
 impl Rt {
     // --- node primitives ---------------------------------------------------

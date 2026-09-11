@@ -15,6 +15,7 @@ use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kgen::rt::hash::*;
 use crate::kgen::rt::pike::*;
+use crate::kgen::rt::hamt::*;
 
 /// Simple case mapping, as [start end delta stride] runs: the uppercase section, then the lowercase one.
 pub static CASE_RANGES: [i32; 1528] = [

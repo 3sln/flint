@@ -63,13 +63,10 @@ public static class Maps {
 
     public const int HASH_BITS = 5, HASH_WIDTH = 32;
 
-    // @kin:link:ns: flint.rt.maps
-    // @kin:link:form:hash-mask: {:template "Mask({0}, {1})"}
-    internal static int Mask(int h, int shift) { return (h >>> shift) & 0x1f; }
-    // @kin:link:form:bitpos: {:template "Bitpos({0}, {1})"}
-    internal static int Bitpos(int h, int shift) { return 1 << Mask(h, shift); }
-    // @kin:link:form:index-of: {:template "IndexOf({0}, {1})"}
-    internal static int IndexOf(int bitmap, int bit) { return System.Numerics.BitOperations.PopCount((uint)(bitmap & (bit - 1))); }
+    // `Mask`, `Bitpos` and `IndexOf` USED TO LIVE HERE, hand-written once per
+    // runtime and declared to kin as linked forms, beside primitives that
+    // genuinely need a host. They never needed one. `kin/hamt.kin` generates
+    // all three now, and the generated sources use them from `Hamt`.
 
     internal static int Olen(Rt rt, long v) { return Obj.Len(rt.gc.sp, Val.AsHeap(v)); }
 

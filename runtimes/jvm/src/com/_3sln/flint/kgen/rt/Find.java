@@ -12,6 +12,7 @@ import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Champ.*;
 import static com._3sln.flint.kgen.rt.Collnode.*;
 import static com._3sln.flint.kgen.rt.Eqalloc.*;
+import static com._3sln.flint.kgen.rt.Hamt.*;
 import static com._3sln.flint.kgen.rt.Nodeclass.*;
 import static com._3sln.flint.kgen.rt.Valeq.*;
 

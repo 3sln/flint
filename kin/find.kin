@@ -54,7 +54,7 @@
             [flint.rt.collnode :refer [cn-count cn-hash cn-key cn-val]]
             [flint.rt.champ :refer [bn-datamap bn-key bn-node bn-nodemap
                                     bn-val]]
-            [flint.rt.maps :refer [bitpos index-of]]))
+            [flint.rt.hamt :refer [bitpos index-of]]))
 
 (declarefn flint.rt.valeq/val-eq)
 

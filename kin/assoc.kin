@@ -79,7 +79,7 @@
                                      bn-copy-set-value bn-inline-to-node]]
             [flint.rt.champ :refer [bn-datamap bn-key bn-node bn-nodemap
                                     bn-set-node bn-val]]
-            [flint.rt.maps :refer [bitpos index-of]]
+            [flint.rt.hamt :refer [bitpos index-of]]
             [flint.rt.find :refer [cn-index-of]]
             [flint.rt.collnode :refer [bn-new cn-copy-set-val cn-count cn-hash
                                        cn-key cn-new cn-val]]))

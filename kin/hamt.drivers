@@ -1,0 +1,49 @@
+--rust-head
+--rust
+fn main() {
+    // THE TOP BIT SET IS THE WHOLE POINT. Below 2^31 an arithmetic shift and a
+    // logical one agree, and a probe that only used small hashes would pass
+    // while proving nothing. At shift 30, `0x80000001` gives 2 logically and
+    // 30 arithmetically -- the two answers are different SLOTS, so a map built
+    // with the wrong one loses entries rather than slowing down.
+    let hi: u32 = 0x80000001;
+    let top: u32 = 0xF8000000;      // its top five bits are 31: bitpos = 1 << 31
+    println!("{} {} {} {} | {} {} {} | {} {} {}",
+             hash_mask(hi, 0), hash_mask(hi, 5),
+             hash_mask(hi, 25), hash_mask(hi, 30),
+             bitpos(hi, 0), bitpos(hi, 30), bitpos(top, 27),
+             index_of(0xFFFFFFFF, 1u32 << 31),
+             index_of(0x0F0F0F0F, 1u32 << 16),
+             index_of(0, 1));
+}
+--java-head
+--java
+    public static void main(String[] args) {
+        int hi = 0x80000001;
+        int top = 0xF8000000;
+        // `& 0xFFFFFFFFL` on the bitpos results: `1 << 31` is negative in a
+        // signed int and 2147483648 in Rust's u32, and the two must PRINT the
+        // same or the comparison is about Java's formatter, not the function.
+        System.out.println(hashMask(hi, 0) + " " + hashMask(hi, 5)
+            + " " + hashMask(hi, 25) + " " + hashMask(hi, 30)
+            + " | " + (bitpos(hi, 0) & 0xFFFFFFFFL)
+            + " " + (bitpos(hi, 30) & 0xFFFFFFFFL)
+            + " " + (bitpos(top, 27) & 0xFFFFFFFFL)
+            + " | " + indexOf(0xFFFFFFFF, 1 << 31)
+            + " " + indexOf(0x0F0F0F0F, 1 << 16)
+            + " " + indexOf(0, 1));
+    }
+--csharp-head
+--csharp
+    static void Main() {
+        int hi = unchecked((int)0x80000001);
+        int top = unchecked((int)0xF8000000);
+        System.Console.WriteLine(HashMask(hi, 0) + " " + HashMask(hi, 5)
+            + " " + HashMask(hi, 25) + " " + HashMask(hi, 30)
+            + " | " + (Bitpos(hi, 0) & 0xFFFFFFFFL)
+            + " " + (Bitpos(hi, 30) & 0xFFFFFFFFL)
+            + " " + (Bitpos(top, 27) & 0xFFFFFFFFL)
+            + " | " + IndexOf(unchecked((int)0xFFFFFFFF), 1 << 31)
+            + " " + IndexOf(0x0F0F0F0F, 1 << 16)
+            + " " + IndexOf(0, 1));
+    }

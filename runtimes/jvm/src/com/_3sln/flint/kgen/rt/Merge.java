@@ -11,6 +11,7 @@ import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Champ.*;
 import static com._3sln.flint.kgen.rt.Collnode.*;
+import static com._3sln.flint.kgen.rt.Hamt.*;
 
 public final class Merge {
     public static long mergeTwo(Rt rt, int shift, long k0, long v0, int h0, long k1, long v1, int h1, long edit) {
@@ -35,8 +36,8 @@ public final class Merge {
                 rt.setSlot(Val.asHeap(res), CN_BASE + 3, rt.r(iv1));
             }
         } else {
-            int m0 = mask(h0, shift);
-            int m1 = mask(h1, shift);
+            int m0 = hashMask(h0, shift);
+            int m1 = hashMask(h1, shift);
             if (m0 != m1) {
                 int dm = (1 << m0) | (1 << m1);
                 res = bnNew(rt, dm, 0, rt.r(ie));

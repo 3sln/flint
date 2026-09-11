@@ -27,7 +27,7 @@
                                    BN_EDIT]]
             [flint.rt.champ :refer [bn-datamap bn-key bn-node bn-nodemap
                                     bn-set-key bn-set-node bn-set-val bn-val]]
-            [flint.rt.maps :refer [index-of]]
+            [flint.rt.hamt :refer [index-of]]
             [flint.rt.collnode :refer [bn-new]]))
 
 (defn ^:pub ^:method ^Value bn-copy-insert-entry [^:mut ^Rt rt ^Value n ^I32 bit ^Value key ^Value val ^Value edit]

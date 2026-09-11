@@ -13,6 +13,7 @@ using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Champ;
 using static global::_3sln.Flint.Kgen.Rt.Collnode;
+using static global::_3sln.Flint.Kgen.Rt.Hamt;
 
 public static class Merge {
     public static long MergeTwo(Rt rt, int shift, long k0, long v0, int h0, long k1, long v1, int h1, long edit) {
@@ -37,8 +38,8 @@ public static class Merge {
                 rt.SetSlot(Val.AsHeap(res), CN_BASE + 3, rt.R(iv1));
             }
         } else {
-            int m0 = Mask(h0, shift);
-            int m1 = Mask(h1, shift);
+            int m0 = HashMask(h0, shift);
+            int m1 = HashMask(h1, shift);
             if (m0 != m1) {
                 int dm = (1 << m0) | (1 << m1);
                 res = BnNew(rt, dm, 0, rt.R(ie));

@@ -14,6 +14,7 @@ using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Champ;
 using static global::_3sln.Flint.Kgen.Rt.Collnode;
 using static global::_3sln.Flint.Kgen.Rt.Eqalloc;
+using static global::_3sln.Flint.Kgen.Rt.Hamt;
 using static global::_3sln.Flint.Kgen.Rt.Nodeclass;
 using static global::_3sln.Flint.Kgen.Rt.Valeq;
 
