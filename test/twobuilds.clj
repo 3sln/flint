@@ -130,7 +130,7 @@
 ;; bytes as its own mirror of the append to -87 as a shared walk. And the warning above stopped being hypothetical a
 ;; second time -- this floor is where that change was caught, after the one in
 ;; `test/threads.clj` had already been raised and this one had not.
-(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 320000))
+(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 321000))
 
 ;; --- absent, by name -------------------------------------------------------
 (doseq [sym ["flint_snapshot_capture" "flint_snapshot_restore" "flint_snapshot_ptr"

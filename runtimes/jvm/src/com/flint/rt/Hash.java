@@ -43,53 +43,8 @@ public final class Hash {
     /// The UTF-16 code units of a UTF-8 byte string, without materialising a
     /// host string. A code point above 0xFFFF becomes a surrogate PAIR, which
     /// is the whole reason this cannot just walk code points.
-    static int[] utf16(byte[] b) {
-        int[] out = new int[b.length + 1];
-        int n = 0, i = 0;
-        while (i < b.length) {
-            int c = b[i] & 0xFF, cp;
-            if (c < 0x80) { cp = c; i += 1; }
-            else if ((c & 0xE0) == 0xC0) { cp = ((c & 0x1F) << 6) | (b[i+1] & 0x3F); i += 2; }
-            else if ((c & 0xF0) == 0xE0) {
-                cp = ((c & 0x0F) << 12) | ((b[i+1] & 0x3F) << 6) | (b[i+2] & 0x3F); i += 3;
-            } else {
-                cp = ((c & 0x07) << 18) | ((b[i+1] & 0x3F) << 12)
-                   | ((b[i+2] & 0x3F) << 6) | (b[i+3] & 0x3F); i += 4;
-            }
-            if (n + 2 > out.length) {
-                int[] bigger = new int[out.length * 2];
-                System.arraycopy(out, 0, bigger, 0, n);
-                out = bigger;
-            }
-            if (cp < 0x10000) out[n++] = cp;
-            else {
-                int v = cp - 0x10000;
-                out[n++] = 0xD800 + (v >> 10);
-                out[n++] = 0xDC00 + (v & 0x3FF);
-            }
-        }
-        int[] exact = new int[n];
-        System.arraycopy(out, 0, exact, 0, n);
-        return exact;
-    }
 
-    /// `java.lang.String.hashCode()`: s[0]*31^(n-1) + ... over UTF-16 units.
-    public static int javaStringHash(byte[] b) {
-        int h = 0;
-        for (int u : utf16(b)) h = h * 31 + u;
-        return h;
-    }
 
-    /// `Murmur3.hashUnencodedChars`: two UTF-16 units per murmur word.
-    public static int hashUnencodedChars(byte[] b) {
-        int[] us = utf16(b);
-        int h1 = SEED;
-        for (int i = 0; i + 1 < us.length; i += 2) {
-            h1 = mixH1(h1, mixK1(us[i] | (us[i + 1] << 16)));
-        }
-        if ((us.length & 1) != 0) h1 ^= mixK1(us[us.length - 1]);
-        return fmix(h1, 2 * us.length);
-    }
 
     // `hashString` -- the UTF-16 walk -- was here and is gone. A string's
     // hash is `hashBytes` now, at every tier; see `Str.stringHash`.
@@ -107,16 +62,21 @@ public final class Hash {
     /// `ns` is the RAW Java string hash here, not the murmur'd one. That
     /// asymmetry is real, and the Rust records that it was found by solving for
     /// it against `'foo/bar`.
+    /// A symbol's hash, over BYTES like every other string hash here.
+    ///
+    /// It used to be `hashCombine(hashUnencodedChars(name), javaStringHash(ns))`
+    /// -- murmur over the name's UTF-16 units, combined with the RAW 31-walk
+    /// over the namespace's. That asymmetry was fitted to observed Clojure
+    /// output, not derived. Reaching it meant DECODING UTF-8 and allocating an
+    /// int array of UTF-16 units, on the hot path, because keywords are what
+    /// map keys are made of.
     public static int hashSymbol(byte[] ns, byte[] name) {
-        return hashCombine(hashUnencodedChars(name), ns == null ? 0 : javaStringHash(ns));
+        return hashCombine(hashBytes(name), ns == null ? 0 : hashBytes(ns));
     }
 
     public static int hashKeyword(byte[] ns, byte[] name) {
         return hashSymbol(ns, name) + 0x9e3779b9;
     }
 
-    /// Exposed for the test: a surrogate pair must count as TWO units, and a
-    /// port that got that wrong would still hash stably and still be wrong.
-    public static int[] utf16Test(byte[] b) { return utf16(b); }
 
 }

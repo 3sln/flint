@@ -42,48 +42,8 @@ public static class Hash {
     /// The UTF-16 code units of a UTF-8 byte string, without materialising a
     /// host string. A code point above 0xFFFF becomes a surrogate PAIR, which
     /// is the whole reason this cannot just walk code points.
-    static int[] Utf16(byte[] b) {
-        int[] outu = new int[b.Length + 1];
-        int n = 0, i = 0;
-        while (i < b.Length) {
-            int c = b[i] & 0xFF, cp;
-            if (c < 0x80) { cp = c; i += 1; }
-            else if ((c & 0xE0) == 0xC0) { cp = ((c & 0x1F) << 6) | (b[i+1] & 0x3F); i += 2; }
-            else if ((c & 0xF0) == 0xE0) {
-                cp = ((c & 0x0F) << 12) | ((b[i+1] & 0x3F) << 6) | (b[i+2] & 0x3F); i += 3;
-            } else {
-                cp = ((c & 0x07) << 18) | ((b[i+1] & 0x3F) << 12)
-                   | ((b[i+2] & 0x3F) << 6) | (b[i+3] & 0x3F); i += 4;
-            }
-            if (n + 2 > outu.Length) System.Array.Resize(ref outu, outu.Length * 2);
-            if (cp < 0x10000) outu[n++] = cp;
-            else {
-                int v = cp - 0x10000;
-                outu[n++] = 0xD800 + (v >> 10);
-                outu[n++] = 0xDC00 + (v & 0x3FF);
-            }
-        }
-        System.Array.Resize(ref outu, n);
-        return outu;
-    }
 
-    /// `java.lang.String.hashCode()`: s[0]*31^(n-1) + ... over UTF-16 units.
-    public static int JavaStringHash(byte[] b) {
-        int h = 0;
-        unchecked { foreach (int u in Utf16(b)) h = h * 31 + u; }
-        return h;
-    }
 
-    /// `Murmur3.hashUnencodedChars`: two UTF-16 units per murmur word.
-    public static int HashUnencodedChars(byte[] b) {
-        int[] us = Utf16(b);
-        int h1 = Seed;
-        for (int i = 0; i + 1 < us.Length; i += 2) {
-            h1 = MixH1(h1, MixK1(us[i] | (us[i + 1] << 16)));
-        }
-        if ((us.Length & 1) != 0) h1 ^= MixK1(us[us.Length - 1]);
-        unchecked { return Fmix(h1, 2 * us.Length); }
-    }
 
     // `HashString` -- the UTF-16 walk -- was here and is gone; see
     // `Str.StringHash`. `JavaStringHash` stays for the symbol hash.
@@ -99,14 +59,15 @@ public static class Hash {
     /// `ns` is the RAW Java string hash here, not the murmur'd one. That
     /// asymmetry is real, and the Rust records that it was found by solving for
     /// it against `'foo/bar`.
+    /// A symbol's hash, over BYTES like every other string hash here. It used
+    /// to combine murmur over the name's UTF-16 units with the RAW 31-walk over
+    /// the namespace's -- an asymmetry fitted to observed Clojure output, and
+    /// reached by decoding UTF-8 into UTF-16 on every call.
     public static int HashSymbol(byte[] ns, byte[] name) =>
-        HashCombine(HashUnencodedChars(name), ns == null ? 0 : JavaStringHash(ns));
+        HashCombine(HashBytes(name), ns == null ? 0 : HashBytes(ns));
 
     public static int HashKeyword(byte[] ns, byte[] name) {
         unchecked { return HashSymbol(ns, name) + unchecked((int) 0x9e3779b9); }
     }
 
-    /// Exposed for the test: a surrogate pair must count as TWO units, and a
-    /// port that got that wrong would still hash stably and still be wrong.
-    public static int[] Utf16Test(byte[] b) => Utf16(b);
 }

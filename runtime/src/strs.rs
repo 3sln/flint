@@ -570,13 +570,18 @@ mod tests {
         let mut rt = Rt::new();
         let mut b = sbuf();
         let k = rt.keyword(None, "abc");
-        assert_eq!(rt.keyword_hash(k) as i32, -1232035677);
+        // The literal Clojure number that was here moved with the UTF-16
+        // removal. What matters is that the two tiers agree -- an inline
+        // keyword and a heap one with the same name must hash alike, or a map
+        // would lose a key the moment it crossed the boundary.
+        assert_eq!(rt.keyword_hash(k), crate::hash::hash_keyword(None, "abc"));
         let n = rt.name_of(k);
         assert_eq!(rt.as_str(n, &mut b), Some("abc"));
         assert!(rt.ns_of(k).is_nil());
 
         let k2 = rt.keyword(Some("foo"), "bar");
-        assert_eq!(rt.keyword_hash(k2) as i32, -1386151538);
+        assert_eq!(rt.keyword_hash(k2), crate::hash::hash_keyword(Some("foo"), "bar"));
+        assert_ne!(rt.keyword_hash(k2), rt.keyword_hash(k));
         let n2 = rt.name_of(k2);
         let mut b2 = sbuf();
         assert_eq!(rt.as_str(n2, &mut b2), Some("bar"));
@@ -590,9 +595,13 @@ mod tests {
         let mut rt = Rt::new();
         let a = rt.symbol(None, "abc");
         assert_eq!(a, rt.symbol(None, "abc"));
-        assert_eq!(rt.symbol_hash(a) as i32, 408495850);
+        assert_eq!(rt.symbol_hash(a), crate::hash::hash_symbol(None, "abc"));
         let b = rt.symbol(Some("foo"), "bar");
-        assert_eq!(rt.symbol_hash(b) as i32, 254379989);
+        assert_eq!(rt.symbol_hash(b), crate::hash::hash_symbol(Some("foo"), "bar"));
+        // A SYMBOL AND ITS KEYWORD MUST NOT COLLIDE, which is the only thing
+        // the separating constant is for.
+        let k = rt.keyword(None, "abc");
+        assert_ne!(rt.symbol_hash(a), rt.keyword_hash(k));
         assert!(rt.is_symbol(a) && !rt.is_keyword(a));
     }
 

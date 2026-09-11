@@ -41,82 +41,20 @@ pub fn hash_double(d: f64) -> u32 {
 
 // --- UTF-16 views over UTF-8 ----------------------------------------------
 
-/// Iterate the UTF-16 code units of a UTF-8 string.
-pub struct Utf16Units<'a> {
-    s: &'a str,
-    iter: core::str::Chars<'a>,
-    pending: u16,
-}
+// `Utf16Units` WAS HERE. It decoded UTF-8 and re-encoded it as UTF-16 code
+// units, and existed only so that string, symbol and keyword hashes could
+// reproduce the numbers a JVM produces. All three walk bytes now, and string
+// COMPARISON -- its last other user -- walks bytes too, so nothing needs it.
 
-impl<'a> Utf16Units<'a> {
-    pub fn new(s: &'a str) -> Self {
-        Utf16Units { s, iter: s.chars(), pending: 0 }
-    }
-    /// Number of UTF-16 code units, i.e. Java's `String.length()`.
-    pub fn len_of(s: &str) -> usize {
-        s.chars().map(|c| c.len_utf16()).sum()
-    }
-}
 
-impl<'a> Iterator for Utf16Units<'a> {
-    type Item = u16;
-    fn next(&mut self) -> Option<u16> {
-        let _ = self.s;
-        if self.pending != 0 {
-            let p = self.pending;
-            self.pending = 0;
-            return Some(p);
-        }
-        let c = self.iter.next()?;
-        let cp = c as u32;
-        if cp < 0x10000 {
-            Some(cp as u16)
-        } else {
-            let v = cp - 0x10000;
-            self.pending = (0xDC00 + (v & 0x3FF)) as u16;
-            Some((0xD800 + (v >> 10)) as u16)
-        }
-    }
-}
-
-/// `java.lang.String.hashCode()`: s[0]*31^(n-1) + ... over UTF-16 units.
-pub fn java_string_hash(s: &str) -> u32 {
-    let mut h: u32 = 0;
-    for u in Utf16Units::new(s) {
-        h = h.wrapping_mul(31).wrapping_add(u as u32);
-    }
-    h
-}
-
-/// `Murmur3.hashUnencodedChars`: two UTF-16 units per murmur word.
-pub fn hash_unencoded_chars(s: &str) -> u32 {
-    let mut h1 = SEED;
-    let mut n: u32 = 0;
-    let mut prev: Option<u16> = None;
-    for u in Utf16Units::new(s) {
-        n += 1;
-        match prev {
-            None => prev = Some(u),
-            Some(p) => {
-                let k1 = (p as u32) | ((u as u32) << 16);
-                h1 = mix_h1(h1, mix_k1(k1));
-                prev = None;
-            }
-        }
-    }
-    if let Some(p) = prev {
-        h1 ^= mix_k1(p as u32);
-    }
-    fmix(h1, 2u32.wrapping_mul(n))
-}
 
 // --- the value-level entry points ------------------------------------------
 
-// `hash_string` -- `hash_int(java_string_hash(s))`, the UTF-16 walk -- was
-// here and is gone. A string's hash is `hash_bytes` now, at every tier; see
-// `Rt::string_hash`. `java_string_hash` STAYS, because a symbol's hash still
-// combines it with the murmur of the name, and a symbol's name is a different
-// question from a string's content.
+// `hash_string`, `java_string_hash` and `hash_unencoded_chars` were all here
+// and are all gone. Strings, symbols and keywords hash over BYTES now. The
+// note that stood here said `java_string_hash` "STAYS, because a symbol's hash
+// still combines it" -- that was true for exactly as long as symbols were
+// still matching Clojure's numbers.
 
 /// `h = h*31 + byte`, the walk `rope_hash` does over a tree's leaves.
 ///
@@ -132,12 +70,43 @@ pub fn hash_bytes(bs: &[u8]) -> u32 {
     hash_int(h)
 }
 
-/// `ns` is the *raw* Java string hash here, not the murmur'd one. That
-/// asymmetry is real, and was found by solving for it against `'foo/bar`.
+/// A symbol's hash, over BYTES like every other string hash here.
+///
+/// IT USED TO REPRODUCE CLOJURE'S NUMBER, and the shape of that is worth
+/// recording because it is what an artefact looks like from the inside:
+///
+///     hash_combine(hash_unencoded_chars(name), java_string_hash(ns))
+///
+/// murmur over the name's UTF-16 units, combined with the RAW 31-walk over the
+/// namespace's. The asymmetry was not derived from anything -- the comment
+/// that stood here said it "was found by solving for it against `'foo/bar`",
+/// which is fitting a formula to observed output.
+///
+/// flint strings are UTF-8, so every call decoded UTF-8 and synthesised UTF-16
+/// to get there. Keywords are the most frequently hashed values in a program
+/// -- they are the constant map keys -- so that decode sat on the hot path, and
+/// on the JVM it ALLOCATED an int array to hold the units.
+///
+/// The string hash stopped doing this earlier: Clojure changed its own hash in
+/// 1.6 and documents no stability across versions, so the numbers were never a
+/// contract. This is the same argument one type over. What a program can rest
+/// on is that equal values hash alike, and they do.
 pub fn hash_symbol(ns: Option<&str>, name: &str) -> u32 {
-    hash_combine(hash_unencoded_chars(name), ns.map_or(0, java_string_hash))
+    // A `match`, NOT `map_or(0, |s| ..)`. The closure form costs 917 bytes in
+    // the shipped module, measured: a closure is a `call_indirect` target and
+    // the shaker roots those CONSERVATIVELY, so it drags in whatever else
+    // shares the table. `test/threads.clj` records the same mechanism costing
+    // far more when one appeared in the printer.
+    let nh = match ns {
+        Some(s) => hash_bytes(s.as_bytes()),
+        None => 0,
+    };
+    hash_combine(hash_bytes(name.as_bytes()), nh)
 }
 
+/// A keyword hashes as its symbol would, plus a constant, so `:foo` and `'foo`
+/// do not collide. The constant came from Clojure's keyword hash and is now
+/// simply A constant -- any fixed non-zero value separates the two spaces.
 pub fn hash_keyword(ns: Option<&str>, name: &str) -> u32 {
     hash_symbol(ns, name).wrapping_add(0x9e3779b9)
 }
@@ -183,33 +152,44 @@ mod tests {
         assert_eq!(hash_bytes(b"") as i32, 0);
     }
 
+
     #[test]
-    fn java_string_hash_matches() {
-        assert_eq!(java_string_hash("foo") as i32, 101574);
-        assert_eq!(java_string_hash("x") as i32, 120);
-        assert_eq!(java_string_hash("") as i32, 0);
+    fn a_symbol_and_its_keyword_do_not_collide() {
+        // THE ONE THING THE CONSTANT IS FOR. `:foo` and `'foo` hash over the
+        // same bytes, so without a separator they would land together in every
+        // map that holds both.
+        assert_ne!(hash_symbol(None, "foo"), hash_keyword(None, "foo"));
+        assert_ne!(hash_symbol(Some("a"), "b"), hash_keyword(Some("a"), "b"));
     }
 
     #[test]
-    fn utf16_view_is_right_for_astral_characters() {
-        // U+1F600 GRINNING FACE is one code point, two UTF-16 units.
+    fn an_astral_name_hashes_over_its_bytes() {
+        // U+1F600 is one code point, four UTF-8 bytes, and two UTF-16 units.
+        // The hash is over the BYTES -- which is the whole change: no decode,
+        // no surrogate pair, nothing that knows what UTF-16 is.
         let s = "\u{1F600}";
         assert_eq!(s.len(), 4, "four UTF-8 bytes");
-        assert_eq!(Utf16Units::len_of(s), 2, "two UTF-16 units");
-        let units: alloc::vec::Vec<u16> = Utf16Units::new(s).collect();
-        assert_eq!(units, alloc::vec![0xD83D, 0xDE00]);
-        // Java: "😀".hashCode() == 0xD83D*31 + 0xDE00
-        assert_eq!(java_string_hash(s), (0xD83Du32).wrapping_mul(31).wrapping_add(0xDE00));
+        assert_eq!(hash_symbol(None, s), hash_combine(hash_bytes(s.as_bytes()), 0));
     }
 
     #[test]
-    fn symbols_and_keywords_match_clojure() {
-        assert_eq!(hash_symbol(None, "a") as i32, -482876059);
-        assert_eq!(hash_symbol(None, "abc") as i32, 408495850);
-        assert_eq!(hash_symbol(Some("foo"), "bar") as i32, 254379989);
-        assert_eq!(hash_keyword(None, "a") as i32, -2123407586);
-        assert_eq!(hash_keyword(None, "abc") as i32, -1232035677);
-        assert_eq!(hash_keyword(Some("foo"), "bar") as i32, -1386151538);
+    fn symbols_and_keywords_hash_by_their_parts() {
+        // THESE USED TO BE CLOJURE'S NUMBERS, six of them, asserted literally.
+        // They were the contract right up until the contract was that there is
+        // no contract: Clojure changed its own hash in 1.6 and documents no
+        // stability across versions.
+        //
+        // What a program can rest on is below. Equal names hash alike; a
+        // namespace changes the answer; and a different name gives a different
+        // one. Nothing here pins a NUMBER, because a number is what tied this
+        // to somebody else's implementation.
+        assert_eq!(hash_symbol(None, "abc"), hash_symbol(None, "abc"));
+        assert_ne!(hash_symbol(None, "abc"), hash_symbol(None, "abd"));
+        assert_ne!(hash_symbol(None, "bar"), hash_symbol(Some("foo"), "bar"));
+        assert_ne!(hash_symbol(Some("a"), "b"), hash_symbol(Some("b"), "a"));
+        // A keyword is its symbol plus the separator, and nothing else.
+        assert_eq!(hash_keyword(Some("foo"), "bar"),
+                   hash_symbol(Some("foo"), "bar").wrapping_add(0x9e3779b9));
     }
 
     #[test]
@@ -243,18 +223,26 @@ mod tests {
     }
 
     #[test]
-    fn map_hash_matches_clojure() {
-        // {:a 1} -> unordered over entries; an entry hashes as the vector [k v]
+    fn a_map_hash_is_order_independent_and_counts_its_entries() {
+        // The two literal Clojure numbers that were here moved when keyword
+        // hashing stopped synthesising UTF-16. The STRUCTURE did not move, and
+        // it is the part that has to hold: an entry hashes as the vector
+        // `[k v]`, and a map folds its entries with an UNORDERED step.
         let entry = |kh: u32, vh: u32| {
             let acc = ordered_step(ordered_step(1, kh), vh);
             mix_coll_hash(acc, 2)
         };
-        let e = entry(hash_keyword(None, "a"), hash_long(1));
-        assert_eq!(mix_coll_hash(unordered_step(0, e), 1) as i32, 1772842048);
-
-        let e2 = entry(hash_keyword(None, "b"), hash_long(2));
-        let acc = unordered_step(unordered_step(0, e), e2);
-        assert_eq!(mix_coll_hash(acc, 2) as i32, 161871944);
+        let a = entry(hash_keyword(None, "a"), hash_long(1));
+        let b = entry(hash_keyword(None, "b"), hash_long(2));
+        // BUILT IN EITHER ORDER, same answer. A map is unordered, so a hash
+        // that depended on insertion order would be wrong in a way no single
+        // number could reveal.
+        let ab = mix_coll_hash(unordered_step(unordered_step(0, a), b), 2);
+        let ba = mix_coll_hash(unordered_step(unordered_step(0, b), a), 2);
+        assert_eq!(ab, ba);
+        // And the count is part of it, so `{:a 1}` and `{:a 1 :b 2}` differ
+        // even before their entries do.
+        assert_ne!(mix_coll_hash(unordered_step(0, a), 1), ab);
     }
 
     #[test]

@@ -754,22 +754,22 @@ public static class Program {
         HEq("(hash \"日本語\")", Flint.Rt.Hash.HashBytes(HB("日本語")), 1534549342);
         Console.WriteLine("  ok   strings, over UTF-8 BYTES at every tier");
 
-        HEq("(hash 'a)", Flint.Rt.Hash.HashSymbol(null, HB("a")), -482876059);
-        HEq("(hash 'abc)", Flint.Rt.Hash.HashSymbol(null, HB("abc")), 408495850);
-        HEq("(hash 'foo/bar)", Flint.Rt.Hash.HashSymbol(HB("foo"), HB("bar")), 254379989);
-        HEq("(hash :a)", Flint.Rt.Hash.HashKeyword(null, HB("a")), -2123407586);
-        HEq("(hash :abc)", Flint.Rt.Hash.HashKeyword(null, HB("abc")), -1232035677);
-        HEq("(hash :foo/bar)", Flint.Rt.Hash.HashKeyword(HB("foo"), HB("bar")), -1386151538);
-        Console.WriteLine("  ok   symbols and keywords, namespace asymmetry included");
+        HEq("(hash 'a)", Flint.Rt.Hash.HashSymbol(null, HB("a")), 849029948);
+        HEq("(hash 'abc)", Flint.Rt.Hash.HashSymbol(null, HB("abc")), -1195848122);
+        HEq("(hash 'foo/bar)", Flint.Rt.Hash.HashSymbol(HB("foo"), HB("bar")), 1403326929);
+        HEq("(hash :a)", Flint.Rt.Hash.HashKeyword(null, HB("a")), -791501579);
+        HEq("(hash :abc)", Flint.Rt.Hash.HashKeyword(null, HB("abc")), 1458587647);
+        HEq("(hash :foo/bar)", Flint.Rt.Hash.HashKeyword(HB("foo"), HB("bar")), -237204598);
+        Console.WriteLine("  ok   symbols and keywords, over BYTES like strings");
 
-        // A surrogate pair must count as TWO units. If it counted as one the
-        // string hash would still be stable and still be wrong, which is
-        // exactly the failure this case exists to catch.
-        int[] u = Flint.Rt.Hash.Utf16Test(HB("\U0001F600"));
-        HEq("an emoji is two UTF-16 units", u.Length, 2);
-        HEq("  high surrogate", u[0], 0xD83D);
-        HEq("  low surrogate", u[1], 0xDE00);
-        Console.WriteLine("  ok   an astral-plane character is a surrogate PAIR");
+        // AN ASTRAL CHARACTER USED TO BE CHECKED AS A SURROGATE PAIR here,
+        // because the hash ran over UTF-16 units and counting a pair as one
+        // unit would have been stable and wrong. It runs over UTF-8 bytes now,
+        // so what matters is that four bytes are four bytes.
+        HEq("an emoji hashes over its four UTF-8 bytes",
+            Flint.Rt.Hash.HashBytes(HB("\U0001F600")),
+            Flint.Rt.Hash.HashBytes(new byte[]{0xF0, 0x9F, 0x98, 0x80}));
+        Console.WriteLine("  ok   an astral-plane character is FOUR BYTES");
 
         if (hashFails > 0) { Console.WriteLine("  " + hashFails + " failed"); return 1; }
         return 0;

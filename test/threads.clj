@@ -314,11 +314,36 @@
 ;; `java_string_hash` of the namespace with the murmur of the name, and that
 ;; is a different question from a string's content.
 ;;
-;; WHAT WOULD PAY IT BACK: giving symbols and keywords the same treatment
-;; would delete `Utf16Units`, `java_string_hash` and `hash_unencoded_chars`
-;; outright. Not done here, because murmur buys DISTRIBUTION for the values
-;; most used as map keys, and trading that away needs a measurement rather
-;; than a tidy-up.
+;; SIXTH RAISE, and the first where the PREDICTION IN THIS FILE WAS WRONG.
+;;
+;; The note above said giving symbols and keywords the same byte treatment as
+;; strings "would delete `Utf16Units`, `java_string_hash` and
+;; `hash_unencoded_chars` outright" and pay the budget back. It was done. It
+;; cost 901 bytes: 319 528 -> 320 429 on the same units.
+;;
+;; WHY THE PAYBACK WAS ZERO. The note two paragraphs up already knew, about the
+;; string half: "the shaker was never shipping them". Deleting code that does
+;; not ship saves nothing, and the symbol half was the same. What the change
+;; ADDED is `hash-bytes` reached from two more call sites, walk and murmur
+;; finaliser both, where the old path reached a bare 31-walk for the namespace
+;; and murmur for the name.
+;;
+;; A closure was suspected first, since this file records one costing far more
+;; in the printer -- `ns.map_or(0, |s| ..)` is a `call_indirect` target and the
+;; shaker roots those conservatively. Measured: 16 bytes. Not it.
+;;
+;; WHAT IT BOUGHT IS NOT SIZE. Keyword hashing no longer decodes UTF-8 into
+;; UTF-16 on the hot path -- on the JVM it ALLOCATED an int array per call, and
+;; keywords are what map keys are made of. And the numbers stop being fitted to
+;; somebody else's implementation: the old namespace/name asymmetry was, in its
+;; own words, "found by solving for it against `'foo/bar`".
+;;
+;; DISTRIBUTION WAS THE STATED RESERVATION, and it is answered by measurement
+;; rather than argument. `hash-bytes` is not a bare 31-walk: it ends in
+;; `hash-int`, which is murmur's full avalanche. Over 930 keyword-shaped names
+;; (`:id`, `:name`, `:parent-id`, ...) it gives 930 distinct hashes, and at
+;; every 5-bit CHAMP level all 32 buckets are occupied, worst 41 against an
+;; ideal of 29 -- ordinary variance for a random hash.
 ;;
 ;; FIFTH RAISE IN ONE SESSION. The four before it are above.
 ;; THE SESSION TOTAL, because a budget raised once per fix is not a budget:
@@ -403,7 +428,7 @@
 ;; slice, which is what makes the rooting above expressible in all three at
 ;; once. It is a fixed cost, and the next generated caller of a value pays none
 ;; of it.
-            (< pure-size 320000))
+            (< pure-size 321000))
 
 ;; RE-BASELINED AGAIN, and this one is a decision rather than a drift:
 ;; 300 281 against 280 781, and 18 917 of it is ONE ARM IN THE WIRE CODEC.

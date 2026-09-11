@@ -53,22 +53,21 @@ public class RtHash {
     // because there a byte IS a unit. Only the last row moved, which is the
     // whole width of the divergence from Clojure's numbers.
 
-    eq("(hash 'a)", Hash.hashSymbol(null, b("a")), -482876059);
-    eq("(hash 'abc)", Hash.hashSymbol(null, b("abc")), 408495850);
-    eq("(hash 'foo/bar)", Hash.hashSymbol(b("foo"), b("bar")), 254379989);
-    eq("(hash :a)", Hash.hashKeyword(null, b("a")), -2123407586);
-    eq("(hash :abc)", Hash.hashKeyword(null, b("abc")), -1232035677);
-    eq("(hash :foo/bar)", Hash.hashKeyword(b("foo"), b("bar")), -1386151538);
-    System.out.println("  ok   symbols and keywords, namespace asymmetry included");
+    eq("(hash 'a)", Hash.hashSymbol(null, b("a")), 849029948);
+    eq("(hash 'abc)", Hash.hashSymbol(null, b("abc")), -1195848122);
+    eq("(hash 'foo/bar)", Hash.hashSymbol(b("foo"), b("bar")), 1403326929);
+    eq("(hash :a)", Hash.hashKeyword(null, b("a")), -791501579);
+    eq("(hash :abc)", Hash.hashKeyword(null, b("abc")), 1458587647);
+    eq("(hash :foo/bar)", Hash.hashKeyword(b("foo"), b("bar")), -237204598);
+    System.out.println("  ok   symbols and keywords, over BYTES like strings");
 
-    // A surrogate pair must count as TWO units. If it counted as one the
-    // string hash would still be stable and still be wrong, which is exactly
-    // the failure this case exists to catch.
-    int[] u = Hash.utf16Test(b("😀"));
-    eq("an emoji is two UTF-16 units", u.length, 2);
-    eq("  high surrogate", u[0], 0xD83D);
-    eq("  low surrogate", u[1], 0xDE00);
-    System.out.println("  ok   an astral-plane character is a surrogate PAIR");
+    // AN ASTRAL CHARACTER USED TO BE CHECKED AS A SURROGATE PAIR here, because
+    // the hash ran over UTF-16 units and counting a pair as one unit would have
+    // been stable and wrong. It runs over UTF-8 bytes now, so what matters is
+    // that four bytes are four bytes.
+    eq("an emoji hashes over its four UTF-8 bytes", Hash.hashBytes(b("\uD83D\uDE00")),
+       Hash.hashBytes(new byte[]{(byte) 0xF0, (byte) 0x9F, (byte) 0x98, (byte) 0x80}));
+    System.out.println("  ok   an astral-plane character is FOUR BYTES");
 
     if (fails > 0) { System.out.println("  " + fails + " failed"); System.exit(1); }
   }
