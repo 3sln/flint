@@ -1864,6 +1864,28 @@ impl Rt {
             let f = self.image.init[i];
             let c = self.make_closure(f, &[]);
             let _ = self.invoke(c, &[]);
+            // AND A GENUINE PARK IS REFUSED, where a yield is merely impossible.
+            //
+            // The paragraph above disarms preemption so nothing YIELDS in here.
+            // A park is the other thing: a top-level form that asks the HOST
+            // comes back with `park_on` set and no way to be resumed, because
+            // this loop is not re-entrant -- there is no saved position to come
+            // back to. Discarding it is what `let _` does, and the result was a
+            // half-built program that reported "the entry function returned
+            // nil" for an entry that was never reached.
+            //
+            // `0027` says a sandbox that cannot ask is TOLD so rather than
+            // parked. This is the same sentence one phase earlier: it cannot
+            // ask HERE, so say that, at the form that asked.
+            if !self.park_on.is_nil() && !self.failed() {
+                self.park_on = NIL;
+                self.throw_str(
+                    "IllegalStateException",
+                    "a top-level form asked the host while the program was still \
+                     initialising, and cannot wait for the answer there. Move the \
+                     call into a function the entry reaches.",
+                );
+            }
             if self.failed() {
                 self.set_slice_end(slice);
                 self.pop_to(base);

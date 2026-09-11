@@ -205,25 +205,29 @@
   (check "and does not fall back to the nil-callee message"
          (not (str/includes? (:out r) "is not a function")) (:out r)))
 
-;; AND A GRANTED ONE AT LOAD TIME DOES NOT WORK, which is NOT the ordering bug
-;; above and is recorded rather than asserted away. The same call succeeds from
-;; `go` -- every granted row further up does exactly that -- and from a
-;; top-level `def` it never returns a value the entry can render. Reaching the
-;; server means PARKING on a port, and whether a top-level form may park during
-;; initialisation is a question this file cannot answer on its own.
+;; AND A GRANTED ONE AT LOAD TIME IS REFUSED, WITH THE REASON. This used to be
+;; a silent half-built program: a top-level form that asks the HOST comes back
+;; parked, `run_program`'s initialiser loop discarded the park -- it is not
+;; re-entrant, so there is no position to resume to -- and the entry was never
+;; reached. What the user saw was "the entry function did not return a string",
+;; about an entry that returned a constant.
+;;
+;; The comment above that loop already said this happens for a YIELD, and
+;; disarms preemption so none can occur. A park is the other thing and was
+;; still discarded. `0027` says a sandbox that cannot ask is TOLD so rather
+;; than parked; this is that sentence one phase earlier.
+;;
+;; IN-SANDBOX PARKING AT LOAD TIME IS UNAFFECTED, which is the line between the
+;; two: a channel round-trip in a top-level `def` parks and RESUMES inside the
+;; same call, so `park_on` is nil by the time the initialiser returns. Only a
+;; park nothing can resume is refused.
 (let [r (sh proj flint "run" ":path" "." ":fn" "app.c/go" ":with" "[fs]")]
-  (check "a GRANTED virtual call at load time is a known gap, not a nil callee"
-         (not (str/includes? (:out r) "is not a function")) (:out r))
-  ;; AND THE MESSAGE SAYS WHERE TO LOOK. It used to read "the entry function
-  ;; did not return a string (no render shim?)", which guesses that the program
-  ;; returned something unprintable -- and sent three separate attempts to the
-  ;; entry, whose return type is fine. The entry never RAN. Nil is realistically
-  ;; the only way to reach that branch at all: a number renders, and even a
-  ;; function renders as `#<unprintable>`.
-  (check "and the message names nil and points at initialisation"
-         (and (str/includes? (:out r) "returned nil")
-              (str/includes? (:out r) "initialisation"))
-         (:out r)))
+  (check "a GRANTED virtual call at load time is refused, not silently broken"
+         (str/includes? (:out r) "still initialising") (:out r))
+  (check "and the refusal says what to do instead"
+         (str/includes? (:out r) "Move the call into a function") (:out r))
+  (check "and it is not the old message about the entry's return type"
+         (not (str/includes? (:out r) "did not return a string")) (:out r)))
 
 (if (pos? @fails)
   (do (println "sysns:" @fails "FAILURES") (System/exit 1))

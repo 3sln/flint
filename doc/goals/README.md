@@ -551,38 +551,37 @@ builtins compiled to native calls, with no `flint.virtual` behind them. Using
 that set for this trigger would add an edge for every `(:require [flint.rt])`
 and be wrong.
 
-AND A SEPARATE GAP CAME OUT OF TESTING IT, recorded rather than asserted away.
-The ordering fix makes an UNGRANTED load-time virtual call refuse for the right
-reason -- "no system port" instead of a nil callee. A GRANTED one at load time
-still does not work: it never returns a value the entry can render, while the
-same call from a function body succeeds, as every granted row in
-`test/sysns.clj` shows. It has a row asserting only that it is not a nil
-callee.
+AND A SEPARATE DEFECT CAME OUT OF TESTING IT, since fixed. A GRANTED virtual
+call at load time did not work: it produced no value the entry could render,
+while the same call from a function body succeeded.
 
-IT IS NOT PARKING IN GENERAL, which was the first guess and is wrong. A
-channel round-trip at load time -- `(p/send a 7)` then `(p/receive b)` in a
-top-level `def`, which parks and resumes entirely inside the sandbox -- answers
-`[:got 7]`. So a top-level form MAY park. What fails is reaching the HOST
-during initialisation.
+THE CAUSE WAS DOCUMENTED THREE LINES ABOVE THE LINE THAT CAUSED IT.
+`run_program`'s initialiser loop carries a paragraph explaining that a YIELD
+inside an initialiser used to be discarded by its `let _ = self.invoke(..)`,
+leaving a half-built program that reported "the entry function did not return a
+string" for an entry returning a constant. It disarms preemption so no yield can
+happen. A PARK is the other thing, and was still discarded -- the loop is not
+re-entrant, so there is no position to resume to.
 
-AND THE ENTRY NEVER RUNS, which took one more probe to establish and rules out
-the obvious reading. With the load-time call kept reachable and the entry
-returning a LITERAL -- `(defn go [_] (if (= flag 1) "one" "zero"))` -- it still
-fails, so this is not about rendering the value the call produced. Nothing
-errors: `rendered` reports "did not return a string" only after the error
-branch above it declines, so the program neither raised nor completed.
+It is refused now, at the form that asked:
 
-THE MESSAGE IS THE FIRST THING TO FIX whatever the cause is. Exit 1 and "the
-entry function did not return a string (no render shim?)" sends the reader to
-an entry whose return type is fine, and cost several probes here before the
-literal-return one showed the entry was never reached at all. This section has
-now watched a misleading diagnostic send three separate attempts to the wrong
-pass; that is the pattern, not the coincidence.
+    IllegalStateException: a top-level form asked the host while the program
+    was still initialising, and cannot wait for the answer there. Move the call
+    into a function the entry reaches.
 
-WHETHER IT SHOULD WORK AT ALL IS THE DESIGN QUESTION. `0027` makes "cannot ask"
-an honest refusal rather than a park, and a program reaching the embedder while
-its own namespaces are still initialising may be a thing to REFUSE clearly
-rather than support. Either answer is better than the present one.
+Which is `0027` one phase earlier: a sandbox that cannot ask is TOLD so rather
+than parked.
+
+THE LINE IS "CAN IT BE RESUMED", not "did it park". A channel round-trip in a
+top-level `def` parks and resumes inside the same call, so `park_on` is nil
+when the initialiser returns, and it still answers `[:got 7]`. Only a park
+nothing can resume is refused.
+
+AND IT IS NOT PARKING IN GENERAL was the first guess, and wrong; the second
+guess, that the returned value could not be rendered, was also wrong -- an
+entry returning a LITERAL failed identically, which is what showed the entry
+was never reached. Two wrong readings before the right one, both of them
+plausible, both cheap to disprove.
 
 A TRAP WORTH KEEPING: the first version of that test had `go` ignore the
 top-level `def`, and it passed. The linker had dropped the def as unreachable,
