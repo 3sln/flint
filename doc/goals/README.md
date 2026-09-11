@@ -556,9 +556,18 @@ The ordering fix makes an UNGRANTED load-time virtual call refuse for the right
 reason -- "no system port" instead of a nil callee. A GRANTED one at load time
 still does not work: it never returns a value the entry can render, while the
 same call from a function body succeeds, as every granted row in
-`test/sysns.clj` shows. Reaching the server means PARKING on a port, and
-whether a top-level form may park during initialisation is a different question
-from load ORDER. It has a row asserting only that it is not a nil callee.
+`test/sysns.clj` shows. It has a row asserting only that it is not a nil
+callee.
+
+IT IS NOT PARKING IN GENERAL, which was the first guess and is wrong. A
+channel round-trip at load time -- `(p/send a 7)` then `(p/receive b)` in a
+top-level `def`, which parks and resumes entirely inside the sandbox -- answers
+`[:got 7]`. So a top-level form MAY park. What fails is reaching the HOST
+during initialisation, and the failure is silent past one line: exit 1 and "the
+entry function did not return a string (no render shim?)", which is about the
+entry and not about what went wrong. Whatever the cause, the message is the
+first thing to fix: it sends the reader to the entry's return type, which is
+fine.
 
 A TRAP WORTH KEEPING: the first version of that test had `go` ignore the
 top-level `def`, and it passed. The linker had dropped the def as unreachable,
