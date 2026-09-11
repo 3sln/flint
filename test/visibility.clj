@@ -442,3 +442,38 @@
               [{:prefix "libx/" :name 'libx :grants #{:host}} {:prefix "app/" :name 'app}]
               #{"flint/request"}))
        "which is how the standard library reaches the host, and the only how")
+
+;; A BUILTIN IS NEVER "THE SAME WORKSPACE" AS ITS CALLER.
+;;
+;; The second hole in this check, and it made the first fix inert in exactly
+;; the configuration that matters. `guard-check!` skips a reference within one
+;; workspace, because a project is not a security boundary against itself. A
+;; builtin belongs to no project: `flint.native` is a namespace no source
+;; declares, so its workspace came back nil -- the ANONYMOUS one -- and any
+;; caller that was also anonymous compared EQUAL to it and was never checked.
+;;
+;; Which is what the SDK does by default: it names the library's workspace and
+;; leaves the embedder's own files unnamed unless the embedder says otherwise.
+;; So the rung that matters when nobody has configured anything was the rung
+;; that was off. The VAR guard was unaffected, because the library it protects
+;; is named and that edge crosses -- which is why this was invisible.
+(def lib-file {"flint/helper.cljc" "(ns flint.helper)\n(defn h [x] x)"})
+
+(defn anon-outcome [ws]
+  (guard-outcome
+   (merge lib-file
+          {"app/main.cljc" "(ns app.main (:require [flint.helper])) (defn main [_] (flint.rt/request \"config\"))"})
+   ws #{"flint/request"}))
+
+(check "anonymous code is refused a guarded builtin when the library is named"
+       (= :refused (anon-outcome [{:prefix "flint/" :name 'flint/flint :grants #{:host}}]))
+       "this compiled: unnamed caller and unnamed builtin were one workspace")
+
+(check "but a program that names NO workspace at all is still checked nowhere"
+       (not= :refused (anon-outcome []))
+       "declare none and nothing is checked -- what this was before any of it")
+
+(check "and a named caller holding nothing is refused, as before"
+       (= :refused (anon-outcome [{:prefix "flint/" :name 'flint/flint :grants #{:host}}
+                                  {:prefix "app/" :name 'app}]))
+       "the row that already passed, kept so a fix cannot trade one for the other")

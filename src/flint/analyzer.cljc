@@ -321,7 +321,37 @@
               ws (:workspaces c)
               w-here (get-in ws [here :workspace])
               w-there (get-in ws [there :workspace])]
-          (when (not= w-here w-there)
+          ;; A BUILTIN IS NEVER "THE SAME WORKSPACE" AS ITS CALLER, and this is
+          ;; the second hole found in this check rather than the first.
+          ;;
+          ;; The same-workspace exemption exists because a project is not a
+          ;; security boundary against itself. A builtin belongs to no project:
+          ;; `there` is `flint.native`, which no source declares, so `w-there`
+          ;; came back nil -- the ANONYMOUS workspace -- and any caller that
+          ;; was also anonymous compared equal to it and was never checked.
+          ;;
+          ;; That is not a corner. It is what the SDK does by default: it names
+          ;; the LIBRARY's workspace and leaves the embedder's own files
+          ;; unnamed unless the embedder says otherwise. Measured:
+          ;;
+          ;;   app anonymous, only the lib named -> compiled
+          ;;   app named, holding nothing        -> refused
+          ;;
+          ;; The var guard was unaffected, because the library it protects IS
+          ;; named, so that edge crosses. Only the builtin -- the rung under
+          ;; it, and the one that matters when nobody has configured anything
+          ;; -- was inert exactly where the configuration is thinnest.
+          ;;
+          ;; THE ESCAPE FOR A PROGRAM WITH NO WORKSPACES AT ALL STAYS. "Declare
+          ;; none and nothing is checked" is what this was before any of it
+          ;; existed, and a CLI build of one's own program should not need a
+          ;; capability table. The test is whether the program names any
+          ;; workspace ANYWHERE: once it is using the mechanism, code that was
+          ;; left unnamed is a workspace holding nothing, not a peer of the
+          ;; runtime.
+          (when (if builtin?
+                  (some :workspace (vals ws))
+                  (not= w-here w-there))
             ;; What is MISSING, not the whole guard: naming three capabilities
             ;; the caller already holds helps nobody find the one it does not.
             ;; A VAR'S OWN GUARD DOES NOT AUTHORISE ITS BODY, and this is
