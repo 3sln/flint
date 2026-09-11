@@ -214,6 +214,65 @@ So this is recorded and not done. It is a real instance of the pattern and the
 price is real too; whether ~20 lines of shared structure is worth a per-node
 branch is a judgement about this runtime, not a cleanup.
 
+## What is left on the table, audited
+
+A body-by-body pass over the hand-written trees, 2026-09. Ranked, with the
+strongest first. Everything here was confirmed by reading all three
+implementations, not by matching names.
+
+**1. NaN-box pack and unpack.** `from_f64`/`as_f64` (`value.rs`),
+`ofDouble`/`asDouble` (`Val.java`), `OfDouble`/`AsDouble` (`Val.cs`). Nine to
+thirteen lines each. Pure bit work on a word already in a register, plus the
+canonicalisation of a NaN whose payload would collide with the tag range.
+
+THIS IS THE `hash-mask` ARGUMENT AGAIN, and more sharply. Each runtime spells
+the same shift differently BECAUSE ITS LANGUAGE WOULD OTHERWISE GET IT WRONG:
+
+    Rust   b >> 48            u64, already logical
+    Java   (b >>> 48)         `>>` sign-extends; the file says so
+    C#     ((ulong)b >> 48)   cast first, same reason
+
+Three correct answers, independently arrived at, to one trap. The Java comment
+records what the wrong one does: "every tag comes back as -1".
+
+**2. The Pike VM's simulator core.** `class-hit`, `add-thread`, `consumes`,
+`run-over` -- about 150 lines, over flat integer arrays already in memory.
+`class-hit` was verified line-for-line. CAVEAT, unresolved: it recurses and
+grows a thread list, and whether kin's vocabulary reaches that has not been
+checked. Algorithmically portable is not the same as portable.
+
+**3. Numeric three-way compare.** `num-cmp` / `cmp` / `Cmp`. Integers first,
+then `f64` with NaN sorting equal. Its siblings `num-eq` and `num-hash` are
+already generated; this is the leftover.
+
+**4. Object-size arithmetic.** `layout-of`, `align8`, `size-for`. Arithmetic on
+`(ty, len)` with no memory parameter, sitting in a file that is otherwise
+genuine host-bound accessors -- which is why it was easy to miss.
+
+**5. `conj`'s dispatch, but NOT a drop-in.** Most arms match. Two do not: the
+map-onto-map arm uses a closure natively (`map-for-each`) and a seq walk on the
+ports, and the variadic shape differs -- native re-tests the type per argument,
+the ports hoist the test out of the loop. Porting means choosing one shape and
+changing two runtimes to match. The closure half is blocked on kin having no
+closures, which is a known hole.
+
+Plus a handful of genuine one-to-three-liners (`take-opaque-id`, `hash-double`,
+`ex-matches`, `vec-from-roots`) where the round trip probably costs more than
+the duplication, worth batching only if kin work touches that area anyway.
+
+WHAT THE AUDIT RULED OUT, so it is not re-done. Memory, the collector, threads,
+AOT, the codec, snapshots and the image reader are host-bound as expected.
+`abi.rs` is wasm-only and has no counterpart. Most of `map`, `set`, `table`,
+`seqs` and `Bytes` turned out to be ALREADY generated, with only layout
+constants and wrappers left by hand.
+
+And two traps worth keeping. `map-for-each` is not an oversight -- the
+alternative was measured at 1.73x time and 12,500x peak roots, so the closure
+is deliberate. And `utf16-cmp` looks identical down to its doc comment while
+being a different mechanism underneath: .NET and Java strings ARE UTF-16 and
+index directly, while Rust has to synthesise code units. Same specification,
+asymmetric work, correctly not a candidate.
+
 WHAT THIS COUNT IS NOT. It measures the surface kin CALLS INTO, not everything
 written three times. The runtimes also hold parallel hand-written code kin
 never sees -- memory, the collector, threads, AOT, the codec -- and most of
