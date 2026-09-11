@@ -340,6 +340,44 @@ them to, because it does not depend on an ecosystem accepting git. It depends
 only on a repository CONTAINING a manifest once it is on disk, which is exactly
 what separating the scanners from the downloaders buys.
 
+### Design: a first-party pod registry, in this repo
+
+Recorded 2026-09-11. This is the piece that makes "the drivers are pods" work
+without depending on anybody else's infrastructure.
+
+**The repo houses its own small pod registry** — not the official one, and not
+a competitor to it. It lists the pods that live HERE: the npm, Maven and git
+drivers, and whatever else moves out of the CLI. The CLI links it into pod
+resolution automatically, so a first-party driver is found without a project
+configuring anything and without reaching a third-party service.
+
+**THIS IS WHAT LETS THE DEPENDENCIES LEAVE.** The section below shows the CLI's
+entire third-party surface exists to serve dependency fetching. Those crates
+cannot move out while the drivers have nowhere to be published to — a driver
+that only exists on the official registry makes flint's own build depend on
+that registry being up, and one that ships inside the binary defeats the point.
+A registry in the repo is the third answer.
+
+**There is precedent for first-party native components here.** `units-src/`
+holds six Rust crates built by `bin/build-units` into `units/`. The pattern of
+"the repo carries source for native pieces the toolchain builds" already
+exists; this extends it.
+
+**THE OPEN QUESTION IS DISTRIBUTION, and it is a real difference from
+`units-src`.** Those crates compile to wasm object files, which are portable:
+one build serves every host. A pod is a NATIVE EXECUTABLE, so the same source
+produces a different artifact per platform. That leaves a choice nobody has
+made yet:
+
+* build from source on first use — no artifacts to host, but every user needs
+  a Rust toolchain, which flint does not otherwise require;
+* publish prebuilt binaries per platform — a real release process, and the
+  registry has to say which artifact matches which host;
+* or a hybrid: prebuilt where available, build from source as the fallback.
+
+Worth deciding before the registry format is fixed, because the manifest has to
+carry whatever the answer needs.
+
 ### Design: the heavy parts of the CLI should be pods too
 
 Recorded 2026-09-11, generalising the dependency plan above: anything heavy and
