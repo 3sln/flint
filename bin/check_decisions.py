@@ -1,103 +1,73 @@
-import os, re, sys
+#!/usr/bin/env python3
+"""Every decision citation in the tree resolves to a real section.
 
-HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DIR  = os.path.join(HERE, 'doc', 'decisions')
+WHAT THIS USED TO CHECK, AND WHY IT CAUGHT NOTHING. Until 2026-09-11 each
+decision lived in its own file with a status banner, and an index carried a
+status row per decision. This script asserted the two AGREED, with a comment
+saying the failure it catches "is not cosmetic: the index has already been
+wrong in both directions".
 
-# Order matters: the longer phrase has to win over the substring it contains.
-BANNER_RULES = [
-    ('SUPERSEDED',    'superseded'),
-    ('SHELVED',       'shelved'),
-    ('NOT BUILT',     'roadmap'),
-    ('QUEUED',        'queued'),
-    ('PARTLY BUILT',  'partial'),
-    ('PART 1 IS BUILT','partial'),
-    ('LIVE',          'live'),
-    ('BUILT',         'shipped'),
-    ('DONE',          'shipped'),
-]
-ROW_RULES = [
-    ('superseded',     'superseded'),
-    ('SHELVED',        'shelved'),
-    ('Partly shipped', 'partial'),
-    ('Part 1 shipped', 'partial'),
-    ('Roadmap',        'roadmap'),
-    ('Queued',         'queued'),
-    ('Live',           'live'),
-    ('Shipped',        'shipped'),
-    ('Done',           'shipped'),
-]
+It never fired, and it could not have. The index rows were near-verbatim
+copies of the banners they were checked against, so the two agreed by
+construction -- including when both were false. A verification pass found one
+decision opening "NOT BUILT -- a spike, nothing in the tree uses it yet"
+beside 89 sources generating 88 modules, another saying a data type "does not
+exist" beside 552 lines implementing it, and an index whose adjacent rows
+contradicted each other. This check passed through all of it.
 
-def classify(text, rules, where):
-    hits = [cls for kw, cls in rules if kw in text]
-    if not hits:
-        return None, "%s: no status keyword found in %r" % (where, text[:90])
-    return hits[0], None
+A check that compares two copies of one claim is not a check. What it should
+have compared the banner against is the CODE, which no script can do.
 
-def banner_of(path):
-    """The first blockquote in the first 14 lines, joined."""
-    lines = open(path, encoding='utf-8').read().split('\n')[:14]
-    quote = []
-    for ln in lines:
-        if ln.startswith('>'):
-            quote.append(ln.lstrip('> ').rstrip())
-        elif quote:
-            break
-    return ' '.join(quote)
+WHAT IT CHECKS NOW is the thing a script genuinely can: that the citations
+resolve. 400-odd files cite decisions by slug -- `DECISIONS.md#strings-and-matching`
+-- and a renamed, merged or deleted section turns every one of them into a
+dangling pointer that nothing would otherwise notice. That is a real failure
+with a mechanical answer, which is the kind worth automating.
+"""
+import os, re, subprocess, sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DOC = os.path.join(ROOT, 'DECISIONS.md')
 
 def main():
     errs = []
-    readme = open(os.path.join(DIR, 'README.md'), encoding='utf-8').read()
+    text = open(DOC, encoding='utf-8').read()
+    heads = re.findall(r'^## (.+)$', text, re.M)
+    slugs = [h.strip() for h in heads]
+    seen = set()
+    for s in slugs:
+        if s in seen:
+            errs.append(f"DECISIONS.md has two sections called {s!r} -- an anchor can only mean one")
+        seen.add(s)
 
-    rows = {}
-    for m in re.finditer(r'^\| \[(\d{4})\]\(([^)]+)\) \| [^|]* \| (.*?) \|$',
-                         readme, re.M):
-        rows[m.group(1)] = (m.group(2), m.group(3))
-
-    docs = sorted(f for f in os.listdir(DIR)
-                  if f.endswith('.md') and f != 'README.md')
-    if not docs:
-        print('check-decisions: FAIL — no decision docs found', file=sys.stderr)
-        return 1
-
-    for f in docs:
-        num = f[:4]
-        if num not in rows:
-            errs.append('%s has no row in the index' % f)
+    files = subprocess.run(['git', 'ls-files'], cwd=ROOT, capture_output=True,
+                           text=True).stdout.split()
+    cited, sites = set(), {}
+    for f in files:
+        p = os.path.join(ROOT, f)
+        if not os.path.isfile(p):
             continue
-        link, status = rows[num]
-        if link != f:
-            errs.append('%s: the index links to %s' % (f, link))
-        b = banner_of(os.path.join(DIR, f))
-        if not b:
-            errs.append('%s: no status banner in the first 14 lines. Every doc '
-                        'says what it is at the top.' % f)
+        try:
+            t = open(p, encoding='utf-8').read()
+        except (UnicodeDecodeError, OSError):
             continue
-        bcls, e1 = classify(b, BANNER_RULES, f + ' banner')
-        # Only the row's LEADING bold run is its status; the prose after it
-        # often names a supersession that applies to one section, not the doc.
-        lead = re.match(r'\*\*(.+?)\*\*', status)
-        if not lead:
-            errs.append('%s: the index row does not start with a bold status'
-                        % f)
-            continue
-        rcls, e2 = classify(lead.group(1), ROW_RULES, f + ' index row')
-        for e in (e1, e2):
-            if e: errs.append(e)
-        if bcls and rcls and bcls != rcls:
-            errs.append('%s: banner says %s, the index says %s'
-                        % (f, bcls.upper(), rcls.upper()))
+        for m in re.finditer(r'DECISIONS\.md#([a-z0-9-]+)', t):
+            cited.add(m.group(1))
+            sites.setdefault(m.group(1), []).append(f)
 
-    for num in sorted(rows):
-        if not os.path.exists(os.path.join(DIR, rows[num][0])):
-            errs.append('the index has a row for %s, which does not exist'
-                        % rows[num][0])
+    for c in sorted(cited):
+        if c not in seen:
+            where = sites[c][:3]
+            errs.append(f"nothing in DECISIONS.md anchors {c!r}, cited by {', '.join(where)}"
+                        + (f" and {len(sites[c]) - 3} more" if len(sites[c]) > 3 else ""))
 
     if errs:
-        print('check-decisions: %d disagreement(s)' % len(errs), file=sys.stderr)
         for e in errs:
-            print('  ' + e, file=sys.stderr)
+            print("  FAIL " + e)
+        print(f"check-decisions: {len(errs)} failure(s)")
         return 1
-    print('decisions: %d docs, every banner agrees with its index row' % len(docs))
+    print(f"check-decisions: {len(seen)} decisions, {len(cited)} cited by slug, every citation resolves")
     return 0
 
-sys.exit(main())
+if __name__ == '__main__':
+    sys.exit(main())

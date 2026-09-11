@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Every decision doc carries a status banner; the index carries a status row.
-# This asserts the two agree. The failure this catches is not cosmetic: the
-# index has already been wrong in both directions, and the direction that
-# UNDERSTATES what exists is the one that gets something rebuilt.
+# Every citation of a decision resolves to a section that exists.
+#
+# This used to assert that a decision's status banner agreed with its row in
+# an index -- and never fired, because the rows were copies of the banners.
+# Two copies of one claim agree by construction, including when both are
+# false. See the docstring in check_decisions.py for what that let through.
 exec python3 "$(dirname "$0")/check_decisions.py" "$@"
