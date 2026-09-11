@@ -30,6 +30,7 @@
   for every node, because a build that resolves differently tomorrow is not
   reproducible and nobody finds that out at a convenient moment."
   (:require [clojure.string :as str]
+            [flint.deps :as deps]
             [flint.deps.npm :as npm]
             [flint.deps.git :as git]))
 
@@ -94,25 +95,14 @@
                  (when i (strip (subs t (inc i))))))]
     (when (and cand (parse-version cand)) cand)))
 
-(defn coord-kind
-  "Which sort of coordinate this is, by the key that identifies it.
+(def coord-kind
+  "Which sort of coordinate this is.
 
-  `:git/version` and `:git/tag` both mean git, which is the whole point of
-  `system-namespaces-and-deps`'s git support: a version is a first-class way to name a git dependency
-  rather than a second-class alias for a sha."
-  [c]
-  (cond
-    (or (:git/url c) (:git/version c) (:git/tag c) (:git/sha c)) :git
-    (:local/root c) :local
-    (or (:npm/version c) (:npm/name c)) :npm
-    (:mvn/version c) :mvn
-    ;; A POD, in its two forms. `:pod/path` is local and resolves to itself;
-    ;; `:pod/version` needs a registry. Both are recognised HERE so the registry
-    ;; form gets a sentence about the registry rather than the generic
-    ;; "flint cannot resolve this coordinate", which would be true but would
-    ;; send a reader looking for a typo.
-    (or (:pod/path c) (:pod/version c)) :pod
-    :else :unknown))
+  `flint.deps/dep-kind`, under the name this namespace calls it. The KINDS live
+  in one table (`flint.deps/coord-types`) because two copies of that list is
+  what this file used to hold and they drifted; the classifier is shared with
+  them rather than reimplemented beside them."
+  deps/dep-kind)
 
 ;; --------------------------------------------------------------- resolution
 
@@ -250,12 +240,21 @@
   front end's call."
   ([deps] (plan deps {}))
   ([deps overrides]
+   ;; NOTES COME FROM THE DECLARED COORDINATES ONLY, not from the transitive
+   ;; walk. A key this build does not understand is worth telling the person who
+   ;; TYPED it; the same key arriving from a registry's own metadata is not
+   ;; theirs to fix and would be noise on every build.
+   (let [notes (reduce (fn [acc e]
+                         (if-let [n (deps/coord-notes (val e))]
+                           (conj acc {:dep (str (key e)) :note n})
+                           acc))
+                       [] deps)]
    (loop [queue (mapv (fn [e] [(key e) (val e) 0]) deps)
           nodes {}
           order []
           refused []]
      (if (empty? queue)
-       {:nodes nodes :order order :refused refused}
+       {:nodes nodes :order order :refused refused :notes notes}
        (let [[nm coord depth] (first queue)
              rest* (vec (rest queue))
              ;; AN OVERRIDE WINS AT ANY DEPTH, and is applied before resolution
@@ -274,7 +273,13 @@
              (cond
                (nil? r)
                (recur rest* nodes order
-                      (conj refused {:dep nm :reason "flint cannot resolve this coordinate"}))
+                      ;; The specific complaint when there is one -- a typo'd
+                      ;; key, or a key set with a hole in it -- and the generic
+                      ;; sentence only when the coordinate really is of no
+                      ;; recognisable kind.
+                      (conj refused {:dep nm
+                                     :reason (or (deps/coord-complaint coord)
+                                                 "flint cannot resolve this coordinate")}))
 
                (:error r)
                (recur rest* nodes order (conj refused {:dep nm :reason (:error r)}))
@@ -291,7 +296,7 @@
                  (recur (into rest* kids)
                         (assoc nodes nm r)
                         (if (contains? nodes nm) order (conj order nm))
-                        refused))))))))))
+                        refused)))))))))))
 
 (defn pins
   "A plan as the `:flint/overrides` map that would reproduce it exactly.
@@ -407,7 +412,8 @@
   REACHED at -- which is what the conflict rule uses -- and inventing a parent
   edge to draw would be drawing something the resolver did not decide."
   [p]
-  (mapv (fn [nm]
+  (into
+   (mapv (fn [nm]
           (let [n (get (:nodes p) nm)]
             (str (apply str (repeat (* 2 (:depth n 0)) " "))
                  ;; A path-based dependency has no version and never will --
@@ -417,7 +423,10 @@
                  ;; that failed rather than as a coordinate with nothing to pin.
                  nm " " (or (:version n) (:sha n) (:root n) "?")
                  (when (= :git (:kind n)) (str "  " (:url n))))))
-        (:order p)))
+        (:order p))
+   ;; Notes AFTER the tree, so the shape a reader came for is not pushed down
+   ;; the screen by something advisory.
+   (mapv (fn [x] (str "note: " (:dep x) " -- " (:note x))) (:notes p))))
 
 (defn why-lines
   "Why `target` is in the plan: the declaration that reached it, and at what

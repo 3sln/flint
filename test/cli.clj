@@ -420,5 +420,58 @@
                 (and (str/includes? o "does NOT resolve the transitive graph")
                      (str/includes? o "no host interop")))))
 
+;; --- the coordinate table (`DECISIONS.md#system-namespaces-and-deps`) --------
+;;
+;; ONE table says what kinds exist and what keys each understands. It used to be
+;; two -- `flint.deps/dep-kind` and `flint.deps.resolve/coord-kind` -- and they
+;; had drifted: maven carried a different kind keyword in each, and a git
+;; coordinate written as `:git/tag` with no `:git/url` was git to one and
+;; unknown to the other. A THIRD copy lived in `bin/flint`'s fetch dispatch,
+;; which is what actually broke when the keyword was unified, so these check the
+;; table itself rather than any one reader of it.
+(println "cli: the coordinate table")
+
+(check "a version alone is a complete npm coordinate"
+       (fdeps/dep-kind {:npm/version "1.0.0"}) :npm)
+(check "maven has ONE kind keyword, matching its coordinate namespace"
+       (fdeps/dep-kind {:mvn/version "1.0.0"}) :mvn)
+(check "both pod forms are pods"
+       [(fdeps/dep-kind {:pod/path "./p"}) (fdeps/dep-kind {:pod/version "1.0"})]
+       [:pod :pod])
+(check "every known kind is a supported kind"
+       (= fdeps/supported-dep-kinds (set (map :kind fdeps/coord-types))) true)
+
+;; A key set is satisfied or it is not; a coordinate that satisfies none is not
+;; of that kind, however much it looks like one.
+(check "a git tag with no url satisfies no git key set"
+       (fdeps/dep-kind {:git/tag "v1"}) :unknown)
+(check "  ... and the complaint still names git, and what is missing"
+       (fdeps/coord-complaint {:git/tag "v1"}) "git coordinates need :git/url")
+
+;; The case the `:known` lists exist for. A typo is in NO kind's key list, so
+;; attribution falls to the key's namespace -- without that, the one mistake
+;; this machinery is for reports as a coordinate of no kind.
+(check "a typo is attributed to its kind and named"
+       (fdeps/coord-complaint {:npm/verison "1.0"})
+       ":npm/verison is not a key npm understands; npm coordinates need :npm/version")
+
+;; Reported, not refused: `deps.edn` is a format flint shares with tools.deps.
+(check "an unknown key on a USABLE coordinate does not refuse it"
+       (fdeps/coord-complaint {:npm/version "1.0" :npm/bogus 1}) nil)
+(check "  ... it is a note instead"
+       (fdeps/coord-notes {:npm/version "1.0" :npm/bogus 1})
+       ":npm/bogus is not a key npm understands, and is ignored")
+(check "a universal key is understood by every kind"
+       (fdeps/coord-notes {:local/root "." :deps/root "sub"}) nil)
+
+;; `incomplete` and `unsupported` answer different questions, and a coordinate
+;; of no known kind belongs to the second. Both firing stopped `flint task` on a
+;; project that used to run.
+(check "a coordinate of no known kind is not `incomplete`'s to report"
+       (fdeps/coord-complaint {:weird/coord "x"}) nil)
+(check "  ... it is `unsupported`'s"
+       (mapv :kind (fdeps/unsupported {:deps {'some/thing {:weird/coord "x"}}}))
+       [:unknown])
+
 (println (if (zero? @fails) "cli: ok" (str "cli: " @fails " FAILURES")))
 (System/exit (if (zero? @fails) 0 1))

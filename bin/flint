@@ -684,7 +684,7 @@
                         (println (str "no such :local/root for " (:dep x) ": " (:dir x)))
                         (System/exit 1))
                       (= (:kind x) :npm) (npm! x)
-                      (= (:kind x) :maven) (mvn! x)
+                      (= (:kind x) :mvn) (mvn! x)
                       :else (git! x)))
                   (recur (vec (:then r)) (inc guard)))
                 r)))]

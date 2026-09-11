@@ -16,6 +16,184 @@
   (:require [clojure.edn :as edn]
             [clojure.string :as str]))
 
+(def universal-coord-keys
+  "Keys meaningful on a coordinate of ANY kind, so no kind has to list them."
+  #{:deps/root})
+
+(def coord-types
+  "EVERY coordinate kind flint knows, the key sets that define one, and every
+  other key it understands.
+
+  ONE LIST, deliberately. This used to be two -- `dep-kind` here and
+  `coord-kind` in `flint.deps.resolve` -- written separately and drifted: maven
+  had a different kind keyword in each, and a git coordinate written as
+  `:git/tag` with no `:git/url` was git to one and unknown to the other.
+  Neither disagreement was reachable through a supported path, which is exactly
+  why they survived: two tables that agree on the common cases look like one
+  table until something uncommon arrives.
+
+  `:forms` is a list of ALTERNATIVE KEY SETS, and a coordinate is of this kind
+  when it carries every key in ANY ONE of them. This is one idea rather than
+  two: \"what marks this kind\" and \"what does it require\" are the same
+  question asked of a complete coordinate, and splitting them into a one-of and
+  an all-of made `{:pod/path}` and `{:git/url :git/sha}` look like different
+  species of rule when they are the same rule.
+
+  An ARRAY, walked in order, first satisfied set winning -- so order is
+  PRECEDENCE, and a coordinate carrying keys from two ecosystems resolves the
+  same way everywhere rather than depending on which reader saw it. Within a
+  kind the MORE SPECIFIC set comes first, so the form that gets reported is the
+  one the author most nearly wrote.
+
+  `:also` is every other key the kind understands: optional settings, and
+  spellings read as fallbacks. It is what makes a TYPO REPORTABLE -- without it
+  `{:npm/verison \"1.0\"}` is not an npm coordinate with a misspelling, it is a
+  coordinate of no kind at all, and the message says so and helps nobody.
+
+  The functions that act on a kind stay separate -- resolving, fetching and
+  pinning are genuinely different jobs. What must not be separate is the answer
+  to `what kinds are there, and what may they say`."
+  [{:kind :git
+    ;; PINNED FORMS FIRST. All three are git; which one was written decides
+    ;; whether `incomplete` has anything to say about resolving a branch.
+    :forms [[:git/url :git/sha]
+            [:git/url :git/tag]
+            [:git/url :git/version]
+            [:git/url]]
+    ;; `:sha` bare is read as a fallback for `:git/sha`, so it is known rather
+    ;; than reported as a typo for the thing it is a spelling of.
+    :also  [:sha]}
+   {:kind :local
+    :forms [[:local/root]]
+    :also  []}
+   {:kind :npm
+    ;; The name defaults to the dependency's own symbol, so a version alone is
+    ;; a complete npm coordinate.
+    :forms [[:npm/name :npm/version]
+            [:npm/version]]
+    :also  [:npm/integrity :npm/registry]}
+   {:kind :mvn
+    :forms [[:mvn/version]]
+    :also  [:mvn/repos]}
+   {:kind :pod
+    ;; The two genuine alternatives: on disk, or from a registry.
+    :forms [[:pod/path]
+            [:pod/version]]
+    :also  []}])
+
+(defn- has-all? [coord form] (every? (fn [k] (get coord k)) form))
+
+(defn coord-type
+  "The first entry with a satisfied key set, or nil."
+  [coord]
+  (some (fn [t] (when (some (fn [form] (has-all? coord form)) (:forms t)) t))
+        coord-types))
+
+(defn- kind-keys
+  "Every key one kind understands, across all its forms."
+  [t]
+  (into (set (:also t)) (mapcat identity (:forms t))))
+
+(defn coord-candidate
+  "The kind a coordinate was REACHING FOR when no set was satisfied.
+
+  Without this an incomplete coordinate is simply of no kind, and the only
+  honest message is \"flint cannot resolve this\" -- which is true and useless
+  next to \"git needs :git/url, and this has only :git/tag\". The candidate is
+  the kind sharing the most keys with what was written."
+  [coord]
+  (let [scored (keep (fn [t]
+                       (let [ks (kind-keys t)
+                             ;; THE KEY'S NAMESPACE IS THE STRONGER SIGNAL, and
+                             ;; the only one that survives a typo: `:npm/verison`
+                             ;; is in no kind's key list, so matching by key
+                             ;; alone cannot attribute it and the misspelling --
+                             ;; the single case this exists for -- reports as a
+                             ;; coordinate of no kind. The namespaces ARE the
+                             ;; kind names, which is the convention every
+                             ;; coordinate already follows.
+                             nsname (name (:kind t))
+                             n (count (filter (fn [k]
+                                                (or (contains? ks k)
+                                                    (= nsname (namespace k))))
+                                              (keys coord)))]
+                         (when (pos? n) [n t])))
+                     coord-types)]
+    (second (last (sort-by first scored)))))
+
+(defn coord-problems
+  "What is wrong with one coordinate, as data.
+
+  `{:kind k :missing [..] :unknown [..]}`. `:missing` is the absent keys of the
+  NEAREST key set -- the one the author most nearly wrote -- and `:unknown` is
+  keys the kind does not understand, which is how a typo gets named instead of
+  silently doing nothing."
+  [coord]
+  (let [matched (coord-type coord)
+        t (or matched (coord-candidate coord))]
+    (if-not t
+      {:kind :unknown :missing [] :unknown []}
+      (let [known (into universal-coord-keys (kind-keys t))
+            nearest (when-not matched
+                      (first (sort-by (fn [form]
+                                        (count (remove (fn [k] (get coord k)) form)))
+                                      (:forms t))))]
+        {:kind (:kind t)
+         :matched? (some? matched)
+         :missing (vec (remove (fn [k] (get coord k)) nearest))
+         :unknown (vec (remove (fn [k] (contains? known k)) (keys coord)))}))))
+
+(defn coord-complaint
+  "One sentence about why a coordinate CANNOT BE USED, or nil if it can.
+
+  Fatal only. A coordinate that satisfies a key set is usable, even carrying a
+  key this kind does not know -- `deps.edn` is a format flint shares with
+  tools.deps, real files carry keys flint has no opinion about (`:exclusions`),
+  and refusing a build over one would be flint asserting ownership of a format
+  it borrows. Those are `coord-notes`, which is reporting rather than refusing.
+
+  ONE WORDING, used by every funnel that refuses a coordinate. `incomplete` and
+  `flint.deps.resolve/plan` both do it and both have to say why; two spellings
+  of the same complaint is the same drift this file's one table exists to end,
+  one level up."
+  [coord]
+  (let [{:keys [kind matched? missing unknown]} (coord-problems coord)]
+    (cond
+      matched? nil
+      ;; A COORDINATE OF NO KNOWN KIND IS `unsupported`'s TO REPORT, not this
+      ;; function's. They are different questions -- "flint has never heard of
+      ;; this" against "this is an npm coordinate with a hole in it" -- and
+      ;; answering both here made `incomplete` fire on a project that
+      ;; `unsupported` already described, which stops a build twice for one
+      ;; fault and stopped `flint task` on a project that used to run.
+      (= :unknown kind) nil
+      ;; THE UNKNOWN KEY FIRST, because it explains the missing one:
+      ;; `{:npm/verison "1.0"}` is also "no :npm/version", and reporting only
+      ;; that sends a reader looking at a key they can see is right there.
+      (seq unknown)
+      (str (str/join ", " (map str unknown))
+           (if (= 1 (count unknown)) " is not a key " " are not keys ")
+           (name kind) " understands"
+           (when (seq missing)
+             (str "; " (name kind) " coordinates need "
+                  (str/join " and " (map str missing)))))
+      (seq missing)
+      (str (name kind) " coordinates need " (str/join " and " (map str missing)))
+      :else nil)))
+
+(defn coord-notes
+  "Worth saying about a USABLE coordinate, or nil.
+
+  A key its kind does not understand: harmless to this build, and almost always
+  either a typo that silently did nothing or a setting meant for another tool.
+  Reported rather than refused -- see `coord-complaint`."
+  [coord]
+  (let [{:keys [kind matched? unknown]} (coord-problems coord)]
+    (when (and matched? (seq unknown))
+      (str (str/join ", " (map str unknown))
+           (if (= 1 (count unknown)) " is not a key " " are not keys ")
+           (name kind) " understands, and is ignored"))))
+
 (def supported-dep-kinds
   "Coordinate kinds this build can fetch.
 
@@ -28,7 +206,7 @@
   -- and its caution is that resolving a coordinate gets you SOURCE, not
   something that compiles. So flint fetches one jar at one version and does not
   pretend to resolve a graph; see `flint.deps/maven-note`."
-  #{:git :npm :maven :local :pod})
+  (set (map :kind coord-types)))
 
 (def default-maven-repos
   "Where a jar is looked for, in order. Clojars first because that is where
@@ -81,22 +259,13 @@
     (str registry "/" nm "/-/" base "-" version ".tgz")))
 
 (defn dep-kind
-  "Which sort of coordinate this is, by the key that identifies it."
+  "Which sort of coordinate this is, by the key set it satisfies.
+
+  Reads `coord-types` rather than repeating it. A key present but nil does NOT
+  count -- the old `cond` tested the VALUE, and a coordinate written
+  `{:git/url nil}` has said nothing about being git."
   [coord]
-  (cond
-    (:git/url coord) :git
-    (:local/root coord) :local
-    (:npm/name coord) :npm
-    (:npm/version coord) :npm
-    (:mvn/version coord) :maven
-    ;; A POD is an ordinary dependency (`DECISIONS.md#workspace-capabilities`),
-    ;; not a second mechanism beside `:deps`. `:pod/path` is the local form and
-    ;; names a directory holding a manifest; `:pod/version` is the registry
-    ;; form, recognised here so it gets a real answer from `incomplete` rather
-    ;; than being reported as a coordinate nobody knows.
-    (:pod/path coord) :pod
-    (:pod/version coord) :pod
-    :else :unknown))
+  (:kind (coord-type coord) :unknown))
 
 (defn read-deps
   "Read `deps.edn` through `slurp*`, a function from a project-relative path to
@@ -154,7 +323,7 @@
                      (str cache "/npm/"
                           (str/replace (str/replace (str nm) "@" "") "/" "-")
                           "-" v "/package")))
-      (= k :maven) (let [v (:mvn/version c)]
+      (= k :mvn) (let [v (:mvn/version c)]
                      (when (exact-version? v)
                        (str cache "/mvn/"
                             (str/replace (str/replace (str nm) "/" "-") ":" "-") "-" v)))
@@ -213,7 +382,7 @@
                               ;; Several, tried in order: a jar is on Clojars or
                               ;; on Central and the coordinate does not say
                               ;; which.
-                              (= (dep-kind c) :maven)
+                              (= (dep-kind c) :mvn)
                               (mapv (fn [r] (maven-jar r nm (:mvn/version c)))
                                     (or (:mvn/repos c) repos))
                               :else (:git/url c))
@@ -228,7 +397,7 @@
                                   ;; package that ships cljc puts it wherever
                                   ;; `package.json` points, and the root is the
                                   ;; only thing that is always right.
-                                  (if (contains? #{:npm :maven} (dep-kind c))
+                                  (if (contains? #{:npm :mvn} (dep-kind c))
                                     [root]
                                     [(str root "/src")])))}]
             (recur (vec (concat (rest todo) (or (:deps sub) {})))
@@ -248,11 +417,14 @@
   a different build tomorrow. flint refuses rather than doing that quietly."
   [d]
   (reduce (fn [acc e]
-            (let [nm (str (key e)) c (val e) k (dep-kind c)]
+            (let [nm (str (key e)) c (val e) k (dep-kind c)
+                  probs (coord-problems c)]
               (cond
+                (coord-complaint c)
+                (conj acc {:dep nm :why (coord-complaint c)})
                 (and (= k :git) (str/blank? (str (or (:git/sha c) (:sha c)))))
                 (conj acc {:dep nm :why "no :git/sha -- flint will not resolve a branch to whatever it points at today"})
-                (and (= k :maven) (not (exact-version? (:mvn/version c))))
+                (and (= k :mvn) (not (exact-version? (:mvn/version c))))
                 (conj acc {:dep nm :why (str ":mvn/version " (pr-str (:mvn/version c))
                                              " is not one exact version -- flint does not resolve"
                                              " a range or a graph")})
@@ -307,7 +479,7 @@
                       ;; The maven caveat goes where a reader will meet it --
                       ;; next to their own maven dependency -- rather than in a
                       ;; document they have not opened.
-                      (if (some (fn [e] (= :maven (dep-kind (val e)))) (or (:deps d) {}))
+                      (if (some (fn [e] (= :mvn (dep-kind (val e)))) (or (:deps d) {}))
                         (concat [""] (str/split-lines maven-note))
                         [])
                       (if (empty? u)
