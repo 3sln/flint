@@ -47,7 +47,7 @@ A few things the usage text is explicit about:
   fallback: *"`:to :llvm` is not built yet: emitting a native artifact needs
   a linker, and this binary carries none. The native runtime itself IS
   built — it is what `flint run` uses — so the way to run natively today is
-  `flint run`."* (This is decision 0021's design, partly shipped — the
+  `flint run`."* (This is the `cli` decision's design, partly shipped — the
   native binary, this command surface, and `deps.edn` work; a native
   cross-compiler and an "entry map" concept from that decision do not exist
   yet.)
@@ -64,7 +64,7 @@ $ flint run :path . :fn app/main :with [slurp:https://example.com/**,file://exac
 ```
 
 Known names, each backed by a virtual namespace the binary itself serves over
-RPC (decision 0037): `fs` (add `fs:write` to allow mutation — filesystem
+RPC (the `system-namespaces-and-deps` decision): `fs` (add `fs:write` to allow mutation — filesystem
 access is rooted at the current directory; a path that escapes it, like
 `../../etc/passwd`, is refused rather than clamped), `slurp` (read bytes from
 a `file://` or `https://` URL), `net`, `env`, and `deps` (defaults to the

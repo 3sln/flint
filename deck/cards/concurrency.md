@@ -3,7 +3,7 @@
 Flint's concurrency is cooperative green threads talking over ports. There
 are no host threads, no futures, no refs, no agents — `spawn`, `channel`,
 `send` and `receive` are the whole surface (`flint.thread` and `flint.port`,
-decision 0005, shipped).
+the `threads-and-ports` decision, shipped).
 
 ## Green threads, and why nothing suspends
 

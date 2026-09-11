@@ -88,7 +88,7 @@ truthy — a runtime that borrowed its host's notion of falsy would fail this:
 **Tagged literals** (`#my.ns/thing [1 2]`) are their own value kind
 (`:tagged`), not a two-key map — deliberately, so a codec can tell a tagged
 literal apart from a map that happens to have `:tag`/`:form` keys
-(decision 0034, shipped):
+(the `tagged-literals` decision, shipped):
 
 ```clojure
 (let [t (tagged-literal 'my.ns/thing [1 2])]
@@ -101,7 +101,7 @@ literal apart from a map that happens to have `:tag`/`:form` keys
 — `test/common/lang/tagged.cljc`. `#flint/table` is a built-in reader tag; a
 project can bind its own tag names to reader functions in `deps.edn`, scoped
 per-project so two libraries can each own `#x` without colliding
-(decision 0035 — partly shipped:
+(the `reader-tags` decision — partly shipped:
 an unknown tag is a compile error, and per-project tag binding works; a
 runtime `reader-tag-of` lookup is not yet built).
 
@@ -226,7 +226,7 @@ bytes.** Clojure inherits the JVM's UTF-16 `char`, so `(count "aé😀")` is `4`
 there (the emoji is a surrogate pair) and `3` in flint. This follows directly
 from flint having no JVM under it — strings and hashing are defined over
 UTF-8, independent of any host's internal representation
-(decision 0011), so a
+(the `strings-and-matching` decision), so a
 value hashes the same on the wasm, native, JVM and CLR runtimes.
 
 **Arithmetic overflow throws.** flint's number tower stops at `i64`/`f64` —
@@ -235,7 +235,7 @@ there is no bignum to promote into. `(- Long/MIN_VALUE)` and
 `Throwable`, everywhere, rather than silently wrapping (as a raw JVM `long`
 would) or throwing a host-specific, non-flint exception (as the CLR does
 without this convergence) — see
-decision 0010.
+the `other-hosts` decision.
 
 **Protocols dispatch on kind or metadata, not on type.** There is nothing for
 `extend-type` to name, because there are no types — see

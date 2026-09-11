@@ -41,8 +41,13 @@ the first because the first one's failures were written down.
 ## Multi-threading
 
 Works, and needed almost nothing: values are immutable, `Kw`/`Sym` intern
-through a `ConcurrentDictionary`, and the var slots are guarded. There is no
-safepoint to build because there is no collector of ours to stop.
+through a `ConcurrentDictionary`, and the var slots are guarded.
+
+This paragraph used to end "there is no safepoint to build because there is no
+collector of ours to stop", which was true of the FIRST design and has not been
+true since. `Gc.cs` is 440 lines: a real generational collector ported from
+`gc.rs`, which the section at the top of this file describes. Stopping it is
+`RtParallel`'s problem and it is solved there, not absent here.
 
 `swap!` still loses updates under contention — it is a read-modify-write in
 `lib/clojure/core.cljc`, and the test says so rather than wishing otherwise.
@@ -56,7 +61,11 @@ and nothing shippable is produced. Deliberate; see `DECISIONS.md#clr-runtime`.
 
 ## What is missing
 
-Most of the 143 builtins the flint compiler itself imports, and AOT.
-Missing builtins are **absent, not stubbed**: reaching one names it, because a
-stub returning nil would let a program answer wrongly here and rightly
-elsewhere.
+NOT THE BUILTINS, AND NOT AOT, both of which this section claimed. `bin/check-builtins`
+reports "clr carries all 168, the 2 mandatory included", and `Aot.cs`,
+`AotEmit.cs` and `AotPlan.cs` are all here. The claim dated from the port's
+first weeks and was never revisited.
+
+The policy it stated is still the right one and still holds: a missing builtin
+is **absent, not stubbed**, because reaching one names it, where a stub
+returning nil would let a program answer wrongly here and rightly elsewhere.

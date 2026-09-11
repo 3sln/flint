@@ -29,7 +29,7 @@ ordinary value rather than a port:
 ```
 
 Both `flint.port/open` and `flint.host/request` are requests, not
-constructions (decision 0027) — the sandbox cannot make a bridge to the
+constructions (the `ports-are-the-hosts` decision) — the sandbox cannot make a bridge to the
 outside world itself; it can only ask the host for one it already owns.
 Everything else described in [Concurrency](concurrency.md) — channels,
 send/receive, back-pressure — is what happens once a port exists.
@@ -39,7 +39,7 @@ send/receive, back-pressure — is what happens once a port exists.
 **"Capability" is not a concept the runtime has — it's a pattern, built out
 of one primitive.** That primitive is the **opaque value**: a value a
 program can hold, compare, and pass around, but never inspect or forge
-(decision 0022, shipped, amended 2026-08-30). `(flint.core/opaque)` mints
+(the `opaque-values` decision, shipped, amended 2026-08-30). `(flint.core/opaque)` mints
 one; a program can mint its own, but only ever with a host id of `0`, so a
 guest-minted opaque value is structurally distinguishable from one the host
 issued. Anything in a request's arguments that is an opaque value crosses
@@ -111,7 +111,7 @@ instead comes from outside — the embedder's workspace table, or a
 doesn't make what a workspace does with it any less visible or auditable —
 it can wrap `request` in a function of its own and hand that out, so the
 guard shrinks the set of places that ask *directly*, and does not confine
-what they pass on afterward. (This whole mechanism is decision 0036, partly
+what they pass on afterward. (This whole mechanism is the `workspace-capabilities` decision, partly
 shipped: the resolver, grants, workspace and var guards, and the request
 primitive are built; virtual namespaces, pods and load-time binding are
 not.)
@@ -150,4 +150,4 @@ distinction in Concurrency](concurrency.md#channels-vs-bridges)). Per-project
 policy narrowing beyond the single program-wide `:with` grant, pods (a
 protocol for plugging in a language-agnostic capability server), and
 load-time capability binding for an image loaded outside any compiler's
-check are all part of decision 0036's design and not built yet.
+check are all part of the `workspace-capabilities` decision's design and not built yet.

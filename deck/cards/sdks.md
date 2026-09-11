@@ -35,7 +35,7 @@ Four nouns, everywhere:
 - **A Sandbox** — `call(fn, args)` by name, a step limit, and gas. There used
   to be a fifth noun-level piece here, `Sandbox.grant(name)`, backed by a
   capability table the runtime itself kept — it's gone (removed 2026-08-30,
-  decision 0022's cutover). A capability isn't a concept a Sandbox has: what
+  the `opaque-values` decision's cutover). A capability isn't a concept a Sandbox has: what
   a call receives is an ordinary opaque value the host minted, and whether it
   means "capability" is a convention the host and the guest program agree on
   between themselves — see [Capabilities and the

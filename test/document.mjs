@@ -1,4 +1,4 @@
-// The document resource (DECISIONS.md#document-resource): structure once, content on
+// The document resource (bench/construe/document-resource.md): structure once, content on
 // demand, planned by the host, delivered in waves.
 //
 // Almost every claim here is about MEMORY or about TRAFFIC, so almost every
@@ -73,6 +73,18 @@ async function runWith(wasm, store, args = [], { stress = false } = {}) {
   const r = inst.run(fnOf(wasm), args);
   if (r.code !== 0) throw new Error(`module failed: ${r.out}`);
   const e = inst.exports;
+  // SAY WHICH BUILD IS MISSING, rather than crashing on a missing export.
+  // `collect_now` and `stat_peak_live` exist only in a diagnostics build;
+  // `bin/test` runs `./bin/build-units --diagnostics` before this file for
+  // exactly that reason, so the gate never sees it. Running this test by hand
+  // against production units used to fail with "e.collect_now is not a
+  // function", which names the symbol and not the cause.
+  // `bench/construe.mjs` already guards the same two exports and says so.
+  if (typeof e.collect_now !== "function" || typeof e.stat_peak_live !== "function") {
+    throw new Error(
+      "this test measures memory and needs a DIAGNOSTICS build of the units -- " +
+      "run `./bin/build-units --diagnostics` first (which is what `bin/test` does)");
+  }
   e.collect_now();
   return { out: r.out, messages, peakLive: Number(e.stat_peak_live()), exports: e };
 }

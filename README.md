@@ -1937,7 +1937,7 @@ Written down where somebody will find them, with the reasoning:
 - [`DECISIONS.md#construe-benchmarks`](DECISIONS.md#construe-benchmarks)
   — benchmark the decision, not the runtime: what the numbers have to answer
   for somebody choosing whether to adopt this.
-- [`DECISIONS.md#document-resource`](DECISIONS.md#document-resource)
+- [`bench/construe/document-resource.md`](bench/construe/document-resource.md)
   — documents: structure eagerly, content on demand, and the fetch planning
   that follows from measuring latency against bandwidth.
 - [`doc/unit-format.md`](doc/unit-format.md) — what a unit is, and what would

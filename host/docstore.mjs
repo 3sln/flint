@@ -1,6 +1,6 @@
 // A document store capability, and the fetch planner that lives with it.
 //
-// `DECISIONS.md#document-resource` puts planning on the HOST on purpose: only the host knows
+// `bench/construe/document-resource.md` puts planning on the HOST on purpose: only the host knows
 // the storage's latency and bandwidth and the memory budget, so only the host
 // can decide how many requests to make and how wide each one should be. The
 // script asks for pieces; this decides how to get them.

@@ -618,7 +618,7 @@ pub struct GcStats {
     /// nursery -- sampled at every collection. This is the number a memory
     /// claim has to be made against: "peak memory is proportional to content
     /// actually fetched" is a statement about *this*, not about how much has
-    /// been allocated over a run (`DECISIONS.md#document-resource`).
+    /// been allocated over a run (`bench/construe/document-resource.md`).
     pub peak_live: u64,
 }
 
