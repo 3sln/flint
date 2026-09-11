@@ -1756,20 +1756,31 @@
   [protocol kind mmap]
   (swap! (:impls protocol) update kind merge mmap)
   nil)
-(comment
-  "`method-key` and `extend-method` LIVE IN `flint.protocols` NOW, which is
-  where `defprotocol` expands a call to. They are the two names here that only
-  `defprotocol` and `extend-protocol` ever reach, and `methods-of` and
-  `protocol-miss` moved there earlier for the same reason.
+(defn- method-key
+  "The protocol's OWN key for the method named `n`.
 
-  It could not move before: a top-level `(extend-protocol ...)` calls it while
-  the using namespace is initialising, and `flint.protocols` was not ordered
-  before that namespace, so the call found a nil. `clojure.core` is pinned
-  first by `core-first` and was the only namespace safe to call from there.
-  `flint.protocols` is pinned now too -- it had to be, because `protocol-miss`
-  had the same problem and that one showed up as a bad diagnostic on ordinary
-  code -- so the reason is gone and so is the name: this namespace no longer
-  publishes anything Clojure does not.")
+  A method key is qualified by the namespace that DEFINED the protocol, which
+  is not the namespace doing the extending. Computing it lexically at the
+  extend site -- which is what `extend-protocol` did -- writes an
+  implementation under a key nobody ever reads, so extending a protocol from
+  another namespace was a silent no-op that surfaced later as `protocol-miss`.
+  Silent is the part that made it worth a named function and this comment."
+  [protocol n]
+  (loop [ks (seq (:method-keys protocol))]
+    (cond
+      (nil? ks)
+      (throw (ex-info (str "the protocol " (:flint/protocol protocol)
+                           " has no method named " n "; its methods are "
+                           (pr-str (mapv name (:method-keys protocol))))
+                      {:protocol (:flint/protocol protocol) :method n}))
+      (= n (name (first ks))) (first ks)
+      :else (recur (next ks)))))
+
+(defn extend-method
+  "One method of `protocol` for one `kind`. `mname` is the method's bare name as
+  a string, resolved against the protocol rather than against the caller."
+  [protocol kind mname f]
+  (extend protocol kind (hash-map (method-key protocol mname) f)))
 
 (defn satisfies?
   "Does `x` have an implementation of every method of `protocol`, by metadata or
@@ -1840,7 +1851,7 @@
                      (recur (rest xs) k (conj acc [k (first xs)])))))]
     (list* 'do
            (map (fn [[k mform]]
-                  (list 'flint.protocols/extend-method pname k
+                  (list 'clojure.core/extend-method pname k
                         (name (first mform))
                         (list* 'clojure.core/fn (rest mform))))
                 groups))))

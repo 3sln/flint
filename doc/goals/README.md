@@ -490,11 +490,27 @@ one: a protocol miss during load reported "value is not a function (nil, 3
 args)" instead of naming the missing implementation, which is a live defect on
 ordinary code.
 
-So the thing that kept `extend-method` in `clojure.core` is gone. Moving it is
-now an ordinary change rather than a blocked one, and it is worth doing only if
-the name bothers somebody -- `extend-method` is the one name that namespace
-publishes which Clojure does not. It stays for now because nothing forces it,
-not because anything stops it.
+So the thing that kept `extend-method` in `clojure.core` is gone. It STILL
+stays, and the move was tried and reverted rather than argued about:
+
+* It works. A top-level `(extend-protocol ...)` with no require answers
+  correctly once `extend-method` lives in `flint.protocols`.
+* The PIN has to be reordered for it. `flint.check` uses `extend-protocol` at
+  top level and was pinned SECOND, ahead of `flint.protocols` at fourth --
+  invisible while the callee was `clojure.core`, which is first whatever else
+  happens. Pinning overrides the require graph, so a derived edge cannot fix a
+  pinned namespace: the list must be in dependency order itself. That
+  correction is worth keeping and was kept.
+* And it is an API CHANGE, which is what stopped it. `extend-method` is not
+  only reached through `defprotocol`'s expansion: `test/common/lang/extending`
+  calls it by its bare name, through `clojure.core`'s implicit refer. Moving it
+  means every direct caller must require `flint.protocols`. The manifest
+  records it as `:extra #{extend-method}` -- flint's own addition to that
+  namespace -- and whether to relocate a published name is not a tidying
+  decision.
+
+What the experiment bought is that this is no longer BLOCKED. It is a choice,
+with a known cost and a known prerequisite.
 
 ## THE GENERAL CASE: a compiler-emitted reference is not an edge
 

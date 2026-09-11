@@ -124,29 +124,3 @@
                     (str mname)
                     " as metadata on the value."])
                   {:protocol pname :method mname :kind (kind x) :value x})))
-
-(defn- method-key
-  "The protocol's OWN key for the method named `n`.
-
-  A method key is qualified by the namespace that DEFINED the protocol, which
-  is not the namespace doing the extending. Computing it lexically at the
-  extend site -- which is what `extend-protocol` did -- writes an
-  implementation under a key nobody ever reads, so extending a protocol from
-  another namespace was a silent no-op that surfaced later as `protocol-miss`.
-  Silent is the part that made it worth a named function and this comment."
-  [protocol n]
-  (loop [ks (seq (:method-keys protocol))]
-    (cond
-      (nil? ks)
-      (throw (ex-info (str "the protocol " (:flint/protocol protocol)
-                           " has no method named " n "; its methods are "
-                           (pr-str (mapv name (:method-keys protocol))))
-                      {:protocol (:flint/protocol protocol) :method n}))
-      (= n (name (first ks))) (first ks)
-      :else (recur (next ks)))))
-
-(defn extend-method
-  "One method of `protocol` for one `kind`. `mname` is the method's bare name as
-  a string, resolved against the protocol rather than against the caller."
-  [protocol kind mname f]
-  (extend protocol kind (hash-map (method-key protocol mname) f)))
