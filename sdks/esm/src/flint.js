@@ -257,12 +257,29 @@ function collectSources({ resolve, files, workspaces, target, withLib }) {
   // is being guarded against. `flint.host/request` is the first var this
   // matters for (`doc/decisions/0036`).
   //
-  // It grants nothing. The library holding a capability is not the same
-  // question as a program being allowed to reach it, and the library does not
-  // need one to define a guarded var.
+  // AND IT HOLDS `:host`, which it did not used to. This said "It grants
+  // nothing", and that was true while the guard was only on the VAR --
+  // `flint.host/request` was guarded and reached the host through a builtin
+  // nothing checked. The builtin is guarded now, and `flint.host/request` and
+  // `flint.host/ask` both call it, so the library implementing the capability
+  // has to hold it. Defining a guarded var still needs nothing; CALLING a
+  // guarded builtin is the part that changed.
+  //
+  // A grant, not an exemption. Letting a var's own guard authorise its own
+  // body was tried first and is a way to mint authority: a guard is written by
+  // the author about their own var, so any workspace could assert one, call
+  // the builtin behind it, and re-export it unguarded. A grant is conferred
+  // from outside -- here, by the SDK that ships the library.
+  //
+  // It does not let a caller past `flint.host/request`'s guard. An application
+  // holds `:host` or it does not, and that is the next check down.
+  //
+  // KEEP THIS THE SAME SENTENCE AS `lib/deps.edn`. Two front doors naming one
+  // workspace two ways is the defect this mechanism exists to stop, and a
+  // grant on one and not the other is exactly that.
   if (withLib) {
-    spaces.push({ prefix: 'clojure/', name: 'flint/flint' });
-    spaces.push({ prefix: 'flint/', name: 'flint/flint' });
+    spaces.push({ prefix: 'clojure/', name: 'flint/flint', grants: ['host'] });
+    spaces.push({ prefix: 'flint/', name: 'flint/flint', grants: ['host'] });
   }
   return { files: all, workspaces: spaces };
 }

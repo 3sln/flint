@@ -7,6 +7,25 @@
 ;; same files, which is `flint/flint`. Two front doors naming one workspace two
 ;; ways is the defect this whole mechanism exists to stop.
 ;;
-;; It grants NOTHING. Defining a guarded var does not require holding what it
-;; guards, and the standard library holds no capability of its own.
-{:flint/workspace flint/flint}
+;; AND IT HOLDS `:host`, which it did not used to. This file said "It grants
+;; NOTHING ... the standard library holds no capability of its own", and that
+;; was true while the guard was only on the VAR: `flint.host/request` was
+;; guarded, and its body reached the host through a builtin that nothing
+;; checked. Guarding the builtin made the sentence false. `flint.host/request`
+;; and `flint.host/ask` call `flint.rt/request`, so the library that implements
+;; the capability must hold it.
+;;
+;; A GRANT AND NOT AN EXEMPTION, and the difference is the whole point. The
+;; first attempt let a var's own guard authorise its own body -- which reads
+;; well, since that is exactly the wrapper relationship -- and it was a way to
+;; MINT authority: a guard is written by the author of the var, about their own
+;; var, so any workspace could assert one, call the builtin from behind it, and
+;; re-export it through an unguarded function. Measured, and it compiled. A
+;; grant is different in kind: it is conferred from outside, by the embedder's
+;; workspace table or by this file, which ships with the compiler.
+;;
+;; It is still the narrowest true statement. What it does NOT do is let a
+;; caller past `flint.host/request`'s own guard -- an application still holds
+;; `:host` or it does not.
+{:flint/workspace flint/flint
+ :flint/capabilities-grant [:host]}

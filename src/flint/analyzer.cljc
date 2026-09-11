@@ -324,33 +324,24 @@
           (when (not= w-here w-there)
             ;; What is MISSING, not the whole guard: naming three capabilities
             ;; the caller already holds helps nobody find the one it does not.
-            (let [;; A VAR THAT DECLARES A GUARD MAY CALL WHAT IT GUARDS.
-                  ;; `flint.host/request` is guarded `[:host]` and its body is
-                  ;; `(flint.rt/request ..)` -- it IS the implementation of
-                  ;; that capability, and the whole reason the builtin is
-                  ;; guarded is so that this wrapper is the way through.
-                  ;;
-                  ;; The alternative was granting `:host` to the standard
-                  ;; library's workspace, and `lib/deps.edn` says in as many
-                  ;; words why not: "It grants NOTHING ... the standard library
-                  ;; holds no capability of its own." Granting it would have
-                  ;; given every namespace in `lib/` the authority that two
-                  ;; functions need.
-                  ;;
-                  ;; No authority is created. A caller in another workspace
-                  ;; still has to hold `:host` to name the wrapper, so the
-                  ;; chain is unchanged -- what moves is only WHERE the
-                  ;; requirement is stated, from the workspace to the var that
-                  ;; actually does the thing.
-                  own (let [cur (:current-var env)]
-                        (when cur
-                          (:flint/capabilities-guard
-                           (or (get (:var-meta c) cur)
-                               (let [d (get (:declared c) cur)]
-                                 (when (map? d) d))))))
-                  held (into (set (or (get-in ws [here :grants]) #{}))
-                             (or own #{}))
-                  missing (into #{} (remove held guard))]
+            ;; A VAR'S OWN GUARD DOES NOT AUTHORISE ITS BODY, and this is
+            ;; the second thing tried here rather than the first. Letting a
+            ;; guarded var name what it guards reads well -- it is how
+            ;; `flint.host/request` wraps `flint.rt/request` -- and it is a
+            ;; LAUNDERING HOLE, because a guard is not a grant. A grant comes
+            ;; from the embedder, in the workspace table the host supplies. A
+            ;; guard is written by the author of the var, about their own var.
+            ;;
+            ;; Measured, with a workspace holding nothing:
+            ;;
+            ;;   (defn ^{:flint/capabilities-guard [:host]} w [x]
+            ;;     (flint.rt/request x))
+            ;;   (defn wide-open [x] (w x))     ; same workspace, no check
+            ;;
+            ;; compiled. Any code could mint the authority by asserting it, and
+            ;; then hand it on unguarded. The check must read only what was
+            ;; GRANTED.
+            (let [missing (into #{} (remove (or (get-in ws [here :grants]) #{}) guard))]
               (when (seq missing)
                 ;; Name it the way a person WROTE it. `flint.native/flint/add`
                 ;; is the internal coordinate and appears in no source.
