@@ -67,21 +67,33 @@
       (do) (vec (mapcat def-form-names (rest form)))
       nil)))
 
+(defn- vis-of
+  "The VISIBILITY a name is declared with, as the analyser's check reads it.
+
+  BOTH MARKS AND NOT JUST `:private`. `privacy-check!` reads `:private` and
+  `:internal` out of the SAME map, so recording one and not the other left
+  `:internal` order-dependent after `:private` was fixed -- the same bug, one
+  visibility level along, and the test that found it was written to ask rather
+  than to assume."
+  [sym extra]
+  (let [m (meta sym)]
+    (cond-> {:private (boolean (or extra (:private m)))}
+      (:internal m) (assoc :internal true))))
+
 (defn- def-form-entries
-  "`[name private?]` for every top-level name `form` defines, following `do` so
-  a nested def is not attributed to its wrapper.
+  "`[name visibility]` for every top-level name `form` defines, following `do`
+  so a nested def is not attributed to its wrapper.
 
   PAIRS AND NOT TWO PASSES, because the two answers come from the same place
   and a `do` splits them: asking `def-form-names` for the names and then
-  asking the wrapper whether IT was private would give every name inside a
-  `(do ...)` the wrapper's answer, which is always no."
+  asking the wrapper what IT was marked would give every name inside a
+  `(do ...)` the wrapper's answer, and a wrapper is never marked."
   [form]
   (when (seq? form)
     (case (first form)
-      (def defn defmacro) [[(second form)
-                            (boolean (:private (meta (second form))))]]
-      (defn-) [[(second form) true]]
-      (declare) (mapv (fn [n] [n (boolean (:private (meta n)))]) (rest form))
+      (def defn defmacro) [[(second form) (vis-of (second form) false)]]
+      (defn-) [[(second form) (vis-of (second form) true)]]
+      (declare) (mapv (fn [n] [n (vis-of n false)]) (rest form))
       (do) (vec (mapcat def-form-entries (rest form)))
       nil)))
 
@@ -433,9 +445,8 @@
                           (reader/set-ns! st (second f) (ns-aliases f)))
                         (recur (conj acc f))))))]
     (let [forms (flatten-top-level forms)]
-      (doseq [f forms, [n private?] (def-form-entries f)]
-        (vswap! cc assoc-in [:declared (symbol (str nsname) (name n))]
-                {:private private?}))
+      (doseq [f forms, [n vis] (def-form-entries f)]
+        (vswap! cc assoc-in [:declared (symbol (str nsname) (name n))] vis))
       forms)))
 
 (defn analyze-namespace!

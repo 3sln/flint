@@ -109,6 +109,25 @@
                                 "app/main.cljc" "(ns app.main (:require [libx.owner :as o])) (defn main [_] (o/go 1))"}
                                two))
        "the control: the reverse edge itself must stay legal")
+;; AND `^:internal` ACROSS THE SAME REVERSE EDGE. `:private` and `:internal`
+;; are read from the SAME map by the same check, so if one was order-dependent
+;; the other was too -- and the fix recorded only `:private`. This row is here
+;; to say which of those is true rather than to assume.
+(def owner-int "(ns libx.owner3 (:require [other.back3]))
+(defn ^:internal team-only [x] x)
+(defn go [x] (other.back3/reach x))")
+
+(def back-int "(ns other.back3)
+(defn reach [x] (libx.owner3/team-only x))")
+
+(check "`^:internal` is refused across a workspace boundary, definer second"
+       (= :refused (outcome {"libx/owner3.cljc" owner-int "other/back3.cljc" back-int
+                             "app/main.cljc" "(ns app.main (:require [libx.owner3 :as o])) (defn main [_] (o/go 1))"}
+                            [{:prefix "libx/" :name 'libx}
+                             {:prefix "other/" :name 'other}
+                             {:prefix "app/" :name 'app}]))
+       "internal must not depend on analysis order either")
+
 ;; AND `^:private` ON A PLAIN `def`, WHICH IS THE OTHER SPELLING. The fix
 ;; above first caught only `defn-`, because that is the one the pre-pass could
 ;; tell from the form's HEAD. `^:private` is metadata on the name symbol,
