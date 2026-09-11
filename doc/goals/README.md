@@ -453,20 +453,54 @@ was what found it.
   declarations in the sources that need them, which is what a declaration is
   for.
 
-## Reopened: moving `extend-method` fails, and I do not know why
+## SOLVED: `extend-method` must live in a namespace that is INITIALISED FIRST
 
-I measured "should a qualified reference be a dependency edge", declined the
-change, and was wrong -- recorded here rather than quietly fixed, because the
-wrong answer is written into `test/requires.clj` and commit `c36afd0`.
+`clojure.core` is pinned to position 0 by `core-first`, so top-level code in
+ANY namespace can call into it whether or not that namespace requires it.
+`flint.protocols` is not pinned. A using namespace with no requires sorts
+before it, so `(extend-protocol ...)` at top level calls
+`flint.protocols/extend-method` while that namespace's vars are still nil --
+which is what "value is not a function (nil, 4 args)" says.
 
-WHAT IS OBSERVED, and only this:
+MEASURED, all three rows with a freshly built CLI:
+
+| `extend-method` in | using ns requires `flint.protocols` | result |
+| --- | --- | --- |
+| `clojure.core` (pinned) | no | works |
+| `flint.protocols` | no | ClassCastException (nil, 4 args) |
+| `flint.protocols` | yes | works |
+
+So this was never about emission, reachability, or the SHAPE of the expansion.
+It is initialisation order, and the reason the six probes below all "worked" is
+that none of them put the callee in a namespace that could sort late.
+
+AND THE STALE-BINARY TRAP NEARLY WROTE THE OPPOSITE. `flint run` compiles with
+the compiler built INTO the binary, and `bin/build-dist` does not rebuild that
+binary. The first run of this experiment reported that moving `extend-method`
+worked in both configurations -- a clean resolution, and entirely an artefact
+of a `target/release/flint` from before the move. `cargo build --release -p
+flint-cli` is the missing step, and the failure appeared the moment it ran.
+
+WHAT WOULD ACTUALLY MOVE IT is pinning `flint.protocols` in `core-first`, which
+is exactly why `flint.check` is pinned -- "nothing `:require`s `flint.check`,
+so the graph has no edge to order by and this supplies one". The catch is that
+`flint.protocols` requires `flint.core`, so pinning it means pinning that too,
+and the pinned list stops being two special cases and starts being a
+hand-maintained prefix of the order. That is a decision, not a fix, and it is
+left open.
+
+THE OLD RECORD FOLLOWS, corrected where it was wrong.
+
+WHAT WAS OBSERVED:
 
 * Moving `extend-method` to `flint.protocols` -- reached only through
   `extend-protocol`'s expansion, which never names it -- makes a top-level
   `(extend-protocol ...)` in a using namespace fail with
   `ClassCastException: value is not a function (nil, 4 args)`.
-* An explicit `(:require [flint.protocols])` in the using namespace does NOT
-  fix it.
+* ~~An explicit `(:require [flint.protocols])` in the using namespace does NOT
+  fix it.~~ WRONG, and measured wrong above: it fixes it, because it is the
+  dependency edge the order is built from. This claim is why the search went
+  looking at emission for so long.
 * At one point the same move reported `no slot for var
   flint.protocols/extend-method -- it was reached but not emitted`, which
   points at emission or reachability rather than at load order.
@@ -572,9 +606,14 @@ not a conclusion -- this section has already offered two explanations that did
 not survive contact, and the pattern in both was reasoning about order instead
 of reading it.
 
-SO THE MECHANISM IS STILL NOT ESTABLISHED, and this section says so rather
-than offering a third guess. Two disproofs narrow it; they do not close it. `extend-method` stays in `clojure.core`. It is the one name that
-namespace publishes which Clojure does not.
+THE MECHANISM IS ESTABLISHED NOW, and it is the one thing the earlier passes
+kept walking past: the order is built from `:require` EDGES, and a qualified
+reference is not an edge. `defprotocol` expands to a call the using namespace
+never required, so the only thing making it safe is that the callee is pinned
+first. Two disproofs narrow it; they do not close it. `extend-method` stays in `clojure.core`, and now for a stated reason rather
+than a failed experiment: that namespace is pinned first, so a top-level
+expansion can reach it from anywhere. It is the one name that namespace
+publishes which Clojure does not, and that is the price of the pin.
 
 MISSING TEST: `test/requires.clj` pins three cases that pass -- a function
 call, a top-level `def`, a macro -- and a fourth added since, a top-level
