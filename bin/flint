@@ -234,13 +234,38 @@
             (conj (vec path) node)
             (recur (first nexts) (conj path node) (conj seen node))))))))
 
+(defn implied-requires
+  ;; The namespaces a source depends on because the COMPILER emits calls into
+  ;; them -- a regex literal becomes `(flint.regex/pattern ..)`, a
+  ;; `defprotocol` becomes calls on `flint.protocols`. No `:require` names
+  ;; them, and the load order is built from requires, so at top level they ran
+  ;; before the callee was initialised.
+  ;;
+  ;; Kept identical to `flint.project/implied-requires`, for the reason
+  ;; `core-first` is duplicated here.
+  [me forms]
+  (let [found (volatile! #{})
+        walk (fn walk [x]
+               (cond
+                 (and (map? x) (string? (:flint/regex x))) (vswap! found conj 'flint.regex)
+                 (map? x) (doseq [[k v] x] (walk k) (walk v))
+                 (seq? x) (do (when (contains? '#{defprotocol extend-protocol extend-type}
+                                                (first x))
+                                (vswap! found conj 'flint.protocols))
+                              (doseq [e x] (walk e)))
+                 (coll? x) (doseq [e x] (walk e))
+                 :else nil))]
+    (doseq [f forms] (walk f))
+    (disj @found me)))
+
 (defn topo-order [sources features]
   ;; Dependencies before dependents; clojure.core always first.
   (let [deps (into {} (for [[n {:keys [src file tags]}] sources]
                         [n (let [forms (reader/read-all src {:file file :features features
                                                              :tags tags})
                                  nsform (first (filter #(and (seq? %) (= 'ns (first %))) forms))]
-                             (set (when nsform (compiler/ns-requires nsform))))]))]
+                             (into (set (when nsform (compiler/ns-requires nsform)))
+                                   (implied-requires n forms)))]))]
     (loop [done [] seen #{} pending (vec (keys deps))]
       (if (empty? pending)
         done

@@ -729,6 +729,27 @@
             (str/includes? pmiss "no implementation of pmiss/greet"))
 (check-that "and does not fall back to the nil-callee message"
             (not (str/includes? pmiss "is not a function")))
+
+;; A REGEX LITERAL AT TOP LEVEL, which is the same defect on ordinary code.
+;; `#"a+b"` compiles to `(flint.regex/pattern "a+b")` -- a call into a
+;; namespace the source never required -- and the load order is built from
+;; `:require` EDGES, so this died as "value is not a function (nil, 1 args)"
+;; in any namespace that had no requires.
+;;
+;; Not pinned: `flint.regex` pulls in `clojure.string` and `flint.nfa`, and a
+;; pinned list that grows with every emitted reference is a hand-written prefix
+;; of the load order. `implied-requires` derives the edge from the literal
+;; instead, in the read pre-pass, which already walks every form.
+(src! "relit"
+      (str "(ns relit)\n"
+           ;; TOP LEVEL and NO requires: both halves matter.
+           "(def re #\"a+b\")\n"
+           "(defn main [_] (pr-str [(boolean re) (re-find re \"xaabz\")]))"))
+(def relit (run! (build! "relit")))
+(check-that "a regex literal at top level works with no require"
+            (str/includes? relit "[true"))
+(check-that "and the pattern it built is the one that was written"
+            (str/includes? relit "aab"))
 (check-that "  ... and on metadata, which is the main road here"
             (str/includes? proto "12 \"a vector 12\""))
 (check-that "a value with no implementation names the protocol"

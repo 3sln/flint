@@ -503,8 +503,8 @@ The set it emits is small and was probed in full:
 | `clojure.core/assoc` | `binding` | safe — pinned first |
 | `flint.rt/dyn-bindings`, `dyn-set-bindings` | dynamic vars | safe — `flint.rt` is a builtin, it has no vars to be nil |
 | `flint.protocols/extend-method`, `protocol-miss` | `defprotocol` | FIXED by pinning (`cb8fadd`) |
-| `flint.virtual/fn-for`, `call` | a reference to a virtual namespace | BROKEN |
-| `flint.regex/pattern` | ANY regex literal | BROKEN |
+| `flint.virtual/fn-for`, `call` | a reference to a virtual namespace | STILL BROKEN |
+| `flint.regex/pattern` | ANY regex literal | FIXED by `implied-requires` |
 
 THE REGEX ONE IS ORDINARY CODE, which is what makes this worth a section:
 
@@ -525,17 +525,30 @@ requires `flint.port`, `flint.rpc` and `flint.thread`. Covering these by
 pinning means hand-writing a large prefix of the stdlib's load order, and the
 next emitted reference reopens it.
 
-WHAT THE FIX LOOKS LIKE. The information already exists before analysis: the
-READ pre-pass walks every top-level form, so it can see the regex literal and
-the `defprotocol` that will become these calls. An emitted reference should
-supply the edge the user did not write, the way `core-first` supplies one for
-`flint.check` — but derived rather than listed.
+WHAT THE FIX IS. `implied-requires` walks the read forms -- which the pre-pass
+already does, before any analysis -- and adds the edge the user did not write:
+`flint.regex` for a source containing a regex literal, `flint.protocols` for
+one containing `defprotocol`/`extend-protocol`/`extend-type`. Self is excluded,
+because `flint.protocols` defines a protocol.
 
-NOT DONE, and deliberately. It changes the compiler's dependency model; the
-order determines analysis and analysis produces `:deps`, so the edge has to
-come from the pre-pass rather than from the dependency table, and getting that
-framing wrong would be a worse bug than the one it fixes. One ordering change
-has already landed this session.
+DERIVED RATHER THAN PINNED, and the difference is why this is the shape it is.
+`core-first` names four namespaces by hand; `flint.regex` alone would add three
+more, and the next emitted reference would reopen it. A derived edge covers the
+reference that exists rather than the list somebody remembered to update.
+
+Cycle risk was measured, not assumed: `flint.regex`, `clojure.string` and
+`flint.nfa` contain no regex literals, and `flint.core` -- the one namespace
+`flint.protocols` requires -- contains no protocol forms. So neither new edge
+can point back into its own chain.
+
+THE VIRTUAL CASE IS NOT FIXED. Its trigger is "this source requires a namespace
+that is VIRTUAL", which the compiler knows from the workspace table and
+`bin/flint` does not: that script carries a hardcoded `#{flint.rt}` and cannot
+see a workspace-declared virtual namespace at all. Deriving it in one of the
+two and not the other would make them disagree about load order, which is the
+defect the duplication comment exists to prevent. Teaching `bin/flint` the
+workspace's virtual set is the prerequisite, and it is a bigger change than
+this one.
 
 THE OLD RECORD FOLLOWS, corrected where it was wrong.
 

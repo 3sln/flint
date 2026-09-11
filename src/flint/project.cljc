@@ -182,6 +182,38 @@
             (conj (vec path) node)
             (recur (first nexts) (conj path node) (conj seen node))))))))
 
+(defn implied-requires
+  "The namespaces a source depends on because the COMPILER will emit calls into
+  them, which no `:require` in that source names.
+
+  The load order is built from `:require` edges. A regex literal becomes
+  `(flint.regex/pattern ..)` and a `defprotocol` becomes calls on
+  `flint.protocols/extend-method` and `protocol-miss` -- references the user
+  never wrote, into namespaces they never named. At TOP LEVEL that ran before
+  the callee was initialised, and `(def re #\"a+b\")` in a namespace with no
+  requires died as \"value is not a function (nil, 1 args)\".
+
+  Derived rather than pinned. `core-first` pins four names and that is already
+  a hand-written prefix of the load order; `flint.regex` alone would add three
+  more, and the next emitted reference would reopen it.
+
+  SELF IS EXCLUDED, because `flint.protocols` defines a protocol and
+  `flint.regex` would otherwise be asked to precede itself."
+  [me forms]
+  (let [found (volatile! #{})
+        walk (fn walk [x]
+               (cond
+                 (and (map? x) (string? (:flint/regex x))) (vswap! found conj 'flint.regex)
+                 (map? x) (doseq [[k v] x] (walk k) (walk v))
+                 (seq? x) (do (when (contains? '#{defprotocol extend-protocol extend-type}
+                                                (first x))
+                                (vswap! found conj 'flint.protocols))
+                              (doseq [e x] (walk e)))
+                 (coll? x) (doseq [e x] (walk e))
+                 :else nil))]
+    (doseq [f forms] (walk f))
+    (disj @found me)))
+
 (defn topo-order
   "Dependencies before dependents. A namespace cycle is REFUSED, naming the
   loop.
@@ -202,7 +234,8 @@
   information attached."
   [sources]
   (let [deps (into {} (for [[n {:keys [forms]}] sources]
-                        [n (set (compiler/ns-requires (or (ns-form forms) '(ns x))))]))]
+                        [n (into (set (compiler/ns-requires (or (ns-form forms) '(ns x))))
+                                 (implied-requires n forms))]))]
     (loop [done [] seen #{} pending (vec (keys deps))]
       (if (empty? pending)
         done
