@@ -698,6 +698,37 @@
            "           (try (area \"nope\") (catch Throwable e (ex-message e)))]))"))
 (def proto (run! (build! "proto")))
 (check-that "a protocol dispatches on a built-in kind" (str/includes? proto "[12 25 12"))
+
+;; A MISS DURING LOAD, which is a different phase from the one above and used
+;; to give a different answer. `defprotocol` expands to a call on
+;; `flint.protocols/protocol-miss` INTO the using namespace, which never
+;; requires it -- and the load order is built from `:require` EDGES, so a
+;; namespace with no requires sorted BEFORE `flint.protocols` and reached a var
+;; that was still nil. The function whose whole job is to explain a missing
+;; implementation was unreachable in exactly the phase where the fallback
+;; message is useless:
+;;
+;;   during load  "value is not a function (nil, 3 args)"
+;;   after load   "no implementation of pmiss/greet (protocol pmiss/Greet) .."
+;;
+;; `core-first` pins `flint.protocols` now, and `flint.core` with it, because
+;; `protocol-miss` itself calls `kind`.
+(src! "pmiss"
+      (str "(ns pmiss)
+"
+           "(defprotocol Greet (greet [x]))
+"
+           ;; TOP LEVEL, not inside main: this is the whole point of the row.
+           "(def at-load
+"
+           "  (try (greet 1) (catch Throwable e (ex-message e))))
+"
+           "(defn main [_] (pr-str at-load))"))
+(def pmiss (run! (build! "pmiss")))
+(check-that "a protocol miss DURING LOAD says which implementation is missing"
+            (str/includes? pmiss "no implementation of pmiss/greet"))
+(check-that "and does not fall back to the nil-callee message"
+            (not (str/includes? pmiss "is not a function")))
 (check-that "  ... and on metadata, which is the main road here"
             (str/includes? proto "12 \"a vector 12\""))
 (check-that "a value with no implementation names the protocol"

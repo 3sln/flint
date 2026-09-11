@@ -303,7 +303,33 @@
   ;; this script cannot call into the compiled compiler, which is the same
   ;; reason the feature set was once read in three places with three different
   ;; literals.
-  (let [pinned '[clojure.core flint.check]]
+  ;;
+  ;; `flint.protocols` FOLLOWS, and for a measured reason rather than a
+  ;; symmetry. `defprotocol` expands to calls on `flint.protocols/extend-method`
+  ;; and `flint.protocols/protocol-miss` INTO the using namespace, which never
+  ;; required it -- a qualified reference resolves through the read pre-pass,
+  ;; and the load order is built from `:require` EDGES. So a namespace with no
+  ;; requires sorts before it, and its top-level code calls a var that is still
+  ;; nil.
+  ;;
+  ;; That is not hypothetical. The SAME protocol miss, in the same program:
+  ;;
+  ;;   during load  -> "value is not a function (nil, 3 args)"
+  ;;   after load   -> "no implementation of app.main/greet (protocol ..) for
+  ;;                    a value of kind :number. Extend the protocol to that
+  ;;                    kind, or attach .. as metadata on the value."
+  ;;
+  ;; `protocol-miss` exists to say the second thing, and it was unreachable in
+  ;; exactly the phase where the first one is useless.
+  ;;
+  ;; `flint.core` IS PINNED WITH IT, and that was measured too. Pinning
+  ;; `flint.protocols` alone moved the failure one level down rather than
+  ;; fixing it -- `protocol-miss` ran, and died on `(kind x)`, because `kind`
+  ;; lives in `flint.core` and that was still nil. The claim that its
+  ;; `flint.core` reference was call-time-only was wrong: `protocol-miss` IS
+  ;; the load-time caller. `flint.core` requires nothing, so the chain stops
+  ;; there.
+  (let [pinned '[clojure.core flint.check flint.core flint.protocols]]
     (concat (filter (set order) pinned) (remove (set pinned) order))))
 
 (defn b64-decode [s]
