@@ -75,7 +75,9 @@ pub fn hash_bytes(bs: &[u8]) -> u32 {
 /// IT USED TO REPRODUCE CLOJURE'S NUMBER, and the shape of that is worth
 /// recording because it is what an artefact looks like from the inside:
 ///
-///     hash_combine(hash_unencoded_chars(name), java_string_hash(ns))
+/// ```text
+/// hash_combine(hash_unencoded_chars(name), java_string_hash(ns))
+/// ```
 ///
 /// murmur over the name's UTF-16 units, combined with the RAW 31-walk over the
 /// namespace's. The asymmetry was not derived from anything -- the comment
