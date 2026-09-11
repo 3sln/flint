@@ -248,33 +248,47 @@ binding and the host-facing token half, which really are still open.
 Recorded 2026-09-11. Today there are three mechanisms and one dead service
 (see the row below); this is the shape they should collapse into.
 
-**Each `deps.*` module parses that ecosystem's OWN manifest and answers in one
-standard shape.** npm reads `package.json`, Maven reads a POM, flint reads
-`deps.edn` — the parsing lives where the format knowledge is, in Rust, and what
-comes back out is the same structure regardless of where it came from. The
-`.cljc` side stops knowing that npm has a manifest and Maven has a POM.
+**TWO AXES, NOT ONE. Downloaders and manifest scanners are separate things.**
+This is the correction that makes the rest work: what FETCHES a package and
+what READS its dependency list are independent, and coupling them is what
+produced today's mess.
 
-**The `deps.*` modules become PODS.** That makes them usable from babashka and
-from flint alike, rather than being a CLI-only service. The shape already
-exists and is already decided: `workspace-capabilities` describes a pod as an
-ordinary dependency carrying `:pod/version` with a virtual namespace
-underneath, and `flint.deps.mvn` is already served as a virtual namespace — so
-this is a short step from where it is, not a new mechanism.
+* A **downloader** per ecosystem: npm from a registry, Maven from a
+  repository, git by clone. `:local/root` has none — there is nothing to
+  fetch, and that is the case that proves the axes are separate.
+* A **manifest scanner** per FORMAT: `package.json`, `pom.xml`, `deps.edn`.
+  Each takes a directory that is already on disk and answers in one standard
+  shape.
 
-**Then the merge is ordinary `.cljc`.** Given native dependencies from the pod
-AND the pod's package asset/file/VFS reader, the Clojure side reads `deps.edn`
-and merges it with what the ecosystem declared. One walk, one merge, every
-kind.
+The scanners must not be reachable only through their own downloader. A
+`:local/root` is never downloaded and still has a manifest worth reading. A git
+repository is cloned by the git downloader and may then turn out to carry any
+of the three formats. And a package pulled from npm could itself carry a
+`deps.edn`, if somebody publishes a flint library there — so even the obvious
+pairing is not guaranteed, and nothing should assume the format from the
+source.
 
-**Git has no native manifest, and does not need one.** A cloned repository can
-CARRY a `package.json`, a `pom.xml` or a `deps.edn`, and after the clone any of
-them can be read the same way as a registry's. Worth one correction to the
-premise: npm genuinely does accept git dependencies (`git+https://…` in
-`package.json`), but Maven does not resolve from git natively — JitPack and
-similar are third-party services that build a repo into an artifact. That does
-not weaken the design, because it does not depend on the ecosystem accepting
-git; it depends only on the repository containing a manifest we can read once
-it is on disk.
+**Parsing lives where the format knowledge is**, in the Rust `deps.*` modules,
+so the `.cljc` side stops knowing which ecosystem keeps its dependencies in
+which file.
+
+**Those modules become PODS**, usable from babashka and flint alike rather than
+being CLI-only. A short step from where things are:
+`workspace-capabilities` already defines a pod as an ordinary dependency
+carrying `:pod/version` with a virtual namespace underneath, and
+`flint.deps.mvn` is already served as a virtual namespace.
+
+**Then the merge is ordinary `.cljc`**: native dependencies from the scanner,
+plus the pod's asset/file/VFS reader, merged with `deps.edn` in one walk, for
+every kind.
+
+ONE CORRECTION TO A PREMISE, since it was raised as a question: npm genuinely
+does accept git dependencies (`git+https://…` in `package.json`), but Maven
+does not resolve from git natively — JitPack and similar are third-party
+services that build a repository into an artifact. The design does not need
+them to, because it does not depend on an ecosystem accepting git. It depends
+only on a repository CONTAINING a manifest once it is on disk, which is exactly
+what separating the scanners from the downloaders buys.
 
 | **Transitive resolution, EVERY dependency kind** | git/`:local/root` resolve transitives one way, npm another, Maven not at all | THREE mechanisms where there should be one. `lib/flint/deps.cljc`'s fetch walk reads a fetched dependency's own `deps.edn` and recurses (`(recur (vec (concat (rest todo) (or (:deps sub) {}))))`) — that covers git and `:local/root`, whose deps live in a `deps.edn`. `resolve.cljc`'s `plan`/`deps-of` reads an npm MANIFEST and recurses separately. Maven has neither: a jar's deps are in a POM, and nothing parses one, though `flint.deps.mvn` serves `pom` ready to be called. **`deps-of`'s docstring also describes a caller-side git mechanism that is not what happens** — the git path works, but through the other walk entirely. Every kind needs transitive resolution and it should be ONE walk |
 | ~~Transitive resolution for Maven~~ (superseded by the row above) | not built — npm has it, Maven silently does not | `deps-of` (`lib/flint/deps/resolve.cljc`) returns real transitives for `:npm` from its manifest; `:mvn` falls through to `{}` with no clause and no comment. `flint.deps.mvn` already serves `pom` with real fetches and caching and has never been called. The cancellation recorded under `cli` was **revoked 2026-09-11**: it measured a benefit against a standard library that was missing `spec.alpha`/`zip`/`data`/`datafy`, which were implemented right afterwards |
