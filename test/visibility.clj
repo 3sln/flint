@@ -183,3 +183,67 @@
          (some? r) "a protocol emits a call into the caller's namespace"))
 
 (when (pos? @fails) (println "  " @fails "FAILURES") (System/exit 1))
+
+;; ---------------------------------------------------------------------------
+;; AND THE CAPABILITY GUARD, which is the same KIND of mark and had no test.
+;;
+;; `^{:flint/capabilities-guard [...]}` is not hygiene -- it is the var-level
+;; half of 0036, refusing a reference from a workspace that does not hold the
+;; capability. It was read out of the SAME table by the same shape of check as
+;; the two above, so the order-dependence those rows pin was present here too,
+;; and nothing anywhere named it: `capabilities-guard` appeared in `src/` and
+;; `lib/` and in NO test file.
+;;
+;; What made it certain rather than suspected is the pair below. Both rows are
+;; the same reverse edge, the same namespace, the same function position. The
+;; only difference is WHICH mark the named var carries. Privacy refused and the
+;; guard did not -- so the body was demonstrably analysed, and the guard's
+;; silence was a bypass rather than a file the compiler never reached.
+(defn guard-outcome
+  "`:refused` only when the capability guard stopped it."
+  [files ws]
+  (let [r (project/resolve-project (project/files-resolver files ws) 'app.main #{:flint})]
+    (try
+      (compiler/compile-image {:sources (:sources r) :order (:order r)
+                               :entry 'app.main/main})
+      :compiled
+      (catch Exception e
+        (if (str/includes? (ex-message e) "is guarded with") :refused :other)))))
+
+(def guard-ws [{:prefix "libx/" :name 'libx :grants #{:fs}}
+               {:prefix "app/" :name 'app}])
+
+(def guard-owner "(ns libx.owner2 (:require [app.back2]))
+(defn ^{:flint/capabilities-guard [:fs]} danger [x] x)
+(defn- guard-secret [x] x)
+(defn go [x] (app.back2/reach x))")
+
+(defn guard-files [reach]
+  {"libx/owner2.cljc" guard-owner
+   "app/back2.cljc" (str "(ns app.back2)\n(defn reach [x] " reach ")")
+   "app/main.cljc" "(ns app.main (:require [libx.owner2 :as o])) (defn main [_] (o/go 1))"})
+
+(check "a guarded var is refused from an ungranted workspace, ORDINARY edge"
+       (= :refused (guard-outcome
+                    {"libx/owner2.cljc" "(ns libx.owner2)\n(defn ^{:flint/capabilities-guard [:fs]} danger [x] x)"
+                     "app/main.cljc" "(ns app.main (:require [libx.owner2 :as o])) (defn main [_] (o/danger 1))"}
+                    guard-ws))
+       "the baseline: without this row the check could be dead and look fine")
+
+(check "and refused across the REVERSE edge, where the definer is analysed second"
+       (= :refused (guard-outcome (guard-files "(libx.owner2/danger x)") guard-ws))
+       "this is the row that failed: the guard read a table analysis had not filled yet")
+
+(check "the same reverse edge refuses a PRIVATE var -- so the body IS analysed"
+       (= :refused (outcome (guard-files "(libx.owner2/guard-secret x)") guard-ws))
+       "the companion control: if this stops refusing, the row above proves nothing")
+
+(check "and an unguarded var across that edge is still allowed"
+       (not= :refused (guard-outcome (guard-files "x") guard-ws))
+       "the guard must not refuse the reverse edge itself")
+
+(check "a workspace that HOLDS the capability may name the guarded var"
+       (not= :refused (guard-outcome (guard-files "(libx.owner2/danger x)")
+                                     [{:prefix "libx/" :name 'libx :grants #{:fs}}
+                                      {:prefix "app/" :name 'app :grants #{:fs}}]))
+       "a guard that refuses the granted caller is not a guard, it is a wall")

@@ -223,16 +223,37 @@
   the anonymous one and so are the same -- a program that declares no workspaces
   is checked nowhere, which is what it was before any of this existed.
 
-  One honest limit. The guard has to be recorded before the reference is
-  analysed, and it is, because namespaces are analysed dependencies-first. A
-  cycle ACROSS workspaces could put a reference before the guard that would have
-  refused it, and this fails open there. Level one still refuses the require in
-  the ordinary case, and a guarded workspace in a cycle with the workspace it
-  guards is pathological rather than merely unusual."
+  THE LIMIT THIS ONCE CLAIMED WAS WRONG, and the correction is worth keeping.
+  It said the guard is always recorded before the reference because namespaces
+  are analysed dependencies-first, so that only a cycle ACROSS workspaces could
+  fail open. Dependencies-first is what CREATES the hole: if A requires B then
+  B is analysed FIRST, and B may name A's vars without requiring it, because
+  `qualify` resolves through `:declared`. No cycle, no reverse require, just an
+  ordinary edge pointing the other way.
+
+  Measured before this was rewritten: the same function, in the same position,
+  refused for naming a private var and ACCEPTED for naming a guarded one.
+
+  It reads `:declared` now, which the read pre-pass fills before any analysis,
+  so the answer no longer depends on which file the compiler reached first."
   [env q]
   (when (namespace q)
     (let [c @(:cc env)
-          guard (:flint/capabilities-guard (get (:var-meta c) q))]
+          ;; THE SAME FALLBACK `privacy-check!` USES, and for the same reason
+          ;; one function up. `:var-meta` is filled in when a namespace is
+          ;; ANALYSED; `:declared` is filled in by the read pre-pass, before
+          ;; any analysis. Reading only the first made this ORDER-DEPENDENT,
+          ;; and the docstring above says why that was thought safe --
+          ;; "namespaces are analysed dependencies-first". That is exactly what
+          ;; breaks it: dependencies-first means that if A requires B then B is
+          ;; analysed FIRST, so B's references to A's guarded vars are checked
+          ;; against an empty table. No cycle is needed, and no `:require` from
+          ;; B to A is needed either, because `qualify` resolves through
+          ;; `:declared`.
+          guard (:flint/capabilities-guard
+                 (or (get (:var-meta c) q)
+                     (let [d (get (:declared c) q)]
+                       (when (map? d) d))))]
       (when (seq guard)
         (let [here (current-ns env)
               there (symbol (namespace q))

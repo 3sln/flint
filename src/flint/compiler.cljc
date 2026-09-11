@@ -78,7 +78,15 @@
   [sym extra]
   (let [m (meta sym)]
     (cond-> {:private (boolean (or extra (:private m)))}
-      (:internal m) (assoc :internal true))))
+      (:internal m) (assoc :internal true)
+      ;; AND THE CAPABILITY GUARD, which is the one that is not hygiene.
+      ;; `guard-check!` reads it out of the same map as the two above, and
+      ;; read only `:var-meta` -- so a reference from a namespace analysed
+      ;; before the definer found no guard and was ALLOWED. Verified: the same
+      ;; function, in the same position, is refused for naming a private var
+      ;; and accepted for naming a guarded one.
+      (:flint/capabilities-guard m)
+      (assoc :flint/capabilities-guard (:flint/capabilities-guard m)))))
 
 (defn- def-form-entries
   "`[name visibility]` for every top-level name `form` defines, following `do`
