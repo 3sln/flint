@@ -481,13 +481,20 @@ worked in both configurations -- a clean resolution, and entirely an artefact
 of a `target/release/flint` from before the move. `cargo build --release -p
 flint-cli` is the missing step, and the failure appeared the moment it ran.
 
-WHAT WOULD ACTUALLY MOVE IT is pinning `flint.protocols` in `core-first`, which
-is exactly why `flint.check` is pinned -- "nothing `:require`s `flint.check`,
-so the graph has no edge to order by and this supplies one". The catch is that
-`flint.protocols` requires `flint.core`, so pinning it means pinning that too,
-and the pinned list stops being two special cases and starts being a
-hand-maintained prefix of the order. That is a decision, not a fix, and it is
-left open.
+AND IT IS NO LONGER BLOCKED, which this paragraph used to say it was. Pinning
+`flint.protocols` in `core-first` is exactly why `flint.check` is pinned --
+"nothing `:require`s `flint.check`, so the graph has no edge to order by and
+this supplies one" -- and it LANDED, with `flint.core` beside it, because
+`protocol-miss` calls `kind`. It landed for its own reason rather than for this
+one: a protocol miss during load reported "value is not a function (nil, 3
+args)" instead of naming the missing implementation, which is a live defect on
+ordinary code.
+
+So the thing that kept `extend-method` in `clojure.core` is gone. Moving it is
+now an ordinary change rather than a blocked one, and it is worth doing only if
+the name bothers somebody -- `extend-method` is the one name that namespace
+publishes which Clojure does not. It stays for now because nothing forces it,
+not because anything stops it.
 
 ## THE GENERAL CASE: a compiler-emitted reference is not an edge
 
