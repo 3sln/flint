@@ -340,6 +340,37 @@ them to, because it does not depend on an ecosystem accepting git. It depends
 only on a repository CONTAINING a manifest once it is on disk, which is exactly
 what separating the scanners from the downloaders buys.
 
+### Design: the heavy parts of the CLI should be pods too
+
+Recorded 2026-09-11, generalising the dependency plan above: anything heavy and
+not always needed should be a pod fetched on demand, not weight in the binary.
+
+DEPENDENCY MANAGEMENT IS THE WORKED EXAMPLE, and the numbers make the case
+without argument. Every external crate the CLI pulls in exists to serve it:
+
+    ureq + rustls   downloading from registries   (a whole TLS stack)
+    flate2, tar     npm tarballs
+    zip             maven jars
+    semver          npm version ranges
+    sha2, hex       integrity checking
+    serde_json      npm manifests
+
+All of them are reached from `cli/src/deps.rs` and nowhere else, except
+`serde_json`, which `pod.rs` also uses, and `ureq`, which `sys.rs` also uses.
+And `deps.rs` plus `depscmd.rs` is 1 226 lines of a 3 491-line CLI — **35% of
+the source, and effectively all of the third-party surface, for one feature.**
+The binary is 4.5 MB.
+
+So moving the drivers out is not only about openness, it is the difference
+between shipping a TLS stack to everyone and shipping it to people who fetch
+something. A `flint run` over local sources needs none of it.
+
+WHAT ELSE FITS THE SHAPE is worth surveying rather than assuming — the test is
+"heavy, and not needed on every invocation". Likely candidates: anything that
+speaks a wire format, anything that unpacks an archive, anything that talks to
+a network service. What must NOT move is the pod manager itself, for the reason
+in the section below: it is the fixed point that fetches the rest.
+
 ### Pods are a dependency kind, and the least finished one
 
 Raised 2026-09-11, and it matters more than it looks, because the plan above
