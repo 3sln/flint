@@ -147,6 +147,45 @@ hand-written; it is the argument for moving them, because this is the class of
 function where being wrong is invisible until a hash collides in one runtime
 and not another.
 
+## One algorithm, two GENERATED sources
+
+The sharpest instance of "ported into isolated namespaces and so written
+twice", and it is not in the hand-written tree at all — both halves are kin
+output, which is why counting hand-written functions never showed it.
+
+`rope-hash` (`kin/ropeflat.kin`) and `b-hash` (`kin/bytehash.kin`) are the same
+cached tree-fold: walk a leaf with `h * 31 + byte`; return a cached hash if the
+node has one; otherwise fold the children with `h * pow31(child bytes) + child
+hash`, cache, return. Diffed as EMITTED Rust, the fold is line-for-line
+identical under six substitutions:
+
+    is_rope          is_brope
+    leaf_len/_byte   olen / read_u8 at HDR+i, behind a TY_BYTES test
+    RP_HASH          BB_HASH
+    rope_kids        olen - BB_KIDS
+    RP_KIDS          BB_KIDS
+    s_bytes          b_count
+
+`pow31` is ALREADY shared — `ropeflat.kin` requires it from `bytehash.kin` — so
+the arithmetic converged and the walk around it did not.
+
+THE TWO ARE ALLOWED TO DIFFER IN RESULT, and do: the string side finishes with
+`hash-int` and the byte side does not. That is legal because a byte string is
+only ever `=` to another byte string (`valeq.kin` tests `TY_BYTES`/`TY_BROPE`
+on BOTH sides), so nothing requires the two to agree. The duplication is the
+WALK, not the answer.
+
+WHAT UNIFYING WOULD COST, stated because it is not obviously worth paying. kin
+has no macro, template or generic form — `defconst`, `defdata`, `defn`,
+`defstruct` is the whole list — so one source cannot emit two specialisations.
+A single function would have to branch on the type per node, in a hot path, and
+would couple two layouts in one place. The recursion is what forces it: the
+fold calls back into itself, so the branch cannot be hoisted out of the loop.
+
+So this is recorded and not done. It is a real instance of the pattern and the
+price is real too; whether ~20 lines of shared structure is worth a per-node
+branch is a judgement about this runtime, not a cleanup.
+
 AND THE 31-WALK EXISTS FOUR TIMES. `hashBytes` / `HashBytes` / `hash_bytes` are
 one rule -- `h * 31 + byte`, then the final mix -- written once per runtime,
 and `kin/bytehash.kin` writes the SAME walk for byte trees, generated. The two
