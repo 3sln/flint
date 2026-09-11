@@ -363,20 +363,24 @@ holds six Rust crates built by `bin/build-units` into `units/`. The pattern of
 "the repo carries source for native pieces the toolchain builds" already
 exists; this extends it.
 
-**THE OPEN QUESTION IS DISTRIBUTION, and it is a real difference from
-`units-src`.** Those crates compile to wasm object files, which are portable:
-one build serves every host. A pod is a NATIVE EXECUTABLE, so the same source
-produces a different artifact per platform. That leaves a choice nobody has
-made yet:
+**DISTRIBUTION IS NOT AN OPEN QUESTION — prebuilt per platform is what a pod
+IS.** An earlier draft of this section offered three options, one of them
+"build from source on first use". That was inventing a choice the concept
+already forecloses: a pod is a separate process the host starts, `Pod::boot`
+takes a path to a program and does `Command::new(program)`, and the babashka
+pod registry a flint pod would be modelled on already carries per-platform
+artifacts. Distributing prebuilt binaries per platform is the definition, not
+one option among several.
 
-* build from source on first use — no artifacts to host, but every user needs
-  a Rust toolchain, which flint does not otherwise require;
-* publish prebuilt binaries per platform — a real release process, and the
-  registry has to say which artifact matches which host;
-* or a hybrid: prebuilt where available, build from source as the fallback.
+So the registry format does not need a decision here; it needs to do what pod
+registries already do — name a pod, name its versions, and say which artifact
+matches which host.
 
-Worth deciding before the registry format is fixed, because the manifest has to
-carry whatever the answer needs.
+What DOES differ from `units-src`, and is worth keeping in view rather than
+deciding: those crates compile to wasm object files, so one build serves every
+host and the repo ships no binaries. Pods mean a real release process producing
+an artifact per platform. That is a cost of the approach, not a choice within
+it.
 
 ### Design: the heavy parts of the CLI should be pods too
 
