@@ -242,6 +242,40 @@ binding and the host-facing token half, which really are still open.
 | The remaining cross-compilation backends (`:to :jvm`, `:to :clr`) | decided, not started, blocked on nothing technical — the runtimes exist, the CLI wiring doesn't | `cli`, `other-hosts` |
 | nREPL | decided, not started — overlaps `debug-runner`'s debug runner design, "these should be one implementation" | `cli` §nREPL |
 | `{:args :capabilities}` entry map (vs. today's bare `:args` vector) | decided, not started — explicitly the breaking change to make exactly once, before anything is published | `cli`, `structured-ports` |
+
+### Design: unify dependency resolution behind pods
+
+Recorded 2026-09-11. Today there are three mechanisms and one dead service
+(see the row below); this is the shape they should collapse into.
+
+**Each `deps.*` module parses that ecosystem's OWN manifest and answers in one
+standard shape.** npm reads `package.json`, Maven reads a POM, flint reads
+`deps.edn` — the parsing lives where the format knowledge is, in Rust, and what
+comes back out is the same structure regardless of where it came from. The
+`.cljc` side stops knowing that npm has a manifest and Maven has a POM.
+
+**The `deps.*` modules become PODS.** That makes them usable from babashka and
+from flint alike, rather than being a CLI-only service. The shape already
+exists and is already decided: `workspace-capabilities` describes a pod as an
+ordinary dependency carrying `:pod/version` with a virtual namespace
+underneath, and `flint.deps.mvn` is already served as a virtual namespace — so
+this is a short step from where it is, not a new mechanism.
+
+**Then the merge is ordinary `.cljc`.** Given native dependencies from the pod
+AND the pod's package asset/file/VFS reader, the Clojure side reads `deps.edn`
+and merges it with what the ecosystem declared. One walk, one merge, every
+kind.
+
+**Git has no native manifest, and does not need one.** A cloned repository can
+CARRY a `package.json`, a `pom.xml` or a `deps.edn`, and after the clone any of
+them can be read the same way as a registry's. Worth one correction to the
+premise: npm genuinely does accept git dependencies (`git+https://…` in
+`package.json`), but Maven does not resolve from git natively — JitPack and
+similar are third-party services that build a repo into an artifact. That does
+not weaken the design, because it does not depend on the ecosystem accepting
+git; it depends only on the repository containing a manifest we can read once
+it is on disk.
+
 | **Transitive resolution, EVERY dependency kind** | git/`:local/root` resolve transitives one way, npm another, Maven not at all | THREE mechanisms where there should be one. `lib/flint/deps.cljc`'s fetch walk reads a fetched dependency's own `deps.edn` and recurses (`(recur (vec (concat (rest todo) (or (:deps sub) {}))))`) — that covers git and `:local/root`, whose deps live in a `deps.edn`. `resolve.cljc`'s `plan`/`deps-of` reads an npm MANIFEST and recurses separately. Maven has neither: a jar's deps are in a POM, and nothing parses one, though `flint.deps.mvn` serves `pom` ready to be called. **`deps-of`'s docstring also describes a caller-side git mechanism that is not what happens** — the git path works, but through the other walk entirely. Every kind needs transitive resolution and it should be ONE walk |
 | ~~Transitive resolution for Maven~~ (superseded by the row above) | not built — npm has it, Maven silently does not | `deps-of` (`lib/flint/deps/resolve.cljc`) returns real transitives for `:npm` from its manifest; `:mvn` falls through to `{}` with no clause and no comment. `flint.deps.mvn` already serves `pom` with real fetches and caching and has never been called. The cancellation recorded under `cli` was **revoked 2026-09-11**: it measured a benefit against a standard library that was missing `spec.alpha`/`zip`/`data`/`datafy`, which were implemented right afterwards |
 | `deps.edn` support: git/npm/maven at exact versions | done | `cli` — **maven's transitive resolution was explicitly cancelled, and that is now revoked**, on a measured survey (8.9% of a 135-namespace Clojars sample compiles cleanly on flint; transitive resolution would fix ~2 of 135) |
