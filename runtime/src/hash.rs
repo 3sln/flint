@@ -1,28 +1,33 @@
-//! Hashing, bit-compatible with JVM Clojure's `hash`.
-//!
-//! This is worth the trouble: `hash` is observable from Clojure code, and a
-//! program that ports to flint should get the same numbers it got before. The
-//! formulas were derived by solving against real Clojure values rather than
-//! from memory -- see the tests, which pin every one of them.
+//! Hashing. Clojure's numbers for NUMBERS and COLLECTIONS; flint's own for
+//! anything made of text.
 //!
 //! ```text
 //!   nil                0
 //!   true / false       1231 / 1237
-//!   long               Murmur3.hashLong
-//!   double             (int)(bits ^ (bits >>> 32)), and -0.0 hashes as 0.0
-//!   string             Murmur3.hashInt(javaStringHashCode(s))
-//!   symbol             hashCombine(hashUnencodedChars(name), rawHash(ns))
-//!   keyword            symbolHash + 0x9e3779b9
-//!   sequential         hashOrdered      (31*h + hash(x), then mixCollHash)
-//!   set                hashUnordered    (sum of hashes, then mixCollHash)
+//!   long               Murmur3.hashLong                     as Clojure
+//!   double             (int)(bits ^ (bits >>> 32))          as Clojure
+//!   string             hash_bytes                           flint's own
+//!   symbol             hash_combine of both parts' bytes    flint's own
+//!   keyword            symbol hash + 0x9e3779b9             flint's own
+//!   sequential         hashOrdered   (31*h + hash(x), then mixCollHash)
+//!   set                hashUnordered (sum of hashes, then mixCollHash)
 //!   map                hashUnordered over entries; an entry hashes as [k v]
 //! ```
 //!
-//! Note `javaStringHashCode` and `hashUnencodedChars` both run over **UTF-16
-//! code units**, not bytes and not code points. flint strings are UTF-8, so the
-//! iterators below re-derive the UTF-16 view on the fly. Getting this wrong is
-//! invisible until the first astral-plane character.
-
+//! THE TEXT ROWS USED TO MATCH CLOJURE TOO, through `javaStringHashCode` and
+//! `hashUnencodedChars`, both of which run over UTF-16 CODE UNITS. flint
+//! strings are UTF-8, so reaching those numbers meant decoding UTF-8 and
+//! re-deriving a UTF-16 view on every hash -- on the JVM, allocating an array
+//! to hold it, on the path that hashes map keys.
+//!
+//! It bought nothing that was promised. Clojure changed its own hash in 1.6
+//! and documents no stability across versions, so the numbers were never a
+//! contract. What a program can rest on is that equal values hash alike, and
+//! that every runtime agrees -- both of which the conform suite pins.
+//!
+//! The number rows above ARE still Clojure's, and cost nothing extra to keep:
+//! they are bit operations on a value already in a register, with no decode
+//! and no allocation behind them.
 
 // THE CONSUMING LINE. The Murmur3 primitives are generated now, into
 // `kgen/rt/hash.rs`, and they are FREE FUNCTIONS rather than methods
