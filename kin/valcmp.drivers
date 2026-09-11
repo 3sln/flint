@@ -214,11 +214,9 @@ fn main() {
             return sgn((int) (a & 0xFFFFFFFFL) - (int) (b & 0xFFFFFFFFL));
         }
     }
-    static final class Str {
-        static int compareUtf16(Rt rt, long a, long b) {
+    static int strCmp(Rt rt, long a, long b) {
             return sgn((int) rt.slot_(a, 0) - (int) rt.slot_(b, 0));
         }
-    }
     static boolean isSymbol(Rt rt, long v) { return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_SYM; }
     static long nsOf(Rt rt, long v) { return rt.slot_(v, 0); }
     static int category(Rt rt, long v) {
@@ -356,11 +354,9 @@ namespace Flint.Rt {
             return Sgn((int) (a & 0xFFFFFFFFL) - (int) (b & 0xFFFFFFFFL));
         }
     }
-    internal static class Str {
-        internal static int CompareUtf16(Rt rt, long a, long b) {
+    internal static int StrCmp(Rt rt, long a, long b) {
             return Sgn((int) rt.Slot_(a, 0) - (int) rt.Slot_(b, 0));
         }
-    }
     internal static bool IsSymbol(Rt rt, long v) { return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TySym; }
     internal static long NsOf(Rt rt, long v) { return rt.Slot_(v, 0); }
     internal static int Category(Rt rt, long v) {

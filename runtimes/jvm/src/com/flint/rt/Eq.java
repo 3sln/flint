@@ -41,22 +41,12 @@ public final class Eq {
     /// Clojure's `compare`: -1, 0 or 1, and a THROW for values that have no
     /// ordering. Refusing is the right answer -- a `sort` over mixed types
     /// silently ordered by type tag would be stable, plausible and wrong.
-    /// By UTF-16 CODE UNIT, as `String.compareTo` is -- not by code point.
-    /// The two orders differ above U+FFFF, and Clojure's is the UTF-16 one.
-    /// `Str.compareUtf16` is what the generated `compare` reaches this by.
-    public static int utf16Cmp(String x, String y) {
-        int n = Math.min(x.length(), y.length());
-        for (int i = 0; i < n; i++) {
-            int d = x.charAt(i) - y.charAt(i);
-            if (d != 0) return d < 0 ? -1 : 1;
-        }
-        return Integer.compare(x.length(), y.length());
-    }
 
-    // `compare`, `cmpNamed` and `cmpSequential` are GENERATED, from
-    // `kin/valcmp.kin`. `utf16Cmp` stays, and `Str.compareUtf16` is the name
-    // the generated arm reaches it by -- native was reading a rope's SLOTS as
-    // UTF-8 where this port materialised and was right.
+    // `compare`, `cmpNamed` and `cmpSequential` are GENERATED, and `str-cmp`
+    // is too now, from `kin/ropecmp.kin`. The UTF-16 comparison that used to
+    // live here went with it: it ordered by code UNIT to match
+    // `String.compareTo`, which differs from code point order only above
+    // U+FFFF, and reaching it meant materialising both ropes first.
 
     static long nsOf(Rt rt, long v) { return com._3sln.flint.kgen.rt.Names.nsOf(rt, v); }
     /// THE SECOND COPY IS GONE. `Eq` had its own `nameOf` that skipped the

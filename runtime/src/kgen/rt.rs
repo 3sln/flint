@@ -77,6 +77,7 @@ pub mod meta;
 pub mod nodeclass;
 pub mod pike;
 pub mod ropecat;
+pub mod ropecmp;
 pub mod ropecp;
 pub mod ropeeq;
 pub mod ropefind;

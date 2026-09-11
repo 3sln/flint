@@ -263,13 +263,11 @@ public final class Str {
                                 name.getBytes(StandardCharsets.UTF_8));
     }
 
-    /// Two strings in UTF-16 CODE UNIT order, across all three tiers.
-    /// `Eq.compare` did this inline; it is a name now because the generated
-    /// `compare` needs one, and because native was reading a rope's SLOTS as
-    /// UTF-8 where this materialises.
-    public static int compareUtf16(Rt rt, long a, long b) {
-        return Eq.utf16Cmp(text(rt, a), text(rt, b));
-    }
+    /// GENERATED NOW, from `kin/ropecmp.kin`. This flattened both operands --
+    /// `text` opens a sink and appends the whole rope -- and then compared
+    /// UTF-16 code units to reproduce `String.compareTo`. UTF-8 byte order is
+    /// already code point order, and `0011` lists comparison among the
+    /// operations that must WALK.
 
     /// The hash of a STRING value, cached in the object for a heap string.
     ///

@@ -1,0 +1,558 @@
+--rust-head
+extern crate alloc;
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_STR: u8 = 2; const TY_ROPE: u8 = 26; const TY_VEC: u8 = 9;
+pub mod obj {
+    pub const HDR: u64 = 8; pub const STR_DATA: u64 = 16;
+    pub const RP_BYTES: u32 = 0; pub const RP_CPS: u32 = 1;
+    pub const RP_FLAT: u32 = 2; pub const RP_HASH: u32 = 3; pub const RP_KIDS: u32 = 4;
+}
+impl Value {
+    // AN INLINE STRING is tagged and carries its own bytes -- here, one byte of
+    // length and up to three of payload, which is enough to be a leaf.
+    fn is_inline_str(self) -> bool { (self.0 >> 60) == 0xE }
+    fn inline_len(self) -> u32 { ((self.0 >> 56) & 0xF) as u32 }
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 && (self.0 >> 60) != 0xE }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    // THE PROBE TAGS ITS FIXNUMS so that a heap address is not mistaken for
+    // one -- `rope_hash` asks `is_fixnum` of a slot that may hold either.
+    fn is_fixnum(self) -> bool { (self.0 >> 60) == 0xD }
+    fn as_fixnum(self) -> i64 { (self.0 & 0xFFFF_FFFF) as i64 }
+    fn fixnum(n: i64) -> Value { Value((0xDu64 << 60) | (n as u64 & 0xFFFF_FFFF)) }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+}
+struct Space { m: Vec<u8> }
+impl Space {
+    fn read_u8(&self, a: Addr) -> u8 { self.m[a as usize] }
+}
+struct Gc { sp: Space }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64,
+            roots: Vec<Value>, sinks: Vec<Vec<u8>>, walks: Vec<Vec<(Value, u32)>> }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn set(&mut self, n: Value, i: u32, v: Value) { self.h[n.0 as usize + i as usize] = v.0; }
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        let a = self.bump; self.bump += n as u64 + 32;
+        self.gc.sp.m[a as usize] = t; self.lens[a as usize] = n;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
+        a as Addr
+    }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+    fn olen(&self, v: Value) -> u32 { self.lens[v.0 as usize] }
+    fn leaf_len(&self, v: Value) -> u32 {
+        if v.is_inline_str() { v.inline_len() } else if v.is_heap() { self.olen(v) } else { 0 }
+    }
+    fn leaf_byte(&self, v: Value, i: u32) -> u32 {
+        if v.is_inline_str() { ((v.0 >> (8 * i)) & 0xFF) as u32 }
+        else if v.is_heap() { self.gc.sp.read_u8(v.as_heap() + obj::STR_DATA + i as u64) as u32 }
+        else { 0 }
+    }
+    fn pow31(&self, n: u32) -> u32 {
+        let mut p: u32 = 1;
+        for _ in 0..n { p = p.wrapping_mul(31); }
+        p
+    }
+    fn s_bytes(&self, v: Value) -> u32 {
+        if !self.is_rope(v) { return self.leaf_len(v); }
+        let mut n = 0u32;
+        for i in 0..self.rope_kids(v) { n += self.s_bytes(self.slot(v, obj::RP_KIDS + i)); }
+        n
+    }
+    fn is_rope(&self, v: Value) -> bool {
+        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_ROPE
+    }
+    fn rope_kids(&self, v: Value) -> u32 { self.olen(v) - obj::RP_KIDS }
+    // A FLAT STRING puts its bytes at STR_DATA, not at HDR.
+    fn flat(&mut self, bs: &[u8]) -> Value {
+        let a = self.alloc(TY_STR, bs.len() as u32);
+        for (i, b) in bs.iter().enumerate() { self.gc.sp.m[(a + obj::STR_DATA) as usize + i] = *b; }
+        Value::heap(a)
+    }
+    fn inline_of(&self, bs: &[u8]) -> Value {
+        let mut v: u64 = (0xEu64 << 60) | ((bs.len() as u64) << 56);
+        for (i, b) in bs.iter().enumerate() { v |= (*b as u64) << (8 * i); }
+        Value(v)
+    }
+    fn node(&mut self, kids: &[Value]) -> Value {
+        let a = self.alloc(TY_ROPE, obj::RP_KIDS + kids.len() as u32);
+        self.set(Value::heap(a), obj::RP_FLAT, NIL);
+        self.set(Value::heap(a), obj::RP_HASH, NIL);
+        for (i, k) in kids.iter().enumerate() { self.set(Value::heap(a), obj::RP_KIDS + i as u32, *k); }
+        Value::heap(a)
+    }
+    // THE WALK, and `run_eq` -- the memcmp `tree_eq` uses for a pair of
+    // addressable leaves. The real ones live in `bytes.rs`; these are the
+    // smallest thing that has the same behaviour.
+    fn walks_of(&mut self) -> &mut Vec<Vec<(Value, u32)>> { &mut self.walks }
+    fn walk_open(&mut self, v: Value) -> u32 {
+        self.walks.push(vec![(v, 0u32)]); (self.walks.len() - 1) as u32
+    }
+    fn walk_close(&mut self, w: u32) { self.walks.truncate(w as usize); }
+    fn walk_dup(&mut self, w: u32) -> u32 {
+        let c = self.walks[w as usize].clone(); self.walks.push(c);
+        (self.walks.len() - 1) as u32
+    }
+    fn walk_take(&mut self, w: u32, src: u32) {
+        let c = self.walks[src as usize].clone(); self.walks[w as usize] = c;
+    }
+    fn walk_done(&self, w: u32) -> bool { self.walks[w as usize].is_empty() }
+    fn walk_next(&mut self, w: u32) -> Value {
+        loop {
+            let top = match self.walks[w as usize].last() { None => return NIL, Some(t) => *t };
+            let (node, i) = top;
+            if !self.is_rope(node) { self.walks[w as usize].pop(); return node; }
+            let kids = self.rope_kids(node);
+            if i >= kids { self.walks[w as usize].pop(); continue; }
+            if let Some(t) = self.walks[w as usize].last_mut() { t.1 = i + 1; }
+            let k = self.slot(node, obj::RP_KIDS + i);
+            self.walks[w as usize].push((k, 0));
+        }
+    }
+    fn run_eq(&self, a: Addr, b: Addr, len: u32) -> bool {
+        (0..len).all(|i| self.gc.sp.read_u8(a + i as u64) == self.gc.sp.read_u8(b + i as u64))
+    }
+    fn sink_open(&mut self) -> u32 { self.sinks.push(Vec::new()); (self.sinks.len() - 1) as u32 }
+    fn sink_close(&mut self, s: u32) { self.sinks.truncate(s as usize); }
+    fn sink_put_run(&mut self, s: u32, addr: Addr, len: u32) {
+        let run: Vec<u8> = (0..len).map(|i| self.gc.sp.m[(addr + i as u64) as usize]).collect();
+        self.sinks[s as usize].extend_from_slice(&run);
+    }
+    fn sink_put(&mut self, s: u32, b: u32) { self.sinks[s as usize].push(b as u8); }
+    fn sink_put_inline(&mut self, s: u32, v: Value) {
+        let n = v.inline_len();
+        let run: Vec<u8> = (0..n).map(|i| ((v.0 >> (8 * i)) & 0xFF) as u8).collect();
+        self.sinks[s as usize].extend_from_slice(&run);
+    }
+    // The probe answers a FLAT STRING rather than interning one.
+    fn sink_contiguous(&mut self, s: u32) -> Value {
+        let bs = self.sinks[s as usize].clone();
+        self.flat(&bs)
+    }
+}
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 40000], gc: Gc { sp: Space { m: vec![0u8; 40000] } },
+                      lens: vec![0; 40000], bump: 100, roots: Vec::new(),
+                      sinks: Vec::new(), walks: Vec::new() };
+    let mut o = String::new();
+    // THE SAME BYTES IN DIFFERENT SHAPES compare EQUAL. `x` is one flat leaf of
+    // six; `y` is 1+2+3 over three; `z` is 3+3. None of them is materialised.
+    let x = rt.flat(&[1,2,3,4,5,6]);
+    let y = { let a = rt.flat(&[1]); let b = rt.flat(&[2,3]); let c = rt.flat(&[4,5,6]);
+              rt.node(&[a, b, c]) };
+    let z = { let a = rt.flat(&[1,2,3]); let b = rt.flat(&[4,5,6]); rt.node(&[a, b]) };
+    o.push_str(&format!("shapes={},{},{} ", rt.str_cmp(x, y), rt.str_cmp(y, z), rt.str_cmp(z, x)));
+    o.push_str(&format!("same={} ", rt.str_cmp(y, y)));
+    // A PREFIX IS LESS, both ways round. This is the case the byte loop cannot
+    // answer -- every byte they share is equal and the length decides.
+    let short = rt.flat(&[1,2,3]);
+    o.push_str(&format!("prefix={},{} ", rt.str_cmp(short, x), rt.str_cmp(x, short)));
+    // A DIFFERENCE, at the front and at the very last byte.
+    let front = rt.flat(&[0,2,3,4,5,6]);
+    let last = { let a = rt.flat(&[1,2,3]); let b = rt.flat(&[4,5,9]); rt.node(&[a, b]) };
+    o.push_str(&format!("diff={},{} ", rt.str_cmp(front, x), rt.str_cmp(x, last)));
+    // THE INLINE TIER has no address, so the memcmp cannot see it and the byte
+    // loop must. The difference here is INSIDE an inline leaf.
+    let w = { let a = rt.flat(&[1]); let b = rt.inline_of(&[2,3,4]); let c = rt.flat(&[5,6]);
+              rt.node(&[a, b, c]) };
+    let wd = { let a = rt.flat(&[1]); let b = rt.inline_of(&[2,9,4]); let c = rt.flat(&[5,6]);
+               rt.node(&[a, b, c]) };
+    o.push_str(&format!("inline={},{} ", rt.str_cmp(x, w), rt.str_cmp(w, wd)));
+    // BYTES ARE UNSIGNED, and this is the row that says so. 0x80 is GREATER
+    // than 0x01; read as a signed byte it would be less, and every non-ASCII
+    // string would sort before every ASCII one.
+    let hi = rt.flat(&[0x80]);
+    let lo = rt.flat(&[0x01]);
+    o.push_str(&format!("unsigned={},{} ", rt.str_cmp(hi, lo), rt.str_cmp(lo, hi)));
+    // RAGGED, deeply: the leaf boundaries line up nowhere.
+    let deep = { let a = rt.flat(&[1,2]); let b = rt.inline_of(&[3]);
+                 let inner = rt.node(&[a, b]);
+                 let c = rt.inline_of(&[4,5]); let d = rt.flat(&[6]);
+                 let inner2 = rt.node(&[c, d]);
+                 rt.node(&[inner, inner2]) };
+    o.push_str(&format!("deep={},{} ", rt.str_cmp(deep, x), rt.str_cmp(deep, last)));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_STR = 2, TY_ROPE = 26, TY_VEC = 9;
+    static final class Obj {
+        static final long HDR = 8, STR_DATA = 16;
+    }
+    static final class Str {
+        static final int RP_BYTES = 0, RP_CPS = 1, RP_FLAT = 2, RP_HASH = 3, RP_KIDS = 4;
+        static int sBytes(Rt rt, long v) { return rt.sBytes(v); }
+    }
+    static int sBytes(Rt rt, long v) { return Str.sBytes(rt, v); }
+    static int pow31(Rt rt, int n) { return rt.pow31(n); }
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static boolean isInlineStr(long v) { return (v >>> 60) == 0xEL; }
+        static int inlineLen(long v) { return (int) ((v >>> 56) & 0xF); }
+        static boolean isHeap(long v) { return v >= 100 && v != NIL && (v >>> 60) != 0xEL; }
+        static long asHeap(long v) { return v; }
+        static boolean isFixnum(long v) { return (v >>> 60) == 0xDL; }
+        static long asFixnum(long v) { return v & 0xFFFFFFFFL; }
+        static long fixnum(long n) { return (0xDL << 60) | (n & 0xFFFFFFFFL); }
+        static long heap(long a) { return a; }
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static final class Space {
+        byte[] m = new byte[40000];
+        int readU8(long a) { return m[(int) a] & 0xFF; }
+    }
+    static final class Rt {
+        long[] h = new long[40000];
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        int[] lens = new int[40000];
+        long bump = 100;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        java.util.ArrayList<java.io.ByteArrayOutputStream> sinks = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        void set(long n, int i, long v) { h[(int) n + i] = v; }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long alloc(int t, int n) {
+            long a = bump; bump += n + 32;
+            gc.sp.m[(int) a] = (byte) t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;
+            return a;
+        }
+        long slot(long n, int i) { return h[(int) n + i]; }
+        int leafLen(long v) {
+            if (Val.isInlineStr(v)) return Val.inlineLen(v);
+            return Val.isHeap(v) ? lens[(int) v] : 0;
+        }
+        int leafByte(long v, int i) {
+            if (Val.isInlineStr(v)) return (int) ((v >>> (8 * i)) & 0xFF);
+            return Val.isHeap(v) ? gc.sp.readU8(v + Obj.STR_DATA + i) : 0;
+        }
+        int pow31(int n) { int p = 1; for (int i = 0; i < n; i++) p *= 31; return p; }
+        int sBytes(long v) {
+            if (!isRope(this, v)) return leafLen(v);
+            int n = 0;
+            for (int i = 0; i < ropeKids(this, v); i++) n += sBytes(slot(v, Str.RP_KIDS + i));
+            return n;
+        }
+        java.util.ArrayList<java.util.ArrayList<long[]>> walks = new java.util.ArrayList<>();
+        int walkOpen(long v) {
+            java.util.ArrayList<long[]> st = new java.util.ArrayList<>();
+            st.add(new long[]{v, 0}); walks.add(st); return walks.size() - 1;
+        }
+        void walkClose(int w) { while (walks.size() > w) walks.remove(walks.size() - 1); }
+        int walkDup(int w) {
+            java.util.ArrayList<long[]> c = new java.util.ArrayList<>();
+            for (long[] e : walks.get(w)) c.add(new long[]{e[0], e[1]});
+            walks.add(c); return walks.size() - 1;
+        }
+        void walkTake(int w, int src) {
+            java.util.ArrayList<long[]> c = new java.util.ArrayList<>();
+            for (long[] e : walks.get(src)) c.add(new long[]{e[0], e[1]});
+            walks.set(w, c);
+        }
+        boolean walkDone(int w) { return walks.get(w).isEmpty(); }
+        long walkNext(int w) {
+            while (true) {
+                java.util.ArrayList<long[]> st = walks.get(w);
+                if (st.isEmpty()) return NIL;
+                long[] top = st.get(st.size() - 1);
+                long node = top[0];
+                if (!isRope(this, node)) { st.remove(st.size() - 1); return node; }
+                int kids = ropeKids(this, node);
+                if (top[1] >= kids) { st.remove(st.size() - 1); continue; }
+                int i = (int) top[1];
+                top[1] = i + 1;
+                st.add(new long[]{slot(node, Str.RP_KIDS + i), 0});
+            }
+        }
+        boolean runEq(long a, long b, int len) {
+            for (int i = 0; i < len; i++) if (gc.sp.readU8(a + i) != gc.sp.readU8(b + i)) return false;
+            return true;
+        }
+        int sinkOpen() { sinks.add(new java.io.ByteArrayOutputStream()); return sinks.size() - 1; }
+        void sinkClose(int s) { while (sinks.size() > s) sinks.remove(sinks.size() - 1); }
+        void sinkPutRun(int s, long addr, int len) {
+            for (int i = 0; i < len; i++) sinks.get(s).write(gc.sp.m[(int) (addr + i)] & 0xFF);
+        }
+        void sinkPut(int s, int b) { sinks.get(s).write(b); }
+        void sinkPutInline(int s, long v) {
+            int n = Val.inlineLen(v);
+            for (int i = 0; i < n; i++) sinks.get(s).write((int) ((v >>> (8 * i)) & 0xFF));
+        }
+        long sinkContiguous(int s) {
+            byte[] a = sinks.get(s).toByteArray();
+            int[] bs = new int[a.length];
+            for (int i = 0; i < a.length; i++) bs[i] = a[i] & 0xFF;
+            return flat(this, bs);
+        }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static int olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    static boolean isRope(Rt rt, long v) {
+        return Val.isHeap(v) && ty(rt.gc.sp, v) == TY_ROPE;
+    }
+    static int ropeKids(Rt rt, long v) { return olen(rt, v) - Str.RP_KIDS; }
+    static long flat(Rt rt, int[] bs) {
+        long a = rt.alloc(TY_STR, bs.length);
+        for (int i = 0; i < bs.length; i++) rt.gc.sp.m[(int) (a + Obj.STR_DATA) + i] = (byte) bs[i];
+        return Val.heap(a);
+    }
+    static long inlineOf(int[] bs) {
+        long v = (0xEL << 60) | ((long) bs.length << 56);
+        for (int i = 0; i < bs.length; i++) v |= ((long) bs[i]) << (8 * i);
+        return v;
+    }
+    static long node(Rt rt, long[] kids) {
+        long a = rt.alloc(TY_ROPE, Str.RP_KIDS + kids.length);
+        rt.set(a, Str.RP_FLAT, NIL);
+        rt.set(a, Str.RP_HASH, NIL);
+        for (int i = 0; i < kids.length; i++) rt.set(a, Str.RP_KIDS + i, kids[i]);
+        return Val.heap(a);
+    }
+    static String show(Rt rt, long v) {
+        StringBuilder s = new StringBuilder();
+        for (int i = 0; i < olen(rt, v); i++) {
+            if (i > 0) s.append('.');
+            s.append(rt.gc.sp.readU8(v + Obj.STR_DATA + i));
+        }
+        return s.toString();
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long x = flat(rt, new int[]{1,2,3,4,5,6});
+        long y = node(rt, new long[]{flat(rt, new int[]{1}), flat(rt, new int[]{2,3}),
+                                     flat(rt, new int[]{4,5,6})});
+        long z = node(rt, new long[]{flat(rt, new int[]{1,2,3}), flat(rt, new int[]{4,5,6})});
+        o.append("shapes=").append(strCmp(rt, x, y)).append(',').append(strCmp(rt, y, z))
+         .append(',').append(strCmp(rt, z, x)).append(' ');
+        o.append("same=").append(strCmp(rt, y, y)).append(' ');
+        long shortS = flat(rt, new int[]{1,2,3});
+        o.append("prefix=").append(strCmp(rt, shortS, x)).append(',')
+         .append(strCmp(rt, x, shortS)).append(' ');
+        long front = flat(rt, new int[]{0,2,3,4,5,6});
+        long last = node(rt, new long[]{flat(rt, new int[]{1,2,3}), flat(rt, new int[]{4,5,9})});
+        o.append("diff=").append(strCmp(rt, front, x)).append(',')
+         .append(strCmp(rt, x, last)).append(' ');
+        long w = node(rt, new long[]{flat(rt, new int[]{1}), inlineOf(new int[]{2,3,4}),
+                                     flat(rt, new int[]{5,6})});
+        long wd = node(rt, new long[]{flat(rt, new int[]{1}), inlineOf(new int[]{2,9,4}),
+                                      flat(rt, new int[]{5,6})});
+        o.append("inline=").append(strCmp(rt, x, w)).append(',')
+         .append(strCmp(rt, w, wd)).append(' ');
+        long hi = flat(rt, new int[]{0x80});
+        long lo = flat(rt, new int[]{0x01});
+        o.append("unsigned=").append(strCmp(rt, hi, lo)).append(',')
+         .append(strCmp(rt, lo, hi)).append(' ');
+        long inner = node(rt, new long[]{flat(rt, new int[]{1,2}), inlineOf(new int[]{3})});
+        long inner2 = node(rt, new long[]{inlineOf(new int[]{4,5}), flat(rt, new int[]{6})});
+        long deep = node(rt, new long[]{inner, inner2});
+        o.append("deep=").append(strCmp(rt, deep, x)).append(',')
+         .append(strCmp(rt, deep, last)).append(' ');
+        System.out.println(o.toString());
+    }
+--csharp-pre
+namespace Flint.Rt {
+    internal static class Str {
+        internal const int RP_BYTES = 0, RP_CPS = 1, RP_FLAT = 2, RP_HASH = 3, RP_KIDS = 4;
+    }
+}
+--csharp-head
+    internal static class Obj {
+        internal const long Hdr = 8, StrData = 16;
+        internal const int TyStr = 2, TyRope = 26, TyVec = 9;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsInlineStr(long v) { return (long)((ulong) v >> 60) == 0xEL; }
+        internal static int InlineLen(long v) { return (int) (((ulong) v >> 56) & 0xF); }
+        internal static bool IsHeap(long v) { return v >= 100 && v != Nil && (long)((ulong) v >> 60) != 0xEL; }
+        internal static long AsHeap(long v) { return v; }
+        internal static bool IsFixnum(long v) { return (long)((ulong) v >> 60) == 0xDL; }
+        internal static long AsFixnum(long v) { return v & 0xFFFFFFFFL; }
+        internal static long Fixnum(long n) { return (0xDL << 60) | (n & 0xFFFFFFFFL); }
+        internal static long Heap(long a) { return a; }
+        internal static bool IsNil(long v) { return v == Nil; }
+    }
+    internal sealed class Space {
+        internal byte[] m = new byte[40000];
+        internal int ReadU8(long a) { return m[(int) a]; }
+    }
+    internal sealed class Rt {
+        internal long[] h = new long[40000];
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[40000];
+        internal long bump = 100;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal System.Collections.Generic.List<System.IO.MemoryStream> sinks =
+            new System.Collections.Generic.List<System.IO.MemoryStream>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal void Set(long n, int i, long v) { h[(int) n + i] = v; }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long Alloc(int t, int n) {
+            long a = bump; bump += n + 32;
+            gc.sp.m[(int) a] = (byte) t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = Val.Nil;
+            return a;
+        }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+        internal int LeafLen(long v) {
+            if (Val.IsInlineStr(v)) return Val.InlineLen(v);
+            return Val.IsHeap(v) ? lens[(int) v] : 0;
+        }
+        internal int LeafByte(long v, int i) {
+            if (Val.IsInlineStr(v)) return (int) (((ulong) v >> (8 * i)) & 0xFF);
+            return Val.IsHeap(v) ? gc.sp.ReadU8(v + Obj.StrData + i) : 0;
+        }
+        internal int Pow31(int n) { int p = 1; for (int i = 0; i < n; i++) p *= 31; return p; }
+        internal int SBytes(long v) {
+            if (!IsRope(this, v)) return LeafLen(v);
+            int n = 0;
+            for (int i = 0; i < RopeKids(this, v); i++) n += SBytes(Slot(v, global::Flint.Rt.Str.RP_KIDS + i));
+            return n;
+        }
+        internal System.Collections.Generic.List<System.Collections.Generic.List<long[]>> walks =
+            new System.Collections.Generic.List<System.Collections.Generic.List<long[]>>();
+        internal int WalkOpen(long v) {
+            var st = new System.Collections.Generic.List<long[]>();
+            st.Add(new long[]{v, 0}); walks.Add(st); return walks.Count - 1;
+        }
+        internal void WalkClose(int w) { while (walks.Count > w) walks.RemoveAt(walks.Count - 1); }
+        internal int WalkDup(int w) {
+            var c = new System.Collections.Generic.List<long[]>();
+            foreach (var e in walks[w]) c.Add(new long[]{e[0], e[1]});
+            walks.Add(c); return walks.Count - 1;
+        }
+        internal void WalkTake(int w, int src) {
+            var c = new System.Collections.Generic.List<long[]>();
+            foreach (var e in walks[src]) c.Add(new long[]{e[0], e[1]});
+            walks[w] = c;
+        }
+        internal bool WalkDone(int w) { return walks[w].Count == 0; }
+        internal long WalkNext(int w) {
+            while (true) {
+                var st = walks[w];
+                if (st.Count == 0) return Val.Nil;
+                long[] top = st[st.Count - 1];
+                long nd = top[0];
+                if (!IsRope(this, nd)) { st.RemoveAt(st.Count - 1); return nd; }
+                int kids = RopeKids(this, nd);
+                if (top[1] >= kids) { st.RemoveAt(st.Count - 1); continue; }
+                int i = (int) top[1];
+                top[1] = i + 1;
+                st.Add(new long[]{Slot(nd, global::Flint.Rt.Str.RP_KIDS + i), 0});
+            }
+        }
+        internal bool RunEq(long a, long b, int len) {
+            for (int i = 0; i < len; i++) if (gc.sp.ReadU8(a + i) != gc.sp.ReadU8(b + i)) return false;
+            return true;
+        }
+        internal int SinkOpen() { sinks.Add(new System.IO.MemoryStream()); return sinks.Count - 1; }
+        internal void SinkClose(int s) { while (sinks.Count > s) sinks.RemoveAt(sinks.Count - 1); }
+        internal void SinkPutRun(int s, long addr, int len) {
+            for (int i = 0; i < len; i++) sinks[s].WriteByte(gc.sp.m[(int) (addr + i)]);
+        }
+        internal void SinkPut(int s, int b) { sinks[s].WriteByte((byte) b); }
+        internal void SinkPutInline(int s, long v) {
+            int n = Val.InlineLen(v);
+            for (int i = 0; i < n; i++) sinks[s].WriteByte((byte) (((ulong) v >> (8 * i)) & 0xFF));
+        }
+        internal long SinkContiguous(int s) {
+            byte[] a = sinks[s].ToArray();
+            int[] bs = new int[a.Length];
+            for (int i = 0; i < a.Length; i++) bs[i] = a[i];
+            return Flat(this, bs);
+        }
+    }
+    internal static int Pow31(Rt rt, int n) { return rt.Pow31(n); }
+    // The generated code calls `Str.SBytes` UNQUALIFIED. The constants live in
+    // `global::Flint.Rt.Str`, which the head names in full everywhere, so a
+    // local `Str` holding just this one method is free of ambiguity.
+    internal static class Str {
+        internal static int SBytes(Rt rt, long v) { return rt.SBytes(v); }
+    }
+    internal static int SBytes(Rt rt, long v) { return Str.SBytes(rt, v); }
+    internal static int Olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    internal static bool IsRope(Rt rt, long v) {
+        return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, v) == Obj.TyRope;
+    }
+    internal static int RopeKids(Rt rt, long v) { return Olen(rt, v) - global::Flint.Rt.Str.RP_KIDS; }
+    internal static long Flat(Rt rt, int[] bs) {
+        long a = rt.Alloc(Obj.TyStr, bs.Length);
+        for (int i = 0; i < bs.Length; i++) rt.gc.sp.m[(int) (a + Obj.StrData) + i] = (byte) bs[i];
+        return Val.Heap(a);
+    }
+    internal static long InlineOf(int[] bs) {
+        long v = (0xEL << 60) | ((long) bs.Length << 56);
+        for (int i = 0; i < bs.Length; i++) v |= ((long) bs[i]) << (8 * i);
+        return v;
+    }
+    internal static long Node(Rt rt, long[] kids) {
+        long a = rt.Alloc(Obj.TyRope, global::Flint.Rt.Str.RP_KIDS + kids.Length);
+        rt.Set(a, global::Flint.Rt.Str.RP_FLAT, Val.Nil);
+        rt.Set(a, global::Flint.Rt.Str.RP_HASH, Val.Nil);
+        for (int i = 0; i < kids.Length; i++) rt.Set(a, global::Flint.Rt.Str.RP_KIDS + i, kids[i]);
+        return Val.Heap(a);
+    }
+    internal static string Show(Rt rt, long v) {
+        var s = new System.Text.StringBuilder();
+        for (int i = 0; i < Olen(rt, v); i++) {
+            if (i > 0) s.Append('.');
+            s.Append(rt.gc.sp.ReadU8(v + Obj.StrData + i));
+        }
+        return s.ToString();
+    }
+--csharp
+    internal static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long x = Flat(rt, new int[]{1,2,3,4,5,6});
+        long y = Node(rt, new long[]{Flat(rt, new int[]{1}), Flat(rt, new int[]{2,3}),
+                                     Flat(rt, new int[]{4,5,6})});
+        long z = Node(rt, new long[]{Flat(rt, new int[]{1,2,3}), Flat(rt, new int[]{4,5,6})});
+        o.Append("shapes=").Append(StrCmp(rt, x, y)).Append(',').Append(StrCmp(rt, y, z))
+         .Append(',').Append(StrCmp(rt, z, x)).Append(' ');
+        o.Append("same=").Append(StrCmp(rt, y, y)).Append(' ');
+        long shortS = Flat(rt, new int[]{1,2,3});
+        o.Append("prefix=").Append(StrCmp(rt, shortS, x)).Append(',')
+         .Append(StrCmp(rt, x, shortS)).Append(' ');
+        long front = Flat(rt, new int[]{0,2,3,4,5,6});
+        long last = Node(rt, new long[]{Flat(rt, new int[]{1,2,3}), Flat(rt, new int[]{4,5,9})});
+        o.Append("diff=").Append(StrCmp(rt, front, x)).Append(',')
+         .Append(StrCmp(rt, x, last)).Append(' ');
+        long w = Node(rt, new long[]{Flat(rt, new int[]{1}), InlineOf(new int[]{2,3,4}),
+                                     Flat(rt, new int[]{5,6})});
+        long wd = Node(rt, new long[]{Flat(rt, new int[]{1}), InlineOf(new int[]{2,9,4}),
+                                      Flat(rt, new int[]{5,6})});
+        o.Append("inline=").Append(StrCmp(rt, x, w)).Append(',')
+         .Append(StrCmp(rt, w, wd)).Append(' ');
+        long hi = Flat(rt, new int[]{0x80});
+        long lo = Flat(rt, new int[]{0x01});
+        o.Append("unsigned=").Append(StrCmp(rt, hi, lo)).Append(',')
+         .Append(StrCmp(rt, lo, hi)).Append(' ');
+        long inner = Node(rt, new long[]{Flat(rt, new int[]{1,2}), InlineOf(new int[]{3})});
+        long inner2 = Node(rt, new long[]{InlineOf(new int[]{4,5}), Flat(rt, new int[]{6})});
+        long deep = Node(rt, new long[]{inner, inner2});
+        o.Append("deep=").Append(StrCmp(rt, deep, x)).Append(',')
+         .Append(StrCmp(rt, deep, last)).Append(' ');
+        System.Console.WriteLine(o.ToString());
+    }

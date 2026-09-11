@@ -1,0 +1,127 @@
+;; Comparing two strings without materialising either.
+;;
+;; `0011` lists comparison among the operations that "must walk leaves through
+;; the cursor -- none of them needs contiguous bytes", beside `index-of`.
+;; `index-of` was fixed. This was not: `str-cmp` was a hand-written call on all
+;; three runtimes, and every one of them FLATTENED BOTH OPERANDS first --
+;; natively through `value_text`, on the ports through `text`/`Text`, which for
+;; a rope opens a sink and appends the whole tree. Comparing one character
+;; against a megabyte copied the megabyte, and the early exit on the first
+;; differing byte saved nothing because the copy had already happened.
+;;
+;; `bin/check-flattens` did not see it. That gate scans `eq.rs` by name and
+;; matches `flatten|string_arg|Str.flatten`; the materialisation was reached
+;; through `value_text`, which is not in its regex. An instrument that only
+;; knows the names it was told is worth less than it looks.
+;;
+;; BYTE ORDER IS CODE POINT ORDER. UTF-8 is order-preserving by construction,
+;; so comparing bytes lexicographically gives correct Unicode ordering with no
+;; decoding at all. What the old code did instead was synthesise UTF-16 code
+;; units out of UTF-8 to reproduce `String.compareTo` -- under which a
+;; supplementary character sorts BEFORE U+E000..U+FFFF, because its surrogates
+;; begin at 0xD800. That is an artefact of how the JVM stores strings, not
+;; something a program can reasonably rest on, and it is the only thing the old
+;; ordering bought.
+;;
+;; The walk is `tree-eq`'s, one file over. Equality already walked; comparison
+;; is the same traversal with a three-way answer and a length tie-break.
+(ns flint.rt.ropecmp
+  (:require [flint.impl.rt :refer [defn return if let do comment doc == != < >
+                                   not and nil? is-heap as-heap
+                                   leaf-len leaf-byte + - local set forever
+                                   break to-addr run-eq walk-open walk-close
+                                   walk-next Rt Value I32 Cmp Bool Walk NIL
+                                   STR_DATA]]
+            [flint.rt.ropemeas :refer [s-bytes]]))
+
+(doc "Order two strings by their bytes, which is their code points."
+     ""
+     "`walk-close` ON `wa` ALONE closes both: the walks are a stack and"
+     "closing one truncates to it, so the later `wb` goes with it. `tree-eq`"
+     "and `b-eq` both do this, which reads like a leak in each of them until"
+     "you look at `walk_close`.")
+(defn ^:pub ^:method ^Cmp str-cmp [^:mut ^Rt rt ^Value a ^Value b]
+  (if (== a b)
+    (return 0))
+  (let [^Walk wa (walk-open rt a)
+        ^Walk wb (walk-open rt b)]
+    (comment "The current leaf of each side, and how far into it. Neither side"
+             "is read ahead of the other: each takes a leaf only when it has"
+             "consumed the one it holds, so ragged trees line up by OFFSET"
+             "rather than by leaf.")
+    (local ^:mut ^Value la)
+    (local ^:mut ^Value lb)
+    (local ^:mut ^I32 pa)
+    (local ^:mut ^I32 pb)
+    (local ^:mut ^I32 na)
+    (local ^:mut ^I32 nb)
+    (local ^:mut ^Cmp out)
+    (set la NIL) (set lb NIL)
+    (set pa 0) (set pb 0)
+    (set na 0) (set nb 0)
+    (set out 0)
+    (forever
+      (if (== pa na)
+        (do
+          (let [^Value v (walk-next rt wa)]
+            (if (nil? rt v)
+              (break))
+            (set la v)
+            (set pa 0)
+            (set na (leaf-len rt v)))))
+      (if (== pb nb)
+        (do
+          (let [^Value v (walk-next rt wb)]
+            (if (nil? rt v)
+              (break))
+            (set lb v)
+            (set pb 0)
+            (set nb (leaf-len rt v)))))
+      (let [^I32 ra (- na pa)
+            ^I32 rb (- nb pb)]
+        (local ^:mut ^I32 n)
+        (set n ra)
+        (if (< rb n) (set n rb))
+        (if (> n 0)
+          (do
+            (comment "THE MEMCMP IS A SKIP, not the answer. It says whether"
+                     "this run is equal; when it is not, the byte loop below"
+                     "finds WHICH byte differs. An inline leaf has no address,"
+                     "so a pair with one on either side goes straight to the"
+                     "loop.")
+            (local ^:mut ^Bool run)
+            (set run false)
+            (if (and (is-heap la) (is-heap lb))
+              (set run (run-eq rt (+ (+ (as-heap la) STR_DATA) (to-addr pa))
+                               (+ (+ (as-heap lb) STR_DATA) (to-addr pb))
+                               n)))
+            (if (not run)
+              (do
+                (local ^:mut ^I32 i)
+                (set i 0)
+                (forever
+                  (if (== i n) (break))
+                  (let [^I32 x (leaf-byte rt la (+ pa i))
+                        ^I32 y (leaf-byte rt lb (+ pb i))]
+                    (if (!= x y)
+                      (do (if (< x y)
+                            (set out -1)
+                            (set out 1))
+                          (break))))
+                  (set i (+ i 1)))))
+            (if (!= out 0)
+              (break))
+            (set pa (+ pa n))
+            (set pb (+ pb n))))))
+    (walk-close rt wa)
+    (if (!= out 0)
+      (return out))
+    (comment "EVERY BYTE THEY SHARE IS EQUAL, so the shorter one is less --"
+             "which is also the answer when one walk ran dry above.")
+    (let [^I32 ea (s-bytes rt a)
+          ^I32 eb (s-bytes rt b)]
+      (if (< ea eb)
+        (return -1))
+      (if (< eb ea)
+        (return 1))
+      (return 0))))

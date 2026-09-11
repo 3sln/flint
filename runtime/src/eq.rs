@@ -36,18 +36,13 @@ impl Rt {
     /// error in Clojure and returns 0 here after setting `thrown`.
     /// Two strings in UTF-16 CODE UNIT order, ACROSS ALL THREE TIERS.
     ///
-    /// This used to be inline in `compare`, reading `str_bytes` -- and
-    /// `str_bytes` debug-asserts `TY_STR` because a rope's `len` is its SLOT
-    /// COUNT and its body is Values. In a release build the assert is off, so
-    /// comparing anything longer than `FLAT_MAX` read the rope's slots as
-    /// UTF-8: MEASURED, two unequal 1 400-byte strings compared as 0 and
-    /// `sort` over them was silently wrong. Both ports materialise and were
-    /// right; this does the same, and now one body decides for all three.
-    pub fn str_cmp(&mut self, a: Value, b: Value) -> i32 {
-        let sa = self.value_text(a);
-        let sb = self.value_text(b);
-        utf16_cmp(&sa, &sb)
-    }
+    // `str_cmp` IS GENERATED NOW, from `kin/ropecmp.kin`. What went with it:
+    // this flattened BOTH operands through `value_text` and then synthesised
+    // UTF-16 code units out of the UTF-8 to reproduce `String.compareTo`'s
+    // ordering, in which a supplementary character sorts before U+E000..U+FFFF
+    // because its surrogates begin at 0xD800. UTF-8 byte order is already code
+    // point order, and `0011` lists comparison among the operations that must
+    // WALK rather than materialise.
 
     // `compare`, `cmp_named` and `cmp_sequential` are GENERATED, from
     // `kin/valcmp.kin`, under the names `val_cmp`, `cmp_named` and
@@ -64,25 +59,6 @@ impl Rt {
     }
 }
 
-/// String ordering by UTF-16 code unit, which is what `String.compareTo` does
-/// and therefore what Clojure's `compare` does. It differs from byte order for
-/// astral characters, so it is worth doing properly.
-fn utf16_cmp(a: &str, b: &str) -> i32 {
-    let mut ia = hash::Utf16Units::new(a);
-    let mut ib = hash::Utf16Units::new(b);
-    loop {
-        match (ia.next(), ib.next()) {
-            (None, None) => return 0,
-            (None, Some(_)) => return -1,
-            (Some(_), None) => return 1,
-            (Some(x), Some(y)) => {
-                if x != y {
-                    return x as i32 - y as i32;
-                }
-            }
-        }
-    }
-}
 
 impl Rt {
     pub fn nil_or(&self, c: bool) -> Value {

@@ -1047,10 +1047,11 @@
     ;; `hash-value` are theirs: its two helpers call it from above its
     ;; definition. The RUST spelling stays `compare`, which is what every
     ;; native caller already says.
-    'str-cmp (core/call {:rust "{0}.str_cmp({1}, {2})"
-                         :java "Str.compareUtf16({0}, {1}, {2})"
-                         :csharp "Str.CompareUtf16({0}, {1}, {2})"}
-                        {:tag Cmp})
+    ;; `str-cmp` WAS HERE, naming a hand-written function on each runtime. All
+    ;; three flattened both operands to compare them -- `0011` lists comparison
+    ;; among the operations that must WALK -- and synthesised UTF-16 out of
+    ;; UTF-8 to reproduce `String.compareTo`'s ordering. `kin/ropecmp.kin`
+    ;; walks and compares bytes, which is code point order already.
     ;; NUMBERS: `is-number` is either tier, and `num-cmp` orders across them.
     'num-cmp (core/call {:rust "{0}.num_cmp({1}, {2})"
                          :java "Num.cmp({0}, {1}, {2})"

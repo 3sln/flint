@@ -49,20 +49,9 @@ public static class Eq {
     /// Clojure's `compare`: -1, 0 or 1, and a THROW for values that have no
     /// ordering. Refusing is the right answer -- a `sort` over mixed types
     /// silently ordered by type tag would be stable, plausible and wrong.
-    /// By UTF-16 CODE UNIT, as `string.CompareTo` is -- not by code point.
-    /// The two orders differ above U+FFFF, and Clojure's is the UTF-16 one.
-    /// `Str.CompareUtf16` is what the generated `compare` reaches this by.
-    public static int Utf16Cmp(string x, string y) {
-        int n = System.Math.Min(x.Length, y.Length);
-        for (int i = 0; i < n; i++) {
-            int d = x[i] - y[i];
-            if (d != 0) return d < 0 ? -1 : 1;
-        }
-        return x.Length.CompareTo(y.Length);
-    }
 
     // `Compare`, `CmpNamed` and `CmpSequential` are GENERATED, from
-    // `kin/valcmp.kin`. `Utf16Cmp` stays, and `Str.CompareUtf16` is the name
+    // `kin/valcmp.kin`, and `str-cmp` from `kin/ropecmp.kin`.
     // the generated arm reaches it by -- native was reading a rope's SLOTS as
     // UTF-8 where this port materialised and was right.
 

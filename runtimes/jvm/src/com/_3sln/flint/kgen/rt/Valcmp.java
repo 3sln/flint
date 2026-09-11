@@ -13,6 +13,7 @@ import static com._3sln.flint.kgen.rt.Eq.*;
 import static com._3sln.flint.kgen.rt.Names.*;
 import static com._3sln.flint.kgen.rt.Nouns.*;
 import static com._3sln.flint.kgen.rt.Numkind.*;
+import static com._3sln.flint.kgen.rt.Ropecmp.*;
 import static com._3sln.flint.kgen.rt.Ropemeas.*;
 import static com._3sln.flint.kgen.rt.Seqcore.*;
 import static com._3sln.flint.kgen.rt.Seqwalk.*;
@@ -123,7 +124,7 @@ public final class Valcmp {
             return -1;
         }
         if (isString(rt, a) && isString(rt, b)) {
-            return Str.compareUtf16(rt, a, b);
+            return strCmp(rt, a, b);
         }
         if (isKeyword(rt, a) && isKeyword(rt, b)) {
             return cmpNamed(rt, a, b);

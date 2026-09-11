@@ -15,6 +15,7 @@ using static global::_3sln.Flint.Kgen.Rt.Eq;
 using static global::_3sln.Flint.Kgen.Rt.Names;
 using static global::_3sln.Flint.Kgen.Rt.Nouns;
 using static global::_3sln.Flint.Kgen.Rt.Numkind;
+using static global::_3sln.Flint.Kgen.Rt.Ropecmp;
 using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 using static global::_3sln.Flint.Kgen.Rt.Seqcore;
 using static global::_3sln.Flint.Kgen.Rt.Seqwalk;
@@ -125,7 +126,7 @@ public static class Valcmp {
             return -1;
         }
         if (IsString(rt, a) && IsString(rt, b)) {
-            return Str.CompareUtf16(rt, a, b);
+            return StrCmp(rt, a, b);
         }
         if (IsKeyword(rt, a) && IsKeyword(rt, b)) {
             return CmpNamed(rt, a, b);

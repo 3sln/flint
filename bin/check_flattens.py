@@ -31,6 +31,15 @@ JUSTIFIED = {
         ("runtimes/jvm/src/com/flint/rt/Conc.java", "Str.flatten"),
         ("runtimes/clr/src/rt/Conc.cs", "Str.Flatten"),
     ],
+    # These became VISIBLE when the detector learned `text`/`Text`, and they
+    # were always here. Both uses in `Conc` are the same boundary: a port's
+    # NAME and LABEL are strings the host is shown -- in a deadlock report, or
+    # to find a virtual namespace -- and a payload crossing a port becomes wire
+    # bytes. Neither can stay a tree, because neither stays in this heap.
+    "a port's name, its label and its payload all leave the heap": [
+        ("runtimes/jvm/src/com/flint/rt/Conc.java", "Str.text"),
+        ("runtimes/clr/src/rt/Conc.cs", "Str.Text"),
+    ],
     "hashing caches the flat form, so a rope used as a map key pays once": [
         ("runtime/src/eq.rs", "flatten"),
         ("runtimes/jvm/src/com/flint/rt/Str.java", "flatten"),
@@ -67,7 +76,14 @@ for why, sites in JUSTIFIED.items():
     for f, name in sites:
         ALLOWED.add((f, name))
 
-CALL = re.compile(r'\b(string_arg|flatten|Flatten|Str\.flatten|Str\.Flatten)\s*\(')
+# `value_text`, `text` and `Text` ARE MATERIALISATIONS TOO, and leaving them out
+# is how `str_cmp` flattened both operands of every string comparison on all
+# three runtimes without this gate noticing. It scans `eq.rs` -- it just did not
+# know the name the copy was reached by. A detector that only knows the names it
+# was told is worth less than it looks, so the rule is now: anything that hands
+# back contiguous bytes counts, whatever it is called.
+CALL = re.compile(r'\b(string_arg|flatten|Flatten|Str\.flatten|Str\.Flatten'
+                  r'|value_text|Str\.text|Str\.Text)\s*\(')
 SCAN = [
     "runtime/src/abi.rs", "runtime/src/coll.rs", "runtime/src/conc.rs",
     "runtime/src/eq.rs", "runtime/src/native.rs", "runtime/src/rt.rs",

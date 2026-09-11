@@ -108,6 +108,28 @@
       (expect = true (pos? (compare hi lo)))
       (expect = false (= lo hi)))))
 
+(defn ^:flint.check/test strings-order-by-code-point-not-utf16 []
+  ;; THE ONE PLACE THE ANSWER CHANGED when `compare` stopped emulating
+  ;; `String.compareTo`. UTF-16 orders by CODE UNIT, and a supplementary
+  ;; character is a surrogate pair beginning at 0xD800 -- so under that order
+  ;; it sorts BEFORE every character in U+E000..U+FFFF, even though its code
+  ;; point is far larger. flint orders by code point, which is what comparing
+  ;; UTF-8 bytes gives for free.
+  ;;
+  ;; The two characters below are U+1F600 (four UTF-8 bytes, above the BMP)
+  ;; and U+E000 (three bytes, the first private-use character). Written
+  ;; literally because the reader has no escape that reaches past U+FFFF.
+  (let [astral "😀"
+        bmp ""]
+    (expect = true (pos? (compare astral bmp)))
+    (expect = true (neg? (compare bmp astral))))
+  ;; And ordering still agrees with equality, which is the part a program may
+  ;; actually rest on.
+  (let [a "z"
+        b (str "z" "")]
+    (expect = true (neg? (compare a b)))
+    (expect = 0 (compare a (str a)))))
+
 (defn ^:flint.check/test maps-straddle-the-champ-boundary []
   ;; Around ARRAY_MAP_MAX, where a map changes representation. Promotion is
   ;; supposed to be invisible: same count, same lookups, same equality, same
