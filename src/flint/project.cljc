@@ -49,15 +49,15 @@
   One list, read by `bin/flint` too rather than copied there. Four places used
   to enumerate these -- here, `cli/src/main.rs`, and twice in `bin/flint`.
 
-  `.fl` is a PLATFORM extension in the sense `.clj` and `.cljs` are: one
-  namespace may have both a `.fl` and a `.cljc`, and each runtime loads the one
+  `.fln` is a PLATFORM extension in the sense `.clj` and `.cljs` are: one
+  namespace may have both a `.fln` and a `.cljc`, and each runtime loads the one
   it understands (`DECISIONS.md#dialects-and-preludes`). flint prefers its own,
   exactly as the JVM prefers `.clj` over `.cljc`.
 
   `.cljc` BEFORE `.clj` is flint's existing order and the reverse of the JVM's.
   It stays: a `.clj` here is an oddity rather than the native case, so the
   portable file is the better default when both are present."
-  [".fl" ".cljc" ".clj"])
+  [".fln" ".cljc" ".clj"])
 
 (defn dialect-of
   "Which dialect a source file is written in, by its extension.
@@ -66,7 +66,7 @@
   prelude. `:portable` must mean the same thing under Clojure, so it may not.
   Nothing enforces that yet; this is the field the enforcement will read."
   [path]
-  (if (str/ends-with? (str path) ".fl") :flint :portable))
+  (if (str/ends-with? (str path) ".fln") :flint :portable))
 
 (defn collect
   "Read from `roots` outwards. `resolve-ns` takes a namespace symbol and returns

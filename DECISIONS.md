@@ -4281,7 +4281,7 @@ entry (`^{:script main}`) or whether a fixed convention does.
 
 ## dialects-and-preludes
 
-**Portable `.cljc` and flint-only `.fl`, and a prelude a workspace can extend**
+**Portable `.cljc` and flint-only `.fln`, and a prelude a workspace can extend**
 
 **Ratified:** ☐ not signed off
 
@@ -4291,17 +4291,17 @@ proposal awaiting sign-off.
 
 ### What was decided
 
-**`.fl` is a PLATFORM EXTENSION, not a category of namespace.** It sits beside
+**`.fln` is a PLATFORM EXTENSION, not a category of namespace.** It sits beside
 `.clj`, `.cljs` and `.cljd` in the model Clojure already has: one namespace may
 have several implementations, and each runtime loads the one it understands.
-`foo/bar.cljc` and `foo/bar.fl` are the same namespace, and flint prefers the
-`.fl`, exactly as the JVM prefers `.clj` over `.cljc`.
+`foo/bar.cljc` and `foo/bar.fln` are the same namespace, and flint prefers the
+`.fln`, exactly as the JVM prefers `.clj` over `.cljc`.
 
 **There is therefore no edge rule on requires**, and an earlier draft of this
 section was wrong to propose one. "A portable namespace may not require a
 flint-only one" mistakes a property of a FILE for a property of a NAMESPACE. A
 `.cljc` file requiring `foo.bar` is fine: under Clojure that resolves to
-`foo/bar.cljc` or `.clj`, under flint to `foo/bar.fl` or `.cljc`. Whether the
+`foo/bar.cljc` or `.clj`, under flint to `foo/bar.fln` or `.cljc`. Whether the
 namespace is available is answered by whether an implementation exists on the
 platform doing the loading — which is the consumer's question at load time, not
 a static property of the graph.
@@ -4311,10 +4311,10 @@ carries `:features #{:flint}` (`src/flint/reader.cljc`), so `#?(:clj a :flint b)
 reads today, and `lib/clojure/core.cljc` already uses conditionals in anger.
 
 * small divergence → a reader conditional inside one `.cljc`
-* wholesale divergence → a separate `.fl` implementation
+* wholesale divergence → a separate `.fln` implementation
 
-**Resolution order gains `.fl` at the front.** `project/collect` tries
-`[base.cljc, base.clj]` today; it becomes `[base.fl, base.cljc, base.clj]`.
+**Resolution order gains `.fln` at the front.** `project/collect` tries
+`[base.cljc, base.clj]` today; it becomes `[base.fln, base.cljc, base.clj]`.
 Platform-specific beats portable, which is the established convention.
 
 Worth noting in passing: flint's existing order prefers `.cljc` over `.clj`,
@@ -4332,7 +4332,7 @@ Both are known at read time for the file being read, which is where the check
 belongs and where the answer is local.
 
 **The prelude rule survives the correction, for a better reason.** A custom
-prelude applies to `.fl` only — not because flint namespaces are a separate
+prelude applies to `.fln` only — not because flint namespaces are a separate
 species, but because a `.cljc` is a file other platforms' readers will read, and
 they know nothing of flint's prelude. A `.cljc` whose meaning depends on one is
 not portable, whatever it says on the tin.
@@ -4402,7 +4402,7 @@ An extension makes the claim explicit, and a resolver tag makes it checkable.
 
 ### What this collides with in the code today
 
-* **FOUR places resolve source extensions**, and every one must learn `.fl`:
+* **FOUR places resolve source extensions**, and every one must learn `.fln`:
   `src/flint/project.cljc` tries `[base.cljc, base.clj]`; `cli/src/main.rs`
   collects files ending `.cljc`/`.clj`; and `bin/flint` has TWO — its
   `source-candidates` and its linter's file filter. `bin/flint` puts `src` and
@@ -4423,12 +4423,17 @@ An extension makes the claim explicit, and a resolver tag makes it checkable.
 
 * **Ordering.** Recorded as later-overrides-earlier above; the alternative is
   earlier-wins, which makes the prelude a base nobody can shadow.
-* **Whether `.fl` is the extension.** It is short and unclaimed; `.flc` and
-  `.flint` are the alternatives.
+* ~~Whether `.fln` is the extension.~~ **Settled 2026-09-11: `.fln`.** The
+  first choice was `.fl`, and it was rejected on legibility. `fl` is a
+  TYPOGRAPHIC LIGATURE -- many fonts render it as the single glyph `ﬂ` -- and
+  in a sans-serif face `fl`, `f1` and `fI` are near-indistinguishable. An
+  extension is read far more often than it is typed, frequently in a diff or a
+  stack trace where there is no context to disambiguate it. `.fln` is also
+  three characters, which matches `.clj`; `.fl` was the odd one out at two.
 * **Whether portability is checkable beyond the edge rule.** The edge rule
   catches dependencies. It does not catch a `.cljc` file using a reader tag its
   workspace binds — which is a separate check, at the reader rather than the
   graph.
-* **What `clojure.core` means for `.fl`.** Presumably still the first prelude
+* **What `clojure.core` means for `.fln`.** Presumably still the first prelude
   entry, but a flint-only dialect could in principle start from a different
   base.

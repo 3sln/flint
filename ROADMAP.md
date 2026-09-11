@@ -413,20 +413,20 @@ whether the native binary earns its keep.
 
 Recorded 2026-09-11. Full spec at `DECISIONS.md#dialects-and-preludes`.
 
-- [ ] `.fl` extension recognised alongside `.cljc`/`.clj` — in BOTH
+- [ ] `.fln` extension recognised alongside `.cljc`/`.clj` — in BOTH
       `src/flint/project.cljc` and `cli/src/main.rs`, plus `bin/flint`
 - [ ] `:dialect` on the resolver's per-namespace record, beside `:workspace`,
       `:tags`, `:grants`, `:guard`, `:virtual`
 - [ ] Enforcement at the READER, not the graph: flint-only surface (a
       workspace-bound reader tag, a prelude-only symbol) is refused inside a
-      `.cljc`. There is NO edge rule on requires — `.fl` is a platform
+      `.cljc`. There is NO edge rule on requires — `.fln` is a platform
       extension like `.clj`/`.cljs`, so one namespace may have both
 - [ ] `:flint/prelude` in workspace config, replacing the `core-first` pin
       duplicated in `src/flint/project.cljc` and `bin/flint` — default must be
       the existing list in the existing order, which is load-bearing
 - [ ] Per-entry `:include`/`:exclude`; a remaining collision is an error;
       order in the list is LOAD order only
-- [ ] Custom preludes apply to `.fl` only
+- [ ] Custom preludes apply to `.fln` only
 - [ ] Audit `lib/`'s 33 namespaces for which are genuinely flint-only
 
 ### Standalone scripts (spec only, nothing built)

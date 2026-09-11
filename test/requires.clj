@@ -141,29 +141,29 @@
   (check ":refer-clojure is still accepted" (= 0 (:exit r))))
 
 
-;; --- DIALECTS: `.fl` beside `.cljc` -------------------------------------
+;; --- DIALECTS: `.fln` beside `.cljc` -------------------------------------
 ;;
-;; `.fl` is a PLATFORM extension in the sense `.clj` and `.cljs` are
+;; `.fln` is a PLATFORM extension in the sense `.clj` and `.cljs` are
 ;; (`DECISIONS.md#dialects-and-preludes`): one namespace may have both, and the
 ;; runtime loads the one it understands. It is not a separate namespace and
 ;; there is no rule about which may require which.
-(let [r (run {"zzz.fl" "(ns zzz)\n(defn twice [x] (* 3 x))"
+(let [r (run {"zzz.fln" "(ns zzz)\n(defn twice [x] (* 3 x))"
               "aaa.cljc" (str "(ns aaa (:require [flint.check :refer [expect]]))\n"
                               "(defn ^:flint.check/test t []\n"
                               "  #?(:flint/check (expect = 126 (zzz/twice 42))))")})]
-  (check "a .fl namespace compiles, and a .cljc may require it" (= 0 (:exit r))))
+  (check "a .fln namespace compiles, and a .cljc may require it" (= 0 (:exit r))))
 
 ;; Platform-specific beats portable, as `.clj` beats `.cljc` on the JVM.
-(let [r (run {"zzz.fl"   "(ns zzz)\n(defn twice [x] (* 3 x))"
+(let [r (run {"zzz.fln"   "(ns zzz)\n(defn twice [x] (* 3 x))"
               "zzz.cljc" "(ns zzz)\n(defn twice [x] (* 2 x))"
               "aaa.cljc" (str "(ns aaa (:require [flint.check :refer [expect]]))\n"
                               "(defn ^:flint.check/test t []\n"
                               "  #?(:flint/check (expect = 126 (zzz/twice 42))))")})]
-  (check "with both present, flint takes the .fl" (= 0 (:exit r))))
+  (check "with both present, flint takes the .fln" (= 0 (:exit r))))
 
 ;; And that pairing is ORDINARY, so it must not be reported as shadowing --
 ;; the two files are one namespace's two halves, not one hiding the other.
-(let [r (run {"zzz.fl"   "(ns zzz)\n(defn twice [x] (* 3 x))"
+(let [r (run {"zzz.fln"   "(ns zzz)\n(defn twice [x] (* 3 x))"
               "zzz.cljc" "(ns zzz)\n(defn twice [x] (* 2 x))"
               "aaa.cljc" (str "(ns aaa (:require [flint.check :refer [expect]]))\n"
                               "(defn ^:flint.check/test t []\n"

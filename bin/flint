@@ -822,7 +822,7 @@
         ;; destructuring `:op` as `op`.
         src-nses (when test-mode?
                    ;; EVERY dialect, not just the portable one. A test that
-                   ;; lives in a `.fl` is still a test, and a namespace that is
+                   ;; lives in a `.fln` is still a test, and a namespace that is
                    ;; never collected is one a qualified reference cannot
                    ;; resolve -- which surfaces as "is zzz required?" and sends
                    ;; the reader to the `ns` form rather than to the file list.
@@ -854,7 +854,7 @@
         ;; they compose rather than compete, so "source or unit?" is not the
         ;; question. What can genuinely conflict is two of the same kind, and
         ;; both resolve the same way -- earlier on the path wins.
-        ;; SAME REASONING ONE STEP FURTHER. A `.fl` and a `.cljc` for one
+        ;; SAME REASONING ONE STEP FURTHER. A `.fln` and a `.cljc` for one
         ;; namespace are its flint half and its portable half -- different
         ;; DIALECTS, chosen by the runtime doing the loading, exactly as
         ;; `foo.clj` beside `foo.cljc` is ordinary in Clojure and unremarked.
