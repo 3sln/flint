@@ -92,10 +92,11 @@ a set-specific node layout; it buys `get` returning the *stored* element (which
 is what Clojure does, and what makes sets usable for canonicalisation) and one
 trie implementation instead of two.
 
-**Hashing is bit-compatible with JVM Clojure.** `(hash [1 2 3])` is 736442005
-here as there. The formulas were derived by solving against real Clojure values
-rather than from memory, which caught two things: strings hash as
-`Murmur3.hashInt(String.hashCode())` rather than `hashUnencodedChars`, and a
-symbol's *namespace* contributes its raw Java string hash while its *name*
-contributes the murmur'd one. Both are pinned by tests, including an
-astral-plane case for the UTF-16 view over our UTF-8 strings.
+**Numeric and collection hashing is bit-compatible with JVM Clojure** —
+`(hash [1 2 3])` is 736442005 here as there — but strings, keywords and symbols
+are not: they hash over UTF-8 bytes (murmur3's full avalanche) rather than
+reproducing Clojure's JVM-specific number, which Clojure itself documents no
+stability for across versions. What is guaranteed instead: equal names hash
+alike, a namespace changes the answer, and a keyword never collides with its
+symbol — checked across 930 keyword-shaped names with no collisions and even
+bucket occupancy at every 5-bit CHAMP level.

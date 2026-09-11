@@ -8,10 +8,9 @@ The honest list. Nothing here is stubbed and reported as working.
 
 - **Records and types.** No `deftype`, `defrecord`, `reify`, `extend-type`.
   `defprotocol`, `extend-protocol`, `extend` and `satisfies?` **do** exist and
-  dispatch on kind or metadata — see
-  [Protocols](#protocols-and-metadata-dispatch-as-the-main-road) — but there is
-  no way to make a new *type*, so a port of code that leans on `defrecord` still
-  needs reshaping into maps with metadata.
+  dispatch on kind or metadata — see [Protocols](language.md#protocols) — but
+  there is no way to make a new *type*, so a port of code that leans on
+  `defrecord` still needs reshaping into maps with metadata.
 - **Transducers.** No `transduce`, `eduction`, `cat`, `completing`,
   `halt-when`, and no 1-arity transducer forms of `map`/`filter`/`take`/…. The
   eager and lazy forms all work.
@@ -30,19 +29,19 @@ The honest list. Nothing here is stubbed and reported as working.
 - **Metadata on functions, numbers and inline values.** A closure, a number and
   a short string have nowhere to put it, so `with-meta` returns them unchanged.
   This matters more than it used to, because metadata is how protocols dispatch
-  on user-defined abstractions: see the table under
-  [Protocols](#what-can-carry-metadata-and-what-cannot). (It is also why
-  `defmulti` keeps its method table in a second var.)
+  on user-defined abstractions: see [Protocols](language.md#protocols). (It is
+  also why `defmulti` keeps its method table in a second var.)
 - **No host threads, agents, refs or host interop**, by design. Green threads
   and ports exist and are cooperative and deterministic; nothing here is
   parallel, and nothing preempts across a native call.
-- **A capability cannot be delegated at run time.** Ports are not transferable
-  and cannot be sent through a port, so a program cannot hand a resource it was
-  lent to another part of itself over a channel — it has to pass the port by
-  ordinary reference, within the runtime. That buys no ownership transfer to
-  reason about, no capability leaking through a message, and a wire format that
-  never has to represent a port. Transfer can be added later; it could not be
-  removed. (`doc/decisions/0006`.)
+- **A channel is not transferable across a bridge.** A channel's ends both
+  live in this heap and the host was never told it exists, so a program
+  cannot hand one to another part of itself over a *bridge* — it has to pass
+  it by ordinary reference, within the runtime. A *bridge*, by contrast, can
+  now be sent through another bridge, which is how a host-lent capability
+  gets delegated — see [Concurrency](concurrency.md#channels-vs-bridges).
+  This is a later, narrower shape than the original "no transfer at all"
+  default recorded in `doc/decisions/0006`.
 - **A parked thread cannot be inside native code.** `map`, `sort`, a comparator
   and a lazy-seq force re-enter the interpreter with Rust frames underneath, and
   those are not a continuation anybody can save. Parking there is a clean error,
@@ -58,7 +57,7 @@ The honest list. Nothing here is stubbed and reported as working.
   where it is the one result that would rule flint out of a job. It is a backtracking matcher written in cljc — which is what makes
   it tree-shake away when unused — using continuation closures, so it allocates
   per match step. A first-character skip cut a third off; the remaining cost is
-  structural. [`doc/decisions/0002`](doc/decisions/0002-modularity.md) said to
+  structural. `doc/decisions/0002` said to
   measure before moving something to Rust, and this is the measurement that
   would justify it: a Rust regex unit would cost nothing for programs that do
   not use one, because the unit mechanism already exists — and now that

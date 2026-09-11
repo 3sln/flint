@@ -14,8 +14,8 @@
 ```
 
 Two tiers, and the split is deliberate
-([`doc/decisions/0002`](doc/decisions/0002-modularity.md),
-[`0003`](doc/decisions/0003-namespace-units.md)):
+(`doc/decisions/0002`,
+`0003`):
 
 - **Tier 1 — Rust, precompiled to relocatable wasm objects.** Only what cannot
   be expressed in the language: memory, the collector, the value encoding,

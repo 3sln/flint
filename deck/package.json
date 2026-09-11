@@ -4,8 +4,11 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "dev": "deck-dev",
+    "dev": "vite",
     "build": "deck-build"
+  },
+  "devDependencies": {
+    "vite": "^5.4.20"
   },
   "dependencies": {
     "@3sln/deck": "0.0.17"
@@ -14,7 +17,9 @@
     "title": "flint",
     "url": "https://flint.3sln.com",
     "pinned": [
-      "/introduction.md"
+      "/cards/introduction.md",
+      "/cards/language.md",
+      "/cards/cli.md"
     ]
   }
 }
