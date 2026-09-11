@@ -81,9 +81,14 @@
 ;;
 ;; THE TRIGGER IS A REQUIRE POINTING THE OTHER WAY. If A requires B then B is
 ;; analysed first, so B could name A's private vars. That is not a corner: it
-;; is what `clojure.core` requiring `flint.protocols` does, and it is why
-;; moving `extend-method` there passed a privacy violation in silence and
-;; failed later as `value is not a function`.
+;; is what `clojure.core` requiring `flint.protocols` does.
+;;
+;; THAT EXAMPLE USED TO CLAIM MORE THAN IT COULD. It said moving
+;; `extend-method` there "passed a privacy violation in silence". It did not:
+;; `core-first` pins `clojure.core` FIRST whatever the require graph says, so
+;; its `:var-meta` is filled before `flint.protocols` is analysed and the old
+;; check would have refused that reference too. The reverse edge is real and
+;; the rows below measure it; that particular example was not an instance.
 ;;
 ;; Same two namespaces as the rows above would not show it -- `app.main`
 ;; requires `libx.core`, so the definer is always analysed first. These name

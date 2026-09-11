@@ -74,10 +74,16 @@
 ;; 4. A TOP-LEVEL SIDE EFFECT into a never-required namespace.
 ;;
 ;; Added after a case that FAILS was found and this one was assumed to be it.
-;; It is not: this works. Moving `extend-method` to `flint.protocols` fails
-;; with `value is not a function (nil, 4 args)` and an explicit require does
-;; not fix it, but the distinguishing factor is NOT "top-level effect" --
-;; that is what this pins, by working.
+;; It is not: this works, and that is what this row pins.
+;;
+;; THE CASE THAT FAILED HAS SINCE BEEN EXPLAINED AND FIXED, and the note here
+;; described it wrongly on two counts. Moving `extend-method` to
+;; `flint.protocols` gave `value is not a function (nil, 4 args)` because the
+;; load ORDER is built from `:require` edges and nothing ordered
+;; `flint.protocols` before the namespace whose top-level `extend-protocol`
+;; called into it. An explicit require DID fix it -- this note said it did not,
+;; measured wrong. `flint.protocols` is pinned now and `extend-method` has
+;; moved. See `doc/goals/README.md`.
 ;;
 ;; So these four cases are four shapes that ARE sufficient, and not a proof
 ;; that a qualified reference always is. See `doc/goals/README.md`.
