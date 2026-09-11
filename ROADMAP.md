@@ -354,19 +354,34 @@ are not resolvable yet"* — and `:pod/version` appears nowhere in the code at
 all, only in prose. So a pod can be booted but not fetched, and the coordinate
 that is supposed to name it is not read by anything.
 
-**THE BOOTSTRAP PROBLEM, which the plan above creates.** If the npm, Maven and
-git drivers are pods, and pods are fetched like any other dependency, then
-fetching anything requires first fetching a pod — with what? `Pod::boot` takes
-a path to a program that must already exist. Something has to be able to
-acquire the first pod without using a pod, or the drivers have to ship with the
-CLI and only third-party pods get resolved. That choice is not made yet and
-should be made deliberately rather than discovered.
+**THE BOOTSTRAP IS SETTLED, and it is the reason to want pods here at all.**
+The POD manager — resolver, downloader, the thing that boots one — is the ONLY
+dependency machinery built into the CLI. It has to be, because it is the fixed
+point: everything else is fetched by it.
+
+Every other driver is a pod. npm, Maven, git: none of them are compiled in. The
+CLI carries REFERENCES to their manifests — enough to know what the standard
+drivers are and where to get them — and then uses the pod functionality it
+already has to fetch and boot whichever the build actually needs.
+
+So the drivers are acquired LAZILY, only when a project uses that ecosystem. A
+project with three git dependencies never downloads the Maven driver. The CLI
+stays small and the driver set becomes open: a fourth ecosystem is a new pod,
+not a new release of flint.
+
+WHICH MAKES `depscmd.rs`'s "pods are not resolvable yet" THE LOAD-BEARING GAP.
+It reads today like one unfinished kind among four. Under this plan every other
+kind is downstream of it: until a pod can be resolved, nothing else can be
+fetched by the thing that is supposed to fetch it.
 
 **Open questions, recorded as open:**
 
 * *Can a pod have transitive dependencies?* A pod is a native binary, so what
   it links is its own affair and invisible to us. But a pod depending on
-  ANOTHER pod is meaningful and would need resolving. Undecided.
+  ANOTHER pod is meaningful and would need resolving — and since the pod
+  manager is the built-in fixed point, that resolution is the one piece that
+  cannot be delegated to a driver pod. Undecided, and the answer shapes how
+  much has to be built in.
 * *Where does a pod come from?* A registry, or git — which raises the question
   of what distinguishes a pod dependency from a git one. The current answer is
   the coordinate: `:pod/version` rather than `:git/sha`, plus somewhere to look
