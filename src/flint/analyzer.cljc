@@ -167,7 +167,31 @@
 
 (defn- macro-fn [env sym]
   (when-let [q (qualify env sym)]
-    (get-in @(:cc env) [:macros q])))
+    (let [c @(:cc env)]
+      (or (get-in c [:macros q])
+          ;; A MACRO WE KNOW ABOUT AND CANNOT EXPAND YET IS AN ERROR, not a
+          ;; function call. `:macros` holds expanders, and an expander exists
+          ;; only once its namespace has been ANALYSED. A namespace analysed
+          ;; BEFORE the definer therefore found nothing here and compiled the
+          ;; form as an ordinary call -- silently, and with different
+          ;; evaluation: every argument evaluated, in a form written precisely
+          ;; so that they would not be.
+          ;;
+          ;; Measured with a macro that DISCARDS its argument, given an
+          ;; argument that cannot resolve. Ordinary edge: expanded, the symbol
+          ;; never analysed. Reverse edge: "unable to resolve symbol". The
+          ;; argument was evaluated in a macro call.
+          ;;
+          ;; The read pre-pass marks the NAME, which is all that is needed to
+          ;; say so. Saying so is the whole fix: there is no ordering that
+          ;; makes this work, because the user's namespace does not require
+          ;; the definer -- it names it -- so there is no edge to order by.
+          (when (:macro (get (:declared c) q))
+            (err (str q " is a macro, and " (current-ns env)
+                      " is compiled before the namespace that defines it, so"
+                      " there is no expansion to use here."
+                      " Move the macro to a namespace this one requires.")
+                 {:sym sym :macro q :ns (current-ns env)}))))))
 
 ;; How many `:inline` expansions may nest before the analyzer calls it a loop.
 ;; An inline whose body calls the function it is inlining -- which is how a

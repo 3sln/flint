@@ -102,7 +102,14 @@
   [form]
   (when (seq? form)
     (case (first form)
-      (def defn defmacro) [[(second form) (vis-of (second form) false)]]
+      (def defn) [[(second form) (vis-of (second form) false)]]
+          ;; A MACRO IS MARKED AS ONE HERE. The expander itself cannot be made
+          ;; in this pass -- it is a function, and building it means evaluating
+          ;; the `defmacro`, which is analysis. But knowing that a NAME is a
+          ;; macro costs nothing and is what `macro-fn` needs to tell "this is
+          ;; not a macro" from "this is a macro I cannot expand yet".
+          (defmacro) [[(second form) (assoc (vis-of (second form) false)
+                                            :macro true)]]
       (defn-) [[(second form) (vis-of (second form) true)]]
       (declare) (mapv (fn [n] [n (vis-of n false)]) (rest form))
       (do) (vec (mapcat def-form-entries (rest form)))

@@ -360,3 +360,42 @@
           (dyn-outcome {"a/owner.cljc" "(ns a.owner)\n(def plain 1)"
                         "app/main.cljc" "(ns app.main (:require [a.owner :as o])) (defn main [_] (binding [a.owner/plain 2] 1))"}))
        "the control: without it the row above passes by never checking anything")
+
+;; A MACRO THAT QUIETLY BECAME A FUNCTION CALL, which is the same table again
+;; and the worst of them: not a refusal that should have happened, but a
+;; DIFFERENT PROGRAM. `:macros` holds expanders and is filled when a namespace
+;; is analysed, so a namespace analysed first found nothing and compiled
+;; `(their/macro x)` as an ordinary call -- evaluating every argument, in a
+;; form usually written precisely so that they are not.
+;;
+;; The probe is a macro that DISCARDS its argument, given an argument that
+;; cannot resolve. If the call expanded, the bad symbol is never analysed. If
+;; it did not, resolving it is the first thing that happens. That difference is
+;; the whole test, and no other error can imitate it.
+(defn mac-outcome [files]
+  (let [r (project/resolve-project (project/files-resolver files []) 'app.main #{:flint})]
+    (try
+      (compiler/compile-image {:sources (:sources r) :order (:order r)
+                               :entry 'app.main/main})
+      :compiled
+      (catch Exception e
+        (let [m (ex-message e)]
+          (cond (str/includes? m "is a macro, and") :refused
+                (str/includes? m "no-such-symbol-here") :evaluated-the-argument
+                :else :other))))))
+
+(def discards "(defmacro mm [x] ''expanded)")
+
+(check "a macro used where it cannot be expanded is REFUSED, not called"
+       (= :refused (mac-outcome
+                    {"a/owner.cljc" (str "(ns a.owner (:require [a.back]))\n" discards
+                                         "\n(defn go [y] (a.back/reach y))")
+                     "a/back.cljc" "(ns a.back)\n(defn reach [y] (a.owner/mm no-such-symbol-here))"
+                     "app/main.cljc" "(ns app.main (:require [a.owner :as o])) (defn main [_] (o/go 1))"}))
+       "it compiled as a call and analysed the argument the macro throws away")
+
+(check "and the ordinary edge still EXPANDS it, argument untouched"
+       (not= :evaluated-the-argument
+             (mac-outcome {"a/owner.cljc" (str "(ns a.owner)\n" discards)
+                           "app/main.cljc" "(ns app.main (:require [a.owner :as o])) (defn main [_] (a.owner/mm no-such-symbol-here))"}))
+       "the control: a macro that expands must not look at what it discards")
