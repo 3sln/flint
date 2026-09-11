@@ -284,7 +284,21 @@
   [env q]
   (when (namespace q)
     (let [c @(:cc env)
-          m (get (:var-meta c) q)
+          ;; `:var-meta` IS ONLY FILLED IN WHEN A NAMESPACE IS ANALYSED, and
+          ;; `:declared` is filled in by a pre-pass over every source. Reading
+          ;; only the first made privacy ORDER-DEPENDENT: a reference from a
+          ;; namespace analysed before the definer found no metadata and met
+          ;; no check. If A required B, B could name A's private vars -- same
+          ;; two files, refused when A was analysed first and allowed when B
+          ;; was.
+          ;;
+          ;; The pre-pass entry is a map now and carries `:private`, so the
+          ;; fallback answers before the definer has been analysed. A `declare`
+          ;; writes `true` rather than a map, which is why this checks; a
+          ;; declared name has no visibility to report anyway.
+          m (or (get (:var-meta c) q)
+                (let [d (get (:declared c) q)]
+                  (when (map? d) d)))
           here (current-ns env)
           there (symbol (namespace q))]
       (when (not= here there)

@@ -67,6 +67,25 @@
       (do) (vec (mapcat def-form-names (rest form)))
       nil)))
 
+(defn- def-form-private?
+  "Does `form` define its names PRIVATELY? Only `defn-` does; `^:private` on a
+  `def` is metadata the pre-pass cannot read, because it is attached to a
+  symbol this pass sees but does not analyse.
+
+  THIS EXISTS BECAUSE PRIVACY WAS ORDER-DEPENDENT. The pass above records
+  every top-level name in `:declared` so a forward reference resolves. It
+  recorded the NAME and not the visibility -- and `privacy-check!` reads
+  `:var-meta`, which is only filled in when a namespace is ANALYSED. So a
+  reference from a namespace analysed BEFORE the definer resolved through
+  `:declared` and met no privacy check at all.
+
+  The practical shape: if A requires B, then B is analysed first, and B could
+  name A's private vars. Same two files, same reference -- refused when A is
+  analysed first, allowed when B is. Reproduced minimally before this was
+  written."
+  [form]
+  (and (seq? form) (= 'defn- (first form))))
+
 ;; ------------------------------------------------------------------ context
 
 (defn new-context [opts]
@@ -394,7 +413,8 @@
                         (recur (conj acc f))))))]
     (let [forms (flatten-top-level forms)]
       (doseq [f forms, n (def-form-names f)]
-        (vswap! cc assoc-in [:declared (symbol (str nsname) (name n))] true))
+        (vswap! cc assoc-in [:declared (symbol (str nsname) (name n))]
+                {:private (def-form-private? f)}))
       forms)))
 
 (defn analyze-namespace!
