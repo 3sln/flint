@@ -263,10 +263,33 @@ produced today's mess.
 The scanners must not be reachable only through their own downloader. A
 `:local/root` is never downloaded and still has a manifest worth reading. A git
 repository is cloned by the git downloader and may then turn out to carry any
-of the three formats. And a package pulled from npm could itself carry a
-`deps.edn`, if somebody publishes a flint library there — so even the obvious
-pairing is not guaranteed, and nothing should assume the format from the
-source.
+of the format, and a package pulled from npm could itself carry a `deps.edn`,
+if somebody publishes a flint library there.
+
+**WHICH SCANNER RUNS IS ANSWERED TWO DIFFERENT WAYS, and that is deliberate.**
+
+*Referenced locally? The COORDINATE says.* A local dependency names its
+ecosystem in how it is written, so there is nothing to guess:
+
+    :npm/path     -> package.json
+    :mvn/path     -> pom.xml
+    :pod/path     -> the pod manifest
+    :local/root   -> deps.edn
+
+This is also what makes **local pods** work, which is the case that prompted
+the rule: a pod under development is a directory, not a registry entry, and
+`:pod/path` says both where it is and what to read. Only `:local/root` exists
+today; the other three are new coordinates.
+
+*Fetched from a registry? WHAT IS THERE says*, by precedence — `deps.edn`
+first, then the ecosystem's own manifest. A flint library published to npm
+carries both a `package.json`, because npm demands one, and a `deps.edn`
+saying what it actually depends on as flint code. The `deps.edn` is the better
+answer and wins.
+
+The two rules do not conflict: one applies where the reference is explicit
+about its ecosystem, the other where the package had to satisfy a registry and
+may say more than that registry understands.
 
 **Parsing lives where the format knowledge is**, in the Rust `deps.*` modules,
 so the `.cljc` side stops knowing which ecosystem keeps its dependencies in
