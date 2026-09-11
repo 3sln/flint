@@ -159,18 +159,21 @@ blockage is small and nameable:
 * `integer` is a range test, an `alloc`, and a 64-bit write. Both ports spell
   the test `n >= -(1L << 47) && n < (1L << 47)` and Rust spells it
   `n >= FIXNUM_MIN && n <= FIXNUM_MAX`; since `FIXNUM_MAX` is `(1 << 47) - 1`
-  those are the identical set, checked. It needs `write-u64`, and it needs a
-  way to SAY 2^47: `flint.impl.rt` has no `hex`, and `hash.kin` records what
-  that costs — a constant spelled in decimal is "a valid `u32` in Rust and
-  `integer number too large` in Java, where an `int` literal stops at
-  2147483647".
+  those are the identical set, checked. `write-u64` is the easy half.
 
-All three runtimes already have the accessors (`read_u32`/`write_u32`,
-`read_u64`/`write_u64`, and the camel/Pascal spellings on the ports), so the
-additions are template entries beside the `u8` ones. They are ADDITIVE — no
-existing source says `hex` in an `rt` file — but they change the vocabulary all
-88 sources share, which is a different kind of change from moving a function.
-Recorded here rather than done for that reason.
+  SAYING 2^47 IS THE HARD HALF, and `hex` is not the answer — which is worth
+  writing down, because it looks like it is. `hex` emits its literal VERBATIM:
+  `0xcc9e2d51` is a `u32` in Rust and an `int` in Java and needs no help. A
+  48-bit constant is `integer number too large` in Java without an `L`, and
+  nothing in kin adds one — no source emits a large `I64` literal today, so the
+  facility does not exist rather than merely being unused. `integer` needs a
+  literal form that knows its own width, not another template entry.
+
+The `u32`/`u64` accessors do all exist on all three runtimes
+(`read_u32`/`write_u32`, `read_u64`/`write_u64`, and the camel/Pascal
+spellings), so THOSE are template entries beside the `u8` ones. Additive, but
+to the vocabulary all 88 sources share, which is a different kind of change
+from moving a function — and for `integer`, not sufficient on its own.
 
 ## One algorithm, two GENERATED sources
 
