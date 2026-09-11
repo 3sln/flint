@@ -545,6 +545,26 @@ capability guards, `^:private`/`^:internal` on macro-defined vars, and
 `:dynamic`. `extend-method` is the same shape one pass later: not a table read
 before it was filled, but a var READ before its namespace was initialised.
 
+AND A FIFTH MEMBER THAT MUST NOT BE FIXED THE SAME WAY. `:inline`,
+`register-native-aliases!`, `register-projections!` and `register-inversion!`
+are all registered while the DEFINING form is analysed, exactly like `:macros`.
+So they too are missing for a reference analysed earlier. Measured, with an
+`:inline` whose expansion names a symbol that cannot resolve:
+
+    ordinary edge -> "unable to resolve symbol: no-such-inline-marker"   (inlined)
+    reverse edge  -> no such error                                        (not inlined)
+
+The difference is real and it is silent. It is NOT the same defect, though:
+an `:inline` is required to mean what the function means, so the program still
+computes the right answer. What changes is the code emitted, and therefore the
+GAS -- the same source, arranged differently, is charged differently.
+
+Refusing, which is right for a macro, would be wrong here: "this call was not
+inlined" is a thing a compiler is allowed to decide. So this is recorded and
+not fixed, and the open question is whether the compiler should SAY it -- a
+note that an `:inline` was skipped for ordering reasons -- rather than leave
+the gas difference to be discovered from a bill.
+
 Whether `core-first` hoisting `clojure.core` over the namespaces it requires
 is what leaves `flint.protocols` uninitialised at the moment
 `(extend-protocol ...)` runs is the obvious next probe, and it is a PROBE and
