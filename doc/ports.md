@@ -116,3 +116,45 @@ against the gate as it stands.
 * `SelfHost` / `--selfhost`, superseded by `RtSelfHost` / `--rt-selfhost`.
 * `AotTest` / `--aot`, which had nothing left to test.
 * `LoadTest`, `RunTest`, `HashTest`, which nothing had run for some time.
+
+## What is still written three times, and why
+
+"29 hand-written fns in bytes/strs/vector/pike" is the number the work reminder
+carries, and it overstates the problem: most of those are `#[test]`. The
+boundary that MATTERS is the one kin calls into, and it is declared in the
+sources themselves as `@kin:link:form:`. Counted across the three runtimes:
+
+    native 12    CLR 12    JVM 12    identical set
+
+    bitpos  char-at  hash-mask  index-of  integer  keyword-hash
+    s-concat-copy  s-copy-range  s-empty  set-eq  string-hash  vec-count
+
+That the three lists are the same set is itself worth having: a primitive that
+exists on one runtime and not another is a divergence waiting to be found by a
+user.
+
+THREE OF THEM ARE NOT PRIMITIVE. `hash-mask`, `bitpos` and `index-of` are the
+HAMT's bit arithmetic -- `(h >>> shift) & 0x1f`, `1 << mask`, and
+`popcount(bitmap & (bit - 1))`. Nothing about them needs a host; the first two
+are already sayable in kin's vocabulary today, and the third needs a popcount
+link and nothing else.
+
+They are all three CORRECT right now -- checked, because this is exactly where
+a shift is easy to get wrong: Java's `>>` is arithmetic and would silently
+corrupt a hash with the top bit set. All three spell it `>>>` (or `>>` on
+Rust's unsigned). That they are right is not an argument for leaving them
+hand-written; it is the argument for moving them, because this is the class of
+function where being wrong is invisible until a hash collides in one runtime
+and not another.
+
+AND THE 31-WALK EXISTS FOUR TIMES. `hashBytes` / `HashBytes` / `hash_bytes` are
+one rule -- `h * 31 + byte`, then the final mix -- written once per runtime,
+and `kin/bytehash.kin` writes the SAME walk for byte trees, generated. The two
+are not interchangeable as they stand (the byte-tree hash caches a raw walk per
+node and applies no final mix; the string hash mixes), but the walk under them
+is one thing, and the string side is the hand-written one.
+
+Written down because it was introduced RECENTLY, by the change that made a
+string hash over its bytes, and by the habit this file exists to name: three
+files were open, so the function was written three times. The port boundary is
+small and deliberate; this was neither.
