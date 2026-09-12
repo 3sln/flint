@@ -70,3 +70,31 @@ fn main() {
         }
         System.Console.WriteLine(o.ToString());
     }
+--expect
+1101110000
+--expect-why
+DERIVED from the fixture's tag encoding in `--rust-head`: `is-fixnum` is
+`v == 1`, `is-double` is `v == 2`, `is-heap` is `v >= 0x100`, `as-heap` is the
+low byte, `ty` is that byte, TY_BIGINT = 5 and TY_STR = 6. Each pair printed
+is `is-int` then `is-number`.
+
+  Value(1)         fixnum                  -> is-int 1, is-number 1   "11"
+  Value(2)         double                  -> is-int 0, is-number 1   "01"
+  Value(0x105)     heap, ty 5 = TY_BIGINT  -> is-int 1, is-number 1   "11"
+  Value(0x106)     heap, ty 6 = TY_STR     -> is-int 0, is-number 0   "00"
+  Value(3)         immediate, neither      -> is-int 0, is-number 0   "00"
+
+THE THIRD PAIR IS THE WHOLE FILE. `11` there is `is-int` and `01` would be
+`is-fixnum` wearing its name -- the exact confusion the header records, where
+a bigint fell through every printer arm and the bits of 1.5 came out as
+`#<unprintable>`. It is also the only field that requires the TAG READ, so a
+source that stopped after the value-word tests still passes every other pair.
+
+The fourth pair is its control: also on the heap, also reached through `ty`,
+and NOT a number. Without it, `is-int` could answer "heap means bigint" and
+the third pair would not notice.
+
+NOT COVERED HERE, and noted rather than quietly left: `both-ints` is exported
+by `numkind.kin` and this driver never calls it. It is exercised indirectly by
+`numarith` and `numdiv`, whose probes take the integer path on pairs of
+bigints -- but nothing asks it about a MIXED pair.

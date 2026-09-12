@@ -122,3 +122,69 @@ fn main() {
         for (int k = 1; k < 40; k++) o.Append(rt.h[k]).Append(',');
         Console.WriteLine(o.ToString());
     }
+--expect
+1 10 19 35 log=BBCBB roots=0 0,0,10,11,20,21,0,0,0,0,0,40,41,30,31,0,0,0,0,0,50,51,60,61,0,0,0,70,71,80,81,0,0,0,0,0,0,0,0,
+--expect-why
+DERIVED by walking `merge-two` through each of its four branches on the
+driver's four calls. The ADDRESSES are derived too rather than pinned: the
+fixture's bump starts at 1 and `obj` advances it by `n + 1`, with `bn-new`
+asking for 8 and `cn-new` for `2n + 2`, so every allocation's address follows
+from the ones before it.
+
+  bump 1  -> B(8) at 1,  bump 10
+          -> B(8) at 10, bump 19
+          -> C(6) at 19, bump 26
+          -> B(8) at 26, bump 35
+          -> B(8) at 35, bump 44
+
+which gives the four results `1 10 19 35` and the log `BBCBB`. The log is the
+SHAPE of the answer: five allocations, and the third is a COLLISION node while
+the rest are bitmap nodes. A source that took the wrong arm would still return
+a plausible address; it would not produce this letter in this position.
+
+CALL a -- differing at this level, already in order.
+  h0 = 0x01, h1 = 0x02, shift 0, so m0 = 1 and m1 = 2, different.
+  m0 < m1, so k0/v0 go to pair 0 and k1/v1 to pair 1, at node 1:
+  h[3]=10 h[4]=11 h[5]=20 h[6]=21.
+
+CALL b -- THE SAME CASE WITH THE ARGUMENTS REVERSED, and the reason the
+fixture has two of them. h0 = 0x05 and h1 = 0x03, so m0 = 5 and m1 = 3 and
+m0 > m1. The source's comment says the pairs go "in BIT ORDER, not argument
+order", because `index-of` derives a slot from the bitmap. So at node 10 the
+SECOND argument lands first:
+
+  h[12]=40 h[13]=41 h[14]=30 h[15]=31
+
+and NOT `30,31,40,41`. That inversion is the single most valuable field on
+this line: storing in argument order builds a node whose bitmap says one thing
+and whose slots say another, so every later `get` on it returns the other key's
+value -- silently, and only for the half of insertions that arrive descending.
+
+CALL c -- shift 32, the same 32-bit hash all the way down. The `>= shift 32`
+arm runs `cn-new` (the `C` in the log) and writes the two pairs at CN_BASE = 2
+onward, in ARGUMENT order, since a collision node has no bitmap to order by:
+
+  h[21]=50 h[22]=51 h[23]=60 h[24]=61
+
+CALL d -- equal at this level, differing deeper: the recursion. h0 = 0x21 and
+h1 = 0x41 are both 1 mod 32, so m0 == m1 and the source recurses at
+shift + HASH_BITS = 5. There 33 >> 5 = 1 and 65 >> 5 = 2, which differ, so the
+inner call takes branch (a) and fills node 26:
+
+  h[28]=70 h[29]=71 h[30]=80 h[31]=81
+
+The outer call then allocates node 35 with an EMPTY datamap and a nodemap of
+`1 << m0`, and hangs the sub-node off it.
+
+  roots=0  every call marks and pops to the mark, including the recursive one,
+           so the stack is exactly as deep after four merges as before. The
+           recursion is where a missing `pop-to` would compound, one leak per
+           level of trie depth.
+
+WHAT THIS LINE DOES NOT CHECK. `bn-set-node` in this fixture writes slot 7 - j,
+so call d's link lands at h[35 + 7] = h[42] -- and the dump stops at h[39].
+The sub-node's CONTENTS are checked (28..31) and its ADDRESS is checked only
+indirectly, by the bump arithmetic that makes the outer node 35. A recursion
+that built the right child and attached the wrong one would not be caught here.
+Widening the loop past 42 would close that gap; changing the driver is outside
+what this section may do, so it is recorded instead.

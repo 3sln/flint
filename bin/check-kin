@@ -88,6 +88,12 @@ printf '%s\n' kin/*.kin | xargs -P "$_kin_jobs" -I@ sh -c '
     echo "  FAIL $name has no drivers file"
     exit 0
   fi
+  # AN `--expect` SECTION IS THE OTHER HALF, and it is counted rather than
+  # merely available. `verify` compares the three targets WITH EACH OTHER,
+  # which cannot see a logic error in the one source they all come from --
+  # three identically-wrong implementations agree. A source with an `--expect`
+  # says what the answer SHOULD BE; one without is checked only against
+  # itself, one level up from the thing this script already refuses.
   if out=$(./kin/scripts/verify "$src" 2>&1); then
     echo "  ok   $name agrees across three targets"
   else
@@ -97,6 +103,16 @@ printf '%s\n' kin/*.kin | xargs -P "$_kin_jobs" -I@ sh -c '
 ' _ @ >> "$_kin_out" 2>&1
 sort "$_kin_out"
 verified=$(ls kin/*.kin | wc -l | tr -d ' ')
+# AN `--expect` SECTION IS THE OTHER HALF, counted rather than merely
+# available. `verify` compares the three targets WITH EACH OTHER, which cannot
+# see a logic error in the one source they all come from -- three identically
+# wrong implementations agree. A source with an `--expect` says what the answer
+# SHOULD BE; one without is checked only against itself, one level up from the
+# thing this script already refuses.
+#
+# Counted here rather than inside the loop: the loop runs under `xargs`, and a
+# counter incremented in a subshell does not survive it.
+expected=$(grep -l '^--expect$' kin/*.drivers 2>/dev/null | wc -l | tr -d ' ')
 fails=$((fails + $(grep -c '^  FAIL' "$_kin_out" || true)))
 rm -f "$_kin_out"
 
@@ -195,4 +211,30 @@ trap 'rm -rf "$work"' EXIT
   echo "  A pass over almost nothing looks exactly like a pass over everything."
   exit 1
 }
-echo "check-kin: $verified kin sources agree, every generated module matches, and every one is reached"
+# EVERY SOURCE CARRIES AN EXPECTATION, and this is the same argument as the
+# floor above, one level up.
+#
+# `verified` counts sources whose three targets AGREE. Agreement cannot see a
+# logic error in the source they all come from: one wrong `.kin` emits three
+# identically-wrong implementations, which agree perfectly and pass. Only an
+# `--expect` section says what the answer should BE.
+#
+# NOT A FLOOR WITH A MARGIN, unlike `verified`. A margin there is right,
+# because it protects a gate from the act of adding a source. A margin here
+# would do the opposite: it would let the next source arrive with no
+# expectation and no complaint, which is exactly how the previous state --
+# ninety drivers and not one expected value -- was reached without anyone
+# deciding on it. All ninety have one, so the check is `all of them`, and a
+# new source writes its expectation as part of being written.
+if [ "$expected" -lt "$verified" ]; then
+  echo "check-kin: $expected of $verified kin sources carry an --expect section."
+  echo "  Every one is meant to. Without it a source is checked only against"
+  echo "  ITSELF: three targets from one source agree however wrong the source is."
+  for src in kin/*.kin; do
+    n=$(basename "$src" .kin)
+    grep -q '^--expect$' "kin/$n.drivers" || echo "  missing: kin/$n.drivers"
+  done
+  exit 1
+fi
+echo "check-kin: $verified kin sources agree, all $expected against a written-down expected answer,"
+echo "           every generated module matches, and every one is reached"

@@ -355,3 +355,102 @@ namespace Flint.Rt {
          .Append(CollContains(rt, ot, kw) ? 1 : 0);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+s=912/11/11 921/921/921 921/921/921 922/922/922 932/11/11 11/11/11 942/11/11 923/923/923 952/11/11 952/11/11 962/11/11 924/924/924 925/925/925 11/11/11 me=700/701/11 tag=700/701/11 row=11 n=11/11 c=111000 c2=010
+--expect-why
+DERIVED BY HAND from `collread.kin` against the `-head` stubs, which give each
+delegate a DISTINCT constant so the printed value names the arm that ran. All
+values are printed in HEX.
+
+  dflt        0x11        <- "11" below always means A MISS
+  char-at i   0x910 + i   vec-nth i   0x930 + i   table-ref i 0x940 + i
+  b-at i      0x950 + i   tvec-nth i  0x960 + i
+  map-get     0x921       set-get     0x922       ref-get     0x923
+  tmap-get    0x924       tset-get    0x925       slot i      0x700 + i
+  keyword "tag" 0x8A, "form" 0x8B; the probe's `kw` is 0x8C -- NEITHER
+  two = 2, neg = -1, and `kw` is not an integer at all.
+
+THE STRING, `s=912/11/11`, checked BEFORE the tag dispatch because a short
+string is not a heap value:
+  two -> `char-at s 2` = 0x910 + 2 = 912
+  neg -> `is-int` yes but `i >= 0` fails, so the inner `if` falls out and the
+         arm's own `return dflt` runs: 11. The -1 is the point: `i64-of`
+         sign-extends, so a runtime reading the payload unsigned would see
+         four billion and index with it.
+  kw  -> not an integer: a MISS, not an error. That is the rule that makes
+         `(get v :nope)` safe.
+
+THE THIRTEEN TAGS, in the driver's order, each with `two`, `neg`, `kw`:
+
+  TY_ARRAYMAP  921/921/921   one arm for both map tags, so the two lines are
+  TY_HASHMAP   921/921/921   IDENTICAL -- and a map ignores whether the key
+                             looks like an index, which is why all three
+                             columns are the same.
+  TY_SET       922/922/922
+  TY_VEC       932/11/11     INDEXED: `vec-nth` at 2. Negative and non-integer
+                             are misses, not errors.
+  TY_MAPENTRY  11/11/11      2 is not 0 and not 1, so a miss. "It is a PAIR,
+                             not a vector that happens to be two long" -- a
+                             vector arm here would print 932.
+  TY_TABLE     942/11/11     indexed by ROW, answering a ref.
+  TY_TABLEREF  923/923/923   a ref is keyed like a map, so no index test.
+  TY_BYTES     952/11/11     both byte tiers share one arm, so the next line
+  TY_BROPE     952/11/11     must be the same number.
+  TY_TVEC      962/11/11     the transient vector has its OWN accessor: 962
+                             and not 932 says it did not fall into `vec-nth`.
+  TY_TMAP      924/924/924
+  TY_TSET      925/925/925
+  TY_OTHER     11/11/11      an unrecognised heap tag falls off the end of the
+                             dispatch and returns `dflt`. Not a throw: `get`
+                             misses, it does not refuse.
+
+`me=700/701/11`. A map entry answers slot 0 for key 0 and slot 1 for key 1 and
+nothing else -- so key 2 is `11`. The two slots differ (700 vs 701), so a
+swapped pair is visible.
+
+`tag=700/701/11`. A tagged literal "reads like a two-key map": the keyword
+`tag` gives slot 0, `form` gives slot 1, and any other keyword misses. The
+probe's third key, 0x8C, is deliberately a THIRD keyword rather than a
+non-keyword, so the `11` proves the arm compares against both names rather
+than accepting any keyword.
+
+`row=11`. With `rowmiss` set, `table-ref` answers NIL for row 2 -- a row past
+the end. The source turns that nil into `dflt`, so the answer is 11 and not
+`ffff`. A caller asking for row 2 of a 2-row table gets its default back, not
+a nil row it would then try to read.
+
+`n=11/11`. NIL and a fixnum both miss: neither is `is-string` and neither is
+`is-heap`, so the tag dispatch is never entered -- reading `ty` at a fixnum's
+bits is exactly what the guard is for.
+
+`c=111000` -- `coll-contains`, six answers in order:
+  map  + kw    1   delegates to `map-contains` (stubbed true)
+  set  + kw    1   delegates to `set-contains` (stubbed true)
+  vec  + 2     1   THE INDEX, not the value: `u< 2 (vec-count = 3)`
+  vec  + 3     0   3 is not < 3 -- the boundary, and the one an inclusive
+                   comparison would get wrong
+  vec  + -1    0   the explicit `i < 0` arm. It matters that this is checked
+                   BEFORE `u<`: as an unsigned 32-bit number -1 is about four
+                   billion, which is not less than 3 either, so both readings
+                   print 0 here -- but the guard is what makes that not an
+                   accident.
+  vec  + kw    0   a non-integer key on an indexed collection is false.
+  `(contains? [:a :b] :a)` being false is the rule this line encodes.
+
+`c2=010`:
+  NIL        0   the first arm.
+  TY_TMAP    1   no arm names it, so it falls to the general case: `coll-get`
+                 against NOT_FOUND, which `tmap-get` answers 0x924 for -- not
+                 NOT_FOUND, so true. This is what "the one value a collection
+                 cannot be holding" buys: a stored nil would still be true.
+  TY_OTHER   0   the same general case, but `coll-get` has no arm either, so
+                 it returns the default it was GIVEN -- NOT_FOUND -- and the
+                 comparison makes it false. 1 here would mean the sentinel
+                 leaked through as a real answer.
+
+NOT EXERCISED HERE: the seq refusal. `coll-contains` throws
+IllegalArgumentException for TY_CONS, TY_EMPTY_LIST, TY_LAZYSEQ, TY_VECSEQ and
+TY_STRSEQ -- the source argues at length that answering `false` there is the
+wrong kind of wrong -- but no probe in this file passes a seq tag, and although
+each fixture records the message in `rt.thrown`, nothing prints it. The five
+seq constants in the `-head` sections are declared and unused.

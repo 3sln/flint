@@ -419,3 +419,64 @@ namespace Flint.Rt {
         o.Append("count=").Append(TableCount(rt, tab)).Append(" offset=").Append(TableOffset(rt, tab));
         System.Console.WriteLine(o.ToString());
     }
+--expect
+kinds=100.010.001.000.000.000 len=2 width=3 idat=0.1 nameat=101.102 typeat=201.202 eq=1001 rows=3 enc=01 flat=10.11.12 const=99.99.99 count=7 offset=2
+--expect-why
+DERIVED FROM THE SLOT LAYOUT, not from a run. Every function in
+`tablemeta.kin` is a slot read or a vector index over a fixture that lays the
+slots out by hand, so each field can be worked out from the constant that
+names it.
+
+KINDS, three digits per value: `is-schema`, `is-table`, `is-table-ref`.
+
+  TY_SCHEMA object -> 100    TY_TABLE -> 010    TY_TABLEREF -> 001
+  a plain TY_VEC   -> 000    (heap, but tagged otherwise)
+  NIL              -> 000    (not heap at all -- the early `is-heap` guard)
+  the fixnum 77    -> 000    (ditto)
+
+  EXACTLY ONE DIGIT SET per real object, and NONE for the other three. The
+  two non-heap cases are what the source's own comment is about: reading a
+  type tag out of a fixnum would index the space map with 77.
+
+THE SCHEMA is two columns with ids 0 and 1 and a WIDTH of 3 -- wider than it
+is long, which is what a migration that dropped a column leaves behind.
+
+  len=2     `schema-len` counts the NAMES vector
+  width=3   `schema-width` reads SC_WIDTH. It must NOT equal `len`: ids are
+            stable so chunks survive a migration, and the price is a width
+            that only grows. `width=2` would mean width was derived from the
+            name count, and a chunk would be allocated one column short.
+  idat=0.1  SC_IDS positionally
+  nameat=101.102 and typeat=201.202 -- the fixture's names and types are
+            distinct fixnums PER POSITION, so a `schema-name-at` that read
+            SC_TYPES prints 201.202 and a swapped index prints 102.101.
+
+EQ=1001, the four comparisons in order: an equal-but-distinct schema, a
+SWAPPED one, a RETYPED one, and the schema against itself.
+
+  same    1  -- structural, not identity: different objects, same contents
+  swapped 0  -- [b a] is not [a b]. Position matters, because the rows would
+                read differently, and this is the digit an unordered (set-like)
+                comparison gets wrong.
+  retyped 0  -- same names, types [201 201] instead of [201 202]. This is the
+                digit a `schema-eq` that only compared NAMES gets wrong -- and
+                it would compare equal two tables whose columns hold different
+                types.
+  self    1
+
+THE CHUNK is three rows, column 0 FLAT and column 1 COLLAPSED.
+
+  rows=3, enc=01 (ENC_FLAT = 0 for column 0, ENC_CONST = 1 for column 1)
+  flat=10.11.12   -- `chunk-get` indexes the column vector by row
+  const=99.99.99  -- the collapsed column IS the value; there is nothing to
+                     index into, and every row answers the same 99.
+
+  THE COLLAPSED ROW IS THE ASSERTION. Slot CH_BASE+1 holds the fixnum 99
+  itself, not a vector, so a `chunk-get` that indexed it regardless of the
+  encoding would read 99's neighbours in the heap array -- three arbitrary
+  numbers rather than a crash. `99.99.99` is what says the encoding is asked
+  in exactly one place, as the file's header claims.
+
+count=7 offset=2: the table is a SLICE, so its first row is at index 2 of its
+first chunk. offset=0 would be an accessor ignoring TB_OFFSET, which silently
+reads the wrong rows of every sliced table.

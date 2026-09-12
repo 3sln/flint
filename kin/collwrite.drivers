@@ -462,3 +462,133 @@ namespace Flint.Rt {
         o.Append("e=").Append(CollNth(rt, c, AnInt(0), d).ToString("x"));
         System.Console.WriteLine(o.ToString());
     }
+--expect
+nil=901 fix=ffff|ClassCastException/assoc needs an associative collection| 901 901 903 904 ffff oth=ffff|ClassCastException/assoc needs an associative collection| v=911/913 |IndexOutOfBoundsException/assoc index out of range| |IndexOutOfBoundsException/assoc index out of range| |IndexOutOfBoundsException/assoc index out of range| me=911 t=902/902 |IllegalArgumentException/a tagged literal's :tag must be a symbol| |IllegalArgumentException/a tagged literal has :tag and :form and nothing else, so it cannot take :zz| n|IllegalArgumentException/nth index must be an integer| neg=22 |IndexOutOfBoundsException/negative index| nil=22/ffff in=921/931/941/952 out=22/22/22/22 s|IndexOutOfBoundsException/string index out of range| b|IndexOutOfBoundsException/byte index out of range| v|IndexOutOfBoundsException/index out of range| c|IndexOutOfBoundsException/index out of range| e=22
+--expect-why
+DERIVED BY HAND from `collwrite.kin` against the `-head` stubs. Every delegate
+answers its own constant, so a printed Value NAMES the arm that produced it;
+values are in HEX and a refusal is printed as `class/message` between bars.
+
+  empty-map 0x900  map-assoc 0x901  new-tagged 0x902
+  table-assoc 0x903  ref-assoc 0x904  vec-assoc i -> 0x910 + i
+  char-at i -> 0x920 + i (i < strn = 3, else the default it was passed)
+  b-at    i -> 0x930 + i (i < bytn = 3)
+  vec-nth i -> 0x940 + i (i < vecn = 3)
+  slot i -> 0x700 + i;  keyword "tag" 0x8A, "form" 0x8B;  the probe's `k` is
+  0x8C, a THIRD keyword.  `value-text` of any name is "zz".
+  NIL is ffff, NOT_FOUND is fffe, the caller's `dflt` in the `nth` half is 22.
+  The seq is a countdown: `seq` gives 0xC000 + seqn, `first` of 0xC000 + j is
+  0x950 + j, `next` counts down to NIL.
+
+ASSOC.
+
+`nil=901`. `(assoc nil k v)` takes the first arm: `empty-map` then `map-assoc`.
+901 and not 900 -- the empty map is assoc-ed INTO, not handed back. This is
+what makes `(update m :k f)` work on a key that was never there.
+
+`fix=ffff|ClassCastException/...|`. A fixnum is not `is-heap`, so it refuses
+before the tag switch -- reading `ty` at a fixnum's bits is the defect the
+guard exists for. The returned Value is NIL because the fixture models a throw
+that way; the MESSAGE is the assertion.
+
+`901 901 903 904 ffff`, over TY_ARRAYMAP, TY_HASHMAP, TY_TABLE, TY_TABLEREF,
+TY_MAPENTRY:
+  the two map tags share one arm, so the same 901 twice;
+  a table goes to `table-assoc` (903) -- "its schema is CLOSED, so the
+  refusals live where the schema is";
+  a ref goes to `ref-assoc` (904) and NOT to `table-assoc`, because "a ref is
+  a VIEW" and assoc-ing it makes an independent map;
+  the map entry is `ffff`, and that is CORRECT here rather than a failure: the
+  MAPENTRY arm converts to a vector and recurses, and the key in this loop is
+  the keyword 0x8C, which is not an integer -- so the vector arm refuses it
+  with IndexOutOfBoundsException. The `me=` field below runs the same arm with
+  an INTEGER key and gets a real answer, which is what shows the conversion
+  happened at all.
+
+`oth=ffff|ClassCastException/...|`. An unrecognised heap tag falls off the end
+of the dispatch to the same refusal as the fixnum -- the same sentence, which
+is right: both mean "not associative".
+
+`v=911/913`. A vector indexed at 1 gives `vec-assoc` at 1. THE SECOND IS THE
+POINT: index 3 on a vector of count 3 is ONE PAST THE END, which APPENDS, so
+the bound is `<=` and not `<`. 913 is the number that says so; a `<` would
+refuse and print the IndexOutOfBounds message instead.
+
+Then three refusals, all the same sentence, for three different reasons:
+  index 4  -- two past the end, so past the `<=` bound
+  index -1 -- caught by `i >= 0` before the bound is even reached; and this is
+              the sign-extension case, since as an unsigned 32-bit number -1
+              would sail past the `>= 0` test and then fail `<=` anyway, so
+              the message alone cannot distinguish them -- the guard is what
+              makes it deliberate
+  a keyword -- not an integer at all
+An `assoc` that promoted a non-integer key to something is exactly what these
+rule out.
+
+`me=911`. The map-entry arm with an integer key: `map-entry-as-vec` makes a
+TY_VEC, the function recurses, and index 1 lands in the VECTOR arm -- 0x911,
+the same constant the vector produced above. "A map entry IS a vector, so it
+is associative and `assoc` indexes it"; without this arm it would claim
+`associative?` and then refuse.
+
+`t=902/902`. Both `:tag` and `:form` answer `new-tagged`, so the TYPE IS
+PRESERVED -- 902 and not 901, which would be the silent promotion to a map
+that loses the taggedness.
+
+`|IllegalArgumentException/a tagged literal's :tag must be a symbol|` with
+`sym` forced false: the `:tag` arm checks `is-symbol` on the VALUE before
+building.
+
+`|IllegalArgumentException/a tagged literal has :tag and :form and nothing
+else, so it cannot take :zz|` for a third keyword. THE KEY IS NAMED: the
+message ends in the fixture's `value-text`, "zz", built by `str-cat`. A refusal
+that said "wrong key" without saying which one is what this codebase keeps
+replacing -- so the presence of `:zz` at the end is the assertion, not decoration.
+
+NTH. `NOT_FOUND` as `dflt` means THERE IS NO DEFAULT, and then every arm raises
+instead of answering.
+
+`n|IllegalArgumentException/nth index must be an integer|` -- a non-integer
+index is refused outright, before any collection is looked at.
+
+`neg=22` then `|IndexOutOfBoundsException/negative index|`. THE SAME CALL WITH
+TWO DIFFERENT DEFAULTS: with `dflt` = 0x22 a negative index answers the
+default; with `dflt` = NOT_FOUND it raises. That pair is the whole point of the
+sentinel -- one code path, two behaviours, chosen by a value no collection can
+be holding.
+
+`nil=22/ffff`. `nth` of nil: the default when there is one, and NIL (not a
+throw) when there is not.
+
+`in=921/931/941/952`. Index 1, in range, on four different kinds:
+  string 921 via `char-at`, byte string 931 via `b-at`, vector 941 via
+  `vec-nth`, seq 952 via the walk. FOUR DIFFERENT CONSTANTS, so no arm can be
+  standing in for another. The byte one is the arm the source says was
+  MISSING: `count` and `get` learned that a byte string indexes like a vector
+  and `nth` did not, and the symptom was IndexOutOfBounds on a byte string
+  plainly long enough. 931 is that arm present.
+  The seq value is 952 rather than 951 because the fixture's `first` is keyed
+  on the countdown (three left, then two), and index 1 is reached with two
+  left.
+
+`out=22/22/22/22`. The same four at index 9, past every bound, WITH a default:
+all four answer the caller's 0x22. Each arm probes with NOT_FOUND internally
+and only then falls back -- which is how "the element is nil" stays
+distinguishable from "there is no element".
+
+`s|...string index out of range| b|...byte index out of range|
+v|...index out of range| c|...index out of range|`. The same four at index 9
+with NO default. Each raises, and the first two name the KIND -- three distinct
+sentences across four arms, so a shared refusal cannot pass for all of them.
+
+`e=22`. `seqn` set to 0, so `seq` answers NIL and the `while` never enters its
+body: `out` is still NOT_FOUND, and the default comes back. The empty-walk
+case, which an implementation that read `first` before testing the loop
+condition would get wrong.
+
+NOT EXERCISED HERE: `coll-nth` refuses a map or a set with
+UnsupportedOperationException, and the source argues at length that falling
+through to the walk answered `[:a 1]` for `(nth {:a 1} 0)`. No probe in this
+file passes TY_ARRAYMAP, TY_HASHMAP or TY_SET to `coll-nth` -- TY_SET is
+declared in all three `-head` sections, with a comment saying `nth` must refuse
+it, and then never used. That arm is unchecked here.

@@ -642,3 +642,64 @@ namespace _3sln.Flint.Kgen.Rt {
          .Append(" none=").Append(FirstForeignKey(rt, sch, good) == Val.Nil ? 1 : 0);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+kw=a/? cols=[:a :b] good=1 notmap=0|a table row is a map, and row 3 is a number missing=0|row 4 has no :b; a table is closed, so every row has every column, and the columns are :a :b type=0|row 5, column :a holds :int and was given a string extra=0|row 6 has :z, which is not a column; a table is closed, and the columns are :a :b foreign=z none=1
+--expect-why
+DERIVED BY COMPOSING THE `str-cat`s in `tablesay.kin` over this fixture's
+schema -- `[[:a :int] [:b :string]]` -- rather than by copying what a run
+printed. The messages ARE the subject of this file: its header says "bad row"
+is the message this codebase keeps replacing, and what a caller needs is which
+ROW, which COLUMN, what the column HOLDS and what it was GIVEN. An `--expect`
+that only checked a boolean would let all four words rot.
+
+  kw=a/?   `kw-name` of `:a` is its name; `kw-name` of the FIXNUM 3 is `?`.
+           The second is the deliberate non-refusal: this is only ever called
+           while building a message about something already wrong, and a
+           second failure there would replace the message the caller needs.
+
+  cols=[:a :b]  `column-list` joins with ONE space and prefixes each with a
+           colon -- `:a :b`, not `:a:b` and not a trailing space. The `(> c 0)`
+           guard is why the separator is between and not before.
+
+  good=1   `{:a 1, :b "hi"}` is a fixnum in an `:int` column and a string in a
+           `:string` one, exactly two keys for exactly two columns. Nothing to
+           refuse.
+
+THE FOUR REFUSALS, each returning false AND naming itself:
+
+  notmap   row 3 is the fixnum 7. `kind-of` calls it a `number`, and the
+           message says so:
+             "a table row is a map, and row 3 is a number"
+           The ROW NUMBER is in it, which is what makes it actionable in a
+           thousand-row insert.
+
+  missing  `{:a 1}` against a two-column schema. `row-column` answers
+           NOT_FOUND for `:b`, and the message names the column AND lists the
+           schema:
+             "row 4 has no :b; a table is closed, so every row has every
+              column, and the columns are :a :b"
+           The list comes from `column-list`, so `cols=` above and the tail of
+           this message must agree.
+
+  type     `{:a "hi", :b "hi"}`. Column `:a` holds `:int` and got a string:
+             "row 5, column :a holds :int and was given a string"
+           FOUR FACTS: row 5, column :a, holds :int, was given a string. The
+           last comes from `kind-of` on the value that arrived, which is the
+           same closed set protocol dispatch uses -- so `string` is a word the
+           reader has already met, not a host type name.
+
+  extra    `{:a 1, :b "hi", :z 9}`. Every column is present, so the count
+           disagreeing means a key that is not a column, and only then is the
+           row walked:
+             "row 6 has :z, which is not a column; a table is closed, and the
+              columns are :a :b"
+
+  foreign=z none=1  `first-foreign-key` directly: it finds `:z` in the wide
+           row and answers NIL for the good one. `none=0` would mean the hunt
+           reported a foreign key in a row that has none -- and since the hunt
+           runs only when the count already disagrees, the good path would
+           still pass while the message was nonsense.
+
+Every refusal digit is 0 and `good` is 1: an inverted return would print
+`good=0` with the other four at 1, which is the one confusion a boolean alone
+could hide.

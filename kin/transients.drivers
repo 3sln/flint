@@ -475,3 +475,114 @@ namespace Flint.Rt {
         o.Append("|").Append(rt.thrown).Append("|");
         System.Console.WriteLine(o.ToString());
     }
+--expect
+901 902 902 902 903 904 ffff[ClassCastException/a #30 is not transientable] |ClassCastException/a fixnum is not transientable| 911 912 913 914 ffff! |ClassCastException/persistent! wants a transient, got a #9| |IllegalStateException/persistent! called twice on one transient| 921 922 923 931/960,961 931 |IllegalArgumentException/conj! on a map wants a map entry| |ClassCastException/conj! wants a transient, got a #9| 931 942 |IndexOutOfBoundsException/assoc! index out of range| |IndexOutOfBoundsException/assoc! index out of range| |ClassCastException/not an associative transient| 932 933 |ClassCastException/dissoc!/disj! wants a transient, got a #23| 951 |IllegalStateException/cannot pop an empty vector| |ClassCastException/pop! wants a transient, got a #24|
+--expect-why
+DERIVED BY HAND from `transients.kin`, by reading which callee each tag routes
+to and taking that stub's number. Nothing was read off a run.
+
+THIS SOURCE DOES NO WORK OF ITS OWN -- it is five dispatches -- so the driver's
+`-head` makes every callee a STUB THAT NAMES ITSELF with a distinct constant,
+and the whole check is WHICH one answered. Numbers are hex, as the probe
+prints them:
+
+  901 vec-transient    911 tvec-persistent    921 tvec-conj    931 tmap-assoc
+  902 map-transient    912 tmap-persistent    922 tset-conj    932 tmap-dissoc
+  903 set-transient    913 tset-persistent    923 ttable-conj  933 tset-disj
+  904 table-transient  914 ttable-persistent                   951 tvec-pop
+  905 ref-to-map       940+i tvec-assoc       960+i slot-or-nth
+  ffff = NIL, the sentinel the fixture's `throw-str` returns
+
+`transient` OVER SIX TAGS AND TWO REFUSALS:
+
+  901   TY_VEC       -> vec-transient
+  902   TY_ARRAYMAP  -> map-transient
+  902   TY_HASHMAP   -> map-transient, the same one: both map tags share an arm
+  902   TY_TABLEREF  -> THE ARM THIS SOURCE ADDED. A row ref is a map, so it
+                        materialises through `ref-to-map` and then takes the
+                        MAP transient -- so the answer is 902 and never 905.
+                        Kin's header records that the ports guarded with
+                        `is-map` (true for a ref) and then read the ref's slots
+                        as an array-map's, so `(merge row {:z 9})` answered
+                        `{:z 9, 1 2}` -- garbage with no refusal. `905` here
+                        would mean the materialisation was returned instead of
+                        being transiented; `ffff` would mean the arm is gone
+                        and `merge` cannot take a row as its source.
+  903   TY_SET       -> set-transient
+  904   TY_TABLE     -> table-transient
+  ffff  TY_OTHER     -> refused, "a #30 is not transientable"
+  ffff  a FIXNUM     -> refused, "a fixnum is not transientable"
+
+The last two are one message with two subjects, and the difference is what
+kin's doc says locates the bug: a wrong TYPE is a mixed-up value, a fixnum is
+a stack slot read at the wrong depth. Both come from one `describe`, not from
+a classifier of this file's own -- the defect the doc describes is two
+classifiers giving two answers to one question.
+
+`persistent!`: 911, 912, 913, 914 for the four transient tags, then `ffff!`
+for a PERSISTENT vector, which is refused with "persistent! wants a transient,
+got a #9". Note what is NOT here: a TY_TBYTES arm. The fixture declares the
+tag and kin has no branch for it, deliberately -- kin's doc measures that arm
+at 8 317 bytes in every module that can be called, because `persistent!` is
+reachable from anything and the arm drags the whole byte builder behind it.
+
+"persistent! called twice on one transient" -- with `tvec-alive` false, the
+transient vector arm REFUSES. Kin's doc: native had `tvec-alive` and called it
+from nothing but a unit test, so a double `persistent!` there re-cleared the
+edit token and built a vector out of the emptied handle -- a wrong answer
+where both ports threw.
+
+`conj!`: 921, 922, 923 for vector, set and table.
+
+  931/960,961  THE MAP ARM TAKES A PAIR APART, and the two extra numbers are
+               why the stub records them: k = slot-or-nth(x, 0) = 960 and
+               v = slot-or-nth(x, 1) = 961, IN THAT ORDER. A stub that only
+               named itself would pass whether the key and value arrived
+               backwards, so `960,961` and not `961,960` is the assertion.
+  931          a two-element VECTOR counts as a map entry too, which is what
+               `(into {} pairs)` hands it -- the same 931, reached through the
+               other half of the `or`.
+  refusal      conj! of a SET onto a transient map is "conj! on a map wants a
+               map entry" -- IllegalArgumentException, the wrong-shape error,
+  refusal      while conj! onto a PERSISTENT vector is "conj! wants a
+               transient, got a #9" -- ClassCastException, the wrong-kind
+               error. Two different classes for two different mistakes.
+
+`assoc!`:
+
+  931   onto a transient MAP with a non-integer key -- a map takes any key,
+        so this must NOT be refused
+  942   onto a transient VECTOR at index 2, which is `940 + i`: the index
+        really reached `tvec-assoc` as 2. The fixture's count is 3, and kin
+        tests `i <= count` rather than `i <`, because writing AT the end
+        appends -- `(assoc [1 2] 2 :c)`.
+  index out of range, TWICE, for two different reasons:
+        * -1. The fixture spells it as a value whose low 32 bits are all ones,
+          and kin holds the index as a SIGNED 64-bit number: `i64-of` gives
+          -1, and `>= 0` refuses it. Widened to `I32` first it would be
+          4294967295, which fails the upper bound too -- but only by luck, and
+          on a longer vector it would not.
+        * a non-integer key. `is-int` is false, so it falls past the range
+          test to the same refusal.
+  not an associative transient -- a transient SET takes neither arm. This is
+        a bare `throw-str` and not `not-a-transient`, so the message does not
+        name the value: that is kin's own wording and the field pins it.
+
+The upper bound is the part kin's comment says was missing: only `>= 0` was
+checked, so `(assoc! (transient [1 2]) 5 :d)` answered the transient BACK,
+unchanged and unrefused, ON ALL FOUR RUNTIMES.
+
+`dissoc!`: 932 for a transient map and 933 for a transient set -- ONE entry
+point, two shapes, because `clojure.core` defines `disj!` as a call to the
+same builtin. The refusal therefore names BOTH: "dissoc!/disj! wants a
+transient, got a #23". That is not vagueness; by the time control is here the
+runtime cannot tell which name was written, and kin's doc records the two
+runtimes each picking one and being wrong half the time.
+
+`pop!`: 951 for a live transient vector; "cannot pop an empty vector" when the
+count is 0 -- CHECKED HERE and not in `tvec-pop`, because the count is a `u32`
+on native and `cnt - 1` on empty wraps to four billion and is written back;
+and "pop! wants a transient, got a #24" for a transient MAP, because Clojure's
+`pop!` is vector-only and does not dispatch further. Kin's doc records that
+this had no builtin at all -- `pop!` read the PERSISTENT pop, so a transient
+vector fell through to the list branch and answered `()`.

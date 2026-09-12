@@ -46,3 +46,36 @@ fn main() {
         o.Append(HashTrue).Append(' ').Append(HashFalse);
         Console.WriteLine(o.ToString());
     }
+--expect
+-1134849565 1392991556 1651860712 -1640531070 736442005 439094965 1231 1237
+--expect-why
+FROM REAL CLOJURE, which is the oracle this file's own header names: `hash` is
+observable, and "a program ported to flint has to get the hashes it got
+before". Nothing here was read off a flint run.
+
+METHOD. `clojure -M` on Clojure 1.12 (the version the `clojure` CLI resolves
+by default on this machine), against `clojure.lang.Murmur3` and
+`clojure.lang.Util` directly:
+
+  (clojure.lang.Murmur3/hashInt 42)      => -1134849565
+  (clojure.lang.Murmur3/hashLong 1)      =>  1392991556
+  (clojure.lang.Murmur3/hashLong -1)     =>  1651860712
+  (clojure.lang.Util/hashCombine 7 11)   => -1640531070
+  (hash-ordered-coll [1 2 3])            =>   736442005
+  (hash-unordered-coll #{1 2 3})         =>   439094965
+  (hash true) (hash false)               =>  1231 1237
+
+The last two come out of Clojure as well rather than being restated from the
+`defconst`s: 1231/1237 are `Boolean.hashCode`, and a constant checked against
+itself is not checked.
+
+THE TWO FOLDS ARE THE POINT. `hash-ordered-coll` is defined to start at 1,
+step `31*acc + hasheq(x)`, and finish through `mixCollHash(acc, n)`; the
+unordered one starts at 0 and sums. The driver spells that fold out by hand
+and must land on the same two numbers Clojure does -- so this checks
+`ordered-step`, `unordered-step`, `mix-coll-hash`, `mix-k1`, `mix-h1` and
+`fmix` composed, not one at a time.
+
+`hash-long -1` is the signed case: `low32`/`high32` of a negative long, where
+a sign-extending split gives a different `h2` and the error would survive into
+every map keyed by a negative number.

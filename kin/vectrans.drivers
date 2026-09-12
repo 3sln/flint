@@ -540,3 +540,61 @@ fn main() {
         o.Append("dead=").Append(TvecAlive(rt, t) ? 1 : 0).Append(' ');
         System.Console.WriteLine(o.ToString());
     }
+--expect
+tok=1 istv=1 isvec=0 cnt=33 sh=5 toff=32 alive=1 tailwide=32 srctail=1 rootshared=1 own=1 copied=1 nowowned=1 a0=1 a32=1 t0=4096 t32=4128 tover=57005 dead=0
+--expect-why
+DERIVED BY HAND from `vectrans.kin` against the fixture's 33-element vector,
+not pasted from a run. `build(33, BITS)` lays it out explicitly: tail-off 32,
+so ONE full leaf holding 0x1000..0x101F under root child 0, and a tail of ONE
+holding 0x1020.
+
+  tok=1     two `new-edit-token`s are two allocations, so two addresses. A
+            token's identity IS the token -- the slot is never read -- and
+            `tok=0` would make `node-edit node == edit` answer "mine" for a
+            node another transient owns.
+
+  istv=1 isvec=0  `is-transient-vector` is a TY_TVEC test and nothing else. A
+            persistent vector must answer 0: the two share a header PREFIX,
+            so a predicate that looked at slots rather than the type tag
+            would say yes to both and let a write land in a shared value.
+
+  cnt=33 sh=5 toff=32  read straight off the source vector through the
+            VECTOR's readers, which is the convergence this file documents:
+            T_CNT/T_SHIFT/T_ROOT/T_TAIL are V_CNT/V_SHIFT/V_ROOT/V_TAIL.
+            toff = ((33-1) >>> 5) << 5 = 32.
+  alive=1   the token is set, so the handle is usable.
+
+  tailwide=32 srctail=1  THE ONE COPY `transient` MAKES. The source tail holds
+            one element and stays one wide; the transient's is widened to a
+            full WIDTH so `conj!` can write into it in place instead of
+            copying it one longer each time. `tailwide=1` would be a
+            transient that re-copies its tail on every append, which is the
+            cost transients exist to remove; `srctail=32` would mean the
+            widening reached back into the persistent vector.
+
+  rootshared=1  `transient` is O(1): the ROOT is the same object, not a copy.
+            Nothing is copied until a write reaches a node the transient does
+            not own.
+
+  own=1 copied=1 nowowned=1  `ensure-editable`, all three arms. A node whose
+            slot 0 IS this edit token comes back identical (same address). A
+            node owned by nobody (NIL) is cloned, so the address differs, and
+            the clone's slot 0 is now the token -- which is what makes the
+            SECOND write to it free. `own=0` would copy every node every time;
+            `copied=0` would write in place into a node a persistent vector
+            still points at, which is the corruption the whole design guards.
+
+  a0=1 a32=1  `t-array-for` on the vector's rule: index 0 is below tail-off 32
+            so it descends the shared root (child 0 = the leaf `build` put
+            there), and index 32 is at tail-off so it takes T_TAIL.
+
+  t0, t32, tover -- `tvec-nth` with a default:
+            t0    = leaf slot 0          = 0x1000 = 4096
+            t32   = tail slot 32 & 31 = 0 = 0x1020 = 4128. The masked index is
+                    the check: 32 unmasked runs off the end of the tail node,
+                    and 0x1020 is deliberately different from 0x1000 so a
+                    descent that wrongly stayed in the trie prints 4096.
+            tover = 33 >= cnt 33, so the caller's default 0xDEAD = 57005.
+
+  dead=0    clearing T_EDIT is exactly what `persistent!` does, and
+            `tvec-alive` must then say the handle is spent.

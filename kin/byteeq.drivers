@@ -452,3 +452,37 @@ namespace Flint.Rt {
         o.Append("emptytree=").Append(BEq(rt, e1, e2) ? 1 : 0).Append(' ');
         System.Console.WriteLine(o.ToString());
     }
+--expect
+shapes=111 same=1 first=0 last=0 len=0 shared=1 empty=1 emptytree=0
+--expect-why
+DERIVED FROM THE CONTENTS, which is the only thing `b-eq` is allowed to look
+at. Every field is a boolean, so each is an exact 1 or 0 and the shape of the
+line cannot absorb a wrong answer.
+
+  shapes=111  x is ONE LEAF of [1..6]; y is a tree of 1+2+3; z is a tree of
+              3+3. Same bytes, three different trees, so all three pairs are
+              EQUAL. A structural comparison -- same node count, same child
+              lengths -- would print 000 here and pass every other field.
+  same=1      identity, the commonest case.
+  first=0     [9,2,3,4,5,6] against [1..6]: differs in the FIRST byte, and
+              the difference is across a shape boundary (leaf vs 1+2+3).
+  last=0      [1,2,3,4,5,9] against [1..6]: differs in the LAST byte, which
+              the run comparison only reaches by walking the whole thing. A
+              comparison that stopped early would print 1.
+  len=0       three bytes against six: refused on the count before walking.
+  shared=1    two trees holding the SAME `c` leaf object; equal.
+  empty=1     two distinct empty leaves.
+
+`first=0` and `last=0` are the controls for `shapes=111`: without them, a
+`b-eq` that answered 1 unconditionally would pass every other field on this
+line.
+
+emptytree=0 IS A KNOWN DIVERGENCE PINNED AS-IS, not an answer this file
+endorses. A node holding two EMPTY leaves compares unequal to an empty leaf,
+because one walk runs dry while the other still has a zero-length leaf on it
+and the final both-dry check sees a leaf rather than a byte. The hand-written
+version answered the same way for the same reason, and no public path builds
+such a node -- `b-slice` drops zero-length pieces, `b-concat` answers the other
+side when one is empty, and the fold is only handed pieces that hold
+something. Written down here so that a later fix CHANGES this field visibly
+rather than sliding past, and so nobody reads the 0 as the rule.

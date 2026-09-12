@@ -193,3 +193,60 @@ namespace Flint.Rt {
         o.Append(" starved-roots=").Append(rt.roots.Count);
         System.Console.WriteLine(o.ToString().Trim());
     }
+--expect
+made=100 isex=true kind=200 msg=201 data=202 roots=0 other-isex=false other-kind=nil nil-msg=nil starved=nil starved-roots=0
+--expect-why
+DERIVED from `exinfo.kin` against the driver's bump allocator. The address is
+derivable here rather than opaque: the fixture's `bump` starts at 100 and
+`ex-info` makes exactly ONE allocation, so `made` is not pinned.
+
+  made=100    `alloc` answers the bump as it stands, which is its initial 100.
+              (It then advances to 100 + 4 + 8 = 112, which nothing prints.)
+  isex=true   `ty` at 100 was written TY_EXINFO = 44 by that same `alloc`.
+
+THE FOUR SLOTS ARE THE ORDER CHECK. `EX_KIND EX_MSG EX_DATA EX_CAUSE` are
+0 1 2 3, and the driver passes 200 201 202 203 in that same order, so a
+correct build gives slot i the value 200+i and the three readbacks print
+
+  kind = slot 0 = 200
+  msg  = slot 1 = 201
+  data = slot 2 = 202
+
+The arguments are consecutive and distinct precisely so a transposition shows.
+Swap `EX_MSG` and `EX_DATA` in either the setter or the getter and the line
+reads `msg=202 data=201` -- still four plausible numbers, which is why the
+values are not all the same and why all three are printed. `cause` is written
+and not read back; nothing here would catch a wrong EX_CAUSE offset, which is
+a gap in the fixture rather than in the source.
+
+roots=0 IS THE HEADER'S CLAIM MADE OBSERVABLE. `ex-info` marks, pushes four,
+allocates, and pops to the mark. The stack begins empty, so it must end empty:
+0 and not 4. A body that forgot `pop-to` on the success path would print 4 and
+every exception ever built would pin four values live forever.
+
+THE THREE NEGATIVE FIELDS each refuse by a DIFFERENT test, which is why all
+three are here and not just one:
+
+  other-isex=false  address 300 is heap, but its type byte is 9, not 44 --
+                    refused by the TAG test.
+  other-kind=nil    so the accessor's guard holds and it answers NIL instead
+                    of reading h[300 + 0], which is 0 in this fixture and
+                    would print as `0` rather than `nil`. `0` is the tell.
+  nil-msg=nil       NIL itself: `is-heap` is `v >= 100 && v != NIL`, and NIL is
+                    0xFFFF = 65535, which passes the first half. So this is
+                    refused by the `!= NIL` half, one test earlier than the
+                    other case, and it is the one a naive `v >= 100` would let
+                    through -- straight into h[65535] and out of the array.
+
+THE STARVED ARM is the other half of the fixture and the harder half.
+`alloc` answers 0, and the source's contract is "a failed allocation answers
+NIL rather than throwing, because throwing is what the caller is in the middle
+of arranging":
+
+  starved=nil          the `(if (== a 0) ... (return NIL))` arm was taken.
+  starved-roots=0      and it ran `pop-to base` FIRST.
+
+Those two must BOTH hold. `starved=nil` with `starved-roots=4` is the bug the
+early-return arm exists to prevent: the answer would look right and the root
+stack would grow by four on every failed allocation, so an out-of-memory path
+leaks roots exactly when memory is what is short. 0 is the only passing value.

@@ -439,3 +439,106 @@ namespace Flint.Rt {
          .Append(" log=").Append(rt.log);
         Console.WriteLine(o.ToString());
     }
+--expect
+300:1 340:1 30:0 380:1 460:1 540:1 30:0 150:0 580:1 85,2,100,101,300,301, 620:1 16777216,0,200,201, oom=65535 roots=0 log=BRBBIRNCBx
+--expect-why
+DERIVED BY HAND from `dissoc.kin` over the hand-laid nodes in the probe.
+Nothing here was read off a run; the arithmetic for each field is below.
+
+HOW TO READ IT. Each `addr:flag` pair is the Value answered and
+`champ-added`, which "reads as CHANGED on this path". The fixture's `obj`
+allocates 40 bytes from bump = 300 AND APPENDS A LETTER TO `log`, so the
+addresses and the log spell out which helper ran, in order:
+
+  B `bn-new`   R `bn-copy-remove-entry`   N `bn-copy-set-node`
+  I `bn-node-to-inline`   C `cn-new`   x an allocation refused
+  addresses: 300, 340, 380, 420, 460, 500, 540, 580, 620 in call order.
+
+Also: `bitpos h shift` = 1 << ((h >> shift) & 31), `index-of bm bit` =
+popcount(bm & (bit - 1)), and the fixture's `hash-value v` = (v * 7) & 0xff.
+
+`300:1` -- COLLAPSE. Node A has datamap 6 (two entries) and no sub-nodes.
+bit = bitpos(0x01, 0) = 1 << 1 = 2; 6 & 2 is set, so at = popcount(6 & 1) = 0,
+and key 100 matches. popcount(dm) == 2 and nm == 0, so the SHAPE INVARIANT
+fires: "a node must never be left holding one entry and nothing else". It
+builds a fresh single-entry node (the first B, at 300) holding the OTHER pair,
+(200,201). At shift 0 the new datamap is dm XOR bit = 4; the answer is the new
+node's address, not A's.
+
+`340:1` -- NO COLLAPSE. Node B has three entries, so dropping one leaves two
+and the invariant is satisfied: the plain `bn-copy-remove-entry` path, which is
+the R at 340. The contrast with the field above is the whole test -- same key,
+same bit, different entry count, different helper.
+
+`30:0` -- THE SLOT HOLDS A DIFFERENT KEY. Bit 2 is in B's datamap, but the key
+there is 100 and the caller asked for 999. `val-eq` says no, so nothing is
+allocated, `champ-added` is FALSE, and the node comes back UNCHANGED by
+identity -- 30, the address passed in. A dissoc of an absent key must not
+allocate, or every miss churns the heap.
+
+`380:1` -- RECURSIVE COLLAPSE THAT REPLACES THE PARENT. C has no entries and
+exactly one sub-node (node 90, two entries). The recursion into 90 collapses it
+to a single-entry node (the B at 380), and this time the new datamap is
+computed from the SURVIVING KEY'S hash rather than by clearing a bit -- shift
+is 5, not 0, so `newdm = bitpos(hash-value 200, 0)`. The fixture's
+hash-value(200) is (200 * 7) & 0xff = 1400 & 0xff = 120, and 120 & 31 = 24, so
+newdm = 1 << 24 = 16777216. That number reappears below.
+Back in the parent: the child's size class is 1, and the parent has dm == 0
+with one sub-node, so "nothing else lives here, so this node IS the child now"
+  -- the answer is 380, the child itself, and C disappears.
+
+`460:1` -- THE SAME COLLAPSE, FOLDED INLINE INSTEAD. G has ONE entry of its own
+(500,501) plus one sub-node (210). The recursion collapses 210 to a
+single-entry node (the B at 420, datamap 1 << (hash-value(400) & 31) = 1 << 16
+= 65536), but now the parent is not empty, so the collapsed child's pair is
+folded back into G's entry half: `bn-node-to-inline`, the I at 460. Two
+adjacent fields, the same collapse underneath, two different parent answers --
+which is exactly the distinction the source's `dm == 0 && popcount(nm) == 1`
+test makes.
+
+`540:1` -- THE COMMON CASE. H's child (270) has THREE entries, so removing one
+leaves a node that does NOT collapse: its size class is not 1, and the parent
+rebuilds itself around the new child with `bn-copy-set-node` -- the R at 500
+then the N at 540. This is the only path in the probe that reaches
+`bn-copy-set-node` at all.
+
+`30:0` again -- THE BIT IS IN NEITHER MAP. h = 0x1F gives bit = 1 << 31, and
+B's datamap is 14 and nodemap 0, so neither test matches. The final `else`:
+`champ-added` false and the node returned unchanged. The top bit is chosen on
+purpose -- it is the bit position a signed shift would get wrong.
+
+`150:0` -- A COLLISION NODE REACHED THROUGH `node-dissoc`. `is-bmnode` is
+false, so it is handed straight to `coll-dissoc`, which scans all three pairs
+for key 999, finds none, and answers `found == cnt` -- the SENTINEL the header
+describes, "cnt is already outside the valid range". Unchanged, flag 0.
+
+`580:1` then `85,2,100,101,300,301,` -- A PLAIN COLLISION REMOVAL. Key 200 is
+found at index 1 of three. cnt != 2, so a fresh collision node one pair shorter
+(the C at 580) is built with the SAME hash: the dumped slots are
+  hash 0x55 = 85, count 2, then (100,101) and (300,301).
+Index 1 was skipped and index 2 SHIFTED DOWN into its place -- `d` advances
+only on a copy. `85,2,100,101,200,201,` would mean it removed the wrong pair;
+`85,2,100,101,0,0,` would mean the shift never happened.
+
+`620:1` then `16777216,0,200,201,` -- A COLLISION NODE DOWN TO ONE PAIR. F has
+two pairs and key 100 is removed, so cnt == 2 and it must "become a
+single-entry BITMAP node so the parent can fold it back inline" -- the B at
+620. Its datamap is `bitpos(hash-value 200, 0)` = 1 << 24 = 16777216, the same
+number derived in the `380` case because the surviving key is the same 200.
+Then nodemap 0 and the surviving pair (200,201). A collision node of one pair
+would be the invariant violation this branch exists to prevent.
+
+`oom=65535 roots=0 log=BRBBIRNCBx`:
+  65535 = 0xFFFF = NIL. With `starve` set, `cn-new` refuses, and `coll-dissoc`
+  answers NIL rather than writing into address 0 -- note it had ALREADY set
+  `champ-added` true before the allocation, so a caller must not read that
+  flag as proof of success.
+  roots = 0: every `mark`/`pop-to` balanced, including the refusal path, which
+  pops before returning NIL.
+  log = BRBBIRNCBx is the allocation sequence spelled out: B (collapse),
+  R (plain remove), B (child collapse), B then I (child collapse folded
+  inline), R then N (child changed, parent re-noded), C (collision shrink),
+  B (collision collapse), x (refused). Ten helper calls in that exact order --
+  the field that would catch a right-looking answer reached by the wrong route,
+  since several of these paths can produce a plausible address while running a
+  different helper.

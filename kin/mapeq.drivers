@@ -362,3 +362,66 @@ fn main() {
         o.Append("roots=").Append(rt.roots.Count);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+self=1:0 shared=1:3 copied=1:5 val=0:3 shape=0:1 count=0:0 small=1:2 smallrev=1:2 empty=1:0 collswap=1:4 collval=0:3 collhash=0:1 roots=0
+--expect-why
+DERIVED BY WALKING THE MOCK TRIE BY HAND. Each field is `answer:visits`, and
+`visits` counts `charge-work` calls -- so the SECOND half of every field is
+what makes this a check on the algorithm and not only on its verdict. Two
+implementations can agree on every boolean here and differ by a factor of n
+in what they read; that is precisely the defect this file was written to fix
+(840us against 1.2us at 20 000 entries).
+
+  self=1:0       identity, and NOTHING is read. Not one charge.
+  count=0:0      counts 3 against 9: rejected before any node is touched.
+  empty=1:0      two empty maps, both roots nil: no walk.
+
+  shared=1:3     A and B are different maps whose roots hold the same two
+                 inline entries and THE SAME CHILD OBJECT at 150. Three
+                 charges: one for the root pair, two for its two entries. The
+                 child costs NOTHING, because `node-eq`'s first test is
+                 `a == b` and it prunes the whole subtree. This is the field
+                 the file exists for.
+  copied=1:5     G holds an equal child at a DIFFERENT address (260 instead
+                 of 150). Same answer, and now FIVE charges -- the root, its
+                 two entries, the child node, and the child's one entry. The
+                 pair `1:3` against `1:5` is the whole claim: identical
+                 verdicts, different work, and only the counts can tell them
+                 apart.
+
+  val=0:3        V differs in the SECOND entry's value (9999 for 1003). Three
+                 charges: root, first entry, second entry -- so it rejected at
+                 the entry that differs and did not go on to the child.
+  shape=0:1      S has datamap 7 where A has 3. Rejected in O(1) on the
+                 bitmap, ONE charge, before any entry is compared. A
+                 nodemap/datamap test that ran after the entries would print
+                 a larger number here.
+
+  small=1:2      the ARRAY-MAP tier against a CHAMP holding the same two
+  smallrev=1:2   pairs. THE TIER IS PATH-DEPENDENT -- eight entries reached by
+                 dissoc stay a CHAMP where eight built directly are an
+                 array-map -- so two equal maps can be structurally
+                 incomparable, and this is the fallback. Both orderings give
+                 the same 1:2, because `small-eq` iterates whichever side IS
+                 the array-map rather than whichever side came first.
+
+  collswap=1:4   two collision nodes holding the same two pairs in OPPOSITE
+                 insertion order. Collision nodes are the one part of a CHAMP
+                 that is NOT canonical, so they are compared UNORDERED, and 4
+                 is the quadratic cost of doing so: pair 0 of `a` misses `b`'s
+                 first and matches its second (2 charges), pair 1 matches on
+                 the first try (1 charge), plus 1 for the node itself. The
+                 charge sits in the INNER loop, so O(n^2) work is billed
+                 O(n^2) -- moving it out for speed would reopen the hole that
+                 `find`, `assoc` and `dissoc` had. 4 and not 2 is what says it
+                 is still there.
+  collval=0:3    the same two keys, one value changed: no match for pair 0
+                 after trying both of `b`'s, so 1 + 2 charges and a reject.
+  collhash=0:1   a different node hash: rejected on the hash, ONE charge,
+                 before the quadratic loop starts.
+
+  roots=0        the shadow stack ends where it began. All four of a pair's
+                 key/value words are rooted BEFORE any comparison, not two and
+                 then two, because `val-eq` allocates -- a row ref
+                 materialises as a map -- and `DECISIONS.md#a-vec-of-values-is-not-a-root`
+                 is that a value in a host local does not survive one.

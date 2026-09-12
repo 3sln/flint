@@ -281,3 +281,68 @@ namespace Flint.Rt {
         o.Append("starved=").Append(Val.IsNil(WithMeta(rt, v, m2)) ? 1 : 0);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+meta=11111111111 closure=1/7 none=01/1 nonheap=01 copy=1/1/1 carried=1 starved=1
+--expect-why
+DERIVED from `meta.kin`'s `meta-slot` table read against the driver's `cases`
+table, which is the same eleven types with the slot each one is BUILT with.
+Nothing here is pinned; no address is printed.
+
+  meta=11111111111  eleven types, eleven slots, all found.
+
+Each `1` is an independent claim, because the driver fills EVERY slot with
+`0x900 + i` and then overwrites just one with the sentinel 0x55. So a wrong
+slot number does not read nil or zero -- it reads another slot's plausible
+value and prints `0`. The eleven, in order, and the slot each asserts:
+
+  TY_SYM 2, TY_VEC V_META=3, TY_ARRAYMAP AM_META=1, TY_HASHMAP HM_META=2,
+  TY_SET S_META=1, TY_CONS C_META=2, TY_EMPTY_LIST 0, TY_LAZYSEQ 2,
+  TY_ATOM 1, TY_CLOSURE olen-1 = 5, TY_TAGGED 2.
+
+The seventh is why the source's header says a predicate is needed rather than
+an optional slot index: TY_EMPTY_LIST keeps metadata at SLOT 0, so 0 cannot
+double as "nowhere". `has-meta` answering false is the only way to say that,
+and `none=0...` below is the other half of the same argument.
+
+  closure=1/7   the closure again at a DIFFERENT length: 8 slots, metadata at
+                7. The first eleven include a 6-slot closure whose slot is 5,
+                so the two together say `meta-slot` computes `olen - 1` rather
+                than returning a constant that happens to be right once. This
+                is the header's reason for the last slot -- every UPVAL index
+                stays where it was -- and a fixed 5 would read an upvalue out
+                of the 8-slot closure and hand it back as metadata.
+
+  none=01/1     a STRING, which is on nobody's list.
+                0  `has-meta` says no.
+                1  so `meta-of` answers NIL. Its slots are NIL-filled here, so
+                   this one digit would pass either way; the `0` beside it is
+                   what carries it.
+                1  and `with-meta` answers the SAME VALUE BACK -- not nil, not
+                   a copy. That is the contract for a type that cannot carry
+                   metadata, and it is the third distinct behaviour on this
+                   line: refusing would be `0`, and so would copying.
+
+  nonheap=01    NIL itself, refused by `is-heap` before any type is read.
+                Without that guard `ty` indexes the type array at 0xFFFF.
+
+  copy=1/1/1    `with-meta` on a vector that already has metadata:
+                1  the result is a DIFFERENT object,
+                1  the ORIGINAL still reads 0x55,
+                1  and the copy reads 0x66.
+                All three are needed. Writing in place would give `0/0/1`;
+                copying but writing the metadata into the original would give
+                `1/0/1`. The header's claim -- "changing one must not change
+                the other" -- is exactly the middle digit.
+
+  carried=1     every slot except V_META is identical between original and
+                copy. The fixture's distinct 0x900+i fillers make this a real
+                comparison: `with-meta` copies the whole object and then
+                overwrites one slot, so a loop that stopped short, or started
+                at 1, moves one of those numbers and this goes to 0.
+
+  starved=1     when `new-obj` refuses, the answer is NIL rather than a
+                half-copy. Note this is a DIFFERENT answer from `none=.../1`
+                above: a type that cannot carry metadata gets `v` back, a type
+                that can but could not be allocated gets nil. Both are on this
+                line, so a source that collapsed the two cases into one fails
+                whichever way it collapsed them.

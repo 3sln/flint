@@ -1266,3 +1266,66 @@ namespace Flint.Rt {
         o.Append("bad=[").Append(m1).Append("][").Append(m2).Append("][").Append(m3).Append("]");
         System.Console.WriteLine(o.ToString());
     }
+--expect
+rebase=b@1.c@2/w3 migrated=6|enc=11|b=hi|c=7 shared=1 bad=[column :b holds :string and the new schema declares :int; a type change needs a value per row, so migrate with a function: (migrate t s (fn [row] ...))][the new schema adds :c and the table has no values for it; give it a default -- (migrate t s {:c v}) -- or compute one per row: (migrate t s (fn [row] ...))][the default for :c is a string and the column holds :int]
+--expect-why
+DERIVED BY HAND from `tablemigrate.kin`. The fixture migrates
+`[[:a :int] [:b :string]]` to `[[:b :string] [:c :int]]` -- one column KEPT,
+one DROPPED, one ADDED, which is all three cases at once.
+
+  rebase=b@1.c@2/w3    (`show_schema` prints `name@id` per column, then `/w`
+                        the width)
+
+    :b KEEPS ID 1. It is at POSITION 0 of the new schema and id 1 from the
+    old, and those two numbers being different is the entire point: a chunk
+    addresses its columns by stable id, so a kept column is the same column
+    object and nothing is rewritten. `b@0` would be positional ids, and every
+    chunk in the table would have to be rewritten to say what it already says.
+
+    :c GETS ID 2, past the end -- NOT id 0, the slot :a vacated. Reusing a
+    dropped slot would hand the new column the old one's data.
+
+    WIDTH 3 FOR A TWO-COLUMN SCHEMA. The dropped column's slot stays spoken
+    for, which is what keeps every other id stable; the width only ever grows.
+    `/w2` would mean ids were compacted, and `schema-id`'s "absent is the
+    width" convention would then collide with a live id.
+
+  migrated=6|enc=11|b=hi|c=7
+
+    6      the row count is carried; a migration is a head-only edit.
+    enc=11 BOTH columns are ENC_CONST in chunk 0 -- :b because its encoding is
+           carried across UNCHANGED from the old chunk (it had collapsed
+           there, all six rows holding the same string), and :c because AN
+           ADDED COLUMN IS ONE SHARED VALUE PER CHUNK. That is what makes
+           adding a column cost a slot per chunk instead of a value per row.
+    b=hi   the kept column still reads its old value at row 0.
+    c=7    the added column reads the default.
+
+  shared=1
+    THE KEPT COLUMN IS THE SAME OBJECT, compared by address: the new chunk's
+    slot at the new id holds exactly what the old chunk's slot at the old id
+    held. 0 would mean it was copied -- correct output, and the migration no
+    longer head-only, which is the property this file exists for.
+    (Dropping :a needs no assertion and can have none: the loop simply never
+    reaches the old slot, so the data stays resident until that chunk is next
+    rewritten. That is the trade `tables` names.)
+
+THE THREE REFUSALS, each naming what to do INSTEAD -- and all three happen
+BEFORE anything is built, because a half-happened migration would leave a
+table nobody asked for:
+
+  1. a carried column whose type changed. :b holds :string and the new schema
+     says :int:
+       "column :b holds :string and the new schema declares :int; a type
+        change needs a value per row, so migrate with a function:
+        (migrate t s (fn [row] ...))"
+  2. an added column with no default:
+       "the new schema adds :c and the table has no values for it; give it a
+        default -- (migrate t s {:c v}) -- or compute one per row:
+        (migrate t s (fn [row] ...))"
+     The suggested form is spelled with the COLUMN'S OWN NAME (`{:c v}`), so
+     the message is a line the caller can paste.
+  3. a default of the wrong type -- the string "hi" for an :int column:
+       "the default for :c is a string and the column holds :int"
+     `string` comes from `kind-of` on the value that arrived, the same closed
+     set protocol dispatch uses.

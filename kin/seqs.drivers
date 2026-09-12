@@ -134,3 +134,79 @@ fn main() {
         o.Append(' ').Append(Vecseq(rt, 1, 0) == NIL ? "true" : "false").Append(' ').Append(rt.roots.Count);
         Console.WriteLine(o.ToString());
     }
+--expect
+2 6 10 14 04117655355229655353336553565535611026553500 roots=0 E true 0
+--expect-why
+DERIVED BY HAND from `seqs.kin` and the bump allocator in the driver's own
+`-head`. Nothing was read off a run; every address below is a step of a
+counter whose start the fixture states.
+
+  alloc ty len:  a = bump; bump += len + 1; h[a] = ty; RETURN a + 1
+
+so the HEADER sits at `a` and the object's slot 0 at `a + 1`, and the value
+handed back is the body address. bump starts at 1. NIL = 0xFFFF = 65535.
+Tags: LAZYSEQ 3, VECSEQ 4, STRSEQ 5, RANGE 6. LS_THUNK 0, LS_SEQ 1.
+
+THE FOUR ALLOCATIONS, in probe order:
+
+  vecseq(11, 7)     alloc(4, 3)  hdr h[1]=4   body  2   bump 1 -> 5
+  strseq(22, 9)     alloc(5, 3)  hdr h[5]=5   body  6   bump 5 -> 9
+  lazy-seq(33)      alloc(3, 3)  hdr h[9]=3   body 10   bump 9 -> 13
+  range(1, 10, 2)   alloc(6, 4)  hdr h[13]=6  body 14   bump 13 -> 18
+
+giving `2 6 10 14` for the first four fields. The strides are 4, 4, 4 and 5 --
+the range is the one object of four slots, so a constructor that allocated
+three there would shift every later address and the whole tail of the line.
+
+THE HEAP DUMP is h[0..19] printed with NO separator, which is why it reads as
+one 44-character run. Slot by slot, from what kin writes:
+
+  h[0]  = 0       untouched -- bump starts at 1, so address 0 is never handed out
+  h[1]  = 4       VECSEQ header
+  h[2]  = 11      slot 0: the vector, read back through `r` after the alloc
+  h[3]  = 7       slot 1: the index, as a fixnum
+  h[4]  = 65535   slot 2: NIL
+  h[5]  = 5       STRSEQ header
+  h[6]  = 22      the string
+  h[7]  = 9       the index
+  h[8]  = 65535   NIL
+  h[9]  = 3       LAZYSEQ header
+  h[10] = 33      LS_THUNK = 0, so the thunk lands in slot 0
+  h[11] = 65535   LS_SEQ = 1, forced to NIL: nothing realised yet
+  h[12] = 65535   slot 2: NIL
+  h[13] = 6       RANGE header
+  h[14] = 1       start
+  h[15] = 10      end
+  h[16] = 2       step
+  h[17] = 65535   slot 3: NIL
+  h[18] = 0       past every object
+  h[19] = 0
+
+concatenated: 0 4 11 7 65535 5 22 9 65535 3 33 65535 65535 6 1 10 2 65535 0 0
+= `04117655355229655353336553565535611026553500`.
+
+THE ARGUMENTS ARE THE ROOTING CHECK. `11`, `22`, `33` and `1/10/2` reach their
+slots only because kin pushes each one BEFORE `alloc` and reads it back with
+`r` afterwards -- `DECISIONS.md#a-vec-of-values-is-not-a-root`. The fixture's
+allocator does not move anything, so this run cannot prove the roots are
+honoured; what the dump does prove is that the values arrive in the right
+SLOTS and the trailing NILs are written rather than left as the array's
+initial zero. Every 65535 in the run is a deliberate store: the fixture's heap
+starts at 0, so a missing `set-at ... NIL` shows as a `0` and shortens the run.
+
+`roots=0`: four constructors, seven pushes between them, and `pop-to mk` on
+each success path, so the shadow stack is back where it started.
+
+`E` -- `range-empty` over the range at body address 14, rewritten in place to
+start 10, end 0, step 1. End is 0, and NIL is 65535, so this is a BOUNDED
+range and the `nil?` arm does not fire; step > 0, so the answer is
+`start >= end` = `10 >= 0` = true, i.e. EMPTY. Note what this single call does
+NOT reach, since the driver's comment above it names three cases and the probe
+runs one: the unbounded arm (end = NIL) and the zero-step arm are both
+unexercised here.
+
+` true 0` -- the STARVED path. `alloc` answers 0, kin's `(if (== a 0) ...)`
+fires, and the two things it must do are both checked: it returns NIL (`true`)
+and it runs `pop-to mk` FIRST, so the shadow stack is 0 and not 1. A bail that
+returned NIL without popping would print `true 1` -- a slow leak of the root
+stack on exactly the path taken when memory is already short.

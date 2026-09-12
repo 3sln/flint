@@ -670,3 +670,92 @@ namespace Flint.Rt {
         o.Append("tg=").Append(HEX(HashValue(rt, tg)));
         System.Console.WriteLine(o.ToString());
     }
+--expect
+v=daa612ca ticks=3 again=daa612ca ticks=0 cached=1 c=daa612ca ticks=3 cagain=daa612ca ticks=3 nocache=0 e=1 ticks=0 starve=0 ticks=3 uncached=0 nil=1 hi=ffffffff d=1/7 n=0 t=4cf f=4d5 fx=7 is=5141 ik=5242 other=0 tags=5169,546a,556b,556c,526d,536e,6f,5670,5671,5772,51ed51e1, ropeascii=5474 ropewide=5475 seqs=3c6ef772,daa612ca,daa612ca,daa612ca,daa612ca,daa612ca,daa612ca,daa612ca, op=63/0 tb=1040/1cc0 rf=5687 tg=61
+--expect-why
+DERIVED BY TRANSCRIBING `valhash.kin` INTO PYTHON and running it against this
+file's fixture -- a FOURTH implementation, in a language none of the three
+targets is, so an error shared by all three generated copies has nowhere to
+hide. The model is `scratchpad/valhash_model.py` in the session that wrote
+this; every number below was also checked by hand.
+
+THE TWO WALKS AGREE, which is the file's whole claim. `v` is a plain vector
+and takes the INDEXED loop; `c` is a cons and takes the SEQ walk. The fixture
+makes both see fixnum(3), fixnum(2), fixnum(1) on purpose, so:
+
+  acc = ((1*31 + 3)*31 + 2)*31 + 1 = 32737
+  mix-coll-hash(32737, 3) = 32737 ^ (3 * 0x9E3779B9) = 0xDAA612CA
+
+and `v`, `c`, `cagain` and seven of the eight `seqs` are all that number. Two
+walks that disagreed would show here as two different hashes for the same
+content -- which is exactly what "both ports had TWO" means, and what no
+cross-target comparison could report.
+
+TICKS ARE THE OTHER HALF, and the half the ports were missing:
+
+  ticks=3   the first hash of a 3-element vector charges ONCE PER ELEMENT
+  ticks=0   the second reads the cache and charges NOTHING; cached=1
+  ticks=3   a cons charges again every time, because nocache=0 -- a seq has
+            nowhere to put the answer
+  e=1 ticks=0    an empty vector never enters the loop: mix-coll-hash(1, 0)
+                 is 1 ^ 0 = 1, and n=0 elements is 0 ticks. Not n+1: the loop
+                 checks the END FIRST and charges after.
+  starve=0 ticks=3 uncached=0
+                 budget 2 over 5 elements. The third tick is REFUSED, the
+                 answer is 0, and NOTHING is written to the cache -- a
+                 half-computed hash must never be cached, and `uncached=0`
+                 is the field that says so.
+
+  nil=1     a non-heap value has no slot and no seq; it must not index the
+            type array with something that is not an address.
+  hi=ffffffff  THE CACHE ROUND-TRIPS BIT 31. Stored and read back as the same
+            32 bits, whichever way the target spells a signed int.
+
+EVERY ARM OF `hash-value`, each stub naming itself in its high bits:
+
+  d=1/7        a double by its NUMBER: doubles[0]=1.5 hashes as (long)1.5 = 1,
+               and NaN as the stub's 7 -- NOT by its bits, which is what makes
+               `hash` agree with `=` about NaN
+  n=0          nil
+  t=4cf f=4d5  1231 and 1237, Boolean.hashCode
+  fx=7         hash-long(7)
+  is=5141      inline string  -> string-hash  0x5100|0x41
+  ik=5242      inline keyword -> keyword-hash 0x5200|0x42
+  other=0      a value that is neither immediate nor on the heap
+
+  tags=        STR 0x5169, ROPE 0x546a, BYTES 0x556b, BROPE 0x556c,
+               KW 0x526d, SYM 0x536e, BIGINT 0x6f, ARRAYMAP 0x5670,
+               HASHMAP 0x5671, SET 0x5772, OTHER 0x51ed51e1
+
+  BYTES AND BROPE BOTH SHOW 0x55xx -- one walk for both tiers, where native
+  had an inline byte walk for the flat case and `b-hash` for the tree.
+  ARRAYMAP and HASHMAP both show 0x56xx: two map tiers, one hash.
+  BIGINT is 0x6f = 111, its own address through `hash-long`, so it is the
+  NUMBER tier and not a per-type constant.
+  OTHER is `hash-int(0x51ed0000 | 12)`: the per-type fallback for functions,
+  atoms and vars, which are only ever `=` to themselves.
+
+  op=63/0      an opaque value hashes its STORED id: 99 = 0x63. One without
+               falls back to 0 and NOT to the per-type constant, because the
+               point of the type is a distinct key per value.
+  tb=1040/1cc0 a table is COLUMNAR: rows 100,101 fold to 4162, xor 2 = 4160;
+               rows 200,201 fold to 7362, xor 2 = 7360. Two tables differing
+               only in content must differ here.
+  rf=5687      a REF hashes AS THE MAP IT IS -- 0x56xx, the arraymap stub --
+               or a map keyed by a row would not find it.
+  tg=61        a tagged literal hashes BOTH HALVES through the final mix:
+               hash-int(3*31 + 4) = 97. That mix is the one both ports
+               dropped, which made a tagged literal hash differently on wasm
+               than on the JVM and the CLR. Without it this field is 97 too --
+               so what the field really pins is 3*31+4 and not 4*31+3 or
+               3+4.
+
+A STALE CLAIM IN THIS DRIVER, recorded rather than acted on. The `--rust`
+section says of the last two rope fields: "An ASCII rope must take `rope-hash`
+(0x54xx) and a non-ASCII one `java-string-hash` (0x77xx)." BOTH ARE 0x54xx.
+`valhash.kin` routes `TY_ROPE` to `rope-hash` unconditionally -- there is no
+`s-ascii` test in the function, and `s-ascii` is imported at line 40 and never
+called. The comment describes the two-walk arrangement that the source's own
+"ONE WALK FOR EVERY TIER" block says was REMOVED, and the driver was not
+updated with it. `ropeascii` and `ropewide` differ here only by address
+(0x5474 vs 0x5475), so as written the pair tests nothing about routing.

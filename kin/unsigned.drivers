@@ -38,3 +38,35 @@ fn main() {
             + " | " + (Ult(rt, 5, hi) ? 1 : 0)
             + " " + (Udiv(rt, 100, 7) & 0xFFFFFFFFL) + " " + (Umod(rt, 100, 7) & 0xFFFFFFFFL));
     }
+--expect
+0 1 1 0 715827883 0 | 1 14 2
+--expect-why
+DERIVED, and then found to match a claim `unsigned.kin` already makes in
+prose: its header says "the three runtimes still answer
+`0 1 1 0 715827883 0 | 1 14 2`". Until now nothing checked that sentence --
+it was a status line about the tree, and those decay silently (`AGENTS.md`
+§2). It is now the assertion.
+
+hi = 0x80000001 = 2147483649, UNSIGNED. Signed, the same bits are
+-2147483647, and that is the entire difference this file exists to pin.
+
+  ult hi 5   2147483649 <  5            = 0   (signed: -2147483647 < 5 -> 1)
+  ugt hi 5   2147483649 >  5            = 1   (signed: 0)
+  ule hi hi  equal                      = 1
+  uge 5 hi   5 >= 2147483649            = 0   (signed: 1)
+  udiv hi 3  2147483649 / 3             = 715827883, and 3*715827883
+                                          = 2147483649 exactly
+  umod hi 3                             = 0
+  ult 5 hi   5 < 2147483649             = 1
+  udiv 100 7                            = 14
+  umod 100 7                            = 2
+
+FOUR OF THE NINE FLIP under a signed reading: fields 1, 2, 4 and 7. The last
+two are the control -- both operands below 2^31, where signed and unsigned
+agree -- so a failure that moved every field would be something other than
+the sign, and a failure in exactly the first four is the sign.
+
+`715827883` is the field that catches a signed DIVISION: -2147483647/3
+truncates toward zero to -715827882, a different magnitude AND a different
+sign, so it cannot be reached from the right answer by a formatting
+difference.

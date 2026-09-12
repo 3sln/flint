@@ -731,3 +731,56 @@ namespace Flint.Rt {
         o.Append("refold=").Append(ShowChunk(rt, refolded, 2, 3));
         System.Console.WriteLine(o.ToString());
     }
+--expect
+write=0[10.11.12],0[7.7.7] open=256/0 seal=3/0[20.21.22],1[7.7.7] replace=3/0[20.99.22],1[7.7.7] broke=0[20.99.22],0[7.8.7] grow=4/0[20.21.22.40],1[7.7.7.7] refold=0[20.99.22],1[7.7.7]
+--expect-why
+DERIVED BY HAND from `tablefill.kin`, tracing each rewrite over the fixture's
+two-column schema. `show_chunk` prints `enc[cells]` per column, so the LEADING
+DIGIT IS THE ENCODING -- 0 flat, 1 constant -- and every assertion about
+collapsing is visible in it.
+
+  write=0[10.11.12],0[7.7.7]
+    `write-row` fills a chunk that is already the right shape: column 0 gets
+    10, 11, 12 and column 1 gets 7 three times. It COLLAPSES NOTHING -- both
+    encodings are 0 even though column 1 is uniform, because collapsing is
+    `collapse`'s job and not the filler's.
+
+  open=256/0
+    `open-chunk` gives every named column a full CHUNK-long column (256) and
+    sets CH_ROWS to 0. The two numbers must DISAGREE: the columns are sized
+    for the chunk and the row count says how much of them is real. `256/256`
+    would be a chunk claiming 256 written rows before anything was written.
+
+  seal=3/0[20.21.22],1[7.7.7]
+    `seal` copies out only the 3 rows written -- so the sealed column's length
+    is 3 and not 256 -- and collapses on the way: column 1 is uniform and
+    becomes ENC_CONST, column 0 does not. The length `3` is the reclaim; the
+    `1` is the encoding.
+
+  replace=3/0[20.99.22],1[7.7.7]
+    Row 1 replaced by `{:a 99, :b 7}`, not growing. Column 0 is flat, so it is
+    copied and slot 1 overwritten. Column 1 IS CONSTANT AND THE NEW VALUE IS
+    THE SAME VALUE, so the `stays` arm carries the single slot across
+    untouched -- it stays `1[...]`, and this is the case that makes appending
+    to a table with a constant column cheap.
+
+  broke=0[20.99.22],0[7.8.7]
+    The same row with `:b 8`. Now the constant column must EXPAND: the const
+    slot is read back as 7 for every row, the copy becomes [7 7 7], slot 1 is
+    set to 8, and the collapse on the way out fails. Encoding 0. A source that
+    wrote 8 into the const slot instead would print `1[8.8.8]` -- every row
+    changed by a write to one.
+
+  grow=4/0[20.21.22.40],1[7.7.7.7]
+    Growing by one at k=3. `take` is old+1 = 4 and `carry` is min(old, take) =
+    3, so three rows are copied and the fourth slot is the new value: column 0
+    ends 20 21 22 40. Column 1 stays constant and now reads 7 for FOUR rows
+    without being touched -- which is the point of the encoding. CH_ROWS is 4.
+
+  refold=0[20.99.22],1[7.7.7]
+    THE ONE THAT SAYS ENCODINGS ARE NOT ONLY LOST. Starting from the broken
+    chunk `0[20.99.22],0[7.8.7]`, replacing row 1's `:b` with 7 makes the
+    column uniform again, and the collapse at the end of `chunk-with-row`
+    turns it back into `1[...]`. Without that check a table would only ever
+    lose encodings, and nothing but this digit would say so -- the CELLS are
+    identical either way.

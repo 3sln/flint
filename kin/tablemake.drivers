@@ -873,3 +873,56 @@ namespace Flint.Rt {
         o.Append("starved=").Append(TableColumn(rt, t, ka) == Val.Nil ? 1 : 0);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+schema=a.b/0.1/2 entrypairs=1 bad=[a schema is [[name type] ...]; this entry is not a name and a type][a column name must be a keyword][no such column type :table; the types are :int :double :string :bool :keyword :any][the column :a is named twice] col=10.11.12 nocol=[no column :z; the columns are :a :b] starved=1
+--expect-why
+DERIVED BY WALKING `new-schema`'s checks and `table-column`'s path over this
+fixture, not read off a run. The schema under test is `[[:a :int] [:b
+:string]]`.
+
+  schema=a.b/0.1/2
+    names in ORDER (`a.b`), ids `0.1`, width 2. The ids are the POSITIONS here
+    because nothing has been migrated yet -- `new-schema` assigns `i` as the
+    id -- and the width equals the count for the same reason. Later, after a
+    migration, the two part company; that is `tablemigrate`'s business, and
+    this is the baseline it diverges from.
+
+  entrypairs=1
+    THE SAME SCHEMA BUILT OUT OF MAP ENTRIES, and it must be accepted. This is
+    the divergence the source's own doc names: `is-vector-like` and NOT
+    `is-vector`, because a map entry is a two-element vector as the guest sees
+    it, so a schema whose pairs came from a map's `seq` is made of entries.
+    Rust used the strict test and both ports the loose one, so one runtime
+    refused a schema the other two took. `0` here is that bug.
+
+THE FOUR REFUSALS, in the order the source checks them, each naming itself:
+
+  1. an entry that is not a pair -- `[:a]` is vector-like but its count is 1:
+     "a schema is [[name type] ...]; this entry is not a name and a type"
+  2. a name that is not a keyword -- the fixnum 1:
+     "a column name must be a keyword"
+  3. a type that is not declarable -- `:table` is a real KIND but not a column
+     type, so `known-type` refuses it and the message LISTS the six:
+     "no such column type :table; the types are :int :double :string :bool
+      :keyword :any"
+  4. a DUPLICATE name -- `[[:a :int] [:a :string]]`:
+     "the column :a is named twice"
+     This is the one with a silent failure mode behind it: without the check
+     the index keeps only the later position, so `get` would answer from one
+     column and the type check from the other.
+
+  col=10.11.12
+    `table-column` reads the column RUNS DIRECTLY -- three cells straight out
+    of the chunk, no row and no ref built. The values are the column's, in row
+    order.
+
+  nocol=[no column :z; the columns are :a :b]
+    An absent column is `schema-id` answering the WIDTH, which is `>= width`,
+    and the message says both what was asked for and what exists.
+
+  starved=1
+    With the gas budget set to 2 and a table of 3 rows, `charge-checked`
+    refuses BEFORE the scan and `table-column` answers NIL. The point is that
+    it is charged for the whole column up front rather than per cell: a
+    per-cell charge would return a PARTIAL vector here, which is a wrong
+    answer rather than a refused one.

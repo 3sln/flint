@@ -169,3 +169,50 @@ fn main() {
         long b = ChangeCase(rt, 1L, false);
         System.Console.WriteLine(a + " " + b + " " + rt.steps);
     }
+--expect
+65997091 95549795 8
+--expect-why
+DERIVED BY WALKING THE FIXTURE BY HAND. subject = [97, 223, 233] = 'a',
+sharp-s, 'e-acute'. The probe's `case_map` is a binary search over the runs
+the fixture supplies, and `sink_string` folds the BYTES the walk emitted with
+`h = h*31 + b` from 0.
+
+UPCASING. up = [[97 122 -32 1] [224 246 -32 1]].
+
+  97   in run 0, stride 1        -> 97 - 32  =  65   'A'
+  223  past run 0, before run 1  -> unmapped =  223  (sharp s)
+  233  in run 1, stride 1        -> 233 - 32 =  201
+
+  put-utf8: 65 is one byte; 223 and 201 are both under 0x800, so two:
+    223 -> 0xC0|(223>>6)=0xC3=195, 0x80|(223&0x3F)=0x9F=159
+    201 -> 0xC0|(201>>6)=0xC3=195, 0x80|(201&0x3F)=0x89=137
+  bytes 65 195 159 195 137, folded:
+    65 -> 2210 -> 68669 -> 2128934 -> 65997091
+
+DOWNCASING. lo = [[65 90 32 1]] -- an ASCII-only table, so nothing in the
+subject is in range and all three code points pass through unchanged.
+
+  bytes 97 195 159 195 169   (233 -> 0xC3 0xA9)
+  folded: 97 -> 3202 -> 99421 -> 3082246 -> 95549795
+
+THE TWO ANSWERS MUST DIFFER, and they differ in the FIRST byte and the last:
+that is what makes this pair a check rather than a coincidence. A
+`change-case` that ignored its `up` flag would print the same number twice.
+The subject deliberately holds two code points that are above 127 -- the Rust
+this replaced answered `nil` for any such string, "which is not a terse answer
+but a wrong one".
+
+steps=8. `charge-checked` is called ONCE per conversion with `n + 1` where n
+is the code-point count: 3 + 1 = 4, twice. Not 3, not 6, and not per byte --
+the point recorded in the source is that charging per iteration billed 48097
+steps past an exhausted budget, because billing is not bounding. A source that
+moved the charge inside the loop would print 6 here.
+
+A GAP IN THIS DRIVER, recorded rather than papered over. The `--rust` section
+is headed "'a-sharp-s' upcased: 'a' by delta, sharp s by a FULL mapping to two
+code points", and NO FULL MAPPING HAPPENS: the fixture's `full_index` returns
+-1 unconditionally, so `fx < 0` on every code point and the whole
+`case-full-at` branch -- the inner loop, the `cp-unsigned` conversions, the
+one-to-many expansion -- is never entered. Sharp s comes out unchanged at 223
+above, which is what the numbers show. Exercising it needs a fixture whose
+`full_index` answers a real row, and CASE_FULL here is 515 zeros.

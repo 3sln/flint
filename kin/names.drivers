@@ -230,3 +230,62 @@ fn main() {
         o.Append("hash=").Append(SymbolHash(rt, sym));
         System.Console.WriteLine(o.ToString());
     }
+--expect
+inline=1/true/1 kw=11 sym=11 bare=1 self=11 nsnone=11 sym?=1000 kw?=11100 hash=4242
+--expect-why
+DERIVED by taking each of `names.kin`'s five functions through its branches on
+the driver's five values. Every field is a 1 or a 0 whose CORRECT side is
+argued below -- an all-ones line would be wrong, and two fields here are 0 on
+purpose.
+
+THE INLINE KEYWORD, `:ab` in the value word. `name-of` takes the first branch,
+`kw-to-str`, which the fixture defines as "clear the tag, set TAG_STR":
+
+  1     the result's tag is TAG_STR, so it IS an inline string.
+  true  its low 48 bits are byte-for-byte the keyword's. This is the field
+        that says `kw-to-str` swapped ONLY the tag: length nibble and the
+        two characters have to survive, and a version that rebuilt the word
+        or shifted the payload would still pass the tag test and fail here.
+  1     `ns-of` answers NIL without reading anything. The header's claim --
+        "an inline keyword has no namespace, by construction" -- is exactly
+        this 1, and it is not vacuous: the low bits of `:ab` are a namespace
+        slot's worth of nonzero bits, so a source that fell through to the
+        heap path would hand back a garbage value instead of nil.
+
+THE HEAP KEYWORD AND SYMBOL are built with namespace in slot 0 and name in
+slot 1, and `kw=11 sym=11` says both accessors read the right slot of both
+types. Slot 0 and slot 1 hold DIFFERENT inline strings ("my" and "x"), so a
+transposed `name-of`/`ns-of` prints `kw=00 sym=00` rather than passing.
+
+  bare=1  a heap keyword with NIL in slot 0. `ns-of` has no special case for
+          it -- it returns the slot -- so this says the SLOT is nil, i.e. that
+          a bare keyword is stored with NIL rather than with a zero or an
+          empty string. It comes back as nil because it was stored as nil.
+
+SELF-NAMING, the case the header insists on: `(name "a")` is `"a"`.
+
+  self=11    `name-of` of an inline string and of a FIXNUM each answers the
+             value itself. Neither is inline-kw and neither is heap, so both
+             fall past both `if`s to the final `return v`.
+  nsnone=11  and `ns-of` of the same two answers NIL. The fixnum is the one
+             that matters: `ns-of` must not try to read slot 0 of a number.
+
+THE TWO PREDICATES, and their zeros are the content:
+
+  sym?=1000   symbol yes; heap keyword NO (TY_KW 7 != TY_SYM 8); INLINE
+              KEYWORD NO; fixnum no. The third digit is the header's "no
+              inline tier, unlike a keyword" -- `is-symbol` starts with
+              `is-heap`, and an inline keyword is not heap, so it must be 0.
+  kw?=11100   inline keyword yes (first branch, before `is-heap`); heap
+              keyword yes; BARE heap keyword yes; SYMBOL NO; fixnum no.
+
+Read together the two lines are a cross-check rather than two restatements:
+`ik` is 0 in `sym?` and 1 in `kw?`, `sym` is 1 in `sym?` and 0 in `kw?`. A
+predicate that answered by "is it one of the naming types" instead of by tag
+would print 1 in both places for both values.
+
+  hash=4242   slot 3 of the symbol, which the fixture set to `fixnum 4242`.
+              `symbol-hash` is `to-i32 (as-fixnum (slot v 3))`, so this checks
+              the SLOT INDEX -- slots 0, 1, 2 hold "my", "x" and fixnum 0, so
+              an off-by-one reads 0 and prints `hash=0`, and 4242 is picked to
+              be nothing else in the object.

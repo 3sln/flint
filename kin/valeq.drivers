@@ -662,3 +662,77 @@ namespace Flint.Rt {
          .Append(ValEq(rt, z1, z2) ? 1 : 0);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+d=01100 i=100 im=10 ref=111 ref0=00 cat=000 seq=10 work=4 cons=1 work=4 mix=1 del=10 s=00111 s0=000 b=1 b0=0 t=10 tsch=0 tv=00 g=100 y=100
+--expect-why
+DERIVED ARM BY ARM from `valeq.kin` against the fixture. `=` is the hottest
+function in the runtime and the one where a disagreement does the most
+damage -- two values that are `=` must hash alike -- and it was hand-written
+three times, so agreement between the targets is the state this file created.
+
+  d=01100  DOUBLES COME FIRST, before bit equality, and these five say why:
+           NaN is NOT equal to itself (0) though its bits are identical, and
+           0.0 IS equal to -0.0 (1) though its bits are not. Bit equality gets
+           both of those backwards. Then two distinct doubles both holding 1.0
+           are equal (1); 1.0 against 0.0 is not (0); and 1.0 against the
+           INTEGER 1 is not (0) -- `(= 1 1.0)` is false in Clojure and here,
+           which is what makes `==` a separate function.
+  i=100    integers are canonical, so 5 and 5 are bit-equal; 5 and 6 are not
+           equal; 5 and nil is FALSE and not a refusal.
+  im=10    nil equals nil; nil against the integer 0 does not. Refusing here
+           was a runtime error where a `false` belonged.
+
+  ref=111  A ROW REF IS COMPARED AS THE MAP IT IS, ref-against-map, the other
+  ref0=00  way round, and against itself. THE REF ARM SITS ABOVE `category`,
+           which is the fix this file carries: `category` puts a ref in
+           CAT_MAP, so on both ports the ref arm below the switch could never
+           run -- any ref reached `map-eq` first, and any non-map counterpart
+           was refused by `ca != cb`. Dead code that looked live. `ref0` flips
+           the `map-eq` stub to false and both fields follow it, which is what
+           says the comparison really was DELEGATED after materialising rather
+           than decided some other way. `ref=...1` is identity, caught by
+           `a == b` before any materialisation.
+  cat=000  three different categories, pairwise: not equal, and no arm runs.
+
+  seq=10 work=4   TWO PLAIN VECTORS GO BY INDEX, not by walking two seqs.
+           Three elements cost FOUR charges: one per element plus one more for
+           the round that finds the end. That is exactly what the seq loop
+           charges, and reproducing it is the point -- `resource-limits` says
+           gas agrees to the instruction, and a faster path that quietly
+           reprices is the same defect this repo has paid for once. The `0` is
+           a count mismatch, rejected before any walk and charging NOTHING.
+  cons=1 work=4   two conses take the SEQ walk and land on the same 4. The
+           two numbers being equal is the check: same gas, different path.
+  mix=1    a vector against a cons -- both sequential, so they compare element
+           by element rather than by type.
+  del=10   MAP and SET delegate. The set stub is flipped to false for this
+           field alone, so `10` shows each went to its own function; `11`
+           would mean the set arm was not reached.
+
+  s=00111  STRINGS ACROSS TIERS, and all three tests in order. Byte LENGTHS
+  s0=000   first: 8 against 9 is 0 with nothing read. Then the INTERNING
+           answer: two SHORT FLAT strings that are not bit-equal are not equal,
+           0, with no bytes read -- only flat strings are interned, so this is
+           sound exactly because both sides are TY_STR and within INTERN_MAX
+           (32 here). Then the WALK: 64-byte flats, two ropes, and a flat
+           against a rope, all 1. The last is the one the rule rests on --
+           `(str a b)` and a flat string of the same bytes must be `=` or a map
+           keyed by one is not found by the other. `s0` flips the `tree-eq`
+           stub and all three walked fields follow, proving they walked.
+  b=1 b0=0 byte strings compare by CONTENT across both tiers, same shape.
+
+  t=10     TABLES: same tag, same count, same schema, then row by row. The
+           fixture's rows are derived from a slot, so t1/t2 agree and t3's
+           rows differ.
+  tsch=0   the SCHEMA test alone rejects, with the rows still identical.
+  tv=00    A TABLE IS NOT A VECTOR, whichever side it is on. Refusing that is
+           what frees `hash` to be columnar.
+
+  g=100    two tagged literals are equal when BOTH HALVES are; differing in
+           the second half is not equal; and a tagged literal is not equal to
+           a map -- which is the whole reason it is a type, since a codec has
+           to tell them apart.
+  y=100    SYMBOLS COMPARE BY (ns, name), so `with-meta` makes a distinct
+           object that is still `=`; a differing name is not. The trailing 0
+           is the floor: two objects of a type with no arm at all are NOT
+           equal, rather than falling into the symbol arm or into `true`.

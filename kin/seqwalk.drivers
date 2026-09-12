@@ -704,3 +704,124 @@ namespace Flint.Rt {
          .Append('|').Append(rt.thrown);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+cons=17 next1=34 next2=1 vec=161 vecn=162 vecend=1 ent=225 entn=226 entend=1 tab=28672 tabn=28673 tabend=1 str=193 strn=194 strlast=195 strend=1 rng=5 rngn=7 rngn2=65535 rngsame=5 rest=34 restend=1 force=68 cached=1 thunkcleared=1 chain=68 nils=11 cnt_hint=9 cnt_walk=2 cnt_vec=2 cnt_nil=0 seq=00101011011 seq2=111 refused=1|seq over an atom needs more of the data structures
+--expect-why
+DERIVED BY HAND from `seqwalk.kin` against the hand-laid objects the probe
+builds. Nothing was read off a run. The fixture's payloads are hex and the
+output is decimal, so each conversion is written out below; NIL is 0xFFFF =
+65535.
+
+THE FOUR SEQ SHAPES, walked to exhaustion. Each row is first, the first of
+next, and whether the walk ENDS -- and the ending is the half a walk that
+runs one past the end would get wrong while every earlier field still agreed.
+
+  cons=17 next1=34 next2=1
+      A cell holding 0x11 = 17 whose rest is a cell holding 0x22 = 34, whose
+      rest is NIL. `next` of the last cell is nil, so the `1`.
+
+  vec=161 vecn=162 vecend=1
+      A "vector" of 0xA1 = 161 and 0xA2 = 162 (the fixture keeps the count in
+      slot 0 and the elements after it, so element i is slot i+1). `next`
+      stops when i + 1 >= count: at i = 1 with count 2, which is the `1`.
+
+  ent=225 entn=226 entend=1
+      A MAP ENTRY, 0xE1 = 225 and 0xE2 = 226, read DIRECTLY off the entry
+      rather than through a copied vector -- kin's header measures that at
+      13.9% of a map walk. Its length is the constant 2, so `next` stops
+      after the value; an entry routed through `vec-count` would read slot 0,
+      which here holds the KEY (225) and not a count, and the walk would run
+      225 elements long.
+
+  tab=28672 tabn=28673 tabend=1
+      A TABLE rides the same vecseq, and `first` answers a ROW REF:
+      0x7000 = 28672 and 0x7001 = 28673 from the fixture's `table-ref`. The
+      two differ, so the index really reaches it. Its length comes from
+      `table-count`, not `vec-count`.
+
+  str=193 strn=194 strlast=195 strend=1
+      A string of three "code points" 0xC1, 0xC2, 0xC3 = 193, 194, 195. The
+      index is CODE POINTS, which is what the strseq holds; kin's header
+      records that the byte version read a rope's header as text.
+
+  rng=5 rngn=7 rngn2=65535
+      A range start 5, end 9, step 2: 5, 7, then 9 which is NOT below the end,
+      so `seq` of it is nil and `first` of nil is NIL = 65535. Exclusive end,
+      so 9 is absent -- an inclusive one would print 9 here.
+
+  rngsame=5
+      THE ORIGINAL RANGE IS UNDISTURBED after being walked twice. `next` builds
+      a FRESH range rather than advancing a cursor, because a range IS a value;
+      a mutated cursor prints 9 here and silently corrupts anything else
+      holding the same range.
+
+`rest=34 restend=1` -- `rest` is `next` except when exhausted, and then it is
+the EMPTY LIST rather than nil. That is Clojure's rule and the whole
+difference between the two: `(rest (rest [1]))` stays seqable. The second
+digit checks the tag of what came back, so returning nil (or the original)
+shows.
+
+`force=68 cached=1 thunkcleared=1 chain=68` -- forcing a lazy seq.
+
+  68 is 0x44, the value inside the cell the thunk answers.
+  `cached=1`   forcing again returns the SAME value, by identity.
+  `thunkcleared=1`  and LS_THUNK is NIL afterwards, which is what makes the
+                    second force run nothing. A cache written into LS_SEQ but
+                    with the thunk left in place would print `1 0` and re-run
+                    the thunk every time -- a lazy seq behaving as a
+                    generator, which is the bug kin's doc names.
+  `chain=68`   a thunk answering a lazy seq answering a lazy seq collapses to
+               the same 68. The loop is what does that; without it the caller
+               gets a LAZYSEQ back where a seq was promised.
+
+`nils=11` -- `first` and `next` of nil are both nil, not a crash: both start
+by calling `seq`, which answers nil, and both check it.
+
+`cnt_hint=9 cnt_walk=2 cnt_vec=2 cnt_nil=0` -- THE ASK, WHICH BOTH PORTS WERE
+MISSING. The counted chain in the fixture is TWO CELLS LONG AND CLAIMS NINE.
+That is deliberate and it is the only way this field can tell the fast path
+from its absence: `9` proves `count-hint` was read, and `2` would prove the
+list was walked instead. Kin's doc records that Rust had the O(1) path and the
+JVM and CLR did not -- the same function in a different complexity class,
+which no conformance diff can see because both answers are right.
+
+  cnt_walk=2   an UNcounted chain (C_COUNT nil in both cells) really is
+               walked, and really is two long
+  cnt_vec=2    a vector answers from `vec-count`
+  cnt_nil=0    `(count nil)` is 0
+
+`seq=00101011011` -- `seq` over eleven inputs in the probe's order. `1` means
+a seq came back and `0` means NIL:
+
+  nil          0    nothing to walk
+  empty list   0    NOT itself: `(seq ())` is nil
+  "abc"        1    three code points
+  ""           0
+  [a b]        1
+  []           0    `(seq [])` MUST be nil
+  array map    1
+  hash map     1
+  {}           0
+  set          1
+  map entry    1    always -- an entry is two long by definition, so there is
+                    no empty case and no count to consult
+
+THE FIVE ZEROES IN THE MIDDLE ARE THE POINT. An empty collection answering a
+truthy empty seq makes every `(when (seq coll) ...)` in a program wrong, and
+each empty case here goes through a different length test -- `s-count`,
+`vec-count`, and the entry vector's own count for the map.
+
+`seq2=111` -- a TABLE, a ROW REF and a LAZY SEQ all come back as seqs. The ref
+goes through `ref-to-map` and then through `seq` again, which is the one place
+kin says a row materialises. The lazy seq here is the one already forced
+above, so this also says a forced lazy seq is still seqable through its cache.
+
+`refused=1|seq over an atom needs more of the data structures` -- AND THE
+REFUSAL. `seq` of something with no arm THROWS rather than answering nil: kin
+records that native answered NIL and both ports threw, so `(seq (atom 1))` was
+nil in one runtime and an exception in two, and Clojure is the one that
+refuses. The message is checked in full because it is assembled from three
+pieces -- a static prefix, `describe`'s answer, and a static suffix -- and a
+concatenation that dropped or reordered one is exactly the kind of thing that
+differs per target. The `1` beside it is the sentinel the fixture's
+`throw-str` returns.

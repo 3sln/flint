@@ -127,6 +127,10 @@ fn main() {
               rt.node(&[a, b, c]) };
     let z = { let a = rt.leaf(&[1,2,3]); let b = rt.leaf(&[4,5,6]); rt.node(&[a, b]) };
     let hx = rt.b_hash(x); let hy = rt.b_hash(y); let hz = rt.b_hash(z);
+    // THE HASH ITSELF, and not only that the three agree. Equality of two
+    // hashes is satisfied by a function that answers a constant; the number
+    // pins `h*31 + c` per byte and the `ha * 31^len(b) + hb` join.
+    o.push_str(&format!("hx={} ", hx));
     o.push_str(&format!("shapes={}{} ", (hx == hy) as u32, (hy == hz) as u32));
     // AND DIFFERENT BYTES SHOULD NOT, or the check above passes with a
     // constant.
@@ -278,6 +282,7 @@ fn main() {
                                      leaf(rt, new int[]{4,5,6})});
         long z = node(rt, new long[]{leaf(rt, new int[]{1,2,3}), leaf(rt, new int[]{4,5,6})});
         int hx = bHash(rt, x), hy = bHash(rt, y), hz = bHash(rt, z);
+        o.append("hx=").append(hx).append(' ');
         o.append("shapes=").append(hx == hy ? 1 : 0).append(hy == hz ? 1 : 0).append(' ');
         o.append("differs=").append(bHash(rt, leaf(rt, new int[]{1,2,3,4,5,7})) != hx ? 1 : 0).append(' ');
         o.append("cached=").append(bHash(rt, y) == hy ? 1 : 0)
@@ -432,6 +437,7 @@ namespace Flint.Rt {
                                      Leaf(rt, new int[]{4,5,6})});
         long z = Node(rt, new long[]{Leaf(rt, new int[]{1,2,3}), Leaf(rt, new int[]{4,5,6})});
         int hx = BHash(rt, x), hy = BHash(rt, y), hz = BHash(rt, z);
+        o.Append("hx=").Append(hx).Append(' ');
         o.Append("shapes=").Append(hx == hy ? 1 : 0).Append(hy == hz ? 1 : 0).Append(' ');
         o.Append("differs=").Append(BHash(rt, Leaf(rt, new int[]{1,2,3,4,5,7})) != hx ? 1 : 0).Append(' ');
         o.Append("cached=").Append(BHash(rt, y) == hy ? 1 : 0)
@@ -452,3 +458,52 @@ namespace Flint.Rt {
         o.Append("wrap=").Append(BHash(rt, l1) == BHash(rt, l2) ? 1 : 0).Append(' ');
         System.Console.WriteLine(o.ToString());
     }
+--expect
+hx=30569571 shapes=11 differs=1 cached=1 slot=1 order=1 empty=0 p0=1 p1=31 p3=29791 wrap=1
+--expect-why
+COMPUTED BY HAND from the rule the source states -- `h = h*31 + c` per byte --
+over x = [1,2,3,4,5,6]:
+
+  1 -> 33 -> 1026 -> 31810 -> 986115 -> 30569571
+
+`hx=30569571` IS NEW IN THIS DRIVER. Before it, every hash field on this line
+was a COMPARISON between two hashes, and `hx==hy`, `hy==hz`, `b_hash(y)==hy`
+and the slot check are all satisfied by a `b-hash` that returns a constant.
+`differs` and `order` bound that from the other side, but nothing said what
+the number IS. Now one field does, and it is the only field on the line that a
+wrong-but-consistent hash cannot pass.
+
+It also pins the JOIN, because y and z must reach the same number by a
+different route. y is the tree [1]+[2,3]+[4,5,6], combined as
+`h = h * 31^len(kid) + hash(kid)`:
+
+  kid [1]      len 1, hash 1     -> 0*31    + 1    = 1
+  kid [2,3]    len 2, hash 65    -> 1*961   + 65   = 1026
+  kid [4,5,6]  len 3, hash 4005  -> 1026*29791 + 4005 = 30569571
+
+which is the flat number above. That equality is the whole requirement: two
+trees over the same bytes must hash alike, whatever shape they are in, or a
+sliced or concatenated byte string stops working as a map key.
+
+  shapes=11   leaf vs 1+2+3 vs 3+3, all equal
+  differs=1   [1,2,3,4,5,7] must NOT collide with [1..6]
+  order=1     [6,5,4,3,2,1] must NOT collide with it either -- `h*31 + c` is
+              order-sensitive, a sum or an xor would not be
+  cached=1    asked twice, same answer
+  slot=1      and the answer is IN the BB_HASH slot after the first ask, so
+              the second is a slot read rather than a second walk
+  wrap=1      40 bytes split 17+23 against the same 40 flat. Long enough that
+              the multiply WRAPS, which is where a join computed with a
+              non-wrapping power would diverge from the flat walk.
+
+  empty=0     an empty leaf hashes to 0 -- the accumulator's start, never
+              entered. Zero is a LEGITIMATE hash, which is why the cache is
+              checked with `is-fixnum` and not against nil.
+  p0=1        31^0. The loop does not run at all.
+  p1=31       31^1
+  p3=29791    31^3 = 29791, reached by SQUARING (bit 0 then bit 1), not by
+              three multiplications. An exponentiation that looped `n` times
+              would give the same three numbers here -- what it would not give
+              is `wrap=1` at a tolerable cost, since `n` there is a byte
+              length. 29791 is still the value that catches an off-by-one in
+              the shift: 31^2 is 961 and 31^4 is 923521.

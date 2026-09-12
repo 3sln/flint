@@ -200,3 +200,76 @@ namespace Flint.Rt {
         }
         System.Console.WriteLine(o.ToString());
     }
+--expect
+leaf=10000,7,0 tcleaf=0 node=11000,300,2 tcnode=0 tr=00110,0,0 tctr=309 dead=00100,0,0 tcdead=8 other=00000,0,0 tcother=0 nil=00000,0,0 tcnil=0 fix=00000,0,0 tcfix=0
+--expect-why
+DERIVED BY HAND from `bytecore.kin` against the hand-laid fixture. Every
+predicate here is a type-tag comparison and every count is a slot the driver
+itself wrote, so there is nothing to read off a run.
+
+Each group prints five booleans then two numbers:
+
+  is-bytes  is-brope  is-tbytes  tb-live  <a literal 0>, b-count, b-depth
+
+and then `tc<label>` is `b-tcount`. The fifth digit is a CONSTANT `0` in all
+three drivers, not a function's answer -- see the note at the end.
+
+THE FIXTURE, and what each predicate must say about it:
+
+  leaf   TY_BYTES, olen 7
+         is-bytes 1 (t == TY_BYTES), is-brope 0, is-tbytes 0, tb-live 0
+         b-count: "A LEAF DOES NOT STORE ITS COUNT" -- `olen` is the count = 7
+         b-depth: not TY_BROPE -> 0
+         b-tcount: not a transient -> 0
+         => leaf=10000,7,0  tcleaf=0
+
+  node   TY_BROPE, BB_BYTES = 300, BB_DEPTH = 2
+         is-bytes 1 -- THE `or` IS THE POINT: both tiers are byte strings, and
+           an `is-bytes` that only knew leaves would print 0 here and silently
+           exclude every tree from every byte operation.
+         is-brope 1, is-tbytes 0, tb-live 0
+         b-count = slot BB_BYTES = 300, b-depth = slot BB_DEPTH = 2
+         300 and 2 are DIFFERENT numbers in DIFFERENT slots (0 and 2), so a
+         reader that confused the two constants prints 2,300 or 300,300.
+         => node=11000,300,2  tcnode=0
+
+  tr     TY_TBYTES, TB_TREE = node, TB_FILL = 9, TB_LIVE = TRUE
+         is-bytes 0 -- a transient is NOT a byte string; TY_TBYTES is neither
+           of the two `or` arms, and a predicate that accepted it would let a
+           half-built buffer be read as a finished one.
+         is-brope 0, is-tbytes 1, tb-live 1 (the slot holds TRUE)
+         b-count 0 and b-depth 0: `b-count`'s final `return 0` is the "not a
+           byte string at all" arm the source comments.
+         b-tcount = b-count(tree) + fill = 300 + 9 = 309
+         => tr=00110,0,0  tctr=309
+         309 is the assertion: it is neither 300 (tree only) nor 9 (tail
+         only), so dropping either term is visible.
+
+  dead   TY_TBYTES, TB_TREE = leaf, TB_FILL = 1, TB_LIVE = NIL
+         Differs from `tr` in ONE slot, so `tb-live` is the only digit that
+         may change: is-tbytes 1, tb-live 0. That pair, 1 then 0, is what
+         separates "is a transient" from "is still usable" -- a `tb-live`
+         that only checked the type would print 1 and let `persistent!` be
+         called twice.
+         b-tcount = b-count(leaf) + fill = 7 + 1 = 8, and note it answers for
+         a DEAD transient: the guard is `is-tbytes`, not `tb-live`.
+         => dead=00100,0,0  tcdead=8
+
+  other  TY_VEC: a heap object of the wrong type. Every predicate 0, both
+         counts 0, `b-tcount` 0.          => other=00000,0,0  tcother=0
+  nil    not `is-heap`, so every function's first guard fires.
+                                          => nil=00000,0,0    tcnil=0
+  fix    the raw Value 5, below the fixture's `is-heap` floor of 100 -- a
+         FIXNUM, and the case that matters: `ty` would index the type array at
+         5 and read whatever is there, so each function must refuse on
+         `is-heap` BEFORE tagging.       => fix=00000,0,0     tcfix=0
+
+`other`, `nil` and `fix` printing the same line is deliberate: three different
+ways of not being a byte string, all answered `0` rather than by reading a
+slot that is not there.
+
+A NOTE ON THE FIFTH DIGIT. All three drivers append a literal `0` between
+`tb-live` and the counts. It is not any function's answer, so it can never
+fail -- the `0` in `leaf=10000,7,0` is the driver printing a constant. Harmless,
+but worth knowing it is not an assertion; it appears to be where a removed
+predicate used to be.

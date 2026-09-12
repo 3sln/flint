@@ -708,3 +708,93 @@ fn main() {
         o.Append("pop1=").Append(TvecCount(rt, TvecPop(rt, t1))).Append(' ');
         System.Console.WriteLine(o.ToString());
     }
+--expect
+cnt=2100 sh=10 wrong=0 inplace=1 as5=2730 keep6=4102 astail=3003 append=2102 pops=1020:5 30:5 popwrong=0 pcnt=30 ptail=30 dead=1 pop0nil=1 pop1=0
+--expect-why
+DERIVED BY HAND from `vectwrite.kin`, tracing the counts and the shift through
+the fixture rather than reading them off a run. The elements are 0x1000+i, so
+every value printed is an index in disguise.
+
+CONJ!, 2100 times from empty.
+
+`tvec-conj` takes the in-place arm while `cnt - tail-off < WIDTH`; otherwise
+the tail folds into the trie and `overflow = (cnt >>> 5) > (1 << shift)`
+decides whether the tree gains a level. That is the SAME test the persistent
+`vec-conj` uses, and it must be, or a transient and a persistent vector of the
+same length would have different shapes.
+
+  shift starts at 5. The fold happens at every cnt that is a multiple of 32:
+    cnt=32   (32>>>5)=1  > (1<<5)=32  -- no, `t-push-tail`, shift stays 5
+    cnt=1024 (1024>>>5)=32 > 32       -- NO. Strict `>`: at 1025 the root is
+                                         exactly full and the shift is STILL 5
+    cnt=1056 (1056>>>5)=33 > 32       -- YES, shift becomes 10
+    next growth would need cnt>>>5 > 1024, i.e. past 32768
+  so after 2100 conjes: cnt=2100 sh=10.
+
+  wrong=0 re-reads all 2100 through `t-array-for` and `i & 31`. It is the
+  field that catches a wrong `subidx`: at cnt=2080 the tail holds 2048..2079,
+  `t-push-tail`'s subidx is (2079>>>10)&31 = 2, root child 2 is ABSENT, and
+  the absent arm builds it with `new-path` at level 5. Reading index 2048 back
+  descends (2048>>>10)&31 = 2 then (2048>>>5)&31 = 0. A path built one level
+  too deep or too shallow puts the leaf where that descent does not find it,
+  and the count would still say 2100.
+
+  inplace=1: `conj!` on a tail with room writes one slot and bumps the count,
+  so it hands back THE SAME handle. 0 would mean it allocated a new transient
+  every append, which is the copy transients exist to avoid. (Note this conj
+  is a real one: it leaves cnt at 2101 for what follows.)
+
+ASSOC!, at cnt=2101, tail-off = (2100>>>5)<<5 = 65<<5 = 2080.
+
+  as5:    index 5 < 2080, so the TRIE arm. `t-do-assoc` descends 10 then 5,
+          both subidx 0, and writes slot 5 of the first leaf -> 0xAAA = 2730.
+  keep6:  its neighbour must be untouched -> 0x1006 = 4102. A `t-do-assoc`
+          that cloned with the wrong width, or wrote the whole leaf, shows up
+          here and not in `as5`.
+  astail: index 2100 >= 2080, so the TAIL arm: slot 2100 & 31 = 20 of the
+          32-wide working tail -> 0xBBB = 3003.
+  append: `i == cnt` is an append, routed to `tvec-conj`, so the count goes
+          2101 -> 2102. Anything else means the `== i cnt` arm is missing and
+          Clojure's `(assoc! v (count v) x)` would be a bounds error here.
+
+POP!, from 2102. `tvec-pop` decrements in place while `(cnt-1) & 31 > 0`; on
+a cnt that is 1 mod 32 the previous leaf is pulled out of the trie to become
+the tail, and a root left without a child 1 costs a LEVEL.
+
+  THE LEVEL COLLAPSE IS THE POINT OF THE FIRST NUMBER. It happens at exactly
+  one pop in this run, cnt=1057:
+    pop-tail level 10, subidx = (1055>>>10)&31 = 1
+      recurse level 5, subidx = (1055>>>5)&31 = 32&31 = 0 -> NIL
+    newchild nil but subidx 1, so the root is cloned with child 1 = NIL
+    then `newshift > BITS and child 1 is nil` -> root becomes child 0,
+    shift 5.
+  Every later pop is already at shift 5, and the guard `> BITS` stops there.
+  So at count 1020 the shift is 5, and at count 30 it is still 5.
+  `1020:10` would be the collapse never firing -- which is exactly what the
+  fixture's own NIL-fill comment says once hid this bug, a root carrying an
+  empty level and `array-for` descending through it.
+
+  popwrong=0 re-reads indices 6..29 after the vector has shrunk to 30. At 30
+  elements tail-off is 0, so ALL of them come from the tail -- which is the
+  first leaf, pulled back out of the trie by the pop at cnt=33. It must still
+  hold the original 0x1006..0x101D. The scan starts at 6 because index 5 was
+  deliberately overwritten with 0xAAA above.
+
+PERSISTENT!, at cnt=30 shift=5 tail-off=0.
+
+  pcnt=30 is the count carried across.
+  ptail=30 is the TRIM: the transient's working tail is a full 32 wide, and a
+  persistent vector's tail length is part of its shape, so `node-clone` cuts
+  it to `cnt - toff` = 30. `ptail=32` would be an untrimmed tail -- a vector
+  that answers 30 but whose tail node is a different width from the one
+  `vec-conj` would have built, the same cross-runtime shape mismatch this
+  file's header describes.
+  dead=1 is the token CLEARED: the handle is invalidated, so a later write
+  cannot mutate a value somebody else now owns.
+
+THE EMPTY EDGES.
+
+  pop0nil=1: popping an empty transient answers NIL rather than wrapping
+  `cnt - 1` on an unsigned zero -- the caller raises, as the doc says.
+  pop1=0: cnt==1 has its own arm that just zeroes the count; it must not try
+  to pull a leaf out of a trie that holds nothing.

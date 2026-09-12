@@ -56,3 +56,47 @@ fn main() {
         int d = ChargeSubject(rt, 0L);
         System.Console.WriteLine(a + " " + b + " " + c + " " + d + " " + rt.steps);
     }
+--expect
+7 64 0 0 17
+--expect-why
+DERIVED BY HAND from `pikegas.kin` plus the accounting stubs the driver's own
+`-head` sections define. Nothing was read off a run.
+
+  charge-compile rt n = (charge-work rt n; return n)
+  charge-subject rt s = (let n = s-bytes rt s in charge-bytes rt n; return n)
+
+and the fixture's `-head` supplies the three things kin delegates to:
+
+  s-bytes v      = v            (the Value IS its byte count here)
+  charge-work n  = steps += n
+  charge-bytes n = charge-work (n / 8 + 1)
+
+FIELDS 1-4 ARE THE RETURN VALUES, and the point of printing them is that the
+two functions return DIFFERENT QUANTITIES from what they charge:
+
+  a = charge-compile 7      -> 7    program words, and 7 is also what it charged
+  b = charge-subject 64     -> 64   BYTES -- not the 9 steps it charged
+  c = charge-compile 0      -> 0
+  d = charge-subject 0      -> 0    bytes -- not the 1 step it charged
+
+`b` is the one that can only be right. Kin says charge-subject answers the
+subject's bytes, while the price it pays goes through `charge-bytes`, which
+divides by 8 and adds one; a version that returned the amount charged would
+print 9 here and 1 for `d`, and the whole line would still be self-consistent.
+
+FIELD 5 IS THE RUNNING TOTAL, and it accumulates all four calls in order:
+
+  charge-compile 7   charge-work 7            steps  0 -> 7
+  charge-subject 64  charge-work (64/8 + 1)=9 steps  7 -> 16
+  charge-compile 0   charge-work 0            steps 16 -> 16
+  charge-subject 0   charge-work (0/8 + 1)=1  steps 16 -> 17
+
+so 17. The third and fourth calls are the ones that say the charge happens
+UNCONDITIONALLY, which is the divergence this source exists to close -- kin's
+own doc says a compile is "CHARGED ON EVERY COMPILE, hit or miss". A
+zero-word compile adds nothing (16 stays 16 -- a zero charge and a skipped
+charge are indistinguishable there, which is exactly why the fourth call is
+also in the line), and an EMPTY subject still costs 1, because
+`charge-bytes`'s `+ 1` is a per-call floor. That last 1 is the whole of the
+difference between 16 and 17: an implementation that took an empty subject as
+free work, or that charged only on a miss, lands on 16.

@@ -57,3 +57,63 @@ fn main() {
             o.Append(FullIndex(rt, cp, true)).Append(',').Append(FullIndex(rt, cp, false)).Append(' ');
         System.Console.WriteLine(o.ToString());
     }
+--expect
+0/0 1/1 97/97 65/65 223/223 1000/1000 50,102 -1,-1 -1,-1
+--expect-why
+DERIVED BY HAND from `casemap.kin` and this fixture's table, which is ALL
+ZEROS. The driver's own comment says why: the probe checks that three targets
+generated the SAME SEARCH over a table they index the same way, not that the
+mapping is right -- the real table is checked against Clojure by the language
+suite. So every number below comes from running the two searches on paper
+against zeros, and NONE of them is a Unicode fact.
+
+THE LENGTHS ARE REAL even though the contents are not, and they have to be:
+`case-ranges-n` and `case-full-n` are count accessors that inline as literals,
+so the generated search carries the shipped table's row counts.
+
+  case-ranges: 1528 ints at stride 4 = 382 rows; CASE_UPPER_LEN = 200
+  case-full:    515 ints at stride 5 = 103 rows; CASE_FULL_UPPER_LEN = 102
+
+`case-map` OVER ZEROS -- every code point maps to ITSELF, for two different
+reasons, and the split is at zero.
+
+  Each probed row gives s = 0, e = 0, delta = 0, stride = 0.
+
+  cp > 0 (1, 97, 65, 223, 1000): `c > e` is true at every midpoint, so `lo`
+     walks past `hi`, the `forever` breaks, and the function falls through to
+     its last line: `return cp`. That is the "a code point with no entry maps
+     to itself" arm, reached by EXHAUSTING the search.
+  cp = 0: `c < s` and `c > e` are both false, so 0 is IN RANGE [0,0]. Stride
+     is 0, not 1, so the stride arm runs: `(c - s) & 1` = 0, which is even, so
+     it returns `c + delta` = 0 + 0 = 0. Reached by FINDING a row.
+
+Both print the input back, so `0/0 1/1 97/97 65/65 223/223 1000/1000` -- and
+the two paths differing matters: cp = 0 is the one input in this list that
+exercises the hit branch, the delta addition and the stride test at all. Note
+`97/97` and `65/65` would be `65/97` and `65/97` against the real table; the
+zeros are what make them identities here.
+
+`full-index` OVER ZEROS -- and this is where the search's exact shape shows.
+
+  `50,102` for cp = 0. Zero is a HIT, and the index returned is wherever the
+  binary search first lands:
+    up:   base2 = 0, lo = 0, hi = CASE_FULL_UPPER_LEN - 1 = 101.
+          mid = lo + (hi - lo)/2 = 0 + 101/2 = 50. Row 50's first field is 0,
+          equal to c, so it returns base2 + mid = 50 on the FIRST probe.
+    down: base2 = CASE_FULL_UPPER_LEN = 102, and hi = (103 - 102) - 1 = 0 --
+          a section of exactly ONE row, which is right: the source's doc says
+          "102 of them upward and exactly one downward". mid = 0, hit,
+          returns 102 + 0 = 102.
+  `50` therefore pins the midpoint formula: `lo + (hi - lo)/2` on [0,101] with
+  integer division truncating toward zero. `102` pins the other thing the doc
+  insists on -- the index is ABSOLUTE, not section-relative. A search that
+  answered `mid` instead of `base2 + mid` would print `50,0` here, and a
+  caller would then read the uppercase row 0 for a lowercase hit.
+
+  `-1,-1` twice, for 223 and 1000. Both are greater than every probed 0, so
+  `lo` climbs past `hi` and the search falls out to `return -1`. -1 and not 0:
+  0 is a VALID index into this table (it is sharp-s's own row in the real
+  data), so a miss reported as 0 would be read as a hit on the first entry.
+  223 is chosen precisely because it IS sharp s -- against the shipped table
+  it would be a hit at 0, and here it must be a miss, which is the clearest
+  statement that this probe is about the search and not the data.

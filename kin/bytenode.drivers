@@ -292,3 +292,63 @@ namespace Flint.Rt {
          .Append(" roots=").Append(rt.Mark() == before + 1 ? 1 : 0).Append(' ');
         System.Console.WriteLine(o.ToString());
     }
+--expect
+ty=45 bytes=8 depth=1 flat=1 hash=1 k0=1 k1=1 olen=6 wd=2 wbytes=3 inner=1 noop=1 wstarved=1 starved=1 roots=1
+--expect-why
+DERIVED BY HAND from `bytenode.kin` and the slot layout the `-head` sections
+declare (BB_BYTES 0, BB_FLAT 1, BB_DEPTH 2, BB_HASH 3, BB_KIDS 4). Two leaves
+of DELIBERATELY UNEQUAL length, 3 and 5, so a sum cannot be mistaken for a
+doubled single child.
+
+THE NODE. `b-node base 2` over [l1(3), l2(5)]:
+
+  ty     = TY_BROPE = 45, the type it allocates
+  bytes  = slot BB_BYTES = the children's counts added up = 3 + 5 = 8.
+           Not 3 and not 5: dropping either child, or adding the first twice,
+           is visible in this one number. "The one walk a node exists to avoid
+           doing later" is done exactly once, here.
+  depth  = slot BB_DEPTH = `b-depth(child zero) + 1` = 0 + 1 = 1, because a
+           leaf is depth 0.
+  flat   = 1 and hash = 1, meaning both slots hold NIL. THIS IS THE POINT OF
+           the source's own comment: BB_FLAT and BB_HASH are caches computed on
+           demand, and a slot left at whatever the allocator happened to have
+           would be read later as a real flattening or a real hash. The
+           fixture's `alloc` fills slots with NIL anyway, so these two check
+           that `b-node` does not OVERWRITE them with something else -- which
+           is what a mixed-up constant would do: writing the total into slot 1
+           instead of 0 gives flat=0.
+  k0, k1 = 1 and 1: the children land at BB_KIDS and BB_KIDS+1 in the order
+           they were rooted, compared by IDENTITY against l1 and l2. Reversed
+           order gives 0 0 while `bytes` stays 8.
+  olen   = BB_KIDS + n = 4 + 2 = 6 slots.
+
+THE WRAP. `b-wrap-to l1 2`: l1 is depth 0, so the loop runs twice, making a
+single-child node of depth 1 and then one of depth 2.
+
+  wd     = 2, the depth asked for -- not 1 (looped once) and not 3 (a `<=`
+           where the source has `<`, one wrap too many).
+  wbytes = 3, l1's count UNCHANGED. Wrapping promotes, it does not copy or
+           duplicate; 6 here would mean a wrapper counted its child twice.
+  inner  = `b-depth` of the outer node's only child = 1. That is what makes
+           the chain a chain: each wrapper is exactly one deeper than what it
+           holds, which is the invariant the header says every sibling relies
+           on.
+  noop   = 1. `b-wrap-to w 1` finds `b-depth w` = 2, already >= 1, so the
+           `while` never runs and it returns the SAME Value. 0 would mean it
+           wrapped anyway and deepened a tree that was already deep enough.
+
+THE STARVED HEAP -- and `wstarved` is the one that used to HANG rather than
+print anything. With `starve` set, the fixture's `alloc` returns 0:
+
+  starved  = 1: `b-node` sees `a == 0` and returns NIL, rather than building a
+             node at address 0.
+  wstarved = 1: `b-wrap-to l1 3` calls `b-node`, gets NIL, and must ANSWER NIL.
+             The bug the doc describes is that `b-depth` of NIL is 0, so a
+             version that ignored the nil re-tested 0 < 3 forever. This field
+             cannot print 0 -- a regression here does not fail, it spins, and
+             the run never reaches `println`. So `wstarved=1` is really the
+             assertion "this probe terminated at all".
+  roots    = 1: after the refusal the shadow stack is back to `before + 1` --
+             the one root the driver pushed, and nothing `b-wrap-to` left
+             behind. Its `pop-to base` runs on the nil path too. A leaked root
+             here would be a value kept alive forever by a failed call.

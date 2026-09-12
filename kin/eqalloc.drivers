@@ -45,3 +45,37 @@ fn main() {
         foreach (long v in vs) o.Append(EqMayAlloc(rt, v) ? 1 : 0).Append(',');
         Console.WriteLine(o.ToString());
     }
+--expect
+0,0,1,1,1,
+--expect-why
+DERIVED from the one rule in `eqalloc.kin`, applied to the driver's category
+table. Nothing here was read off a run.
+
+  eq-may-alloc rt v = (is-heap v) AND (category rt v != CAT_SCALAR)
+
+The fixture makes both halves observable and INDEPENDENTLY so: `is-heap` is
+`v >= 100`, and the heap values 100..103 carry categories 0,1,2,3 with
+CAT_SCALAR = 0.
+
+  5    not heap            -> the AND short-circuits            -> 0
+  100  heap, category 0    -> 0 == CAT_SCALAR, so no allocation -> 0
+  101  heap, category 1    -> != CAT_SCALAR                     -> 1
+  102  heap, category 2    -> != CAT_SCALAR                     -> 1
+  103  heap, category 3    -> != CAT_SCALAR                     -> 1
+
+THE FIRST TWO ZEROS ARE THE CHECK, and they are zero for DIFFERENT reasons.
+`5` is refused by `is-heap`; `100` passes `is-heap` and is refused by the
+category test. A source that dropped the `is-heap` conjunct would still print
+0 for 100 but would index `cats[5 - 100]` for the immediate and crash; one
+that dropped the `!=` test would print 1 for 100. Either way the answer moves,
+which is why the fixture has a heap value whose category IS scalar.
+
+The direction matters and is not symmetric: this predicate gates ROOTING. A
+spurious 1 costs six percent on `get` (the header's measurement); a spurious 0
+drops rooting on a walk that really does allocate, and a collection in the
+middle of a map lookup moves the objects the lookup is holding. So `0,0,1,1,1,`
+is the safe answer AND the correct one, and a check that could not tell it from
+`1,1,1,1,1,` would be no check.
+
+The trailing comma is real: each driver appends `,` after every value and none
+of them strips the last one, so the printed line genuinely ends in a comma.

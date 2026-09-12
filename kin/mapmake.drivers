@@ -246,3 +246,69 @@ fn main() {
          .Append(" roots=").Append(rt.roots.Count);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+m=64 slots=e004,e003,e002,e001 meta=1 hash=1 empty=1 odd=1|IllegalArgumentException/array-map needs an even number of forms| roots=0 norm=1 roots=0 volno=1 vol=77 roots=0
+--expect-why
+DERIVED from `mapmake.kin` against the driver's mock seq. Everything is
+printed in HEX by all three probes, so the addresses read as hex too.
+
+THE MOCK SEQ IS A COUNTDOWN, and that is what makes ORDER visible rather than
+merely length. With `seqn = 4`, `seq` answers 0xC004 and `first` answers
+0xE000 + (s - 0xC000), so the walk yields, in order:
+
+  0xC004 -> e004, 0xC003 -> e003, 0xC002 -> e002, 0xC001 -> e001, then nil
+
+  m=64                 the array map's address. Derived, not pinned: the bump
+                       starts at 100 and two pairs need AM_BASE + 2*2 = 6
+                       slots, so the map is at 100 = 0x64.
+
+  slots=e004,e003,e002,e001
+                       THE HEADER'S WHOLE CLAIM: "array-map KEEPS THE ORDER IT
+                       WAS GIVEN", because the reader builds map literals with
+                       it and the self-hosting fixpoint breaks if the order
+                       does not survive. The four elements are DESCENDING as
+                       they arrive, so a copy that reversed them would print
+                       `e001,e002,e003,e004` -- an ascending run that looks
+                       tidier and is wrong. A pair-swapping copy would print
+                       `e003,e004,e001,e002`.
+
+                       This is also where the root-stack arithmetic shows.
+                       Values are pushed ONE AT A TIME as they are taken --
+                       the header explains that gathering them in a host
+                       vector first meant every value went stale at the first
+                       collection inside the loop -- and the copy reads them
+                       back as `r(vals-at + i)`. `vals-at` is marked AFTER the
+                       seq itself was pushed, so it is 1, and the four values
+                       sit at root indices 1..4. An off-by-one in that base
+                       reads the SEQ at index 0 and prints `ffff,e004,e003,
+                       e002`: still four values, one of them nonsense.
+
+  meta=1 hash=1        both header slots written NIL explicitly.
+
+  empty=1              `seqn = 0`, so `seq` answers nil and the loop never
+                       runs. count 0 is EVEN, so this is not the odd-count
+                       refusal: an empty array map is still allocated and
+                       still a map. `empty=0` would mean the zero case fell
+                       into the refusal path.
+
+  odd=1|IllegalArgumentException/array-map needs an even number of forms|
+                       `seqn = 3` gives three elements, and `rem 3 2 != 0`, so
+                       the source throws. Both the class and the message are
+                       compared, because a wrong message is the failure mode
+                       `nouns.kin` exists to prevent and `conform` cannot see.
+  roots=0              AND the three pushed values are released BEFORE the
+                       throw -- `pop-to base` precedes `throw-str` in the
+                       source. A refusal that leaks its roots leaks them on
+                       exactly the input a caller retries.
+
+  norm=1 roots=0       the allocation refused after a SUCCESSFUL four-element
+                       walk: nil, and the four roots released. This is a
+                       different failure point from the odd count -- the walk
+                       completed and the count was even -- so both are on the
+                       line.
+
+  volno=1              `new-volatile` under the same refusal: nil, not a box
+                       at address 0.
+  vol=77               and when it succeeds, the box holds what it was given,
+                       read back through the ROOT after the allocation.
+  roots=0              stack empty at the end of everything.

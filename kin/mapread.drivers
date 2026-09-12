@@ -254,3 +254,83 @@ namespace Flint.Rt {
          .Append(" roots=").Append(rt.roots.Count).Append(" max=").Append(rt.maxroots);
         Console.WriteLine(o.ToString());
     }
+--expect
+7 48879 66 7 23713 7 | 7 7 | 1 2 2 | 10 roots=0 max=6
+--expect-why
+DERIVED from `mapread.kin` against the driver's stubs. The fixture's hex
+constants in decimal: 0xBEEF = 48879, 0x42 = 66, 0x5CA1 = 23713, 0xC0DE =
+49374, NOT_FOUND = 0xFFFE = 65534. The stubs are `hash-value v = (v*7) & 0xff`,
+`node-find-scalar` answering 0x5CA1 only for hash 0x77, `node-find` answering
+0xC0DE only for hash 0x77, `ref-get` always 0xBEEF, and `eq-may-alloc v` =
+`v >= 900`, which is what routes a lookup to the scalar path or the rooted one.
+
+THE SEVEN `map-get` ANSWERS, each taking a different arm:
+
+  7        an IMMEDIATE (5). `is-heap` is the first test in `map-get`, so the
+           default comes straight back without reading a type byte.
+  48879    a ROW REF. The tag test comes BEFORE both representation arms, so
+           the ref is handed to `ref-get` and answers 0xBEEF. The source's
+           comment says why it is here and not at every call site: `is-map` is
+           true for a ref, so any path that asked and then reached a map
+           internal would read a ref as an array map and find nothing -- which
+           is what `(:name row)` once did. A missing arm prints `7` here, and
+           7 is a plausible-looking default.
+  66       an array map, scalar key 0x41, FOUND at index 1: `am-val 1` is
+           h[105] = 0x42. Not 0x32 (index 0's value), which is what an
+           `am-val` reading the wrong pair would give.
+  7        the same map, key 0x99, absent: `am-index-of` answers `n` = 2, which
+           `map-get` compares against `map-count` and turns into the default.
+           THE SENTINEL IS THE POINT: `n` is outside `0..n-1`, so no signed
+           type and no `Option` is needed -- and a source that answered 0 or
+           -1 for "absent" would print `0x32` or index out of range here.
+  23713    a hash map, scalar key 0x11. 0x11 * 7 = 0x77, so the stub finds it.
+           This is the SCALAR walk: 23713 is `node-find-scalar`'s answer and
+           49374 would be `node-find`'s, so this number says which of the two
+           the source called. Routing a scalar key through the rooted walk is
+           correct-but-slow, and the header measures it at about 6% of lookup
+           time; this field is what would catch it.
+  7        a hash map whose HM_ROOT slot is NIL -- an empty map. The root is
+           checked BEFORE hashing, and the default comes back rather than the
+           walk being handed nil.
+
+  | 7      a COMPOUND key (900) in the ARRAY MAP. It takes the rooted arm of
+           both `map-get` and `am-index-of`, scans both pairs, matches
+           neither, and answers the default. The bar separates the compound
+           calls.
+  7        a compound key in the HASH map. 900 * 7 = 6300, and 6300 & 0xff =
+           156, which is NOT 0x77 -- so the stub answers NOT_FOUND and the
+           default comes back. NOTE: the driver's comment above this call
+           ("0x900 hashes to 0x77 * 7 & 0xff") is wrong; the key is decimal
+           900, not 0x900, and nothing in this fixture makes a compound
+           hash-map lookup SUCCEED. `node-find`'s 0xC0DE is unreachable here,
+           so the compound hash-map hit is untested. A key of 1041 would take
+           it (1041 = 17 mod 256). Recorded rather than fixed, since this
+           section may not change the driver.
+
+  | 1 2 2  `am-index-of` called directly.
+           1  key 0x41 is at index 1.
+           2  key 0x99 is absent, so `n` = 2 -- the sentinel again, printed
+              here as the function's own answer rather than filtered through
+              `map-get`.
+           2  the same absence through the COMPOUND path. Both paths must
+              answer the same sentinel; the scalar one returns `sn` and the
+              rooted one returns `out` initialised to `n`, which are two
+              separate lines of source that have to agree.
+
+  | 10     membership: 0x31 is in the map, 0x99 is not. `map-contains` is
+           `map-get` against NOT_FOUND, so the `0` also says NOT_FOUND is
+           never a legitimate answer leaking out of a lookup.
+
+  roots=0  after all thirteen calls the root stack is empty. Every rooted path
+           -- `map-get`'s compound arm, `am-index-of`'s compound arm, and the
+           per-comparison push inside it -- pops what it pushed, on the found
+           path and the absent path alike.
+
+  max=6    the DEEPEST the stack ever got, and it is derivable exactly. The
+           worst case is the compound array-map lookup: `map-get` pushes map,
+           key and default (3), then `am-index-of` pushes map and key again
+           (5), then pushes the key being compared (6) and pops it before the
+           next comparison. 6 and not 7 says the per-comparison push does not
+           accumulate across the scan -- an n-entry map must not need n roots.
+           6 and not 5 says the compared key is rooted at all, which is what
+           makes `val-eq` safe when it can allocate.

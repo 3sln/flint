@@ -411,3 +411,76 @@ namespace Flint.Rt {
          .Append(IsString(rt, 1L) ? 1 : 0);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+flatascii=2/2/1 inlineascii=2/2/1 flatwide=3/2/0 inlinewide=2/1/0 emptyflat=0/0/1 emptyinline=0/0/1 nodeascii=4/4/1 nodemixed=7/5/0 deep=11/9/0 wide4=4/1/0 node4=6/3/0 str?=11100
+--expect-why
+DERIVED BY HAND from `ropemeas.kin`, counting the UTF-8 of each fixture string
+byte by byte. Nothing was read off a run. Each triple is bytes/code-points/
+ascii-bit.
+
+THE RULE KIN USES FOR A LEAF, and the one this whole file turns on: a code
+point is counted by its FIRST byte, and a continuation byte is exactly
+`10xxxxxx`, i.e. `b & 0xC0 == 0x80`. So counting is `n` minus the number of
+continuation bytes -- nothing is decoded.
+
+  fa = flat "ab"   = 61 62            both < 0x80
+  ia = inline "ab" = 61 62            same bytes, other tier
+  fw = flat "ae'"  = 61 C3 A9         'a' + U+00E9 as two bytes
+  iw = inline "e'" = C3 A9            U+00E9 alone
+
+  flatascii   = 2/2/1   61, 62: neither is a continuation, both ASCII
+  inlineascii = 2/2/1   MUST MATCH `flatascii` exactly -- same text, and the
+                        tier is supposed to be invisible to the measurements
+  flatwide    = 3/2/0   3 bytes; A9 & C0 = 80 is a continuation, so 3 - 1 = 2
+  inlinewide  = 2/1/0   2 bytes, one continuation, so 1 code point
+
+The pair 3/2 and 2/1 is the off-by-one detector for the whole source: a
+counter that counted BYTES would say 3 and 2, one that counted continuations
+instead of first bytes would say 1 and 1.
+
+  emptyflat   = 0/0/1
+  emptyinline = 0/0/1
+
+ASCII BY VACUITY, and `1` is the answer that can only be right. An empty
+string has no byte >= 0x80, so `s-ascii` must say true -- kin's inline arm
+falls out of a loop that never runs and returns true, and the flat arm reads a
+header bit the allocator set from `all(< 0x80)` over nothing. A scan that
+seeded its answer `false` would print 0 here, and then every empty string
+would take the slow indexing path forever.
+
+THE NODES. `RP_BYTES` holds the byte count and `RP_CPS` holds
+`(count << 1) | ascii`, so the node arms are a slot read, a shift and a mask:
+
+  nodeascii = 4/4/1    [fa, ia]:        2+2 bytes, 2+2 cps, 1 and 1
+  nodemixed = 7/5/0    [fa, iw, fw]:    2+2+3 = 7 bytes, 2+1+2 = 5 cps,
+                                        and 0 because iw and fw are not ASCII
+  deep      = 11/9/0   [mixed, allascii]: 7+4 = 11 bytes, 5+4 = 9 cps
+
+`nodemixed` is the field that pins the PACKING. RP_CPS there holds
+(5 << 1) | 0 = 10; `s-count` must shift right (5, not 10) and `s-ascii` must
+mask bit 0 (0, not "10 is truthy"). A missing shift prints 10/…, a missing
+mask prints …/1. And 7 != 5, so bytes and code points cannot be swapped
+without showing.
+
+`deep` is the O(1) claim: two levels up, the answer still comes from the
+node's own slots. If `s-count` walked the tree instead it would still print 9
+here -- what `deep` actually pins is that the sums COMPOSE, and that the ASCII
+bit stays 0 through a level whose other child is entirely ASCII (an `or` fold
+prints 1).
+
+  wide4 = 4/1/0   F0 9F 92 A9 -- U+1F4A9. Four bytes, and 9F, 92, A9 are all
+                  continuations, so 4 - 3 = ONE code point.
+  node4 = 6/3/0   [fa, emoji]: 2+4 = 6 bytes, 2+1 = 3 code points.
+
+The four-byte case is worth its own field because a counter written for the
+two-byte case -- "add one per lead byte, skip one" -- gets 2 here, and a
+UTF-16-shaped one that counted surrogate pairs gets 2 as well. 1 is the
+Clojure-correct answer and the one kin's rule gives.
+
+`str?=11100`, in the probe's order: an INLINE string (1), a FLAT string (1), a
+ROPE (1), a heap object tagged TY_VEC (0), and the immediate `1` (0). The
+third digit is the one kin's doc singles out -- "every caller that forgot the
+second one was a bug waiting for a string long enough to become a rope" -- so
+`11000` is the specific wrong answer this field exists to refuse. The last two
+are the negative half: without them a predicate returning `true` always would
+print `111` and look right.

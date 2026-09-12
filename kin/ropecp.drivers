@@ -529,3 +529,106 @@ namespace Flint.Rt {
         o.Append("past=").Append(past).Append(" steps=").Append(rt.steps);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+width=1234 cps=5 ascii=0 bytes=8 offs=0.1.3.6.7.8 asciioffs=0.1.2.3 at=1:61,2:c3a9,3:e282ac,1:62,1:63 past=0 steps=37
+--expect-why
+DERIVED BY HAND from `ropecp.kin`, laying out the fixture's bytes and counting
+the offsets off them. Nothing was read off a run.
+
+`width=1234` -- `utf8-width` over one lead byte of each class: 0x61 < 0x80 is
+1, 0xC3 < 0xE0 is 2, 0xE2 < 0xF0 is 3, 0xF0 falls through to 4. The chain is
+four strict `<` against three thresholds, so any one boundary written `<=`
+moves exactly one of these digits.
+
+THE FIXTURE, and the reason the code points and the leaves do not line up:
+
+  l1 flat   61 C3 A9      "a" + U+00E9      3 bytes, 2 code points
+  l2 flat   E2 82 AC      U+20AC            3 bytes, 1 code point
+  l3 INLINE 62 63         "bc"              2 bytes, 2 code points
+
+  byte    0    1  2    3  4  5    6    7
+          61   C3 A9   E2 82 AC   62   63
+  cp      0    1        2         3    4
+
+`cps=5 ascii=0 bytes=8` -- 2 + 1 + 2 code points, 3 + 3 + 2 bytes, and the
+node is not ASCII because two of its three children are not.
+
+`offs=0.1.3.6.7.8` -- `rope-byte-of-cp t k` for k = 0..5, read straight off
+the table above: cp 0 at byte 0, cp 1 at 1, cp 2 at 3, cp 3 at 6, cp 4 at 7.
+The three interesting ones:
+
+* cp 2 -> 3, not 2. A counter that treated code points as bytes gives 2, and
+  an index into "aé€bc" that lands on byte 2 is the SECOND byte of é -- a
+  split code point, which decodes to nothing.
+* cp 3 -> 6. The descent crosses two whole children (want 3 - 2 - 1 = 0,
+  base 0 + 3 + 3 = 6) and lands on the inline leaf, which has no address; the
+  offset is still a tree offset, not a leaf-local one. Returning 0 here would
+  be the leaf-local answer and is the mistake the `base` accumulator exists to
+  prevent.
+* k = 5 -> 8, which is `s-bytes`, ONE PAST THE LAST BYTE. Kin's doc says past
+  the end answers the length precisely so no sentinel has to exist: a real
+  answer is always 0..n-1. Rust used to answer `Option` and both ports -1,
+  and -1 does not survive an unsigned index.
+
+`asciioffs=0.1.2.3` -- the same function over an all-ASCII tree
+[flat "xy"][inline "z"]. Every offset IS its index, because kin short-circuits
+on `s-ascii` and returns `base + want` without scanning. The fourth entry, k =
+3, is again one past the end and equals the 3-byte length -- which is also
+what k = 3 would be if the string were longer, so the two cases are
+deliberately adjacent: what separates them is that `absent` is returned from
+the descent, not from a leaf.
+
+`at=1:61,2:c3a9,3:e282ac,1:62,1:63` -- for each code point, the byte offset
+from `rope-byte-of-cp` is fed back into `rope-bytes-at`, which re-descends
+BY BYTES (not by code points) and copies the whole code point into a sink.
+Width and bytes together:
+
+  cp 0  byte 0 in l1     lead 61  -> 1 byte   61
+  cp 1  byte 1 in l1     lead C3  -> 2 bytes  c3 a9      -- runs to l1's end
+  cp 2  byte 3 = l2[0]   lead E2  -> 3 bytes  e2 82 ac
+  cp 3  byte 6 = l3[0]   lead 62  -> 1 byte   62         -- the INLINE leaf
+  cp 4  byte 7 = l3[1]   lead 63  -> 1 byte   63
+
+THIS IS THE ROUND TRIP, and it is why the two functions are checked together:
+`rope-byte-of-cp` counts in code points and `rope-bytes-at` counts in bytes,
+so an off-by-one in either shows up as a SPLIT code point -- `2:a9e2` for cp 1
+if the offset were one high, or `3:82ace2` if the second descent used code
+points. Every value here is a complete, valid UTF-8 sequence, which is a
+property a wrong pairing cannot accidentally have.
+
+`past=0` -- an offset past the end puts nothing and answers 0, rather than
+reading off the end of the last leaf.
+
+`steps=37` -- the gas, which the fixture COUNTS rather than enforces, so that
+the three targets must charge the same amount for the same walk. Two charge
+sites, both in `rope-byte-of-cp` (`rope-bytes-at` charges nothing, deliberately
+  -- kin's doc argues that is sound only while depth stays logarithmic):
+
+  descent   `charge-work (i + 1)`, once per node, i = the child index it
+            stopped at, or nkids when it ran off the end
+  leaf scan `charge-bytes at` = at/8 + 1, ONLY on a non-ASCII leaf that is
+            actually scanned -- an ASCII leaf and an out-of-range `want` both
+            return before it
+
+Both trees here are one level deep, so each call is one descent charge plus at
+most one scan charge:
+
+  over t (3 kids):   k=0  i=0 -> 1, scan at=0 -> 1        = 2
+                     k=1  i=0 -> 1, scan at=1 -> 1        = 2
+                     k=2  i=1 -> 2, scan at=0 -> 1        = 3
+                     k=3  i=2 -> 3, l3 is ASCII, no scan  = 3
+                     k=4  i=2 -> 3, ASCII                 = 3
+                     k=5  ran off: nkids=3 -> 4           = 4
+                                                    k=0..5  17
+
+  over the ASCII tree (2 kids):
+                     k=0 -> 1   k=1 -> 1   k=2 -> 2   k=3 -> 3     7
+
+  the `at=` loop repeats `rope-byte-of-cp t k` for k = 0..4:            13
+
+  17 + 7 + 13 = 37.
+
+The ASCII tree contributing only descent charges is the point of that group:
+`s-ascii` is what buys the scan away, so a version that scanned every leaf
+regardless would add four more steps there and would still print the same
+offsets.

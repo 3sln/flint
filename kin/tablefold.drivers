@@ -1455,3 +1455,48 @@ namespace Flint.Rt {
         o.Append("starved=").Append(TableReduceColumn(rt, t, ka, f, Val.Fixnum(0)) == Val.Nil ? 1 : 0);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+fold=250 calls=6 nocol=[no column :z; the columns are :a :b] threw=1 starved=1
+--expect-why
+DERIVED BY HAND from `tablefold.kin` and the fixture's callback, not read off
+a run. The probe's `invoke-roots` computes `acc + 2*v` from the two roots it is
+handed, and column `:a` of the six-row table holds 10..15.
+
+  fold=250
+    100 + 2*(10 + 11 + 12 + 13 + 14 + 15) = 100 + 2*75 = 250.
+
+    THE ARGUMENT ORDER IS INSIDE THIS NUMBER, which is why the callback is
+    deliberately NOT commutative. `invoke-roots` takes its two arguments as a
+    contiguous RUN of shadow-stack roots starting at `acc`, so the accumulator
+    must be the first and the cell the second. Swap them and the fold computes
+    `v + 2*acc` each step -- a completely different number -- and a
+    `f(acc, acc)` or `f(v, v)` slip likewise. `2*` rather than `+` is what
+    makes the weighting visible: a plain sum would be 175 whichever way round
+    the pair arrived.
+
+    It is also the number that says every row was visited exactly once and in
+    range: 5 rows would give 220, 7 would read past the table.
+
+  calls=6
+    One call per row and not one per chunk, and no extra call for the initial
+    value.
+
+  nocol=[no column :z; the columns are :a :b]
+    An absent column is `schema-id` answering the width, and the message says
+    both what was asked for and what exists -- the same wording
+    `table-column` uses, because they are the same failure.
+
+  threw=1
+    With the runtime's thrown flag set, the fold must answer NIL after the
+    first call rather than finish and hand back an accumulator. A FLINT THROW
+    DOES NOT UNWIND THE HOST STACK -- it sets a field -- so a native caller
+    that invokes guest code and then keeps going is running inside an
+    exception that has already happened. `0` here means the `is-thrown` check
+    after the call is missing, and the fold would return a plausible number
+    computed from a callback that had already failed.
+
+  starved=1
+    Budget 3, six rows: `charge-tick` refuses on the third row and the fold
+    answers NIL. It is charged PER ROW, so a long fold stops partway rather
+    than running to the end -- and it answers NIL rather than the partial
+    accumulator, which would be a wrong answer instead of a refused one.

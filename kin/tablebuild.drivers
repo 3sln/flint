@@ -1066,3 +1066,50 @@ namespace Flint.Rt {
         o.Append("starved=").Append(NewTable(rt, s, rv) == Val.Nil ? 1 : 0);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+rows=6|0[10.11.12.13],1[hi.hi.hi.hi];0[14.15],1[hi.hi] cols=6|0[10.11.12.13],1[hi.hi.hi.hi];0[14.15],1[hi.hi] same=1 empty=0| bad=[row 0, column :a holds :int and was given a string][row 0, column :a holds :int and was given a string] starved=1
+--expect-why
+DERIVED BY HAND from `tablebuild.kin`. `show_table` prints
+`count|chunk;chunk`, each chunk as `enc[cells],enc[cells]`, so the LEADING
+DIGIT OF EACH COLUMN IS ITS ENCODING. THE PROBE SETS CHUNK = 4, which is what
+makes six rows cross a boundary in a fixture small enough to read.
+
+  rows=6|0[10.11.12.13],1[hi.hi.hi.hi];0[14.15],1[hi.hi]
+
+    6 rows at CHUNK = 4 is `take` = 4 then `take` = 2 -- TWO CHUNKS, split 4/2,
+    which is the `min(nrows - row, CHUNK)` in the loop. A single chunk of 6
+    would mean the cap was not applied; three chunks would mean `take` was
+    computed per row.
+    Column `:a` is 10..15 in row order, split across the two chunks at exactly
+    13/14.
+    Column `:b` is the same string in every row, so it COLLAPSES IN EACH CHUNK
+    INDEPENDENTLY -- encoding 1 in both -- and still reads back `hi` for every
+    row. Collapsing is per chunk, which is why the second chunk's two rows
+    collapse on their own.
+
+  cols=... same=1
+    THE COLUMN FORM MUST BUILD THE IDENTICAL TABLE. `tables` step 9 has the
+    wire decoder building this way rather than making a map per row only to
+    take it apart again, so the two shapes are the same loop and must agree
+    down to the chunk split and the encodings. `same=0` would mean the two
+    entry points disagree about shape while both "working".
+
+  empty=0|
+    No rows: the `while` never runs, so there are NO chunks at all and the
+    count is 0. An empty table with one empty chunk would print `0|0[],0[]`,
+    and every later chunk index would be one out.
+
+  bad=[...][...]
+    BOTH ways in refuse the same value with the same message: `:a` holds
+    `:int` and was given a string, at row 0. The two are byte-identical on
+    purpose -- a decoder that skipped the check, or that reported a different
+    row number because it counts within the chunk rather than within the
+    table, would show up as a difference between the two brackets. Four facts
+    in each: the row, the column, what it holds, what arrived.
+
+  starved=1
+    With one unit of budget, the FIRST per-chunk check refuses and the answer
+    is NIL. The charge is per CHUNK and not per row -- the source's doc says
+    charging `rows * cols` up front once ran 637 379 steps past an exhausted
+    budget -- so the overshoot here is bounded at one chunk's work, and the
+    table is refused rather than half-built.

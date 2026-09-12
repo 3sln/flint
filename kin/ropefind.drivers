@@ -844,3 +844,127 @@ namespace Flint.Rt {
         rt.limit = 0;
         System.Console.WriteLine(o.ToString());
     }
+--expect
+shape=0,0,0 cab=2,2,2 absent=-,- span=2 resume=1 from=3,3,-,- empty=0,2,6 long=- utf8=2,1 ropeneedle=0 needleflat=1 flattens=1 gas=6,6 starved=-
+--expect-why
+DERIVED BY HAND from `ropefind.kin`, counting the offsets off each fixture
+haystack byte by byte and code point by code point. Nothing was read off a
+run. Every index below is a CODE-POINT index, which is what `s-index-of`
+returns; `-` is NIL.
+
+THE HAYSTACKS. Four spellings of the same six bytes "abcabc", so that any
+field whose three numbers differ is a SHAPE dependence and nothing else:
+
+  hf  one flat leaf          [abcabc]
+  h3  three flat leaves      [a][bc][abc]
+  hi  a flat, an INLINE, a flat   [a][bca][bc]    -- the inline has no address
+  hb  three flat leaves      [ab][ca][bc]         -- used for `span`
+
+`shape=0,0,0` -- "abc" begins at 0 in all three. `cab=2,2,2` -- "cab" is the
+bytes at 2, 3, 4. Counted off "abcabc": a0 b1 c2 a3 b4 c5, so c-a-b starts at
+2. The three answers must be IDENTICAL: `hi`'s match at 2 begins inside an
+inline leaf whose `p0 + nn` = 1 + 3 exceeds its three bytes, so it takes
+`match-at`'s cursor path rather than the `run-eq` memcmp, and kin's own note
+says an inline leaf has no address. Two spellings of the same string that
+answered differently would be the whole bug this file exists to prevent.
+
+`absent=-,-` -- "zz" is not in "abcabc". NIL, not a number: kin's doc says
+there is no -1 to return because `I32` is unsigned, so a search that tried to
+signal failure numerically would print something like 4294967295 here.
+
+`span=2` -- over [ab][ca][bc], "cab" is bytes 2, 3, 4, which sit in leaf 2
+(bytes 2-3) and leaf 3 (byte 4). The match therefore crosses a leaf boundary
+mid-needle, which is exactly `match-at`'s duplicate-cursor path.
+
+`resume=1` -- haystack [a][ab] = "aab", needle "ab". The FIRST 'a' starts a
+match that compares 'a' (ok), crosses into the next leaf, compares 'a' against
+'b' and FAILS. The search must then resume at the very next byte, find 'a' at
+byte 1 and match "ab" there: the answer is 1. This is what `walk-dup` is for
+  -- the failed match moved a COPY of the cursor into leaf 2, and if it had
+moved the outer walk instead, byte 1 would never be examined and the answer
+would be `-`. 1 and `-` are the two candidate answers, and only one of them
+can be produced by a correct resume.
+
+`from=3,3,-,-` over h3 = [a][bc][abc], needle "abc":
+
+  from=1  the next occurrence at code point >= 1 is 3
+  from=3  exactly AT an occurrence, so 3 -- `>=`, not `>`
+  from=4  nothing left, so `-`
+  from=99 past the end, so `-`
+
+THE FIRST IS THE ONE KIN'S COMMENT NAMES. Seeking to `from` is a descent:
+`rope-byte-of-cp h3 1` = 1, and the walk then skips leaves WHOLLY before that
+offset by length. Leaf [a] has base 0 and length 1, so base + n = 1 <= 1 and it
+is skipped without a byte being read. Leaf [bc] has base 1, and `base <=
+startbyte` (1 <= 1) fires, setting p = startbyte - base = 0 and cp = 1. With
+`<` there instead of `<=` the leaf that begins exactly at the seek point gets
+no `cp`, the walk believes it is at code point 0, and the answer comes out 2
+instead of 3 -- the exact off-by-one the comment records. `from=3` is the
+other side of the same test: leaf [bc] is skipped by length (base 1 + n 2 = 3
+<= 3), leaf [abc] takes the jump with p = 0, cp = 3.
+
+`empty=0,2,6` -- an EMPTY needle is found WHERE THE SEARCH STARTS, clamped to
+the code-point count. h3 holds 6 code points, so from 0 gives 0, from 2 gives
+2, and from 99 gives 6 -- NOT `-`, and not 99. This is Clojure's
+`(str/index-of "abc" "" 100)` = 3, and kin's comment records that the three
+runtimes gave three different answers here depending on whether the haystack
+was ASCII.
+
+`long=-` -- a nine-byte needle in a six-byte haystack. The cursor path runs
+off the end of the tree: `walk-next` answers nil, and `match-at` must treat
+that as a FAILED match rather than a finished one. An implementation that fell
+out of the loop with `ok` still true would report a match at 0.
+
+`utf8=2,1` -- haystack "a" + U+03B2 + "c" = bytes 61 CE B2 63, SPLIT AS
+[61 CE][B2 63] so a continuation byte is the first byte of a leaf.
+
+  "c"    is byte 3 but CODE POINT 2 -- a, beta, c. Answering 3 is the
+         byte offset, which is what a search that never converted would say.
+  "beta" is code point 1.
+
+The counting rule is kin's: a byte is a code-point start unless
+`b & 0xC0 == 0x80`. Walking it: 61 starts (cp 0), CE starts (cp 1), B2 is a
+continuation and starts nothing, 63 starts (cp 2). This haystack is NOT ASCII,
+so the probe takes the counting branch rather than the `cp += hit - p`
+shortcut -- both branches exist in kin and only this fixture exercises the
+slow one.
+
+`ropeneedle=0 needleflat=1 flattens=1` IS THE CLAIM THE WHOLE FILE IS ABOUT.
+A ROPE needle is flattened -- it is bounded by the pattern -- so the delta
+across that one call is exactly 1. And the running total over EVERY call above
+is also 1: every haystack in this probe was a rope, and not one of them was
+ever materialised. `flattens=2` would mean a haystack went through
+`s-flatten`, which is the 897-steps-versus-21 regression named in the header.
+The needle still has to be FOUND after flattening, hence `ropeneedle=0` beside
+it -- flattening the wrong thing and flattening nothing are both visible here.
+
+`gas=6,6` -- THE SAME BYTES IN TWO SHAPES MUST COST THE SAME. Ticks charge 0
+(kin passes 0 to `charge-tick`; the tick only tests the limit), so every unit
+is a byte actually looked at. Searching "abcabc" for "cab":
+
+  hf, one leaf:   leaf-find jumps the run "ab" to the 'c'        2
+                  the byte at p is examined                      1
+                  match-at: p0+nn = 5 <= 6, so the memcmp path
+                  charges the needle's length                    3
+                                                                 = 6
+  h3, [a][bc][abc]:
+                  leaf [a]: no 'c', run of 1 charged             1
+                  leaf [bc]: 'c' found at 1, run of 1 charged    1
+                  the byte at p examined                         1
+                  match-at: 1 + 3 > 2, so the CURSOR path, one
+                  charge per byte compared, 3 compared, 3 matched 3
+                                                                 = 6
+
+Both 6, by two different routes -- one memcmp, one byte-at-a-time across two
+leaf boundaries. Kin's own comment records the number that a per-LEAF tick
+produced instead: `gas=4,5`, unequal, which is the shape-dependence this
+field refuses.
+
+`starved=-` -- and this one is PINNED IN MEANING but weak as a check, which
+is worth saying rather than dressing up. With `limit = 3` the scan over hf for
+"zz" answers NIL. But "zz" is genuinely absent, so `-` is also the answer with
+no limit at all (see `absent`), and the fixture's `charge-tick` only tests the
+limit when `i & 63 == 0` -- this search ticks twice, so the limit is never
+re-examined. The value is correct and derived; what it demonstrates is that a
+limit does not make the search CRASH or report a spurious hit, not that it cut
+the scan short.

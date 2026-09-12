@@ -984,3 +984,73 @@ namespace Flint.Rt {
          .Append(" msg=").Append(semi < 0 ? THROWN : THROWN.Substring(0, semi));
         System.Console.WriteLine(o.ToString());
     }
+--expect
+carried=1 fill=44 count=300 moved=256.299 afterfill=2/0/512 handedenc=1 persist=3/513/1 values=5.9999 dead=1 msg=conj! on a transient table that persistent! has already taken
+--expect-why
+DERIVED BY HAND from `tabletrans.kin` over a 300-row table -- one FULL chunk of
+256 and a partial one of 44 -- with column 0 holding its own absolute row
+number and column 1 holding 7 in every row. So a chunk that moved to the wrong
+place prints a wrong number rather than failing.
+
+TABLE-TRANSIENT splits the count: partial = 300 & 255 = 44, full = 300 - 44 =
+256.
+
+  carried=1  THE PARTIAL CHUNK IS DROPPED from the list -- its rows are copied
+             into the open chunk and the vector is popped -- so one of the two
+             chunks is carried by reference. `carried=2` would mean the
+             partial chunk was left in the list as well as copied out, and its
+             44 rows would appear twice.
+  fill=44    the open chunk's CH_ROWS is the partial count.
+  count=300  the transient holds every row the table did.
+
+  moved=256.299  the 44 rows read back through the OPEN chunk: the first is
+             absolute row 256 and row 43 is absolute row 299. These are the
+             numbers that say the partial chunk was read from index
+             `full >> CHUNK_SHIFT` = 1 and not 0 -- reading chunk 0 would
+             print `0.43`, which looks just as plausible.
+
+  (The source's note about the remainder being taken FIRST is about Rust:
+  `count & -CHUNK` on an unsigned constant is a compile-time overflow there.
+  The arithmetic above is the same either way.)
+
+CONJ, 212 times. 44 + 212 = 256 exactly, so the LAST of them fills the open
+chunk:
+
+  afterfill=2/0/512
+    2   the filled chunk is handed over, so the carried list grows to 2
+    0   and a FRESH open chunk takes its place, with nothing written
+    512 300 + 212
+    `1/256/512` would be an open chunk left full and never handed over -- the
+    next conj would write past its end.
+
+  handedenc=1
+    THE HANDED-OVER CHUNK IS COLLAPSED, NOT COPIED. Column 1 is 7 in all 256
+    rows (44 moved plus 212 conjed), so its encoding is ENC_CONST. `0` would
+    mean the chunk went into the list without the collapse pass -- 256 slots
+    holding one value. The file's header is explicit that it must not be
+    SEALED here either: copying at this point made the transient allocate more
+    than the bulk path it exists to beat.
+
+PERSISTENT, after one more row (a = 9999):
+
+  persist=3/513/1
+    3   two full chunks plus the sealed remainder
+    513 512 + 1
+    1   the last chunk is sealed to EXACTLY the rows written, not to CHUNK.
+        `256` here would be a table whose final chunk claims 255 rows that
+        were never written.
+
+  values=5.9999
+    Row 5 still reads 5 out of the chunk that was carried by REFERENCE and
+    never rewritten, and the final row reads 9999 out of the freshly sealed
+    one. Between them they say the carried chunk, the moved rows and the
+    conjed rows all survived. (The sealed one-row column collapses to
+    ENC_CONST on the way out, which is why 9999 comes back through the
+    constant path.)
+
+  dead=1 and the message names the OPERATION:
+    "conj! on a transient table that persistent! has already taken"
+    A transient is used once, so a second operation is a mistake about
+    ownership; saying `conj!` rather than only "already taken" is what tells
+    the caller which line to look at. `dead=0` would be a transient still
+    writing into a table somebody else now owns.

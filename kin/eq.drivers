@@ -70,3 +70,38 @@ fn main() {
         for (long h = 1; h <= 13; h++) o.Append(Category(rt, 0x100 | h));
         Console.WriteLine(o.ToString());
     }
+--expect
+0 1111111122230
+--expect-why
+DERIVED FROM THE `case` IN `eq.kin` AGAINST THE FIXTURE'S TAG NUMBERS. The
+probe's `ty` is the identity on the heap address's low byte, so `Value(0x100|h)`
+has type tag `h`, and the tags are numbered in the head:
+
+  1 CONS  2 EMPTY_LIST  3 LAZYSEQ  4 VECSEQ  5 STRSEQ  6 RANGE
+  7 VEC   8 MAPENTRY    9 ARRAYMAP 10 HASHMAP 11 TABLEREF 12 SET
+
+and the categories SCALAR 0, SEQUENTIAL 1, MAP 2, SET 3.
+
+  Value(7)   not on the heap          -> 0   (the leading field)
+  tags 1..8  the SEQUENTIAL list      -> 11111111
+  tags 9..11 the MAP list             -> 222
+  tag 12     SET                      -> 3
+  tag 13     named by no arm          -> 0   (the `:else`)
+
+THE TWO ZEROS ARE THE LOAD-BEARING FIELDS, at opposite ends of the line. The
+leading one says a non-heap value never reaches the tag read at all; the
+trailing one says an UNKNOWN tag falls to SCALAR rather than to whichever arm
+happens to be last. Everything between them is a membership list, and this is
+a codebase whose first rule is that two tables agreeing on the common cases
+are indistinguishable from one table until an uncommon case arrives -- so the
+whole line is that list, written down where a change to `category` has to
+change it.
+
+`11` AT POSITION 8 IS `TY_MAPENTRY`, and it is SEQUENTIAL, not MAP. A map
+entry is a pair, and `=` compares it with a two-element vector.
+
+`2` AT POSITION 11 IS `TY_TABLEREF`, and that is the one this file exists to
+say: A ROW REF IS IN THE MAP CATEGORY, because it is `=` to a map with the
+same entries (`DECISIONS.md#tables`). Nothing else in the tree states it; if
+it moved to SCALAR, row refs would silently stop comparing equal to maps and
+this field is what would notice.

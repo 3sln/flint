@@ -320,3 +320,60 @@ fn main() {
         o.Append("refused=").Append(refused);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+div=!|ArithmeticException/integer overflow| quot=!|ArithmeticException/integer overflow| rem=i0|| neg=!|ArithmeticException/integer overflow| z=!|ArithmeticException/Divide by zero| zq=!|ArithmeticException/Divide by zero| zr=!|ArithmeticException/Divide by zero| exact=i2 inexact=d3.5 q=i3/i-3/i-3/i3 r=i1/i-1/i1/i-1 n=i-5/i-7 f=d0.5/d127.5 refused=1111
+--expect-why
+DERIVED FROM CLOJURE'S RULES AND THIS FILE'S OWN HEADER, not from a run. The
+header records what each runtime did BEFORE kin owned this code -- native
+panicked, the JVM silently answered MIN, the CLR raised a host exception -- so
+three targets agreeing is exactly the state this file was written to leave
+behind, and says nothing on its own about the answer being right.
+
+THE EDGE, MIN over -1.
+
+  div  -- guarded before the remainder, so: throw, not a panic and not MIN
+  quot -- same guard, same throw
+  rem  -- `MIN % -1` IS 0 as a value; the guard answers 0 DIRECTLY rather than
+          computing it, so this one is `i0` with NO exception. It is the field
+          that separates "guarded correctly" from "guarded by throwing at
+          everything", and a source that copied the `div` arm into `rem` would
+          print `!` with a message here.
+  neg  -- MIN has no positive counterpart: throw.
+
+Clojure raises `ArithmeticException` "integer overflow" for all three, which
+is the text the header commits to.
+
+DIVIDE BY ZERO IS A DIFFERENT REFUSAL and is asked FIRST -- a question about
+the divisor, not about the width of the answer -- so all three of `z`, `zq`,
+`zr` say "Divide by zero" and not "integer overflow".
+
+ORDINARY DIVISION. `(/ 6 3)` divides evenly, so an INTEGER 2; `(/ 7 2)` does
+not, so a double 3.5. (flint yields a double where Clojure yields a Ratio;
+`doc/goals` records that divergence.)
+
+`quot` TRUNCATES TOWARD ZERO and `rem` TAKES THE DIVIDEND'S SIGN -- Clojure's
+rule, not the modulo one. Checked in real Clojure 1.12:
+
+  (quot 7 2)=3  (quot -7 2)=-3  (quot 7 -2)=-3  (quot -7 -2)=3
+  (rem  7 2)=1  (rem  -7 2)=-1  (rem  7 -2)=1   (rem  -7 -2)=-1
+
+`r=i1/i-1/i1/i-1` is the discriminating one: `mod` would give 1/1/-1/-1, so
+these four fields tell `rem` from `mod` -- which no pair of equal outputs
+could.
+
+NEGATION: 5 negates to -5, and `big(2)` is boxes[2] = 7, so -7 -- the BIGINT
+path reached through `is-int`/`i64-of` rather than `isFixnum`, which is the
+shape both ports used to get wrong.
+
+`f=d0.5/d127.5`. THE SECOND IS AN ARTEFACT OF THE FIXTURE, not of the code,
+and it is written down here so nobody reads it as an answer about negation.
+The probe's toy double is an 8-BIT payload holding `d*2`, so `of-double(-0.5)`
+stores `(-1) & 0xFF` = 255 and reads back 255/2 = 127.5. What the field
+actually checks is that `num-neg` took the DOUBLE arm and multiplied by -1.0
+rather than subtracting from zero: `0.0 - 0.0` is `+0.0` under IEEE 754, and
+negating by subtraction loses the sign of zero (the header records that
+`(- 0.0)` answered 0.0 where Clojure answers -0.0). A subtract-based negation
+would store `(0.5*2)=1` -> `d0.5` here, not `d127.5`.
+
+`refused=1111`: a non-number is refused by ALL FOUR, including unary `neg`,
+which takes neither the int nor the double arm. `1111` and not `1110`.

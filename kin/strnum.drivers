@@ -219,3 +219,82 @@ fn main() {
         if (digits.Length > 1) m.Append('.').Append(digits.Substring(1));
         return m + "e" + exp;
     }
+--expect
+i42 i-42 i7 d1.5e0 d-1.5e0 d1e3 d1e3 i31 i31 nil dInf d-Inf dNaN nil nil nil nil nil nil d1e20 i5 nil nil i9223372036854775807 i-9223372036854775808 d9.223372036854776e18 i0 i0 d0e0 d-0e0 d5e-1 d5e0 nil d1e3 d1e-3 nil nil
+--expect-why
+DERIVED BY READING `parse-run` AGAINST EACH TOKEN, in order. This is the file
+where "three hand-written parsers did not agree about what a number even
+looks like", and its header lists six tokens on which native and the ports
+gave DIFFERENT answers. Agreement is now the state that was engineered; only
+the values say which of the two old answers won, and for several of these
+neither did.
+
+THE SIX FROM THE HEADER, decided:
+
+  "0x1f"                  i31        native's answer; the ports said nil
+  "##Inf" "##NaN"         dInf dNaN  native's; the ports said nil
+  "99999999999999999999"  d1e20      native's -- too wide for 64 bits, so it
+                                     falls through to the DECIMAL arm rather
+                                     than failing
+  "Infinity" "NaN"        nil        NEITHER old answer survives unchanged in
+                                     spirit: native accepted these because its
+                                     last resort was Rust's `f64::from_str`,
+                                     which also takes `inf`, `+inf` and
+                                     `infinity` in any case. flint does not
+                                     spell them that way, so the shape is
+                                     validated here and the host never gets
+                                     asked. `nil` is a DECISION, not a
+                                     regression to the ports' behaviour.
+
+THE INTEGER ARM ACCUMULATES DOWNWARD, and these three fields are why:
+
+  "9223372036854775807"   i9223372036854775807    fits
+  "-9223372036854775808"  i-9223372036854775808   the most negative integer,
+                                                  reachable ONLY on the
+                                                  negative side -- building
+                                                  the magnitude first cannot
+                                                  represent it and wraps
+                                                  silently on two of three
+                                                  hosts
+  "9223372036854775808"   d9.223372036854776e18   one past the range, so the
+                                                  guard `neg or acc != MIN`
+                                                  lets it fall to the decimal
+                                                  arm and it becomes a double
+
+THE THREE `##` NAMES ARE MATCHED EXACTLY, not by prefix -- "##" (len 2, never
+enters the block) and "##Infx" (len 6 but position 2 is not '-') are both nil.
+"##-Inf" is the len-6 form and is d-Inf. Three nils and three values from one
+five-line block is what makes it a check.
+
+HEX TAKES NO SIGN: "-0x10" is nil, because the hex arm demands `p == lo` and
+the sign has already moved `p`. Native reached hex by stripping a `0x` prefix
+from the whole token, so it was not a number there either; kept deliberately,
+since a negative hex literal is not something flint spells. "0X1f" is i31 --
+both cases of the marker.
+
+TRAILING CHARACTERS END IT: "1.5.2", "5N", "1.5M" all reach the final
+`i != hi` with characters unread. `5N` and `1.5M` are Clojure's bigint and
+bigdec suffixes, so this says flint does not read them.
+
+WHITESPACE IS ASCII-ONLY AND TRIMMED: " 7 " is i7, "" and "  " are nil (the
+trim collapses them to an empty run). Native trimmed with Rust's `trim`, which
+strips every Unicode space, so a non-breaking space before a number made it a
+number there and nothing anywhere else.
+
+EXPONENT AND POINT EDGES:
+  "1e3" "1E3" "1e+3"  all d1e3     -- both cases, and an explicit '+'
+  "1e-3"              d1e-3
+  "1e"                nil          -- an exponent marker with no digits
+  ".5"                d5e-1        -- no leading digit
+  "5."                d5e0         -- no trailing digit
+  "+5"                i5           -- a leading '+' the integer arm consumes
+  "0" "-0"            i0 i0        -- integers, so no signed zero
+  "0.0" "-0.0"        d0e0 d-0e0   -- doubles, so the sign of zero SURVIVES
+
+The last pair is the discriminating one for the integer/decimal split: "-0"
+and "-0.0" differ in one character and must come out in different TIERS, and
+`d-0e0` is the field that shows the negative zero was not normalised away.
+
+FORMATTING: doubles print in Rust's `{:e}` spelling, which the Java and C#
+drivers reimplement on purpose so the comparison is about the parse and not
+about how each host prints a double.

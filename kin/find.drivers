@@ -225,3 +225,91 @@ namespace Flint.Rt {
          .Append(" roots=").Append(rt.roots.Count);
         Console.WriteLine(o.ToString());
     }
+--expect
+101,65534,65534,901,301,65534,65534,| 101,901,301, eqs=11 gas=6 maxroots=3 roots=0
+--expect-why
+DERIVED by walking `find.kin` over the driver's hand-laid trie. NOT_FOUND is
+0xFFFE = 65534, which is the number that appears three times below.
+
+THE TRIE, from the fixture:
+
+  node 1  bitmap: datamap 2 (bit 1), nodemap 4 (bit 2)
+          pair 0 = 100 -> 101         sub-node 0 = 40
+  node 40 bitmap: datamap 1 (bit 0), nodemap 0
+          pair 0 = 900 -> 901
+  node 80 collision: hash 0x77, count 2
+          200 -> 201, 300 -> 301
+
+and `eq-may-alloc` is mocked as `v >= 900`, which is what routes a lookup to
+the rooted walk or the scalar one.
+
+THE SEVEN `node-find` CALLS:
+
+  (1, 0x01, 100) -> 101     bitpos(0x01,0) = 1<<1 = 2, which IS in datamap 2.
+                            index-of(2, 2) = popcount(2 & 1) = 0, so pair 0,
+                            whose key is 100. Found. Scalar walk: 100 < 900.
+  (1, 0x01, 999) -> 65534   same slot, different key -- and note 999 >= 900, so
+                            despite the driver's comment saying "scalar key"
+                            this takes the ROOTED walk. It is a miss through
+                            `node-find`'s datamap arm, which is worth having.
+  (1, 0x03, 100) -> 65534   bitpos(0x03,0) = 1<<3 = 8, in NEITHER map
+                            (datamap 2, nodemap 4), so the walk stops without
+                            comparing anything. The `eqs` total below is what
+                            proves it compared nothing.
+  (1, 0x02, 900) -> 901     THE DESCENT. bit = 1<<2 = 4, absent from datamap 2,
+                            present in nodemap 4. index-of(4,4) = 0, so
+                            sub-node 0 = node 40, shift becomes 5. There
+                            mask(0x02, 5) = 0, bit 1, present in datamap 1,
+                            pair 0 is 900 -> 901. Rooted walk (900 >= 900), so
+                            this is also the `set-r` path: the current node is
+                            updated IN THE ROOT rather than in a host local.
+  (80, 0x77, 300) -> 301    collision node, hash matches, second pair.
+  (80, 0x77, 500) -> 65534  collision node, hash matches, scans BOTH pairs and
+                            finds neither.
+  (80, 0x11, 300) -> 65534  collision node whose hash does NOT match at this
+                            depth: refused before the scan. Its contribution
+                            to `gas` is zero, which is checked below.
+
+THE THREE `node-find-scalar` CALLS REPEAT three of those and must give the
+SAME answers -- `101,901,301`. That is the point of printing them: the fast
+path is an OPTIMISATION, not a shortcut, and the second of the three descends
+through the sub-node with no rooting at all. A scalar walk that disagreed with
+the rooted one on any of these would be a `get` whose answer depended on the
+key's representation.
+
+  eqs=11    every `val-eq` the two walks perform, counted. Derived call by
+            call: 1 + 1 + 0 + 1 + 2 + 2 + 0 + 1 + 1 + 2. The two ZEROS are the
+            content -- the bit-not-in-either-map case and the hash-mismatch
+            case each answer NOT_FOUND without comparing a single key, so a
+            source that scanned first and tested later would push this number
+            up without changing any answer above.
+
+  gas=6     `charge-work 1` PER COLLISION ENTRY EXAMINED, and only there.
+            Three collision scans reach the loop -- (80,0x77,300) stops after
+            2, (80,0x77,500) walks all 2, and the scalar repeat walks 2 -- so
+            2 + 2 + 2 = 6. The hash-mismatch call contributes 0.
+
+            THIS NUMBER IS THE HASH-FLOODING FIX, which the header measures:
+            without the charge a collision scan is billed a flat 16 steps
+            whatever its width, and flint's base-31 string hash lets an
+            attacker choose that width (2^k strings sharing one hash). A
+            source that dropped either `charge-work` would still print every
+            answer above correctly and would print `gas=4`, `gas=2` or
+            `gas=0` here. Six is the only value that says both loops charge.
+
+            It is also NOT equal to `eqs`: 6 against 11. The five uncharged
+            comparisons are the bitmap-node ones, which are bounded by trie
+            depth and are not attacker-widened. A source that charged on every
+            comparison would print gas=11, which is wrong in the other
+            direction.
+
+  maxroots=3  the deepest the root stack ever got. `node-find` pushes the node
+              and the key (2), and then ONE MORE for the key being compared
+              (3), popping it after each comparison. 3 and not 4 says the
+              per-comparison push is popped INSIDE the loop rather than
+              accumulating -- a collision node of n entries must not need n
+              roots. 3 and not 2 says the comparison key is rooted at all,
+              which is the reason `val-eq` on a compound key is safe here.
+
+  roots=0     and everything is popped at the end of every call, including the
+              early `break` paths and the two misses.

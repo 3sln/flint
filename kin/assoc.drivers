@@ -388,3 +388,94 @@ namespace Flint.Rt {
         ProbeCollAssoc(o);
         Console.WriteLine(o.ToString());
     }
+--expect
+209:1 1:0 218:0 236:1 254:1 263:1 log=BEVMIENE roots=0 bump=272 | 209:1 218:0 227:0 236:1 85,3,100,101,200,201,300,301,0,0, oom=65535 roots=0 log=BEVVCx
+--expect-why
+DERIVED by walking `assoc.kin` over the two fixtures. The two probes build
+their OWN `Rt`, so each starts from bump 200 with an empty log -- which is why
+209 and 236 appear on both sides of the bar and are DIFFERENT objects.
+
+Every mock constructor writes a letter and takes a size, so both the ADDRESS
+and the letter are derivable: `obj(tag, n)` answers the bump and advances it by
+n + 1. All the bitmap-node mocks ask for 8 (stride 9); `cn-new` asks for
+`2*pairs + 2`.
+
+  B `bn-new`   E `bn-copy-insert-entry`   V a value-replacing copy
+  M `merge-two`   I `bn-inline-to-node`   N `bn-copy-set-node`
+  C `cn-new`   x `cn-new` refusing
+
+FIRST PROBE -- `node-assoc`, six calls over one node.
+Node 1 has datamap 2 (bit for mask(0x01,0) = 1) with the entry 1000 -> 1001,
+and nodemap 4 (bit for mask(0x02,0) = 2) pointing at the empty node 50. Node
+100 is a COLLISION node (0xDEAD in slot 0).
+
+  209:1   a COLLISION node handed straight over. `coll-assoc` finds its hash
+          (0xDEAD) differs from 0x01, wraps it in a fresh bitmap node (B at
+          200) and hands it BACK to `node-assoc`, which finds an empty slot
+          and inserts (E at 209). Two objects, so 209 and not 200 is the
+          answer -- the wrapper is not what the caller gets. This one call is
+          the mutual recursion the two functions were merged into one source
+          for, running for real in both directions.
+  1:0     the bit is in the datamap, the key MATCHES, and the value is `==`
+          too: the node is handed back UNCHANGED (address 1, not a copy) and
+          `champ-added` is false. Nothing is allocated, which the log
+          confirms by not growing.
+  218:0   same slot, same key, DIFFERENT value: a value-replacing copy (V),
+          and `champ-added` still false -- replacing a value does not move the
+          map's count. The pairing `218:0` is the content; `218:1` would
+          inflate the count of every map on every overwrite.
+  236:1   same slot, DIFFERENT key. The two entries are pushed down into a
+          sub-node: `merge-two` (M at 227) then `bn-inline-to-node` (I at
+          236), and `champ-added` is true. Note the answer is the I and not
+          the M -- the caller gets the new parent, not the sub-node.
+  254:1   the bit is in the NODEMAP: recurse into node 50 at shift 5, which is
+          empty, so the inner call inserts (E at 245) and the outer copies the
+          new child in (N at 254). Two objects again, and the answer is the
+          outer one. `champ-added` comes from the inner insert.
+  263:1   the bit is in NEITHER map: a plain insert (E at 263).
+
+  log=BEVMIENE   the eight allocations in order, one letter per call except
+                 the two-object cases. This is what says each call took the
+                 arm it should: V for the replace, M+I for the collision-down,
+                 E+N for the descent. A source that copied where it should
+                 have handed the node back would show an extra letter here
+                 even when the address happened to look plausible.
+  roots=0        every call pops to its mark, including the nested ones.
+  bump=272       200 plus eight objects of stride 9. Not printed for its own
+                 sake: it is what makes the addresses above derived rather
+                 than pinned.
+
+SECOND PROBE -- `coll-assoc`, a collision node at 1 with hash 0x55 and the
+pairs (100 -> 101) and (200 -> 201).
+
+  209:1   the hash DIFFERS at this depth (0x99 against 0x55). Wrap (B at 200),
+          hand to `node-assoc`, which inserts into the empty wrapper (E at
+          209). The other direction of the same mutual recursion.
+  218:0   the key is already here at the LAST index, so the scan runs to the
+          end and still finds it: `cn-index-of` answers 1, which is not `cnt`,
+          so the value is replaced (V) and `champ-added` is false.
+  227:0   the key is already here at the FIRST index, so the scan breaks
+          early. Same arm, different scan length -- both are here because the
+          sentinel only works if "found at the last index" and "not found" are
+          distinguishable, and `cnt` = 2 is exactly one past index 1.
+  236:1   a NEW key: `cn-index-of` returns `cnt` = 2, so a fresh node one pair
+          longer (C at 236) and `champ-added` true.
+
+  85,3,100,101,200,201,300,301,0,0,
+          the fresh node's ten words, and this is where the copy is checked.
+          85 = 0x55 is the hash CARRIED OVER; 3 is the new pair count; then
+          the two old pairs in their original order, then the new pair
+          APPENDED at the end. A copy loop that started at CN_BASE + 2 would
+          print 0,0 where 100,101 are; one that wrote the new pair at index 0
+          would print 300,301 first. The last two zeros are past the node's
+          eight words -- the fixture allocated exactly `2*3 + 2`, so nothing
+          was written beyond it.
+
+  oom=65535     with `cn-new` refusing, `coll-assoc` answers NIL (0xFFFF).
+  roots=0       AND unwinds to where it started -- the refusal path runs
+                `pop-to gbase` before returning, having already pushed four.
+  log=BEVVCx    the second probe's own trace: wrap, insert, two replaces, the
+                grown node, and the refused allocation. The `x` is the mock
+                recording that `cn-new` was ASKED and said no, so the NIL
+                above is a real refusal rather than a path that never
+                allocated.

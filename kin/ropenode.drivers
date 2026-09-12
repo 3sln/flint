@@ -349,3 +349,72 @@ namespace Flint.Rt {
          .Append(" roots=").Append(rt.Mark() == before + 1 ? 1 : 0).Append(' ');
         System.Console.WriteLine(o.ToString());
     }
+--expect
+node=8,8,1,1 mixed=7,5,0 lift=4,2,0 f0=0,0 f1=2,2 f2=4,4 f7=14,14 same=1 starved=1 roots=1
+--expect-why
+DERIVED BY HAND from `ropenode.kin` against the three hand-laid leaves the
+probe builds. Nothing was read off a run.
+
+THE FIXTURE'S LEAVES, each carrying its own three measurements:
+
+  a = leaf(3 bytes, 3 code points, ASCII)
+  b = leaf(5 bytes, 5 code points, ASCII)
+  u = leaf(4 bytes, 2 code points, NOT ASCII)   -- two 2-byte sequences
+
+`u` is the one that earns its keep: its byte count and its code-point count
+DIFFER, so a fold that summed the wrong measurement into the wrong slot shows
+up as a number rather than as nothing.
+
+`node=8,8,1,1` -- `rope-node` over [a, b]. Bytes 3+5 = 8, code points
+3+5 = 8, and ASCII because both children are. The fourth digit is RP_FLAT and
+RP_HASH both reading NIL: kin writes them explicitly, and the comment says why
+  -- both are computed on demand, so a fresh node must start with neither
+cached. The fixture's allocator NIL-fills, so this digit cannot tell a written
+NIL from an unwritten slot; what it can tell is a constructor that pre-filled
+either with something else.
+
+`mixed=7,5,0` -- `rope-node` over [a, u]. Bytes 3+4 = 7, code points 3+2 = 5,
+and the ASCII bit is 0. THE TWO NUMBERS ARE DIFFERENT ON PURPOSE: 7 and 5
+cannot be confused for each other, so this field pins that bytes and code
+points went into the slots kin names and not into each other's. The bit is
+the `and` fold kin's doc calls out -- ONE non-ASCII child makes the node
+non-ASCII, so an `or` (or a bit dropped on the way into RP_CPS) prints 1.
+
+That bit also has to survive the packing. RP_CPS holds `(cps << 1) | ascii`,
+so `mixed` stores (5 << 1) | 0 = 10 and `node` stores (8 << 1) | 1 = 17;
+the probe reads them back through `s-count` (>> 1) and `s-ascii` (& 1). A
+shift in one direction only -- packed but not unpacked, or the reverse --
+would make `mixed` print a count of 10 or 2 rather than 5.
+
+`lift=4,2,0` -- `rope-lift u 3`: three single-child nodes stacked on the
+non-ASCII leaf. Every measurement must come through UNCHANGED, because a
+one-child node measures exactly its one child: 4 bytes, 2 code points, and
+still not ASCII three levels up. The ASCII bit is the fragile one here -- it
+is re-derived at each level by `and`-ing over one child, so a fold whose
+accumulator started at `false` would give 0 for every node including the
+all-ASCII ones, and one that started at `true` and forgot the child would give
+1 here.
+
+THE FOUR FOLDS, over leaves of (2 bytes, 2 code points) with FANOUT = 3:
+
+  f0=0,0   n = 0 takes kin's first guard and answers `s-empty` -- a STRING,
+           not nil, so the caller never has to test. 0 bytes, 0 code points.
+  f1=2,2   n = 1 takes the second guard and answers the piece itself.
+  f2=4,4   one node over two leaves.
+  f7=14,14 seven leaves, 7 x 2 = 14 bytes. With FANOUT 3 the shape is
+           7 -> 3 (groups of 3, 3, 1) -> 1, two levels, and the total has to
+           survive both. A fold that dropped the short last group would print
+           12, and one that looped on the wrong `level` would not terminate.
+
+`same=1` -- `rope-from-roots` of ONE piece answers that piece by identity, not
+a one-child node wrapped around it. That is the `(if (== n 1) (return (r rt
+base)))` guard; without it every single-piece concat would grow a level.
+
+`starved=1 roots=1` -- with the allocator refusing, `rope-node` answers NIL
+rather than a node at address 0. `roots=1` is the other half of kin's
+contract, and the reason it is checked here: the doc says "THE CALLER PUSHES
+AND THE CALLER POPS", so `rope-node` must leave the shadow stack exactly as it
+found it EVEN ON THE FAILURE PATH -- the caller's one pushed value still
+there, `mark() == before + 1`. A bail that popped to its own idea of a base
+would truncate the caller's roots, which is worse than the allocation failure
+it was reacting to.

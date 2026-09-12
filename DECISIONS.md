@@ -5323,3 +5323,152 @@ the shipped binary. The native side READS the cache and says
 honest, and one command away from being self-sufficient. Closing it means the
 native CLI gaining a fetch driver, which is `one-dependency-walk`'s open half
 and not a separate piece of work.
+
+## kin-probes-assert-a-value
+
+**A kin probe says what the answer should BE, not only that three targets said the same thing**
+
+**Ratified:** ☐ not signed off
+
+**Status: built 2026-09-12.** `kin/scripts/verify` reads an `--expect` section
+from the `.drivers` file and compares it, byte for byte, against the output the
+targets agreed on. **All 90 kin sources carry one**, and `bin/check-kin`
+refuses if any source does not — not a floor with a margin, because a margin
+is how ninety drivers came to hold not one expected value without anyone
+deciding on it.
+
+### What was missing
+
+`kin/scripts/verify` ended in exactly two verdicts: *"ok N targets, one source,
+identical output"* or *"FAIL the targets disagree"*. That is a real check and
+it catches a real class — per-target TRANSLATION divergence, where one source
+emits different semantics into different languages. `kin/hamt.drivers` is the
+model: an arithmetic shift and a logical one agree below 2^31, so it
+deliberately probes `0x80000001`.
+
+**But all three targets are generated from ONE source.** A logic error in that
+source produces three identically-wrong implementations, which agree perfectly
+and pass. The script already states the principle one case earlier — *"an
+output identical to itself is not a check"*, where it refuses a source that
+generates for fewer than two targets — and simply did not extend it one level
+up. Three outputs identical to each other are not a check either, for the same
+reason.
+
+Not one of the 90 drivers asserted what its answer should be. Grepped before
+starting: none of them contained an expected value in any form.
+
+### The shape, and why not a separate harness
+
+**The expectation goes in the `.drivers` file, and `verify` compares it.** The
+alternative considered was a separate expected-value harness beside the
+drivers. Three things settled it the other way:
+
+* **Cost.** `verify` already compiles and runs all three targets; comparing one
+  more string is free. A second harness would compile them again, and
+  `./kin/scripts/verify <file>` costs 4 seconds — the budget this has to stay
+  inside, because it is meant to run on every change.
+* **One list, not two.** A separate harness would restate each probe's output
+  format, and the two would drift the first time a driver gained a field
+  (`AGENTS.md` §1).
+* **`bin/check-kin` gets it for free**, because it already runs `verify` over
+  every source.
+
+`section` reads one named section and ignores every other, so a section nothing
+reads is a place to write prose. **`--expect-why` is that place, and it is not
+optional in spirit:** a number carries its method or it is folklore
+(`AGENTS.md` §2). It records how the value was obtained — derived from the kin
+source, computed from an independent oracle, or pinned from a run — so the next
+reader does not have to guess which.
+
+### Compared exactly, never by substring
+
+The comparison is `cmp` over the whole line, with only trailing whitespace
+trimmed. A substring test would let an expectation of `"3"` pass against a
+failure message that happens to contain a 3 — which is not hypothetical; it is
+a mistake made in this tree the same week, where `(str/includes? out "3")`
+passed whether the feature worked or not because the FAILURE text ended
+`(app.cljc:2:32)`. **An assertion that cannot tell success from failure is not
+a check**, and the cheapest way to keep that property is to make the assertion
+total.
+
+The mechanism was proved with a control before any expectation was trusted:
+`hamt`'s `2` was changed to `30` — the answer an arithmetic shift gives — and
+`verify` reported `FAIL the targets agree on the WRONG answer`.
+
+### Where the values came from
+
+Independence from the code under test is the whole value, so the oracle is
+named per source in `--expect-why`. Four kinds were used:
+
+* **A different implementation of the same published thing.** `kin/hash.kin`'s
+  numbers came out of real Clojure 1.12 (`clojure.lang.Murmur3`,
+  `hash-ordered-coll`), which is the oracle that file's own header names.
+  `kin/dblstr.kin`'s twenty-one doubles came from Clojure's `Double.toString`
+  rule, run.
+* **Arithmetic worked by hand from the source's stated rule**, for `hamt`,
+  `champ`, `unsigned`, `numarith`, `numdiv`, `codepoints`, `bytehash`.
+* **A fourth implementation.** `valhash` and `collhash` were transcribed into
+  python and run against the driver's own fixture — a language none of the
+  three targets is, so an error shared by all three generated copies has
+  nowhere to hide. Both matched character for character.
+* **A second reader of the data.** `casetable`'s 1528 integers were parsed out
+  of the `.kin` source by script and folded independently, and its two section
+  boundaries were checked against where the data actually stops ascending
+  rather than restated from the `defconst`s.
+
+### What it found
+
+**No logic error in any kin source.** Ninety sources, every expectation
+derived, and every one matched. That is worth saying plainly rather than
+padding: the kin layer was already right, and this now says so in a form that
+survives the next edit.
+
+What it did find is **five drivers whose comments describe behaviour the probe
+does not exercise**, each recorded in the `--expect-why` beside it rather than
+silently fixed:
+
+* `valcmp` — `short=` and `long=` are labelled as testing "the SHORTER one
+  first when one runs out", and do not: the fixture derives each element from
+  the length, so the FIRST elements already differ and the element comparison
+  decides. Neither run-out branch of `cmp-sequential` is reached by any field.
+* `valhash` — the last two fields are labelled "an ASCII rope must take
+  `rope-hash` (0x54xx) and a non-ASCII one `java-string-hash` (0x77xx)". Both
+  are 0x54xx. `valhash.kin` routes `TY_ROPE` unconditionally; `s-ascii` is
+  imported and never called. The comment describes the two-walk arrangement the
+  source's own "ONE WALK FOR EVERY TIER" block says was removed.
+* `casechange` — headed as upcasing sharp s "by a FULL mapping to two code
+  points". The fixture's `full_index` returns -1 unconditionally, so the entire
+  `case-full-at` branch is never entered.
+* `byteconcat` — the `t3` comment promises a merge into the rightmost leaf with
+  the depth unchanged. With the fixture's `FLAT_MAX` of 8 no piece can both
+  pass the gate and fit, so tier 3 is unreachable from this fixture.
+* `mapread` — a comment computes a key's hash as `0x900` where the key is
+  decimal `900`, and the consequence is that `node_find`'s success value is
+  unreachable: the compound hash-map HIT is untested and only the miss runs.
+
+Also noted: `numarith`'s `mul-overflows` docstring illustrates `MIN * -1` with
+the operands the other way round from the code (`I64_MAX / -1` where the code
+divides by `x`). Both orderings are correct and both refuse; the driver now
+asks BOTH, where before it asked one.
+
+None of these is a bug in shipped behaviour. All of them are places where a
+reader would believe something is checked that is not — which is the same
+failure mode as a status line that decayed, and the reason they are written
+down where the check is.
+
+### Why this was worth doing now
+
+The project wants to stop running a 30-minute gate on every commit and run only
+what a change can break. That is only safe if the fast checks catch logic
+errors, and until now the kin layer had none that could: every check it had
+compared an implementation against two copies of itself.
+
+### One trap, fixed rather than remembered
+
+Several `.drivers` files did not end in a newline. Appending a section to one
+fuses the header onto the last line of the previous section — `    }--expect` —
+so it stops being a header, its text lands inside the probe, and the target
+fails to compile with `CS1519: Invalid token '='`. That reads as *"the targets
+disagree"* about the code under test, which is the one thing it is not.
+`kin/scripts/verify` now refuses a drivers file that does not end in a newline,
+and says why.
