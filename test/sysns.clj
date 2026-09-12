@@ -279,6 +279,34 @@
     (check "a project's reader tag is bound in the shipped binary"
            (str/includes? (:out r) "3") (:out r))))
 
+
+;; A guard BETWEEN two project workspaces, which is the half the first fix
+;; missed. One catch-all prefix collapsed every source root into one workspace,
+;; and a guard cannot fire inside one workspace -- so this passed while
+;; `bin/flint` refused it. Files are now attributed per root.
+(let [p8 (str (fs/create-temp-dir))]
+  (fs/create-dirs (str p8 "/lib/src/acme"))
+  (fs/create-dirs (str p8 "/app/src"))
+  (spit (str p8 "/lib/deps.edn")
+        "{:paths [\"src\"] :flint/workspace acme/lib :flint/capabilities-guard [:secret]}\n")
+  (spit (str p8 "/lib/src/acme/thing.cljc") "(ns acme.thing)\n(defn peek [] \"sensitive\")\n")
+  (spit (str p8 "/app/src/app.cljc")
+        "(ns app (:require [acme.thing :as t]))\n(defn go [_] (t/peek))\n")
+  (spit (str p8 "/app/deps.edn") "{:paths [\"src\"]}\n")
+  (let [r (sh p8 flint "run" ":path" "[app/src lib/src]" ":fn" "app/go")]
+    (check "a guard BETWEEN two project workspaces refuses"
+           (str/includes? (:out r) "guards with") (:out r))
+    ;; The refusal marker had no handler on this side, because with everything
+    ;; anonymous nothing was ever refused -- so it reached the image loader and
+    ;; came back as "this is not a flint image".
+    (check "  ... as a sentence, not as a corrupt image"
+           (not (str/includes? (:out r) "not a flint image")) (:out r)))
+  (spit (str p8 "/app/deps.edn")
+        "{:paths [\"src\"] :flint/capabilities-grant [:secret]}\n")
+  (let [r (sh p8 flint "run" ":path" "[app/src lib/src]" ":fn" "app/go")]
+    (check "  ... and a GRANTED workspace may require it"
+           (str/includes? (:out r) "sensitive") (:out r))))
+
 (if (pos? @fails)
   (do (println "sysns:" @fails "FAILURES") (System/exit 1))
   (println "sysns: ok"))

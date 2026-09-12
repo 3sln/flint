@@ -422,13 +422,28 @@ Fixed: `build_spec_with` now emits the stdlib's workspace (from `lib/deps.edn`,
 newly embedded by `cli/build.rs`) and the project's own. `test/sysns.clj`, which
 drives `target/release/flint`, covers both.
 
-- [ ] **Multi-root projects take the FIRST `deps.edn` found.** `bin/flint`
-      resolves a workspace per source root, keyed by path prefix. This side
-      keys files by their namespace-derived path with no marker for which root
-      they came from, so it cannot distinguish them. Narrower than `bin/flint`,
-      and deliberate rather than hidden
-- [ ] Audit what else is tested only through `bin/flint` — the class of bug is
-      "the binary users run is the one nothing exercises"
+- [x] Multi-root projects — **fixed the same day.** The first fix emitted one
+      catch-all workspace, so a guard BETWEEN two project workspaces still did
+      not fire on the native CLI. Files are now read per root and attributed
+      per file: a full path is a valid `starts-with?` prefix matching exactly
+      one file, so roots whose files interleave in one namespace-derived space
+      still get their own workspace
+- [x] The `!refused` marker had no handler on the native side — unreachable
+      while everything was anonymous, so a refusal reached the image loader and
+      surfaced as "this is not a flint image" instead of the sentence the guest
+      had already written
+
+**AUDIT RESULT: `test/sysns.clj` is the ONLY test file that drives
+`target/release/flint`.** Every other test goes through `./bin/flint` —
+babashka running the compiler SOURCE, with its own parallel implementations of
+spec construction, workspace resolution, source collection and dependency
+fetching. Four places the two can silently disagree, one file watching the side
+that ships.
+
+- [ ] Decide the standing answer: does every behaviour that has two
+      implementations get a native-CLI check, or do the two front ends stop
+      being parallel implementations? This is the shape that produced the bug,
+      not an instance of it
 
 ### Dialects and pluggable preludes (spec only, nothing built)
 

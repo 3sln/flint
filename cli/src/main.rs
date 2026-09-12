@@ -235,13 +235,22 @@ fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
     for (p, body) in STDLIB {
         files.insert((*p).to_string(), (*body).to_string());
     }
+    // PER ROOT, so each file can be attributed to the workspace that owns it.
+    // Reading them all into one map loses which root a file came from, and the
+    // paths here are namespace-derived (`acme/thing.cljc`) with no marker to
+    // recover it -- which is why the first version of this could express only
+    // one project workspace and a guard BETWEEN two of them never fired.
+    let mut owned: Vec<(PathBuf, Vec<String>)> = Vec::new();
     for s in srcs {
+        let mut mine: BTreeMap<String, String> = BTreeMap::new();
         if s.is_dir() {
-            read_sources(s, "", &mut files)?;
+            read_sources(s, "", &mut mine)?;
         } else {
             let name = s.file_name().unwrap().to_string_lossy().to_string();
-            files.insert(name, fs::read_to_string(s)?);
+            mine.insert(name, fs::read_to_string(s)?);
         }
+        owned.push((s.clone(), mine.keys().cloned().collect()));
+        files.extend(mine);
     }
     let mut out = String::from("{:files {");
     for (k, v) in &files {
@@ -320,16 +329,23 @@ fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
     // marker for which root they came from; a project whose roots carry
     // DIFFERENT `deps.edn` files therefore gets the first one found, which is
     // narrower than `bin/flint` and is recorded rather than hidden.
-    for sdir in srcs.iter().filter(|s| s.is_dir()) {
-        let here = sdir.join("deps.edn");
-        let up = sdir.parent().map(|p| p.join("deps.edn"));
+    for (sdir, paths) in &owned {
+        let dir = if sdir.is_dir() { sdir.clone() } else { sdir.parent().unwrap().to_path_buf() };
+        let here = dir.join("deps.edn");
+        let up = dir.parent().map(|p| p.join("deps.edn"));
         let text = fs::read_to_string(&here)
             .or_else(|_| fs::read_to_string(up.unwrap_or_else(|| here.clone())))
             .unwrap_or_default();
         if text.trim().is_empty() { continue }
         let w = read_workspace(&text);
-        let entry = workspace_entry("", &w, &edn_string(&sdir.display().to_string()));
-        if !entry.is_empty() { out.push_str(&entry); break }
+        // ONE ENTRY PER FILE, with the file's own path as the prefix. Prefix
+        // matching is `starts-with?`, so a full path matches exactly that file
+        // -- which is how a root whose files interleave with another root's in
+        // one flat namespace-derived space still gets its own workspace.
+        for path in paths {
+            let entry = workspace_entry(path, &w, &edn_string(&dir.display().to_string()));
+            if !entry.is_empty() { out.push_str(&entry) }
+        }
     }
     out.push_str("] :builtins #{");
     for k in slots.keys() {
@@ -422,6 +438,17 @@ fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize: &[String],
         bail!("no source for{}\nevery namespace a program requires has to be on the source path",
               rest.replace('\n', " "));
     }
+    // A REFUSED require is not a missing one: the source is there and
+    // readable, and the answer is that this workspace may not have it. The
+    // guest has already formed the sentence -- it names both ends and the
+    // capability -- so this passes it through rather than rewording it.
+    //
+    // Unreachable until source workspaces existed: with everything anonymous
+    // nothing was ever refused, so the marker fell through to the image
+    // loader and surfaced as "this is not a flint image".
+    if let Some(rest) = r.out.strip_prefix("!refused") {
+        bail!("{}", rest.trim());
+    }
     let module = base64_decode(r.out.trim())?;
     fs::write(out_path, &module)?;
     eprintln!("wrote {} ({} bytes{})", out_path.display(), module.len(),
@@ -474,6 +501,17 @@ fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
     if let Some(rest) = r.out.strip_prefix("!missing") {
         bail!("no source for{}\nevery namespace a program requires has to be on the source path",
               rest.replace('\n', " "));
+    }
+    // A REFUSED require is not a missing one: the source is there and
+    // readable, and the answer is that this workspace may not have it. The
+    // guest has already formed the sentence -- it names both ends and the
+    // capability -- so this passes it through rather than rewording it.
+    //
+    // Unreachable until source workspaces existed: with everything anonymous
+    // nothing was ever refused, so the marker fell through to the image
+    // loader and surfaced as "this is not a flint image".
+    if let Some(rest) = r.out.strip_prefix("!refused") {
+        bail!("{}", rest.trim());
     }
     let bytes = base64_decode(r.out.split('\n').next().unwrap_or(""))?;
 
