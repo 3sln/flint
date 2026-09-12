@@ -4515,3 +4515,115 @@ An extension makes the claim explicit, and a resolver tag makes it checkable.
 * **What `clojure.core` means for `.fln`.** Presumably still the first prelude
   entry, but a flint-only dialect could in principle start from a different
   base.
+
+## the-pike-vm-is-the-last-triplicate
+
+**The regex engine is written three times, and the thing that blocks generating
+it is that kin cannot pass a mutable array**
+
+**Ratified:** ☐ not signed off
+
+**Status: FINDING, nothing built.** Recorded 2026-09-11 while porting the
+remaining hand-written functions out of `bytes.rs`, `strs.rs`, `vector.rs` and
+`pike.rs`. The census below was re-derived from the tree, not quoted from
+`doc/goals/kin-port.md`.
+
+### What was found
+
+Of the 55 functions left in those four files, **`bytes.rs` is 29 of them and
+every one is a vocabulary primitive** — a host `Vec<u8>`, a host `&str`, a
+borrowed slice or the allocator. `strs.rs` is the same wall: eight of its
+fourteen take a host `&str`, and three more are the intern table. Those are
+hole 5 and hole 6 and they are *supposed* to be hand-written; the ports have
+their own and the vocabulary in `kin/src/flint/impl/rt.cljc` names all three
+spellings, so they cannot drift silently.
+
+`pike.rs` is not that. **`class_hit`, `consumes`, `add_thread` and `run_over`
+are pure integer functions over a program and a code-point array**, written out
+in Rust, Java and C# — about 130 lines each, three times — and the only thing
+keeping them out of `kin/` is a host array. That is the largest genuine
+triplicate left anywhere in the runtime, and it is the one where a silent
+divergence changes *what a regular expression matches*.
+
+### Why it is not generated yet, precisely
+
+kin renders `^:mut` on a parameter as Rust's `mut x: T`, a by-value rebinding —
+not `&mut T`. So a tag whose Rust type is `Vec<i32>` and whose Java type is
+`int[]` means **pass by move on one target and pass by reference on the other
+two**: a callee that writes into it would be seen by the caller in Java and C#
+and not in Rust. There is no tag that spells a shared mutable array in all
+three, and adding one is a change to `kin.lang`, which is a separate library.
+
+The shape that *does* work is the one this runtime already uses for exactly
+this problem: **a buffer the runtime owns, named by an integer**. `Sink`, `Cps`
+and `Walk` are all that, for the same reason. A Pike VM written that way needs
+
+* the thread lists flat in two `Cps`-shaped buffers — `pc` then `nslots` slot
+  values per thread — with the count carried as an ordinary return value, since
+  `add-thread` is threaded linearly;
+* the `seen` set as a third;
+* the program words in a fourth, filled once per call (which is the copy all
+  three already do — see below);
+* `cps-set` and `cps-truncate` added to the vocabulary. `cps-open`,
+  `cps-close`, `cps-put`, `cps-len` and `cps-at` exist.
+
+### What is NOT the reason, though it looks like one
+
+**All three runtimes already copy the whole program out of the `TY_RAW` blob on
+every `re-run` and every `re-find-all`** — `pike.rs`'s `chunks_exact(4)`,
+`Pike.java`'s `progOf`, `Pike.cs`'s `ProgOf`. So moving the program into a
+runtime-owned buffer costs nothing new. What it *would* cost is the inner
+loop: `consumes` runs per live thread per character, and `cps_at` is a bounds-
+checked double indirection where `code[b]` is an indexed load. **That is the
+measurement to take before committing** — `DECISIONS.md#matching-over-ropes`
+records the Pike VM being four times slower than the backtracker it replaced
+until `re-find-all` existed, so this engine's constant factor has already been
+load-bearing once.
+
+### The divergences the three copies have already accumulated
+
+Found by reading all three, not by a failing test — no gate compares them.
+
+1. **`from` is narrowed before it is clamped on both ports.** `re-run`'s third
+   argument is any integer a guest program passes. `(int) Math.max(from, 0)` of
+   2^31 is -2147483648, which passes `runOver`'s `from > cps.length` guard and
+   then indexes `cps` negatively — an `ArrayIndexOutOfBoundsException` thrown
+   out of the host by guest code. Native holds it in an `i64` and answers nil.
+   **Fixed** in `Pike.java` and `Pike.cs` at the same time as this was written:
+   clamp in 64 bits, refuse past the end, then narrow.
+
+2. **A match that never writes slot 1 hangs every runtime.** `re-find-all`
+   advances by `at = en > st ? en : en + 1`, and a program that reaches MATCH
+   without a SAVE leaves `en` at -1, so `at` becomes 0 and the loop restarts
+   from the beginning for ever. Native wraps through `usize` to the same 0 in
+   release and panics in debug. Gas is charged once, *outside* the loop, so
+   nothing stops it. `re-compile` accepts an arbitrary vector of words from
+   guest code, so this is reachable without a compiler bug. **NOT fixed** —
+   see below.
+
+3. **`RX_NGROUPS` zero-extends on native and sign-extends on both ports**
+   (`raw[2] as i64` from a `u32`, against `Val.fixnum` of an `int`). Only
+   differs if the group-count word has bit 31 set, which means only for a
+   crafted program.
+
+4. **The program blob is little-endian on native and native-endian on the
+   ports** — `to_le_bytes`/`from_le_bytes` against `writeU32`/`readU32`. Equal
+   on every host either runs on today.
+
+5. **`re-compile` drops its shadow-stack frame before writing the three slots
+   on native and after on both ports.** Not observable: `set_slot` does not
+   allocate. Worth converging when this file is next touched, because the
+   native order is the one that is only safe by accident.
+
+### Open, and needing sign-off
+
+* **Whether `re-compile` validates the program it is handed.** Divergence 2 is
+  a denial of service reachable from guest code, and the cheap fix — make `at`
+  strictly increase — changes the loop that `test/regex_pike.clj` and the
+  conformance transcripts both cover, in four runtimes. The alternative is to
+  reject a malformed program at compile time, which is where the gas is already
+  charged. That is a decision about what `re-compile`'s contract is, not a bug
+  fix, so it is recorded rather than taken.
+* **Whether the Pike VM is generated at all.** It is the largest triplicate
+  left and the one where drift is most expensive. It is also the hottest loop
+  in the runtime, and the buffer indirection above has not been measured.

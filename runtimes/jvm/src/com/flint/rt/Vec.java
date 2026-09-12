@@ -112,29 +112,16 @@ public final class Vec {
 
 
 
-    /// A MAP ENTRY AS A TWO-ELEMENT VECTOR. It was a private helper in
-    /// `Builtins` here and lives on `Vec` in the native runtime; `assoc` and
-    /// `conj` both reach it, and generated code needs one home.
-    public static long mapEntryAsVec(Rt rt, long e) {
-        int base = rt.mark();
-        rt.push(rt.slot(e, 0));
-        rt.push(rt.slot(e, 1));
-        long out = fromRoots(rt, base, 2);
-        rt.popTo(base);
-        return out;
-    }
+    /// A VECTOR OUT OF A RUN OF SHADOW-STACK ROOTS. The body is GENERATED,
+    /// as `kin/vecroots.kin`; this keeps the name its callers already spell,
+    /// the way `conj` and `assoc` above do.
+    public static long fromRoots(Rt rt, int base, int n) { return com._3sln.flint.kgen.rt.Vecroots.vecFromRoots(rt, base, n); }
 
-    public static long fromRoots(Rt rt, int base, int n) {
-        int mk = rt.mark();
-        int vi = rt.push(empty(rt));
-        for (int i = 0; i < n; i++) {
-            long nv = vecConj(rt, rt.r(vi), rt.r(base + i));
-            rt.setR(vi, nv);
-        }
-        long out = rt.r(vi);
-        rt.popTo(mk);
-        return out;
-    }
+    // `mapEntryAsVec` HAS NO SHIM HERE, and that is not an oversight. A
+    // generated module reaches it through `import static ...Vecroots.*`, and
+    // a same-named static on `Vec` -- also star-imported there -- makes every
+    // call AMBIGUOUS: javac refuses `Collwrite.java` outright. One name, one
+    // home, and `Builtins` says the generated one.
 
     // -----------------------------------------------------------------------
     // TRANSIENTS. `TY_TVEC [cnt, shift, root, tail, edit]`.

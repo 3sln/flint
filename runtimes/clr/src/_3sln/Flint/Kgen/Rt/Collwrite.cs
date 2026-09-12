@@ -23,6 +23,7 @@ using static global::_3sln.Flint.Kgen.Rt.Tablemake;
 using static global::_3sln.Flint.Kgen.Rt.Tablerow;
 using static global::_3sln.Flint.Kgen.Rt.Vecassoc;
 using static global::_3sln.Flint.Kgen.Rt.Vecread;
+using static global::_3sln.Flint.Kgen.Rt.Vecroots;
 
 public static class Collwrite {
     /// `(assoc coll k v)`, whichever associative thing `coll` is.
@@ -97,7 +98,7 @@ public static class Collwrite {
             int @base = rt.Mark();
             int ki = rt.Push(k);
             int vi = rt.Push(v);
-            long ev = Vec.MapEntryAsVec(rt, coll);
+            long ev = MapEntryAsVec(rt, coll);
             int ei = rt.Push(ev);
             long @out = CollAssocGen(rt, rt.R(ei), rt.R(ki), rt.R(vi));
             rt.PopTo(@base);

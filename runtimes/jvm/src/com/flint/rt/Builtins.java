@@ -374,7 +374,7 @@ public final class Builtins {
             // -- both readings exist and Clojure picks the vector one.
             if (rt.isHeapTy(v, TY_MAPENTRY)) {
                 int mb = rt.mark();
-                int vi = rt.push(Vec.mapEntryAsVec(rt, v));
+                int vi = rt.push(com._3sln.flint.kgen.rt.Vecroots.mapEntryAsVec(rt, v));
                 for (int i = 1; i < n; i++) rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.vat(at + i)));
                 long out = rt.r(vi);
                 rt.popTo(mb);

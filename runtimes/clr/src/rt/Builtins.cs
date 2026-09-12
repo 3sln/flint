@@ -350,7 +350,7 @@ public static class Builtins {
             // -- both readings exist and Clojure picks the vector one.
             if (rt.IsHeapTy(v, Obj.TyMapentry)) {
                 int mb = rt.Mark();
-                int vi = rt.Push(Vec.MapEntryAsVec(rt, v));
+                int vi = rt.Push(global::_3sln.Flint.Kgen.Rt.Vecroots.MapEntryAsVec(rt, v));
                 for (int i = 1; i < n; i++) rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.VAt(at + i)));
                 long o2 = rt.R(vi);
                 rt.PopTo(mb);

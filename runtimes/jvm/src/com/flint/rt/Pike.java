@@ -225,7 +225,15 @@ public final class Pike {
         int ninstrs = prog[0];
         int nslots = (prog[2] + 1) * 2;
         int[] cps = rt.cpsTake(com._3sln.flint.kgen.rt.Codepoints.codePoints(rt, s));
-        int[] best = runOver(prog, ninstrs, nslots, cps, (int) Math.max(from, 0), entry, full);
+        // CLAMPED BEFORE THE NARROWING, and that order is the whole of the
+        // fix (`DECISIONS.md#the-pike-vm-is-the-last-triplicate`). `from` is whatever integer a guest program passed, and
+        // `(int) Math.max(from, 0)` on 2^31 is -2147483648 -- which passes
+        // `runOver`'s `from > cps.length` guard and then indexes `cps`
+        // negatively, so guest code could throw an ArrayIndexOutOfBounds out
+        // of the host. Native holds it in an `i64` and answers nil.
+        long start = Math.max(from, 0);
+        if (start > cps.length) return Val.NIL;
+        int[] best = runOver(prog, ninstrs, nslots, cps, (int) start, entry, full);
         return best == null ? Val.NIL : slotsVector(rt, best);
     }
 

@@ -16,13 +16,14 @@
                                    ty mark push r set-r pop-to while break +
                                    to-i32 slot i64-of bare-kw name-of
                                    value-text throw-str str-cat static-text
-                                   empty-map map-entry-as-vec Rt Value I32 I64
+                                   empty-map Rt Value I32 I64
                                    Ty Bool RootIx Text NIL NOT_FOUND
                                    TY_ARRAYMAP TY_HASHMAP TY_VEC TY_TAGGED
                                    TY_TABLE TY_TABLEREF TY_MAPENTRY
                                    TY_SET]]
             [flint.rt.vecread :refer [vec-nth vec-count]]
             [flint.rt.vecassoc :refer [vec-assoc]]
+            [flint.rt.vecroots :refer [map-entry-as-vec]]
             [flint.rt.strs :refer [char-at]]
             [flint.rt.mapwrite :refer [map-assoc]]
             [flint.rt.names :refer [is-symbol]]

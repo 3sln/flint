@@ -2795,3 +2795,56 @@ That measurement was WRONG twice before it was right. `bb test/shake.clj` reads
 fresh `linked` against a stale `prebuilt` and `shaken`. **`./bin/build-dist &&
 ./bin/build-units` before `bb test/shake.clj`**, or the ratio is arithmetic on
 numbers from two different builds.
+
+### The four files re-counted, 2026-09-11, and what the number actually is
+
+`bytes.rs`, `strs.rs`, `vector.rs` and `pike.rs`, non-test functions, counted
+from the tree rather than quoted from the table above — which is stale, as it
+warns it will be.
+
+| file | lines | functions left | what they are |
+| --- | --- | --- | --- |
+| `bytes.rs` | 552 | **29** | every one a vocabulary primitive |
+| `strs.rs` | 775 | 14 | 8 take a host `&str`, 3 are the intern table |
+| `vector.rs` | 421 | **2** | `init_vector` and `is_vector` |
+| `pike.rs` | 420 | 8 | the VM, and three `Rt` entry points |
+
+**"Twenty-nine functions left" IS `bytes.rs`, and the file is finished.** The
+count is a census artefact: it is what `grep '^ *pub fn'` reports, and every
+one of the twenty-nine holds a host `Vec<u8>`, a host `&str`, a borrowed slice,
+or the allocator. `sink-*`, `cps-*`, `walk-*`, `leaf-len`, `leaf-byte`,
+`leaf-find` and `run-eq` are all declared in `flint.impl.rt` with three
+spellings each, which is the opposite of drift: the ports' copies are named by
+the same vocabulary entry that names Rust's, so a rename on one target fails
+generation rather than diverging quietly. `new_bytes`, `b_to_vec` and
+`sink_array` are the host boundary itself.
+
+`vector.rs` LOST TWO. `map_entry_as_vec` and `vec_from_roots` are generated,
+`kin/vecroots.kin` — the fourth and last `(base, n)` constructor, after
+`list-from-roots`, `b-from-roots` and `rope-from-roots`, and the only one still
+written out three times. `map-entry-as-vec` came OFF the vocabulary in the same
+change: it was declared as a call into three hand-written bodies, and a source
+that wants it now requires it like any other generated function.
+
+`is_vector` IS NOT WORTH GENERATING, and the reason is worth writing down
+because it looks like an omission. It is `v.is_heap() && ty(..) == TY_VEC`,
+which is `Rt::is_heap_ty(v, TY_VEC)` spelled out — and `heap-ty?` is already in
+the vocabulary, and both ports already say `isHeapTy(v, TY_VEC)` at every one
+of their call sites. There is no second implementation to converge. Generating
+it would add a `pub` function to three modules to give one runtime's local
+alias a home, which is the trade this file already recorded against the
+`champ_*` wrappers.
+
+`init_vector` writes the empty vector into `roots.shared.singletons`, which no
+vocabulary names and only one runtime does — the ports build theirs through
+`NewEmpty`/`newEmpty` on demand. That is a real divergence in the *singleton*,
+not in the vector, and it is not a kin question.
+
+`pike.rs` IS THE ONE THAT SHOULD BE GENERATED AND IS NOT.
+`DECISIONS.md#the-pike-vm-is-the-last-triplicate` has the whole finding: four
+pure integer functions, ~130 lines in each of three runtimes, blocked by kin
+rendering `^:mut` on a parameter as a by-value rebinding in Rust and a shared
+reference on both ports — so no tag spells a mutable host array in all three.
+The shape that works is the one `Sink`, `Cps` and `Walk` already use. Five
+divergences between the three copies are listed there; two are reachable from
+guest code and one of those is fixed.

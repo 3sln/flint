@@ -386,7 +386,7 @@ impl Program {
             let v = rt.string(a);
             rt.push(v);
         }
-        let argv = rt.vec_from_roots(base, args.len());
+        let argv = rt.vec_from_roots(base, args.len() as u32);
         let ai = rt.push(argv);
         let mut m = rt.empty_map();
         let mi = rt.push(m);

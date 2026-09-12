@@ -108,3 +108,4 @@ pub mod vecassoc;
 pub mod vecwrite;
 pub mod vectwrite;
 pub mod vectrans;
+pub mod vecroots;

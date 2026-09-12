@@ -81,7 +81,7 @@ fn run(w: &mut ImageWriter, args: Vec<&str>) -> (Rt, Value) {
         let s = rt.string(a);
         rt.push(s);
     }
-    let argv = rt.vec_from_roots(base, args.len());
+    let argv = rt.vec_from_roots(base, args.len() as u32);
     rt.pop_to(base);
     let r = rt.run_program(argv);
     (rt, r)
