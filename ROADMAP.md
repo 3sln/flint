@@ -809,7 +809,19 @@ things that are code, not record:
       the mint-authority-from-nothing case rule 1 exists to refuse — is not
       refused. It is reported as an unknown key and ignored. The status said
       this was built
-- [ ] **`:optimize [perf]` does not strip checks in the shipped CLI.** The
+- [x] **`:optimize [perf]` stripped no checks in the shipped CLI — fixed
+      2026-09-12**, partially. The binary now emits `:features #{:flint}` for a
+      `[perf]` build, so the conditional bodies are gone: a deliberately
+      failing check fires in a plain build and answers "survived" under
+      `[perf]`. **Parity is NOT reached** — `bin/flint` emits zero
+      `flint.check` references on the same program and this emits four, because
+      the `:require` naming `flint.check` survives the conditional being
+      stripped and something downstream keeps the namespace reachable. The
+      checks do not run; the namespace is still linked
+- [ ] Close that gap: find what keeps `flint.check` reachable after its only
+      use is elided, and whether `bin/flint` drops it by shaking or by
+      something else
+- [ ] ~~`:optimize [perf]` does not strip checks in the shipped CLI.~~ The
       native binary never emits `:features` into the compile spec;
       `wants_aot` turns `perf` into AOT and nothing else. Measured: a module
       built `[perf]` and one built plain both carry 5 `flint.check` hits.
