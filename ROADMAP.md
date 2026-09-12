@@ -618,8 +618,30 @@ section headers to time — 912 lines, three `echo` progress lines — so the ne
 step is giving it the same `sec` treatment `bin/test` now has, which is what
 turned a guess into a 5x win there.
 
-- [ ] Itemise `bin/conform-hosts`; it is 15% of the gate and nothing says
-      where
+- [x] **Itemised — `conform-hosts` now times its phases too.** 203 s, and one
+      phase is 118 s of it:
+
+          118 s  the 23-program conformance loop
+           33 s  the language suite, every runtime
+           15 s  under a collection at every allocation
+           13 s  ported runtime foundation, both hosts
+
+      Two wrong guesses on the way, both corrected by measuring: the
+      `--features diagnostics` cargo run is CACHED and instant, not a rebuild;
+      and `bin/flint` (babashka) compiles a fixture in 1 s against the native
+      CLI's 2 s, so the loop is not slow because it uses the bootstrap host.
+
+      It is 23 programs at about 5 s each — two compiles and three runtime
+      executions apiece — spread evenly. **No hot spot, so the remedy is
+      parallelism**, as with `check-kin`.
+
+- [ ] Parallelise the 23-program conformance loop. **CAREFULLY**: the body
+      writes shared temp files (`/tmp/flint-c-jvm.out`, `/tmp/flint-c-clr.out`)
+      that would collide, and it fails the gate with `exit 1` — which under
+      `xargs` exits only the subshell, so a failure would be LOST and a red
+      gate would go green. That is precisely the class this script's own
+      comments record being bitten by twice. Per-program temp files, and
+      failures collected and checked after the loop, not signalled by `exit`
 
 **WHAT THE SHAPE MEANS FOR SELECTIVE TESTING.** The top 12 of 60 sections are
 71% of the time, and the biggest four are BUILDS — the three-runtime diff, the

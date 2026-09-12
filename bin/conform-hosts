@@ -8,6 +8,7 @@
 #
 # A port that runs is not a port that is correct. This is what tells them apart.
 #
+phase "native: rebuild the reference answer"
 # THE NATIVE ANSWER IS REBUILT FIRST, and it was not. This script builds the
 # ports and then compares them against `./target/release/flint` -- which it
 # used three times and never built. A stale binary makes every comparison here
@@ -20,6 +21,32 @@
 # `bin/check-builtins` describes, one level up: not a check that cannot find
 # what it checks, but one that finds the wrong thing and cannot tell.
 set -e
+
+# SECTION TIMING, the same shape `bin/test` grew. This script is 15% of the
+# gate and the largest single item in it, and nothing said where that went --
+# measuring `bin/test` turned a 371-second guess into a 5x win, so the same
+# question is worth asking here. Costs one `date` per phase.
+FLINT_CONF_TIMES=${FLINT_CONF_TIMES:-/tmp/flint-conform-times}
+: > "$FLINT_CONF_TIMES"
+_ph_at=$(date +%s)
+_ph_name=""
+phase() {
+  _now=$(date +%s)
+  [ -n "$_ph_name" ] && echo "$((_now - _ph_at)) $_ph_name" >> "$FLINT_CONF_TIMES"
+  _ph_at=$_now
+  _ph_name="$1"
+}
+conform_times() {
+  _now=$(date +%s)
+  [ -n "$_ph_name" ] && echo "$((_now - _ph_at)) $_ph_name" >> "$FLINT_CONF_TIMES"
+  echo
+  echo "  == conform-hosts, where the time went (seconds)"
+  sort -rn "$FLINT_CONF_TIMES" | head -10 | while read -r secs name; do
+    printf '    %5ss  %s\n' "$secs" "$name"
+  done
+  printf '    %5ss  TOTAL\n' "$(awk '{t+=$1} END {print t}' "$FLINT_CONF_TIMES")"
+}
+
 cd "$(dirname "$0")/.."
 cargo build --release -p flint-cli > /tmp/flint-cli-build.log 2>&1 \
   || { tail -20 /tmp/flint-cli-build.log; \
@@ -151,6 +178,7 @@ fi
 
 
 
+phase "ported runtime foundation, both hosts"
 # THE PORTED RUNTIME'S FOUNDATION, on both hosts, with the same assertions in
 # the same order.
 #
@@ -259,6 +287,7 @@ if [ -n "$CLR" ]; then
          echo "  FAIL the two ported runtimes read the image differently"; exit 1; }
 fi
 
+phase "snapshots, both formats"
 # SNAPSHOTS on the ported runtime: both formats. The verbatim one is a memcpy
 # that must come back at IDENTICAL addresses; the live one traverses and must
 # come back correct at DIFFERENT ones, so it is imported into a heap with a
@@ -281,6 +310,7 @@ if [ -n "$CLR" ]; then
     || { echo "  FAIL the two ports hash differently"; exit 1; }
 fi
 
+phase "same program, same gas, every runtime"
 # THE SAME PROGRAM COSTS THE SAME GAS ON EVERY RUNTIME (`DECISIONS.md#resource-limits`).
 #
 # Two workloads, one a scaled-up version of the other, and what is compared is
@@ -361,6 +391,7 @@ GMJS
   fi
 fi
 
+phase "gas bounds every runtime"
 # GAS IS A BOUND ON EVERY RUNTIME, not just the native one
 # (`DECISIONS.md#resource-limits`).
 #
@@ -385,6 +416,7 @@ if [ -n "$CLR" ]; then
   echo "  ok   and both stop at the same instruction, which is the parity claim"
 fi
 
+phase "parallel executors, K host threads"
 # PARALLEL EXECUTORS (`DECISIONS.md#drivers`): K REAL HOST THREADS on one flint
 # heap, which is a different thing from the green threads next door and both
 # exist. Green threads are how one sandbox interleaves its own work
@@ -404,6 +436,7 @@ if [ -n "$CLR" ]; then
   sed 's/$/ [clr]/' /tmp/flint-par-clr.out
 fi
 
+phase "the stale-push check"
 # THE STALE-PUSH CHECK, and whether it can fire at all.
 #
 # `doc/HANDOFF.md`: a value read into a host local before an allocation comes
@@ -436,6 +469,7 @@ if [ -n "$CLR" ]; then
          echo "  FAIL the ports disagree about stale pushes"; exit 1; }
 fi
 
+phase "port suites again, check on"
 # THE PORT SUITES AGAIN, WITH THE CHECK ON. The runs above prove the answers;
 # this proves nothing was rooted late to get them. It is a second pass rather
 # than a flag on the first because the first compares transcripts, and a stale
@@ -458,6 +492,7 @@ for pair in "RtFoundation --rt-foundation" "RtMaps --rt-maps" \
 done
 echo "  ok   four port suites re-run with the stale check on, both hosts"
 
+phase "under a collection at every allocation"
 # AND UNDER A COLLECTION AT EVERY ALLOCATION. The conform fixtures below
 # already run this way; the port's OWN suites did not, and that is where the
 # rooting bugs live -- `0n` records three found by stress that the stale-push
@@ -484,6 +519,7 @@ for pair in "RtFoundation --rt-foundation" "RtMaps --rt-maps" "RtSnapshot --rt-s
 done
 echo "  ok   three port suites re-run collecting at every allocation, both hosts"
 
+phase "host ports"
 # HOST PORTS (`DECISIONS.md#host-abi`, `ports-are-the-hosts`): the half of the port protocol the
 # HOST drives, on all three runtimes at once.
 #
@@ -549,6 +585,7 @@ if [ -n "$CLR" ]; then
          echo "  FAIL the two ports disagree about maps"; exit 1; }
 fi
 
+phase "shelving a real program mid-run"
 # SHELVING A REAL PROGRAM, mid-run. `RtSnapshot` next door round-trips a heap
 # built by hand, which checks the FORMAT; this stops a program that is genuinely
 # half-finished -- frames on the stack, locals live, a loop counter partway --
@@ -568,6 +605,7 @@ if [ -n "$CLR" ]; then
          echo "  FAIL the two ports shelve differently"; exit 1; }
 fi
 
+phase "a live snapshot across runtimes"
 # A LIVE SNAPSHOT ACROSS RUNTIMES, in both directions.
 #
 # `snapshots` says the snapshot is "a serialised internal layout, not an interchange
@@ -622,6 +660,7 @@ if [ -n "$CLR" ]; then
   fi
 fi
 
+phase "native reads what the ports wrote"
 # AND NATIVE READS WHAT THE PORTS WROTE. The ports check the other direction
 # themselves, above, under `FLINT_LIVEIMPORT`.
 for who in jvm clr; do
@@ -641,6 +680,7 @@ for who in jvm clr; do
   echo "  ok   native reads the live snapshot the $who runtime wrote"
 done
 
+phase "every conformance program, 3 runtimes"
 # EVERY conformance program the ported runtimes can run, each checked against
 # the NATIVE answer and then the two ports against each other.
 #
@@ -658,6 +698,7 @@ done
 # The answers are nested collections rather than numbers, so agreeing means
 # agreeing about maps, vectors, sets, strings, seqs and doubles at once -- and
 # `maps` prints its keys in trie order, so matching means the ported CHAMP
+phase "iteration order"
 # ITERATES the way the Rust's does, which nothing asserts directly.
 for prog in assocshapes bytes churn collections conjshapes control errors green hosted lazy lazyref maps mapshapes mathfns numedge numbers opcodes regex seqshapes strings tables threads transhapes; do
   # A FIXTURE THAT DOES NOT COMPILE IS A FAILURE, NOT A SKIP. This used to
@@ -735,6 +776,7 @@ for prog in assocshapes bytes churn collections conjshapes control errors green 
   fi
 done
 
+phase "the language suite, every runtime"
 # THE LANGUAGE SUITE, on every runtime. `test/common` is written in flint and
 # ASSERTS its answers, which is the half everything above cannot cover: every
 # other row here diffs one runtime against another, so two ports wrong the same
@@ -833,6 +875,7 @@ for prog in churn collections control green hosted lazy maps numbers regex strin
 done
 
 
+phase "one config, three runtimes"
 # ONE CONFIG, THREE RUNTIMES. `:optimize [perf]` cannot be carried the same way
 # on any two of them: on wasm it changes the ARTIFACT -- a different runtime
 # binary, compiled arities emitted into the module -- while on the JVM and the
@@ -910,3 +953,5 @@ if [ "${FLINT_SELFHOST:-0}" = "1" ]; then
     fi
   fi
 fi
+
+conform_times
