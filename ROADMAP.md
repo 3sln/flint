@@ -506,8 +506,25 @@ and source collection have been drifting; there is nothing to keep in step.
 - [ ] Then compile `lib/flint/cli.cljc` and its glue, link into the native
       binary, and retire the Rust reimplementations of `build`, `check`,
       `fetch`, `inspect`, `paths`, `targets`, `task`, `tasks`
-- [ ] Until then, state which parts of `deps.edn` the native CLI reads — it is
-      currently capabilities and dependencies but not `:paths`
+- [ ] Until then, state which parts of `deps.edn` the native CLI reads.
+      **Measured 2026-09-12, on one project file:**
+
+          :flint/capabilities-grant   READ
+          :flint/tag-readers          READ
+          :flint/prelude              READ
+          :paths                      IGNORED
+          :deps                       IGNORED
+
+      One file, five keys, two answers, and nothing says which is which. The
+      user-visible symptom, on a project with a `:local/root`:
+
+          bin/flint build   -> module runs, prints "from the local dep"
+          flint run         -> "no source for shared"
+
+      `:local/root` was fixed today in the deps machinery, which `bin/flint`
+      drives. The shipped binary does not resolve dependencies at all, so the
+      fix is invisible there. That is not a new defect — it is the five-of-
+      thirteen command gap showing up where a user meets it
 - [ ] Decide whether the wasm runner stays native-only, the one place the
       mirror may legitimately break
 
