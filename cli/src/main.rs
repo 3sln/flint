@@ -1050,6 +1050,13 @@ fn usage() -> ! {
 is what the entry function is called with. Both are conventions of THIS CLI --
 the SDKs take a function name and an argument list and nothing more.
 
+`:with [fs]` IS ROOTED AT YOUR WORKING DIRECTORY, not at `:path`. Running
+`flint run :path /somewhere/proj :with [fs]` from your home directory lends the
+program your home directory -- not the project's tree. That is deliberate: you
+are conferring YOUR authority, and where you stand is what you are authorised
+over. It is also easy to misread, so it is said here. `cd` to the tree you mean
+to lend, or lend nothing.
+
 `:optimize` is an ordered preference: `[perf]` compiles every arity as well
 (bigger, much faster on arithmetic), `[size]` interprets. Unrecognised tokens
 are ignored, so a script written for a newer flint still runs here.
