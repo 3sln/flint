@@ -1024,8 +1024,16 @@ just the shared conformance fixtures).
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): superseded in mechanism; the requirement it states still stands**,
-met by `namespace-units` below.
+**Status: superseded in mechanism; the requirement it states still stands**,
+met by `namespace-units` below. Verified 2026-09-12: neither rejected mechanism
+is in the tree — `bin/build-units` opens with "No cargo on the compile path:
+`flint` only links these", and nothing nulls dispatch-table entries. The
+requirement holds, measured at the artifact: `flint inspect` reports `(+23
+builtins)` for `(defn main [_] "hi")`, `(+39)` for the same program calling
+`flint.data.json/write-str`, `(+192)` for the loader build. The parsers are
+adapted crates, not hand-written — `units-src/flint-data-json` over
+`serde_json`, `…-xml` over `xmlparser`, `…-html` over `htmlparser`, reached
+from cljc through `flint.rt/json-parse` (`lib/flint/data/json.cljc:39`).
 
 ### What was decided, and what replaced it
 
@@ -1062,8 +1070,22 @@ proposed answers lost.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): shipped.** A namespace is a compilation unit and `flint link`
-composes them.
+**Status: shipped — but there is no `flint link` command; composition runs
+inside an ordinary compile.** Checked 2026-09-12. `src/flint/link.cljc`
+(`discover-units`, `check-abi!`, `plan`, `link-objects`, `compose`) resolves one
+`<ns>.unit.edn` per namespace off the unit search path and runs `rust-lld
+-flavor wasm --no-entry --gc-sections` over only the reachable units' `.o`
+files; `units/` holds one unit per namespace (`flint.rt`, `flint.conc`,
+`flint.data.{json,html,xml}`), built by `bin/build-units`. No `link` subcommand
+exists in `cli/src/main.rs`, `bin/flint` or `lib/flint/cli.cljc`. Observed:
+`./bin/flint :src … :fn m/main` on `(defn main [_] "hi")`, then `./bin/flint
+inspect` on the result, prints `units: flint.rt` / `(+23 builtins)`, against
+`(+192 builtins)` for the loader build of the same program — only the reached
+builtins survive the link. One mechanism detail below is *not* how it was
+built: the registry is assembled after the link, by reading the module's export
+section and appending an element segment (`compose`), rather than by the
+runtime walking a linker section at startup. The property it was for — no
+hand-written table holding every builtin live — holds either way.
 
 ### What was decided
 
@@ -1124,7 +1146,19 @@ namespace compilation immediately, only not making it impossible.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): shipped.** Both are covered in the CLI options surface. (The flag
+**Status: shipped** — on `bin/flint`, the front end that links; the shipped
+`target/release/flint` carries no linker (`no-runtime-linking`) and its
+`compile` takes neither flag. Verified 2026-09-12 by running both. `:exclude
+[flint.data.json]` against a program calling `json/write-str` failed the
+compile with the chain — `flint.main/-main -> j/main ->
+flint.data.json/write-str`, plus the six other reachable vars — so it is the
+assertion described below, not a pruning (`check-exclusions!`,
+`src/flint/compiler.cljc:684`). `:wasm-path <dir>` over a copied unit tree
+linked and printed `note: unit flint.rt at units/flint/rt.unit.edn is shadowed
+by <dir>/flint/rt.unit.edn` for each of the five, so `units/` really is the last
+entry on the path; editing that copy's `:abi` to `{:runtime 2 …}` got `refusing
+unit flint.data.json …: runtime 2 (need 1)` (`abi-problem`/`check-abi!`,
+`src/flint/link.cljc`). (The flag
 was originally proposed as `:wasm-ld`, renamed to `:wasm-path` in
 `host-abi`, because "flags to pass to wasm-ld" is not what it means — "where
 to find precompiled units" is.)
@@ -1179,11 +1213,20 @@ exercised by every ordinary compile, not just a special test.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): part 1 shipped** — every module carries a `flint` custom section,
+**Status: part 1 shipped** — every module carries a `flint` custom section,
 readable from the bytes without instantiating, and `flint inspect` prints
 it. **Part 2 (shards) is not built** — the hard part, deciding which
 namespaces may be privately bundled versus which must be imported, remains
-unsolved work rather than solved-and-unbuilt.
+unsolved work rather than solved-and-unbuilt. Verified 2026-09-12: the section
+is written by `src/flint/link.cljc` last of all (`modmeta/describe`,
+`src/flint/modmeta.cljc`) and read from the bytes by `bin/flint inspect` and
+`host/modmeta.mjs`. Observed on a module from each front end — `./bin/flint
+:src … :fn m/main` and `target/release/flint compile … :to :wasm` — `./bin/flint
+inspect` printing `flint 0.1.0`, `compatibility key 6cebaa00   abi {:runtime 1,
+:value 1, :image 1}   unshared`, then present/absent features, units, exports
+and imports. For part 2, "shard" appears in `src/`, `lib/`, `cli/`, `host/` and
+`bin/flint` only in prose and citations; nothing classifies a namespace into
+`:provides`/`:bundles`/`:requires`.
 
 ### What was decided
 
@@ -1390,10 +1433,20 @@ do with wasm and had been costing every `for` over a large collection.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): shipped** for sections 1–2 (ropes); **section 5's conclusion is
-superseded** by `matching-over-ropes`, below. This is one of the most
-heavily cited decisions in the codebase and is treated at full length here
-for that reason.
+**Status: shipped** for sections 1–2 (ropes); **section 5's conclusion is
+superseded** by `matching-over-ropes`, below, which is itself shipped. This is
+one of the most heavily cited decisions in the codebase and is treated at full
+length here for that reason. Verified 2026-09-12. The three tiers are real and
+named: inline in `runtime/src/strs.rs`, flat and the B-tree in
+`runtime/src/rope.rs`, which fixes `FLAT_MAX` 1024, `FANOUT` 16 and `SLICE_MIN`
+256 and stores per-subtree counts rather than absolute offsets. Observed
+through `target/release/flint run`: a 2,490-byte string built by repeated `str`
+answers `kind` `:string`, gives the right `subs` and `nth`, and is `=` to the
+same content built another way — one interface over the tiers. `TY_ROPE`/
+`TyRope` is 42 on all four runtimes (`runtime/src/obj.rs:77`,
+`runtimes/jvm/…/Obj.java:69`, `runtimes/clr/src/rt/Obj.cs:26`, nine generated
+`Rope*` files per port). The "count the flattens" discipline is a real counter
+with a gate: `Rt::flatten` in `rope.rs` and `bin/check-flattens`.
 
 ### What was decided
 
@@ -1559,11 +1612,22 @@ kind of thing it must never be able to observe.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): shipped.** One shared NFA compiler with two simulators — a cljc
+**Status: shipped.** One shared NFA compiler with two simulators — a cljc
 reference and a native one — over a rope cursor. `re-pattern`, `re-find`,
 `re-matches`, `re-seq` all run on it; the catastrophic-backtracking case
 stays linear (measured: `(a+)+$` over 24 and 48 characters, 37 ms and 38 ms
-— i.e., not exponential).
+— i.e., not exponential). Verified 2026-09-12. All three parts exist:
+`lib/flint/nfa.cljc` (the shared compiler), `lib/flint/pike.cljc` (the cljc
+reference), and the native simulators — `runtime/src/pike.rs` plus the
+generated `Pike.java`/`Pike.cs` — which `lib/flint/regex.cljc` reaches through
+the `flint.rt/re-compile` and `flint.rt/re-run` builtins (l.295, 322, 333, 391),
+not through the cljc one. Observed through `target/release/flint run`:
+`re-find` with capture groups, `re-matches` matching and returning nil,
+`re-seq`, `re-pattern`, `str/split` and `str/replace` all answer correctly. The
+linearity was re-checked at the binary's own boundary rather than re-deriving
+the 37/38 ms figures: `(a+)+$` over 24, 48 and 2000 `a`s cost 1.62 s, 1.60 s
+and 1.75 s of total wall clock (compile-dominated, hence flat) — a backtracker
+would not have returned at 48.
 
 ### What was decided
 
@@ -1668,14 +1732,26 @@ of memory.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): partly built — steps 1–6 of 9.** The value type, row refs,
-`assoc`/`conj`/`update-row`, iteration, the constant-column encoding, and
-`migrate` all ship on the wasm and native runtimes, extensively measured.
-Not built: the transient (step 7 — since built per the source's own later
-notes), the column API, the codec/reader tag, and the JVM/CLR ports
-(deliberately last, so the type is ported once rather than after every
-step). This decision is heavily cited across the runtime and is treated at
-length.
+**Status: shipped.** The banner read "partly built — steps 1–6 of 9", naming
+the transient, the column API, the codec/reader tag and the JVM/CLR ports as
+not built. All four are in the tree, and the body of this section already
+describes three of them as done — the banner was stale, not the content.
+Checked 2026-09-12, by reading and by running. In `lib/flint/table.cljc`:
+`build` is `transient`/`conj!`/`persistent!` (l.157), `column`,
+`reduce-column`, `slice` and `select` are the column API (l.174–213), and
+`read-table` (l.218) is bound to `#flint/table` in `src/flint/reader.cljc:526`.
+A probe run through `target/release/flint run` on a 300-row table answered
+`(reduce-column t :a + 0)` = 44850, `(count (slice t 10 20))` = 10,
+`(count (build S (range 50) f))` = 50, printed
+`#flint/table {:schema [[:a :int] [:b :string]] :rows [{:a 1, :b "x"}]}`, and
+read that form back `=` to the original. The wire tag is `K_TABLE = 18`
+(`runtime/src/codec.rs:66`, `runtimes/jvm/…/Codec.java`,
+`runtimes/clr/src/rt/Codec.cs`). The ports are `runtimes/jvm/src/com/flint/rt/Table.java`
+and `runtimes/clr/src/rt/Table.cs` over the generated `kgen`
+`Table*` files (`kin/table*.kin`; commit 2bfa4fc, "`Table` is generated"), and
+`tables` is in `bin/conform-hosts`' three-runtime suite list (l.762) — the
+ports are checked here by code and by that listing, not by running the gate.
+This decision is heavily cited across the runtime and is treated at length.
 
 ### What was decided
 
@@ -1835,7 +1911,15 @@ port at all — half of what each type existed for.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): shipped.** `TY_TAGGED` on all four runtimes.
+**Status: shipped.** `TY_TAGGED` on all four runtimes. Verified 2026-09-12:
+the type number is 47 in `runtime/src/obj.rs:114` (native and wasm),
+`runtimes/jvm/src/com/flint/rt/Obj.java:83`, and as `TyTagged` in
+`runtimes/clr/src/rt/Obj.cs:39`, with `K_TAGGED = 17` in each of the three
+codecs. Behaviour observed through `target/release/flint run`: `kind` is
+`:tagged`, `map?` is false, it prints `#my.ns/thing 42`, `tag`/`form` read the
+two slots back, `assoc` on `:tag` and on `:form` each return a tagged literal,
+and `assoc` on any other key refuses with "a tagged literal has :tag and :form
+and nothing else, so it cannot take :zzz".
 
 ### What was decided
 
