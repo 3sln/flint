@@ -21,11 +21,21 @@
 # what it checks, but one that finds the wrong thing and cannot tell.
 set -e
 
+# A PER-RUN SCRATCH DIRECTORY. Every temporary here used to be a fixed
+# `/tmp/flint-…` name, so two copies of this script on one machine overwrote
+# each other's evidence and produced failures belonging to neither run. A
+# worktree isolates the SOURCE and not the scratch space, which is exactly the
+# case that bites: an agent verifying its own change had to wait for the main
+# tree's gate rather than run beside it.
+FLINT_SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/flint-conform.XXXXXX")
+trap 'rm -rf "$FLINT_SCRATCH"' EXIT
+
+
 # SECTION TIMING, the same shape `bin/test` grew. This script is 15% of the
 # gate and the largest single item in it, and nothing said where that went --
 # measuring `bin/test` turned a 371-second guess into a 5x win, so the same
 # question is worth asking here. Costs one `date` per phase.
-FLINT_CONF_TIMES=${FLINT_CONF_TIMES:-/tmp/flint-conform-times}
+FLINT_CONF_TIMES=${FLINT_CONF_TIMES:-$FLINT_SCRATCH/conform-times}
 : > "$FLINT_CONF_TIMES"
 _ph_at=$(date +%s)
 _ph_name=""
@@ -55,8 +65,8 @@ cd "$(dirname "$0")/.."
 # nothing at all and dropped out of the total. A timing harness that silently
 # omits a phase is the same fault as a gate that silently omits a check.
 phase "native: rebuild the reference answer"
-cargo build --release -p flint-cli > /tmp/flint-cli-build.log 2>&1 \
-  || { tail -20 /tmp/flint-cli-build.log; \
+cargo build --release -p flint-cli > "$FLINT_SCRATCH"/flint-cli-build.log 2>&1 \
+  || { tail -20 "$FLINT_SCRATCH"/flint-cli-build.log; \
        echo "  FAIL the native runtime does not build, so there is nothing to compare against"; \
        exit 1; }
 
@@ -100,12 +110,12 @@ if command -v dotnet >/dev/null 2>&1; then
   # every CLR row skipped, the whole runtime unverified, and this script
   # exiting 0 the entire time.
   if (cd runtimes/clr/conform && dotnet build -v q --nologo -c Release) \
-       > /tmp/flint-clr-build.out 2>&1; then
+       > "$FLINT_SCRATCH"/flint-clr-build.out 2>&1; then
     CLR="runtimes/clr/conform/bin/Release/net10.0/Conform"
     [ -x "$CLR" ] || { echo "  FAIL the CLR built but left no Conform binary"; exit 1; }
   else
     echo "  FAIL the CLR runtime does not compile"
-    grep -E "error" /tmp/flint-clr-build.out | sort -u | head -10
+    grep -E "error" "$FLINT_SCRATCH"/flint-clr-build.out | sort -u | head -10
     exit 1
   fi
 fi
@@ -166,14 +176,14 @@ mkdir -p out/conform
 rm -rf runtimes/jvm/classes
 if ! "$JDK/bin/javac" -d runtimes/jvm/classes \
      runtimes/jvm/src/com/flint/rt/*.java runtimes/jvm/src/com/_3sln/flint/kgen/rt/*.java \
-     runtimes/jvm/test/*.java > /tmp/flint-javac.out 2>&1; then
-  head -20 /tmp/flint-javac.out
+     runtimes/jvm/test/*.java > "$FLINT_SCRATCH"/flint-javac.out 2>&1; then
+  head -20 "$FLINT_SCRATCH"/flint-javac.out
   # A JDK TOO OLD is a missing toolchain and skippable. Anything else is the
   # PORT NOT COMPILING, which is a failure -- and treating it as a skip is how
   # this ran for a whole session reporting nothing while `Conc.java` had a call
   # to a method that does not exist. `missing` exits 0 by design, so the
   # distinction has to be made here.
-  if grep -q "java.lang.classfile" /tmp/flint-javac.out; then
+  if grep -q "java.lang.classfile" "$FLINT_SCRATCH"/flint-javac.out; then
     echo "  (this JDK is older than 24, which is what java.lang.classfile needs;"
     echo "   set FLINT_JDK to a 24+ install to run the JVM rows)"
     missing "javac needs a newer JDK than $JDK"
@@ -194,13 +204,13 @@ phase "ported runtime foundation, both hosts"
 # and of each other, and the only way to know that is to run the same checks on
 # both rather than to intend it.
 echo "  .. the ported runtime's foundation"
-"$JDK/bin/java" -cp runtimes/jvm/classes RtFoundation > /tmp/flint-rt-jvm.out 2>&1 \
-  || { cat /tmp/flint-rt-jvm.out; echo "  FAIL the ported runtime [jvm]"; exit 1; }
-sed 's/$/ [jvm]/' /tmp/flint-rt-jvm.out
+"$JDK/bin/java" -cp runtimes/jvm/classes RtFoundation > "$FLINT_SCRATCH"/flint-rt-jvm.out 2>&1 \
+  || { cat "$FLINT_SCRATCH"/flint-rt-jvm.out; echo "  FAIL the ported runtime [jvm]"; exit 1; }
+sed 's/$/ [jvm]/' "$FLINT_SCRATCH"/flint-rt-jvm.out
 if [ -n "$CLR" ]; then
-  "$CLR" --rt-foundation > /tmp/flint-rt-clr.out 2>&1 \
-    || { cat /tmp/flint-rt-clr.out; echo "  FAIL the ported runtime [clr]"; exit 1; }
-  sed 's/$/ [clr]/' /tmp/flint-rt-clr.out
+  "$CLR" --rt-foundation > "$FLINT_SCRATCH"/flint-rt-clr.out 2>&1 \
+    || { cat "$FLINT_SCRATCH"/flint-rt-clr.out; echo "  FAIL the ported runtime [clr]"; exit 1; }
+  sed 's/$/ [clr]/' "$FLINT_SCRATCH"/flint-rt-clr.out
 
   # The two are meant to be VERBATIM MIRRORS, so the check is not that each
   # passes -- it is that they make the same decisions. The collector lines
@@ -210,13 +220,13 @@ if [ -n "$CLR" ]; then
   #
   # The timing line is excluded, and only that one: it is a measurement of the
   # machine rather than of the port.
-  grep "^  ok" /tmp/flint-rt-jvm.out > /tmp/flint-rt-jvm.ok
-  grep "^  ok" /tmp/flint-rt-clr.out > /tmp/flint-rt-clr.ok
-  if cmp -s /tmp/flint-rt-jvm.ok /tmp/flint-rt-clr.ok; then
+  grep "^  ok" "$FLINT_SCRATCH"/flint-rt-jvm.out > "$FLINT_SCRATCH"/flint-rt-jvm.ok
+  grep "^  ok" "$FLINT_SCRATCH"/flint-rt-clr.out > "$FLINT_SCRATCH"/flint-rt-clr.ok
+  if cmp -s "$FLINT_SCRATCH"/flint-rt-jvm.ok "$FLINT_SCRATCH"/flint-rt-clr.ok; then
     echo "  ok   the two ported runtimes agree line for line"
   else
     echo "  FAIL the ported runtimes DIVERGED:"
-    diff /tmp/flint-rt-jvm.ok /tmp/flint-rt-clr.ok | sed 's/^/        /'
+    diff "$FLINT_SCRATCH"/flint-rt-jvm.ok "$FLINT_SCRATCH"/flint-rt-clr.ok | sed 's/^/        /'
     exit 1
   fi
 fi
@@ -277,20 +287,20 @@ PROBE
 # than "it did not throw".
 rt_want="$(./target/release/flint run :path out/rt-probe :fn probe/main 2>&1 || true)"
 "$JDK/bin/java" -cp runtimes/jvm/classes RtImage out/rt-probe/probe.img "$rt_want" \
-  > /tmp/flint-img-jvm.out 2>&1 \
-  || { cat /tmp/flint-img-jvm.out; echo "  FAIL the ported runtime disagrees with the native one [jvm]"; exit 1; }
-sed 's/$/ [jvm]/' /tmp/flint-img-jvm.out
+  > "$FLINT_SCRATCH"/flint-img-jvm.out 2>&1 \
+  || { cat "$FLINT_SCRATCH"/flint-img-jvm.out; echo "  FAIL the ported runtime disagrees with the native one [jvm]"; exit 1; }
+sed 's/$/ [jvm]/' "$FLINT_SCRATCH"/flint-img-jvm.out
 if [ -n "$CLR" ]; then
-  "$CLR" --rt-image out/rt-probe/probe.img "$rt_want" > /tmp/flint-img-clr.out 2>&1 \
-    || { cat /tmp/flint-img-clr.out; echo "  FAIL the ported runtime disagrees with the native one [clr]"; exit 1; }
-  sed 's/$/ [clr]/' /tmp/flint-img-clr.out
+  "$CLR" --rt-image out/rt-probe/probe.img "$rt_want" > "$FLINT_SCRATCH"/flint-img-clr.out 2>&1 \
+    || { cat "$FLINT_SCRATCH"/flint-img-clr.out; echo "  FAIL the ported runtime disagrees with the native one [clr]"; exit 1; }
+  sed 's/$/ [clr]/' "$FLINT_SCRATCH"/flint-img-clr.out
   # THREE runtimes on one program, and the two ports compared to each other as
   # well as to the native one. Agreeing with the native answer is what makes
   # each correct; agreeing line for line with each other -- constant counts,
   # code size, native count -- is what makes them the same port.
-  cmp -s /tmp/flint-img-jvm.out /tmp/flint-img-clr.out \
+  cmp -s "$FLINT_SCRATCH"/flint-img-jvm.out "$FLINT_SCRATCH"/flint-img-clr.out \
     && echo "  ok   the two ported runtimes read the image identically" \
-    || { diff /tmp/flint-img-jvm.out /tmp/flint-img-clr.out | head; \
+    || { diff "$FLINT_SCRATCH"/flint-img-jvm.out "$FLINT_SCRATCH"/flint-img-clr.out | head; \
          echo "  FAIL the two ported runtimes read the image differently"; exit 1; }
 fi
 
@@ -411,14 +421,14 @@ phase "gas bounds every runtime"
 # So this asks for the REFUSAL, and then asks the two ports to agree on the
 # instruction count at which it came, which is the parity claim rather than the
 # mere existence of a limit.
-"$JDK/bin/java" -cp runtimes/jvm/classes RtGas out/rt-probe/probe.img > /tmp/flint-gas-jvm.out 2>&1 \
-  || { cat /tmp/flint-gas-jvm.out; echo "  FAIL gas is not a bound [jvm]"; exit 1; }
-sed 's/$/ [jvm]/' /tmp/flint-gas-jvm.out
+"$JDK/bin/java" -cp runtimes/jvm/classes RtGas out/rt-probe/probe.img > "$FLINT_SCRATCH"/flint-gas-jvm.out 2>&1 \
+  || { cat "$FLINT_SCRATCH"/flint-gas-jvm.out; echo "  FAIL gas is not a bound [jvm]"; exit 1; }
+sed 's/$/ [jvm]/' "$FLINT_SCRATCH"/flint-gas-jvm.out
 if [ -n "$CLR" ]; then
-  "$CLR" --rt-gas out/rt-probe/probe.img > /tmp/flint-gas-clr.out 2>&1 \
-    || { cat /tmp/flint-gas-clr.out; echo "  FAIL gas is not a bound [clr]"; exit 1; }
-  sed 's/$/ [clr]/' /tmp/flint-gas-clr.out
-  cmp -s /tmp/flint-gas-jvm.out /tmp/flint-gas-clr.out \
+  "$CLR" --rt-gas out/rt-probe/probe.img > "$FLINT_SCRATCH"/flint-gas-clr.out 2>&1 \
+    || { cat "$FLINT_SCRATCH"/flint-gas-clr.out; echo "  FAIL gas is not a bound [clr]"; exit 1; }
+  sed 's/$/ [clr]/' "$FLINT_SCRATCH"/flint-gas-clr.out
+  cmp -s "$FLINT_SCRATCH"/flint-gas-jvm.out "$FLINT_SCRATCH"/flint-gas-clr.out \
     || { echo "  FAIL the two ports stop at different instruction counts"; exit 1; }
   echo "  ok   and both stop at the same instruction, which is the parity claim"
 fi
@@ -434,13 +444,13 @@ phase "parallel executors, K host threads"
 # survives and what moved is found where it moved to. The collection count is
 # printed so that a change which quietly stops the nursery filling shows up as
 # a WEAKER test rather than as a passing one.
-"$JDK/bin/java" -cp runtimes/jvm/classes RtParallel > /tmp/flint-par-jvm.out 2>&1 \
-  || { cat /tmp/flint-par-jvm.out; echo "  FAIL parallel executors [jvm]"; exit 1; }
-sed 's/$/ [jvm]/' /tmp/flint-par-jvm.out
+"$JDK/bin/java" -cp runtimes/jvm/classes RtParallel > "$FLINT_SCRATCH"/flint-par-jvm.out 2>&1 \
+  || { cat "$FLINT_SCRATCH"/flint-par-jvm.out; echo "  FAIL parallel executors [jvm]"; exit 1; }
+sed 's/$/ [jvm]/' "$FLINT_SCRATCH"/flint-par-jvm.out
 if [ -n "$CLR" ]; then
-  "$CLR" --rt-parallel > /tmp/flint-par-clr.out 2>&1 \
-    || { cat /tmp/flint-par-clr.out; echo "  FAIL parallel executors [clr]"; exit 1; }
-  sed 's/$/ [clr]/' /tmp/flint-par-clr.out
+  "$CLR" --rt-parallel > "$FLINT_SCRATCH"/flint-par-clr.out 2>&1 \
+    || { cat "$FLINT_SCRATCH"/flint-par-clr.out; echo "  FAIL parallel executors [clr]"; exit 1; }
+  sed 's/$/ [clr]/' "$FLINT_SCRATCH"/flint-par-clr.out
 fi
 
 phase "the stale-push check"
@@ -463,16 +473,16 @@ phase "the stale-push check"
 # stderr is dropped: a stale push prints a stack trace, and the two hosts spell
 # those differently. The verdict lines on stdout are what must match.
 FLINT_STALE=1 "$JDK/bin/java" -cp runtimes/jvm/classes RtStale \
-  > /tmp/flint-stale-jvm.out 2>/dev/null \
-  || { cat /tmp/flint-stale-jvm.out; echo "  FAIL the stale-push check [jvm]"; exit 1; }
-sed 's/$/ [jvm]/' /tmp/flint-stale-jvm.out
+  > "$FLINT_SCRATCH"/flint-stale-jvm.out 2>/dev/null \
+  || { cat "$FLINT_SCRATCH"/flint-stale-jvm.out; echo "  FAIL the stale-push check [jvm]"; exit 1; }
+sed 's/$/ [jvm]/' "$FLINT_SCRATCH"/flint-stale-jvm.out
 if [ -n "$CLR" ]; then
-  FLINT_STALE=1 "$CLR" --rt-stale > /tmp/flint-stale-clr.out 2>/dev/null \
-    || { cat /tmp/flint-stale-clr.out; echo "  FAIL the stale-push check [clr]"; exit 1; }
-  sed 's/$/ [clr]/' /tmp/flint-stale-clr.out
-  cmp -s /tmp/flint-stale-jvm.out /tmp/flint-stale-clr.out \
+  FLINT_STALE=1 "$CLR" --rt-stale > "$FLINT_SCRATCH"/flint-stale-clr.out 2>/dev/null \
+    || { cat "$FLINT_SCRATCH"/flint-stale-clr.out; echo "  FAIL the stale-push check [clr]"; exit 1; }
+  sed 's/$/ [clr]/' "$FLINT_SCRATCH"/flint-stale-clr.out
+  cmp -s "$FLINT_SCRATCH"/flint-stale-jvm.out "$FLINT_SCRATCH"/flint-stale-clr.out \
     && echo "  ok   both ports catch a stale push and neither cries wolf" \
-    || { diff /tmp/flint-stale-jvm.out /tmp/flint-stale-clr.out | head; \
+    || { diff "$FLINT_SCRATCH"/flint-stale-jvm.out "$FLINT_SCRATCH"/flint-stale-clr.out | head; \
          echo "  FAIL the ports disagree about stale pushes"; exit 1; }
 fi
 
@@ -484,15 +494,15 @@ phase "port suites again, check on"
 for pair in "RtFoundation --rt-foundation" "RtMaps --rt-maps" \
             "RtSnapshot --rt-snapshot" "RtParallel --rt-parallel"; do
   set -- $pair
-  FLINT_STALE=1 "$JDK/bin/java" -cp runtimes/jvm/classes "$1" > /tmp/flint-st.out 2>&1 || true
-  if grep -q "STALE PUSH" /tmp/flint-st.out; then
-    grep -A6 "STALE PUSH" /tmp/flint-st.out | head -12
+  FLINT_STALE=1 "$JDK/bin/java" -cp runtimes/jvm/classes "$1" > "$FLINT_SCRATCH"/flint-st.out 2>&1 || true
+  if grep -q "STALE PUSH" "$FLINT_SCRATCH"/flint-st.out; then
+    grep -A6 "STALE PUSH" "$FLINT_SCRATCH"/flint-st.out | head -12
     echo "  FAIL $1 roots a value AFTER allocating across it [jvm]"; exit 1
   fi
   if [ -n "$CLR" ]; then
-    FLINT_STALE=1 "$CLR" "$2" > /tmp/flint-st.out 2>&1 || true
-    if grep -q "STALE PUSH" /tmp/flint-st.out; then
-      grep -A6 "STALE PUSH" /tmp/flint-st.out | head -12
+    FLINT_STALE=1 "$CLR" "$2" > "$FLINT_SCRATCH"/flint-st.out 2>&1 || true
+    if grep -q "STALE PUSH" "$FLINT_SCRATCH"/flint-st.out; then
+      grep -A6 "STALE PUSH" "$FLINT_SCRATCH"/flint-st.out | head -12
       echo "  FAIL $1 roots a value AFTER allocating across it [clr]"; exit 1
     fi
   fi
@@ -517,11 +527,11 @@ phase "under a collection at every allocation"
 # rooting bug, and running it here would only teach people to ignore a failure.
 for pair in "RtFoundation --rt-foundation" "RtMaps --rt-maps" "RtSnapshot --rt-snapshot"; do
   set -- $pair
-  "$JDK/bin/java" -Dflint.gcstress=1 -cp runtimes/jvm/classes "$1" > /tmp/flint-gcs.out 2>&1 \
-    || { tail -5 /tmp/flint-gcs.out; echo "  FAIL $1 under a collection at every allocation [jvm]"; exit 1; }
+  "$JDK/bin/java" -Dflint.gcstress=1 -cp runtimes/jvm/classes "$1" > "$FLINT_SCRATCH"/flint-gcs.out 2>&1 \
+    || { tail -5 "$FLINT_SCRATCH"/flint-gcs.out; echo "  FAIL $1 under a collection at every allocation [jvm]"; exit 1; }
   if [ -n "$CLR" ]; then
-    FLINT_GCSTRESS=1 "$CLR" "$2" > /tmp/flint-gcs.out 2>&1 \
-      || { tail -5 /tmp/flint-gcs.out; echo "  FAIL $1 under a collection at every allocation [clr]"; exit 1; }
+    FLINT_GCSTRESS=1 "$CLR" "$2" > "$FLINT_SCRATCH"/flint-gcs.out 2>&1 \
+      || { tail -5 "$FLINT_SCRATCH"/flint-gcs.out; echo "  FAIL $1 under a collection at every allocation [clr]"; exit 1; }
   fi
 done
 echo "  ok   three port suites re-run collecting at every allocation, both hosts"
@@ -551,24 +561,24 @@ if ./bin/flint :src runtimes/conform-host :fn hostport/main --emit-image \
   # which exists on wasm32, so the bin is gated -- otherwise a workspace-wide
   # wasm build trips over it and the whole distributable stops building.
   cargo build --release -p flint-conc --bin hostports --features host-tools \
-    > /tmp/flint-hp-build.log 2>&1 \
-    || { tail -20 /tmp/flint-hp-build.log; \
+    > "$FLINT_SCRATCH"/flint-hp-build.log 2>&1 \
+    || { tail -20 "$FLINT_SCRATCH"/flint-hp-build.log; \
          echo "  FAIL the native host-port driver does not build"; exit 1; }
-  ./target/release/hostports out/conform/hostport.img > /tmp/flint-hp-native.out 2>&1 \
-    || { cat /tmp/flint-hp-native.out; echo "  FAIL host ports [native]"; exit 1; }
-  sed 's/$/ [native]/' /tmp/flint-hp-native.out
+  ./target/release/hostports out/conform/hostport.img > "$FLINT_SCRATCH"/flint-hp-native.out 2>&1 \
+    || { cat "$FLINT_SCRATCH"/flint-hp-native.out; echo "  FAIL host ports [native]"; exit 1; }
+  sed 's/$/ [native]/' "$FLINT_SCRATCH"/flint-hp-native.out
   "$JDK/bin/java" -cp runtimes/jvm/classes RtHostPorts out/conform/hostport.img \
-    > /tmp/flint-hp-jvm.out 2>&1 \
-    || { cat /tmp/flint-hp-jvm.out; echo "  FAIL host ports [jvm]"; exit 1; }
-  cmp -s /tmp/flint-hp-native.out /tmp/flint-hp-jvm.out \
-    || { diff /tmp/flint-hp-native.out /tmp/flint-hp-jvm.out | head -20; \
+    > "$FLINT_SCRATCH"/flint-hp-jvm.out 2>&1 \
+    || { cat "$FLINT_SCRATCH"/flint-hp-jvm.out; echo "  FAIL host ports [jvm]"; exit 1; }
+  cmp -s "$FLINT_SCRATCH"/flint-hp-native.out "$FLINT_SCRATCH"/flint-hp-jvm.out \
+    || { diff "$FLINT_SCRATCH"/flint-hp-native.out "$FLINT_SCRATCH"/flint-hp-jvm.out | head -20; \
          echo "  FAIL the jvm port drives the host protocol differently"; exit 1; }
   echo "  ok   the jvm port produces the same transcript, line for line"
   if [ -n "$CLR" ]; then
-    "$CLR" --rt-hostports out/conform/hostport.img > /tmp/flint-hp-clr.out 2>&1 \
-      || { cat /tmp/flint-hp-clr.out; echo "  FAIL host ports [clr]"; exit 1; }
-    cmp -s /tmp/flint-hp-native.out /tmp/flint-hp-clr.out \
-      || { diff /tmp/flint-hp-native.out /tmp/flint-hp-clr.out | head -20; \
+    "$CLR" --rt-hostports out/conform/hostport.img > "$FLINT_SCRATCH"/flint-hp-clr.out 2>&1 \
+      || { cat "$FLINT_SCRATCH"/flint-hp-clr.out; echo "  FAIL host ports [clr]"; exit 1; }
+    cmp -s "$FLINT_SCRATCH"/flint-hp-native.out "$FLINT_SCRATCH"/flint-hp-clr.out \
+      || { diff "$FLINT_SCRATCH"/flint-hp-native.out "$FLINT_SCRATCH"/flint-hp-clr.out | head -20; \
            echo "  FAIL the clr port drives the host protocol differently"; exit 1; }
     echo "  ok   and so does the clr port"
   fi
@@ -580,15 +590,15 @@ fi
 # MAPS: the array-map, the promotion to CHAMP at 9 entries, and the two
 # properties CHAMP is chosen FOR -- canonical form (a map built by deleting
 # equals and hashes like the same map built directly) and collision nodes.
-"$JDK/bin/java" -cp runtimes/jvm/classes RtMaps > /tmp/flint-maps-jvm.out 2>&1 \
-  || { cat /tmp/flint-maps-jvm.out; echo "  FAIL maps on the ported runtime [jvm]"; exit 1; }
-sed 's/$/ [jvm]/' /tmp/flint-maps-jvm.out
+"$JDK/bin/java" -cp runtimes/jvm/classes RtMaps > "$FLINT_SCRATCH"/flint-maps-jvm.out 2>&1 \
+  || { cat "$FLINT_SCRATCH"/flint-maps-jvm.out; echo "  FAIL maps on the ported runtime [jvm]"; exit 1; }
+sed 's/$/ [jvm]/' "$FLINT_SCRATCH"/flint-maps-jvm.out
 if [ -n "$CLR" ]; then
-  "$CLR" --rt-maps > /tmp/flint-maps-clr.out 2>&1 \
-    || { cat /tmp/flint-maps-clr.out; echo "  FAIL maps on the ported runtime [clr]"; exit 1; }
-  sed 's/$/ [clr]/' /tmp/flint-maps-clr.out
-  cmp -s /tmp/flint-maps-jvm.out /tmp/flint-maps-clr.out \
-    || { diff /tmp/flint-maps-jvm.out /tmp/flint-maps-clr.out | head; \
+  "$CLR" --rt-maps > "$FLINT_SCRATCH"/flint-maps-clr.out 2>&1 \
+    || { cat "$FLINT_SCRATCH"/flint-maps-clr.out; echo "  FAIL maps on the ported runtime [clr]"; exit 1; }
+  sed 's/$/ [clr]/' "$FLINT_SCRATCH"/flint-maps-clr.out
+  cmp -s "$FLINT_SCRATCH"/flint-maps-jvm.out "$FLINT_SCRATCH"/flint-maps-clr.out \
+    || { diff "$FLINT_SCRATCH"/flint-maps-jvm.out "$FLINT_SCRATCH"/flint-maps-clr.out | head; \
          echo "  FAIL the two ports disagree about maps"; exit 1; }
 fi
 
@@ -600,15 +610,15 @@ phase "shelving a real program mid-run"
 # carries on to the answer it would have reached uninterrupted. A hand-built
 # heap has no interpreter state in it at all, so none of that was covered.
 "$JDK/bin/java" -cp runtimes/jvm/classes RtShelve out/rt-probe/probe.img "$rt_want" \
-  > /tmp/flint-shelve-jvm.out 2>&1 \
-  || { cat /tmp/flint-shelve-jvm.out; echo "  FAIL shelving a real program [jvm]"; exit 1; }
-sed 's/$/ [jvm]/' /tmp/flint-shelve-jvm.out
+  > "$FLINT_SCRATCH"/flint-shelve-jvm.out 2>&1 \
+  || { cat "$FLINT_SCRATCH"/flint-shelve-jvm.out; echo "  FAIL shelving a real program [jvm]"; exit 1; }
+sed 's/$/ [jvm]/' "$FLINT_SCRATCH"/flint-shelve-jvm.out
 if [ -n "$CLR" ]; then
-  "$CLR" --rt-shelve out/rt-probe/probe.img "$rt_want" > /tmp/flint-shelve-clr.out 2>&1 \
-    || { cat /tmp/flint-shelve-clr.out; echo "  FAIL shelving a real program [clr]"; exit 1; }
-  sed 's/$/ [clr]/' /tmp/flint-shelve-clr.out
-  cmp -s /tmp/flint-shelve-jvm.out /tmp/flint-shelve-clr.out \
-    || { diff /tmp/flint-shelve-jvm.out /tmp/flint-shelve-clr.out | head -4
+  "$CLR" --rt-shelve out/rt-probe/probe.img "$rt_want" > "$FLINT_SCRATCH"/flint-shelve-clr.out 2>&1 \
+    || { cat "$FLINT_SCRATCH"/flint-shelve-clr.out; echo "  FAIL shelving a real program [clr]"; exit 1; }
+  sed 's/$/ [clr]/' "$FLINT_SCRATCH"/flint-shelve-clr.out
+  cmp -s "$FLINT_SCRATCH"/flint-shelve-jvm.out "$FLINT_SCRATCH"/flint-shelve-clr.out \
+    || { diff "$FLINT_SCRATCH"/flint-shelve-jvm.out "$FLINT_SCRATCH"/flint-shelve-clr.out | head -4
          echo "  FAIL the two ports shelve differently"; exit 1; }
 fi
 
@@ -638,30 +648,30 @@ phase "a live snapshot across runtimes"
 # property rather than a coincidence.
 mkdir -p out/snapcross
 cargo run -p flint-rt --release --quiet --features diagnostics --example livedump \
-  -- out/snapcross/native.bin > /tmp/flint-livedump.out 2>/dev/null \
-  || { cat /tmp/flint-livedump.out; echo "  FAIL native could not write a live snapshot"; exit 1; }
+  -- out/snapcross/native.bin > "$FLINT_SCRATCH"/flint-livedump.out 2>/dev/null \
+  || { cat "$FLINT_SCRATCH"/flint-livedump.out; echo "  FAIL native could not write a live snapshot"; exit 1; }
 
 FLINT_LIVEDUMP=out/snapcross/jvm.bin FLINT_LIVEIMPORT=out/snapcross/native.bin \
-"$JDK/bin/java" -cp runtimes/jvm/classes RtSnapshot > /tmp/flint-snap-jvm.out 2>&1 \
-  || { cat /tmp/flint-snap-jvm.out; echo "  FAIL snapshots on the ported runtime [jvm]"; exit 1; }
-sed 's/$/ [jvm]/' /tmp/flint-snap-jvm.out
+"$JDK/bin/java" -cp runtimes/jvm/classes RtSnapshot > "$FLINT_SCRATCH"/flint-snap-jvm.out 2>&1 \
+  || { cat "$FLINT_SCRATCH"/flint-snap-jvm.out; echo "  FAIL snapshots on the ported runtime [jvm]"; exit 1; }
+sed 's/$/ [jvm]/' "$FLINT_SCRATCH"/flint-snap-jvm.out
 if [ -n "$CLR" ]; then
   FLINT_LIVEDUMP=out/snapcross/clr.bin FLINT_LIVEIMPORT=out/snapcross/native.bin \
-  "$CLR" --rt-snapshot > /tmp/flint-snap-clr.out 2>&1 \
-    || { cat /tmp/flint-snap-clr.out; echo "  FAIL snapshots on the ported runtime [clr]"; exit 1; }
-  sed 's/$/ [clr]/' /tmp/flint-snap-clr.out
+  "$CLR" --rt-snapshot > "$FLINT_SCRATCH"/flint-snap-clr.out 2>&1 \
+    || { cat "$FLINT_SCRATCH"/flint-snap-clr.out; echo "  FAIL snapshots on the ported runtime [clr]"; exit 1; }
+  sed 's/$/ [clr]/' "$FLINT_SCRATCH"/flint-snap-clr.out
   # BYTE FOR BYTE, not merely "both passed". The two runtimes were written
   # separately, so the strong evidence that they are mirrors is that they
   # produce the SAME NUMBERS -- the snapshot sizes are printed precisely
   # because they are what would move if a field were written at a different
   # width or in a different order.
-  if cmp -s /tmp/flint-snap-jvm.out /tmp/flint-snap-clr.out; then
+  if cmp -s "$FLINT_SCRATCH"/flint-snap-jvm.out "$FLINT_SCRATCH"/flint-snap-clr.out; then
     echo "  ok   the two ported runtimes snapshot identically, byte counts included"
     cmp -s out/snapcross/jvm.bin out/snapcross/clr.bin \
       || { echo "  FAIL the two ports write different live-snapshot BYTES"; exit 1; }
     echo "  ok   ... and the live snapshots they write are byte for byte the same"
   else
-    diff /tmp/flint-snap-jvm.out /tmp/flint-snap-clr.out | head -20
+    diff "$FLINT_SCRATCH"/flint-snap-jvm.out "$FLINT_SCRATCH"/flint-snap-clr.out | head -20
     echo "  FAIL the two ported runtimes disagree about snapshots"
     exit 1
   fi
@@ -674,15 +684,15 @@ for who in jvm clr; do
   [ -f "out/snapcross/$who.bin" ] || continue
   LIVEDUMP_IMPORT="out/snapcross/$who.bin" \
     cargo run -p flint-rt --release --quiet --features diagnostics --example livedump \
-    > /tmp/flint-cross.out 2>/dev/null
-  grep -q "accepted=true" /tmp/flint-cross.out \
-    || { cat /tmp/flint-cross.out; echo "  FAIL native refused the $who live snapshot"; exit 1; }
+    > "$FLINT_SCRATCH"/flint-cross.out 2>/dev/null
+  grep -q "accepted=true" "$FLINT_SCRATCH"/flint-cross.out \
+    || { cat "$FLINT_SCRATCH"/flint-cross.out; echo "  FAIL native refused the $who live snapshot"; exit 1; }
   # THE WHOLE STRUCTURE, not a prefix. `livedump` rebuilds it and compares,
   # because checking `accepted` and the first few characters passed a real
   # port snapshot with a byte flipped in the middle of it -- the import still
   # succeeded and the first element still read `0=item-0`.
-  grep -q "matches=true" /tmp/flint-cross.out \
-    || { cat /tmp/flint-cross.out
+  grep -q "matches=true" "$FLINT_SCRATCH"/flint-cross.out \
+    || { cat "$FLINT_SCRATCH"/flint-cross.out
          echo "  FAIL native read the $who live snapshot and got something else"; exit 1; }
   echo "  ok   native reads the live snapshot the $who runtime wrote"
 done
@@ -744,7 +754,7 @@ phase "every conformance program, 3 runtimes"
 # program's transcript whole.
 #
 # PER-PROGRAM TEMP FILES for the same reason. The body wrote
-# `/tmp/flint-c-jvm.out` and three others at fixed names, which twenty-three
+# `"$FLINT_SCRATCH"/flint-c-jvm.out` and three others at fixed names, which twenty-three
 # concurrent jobs would trample -- and which a concurrent run of this script in
 # another worktree tramples today, sequential or not.
 conform_progs="assocshapes bytes churn collections conjshapes control errors
@@ -885,14 +895,14 @@ if ./bin/flint test :src test/common --emit-image :out out/conform/common.img \
   echo "  ok   the language suite passes [native]: \
 $(echo "$common_want" | grep 'checks passed' | tr -d '\n')"
   "$JDK/bin/java" -cp runtimes/jvm/classes RtImage out/conform/common.img "$common_want" \
-    > /tmp/flint-common-jvm.out 2>&1 \
-    || { tail -20 /tmp/flint-common-jvm.out
+    > "$FLINT_SCRATCH"/flint-common-jvm.out 2>&1 \
+    || { tail -20 "$FLINT_SCRATCH"/flint-common-jvm.out
          echo "  FAIL the language suite disagrees with native [jvm]"; exit 1; }
   echo "  ok   and produces the same report, check by check [jvm]"
   if [ -n "$CLR" ]; then
     "$CLR" --rt-image out/conform/common.img "$common_want" \
-      > /tmp/flint-common-clr.out 2>&1 \
-      || { tail -20 /tmp/flint-common-clr.out
+      > "$FLINT_SCRATCH"/flint-common-clr.out 2>&1 \
+      || { tail -20 "$FLINT_SCRATCH"/flint-common-clr.out
            echo "  FAIL the language suite disagrees with native [clr]"; exit 1; }
     echo "  ok   and so does the clr port"
   fi
