@@ -918,6 +918,24 @@ Recorded 2026-09-11. Full spec at `DECISIONS.md#dialects-and-preludes`.
       use `#flint/table`, it prints and reads one — all five occurrences are
       comments, a docstring and two `str` literals. The earlier claim was a
       grep, and a grep cannot tell a tag from the text of a tag
+- [ ] **The SEMANTIC half is still open, and it answers differently.** "No
+      flint-only tags" is not "would mean the same under Clojure". Most of
+      `lib/` calls `flint.rt/` — `clojure/core.cljc` 261 times,
+      `clojure/string.cljc` 27 — because those files are flint's
+      IMPLEMENTATIONS of those namespaces, not portable Clojure. By the rule as
+      written, much of the standard library is `.fln`.
+
+      Two cautions before anyone acts on that. **The grep is a starting point
+      and never a finding**: two of two spot-checks were false positives —
+      `table.cljc`'s hits are comments and `str` literals, and
+      `lib/flint/cli.cljc`'s single `flint.rt/` sits inside a string it EMITS
+      as generated source, so that namespace is portable after all.
+
+      **And the extension is load-bearing.** `bin/flint` loads `flint.cli`,
+      `flint.deps` and others from `lib/` under babashka, which cannot read a
+      `.fln`. Renaming those breaks the bootstrap host. So the migration is
+      per-file judgement — does anything outside flint read this file? — and
+      that answer, not the call graph, decides the extension
 - [x] ORDER MATTERS: migrate first, enforce second. Migrated: `test/tags.clj`
       (`a.fln`, `b.fln`), `test/tables.clj` (`ops.fln`) and `test/sysns.clj`
       (`app.fln`) — the last two were MISSED by the grep audit and found by
