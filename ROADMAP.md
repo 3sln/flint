@@ -476,16 +476,29 @@ native CLI implements all six in Rust. So `slurp` (21 sites), `spit` (8),
 `io/file` (19) and the git/curl/tar/unzip fetching have a portable expression
 already; `bin/flint` implements them directly instead of serving them.
 
-**TWO THINGS GENUINELY ARE NOT SERVED, and they are the whole job:**
+**AND THE SEAM ALREADY EXISTS — corrected after reading it properly.**
+`flint.cli/run` takes `argv`, a `slurp*` FUNCTION, and `opts`, and answers
+`{:out text}`, `:code`, or **`{:exec {...}}` for a task the host should compile
+and run**. So "how does a module get run from flint code" is already answered:
+it does not. The guest says what to run and the host runs it. Its docstring is
+explicit that `slurp*` is "the seam that lets this same code run under the
+bootstrap host, where there is no port".
 
-- **Running a compiled module.** `bin/flint` shells out to `node` three times
-  for this, because babashka has no wasm engine. The native CLI has the runtime
-  compiled in; node has one natively. This is the one capability that differs
-  in KIND between the three hosts rather than in implementation, and the
-  unified CLI needs either a served operation for it or a structure that keeps
-  execution host-side.
-- **Exiting.** 24 `System/exit` sites. A flint entry returns a value, so these
-  become a returned status the wrapper acts on — mechanical, but 24 of them.
+**THE REAL DUPLICATION IS THE SPEC.** Both front ends build one and hand it to
+`flint.selfhost`: `bin/flint` assembles a Clojure map (`:files :workspaces
+:entry :builtins :features` …) and calls `compiler/compile-image`; the native
+CLI assembles the same thing as EDN text in ~200 lines of Rust
+(`build_spec_with`) and runs the embedded compiler with `["project", spec]`.
+One concept, two implementations, and every drift found this session lived in
+that gap — workspaces, pods, prelude, dialect, features.
+
+So the split is: the HOST supplies what only it knows — file contents, the
+sys/pod catalogue, slot numbers, booted pods — and FLINT CODE assembles the
+spec and drives. That is what the native CLI already does from the outside; it
+just does the assembling in Rust.
+
+- **Exiting** is the remaining mechanical piece: 24 `System/exit` sites become
+  a returned status, which `{:code}` already carries.
 
 **The shape that follows:** `cli.cljc` calls `flint.sys.*` and
 `flint.deps.*`; each front end SERVES that catalogue — Rust natively, JS on
@@ -493,10 +506,8 @@ node, babashka by shelling out — and each supplies its own way to run a module
 That is what `cli/src/sys.rs`'s catalogue already is, extended to cover what
 `bin/flint` currently does by hand.
 
-- [ ] Serve the sys catalogue from `bin/flint` rather than implementing its
-      operations inline
-- [ ] Decide how a module is RUN from flint code — a served operation, or
-      execution staying in the wrapper
+- [ ] ONE spec builder, in flint code, called by both front ends — retiring
+      `build_spec_with`'s Rust half and `bin/flint`'s map half
 - [ ] Move the compiler-driving half of `bin/flint` into `flint.cli`
 - [ ] Retire the Rust reimplementations once `:to :llvm` compiles the driver
 
