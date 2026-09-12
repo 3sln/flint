@@ -409,6 +409,27 @@ be judged against it. Since npm-only is the decided path for now, that is the
 same order the work was going in anyway — build it, then measure, then decide
 whether the native binary earns its keep.
 
+### Source workspaces in the native CLI (fixed 2026-09-11)
+
+The shipped binary emitted VIRTUAL workspaces only, so every compiled file
+belonged to the anonymous workspace. The capability guard skips references
+within one workspace, so it never fired; `:flint/tag-readers` was never bound.
+`bin/flint` read `deps.edn` and behaved correctly, and every test for both
+features drove `bin/flint` — so the suite was green while the thing that ships
+was inert.
+
+Fixed: `build_spec_with` now emits the stdlib's workspace (from `lib/deps.edn`,
+newly embedded by `cli/build.rs`) and the project's own. `test/sysns.clj`, which
+drives `target/release/flint`, covers both.
+
+- [ ] **Multi-root projects take the FIRST `deps.edn` found.** `bin/flint`
+      resolves a workspace per source root, keyed by path prefix. This side
+      keys files by their namespace-derived path with no marker for which root
+      they came from, so it cannot distinguish them. Narrower than `bin/flint`,
+      and deliberate rather than hidden
+- [ ] Audit what else is tested only through `bin/flint` — the class of bug is
+      "the binary users run is the one nothing exercises"
+
 ### Dialects and pluggable preludes (spec only, nothing built)
 
 Recorded 2026-09-11. Full spec at `DECISIONS.md#dialects-and-preludes`.

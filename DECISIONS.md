@@ -4337,11 +4337,33 @@ species, but because a `.cljc` is a file other platforms' readers will read, and
 they know nothing of flint's prelude. A `.cljc` whose meaning depends on one is
 not portable, whatever it says on the tin.
 
-**The prelude becomes a workspace's ordered list.** Today it is pinned in code:
-`project/core-first` hardcodes `clojure.core`, `flint.core`, `flint.protocols`,
-`flint.check` — analysed before everything, referable without a `:require`. That
-list is duplicated in `bin/flint`. Making it configuration replaces two
-hardcoded copies with one declaration:
+**The prelude becomes a workspace's ordered list.** Today the implicit refer is
+hardcoded in ONE place — `flint.analyzer` falls back to `clojure.core` for any
+unqualified symbol it cannot otherwise resolve — and that single lookup is what
+becomes configurable:
+
+```clojure
+;; src/flint/analyzer.cljc, the whole of today's prelude
+(when (get-in cc [:vars (symbol "clojure.core" (name sym))])
+  (symbol "clojure.core" (name sym)))
+```
+
+**`core-first` IS A DIFFERENT LIST, and an earlier draft of this section wrongly
+said the prelude replaces it.** It pins `clojure.core`, `flint.core`,
+`flint.protocols` and `flint.check` into the front of the LOAD order, and only
+the first of those is implicitly referred. The other three are there because the
+compiler EMITS references into them that no source names — `defprotocol`
+expanding to `flint.protocols/extend-method`, `protocol-miss` calling
+`flint.core/kind` — which is a question about initialisation order, not about
+what a bare symbol means.
+
+The two lists overlap without being the same, and conflating them would make
+`:flint/prelude` quietly responsible for load-order correctness that has already
+cost this project several debugging sessions. A prelude entry must of course be
+initialised before the code that uses it, so the prelude contributes to the pin;
+it does not subsume it.
+
+The declaration:
 
 ```clojure
 {:flint/prelude [clojure.core flint.core my.lib.prelude]}

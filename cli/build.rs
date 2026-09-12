@@ -40,7 +40,13 @@ fn main() {
     }
     walk(&lib, "", &mut entries);
 
-    let mut src = String::from("pub static STDLIB: &[(&str, &str)] = &[\n");
+    // The stdlib's OWN `deps.edn`, which names its workspace and says what it
+    // holds. `walk` takes only `.cljc`/`.clj`, so without this the binary has
+    // the standard library's code and no idea whose it is -- and a guard that
+    // cannot name a workspace is a guard that never fires.
+    let lib_deps = fs::read_to_string(lib.join("deps.edn")).unwrap_or_default();
+    let mut src = format!("pub static STDLIB_DEPS: &str = {:?};\n", lib_deps);
+    src.push_str("pub static STDLIB: &[(&str, &str)] = &[\n");
     for (path, body) in &entries {
         src.push_str(&format!("  ({:?}, {:?}),\n", path, body));
     }

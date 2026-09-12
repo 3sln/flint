@@ -164,6 +164,69 @@ fn build_spec(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
 
 /// The same, plus the pod namespaces this build booted.
 #[allow(clippy::too_many_arguments)]
+/// One workspace's facts, read from a `deps.edn`.
+///
+/// The same four keys `bin/flint`'s `workspace-of` reads, and for the same
+/// reason: a workspace is one concept, not a set of unrelated lookups that
+/// happen to share a file.
+///
+/// Read with a SCAN rather than an EDN parser, as everywhere else on this side
+/// -- the guest owns the format and a second reader of it is a second thing to
+/// keep true.
+#[derive(Default)]
+struct Workspace {
+    name: String,
+    tags: String,
+    grants: String,
+    guard: String,
+}
+
+/// The text between the delimiters of the collection following `key`.
+fn edn_block(text: &str, key: &str, open: char, close: char) -> String {
+    let Some(at) = text.find(key) else { return String::new() };
+    let rest = &text[at + key.len()..];
+    let Some(o) = rest.find(open) else { return String::new() };
+    let mut depth = 0i32;
+    for (i, c) in rest[o..].char_indices() {
+        if c == open { depth += 1 } else if c == close {
+            depth -= 1;
+            if depth == 0 { return rest[o + 1..o + i].trim().to_string() }
+        }
+    }
+    String::new()
+}
+
+/// The bare token following `key`.
+fn edn_token(text: &str, key: &str) -> String {
+    let Some(at) = text.find(key) else { return String::new() };
+    text[at + key.len()..]
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('}')
+        .to_string()
+}
+
+fn read_workspace(text: &str) -> Workspace {
+    Workspace {
+        name: edn_token(text, ":flint/workspace"),
+        tags: edn_block(text, ":flint/tag-readers", '{', '}'),
+        grants: edn_block(text, ":flint/capabilities-grant", '[', ']'),
+        guard: edn_block(text, ":flint/capabilities-guard", '[', ']'),
+    }
+}
+
+/// A workspace entry for the spec, or empty when there is nothing to say.
+fn workspace_entry(prefix: &str, w: &Workspace, fallback_name: &str) -> String {
+    let name = if w.name.is_empty() { fallback_name } else { &w.name };
+    if name.is_empty() && w.tags.is_empty() && w.grants.is_empty() && w.guard.is_empty() {
+        return String::new();
+    }
+    format!(
+        "{{:prefix {} :name {} :tags {{{}}} :grants [{}] :guard [{}]}} ",
+        edn_string(prefix), name, w.tags, w.grants, w.guard)
+}
+
 fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
                    aot: bool, shake: bool, meta: &[(String, String)],
                    roots: Option<&[String]>,
@@ -237,6 +300,36 @@ fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
             out.push_str("]} ");
         }
         out.push_str("]} ");
+    }
+    // THE SOURCE WORKSPACES, after the virtual ones because the first matching
+    // prefix wins and `flint/` would otherwise swallow `flint/sys/fs/`.
+    //
+    // Until this existed the native CLI emitted virtual workspaces ONLY, so
+    // every compiled file belonged to the anonymous workspace -- and since the
+    // capability guard skips references within one workspace, it never fired.
+    // `bin/flint` read `deps.edn` and refused the same program. The binary
+    // users run was the one nothing tested, because every test for the guard
+    // and for `:flint/tag-readers` drives `bin/flint`.
+    let stdlib = read_workspace(STDLIB_DEPS);
+    for pre in ["clojure/", "flint/"] {
+        out.push_str(&workspace_entry(pre, &stdlib, ""));
+    }
+    // The PROJECT's own, from `deps.edn` beside a source root or one directory
+    // up -- the rule `bin/flint` states and follows. A catch-all prefix,
+    // because this side keys files by their namespace-derived path with no
+    // marker for which root they came from; a project whose roots carry
+    // DIFFERENT `deps.edn` files therefore gets the first one found, which is
+    // narrower than `bin/flint` and is recorded rather than hidden.
+    for sdir in srcs.iter().filter(|s| s.is_dir()) {
+        let here = sdir.join("deps.edn");
+        let up = sdir.parent().map(|p| p.join("deps.edn"));
+        let text = fs::read_to_string(&here)
+            .or_else(|_| fs::read_to_string(up.unwrap_or_else(|| here.clone())))
+            .unwrap_or_default();
+        if text.trim().is_empty() { continue }
+        let w = read_workspace(&text);
+        let entry = workspace_entry("", &w, &edn_string(&sdir.display().to_string()));
+        if !entry.is_empty() { out.push_str(&entry); break }
     }
     out.push_str("] :builtins #{");
     for k in slots.keys() {

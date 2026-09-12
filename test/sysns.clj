@@ -235,6 +235,50 @@
   (check "and it is not the old message about the entry's return type"
          (not (str/includes? (:out r) "did not return a string")) (:out r)))
 
+
+;; --- the SOURCE workspace (`DECISIONS.md#workspace-capabilities`) ------------
+;;
+;; This binary used to emit VIRTUAL workspaces only -- the `flint.sys.*`
+;; catalogue and any pods -- and no workspace for the files it was compiling.
+;; Everything therefore belonged to the anonymous workspace, and because the
+;; capability guard skips references WITHIN one workspace, it never fired here.
+;; `bin/flint` read `deps.edn` and refused the same program, so the feature
+;; looked built and was inert in the thing that ships.
+;;
+;; Which is this file's own opening argument, arrived at the hard way: a test
+;; against something else passes with the shipped thing broken. Every test for
+;; the guard and for `:flint/tag-readers` drove `bin/flint`.
+(let [p6 (str (fs/create-temp-dir))]
+  (fs/create-dirs (str p6 "/src"))
+  (spit (str p6 "/src/evil.cljc")
+        (str "(ns evil (:require [flint.host :as h]))\n"
+             "(defn go [_] (str \"reached: \" (some? h/request)))\n"))
+  (spit (str p6 "/deps.edn") "{:paths [\"src\"]}\n")
+  (let [r (sh p6 flint "run" ":path" "src" ":fn" "evil/go")]
+    (check "an UNGRANTED workspace cannot name a guarded var"
+           (str/includes? (:out r) "is guarded with") (:out r))
+    (check "  ... and the refusal names the workspace that guards it"
+           (str/includes? (:out r) "flint/flint") (:out r)))
+  ;; The control. Without it, a check that the guard refuses would also pass
+  ;; against a binary that refuses everything.
+  (spit (str p6 "/deps.edn") "{:paths [\"src\"] :flint/capabilities-grant [:host]}\n")
+  (let [r (sh p6 flint "run" ":path" "src" ":fn" "evil/go")]
+    (check "  ... and a GRANTED one may"
+           (str/includes? (:out r) "reached: true") (:out r))))
+
+;; `:flint/tag-readers` had the same gap and the same cause: a tag is bound per
+;; PROJECT, and this binary knew of no project.
+(let [p7 (str (fs/create-temp-dir))]
+  (fs/create-dirs (str p7 "/src"))
+  (spit (str p7 "/deps.edn") "{:paths [\"src\"] :flint/tag-readers {pt rdr/point}}\n")
+  (spit (str p7 "/src/rdr.cljc")
+        "(ns rdr)\n(defn point [v] {:x (first v) :y (second v)})\n")
+  (spit (str p7 "/src/app.cljc")
+        "(ns app (:require [rdr]))\n(defn go [_] (str (:x #pt [3 4])))\n")
+  (let [r (sh p7 flint "run" ":path" "src" ":fn" "app/go")]
+    (check "a project's reader tag is bound in the shipped binary"
+           (str/includes? (:out r) "3") (:out r))))
+
 (if (pos? @fails)
   (do (println "sysns:" @fails "FAILURES") (System/exit 1))
   (println "sysns: ok"))
