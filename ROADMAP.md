@@ -596,6 +596,38 @@ false failures, and false failures train people to ignore failures.
 - [ ] Expected-value tests at the kin layer
 - [ ] A changed-files → (suites + build prerequisites) map
 
+## A counterexample for the changed-files → suites map
+
+The dialect enforcement landed in `src/flint/reader.cljc`. It broke
+`sdks/esm/selftest.mjs`, whose inline fixtures are flint source held in
+JavaScript string literals.
+
+**No plausible file-to-suite map contains that edge.** "Changed the reader →
+run the reader tests, the language suite, the compiler suites" is the obvious
+mapping and it would have missed this. The dependency runs
+reader → compiler → SDK dist → a JS selftest that compiles strings.
+
+**And no grep finds it either**, which is the other half: a scan over source
+files cannot see a source file that is a string literal in another language.
+The audit that preceded enforcement covered `lib/` and `test/` and was correct
+about both.
+
+So this class is caught by RUNNING code, not by scanning it — which is an
+argument for breadth of execution, i.e. the thing a selective gate reduces.
+
+Two ways to keep the tiering honest about it:
+
+- derive the map from what actually RAN, not from what a human thinks depends
+  on what — a coverage or trace-derived mapping would have recorded that
+  `sdks/esm/selftest.mjs` exercises the reader;
+- treat "changed a file every suite transitively compiles through" (the
+  reader, the analyzer, the emitter, `clojure.core`) as a full-gate trigger
+  rather than a mapped one. Those files have no useful selective answer.
+
+Cost of getting it wrong is asymmetric: a selective run that misses this goes
+GREEN, and a green run that should have been red is worse than a slow one.
+
+
 ### Port tests belong in kin (recorded 2026-09-11)
 
 The same fourteen runtime tests are hand-written TWICE:
