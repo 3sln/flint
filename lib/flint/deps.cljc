@@ -462,6 +462,30 @@
   [k c]
   (or (= k :local) (and (= k :pod) (not (str/blank? (str (:pod/path c)))))))
 
+(defn- rebase-relative
+  "A transitive coordinate's relative path, made relative to the manifest that
+  DECLARED it rather than to the project at the top of the walk.
+
+  `:local/root \"../lib2\"` written in `lib/deps.edn` means `lib/../lib2`. It
+  was being resolved against the top project instead, so the correct spelling
+  failed and the wrong one -- a path written as if the file sat at the root --
+  worked. That is the shape of bug that trains people to write the wrong thing.
+
+  Absolute paths are left alone, and so is every other kind: only a path
+  coordinate has a base to be wrong about."
+  [kids base]
+  (if (str/blank? (str base))
+    kids
+    (mapv (fn [e]
+            (let [c (second e)
+                  fix (fn [c k]
+                        (let [r (str (get c k))]
+                          (if (or (str/blank? r) (str/starts-with? r "/"))
+                            c
+                            (assoc c k (str base "/" r)))))]
+              [(first e) (-> c (fix :local/root) (fix :pod/path))]))
+          kids)))
+
 (defn- kids-of
   "What a scanned manifest contributes to the walk.
 
@@ -527,9 +551,12 @@
        (if (empty? todo)
          out
          (let [e (first todo)
-               k0 (key e)
+               ;; `first`/`second` rather than `key`/`val`: the queue starts as
+               ;; map entries and gains plain pairs when a transitive's relative
+               ;; path is rebased, and both answer these.
+               k0 (first e)
                nm (str k0)
-               c (or (get overrides k0) (get overrides (symbol nm)) (val e))
+               c (or (get overrides k0) (get overrides (symbol nm)) (second e))
                kind (dep-kind c)
                ;; A pod from a registry has to be looked up before it has a URL
                ;; at all, and the lookup needs the registry document, which is
@@ -643,7 +670,7 @@
                                    (if (seq (:paths m))
                                      (mapv (fn [p] (str root "/" p)) (:paths m))
                                      (default-source kind root)))}]
-               (recur (vec (concat (rest todo) (kids-of kind m)))
+               (recur (vec (concat (rest todo) (rebase-relative (kids-of kind m) root)))
                       (conj seen nm)
                       (conj out entry))))))))))
 

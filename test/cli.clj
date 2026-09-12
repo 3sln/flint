@@ -820,5 +820,33 @@
                                  ":deps {some/dep {:local/root \".\" :flint/capabilities-grant [:host]}}}"))
                       "lends a capability it does not hold")))))
 
+
+;; --- a transitive's relative path is relative to what DECLARED it ---------
+;;
+;; `:local/root "../lib2"` written in `lib/deps.edn` means `lib/../lib2`. It
+;; was resolved against the project at the top of the walk instead, so the
+;; CORRECT spelling failed and a path written as if the file sat at the root
+;; worked -- the shape of bug that trains people to write the wrong thing.
+(let [r (str (fs/create-temp-dir))]
+  (fs/create-dirs (str r "/lib"))
+  (fs/create-dirs (str r "/lib2"))
+  (spit (str r "/app.cljc") "(ns app)\n(defn go [_] \"ok\")\n")
+  (spit (str r "/deps.edn") "{:paths [\".\"] :deps {dep/x {:local/root \"lib\"}}}\n")
+  (spit (str r "/lib2/deps.edn") "{:paths [\".\"]}\n")
+  (let [with (fn [inner]
+               (spit (str r "/lib/deps.edn") inner)
+               (:out (flint-in* r "paths")))]
+    (check-that "a transitive :local/root resolves against the deps.edn that declared it"
+                (str/includes? (with "{:paths [\".\"] :deps {other/y {:local/root \"../lib2\"}}}")
+                               "lib2"))
+    ;; The control, and the half that proves the base moved rather than the
+    ;; check being loosened: the spelling that used to work must now fail.
+    (check-that "  ... so a path written as if it sat at the ROOT now fails"
+                (str/includes? (with "{:paths [\".\"] :deps {other/y {:local/root \"lib2\"}}}")
+                               "no such :local/root"))
+    (check-that "  ... and an absolute path is left alone"
+                (str/includes? (with (str "{:paths [\".\"] :deps {other/y {:local/root \"" r "/lib2\"}}}"))
+                               "lib2"))))
+
 (println (if (zero? @fails) "cli: ok" (str "cli: " @fails " FAILURES")))
 (System/exit (if (zero? @fails) 0 1))
