@@ -46,6 +46,23 @@ script can check the second. When you cite a decision, read the code it
 describes and correct the record if they disagree — a status line is a claim
 about the tree, and it decays silently.
 
+**Record how a claim was obtained, next to the claim.** The failures here are
+not lies; they are statements that were true once, or true of something
+adjacent, written in a form that cannot be checked later:
+
+* a benchmark ratio with no host, machine, or method — unreproducible, so it
+  can only be believed or ignored, and it gets believed;
+* a count produced by a grep, which counts what the pattern understood and not
+  what was asked;
+* a phrase true of one subject and read as another ("compiled through LLVM" is
+  ordinary of anything written in Rust, and reads as a backend);
+* a feature recorded as built whose only exercise was a path nobody ran.
+
+A number carries its method or it is folklore. A count says what produced it. A
+status line that says BUILT names the test that proves it. The cost of the
+sentence is seconds; the cost of its absence is that the next person plans
+around it.
+
 `ROADMAP.md` holds state: sections, checklists, what is built and what is not.
 A decision explains *why*; the roadmap tracks *whether*.
 
