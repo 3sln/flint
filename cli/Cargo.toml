@@ -33,6 +33,12 @@ flint-rt = { path = "../runtime" }
 # natively-linked binary has to carry it, or `flint run` cannot execute a
 # program that spawns a thread.
 flint-conc = { path = "../units-src/flint-conc" }
+# JSON and XML are units too, and the CLI's OWN dependency code parses
+# manifests with them -- `package.json`, `pom.xml`. Without these linked,
+# `flint run` refuses any program that calls one, which included the CLI
+# parsing the manifests it exists to read.
+flint-data-json = { path = "../units-src/flint-data-json" }
+flint-data-xml = { path = "../units-src/flint-data-xml" }
 anyhow = "1"
 ureq = { version = "3.4.0", default-features = false, features = ["rustls"] }
 flate2 = "1.1.10"

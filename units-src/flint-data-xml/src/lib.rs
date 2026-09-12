@@ -172,3 +172,15 @@ pub fn b_xml_parse(rt: &mut Rt, a: usize, n: usize) -> Value {
 pub extern "C" fn flint_b_xml_parse(rt: *mut Rt, base: u32, argc: u32) -> u64 {
     unsafe { b_xml_parse(&mut *rt, base as usize, argc as usize).0 }
 }
+
+/// What a NATIVELY LINKED host has to be handed by name.
+///
+/// A wasm module links this unit through the `flint_b_*` symbol below; a native
+/// binary cannot, so it passes this to `Program::load_with` the way
+/// `flint-conc` is passed. Without it `flint run` answers "this runtime does
+/// not carry the builtin `flint/xml-parse`" for any program that parses one --
+/// which included flint's OWN CLI, whose dependency code cannot parse a
+/// manifest it is compiled to read.
+pub const HOST_CATALOGUE: &[(&str, flint_rt::vm::NativeFn)] = &[
+    ("flint/xml-parse", flint_b_xml_parse),
+];

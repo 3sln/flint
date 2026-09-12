@@ -680,7 +680,15 @@ fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
     // ports are a namespace UNIT rather than part of the runtime, so a
     // natively-linked binary has to hand them over by name. Without this
     // `flint run` cannot execute a program that spawns a thread.
-    let mut p = Program::load_with(&bytes, 2_000_000_000, flint_conc::HOST_CATALOGUE)
+    // EVERY unit this binary carries, concatenated. `flint-conc` was the only
+    // one, so a program that parsed JSON ran under `flint compile` -- which
+    // links units -- and not under `flint run`, which hands them over by name.
+    let mut natives: Vec<(&str, flint_rt::vm::NativeFn)> =
+        Vec::with_capacity(flint_conc::HOST_CATALOGUE.len() + 2);
+    natives.extend_from_slice(flint_conc::HOST_CATALOGUE);
+    natives.extend_from_slice(flint_data_json::HOST_CATALOGUE);
+    natives.extend_from_slice(flint_data_xml::HOST_CATALOGUE);
+    let mut p = Program::load_with(&bytes, 2_000_000_000, &natives)
         .map_err(|e| anyhow::anyhow!("the compiled program did not load: {e}"))?;
     // `:with` mints one opaque value per name and PROJECTS them in as the
     // entry's second argument, so a program receives `[args {name -> cap}]`.

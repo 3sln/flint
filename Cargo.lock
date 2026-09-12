@@ -251,6 +251,8 @@ dependencies = [
  "anyhow",
  "flate2",
  "flint-conc",
+ "flint-data-json",
+ "flint-data-xml",
  "flint-rt",
  "hex",
  "rmp-serde",
