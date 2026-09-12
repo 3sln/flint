@@ -192,7 +192,11 @@ checking whether a recorded decision still matches the code.
   is most likely and most costly. Verify the claim yourself.
 - **Never let two agents write the same files.** Parallel reading is free;
   parallel writing needs separate worktrees.
-- One gate at a time, in one tree. See §4.
+- One gate at a time, **across every tree on the machine**. `bin/conform-hosts`
+  writes fixed `/tmp` names (`/tmp/flint-rt-jvm.out` and about twenty more), so
+  two runs in two worktrees overwrite each other's evidence and produce
+  failures belonging to neither. Worktrees isolate the SOURCE, not the
+  scratch space. An agent that needs the gate waits for the one in flight.
 
 For headless runs, `bin/agent-tail <log>` summarises a
 `claude --output-format stream-json` log — `--say` for what it said, `--stats`
