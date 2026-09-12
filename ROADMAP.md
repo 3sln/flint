@@ -424,10 +424,37 @@ performance comparison against a node/wasm build; it is not only that, because
 the native binary cannot build a project today. A capability gap decides more
 than a latency one.
 
-- [ ] Decide whether the native binary gets the project surface, or whether
-      `bin/flint` is the project CLI and the binary is the runner
-- [ ] State, wherever that lands, which parts of `deps.edn` the native CLI
-      reads — it is currently capabilities and dependencies but not `:paths`
+**SETTLED 2026-09-11: the two CLIs are MIRRORS of each other.** Not a runner
+and a project CLI — the same surface, with the wasm runner as the possible lone
+exception.
+
+The mechanism: **the driver and glue are flint code, compiled to LLVM IR and
+linked into the native binary.** `lib/flint/cli.cljc` is already the project
+surface as flint code, which is why `bin/flint` can be thin over it; the native
+binary reimplements a subset in Rust instead of compiling the same source. That
+is the duplication, and the LLVM backend is the way out of it rather than a
+second hand-written implementation.
+
+**PREREQUISITE, AND IT IS NOT BUILT.** `:to :llvm` bails today —
+*"emitting a native artifact needs a linker, and this binary carries none"*
+(`cli/src/main.rs`) — and `bin/test` asserts it keeps saying so rather than
+quietly emitting wasm. The native RUNTIME exists and is what `flint run` uses;
+what is missing is emitting a linkable artifact. So the mirror is downstream of
+the LLVM backend, and no part of it can start before that lands.
+
+This also dissolves the audit question below it. Two front ends that COMPILE
+THE SAME SOURCE cannot drift in the way spec construction, workspace resolution
+and source collection have been drifting; there is nothing to keep in step.
+
+- [ ] **First:** `:to :llvm` — emit a linkable native artifact. Blocks
+      everything below it
+- [ ] Then compile `lib/flint/cli.cljc` and its glue, link into the native
+      binary, and retire the Rust reimplementations of `build`, `check`,
+      `fetch`, `inspect`, `paths`, `targets`, `task`, `tasks`
+- [ ] Until then, state which parts of `deps.edn` the native CLI reads — it is
+      currently capabilities and dependencies but not `:paths`
+- [ ] Decide whether the wasm runner stays native-only, the one place the
+      mirror may legitimately break
 
 ### Source workspaces in the native CLI (fixed 2026-09-11)
 
@@ -460,10 +487,11 @@ spec construction, workspace resolution, source collection and dependency
 fetching. Four places the two can silently disagree, one file watching the side
 that ships.
 
-- [ ] Decide the standing answer: does every behaviour that has two
-      implementations get a native-CLI check, or do the two front ends stop
-      being parallel implementations? This is the shape that produced the bug,
-      not an instance of it
+- [x] **Answered above: the front ends stop being parallel implementations.**
+      Native-CLI checks for every duplicated behaviour would be treating the
+      symptom; compiling one source for both removes the duplication. Until the
+      LLVM path lands, `test/sysns.clj` remains the only guard on the shipped
+      binary, so anything security-bearing added there needs a check in it
 
 ### Dialects and pluggable preludes (spec only, nothing built)
 

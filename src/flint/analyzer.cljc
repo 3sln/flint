@@ -66,6 +66,69 @@
 
 (defn- current-ns [env] (:ns env))
 
+(def default-prelude
+  "What resolves without a `:require` when a workspace says nothing.
+
+  `clojure.core` alone, which is what flint has always done and what Clojure
+  does. NOT the same list as `flint.project/core-first`: that pins four
+  namespaces into the front of the LOAD order because the compiler emits
+  references into them, which is a question about initialisation rather than
+  about what a bare symbol means."
+  [{:ns 'clojure.core}])
+
+(defn- entry-allows?
+  "Whether one prelude entry offers `nm`.
+
+  `:include` omitted means every name the namespace publishes; `:exclude`
+  omitted means none. A plain symbol entry is therefore both."
+  [entry nm]
+  (let [inc* (:include entry) exc (:exclude entry)]
+    (cond
+      (seq inc*) (boolean (some (fn [x] (= (name x) nm)) inc*))
+      (seq exc) (not (some (fn [x] (= (name x) nm)) exc))
+      :else true)))
+
+(defn prelude-of
+  "The prelude in force for `nsname`.
+
+  A PORTABLE file gets `clojure.core` and nothing else, whatever its workspace
+  declares: a `.cljc` is read by other platforms' readers too, and they know
+  nothing of a flint workspace's prelude, so a name that resolved only through
+  one would not be portable (`DECISIONS.md#dialects-and-preludes`)."
+  [cc nsname]
+  (let [w (get-in cc [:workspaces nsname])]
+    (if (and (seq (:prelude w)) (= :flint (:dialect w)))
+      (:prelude w)
+      default-prelude)))
+
+(defn prelude-resolve
+  "The qualified var `sym` names through `nsname`'s prelude, or nil.
+
+  AMBIGUITY IS REFUSED. Two entries offering one name, neither excluding it, is
+  a question the author can answer exactly -- by excluding it from the entry
+  they did not mean -- so guessing costs them an afternoon and refusing costs
+  them nothing (`DECISIONS.md#dialects-and-preludes`).
+
+  Checked where the name is USED rather than when the list is declared. Two
+  preludes may well overlap on names nobody references, and making that an
+  error would mean adding an entry could break code that never touches it."
+  [cc nsname sym]
+  (let [nm (name sym)
+        hits (for [e (prelude-of cc nsname)
+                   :when (entry-allows? e nm)
+                   :let [q (symbol (str (:ns e)) nm)]
+                   :when (get-in cc [:vars q])]
+               q)]
+    (cond
+      (empty? hits) nil
+      (next hits) (throw (ex-info
+                          (str nm " is offered by " (str/join " and " (map namespace hits))
+                               ", and this workspace's prelude lists both."
+                               " Exclude it from the one you did not mean:"
+                               " {:ns " (namespace (first hits)) " :exclude [" nm "]}")
+                          {:sym sym :ns nsname :from (vec hits)}))
+      :else (first hits))))
+
 (defn qualify
   "The fully qualified symbol a name refers to in `env`, or nil."
   [env sym]
@@ -113,9 +176,10 @@
       (or (get (:refers nsdef) sym)
           (when (get-in cc [:vars (symbol (str nsname) (name sym))])
             (symbol (str nsname) (name sym)))
-          ;; clojure.core is referred everywhere, as in Clojure
-          (when (get-in cc [:vars (symbol "clojure.core" (name sym))])
-            (symbol "clojure.core" (name sym)))
+          ;; THE PRELUDE: names that resolve without a `:require`. Defaults to
+          ;; `clojure.core`, which is referred everywhere as in Clojure, and is
+          ;; a workspace's ordered list when it declares one.
+          (prelude-resolve cc nsname sym)
           (when (get-in cc [:declared (symbol (str nsname) (name sym))])
             (symbol (str nsname) (name sym)))))))
 
