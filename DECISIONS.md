@@ -173,8 +173,18 @@ should be treated as superseded rather than final.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): shipped.** The stack machine shipped; dispatch is measured at 6.2
-ns/instruction on a tight loop, 8–19 ns diluted by real work. The AOT half of
+**Status: shipped — verified 2026-09-12 against the code and by measurement.**
+The stack machine is `Rt::run`/`run_with`/`run_inner` in `runtime/src/vm.rs`
+(a `match opcode` over a value stack in linear memory, `vpush`/`vpop`); there
+is no register form anywhere in the tree. The dispatch numbers were re-taken
+by the method `runtime/src/abi.rs` states beside `stat_steps` — time it with
+counting off, count it with counting on, divide — on a module built by
+`./target/release/flint compile :to :wasm` and run under node via
+`host/flint.mjs`, best of three fresh instances: **4.78 ns/instruction** on a
+3 000 000-iteration `(loop [i 0 acc 0] ...)` (39 000 824 steps, 186.2 ms), and
+**6.69 ns/instruction** on a `str/split` + `frequencies` payload (7 839 964
+steps, 52.5 ms). Both are at or below the 6.2 / 8–19 ns the record carries, so
+the figures below are conservative rather than stale. The AOT half of
 the question is its own decision (`emit-wasm-instead-of-dispatch`, below).
 
 ### What was decided
@@ -243,9 +253,44 @@ own, independent of AOT.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): shelved, and understood.** Built, measured, and parked in favour of
-strings/regex work; the correctness bugs the shelving surfaced are fixed. Off
-by default, behind a cargo feature, so production carries none of it. This
+**Status: BUILT and SHIPPED as an opt-in; what is parked is further
+optimisation, not the feature. "Shelved" was the stale word — corrected
+2026-09-12 by checking the code and running it.** `:optimize [perf]` is a
+documented option of the shipped CLI (`flint --help`), backed by a second
+runtime blob the binary carries (`dist/flint-runtime-aot.wasm` and
+`dist/slots-aot.json`, `include_bytes!` at `cli/src/main.rs:39`), and
+`bin/test` exercises it on every run in three sections (`test/aot_emit.clj`,
+`test/aot.clj`, and the whole `test/common` language suite diffed
+interpreted against compiled, byte for byte).
+
+**The method for the numbers below, because a ratio without one can only be
+believed or ignored.** One program — `(defn tight [n] (loop [i 0 acc 0] (if
+(< i n) (recur (inc i) (+ acc i)) acc)))` — compiled twice by
+`./target/release/flint compile :path p :fn bench/main :to :wasm`, once
+plain and once with `:optimize '[perf]'`: **597 349 bytes** against **654 234
+bytes**, the second reported by the CLI as "compiled arities". Both modules
+run under node through `host/flint.mjs`, n = 3 000 000, best of three fresh
+instances each, both returning the same answer (`4499998500000`):
+**191.8 ms interpreted against 56.0 ms compiled — 3.4x.** That is better than
+the 1.21x this section's table records at shelving time, and consistent with
+the later fix that table notes (136.9 → 50.9 ns/iteration).
+
+`src/flint/aot.cljc` is not dormant either, and this is what makes "shelved"
+unrecoverable rather than merely stale: **the LLVM emitter requires it and
+reads its opcode table.** `src/flint/llvm.cljc` opens `(:require [flint.aot
+:as aot])` and calls into it in real code — `aot/OPS` for the opcode byte (in
+`opcode-byte`, deliberately "one table" rather than a restatement),
+`aot/resume-after`, `aot/jump-target`, `aot/TAG-FIXNUM`, `aot/FIXNUM-BITS`,
+`aot/AOT-NEVER`. Deleting the shelf would take the LLVM backend with it.
+
+The rest of the old status HOLDS unchanged, and was checked rather than
+carried: the `aot` cargo feature is absent by default (`runtime/Cargo.toml`)
+and a default-compiled module carries no compiled arities; and both
+correctness bugs below are fixed, with the fix visible as the shape they
+needed — `AotFn::points` (`runtime/src/aot.rs:101`) holding every valid
+re-entry point, and `aot_ip` carried per frame (`runtime/src/vm.rs:238`) and
+saved in the thread-save format (`runtime/src/conc.rs:595`) rather than
+inferred from `ip`. This
 section is long because it is one of the most heavily instrumented pieces of
 reasoning in the project: multiple rounds of measurement, two real bugs, and
 a final diagnosis of *why* the win was smaller than predicted.
@@ -444,8 +489,21 @@ picking this back up.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): shipped.** Deterministic gas, charged natives, and a catchable
-memory cap. This determinism is what makes every cross-engine number in
+**Status: shipped — verified 2026-09-12 by running it, not by reading it.**
+Deterministic gas, charged natives, and a catchable memory cap, all three
+observed against a module built by `./target/release/flint compile :to :wasm`
+and driven under node through `host/flint.mjs`. **Determinism:** the same
+program reported **30 985 steps** on three fresh instances. **The limit is
+exact and catchable:** `set_step_limit(200000)` on a runaway loop returned
+`ResourceExhausted: gas limit exceeded: spent 200000 of 200000 (thread 0)`,
+and the same program wrapped in `try/catch` caught it. **The memory cap:**
+`set_memory_limit(8 MiB)` returned `memory limit exceeded: 8388608 bytes of
+8388608 in use after a collection`, caught by the guest. **Charged natives**
+were proved adversarially, since that is the half that would quietly not
+work: a program whose bytecode is constant — `(= (vec (range n)) (vec (range
+n)))` — reported 7 882, 673 098 and 67 194 713 steps for n = 10², 10⁴ and 10⁶,
+so the O(n) native work is billed (`Rt::charge*`, `runtime/src/rt.rs`). This
+determinism is what makes every cross-engine number in
 `cross-runtime-benchmarks` comparable, and it is one of the most heavily
 relied-on properties in the codebase.
 
@@ -571,7 +629,16 @@ passed while measuring nothing but its own baseline error.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): shipped.** Both builds are compiled and tested on every suite run.
+**Status: shipped — verified 2026-09-12 against the shipped artefact, not
+just the script.** Both builds are compiled and tested on every suite run:
+`bin/test` builds production (`bin/build-dist`, `bin/build-units`, plus
+`test/twobuilds.clj`) and then the instrumented one (`cargo test -p flint-rt
+--features diagnostics`, `bin/build-units --diagnostics`, `bin/test:602-624`).
+The rule itself was checked on the bytes rather than the build script:
+`strings dist/flint-runtime.wasm` finds `set_step_limit` and
+`set_memory_limit` — production features — and **zero** occurrences of
+`stat_heap_used`, `stat_bytes_allocated` or any `flint_snapshot_*`; the same
+holds for a module compiled here with the release CLI. Absent, not disabled.
 
 ### What was decided
 
@@ -635,7 +702,13 @@ person who needs it finds it broken.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): roadmap, explicitly not next.** Recorded because the design is
+**Status: roadmap, explicitly not next — verified 2026-09-12 as still
+unbuilt.** Nothing here exists: the tree has no hit for `nREPL` or the Debug
+Adapter Protocol in any language, no `(break)` special form (every "break" in
+`src/flint/` is prose in a comment), and no REPL in the CLI. `cli/src/serve.rs`
+is the host event pump for `system-namespaces-and-deps`, not a debug server —
+checked by reading it, because its name invites the opposite assumption.
+Recorded because the design is
 unusually cheap here for reasons worth knowing before something is built that
 would make it expensive.
 
@@ -690,8 +763,21 @@ scheduler's whole value.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): shipped.** Capture, export/import, and an inspector, all opt-in
-under `two-builds` (present only in a diagnostics build).
+**Status: shipped — verified 2026-09-12 by capturing one and reading it.**
+Capture, export/import, and an inspector, all opt-in
+under `two-builds` (present only in a diagnostics build). Driven under node
+against the diagnostics module `out/sn-work.wasm`: `flint_snapshot_capture`
+returned a **5 276 704-byte** memcpy image, which `host/snapshot.mjs` parsed
+and validated in one pass (**2 757 objects walked, 0 problems**, gas counter
+carried); `flint_snapshot_restore` returned 1; `flint_snapshot_export`
+returned a **41 430-byte** live set with magic `XSLF`
+(`snap::MAGIC_LIVE`, `runtime/src/snap.rs:563`), and
+`flint_snapshot_import` accepted it **into a different instance** — which is
+the "two formats, two jobs" split recorded below, demonstrated rather than
+asserted. The opt-in half was probed adversarially, since a snapshot export
+in a production module is exactly the thing `two-builds` exists to prevent:
+compiling `(:require [flint.snapshot])` with the release CLI fails closed —
+`compile error: no such builtin: flint.rt/snapshot`.
 
 ### What was decided
 
@@ -796,7 +882,15 @@ move a sandbox, memcpy to debug one.**
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): roadmap, not next.** Recorded because two of its dependencies are
+**Status: roadmap, not next — verified 2026-09-12 as still unbuilt.** Nothing
+here exists: no named-block API, no per-thread block stack, no `flint.prof`
+namespace anywhere in `lib/`, `src/`, the runtime or the ports. The four
+tree-wide matches for "profil" are Maven profiles in `lib/flint/deps.cljc`
+and a storage-profile comment in `host/docstore.mjs` — checked, because a
+grep for this word is nearly all false positives. The diagnostics build's
+`runtime/src/aotstat.rs` counters are an opcode census and the region
+histogram for `emit-wasm-instead-of-dispatch`, not this. Recorded because two
+of its dependencies are
 being built elsewhere and one measurement it would give away for free is
 already owed.
 
@@ -845,8 +939,17 @@ is already known from the self-hosting fixpoint test.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): fixed** (2026-08-28), and heavily cited across the runtime as the
-canonical statement of a rooting rule every port now checks itself against.
+**Status: fixed** (2026-08-28), **and heavily cited across the runtime as the
+canonical statement of a rooting rule every port now checks itself against —
+verified 2026-09-12 by reading the fix, not the claim.** The named fault is
+gone at the site that produced it: `Rt::ordered_map`
+(`runtime/src/kgen/rt/mapmake.rs`) now pushes each element on the shadow
+stack **before** calling `next`, with this rule cited by name in the comment
+that explains why. It is a kin-generated shared source, so the identical fix
+is in `runtimes/jvm/src/com/_3sln/flint/kgen/rt/Mapmake.java` — the ports do
+not each re-derive it. The citation claim holds too, and is a count of real
+citations rather than of grep hits: **68** across the Rust runtime, both
+ports' own sources, and kin.
 
 ### What was decided
 
