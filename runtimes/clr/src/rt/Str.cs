@@ -20,6 +20,18 @@ using static _3sln.Flint.Kgen.Rt.Interns;
 /// quadratic. Before it existed the word-frequency benchmark took 762 ms
 /// instead of 62.
 public static class Str {
+    /// NO NAMESPACE, as the hash sees it.
+    ///
+    /// `Flint.Rt.Hash` STOOD HERE AND IS GONE. It held `HashDouble`,
+    /// `HashBytes`, `HashSymbol` and `HashKeyword`, written out by hand, and
+    /// its own header said the arithmetic was spelled out on both ports
+    /// because `String.hashCode()` "would leave the two ports computing the
+    /// same number by different routes". All four are generated from
+    /// `kin/hashtext.kin` now, and this constant is the one thing the move
+    /// cost: the generated signature takes bytes rather than a nullable array,
+    /// because Rust had no `null` to take.
+    static readonly byte[] NoNs = new byte[0];
+
 
     /// A bare, UNINTERNED heap string. `Of` is the canonical constructor.
     /// A LONG NON-ASCII STRING ARRIVES AS A TREE. The tier transitions fire on
@@ -106,7 +118,7 @@ public static class Str {
         if (b.Length <= Val.InlineMax) return Val.InlineStr(b);
         if (b.Length > Interns.InternMax) return RawString(rt, b);
         // THE SAME WALK THE VALUE HASH USES; see the note in the Rust.
-        int h = Hash.HashBytes(b);
+        int h = global::_3sln.Flint.Kgen.Rt.Hashtext.HashBytes(b);
         Interns.Match matches = v => Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr
                                      && SameBytes(Bytes(rt, v), b);
         long found = Probe(rt, Interns.STR, h, matches);
@@ -304,7 +316,13 @@ public static class Str {
         byte[] nb = Encoding.UTF8.GetBytes(name);
         if (ns == null && nb.Length > 0 && nb.Length <= Val.InlineMax) return Val.InlineKw(nb);
         byte[] nsb = ns == null ? null : Encoding.UTF8.GetBytes(ns);
-        int h = Hash.HashKeyword(nsb, nb);
+        // NoNs, NOT `null`: the generated `HashKeyword` takes one `byte[]`
+        // on every runtime, and an absent namespace is an EMPTY one --
+        // `HashBytes` of no bytes is `HashInt(0)`, which is the 0 the old
+        // `ns == null ? 0` supplied. `nsb` stays nullable because
+        // `SameName` distinguishes an absent namespace from an empty one,
+        // which the HASH deliberately does not.
+        int h = global::_3sln.Flint.Kgen.Rt.Hashtext.HashKeyword(nsb ?? NoNs, nb);
         Interns.Match matches = v => Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyKw
                                      && SameName(rt, v, nsb, nb);
         long found = Probe(rt, Interns.KW, h, matches);
@@ -325,8 +343,9 @@ public static class Str {
     }
 
     static int HashKeywordOf(Rt rt, string ns, string name) {
-        return Hash.HashKeyword(ns == null ? null : System.Text.Encoding.UTF8.GetBytes(ns),
-                                System.Text.Encoding.UTF8.GetBytes(name));
+        return global::_3sln.Flint.Kgen.Rt.Hashtext.HashKeyword(
+            ns == null ? NoNs : System.Text.Encoding.UTF8.GetBytes(ns),
+            System.Text.Encoding.UTF8.GetBytes(name));
     }
 
     /// GENERATED NOW, from `kin/ropecmp.kin`. This flattened both operands --
@@ -344,11 +363,11 @@ public static class Str {
     // @kin:link:form:string-hash: {:template "Str.StringHash({0}, {1})"}
     /// A 31-WALK OVER UTF-8 BYTES; see `Rt::string_hash` in the Rust for why.
     public static int StringHash(Rt rt, long v) {
-        if (Val.IsInlineStr(v)) return Hash.HashBytes(Val.InlineBytes(v));
+        if (Val.IsInlineStr(v)) return global::_3sln.Flint.Kgen.Rt.Hashtext.HashBytes(Val.InlineBytes(v));
         long a = Val.AsHeap(v);
         int cached = Obj.StrHash(rt.gc.sp, a);
         if (cached != 0) return cached;
-        int h = Hash.HashBytes(Bytes(rt, v));
+        int h = global::_3sln.Flint.Kgen.Rt.Hashtext.HashBytes(Bytes(rt, v));
         if (h == 0) h = 1;
         Obj.SetStrHash(rt.gc.sp, a, h);
         return h;
@@ -358,7 +377,7 @@ public static class Str {
     /// keyword was built.
     // @kin:link:form:keyword-hash: {:template "Str.KeywordHash({0}, {1})"}
     public static int KeywordHash(Rt rt, long v) {
-        if (Val.IsInlineKw(v)) return Hash.HashKeyword(null, Val.InlineBytes(v));
+        if (Val.IsInlineKw(v)) return global::_3sln.Flint.Kgen.Rt.Hashtext.HashKeyword(NoNs, Val.InlineBytes(v));
         return (int) Val.AsFixnum(rt.Slot(v, 2));
     }
 
@@ -385,7 +404,7 @@ public static class Str {
     public static long Symbol(Rt rt, string ns, string name) {
         byte[] nb = Encoding.UTF8.GetBytes(name);
         byte[] nsb = ns == null ? null : Encoding.UTF8.GetBytes(ns);
-        int h = Hash.HashSymbol(nsb, nb);
+        int h = global::_3sln.Flint.Kgen.Rt.Hashtext.HashSymbol(nsb ?? NoNs, nb);
         Interns.Match matches = v => Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TySym
                                      && SameName(rt, v, nsb, nb);
         long found = Probe(rt, Interns.SYM, h, matches);
@@ -407,8 +426,8 @@ public static class Str {
         // THE HASH, and it used to be Nil -- the same empty cache the keyword
         // slot had. `SymbolHash` reads it; this port recomputed from the ns
         // and name bytes on every hash instead.
-        rt.SetSlot(a, 3, Val.Fixnum(Hash.HashSymbol(
-            ns == null ? null : System.Text.Encoding.UTF8.GetBytes(ns),
+        rt.SetSlot(a, 3, Val.Fixnum(global::_3sln.Flint.Kgen.Rt.Hashtext.HashSymbol(
+            ns == null ? NoNs : System.Text.Encoding.UTF8.GetBytes(ns),
             System.Text.Encoding.UTF8.GetBytes(name))));
         rt.PopTo(bas);
         return Val.Heap(a);

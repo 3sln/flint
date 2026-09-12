@@ -73,7 +73,13 @@
   `d != d` waiting to disagree."
   #{"divideUnsigned" "remainderUnsigned"
     "isNaN" "IsNaN" "isInfinite" "IsInfinity"
-    "POSITIVE_INFINITY" "PositiveInfinity"})
+    "POSITIVE_INFINITY" "PositiveInfinity"
+    ;; A DOUBLE'S BITS. Reinterpreting an IEEE double as an integer is the
+    ;; host's job everywhere -- `f64::to_bits`, `Double.doubleToLongBits`,
+    ;; `BitConverter.DoubleToInt64Bits` -- and the three names share nothing,
+    ;; which is exactly why `f64-bits` is a vocabulary entry. A flint spelling
+    ;; would be three copies of a cast that no language will do with a cast.
+    "to_bits" "doubleToLongBits" "DoubleToInt64Bits"})
 
 (defn check [what nm target spelling]
   (let [id (ident spelling)]

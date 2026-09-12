@@ -20,7 +20,7 @@
                                    push r set-r pop-to forever break while + *
                                    charge-tick to-i64 bit-or bit-xor is-double
                                    num-f64 is-fixnum < is-inline-str
-                                   is-inline-kw i64-of hash-double ref-to-map
+                                   is-inline-kw i64-of ref-to-map
                                    wadd wmul or Rt Value I32 U32 Ty Bool
                                    RootIx NIL F64 TRUE FALSE TY_VEC TY_STR
                                    TY_ROPE TY_KW TY_SYM TY_BIGINT TY_MAPENTRY
@@ -34,6 +34,7 @@
             [flint.rt.strs :refer [keyword-hash string-hash]]
             [flint.rt.hash :refer [ordered-step mix-coll-hash hash-long hash-int
                                    HASH_TRUE HASH_FALSE]]
+            [flint.rt.hashtext :refer [hash-double]]
             [flint.rt.names :refer [symbol-hash]]
             [flint.rt.bytehash :refer [b-hash]]
             [flint.rt.ropeflat :refer [rope-hash]]

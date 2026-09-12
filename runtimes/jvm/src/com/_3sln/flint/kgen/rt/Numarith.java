@@ -10,6 +10,7 @@ import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Hash.*;
+import static com._3sln.flint.kgen.rt.Hashtext.*;
 import static com._3sln.flint.kgen.rt.Numkind.*;
 
 public final class Numarith {
@@ -141,7 +142,7 @@ public final class Numarith {
     /// hash alike, and these two are not equal.
     public static int numHash(Rt rt, long v) {
         if (Val.isDouble(v)) {
-            return com.flint.rt.Hash.hashDouble(Num.f64(rt, v));
+            return hashDouble(Num.f64(rt, v));
         }
         if (isInt(rt, v)) {
             return hashLong(Num.i64Of(rt, v));

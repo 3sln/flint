@@ -5559,3 +5559,153 @@ Parallelising a loop whose iterations are not independent. This one qualifies
 because each program compiles to its own image and its own wasm module and is
 read by three runtimes that share nothing — verified by reading every write in
 the body, not assumed from the loop looking parallel.
+
+## port-tests-in-kin
+
+**Ratified:** ☐ not signed off
+
+Recorded 2026-09-12. `ROADMAP.md`'s "Port tests belong in kin" asked for the
+fourteen duplicated runtime port tests to move into `kin/`. One of them did.
+This records why the other thirteen did not, because "we ported one of
+fourteen" is the kind of result that gets re-attempted by somebody who assumes
+the first attempt gave up early.
+
+### What the fourteen actually are
+
+`runtimes/jvm/test/*.java` (1 598 lines, fourteen `main()` programs) and
+`runtimes/clr/conform/Program.cs` (1 442 lines, the same fourteen as `--rt-*`
+flags) are two hand-written transcripts of one suite, run by
+`bin/conform-hosts` and `cmp`d. The roadmap's insight was right and is worth
+restating: they are NOT framework-shaped. They print `"  ok  …"` lines, which
+is exactly what `kin/scripts/verify` consumes, so no test-framework vocabulary
+is needed to move one.
+
+**The blocker is not the test's shape. It is what the test CALLS.**
+
+`kin/scripts/verify` builds a self-contained probe — one `.rs` through `rustc`,
+one `Probe.java` through `javac`, one `Program.cs` through `dotnet run`. It
+cannot link a runtime. Every dependency a probe has is supplied by a
+hand-written `--rust-head` / `--java-head` / `--csharp-head` fixture, three
+times over, on purpose: the fixture is a STUB, and what the probe checks is the
+generated code between the stubs.
+
+Thirteen of the fourteen construct a `Rt` — the interpreter, the NaN-boxed
+heap and the moving collector, which are hand-written in each runtime and are
+the thing the test exists to check. Against a stub `Rt` those tests assert
+nothing about any runtime. Porting them would have reduced the line count and
+the coverage at the same time, which is the failure mode `AGENTS.md` §2
+describes: a status line that is true of something adjacent.
+
+Specifically, and each verified by reading the file rather than inferred from
+the name:
+
+| test | what it needs that kin cannot supply |
+|---|---|
+| `RtFoundation` | `Space`, `Obj` headers, 48-bit forwarding, the dispatch loop over hand-assembled bytecode, a GC-stress pass — **and it prints a ns/iteration TIMING**, so byte-identical stdout is impossible by construction |
+| `RtMaps` | generated map code over the REAL heap, with `rt.gc.major` run across it. The generated half is already covered by `kin/map*.drivers`; the half this adds is the heap, which is the hand-written half |
+| `RtSnapshot` | the snapshot format, exported and re-imported at DIFFERENT addresses |
+| `RtShelve` | a program stopped mid-run — frames live, locals live — moved to a fresh runtime |
+| `RtImage`, `RtFlags`, `RtSteps`, `RtGas`, `RtAot`, `RtSelfHost` | `Img.load` and `runProgram`: a real image, on a real interpreter |
+| `RtHostPorts` | `Conc.hostGrant`, `hostDeliver`, `drainEvents` — the host-port ABI |
+| `RtParallel` | `new Thread(...)`, the host's own scheduler |
+| `RtStale` | the `FLINT_STALE=1` root-discipline detector, a debug facility of the hand-written `Rt` |
+
+**The way to move any of the thirteen is to generate the thing it tests.** That
+is the same order this port has always run in, and it is a runtime decision
+rather than a testing one.
+
+### The one that moved, and what moving it cost
+
+`RtHash` was the exception: its subject is four functions that touch no host at
+all — `hash_double`, `hash_bytes`, `hash_symbol`, `hash_keyword`, bytes in and
+an `int` out.
+
+They were written out **three times by hand**, in `runtime/src/hash.rs`,
+`runtimes/jvm/src/com/flint/rt/Hash.java` and `runtimes/clr/src/rt/Hash.cs`,
+and both port copies carried a header saying so — that `String.hashCode()`
+"would leave the two ports computing the same number by different routes", so
+"the arithmetic is written out on both". A file whose comment says it is kept
+in step by hand is a file asking to be generated (`AGENTS.md` §6).
+
+So the test could not move on its own: a kin probe calling a stubbed
+`hash_bytes` would pin a number about the stub. Moving the test meant moving
+the implementation, and `kin/hashtext.kin` is both. Both hand-written `Hash`
+classes are deleted.
+
+**The three copies agreed on every number and disagreed on the INTERFACE.**
+Rust's `hash_symbol` took `Option<&str>` and `&str`; both ports took `byte[]`
+and `null`. Two spellings of "there is no namespace", on three sides, with
+nothing comparing them — precisely the drift two lists produce. The generated
+function takes one `Bytes` on all three, and an ABSENT namespace is an EMPTY
+one, which is an identity rather than a convention:
+
+    hash-bytes []  =  hash-int (fold over no bytes)  =  hash-int 0  =  0
+
+and `hash-int` short-circuits zero. `kin/hashtext.drivers` evaluates both sides
+and PRINTS them rather than asserting they are equal, because `true` cannot say
+which side moved; `clojure.lang.Util/hashCombine` agrees that both are
+-1390931727.
+
+### What the expectations are worth, and what they are not
+
+`--expect` for both `kin/hash.drivers` and `kin/hashtext.drivers` was computed
+from `clojure.lang.Murmur3` and `clojure.lang.Util` through the `clojure` CLI,
+in a script that implements the fold independently. Nothing was pasted from a
+flint run. The derivation is in each `--expect-why`.
+
+**Both retired copies said `clojure says` for rows that are not Clojure's
+numbers.** Strings, symbols and keywords have hashed over UTF-8 BYTES since the
+UTF-16 basis was removed; `runtime/src/hash.rs` says so at length, and its own
+Rust tests were updated to stop pinning Clojure numbers for symbols. The two
+port transcripts were not. Only the ASCII rows coincide — `日本語` is the row
+that separates them, and it was in both files, under a message naming the wrong
+oracle. That is the divergence two implementations of one suite produce, and it
+is the reason for this work.
+
+### Where the guarantee now comes from, stated exactly
+
+This is a real change and must not be glossed. Before, `RtHash` composed the
+REAL generated murmur with the REAL hand-written text hash, inside each port,
+against a pinned number. After:
+
+* **agreement** across rust/java/csharp is `kin/scripts/verify` on both
+  sources, byte-identical stdout, run by `bin/check-kin`;
+* **absolute correctness of the murmur core** is `kin/hash.drivers` against
+  Clojure;
+* **absolute correctness of the text hashes** is `kin/hashtext.drivers` against
+  Clojure — composed with a murmur fixture transcribed into each head section,
+  not with the generated one;
+* **the composition of the two, inside a real runtime, against a pinned
+  number** is `runtime/src/hash.rs`'s own tests, which still run under
+  `cargo test` and still assert `hash_bytes(b"a") == 1455541201`.
+
+The composition is therefore pinned once (native) rather than twice (jvm, clr),
+and the two ports are covered by being generated from the same source as the
+native one plus the agreement check. That is a weaker end-to-end pin on the
+ports and a stronger one everywhere else, and it is written down here rather
+than discovered.
+
+### Counts
+
+| | before | after |
+|---|---|---|
+| hand-written assertions | 24 in `RtHash.java` + 24 in `Program.cs` | 0 |
+| distinct values pinned | 24 | 27 |
+| targets each value is checked on | 2 (jvm, clr) | 3 (rust, java, csharp) |
+| checked against a written-down expectation | no | yes |
+| hand-written copies of the four functions | 3 | 0 |
+
+The three added values are the two halves of the empty-namespace identity and
+the second half of the emoji pair, both of which were single boolean assertions
+before. Nothing was dropped.
+
+### Where they run, and what it cost
+
+`bin/conform-hosts` loses the hash phase and its cross-port `cmp`; the run is
+141 s and the two rows were two process launches inside a phase that never
+appeared in the top ten, so the saving is not measurable and is not claimed.
+`bin/check-kin` gains one source: 90 sources in 66 s became 91 in 73 s,
+`time` on this machine. It is parallel and runs in the static-check group,
+where `bin/conform-hosts` is a two-minute gate — so the check moved from the
+expensive end of the suite to the cheap one, which is the part of this worth
+having.

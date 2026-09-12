@@ -18,11 +18,12 @@
 (ns flint.rt.numarith
   (:require [flint.impl.rt :refer [defn return if let do comment doc == != < >
                                    and or not i64-of num-f64 of-double
-                                   is-double hash-double
+                                   is-double
                                    throw-str throw-not-a-number + - * quot
                                    Rt Value I64 U32 Bool I64_MIN I64_MAX]]
             [flint.rt.num :refer [integer]]
             [flint.rt.hash :refer [hash-long]]
+            [flint.rt.hashtext :refer [hash-double]]
             [flint.rt.numkind :refer [both-ints is-int is-number]]))
 
 (doc "Does `x + y` overflow?"

@@ -781,12 +781,41 @@ extends one step further than it is applied.
 So the kin namespaces are the natural home for expected-value unit tests, and
 that is the missing half rather than a duplicate of the drivers.
 
+**THE COUNT WAS WRONG, AND ONE OF THE FOURTEEN MOVED** (measured 2026-09-12,
+`DECISIONS.md#port-tests-in-kin`). The fourteen are not fourteen tests of one
+kind. THIRTEEN construct a `Rt` — the interpreter, the heap and the collector,
+hand-written per runtime — and most of those then load an image, spawn a host
+thread, or drive the host-port ABI. `kin/scripts/verify` compiles a
+SELF-CONTAINED probe with `rustc`, `javac` and `dotnet run`; it cannot link a
+runtime, so a kin port of any of those thirteen would exercise a stub fixture
+and check nothing about the runtime under test. That is not a port, it is a
+coverage loss wearing one.
+
+`RtHash` was the exception, and it moved. Its subject is four PURE functions —
+`hash-double`, `hash-bytes`, `hash-symbol`, `hash-keyword` — which were
+themselves written out by hand in `hash.rs`, `Hash.java` and `Hash.cs`, each
+with a header saying the three had to be kept in step. Moving the test meant
+moving them, and both hand-written `Hash` classes are gone.
+
+The lesson for the rest: **what blocks a port test from moving is the
+IMPLEMENTATION it calls, not the test's shape.** `kin/scripts/verify` consumes
+`main()`-shaped probes happily. The thirteen stay because `Rt` is hand-written,
+and the way to move any of them is to generate the thing they test.
+
 - [ ] Expected-value tests for the kin namespaces — the half the drivers
-      cannot provide. This is what would make selective testing safe
-- [ ] Port the 14 duplicated port tests to kin, one source each, verified by
-      the existing stdout-agreement probe
-- [ ] Retire `runtimes/jvm/test/*.java` and the `--rt-*` flags in
-      `runtimes/clr/conform/Program.cs` as each lands
+      cannot provide. This is what would make selective testing safe.
+      **`bin/check-kin` now reports "all 91 against a written-down expected
+      answer", so this is done for every source that exists**
+- [x] `RtHash` ported — `kin/hashtext.kin` plus rows added to
+      `kin/hash.drivers`. 24 assertions in each of two hand-written copies
+      became 27 pinned values checked three ways and against an `--expect`
+      derived from `clojure.lang.Murmur3`
+- [ ] The other thirteen: blocked on `Rt` being hand-written, not on kin.
+      `RtFoundation` additionally prints a TIMING, which no byte-identical
+      probe can compare
+- [x] `runtimes/jvm/test/RtHash.java` and `--rt-hash` in
+      `runtimes/clr/conform/Program.cs` retired, with the `cmp` of their two
+      transcripts in `bin/conform-hosts`
 - [ ] Triage the 131 Rust `#[test]`s: portable behaviour against platform
       intimacy, with the reason recorded for anything that stays
 - [ ] Only then, if wanted: a kin vocabulary emitting each target's native

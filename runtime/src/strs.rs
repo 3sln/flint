@@ -301,7 +301,10 @@ impl Rt {
         if ns.is_none() && !name.is_empty() && name.len() <= INLINE_MAX {
             return Value::inline_kw(name.as_bytes());
         }
-        let h = hash::hash_keyword(ns, name);
+        // BYTES, and an EMPTY namespace where there is none: the generated
+        // `hash_keyword` takes one `Bytes` on all three runtimes, and
+        // `hash_bytes(b"")` is 0 -- the same 0 the `Option` arm supplied.
+        let h = hash::hash_keyword(ns.unwrap_or("").as_bytes(), name.as_bytes());
         let (wns, wname) = (ns.map(alloc::string::String::from), alloc::string::String::from(name));
         let matches = move |sp: &crate::mem::Space, v: Value| {
             v.is_heap()
@@ -348,7 +351,7 @@ impl Rt {
     // --- symbols -----------------------------------------------------------
 
     pub fn symbol(&mut self, ns: Option<&str>, name: &str) -> Value {
-        let h = hash::hash_symbol(ns, name);
+        let h = hash::hash_symbol(ns.unwrap_or("").as_bytes(), name.as_bytes());
         let (wns, wname) = (ns.map(alloc::string::String::from), alloc::string::String::from(name));
         let matches = move |sp: &crate::mem::Space, v: Value| {
             v.is_heap()
@@ -412,7 +415,7 @@ impl Rt {
         if v.is_inline_kw() {
             let mut b = [0u8; INLINE_MAX];
             let name = core::str::from_utf8(v.inline_bytes(&mut b)).unwrap_or("");
-            hash::hash_keyword(None, name)
+            hash::hash_keyword(b"", name.as_bytes())
         } else {
             slot(&self.gc.sp, v.as_heap(), 2).as_fixnum() as i32 as u32
         }
@@ -574,13 +577,13 @@ mod tests {
         // removal. What matters is that the two tiers agree -- an inline
         // keyword and a heap one with the same name must hash alike, or a map
         // would lose a key the moment it crossed the boundary.
-        assert_eq!(rt.keyword_hash(k), crate::hash::hash_keyword(None, "abc"));
+        assert_eq!(rt.keyword_hash(k), crate::hash::hash_keyword(b"", b"abc"));
         let n = rt.name_of(k);
         assert_eq!(rt.as_str(n, &mut b), Some("abc"));
         assert!(rt.ns_of(k).is_nil());
 
         let k2 = rt.keyword(Some("foo"), "bar");
-        assert_eq!(rt.keyword_hash(k2), crate::hash::hash_keyword(Some("foo"), "bar"));
+        assert_eq!(rt.keyword_hash(k2), crate::hash::hash_keyword(b"foo", b"bar"));
         assert_ne!(rt.keyword_hash(k2), rt.keyword_hash(k));
         let n2 = rt.name_of(k2);
         let mut b2 = sbuf();
@@ -595,9 +598,9 @@ mod tests {
         let mut rt = Rt::new();
         let a = rt.symbol(None, "abc");
         assert_eq!(a, rt.symbol(None, "abc"));
-        assert_eq!(rt.symbol_hash(a), crate::hash::hash_symbol(None, "abc"));
+        assert_eq!(rt.symbol_hash(a), crate::hash::hash_symbol(b"", b"abc"));
         let b = rt.symbol(Some("foo"), "bar");
-        assert_eq!(rt.symbol_hash(b), crate::hash::hash_symbol(Some("foo"), "bar"));
+        assert_eq!(rt.symbol_hash(b), crate::hash::hash_symbol(b"foo", b"bar"));
         // A SYMBOL AND ITS KEYWORD MUST NOT COLLIDE, which is the only thing
         // the separating constant is for.
         let k = rt.keyword(None, "abc");

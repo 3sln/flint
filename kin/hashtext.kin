@@ -1,0 +1,95 @@
+;; The hashes of everything that is NOT a number: bytes, symbols, keywords --
+;; plus `hash-double`, which is bit arithmetic and belongs beside them.
+;;
+;; THIS WAS WRITTEN THREE TIMES BY HAND. `runtime/src/hash.rs`,
+;; `runtimes/jvm/src/com/flint/rt/Hash.java` and `runtimes/clr/src/rt/Hash.cs`
+;; each carried these four functions, and each of the two ports carried a
+;; header saying the three must agree:
+;;
+;;     "this file is the one place where being ON the JVM is a temptation
+;;      rather than a help. `String.hashCode()` would give the right answer
+;;      -- and the CLR has no such method, so using it would leave the two
+;;      ports computing the same number by different routes. The arithmetic
+;;      is written out on both."
+;;
+;; A file whose comment says it is kept in step by hand is a file asking to be
+;; generated (`AGENTS.md` §6). The murmur3 core moved to `kin/hash.kin`
+;; already; this is the other half of the same three files, and after it none
+;; of them carries hash arithmetic at all.
+;;
+;; WHAT THE HAND-WRITTEN COPIES DISAGREED ABOUT. Not the numbers -- the
+;; INTERFACE. Rust's `hash_symbol` took `Option<&str>` and `&str`; both ports
+;; took `byte[]` and `null`. Two spellings of "there is no namespace", checked
+;; on three sides, with nothing comparing them. They are one `Bytes` here, and
+;; an ABSENT namespace is an EMPTY one -- which is not a convention chosen for
+;; convenience but an identity that holds:
+;;
+;;     hash-bytes []  =  hash-int (fold over no bytes)  =  hash-int 0  =  0
+;;
+;; and `hash-int` short-circuits zero to zero. So `hash-combine h (hash-bytes
+;; [])` is `hash-combine h 0`, which is exactly what `ns == null ? 0` did.
+;; Every number in `kin/hashtext.drivers` is unchanged across the move.
+(ns flint.rt.hashtext
+  (:require [flint.impl.rt :refer [defn return if let local set for doc comment
+                                   == bit-xor wmul wadd to-i32
+                                   alen byte-at f64-bits ushr64
+                                   Bytes F64 I64 U32]]
+            [flint.rt.hash :refer [hash-int hash-combine KW_SHIFT]]))
+
+(doc "A double's hash: the two halves of its bit pattern, xored."
+     ""
+     "`0.0` AND `-0.0` BOTH ANSWER 0, which is the one special case and the"
+     "reason the test is on the NUMBER rather than on the bits. The two"
+     "differ in the sign bit, so xoring their halves gives different answers"
+     "-- and Clojure's `Numbers.hasheq` makes them equal, which means they"
+     "have to hash alike or a map keyed by `-0.0` cannot be read with `0.0`."
+     ""
+     "`==` on an `F64` is IEEE equality, so the one comparison covers both:"
+     "`-0.0 == 0.0` is true in all three languages. NaN is not special here"
+     "and must not be -- `(= ##NaN ##NaN)` is false, so nothing looks it up.")
+(defn ^:pub ^U32 hash-double [^F64 d]
+  (if (== d 0.0)
+    (return 0))
+  (let [^I64 bits (f64-bits d)]
+    (return (to-i32 (bit-xor bits (ushr64 bits 32))))))
+
+(doc "A run of bytes: `h = h*31 + byte`, finished through `hash-int`."
+     ""
+     "THE STRING HASH IS DEFINED OVER BYTES, not over UTF-16 code units. The"
+     "three runtimes used to reproduce Clojure's number here, which meant"
+     "decoding UTF-8 and synthesising a UTF-16 view on every call, on the path"
+     "that hashes map keys. Clojure changed its own hash in 1.6 and documents"
+     "no stability across versions, so the numbers were never a contract; what"
+     "a program rests on is that equal values hash alike and every runtime"
+     "agrees. `runtime/src/hash.rs` records the argument in full."
+     ""
+     "`byte-at` AND NOT `aget`: Java's `byte` is signed and the other two are"
+     "not, so an unwidened read agrees on ASCII and diverges on the first"
+     "byte over 0x7F. See the form's own note.")
+(defn ^:pub ^U32 hash-bytes [^Bytes b]
+  (local ^:mut ^U32 h)
+  (set h 0)
+  (let [^U32 n (to-i32 (alen b))]
+    (for [^U32 i 0 n]
+      (set h (wadd (wmul h 31) (byte-at b i)))))
+  (return (hash-int h)))
+
+(doc "A symbol's hash: its two parts' byte hashes, combined."
+     ""
+     "AN EMPTY `ns` MEANS NO NAMESPACE, and costs nothing to say that way:"
+     "`hash-bytes` of no bytes is `hash-int 0`, which is 0, which is what the"
+     "three hand-written copies substituted for an absent namespace anyway."
+     "The alternative is an optional type, which Rust spells and neither port"
+     "has -- three interfaces for one function, which is what was there.")
+(defn ^:pub ^U32 hash-symbol [^Bytes ns ^Bytes name]
+  (return (hash-combine (hash-bytes name) (hash-bytes ns))))
+
+(doc "A keyword hashes as its symbol would, plus a constant, so `:foo` and"
+     "`'foo` do not collide."
+     ""
+     "The constant came from Clojure's keyword hash and is now simply A"
+     "constant -- any fixed non-zero value separates the two spaces. It is"
+     "`KW_SHIFT` in `kin/hash.kin` because `0x9e3779b9` does not fit a signed"
+     "32-bit literal, and that file owns the `hex` form that spells it.")
+(defn ^:pub ^U32 hash-keyword [^Bytes ns ^Bytes name]
+  (return (wadd (hash-symbol ns name) KW_SHIFT)))

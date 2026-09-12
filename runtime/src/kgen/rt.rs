@@ -63,6 +63,7 @@ pub mod valcmp;
 pub mod find;
 pub mod hamt;
 pub mod hash;
+pub mod hashtext;
 pub mod interns;
 pub mod collhash;
 pub mod collvec;

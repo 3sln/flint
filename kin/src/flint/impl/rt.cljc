@@ -164,6 +164,17 @@
   "The raw 64 bits of a value, outside the `Value` newtype Rust wraps them in."
   {:name 'Bits :types {:rust "u64" :java "long" :csharp "long"} :methods {}})
 
+(def Bytes
+  "A BORROWED run of bytes: the argument a text hash is taken over.
+
+  `&[u8]` and not `Vec<u8>`, which is the one place this differs from `U32s`
+  below. Every Rust caller already holds a slice -- `s.as_bytes()`,
+  `str_bytes(&self.gc.sp, a)`, `v.inline_bytes(&mut b)` -- and taking a `Vec`
+  would make each of them COPY, on the path that hashes map keys. Java and C#
+  pass their arrays by reference already, so the borrow costs them nothing and
+  is not spelled."
+  {:name 'Bytes :types {:rust "&[u8]" :java "byte[]" :csharp "byte[]"} :methods {}})
+
 (def U32s {:name 'U32s :types {:rust "Vec<u32>" :java "int[]" :csharp "int[]"} :methods {}})
 (def U64s {:name 'U64s :types {:rust "Vec<u64>" :java "long[]" :csharp "long[]"} :methods {}})
 
@@ -193,7 +204,8 @@
 
 (def tags {'Rt Rt 'Value Value 'Cat Cat 'Ty Ty 'Bool Bool 'I32 I32 'I64 I64 'Cmp Cmp 'U32 U32 'RootIx RootIx
                'Text Text 'StaticText StaticText 'Sink Sink 'Walk Walk 'Cps Cps
-               'F64 F64 'Addr Addr 'Idx Idx 'Bits Bits 'U32s U32s 'U64s U64s 'Interns Interns})
+               'F64 F64 'Addr Addr 'Idx Idx 'Bits Bits 'Bytes Bytes
+               'U32s U32s 'U64s U64s 'Interns Interns})
 
 (defn- t [ctx] (:target ctx))
 
@@ -682,6 +694,44 @@
     ;; length. Indexing is spelled identically everywhere and only the length
     ;; disagrees, which is the whole of what a host array costs.
     'aget (core/call {:rust "{0}[{1}]" :java "{0}[{1}]" :csharp "{0}[{1}]"})
+
+    ;; ONE BYTE OF A `Bytes`, AS A NUMBER IN 0..255 -- which is not `aget`, and
+    ;; the reason is the single ugliest portability trap in this file.
+    ;;
+    ;;     rust     `u8`, unsigned              `b[i] as u32`     0..255
+    ;;     java     `byte`, SIGNED              `b[i]`            -128..127
+    ;;     csharp   `byte`, unsigned            `b[i]`            0..255
+    ;;
+    ;; Java is the odd one and it is odd SILENTLY: `h * 31 + b[i]` compiles,
+    ;; runs, and agrees with the other two on every ASCII byte, because ASCII
+    ;; stops at 0x7F. It diverges on the first byte with the top bit set --
+    ;; which is to say on the first non-ASCII character anybody hashes. The
+    ;; hand-written `Hash.java` had the `& 0xFF` and the hand-written `Hash.cs`
+    ;; had no cast at all; both were right, and both were right BY HAND.
+    ;;
+    ;; The index is widened for Rust only: an integer is not a `usize`.
+    'byte-at (core/call {:rust "({0}[{1} as usize] as u32)"
+                         :java "({0}[{1}] & 0xFF)"
+                         :csharp "((int) {0}[{1}])"}
+                        {:tag U32})
+
+    ;; A DOUBLE'S BITS, as an `I64`. Not a reinterpretation any of the three
+    ;; spells the same way, and not one any of them will do with a cast: `as`
+    ;; in Rust CONVERTS the number, `(long) d` in Java and C# truncates it.
+    ;; Each host has a named intrinsic and the three names share nothing.
+    'f64-bits (core/call {:rust "({0}.to_bits() as i64)"
+                          :java "Double.doubleToLongBits({0})"
+                          :csharp "System.BitConverter.DoubleToInt64Bits({0})"}
+                         {:tag I64})
+
+    ;; THE LOGICAL RIGHT SHIFT AT 64 BITS. `ushr` next door is the 32-bit one
+    ;; and its C# spelling casts through `uint`, which would take the top half
+    ;; off a `long` before shifting it -- a wrong answer rather than a compile
+    ;; error, on exactly the negative doubles `hash-double` exists for.
+    'ushr64 (core/call {:rust "((({0} as u64) >> {1}) as i64)"
+                        :java "({0} >>> {1})"
+                        :csharp "((long)((ulong) {0} >> {1}))"}
+                       {:tag I64})
     'aset (fn [ctx form]
             (let [[_ a i v] form]
               (kin/emit! ctx (kin/indent-of ctx)
@@ -1057,16 +1107,11 @@
                          :java "Num.cmp({0}, {1}, {2})"
                          :csharp "Num.Cmp({0}, {1}, {2})"}
                         {:tag Cmp})
-    ;; `hash-double` takes the DOUBLE, not the value: the bit pattern of a NaN
-    ;; is not the question, the number is.
-    ;; FULLY QUALIFIED, and not optional: a GENERATED `Hash` lives beside
-    ;; every other generated module, so a bare `Hash` inside one binds to that
-    ;; and not to the runtime's. The third time this shadowing has bitten --
-    ;; see `seq-of` and `INTERN_MAX`.
-    'hash-double (core/call {:rust "crate::hash::hash_double({0})"
-                             :java "com.flint.rt.Hash.hashDouble({0})"
-                             :csharp "global::Flint.Rt.Hash.HashDouble({0})"}
-                            {:tag U32})
+    ;; `hash-double` WAS HERE, as a link to three hand-written `Hash` classes,
+    ;; and it is gone: `kin/hashtext.kin` generates it, so `numarith.kin` and
+    ;; `valhash.kin` require it from there like any other sibling. A form in
+    ;; this file stands for something the host owns; that one stood for
+    ;; arithmetic written out three times, which is the thing kin removes.
     ;; FULLY QUALIFIED, and this one is not optional. A generated module lives
     ;; in `flint.rt`, and `seqs.kin` generates a `flint.rt.Seqs` there -- so a
     ;; bare `Seqs.seq` inside another generated module binds to the GENERATED

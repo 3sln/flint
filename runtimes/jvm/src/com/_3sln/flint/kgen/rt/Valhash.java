@@ -12,6 +12,7 @@ import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Bytehash.*;
 import static com._3sln.flint.kgen.rt.Collhash.*;
 import static com._3sln.flint.kgen.rt.Hash.*;
+import static com._3sln.flint.kgen.rt.Hashtext.*;
 import static com._3sln.flint.kgen.rt.Names.*;
 import static com._3sln.flint.kgen.rt.Ropeflat.*;
 import static com._3sln.flint.kgen.rt.Ropemeas.*;
@@ -159,7 +160,7 @@ public final class Valhash {
     /// collector rules out using the address.
     public static int hashValue(Rt rt, long v) {
         if (Val.isDouble(v)) {
-            return com.flint.rt.Hash.hashDouble(Num.f64(rt, v));
+            return hashDouble(Num.f64(rt, v));
         }
         if (Val.isNil(v)) {
             return 0;

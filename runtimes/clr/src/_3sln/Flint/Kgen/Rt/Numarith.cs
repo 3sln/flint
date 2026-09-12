@@ -12,6 +12,7 @@ using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Hash;
+using static global::_3sln.Flint.Kgen.Rt.Hashtext;
 using static global::_3sln.Flint.Kgen.Rt.Numkind;
 
 public static class Numarith {
@@ -143,7 +144,7 @@ public static class Numarith {
     /// hash alike, and these two are not equal.
     public static int NumHash(Rt rt, long v) {
         if (Val.IsDouble(v)) {
-            return global::Flint.Rt.Hash.HashDouble(Num.F64(rt, v));
+            return HashDouble(Num.F64(rt, v));
         }
         if (IsInt(rt, v)) {
             return HashLong(Num.I64Of(rt, v));
