@@ -164,9 +164,9 @@ ok('no optimize at all is the interpreter', sizeOf([]) === small, 'it compiled a
 // alone would look like success.
 {
   const files = {
-    'alpha/a.cljc':
+    'alpha/a.fln':
       '(ns alpha.a) (defn read-x [v] (str "alpha:" v)) (defn go [] #x "one")',
-    'beta/b.cljc':
+    'beta/b.fln':
       '(ns beta.b (:require [alpha.a :as a])) (defn read-x [v] (str "beta:" v))' +
       ' (defn go [] [(a/go) #x "two"])',
   };
