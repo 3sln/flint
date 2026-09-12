@@ -186,6 +186,34 @@ fn build_spec(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
 
 /// The same, plus the pod namespaces this build booted.
 #[allow(clippy::too_many_arguments)]
+/// The `deps.edn` governing a source root: beside it, or one directory up.
+///
+/// ONE RULE, because there were two. `bin/flint`'s `workspace-of` states it --
+/// "read from `deps.edn` beside the root or one directory up" -- and the
+/// workspace reader here followed it while `declared_pods` looked only beside
+/// the root. On the standard layout (`{:paths ["src"]}` with `deps.edn` at the
+/// project root) that meant capabilities were read from the project and pods
+/// were not: the same file, governing the same build, with two lookups and one
+/// of them wrong.
+///
+/// Returns the text AND THE DIRECTORY IT CAME FROM, because a relative
+/// coordinate in it -- `:pod/path "./demopod"`, `:local/root "../lib"` -- is
+/// relative to the file that declares it and not to the source root. Resolving
+/// against the root gave `src/./demopod` for a pod sitting beside `deps.edn`
+/// one level up, which is a path that exists nowhere.
+///
+/// Empty text when neither exists.
+fn project_deps_edn(dir: &Path) -> (String, PathBuf) {
+    let here = dir.join("deps.edn");
+    if let Ok(t) = fs::read_to_string(&here) { return (t, dir.to_path_buf()) }
+    if let Some(up) = dir.parent() {
+        if let Ok(t) = fs::read_to_string(up.join("deps.edn")) {
+            return (t, up.to_path_buf());
+        }
+    }
+    (String::new(), dir.to_path_buf())
+}
+
 /// One workspace's facts, read from a `deps.edn`.
 ///
 /// The same four keys `bin/flint`'s `workspace-of` reads, and for the same
@@ -378,11 +406,7 @@ fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
             continue;
         }
         let dir = sdir.clone();
-        let here = dir.join("deps.edn");
-        let up = dir.parent().map(|p| p.join("deps.edn"));
-        let text = fs::read_to_string(&here)
-            .or_else(|_| fs::read_to_string(up.unwrap_or_else(|| here.clone())))
-            .unwrap_or_default();
+        let (text, _) = project_deps_edn(&dir);
         if text.trim().is_empty() { continue }
         let w = read_workspace(&text);
         // ONE ENTRY PER FILE, with the file's own path as the prefix. Prefix
@@ -721,10 +745,10 @@ fn declared_pods(srcs: &[PathBuf]) -> Result<Vec<(String, String, Vec<String>)>>
     let mut out = Vec::new();
     for s in srcs {
         let dir = if s.is_dir() { s } else { continue };
-        let f = dir.join("deps.edn");
-        let Ok(text) = fs::read_to_string(&f) else { continue };
+        let (text, base) = project_deps_edn(dir);
+        if text.trim().is_empty() { continue }
         for (ns, rel, fetched) in scan_pod_dirs(&text) {
-            let pod_dir = dir.join(&rel);
+            let pod_dir = base.join(&rel);
             let manifest = pod_dir.join("manifest.edn");
             let m = fs::read_to_string(&manifest).with_context(|| {
                 if fetched {

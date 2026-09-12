@@ -548,6 +548,29 @@
     (check "  ... and the SAME source as a .fln runs"
            (str/includes? (:out r) "#flint/table") (:out r))))
 
+
+;; THE STANDARD LAYOUT, which nothing covered. Every pod fixture above puts
+;; `deps.edn` and the pod beside the sources; a real project puts sources under
+;; `src/` and `deps.edn` at the root. Two things were wrong there and both were
+;; silent: the pod declaration was looked for only BESIDE the source root, so a
+;; project-root `deps.edn` was never read; and `:pod/path` resolved against the
+;; source root rather than against the file declaring it, giving `src/./demopod`
+;; for a pod sitting next to `deps.edn` one level up.
+(let [pa (str (fs/create-temp-dir))]
+  (fs/create-dirs (str pa "/src"))
+  (fs/create-dirs (str pa "/demopod"))
+  (fs/copy (str root "/test/fixtures/demopod") (str pa "/demopod/run"))
+  (fs/set-posix-file-permissions (str pa "/demopod/run") "rwxr-xr-x")
+  (spit (str pa "/demopod/manifest.edn")
+        "{:pod/name pod.demo\n :pod/artifacts [{:artifact/executable \"run\"}]}\n")
+  (spit (str pa "/deps.edn")
+        "{:paths [\"src\"] :deps {pod.demo {:pod/path \"./demopod\"}}}\n")
+  (spit (str pa "/src/app.cljc")
+        "(ns app (:require [pod.demo :as d]))\n(defn go [_] (str \"pod says \" (d/add 1 2 3)))\n")
+  (let [r (sh pa flint "run" ":path" "src" ":fn" "app/go")]
+    (check "a pod is found when deps.edn is a directory ABOVE the source root"
+           (str/includes? (:out r) "pod says 6") (:out r))))
+
 (if (pos? @fails)
   (do (println "sysns:" @fails "FAILURES") (System/exit 1))
   (println "sysns: ok"))
