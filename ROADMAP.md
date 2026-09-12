@@ -1036,6 +1036,23 @@ Recorded 2026-09-11. Full spec at `DECISIONS.md#dialects-and-preludes`.
       use `#flint/table`, it prints and reads one — all five occurrences are
       comments, a docstring and two `str` literals. The earlier claim was a
       grep, and a grep cannot tell a tag from the text of a tag
+- [x] **The renames themselves: RECOMMENDED AGAINST, 2026-09-12.** Measured,
+      not judged: babashka loads exactly FOUR namespaces out of `lib/` —
+      `flint.cli`, `flint.deps`, `flint.deps.manifest`, `flint.deps.registry`.
+      Those cannot become `.fln`, because babashka cannot read one, and the
+      dialect rule actively invites the rename. `bin/check` asserts it now,
+      ahead of the suites, since it is a precondition.
+
+      The other 29 are flint-only by the portability rule and renaming them
+      would buy nothing today: the tag half is enforced and green, so nothing
+      would be caught, and `clojure/core.fln` invites a reader to think flint
+      has some other `clojure.core`. Revisit when the prelude-symbol check
+      lands — that is the first thing that would actually catch something.
+
+      Whoever revisits it: a mechanical rename is a trap. The grep that
+      suggests which files are flint-only had a 2-of-2 false-positive rate on
+      spot-checks, and `lib/flint/cli.cljc`'s single `flint.rt/` hit is inside
+      a string it EMITS as generated source.
 - [ ] **The SEMANTIC half is still open, and it answers differently.** "No
       flint-only tags" is not "would mean the same under Clojure". Most of
       `lib/` calls `flint.rt/` — `clojure/core.cljc` 261 times,
