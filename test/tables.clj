@@ -346,7 +346,11 @@
 ;; a closed table's value is that it says what was wrong, and a test that only
 ;; checks for an exception would pass on "invalid row" -- which is the message
 ;; this codebase keeps replacing.
-(spit (str d "/ops.cljc")
+;; A `.fln`, and not by taste: `#flint/table` is a flint-only reader tag, so a
+;; file using it is not portable and a `.cljc` claiming to be is refused
+;; (`DECISIONS.md#dialects-and-preludes`). `ops.fln` and `ops.cljc` would be the
+;; same namespace; this one is only readable here.
+(spit (str d "/ops.fln")
       (str "(ns ops (:require [flint.table :as ft]))\n"
            "(def S (ft/schema [[:id :int] [:name :string]]))\n"
            "(def T (ft/table S [{:id 1 :name \"a\"} {:id 2 :name \"b\"}]))\n"

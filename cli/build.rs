@@ -33,7 +33,13 @@ fn main() {
             let rel = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
             if p.is_dir() {
                 walk(&p, &rel, out);
-            } else if rel.ends_with(".cljc") || rel.ends_with(".clj") {
+            // `flint.project/source-extensions` is the list that decides which
+            // file WINS for a namespace; this one only decides what is worth
+            // embedding, so a superset costs a read and a SUBSET loses a file
+            // silently. `.fln` was missing here after the extension landed
+            // everywhere else, which would have made a stdlib namespace moved
+            // to `.fln` simply vanish from the binary.
+            } else if rel.ends_with(".fln") || rel.ends_with(".cljc") || rel.ends_with(".clj") {
                 out.push((rel, fs::read_to_string(&p).unwrap()));
             }
         }
