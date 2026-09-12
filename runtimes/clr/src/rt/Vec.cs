@@ -92,29 +92,16 @@ public static class Vec {
 
 
 
-    /// A MAP ENTRY AS A TWO-ELEMENT VECTOR. It was a private helper in
-    /// `Builtins` here and lives on `Vec` in the native runtime; `assoc` and
-    /// `conj` both reach it, and generated code needs one home.
-    public static long MapEntryAsVec(Rt rt, long e) {
-        int bas = rt.Mark();
-        rt.Push(rt.Slot(e, 0));
-        rt.Push(rt.Slot(e, 1));
-        long outv = FromRoots(rt, bas, 2);
-        rt.PopTo(bas);
-        return outv;
+    /// A VECTOR OUT OF A RUN OF SHADOW-STACK ROOTS. The body is GENERATED,
+    /// as `kin/vecroots.kin`; this keeps the name its callers already spell,
+    /// the way `Conj` and `Assoc` above do.
+    public static long FromRoots(Rt rt, int bas, int n) {
+        return global::_3sln.Flint.Kgen.Rt.Vecroots.VecFromRoots(rt, bas, n);
     }
 
-    public static long FromRoots(Rt rt, int bas, int n) {
-        int mk = rt.Mark();
-        int vi = rt.Push(Empty(rt));
-        for (int i = 0; i < n; i++) {
-            long nv = VecConj(rt, rt.R(vi), rt.R(bas + i));
-            rt.SetR(vi, nv);
-        }
-        long outv = rt.R(vi);
-        rt.PopTo(mk);
-        return outv;
-    }
+    // `MapEntryAsVec` HAS NO SHIM HERE. See the JVM copy: a generated module
+    // `using static`s both this class and `Vecroots`, and two statics of one
+    // name make every call ambiguous. One name, one home.
 
     // -----------------------------------------------------------------------
     // TRANSIENTS. `TY_TVEC [cnt, shift, root, tail, edit]`.

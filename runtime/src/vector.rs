@@ -57,16 +57,10 @@ impl Rt {
     }
 
 
-    /// A map entry as a real two-element vector, for the operations that
-    /// Clojure gives vector semantics: `conj` appends, `assoc` replaces.
-    pub fn map_entry_as_vec(&mut self, e: Value) -> Value {
-        let base = self.mark();
-        self.push(self.slot(e, 0));
-        self.push(self.slot(e, 1));
-        let out = self.vec_from_roots(base, 2);
-        self.pop_to(base);
-        out
-    }
+    // `map_entry_as_vec` AND `vec_from_roots` ARE GENERATED, from
+    // `kin/vecroots.kin`. They were the last pair in this file that every
+    // runtime wrote out by hand -- six lines each, said three times, and
+    // nothing compared them.
     //
     // THE SPELLING LIVES WITH THE FUNCTION. This said the same thing in
     // `flint.impl.rt` as `(sibling "vec_count" "Vec" "count" 1)`, one table
@@ -78,32 +72,6 @@ impl Rt {
     // already -- it sat on the linked side because it is short. `kin/vecread.kin`
     // has it now, and it was the only linked form in the vector surface, so the
     // link namespace is gone with it.
-    #[inline]
-    
-    #[inline]
-
-
-
-
-
-
-
-
-
-    /// Build a vector from a slice of values already on the shadow stack.
-    /// `base` is the shadow index of the first element.
-    pub fn vec_from_roots(&mut self, base: usize, n: usize) -> Value {
-        let mut v = self.empty_vec();
-        let vi = self.push(v);
-        for i in 0..n {
-            let x = self.r(base + i);
-            let nv = self.vec_conj(self.r(vi), x);
-            self.set_r(vi, nv);
-        }
-        v = self.r(vi);
-        self.pop_to(vi);
-        v
-    }
 }
 
 // --- transient vector ------------------------------------------------------

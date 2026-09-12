@@ -1,0 +1,202 @@
+--rust-head
+// A MOCK VECTOR THAT COPIES ON CONJ, as `collvec.drivers` uses, so the
+// rooting the real `vec-from-roots` needs is actually exercised: a vector
+// read into a host local before `vec-conj` would be stale here too.
+//
+//     vector    [count, e0, e1, ...]
+//     entry     [key, val]
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+struct Sp { h: Vec<u64> }
+struct Gc { sp: Sp }
+struct Rt { gc: Gc, roots: Vec<Value>, bump: u64 }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn slot(&self, v: Value, i: u32) -> Value { Value(self.gc.sp.h[(v.0 + i as u64) as usize]) }
+    fn empty_vec(&self) -> Value { Value(1) }
+    // THE EMPTY VECTOR IS A SHARED SINGLETON at address 1, written once by
+    // `main`. Conj copies it rather than growing it, which is what makes a
+    // stale accumulator visible.
+    fn vec_conj(&mut self, v: Value, x: Value) -> Value {
+        let n = self.gc.sp.h[v.0 as usize];
+        let a = self.bump; self.bump += n + 2;
+        self.gc.sp.h[a as usize] = n + 1;
+        for i in 0..n { self.gc.sp.h[(a + 1 + i) as usize] = self.gc.sp.h[(v.0 + 1 + i) as usize]; }
+        self.gc.sp.h[(a + 1 + n) as usize] = x.0;
+        Value(a)
+    }
+    fn entry(&mut self, k: Value, v: Value) -> Value {
+        let a = self.bump; self.bump += 2;
+        self.gc.sp.h[a as usize] = k.0; self.gc.sp.h[(a + 1) as usize] = v.0;
+        Value(a)
+    }
+}
+impl Rt {
+--rust
+}
+fn show(rt: &Rt, v: Value) -> String {
+    let n = rt.gc.sp.h[v.0 as usize];
+    let mut s = format!("[{}", n);
+    for i in 0..n { s.push_str(&format!(":{}", rt.gc.sp.h[(v.0 + 1 + i) as usize])); }
+    s.push(']');
+    s
+}
+fn main() {
+    let mut rt = Rt { gc: Gc { sp: Sp { h: vec![0; 4000] } }, roots: Vec::new(), bump: 100 };
+    rt.gc.sp.h[1] = 0;   // the empty vector
+    let mut o = String::new();
+
+    // THREE ROOTS, IN ORDER. The order is the contract: `base + i` counting
+    // up has to hand them out the way they were pushed.
+    let b = rt.mark();
+    rt.push(Value(0x41)); rt.push(Value(0x42)); rt.push(Value(0x43));
+    let v3 = rt.vec_from_roots(b, 3);
+    o.push_str(&format!("v3={} ", show(&rt, v3)));
+    // AND ZERO OF THEM, which must answer the empty vector rather than walk.
+    let v0 = rt.vec_from_roots(b, 0);
+    o.push_str(&format!("v0={} ", show(&rt, v0)));
+    // A SUFFIX of the same run, to prove `base` is honoured and not assumed
+    // to be the caller's mark.
+    let v2 = rt.vec_from_roots(b + 1, 2);
+    o.push_str(&format!("v2={} ", show(&rt, v2)));
+    // THE SHADOW STACK IS BACK WHERE IT WAS. A function that popped to its
+    // own mark and not the caller's would strand roots here.
+    o.push_str(&format!("depth={} ", rt.mark() - b));
+    rt.pop_to(b);
+
+    // A MAP ENTRY BECOMES [key val], in that order. Reaching for the wrong
+    // slot is the bug this fixture is named after.
+    let e = rt.entry(Value(0x6B), Value(0x76));
+    let ev = rt.map_entry_as_vec(e);
+    o.push_str(&format!("entry={} after={} ", show(&rt, ev), rt.mark()));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final class Val {
+        static final long NIL = 0xFFFFL;
+    }
+    static final class Rt {
+        long[] h = new long[4000];
+        static final class Gc { long[] h; }
+        Gc gc = new Gc();
+        long bump = 100;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        Rt() { gc.h = h; }
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void setR(int i, long v) { roots.set(i, v); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long slot(long v, int i) { return h[(int) v + i]; }
+        long entry(long k, long v) {
+            long a = bump; bump += 2;
+            h[(int) a] = k; h[(int) a + 1] = v;
+            return a;
+        }
+    }
+    // `empty-vec` and `vec-conj` are ABSOLUTE names in the generated Java --
+    // `Vec.empty` from the hand-written runtime, `vecConj` from the sibling
+    // generated module. The probe has neither, so it nests a class of that
+    // name and declares the static the `import static` would have supplied.
+    static final class Vec {
+        static long empty(Rt rt) { return 1; }
+    }
+    static long vecConj(Rt rt, long v, long x) {
+        long n = rt.h[(int) v];
+        long a = rt.bump; rt.bump += n + 2;
+        rt.h[(int) a] = n + 1;
+        for (long i = 0; i < n; i++) rt.h[(int) (a + 1 + i)] = rt.h[(int) (v + 1 + i)];
+        rt.h[(int) (a + 1 + n)] = x;
+        return a;
+    }
+--java
+    static String show(Rt rt, long v) {
+        long n = rt.h[(int) v];
+        StringBuilder s = new StringBuilder("[").append(n);
+        for (long i = 0; i < n; i++) s.append(':').append(rt.h[(int) (v + 1 + i)]);
+        return s.append(']').toString();
+    }
+
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        rt.h[1] = 0;   // the empty vector
+        StringBuilder o = new StringBuilder();
+        int b = rt.mark();
+        rt.push(0x41); rt.push(0x42); rt.push(0x43);
+        o.append("v3=").append(show(rt, vecFromRoots(rt, b, 3))).append(' ');
+        o.append("v0=").append(show(rt, vecFromRoots(rt, b, 0))).append(' ');
+        o.append("v2=").append(show(rt, vecFromRoots(rt, b + 1, 2))).append(' ');
+        o.append("depth=").append(rt.mark() - b).append(' ');
+        rt.popTo(b);
+        long e = rt.entry(0x6B, 0x76);
+        o.append("entry=").append(show(rt, mapEntryAsVec(rt, e)))
+         .append(" after=").append(rt.mark()).append(' ');
+        System.out.println(o.toString());
+    }
+--csharp-head
+    // `empty-vec` emits as a BARE `Vec.Empty`, which the real generated file
+    // resolves through `using global::Flint.Rt`. A nested class of that name
+    // is what the probe has instead -- the same trick `collvec.drivers` uses.
+    internal static class Vec {
+        internal static long Empty(Rt rt) { return 1; }
+    }
+    internal static class Val {
+        internal const long Nil = 0xFFFFL;
+    }
+    internal sealed class Rt {
+        internal long[] h = new long[4000];
+        internal sealed class GcT { internal long[] h; }
+        internal GcT gc = new GcT();
+        internal long bump = 100;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal Rt() { gc.h = h; }
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void SetR(int i, long v) { roots[i] = v; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal long Slot(long v, int i) { return h[(int) v + i]; }
+        internal long Entry(long k, long v) {
+            long a = bump; bump += 2;
+            h[(int) a] = k; h[(int) a + 1] = v;
+            return a;
+        }
+    }
+    internal static long VecConj(Rt rt, long v, long x) {
+        long n = rt.h[(int) v];
+        long a = rt.bump; rt.bump += n + 2;
+        rt.h[(int) a] = n + 1;
+        for (long i = 0; i < n; i++) rt.h[(int) (a + 1 + i)] = rt.h[(int) (v + 1 + i)];
+        rt.h[(int) (a + 1 + n)] = x;
+        return a;
+    }
+--csharp
+    internal static string Show(Rt rt, long v) {
+        long n = rt.h[(int) v];
+        var s = new System.Text.StringBuilder("[").Append(n);
+        for (long i = 0; i < n; i++) s.Append(':').Append(rt.h[(int) (v + 1 + i)]);
+        return s.Append(']').ToString();
+    }
+
+    internal static void Main() {
+        Rt rt = new Rt();
+        rt.h[1] = 0;   // the empty vector
+        var o = new System.Text.StringBuilder();
+        int b = rt.Mark();
+        rt.Push(0x41); rt.Push(0x42); rt.Push(0x43);
+        o.Append("v3=").Append(Show(rt, VecFromRoots(rt, b, 3))).Append(' ');
+        o.Append("v0=").Append(Show(rt, VecFromRoots(rt, b, 0))).Append(' ');
+        o.Append("v2=").Append(Show(rt, VecFromRoots(rt, b + 1, 2))).Append(' ');
+        o.Append("depth=").Append(rt.Mark() - b).Append(' ');
+        rt.PopTo(b);
+        long e = rt.Entry(0x6B, 0x76);
+        o.Append("entry=").Append(Show(rt, MapEntryAsVec(rt, e)))
+         .Append(" after=").Append(rt.Mark()).Append(' ');
+        System.Console.WriteLine(o.ToString());
+    }

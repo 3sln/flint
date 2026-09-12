@@ -21,6 +21,7 @@ import static com._3sln.flint.kgen.rt.Tablemake.*;
 import static com._3sln.flint.kgen.rt.Tablerow.*;
 import static com._3sln.flint.kgen.rt.Vecassoc.*;
 import static com._3sln.flint.kgen.rt.Vecread.*;
+import static com._3sln.flint.kgen.rt.Vecroots.*;
 
 public final class Collwrite {
     /// `(assoc coll k v)`, whichever associative thing `coll` is.
@@ -95,7 +96,7 @@ public final class Collwrite {
             int base = rt.mark();
             int ki = rt.push(k);
             int vi = rt.push(v);
-            long ev = Vec.mapEntryAsVec(rt, coll);
+            long ev = mapEntryAsVec(rt, coll);
             int ei = rt.push(ev);
             long out = collAssocGen(rt, rt.r(ei), rt.r(ki), rt.r(vi));
             rt.popTo(base);

@@ -215,8 +215,11 @@ fn main() {
     static final class Vec {
         static long assoc(Rt rt, long v, int i, long x) { return 0x910L + i; }
         static long nth(Rt rt, long v, int i, long d) { return i < rt.vecn ? 0x940L + i : d; }
-        static long mapEntryAsVec(Rt rt, long e) { return rt.obj(TY_VEC); }
     }
+    // `map-entry-as-vec` is GENERATED now, in `flint.rt.vecroots`, so the
+    // generated call is a BARE name reached through an `import static` --
+    // not `Vec.mapEntryAsVec`. The stub moves out of the class with it.
+    static long mapEntryAsVec(Rt rt, long e) { return rt.obj(TY_VEC); }
     static long vecAssoc(Rt rt, long v, int i, long x) { return Vec.assoc(rt, v, i, x); }
     static long vecNth(Rt rt, long v, int i, long d) { return Vec.nth(rt, v, i, d); }
     static long seq(Rt rt, long c) { return rt.seqn == 0 ? NIL : 0xC000L + rt.seqn; }
@@ -368,8 +371,9 @@ namespace Flint.Rt {
     internal static class Vec {
         internal static long Assoc(Rt rt, long v, int i, long x) { return 0x910L + i; }
         internal static long Nth(Rt rt, long v, int i, long d) { return i < rt.vecn ? 0x940L + i : d; }
-        internal static long MapEntryAsVec(Rt rt, long e) { return rt.Obj_(Obj.TyVec); }
     }
+    // See the Java copy: a bare name now, not a member of `Vec`.
+    internal static long MapEntryAsVec(Rt rt, long e) { return rt.Obj_(Obj.TyVec); }
     internal static long VecAssoc(Rt rt, long v, int i, long x) { return Vec.Assoc(rt, v, i, x); }
     internal static long VecNth(Rt rt, long v, int i, long d) { return Vec.Nth(rt, v, i, d); }
     internal static long Seq(Rt rt, long c) { return rt.seqn == 0 ? NIL : 0xC000L + rt.seqn; }

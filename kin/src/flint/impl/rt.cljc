@@ -1312,15 +1312,13 @@
     ;; closure hole genuinely blocks -- it walks a CHAMP with a host callback --
     ;; and `set-element-vector` is its twin. Reached as calls until that hole
     ;; closes.
-    ;; A MAP ENTRY AS A TWO-ELEMENT VECTOR -- which is NOT `map-entry-vector`
-    ;; above, and the two are one letter apart in use. That one turns a MAP
-    ;; into a vector OF entries; this one turns ONE entry into a vector of its
-    ;; key and value. Reaching for the wrong one gave `(assoc [:a 1] 0 :z)` the
-    ;; answer `[:z]` on the JVM, which is what named the confusion.
-    'map-entry-as-vec (core/call {:rust "{0}.map_entry_as_vec({1})"
-                                  :java "Vec.mapEntryAsVec({0}, {1})"
-                                  :csharp "Vec.MapEntryAsVec({0}, {1})"}
-                                 {:tag Value})
+    ;; `map-entry-as-vec` USED TO BE DECLARED HERE, as a call into three
+    ;; hand-written bodies. `kin/vecroots.kin` generates it now, so a source
+    ;; that wants it REQUIRES it -- which also puts the warning where it can
+    ;; be read: it is NOT `map-entry-vector`, and the two are one letter
+    ;; apart in use. That one turns a MAP into a vector OF entries; this one
+    ;; turns ONE entry into a vector of its key and value. Reaching for the
+    ;; wrong one gave `(assoc [:a 1] 0 :z)` the answer `[:z]` on the JVM.
     'invoke-roots (core/call {:rust "{0}.invoke_roots({1}, {2}, {3})"
                               :java "{0}.invokeRoots({1}, {2}, {3})"
                               :csharp "{0}.InvokeRoots({1}, {2}, {3})"}

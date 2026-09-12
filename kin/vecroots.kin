@@ -1,0 +1,57 @@
+;; Building a VECTOR from values already on the shadow stack.
+;;
+;; The `(base, n)` convergence, for vectors. `list-from-roots`,
+;; `b-from-roots` and `rope-from-roots` all take a contiguous run of roots and
+;; build a value out of it; this is the fourth, and it was the last one still
+;; hand-written three times. The algorithm is six lines and all three runtimes
+;; said the same six -- which is exactly the shape that drifts without anyone
+;; noticing, because nothing compares them.
+;;
+;; THE ACCUMULATOR LIVES IN A ROOT. `vec-conj` allocates, so the partly-built
+;; vector read into a host local does not survive it
+;; (`DECISIONS.md#a-vec-of-values-is-not-a-root`). The SOURCE values are the
+;; caller's roots and the caller keeps them: this pushes nothing of theirs and
+;; pops back only to its own mark.
+;;
+;; `n` is tagged `I32` and not `RootIx`, for the reason `seqcore.kin` writes
+;; out: it is a COUNT, and borrowing the shadow-stack tag for one would compile
+;; everywhere and tell a reader something false. The cast back to an index is
+;; `as-idx`.
+(ns flint.rt.vecroots
+  (:require [flint.impl.rt :refer [defn return let doc comment for + as-idx
+                                   mark push r set-r pop-to slot empty-vec
+                                   Rt Value RootIx I32]]
+            [flint.rt.vecwrite :refer [vec-conj]]))
+
+(doc "A vector of the `n` values rooted at `base`, in that order.")
+(defn ^:pub ^:method ^Value vec-from-roots [^:mut ^Rt rt ^RootIx base ^I32 n]
+  (let [^RootIx mk (mark rt)
+        ^Value empty (empty-vec rt)
+        ^RootIx vi (push rt empty)]
+    (comment "HOISTED, as in `list-from-roots`: nesting the constructor"
+             "inside `push` is two borrows of the runtime at once on Rust.")
+    (for [^I32 i 0 n]
+      (let [^Value x (r rt (+ base (as-idx i)))
+            ^Value nv (vec-conj rt (r rt vi) x)]
+        (set-r rt vi nv)))
+    (let [^Value out (r rt vi)]
+      (pop-to rt mk)
+      (return out))))
+
+(doc "A map entry as a real two-element vector."
+     ""
+     "For the operations Clojure gives VECTOR semantics to an entry: `conj`"
+     "appends and `assoc` replaces, and neither means anything on a pair that"
+     "is still a `TY_MAPENTRY`. Slot 0 is the key and slot 1 the value;"
+     "reaching for the wrong one gave `(assoc [:a 1] 0 :z)` the answer `[:z]`"
+     "on one runtime, which is what named the confusion.")
+(defn ^:pub ^:method ^Value map-entry-as-vec [^:mut ^Rt rt ^Value e]
+  (let [^RootIx base (mark rt)]
+    (comment "The two roots are the ARGUMENTS to `vec-from-roots`, so nothing"
+             "names them: the run is `(base, 2)` and the indices are implied"
+             "by it. Binding them would be two locals nothing reads.")
+    (push rt (slot rt e 0))
+    (push rt (slot rt e 1))
+    (let [^Value out (vec-from-roots rt base 2)]
+      (pop-to rt base)
+      (return out))))

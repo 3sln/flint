@@ -16,6 +16,14 @@
 //! cuts every LOWER-priority thread; the ones already carried forward have
 //! higher priority and may still beat it.
 
+// THIS FILE IS WRITTEN THREE TIMES, and `DECISIONS.md#the-pike-vm-is-the-last-triplicate`
+// says why it is not generated: `class_hit`, `consumes`, `add_thread` and
+// `run_over` are pure integer functions over a program and a code-point array,
+// and kin cannot pass a mutable host array to a callee -- `^:mut` on a
+// parameter is a by-value rebinding in Rust and a shared reference on both
+// ports. That record also lists the five places the three copies have already
+// drifted, two of them reachable from guest code.
+
 // THE CONSUMING LINE. The character-class predicates are generated now,
 // `kgen/rt/pike.rs`, and they are FREE FUNCTIONS rather than methods
 // -- so unlike an `impl Rt` block they have to be brought into scope. This

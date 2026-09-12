@@ -224,7 +224,14 @@ public static class Pike {
         int ninstrs = prog[0];
         int nslots = (prog[2] + 1) * 2;
         int[] cps = rt.CpsTake(global::_3sln.Flint.Kgen.Rt.Codepoints.CodePoints(rt, s));
-        int[] best = RunOver(prog, ninstrs, nslots, cps, (int) System.Math.Max(from, 0), entry, full);
+        // CLAMPED BEFORE THE NARROWING -- see the JVM copy, and
+        // `DECISIONS.md#the-pike-vm-is-the-last-triplicate`. `(int)` of 2^31
+        // is negative, which passes `RunOver`'s length guard and then indexes
+        // `cps` negatively, so guest code could throw an IndexOutOfRange out
+        // of the host. Native holds it in an `i64` and answers nil.
+        long start = System.Math.Max(from, 0);
+        if (start > cps.Length) return Val.Nil;
+        int[] best = RunOver(prog, ninstrs, nslots, cps, (int) start, entry, full);
         return best == null ? Val.Nil : SlotsVector(rt, best);
     }
 
