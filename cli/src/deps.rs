@@ -52,7 +52,10 @@ fn get(url: &str, p: &Policy) -> Result<Vec<u8>, String> {
     Ok(body)
 }
 
-fn sha256_hex(b: &[u8]) -> String {
+/// Public because `script.rs` identifies a script by its CONTENT, and a
+/// second implementation of sha256 in one binary is a second thing to get
+/// wrong.
+pub fn sha256_hex(b: &[u8]) -> String {
     use sha2::Digest as _;
     let mut h = sha2::Sha256::new();
     h.update(b);

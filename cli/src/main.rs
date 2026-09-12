@@ -1021,6 +1021,33 @@ fn run_script(path: &Path, caps: &[String], args: &[String]) -> Result<i32> {
                as part of a project with `flint run :path <dir> :fn {}/main`.",
               nsf.ns, path.display(), nsf.ns, nsf.ns, nsf.ns, nsf.ns, nsf.ns)
     };
+    // WHAT THE SCRIPT ASKED FOR, once the person running it has said so.
+    //
+    // A script is self-contained, which is the point of it -- having to
+    // remember the right `:with` flags every time defeats that. So it DECLARES
+    // what it needs and the launcher asks, once, keyed to the file's content:
+    // editing the script asks again, because a grant that survived an edit
+    // would be a grant to code nobody agreed to.
+    //
+    // `:with` on the command line is added to whatever consent yields, so the
+    // explicit route still works and still wins where there is no terminal.
+    let mut caps: Vec<String> = caps.to_vec();
+    // ONLY WHAT IS NOT ALREADY LENT. `:with [fs]` on the command line is the
+    // person saying it outright, and asking them again about something they
+    // just granted is how a prompt teaches people to stop reading it.
+    let unmet: Vec<String> = nsf.capabilities.iter()
+        .filter(|c| !caps.contains(c))
+        .cloned()
+        .collect();
+    if !unmet.is_empty() {
+        let hash = crate::deps::sha256_hex(body.as_bytes());
+        for c in script::consent(path, &unmet, &hash)? {
+            if !caps.contains(&c) {
+                caps.push(c);
+            }
+        }
+    }
+    let caps = &caps[..];
     if nsf.has_deps {
         // STATED, not ignored. `:deps` is real surface -- the analyzer accepts
         // it and refuses it outside a script -- but nothing in this binary

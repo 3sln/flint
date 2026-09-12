@@ -641,6 +641,33 @@
          (str/includes? (:out (sh p13 flint "run" ":path" "src" ":fn" "tool/go")) "as a script: 42")
          (:out (sh p13 flint "run" ":path" "src" ":fn" "tool/go"))))
 
+
+;; --- a script asks for its own capabilities -------------------------------
+;;
+;; A script is self-contained, which is the point of it: having to remember the
+;; right `:with` flags every time defeats that. So it DECLARES what it needs and
+;; the launcher asks, once, keyed to the file's CONTENT.
+(let [p14 (str (fs/create-temp-dir))]
+  (spit (str p14 "/data.txt") "secret\n")
+  (spit (str p14 "/s")
+        (str "#!/usr/bin/env " flint "\n"
+             "(ns s {:script {:capabilities [:fs]}} (:require [flint.sys.fs :as fs]))\n"
+             "(defn main [_] (str \"read: \" (fs/read-file \"data.txt\")))\n"))
+  (fs/set-posix-file-permissions (str p14 "/s") "rwxr-xr-x")
+  ;; WITH NOBODY TO ASK, IT REFUSES. There is no consent to be had down a pipe,
+  ;; and the safe direction is to run with nothing rather than to assume yes.
+  (let [r (sh p14 "./s")]
+    (check "a script asking for a capability REFUSES when there is no terminal"
+           (and (not (zero? (:exit r))) (str/includes? (:out r) "no terminal to ask on"))
+           (:out r))
+    (check "  ... and names the invocation that lends it explicitly"
+           (str/includes? (:out r) ":with [fs]") (:out r)))
+  ;; `:with` BEFORE the path -- everything after it is the script's own argv --
+  ;; and then nothing is asked, because nothing is unmet.
+  (let [r (sh p14 flint ":with" "[fs]" "./s")]
+    (check "  ... and `:with` before the path lends it with no prompt at all"
+           (str/includes? (:out r) "read: secret") (:out r))))
+
 (if (pos? @fails)
   (do (println "sysns:" @fails "FAILURES") (System/exit 1))
   (println "sysns: ok"))

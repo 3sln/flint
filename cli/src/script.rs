@@ -15,6 +15,10 @@
 ///
 /// Blanked rather than deleted: every offset stays where it was, which keeps
 /// this honest about what it is looking at.
+use std::fs;
+use std::path::Path;
+use anyhow::{bail, Result};
+
 fn code_only(src: &str) -> String {
     let b: Vec<char> = src.chars().collect();
     let mut out = String::with_capacity(b.len());
@@ -93,6 +97,12 @@ pub struct ScriptNs {
     pub paths: Vec<String>,
     /// Whether it declares dependencies at all.
     pub has_deps: bool,
+    /// What the script asks to be lent, from `:capabilities` in its `:script`
+    /// map. A REQUEST, not a grant: the script says what it needs, and the
+    /// person running it decides. A script that asks is one whose demands can
+    /// be read before it runs, which is the opposite of one that dies halfway
+    /// through for want of `:fs`.
+    pub capabilities: Vec<String>,
 }
 
 /// One metadata datum after a `^`, as the text it spans, and where it ends.
@@ -226,8 +236,13 @@ pub fn read_ns(src: &str) -> Option<ScriptNs> {
         .filter(|t| !t.is_empty())
         .collect();
     let has_deps = !crate::edn_block(&scope, ":deps", '{', '}').trim().is_empty();
+    let capabilities = crate::edn_block(&scope, ":capabilities", '[', ']')
+        .split_whitespace()
+        .map(|t| t.trim_start_matches(':').to_string())
+        .filter(|t| !t.is_empty())
+        .collect();
     let entry = script.map(|f| format!("{ns}/{f}"));
-    Some(ScriptNs { ns, entry, paths, has_deps })
+    Some(ScriptNs { ns, entry, paths, has_deps, capabilities })
 }
 
 /// The path a namespace's source is FOUND at, which is not the path it sits at
@@ -248,4 +263,95 @@ pub fn ns_key(ns: &str, ext: &str) -> String {
         });
     }
     format!("{out}{ext}")
+}
+
+// ------------------------------------------------------- asking for consent
+
+/// Where remembered answers live: one line per script, `<sha256> <caps>`.
+///
+/// Under the USER's home rather than the project, because the answer is the
+/// user's and not the checkout's -- a shared machine must not let one account's
+/// "always" speak for another's.
+fn grants_file() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".flint").join("script-grants"))
+}
+
+/// What this user has already said `always` to, for this exact content.
+fn remembered(hash: &str) -> Option<Vec<String>> {
+    let f = grants_file()?;
+    let text = fs::read_to_string(f).ok()?;
+    for line in text.lines() {
+        let mut it = line.split_whitespace();
+        if it.next() == Some(hash) {
+            return Some(it.map(|s| s.to_string()).collect());
+        }
+    }
+    None
+}
+
+fn remember(hash: &str, caps: &[String]) -> Result<()> {
+    let Some(f) = grants_file() else { return Ok(()) };
+    if let Some(d) = f.parent() {
+        fs::create_dir_all(d)?;
+    }
+    let mut text = fs::read_to_string(&f).unwrap_or_default();
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(hash);
+    for c in caps {
+        text.push(' ');
+        text.push_str(c);
+    }
+    text.push('\n');
+    fs::write(&f, text)?;
+    Ok(())
+}
+
+/// Ask, once, and let the answer be remembered.
+///
+/// KEYED BY CONTENT, not by path. A remembered answer is about the code the
+/// user read, so editing the script asks again -- which is the whole point: a
+/// grant that survived an edit would be a grant to code nobody agreed to.
+///
+/// REFUSES WHEN THERE IS NOBODY TO ASK. With no terminal -- a pipe, CI, a cron
+/// job -- there is no consent to be had, and the safe direction is to run with
+/// nothing rather than to assume yes. `:with` on the command line still works
+/// there, which is the explicit way to say it.
+pub fn consent(path: &Path, asked: &[String], hash: &str) -> Result<Vec<String>> {
+    if asked.is_empty() {
+        return Ok(vec![]);
+    }
+    if let Some(ok) = remembered(hash) {
+        return Ok(ok);
+    }
+    let pretty: Vec<String> = asked.iter().map(|c| format!(":{c}")).collect();
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        // `:with` BEFORE the path, because everything after it belongs to the
+        // script -- a script has to be able to receive `:with` as an argument
+        // of its own. The first version of this message had the order wrong,
+        // which would have sent people to an invocation that silently passes
+        // the flag through to their program.
+        bail!("{} asks for {} and there is no terminal to ask on.\n\
+               Run it where you can answer, or lend them explicitly with \
+               `flint :with [{}] {}`.",
+              path.display(), pretty.join(" "), asked.join(" "), path.display());
+    }
+    eprintln!();
+    eprintln!("  {} asks to be lent {}", path.display(), pretty.join(" "));
+    eprintln!("  {}", "-".repeat(60));
+    eprint!("  allow? [y]es once, [a]lways for this exact file, [N]o: ");
+    use std::io::Write as _;
+    std::io::stderr().flush().ok();
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    match line.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => Ok(asked.to_vec()),
+        "a" | "always" => {
+            remember(hash, asked)?;
+            eprintln!("  remembered; editing the file will ask again");
+            Ok(asked.to_vec())
+        }
+        _ => Ok(vec![]),
+    }
 }
