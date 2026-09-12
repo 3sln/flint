@@ -38,7 +38,63 @@
   a manifest reader that cannot read arbitrary JSON cannot be wrong about
   arbitrary JSON."
   (:require [clojure.edn :as edn]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            ;; REAL PARSERS, chosen per host by a reader conditional. This
+            ;; namespace has to run under babashka (which drives the walk on
+            ;; the bootstrap host) and under flint, and neither can load the
+            ;; other's parser -- so each takes the one it has.
+            #?(:clj [cheshire.core :as json]
+               :flint [flint.data.json :as json])
+            #?(:clj [clojure.data.xml :as xml]
+               :flint [flint.data.xml :as xml])))
+
+;; ------------------------------------------------------------- two hosts, one shape
+;;
+;; THIS USED TO BE A SCANNER, and its own docstring said so: "not a JSON or XML
+;; parser -- it is a scanner that can find one member of one object". That was
+;; not a judgement about robustness. `flint run` could not carry the JSON and
+;; XML units at all, so flint's own CLI could not parse a `package.json` or a
+;; `pom.xml` natively, and a scanner was what was reachable. The units are
+;; linked now, so this reads the documents.
+;;
+;; The two hosts agree closely enough that one code path serves both: JSON
+;; comes back identically, and XML comes back as `:tag`/`:attrs`/`:content`
+;; either way -- `clojure.data.xml` wraps it in a record that answers the same
+;; keywords. The only difference is that babashka's omits `:attrs` when empty,
+;; which `attrs-of` below absorbs.
+
+(defn- json-parse
+  "A JSON document as data. String keys, both sides."
+  [text]
+  #?(:clj (json/parse-string (str text))
+     :flint (json/read-str (str text))))
+
+(defn- xml-parse
+  "An XML document as ONE root element. `clojure.data.xml/parse-str` answers
+  one; flint's `parse-str` answers a sequence and `parse-one` takes its head."
+  [text]
+  #?(:clj (xml/parse-str (str text))
+     :flint (xml/parse-one (str text))))
+
+(defn- attrs-of
+  "An element's attributes, as a map either way."
+  [e]
+  (or (:attrs e) {}))
+
+(defn- kids
+  "The child ELEMENTS of `e` with tag `tag`, skipping text nodes."
+  [e tag]
+  (filterv (fn [c] (and (map? c) (= (name (:tag c)) (name tag)))) (:content e)))
+
+(defn- text-of
+  "An element's text content, trimmed. Empty when it has none."
+  [e]
+  (str/trim (apply str (filter string? (:content e)))))
+
+(defn- child-text
+  "The text of `e`'s first `tag` child, or nil when there is none."
+  [e tag]
+  (when-let [c (first (kids e tag))] (text-of c)))
 
 ;; ------------------------------------------------------------ JSON, narrowly
 
@@ -95,106 +151,6 @@
       (recur (inc j))
       j)))
 
-(defn json-member
-  "The TEXT of the top-level member named `k`, or nil.
-
-  Top level only, and that is the point: `\"dependencies\"` nested inside some
-  tool's own configuration block is not this package's dependency list, and a
-  scan that took the first match anywhere would pick it up."
-  [s k]
-  (let [open (str/index-of s "{")]
-    (when open
-      (loop [j (skip-space s (inc open))]
-        (if (or (>= j (count s)) (= "}" (subs s j (inc j))))
-          nil
-          (if-not (= "\"" (subs s j (inc j)))
-            nil                                     ; not an object member: give up
-            (let [ke (string-end s j)
-                  nm (subs s (inc j) (dec ke))
-                  colon (skip-space s ke)
-                  vstart (skip-space s (inc colon))
-                  vend (value-end s vstart)]
-              (if (= nm k)
-                (subs s vstart vend)
-                (let [after (skip-space s vend)]
-                  (if (and (< after (count s)) (= "," (subs s after (inc after))))
-                    (recur (skip-space s (inc after)))
-                    nil))))))))))
-
-(defn json-string-map
-  "A JSON object of string to string, as a Clojure map. Anything whose value is
-  not a string is dropped rather than guessed at."
-  [s]
-  (if (or (nil? s) (not (str/starts-with? (str/trim (str s)) "{")))
-    {}
-    (let [s (str/trim (str s))]
-      (loop [j (skip-space s 1) out {}]
-        (if (or (>= j (count s)) (not= "\"" (subs s j (inc j))))
-          out
-          (let [ke (string-end s j)
-                k (subs s (inc j) (dec ke))
-                colon (skip-space s ke)
-                vstart (skip-space s (inc colon))
-                vend (value-end s vstart)
-                v (subs s vstart vend)
-                out (if (str/starts-with? v "\"")
-                      (assoc out k (subs v 1 (dec (count v))))
-                      out)
-                after (skip-space s vend)]
-            (if (and (< after (count s)) (= "," (subs s after (inc after))))
-              (recur (skip-space s (inc after)) out)
-              out)))))))
-
-;; ------------------------------------------------------------- XML, narrowly
-
-(defn- strip-comments [s]
-  (loop [t (str s)]
-    (let [i (str/index-of t "<!--")]
-      (if (nil? i)
-        t
-        (let [j (str/index-of t "-->" i)]
-          (recur (str (subs t 0 i) (if j (subs t (+ j 3)) ""))))))))
-
-(defn elements
-  "The inner text of every `<tag>...</tag>` in `s`, at any depth, in order.
-
-  Same-name nesting is not handled and does not occur in the elements this
-  reads (`dependency`, `groupId`, `version`); `dependencies` DOES nest inside
-  `dependencyManagement`, which is why the caller strips that block first
-  rather than asking this to understand it."
-  [s tag]
-  (let [open (str "<" tag ">") close (str "</" tag ">")]
-    (loop [from 0 out []]
-      (let [i (str/index-of s open from)]
-        (if (nil? i)
-          out
-          (let [start (+ i (count open))
-                j (str/index-of s close start)]
-            (if (nil? j)
-              out
-              (recur (+ j (count close)) (conj out (subs s start j))))))))))
-
-(defn element
-  "The inner text of the FIRST `<tag>` in `s`, trimmed, or nil."
-  [s tag]
-  (let [xs (elements s tag)]
-    (when (seq xs) (str/trim (first xs)))))
-
-(defn- drop-blocks
-  "`s` with every `<tag>...</tag>` removed."
-  [s tag]
-  (let [open (str "<" tag ">") close (str "</" tag ">")]
-    (loop [t s]
-      (let [i (str/index-of t open)]
-        (if (nil? i)
-          t
-          (let [j (str/index-of t close i)]
-            (if (nil? j)
-              (subs t 0 i)
-              (recur (str (subs t 0 i) (subs t (+ j (count close))))))))))))
-
-;; --------------------------------------------------------------- the formats
-
 (defn deps-edn
   "`deps.edn`: flint's own format, and the one that wins wherever two are
   present. A package published to npm carries a `package.json` because npm
@@ -218,8 +174,9 @@
   [text]
   {:format :package-json
    :deps (reduce (fn [m e]
-                   (assoc m (symbol (key e)) {:npm/name (key e) :npm/version (val e)}))
-                 {} (json-string-map (json-member text "dependencies")))
+                   (assoc m (symbol (key e))
+                          {:npm/name (key e) :npm/version (str (val e))}))
+                 {} (get (json-parse text) "dependencies"))
    :paths []})
 
 (def ^:private skipped-scopes
@@ -227,31 +184,6 @@
   `provided` and `system` are supplied by the container, `test` by the test
   run, and `import` is a `dependencyManagement` device rather than an edge."
   #{"test" "provided" "system" "import"})
-
-(defn- child-elements
-  "Every immediate `<name>text</name>` pair in `s`, as `{name text}`.
-
-  `<properties>` is the reason this exists: the element names are the property
-  names, so they cannot be looked for and have to be read off the open tags."
-  [s]
-  (loop [from 0 out {}]
-    (let [i (str/index-of (str s) "<" from)]
-      (cond
-        (nil? i) out
-        (= "</" (subs s i (min (count s) (+ i 2)))) (recur (inc i) out)
-        :else
-        (let [gt (str/index-of s ">" i)]
-          (if (nil? gt)
-            out
-            (let [raw (subs s (inc i) gt)
-                  sp (str/index-of raw " ")
-                  nm (if sp (subs raw 0 sp) raw)
-                  close (str "</" nm ">")
-                  j (str/index-of s close gt)]
-              (if (nil? j)
-                (recur (inc gt) out)
-                (recur (+ j (count close))
-                       (assoc out nm (str/trim (subs s (inc gt) j))))))))))))
 
 (defn pom-xml
   "`pom.xml`, read as far as is honest.
@@ -268,11 +200,15 @@
   the unresolved text in `:mvn/version`, where it is refused by name -- which
   is what it should do, because inventing a version would be worse."
   [text]
-  (let [t (strip-comments (str text))
-        props (child-elements (or (first (elements t "properties")) ""))
-        ;; The POM's OWN version, read with the dependency blocks taken out so
-        ;; a dependency's `<version>` cannot be mistaken for the project's.
-        own-version (element (drop-blocks t "dependencies") "version")
+  (let [root (xml-parse text)
+        props (into {} (for [p (kids root "properties")
+                             c (:content p)
+                             :when (map? c)]
+                         [(name (:tag c)) (text-of c)]))
+        ;; The POM'S OWN version, not a dependency's. Read off the root's own
+        ;; children rather than from anywhere in the document, which is what a
+        ;; tree gets for free and a scan had to arrange by deleting blocks.
+        own-version (child-text root "version")
         expand (fn [v]
                  (let [v (str/trim (str v))]
                    (if-not (str/starts-with? v "${")
@@ -283,25 +219,25 @@
                          (contains? #{"project.version" "version" "pom.version"} k)
                          (str own-version)
                          :else v)))))
-        body (drop-blocks t "dependencyManagement")
-        blocks (elements body "dependencies")
-        entries (mapcat (fn [b] (elements b "dependency")) blocks)]
+        ;; `<dependencyManagement>` is version POLICY for dependencies declared
+        ;; elsewhere, not an edge in the graph. Excluded by taking only the
+        ;; ROOT's own `<dependencies>` -- the nesting says it, so nothing has to
+        ;; find and delete the block.
+        entries (mapcat (fn [b] (kids b "dependency")) (kids root "dependencies"))]
     {:format :pom
      :deps (reduce (fn [m d]
-                     (let [g (element d "groupId")
-                           a (element d "artifactId")
-                           v (element d "version")
-                           scope (element d "scope")
-                           optional (element d "optional")]
-                       (if (or (nil? g) (nil? a)
+                     (let [g (child-text d "groupId")
+                           a (child-text d "artifactId")
+                           v (child-text d "version")
+                           scope (child-text d "scope")
+                           optional (child-text d "optional")]
+                       (if (or (str/blank? (str g)) (str/blank? (str a))
                                (contains? skipped-scopes (str scope))
                                (= "true" (str optional)))
                          m
                          (assoc m
-                                ;; `group/artifact`, exactly as `deps.edn`
-                                ;; keys a maven dependency -- and `group/group`
-                                ;; when they are the same, which is what
-                                ;; tools.deps writes too.
+                                ;; `group/artifact`, exactly as `deps.edn` keys
+                                ;; a maven dependency.
                                 (symbol (str g "/" a))
                                 {:mvn/version (expand (or v ""))}))))
                    {} entries)
