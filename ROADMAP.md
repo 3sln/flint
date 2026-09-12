@@ -809,8 +809,9 @@ things that are code, not record:
       the mint-authority-from-nothing case rule 1 exists to refuse — is not
       refused. It is reported as an unknown key and ignored. The status said
       this was built
-- [x] **`:optimize [perf]` stripped no checks in the shipped CLI — fixed
-      2026-09-12**, partially. The binary now emits `:features #{:flint}` for a
+- [ ] **`:optimize [perf]` strips no checks in the shipped CLI.** Attempted
+      2026-09-12 and REVERTED, because the fix collides with a correctness
+      invariant. Details below; the attempt is worth not repeating blind. The binary now emits `:features #{:flint}` for a
       `[perf]` build, so the conditional bodies are gone: a deliberately
       failing check fires in a plain build and answers "survived" under
       `[perf]`. **Parity is NOT reached** — `bin/flint` emits zero
@@ -818,9 +819,28 @@ things that are code, not record:
       the `:require` naming `flint.check` survives the conditional being
       stripped and something downstream keeps the namespace reachable. The
       checks do not run; the namespace is still linked
-- [ ] Close that gap: find what keeps `flint.check` reachable after its only
-      use is elided, and whether `bin/flint` drops it by shaking or by
-      something else
+      **What the attempt did:** emit `:features #{:flint}` into the compile
+      spec for a `[perf]` build. It works — a deliberately failing check fires
+      in a plain build and answers "survived" under `[perf]`, where before it
+      threw in both.
+
+      **Why it was reverted:** `bin/check-llvm` compiles each fixture twice,
+      `[perf]` against `[size]`, and asserts the two charge IDENTICAL GAS. Once
+      `[perf]` strips checks and `[size]` does not, the two arms no longer read
+      the same source and the gas legitimately differs — 260 622 against
+      260 831 on `arith`. The invariant is not wrong; it assumed `[perf]` and
+      `[size]` differ only in compilation, and this decision makes them differ
+      in SOURCE.
+
+      So closing this needs a choice, and it is a design choice:
+
+- [ ] Either `check-llvm` compares `[perf]` against `[perf]` (it cannot today:
+      `flint run` takes no `:optimize`), or its fixtures are made check-free so
+      the two arms coincide again, or `:optimize` grows a separate axis so
+      "compile the arities" and "strip the checks" stop being one token
+- [ ] And still open underneath it: `bin/flint` emits zero `flint.check`
+      references on a `[perf]` build where the shipped binary emits four, so
+      even with the feature set fixed the namespace stays linked
 - [ ] ~~`:optimize [perf]` does not strip checks in the shipped CLI.~~ The
       native binary never emits `:features` into the compile spec;
       `wants_aot` turns `perf` into AOT and nothing else. Measured: a module
