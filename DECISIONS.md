@@ -2832,12 +2832,34 @@ making the *core* depend on it either way.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): partly built.** The single native binary exists and is the CLI:
-`run`/`compile` take `:path`/`:fn`/`:with`/`:args`/`:to`/`:optimize`/`:meta`.
-Still to do: `:to :llvm`, the remaining cross-compilation backends, nREPL,
-and the `{:args :capabilities}` entry-map wrapping (arguments arrive today as
-the bare vector, not yet wrapped). Maven's transitive dependency resolution
-is **deliberately cancelled** — see the measurement below.
+**Status (measured 2026-09-11): partly built, and NARROWER THAN THIS SECTION
+READS.** The native binary exists and `run`/`compile` take
+`:path`/`:fn`/`:with`/`:args`/`:to`/`:optimize`/`:meta`. But it serves FIVE
+commands, and `bin/flint` serves thirteen:
+
+    present in the shipped binary: deps, run, compile, test, version
+    absent:  build, check, fetch, inspect, paths, targets, task, tasks
+
+So most of the PROJECT surface — building from `deps.edn`, running tasks,
+fetching dependencies, reporting paths — exists only in babashka. This section
+said "the single native binary exists and is the CLI" without that.
+
+A related seam, also measured: the native CLI does NOT read `:paths` from
+`deps.edn` (`flint run :path .` on a project declaring `:paths ["src"]` answers
+"no source for …"; `:path src` works), while it DOES read that file for
+workspace identity and capabilities. It is partially project-aware and nothing
+said where the line falls.
+
+Still to do: `:to :llvm`, the remaining cross-compilation backends, nREPL, and
+the `{:args :capabilities}` entry-map wrapping (arguments arrive today as the
+bare vector, not yet wrapped).
+
+**Maven's transitive dependency resolution is REQUIRED, not cancelled.** The
+status line here said "deliberately cancelled — see the measurement below"
+while the body of this same section, a hundred lines down, recorded the
+reversal: every dependency kind needs transitive resolution. The measurement
+that prompted the cancellation stands as history and is kept below; the
+decision it produced does not. Tracked in `ROADMAP.md`.
 
 ### What was decided
 

@@ -409,6 +409,26 @@ be judged against it. Since npm-only is the decided path for now, that is the
 same order the work was going in anyway — build it, then measure, then decide
 whether the native binary earns its keep.
 
+### The shipped binary is a subset of `bin/flint` (measured 2026-09-11)
+
+    present in target/release/flint: deps, run, compile, test, version
+    absent: build, check, fetch, inspect, paths, targets, task, tasks
+
+Most of the project surface exists only in babashka. The native CLI also does
+not read `:paths` from `deps.edn`, though it now reads that file for workspace
+identity and capabilities — so it is partially project-aware with no stated
+line between what it reads and what it ignores.
+
+**This changes the open "which CLI ships" question.** That was framed as a
+performance comparison against a node/wasm build; it is not only that, because
+the native binary cannot build a project today. A capability gap decides more
+than a latency one.
+
+- [ ] Decide whether the native binary gets the project surface, or whether
+      `bin/flint` is the project CLI and the binary is the runner
+- [ ] State, wherever that lands, which parts of `deps.edn` the native CLI
+      reads — it is currently capabilities and dependencies but not `:paths`
+
 ### Source workspaces in the native CLI (fixed 2026-09-11)
 
 The shipped binary emitted VIRTUAL workspaces only, so every compiled file
