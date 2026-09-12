@@ -959,8 +959,22 @@ proposed answers lost.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): shipped.** A namespace is a compilation unit and `flint link`
-composes them.
+**Status: shipped — but there is no `flint link` command; composition runs
+inside an ordinary compile.** Checked 2026-09-12. `src/flint/link.cljc`
+(`discover-units`, `check-abi!`, `plan`, `link-objects`, `compose`) resolves one
+`<ns>.unit.edn` per namespace off the unit search path and runs `rust-lld
+-flavor wasm --no-entry --gc-sections` over only the reachable units' `.o`
+files; `units/` holds one unit per namespace (`flint.rt`, `flint.conc`,
+`flint.data.{json,html,xml}`), built by `bin/build-units`. No `link` subcommand
+exists in `cli/src/main.rs`, `bin/flint` or `lib/flint/cli.cljc`. Observed:
+`./bin/flint :src … :fn m/main` on `(defn main [_] "hi")`, then `./bin/flint
+inspect` on the result, prints `units: flint.rt` / `(+23 builtins)`, against
+`(+192 builtins)` for the loader build of the same program — only the reached
+builtins survive the link. One mechanism detail below is *not* how it was
+built: the registry is assembled after the link, by reading the module's export
+section and appending an element segment (`compose`), rather than by the
+runtime walking a linker section at startup. The property it was for — no
+hand-written table holding every builtin live — holds either way.
 
 ### What was decided
 
@@ -1565,14 +1579,26 @@ of memory.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): partly built — steps 1–6 of 9.** The value type, row refs,
-`assoc`/`conj`/`update-row`, iteration, the constant-column encoding, and
-`migrate` all ship on the wasm and native runtimes, extensively measured.
-Not built: the transient (step 7 — since built per the source's own later
-notes), the column API, the codec/reader tag, and the JVM/CLR ports
-(deliberately last, so the type is ported once rather than after every
-step). This decision is heavily cited across the runtime and is treated at
-length.
+**Status: shipped.** The banner read "partly built — steps 1–6 of 9", naming
+the transient, the column API, the codec/reader tag and the JVM/CLR ports as
+not built. All four are in the tree, and the body of this section already
+describes three of them as done — the banner was stale, not the content.
+Checked 2026-09-12, by reading and by running. In `lib/flint/table.cljc`:
+`build` is `transient`/`conj!`/`persistent!` (l.157), `column`,
+`reduce-column`, `slice` and `select` are the column API (l.174–213), and
+`read-table` (l.218) is bound to `#flint/table` in `src/flint/reader.cljc:526`.
+A probe run through `target/release/flint run` on a 300-row table answered
+`(reduce-column t :a + 0)` = 44850, `(count (slice t 10 20))` = 10,
+`(count (build S (range 50) f))` = 50, printed
+`#flint/table {:schema [[:a :int] [:b :string]] :rows [{:a 1, :b "x"}]}`, and
+read that form back `=` to the original. The wire tag is `K_TABLE = 18`
+(`runtime/src/codec.rs:66`, `runtimes/jvm/…/Codec.java`,
+`runtimes/clr/src/rt/Codec.cs`). The ports are `runtimes/jvm/src/com/flint/rt/Table.java`
+and `runtimes/clr/src/rt/Table.cs` over the generated `kgen`
+`Table*` files (`kin/table*.kin`; commit 2bfa4fc, "`Table` is generated"), and
+`tables` is in `bin/conform-hosts`' three-runtime suite list (l.762) — the
+ports are checked here by code and by that listing, not by running the gate.
+This decision is heavily cited across the runtime and is treated at length.
 
 ### What was decided
 
