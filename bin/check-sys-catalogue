@@ -1,0 +1,114 @@
+#!/usr/bin/env node
+// The served catalogue is ONE list, and this is what keeps it one
+// (`DECISIONS.md#npm-cli`).
+//
+// `cli/src/sys.rs`'s `catalogue()` is what the native CLI tells the compiler
+// and what it answers `{:op :list}` with. `sdks/cli/src/catalogue.mjs` is the
+// same list for the npm CLI, and it cannot import the Rust one, so AGENTS.md
+// §1's "make one read the other" is not available across the boundary.
+//
+// So the drift is CAUGHT instead. This parses the `vars()` bodies out of
+// `cli/src/sys.rs` and `cli/src/deps.rs`, parses the JS list, and fails naming
+// exactly what differs -- a namespace, a var, an arity or the order. Two tables
+// that agree on the common cases are indistinguishable from one table until an
+// uncommon case arrives; this is the thing that arrives first.
+//
+// The ORDER is checked too, and not out of tidiness: it is the order the
+// virtual workspaces appear in the compiler's spec, and `sdks/cli` exists to
+// produce byte-identical output to the native CLI.
+
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const read = (p) => readFileSync(join(root, p), 'utf8');
+
+/// Every `impl Service for T` in a file, as `type -> [namespace, vars]`.
+function rustServices(src) {
+  const out = new Map();
+  const impl = /impl\s+Service\s+for\s+(\w+)\s*\{([\s\S]*?)\n\}/g;
+  for (const m of src.matchAll(impl)) {
+    const type = m[1];
+    const body = m[2];
+    const name = /fn\s+name\(&self\)\s*->\s*&str\s*\{\s*"([^"]+)"\s*\}/.exec(body);
+    const vars = /fn\s+vars\([\s\S]*?vec!\[([\s\S]*?)\]\s*\n?\s*\}/.exec(body);
+    if (!name || !vars) continue;
+    const pairs = [];
+    for (const v of vars[1].matchAll(/\("([^"]+)",\s*&\[([^\]]*)\]\)/g)) {
+      const arities = v[2].split(',').map((s) => s.trim()).filter((s) => s !== '').map(Number);
+      pairs.push([v[1], arities]);
+    }
+    out.set(type, [name[1], pairs]);
+  }
+  return out;
+}
+
+const sysSrc = read('cli/src/sys.rs');
+const depsSrc = read('cli/src/deps.rs');
+const services = new Map([...rustServices(sysSrc), ...rustServices(depsSrc)]);
+
+/// The ORDER, from `catalogue()`'s vec. Each entry is `<expr>.name_static()`,
+/// where `<expr>` is either a local bound by a `let` just above or a path to a
+/// unit struct.
+function rustOrder(src) {
+  const fn = /pub fn catalogue\(\)[\s\S]*?\{([\s\S]*?)\n\}/.exec(src);
+  if (!fn) throw new Error('cli/src/sys.rs: no catalogue() to read');
+  const body = fn[1];
+  const lets = new Map();
+  for (const m of body.matchAll(/let\s+(\w+)\s*=\s*(?:crate::\w+::)?(\w+)/g)) {
+    lets.set(m[1], m[2]);
+  }
+  const order = [];
+  const vec = /vec!\[([\s\S]*?)\]/.exec(body);
+  if (!vec) throw new Error('cli/src/sys.rs: catalogue() has no vec![..]');
+  for (const m of vec[1].matchAll(/(?:crate::\w+::)?(\w+)(?:\.name_static\(\))/g)) {
+    const type = lets.get(m[1]) ?? m[1];
+    const hit = services.get(type);
+    if (!hit) throw new Error(`cli/src/sys.rs: catalogue() names ${type}, which impls no Service`);
+    order.push(hit);
+  }
+  return order;
+}
+
+const rust = rustOrder(sysSrc);
+
+/// The JS list, read as source rather than imported: `sdks/cli/src/catalogue.mjs`
+/// is plain data and importing it would make this check depend on the package
+/// having been built.
+const jsSrc = read('sdks/cli/src/catalogue.mjs');
+const js = [];
+{
+  const block = /export const CATALOGUE = \[([\s\S]*?)\n\];/.exec(jsSrc);
+  if (!block) throw new Error('sdks/cli/src/catalogue.mjs: no CATALOGUE to read');
+  for (const m of block[1].matchAll(/\['([^']+)',\s*\[([\s\S]*?)\n {2}\]\]/g)) {
+    const pairs = [];
+    for (const v of m[2].matchAll(/\['([^']+)',\s*\[([^\]]*)\]\]/g)) {
+      pairs.push([v[1], v[2].split(',').map((s) => s.trim()).filter((s) => s !== '').map(Number)]);
+    }
+    js.push([m[1], pairs]);
+  }
+}
+
+const show = (entries) =>
+  entries.map(([ns, vars]) =>
+    `${ns}: ${vars.map(([n, a]) => `${n}/${a.join('|')}`).join(' ')}`).join('\n');
+
+const a = show(rust);
+const b = show(js);
+if (a === b) {
+  console.log(`  ok  ${rust.length} served namespaces, ` +
+              `${rust.reduce((n, [, v]) => n + v.length, 0)} vars, same order`);
+  process.exit(0);
+}
+console.error('  FAIL cli/src/sys.rs and sdks/cli/src/catalogue.mjs disagree.\n');
+const al = a.split('\n');
+const bl = b.split('\n');
+for (let i = 0; i < Math.max(al.length, bl.length); i++) {
+  if (al[i] === bl[i]) continue;
+  console.error(`    rust: ${al[i] ?? '(nothing)'}`);
+  console.error(`    node: ${bl[i] ?? '(nothing)'}\n`);
+}
+console.error('  Both lists are read twice -- by the compiler, to resolve a :require and to');
+console.error('  reject an unknown var, and at run time to answer {:op :list}. Fix both.');
+process.exit(1);

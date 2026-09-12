@@ -1,0 +1,26 @@
+{
+  "name": "@3sln/flint-cli",
+  "version": "0.0.1",
+  "description": "The flint compiler as a command line, on node: compile Clojure to WebAssembly, or run it here.",
+  "type": "module",
+  "author": "Ray Stubbs",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/3sln/flint.git",
+    "directory": "sdks/cli"
+  },
+  "homepage": "https://flint.3sln.com",
+  "keywords": ["clojure", "cljc", "wasm", "webassembly", "compiler", "cli"],
+  "bin": { "flint": "./bin/flint.mjs" },
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "engines": { "node": ">=20" },
+  "files": ["bin/", "src/", "dist/", "fixture/", "selftest.mjs", "README.md"],
+  "publishConfig": { "access": "public" },
+  "scripts": {
+    "build": "./build",
+    "test": "node selftest.mjs"
+  }
+}

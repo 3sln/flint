@@ -518,6 +518,10 @@ echo "== decisions: the index agrees with what is in the tree"
 ./bin/check-decisions || fail "bin/check-decisions"
 
 echo
+echo "== the served catalogue: the Rust CLI and the npm CLI list the same namespaces"
+./bin/check-sys-catalogue || fail "bin/check-sys-catalogue"
+
+echo
 echo "== manifest: the deficiency lists are true"
 bb test/manifest.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/manifest.clj"; }
 tail -1 /tmp/flint-test.out

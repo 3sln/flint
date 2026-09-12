@@ -1,0 +1,71 @@
+#!/bin/sh
+# Build the npm CLI distributable.
+#
+# Nothing is compiled here. What this does is COPY, and the reason it exists as
+# a step rather than as a set of relative imports is that a published package
+# has no `../../dist` to import from: `sdks/cli/dist/` is what npm puts in the
+# tarball, and it has to be filled from artifacts built out of the source beside
+# it.
+#
+# The artifacts are GENERATED (`bin/build-dist`), so this builds them first. A
+# distributable can only ever carry artifacts built from the source beside it,
+# and `bin/build-dist` does NOT rebuild `target/release/flint` -- neither step
+# implies the other (AGENTS.md §3).
+set -e
+cd "$(dirname "$0")"
+root=../..
+
+echo "==> the wasm artifacts"
+(cd "$root" && ./bin/build-dist) | sed 's/^/    /'
+
+mkdir -p dist
+
+echo "==> the compiler, the runtimes and their slot maps"
+for f in flintc.wasm flint-runtime.wasm flint-runtime-aot.wasm slots.json slots-aot.json; do
+  cp "$root/dist/$f" "dist/$f"
+  printf '    %-24s %s\n' "$f" "$(wc -c < "dist/$f" | tr -d ' ') bytes"
+done
+
+echo "==> the standard library, as data"
+# As one JSON file rather than as a tree of `.cljc`: the CLI reads it into a map
+# to build the spec, and a tree would be a second walk producing the same map
+# with more ways to go wrong.
+cp "$root/lib/deps.edn" dist/lib-deps.edn
+node -e '
+const fs = require("fs"), path = require("path");
+const lib = path.join("'"$root"'", "lib");
+const out = {};
+(function walk(dir, prefix) {
+  for (const name of fs.readdirSync(dir).sort()) {
+    const full = path.join(dir, name);
+    const rel = prefix ? prefix + "/" + name : name;
+    if (fs.statSync(full).isDirectory()) walk(full, rel);
+    else if (rel.endsWith(".cljc") || rel.endsWith(".clj"))
+      out[rel] = fs.readFileSync(full, "utf8");
+  }
+})(lib, "");
+fs.writeFileSync("dist/stdlib.json", JSON.stringify(out));
+console.log("    " + Object.keys(out).length + " files, " +
+            (JSON.stringify(out).length / 1024).toFixed(0) + " KB");
+'
+
+echo "==> the guest driver"
+# COPIED, not reimplemented. `sdks/esm/src/guest.js` is the reference driver --
+# arguments, the pump, capabilities -- and `sdks/esm/src/codec.js` is the wire
+# codec. Both are portable (no `node:` import, no `process`, no filesystem), so
+# the CLI is a third caller of them rather than a second implementation. A
+# published package cannot reach across to a sibling package's source, which is
+# the only reason these are copies and not imports.
+cp "$root/sdks/esm/src/guest.js" dist/guest.js
+cp "$root/sdks/esm/src/codec.js" dist/codec.js
+
+echo "==> checking the served catalogue still matches cli/src/sys.rs"
+(cd "$root" && ./bin/check-sys-catalogue) | sed 's/^/    /'
+
+echo "==> checking it works"
+selftest_out=$(mktemp)
+selftest_status=0
+node selftest.mjs > "$selftest_out" 2>&1 || selftest_status=$?
+sed 's/^/    /' "$selftest_out"
+rm -f "$selftest_out"
+[ "$selftest_status" -eq 0 ] || exit "$selftest_status"
