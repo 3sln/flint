@@ -95,6 +95,58 @@ as evidence of what the tree currently does, not as a rule you have agreed to.
 Where you disagree with one, the code is what has to change -- but the
 disagreement is legitimate and the record does not settle it.
 
+### Triage, 2026-09-12: 47 unratified, and they are not one pile
+
+**32 of the 47 carry a status reading "per the record; not independently
+verified".** Those were copied forward in the spring cleaning from the old
+decision files, and the phrase is exactly true: nobody checked them against the
+code.
+
+**Ratifying one of those signs off on folklore, not on a decision.** The fifteen
+that HAVE been checked make the case: four of them were wrong and had to be
+corrected — `kin`'s banner said "NOT BUILT" beside 91 sources; `structured-ports`
+carried a "NOT BUILT — a proposal" banner over working code; `cli` claimed the
+binary IS the CLI while serving five of thirteen commands; `other-hosts` read as
+a flint→LLVM backend that did not exist. A fifth, `:local/root`, was recorded
+built and had never worked.
+
+Four corrections in fifteen checks. Against 32 unchecked statuses, that rate
+suggests several more are wrong — which is an argument for checking them, not
+for signing them.
+
+**So the pile is three piles.**
+
+**Ratifiable as recorded — built, checked, behaving (8).** These were verified
+against the code this session, and re-verified after the merges that followed:
+`structured-ports`, `kin`, `npm-cli`, `pods-are-a-resolvable-dependency`,
+`kin-probes-assert-a-value`, `a-parallel-gate-body-never-exits`,
+`dialects-and-preludes`, `port-tests-in-kin`.
+
+**Needs a decision from you before it means anything (7).** Each has running
+code and an open question the code cannot answer:
+
+* `cli` and `other-hosts` — does the native binary survive? The 5.8x that
+  justified it measures 1.7x, and it serves five of thirteen commands.
+* `the-pike-vm-is-the-last-triplicate` — is generating `Rt` the goal? ~21 000
+  hand-duplicated lines and thirteen unportable tests turn on it.
+* `llvm-ir-target` — should `:to :llvm` imply `:optimize [perf]`; where does
+  `nativeabi/` belong?
+* `one-dependency-walk` — manifest parsing landed in `.cljc`, not the Rust
+  modules `ROADMAP.md` specified. The reason is recorded; the deviation is
+  yours to accept or reverse.
+* `standalone-scripts` — an agent decided the entry-point rule, that a script
+  declares no capabilities, and that a script cannot be a dependency. All three
+  are defensible and none is yours yet.
+* `no-runtime-linking` — partly built, and the remainder is a scope question.
+
+**Not ratifiable until somebody checks them (32).** Everything else. The work is
+not review, it is verification: read the code the status describes and correct
+the status. `bin/check-decisions` proves a citation RESOLVES and can never prove
+it is TRUE.
+
+A cheap way in: `port-tests-in-kin` has no status line at all, which makes it
+the one item in this file whose claim cannot even be assessed.
+
 AND THE STATUS CLAIMS IN THESE RECORDS ARE NOT RELIABLE. Several were verified
 wrong: one opens "NOT BUILT -- a spike, nothing in the tree uses it yet" and
 describes a generator that now emits 89 modules into three runtimes; another
