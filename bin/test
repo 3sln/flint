@@ -7,6 +7,39 @@ set -e
 cd "$(dirname "$0")/.."
 fail() { echo; echo "FAILED: $1"; exit 1; }
 
+# SECTION TIMING, because the 26 minutes this takes has never had an
+# itemisation and the remedy depends entirely on the shape of it: a handful of
+# slow sections and a uniform cost want completely different answers.
+#
+# Recorded by the script itself rather than by a wrapper piping its output. A
+# pipeline reports the status of its LAST command -- the hazard the note above
+# already describes -- and a timing harness that swallowed a failure would be
+# the worst possible trade.
+#
+# The summary prints at the end, slowest first, and costs one `date` per
+# section.
+FLINT_TIMES=${FLINT_TIMES:-/tmp/flint-test-times}
+: > "$FLINT_TIMES"
+_sec_at=$(date +%s)
+_sec_name=""
+sec() {
+  _now=$(date +%s)
+  [ -n "$_sec_name" ] && echo "$((_now - _sec_at)) $_sec_name" >> "$FLINT_TIMES"
+  _sec_at=$_now
+  _sec_name="$1"
+  echo "== $1"
+}
+times_summary() {
+  _now=$(date +%s)
+  [ -n "$_sec_name" ] && echo "$((_now - _sec_at)) $_sec_name" >> "$FLINT_TIMES"
+  echo
+  echo "== where the time went (seconds, slowest first)"
+  sort -rn "$FLINT_TIMES" | head -12 | while read -r secs name; do
+    printf '  %5ss  %s\n' "$secs" "$name"
+  done
+  printf '  %5ss  TOTAL\n' "$(awk '{t+=$1} END {print t}' "$FLINT_TIMES")"
+}
+
 # CARGO'S EXIT STATUS, not a grep for the word FAILED.
 #
 # It used to be the grep, and the hole that leaves is a test target that does
@@ -27,11 +60,11 @@ rust_tests() {
   grep -E "^test result" /tmp/flint-cargo.out
 }
 
-echo "== rust: runtime unit tests and VM integration tests"
+sec "rust: runtime unit tests and VM integration tests"
 rust_tests flint-rt
 
 echo
-echo "== rust: green threads, ports, and a parked thread under collection"
+sec "rust: green threads, ports, and a parked thread under collection"
 rust_tests flint-conc
 
 echo
@@ -39,23 +72,23 @@ echo
 # `./target/release/flint`, and nothing here built it -- so a change to the
 # runtime that was never compiled was tested as if it had been. That reads as
 # a PASS, and against `bin/conform-hosts` it reads as the PORT disagreeing.
-echo "== rust: the native CLI, which everything below runs"
+sec "rust: the native CLI, which everything below runs"
 cargo build --release -p flint-cli > /tmp/flint-cli-build.log 2>&1 \
   || { tail -20 /tmp/flint-cli-build.log; fail "cargo build --release -p flint-cli"; }
 echo "  ok"
 
 echo
-echo "== units: the PRODUCTION build (no diagnostic machinery -- 0016)"
+sec "units: the PRODUCTION build (no diagnostic machinery -- 0016)"
 ./bin/build-units >/dev/null 2>&1 || fail "build-units"
 echo "  ok"
 
 echo
-echo "== reader"
+sec "reader"
 bb --classpath src test/reader_test.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/reader_test.clj"; }
 tail -1 /tmp/flint-test.out
 
 echo
-echo "== conformance: Clojure expressions, on flint"
+sec "conformance: Clojure expressions, on flint"
 ./bin/flint :src test :fn conform.runner/main :out out/conform.wasm >/dev/null
 node host/flint.mjs out/conform.wasm conform.runner/main | tee /tmp/conform.out
 # A FLOOR, not the count. The runner prints `PASS <n>`, and this grepped for
@@ -70,28 +103,28 @@ esac
 echo "    $conform_n expressions, and at least 130 are expected"
 
 echo
-echo "== conformance: the same expressions, under real Clojure"
+sec "conformance: the same expressions, under real Clojure"
 bb test/conform_vs_clojure.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/conform_vs_clojure.clj"; }
 tail -2 /tmp/flint-test.out
 
 echo
-echo "== end to end: hand-assembled images, linked and run"
+sec "end to end: hand-assembled images, linked and run"
 bb --classpath src test/e2e_link.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/e2e_link.clj"; }
 tail -1 /tmp/flint-test.out
 
 echo
-echo "== modularity: only reachable code ships"
+sec "modularity: only reachable code ships"
 bb test/modularity.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/modularity.clj"; }
 tail -1 /tmp/flint-test.out
 
 echo
-echo "== options: :exclude is an assertion, :wasm-path is a search path"
+sec "options: :exclude is an assertion, :wasm-path is a search path"
 ./bin/build-test-unit >/dev/null 2>&1 || fail "build-test-unit"
 bb test/options.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/options.clj"; }
 tail -1 /tmp/flint-test.out
 
 echo
-echo "== threads: green threads, ports, protocols, dynamic vars"
+sec "threads: green threads, ports, protocols, dynamic vars"
 # THE RUNTIME FIRST, because `threads.clj` carries the module size budget and
 # the floor module links `dist/flint-runtime.wasm`. That artifact used to be
 # rebuilt at the "distributable" section a hundred lines below this one, so the
@@ -109,27 +142,27 @@ echo "== threads: green threads, ports, protocols, dynamic vars"
 ./bin/build-dist > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "bin/build-dist (before the size budget)"; }
 bb test/threads.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/threads.clj"; }
 
-echo "== catch: Exception means what it means in Clojure"
+sec "catch: Exception means what it means in Clojure"
 bb test/catch.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/catch.clj"; }
 grep -E "^    |FAIL" /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
-echo "== loader: an image runs in a module that never linked it (0023)"
+sec "loader: an image runs in a module that never linked it (0023)"
 bb test/loader.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/loader.clj"; }
 grep -E "^    |FAIL" /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
-echo "== pause: the collector collects little and often, so the tail stays tight (0018)"
+sec "pause: the collector collects little and often, so the tail stays tight (0018)"
 bb test/pause.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/pause.clj"; }
 grep -E "^    |FAIL" /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
-echo "== opaque: identity without structure, across a moving collector (0022)"
+sec "opaque: identity without structure, across a moving collector (0022)"
 bb test/opaque.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/opaque.clj"; }
 grep -E "^    |FAIL" /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
-echo "== capability: possession is not the check, the grant table is (0021, 0022)"
+sec "capability: possession is not the check, the grant table is (0021, 0022)"
 # `test/capability.clj` COMPILES AGAINST `sdks/esm/dist/flint.js`, which is
 # generated and gitignored -- so it is absent from a fresh clone, and this line
 # is 179 lines above the `./sdks/esm/build` that makes it. Every tree that has
@@ -163,31 +196,31 @@ tail -1 /tmp/flint-cycles.out
 bb test/requires.clj > /tmp/flint-requires.out 2>&1 || { cat /tmp/flint-requires.out; fail "test/requires.clj"; }
 tail -1 /tmp/flint-requires.out
 
-echo "== cli: the command surface, tasks, and running an image directly (0021)"
+sec "cli: the command surface, tasks, and running an image directly (0021)"
 bb test/cli.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/cli.clj"; }
 grep -E "^    |FAIL" /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
-echo "== scaling: doubling the input must not square the work"
+sec "scaling: doubling the input must not square the work"
 bb test/scaling.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/scaling.clj"; }
 grep -E "^    |FAIL" /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
-echo "== ropes: three tiers, one string, and the flattens counted (0011)"
+sec "ropes: three tiers, one string, and the flattens counted (0011)"
 bb test/ropes.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; ./bin/build-units > /dev/null; fail "test/ropes.clj"; }
 grep -E "^    |FAIL" /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
-echo "== pike: one shared NFA, two simulators, a rope cursor (0012)"
+sec "pike: one shared NFA, two simulators, a rope cursor (0012)"
 bb test/regex_pike.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; ./bin/build-units > /dev/null; fail "test/regex_pike.clj"; }
 grep -E "^    |FAIL" /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
-echo "== aot: the emitter, validated one arity at a time (0013)"
+sec "aot: the emitter, validated one arity at a time (0013)"
 bb test/aot_emit.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/aot_emit.clj"; }
 tail -3 /tmp/flint-test.out
 
-echo "== aot: the same answer AND the same instruction count as the interpreter"
+sec "aot: the same answer AND the same instruction count as the interpreter"
 # Its own build, like diagnostics: a production runtime cannot run compiled
 # arities and does not carry the machinery that would (DECISIONS.md#emit-wasm-instead-of-dispatch, 0016).
 ./bin/build-units --aot > /dev/null || fail "build-units --aot"
@@ -201,7 +234,7 @@ grep -E "^    |FAIL" /tmp/flint-test.out || true
 # run through the compiled path. Two runs on the SAME units, so the only
 # variable is the one being tested.
 echo
-echo "== aot: the language suite answers the same with compiled arities"
+sec "aot: the language suite answers the same with compiled arities"
 ./bin/flint test :src test/common > /tmp/flint-common-i.out 2>&1 \
   || { cat /tmp/flint-common-i.out; ./bin/build-units > /dev/null; fail "test/common (interpreted, under aot units)"; }
 ./bin/flint test :src test/common --aot > /tmp/flint-common-a.out 2>&1 \
@@ -219,27 +252,27 @@ grep -E "^    " /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
 echo
-echo "== host abi: tokens, one event queue, two lifetimes"
+sec "host abi: tokens, one event queue, two lifetimes"
 bb test/host_abi.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/host_abi.clj"; }
 grep -E "^    " /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
 echo
-echo "== inline: :inline metadata, and the instruction count it removes"
+sec "inline: :inline metadata, and the instruction count it removes"
 bb test/inline.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/inline.clj"; }
 grep -E "^  (ok|FAIL)" /tmp/flint-test.out | tail -3
 node test/inline.mjs > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/inline.mjs"; }
 grep -E "^    " /tmp/flint-test.out
 
 echo
-echo "== types: annotations are checked claims, and a proven one costs nothing"
+sec "types: annotations are checked claims, and a proven one costs nothing"
 bb test/types.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/types.clj"; }
 grep -cE "^  ok" /tmp/flint-test.out | sed 's/^/    /;s/$/ checks/'
 node test/types.mjs > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/types.mjs"; }
 grep -E "^    " /tmp/flint-test.out
 
 echo
-echo "== narrowing: which guard shapes it composes with (0013)"
+sec "narrowing: which guard shapes it composes with (0013)"
 ./bin/build-units --diagnostics > /dev/null 2>&1 || fail "build-units --diagnostics"
 ./bin/flint :src test :fn narrow/main :out out/narrow.wasm > /dev/null 2>&1 || fail "build narrow.wasm"
 node test/narrow.mjs > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/narrow.mjs"; }
@@ -247,13 +280,13 @@ grep -E "^    [a-z]" /tmp/flint-test.out | awk '{printf "%s=%s ", $1, $2} END {p
 ./bin/build-units > /dev/null 2>&1 || fail "build-units"
 
 echo
-echo "== specialisation: the same instructions, and what one costs"
+sec "specialisation: the same instructions, and what one costs"
 ./bin/flint :src bench/progs :fn spec/main :out out/spec.wasm > /dev/null 2>&1 || fail "build spec.wasm"
 node bench/specialised.mjs > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "bench/specialised.mjs"; }
 grep -E "^  (generic|specialised|[0-9])" /tmp/flint-test.out | sed 's/^/  /'
 
 echo
-echo "== collections: transients, and what a seq walk costs in memory"
+sec "collections: transients, and what a seq walk costs in memory"
 ./bin/build-units --diagnostics > /dev/null 2>&1 || fail "build-units --diagnostics"
 ./bin/flint :src bench/progs :fn colls/main :out out/colls-diag.wasm > /dev/null 2>&1 || fail "build colls"
 node bench/colls.mjs 20000 conj conj! assoc assoc! reduce sort group-by zipmap select-keys \
@@ -314,7 +347,7 @@ awk '/^  (vec|noshare|hash-bigvec|set-member) /{
 ./bin/build-units > /dev/null 2>&1 || fail "build-units"
 
 echo
-echo "== distributable: the compiler and loader, driven by the SDK alone"
+sec "distributable: the compiler and loader, driven by the SDK alone"
 # Rebuilt every run, because the artifacts are generated and a stale one that
 # still passes is the failure this section exists to catch.
 ./bin/build-dist > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "bin/build-dist"; }
@@ -331,7 +364,7 @@ echo "== distributable: the compiler and loader, driven by the SDK alone"
 grep -E "^ *(ok|FAIL|dist/|no node)" /tmp/flint-test.out | sed 's/^      /  /'
 
 echo
-echo "== bytes: a string of bytes, in two tiers (0024)"
+sec "bytes: a string of bytes, in two tiers (0024)"
 bb test/bytes.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/bytes.clj"; }
 grep -cE "^  ok" /tmp/flint-test.out | sed 's/^/    /;s/$/ checks/'
 # The number the type exists for: the same bytes, two representations.
@@ -349,18 +382,18 @@ awk '/^  byte-cat /{c=$4} /^  byte-trans /{t=$4} END{gsub(",","",c); gsub(",",""
 ./bin/build-units > /dev/null 2>&1 || fail "build-units"
 
 echo
-echo "== shake: cutting a prebuilt module down, with no linker (0024)"
+sec "shake: cutting a prebuilt module down, with no linker (0024)"
 bb test/shake.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/shake.clj"; }
 grep -E "^    " /tmp/flint-test.out
 
 echo
-echo "== dist: built from this source tree, not a previous one"
+sec "dist: built from this source tree, not a previous one"
 # Runs BEFORE the binary section, because the CLI embeds `dist/` and a stale
 # slot table does not fail where it is stale -- it segfaults somewhere else.
 ./bin/check-dist || fail "check-dist"
 
 echo
-echo "== binary: the single-file CLI, compiling and running with nothing installed"
+sec "binary: the single-file CLI, compiling and running with nothing installed"
 # Built against dist/, which the section above just rebuilt. This is the
 # release artifact, so what is asserted is what a user does with it: compile a
 # program and run the result.
@@ -439,7 +472,7 @@ fi
 # `test/aot.clj` holds the wasm emitter to: the same answer AND the same
 # instruction count as the interpreter.
 echo
-echo "== llvm: IR out, linked by clang, answering what the interpreter answers"
+sec "llvm: IR out, linked by clang, answering what the interpreter answers"
 # THE SCRIPT'S OWN STATUS, not a grep of its output, and for the reason at the
 # top of this file: a pipeline reports its LAST command, so `check-llvm | tee`
 # would report `tee`.
@@ -455,7 +488,7 @@ sed -n 's/^    \([a-z]*:\)/  \1/p' /tmp/flint-llvm.out
 ls -l target/release/flint | awk '{printf "    binary %.1f MB\n", $5/1048576}'
 
 echo
-echo "== parallel: two executors on one heap (0028)"
+sec "parallel: two executors on one heap (0028)"
 # The `parallel` feature is the native SDK's, so it is tested where it is used.
 # What this asserts is that a collection staged by one executor walks the
 # other's roots: a run in which nothing collected would prove nothing, so the
@@ -466,7 +499,7 @@ grep -E "collections with two executors" /tmp/flint-test.out | sed 's/^ */    /'
 grep -E "^test result" /tmp/flint-test.out | sed 's/^/    /'
 
 echo
-echo "== hosts: every builtin is carried by every port"
+sec "hosts: every builtin is carried by every port"
 # Counted, not assumed. The count was wrong twice -- once by matching only
 # `flint/`-prefixed names, once by mispairing quotes around an escaped one --
 # and both times it reported a number that looked fine.
@@ -493,20 +526,20 @@ else
 fi
 
 echo
-echo "== global ports: the host owns them, and passes one IN (0027)"
+sec "global ports: the host owns them, and passes one IN (0027)"
 bb test/globalport.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/globalport.clj"; }
 grep -E "^  (ok|FAIL)" /tmp/flint-test.out | sed 's/^/  /'
 tail -1 /tmp/flint-test.out
 
 echo
-echo "== hosts: one program, three runtimes, diffed (0010, 0029, 0030)"
+sec "hosts: one program, three runtimes, diffed (0010, 0029, 0030)"
 # The JVM port's gate. Skips itself when there is no JDK, because the rest of
 # the suite must not depend on one being installed.
 ./bin/conform-hosts > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "conform-hosts"; }
 grep -E "^  (ok|FAIL|[0-9]+/|\()" /tmp/flint-test.out | sed 's/^/  /'
 
 echo
-echo "== sdks: the same four nouns in three languages (0025)"
+sec "sdks: the same four nouns in three languages (0025)"
 # Release, because each of these embeds the compiler and runs flint compiling
 # itself; a debug build of that is minutes rather than seconds.
 cargo test -p flint --release --test sdk -- --nocapture > /tmp/flint-test.out 2>&1 \
@@ -517,7 +550,7 @@ grep -E "dispatches ran on a secondary executor" /tmp/flint-test.out | sed 's/^ 
 grep -c "  ok  " /tmp/flint-test.out | awk '{printf "    c/c++: %d checks passed\n", $1}'
 
 echo
-echo "== check: what was written for flint and does nothing"
+sec "check: what was written for flint and does nothing"
 # The fixture carries one of each kind, so it must FAIL -- a checker that
 # cannot fail is not checking. The two host hints must NOT be what fails it.
 if ./bin/flint check :src test/fixtures > /tmp/flint-test.out 2>&1; then
@@ -532,13 +565,13 @@ grep -E "^    \^" /tmp/flint-test.out | sed 's/^/  /'
 grep -E "annotation" /tmp/flint-test.out | sed 's/^ */    /' 
 
 echo
-echo "== casetable: the Unicode tables are what the derivation says"
+sec "casetable: the Unicode tables are what the derivation says"
 # DERIVED, not written. Re-derive from the host's own Unicode data and diff --
 # a table nobody reads is still known to be right, and a host whose Unicode
 # version moved says so here rather than in someone's string.
 ./bin/casetable --check || fail "bin/casetable --check"
 
-echo "== kin: the sources agree, and the committed regions match them"
+sec "kin: the sources agree, and the committed regions match them"
 # The generated regions are COMMITTED on purpose -- a runtime build must not
 # need babashka -- and the cost is that source and output can drift. Nothing
 # checked that until now: a `fixnum` fix left two files stale, and the only
@@ -548,31 +581,31 @@ echo "== kin: the sources agree, and the committed regions match them"
 tail -1 "$TMPDIR/flint-kin.out" | sed 's/^/  /'
 
 echo
-echo "== decisions: the index agrees with what is in the tree"
+sec "decisions: the index agrees with what is in the tree"
 ./bin/check-decisions || fail "bin/check-decisions"
 
 echo
-echo "== the served catalogue: the Rust CLI and the npm CLI list the same namespaces"
+sec "the served catalogue: the Rust CLI and the npm CLI list the same namespaces"
 ./bin/check-sys-catalogue || fail "bin/check-sys-catalogue"
 
 echo
-echo "== manifest: the deficiency lists are true"
+sec "manifest: the deficiency lists are true"
 bb test/manifest.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/manifest.clj"; }
 tail -1 /tmp/flint-test.out
 
 echo
-echo "== modmeta: what a module says about itself, without instantiating (0020)"
+sec "modmeta: what a module says about itself, without instantiating (0020)"
 bb test/modmeta.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/modmeta.clj"; }
 grep -E "^    |FAIL" /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
-echo "== two builds: a production module carries no diagnostics (0016)"
+sec "two builds: a production module carries no diagnostics (0016)"
 bb test/twobuilds.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/twobuilds.clj"; }
 grep -E "^    " /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
 echo
-echo "== self-hosting fixpoint"
+sec "self-hosting fixpoint"
 bb test/selfhost.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/selfhost.clj"; }
 tail -1 /tmp/flint-test.out
 
@@ -585,45 +618,45 @@ echo "all green"
 # compiles is a feature that rots. The suite above ran against the stripped
 # module; these are the tests that need the machinery it does not carry.
 echo
-echo "== units: the DIAGNOSTICS build"
+sec "units: the DIAGNOSTICS build"
 cargo test -q -p flint-rt --features diagnostics 2>&1 | grep -E "^test result|panicked" || fail "cargo test --features diagnostics"
 cargo test -q -p flint-conc --features diagnostics 2>&1 | grep -E "^test result: ok\. [1-9]|panicked" || true
 ./bin/build-units --diagnostics > /dev/null || fail "build-units --diagnostics"
 echo "  ok"
 
 echo
-echo "== gc: compound keys survive collection"
+sec "gc: compound keys survive collection"
 bb test/gc_stress.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/gc_stress.clj"; }
 tail -1 /tmp/flint-test.out
 
 echo
-echo "== limits: deterministic gas, charged natives, a catchable memory cap"
+sec "limits: deterministic gas, charged natives, a catchable memory cap"
 bb test/limits.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/limits.clj"; }
 grep -E "^    " /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
 echo
-echo "== snapshots: capture, import, and an inspector that can read them"
+sec "snapshots: capture, import, and an inspector that can read them"
 bb test/snapshot.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/snapshot.clj"; }
 grep -E "^    " /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
 echo
-echo "== tags: a reader tag is bound per project (0035)"
+sec "tags: a reader tag is bound per project (0035)"
 bb test/tags.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/tags.clj"; }
 grep -E "^ +(ok|FAIL)" /tmp/flint-test.out | sed 's/^/  /'
 
-echo "== flattens: every rope materialisation justifies itself (0011)"
+sec "flattens: every rope materialisation justifies itself (0011)"
 ./bin/check-flattens || fail "bin/check-flattens"
 
-echo "== gas: no operation does unbounded work for bounded gas (0009)"
+sec "gas: no operation does unbounded work for bounded gas (0009)"
 # Scaling, not absolutes: each case runs at n and 8n with the setup subtracted.
 # The stats are diagnostics-only (`two-builds`), so the instrumented units are built.
 ./bin/build-units --diagnostics > /dev/null 2>&1 || fail "build-units --diagnostics"
 bb test/gas.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/gas.clj"; }
 grep -E "^ +(ok|FAIL|[a-z])" /tmp/flint-test.out | sed 's/^/  /'
 
-echo "== tables: columnar storage that is a value (0026)"
+sec "tables: columnar storage that is a value (0026)"
 # The stats it reads are diagnostics-only (`two-builds`), so the instrumented units
 # have to be in place -- same reason `documents` below builds them.
 ./bin/build-units --diagnostics > /dev/null 2>&1 || fail "build-units --diagnostics"
@@ -632,13 +665,13 @@ grep -E "^    " /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
 echo
-echo "== documents: structure once, content on demand, memory measured"
+sec "documents: structure once, content on demand, memory measured"
 bb test/document.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/document.clj"; }
 grep -E "^    " /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
 echo
-echo "== the language itself: checks that hold on every runtime"
+sec "the language itself: checks that hold on every runtime"
 # `test/common` is written in flint and asserts ANSWERS, which is the half
 # `runtimes/conform` cannot cover: that harness diffs transcripts across
 # runtimes, so two ports wrong the same way agree and pass. Run here on wasm,
@@ -660,6 +693,8 @@ esac
 # Leave the tree in the production configuration, so anything built afterwards
 # is what would ship.
 echo
-echo "== units: back to the production build"
+sec "units: back to the production build"
 ./bin/build-units > /dev/null || fail "build-units"
 echo "  ok"
+
+times_summary
