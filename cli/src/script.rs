@@ -148,6 +148,11 @@ pub fn read_ns(src: &str) -> Option<ScriptNs> {
     let form = form_at(&orig, at);
     let mut i = at + 3;
     let mut script: Option<String> = None;
+    // The `:script` map's own text, when the map form was used -- `:deps`,
+    // `:paths` and `:capabilities` are read out of THIS rather than out of the
+    // whole `ns` form, so a non-script namespace cannot accidentally supply
+    // them and a script's are scoped to where they were declared.
+    let mut script_block = String::new();
     loop {
         while i < s.len() && is_ws(s[i]) {
             i += 1;
@@ -158,14 +163,33 @@ pub fn read_ns(src: &str) -> Option<ScriptNs> {
             // `^:script` is the flag; `^{:script go}` names the entry. Both,
             // because the flag is what everyone writes and the map is what a
             // file whose entry is not called `main` needs.
+            // FOUR SPELLINGS, one idea at four levels of detail, matching
+            // `flint.analyzer/script-spec`:
+            //
+            //     ^:script                   entry is ns/main
+            //     ^{:script go}              entry is ns/go
+            //     ^{:script {:entry go}}     the same, longhand
+            //     ^{:script {:entry go :deps {..} :paths [..] :capabilities [..]}}
+            //
+            // Everything a script declares lives in the `ns` METADATA rather
+            // than in `ns` clauses, so it stays inside a shape every Clojure
+            // reader already parses.
             if m == ":script" {
                 script = Some("main".to_string());
             } else if m.starts_with('{') && m.contains(":script") {
-                let t = token_after(&m, ":script");
-                if t == "true" || t.is_empty() {
-                    script = Some("main".to_string());
+                let inner = crate::edn_block(&m, ":script", '{', '}');
+                if !inner.is_empty() {
+                    // The map form. `:entry` names it; absent means `main`.
+                    let e = token_after(&inner, ":entry");
+                    script = Some(if e.is_empty() { "main".to_string() } else { e });
+                    script_block = inner;
                 } else {
-                    script = Some(t);
+                    let t = token_after(&m, ":script");
+                    script = Some(if t == "true" || t.is_empty() {
+                        "main".to_string()
+                    } else {
+                        t
+                    });
                 }
             }
             continue;
@@ -180,12 +204,28 @@ pub fn read_ns(src: &str) -> Option<ScriptNs> {
     if ns.is_empty() {
         return None;
     }
-    let paths = crate::edn_block(&form, ":paths", '[', ']')
+    // THE ATTR-MAP, which is the other place Clojure puts this and the one a
+    // multi-line declaration will use: `(ns foo {:script {:entry go ..}})`.
+    // Looked for only when the `^` metadata did not already supply it, so the
+    // two cannot disagree silently -- and read from the FORM, since by
+    // definition it sits after the name rather than before it.
+    if script.is_none() && form.contains(":script") {
+        // PRESENCE, not contents. `edn_block` answers "" both for a key that is
+        // absent and for one whose map is empty, so `{:script {}}` -- a script
+        // that declares nothing but that it IS one -- read as not a script at
+        // all. The key being there is what marks the file.
+        let attr = crate::edn_block(&form, ":script", '{', '}');
+        let e = token_after(&attr, ":entry");
+        script = Some(if e.is_empty() { "main".to_string() } else { e });
+        script_block = attr;
+    }
+    let scope = if script_block.is_empty() { form.clone() } else { script_block.clone() };
+    let paths = crate::edn_block(&scope, ":paths", '[', ']')
         .split_whitespace()
         .map(|t| t.trim_matches('"').to_string())
         .filter(|t| !t.is_empty())
         .collect();
-    let has_deps = !crate::edn_block(&form, ":deps", '{', '}').trim().is_empty();
+    let has_deps = !crate::edn_block(&scope, ":deps", '{', '}').trim().is_empty();
     let entry = script.map(|f| format!("{ns}/{f}"));
     Some(ScriptNs { ns, entry, paths, has_deps })
 }

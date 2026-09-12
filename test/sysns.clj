@@ -450,7 +450,7 @@
            (and (not (zero? (:exit r))) (str/includes? (:out r) "helper")) (:out r)))
   (script! "uses2"
            (str "#!/usr/bin/env flint\n"
-                "(ns ^:script uses2 (:paths [\"side\"]) (:require [helper]))\n"
+                "(ns uses2 {:script {:paths [\"side\"]}} (:require [helper]))\n"
                 "(defn main [_] (helper/shout \"hi\"))\n"))
   (let [r (sh p10 flint "./uses2")]
     (check "  ... and joins the path only by being NAMED in the ns form"
@@ -506,24 +506,30 @@
                 (str/includes? (:out r) "does not fetch dependencies"))
            (:out r))))
 
-;; `:deps` and `:paths` OUTSIDE a script are inert, so they are refused. A
-;; project already has a deps.edn, and a second place to declare dependencies
-;; that nothing reads is a misspelling that compiles.
+;; A SCRIPT'S DECLARATIONS ARE NS METADATA, not ns clauses.
+;;
+;; They were clauses -- `(ns app (:deps {..}))` -- which meant a non-script had
+;; to be REFUSED for using them, and the clause list had to carry two names no
+;; ordinary namespace may write. Putting them in the `ns` form's metadata map
+;; removes both problems: the shape is one every Clojure reader already parses,
+;; and a namespace that is not a script simply has no `:script` key.
 (let [p11 (str (fs/create-temp-dir))]
   (fs/create-dirs (str p11 "/src"))
   (spit (str p11 "/deps.edn") "{}")
+  ;; `:deps` as a CLAUSE is now an unknown clause like any other, and the error
+  ;; names the four an `ns` actually takes.
   (spit (str p11 "/src/app.cljc")
         "(ns app (:deps {some/lib {:npm/version \"1.0.0\"}}))\n(defn main [_] \"x\")\n")
   (let [r (sh p11 flint "run" ":path" "src" ":fn" "app/main")]
-    (check ":deps in a namespace that is not a script is refused"
-           (and (not (zero? (:exit r))) (str/includes? (:out r) "only a SCRIPT may"))
+    (check ":deps as an ns CLAUSE is refused, and names the real list"
+           (and (not (zero? (:exit r)))
+                (str/includes? (:out r) "has no :deps clause")
+                (str/includes? (:out r) ":refer-clojure"))
            (:out r)))
-  ;; And an unknown clause still names the list it is not in, which is the
-  ;; error `:deps` had to be added to deliberately rather than fall through.
   (spit (str p11 "/src/app.cljc") "(ns app (:dpes {}))\n(defn main [_] \"x\")\n")
   (let [r (sh p11 flint "run" ":path" "src" ":fn" "app/main")]
-    (check "  ... and a misspelled clause still lists what an ns takes"
-           (str/includes? (:out r) ":deps") (:out r))))
+    (check "  ... as is a misspelled one"
+           (and (not (zero? (:exit r))) (str/includes? (:out r) ":dpes")) (:out r))))
 
 ;; --- the dialect split at the reader (`DECISIONS.md#dialects-and-preludes`) --
 ;;
@@ -597,6 +603,43 @@
     (check "  ... and `:checks true` KEEPS it under :optimize [perf]"
            (str/includes? (run ":optimize" "[perf]" ":checks" "true") "check failed")
            (run ":optimize" "[perf]" ":checks" "true"))))
+
+
+;; --- a script declares itself in ns METADATA, four ways ------------------
+(let [p12 (str (fs/create-temp-dir))]
+  (let [script! (fn [name src]
+                  (spit (str p12 "/" name) (str "#!/usr/bin/env " flint "\n" src))
+                  (fs/set-posix-file-permissions (str p12 "/" name) "rwxr-xr-x"))]
+    (script! "a" "(ns ^:script a)\n(defn main [_] \"flag\")\n")
+    (script! "b" "(ns ^{:script go} b)\n(defn go [_] \"symbol\")\n")
+    (script! "c" "(ns c {:script {:entry go}})\n(defn go [_] \"attr-map entry\")\n")
+    ;; An EMPTY map still marks the file. `edn_block` answers "" both for an
+    ;; absent key and an empty one, so this read as "not a script" until the
+    ;; scanner tested for the key's PRESENCE instead of its contents.
+    (script! "d" "(ns d {:script {}})\n(defn main [_] \"attr-map default\")\n")
+    (doseq [[f want] [["a" "flag"] ["b" "symbol"] ["c" "attr-map entry"] ["d" "attr-map default"]]]
+      (check (str "  ns metadata form `" f "` runs " want)
+             (str/includes? (:out (sh p12 (str "./" f))) want)
+             (:out (sh p12 (str "./" f)))))))
+
+;; A SCRIPT IS STILL AN ORDINARY NAMESPACE. Nothing forbids requiring one --
+;; the `:script` block is read by the launcher and ignored by the compiler, so
+;; a file can be both a tool and a library without saying so twice.
+(let [p13 (str (fs/create-temp-dir))]
+  (fs/create-dirs (str p13 "/src"))
+  (spit (str p13 "/deps.edn") "{:paths [\"src\"]}\n")
+  (spit (str p13 "/src/tool.cljc")
+        (str "(ns tool {:script {:entry go}})\n"
+             "(defn helper [x] (* x 2))\n"
+             "(defn go [_] (str \"as a script: \" (helper 21)))\n"))
+  (spit (str p13 "/src/app.cljc")
+        "(ns app (:require [tool]))\n(defn main [_] (str \"as a library: \" (tool/helper 21)))\n")
+  (check "a script can be required as an ordinary namespace"
+         (str/includes? (:out (sh p13 flint "run" ":path" "src" ":fn" "app/main")) "as a library: 42")
+         (:out (sh p13 flint "run" ":path" "src" ":fn" "app/main")))
+  (check "  ... and still runs as a script"
+         (str/includes? (:out (sh p13 flint "run" ":path" "src" ":fn" "tool/go")) "as a script: 42")
+         (:out (sh p13 flint "run" ":path" "src" ":fn" "tool/go"))))
 
 (if (pos? @fails)
   (do (println "sysns:" @fails "FAILURES") (System/exit 1))
