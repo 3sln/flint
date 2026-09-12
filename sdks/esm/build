@@ -27,7 +27,12 @@ const out = {};
     const full = path.join(dir, name);
     const rel = prefix ? prefix + "/" + name : name;
     if (fs.statSync(full).isDirectory()) walk(full, rel);
-    else if (rel.endsWith(".cljc") || rel.endsWith(".clj"))
+    // `.fln` FIRST, and its absence here was a silent one. This walk embeds
+    // the standard library into the SDK bundle; a namespace renamed to `.fln`
+    // would simply stop being in it, with no error from either side -- the
+    // same failure `cli/build.rs` carries a comment about, in the seventh
+    // place that enumerates these extensions.
+    else if (rel.endsWith(".fln") || rel.endsWith(".cljc") || rel.endsWith(".clj"))
       out[rel] = fs.readFileSync(full, "utf8");
   }
 })(lib, "");
