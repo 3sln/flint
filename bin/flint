@@ -152,6 +152,10 @@
               {})]
     {:name (or (:flint/workspace m) (symbol (str d)))
      :tags (or (:flint/tag-readers m) {})
+     ;; The names that resolve without a `:require`. Read here with the rest of
+     ;; the workspace, for the reason this fn already gives: four lookups in one
+     ;; file are one concept, not four.
+     :prelude (vec (:flint/prelude m))
      :grants (set (:flint/capabilities-grant m))
      :guard (set (:flint/capabilities-guard m))}))
 
@@ -206,14 +210,28 @@
                 ;; error because whether it matters is the reader's call.
                 _ (vswap! elisions into (reader/elided st))
                 nsform (first (filter #(and (seq? %) (= 'ns (first %))) forms))
-                reqs (if nsform (compiler/ns-requires nsform) [])]
-            (recur (into (vec (rest todo)) reqs)
+                reqs (if nsform (compiler/ns-requires nsform) [])
+                ;; A PRELUDE ENTRY IS AN IMPLICIT REQUIRE -- kept in step with
+                ;; `flint.project/collect`, which does the same. Its names
+                ;; resolve without a `:require`, so nothing else pulls the
+                ;; namespace into the program. Self excluded: a workspace's
+                ;; prelude covers its own namespaces, and one of them would
+                ;; otherwise precede itself.
+                pre (remove (clojure.core/fn [x] (= x n))
+                            (map :ns (project/normalise-prelude (:prelude proj))))]
+            (recur (into (into (vec (rest todo)) reqs) pre)
                    ;; The tags travel WITH the source, and so does everything
                    ;; else the workspace says. `topo-order` and the compiler
                    ;; read this same file again, and a tag map only this loop
                    ;; knew about is a tag map they would get wrong.
                    (assoc sources n (assoc s :tags tags
                                            :workspace (:name proj)
+                                           ;; The DIALECT and the PRELUDE with them --
+                                           ;; this map is assembled field by field, so
+                                           ;; anything not named here never reaches the
+                                           ;; compiler.
+                                           :dialect (project/dialect-of (:file s))
+                                           :prelude (project/normalise-prelude (:prelude proj))
                                            :grants (:grants proj)
                                            :guard (:guard proj)))
                    (conj order n)))

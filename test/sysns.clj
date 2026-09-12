@@ -307,6 +307,56 @@
     (check "  ... and a GRANTED workspace may require it"
            (str/includes? (:out r) "sensitive") (:out r))))
 
+
+;; --- the prelude (`DECISIONS.md#dialects-and-preludes`) ---------------------
+;;
+;; What `clojure.core` has always had, generalised: a workspace's ordered list
+;; of namespaces whose names resolve without a `:require`.
+(let [p9 (str (fs/create-temp-dir))]
+  (fs/create-dirs (str p9 "/src/mylib"))
+  (fs/create-dirs (str p9 "/src/other"))
+  (spit (str p9 "/src/mylib/prelude.fln") "(ns mylib.prelude)\n(defn shout [s] (str s \"!\"))\n")
+  (spit (str p9 "/src/other/prelude.fln") "(ns other.prelude)\n(defn shout [s] (str s \"?\"))\n")
+  (spit (str p9 "/src/app.fln") "(ns app)\n(defn go [_] (shout \"hello\"))\n")
+  ;; A `.cljc` must NOT see it: other platforms' readers know nothing of a
+  ;; flint workspace's prelude, so a name resolving only through one is not
+  ;; portable however the file is spelled.
+  (spit (str p9 "/src/app2.cljc") "(ns app2)\n(defn go [_] (shout \"portable\"))\n")
+  (let [pre (fn [body] (spit (str p9 "/deps.edn")
+                             (str "{:paths [\"src\"] :flint/prelude " body "}\n")))]
+    (pre "[clojure.core mylib.prelude]")
+    (check "a prelude name resolves with no :require"
+           (str/includes? (:out (sh p9 flint "run" ":path" "src" ":fn" "app/go")) "hello!")
+           (:out (sh p9 flint "run" ":path" "src" ":fn" "app/go")))
+    ;; Which also proves the namespace was COLLECTED. Nothing requires it, so a
+    ;; prelude entry has to create the edge itself or the program never holds it.
+    (check "  ... and a .cljc does NOT get it"
+           (str/includes? (:out (sh p9 flint "run" ":path" "src" ":fn" "app2/go"))
+                          "unable to resolve")
+           (:out (sh p9 flint "run" ":path" "src" ":fn" "app2/go")))
+    (pre "[clojure.core {:ns mylib.prelude :exclude [shout]}]")
+    (check "  ... :exclude removes a name from the entry it names"
+           (str/includes? (:out (sh p9 flint "run" ":path" "src" ":fn" "app/go"))
+                          "unable to resolve")
+           (:out (sh p9 flint "run" ":path" "src" ":fn" "app/go")))
+    (pre "[clojure.core {:ns mylib.prelude :include [shout]}]")
+    (check "  ... :include admits only what it lists"
+           (str/includes? (:out (sh p9 flint "run" ":path" "src" ":fn" "app/go")) "hello!")
+           (:out (sh p9 flint "run" ":path" "src" ":fn" "app/go")))
+    (pre "[clojure.core {:ns mylib.prelude :include [shout] :exclude [x]}]")
+    (check "  ... and giving both is refused"
+           (str/includes? (:out (sh p9 flint "run" ":path" "src" ":fn" "app/go"))
+                          "both :include and :exclude")
+           (:out (sh p9 flint "run" ":path" "src" ":fn" "app/go")))
+    ;; Ambiguity is refused rather than settled by order: the author can say
+    ;; exactly which they meant, so guessing buys nothing.
+    (pre "[clojure.core mylib.prelude other.prelude]")
+    (let [r (sh p9 flint "run" ":path" "src" ":fn" "app/go")]
+      (check "two entries offering one name is refused"
+             (str/includes? (:out r) "lists both") (:out r))
+      (check "  ... and the refusal names the exclusion that settles it"
+             (str/includes? (:out r) ":exclude [shout]") (:out r)))))
+
 (if (pos? @fails)
   (do (println "sysns:" @fails "FAILURES") (System/exit 1))
   (println "sysns: ok"))

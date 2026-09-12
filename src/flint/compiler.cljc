@@ -705,6 +705,12 @@
              ;; for the same fact is a second thing to get out of step.
              :workspaces (into {} (map (fn [e]
                                          [(key e) {:workspace (:workspace (val e))
+                                                   ;; The DIALECT and the PRELUDE ride the same
+                                                   ;; lift for the reason above: the resolver
+                                                   ;; answered both per namespace, and a second
+                                                   ;; channel is a second thing to get out of step.
+                                                   :dialect (:dialect (val e))
+                                                   :prelude (:prelude (val e))
                                                    :grants (set (:grants (val e)))}])
                                        sources))})]
     ;; VIRTUAL namespaces first, and before anything is read: a reference to one

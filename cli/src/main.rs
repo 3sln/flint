@@ -177,6 +177,7 @@ fn build_spec(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
 struct Workspace {
     name: String,
     tags: String,
+    prelude: String,
     grants: String,
     guard: String,
 }
@@ -211,6 +212,7 @@ fn read_workspace(text: &str) -> Workspace {
     Workspace {
         name: edn_token(text, ":flint/workspace"),
         tags: edn_block(text, ":flint/tag-readers", '{', '}'),
+        prelude: edn_block(text, ":flint/prelude", '[', ']'),
         grants: edn_block(text, ":flint/capabilities-grant", '[', ']'),
         guard: edn_block(text, ":flint/capabilities-guard", '[', ']'),
     }
@@ -219,12 +221,13 @@ fn read_workspace(text: &str) -> Workspace {
 /// A workspace entry for the spec, or empty when there is nothing to say.
 fn workspace_entry(prefix: &str, w: &Workspace, fallback_name: &str) -> String {
     let name = if w.name.is_empty() { fallback_name } else { &w.name };
-    if name.is_empty() && w.tags.is_empty() && w.grants.is_empty() && w.guard.is_empty() {
+    if name.is_empty() && w.tags.is_empty() && w.prelude.is_empty()
+        && w.grants.is_empty() && w.guard.is_empty() {
         return String::new();
     }
     format!(
-        "{{:prefix {} :name {} :tags {{{}}} :grants [{}] :guard [{}]}} ",
-        edn_string(prefix), name, w.tags, w.grants, w.guard)
+        "{{:prefix {} :name {} :tags {{{}}} :prelude [{}] :grants [{}] :guard [{}]}} ",
+        edn_string(prefix), name, w.tags, w.prelude, w.grants, w.guard)
 }
 
 fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,

@@ -164,6 +164,15 @@
                                                               :file (:file (val e))
                                                               :tags (:tags (val e))
                                                               :workspace (:workspace (val e))
+                                                              ;; The DIALECT and the PRELUDE travel
+                                                              ;; with the source too, and for the
+                                                              ;; same reason as `:tags`: this map is
+                                                              ;; rebuilt field by field, so anything
+                                                              ;; not named here is silently dropped
+                                                              ;; between the resolver and the
+                                                              ;; compiler.
+                                                              :dialect (:dialect (val e))
+                                                              :prelude (:prelude (val e))
                                                               :grants (:grants (val e))
                                                               ;; A VIRTUAL namespace has no
                                                               ;; `:src` and must not be read
@@ -241,6 +250,15 @@
                                                               :file (:file (val e))
                                                               :tags (:tags (val e))
                                                               :workspace (:workspace (val e))
+                                                              ;; The DIALECT and the PRELUDE travel
+                                                              ;; with the source too, and for the
+                                                              ;; same reason as `:tags`: this map is
+                                                              ;; rebuilt field by field, so anything
+                                                              ;; not named here is silently dropped
+                                                              ;; between the resolver and the
+                                                              ;; compiler.
+                                                              :dialect (:dialect (val e))
+                                                              :prelude (:prelude (val e))
                                                               :grants (:grants (val e))
                                                               ;; A VIRTUAL namespace has no
                                                               ;; `:src` and must not be read

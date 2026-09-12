@@ -68,6 +68,27 @@
   [path]
   (if (str/ends-with? (str path) ".fln") :flint :portable))
 
+(defn normalise-prelude
+  "A workspace's `:flint/prelude` as entries the analyzer can read.
+
+  A plain symbol is `{:ns sym}` -- include everything, exclude nothing. A map
+  says what it needs to. Giving BOTH `:include` and `:exclude` is refused:
+  every such list has a shorter unambiguous spelling as an `:include` alone, so
+  accepting both would add a second way to write one thing and a question about
+  which applies first (`DECISIONS.md#dialects-and-preludes`)."
+  [entries]
+  (mapv (fn [e]
+          (if (symbol? e)
+            {:ns e}
+            (let [m (into {} e)]
+              (when (and (seq (:include m)) (seq (:exclude m)))
+                (throw (ex-info
+                        (str "a prelude entry gives both :include and :exclude for "
+                             (:ns m) " -- write the :include alone")
+                        {:entry m})))
+              {:ns (:ns m) :include (vec (:include m)) :exclude (vec (:exclude m))})))
+        (or entries [])))
+
 (defn collect
   "Read from `roots` outwards. `resolve-ns` takes a namespace symbol and returns
   nil, or what that namespace IS:
@@ -125,8 +146,20 @@
             (let [forms (reader/read-all (:src s) {:file (:file s)
                                                    :features features
                                                    :tags (:tags s)})
-                  reqs (compiler/ns-requires (or (ns-form forms) '(ns x)))]
-              (recur (into (vec (rest todo)) reqs)
+                  reqs (compiler/ns-requires (or (ns-form forms) '(ns x)))
+                  ;; A PRELUDE ENTRY IS AN IMPLICIT REQUIRE, and has to create
+                  ;; the same edge. Its names resolve without a `:require`, so
+                  ;; nothing else would ever pull the namespace in -- it would
+                  ;; be absent from the program and every prelude name would
+                  ;; fail to resolve, which is what `clojure.core` being a ROOT
+                  ;; has always been working around.
+                  ;;
+                  ;; An edge rather than a pin, so `topo-order` also puts the
+                  ;; prelude BEFORE the code using it. SELF IS EXCLUDED: a
+                  ;; workspace's prelude covers its own namespaces too, and one
+                  ;; of them would otherwise be asked to precede itself.
+                  pre (remove (fn [x] (= x n)) (map :ns (:prelude s)))]
+              (recur (into (into (vec (rest todo)) reqs) pre)
                      (assoc sources n {:src (:src s) :file (:file s) :forms forms
                                        ;; A resolver that answers only `{:src :file}` is
                                        ;; still valid (see this fn's docstring), so the
@@ -134,6 +167,7 @@
                                        ;; than demanded of it.
                                        :dialect (or (:dialect s) (dialect-of (:file s)))
                                        :workspace (:workspace s) :tags (:tags s)
+                                       :prelude (:prelude s)
                                        :grants (:grants s) :guard (:guard s)})
                      (conj order n)
                      missing)))
@@ -193,6 +227,7 @@
                                 (or workspaces [])))]
            {:src (get files path) :file path :dialect (dialect-of path)
             :workspace (:name w) :tags (:tags w)
+            :prelude (normalise-prelude (:prelude w))
             :grants (set (:grants w)) :guard (set (:guard w))})))))))
 
 (defn- a-cycle

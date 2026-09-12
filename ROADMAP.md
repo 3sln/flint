@@ -505,12 +505,17 @@ Recorded 2026-09-11. Full spec at `DECISIONS.md#dialects-and-preludes`.
       workspace-bound reader tag, a prelude-only symbol) is refused inside a
       `.cljc`. There is NO edge rule on requires — `.fln` is a platform
       extension like `.clj`/`.cljs`, so one namespace may have both
-- [ ] `:flint/prelude` in workspace config, replacing the `core-first` pin
-      duplicated in `src/flint/project.cljc` and `bin/flint` — default must be
-      the existing list in the existing order, which is load-bearing
-- [ ] Per-entry `:include`/`:exclude`; a remaining collision is an error;
-      order in the list is LOAD order only
-- [ ] Custom preludes apply to `.fln` only
+- [x] `:flint/prelude` in workspace config — **built 2026-09-11.** It does NOT
+      replace the `core-first` pin: that pins four namespaces into the front of
+      the load order because the compiler emits references into them, which is
+      a different question from what a bare symbol means. The prelude replaces
+      the analyzer's single hardcoded `clojure.core` fallback
+- [x] Per-entry `:include`/`:exclude`, both-is-refused, ambiguity refused at
+      the point of USE with the settling exclusion named
+- [x] Custom preludes apply to `.fln` only
+- [x] A prelude entry creates a require EDGE rather than needing a pin, so
+      `topo-order` places it before its users and the namespace is collected at
+      all — nothing else would pull it in
 - [ ] Audit `lib/`'s 33 namespaces for which are genuinely flint-only
 
 ### Standalone scripts (spec only, nothing built)
