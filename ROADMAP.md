@@ -787,6 +787,39 @@ change, in the sibling repo.
 - [ ] The `^:mut` capability in `kin.lang`, which blocks `Pike` and probably
       most of what follows it
 
+### Defects found by the status-verification pass (2026-09-12)
+
+Verifying all 32 unchecked decision statuses against the code turned up three
+things that are code, not record:
+
+- [ ] **`bin/bench-xruntime` returns FAILED on every row.** Two breakages, both
+      from `structured-ports` step 5 removing `flint_main`: a compiled module
+      no longer exports `main`, which kills wasmtime and wasm3; and
+      `bench/xrt-run.mjs` defaults to a hard-coded entry name that only one of
+      five fitted modules matches, which kills node, bun, deno and
+      SpiderMonkey. **Confirmed here on a freshly built module** — `wasmtime
+      --invoke main` answers `no func export named 'main' found`. None of the
+      recorded ns/instruction figures can be reproduced until this is fixed,
+      and this is the harness that was recommended earlier this session as the
+      right instrument for the native-versus-wasm question
+- [ ] **Capability delegation on dependency entries is dead code.**
+      `lending-errors` (`lib/flint/deps/resolve.cljc`) implements the rules and
+      **has no caller anywhere in the tree**. Probed: a project holding nothing
+      that writes `:flint/capabilities-grant [:host]` on a dependency entry —
+      the mint-authority-from-nothing case rule 1 exists to refuse — is not
+      refused. It is reported as an unknown key and ignored. The status said
+      this was built
+- [ ] **`:optimize [perf]` does not strip checks in the shipped CLI.** The
+      native binary never emits `:features` into the compile spec;
+      `wants_aot` turns `perf` into AOT and nothing else. Measured: a module
+      built `[perf]` and one built plain both carry 5 `flint.check` hits.
+      Production modules from the shipped binary ship their test code, and a
+      failing check throws
+- [ ] Stale docs found in passing: `runtimes/jvm/README.md` claims "141 of 144
+      builtins" and "self-hosting: close, not there" — it is 168 of 168 and
+      self-hosting is byte-for-byte; `README.md`'s construe figures have
+      drifted (module 289 579 → 486 052 bytes, compile 935 → 1 564 ms)
+
 ### Port tests belong in kin (recorded 2026-09-11)
 
 The same fourteen runtime tests are hand-written TWICE:
