@@ -650,6 +650,36 @@ Cost of getting it wrong is asymmetric: a selective run that misses this goes
 GREEN, and a green run that should have been red is worse than a slow one.
 
 
+### Driver prose that outran the probe (recorded 2026-09-12)
+
+Adding an expected value to all 90 kin drivers turned up a dozen whose COMMENTS
+describe behaviour the probe does not exercise. Two were checked here before
+acting on them, and they did not hold up the same way:
+
+**`casechange` — the claim was wrong, and the code is fine.** Reported as
+`full_index` returning `-1` unconditionally, leaving the full-mapping branch
+dead. It is a real binary search over `CASE_FULL`, and behaviour settles it:
+
+    flint:   upper(sharp-s)=SS | upper(fi-ligature)=FI
+    Clojure: upper(sharp-s)=SS | upper(fi-ligature)=FI
+
+Multi-character case mappings work and match Clojure. The branch is dead IN THE
+PROBE, not in the code — which is the real finding and a much narrower one.
+Stated as "dead code" it would have invited deleting a working feature.
+
+**`valhash` — the claim holds.** `kin/valhash.kin:40` imports `s-ascii` from
+`flint.rt.ropemeas` and the generated Rust contains zero references to it. The
+driver's header describes an ASCII rope routing to `rope-hash` and a wide one
+to `java-string-hash`, while the source routes `TY_ROPE` unconditionally. The
+unused import corroborates the prose: that distinction existed once and the
+comment and the import both outlived it.
+
+- [ ] Work through the remaining ten, checking each against behaviour before
+      believing it. The pattern is a probe that stopped reaching a branch its
+      header still advertises — stale prose, sometimes with a stale import
+      beside it, and only sometimes dead code
+- [ ] Remove `s-ascii` from `valhash.kin` and correct its header
+
 ### Port tests belong in kin (recorded 2026-09-11)
 
 The same fourteen runtime tests are hand-written TWICE:
