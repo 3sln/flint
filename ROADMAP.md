@@ -555,7 +555,14 @@ Recorded 2026-09-11. Full spec at `DECISIONS.md#dialects-and-preludes`.
 - [x] A prelude entry creates a require EDGE rather than needing a pin, so
       `topo-order` places it before its users and the namespace is collected at
       all — nothing else would pull it in
-- [ ] Audit `lib/`'s 33 namespaces for which are genuinely flint-only
+- [ ] Audit `lib/`'s 33 namespaces for which are genuinely flint-only.
+      **Two already found, by grep rather than by judgement:**
+      `lib/flint/table.cljc` uses `#flint/table` and should be `.fln`; and
+      `test/tags.clj` builds `.cljc` projects that bind and use `#pt`, so
+      enforcement breaks it as written
+- [ ] ORDER MATTERS: migrate first, enforce second. Turning the tag check on
+      before the rename breaks the build, and a check whose first act is to
+      condemn the standard library is one nobody will trust
 
 ### Standalone scripts (spec only, nothing built)
 

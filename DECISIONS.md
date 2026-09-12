@@ -4359,11 +4359,33 @@ third extension is when to decide it was intended.
 **Enforcement lives at the READER and the resolver, not the graph.** What makes
 a `.cljc` non-portable is using flint-only surface *in that file*:
 
-* a reader tag the workspace binds (`#table [...]`)
+* a flint-only reader tag
 * a symbol that resolves only through a custom prelude
 
 Both are known at read time for the file being read, which is where the check
-belongs and where the answer is local.
+belongs and where the answer is local. The prelude half is BUILT — a custom
+prelude applies to `.fln` only, and a `.cljc` gets `clojure.core`. The tag half
+is not, and two things found before starting it change what it should say.
+
+**IT IS NOT ONLY WORKSPACE-BOUND TAGS.** An earlier draft said "a reader tag
+the workspace binds", which misses the built-in ones. `#flint/table` is bound
+by `flint.reader` itself, always available and never declared — and Clojure
+cannot read it either. Portability is about whether ANOTHER platform's reader
+can make sense of the file, so the rule is flint-only tags, however they came
+to be bound.
+
+**AND THE RULE ALREADY CONDEMNS FILES IN THIS REPO**, which is the honest
+version of the audit item below:
+
+* `lib/flint/table.cljc` uses `#flint/table` — a flint-only tag in a file
+  claiming to be portable. It should be `lib/flint/table.fln`.
+* `test/tags.clj` builds two projects whose `.cljc` sources bind and use the
+  project tag `#pt`. Enforcement breaks that test as written.
+
+Neither is an argument against the rule; both are the rule working. But they
+mean **enforcement cannot land before the migration**: turning it on first
+would break the build, and a check whose first act is to condemn the standard
+library is one nobody will trust. Rename what the rule catches, then enforce.
 
 **The prelude rule survives the correction, for a better reason.** A custom
 prelude applies to `.fln` only — not because flint namespaces are a separate
