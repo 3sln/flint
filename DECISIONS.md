@@ -1969,12 +1969,21 @@ tag — see `reader-tags`, immediately below, for why and what changed.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): partly built.** An unknown reader tag in source is an error, as in
+**Status (checked 2026-09-12 on BOTH front ends; holds): partly built.** An unknown reader tag in source is an error, as in
 canonical Clojure. Tags are bound per project in `deps.edn` under
 `:flint/tag-readers`, mapping a short tag name to a fully-qualified var, and
 apply only to that project's own source roots. `#flint/table` is built in.
 Not built: `reader-tag-of`, so a printer can ask what name the current
-build bound to its own reader.
+build bound to its own reader. How this was checked: a throwaway project
+binding `{pt demo/point}` compiled and ran under `target/release/flint run`
+(`point={:x 3, :y 4}`) and compiled under `bin/flint`; a sibling file using
+`#nope/thing` was refused by BOTH with the same "no reader for the tag" error,
+which lists `#flint/table, #pt` as what the project can read. `read-dispatch`
+in `src/flint/reader.cljc:600` is the single site — `builtin-tags` (line 516)
+holds `flint/table` and is merged with the workspace's at line 801, and both
+front ends share this reader. `reader-tag-of` has no definition anywhere: the
+only occurrences in `git ls-files` are in this file, `ROADMAP.md` and
+`deck/cards/language.md`, all saying it is not built.
 
 ### What was decided
 
@@ -2081,8 +2090,23 @@ the positive case is not merely "tags appear from nowhere and are accepted."
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): shipped.** `#?(:flint/check ...)` on by default, removed entirely
-by `:optimize [perf]` before source is even collected.
+**Status (checked 2026-09-12 against both front ends): shipped, EXCEPT that
+`:optimize [perf]` strips checks only under `bin/flint`.** `#?(:flint/check
+...)` is on by default everywhere — `reader/default-features` is
+`#{:flint :flint/check}` (`src/flint/reader.cljc:762`), and `flint run :path
+.scratch/chk/src :fn chk/-main` on `target/release/flint` fires `(expect
+nat-int? -1)` with a caret under the `-1`. The strip is real under babashka:
+`bin/flint:891` does `(disj :flint/check)` when `:optimize` names `perf`, and
+`bin/flint :optimize [perf]` reports `offering :flint/check` as an elision. It
+is ABSENT from the shipped binary: `cli/src/main.rs` never emits `:features`
+into the compile spec (`build_spec_with`, lines 284–460) and `wants_aot`
+(line 471) turns `perf` into AOT only — so `target/release/flint compile
+:optimize [perf]` produced a module still carrying `flint.check`, and running
+it (`host/run.mjs`) threw the check. Checks are therefore still in the release
+artifact the Rust CLI builds. The rest of the mechanism is shipped and was run:
+`target/release/flint test :path test/common` generates `flint.check.registry`
+from `^:flint.check/test` metadata and reports `125/125 checks passed` (the
+suite has grown since the 53 named below).
 
 ### What was decided
 
@@ -2159,11 +2183,18 @@ integer.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): shipped** — green threads, ports, protocols, dynamic vars. The
-port bug that ran through this whole phase is closed (`HANDOFF.md` is its
+**Status (checked 2026-09-12 by running a program that uses all four; holds): shipped** — green threads, ports, protocols, dynamic vars. The
+port bug that ran through this whole phase is closed (`doc/HANDOFF.md` is its
 post-mortem and the source of five standing rules the project still holds
 itself to). This is one of the two or three foundational decisions in the
-codebase and is treated at full length.
+codebase and is treated at full length. How this was checked: one program
+spawning a green thread that sends over a `flint.port/channel` while rebinding
+a `^:dynamic` var, read back by a protocol extended to two kinds, answered
+`recv=inner dyn-outer=outer proto=str:x,num:7 thread?=true` under
+`target/release/flint run` — so parking, the channel, per-thread dynamic
+scoping and kind dispatch all work together, not merely separately. The
+mechanism is `runtime/src/conc.rs` (3 171 lines) with hand-written ports in
+`runtimes/jvm/.../Conc.java` and `runtimes/clr/src/rt/Conc.cs`.
 
 ### What was decided
 
@@ -2300,9 +2331,20 @@ metadata map at all.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): shipped** — tokens, one event queue, two lifetimes. Refines
+**Status (checked 2026-09-12 against `runtime/src/conc.rs`, and exercised; holds): shipped** — tokens, one event queue, two lifetimes. Refines
 `threads-and-ports` §5; several of its specific rules were later reversed by
-`structured-ports` and `ports-are-the-hosts`, noted inline below.
+`structured-ports` and `ports-are-the-hosts`, noted inline below. How this was
+checked: the token really is an index with a generation — `new_waiter` /
+`waiter_at` / `free_waiter` (`conc.rs:1126`–`1205`) pack the index in the low
+16 bits, bump the generation on free, and reject a mismatch — and there is one
+queue, `SC_EVENTS`, written only by `push_event` (`conc.rs:1893`) and read only
+by `drain_events` (`conc.rs:2969`), carrying all six event kinds. Two
+lifetimes: `reap_ports` (`conc.rs:3045`) treats a flint end the collector lost
+as a `close`, pushing `EV_CLOSED` and `EV_RELEASE`, while the host end is held
+by a holder count. Exercised end to end: `target/release/flint run :with [env]`
+(the shipped binary, not `bin/flint`) on a program
+calling `flint.sys.env/cwd` parks on a token, emits `EV_REQUEST`, and resumes
+with the host's answer — it printed this worktree's path.
 
 ### What was decided
 
@@ -2577,12 +2619,24 @@ API — which do still read as proposed rather than shipped.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): shipped**, on all four runtimes, except two named pieces of
+**Status (checked 2026-09-12, exceptions first; holds): shipped**, on all four runtimes, except two named pieces of
 follow-on work at the end. This file's own banner used to claim the whole
 design was unbuilt long after half of it had shipped and gone unreachable —
 see "A banner that lied," below, which the project's own closing
 documentation held up as its worked example of why a banner must be checked
-against the code rather than trusted.
+against the code rather than trusted. How this was checked, taking the two
+exceptions rather than the headline: the weak-table fixup is indeed still the
+simpler sweep — `reap_ports` (`runtime/src/conc.rs:3045`) walks `SC_BRIDGES`
+after a collection and pushes `EV_CLOSED`/`EV_RELEASE` for any id whose
+`port_by_id` lookup now misses, with no fixup-on-forward anywhere; and codec
+back-references are still not built — `runtime/src/codec.rs`'s own header says
+"A stream duplicates a subtree that appears twice, where a pool would share
+it." For the headline, the orphaned second generation the banner story is
+about is gone: `K_GLOBAL` no longer appears in `runtime/src/conc.rs` at all,
+and the bridge path has real callers on the JVM and CLR
+(`installBridgePort`/`forgetBridge` in `Conc.java`, `InstallBridgePort`/
+`CloseAllBridges` in `Conc.cs`), reached from the decoder through
+`rt.bridgeHook`.
 
 ### What was decided
 
@@ -2732,10 +2786,22 @@ a real, named, and still-open cost.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): not built — a proposal.** It settles who owns a message in
+**Status (checked 2026-09-12; holds): not built — a proposal.** It settles who owns a message in
 flight, a question `host-abi` and `drivers` both left resting on the
 sandbox, and what the wire codec and terminology work in `structured-ports`
-and `ports-are-the-hosts` are still waiting on.
+and `ports-are-the-hosts` are still waiting on. How this was checked: none of
+the six verbs exists — no `reserve`/`grow`/`commit`/`abort` contract, no
+`format()`/`memo()`, and no `Bridge` trait, in `runtime/src`, `sdks`,
+`runtimes/jvm`, `runtimes/clr`, `cli/src`, `nativeabi` or `kin` (the only
+"reserve" hits are the GC's address-space reserve and `Vec::reserve`). The
+word "bridge" IS everywhere in the runtime, but it names the thing
+`ports-are-the-hosts` shipped — a port whose far end is the host — not this.
+The premise this document rests on is also still true: `push_event`
+(`runtime/src/conc.rs:1893`) is still a read-modify-write that `vec_conj`s onto
+the `SC_EVENTS` persistent vector in the sending sandbox's own heap, with
+allocations in the middle, so a message still cannot outlive its sandbox.
+(Note for whoever picks this up: the ring in `port_enqueue`, `conc.rs:1055`,
+HAS since been made single-CAS and lock-free; the event queue has not.)
 
 ### What was decided
 
@@ -2834,16 +2900,26 @@ the format's own compactness argument intact all the way out to the wire.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): partly built.** The SDK shape exists in Rust — `Driver`,
-`Inline`, `ThreadPool`, an asynchronous `call`, coalesced dispatch (measured:
-200 requests coalesced into 1 dispatch). Underneath, the heap has moved out
-of the single-threaded `Rt` struct and two executors now genuinely share one
-heap across real collections (50 collections, roots fixed up across both
-threads, verified by value) — but this is recorded as **not yet safe**,
-tracked as a deliberately-ignored test rather than left as a silent gap:
-the intern tables, the remembered set, and `globals` are not yet protected,
-so the driver still effectively serialises today — K > 1 is *correct* and
-not yet *faster*.
+**Status (checked 2026-09-12 by reading `sdks/rust/src/driver.rs` and running
+the parallel suite): partly built, and the shared-heap gaps this line used to
+name are now CLOSED.** The SDK shape exists in Rust — `Driver`, `Inline`,
+`ThreadPool`, an asynchronous `call`, coalesced dispatch — all in
+`sdks/rust/src/driver.rs` and `sandbox.rs`. Underneath, the heap has moved out
+of the single-threaded `Rt` struct and two executors genuinely share one heap
+across real collections. What this line used to say was still unsafe is no
+longer: the intern tables take a lock per table held across the probe
+(`Rt::lock_intern`, `runtime/src/rt.rs:549`, used by `runtime/src/strs.rs`),
+the remembered set is per-executor and every parked executor's list is drained
+by whoever stages the collection (`Rt::alloc_shared`, `runtime/src/rt.rs`), and
+`globals` is an array of atomics (`GlobalSlot`, `runtime/src/gc.rs:260`). The
+deliberately-ignored test is gone: `cargo test -p flint-rt --features parallel
+--test parallel --release` reports `7 passed; 0 failed; 0 ignored`, and those
+seven include one text interning to one object across two executors and
+old-to-young edges surviving a collection staged on the other thread. What
+remains true is the last clause: the sandbox still serialises its executors, so
+K > 1 is *correct* and not yet *faster* — stated in `driver.rs`'s own module
+doc, and visible in `kin/atoms.kin`, where `compare-and-set-atom` is a plain
+compare-then-`set-slot` rather than a hardware CAS.
 
 ### What was decided
 
@@ -2990,9 +3066,21 @@ while still referenced.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): not built.** An honest assessment of distance recorded because the
-ask splits into two genuinely different projects that happen to share a
-name.
+**Status (checked 2026-09-12 against the runtime): still not built — but the
+DISTANCE below is stale, and Model A is much nearer than this section says.**
+No worker pool exists on either model: `sdks/rust/src/driver.rs`'s
+`ThreadPool` dispatches whole sandboxes and the sandbox serialises its
+executors, and atoms are not genuinely atomic — `compare-and-set-atom` in
+`kin/atoms.kin` is a plain compare-then-`set-slot`. Model B is untouched. But
+"Model A is close to a rewrite of the collector", and the recommendation of
+Model B that rests on it, no longer describe the tree: under `drivers` the
+shared heap, the stop-the-world safepoint, the N per-executor root stacks and
+remembered sets, the locked intern tables and the atomic `globals` array have
+all landed (`runtime/src/rt.rs`, `runtime/src/gc.rs`, `runtime/src/par.rs`),
+with `cargo test -p flint-rt --features parallel --test parallel` passing 7
+tests and ignoring none. What is left for Model A is letting two executors run
+guest code at once and making an atom's CAS a real one — not the collector
+rewrite this section prices.
 
 ### What was decided
 
