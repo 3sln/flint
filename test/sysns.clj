@@ -134,6 +134,43 @@
     (check "and its var list makes an unknown var a COMPILE error"
            (str/includes? (:out r) "does not hold subtract") (:out r))))
 
+;; --- a pod FETCHED from a registry (`DECISIONS.md#pods-are-a-resolvable-dependency`)
+;;
+;; `:pod/version` used to be recognised and refused with a sentence naming the
+;; missing registry. The registry exists now, and the property that matters is
+;; that a FETCHED pod is indistinguishable from a local one by the time
+;; anything boots it: the artifact is chosen once, where the plan is made, and
+;; what lands on disk is an ordinary pod directory with an ordinary manifest.
+(let [p (str (fs/create-temp-dir))
+      reg (str (fs/create-temp-dir))]
+  (fs/create-dirs (str p "/app"))
+  (fs/copy (str root "/test/fixtures/demopod") (str reg "/demopod"))
+  (spit (str reg "/registry.edn")
+        (str "{:registry/name \"test\"\n"
+             " :pods {pod.demo {\"1.0.0\" {:pod/artifacts"
+             " [{:artifact/url \"file://" reg "/demopod\""
+             "   :artifact/executable \"run\"}]}}}}\n"))
+  (spit (str p "/deps.edn")
+        (str "{:paths [\".\"]\n"
+             " :flint/pod-registries [\"file://" reg "/registry.edn\"]\n"
+             " :deps {pod.demo {:pod/version \"1.0.0\"}}}\n"))
+  (spit (str p "/app/a.cljc")
+        "(ns app.a (:require [pod.demo :as d]))\n(defn go [_] (str \"add=\" (d/add 2 3)))\n")
+  ;; UNFETCHED FIRST, because the message is the part that is easy to get
+  ;; wrong: what is missing is the fetch, not a manifest the user was supposed
+  ;; to write.
+  (let [r (sh p flint "run" ":path" "." ":fn" "app.a/go")]
+    (check "an unfetched :pod/version says the fetch is what is missing"
+           (and (str/includes? (:out r) "has not been fetched")
+                (str/includes? (:out r) "flint fetch"))
+           (:out r)))
+  (let [f (sh p (str root "/bin/flint") "fetch")]
+    (check "`flint fetch` resolves a :pod/version against the registry"
+           (zero? (:exit f)) (:out f)))
+  (let [r (sh p flint "run" ":path" "." ":fn" "app.a/go")]
+    (check "  ... and the shipped binary boots what it fetched"
+           (str/includes? (:out r) "add=5") (:out r))))
+
 ;; --- git tags that disagree (`DECISIONS.md#system-namespaces-and-deps`) ---------------------------
 ;;
 ;; `:git/version` was built and then REMOVED: a semver range re-resolves on

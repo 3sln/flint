@@ -180,8 +180,16 @@
   this same code run under the bootstrap host, where there is no port.
 
   Returns `{:out text}`, optionally with `:code`, or `{:exec {...}}` for a task
-  the host should compile and run."
-  [argv slurp*]
+  the host should compile and run.
+
+  `opts` is what only a HOST can answer, and the dependency walk needs two
+  things from it: `:exists?`, a directory probe -- `slurp*` reads files and a
+  `:local/root` is a directory -- and `:os/name`/`:os/arch`, which pick a pod's
+  artifact. A host that passes nothing still works: on-disk dependencies get
+  the benefit of the doubt, and a pod resolves only if its artifact names no
+  platform."
+  ([argv slurp*] (run argv slurp* {}))
+  ([argv slurp* opts]
   (let [cmd (first argv)
         rest-args (vec (rest argv))
         cache ".flint"
@@ -192,7 +200,7 @@
       (= cmd "targets") (text (describe-targets))
       :else
       (let [d (deps/read-deps slurp*)
-            plan (deps/fetch-plan d cache slurp*)
+            plan (deps/fetch-plan d cache slurp* opts)
             pending (filterv (fn [x] (not (:fetched? x))) plan)
             ;; The project's own roots FIRST. A dependency must not be able to
             ;; shadow the namespace of the project that depends on it.
@@ -210,6 +218,21 @@
                                   (mapv (fn [x] (str "  " (:dep x) "  -- " (:why x)))
                                         (deps/incomplete d)))))
 
+          ;; WHAT THE WALK COULD NOT RESOLVE, which is mostly things NOBODY
+          ;; HERE TYPED: a transitive coordinate arrives through a dependency's
+          ;; own manifest, so it is not in this `deps.edn` and `incomplete`
+          ;; cannot see it. Without this the build failed later as a missing
+          ;; namespace, which names the wrong thing.
+          (and (seq (deps/refused plan))
+               (contains? #{"build" "task"} cmd))
+          (oops (str/join "\n"
+                          (concat ["flint cannot fetch everything this project reaches:"]
+                                  (mapv (fn [x]
+                                          (str "  " (:dep x) "  -- " (:why x)
+                                               (when-not (:direct? x)
+                                                 "\n      (not declared in this deps.edn -- a dependency asked for it)")))
+                                        (deps/refused plan)))))
+
           ;; Anything that needs a source root needs the dependencies on disk
           ;; first, and the host is what fetches. `fetch-plan` is transitive, so
           ;; this is a fixpoint the host drives rather than one pass.
@@ -218,8 +241,15 @@
           {:fetch pending :then argv}
 
           (= cmd "fetch")
+          ;; `:then` IS `fetch` AGAIN, not `deps`. One round was enough while
+          ;; the only thing a round could discover was a `deps.edn` naming more
+          ;; git dependencies -- and it was not even enough for that, it just
+          ;; never showed, because `build` drove the same fixpoint properly and
+          ;; is what everything used. A pod needs two rounds by construction:
+          ;; the registry document is itself a fetch, and the pod it names can
+          ;; only be resolved once it is on disk.
           (if (seq pending)
-            {:fetch pending :then ["deps"]}
+            {:fetch pending :then ["fetch"]}
             (text (if (empty? plan)
                     "nothing to fetch"
                     (str "all " (count plan) " dependencies are present"))))
@@ -283,7 +313,7 @@
                             :entry "flint.task/main"
                             :paths all-paths
                             :args (vec (rest rest-args))}}))
-          :else (oops (str "no such command: " cmd "\n\n" (usage))))))))
+          :else (oops (str "no such command: " cmd "\n\n" (usage)))))))))
 
 (defn run-text
   "`run`, flattened to the text a host would print. The `:exec` case has no text

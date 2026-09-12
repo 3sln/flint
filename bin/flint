@@ -615,6 +615,25 @@
                  ;; answer nil rather than throw, and `fetch-plan` probes for a
                  ;; stamp inside one that may not be there.
                  (let [f (io/file p)] (when (.isFile f) (slurp f))))
+        ;; The OTHER half of that probe. `:local/root` and `:pod/path` name
+        ;; directories, and a walk with only a file reader cannot tell a
+        ;; missing one from a present one -- which is why every `:local/root`
+        ;; used to come back pending for ever.
+        exists?* (clojure.core/fn [p] (.exists (io/file p)))
+        ;; `std::env::consts` names, because those are what the shipped binary
+        ;; compares a pod manifest against. The JVM's own spellings are
+        ;; different and mapping them here, once, is what keeps a pod artifact
+        ;; meaning the same thing to both hosts.
+        os-name (let [o (str/lower-case (str (System/getProperty "os.name")))]
+                  (cond (str/includes? o "mac") "macos"
+                        (str/includes? o "win") "windows"
+                        (str/includes? o "linux") "linux"
+                        :else o))
+        os-arch (let [a (str/lower-case (str (System/getProperty "os.arch")))]
+                  (cond (contains? #{"aarch64" "arm64"} a) "aarch64"
+                        (contains? #{"amd64" "x86_64"} a) "x86_64"
+                        :else a))
+        opts {:exists? exists?* :os/name os-name :os/arch os-arch}
         git! (clojure.core/fn [x]
                ;; A shallow fetch of ONE sha rather than a clone: it is the
                ;; cheap shape, and it cannot silently give you a different
@@ -641,75 +660,112 @@
                  ;; The stamp goes on LAST, so a fetch that died halfway is not
                  ;; mistaken for one that finished.
                  (spit (io/file dir deps/stamp) (str (:url x) " " (:sha x) "\n"))))
-        npm! (clojure.core/fn [x]
-               ;; An npm tarball unpacks into `package/`, which is why the
-               ;; coordinate's directory ends there: a source root has to be the
-               ;; directory the namespaces are relative to.
-               (let [pkg (io/file (:dir x))
-                     into-dir (str (fs/parent pkg))
-                     tgz (str into-dir "/package.tgz")]
-                 (println (str "fetching " (:dep x) "  " (:url x)))
-                 (fs/create-dirs into-dir)
-                 (doseq [args [["curl" "-sSfL" (:url x) "-o" tgz]
-                               ["tar" "-xzf" tgz "-C" into-dir]]]
-                   (let [p (.start (ProcessBuilder. (into-array String args)))
-                         o (slurp (.getInputStream p)) e (slurp (.getErrorStream p))]
-                     (.waitFor p)
-                     (when-not (zero? (.exitValue p))
-                       (binding [*out* *err*]
-                         (println (str "could not fetch " (:dep x) ":"))
-                         (println (str "  " (str/join " " args)))
-                         (println (str "  " (str/trim (str o e)))))
-                       (System/exit 1))))
-                 (fs/delete-if-exists tgz)
-                 (spit (io/file (:dir x) deps/stamp) (str (:url x) "\n"))))
         sh! (clojure.core/fn [args]
               (let [p (.start (ProcessBuilder. (into-array String args)))
                     o (slurp (.getInputStream p)) e (slurp (.getErrorStream p))]
                 (.waitFor p) {:exit (.exitValue p) :out (str/trim (str o e))}))
-        mvn! (clojure.core/fn [x]
-               ;; A jar is a zip, and Clojure source sits at its root -- so the
-               ;; extracted directory IS the source root, as with npm.
-               ;;
-               ;; `:url` is a LIST here: a coordinate does not say whether it is
-               ;; on Clojars or on Central, so both are tried in order.
-               (let [dir (:dir x) jar (str dir "/artifact.jar")]
-                 (fs/create-dirs dir)
-                 (let [hit (some (clojure.core/fn [u]
-                                   (println (str "fetching " (:dep x) "  " u))
-                                   (when (zero? (:exit (sh! ["curl" "-sSfL" u "-o" jar]))) u))
-                                 (:url x))]
-                   (when-not hit
-                     (binding [*out* *err*]
-                       (println (str "could not fetch " (:dep x) " from any repository:"))
-                       (doseq [u (:url x)] (println (str "  " u))))
-                     (System/exit 1))
-                   (let [r (sh! ["unzip" "-qo" jar "-d" dir])]
-                     (when-not (zero? (:exit r))
-                       (binding [*out* *err*]
-                         (println (str "could not unpack " (:dep x) ": " (:out r))))
-                       (System/exit 1)))
-                   (fs/delete-if-exists jar)
-                   (spit (io/file dir deps/stamp) (str hit "\n")))))
+        die! (clojure.core/fn [& lines]
+               (binding [*out* *err*] (doseq [l lines] (println l)))
+               (System/exit 1))
+        ;; ONE download, however the archive is shaped. `:url` may be a LIST --
+        ;; a maven coordinate does not say whether the jar is on Clojars or on
+        ;; Central -- so every downloader tries them in order and reports all of
+        ;; them if none works.
+        get! (clojure.core/fn [x to]
+               (let [urls (if (vector? (:url x)) (:url x) [(:url x)])
+                     hit (some (clojure.core/fn [u]
+                                 (println (str "fetching " (:dep x) "  " u))
+                                 (when (zero? (:exit (sh! ["curl" "-sSfL" u "-o" to]))) u))
+                               urls)]
+                 (when-not hit
+                   (apply die! (cons (str "could not fetch " (:dep x) ":")
+                                     (mapv (clojure.core/fn [u] (str "  " u)) urls))))
+                 hit))
+        ;; A tarball. npm's unpacks into `package/`, which is why `:unpack` and
+        ;; `:dir` are different fields: the archive goes one place and the
+        ;; source root is another.
+        tgz! (clojure.core/fn [x]
+               (let [into-dir (or (:unpack x) (:dir x))
+                     tmp (str into-dir "/archive.tgz")]
+                 (fs/create-dirs into-dir)
+                 (let [u (get! x tmp)
+                       r (sh! ["tar" "-xzf" tmp "-C" into-dir])]
+                   (when-not (zero? (:exit r))
+                     (die! (str "could not unpack " (:dep x) ": " (:out r))))
+                   (fs/delete-if-exists tmp)
+                   ;; The archive is expected to CONTAIN the content directory
+                   ;; -- `package/` for npm. Saying so here beats stamping an
+                   ;; empty directory as fetched and failing later as a missing
+                   ;; namespace, which names the wrong thing.
+                   (when-not (.exists (io/file (:dir x)))
+                     (die! (str (:dep x) ": " u " unpacked without " (:dir x))))
+                   (spit (io/file (:dir x) deps/stamp) (str u "\n")))))
+        ;; A zip. A jar is one, and Clojure source sits at its root -- so the
+        ;; extracted directory IS the source root.
+        zip! (clojure.core/fn [x]
+               (let [into-dir (or (:unpack x) (:dir x))
+                     tmp (str into-dir "/archive.zip")]
+                 (fs/create-dirs into-dir)
+                 (let [u (get! x tmp)
+                       r (sh! ["unzip" "-qo" tmp "-d" into-dir])]
+                   (when-not (zero? (:exit r))
+                     (die! (str "could not unpack " (:dep x) ": " (:out r))))
+                   (fs/delete-if-exists tmp)
+                   (spit (io/file (:dir x) deps/stamp) (str u "\n")))))
+        ;; A bare file: a registry document, or a pod artifact that is one
+        ;; executable rather than an archive.
+        file! (clojure.core/fn [x]
+                (let [dir (:dir x)
+                      nm (or (:file x) (:exec x) "artifact")
+                      to (str dir "/" nm)]
+                  (fs/create-dirs dir)
+                  (let [u (get! x to)]
+                    (when (:exec x)
+                      (fs/set-posix-file-permissions to "rwxr-xr-x"))
+                    (spit (io/file dir deps/stamp) (str u "\n")))))
+        ;; A FETCHED POD BECOMES A LOCAL ONE. The artifact was chosen where the
+        ;; plan was made -- once, with the platform in hand -- so what is
+        ;; written here is the same `manifest.edn` a `:pod/path` pod has, and
+        ;; the boot side never learns the difference.
+        pod-manifest! (clojure.core/fn [x]
+                        (when (and (= (:kind x) :pod) (:exec x))
+                          (let [exe (io/file (:dir x) (:exec x))]
+                            (when (.exists exe)
+                              (fs/set-posix-file-permissions (str exe) "rwxr-xr-x"))
+                            (spit (io/file (:dir x) "manifest.edn")
+                                  (str "{:pod/name " (:dep x) "\n"
+                                       " :pod/artifacts [{:artifact/executable "
+                                       (pr-str (:exec x)) "}]}\n")))))
+        fetch1! (clojure.core/fn [x]
+                  ;; DISPATCH ON `:via`, NOT ON `:kind`. How a thing is
+                  ;; downloaded and which ecosystem it belongs to are different
+                  ;; questions, and the copy of the KINDS that used to live here
+                  ;; is what broke the last time they moved.
+                  (let [v (:via x)]
+                    (cond
+                      (= v :none)
+                      (die! (str "no such " (if (= (:kind x) :pod) ":pod/path" ":local/root")
+                                 " for " (:dep x) ": " (:dir x)))
+                      (= v :git) (git! x)
+                      (= v :tgz) (tgz! x)
+                      (= v :zip) (zip! x)
+                      (= v :file) (file! x)
+                      :else (die! (str "no downloader for " (:dep x)
+                                       " (:via " (pr-str v) ")")))
+                    (pod-manifest! x)))
         r (loop [argv (vec *command-line-args*) guard 0]
-            (let [r (cli/run argv slurp*)]
+            (let [r (cli/run argv slurp* opts)]
               (if-let [f (:fetch r)]
                 (do
                   (when (> guard 32)
-                    (binding [*out* *err*] (println "dependency resolution did not settle"))
-                    (System/exit 1))
+                    (die! "dependency resolution did not settle"))
                   ;; `fetch-plan` is transitive and a fetched dep can name more,
                   ;; so this is a fixpoint the host drives: fetch what is
-                  ;; pending, then ask again.
-                  (doseq [x f]
-                    (cond
-                      (= (:kind x) :local)
-                      (binding [*out* *err*]
-                        (println (str "no such :local/root for " (:dep x) ": " (:dir x)))
-                        (System/exit 1))
-                      (= (:kind x) :npm) (npm! x)
-                      (= (:kind x) :mvn) (mvn! x)
-                      :else (git! x)))
+                  ;; pending, then ask again. The ROUND runs concurrently --
+                  ;; independent downloads have no reason to be serial, and the
+                  ;; batch is a batch precisely because nothing in it waits on
+                  ;; anything else in it.
+                  (doseq [t (mapv (clojure.core/fn [x] (future (fetch1! x))) f)] @t)
                   (recur (vec (:then r)) (inc guard)))
                 r)))]
     (when-let [b (:build r)]

@@ -1,0 +1,44 @@
+;; flint's own pod registry (`DECISIONS.md#pods-are-a-resolvable-dependency`).
+;;
+;; THIS ONE IS FOR flint's TOOLING and nothing else. It lists the pods that
+;; live in this repository -- the dependency drivers, and whatever else sheds
+;; out of the binary -- so flint's own build does not depend on third-party
+;; infrastructure being up.
+;;
+;; It is NOT where a user's dependencies resolve from. Those resolve against
+;; the community registry (`flint.deps.registry/community-registry`), because a
+;; first-party registry that also answered for somebody else's coordinate would
+;; quietly change what that coordinate means. A project that WANTS these pods
+;; says so:
+;;
+;;     {:flint/pod-registries ["registry/pods.edn"]}
+;;
+;; ## The format
+;;
+;; A pod, its versions, and which artifact matches which host. Prebuilt per
+;; platform is what a pod IS -- the host starts a program -- so an entry names
+;; artifacts and not a way to build one. An artifact with neither `:os/name`
+;; nor `:os/arch` matches anything; one marked `:artifact/wasm true` is the
+;; FALLBACK, used only where no native artifact matches, so the matrix does not
+;; have to be complete.
+;;
+;;     {:pods {pod.name {"1.2.0" {:pod/artifacts
+;;                                [{:os/name "macos" :os/arch "aarch64"
+;;                                  :artifact/url "https://.../pod-macos-aarch64.tgz"
+;;                                  :artifact/sha256 "..."
+;;                                  :artifact/executable "pod"}
+;;                                 {:artifact/wasm true
+;;                                  :artifact/url "https://.../pod.wasm"
+;;                                  :artifact/executable "pod.wasm"}]}}}}
+;;
+;; ## Why it is empty
+;;
+;; Nothing has moved out of the binary yet. The npm, maven and git drivers are
+;; still compiled in (`cli/src/deps.rs`), and a registry entry for a pod that
+;; does not exist would be a published lie. The entries land here as the
+;; drivers are built and released; what exists now is the format and the hook
+;; that reads it, which is what the fetching side needed in order to be
+;; testable at all.
+{:registry/name "flint tooling pods"
+ :registry/scope :tooling
+ :pods {}}

@@ -31,7 +31,9 @@
   reproducible and nobody finds that out at a convenient moment."
   (:require [clojure.string :as str]
             [flint.deps :as deps]
+            [flint.deps.manifest :as manifest]
             [flint.deps.npm :as npm]
+            [flint.deps.mvn :as mvn]
             [flint.deps.git :as git]))
 
 ;; ------------------------------------------------------------------ versions
@@ -195,20 +197,19 @@
     :npm (resolve-npm nm c)
     :git (resolve-git nm c)
     :local {:kind :local :name (str nm) :root (str (:local/root c))}
-    ;; Maven resolves to the version it was given: flint does not walk a POM
-    ;; graph, and `cli` prices that work and states the reason -- resolving a
-    ;; coordinate gets you SOURCE, not something that compiles. Said here rather
-    ;; than pretended.
+    ;; Maven resolves to the version it was given, and its graph is walked from
+    ;; there -- see `deps-of`, which reads the POM this used to say nobody read.
     :mvn {:kind :mvn :name (str nm) :version (str (:mvn/version c))}
     ;; A LOCAL POD resolves to itself, exactly as `:local` does: it is already
     ;; on disk and there is nothing to pin. The directory it names holds the
     ;; manifest, and the CLI reads that at boot -- resolution's job here is to
-    ;; say the coordinate is legitimate, not to open it.
+    ;; say the coordinate is legitimate, not to open it. A REGISTRY pod
+    ;; resolves to its version; which artifact that is depends on the host
+    ;; doing the fetching, and is decided in the fetch plan
+    ;; (`DECISIONS.md#pods-are-a-resolvable-dependency`) rather than here,
+    ;; where there is no platform to decide it with.
     :pod (if (str/blank? (str (:pod/path c)))
-           (throw (ex-info (str ":pod/version needs a pod registry, which is not built yet"
-                                " -- a pod is resolvable today only as :pod/path, naming a"
-                                " directory that holds its manifest")
-                           {:dep (str nm)}))
+           {:kind :pod :name (str nm) :version (str (:pod/version c))}
            {:kind :pod :name (str nm) :root (str (:pod/path c))})
     nil))
 
@@ -217,15 +218,37 @@
 (defn- deps-of
   "What a resolved node depends on, as `{name coord}`.
 
-  npm answers from its manifest. A git dependency's own `deps.edn` needs the
-  checkout, so it is read by the CALLER after fetching -- this returns nothing
-  for it rather than fetching from inside a resolver, because a function that
-  quietly downloads is one nobody can reason about."
+  THE TRANSITIVE STEP, for the kinds that can answer WITHOUT the thing being on
+  disk. A registry knows what a package depends on before anybody downloads it:
+  npm says so in the packument, and maven serves the POM beside the jar. That
+  is what lets this walk pin a graph -- `flint deps tree`, `why`, `pin` -- with
+  nothing fetched at all.
+
+  The other kinds genuinely cannot answer here, and the docstring this replaces
+  said something that was not true: it claimed a git dependency's `deps.edn`
+  was \"read by the CALLER after fetching\", which described a mechanism this
+  namespace's callers do not have. What actually reads it is
+  `flint.deps/fetch-plan`, the other half of the same walk, which has the
+  checkout and reads every format through `flint.deps.manifest`. So there is
+  one piece of format knowledge and two callers of it, rather than two
+  transitive mechanisms -- and the POM reader here is that same one.
+
+  A function that quietly downloads is one nobody can reason about, so nothing
+  here fetches: `npm/manifest` and `mvn/pom` are metadata reads."
   [node]
   (case (:kind node)
     :npm (let [m (npm/manifest (:name node) (:version node))]
            (reduce (fn [acc e] (assoc acc (key e) {:npm/version (val e)}))
                    {} (or (:deps m) {})))
+    ;; MAVEN HAD NO TRANSITIVE RESOLUTION AT ALL -- it fell through to `{}`
+    ;; with no clause and no comment, while `flint.deps.mvn/pom` sat there
+    ;; served, cached and never called.
+    :mvn (let [pom (try (mvn/pom (:name node) (:version node))
+                        ;; A jar with no POM beside it is a real thing in old
+                        ;; repositories. It means "nothing known about this
+                        ;; one's dependencies", not "fail the plan".
+                        (catch Throwable _ nil))]
+           (if pom (:deps (manifest/pom-xml pom)) {}))
     {}))
 
 (defn plan
@@ -315,6 +338,17 @@
                               (:version n) (assoc :git/version (:version n))
                               (:tag n) (assoc :git/tag (:tag n)))
                        :mvn {:mvn/version (:version n)}
+                       ;; A PATH-BASED COORDINATE STILL HAS TO SURVIVE BEING
+                       ;; PINNED. These fell to `{}`, which `flint deps pin`
+                       ;; then wrote into `:flint/overrides` -- and an override
+                       ;; of `{}` is a coordinate of no kind, so pinning a
+                       ;; project with a `:local/root` broke the build it was
+                       ;; supposed to make reproducible. Unreachable until the
+                       ;; fetch walk started reading overrides; reachable now.
+                       :local {:local/root (:root n)}
+                       :pod (if (:root n)
+                              {:pod/path (:root n)}
+                              {:pod/version (:version n)})
                        {}))))
           {} (:order p)))
 
