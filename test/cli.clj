@@ -789,5 +789,36 @@
        (mapv :kind (fdeps/unsupported {:deps {'some/thing {:weird/coord "x"}}}))
        [:unknown])
 
+
+;; --- capability delegation on dependency entries -------------------------
+;;
+;; `system-namespaces-and-deps` rule 1: a project cannot lend what it does not
+;; hold, or `deps.edn` becomes a way to MINT authority and the chain stops
+;; being auditable from the top.
+;;
+;; The rule was implemented in `flint.deps.resolve` and had NO CALLER, and the
+;; reason was structural: `resolve` requires virtual namespaces the CLI serves,
+;; which babashka cannot load, so `flint.cli` could never require the namespace
+;; the rule lived in. A rule nothing can call is a rule that does not exist.
+(let [mint (str (fs/create-temp-dir))]
+  (spit (str mint "/app.cljc") "(ns app)\n(defn go [_] \"built\")\n")
+  (let [with (fn [deps-edn]
+               (spit (str mint "/deps.edn") deps-edn)
+               (:out (flint-in* mint "paths")))]
+    (check-that "lending a capability the project does not hold is REFUSED"
+                (str/includes?
+                 (with "{:paths [\".\"] :deps {some/dep {:local/root \".\" :flint/capabilities-grant [:host]}}}")
+                 "lends a capability it does not hold"))
+    (check-that "  ... and it names both the dependency and what was lent"
+                (let [o (with "{:paths [\".\"] :deps {some/dep {:local/root \".\" :flint/capabilities-grant [:host]}}}")]
+                  (and (str/includes? o "some/dep") (str/includes? o ":host"))))
+    ;; The control, which is what makes the check mean something: a project
+    ;; that HOLDS the capability may lend it.
+    (check-that "  ... but a project that HOLDS it may lend it"
+                (not (str/includes?
+                      (with (str "{:paths [\".\"] :flint/capabilities-grant [:host] "
+                                 ":deps {some/dep {:local/root \".\" :flint/capabilities-grant [:host]}}}"))
+                      "lends a capability it does not hold")))))
+
 (println (if (zero? @fails) "cli: ok" (str "cli: " @fails " FAILURES")))
 (System/exit (if (zero? @fails) 0 1))

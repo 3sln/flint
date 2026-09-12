@@ -206,6 +206,29 @@
             ;; shadow the namespace of the project that depends on it.
             all-paths (vec (concat (deps/paths d) (deps/dep-paths plan)))]
         (cond
+          ;; CAPABILITY DELEGATION, FIRST, because it is the one that fails
+          ;; OPEN. `system-namespaces-and-deps` rule 1 says a project cannot
+          ;; lend what it does not hold -- otherwise `deps.edn` is a way to MINT
+          ;; authority, and the chain stops being auditable from the top.
+          ;;
+          ;; `lending-errors` implemented that rule and HAD NO CALLER anywhere
+          ;; in the tree, so a project holding nothing could write
+          ;; `:flint/capabilities-grant [:host]` onto a dependency entry and be
+          ;; neither granted nor refused: the key was reported as one npm does
+          ;; not understand, and ignored. Refused now, before anything is
+          ;; fetched.
+          ;;
+          ;; `paths` is in the list and `incomplete`'s is not, deliberately: a
+          ;; project that mints authority should not be able to get its source
+          ;; roots resolved either, and `paths` is what a host calls before
+          ;; fetching.
+          (and (seq (deps/lending-errors d (or (:deps d) {})))
+               (contains? #{"build" "task" "paths" "fetch"} cmd))
+          (oops (str/join "\n"
+                          (concat ["this project lends a capability it does not hold:"]
+                                  (mapv (fn [x] (str "  " (:dep x) "  -- " (:reason x)))
+                                        (deps/lending-errors d (or (:deps d) {}))))))
+
           ;; A dependency flint would fetch but cannot as written stops the
           ;; build HERE, naming itself. Letting it through produced `cannot find
           ;; source for namespace greeter.core`, which is true and names the
