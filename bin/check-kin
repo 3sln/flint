@@ -69,22 +69,36 @@ else
 fi
 
 verified=0
-for src in kin/*.kin; do
+# IN PARALLEL, because this loop was 371 of the gate's 1671 seconds -- 22% of
+# it, and the largest single item by a factor of two. Ninety sources at about
+# four seconds each, every one of them independent: each `verify` compiles one
+# source for three targets in its own `mktemp -d`, which the script was already
+# careful about ("this used to be a fixed $TMPDIR/kin-verify, which two
+# concurrent runs..."). Concurrency was anticipated here; nothing used it.
+#
+# Output is collected and SORTED rather than streamed, because interleaved
+# lines from ninety jobs are unreadable and, worse, unstable -- a gate whose
+# output reorders between runs cannot be diffed.
+_kin_jobs=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+_kin_out=$(mktemp "${TMPDIR:-/tmp}/check-kin.XXXXXX")
+printf '%s\n' kin/*.kin | xargs -P "$_kin_jobs" -I@ sh -c '
+  src="$1"
   name=$(basename "$src" .kin)
-  verified=$((verified + 1))
   if [ ! -f "kin/$name.drivers" ]; then
     echo "  FAIL $name has no drivers file"
-    fails=$((fails + 1))
-    continue
+    exit 0
   fi
   if out=$(./kin/scripts/verify "$src" 2>&1); then
     echo "  ok   $name agrees across three targets"
   else
     echo "  FAIL $name does not agree across targets"
-    echo "$out" | tail -5
-    fails=$((fails + 1))
+    echo "$out" | tail -5 | sed "s/^/       /"
   fi
-done
+' _ @ >> "$_kin_out" 2>&1
+sort "$_kin_out"
+verified=$(ls kin/*.kin | wc -l | tr -d ' ')
+fails=$((fails + $(grep -c '^  FAIL' "$_kin_out" || true)))
+rm -f "$_kin_out"
 
 # ASK KIN WHERE IT WRITES. Destination is computed from the namespace by a
 # function each target carries, so the only thing that knows the answer is
