@@ -8,7 +8,6 @@
 #
 # A port that runs is not a port that is correct. This is what tells them apart.
 #
-phase "native: rebuild the reference answer"
 # THE NATIVE ANSWER IS REBUILT FIRST, and it was not. This script builds the
 # ports and then compares them against `./target/release/flint` -- which it
 # used three times and never built. A stale binary makes every comparison here
@@ -48,6 +47,14 @@ conform_times() {
 }
 
 cd "$(dirname "$0")/.."
+
+# The first `phase` used to sit at the top of the header comment, ABOVE the
+# definition of `phase` -- so it ran before the function existed, printed
+# `phase: not found`, and left `_ph_name` empty. Everything up to the next
+# marker, which is the native rebuild and both port builds, was then charged to
+# nothing at all and dropped out of the total. A timing harness that silently
+# omits a phase is the same fault as a gate that silently omits a check.
+phase "native: rebuild the reference answer"
 cargo build --release -p flint-cli > /tmp/flint-cli-build.log 2>&1 \
   || { tail -20 /tmp/flint-cli-build.log; \
        echo "  FAIL the native runtime does not build, so there is nothing to compare against"; \
@@ -698,83 +705,164 @@ phase "every conformance program, 3 runtimes"
 # The answers are nested collections rather than numbers, so agreeing means
 # agreeing about maps, vectors, sets, strings, seqs and doubles at once -- and
 # `maps` prints its keys in trie order, so matching means the ported CHAMP
-phase "iteration order"
 # ITERATES the way the Rust's does, which nothing asserts directly.
-for prog in assocshapes bytes churn collections conjshapes control errors green hosted lazy lazyref maps mapshapes mathfns numedge numbers opcodes regex seqshapes strings tables threads transhapes; do
-  # A FIXTURE THAT DOES NOT COMPILE IS A FAILURE, NOT A SKIP. This used to
-  # `continue`, so a broken fixture removed its own checks and the gate still
-  # exited 0 -- thirteen programs, each worth several checks on two hosts. It
-  # fooled me once already: a concurrent `bin/test` rebuilt `out/` underneath a
-  # run of this, four fixtures stopped compiling, and the summary went from 246
-  # checks to 213 without a single FAIL line.
-  #
-  # `missing` exists for a toolchain that is genuinely absent. A fixture that
-  # will not build is the other thing, and `DECISIONS.md#other-hosts` is that the
-  # bytecode makes a port cheap and does nothing to make two ports AGREE --
-  # which is only true while the fixtures actually run.
+#
+# IN PARALLEL, because this loop was 118 of this script's 203 seconds -- more
+# than half of it, and four times the next item. Twenty-three programs at about
+# five seconds each, and every one of them independent: two compiles and three
+# runtime executions apiece, no program reading anything another writes.
+# `bin/check-kin` had the same shape and went from 371 s to 66 s.
+#
+# THE HAZARD IS A LOST FAILURE (`DECISIONS.md#a-parallel-gate-body-never-exits`),
+# and it is the whole difficulty here. Every
+# check in the body used to fail the gate with `exit 1`. Under `xargs` that
+# exits the SUBSHELL: the loop carries on, the script never sees it, and a red
+# gate goes green. This script has been bitten by that exact shape twice -- the
+# comments above record a broken fixture that `continue`d, took thirteen
+# programs worth of checks away, and left the summary at 213 checks instead of
+# 246 with not one FAIL line. A parallel gate that cannot go red is far worse
+# than a slow one.
+#
+# So nothing in the body exits the script any more. `fail` writes the message
+# into that program's own transcript, touches a marker file, and stops that
+# program only; the markers are counted AFTER the loop, and that count is what
+# fails the gate.
+#
+# And EVERY PROGRAM MUST PRODUCE A VERDICT. A job that never ran at all --
+# xargs declining to start it, a shell killed by the machine -- would otherwise
+# remove its own checks in silence, which is the same fault one level up: not a
+# check that fails, a check that is not there. Each body run touches `ok` or
+# `fail` as its last act, and a program with neither is a failure with a name.
+#
+# Output is collected per program and replayed in the order of the list, rather
+# than streamed: interleaved lines from ten concurrent jobs are unreadable and,
+# worse, reorder between runs, so the gate output cannot be diffed. It is
+# replayed by the list rather than SORTED, which is what check-kin does,
+# because these lines come in threes and the second of them -- "... and under a
+# collection at every allocation" -- means nothing away from the first. A sort
+# would separate them; the list order is just as stable and keeps each
+# program's transcript whole.
+#
+# PER-PROGRAM TEMP FILES for the same reason. The body wrote
+# `/tmp/flint-c-jvm.out` and three others at fixed names, which twenty-three
+# concurrent jobs would trample -- and which a concurrent run of this script in
+# another worktree tramples today, sequential or not.
+conform_progs="assocshapes bytes churn collections conjshapes control errors
+green hosted lazy lazyref maps mapshapes mathfns numedge numbers opcodes regex
+seqshapes strings tables threads transhapes"
+conform_n=$(printf '%s\n' $conform_progs | wc -l | tr -d ' ')
+# A FLOOR UNDER THE ZERO, the same one check-kin carries: an empty list runs
+# nothing, reports no failures, and looks exactly like a clean pass over
+# everything. A floor rather than the exact count, so adding a fixture does not
+# fail the gate that exists to run the fixtures.
+[ "$conform_n" -ge 20 ] || {
+  echo "  FAIL only $conform_n conformance programs are listed, and at least 20 are expected"
+  exit 1; }
+conform_jobs="${FLINT_CONF_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
+CONFORM_W=$(mktemp -d "${TMPDIR:-/tmp}/flint-conform.XXXXXX")
+export CONFORM_W JDK CLR
+conform_xargs_ok=1
+
+# A FIXTURE THAT DOES NOT COMPILE IS A FAILURE, NOT A SKIP -- see above; that
+# is what the first two `fail`s in the body are. `missing` exists for a
+# toolchain that is genuinely absent. A fixture that will not build is the
+# other thing, and `DECISIONS.md#other-hosts` is that the bytecode makes a port
+# cheap and does nothing to make two ports AGREE -- which is only true while
+# the fixtures actually run.
+#
+# AND WASM, WHICH WAS NEVER IN THIS COMPARISON. The native binary and the wasm
+# module are the same Rust compiled two ways, and they are NOT the same
+# program: there are 35 `cfg(target_arch = "wasm32")` splits across eleven
+# files, seven of them in `vm.rs` and eight in `mem.rs`. One of those splits
+# was already wrong. `fmath::rint` hand-rolled round-half-to-even for the
+# native build and called `libm` for wasm, and the hand-rolled one lost the
+# sign of zero -- `rint(-0.5)` was 0.0 native and -0.0 on wasm. It was found by
+# a probe about MATH, not by anything comparing these two, because nothing
+# compared these two.
+#
+# AND AGAIN WITH THE COLLECTOR RUNNING AT EVERY ALLOCATION. A rooting bug -- a
+# value read into a host local, held across a call that allocates, used after
+# -- is invisible unless a collection lands in that exact window. Normal
+# running almost never puts one there; `-Dflint.gcstress` puts one everywhere.
+# It found three, all in `Eq`, all shipped: two in `seqEq` and one in the table
+# loop whose own comment said "BOTH SIDES ROOTED" while rooting one. It costs
+# nothing measurable, because these programs allocate far less than the JVM's
+# own startup costs.
+#
+# The body is single-quoted, so it carries no apostrophes and the prose above
+# is where the reasons live.
+printf '%s\n' $conform_progs | xargs -P "$conform_jobs" -n1 sh -c '
+  prog="$1"
+  out="$CONFORM_W/$prog.out"
+  # NOT `exit 1`. This is a subshell; exiting it non-zero tells the loop
+  # nothing, and the marker file is what the check after the loop reads.
+  fail() { echo "$1" >> "$out"; : > "$CONFORM_W/$prog.fail"; exit 0; }
+
   ./bin/flint :src runtimes/conform :fn "$prog/main" --emit-image \
-    :out "out/conform/$prog.img" > /tmp/flint-c-build.out 2>&1 || {
-      tail -5 /tmp/flint-c-build.out
-      echo "  FAIL the conform fixture $prog does not compile"; exit 1; }
+    :out "out/conform/$prog.img" > "$CONFORM_W/$prog.build" 2>&1 || {
+      tail -5 "$CONFORM_W/$prog.build" >> "$out"
+      fail "  FAIL the conform fixture $prog does not compile"; }
   want="$(./target/release/flint run :path runtimes/conform :fn "$prog/main" 2>&1 || true)"
 
-  # AND WASM, WHICH WAS NEVER IN THIS COMPARISON. The native binary and the
-  # wasm module are the same Rust compiled two ways, and they are NOT the same
-  # program: there are 35 `cfg(target_arch = "wasm32")` splits across eleven
-  # files, seven of them in `vm.rs` and eight in `mem.rs`.
-  #
-  # One of those splits was already wrong. `fmath::rint` hand-rolled
-  # round-half-to-even for the native build and called `libm` for wasm, and the
-  # hand-rolled one lost the sign of zero -- `rint(-0.5)` was 0.0 native and
-  # -0.0 on wasm. It was found by a probe about MATH, not by anything comparing
-  # these two, because nothing compared these two: this loop diffs native
-  # against the ports, and `bin/test` runs the Clojure differential on wasm.
-  # Two runtimes, both checked against other things, never against each other.
   ./bin/flint :src runtimes/conform :fn "$prog/main" :out "out/conform/$prog.wasm" \
-    > /tmp/flint-c-wasm-build.out 2>&1 || {
-      tail -5 /tmp/flint-c-wasm-build.out
-      echo "  FAIL the conform fixture $prog does not compile to wasm"; exit 1; }
+    > "$CONFORM_W/$prog.wasmbuild" 2>&1 || {
+      tail -5 "$CONFORM_W/$prog.wasmbuild" >> "$out"
+      fail "  FAIL the conform fixture $prog does not compile to wasm"; }
   got="$(node host/flint.mjs "out/conform/$prog.wasm" "$prog/main" 2>&1 || true)"
   if [ "$got" = "$want" ]; then
-    echo "  ok   $prog agrees between the native and wasm builds"
+    echo "  ok   $prog agrees between the native and wasm builds" >> "$out"
   else
-    printf 'native: %s\n  wasm:   %s\n' "$want" "$got" | head -4
-    echo "  FAIL $prog differs between the native and wasm builds"; exit 1
+    printf "native: %s\n  wasm:   %s\n" "$want" "$got" | head -4 >> "$out"
+    fail "  FAIL $prog differs between the native and wasm builds"
   fi
 
   "$JDK/bin/java" -cp runtimes/jvm/classes RtImage "out/conform/$prog.img" "$want" \
-    > /tmp/flint-c-jvm.out 2>&1 \
-    || { tail -3 /tmp/flint-c-jvm.out; echo "  FAIL $prog disagrees with native [jvm]"; exit 1; }
-  echo "  ok   $prog agrees with the native runtime [jvm]"
-  # AND AGAIN WITH THE COLLECTOR RUNNING AT EVERY ALLOCATION.
-  #
-  # A rooting bug -- a value read into a host local, held across a call that
-  # allocates, used after -- is invisible unless a collection lands in that
-  # exact window. Normal running almost never puts one there; `-Dflint.gcstress`
-  # puts one everywhere.
-  #
-  # It found three, all in `Eq`, all shipped: two in `seqEq` and one in the
-  # table loop whose own comment said "BOTH SIDES ROOTED" while rooting one.
-  # Before this row they were reachable only by noticing a 600-row conformance
-  # answer was wrong and bisecting it.
-  #
-  # It costs nothing measurable -- a suite that runs in a second still runs in
-  # a second -- because these programs allocate far less than the JVM's own
-  # startup costs.
-  "$JDK/bin/java" -Dflint.gcstress=1 -cp runtimes/jvm/classes RtImage "out/conform/$prog.img" "$want" \
-    > /tmp/flint-c-jvm-stress.out 2>&1 \
-    || { tail -3 /tmp/flint-c-jvm-stress.out
-         echo "  FAIL $prog disagrees under GC STRESS -- a rooting bug [jvm]"; exit 1; }
-  echo "  ok     ... and under a collection at every allocation [jvm]"
+    > "$CONFORM_W/$prog.jvm" 2>&1 || {
+      tail -3 "$CONFORM_W/$prog.jvm" >> "$out"
+      fail "  FAIL $prog disagrees with native [jvm]"; }
+  echo "  ok   $prog agrees with the native runtime [jvm]" >> "$out"
+  "$JDK/bin/java" -Dflint.gcstress=1 -cp runtimes/jvm/classes RtImage \
+    "out/conform/$prog.img" "$want" > "$CONFORM_W/$prog.stress" 2>&1 || {
+      tail -3 "$CONFORM_W/$prog.stress" >> "$out"
+      fail "  FAIL $prog disagrees under GC STRESS -- a rooting bug [jvm]"; }
+  echo "  ok     ... and under a collection at every allocation [jvm]" >> "$out"
   if [ -n "$CLR" ]; then
-    "$CLR" --rt-image "out/conform/$prog.img" "$want" > /tmp/flint-c-clr.out 2>&1 \
-      || { tail -3 /tmp/flint-c-clr.out; echo "  FAIL $prog disagrees with native [clr]"; exit 1; }
-    echo "  ok   $prog agrees with the native runtime [clr]"
-    cmp -s /tmp/flint-c-jvm.out /tmp/flint-c-clr.out \
-      || { diff /tmp/flint-c-jvm.out /tmp/flint-c-clr.out | head -4
-           echo "  FAIL the two ports disagree on $prog"; exit 1; }
+    "$CLR" --rt-image "out/conform/$prog.img" "$want" \
+      > "$CONFORM_W/$prog.clr" 2>&1 || {
+        tail -3 "$CONFORM_W/$prog.clr" >> "$out"
+        fail "  FAIL $prog disagrees with native [clr]"; }
+    echo "  ok   $prog agrees with the native runtime [clr]" >> "$out"
+    cmp -s "$CONFORM_W/$prog.jvm" "$CONFORM_W/$prog.clr" || {
+      diff "$CONFORM_W/$prog.jvm" "$CONFORM_W/$prog.clr" | head -4 >> "$out"
+      fail "  FAIL the two ports disagree on $prog"; }
+  fi
+  # THE VERDICT, and it is the last thing written. Its absence is a failure.
+  : > "$CONFORM_W/$prog.ok"
+' _ || conform_xargs_ok=0
+
+# THE FAILURES, COUNTED AFTER THE LOOP. This is the half that makes the
+# parallel version safe, so it is deliberately dumber than the body: it reads
+# files, it does not trust a status.
+conform_fails=0
+for prog in $conform_progs; do
+  [ -f "$CONFORM_W/$prog.out" ] && cat "$CONFORM_W/$prog.out"
+  if [ -f "$CONFORM_W/$prog.fail" ]; then
+    conform_fails=$((conform_fails + 1))
+  elif [ ! -f "$CONFORM_W/$prog.ok" ]; then
+    echo "  FAIL $prog reached no verdict -- its job did not finish"
+    echo "       A program that never ran takes its own checks away silently,"
+    echo "       which is how this summary once fell from 246 checks to 213."
+    conform_fails=$((conform_fails + 1))
   fi
 done
+[ "$conform_xargs_ok" = 1 ] || {
+  echo "  FAIL xargs did not run the conformance loop to completion"
+  conform_fails=$((conform_fails + 1)); }
+rm -rf "$CONFORM_W"
+[ "$conform_fails" -eq 0 ] || {
+  echo "  FAIL $conform_fails of $conform_n conformance programs did not pass"
+  exit 1; }
+echo "  ok   all $conform_n conformance programs reported, on ${conform_jobs} jobs"
 
 phase "the language suite, every runtime"
 # THE LANGUAGE SUITE, on every runtime. `test/common` is written in flint and

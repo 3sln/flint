@@ -635,13 +635,25 @@ turned a guess into a 5x win there.
       executions apiece — spread evenly. **No hot spot, so the remedy is
       parallelism**, as with `check-kin`.
 
-- [ ] Parallelise the 23-program conformance loop. **CAREFULLY**: the body
-      writes shared temp files (`/tmp/flint-c-jvm.out`, `/tmp/flint-c-clr.out`)
-      that would collide, and it fails the gate with `exit 1` — which under
-      `xargs` exits only the subshell, so a failure would be LOST and a red
-      gate would go green. That is precisely the class this script's own
-      comments record being bitten by twice. Per-program temp files, and
-      failures collected and checked after the loop, not signalled by `exit`
+- [x] **The 23-program conformance loop is parallel: 116 s → 24 s**, 4.8x, on
+      10 jobs. The script's own phase total went 213 s → 110 s — and the new
+      total is the LARGER measurement, because the first `phase` marker used to
+      sit above the definition of `phase` itself, so the native rebuild and
+      both port builds were charged to nothing and dropped out of the sum.
+
+      Done the careful way this entry asked for, and recorded in
+      `DECISIONS.md#a-parallel-gate-body-never-exits`: per-program temp files
+      under one `mktemp -d`, no `exit` anywhere in the body, failures counted
+      from marker files after the loop, and every program required to leave a
+      verdict so a job that never ran cannot take its own checks away.
+
+      **Proved rather than reasoned about**, three probes, each with the other
+      22 programs as its control: a fixture that does not compile → `FAIL the
+      conform fixture bytes does not compile`, exit 1; a JVM builtin perturbed
+      (`hypot` + 1.0) → `FAIL mathfns disagrees with native [jvm]` and `hosted`
+      too, exit 1; one job made to die before writing a verdict → `FAIL churn
+      reached no verdict`, exit 1. Restored, the run is green with the same 310
+      `ok` lines in the same order as the run before it.
 
 **WHAT THE SHAPE MEANS FOR SELECTIVE TESTING.** The top 12 of 60 sections are
 71% of the time, and the biggest four are BUILDS — the three-runtime diff, the

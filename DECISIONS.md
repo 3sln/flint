@@ -5472,3 +5472,90 @@ fails to compile with `CS1519: Invalid token '='`. That reads as *"the targets
 disagree"* about the code under test, which is the one thing it is not.
 `kin/scripts/verify` now refuses a drivers file that does not end in a newline,
 and says why.
+
+## a-parallel-gate-body-never-exits
+
+**A loop body run under `xargs` records its failure in a file; only the code after the loop may fail the gate**
+
+**Ratified:** ☐ not signed off
+
+**Status: built 2026-09-12.** `bin/conform-hosts`, the 23-program conformance
+loop: 116 s to 24 s measured on this machine (10 jobs, `sysctl hw.ncpu`), and
+the script's own phase total 213 s to 110 s. `bin/check-kin` was parallelised
+the same way a day earlier, 371 s to 66 s. Proved by three adversarial probes
+before it was believed: a fixture that does not compile, a port that answers
+differently, and a job that dies leaving no verdict. All three exit non-zero
+and name the program.
+
+### The hazard, which is specific to this transformation
+
+A sequential loop body fails the gate with `exit 1`. That line does not change
+meaning when the loop becomes parallel — it changes SCOPE. Under `xargs` the
+body is a subshell, so `exit 1` ends that subshell, the other jobs carry on,
+`xargs` returns success, and the script never learns anything happened.
+
+**A red gate goes green, and nothing in the output says so.** This is the worst
+available direction for a bug in a gate: a slow gate wastes minutes, a gate
+that cannot fail wastes the reason for having one. `bin/conform-hosts` has been
+bitten by this exact shape twice already, both recorded in its own comments —
+most plainly when a broken fixture `continue`d, took thirteen programs worth of
+checks away, and left the summary at 213 checks instead of 246 without a single
+FAIL line.
+
+So the rule is not "be careful with `exit` in the body". It is that **the body
+has no way to fail the gate at all**. Every failure goes through one `fail`
+function, which appends its message to that program's transcript, touches a
+marker file, and exits the subshell ZERO. After the loop, the script counts
+marker files. A file on disk survives a subshell; a status does not.
+
+### Every job must produce a verdict
+
+Collecting failures is only half of it. The other half is the job that never
+ran — `xargs` declining to start it, a shell the machine killed, a `sh -c` that
+died before its first command. It writes no failure marker, so a
+failures-only check reports success over a program that was never tested. That
+is the same fault one level up: not a check that fails, a check that is not
+there.
+
+Each body run therefore touches `ok` as its LAST act. After the loop, a program
+with neither `ok` nor `fail` is a failure with a name. Probed by simulating it
+— an `exit 0` inserted at the top of the body for one program — and the gate
+says `FAIL churn reached no verdict -- its job did not finish` and exits 1.
+
+The same argument gives the list a floor (at least 20 programs listed), because
+an empty list runs nothing, reports nothing, and looks exactly like a clean
+pass.
+
+### Output: collected per job, replayed in list order
+
+Streaming from ten concurrent jobs interleaves lines, which is unreadable and,
+worse, REORDERS between runs — a gate whose output cannot be diffed against a
+previous run loses most of its value. `bin/check-kin` collects and SORTS,
+because each of its jobs emits one line.
+
+This loop emits three or four lines per program, and the second of them — `ok
+... and under a collection at every allocation` — means nothing away from the
+first. A sort separates them. So the transcripts are written per program and
+replayed in the order of the program list, which is just as stable as a sort
+and keeps each program's lines together and in body order. Two consecutive
+parallel runs produced the same 310 lines in the same order.
+
+### Per-run temp files, not fixed ones
+
+The body wrote `/tmp/flint-c-jvm.out`, `/tmp/flint-c-clr.out` and two others at
+fixed paths. Twenty-three concurrent jobs would trample those, and the symptom
+would be a cross-port comparison against another program's output — a
+divergence report naming the wrong thing. They are now per program inside one
+`mktemp -d` per run.
+
+Worth saying that this was already a live bug before any parallelism: a second
+run of this script, in another worktree on the same machine, tramples exactly
+these files today. The rest of the script still uses fixed `/tmp` names and
+still has that flaw.
+
+### What this does NOT license
+
+Parallelising a loop whose iterations are not independent. This one qualifies
+because each program compiles to its own image and its own wasm module and is
+read by three runtimes that share nothing — verified by reading every write in
+the body, not assumed from the loop looking parallel.
