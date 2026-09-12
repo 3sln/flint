@@ -605,6 +605,22 @@ false failures, and false failures train people to ignore failures.
       script had been made concurrency-safe and nothing ever used it. About
       18% off the whole gate from one loop
 
+**AFTER check-kin, `conform-hosts` IS THE TOP ITEM at 216 s** — and measuring
+it narrowed where that cannot be:
+
+    dotnet build (CLR)          1 s
+    javac, full, classes wiped  1 s
+    all 7 JVM Rt* programs      ~7 s   (RtFoundation 5 s, the rest 0-1 s)
+
+So it is neither the port builds nor the JVM side. What is left is the native
+compile of the probe corpus and the CLR runs. `bin/conform-hosts` has no
+section headers to time — 912 lines, three `echo` progress lines — so the next
+step is giving it the same `sec` treatment `bin/test` now has, which is what
+turned a guess into a 5x win there.
+
+- [ ] Itemise `bin/conform-hosts`; it is 15% of the gate and nothing says
+      where
+
 **WHAT THE SHAPE MEANS FOR SELECTIVE TESTING.** The top 12 of 60 sections are
 71% of the time, and the biggest four are BUILDS — the three-runtime diff, the
 SDK distributable, the single-file binary, the diagnostics units. A
