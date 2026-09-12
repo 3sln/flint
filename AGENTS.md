@@ -102,7 +102,14 @@ things being compared.
 
 ## 4. The gate is the last check, not the first
 
-`bin/test` and `bin/conform-hosts` together take roughly **forty minutes**.
+**`bin/test` IS the gate. It already runs `bin/conform-hosts` in full** (see
+the `hosts:` section), so running both is running the four-runtime matrix
+twice — about 3½ minutes of pure duplication per gate. Run `./bin/test`.
+
+It takes about **23 minutes** and prints its own itemisation at the end,
+slowest section first. Use that before optimising anything: the first
+measurement put 71% of the time in 12 of 60 sections, and the largest was a
+CHECK rather than a suite.
 
 - Run the suite your change touches first: `bb test/<name>.clj`, seconds each.
 - The static checks are seconds and catch real breakage: `bin/check-decisions`,

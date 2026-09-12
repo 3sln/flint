@@ -589,8 +589,30 @@ happens to perform. So a changed-files → suites map must carry BUILD
 PREREQUISITES as well as suite names. Without that, selective runs produce
 false failures, and false failures train people to ignore failures.
 
-- [ ] Break `bin/test`'s 26 minutes down by section; 58 sections and nothing
-      records where the time goes
+- [x] **Broken down — `bin/test` now times itself** and prints the slowest
+      twelve. First measurement, 60 sections, 1671 s total:
+
+          371 s  kin: the sources agree, and the regions match      22%
+          206 s  hosts: one program, three runtimes, diffed
+          139 s  distributable: compiler and loader via the SDK
+          100 s  binary: the single-file CLI
+           68 s  units: the DIAGNOSTICS build
+           66 s  threads
+          ---- the top 12 of 60 are 1182 s, or 71% of the whole ----
+
+- [x] **`check-kin` parallelised: 371 s → 70 s**, 5.3x. Ninety independent
+      sources, each `verify` already using its own `mktemp -d` because the
+      script had been made concurrency-safe and nothing ever used it. About
+      18% off the whole gate from one loop
+
+**WHAT THE SHAPE MEANS FOR SELECTIVE TESTING.** The top 12 of 60 sections are
+71% of the time, and the biggest four are BUILDS — the three-runtime diff, the
+SDK distributable, the single-file binary, the diagnostics units. A
+changed-files → suites map cannot skip a build; it can only skip suites. So
+the fast gate comes from parallelising and trimming the expensive builds, and
+the map buys the 48-section tail that is 29% of the time.
+
+That is the reverse of the order the plan assumed.
 - [ ] Attack the 32 build invocations — shared setup does not respond to
       selective testing at all
 - [ ] Expected-value tests at the kin layer
