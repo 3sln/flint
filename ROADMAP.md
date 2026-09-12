@@ -854,14 +854,13 @@ things that are code, not record:
       here** by `FLINT_SELFHOST=1 ./bin/conform-hosts`: 0 missing builtins, 736
       initialisers, and output byte for byte identical to the wasm compiler's,
       on BOTH ports in one run
-- [ ] And its cost is still unmeasured: the self-host step sits outside every
-      `phase` marker, so `conform-hosts`' own summary totalled 148 s for a run
-      that included it. The only estimate is the script's own "about 15
-      minutes", which nothing has checked — and whether this belongs in the
-      gate turns on that number
-- [ ] **SELF-HOSTING ON THE PORTS IS NOT GATE-COVERED.** `bin/conform-hosts`
-      runs it only under `FLINT_SELFHOST=1` and the step announces "this takes
-      about 15 minutes", so a green gate says nothing about it. That is a
+- [x] **Measured: SIX SECONDS.** The script announced "about 15 minutes" — wrong
+      by a factor of 150. That estimate is the only reason this is opt-in, and
+      it survived because the step sat outside every `phase` marker, so nothing
+      measured it and nothing contradicted it
+- [ ] **SELF-HOSTING ON THE PORTS IS NOT GATE-COVERED, and there is no longer
+      a cost argument for that.** It is 6 s of a 117 s script inside a 21-minute
+      gate. `bin/conform-hosts` runs it only under `FLINT_SELFHOST=1`. That is a
       headline capability of both ports — the JVM README leads with it — and
       the four bugs its own comment records were each of the kind that let the
       compiler RUN and produced wrong output. Decide whether it belongs in the

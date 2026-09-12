@@ -1028,7 +1028,16 @@ done
 # on the CLR, against about a minute for everything above. Turn it on with
 # FLINT_SELFHOST=1, and CI should.
 if [ "${FLINT_SELFHOST:-0}" = "1" ]; then
-  echo "  .. self-hosting (this takes about 15 minutes)"
+  # SIX SECONDS, measured 2026-09-12. This step announced "about 15 minutes"
+  # for as long as it has existed, and that number is why it is opt-in: it is
+  # the only reason a headline capability of both ports goes unchecked by every
+  # ordinary gate run. It is wrong by a factor of 150.
+  #
+  # The step sat outside every phase marker too, so a run including it reported
+  # a total that excluded it -- which is how the estimate survived: nothing
+  # measured it, and nothing contradicted it.
+  phase "self-hosting, both ports (FLINT_SELFHOST=1)"
+  echo "  .. self-hosting, both ports"
   ./bin/flint :src bench/progs :fn hello/main --emit-spec :out out/conform/self.spec     >/dev/null 2>&1
   # The reference: the same spec through the compiler running as wasm.
   node host/flint-file.mjs dist/flintc.wasm out/conform/self.spec > out/conform/self.ref 2>/dev/null
