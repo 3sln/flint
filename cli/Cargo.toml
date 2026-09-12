@@ -10,9 +10,23 @@ path = "src/main.rs"
 
 [dependencies]
 # flint's own runtime, compiled NATIVELY. It is the same Rust the wasm module
-# is built from -- the same collector, the same interpreter, the same builtins
-# -- so running the compiler here is 2.7 s against 15.6 s through a wasm
-# engine (`DECISIONS.md#other-hosts`). There is no wasm runtime in this binary.
+# is built from -- the same collector, the same interpreter, the same builtins.
+# There is no wasm runtime in this binary.
+#
+# THIS COMMENT USED TO CLAIM 2.7 s AGAINST 15.6 s -- 5.8x -- and that figure
+# was the whole argument for the native binary. Re-measured 2026-09-11 against
+# `@3sln/flint-cli` (`DECISIONS.md#npm-cli`), which runs the same compiler on
+# node over wasm: 1.63x on a four-namespace project, 1.71x on the compiler
+# compiling itself. Not 5.8x.
+#
+# The new measurement is trustworthy where earlier attempts were not, and for
+# one reason: the two arms emit BYTE-IDENTICAL modules across six cases,
+# including the compiler compiling itself at 964 177 bytes. That is the proof
+# they do the same work. Three earlier attempts compared arms that did
+# different amounts of the pipeline and produced ratios between pipelines.
+#
+# The old figure is not retracted as false -- nobody can re-run it, the host
+# and machine are unrecorded -- but it should not be cited as current.
 flint-rt = { path = "../runtime" }
 # Green threads and ports are a namespace UNIT, not part of the runtime
 # (`DECISIONS.md#namespace-units`). A wasm module links it when a program reaches it; a
