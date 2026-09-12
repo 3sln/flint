@@ -847,10 +847,22 @@ things that are code, not record:
       built `[perf]` and one built plain both carry 5 `flint.check` hits.
       Production modules from the shipped binary ship their test code, and a
       failing check throws
-- [ ] Stale docs found in passing: `runtimes/jvm/README.md` claims "141 of 144
-      builtins" and "self-hosting: close, not there" — it is 168 of 168 and
-      self-hosting is byte-for-byte; `README.md`'s construe figures have
-      drifted (module 289 579 → 486 052 bytes, compile 935 → 1 564 ms)
+- [x] `runtimes/jvm/README.md`'s builtin count corrected: it said "141 of the
+      144 the compiler imports; the 3 missing are regex". `bin/check-builtins`
+      says all 168, the 2 mandatory included — verified here, not taken
+- [ ] Its "Self-hosting: close, not there" heading is reported stale by a
+      verifier that ran `RtSelfHost` directly and got a byte-for-byte pass.
+      **NOT confirmed here**, and the reason is the next item
+- [ ] **SELF-HOSTING ON THE PORTS IS NOT GATE-COVERED.** `bin/conform-hosts`
+      runs it only under `FLINT_SELFHOST=1` and the step announces "this takes
+      about 15 minutes", so a green gate says nothing about it. That is a
+      headline capability of both ports — the JVM README leads with it — and
+      the four bugs its own comment records were each of the kind that let the
+      compiler RUN and produced wrong output. Decide whether it belongs in the
+      gate, in CI, or in a documented periodic run; right now it is in none of
+      them
+- [ ] `README.md`'s construe figures have drifted (module 289 579 → 486 052
+      bytes, compile 935 → 1 564 ms)
 
 ### Port tests belong in kin (recorded 2026-09-11)
 

@@ -46,7 +46,7 @@ whichever module it was linked against.
 | --- | --- |
 | image format | complete |
 | opcodes | all 46 |
-| builtins | 141 of the 144 the compiler imports; the 3 missing are regex |
+| builtins | all 168, the 2 mandatory included (`bin/check-builtins`, 2026-09-12) |
 | conformance | `bin/conform-hosts`, every case agreeing |
 | threads | several threads on one program |
 | AOT | `java.lang.classfile`, on first call, 1.67x |
