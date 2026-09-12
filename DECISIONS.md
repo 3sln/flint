@@ -3460,11 +3460,23 @@ would plausibly be fetching source from git at all.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): partly built.** The native target (flint's own runtime, compiled
-through LLVM to run with no wasm engine present at all) works, and `bin/flint`
-is built on it — the compiler running as native code took a compile from
-15.6 s to 3.5 s, in a 2.1 MB binary rather than 7.1 MB. Native AOT is not
-built. The JVM and CLR ports are the rest of this document; see
+**Status (re-read 2026-09-11): partly built, and THIS LINE HAS BEEN MISREAD.**
+The native target works — flint's own runtime runs with no wasm engine present
+at all, and `bin/flint` is built on it. The compiler running as native code
+took a compile from 15.6 s to 3.5 s, in a 2.1 MB binary rather than 7.1 MB.
+Native AOT is not built.
+
+**"Compiled through LLVM" here means RUSTC, not a flint→LLVM backend.** The
+runtime is Rust, and every Rust binary is compiled through LLVM. This sentence
+reads as though flint emits LLVM IR, and it does not: `flint.emitter` is "AST
+to bytecode", `flint.aot` is "bytecode to wasm", and nothing in `src/` or
+`lib/` emits IR. `:to :llvm` refuses.
+
+The distinction matters because the refusal in `cli/src/main.rs` compounds it:
+`"llvm" | "native"` is ONE match arm for two different targets, refused with a
+reason — "emitting a native artifact needs a linker" — that applies only to the
+second. Emitting IR is writing a `.ll` or `.bc` file and needs no linker. The
+real blocker for `:to :llvm` is that no IR emitter exists. The JVM and CLR ports are the rest of this document; see
 `jvm-runtime` and `clr-runtime`.
 
 ### What was decided

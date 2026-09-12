@@ -44,3 +44,7 @@ sdks/*/node_modules/
 runtimes/jvm/classes/
 runtimes/clr/*/bin/
 runtimes/clr/*/obj/
+
+# Agent worktrees, created inside the repo by the Agent tool. Untracked and
+# large -- a `git add -A` would otherwise stage a whole second checkout.
+.claude/worktrees/
