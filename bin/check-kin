@@ -81,7 +81,12 @@ verified=0
 # output reorders between runs cannot be diffed.
 _kin_jobs=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 _kin_out=$(mktemp "${TMPDIR:-/tmp}/check-kin.XXXXXX")
-printf '%s\n' kin/*.kin | xargs -P "$_kin_jobs" -I@ sh -c '
+# `-n1`, NOT `-I@`. `-I` substitutes its placeholder in EVERY argument that
+# follows, and this repository's own path contains `@3sln` -- so the moment an
+# `@` appears in the script below, or in a path handed to it, xargs rewrites it
+# into a filename. It is correct today only because nothing here happens to
+# contain one. `-n1` appends the argument instead, with no substitution at all.
+printf '%s\n' kin/*.kin | xargs -P "$_kin_jobs" -n1 sh -c '
   src="$1"
   name=$(basename "$src" .kin)
   if [ ! -f "kin/$name.drivers" ]; then
@@ -100,7 +105,7 @@ printf '%s\n' kin/*.kin | xargs -P "$_kin_jobs" -I@ sh -c '
     echo "  FAIL $name does not agree across targets"
     echo "$out" | tail -5 | sed "s/^/       /"
   fi
-' _ @ >> "$_kin_out" 2>&1
+' _ >> "$_kin_out" 2>&1
 sort "$_kin_out"
 verified=$(ls kin/*.kin | wc -l | tr -d ' ')
 # AN `--expect` SECTION IS THE OTHER HALF, counted rather than merely
