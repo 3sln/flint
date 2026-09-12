@@ -436,7 +436,10 @@ if ! ./bin/check-llvm > /tmp/flint-llvm.out 2>&1; then
   cat /tmp/flint-llvm.out
   fail "bin/check-llvm"
 fi
-grep -E '^ {4}[a-z]+:' /tmp/flint-llvm.out
+# `sed -n ...p`, not `grep`: under `set -e` a grep that matches nothing exits 1
+# and ends the suite with no message at all, which would turn a change to
+# check-llvm's output format into a silent abort here.
+sed -n 's/^    \([a-z]*:\)/  \1/p' /tmp/flint-llvm.out
 
 ls -l target/release/flint | awk '{printf "    binary %.1f MB\n", $5/1048576}'
 

@@ -4668,6 +4668,34 @@ called `op` does this want?"
 Both `.ll`s in that check come from ONE program, `[perf]` against `[size]`, so
 a difference is the emitter and cannot be anything else.
 
+**And check 1 could not fail when it was written.** It was
+
+    head -c 4 "$f" | od -An -c | grep -q 'a s m'
+
+and `od -c` pads every byte to a three-character column, so a wasm module
+renders as `\0   a   s   m` and that pattern never matched anything. The one
+guarantee being carried forward from the assertion this replaces was carried by
+a grep that could only pass — `checks`'s vacuous gate, and the shape
+AGENTS.md §5 describes: no error, no warning, and a green suite, which is what
+a working check also produces.
+
+It is now four hex bytes against `0061736d`, and it is PROBED rather than
+reasoned about, twice: `selftest` runs before anything else and requires the
+comparison to tell a real wasm header from a real `.ll` first line, both arms;
+and by hand, the whole script with `:to :llvm` rewritten to `:to :wasm` and
+nothing else changed, so `flint` really does write a wasm module under a `.ll`
+name — it fails with "arith.perf.ll is a wasm module, not LLVM IR", against an
+unmodified control that passes.
+
+The gas comparison was wrong first too, and in a way that reads exactly like an
+emitter bug: the interpreted arm reported 104 steps against the compiled arm's
+104 652. Nothing was miscounted. With no gas limit the interpreter runs
+`NoBudget`, whose `tick` is a constant the optimiser deletes along with the
+counter (`resource-limits`), while compiled code charges through `aot_*`
+regardless — the two arms were not comparable, and a limit is what turns
+counting on. That is AGENTS.md §3's "state what each arm does end to end"
+arriving as a number that looked like a finding.
+
 ### Open, and needing sign-off
 
 * **Whether `nativeabi/` is where the archive belongs.** It is a fifth crate

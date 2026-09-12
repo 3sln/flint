@@ -34,8 +34,27 @@ fail() { echo; echo "FAILED: $1"; exit 1; }
 command -v clang >/dev/null 2>&1 \
   || fail "clang is not on PATH: linking the emitted IR is what it is for"
 
+# The first four bytes, as hex. A wasm module's `\0asm` is `0061736d`.
+magic_of() { head -c 4 "$1" | od -An -t x1 | tr -d ' \n'; }
+
 D=/tmp/flint-llvm
 rm -rf "$D" && mkdir -p "$D"
+
+# THE GUARD IS PROBED, not reasoned about. A check on an artifact that is
+# always the right shape is indistinguishable from no check at all until the
+# day it is not (AGENTS.md 5), so this hands it a real wasm header and a real
+# `.ll` first line and requires it to tell them apart. BOTH arms, because one
+# of them passing is also what a broken guard looks like.
+selftest() {
+  printf '\0asm\1\0\0\0' > "$D/probe-wasm"
+  [ "$(magic_of "$D/probe-wasm")" = 0061736d ] \
+    || fail "self-test: a wasm module was not recognised as one, so the check below is vacuous"
+  printf '; flint program, as LLVM IR.\n' > "$D/probe-ll"
+  [ "$(magic_of "$D/probe-ll")" != 0061736d ] \
+    || fail "self-test: LLVM IR was mistaken for wasm"
+  rm -f "$D/probe-wasm" "$D/probe-ll"
+}
+selftest
 
 # Straight-line arithmetic in a loop -- the specialised integer ops inline, and
 # the back edge that is the one preemption point in compiled code.
@@ -117,9 +136,15 @@ for n in $PROGS; do
     # IT IS IR, AND IT IS NOT WASM. A `.ll` beginning with the wasm magic would
     # mean `:to :llvm` had quietly become `:to :wasm`, which is exactly what the
     # refusal that used to live here was protecting against.
-    if head -c 4 "$D/$n.$k.ll" | od -An -c | grep -q 'a s m'; then
-      fail "$n.$k.ll is a wasm module, not LLVM IR"
-    fi
+    #
+    # HEX, not `od -An -c`. The first version of this grepped that output for
+    # `a s m` and could never match, because `od -c` pads every byte to a
+    # three-character column and the magic renders as `\0   a   s   m`. It was
+    # a guard that could only pass -- AGENTS.md 5's failure mode, in the very
+    # check written to catch that failure -- so `selftest` above now feeds it a
+    # real wasm module and requires it to fire.
+    [ "$(magic_of "$D/$n.$k.ll")" != 0061736d ] \
+      || fail "$n.$k.ll is a wasm module, not LLVM IR"
     head -1 "$D/$n.$k.ll" | grep -q '^; flint program, as LLVM IR' \
       || { head -3 "$D/$n.$k.ll"; fail "$n.$k.ll does not look like flint's LLVM IR"; }
 
