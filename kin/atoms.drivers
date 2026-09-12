@@ -327,3 +327,85 @@ namespace Flint.Rt {
         o.Append("starved=").Append(Val.IsNil(NewAtom(rt, 1)) ? 1 : 0);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+atom=17 reset=34/34 cas=11/51 vol=102 delay=30583/30583/ran=1/cleared=1 threw=1/unforced=1 bad=[cannot deref a string][not an atom: a string][not an atom: a delay] starved=1
+--expect-why
+DERIVED from `atoms.kin` against the driver's fixture. The numbers are the
+fixture's own hex constants in decimal, so they are worth naming once:
+
+  0x11 = 17   0x22 = 34   0x33 = 51   0x55 = 85   0x66 = 102   0x7777 = 30583
+
+  atom=17         `new-atom` puts its argument in slot 0 and NIL in slot 1;
+                  `deref` of a TY_ATOM returns slot 0. 17 and not 65535 (NIL),
+                  which is what slot 1 holds and what an off-by-one reads.
+
+  reset=34/34     `reset-atom` answers WHAT IT SET, and the atom then holds it.
+                  Both halves are printed because they are different claims: a
+                  version that returned the OLD value would print `17/34`.
+
+  cas=11/51       THE PRIMITIVE `swap!` IS BUILT FROM, and all three fields
+                  matter.
+                  1st `1`  the atom holds 0x22 and the expectation is 0x22, so
+                           the swap happens and the answer is TRUE.
+                  2nd `1`  the SECOND call offers the SAME stale expectation
+                           0x22 against a slot that now holds 0x33, so it must
+                           answer FALSE.
+                  51       and it must have changed NOTHING: the atom still
+                           holds 0x33 from the first call, not 0x44 from the
+                           refused one. A compare-and-set that writes before
+                           testing prints `10/68`, and the header says why that
+                           matters -- two threads inside a read-modify-write
+                           lose updates SILENTLY.
+
+  vol=102         a VOLATILE takes the same `reset-atom` and `deref` paths as
+                  an atom, so `is-resettable` must accept TY_VOLATILE as well
+                  as TY_ATOM. The slot starts at 0x55 and is reset to 0x66, so
+                  102 rather than 85 also says the reset reached it.
+
+THE DELAY IS THE INTERESTING ONE, and its four fields are four separate
+properties of "runs its thunk once":
+
+  30583/30583     both derefs answer the thunk's result. The second must come
+                  from the CACHE, which is the next field.
+  ran=1           the fixture's `invoke-roots` counts its calls. 1, not 2: the
+                  second deref found slot 0 nil and returned slot 1 instead.
+  cleared=1       and slot 0 IS nil afterwards -- the source clears the thunk
+                  BEFORE storing the result, so a forced delay holds no
+                  reference to the code that produced it. That is both a
+                  memory property and the mechanism for `ran=1`: the cleared
+                  slot is how the next deref knows not to run again.
+
+  threw=1         a thunk that throws: `is-thrown` is checked after
+                  `invoke-roots` and the answer is NIL.
+  unforced=1      AND the delay is left UNFORCED -- slot 0 still holds the
+                  thunk. So the next deref tries again rather than caching a
+                  failure as though it were a value. The order in the source
+                  is what makes this true: the two `set-slot`s come after the
+                  throw check, so the early return skips both. A source that
+                  cleared first would print `unforced=0` and every later deref
+                  of that delay would answer the NIL left in slot 1.
+
+THE THREE REFUSAL MESSAGES are compared as text, which is the whole reason
+this source exists: the header records that Rust raised messages that did not
+name the value while the ports did, and `conform` cannot see a message because
+it diffs answers.
+
+  [cannot deref a string]     `deref` of a TY_STR: not atom, not volatile, not
+                              delay, so it falls past the heap block to the
+                              throw. The noun comes from `describe`.
+  [not an atom: a string]     `reset-atom` of the same string -- a DIFFERENT
+                              prefix from the same value, so the two messages
+                              are not interchangeable.
+  [not an atom: a delay]      `compare-and-set-atom` of a DELAY. A delay is
+                              heap, is a box, and is still refused, because it
+                              has no set operation -- the header's "reset! on
+                              one would be undoing the only guarantee it
+                              makes". This is the field that says
+                              `is-resettable` excludes TY_DELAY rather than
+                              accepting anything box-shaped.
+
+Note the spacing is part of the assertion: `cannot deref ` and `not an atom: `
+each end in a space before the noun, so a missing separator shows as
+`cannot derefa string` rather than passing.
+
+  starved=1       `new-obj` refusing gives NIL, not a half-built atom.

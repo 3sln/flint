@@ -47,3 +47,38 @@ fn main() {
             + " " + IndexOf(0x0F0F0F0F, 1 << 16)
             + " " + IndexOf(0, 1));
     }
+--expect
+1 0 0 2 | 2 4 2147483648 | 31 8 0
+--expect-why
+DERIVED BY HAND from `hamt.kin`, not pasted from a run. The three targets
+agreeing proves they were translated alike; only a number worked out
+independently says the source is RIGHT.
+
+  hash-mask h shift = (h >>> shift) & 31          -- LOGICAL shift
+  bitpos    h shift = 1 << hash-mask h shift
+  index-of  map bit = popcount (map & (bit - 1))
+
+h = 0x80000001, the hash whose top bit is set.
+
+  hash-mask  0: 0x80000001 & 31              = 1
+  hash-mask  5: 0x80000001 >>> 5  = 0x04000000, low five bits  = 0
+  hash-mask 25: 0x80000001 >>> 25 = 0b1000000 = 64, & 31       = 0
+  hash-mask 30: 0x80000001 >>> 30 = 0b10                       = 2
+
+THE FOURTH IS THE ONE THAT MATTERS. Arithmetically shifted, 0x80000001 >> 30
+is 0xFFFFFFFE, whose low five bits are 30 -- a DIFFERENT SLOT, so a map built
+that way loses entries rather than slowing down. `2` is the number that
+distinguishes the two, and `30` is what a wrong source would say here in all
+three languages at once.
+
+  bitpos h 0            = 1 << 1  = 2
+  bitpos h 30           = 1 << 2  = 4
+  bitpos 0xF8000000 27  = 1 << 31 = 2147483648
+
+The last prints UNSIGNED: `I32` emits `u32` in Rust (`kgen/rt/hamt.rs` says
+`pub fn hash_mask(h: u32, ...)`), and the Java and C# drivers mask with
+`& 0xFFFFFFFFL` to print the same digits rather than -2147483648.
+
+  index-of 0xFFFFFFFF (1<<31) = popcount 0x7FFFFFFF = 31
+  index-of 0x0F0F0F0F (1<<16) = popcount 0x00000F0F = 8
+  index-of 0 1                = popcount 0          = 0

@@ -173,3 +173,62 @@ fn main() {
         }
         System.Console.WriteLine(o.ToString());
     }
+--expect
+str=a string sym=a symbol kw=a keyword cons=a list empty=an empty list lazy=a lazy seq vec=a vector vecseq=a vector seq range=a range amap=an array-map hmap=a hash-map set=a set entry=a map entry closure=a function native=a builtin tvec=a transient vector tmap=a transient map tset=a transient set rope=a rope bytes=a byte string record=a record atom=an atom var=a var delay=a delay regex=a regex multi=a multimethod reduced=a reduced exinfo=an ex-info unknown=object type 99 unknown2=object type 200 nil=nil true=a boolean false=a boolean int=an integer dbl=a double istr=a string ikw=a keyword odd=an unknown immediate
+--expect-why
+DERIVED by reading `describe-literal`'s arms off `nouns.kin` and pairing each
+with the tag the driver's table builds. These are STRING LITERALS in the
+source, so the derivation is a transcription rather than an arithmetic -- but
+it is the transcription that matters, because the header records that this
+whole file exists to stop three runtimes saying different things about the
+same value, and `conform` cannot see a message.
+
+THE TWENTY-EIGHT KNOWN TAGS map to the twenty-eight literals above, in the
+order the driver lists them. The articles are part of the answer and not
+decoration: the source's own doc says every call site reads
+`"seq over " + describe(v) + " ..."`, so `an empty list`, `an array-map`,
+`an atom` and `an ex-info` take "an" and the rest take "a". A literal with the
+wrong article is a wrong answer here, checked byte-for-byte.
+
+Four of them are worth naming because they are not the tag's name:
+
+  TY_CLOSURE   -> "a function"          not "a closure"
+  TY_NATIVEFN  -> "a builtin"           not "a native fn"
+  TY_BYTES     -> "a byte string"       not "bytes"
+  TY_MAPENTRY  -> "a map entry"         two words, not "a mapentry"
+
+THE TWO UNKNOWN TAGS are the only arm that BUILDS a string. Tags 99 and 200
+are in no arm, so `describe-literal` answers the empty literal and `describe`
+falls through to `str-cat "object type " (ty ...)`:
+
+  unknown=object type 99   unknown2=object type 200
+
+Both are here because 200 exceeds a signed byte: the fixture's type store is
+`u8` in Rust and `int` on the ports, and a sign-extending read would print
+`object type -56`. `str-cat` is the source's one variadic call, so this also
+says the number is formatted as a number rather than as a character.
+
+THE EIGHT IMMEDIATES exercise the arms BEFORE the heap test, in source order:
+
+  nil=nil                    the `nil?` arm, first, and the only answer with
+                             no article -- `nil` is not "a nil".
+  int=an integer             `is-fixnum`.
+  dbl=a double               `is-double`.
+  true=a boolean             `== TRUE`, and
+  false=a boolean            `== FALSE` -- the SAME phrase from two arms, so
+                             both are printed; dropping either arm shows here
+                             and nowhere else.
+  istr=a string              inline string, and it must read the same as the
+  ikw=a keyword              heap `str=a string` above; likewise `ikw` against
+                             `kw=a keyword`. That equality is the point: the
+                             source's header says these once said "an inline
+                             keyword", which leaks a representation the guest
+                             cannot see. Four fields on this line assert the
+                             tier is INVISIBLE, and they do it by being equal
+                             in pairs.
+  odd=an unknown immediate   0xF500 satisfies none of the immediate
+                             predicates AND fails `is-heap`, so it reaches the
+                             `(not (is-heap v))` arm. Without that arm it would
+                             fall into the heap block and index the type array
+                             at 62720 -- out of bounds on a 4000-entry fixture.
+                             This is the field that says the guard is there.

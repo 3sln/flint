@@ -344,3 +344,63 @@ fn main() {
         o.Append("older=").Append(VecCount(rt, older)).Append(" v=").Append(VecCount(rt, v)).Append(' ');
         System.Console.WriteLine(o.ToString());
     }
+--expect
+1:cnt=1,sh=5,toff=0 32:cnt=32,sh=5,toff=0 33:cnt=33,sh=5,toff=32 1024:cnt=1024,sh=5,toff=992 1025:cnt=1025,sh=5,toff=1024 2048:cnt=2048,sh=10,toff=2016 2049:cnt=2049,sh=10,toff=2048 | final cnt=2100 shift=10 wrong=0 older=2101 v=2100
+--expect-why
+DERIVED BY HAND from `vecwrite.kin`, working the trie arithmetic out rather
+than reading a run. Every snapshot is printed AFTER conjing element `i`, so
+the label `i+1` is the new count and `cnt` must equal it.
+
+THE THREE RULES `vec-conj` TURNS ON.
+
+  tail-len = cnt - tail-off v,   tail-off = 0 below 32, else ((cnt-1)>>>5)<<5
+  tail-len < 32          -> copy the tail one longer; SHIFT UNCHANGED
+  tail-len = 32          -> the tail becomes a leaf, and then
+      overflow = (cnt >>> 5) > (1 << shift)
+        true  -> new root, child 0 the old root, child 1 a `new-path`,
+                 shift += 5
+        false -> `push-tail` into the existing root, shift unchanged
+
+SNAPSHOT BY SNAPSHOT, from an empty vector at shift 5.
+
+  i=0    cnt was 0, tail-len 0 -> room. cnt=1, sh=5, tail-off(1)=0
+  i=31   cnt was 31, tail-off 0, tail-len 31 -> room. cnt=32,
+         tail-off(32) = ((32-1)>>>5)<<5 = 0. STILL ZERO: 32 elements is one
+         full tail and an empty trie, and a `<=`/`>>>` slip prints 32 here.
+  i=32   cnt was 32, tail-len 32 -> the tail goes in. overflow?
+         (32>>>5)=1 > (1<<5)=32 -- no. So `push-tail`, shift stays 5.
+         cnt=33, tail-off(33) = (32>>>5)<<5 = 32.
+  i=1023 cnt was 1023, tail-off ((1022)>>>5)<<5 = 31<<5 = 992, tail-len 31
+         -> room. cnt=1024, tail-off(1024) = (1023>>>5)<<5 = 992.
+  i=1024 cnt was 1024, tail-len 1024-992 = 32 -> the tail goes in. overflow?
+         (1024>>>5) = 32 > (1<<5) = 32 -- NO, the test is strict `>`.
+         THIS IS THE FIELD THE DRIVER'S OWN COMMENT GETS WRONG when it calls
+         1025 "the level change". At 1025 the root becomes exactly FULL --
+         32 leaves of 32 -- and the shift is still 5. `sh=10` here would mean
+         a `>=` overflow test, growing the tree one conj early and leaving
+         child 0 of the new root holding a root that is not full.
+         cnt=1025, sh=5, tail-off(1025) = (1024>>>5)<<5 = 1024.
+
+  THE LEVEL ACTUALLY CHANGES AT i=1056: tail-off(1056) = (1055>>>5)<<5 =
+  32<<5 = 1024, tail-len 32, and (1056>>>5) = 33 > 32, so the root gains a
+  level and the shift becomes 10. Nothing prints there; it is why the next
+  two snapshots say 10.
+
+  i=2047 cnt was 2047, tail-off (2046>>>5)<<5 = 63<<5 = 2016, tail-len 31
+         -> room. cnt=2048, sh=10, tail-off(2048) = (2047>>>5)<<5 = 2016.
+  i=2048 cnt was 2048, tail-len 32 -> the tail goes in. overflow?
+         (2048>>>5) = 64 > (1<<10) = 1024 -- no, so `push-tail` at level 10
+         recurses and hits the ABSENT-CHILD arm, building a fresh subtree
+         with `new-path`. cnt=2049, sh=10, tail-off(2049) = 64<<5 = 2048.
+
+  final  2100 conjes, and no further overflow (the next needs cnt>>>5 > 1024,
+         i.e. past 32768), so cnt=2100 and shift=10.
+
+  wrong=0 re-reads all 2100 elements through `array-for` and `i & 31` and
+  demands element `i` be 0x1000+i. This is the field that catches a wrong
+  `new-path` depth or a wrong `subidx`: a misplaced subtree still counts
+  right, and only reading the elements back says so. Anything but 0 is a
+  vector that lost or reordered elements while reporting the right size.
+
+  older=2101 v=2100 is PERSISTENCE: conjing onto `v` must not touch `v`.
+  `v=2101` would mean `push-tail` wrote the shared spine in place.

@@ -206,3 +206,51 @@ namespace Flint.Rt {
          .Append(" roots=").Append(rt.Mark() == before ? 1 : 0).Append(' ');
         System.Console.WriteLine(o.ToString());
     }
+--expect
+ty=46 tree=1 tailty=44 taillen=8 fill=0 live=1 distinct=1 tail2=1 starved=1 roots=1
+--expect-why
+DERIVED BY HAND from `bytetrans.kin` and the `-head` constants: TY_BYTES 44,
+TY_TBYTES 46, TAIL_CAP 8. `b-transient` writes four slots and every one of
+them is named in the source, so each field below is read off the code rather
+than off a run.
+
+THE HEADER. `b-transient leaf`, where `leaf` is a 7-byte TY_BYTES:
+
+  ty      = 46 = TY_TBYTES. The header is a NEW object of the transient type,
+            not the leaf handed back and not a TY_BROPE.
+  tree    = 1: TB_TREE holds the argument itself, by identity. A transient
+            over `v` starts as `v` plus nothing -- so 0 here would mean it
+            copied or wrapped what the caller passed.
+  tailty  = 44 = TY_BYTES. The tail is an ordinary flat leaf, which is the
+            header's point: "a full tail is already the largest leaf the tree
+            wants", so it can be handed over whole rather than copied.
+  taillen = 8 = TAIL_CAP, allocated at full capacity up front. Not 0 and not
+            7 (the tree's length): the tail's size has nothing to do with what
+            is already in the transient, and an implementation that sized it
+            from `v` would print 7.
+  fill    = 0. The tail is allocated 8 long but EMPTY -- `TB_FILL` is how much
+            of it is live, and it must start at zero however many bytes the
+            allocator left behind in those 8. A non-zero fill here would make
+            the transient claim garbage bytes it never wrote.
+  live    = 1: TB_LIVE is TRUE, so the transient is usable before anything is
+            done to it. `persistent!` is what clears this; construction sets
+            it.
+
+`distinct=1 tail2=1`. A second transient is opened OVER THE FIRST. The two
+header Values must differ (1), and so must their tails (1) -- each call
+allocates its own `TAIL_CAP` leaf. `tail2=0` would mean two transients writing
+into the same open buffer, where appending to one would silently corrupt the
+other. Both are 1, and both are needed: two distinct headers sharing one tail
+would still print `distinct=1`.
+
+`starved=1 roots=1` -- THE REFUSAL, and the reason the doc paragraph on
+`DECISIONS.md#a-vec-of-values-is-not-a-root` is there. With `starve` set the
+fixture's `alloc` returns 0, so the FIRST allocation (the tail) fails:
+  starved = 1: `tail == 0` is caught and NIL is returned, rather than a header
+            pointing at address 0.
+  roots   = 1: the shadow stack is back to exactly where it was. `b-transient`
+            pushed `v` before allocating, and its failure path runs `pop-to
+            base` before answering -- so the mark afterwards equals the mark
+            before. 0 would mean a refused call left a root pushed, which
+            leaks it into whatever runs next and, worse, shifts every later
+            RootIx by one.

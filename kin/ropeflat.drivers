@@ -500,3 +500,103 @@ namespace Flint.Rt {
          .Append("] past=[").Append(Range(rt, tree, 5, 99)).Append("] ");
         System.Console.WriteLine(o.ToString());
     }
+--expect
+mixed=1.2.3.7.8.4.5 flatid=1 inlineid=1 nested=1.2.3.7.8.4.5.9 cached=1 usescache=99 hash=947748900 agrees=1 reshaped=1 usescached=4242 cut=3.7.8.4 whole=1.2.3.7.8.4.5 inner=8 empty=[] past=[4.5]
+--expect-why
+DERIVED BY HAND from `ropeflat.kin`. The bytes are hand-laid small integers so
+they can be read straight off; the hash is worked out with a calculator from
+the rule kin states, not copied from a run.
+
+THE FIXTURE:
+
+  f1   flat    [1, 2, 3]
+  inl  INLINE  [7, 8]        -- no address; `sink-put-run` cannot reach it
+  f2   flat    [4, 5]
+  tree = node(f1, inl, f2)   -> 1 2 3 7 8 4 5
+
+`mixed=1.2.3.7.8.4.5` -- the three tiers in one flatten, in order. The middle
+two bytes are the reason this file waited on the byte side: an inline leaf
+must go through `sink-put-inline`, and a flattener that only knew
+`sink-put-run` would emit `1.2.3.4.5` -- five bytes where there are seven, and
+silently, because nothing else notices a short sink.
+
+`flatid=1 inlineid=1` -- `s-flatten` of a LEAF is the leaf, by identity, on
+both tiers. Kin's doc says that is what makes it safe to call at the door of
+every operation that wants bytes; a copy would print 0 and turn every read of
+a flat string into an allocation.
+
+`nested=1.2.3.7.8.4.5.9 cached=1` -- a node over [tree, [9]]. Eight bytes in
+order, and the second `s-flatten` of the same node answers the SAME value.
+Note what the inner descent does here: `tree` was already flattened above, so
+`s-append` takes its `RP_FLAT` and emits one run instead of re-walking three
+children -- the cache is read on the way down, not only at the top.
+
+`usescache=99` IS THE CACHE BEING USED RATHER THAN MERELY WRITTEN. The probe
+builds a node over [1,2,3] and [4,5] and then POINTS `RP_FLAT` at a string
+holding `99`, which the node's bytes are not. `s-flatten` must answer `99`. A
+version that wrote the cache but recomputed anyway would print `1.2.3.4.5`
+here and look perfectly correct -- and would be the exact defect kin's doc
+describes, every `subs` and `str-index-of` walking the whole rope again before
+its own charge got a say.
+
+`hash=947748900 agrees=1` -- THE HASH OF THE TREE IS THE HASH OF ITS BYTES.
+The leaf rule is Java's `31 * h + b`, and kin's node rule is
+`h(A then B) = h(A) * 31^|B| + h(B)` with the exponent in BYTES. Both sides,
+worked out:
+
+  flat, byte by byte over 1 2 3 7 8 4 5:
+    0 -> 1 -> 33 -> 1026 -> 31813 -> 986211 -> 30572545 -> 947748900
+
+  tree, child by child (pow31(2) = 961, pow31(3) = 29791):
+    f1  [1,2,3] -> 1026,  3 bytes:  h = 0*29791 + 1026      = 1026
+    inl [7,8]   ->  225,  2 bytes:  h = 1026*961 + 225      = 986211
+    f2  [4,5]   ->  129,  2 bytes:  h = 986211*961 + 129    = 947748900
+
+The two routes meet at 947748900, which is `agrees=1`. THE EXPONENT IS WHAT
+THIS PINS: raising 31 to the CODE-POINT count instead of the byte count gives
+the same answer for ASCII and a different one the moment a character is two
+bytes wide -- a bug that would sit invisible until a string with an accent in
+it was used as a map key.
+
+`reshaped=1` -- the same seven bytes cut as [1,2] + ([3,7] + [8,4,5]), which
+splits differently AND at a different depth, and puts the inline leaf in
+another place. Its hash must be the same 947748900. Checked by hand:
+[3,7] -> 100, [8,4,5] -> 7817, inner = 100*29791 + 7817 = 2986917 over 5
+bytes; outer = 33*31^5 + 2986917 = 33*28629151 + 2986917 = 947748900. Without
+this row the hash rule could be self-consistently wrong in any shape-dependent
+way and `agrees` would still be 1.
+
+`usescached=4242` -- `RP_HASH` is set to a fixnum the tree's bytes could not
+produce, and `rope-hash` must return it. The test kin uses is `is-fixnum`, not
+`not nil?`, which is the right one here: a fresh node's RP_HASH is NIL, and a
+legitimate cached hash of ZERO must still count as present. `4242` says the
+slot is consulted before the children are walked.
+
+THE RANGES, over `tree` = 1 2 3 | 7 8 | 4 5 with byte offsets 0..6:
+
+`cut=3.7.8.4` -- bytes [2, 6). Child by child, with `at` the running offset:
+
+  f1   at=0  w=3   at+w = 3 > from = 2, and at < to: klo = from-at = 2,
+                   sub-range [2, 6-0) clamped to the leaf's 3 -> byte 3
+  inl  at=3  w=2   klo = 0 (from is behind at), sub-range [0, 3) clamped
+                   to 2 -> bytes 7, 8, a byte at a time, no address
+  f2   at=5  w=2   klo = 0, sub-range [0, 1) -> byte 4
+                   at becomes 7 >= to, so it returns
+
+Four bytes, cutting the first leaf and the last and taking the middle whole.
+`klo` is computed as `from - at` ONLY when `from > at`, which is kin's guard
+rather than a clamp: `I32` is `u32` in Rust, so `2 - 3` there is not -1 but
+4294967295, and the later "if negative" test would be dead code. Had that
+subtraction wrapped, the inline leaf's sub-range would start at a huge offset
+and contribute nothing -- `3.4` instead of `3.7.8.4`.
+
+`whole=1.2.3.7.8.4.5` -- the full range, the same seven bytes as the flatten,
+by the other route. `inner=8` -- a one-byte window inside an INLINE leaf,
+[1, 2), which is the tier with no address at all.
+
+`empty=[]` -- `from >= to` returns immediately and puts nothing; the brackets
+are in the format string so that "nothing" is visible rather than being an
+absent field. `past=[4.5]` -- [5, 99) is CLAMPED to what exists: f1 and inl are
+skipped without being read (`at + w > from` is false for both), and the last
+leaf contributes its two bytes. A `to` that was trusted rather than clamped
+reads 94 bytes off the end of a 2-byte leaf.

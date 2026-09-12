@@ -334,3 +334,73 @@ namespace Flint.Rt {
         o.Append("gas=").Append(rt.gas).Append(" roots=").Append(rt.roots.Count);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+champ=500=501,502=503,504=505, array=500=501,502=503,504=505, coll=600=601,602=603, set=500,502,504, setam=500,502,504, gas=22 roots=0
+--expect-why
+DERIVED BY HAND by walking `collvec.kin` over the hand-laid heap in `fresh()`.
+Every key and value in that heap is an explicit number, so the printed order IS
+the walk order -- which is what the source calls "THE ORDER IS THE CONTRACT".
+
+THE FIXTURE, read out of `fresh()`:
+
+  map at 10   TY_HASHMAP, count 3, HM_ROOT -> node 100
+  node 100    bmnode, datamap 3 (popcount 2), nodemap 4 (popcount 1)
+              inline pairs (500,501) and (502,503); one child -> node 150
+  node 150    bmnode, datamap 1 (popcount 1), nodemap 0
+              inline pair (504,505)
+  map at 20   TY_ARRAYMAP, count 3, pairs (500,501) (502,503) (504,505)
+  set at 30   S_MAP -> the CHAMP map at 10
+  set at 34   S_MAP -> the array-map at 20
+  map at 40   TY_HASHMAP, count 2, HM_ROOT -> node 400, which is a COLLISION
+              node (its first word is 1, not 0): 2 pairs, (600,601) (602,603)
+
+`champ=500=501,502=503,504=505,`. `node-entries-into` visits a bitmap node's
+INLINE ENTRIES FIRST, in bitmap-index order, and only then descends its
+children. So 500 and 502 come out before 504, which lives one level down.
+That exact sequence is the assertion: a walk that descended before draining the
+inline entries would print `504=505,500=501,502=503,`, which has the same three
+pairs and is a different `seq`. The keys ascend across the level boundary on
+purpose, so "sorted-looking" and "trie order" coincide here only if the walk is
+right.
+
+`array=500=501,502=503,504=505,`. The array-map takes its own arm and walks
+`am-key`/`am-val` by index. IT MUST MATCH THE CHAMP LINE EXACTLY -- the fixture
+stores the same three pairs both ways -- because `seq` of a map cannot depend
+on which representation the map happens to have.
+
+`coll=600=601,602=603,`. The root here is a COLLISION node, so
+`node-entries-into` takes its `not is-bmnode` branch and yields
+`cn-count` = 2 pairs "as stored". Different key range (600s) from every other
+line, so a collision node walked as a bitmap node -- reading its hash word as a
+datamap -- cannot print something that looks plausible.
+
+`set=500,502,504,` and `setam=500,502,504,`. The same two walks with
+`node-keys-into`, which takes the KEY ALONE: "a set is a map from each element
+to itself". Keys only, values 501/503/505 absent, same order, and the CHAMP and
+array-map backings agree. A set walk that emitted values would print the odd
+numbers.
+
+`gas=22` -- THE CHARGING, which the header says the first generated walk got
+wrong by charging NOTHING while no gate noticed. The fixture's `charge_work`
+and `charge_checked` both just add to a counter, so the total is exactly what
+the source asks for:
+
+  champ   charge-checked 3, then charge-work 1 per entry  = 3 + 3  =  6
+  array   charge-checked 3; the ARRAY-MAP ARM HAS NO PER-ENTRY
+          `charge-work` at all                            = 3      =  9
+  coll    charge-checked 2, charge-work 1 x 2             = 2 + 2  = 13
+  set     charge-checked 3, charge-work 1 x 3             = 3 + 3  = 19
+  setam   charge-checked 3, no per-entry charge           = 3      = 22
+
+22, and not 25: the two array-map walks charge only up front. That asymmetry is
+real in the source -- `map-entry-vector`'s TY_ARRAYMAP loop and
+`set-element-vector`'s both omit `charge-work`, where every trie loop has it --
+so 22 is what the code says and 25 is what a reader might assume. Worth a look:
+an array-map is bounded and small, so the up-front charge may well be the whole
+of it by design, but nothing in the file states that.
+
+`roots=0`. Every `mark`/`pop-to` pair balanced, including the ones inside the
+recursive node walks. The accumulator lives in a ROOT across `map-entry` and
+`vec-conj` -- and the fixture's `vec_conj` COPIES into a fresh object, so a
+walk that held the vector in a host local would append to a stale copy and
+print fewer entries than it conj-ed.

@@ -213,3 +213,65 @@ fn main() {
          .Append(Val.IsNil(NewOpaque(rt, label, 1)) ? 1 : 0);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+tagged=10/11.22 opaque=10 ids=1.2 distinct=1 host=900.901 label=55.55 notopaque=0/1 nonheap=0/1 starved=11
+--expect-why
+DERIVED from `opaque.kin` against the driver's fixture. Nothing is pinned: the
+two opaque ids come from the fixture's `next_opaque`, which starts at 1, and no
+heap ADDRESS is printed anywhere on this line -- every number is either a slot
+the source wrote or a predicate's answer.
+
+THE TAGGED FORM. `new-tagged` allocates TY_TAGGED = 36 and writes tag into
+slot 0, form into slot 1, NIL into slot 2.
+
+  tagged=10   it IS tagged and it is NOT opaque. TY_TAGGED 36 and TY_OPAQUE 37
+              are adjacent, so an off-by-one in either predicate flips a digit
+              here; the pair is printed together for exactly that reason.
+  11.22       slots 0 and 1 read back as the fixnums that went in, in that
+              order. 11 and 22 are distinct, so a swapped `set-slot` pair
+              prints `22.11` rather than passing.
+
+THE TWO OPAQUES ARE THE HEADER'S CLAIM -- "an opaque value is its identity",
+and the identity is STORED, not derived from the address.
+
+  opaque=10       opaque yes, tagged no; the mirror of the pair above.
+  ids=1.2         `take-opaque-id` is a counter starting at 1 in this fixture,
+                  and `new-opaque` takes ONE id per value, so the first is 1
+                  and the second is 2. Not `1.1` (an id read without
+                  advancing), not `2.3` (advanced before taking).
+  distinct=1      the two ids differ AS VALUES. This is the property the whole
+                  type exists for: two opaques built from the SAME label (both
+                  `fixnum 55`) must not collapse into one, or a map keyed on
+                  one would answer for the other.
+  host=900.901    slot 2, the host's own id, passed in per value.
+  label=55.55     slot 0, the SAME label for both -- which is what makes
+                  `distinct=1` meaningful rather than trivially true.
+
+`ids` and `host` together also pin the slot ASSIGNMENT: identity in 1, host id
+in 2. Both are fixnums of unrelated magnitudes, so a source that wrote host-id
+into slot 1 would print `ids=900.901`.
+
+THE TWO REFUSALS, and they are refused at different depths:
+
+  notopaque=0/1   asked of the TAGGED form -- a real heap object with three
+                  slots. `opaque-host-id` answers 0 and `opaque-label` answers
+                  nil because `is-opaque` said no, NOT because the slots are
+                  empty: slot 2 of the tagged form is NIL and slot 0 holds
+                  `fixnum 11`. A missing guard would print `notopaque=0/0`,
+                  since it would hand back `fixnum 11` as the label, which is
+                  not nil. So the `/1` is the field that catches it, and the
+                  fixture is laid so the two disagree.
+  nonheap=0/1     asked of a FIXNUM, refused one test earlier by `is-heap`.
+                  Without that, `slot(v, 2)` on a tagged immediate indexes the
+                  heap array by 0xD000...  and is out of bounds.
+
+  starved=11      `new-obj` answers NIL, and BOTH constructors check it. The
+                  header records that this was the asymmetry: "Rust's
+                  `new_opaque` checked and its `new_tagged` did not", so the
+                  first digit is the one that regressed before. `starved=01`
+                  is the failure this field exists to name -- a tagged form
+                  whose three slots were written through a NIL pointer.
+
+WHAT THIS LINE DOES NOT CHECK: the root stack is never printed, so the
+`pop-to base` on either the success or the refusal path is unobserved here.
+`exinfo.drivers` checks that for the same idiom; this fixture does not.

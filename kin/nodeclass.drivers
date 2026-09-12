@@ -172,3 +172,48 @@ fn main() {
         o.Append(" roots=").Append(rt.roots.Count);
         Console.WriteLine(o.ToString());
     }
+--expect
+bm=0 sz=2 0,1,2,2, roots=0
+--expect-why
+DERIVED from `nodeclass.kin`'s two functions read against the five nodes the
+driver lays out by hand. No field here came from a run.
+
+  is-bmnode rt n   = ty(n) == TY_BMNODE
+  node-size-class  = 2 if not a bmnode
+                     2 if nodemap != 0
+                     else popcount(datamap) capped at 2: 0 -> 0, 1 -> 1, _ -> 2
+
+NODE 0 is allocated with TY_COLLNODE = 18, and TY_BMNODE is 16, so
+
+  bm=0   -- 18 != 16
+  sz=2   -- the first early return: "a collision node always holds at least
+            two pairs", so it is MORE without either bitmap being consulted.
+
+That is the load-bearing pair. The collision node's six slots are NIL-filled
+by the fixture's allocator, so its slot 0 and slot 1 read as 0xFFFF, not 0 --
+a `node-size-class` that skipped the `is-bmnode` guard and went straight to
+the bitmaps would popcount 0xFFFF, get 16, and STILL print 2. The `bm=0` field
+is what separates "took the collision path" from "took the bitmap path and got
+the right answer by luck": both would say sz=2, only one says bm=0.
+
+THE FOUR BITMAP NODES walk the size classes in order, EMPTY / ONE / MORE:
+
+  datamap 0, nodemap 0 -> popcount 0      = 0 entries        -> 0
+  datamap 2, nodemap 0 -> popcount 0b10   = 1 entry          -> 1
+  datamap 6, nodemap 0 -> popcount 0b110  = 2 entries        -> 2
+  datamap 0, nodemap 4 -> nodemap != 0, so MORE regardless   -> 2
+
+The last two both print 2 by DIFFERENT routes, which is the point of having
+both: the third reaches 2 through the popcount tail, the fourth through the
+nodemap early return with an EMPTY datamap. A source that forgot the nodemap
+test would popcount 0 for the fourth and answer 0 -- "this node is empty" for a
+node holding a whole sub-trie, and CHAMP collapses an empty node away, so the
+error deletes the subtree rather than misreporting it. `0,1,2,2,` and not
+`0,1,2,0,` is therefore the field that matters most here.
+
+Datamap 2 rather than 1, and 6 rather than 3, so a popcount confused with the
+bitmap VALUE would print 2 and 6 instead of 1 and 2.
+
+roots=0: neither function pushes a root. They read, they do not allocate, so
+the root stack must be exactly as deep after as before -- a leak would show as
+roots=1 or more, and there is nothing here that could legitimately make it so.

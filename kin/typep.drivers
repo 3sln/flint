@@ -169,3 +169,65 @@ fn main() {
         o.Append(IsFn(rt, 0x100 | 16) ? 1 : 0).Append(IsSequential(rt, 0x100 | 8) ? 1 : 0);
         Console.WriteLine(o.ToString());
     }
+--expect
+000101000000000000000000 000010000000000000000000 000111000000000000000000 000000100000000000000000 000000010000000000000000 000000000000000000001000 011000000000000000000000 000000000000001100000000 000000000000000011100000 000000000000000000010000 000000001111110000000000 000000000000000000000111 100000000000000000000000 000000001111111100000000 000000001111111100000000 11
+--expect-why
+DERIVED BY HAND from `typep.kin`'s table and the predicate stubs the driver's
+own `-head` sections define. Nothing was read off a run.
+
+THE FIXTURE'S VALUE SPACE. Each group is `type-p code v` over 24 values in a
+fixed order: eight IMMEDIATES v = 0..7, then sixteen HEAP values 0x100|h for
+h = 1..16, whose tag IS h (`ty(sp, h) = h` in the `-head`). The stubs make
+each immediate answer exactly one predicate:
+
+  0 nil   1,2 bool   3 int   4 double   5 int   6 string   7 keyword
+
+and the sixteen tags are TY_CONS 1, TY_EMPTY_LIST 2, TY_LAZYSEQ 3,
+TY_VECSEQ 4, TY_STRSEQ 5, TY_RANGE 6, TY_VEC 7, TY_MAPENTRY 8, TY_ARRAYMAP 9,
+TY_HASHMAP 10, TY_TABLEREF 11, TY_SET 12, TY_SYM 13, TY_CLOSURE 14,
+TY_NATIVEFN 15, TY_MULTIFN 16.
+
+Immediate predicates test the RAW value, so no heap value (>= 0x100) can
+satisfy one; heap predicates start with `is-heap`, so no immediate can satisfy
+one. Every group is therefore eight bits over the immediates and sixteen over
+the tags, with one side always all zeros -- which is itself the check that no
+arm confuses a tagged pointer for a small integer.
+
+  code  arm              immediates 0..7   tags 1..16 that hit
+   1    is-int           3, 5              --
+   2    is-double        4                 --
+   3    is-number        3, 4, 5           --
+   4    is-string        6                 --
+   5    is-keyword       7                 --
+   6    is-symbol        --                13
+   7    is-bool          1, 2              --
+   8    is-vector-like   --                7, 8
+   9    is-map           --                9, 10, 11
+  10    is-set           --                12
+  11    is-seq           --                1..6
+  12    is-fn            --                14, 15, 16
+  13    nil?             0                 --
+  14    :else -> seq'l   --                1..8
+  15    :else -> seq'l   --                1..8
+
+THE FOUR ARMS WHOSE BITS ARE THE ARGUMENT THIS SOURCE MAKES:
+
+* Code 8 lights tag 8 as well as tag 7. A MAP ENTRY IS A VECTOR -- kin's own
+  comment says all four runtimes said false here. `0000001100000000` over the
+  tags, not `0000001000000000`.
+* Code 9 spans 9..11, so TY_TABLEREF is a map. A row ref answering `false`
+  is the drift the comment records; the third 1 is what says it is repaired.
+* Code 12 lights tag 16. TY_MULTIFN is the latent divergence named in the
+  header -- the ports' arm 12 was closure-or-nativefn, two bits, and kin's
+  `is-fn` is three. `111`, not `110`.
+* Codes 14 and 15 are OUT OF RANGE, so they take `:else` and must equal each
+  other and equal `sequential?`: tags 1..8, which is `is-seq`'s 1..6 PLUS
+  vector and map entry. That is why group 14 differs from group 11 in exactly
+  two bit positions, and an `:else` wired to `is-seq` would make them equal.
+
+THE TRAILING `11` calls the two exported predicates directly at the values the
+table cannot reach from an in-range code: `is-fn` on tag 16 (multifn -- 1, the
+converged answer, and the whole reason this predicate exists in kin) and
+`is-sequential` on tag 8 (map entry -- 1, sequential without being a seq,
+which is what kin's doc says `=` dispatches on). Both are `1`; `10` would mean
+the multifn arm was dropped and `01` that map entries lost their category.

@@ -201,3 +201,87 @@ fn main() {
         o.Append("| setnode n").Append(BnNode(rt, z, 0)).Append(" roots=").Append(rt.roots.Count);
         Console.WriteLine(o.ToString());
     }
+--expect
+dm=11 nm=4 10:11 20:21 80:81 sub=44 | dm=9 10:11 80:81 | copy 80:99 | through true 5:66 | promo dm=3 nm=12 10:11 20:21 n44 n77 | demo dm=11 nm=4 10:11 20:21 80:81 n44 | setnode n55 roots=0
+--expect-why
+DERIVED BY HAND from `copies.kin`. These six functions are pure SLOT
+ARITHMETIC, and the header says why it matters: "an off-by-one in the slot
+arithmetic here is a map that loses an entry". So every index below is worked
+out from the bitmaps rather than observed.
+
+THE STARTING NODE. `bn-new 0b1001 0b0100`, then entries (10,11) and (80,81)
+and one sub-node 44:
+
+  datamap 0b1001 = bits 1 and 8   -> two inline pairs
+  nodemap 0b0100 = bit 4          -> one sub-node
+  index-of bitmap bit = popcount(bitmap & (bit - 1))
+
+INSERT, `dm=11 nm=4 10:11 20:21 80:81 sub=44`. Inserting at bit 2:
+  at = index-of(0b1001, 0b0010) = popcount(0b1001 & 0b0001) = 1
+  new datamap = 0b1001 | 0b0010 = 0b1011 = 11, nodemap unchanged at 4
+  k = 0 is below `at`, so it stays at 0; k = 1 is at or above, so it moves to 2
+  the new pair goes in at 1
+BIT 2 SORTS BETWEEN THE TWO EXISTING PAIRS on purpose -- that is the whole
+test. The printed order `10:11 20:21 80:81` is ASCENDING BY BIT, which is the
+CHAMP invariant: `index-of` derives a slot from the bitmap, so a pair stored
+out of order is a lookup that misses. Appending instead of inserting would give
+`10:11 80:81 20:21`; failing to shift would give `10:11 20:21` with 81 lost.
+`sub=44` says the node half was carried across untouched.
+
+REMOVE, `dm=9 10:11 80:81`. Removing bit 2 from the node just built:
+  at = index-of(0b1011, 0b0010) = popcount(0b1011 & 0b0001) = 1
+  new datamap = 0b1011 XOR 0b0010 = 0b1001 = 9
+  k = 0 stays; k = 1 is SKIPPED (`continue`); k = 2 shifts DOWN to 1
+So the pair that was pushed up by the insert comes back down, and the result is
+the original node's contents exactly. Insert-then-remove being an identity on
+both the bitmap and the payload is what makes the pair of them checkable at
+all.
+
+`| copy 80:99`. `bn-copy-set-value` with `edit` = NIL: not owned, so it takes
+the copying path -- allocate, copy both halves, then overwrite index 1's VALUE.
+The key at 1 is still 80 and only the value became 99. `99:99` would mean it
+wrote the key slot too; `80:81` would mean the overwrite went to the wrong
+index.
+
+`| through true 5:66` -- THE OWNED PATH. A node whose BN_EDIT slot holds the
+same token the caller passed is written through IN PLACE:
+  `true` -- the answer is the SAME Value, not a copy. That identity is the
+  whole point of a transient; `false` here means every transient insert
+  allocates and the type buys nothing.
+  `5:66` -- the key is untouched and the value is the new one, so writing
+  through is not an excuse for writing the wrong slot.
+The guard is `edit is not nil AND the node's BN_EDIT equals it`, and the
+copying case two fields up is the same function with a nil edit -- so the two
+fields together show the branch is on ownership rather than always taken.
+
+`| promo dm=3 nm=12 10:11 20:21 n44 n77` -- BOTH BITMAPS AND BOTH HALVES
+REINDEX, which is what the doc for `bn-inline-to-node` claims. Promoting bit 8
+of the three-entry node:
+  at-entry = index-of(0b1011, 0b1000) = popcount(0b1011 & 0b0111) = 2
+  at-node  = index-of(0b0100, 0b1000) = popcount(0b0100 & 0b0111) = 1
+  datamap  = 0b1011 XOR 0b1000 = 0b0011 = 3   (the pair LEAVES)
+  nodemap  = 0b0100 |   0b1000 = 0b1100 = 12  (and JOINS the node half)
+  entries: k = 0, 1 keep their slots; k = 2 is skipped
+  nodes:   j = 0 is below at-node so stays at 0; the new sub-node goes in at 1
+`n44 n77` is the assertion on the node half: the existing child keeps position
+0 and the promoted one lands at 1. `n77 n44` would mean the two ends of the
+descending node region were confused -- and `bn-node` counts DOWN from the end
+of the object, so that mistake is easy and silent.
+
+`| demo dm=11 nm=4 10:11 20:21 80:81 n44` -- and back. `bn-node-to-inline` with
+bit 8, key 80, value 81:
+  at-entry = index-of(0b0011, 0b1000) = popcount(0b0011 & 0b0111) = 2
+  at-node  = index-of(0b1100, 0b1000) = popcount(0b1100 & 0b0111) = 1
+  datamap  = 0b0011 | 0b1000 = 0b1011 = 11, nodemap = 0b1100 XOR 0b1000 = 4
+  the two surviving entries keep slots 0 and 1, the restored pair goes to 2,
+  node j = 0 stays and j = 1 is skipped
+This lands EXACTLY back on the node the insert produced -- dm 11, nm 4, the
+same three pairs in the same order, the same single child 44. Promote and
+demote being inverses is the check; either one alone could be self-consistently
+wrong.
+
+`| setnode n55 roots=0`. `bn-copy-set-node` with a nil edit copies and then
+overwrites node 0 with 55 -- so the 44 that was copied in is replaced, and
+`n44` here would mean the overwrite never happened. `roots=0` is every
+`mark`/`pop-to` balanced across all six calls, including the early `return NIL`
+paths that were not taken.

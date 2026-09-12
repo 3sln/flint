@@ -294,3 +294,71 @@ namespace Flint.Rt {
         long r = t();
         return rt.thrown.Length == 0 ? Show(rt, r) : rt.thrown;
     }
+--expect
+add=i5 sub=i4 mul=i42 maxinc=ArithmeticException/integer overflow mindec=ArithmeticException/integer overflow maxok=i9223372036854775806 minok=i-9223372036854775807 mulmax=ArithmeticException/integer overflow mulmin=ArithmeticException/integer overflow minneg=ArithmeticException/integer overflow negmin=ArithmeticException/integer overflow mulok=i9223372036854775807 mulzero=i0 dbl=d4 mixed=d6 notnum=ClassCastException/not a number eqii=true nei=false eqid=true eqbad=false eqmin=true hi=24298 hd=53427 hbad=24301
+--expect-why
+DERIVED BY WORKING THE GUARDS, not pasted. The source's own point is that
+each host's checked-arithmetic idiom decided these edges for itself and the
+three disagreed; three targets agreeing now is the thing that got FIXED, so
+it is not evidence about the answer.
+
+THE ORDINARY CASES first, as a control: 2+3=5, 7-3=4, 6*7=42. If the edges
+below all say "overflow" because the guard is stuck on, these three say so.
+
+THE EDGES. boxes = [MIN, MAX, 2], so `min`, `max` and `two` arrive as BIGINTs
+and are found through `is-int`/`i64-of` rather than `is-fixnum`.
+
+  maxinc  MAX+1    y>0, MAX > I64_MAX-1              -> overflow
+  mindec  MIN-1    y>0, MIN < I64_MIN+1              -> overflow
+  maxok   MAX+(-1) y<0, MAX < I64_MIN+1 is FALSE     -> 9223372036854775806
+  minok   MIN-(-1) y<0, MIN > I64_MAX-1 is FALSE     -> -9223372036854775807
+
+`maxok` and `minok` ARE THE LOAD-BEARING PAIR. A guard that refuses whenever
+an operand is MAX or MIN passes every "overflow" field above and fails these
+two, and the two answers are the exact neighbours of the bounds -- reachable
+from the bound only by getting the arithmetic right. The probe's `integer`
+spills past 2^59 to a BIGINT precisely so these print in full rather than
+agreeing on a truncation.
+
+  mulmax  MAX*2    x,y>0: MAX > I64_MAX/2            -> overflow
+  mulmin  MIN*2    x<0,y>0: MIN < I64_MIN/2          -> overflow
+  mulok   MAX*1    x,y>0: MAX > I64_MAX/1 is FALSE   -> 9223372036854775807
+  mulzero MIN*0    the zero arm, before any quadrant -> 0
+
+`minneg`/`negmin` ARE THE SAME PRODUCT BOTH WAYS ROUND, and MIN*-1 is the
+pair with no positive answer. It is not special-cased; it falls out of the
+both-negative quadrant `y < I64_MAX/x`:
+
+  minneg  x=MIN, y=-1: I64_MAX/MIN = 0,     -1 < 0     -> overflow
+  negmin  x=-1, y=MIN: I64_MAX/-1 = -MAX,  MIN < -MAX  -> overflow
+
+NOTE A DISCREPANCY IN THE SOURCE'S PROSE, recorded rather than acted on: the
+`mul-overflows` docstring illustrates MIN*-1 as "`I64_MAX / -1` is `-I64_MAX`,
+and `MIN < -I64_MAX` is true", which is the `negmin` ordering. With the
+arguments the other way round the code divides `I64_MAX` by MIN and compares
+-1 against 0. Both orderings are correct and both refuse, which is why the
+driver now asks BOTH -- the docstring describes only one of them.
+
+THE DOUBLE ARM. The fixture's toy double holds `d*2` in eight bits:
+dbl(3)=1.5, dbl(5)=2.5, so `dbl` is 4.0, printed `d4`; dbl(4)=2.0 times 3
+is 6.0, printed `d6`. `mixed` is the promotion -- an int operand with a double
+one does NOT take the integer arm.
+
+`notnum` names the class: `+` on a non-number is a mistake, so it throws.
+
+`==` ACROSS THE TIERS is the difference from `=`. `eqid` asks `(== 2 2.0)`
+and must be TRUE, where `(= 1 1.0)` is false in Clojure and here -- that one
+field is the whole reason `num-eq` is not an arm of `=`. `eqbad` must be
+FALSE and NOT a throw: `==` on a non-number is a question with an answer.
+
+THE HASHES, through the probe's deliberately trivial shims -- `hash-long n`
+is `n ^ 0x5eed` and `hash-double d` is `(long)d ^ 0xd0b1` -- so which TIER was
+taken is legible in the number:
+
+  hi   = 7 ^ 0x5eed = 0x5eea = 24298     (integer tier)
+  hd   = 2 ^ 0xd0b1 = 0xd0b3 = 53427     (double tier, on dbl(4) = 2.0)
+  hbad = 0 ^ 0x5eed = 0x5eed = 24301     (not a number at all: hash-long 0)
+
+`hd` is the discriminating one. Had `num-hash` sent the double through
+`hash-long`, it would print 2 ^ 0x5eed = 24303 -- a different number in the
+same range, which is why the two shims use different constants.

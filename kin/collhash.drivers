@@ -283,3 +283,59 @@ namespace Flint.Rt {
          .Append(" roots=").Append(rt.roots.Count);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+champ=-1010270229 array=-1010270229 same=1 again=1 rehashed=0 set=419401321 coll=1 gas=13 roots=0
+--expect-why
+DERIVED BY TRANSCRIBING `collhash.kin` INTO PYTHON and running it against this
+file's fixture -- a FOURTH implementation, in a language none of the three
+targets is. The stub arithmetic is the driver's (`hash-value v` is
+`v * 2654435761`, `ordered-step` is `31a + h`, `mix-coll-hash` is
+`h ^ (n * 0x9e3779b9)`), so the numbers are a property of the WALK.
+
+  champ=-1010270229  the CHAMP tier: two inline entries (500,501) and
+                     (502,503) in the root, and (504,505) one level down
+                     behind the nodemap.
+  array=-1010270229  the ARRAY-MAP tier holding the SAME three pairs flat.
+  same=1             AND THEY MUST BE THE SAME NUMBER. That is the whole
+                     point: the two tiers are `=` to each other, so a map
+                     keyed by one has to be found by the other. A recursive
+                     trie walk gives the same answer as a linear scan only
+                     because `unordered-step` is a wrapping ADD -- commutative
+                     and associative -- which is what lets a subtree be summed
+                     on its own and added to its parent's.
+
+  again=1 rehashed=0 MEMOISED. The second ask must not hash a single value
+                     again, and `rehashed` counts `hash-value` calls: exactly
+                     0, not 3. The counter is what tells a memoised answer
+                     from a recomputed one that happens to match.
+
+  set=419401321      a set IS its backing map, so it sums the KEYS -- 500,
+                     502, 504 -- and ignores the values that repeat them. It
+                     must NOT equal the map hash above, and it does not: the
+                     map folds pairs through `entry-hash`.
+
+  coll=1             two maps whose only node is a COLLISION node, holding
+                     the same two pairs in OPPOSITE ORDER: (600,601),(602,603)
+                     against (602,603),(600,601). Equal sets of entries, so
+                     equal hashes. A fold that was order-sensitive -- an
+                     `ordered-step` reached for by mistake -- would fail here
+                     and nowhere else on this line.
+
+  gas=13             THE METERING, and the reason it is a field at all: the
+                     first version of this walked WITHOUT CHARGING, which made
+                     hashing a two-hundred-thousand-entry map free to
+                     untrusted code, and nothing caught it -- `test/gas.clj`
+                     covers `hash` of a VECTOR and `=` of two vectors, and
+                     neither comes through here. 13 = 3 (champ: two inline
+                     entries plus one in the child) + 3 (array-map, charged in
+                     one go by count) + 3 (set: three keys) + 2 + 2 (the two
+                     collision nodes). One unit per ENTRY, which is what
+                     `map-for-each` charged before this file existed. A walk
+                     that charged per NODE would print 8; one that charged
+                     nothing would print 0.
+
+  roots=0            the shadow stack is back where it started. `hash-value`
+                     allocates -- hashing a row ref materialises it as a map --
+                     so every node is pushed and re-read across the call, and
+                     a leaked root here is a slow corruption rather than a
+                     wrong answer.

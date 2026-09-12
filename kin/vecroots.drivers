@@ -200,3 +200,44 @@ fn main() {
          .Append(" after=").Append(rt.Mark()).Append(' ');
         System.Console.WriteLine(o.ToString());
     }
+--expect
+v3=[3:65:66:67] v0=[0] v2=[2:66:67] depth=3 entry=[2:107:118] after=0
+--expect-why
+DERIVED BY HAND from `vecroots.kin` against the mock vector this fixture
+defines, not pasted from a run. `show` prints `[count:e0:e1:...]` in DECIMAL,
+so the fixture's hex pushes come back as digits:
+
+  0x41 = 65   0x42 = 66   0x43 = 67   0x6B = 107   0x76 = 118
+
+`vec-from-roots base n` starts from `empty-vec` and conjes `r(base + i)` for
+i in 0..n, in that order.
+
+  v3: base = the caller's mark, n = 3 -> r(0), r(1), r(2) = 65, 66, 67, conjed
+      in that order. `[3:65:66:67]`. THE ORDER IS THE ASSERTION: the three
+      values are distinct and ascending, so a descending walk prints
+      `[3:67:66:65]` and a fixed `mark` rather than `base` prints the same
+      three whatever `base` is.
+
+  v0: n = 0, so the loop never runs and the answer is the empty vector it
+      started from -- `[0]`, printed from the singleton at address 1. A
+      `for` that ran once on zero would print `[1:...]` reading a root that
+      is not the caller's.
+
+  v2: base + 1, n = 2 -> r(1), r(2) = 66, 67. `[2:66:67]`. This is the field
+      that proves `base` is HONOURED: an implementation that took the
+      caller's current mark instead would answer `[2:65:66]` or `[3:...]`,
+      and v3 alone cannot tell the two apart because there base IS the mark.
+
+  depth=3: the three values `main` pushed are still on the shadow stack.
+      `vec-from-roots` pops back to ITS OWN mark and must not take the
+      caller's roots with it (the file's header says "the SOURCE values are
+      the caller's roots and the caller keeps them"). 0 would be a function
+      that popped to `base`, stranding the caller's live values.
+
+  entry: `map-entry-as-vec` pushes slot 0 then slot 1 and hands the pair to
+      `vec-from-roots (base, 2)`, so a `TY_MAPENTRY` of (0x6B, 0x76) becomes
+      `[2:107:118]` -- KEY FIRST. `[2:118:107]` is the bug this function is
+      named after, the one that gave `(assoc [:a 1] 0 :z)` the answer `[:z]`.
+
+  after=0: the shadow stack is back to empty, so the two roots it pushed for
+      its own use were popped.

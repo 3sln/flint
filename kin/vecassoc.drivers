@@ -492,3 +492,97 @@ fn main() {
         o.Append("p0nil=").Append(Val.IsNil(VecPop(rt, v0)) ? 1 : 0).Append(' ');
         System.Console.WriteLine(o.ToString());
     }
+--expect
+t=4096,2730,4098 orig=4097 r=3003 keep=4102 tail=4128 orig=4101 append=12648430 p3=2 4096,4097 p33=32 sh=5 toff=0 last=4127 p1025=1024 sh=10->5 last=5119 p1=0 p0nil=1
+--expect-why
+DERIVED BY HAND from `vecassoc.kin`, walking the trie arithmetic for each case
+against the vectors the fixture builds directly. Nothing was read off a run.
+
+THE FIXTURE'S ELEMENTS ARE THEIR OWN ADDRESSES: element i holds 0x1000 + i =
+4096 + i, so every number below says WHICH element came back, and a read that
+landed one leaf over is a number that is 32 out rather than a silence. BITS 5,
+WIDTH 32, MASK 31. The two values written in are 0xAAA = 2730 and
+0xBBB = 3003, both far outside the 4096.. range so neither can be mistaken for
+an element.
+
+ASSOC IN THE TAIL -- `t=4096,2730,4098 orig=4097`. A 3-element vector is all
+tail (`tail-off` is 0 below WIDTH), so `assoc 1` copies the TAIL AT ITS OWN
+LENGTH and writes one slot: 4096, 2730, 4098. The index into the copy is
+`i - tail-off` = 1 - 0 = 1, and the trie is not touched at all. `orig=4097`
+is the source vector still reading its old value at index 1 -- persistence,
+and the thing an in-place write would break while every other field agreed.
+
+ASSOC IN THE TRIE -- `r=3003 keep=4102 tail=4128 orig=4101`. A 33-element
+vector has `tail-off` = ((33-1) >> 5) << 5 = 32: elements 0..31 in one leaf
+under the root, element 32 in the tail. `assoc 5` is below 32, so it takes the
+trie branch and `do-assoc` copies the SPINE:
+
+  level 5: subidx = (5 >> 5) & 31 = 0, so descend child 0
+  level 0: write at 5 & 31 = 5
+
+  r=3003     index 5 now holds the new value
+  keep=4102  index 6 is 0x1006 -- ITS NEIGHBOUR IN THE SAME LEAF is intact,
+             so the leaf was COPIED and edited rather than replaced
+  tail=4128  index 32 is 0x1020 = 4128, the tail carried over unchanged
+  orig=4101  the source still reads 0x1005 at index 5
+
+`append=12648430` -- 0xC0FFEE, the marker the fixture's `vec-conj` returns.
+`assoc` AT the count is an APPEND in Clojure, so kin's first line routes
+`i == cnt` to `conj` rather than raising. The stub is a marker on purpose:
+what this source is responsible for is the ROUTING, and a stub that rebuilt a
+vector would be testing the fixture.
+
+POP IN THE TAIL -- `p3=2 4096,4097`. Three elements, all tail, so `cnt - 1`
+(2) is still above `tail-off` (0): the tail is cloned ONE SHORTER and the trie
+is kept. Two elements, 4096 and 4097.
+
+POP PULLING A LEAF BACK OUT OF THE TRIE -- `p33=32 sh=5 toff=0 last=4127`.
+33 elements, `tail-off` 32, so `cnt - 1` = 32 is NOT above it: the tail has
+emptied and the previous leaf must become the new tail.
+
+  newtail  = array-for(v, cnt - 2 = 31) -> the leaf holding 0..31
+  pop-tail(5, root, 33): subidx = ((33-2) >> 5) & 31 = 0, and at level == BITS
+                         subidx 0 means the branch disappears -> NIL
+  so newroot becomes a fresh empty node, and shift stays 5
+
+  p33=32    one shorter
+  toff=0    the new count is 32, and `tail-off` of 32 is ((32-1)>>5)<<5 = 0 --
+            so the whole vector is tail again, which is what "the leaf became
+            the tail" means
+  last=4127 index 31 is 0x101F, read out of that promoted leaf. This is the
+            field that says the RIGHT leaf was promoted: the leaf one over
+            would give 4159 or nothing at all.
+
+POP DROPPING A LEVEL -- `p1025=1024 sh=10->5 last=5119`, and this is the case
+kin's header is about. 1025 elements at shift 10: elements 0..1023 live in 32
+leaves under ONE mid node which is child 0 of the root; child 1 of the root
+was never populated. Popping:
+
+  newtail = array-for(v, 1023) -> mid's child 31
+  pop-tail(10, root, 1025): subidx = (1023 >> 10) & 31 = 0, level > BITS, so
+    it recurses into mid: subidx = (1023 >> 5) & 31 = 31, not 0, so mid is
+    cloned with child 31 cleared. The clone comes back non-nil, so the root is
+    cloned with that as child 0.
+  THEN THE COLLAPSE: shift 10 > BITS and the new root's CHILD 1 IS NIL, so the
+    root is a level holding one child. The root becomes its own child 0 and
+    the shift drops to 5.
+
+  p1025=1024   one shorter
+  sh=10->5     THE LEVEL IS GONE. This is the digit that cannot be faked: the
+               vector reads correctly either way, and a version that skipped
+               the collapse leaves a permanently one-child root that every
+               later index pays a level for.
+  last=5119    index 1023 is 0x13FF = 5119, read through the NEW shift and the
+               NEW tail. A collapse that dropped the shift without re-rooting
+               (or re-rooted without dropping the shift) reads the wrong node
+               here and gives a number 32 or 1024 away, or NIL.
+
+Kin's own note says this case was invisible for a while because the fixture's
+allocator left node slots at 0 rather than NIL: "this child is absent" never
+read as absent, the collapse never fired, and all three targets agreed on the
+wrong answer.
+
+THE EDGES -- `p1=0` and `p0nil=1`. Popping a one-element vector is the EMPTY
+VECTOR (count 0), not nil and not an error; popping an EMPTY one is NIL, and
+kin's doc says the caller raises. Two different answers for two adjacent
+counts, and swapping them would make `(pop [x])` throw.

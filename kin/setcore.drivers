@@ -319,3 +319,63 @@ namespace Flint.Rt {
          .Append(" hash=").Append(Val.IsNil(rt.Slot(s3, global::Flint.Rt.Sets.S_HASH)) ? 1 : 0);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+set?=10 count0=0 count2=2 has=110 get=161/221 same=1 disj=1/0 disjsame=1 eq=10 meta=1 hash=1
+--expect-why
+DERIVED BY HAND from `setcore.kin` against the toy map the driver's `-head`
+defines (a flat run of key/value pairs, with `assoc` of a present key and
+`dissoc` of an absent one BOTH answering the same map -- the property every
+identity field below rests on). Nothing was read off a run.
+
+The fixture's values, in decimal because that is how they print:
+
+  meta 0x77 = 119   a 0xA1 = 161   b 0xB2 = 178   c 0xC3 = 195
+  not-found 0xDD = 221            NIL = 0xFFFF = 65535
+  S_MAP 0  S_META 1  S_HASH 2     TY_SET 18  TY_MAP 14
+
+`set?=10` -- `is-set` on the set is 1, and ON THE BARE MAP is 0. The second
+digit is the one that matters: a set WRAPS a map (kin's header: "THE SLOT IS
+THE MAP, not the object"), so a predicate that answered yes to the thing in
+slot 0 would print `11` and every `set?`/`map?` dispatch would be ambiguous.
+
+`count0=0` -- the empty set's map holds no pairs. The fixture allocates that
+map with a floor of one slot and then sets its length to 0, so a `set-count`
+that read the OBJECT length rather than delegating to `map-count` would print
+1 here. Two elements later `count2=2`: `map-count` is pairs, not slots, so a
+missing halving prints 4.
+
+`has=110` -- a and b present, c absent. The absent one is what says
+`set-contains` can answer no at all.
+
+`get=161/221` IS THE HEADLINE CLAIM OF THIS SOURCE. An element is its own KEY
+AND its own VALUE, so `map-get` hands back the element itself: 161, not `true`,
+not NIL, not the map's index. Said precisely, since the doc claims more than
+this probe can show: the fixture's probe and stored element are the same 161,
+so this field cannot distinguish the stored copy from an equal stranger -- what
+it does pin is that the VALUE slot holds the element, which is the mechanism
+the identity claim rests on. The second half, 221, is the not-found default
+coming back unchanged for an absent element rather than NIL or 0.
+
+`same=1` -- `(conj s x)` where x is already in s is `s` ITSELF. Kin compares
+the new map against the old by identity and returns the original set without
+allocating; a copy would print 0 and every `conj` in a loop would churn the
+heap. `disjsame=1` is the same test on the other side: `disj` of an absent
+element answers the set unchanged.
+
+`disj=1/0` -- after removing a, one element remains and a is gone. The count
+and the membership are both printed because either alone is weak: a `disj`
+that rebuilt the map without removing anything gives 2/1, and one that dropped
+the wrong pair gives 1/1.
+
+`eq=10` -- BOTH ARMS OF `set-eq`, and they are deliberately different
+mechanisms. `set-eq s2 s2` has equal counts, so it must fall through to
+`map-eq` (the stub answers by identity) and say 1. `set-eq s2 s3` has counts
+2 and 1, so kin's `(if (!= count count) (return false))` must refuse it BEFORE
+consulting the maps -- 0. That first line is the cheap half kin's doc calls
+out, and it is the half a delegation could accidentally skip.
+
+`meta=1 hash=1` -- read from s3, the set `disj` BUILT, not from s0. The
+metadata rode through `set-disj`'s `new-set` call, and the hash slot of that
+brand-new set is NIL. A set that copied the source's cached hash along with
+its meta would print `hash=0` and then answer a stale hash for a set with
+different contents.

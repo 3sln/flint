@@ -236,3 +236,85 @@ fn main() {
          .Append(',').Append(MapEntry(rt, NIL, NIL)).Append(" roots=").Append(rt.roots.Count);
         Console.WriteLine(o.ToString());
     }
+--expect
+00 am=100 hm=109 me=114 110 100 ref=1 refcount=0 amcount=3 hmcount=7 ammeta=65535 amhash=65535 cnt=7 root=43690 meta=48059 hash=65535 k=17 v=34 k0=49 v0=50 k1=65 v1=66 oom=65535,65535,65535 roots=0
+--expect-why
+DERIVED from `mapcore.kin` against the driver's fixture. The addresses are
+derived, not pinned: the bump starts at 100 and `alloc` advances it by `n + 1`.
+
+  new-array-map 3 asks for AM_BASE + 2*3 = 8 slots -> am = 100, bump 109
+  new-hash-map    asks for 4                       -> hm = 109, bump 114
+  map-entry       asks for 2                       -> me = 114, bump 117
+
+NIL is 0xFFFF = 65535 in this fixture, which is why that number is the answer
+wherever a slot was deliberately left empty and wherever a constructor refused.
+0xAAAA = 43690, 0xBBBB = 48059, 0x11 = 17, 0x22 = 34, 0x31 = 49, 0x32 = 50,
+0x41 = 65, 0x42 = 66.
+
+  00              an IMMEDIATE (5) is neither a map nor an array map, refused
+                  by `is-heap` before any type byte is read. Without that
+                  guard `ty` indexes the type array at 5, which in this
+                  fixture is a zero byte -- so it would answer 0 anyway and
+                  the bug would hide. It is here for the case where it does
+                  not.
+
+  110 100         THE THREE TAGS, and the pattern is the content.
+                  `is-map` says yes to the array map and the hash map and NO
+                  to the map entry -- a map entry is a VECTOR, not a map, even
+                  though it holds a key and a value.
+                  `is-array-map` says yes to exactly one of the three.
+                  An `is-map` that tested "has key/value slots" would print
+                  `111`; one that forgot TY_HASHMAP would print `100 100` and
+                  agree with the second field, which is why both are printed.
+
+  ref=1           A ROW REF ANSWERS `is-map`. This is the third tag the source
+                  names, and its header records what forgetting it cost:
+                  `(dissoc row :b)` returned nil on all four runtimes.
+  refcount=0      and `map-count` has NO row-ref arm. That is a deliberate
+                  removal, measured at 636 bytes per shipped module, on the
+                  grounds that every `count` builtin tests TY_TABLEREF before
+                  it tests `is-map`. So 0 here is the CORRECT answer for this
+                  source, not a bug -- and the fixture makes that visible by
+                  wiring the ref to a schema of 4 columns. A version carrying
+                  the arm prints `refcount=4`. The two fields together say
+                  "yes it is a map, and no, counting one is somebody else's
+                  job", which is the pair a reader needs to see.
+
+  amcount=3       an array map COUNTS ITS SLOTS: (olen 8 - AM_BASE 2) / 2 = 3.
+                  It was built with room for 3 and its pairs are still empty,
+                  so this is length-derived and not content-derived.
+  hmcount=7       a hash map is TOLD: slot HM_CNT, which `new-hash-map` was
+                  handed as 7. Two different mechanisms, two different
+                  numbers, so neither can be produced by the other's rule.
+
+  ammeta=65535    `new-array-map` writes NIL into AM_META and AM_HASH
+  amhash=65535    explicitly. Both are NIL for the same reason and read back
+                  as 65535.
+
+  cnt=7           the four hash-map slots in order: HM_CNT 0, HM_ROOT 1,
+  root=43690      HM_META 2, HM_HASH 3. The three written values are
+  meta=48059      deliberately distinct, so a transposed HM_ROOT/HM_META
+  hash=65535      prints `root=48059 meta=43690` rather than passing. HM_HASH
+                  is the one left NIL -- a map's hash is computed lazily.
+                  root and meta are ALSO the two values pushed as roots across
+                  the allocation and read back through `r`; that they survive
+                  as 43690 and 48059 is what says the read-back happened.
+
+  k=17 v=34       `map-entry` slots 0 and 1, in argument order.
+
+  k0=49 v0=50     `am-key i` is slot AM_BASE + 2i and `am-val i` is one past
+  k1=65 v1=66     it. The driver writes 0x31 0x32 0x41 0x42 into slots 2..5,
+                  so the four accessors must pick them off in that order. Four
+                  distinct values, so any off-by-one or swapped pair moves a
+                  number. `k1=65` is the field that says the stride is 2
+                  rather than 1.
+
+  oom=65535,65535,65535
+                  all THREE constructors answer NIL when `alloc` refuses --
+                  not a half-built map, and not address 0 dressed up as a
+                  value. `new-array-map` has nothing to unwind;
+                  `new-hash-map` and `map-entry` each pushed two roots first.
+  roots=0         so the stack is empty afterwards. This is the field that
+                  distinguishes "returned NIL" from "returned NIL and cleaned
+                  up": both refusal paths run `pop-to base` before returning,
+                  and a missing one would print roots=4 here.

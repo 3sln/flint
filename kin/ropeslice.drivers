@@ -430,3 +430,80 @@ namespace Flint.Rt {
          .Append(" rag=").Append(SBytesOf(rt, RopeSlice(rt, tree, 3, 17))).Append(' ');
         System.Console.WriteLine(o.ToString());
     }
+--expect
+whole=1 empty=0,0 small=3,0 mid=10 shares=11 clamp=4 rag=14
+--expect-why
+DERIVED BY HAND from `ropeslice.kin`, walking the descent for each range and
+counting the byte offsets off the fixture. Nothing was read off a run.
+
+THE FIXTURE, and every offset below is counted from it:
+
+  four leaves of five bytes, one node over all four, SLICE_MIN = 4
+
+      a          b           c            d
+   [0 .. 5)  [5 .. 10)  [10 .. 15)  [15 .. 20)     total 20 bytes
+
+`whole=1` -- `slice v 0 20`. `hi` is clamped to `n` (20), then `from == 0` and
+`hi == n`, so kin returns `v` ITSELF. The check is identity, not width: a
+version that rebuilt the tree would answer something 20 bytes long and print
+0, and every `(subs s 0 (count s))` would copy the whole rope.
+
+`empty=0,0` -- `slice 3 3` and `slice 7 2`. The guard is `from >= to`, so BOTH
+the empty range and the INVERTED one answer the empty string, and both print 0
+bytes rather than nil. `>` instead of `>=` sends 3..3 down the descent, where
+`made` ends at 0 and the fold answers the empty string anyway -- so what this
+field really pins is the inverted case, which under `>` would run the loop
+with `hi < from` and take the `at < hi` arm never, and under a clamp of `from`
+rather than an early return would produce something non-empty.
+
+`small=3,0` -- `slice 5 8`, three bytes inside b. Width 3 < SLICE_MIN 4, so
+kin copies: `s-copy-range v 5 8`, a fresh 3-byte leaf. Stated exactly, because
+the field is weaker than the comment above it suggests: the descent would ALSO
+produce a 3-byte leaf here (b's sub-range is itself under SLICE_MIN), and the
+range is not child-aligned, so `small == b` could not have been 1 by any
+route. What `3,0` pins is the width arithmetic (8 - 5, with `from` not
+clamped and `to` not off by one) and that a short slice is never the child.
+
+`mid=10 shares=11` IS THE SHARING CLAIM. `slice 5 15`: width 10, so no copy,
+and `tree` is a rope so the descent runs. Walking the children with the
+running offset `at`:
+
+  i=0  a  at=0   at+w = 5 > from = 5 ?  NO   -- skipped, and `>` is why
+  i=1  b  at=5   5+5 = 10 > 5 yes, at < hi;  klo = 0 (from is not past at),
+                 khi = hi - at = 10, clamped to w = 5 -> klo=0, khi=w
+                 => WHOLLY INSIDE: piece IS b, shared
+  i=2  c  at=10  klo = 0, khi = 15-10 = 5 = w  => piece IS c, shared
+                 at becomes 15 >= hi, so the loop breaks
+
+two pieces, so `rope-from-roots` builds one node of 10 bytes whose kids are b
+and c BY IDENTITY. `shares=11` is the whole point of the file -- a slice that
+copied would print `00` and a 10-byte slice of a 509 KB rope would cost 10 KB
+of copying instead of one node. The `at + w > from` test at i=0 is the strict
+one: `>=` there would pull `a` in as a zero-width piece.
+
+`clamp=4` -- `slice 16 99`. `to` is clamped to `n`, so the range is 16..20,
+four bytes, all inside d. a, b and c are each skipped because `at + w > 16` is
+false for them (5, 10, 15 all <= 16). For d: `at` = 15, `klo` = from - at =
+16 - 15 = 1, `khi` = hi - at = 5, so the recursive call is `slice d 1 5` --
+d is a LEAF, so that copies four bytes. One piece, so the fold answers it
+unwrapped: 4. An unclamped `to` would index past the string; a `klo` computed
+as `from` rather than `from - at` would take d's bytes 16..20, out of a
+five-byte leaf.
+
+`rag=14` -- `slice 3 17`, ragged at BOTH ends, which is the case where the two
+boundary arithmetics are different from each other:
+
+  i=0  a  at=0   klo = from - at = 3, khi = min(17-0, 5) = 5
+                 klo != 0 -> slice a 3 5, width 2, under SLICE_MIN -> copy  2
+  i=1  b  at=5   klo = 0, khi = min(12, 5) = 5 = w -> SHARED                5
+  i=2  c  at=10  klo = 0, khi = min(7, 5) = 5 = w -> SHARED                 5
+  i=3  d  at=15  klo = 0, khi = hi - at = 2, and 2 != w -> slice d 0 2      2
+                 at becomes 20 >= hi, break
+
+  2 + 5 + 5 + 2 = 14 = 17 - 3.
+
+The last child is the one that catches a common slip: its `klo` is 0 and its
+`khi` is 2, so the `(if (== klo 0) (if (== khi w) share ...))` must check BOTH
+before sharing. Sharing on `klo == 0` alone hands back all five of d's bytes
+and prints 17 rather than 14 -- a slice that is longer than the range asked
+for, which no bounds check would catch because every byte of it is real.

@@ -198,3 +198,58 @@ fn main() {
         o.Append(NumToStr(rt, 4L << 60) == NIL ? "refused" : "FORMATTED");
         System.Console.WriteLine(o.ToString());
     }
+--expect
+0.0 -0.0 1.0 1.5 100.0 1000000.0 1234567.0 1.0E7 1.2345678E7 1.0E14 1.0E15 1.0E20 0.001 1.0E-4 5.0E-4 0.1 123.456 1.0E-300 1.0E300 3.14159265358979 0.3333333333333333 ##NaN ##Inf ##-Inf 0 7 -7 9223372036854775807 -9223372036854775808 refused
+--expect-why
+FROM REAL CLOJURE, which is the rule this file names: "CLOJURE'S RULE is
+Java's `Double.toString`". Twenty-one of the twenty-four doubles were printed
+by Clojure 1.12 under `clojure -M`, on exactly the list the driver uses:
+
+  (map str [0.0 -0.0 1.0 1.5 100.0 1e6 1234567.0 1e7 12345678.0
+            1e14 1e15 1e20 1e-3 1e-4 5e-4 0.1 123.456 1e-300 1e300
+            3.14159265358979 (/ 1.0 3.0)])
+
+  => 0.0 -0.0 1.0 1.5 100.0 1000000.0 1234567.0 1.0E7 1.2345678E7
+     1.0E14 1.0E15 1.0E20 0.001 1.0E-4 5.0E-4 0.1 123.456
+     1.0E-300 1.0E300 3.14159265358979 0.3333333333333333
+
+THE LIST IS BUILT AROUND THE NOTATION THRESHOLD, and that is where the four
+divergences in the header lived:
+
+  1234567.0 -> 1234567.0   plain, just under 1e7
+  1e7       -> 1.0E7       scientific, exactly at the boundary
+  12345678.0-> 1.2345678E7 scientific, just over
+  1e-3      -> 0.001       plain, exactly at the lower boundary
+  1e-4      -> 1.0E-4      scientific, just under it
+  5e-4      -> 5.0E-4      scientific, and not a round power of ten
+
+Native used NO scientific notation at all -- 1e14 came out as
+"100000000000000.0" and 1e20 as twenty-one characters -- while the CLR spelled
+1e20 as "1E+20". So `1.0E14`, `1.0E20` and `1.0E-4` are each a field where all
+three hosts' own formatters gave a different string, and `0.001` against
+`1.0E-4` is the pair that pins the threshold rather than the spelling.
+
+ALWAYS ONE DIGIT AFTER THE POINT: `1.0`, `100.0`, `1.0E7` -- not `1`, `100`,
+`1E7`. That is Clojure's rule and not every host's.
+
+`-0.0` KEEPS ITS SIGN, and `0.3333333333333333` is sixteen digits -- the
+SHORTEST decimal that reads back as the same double, which is the one thing
+this file does borrow from the host.
+
+THE THREE SPECIALS are flint's spelling, taken from `dblstr.kin` lines
+226-230: `##NaN`, `##Inf`, `##-Inf`. This matches Clojure's `pr-str`, and NOT
+Clojure's `str`, which prints `NaN`, `Infinity` and `-Infinity` -- measured,
+same run. Worth writing down because the header's table labels its row
+`(str x)` and puts "##Inf" in the clojure column; `(str (/ 1.0 0.0))` in real
+Clojure 1.12 is "Infinity". The flint behaviour is the deliberate one; the
+table's label is what is imprecise.
+
+THE INTEGERS are the `put-i64` arm: 0, 7, -7, and both ends of the range.
+`-9223372036854775808` is the one that matters -- the digits come off the
+NEGATIVE side, because taking the absolute value first overflows at exactly
+that input and wraps silently on two of the three hosts. A wrapped answer
+there is `-9223372036854775808` too, so the field that actually discriminates
+is that `9223372036854775807` is right beside it: an implementation that
+negated first would print garbage for one and not the other.
+
+`refused`: a non-number is refused rather than formatted.

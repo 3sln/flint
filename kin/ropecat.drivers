@@ -511,3 +511,98 @@ namespace Flint.Rt {
         o.Append("kids=").Append(RopeKids(rt, acc)).Append(" ");
         System.Console.WriteLine(o.ToString());
     }
+--expect
+t1=11 t2=0,6 built=78,78,3 mixed=87,82,0 leafdecl=1 merged=18,2,2 prepend=20,3,2 prebuilt=78,2,3 kids=2
+--expect-why
+DERIVED BY HAND from `ropecat.kin`, by simulating each join against the
+fixture's constants -- FANOUT 3, FLAT_MAX 8, MERGE_MAX 4 -- and reading the
+resulting tree. Nothing was read off a run.
+
+`t1=11` -- TIER 1, both ways round. `s-concat` tests `s-bytes a == 0` first
+and `s-bytes b == 0` second, and each answers the OTHER side by identity, so
+joining the empty string to a 3-byte leaf is that same leaf and not a copy of
+it. Identity, not width: a copy would print 0 and still be 3 bytes long.
+
+`t2=0,6` -- TIER 2. 3 + 3 = 6 <= FLAT_MAX 8, so the result is ONE LEAF: not a
+rope (0) and 6 bytes. Kin calls this "the tier that must NOT be skipped" -- a
+join that went straight to a node would print `1,6`, correct in content and
+wrong in cost, one two-byte node per tiny join.
+
+TIER 3 IS THE REST OF THE LINE, and the fixture is twelve appends of a 6-byte
+leaf onto a 6-byte leaf.
+
+`built=78,78,3` -- 13 leaves x 6 = 78 bytes and 78 code points, in a tree of
+HEIGHT 3. The height is the whole point. Tracing the spine with FANOUT 3:
+
+  join  1   two leaves -> a node of 2                    height 1
+  join  2   sibling on the right edge, node of 3         height 1
+  join  3   edge full at every level -> NEW LEVEL, and
+            the 6-byte piece is LIFTED to height 1       height 2
+  4..8      the right spine fills: the lifted subtree
+            grows to 3 kids, then a new sibling at the
+            root, which fills in turn                    height 2
+  join  9   both levels full -> new level, piece lifted
+            by 2                                         height 3
+  10..12    grafted down the new right spine             height 3
+
+so a level is added only when the edge is full AT EVERY LEVEL -- twice in
+twelve joins. The regression this replaced widened the root while it had room
+and otherwise built `[old, new]`, which adds a level every FANOUT joins: that
+shape gives height 5 here, and O(n) depth in general. 3 is log-shaped; 5 is
+the linear one.
+
+`mixed=87,82,0` -- 78 + 9 bytes, 78 + 4 code points, and the ASCII bit goes to
+0 because one 9-byte 4-code-point child is not ASCII. 87 and 82 differ, so
+bytes and code points cannot be swapped without showing.
+
+`leafdecl=1` -- `rope-append` on a LEAF answers NIL. There is no spine to walk,
+and kin's first line is `(if (not (is-rope rt node)) (return NIL))`. This is
+what makes `s-concat` fall through to the prepend attempt and then to a new
+level; an append that "succeeded" on a leaf would have to invent a tree.
+
+`merged=18,2,2` -- MERGE BEFORE CREATE. Eight joins of a 2-byte leaf onto a
+2-byte start, with MERGE_MAX 4:
+
+  1,2,3   4, 6, 8 bytes -- all <= FLAT_MAX, so still ONE LEAF
+  4       8 + 2 = 10 > FLAT_MAX: no tree to graft onto, so a new level
+          -> [leaf8, leaf2], 10 bytes
+  5       the right edge is a 2-byte leaf and 2 + 2 = 4 <= MERGE_MAX,
+          so the piece MERGES INTO IT -> [leaf8, leaf4], 12 bytes
+  6       4 + 2 = 6 > MERGE_MAX, so a sibling -> [leaf8, leaf4, leaf2], 14
+  7       2 + 2 = 4 <= MERGE_MAX, merge -> [leaf8, leaf4, leaf4], 16
+  8       6 > MERGE_MAX and the node is full -> new level, 18 bytes,
+          2 kids, height 2
+
+18 bytes is just 2 + 8 x 2 and says nothing on its own; `2,2` is the check.
+WITHOUT the merge rule every 2-byte piece past FLAT_MAX becomes its own leaf,
+which fills the node two joins sooner and gives a different kid count and a
+taller tree. Kin's comment names the mistake exactly: `s-concat`'s copy tier
+asks whether the WHOLE RESULT fits a leaf, and the question that matters is
+whether the piece fits the leaf ALREADY THERE.
+
+`prepend=20,3,2` -- a 2-byte piece in FRONT of that 18-byte tree. The append
+side declines (the piece is a leaf), so `s-concat` tries `rope-prepend`, which
+is the same `rope-graft` walking the LEFT edge. Down that edge: the leftmost
+child is a node, and its leftmost child is an 8-byte leaf -- 8 + 2 = 10 exceeds
+MERGE_MAX so nothing merges, and that node already has 3 children so nothing
+fits beside it. One level up there is room, so the piece is LIFTED to the
+height of its new siblings and becomes child 0: 3 kids, 20 bytes, height still
+2. The lift is what keeps the tree unragged; an unlifted leaf beside two
+height-1 subtrees is the shape kin's comment calls RAGGED, and `rope-height`
+would then report a number it read off child zero and could not justify.
+
+`prebuilt=78,2,3` -- TWELVE PREPENDS, the mirror of `built`, and the answer to
+compare against it is `built`'s: same 78 bytes, and the SAME HEIGHT 3. That is
+the point of having both rows. The driver comment above this line predicts
+"twelve prepends give depth 12" -- that was true of the version with no
+prepend path at all, where each join built `[piece, old-tree]` and added a
+level every time. With `rope-graft` shared between the two directions the left
+edge fills exactly as the right one does: a level at join 3 and another at
+join 9, height 3, root of 2 children. THE COMMENT IS STALE AND THE NUMBER HERE
+IS THE REPAIRED ONE; a 12 in this field would mean the prepend path had been
+lost again.
+
+`kids=2` -- the root of the twelve-append tree has two children, which is what
+a height-3 tree two joins past its last level split should have. Together with
+`built`'s height this pins the SHAPE and not just the size: 78 bytes can be
+arranged many ways, and only one of them is log-deep.

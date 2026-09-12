@@ -62,6 +62,43 @@ echo "  comparing:$present"
 drv="${src%.kin}.drivers"
 [ -f "$drv" ] || { echo "kin/scripts/verify: no drivers file at $drv"; exit 2; }
 
+# A DRIVERS FILE MUST END IN A NEWLINE, and this says so by name because the
+# symptom otherwise does not.
+#
+# Sections are split on lines beginning `--`. A file whose last line has no
+# newline fuses the next appended header onto it -- `    }--expect` -- so the
+# header stops being a header, its text lands INSIDE the probe, and the target
+# fails to compile with `CS1519: Invalid token '='`. That reads as "the targets
+# disagree" about the code under test, which is the one thing it is not.
+if [ -n "$(tail -c 1 "$drv")" ]; then
+  echo "kin/scripts/verify: $drv does not end in a newline."
+  echo "            Anything appended to it fuses onto the last line of the last"
+  echo "            section, and shows up as a COMPILE ERROR in the probe rather"
+  echo "            than as a bad section. Add the newline."
+  exit 2
+fi
+
+# EVERY `--` LINE IS A SECTION HEADER, so one that is not a section NAME is a
+# mistake and is named as one here.
+#
+# The split is on any line beginning `--`, which makes a PROSE line starting
+# with a dash into a header. In `--expect-why` that only truncates prose
+# nothing reads, and it happened four times while these were being written. But
+# the same accident one word along -- a line beginning `--rust` -- splices its
+# text INTO the Rust probe, and the report would be a compile error in
+# generated code that is perfectly fine.
+stray=$(grep -n '^--' "$drv" \
+  | grep -v -E ':--(rust|java|csharp)(-head|-pre)?$|:--expect(-why)?$' || true)
+if [ -n "$stray" ]; then
+  echo "kin/scripts/verify: $drv has a line beginning \`--\` that names no section:"
+  echo "$stray" | sed 's/^/            /'
+  echo "            Sections split on ANY line starting \`--\`, so a prose line that"
+  echo "            begins with a dash ends the section it is inside -- and one"
+  echo "            that happens to spell a real section name is spliced into the"
+  echo "            probe. Indent it, or reword it."
+  exit 2
+fi
+
 # A named section of the drivers file: everything after `--name` up to the
 # next line that starts with `--`. A `-head` section is emitted BEFORE the
 # generated code, which is how a source whose functions need a receiver or a
@@ -164,4 +201,54 @@ if [ "$(cut -d' ' -f2- < "$work/answers" | sort -u | wc -l | tr -d ' ')" = "1" ]
   echo "  ok   $n targets, one source, identical output"
 else
   echo "  FAIL the targets disagree"; exit 1
+fi
+
+# --- THE OTHER HALF: WHAT THE ANSWER SHOULD BE. -----------------------------
+#
+# Everything above compares the targets WITH EACH OTHER. That catches a
+# TRANSLATION divergence -- one source emitting different semantics into
+# different languages -- and it is the failure this port exists to prevent.
+#
+# It cannot catch the other one. All three targets come from ONE source, so a
+# logic error in that source emits three identically-wrong implementations,
+# which agree perfectly and pass. The script already says, thirty lines up,
+# that "an output identical to itself is not a check"; three outputs identical
+# to each other are not a check EITHER, for the same reason, one level up.
+#
+# An `--expect` section is that other half: the answer written down
+# independently of the code that produces it. `hash_mask(0x80000001, 30)` IS 2,
+# and a source that makes it 30 is wrong however unanimously the three targets
+# say 30.
+#
+# THE DERIVATION GOES IN `--expect-why`, beside the value. `section` reads one
+# named section and ignores every other, so a section nothing reads is a place
+# to write prose -- and a number with no method behind it is folklore
+# (`AGENTS.md` §2). An expectation that was pasted out of a passing run says so
+# there, because that is a REGRESSION PIN and not a derivation, and the next
+# reader must not have to guess which one they are looking at.
+#
+# COMPARED EXACTLY, never by substring. A `case "$out" in *"$want"*)` would
+# pass on an expectation of "3" against a failure message that happens to
+# contain a 3 -- an assertion that cannot tell success from failure is not a
+# check.
+section expect > "$work/expect"
+if [ -s "$work/expect" ]; then
+  # Trailing whitespace only: the targets print through three different
+  # formatters and a stray space at end of line is not a disagreement about
+  # the answer. Everything inside the line is compared byte for byte.
+  sed 's/[[:space:]]*$//' "$work/expect" > "$work/expect.trim"
+  cut -d' ' -f2- < "$work/answers" | sort -u | sed 's/[[:space:]]*$//' > "$work/actual.trim"
+  if cmp -s "$work/expect.trim" "$work/actual.trim"; then
+    echo "  ok   and the answer is the expected one"
+  else
+    echo "  FAIL the targets agree on the WRONG answer"
+    echo "       expect  $(cat "$work/expect.trim")"
+    echo "       actual  $(cat "$work/actual.trim")"
+    exit 1
+  fi
+else
+  # SAID OUT LOUD, because a missing expectation is invisible otherwise: the
+  # run is green and nothing distinguishes "checked against the right answer"
+  # from "checked against itself".
+  echo "  note no --expect section -- agreement only, nothing says this answer is RIGHT"
 fi

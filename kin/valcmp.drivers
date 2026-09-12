@@ -432,3 +432,69 @@ namespace Flint.Rt {
         o.Append("bad=").Append(c).Append("|").Append(rt.thrown).Append("|");
         System.Console.WriteLine(o.ToString());
     }
+--expect
+id=00 nil=-110 num=-110 bool=-1100 str=-110 kw=-11-1-10 sym=-1 seq=0 work=4 short=-1 long=1 empty=0 bad=0|ClassCastException/cannot compare a #11 with a #15|
+--expect-why
+DERIVED FROM CLOJURE'S ORDER and from the fixture's shims, field by field.
+Every field is a SIGN (`sgn` collapses to -1/0/1), so a wrong answer here is
+a wrong SORT -- not a slower one.
+
+  id=00     identity is zero. The double is `dbl(1)` against itself and the
+            fixture's `num-cmp` orders by payload, so it is 0 too; what this
+            field can show is only that the double did NOT take the
+            identity shortcut and crash on the way through `num-cmp`.
+  nil=-110  NIL SORTS FIRST, before anything; nil against nil is caught by
+            identity, so 0.
+  num=-110  1<2, 2>1, 2=2.
+  bool=-1100  FALSE SORTS BEFORE TRUE. This is the arm that used to SUBTRACT
+            two unsigned bits, where `false - true` is not -1 but four
+            billion -- and `sgn` of four billion is +1, the opposite answer.
+            So `-1` in the first position is the whole point of the field.
+  str=-110  ordered by the fixture's slot 0: 5<9, 9>5, and 5 against a
+            DIFFERENT OBJECT also holding 5 is 0. The last is the case native
+            got wrong by reading a rope's slots as UTF-8 and comparing two
+            unequal 1400-byte strings as equal.
+
+NAMED THINGS. ns is slot 0, name is slot 1, each a string ordered by ITS slot
+0: nsa=1, nsb=2, na=3, nb=4.
+
+  bare vs qual   nil ns against a present one  -> -1  (A BARE NAME SORTS
+  qual vs bare   present against nil           ->  1   BEFORE A QUALIFIED ONE)
+  bare vs bare2  both bare, names 3 vs 4       -> -1  (falls through to name)
+  qual vs qual2  ns 1 vs 2, decided there      -> -1  (never reaches name --
+                                                       both names are `na`)
+  qual vs qual   identity                      ->  0
+  so kw=-11-1-10, and sym=-1 is the same walk for a symbol.
+
+`qual vs qual2` is the discriminating pair: the two share a NAME and differ
+only in NAMESPACE, so a `cmp-named` that compared names first would answer 0.
+
+SEQUENTIALS. The fixture's `seq` turns a length n into the descending run
+n, n-1, ... 1: length 3 walks 3,2,1.
+
+  seq=0     two length-3 vectors walk the same three numbers -> 0
+  work=4    CHARGED PER ELEMENT, once per loop pass: three passes that
+            compare an element, plus the fourth that finds both walks dry
+            and breaks. Not 3, and not 1 -- `compare` on two big vectors is
+            one bytecode instruction and O(n) work, so the count is the
+            thing that keeps it metered.
+  short=-1  length 2 against length 3
+  long=1    length 3 against length 2
+  empty=0   both empty: `seq` gives nil on both sides, first pass breaks
+
+A GAP IN THIS DRIVER, recorded rather than papered over. `short` and `long`
+are labelled as "the SHORTER one first when one runs out", and they do NOT
+test that rule. The fixture derives each element from the length, so a
+length-2 vector walks 2,1 and a length-3 walks 3,2,1 -- the FIRST elements
+already differ (2 vs 3), the element comparison decides it, and the walk never
+runs out. The answers coincide with what the length rule would give, which is
+exactly why the coincidence is invisible. Neither `set out -1` nor `set out 1`
+in `cmp-sequential`'s run-out branches is reached by any field here; the
+`seq=0` case reaches the both-dry exit only. Fixing it means a fixture where a
+short vector is a PREFIX of a long one, which this `seq` shim cannot express.
+
+  bad=0|...|  ACROSS TYPES IT REFUSES. A keyword against TY_OTHER (15) shares
+            no arm, so it names both sides -- TY_KW is 11 -- and answers 0,
+            because an `I32` has no failure value and the interpreter unwinds
+            on `thrown`. Printed WITHOUT `sgn`, so a refusal that answered
+            some other number would show.

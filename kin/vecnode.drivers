@@ -177,3 +177,62 @@ fn main() {
         o.Append("starved=").Append(Val.IsNil(NewNode(rt, 4, NIL)) ? 1 : 0).Append(' ');
         System.Console.WriteLine(o.ToString());
     }
+--expect
+n4=100 len=4 tag=10 edit=65535 get=512,513,514,515 owned=1911 ownlen=2 zlen=0 starved=1
+--expect-why
+DERIVED BY HAND from `vecnode.kin` plus the bump allocator the driver's own
+`-head` sections define. Nothing was read off a run; the addresses are
+derivable because the fixture's allocator is a counter starting at 100.
+
+  node-len  n     = olen n - 1          slot 0 is the TOKEN, not a child
+  node-get  n i   = slot n (i + 1)
+  node-set  n i v = set-slot n (i + 1) v
+  node-edit n     = slot n 0
+  new-node  n ed  = alloc TY_NODE (n + 1), then slot 0 := ed
+
+  alloc t n: a = bump; bump += n + 1; lens[a] = n; sp[a] = t; body := NIL
+  bump starts at 100, NIL is 0xFFFF = 65535, TY_NODE = 10
+
+THE ALLOCATION WALK, which is what makes every address below a derived number
+rather than a pasted one:
+
+  new-node 4 NIL   alloc(NODE, 5)  a = 100   bump 100 -> 106
+  new-node 2 tok   alloc(NODE, 3)  a = 106   bump 106 -> 110
+  new-node 0 NIL   alloc(NODE, 1)  a = 110   bump 110 -> 112
+
+so `n4=100`. `len=4`: the object is FIVE slots and `node-len` answers 4,
+because kin subtracts the token slot. An accessor layer that forgot the token
+would say 5 here and then read one child past the end of every node.
+`tag=10` is TY_NODE, so `new-node` allocated the kind it claims to.
+
+`edit=65535` is NIL: a node made for nobody is owned by nobody. This is the
+slot a transient tests to decide between writing in place and copying, so a
+`new-node` that left slot 0 as raw zero -- which the fixture's allocator does
+NOT do, precisely because zero is a plausible token -- would make an untouched
+node look owned.
+
+`get=512,513,514,515` = 0x200..0x203, written THROUGH `node-set` and read back
+THROUGH `node-get`. Said plainly, because the limit matters: this field cannot
+catch a +1 that both functions got wrong the SAME way -- they would write and
+read the same four cells. What it does catch is the two disagreeing (a stale
+NIL = 65535 appears), an index that is not scaled one-per-slot, and a reversed
+or constant index, which is why the four values are distinct and ascending
+rather than repeated. The absolute offset is pinned instead by `len=4` against
+a five-slot object and by the token being READABLE at slot 0 -- children
+starting at slot 0 would leave the token nowhere to live.
+
+`owned=1911 ownlen=2`: 0x777 = 1911, read back out of slot 0, so `new-node`
+stores the token it was handed rather than always NIL -- and two children out
+of a three-slot object, the subtraction again at a different size.
+
+`zlen=0` IS THE DIVERGENCE THIS SOURCE CLOSED. Kin's header says both ports
+had a `max(n, 1)` floor in the node layer that native did not, so persisting
+an empty transient made a two-slot tail node there and a one-slot one here.
+`new-node 0` must allocate ONE slot -- the token alone -- and `node-len` must
+answer 0. A floored implementation prints `zlen=1`.
+
+`starved=1`: with the allocator refusing, `alloc` answers 0 and kin's
+`(if (== a 0) (return NIL))` fires, so the caller gets NIL rather than a node
+at address 0 whose slot 0 was just written. `0` here would mean the guard was
+dropped and a failed allocation returned `heap(0)` -- a live-looking pointer
+into the bottom of the heap.

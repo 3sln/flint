@@ -1486,3 +1486,78 @@ namespace Flint.Rt {
         o.Append("badslice=[").Append(s1).Append("][").Append(s2).Append("][").Append(s3).Append("]");
         System.Console.WriteLine(o.ToString());
     }
+--expect
+grown=10/hi.11/hi.12/hi.13/hi.14/hi.15/hi|2 replaced=10/hi.11/hi.99/hi.13/hi.14/hi.15/hi appended=10/hi.11/hi.99/hi.13/hi.14/hi.15/hi.77/hi bad=[a table is indexed by row number and this key is a keyword; to reach a column, index the row first: (assoc-in t [row :column] v)][row -1 is out of range for a table of 6 rows; assoc may replace any row or append at 6][row 7 is out of range for a table of 6 rows; assoc may replace any row or append at 6] slice=11/hi.12/hi.13/hi.14/hi|2|1 slice2=14/hi.15/hi|1 shared=1 empty=0/0 badslice=[slice [-1 3) is outside a table of 6 rows][slice [0 7) is outside a table of 6 rows][slice [4 2) is outside a table of 6 rows]
+--expect-why
+DERIVED BY HAND from `tablerow.kin`, with the probe's CHUNK = 4 and
+CHUNK_SHIFT = 2 -- small enough that six rows cross a boundary and every
+chunk/offset decision is visible. `show_rows` prints `a/b` per row joined by
+`.`, reading through TB_OFFSET, so it shows what a READER of the table sees
+rather than what the chunks hold.
+
+  grown=10/hi.…15/hi|2
+    Six `conj`s from an EMPTY table. `conj` is `assoc` at `count`, so each one
+    appends. The first four land in chunk 0: the first creates it (there is no
+    chunk to grow), the next three go through `chunk-with-row` with `grow`.
+    Row 4 is `which` = 4>>2 = 1 >= nchunks = 1, so a NEW chunk is created
+    again, and row 5 grows it. Hence TWO chunks and the rows in order. `|1`
+    would mean the boundary was never noticed and chunk 0 grew past CHUNK.
+
+  replaced=…99/…
+    `assoc` at 2 with `:a` 99, NOT growing: `append` is false because 2 is not
+    the count, so `chunk-with-row` rewrites in place at `within` = 2 and the
+    count stays 6. Only row 2 changes; 10, 11, 13 and the second chunk are
+    untouched.
+
+  appended=…77/hi
+    `assoc` AT `count` (6) appends -- the same rule a vector follows, which is
+    the point of allowing it. phys 6 is chunk 1, `within` = 2, and chunk 1
+    already exists, so this is the grow arm rather than the new-chunk arm.
+    Seven rows out.
+
+  bad=[…][…][…], the three refusals:
+    1. a KEYWORD key. The message names the kind AND says what to write
+       instead, because reaching for a column by name is the mistake this is
+       almost always catching:
+         "a table is indexed by row number and this key is a keyword; to reach
+          a column, index the row first: (assoc-in t [row :column] v)"
+    2. -1. THIS IS THE LIVE TEST THE FILE EXISTS FOR: the index is an I64 and
+       signed on every runtime, so a program CAN hand over -1 and it must be
+       refused. As an I32 (a u32 in Rust) `i < 0` is dead code and -1 would
+       arrive as four billion, passing the low check and failing the high one
+       with a nonsense number in the message.
+         "row -1 is out of range for a table of 6 rows; assoc may replace any
+          row or append at 6"
+    3. 7, one past the append point. The message says where the boundary IS
+       (append at 6), which is the fact the caller needs.
+
+  slice=11/hi.12/hi.13/hi.14/hi|2|1
+    Rows [1,5) of six. first chunk = (0+1)>>2 = 0, last = (0+5-1)>>2 = 1, so
+    BOTH chunks are carried; count is 4 and the OFFSET is (0+1) & 3 = 1.
+    The three numbers have to agree: reading row 0 of the slice means phys 1
+    of chunk 0, which is 11. An offset of 0 would print 10..13 and silently
+    return the wrong four rows.
+
+  slice2=14/hi.15/hi|1
+    Rows [4,6) start INSIDE the second chunk: first = last = 1, so exactly ONE
+    chunk is kept and the offset is 4 & 3 = 0. `|2` would mean the slice held
+    the whole first chunk alive to say nothing about it.
+
+  shared=1
+    The kept chunk is THE SAME OBJECT as the original's chunk 1, compared by
+    address. Slicing costs a head, not a copy.
+
+  empty=0/0
+    An empty slice is a FRESH empty table -- no chunks at all -- rather than a
+    zero-row window onto the old ones, which would hold a whole table alive to
+    say nothing.
+
+  badslice, the three ways a range is wrong: `from` negative, `to` past the
+  end, and `from` past `to`. All three print the range back in the interval
+  notation they were given:
+    "slice [-1 3) is outside a table of 6 rows"
+    "slice [0 7) is outside a table of 6 rows"
+    "slice [4 2) is outside a table of 6 rows"
+  The third is the one an unsigned index would never reach: `4 > 2` has to be
+  checked separately from the two bounds, since both ends are individually in
+  range.

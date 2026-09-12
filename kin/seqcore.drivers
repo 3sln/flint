@@ -399,3 +399,83 @@ namespace Flint.Rt {
         o.Append("starved=").Append(Val.IsNil(Cons(rt, 1, el)) ? 1 : 0).Append(' ');
         System.Console.WriteLine(o.ToString());
     }
+--expect
+seq=11000 hnil=0 hel=0 hvec=7 hlazy=65535 rng=10,4,0,0,65535 counts=1,2,3 firsts=13,12,11 restis=1 meta=65535 uncounted=65535,65535 onvec=8 lfr=65,66,67 lfrtail=1 lfrcount=3 lfr0=1 starved=1
+--expect-why
+DERIVED BY HAND from `seqcore.kin` against the tags and the fixnum convention
+the driver's `-head` sets up. Nothing was read off a run. NIL is 0xFFFF, so
+every `65535` below is kin returning or storing NIL, and the fixture's
+"fixnum" is any value under the heap floor of 100.
+
+`seq=11000` -- `is-seq` over TY_CONS, TY_RANGE, an immediate, TY_ARRAYMAP and
+NIL. Yes to the two seq tags, NO to the map: a map is `seqABLE` but is not a
+seq, and kin's header says the JVM's kind table once conflated the three
+questions. NIL's 0 is the guard doing its job -- `is-heap` must reject 0xFFFF
+before `ty` indexes the type array with it.
+
+`hnil=0 hel=0 hvec=7 hlazy=65535` -- `count-hint`, which answers a VALUE and
+not an absence:
+
+  nil          fixnum 0   -- `(count nil)` is 0 in Clojure, not an error
+  empty list   fixnum 0
+  vector       fixnum 7   -- the fixture's vector says 7, delegated to
+                             `vec-count` rather than walked
+  lazy seq     NIL        -- the count is NOT knowable without walking
+
+The last is the one that has to be NIL rather than 0: a lazy seq that reported
+0 would make `count` answer 0 for every unrealised sequence.
+
+`rng=10,4,0,0,65535` -- A RANGE KNOWS ITS SIZE, which is the 11.92s-versus-
+1.40s regression kin's comment records. Worked out from
+`n = ceil((b - a) / k)`, spelled `(b + k - 1 - a) / k`:
+
+  (0, 10, 1)    (10 + 0 - 0) / 1 = 10
+  (0, 10, 3)    (10 + 2 - 0) / 3 = 4        -- 0, 3, 6, 9: CEILING, not floor
+  (5,  5, 1)    a < b is false, so 0        -- an empty range counts 0
+  (0, 10, 0)    k == 0 answers 0            -- a zero step never advances,
+                                               and kin calls that empty
+                                               rather than infinite
+  (0, NIL, 1)   unbounded -> NIL            -- declines rather than guessing
+
+The second is the one that pins the rounding: floor division gives 3 there and
+the range really has four elements. The last two are different kinds of zero
+and non-answer and must not be swapped -- a zero-step range that returned NIL
+would walk forever, and an unbounded range that returned a number would
+truncate `(count (range))`.
+
+THE CONS COUNTS. `cons` stores the tail's count PLUS ONE, or NIL when the
+tail will not say.
+
+  counts=1,2,3         onto the empty list, then onto each other: 0+1, 1+1, 2+1
+  firsts=13,12,11      read back from the outside in, so the cells are in the
+                       order they were built and `first` is not `rest`
+  restis=1             c3's rest IS c2, by identity
+  meta=65535           a fresh cell carries no metadata
+  uncounted=65535,65535  onto a LAZY tail the count is unknown, and it stays
+                       unknown however many cells are built on top -- the
+                       second NIL is the one that matters, because a `+ 1`
+                       applied to a NIL hint would turn 65535 into 65536 here
+                       and make `count` answer a number it invented
+  onvec=8              onto the 7-element vector: 7 + 1, so the `+ 1` lives in
+                       `cons` and not in `count-hint`, which kin's doc says is
+                       exactly where both ports had put it wrongly
+
+`lfr=65,66,67` -- `list-from-roots` over 0x41, 0x42, 0x43 pushed in that
+order, read back head-first. THE ORDER IS THE WHOLE FIELD: kin's loop counts
+UP while the index counts DOWN (`base + n - 1 - i`), reproducing what Rust's
+`(0..n).rev()` did, and a loop that walked the roots forwards would build a
+three-long list of 67, 66, 65 -- right length, right elements, reversed. That
+is why the probe prints the elements rather than the length.
+
+`lfrtail=1` -- the last cell's rest is the EMPTY LIST object, not NIL: a list
+terminates in a seq, so `(seq (rest ...))` keeps working. `lfrcount=3` -- the
+counts compose all the way up through `list-from-roots`, so `count` on the
+result is O(1).
+
+`lfr0=1` -- zero values gives the empty list itself, and kin's doc says why it
+must be a SEQ and not a vector: `clojure.core/list` is `[& xs] xs`, so a
+vector here makes `(list)` print as `[]`.
+
+`starved=1` -- with the allocator refusing, `cons` answers NIL and pops the
+shadow stack back to its mark first, rather than returning a cell at address
+0 whose slots were about to be written.

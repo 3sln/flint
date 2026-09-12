@@ -35,3 +35,40 @@ fn main() {
         System.Console.WriteLine(CaseRanges.Length + " " + h + " " + CaseFull.Length + " " + g
                                  + " " + CaseUpperLen + " " + CaseFullUpperLen);
     }
+--expect
+1528 -3643023067884571207 515 5989950694116713709 200 102
+--expect-why
+COMPUTED FROM `casetable.kin` BY A SECOND READER, not read off a run. A
+python script parsed the two `:data` literals straight out of the source and
+folded them with the same `h = h*31 + v` over 64-bit wrapping:
+
+  len(case-ranges) = 1528 integers  (382 runs of stride 4)
+  fold             = -3643023067884571207
+  len(case-full)   =  515 integers  (103 runs of stride 5)
+  fold             =  5989950694116713709
+
+That is the point of the check. The table is DERIVED from the host JDK's
+Unicode data by `bin/casetable --derive` and is the artifact of record; what
+can go wrong afterwards is the EMITTER -- kin dropping, reordering or
+sign-flipping an entry on its way into three languages. Folding the source
+independently catches that, where three generated copies of a mangled table
+would agree.
+
+THE LAST TWO ARE NOT RESTATEMENTS OF THE `defconst`s, which would check a
+constant against itself. `CASE_UPPER_LEN` and `CASE_FULL_UPPER_LEN` are the
+boundary a BINARY SEARCH splits on, so they are checked against the shape of
+the data instead:
+
+  case-ranges runs 0..199 ascend by start and end at [125218 125251 -34 1];
+  run 200 starts over at [65 90 32 1] and the rest ascend again. 200 is
+  exactly where the uppercase section ends.
+
+  case-full runs 0..101 ascend and end at [64279 ...]; run 102 starts over at
+  [304 2 105 775 0] -- the Turkish dotted I, the only lowercase full mapping.
+  102 is exactly where that section ends.
+
+A boundary off by one leaves both halves unsorted at the seam, which a binary
+search does not report: it returns a miss, and `upper-case` silently declines
+to map a character. That is the failure this field is for. Verified by script;
+both halves were also checked to be strictly ascending on `start`, which is
+what the search requires and what nothing else asserts.

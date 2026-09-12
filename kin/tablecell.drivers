@@ -701,3 +701,81 @@ namespace Flint.Rt {
          .Append(" steps=").Append(rt.steps);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+fresh=5 rows=7 encs=000 zerowide=2 zencs=1 enc=100 const=7 read=7.7.7.7/7.7.7.8 pos=0.1.0 rowcol=41.42/41.42 absent=1 cell=0.255.256/300.399 ttable=1000 steps=14
+--expect-why
+DERIVED BY HAND from `tablecell.kin` against this fixture. Lengths come from
+the layout constants, the collapse decisions from the column contents, and the
+cell arithmetic from CHUNK = 256 / CHUNK_SHIFT = 8.
+
+NEW-CHUNK.
+
+  fresh=5   `new-obj TY_NODE (CH_BASE + width)` with CH_BASE = 2 and width 3.
+  rows=7    CH_ROWS is the row count it was given, not a capacity.
+  encs=000  every column starts ENC_FLAT.
+
+  zerowide=2 zencs=1  A ZERO-WIDTH SCHEMA IS LEGAL -- a table of no columns
+            and many rows counts rows and nothing else -- so the chunk is
+            CH_BASE + 0 = 2 slots, and the ENCODING object is floored at ONE.
+            `zencs=0` is the bug the source's `(if (< encn 1) (set encn 1))`
+            exists to prevent: an object of length zero is not something the
+            allocator hands back.
+
+COLLAPSE, over three deliberately different columns of a 4-row chunk:
+
+  column 0  [7 7 7 7]  -> collapses. enc becomes ENC_CONST and the SLOT now
+                         holds the value 7 itself, which is why `const=7`.
+  column 1  [7 7 7 8]  -> must NOT collapse. The difference is in the LAST
+                         row, so a scan that stopped early, or compared only
+                         the first pair, would collapse it and lose row 3.
+                         This is the digit that catches an off-by-one in the
+                         `for k 1 n` loop.
+  column 2  []         -> `n == 0` returns before touching anything, so it
+                         stays flat. A collapse here would read slot 0 of an
+                         empty object.
+  so enc=100.
+
+  read=7.7.7.7/7.7.7.8 -- THE READ MUST NOT CARE. The collapsed column answers
+  7 for every row without indexing, and the flat one still answers 7 7 7 8 --
+  including the 8 that stopped the collapse.
+
+SCHEMA-POS-OF is the POSITION and not the id: pos=0.1.0.
+
+  `:a` is at 0 and `:b` at 1. A name the schema does not have answers 0 -- the
+  source's documented fallback -- which is why the two present columns are
+  checked at DIFFERENT positions: if it answered 0 for everything, only `pb`
+  would notice.
+
+ROW-COLUMN takes a map OR another table's ROW REF, and both must answer the
+same thing: rowcol=41.42/41.42. That equality is the point -- it is what lets
+a row move between tables without being materialised. `absent=1` is column
+position 5 of a two-column schema: the name is NIL, the lookup misses, and the
+answer is NOT_FOUND rather than nil, so "the column holds nil" stays
+distinguishable from "there is no such column".
+
+TABLE-CELL, over two 256-row chunks whose column 0 holds its own absolute row
+number:
+
+  cell 0   -> phys 0,   chunk 0>>8 = 0, row 0 & 255 = 0    -> 0
+  cell 255 -> phys 255, chunk 0, row 255                   -> 255
+  cell 256 -> phys 256, chunk 1, row 0                     -> 256
+  sliced (offset 300) cell 0  -> phys 300 -> chunk 1, row 44  -> 300
+  sliced cell 99              -> phys 399 -> chunk 1, row 143 -> 399
+
+  The offset is added BEFORE the shift. Added after, the slice would read
+  chunk 0 and print 0 and 99.
+
+ttable=1000: `is-ttable` is true of the TY_TTABLE object and false of a table,
+of NIL, and of a fixnum -- the last two through the `is-heap` guard, which is
+what stops a type tag being read out of a non-pointer.
+
+steps=14 IS A COUNT OF CHARGED WORK, and it is derivable:
+  collapse column 0: charge 4 (the column length)
+  collapse column 1: charge 4 -- charged in full even though the scan BREAKS
+                     at row 3; the charge is made before the scan
+  collapse column 2: charge 0 -- charged, then the `n == 0` early return
+  schema-pos-of x 3: charge 2 each (the schema length) = 6
+  4 + 4 + 0 + 6 = 14.
+A path that charged per COMPARISON rather than per column would print 13 here
+(column 1 breaking after three), and one that charged nothing for the empty
+column and nothing for the misses would print less again.

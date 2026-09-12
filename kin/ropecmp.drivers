@@ -556,3 +556,52 @@ namespace Flint.Rt {
          .Append(StrCmp(rt, deep, last)).Append(' ');
         System.Console.WriteLine(o.ToString());
     }
+--expect
+shapes=0,0,0 same=0 prefix=-1,1 diff=-1,-1 inline=0,-1 unsigned=1,-1 deep=0,-1
+--expect-why
+DERIVED FROM THE BYTES, which is all `str-cmp` is allowed to look at.
+Lexicographic order on bytes IS code point order, because UTF-8 is
+order-preserving by construction -- so every field below is decided by
+comparing two byte sequences by hand.
+
+  x    = [1,2,3,4,5,6]  one flat leaf
+  y    = [1]+[2,3]+[4,5,6]
+  z    = [1,2,3]+[4,5,6]
+  w    = [1] + inline[2,3,4] + [5,6]
+  deep = ([1,2]+inline[3]) + (inline[4,5]+[6])
+
+  shapes=0,0,0   four shapes over the SAME six bytes, all equal. Not one of
+                 them is materialised, which is the point of the file: the
+                 hand-written version flattened both operands first, so
+                 comparing one character against a megabyte copied the
+                 megabyte.
+  same=0         identity.
+  prefix=-1,1    [1,2,3] against [1,2,3,4,5,6]. THE BYTE LOOP CANNOT ANSWER
+                 THIS: every byte they share is equal, one walk runs dry, and
+                 the LENGTH tie-break decides. Both directions, so a
+                 tie-break with the sign backwards fails one of them.
+  diff=-1,-1     a difference in the FIRST byte (0 vs 1) and a difference in
+                 the LAST (6 vs 9, across a leaf boundary). The second is the
+                 one a comparison that stopped at the first leaf would miss.
+  inline=0,-1    an INLINE leaf has no heap address, so `run-eq` cannot be
+                 asked about it and the byte loop must do the work. The first
+                 field proves an inline tier compares equal to flat bytes; the
+                 second puts the DIFFERENCE INSIDE the inline leaf (2,9,4
+                 against 2,3,4) so the fallback path is what decides.
+  unsigned=1,-1  0x80 against 0x01. BYTES ARE UNSIGNED: 128 > 1, so the
+                 answer is 1. Read as a SIGNED byte, 0x80 is -128 and this
+                 field flips to -1 -- and every non-ASCII string would sort
+                 before every ASCII one. There is no other field on this line
+                 that a signed comparison would fail, and that is why the pair
+                 is here.
+  deep=0,-1      leaf boundaries that line up NOWHERE: 2+1 then 2+1 against a
+                 single leaf of six, mixing inline and flat at both depths.
+                 Equal to x, and -1 against the sequence that differs in the
+                 final byte -- so the two walks track by OFFSET rather than by
+                 leaf.
+
+NOT PINNED HERE, and worth saying: the old ordering synthesised UTF-16 code
+units out of UTF-8 to reproduce `String.compareTo`, under which a
+supplementary character sorts BEFORE U+E000..U+FFFF. No field on this line
+reaches four-byte UTF-8, so this driver does not distinguish the byte order
+from that one. `unsigned=1,-1` is the nearest it gets.

@@ -344,3 +344,71 @@ fn main() {
          .Append(IsVectorLike(rt, 1L) ? 1 : 0).Append(' ');
         System.Console.WriteLine(o.ToString());
     }
+--expect
+same=768,769,770,771 wlen=6 w4=771 w5=65535 nlen=2 n0=768 zlen=0 indep=768 0 0 0 0 32 32 992 1024 | toff33=32 a0=1 a31=1 a32=1 shift=5 n3=119 n32=136 nover=57005 veclike=1100
+--expect-why
+DERIVED BY HAND from `vecread.kin` against this fixture, not pasted from a
+run. The fixture lays every node out explicitly -- a bump allocator starting
+at 100, `alloc` NIL-filling the body -- so every printed number is an address
+or a slot value that can be worked out.
+
+  NIL = 0xFFFF = 65535, and an untouched slot reads as that.
+
+NODE-CLONE, the three length relationships. `node-clone src newlen edit`
+allocates a node of `newlen` children and copies `min(newlen, node-len src)`
+of them; there is no `max(newlen, 1)` floor (the file's own doc says so).
+
+  src = new-node 4  -> children 0..3 set to 0x300..0x303 = 768 769 770 771
+
+  same   = clone 4: copy = min(4, 4) = 4, so all four survive
+           -> same=768,769,770,771
+  wider  = clone 6: copy = min(6, 4) = 4. `node-len` is `olen - 1` and the
+           object is 6+1 slots, so wlen=6; child 3 is the last one COPIED
+           (771) and child 5 was never written, so it is still the allocator's
+           NIL -> w5=65535. (The driver labels these `w4=`/`w5=` while asking
+           for children 3 and 5; the values are children 3 and 5.)
+  narrow = clone 2: copy = min(2, 4) = 2, nlen=2, n0=768
+  z      = clone 0: copy = 0 and zlen=0. THIS IS THE FLOORED CASE -- both
+           ports used to build a 1-child node here, which would print zlen=1.
+           `0` is the number that tells the two apart.
+
+  indep: after the clone, `node-set src 0 0x999` writes the ORIGINAL. A clone
+  that shared storage would print 2457; a real copy still reads 768.
+
+TAIL-OFF, over the boundary. The rule is `c < WIDTH -> 0`, else
+`((c - 1) >>> 5) << 5`:
+
+  0, 1, 31 -> 0 by the first arm
+  32       -> ((32-1) >>> 5) << 5 = (31 >>> 5) << 5 = 0     <- the boundary:
+              32 elements is still ONE full tail, tail-off 0, and a
+              `c <= WIDTH`/`(c >>> 5) << 5` slip prints 32 here
+  33       -> (32 >>> 5) << 5 = 1 << 5 = 32
+  64       -> (63 >>> 5) << 5 = 32
+  1024     -> (1023 >>> 5) << 5 = 31 << 5 = 992                <- not 1024
+  1025     -> (1024 >>> 5) << 5 = 32 << 5 = 1024
+
+ARRAY-FOR on the 33-element vector: root at shift 5 with child 0 = leaf, tail
+of one. tail-off is 32, so indices 0 and 31 are UNDER THE TRIE and 32 is the
+tail.
+
+  array-for 0:  0 >= 32? no. level 5: child (0 >>> 5) & 31 = 0 -> leaf.  a0=1
+  array-for 31: 31 >= 32? no. (31 >>> 5) & 31 = 0 -> leaf.               a31=1
+  array-for 32: 32 >= 32, take V_TAIL -> tail1.                          a32=1
+
+  shift=5 is V_SHIFT read straight back.
+
+VEC-NTH with a default:
+
+  nth 3   -> leaf, index 3 & 31 = 3   -> 0x77 = 119
+  nth 32  -> tail1, index 32 & 31 = 0 -> 0x88 = 136. THE MASK IS THE CHECK:
+             an unmasked index reads tail1's slot 32, which is off the end of
+             a one-child node.
+  nth 33  -> 33 >= cnt 33, so the DEFAULT, 0xDEAD = 57005 -- and it is the
+             caller's default rather than NIL, which is the convergence this
+             file's doc describes.
+
+IS-VECTOR-LIKE answers for four things, in order: a TY_VEC object, a
+TY_MAPENTRY, a TY_NODE, and the non-heap fixnum 1. A map entry IS
+vector-like (Clojure's `vector?` is true of one) and a trie node is not, so
+the expected digits are 1 1 0 0 -> veclike=1100. The middle `1` is the whole
+point of the field; `1000` is what the pre-convergence answer would print.

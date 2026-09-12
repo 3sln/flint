@@ -361,3 +361,100 @@ namespace Flint.Rt {
         o.Append(EmptyOf(rt, 7L).ToString("x"));
         System.Console.WriteLine(o.ToString());
     }
+--expect
+nil=0 str=71 5 2 2 72 73 74 75 75 76 77 77 78 79 80 0 81 unk=0|UnsupportedOperationException/count over a #30 needs more of the data structures| fix=0|UnsupportedOperationException/count over a fixnum needs more of the data structures| pop=901 |IllegalStateException/cannot pop an empty vector| |IllegalStateException/cannot pop an empty list| popc=902 || peek=914 peek0=ffff peekc=903 peekn=ffff 921 922 922 922 923 924 ffff ffff
+--expect-why
+DERIVED BY HAND from `collgen.kin` against the `-head` stubs. These four
+functions are TAG DISPATCHES, so what is checked is which arm each tag lands
+on -- and the fixture is built for exactly that: every delegate answers a
+DISTINCT constant, so the printed number NAMES the arm that ran. Nothing here
+was read off a run.
+
+  s-count 71   table-count 72   ttable-count 73   schema-len 74
+  map-count 75 set-count 76     b-count 77        tvec-count 78
+  tmap-count 79 tset-count 80   seq-count 81      vec-count settable (`vn`)
+  vec-pop 0x901  rest 0x902  first 0x903  vec-nth i -> 0x910 + i
+  empty-vec 0x921  empty-map 0x922  empty-set 0x923  empty-list 0x924
+  NIL is 0xffff; the Values are printed in HEX.
+
+`count-of`, in the driver's order:
+
+  nil=0   the first arm, and the doc says why it is first: nil is not a heap
+          value, so every arm below would otherwise have to say so again.
+  str=71  `is-string` is asked BEFORE the type switch, so a string counts in
+          CODE POINTS via `s-count`. 71, not 77 -- a string must not fall into
+          the byte-string arm.
+  5       TY_VEC -> `vec-count`, which is `vn` = 5 at this point.
+  2 2     TY_MAPENTRY and TY_TAGGED, both LITERAL 2. Not a delegate: a map
+          entry is a pair and a tagged literal reads as two keys. The source
+          notes the ports THREW here, so a value `(seq some-map)` hands out
+          could not be counted; `2 2` is that fix.
+  72 73 74      TY_TABLE, TY_TTABLE, TY_TABLEREF. The third is `schema-len`
+          (74) and not `table-count` (72): "a ref counts its COLUMNS, because
+          it is a map of them".
+  75 75   TY_ARRAYMAP and TY_HASHMAP share one arm -- the same number twice,
+          on purpose, is what an `or` of two tags looks like.
+  76      TY_SET
+  77 77   TY_BYTES and TY_BROPE, the two byte tiers, also one arm.
+  78 79 80  the three transients. TY_TVEC is 78 and not 5: a transient vector
+          is NOT counted through `vec-count`.
+  0       TY_EMPTY_LIST, a literal 0 rather than a walk.
+  81      TY_CONS reaches `is-seq` and then `seq-count`. THIS IS THE ARM THE
+          HEADER IS ABOUT: it is reached only after the tag switch misses, and
+          only when `is-seq` says yes.
+
+  unk=0|...a #30...|  A heap object of an unknown tag. It must NOT fall into
+          `seq-count` -- the native runtime did, walking a first/rest chain
+          that is not there. `is-seq` says no, so it refuses by name: the
+          message is built by `str-cat` around `describe`, which the fixture
+          answers as "a #30" for tag 30. The count printed alongside is 0,
+          which is what the function returns after throwing.
+  fix=0|...a fixnum...|  A value that is not on the heap at all. `is-heap`
+          keeps it out of the type switch entirely -- reading `ty` at a
+          fixnum's bits is the defect the header describes -- and `describe`
+          says "a fixnum". Same refusal, different noun, which is the proof
+          the guard ran rather than the tag switch falling through.
+
+`pop-of`:
+
+  pop=901   TY_VEC with `vn` = 5: non-empty, so `vec-pop`.
+  |IllegalStateException/cannot pop an empty vector|  `vn` set to 0: the
+            vector arm checks count FIRST and refuses. A pop of an empty
+            vector is an error, unlike a peek.
+  |IllegalStateException/cannot pop an empty list|  TY_EMPTY_LIST has its own
+            arm and its own message -- two different sentences, so a shared
+            refusal cannot pass for both.
+  popc=902  TY_CONS falls past both arms to `rest`. A list pops its FIRST,
+            which is `rest`; a vector pops its last, which is `vec-pop`. The
+            two constants being different is what says so.
+  ||        `pop-of NIL` answers NIL and throws NOTHING -- the empty `thrown`
+            between the bars is the assertion. The doc calls this the one
+            place flint was STRICTER than Clojure, which is the only kind of
+            divergence a working program meets by accident. A refusal here
+            would print a message between the bars.
+
+`peek-of`:
+
+  peek=914  TY_VEC, n = 5, so `vec-nth coll (n - 1)` = index 4 -> 0x910 + 4.
+            The `914` is the off-by-one check: `915` would be `n` instead of
+            `n - 1`, reading one past the end.
+  peek0=ffff  `vn` = 0: NIL, not a refusal. "Peeking at nothing is a question
+            with an answer" -- this is the field that distinguishes `peek`
+            from `pop`, which threw for the same vector two fields ago.
+  peekc=903 TY_CONS -> `first`, not `rest` (0x902) and not `vec-nth`.
+  peekn=ffff  nil peeks to nil.
+
+`empty-of`, over TY_VEC, TY_ARRAYMAP, TY_HASHMAP, TY_TABLEREF, TY_SET,
+TY_CONS, TY_STR and then a fixnum:
+
+  921 922 922 922 923 924 ffff ffff
+
+  The THIRD 922 is the one the doc argues for: a TY_TABLEREF answers the empty
+  MAP, because a ref is a map. Native sent it to the empty LIST (0x924), so
+  `(empty row)` was `()` on wasm and `{}` on the ports -- this field is 922
+  and would be 924 if that arm went missing.
+  `ffff` for TY_STR is the other correction: native answered `()` for any heap
+  value it did not name, so `(empty "abc")` was `()` there. A string is not a
+  seq by `is-seq`, so it falls out of the heap block and answers NIL, which is
+  what Clojure says. 924 here would be that bug returning.
+  The last `ffff` is a fixnum -- not on the heap, so no kind, so nil.

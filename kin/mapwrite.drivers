@@ -334,3 +334,108 @@ namespace Flint.Rt {
          .Append(" max=").Append(rt.maxroots);
         Console.WriteLine(o.ToString());
     }
+--expect
+same=1 repl=153,65 grow=3,81 promoted=1 hcount=6 | miss=1 shrunk=1,65 ref=1 | huntouched=1 hshrunk=4 log=AABNNNNNNNNHNHNHAMDH roots=0 max=9
+--expect-why
+DERIVED from `mapwrite.kin` against the driver's stubs. The addresses never
+appear; what appears is the SHAPE of what was built. 0x99 = 153, 0x41 = 65,
+0x51 = 81.
+
+The fixture: an array map at 60 with entries (0x31 -> 0x32) and (0x41 -> 0x42);
+a hash map at 80 with count 5 and root 90; a row ref at 70. Every constructor
+writes a letter into `log` -- A for `new-array-map`, H for `new-hash-map`, B
+for `bn-new`, N for `node-assoc`, D for a `node-dissoc` that removed
+something, M for `ref-to-map` -- so `log` is the allocation TRACE, and it is
+the field that says which arm ran rather than only what it answered.
+
+  same=1      assoc of an existing key with an IDENTICAL value hands the SAME
+              map back. Not a copy that compares equal -- the same address. So
+              `log` gains nothing here, which the trace below confirms by
+              starting at A rather than AA.
+
+  repl=153,65 existing key, DIFFERENT value. A fresh flat map, slot 0's value
+              replaced with 0x99 = 153, and slot 1 UNTOUCHED at 0x41 = 65. The
+              second number is what says the copy loop ran over the whole map
+              rather than only the changed pair.
+
+  grow=3,81   a NEW key with room. The fresh map is sized n + 1 = 3, and the
+              new key lands at index 2 -- APPENDED, after the existing two.
+              81 = 0x51 at index 2, not at index 0, so insertion order holds.
+
+  promoted=1  a new key with NO room: `map-count` is set to ARRAY_MAP_MAX = 8,
+              so the flat arm is refused and `promote` runs, and the result is
+              a TY_HASHMAP. This is the one-way door.
+
+  hcount=6    assoc into the hash map at 80, which has count 5. `node-assoc`
+              sets `champ-added`, so the new map's count is 5 + 1 = 6. This is
+              the field that checks `champ-added` is READ: the source sets
+              `grown = cnt` and only bumps it when the flag is set, so 6 and
+              not 5. A runtime that returned the pair another way would be
+              allocating something to hold it, which is what the header says
+              the flag exists to avoid.
+
+  | miss=1    dissoc of an ABSENT key hands the map back unchanged -- the
+              `found == n` sentinel again, and no allocation.
+  shrunk=1,65 dissoc of a PRESENT key: a fresh map of n - 1 = 1 entry, and the
+              SURVIVOR is 0x41 = 65. The `d` cursor in the copy loop advances
+              only on the kept entries, so removing index 0 must leave index
+              1's key at index 0 -- not a hole, and not the removed key.
+  ref=1       A ROW REF MATERIALISES. Its arm comes before everything else in
+              `map-dissoc`, turning the ref into a real map and recursing. The
+              header records what its absence cost: `(dissoc row :b)` was nil
+              on all four runtimes while `assoc`, `get`, `count` and `=` all
+              worked, because `is-map` is true for a ref and the ref fell
+              through to the NIL at the bottom. So `ref=1` versus a nil is the
+              regression this line pins.
+
+  | huntouched=1
+              dissoc from the hash map of a key the stub reports as NOT there
+              (`node-dissoc` clears `champ-added` for any hash but 0x77). The
+              source checks the FLAG FIRST -- `(if (not champ-added) ...)` --
+              and hands the original map back. A version that compared only
+              the returned node would also pass here (the stub returns the
+              same node), so this field alone does not separate them; what
+              does is that `log` gains NOTHING at this point, which means no
+              map was built.
+  hshrunk=4   dissoc of a key whose hash IS 0x77 (0x11 * 7 = 0x77): a real
+              removal, so the count goes 5 - 1 = 4.
+
+THE TRACE, log=AABNNNNNNNNHNHNHAMDH, read left to right:
+
+  A                 the replacement copy (`repl`)
+  A                 the append copy (`grow`)
+  B NNNNNNNN H      `promote`: ONE empty root node, then EIGHT `node-assoc`
+                    calls -- one per entry of the 8-entry map -- then one
+                    hash map to hold the result. Eight Ns is the field that
+                    says `promote` rebuilt every entry; seven would mean an
+                    off-by-one in its loop, and the map would silently lose a
+                    key on the way through the door.
+  N H               the RETRY after promotion, which lands in the CHAMP arm
+                    because `promote` answers a hash map. So `promoted=1` and
+                    these two letters together say the retry did not loop back
+                    into the flat arm.
+  N H               the ordinary hash-map assoc (`hcount`)
+  A                 the dissoc copy (`shrunk`)
+  M                 `ref-to-map` for the row ref. Exactly one, and no A after
+                    it: the materialised map is empty, so the inner dissoc
+                    finds nothing and hands it straight back.
+  D H               the hash-map dissoc that removed something.
+
+Nothing appears for `same`, `miss` or `huntouched`, which is the point of
+reading the trace rather than the answers: those three must allocate NOTHING,
+and an implementation that copied a map in order to return an identical one
+would pass every other field on this line.
+
+  roots=0     the stack is empty after ten calls, including the nested ones:
+              `promote` inside `map-assoc` inside itself, and `map-dissoc`
+              recursing through the ref arm.
+  max=9       the deepest it ever got, and it is derivable exactly. The peak
+              is the promote-and-retry: `map-assoc` pushes map, key and value
+              (3), pushes the promoted map (4), the recursive `map-assoc`
+              pushes map, key and value again (7), then the CHAMP root (8) and
+              the new node (9). `promote`'s own loop peaks at 7 (3 + its map,
+              its root, a key and a value), under this. 9 is a CONSTANT, not a
+              function of the map's size -- `promote` pops each key/value pair
+              before the next iteration, so rebuilding 8 entries costs the
+              same depth as rebuilding 1. A loop that leaked one root per
+              entry would print max=15 here and would overflow on a real map.

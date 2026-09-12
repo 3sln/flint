@@ -100,3 +100,38 @@ fn main() {
         for (int i = 0; i < rt.CpsLen(c); i++) o.Append(' ').Append(rt.CpsAt(c, i));
         System.Console.WriteLine(o.ToString());
     }
+--expect
+5: 97 98 233 65 8364
+--expect-why
+DECODED BY HAND from the fixture's leaves, which are five leaves holding
+eight bytes:
+
+  [0x61 0x62] [0xC3] [0xA9 0x41] [0xE2 0x82] [0xAC]
+  = 61 62 C3 A9 41 E2 82 AC
+
+  0x61                -> U+0061  'a'  =    97
+  0x62                -> U+0062  'b'  =    98
+  0xC3 0xA9           -> 110_00011 10_101001
+                       -> 00011 101001 = 0xE9 'e-acute' = 233
+  0x41                -> U+0041  'A'  =    65
+  0xE2 0x82 0xAC      -> 1110_0010 10_000010 10_101100
+                       -> 0010 000010 101100 = 0x20AC 'euro' = 8364
+
+so five code points and the length is 5.
+
+BOTH MULTI-BYTE CHARACTERS STRADDLE A LEAF BOUNDARY, and that is the fixture's
+whole design: `C3` ends leaf 2 and `A9` opens leaf 3; `E2 82` ends leaf 4 and
+`AC` opens leaf 5. The decoder carries `need` and `acc` across the boundary
+rather than buffering, so a straddle needs no special case -- and an
+implementation that reset its state at each leaf would drop 233 and 8364 and
+print a SHORTER list. The count comes first in the output for exactly that
+reason: a dropped character changes field one.
+
+The values are also what distinguishes a correct continuation from a nearly
+correct one. `acc = (acc << 6) | (b & 0x3F)` on `C3 A9` gives 233; masking the
+continuation with 0x7F instead gives 0x1E9 = 489, and shifting by 5 gives 105 --
+all three are plausible-looking numbers, and only 233 is 'e-acute'.
+
+65 between the two is the control: an ASCII byte immediately after a completed
+multi-byte character, so a decoder that left `need` non-zero would swallow it
+and print four points, not five.

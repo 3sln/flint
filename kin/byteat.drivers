@@ -271,3 +271,58 @@ namespace Flint.Rt {
         o.Append("flat_used=").Append(Show(rt, nd, 0)).Append(',').Append(Show(rt, nd, 4)).Append(' ');
         System.Console.WriteLine(o.ToString());
     }
+--expect
+flat=10,12,-1,-1 tree=10,12,20,21,-1 other=-1 nil=-1 dflt=77 flat_used=90,94
+--expect-why
+DERIVED BY HAND from `byteat.kin` against this fixture, not read off a run.
+The fixture spells its bytes out, so every answer is a byte the driver itself
+wrote and can be named.
+
+  l1 = leaf [10,11,12]   b-count 3
+  l2 = leaf [20,21]      b-count 2
+  nd = node [l1,l2]      b-count 5, BB_FLAT nil
+  `show` maps the NIL answer to -1, so -1 here means "returned `dflt`".
+
+FLAT TIER. `b-at` range-checks first (`i >= b-count` -> dflt) and then reads
+`read-u8 (cur + HDR + idx)`:
+
+  b-at l1 0  = byte 0 of [10,11,12] = 10
+  b-at l1 2  = byte 2                = 12
+  b-at l1 3  -> 3 >= 3, dflt         = -1   <- the off-by-one: index 3 of a
+  b-at l1 99 -> 99 >= 3, dflt        = -1      three-byte leaf is ABSENT, and
+                                               a `>` instead of `>=` reads one
+                                               byte past the bytes into the
+                                               gap the fixture leaves there.
+
+TREE TIER, and the boundary is the point. The descent subtracts each child it
+passes: `if idx < kn then next = kid else idx -= kn`.
+
+  b-at nd 0: k=0 kn=3, 0<3 -> l1, idx 0   -> 10
+  b-at nd 2: k=0 kn=3, 2<3 -> l1, idx 2   -> 12
+  b-at nd 3: k=0 kn=3, 3<3 NO, idx 3-3=0
+             k=1 kn=2, 0<2 -> l2, idx 0   -> 20   <- FIRST BYTE OF THE SECOND
+  b-at nd 4: k=0 idx 4-3=1; k=1 1<2 -> l2, idx 1 -> 21      CHILD
+  b-at nd 5: 5 >= 5, dflt                 = -1
+
+`20 21` is what distinguishes a correct descent from one that forgets to
+subtract: without the `idx -= kn` the second child would be indexed 3 and 4 and
+read off its end. The two leaves hold disjoint byte ranges (10..12 vs 20..21)
+precisely so a wrong child cannot print a right-looking byte.
+
+NOT A BYTE STRING. `other` is a TY_VEC: the loop's `t` is neither TY_BYTES nor
+TY_BROPE, and the fixture's `b-count` answers 0 for it, so the range check
+alone returns `dflt` -> -1. `NIL` is not `is-heap`, so the first line of `b-at`
+returns `dflt` -> -1. Both are -1, and both are refusals rather than bytes.
+
+THE `dflt` IS THE CALLER'S. `b-at l1 99 (fixnum 77)` is out of range, so it
+returns what was passed: 77, not -1 and not a sentinel of the function's own.
+This is the hole the doc header names -- 0..255 leaves no number spare.
+
+THE CACHED FLATTENING. `nd`'s BB_FLAT is then pointed at a leaf holding
+[90,91,92,93,94], which DISAGREES with the children on purpose. `b-at` takes
+the flattening (`set cur flat; continue`) before walking kids, so index 0 must
+read 90 and index 4 must read 94 -- the lie's bytes. An implementation that
+ignores BB_FLAT walks l1/l2 instead and prints `10,-1`: 10 for index 0, and -1
+for index 4 only if it also mis-ranges, or 21 if it descends correctly. So
+`90,94` is the answer only the flat-following path can give, and `10,21` is
+exactly what the ports printed before this path was written in.

@@ -380,3 +380,76 @@ namespace Flint.Rt {
          .Append(Val.IsNil(BAbsorb(rt, l3, l3)) ? 1 : 0).Append(' ');
         System.Console.WriteLine(o.ToString());
     }
+--expect
+t1=11 t2=44,6 built=45,54,2 t3=57,0 t45=62,1 decl=11
+--expect-why
+DERIVED BY HAND by walking `b-concat`'s five tiers over this fixture's
+constants -- FLAT_MAX = 8 and FANOUT = 3, which the `-head` sections set small
+precisely so a whole tree can be traced on paper. Nothing below was read off a
+run; one field came out other than expected and is discussed at the end.
+
+TIER 1, `t1=11`. `b-count e` is 0, so `b-concat e l3` returns `b` -- the SAME
+Value, not a copy, so the driver's identity test is 1. `b-concat l3 e` hits the
+second guard and returns `a`, also identity: 1. Two ones, and a tier that
+allocated instead of returning its argument would print 0 for one of them.
+
+TIER 2, `t2=44,6`. 3 + 3 = 6 <= FLAT_MAX, so `b-copy-concat` makes a LEAF:
+type 44 = TY_BYTES (not 45 = TY_BROPE), of 6 bytes. The type is the assertion --
+a tree here would be correct in content and wrong in shape.
+
+THE BUILD, `built=45,54,2`. `acc` starts as a 6-byte leaf and is joined with a
+fresh 6-byte leaf eight times. Writing L for a 6-byte leaf, and taking each
+join through the tiers (sum always > 8, so never tier 2; `b-count b` is 6 and
+FLAT_MAX/2 is 4, so never tier 3):
+
+  1. absorb declines (`a` is a leaf, not TY_BROPE) -> tier 5: [L,L]        d1
+  2. absorb: top n=2 < 3, so `b` joins it                 -> [L,L,L]       d1
+  3. absorb: top n=3 = FANOUT, full  -> tier 5, `b` wrapped to d1
+                                                  -> [[L,L,L],[L]]        d2
+  4. absorb descends into [L]:        -> [[L,L,L],[L,L]]                   d2
+  5. absorb descends:                 -> [[L,L,L],[L,L,L]]                 d2
+  6. last child full, top n=2 < 3     -> [[L,L,L],[L,L,L],[L]]             d2
+  7. absorb descends into the [L]:    -> [[L,L,L],[L,L,L],[L,L]]           d2
+  8. absorb descends:                 -> [[L,L,L],[L,L,L],[L,L,L]]         d2
+
+so type 45 (TY_BROPE), count 6 + 8*6 = 54, depth 2. THE DEPTH IS THE CHECK:
+nine leaves at FANOUT 3 fit in depth 2, and absorbing at the top instead of
+down the right spine would give the left spine the header warns about -- depth
+climbing with every join, 8 rather than 2.
+
+`t3=57,0` -- AND THE SECOND FIELD IS NOT WHAT THE DRIVER'S COMMENT PROMISES.
+The comment above it says a small `b` "merges into the rightmost LEAF, so the
+count grows and the DEPTH does not", which would print 1. Worked out from the
+source it must print 0, and the code is right and the comment is wrong:
+
+  `b-concat acc l3`: 54 + 3 > 8, so not tier 2. `b-count l3` is 3 <= 4, so
+  tier 3 is TRIED: `b-merge-right` walks the right spine to the rightmost
+  leaf, which is an L. Its guard is `olen a + b-count b <= FLAT_MAX`, i.e.
+  6 + 3 = 9 <= 8 -- FALSE. It declines, and nil propagates back up.
+  Tier 4, `b-absorb`: the tree above is COMPLETELY FULL -- top has 3 = FANOUT
+  children and its last child has 3 as well -- so the descent finds no room
+  and the `n < FANOUT` fallback does not fire either. Nil.
+  Tier 5 therefore runs: `l3` is wrapped to depth 2 and paired with `acc`,
+  giving count 54 + 3 = 57 at depth 3.
+
+So 57 (the count is right either way) and 0 (the depth GREW, by exactly the one
+level tier 5 adds). Tier 3 is unreachable from this fixture: every leaf it
+builds is 6 bytes and FLAT_MAX is 8, so no `b` that passes the `<= FLAT_MAX/2`
+gate can also fit beside a 6-byte leaf. The probe's label `t3=` names the tier
+it ATTEMPTS, not one it reaches. Left as derived rather than relabelled,
+because only the `.drivers` file may be edited here -- but the comment above
+the probe is misleading and should be fixed.
+
+`t45=62,1`. `b-count big` is 8 > 4, so tier 3 is not even tried; the tree is
+still full so tier 4 declines; tier 5 wraps `big` to depth 2 and pairs it,
+giving 54 + 8 = 62 at depth 3, which is d0 + 1. The `1` is the real assertion:
+"a new level" means ONE new level, and a tier 5 that wrapped to the wrong depth
+would print 2.
+
+`decl=11`. Both helpers are asked to do something they cannot, and must answer
+NIL rather than something plausible:
+  `b-merge-right l3 big`: `l3` is a leaf, 3 + 8 = 11 > FLAT_MAX -> nil -> 1
+  `b-absorb l3 l3`:       `l3` is TY_BYTES, not TY_BROPE       -> nil -> 1
+This is the "NIL MEANS DECLINED" contract in the header: a node is never nil,
+so a declining helper cannot be mistaken for a successful one. `00` here would
+mean a helper returned a value where it had no room.

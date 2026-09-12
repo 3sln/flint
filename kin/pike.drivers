@@ -44,3 +44,53 @@ fn main() {
                 o.Append(PredHit(code, v) ? "1" : "0");
         Console.WriteLine(o.ToString());
     }
+--expect
+11011111000000 11111100 100001111100001100101101
+--expect-why
+DERIVED BY HAND from `pike.kin`, evaluating each predicate against each probe
+codepoint. Nothing here was read off a run.
+
+  word-cp  v = (48<=v<=57) or (65<=v<=90) or (97<=v<=122) or v==95
+  space-cp v = v in {32, 9, 10, 13, 12, 11}
+
+FIELD 1 -- `word-cp` over the 14 probe values, the range EDGES first:
+
+  48 '0'  lower edge of the digit range   1
+  57 '9'  upper edge                      1
+  58 ':'  ONE PAST the digits             0   <- an inclusive/exclusive slip
+  65 'A'  lower edge of upper case        1
+  90 'Z'  upper edge                      1
+  97 'a'  lower edge of lower case        1
+ 122 'z'  upper edge                      1
+  95 '_'  the lone `== 95` disjunct       1
+  32 ' '                                  0
+   9 tab                                  0
+  13 CR                                   0
+  11 VT                                   0
+  64 '@'  the GAP between '9' and 'A'     0   <- a merged range would say 1
+   0 NUL                                  0
+
+so `11011111000000`. 58 and 64 are the two that can only be right: 58 catches
+`<= 57` written as `< 57`-and-then-shifted, and 64 catches an implementation
+that collapsed 48..122 into one range -- ASCII '@' sits inside that span and
+outside every clause kin lists.
+
+FIELD 2 -- `space-cp` over its six members in the order the `or` lists them,
+then two non-members: 32, 9, 10, 13, 12, 11 all hit, 33 '!' and 48 '0' miss,
+so `11111100`. VT (11) is last in kin's chain and is the one a port that
+stopped at five whitespace codes would drop.
+
+FIELD 3 -- `pred-hit code v` for code 0..5 over v = 48 '0', 65 'A', 32 ' ',
+33 '!'; four bits per code, six codes, 24 bits. The odd codes are the
+NEGATIONS of the even ones, so each pair must read as exact complements:
+
+  0  digit       1 0 0 0
+  1  non-digit   0 1 1 1
+  2  word        1 1 0 0
+  3  non-word    0 0 1 1
+  4  space       0 0 1 0
+  5  non-space   1 1 0 1
+
+giving `100001111100001100101101`. Code 5 is kin's `:else` rather than a
+listed arm, so it is the one that answers for every code the `case` does not
+name; it must still be the exact complement of code 4, and `1101` is that.

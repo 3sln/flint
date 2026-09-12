@@ -101,3 +101,33 @@ fn main() {
         o.Append(BnKey(rt, n, 0)).Append(' ').Append(BnVal(rt, n, 1)).Append(' ').Append(BnNode(rt, n, 0));
         Console.WriteLine(o.ToString());
     }
+--expect
+17 34 70 71 80 81 91 90 700 811 900
+--expect-why
+DERIVED FROM THE LAYOUT, not from a run. The fixture is a hand-laid node, so
+every slot's address can be worked out and the printed value is the one the
+address holds.
+
+  BN_DATAMAP 0  BN_NODEMAP 1  BN_BASE 2      (the driver's `--rust-head`)
+  node at address 4, `olen` read from h[3] = 8
+
+  bn-datamap = h[4+0] = 0x11 = 17
+  bn-nodemap = h[4+1] = 0x22 = 34
+  bn-key  i  = h[4 + 2 + 2i]      -> h[6]=70,  h[8]=80
+  bn-val  i  = h[4 + 2 + 2i + 1]  -> h[7]=71,  h[9]=81
+
+THE SUB-NODES ARE THE CHECK. `champ.kin` says they "live at the END, in
+DESCENDING bit order" -- `bn-node j = slot(n, olen - 1 - j)`:
+
+  bn-node 0 = h[4 + 8 - 1 - 0] = h[11] = 91
+  bn-node 1 = h[4 + 8 - 1 - 1] = h[10] = 90
+
+so the expected pair is `91 90` and NOT `90 91`. An off-by-one or an ascending
+walk reads a node that is one slot out -- inside the object, so no bounds check
+fires, and the map returns a wrong child rather than crashing. The two values
+are deliberately unequal and deliberately out of order: had the fixture stored
+`90 91` ascending, both conventions would print the same thing.
+
+The last three are the SETTERS answering through the GETTERS -- key 0 written
+at h[6], val 1 at h[9], node 0 at h[11] -- so a setter that computes a
+different address from its getter shows up as a stale 70/81/91.

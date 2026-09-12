@@ -76,3 +76,51 @@ namespace Flint.Rt {
         o.Append(NeedsGrow(t) ? "1" : "0");
         Console.WriteLine(o.ToString());
     }
+--expect
+7 0 0:0 1:101 9:109 170:77 17:117 0:0 0:0 0:0 n=4 0
+--expect-why
+DERIVED by running `interns.kin`'s four functions against the driver's table
+by hand. The table is eight slots of zero, so every probe's landing slot is
+determined.
+
+  mask t        = alen(values) - 1        = 8 - 1 = 7
+  needs-grow t  = count*4 >= alen(values)*3
+
+FIELD 1, `mask` = 7. A power-of-two mask, not a modulus: `raw-insert` uses it
+as `hash & m`, so a mask of 8 (length, not length-1) would put a probe one slot
+past the array on every hash with bit 3 set.
+
+FIELD 2, `needs-grow` on the empty table = 0. 0*4 = 0, 8*3 = 24, and 0 >= 24 is
+false. A predicate that read `<=`, or compared against `alen` rather than
+`alen*3`, would say 1 here and the table would grow before holding anything.
+
+THE EIGHT SLOTS ARE THE LINEAR PROBE, and the fixture is laid so the walk has
+to step over an entry it did not place. `insert-at 3` writes DIRECTLY at index
+3 with no probe -- hashes[3] = 0xAA = 170, values[3] = 77 -- and then three
+`raw-insert`s arrive on hashes 1, 9, 17, which are all 1 mod 8:
+
+  raw-insert 1  101: i = 1 & 7 = 1, values[1] = 0        -> lands at 1
+  raw-insert 9  109: i = 9 & 7 = 1, taken -> 2, free     -> lands at 2
+  raw-insert 17 117: i = 17 & 7 = 1, taken -> 2, taken
+                     -> 3, HOLDS 77 from insert-at, taken
+                     -> 4, free                          -> lands at 4
+
+so slot 3 keeps `170:77` and the third collider is pushed past it to 4. That
+skip is the whole point of the fixture: a probe that tested the HASH array for
+emptiness rather than the VALUE array would see hashes[3] = 170 and still skip,
+but one that walked `i + 1` without re-masking, or that stopped on the first
+slot whose hash differed, would overwrite 77 and print `17:117` at index 3.
+The three hashes are deliberately congruent mod 8 and the values deliberately
+distinct, so a mis-stepped probe moves a number rather than merely reordering
+equal ones.
+
+Empty slots print `0:0`, which is also what `raw-insert`'s loop tests -- the
+sentinel for "free" is a zero VALUE, so slot 0 and slots 5..7 are untouched.
+
+  n=4: three `raw-insert`s plus one `insert-at`, each bumping `count` once.
+
+FIELD LAST, `needs-grow` again = 0: 4*4 = 16, still under 24. Four of eight is
+half full and the threshold is three quarters, so the table does not grow until
+the sixth entry. The two `needs-grow` readings are both 0 for arithmetic that
+differs by 16, not because the predicate is stuck -- 6*4 = 24 >= 24 is where it
+turns over, and this fixture stops two entries short of it.

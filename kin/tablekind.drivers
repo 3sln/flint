@@ -353,3 +353,70 @@ fn main() {
         o.Append("ok=").Append(string.Join(".", grid));
         System.Console.WriteLine(o.ToString());
     }
+--expect
+heap=string.string.keyword.symbol.number.vector.vector.map.map.map.set.list.list.list.list.list.list.list.list.fn.fn.fn.port.thread.atom.var.regex.exception.tagged.opaque.bytes.bytes.bytes.delay.volatile.schema.table flat=nil.boolean.boolean.number.number.string.keyword.other others=1 known=1111110 ok=11111111.11000000.00100000.00011000.00000100.00000010
+--expect-why
+DERIVED BY READING THE ARMS of `kind-of`, `known-type` and `type-ok` against
+the fixture's tag list, in the fixture's order. Nothing here was pasted from a
+run; every word is the `static-text` the matching arm returns.
+
+HEAP, the 37 tags the driver builds one object of each for, in ITS order:
+
+  TY_STR, TY_ROPE            -> string   (one arm, two tags)
+  TY_KW                      -> keyword
+  TY_SYM                     -> symbol
+  TY_BIGINT                  -> number   (with the fixnum and double arms)
+  TY_VEC, TY_MAPENTRY        -> vector   -- a MAP ENTRY IS A VECTOR, the same
+                                            widening `vecread`'s
+                                            `is-vector-like` makes
+  TY_ARRAYMAP, TY_HASHMAP,
+  TY_TABLEREF                -> map      -- a table REF answers `:map`,
+                                            because that is what a guest holds
+  TY_SET                     -> set
+  TY_CONS, TY_EMPTY_LIST, TY_LAZYSEQ, TY_VECSEQ, TY_STRSEQ, TY_RANGE,
+  TY_ITERSEQ, TY_CHUNKSEQ    -> list     (eight tags, one arm)
+  TY_CLOSURE, TY_NATIVEFN,
+  TY_MULTIFN                 -> fn
+  TY_PORT -> port      TY_THREAD -> thread   TY_ATOM -> atom
+  TY_VAR  -> var       TY_REGEX  -> regex    TY_EXINFO -> exception
+  TY_TAGGED -> tagged  TY_OPAQUE -> opaque
+  TY_BYTES, TY_BROPE, TY_TBYTES -> bytes
+  TY_DELAY -> delay    TY_VOLATILE -> volatile
+  TY_SCHEMA -> schema  TY_TABLE -> table
+
+FLAT, the non-heap tiers, tested BEFORE the type tag and in this order in the
+source: nil, bool, double, fixnum, inline string, inline keyword. So
+
+  NIL -> nil, TRUE -> boolean, FALSE -> boolean, a double -> number,
+  a fixnum -> number, an inline string -> string, an inline keyword ->
+  keyword, and the TY_UNKNOWN object -> other.
+
+  THE POINT IS `others=1`. `DECISIONS.md#threads-and-ports` says a value a
+  guest can hold needs a kind of its own or it cannot be dispatched on at
+  all, so `:other` must appear EXACTLY ONCE across all 45 probes -- for the
+  one tag deliberately not in the closed set. 2 or more means a real type
+  fell through and a protocol cannot reach it; 0 would mean the fallthrough
+  arm is unreachable and the fixture is not testing what it claims.
+
+KNOWN=1111110, for `int double string bool keyword any table` in that order.
+The first six are the types a schema may declare; `:table` is a real kind but
+NOT a declarable column type, so the last digit is 0. A `known-type` that
+accepted anything keyword-shaped would print 1111111.
+
+OK, the grid: one row per type in `any int double string bool keyword`, one
+column per value in `fixnum(1), bigint, double, TY_STR object, inline string,
+TRUE, inline keyword, NIL`.
+
+  any     11111111  -- the escape hatch takes everything, NIL included
+  int     11000000  -- fixnum AND BIGINT. This is the line the source's own
+                       comment is about: `is-int` and not `is-fixnum`, so a
+                       big integer belongs in an `:int` column. `10000000`
+                       is the bug.
+  double  00100000  -- and NOT the fixnum: `:double` is not `:int`
+  string  00011000  -- the heap string and the INLINE string, two
+                       representations of one kind
+  bool    00000100  -- only TRUE among these; NIL is not false here
+  keyword 00000010  -- only the inline keyword
+
+  Every row has NIL at 0 except `any`: a typed column does not take nil, which
+  is what makes `:any` a decision rather than a default.

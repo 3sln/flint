@@ -495,3 +495,64 @@ namespace Flint.Rt {
         }
         return s.ToString();
     }
+--expect
+fill=3 tree=1 after=1 flushed=1.2.3.4 out=1.2.3.4.5 live=0 reuse=1 bulk=10.11.12.13.14.15.16.17.18 empty=0,0
+--expect-why
+DERIVED BY HAND from `bytetwrite.kin` with TAIL_CAP = 4, which the `-head`
+sections set small "so the flush boundary is reachable by hand". `mk` builds a
+transient with TB_TREE nil, a four-byte tail of zeros, fill 0 and TB_LIVE true.
+
+BELOW CAPACITY, `fill=3 tree=1`. Three `b-conj`s of 1, 2, 3. Each finds
+`fill != TAIL_CAP`, writes one byte at `tail + HDR + fill` and bumps TB_FILL.
+So fill is 3, and TB_TREE is STILL NIL (printed as 1) -- the whole claim of the
+type is "no allocation and no copy until it fills", and a tree that had grown
+by now would mean every append allocated.
+
+PAST CAPACITY, `after=1 flushed=1.2.3.4`. The fourth conj takes fill 3 -> 4,
+filling the tail exactly and STILL not flushing -- the check is on entry, not
+on exit. The fifth then finds `fill == TAIL_CAP` and flushes first:
+  `tb-flush` with `fill == TAIL_CAP` hands the tail over WHOLE (`piece` is the
+  tail itself, no copy), concats it onto a nil tree -- which is just the piece
+  -- installs a FRESH tail and resets TB_FILL to 0. Then the conj retries and
+  writes 5 into the new tail.
+So TB_FILL is 1 (the single byte 5) and the tree is the bytes 1,2,3,4. `1.2.3.4`
+is the assertion on both halves: the four bytes are there in order, and there
+are exactly four -- a flush that handed over the buffer without regard to fill
+would be right HERE (fill was 4) but wrong at the next step, which is why the
+partial case is tested separately below. `after=5` would mean the flush never
+happened and the sixth byte overran the tail.
+
+SEALED, `out=1.2.3.4.5 live=0`. `b-persistent` sees fill = 1 > 0 and flushes a
+PARTIAL tail: `fill != TAIL_CAP`, so `b-copy-range tail 0 1` copies out just
+the one live byte. THAT COPY IS THE POINT of the doc paragraph -- handing over
+the four-byte buffer would say the transient holds four bytes when it holds
+one, and `out` would print `5.0.0.0`. Concatenated onto `1.2.3.4`, the answer
+is `1.2.3.4.5`: five bytes, in append order, no padding. Then TB_LIVE goes
+false, so `tb-live` is 0 -- INVALIDATED, not freed.
+
+`reuse=1`. Sealing again must refuse. `b-persistent` guards on `tb-live`, which
+is now false, so it throws -- modelled in all three fixtures as NIL -- giving 1.
+0 would mean a dead transient answered, which is the "reading a structure
+somebody else now owns" the doc warns about. The same guard is on `b-conj` and
+`b-append-bytes`.
+
+BULK, `bulk=10.11.12.13.14.15.16.17.18`. Nine bytes into a four-byte tail, so
+`b-append-bytes` crosses the boundary TWICE:
+  sink holds 10..18, total 9, i = 0
+  fill 0: n = TAIL_CAP - fill = 4, copy 10,11,12,13   -> fill 4, i 4
+  fill 4: flush (whole tail) -> tree = 10.11.12.13, fresh tail, `continue`
+  fill 0: n = 4, copy 14,15,16,17                     -> fill 4, i 8
+  fill 4: flush (whole tail) -> tree = 10..17, fresh tail, `continue`
+  fill 0: n = 4 but `total - i` = 1 is smaller, so n = 1, copy 18 -> fill 1
+  then `b-persistent` flushes the PARTIAL 1 -> tree = 10..18
+Nine bytes, ascending, no gaps and no repeats. Every distinct failure shows:
+losing the `n > total - i` clamp reads past the sink; forgetting the
+`continue` after a flush writes at the old fill; flushing a full tail by copy
+rather than whole would still give the right bytes, which is why the field
+above tests that separately.
+
+`empty=0,0`. A transient sealed with NOTHING appended: fill is 0, so no flush
+runs, and TB_TREE is still nil. The source's last comment turns that into
+`b-empty` -- so the answer is a LEAF OF LENGTH 0 (first field 0) and NOT nil
+(second field 0). `empty=0,1` would be the bug: a caller that built nothing
+getting nil back instead of an empty byte string, and having to test for it.

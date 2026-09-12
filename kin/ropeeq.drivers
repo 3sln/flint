@@ -584,3 +584,44 @@ namespace Flint.Rt {
         System.Console.WriteLine(o.ToString());
     }
     internal static int B(bool v) { return v ? 1 : 0; }
+--expect
+shapes=111 same=1 inline=111 bothinline=1 inlineleaf=10 last=00 len=0 shared=11 deep=11
+--expect-why
+DERIVED FROM THE BYTES. Every tree below holds [1,2,3,4,5,6] unless it is
+named as differing, so each field is a yes/no about content, decided by hand:
+
+  x    = [1,2,3,4,5,6]              one flat leaf
+  y    = [1]+[2,3]+[4,5,6]
+  z    = [1,2,3]+[4,5,6]
+  w    = [1] + inline[2,3,4] + [5,6]
+  w2   = inline[1,2] + inline[3,4] + inline[5,6]
+  deep = ([1,2]+inline[3]) + (inline[4,5]+[6])
+
+  shapes=111      three shapes, same six bytes, all equal. A structural
+                  comparison would print 000 and pass nothing else here.
+  same=1          identity.
+  inline=111      w against x, y and z. AN INLINE LEAF HAS NO ADDRESS, so the
+                  run comparison cannot be asked about it and the byte loop
+                  has to do the work -- that is the whole reason this is not
+                  `b-eq`.
+  bothinline=1    w against w2: inline on BOTH sides, at different boundaries.
+  inlineleaf=10   two inline leaves of the same three bytes are equal (1), and
+                  two that differ in the LAST byte are not (0). The 0 is the
+                  control: without it, every field above is satisfied by a
+                  `tree-eq` that returns true.
+  last=00         a difference in the FINAL byte, which the walk only reaches
+                  by going all the way -- once across flat leaves (x vs
+                  [1,2,3]+[4,5,9]) and once with the difference inside an
+                  INLINE leaf (x vs [1]+inline[2,3,4]+inline[5,9]).
+  len=0           three bytes against six: refused on the count.
+  shared=11       two trees holding the SAME child object -- once a flat leaf,
+                  once an INLINE one. The peek skips a shared child without
+                  reading a byte, and taking one side and not the other is
+                  what used to go wrong when that child was inline.
+  deep=11         leaf boundaries lining up nowhere, mixing inline and flat at
+                  two depths, equal both to the single flat leaf and to w.
+
+The line is eleven booleans of which three are 0. Every 1 field is about two
+different shapes agreeing; every 0 field is a single byte's difference. Read
+together they say the walk tracks by OFFSET and reads CONTENT -- neither of
+which "the three targets printed the same string" can say.

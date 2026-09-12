@@ -398,3 +398,67 @@ namespace Flint.Rt {
         }
         return s.ToString();
     }
+--expect
+whole=1 clamp=30.31.32.33.34 empty=0 small=10.11.12,0 mid=10.11.12.13.14.20.21.22.23.24 shares=11 rag=3.4.10.11.12.13.14.20.21.22.23.24.30.31
+--expect-why
+DERIVED BY HAND from `byteslice.kin`, with SLICE_MIN = 4 as the `-head`
+sections set it. Nothing was read off a run.
+
+THE FIXTURE, written out as a flat index so every range can be read off it:
+
+  index   0  1  2  3  4 | 5  6  7  8  9 |10 11 12 13 14|15 16 17 18 19
+  byte    0  1  2  3  4 |10 11 12 13 14|20 21 22 23 24|30 31 32 33 34
+  child        a        |      b        |      c       |      d
+  tree = node [a,b,c,d], count 20
+
+The byte values are 10 apart per child ON PURPOSE: any byte printed names the
+child it came from, so a slice that took the right WIDTH from the wrong child
+is visible rather than plausible.
+
+`whole=1`. `b-slice tree 0 20` clamps to lo 0, hi 20 = n, and the `lo == 0 and
+hi == n` arm returns `v` ITSELF -- compared by identity in all three drivers.
+The doc calls this "the case a caller hits most and the one that must not
+allocate"; 0 would mean it rebuilt an identical tree.
+
+`clamp=30.31.32.33.34`. `b-slice tree 15 99`: `to` is clamped to n = 20, so the
+range is [15,20) -- exactly child d. Walking the children, a/b/c all fail
+`at + w > lo` (5 > 15, 10 > 15, 15 > 15 all false -- note the LAST is the
+boundary case, and a `>=` there would wrongly include an empty piece of c), and
+d passes with klo = 0, khi = 5 = w, so d is SHARED whole. One piece, so
+`b-from-roots ... 1` hands it back unwrapped. Hence d's own bytes, 30..34.
+
+`empty=0`. `b-slice tree 3 3` has width 0, which is below SLICE_MIN, so it
+copies a range of nothing: a leaf of count 0. Not nil, and not the whole tree.
+
+`small=10.11.12,0` -- SLICE_MIN AS POLICY. The range [5,8) is three bytes,
+below SLICE_MIN = 4, so it is COPIED even though it lies wholly inside child b.
+The bytes are 10,11,12, and the second field is 0 because the answer is a fresh
+leaf and NOT b. That 0 is the assertion: sharing here would be the retention
+leak the header names -- a three-byte slice keeping a whole section alive -- so
+`small=...,1` would be the bug, not the improvement.
+
+`mid=10.11.12.13.14.20.21.22.23.24 shares=11` -- THE SHARING, the point of the
+file. [5,15) is ten bytes, at or above SLICE_MIN, and covers b and c exactly:
+  a: at+w = 5 > lo = 5 is FALSE, so a is skipped (boundary again)
+  b: klo = 0, khi = hi - at = 10 clamped to w = 5, so khi == w -> piece IS b
+  c: klo = 0, khi = 15 - 10 = 5 == w        -> piece IS c, then at >= hi breaks
+Two pieces, so a node of [b,c]. `shares=11` compares the new node's children
+against b and c BY IDENTITY: `11` means neither was copied. `00` would be a
+correct-looking slice -- the bytes field would be unchanged -- that had thrown
+away exactly the sharing this file exists for. That is why both fields are
+printed: the content alone cannot tell.
+
+`rag=3.4.10.11.12.13.14.20.21.22.23.24.30.31` -- THE RAGGED CASE, where both
+ends are cut and the middle is shared. [3,17), 14 bytes:
+  a: klo = lo - at = 3, khi = 5 -> recursive `b-slice a 3 5`, width 2 < 4, so
+     copied: bytes 3,4
+  b: klo 0, khi = 17-5 = 12 clamped to 5 == w  -> b shared whole
+  c: klo 0, khi = 17-10 = 7 clamped to 5 == w  -> c shared whole
+  d: klo 0, khi = 17-15 = 2, and 2 != w, so NOT shared -- recursive
+     `b-slice d 0 2`, width 2 < 4, copied: bytes 30,31
+  4 pieces -> a node of four.
+Total 2 + 5 + 5 + 2 = 14 = hi - lo, which is the arithmetic check. The
+sequence is what pins the two ends: `3.4` and not `0.1` proves `klo` was
+`lo - at` and not 0, and `30.31` and not `32.33` proves the trailing child was
+cut from its START. Dropping the `khi != w` test would share d whole and give
+four extra bytes at the end.

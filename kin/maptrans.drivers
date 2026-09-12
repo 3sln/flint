@@ -591,3 +591,94 @@ namespace Flint.Rt {
          .Append(" smedit=").Append(Val.IsNil(rt.Slot(rt.Slot(ts4, global::Flint.Rt.Sets.TS_MAP), global::Flint.Rt.Maps.TM_EDIT)) ? 1 : 0);
         System.Console.WriteLine(o.ToString());
     }
+--expect
+cnt=2 edit=1 get=212/229/17 same=11 cnt3=3 k1=246 cnt5=2 gone=1 pcnt=2 after=1/55 empty=1 scnt=1 sedit=1 ssame=11 scnt3=2 sget=178/51 sdisj=1 sp=1 sedit2=1 smedit=1
+--expect-why
+DERIVED from `maptrans.kin` against the driver's node model. No address is
+printed anywhere on this line -- every field is a count, a flag, or a stored
+value -- so nothing here is pinned. The keys and values in decimal:
+k1 = 0xA1 = 161, k2 = 0xB2 = 178, k3 = 0xC3 = 195,
+v1 = 0xD4 = 212, v2 = 0xE5 = 229, v3 = 0xF6 = 246,
+and the three defaults 0x11 = 17, 0x22 = 34, 0x33 = 51.
+
+  cnt=2 edit=1   `map-transient` of a 2-entry ARRAY MAP. It is promoted first
+                 (the header: "there is one transient implementation and it is
+                 the trie's"), and the count is LIFTED OUT of the promoted map
+                 -- 2, read from the hash map's HM_CNT, not from the array
+                 map's slot count. `edit=1` says a token was minted and
+                 stored; that same slot is the validity bit, and `after=`
+                 below is what happens when it is nil.
+
+  get=212/229/17 both keys read back their own values -- 212 for k1 and 229
+                 for k2, not swapped -- and a MISSING key answers the caller's
+                 default 17. The default is the third field because `tmap-get`
+                 must return the caller's `not-found` and not NOT_FOUND: a
+                 leaked NOT_FOUND (0xFFFE) would print 65534 here.
+
+  same=11        BOTH assocs answer the SAME HANDLE. That is the whole point
+                 of a transient -- there is only ever one -- so a version that
+                 returned a fresh box would print 00 and every `assoc!` in a
+                 loop would allocate.
+  cnt3=3         only the NEW key moved the count: 2 + 1 for k3, and then
+                 nothing for re-assoc'ing k1. `champ-added` is set false
+                 before each descent and read after, so a count that ignored
+                 it would print 4 here.
+  k1=246         and the re-assoc did REPLACE: k1 now reads v3 = 246, not
+                 v1 = 212. So `same=11 cnt3=3 k1=246` is three separate
+                 claims about one operation -- same handle, count unmoved,
+                 value changed -- and no two of them imply the third.
+
+  cnt5=2         3 - 1 for the first dissoc, and NOTHING for the second, which
+                 asks for the same already-absent key. `champ-added` again:
+                 the mock `node-dissoc` clears it when the key is not there,
+                 and the source only decrements when it is set. A decrement
+                 that ignored the flag prints 1 and the map's count drifts
+                 below its contents.
+  gone=1         and the key really is gone -- the default comes back.
+
+  pcnt=2         `persistent!` freezes to a hash map carrying the transient's
+                 own count.
+  after=1/55     the handle is REFUSED afterwards: nil out, and a thrown
+                 message of exactly 55 characters --
+                 "IllegalStateException: transient used after persistent!",
+                 21 + 2 + 32. The length is checked rather than the text
+                 because the three probes build it the same way; what the
+                 number proves is that a message was produced at all, so
+                 `after=1/0` (nil with nothing thrown) fails. The header
+                 records why this matters: the edit token IS the validity bit,
+                 and a handle used after freezing would otherwise quietly
+                 mutate a value somebody else now owns.
+
+  empty=1        an EMPTY transient freezes to the SHARED empty map, BY
+                 IDENTITY -- not to a fresh wrapper around an empty root. So
+                 `(persistent! (transient {}))` is `{}` in the `==` sense.
+
+THE SET SIDE, which is the map side wearing a different tag.
+
+  scnt=1         a transient set of a 1-element set: its count is its inner
+                 map's count.
+  sedit=1        and the set's OWN token is the same object as the inner map's
+                 -- one token, two slots. This is what makes the invalidation
+                 below checkable.
+
+  ssame=11       `conj!` answers the same transient set, twice.
+  scnt3=2        the first conj of k2 adds it (1 -> 2); the second conj of the
+                 SAME element does not (still 2). A set that counted every
+                 conj would print 3.
+  sget=178/51    `get` on a set answers the STORED element, not the one asked
+                 for -- they are `=` here because the mock compares by value,
+                 but the field still says the answer came out of the node
+                 rather than being handed back -- and a missing element gives
+                 the caller's default 51.
+  sdisj=1        `disj!` of k1 takes it back to 1.
+
+  sp=1           `persistent!` on the set gives a set whose map carries the
+                 count.
+  sedit2=1       the SET's token is nil afterwards,
+  smedit=1       AND the inner MAP's token is nil afterwards.
+
+THE LAST TWO ARE THE POINT, and they must BOTH be 1. The header records the
+bug exactly: "Native never nilled the SET's token -- only the inner map's --
+so the two runtimes refused the same program through different slots." That
+divergence prints as `sedit2=0 smedit=1`, and the three-target comparison
+cannot see it, because one source emits the same omission into all three.
