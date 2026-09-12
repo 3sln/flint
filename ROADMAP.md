@@ -522,22 +522,53 @@ that ships.
       LLVM path lands, `test/sysns.clj` remains the only guard on the shipped
       binary, so anything security-bearing added there needs a check in it
 
-### The gate costs 30 minutes, and `bin/test` is 26 of them
+### Testing tiers, and the measurements behind them
 
-Measured 2026-09-11 on one commit: `bin/test` 26 min, `bin/conform-hosts`
-4 min. **The four-runtime conformance matrix is not the expense** — the
-single-runtime suite is 87% of it.
+Recorded 2026-09-11. The 30-minute gate on every commit is the wrong default;
+what follows is what would make a smaller one trustworthy rather than merely
+faster.
 
-Running it on every commit is the wrong default, and the fix is not a faster
-gate but a reason to trust a smaller one:
+**Measured, not estimated:**
 
-- [ ] Break `bin/test`'s 26 minutes down by section. It has 58 of them and
-      nothing says where the time goes; the answer decides whether this is a
-      few slow sections or uniform cost
-- [ ] Expected-value unit tests at the kin layer (above) — selective testing is
-      only safe when the fast checks actually catch logic errors
-- [ ] A changed-files → suites map, so a commit runs what it can break
-- [ ] Reserve the full gate for merge and release rather than per-commit
+    bin/test            26 min      36 bb suites + 32 build invocations
+    bin/conform-hosts    4 min      the four-runtime matrix
+    one kin verify        4 s       all three targets compiled and compared
+    whole kin corpus     ~6 min     89 sources
+
+The four-runtime conformance is NOT the expense. The single-runtime suite is
+87% of it, and most of that is builds rather than assertions.
+
+**Why one runtime can stand for three — and where it cannot.** kin generates
+all three targets from one source, so a LOGIC error is identical everywhere and
+one runtime's expected-value test speaks for all of them. A TRANSLATION
+divergence is the opposite: it exists precisely because one source emitted
+different semantics per language, and no single-target test can see it. That is
+what the `.drivers` probes catch, and why they must run ALONGSIDE the fast tests
+rather than being deferred — at 4 seconds each they are not worth deferring.
+
+    per change     expected-value tests for what changed,
+                   plus `kin/scripts/verify` on touched kin sources     seconds
+    occasionally   every runtime's suite, whole kin corpus              ~6 min
+    PR / milestone the full gate                                        30 min
+
+**The prerequisite nobody can skip: the kin drivers check agreement, not
+correctness.** Selective testing is only safe when the fast checks catch logic
+errors, and today the kin layer has none that do — see the section above.
+Expected-value tests come first or the tiering is false confidence.
+
+**A hazard found while trying it.** Running `bb test/aot.clj` alone FAILED with
+"this runtime cannot run compiled arities: build the units with
+`bin/build-units --aot`" — not a regression, a missing build step the full gate
+happens to perform. So a changed-files → suites map must carry BUILD
+PREREQUISITES as well as suite names. Without that, selective runs produce
+false failures, and false failures train people to ignore failures.
+
+- [ ] Break `bin/test`'s 26 minutes down by section; 58 sections and nothing
+      records where the time goes
+- [ ] Attack the 32 build invocations — shared setup does not respond to
+      selective testing at all
+- [ ] Expected-value tests at the kin layer
+- [ ] A changed-files → (suites + build prerequisites) map
 
 ### Port tests belong in kin (recorded 2026-09-11)
 
