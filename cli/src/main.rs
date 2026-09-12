@@ -418,7 +418,23 @@ fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
             if !entry.is_empty() { out.push_str(&entry) }
         }
     }
-    out.push_str("] :builtins #{");
+    // THE READER'S FEATURE SET, and it has to be said rather than defaulted.
+    //
+    // `:optimize [perf]` is documented as removing checks "before source is
+    // even collected" (`DECISIONS.md#checks`), and `bin/flint` does exactly
+    // that -- `(disj :flint/check)` on the feature set. This side emitted NO
+    // `:features` at all, so the guest fell back to `default-features`, which
+    // has `:flint/check` in it. A release module built by the shipped binary
+    // therefore carried its own test code: measured, a `[perf]` build and a
+    // plain one both held five `flint.check` references.
+    //
+    // Emitted only when it differs from the default, so an ordinary build's
+    // spec is unchanged.
+    out.push_str("]");
+    if aot {
+        out.push_str(" :features #{:flint}");
+    }
+    out.push_str(" :builtins #{");
     for k in slots.keys() {
         out.push_str(&edn_string(k));
         out.push(' ');
