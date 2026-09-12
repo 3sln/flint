@@ -3064,12 +3064,35 @@ graph, and version-conflict resolution.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): shipped.** `(opaque)` / `(opaque "label")`, `TY_OPAQUE`,
-host-minted values reaching the entry function as its second argument, never
-sendable, and — reversing this document's own original answer — identities
-**preserved** across a snapshot rather than erased. This decision is
-heavily cited across the runtime as the canonical statement of the
-sentinel-identity pattern.
+**Status: shipped, and two clauses of the old status line were wrong. Verified 2026-09-12 at 639430e.**
+`(opaque)` / `(opaque "label")` and `TY_OPAQUE` are real — `kin/opaque.kin`,
+`runtime/src/obj.rs:78`, `flint/opaque` in `dist/builtins.json` — and identities
+are **preserved** across a snapshot rather than erased, reversing this
+document's own original answer (`runtime/src/snap.rs:269-291`, whose
+`count_host_opaques` counts and leaves alone). This decision is heavily cited
+across the runtime as the canonical statement of the sentinel-identity pattern.
+
+*How this was checked.* `cargo test -p flint-rt --features diagnostics --test vm
+an_imported_snapshot_keeps_its_identities` passes: host id 7 and the identity
+hash both survive a capture/restore, and a guest-minted value still reads 0.
+A program run on a freshly built `target/release/flint` — minting two anonymous
+and one labelled opaque, using them as map keys, forcing 300,000 allocations
+between the `assoc` and the `get` — answers `distinct=true self=true
+opaque?=true label="label" nolabel=nil labels-not-identity=true
+key-after-gc=:first key3-after-gc=:third print=#<opaque label>`, so the stored
+(not address-derived) hash holds across a copying collection.
+
+*Two clauses that did NOT hold.* (1) **"never sendable" is false.**
+`runtime/src/conc.rs:1430` is `TY_OPAQUE => Ok(())` with a comment retiring the
+old rule, and the same program sending an opaque through a channel and reading
+it back answers `channel-send=OK same=true`. What is still refused is a
+guest-reachable *decoder* (`decode_guest` in `runtime/src/codec.rs`), not the
+send. (2) **"reaching the entry function as its second argument" describes a
+`flint_main` that no longer exists** (`runtime/src/abi.rs:157-162`,
+`src/flint/bundle.cljc:147-151`; removed by `structured-ports` step 5). A host
+names a function through `flint_call`, and a host-minted opaque travels as an
+ordinary encoded argument (`K_SENTINEL`, `runtime/src/codec.rs:232`) or over a
+port. The `{:args :capabilities}` entry map is still unstarted.
 
 ### What was decided
 
@@ -3142,12 +3165,34 @@ by import.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): partly built.** The namespace resolver, grants, workspace guards,
-var guards, and the request primitive are in; virtual namespaces, pods,
-load-time reference-guard binding, and the host-facing half are not. This is
+**Status: partly built — and two items this line called "not built" have shipped. Verified 2026-09-12 at 639430e.**
+The namespace resolver, grants, workspace guards, var guards, the request
+primitive, **virtual namespaces** and **pods** are in. Still not built: the
+load-time reference-guard binding (step 9 — the one case compile-time-only
+guarding cannot cover) and the host-facing token half (step 10). This is
 the densest and most heavily reworked decision in the project — several of
 its own earlier sections are explicitly superseded by later ones within the
 same document — and it is treated at full length here for that reason.
+
+*How this was checked — by running programs that must be refused, with controls
+that must be allowed, because this guard fails open and was inert in the
+shipped binary earlier this session while reading perfectly well.* All four
+against a freshly rebuilt `target/release/flint`:
+
+| ran | answer |
+|---|---|
+| ungranted workspace names `flint.host/request` | REFUSED: `compile error: flint.host/request is guarded with #{:host} by flint/flint; src does not hold #{:host}` |
+| control — same source, `:flint/capabilities-grant [:host]` in `deps.edn` | allowed: `reached: true` |
+| `app` requires `acme.thing` across two source roots, `acme/lib` guarding `[:secret]`, `app` granted nothing | REFUSED: `app requires acme.thing, which acme/lib guards with #{:secret}; app/src does not hold it` |
+| control — `app` granted `[:secret]` | allowed: `sensitive` |
+
+Virtual namespaces and pods were checked the same way: a local pod
+(`test/fixtures/demopod`, `{:pod/path "./demopod"}`) boots, describes and
+invokes — `add=6 greet=hello flint` — and an unknown var in it is a *compile*
+error, `unable to resolve d/subtract -- pod.demo is a virtual namespace and
+does not hold subtract`, which is the optional var list doing its job. This
+line's "not built" for both was already flagged as wrong by `ROADMAP.md`
+lines 102 and 212; it is now confirmed by running them.
 
 ### What was decided
 
@@ -3303,12 +3348,42 @@ compiler this system trusts at all.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): partly built.** Virtual namespaces, `flint.sys.fs`/`env`/`slurp`,
-`flint.deps.npm`/`mvn`/`git`, the `.cljc` resolution plan, `flint deps add`,
-capability delegation on dependency entries, and pods are all in. Not built:
-the rest of the `flint deps` surface (`bump`/`pin`/`tree`/`why`),
-`flint.sys.net`/`proc`/`clock`, and deleting the old babashka-shelling
-dependency path.
+**Status: partly built, and the old line had the "not built" list backwards in two places. Verified 2026-09-12 at 639430e.**
+In: virtual namespaces; `flint.sys.fs`/`env`/`slurp` and
+`flint.deps.npm`/`mvn`/`git` (six served namespaces, 24 vars —
+`./bin/check-sys-catalogue` answers `ok 6 served namespaces, 24 vars, same
+order`, and they are the six in `cli/src/sys.rs` and `cli/src/deps.rs`); the
+`.cljc` resolution plan; `flint deps add`; pods; **and the whole rest of the
+`flint deps` surface** — `tree`, `why`, `pin` and `bump` all work, which this
+line said were not built. Still not built: `flint.sys.net`/`proc`/`clock`;
+deleting the old babashka-shelling dependency path; **and capability
+delegation on dependency entries, which this line said was in and is not.**
+
+*How this was checked.* Against a freshly rebuilt `target/release/flint`:
+`flint deps tree` answers `left-pad 1.3.0`; `flint deps why left-pad` answers
+`left-pad 1.3.0 -- declared directly`; `flint deps pin` answers `pinned every
+transitive into :flint/overrides` and writes the `:npm/integrity` hash into
+`deps.edn`; `flint deps bump :minor` answers `nothing to bump`. A program
+requiring `flint.sys.fs` answers `deps=true nope=false` when run with
+`:with [fs]` and `SecurityException: this sandbox was given no system port, so
+it cannot ask for "flint.sys.fs"` without it — the refusal and its control.
+Requiring `flint.sys.net`, `flint.sys.proc` or `flint.sys.clock` answers
+`no source for flint.sys.<x>` in every case. `bin/flint` still shells out to
+`git`, `curl` and `unzip` at lines 648-714, so the babashka path is still there.
+
+*The delegation correction, which is a capability claim and therefore was
+probed rather than read.* `system-namespaces-and-deps`' own three delegation
+rules are **inert in the shipped binary**. `lending-errors` in
+`lib/flint/deps/resolve.cljc:383` implements rules 1 and 2 and **has no caller
+anywhere in the tree**; `flint deps add` (`cli/src/depscmd.rs`) never asks for
+or writes a grant, so rule 3 is absent too. Running it: a project holding
+nothing and writing `:flint/capabilities-grant [:host]` on a dependency entry
+— the exact "mint authority from nothing" case rule 1 exists to refuse — is not
+refused. `flint deps tree` answers `left-pad 1.3.0` followed by `note: left-pad
+-- :flint/capabilities-grant is not a key npm understands, and is ignored`, and
+the same for a `:local/root` entry. The key is not in any kind's known-key set
+(`lib/flint/deps.cljc` `coord-notes`), so it neither grants nor refuses: it
+does nothing at all, silently, in the direction that reads like success.
 
 ### What was decided
 
@@ -3639,14 +3714,45 @@ than not porting at all.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): partly built.** The image loader, the interpreter over all 46
-opcodes and all 155 builtins, real programs, several threads sharing one
-program, and AOT emitting real bytecode (12× on a counting loop) all work,
-all nine conformance cases agree with the native runtime byte for byte —
-including hashes, forty-key CHAMP ordering, infinite lazy sequences, and
-mutual tail recursion 300,000 deep — and **the flint compiler itself runs on
-the JVM and emits the exact same image the native compiler does, byte for
-byte.**
+**Status: partly built. The self-hosting claim is verified; three of this line's numbers were stale. Verified 2026-09-12 at 639430e.**
+The image loader, the interpreter, the builtins, real programs, several threads
+sharing one program, and AOT emitting real bytecode all work, and **the flint
+compiler itself runs on the JVM and emits the exact same image the native
+compiler does, byte for byte** — that last is the claim that matters and it
+holds.
+
+*How the self-hosting claim was checked.* `javac -d <out>
+runtimes/jvm/src/com/flint/rt/*.java runtimes/jvm/src/com/_3sln/flint/kgen/rt/*.java
+runtimes/jvm/test/*.java` (JDK at `/opt/homebrew/opt/openjdk`), then
+`./bin/flint :src bench/progs :fn hello/main --emit-spec :out self.spec`,
+`node host/flint-file.mjs dist/flintc.wasm self.spec > self.ref`, then
+`java -Xss1g -cp <out> RtSelfHost self.spec self.ref` — the same three steps
+`bin/conform-hosts` runs under `FLINT_SELFHOST=1`, run directly here. Output:
+`the compiler: 1603 fns, 3065 consts, 100079 code bytes, 159 natives` /
+`builtins it wants that this runtime lacks: 0` / `ok 736 initialisers ran` /
+`ok the compiler ran and produced 10425 chars` / **`ok and it is byte for byte
+what the wasm compiler emits`**, exit 0.
+
+*Three numbers corrected.* **"all 46 opcodes" → 39.** Seven were retired and
+their numbers deliberately not reused (`src/flint/emitter.cljc:27-67`, 39
+entries; `bin/opcov-gate` says "All 39 defined opcodes"). **"all 155 builtins"
+→ 168**; `./bin/check-builtins` answers `the native runtime carries 168, 2 of
+them emitted by the compiler` / `ok jvm carries all 168, the 2 mandatory
+included`. The port carrying *all* of them is still true — the count moved, not
+the claim. (`runtimes/jvm/README.md`'s "141 of the 144 the compiler imports;
+the 3 missing are regex" and its "Self-hosting: close, not there" are both
+stale against this; the self-host run above needed nothing.) **"all nine
+conformance cases" → 25** (`runtimes/conform/*.cljc`); `bin/conform-hosts` was
+not run here, so the agreement claim rests on the record and on the self-host
+run, not on a fresh diff.
+
+*One figure not reproducible as stated.* "12× on a counting loop" names no
+machine and no command, and the tree disagrees with itself about it:
+`README.md:118` reads it as AOT over *the JVM port's own interpreter*, while
+`runtimes/jvm/README.md:52` records `1.67x` for the same row. `RtAot` asserts
+that compiling does not change the answer and reports no timing at all, so
+nothing in the tree regenerates the 12×. Treat the figure as recorded without
+its method until someone re-measures it and says on what.
 
 ### What was decided
 
@@ -3737,11 +3843,30 @@ a stale-build artefact).
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): partly built**, at the same level of completeness as
-`jvm-runtime`: all 155 builtins, all nine conformance cases, several threads
-sharing one program, AOT to real IL (1.8× on a counting loop), and the flint
-compiler self-hosting on .NET to the byte-identical image the native
-compiler produces.
+**Status: partly built, at the same level of completeness as `jvm-runtime`. Self-hosting verified; the builtin and conformance counts were stale. Verified 2026-09-12 at 639430e.**
+All **168** builtins (not 155), **25** conformance cases (not nine), several
+threads sharing one program, AOT to real IL, and **the flint compiler
+self-hosting on .NET to the byte-identical image the native compiler
+produces**.
+
+*How the self-hosting claim was checked.* `DOTNET_ROOT=/opt/homebrew/opt/dotnet/libexec`,
+`dotnet build -v q --nologo -c Release` in `runtimes/clr/conform`, then
+`./runtimes/clr/conform/bin/Release/net10.0/Conform --rt-selfhost self.spec
+self.ref` against the same spec and wasm-produced reference the JVM row used
+(`./bin/flint :src bench/progs :fn hello/main --emit-spec`, then
+`node host/flint-file.mjs dist/flintc.wasm`). Output: `the compiler: 1603 fns,
+3065 consts, 100079 code bytes, 159 natives` / `builtins it wants that this
+runtime lacks: 0` / `ok 736 initialisers ran` / `ok the compiler ran and
+produced 10425 chars` / **`ok and it is byte for byte what the wasm compiler
+emits`**, exit 0. The builtin count is `./bin/check-builtins`: `ok clr carries
+all 168, the 2 mandatory included`. `bin/conform-hosts` was not run here, so
+"all conformance cases agree" rests on the record plus this self-host run.
+
+*One figure not reproducible as stated.* "1.8× on a counting loop" names no
+machine and no command. `README.md:118` carries the same figure as AOT over the
+CLR port's own interpreter, and nothing in the tree regenerates it — the CLR's
+AOT test asserts the answer is unchanged, not how fast it was. Recorded without
+its method; re-measure before citing.
 
 ### What was decided
 
@@ -3998,10 +4123,41 @@ is deliberately not a claim about the whole runtime.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): done**, across eight engines (node, deno, bun, workerd, wasmtime,
-SpiderMonkey, wasm3, Chicory). This decision directly decided
-`other-hosts`' JVM tier, and one of its own central predictions turned out
-to be backwards once actually measured.
+**Status: the work was done; the harness is BROKEN and none of the ns/instruction figures below can be reproduced today. Checked 2026-09-12 at 639430e.**
+This decision directly decided `other-hosts`' JVM tier, and one of its own
+central predictions turned out to be backwards once actually measured — both
+of those still stand on the record. What does not stand is the table: run
+`./bin/bench-xruntime` now and **every engine row fails.**
+
+*What was run, and on what.* `./bin/bench-xruntime` on an Apple M1 Pro,
+Darwin 23.6.0, with all six engines the harness looks for present — node
+v24.6.0, bun 1.3.14, deno 1.44.0, wasmtime 48.0.1, SpiderMonkey
+JavaScript-C140.14.0, wasm3 v0.9.0. Every row came back
+`FAILED: Command failed: …` and the ns/instruction table printed nothing.
+
+*Why, and it is two separate breakages, both caused by `structured-ports`
+step 5 removing `flint_main`.* (1) A flint module no longer exports `main` at
+all — `wasmtime --invoke main out/xrt-0.wasm` answers `no func export named
+'main' found`, and the module's exports are `arg_alloc arg_push flint_call`.
+That kills the wasmtime and wasm3 rows outright. (2) The JS driver
+`bench/xrt-run.mjs` defaults to the hard-coded entry
+`construe.bench.xrt25/main` and `bench/xruntime.mjs` never passes a name, so
+of the five modules in the fitted family only `xrt-25` has a matching entry;
+`node bench/xrt-run.mjs out/xrt-0.wasm` exits 1, while
+`node bench/xrt-run.mjs out/xrt-0.wasm construe.bench.xrt0/main` exits 0.
+That kills node, bun, deno and SpiderMonkey.
+
+*What still works.* The resident-memory table (`bench/xmem.mjs`) ran and
+reported node +13.4 MB, bun +27.2 MB, deno +25.0 MB, wasmtime +0.0 MB,
+wasm3 +0.0 MB over a trivial module. The Chicory and workerd rows are measured
+by separate scripts (`bin/bench-chicory`, `bench/workerd`) and were not run
+here; workerd is not installed on this machine.
+
+*So: the figures quoted below — node/V8 11.0, bun 10.8, wasmtime 9.7, deno
+15.9, SpiderMonkey 15.7, wasm3 165.0 ns/instruction, and the 1.44–1.64× /
+1.07–1.18× AOT split — name their command and their workload but not their
+machine, and the command no longer produces them.* Fix the two entry-point
+breakages before citing any of them again.
 
 ### What was decided
 
@@ -4105,9 +4261,30 @@ reading it has to make a real deployment decision with these numbers.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): done.** Results are folded into the README; `cross-runtime-
-benchmarks` later re-ran the whole set across eight engines, so every figure
-now states which engine actually produced it.
+**Status: done, and it still reproduces — but two recorded figures have drifted badly. Verified 2026-09-12 at 639430e.**
+Results are folded into the README (§"What this means for construe") with
+`doc/construe-benchmarks.txt` as the full output, and both state their method
+and machine — "Apple M1 Pro, Darwin 23.6.0, node v24.6.0", construe's own
+258-line seed interpreter and four real annotated contexts, one source file to
+both compilers, checked to compute the same answer before being timed. The
+cross-engine half of the second clause is now **unreliable**: the engine-labelled
+figures came from `bin/bench-xruntime`, which no longer runs at all — see
+`cross-runtime-benchmarks`.
+
+*How this was checked.* `./bin/bench-construe` on that same machine
+(construe's `node_modules` present, so nothing was skipped). Most rows
+reproduce within noise: parse latency 0.079 ms against cherry's 0.054 (1.5×,
+recorded 1.4×); cold start 1.25 ms against a V8 isolate's 14.69 ms (recorded
+0.998 and 14.59); the 500-case suite 39.42 ms against 29.02; merge, reduce and
+map-access rows all within 10-20%.
+
+*Two figures that have moved enough to matter, and the README carries the old
+ones.* The compiled module went **289,579 B → 486,052 B** and whole-module
+compile time **935 ms → 1,564 ms** — a 68% size increase against the number the
+README's footprint argument is built on. In the other direction,
+`clojure.string/split, regex` improved from **274.9× cherry to 39.3×**. The
+README tables and `doc/construe-benchmarks.txt` are a stale capture, not a
+wrong method; re-run and re-fold before quoting the size or the split figure.
 
 ### What was decided
 
@@ -4169,10 +4346,35 @@ the person reading it has to make a real decision with these numbers.
 
 **Ratified:** ☐ not signed off
 
-**Status (per the record; not independently verified): live** — a milestone definition rather than a design, existing so
-the handoff to construe is judged against an explicit list rather than a
-feeling, and so the work between here and there stays aimed at what the
+**Status: live — a milestone definition rather than a design. Checked 2026-09-12 at 639430e; the status holds, its figures are a mix of reproduced and unreproducible.**
+It exists so the handoff to construe is judged against an explicit list rather
+than a feeling, and so the work between here and there stays aimed at what the
 first real customer actually needs.
+
+*How this was checked.* The document is a bar, not a build: every item below is
+a condition, not a component, and `ROADMAP.md:133` independently carries it as
+"in progress / live milestone" with the same items open. So "live" is right.
+The figures it cites divide three ways.
+
+*Reproduced.* `./bin/bench-construe` on an Apple M1 Pro, Darwin 23.6.0,
+node v24.6.0 answers 1.25 ms to first answer against a V8 isolate's 14.69 ms —
+this line's 1.00 ms / 14.59 ms, within noise, and still ~12× rather than 15×.
+
+*Not reproducible here, and the blocker item depends on it.* The two workerd
+demonstrations — a flint module under workerd with no polyfill, and the flint
+compiler itself compiling inside workerd (1,178 ms for a 22-namespace program,
+~2 ms to load an 8 KB image, 555 KB loader against 214 KB) — could not be
+re-run: **there is no `workerd` on this machine**, and `bench/workerd/` is a
+config and a worker script with no installed engine to drive them. Those
+figures name a runtime but no machine and no repeatable command. Since this is
+the one item the bar itself calls "binary, not a matter of degree", it should
+be re-demonstrated on a machine with workerd before the handoff is judged met.
+
+*Superseded by a later measurement.* "Word frequency at 11.6× babashka" is a
+`strings-and-matching`/`matching-over-ropes` figure, not one this document
+regenerates; the construe run above shows the related `clojure.string/split,
+regex` row has since moved from 274.9× cherry to 39.3×, so the string/regex
+picture has changed under this bar since it was written.
 
 ### What was decided
 
