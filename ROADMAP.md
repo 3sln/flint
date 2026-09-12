@@ -285,8 +285,16 @@ the rule: a pod under development is a directory, not a registry entry, and
 **`:local/root` and `:pod/path` are BUILT** (2026-09-11). A pod is an ordinary
 `:deps` entry, `:pod/path` names a directory holding `manifest.edn`, and the
 manifest selects a per-platform `:artifact/executable`. `:npm/path` and
-`:mvn/path` remain new coordinates. `:pod/version` is recognised and refused
-with a sentence naming the missing registry.
+`:mvn/path` remain new coordinates. **`:pod/version` resolves from a registry
+now** ([`pods-are-a-resolvable-dependency`](DECISIONS.md#pods-are-a-resolvable-dependency)).
+
+A CORRECTION TO THIS ROW, since it was recorded as built and was not:
+`:local/root` did not work at all. The walk asked for a `.flint-fetched` stamp
+to decide whether a dependency was present, and nothing writes one into
+somebody's own source tree — so every local dependency came back pending for
+ever and the host reported `no such :local/root` for a directory that was right
+there. Fixed and tested end to end under
+[`one-dependency-walk`](DECISIONS.md#one-dependency-walk).
 
 *Fetched from a registry? WHAT IS THERE says*, by precedence — `deps.edn`
 first, then the ecosystem's own manifest. A flint library published to npm
@@ -301,6 +309,16 @@ may say more than that registry understands.
 **Parsing lives where the format knowledge is**, in the Rust `deps.*` modules,
 so the `.cljc` side stops knowing which ecosystem keeps its dependencies in
 which file.
+
+**THIS PART WAS BUILT THE OTHER WAY, deliberately** (2026-09-11): the scanners
+are one portable `.cljc` namespace, `flint.deps.manifest`. The stated reason
+holds either way — the WALK does not know which file, the scanner does — and
+the location is settled by a constraint this design did not weigh: the walk has
+to run under `bin/flint`, which is babashka with no flint runtime and no ports.
+Parsing in Rust would mean the bootstrap host could not resolve a transitive
+dependency at all, or that it grew its own babashka copy of every format, which
+is a fourth copy of the thing being unified. See
+[`one-dependency-walk`](DECISIONS.md#one-dependency-walk).
 
 **Those modules become PODS**, usable from babashka and flint alike rather than
 being CLI-only. A short step from where things are:
@@ -338,6 +356,14 @@ fixpoint with `(doseq [x f] ...)` — it fetches the batch one entry at a time.
 So the architecture already permits what is being asked for and the driver
 declines to use it. Whatever replaces these modules keeps the plan/execute
 split and runs each round concurrently.
+
+**The round runs concurrently now** (2026-09-11) — in `bin/flint`, which is the
+driver that exists. The rest of this paragraph is unmoved: the shipped binary
+has no `fetch` or `build` command, so fetching is still babashka shelling out
+to `curl`, `tar`, `unzip` and `git`. What changed is that the plan a native
+driver would consume is complete and kind-agnostic: entries carry `:via`, the
+DOWNLOADER, so a host dispatches on five verbs rather than on the coordinate
+kinds.
 
 ONE CORRECTION TO A PREMISE, since it was raised as a question: npm genuinely
 does accept git dependencies (`git+https://…` in `package.json`), but Maven
@@ -715,6 +741,12 @@ Recorded 2026-09-11. Full spec at `DECISIONS.md#standalone-scripts`.
 Recorded 2026-09-11. This is the piece that makes "the drivers are pods" work
 without depending on anybody else's infrastructure.
 
+**BUILT 2026-09-11**: `registry/pods.edn`, and the resolution that reads it
+([`pods-are-a-resolvable-dependency`](DECISIONS.md#pods-are-a-resolvable-dependency)).
+It ships EMPTY, and that is the honest state: nothing has moved out of the
+binary yet, so an entry here would name a pod that does not exist. What exists
+is the format and the reader.
+
 **The repo houses its own small pod registry** — not the official one, and not
 a competitor to it. It lists the pods that live HERE: the npm, Maven and git
 drivers, and whatever else moves out of the CLI. The CLI links it into pod
@@ -841,10 +873,19 @@ compiling, since only a running pod can say what it holds. The old
 executable directly and so with nowhere to express per-platform artifacts — is
 gone.
 
-**What does not:** resolving a pod from a REGISTRY. `:pod/version` is now
-recognised as a coordinate and refused with a sentence naming the missing
-registry, rather than falling through to a generic message. So a pod can be
-declared, booted and reasoned about; it still cannot be FETCHED.
+**A REGISTRY POD IS BUILT TOO** (2026-09-11), see
+[`pods-are-a-resolvable-dependency`](DECISIONS.md#pods-are-a-resolvable-dependency).
+`:pod/version` resolves against the registries a project names, the artifact
+for this platform is chosen once in the plan, and what lands in the cache is an
+ordinary pod directory with an ordinary manifest — so a fetched pod and a local
+one are the same thing to everything that boots one. `registry/pods.edn` is
+flint's own, for tooling pods, and ships empty because nothing has moved out of
+the binary yet. The community registry is not serving, so a `:pod/version`
+needs `:flint/pod-registries` naming a registry that is.
+
+**What does not:** the FETCH is `bin/flint`'s. The shipped binary reads the pod
+cache and boots what it finds, and says `flint fetch` when it finds nothing —
+it does not fetch one itself, because it has no fetch command at all.
 
 **THE BOOTSTRAP IS SETTLED, and it is the reason to want pods here at all.**
 The POD manager — resolver, downloader, the thing that boots one — is the ONLY
@@ -870,14 +911,14 @@ And the registry it resolves against comes first, since there is nothing to
 resolve into otherwise — noting that the in-repo registry serves CLI tooling
 only, while user dependencies resolve against the community registry.
 
-**Open questions, recorded as open:**
+**Open questions:**
 
-* *Can a pod have transitive dependencies?* A pod is a native binary, so what
-  it links is its own affair and invisible to us. But a pod depending on
-  ANOTHER pod is meaningful and would need resolving — and since the pod
-  manager is the built-in fixed point, that resolution is the one piece that
-  cannot be delegated to a driver pod. Undecided, and the answer shapes how
-  much has to be built in.
+* ~~*Can a pod have transitive dependencies?*~~ **Answered 2026-09-11: yes, and
+  only pods.** A pod's manifest may declare `:deps`; every one of them must be
+  a pod, and a coordinate of any other kind is dropped rather than walked. What
+  a pod links natively is its own affair; a pod depending on another pod is
+  meaningful, and resolving it is the one piece that cannot be delegated to a
+  driver pod. See `pods-are-a-resolvable-dependency`.
 * *Where does a pod come from?* A registry, or git — which raises the question
   of what distinguishes a pod dependency from a git one. The current answer is
   the coordinate: `:pod/version` rather than `:git/sha`, plus somewhere to look
@@ -886,10 +927,10 @@ only, while user dependencies resolve against the community registry.
   the FETCH for a git-hosted pod is the git downloader, which the two-axis
   split above already handles.
 
-| **Transitive resolution, EVERY dependency kind** | git/`:local/root` resolve transitives one way, npm another, Maven not at all | THREE mechanisms where there should be one. `lib/flint/deps.cljc`'s fetch walk reads a fetched dependency's own `deps.edn` and recurses (`(recur (vec (concat (rest todo) (or (:deps sub) {}))))`) — that covers git and `:local/root`, whose deps live in a `deps.edn`. `resolve.cljc`'s `plan`/`deps-of` reads an npm MANIFEST and recurses separately. Maven has neither: a jar's deps are in a POM, and nothing parses one, though `flint.deps.mvn` serves `pom` ready to be called. **`deps-of`'s docstring also describes a caller-side git mechanism that is not what happens** — the git path works, but through the other walk entirely. Every kind needs transitive resolution and it should be ONE walk |
-| ~~Transitive resolution for Maven~~ (superseded by the row above) | not built — npm has it, Maven silently does not | `deps-of` (`lib/flint/deps/resolve.cljc`) returns real transitives for `:npm` from its manifest; `:mvn` falls through to `{}` with no clause and no comment. `flint.deps.mvn` already serves `pom` with real fetches and caching and has never been called. The cancellation recorded under `cli` was **revoked 2026-09-11**: it measured a benefit against a standard library that was missing `spec.alpha`/`zip`/`data`/`datafy`, which were implemented right afterwards |
+| Transitive resolution, EVERY dependency kind | **done 2026-09-11** — one walk, every kind | [`one-dependency-walk`](DECISIONS.md#one-dependency-walk). `lib/flint/deps/manifest.cljc` reads `deps.edn`, `package.json`, `pom.xml` and a pod manifest in one shape; `flint.deps/fetch-plan` consumes all of them and `flint.deps.resolve/deps-of` reads the same POM reader, so the three mechanisms are one. Maven's transitives come off the POM inside the jar, which needs no second request. Two bugs fell out: `:local/root` never worked (it was probed for a fetch stamp nothing writes), and `flint deps pin` wrote `{}` for `:local` and `:pod` — a coordinate of no kind — which was invisible only because the fetch walk did not read `:flint/overrides` at all. It does now |
+| ~~Transitive resolution for Maven~~ (superseded by the row above) | **built 2026-09-11** | `deps-of` (`lib/flint/deps/resolve.cljc`) returns real transitives for `:npm` from its manifest; `:mvn` falls through to `{}` with no clause and no comment. `flint.deps.mvn` already serves `pom` with real fetches and caching and has never been called. The cancellation recorded under `cli` was **revoked 2026-09-11**: it measured a benefit against a standard library that was missing `spec.alpha`/`zip`/`data`/`datafy`, which were implemented right afterwards |
 | `deps.edn` support: git/npm/maven at exact versions | done | `cli` — **maven's transitive resolution was explicitly cancelled, and that is now revoked**, on a measured survey (8.9% of a 135-namespace Clojars sample compiles cleanly on flint; transitive resolution would fix ~2 of 135) |
-| `flint build`/`tasks`/`task`/`deps`/`fetch`/`paths`/`targets` (babashka CLI) | done | `cli` |
+| `flint build`/`tasks`/`task`/`deps`/`fetch`/`paths`/`targets` (babashka CLI) | done — and `fetch` now drives the fixpoint to a settle rather than one round, with the round run concurrently | `cli`, `one-dependency-walk` |
 | Capability injection on the CLI (`:with [...]`) | done | `cli`, `workspace-capabilities` |
 | Native binary size, now that it fetches real dependencies (HTTP/git/zip/tar/semver) | measured, not a gap — 2.6 MB → 4.4 MB with all of `system-namespaces-and-deps`'s crates | `system-namespaces-and-deps` — "each crate is measured as it lands, not predicted" |
 

@@ -5099,3 +5099,227 @@ arriving as a number that looked like a finding.
   is an executable-shaped artifact; a library-shaped one would export the image
   and the table and let the embedder write the entry. Both are one line apart
   and only one can be the default.
+
+---
+
+## one-dependency-walk
+
+**Every dependency kind resolves transitively, through one walk**
+
+**Ratified:** ☐ not signed off
+
+**Status: built 2026-09-11, and checked against the code by building each case.**
+`lib/flint/deps/manifest.cljc` is new; `flint.deps/fetch-plan` and
+`flint.deps.resolve/deps-of` both read it. `bb test/cli.clj` covers maven and
+npm transitives, `:local/root`, and the refusal wording, against local
+fixtures rather than the network.
+
+### What was wrong
+
+There were **three** transitive mechanisms and they covered different kinds.
+`flint.deps/fetch-plan` read a fetched dependency's own `deps.edn` and recursed,
+which covered git and `:local/root`. `flint.deps.resolve/plan` read an npm
+MANIFEST and recursed separately, on a walk that nothing doing the fetching
+ever called. Maven had neither: a jar's dependencies are in a POM, nothing
+parsed one, and `flint.deps.mvn/pom` sat served, cached, and never called by
+anything. `deps-of`'s docstring described a caller-side git mechanism that did
+not exist.
+
+Three walks agreeing about the common case is the same shape as two tables
+agreeing about the common case, which is what `coord-types` exists to end one
+level down: it is invisible until something uncommon arrives, and here the
+uncommon thing was ordinary — a maven library with a dependency.
+
+### The split that makes one walk possible
+
+**A DOWNLOADER and a MANIFEST SCANNER are different things, and coupling them
+is what produced three mechanisms.** What fetches a package and what reads its
+dependency list are independent:
+
+* a **downloader** per ecosystem — npm from a registry, maven from a
+  repository, git by clone, a plain file for everything else. `:local/root`
+  has none, and that is the case that proves the axes are separate: there is
+  nothing to fetch and still a manifest worth reading.
+* a **scanner** per FORMAT — `deps.edn`, `package.json`, `pom.xml`, a pod
+  manifest. Each takes a directory that is already on disk and answers in one
+  shape, so the walk never learns which file the answer came out of.
+
+WHICH SCANNER RUNS IS ANSWERED TWO DIFFERENT WAYS, and that is deliberate. A
+LOCAL reference names its ecosystem in how it is written (`:local/root` means
+`deps.edn`, `:pod/path` means the pod manifest), so there is nothing to guess.
+A FETCHED package had to satisfy some registry's format and may say more than
+that registry understands — a flint library published to npm carries a
+`package.json` because npm demands one and a `deps.edn` saying what it actually
+depends on — so `deps.edn` comes first and the ecosystem's own file after it.
+That precedence lives in `coord-types` beside the kinds, so adding a kind has
+to answer "what does one of these carry" in the same edit.
+
+The host dispatches on `:via` — the downloader — and not on `:kind`. The copy
+of the KINDS that used to live in `bin/flint`'s fetch dispatch is what actually
+broke the last time the kinds moved, and `:via` is a smaller thing to agree
+about: `:git`, `:tgz`, `:zip`, `:file`, `:none`.
+
+### Why the parsing is in `.cljc` and not in Rust, against the roadmap
+
+`ROADMAP.md` put manifest parsing in the native `deps.*` modules, "so the
+`.cljc` side stops knowing which ecosystem keeps its dependencies in which
+file". That reason is satisfied by one portable scanner just as well — the
+WALK does not know; the scanner does — and the location is settled by a
+constraint the roadmap did not weigh: **the walk has to run under `bin/flint`,
+which is babashka with no flint runtime and no ports, and inside the shipped
+binary.** Parsing in Rust would mean either that the bootstrap host cannot
+resolve a transitive dependency at all, or that it grows its own babashka copy
+of every format — a fourth copy of exactly the thing being unified.
+
+For the same reason the scanner does not use `flint.data.json` or
+`flint.data.xml`, which is the obvious objection to it: both bottom out in
+`flint.rt/json-parse` and `flint.rt/xml-parse`, runtime builtins babashka does
+not have. What is there instead is deliberately **not a parser** — it finds one
+member of one JSON object and one element of one XML document, and the
+narrowness is the point, because a manifest reader that cannot read arbitrary
+JSON cannot be wrong about arbitrary JSON. It handles the two things a naive
+scan gets wrong on real files and that do occur: a nested `"dependencies"`
+belonging to some tool's own configuration block, and a backslash escape inside
+a string.
+
+What the POM reader does and does not do is stated where a reader meets it
+(`flint.deps/maven-note`): the top-level `<dependencies>`, `<properties>`
+substitution and `${project.version}`, with `dependencyManagement`, `test` and
+`provided` scopes and optional dependencies excluded — and NOT parent POM
+inheritance, profiles, or version ranges. A version those leave unresolved is
+reported by name rather than guessed at.
+
+### Two bugs this found, both invisible until something uncommon arrived
+
+**`:local/root` never worked.** The walk asked whether a dependency was present
+by probing for a `.flint-fetched` stamp, which the host writes after a
+successful download — and nothing ever writes one into somebody's own source
+tree. So every `:local/root` came back pending for ever, and `bin/flint`
+reported `no such :local/root for my/lib: ../lib` for a directory that was
+right there. `ROADMAP.md` recorded the coordinate as BUILT. Nothing tested it
+end to end, which is how a feature can be recorded as built and be broken in
+its only path.
+
+The fix needed the host seam widened by exactly one function: `slurp*` reads
+FILES, and whether a directory exists is a different question. `fetch-plan` and
+`flint.cli/run` take an options map carrying `:exists?` (and the platform, for
+pods); a host that passes nothing still works, and an on-disk dependency gets
+the benefit of the doubt.
+
+**`flint deps pin` wrote coordinates that could not be read back.** `pins`
+produced `{}` for any kind it had no clause for, which included `:local` and
+`:pod` — and `{}` is a coordinate of no kind. It was unreachable only because
+the walk that fetches did not read `:flint/overrides` at all, which is itself
+the third finding: **pinning a transitive and forcing a version are the same
+operation**, `flint.deps.resolve/plan` already worked that way, and the walk
+that actually fetches did not. So a pin written by the tool was never read by
+the build. Both halves are fixed together, and the pair is what makes a
+transitive npm RANGE workable rather than merely refused: a range arriving from
+somebody else's `package.json` is not the project's to edit, and `flint deps
+pin` is what turns it into something exact.
+
+### What is still not done
+
+**The parallelism is in `bin/flint`, which is the driver that exists, not in a
+native one.** The round is a batch and now runs concurrently — the shape was
+always right and the driver declined to use it. But the shipped binary has no
+`fetch` or `build` command at all, so the "fetching belongs in the native
+driver" half of the design is unmoved: `bin/flint` still shells out to `curl`,
+`tar`, `unzip` and `git`. What this change does is make the plan complete and
+kind-agnostic enough that a native driver has one interface to implement rather
+than three.
+
+---
+
+## pods-are-a-resolvable-dependency
+
+**A pod resolves from a registry, and a fetched pod is a local pod**
+
+**Ratified:** ☐ not signed off
+
+**Status: built 2026-09-11.** `lib/flint/deps/registry.cljc` resolves
+`:pod/version`; `bin/flint` fetches it; `cli/src/main.rs` boots what was
+fetched. `bb test/sysns.clj` boots a registry-fetched pod with the shipped
+binary; `bb test/cli.clj` covers artifact selection and the registry document
+against a `file://` fixture. The community registry is **not serving yet**, so
+a `:pod/version` needs `:flint/pod-registries` naming one that is.
+
+### What was decided
+
+`:pod/path` already worked: a directory holding `manifest.edn`, with the
+manifest selecting a per-platform `:artifact/executable`. `:pod/version` was
+recognised and refused with a sentence naming the missing registry. This builds
+the registry and the resolution, and the shape it takes is one property:
+
+**A FETCHED POD IS INDISTINGUISHABLE FROM A LOCAL ONE by the time anything
+boots it.** The artifact is chosen ONCE, in the plan, where the platform is
+known; what lands in the cache is an ordinary pod directory with an ordinary
+manifest naming the one executable that was fetched. Nothing downstream learns
+which coordinate it came from — `cli/src/main.rs` resolves both forms to a
+directory and reads the same manifest either way, which is what keeps the
+platform rule from being implemented twice at two different moments.
+
+### Two registries, because they answer different questions
+
+**The in-repo registry (`registry/pods.edn`) serves flint's own TOOLING pods
+and nothing else** — the dependency drivers, and whatever else sheds out of the
+binary. It exists so flint's own build does not depend on third-party
+infrastructure being up. **A user's dependencies resolve against the COMMUNITY
+registry**, which is where the pods people publish live.
+
+Keeping them apart gets both properties instead of trading one for the other. A
+first-party registry that also answered for `pod.org/postgres` would quietly
+change what somebody else's coordinate means, and that is worth more than the
+convenience of one lookup path. So the in-repo one is NOT in the default list:
+a project that wants flint's tooling pods says so with
+`:flint/pod-registries`, the same shape `:flint/npm-registry` and
+`:flint/maven-repos` already have.
+
+`registry/pods.edn` ships empty, and that is honest rather than unfinished:
+nothing has moved out of the binary yet, and a registry entry for a pod that
+does not exist would be a published lie. What exists now is the format and the
+hook that reads it.
+
+### The registry document, and why it needs no new host operation
+
+A registry is one EDN map — a pod, its versions, and which artifact matches
+which host. Fetching one is an ORDINARY FETCH, so it goes in the same batch as
+everything else and the fixpoint picks the resolution up on the next round:
+round one has nothing to resolve the pod with and asks for the document; round
+two reads it and asks for the artifact. Nothing was added to the host interface
+to make this work, which is the test of whether the plan/execute split was real.
+
+A native artifact is matched on `:os/name` and `:os/arch` (`std::env::consts`
+spellings, because that is what the binary compares against at boot), and an
+artifact with neither matches anything — so a one-artifact manifest, which is
+what a pod under development has, works without saying the same thing three
+times. **A wasm build is the FALLBACK and never the first choice**, so the
+matrix does not have to be complete: publish natives for the platforms worth
+publishing for, publish one wasm build beside them, and a host that can run it
+covers the tail.
+
+### The open question, answered: a pod may depend on pods, and only on pods
+
+`ROADMAP.md` recorded this as open. The answer: **a pod's manifest may declare
+`:deps`, and every one of them must be a pod.** What a pod links natively is
+its own affair and invisible from here; a pod depending on ANOTHER pod is
+meaningful, and resolving it is the one piece that cannot be delegated to a
+driver pod, because the pod manager is the fixed point everything else is
+fetched by. A coordinate of any other kind in a pod's manifest is dropped
+rather than walked — a subprocess must not be able to put a compiler's worth of
+source on the path behind itself.
+
+For the same reason a pod contributes **no source roots**, which is now stated
+in `coord-types` (`:source :none`) rather than achieved by the walk skipping
+pods entirely. Skipping them was how it worked before, and it had a cost: a
+`:pod/path` naming a directory that did not exist was never reported, because a
+coordinate outside the plan cannot be checked.
+
+### What is still not done
+
+`flint fetch` is `bin/flint`'s, so a pod is fetched by babashka and booted by
+the shipped binary. The native side READS the cache and says
+`the pod X has not been fetched ... flint fetch resolves it` when it is empty —
+honest, and one command away from being self-sufficient. Closing it means the
+native CLI gaining a fetch driver, which is `one-dependency-walk`'s open half
+and not a separate piece of work.

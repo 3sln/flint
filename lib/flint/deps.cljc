@@ -3,18 +3,22 @@
 
   ## What is supported, and what is not
 
-  `:paths` and `:flint/tasks` are honoured. `:deps` are **read and reported but
-  not fetched**: 0021 puts them in the order git, npm, maven, which is both the
-  cost order and the order of how likely the fetched code is to build — and
-  states the caution that matters more than the cost, that resolving a
-  coordinate gets you SOURCE and not something that compiles. Most of Clojars
-  reaches for host interop flint does not have.
+  `:paths`, `:flint/tasks`, `:flint/overrides` and `:deps` of every kind flint
+  knows: git, npm, maven, `:local/root` and pods. All of them resolve
+  TRANSITIVELY, through one walk (`DECISIONS.md#one-dependency-walk`) -- this
+  file plans, the host fetches, and `flint.deps.manifest` is what knows which
+  file a given ecosystem keeps its dependency list in.
 
-  So this reports what it cannot do, by name, rather than half-fetching. That is
-  the manifest style the README already uses for library coverage: a dependency
-  source states what it does not support."
+  The caution that matters more than the cost still holds, and it is why this
+  reports what it cannot do BY NAME rather than half-fetching: resolving a
+  coordinate gets you SOURCE, not something that compiles, and most of Clojars
+  reaches for host interop flint does not have. That is the manifest style the
+  README already uses for library coverage -- a dependency source states what
+  it does not support."
   (:require [clojure.edn :as edn]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [flint.deps.manifest :as manifest]
+            [flint.deps.registry :as registry]))
 
 (def universal-coord-keys
   "Keys meaningful on a coordinate of ANY kind, so no kind has to list them."
@@ -50,6 +54,14 @@
   `{:npm/verison \"1.0\"}` is not an npm coordinate with a misspelling, it is a
   coordinate of no kind at all, and the message says so and helps nobody.
 
+  `:manifests` is the formats a dependency of this kind may CARRY, in
+  precedence order (`flint.deps.manifest`), and `:source` is where its code
+  sits when it carries no manifest saying otherwise. Both live here rather than
+  in the walk for the reason the kinds themselves do: adding a kind should have
+  to answer \"what does one of these say it depends on, and where is its
+  source\" in the same edit, not silently default to whatever the last `cond`
+  clause happened to be.
+
   The functions that act on a kind stay separate -- resolving, fetching and
   pinning are genuinely different jobs. What must not be separate is the answer
   to `what kinds are there, and what may they say`."
@@ -62,24 +74,47 @@
             [:git/url]]
     ;; `:sha` bare is read as a fallback for `:git/sha`, so it is known rather
     ;; than reported as a typo for the thing it is a spelling of.
-    :also  [:sha]}
+    :also  [:sha]
+    ;; A repository is fetched by git and may then turn out to carry ANY
+    ;; format: `deps.edn` if it is flint or Clojure, `package.json` if somebody
+    ;; published the same tree to npm, a `pom.xml` if it builds with maven.
+    ;; That is the whole reason the downloader and the scanner are separate.
+    :manifests [:deps-edn :package-json :pom]
+    :source :src}
    {:kind :local
     :forms [[:local/root]]
-    :also  []}
+    :also  []
+    ;; The COORDINATE says, for a local reference: `:local/root` is flint's own
+    ;; spelling and `deps.edn` is what it means.
+    :manifests [:deps-edn]
+    :source :src}
    {:kind :npm
     ;; The name defaults to the dependency's own symbol, so a version alone is
     ;; a complete npm coordinate.
     :forms [[:npm/name :npm/version]
             [:npm/version]]
-    :also  [:npm/integrity :npm/registry]}
+    :also  [:npm/integrity :npm/registry]
+    ;; `deps.edn` FIRST. A flint library published to npm carries a
+    ;; `package.json` because npm demands one, and a `deps.edn` saying what it
+    ;; actually depends on as flint code; the second is the better answer.
+    :manifests [:deps-edn :package-json]
+    ;; An npm tarball is not `src`: a package that ships cljc puts it wherever
+    ;; `package.json` points, and the root is the only thing always right.
+    :source :root}
    {:kind :mvn
     :forms [[:mvn/version]]
-    :also  [:mvn/repos]}
+    :also  [:mvn/repos]
+    :manifests [:deps-edn :pom]
+    :source :root}
    {:kind :pod
     ;; The two genuine alternatives: on disk, or from a registry.
     :forms [[:pod/path]
             [:pod/version]]
-    :also  []}])
+    :also  [:pod/registry]
+    :manifests [:pod]
+    ;; A pod contributes NO SOURCE. It is a separate process with its own
+    ;; authority, and its surface is discovered by booting it and asking.
+    :source :none}])
 
 (defn- has-all? [coord form] (every? (fn [k] (get coord k)) form))
 
@@ -197,15 +232,15 @@
 (def supported-dep-kinds
   "Coordinate kinds this build can fetch.
 
-  `git`, `npm`, `maven` and `local`. 0021's order is git, npm, maven -- the cost
-  order, and also the order of how likely the fetched code is to compile.
+  `git`, `npm`, `maven`, `local` and `pod`. 0021's order is git, npm, maven --
+  the cost order, and also the order of how likely the fetched code is to
+  compile.
 
-  Maven is here in its CHEAP half only. An exact coordinate is a derived URL,
-  exactly like npm, and that part costs nothing. What 0021 prices as expensive
-  is the rest -- POM parsing, the transitive graph, version conflict resolution
-  -- and its caution is that resolving a coordinate gets you SOURCE, not
-  something that compiles. So flint fetches one jar at one version and does not
-  pretend to resolve a graph; see `flint.deps/maven-note`."
+  EVERY ONE OF THEM RESOLVES TRANSITIVELY, through one walk
+  (`DECISIONS.md#one-dependency-walk`). Maven used to be the exception and is
+  not any more: a jar carries its own POM, so the graph is read off what was
+  already fetched. `flint.deps/maven-note` states what the POM reader still
+  does not do."
   (set (map :kind coord-types)))
 
 (def default-maven-repos
@@ -214,11 +249,20 @@
   ["https://repo.clojars.org" "https://repo1.maven.org/maven2"])
 
 (def maven-note
-  "What flint's maven support does NOT do, stated where a reader will meet it."
-  (str "flint fetches a maven jar at an exact version and takes the source in it.\n"
-       "It does NOT resolve the transitive graph: a jar's own dependencies are not\n"
-       "fetched, so name them yourself. 0021 prices that work and states the reason\n"
-       "it is not obviously worth it -- resolving a coordinate gets you source, not\n"
+  "What flint's maven support does and does not do, stated where a reader will
+  meet it.
+
+  The transitive half is BUILT now: a jar carries its own POM at
+  `META-INF/maven/<group>/<artifact>/pom.xml`, so the graph is read off the
+  thing that was already downloaded rather than from a second request. What is
+  still not done is the parts of Maven that are Maven rather than dependency
+  resolution -- parent POMs, profiles, version ranges -- and a version those
+  leave unresolved is refused by name instead of guessed at."
+  (str "flint fetches a maven jar at an exact version and takes the source in it,\n"
+       "and reads the jar's own POM for what IT depends on. What it does NOT read:\n"
+       "a parent POM, a profile, or a version range -- so a dependency whose version\n"
+       "only a parent knows is reported rather than guessed. The caution that matters\n"
+       "more than the cost still holds: resolving a coordinate gets you SOURCE, not\n"
        "something that compiles, and flint has no host interop."))
 
 (defn maven-jar
@@ -306,103 +350,302 @@
         base (last (str/split (str/replace (str url) #"\.git$" "") #"/"))]
     (str (clean base) "-" (subs (clean sha) 0 (min 12 (count (str sha)))))))
 
+(def stamp
+  "The file a host writes into a checkout once the fetch has SUCCEEDED. Its
+  presence is what `fetch-plan` reads as `:fetched?`."
+  ".flint-fetched")
+
+(defn coord-reason
+  "Why flint cannot fetch this coordinate as written, or nil.
+
+  ONE WORDING, for the same reason `coord-complaint` is one wording: this is
+  asked both of a project's own `:deps` (by `incomplete`, at the top of a
+  build) and of a coordinate the transitive walk reached (by `fetch-plan`,
+  which has nowhere else to say it). Two spellings of `is a range` is the drift
+  the coordinate table exists to end, one level up.
+
+  A git dep without a sha is the one that matters: `deps.edn` allows it, and
+  resolving it means asking the remote what a branch points at today, which is
+  a different build tomorrow. flint refuses rather than doing that quietly."
+  [c]
+  (let [k (dep-kind c)]
+    (cond
+      (coord-complaint c) (coord-complaint c)
+      (and (= k :git) (str/blank? (str (or (:git/sha c) (:sha c)))))
+      "no :git/sha -- flint will not resolve a branch to whatever it points at today"
+      (and (= k :mvn) (not (exact-version? (:mvn/version c))))
+      (str ":mvn/version " (pr-str (:mvn/version c))
+           " is not one exact version -- flint takes an exact version, and"
+           " `flint deps pin` writes one")
+      (and (= k :npm) (str/blank? (str (or (:npm/version c) (:mvn/version c)))))
+      "no :npm/version"
+      (and (= k :npm) (not (exact-version? (or (:npm/version c) (:mvn/version c)))))
+      (str ":npm/version " (pr-str (or (:npm/version c) (:mvn/version c)))
+           " is a range -- flint takes an exact version, for the same"
+           " reason it takes a git sha and not a branch."
+           " `flint deps pin` resolves it and writes it into :flint/overrides")
+      (and (= k :local) (str/blank? (str (:local/root c))))
+      "no :local/root"
+      ;; A pod from a REGISTRY resolves now; what it still needs is an exact
+      ;; version, for the reason every other kind does.
+      (and (= k :pod) (str/blank? (str (:pod/path c)))
+           (not (exact-version? (:pod/version c))))
+      (str ":pod/version " (pr-str (:pod/version c))
+           " is not one exact version -- a pod is pinned like everything else")
+      :else nil)))
+
+(defn- npm-base
+  "The directory an npm tarball is unpacked INTO. The tarball itself contains a
+  `package/`, so this is one level above the source root."
+  [nm c cache]
+  (let [v (or (:npm/version c) (:mvn/version c))]
+    (when (exact-version? v)
+      (str cache "/npm/"
+           (str/replace (str/replace (str nm) "@" "") "/" "-") "-" v))))
+
+(defn pod-dir
+  "Where a pod fetched from a registry lives. `:pod/path` names its own."
+  [cache nm version]
+  (str cache "/pod/" (str/replace (str/replace (str nm) "@" "") "/" "-") "-" version))
+
 (defn- coord-dir
-  "Where a coordinate's source lives once fetched, or nil if flint cannot fetch
-  it at all."
+  "Where a coordinate's content lives once fetched, or nil if flint cannot
+  fetch it at all."
   [nm c cache]
   (let [k (dep-kind c)]
     (cond
       (= k :git) (let [sha (or (:git/sha c) (:sha c))]
                    (when-not (str/blank? (str sha))
                      (str cache "/git/" (git-name (:git/url c) sha))))
-      (= k :npm) (let [v (or (:npm/version c) (:mvn/version c))]
-                   (when (exact-version? v)
-                     ;; `/package`, because that is what an npm tarball unpacks
-                     ;; into, and a source root has to be the directory the
-                     ;; namespaces are relative to.
-                     (str cache "/npm/"
-                          (str/replace (str/replace (str nm) "@" "") "/" "-")
-                          "-" v "/package")))
+      ;; `/package`, because that is what an npm tarball unpacks into, and a
+      ;; source root has to be the directory the namespaces are relative to.
+      ;; The tarball is unpacked into the directory ABOVE -- see `:unpack`.
+      (= k :npm) (when-let [b (npm-base nm c cache)] (str b "/package"))
       (= k :mvn) (let [v (:mvn/version c)]
                      (when (exact-version? v)
                        (str cache "/mvn/"
                             (str/replace (str/replace (str nm) "/" "-") ":" "-") "-" v)))
       (= k :local) (when-not (str/blank? (str (:local/root c))) (:local/root c))
-      ;; NIL ON PURPOSE, and it is the whole reason a pod fits here without a
-      ;; special case downstream. A pod contributes no SOURCE: it is a separate
-      ;; process with its own authority, and its surface is discovered by
-      ;; booting it and asking. `fetch-plan` skips a coordinate whose dir is
-      ;; nil, so a pod never becomes a source root and never gets compiled --
-      ;; which is what it means for the host, not the resolver, to own it.
-      (= k :pod) nil
+      ;; A POD IS IN THE WALK NOW, and the directory is what puts it there. It
+      ;; used to answer nil, which took a pod out of the plan entirely -- so a
+      ;; `:pod/path` that did not exist was never reported, and a
+      ;; `:pod/version` had nowhere to be fetched to.
+      (= k :pod) (if (str/blank? (str (:pod/path c)))
+                   (when (exact-version? (:pod/version c))
+                     (pod-dir cache nm (:pod/version c)))
+                   (str (:pod/path c)))
       :else nil)))
 
+(defn- kind-entry [k] (some (fn [t] (when (= k (:kind t)) t)) coord-types))
+
+(defn manifests-of
+  "The manifest formats a kind may carry, in precedence order. Reads
+  `coord-types` rather than restating it."
+  [k]
+  (vec (:manifests (kind-entry k))))
+
+(defn- default-source
+  "Where a dependency's code is when its manifest does not say."
+  [k root]
+  (case (:source (kind-entry k))
+    :root [root]
+    :src [(str root "/src")]
+    []))
+
+(defn- never-fetched?
+  "Kinds that are ALREADY THERE by construction. `:local/root` and `:pod/path`
+  name a directory rather than something to go and get, and treating them as
+  unfetched is the bug this names: the walk probed for a `.flint-fetched`
+  stamp, which nothing ever writes into somebody's own source tree, so every
+  `:local/root` came back pending for ever and `bin/flint` reported it as `no
+  such :local/root` -- for a directory that was right there."
+  [k c]
+  (or (= k :local) (and (= k :pod) (not (str/blank? (str (:pod/path c)))))))
+
+(defn- kids-of
+  "What a scanned manifest contributes to the walk.
+
+  A POD MAY ONLY DEPEND ON PODS. Whatever a pod links natively is its own
+  affair and invisible from here; a pod depending on ANOTHER pod is meaningful,
+  and resolving it is the one piece that cannot be delegated to a driver pod,
+  because the pod manager is the fixed point everything else is fetched by. A
+  coordinate of any other kind in a pod's manifest is DROPPED rather than
+  walked -- a subprocess must not be able to pull a compiler's worth of source
+  onto the path behind itself."
+  [k m]
+  (let [ds (or (:deps m) {})]
+    (if-not (= k :pod)
+      ds
+      (reduce (fn [acc e] (if (= :pod (dep-kind (val e))) (conj acc e) acc)) [] ds))))
+
 (defn fetch-plan
-  "What has to be fetched before this project can build, as data -- transitively.
+  "What has to be fetched before this project can build, as data -- transitively,
+  for EVERY kind (`DECISIONS.md#one-dependency-walk`).
 
   Resolution here, fetching in the host: the guest decides WHAT to fetch and
   where it goes, which is pure and testable, and the host runs `git`. That is
   the same split the rest of the CLI draws, and it is why `deps.edn` support can
   be tested without a network.
 
-  Transitive, and therefore iterative. A dependency's OWN `deps.edn` is what
-  says where its source is and what it depends on in turn -- the coordinate does
-  not, which is the part it is easy to get wrong -- and that file does not exist
-  until the thing is fetched. So an entry that is not on disk yet comes back
-  with `:fetched? false` and no `:paths`, the host fetches it, and the host asks
-  again. It settles when nothing is left unfetched.
+  Transitive, and therefore iterative. A dependency's OWN manifest is what says
+  where its source is and what it depends on in turn -- the coordinate does
+  not, which is the part it is easy to get wrong -- and that file does not
+  exist until the thing is fetched. So an entry that is not on disk yet comes
+  back with `:fetched? false` and no `:paths`, the host fetches it, and the
+  host asks again. It settles when nothing is left unfetched.
+
+  WHICH manifest is `flint.deps.manifest`'s business and not this one's. That
+  is the change that made one walk possible: this used to read `deps.edn` and
+  only `deps.edn`, so npm's transitives were resolved by a second walk in
+  `flint.deps.resolve` and maven's were not resolved at all.
+
+  Each entry carries `:via`, which is the DOWNLOADER it needs -- `:git`,
+  `:tgz`, `:zip`, `:file`, or `:none` for something already on disk. A host
+  dispatches on that and not on `:kind`: how a thing is fetched and what
+  ecosystem it belongs to are different questions, and a host that switched on
+  the kind is the third copy of this table that broke last time the kinds
+  moved.
 
   `slurp*` is the project reader; `cache` is the root the host keeps checkouts
-  under."
-  [d cache slurp*]
-  (let [registry (or (:flint/npm-registry d) default-npm-registry)
-        repos (if (seq (:flint/maven-repos d)) (:flint/maven-repos d) default-maven-repos)]
-   (loop [todo (vec (or (:deps d) {})) seen #{} out []]
-    (if (empty? todo)
-      out
-      (let [e (first todo)
-            nm (str (key e)) c (val e)
-            dir (coord-dir (or (:npm/name c) nm) c cache)
-            root (if (str/blank? (str (:deps/root c))) dir (str dir "/" (:deps/root c)))]
-        (if (or (nil? dir) (contains? seen nm))
-          (recur (vec (rest todo)) (conj seen nm) out)
-          (let [inner (when root (slurp* (str root "/deps.edn")))
-                ;; A STAMP, not the presence of `deps.edn`: a project without
-                ;; one is legal and means `src`, and a half-finished clone has
-                ;; files in it. The host writes the stamp only after the fetch
-                ;; succeeds, so its presence means exactly what it says.
-                fetched? (some? (slurp* (str dir "/.flint-fetched")))
-                sub (when inner (edn/read-string inner))
-                entry {:dep nm :kind (dep-kind c) :dir dir :root root
-                       :url (cond
-                              (= (dep-kind c) :npm)
-                              (npm-tarball (or (:npm/registry c) registry)
-                                           (or (:npm/name c) nm)
-                                           (or (:npm/version c) (:mvn/version c)))
-                              ;; Several, tried in order: a jar is on Clojars or
-                              ;; on Central and the coordinate does not say
-                              ;; which.
-                              (= (dep-kind c) :mvn)
-                              (mapv (fn [r] (maven-jar r nm (:mvn/version c)))
-                                    (or (:mvn/repos c) repos))
-                              :else (:git/url c))
-                       :sha (or (:git/sha c) (:sha c))
-                       :fetched? (boolean fetched?)
-                       :paths (when fetched?
-                                (if (seq (:paths sub))
-                                  (mapv (fn [p] (str root "/" p)) (:paths sub))
-                                  ;; No `deps.edn` of its own, so a default per
-                                  ;; kind. A git repo of Clojure is `src` by
-                                  ;; convention; an npm tarball is not -- a
-                                  ;; package that ships cljc puts it wherever
-                                  ;; `package.json` points, and the root is the
-                                  ;; only thing that is always right.
-                                  (if (contains? #{:npm :mvn} (dep-kind c))
-                                    [root]
-                                    [(str root "/src")])))}]
-            (recur (vec (concat (rest todo) (or (:deps sub) {})))
-                   (conj seen nm)
-                   (conj out entry)))))))))
+  under. `opts` may carry `:exists?`, a directory probe, and `:os/name` and
+  `:os/arch`, which pod artifact selection needs."
+  ([d cache slurp*] (fetch-plan d cache slurp* {}))
+  ([d cache slurp* opts]
+   (let [registry (or (:flint/npm-registry d) default-npm-registry)
+         repos (if (seq (:flint/maven-repos d)) (:flint/maven-repos d) default-maven-repos)
+         ;; AN OVERRIDE WINS AT ANY DEPTH, applied before anything is derived
+         ;; from the coordinate. `flint.deps.resolve/plan` already worked this
+         ;; way and this walk did not, which meant `flint deps pin` wrote pins
+         ;; that the thing doing the fetching never read -- and a transitive
+         ;; npm range, which arrives from a `package.json` and is not the
+         ;; project's to edit, had no way of ever becoming exact.
+         overrides (or (:flint/overrides d) {})
+         exists? (:exists? opts)
+         os (get opts :os/name "") arch (get opts :os/arch "")
+         direct (set (mapv (fn [e] (str (key e))) (or (:deps d) {})))]
+     (loop [todo (vec (or (:deps d) {})) seen #{} out []]
+       (if (empty? todo)
+         out
+         (let [e (first todo)
+               k0 (key e)
+               nm (str k0)
+               c (or (get overrides k0) (get overrides (symbol nm)) (val e))
+               kind (dep-kind c)
+               ;; A pod from a registry has to be looked up before it has a URL
+               ;; at all, and the lookup needs the registry document, which is
+               ;; itself a fetch. So it goes in the same batch and the fixpoint
+               ;; picks the answer up on the next round.
+               ;;
+               ;; NOT ONCE IT IS ON DISK, though. A fetched pod needs no URL,
+               ;; so asking the registry again would make an offline build fail
+               ;; on a dependency it already has -- and the cache directory is
+               ;; derived from the coordinate alone, which is what lets the
+               ;; question be asked before resolving anything.
+               pod (when (and (= kind :pod) (str/blank? (str (:pod/path c)))
+                              (exact-version? (:pod/version c))
+                              (nil? (slurp* (str (pod-dir cache nm (:pod/version c))
+                                                 "/" stamp))))
+                     (registry/resolve-pod slurp* cache d nm (:pod/version c) os arch))
+               dir (coord-dir (or (:npm/name c) nm) c cache)
+               root (if (str/blank? (str (:deps/root c))) dir (str dir "/" (:deps/root c)))]
+           (cond
+             (contains? seen nm) (recur (vec (rest todo)) seen out)
+
+             ;; The registry document is missing, so THAT is what this round
+             ;; asks for. The pod itself comes back next time round.
+             (:need-registry pod)
+             (let [u (:need-registry pod)
+                   rd (registry/doc-dir cache u)]
+               (recur (vec (rest todo)) seen
+                      (if (some (fn [x] (= (:dir x) rd)) out)
+                        out
+                        (conj out {:dep u :kind :registry :via :file
+                                   :dir rd :root rd :url u
+                                   :file registry/doc-file
+                                   :fetched? false :paths []}))))
+
+             ;; UNRESOLVABLE, and SAID SO IN THE PLAN. It used to be dropped
+             ;; silently, which was survivable only while the walk saw nothing
+             ;; but a project's own `:deps` -- `incomplete` reported those. A
+             ;; transitive coordinate has no such second reader, and dropping
+             ;; one quietly means a build that fails later as `cannot find
+             ;; source for namespace ...`, naming the wrong thing.
+             (or (nil? dir) (:why pod))
+             (recur (vec (rest todo)) (conj seen nm)
+                    ;; WHAT ANOTHER READER ALREADY SAYS IS NOT SAID AGAIN. An
+                    ;; unknown kind is `unsupported`'s to report, and a direct
+                    ;; coordinate `coord-reason` can judge on its own is
+                    ;; `incomplete`'s; saying either here as well stops a build
+                    ;; twice for one fault, which is the exact mistake
+                    ;; `coord-complaint` records having made before. What is
+                    ;; left is what no other reader can see: a coordinate
+                    ;; reached transitively, and a registry lookup that failed
+                    ;; -- `incomplete` gets no cache and no reader, so it
+                    ;; cannot know a pod version is absent.
+                    (if (or (= :unknown kind)
+                            (and (contains? direct nm) (some? (coord-reason c))))
+                      out
+                      (conj out {:dep nm :kind kind :via :none
+                                 :direct? (contains? direct nm)
+                                 :why (or (:why pod) (coord-reason c)
+                                          "flint cannot resolve this coordinate")
+                                 :fetched? true :paths []})))
+
+             :else
+             (let [a (:artifact pod)
+                   on-disk? (never-fetched? kind c)
+                   fetched? (if on-disk?
+                              ;; NOTHING TO FETCH, so the question is whether
+                              ;; it is there at all. A host that cannot answer
+                              ;; that says so by passing no `:exists?`, and the
+                              ;; benefit of the doubt goes to the directory.
+                              (if exists? (boolean (exists? dir)) true)
+                              (some? (slurp* (str dir "/" stamp))))
+                   m (when fetched? (manifest/scan slurp* root nm (manifests-of kind)))
+                   entry {:dep nm :kind kind
+                          :via (cond
+                                 on-disk? :none
+                                 (= kind :git) :git
+                                 (= kind :npm) :tgz
+                                 (= kind :mvn) :zip
+                                 (= kind :pod) (registry/via (:artifact/url a))
+                                 :else :file)
+                          :dir dir :root root
+                          ;; WHERE THE ARCHIVE IS UNPACKED, which is not always
+                          ;; where the content ends up: an npm tarball carries
+                          ;; its own `package/`, so the source root is one
+                          ;; level down from what tar is pointed at.
+                          :unpack (if (= kind :npm)
+                                    (npm-base (or (:npm/name c) nm) c cache)
+                                    dir)
+                          :url (cond
+                                 (= kind :npm)
+                                 (npm-tarball (or (:npm/registry c) registry)
+                                              (or (:npm/name c) nm)
+                                              (or (:npm/version c) (:mvn/version c)))
+                                 ;; Several, tried in order: a jar is on
+                                 ;; Clojars or on Central and the coordinate
+                                 ;; does not say which.
+                                 (= kind :mvn)
+                                 (mapv (fn [r] (maven-jar r nm (:mvn/version c)))
+                                       (or (:mvn/repos c) repos))
+                                 (= kind :pod) (:artifact/url a)
+                                 :else (:git/url c))
+                          :sha (or (:git/sha c) (:sha c))
+                          :sha256 (:artifact/sha256 a)
+                          ;; What the host has to write down so that a fetched
+                          ;; pod is indistinguishable from a `:pod/path` one:
+                          ;; the artifact was chosen HERE, once, and the boot
+                          ;; side only ever runs what the manifest names.
+                          :exec (:artifact/executable a)
+                          :fetched? (boolean fetched?)
+                          :paths (when fetched?
+                                   (if (seq (:paths m))
+                                     (mapv (fn [p] (str root "/" p)) (:paths m))
+                                     (default-source kind root)))}]
+               (recur (vec (concat (rest todo) (kids-of kind m)))
+                      (conj seen nm)
+                      (conj out entry))))))))))
 
 (defn dep-paths
   "Every fetched dependency's source roots, in the order they were resolved."
@@ -410,42 +653,23 @@
   (vec (mapcat :paths (filter :fetched? plan))))
 
 (defn incomplete
-  "Coordinates flint would fetch but cannot as written, with the reason.
-
-  A git dep without a sha is the one that matters: `deps.edn` allows it, and
-  resolving it means asking the remote what a branch points at today, which is
-  a different build tomorrow. flint refuses rather than doing that quietly."
+  "Coordinates flint would fetch but cannot as written, with the reason."
   [d]
   (reduce (fn [acc e]
-            (let [nm (str (key e)) c (val e) k (dep-kind c)
-                  probs (coord-problems c)]
-              (cond
-                (coord-complaint c)
-                (conj acc {:dep nm :why (coord-complaint c)})
-                (and (= k :git) (str/blank? (str (or (:git/sha c) (:sha c)))))
-                (conj acc {:dep nm :why "no :git/sha -- flint will not resolve a branch to whatever it points at today"})
-                (and (= k :mvn) (not (exact-version? (:mvn/version c))))
-                (conj acc {:dep nm :why (str ":mvn/version " (pr-str (:mvn/version c))
-                                             " is not one exact version -- flint does not resolve"
-                                             " a range or a graph")})
-                (and (= k :npm) (str/blank? (str (or (:npm/version c) (:mvn/version c)))))
-                (conj acc {:dep nm :why "no :npm/version"})
-                (and (= k :npm) (not (exact-version? (or (:npm/version c) (:mvn/version c)))))
-                (conj acc {:dep nm :why (str ":npm/version " (pr-str (or (:npm/version c) (:mvn/version c)))
-                                             " is a range -- flint takes an exact version, for the same"
-                                             " reason it takes a git sha and not a branch")})
-                (and (= k :local) (str/blank? (str (:local/root c))))
-                (conj acc {:dep nm :why "no :local/root"})
-                ;; A pod from a REGISTRY is the half that is not built. Said
-                ;; here rather than left to fail at boot, because the failure
-                ;; would otherwise be "could not start the pod \"\"" -- a
-                ;; message about an empty path that says nothing about why.
-                (and (= k :pod) (str/blank? (str (:pod/path c))))
-                (conj acc {:dep nm :why (str ":pod/version needs a pod registry, which is not built yet"
-                                             " -- a pod is resolvable today only as :pod/path, naming a"
-                                             " directory that holds its manifest")})
-                :else acc)))
+            (if-let [why (coord-reason (val e))]
+              (conj acc {:dep (str (key e)) :why why})
+              acc))
           [] (or (:deps d) {})))
+
+(defn refused
+  "Every entry the WALK had to drop, with the reason.
+
+  Separate from `incomplete` because it answers about the whole graph and not
+  about what a person typed: a transitive npm range arrives from somebody
+  else's `package.json` and is not in this project's `deps.edn` at all, so
+  nothing that reads only `:deps` can report it."
+  [plan]
+  (vec (filter :why plan)))
 
 (defn unsupported
   "Every dependency this build cannot fetch, with the reason, so a project that
@@ -457,11 +681,6 @@
                 acc
                 (conj acc {:dep (str (key e)) :kind k}))))
           [] (or (:deps d) {})))
-
-(def stamp
-  "The file a host writes into a checkout once the fetch has SUCCEEDED. Its
-  presence is what `fetch-plan` reads as `:fetched?`."
-  ".flint-fetched")
 
 (defn describe
   "A one-line summary of what was found, for `flint deps`."
@@ -486,7 +705,8 @@
                         []
                         (concat ["dependencies this build cannot fetch:"]
                                 (mapv (fn [x] (str "  " (:dep x) "  (" (name (:kind x)) ")")) u)
-                                ["  flint fetches git, npm and :local/root. 0021's order is git,"
-                                 "  npm, maven -- cost order, and also the order of how likely the"
-                                 "  code is to compile: flint has no host interop, so a library has"
-                                 "  to be portable cljc, which most of a registry is not."]))))))
+                                ["  flint fetches git, npm, maven, :local/root and pods. 0021's"
+                                 "  order is git, npm, maven -- cost order, and also the order of"
+                                 "  how likely the code is to compile: flint has no host interop,"
+                                 "  so a library has to be portable cljc, which most of a registry"
+                                 "  is not."]))))))

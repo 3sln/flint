@@ -414,11 +414,327 @@
          (:out (flint-in mp "run" "out/app.wasm" "app/main")) "42")
   (check-that "  ... with the jar ROOT as the source root"
               (str/includes? (:out (flint-in mp "paths")) ".flint/mvn/"))
-  ;; The limitation is stated next to the dependency, not buried.
-  (check-that "  ... and deps says the transitive graph is NOT resolved"
+  ;; The limitation is stated next to the dependency, not buried -- and what
+  ;; the limitation IS has changed: the transitive graph is read now, off the
+  ;; POM inside the jar. What is still not read is the parts of maven that are
+  ;; maven, and that is what the note has to say.
+  (check-that "  ... and deps says what the POM reader does not read"
               (let [o (:out (flint-in mp "deps"))]
-                (and (str/includes? o "does NOT resolve the transitive graph")
+                (and (str/includes? o "reads the jar's own POM")
+                     (str/includes? o "a parent POM, a profile, or a version range")
                      (str/includes? o "no host interop")))))
+
+;; --- one walk, every kind (`DECISIONS.md#one-dependency-walk`) -------------
+;;
+;; There used to be THREE transitive mechanisms: `fetch-plan` read a fetched
+;; dependency's `deps.edn` and recursed, `flint.deps.resolve/plan` read an npm
+;; MANIFEST and recursed separately, and maven had neither. What made them
+;; three was that the walk knew which file to read; now `flint.deps.manifest`
+;; knows, one walk consumes every format, and the kinds table says which
+;; formats a kind may carry.
+(println "cli: manifest scanners")
+(babashka.classpath/add-classpath "lib")
+(require '[flint.deps.manifest :as fman] '[flint.deps.registry :as freg])
+
+(check "package.json gives npm coordinates, dependencies only"
+       (fman/package-json
+        (str "{\"name\":\"x\",\"devDependencies\":{\"jest\":\"1.0.0\"},"
+             "\"dependencies\":{\"left-pad\":\"^1.3.0\",\"@s/y\":\"2.0.0\"}}"))
+       {:format :package-json
+        :deps {'left-pad {:npm/name "left-pad" :npm/version "^1.3.0"}
+               (symbol "@s/y") {:npm/name "@s/y" :npm/version "2.0.0"}}
+        :paths []})
+;; The case a naive `index-of "dependencies"` gets wrong, and it occurs: tools
+;; put their own configuration in `package.json`, and a nested key of the same
+;; name is not this package's dependency list.
+(check "  ... and a NESTED \"dependencies\" is not this package's"
+       (:deps (fman/package-json
+               (str "{\"scripts\":{\"dependencies\":\"lie\"},"
+                    "\"dependencies\":{\"real\":\"1.0.0\"}}")))
+       {'real {:npm/name "real" :npm/version "1.0.0"}})
+;; A backslash escapes the next character. Without that a Windows path in a
+;; `"bin"` entry ends the string early and everything after it is misread.
+(check "  ... and an escaped quote does not end the string early"
+       (:deps (fman/package-json
+               (str "{\"bin\":\"a\\\\b\\\"c\",\"dependencies\":{\"real\":\"1.0.0\"}}")))
+       {'real {:npm/name "real" :npm/version "1.0.0"}})
+
+(def pom-fixture
+  (str "<project><groupId>com.example</groupId><artifactId>t</artifactId>"
+       "<version>1.2.3</version>"
+       "<properties><json.version>2.4.0</json.version></properties>"
+       "<!-- <dependency><groupId>ghost</groupId><artifactId>g</artifactId>"
+       "<version>1</version></dependency> -->"
+       "<dependencyManagement><dependencies><dependency><groupId>managed</groupId>"
+       "<artifactId>m</artifactId><version>9</version></dependency></dependencies>"
+       "</dependencyManagement>"
+       "<dependencies>"
+       "<dependency><groupId>org.clojure</groupId><artifactId>data.json</artifactId>"
+       "<version>${json.version}</version></dependency>"
+       "<dependency><groupId>com.example</groupId><artifactId>sib</artifactId>"
+       "<version>${project.version}</version></dependency>"
+       "<dependency><groupId>junit</groupId><artifactId>junit</artifactId>"
+       "<version>4.13</version><scope>test</scope></dependency>"
+       "<dependency><groupId>opt</groupId><artifactId>o</artifactId>"
+       "<version>1</version><optional>true</optional></dependency>"
+       "</dependencies></project>"))
+
+;; `dependencyManagement` is version POLICY for dependencies declared
+;; elsewhere, not an edge; a `test` scope belongs to the POM's own build; an
+;; optional one is the consumer's choice. Taking any of the three would put
+;; things on the path that maven itself would not.
+(check "a POM gives maven coordinates, with the graph's edges only"
+       (:deps (fman/pom-xml pom-fixture))
+       {'org.clojure/data.json {:mvn/version "2.4.0"}
+        'com.example/sib {:mvn/version "1.2.3"}})
+;; A jar carries its own POM, which is why maven needs no second request to
+;; answer what it depends on.
+(check "  ... and it is looked for inside the jar, at the coordinate's path"
+       (let [t (first (filter (fn [f] (= :pom (:format f))) fman/formats))]
+         ((:files t) 'com.example/thing))
+       ["pom.xml" "META-INF/maven/com.example/thing/pom.xml"])
+
+;; The precedence is the kinds table's answer, not the scanner's: a LOCAL
+;; reference names its ecosystem in how it is written, and a FETCHED package
+;; may carry more than its own registry understands, so `deps.edn` wins there.
+(check "deps.edn beats the ecosystem's own manifest on a fetched package"
+       [(fdeps/manifests-of :npm) (fdeps/manifests-of :mvn)
+        (fdeps/manifests-of :local) (fdeps/manifests-of :pod)]
+       [[:deps-edn :package-json] [:deps-edn :pom] [:deps-edn] [:pod]])
+(check "every kind says what it carries"
+       (every? (fn [t] (and (seq (:manifests t)) (:source t))) fdeps/coord-types)
+       true)
+
+;; --- transitive, for the two kinds that did not have it --------------------
+
+(def cwd* (System/getProperty "user.dir"))
+(defn flint-in* [dir & args]
+  (let [pb (ProcessBuilder. (into-array String (cons (str cwd* "/bin/flint") args)))]
+    (.directory pb (io/file dir))
+    (let [p (.start pb) o (slurp (.getInputStream p)) e (slurp (.getErrorStream p))]
+      {:exit (do (.waitFor p) (.exitValue p)) :out (str/trim (str o e))})))
+(defn run-in* [dir args]
+  (let [pb (ProcessBuilder. (into-array String (concat [(str cwd* "/bin/flint")] args)))]
+    (.directory pb (io/file dir))
+    (let [p (.start pb) o (slurp (.getInputStream p)) e (slurp (.getErrorStream p))]
+      {:exit (do (.waitFor p) (.exitValue p)) :out (str/trim (str o e))})))
+
+(println "cli: transitive resolution, every kind")
+
+;; MAVEN. A jar's dependencies are in its POM and nothing read one, so a maven
+;; dependency of a maven dependency simply was not there.
+(let [repo (str (fs/create-temp-dir))
+      stage (str (fs/create-temp-dir))
+      proj (str (fs/create-temp-dir))
+      jar! (fn [dir out]
+             (let [pb (ProcessBuilder. (into-array String ["zip" "-qr" out "."]))]
+               (.directory pb (io/file dir))
+               (.waitFor (.start pb))))]
+  ;; leaf: no dependencies of its own.
+  (fs/create-dirs (str stage "/leaf/leafns"))
+  (spit (str stage "/leaf/leafns/core.cljc")
+        "(ns leafns.core)\n(defn shout [s] (clojure.string/upper-case s))\n")
+  (fs/create-dirs (str repo "/com/example/leaf/1.0.0"))
+  (jar! (str stage "/leaf") (str repo "/com/example/leaf/1.0.0/leaf-1.0.0.jar"))
+  ;; trunk: depends on leaf, and says so in the POM inside its own jar.
+  (fs/create-dirs (str stage "/trunk/trunkns"))
+  (fs/create-dirs (str stage "/trunk/META-INF/maven/com.example/trunk"))
+  (spit (str stage "/trunk/trunkns/core.cljc")
+        "(ns trunkns.core (:require [leafns.core :as l]))\n(defn hi [w] (l/shout (str \"hi \" w)))\n")
+  (spit (str stage "/trunk/META-INF/maven/com.example/trunk/pom.xml")
+        (str "<project><groupId>com.example</groupId><artifactId>trunk</artifactId>"
+             "<version>1.0.0</version><dependencies>"
+             "<dependency><groupId>com.example</groupId><artifactId>leaf</artifactId>"
+             "<version>1.0.0</version></dependency></dependencies></project>"))
+  (fs/create-dirs (str repo "/com/example/trunk/1.0.0"))
+  (jar! (str stage "/trunk") (str repo "/com/example/trunk/1.0.0/trunk-1.0.0.jar"))
+
+  (fs/create-dirs (str proj "/src"))
+  (spit (str proj "/src/app.cljc")
+        "(ns app (:require [trunkns.core :as t]))\n(defn main [args] (t/hi (first args)))\n")
+  (spit (str proj "/deps.edn")
+        (str "{:paths [\"src\"] :flint/main app/main\n"
+             " :flint/maven-repos [\"file://" repo "\"]\n"
+             " :deps {com.example/trunk {:mvn/version \"1.0.0\"}}}\n"))
+  (check "a maven dependency's own POM is read, and its deps fetched"
+         (:exit (flint-in* proj "build")) 0)
+  (check "  ... so the project compiles against the transitive one"
+         (:out (run-in* proj ["run" "out/app.wasm" "app/main" "you"])) "HI YOU")
+  (check-that "  ... and both jars are on the path"
+              (let [o (:out (flint-in* proj "paths"))]
+                (and (str/includes? o "trunk-1.0.0") (str/includes? o "leaf-1.0.0")))))
+
+;; NPM. `package.json` was read by `flint.deps.resolve` in a second walk that
+;; the thing doing the fetching never called, so a build got the package and
+;; not what it depends on.
+(let [reg (str (fs/create-temp-dir))
+      stage (str (fs/create-temp-dir))
+      proj (str (fs/create-temp-dir))
+      tgz! (fn [dir out]
+             (let [pb (ProcessBuilder. (into-array String ["tar" "-czf" out "package"]))]
+               (.directory pb (io/file dir))
+               (.waitFor (.start pb))))]
+  (fs/create-dirs (str stage "/b/package/bns"))
+  (spit (str stage "/b/package/package.json") "{\"name\":\"pkg-b\",\"version\":\"1.0.0\"}")
+  (spit (str stage "/b/package/bns/core.cljc")
+        "(ns bns.core)\n(defn shout [s] (str (clojure.string/upper-case s) \"!\"))\n")
+  (fs/create-dirs (str reg "/pkg-b/-"))
+  (tgz! (str stage "/b") (str reg "/pkg-b/-/pkg-b-1.0.0.tgz"))
+
+  (fs/create-dirs (str stage "/a/package/ans"))
+  (spit (str stage "/a/package/package.json")
+        (str "{\"name\":\"pkg-a\",\"version\":\"1.0.0\","
+             "\"devDependencies\":{\"nope\":\"9.9.9\"},"
+             "\"dependencies\":{\"pkg-b\":\"1.0.0\"}}"))
+  (spit (str stage "/a/package/ans/core.cljc")
+        "(ns ans.core (:require [bns.core :as b]))\n(defn hi [w] (b/shout (str \"hi \" w)))\n")
+  (fs/create-dirs (str reg "/pkg-a/-"))
+  (tgz! (str stage "/a") (str reg "/pkg-a/-/pkg-a-1.0.0.tgz"))
+
+  (fs/create-dirs (str proj "/src"))
+  (spit (str proj "/src/app.cljc")
+        "(ns app (:require [ans.core :as a]))\n(defn main [args] (a/hi (first args)))\n")
+  (let [base (str "{:paths [\"src\"] :flint/main app/main\n"
+                  " :flint/npm-registry \"file://" reg "\"\n")]
+    (spit (str proj "/deps.edn") (str base " :deps {pkg-a {:npm/version \"1.0.0\"}}}\n"))
+    (check "an npm package's package.json is read, and its deps fetched"
+           (:exit (flint-in* proj "build")) 0)
+    (check "  ... so the project compiles against the transitive one"
+           (:out (run-in* proj ["run" "out/app.wasm" "app/main" "you"])) "HI YOU!")
+    (check-that "  ... and devDependencies are NOT fetched"
+                (not (str/includes? (:out (flint-in* proj "paths")) "nope")))
+
+    ;; A RANGE arriving from somebody else's manifest. flint takes exact
+    ;; versions everywhere, and the thing that makes this workable rather than
+    ;; merely strict is that the refusal names the tool that fixes it.
+    (fs/delete-tree (str proj "/.flint"))
+    (spit (str stage "/a/package/package.json")
+          "{\"name\":\"pkg-a\",\"version\":\"1.0.0\",\"dependencies\":{\"pkg-b\":\"^1.0.0\"}}")
+    (tgz! (str stage "/a") (str reg "/pkg-a/-/pkg-a-1.0.0.tgz"))
+    (let [r (flint-in* proj "build")]
+      (check-that "a TRANSITIVE range is refused, naming the dependency nobody typed"
+                  (and (str/includes? (:out r) "not declared in this deps.edn")
+                       (str/includes? (:out r) "pkg-b")
+                       (str/includes? (:out r) "flint deps pin")))
+      (check "  ... and exits nonzero" (:exit r) 1))
+    ;; And `:flint/overrides` is what makes it buildable again -- the same key
+    ;; `flint deps pin` writes, now read by the walk that fetches.
+    (fs/delete-tree (str proj "/.flint"))
+    (spit (str proj "/deps.edn")
+          (str base " :flint/overrides {pkg-b {:npm/version \"1.0.0\"}}\n"
+               " :deps {pkg-a {:npm/version \"1.0.0\"}}}\n"))
+    (check "an override pins a transitive, and the build proceeds"
+           (:exit (flint-in* proj "build")) 0)))
+
+;; :local/root. It was BROKEN, and invisibly: the walk asked for a
+;; `.flint-fetched` stamp, which nothing writes into somebody's own source
+;; tree, so every local dependency came back pending for ever and the host
+;; reported `no such :local/root` for a directory that was right there.
+(let [lib (str (fs/create-temp-dir))
+      proj (str (fs/create-temp-dir))]
+  (fs/create-dirs (str lib "/src"))
+  (spit (str lib "/deps.edn") "{:paths [\"src\"]}\n")
+  (spit (str lib "/src/locallib.cljc") "(ns locallib)\n(defn hi [w] (str \"hi \" w))\n")
+  (fs/create-dirs (str proj "/src"))
+  (spit (str proj "/src/app.cljc")
+        "(ns app (:require [locallib]))\n(defn main [args] (locallib/hi (first args)))\n")
+  (spit (str proj "/deps.edn")
+        (str "{:paths [\"src\"] :flint/main app/main\n"
+             " :deps {my/lib {:local/root \"" lib "\"}}}\n"))
+  (check "a :local/root builds" (:exit (flint-in* proj "build")) 0)
+  (check "  ... and the project compiles against it"
+         (:out (run-in* proj ["run" "out/app.wasm" "app/main" "you"])) "hi you")
+  ;; The control: the same coordinate pointing nowhere must still say so, and
+  ;; say it about the directory rather than about a namespace three steps later.
+  (spit (str proj "/deps.edn")
+        "{:paths [\"src\"] :flint/main app/main :deps {my/lib {:local/root \"/nope/nowhere\"}}}\n")
+  (let [r (flint-in* proj "build")]
+    (check-that "a :local/root that is not there is named"
+                (and (str/includes? (:out r) "no such :local/root")
+                     (str/includes? (:out r) "my/lib")))))
+
+;; --- pods resolve from a registry (`DECISIONS.md#pods-are-a-resolvable-dependency`)
+(println "cli: pods from a registry")
+
+(check "an artifact with no platform matches anything"
+       (freg/artifact-for {:pod/artifacts [{:artifact/executable "run"}]} "macos" "aarch64")
+       {:artifact/executable "run"})
+(check "the NATIVE match wins, and wasm is only the fallback"
+       [(:artifact/executable
+         (freg/artifact-for {:pod/artifacts [{:artifact/wasm true :artifact/executable "w"}
+                                             {:os/name "linux" :artifact/executable "l"}]}
+                            "linux" "x86_64"))
+        (:artifact/executable
+         (freg/artifact-for {:pod/artifacts [{:artifact/wasm true :artifact/executable "w"}
+                                             {:os/name "linux" :artifact/executable "l"}]}
+                            "macos" "aarch64"))]
+       ["l" "w"])
+(check "no artifact and no wasm build is nil, not a guess"
+       (freg/artifact-for {:pod/artifacts [{:os/name "linux" :artifact/executable "l"}]}
+                          "macos" "aarch64")
+       nil)
+;; The default is the community registry, and flint's own is NOT in it: a
+;; first-party registry that also answered for somebody else's coordinate would
+;; quietly change what that coordinate means.
+(check "a project resolves pods against the community registry by default"
+       (freg/registries {}) freg/default-registries)
+(check "  ... and flint's own tooling registry is not in that list"
+       (boolean (some (fn [r] (= r freg/tooling-registry)) freg/default-registries)) false)
+(check "  ... but a project may name registries, flint's included"
+       (freg/registries {:flint/pod-registries ["file:///r" freg/tooling-registry]})
+       ["file:///r" freg/tooling-registry])
+
+(let [reg (str (fs/create-temp-dir))
+      proj (str (fs/create-temp-dir))]
+  ;; The artifact is the demo pod the sysns suite boots, published as a bare
+  ;; executable -- which is one of the three shapes a registry may name.
+  (fs/copy (str cwd* "/test/fixtures/demopod") (str reg "/demopod"))
+  (spit (str reg "/registry.edn")
+        (str "{:registry/name \"test\"\n"
+             " :pods {pod.demo {\"1.0.0\" {:pod/artifacts"
+             " [{:artifact/url \"file://" reg "/demopod\""
+             "   :artifact/executable \"run\"}]}}}}\n"))
+  (fs/create-dirs (str proj "/src"))
+  (spit (str proj "/src/app.cljc")
+        "(ns app (:require [pod.demo :as d]))\n(defn main [args] (str (d/add 1 2)))\n")
+  (spit (str proj "/deps.edn")
+        (str "{:paths [\"src\"] :flint/main app/main\n"
+             " :flint/pod-registries [\"file://" reg "/registry.edn\"]\n"
+             " :deps {pod.demo {:pod/version \"1.0.0\"}}}\n"))
+  (let [r (flint-in* proj "fetch")]
+    (check "a :pod/version is fetched through the registry" (:exit r) 0))
+  ;; A FETCHED POD IS A LOCAL POD. The artifact was chosen once, where the plan
+  ;; was made, so what lands on disk is the same manifest a `:pod/path` names
+  ;; and the boot side never learns the difference.
+  (check-that "  ... and what lands is an ordinary pod directory with a manifest"
+              (let [d (str proj "/.flint/pod/pod.demo-1.0.0")]
+                (and (fs/exists? (str d "/manifest.edn"))
+                     (str/includes? (slurp (str d "/manifest.edn")) ":artifact/executable")
+                     (fs/executable? (str d "/run")))))
+  ;; A pod contributes no SOURCE: it is a separate process with its own
+  ;; authority, so it must never become a source root.
+  (check-that "  ... and a pod is not a source root"
+              (not (str/includes? (:out (flint-in* proj "paths")) "/pod/")))
+  ;; The registry document is cached like anything else, so a second round
+  ;; fetches nothing.
+  (check "  ... and a second fetch has nothing to do"
+         (str/includes? (:out (flint-in* proj "fetch")) "are present") true)
+  ;; A FETCHED POD NEEDS NO REGISTRY. Its cache directory is derived from the
+  ;; coordinate alone, so the question "is it already here" can be asked before
+  ;; anything is resolved -- and without that, a build with every dependency on
+  ;; disk would still fail the moment the registry was unreachable.
+  (fs/delete-tree (str proj "/.flint/registry"))
+  (check "  ... and a pod already on disk is not resolved again"
+         (str/includes? (:out (flint-in* proj "fetch")) "are present") true)
+
+  ;; A version the registry does not have says so, naming what was searched.
+  (spit (str proj "/deps.edn")
+        (str "{:paths [\"src\"] :flint/main app/main\n"
+             " :flint/pod-registries [\"file://" reg "/registry.edn\"]\n"
+             " :deps {pod.demo {:pod/version \"9.9.9\"}}}\n"))
+  (let [r (flint-in* proj "build")]
+    (check-that "a pod version the registry does not hold is refused by name"
+                (and (str/includes? (:out r) "pod.demo") (str/includes? (:out r) "9.9.9")))))
 
 ;; --- the coordinate table (`DECISIONS.md#system-namespaces-and-deps`) --------
 ;;

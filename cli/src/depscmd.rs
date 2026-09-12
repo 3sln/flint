@@ -102,6 +102,11 @@ pub fn entry_for(kind: &str, name: &str, version: &str, extra: &[(&str, &str)]) 
         "mvn" => s.push_str(&format!(":mvn/version {version:?}")),
         // CANONICAL: a tag and a sha, which is what `deps.edn` has always had.
         "git" => s.push_str(&format!(":git/tag {version:?}")),
+        // A POD WRITES `:pod/version`, and the fallthrough it used to take
+        // wrote `:version` -- a key of no kind, so `deps add pod:x@1` produced
+        // an entry the build then refused. Unreachable while `add` rejected
+        // pods outright, which is exactly how it survived.
+        "pod" => s.push_str(&format!(":pod/version {version:?}")),
         _ => s.push_str(&format!(":version {version:?}")),
     }
     for (k, v) in extra {
@@ -133,6 +138,17 @@ mod tests {
         let s = parse_spec("npm:@scope/pkg").unwrap();
         assert_eq!(s.name, "@scope/pkg");
         assert_eq!(s.range, None);
+    }
+
+    /// A pod writes `:pod/version`. The fallthrough it used to take wrote
+    /// `:version`, which is a key of no kind -- so the entry `add` produced
+    /// was one the build then refused.
+    #[test]
+    fn a_pod_entry_carries_the_pod_coordinate() {
+        assert_eq!(
+            entry_for("pod", "pod.demo", "1.2.0", &[]),
+            "  pod.demo {:pod/version \"1.2.0\"}\n"
+        );
     }
 
     #[test]
@@ -355,8 +371,26 @@ pub fn add(
     run: impl Fn(&str, &str, &[String]) -> Result<String>,
 ) -> Result<()> {
     let s = parse_spec(spec)?;
+    // A POD IS WRITTEN DOWN, NOT RESOLVED HERE. Every other kind resolves a
+    // range against a registry at add time, because that is where a range
+    // becomes something exact; a pod version is already exact or it is not a
+    // pod version, so there is nothing to choose. What the registry would
+    // answer -- which artifact, for which platform -- is not a property of the
+    // coordinate at all: it is decided in the fetch plan, on the machine doing
+    // the fetching (`DECISIONS.md#pods-are-a-resolvable-dependency`). Resolving
+    // it here would pick an artifact for whoever happened to run `deps add`.
     if s.kind == "pod" {
-        bail!("pods are not resolvable yet (`DECISIONS.md#system-namespaces-and-deps` step 9)");
+        let Some(version) = s.range.clone() else {
+            bail!("flint deps add pod:{}@<version> -- a pod is pinned like everything else, \
+                   so the version is not optional", s.name);
+        };
+        let entry = entry_for("pod", &s.name, &version, &[]);
+        let path = deps_path(dir);
+        let before = std::fs::read_to_string(&path).unwrap_or_else(|_| "{}\n".to_string());
+        std::fs::write(&path, insert_dep(&before, &entry))?;
+        println!("added {} {version}", s.name);
+        println!("`flint fetch` resolves it against :flint/pod-registries");
+        return Ok(());
     }
     let range = s.range.clone().unwrap_or_else(|| "*".to_string());
     let src = resolve_program(&s.kind, &s.name, &range);

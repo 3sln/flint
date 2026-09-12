@@ -723,12 +723,23 @@ fn declared_pods(srcs: &[PathBuf]) -> Result<Vec<(String, String, Vec<String>)>>
         let dir = if s.is_dir() { s } else { continue };
         let f = dir.join("deps.edn");
         let Ok(text) = fs::read_to_string(&f) else { continue };
-        for (ns, rel) in scan_pod_paths(&text) {
+        for (ns, rel, fetched) in scan_pod_dirs(&text) {
             let pod_dir = dir.join(&rel);
             let manifest = pod_dir.join("manifest.edn");
             let m = fs::read_to_string(&manifest).with_context(|| {
-                format!("the pod {ns} names {}, which has no manifest.edn",
-                        pod_dir.display())
+                if fetched {
+                    // A `:pod/version` is RESOLVED AND FETCHED rather than
+                    // named on disk, and what is missing when the directory is
+                    // not there is the fetch -- not the manifest. Saying "no
+                    // manifest.edn" would send a reader looking for a file they
+                    // were never supposed to write.
+                    format!("the pod {ns} has not been fetched: no {}\n\
+                             `flint fetch` resolves it against the registries in deps.edn",
+                            pod_dir.display())
+                } else {
+                    format!("the pod {ns} names {}, which has no manifest.edn",
+                            pod_dir.display())
+                }
             })?;
             let program = manifest_program(&m).ok_or_else(|| {
                 anyhow::anyhow!(
@@ -747,18 +758,42 @@ fn declared_pods(srcs: &[PathBuf]) -> Result<Vec<(String, String, Vec<String>)>>
     Ok(out)
 }
 
-/// Every `symbol {... :pod/path "..." ...}` entry in a `deps.edn`.
+/// Every pod a `deps.edn` declares, as `(namespace, directory, fetched?)`.
+///
+/// TWO COORDINATES, ONE ANSWER. `:pod/path` names the directory itself;
+/// `:pod/version` names one to be resolved against a registry and fetched, and
+/// what lands is an ordinary pod directory with an ordinary manifest -- the
+/// artifact was chosen once, where the plan was made. So the only difference
+/// here is how the directory is spelled, which is what makes a fetched pod and
+/// a local one the same thing to everything downstream.
+///
+/// The cache path is `flint.deps/pod-dir`'s, restated here because pods boot
+/// BEFORE the compiler runs and there is no guest to ask yet. It is the one
+/// place that rule lives twice, and it is written next to the reason.
+fn scan_pod_dirs(text: &str) -> Vec<(String, String, bool)> {
+    let mut out: Vec<(String, String, bool)> = scan_pod_key(text, ":pod/path")
+        .into_iter()
+        .map(|(ns, rel)| (ns, rel, false))
+        .collect();
+    for (ns, version) in scan_pod_key(text, ":pod/version") {
+        let dir = format!(".flint/pod/{}-{}", ns.replace('@', "").replace('/', "-"), version);
+        out.push((ns, dir, true));
+    }
+    out
+}
+
+/// Every `symbol {... <key> "..." ...}` entry in a `deps.edn`.
 ///
 /// The symbol is found by walking BACK from the `{` that opens the entry,
 /// rather than by splitting forward: `:deps` holds entries of every kind and
 /// only some are pods, so there is no fixed distance from the key to the
 /// coordinate.
-fn scan_pod_paths(text: &str) -> Vec<(String, String)> {
+fn scan_pod_key(text: &str, key: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let mut from = 0usize;
-    while let Some(rel) = text[from..].find(":pod/path") {
+    while let Some(rel) = text[from..].find(key) {
         let at = from + rel;
-        from = at + ":pod/path".len();
+        from = at + key.len();
         // The value: the next quoted string.
         let Some(q1) = text[from..].find('"') else { continue };
         let after = &text[from + q1 + 1..];
@@ -1405,5 +1440,42 @@ fn main() -> Result<()> {
             }
             usage()
         }
+    }
+}
+
+#[cfg(test)]
+mod pod_scan_tests {
+    use super::*;
+
+    /// The two coordinate forms end up as the SAME thing: a directory holding
+    /// a manifest. That is what makes a fetched pod and a local one
+    /// indistinguishable to everything that boots one.
+    #[test]
+    fn both_pod_coordinates_name_a_directory() {
+        let text = r#"{:paths ["src"]
+ :deps {pod.local {:pod/path "./demopod"}
+        my/lib    {:git/url "u" :git/sha "s"}
+        pod.remote {:pod/version "1.2.0"}}}"#;
+        let mut got = scan_pod_dirs(text);
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                ("pod.local".to_string(), "./demopod".to_string(), false),
+                ("pod.remote".to_string(), ".flint/pod/pod.remote-1.2.0".to_string(), true),
+            ]
+        );
+    }
+
+    /// A `:deps` map holds entries of every kind and only some are pods, so
+    /// the symbol is found by walking BACK from the brace that opened the
+    /// entry -- there is no fixed distance from the key to the coordinate.
+    #[test]
+    fn a_coordinate_with_other_keys_first_still_finds_its_symbol() {
+        let text = r#"{:deps {pod.x {:flint/capabilities-grant [:fs] :pod/version "0.1.0"}}}"#;
+        assert_eq!(
+            scan_pod_dirs(text),
+            vec![("pod.x".to_string(), ".flint/pod/pod.x-0.1.0".to_string(), true)]
+        );
     }
 }
