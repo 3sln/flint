@@ -303,8 +303,9 @@
 ;; hash, and no per-node caching, because `pow31` composition needs the
 ;; child's length in the units the walk counts and no node carries a UTF-16
 ;; count. Bytes compose. ASCII still agrees with Clojure exactly, because
-;; there a byte IS a unit; of the five pinned values in `RtHash.java` only
-;; the non-ASCII one moved.
+;; there a byte IS a unit; of the five pinned string values -- now in
+;; `kin/hashtext.drivers`, previously in `RtHash.java` -- only the non-ASCII
+;; one moved.
 ;;
 ;; WHY IT COSTS ANYTHING AT ALL, since the byte walk is the simpler function.
 ;; Interning must hash a byte SLICE to probe the table before a Value exists,

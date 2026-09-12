@@ -190,8 +190,9 @@ path for ASCII BECAUSE the unit walk could not compose, which was evidence
 read as an optimisation.
 
 ASCII still agrees with Clojure exactly, because there a byte IS a unit. Of
-the five pinned values in `runtimes/jvm/test/RtHash.java`, only the non-ASCII
-one moved. Recorded as a deliberate divergence rather than a bug.
+the five pinned string values -- `kin/hashtext.drivers` holds them now, and
+`runtimes/jvm/test/RtHash.java` held them before it was retired -- only the
+non-ASCII one moved. Recorded as a deliberate divergence rather than a bug.
 
 #### A collision node was scanned for free -- FIXED
 

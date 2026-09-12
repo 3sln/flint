@@ -93,7 +93,8 @@ public class RtMaps {
     byte[] aa = "Aa".getBytes(java.nio.charset.StandardCharsets.UTF_8);
     byte[] bb = "BB".getBytes(java.nio.charset.StandardCharsets.UTF_8);
     ok("\"Aa\" and \"BB\" collide, as they do in Java",
-       Hash.hashBytes(aa) == Hash.hashBytes(bb));
+       com._3sln.flint.kgen.rt.Hashtext.hashBytes(aa)
+       == com._3sln.flint.kgen.rt.Hashtext.hashBytes(bb));
     {
       int c = rt.push(Maps.empty(rt));
       // Padded past the array-map, or the collision never reaches a trie node

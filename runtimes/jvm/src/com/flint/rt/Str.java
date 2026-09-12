@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 
 import static com.flint.rt.Obj.*;
 import static com._3sln.flint.kgen.rt.Interns.*;
+import com._3sln.flint.kgen.rt.Hashtext;
 
 /// Strings, ported from `runtime/src/strs.rs`.
 ///
@@ -24,6 +25,18 @@ import static com._3sln.flint.kgen.rt.Interns.*;
 /// quadratic. Before it existed the word-frequency benchmark took 762 ms
 /// instead of 62.
 public final class Str {
+    /// NO NAMESPACE, as the hash sees it.
+    ///
+    /// `com.flint.rt.Hash` STOOD HERE AND IS GONE. It held `hashDouble`,
+    /// `hashBytes`, `hashSymbol` and `hashKeyword`, written out by hand, and
+    /// its own header said the CLR copy had to be kept in step with it because
+    /// `String.hashCode()` "would leave the two ports computing the same
+    /// number by different routes". All four are generated from
+    /// `kin/hashtext.kin` now, and this constant is the one thing the move
+    /// cost: the generated signature takes bytes rather than a nullable array,
+    /// because Rust had no `null` to take.
+    static final byte[] NO_NS = new byte[0];
+
     private Str() {}
 
 
@@ -135,7 +148,7 @@ public final class Str {
         // THE SAME WALK THE VALUE HASH USES; see the note in the Rust's
         // `intern_string`. An interned string carries its hash in the header,
         // set here, so changing `stringHash` alone left two bases in play.
-        int h = Hash.hashBytes(b);
+        int h = Hashtext.hashBytes(b);
         long found = probe(rt, Interns.STR, h,
             v -> Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR
                  && sameBytes(bytes(rt, v), b));
@@ -238,7 +251,13 @@ public final class Str {
         byte[] nb = name.getBytes(StandardCharsets.UTF_8);
         if (ns == null && nb.length > 0 && nb.length <= Val.INLINE_MAX) return Val.inlineKw(nb);
         byte[] nsb = ns == null ? null : ns.getBytes(StandardCharsets.UTF_8);
-        int h = Hash.hashKeyword(nsb, nb);
+        // NO_NS, NOT `null`: the generated `hashKeyword` takes one `byte[]`
+        // on every runtime, and an absent namespace is an EMPTY one --
+        // `hashBytes` of no bytes is `hashInt(0)`, which is the 0 the old
+        // `ns == null ? 0` supplied. `nsb` stays nullable because
+        // `sameName` distinguishes an absent namespace from an empty one,
+        // which the HASH deliberately does not.
+        int h = Hashtext.hashKeyword(nsb == null ? NO_NS : nsb, nb);
         Interns.Match matches = v -> Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_KW
                                      && sameName(rt, v, nsb, nb);
         long found = probe(rt, Interns.KW, h, matches);
@@ -259,8 +278,8 @@ public final class Str {
     }
 
     static int hashKeywordOf(Rt rt, String ns, String name) {
-        return Hash.hashKeyword(ns == null ? null : ns.getBytes(StandardCharsets.UTF_8),
-                                name.getBytes(StandardCharsets.UTF_8));
+        return Hashtext.hashKeyword(ns == null ? NO_NS : ns.getBytes(StandardCharsets.UTF_8),
+                                    name.getBytes(StandardCharsets.UTF_8));
     }
 
     /// GENERATED NOW, from `kin/ropecmp.kin`. This flattened both operands --
@@ -283,11 +302,11 @@ public final class Str {
     /// are what `pow31` composes for per-node caching; and Clojure's hash
     /// NUMBERS are not a contract it offers.
     public static int stringHash(Rt rt, long v) {
-        if (Val.isInlineStr(v)) return Hash.hashBytes(Val.inlineBytes(v));
+        if (Val.isInlineStr(v)) return Hashtext.hashBytes(Val.inlineBytes(v));
         long a = Val.asHeap(v);
         int cached = Obj.strHash(rt.gc.sp, a);
         if (cached != 0) return cached;
-        int h = Hash.hashBytes(bytes(rt, v));
+        int h = Hashtext.hashBytes(bytes(rt, v));
         if (h == 0) h = 1;
         Obj.setStrHash(rt.gc.sp, a, h);
         return h;
@@ -297,7 +316,7 @@ public final class Str {
     /// keyword was built.
     // @kin:link:form:keyword-hash: {:template "Str.keywordHash({0}, {1})"}
     public static int keywordHash(Rt rt, long v) {
-        if (Val.isInlineKw(v)) return Hash.hashKeyword(null, Val.inlineBytes(v));
+        if (Val.isInlineKw(v)) return Hashtext.hashKeyword(NO_NS, Val.inlineBytes(v));
         return (int) Val.asFixnum(rt.slot(v, 2));
     }
 
@@ -324,7 +343,7 @@ public final class Str {
     public static long symbol(Rt rt, String ns, String name) {
         byte[] nb = name.getBytes(StandardCharsets.UTF_8);
         byte[] nsb = ns == null ? null : ns.getBytes(StandardCharsets.UTF_8);
-        int h = Hash.hashSymbol(nsb, nb);
+        int h = Hashtext.hashSymbol(nsb == null ? NO_NS : nsb, nb);
         Interns.Match matches = v -> Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_SYM
                                      && sameName(rt, v, nsb, nb);
         long found = probe(rt, Interns.SYM, h, matches);
@@ -346,8 +365,8 @@ public final class Str {
         // THE HASH, and it used to be NIL -- the same empty cache the keyword
         // slot had. `symbolHash` reads it; this port recomputed from the ns
         // and name bytes on every hash instead.
-        rt.setSlot(a, 3, Val.fixnum(Hash.hashSymbol(
-            ns == null ? null : ns.getBytes(StandardCharsets.UTF_8),
+        rt.setSlot(a, 3, Val.fixnum(Hashtext.hashSymbol(
+            ns == null ? NO_NS : ns.getBytes(StandardCharsets.UTF_8),
             name.getBytes(StandardCharsets.UTF_8))));
         rt.popTo(base);
         return Val.heap(a);

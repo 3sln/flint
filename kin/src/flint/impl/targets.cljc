@@ -330,7 +330,7 @@
           ;; qualifies for Java and C# and does nothing for Rust -- right for
           ;; an inherent `impl` method, which is what it was written for, and
           ;; not a rule about data. An import is what Rust wants instead.
-          (str/join (for [s ["hash" "pike" "casetable" "hamt"] :when (not= s self)]
+          (str/join (for [s ["hash" "hashtext" "pike" "casetable" "hamt"] :when (not= s self)]
                       (str "use crate::" (str/join "::" (:rust generated-root))
                            "::" (str/join "::" (first (ns-tail ns-name)))
                            "::" s "::*;\n"))))

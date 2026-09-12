@@ -14,6 +14,7 @@ use crate::strs::INTERN_MAX;
 use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kgen::rt::hash::*;
+use crate::kgen::rt::hashtext::*;
 use crate::kgen::rt::pike::*;
 use crate::kgen::rt::casetable::*;
 use crate::kgen::rt::hamt::*;
@@ -157,7 +158,7 @@ impl Rt {
     /// collector rules out using the address.
     pub fn hash_value(&mut self, v: Value) -> u32 {
         if v.is_double() {
-            return crate::hash::hash_double(self.num_f64(v));
+            return hash_double(self.num_f64(v));
         }
         if v.is_nil() {
             return 0;

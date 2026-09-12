@@ -37,9 +37,9 @@ fn ordered_step(acc: u32, h: u32) -> u32 { acc.wrapping_mul(31).wrapping_add(h) 
 fn mix_coll_hash(acc: u32, n: u32) -> u32 { acc ^ (n.wrapping_mul(0x9E37_79B9)) }
 fn hash_long(n: i64) -> u32 { (n as u64 ^ ((n as u64) >> 32)) as u32 }
 fn hash_int(h: u32) -> u32 { h ^ (h >> 16) }
-// `hash-double` resolves to `crate::hash::hash_double`, so the probe declares
-// that module rather than a bare function.
-pub mod hash { pub fn hash_double(d: f64) -> u32 { if d.is_nan() { 7 } else { (d as i64) as u32 } } }
+// `hash-double` IS A SIBLING NOW, from `kin/hashtext.kin`, so it is called
+// bare and the `pub mod hash { }` wrapper the probe used to need is gone.
+fn hash_double(d: f64) -> u32 { if d.is_nan() { 7 } else { (d as i64) as u32 } }
 impl Rt {
     // A NON-ASCII TREE takes the UTF-16 walk; the probe answers both by
     // inspection so the ROUTING is what is under test, not the arithmetic
@@ -295,10 +295,10 @@ fn main() {
     static int mixCollHash(int acc, int n) { return acc ^ (n * 0x9E3779B9); }
     static int hashLong(long n) { return (int) (n ^ (n >>> 32)); }
     static int hashInt(int h) { return h ^ (h >>> 16); }
-    // `hash-double` is fully qualified, so the probe declares that path.
-    static final class com { static final class flint { static final class rt {
-        static final class Hash { static int hashDouble(double d) { return Double.isNaN(d) ? 7 : (int) (long) d; } }
-    } } }
+    // `hash-double` was reached through a nested `com.flint.rt.Hash` here,
+    // spelled out class by class, because the vocabulary named it fully
+    // qualified. It is a bare sibling now.
+    static int hashDouble(double d) { return Double.isNaN(d) ? 7 : (int) (long) d; }
     static final class Str {
         static int stringHash(Rt rt, long v) { return 0x5100 | (int) (v & 0xFF); }
         static int keywordHash(Rt rt, long v) { return 0x5200 | (int) (v & 0xFF); }
@@ -453,9 +453,6 @@ fn main() {
     }
 --csharp-pre
 namespace Flint.Rt {
-    internal static class Hash {
-        internal static int HashDouble(double d) { return double.IsNaN(d) ? 7 : (int) (long) d; }
-    }
     // `ref-to-map` is fully qualified in the vocabulary; `table-ref` and
     // `table-count` are bare siblings, so the probe needs a `Table` in each.
     internal static class Table {
@@ -467,6 +464,11 @@ namespace Flint.Rt {
     }
 }
 --csharp-head
+    // `hash-double` was an `internal static class Hash` in the `--csharp-pre`
+    // section, because the vocabulary named `global::Flint.Rt.Hash` and a
+    // class nested in `Probe` cannot answer to that. It is a bare sibling
+    // now, so it is an ordinary method here.
+    internal static int HashDouble(double d) { return double.IsNaN(d) ? 7 : (int) (long) d; }
     internal const long NIL = 0xFFFFL;
     internal static class Obj {
         internal const int TyVec = 10, TyCons = 11, TyOther = 12;

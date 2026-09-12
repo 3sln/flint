@@ -10,7 +10,6 @@ public static class Program {
     public static int Main(string[] args) {
         if (args.Length >= 1 && args[0] == "--rt-foundation") return RtFoundation();
         if (args.Length >= 1 && args[0] == "--rt-snapshot") return RtSnapshot();
-        if (args.Length >= 1 && args[0] == "--rt-hash") return RtHash();
         if (args.Length >= 1 && args[0] == "--rt-maps") return RtMaps();
         if (args.Length >= 1 && args[0] == "--rt-parallel") return RtParallel();
         if (args.Length >= 1 && args[0] == "--rt-stale") return RtStale();
@@ -708,72 +707,6 @@ public static class Program {
     }
 
 
-    // ------------------------------------------------------------------
-    // The ported hash, against the numbers a REAL CLOJURE produced.
-    //
-    // These are not this implementation's own output recorded as a baseline --
-    // they are the values in `runtime/src/hash.rs`'s tests, which came out of
-    // `bb` 1.3.190 using `clojure.lang.Murmur3`. A test written the other way
-    // round would pass for any consistent-but-wrong hash.
-    //
-    // A mirror of the JVM's `RtHash.java`, printing the same lines so the gate
-    // can compare them.
-
-    static int hashFails;
-
-    static byte[] HB(string s) => System.Text.Encoding.UTF8.GetBytes(s);
-
-    static void HEq(string what, int got, int want) {
-        if (got != want) {
-            Console.WriteLine("  FAIL " + what + ": got " + got + ", clojure says " + want);
-            hashFails++;
-        }
-    }
-
-    private static int RtHash() {
-        HEq("(hash 0)", _3sln.Flint.Kgen.Rt.Hash.HashLong(0), 0);
-        HEq("(hash 1)", _3sln.Flint.Kgen.Rt.Hash.HashLong(1), 1392991556);
-        HEq("(hash -1)", _3sln.Flint.Kgen.Rt.Hash.HashLong(-1), 1651860712);
-        HEq("(hash 42)", _3sln.Flint.Kgen.Rt.Hash.HashLong(42), 1871679806);
-        HEq("(hash 12345678901234)", _3sln.Flint.Kgen.Rt.Hash.HashLong(12345678901234L), -1096982217);
-        HEq("(hash Long/MAX_VALUE)", _3sln.Flint.Kgen.Rt.Hash.HashLong(long.MaxValue), -2106506049);
-        HEq("(hash Long/MIN_VALUE)", _3sln.Flint.Kgen.Rt.Hash.HashLong(long.MinValue), 1366273829);
-        Console.WriteLine("  ok   longs hash as Clojure hashes them");
-
-        HEq("(hash 0.0)", Flint.Rt.Hash.HashDouble(0.0), 0);
-        HEq("(hash -0.0)", Flint.Rt.Hash.HashDouble(-0.0), 0);
-        HEq("(hash 1.0)", Flint.Rt.Hash.HashDouble(1.0), 1072693248);
-        HEq("(hash 1.5)", Flint.Rt.Hash.HashDouble(1.5), 1073217536);
-        HEq("(hash -2.75)", Flint.Rt.Hash.HashDouble(-2.75), -1073348608);
-        Console.WriteLine("  ok   doubles too, and -0.0 hashes as 0.0");
-
-        HEq("(hash \"\")", Flint.Rt.Hash.HashBytes(HB("")), 0);
-        HEq("(hash \"a\")", Flint.Rt.Hash.HashBytes(HB("a")), 1455541201);
-        HEq("(hash \"abc\")", Flint.Rt.Hash.HashBytes(HB("abc")), 74834163);
-        HEq("(hash \"hello, world\")", Flint.Rt.Hash.HashBytes(HB("hello, world")), 136167191);
-        HEq("(hash \"日本語\")", Flint.Rt.Hash.HashBytes(HB("日本語")), 1534549342);
-        Console.WriteLine("  ok   strings, over UTF-8 BYTES at every tier");
-
-        HEq("(hash 'a)", Flint.Rt.Hash.HashSymbol(null, HB("a")), 849029948);
-        HEq("(hash 'abc)", Flint.Rt.Hash.HashSymbol(null, HB("abc")), -1195848122);
-        HEq("(hash 'foo/bar)", Flint.Rt.Hash.HashSymbol(HB("foo"), HB("bar")), 1403326929);
-        HEq("(hash :a)", Flint.Rt.Hash.HashKeyword(null, HB("a")), -791501579);
-        HEq("(hash :abc)", Flint.Rt.Hash.HashKeyword(null, HB("abc")), 1458587647);
-        HEq("(hash :foo/bar)", Flint.Rt.Hash.HashKeyword(HB("foo"), HB("bar")), -237204598);
-        Console.WriteLine("  ok   symbols and keywords, over BYTES like strings");
-
-        // AN ASTRAL CHARACTER USED TO BE CHECKED AS A SURROGATE PAIR here,
-        // because the hash ran over UTF-16 units and counting a pair as one
-        // unit would have been stable and wrong. It runs over UTF-8 bytes now,
-        // so what matters is that four bytes are four bytes.
-        HEq("an emoji hashes over its four UTF-8 bytes",
-            Flint.Rt.Hash.HashBytes(HB("\U0001F600")),
-            Flint.Rt.Hash.HashBytes(new byte[]{0xF0, 0x9F, 0x98, 0x80}));
-        Console.WriteLine("  ok   an astral-plane character is FOUR BYTES");
-
-        if (hashFails > 0) { Console.WriteLine("  " + hashFails + " failed"); return 1; }
-        return 0;
-    }
 
 
     // ------------------------------------------------------------------
@@ -855,7 +788,8 @@ public static class Program {
     byte[] aa = System.Text.Encoding.UTF8.GetBytes("Aa");
     byte[] bb = System.Text.Encoding.UTF8.GetBytes("BB");
     MOk("\"Aa\" and \"BB\" collide, as they do in Java",
-       Flint.Rt.Hash.HashBytes(aa) == Flint.Rt.Hash.HashBytes(bb));
+       _3sln.Flint.Kgen.Rt.Hashtext.HashBytes(aa)
+       == _3sln.Flint.Kgen.Rt.Hashtext.HashBytes(bb));
     {
       int c = rt.Push(Flint.Rt.Maps.Empty(rt));
       // Padded past the array-map, or the collision never reaches a trie node

@@ -1,7 +1,12 @@
 --rust-head
 #[derive(Clone, Copy, PartialEq)]
 struct Value(u64);
-pub mod hash { pub fn hash_double(d: f64) -> u32 { (d as i64 as u32) ^ 0xd0b1 } }
+// `hash-double` IS A SIBLING NOW, from `kin/hashtext.kin`, so the probe
+// declares a bare function rather than a `crate::hash` module. Still a stub:
+// what this source has to get right is the ROUTING -- a double goes through
+// `hash-double` and an integer through `hash-long` -- and the arithmetic is
+// pinned by `kin/hashtext.drivers` against `clojure.lang.Murmur3`.
+fn hash_double(d: f64) -> u32 { (d as i64 as u32) ^ 0xd0b1 }
 fn hash_long(n: i64) -> u32 { (n as u32) ^ 0x5eed }
 const NIL: Value = Value(0xFFFF);
 struct Rt { thrown: String, boxes: Vec<i64> }
@@ -107,16 +112,13 @@ fn main() {
     o.push_str(&format!(" hbad={}", rt.num_hash(bad)));
     println!("{}", o.trim());
 }
---java-pre
-// `hash-double` is `com.flint.rt.Hash.hashDouble` on this target -- fully
-// qualified, because a generated module sits in a different package from the
-// hand-written runtime. A class nested in `Probe` cannot answer to that name,
-// so the shim is a real file in a real package.
-package com.flint.rt;
-public class Hash {
-    public static int hashDouble(double d) { return (int) (long) d ^ 0xd0b1; }
-}
 --java-head
+    // `hash-double` was a `--java-pre` FILE, in package `com.flint.rt`,
+    // because the vocabulary named the hand-written `Hash` class fully
+    // qualified and a class nested in `Probe` cannot answer to that. It is a
+    // generated sibling now, called bare, so the shim is an ordinary method
+    // here and the whole `--java-pre` section is gone.
+    static int hashDouble(double d) { return (int) (long) d ^ 0xd0b1; }
     static final long NIL = 0xFFFFL;
     static final class Val {
         static final long NIL = Probe.NIL;
@@ -202,14 +204,8 @@ public class Hash {
         long r = t.get();
         return rt.thrown.isEmpty() ? show(rt, r) : rt.thrown;
     }
---csharp-pre
-namespace Flint.Rt {
-    public static class Hash {
-        public static int HashDouble(double d) { return (int) (long) d ^ 0xd0b1; }
-    }
-}
-
 --csharp-head
+    static int HashDouble(double d) { return (int) (long) d ^ 0xd0b1; }
     internal const long NIL = 0xFFFFL;
     internal static class Val {
         internal const long Nil = Probe.NIL;

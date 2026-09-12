@@ -11,7 +11,16 @@ fn main() {
     let mut b: u32 = 0;
     for x in [1i64, 2, 3] { b = unordered_step(b, hash_long(x)); }
     o.push_str(&format!("{} ", mix_coll_hash(b, 3) as i32));
-    o.push_str(&format!("{} {}", HASH_TRUE as i32, HASH_FALSE as i32));
+    o.push_str(&format!("{} {} | ", HASH_TRUE as i32, HASH_FALSE as i32));
+    // THE FIVE LONGS `RtHash` PINNED AND THIS DID NOT. Zero short-circuits;
+    // the two extremes are where a sign-extending `low32`/`high32` split
+    // would show; and 12345678901234 is the one whose high word is neither 0
+    // nor all ones, so a `hash_long` that dropped the high half entirely
+    // would still pass on the first four.
+    o.push_str(&format!("{} {} {} {} {}",
+                        hash_long(0) as i32, hash_long(42) as i32,
+                        hash_long(12345678901234) as i32,
+                        hash_long(i64::MAX) as i32, hash_long(i64::MIN) as i32));
     println!("{}", o);
 }
 --java
@@ -27,7 +36,11 @@ fn main() {
         int b = 0;
         for (long x : new long[]{1, 2, 3}) b = unorderedStep(b, hashLong(x));
         o.append(mixCollHash(b, 3)).append(' ');
-        o.append(HASH_TRUE).append(' ').append(HASH_FALSE);
+        o.append(HASH_TRUE).append(' ').append(HASH_FALSE).append(" | ");
+        o.append(hashLong(0)).append(' ').append(hashLong(42)).append(' ')
+         .append(hashLong(12345678901234L)).append(' ')
+         .append(hashLong(Long.MAX_VALUE)).append(' ')
+         .append(hashLong(Long.MIN_VALUE));
         System.out.println(o);
     }
 --csharp
@@ -43,11 +56,15 @@ fn main() {
         int b = 0;
         foreach (long x in new long[]{1, 2, 3}) b = UnorderedStep(b, HashLong(x));
         o.Append(MixCollHash(b, 3)).Append(' ');
-        o.Append(HashTrue).Append(' ').Append(HashFalse);
+        o.Append(HashTrue).Append(' ').Append(HashFalse).Append(" | ");
+        o.Append(HashLong(0)).Append(' ').Append(HashLong(42)).Append(' ')
+         .Append(HashLong(12345678901234L)).Append(' ')
+         .Append(HashLong(long.MaxValue)).Append(' ')
+         .Append(HashLong(long.MinValue));
         Console.WriteLine(o.ToString());
     }
 --expect
--1134849565 1392991556 1651860712 -1640531070 736442005 439094965 1231 1237
+-1134849565 1392991556 1651860712 -1640531070 736442005 439094965 1231 1237 | 0 1871679806 -1096982217 -2106506049 1366273829
 --expect-why
 FROM REAL CLOJURE, which is the oracle this file's own header names: `hash` is
 observable, and "a program ported to flint has to get the hashes it got
@@ -79,3 +96,16 @@ and must land on the same two numbers Clojure does -- so this checks
 `hash-long -1` is the signed case: `low32`/`high32` of a negative long, where
 a sign-extending split gives a different `h2` and the error would survive into
 every map keyed by a negative number.
+
+THE FIVE AFTER THE LAST BAR CAME FROM `runtimes/jvm/test/RtHash.java`, which
+is retired by this change, and they were re-derived rather than copied across:
+
+  (clojure.lang.Murmur3/hashLong 0)              =>           0
+  (clojure.lang.Murmur3/hashLong 42)             =>  1871679806
+  (clojure.lang.Murmur3/hashLong 12345678901234) => -1096982217
+  (clojure.lang.Murmur3/hashLong Long/MAX_VALUE) => -2106506049
+  (clojure.lang.Murmur3/hashLong Long/MIN_VALUE) =>  1366273829
+
+`0` is the short-circuit. The two extremes are where a sign-extending split
+shows. `12345678901234` is the one whose high word is neither zero nor all
+ones, so a `hash-long` that dropped the high half would pass the other four.

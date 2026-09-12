@@ -36,87 +36,19 @@
 // site in the runtime already looks for them.
 pub(crate) use crate::kgen::rt::hash::*;
 
-pub fn hash_double(d: f64) -> u32 {
-    if d == 0.0 {
-        return 0; // both 0.0 and -0.0, matching Numbers.hasheq
-    }
-    let bits = d.to_bits();
-    ((bits ^ (bits >> 32)) as u32) as i32 as u32
-}
-
-// --- UTF-16 views over UTF-8 ----------------------------------------------
-
-// `Utf16Units` WAS HERE. It decoded UTF-8 and re-encoded it as UTF-16 code
-// units, and existed only so that string, symbol and keyword hashes could
-// reproduce the numbers a JVM produces. All three walk bytes now, and string
-// COMPARISON -- its last other user -- walks bytes too, so nothing needs it.
-
-
-
-// --- the value-level entry points ------------------------------------------
-
-// `hash_string`, `java_string_hash` and `hash_unencoded_chars` were all here
-// and are all gone. Strings, symbols and keywords hash over BYTES now. The
-// note that stood here said `java_string_hash` "STAYS, because a symbol's hash
-// still combines it" -- that was true for exactly as long as symbols were
-// still matching Clojure's numbers.
-
-/// `h = h*31 + byte`, the walk `rope_hash` does over a tree's leaves.
-///
-/// THE STRING HASH IS DEFINED OVER BYTES, not over UTF-16 units. See
-/// `Rt::string_hash` for why; the short version is that a tree already walked
-/// bytes, bytes are what `pow31` can compose for per-node caching, and
-/// matching Clojure's numbers is not a contract Clojure offers.
-pub fn hash_bytes(bs: &[u8]) -> u32 {
-    let mut h: u32 = 0;
-    for b in bs {
-        h = h.wrapping_mul(31).wrapping_add(*b as u32);
-    }
-    hash_int(h)
-}
-
-/// A symbol's hash, over BYTES like every other string hash here.
-///
-/// IT USED TO REPRODUCE CLOJURE'S NUMBER, and the shape of that is worth
-/// recording because it is what an artefact looks like from the inside:
-///
-/// ```text
-/// hash_combine(hash_unencoded_chars(name), java_string_hash(ns))
-/// ```
-///
-/// murmur over the name's UTF-16 units, combined with the RAW 31-walk over the
-/// namespace's. The asymmetry was not derived from anything -- the comment
-/// that stood here said it "was found by solving for it against `'foo/bar`",
-/// which is fitting a formula to observed output.
-///
-/// flint strings are UTF-8, so every call decoded UTF-8 and synthesised UTF-16
-/// to get there. Keywords are the most frequently hashed values in a program
-/// -- they are the constant map keys -- so that decode sat on the hot path, and
-/// on the JVM it ALLOCATED an int array to hold the units.
-///
-/// The string hash stopped doing this earlier: Clojure changed its own hash in
-/// 1.6 and documents no stability across versions, so the numbers were never a
-/// contract. This is the same argument one type over. What a program can rest
-/// on is that equal values hash alike, and they do.
-pub fn hash_symbol(ns: Option<&str>, name: &str) -> u32 {
-    // A `match`, NOT `map_or(0, |s| ..)`. The closure form costs 917 bytes in
-    // the shipped module, measured: a closure is a `call_indirect` target and
-    // the shaker roots those CONSERVATIVELY, so it drags in whatever else
-    // shares the table. `test/threads.clj` records the same mechanism costing
-    // far more when one appeared in the printer.
-    let nh = match ns {
-        Some(s) => hash_bytes(s.as_bytes()),
-        None => 0,
-    };
-    hash_combine(hash_bytes(name.as_bytes()), nh)
-}
-
-/// A keyword hashes as its symbol would, plus a constant, so `:foo` and `'foo`
-/// do not collide. The constant came from Clojure's keyword hash and is now
-/// simply A constant -- any fixed non-zero value separates the two spaces.
-pub fn hash_keyword(ns: Option<&str>, name: &str) -> u32 {
-    hash_symbol(ns, name).wrapping_add(0x9e3779b9)
-}
+// AND THE TEXT HALF, from `kgen/rt/hashtext.rs`. `hash_double`, `hash_bytes`,
+// `hash_symbol` and `hash_keyword` were WRITTEN OUT HERE, and identically in
+// `Hash.java` and `Hash.cs`, with a comment in each port saying the three had
+// to be kept in step by hand. They are one `kin/hashtext.kin` now.
+//
+// The three copies agreed on every number and disagreed on the INTERFACE:
+// this one took `Option<&str>` and `&str` where both ports took `byte[]` and
+// `null`. The generated function takes bytes on all three, and an ABSENT
+// namespace is an EMPTY one -- `hash_bytes(b"")` folds over nothing, giving
+// `hash_int(0)`, which short-circuits to the 0 that `ns == null ? 0` supplied.
+// `kin/hashtext.drivers` derives both sides from `clojure.lang.Util` and
+// prints them, so the identity is checked rather than argued.
+pub(crate) use crate::kgen::rt::hashtext::*;
 
 #[cfg(test)]
 mod tests {
@@ -165,8 +97,8 @@ mod tests {
         // THE ONE THING THE CONSTANT IS FOR. `:foo` and `'foo` hash over the
         // same bytes, so without a separator they would land together in every
         // map that holds both.
-        assert_ne!(hash_symbol(None, "foo"), hash_keyword(None, "foo"));
-        assert_ne!(hash_symbol(Some("a"), "b"), hash_keyword(Some("a"), "b"));
+        assert_ne!(hash_symbol(b"", b"foo"), hash_keyword(b"", b"foo"));
+        assert_ne!(hash_symbol(b"a", b"b"), hash_keyword(b"a", b"b"));
     }
 
     #[test]
@@ -176,7 +108,7 @@ mod tests {
         // no surrogate pair, nothing that knows what UTF-16 is.
         let s = "\u{1F600}";
         assert_eq!(s.len(), 4, "four UTF-8 bytes");
-        assert_eq!(hash_symbol(None, s), hash_combine(hash_bytes(s.as_bytes()), 0));
+        assert_eq!(hash_symbol(b"", s.as_bytes()), hash_combine(hash_bytes(s.as_bytes()), 0));
     }
 
     #[test]
@@ -190,13 +122,13 @@ mod tests {
         // namespace changes the answer; and a different name gives a different
         // one. Nothing here pins a NUMBER, because a number is what tied this
         // to somebody else's implementation.
-        assert_eq!(hash_symbol(None, "abc"), hash_symbol(None, "abc"));
-        assert_ne!(hash_symbol(None, "abc"), hash_symbol(None, "abd"));
-        assert_ne!(hash_symbol(None, "bar"), hash_symbol(Some("foo"), "bar"));
-        assert_ne!(hash_symbol(Some("a"), "b"), hash_symbol(Some("b"), "a"));
+        assert_eq!(hash_symbol(b"", b"abc"), hash_symbol(b"", b"abc"));
+        assert_ne!(hash_symbol(b"", b"abc"), hash_symbol(b"", b"abd"));
+        assert_ne!(hash_symbol(b"", b"bar"), hash_symbol(b"foo", b"bar"));
+        assert_ne!(hash_symbol(b"a", b"b"), hash_symbol(b"b", b"a"));
         // A keyword is its symbol plus the separator, and nothing else.
-        assert_eq!(hash_keyword(Some("foo"), "bar"),
-                   hash_symbol(Some("foo"), "bar").wrapping_add(0x9e3779b9));
+        assert_eq!(hash_keyword(b"foo", b"bar"),
+                   hash_symbol(b"foo", b"bar").wrapping_add(0x9e3779b9));
     }
 
     #[test]
@@ -239,8 +171,8 @@ mod tests {
             let acc = ordered_step(ordered_step(1, kh), vh);
             mix_coll_hash(acc, 2)
         };
-        let a = entry(hash_keyword(None, "a"), hash_long(1));
-        let b = entry(hash_keyword(None, "b"), hash_long(2));
+        let a = entry(hash_keyword(b"", b"a"), hash_long(1));
+        let b = entry(hash_keyword(b"", b"b"), hash_long(2));
         // BUILT IN EITHER ORDER, same answer. A map is unordered, so a hash
         // that depended on insertion order would be wrong in a way no single
         // number could reveal.

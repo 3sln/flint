@@ -1,0 +1,213 @@
+--rust-head
+// MURMUR3 FOR REAL, not a stub, and that is the whole difference between this
+// fixture and `valhash.drivers` next door.
+//
+// A sibling is usually stubbed here: `valhash` wants to know which ARM ran, so
+// its `string_hash` answers `0x5100 | v`, and the arithmetic is pinned
+// elsewhere. This source is arithmetic all the way down -- `hash-bytes` ends
+// in `hash-int`, and `hash-symbol` in `hash-combine` -- so a stub would make
+// every number below a number about the stub. The `--expect` values come out
+// of `clojure.lang.Murmur3`, and they can only mean that if what runs here is
+// murmur3.
+//
+// These twelve lines are `kin/hash.kin` transcribed. That is duplication, and
+// it is duplication of a DIFFERENT KIND from the one this port removes: a
+// fixture is hand-written per language on purpose, and a fixture that
+// disagreed with `hash.kin` would show up immediately as three targets
+// agreeing on a number Clojure does not produce.
+const C1: u32 = 0xcc9e2d51;
+const C2: u32 = 0x1b873593;
+const KW_SHIFT: u32 = 0x9e3779b9;
+fn mix_k1(k1: u32) -> u32 { k1.wrapping_mul(C1).rotate_left(15).wrapping_mul(C2) }
+fn mix_h1(h1: u32, k1: u32) -> u32 {
+    (h1 ^ k1).rotate_left(13).wrapping_mul(5).wrapping_add(0xe6546b64)
+}
+fn fmix(mut h1: u32, len: u32) -> u32 {
+    h1 ^= len;
+    h1 ^= h1 >> 16;
+    h1 = h1.wrapping_mul(0x85ebca6b);
+    h1 ^= h1 >> 13;
+    h1 = h1.wrapping_mul(0xc2b2ae35);
+    h1 ^ (h1 >> 16)
+}
+fn hash_int(input: u32) -> u32 {
+    if input == 0 { return 0; }
+    fmix(mix_h1(0, mix_k1(input)), 4)
+}
+fn hash_combine(seed: u32, h: u32) -> u32 {
+    seed ^ h.wrapping_add(0x9e3779b9)
+             .wrapping_add(seed << 6)
+             .wrapping_add(((seed as i32) >> 2) as u32)
+}
+--rust
+fn main() {
+    // THE EMOJI IS SPELLED TWICE ON PURPOSE: once as a character and once as
+    // the four bytes it encodes to. Printing both, rather than printing
+    // whether they are equal, is what makes a failure legible -- `true` and
+    // `false` cannot say which side moved.
+    let emoji = "\u{1F600}";
+    let raw: [u8; 4] = [0xF0, 0x9F, 0x98, 0x80];
+    println!("{} {} {} {} {} | {} {} {} {} {} | {} {} {} | {} {} {} | {} {} | {} {}",
+        hash_double(0.0) as i32, hash_double(-0.0) as i32, hash_double(1.0) as i32,
+        hash_double(1.5) as i32, hash_double(-2.75) as i32,
+        hash_bytes(b"") as i32, hash_bytes(b"a") as i32, hash_bytes(b"abc") as i32,
+        hash_bytes(b"hello, world") as i32, hash_bytes("日本語".as_bytes()) as i32,
+        hash_symbol(b"", b"a") as i32, hash_symbol(b"", b"abc") as i32,
+        hash_symbol(b"foo", b"bar") as i32,
+        hash_keyword(b"", b"a") as i32, hash_keyword(b"", b"abc") as i32,
+        hash_keyword(b"foo", b"bar") as i32,
+        hash_bytes(emoji.as_bytes()) as i32, hash_bytes(&raw) as i32,
+        hash_symbol(b"", b"bar") as i32, hash_combine(hash_bytes(b"bar"), 0) as i32);
+}
+--java-head
+    static final int KW_SHIFT = 0x9e3779b9;
+    static int mixK1(int k1) { return Integer.rotateLeft(k1 * 0xcc9e2d51, 15) * 0x1b873593; }
+    static int mixH1(int h1, int k1) {
+        return Integer.rotateLeft(h1 ^ k1, 13) * 5 + 0xe6546b64;
+    }
+    static int fmix(int h1, int len) {
+        h1 ^= len;
+        h1 ^= h1 >>> 16;
+        h1 *= 0x85ebca6b;
+        h1 ^= h1 >>> 13;
+        h1 *= 0xc2b2ae35;
+        return h1 ^ (h1 >>> 16);
+    }
+    static int hashInt(int input) {
+        if (input == 0) return 0;
+        return fmix(mixH1(0, mixK1(input)), 4);
+    }
+    static int hashCombine(int seed, int h) {
+        return seed ^ (h + 0x9e3779b9 + (seed << 6) + (seed >> 2));
+    }
+    static byte[] b(String s) { return s.getBytes(StandardCharsets.UTF_8); }
+--java
+    public static void main(String[] args) {
+        byte[] emoji = b("😀");
+        byte[] raw = new byte[]{(byte) 0xF0, (byte) 0x9F, (byte) 0x98, (byte) 0x80};
+        StringBuilder o = new StringBuilder();
+        o.append(hashDouble(0.0)).append(' ').append(hashDouble(-0.0)).append(' ')
+         .append(hashDouble(1.0)).append(' ').append(hashDouble(1.5)).append(' ')
+         .append(hashDouble(-2.75)).append(" | ")
+         .append(hashBytes(b(""))).append(' ').append(hashBytes(b("a"))).append(' ')
+         .append(hashBytes(b("abc"))).append(' ').append(hashBytes(b("hello, world")))
+         .append(' ').append(hashBytes(b("日本語"))).append(" | ")
+         .append(hashSymbol(b(""), b("a"))).append(' ')
+         .append(hashSymbol(b(""), b("abc"))).append(' ')
+         .append(hashSymbol(b("foo"), b("bar"))).append(" | ")
+         .append(hashKeyword(b(""), b("a"))).append(' ')
+         .append(hashKeyword(b(""), b("abc"))).append(' ')
+         .append(hashKeyword(b("foo"), b("bar"))).append(" | ")
+         .append(hashBytes(emoji)).append(' ').append(hashBytes(raw)).append(" | ")
+         .append(hashSymbol(b(""), b("bar"))).append(' ')
+         .append(hashCombine(hashBytes(b("bar")), 0));
+        System.out.println(o);
+    }
+--csharp-head
+    const int KwShift = unchecked((int) 0x9e3779b9);
+    static int MixK1(int k1) { unchecked {
+        return (int) BitOperations.RotateLeft((uint)(k1 * (int) 0xcc9e2d51), 15)
+               * (int) 0x1b873593; } }
+    static int MixH1(int h1, int k1) { unchecked {
+        return (int) BitOperations.RotateLeft((uint)(h1 ^ k1), 13) * 5 + (int) 0xe6546b64; } }
+    static int Fmix(int h1, int len) { unchecked {
+        h1 ^= len;
+        h1 ^= (int)((uint) h1 >> 16);
+        h1 *= (int) 0x85ebca6b;
+        h1 ^= (int)((uint) h1 >> 13);
+        h1 *= (int) 0xc2b2ae35;
+        return h1 ^ (int)((uint) h1 >> 16); } }
+    static int HashInt(int input) {
+        if (input == 0) return 0;
+        return Fmix(MixH1(0, MixK1(input)), 4);
+    }
+    static int HashCombine(int seed, int h) { unchecked {
+        return seed ^ (h + (int) 0x9e3779b9 + (seed << 6) + (seed >> 2)); } }
+    static byte[] B(string s) { return Encoding.UTF8.GetBytes(s); }
+--csharp
+    static void Main() {
+        byte[] emoji = B("\U0001F600");
+        byte[] raw = new byte[]{0xF0, 0x9F, 0x98, 0x80};
+        var o = new StringBuilder();
+        o.Append(HashDouble(0.0)).Append(' ').Append(HashDouble(-0.0)).Append(' ')
+         .Append(HashDouble(1.0)).Append(' ').Append(HashDouble(1.5)).Append(' ')
+         .Append(HashDouble(-2.75)).Append(" | ")
+         .Append(HashBytes(B(""))).Append(' ').Append(HashBytes(B("a"))).Append(' ')
+         .Append(HashBytes(B("abc"))).Append(' ').Append(HashBytes(B("hello, world")))
+         .Append(' ').Append(HashBytes(B("日本語"))).Append(" | ")
+         .Append(HashSymbol(B(""), B("a"))).Append(' ')
+         .Append(HashSymbol(B(""), B("abc"))).Append(' ')
+         .Append(HashSymbol(B("foo"), B("bar"))).Append(" | ")
+         .Append(HashKeyword(B(""), B("a"))).Append(' ')
+         .Append(HashKeyword(B(""), B("abc"))).Append(' ')
+         .Append(HashKeyword(B("foo"), B("bar"))).Append(" | ")
+         .Append(HashBytes(emoji)).Append(' ').Append(HashBytes(raw)).Append(" | ")
+         .Append(HashSymbol(B(""), B("bar"))).Append(' ')
+         .Append(HashCombine(HashBytes(B("bar")), 0));
+        Console.WriteLine(o.ToString());
+    }
+--expect
+0 0 1072693248 1073217536 -1073348608 | 0 1455541201 74834163 136167191 1534549342 | 849029948 -1195848122 1403326929 | -791501579 1458587647 -237204598 | 898984994 898984994 | -1390931727 -1390931727
+--expect-why
+COMPUTED FROM `clojure.lang.Murmur3` AND `clojure.lang.Util`, on Clojure 1.12
+through the `clojure` CLI, in a script that implements the fold and the
+combination independently of anything in this repository. Nothing below was
+pasted out of a flint run.
+
+    (import '[clojure.lang Murmur3 Util])
+    (defn fold31 [bs]
+      (reduce (fn [h b] (unchecked-int (unchecked-add (unchecked-multiply (int h) 31)
+                                                      (bit-and b 0xFF))))
+              (int 0) (seq bs)))
+    (defn hb   [s]     (Murmur3/hashInt (fold31 (.getBytes s "UTF-8"))))
+    (defn hsym [ns nm] (Util/hashCombine (hb nm) (hb (or ns ""))))
+    (defn hkw  [ns nm] (unchecked-int (+ (hsym ns nm) (unchecked-int 0x9e3779b9))))
+    (defn hd   [d]     (if (== d 0.0) 0
+                         (let [b (Double/doubleToLongBits d)]
+                           (unchecked-int (bit-xor b (unsigned-bit-shift-right b 32))))))
+
+WHICH HALVES ARE CLOJURE'S ANSWER AND WHICH ARE FLINT'S, because the
+distinction is real and the hand-written tests this replaces got it wrong.
+
+  * THE DOUBLES ARE CLOJURE'S. `hd` is `Numbers.hasheq` for a double,
+    transcribed: the two halves of the IEEE bit pattern xored, with zero
+    special-cased. A flint program that hashed a double differently would
+    disagree with Clojure, and that is a bug.
+
+  * THE FIVE BYTE ROWS, THE SYMBOLS AND THE KEYWORDS ARE FLINT'S OWN, and
+    `runtime/src/hash.rs` says so at length: text used to be hashed through
+    `javaStringHashCode` and `hashUnencodedChars`, both of which walk UTF-16
+    CODE UNITS, and reaching those numbers meant decoding UTF-8 on every
+    lookup of a map key. Clojure changed its own hash in 1.6 and documents no
+    stability across versions, so the numbers were never a contract.
+
+    `RtHash.java` and `Program.cs` BOTH STILL SAY `clojure says` in the
+    failure message for these rows. They have not been Clojure's numbers since
+    the text hash moved to bytes; only the ASCII rows coincide, because there
+    a byte IS a UTF-16 unit. `日本語` is the row that separates them and it is
+    here for that reason.
+
+    What the oracle above pins for those rows is the FORMULA, evaluated by
+    somebody else's murmur3: `hash-int` of the 31-fold over the UTF-8 bytes.
+    The fold is spelled out rather than borrowed from `String.hashCode`,
+    because `String.hashCode` walks UTF-16 and would silently reintroduce the
+    thing that was removed.
+
+THE LAST PAIR IS THE PORT'S OWN NEW CLAIM, and it is why the pair is printed
+rather than asserted. The three hand-written copies spelled "no namespace"
+three ways -- `None` in Rust, `null` on both ports -- and this source has one
+`Bytes` parameter where an ABSENT namespace is an EMPTY one. That is only
+sound if
+
+    hash-symbol [] name  ==  hash-combine (hash-bytes name) 0
+
+`hash-bytes []` folds over nothing, giving 0, and `hash-int 0` short-circuits
+to 0 -- so the two are the same expression. The driver evaluates BOTH SIDES
+and prints them, and the oracle agrees: `(hsym nil "bar")` and `(hsym "" "bar")`
+are both -1390931727. An equality asserted in the driver would have printed
+`true` for two wrong numbers.
+
+THE EMOJI PAIR IS PRINTED FOR THE SAME REASON. U+1F600 is one code point, four
+UTF-8 bytes and two UTF-16 units; the hash must be over the four bytes. The
+character and the literal `F0 9F 98 80` are hashed separately and both printed,
+so a failure says which side moved instead of saying `false`.

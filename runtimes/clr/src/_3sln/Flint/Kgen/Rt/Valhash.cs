@@ -14,6 +14,7 @@ using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Bytehash;
 using static global::_3sln.Flint.Kgen.Rt.Collhash;
 using static global::_3sln.Flint.Kgen.Rt.Hash;
+using static global::_3sln.Flint.Kgen.Rt.Hashtext;
 using static global::_3sln.Flint.Kgen.Rt.Names;
 using static global::_3sln.Flint.Kgen.Rt.Ropeflat;
 using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
@@ -161,7 +162,7 @@ public static class Valhash {
     /// collector rules out using the address.
     public static int HashValue(Rt rt, long v) {
         if (Val.IsDouble(v)) {
-            return global::Flint.Rt.Hash.HashDouble(Num.F64(rt, v));
+            return HashDouble(Num.F64(rt, v));
         }
         if (Val.IsNil(v)) {
             return 0;
