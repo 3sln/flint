@@ -1,11 +1,23 @@
 //! The module's outside edge.
 //!
 //! ```text
-//!   arg_alloc(len) -> ptr      host writes UTF-8 argument bytes there
+//!   arg_alloc(len) -> ptr      host writes bytes there
 //!   arg_push(ptr, len)         appends one argument
-//!   main() -> i32              0 = ok, 1 = threw
-//!   out_ptr() / out_len()      the UTF-8 result
+//!   flint_call(ptr, len) -> i32   0 = ok, 1 = threw
+//!   out_ptr() / out_len()      the encoded result
 //! ```
+//!
+//! **THERE IS NO `main` EXPORT.** This block listed one until
+//! `structured-ports` step 5 removed it, and the staleness was not harmless:
+//! `bin/bench-xruntime` invokes `main` on every engine that cannot run
+//! JavaScript, so it returns FAILED on every row and none of its recorded
+//! ns/instruction figures can be reproduced. A host names the function it
+//! wants instead, through `flint_call`.
+//!
+//! A bare host -- one with no SDK, which is what `wasmtime` and `wasm3` are --
+//! calls `f` by encoding the vector `["ns/f"]`: `K_VECTOR`, the count as a
+//! little-endian u32, `K_STRING`, the length as a u32, then the UTF-8 bytes.
+//! `arg_alloc` gives it somewhere to put them.
 //!
 //! The Rust function is called `flint_main` and `flint` renames the export to
 //! `main` after linking. `wasm-ld` special-cases a symbol literally named

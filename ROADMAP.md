@@ -809,13 +809,32 @@ a habit.
 Verifying all 32 unchecked decision statuses against the code turned up three
 things that are code, not record:
 
+- [ ] **Where `nativeabi/` belongs — decided 2026-09-12: where it is, NOT
+      beside `sdks/c`.** The direction is what separates them. `sdks/` is for a
+      host EMBEDDING flint — a C program calling into a sandbox. `nativeabi` is
+      the opposite: the archive a compiled flint PROGRAM links against to
+      become a native executable, carrying the collector, interpreter and
+      builtins. Filing two opposite relationships under one word would be the
+      mistake. It is runtime-side, and a sibling of `runtime/` is right. The
+      one improvement available is the directory name, which does not match its
+      crate (`nativeabi` against `flint-native-abi`)
 - [ ] **`bin/bench-xruntime` returns FAILED on every row.** Two breakages, both
       from `structured-ports` step 5 removing `flint_main`: a compiled module
       no longer exports `main`, which kills wasmtime and wasm3; and
       `bench/xrt-run.mjs` defaults to a hard-coded entry name that only one of
       five fitted modules matches, which kills node, bun, deno and
       SpiderMonkey. **Confirmed here on a freshly built module** — `wasmtime
-      --invoke main` answers `no func export named 'main' found`. None of the
+      --invoke main` answers `no func export named 'main' found`, while
+      `flint_call`, `arg_alloc`, `arg_push`, `out_ptr` and `out_len` are all
+      present. `runtime/src/abi.rs`'s own module doc still listed `main` and is
+      corrected; a bare host calls by encoding `["ns/f"]` — `K_VECTOR`, count
+      u32, `K_STRING`, length u32, bytes.
+
+      **The open question is whether the harness should carry an encoder at
+      all.** Four of the six engines run JavaScript and the SDK already does
+      this for them. `wasmtime` and `wasm3` do not, so fixing those two rows
+      means a fifth implementation of the codec living in a benchmark — or
+      dropping them. None of the
       recorded ns/instruction figures can be reproduced until this is fixed,
       and this is the harness that was recommended earlier this session as the
       right instrument for the native-versus-wasm question
