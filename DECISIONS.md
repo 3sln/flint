@@ -6429,71 +6429,80 @@ a change to `lib/flint/cli.cljc` and to all three hosts, and is its own step.
 
 **Ratified:** ☐ not signed off
 
-Recorded 2026-09-12. **OPEN DEFECT, not a decision.** Found while checking that
-`flint.sdk` had not broken anything; it is older than that work and unrelated
-to it.
+Recorded 2026-09-12, **and fixed the same day.** Found while checking that
+`flint.sdk` had broken nothing; it was older than that work.
 
-`sdks/cli/selftest.mjs` compiles one fixture with both CLIs and asserts the
-modules are byte-identical. Under `:optimize [perf]` they are not:
+### The symptom
+
+Under `:optimize [perf]` the two CLIs compiled one fixture to different
+modules. Without it they were byte-identical.
 
 | arm | bytes | wasm functions |
 |---|---|---|
 | native `flint compile` | 698 224 | 1078 |
 | node `flint compile` | 715 879 | 1101 |
-| either, without `:optimize [perf]` | 634 070 | identical, and byte-identical |
 
-The AOT base module has 934 functions, so node compiles roughly 23 more
-arities than native — about 16% more. **This is not an edge case in one
-function; it is systematic.**
+### The cause
 
-### What it is not
+**The node CLI had no `:checks` axis at all** — zero occurrences of the word in
+`sdks/cli/src/`. On the native CLI, `strip_checks(optimize, checks)` makes
+`:optimize [perf]` compile the checks out by emitting ` :features #{:flint}`
+into the spec, which drops `:flint/check`. On node nothing did, so **every
+module the npm CLI produced under `:optimize [perf]` shipped its own check code
+in.** That is a semantics difference, not a size one; the byte count is how it
+was noticed.
 
-Each ruled out by measurement rather than by reading:
+The fix is `stripChecks(optimize, checks)` in `sdks/cli/src/cli.mjs`, the same
+rule as the native `strip_checks`, plus `:checks true|false` in its argument
+parser and `stripChecks` threaded through `buildSpec`. Both CLIs are now
+byte-identical on both arms, which `sdks/cli/selftest.mjs` asserts.
 
-* **Not staleness.** Reproduced after rebuilding the native binary against the
-  current `dist/`, in that order. (`bin/build-dist` does not rebuild
-  `target/release/flint`, which is the usual cause of a false divergence.)
-* **Not a mismatched artifact.** `flint-runtime.wasm`, `flint-runtime-aot.wasm`,
-  `slots.json` and `slots-aot.json` are byte-identical between `dist/` and the
-  copies in `sdks/cli/dist/` that the node CLI reads.
-* **Not the slot table.** Both files are 192 keys, sorted, 4235 bytes.
-* **Not the spec.** Node's AOT spec differs from its plain spec by exactly the
-  ten characters `:aot true `, and the plain modules are byte-identical — which
-  says the two front ends build the same spec text.
-* **Not nondeterminism.** Each arm is stable across runs; the two differ from
-  byte 1717, in the function section.
+### How it was found, because the first three answers were wrong
 
-### What is left
+Worth keeping: the symptom pointed at the AOT emitter and the cause was not
+there.
 
-The native CLI runs `dist/flintc.bytecode` on the Rust runtime compiled into
-the binary. The node CLI runs `dist/flintc.wasm` in a wasm engine.
-`bin/build-dist` builds both from `src` with the same entry, one `--emit-image`
-and one not. So this is **one compiler program, executed by two runtimes,
-producing different output** — which is the class of disagreement this project
-treats as a defect rather than a configuration.
+* **"A stale artifact."** No — reproduced after rebuilding the binary against
+  the current `dist/`, in that order.
+* **"Two different compilers."** No — `dist/flintc.bytecode` and
+  `dist/flintc.wasm` share 99.3% of their bytes (`bytecode[1285:195787]` occurs
+  verbatim inside the wasm). Both are `FLINTIMG` v3. The 1285-byte head that
+  differs is the builtin→slot table: zeros in the native image, ascending
+  indices in the wasm one, which is the host binding and is meant to differ.
+* **"Byte signedness in `flint.aot/decode`."** The most attractive wrong
+  answer. `u16`/`i16` build jump targets from `(nth bs 0)` and `(nth bs 1)`,
+  and this file already records a "zero-extends on native, sign-extends on both
+  ports" divergence in the regex engine. A probe through both front ends gives
+  `b0=195 b1=169 u16=43459 i16=-22077` on both. Not it.
+* **"The AOT emitter refuses different arities."** Also no. Instrumenting
+  `flint.bundle/aot-bundle` to throw with its refusal list gave `AOTREFUSED []`
+  on BOTH — neither refuses anything. That is what turned the search around:
+  the difference was in how many arities were OFFERED, not how many were taken.
 
-The refusal is narrow enough to point at: `flint.aot/compile-arity` returns nil
-for an unknown opcode or an operand stack it cannot bound, and
-`flint.bundle/aot-bundle` silently skips every arity it gets nil for. Both
-paths look deterministic on inspection — `max-depth` is a worklist with a fixed
-200 000-iteration guard, over instructions decoded from the same bytes.
+The measurement that ended it, from a throw placed immediately before
+`compile-arities`:
+
+| | native | node |
+|---|---|---|
+| plain | `fns=142` | `fns=142` |
+| `:optimize [perf]` | `fns=123` | `fns=142` |
+
+Node was consistent; **native dropped 19 functions**. Read that way round it is
+not an AOT bug at all — it is native stripping checks and node not.
+
+### Why AOT is where it surfaced
+
+Shaking runs AFTER `compile-arities`, and the arities it appends become roots
+("a tree shaker cannot find them"). Without `:optimize [perf]` the extra check
+functions are dead and the shaker removes them, so the two modules come out
+identical and the divergence is invisible. With it, they are compiled to wasm
+functions first, rooted, and survive. **The bug was in every `:optimize [perf]`
+build; AOT only made it observable.**
 
 ### Why nothing caught it
 
-`sdks/cli/selftest.mjs` is not run by `bin/check`, `bin/test` or
-`bin/release-gate`. It is the only thing that compares the two front ends'
-output, and nothing runs it.
-
-That is the part worth fixing first, and it is not fixed here: adding it to a
-gate today makes that gate red, and committing a red gate is the thing
-`AGENTS.md` §4 forbids.
-
-### How to pick it up
-
-Instrument `flint.bundle/aot-bundle` to print the ordinal of every arity it
-refuses, rebuild `dist/` so both artifacts carry it, compile the fixture with
-both CLIs and diff the two lists. The 23 arities that differ name the opcode or
-the stack shape the two runtimes disagree about. A third data point is
-available from `bin/flint` (babashka runs `src/flint/*.cljc` directly, and
-`flint.link/compile-aot` has `FLINT_AOT_DUMP`), but note that path needs
-`bin/build-units --aot` first — it refuses outright today.
+`sdks/cli/selftest.mjs` is the only thing that compares the two front ends'
+output, and no gate ran it — not `bin/check`, not `bin/test`, not
+`bin/release-gate`. `bin/test` now runs it, beside `sdks/esm/build`. Not
+`bin/check`: it takes 30 s against that gate's whole 5 s budget, and it needs
+both CLIs built, which is a test-tier requirement rather than a static one.

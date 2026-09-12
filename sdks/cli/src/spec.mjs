@@ -88,7 +88,7 @@ function readIfAny(p) {
 /// | `pods` | `[[namespace, [varName, ..]], ..]` for pods this build booted |
 export function buildSpec({
   srcs, entry, slots, aot = false, shake = false, meta = [], roots = null,
-  pods = [], stdlib, stdlibDeps,
+  pods = [], stdlib, stdlibDeps, stripChecks = false,
 }) {
   // The standard library first, so a project file of the same path wins.
   const files = new Map();
@@ -175,7 +175,16 @@ export function buildSpec({
     }
   }
 
-  out += '] :builtins #{';
+  // The `]` CLOSES `:workspaces`, so it goes first -- `:features` emitted
+  // before it lands inside the vector, which is a spec that parses and means
+  // something else.
+  out += ']';
+  // Said only when it differs from the default, so an ordinary build's spec is
+  // byte-identical to what it was -- and, more to the point, byte-identical to
+  // the native CLI's. This line is the whole of `:checks`: dropping the default
+  // features drops `:flint/check`, which is what compiles a check in.
+  if (stripChecks) out += ' :features #{:flint}';
+  out += ' :builtins #{';
   const keys = Object.keys(slots).sort(byBytes);
   for (const k of keys) out += `${ednString(k)} `;
   out += '} :slots {';

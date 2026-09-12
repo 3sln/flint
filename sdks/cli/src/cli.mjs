@@ -31,6 +31,16 @@ const b64decode = (text) => new Uint8Array(Buffer.from(text, 'base64'));
 /// **Unrecognised tokens are ignored.** That is what makes the list safe to
 /// write against a newer flint than the one reading it -- asking for something
 /// this build has never heard of gets you its best effort, not a refusal.
+/// Whether to compile the checks out.
+///
+/// `:checks` decides when it is given; otherwise a performance build drops them
+/// and anything else keeps them. The same rule as the native CLI's
+/// `strip_checks`, and it has to be the same or the two front ends emit
+/// different modules from one input -- which they did.
+function stripChecks(optimize, checks) {
+  return checks === null || checks === undefined ? wantsAot(optimize) : !checks;
+}
+
 function wantsAot(optimize) {
   for (const t of optimize) {
     const s = String(t).replace(/^:/, '');
@@ -74,7 +84,7 @@ function runCompiler(args) {
   return r.out;
 }
 
-export function compile(srcs, entry, outPath, optimize, to, meta, { quiet = false } = {}) {
+export function compile(srcs, entry, outPath, optimize, to, meta, { quiet = false, checks = null } = {}) {
   const target = String(to).replace(/^:/, '');
   if (target === 'llvm' || target === 'native') {
     throw new Error(
@@ -88,6 +98,7 @@ export function compile(srcs, entry, outPath, optimize, to, meta, { quiet = fals
   const spec = buildSpec({
     srcs, entry, slots: table, aot, shake: true, meta, roots: null,
     stdlib: stdlib(), stdlibDeps: stdlibDeps(),
+    stripChecks: stripChecks(optimize, checks),
   });
   const out = runCompiler(['wasm', spec, b64encode(base)]);
   const module = b64decode(out.trim());
@@ -221,7 +232,7 @@ function values(key, args, at) {
 export function parse(argv) {
   const a = {
     srcs: [], entry: null, out: null, to: null,
-    grants: [], optimize: [], meta: [], args: [], rest: [],
+    grants: [], optimize: [], meta: [], args: [], rest: [], checks: null,
   };
   let i = 0;
   while (i < argv.length) {
@@ -233,6 +244,16 @@ export function parse(argv) {
     else if (t === ':to') { const [v, n] = values(':to', argv, i); a.to = v[0] ?? null; i = n; }
     else if (t === ':with' || t === ':grant') { const [v, n] = values(':with', argv, i); a.grants.push(...v); i = n; }
     else if (t === ':optimize') { const [v, n] = values(':optimize', argv, i); a.optimize.push(...v); i = n; }
+    // `:checks` is its own axis, NOT a corner of `:optimize`. Electing a
+    // performance build is one way to drop checks; saying so directly is the
+    // other, and a build that wants checks under `:optimize [perf]` had no way
+    // to ask for them.
+    else if (t === ':checks') {
+      const [v, n] = values(':checks', argv, i);
+      a.checks = String(v[0]) === 'true' ? true : String(v[0]) === 'false' ? false : null;
+      if (a.checks === null) throw new Error(':checks takes true or false');
+      i = n;
+    }
     else if (t === ':args') { const [v, n] = values(':args', argv, i); a.args.push(...v); i = n; }
     else if (t === ':meta') {
       const [v, n] = values(':meta', argv, i);
@@ -262,7 +283,7 @@ export function usage() {
       Compile and run, here. Nothing is written.
 
   flint compile :path <dir> :fn <ns/fn> :to :wasm [:out <file>]
-                [:with [cap...]] [:optimize [perf]] [:meta k=v]
+                [:with [cap...]] [:optimize [perf]] [:checks true|false] [:meta k=v]
       Compile to a standalone module, for any host with a wasm engine. Here
       \`:with\` DECLARES rather than grants: it is recorded in the artifact's
       metadata, because the arguments arrive later and what a program needs
@@ -314,7 +335,8 @@ export async function main(argv) {
     // its own convention where the next tool can find it.
     const meta = a.meta.slice();
     if (a.grants.length) meta.push(['capabilities', a.grants.join(' ')]);
-    await compile(a.srcs, a.entry, a.out ?? 'out.wasm', a.optimize, a.to ?? 'wasm', meta);
+    await compile(a.srcs, a.entry, a.out ?? 'out.wasm', a.optimize, a.to ?? 'wasm', meta,
+                  { checks: a.checks });
     return 0;
   }
   // `test` is `run` with a generated entry: the compiler collects every var

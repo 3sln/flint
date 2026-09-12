@@ -263,7 +263,9 @@ export class Sdk {
         // into the artifact's metadata.
         const withs = strings(o, 'with');
         if (withs.length) meta.push(['capabilities', withs.join(' ')]);
-        this.ops.compile(srcs, fn, out, strings(o, 'optimize'), to, meta, { quiet: true });
+        const ck = pick(o, 'checks');
+        this.ops.compile(srcs, fn, out, strings(o, 'optimize'), to, meta,
+                         { quiet: true, checks: typeof ck === 'boolean' ? ck : null });
         return c.map([[c.kw('out'), c.str(out)],
                       [c.kw('bytes'), c.int(statSync(out).size)]]);
       }
