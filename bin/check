@@ -1,0 +1,46 @@
+#!/bin/sh
+# THE FAST TIER: about five seconds. Run it on every change.
+#
+# `bin/test` is roughly twenty minutes and was being run on every commit. That
+# is the wrong default -- most changes cannot break most of it, and a gate that
+# expensive gets run less carefully rather than more.
+#
+#   bin/check          ~5 s      every change
+#   bin/test           ~20 min   before pushing, and on a PR
+#   bin/release-gate   ~25 min   before a versioned release
+#
+# WHAT IS IN HERE WAS CHOSEN BY MEASURING, not by guessing. The four static
+# checks are sub-second each; `reader_test` is 1 s and `cycles` is 3 s. Two
+# suites that looked like candidates are not: `requires` is 15 s and `options`
+# is 16 s AND fails standalone, because it needs build state the full gate
+# happens to produce -- which is its own warning about selective testing.
+set -e
+cd "$(dirname "$0")/.."
+fail() { echo; echo "FAILED: $1"; exit 1; }
+t0=$(date +%s)
+
+for c in check-decisions check-flattens check-builtins check-sys-catalogue; do
+  ./bin/$c || fail "bin/$c"
+done
+
+for s in reader_test cycles; do
+  bb --classpath src "test/$s.clj" > /tmp/flint-check.out 2>&1 \
+    || { cat /tmp/flint-check.out; fail "test/$s.clj"; }
+  echo "  ok   test/$s.clj"
+done
+
+# `check-kin` is 74 s -- too slow for every change, and it has a PRECISE input
+# set, so it runs only when that input moved. This is the changed-files idea
+# applied where it actually works: a check whose inputs are a known list of
+# directories, rather than a guess about which suite covers which file.
+kin_touched=$(git diff --name-only HEAD -- \
+  kin runtime/src/kgen runtimes/jvm/src/com/_3sln runtimes/clr/src/_3sln 2>/dev/null | head -1)
+if [ -n "$kin_touched" ]; then
+  echo "  .. kin sources or generated trees changed; running check-kin (74 s)"
+  ./bin/check-kin || fail "bin/check-kin"
+else
+  echo "  -- kin untouched; skipping check-kin (run ./bin/check-kin to force)"
+fi
+
+echo
+echo "bin/check: green in $(( $(date +%s) - t0 ))s"

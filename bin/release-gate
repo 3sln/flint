@@ -1,0 +1,34 @@
+#!/bin/sh
+# THE RELEASE TIER: everything, including what the ordinary gate skips.
+#
+#   bin/check          ~5 s      every change
+#   bin/test           ~20 min   before pushing, and on a PR
+#   bin/release-gate   ~25 min   before a versioned release
+#
+# What this adds over `bin/test` is SELF-HOSTING ON THE PORTS, which is
+# otherwise checked by nothing anyone runs. Both ports compiling the compiler
+# and emitting byte-identical output is a headline capability -- the JVM README
+# leads with it -- and it was opt-in behind a comment claiming "about 15
+# minutes". Measured: SIX SECONDS. That estimate was the only thing keeping it
+# out, and it was wrong by a factor of 150.
+#
+# The four bugs that check has historically caught were each of the kind that
+# let the compiler RUN and produce wrong output -- map literals coming back
+# empty, a tail call reading a slot off a fixnum, `=` throwing where it should
+# answer false, symbols comparing by identity. No other section can see that
+# class, which is why it belongs in the tier that gates a release rather than
+# in nothing at all.
+set -e
+cd "$(dirname "$0")/.."
+fail() { echo; echo "FAILED: $1"; exit 1; }
+t0=$(date +%s)
+
+echo "== the ordinary gate"
+./bin/test || fail "bin/test"
+
+echo
+echo "== self-hosting on both ports (skipped by bin/test)"
+FLINT_SELFHOST=1 ./bin/conform-hosts || fail "conform-hosts with FLINT_SELFHOST=1"
+
+echo
+echo "release-gate: green in $(( ($(date +%s) - t0) / 60 )) min"

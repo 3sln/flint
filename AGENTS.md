@@ -113,9 +113,23 @@ things being compared.
 
 ## 4. The gate is the last check, not the first
 
-**`bin/test` IS the gate. It already runs `bin/conform-hosts` in full** (see
-the `hosts:` section), so running both is running the four-runtime matrix
-twice — about 3½ minutes of pure duplication per gate. Run `./bin/test`.
+**THE GATE IS TIERED. Do not run the twenty-minute one on every change.**
+
+    bin/check          ~5 s      every change
+    bin/test           ~20 min   before pushing a branch, and on a PR
+    bin/release-gate   ~25 min   before a versioned release
+
+`bin/check` is the four sub-second static checks plus two suites that are 1 s
+and 3 s, and it runs `check-kin` (74 s) only when kin sources or the generated
+trees actually moved. Its contents were chosen by measuring: two suites that
+looked like candidates are not — one is 15 s, and the other is 16 s AND fails
+standalone because it needs build state the full gate happens to produce.
+
+`bin/release-gate` adds self-hosting on both ports, which `bin/test` skips.
+
+**`bin/test` already runs `bin/conform-hosts` in full** (see its `hosts:`
+section), so running both is running the four-runtime matrix twice — about 3½
+minutes of pure duplication.
 
 It takes about **23 minutes** and prints its own itemisation at the end,
 slowest section first. Use that before optimising anything: the first
