@@ -464,6 +464,42 @@ and the next step is re-measuring that claim rather than acting on the gap.
 Whether the native binary keeps its place is still a decision to make. Figures
 and caveats in `DECISIONS.md#npm-cli`.
 
+### Unifying the CLIs: what it needs, measured 2026-09-12
+
+The design is already written in `flint.cli`'s own docstring — "what remains is
+a host wrapper, and a host wrapper is mechanical". The drift is that the
+wrapper grew: **`bin/flint` is 735 lines of code against `cli.cljc`'s 251.**
+
+**MOST OF WHAT IT DOES IS ALREADY SERVED.** The sys catalogue offers
+`flint.sys.fs`, `.env`, `.slurp` and `flint.deps.npm`, `.mvn`, `.git`, and the
+native CLI implements all six in Rust. So `slurp` (21 sites), `spit` (8),
+`io/file` (19) and the git/curl/tar/unzip fetching have a portable expression
+already; `bin/flint` implements them directly instead of serving them.
+
+**TWO THINGS GENUINELY ARE NOT SERVED, and they are the whole job:**
+
+- **Running a compiled module.** `bin/flint` shells out to `node` three times
+  for this, because babashka has no wasm engine. The native CLI has the runtime
+  compiled in; node has one natively. This is the one capability that differs
+  in KIND between the three hosts rather than in implementation, and the
+  unified CLI needs either a served operation for it or a structure that keeps
+  execution host-side.
+- **Exiting.** 24 `System/exit` sites. A flint entry returns a value, so these
+  become a returned status the wrapper acts on — mechanical, but 24 of them.
+
+**The shape that follows:** `cli.cljc` calls `flint.sys.*` and
+`flint.deps.*`; each front end SERVES that catalogue — Rust natively, JS on
+node, babashka by shelling out — and each supplies its own way to run a module.
+That is what `cli/src/sys.rs`'s catalogue already is, extended to cover what
+`bin/flint` currently does by hand.
+
+- [ ] Serve the sys catalogue from `bin/flint` rather than implementing its
+      operations inline
+- [ ] Decide how a module is RUN from flint code — a served operation, or
+      execution staying in the wrapper
+- [ ] Move the compiler-driving half of `bin/flint` into `flint.cli`
+- [ ] Retire the Rust reimplementations once `:to :llvm` compiles the driver
+
 ### The shipped binary is a subset of `bin/flint` (measured 2026-09-11)
 
     present in target/release/flint: deps, run, compile, test, version
