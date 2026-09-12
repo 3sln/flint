@@ -18,6 +18,7 @@ mod deps;
 mod depscmd;
 mod pod;
 mod policy;
+mod script;
 mod serve;
 mod sys;
 
@@ -152,6 +153,27 @@ fn read_sources(dir: &Path, prefix: &str, out: &mut BTreeMap<String, String>) ->
     Ok(())
 }
 
+/// The source extension `name` ends in, or `.fln` when it ends in none.
+///
+/// A shebang script is `~/bin/greet` with no extension at all, and it is by
+/// definition not portable -- it carries a `#!` line and an entry point, and
+/// nothing outside flint reads either. `.fln` is therefore the honest default
+/// rather than a convenience (`DECISIONS.md#dialects-and-preludes`).
+fn source_ext(name: &str) -> &'static str {
+    for e in [".fln", ".cljc", ".clj"] {
+        if name.ends_with(e) {
+            // The list is `flint.project/source-extensions`; this returns a
+            // `'static` copy of the match so the key can outlive the name.
+            return match e {
+                ".cljc" => ".cljc",
+                ".clj" => ".clj",
+                _ => ".fln",
+            };
+        }
+    }
+    ".fln"
+}
+
 // --- the commands ----------------------------------------------------------
 
 /// The EDN the compiler takes: the sources, the entry, and what the runtime
@@ -183,7 +205,7 @@ struct Workspace {
 }
 
 /// The text between the delimiters of the collection following `key`.
-fn edn_block(text: &str, key: &str, open: char, close: char) -> String {
+pub(crate) fn edn_block(text: &str, key: &str, open: char, close: char) -> String {
     let Some(at) = text.find(key) else { return String::new() };
     let rest = &text[at + key.len()..];
     let Some(o) = rest.find(open) else { return String::new() };
@@ -249,8 +271,19 @@ fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
         if s.is_dir() {
             read_sources(s, "", &mut mine)?;
         } else {
+            // A FILE IS KEYED BY THE NAMESPACE IT DECLARES, not by what it is
+            // called on disk. The compiler finds a namespace at `ns->path`, so
+            // `flint ~/bin/greet` -- and every other single-file source --
+            // would otherwise hand over a file the resolver never looks for
+            // and report the namespace missing. A file with no readable `ns`
+            // keeps its own name, which is what this always did.
+            let body = fs::read_to_string(s)?;
             let name = s.file_name().unwrap().to_string_lossy().to_string();
-            mine.insert(name, fs::read_to_string(s)?);
+            let key = match script::read_ns(&body) {
+                Some(n) => script::ns_key(&n.ns, source_ext(&name)),
+                None => name,
+            };
+            mine.insert(key, body);
         }
         owned.push((s.clone(), mine.keys().cloned().collect()));
         files.extend(mine);
@@ -333,7 +366,18 @@ fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
     // DIFFERENT `deps.edn` files therefore gets the first one found, which is
     // narrower than `bin/flint` and is recorded rather than hidden.
     for (sdir, paths) in &owned {
-        let dir = if sdir.is_dir() { sdir.clone() } else { sdir.parent().unwrap().to_path_buf() };
+        // A SOURCE THAT IS A FILE INHERITS NOTHING FROM THE DIRECTORY IT SITS
+        // IN. This used to take the `deps.edn` beside it, which for a
+        // standalone script is the whole hazard the feature exists to avoid:
+        // dropping `greet` into a working tree would have silently handed it
+        // that project's reader tags, its prelude and -- worse -- its
+        // capability grants, none of which the script's author wrote or saw
+        // (`DECISIONS.md#standalone-scripts`). A file names its own workspace
+        // or has none.
+        if !sdir.is_dir() {
+            continue;
+        }
+        let dir = sdir.clone();
         let here = dir.join("deps.edn");
         let up = dir.parent().map(|p| p.join("deps.edn"));
         let text = fs::read_to_string(&here)
@@ -838,6 +882,91 @@ fn test_roots(srcs: &[PathBuf]) -> Result<Vec<String>> {
     Ok(out)
 }
 
+/// `flint <file> [args...]` -- a standalone script
+/// (`DECISIONS.md#standalone-scripts`).
+///
+/// `#!/usr/bin/env flint` hands this the script path and then the user's
+/// arguments, so anything after the file is the SCRIPT's and is passed through
+/// untouched. `#!/usr/bin/env -S flint :with [fs]` puts options in front of it,
+/// which is the only way a script is granted anything: a grant is conferred
+/// from outside, and the script is the inside.
+fn script_argv(argv: &[String]) -> Result<Option<(PathBuf, Vec<String>, Vec<String>)>> {
+    let mut caps: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            ":with" | ":grant" => {
+                let (v, n) = values(":with", argv, i)?;
+                caps.extend(v);
+                i = n;
+            }
+            other => {
+                let p = PathBuf::from(other);
+                if p.is_file() {
+                    return Ok(Some((p, caps, argv[i + 1..].to_vec())));
+                }
+                return Ok(None);
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn run_script(path: &Path, caps: &[String], args: &[String]) -> Result<i32> {
+    let body = fs::read_to_string(path)
+        .with_context(|| format!("cannot read {}", path.display()))?;
+    let Some(nsf) = script::read_ns(&body) else {
+        bail!("{} has no `ns` form, so it is not a flint script.\n\
+               A script begins `#!/usr/bin/env flint` and then \
+               `(ns ^:script the-name ...)`.", path.display())
+    };
+    let Some(entry) = nsf.entry.clone() else {
+        // `^:script` IS THE MARK, and its absence is not a detail to work
+        // around. A module deliberately has no entry point
+        // (`DECISIONS.md#structured-ports`); running a file that never claimed
+        // to be runnable would have to invent one, and inventing an entry is
+        // exactly what this codebase refuses everywhere else.
+        bail!("(ns {}) in {} is not marked `^:script`, so nothing names its entry point.\n\
+               A module has no entry by design. Write `(ns ^:script {} ...)` to run \
+               {}/main, or `(ns ^{{:script go}} {} ...)` to run {}/go -- or compile it \
+               as part of a project with `flint run :path <dir> :fn {}/main`.",
+              nsf.ns, path.display(), nsf.ns, nsf.ns, nsf.ns, nsf.ns, nsf.ns)
+    };
+    if nsf.has_deps {
+        // STATED, not ignored. `:deps` is real surface -- the analyzer accepts
+        // it and refuses it outside a script -- but nothing in this binary
+        // fetches a dependency: that loop lives in `flint.cli`, which the host
+        // drives. Compiling anyway would fail as "no source for namespace
+        // some.lib", which is true and names the wrong thing.
+        bail!("{} declares `:deps`, and this binary does not fetch dependencies for a \
+               script yet.\n\
+               `flint run`/`flint compile` build from the source path alone; fetching is \
+               `flint fetch`, which reads a deps.edn.\n\
+               Until a script's `:deps` is wired to it, name what you need with \
+               `(:paths [\"...\"])` and put it on disk.", path.display())
+    }
+    // SRC IS THE FILE, PLUS WHAT THE SCRIPT EXPLICITLY NAMES. The script's own
+    // directory is NOT scanned, which is the property that makes it standalone:
+    // dropping a script into a working tree full of `.cljc` must not pull that
+    // tree into the build, and a script mailed to somebody must behave the same
+    // in their directory as in yours (`DECISIONS.md#standalone-scripts`).
+    let mut srcs = vec![path.to_path_buf()];
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    for p in &nsf.paths {
+        // RELATIVE TO THE SCRIPT and not to the working directory, for the same
+        // reason: what the file names has to mean the same thing wherever it is
+        // run from.
+        let d = dir.join(p);
+        if !d.is_dir() {
+            bail!("(ns {}) asks for the source directory {:?}, which is not a directory.\n\
+                   A script's `:paths` are relative to the script itself, so this was \
+                   looked for at {}.", nsf.ns, p, d.display())
+        }
+        srcs.push(d);
+    }
+    Ok(run_source(&srcs, &entry, args, caps, None)?.0)
+}
+
 fn usage() -> ! {
     eprintln!(
         "flint {VERSION} -- the compiler, as one binary
@@ -865,6 +994,20 @@ fn usage() -> ! {
   flint test :path <dir>
       Run every var marked `^:flint.check/test` under `:path`, and report.
       The suite is what is on the path; nothing has to be registered.
+
+  flint [:with [cap...]] <file> [args...]
+      Run a STANDALONE SCRIPT: one file carrying its own configuration.
+
+          #!/usr/bin/env flint
+          (ns ^:script greet
+            (:require [clojure.string :as str]))
+          (defn main [args] (str \"hello \" (first args)))
+
+      `^:script` names the entry -- `main` by default, `^{{:script go}}` for
+      another -- and everything after the file is the script's own arguments.
+      The source path is THE FILE and the directories its `(:paths [..])`
+      names; the directory it sits in is NOT scanned, so dropping a script
+      into a working tree does not pull that tree into the build.
 
   flint version
 
@@ -1244,8 +1387,22 @@ fn main() -> Result<()> {
             argv.extend(a.rest.iter().cloned());
             std::process::exit(run_source(&a.srcs, &entry, &argv, &a.grants, None)?.0);
         }
+        // A STANDALONE SCRIPT, which is what `#!/usr/bin/env flint` produces:
+        // the kernel invokes `flint <the file> <the user's args>`, so the first
+        // argument is a path and not a command (`DECISIONS.md#standalone-scripts`).
+        //
+        // Checked LAST, after every command name, so a file called `run` in the
+        // working directory cannot shadow `flint run`.
         other => {
-            eprintln!("flint: no such command `{other}`");
+            if let Some((p, caps, args)) = script_argv(&argv)? {
+                std::process::exit(run_script(&p, &caps, &args)?);
+            }
+            if other.starts_with(':') {
+                eprintln!("flint: `{other}` is an option, and no command or script \
+                           was named before it");
+            } else {
+                eprintln!("flint: no such command `{other}`, and no file of that name");
+            }
             usage()
         }
     }

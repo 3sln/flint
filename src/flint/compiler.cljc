@@ -450,9 +450,16 @@
         ;; reason `default-features` records: this file is read THREE times, by
         ;; `collect`, by `topo-order` and by here, and a value only one of them
         ;; knows about is a value the other two get wrong (`DECISIONS.md#reader-tags`).
+        ;; THE DIALECT is read off the context rather than passed in, because
+        ;; `compile-image` already lifted it there from the sources and a
+        ;; second channel for one fact is a second thing to get out of step.
+        ;; A synthetic namespace -- the check registry, the entry shim -- has
+        ;; no entry there and so reads as `:flint`, which is what it is: the
+        ;; compiler wrote it and no other platform will ever read it.
         st (reader/reader src {:file file
                                :features (or (:features spec) reader/default-features)
                                :tags tags
+                               :dialect (get-in @cc [:workspaces nsname :dialect])
                                :resolve resolve-hook})
         _ (vswap! cc assoc-in [:namespaces nsname] (get-in @cc [:namespaces nsname] {}))
         forms (loop [acc []]

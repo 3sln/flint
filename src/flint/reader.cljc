@@ -24,9 +24,34 @@
   [s i]
   (flint.rt/nth s i))
 
+(defn- shebang-end
+  "Where the source proper begins: past a `#!` FIRST LINE, or 0.
+
+  BYTE ONE AND NOWHERE ELSE. `#!` is a kernel convention about the first two
+  bytes of an executable file (`DECISIONS.md#standalone-scripts`), and treating
+  it as a comment marker wherever it appears would invent a second comment
+  syntax out of it -- one that would silently eat `#!` inside a form the moment
+  a tag or a set literal happened to be followed by `!`.
+
+  The newline itself is NOT skipped, so every line number below is the line
+  number an editor shows."
+  [s]
+  (if (and (>= (count s) 2) (= "#" (ch s 0)) (= "!" (ch s 1)))
+    (loop [i 2]
+      (cond (>= i (count s)) i
+            (= NL (ch s i)) i
+            :else (recur (inc i))))
+    0))
+
 (defn- make-state [s file]
-  (volatile! {:s s :i 0 :n (count s) :line 1 :col 1 :file file
-              :gensyms nil :features #{:flint} :ns nil :aliases {} :elided []}))
+  (volatile! {:s s :i (shebang-end s) :n (count s) :line 1 :col 1 :file file
+              :gensyms nil :features #{:flint} :ns nil :aliases {} :elided []
+              ;; `:flint` unless a caller says otherwise. A PORTABLE file is
+              ;; refused flint-only reader tags (`DECISIONS.md#dialects-and-preludes`),
+              ;; and nothing else in this reader is dialect-sensitive -- so the
+              ;; permissive value is the default and `read-string`, EDN and the
+              ;; compiler's synthetic namespaces are unaffected.
+              :dialect :flint}))
 
 (defn- peek-ch [st]
   (let [m @st] (when (< (:i m) (:n m)) (ch (:s m) (:i m)))))
@@ -500,6 +525,29 @@
   `#?` are reader SYNTAX rather than tags and are handled above."
   {'flint/table 'flint.table/read-table})
 
+(def portable-tags
+  "Tag names EVERY Clojure-family reader binds, so a file using one is still
+  readable off this platform.
+
+  Empty, and that is the honest answer rather than an omission: flint binds
+  `#flint/table` and whatever a workspace declares, and Clojure's reader knows
+  neither. `#inst` and `#uuid` are where this becomes non-empty, on the day
+  flint binds them.
+
+  It is a LIST rather than a hardcoded \"every tag is flint-only\" because that
+  sentence is the one that would stop being true without anything failing --
+  the file would simply refuse a `#inst` in a `.cljc` that Clojure reads fine."
+  #{})
+
+(defn- portability-error [tag file]
+  (str "#" tag " is a flint-only reader tag, and " file
+       " is a PORTABLE file. Nothing outside flint can read it: a tag is bound"
+       " by flint's workspace (:flint/tag-readers) or by flint's reader itself,"
+       " and another platform's reader knows neither"
+       " (DECISIONS.md#dialects-and-preludes)."
+       " Rename the file to .fln -- a .fln and a .cljc are the same namespace,"
+       " and flint prefers its own -- or write the value without the tag."))
+
 (defn- tag-error [tag readers]
   (let [known (sort (map str (keys readers)))]
     (str "no reader for the tag #" tag
@@ -553,6 +601,14 @@
               target (get readers tag)]
           (if-not target
             (err st (tag-error tag readers))
+            ;; PORTABILITY, checked AFTER the tag resolved and not before.
+            ;; An unbound tag in a `.cljc` is two complaints at once -- it is
+            ;; not portable and it does not exist here either -- and "no reader
+            ;; for #pt" is the one that leads somewhere, because a tag this
+            ;; project cannot read is broken in flint too.
+            (if (and (= :portable (:dialect @st))
+                     (not (contains? portable-tags tag)))
+              (err st (portability-error tag (:file @st)))
             ;; A REWRITE, not a call. The reader evaluates nothing: it emits
             ;; `(the-var form)` and the ordinary pipeline takes it from there --
             ;; a macro expands at compile time and can fold to a constant, a
@@ -575,7 +631,7 @@
               {:flint/read-form (flint.rt/tagged-literal tag v)
                :flint/read-tag tag
                :flint/read-var target
-               :line (:line @st) :column (:col @st) :file (:file @st)})))))))
+               :line (:line @st) :column (:col @st) :file (:file @st)}))))))))
 
 (defn- read-symbolic [st]
   (let [tok (read-token st)]
@@ -725,13 +781,19 @@
   #{:flint :flint/check})
 
 (defn reader
-  "A reader state over `src`. `opts` may set `:file`, `:ns`, `:aliases` and
-  `:features` (default `default-features`)."
+  "A reader state over `src`. `opts` may set `:file`, `:ns`, `:aliases`,
+  `:dialect` and `:features` (default `default-features`).
+
+  `:dialect` is `:flint` or `:portable` and comes from the file's EXTENSION
+  (`flint.project/dialect-of`). `:portable` refuses flint-only reader tags; a
+  caller that does not say gets `:flint`, which is what every reader of
+  non-file text wants."
   ([src] (reader src {}))
   ([src opts]
    (let [st (make-state src (:file opts "<string>"))]
      (vswap! st merge (select-keys opts [:ns :aliases :features :resolve :tags]))
      (vswap! st assoc :features (or (:features opts) default-features))
+     (vswap! st assoc :dialect (or (:dialect opts) :flint))
      ;; PER PROJECT, merged over the built-ins. A dependency is read with its
      ;; own `:tags` and not with this project's, which is the whole point:
      ;; using a library's tag has to be something a project opts into

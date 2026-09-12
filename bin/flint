@@ -196,7 +196,11 @@
         (if-let [s (find-source dirs n)]
           (let [proj (project-of (:root s))
                 tags (:tags proj)
-                st (reader/reader (:src s) {:file (:file s) :features features :tags tags})
+                st (reader/reader (:src s) {:file (:file s) :features features :tags tags
+                                            ;; The DIALECT, so a flint-only reader tag in a
+                                            ;; `.cljc` is refused here too. `bin/flint` and the
+                                            ;; binary are meant to answer identically.
+                                            :dialect (project/dialect-of (:file s))})
                 forms (try (loop [acc []]
                              (let [v (reader/read-form st)]
                                (if (reader/eof? v) acc (recur (conj acc v)))))

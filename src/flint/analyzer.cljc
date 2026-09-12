@@ -1328,13 +1328,53 @@
   names a namespace\" is a graph that disagrees with the bindings."
   #{:require :use})
 
+(def script-ns-clauses
+  "The clauses only a SCRIPT's `ns` may carry (`DECISIONS.md#standalone-scripts`).
+
+  A script is one file and has no `deps.edn` -- that is the entire point of it
+  -- so what `deps.edn` would have said moves into the only file there is:
+  `:deps` for its dependencies, `:paths` for the directories it wants on the
+  source path beside itself.
+
+  They are refused OUTSIDE a script rather than ignored there. A project
+  already has a `deps.edn`, and a second place to declare dependencies that
+  nothing reads is the failure mode `analyze-ns`'s unknown-clause error exists
+  to stop, one level up: the clause would be spelled correctly, accepted, and
+  do nothing."
+  #{:deps :paths})
+
 (def known-ns-clauses
   "Every clause head an `ns` form may carry.
 
   `:import` is included and still REFUSED -- it is a clause flint knows about
   and rejects with a reason, which is a different answer from one it has never
-  heard of."
-  (into #{:refer-clojure :import} require-clauses))
+  heard of. `:deps` and `:paths` are the same shape of answer for a namespace
+  that is not a script."
+  (into (into #{:refer-clojure :import} require-clauses) script-ns-clauses))
+
+(defn script-entry
+  "The var a `^:script` namespace runs, or nil when the `ns` is not a script.
+
+  `^:script` NAMES A CONVENTION and `^{:script go}` overrides it, which is
+  the one answer `standalone-scripts` left open. Both, rather than either:
+  `^:script` is what everyone will write and `main` is what everyone will call
+  it, so the bare flag has to mean something; and a file whose entry is called
+  something else has an exact way to say so instead of renaming its function
+  to suit the launcher.
+
+  A module deliberately has NO entry (`DECISIONS.md#structured-ports`), so this
+  is not a property namespaces grow -- it is the mark that says this file is
+  not a module."
+  [nsname]
+  (let [s (:script (meta nsname))]
+    (cond
+      (nil? s) nil
+      (true? s) (symbol (str nsname) "main")
+      (symbol? s) (symbol (str nsname) (name s))
+      :else (throw (ex-info (str "^{:script " (pr-str s) "} on (ns " nsname ") is not a name."
+                                 " Write ^:script for " nsname "/main, or ^{:script go} for"
+                                 " " nsname "/go.")
+                            {:ns nsname :script s})))))
 
 (defn analyze-ns [env form]
   (let [[_ nsname & clauses] form
@@ -1354,6 +1394,21 @@
                 (vswap! cc assoc-in [:namespaces nsname :refers r] (symbol (str target) (name r))))))
           :refer-clojure nil
           :import (throw (ex-info "flint has no host interop, so :import is not supported" {:form c}))
+          ;; CONFIGURATION, not code. `:deps` and `:paths` say what the source
+          ;; path and the dependency set are, which is a question answered
+          ;; before a line of this namespace is analysed -- the front end reads
+          ;; them off the `ns` form directly. Nothing is emitted for them here;
+          ;; what this arm does is REFUSE them where they would be inert.
+          (:deps :paths)
+          (when-not (script-entry nsname)
+            (throw (ex-info
+                    (str "(ns " nsname ") carries " (pr-str (first c))
+                         ", which only a SCRIPT may: a script has no deps.edn, so its"
+                         " ns form is its project (DECISIONS.md#standalone-scripts)."
+                         " Mark it `(ns ^:script " nsname " ...)` if that is what this"
+                         " file is; otherwise " (pr-str (first c)) " belongs in deps.edn,"
+                         " where the build already reads it.")
+                    {:form c :ns nsname})))
           ;; AN UNKNOWN CLAUSE IS AN ERROR, not a no-op. Dropping it silently
           ;; makes a misspelled `:require` into a namespace with no
           ;; dependencies, which fails much later as an unresolved var and

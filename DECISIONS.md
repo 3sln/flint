@@ -4247,9 +4247,10 @@ the integration work itself moves to construe's own side of the boundary.
 
 **Ratified:** ☐ not signed off
 
-**Status: SPEC, nothing built.** Recorded 2026-09-11 at the user's request.
-Every claim below about current behaviour was checked against the code; every
-claim about intended behaviour is a proposal awaiting sign-off.
+**Status: BUILT, awaiting sign-off**, except dependency FETCHING — see
+"`:deps` is surface without a fetcher" below. `flint <file> [args]` runs a
+`#!` script through `target/release/flint`; the reader skips a `#!` first line;
+`^:script` names the entry; `src` is the file plus what `(:paths [..])` names.
 
 ### What was decided
 
@@ -4294,35 +4295,103 @@ source and fail. A script format needs the reader to skip a `#!` FIRST LINE
 only — not `#!` anywhere, which would make a comment syntax out of something
 that is a kernel convention about byte one.
 
-**2. `analyze-ns` SILENTLY IGNORES an unknown clause.** `src/flint/analyzer.cljc`
-dispatches on the clause head and its `case` ends in a bare `nil` fallthrough:
-`:refer-clojure` is accepted and dropped, `:import` throws a real message, and
-anything else — including `(:deps ...)` — is discarded without a word. So today
-a `:deps` clause would not error, it would be *ignored*, and the script would
-fail later with a missing namespace that says nothing about why. Whatever else
-this spec does, that fallthrough has to become an error before `:deps` means
-anything, or the first person to typo `:dpes` gets a mystery.
+**2. ~~`analyze-ns` SILENTLY IGNORES an unknown clause.~~** **Already fixed
+when this work started**: the fallthrough throws and names `known-ns-clauses`,
+so `:deps` had to be added to that one list deliberately — which is the whole
+point of the list. It is there now, with `:paths`, as `script-ns-clauses`.
+
+**They are REFUSED OUTSIDE A SCRIPT rather than ignored there.** A project
+already has a `deps.edn`; a second place to declare dependencies that nothing
+reads is the same disease one level up — the clause is spelled correctly,
+accepted, and does nothing. `analyze-ns` asks `script-entry` and refuses if the
+`ns` is not marked.
 
 **3. Nothing names the entry point.** A module deliberately has no entry
 (`DECISIONS.md#structured-ports`); today the CLI takes `:fn` or reads
-`:flint/main` from `deps.edn`. A script has neither. The `^:script` metadata is
-the natural place to answer it, and the open question is whether it names the
-entry (`^{:script main}`) or whether a fixed convention does.
+`:flint/main` from `deps.edn`. A script has neither.
 
-### Open, and needing sign-off
+**4. A single-file source was keyed by its FILENAME.** `build_spec_with` in
+`cli/src/main.rs` inserted a non-directory source under `s.file_name()`, and the
+compiler looks a namespace up at `flint.project/ns->path`. So the two had to
+agree by accident, and for a script they never can: a script is `~/bin/greet`,
+with no extension and a name chosen for the shell. It is now keyed by the
+namespace it DECLARES, which is a fix for every single-file source and not only
+for scripts.
 
-* **The entry point**, per above — metadata, convention, or both.
-* **Capabilities.** Capabilities are declared in workspace config, and a
-  script's `ns` form is its workspace config, so `:flint/capabilities-grant`
-  presumably moves there too. That means a script grants its OWN capabilities,
-  which is a different trust posture from a project whose grants sit in a file
-  the author controls separately. Worth deciding deliberately rather than
-  inheriting by analogy.
-* **The clause spelling.** `:deps` inside `ns` is new surface. `:require`
-  already exists and means something narrower; these must not blur.
-* **Whether a script may be a dependency.** If yes, `^:script` becomes a thing
-  other code can reach, and the "src is just this file" rule needs to say what
-  happens from the other side.
+**5. A file source inherited the `deps.edn` beside it.** The same loop walked up
+from a file's parent directory looking for one, and took its reader tags, its
+prelude and its capability GRANTS. For a script that is precisely the hazard the
+feature exists to avoid — drop `greet` into a working tree and it silently
+acquires that project's authority — and it fails open: the script compiles,
+runs, and says nothing. A source that is a FILE now inherits nothing.
+
+### Decided here, 2026-09-11
+
+**THE ENTRY POINT: `^:script` names a convention, and `^{:script go}`
+overrides it.** Both, not either. `^:script` is what everyone will write and
+`main` is what everyone will call it, so the bare flag has to mean something;
+and a file whose entry is called something else needs an exact way to say so
+rather than renaming its function to suit the launcher. `flint.analyzer/script-entry`
+is the one function that answers it, and the CLI scans for the same mark.
+
+A file NOT marked is refused rather than run with a guessed entry. A module has
+no entry by design, and inventing one is what this codebase refuses everywhere
+else.
+
+**CAPABILITIES: A SCRIPT DECLARES NONE.** `:flint/capabilities-grant` does not
+move into the `ns` form, and the reasoning is `AGENTS.md` §5's distinction
+rather than an analogy to `deps.edn`: a **grant is conferred from outside** and
+a **guard is an author's assertion about their own var**. A script's `ns` form
+is written by the script's author, so a grant there is an assertion the caller
+made about itself — the exact shape that let a var's own guard authorise its own
+body, which was measured, compiled, and removed.
+
+So the only grant is `:with`, given by whoever runs it:
+
+```
+#!/usr/bin/env -S flint :with [fs]
+```
+
+which `env -S` splits, and which is visible on line one of the file to anyone
+reading it and on the command line to anyone running it. A script with no grant
+is a pure function of its arguments whose return value is printed, which is
+already the useful case.
+
+This costs nothing, because of the next decision.
+
+**A SCRIPT MAY NOT BE A DEPENDENCY.** Nothing requires a script: its directory
+is not scanned, no `deps.edn` names it, and `^:script` marks it as the thing a
+module deliberately is not. The two decisions hold each other up — since nothing
+requires a script, a script never needs to HOLD a capability to get past another
+workspace's guard, and the grant it cannot give itself is one it would have had
+no use for.
+
+The reverse direction is unaffected: a script may `:require` anything its
+`:paths` reach, under the ordinary guard rules, as the anonymous workspace.
+
+**THE CLAUSE SPELLING: `:deps` and `:paths`, the `deps.edn` names.** They are
+the existing configuration language relocated, not a new one, so they keep the
+spelling the file they came from uses. `:require` is untouched and still means
+what it meant — which namespaces this file uses — and the two do not blur
+because they answer different questions: `:paths` says where source is FOUND,
+`:require` says what is USED.
+
+**`:deps` IS SURFACE WITHOUT A FETCHER, and it says so.** `target/release/flint`
+compiles from the source path and fetches nothing; the fetch loop lives in
+`flint.cli` and is driven by a host. So a script declaring `:deps` is REFUSED,
+naming the gap, rather than compiled without it — which would fail as "no source
+for namespace some.lib": true, and pointing at the wrong thing. That is the same
+judgement obstacle 2 records one level down. Wiring `flint.cli`'s fetch loop into
+the native binary is the work that closes it.
+
+### Still open
+
+* **Whether `flint compile` can produce a module from a script.** Only `run` is
+  wired. The entry and the source path are the same computation, so this is
+  plumbing rather than a decision — but it has not been done or tested.
+* **`bin/flint` has no script path.** The development CLI cannot run one. The
+  reader half (`#!`) is shared, so this is the front end only.
+* **Fetching, per above.**
 
 ## dialects-and-preludes
 
@@ -4330,9 +4399,10 @@ entry (`^{:script main}`) or whether a fixed convention does.
 
 **Ratified:** ☐ not signed off
 
-**Status: SPEC, nothing built.** Recorded 2026-09-11 at the user's request.
-Claims about current behaviour were checked against the code; the design is a
-proposal awaiting sign-off.
+**Status: BUILT, awaiting sign-off.** The extension resolves
+(`flint.project/source-extensions`), the custom prelude applies to `.fln` only
+(`flint.analyzer/prelude-of`), and the READER now refuses a flint-only tag in a
+portable file (`flint.reader/read-dispatch`). What is still open is marked below.
 
 ### What was decided
 
@@ -4386,17 +4456,44 @@ can make sense of the file, so the rule is flint-only tags, however they came
 to be bound.
 
 **AND THE RULE ALREADY CONDEMNS FILES IN THIS REPO**, which is the honest
-version of the audit item below:
+version of the audit item below. It condemns fewer and different ones than this
+section first claimed, and the correction is worth keeping because of HOW the
+first list was wrong:
 
-* `lib/flint/table.cljc` uses `#flint/table` — a flint-only tag in a file
-  claiming to be portable. It should be `lib/flint/table.fln`.
+* ~~`lib/flint/table.cljc` uses `#flint/table`.~~ **It does not.** All five
+  occurrences are inside comments, a docstring and two `str` literals — the
+  file PRINTS the tag and READS it, and never writes one. The audit was a grep
+  and a grep cannot tell a tag from the text of a tag. The standard library
+  needed no migration at all.
 * `test/tags.clj` builds two projects whose `.cljc` sources bind and use the
-  project tag `#pt`. Enforcement breaks that test as written.
+  project tag `#pt`. That one was right; they are now `a.fln` and `b.fln`.
+* **`test/tables.clj` was missed**, and it is the real one: it spits an
+  `ops.cljc` containing a live `#flint/table` literal. Now `ops.fln`.
+* **`test/sysns.clj` was missed too, and it went GREEN while refused.** Its
+  `app.cljc` used `#pt`, and its assertion was `includes? "3"` — which the read
+  error also satisfies, because the message ends `(app.cljc:2:32)`. A check
+  that a substring appears is not a check that the right thing happened. The
+  file is `app.fln` and the assertion is now `= "3"` on the trimmed output.
 
-Neither is an argument against the rule; both are the rule working. But they
-mean **enforcement cannot land before the migration**: turning it on first
-would break the build, and a check whose first act is to condemn the standard
-library is one nobody will trust. Rename what the rule catches, then enforce.
+None of this is an argument against the rule; all of it is the rule working.
+But it means **enforcement cannot land before the migration**: turning it on
+first would break the build, and a check whose first act is to condemn the
+standard library is one nobody will trust. Rename what the rule catches, then
+enforce. (Two migrations were found by *running* the enforcement, not by
+reading for it — which is the same lesson one layer up.)
+
+**WHAT MAKES A TAG FLINT-ONLY IS A LIST, not the absence of one.**
+`flint.reader/portable-tags` holds the tag names every Clojure-family reader
+binds, and it is empty today: flint binds `#flint/table` and whatever a
+workspace declares, and Clojure's reader knows neither. The alternative —
+hardcoding "every tag is flint-only" — is a sentence that would stop being true
+the day flint binds `#inst`, and nothing would fail when it did. The check reads
+the list.
+
+**THE UNBOUND-TAG ERROR STILL COMES FIRST.** A `#pt` in a `.cljc` that binds no
+`pt` is two complaints at once, and "no reader for the tag #pt" is the one that
+leads somewhere: a tag this project cannot read is broken in `.fln` too. So
+portability is checked only after the tag has resolved.
 
 **The prelude rule survives the correction, for a better reason.** A custom
 prelude applies to `.fln` only — not because flint namespaces are a separate
@@ -4497,6 +4594,13 @@ An extension makes the claim explicit, and a resolver tag makes it checkable.
   `source-candidates` and its linter's file filter. `bin/flint` puts `src` and
   `lib` on its classpath, so it can read one shared list rather than keep a
   fourth hand-copy.
+
+  **THERE WERE FIVE.** `cli/build.rs` walks `lib/` and embeds what it finds,
+  and it took `.cljc`/`.clj` only — so a standard-library namespace moved to
+  `.fln` would simply have been absent from the shipped binary, with no error
+  from either side: the file is on disk, the resolver looks for it, and it is
+  not in the map. It was found by counting the enumerators rather than by
+  anything failing, which is the case §1 of `AGENTS.md` is about.
 * **`core-first` is duplicated** in `src/flint/project.cljc` and `bin/flint`,
   and the order within it is load-bearing: `flint.protocols` must precede
   `flint.check`, which uses `extend-protocol` at top level. A configurable
@@ -4519,10 +4623,20 @@ An extension makes the claim explicit, and a resolver tag makes it checkable.
   extension is read far more often than it is typed, frequently in a diff or a
   stack trace where there is no context to disambiguate it. `.fln` is also
   three characters, which matches `.clj`; `.fl` was the odd one out at two.
-* **Whether portability is checkable beyond the edge rule.** The edge rule
-  catches dependencies. It does not catch a `.cljc` file using a reader tag its
-  workspace binds — which is a separate check, at the reader rather than the
-  graph.
+* ~~**Whether portability is checkable beyond the edge rule.**~~ **Built
+  2026-09-11.** `flint.reader` carries a `:dialect`, derived from the file's
+  extension by `flint.project/dialect-of` and threaded to all THREE reads of a
+  source — `collect`'s, `bin/flint`'s and `compiler/read-namespace!`'s — for
+  the reason `default-features` records: a value only one reader knows about is
+  a value the other two get wrong. `read-namespace!` takes it off the compile
+  context rather than as a sixth argument, because `compile-image` has already
+  lifted it there.
+* **What a `.fln` that requires a portable namespace means for the OTHER
+  platform** is still unanswered, and is deliberately not the reader's
+  question. This check is about one file's own surface. A `.cljc` that requires
+  a namespace only flint implements reads fine under Clojure and fails to
+  LOAD there, which is the consumer's question at load time and is what
+  "no edge rule on requires" above already says.
 * **What `clojure.core` means for `.fln`.** Presumably still the first prelude
   entry, but a flint-only dialect could in principle start from a different
   base.

@@ -273,11 +273,16 @@
   (spit (str p7 "/deps.edn") "{:paths [\"src\"] :flint/tag-readers {pt rdr/point}}\n")
   (spit (str p7 "/src/rdr.cljc")
         "(ns rdr)\n(defn point [v] {:x (first v) :y (second v)})\n")
-  (spit (str p7 "/src/app.cljc")
+  ;; A `.fln`: a project tag is a flint-only tag, so the file using it is not
+  ;; portable (`DECISIONS.md#dialects-and-preludes`). It was a `.cljc`, and the
+  ;; assertion below was `includes? "3"` -- which the REFUSAL also satisfies,
+  ;; because the read error ends in `(app.cljc:2:32)`. The check went green with
+  ;; the feature it tests refused outright. Assert the whole answer.
+  (spit (str p7 "/src/app.fln")
         "(ns app (:require [rdr]))\n(defn go [_] (str (:x #pt [3 4])))\n")
   (let [r (sh p7 flint "run" ":path" "src" ":fn" "app/go")]
     (check "a project's reader tag is bound in the shipped binary"
-           (str/includes? (:out r) "3") (:out r))))
+           (= "3" (str/trim (:out r))) (:out r))))
 
 
 ;; A guard BETWEEN two project workspaces, which is the half the first fix
@@ -356,6 +361,155 @@
              (str/includes? (:out r) "lists both") (:out r))
       (check "  ... and the refusal names the exclusion that settles it"
              (str/includes? (:out r) ":exclude [shout]") (:out r)))))
+
+;; --- standalone scripts (`DECISIONS.md#standalone-scripts`) -----------------
+;;
+;; Driven through `target/release/flint`, because a shebang names a BINARY:
+;; `#!/usr/bin/env flint` is answered by whatever `flint` is on the path, and a
+;; script feature tested anywhere else is a feature the kernel never reaches.
+(let [p10 (str (fs/create-temp-dir))
+      script! (fn [nm text]
+                (let [f (str p10 "/" nm)]
+                  (spit f text)
+                  (fs/set-posix-file-permissions f "rwxr-xr-x")
+                  f))]
+  ;; NO EXTENSION, on purpose: a script lives in `~/bin` under a bare name, and
+  ;; keying a single-file source by its FILENAME -- which is what this did --
+  ;; reported the namespace missing for every one of them.
+  (script! "greet"
+           (str "#!/usr/bin/env flint\n"
+                "(ns ^:script greet\n"
+                "  (:require [clojure.string :as str]))\n"
+                "(defn main [args] (str \"hello \" (str/join \", \" args)))\n"))
+  (let [r (sh p10 flint "./greet" "world" "friend")]
+    (check "a #! script runs, and the shebang line is not read as source"
+           (str/includes? (:out r) "hello world, friend") (:out r)))
+
+  ;; `^{:script go}` names another entry. `^:script` alone is the convention.
+  (script! "named" (str "#!/usr/bin/env flint\n(ns ^{:script go} named)\n"
+                        "(defn go [_] \"went\")\n"))
+  (let [r (sh p10 flint "./named")]
+    (check "  ... and ^{:script go} runs go rather than main"
+           (str/includes? (:out r) "went") (:out r)))
+
+  ;; A module deliberately has NO entry (`DECISIONS.md#structured-ports`), so a
+  ;; file that never claimed to be runnable is refused rather than guessed at.
+  (script! "plain.fln" "(ns plain)\n(defn main [_] \"x\")\n")
+  (let [r (sh p10 flint "./plain.fln")]
+    (check "a file not marked ^:script is refused, not run anyway"
+           (and (not (zero? (:exit r))) (str/includes? (:out r) "^:script")) (:out r)))
+
+  ;; THE SOURCE PATH IS THE FILE. The control is the same script with the same
+  ;; neighbour, differing only in whether it NAMES the directory -- so a failure
+  ;; for any other reason would fail both arms.
+  (fs/create-dirs (str p10 "/side"))
+  (spit (str p10 "/side/helper.fln") "(ns helper)\n(defn shout [s] (str s \"!\"))\n")
+  (spit (str p10 "/helper.fln") "(ns helper)\n(defn shout [s] (str s \"?\"))\n")
+  (script! "uses"
+           (str "#!/usr/bin/env flint\n(ns ^:script uses (:require [helper]))\n"
+                "(defn main [_] (helper/shout \"hi\"))\n"))
+  (let [r (sh p10 flint "./uses")]
+    (check "a script does NOT scan its own directory: the neighbour is not found"
+           (and (not (zero? (:exit r))) (str/includes? (:out r) "helper")) (:out r)))
+  (script! "uses2"
+           (str "#!/usr/bin/env flint\n"
+                "(ns ^:script uses2 (:paths [\"side\"]) (:require [helper]))\n"
+                "(defn main [_] (helper/shout \"hi\"))\n"))
+  (let [r (sh p10 flint "./uses2")]
+    (check "  ... and joins the path only by being NAMED in the ns form"
+           (str/includes? (:out r) "hi!") (:out r)))
+
+  ;; A deps.edn beside a script is NOT the script's workspace. This is the
+  ;; hazard the feature exists to avoid, and it fails open: a script that
+  ;; inherited a neighbour's grants would compile, run, and say nothing.
+  (spit (str p10 "/deps.edn")
+        "{:paths [\"src\"] :flint/tag-readers {pt greet/point}}\n")
+  (script! "tagged" (str "#!/usr/bin/env flint\n(ns ^:script tagged)\n"
+                         "(defn point [v] v)\n(defn main [_] (pr-str #pt [1 2]))\n"))
+  (let [r (sh p10 flint "./tagged")]
+    (check "a deps.edn beside a script does not become the script's workspace"
+           (and (not (zero? (:exit r))) (str/includes? (:out r) "no reader for the tag"))
+           (:out r)))
+
+  ;; THE GRANT CHANNEL, probed as a program rather than reasoned about. This is
+  ;; the one that fails OPEN: a script that inherited a neighbour's
+  ;; `:flint/capabilities-grant` compiles, runs and says nothing, so reading the
+  ;; code and finding it sensible proves nothing (`AGENTS.md` §5).
+  ;;
+  ;; The CONTROL is the same source in an ordinary project, which must still be
+  ;; allowed -- otherwise a refusal here could mean the guard is broken in the
+  ;; other direction and this test could not tell.
+  (spit (str p10 "/deps.edn") "{:paths [\"src\"] :flint/capabilities-grant [:host]}\n")
+  (script! "grabby" (str "#!/usr/bin/env flint\n"
+                         "(ns ^:script grabby (:require [flint.host :as h]))\n"
+                         "(defn main [_] (str h/request))\n"))
+  (let [r (sh p10 flint "./grabby")]
+    (check "a script does NOT inherit a neighbouring deps.edn's capability grant"
+           (and (not (zero? (:exit r))) (str/includes? (:out r) "is guarded with"))
+           (:out r)))
+  (let [p10b (str (fs/create-temp-dir))]
+    (fs/create-dirs (str p10b "/src"))
+    (spit (str p10b "/deps.edn") "{:paths [\"src\"] :flint/capabilities-grant [:host]}\n")
+    (spit (str p10b "/src/ok.fln")
+          "(ns ok (:require [flint.host :as h]))\n(defn main [_] (str h/request))\n")
+    (let [r (sh p10b flint "run" ":path" "src" ":fn" "ok/main")]
+      (check "  ... and the control: a PROJECT with the same grant may name it"
+             (zero? (:exit r)) (:out r))))
+
+  ;; `:deps` is REAL SURFACE and this binary cannot honour it yet, so it says
+  ;; so. Dropping it silently is the bug `analyze-ns`'s unknown-clause error
+  ;; exists to stop, one level up.
+  (script! "withdeps"
+           (str "#!/usr/bin/env flint\n"
+                "(ns ^:script withdeps (:deps {some/lib {:npm/version \"1.2.0\"}}))\n"
+                "(defn main [_] \"x\")\n"))
+  (let [r (sh p10 flint "./withdeps")]
+    (check "a script's :deps is refused with a reason, not ignored"
+           (and (not (zero? (:exit r)))
+                (str/includes? (:out r) "does not fetch dependencies"))
+           (:out r))))
+
+;; `:deps` and `:paths` OUTSIDE a script are inert, so they are refused. A
+;; project already has a deps.edn, and a second place to declare dependencies
+;; that nothing reads is a misspelling that compiles.
+(let [p11 (str (fs/create-temp-dir))]
+  (fs/create-dirs (str p11 "/src"))
+  (spit (str p11 "/deps.edn") "{}")
+  (spit (str p11 "/src/app.cljc")
+        "(ns app (:deps {some/lib {:npm/version \"1.0.0\"}}))\n(defn main [_] \"x\")\n")
+  (let [r (sh p11 flint "run" ":path" "src" ":fn" "app/main")]
+    (check ":deps in a namespace that is not a script is refused"
+           (and (not (zero? (:exit r))) (str/includes? (:out r) "only a SCRIPT may"))
+           (:out r)))
+  ;; And an unknown clause still names the list it is not in, which is the
+  ;; error `:deps` had to be added to deliberately rather than fall through.
+  (spit (str p11 "/src/app.cljc") "(ns app (:dpes {}))\n(defn main [_] \"x\")\n")
+  (let [r (sh p11 flint "run" ":path" "src" ":fn" "app/main")]
+    (check "  ... and a misspelled clause still lists what an ns takes"
+           (str/includes? (:out r) ":deps") (:out r))))
+
+;; --- the dialect split at the reader (`DECISIONS.md#dialects-and-preludes`) --
+;;
+;; `bin/flint` and the binary are meant to answer identically; `test/tags.clj`
+;; drives the first, this drives the one that ships.
+(let [p12 (str (fs/create-temp-dir))
+      src (str "(ns app (:require [flint.table :as ft]))\n"
+               "(defn main [_] (pr-str #flint/table"
+               " {:schema [[:id :int]] :rows [{:id 1}]}))\n")]
+  (fs/create-dirs (str p12 "/src"))
+  (spit (str p12 "/deps.edn") "{}")
+  (spit (str p12 "/src/app.cljc") src)
+  (let [r (sh p12 flint "run" ":path" "src" ":fn" "app/main")]
+    (check "a flint-only reader tag in a .cljc is refused by the shipped binary"
+           (and (not (zero? (:exit r)))
+                (str/includes? (:out r) "flint-only reader tag"))
+           (:out r)))
+  ;; The control: one character of the filename, nothing else.
+  (fs/delete (str p12 "/src/app.cljc"))
+  (spit (str p12 "/src/app.fln") src)
+  (let [r (sh p12 flint "run" ":path" "src" ":fn" "app/main")]
+    (check "  ... and the SAME source as a .fln runs"
+           (str/includes? (:out r) "#flint/table") (:out r))))
 
 (if (pos? @fails)
   (do (println "sysns:" @fails "FAILURES") (System/exit 1))

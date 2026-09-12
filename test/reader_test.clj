@@ -229,6 +229,50 @@
 (check "  ... keeping the tag the person typed"
        (:flint/read-tag (meta tagged-form)) 'pt)
 
+;; --- the shebang (`DECISIONS.md#standalone-scripts`) ------------------------
+;;
+;; BYTE ONE AND NOWHERE ELSE. `#!` is a kernel convention about the first two
+;; bytes of an executable file, and reading it as a comment marker wherever it
+;; appears would invent a second comment syntax out of it.
+(check "a #! first line is skipped" (r/read-all "#!/usr/bin/env flint\n(ns a)\n42")
+       ['(ns a) 42])
+(check "  ... and the line numbers below it are unchanged"
+       (:line (meta (first (r/read-all "#!/usr/bin/env flint\n(ns a)")))) 2)
+(check "  ... a file that is ONLY a shebang reads as nothing"
+       (r/read-all "#!/usr/bin/env flint") [])
+(check "  ... and one with no trailing newline still reads"
+       (r/read-all "#!/usr/bin/env flint\n1") [1])
+;; `#!` anywhere else is what it always was: a `#` dispatch on `!`, which is not
+;; a tag anyone bound. The message is about the tag, not about a comment.
+(check "a #! that is not on line one is NOT a comment"
+       (try (do (r/read-all "(ns a)\n#!nope\n42") :read)
+            (catch Exception e (if (str/includes? (ex-message e) "no reader for the tag")
+                                 :refused (ex-message e))))
+       :refused)
+
+;; --- the dialect (`DECISIONS.md#dialects-and-preludes`) ---------------------
+;;
+;; A flint-only reader tag makes the FILE it is in non-portable, and that is
+;; known at read time for the file being read -- which is where the check
+;; belongs and where the answer is local.
+(defn tag-read [dialect]
+  (try (do (r/read-all "#pt [1 2]" {:tags {'pt 'my.ns/point} :dialect dialect}) :read)
+       (catch Exception e (ex-message e))))
+(check "a flint dialect reads a project tag" (tag-read :flint) :read)
+(check "  ... and a caller that says nothing gets the flint dialect" (tag-read nil) :read)
+(check "  ... and a PORTABLE file is refused"
+       (str/includes? (str (tag-read :portable)) "flint-only reader tag") true)
+(check "  ... naming the extension that fixes it"
+       (str/includes? (str (tag-read :portable)) ".fln") true)
+;; The UNBOUND tag keeps its own error, and that ordering is deliberate: a tag
+;; this project cannot read is broken in flint too, so "no reader for #pt" is
+;; the complaint that leads somewhere.
+(check "an unbound tag in a portable file still says there is no reader"
+       (try (do (r/read-all "#pt [1 2]" {:dialect :portable}) :read)
+            (catch Exception e (if (str/includes? (ex-message e) "no reader for the tag")
+                                 :no-reader (ex-message e))))
+       :no-reader)
+
 (if (zero? @fails)
   (println "reader: ok")
   (do (println "reader:" @fails "FAILURES") (System/exit 1)))

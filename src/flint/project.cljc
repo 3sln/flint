@@ -143,9 +143,16 @@
                                        :grants (:grants s) :guard (:guard s)})
                      (conj order n)
                      missing)
-            (let [forms (reader/read-all (:src s) {:file (:file s)
+            (let [dialect (or (:dialect s) (dialect-of (:file s)))
+                  forms (reader/read-all (:src s) {:file (:file s)
                                                    :features features
-                                                   :tags (:tags s)})
+                                                   :tags (:tags s)
+                                                   ;; THE FIRST OF THREE READS, and the
+                                                   ;; dialect has to be on every one: a
+                                                   ;; value only one reader knows about is
+                                                   ;; one the other two get wrong
+                                                   ;; (`DECISIONS.md#reader-tags`).
+                                                   :dialect dialect})
                   reqs (compiler/ns-requires (or (ns-form forms) '(ns x)))
                   ;; A PRELUDE ENTRY IS AN IMPLICIT REQUIRE, and has to create
                   ;; the same edge. Its names resolve without a `:require`, so
@@ -165,7 +172,7 @@
                                        ;; still valid (see this fn's docstring), so the
                                        ;; dialect is derived from the file it named rather
                                        ;; than demanded of it.
-                                       :dialect (or (:dialect s) (dialect-of (:file s)))
+                                       :dialect dialect
                                        :workspace (:workspace s) :tags (:tags s)
                                        :prelude (:prelude s)
                                        :grants (:grants s) :guard (:guard s)})
