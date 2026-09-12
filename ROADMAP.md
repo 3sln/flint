@@ -493,6 +493,45 @@ that ships.
       LLVM path lands, `test/sysns.clj` remains the only guard on the shipped
       binary, so anything security-bearing added there needs a check in it
 
+### Port tests belong in kin (recorded 2026-09-11)
+
+The same fourteen runtime tests are hand-written TWICE:
+
+    runtimes/jvm/test/*.java          1 598 lines, 14 main() programs
+    runtimes/clr/conform/Program.cs   1 442 lines, the same 14 as flags
+    runtime/src/*.rs                  131 #[test]s, a third shape
+
+`RtAot`, `RtFlags`, `RtFoundation`, `RtGas`, `RtHash`, `RtHostPorts`,
+`RtImage`, `RtMaps`, `RtParallel`, `RtSelfHost`, `RtShelve`, `RtSnapshot`,
+`RtStale`, `RtSteps` — one suite, two implementations, drifting by hand. That
+is kin's whole argument, applied to tests instead of to the runtime.
+
+**AND MOST OF IT NEEDS NO TEST-FRAMEWORK VOCABULARY AT ALL.** The obvious
+design is a kin form emitting `#[test]` / `@Test` / `[Fact]`. But these tests
+are not framework-shaped: they are `main()` programs and CLI flags that PRINT
+`"  ok  …"` lines, which `bin/conform-hosts` runs and compares. That is exactly
+the shape `./kin/scripts/verify` already consumes — byte-identical stdout from
+three targets is the existing correctness bar for all 89 kin sources.
+
+So the port tests can move with ordinary kin vocabulary plus whatever
+primitives their bodies use. The framework mapping is a SECOND step, worth
+doing for ecosystem integration (`cargo test`, `dotnet test`, IDE runners) and
+not a prerequisite for removing the duplication.
+
+The 131 Rust `#[test]`s are a different question and should be judged
+separately: some test native internals — allocator intimacy, GC stress, memory
+layout — that the ports may have no equivalent for. Portable behaviour should
+move; platform intimacy should stay and say why.
+
+- [ ] Port the 14 duplicated port tests to kin, one source each, verified by
+      the existing stdout-agreement probe
+- [ ] Retire `runtimes/jvm/test/*.java` and the `--rt-*` flags in
+      `runtimes/clr/conform/Program.cs` as each lands
+- [ ] Triage the 131 Rust `#[test]`s: portable behaviour against platform
+      intimacy, with the reason recorded for anything that stays
+- [ ] Only then, if wanted: a kin vocabulary emitting each target's native
+      test framework, so these run under `cargo test` and `dotnet test`
+
 ### Dialects and pluggable preludes (spec only, nothing built)
 
 Recorded 2026-09-11. Full spec at `DECISIONS.md#dialects-and-preludes`.
