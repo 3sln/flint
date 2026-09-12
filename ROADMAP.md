@@ -493,6 +493,23 @@ that ships.
       LLVM path lands, `test/sysns.clj` remains the only guard on the shipped
       binary, so anything security-bearing added there needs a check in it
 
+### The gate costs 30 minutes, and `bin/test` is 26 of them
+
+Measured 2026-09-11 on one commit: `bin/test` 26 min, `bin/conform-hosts`
+4 min. **The four-runtime conformance matrix is not the expense** — the
+single-runtime suite is 87% of it.
+
+Running it on every commit is the wrong default, and the fix is not a faster
+gate but a reason to trust a smaller one:
+
+- [ ] Break `bin/test`'s 26 minutes down by section. It has 58 of them and
+      nothing says where the time goes; the answer decides whether this is a
+      few slow sections or uniform cost
+- [ ] Expected-value unit tests at the kin layer (above) — selective testing is
+      only safe when the fast checks actually catch logic errors
+- [ ] A changed-files → suites map, so a commit runs what it can break
+- [ ] Reserve the full gate for merge and release rather than per-commit
+
 ### Port tests belong in kin (recorded 2026-09-11)
 
 The same fourteen runtime tests are hand-written TWICE:
@@ -523,6 +540,29 @@ separately: some test native internals — allocator intimacy, GC stress, memory
 layout — that the ports may have no equivalent for. Portable behaviour should
 move; platform intimacy should stay and say why.
 
+**THE KIN DRIVERS CHECK AGREEMENT, NOT CORRECTNESS** (found 2026-09-11). All
+89 have a `.drivers` probe, and `kin/scripts/verify` ends in exactly two
+verdicts: *"ok N targets, one source, identical output"* or *"FAIL the targets
+disagree"*. **No driver carries an expected value.** Grepped: none assert what
+the answer should BE.
+
+That is a real check and it catches a real class — per-target translation
+divergence, where one source emits different semantics into different
+languages. The `hamt.drivers` comment is a good example: an arithmetic shift
+and a logical one agree below 2^31, so the probe deliberately uses `0x80000001`
+to separate them.
+
+But **all three targets are generated from ONE source**, so a logic error in
+that source produces three identically-wrong implementations, which agree
+perfectly and pass. The script already states the principle one case earlier —
+*"an output identical to itself is not a check"* — and the same reasoning
+extends one step further than it is applied.
+
+So the kin namespaces are the natural home for expected-value unit tests, and
+that is the missing half rather than a duplicate of the drivers.
+
+- [ ] Expected-value tests for the kin namespaces — the half the drivers
+      cannot provide. This is what would make selective testing safe
 - [ ] Port the 14 duplicated port tests to kin, one source each, verified by
       the existing stdout-agreement probe
 - [ ] Retire `runtimes/jvm/test/*.java` and the `--rt-*` flags in
