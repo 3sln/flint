@@ -4627,3 +4627,126 @@ Found by reading all three, not by a failing test — no gate compares them.
 * **Whether the Pike VM is generated at all.** It is the largest triplicate
   left and the one where drift is most expensive. It is also the hottest loop
   in the runtime, and the buffer indirection above has not been measured.
+## npm-cli
+
+**`@3sln/flint-cli`: the CLI as an npm package, node hosting the wasm compiler**
+
+**Ratified:** ☐ not signed off
+
+**Status: BUILT.** Recorded 2026-09-11. `sdks/cli/` is the package;
+`sdks/cli/selftest.mjs` is what checks it.
+
+### What was decided
+
+**The npm CLI is the compiler PLUS a server of namespaces, and the second half
+is the whole of the work.** `dist/flintc.wasm` has run under node for a long
+time -- `host/flint.mjs` does it and `bin/conform-hosts` drives that path. What
+a CLI is, beyond that, is:
+
+* reading a directory into a spec: every `.fln`/`.cljc`/`.clj` under each source
+  root, plus the standard library, keyed by the path a namespace maps to;
+* telling the compiler what it SERVES, so `(:require [flint.sys.fs :as fs])`
+  resolves and `(fs/lst-dir "x")` is a compile error rather than a run-time one;
+* reading each root's `deps.edn` for workspace identity, tag readers, grants and
+  guards, one spec entry per file;
+* and then, while the program runs, answering the calls it makes back out --
+  `flint.sys.fs`, `flint.sys.env`, `flint.sys.slurp`, `flint.deps.npm`,
+  `flint.deps.mvn`, `flint.deps.git`.
+
+A host that serves none of those leaves the compiler unable to read a source
+file at all.
+
+**The correctness standard is BYTE-IDENTICAL OUTPUT, not "it works".** The
+compiler is deterministic, and both CLIs run the same compiler over the same
+spec text, so the same project must compile to the same module. That turns
+every detail of the spec builder -- the escaping, the ordering, which
+`deps.edn` is read, whether an empty one falls through to the parent -- into
+something a comparison can catch, instead of something that surfaces years
+later on an unusual project. `sdks/cli/src/spec.mjs` is therefore a
+transliteration of `build_spec_with` in `cli/src/main.rs` rather than an
+idiomatic rewrite, and where it departs it says so in a comment.
+
+Measured 2026-09-11 on `sdks/cli/fixture`: identical bytes for a plain compile,
+for `:optimize [perf]`, for `:with`/`:meta` recorded in the artifact, for a
+program requiring the served namespaces, and for a two-root project with a
+capability guard between the roots. With a control -- the same comparison
+between deliberately different arms -- because two arms that cannot be told
+apart would report agreement too.
+
+**`run` compiles to a MODULE here, where the native CLI runs a bytecode
+image.** This is the one place the two pipelines are not the same shape, and it
+is forced: an image's native references are NAMES, which only a natively-linked
+host can resolve, and a wasm loader wants table slots. So `run` compiles the
+same program to the same module `compile` produces and instantiates that. The
+program and the answer are identical; what differs is that this pays module
+emission where the native CLI pays none.
+
+**The containment rule moves across unchanged, and is stricter in one place.**
+Every path under `:fs` resolves under the granted root and an escape is REFUSED
+rather than clamped; `..` is refused rather than popped, so `a/../b` -- which
+normalises to somewhere inside the root -- is refused too. The check touches no
+filesystem, so it gives the same answer whether or not the file exists.
+
+The one deliberate difference: node's `under()` treats `\` as a separator on
+EVERY platform, where Rust's `Path` treats it as an ordinary character on unix.
+So `..\..\etc\passwd` is a filename to the native CLI on unix and a refusal
+here. The node side is stricter, which is the safe direction, and it is what
+makes the check correct on Windows -- where node genuinely runs and where `\`
+genuinely is a separator.
+
+**The served catalogue is two lists, and a checker keeps them one.**
+`cli/src/sys.rs`'s `catalogue()` cannot be imported into node, so AGENTS.md §1's
+"make one read the other" is not available across the boundary.
+`bin/check-sys-catalogue` parses the `vars()` bodies out of `cli/src/sys.rs` and
+`cli/src/deps.rs`, parses `sdks/cli/src/catalogue.mjs`, and fails naming the
+namespace, var, arity or ordering that differs. Verified non-vacuous by
+perturbing one arity and watching it fail.
+
+### What is NOT in the package
+
+* **`flint deps`** (`add`, `tree`, `why`, `pin`, `bump`, `agree`). The
+  namespaces it resolves THROUGH are served here, so a program can call them;
+  what is missing is the subcommand, which drives `flint.deps.resolve` as a
+  program and rewrites `deps.edn`. `flint deps` names itself as unimplemented
+  rather than failing as an unknown command.
+* **Pods.** `declared_pods` boots a subprocess to discover a pod's surface
+  before the compiler runs. The spec builder takes a `pods` argument and emits
+  the entries, so the hole is the booting, not the shape.
+* **`:to :llvm`**, which is absent from the native CLI too and for the same
+  reason: emitting a native artifact needs a linker.
+
+### Open, and needing sign-off
+
+* **Whether the native binary still earns its keep.** ROADMAP.md's "Design: how
+  the CLI itself ships" records two invalid attempts at this measurement and
+  says the only number that settles it is the two shipped CLIs, invoked. Both
+  now exist and do provably the same job, so the measurement is available for
+  the first time. Making the decision is not this record's business, but the
+  number is, so here it is.
+
+  Measured 2026-09-11, five timed invocations each, median, both artifacts
+  rebuilt first (`bin/build-dist` then `cargo build --release -p flint-cli`, in
+  that order, because neither implies the other):
+
+  | command | native | node | ratio |
+  | --- | --- | --- | --- |
+  | `compile` a four-namespace project | 1724 ms | 2812 ms | 1.63x |
+  | `compile` the compiler itself (`src/`) | 4140 ms | 7074 ms | 1.71x |
+  | `version` -- process start and nothing else | 3 ms | 32 ms | — |
+
+  Both `compile` rows produced byte-identical output, which is what says the
+  ratio is between HOSTS and not between pipelines.
+
+  **This is 1.7x, not the 5.8x `cli/Cargo.toml` records.** That comment says
+  running the compiler natively "is 2.7 s against 15.6 s through a wasm
+  engine", and it is the entire argument for the native path. Whatever that
+  figure measured, a modern node on this workload is nowhere near it. The
+  absolute numbers were taken on a loaded machine and are inflated; the ratio
+  is the comparable part, and the constant 29 ms of node start is visible in
+  the `version` row and matters for short invocations in a way the ratio hides.
+
+  Re-measuring `cli/Cargo.toml`'s claim before acting on it is the next step,
+  not a conclusion drawn here.
+* **Whether `run` should grow the image path.** It would need the loader to
+  assign native slots by name at load time, which is a runtime change rather
+  than a packaging one.

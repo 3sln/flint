@@ -1,7 +1,7 @@
 {
   "name": "flint-repo",
   "version": "0.0.1",
-  "description": "flint: a compiler and runtime turning pure Clojure into a self-contained wasm module. The npm package is sdks/esm.",
+  "description": "flint: a compiler and runtime turning pure Clojure into a self-contained wasm module. Two npm packages: sdks/esm is the library (@3sln/flint), sdks/cli is the command line (@3sln/flint-cli).",
   "type": "module",
   "author": "Ray Stubbs",
   "license": "MIT",
@@ -25,7 +25,8 @@
     "test": "./bin/test",
     "bench": "./bin/bench",
     "build:dist": "./bin/build-dist",
-    "build:sdk": "./sdks/esm/build"
+    "build:sdk": "./sdks/esm/build",
+    "build:cli": "./sdks/cli/build"
   },
   "private": true
 }

@@ -409,6 +409,33 @@ be judged against it. Since npm-only is the decided path for now, that is the
 same order the work was going in anyway — build it, then measure, then decide
 whether the native binary earns its keep.
 
+**BUILT 2026-09-11: `sdks/cli/` is the package** (`DECISIONS.md#npm-cli`).
+`run`, `compile`, `test` and `version`; `flint deps` and pods are not packaged
+and name themselves as missing. It serves the whole `cli/src/sys.rs` catalogue
+— `flint.sys.fs`, `.env`, `.slurp` and `flint.deps.npm`/`.mvn`/`.git` — and
+`bin/check-sys-catalogue` fails the build if that list and the Rust one drift
+apart.
+
+**AND THE MEASUREMENT IS NOW AVAILABLE, for the reason the two invalid attempts
+above were not.** Both CLIs compile the same project to BYTE-IDENTICAL bytes —
+checked for a plain compile, for `:optimize [perf]`, for `:with`/`:meta`, and
+for a two-root project with a capability guard between the roots, each against
+a control that must differ. That is what says the two arms do the same work,
+which is exactly the thing `bin/flint`-versus-native and `flint-file.mjs`
+-versus-native could not say.
+
+Measured that way: **1.63x on a four-namespace project, 1.71x on the compiler
+compiling itself** (1724 → 2812 ms and 4140 → 7074 ms, five runs each, median,
+both artifacts rebuilt first), plus a constant ~29 ms of node start visible in
+`flint version`. Both compiles produced byte-identical output.
+
+**That is 1.7x, where `cli/Cargo.toml` records 5.8x** — the "2.7 s against
+15.6 s" that is the whole argument for the native path. So the cost this
+section said to weigh is much smaller than the figure it was weighed against,
+and the next step is re-measuring that claim rather than acting on the gap.
+Whether the native binary keeps its place is still a decision to make. Figures
+and caveats in `DECISIONS.md#npm-cli`.
+
 ### The shipped binary is a subset of `bin/flint` (measured 2026-09-11)
 
     present in target/release/flint: deps, run, compile, test, version
