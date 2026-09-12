@@ -141,8 +141,16 @@ in `dist/` are tracked, but `flintc.bytecode`, `flintc.wasm`,
 gitignored, and `cli/build.rs` panics naming the first. So:
 
 ```
+export JAVA_HOME=/opt/homebrew/opt/openjdk        # see below
 cd ../flint-<topic> && ./bin/build-dist && cargo build --release -p flint-cli
 ```
+
+**`JAVA_HOME` is not optional in a fresh worktree.** `bin/build-dist` runs
+babashka, which resolves `bb.edn`'s `:deps` through the clojure CLI, which
+shells out to a JVM — and `/usr/bin/java` on macOS is a stub that reports no
+runtime. Without it the build dies at `builtins.json` with "Unable to locate a
+Java Runtime", which names neither babashka nor the cause. Two agents hit this
+independently before it was written down.
 
 Each worktree carries its own `target/` and its own build time. Use one when
 work genuinely needs isolation — a long refactor, a risky experiment, doc
