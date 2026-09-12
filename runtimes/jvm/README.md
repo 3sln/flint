@@ -69,7 +69,16 @@ returning `nil` would let a program get a wrong answer quietly here and the
 right one elsewhere, which is the drift the conformance harness exists to
 catch.
 
-## Self-hosting: close, not there
+## Self-hosting: done, byte for byte
+
+Verified 2026-09-12 by `FLINT_SELFHOST=1 ./bin/conform-hosts`: the ported
+runtime loads the compiler (1 603 fns, 3 065 consts, 100 079 code bytes, 159
+natives), wants **0** builtins this runtime lacks, runs 736 initialisers, and
+its output is **byte for byte what the wasm compiler emits**. The CLR port
+answers identically in the same run.
+
+That check is NOT part of the ordinary gate — it runs only under
+`FLINT_SELFHOST=1`. What follows is the history of getting here.
 
 The compiler is the largest flint program there is, so it reaches builtins a
 small program never does. Running it here went from 89 missing builtins to

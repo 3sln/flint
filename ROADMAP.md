@@ -850,9 +850,15 @@ things that are code, not record:
 - [x] `runtimes/jvm/README.md`'s builtin count corrected: it said "141 of the
       144 the compiler imports; the 3 missing are regex". `bin/check-builtins`
       says all 168, the 2 mandatory included — verified here, not taken
-- [ ] Its "Self-hosting: close, not there" heading is reported stale by a
-      verifier that ran `RtSelfHost` directly and got a byte-for-byte pass.
-      **NOT confirmed here**, and the reason is the next item
+- [x] Its "Self-hosting: close, not there" heading corrected — **confirmed
+      here** by `FLINT_SELFHOST=1 ./bin/conform-hosts`: 0 missing builtins, 736
+      initialisers, and output byte for byte identical to the wasm compiler's,
+      on BOTH ports in one run
+- [ ] And its cost is still unmeasured: the self-host step sits outside every
+      `phase` marker, so `conform-hosts`' own summary totalled 148 s for a run
+      that included it. The only estimate is the script's own "about 15
+      minutes", which nothing has checked — and whether this belongs in the
+      gate turns on that number
 - [ ] **SELF-HOSTING ON THE PORTS IS NOT GATE-COVERED.** `bin/conform-hosts`
       runs it only under `FLINT_SELFHOST=1` and the step announces "this takes
       about 15 minutes", so a green gate says nothing about it. That is a
