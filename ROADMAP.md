@@ -730,6 +730,46 @@ comment and the import both outlived it.
       beside it, and only sometimes dead code
 - [ ] Remove `s-ascii` from `valhash.kin` and correct its header
 
+### Half of each port is still hand-written (measured 2026-09-12)
+
+The port-test work established that thirteen of the fourteen runtime tests
+cannot move to kin because they construct a real `Rt` — the interpreter, the
+NaN-boxed heap, the moving collector — which is hand-written per port and is
+the thing under test. So the question "how much of a port is still written
+twice" is the question behind that blocker.
+
+    JVM port    12 553 generated (kgen)    10 960 hand-written    47% by hand
+    CLR port    12 751 generated (Kgen)    10 340 hand-written    45% by hand
+
+About 21 000 lines across the two ports, each a hand-written counterpart of the
+other. The largest pieces, JVM side:
+
+    2 010  Conc.java      green threads, the scheduler
+    1 991  Rt.java        the interpreter
+    1 307  Builtins.java
+      653  Snap.java      snapshot format
+      646  Str.java
+      442  Gc.java        the collector
+      411  Codec.java
+      408  AotEmit.java
+      270  Pike.java      the regex VM
+
+**This is the remaining kin project, and it is about half of it.** The 91
+sources done are the easier half by construction: pure functions over integers
+and arrays. What is left owns mutable state, host threads and the object
+layout.
+
+`Pike.java` is the known next step and is already blocked on a NAMED kin
+capability — `^:mut` renders as by-value in Rust and by-reference in Java and
+C#, so a mutable host array cannot be passed portably. That is a `kin.lang`
+change, in the sibling repo.
+
+- [ ] Decide whether generating `Rt` is the goal or whether some of it stays
+      hand-written by design. Thirteen port tests and ~21 000 duplicated lines
+      turn on the answer, and nothing has stated it
+- [ ] The `^:mut` capability in `kin.lang`, which blocks `Pike` and probably
+      most of what follows it
+
 ### Port tests belong in kin (recorded 2026-09-11)
 
 The same fourteen runtime tests are hand-written TWICE:
