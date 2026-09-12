@@ -22,6 +22,14 @@ import {
 import { join, dirname, isAbsolute } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { varsOf } from './catalogue.mjs';
+// The guest driver, shared with `host/flint.mjs` and with whatever engine the
+// native CLI finds. One pump, three front ends.
+//
+// From `dist/`, NOT from `sdks/esm/`: the published package carries no
+// `sdks/esm/` at all, so an import that reaches out of the package works in
+// this checkout and is a missing module for everyone who installs it. `cli.mjs`
+// imports it the same way, and `sdks/cli/build` puts the copy there.
+import { instantiate } from '../dist/guest.js';
 
 /// Every path under `:fs` resolves under the granted root, and an escape is
 /// REFUSED rather than clamped.
@@ -174,6 +182,53 @@ export class Env {
         return c.str(process.cwd());
       default:
         throw new Error(`flint.sys.env has no ${v}`);
+    }
+  }
+}
+
+// -------------------------------------------------------------- flint.sys.wasm
+
+/// Running a compiled module.
+///
+/// THE ONE PLACE THE FRONT ENDS DIFFER IN KIND, and the one where node has the
+/// easy job: it already has a wasm engine, so `engine` reports itself and
+/// there is nothing to find, pin or reset. The native CLI carries no engine
+/// and has to go looking (`DECISIONS.md#wasm-engine`); `use` and `reset` exist
+/// here so that a program written against this namespace runs on both without
+/// asking which host it got.
+export class Wasm {
+  get name() { return 'flint.sys.wasm'; }
+  get vars() { return varsOf(this.name); }
+
+  invoke(v, args, policy, c) {
+    switch (v) {
+      case 'run': {
+        const path = strArg(args, 0, 'module');
+        const fn = strArg(args, 1, 'fn');
+        const argv = args[2] === undefined || args[2] === null ? [] : args[2];
+        if (!Array.isArray(argv)) throw new Error('run: args must be a vector');
+        // Synchronous throughout: `new WebAssembly.Module` compiles without a
+        // promise, and the guest driver's `run` is a pump, not a task. An
+        // `invoke` that returned a promise would have to be awaited by every
+        // caller of every service.
+        const mod = new WebAssembly.Module(readFileSync(path));
+        const inst = instantiate(mod, {
+          stepLimit: process.env.FLINT_STEP_LIMIT ? Number(process.env.FLINT_STEP_LIMIT) : 0,
+        });
+        const r = inst.run(fn, argv.map((a) => String(a)));
+        return c.map([[c.kw('code'), c.int(r.code)], [c.kw('out'), c.str(r.out)]]);
+      }
+      // node IS the engine. Reporting the interpreter that is already running
+      // is the honest answer, and it keeps `(engine)` non-nil on every host
+      // that can actually run something.
+      case 'engine':
+        return c.map([[c.kw('kind'), c.str('node')], [c.kw('path'), c.str(process.execPath)]]);
+      case 'use':
+        return c.str(strArg(args, 0, 'path'));
+      case 'reset':
+        return c.nil();
+      default:
+        throw new Error(`flint.sys.wasm has no ${v}`);
     }
   }
 }

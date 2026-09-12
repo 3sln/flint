@@ -54,6 +54,12 @@ export const CATALOGUE = [
     ['resolve-tag', [2]],
     ['fetch', [2]],
   ]],
+  ['flint.sys.wasm', [
+    ['run', [2, 3]],
+    ['engine', [0]],
+    ['use', [1]],
+    ['reset', [0]],
+  ]],
 ];
 
 /// The var list for one served namespace, by name.

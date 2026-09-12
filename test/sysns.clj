@@ -668,6 +668,34 @@
     (check "  ... and `:with` before the path lends it with no prompt at all"
            (str/includes? (:out r) "read: secret") (:out r))))
 
+;; --- flint.sys.wasm: the binary runs a module it compiled -----------------
+;;
+;; The ONE host operation that differs between the front ends in kind rather
+;; than in spelling (`DECISIONS.md#wasm-engine`). This closes the loop the
+;; namespace exists for: compile a module with the binary, then run it with the
+;; binary, on whatever engine the machine turned out to have.
+(let [p15 (str (fs/create-temp-dir))]
+  (spit (str p15 "/deps.edn") "{}")
+  (spit (str p15 "/m.cljc") "(ns m)\n(defn main [args] (str \"hello from \" (count args) \" args\"))\n")
+  (spit (str p15 "/w.cljc")
+        (str "(ns w (:require [flint.sys.wasm :as wasm]))\n"
+             "(defn go [_] (let [r (wasm/run \"m.wasm\" \"m/main\")]\n"
+             "               (str \"code=\" (:code r) \" out=\" (:out r))))\n"))
+  (let [c (sh p15 flint "compile" ":src" "." ":fn" "m/main" ":out" "m.wasm")]
+    (check "a module compiles, to be run by the namespace below"
+           (and (zero? (:exit c)) (fs/exists? (str p15 "/m.wasm"))) (:out c)))
+  ;; NOT GRANTED first: running a module is executing code, so it is a grant
+  ;; like any other and the ungranted case must fail closed.
+  (let [r (sh p15 flint "run" ":path" "." ":fn" "w/go")]
+    (check "without the grant it cannot run a module at all"
+           (and (not (zero? (:exit r))) (str/includes? (:out r) "no system port"))
+           (:out r)))
+  (let [r (sh p15 flint "run" ":path" "." ":fn" "w/go" ":with" "[wasm]")]
+    (check "a granted flint.sys.wasm/run executes the module"
+           (str/includes? (:out r) "hello from 0 args") (:out r))
+    (check "  ... and reports the module's exit code"
+           (str/includes? (:out r) "code=0") (:out r))))
+
 (if (pos? @fails)
   (do (println "sysns:" @fails "FAILURES") (System/exit 1))
   (println "sysns: ok"))

@@ -18,7 +18,7 @@ import {
 } from './artifacts.mjs';
 import { buildSpec, testRoots } from './spec.mjs';
 import { Policy } from './policy.mjs';
-import { Fs, Env, Slurp } from './sys.mjs';
+import { Fs, Env, Slurp, Wasm } from './sys.mjs';
 import { Npm, Mvn, Git } from './deps.mjs';
 import { capabilitiesFor } from './serve.mjs';
 import { VERSION } from './version.mjs';
@@ -130,6 +130,9 @@ export async function runSource(srcs, entry, args, caps, roots, { quiet = false 
     services.push(new Npm(), new Mvn(), new Git());
   }
   if (caps.some((c) => c === 'env' || c.startsWith('env:'))) services.push(new Env(args));
+  // Running a module is EXECUTING CODE, so it is a grant like any other
+  // (`DECISIONS.md#wasm-engine`).
+  if (caps.some((c) => c === 'wasm' || c.startsWith('wasm:'))) services.push(new Wasm());
   // Installed only when something is actually served. A program that was
   // granted nothing keeps the honest refusal instead of being handed a
   // transport that can reach nothing.

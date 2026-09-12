@@ -391,6 +391,7 @@ pub fn catalogue() -> Vec<(&'static str, Vec<(&'static str, &'static [u32])>)> {
         (npm.name_static(), npm.vars()),
         (mvn.name_static(), mvn.vars()),
         (crate::deps::Git.name_static(), crate::deps::Git.vars()),
+        (Wasm.name_static(), Wasm.vars()),
     ]
 }
 
@@ -502,4 +503,320 @@ impl Slurp {
     fn name_static(&self) -> &'static str {
         "flint.sys.slurp"
     }
+}
+
+// ------------------------------------------------------------ flint.sys.wasm
+
+/// Running a compiled module, from flint code.
+///
+/// THE ONE THING THE THREE FRONT ENDS DIFFER ON IN KIND. The native binary has
+/// flint's runtime compiled in, so it runs an IMAGE without help; node has a
+/// wasm engine; babashka has neither and shells out. Every other host
+/// operation is one idea with three implementations, and this was the
+/// exception that kept `flint.cli` telling its host to run things for it.
+///
+/// Served as a namespace, so flint code asks for it like anything else and
+/// each front end answers with whatever it has.
+///
+/// ## Finding an engine, once
+///
+/// A native binary carries no wasm engine and should not: embedding one costs
+/// megabytes for something most runs never do. So it LOOKS, in the order that
+/// asks least of the machine:
+///
+///   1. `jsc` -- JavaScriptCore, present on every mac, no install
+///   2. `node`, `bun`, `deno` -- whatever is already on PATH
+///   3. `wasmtime` -- fetched for the platform, and only as a last resort
+///
+/// The answer is remembered in `~/.flint/wasm-runner`, because the search is
+/// worth doing once and not once per invocation. `flint wasm reset` forgets it.
+pub struct Wasm;
+
+/// Where the chosen engine is remembered.
+fn runner_file() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".flint").join("wasm-runner"))
+}
+
+/// Candidates, in the order they are tried.
+///
+/// `jsc` FIRST and by absolute path: it ships with macOS and needs no install,
+/// which is the whole reason to prefer it, but it is not on anybody's PATH.
+fn candidates() -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let jsc = "/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc";
+    if std::path::Path::new(jsc).exists() {
+        out.push(("jsc".into(), jsc.into()));
+    }
+    // JAVASCRIPT ENGINES ONLY, and `wasmtime` is deliberately not here even
+    // when it is installed. The driver hands the engine a `.mjs`; wasmtime
+    // would be pinned, handed a file it cannot read, and fail on every run
+    // afterwards. Listing something we cannot drive is worse than listing
+    // nothing -- `DECISIONS.md#wasm-engine` records why the wasmtime path is a
+    // different piece of work.
+    for n in ["node", "bun", "deno"] {
+        if let Ok(p) = which(n) {
+            out.push((n.to_string(), p));
+        }
+    }
+    out
+}
+
+/// `command -v`, without a crate for it.
+fn which(name: &str) -> Result<String, ()> {
+    let path = std::env::var("PATH").map_err(|_| ())?;
+    for dir in path.split(':') {
+        let p = std::path::Path::new(dir).join(name);
+        if p.is_file() {
+            return Ok(p.to_string_lossy().to_string());
+        }
+    }
+    Err(())
+}
+
+/// The pinned engine, WITHOUT choosing one.
+///
+/// Separate from `engine()` on purpose: enquiring must not have the side effect
+/// of searching the machine and writing a file.
+pub fn pinned_engine() -> Option<(String, String)> {
+    let t = std::fs::read_to_string(runner_file()?).ok()?;
+    let (k, p) = t.trim().split_once(' ')?;
+    std::path::Path::new(p).exists().then(|| (k.to_string(), p.to_string()))
+}
+
+/// Everything on this machine that could run a module, best first.
+pub fn available_engines() -> Vec<(String, String)> {
+    candidates()
+}
+
+/// Forget the pinned engine. Absent is already forgotten, so this cannot fail.
+pub fn reset_engine() {
+    if let Some(f) = runner_file() {
+        let _ = std::fs::remove_file(f);
+    }
+}
+
+/// Pin one by hand, overruling the search.
+pub fn pin_engine(path: &str) -> Result<(), String> {
+    if !std::path::Path::new(path).exists() {
+        return Err(format!("no such engine: {path}"));
+    }
+    let kind = std::path::Path::new(path)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "custom".into());
+    let f = runner_file().ok_or("no HOME to remember the engine in")?;
+    if let Some(d) = f.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    std::fs::write(&f, format!("{kind} {path}\n")).map_err(|e| e.to_string())
+}
+
+/// The engine to use, remembered across runs.
+pub fn engine() -> Result<(String, String), String> {
+    if let Some(f) = runner_file() {
+        if let Ok(t) = std::fs::read_to_string(&f) {
+            let t = t.trim();
+            if let Some((k, p)) = t.split_once(' ') {
+                if std::path::Path::new(p).exists() {
+                    return Ok((k.to_string(), p.to_string()));
+                }
+            }
+        }
+    }
+    let found = candidates();
+    let Some((kind, path)) = found.into_iter().next() else {
+        return Err(String::from(
+            "no wasm engine found.\n\
+             flint carries no wasm engine and looks for a JavaScript one: jsc (ships with macOS), \
+             node, bun or deno.\n\
+             Install any of those, or `flint wasm use <path>` to name one.\n\
+             wasmtime is NOT usable here even if installed: driving it needs its C API rather \
+             than a subprocess (DECISIONS.md#wasm-engine).",
+        ));
+    };
+    if let Some(f) = runner_file() {
+        if let Some(d) = f.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let _ = std::fs::write(&f, format!("{kind} {path}\n"));
+    }
+    Ok((kind, path))
+}
+
+impl Wasm {
+    fn name_static(&self) -> &'static str {
+        "flint.sys.wasm"
+    }
+}
+
+impl Service for Wasm {
+    fn name(&self) -> &str {
+        "flint.sys.wasm"
+    }
+    fn vars(&self) -> Vec<(&'static str, &'static [u32])> {
+        vec![("run", &[2, 3]), ("engine", &[0]), ("use", &[1]), ("reset", &[0])]
+    }
+    fn invoke(&mut self, var: &str, args: &[Val], _p: &Policy) -> Answer {
+        let mut w = Wire::new();
+        match var {
+            // `(run module fn)` / `(run module fn args)` -- the FUNCTION IS
+            // NAMED, because a flint module has no entry point that is special
+            // (`DECISIONS.md#structured-ports` step 5).
+            "run" => {
+                let path = str_arg(args, 0, "module")?;
+                let f = str_arg(args, 1, "fn")?;
+                let argv: Vec<String> = match args.get(2) {
+                    None | Some(Val::Nil) => Vec::new(),
+                    Some(Val::Vector(xs)) => xs
+                        .iter()
+                        .map(|x| match x {
+                            Val::Str(s) => Ok(s.clone()),
+                            _ => Err(String::from("run: args must be strings")),
+                        })
+                        .collect::<Result<_, _>>()?,
+                    Some(_) => return Err("run: args must be a vector".into()),
+                };
+                let r = run_module(path, f, &argv)?;
+                w.map(2);
+                w.keyword(None, "code");
+                w.int(r.0 as i64);
+                w.keyword(None, "out");
+                w.string(&r.1);
+            }
+            // Which engine is pinned, WITHOUT choosing one. A program asking
+            // what is configured should not cause a filesystem search and a
+            // write as a side effect, so this reports the file and nothing more.
+            "engine" => {
+                let pinned = runner_file()
+                    .and_then(|f| std::fs::read_to_string(f).ok())
+                    .and_then(|t| t.trim().split_once(' ').map(|(k, p)| (k.to_string(), p.to_string())));
+                match pinned {
+                    Some((k, p)) => {
+                        w.map(2);
+                        w.keyword(None, "kind");
+                        w.string(&k);
+                        w.keyword(None, "path");
+                        w.string(&p);
+                    }
+                    None => {
+                        w.nil();
+                    }
+                }
+            }
+            "use" => {
+                let p = str_arg(args, 0, "path")?;
+                if !std::path::Path::new(p).exists() {
+                    return Err(format!("no such engine: {p}"));
+                }
+                let kind = std::path::Path::new(p)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "custom".into());
+                let f = runner_file().ok_or("no HOME to remember the engine in")?;
+                if let Some(d) = f.parent() {
+                    let _ = std::fs::create_dir_all(d);
+                }
+                std::fs::write(&f, format!("{kind} {p}\n")).map_err(|e| e.to_string())?;
+                w.string(p);
+            }
+            "reset" => {
+                if let Some(f) = runner_file() {
+                    let _ = std::fs::remove_file(f);
+                }
+                w.nil();
+            }
+            _ => return Err(format!("flint.sys.wasm has no {var}")),
+        }
+        Ok(w)
+    }
+}
+
+/// Run `f` in the module at `path`, on whatever engine this machine has.
+///
+/// The job travels in a GENERATED PRELUDE rather than argv, because argv is
+/// the thing four JavaScript shells disagree about most: jsc's module mode has
+/// no `process`, deno wants `--`, and bun follows node. A prelude that sets one
+/// global and imports the driver is the same on all four.
+fn run_module(path: &str, f: &str, argv: &[String]) -> Result<(i32, String), String> {
+    let (_kind, exe) = engine()?;
+    let root = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().and_then(|p| p.parent()).and_then(|p| p.parent()).map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let driver = root.join("host").join("run.js");
+    if !driver.exists() {
+        return Err(format!("the wasm driver is missing: {}", driver.display()));
+    }
+    let abs = std::fs::canonicalize(path).map_err(|e| format!("{path}: {e}"))?;
+    let job = format!(
+        "globalThis.__FLINT_JOB = {{path:{},fn:{},args:[{}],stepLimit:{}}};\nawait import({});\n",
+        js_string(&abs.to_string_lossy()),
+        js_string(f),
+        argv.iter().map(|a| js_string(a)).collect::<Vec<_>>().join(","),
+        std::env::var("FLINT_STEP_LIMIT").ok().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0),
+        js_string(&driver.to_string_lossy()),
+    );
+    let dir = std::env::temp_dir().join(format!("flint-wasm-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let jobfile = dir.join("job.mjs");
+    std::fs::write(&jobfile, job).map_err(|e| e.to_string())?;
+
+    let mut cmd = std::process::Command::new(&exe);
+    // Each shell needs its own words for "this file is a module, run it".
+    match std::path::Path::new(&exe).file_name().and_then(|s| s.to_str()).unwrap_or("") {
+        "jsc" => {
+            cmd.arg("-m");
+        }
+        "deno" => {
+            cmd.args(["run", "-A"]);
+        }
+        _ => {}
+    }
+    cmd.arg(&jobfile);
+    let out = cmd.output().map_err(|e| format!("{exe}: {e}"))?;
+    let _ = std::fs::remove_file(&jobfile);
+    let text = String::from_utf8_lossy(&out.stdout);
+    let last = text.lines().last().unwrap_or("").trim();
+    if last.is_empty() {
+        return Err(format!(
+            "the wasm engine produced no result\nengine: {exe}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    decode_result(last)
+}
+
+/// A JavaScript string literal. Everything the job carries -- paths, a function
+/// name, arguments -- is attacker-adjacent text being pasted into source, so it
+/// is escaped rather than quoted and hoped over.
+fn js_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// The driver's one line of JSON, back into a result.
+fn decode_result(line: &str) -> Result<(i32, String), String> {
+    let v: serde_json::Value =
+        serde_json::from_str(line).map_err(|e| format!("the wasm engine answered unreadably: {e}\n{line}"))?;
+    if let Some(e) = v.get("error").and_then(|e| e.as_str()) {
+        return Err(format!("the module failed:\n{e}"));
+    }
+    Ok((
+        v.get("code").and_then(|c| c.as_i64()).unwrap_or(0) as i32,
+        v.get("out").and_then(|o| o.as_str()).unwrap_or("").to_string(),
+    ))
 }

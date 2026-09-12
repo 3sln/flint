@@ -6238,3 +6238,113 @@ appeared in the top ten, so the saving is not measurable and is not claimed.
 where `bin/conform-hosts` is a two-minute gate — so the check moved from the
 expensive end of the suite to the cheap one, which is the part of this worth
 having.
+
+## wasm-engine
+
+**Ratified:** ☐ not signed off
+
+Recorded 2026-09-12. `flint.sys.wasm` is the served namespace for running a
+compiled module. It exists because running a module is the ONE host operation
+that differs between the three front ends in kind rather than in spelling, and
+that difference had been leaking upward: `bin/flint` shells out to `node` three
+times purely to execute wasm, and `flint.cli/run` returned `{:exec {...}}` —
+a task handed back for the host to run — because the CLI could not run one
+itself.
+
+### Why a native binary has no engine
+
+The native CLI carries flint's runtime compiled natively: the same interpreter,
+collector and builtins the wasm module is built from. What it does not carry is
+a **wasm engine**, and it should not. Embedding one costs megabytes in every
+copy of the binary for something most runs never do, and the binary's whole
+argument is that you get flint without installing an ecosystem.
+
+So it LOOKS for one, in the order that asks least of the machine:
+
+1. **`jsc`** — JavaScriptCore. Ships with macOS, needs no install, and is not
+   on anyone's `PATH`: it lives at
+   `/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc`.
+   Note `Helpers/`, not `Resources/` — the `Resources/` path is the one that
+   gets written down and it does not exist.
+2. **`node`, `bun`, `deno`** — whatever is already installed.
+
+**`wasmtime` is not in that list even when it is installed**, and that is the
+point of the list being short: the driver hands the engine a `.mjs`, so pinning
+wasmtime would mean handing it a file it cannot read and failing on every run
+afterwards. See "What is not built" below. Listing something that cannot be
+driven is worse than listing nothing.
+
+The answer is written to `~/.flint/wasm-runner` as `kind path`. The search is
+worth doing once, not once per invocation. `(wasm/reset)` forgets it and
+`(wasm/use path)` pins one by hand; on node both are no-ops that return
+successfully, so a program written against this namespace runs on either host
+without asking which one it got.
+
+### That the engines agree is measured, not assumed
+
+`out/conform.wasm` — the conformance suite, 524 648 bytes — run as
+`conform.runner/main` on each engine, output hashed:
+
+| engine | exit | md5 of stdout |
+|---|---|---|
+| `node host/flint.mjs` (the existing driver, reference) | 0 | `c64358649c2b` |
+| jsc | 0 | `c64358649c2b` |
+| node | 0 | `c64358649c2b` |
+| bun | 0 | `c64358649c2b` |
+| deno | 0 | `c64358649c2b` |
+
+Byte-identical on all four. This is the same standard `kin/scripts/verify`
+holds the three code generators to, and for the same reason: four engines that
+agree exactly are doing the same work, and four that nearly agree are four
+implementations of something nobody has specified.
+
+### What was portable already, and what was not
+
+Almost all of it. `sdks/esm/src/guest.js` and `codec.js` were written with no
+`node:` import, no `process` and no filesystem — the header of each says so —
+and that held up: the guest driver, the pump and the capability plumbing ran
+unchanged on all four engines. Two things did not, and they are the whole of
+`host/portable.js` (64 lines):
+
+* **`TextEncoder` / `TextDecoder`.** These are Web APIs, not ECMAScript. The
+  jsc shell has neither, and the codec asks only for UTF-8 — twenty lines.
+* **Reading a file.** `node:fs` covers node, bun and current deno. jsc has a
+  bare `readFile`, which needs `readFile(path, "binary")` or it hands back a
+  string.
+
+Two further differences were designed around rather than papered over:
+
+* **argv.** Four shells disagree: jsc's module mode has no `process`, deno
+  wants `--`, bun follows node. The job therefore travels in a generated
+  prelude that sets one global and imports the driver — identical on all four.
+  Everything it carries is escaped as a JS string literal (`js_string`),
+  because a module path and a function name are text being pasted into source.
+* **stdout.** `inst.run` CAPTURES the program's output rather than writing it,
+  so the driver prints exactly one line of JSON and nothing else. There is no
+  interleaving to get wrong, and no dependence on whether an engine spells
+  `process.stdout.write` or appends a newline to `print`.
+
+### Running a module is a grant
+
+`wasm` is a capability like `fs` or `env`, gated by presence in `:with`, and it
+has to be: `(wasm/run m "ns/f")` executes arbitrary code. It is not something
+the CLI does because it is able to.
+
+### What is not built
+
+**The wasmtime fallback.** The intended last resort — download the platform's
+`libwasmtime` and use it — is NOT implemented, and the "no engine found" error
+says so and names what was looked for.
+
+The reason is that it is not the same shape as the other three. The wasmtime
+**CLI** cannot drive this ABI: a flint module has no `_start` and no entry
+point (`DECISIONS.md#structured-ports` step 5), and `wasmtime run --invoke`
+cannot write arguments into the instance's memory, call `flint_call` and read
+the result back. Using wasmtime means embedding the **library** through its C
+API with `dlopen`, which is a different piece of work from spawning a process,
+and shipping a downloader for a native shared object is a supply-chain decision
+rather than a convenience.
+
+What this costs: a machine with no JavaScript engine at all gets a clear
+refusal instead of a download. On macOS that machine does not exist. On Linux
+without node, bun or deno it does, and that case is open.

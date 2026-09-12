@@ -734,6 +734,12 @@ fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
     if caps.iter().any(|c| c == "env" || c.starts_with("env:")) {
         host.serve(Box::new(crate::sys::Env { args: args.to_vec() }));
     }
+    // Running a module is EXECUTING CODE, so it is a grant like any other and
+    // not something the CLI does because it can. The engine behind it is found
+    // once and remembered (`DECISIONS.md#wasm-engine`).
+    if caps.iter().any(|c| c == "wasm" || c.starts_with("wasm:")) {
+        host.serve(Box::new(crate::sys::Wasm));
+    }
     // A booted pod is served whatever the grants say, because DECLARING one in
     // `deps.edn` is the grant: a pod that was started is a process this build
     // already chose to run, and refusing to talk to it afterwards would be a
@@ -1119,6 +1125,12 @@ fn usage() -> ! {
       Run every var marked `^:flint.check/test` under `:path`, and report.
       The suite is what is on the path; nothing has to be registered.
 
+  flint wasm [show | reset | use <path>]
+      The engine that runs a compiled module. This binary carries flint's
+      runtime but NO wasm engine, so it finds one -- JavaScriptCore on macOS,
+      else node, bun or deno -- the first time a program runs a module, and
+      remembers it. `reset` forgets it; `use` overrules the search.
+
   flint [:with [cap...]] <file> [args...]
       Run a STANDALONE SCRIPT: one file carrying its own configuration.
 
@@ -1352,6 +1364,44 @@ fn main() -> Result<()> {
         // It exists on this binary and not only on the development CLI because
         // a check system that runs on the compiler's own host and not on the
         // one that ships is a check system half the users cannot use.
+        // Managing the engine the binary FOUND, since it found it rather than
+        // shipping it (`DECISIONS.md#wasm-engine`). Three words, because the
+        // whole point of pinning is that this is rarely needed: show it, forget
+        // it, or overrule it.
+        "wasm" => {
+            match argv.get(1).map(|s| s.as_str()) {
+                None | Some("show") => match crate::sys::pinned_engine() {
+                    Some((kind, path)) => println!("{kind}  {path}"),
+                    None => {
+                        // NOT an error, and it does not go looking. Nothing is
+                        // wrong with a fresh install; the search happens when a
+                        // program first asks, not when somebody enquires.
+                        println!("no engine pinned yet -- one is found when a program first runs a module");
+                        let found = crate::sys::available_engines();
+                        if found.is_empty() {
+                            println!("and none is available: install node, bun or deno\n\
+                                      (wasmtime does not work here -- DECISIONS.md#wasm-engine)");
+                        } else {
+                            println!("available, in the order they would be tried:");
+                            for (k, p) in found {
+                                println!("  {k}  {p}");
+                            }
+                        }
+                    }
+                },
+                Some("reset") => {
+                    crate::sys::reset_engine();
+                    println!("forgotten -- the next run looks again");
+                }
+                Some("use") => {
+                    let p = argv.get(2).context("wasm use needs a path")?;
+                    crate::sys::pin_engine(p).map_err(|e| anyhow::anyhow!(e))?;
+                    println!("pinned {p}");
+                }
+                Some(other) => bail!("no such wasm command: {other}\nknown: show, reset, use <path>"),
+            }
+            Ok(())
+        }
         "test" => {
             let a = parse(&argv[1..])?;
             if a.srcs.is_empty() {
