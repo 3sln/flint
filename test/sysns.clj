@@ -571,6 +571,33 @@
     (check "a pod is found when deps.edn is a directory ABOVE the source root"
            (str/includes? (:out r) "pod says 6") (:out r))))
 
+
+;; --- `:checks`, independent of `:optimize` (`DECISIONS.md#checks`) ---------
+;;
+;; The two were inseparable: only `:optimize [perf]` removed checks, and the
+;; shipped binary did not even do that -- it emitted no `:features` at all, so
+;; a release module carried its own test code and a failing check threw from
+;; it. Tying them together is wrong in both directions, and the second one is
+;; what `bin/check-llvm` needs: it compares `[perf]` against `[size]` and
+;; asserts identical gas, which is only meaningful if both arms read the SAME
+;; source.
+(let [pb (str (fs/create-temp-dir))]
+  (spit (str pb "/deps.edn") "{:paths [\".\"]}\n")
+  (spit (str pb "/app.cljc")
+        (str "(ns app (:require [flint.check :refer [expect]]))\n"
+             "(defn main [_] #?(:flint/check (expect = 1 2)) \"survived\")\n"))
+  (let [run (fn [& opts]
+              (apply sh pb flint "compile" ":path" "." ":fn" "app/main"
+                     ":to" ":wasm" ":out" "m.wasm" opts)
+              (:out (sh pb "node" (str root "/host/flint.mjs") "m.wasm" "app/main")))]
+    (check "a failing check fires in a default build"
+           (str/includes? (run) "check failed") (run))
+    (check "  ... and `:checks false` removes it with no :optimize at all"
+           (str/includes? (run ":checks" "false") "survived") (run ":checks" "false"))
+    (check "  ... and `:checks true` KEEPS it under :optimize [perf]"
+           (str/includes? (run ":optimize" "[perf]" ":checks" "true") "check failed")
+           (run ":optimize" "[perf]" ":checks" "true"))))
+
 (if (pos? @fails)
   (do (println "sysns:" @fails "FAILURES") (System/exit 1))
   (println "sysns: ok"))

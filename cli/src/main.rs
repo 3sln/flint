@@ -180,8 +180,8 @@ fn source_ext(name: &str) -> &'static str {
 /// carries. Shared by `compile` and `run` so the two cannot drift.
 fn build_spec(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
               aot: bool, shake: bool, meta: &[(String, String)],
-              roots: Option<&[String]>) -> Result<String> {
-    build_spec_with(srcs, entry, slots, aot, shake, meta, roots, &[])
+              roots: Option<&[String]>, strip_checks: bool) -> Result<String> {
+    build_spec_with(srcs, entry, slots, aot, shake, meta, roots, &[], strip_checks)
 }
 
 /// The same, plus the pod namespaces this build booted.
@@ -283,7 +283,8 @@ fn workspace_entry(prefix: &str, w: &Workspace, fallback_name: &str) -> String {
 fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
                    aot: bool, shake: bool, meta: &[(String, String)],
                    roots: Option<&[String]>,
-                   pods: &[(String, Vec<String>)]) -> Result<String> {
+                   pods: &[(String, Vec<String>)],
+                   strip_checks: bool) -> Result<String> {
     let mut files: BTreeMap<String, String> = BTreeMap::new();
     for (p, body) in STDLIB {
         files.insert((*p).to_string(), (*body).to_string());
@@ -418,7 +419,19 @@ fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
             if !entry.is_empty() { out.push_str(&entry) }
         }
     }
-    out.push_str("] :builtins #{");
+    out.push_str("]");
+    // THE READER'S FEATURE SET, said rather than defaulted.
+    //
+    // Emitting nothing left the guest on `default-features`, which carries
+    // `:flint/check` -- so a release module built here contained its own test
+    // code and a failing check threw from it, whatever `:optimize` said.
+    //
+    // Said only when it differs from the default, so an ordinary build's spec
+    // is byte-identical to what it was.
+    if strip_checks {
+        out.push_str(" :features #{:flint}");
+    }
+    out.push_str(" :builtins #{");
     for k in slots.keys() {
         out.push_str(&edn_string(k));
         out.push(' ');
@@ -468,6 +481,21 @@ fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
 /// **Unrecognised tokens are ignored.** That is what makes the list safe to
 /// write against a newer flint than the one reading it -- asking for something
 /// this build has never heard of gets you its best effort, not a refusal.
+/// Whether `#?(:flint/check ...)` is read out of the source.
+///
+/// `:checks` WINS OVER `:optimize`, in both directions. `:optimize [perf]`
+/// removes checks (`DECISIONS.md#checks`), and that is the right default for a
+/// release build -- but tying the two together makes them inseparable, and they
+/// are separate questions. `:checks false` drops them from an interpreted
+/// build; `:checks true` keeps them in a compiled one, which is what lets two
+/// optimisation levels be compared while reading the SAME source.
+fn strip_checks(optimize: &[String], checks: Option<bool>) -> bool {
+    match checks {
+        Some(v) => !v,
+        None => wants_aot(optimize),
+    }
+}
+
 fn wants_aot(optimize: &[String]) -> bool {
     optimize
         .iter()
@@ -498,13 +526,14 @@ fn wants_aot(optimize: &[String]) -> bool {
 /// run` uses. `SLOTS_AOT` describes the wasm AOT module's table, which this
 /// artifact does not have: its natives are resolved by name.
 fn compile_llvm(srcs: &[PathBuf], entry: &str, out_path: &Path,
-                optimize: &[String]) -> Result<()> {
+                optimize: &[String], checks: Option<bool>) -> Result<()> {
     let aot = wants_aot(optimize);
+    let strip_checks = strip_checks(optimize, checks);
     let slots = parse_slots(SLOTS)?;
     // No shaking: shaking cuts a finished module down to what a program
     // reaches, and there is no module here to cut. The equivalent for a
     // natively linked artifact is the linker's own `--gc-sections`.
-    let spec = build_spec(srcs, entry, &slots, aot, false, &[], None)?;
+    let spec = build_spec(srcs, entry, &slots, aot, false, &[], None, strip_checks)?;
     let mut p = Program::load(COMPILER, 3_000_000_000)
         .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
     let r = p.run(&["llvm", &spec]);
@@ -532,7 +561,8 @@ fn compile_llvm(srcs: &[PathBuf], entry: &str, out_path: &Path,
 }
 
 fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize: &[String],
-           to: &str, meta: &[(String, String)]) -> Result<()> {
+           to: &str, meta: &[(String, String)], checks: Option<bool>) -> Result<()> {
+    let strip_checks = strip_checks(optimize, checks);
     // TWO TARGETS, NOT ONE ARM. `:to :llvm` emits LLVM IR -- text, no linker,
     // nothing to link -- and `:to :native` emits an executable, which is a
     // link. They shared an arm and a sentence ("emitting a native artifact
@@ -541,7 +571,7 @@ fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize: &[String],
     // that no IR emitter existed (`DECISIONS.md#llvm-ir-target`).
     match to.trim_start_matches(':') {
         "wasm" => {}
-        "llvm" => return compile_llvm(srcs, entry, out_path, optimize),
+        "llvm" => return compile_llvm(srcs, entry, out_path, optimize, checks),
         "native" => bail!(
             "`:to :native` is not built: an executable is a LINK, and this binary carries\n\
              no linker. `:to :llvm` emits the LLVM IR for the same program and needs none;\n\
@@ -553,7 +583,7 @@ fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize: &[String],
     let aot = wants_aot(optimize);
     let slots = parse_slots(if aot { SLOTS_AOT } else { SLOTS })?;
     let base = if aot { RUNTIME_AOT } else { RUNTIME };
-    let spec = build_spec(srcs, entry, &slots, aot, true, meta, None)?;
+    let spec = build_spec(srcs, entry, &slots, aot, true, meta, None, strip_checks)?;
 
     let mut p = Program::load(COMPILER, 3_000_000_000)
         .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
@@ -622,7 +652,7 @@ fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
         })
         .collect();
     let spec = build_spec_with(srcs, entry, &parse_slots(SLOTS)?, false, false, &[], roots,
-                               &pod_vars)?;
+                               &pod_vars, false)?;
     let mut c = Program::load(COMPILER, 3_000_000_000)
         .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
     let r = c.run(&["project", &spec]);
@@ -1081,6 +1111,13 @@ are conferring YOUR authority, and where you stand is what you are authorised
 over. It is also easy to misread, so it is said here. `cd` to the tree you mean
 to lend, or lend nothing.
 
+`:checks false` removes `#?(:flint/check ...)` from the source before it is
+read; `:checks true` keeps it. `:optimize [perf]` implies `false` and is the
+usual way to get it, but the two are SEPARATE questions: an interpreted release
+build wants its checks gone, and a comparison between optimisation levels wants
+them held constant so the two arms read the same source. `:checks` wins over
+whatever `:optimize` implies, in both directions.
+
 `:optimize` is an ordered preference: `[perf]` compiles every arity as well
 (bigger, much faster on arithmetic), `[size]` interprets. Unrecognised tokens
 are ignored, so a script written for a newer flint still runs here.
@@ -1113,6 +1150,15 @@ struct Args {
     to: Option<String>,
     grants: Vec<String>,
     optimize: Vec<String>,
+    // `:checks false` -- OFF INDEPENDENTLY OF OPTIMISATION.
+    //
+    // `:optimize [perf]` also removes them (`DECISIONS.md#checks`), but tying
+    // the two together is wrong in both directions: a release build that wants
+    // the interpreter cannot drop its checks, and a comparison that wants two
+    // optimisation levels to differ ONLY in compilation cannot have one of them
+    // silently reading different source. `None` means "whatever optimisation
+    // implies"; `Some(false)` means off whatever it implies.
+    checks: Option<bool>,
     meta: Vec<(String, String)>,
     args: Vec<String>,
     rest: Vec<String>,
@@ -1193,6 +1239,16 @@ fn parse(args: &[String]) -> Result<Args> {
                 a.optimize.extend(v);
                 i = n;
             }
+            ":checks" => {
+                let (v, n) = values(":checks", args, i)?;
+                let w = v.into_iter().next().unwrap_or_default();
+                a.checks = match w.as_str() {
+                    "false" | "off" | "no" => Some(false),
+                    "true" | "on" | "yes" => Some(true),
+                    other => bail!("`:checks {other}` is not true or false"),
+                };
+                i = n;
+            }
             ":args" => {
                 let (v, n) = values(":args", args, i)?;
                 a.args.extend(v);
@@ -1251,7 +1307,7 @@ fn main() -> Result<()> {
             if !a.grants.is_empty() {
                 meta.push(("capabilities".to_string(), a.grants.join(" ")));
             }
-            compile(&a.srcs, &entry, Path::new(&out), &a.optimize, &to, &meta)
+            compile(&a.srcs, &entry, Path::new(&out), &a.optimize, &to, &meta, a.checks)
         }
         // `test` is `run` with a generated entry: the compiler collects every
         // var marked `^:flint.check/test` into `flint.check.registry` and this

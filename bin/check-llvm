@@ -9,6 +9,13 @@
 #     because a target that silently means another target is worse than absent;
 #   * `clang` accepts it -- LLVM's verifier is the only reader that can say the
 #     control flow is well formed;
+# `:checks false` ON BOTH ARMS, and that is load-bearing. `[perf]` implies it
+# and `[size]` does not, so leaving it implicit made the two arms read
+# DIFFERENT SOURCE and charge different gas -- 260 622 against 260 831 on
+# `arith`. The gas assertion below is the whole proof that the LLVM emitter is
+# faithful, so the arms have to differ in COMPILATION and nothing else. Saying
+# it explicitly is what makes that true.
+#
 #   * the linked program answers what `flint run` answers -- which is the only
 #     check that reaches the emitted code rather than the text;
 #   * the linked program charges THE SAME GAS with compiled arities as without.
@@ -130,7 +137,8 @@ cargo build --release -p flint-native-abi > /tmp/flint-llvm-cargo.log 2>&1 \
 for n in $PROGS; do
   for k in perf size; do
     ./target/release/flint compile :path "$D" :fn "$n/main" \
-      :to :llvm :out "$D/$n.$k.ll" :optimize "[$k]" >/dev/null 2>"$D/$n.$k.err" \
+      :to :llvm :out "$D/$n.$k.ll" :optimize "[$k]" :checks false \
+      >/dev/null 2>"$D/$n.$k.err" \
       || { cat "$D/$n.$k.err"; fail "compile $n :to :llvm :optimize [$k]"; }
 
     # IT IS IR, AND IT IS NOT WASM. A `.ll` beginning with the wasm magic would
