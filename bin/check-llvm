@@ -1,0 +1,186 @@
+#!/bin/sh
+# `:to :llvm`, end to end: emit IR, link it, run it, and check what it answers.
+#
+# IR THAT COMPILES IS NOT IR THAT IS CORRECT, and the checks below say so in
+# four separate ways, because each one alone has a hole:
+#
+#   * it is IR at all, and not a wasm module under a `.ll` name -- the failure
+#     the assertion this replaces was guarding against, and still the worst one,
+#     because a target that silently means another target is worse than absent;
+#   * `clang` accepts it -- LLVM's verifier is the only reader that can say the
+#     control flow is well formed;
+#   * the linked program answers what `flint run` answers -- which is the only
+#     check that reaches the emitted code rather than the text;
+#   * the linked program charges THE SAME GAS with compiled arities as without.
+#     `DECISIONS.md#two-builds` makes gas a production feature, so a chunk that
+#     charges for an instruction it did not run is a bug rather than a rounding
+#     error -- and it is the check that catches a mis-chunked body whose ANSWER
+#     happens to come out right, which is most of them.
+#
+# The programs are `test/aot.clj`'s, for the same reason it has them: each one
+# reaches a different part of the emitter, and the last two are regressions that
+# cost days on the wasm side. Two artifacts come from ONE program each time,
+# `[perf]` against `[size]`, so any difference is the emitter and cannot be
+# anything else.
+#
+# `DECISIONS.md#llvm-ir-target`.
+set -e
+cd "$(dirname "$0")/.."
+fail() { echo; echo "FAILED: $1"; exit 1; }
+
+# A LINKER IS REQUIRED HERE AND NOT IN `flint compile`. That is the whole split
+# this target rests on: emitting IR needs nothing, and turning IR into a program
+# is the user's `clang`. So this script demands one and `flint` never does.
+command -v clang >/dev/null 2>&1 \
+  || fail "clang is not on PATH: linking the emitted IR is what it is for"
+
+# The first four bytes, as hex. A wasm module's `\0asm` is `0061736d`.
+magic_of() { head -c 4 "$1" | od -An -t x1 | tr -d ' \n'; }
+
+D=/tmp/flint-llvm
+rm -rf "$D" && mkdir -p "$D"
+
+# THE GUARD IS PROBED, not reasoned about. A check on an artifact that is
+# always the right shape is indistinguishable from no check at all until the
+# day it is not (AGENTS.md 5), so this hands it a real wasm header and a real
+# `.ll` first line and requires it to tell them apart. BOTH arms, because one
+# of them passing is also what a broken guard looks like.
+selftest() {
+  printf '\0asm\1\0\0\0' > "$D/probe-wasm"
+  [ "$(magic_of "$D/probe-wasm")" = 0061736d ] \
+    || fail "self-test: a wasm module was not recognised as one, so the check below is vacuous"
+  printf '; flint program, as LLVM IR.\n' > "$D/probe-ll"
+  [ "$(magic_of "$D/probe-ll")" != 0061736d ] \
+    || fail "self-test: LLVM IR was mistaken for wasm"
+  rm -f "$D/probe-wasm" "$D/probe-ll"
+}
+selftest
+
+# Straight-line arithmetic in a loop -- the specialised integer ops inline, and
+# the back edge that is the one preemption point in compiled code.
+cat > "$D/arith.cljc" <<'EOF'
+(ns arith)
+(defn run [n] (loop [i 0 acc 0] (if (< i n) (recur (inc i) (+ acc i)) acc)))
+(defn main [_] (str (run 20000)))
+EOF
+# Persistent collections: natives, and the opcodes the emitter hands back.
+cat > "$D/colls.cljc" <<'EOF'
+(ns colls)
+(defn main [_]
+  (let [m (reduce (fn [m i] (assoc m i (* i i))) {} (range 500))
+        v (reduce conj [] (range 500))]
+    (str [(count m) (get m 30) (reduce + 0 v) (peek v)])))
+EOF
+# Higher-order calls: closures, upvalues, and `aot_call`'s frame discipline.
+cat > "$D/hof.cljc" <<'EOF'
+(ns hof)
+(defn adder [k] (fn [x] (+ x k)))
+(defn main [_]
+  (str [(count (filterv odd? (range 300)))
+        (reduce + 0 (mapv (fn [x] (* x 2)) (range 300)))
+        (apply + (range 50))
+        ((adder 7) 35)]))
+EOF
+cat > "$D/strs.cljc" <<'EOF'
+(ns strs (:require [clojure.string :as str]))
+(defn main [_]
+  (let [ws (str/split "the quick brown fox jumps" #" ")]
+    (str [(count ws) (str/join "-" ws) (str/upper-case (first ws))])))
+EOF
+# A `try` whose handler has to be re-entered -- an unwind is the one route back
+# into compiled code that is not an ip the emitter handed over.
+cat > "$D/handler.cljc" <<'EOF'
+(ns handler)
+(defn boom [x] (if (> x 3) (throw (ex-info "b" {})) x))
+(defn main [_]
+  (str (mapv (fn [i] (try (boom i) (catch Exception _ -1))) (range 6))))
+EOF
+# Recursion deep enough to need many frames, and the SLOW PATH out of the
+# inline multiply. A fixnum is 48 bits; a product past that is still an integer
+# and still correct, so it has to leave through `aot_int_binop` and come back --
+# which is the one arm of the specialised operations a small program never
+# reaches. `fact 20` is the largest factorial inside a 64-bit integer, and
+# flint overflows rather than promoting (there are no bigints to reach).
+cat > "$D/deep.cljc" <<'EOF'
+(ns deep)
+(defn fib [n] (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+(defn fact [n] (if (< n 2) 1 (* n (fact (- n 1)))))
+(defn main [_] (str [(fib 20) (fact 20) (* 12345678 123456789)]))
+EOF
+# A PARKED THREAD coming back into compiled code, at the size `test/aot.clj`
+# found it: the bug it is written for took four days on the wasm emitter, and
+# nothing smaller reproduces it.
+cat > "$D/park.cljc" <<'EOF'
+(ns park (:require [flint.thread :as t] [flint.port :as p]))
+(defn- go [] (count (mapv (fn [i] {:id i :kids (vec (range (rem i 4)))})
+                          (range 33))))
+(defn main [_]
+  (let [[tx rx] (p/channel 1 "test")]
+    (t/spawn (fn [] (p/send tx :go)))
+    (p/receive rx)
+    (pr-str (go))))
+EOF
+
+PROGS="arith colls hof strs handler deep park"
+
+echo "  the archive an emitted module links against"
+cargo build --release -p flint-native-abi > /tmp/flint-llvm-cargo.log 2>&1 \
+  || { tail -20 /tmp/flint-llvm-cargo.log; fail "cargo build -p flint-native-abi"; }
+
+for n in $PROGS; do
+  for k in perf size; do
+    ./target/release/flint compile :path "$D" :fn "$n/main" \
+      :to :llvm :out "$D/$n.$k.ll" :optimize "[$k]" >/dev/null 2>"$D/$n.$k.err" \
+      || { cat "$D/$n.$k.err"; fail "compile $n :to :llvm :optimize [$k]"; }
+
+    # IT IS IR, AND IT IS NOT WASM. A `.ll` beginning with the wasm magic would
+    # mean `:to :llvm` had quietly become `:to :wasm`, which is exactly what the
+    # refusal that used to live here was protecting against.
+    #
+    # HEX, not `od -An -c`. The first version of this grepped that output for
+    # `a s m` and could never match, because `od -c` pads every byte to a
+    # three-character column and the magic renders as `\0   a   s   m`. It was
+    # a guard that could only pass -- AGENTS.md 5's failure mode, in the very
+    # check written to catch that failure -- so `selftest` above now feeds it a
+    # real wasm module and requires it to fire.
+    [ "$(magic_of "$D/$n.$k.ll")" != 0061736d ] \
+      || fail "$n.$k.ll is a wasm module, not LLVM IR"
+    head -1 "$D/$n.$k.ll" | grep -q '^; flint program, as LLVM IR' \
+      || { head -3 "$D/$n.$k.ll"; fail "$n.$k.ll does not look like flint's LLVM IR"; }
+
+    clang "$D/$n.$k.ll" target/release/libflintnative.a -o "$D/$n.$k" \
+      > "$D/$n.$k.link" 2>&1 || { tail -20 "$D/$n.$k.link"; fail "clang $n.$k.ll"; }
+  done
+
+  # `[perf]` carries compiled arities and `[size]` carries none. Measured, not
+  # asserted: it is the only thing that tells "compiled the arities" apart from
+  # "said so", which is the same reason `bin/test` weighs the two wasm modules.
+  big=$(wc -c < "$D/$n.perf.ll"); small=$(wc -c < "$D/$n.size.ll")
+  [ "$big" -gt "$small" ] \
+    || fail "$n: :optimize [perf] emitted no compiled arities ($big against $small)"
+  grep -q '^define internal void @flint_aot_0(' "$D/$n.perf.ll" \
+    || fail "$n: [perf] emitted no compiled arity"
+  grep -q '@flint_aot_table = constant \[0 x ptr\]' "$D/$n.size.ll" \
+    || fail "$n: [size] emitted compiled arities anyway"
+
+  want="$(./target/release/flint run :path "$D" :fn "$n/main")" || fail "flint run $n"
+  for k in perf size; do
+    got="$("$D/$n.$k")" || { echo "    $got"; fail "$n.$k did not run"; }
+    [ "$got" = "$want" ] || {
+      echo "    want: $want"
+      echo "    got : $got"
+      fail "$n.$k answered differently from flint run"
+    }
+  done
+
+  # THE SAME GAS, not merely the same answer. Both programs go through the same
+  # runtime and the same image; the only difference is that one runs compiled
+  # arities, so a count that differs means a chunk charged for an instruction it
+  # did not run, or ran one it did not charge for.
+  gp=$(FLINT_STEPS=1 "$D/$n.perf" 2>&1 >/dev/null | sed -n 's/^steps //p')
+  gs=$(FLINT_STEPS=1 "$D/$n.size" 2>&1 >/dev/null | sed -n 's/^steps //p')
+  [ -n "$gp" ] && [ -n "$gs" ] || fail "$n: no step count came back"
+  [ "$gp" = "$gs" ] \
+    || fail "$n: compiled arities charged $gp gas against the interpreter's $gs"
+  echo "    $n: $want  (gas $gp, ll $big/$small)"
+done

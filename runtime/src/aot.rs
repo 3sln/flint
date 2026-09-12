@@ -36,30 +36,42 @@ use crate::value::Value;
 /// table entry's wasm type is exactly `(i32,i32,i32,i32) -> ()` and a
 /// `call_indirect` through it is unambiguous -- the same reasoning as
 /// `NativeFn`.
-pub type AotEntry = extern "C" fn(*mut Rt, u32, u32, u32, u32);
+///
+/// The last parameter is `usize`, not `u32`: it is an ADDRESS (the sync block),
+/// and an address is pointer-width. On wasm32 `usize` IS `u32`, so the wasm
+/// type of this table entry is unchanged; on a 64-bit host it is what makes the
+/// same signature mean the same thing (`DECISIONS.md#llvm-ir-target`).
+pub type AotEntry = extern "C" fn(*mut Rt, u32, u32, u32, usize);
 
-/// What compiled code reads after any call back into Rust. Two i32 loads rather
+/// What compiled code reads after any call back into Rust. Two loads rather
 /// than two calls: the value stack is a `Vec` and can be reallocated by a push,
 /// so the base cannot be cached across a call.
+///
+/// Every field is `usize`. They were `u32` when the only consumer was a wasm
+/// module, where that is the same type; the LLVM target
+/// (`DECISIONS.md#llvm-ir-target`) is the same emitter aimed at a 64-bit host,
+/// where a truncated `stack` pointer is a wild store on the first push. `usize`
+/// is byte-identical under `wasm32`, so the wasm layout is untouched --
+/// `size_of::<AotSync>()` is asserted at the bottom of this file for both.
 #[repr(C)]
 #[derive(Default)]
 pub struct AotSync {
     /// Byte address of `roots.stack[0]`.
-    pub stack: u32,
+    pub stack: usize,
     /// `roots.stack_top`, as an index.
-    pub top: u32,
+    pub top: usize,
     /// Byte address of `roots.shared.consts[0]`.
-    pub consts: u32,
+    pub consts: usize,
     /// Byte address of `roots.shared.globals[0]`.
-    pub globals: u32,
+    pub globals: usize,
     /// Base of the object heap, which object addresses are relative to.
-    pub heap: u32,
+    pub heap: usize,
     /// Address of `Rt::steps` and of `Rt::checkpoint`. Gas is charged inline,
     /// per chunk, so compiled code needs to reach both without a call
     /// (`DECISIONS.md#two-builds` makes gas a production feature, and construe's
     /// gates depend on the count being the same as the interpreter's).
-    pub steps: u32,
-    pub checkpoint: u32,
+    pub steps: usize,
+    pub checkpoint: usize,
 }
 
 pub static mut SYNC: AotSync = AotSync {
@@ -121,24 +133,24 @@ fn refresh(rt: &mut Rt) {
         // value stack, and the top moves constantly. Writing the other five as
         // well cost seven stores on every one of five call sites, three of them
         // per Clojure call.
-        SYNC.stack = rt.roots.stack.as_ptr() as u32;
-        SYNC.top = rt.roots.stack_top as u32;
+        SYNC.stack = rt.roots.stack.as_ptr() as usize;
+        SYNC.top = rt.roots.stack_top;
         if !SYNC_FIXED {
             SYNC_FIXED = true;
-            SYNC.consts = rt.roots.shared.consts.as_ptr() as u32;
-            SYNC.globals = rt.roots.shared.globals.as_ptr() as u32;
-            SYNC.heap = rt.gc.sp.base_addr();
-            SYNC.steps = core::ptr::addr_of!(rt.steps) as u32;
-            SYNC.checkpoint = core::ptr::addr_of!(rt.checkpoint) as u32;
+            SYNC.consts = rt.roots.shared.consts.as_ptr() as usize;
+            SYNC.globals = rt.roots.shared.globals.as_ptr() as usize;
+            SYNC.heap = rt.gc.sp.base_addr() as usize;
+            SYNC.steps = core::ptr::addr_of!(rt.steps) as usize;
+            SYNC.checkpoint = core::ptr::addr_of!(rt.checkpoint) as usize;
         }
         #[cfg(feature = "diagnostics")]
         {
             SYNC_DRIFT[0] += 1;
-            if SYNC.consts != rt.roots.shared.consts.as_ptr() as u32
-                || SYNC.globals != rt.roots.shared.globals.as_ptr() as u32
-                || SYNC.heap != rt.gc.sp.base_addr()
-                || SYNC.steps != core::ptr::addr_of!(rt.steps) as u32
-                || SYNC.checkpoint != core::ptr::addr_of!(rt.checkpoint) as u32
+            if SYNC.consts != rt.roots.shared.consts.as_ptr() as usize
+                || SYNC.globals != rt.roots.shared.globals.as_ptr() as usize
+                || SYNC.heap != rt.gc.sp.base_addr() as usize
+                || SYNC.steps != core::ptr::addr_of!(rt.steps) as usize
+                || SYNC.checkpoint != core::ptr::addr_of!(rt.checkpoint) as usize
             {
                 SYNC_DRIFT[1] += 1;
             }
@@ -158,8 +170,8 @@ pub fn forget_fixed() {
 /// the interpreter hands it to compiled code as a parameter, so a body makes no
 /// call at all on the way in.
 #[no_mangle]
-pub extern "C" fn aot_prologue() -> u32 {
-    unsafe { core::ptr::addr_of!(SYNC) as u32 }
+pub extern "C" fn aot_prologue() -> usize {
+    unsafe { core::ptr::addr_of!(SYNC) as usize }
 }
 
 /// `NATIVE`. Runs inside compiled code -- a native is a Rust call either way, so
@@ -386,4 +398,46 @@ const _: () = {
     // store it produces. If it ever stops being true, fail here rather than in
     // emitted code.
     assert!(core::mem::size_of::<Value>() == 8);
+    // Seven pointer-width fields, no padding. BOTH emitters hard-code these
+    // offsets -- `flint.aot` as `S-STACK`..`S-CHK` for a 4-byte word,
+    // `flint.llvm` as a struct type for an 8-byte one -- so the layout is
+    // asserted here rather than trusted at either end.
+    assert!(core::mem::size_of::<AotSync>() == 7 * core::mem::size_of::<usize>());
 };
+
+/// The compiled arities of a natively linked program
+/// (`DECISIONS.md#llvm-ir-target`).
+///
+/// On wasm a `slot` indexes `__indirect_function_table`, which the module
+/// already has. Natively there is no table, so the emitted module carries one
+/// and hands it over before the program runs -- which is exactly what
+/// `native::resolve_natives` does for builtins, and for the same reason: an
+/// index only means something inside the artifact that produced it.
+#[cfg(not(target_arch = "wasm32"))]
+static mut AOT_TABLE: (*const AotEntry, usize) = (core::ptr::null(), 0);
+
+/// Register a natively linked program's compiled arities. `slot` 1 is
+/// `table[0]`; slot 0 stays "not compiled", as `AotFn` documents.
+///
+/// # Safety
+/// `table` must point at `n` function pointers that live as long as the
+/// program. The emitted module puts them in a constant global, so they do.
+#[cfg(not(target_arch = "wasm32"))]
+#[no_mangle]
+pub unsafe extern "C" fn flint_aot_register(table: *const AotEntry, n: usize) {
+    unsafe { AOT_TABLE = (table, n) };
+}
+
+/// The compiled arity at `slot`, or `None` if nothing was registered there.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn registered(slot: u32) -> Option<AotEntry> {
+    unsafe {
+        let (p, n) = AOT_TABLE;
+        let i = slot as usize;
+        if p.is_null() || i == 0 || i > n {
+            None
+        } else {
+            Some(*p.add(i - 1))
+        }
+    }
+}

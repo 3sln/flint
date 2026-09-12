@@ -139,8 +139,11 @@
                                 :len (+ 1 nb)
                                 :b (subvec (vec code) (inc ip) (+ ip 1 nb))})))))))))
 
-(defn- u16 [bs] (bit-or (nth bs 0) (bit-shift-left (nth bs 1) 8)))
-(defn- i16 [bs] (let [v (u16 bs)] (if (>= v 0x8000) (- v 0x10000) v)))
+;; Public because `flint.llvm` decodes the same operand bytes. One reader of
+;; the instruction stream, not two: an emitter that restated the widths would
+;; be a second table that agrees until it does not (AGENTS.md §1).
+(defn u16 [bs] (bit-or (nth bs 0) (bit-shift-left (nth bs 1) 8)))
+(defn i16 [bs] (let [v (u16 bs)] (if (>= v 0x8000) (- v 0x10000) v)))
 
 (defn jump-target [{:keys [op ip len b]}]
   (when (JUMPS op) (+ ip len (i16 b))))
@@ -448,7 +451,9 @@
 ;; chose this one. The slow path is a bigint or an overflow; it does not
 ;; deserve a boundary in the module for every `+` in the program.
 
-(def ^:private FIXNUM-BITS 0x0000FFFFFFFFFFFF)
+;; Public for the same reason `u16` is: `flint.llvm` boxes fixnums with the
+;; same mask, and a second copy of it is a second thing to get wrong.
+(def FIXNUM-BITS 0x0000FFFFFFFFFFFF)
 
 (defn- is-fixnum
   "Leaves i32 1 if the i64 on the wasm stack is tagged fixnum."
@@ -613,7 +618,18 @@
       ;; instruction. That is what lets this emitter be COMPLETE from the first
       ;; version instead of refusing a whole function over one rare opcode, and
       ;; it is cheap for the same reason re-entry is.
-      (let [[r-ip r-block] (resume-after op ip len chunk-of)]
+      ;; `k`, not `op`. `op` is the BYTE EMITTER defined above, and passing it
+      ;; here made `resume-after`'s `(= op :tail-call)` compare a function to a
+      ;; keyword -- always false, so the tail-call arm that whole docstring is
+      ;; about never ran. Found by writing `flint.llvm` against the same
+      ;; function and having to decide which of the two arguments was meant.
+      ;;
+      ;; Latent rather than live, which is why nothing caught it: a TAIL_CALL
+      ;; replaces the frame, so `enter` overwrites the `aot_ip` this registered
+      ;; before anything could resume at it. It is still the wrong ip to
+      ;; publish, and it is exactly the one the docstring says cost a debugging
+      ;; session (`DECISIONS.md#llvm-ir-target`).
+      (let [[r-ip r-block] (resume-after k ip len chunk-of)]
         (bail helpers ip r-ip r-block)))))
 
 (defn- emit-chunk

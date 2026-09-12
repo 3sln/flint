@@ -15,6 +15,7 @@
             [flint.project :as project]
             [flint.wasm :as w]
             [flint.bundle :as bundle]
+            [flint.llvm :as llvm]
             [flint.wasmshake :as wshake]
 
             [clojure.string :as str]
@@ -103,6 +104,80 @@
               out (if p3 out (flint.rt/b-conj! out (bit-and t 255)))]
           (recur (+ i 4) out))))))
 
+(defn- build-image
+  "Resolve every namespace a program requires, and compile them to an image
+  builder.
+
+  The half of `compile-to-wasm` that has nothing to do with wasm, which is why
+  it is here rather than there: `compile-to-llvm` needs exactly this and
+  nothing else of it, and a second copy of the resolver wiring is a second
+  place for a reader tag or a workspace grant to go missing (AGENTS.md §1).
+
+  `builtins` is a PARAMETER rather than derived here, and that is not
+  indecision: the wasm and LLVM targets take it from the keys of `:slots`,
+  because a target with a slot map has already been told what the runtime
+  carries, and `compile-project` takes `:builtins` because its caller has no
+  slot map to take it from. Both are always the same set in practice. Deriving
+  one from the other here would make that coincidence load-bearing.
+
+  Answers `{:missing ..}`, `{:refused ..}` or `{:builder ..}`."
+  [spec builtins]
+  (let [files (:files spec)
+        features (or (:features spec) flint.reader/default-features)
+        entry (:entry spec)
+        entry-ns (symbol (namespace entry))
+        ;; The namespace RESOLVER (`DECISIONS.md#workspace-capabilities`). This used to be a
+        ;; lambda here that answered source text and nothing else, which is why
+        ;; reader tags worked from the CLI and silently did not through the
+        ;; SDK: the CLI knew which project a file belonged to and this did not.
+        ;; Now both front doors produce the same thing.
+        resolve-ns (project/files-resolver files (:workspaces spec))
+        ;; `:roots` is how `flint test` compiles: its entry is generated and
+        ;; is on no source path, so resolving from it would report the entry
+        ;; itself missing. Absent, the entry is the root as always.
+        {:keys [sources order missing refused]}
+        (project/resolve-project resolve-ns entry-ns features (:roots spec))]
+    (if (seq missing)
+      {:missing (vec missing)}
+      (if (seq refused)
+        {:refused (vec refused)}
+        (let [result (compiler/compile-image
+                      ;; `:tags` and `:workspace` travel WITH the source. This
+                      ;; used to hand on `:src` and `:file` only, and the compiler
+                      ;; reads each file again -- so a tag the resolver bound was
+                      ;; known to `collect` and unknown here, and `#x` read as an
+                      ;; unbound tag however carefully the workspace declared it.
+                      ;; `compiler.cljc` says a file is read three times and a
+                      ;; value only one reader knows is one the others get wrong;
+                      ;; this was that, and the SDK having no tags at all is why
+                      ;; nothing caught it (`DECISIONS.md#reader-tags`, `workspace-capabilities`).
+                      {:sources (into {} (map (fn [e] [(key e) {:src (:src (val e))
+                                                                :file (:file (val e))
+                                                                :tags (:tags (val e))
+                                                                :workspace (:workspace (val e))
+                                                                ;; The DIALECT and the PRELUDE travel
+                                                                ;; with them, and for the same reason:
+                                                                ;; this map is rebuilt field by field,
+                                                                ;; so anything not named here is
+                                                                ;; silently dropped between the
+                                                                ;; resolver and the compiler
+                                                                ;; (`DECISIONS.md#dialects-and-preludes`).
+                                                                :dialect (:dialect (val e))
+                                                                :prelude (:prelude (val e))
+                                                                :grants (:grants (val e))
+                                                                ;; A VIRTUAL namespace has no
+                                                                ;; `:src` and must not be read
+                                                                ;; (`DECISIONS.md#workspace-capabilities` step 4).
+                                                                :virtual (:virtual (val e))
+                                                                :vars (:vars (val e))}])
+                                              sources))
+                       :order (vec (filter (fn [n] (contains? sources n)) order))
+                       :entry entry
+                       :exports (or (:exports spec) [])
+                       :builtins builtins
+                       :features features})]
+          {:builder (:builder result) :stats (:stats result)})))))
+
 (defn compile-project
   "Compile from an ENTRY and a map of source files, resolving `:require`s here.
 
@@ -131,63 +206,14 @@
   and stopping makes fixing a dependency list an n-round conversation."
   [spec-edn]
   (let [spec (reader/read-one spec-edn)
-        files (:files spec)
-        features (or (:features spec) flint.reader/default-features)
-        entry (:entry spec)
-        entry-ns (symbol (namespace entry))
-        ;; The namespace RESOLVER (`DECISIONS.md#workspace-capabilities`). This used to be a
-        ;; lambda here that answered source text and nothing else, which is why
-        ;; reader tags worked from the CLI and silently did not through the
-        ;; SDK: the CLI knew which project a file belonged to and this did not.
-        ;; Now both front doors produce the same thing.
-        resolve-ns (project/files-resolver files (:workspaces spec))
-        ;; `:roots` is how `flint test` compiles: its entry is generated and
-        ;; is on no source path, so resolving from it would report the entry
-        ;; itself missing. Absent, the entry is the root as always.
-        {:keys [sources order missing refused]}
-        (project/resolve-project resolve-ns entry-ns features (:roots spec))]
-    (if (seq missing)
-      {:missing (vec missing)}
-      (if (seq refused)
-        {:refused (vec refused)}
-      (let [result (compiler/compile-image
-                    ;; `:tags` and `:workspace` travel WITH the source. This
-                    ;; used to hand on `:src` and `:file` only, and the compiler
-                    ;; reads each file again -- so a tag the resolver bound was
-                    ;; known to `collect` and unknown here, and `#x` read as an
-                    ;; unbound tag however carefully the workspace declared it.
-                    ;; `compiler.cljc` says a file is read three times and a
-                    ;; value only one reader knows is one the others get wrong;
-                    ;; this was that, and the SDK having no tags at all is why
-                    ;; nothing caught it (`DECISIONS.md#reader-tags`, `workspace-capabilities`).
-                    {:sources (into {} (map (fn [e] [(key e) {:src (:src (val e))
-                                                              :file (:file (val e))
-                                                              :tags (:tags (val e))
-                                                              :workspace (:workspace (val e))
-                                                              ;; The DIALECT and the PRELUDE travel
-                                                              ;; with the source too, and for the
-                                                              ;; same reason as `:tags`: this map is
-                                                              ;; rebuilt field by field, so anything
-                                                              ;; not named here is silently dropped
-                                                              ;; between the resolver and the
-                                                              ;; compiler.
-                                                              :dialect (:dialect (val e))
-                                                              :prelude (:prelude (val e))
-                                                              :grants (:grants (val e))
-                                                              ;; A VIRTUAL namespace has no
-                                                              ;; `:src` and must not be read
-                                                              ;; (`DECISIONS.md#workspace-capabilities` step 4).
-                                                              :virtual (:virtual (val e))
-                                                              :vars (:vars (val e))}])
-                                            sources))
-                     :order (vec (filter (fn [n] (contains? sources n)) order))
-                     :entry entry
-                     :exports (or (:exports spec) [])
-                     :builtins (or (:builtins spec) #{})
-                     :features features})
-            builder (:builder result)]
-        {:image (base64 (img/emit builder {}))
-         :natives (img/natives builder)})))))
+        built (build-image spec (or (:builtins spec) #{}))]
+    (if (:missing built)
+      {:missing (:missing built)}
+      (if (:refused built)
+        {:refused (:refused built)}
+        (let [builder (:builder built)]
+          {:image (base64 (img/emit builder {}))
+           :natives (img/natives builder)})))))
 
 (defn compile-to-wasm
   "Compile a program and splice it into a PREBUILT runtime module, producing a
@@ -216,62 +242,14 @@
   manipulation on a finished module."
   [spec-edn base-b64]
   (let [spec (reader/read-one spec-edn)
-        files (:files spec)
-        features (or (:features spec) flint.reader/default-features)
         entry (:entry spec)
-        entry-ns (symbol (namespace entry))
         slots (:slots spec)
-        ;; The namespace RESOLVER (`DECISIONS.md#workspace-capabilities`). This used to be a
-        ;; lambda here that answered source text and nothing else, which is why
-        ;; reader tags worked from the CLI and silently did not through the
-        ;; SDK: the CLI knew which project a file belonged to and this did not.
-        ;; Now both front doors produce the same thing.
-        resolve-ns (project/files-resolver files (:workspaces spec))
-        ;; `:roots` is how `flint test` compiles: its entry is generated and
-        ;; is on no source path, so resolving from it would report the entry
-        ;; itself missing. Absent, the entry is the root as always.
-        {:keys [sources order missing refused]}
-        (project/resolve-project resolve-ns entry-ns features (:roots spec))]
-    (if (seq missing)
-      {:missing (vec missing)}
-      (if (seq refused)
-        {:refused (vec refused)}
-      (let [result (compiler/compile-image
-                    ;; `:tags` and `:workspace` travel WITH the source. This
-                    ;; used to hand on `:src` and `:file` only, and the compiler
-                    ;; reads each file again -- so a tag the resolver bound was
-                    ;; known to `collect` and unknown here, and `#x` read as an
-                    ;; unbound tag however carefully the workspace declared it.
-                    ;; `compiler.cljc` says a file is read three times and a
-                    ;; value only one reader knows is one the others get wrong;
-                    ;; this was that, and the SDK having no tags at all is why
-                    ;; nothing caught it (`DECISIONS.md#reader-tags`, `workspace-capabilities`).
-                    {:sources (into {} (map (fn [e] [(key e) {:src (:src (val e))
-                                                              :file (:file (val e))
-                                                              :tags (:tags (val e))
-                                                              :workspace (:workspace (val e))
-                                                              ;; The DIALECT and the PRELUDE travel
-                                                              ;; with the source too, and for the
-                                                              ;; same reason as `:tags`: this map is
-                                                              ;; rebuilt field by field, so anything
-                                                              ;; not named here is silently dropped
-                                                              ;; between the resolver and the
-                                                              ;; compiler.
-                                                              :dialect (:dialect (val e))
-                                                              :prelude (:prelude (val e))
-                                                              :grants (:grants (val e))
-                                                              ;; A VIRTUAL namespace has no
-                                                              ;; `:src` and must not be read
-                                                              ;; (`DECISIONS.md#workspace-capabilities` step 4).
-                                                              :virtual (:virtual (val e))
-                                                              :vars (:vars (val e))}])
-                                            sources))
-                     :order (vec (filter (fn [n] (contains? sources n)) order))
-                     :entry entry
-                     :exports (or (:exports spec) [])
-                     :builtins (set (keys slots))
-                     :features features})
-            builder (:builder result)
+        built (build-image spec (set (keys slots)))]
+    (if (:missing built)
+      {:missing (:missing built)}
+      (if (:refused built)
+        {:refused (:refused built)}
+      (let [builder (:builder built)
             m (w/parse (base64-decode base-b64))
             aot? (boolean (:aot spec))
             ;; BEFORE the image is emitted: `compile-arities` writes each
@@ -330,16 +308,53 @@
          :arities (when res (:total res))
          :shaken (when shaken (second shaken))})))))
 
+(defn compile-to-llvm
+  "Compile a program to ONE LLVM IR module (`DECISIONS.md#llvm-ir-target`).
+
+  `spec` is `compile-to-wasm`'s, minus everything about a wasm module: there is
+  no base module, no table to splice into, and no shaking, because there is no
+  finished artifact here to cut down. What comes out is text.
+
+  `:aot` compiles every arity it can to an LLVM function
+  (`flint.llvm/compile-arities`); without it the module is the program image
+  and the two calls that start it, and every arity is interpreted.
+
+  NOTHING IS LINKED HERE and nothing needs to be. That was the error in the
+  refusal this replaces: it gave `:to :native`'s reason -- a linker -- for
+  `:to :llvm`'s absence, and the actual reason was that no emitter existed."
+  [spec-edn]
+  (let [spec (reader/read-one spec-edn)
+        built (build-image spec (set (keys (:slots spec))))]
+    (if (:missing built)
+      {:missing (:missing built)}
+      (if (:refused built)
+        {:refused (:refused built)}
+        (let [builder (:builder built)
+              aot? (boolean (:aot spec))
+              ;; BEFORE the image is emitted, for the same reason the wasm path
+              ;; compiles arities first: this writes each one's slot into the
+              ;; builder, and an image emitted first would carry none of them.
+              res (when aot? (llvm/compile-arities builder))
+              ;; EMPTY slots, unlike the wasm path. A natively linked program
+              ;; resolves its natives BY NAME against the host registry, the
+              ;; way `flint run` does -- a table index would name a table this
+              ;; artifact does not have (`DECISIONS.md#construe-integration-bar`).
+              image (img/emit builder {})]
+          {:ll (llvm/emit-module image (or (:ir res) "") (or (:names res) []))
+           :compiled (when res (:compiled res))
+           :arities (when res (:total res))})))))
+
 (defn main [args]
   ;; Two entries, chosen by the first argument. `spec` is the original: the
   ;; caller resolved every namespace and handed over a finished map, which is
   ;; what the bootstrap does because babashka is already reading files.
   ;; `project` is the one a host with no Clojure reader can use.
   (let [mode (first args)
-        known? (if (= mode "project") true (= mode "wasm"))
+        known? (or (= mode "project") (= mode "wasm") (= mode "llvm"))
         [mode spec-edn] (if known? [mode (second args)] ["spec" mode])
         r (cond
             (= mode "wasm") (compile-to-wasm spec-edn (nth args 2 ""))
+            (= mode "llvm") (compile-to-llvm spec-edn)
             (= mode "project") (compile-project spec-edn)
             :else (compile-to-base64 spec-edn))]
     (cond
@@ -364,6 +379,9 @@
       ;; A module comes back alone: its native slots are already in it, so
       ;; there is no import order for the host to apply.
       (:module r) (:module r)
+      ;; LLVM IR is TEXT and leaves as text -- no base64 on the way out, which
+      ;; is the one visible difference from every other target here.
+      (:ll r) (:ll r)
       :else
       ;; One string out: base64 image, newline, then the native import order,
       ;; one per line, which is what the host needs to assign slots.

@@ -332,9 +332,16 @@ impl Space {
     }
     /// Where object addresses are measured from. Compiled code needs it to read
     /// a slot without a call back into Rust (`DECISIONS.md#emit-wasm-instead-of-dispatch`).
+    ///
+    /// `usize`, not `u32`. This is a HOST pointer -- `ptr()` two functions up
+    /// adds an `Addr` to it -- and the `as u32` that used to be here was the
+    /// same truncation `Value::as_heap` already has a comment about: right
+    /// while the only reader was a wasm module, and a wild base everywhere
+    /// else. The LLVM target is the everywhere else, and the symptom was a
+    /// `SIGSEGV` on the first `:upval` (`DECISIONS.md#llvm-ir-target`).
     #[inline(always)]
-    pub fn base_addr(&self) -> u32 {
-        self.base as u32
+    pub fn base_addr(&self) -> usize {
+        self.base as usize
     }
     #[inline(always)]
     pub fn read_u64(&self, addr: Addr) -> u64 {

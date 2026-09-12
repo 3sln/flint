@@ -2850,9 +2850,11 @@ A related seam, also measured: the native CLI does NOT read `:paths` from
 workspace identity and capabilities. It is partially project-aware and nothing
 said where the line falls.
 
-Still to do: `:to :llvm`, the remaining cross-compilation backends, nREPL, and
-the `{:args :capabilities}` entry-map wrapping (arguments arrive today as the
-bare vector, not yet wrapped).
+Still to do: `:to :native`, the remaining cross-compilation backends, nREPL,
+and the `{:args :capabilities}` entry-map wrapping (arguments arrive today as
+the bare vector, not yet wrapped). **`:to :llvm` is built** as of 2026-09-11
+(`llvm-ir-target`); this line said it was not, and said so for one reason that
+covered two targets.
 
 **Maven's transitive dependency resolution is REQUIRED, not cancelled.** The
 status line here said "deliberately cancelled — see the measurement below"
@@ -3477,6 +3479,15 @@ The distinction matters because the refusal in `cli/src/main.rs` compounds it:
 reason — "emitting a native artifact needs a linker" — that applies only to the
 second. Emitting IR is writing a `.ll` or `.bc` file and needs no linker. The
 real blocker for `:to :llvm` is that no IR emitter exists. The JVM and CLR ports are the rest of this document; see
+**Status (per the record; not independently verified): partly built.** The native target (flint's own runtime, compiled
+through LLVM to run with no wasm engine present at all) works, and `bin/flint`
+is built on it — the compiler running as native code took a compile from
+15.6 s to 3.5 s, in a 2.1 MB binary rather than 7.1 MB. **Native AOT is now
+built** (2026-09-11, `llvm-ir-target`): `flint compile :to :llvm
+:optimize [perf]` emits compiled arities as LLVM functions against the same
+helper ABI the wasm emitter uses, and `nativeabi/` is the archive they link
+against. This line said native AOT was not built, and it was not until that
+change. The JVM and CLR ports are the rest of this document; see
 `jvm-runtime` and `clr-runtime`.
 
 ### What was decided
@@ -4750,3 +4761,227 @@ perturbing one arity and watching it fail.
 * **Whether `run` should grow the image path.** It would need the loader to
   assign native slots by name at load time, which is a runtime change rather
   than a packaging one.
+---
+
+## llvm-ir-target
+
+**`:to :llvm` emits IR; `:to :native` would emit a program**
+
+**Ratified:** ☐ not signed off
+
+**Status (built and measured 2026-09-11, in this change): `:to :llvm` is BUILT.
+`:to :native` is not, and now refuses for its own reason.** `bin/check-llvm`
+emits IR for seven programs, links each one with `clang`, and every one answers
+what `flint run` answers and charges the same gas compiled as interpreted:
+`arith` 260 831, `colls` 97 323, `hof` 38 591, `strs` 10 157, `handler` 1 728,
+`deep` 253 129, `park` 8 690. `park` is a green thread parked mid-bail and
+`handler` is an unwind into a catch, so the two hardest re-entry routes are
+covered. NOT covered, and listed in full below: `:to :native`, any host for the
+emitted program, 32-bit targets, and any performance claim whatsoever.
+
+### What was wrong before
+
+`cli/src/main.rs` had ONE match arm for two targets:
+
+```rust
+"llvm" | "native" => bail!(
+    "`:to :llvm` is not built yet: emitting a native artifact needs a linker,
+     and this binary carries none. ..."),
+```
+
+Two different mistakes are stacked in that. The first is that `:to :llvm` and
+`:to :native` are not the same target: **LLVM IR is text, and emitting text
+needs no linker.** The second is that the stated reason therefore belonged to
+the other arm — what actually blocked `:to :llvm` was that no IR emitter
+existed, and the message named a blocker that would still be there after the
+emitter was written.
+
+That mattered beyond tidiness. A refusal that names the wrong obstacle sends
+the next reader to solve the wrong problem: "carry a linker" is a large piece
+of work and was never what this needed.
+
+### What was decided
+
+**`:to :llvm` emits one self-contained `.ll` and runs no linker.** It carries
+the program image as a constant, every arity the emitter can take as an LLVM
+function, a table naming them, and a `main`. Turning that into an executable is
+`clang prog.ll libflintnative.a -o prog` — the user's linker, the user's step.
+
+**`:to :native` stays unbuilt and now refuses for its own reason**: an
+executable IS a link, this binary carries no linker, and the message points at
+`:to :llvm` as the thing that gets you to one command away.
+
+**The emitter is `flint.aot` aimed at a different target, not a second
+emitter.** `flint.llvm` requires `flint.aot` and reads the opcode table, the
+decoder, the chunk boundaries, the stack-depth dataflow and `resume-after` out
+of it. What is duplicated is emission and nothing else. Two emitters that
+each carried their own idea of where a chunk begins would agree on every
+program that never took the disagreeing path — which is precisely the drift
+AGENTS.md §1 is about, and the one class of bug that does not show up in a
+test until it shows up in production.
+
+### Why the shape is the same, when LLVM would allow a different one
+
+`flint.aot`'s chunk-and-dispatcher layout exists for two reasons, and only one
+of them is about wasm.
+
+The wasm-specific one is that **you cannot branch INTO structured control
+flow**, so re-entry has to be arranged through a `br_table` at the top of a
+loop, and a backward jump pays it. LLVM has no such rule, so this emitter drops
+that half: a chunk is a basic block, a jump is `br label %chunkN` in either
+direction, and the `switch` on the entry block runs once on the way in.
+
+The one that is NOT about wasm is why **a Clojure call does not become a native
+call**. A green thread parks by unwinding to the interpreter; recursion that
+lived on the machine stack could not be suspended, and deep recursion would
+fault instead of raising a catchable `StackOverflowError`. Both are load
+bearing (`threads-and-ports`). So `aot_call` pushes a frame and RETURNS here
+exactly as it does for wasm, and the interpreter enters the callee — which may
+itself be compiled. Nothing in `emit-wasm-instead-of-dispatch`'s argument for
+that was ever about wasm.
+
+The third property — re-entry at every chunk — is kept for the reason 0013
+measured: a quarter of the work in a program that parks happens in a frame that
+has already been resumed.
+
+### The runtime ABI had to widen, and it was byte-identical to do so
+
+`AotSync`'s seven fields, `aot_prologue`'s result and `AotEntry`'s last
+parameter were all `u32`. On wasm32 that is the right type. On a 64-bit host it
+is a TRUNCATED POINTER, and a truncated `stack` is a wild store on the first
+push.
+
+They are now `usize`, which is `u32` under wasm32 — so the wasm layout, the
+wasm function types and the offsets `flint.aot` hard-codes are all unchanged,
+and a `const` assertion at the bottom of `runtime/src/aot.rs` says so in both
+builds rather than leaving it to be believed.
+
+`mem::Region::base_addr` had the same truncation (`self.base as u32`) and is
+now `usize` for the same reason. That one was not theoretical: it was the first
+SIGSEGV, on the first `:upval`, because the heap base compiled code added an
+object offset to was the low half of a real pointer.
+
+**And the emitter's own 32-bit assumption went with it.** `flint.aot` writes
+`i32.wrap_i64` to turn a `Value` into a heap address, which IS the mask on
+wasm, where an address is 32 bits by the platform's definition. `mem::Addr` is
+a `u64` and `Value::as_heap` takes 48 payload bits, so `flint.llvm` masks to 48
+rather than wrapping to 32.
+
+### Natively a slot is an index, not an address
+
+On wasm, `AotFn::slot` indexes `__indirect_function_table` and `call_aot`
+transmutes it. A natively linked program has no such table, so the emitted
+module carries one (`@flint_aot_table`) and registers it before the program
+runs, and `call_aot` looks the slot up there. That is the same answer
+`native::resolve_natives` already gives for builtins, for the same reason: an
+index only means something inside the artifact that produced it.
+
+`call_aot`'s `unreachable!("compiled arities exist only in a wasm module")` was
+correct when it was written and is now reachable — for an artifact from
+`:to :llvm` and nothing else. An image whose `aot` table is empty never asks;
+one that asks without having registered still gets a panic rather than a jump
+through whatever integer the slot happened to be.
+
+### What is NOT built, precisely
+
+* **`:to :native`.** Unbuilt, refuses, says why.
+* **A host.** A program linked from `:to :llvm` runs and computes and its
+  output comes back. It has NO host: `flint run` serves `fs`, `env`, `slurp`
+  and pods from the CLI, and none of that is in `nativeabi/`. A program that
+  opens a port parks for ever rather than being answered. The interface for
+  fixing that is `Program::drain_events`, and it belongs in whatever embeds the
+  archive — but today nothing does.
+* **32-bit hosts.** The sync block is emitted as seven `i64`s. LLVM IR is not
+  target-independent about integer widths, and a 32-bit native target would
+  need that struct type re-emitted (and nothing else).
+* **`opt`/`llc` are not run.** flint emits IR at `-O0` shape — allocas for
+  every piece of body state — and leaves optimisation to whoever compiles it.
+  That is deliberate for a first version: `mem2reg` is the first thing any
+  pipeline runs, and an emitter that pre-optimised would be a second optimiser
+  to keep correct. **No performance claim is made here.** `emit-wasm-instead-of-dispatch`'s
+  measurements are about the wasm emitter, and nothing in this change measured
+  the LLVM one against the interpreter.
+
+### A latent bug in `flint.aot`, found by writing the second emitter
+
+`flint.aot/emit-instr`'s bail arm called `(resume-after op ip len chunk-of)`
+where `op` is the BYTE EMITTER defined above it, not the instruction's opcode.
+`resume-after` tests `(= op :tail-call)`, so it compared a function to a
+keyword — always false, and the tail-call arm that its own long docstring is
+about never ran.
+
+It is latent rather than live: a TAIL_CALL replaces the frame, so `enter`
+overwrites the `aot_ip` this published before anything could resume at it.
+It is still the wrong ip to publish, and it is exactly the one the docstring
+says cost a debugging session. Fixed to pass `k`.
+
+Worth recording for the reason rather than the fix: **it was invisible to
+review and to the suite, and visible the moment a second reader had to decide
+what the argument meant.** Nothing about writing the LLVM emitter tested
+`flint.aot`; what found the bug was having to answer "which of the two things
+called `op` does this want?"
+
+### How it is checked
+
+`bin/check-llvm`, from `bin/test`. Four checks, because each alone has a hole:
+
+1. **It is IR, and not a wasm module under a `.ll` name.** This is what the
+   assertion it replaces was guarding — a target that silently means a
+   different target is worse than an absent one — and it stays guarded.
+2. **`clang` accepts it.** LLVM's verifier is the only reader that can say the
+   control flow is well formed.
+3. **The linked program answers what `flint run` answers.**
+4. **The linked program charges THE SAME GAS with compiled arities as
+   without.** `two-builds` makes gas a production feature and `resource-limits`
+   makes it a bound on work, so a chunk that charges for an instruction it did
+   not run is a bug rather than a rounding error — and this is the check that
+   catches a mis-chunked body whose ANSWER happens to come out right, which is
+   most of them. `test/aot.clj` makes the same argument for the wasm emitter.
+
+Both `.ll`s in that check come from ONE program, `[perf]` against `[size]`, so
+a difference is the emitter and cannot be anything else.
+
+**And check 1 could not fail when it was written.** It was
+
+    head -c 4 "$f" | od -An -c | grep -q 'a s m'
+
+and `od -c` pads every byte to a three-character column, so a wasm module
+renders as `\0   a   s   m` and that pattern never matched anything. The one
+guarantee being carried forward from the assertion this replaces was carried by
+a grep that could only pass — `checks`'s vacuous gate, and the shape
+AGENTS.md §5 describes: no error, no warning, and a green suite, which is what
+a working check also produces.
+
+It is now four hex bytes against `0061736d`, and it is PROBED rather than
+reasoned about, twice: `selftest` runs before anything else and requires the
+comparison to tell a real wasm header from a real `.ll` first line, both arms;
+and by hand, the whole script with `:to :llvm` rewritten to `:to :wasm` and
+nothing else changed, so `flint` really does write a wasm module under a `.ll`
+name — it fails with "arith.perf.ll is a wasm module, not LLVM IR", against an
+unmodified control that passes.
+
+The gas comparison was wrong first too, and in a way that reads exactly like an
+emitter bug: the interpreted arm reported 104 steps against the compiled arm's
+104 652. Nothing was miscounted. With no gas limit the interpreter runs
+`NoBudget`, whose `tick` is a constant the optimiser deletes along with the
+counter (`resource-limits`), while compiled code charges through `aot_*`
+regardless — the two arms were not comparable, and a limit is what turns
+counting on. That is AGENTS.md §3's "state what each arm does end to end"
+arriving as a number that looked like a finding.
+
+### Open, and needing sign-off
+
+* **Whether `nativeabi/` is where the archive belongs.** It is a fifth crate
+  whose whole content is two entry points. The alternative is `sdks/c`, which
+  already emits a `staticlib` — but that is an SDK ABI for embedding flint, and
+  this is the runtime half of one compiler target. They were kept apart on that
+  reading; merging them is defensible.
+* **Whether `:to :llvm` should imply `:optimize [perf]`.** Today it mirrors
+  `:to :wasm`: without `perf` the module is the image plus the two calls that
+  start it, and every arity is interpreted. That is a useful artifact (it is
+  how the gas comparison gets its control) but it is arguably not what somebody
+  asking for LLVM IR meant.
+* **Whether the emitted `main` should exist at all.** A module carrying `main`
+  is an executable-shaped artifact; a library-shaped one would export the image
+  and the table and let the embedder write the entry. Both are one line apart
+  and only one can be the default.

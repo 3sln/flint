@@ -130,6 +130,17 @@ grep -E "^    |FAIL" /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
 echo "== capability: possession is not the check, the grant table is (0021, 0022)"
+# `test/capability.clj` COMPILES AGAINST `sdks/esm/dist/flint.js`, which is
+# generated and gitignored -- so it is absent from a fresh clone, and this line
+# is 179 lines above the `./sdks/esm/build` that makes it. Every tree that has
+# ever built the SDK hides that, which is every developer's and none of CI's:
+# `.github/workflows/test.yml` runs `./bin/test` on a fresh checkout with no
+# SDK step, and runs on pull requests only, so nothing has opened one since the
+# dependency landed. Built here if it is missing rather than by reordering the
+# suite, because the SDK section below tests the DISTRIBUTABLE and has to keep
+# running where it does.
+[ -f sdks/esm/dist/flint.js ] || ./sdks/esm/build > /tmp/flint-test.out 2>&1 \
+  || { tail -25 /tmp/flint-test.out; fail "sdks/esm/build (bootstrap for test/capability.clj)"; }
 bb test/capability.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/capability.clj"; }
 
 # Privacy is enforced, not documented. Paired refusals and positive controls:
@@ -410,13 +421,36 @@ echo "    :optimize [perf] $fast bytes against [size] $small, unknown token skip
 ./bin/flint inspect /tmp/flint-smoke/size.wasm 2>/dev/null | grep -q 'capabilities "fs"' \
   || { ./bin/flint inspect /tmp/flint-smoke/size.wasm; fail ":meta did not reach the artifact"; }
 
-# `:to :llvm` is not built. It must say so rather than quietly emitting wasm --
-# a target that silently means a different target is worse than an absent one.
+# `:to :native` is not built. It must say so rather than quietly emitting
+# something else -- a target that silently means a different target is worse
+# than an absent one. This assertion used to cover `:to :llvm` as well, and
+# that was the bug: they are two targets, and only one of them needs a linker
+# (`DECISIONS.md#llvm-ir-target`).
 if ./target/release/flint compile :path /tmp/flint-smoke :fn smoke/main \
-     :to :llvm :out /tmp/flint-smoke/no.wasm >/dev/null 2>&1; then
-  fail ":to :llvm claimed to work"
+     :to :native :out /tmp/flint-smoke/no.out >/dev/null 2>&1; then
+  fail ":to :native claimed to work"
 fi
-[ ! -f /tmp/flint-smoke/no.wasm ] || fail ":to :llvm wrote a file anyway"
+[ ! -f /tmp/flint-smoke/no.out ] || fail ":to :native wrote a file anyway"
+
+# `:to :llvm` IS built, and the guarantee the old assertion was really making --
+# that it does not quietly emit wasm -- is now made by checking the artifact
+# rather than by refusing to produce one. `bin/check-llvm` emits IR for seven
+# programs, links each with clang, and holds the result to the same bar
+# `test/aot.clj` holds the wasm emitter to: the same answer AND the same
+# instruction count as the interpreter.
+echo
+echo "== llvm: IR out, linked by clang, answering what the interpreter answers"
+# THE SCRIPT'S OWN STATUS, not a grep of its output, and for the reason at the
+# top of this file: a pipeline reports its LAST command, so `check-llvm | tee`
+# would report `tee`.
+if ! ./bin/check-llvm > /tmp/flint-llvm.out 2>&1; then
+  cat /tmp/flint-llvm.out
+  fail "bin/check-llvm"
+fi
+# `sed -n ...p`, not `grep`: under `set -e` a grep that matches nothing exits 1
+# and ends the suite with no message at all, which would turn a change to
+# check-llvm's output format into a silent abort here.
+sed -n 's/^    \([a-z]*:\)/  \1/p' /tmp/flint-llvm.out
 
 ls -l target/release/flint | awk '{printf "    binary %.1f MB\n", $5/1048576}'
 

@@ -303,6 +303,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "flint-native-abi"
+version = "0.0.1"
+dependencies = [
+ "flint-conc",
+ "flint-rt",
+]
+
+[[package]]
 name = "flint-rt"
 version = "0.1.0"
 dependencies = [

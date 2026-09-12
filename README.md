@@ -1899,6 +1899,7 @@ runner (turn a hang into a frame trace).
 
 ```
 runtime/          the Rust core: mem, value, obj, gc, hash, collections, vm, abi
+nativeabi/        the archive a `flint compile :to :llvm` artifact links against
 units-src/        the parser units (adapted crates), the concurrency unit, and a
                   toy unit for tests
 units/            built units: wasm objects + manifests  (bin/build-units)
