@@ -92,6 +92,17 @@ agree **exactly** — a measurement that cannot tell its arms apart is not
 evidence they are equal — and a test that fails on a port but passes on native
 right after a native change.
 
+**A VERIFICATION EXPIRES.** Checking a feature when it lands says it worked
+against that tree. Every merge after it may have moved the ground underneath —
+a refactor that rebuilds a record field by field drops the field you added; a
+lookup rule fixed in one reader and not its twin; a fix landed in machinery one
+front end drives and the other does not. None of that shows up as a failing
+test, because the test was written against the behaviour that changed.
+
+So before calling something done, ask what you have claimed and not re-checked
+since. Confirming a bug and confirming its fix are different acts, and only the
+second one tells you what shipped.
+
 **Measure at the boundary the decision is about.** A question about a shipped
 artefact is answered by invoking that artefact. A finer-grained unit is not
 automatically more rigorous: `ns/instruction` is right for throughput and wrong
