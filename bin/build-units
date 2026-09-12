@@ -52,9 +52,10 @@ mkdir -p out units/.sysroot
 echo "  dependencies (cargo, once)"
 # The excludes are the HOST crates. `flint-cli` embeds a compiler and reads
 # files; `flint` is the Rust SDK and does the same; `flint-c` is that SDK's C
-# ABI. None can be built for wasm32, and a workspace-wide build tries -- so the
-# exclusion is not a preference, it is the difference between this working and
-# not.
+# ABI; `flint-native-abi` is the archive a `:to :llvm` artifact links against,
+# which is a native `staticlib` by definition. None can be built for wasm32,
+# and a workspace-wide build tries -- so the exclusion is not a preference, it
+# is the difference between this working and not.
 # NOT silenced. This used to be `>/dev/null 2>&1`, and when a host-only binary
 # was added to a unit crate without `required-features`, cargo failed here,
 # `set -e` ended the script, and `bin/build-dist` printed "==> production units"
@@ -62,6 +63,7 @@ echo "  dependencies (cargo, once)"
 # A build step that can fail has to be able to say why.
 if ! PATH="$TC/bin:$PATH" cargo build --release --target wasm32-unknown-unknown \
        --workspace --exclude flint-cli --exclude flint --exclude flint-c \
+       --exclude flint-native-abi \
        > /tmp/flint-units-cargo.log 2>&1; then
   echo "  the dependency build FAILED:"
   sed 's/^/    /' /tmp/flint-units-cargo.log | tail -30

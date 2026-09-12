@@ -410,13 +410,33 @@ echo "    :optimize [perf] $fast bytes against [size] $small, unknown token skip
 ./bin/flint inspect /tmp/flint-smoke/size.wasm 2>/dev/null | grep -q 'capabilities "fs"' \
   || { ./bin/flint inspect /tmp/flint-smoke/size.wasm; fail ":meta did not reach the artifact"; }
 
-# `:to :llvm` is not built. It must say so rather than quietly emitting wasm --
-# a target that silently means a different target is worse than an absent one.
+# `:to :native` is not built. It must say so rather than quietly emitting
+# something else -- a target that silently means a different target is worse
+# than an absent one. This assertion used to cover `:to :llvm` as well, and
+# that was the bug: they are two targets, and only one of them needs a linker
+# (`DECISIONS.md#llvm-ir-target`).
 if ./target/release/flint compile :path /tmp/flint-smoke :fn smoke/main \
-     :to :llvm :out /tmp/flint-smoke/no.wasm >/dev/null 2>&1; then
-  fail ":to :llvm claimed to work"
+     :to :native :out /tmp/flint-smoke/no.out >/dev/null 2>&1; then
+  fail ":to :native claimed to work"
 fi
-[ ! -f /tmp/flint-smoke/no.wasm ] || fail ":to :llvm wrote a file anyway"
+[ ! -f /tmp/flint-smoke/no.out ] || fail ":to :native wrote a file anyway"
+
+# `:to :llvm` IS built, and the guarantee the old assertion was really making --
+# that it does not quietly emit wasm -- is now made by checking the artifact
+# rather than by refusing to produce one. `bin/check-llvm` emits IR for seven
+# programs, links each with clang, and holds the result to the same bar
+# `test/aot.clj` holds the wasm emitter to: the same answer AND the same
+# instruction count as the interpreter.
+echo
+echo "== llvm: IR out, linked by clang, answering what the interpreter answers"
+# THE SCRIPT'S OWN STATUS, not a grep of its output, and for the reason at the
+# top of this file: a pipeline reports its LAST command, so `check-llvm | tee`
+# would report `tee`.
+if ! ./bin/check-llvm > /tmp/flint-llvm.out 2>&1; then
+  cat /tmp/flint-llvm.out
+  fail "bin/check-llvm"
+fi
+grep -E '^ {4}[a-z]+:' /tmp/flint-llvm.out
 
 ls -l target/release/flint | awk '{printf "    binary %.1f MB\n", $5/1048576}'
 

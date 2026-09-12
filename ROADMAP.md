@@ -238,7 +238,9 @@ binding and the host-facing token half, which really are still open.
 |---|---|---|
 | Single native binary (compiler + interpreter), no babashka/JVM/node required | done | [`cli`](DECISIONS.md#cli) |
 | `run`/`compile` with `:with`/`:path`/`:fn`/`:args`/`:to`/`:optimize`/`:meta` | done | `cli` |
-| `:to :llvm` (native-target artifact output) | decided, not started | `cli` |
+| `:to :llvm` (LLVM IR out, no linker) | built — `bin/check-llvm` links seven programs with clang and holds each to the same answer AND the same gas as the interpreter | [`llvm-ir-target`](DECISIONS.md#llvm-ir-target) |
+| `:to :native` (an executable, which is a link) | decided, not started — refuses with its own reason now, rather than borrowing `:to :llvm`'s | `llvm-ir-target` |
+| A host for a program linked from `:to :llvm` (`fs`, `env`, ports) | not started — the archive runs and computes; a program that opens a port parks for ever | `llvm-ir-target` |
 | The remaining cross-compilation backends (`:to :jvm`, `:to :clr`) | decided, not started, blocked on nothing technical — the runtimes exist, the CLI wiring doesn't | `cli`, `other-hosts` |
 | nREPL | decided, not started — overlaps `debug-runner`'s debug runner design, "these should be one implementation" | `cli` §nREPL |
 | `{:args :capabilities}` entry map (vs. today's bare `:args` vector) | decided, not started — explicitly the breaking change to make exactly once, before anything is published | `cli`, `structured-ports` |

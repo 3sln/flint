@@ -1,0 +1,24 @@
+[package]
+name = "flint-native-abi"
+version = "0.0.1"
+edition = "2021"
+description = "The runtime half of `flint compile :to :llvm`: what an emitted .ll links against."
+license = "MIT"
+
+# A crate of its own, for the same reason `sdks/c` is one: cargo cannot make
+# `crate-type` conditional on a target, and a `staticlib` on `flint-rt` itself
+# would duplicate the allocator shim symbols that crate defines by hand for
+# wasm (`runtime/src/lib.rs`). So the archive lives here and the runtime stays
+# an rlib.
+[lib]
+name = "flintnative"
+crate-type = ["staticlib"]
+path = "src/lib.rs"
+
+[dependencies]
+# `aot` because this is the ONLY host that can run compiled arities natively:
+# an emitted module registers its own table (`DECISIONS.md#llvm-ir-target`).
+flint-rt = { path = "../runtime", features = ["aot"] }
+# Green threads and ports are a namespace UNIT, not part of the runtime, so a
+# natively linked program carries them the same way `flint run` does.
+flint-conc = { path = "../units-src/flint-conc" }

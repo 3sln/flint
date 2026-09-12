@@ -408,16 +408,76 @@ fn wants_aot(optimize: &[String]) -> bool {
         .unwrap_or(false)
 }
 
+/// `:to :llvm`: the program as one LLVM IR module, and no linker anywhere.
+///
+/// What comes back is TEXT, which is the whole difference from the wasm path:
+/// there is no prebuilt module to splice into and nothing to base64. The
+/// module carries the program image, its compiled arities as LLVM functions,
+/// and a `main` that hands both to the runtime archive -- so turning it into
+/// an executable is one `clang` invocation, run by whoever has one:
+///
+/// ```sh
+/// cargo build --release -p flint-native-abi
+/// clang prog.ll target/release/libflintnative.a -o prog
+/// ```
+///
+/// `SLOTS`, not `SLOTS_AOT`, even when compiling arities. The slot map is read
+/// here only for the set of builtin NAMES the compiler validates against, and
+/// the runtime a `.ll` links into is the native one -- the same one `flint
+/// run` uses. `SLOTS_AOT` describes the wasm AOT module's table, which this
+/// artifact does not have: its natives are resolved by name.
+fn compile_llvm(srcs: &[PathBuf], entry: &str, out_path: &Path,
+                optimize: &[String]) -> Result<()> {
+    let aot = wants_aot(optimize);
+    let slots = parse_slots(SLOTS)?;
+    // No shaking: shaking cuts a finished module down to what a program
+    // reaches, and there is no module here to cut. The equivalent for a
+    // natively linked artifact is the linker's own `--gc-sections`.
+    let spec = build_spec(srcs, entry, &slots, aot, false, &[], None)?;
+    let mut p = Program::load(COMPILER, 3_000_000_000)
+        .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
+    let r = p.run(&["llvm", &spec]);
+    if r.code != 0 {
+        bail!("{}", r.out.trim());
+    }
+    if let Some(rest) = r.out.strip_prefix("!missing") {
+        bail!("no source for{}\nevery namespace a program requires has to be on the source path",
+              rest.replace('\n', " "));
+    }
+    if let Some(rest) = r.out.strip_prefix("!refused") {
+        bail!("{}", rest.trim());
+    }
+    // A `.ll` that is not IR is the failure this has to refuse rather than
+    // write: the guest answers with a string either way, and a compiler that
+    // wrote a diagnostic into an artifact would be found out by the linker,
+    // three commands later, with no idea which step lied.
+    if !r.out.starts_with("; flint program, as LLVM IR.") {
+        bail!("the compiler did not answer with LLVM IR:\n{}", r.out.trim());
+    }
+    fs::write(out_path, r.out.as_bytes())?;
+    eprintln!("wrote {} ({} bytes{})", out_path.display(), r.out.len(),
+              if aot { ", compiled arities" } else { "" });
+    Ok(())
+}
+
 fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize: &[String],
            to: &str, meta: &[(String, String)]) -> Result<()> {
+    // TWO TARGETS, NOT ONE ARM. `:to :llvm` emits LLVM IR -- text, no linker,
+    // nothing to link -- and `:to :native` emits an executable, which is a
+    // link. They shared an arm and a sentence ("emitting a native artifact
+    // needs a linker, and this binary carries none") that was true of the
+    // second and never of the first: what actually blocked `:to :llvm` was
+    // that no IR emitter existed (`DECISIONS.md#llvm-ir-target`).
     match to.trim_start_matches(':') {
         "wasm" => {}
-        "llvm" | "native" => bail!(
-            "`:to :llvm` is not built yet: emitting a native artifact needs a linker,\n\
-             and this binary carries none. The native runtime itself IS built -- it is\n\
-             what `flint run` uses -- so the way to run natively today is `flint run`."
+        "llvm" => return compile_llvm(srcs, entry, out_path, optimize),
+        "native" => bail!(
+            "`:to :native` is not built: an executable is a LINK, and this binary carries\n\
+             no linker. `:to :llvm` emits the LLVM IR for the same program and needs none;\n\
+             linking it is then your own `clang` (see `nativeabi/`). To just run the\n\
+             program, `flint run` executes it natively here."
         ),
-        other => bail!("no such target `{other}` (`:to :wasm`)"),
+        other => bail!("no such target `{other}` (`:to :wasm`, `:to :llvm`)"),
     }
     let aot = wants_aot(optimize);
     let slots = parse_slots(if aot { SLOTS_AOT } else { SLOTS })?;
@@ -790,6 +850,15 @@ fn usage() -> ! {
       metadata, because the arguments arrive later and what a program needs
       has to survive until then.
 
+  flint compile :path <dir> :fn <ns/fn> :to :llvm [:out <file>]
+                [:optimize [perf]]
+      Compile to LLVM IR: one `.ll` carrying the program, its compiled
+      arities and a `main`. No linker runs here and none is needed -- turning
+      it into an executable is your own:
+
+          cargo build --release -p flint-native-abi
+          clang prog.ll target/release/libflintnative.a -o prog
+
   flint test :path <dir>
       Run every var marked `^:flint.check/test` under `:path`, and report.
       The suite is what is on the path; nothing has to be registered.
@@ -813,7 +882,8 @@ be repeated; the two mean the same thing. In zsh an unquoted bracket is a glob,
 so quote it there: `:path '[src lib]'`.
 
 Everything is embedded, so there is nothing to install: no babashka, no JVM,
-no linker."
+no linker. `:to :llvm` is where that last one shows: flint emits the IR, and
+linking it is a step you run with a linker you already have."
     );
     std::process::exit(2)
 }

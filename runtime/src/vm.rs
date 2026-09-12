@@ -2027,20 +2027,36 @@ impl Rt {
     /// Call a compiled arity through the wasm table. The signature is fixed by
     /// the emitter: `(rt, fp, ret_to, block)`, no result -- everything it needs
     /// to say it says through the frame and the sync block.
-    fn call_aot(&mut self, slot: u32, fp: u32, ret_to: u32, block: u32, sync: u32) {
+    fn call_aot(&mut self, slot: u32, fp: u32, ret_to: u32, block: u32, sync: usize) {
         #[cfg(target_arch = "wasm32")]
         {
             let f: crate::aot::AotEntry = unsafe { core::mem::transmute(slot as usize) };
             let p = self as *mut Rt;
             f(p, fp, ret_to, block, sync);
         }
-        // On a host there is no wasm table and nothing is compiled, so this is
-        // unreachable rather than emulated -- pretending otherwise would give
-        // `cargo test` a path the shipped module does not have.
+        // Natively a slot is an INDEX into a table the artifact registered, not
+        // an address: a natively linked program's compiled arities are ordinary
+        // symbols, and nothing turns one into a wasm table index
+        // (`DECISIONS.md#llvm-ir-target`).
+        //
+        // This used to be `unreachable!`, and that was right while nothing but
+        // a wasm module could hold compiled code. It is now reachable for an
+        // artifact from `:to :llvm` and STILL unreachable for everything else:
+        // an image whose `aot` table is empty never asks, and one that asks
+        // without having registered gets the panic rather than a jump through
+        // whatever integer the slot happened to be.
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let _ = (slot, fp, ret_to, block, sync);
-            unreachable!("compiled arities exist only in a wasm module");
+            match crate::aot::registered(slot) {
+                Some(f) => {
+                    let p = self as *mut Rt;
+                    f(p, fp, ret_to, block, sync);
+                }
+                None => unreachable!(
+                    "compiled arity {slot} was never registered: this image was built with \
+                     compiled arities and linked without them"
+                ),
+            }
         }
     }
 
