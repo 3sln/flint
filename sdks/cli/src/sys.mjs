@@ -233,6 +233,82 @@ export class Wasm {
   }
 }
 
+// ------------------------------------------------------------------ flint.sdk
+
+/// flint's own SDK, served to flint (`DECISIONS.md#flint-sdk`).
+///
+/// `sdks/c`, `sdks/rust` and `sdks/esm` let C, Rust and JavaScript embed the
+/// compiler; this is the same offer made to the language itself, and
+/// self-hosting is what makes it possible -- the compiler is already here.
+///
+/// The two functions are INJECTED rather than imported. `cli.mjs` imports this
+/// file, so importing it back would be a cycle; handing them in at construction
+/// says the same thing without one.
+export class Sdk {
+  constructor(ops) { this.ops = ops; }
+  get name() { return 'flint.sdk'; }
+  get vars() { return varsOf(this.name); }
+
+  invoke(v, args, policy, c) {
+    switch (v) {
+      case 'compile': {
+        const o = args[0] || {};
+        const srcs = strings(o, 'paths', 'compile needs :paths ["src" ...]');
+        const fn = str(o, 'fn', 'compile needs :fn "ns/fn"');
+        const out = pick(o, 'out') ?? 'out.wasm';
+        const to = pick(o, 'to') ?? 'wasm';
+        const meta = [];
+        // `:with` on a compile DECLARES rather than grants, as on the command
+        // line: the arguments arrive later, so what a program needs is written
+        // into the artifact's metadata.
+        const withs = strings(o, 'with');
+        if (withs.length) meta.push(['capabilities', withs.join(' ')]);
+        this.ops.compile(srcs, fn, out, strings(o, 'optimize'), to, meta, { quiet: true });
+        return c.map([[c.kw('out'), c.str(out)],
+                      [c.kw('bytes'), c.int(statSync(out).size)]]);
+      }
+      case 'run': {
+        const o = args[0] || {};
+        const srcs = strings(o, 'paths', 'run needs :paths ["src" ...]');
+        const fn = str(o, 'fn', 'run needs :fn "ns/fn"');
+        const roots = strings(o, 'roots');
+        const r = this.ops.runSource(srcs, fn, strings(o, 'args'), strings(o, 'with'),
+                                     roots.length ? roots : undefined, { quiet: true });
+        return c.map([[c.kw('code'), c.int(r.code)], [c.kw('out'), c.str(r.out)]]);
+      }
+      case 'version':
+        return c.str(this.ops.version);
+      default:
+        throw new Error(`flint.sdk has no ${v}`);
+    }
+  }
+}
+
+/// `:key` out of a decoded options map, whatever the decoder made of it.
+function pick(o, k) {
+  if (o instanceof Map) return o.get(k) ?? o.get(`:${k}`);
+  return o?.[k] ?? o?.[`:${k}`];
+}
+
+function str(o, k, why) {
+  const v = pick(o, k);
+  if (typeof v !== 'string') throw new Error(why);
+  return v;
+}
+
+/// A vector of strings at `k`, or empty. Absent and empty mean the same.
+function strings(o, k, why) {
+  const v = pick(o, k);
+  if (v === undefined || v === null) {
+    if (why) throw new Error(why);
+    return [];
+  }
+  if (!Array.isArray(v)) throw new Error(`${k} must be a vector`);
+  const out = v.map((x) => String(x));
+  if (why && !out.length) throw new Error(why);
+  return out;
+}
+
 // ------------------------------------------------------------- flint.sys.slurp
 
 /// The largest thing `slurp` will pull into memory.

@@ -392,6 +392,7 @@ pub fn catalogue() -> Vec<(&'static str, Vec<(&'static str, &'static [u32])>)> {
         (mvn.name_static(), mvn.vars()),
         (crate::deps::Git.name_static(), crate::deps::Git.vars()),
         (Wasm.name_static(), Wasm.vars()),
+        (Sdk.name_static(), Sdk.vars()),
     ]
 }
 
@@ -819,4 +820,143 @@ fn decode_result(line: &str) -> Result<(i32, String), String> {
         v.get("code").and_then(|c| c.as_i64()).unwrap_or(0) as i32,
         v.get("out").and_then(|o| o.as_str()).unwrap_or("").to_string(),
     ))
+}
+
+// ------------------------------------------------------------------ flint.sdk
+
+/// flint's own SDK, served to flint.
+///
+/// `sdks/c`, `sdks/rust` and `sdks/esm` let C, Rust and JavaScript embed the
+/// compiler. This is the same offer made to the language itself, and the
+/// reason it can be made at all is that flint is self-hosted: the compiler is
+/// already linked into this binary, so `flint.cli` compiling a program is a
+/// function call, not a subprocess and not a task handed back to the host.
+///
+/// THAT HAND-BACK IS WHAT THIS REPLACES. `flint.cli/run` returns
+/// `{:exec {...}}` for `flint task` -- source, an entry and a path list, for
+/// the host to compile and run on its behalf -- and each of the three front
+/// ends then does it differently, which is two implementations too many.
+///
+/// `run` INTERPRETS rather than going through a module: the native runtime is
+/// compiled into this binary, so source can be executed without an artifact and
+/// without a wasm engine. `compile` is the one that produces a module, and
+/// `flint.sys.wasm` is what runs one afterwards.
+pub struct Sdk;
+
+impl Sdk {
+    fn name_static(&self) -> &'static str {
+        "flint.sdk"
+    }
+}
+
+/// `:paths ["src" ...]` from a request, as the CLI's own argument type.
+fn paths_of(opts: &Val) -> Result<Vec<PathBuf>, String> {
+    match opts.get("paths") {
+        Some(Val::Vector(xs)) | Some(Val::List(xs)) => {
+            let mut out = Vec::with_capacity(xs.len());
+            for x in xs {
+                out.push(PathBuf::from(x.as_str().ok_or("paths: every entry must be a string")?));
+            }
+            if out.is_empty() {
+                return Err("paths: at least one source root".into());
+            }
+            Ok(out)
+        }
+        _ => Err("compile/run needs :paths [\"src\" ...]".into()),
+    }
+}
+
+/// A vector of strings at `key`, or empty. Absent and empty mean the same here.
+fn strings_at(opts: &Val, key: &str) -> Result<Vec<String>, String> {
+    match opts.get(key) {
+        None | Some(Val::Nil) => Ok(Vec::new()),
+        Some(Val::Vector(xs)) | Some(Val::List(xs)) => xs
+            .iter()
+            .map(|x| x.as_str().map(|s| s.to_string()).ok_or(format!("{key}: every entry must be a string")))
+            .collect(),
+        _ => Err(format!("{key} must be a vector")),
+    }
+}
+
+impl Service for Sdk {
+    fn name(&self) -> &str {
+        "flint.sdk"
+    }
+    fn vars(&self) -> Vec<(&'static str, &'static [u32])> {
+        vec![("compile", &[1]), ("run", &[1]), ("version", &[0])]
+    }
+    fn invoke(&mut self, var: &str, args: &[Val], _p: &Policy) -> Answer {
+        let mut w = Wire::new();
+        match var {
+            // `(compile {:paths [..] :fn "ns/f" :out "x.wasm"})`
+            "compile" => {
+                let o = args.first().ok_or("compile needs an options map")?;
+                let srcs = paths_of(o)?;
+                let entry = o.get("fn").and_then(|v| v.as_str()).ok_or("compile needs :fn \"ns/fn\"")?;
+                let out = o.get("out").and_then(|v| v.as_str()).unwrap_or("out.wasm");
+                let to = o.get("to").and_then(|v| v.as_str()).unwrap_or("wasm");
+                let optimize = strings_at(o, "optimize")?;
+                let checks = match o.get("checks") {
+                    Some(Val::Bool(b)) => Some(*b),
+                    _ => None,
+                };
+                // `:with` on a compile DECLARES rather than grants, exactly as
+                // it does on the command line: the arguments arrive later, so
+                // what a program needs is written into the artifact's metadata.
+                let mut meta: Vec<(String, String)> = Vec::new();
+                if let Some(Val::Map(es)) = o.get("meta") {
+                    for (k, v) in es {
+                        if let (Some(k), Some(v)) = (k.as_str(), v.as_str()) {
+                            meta.push((k.to_string(), v.to_string()));
+                        }
+                    }
+                }
+                let with = strings_at(o, "with")?;
+                if !with.is_empty() {
+                    meta.push(("capabilities".to_string(), with.join(" ")));
+                }
+                crate::compile_q(&srcs, entry, std::path::Path::new(out), &optimize, to, &meta, checks, true)
+                    .map_err(|e| format!("{e:#}"))?;
+                let size = std::fs::metadata(out).map(|m| m.len()).unwrap_or(0);
+                w.map(2);
+                w.keyword(None, "out");
+                w.string(out);
+                w.keyword(None, "bytes");
+                w.int(size as i64);
+            }
+            // `(run {:paths [..] :fn "ns/f" :args [..] :with [..]})`
+            //
+            // NO MODULE AND NO ENGINE. The runtime is compiled in, so this
+            // loads the program into a second `Program` in this process and
+            // interprets it. The guest's own output is captured rather than
+            // printed, because the caller asked for an answer.
+            "run" => {
+                let o = args.first().ok_or("run needs an options map")?;
+                let srcs = paths_of(o)?;
+                let entry = o.get("fn").and_then(|v| v.as_str()).ok_or("run needs :fn \"ns/fn\"")?;
+                let argv = strings_at(o, "args")?;
+                let caps = strings_at(o, "with")?;
+                let roots = strings_at(o, "roots")?;
+                let (code, out) = crate::run_source_q(
+                    &srcs,
+                    entry,
+                    &argv,
+                    &caps,
+                    if roots.is_empty() { None } else { Some(&roots) },
+                    true,
+                )
+                .map_err(|e| format!("{e:#}"))?;
+                w.map(2);
+                w.keyword(None, "code");
+                w.int(code as i64);
+                w.keyword(None, "out");
+                w.string(&out);
+            }
+            "version" => {
+                w.string(crate::VERSION);
+            }
+            _ => return Err(format!("flint.sdk has no {var}")),
+        }
+        Ok(w)
+    }
 }

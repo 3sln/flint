@@ -40,7 +40,7 @@ static RUNTIME_AOT: &[u8] = include_bytes!("../../dist/flint-runtime-aot.wasm");
 static SLOTS: &str = include_str!("../../dist/slots.json");
 static SLOTS_AOT: &str = include_str!("../../dist/slots-aot.json");
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // --- EDN, written rather than depended on ----------------------------------
 //
@@ -526,7 +526,7 @@ fn wants_aot(optimize: &[String]) -> bool {
 /// run` uses. `SLOTS_AOT` describes the wasm AOT module's table, which this
 /// artifact does not have: its natives are resolved by name.
 fn compile_llvm(srcs: &[PathBuf], entry: &str, out_path: &Path,
-                optimize: &[String], checks: Option<bool>) -> Result<()> {
+                optimize: &[String], checks: Option<bool>, quiet: bool) -> Result<()> {
     let aot = wants_aot(optimize);
     let strip_checks = strip_checks(optimize, checks);
     let slots = parse_slots(SLOTS)?;
@@ -555,13 +555,25 @@ fn compile_llvm(srcs: &[PathBuf], entry: &str, out_path: &Path,
         bail!("the compiler did not answer with LLVM IR:\n{}", r.out.trim());
     }
     fs::write(out_path, r.out.as_bytes())?;
-    eprintln!("wrote {} ({} bytes{})", out_path.display(), r.out.len(),
-              if aot { ", compiled arities" } else { "" });
+    if !quiet { eprintln!("wrote {} ({} bytes{})", out_path.display(), r.out.len(),
+              if aot { ", compiled arities" } else { "" }); }
     Ok(())
 }
 
-fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize: &[String],
+pub(crate) fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize: &[String],
            to: &str, meta: &[(String, String)], checks: Option<bool>) -> Result<()> {
+    compile_q(srcs, entry, out_path, optimize, to, meta, checks, false)
+}
+
+/// The same, without the "wrote ..." line.
+///
+/// `flint.sdk` serves `compile` to a PROGRAM (`DECISIONS.md#flint-sdk`), and a
+/// library call that prints to the user's terminal is chatter the caller did
+/// not ask for -- `flint task` would announce a temporary file on every run.
+/// The same split `run_source_q` makes, for the same reason.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compile_q(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize: &[String],
+           to: &str, meta: &[(String, String)], checks: Option<bool>, quiet: bool) -> Result<()> {
     let strip_checks = strip_checks(optimize, checks);
     // TWO TARGETS, NOT ONE ARM. `:to :llvm` emits LLVM IR -- text, no linker,
     // nothing to link -- and `:to :native` emits an executable, which is a
@@ -571,7 +583,7 @@ fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize: &[String],
     // that no IR emitter existed (`DECISIONS.md#llvm-ir-target`).
     match to.trim_start_matches(':') {
         "wasm" => {}
-        "llvm" => return compile_llvm(srcs, entry, out_path, optimize, checks),
+        "llvm" => return compile_llvm(srcs, entry, out_path, optimize, checks, quiet),
         "native" => bail!(
             "`:to :native` is not built: an executable is a LINK, and this binary carries\n\
              no linker. `:to :llvm` emits the LLVM IR for the same program and needs none;\n\
@@ -612,8 +624,8 @@ fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize: &[String],
     }
     let module = base64_decode(r.out.trim())?;
     fs::write(out_path, &module)?;
-    eprintln!("wrote {} ({} bytes{})", out_path.display(), module.len(),
-              if aot { ", compiled arities" } else { "" });
+    if !quiet { eprintln!("wrote {} ({} bytes{})", out_path.display(), module.len(),
+              if aot { ", compiled arities" } else { "" }); }
     Ok(())
 }
 
@@ -633,7 +645,7 @@ fn run_source(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
 /// `deps add` runs `flint.deps.resolve` as a program to get an answer, and the
 /// answer is for this process rather than for the terminal -- printing it would
 /// put a raw EDN map above the human line that follows it.
-fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
+pub(crate) fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
                 roots: Option<&[String]>, quiet: bool) -> Result<(i32, String)> {
     // PODS ARE BOOTED FIRST, because their surface is what the compiler needs
     // and only a running pod can say what it is (`DECISIONS.md#system-namespaces-and-deps`). A build
@@ -739,6 +751,13 @@ fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
     // once and remembered (`DECISIONS.md#wasm-engine`).
     if caps.iter().any(|c| c == "wasm" || c.starts_with("wasm:")) {
         host.serve(Box::new(crate::sys::Wasm));
+    }
+    // The compiler, served to the program (`DECISIONS.md#flint-sdk`). A grant,
+    // because compiling and running is executing code -- and the reason it can
+    // be a function call rather than a subprocess is that this binary IS the
+    // compiler.
+    if caps.iter().any(|c| c == "sdk" || c.starts_with("sdk:")) {
+        host.serve(Box::new(crate::sys::Sdk));
     }
     // A booted pod is served whatever the grants say, because DECLARING one in
     // `deps.edn` is the grant: a pod that was started is a process this build

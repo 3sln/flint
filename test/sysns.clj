@@ -696,6 +696,35 @@
     (check "  ... and reports the module's exit code"
            (str/includes? (:out r) "code=0") (:out r))))
 
+;; --- flint.sdk: the compiler, served to flint ------------------------------
+;;
+;; Self-hosting is what makes this possible: the compiler is already linked in,
+;; so a flint program compiling another is a function call rather than a
+;; subprocess (`DECISIONS.md#flint-sdk`). `run` needs no module and no wasm
+;; engine on this binary -- the runtime is compiled in.
+(let [p16 (str (fs/create-temp-dir))]
+  (spit (str p16 "/deps.edn") "{}")
+  (fs/create-dirs (str p16 "/inner"))
+  (spit (str p16 "/inner/hi.cljc") "(ns inner.hi)\n(defn main [args] (str \"inner sees \" (count args) \" args\"))\n")
+  (spit (str p16 "/drv.cljc")
+        (str "(ns drv (:require [flint.sdk :as sdk]))\n"
+             "(defn go [_] (let [r (sdk/run {:paths [\".\"] :fn \"inner.hi/main\"})\n"
+             "                   c (sdk/compile {:paths [\".\"] :fn \"inner.hi/main\" :out \"inner.wasm\"})]\n"
+             "               (str \"code=\" (:code r) \" out=\" (:out r) \" bytes=\" (:bytes c))))\n"))
+  (let [r (sh p16 flint "run" ":path" "." ":fn" "drv/go" ":with" "[sdk]")]
+    (check "a flint program compiles and runs another flint program"
+           (str/includes? (:out r) "out=inner sees 0 args") (:out r))
+    (check "  ... and the module it wrote has a size"
+           (re-find #"bytes=[1-9][0-9]+" (:out r)) (:out r))
+    ;; The served compile is QUIET. `flint task` would otherwise announce a
+    ;; temporary file on every run.
+    (check "  ... and the served compile does not announce the file"
+           (not (str/includes? (:out r) "wrote inner.wasm")) (:out r)))
+  (let [r (sh p16 flint "run" ":path" "." ":fn" "drv/go")]
+    (check "without the grant the compiler is not reachable"
+           (and (not (zero? (:exit r))) (str/includes? (:out r) "no system port"))
+           (:out r))))
+
 (if (pos? @fails)
   (do (println "sysns:" @fails "FAILURES") (System/exit 1))
   (println "sysns: ok"))

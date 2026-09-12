@@ -18,7 +18,7 @@ import {
 } from './artifacts.mjs';
 import { buildSpec, testRoots } from './spec.mjs';
 import { Policy } from './policy.mjs';
-import { Fs, Env, Slurp, Wasm } from './sys.mjs';
+import { Fs, Env, Slurp, Wasm, Sdk } from './sys.mjs';
 import { Npm, Mvn, Git } from './deps.mjs';
 import { capabilitiesFor } from './serve.mjs';
 import { VERSION } from './version.mjs';
@@ -46,8 +46,14 @@ function wantsAot(optimize) {
 /// three-quarters of a megabyte of base64, and inside an EDN string it is
 /// three-quarters of a megabyte for flint's reader to scan a character at a
 /// time -- 198 seconds against 10.
-async function runCompiler(args) {
-  const module = await WebAssembly.compile(compilerWasm());
+// SYNCHRONOUS, and deliberately so. `new WebAssembly.Module` compiles without
+// a promise and `inst.run` is a pump rather than a task, so nothing here needs
+// to await -- which is what lets `flint.sdk` serve the compiler over a port
+// (`DECISIONS.md#flint-sdk`): a served `invoke` has to answer in one call.
+// Callers that still say `await compile(...)` are unaffected; awaiting a plain
+// value is a no-op.
+function runCompiler(args) {
+  const module = new WebAssembly.Module(compilerWasm());
   const inst = instantiate(module);
   // Compiling a whole program can outgrow the 512 MB default, and past it an
   // allocation answers NIL, the NIL reaches the tree, and the failure surfaces
@@ -68,7 +74,7 @@ async function runCompiler(args) {
   return r.out;
 }
 
-export async function compile(srcs, entry, outPath, optimize, to, meta) {
+export function compile(srcs, entry, outPath, optimize, to, meta, { quiet = false } = {}) {
   const target = String(to).replace(/^:/, '');
   if (target === 'llvm' || target === 'native') {
     throw new Error(
@@ -83,10 +89,13 @@ export async function compile(srcs, entry, outPath, optimize, to, meta) {
     srcs, entry, slots: table, aot, shake: true, meta, roots: null,
     stdlib: stdlib(), stdlibDeps: stdlibDeps(),
   });
-  const out = await runCompiler(['wasm', spec, b64encode(base)]);
+  const out = runCompiler(['wasm', spec, b64encode(base)]);
   const module = b64decode(out.trim());
   writeFileSync(outPath, module);
-  process.stderr.write(
+  // `flint.sdk` serves this to a PROGRAM, and a library call that prints to the
+  // user's terminal is chatter the caller did not ask for -- `flint task` would
+  // announce a temporary file on every run. The same split `runSource` makes.
+  if (!quiet) process.stderr.write(
     `wrote ${outPath} (${module.length} bytes${aot ? ', compiled arities' : ''})\n`);
 }
 
@@ -104,13 +113,13 @@ export async function compile(srcs, entry, outPath, optimize, to, meta) {
 /// this pays module emission where the native CLI pays none. It is the honest
 /// version of the difference rather than a second compilation path that might
 /// disagree with `compile`.
-export async function runSource(srcs, entry, args, caps, roots, { quiet = false } = {}) {
+export function runSource(srcs, entry, args, caps, roots, { quiet = false } = {}) {
   const spec = buildSpec({
     srcs, entry, slots: slots(), aot: false, shake: true, meta: [], roots,
     stdlib: stdlib(), stdlibDeps: stdlibDeps(),
   });
-  const out = await runCompiler(['wasm', spec, b64encode(runtimeWasm())]);
-  const module = await WebAssembly.compile(b64decode(out.trim()));
+  const out = runCompiler(['wasm', spec, b64encode(runtimeWasm())]);
+  const module = new WebAssembly.Module(b64decode(out.trim()));
   const inst = instantiate(module, {
     stepLimit: process.env.FLINT_STEP_LIMIT ? Number(process.env.FLINT_STEP_LIMIT) : 0,
   });
@@ -133,6 +142,12 @@ export async function runSource(srcs, entry, args, caps, roots, { quiet = false 
   // Running a module is EXECUTING CODE, so it is a grant like any other
   // (`DECISIONS.md#wasm-engine`).
   if (caps.some((c) => c === 'wasm' || c.startsWith('wasm:'))) services.push(new Wasm());
+  // The compiler, served to the program (`DECISIONS.md#flint-sdk`). The two
+  // functions are handed in rather than imported, because `sys.mjs` importing
+  // this file back would be a cycle.
+  if (caps.some((c) => c === 'sdk' || c.startsWith('sdk:'))) {
+    services.push(new Sdk({ compile, runSource, version: VERSION }));
+  }
   // Installed only when something is actually served. A program that was
   // granted nothing keeps the honest refusal instead of being handed a
   // transport that can reach nothing.

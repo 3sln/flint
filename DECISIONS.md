@@ -6348,3 +6348,79 @@ rather than a convenience.
 What this costs: a machine with no JavaScript engine at all gets a clear
 refusal instead of a download. On macOS that machine does not exist. On Linux
 without node, bun or deno it does, and that case is open.
+
+## flint-sdk
+
+**Ratified:** ☐ not signed off
+
+Recorded 2026-09-12. `flint.sdk` is a served namespace giving flint code the
+compiler: `compile`, `run`, `version`.
+
+`sdks/c`, `sdks/rust` and `sdks/esm` let C, Rust and JavaScript embed flint.
+This is the same offer made to the language itself, and the reason it can be
+made at all is that flint is self-hosted — the compiler is already linked into
+the binary, so a flint program compiling another flint program is a function
+call.
+
+### What it replaces
+
+`flint.cli/run` returns `{:exec {:src ... :entry ... :paths ...}}` for
+`flint task`: not an answer, but a job handed back for the host to do. Each of
+the three front ends then does it its own way — `bin/flint` writes the source
+to a temp directory and shells out to `bb bin/flint` to compile it, then to
+`node host/flint.mjs` to run it, two processes deep.
+
+That is the hand-back the user's question was about: *why should the CLI tell
+the host to compile and run something, when the compiler can be imported into
+the CLI build?* It should not. With `flint.sdk` it does not have to, and with
+`flint.sys.wasm` (`DECISIONS.md#wasm-engine`) the running half is covered too.
+
+### `run` interprets; `compile` produces an artifact
+
+`(sdk/run {:paths ["."] :fn "ns/f"})` needs **no module and no wasm engine** on
+the native binary: the runtime is compiled in, so the source is loaded into a
+second `Program` in the same process and interpreted. `compile` is the one that
+writes a module, and `flint.sys.wasm/run` is what executes one afterwards.
+
+On node, `run` goes through a module — that is what node has — and the header
+on `runSource` already said so. Same answer, different amount of work, and the
+difference is stated rather than hidden.
+
+### It is a grant
+
+`sdk` is gated in `:with` like `fs` or `wasm`. Compiling and running is
+executing code.
+
+### What had to change to serve it on node, and what it cost
+
+The node compile path was `async` for exactly one reason: `await
+WebAssembly.compile(...)`, three times. A served `invoke` has to answer in one
+call — `serveRequest` returns the reply that `api.deliver` queues — so an async
+compiler could not be served at all without making the pump itself async.
+
+`new WebAssembly.Module(bytes)` compiles synchronously and `inst.run` is a pump
+rather than a task, so `runCompiler`, `compile` and `runSource` became
+synchronous functions. **Existing `await compile(...)` call sites are
+unaffected**, because awaiting a plain value is a no-op — nothing outside the
+file had to change.
+
+Both `compile` functions gained a quiet form, the split `run_source_q` already
+made: a library call that writes `wrote /tmp/…/task.wasm` to the user's
+terminal is chatter the caller did not ask for, and `flint task` would print it
+on every run.
+
+### That the two agree is measured
+
+The same program — a flint namespace that calls `sdk/run` on a second namespace
+and then `sdk/compile` on it — through both front ends:
+
+    native: v=0.0.1 code=0 out=inner says hi to 0 args bytes=596255
+    node:   v=0.0.1 code=0 out=inner says hi to 0 args bytes=596255
+
+Identical, module size included.
+
+### Not yet done
+
+The `{:exec ...}` arm still exists and `flint task` still goes through it. This
+decision records the capability that makes removing it possible; removing it is
+a change to `lib/flint/cli.cljc` and to all three hosts, and is its own step.

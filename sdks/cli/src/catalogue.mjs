@@ -60,6 +60,11 @@ export const CATALOGUE = [
     ['use', [1]],
     ['reset', [0]],
   ]],
+  ['flint.sdk', [
+    ['compile', [1]],
+    ['run', [1]],
+    ['version', [0]],
+  ]],
 ];
 
 /// The var list for one served namespace, by name.
