@@ -787,6 +787,23 @@ change, in the sibling repo.
 - [ ] The `^:mut` capability in `kin.lang`, which blocks `Pike` and probably
       most of what follows it
 
+### The unchecked-number sweep came back clean (2026-09-12)
+
+Four numbers steered decisions today while carrying no method: the 5.8x that
+justified the native binary (1.7x), a count of 29 that was a `grep '^ *pub fn'`
+artefact, `check-kin`'s 371 s that nothing had ever timed, and a self-host step
+announcing "about 15 minutes" that costs six seconds.
+
+So the class was swept for. **The codebase's norm is good and the four were
+exceptions.** Every remaining time or ratio claim in `bin/`, `src/`, `lib/`,
+`cli/src/` and `runtime/src/` names its scenario and both arms — `rt.rs`'s
+"190x slower" gives 5 375 ms against 119 ms and says it is one `ä` in a 115 KB
+EDN document against the same document with an `x`; `map.rs` gives a three-row
+table with absolute times and peak root counts. Those are reproducible.
+
+Worth recording as a negative result: the problem was four specific claims, not
+a habit.
+
 ### Defects found by the status-verification pass (2026-09-12)
 
 Verifying all 32 unchecked decision statuses against the code turned up three
