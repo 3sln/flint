@@ -1235,6 +1235,7 @@ claim fails the build.
 | `flint.doc` | 11 | 0 | n/a | n/a |
 | `flint.port` | 12 | 1 | n/a | n/a |
 | `flint.protocols` | 7 | 0 | n/a | n/a |
+| `flint.protocols.io` | 17 | 0 | n/a | n/a |
 | `flint.regex` | 11 | 0 | n/a | n/a |
 | `flint.rpc` | 6 | 0 | n/a | n/a |
 | `flint.thread` | 8 | 0 | n/a | n/a |

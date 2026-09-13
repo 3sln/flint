@@ -40,7 +40,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-16 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Byte strings (`DECISIONS.md#no-runtime-linking`).
+16 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Byte strings (`DECISIONS.md#no-runtime-linking`). A string of bytes, in the same two tiers as text: flat below the threshold, a shallow tree above it, with structure sharing so concatenation is a...
 
 **Change requests:** _none recorded_
 
@@ -48,7 +48,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-5 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Checks that cost nothing in a release build.
+5 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Checks that cost nothing in a release build. Two things at once, and they are the same thing seen from two sides: * **Inline checks** against bad usage, so a library says what went wrong where it...
 
 **Change requests:** _none recorded_
 
@@ -72,7 +72,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-12 public vars. HTML, ours, and a **documented subset**.
+12 public vars. HTML, ours, and a **documented subset**. Same node shape as `flint.data.xml`: {:tag :div :attrs {:class \"x\"} :content [...]} with tag and attribute names lower-cased.
 
 **Change requests:** _none recorded_
 
@@ -80,7 +80,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-3 public vars. JSON, ours -- not `clojure.data.json`, but shaped so a Clojure programmer can guess it. `read-str` a
+3 public vars. JSON, ours -- not `clojure.data.json`, but shaped so a Clojure programmer can guess it.
 
 **Change requests:** _none recorded_
 
@@ -88,7 +88,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-2 public vars. **Transit over msgpack**: values to bytes and back.
+2 public vars. **Transit over msgpack**: values to bytes and back. (:require [flint.data.transit :as transit]) (transit/encode {:a 1}) ; => a byte string (transit/decode bytes) ; => {:a 1} A value-to-bytes...
 
 **Change requests:** _none recorded_
 
@@ -96,7 +96,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-9 public vars. XML, ours. An element is
+9 public vars. XML, ours. An element is {:tag :name :attrs {:key \"value\"} :content [...]} which is `clojure.data.xml`'s shape closely enough to guess.
 
 **Change requests:** _none recorded_
 
@@ -112,7 +112,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-7 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Manifest SCANNERS: what a package that is already on disk says it depends on (`DECISIONS.md#one-dependency-walk`)
+7 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Manifest SCANNERS: what a package that is already on disk says it depends on (`DECISIONS.md#one-dependency-walk`).
 
 **Change requests:** _none recorded_
 
@@ -128,7 +128,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-19 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. The dependency PLAN: which version of what, and where it came from (`DECISIONS.md#system-namespaces-and-deps`)
+19 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. The dependency PLAN: which version of what, and where it came from (`DECISIONS.md#system-namespaces-and-deps`).
 
 **Change requests:** _none recorded_
 
@@ -144,7 +144,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-7 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. The filesystem, as a capability (`DECISIONS.md#cli`).
+7 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. The filesystem, as a capability (`DECISIONS.md#cli`). Nothing here is privileged.
 
 **Change requests:** _none recorded_
 
@@ -176,7 +176,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-12 public vars. Ports: an endpoint you send to and receive from.
+12 public vars. Ports: an endpoint you send to and receive from. A port is the unit of impurity. flint is a pure logic executor; a port is how a host *lends* it a capability, and how two green threads talk.
 
 **Change requests:** _none recorded_
 
@@ -192,7 +192,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-9 public vars. Reading and writing as PROTOCOLS, not as capabilities.
+9 public vars. Reading and writing as PROTOCOLS, not as capabilities. A program that needs to read something does not thereby need a filesystem.
 
 **Change requests:** _none recorded_
 
@@ -208,7 +208,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-6 public vars. Request/response over a port.
+6 public vars. Request/response over a port. A port is a **one-way** message stream, and almost every real capability is request/response: a document store, a key-value store, an HTTP client.
 
 **Change requests:** _none recorded_
 
@@ -232,7 +232,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-8 public vars. Green threads.
+8 public vars. Green threads. A green thread is a VM state: its own value stack and frame stack, held as an ordinary heap object.
 
 **Change requests:** _none recorded_
 
@@ -240,7 +240,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-5 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Namespaces with no source, spoken to over a port (`DECISIONS.md#workspace-capabilities` step 4, `sys
+5 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Namespaces with no source, spoken to over a port (`DECISIONS.md#workspace-capabilities` step 4, `system-namespaces-and-deps`).
 
 **Change requests:** _none recorded_
 
@@ -335,7 +335,7 @@ namespace.
 
 **Reviewed:** ☐ not signed off
 
-317 public vars. flint's clojure.core.
+317 public vars. flint's clojure.core. Written in cljc on top of the Rust primitives, for the reason in DECISIONS.md#modularity: a cljc function tree-shakes per var, so a program that never calls `partition-by`...
 
 **Change requests:** _none recorded_
 
@@ -343,7 +343,7 @@ namespace.
 
 **Reviewed:** ☐ not signed off
 
-0 public vars. The two protocols `clojure.datafy` dispatches on.
+0 public vars. The two protocols `clojure.datafy` dispatches on. They live in their own namespace, as they do in Clojure, because the metadata key a value attaches an implementation under is qualified by the...
 
 **Change requests:** _none recorded_
 
@@ -351,7 +351,7 @@ namespace.
 
 **Reviewed:** ☐ not signed off
 
-1 public vars. Non-core data functions: `diff`, which reports what two values have to themselves and what they shar
+1 public vars. Non-core data functions: `diff`, which reports what two values have to themselves and what they share.
 
 **Change requests:** _none recorded_
 
@@ -359,7 +359,7 @@ namespace.
 
 **Reviewed:** ☐ not signed off
 
-2 public vars. Turn values into data, and follow the data further.
+2 public vars. Turn values into data, and follow the data further. `datafy` asks a value to present itself as data; `nav` asks a collection how to follow one of its entries.
 
 **Change requests:** _none recorded_
 
@@ -367,7 +367,7 @@ namespace.
 
 **Reviewed:** ☐ not signed off
 
-5 public vars. An EDN reader with reader-tag support.
+5 public vars. An EDN reader with reader-tag support. Written fresh rather than reusing the compiler's reader: this one has no syntax quote, no reader conditionals and no anonymous-fn literals, so a program that...
 
 **Change requests:** _none recorded_
 
@@ -375,7 +375,7 @@ namespace.
 
 **Reviewed:** ☐ not signed off
 
-32 public vars. clojure.math, over libm.
+32 public vars. clojure.math, over libm. Deliberately absent, because half-implementing them is worse than leaving them out: `ulp`, `nextAfter`, `nextUp`, `nextDown`, `IEEEremainder`, `getExponent`, `scalb`,...
 
 **Change requests:** _none recorded_
 
@@ -383,7 +383,7 @@ namespace.
 
 **Reviewed:** ☐ not signed off
 
-12 public vars. clojure.set. Complete except for `index`, `rename` and `rename-keys`'s relational cousins -- see the
+12 public vars. clojure.set. Complete except for `index`, `rename` and `rename-keys`'s relational cousins -- see the manifest.
 
 **Change requests:** _none recorded_
 
@@ -391,7 +391,7 @@ namespace.
 
 **Reviewed:** ☐ not signed off
 
-24 public vars. clojure.string, in cljc.
+24 public vars. clojure.string, in cljc. Indices are **code points**, not UTF-16 code units, which is the same divergence as `count` on a string.
 
 **Change requests:** _none recorded_
 
@@ -399,7 +399,7 @@ namespace.
 
 **Reviewed:** ☐ not signed off
 
-7 public vars. clojure.walk. `walk` and its family, minus `macroexpand-all` -- a flint module carries no compiler,
+7 public vars. clojure.walk. `walk` and its family, minus `macroexpand-all` -- a flint module carries no compiler, so there is nothing to expand with.
 
 **Change requests:** _none recorded_
 
@@ -407,7 +407,7 @@ namespace.
 
 **Reviewed:** ☐ not signed off
 
-28 public vars. Functional zippers, after Huet. A LOCATION is a vector `[node path]` whose METADATA carries the thre
+28 public vars. Functional zippers, after Huet. A LOCATION is a vector `[node path]` whose METADATA carries the three functions that make a tree a tree: is this a branch, what are its children, and how do I...
 
 **Change requests:** _none recorded_
 
