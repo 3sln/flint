@@ -370,7 +370,7 @@ grep -E "^ *(ok|FAIL|dist/|no node)" /tmp/flint-test.out | sed 's/^      /  /'
 # went unnoticed because this file and `bin/check` both skipped the selftest
 # (`DECISIONS.md#aot-diverges-between-hosts`). It is here rather than in
 # `bin/check` because it needs both CLIs built and takes 30 s.
-./sdks/cli/build > /tmp/flint-test.out 2>&1 || { tail -25 /tmp/flint-test.out; fail "sdks/cli/build"; }
+FLINT_DIST_FRESH=1 ./sdks/cli/build > /tmp/flint-test.out 2>&1 || { tail -25 /tmp/flint-test.out; fail "sdks/cli/build"; }
 grep -E "^ *(ok|FAIL)" /tmp/flint-test.out | sed 's/^      /  /;s/^    /  /'
 
 echo

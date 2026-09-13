@@ -15,8 +15,17 @@ set -e
 cd "$(dirname "$0")"
 root=../..
 
-echo "==> the wasm artifacts"
-(cd "$root" && ./bin/build-dist) | sed 's/^/    /'
+# `FLINT_DIST_FRESH=1` says the caller JUST built them, which `bin/test` has --
+# it runs `bin/build-dist` three lines before calling this. Rebuilding cost the
+# gate a further 97 s for artifacts that could not have gone stale in between.
+# Unset, the build still rebuilds: a distributable that carries artifacts it did
+# not build is the failure this step exists to prevent.
+if [ -n "${FLINT_DIST_FRESH:-}" ]; then
+  echo "==> the wasm artifacts (already fresh; FLINT_DIST_FRESH)"
+else
+  echo "==> the wasm artifacts"
+  (cd "$root" && ./bin/build-dist) | sed 's/^/    /'
+fi
 
 mkdir -p dist
 
