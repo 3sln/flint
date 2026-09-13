@@ -374,6 +374,16 @@ FLINT_DIST_FRESH=1 ./sdks/cli/build > /tmp/flint-test.out 2>&1 || { tail -25 /tm
 grep -E "^ *(ok|FAIL)" /tmp/flint-test.out | sed 's/^      /  /;s/^    /  /'
 
 echo
+sec "io: sources and sinks, as protocols rather than capabilities"
+# NOT in `bin/check`, though it is 2 s: it runs the program through
+# `target/release/flint`, which embeds the standard library at cargo time, so
+# in the fast gate it would check whatever `lib/flint/io.cljc` looked like at
+# the last build. `bin/test` builds the binary, so the signal is about the
+# source in front of you.
+bb test/io.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/io.clj"; }
+grep -cE "^  ok" /tmp/flint-test.out | sed 's/^/    /;s/$/ checks/'
+
+echo
 sec "bytes: a string of bytes, in two tiers (0024)"
 bb test/bytes.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/bytes.clj"; }
 grep -cE "^  ok" /tmp/flint-test.out | sed 's/^/    /;s/$/ checks/'
