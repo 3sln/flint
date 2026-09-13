@@ -282,6 +282,11 @@ export function usage() {
   flint run :path <dir> :fn <ns/fn> [:with [cap...]] [:args [arg...]]
       Compile and run, here. Nothing is written.
 
+  flint wasm [show | reset | use <path>]
+      The engine that runs a compiled module. node carries one, so this
+      reports node itself and there is nothing to pin. The native binary
+      carries none and has to go looking, which is what the command is for.
+
   flint compile :path <dir> :fn <ns/fn> :to :wasm [:out <file>]
                 [:with [cap...]] [:optimize [perf]] [:checks true|false] [:meta k=v]
       Compile to a standalone module, for any host with a wasm engine. Here
@@ -325,6 +330,22 @@ export async function main(argv) {
     return 0;
   }
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') usage();
+  // The same command the native CLI has, answering for this host. node IS the
+  // engine, so there is nothing to find and nothing to remember -- but a
+  // command that exists on one front end and not the other is exactly the
+  // asymmetry `DECISIONS.md#aot-diverges-between-hosts` was about, and a script
+  // written against `flint wasm` should not discover the host by crashing.
+  if (cmd === 'wasm') {
+    const sub = argv[1] ?? 'show';
+    if (sub === 'show') process.stdout.write(`node  ${process.execPath}\n`);
+    else if (sub === 'reset' || sub === 'use') {
+      process.stdout.write('node carries its own wasm engine; there is nothing to pin\n');
+    } else {
+      process.stderr.write(`no such wasm command: ${sub}\nknown: show, reset, use <path>\n`);
+      return 2;
+    }
+    return 0;
+  }
   if (cmd === 'compile') {
     const a = parse(argv.slice(1));
     if (!a.entry) throw new Error('compile needs :fn ns/fn');
