@@ -134,7 +134,18 @@ try {
   } else {
     const a = join(tmp, 'native.wasm');
     const b = join(tmp, 'node.wasm');
-    for (const [label, extra] of [['plain', []], [':optimize [perf]', [':optimize', '[perf]']]]) {
+    // BOTH AXES, IN BOTH DIRECTIONS. `plain` and `:optimize [perf]` alone
+    // would not have caught the bug this exists to catch: the node CLI had no
+    // `:checks` at all, so it behaved as though `:checks true` were always set
+    // (`DECISIONS.md#aot-diverges-between-hosts`). The last two rows are the
+    // ones that pin the axes as INDEPENDENT -- drop checks without compiling,
+    // and compile while keeping them.
+    for (const [label, extra] of [
+      ['plain', []],
+      [':optimize [perf]', [':optimize', '[perf]']],
+      [':checks false', [':checks', 'false']],
+      [':optimize [perf] :checks true', [':optimize', '[perf]', ':checks', 'true']],
+    ]) {
       execFileSync(NATIVE,
         ['compile', ':path', FIXTURE, ':fn', 'demo.main/main', ':out', a, ...extra],
         { stdio: ['ignore', 'ignore', 'ignore'] });
