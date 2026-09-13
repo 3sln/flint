@@ -42,7 +42,7 @@
   (check "and a missing file is false rather than an error"
          (str/includes? (:out r) "nope=false") (:out r)))
 
-;; NOT GRANTED: there is no system port, so it cannot even ask.
+;; NOT GRANTED: the namespace is refused by name.
 (let [r (sh proj flint "run" ":path" "." ":fn" "app.a/go")]
   ;; A NAMED REFUSAL, not "no system port". Since `flint.sdk` is served to
   ;; every program (`DECISIONS.md#flint-sdk`) a system port now always exists,

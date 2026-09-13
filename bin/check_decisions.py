@@ -40,8 +40,16 @@ def main():
             errs.append(f"DECISIONS.md has two sections called {s!r} -- an anchor can only mean one")
         seen.add(s)
 
-    files = subprocess.run(['git', 'ls-files'], cwd=ROOT, capture_output=True,
-                           text=True).stdout.split()
+    # TRACKED *AND* UNTRACKED-BUT-NOT-IGNORED. Plain `git ls-files` lists only
+    # tracked files, so a brand-new file's citations went unchecked until the
+    # commit that added it -- `bin/check` passed, the commit landed, and the
+    # broken anchor surfaced on the NEXT run. That is a check that reports green
+    # on precisely the change it exists to examine.
+    #
+    # `--exclude-standard` keeps `.gitignore` honoured, so build output and
+    # `dist/` stay out.
+    files = subprocess.run(['git', 'ls-files', '--cached', '--others', '--exclude-standard'],
+                           cwd=ROOT, capture_output=True, text=True).stdout.split()
     cited, sites = set(), {}
     for f in files:
         p = os.path.join(ROOT, f)

@@ -79,9 +79,17 @@ console.log('== run ==');
   // A program granted nothing must be TOLD so rather than parked: the honest
   // failure, and the thing a host that installs a system port unconditionally
   // would quietly break.
+  //
+  // REFUSED BY NAME, not by the transport being missing. `flint.sdk` is served
+  // to every program (`DECISIONS.md#flint-sdk`), so a system port now always
+  // exists and the refusal names the namespace instead. Still a refusal, still
+  // non-zero, and strictly more informative -- but the sentence changed, and
+  // this row is what noticed.
   const r = flint(['run', ':path', FIXTURE, ':fn', 'demo.sysdemo/main', ':args', '[.]']);
   check('a program granted nothing cannot ask',
-        r.code !== 0 && r.out.includes('was given no system port'), r.out);
+        r.code !== 0
+          && r.out.includes('refused to open')
+          && r.out.includes('flint.sys.env'), r.out);
 }
 {
   const r = flint(['run', ':path', FIXTURE, ':fn', 'demo.sysdemo/main',

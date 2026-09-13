@@ -112,7 +112,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-7 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Manifest SCANNERS: what a package that is already on disk says it depends on (`DECISIONS.md#one-depe
+7 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Manifest SCANNERS: what a package that is already on disk says it depends on (`DECISIONS.md#one-dependency-walk`)
 
 **Change requests:** _none recorded_
 
@@ -128,7 +128,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-19 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. The dependency PLAN: which version of what, and where it came from (`DECISIONS.md#system-namespaces-
+19 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. The dependency PLAN: which version of what, and where it came from (`DECISIONS.md#system-namespaces-and-deps`)
 
 **Change requests:** _none recorded_
 
