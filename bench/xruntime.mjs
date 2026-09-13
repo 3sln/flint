@@ -8,11 +8,28 @@
 //
 // ## Why this needs no per-engine harness
 //
-// A flint module imports NOTHING and its entry is exported as `main`, so every
-// engine here runs the identical bytes by invoking one export. wasmtime and
-// wasm3 drive it from the command line with no host code at all. That satisfies
-// 0018's first requirement -- a per-engine harness would be measuring
-// harnesses.
+// A flint module imports NOTHING, so every engine here runs identical bytes.
+//
+// **THE `main` EXPORT IS GONE, AND THE COMMAND-LINE ENGINES WENT WITH IT.**
+// This paragraph used to say the entry "is exported as `main`", and that a CLI
+// `--invoke` therefore needed no host code. Nothing is exported as `main` any
+// more: a module has no entry point and the runtime invokes nothing
+// (`DECISIONS.md#structured-ports` step 5). Measured 2026-09-12, on a module
+// built by `bin/bench-xruntime` moments before:
+//
+//     $ wasmtime --invoke main out/xrt-0.wasm
+//     Error: failed to run main module
+//     Caused by: no func export named `main` found
+//
+// A STALE `out/xrt-0.wasm` still answers, which is the trap: the rows look
+// alive if the family was built before the export went. Nothing rebuilds them
+// as part of a gate, and no gate runs this file at all, so the breakage was
+// invisible.
+//
+// Driving a current module from a command line means writing arguments into
+// its memory and calling `flint_call`, which `wasmtime --invoke` cannot do
+// (`DECISIONS.md#wasm-engine` records the same limit for the engine search).
+// The JS engines are fine -- they run a driver.
 //
 // The iteration count is baked into the module rather than passed, because a
 // CLI `--invoke` cannot drive flint's `arg_alloc`/`arg_push` ABI. So there is a
