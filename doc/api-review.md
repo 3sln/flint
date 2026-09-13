@@ -263,6 +263,8 @@ Both the Rust and the JavaScript CLI must serve an identical list;
 
 8 public vars. `read-file write-file exists? dir? list-dir mkdir delete root`
 
+Gated by `:with [fs]`; `fs:write` is a separate, narrower grant that `write-file`, `mkdir` and `delete` require. Confined to a ROOT (the working directory): `under` refuses a path containing `..` rather than popping it, because popping makes `a/../../x` depend on how deep `a` was.
+
 **Change requests:** _none recorded_
 
 ## flint.sys.env
@@ -270,6 +272,8 @@ Both the Rust and the JavaScript CLI must serve an identical list;
 **Reviewed:** ☐ not signed off
 
 3 public vars. `get args cwd`
+
+Gated by `:with [env]`, and the grant carries an ALLOWLIST. A refused variable reads as ABSENT rather than as an error, so a program asking for `HOME` and one probing for `AWS_SECRET_ACCESS_KEY` get the same nil and the allowlist does not leak its own contents.
 
 **Change requests:** _none recorded_
 
@@ -279,6 +283,8 @@ Both the Rust and the JavaScript CLI must serve an identical list;
 
 2 public vars. `slurp slurp-bytes`
 
+Gated by `:with [slurp]`, with an allowlist of URL patterns. Two vars rather than one because a value that is sometimes a string and sometimes bytes is two things wearing one name.
+
 **Change requests:** _none recorded_
 
 ## flint.sys.wasm
@@ -286,6 +292,8 @@ Both the Rust and the JavaScript CLI must serve an identical list;
 **Reviewed:** ☐ not signed off
 
 4 public vars. `run engine use reset`
+
+Gated by `:with [wasm]` -- running a module is executing code. The engine is found once and pinned (`DECISIONS.md#wasm-engine`); `use` and `reset` manage that choice.
 
 **Change requests:** _none recorded_
 
@@ -295,6 +303,8 @@ Both the Rust and the JavaScript CLI must serve an identical list;
 
 4 public vars. `versions resolve manifest fetch`
 
+Gated by `:with [deps]`, whose bare form grants an allowlist of the three default registries rather than the whole network.
+
 **Change requests:** _none recorded_
 
 ## flint.deps.mvn
@@ -302,6 +312,8 @@ Both the Rust and the JavaScript CLI must serve an identical list;
 **Reviewed:** ☐ not signed off
 
 3 public vars. `versions pom fetch`
+
+Gated by `:with [deps]`, sharing the same allowlist as the other two resolvers.
 
 **Change requests:** _none recorded_
 
@@ -311,6 +323,8 @@ Both the Rust and the JavaScript CLI must serve an identical list;
 
 4 public vars. `tags resolve resolve-tag fetch`
 
+Gated by `:with [deps]`, sharing the same allowlist as the other two resolvers.
+
 **Change requests:** _none recorded_
 
 ## flint.sdk
@@ -318,6 +332,8 @@ Both the Rust and the JavaScript CLI must serve an identical list;
 **Reviewed:** ☐ not signed off
 
 6 public vars. `compile run sandbox call close version`
+
+NOT GATED (`DECISIONS.md#flint-sdk`): it takes source text and hands back bytes, so it reaches nothing a program could not already reach. Off under a gas limit, and removable at compile time by omitting `:flint/nested` from `:features`. `run` may lend only capabilities the caller already holds.
 
 **Change requests:** _none recorded_
 
