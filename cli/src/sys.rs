@@ -845,6 +845,16 @@ fn decode_result(line: &str) -> Result<(i32, String), String> {
 /// compiled into this binary, so source can be executed without an artifact and
 /// without a wasm engine. `compile` is the one that produces a module, and
 /// `flint.sys.wasm` is what runs one afterwards.
+/// One constructed sandbox: the program, and the host that serves it.
+///
+/// The host is kept ALONGSIDE rather than rebuilt per call, because it owns the
+/// system port the call protocol travels over and installing a second one would
+/// leave the first orphaned.
+pub struct Sandboxed {
+    pub program: flint_rt::native::Program,
+    pub host: crate::serve::Host,
+}
+
 pub struct Ception {
     /// What the CALLER was granted. A program may not confer what it does not
     /// hold: without this, `sdk` was the only capability anyone needed, because
@@ -853,7 +863,7 @@ pub struct Ception {
     /// Sandboxes this program constructed, by handle. `None` is a closed one --
     /// the slot is kept so a stale handle reads as closed rather than as some
     /// later sandbox that reused the number.
-    pub sandboxes: Vec<Option<flint_rt::native::Program>>,
+    pub sandboxes: Vec<Option<Sandboxed>>,
     /// The gas limit the OUTER program is under, in instructions. Non-zero
     /// turns this namespace off (`DECISIONS.md#flint-ception`).
     pub gas: u64,
@@ -920,7 +930,7 @@ impl Service for Ception {
         "flint.ception"
     }
     fn vars(&self) -> Vec<(&'static str, &'static [u32])> {
-        vec![("compile", &[1]), ("run", &[1]), ("sandbox", &[1]), ("call", &[3]),
+        vec![("compile", &[1]), ("run", &[1]), ("sandbox", &[1, 2]), ("call", &[3]),
              ("close", &[1]), ("version", &[0])]
     }
     fn invoke(&mut self, var: &str, args: &[Val], _p: &Policy) -> Answer {
@@ -985,8 +995,25 @@ impl Service for Ception {
                     Some(Val::Bytes(b)) => b.clone(),
                     _ => return Err("sandbox needs the image bytes `compile` returned".into()),
                 };
-                let p = crate::load_sandbox(&image).map_err(|e| format!("{e:#}"))?;
-                self.sandboxes.push(Some(p));
+                // `:with` LENDS, and only what the caller holds. A sandbox
+                // given nothing reaches nothing, which is the default and the
+                // point; a sandbox given `[fs]` by a caller holding `fs` is the
+                // caller passing on what it has.
+                let caps = match args.get(1) {
+                    None | Some(Val::Nil) => Vec::new(),
+                    Some(o) => strings_at(o, "with")?,
+                };
+                if let Some(extra) = caps.iter().find(|c| !self.holds(c)) {
+                    return Err(format!(
+                        "sandbox: this program was not granted `{extra}`, so it cannot lend it.\n\
+                         it holds: {}\n\
+                         a program may pass on what it has, not mint what it has not.",
+                        if self.caps.is_empty() { "nothing".to_string() } else { self.caps.join(" ") }
+                    ));
+                }
+                let program = crate::load_sandbox(&image).map_err(|e| format!("{e:#}"))?;
+                let host = crate::host_for(&caps, &[], 0);
+                self.sandboxes.push(Some(Sandboxed { program, host }));
                 w.int((self.sandboxes.len() - 1) as i64);
             }
             // `(call sandbox "ns/f" [args])`
@@ -1006,20 +1033,15 @@ impl Service for Ception {
                 };
                 let slot = self.sandboxes.get_mut(h)
                     .ok_or_else(|| format!("no such sandbox: {h}"))?;
-                let p = slot.as_mut().ok_or_else(|| format!("sandbox {h} is closed"))?;
-                // `call`, NOT `run`. `run` hands its arguments to the entry the
-                // image was compiled with and has no way to select anything
-                // else -- the first version passed the function name as
-                // argument zero, so `(call box "guest/main" ["a" "b"])`
-                // reported three arguments. This is the `flint_call` ABI: one
-                // encoded `["ns/f" args..]` in, one encoded value out.
-                let mut c = Wire::new();
-                c.vector(1 + argv.len() as u32);
-                c.string(f);
-                for a in argv {
-                    a.write(&mut c);
-                }
-                let reply = p.call(c.as_bytes()).map_err(|e| format!("{e}"))?;
+                let sb = slot.as_mut().ok_or_else(|| format!("sandbox {h} is closed"))?;
+                // OVER THE SYSTEM PORT, not `Program::call`. That one is
+                // `flint_call` -- synchronous, no scheduler, no way to express
+                // parking -- so a function that opens a port could not be
+                // called through it at all. The runtime already implements the
+                // port protocol, and a call there RUNS AS A GREEN THREAD, so
+                // the called function may park and the pump answers it while
+                // this call is outstanding (`DECISIONS.md#flint-ception`).
+                let reply = sb.host.call_named(&mut sb.program, f, argv)?;
                 // Forwarded VERBATIM. The answer is already an encoded value,
                 // so decoding it here to re-encode it would be two chances to
                 // disagree with the sandbox about what it said.

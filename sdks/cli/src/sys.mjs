@@ -315,7 +315,20 @@ export class Ception {
         if (!(image instanceof Uint8Array)) {
           throw new Error('sandbox needs the image bytes `compile` returned');
         }
-        this.boxes.push(instantiate(new WebAssembly.Module(image), { stepLimit: 0 }));
+        // `:with` LENDS, and only what the caller holds. A sandbox given
+        // nothing reaches nothing, which is the default and the point.
+        const lent = args[1] === undefined || args[1] === null ? [] : strings(args[1], 'with');
+        const extra = lent.find((x) => !this.holds(x));
+        if (extra !== undefined) {
+          const held = (this.ops.caps || []).join(' ') || 'nothing';
+          throw new Error(`sandbox: this program was not granted \`${extra}\`, so it cannot lend it.\n`
+            + `it holds: ${held}\n`
+            + 'a program may pass on what it has, not mint what it has not.');
+        }
+        const inst = instantiate(new WebAssembly.Module(image), { stepLimit: 0 });
+        const caps = lent.length && this.ops.lend ? this.ops.lend(lent) : null;
+        if (caps) inst.capabilities(caps);
+        this.boxes.push(inst);
         return c.int(this.boxes.length - 1);
       }
       // `(call sandbox "ns/f" [args])`
@@ -339,11 +352,18 @@ export class Ception {
           // plain JS value itself.
           return c.from(this.boxes[h].call(strArg(args, 1, 'fn'), argv));
         } catch (e) {
-          // A FAILURE IS DATA, not a second channel: `flint_call` encodes
-          // `{:error kind :message text}` and the native side forwards it as
-          // the answer. This side's driver throws instead, so it is turned back
-          // into the same value rather than into a different kind of failure.
-          return c.from(e.flint ?? { ':error': ':call-failed', ':message': String(e.message) });
+          // A THROW INSIDE THE SANDBOX RAISES HERE, so the caller can catch it.
+          //
+          // This used to answer the error as DATA, to match what `flint_call`
+          // does. The native side no longer uses `flint_call`: it calls over
+          // the system port, where the protocol distinguishes `{:op :return}`
+          // from `{:op :throw}` and the throw becomes an error. So returning
+          // data here meant a `(try ... (catch ...))` around a nested call
+          // fired on one front end and not the other -- the same shape as the
+          // `:checks` divergence, found by running both.
+          const kind = e.flint?.[':error'] ?? e.kind ?? 'Error';
+          const msg = e.flint?.[':message'] ?? e.message ?? '';
+          throw new Error(`${kind}: ${msg}`);
         }
       }
       case 'close': {

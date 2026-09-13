@@ -17,7 +17,7 @@
 
 use crate::policy::Policy;
 use crate::sys::{self, Service};
-use flint_rt::codec;
+use flint_rt::codec::{self, Val, Wire};
 use flint_rt::native::{Event, Outcome, Program};
 use std::collections::HashMap;
 
@@ -33,6 +33,34 @@ const EV_RELEASE: u32 = 5;
 /// collision in a log is obvious rather than plausible.
 const FIRST_PORT: u32 = 1000;
 
+/// Our answer to `call_named`, or `None` if this message is somebody else's.
+///
+/// `:tx` IS CHECKED, not assumed. Several calls can be in flight at once --
+/// `runtime/src/conc.rs` says "told apart by their `:tx`, and `settle` sends
+/// each answer as its thread finishes" -- so taking the first `:return` that
+/// arrives would hand one caller another's value.
+fn reply_for(tx: i64, payload: &[u8]) -> Option<Result<Vec<u8>, String>> {
+    let v = codec::parse(payload).ok()?;
+    if v.get("tx").and_then(|t| t.as_i64()) != Some(tx) {
+        return None;
+    }
+    match v.get("op").and_then(|o| o.as_str()) {
+        Some("return") => {
+            let mut w = Wire::new();
+            v.get("value").unwrap_or(&Val::Nil).write(&mut w);
+            Some(Ok(w.done()))
+        }
+        // A THROW IS AN ERROR, not a value. The guest formed the sentence; this
+        // passes it through rather than rewording it.
+        Some("throw") => {
+            let kind = v.get("kind").and_then(|k| k.as_str()).unwrap_or("Error");
+            let msg = v.get("message").and_then(|m| m.as_str()).unwrap_or("");
+            Some(Err(format!("{kind}: {msg}")))
+        }
+        _ => None,
+    }
+}
+
 pub struct Host {
     services: Vec<Box<dyn Service>>,
     /// port id -> index into `services`
@@ -45,6 +73,8 @@ pub struct Host {
     /// and one release per port per sandbox (`ports-are-the-hosts`), so this reaching zero is
     /// what says the resource can go -- a count of ARRIVALS would not.
     holders: HashMap<u32, i64>,
+    /// Transaction ids for `call_named`, so several calls can be told apart.
+    next_tx: i64,
 }
 
 impl Host {
@@ -56,6 +86,7 @@ impl Host {
             policy,
             system: None,
             holders: HashMap::new(),
+            next_tx: 0,
         }
     }
 
@@ -95,6 +126,97 @@ impl Host {
         }
         let out = p.run_with(args, named);
         self.pump(p, out)
+    }
+
+    /// Call a NAMED function and pump until it answers.
+    ///
+    /// The other half of `run_with`. `run_with` invokes the image's entry;
+    /// this asks for a function by name, which is what `flint.ception/call`
+    /// needs (`DECISIONS.md#flint-ception`).
+    ///
+    /// **Over the SYSTEM PORT, not through `Program::call`.** That one is
+    /// `flint_call` -- synchronous, no scheduler, and no way to express
+    /// parking -- so a function that opens a port cannot be called through it
+    /// at all. The runtime already implements the port protocol
+    /// (`runtime/src/conc.rs`, `system_message`):
+    ///
+    ///     ->  {:tx n :op :call :fn "ns/name" :args [..]}
+    ///     <-  {:tx n :op :return :value v}
+    ///     <-  {:tx n :op :throw  :kind ".." :message ".."}
+    ///
+    /// and a call there RUNS AS A GREEN THREAD, so the called function may park
+    /// and this loop answers it while the call is still outstanding. That is
+    /// the property `sdks/rust` states as "from inside, a call is a port send
+    /// and a park": the caller's own green thread is parked in a served
+    /// request, and no driver thread is held waiting on a driver thread.
+    pub fn call_named(&mut self, p: &mut Program, name: &str, args: &[Val])
+                      -> Result<Vec<u8>, String> {
+        let sys = match self.system {
+            Some(id) => id,
+            None => {
+                let id = self.next_port;
+                self.next_port += 1;
+                if !p.install_port(id, "system", true) {
+                    return Err(String::from(
+                        "this sandbox would not take a system port, so it cannot be called by name",
+                    ));
+                }
+                self.system = Some(id);
+                id
+            }
+        };
+        self.next_tx += 1;
+        let tx = self.next_tx;
+        let mut w = Wire::new();
+        w.map(4);
+        w.keyword(None, "tx");
+        w.int(tx);
+        w.keyword(None, "op");
+        w.keyword(None, "call");
+        w.keyword(None, "fn");
+        w.string(name);
+        w.keyword(None, "args");
+        w.vector(args.len() as u32);
+        for a in args {
+            a.write(&mut w);
+        }
+        if !p.host_deliver(sys, w.as_bytes()) {
+            let _ = p.resume();
+            if !p.host_deliver(sys, w.as_bytes()) {
+                return Err(String::from("the system port would not take the call"));
+            }
+        }
+        let mut out = p.resume();
+        let mut guard = 0u32;
+        loop {
+            guard += 1;
+            if guard > 1_000_000 {
+                return Err(String::from("the host pump made no progress"));
+            }
+            for ev in p.drain_events() {
+                // OUR ANSWER, or somebody else's request. A `:return` on the
+                // system port carrying our `:tx` is the reply; anything else on
+                // any port is an ordinary request and goes to `handle`, which
+                // is what lets the called function park on a capability and be
+                // answered while this call is outstanding.
+                if ev.kind == EV_MESSAGE && ev.a == sys {
+                    if let Some(r) = reply_for(tx, &ev.payload) {
+                        return r;
+                    }
+                }
+                self.handle(p, ev);
+            }
+            if out.code != 2 {
+                // The program stopped without answering. Say so rather than
+                // looping: a call whose thread died is not a call still coming.
+                return Err(format!(
+                    "the sandbox stopped before answering (code {})\n{}",
+                    out.code,
+                    out.out.trim()
+                ));
+            }
+            out = p.resume();
+        }
     }
 
     /// Serve until the program stops asking.

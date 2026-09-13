@@ -874,46 +874,13 @@ pub(crate) fn gas_limit() -> u64 {
     std::env::var("FLINT_STEP_LIMIT").ok().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0)
 }
 
-pub(crate) fn run_image_gas(bytes: &[u8], args: &[String], caps: &[String],
-                            pods: Vec<crate::pod::Pod>, quiet: bool, gas: u64)
-                            -> Result<(i32, String)> {
-    // ports are a namespace UNIT rather than part of the runtime, so a
-    // natively-linked binary has to hand them over by name. Without this
-    // `flint run` cannot execute a program that spawns a thread.
-    // EVERY unit this binary carries, concatenated. `flint-conc` was the only
-    // one, so a program that parsed JSON ran under `flint compile` -- which
-    // links units -- and not under `flint run`, which hands them over by name.
-    let mut natives: Vec<(&str, flint_rt::vm::NativeFn)> =
-        Vec::with_capacity(flint_conc::HOST_CATALOGUE.len() + 2);
-    natives.extend_from_slice(flint_conc::HOST_CATALOGUE);
-    natives.extend_from_slice(flint_data_json::HOST_CATALOGUE);
-    natives.extend_from_slice(flint_data_xml::HOST_CATALOGUE);
-    let mut p = Program::load_with(bytes, 2_000_000_000, &natives)
-        .map_err(|e| anyhow::anyhow!("the compiled program did not load: {e}"))?;
-    if gas > 0 {
-        p.set_step_limit(gas);
-    }
-    // `:with` mints one opaque value per name and PROJECTS them in as the
-    // entry's second argument, so a program receives `[args {name -> cap}]`.
-    //
-    // The CLI decides these are capabilities. The runtime does not know the
-    // word: what it carries is an opaque value with an id, and the check that
-    // matters -- "did I issue this?" -- happens here, where the ids are, rather
-    // than in a table the sandbox keeps. Ids start at 1 because 0 is what
-    // `flint/opaque` gives guest-minted values, and a capability whose id was 0
-    // would be indistinguishable from one the guest made up.
-    let named: Vec<(&str, u64)> =
-        caps.iter().enumerate().map(|(i, n)| (n.as_str(), i as u64 + 1)).collect();
-    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    // SERVED, not just run. `run_with` alone leaves a program that opens a port
-    // parked for ever, because nothing drains the event queue -- so `flint run`
-    // could execute logic and nothing that talked to the world
-    // (`DECISIONS.md#system-namespaces-and-deps`).
-    //
-    // The opaque values `:with` mints stay: they are `opaque-values`'s capabilities, a
-    // different mechanism from the served namespaces, and a host may hand over
-    // both. What each `:with` entry now ALSO does is carry the policy for the
-    // namespace of that name.
+/// A `Host` serving exactly what `caps` grants.
+///
+/// Factored out because `flint.ception` needs the same table: a sandbox it
+/// constructs is served whatever the caller lent it, by the same rule and the
+/// same code (`DECISIONS.md#flint-ception`). Two copies of this list would be
+/// two ideas of what a grant means.
+pub(crate) fn host_for(caps: &[String], args: &[String], gas: u64) -> crate::serve::Host {
     let mut policy = crate::policy::Policy::default();
     for c in caps {
         policy.add(c);
@@ -964,6 +931,50 @@ pub(crate) fn run_image_gas(bytes: &[u8], args: &[String], caps: &[String],
     // `deps.edn` is the grant: a pod that was started is a process this build
     // already chose to run, and refusing to talk to it afterwards would be a
     // check that costs a subprocess and prevents nothing.
+    host
+}
+
+pub(crate) fn run_image_gas(bytes: &[u8], args: &[String], caps: &[String],
+                            pods: Vec<crate::pod::Pod>, quiet: bool, gas: u64)
+                            -> Result<(i32, String)> {
+    // ports are a namespace UNIT rather than part of the runtime, so a
+    // natively-linked binary has to hand them over by name. Without this
+    // `flint run` cannot execute a program that spawns a thread.
+    // EVERY unit this binary carries, concatenated. `flint-conc` was the only
+    // one, so a program that parsed JSON ran under `flint compile` -- which
+    // links units -- and not under `flint run`, which hands them over by name.
+    let mut natives: Vec<(&str, flint_rt::vm::NativeFn)> =
+        Vec::with_capacity(flint_conc::HOST_CATALOGUE.len() + 2);
+    natives.extend_from_slice(flint_conc::HOST_CATALOGUE);
+    natives.extend_from_slice(flint_data_json::HOST_CATALOGUE);
+    natives.extend_from_slice(flint_data_xml::HOST_CATALOGUE);
+    let mut p = Program::load_with(bytes, 2_000_000_000, &natives)
+        .map_err(|e| anyhow::anyhow!("the compiled program did not load: {e}"))?;
+    if gas > 0 {
+        p.set_step_limit(gas);
+    }
+    // `:with` mints one opaque value per name and PROJECTS them in as the
+    // entry's second argument, so a program receives `[args {name -> cap}]`.
+    //
+    // The CLI decides these are capabilities. The runtime does not know the
+    // word: what it carries is an opaque value with an id, and the check that
+    // matters -- "did I issue this?" -- happens here, where the ids are, rather
+    // than in a table the sandbox keeps. Ids start at 1 because 0 is what
+    // `flint/opaque` gives guest-minted values, and a capability whose id was 0
+    // would be indistinguishable from one the guest made up.
+    let named: Vec<(&str, u64)> =
+        caps.iter().enumerate().map(|(i, n)| (n.as_str(), i as u64 + 1)).collect();
+    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    // SERVED, not just run. `run_with` alone leaves a program that opens a port
+    // parked for ever, because nothing drains the event queue -- so `flint run`
+    // could execute logic and nothing that talked to the world
+    // (`DECISIONS.md#system-namespaces-and-deps`).
+    //
+    // The opaque values `:with` mints stay: they are `opaque-values`'s capabilities, a
+    // different mechanism from the served namespaces, and a host may hand over
+    // both. What each `:with` entry now ALSO does is carry the policy for the
+    // namespace of that name.
+    let mut host = host_for(caps, args, gas);
     for p in pods {
         host.serve(Box::new(p));
     }

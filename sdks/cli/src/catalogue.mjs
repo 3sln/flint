@@ -63,7 +63,7 @@ export const CATALOGUE = [
   ['flint.ception', [
     ['compile', [1]],
     ['run', [1]],
-    ['sandbox', [1]],
+    ['sandbox', [1, 2]],
     ['call', [3]],
     ['close', [1]],
     ['version', [0]],

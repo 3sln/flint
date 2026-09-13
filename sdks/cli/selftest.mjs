@@ -156,6 +156,31 @@ console.log('== flint.ception ==');
     check('  ... and calls a named export with individual arguments',
           r.out.includes('call=hi ada and alan'), r.out);
 
+    // A SANDBOX CAN BE LENT A CAPABILITY, and a throw inside it is catchable
+    // outside. Both were divergences when first written: the native side
+    // raised where this one answered the error as data, so a `catch` around a
+    // nested call fired on one front end and not the other.
+    writeFileSync(join(d, 'lent.cljc'),
+      '(ns lent (:require [flint.ception :as ception]))\n'
+      + '(def src (str "(ns g (:require [flint.sys.env :as env]))\\n"\n'
+      + '              "(defn peek [] (str \\"inner:\\" (if (env/cwd) \\"yes\\" \\"no\\")))\\n"\n'
+      + '              "(defn main [a] \\"e\\")\\n"))\n'
+      + '(defn go [_]\n'
+      + '  (let [img (ception/compile {:sources {"g" src} :fn "g/main" :exports ["g/peek"]})\n'
+      + '        b (ception/sandbox img {:with ["env"]})]\n'
+      + '    (str (ception/call b "g/peek" []))))\n'
+      + '(defn boom [_]\n'
+      + '  (let [img (ception/compile {:sources {"g" "(ns g)\\n(defn bang [] (throw (ex-info \\"inner blew up\\" {})))\\n(defn main [a] \\"e\\")\\n"}\n'
+      + '                              :fn "g/main" :exports ["g/bang"]})\n'
+      + '        b (ception/sandbox img)]\n'
+      + '    (try (ception/call b "g/bang" []) "NO THROW" (catch Throwable e (ex-message e)))))\n');
+    const l = flint(['run', ':path', '.', ':fn', 'lent/go', ':with', '[env]'], { cwd: d });
+    check('  ... and a sandbox lent a capability can use it',
+          l.out.includes('inner:yes'), l.out);
+    const bm = flint(['run', ':path', '.', ':fn', 'lent/boom'], { cwd: d });
+    check('  ... and a throw inside it is catchable outside',
+          bm.out.includes('inner blew up') && !bm.out.includes('NO THROW'), bm.out);
+
     // AUTHORITY IS NOT CREATED: a caller holding nothing may lend nothing.
     const m = flint(['run', ':path', '.', ':fn', 'drv/mint'], { cwd: d });
     check('  ... and cannot lend a capability it does not hold',

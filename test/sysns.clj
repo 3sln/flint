@@ -790,6 +790,40 @@
     ;; ends disagreed about this until they were made to agree.
     (check "a sandbox calls a named function with individual arguments"
            (str/includes? (:out r) "hi ada and alan") (:out r)))
+  ;; A SANDBOX CAN BE LENT A CAPABILITY, and the call that reaches it runs as
+  ;; a GREEN THREAD in the inner program -- so the called function may park on
+  ;; the request and the pump answers it while the call is outstanding. Before
+  ;; the call went over the system port this was "this sandbox was given no
+  ;; system port": `Program::call` is `flint_call`, which cannot park at all.
+  (spit (str p18 "/lent.cljc")
+        (str "(ns lent (:require [flint.ception :as ception]))\n"
+             "(def src (str \"(ns g (:require [flint.sys.env :as env]))\\n\"\n"
+             "              \"(defn peek [] (str \\\"inner:\\\" (if (env/cwd) \\\"yes\\\" \\\"no\\\")))\\n\"\n"
+             "              \"(defn main [args] \\\"e\\\")\\n\"))\n"
+             "(defn go [_]\n"
+             "  (let [img (ception/compile {:sources {\"g\" src} :fn \"g/main\" :exports [\"g/peek\"]})\n"
+             "        b (ception/sandbox img {:with [\"env\"]})]\n"
+             "    (str (ception/call b \"g/peek\" []))))\n"
+             "(defn boom [_]\n"
+             "  (let [img (ception/compile {:sources {\"g\" \"(ns g)\\n(defn bang [] (throw (ex-info \\\"inner blew up\\\" {})))\\n(defn main [a] \\\"e\\\")\\n\"}\n"
+             "                              :fn \"g/main\" :exports [\"g/bang\"]})\n"
+             "        b (ception/sandbox img)]\n"
+             "    (try (ception/call b \"g/bang\" []) \"NO THROW\" (catch Throwable e (ex-message e)))))\n"))
+  (let [r (sh p18 flint "run" ":path" "." ":fn" "lent/go" ":with" "[env]")]
+    (check "  ... and a sandbox lent a capability can use it"
+           (str/includes? (:out r) "inner:yes") (:out r)))
+  ;; THE CALLER MAY NOT MINT: same rule `run` follows, on the other door.
+  (let [r (sh p18 flint "run" ":path" "." ":fn" "lent/go")]
+    (check "  ... but a caller holding nothing cannot lend to one"
+           (str/includes? (:out r) "cannot lend it") (:out r)))
+  ;; A THROW INSIDE IS CATCHABLE OUTSIDE. The protocol separates
+  ;; `{:op :return}` from `{:op :throw}`; answering the error as data instead
+  ;; would make a `catch` around a nested call fire on one front end only.
+  (let [r (sh p18 flint "run" ":path" "." ":fn" "lent/boom")]
+    (check "  ... and a throw inside the sandbox is catchable outside"
+           (and (str/includes? (:out r) "inner blew up")
+                (not (str/includes? (:out r) "NO THROW"))) (:out r)))
+
   ;; ANY VALUE CROSSES, not just strings. The restriction this replaces is
   ;; what stopped a PORT being passed inward -- the one argument worth
   ;; passing, since a port is how a sandbox reaches anything at all.

@@ -183,6 +183,22 @@ export function runSource(srcs, entry, args, caps, roots, { quiet = false } = {}
   services.push(new Ception({
     compile, compileBytes, runSource, version: VERSION, caps,
     gas: process.env.FLINT_STEP_LIMIT ? Number(process.env.FLINT_STEP_LIMIT) : 0,
+    // The same service table this CLI serves ITSELF, so a sandbox lent `[fs]`
+    // gets the `fs` the parent would have got. Handed in rather than imported,
+    // because `sys.mjs` importing this file back would be a cycle -- and built
+    // on demand, since a sandbox lent nothing must be served nothing.
+    lend: (lent) => {
+      const pol = new Policy();
+      for (const c of lent) pol.add(c);
+      const svc = [];
+      if (lent.some((c) => c === 'fs' || c.startsWith('fs:'))) {
+        svc.push(new Fs(process.cwd(), lent.some((c) => c === 'fs:write')));
+      }
+      if (lent.some((c) => c === 'slurp' || c.startsWith('slurp:'))) svc.push(new Slurp());
+      if (lent.some((c) => c === 'env' || c.startsWith('env:'))) svc.push(new Env([]));
+      if (lent.some((c) => c === 'wasm' || c.startsWith('wasm:'))) svc.push(new Wasm());
+      return svc.length ? capabilitiesFor(svc, pol) : null;
+    },
   }));
   // Installed only when something is actually served. A program that was
   // granted nothing keeps the honest refusal instead of being handed a

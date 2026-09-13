@@ -6537,62 +6537,64 @@ the child's capabilities.
 thing — the same caller, granted `fs` as well, must still succeed. Without the
 control, a refusal for any unrelated reason would read as the check working.
 
-### What a sandbox cannot do yet, and exactly what blocks it
+### A call is a port send and a park, and the outer drives
 
-A sandbox from `sdk/sandbox` is **purely computational**. It has no system
-port, so it can reach no served namespace:
+`call` goes over the sandbox's SYSTEM PORT, not through `Program::call`.
 
-    ExceptionInfo: rpc: SecurityException: this sandbox was given no system
-    port, so it cannot ask for "flint.sys.env"
+That distinction is the whole of this. `Program::call` is `call_on` is
+`rt.call_named`: it runs to completion and has no park or resume, which is the
+`flint_call` ABI — `sdks/esm` calls it "the no-port call: synchronous, no
+scheduler involved". A function that opens a port cannot be called through it
+at all, so a sandbox built this way could reach nothing: `this sandbox was
+given no system port, so it cannot ask for "flint.sys.env"`.
 
-That matches "it holds nothing", and for a first cut it is the right default.
-But it also means the ports half of this work — giving a sandbox a source or a
-sink, or a channel to its parent — is not merely unwired. **The native side
-lacks the call path it would need**, and that is worth stating precisely
-because it is not obvious from the surface.
+**The runtime already implemented the other path.** `runtime/src/conc.rs`'s
+`system_message` takes
 
-`Program::call` is `call_on`, which is `rt.call_named(&name, &args)`: it runs
-to completion and has no park or resume. That is the `flint_call` ABI, and
-`sdks/esm`'s driver says what it is for — "the no-port call: synchronous, no
-scheduler involved" — because a module with no ports has no system port to
-send a message on, and a function that cannot open a port cannot park.
+    ->  {:tx n :op :call :fn "ns/name" :args [..]}
+    <-  {:tx n :op :return :value v}
+    <-  {:tx n :op :throw  :kind ".." :message ".."}
 
-A sandbox WITH ports has to be called the other way: a message on its system
-port, then a pump that drains its events and answers them. `guest.js` has both
-paths and picks between them by asking the MODULE, not the caller. The native
-side has only the synchronous one. `Host::run_with` pumps, but it runs the
-image's compiled-in ENTRY — there is no "call this named function and pump".
+and says why it is a message rather than a function the host calls straight
+through: **a call runs as a GREEN THREAD**, so "the called function may open a
+port and park, and the host has to be able to answer that while the call is
+still outstanding — a call on the host's stack could not park at all."
 
-So `Val::write` and value arguments (done — a port can now be encoded into a
-call) are necessary and not sufficient. What remains is one piece of
-machinery, and every option for the outer↔inner channel needs it.
+Only the native DRIVER was missing. `Host::call_named` installs the system
+port, delivers the request and pumps: our `:tx` comes back as the answer,
+anything else is an ordinary request and goes to `handle`, which is what lets
+the inner function park on a capability and be answered mid-call. `:tx` is
+checked rather than assumed, because several calls can be in flight and taking
+the first `:return` would hand one caller another's value.
 
-### Three ways the channel could work, none of them chosen
+This is what `sdks/rust` means by "from inside, a call is a port send and a
+park rather than this", warning that guest code occupying a driver thread while
+waiting for a driver thread "is the oldest deadlock there is". The outer's own
+green thread parks inside a served request; no driver thread waits on one.
+**Which thread drives is not knowable and does not need to be** — the top-level
+pool decides.
 
-`sdk/channel` would hand the outer program both ends of a host-owned channel
-and let it pass one in. The obstacle is not the transport — `Wire::port` and
-the decoder's `bridge_hook` already move a port into a sandbox, and
-`DECISIONS.md#ports-are-the-hosts` establishes that a host naming a port in a
-message is handing it over. The obstacle is WHO PUMPS:
+The surface did not change. `(call box "ns/f" args)` still reads as an ordinary
+call, because parking is transparent to a guest.
 
-* **Collect-only.** The inner runs to completion; what it wrote to the channel
-  queues, and the outer drains it after `call` returns. Covers exactly the
-  `BinarySink`/`TextSource` case these protocols were written for — hand it a
-  sink, read what it wrote. No interaction.
-* **Outer drives.** `call` returns a running handle and the outer loops over
-  something like `poll`/`resume`. General; more surface, and the caller writes
-  a pump.
-* **Second executor.** `Program::executor` already exists for this
-  (`DECISIONS.md#drivers`): a second executor on the same heap, so the host can
-  re-enter the parked outer to service its protocol values. Most seamless, and
-  it is behind `parallel`.
+### A sandbox is lent capabilities, and may not be lent more than the caller holds
 
-The deadlock the first two avoid is real: the outer program is SUSPENDED inside
-the `sdk/call` that started the inner, so it cannot serve a channel it created.
-A design that ignores that produces a sandbox that hangs the first time it
-reads.
+`(sandbox image {:with ["env"]})` serves the inner program exactly that, through
+`host_for` — the same table the CLI serves itself, so a sandbox lent `[fs]` gets
+the `fs` its parent would have. A sandbox given nothing reaches nothing, which
+stays the default. The lending rule is `run`'s, on the other door: a caller may
+pass on what it holds and not mint what it has not.
 
-### What had to change to serve it on node, and what it cost
+### A throw inside is catchable outside
+
+The protocol separates `{:op :return}` from `{:op :throw}`, so a throw becomes
+an error the caller can catch. **node had to be changed to agree.** It answered
+the error as DATA, matching what `flint_call` does — correct before the native
+side moved to the port path, and afterwards it meant a `(try ... (catch ...))`
+around a nested call fired on one front end and not the other. Found by running
+both, which is the only thing that ever finds these.
+
+### What had to change to serve it on node, and what it cost### What had to change to serve it on node, and what it cost
 
 The node compile path was `async` for exactly one reason: `await
 WebAssembly.compile(...)`, three times. A served `invoke` has to answer in one
