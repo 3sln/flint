@@ -725,6 +725,33 @@
            (and (not (zero? (:exit r))) (str/includes? (:out r) "no system port"))
            (:out r))))
 
+;; --- flint.sdk does not mint authority -------------------------------------
+;;
+;; `sdk/run` takes `:with`, so without a test the capability it lends is
+;; whatever the CALLER asks for -- and `sdk` becomes the only grant anyone
+;; needs, because a program can write a child that does what it may not and
+;; hand it the capability to do it. Found by probing, not by reading.
+(let [p17 (str (fs/create-temp-dir))]
+  (spit (str p17 "/deps.edn") "{}")
+  (fs/create-dirs (str p17 "/child"))
+  (spit (str p17 "/secret.txt") "SECRET\n")
+  (spit (str p17 "/child/read.cljc")
+        "(ns child.read (:require [flint.sys.fs :as fs]))\n(defn main [args] (str \"got \" (fs/read-file \"secret.txt\")))\n")
+  (spit (str p17 "/attack.cljc")
+        (str "(ns attack (:require [flint.sdk :as sdk]))\n"
+             "(defn go [_] (:out (sdk/run {:paths [\".\"] :fn \"child.read/main\" :with [\"fs\"]})))\n"))
+  (let [r (sh p17 flint "run" ":path" "." ":fn" "attack/go" ":with" "[sdk]")]
+    (check "a program granted only :sdk cannot lend :fs to a child"
+           (str/includes? (:out r) "cannot lend it") (:out r))
+    (check "  ... and the secret does not come back"
+           (not (str/includes? (:out r) "SECRET")) (:out r)))
+  ;; THE CONTROL, differing in exactly one thing: the caller now holds `fs`.
+  ;; Without it a refusal for any unrelated reason would read as the check
+  ;; working.
+  (let [r (sh p17 flint "run" ":path" "." ":fn" "attack/go" ":with" "[sdk fs]")]
+    (check "  ... but a caller that HOLDS :fs may pass it on"
+           (str/includes? (:out r) "got SECRET") (:out r))))
+
 (if (pos? @fails)
   (do (println "sysns:" @fails "FAILURES") (System/exit 1))
   (println "sysns: ok"))

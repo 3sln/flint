@@ -384,6 +384,10 @@ pub fn catalogue() -> Vec<(&'static str, Vec<(&'static str, &'static [u32])>)> {
     let sl = Slurp;
     let npm = crate::deps::Npm::default();
     let mvn = crate::deps::Mvn::default();
+    // The catalogue is the VAR LIST, so the capabilities it is built with are
+    // irrelevant here -- what a caller holds decides what `run` may lend, not
+    // which vars exist.
+    let sdk = Sdk { caps: Vec::new() };
     vec![
         (fs.name_static(), fs.vars()),
         (env.name_static(), env.vars()),
@@ -392,7 +396,7 @@ pub fn catalogue() -> Vec<(&'static str, Vec<(&'static str, &'static [u32])>)> {
         (mvn.name_static(), mvn.vars()),
         (crate::deps::Git.name_static(), crate::deps::Git.vars()),
         (Wasm.name_static(), Wasm.vars()),
-        (Sdk.name_static(), Sdk.vars()),
+        (sdk.name_static(), sdk.vars()),
     ]
 }
 
@@ -841,7 +845,12 @@ fn decode_result(line: &str) -> Result<(i32, String), String> {
 /// compiled into this binary, so source can be executed without an artifact and
 /// without a wasm engine. `compile` is the one that produces a module, and
 /// `flint.sys.wasm` is what runs one afterwards.
-pub struct Sdk;
+pub struct Sdk {
+    /// What the CALLER was granted. A program may not confer what it does not
+    /// hold: without this, `sdk` was the only capability anyone needed, because
+    /// `(sdk/run {... :with ["fs"]})` minted the rest onto a child it wrote.
+    pub caps: Vec<String>,
+}
 
 impl Sdk {
     fn name_static(&self) -> &'static str {
@@ -875,6 +884,18 @@ fn strings_at(opts: &Val, key: &str) -> Result<Vec<String>, String> {
             .map(|x| x.as_str().map(|s| s.to_string()).ok_or(format!("{key}: every entry must be a string")))
             .collect(),
         _ => Err(format!("{key} must be a vector")),
+    }
+}
+
+impl Sdk {
+    /// Whether the caller holds `want`, by the same spelling `:with` uses.
+    ///
+    /// A bare `fs` covers `fs:write`, because the bare name is the whole
+    /// capability; holding `fs:write` does NOT confer a bare `fs`, which would
+    /// be a widening.
+    fn holds(&self, want: &str) -> bool {
+        let base = want.split(':').next().unwrap_or(want);
+        self.caps.iter().any(|c| c == want || c == base)
     }
 }
 
@@ -936,6 +957,19 @@ impl Service for Sdk {
                 let entry = o.get("fn").and_then(|v| v.as_str()).ok_or("run needs :fn \"ns/fn\"")?;
                 let argv = strings_at(o, "args")?;
                 let caps = strings_at(o, "with")?;
+                // AUTHORITY IS NOT CREATED HERE. A child may be given any
+                // subset of what the caller holds and nothing beyond it.
+                // Refused rather than quietly narrowed: a child that silently
+                // loses a capability fails somewhere else, for a reason that
+                // does not name this.
+                if let Some(extra) = caps.iter().find(|c| !self.holds(c)) {
+                    return Err(format!(
+                        "run: this program was not granted `{extra}`, so it cannot lend it.\n\
+                         it holds: {}\n\
+                         a program may pass on what it has, not mint what it has not.",
+                        if self.caps.is_empty() { "nothing".to_string() } else { self.caps.join(" ") }
+                    ));
+                }
                 let roots = strings_at(o, "roots")?;
                 let (code, out) = crate::run_source_q(
                     &srcs,

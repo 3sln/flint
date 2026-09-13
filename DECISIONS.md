@@ -6386,10 +6386,47 @@ On node, `run` goes through a module — that is what node has — and the heade
 on `runSource` already said so. Same answer, different amount of work, and the
 difference is stated rather than hidden.
 
-### It is a grant
+### It is a grant, and it does not mint others
 
 `sdk` is gated in `:with` like `fs` or `wasm`. Compiling and running is
 executing code.
+
+**`run` takes `:with`, and the first version let the caller put anything in
+it.** That made `sdk` the only capability anyone needed: a program granted
+`sdk` alone could write a child that reads a file, run it with `:with ["fs"]`,
+and read the answer. Probed rather than reasoned about, on the day it was
+written, and it worked — `code=0 out=child read: SECRET-CONTENTS`.
+
+A caller may now pass on only what it holds, and an excess is REFUSED rather
+than quietly narrowed — a child that silently loses a capability fails
+somewhere else, for a reason that does not name this:
+
+    run: this program was not granted `fs`, so it cannot lend it.
+    it holds: sdk
+    a program may pass on what it has, not mint what it has not.
+
+Scoping goes one way, and both directions are tested: holding bare `fs` lends
+`fs:write`, and holding `fs:write` does **not** lend bare `fs`. The chain is
+bounded at every link, because a child's own `flint.sdk` is constructed with
+the child's capabilities.
+
+`test/sysns.clj` carries the attack and a control that differs in exactly one
+thing — the same caller, granted `fs` as well, must still succeed. Without the
+control, a refusal for any unrelated reason would read as the check working.
+
+### What `sdk` still confers, stated rather than discovered
+
+Compiling reads source and writes an artifact, so a program holding `sdk` can
+read any tree it names in `:paths` and write any path it names in `:out`,
+**without holding `fs`**. That is inherent to what a compiler does, not an
+oversight, but it is more reach than "may compile" sounds like.
+
+It is NOT confined to a root the way `flint.sys.fs` is, and the choice is open:
+`Fs` takes the working directory as its root and refuses a path that leaves it,
+and the same rule here would be consistent — at the cost of breaking a
+legitimate compile of a tree elsewhere, which `flint task` will want when it
+compiles out of a temporary directory. Worth deciding before `sdk` is granted
+to anything that did not come with the project.
 
 ### What had to change to serve it on node, and what it cost
 

@@ -757,7 +757,7 @@ pub(crate) fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps:
     // be a function call rather than a subprocess is that this binary IS the
     // compiler.
     if caps.iter().any(|c| c == "sdk" || c.starts_with("sdk:")) {
-        host.serve(Box::new(crate::sys::Sdk));
+        host.serve(Box::new(crate::sys::Sdk { caps: caps.to_vec() }));
     }
     // A booted pod is served whatever the grants say, because DECLARING one in
     // `deps.edn` is the grant: a pod that was started is a process this build

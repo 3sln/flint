@@ -157,7 +157,7 @@ export function runSource(srcs, entry, args, caps, roots, { quiet = false } = {}
   // functions are handed in rather than imported, because `sys.mjs` importing
   // this file back would be a cycle.
   if (caps.some((c) => c === 'sdk' || c.startsWith('sdk:'))) {
-    services.push(new Sdk({ compile, runSource, version: VERSION }));
+    services.push(new Sdk({ compile, runSource, version: VERSION, caps }));
   }
   // Installed only when something is actually served. A program that was
   // granted nothing keeps the honest refusal instead of being handed a

@@ -245,7 +245,19 @@ export class Wasm {
 /// file, so importing it back would be a cycle; handing them in at construction
 /// says the same thing without one.
 export class Sdk {
+  /// `ops.caps` is what the CALLER was granted. A program may not confer what
+  /// it does not hold: without that test, `sdk` was the only capability anyone
+  /// needed, because `(sdk/run {... :with ["fs"]})` minted the rest onto a
+  /// child it wrote.
   constructor(ops) { this.ops = ops; }
+
+  /// Whether the caller holds `want`, by the same spelling `:with` uses. A bare
+  /// `fs` covers `fs:write`; holding `fs:write` does NOT confer a bare `fs`,
+  /// which would be a widening.
+  holds(want) {
+    const base = String(want).split(':')[0];
+    return (this.ops.caps || []).some((c) => c === want || c === base);
+  }
   get name() { return 'flint.sdk'; }
   get vars() { return varsOf(this.name); }
 
@@ -274,7 +286,18 @@ export class Sdk {
         const srcs = strings(o, 'paths', 'run needs :paths ["src" ...]');
         const fn = str(o, 'fn', 'run needs :fn "ns/fn"');
         const roots = strings(o, 'roots');
-        const r = this.ops.runSource(srcs, fn, strings(o, 'args'), strings(o, 'with'),
+        const caps = strings(o, 'with');
+        // AUTHORITY IS NOT CREATED HERE. Refused rather than quietly narrowed:
+        // a child that silently loses a capability fails somewhere else, for a
+        // reason that does not name this.
+        const extra = caps.find((c) => !this.holds(c));
+        if (extra !== undefined) {
+          const held = (this.ops.caps || []).join(' ') || 'nothing';
+          throw new Error(`run: this program was not granted \`${extra}\`, so it cannot lend it.\n`
+            + `it holds: ${held}\n`
+            + 'a program may pass on what it has, not mint what it has not.');
+        }
+        const r = this.ops.runSource(srcs, fn, strings(o, 'args'), caps,
                                      roots.length ? roots : undefined, { quiet: true });
         return c.map([[c.kw('code'), c.int(r.code)], [c.kw('out'), c.str(r.out)]]);
       }
