@@ -51,49 +51,43 @@
 (build! [":src" d ":fn" "one/main" ":out" "out/plain.wasm"])
 
 (def driver
+  ;; THE SUBJECT HERE IS `flint_load_image`, not the calling convention.
+  ;;
+  ;; This driver used to be a plain `WebAssembly.Instance` with nothing behind
+  ;; it, calling `flint_call` with a hand-encoded `[name [arg]]` vector. That
+  ;; entry point is gone (`DECISIONS.md#calls-are-ports`): a sandbox is reached
+  ;; only through its system port, and the message is a keyword map rather than
+  ;; a vector -- so a bare host now needs keyword encoding AND a pump before it
+  ;; can make one call. That is a real cost of the single entry point, and it
+  ;; is paid here by using the guest driver for the CALL.
+  ;;
+  ;; The loader half stays raw: `flint_load_image` is still reached straight off
+  ;; `exports`, which is what these rows are about.
   "import('fs').then(async (fsm) => {
      const fs = fsm.default;
-     const e = new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(process.argv[1])), {}).exports;
-     const mem = () => new Uint8Array(e.memory.buffer);
-     const raw = () => mem().subarray(e.out_ptr(), e.out_ptr() + e.out_len());
-     // `flint_call` writes the ENCODED answer, where the old entry point wrote
-     // rendered text. A string is `K_STRING`, a u32 length, then the bytes --
-     // unpacked here rather than by an SDK, so this driver stays a plain
-     // `WebAssembly.Instance` with nothing behind it.
-     const out = () => {
-       const b = raw();
-       if (b.length > 5 && b[0] === 5) return new TextDecoder().decode(b.subarray(5));
-       return new TextDecoder().decode(b);
-     };
+     const { instantiate } = await import('./sdks/esm/src/guest.js');
+     const mod = new WebAssembly.Module(fs.readFileSync(process.argv[1]));
      const res = [];
-     // `path=arg=ns/fn`: the FUNCTION IS NAMED, because a loaded image has no
-     // entry point -- nothing is called automatically (`DECISIONS.md#structured-ports`
-     // step 5) and the loader module cannot know what the image calls itself.
      for (const spec of process.argv.slice(2)) {
        const [path, arg, fname] = spec.split('=');
+       // A FRESH INSTANCE PER IMAGE. The rows below replace one image with
+       // another and back; each needs its own instance or the second load would
+       // be measuring the first instance's state.
+       const inst = instantiate(mod, { stepLimit: 0 });
+       const e = inst.exports;
        const img = fs.readFileSync(path);
        const p = e.arg_alloc(img.length);
-       mem().set(img, p);
+       new Uint8Array(e.memory.buffer).set(img, p);
        const rc = e.flint_load_image ? e.flint_load_image(p, img.length) : -1;
-       if (rc !== 0) { res.push({rc, why: rc === -1 ? 'no flint_load_image export' : out()}); continue; }
-       // `[name [arg]]`, encoded: one string argument, the way a command line
-       // hands one over. Written by hand rather than through the codec so this
-       // driver stays a plain WebAssembly.Instance with no SDK behind it.
-       const enc = (str) => {
-         const u = new TextEncoder().encode(str);
-         const b = [5];                                     // K_STRING
-         for (let i = 0; i < 4; i++) b.push((u.length >> (8 * i)) & 0xff);
-         return b.concat(Array.from(u));
-       };
-       const call = [8, 2, 0, 0, 0]                         // K_VECTOR, 2 items
-         .concat(enc(fname))
-         .concat([8, 1, 0, 0, 0])                           // K_VECTOR, 1 item
-         .concat(enc(arg));
-       const cb = Uint8Array.from(call);
-       const cp = e.arg_alloc(cb.length);
-       mem().set(cb, cp);
-       const code = e.flint_call(cp, cb.length);
-       res.push({rc: 0, code, out: out()});
+       if (rc !== 0) { res.push({rc, why: rc === -1 ? 'no flint_load_image export' : 'refused'}); continue; }
+       // The FUNCTION IS NAMED, because a loaded image has no entry point --
+       // nothing is called automatically (`DECISIONS.md#structured-ports` step
+       // 5) and the loader module cannot know what the image calls itself.
+       try {
+         res.push({rc: 0, code: 0, out: String(inst.call(fname, [arg]))});
+       } catch (err) {
+         res.push({rc: 0, code: 1, out: String(err.message ?? err)});
+       }
      }
      console.log(JSON.stringify(res));
    })")
