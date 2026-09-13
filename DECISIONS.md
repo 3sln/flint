@@ -6818,3 +6818,134 @@ CLI any more — `flint.ception` goes over the port — but the Rust SDK has its
 own inbox-and-driver model built on `call_on`, and moving it to the port
 protocol is its own change. Until then the rule holds for wasm and not for a
 natively embedded sandbox.
+
+## bridges-are-the-only-door
+
+**Ratified:** ☐ not signed off
+
+Recorded 2026-09-13. The settled shape of `DECISIONS.md#drivers`, worked out
+across several rounds and written down before it is built, because eight
+implementations get built against it — four runtimes and four hosts.
+
+### The rule
+
+**A bridge port is the only way to talk to a sandbox.** Not the main way: the
+only one. No direct call, no entry point, no host reaching in. `flint_call` is
+already gone (`DECISIONS.md#calls-are-ports`); `Program::call`, `call_on`, the
+Rust SDK's `Request` inbox and the CLI's `Host::call_named` go with it.
+
+### What a bridge is
+
+A standalone object with **its own memory**, owned by neither side, with **two
+ends**. Writing into an end copies the value into the bridge — as encoded
+bytes, because two sandboxes have separate heaps and a value cannot cross by
+reference.
+
+**Bridges are host-side.** `runtime/` is `#![no_std]`, so a registry with locks
+and a pool cannot live there. The sandbox side is what it already is: a
+refcounted HANDLE — a `K_BRIDGE` port interned by host id, so a handle arriving
+twice counts once (`install_bridge_port`: "hand back the SAME object and say
+nothing to the host"), with exactly one `EV_RETAIN` and one `EV_RELEASE` per
+port per sandbox.
+
+**Refcounted per END. A bridge dies when both ends reach zero.** A sandbox
+tracks which bridge ports it holds so it cannot double-count, which the
+interning already gives.
+
+LOCAL channels are unaffected and stay in-heap: `crosses_a_heap` already
+separates them, and a channel between two green threads in one sandbox has no
+reason to pay for a host round trip.
+
+### What drives a sandbox
+
+ONE executor, **shared across sandboxes, including inner ones**. It owns the
+thread pool, or a single thread.
+
+**A sandbox is runnable exactly when a thread parked on a bridge end has a
+value waiting** — not when a bridge is written. A write nobody is parked on
+does nothing; a thread parked on an empty bridge does nothing. The predicate is
+a sibling of `needs_host` (`runtime/src/conc.rs:1599`): the same walk over
+`SC_THREADS` and `TH_PARK_ON`, asking whether the port has a value rather than
+merely whether it is a bridge.
+
+Wakes **debounce**: N arrivals between two runs cost one dispatch, which
+`Driver::wake` already requires and `Core.scheduled` already implements.
+
+### The system thread, and why calls do not run on it
+
+The constructor takes a **system bridge end** — a sandbox cannot be built
+without one — and bootstrap spawns a **system thread** parked on it. So the
+readiness predicate has no bootstrap exception: something is parked on the
+system port from the first instant.
+
+**The system port is control-plane only: `bind`, `unbind`, `close`. No `:call`
+on it.** Calls run on a DEDICATED CALL THREAD, bound to a port:
+
+    -> {:op :bind   :port P}     spawn a call thread parked on P
+    -> {:op :unbind :port P}     stop it
+    -> {:op :close}              the sandbox goes
+
+The holder makes a bridge pair, keeps one end, and sends the other as a
+`K_PORT` value — delegation that already works, since a port the host names in
+a message is one it is handing over (`DECISIONS.md#ports-are-the-hosts`).
+
+Calls then go on the bound port and answers come back on it carrying `:tx`:
+
+    -> {:tx n :op :call :fn "ns/f" :args [..]}
+    <- {:tx n :op :return :value v}
+    <- {:tx n :op :throw  :kind ".." :message ".."}
+
+**One bound port is a QUEUE: serial by construction.** Several calls may be
+outstanding, and they are processed one at a time in arrival order. Concurrency
+is explicit — bind two ports — so the cost of it is visible rather than a
+thread appearing per call.
+
+**Why not on the system thread.** Because a call that parks would park the
+control plane, and `close` would be stuck behind a call that is waiting on
+something. And because "the system thread never becomes irrecoverable" is then
+a property maintained by catching everything, where one missed edge — a throw
+while unwinding, an allocation failure mid-handler, a native that traps — takes
+out the sandbox's only control plane. **Guest code never runs on the system
+thread, so guest code cannot kill it.** Guarantee by construction, the same
+move as a grant being conferred from outside rather than asserted by the var it
+protects.
+
+The call thread's contract is smaller and can be met: a throw answers
+`{:tx :op :throw}`, and the thread re-parks to serve the next request.
+
+### The sandbox object is sugar
+
+What a constructor returns is **an API over the system port end** — an id, that
+end, a reference to the executor. Every operation is a message, `close`
+included; there is no disposal path beside it. `DECISIONS.md#drivers` already
+says the handle is "an id, its system port, a reference to its driver", and
+this is that, with the consequence followed through: an SDK wraps a bound port
+in a client object so the simple case reads simply, and two clients is two
+bound ports.
+
+### What has to change, and where it is not
+
+| | today | target |
+|---|---|---|
+| bridge memory | ring inside the receiving sandbox (`PT_INBOX`) | the bridge's own, host-side |
+| executor | per-sandbox `Driver` | one, shared |
+| wake condition | on write | parked thread + non-empty end |
+| Rust SDK | `Mutex<VecDeque<Request>>` → `call_on` | bridge → system port |
+| CLI | `Host`/`Service`, pumping inline | nothing; the executor drives |
+| JVM / CLR | `TH_LEN=12`, no `systemMessage`, no system branch in `hostDeliver` | the whole protocol |
+| constructor | no system port; installed afterwards | system bridge required |
+
+**The ports are a generation behind before this starts.** They never received
+`structured-ports` step 5: their thread object has no `TH_ARGS`/`TH_TX`, there
+is no `systemMessage`, and `hostDeliver` has no system-port branch — they still
+run `img.entry` directly.
+
+**And none of this is generated.** All 91 kin sources were checked: not one
+touches ports, concurrency or scheduling. `Conc` is hand-written three times, so
+parity is three hand ports of one protocol. That is the cost of the current
+arrangement, stated here rather than discovered per-runtime.
+
+### What it settles
+
+The gas divergence in `DECISIONS.md#calls-are-ports` closes when every runtime
+calls the same way, because every runtime then pays the same scheduler.
