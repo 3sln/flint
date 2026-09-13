@@ -24,11 +24,27 @@ callable from a compiled module. It covers 22 namespaces.
 
 **Fourteen `lib/flint` namespaces are not in it.** That is not a bug, but it
 is unreviewed: nothing records whether they are public API, internal machinery
-that happens to live in `lib/`, or something in between. They are marked
-**UNMANIFESTED** below, and that is the first boundary question for each of
-them — several are plainly internal (`flint.nfa` and `flint.pike` are the
-regex engine's insides), and several plainly are not (`flint.bytes`,
-`flint.table`).
+that happens to live in `lib/`, or something in between. Each is marked
+**UNMANIFESTED** below and carries an **Is this public?** line with the
+evidence — how many compiled test programs require it, how many other `lib`
+namespaces do, and whether README names it. Counted, not guessed.
+
+What the counts say, as a starting point rather than an answer:
+
+| | evidence | reading |
+|---|---|---|
+| `flint.check` | 14 programs require it | public, never manifested |
+| `flint.bytes` | 5 programs, and `flint.protocols.io` | public, never manifested |
+| `flint.table` | 2 programs, has its own decision | public, never manifested |
+| `flint.host` | 0 programs, 2 README mentions | genuinely unclear |
+| `flint.snapshot` | nothing requires it at all | genuinely unclear |
+| `flint.fs` | nothing requires it; `flint.sys.fs` is what programs use | may have no job left |
+| the rest | required only by tooling or by each other | internal |
+
+The three "public, never manifested" ones are the concrete finding: adding a
+namespace to `bin/manifest` makes `test/manifest.clj` assert every var in it is
+callable from a compiled module, which is coverage those three do not have
+today.
 
 ---
 
@@ -42,6 +58,8 @@ These are ours to design. Nothing constrains the names but us.
 
 16 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Byte strings (`DECISIONS.md#no-runtime-linking`). A string of bytes, in the same two tiers as text: flat below the threshold, a shallow tree above it, with structure sharing so concatenation is a...
 
+**Is this public?** Required by 5 compiled test program(s), 1 other `lib` namespace(s), named 0 time(s) in README. 5 compiled test programs require it, and `flint.protocols.io` does. Reads as public API that was never manifested.
+
 **Change requests:** _none recorded_
 
 ## flint.check
@@ -50,6 +68,8 @@ These are ours to design. Nothing constrains the names but us.
 
 5 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Checks that cost nothing in a release build. Two things at once, and they are the same thing seen from two sides: * **Inline checks** against bad usage, so a library says what went wrong where it...
 
+**Is this public?** Required by 14 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. 14 compiled test programs require it -- more than any other namespace here. Reads as public API that was never manifested.
+
 **Change requests:** _none recorded_
 
 ## flint.cli
@@ -57,6 +77,8 @@ These are ours to design. Nothing constrains the names but us.
 **Reviewed:** ☐ not signed off
 
 7 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. The command surface, as a flint program (`DECISIONS.md#cli`).
+
+**Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. Nothing requires it. It is the CLI's own logic, driven by `bin/flint`; a program requiring it would be odd.
 
 **Change requests:** _none recorded_
 
@@ -106,6 +128,8 @@ These are ours to design. Nothing constrains the names but us.
 
 29 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. `deps.edn`, the parts of it flint can honour (`DECISIONS.md#cli`).
 
+**Is this public?** Required by 0 compiled test program(s), 1 other `lib` namespace(s), named 0 time(s) in README. Required only by other `flint.deps.*` namespaces. Tooling for reading `deps.edn`.
+
 **Change requests:** _none recorded_
 
 ## flint.deps.manifest
@@ -113,6 +137,8 @@ These are ours to design. Nothing constrains the names but us.
 **Reviewed:** ☐ not signed off
 
 7 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Manifest SCANNERS: what a package that is already on disk says it depends on (`DECISIONS.md#one-dependency-walk`).
+
+**Is this public?** Required by 0 compiled test program(s), 2 other `lib` namespace(s), named 0 time(s) in README. Required only within `flint.deps.*`. Tooling.
 
 **Change requests:** _none recorded_
 
@@ -122,6 +148,8 @@ These are ours to design. Nothing constrains the names but us.
 
 13 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Where a pod comes from (`DECISIONS.md#pods-are-a-resolvable-dependency`).
 
+**Is this public?** Required by 0 compiled test program(s), 1 other `lib` namespace(s), named 0 time(s) in README. Required only within `flint.deps.*`. Tooling.
+
 **Change requests:** _none recorded_
 
 ## flint.deps.resolve
@@ -129,6 +157,8 @@ These are ours to design. Nothing constrains the names but us.
 **Reviewed:** ☐ not signed off
 
 19 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. The dependency PLAN: which version of what, and where it came from (`DECISIONS.md#system-namespaces-and-deps`).
+
+**Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. Required by nothing in `lib`; reached by the CLI. Tooling.
 
 **Change requests:** _none recorded_
 
@@ -146,6 +176,8 @@ These are ours to design. Nothing constrains the names but us.
 
 7 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. The filesystem, as a capability (`DECISIONS.md#cli`). Nothing here is privileged.
 
+**Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. Nothing requires it, and `flint.sys.fs` is the served filesystem a program actually uses. Worth checking whether this one still has a job.
+
 **Change requests:** _none recorded_
 
 ## flint.host
@@ -153,6 +185,8 @@ These are ours to design. Nothing constrains the names but us.
 **Reviewed:** ☐ not signed off
 
 2 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Asking the host for something, and the capability that gates it.
+
+**Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 2 time(s) in README. No program requires it, but README names it twice and it is the var the capability guard is written about. Public by documentation, private by use -- the one here that could go either way.
 
 **Change requests:** _none recorded_
 
@@ -162,6 +196,8 @@ These are ours to design. Nothing constrains the names but us.
 
 21 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Regex AST to a Thompson NFA program (`DECISIONS.md#matching-over-ropes`).
 
+**Is this public?** Required by 0 compiled test program(s), 2 other `lib` namespace(s), named 0 time(s) in README. Required by `flint.regex` and one other; the regex engine's insides.
+
 **Change requests:** _none recorded_
 
 ## flint.pike
@@ -169,6 +205,8 @@ These are ours to design. Nothing constrains the names but us.
 **Reviewed:** ☐ not signed off
 
 1 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. The reference Pike VM (`DECISIONS.md#matching-over-ropes`), in cljc.
+
+**Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. Required by nothing directly; the reference Pike VM behind `flint.regex`.
 
 **Change requests:** _none recorded_
 
@@ -218,6 +256,8 @@ These are ours to design. Nothing constrains the names but us.
 
 3 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Capture the whole VM state, and put it back (`DECISIONS.md#snapshots`).
 
+**Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. Nothing requires it and no program names it, but capturing VM state is the kind of thing a host wants. Unclear which side of the line it is on.
+
 **Change requests:** _none recorded_
 
 ## flint.table
@@ -225,6 +265,8 @@ These are ours to design. Nothing constrains the names but us.
 **Reviewed:** ☐ not signed off
 
 17 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Tables: columnar storage that is a value (`DECISIONS.md#tables`).
+
+**Is this public?** Required by 2 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. 2 compiled test programs require it, and it has its own decision (`DECISIONS.md#tables`). Reads as public API that was never manifested.
 
 **Change requests:** _none recorded_
 
@@ -241,6 +283,8 @@ These are ours to design. Nothing constrains the names but us.
 **Reviewed:** ☐ not signed off
 
 5 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Namespaces with no source, spoken to over a port (`DECISIONS.md#workspace-capabilities` step 4, `system-namespaces-and-deps`).
+
+**Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. Compiler machinery: the target `:require` of a virtual namespace compiles INTO. A program naming it directly would be a mistake.
 
 **Change requests:** _none recorded_
 
