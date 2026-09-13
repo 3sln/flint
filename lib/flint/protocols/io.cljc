@@ -1,4 +1,4 @@
-(ns flint.io
+(ns flint.protocols.io
   "Reading and writing as PROTOCOLS, not as capabilities.
 
   A program that needs to read something does not thereby need a filesystem.
@@ -25,6 +25,20 @@
   rather than one with an encoding argument because a value that is sometimes
   a string and sometimes bytes is two things wearing one name -- the same
   reason `flint.sys.slurp` has both `slurp` and `slurp-bytes`.
+
+  ## Why `flint.protocols.io` and not `flint.io`
+
+  Because `flint.protocols` is where protocols live. `Printable` is there, and
+  a second protocol namespace under a different prefix would be the same "one
+  concept, two homes" this project keeps finding -- the reader looking for what
+  they can implement should find all of it in one place.
+
+  ## Why `flint.protocols.io` and not `flint.io`
+
+  Because `flint.protocols` is where protocols live -- `Printable` is already
+  there. A second protocol namespace under a different prefix would be the same
+  one-concept-two-homes this project keeps finding, and a reader looking for
+  what they can implement should find all of it in one place.
 
   ## Closing is not here
 
@@ -70,26 +84,26 @@
 (defn text-source
   "A `TextSource` from `f`: `(f n)` for a sized read, `(f nil)` for the rest."
   [f]
-  (with-meta {:flint.io/kind :text-source}
-    {'flint.io/read-text (fn ([src] (f nil)) ([src n] (f n)))}))
+  (with-meta {:flint.protocols.io/kind :text-source}
+    {'flint.protocols.io/read-text (fn ([src] (f nil)) ([src n] (f n)))}))
 
 (defn text-sink
   "A `TextSink` from `f`, called with each string written."
   [f]
-  (with-meta {:flint.io/kind :text-sink}
-    {'flint.io/write-text (fn [sink s] (f s) sink)}))
+  (with-meta {:flint.protocols.io/kind :text-sink}
+    {'flint.protocols.io/write-text (fn [sink s] (f s) sink)}))
 
 (defn binary-source
   "A `BinarySource` from `f`: `(f n)` for a sized read, `(f nil)` for the rest."
   [f]
-  (with-meta {:flint.io/kind :binary-source}
-    {'flint.io/read-bytes (fn ([src] (f nil)) ([src n] (f n)))}))
+  (with-meta {:flint.protocols.io/kind :binary-source}
+    {'flint.protocols.io/read-bytes (fn ([src] (f nil)) ([src n] (f n)))}))
 
 (defn binary-sink
   "A `BinarySink` from `f`, called with each byte string written."
   [f]
-  (with-meta {:flint.io/kind :binary-sink}
-    {'flint.io/write-bytes (fn [sink bs] (f bs) sink)}))
+  (with-meta {:flint.protocols.io/kind :binary-sink}
+    {'flint.protocols.io/write-bytes (fn [sink bs] (f bs) sink)}))
 
 ;; ------------------------------------------------------- the obvious ones
 
@@ -109,8 +123,8 @@
   "A `TextSink` collecting into an atom, which `collected` reads back."
   []
   (let [acc (atom [])]
-    (with-meta {:flint.io/kind :text-sink :flint.io/acc acc}
-      {'flint.io/write-text (fn [sink s] (swap! acc conj s) sink)})))
+    (with-meta {:flint.protocols.io/kind :text-sink :flint.protocols.io/acc acc}
+      {'flint.protocols.io/write-text (fn [sink s] (swap! acc conj s) sink)})))
 
 (defn bytes-source
   "A `BinarySource` over `bs`."
@@ -129,8 +143,8 @@
   "A `BinarySink` collecting into an atom, which `collected` reads back."
   []
   (let [acc (atom [])]
-    (with-meta {:flint.io/kind :binary-sink :flint.io/acc acc}
-      {'flint.io/write-bytes (fn [sink bs] (swap! acc conj bs) sink)})))
+    (with-meta {:flint.protocols.io/kind :binary-sink :flint.protocols.io/acc acc}
+      {'flint.protocols.io/write-bytes (fn [sink bs] (swap! acc conj bs) sink)})))
 
 (defn collected
   "Everything written to a `string-sink` or `bytes-sink`, in order.
@@ -138,7 +152,7 @@
   Only these two: a sink built from a function has nowhere to collect into, and
   answering `nil` for one would read as \"nothing was written\"."
   [sink]
-  (if-let [acc (:flint.io/acc sink)]
+  (if-let [acc (:flint.protocols.io/acc sink)]
     @acc
     (throw (ex-info "this sink does not collect; only string-sink and bytes-sink do"
-                    {:kind (:flint.io/kind sink)}))))
+                    {:kind (:flint.protocols.io/kind sink)}))))

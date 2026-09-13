@@ -1008,28 +1008,6 @@
     text},
   :macros #{},
   :count 11},
- flint.io
- {:file "lib/flint/io.cljc",
-  :present
-  #{BinarySink
-    BinarySource
-    TextSink
-    TextSource
-    binary-sink
-    binary-source
-    bytes-sink
-    bytes-source
-    collected
-    read-bytes
-    read-text
-    string-sink
-    string-source
-    text-sink
-    text-source
-    write-bytes
-    write-text},
-  :macros #{},
-  :count 17},
  flint.port
  {:file "lib/flint/port.cljc",
   :present
@@ -1059,6 +1037,28 @@
     protocol-miss},
   :macros #{},
   :count 7},
+ flint.protocols.io
+ {:file "lib/flint/protocols/io.cljc",
+  :present
+  #{BinarySink
+    BinarySource
+    TextSink
+    TextSource
+    binary-sink
+    binary-source
+    bytes-sink
+    bytes-source
+    collected
+    read-bytes
+    read-text
+    string-sink
+    string-source
+    text-sink
+    text-source
+    write-bytes
+    write-text},
+  :macros #{},
+  :count 17},
  flint.regex
  {:file "lib/flint/regex.cljc",
   :present

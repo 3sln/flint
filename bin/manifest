@@ -26,7 +26,7 @@
     flint.regex       "lib/flint/regex.cljc"
     flint.thread      "lib/flint/thread.cljc"
     flint.port        "lib/flint/port.cljc"
-    flint.io          "lib/flint/io.cljc"
+    flint.protocols.io "lib/flint/protocols/io.cljc"
     flint.rpc         "lib/flint/rpc.cljc"
     flint.doc         "lib/flint/doc.cljc"
     flint.data.json   "lib/flint/data/json.cljc"

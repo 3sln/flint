@@ -5,7 +5,7 @@
   not a type: that is what lets `flint.sdk` give an inner sandbox input and
   output without granting it any, and what lets a caller substitute a buffer
   for a file without the program noticing."
-  (:require [flint.io :as io]
+  (:require [flint.protocols.io :as io]
             [flint.bytes :as b]
             [clojure.string :as str]))
 
