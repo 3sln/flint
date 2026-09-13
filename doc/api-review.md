@@ -46,6 +46,17 @@ namespace to `bin/manifest` makes `test/manifest.clj` assert every var in it is
 callable from a compiled module, which is coverage those three do not have
 today.
 
+**They would pass it.** Adding all three temporarily and running the suite:
+
+    ok   flint.bytes (16 vars)
+    ok   flint.table (17 vars)
+    ok   flint.check (7 vars, 1 macro)
+
+Every var reachable, nothing absent, nothing extra. So the gap is missing
+COVERAGE and not a hidden defect — publishing them costs nothing and buys the
+assertion. The probe was reverted, because whether they are published is a
+boundary decision and this file is where it gets made, not a script.
+
 ---
 
 # flint's own
