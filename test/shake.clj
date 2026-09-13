@@ -98,12 +98,24 @@
 (check-that "the function table reads back" (> (count table) 100))
 (check-that "the image names the builtins it imports" (> (count (:used b)) 10))
 
-;; Roots: every entry point a host or the runtime uses, plus EXACTLY the table
-;; slots this image imports. The second half is precision the linker could not
-;; have had -- it was handed an export list before the program existed.
+;; Roots: every entry point a host or the runtime uses, the LINKER's own
+;; function pointers, and exactly the table slots this image imports. The last
+;; is precision the linker could not have had -- it was handed an export list
+;; before the program existed.
+;;
+;; THE LINKER'S POINTERS ARE ROOTS TOO, and this file used to leave them out.
+;; Below `slots` the table holds what Rust compiled a closure or a trait object
+;; to, and nothing here can tell which are reachable. `flint.selfhost` learned
+;; that when stubbing them "stubbed the scheduler's own callbacks, and every
+;; program using ports trapped inside `conc::scheduler`" -- and this file kept
+;; the narrower rule, which was harmless only while a call did not use a port.
+;; It does now (`DECISIONS.md#calls-are-ports`), so this shake stubbed the
+;; scheduler under its own feet and the module answered `unreachable`.
+(def builtin-slots (set (vals slots)))
 (def roots
-  (into (into #{} (keep #(:index (get exp %))
-                        (remove #(str/starts-with? % "flint_b_") (keys exp))))
+  (into (into (into #{} (keep #(:index (get exp %))
+                              (remove #(str/starts-with? % "flint_b_") (keys exp))))
+              (keep (fn [e] (when-not (contains? builtin-slots (key e)) (val e))) table))
         (keep #(get table %) (keep #(get slots %) (:used b)))))
 
 (def shaken (ws/stub-dead full roots))
@@ -160,7 +172,19 @@
     ;; rather than conservative; it is not written because a decoder with one
     ;; wrong immediate width desynchronises and starts MISSING calls again,
     ;; which is the failure this just cost an hour to find.
-    (check-that "it recovers much of what the linker removes" (> recovered 0.45))
+    ;; DOWN FROM 55% TO 44% for the single entry point
+    ;; (`DECISIONS.md#calls-are-ports`). The shaker now roots the linker's own
+    ;; function pointers -- Rust's closures and trait objects, below `slots` --
+    ;; because a call uses a port and a stubbed scheduler callback traps under
+    ;; its own feet. That is the same lesson `flint.selfhost` already carried
+    ;; and this file did not, which is why the row above went `unreachable`
+    ;; before it went smaller.
+    ;;
+    ;; Kept conservative on purpose: a shake that cuts something reachable makes
+    ;; a SMALLER module that traps, and only running it says so. 11% of a module
+    ;; is the right price for that, the same way round as the byte-at-a-time
+    ;; scan above.
+    (check-that "it recovers much of what the linker removes" (> recovered 0.40))
     (check-that "and does not claim to beat the linker" (< recovered 1.0))))
 
 (if (pos? @fails)
