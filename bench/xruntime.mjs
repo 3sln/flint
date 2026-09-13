@@ -14,17 +14,18 @@
 // This paragraph used to say the entry "is exported as `main`", and that a CLI
 // `--invoke` therefore needed no host code. Nothing is exported as `main` any
 // more: a module has no entry point and the runtime invokes nothing
-// (`DECISIONS.md#structured-ports` step 5). Measured 2026-09-12, on a module
-// built by `bin/bench-xruntime` moments before:
+// (`DECISIONS.md#structured-ports` step 5).
 //
-//     $ wasmtime --invoke main out/xrt-0.wasm
-//     Error: failed to run main module
-//     Caused by: no func export named `main` found
+// **This is already recorded**, with both breakages and their evidence, in
+// `DECISIONS.md#cross-runtime-benchmarks` -- including that every quoted
+// ns/instruction figure there "names its command and its workload but not its
+// machine, and the command no longer produces them". Read that before citing
+// any number from this harness. What is here is the correction to the sentence
+// this file itself got wrong.
 //
 // A STALE `out/xrt-0.wasm` still answers, which is the trap: the rows look
 // alive if the family was built before the export went. Nothing rebuilds them
-// as part of a gate, and no gate runs this file at all, so the breakage was
-// invisible.
+// as part of a gate, and no gate runs this file at all.
 //
 // Driving a current module from a command line means writing arguments into
 // its memory and calling `flint_call`, which `wasmtime --invoke` cannot do

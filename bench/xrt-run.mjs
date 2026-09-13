@@ -6,7 +6,18 @@
 // work either way is: read a file, compile, instantiate, call.
 const path = typeof Deno !== 'undefined' ? Deno.args[0] : process.argv[2];
 // The FUNCTION, named: `wasmtime --invoke main` had a name in it too.
+//
+// DERIVED FROM THE MODULE when not given, because the default was
+// `construe.bench.xrt25/main` and the family is one module per iteration
+// count. Four of the five therefore exited 1 -- `no such var` -- and only
+// `xrt-25` ever ran. Recorded in `DECISIONS.md#cross-runtime-benchmarks` as
+// the second of two entry-point breakages; this is that one fixed.
+const derived = (() => {
+  const m = /xrt-(\d+)\.wasm$/.exec(path ?? '');
+  return m ? `construe.bench.xrt${m[1]}/main` : null;
+})();
 const FN = (typeof Deno !== 'undefined' ? Deno.args[1] : process.argv[3])
+        ?? derived
         ?? 'construe.bench.xrt25/main';
 const bytes = typeof Deno !== 'undefined'
   ? Deno.readFileSync(path)
