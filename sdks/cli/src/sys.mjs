@@ -17,8 +17,9 @@
 
 import {
   readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, existsSync,
-  rmSync, unlinkSync,
+  rmSync, unlinkSync, mkdtempSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, dirname, isAbsolute } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { varsOf } from './catalogue.mjs';
@@ -249,7 +250,23 @@ export class Sdk {
   /// it does not hold: without that test, `sdk` was the only capability anyone
   /// needed, because `(sdk/run {... :with ["fs"]})` minted the rest onto a
   /// child it wrote.
-  constructor(ops) { this.ops = ops; }
+  constructor(ops) { this.ops = ops; this.boxes = []; }
+
+  /// Caller-supplied sources, in a private temporary directory.
+  ///
+  /// The host touching its own disk, not the guest reaching anything: no path
+  /// here is caller-controlled, and it is removed on the way out. Reusing the
+  /// ordinary spec builder keeps one of them rather than a second that agrees
+  /// with it until it does not.
+  spill(sources) {
+    const dir = mkdtempSync(join(tmpdir(), 'flint-sdk-'));
+    for (const [ns, body] of sources) {
+      const at = join(dir, `${ns.replace(/-/g, '_').replace(/\./g, '/')}.cljc`);
+      mkdirSync(dirname(at), { recursive: true });
+      writeFileSync(at, body);
+    }
+    return dir;
+  }
 
   /// Whether the caller holds `want`, by the same spelling `:with` uses. A bare
   /// `fs` covers `fs:write`; holding `fs:write` does NOT confer a bare `fs`,
@@ -263,29 +280,66 @@ export class Sdk {
 
   invoke(v, args, policy, c) {
     switch (v) {
+      // `(compile {:sources {"my.ns" "(ns my.ns) .."} :fn "my.ns/main"})`
+      //
+      // NO `:paths` AND NO `:out`. The caller hands over source text and gets
+      // the artifact bytes back, so `sdk` confers no filesystem reach at all.
       case 'compile': {
         const o = args[0] || {};
-        const srcs = strings(o, 'paths', 'compile needs :paths ["src" ...]');
-        const fn = str(o, 'fn', 'compile needs :fn "ns/fn"');
-        const out = pick(o, 'out') ?? 'out.wasm';
-        const to = pick(o, 'to') ?? 'wasm';
-        const meta = [];
-        // `:with` on a compile DECLARES rather than grants, as on the command
-        // line: the arguments arrive later, so what a program needs is written
-        // into the artifact's metadata.
-        const withs = strings(o, 'with');
-        if (withs.length) meta.push(['capabilities', withs.join(' ')]);
-        const ck = pick(o, 'checks');
-        this.ops.compile(srcs, fn, out, strings(o, 'optimize'), to, meta,
-                         { quiet: true, checks: typeof ck === 'boolean' ? ck : null });
-        return c.map([[c.kw('out'), c.str(out)],
-                      [c.kw('bytes'), c.int(statSync(out).size)]]);
+        const dir = this.spill(sourcesOf(o));
+        try {
+          const bytes = this.ops.compileBytes([dir], str(o, 'fn', 'compile needs :fn "ns/fn"'),
+                                              strings(o, 'optimize'), pick(o, 'to') ?? 'wasm',
+                                              metaOf(o),
+                                              { checks: typeof pick(o, 'checks') === 'boolean' ? pick(o, 'checks') : null,
+                                                exports: strings(o, 'exports') });
+          return c.bytes(bytes);
+        } finally { rmSync(dir, { recursive: true, force: true }); }
+      }
+      // `(sandbox image)` -- a loaded, callable program that holds NOTHING.
+      // No ports, no capabilities, no IO: it reaches the world only through
+      // what it is later handed.
+      case 'sandbox': {
+        const image = args[0];
+        if (!(image instanceof Uint8Array)) {
+          throw new Error('sandbox needs the image bytes `compile` returned');
+        }
+        this.boxes.push(instantiate(new WebAssembly.Module(image), { stepLimit: 0 }));
+        return c.int(this.boxes.length - 1);
+      }
+      // `(call sandbox "ns/f" [args])`
+      case 'call': {
+        const h = args[0];
+        if (this.boxes[h] === undefined) throw new Error(`no such sandbox: ${h}`);
+        if (this.boxes[h] === null) throw new Error(`sandbox ${h} is closed`);
+        const argv = args[2] === undefined || args[2] === null ? [] : args[2];
+        if (!Array.isArray(argv)) throw new Error('call: args must be a vector');
+        // `call`, NOT `run`. `run` wraps its arguments into ONE vector -- the
+        // `main [args]` convention -- while `call` passes them individually,
+        // which is the `flint_call` ABI the native side uses. Using `run` here
+        // made `(call box "greet" ["ada" "alan"])` an arity error on node and
+        // not on native: one surface, two meanings.
+        try {
+          return c.from(this.boxes[h].call(strArg(args, 1, 'fn'), argv.map(String)));
+        } catch (e) {
+          // A FAILURE IS DATA, not a second channel: `flint_call` encodes
+          // `{:error kind :message text}` and the native side forwards it as
+          // the answer. This side's driver throws instead, so it is turned back
+          // into the same value rather than into a different kind of failure.
+          return c.from(e.flint ?? { ':error': ':call-failed', ':message': String(e.message) });
+        }
+      }
+      case 'close': {
+        const h = args[0];
+        if (this.boxes[h] === undefined) throw new Error(`no such sandbox: ${h}`);
+        // The SLOT IS KEPT, so a stale handle reads as closed rather than as
+        // some later sandbox that reused the number.
+        this.boxes[h] = null;
+        return c.nil();
       }
       case 'run': {
         const o = args[0] || {};
-        const srcs = strings(o, 'paths', 'run needs :paths ["src" ...]');
         const fn = str(o, 'fn', 'run needs :fn "ns/fn"');
-        const roots = strings(o, 'roots');
         const caps = strings(o, 'with');
         // AUTHORITY IS NOT CREATED HERE. Refused rather than quietly narrowed:
         // a child that silently loses a capability fails somewhere else, for a
@@ -297,9 +351,12 @@ export class Sdk {
             + `it holds: ${held}\n`
             + 'a program may pass on what it has, not mint what it has not.');
         }
-        const r = this.ops.runSource(srcs, fn, strings(o, 'args'), caps,
-                                     roots.length ? roots : undefined, { quiet: true });
-        return c.map([[c.kw('code'), c.int(r.code)], [c.kw('out'), c.str(r.out)]]);
+        const dir = this.spill(sourcesOf(o));
+        try {
+          const r = this.ops.runSource([dir], fn, strings(o, 'args'), caps, undefined,
+                                       { quiet: true });
+          return c.map([[c.kw('code'), c.int(r.code)], [c.kw('out'), c.str(r.out)]]);
+        } finally { rmSync(dir, { recursive: true, force: true }); }
       }
       case 'version':
         return c.str(this.ops.version);
@@ -307,6 +364,31 @@ export class Sdk {
         throw new Error(`flint.sdk has no ${v}`);
     }
   }
+}
+
+/// `:sources {"my.ns" "(ns my.ns) .."}` from a request, as [ns, body] pairs.
+///
+/// A MAP OF SOURCE TEXT, not a list of directories: there is no path in this
+/// request for a caller to point anywhere.
+function sourcesOf(o) {
+  const v = pick(o, 'sources');
+  const pairs = v instanceof Map ? [...v.entries()]
+    : (v && typeof v === 'object') ? Object.entries(v) : null;
+  if (!pairs) throw new Error('compile/run needs :sources {"my.ns" "(ns my.ns) ..."}');
+  const out = pairs.map(([k, body]) => {
+    if (typeof body !== 'string') throw new Error(`sources: ${k} must map to source text`);
+    return [String(k).replace(/^:/, ''), body];
+  });
+  if (!out.length) throw new Error('sources: at least one namespace');
+  return out;
+}
+
+/// `:meta {k v}` as the [k, v] pairs the compiler takes.
+function metaOf(o) {
+  const v = pick(o, 'meta');
+  const pairs = v instanceof Map ? [...v.entries()]
+    : (v && typeof v === 'object') ? Object.entries(v) : [];
+  return pairs.map(([k, x]) => [String(k).replace(/^:/, ''), String(x)]);
 }
 
 /// `:key` out of a decoded options map, whatever the decoder made of it.

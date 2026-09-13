@@ -63,6 +63,9 @@ export const CATALOGUE = [
   ['flint.sdk', [
     ['compile', [1]],
     ['run', [1]],
+    ['sandbox', [1]],
+    ['call', [3]],
+    ['close', [1]],
     ['version', [0]],
   ]],
 ];

@@ -706,24 +706,66 @@
   (spit (str p16 "/deps.edn") "{}")
   (fs/create-dirs (str p16 "/inner"))
   (spit (str p16 "/inner/hi.cljc") "(ns inner.hi)\n(defn main [args] (str \"inner sees \" (count args) \" args\"))\n")
+  ;; `:sources`, NOT `:paths`: the SDK reaches no filesystem, so the caller
+  ;; supplies the source text it wants compiled (`DECISIONS.md#flint-sdk`).
   (spit (str p16 "/drv.cljc")
-        (str "(ns drv (:require [flint.sdk :as sdk]))\n"
-             "(defn go [_] (let [r (sdk/run {:paths [\".\"] :fn \"inner.hi/main\"})\n"
-             "                   c (sdk/compile {:paths [\".\"] :fn \"inner.hi/main\" :out \"inner.wasm\"})]\n"
-             "               (str \"code=\" (:code r) \" out=\" (:out r) \" bytes=\" (:bytes c))))\n"))
+        (str "(ns drv (:require [flint.sdk :as sdk] [flint.bytes :as b]))\n"
+             "(def src \"(ns inner.hi)\\n(defn main [args] (str \\\"inner sees \\\" (count args) \\\" args\\\"))\\n\")\n"
+             "(defn go [_] (let [r (sdk/run {:sources {\"inner.hi\" src} :fn \"inner.hi/main\"})\n"
+             "                   img (sdk/compile {:sources {\"inner.hi\" src} :fn \"inner.hi/main\"})]\n"
+             "               (str \"code=\" (:code r) \" out=\" (:out r) \" bytes=\" (b/size img))))\n"))
   (let [r (sh p16 flint "run" ":path" "." ":fn" "drv/go" ":with" "[sdk]")]
     (check "a flint program compiles and runs another flint program"
            (str/includes? (:out r) "out=inner sees 0 args") (:out r))
-    (check "  ... and the module it wrote has a size"
+    (check "  ... and compile hands back the image rather than writing one"
            (re-find #"bytes=[1-9][0-9]+" (:out r)) (:out r))
-    ;; The served compile is QUIET. `flint task` would otherwise announce a
-    ;; temporary file on every run.
-    (check "  ... and the served compile does not announce the file"
-           (not (str/includes? (:out r) "wrote inner.wasm")) (:out r)))
+    ;; NOTHING IS WRITTEN. `compile` takes no `:out`, so there is no path for a
+    ;; caller to name and nothing to announce.
+    (check "  ... writing no file and announcing none"
+           (not (str/includes? (:out r) "wrote")) (:out r)))
   (let [r (sh p16 flint "run" ":path" "." ":fn" "drv/go")]
     (check "without the grant the compiler is not reachable"
            (and (not (zero? (:exit r))) (str/includes? (:out r) "no system port"))
            (:out r))))
+
+;; --- flint.sdk: a sandbox constructor, holding nothing --------------------
+;;
+;; The shape `sdks/rust` and `sdks/c` have: compile to an artifact, construct a
+;; sandbox from it, call a named function. The sandbox holds NOTHING -- no
+;; ports, no capabilities, no IO -- so it reaches the world only through what it
+;; is later handed (`DECISIONS.md#flint-sdk`).
+(let [p18 (str (fs/create-temp-dir))]
+  (spit (str p18 "/deps.edn") "{}")
+  (spit (str p18 "/box.cljc")
+        (str "(ns box (:require [flint.sdk :as sdk]))\n"
+             "(def src (str \"(ns guest)\\n\"\n"
+             "              \"(defn greet [a b] (str \\\"hi \\\" a \\\" and \\\" b))\\n\"\n"
+             "              \"(defn main [args] \\\"entry\\\")\\n\"))\n"
+             ;; `:exports` keeps `greet` callable: only reachable code ships, and
+             ;; a function nobody calls from the entry is the one a host wants.
+             "(defn go [_]\n"
+             "  (let [img (sdk/compile {:sources {\"guest\" src} :fn \"guest/main\"\n"
+             "                          :exports [\"guest/greet\"]})\n"
+             "        b (sdk/sandbox img)\n"
+             "        r (sdk/call b \"guest/greet\" [\"ada\" \"alan\"])\n"
+             "        _ (sdk/close b)]\n"
+             "    (str \"reply=\" (pr-str r))))\n"
+             "(defn stale [_]\n"
+             "  (let [img (sdk/compile {:sources {\"guest\" src} :fn \"guest/main\"})\n"
+             "        b (sdk/sandbox img)]\n"
+             "    (sdk/close b)\n"
+             "    (sdk/call b \"guest/main\" [])))\n"))
+  (let [r (sh p18 flint "run" ":path" "." ":fn" "box/go" ":with" "[sdk]")]
+    ;; ARGUMENTS ARE PASSED INDIVIDUALLY -- the `flint_call` ABI -- and not
+    ;; wrapped into one vector the way an entry's `[args]` is. The two front
+    ;; ends disagreed about this until they were made to agree.
+    (check "a sandbox calls a named function with individual arguments"
+           (str/includes? (:out r) "hi ada and alan") (:out r)))
+  ;; A CLOSED HANDLE IS CLOSED, not silently some later sandbox that reused the
+  ;; number: the slot is kept rather than compacted.
+  (let [r (sh p18 flint "run" ":path" "." ":fn" "box/stale" ":with" "[sdk]")]
+    (check "  ... and a handle used after close says so"
+           (str/includes? (:out r) "is closed") (:out r))))
 
 ;; --- flint.sdk does not mint authority -------------------------------------
 ;;
@@ -739,7 +781,8 @@
         "(ns child.read (:require [flint.sys.fs :as fs]))\n(defn main [args] (str \"got \" (fs/read-file \"secret.txt\")))\n")
   (spit (str p17 "/attack.cljc")
         (str "(ns attack (:require [flint.sdk :as sdk]))\n"
-             "(defn go [_] (:out (sdk/run {:paths [\".\"] :fn \"child.read/main\" :with [\"fs\"]})))\n"))
+             "(def src \"(ns child.read (:require [flint.sys.fs :as fs]))\\n(defn main [args] (str \\\"got \\\" (fs/read-file \\\"secret.txt\\\")))\\n\")\n"
+             "(defn go [_] (:out (sdk/run {:sources {\"child.read\" src} :fn \"child.read/main\" :with [\"fs\"]})))\n"))
   (let [r (sh p17 flint "run" ":path" "." ":fn" "attack/go" ":with" "[sdk]")]
     (check "a program granted only :sdk cannot lend :fs to a child"
            (str/includes? (:out r) "cannot lend it") (:out r))

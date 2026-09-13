@@ -84,6 +84,24 @@ function runCompiler(args) {
   return r.out;
 }
 
+/// The module bytes, without writing them anywhere.
+///
+/// `flint.sdk` needs exactly this: it hands back an artifact rather than
+/// writing one, because a path in that request is filesystem reach the caller
+/// did not grant (`DECISIONS.md#flint-sdk`).
+export function compileBytes(srcs, entry, optimize, to, meta,
+                             { checks = null, exports = [] } = {}) {
+  const target = String(to ?? 'wasm').replace(/^:/, '');
+  if (target !== 'wasm') throw new Error(`no such target \`${target}\` (\`:to :wasm\`)`);
+  const aot = wantsAot(optimize);
+  const spec = buildSpec({
+    srcs, entry, slots: aot ? slotsAot() : slots(), aot, shake: true, meta, roots: null,
+    stdlib: stdlib(), stdlibDeps: stdlibDeps(),
+    stripChecks: stripChecks(optimize, checks), exports,
+  });
+  return b64decode(runCompiler(['wasm', spec, b64encode(aot ? runtimeAotWasm() : runtimeWasm())]).trim());
+}
+
 export function compile(srcs, entry, outPath, optimize, to, meta, { quiet = false, checks = null } = {}) {
   const target = String(to).replace(/^:/, '');
   if (target === 'llvm' || target === 'native') {
@@ -157,7 +175,7 @@ export function runSource(srcs, entry, args, caps, roots, { quiet = false } = {}
   // functions are handed in rather than imported, because `sys.mjs` importing
   // this file back would be a cycle.
   if (caps.some((c) => c === 'sdk' || c.startsWith('sdk:'))) {
-    services.push(new Sdk({ compile, runSource, version: VERSION, caps }));
+    services.push(new Sdk({ compile, compileBytes, runSource, version: VERSION, caps }));
   }
   // Installed only when something is actually served. A program that was
   // granted nothing keeps the honest refusal instead of being handed a

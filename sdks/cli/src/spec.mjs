@@ -88,7 +88,7 @@ function readIfAny(p) {
 /// | `pods` | `[[namespace, [varName, ..]], ..]` for pods this build booted |
 export function buildSpec({
   srcs, entry, slots, aot = false, shake = false, meta = [], roots = null,
-  pods = [], stdlib, stdlibDeps, stripChecks = false,
+  pods = [], stdlib, stdlibDeps, stripChecks = false, exports = [],
 }) {
   // The standard library first, so a project file of the same path wins.
   const files = new Map();
@@ -190,6 +190,10 @@ export function buildSpec({
   out += '} :slots {';
   for (const k of keys) out += `${ednString(k)} ${slots[k]} `;
   out += '}';
+  // `:exports` keeps a function callable through the shake. NOT `:roots`:
+  // roots are namespaces to resolve from, so a qualified function name there
+  // reports itself missing.
+  if (exports.length) out += ` :exports [${exports.join(' ')}]`;
   if (aot) out += ' :aot true';
   if (shake) out += ' :shake true';
   if (meta.length) {

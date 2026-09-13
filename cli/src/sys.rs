@@ -387,7 +387,7 @@ pub fn catalogue() -> Vec<(&'static str, Vec<(&'static str, &'static [u32])>)> {
     // The catalogue is the VAR LIST, so the capabilities it is built with are
     // irrelevant here -- what a caller holds decides what `run` may lend, not
     // which vars exist.
-    let sdk = Sdk { caps: Vec::new() };
+    let sdk = Sdk { caps: Vec::new(), sandboxes: Vec::new() };
     vec![
         (fs.name_static(), fs.vars()),
         (env.name_static(), env.vars()),
@@ -850,6 +850,10 @@ pub struct Sdk {
     /// hold: without this, `sdk` was the only capability anyone needed, because
     /// `(sdk/run {... :with ["fs"]})` minted the rest onto a child it wrote.
     pub caps: Vec<String>,
+    /// Sandboxes this program constructed, by handle. `None` is a closed one --
+    /// the slot is kept so a stale handle reads as closed rather than as some
+    /// later sandbox that reused the number.
+    pub sandboxes: Vec<Option<flint_rt::native::Program>>,
 }
 
 impl Sdk {
@@ -858,20 +862,29 @@ impl Sdk {
     }
 }
 
-/// `:paths ["src" ...]` from a request, as the CLI's own argument type.
-fn paths_of(opts: &Val) -> Result<Vec<PathBuf>, String> {
-    match opts.get("paths") {
-        Some(Val::Vector(xs)) | Some(Val::List(xs)) => {
-            let mut out = Vec::with_capacity(xs.len());
-            for x in xs {
-                out.push(PathBuf::from(x.as_str().ok_or("paths: every entry must be a string")?));
+/// `:sources {"my.ns" "(ns my.ns) .."}` from a request.
+///
+/// A MAP OF SOURCE TEXT, not a list of directories, and that is the whole of
+/// why `sdk` reaches no filesystem: there is no path in this request for a
+/// caller to point anywhere (`DECISIONS.md#flint-sdk`).
+fn sources_of(opts: &Val) -> Result<Vec<(String, String)>, String> {
+    match opts.get("sources") {
+        Some(Val::Map(es)) => {
+            let mut out = Vec::with_capacity(es.len());
+            for (k, v) in es {
+                let ns = k.as_str().ok_or("sources: every key must be a namespace")?;
+                let body = match v {
+                    Val::Str(s) => s.clone(),
+                    _ => return Err(format!("sources: {ns} must map to source text")),
+                };
+                out.push((ns.to_string(), body));
             }
             if out.is_empty() {
-                return Err("paths: at least one source root".into());
+                return Err("sources: at least one namespace".into());
             }
             Ok(out)
         }
-        _ => Err("compile/run needs :paths [\"src\" ...]".into()),
+        _ => Err("compile/run needs :sources {\"my.ns\" \"(ns my.ns) ..\"}".into()),
     }
 }
 
@@ -904,26 +917,29 @@ impl Service for Sdk {
         "flint.sdk"
     }
     fn vars(&self) -> Vec<(&'static str, &'static [u32])> {
-        vec![("compile", &[1]), ("run", &[1]), ("version", &[0])]
+        vec![("compile", &[1]), ("run", &[1]), ("sandbox", &[1]), ("call", &[3]),
+             ("close", &[1]), ("version", &[0])]
     }
     fn invoke(&mut self, var: &str, args: &[Val], _p: &Policy) -> Answer {
         let mut w = Wire::new();
         match var {
-            // `(compile {:paths [..] :fn "ns/f" :out "x.wasm"})`
+            // `(compile {:sources {"my.ns" "(ns my.ns) .."} :fn "my.ns/main"})`
+            //
+            // NO `:paths` AND NO `:out`. The caller hands over source text and
+            // gets the image bytes back, so `sdk` confers no filesystem reach
+            // at all -- a caller compiling a project on disk reads it with its
+            // own `fs` grant first, and the two capabilities compose rather
+            // than one implying the other.
             "compile" => {
                 let o = args.first().ok_or("compile needs an options map")?;
-                let srcs = paths_of(o)?;
+                let sources = sources_of(o)?;
                 let entry = o.get("fn").and_then(|v| v.as_str()).ok_or("compile needs :fn \"ns/fn\"")?;
-                let out = o.get("out").and_then(|v| v.as_str()).unwrap_or("out.wasm");
-                let to = o.get("to").and_then(|v| v.as_str()).unwrap_or("wasm");
                 let optimize = strings_at(o, "optimize")?;
                 let checks = match o.get("checks") {
                     Some(Val::Bool(b)) => Some(*b),
                     _ => None,
                 };
-                // `:with` on a compile DECLARES rather than grants, exactly as
-                // it does on the command line: the arguments arrive later, so
-                // what a program needs is written into the artifact's metadata.
+                let shake = !matches!(o.get("shake"), Some(Val::Bool(false)));
                 let mut meta: Vec<(String, String)> = Vec::new();
                 if let Some(Val::Map(es)) = o.get("meta") {
                     for (k, v) in es {
@@ -932,18 +948,71 @@ impl Service for Sdk {
                         }
                     }
                 }
-                let with = strings_at(o, "with")?;
-                if !with.is_empty() {
-                    meta.push(("capabilities".to_string(), with.join(" ")));
-                }
-                crate::compile_q(&srcs, entry, std::path::Path::new(out), &optimize, to, &meta, checks, true)
+                let exports = strings_at(o, "exports")?;
+                let image = crate::sdk_compile(&sources, entry, &exports, &optimize, shake,
+                                               checks, &meta)
                     .map_err(|e| format!("{e:#}"))?;
-                let size = std::fs::metadata(out).map(|m| m.len()).unwrap_or(0);
-                w.map(2);
-                w.keyword(None, "out");
-                w.string(out);
-                w.keyword(None, "bytes");
-                w.int(size as i64);
+                w.bytes(&image);
+            }
+            // `(sandbox image)` -- a loaded, callable program.
+            //
+            // It holds NOTHING. No ports, no capabilities, no IO: a sandbox
+            // constructed here can run its logic and reach the world only
+            // through what it is later handed, which is the inversion
+            // `DECISIONS.md#ports-are-the-hosts` made for ports applied to
+            // everything a program might want.
+            "sandbox" => {
+                let image = match args.first() {
+                    Some(Val::Bytes(b)) => b.clone(),
+                    _ => return Err("sandbox needs the image bytes `compile` returned".into()),
+                };
+                let p = crate::load_sandbox(&image).map_err(|e| format!("{e:#}"))?;
+                self.sandboxes.push(Some(p));
+                w.int((self.sandboxes.len() - 1) as i64);
+            }
+            // `(call sandbox "ns/f" [args])`
+            "call" => {
+                let h = args.first().and_then(|v| v.as_i64())
+                    .ok_or("call needs the handle `sandbox` returned")? as usize;
+                let f = str_arg(args, 1, "fn")?;
+                let argv: Vec<String> = match args.get(2) {
+                    None | Some(Val::Nil) => Vec::new(),
+                    Some(Val::Vector(xs)) | Some(Val::List(xs)) => xs
+                        .iter()
+                        .map(|x| x.as_str().map(|s| s.to_string())
+                             .ok_or(String::from("call: args must be strings")))
+                        .collect::<Result<_, _>>()?,
+                    Some(_) => return Err("call: args must be a vector".into()),
+                };
+                let slot = self.sandboxes.get_mut(h)
+                    .ok_or_else(|| format!("no such sandbox: {h}"))?;
+                let p = slot.as_mut().ok_or_else(|| format!("sandbox {h} is closed"))?;
+                // `call`, NOT `run`. `run` hands its arguments to the entry the
+                // image was compiled with and has no way to select anything
+                // else -- the first version passed the function name as
+                // argument zero, so `(call box "guest/main" ["a" "b"])`
+                // reported three arguments. This is the `flint_call` ABI: one
+                // encoded `["ns/f" args..]` in, one encoded value out.
+                let mut c = Wire::new();
+                c.vector(1 + argv.len() as u32);
+                c.string(f);
+                for a in &argv {
+                    c.string(a);
+                }
+                let reply = p.call(c.as_bytes()).map_err(|e| format!("{e}"))?;
+                // Forwarded VERBATIM. The answer is already an encoded value,
+                // so decoding it here to re-encode it would be two chances to
+                // disagree with the sandbox about what it said.
+                w.raw(&reply);
+            }
+            "close" => {
+                let h = args.first().and_then(|v| v.as_i64())
+                    .ok_or("close needs the handle `sandbox` returned")? as usize;
+                match self.sandboxes.get_mut(h) {
+                    Some(slot) => { *slot = None; }
+                    None => return Err(format!("no such sandbox: {h}")),
+                }
+                w.nil();
             }
             // `(run {:paths [..] :fn "ns/f" :args [..] :with [..]})`
             //
@@ -953,7 +1022,7 @@ impl Service for Sdk {
             // printed, because the caller asked for an answer.
             "run" => {
                 let o = args.first().ok_or("run needs an options map")?;
-                let srcs = paths_of(o)?;
+                let sources = sources_of(o)?;
                 let entry = o.get("fn").and_then(|v| v.as_str()).ok_or("run needs :fn \"ns/fn\"")?;
                 let argv = strings_at(o, "args")?;
                 let caps = strings_at(o, "with")?;
@@ -970,16 +1039,13 @@ impl Service for Sdk {
                         if self.caps.is_empty() { "nothing".to_string() } else { self.caps.join(" ") }
                     ));
                 }
-                let roots = strings_at(o, "roots")?;
-                let (code, out) = crate::run_source_q(
-                    &srcs,
-                    entry,
-                    &argv,
-                    &caps,
-                    if roots.is_empty() { None } else { Some(&roots) },
-                    true,
-                )
-                .map_err(|e| format!("{e:#}"))?;
+                // Compile then run, from the same source map `compile` takes.
+                // No pods: booting one is starting a process, which is not
+                // something a program holding `sdk` alone may do.
+                let image = crate::sdk_compile(&sources, entry, &[], &[], true, None, &[])
+                    .map_err(|e| format!("{e:#}"))?;
+                let (code, out) = crate::run_image_q(&image, &argv, &caps, Vec::new(), true)
+                    .map_err(|e| format!("{e:#}"))?;
                 w.map(2);
                 w.keyword(None, "code");
                 w.int(code as i64);

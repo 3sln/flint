@@ -507,6 +507,114 @@ fn wants_aot(optimize: &[String]) -> bool {
         .unwrap_or(false)
 }
 
+/// Compile from SOURCE THE CALLER SUPPLIED, to a loadable image.
+///
+/// The IO-free half of `compile` (`DECISIONS.md#flint-sdk`). There is no path
+/// here and no output file: the caller hands over namespace-to-source text and
+/// gets bytes back, so `sdk` confers no reach into the filesystem at all. A
+/// caller that wants to compile a project on disk reads it with its own `fs`
+/// grant first, and the two capabilities compose instead of one implying the
+/// other.
+///
+/// The sources are written to a PRIVATE temporary directory and the ordinary
+/// spec builder runs over that. That is the host touching its own disk, not the
+/// guest reaching anything: no path here is caller-controlled, the directory is
+/// removed on the way out, and reusing `build_spec_with` keeps one spec emitter
+/// rather than a second that agrees with it until it does not.
+pub(crate) fn sdk_compile(sources: &[(String, String)], entry: &str, exports: &[String],
+                          optimize: &[String], shake: bool, checks: Option<bool>,
+                          meta: &[(String, String)]) -> Result<Vec<u8>> {
+    let dir = std::env::temp_dir().join(format!("flint-sdk-{}-{}", std::process::id(), sources.len()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir)?;
+    for (ns, body) in sources {
+        let rel = ns_to_path(ns);
+        let path = dir.join(&rel);
+        if let Some(p) = path.parent() {
+            fs::create_dir_all(p)?;
+        }
+        fs::write(&path, body)?;
+    }
+    let slots = parse_slots(SLOTS)?;
+    let strip = strip_checks(optimize, checks);
+    let spec = build_spec_with(&[dir.clone()], entry, &slots, false, shake, meta, None, &[], strip);
+    let spec = match spec {
+        Ok(s) => s,
+        Err(e) => { let _ = fs::remove_dir_all(&dir); return Err(e); }
+    };
+    // `:exports` KEEPS A FUNCTION CALLABLE THROUGH THE SHAKE, and is not
+    // `:roots` -- roots are namespaces to resolve from, so a qualified function
+    // name there reports itself missing. Only reachable code ships, and a
+    // function nobody calls from the entry is exactly the one a host wants to
+    // call: without this `(call box "guest/greet" ..)` answers "this image has
+    // no `guest/greet`" for a function whose source is right there.
+    //
+    // Appended rather than threaded through `build_spec_with`, which already
+    // takes nine arguments. The spec is an EDN MAP, so a key's position in it
+    // carries no meaning -- unlike `:features`, which had to go outside the
+    // `:workspaces` vector it was being written into.
+    let spec = if exports.is_empty() {
+        spec
+    } else {
+        debug_assert!(spec.ends_with('}'));
+        let mut t = spec[..spec.len() - 1].to_string();
+        t.push_str(" :exports [");
+        t.push_str(&exports.join(" "));
+        t.push_str("]}");
+        t
+    };
+    let out = (|| -> Result<Vec<u8>> {
+        let mut c = Program::load(COMPILER, 3_000_000_000)
+            .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
+        let r = c.run(&["project", &spec]);
+        if r.code != 0 {
+            bail!("{}", r.out.trim());
+        }
+        if let Some(rest) = r.out.strip_prefix("!missing") {
+            bail!("no source for{}\nthe sources map has to carry every namespace the entry requires",
+                  rest.replace('\n', " "));
+        }
+        if let Some(rest) = r.out.strip_prefix("!refused") {
+            bail!("{}", rest.trim());
+        }
+        Ok(base64_decode(r.out.split('\n').next().unwrap_or(""))?)
+    })();
+    let _ = fs::remove_dir_all(&dir);
+    out
+}
+
+/// `my.ns` -> `my/ns.cljc`, the path the spec keys a file by.
+///
+/// The same mapping `flint.project/ns->path` makes, and it has to stay the
+/// same: the compiler finds a namespace by the path its name implies.
+fn ns_to_path(ns: &str) -> String {
+    let mut out = String::with_capacity(ns.len() + 5);
+    for c in ns.chars() {
+        match c {
+            '.' => out.push('/'),
+            '-' => out.push('_'),
+            c => out.push(c),
+        }
+    }
+    out.push_str(".cljc");
+    out
+}
+
+/// Load an image so it can be called, with every unit this binary carries.
+///
+/// `run_source_q` does the same thing for `flint run`; a sandbox needs it for
+/// the same reason -- green threads, ports, JSON and XML are namespace UNITS,
+/// so a natively linked binary hands them over by name or a program that
+/// reaches one cannot run.
+pub(crate) fn load_sandbox(image: &[u8]) -> Result<Program> {
+    let mut natives: Vec<(&str, flint_rt::vm::NativeFn)> = Vec::new();
+    natives.extend_from_slice(flint_conc::HOST_CATALOGUE);
+    natives.extend_from_slice(flint_data_json::HOST_CATALOGUE);
+    natives.extend_from_slice(flint_data_xml::HOST_CATALOGUE);
+    Program::load_with(image, 3_000_000_000, &natives)
+        .map_err(|e| anyhow::anyhow!("the image did not load: {e}"))
+}
+
 /// `:to :llvm`: the program as one LLVM IR module, and no linker anywhere.
 ///
 /// What comes back is TEXT, which is the whole difference from the wasm path:
@@ -689,6 +797,18 @@ pub(crate) fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps:
     let bytes = base64_decode(r.out.split('\n').next().unwrap_or(""))?;
 
     // `load_with`, carrying the concurrency unit's builtins: green threads and
+    run_image_q(&bytes, args, caps, pods, quiet)
+}
+
+/// Serve and run an image that is already compiled.
+///
+/// The half of `run_source_q` after the compile, split out because
+/// `flint.sdk` needs exactly this and none of the rest: it has an image
+/// already, from source the caller supplied rather than from a path
+/// (`DECISIONS.md#flint-sdk`). One serving loop rather than two that agree
+/// until one of them is changed.
+pub(crate) fn run_image_q(bytes: &[u8], args: &[String], caps: &[String],
+                          pods: Vec<crate::pod::Pod>, quiet: bool) -> Result<(i32, String)> {
     // ports are a namespace UNIT rather than part of the runtime, so a
     // natively-linked binary has to hand them over by name. Without this
     // `flint run` cannot execute a program that spawns a thread.
@@ -700,7 +820,7 @@ pub(crate) fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps:
     natives.extend_from_slice(flint_conc::HOST_CATALOGUE);
     natives.extend_from_slice(flint_data_json::HOST_CATALOGUE);
     natives.extend_from_slice(flint_data_xml::HOST_CATALOGUE);
-    let mut p = Program::load_with(&bytes, 2_000_000_000, &natives)
+    let mut p = Program::load_with(bytes, 2_000_000_000, &natives)
         .map_err(|e| anyhow::anyhow!("the compiled program did not load: {e}"))?;
     // `:with` mints one opaque value per name and PROJECTS them in as the
     // entry's second argument, so a program receives `[args {name -> cap}]`.
@@ -757,7 +877,7 @@ pub(crate) fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps:
     // be a function call rather than a subprocess is that this binary IS the
     // compiler.
     if caps.iter().any(|c| c == "sdk" || c.starts_with("sdk:")) {
-        host.serve(Box::new(crate::sys::Sdk { caps: caps.to_vec() }));
+        host.serve(Box::new(crate::sys::Sdk { caps: caps.to_vec(), sandboxes: Vec::new() }));
     }
     // A booted pod is served whatever the grants say, because DECLARING one in
     // `deps.edn` is the grant: a pod that was started is a process this build

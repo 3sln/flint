@@ -6375,6 +6375,110 @@ the host to compile and run something, when the compiler can be imported into
 the CLI build?* It should not. With `flint.sdk` it does not have to, and with
 `flint.sys.wasm` (`DECISIONS.md#wasm-engine`) the running half is covered too.
 
+### The shape is the other SDKs' shape
+
+`sdks/rust` is the reference: `Compiler::compile(Compile { resolve, fn_name,
+exports, .. }) -> Image`, then `Image::sandbox() -> Sandbox`, then
+`Sandbox::call(name, args)`. `flint.sdk` is the same four steps —
+`compile`, `sandbox`, `call`, `close` — because a program embedding flint
+should not find a different vocabulary than C, Rust or JavaScript would.
+
+### It grants NO IO, and that is the point
+
+The first version took `:paths` and `:out`, which meant `sdk` alone could read
+any tree and write any path without holding `fs`. It now takes **`:sources`, a
+map of namespace to source text**, and hands back the artifact **bytes**. There
+is no path in the request for a caller to point anywhere.
+
+A caller compiling a project on disk reads it with its own `fs` grant first and
+passes the text in; a caller wanting the artifact on disk writes it the same
+way. The two capabilities compose, rather than one silently implying the other.
+This is the same answer `sdks/rust` gives with a `resolve` closure — the host
+decides what the compiler may see — expressed as data because a served call
+cannot hold a callback into the guest that made it.
+
+The sources are written to a private temporary directory the caller cannot
+name, and the ordinary spec builder runs over that. That is the host touching
+its own disk, not the guest reaching anything, and it keeps one spec builder
+rather than a second that agrees with it until it does not.
+
+A constructed sandbox **holds nothing**: no ports, no capabilities, no IO. It
+reaches the world only through what it is handed afterwards — the inversion
+`DECISIONS.md#ports-are-the-hosts` made for ports, applied to everything.
+
+### `call` passes arguments individually
+
+`(call box "guest/greet" ["ada" "alan"])` calls `greet` with two arguments.
+That is the `flint_call` ABI, and it is NOT what `run` does: `run` hands its
+arguments to the entry as one vector, the `main [args]` convention.
+
+**Both front ends had to be corrected to agree here**, in opposite directions.
+The native side first used `Program::run`, which has no way to select a
+function at all — it calls the image's compiled-in entry, so the function name
+arrived as argument zero and `(call box "guest/main" ["a" "b"])` reported three
+arguments. The node side first used the driver's `run`, which wraps arguments
+into one vector, so the same call was an arity error there and not on native.
+One surface, two meanings, until it was measured.
+
+A failure is DATA on both — `{:error kind :message text}` — rather than a
+second channel. The node driver throws, so its answer is turned back into that
+value rather than into a different kind of failure.
+
+### `:exports` is not `:roots`
+
+Only reachable code ships, so a function nobody calls from the entry is exactly
+the one a host wants to call: `(call box "guest/greet" ..)` answers "this image
+has no `guest/greet`" for a function whose source is right there. `:exports`
+keeps it. It is a separate spec key from `:roots`, which names namespaces to
+RESOLVE from — a qualified function name there reports itself missing, which is
+what the first attempt did.
+
+### What the two front ends do not share
+
+`compile` answers a flint bytecode IMAGE natively and a **wasm module** on
+node, because node has no natively linked runtime to load an image into. The
+same difference `run` already had and states. The bytes are therefore not
+portable between hosts; the answer from `call` is.
+
+### `run` interprets; `compile` produces an artifact
+
+`(sdk/run {:paths ["."] :fn "ns/f"})` needs **no module and no wasm engine** on
+the native binary: the runtime is compiled in, so the source is loaded into a
+second `Program` in the same process and interpreted. `compile` is the one that
+writes a module, and `flint.sys.wasm/run` is what executes one afterwards.
+
+On node, `run` goes through a module — that is what node has — and the header
+on `runSource` already said so. Same answer, different amount of work, and the
+difference is stated rather than hidden.
+
+### It is a grant, and it does not mint others
+
+`sdk` is gated in `:with` like `fs` or `wasm`. Compiling and running is
+executing code.
+
+**`run` takes `:with`, and the first version let the caller put anything in
+it.** That made `sdk` the only capability anyone needed: a program granted
+`sdk` alone could write a child that reads a file, run it with `:with ["fs"]`,
+and read the answer. Probed rather than reasoned about, on the day it was
+written, and it worked — `code=0 out=child read: SECRET-CONTENTS`.
+
+A caller may now pass on only what it holds, and an excess is REFUSED rather
+than quietly narrowed — a child that silently loses a capability fails
+somewhere else, for a reason that does not name this:
+
+    run: this program was not granted `fs`, so it cannot lend it.
+    it holds: sdk
+    a program may pass on what it has, not mint what it has not.
+
+Scoping goes one way, and both directions are tested: holding bare `fs` lends
+`fs:write`, and holding `fs:write` does **not** lend bare `fs`. The chain is
+bounded at every link, because a child's own `flint.sdk` is constructed with
+the child's capabilities.
+
+`test/sysns.clj` carries the attack and a control that differs in exactly one
+thing — the same caller, granted `fs` as well, must still succeed. Without the
+control, a refusal for any unrelated reason would read as the check working.
+
 ### `run` interprets; `compile` produces an artifact
 
 `(sdk/run {:paths ["."] :fn "ns/f"})` needs **no module and no wasm engine** on
