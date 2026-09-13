@@ -88,8 +88,12 @@ function readIfAny(p) {
 /// | `pods` | `[[namespace, [varName, ..]], ..]` for pods this build booted |
 export function buildSpec({
   srcs, entry, slots, aot = false, shake = false, meta = [], roots = null,
-  pods = [], stdlib, stdlibDeps, stripChecks = false, exports = [],
+  pods = [], stdlib, stdlibDeps, stripChecks = false, exports = [], features = null,
 }) {
+  // `:flint/nested` decides whether `flint.sdk` is offered at all. Absent from
+  // an explicit set, the namespace is not emitted and a program naming it does
+  // not compile (`DECISIONS.md#flint-sdk`). Default is ON.
+  const nested = features === null || features.includes(':flint/nested');
   // The standard library first, so a project file of the same path wins.
   const files = new Map();
   for (const [p, body] of Object.entries(stdlib)) files.set(p, body);
@@ -139,6 +143,9 @@ export function buildSpec({
   // missing -- and it has to be told what they HOLD, so an unknown var is a
   // compile error rather than a run-time one.
   for (const [ns, vars] of CATALOGUE) {
+    // NOT NAMEABLE without the feature: omitting the workspace is what makes
+    // `(:require [flint.sdk])` a compile error rather than a run-time refusal.
+    if (ns === 'flint.sdk' && !nested) continue;
     out += '{:prefix ';
     out += ednString(`${ns.replace(/\./g, '/')}/`);
     out += ' :name flint/sys :virtual true :vars [';
@@ -183,7 +190,12 @@ export function buildSpec({
   // byte-identical to what it was -- and, more to the point, byte-identical to
   // the native CLI's. This line is the whole of `:checks`: dropping the default
   // features drops `:flint/check`, which is what compiles a check in.
-  if (stripChecks) out += ' :features #{:flint}';
+  // THE STRIP-CHECKS SET KEEPS `:flint/nested`. It used to be `#{:flint}` --
+  // the whole default minus checks -- but the default gained `:flint/nested`,
+  // and the old literal would have turned the SDK off in every
+  // `:optimize [perf]` build as a side effect of dropping checks.
+  if (features !== null) out += ` :features #{${features.join(' ')}}`;
+  else if (stripChecks) out += ' :features #{:flint :flint/nested}';
   out += ' :builtins #{';
   const keys = Object.keys(slots).sort(byBytes);
   for (const k of keys) out += `${ednString(k)} `;

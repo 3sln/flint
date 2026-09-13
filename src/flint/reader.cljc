@@ -777,8 +777,16 @@
   so the default is the developer's build and the release build is the
   exception. Everything inside `#?(:flint/check ...)` then does not merely
   compile to nothing: the reader never hands it to the analyzer, so it costs no
-  image bytes, no constants, and no shaking."
-  #{:flint :flint/check})
+  image bytes, no constants, and no shaking.
+
+  `:flint/nested` is ON by default and is what makes `flint.sdk` nameable
+  (`DECISIONS.md#flint-sdk`). Unlike the others it selects no reader branch:
+  the CLI reads it to decide whether to offer that virtual namespace at all, so
+  a build compiled without it cannot `:require` the SDK rather than being
+  refused later. It is a feature and not a grant because the SDK confers no
+  access -- turning it off is a statement about what this artifact is allowed to
+  BE, not about what it may reach."
+  #{:flint :flint/check :flint/nested})
 
 (defn reader
   "A reader state over `src`. `opts` may set `:file`, `:ns`, `:aliases`,

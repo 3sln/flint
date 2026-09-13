@@ -6451,10 +6451,61 @@ On node, `run` goes through a module — that is what node has — and the heade
 on `runSource` already said so. Same answer, different amount of work, and the
 difference is stated rather than hidden.
 
-### It is a grant, and it does not mint others
+### It is NOT a grant, and it is off under a gas limit
 
-`sdk` is gated in `:with` like `fs` or `wasm`. Compiling and running is
-executing code.
+It used to be gated by `:with [sdk]`. It is not any more, and the reshape above
+is why: `compile` takes source text and hands back bytes, so the SDK reaches
+nothing a program could not already reach. It is pure computation. Gating it
+bought no safety and made every nested compile ask for a capability that
+conferred nothing.
+
+**Except under a gas limit.** A limit is a promise about how much work a
+program may do before it is stopped, and a nested sandbox runs on its OWN
+budget — so a program that could build one steps outside the promise by
+construction, however small its own allowance. The guarantee holds for the
+whole process or it is not one. `FLINT_STEP_LIMIT` is the spelling, the same
+one `host/flint.mjs` and the wasm driver already use.
+
+The namespace is SERVED AND REFUSING rather than absent, so the reason is said.
+Left unserved, a program meets "this sandbox was given no system port", which
+names neither this namespace nor the limit that turned it off.
+
+**A consequence worth stating: a program granted nothing now has a system
+port.** `test/globalport.clj` puts the old property as "a sandbox given none
+can run its logic and ask the world for nothing", and the transport being
+absent was how that showed. Serving the SDK to everything means the port always
+exists, so an ungranted namespace is refused BY NAME — `the host refused to
+open "flint.sys.fs"` — rather than by the transport being missing. Strictly
+more informative, and what a program can reach is unchanged. It is written down
+because it is a real change to a property this project stated deliberately.
+
+### Turning it off at compile time
+
+`:flint/nested` is in `flint.reader/default-features`, and a build whose
+`:features` omits it does not get the namespace emitted at all — so
+`(:require [flint.sdk])` is a COMPILE error and the artifact cannot reach the
+SDK however it is later run. A feature rather than a grant, because it says
+what this artifact is allowed to BE rather than what it may reach.
+
+    flint compile :path . :fn app/main :features [flint flint/check]
+
+**The strip-checks set had to learn about it.** `:optimize [perf]` emits
+`:features #{:flint}` to drop `:flint/check` — that literal was the whole
+default minus checks, so once the default gained `:flint/nested` the old
+emission would have turned the SDK off in every performance build as a side
+effect of dropping checks. It is now `#{:flint :flint/nested}`: two features,
+two decisions. Both front ends emit it, and `sdks/cli/selftest.mjs` compares
+them on this axis too.
+
+A namespace the CLI withheld reads exactly like one the author misspelled, and
+the compiler cannot tell them apart — it was never offered either. So the CLI,
+the only side that knows, says so:
+
+    no source for flint.sdk
+    `flint.sdk` is not missing -- this build turned it off. `:features` was
+    given without `:flint/nested`, which is what makes the SDK nameable.
+
+### `run` still may not lend what the caller lacks
 
 **`run` takes `:with`, and the first version let the caller put anything in
 it.** That made `sdk` the only capability anyone needed: a program granted
@@ -6478,59 +6529,6 @@ the child's capabilities.
 `test/sysns.clj` carries the attack and a control that differs in exactly one
 thing — the same caller, granted `fs` as well, must still succeed. Without the
 control, a refusal for any unrelated reason would read as the check working.
-
-### `run` interprets; `compile` produces an artifact
-
-`(sdk/run {:paths ["."] :fn "ns/f"})` needs **no module and no wasm engine** on
-the native binary: the runtime is compiled in, so the source is loaded into a
-second `Program` in the same process and interpreted. `compile` is the one that
-writes a module, and `flint.sys.wasm/run` is what executes one afterwards.
-
-On node, `run` goes through a module — that is what node has — and the header
-on `runSource` already said so. Same answer, different amount of work, and the
-difference is stated rather than hidden.
-
-### It is a grant, and it does not mint others
-
-`sdk` is gated in `:with` like `fs` or `wasm`. Compiling and running is
-executing code.
-
-**`run` takes `:with`, and the first version let the caller put anything in
-it.** That made `sdk` the only capability anyone needed: a program granted
-`sdk` alone could write a child that reads a file, run it with `:with ["fs"]`,
-and read the answer. Probed rather than reasoned about, on the day it was
-written, and it worked — `code=0 out=child read: SECRET-CONTENTS`.
-
-A caller may now pass on only what it holds, and an excess is REFUSED rather
-than quietly narrowed — a child that silently loses a capability fails
-somewhere else, for a reason that does not name this:
-
-    run: this program was not granted `fs`, so it cannot lend it.
-    it holds: sdk
-    a program may pass on what it has, not mint what it has not.
-
-Scoping goes one way, and both directions are tested: holding bare `fs` lends
-`fs:write`, and holding `fs:write` does **not** lend bare `fs`. The chain is
-bounded at every link, because a child's own `flint.sdk` is constructed with
-the child's capabilities.
-
-`test/sysns.clj` carries the attack and a control that differs in exactly one
-thing — the same caller, granted `fs` as well, must still succeed. Without the
-control, a refusal for any unrelated reason would read as the check working.
-
-### What `sdk` still confers, stated rather than discovered
-
-Compiling reads source and writes an artifact, so a program holding `sdk` can
-read any tree it names in `:paths` and write any path it names in `:out`,
-**without holding `fs`**. That is inherent to what a compiler does, not an
-oversight, but it is more reach than "may compile" sounds like.
-
-It is NOT confined to a root the way `flint.sys.fs` is, and the choice is open:
-`Fs` takes the working directory as its root and refuses a path that leaves it,
-and the same rule here would be consistent — at the cost of breaking a
-legitimate compile of a tree elsewhere, which `flint task` will want when it
-compiles out of a temporary directory. Worth deciding before `sdk` is granted
-to anything that did not come with the project.
 
 ### What had to change to serve it on node, and what it cost
 

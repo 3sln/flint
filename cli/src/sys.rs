@@ -387,7 +387,7 @@ pub fn catalogue() -> Vec<(&'static str, Vec<(&'static str, &'static [u32])>)> {
     // The catalogue is the VAR LIST, so the capabilities it is built with are
     // irrelevant here -- what a caller holds decides what `run` may lend, not
     // which vars exist.
-    let sdk = Sdk { caps: Vec::new(), sandboxes: Vec::new() };
+    let sdk = Sdk { caps: Vec::new(), sandboxes: Vec::new(), gas: 0 };
     vec![
         (fs.name_static(), fs.vars()),
         (env.name_static(), env.vars()),
@@ -854,6 +854,9 @@ pub struct Sdk {
     /// the slot is kept so a stale handle reads as closed rather than as some
     /// later sandbox that reused the number.
     pub sandboxes: Vec<Option<flint_rt::native::Program>>,
+    /// The gas limit the OUTER program is under, in instructions. Non-zero
+    /// turns this namespace off (`DECISIONS.md#flint-sdk`).
+    pub gas: u64,
 }
 
 impl Sdk {
@@ -921,6 +924,22 @@ impl Service for Sdk {
              ("close", &[1]), ("version", &[0])]
     }
     fn invoke(&mut self, var: &str, args: &[Val], _p: &Policy) -> Answer {
+        // A GAS LIMIT IS A PROMISE ABOUT THE WHOLE PROCESS. A nested sandbox
+        // runs on its own budget, so a program that could build one would step
+        // outside the promise by construction, however small its own allowance.
+        //
+        // Served and refusing rather than absent, so the reason is said. Left
+        // unserved, the program meets "this sandbox was given no system port",
+        // which names neither this namespace nor the limit that turned it off.
+        if self.gas > 0 {
+            return Err(format!(
+                "flint.sdk is off under a gas limit.\n\
+                 this program is limited to {} instructions, and a sandbox it built would run \
+                 on its own budget -- so the limit would stop meaning what it says.\n\
+                 run without FLINT_STEP_LIMIT to use it.",
+                self.gas
+            ));
+        }
         let mut w = Wire::new();
         match var {
             // `(compile {:sources {"my.ns" "(ns my.ns) .."} :fn "my.ns/main"})`

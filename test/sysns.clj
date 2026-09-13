@@ -44,8 +44,15 @@
 
 ;; NOT GRANTED: there is no system port, so it cannot even ask.
 (let [r (sh proj flint "run" ":path" "." ":fn" "app.a/go")]
+  ;; A NAMED REFUSAL, not "no system port". Since `flint.sdk` is served to
+  ;; every program (`DECISIONS.md#flint-sdk`) a system port now always exists,
+  ;; so an ungranted namespace is refused BY NAME instead of the transport
+  ;; being absent. Strictly more informative, and a real change to the old
+  ;; "granted nothing has no port" property -- recorded rather than absorbed.
   (check "without the grant it cannot ask at all"
-         (and (not (zero? (:exit r))) (str/includes? (:out r) "no system port"))
+         (and (not (zero? (:exit r)))
+              (str/includes? (:out r) "refused to open")
+              (str/includes? (:out r) "flint.sys.fs"))
          (:out r)))
 
 ;; THE ROOT IS THE AUTHORITY. An escape is refused, not clamped.
@@ -243,8 +250,13 @@
            "(defn go [_] (str at-load))\n"))
 
 (let [r (sh proj flint "run" ":path" "." ":fn" "app.c/go")]
+  ;; REACHED AND REFUSED, which is what this row is about. The sentence is now
+  ;; the load-time one rather than "no system port", because the call gets
+  ;; further: a port exists, and what stops it is that a top-level form cannot
+  ;; wait for an answer.
   (check "a virtual reference AT LOAD TIME reaches the machinery"
-         (str/includes? (:out r) "no system port") (:out r))
+         (or (str/includes? (:out r) "still initialising")
+             (str/includes? (:out r) "refused to open")) (:out r))
   (check "and does not fall back to the nil-callee message"
          (not (str/includes? (:out r) "is not a function")) (:out r)))
 
@@ -688,7 +700,9 @@
   ;; like any other and the ungranted case must fail closed.
   (let [r (sh p15 flint "run" ":path" "." ":fn" "w/go")]
     (check "without the grant it cannot run a module at all"
-           (and (not (zero? (:exit r))) (str/includes? (:out r) "no system port"))
+           (and (not (zero? (:exit r)))
+                (str/includes? (:out r) "refused to open")
+                (str/includes? (:out r) "flint.sys.wasm"))
            (:out r)))
   (let [r (sh p15 flint "run" ":path" "." ":fn" "w/go" ":with" "[wasm]")]
     (check "a granted flint.sys.wasm/run executes the module"
@@ -723,10 +737,25 @@
     ;; caller to name and nothing to announce.
     (check "  ... writing no file and announcing none"
            (not (str/includes? (:out r) "wrote")) (:out r)))
+  ;; NO GRANT IS NEEDED, and that is the point: since `compile` takes source
+  ;; text and hands back bytes, the SDK reaches nothing a program could not
+  ;; already reach. Gating it bought no safety and made every nested compile ask
+  ;; for a capability that conferred nothing.
   (let [r (sh p16 flint "run" ":path" "." ":fn" "drv/go")]
-    (check "without the grant the compiler is not reachable"
-           (and (not (zero? (:exit r))) (str/includes? (:out r) "no system port"))
-           (:out r))))
+    (check "  ... and needs no capability at all"
+           (str/includes? (:out r) "out=inner sees 0 args") (:out r)))
+  ;; OFF UNDER A GAS LIMIT. A limit is a promise about the whole process, and a
+  ;; nested sandbox runs on its own budget.
+  (let [pb (doto (ProcessBuilder. (into-array String [flint "run" ":path" "." ":fn" "drv/go"]))
+             (.directory (java.io.File. p16)))
+        _ (.put (.environment pb) "FLINT_STEP_LIMIT" "50000000")
+        proc (.start pb)
+        out (str (slurp (.getInputStream proc)) (slurp (.getErrorStream proc)))]
+    (.waitFor proc)
+    (check "  ... but is off under a gas limit"
+           (str/includes? out "off under a gas limit") out)
+    (check "  ... saying why, rather than looking absent"
+           (str/includes? out "own budget") out)))
 
 ;; --- flint.sdk: a sandbox constructor, holding nothing --------------------
 ;;
@@ -755,7 +784,7 @@
              "        b (sdk/sandbox img)]\n"
              "    (sdk/close b)\n"
              "    (sdk/call b \"guest/main\" [])))\n"))
-  (let [r (sh p18 flint "run" ":path" "." ":fn" "box/go" ":with" "[sdk]")]
+  (let [r (sh p18 flint "run" ":path" "." ":fn" "box/go")]
     ;; ARGUMENTS ARE PASSED INDIVIDUALLY -- the `flint_call` ABI -- and not
     ;; wrapped into one vector the way an entry's `[args]` is. The two front
     ;; ends disagreed about this until they were made to agree.
@@ -763,7 +792,7 @@
            (str/includes? (:out r) "hi ada and alan") (:out r)))
   ;; A CLOSED HANDLE IS CLOSED, not silently some later sandbox that reused the
   ;; number: the slot is kept rather than compacted.
-  (let [r (sh p18 flint "run" ":path" "." ":fn" "box/stale" ":with" "[sdk]")]
+  (let [r (sh p18 flint "run" ":path" "." ":fn" "box/stale")]
     (check "  ... and a handle used after close says so"
            (str/includes? (:out r) "is closed") (:out r))))
 
@@ -783,15 +812,15 @@
         (str "(ns attack (:require [flint.sdk :as sdk]))\n"
              "(def src \"(ns child.read (:require [flint.sys.fs :as fs]))\\n(defn main [args] (str \\\"got \\\" (fs/read-file \\\"secret.txt\\\")))\\n\")\n"
              "(defn go [_] (:out (sdk/run {:sources {\"child.read\" src} :fn \"child.read/main\" :with [\"fs\"]})))\n"))
-  (let [r (sh p17 flint "run" ":path" "." ":fn" "attack/go" ":with" "[sdk]")]
-    (check "a program granted only :sdk cannot lend :fs to a child"
+  (let [r (sh p17 flint "run" ":path" "." ":fn" "attack/go")]
+    (check "a program granted nothing cannot lend :fs to a child"
            (str/includes? (:out r) "cannot lend it") (:out r))
     (check "  ... and the secret does not come back"
            (not (str/includes? (:out r) "SECRET")) (:out r)))
   ;; THE CONTROL, differing in exactly one thing: the caller now holds `fs`.
   ;; Without it a refusal for any unrelated reason would read as the check
   ;; working.
-  (let [r (sh p17 flint "run" ":path" "." ":fn" "attack/go" ":with" "[sdk fs]")]
+  (let [r (sh p17 flint "run" ":path" "." ":fn" "attack/go" ":with" "[fs]")]
     (check "  ... but a caller that HOLDS :fs may pass it on"
            (str/includes? (:out r) "got SECRET") (:out r))))
 

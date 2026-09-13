@@ -279,6 +279,17 @@ export class Sdk {
   get vars() { return varsOf(this.name); }
 
   invoke(v, args, policy, c) {
+    // A GAS LIMIT IS A PROMISE ABOUT THE WHOLE PROCESS. A nested sandbox runs
+    // on its own budget, so a program that could build one would step outside
+    // the promise by construction, however small its own allowance.
+    //
+    // Served and refusing rather than absent, so the reason is said.
+    if (this.ops.gas > 0) {
+      throw new Error(`flint.sdk is off under a gas limit.\n`
+        + `this program is limited to ${this.ops.gas} instructions, and a sandbox it built `
+        + `would run on its own budget -- so the limit would stop meaning what it says.\n`
+        + 'run without FLINT_STEP_LIMIT to use it.');
+    }
     switch (v) {
       // `(compile {:sources {"my.ns" "(ns my.ns) .."} :fn "my.ns/main"})`
       //

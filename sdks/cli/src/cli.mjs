@@ -90,19 +90,20 @@ function runCompiler(args) {
 /// writing one, because a path in that request is filesystem reach the caller
 /// did not grant (`DECISIONS.md#flint-sdk`).
 export function compileBytes(srcs, entry, optimize, to, meta,
-                             { checks = null, exports = [] } = {}) {
+                             { checks = null, exports = [], features = null } = {}) {
   const target = String(to ?? 'wasm').replace(/^:/, '');
   if (target !== 'wasm') throw new Error(`no such target \`${target}\` (\`:to :wasm\`)`);
   const aot = wantsAot(optimize);
   const spec = buildSpec({
     srcs, entry, slots: aot ? slotsAot() : slots(), aot, shake: true, meta, roots: null,
     stdlib: stdlib(), stdlibDeps: stdlibDeps(),
-    stripChecks: stripChecks(optimize, checks), exports,
+    stripChecks: stripChecks(optimize, checks), exports, features,
   });
   return b64decode(runCompiler(['wasm', spec, b64encode(aot ? runtimeAotWasm() : runtimeWasm())]).trim());
 }
 
-export function compile(srcs, entry, outPath, optimize, to, meta, { quiet = false, checks = null } = {}) {
+export function compile(srcs, entry, outPath, optimize, to, meta,
+                        { quiet = false, checks = null, features = null } = {}) {
   const target = String(to).replace(/^:/, '');
   if (target === 'llvm' || target === 'native') {
     throw new Error(
@@ -116,7 +117,7 @@ export function compile(srcs, entry, outPath, optimize, to, meta, { quiet = fals
   const spec = buildSpec({
     srcs, entry, slots: table, aot, shake: true, meta, roots: null,
     stdlib: stdlib(), stdlibDeps: stdlibDeps(),
-    stripChecks: stripChecks(optimize, checks),
+    stripChecks: stripChecks(optimize, checks), features,
   });
   const out = runCompiler(['wasm', spec, b64encode(base)]);
   const module = b64decode(out.trim());
@@ -171,12 +172,18 @@ export function runSource(srcs, entry, args, caps, roots, { quiet = false } = {}
   // Running a module is EXECUTING CODE, so it is a grant like any other
   // (`DECISIONS.md#wasm-engine`).
   if (caps.some((c) => c === 'wasm' || c.startsWith('wasm:'))) services.push(new Wasm());
-  // The compiler, served to the program (`DECISIONS.md#flint-sdk`). The two
+  // The compiler, served to the program (`DECISIONS.md#flint-sdk`). The
   // functions are handed in rather than imported, because `sys.mjs` importing
   // this file back would be a cycle.
-  if (caps.some((c) => c === 'sdk' || c.startsWith('sdk:'))) {
-    services.push(new Sdk({ compile, compileBytes, runSource, version: VERSION, caps }));
-  }
+  //
+  // NOT A GRANT, and it used to be one: since `compile` takes source text and
+  // hands back bytes, the SDK reaches nothing a program could not already
+  // reach. It is off under a GAS LIMIT instead -- a limit is a promise about
+  // the whole process, and a nested sandbox runs on its own budget.
+  services.push(new Sdk({
+    compile, compileBytes, runSource, version: VERSION, caps,
+    gas: process.env.FLINT_STEP_LIMIT ? Number(process.env.FLINT_STEP_LIMIT) : 0,
+  }));
   // Installed only when something is actually served. A program that was
   // granted nothing keeps the honest refusal instead of being handed a
   // transport that can reach nothing.
@@ -250,7 +257,7 @@ function values(key, args, at) {
 export function parse(argv) {
   const a = {
     srcs: [], entry: null, out: null, to: null,
-    grants: [], optimize: [], meta: [], args: [], rest: [], checks: null,
+    grants: [], optimize: [], meta: [], args: [], rest: [], checks: null, features: null,
   };
   let i = 0;
   while (i < argv.length) {
@@ -266,6 +273,13 @@ export function parse(argv) {
     // performance build is one way to drop checks; saying so directly is the
     // other, and a build that wants checks under `:optimize [perf]` had no way
     // to ask for them.
+    else if (t === ':features') {
+      const [v, n] = values(':features', argv, i);
+      // Written `flint` or `:flint`; kept with the colon, which is how the spec
+      // spells a keyword.
+      a.features = v.map((f) => (f.startsWith(':') ? f : `:${f}`));
+      i = n;
+    }
     else if (t === ':checks') {
       const [v, n] = values(':checks', argv, i);
       a.checks = String(v[0]) === 'true' ? true : String(v[0]) === 'false' ? false : null;
@@ -375,7 +389,7 @@ export async function main(argv) {
     const meta = a.meta.slice();
     if (a.grants.length) meta.push(['capabilities', a.grants.join(' ')]);
     await compile(a.srcs, a.entry, a.out ?? 'out.wasm', a.optimize, a.to ?? 'wasm', meta,
-                  { checks: a.checks });
+                  { checks: a.checks, features: a.features });
     return 0;
   }
   // `test` is `run` with a generated entry: the compiler collects every var

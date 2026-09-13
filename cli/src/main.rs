@@ -180,8 +180,9 @@ fn source_ext(name: &str) -> &'static str {
 /// carries. Shared by `compile` and `run` so the two cannot drift.
 fn build_spec(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
               aot: bool, shake: bool, meta: &[(String, String)],
-              roots: Option<&[String]>, strip_checks: bool) -> Result<String> {
-    build_spec_with(srcs, entry, slots, aot, shake, meta, roots, &[], strip_checks)
+              roots: Option<&[String]>, strip_checks: bool,
+              features: Option<&[String]>) -> Result<String> {
+    build_spec_with(srcs, entry, slots, aot, shake, meta, roots, &[], strip_checks, features)
 }
 
 /// The same, plus the pod namespaces this build booted.
@@ -280,11 +281,18 @@ fn workspace_entry(prefix: &str, w: &Workspace, fallback_name: &str) -> String {
         edn_string(prefix), name, w.tags, w.prelude, w.grants, w.guard)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
                    aot: bool, shake: bool, meta: &[(String, String)],
                    roots: Option<&[String]>,
                    pods: &[(String, Vec<String>)],
-                   strip_checks: bool) -> Result<String> {
+                   strip_checks: bool,
+                   features: Option<&[String]>) -> Result<String> {
+    // `:flint/nested` decides whether `flint.sdk` is offered at all. Absent
+    // from an explicit set, the namespace is not emitted and a program naming
+    // it does not compile (`DECISIONS.md#flint-sdk`). Default is ON, so a build
+    // that says nothing about features keeps it.
+    let nested = features.map_or(true, |f| f.iter().any(|x| x == ":flint/nested"));
     let mut files: BTreeMap<String, String> = BTreeMap::new();
     for (p, body) in STDLIB {
         files.insert((*p).to_string(), (*body).to_string());
@@ -363,6 +371,13 @@ fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
         out.push_str("]} ");
     }
     for (ns, vars) in crate::sys::catalogue() {
+        // NOT NAMEABLE without the feature. Omitting the workspace is what
+        // makes `(:require [flint.sdk])` a compile error rather than a run-time
+        // refusal -- an artifact built without it cannot reach the SDK however
+        // it is later run.
+        if ns == "flint.sdk" && !nested {
+            continue;
+        }
         out.push_str("{:prefix ");
         out.push_str(&edn_string(&format!("{}/", ns.replace('.', "/"))));
         out.push_str(" :name flint/sys :virtual true :vars [");
@@ -428,8 +443,25 @@ fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
     //
     // Said only when it differs from the default, so an ordinary build's spec
     // is byte-identical to what it was.
-    if strip_checks {
-        out.push_str(" :features #{:flint}");
+    // Said only when it differs from the default, so an ordinary build's spec
+    // is byte-identical to what it was.
+    //
+    // THE STRIP-CHECKS SET KEEPS `:flint/nested`. It used to be `#{:flint}`,
+    // which was the whole default minus checks -- but the default gained
+    // `:flint/nested`, and emitting the old literal would have turned the SDK
+    // off in every `:optimize [perf]` build as a side effect of dropping
+    // checks. Two features, two decisions.
+    match features {
+        Some(f) => {
+            out.push_str(" :features #{");
+            for x in f {
+                out.push_str(x);
+                out.push(' ');
+            }
+            out.push('}');
+        }
+        None if strip_checks => out.push_str(" :features #{:flint :flint/nested}"),
+        None => {}
     }
     out.push_str(" :builtins #{");
     for k in slots.keys() {
@@ -537,7 +569,8 @@ pub(crate) fn sdk_compile(sources: &[(String, String)], entry: &str, exports: &[
     }
     let slots = parse_slots(SLOTS)?;
     let strip = strip_checks(optimize, checks);
-    let spec = build_spec_with(&[dir.clone()], entry, &slots, false, shake, meta, None, &[], strip);
+    let spec = build_spec_with(&[dir.clone()], entry, &slots, false, shake, meta, None, &[], strip,
+                               None);
     let spec = match spec {
         Ok(s) => s,
         Err(e) => { let _ = fs::remove_dir_all(&dir); return Err(e); }
@@ -581,6 +614,28 @@ pub(crate) fn sdk_compile(sources: &[(String, String)], entry: &str, exports: &[
     })();
     let _ = fs::remove_dir_all(&dir);
     out
+}
+
+/// The "no source for ..." sentence, plus WHY when the reason is known.
+///
+/// A namespace the CLI deliberately withheld reads exactly like one the author
+/// misspelled, and the compiler cannot tell them apart -- it was never offered
+/// either. Only this side knows the feature was off, so only this side can say
+/// so (`DECISIONS.md#flint-sdk`).
+fn missing_message(missing: &str, features: Option<&[String]>) -> String {
+    let mut m = format!(
+        "no source for{}\nevery namespace a program requires has to be on the source path",
+        missing.replace('\n', " ")
+    );
+    let nested_off = features.is_some_and(|f| !f.iter().any(|x| x == ":flint/nested"));
+    if nested_off && missing.contains("flint.sdk") {
+        m.push_str(
+            "\n\n`flint.sdk` is not missing -- this build turned it off. `:features` was given \
+             without `:flint/nested`, which is what makes the SDK nameable. Add it, or drop \
+             `:features` to get the default set.",
+        );
+    }
+    m
 }
 
 /// `my.ns` -> `my/ns.cljc`, the path the spec keys a file by.
@@ -634,14 +689,15 @@ pub(crate) fn load_sandbox(image: &[u8]) -> Result<Program> {
 /// run` uses. `SLOTS_AOT` describes the wasm AOT module's table, which this
 /// artifact does not have: its natives are resolved by name.
 fn compile_llvm(srcs: &[PathBuf], entry: &str, out_path: &Path,
-                optimize: &[String], checks: Option<bool>, quiet: bool) -> Result<()> {
+                optimize: &[String], checks: Option<bool>, quiet: bool,
+                features: Option<&[String]>) -> Result<()> {
     let aot = wants_aot(optimize);
     let strip_checks = strip_checks(optimize, checks);
     let slots = parse_slots(SLOTS)?;
     // No shaking: shaking cuts a finished module down to what a program
     // reaches, and there is no module here to cut. The equivalent for a
     // natively linked artifact is the linker's own `--gc-sections`.
-    let spec = build_spec(srcs, entry, &slots, aot, false, &[], None, strip_checks)?;
+    let spec = build_spec(srcs, entry, &slots, aot, false, &[], None, strip_checks, features)?;
     let mut p = Program::load(COMPILER, 3_000_000_000)
         .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
     let r = p.run(&["llvm", &spec]);
@@ -649,8 +705,7 @@ fn compile_llvm(srcs: &[PathBuf], entry: &str, out_path: &Path,
         bail!("{}", r.out.trim());
     }
     if let Some(rest) = r.out.strip_prefix("!missing") {
-        bail!("no source for{}\nevery namespace a program requires has to be on the source path",
-              rest.replace('\n', " "));
+        bail!("{}", missing_message(rest, features));
     }
     if let Some(rest) = r.out.strip_prefix("!refused") {
         bail!("{}", rest.trim());
@@ -670,7 +725,7 @@ fn compile_llvm(srcs: &[PathBuf], entry: &str, out_path: &Path,
 
 pub(crate) fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize: &[String],
            to: &str, meta: &[(String, String)], checks: Option<bool>) -> Result<()> {
-    compile_q(srcs, entry, out_path, optimize, to, meta, checks, false)
+    compile_q(srcs, entry, out_path, optimize, to, meta, checks, false, None)
 }
 
 /// The same, without the "wrote ..." line.
@@ -681,7 +736,8 @@ pub(crate) fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize: 
 /// The same split `run_source_q` makes, for the same reason.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn compile_q(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize: &[String],
-           to: &str, meta: &[(String, String)], checks: Option<bool>, quiet: bool) -> Result<()> {
+           to: &str, meta: &[(String, String)], checks: Option<bool>, quiet: bool,
+           features: Option<&[String]>) -> Result<()> {
     let strip_checks = strip_checks(optimize, checks);
     // TWO TARGETS, NOT ONE ARM. `:to :llvm` emits LLVM IR -- text, no linker,
     // nothing to link -- and `:to :native` emits an executable, which is a
@@ -691,7 +747,7 @@ pub(crate) fn compile_q(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize
     // that no IR emitter existed (`DECISIONS.md#llvm-ir-target`).
     match to.trim_start_matches(':') {
         "wasm" => {}
-        "llvm" => return compile_llvm(srcs, entry, out_path, optimize, checks, quiet),
+        "llvm" => return compile_llvm(srcs, entry, out_path, optimize, checks, quiet, features),
         "native" => bail!(
             "`:to :native` is not built: an executable is a LINK, and this binary carries\n\
              no linker. `:to :llvm` emits the LLVM IR for the same program and needs none;\n\
@@ -703,7 +759,7 @@ pub(crate) fn compile_q(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize
     let aot = wants_aot(optimize);
     let slots = parse_slots(if aot { SLOTS_AOT } else { SLOTS })?;
     let base = if aot { RUNTIME_AOT } else { RUNTIME };
-    let spec = build_spec(srcs, entry, &slots, aot, true, meta, None, strip_checks)?;
+    let spec = build_spec(srcs, entry, &slots, aot, true, meta, None, strip_checks, features)?;
 
     let mut p = Program::load(COMPILER, 3_000_000_000)
         .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
@@ -716,8 +772,7 @@ pub(crate) fn compile_q(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize
         bail!("{}", r.out.trim());
     }
     if let Some(rest) = r.out.strip_prefix("!missing") {
-        bail!("no source for{}\nevery namespace a program requires has to be on the source path",
-              rest.replace('\n', " "));
+        bail!("{}", missing_message(rest, features));
     }
     // A REFUSED require is not a missing one: the source is there and
     // readable, and the answer is that this workspace may not have it. The
@@ -772,7 +827,7 @@ pub(crate) fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps:
         })
         .collect();
     let spec = build_spec_with(srcs, entry, &parse_slots(SLOTS)?, false, false, &[], roots,
-                               &pod_vars, false)?;
+                               &pod_vars, false, None)?;
     let mut c = Program::load(COMPILER, 3_000_000_000)
         .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
     let r = c.run(&["project", &spec]);
@@ -780,8 +835,7 @@ pub(crate) fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps:
         bail!("{}", r.out.trim());
     }
     if let Some(rest) = r.out.strip_prefix("!missing") {
-        bail!("no source for{}\nevery namespace a program requires has to be on the source path",
-              rest.replace('\n', " "));
+        bail!("{}", missing_message(rest, None));
     }
     // A REFUSED require is not a missing one: the source is there and
     // readable, and the answer is that this workspace may not have it. The
@@ -809,6 +863,20 @@ pub(crate) fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps:
 /// until one of them is changed.
 pub(crate) fn run_image_q(bytes: &[u8], args: &[String], caps: &[String],
                           pods: Vec<crate::pod::Pod>, quiet: bool) -> Result<(i32, String)> {
+    run_image_gas(bytes, args, caps, pods, quiet, gas_limit())
+}
+
+/// The gas limit this run is under, in instructions. Zero is no limit.
+///
+/// `FLINT_STEP_LIMIT` is the spelling `host/flint.mjs` and the wasm driver
+/// already use, so a limit set for one front end means the same thing here.
+pub(crate) fn gas_limit() -> u64 {
+    std::env::var("FLINT_STEP_LIMIT").ok().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0)
+}
+
+pub(crate) fn run_image_gas(bytes: &[u8], args: &[String], caps: &[String],
+                            pods: Vec<crate::pod::Pod>, quiet: bool, gas: u64)
+                            -> Result<(i32, String)> {
     // ports are a namespace UNIT rather than part of the runtime, so a
     // natively-linked binary has to hand them over by name. Without this
     // `flint run` cannot execute a program that spawns a thread.
@@ -822,6 +890,9 @@ pub(crate) fn run_image_q(bytes: &[u8], args: &[String], caps: &[String],
     natives.extend_from_slice(flint_data_xml::HOST_CATALOGUE);
     let mut p = Program::load_with(bytes, 2_000_000_000, &natives)
         .map_err(|e| anyhow::anyhow!("the compiled program did not load: {e}"))?;
+    if gas > 0 {
+        p.set_step_limit(gas);
+    }
     // `:with` mints one opaque value per name and PROJECTS them in as the
     // entry's second argument, so a program receives `[args {name -> cap}]`.
     //
@@ -872,13 +943,23 @@ pub(crate) fn run_image_q(bytes: &[u8], args: &[String], caps: &[String],
     if caps.iter().any(|c| c == "wasm" || c.starts_with("wasm:")) {
         host.serve(Box::new(crate::sys::Wasm));
     }
-    // The compiler, served to the program (`DECISIONS.md#flint-sdk`). A grant,
-    // because compiling and running is executing code -- and the reason it can
-    // be a function call rather than a subprocess is that this binary IS the
-    // compiler.
-    if caps.iter().any(|c| c == "sdk" || c.starts_with("sdk:")) {
-        host.serve(Box::new(crate::sys::Sdk { caps: caps.to_vec(), sandboxes: Vec::new() }));
-    }
+    // The compiler, served to the program (`DECISIONS.md#flint-sdk`).
+    //
+    // NOT A GRANT, and it used to be one. Since `compile` takes source text
+    // rather than paths and hands back bytes rather than writing a file, the
+    // SDK reaches nothing a program could not already reach -- it is pure
+    // computation, and `run`'s `:with` can still only pass on what the caller
+    // holds. Gating it bought no safety and made every nested compile ask for
+    // a capability that conferred nothing.
+    //
+    // EXCEPT UNDER A GAS LIMIT. A limit is a promise about how much work a
+    // program can do before it is stopped, and a nested sandbox runs on its
+    // own budget -- so a program that could build one would step outside the
+    // promise by construction, no matter how small its own allowance. The
+    // guarantee has to hold for the whole process or it is not one.
+    host.serve(Box::new(crate::sys::Sdk {
+        caps: caps.to_vec(), sandboxes: Vec::new(), gas,
+    }));
     // A booted pod is served whatever the grants say, because DECLARING one in
     // `deps.edn` is the grant: a pod that was started is a process this build
     // already chose to run, and refusing to talk to it afterwards would be a
@@ -1345,6 +1426,15 @@ struct Args {
     // silently reading different source. `None` means "whatever optimisation
     // implies"; `Some(false)` means off whatever it implies.
     checks: Option<bool>,
+    // `:features [flint flint/check]` -- the reader's feature set, said rather
+    // than defaulted. `None` means `flint.reader/default-features`.
+    //
+    // It also decides whether `flint.sdk` is NAMEABLE: `:flint/nested` is in
+    // the default set, and a build compiled without it cannot `:require` the
+    // SDK at all (`DECISIONS.md#flint-sdk`). A feature and not a grant, because
+    // the SDK confers no access -- it is a statement about what the artifact is
+    // allowed to BE.
+    features: Option<Vec<String>>,
     meta: Vec<(String, String)>,
     args: Vec<String>,
     rest: Vec<String>,
@@ -1435,6 +1525,15 @@ fn parse(args: &[String]) -> Result<Args> {
                 };
                 i = n;
             }
+            ":features" => {
+                let (v, n) = values(":features", args, i)?;
+                // Written `flint` or `:flint`; kept with the colon, which is
+                // how the spec spells a keyword.
+                a.features = Some(v.into_iter()
+                    .map(|f| if f.starts_with(':') { f } else { format!(":{f}") })
+                    .collect());
+                i = n;
+            }
             ":args" => {
                 let (v, n) = values(":args", args, i)?;
                 a.args.extend(v);
@@ -1493,7 +1592,8 @@ fn main() -> Result<()> {
             if !a.grants.is_empty() {
                 meta.push(("capabilities".to_string(), a.grants.join(" ")));
             }
-            compile(&a.srcs, &entry, Path::new(&out), &a.optimize, &to, &meta, a.checks)
+            compile_q(&a.srcs, &entry, Path::new(&out), &a.optimize, &to, &meta, a.checks,
+                      false, a.features.as_deref())
         }
         // `test` is `run` with a generated entry: the compiler collects every
         // var marked `^:flint.check/test` into `flint.check.registry` and this
