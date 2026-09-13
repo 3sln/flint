@@ -134,8 +134,19 @@
                         (recur seen (subvec (vec todo) 1))
                         (recur (conj seen n) (into (subvec (vec todo) 1) (:requires (units n)))))
                       seen))
-          ;; flint.rt carries the interpreter itself, so it is always required
-          closure (conj closure 'flint.rt)
+          ;; flint.rt carries the interpreter itself, so it is always required.
+          ;;
+          ;; AND flint.conc, WHICH IS NEW. A sandbox is reached only through its
+          ;; system port now (`DECISIONS.md#calls-are-ports`) -- a call in, a
+          ;; request out, driving -- and the port machinery lives in this unit.
+          ;; Linking it by reachability meant a program that opened no port had
+          ;; no port, which used to be a saving and is now a module nothing can
+          ;; call.
+          ;;
+          ;; The saving was real and is given up on purpose: `sdks/esm`
+          ;; measured a trivial module at 300 801 bytes without the scheduler
+          ;; and 335 320 with it.
+          closure (conj closure 'flint.rt 'flint.conc)
           exports (into {} (for [b needed-builtins
                                  :let [u (units (provider b))]]
                              [b (get-in u [:provides b :symbol])]))]
@@ -159,7 +170,13 @@
   ;; means it likes, the guest presents it with a request, and it crosses as a
   ;; sentinel carrying that id. Nothing here decides what any of it MEANS
   ;; (`DECISIONS.md#opaque-values`).
-  ["flint_call" "arg_alloc" "arg_push" "out_ptr" "out_len"
+  ;; `flint_call` is GONE (`DECISIONS.md#calls-are-ports`). It was the second
+  ;; way into a sandbox -- a named call, synchronous, no scheduler -- and one
+  ;; way in is worth more than the saving it bought a module that could not
+  ;; park. `arg_alloc`, `arg_push`, `out_ptr` and `out_len` stay: they are how a
+  ;; host writes an encoded value in and reads one back, which the port needs
+  ;; too.
+  ["arg_alloc" "arg_push" "out_ptr" "out_len"
    "image_desc_addr" "set_step_limit" "stat_steps" "set_memory_limit"
    "flint_opaque_host_id"])
 

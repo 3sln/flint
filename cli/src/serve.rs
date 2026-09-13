@@ -118,14 +118,33 @@ impl Host {
         // Installed only when something is actually served. A program that was
         // granted nothing keeps the honest refusal instead of being handed a
         // transport that can reach nothing.
-        if !self.services.is_empty() {
-            let id = self.next_port;
-            self.next_port += 1;
-            p.install_port(id, "system", true);
-            self.system = Some(id);
-        }
+        // UNCONDITIONALLY. See `ensure_system`: the port is the boundary, not a
+        // convenience that appears when something is served.
+        let _ = self.ensure_system(p);
         let out = p.run_with(args, named);
         self.pump(p, out)
+    }
+
+    /// This sandbox's system port, installing it if it has none.
+    ///
+    /// **EVERY SANDBOX HAS ONE.** It used to be installed only when something
+    /// was actually served, so a program granted nothing had no transport at
+    /// all -- which read as "confined by default" and was really "unreachable
+    /// by a route that has since become the only route". Ports are the whole
+    /// boundary now: a call in, a request out, and driving are all messages on
+    /// this port, so a sandbox without one could not be called, could not ask,
+    /// and could not be driven.
+    fn ensure_system(&mut self, p: &mut Program) -> Result<u32, String> {
+        if let Some(id) = self.system {
+            return Ok(id);
+        }
+        let id = self.next_port;
+        self.next_port += 1;
+        if !p.install_port(id, "system", true) {
+            return Err(String::from("this sandbox would not take a system port"));
+        }
+        self.system = Some(id);
+        Ok(id)
     }
 
     /// Call a NAMED function and pump until it answers.
@@ -151,20 +170,7 @@ impl Host {
     /// request, and no driver thread is held waiting on a driver thread.
     pub fn call_named(&mut self, p: &mut Program, name: &str, args: &[Val])
                       -> Result<Vec<u8>, String> {
-        let sys = match self.system {
-            Some(id) => id,
-            None => {
-                let id = self.next_port;
-                self.next_port += 1;
-                if !p.install_port(id, "system", true) {
-                    return Err(String::from(
-                        "this sandbox would not take a system port, so it cannot be called by name",
-                    ));
-                }
-                self.system = Some(id);
-                id
-            }
-        };
+        let sys = self.ensure_system(p)?;
         self.next_tx += 1;
         let tx = self.next_tx;
         let mut w = Wire::new();

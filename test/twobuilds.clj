@@ -130,7 +130,23 @@
 ;; bytes as its own mirror of the append to -87 as a shared walk. And the warning above stopped being hypothetical a
 ;; second time -- this floor is where that change was caught, after the one in
 ;; `test/threads.clj` had already been raised and this one had not.
-(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 321000))
+;; RAISED 106 525 BYTES for the single entry point (`DECISIONS.md#calls-are-ports`),
+;; measured at 376 644 against 270 119 on this very module. A sandbox is reached
+;; only through its system port now -- a call in, a request out, driving -- so
+;; `flint.conc` is in the link closure unconditionally rather than when a
+;; program happens to open a port. Every module is CALLED, so every module needs
+;; the machinery.
+;;
+;; The green thread is what costs and it is not severable: a call runs as one
+;; precisely so the called function can park, which is the property the single
+;; entry point exists to provide.
+;;
+;; The estimate on record was 34 519 bytes (`sdks/esm/src/guest.js`, since
+;; corrected). The first measurement of the change said ZERO, because it
+;; compared a module carrying `clojure.core` against itself -- `clojure.core`
+;; already reaches a conc builtin, so both arms linked the unit and the numbers
+;; were identical by construction.
+(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 430000))
 
 ;; --- absent, by name -------------------------------------------------------
 (doseq [sym ["flint_snapshot_capture" "flint_snapshot_restore" "flint_snapshot_ptr"

@@ -381,39 +381,23 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
   let nextTx = 1;
   const pending = new Map();
   function call(name, args = []) {
-    // TWO PATHS, and which one is right is decided by the module rather than
-    // by the caller.
+    // ONE PATH: THE SYSTEM PORT. A call in, a request out, and driving are all
+    // messages on it, which is what lets calls be distributed across a thread
+    // pool and what makes the sandbox boundary one thing rather than two.
     //
-    // A module with no ports does not link the concurrency unit at all, so it
-    // has no system port to send a message on -- and it cannot need one: a
-    // function that cannot open a port cannot park, so nothing has to be
-    // answered while the call is outstanding. `flint_call` is that case:
-    // encoded arguments in, an encoded answer out, synchronous.
+    // There used to be a second, synchronous path -- `flint_call`, chosen when
+    // the module had no system port -- and it was cheaper for a module that
+    // could not park: a pure module linked no scheduler at all. That saving is
+    // given up deliberately. `test/threads.clj` holds the budget it cost, and
+    // `DECISIONS.md#calls-are-ports` records the trade.
     //
-    // This is what keeps "none of it is in a pure module" true
-    // (`DECISIONS.md#namespace-units`). Routing every call through the system port would
-    // put a scheduler, a ring and an event queue in a module whose whole source
-    // is `(defn f [x] x)` -- 300,801 bytes becoming 335,320, which is the
-    // budget `test/threads.clj` holds.
-    //
-    // Neither path is an entry point. Both name the function.
-    //
-    // The choice is by NEED, and the runtime is ASKED rather than guessed at.
-    //
-    // A partially shaken module can export `flint_install_port` with a stubbed
-    // body (`test/shake.clj` builds exactly that), so the export is not evidence
-    // that the machinery is there; and a host that installed a port through the
-    // raw ABI told the RUNTIME, not this driver. `flint_system_port` answers
-    // both questions at once: whether one exists, and what its id is.
-    //
-    // Without one, nothing the guest does can park on us -- there is nothing to
-    // park on -- so the synchronous path is sufficient and cheaper, and it is
-    // what keeps a pure module free of a scheduler.
-    if (Object.keys(capabilities).length > 0 || Object.keys(requests).length > 0) {
-      ensureSystem();
-    }
+    // The port is ensured rather than probed. It used to be installed only when
+    // something was served, so a module with no capabilities had none -- and
+    // now that this is the only route in, a sandbox without one could not be
+    // called at all.
+    ensureSystem();
     const sysId = e.flint_system_port ? e.flint_system_port() : 0;
-    if (!sysId) return callSync(name, args);
+    if (!sysId) throw new Error('flint: this sandbox has no system port, so it cannot be called');
     const tx = nextTx++;
     const bytes = codec.map([
       [codec.kw('tx'), codec.int(tx)],
@@ -457,26 +441,6 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
       throw err;
     }
     return answer[':value'];
-  }
-
-  /// The no-port call: `flint_call`, synchronous, no scheduler involved.
-  function callSync(name, args = []) {
-    const encoded = codec.vec([
-      codec.str(name),
-      ...args.map((a) => (a instanceof Val ? a : codec.from(a))),
-    ]).encode();
-    const p = e.arg_alloc(encoded.length);
-    new Uint8Array(e.memory.buffer).set(encoded, p);
-    const code = e.flint_call(p, encoded.length);
-    const out = new Uint8Array(e.memory.buffer, e.out_ptr(), e.out_len()).slice();
-    const value = codec.decode(out);
-    if (code !== 0) {
-      const err = new Error(value?.[':message'] ?? 'the call failed');
-      err.kind = value?.[':error'] ?? value?.[':kind'];
-      err.flint = value;
-      throw err;
-    }
-    return value;
   }
 
   const api = {

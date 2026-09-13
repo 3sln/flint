@@ -486,19 +486,23 @@ export class Sandbox {
   /// already resolved. Never reachable from inside a sandbox.
   callSync(fn, args = []) {
     const e = this.inst.exports;
-    if (!e.flint_call) {
+    if (!e.flint_system_port) {
       throw new Error(
-        'this module predates `flint_call`: rebuild it with a current flint');
+        'this module predates the system-port call: rebuild it with a current flint');
     }
     // DELEGATED, rather than a second copy of the call path.
     //
-    // There are two ways to make a call and which is right depends on whether
-    // the sandbox has a system port (`DECISIONS.md#structured-ports` step 5): with one, a
-    // call is a message and can park; without one, `flint_call` is synchronous
-    // and cannot. This used to drive `flint_call` itself and got the choice
-    // wrong for every sandbox with a capability -- the guest opened a port, the
-    // run came back "the host is needed", and `flint_call` encoded the nil that
-    // a not-yet-finished run returns. Every such call answered null.
+    // There used to be TWO ways to make a call, and choosing between them was
+    // this method's job: `flint_call` when the sandbox had no system port, a
+    // message when it had one. It got the choice wrong for every sandbox with a
+    // capability -- the guest opened a port, the run came back "the host is
+    // needed", and `flint_call` encoded the nil that a not-yet-finished run
+    // returns, so every such call answered null.
+    //
+    // There is one way now (`DECISIONS.md#calls-are-ports`), so there is
+    // nothing to choose and nothing to get wrong. This stays because a wasm
+    // sandbox is synchronous underneath and a caller with nothing else to do
+    // should not await an already-resolved promise.
     return this.inst.call(fn, args);
   }
 

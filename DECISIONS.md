@@ -6709,3 +6709,69 @@ output, and no gate ran it — not `bin/check`, not `bin/test`, not
 `bin/release-gate`. `bin/test` now runs it, beside `sdks/esm/build`. Not
 `bin/check`: it takes 30 s against that gate's whole 5 s budget, and it needs
 both CLIs built, which is a test-tier requirement rather than a static one.
+
+## calls-are-ports
+
+**Ratified:** ☐ not signed off
+
+Recorded 2026-09-13. **A sandbox is reached only through its system port.** A
+call in, a request out, and driving are all messages on it. `flint_call` — the
+second way in — is gone, and every sandbox has a system port whether or not
+anything is served to it.
+
+### Why one way and not two
+
+Ports are the whole sandbox boundary. With two ways in, the boundary is two
+things that have to agree, and this project's recurring defect is exactly that:
+one surface exercised, the other assumed. The `:checks` axis existed on one CLI
+and not the other; a throw came back as an error on one front end and as data
+on the other, so a `catch` around a nested call fired on one and not the other.
+Both were two implementations of one idea drifting.
+
+A port also gives what a direct call cannot:
+
+* **calls distribute across a thread pool** — a message can be picked up by
+  whichever driver is free, and which one is driving at any moment is not
+  knowable and does not need to be;
+* **a call can park** — it runs as a green thread, so the called function may
+  open a port and wait, and the host answers that while the call is still
+  outstanding. `flint_call` ran on the host's stack and could not park at all,
+  which is why a sandbox built on it could reach nothing.
+
+### What it cost, measured rather than assumed
+
+`sdks/esm/src/guest.js` argued for keeping the second path with a number:
+routing every call through the system port would put a scheduler, a ring and an
+event queue into a module whose whole source is `(defn f [x] x)` — 300 801
+bytes becoming 335 320.
+
+**That cost is no longer real.** A trivial module — `(ns t) (defn main [args]
+"x")` — is 589 649 bytes with the port machinery and 589 649 without it,
+byte for byte. `clojure.core` already reaches a builtin the concurrency unit
+provides, so every module that carries the standard library already linked it.
+The saving the second path existed to protect had already been spent.
+
+`flint.conc` is now in the link closure unconditionally, beside `flint.rt`,
+rather than by reachability. That changes no size today; it makes the invariant
+hold for a module that reaches no conc builtin at all, which is the case the
+old rule would have broken.
+
+### What went, exactly
+
+* `flint_call` in `runtime/src/abi.rs`, and `encode_error`, its only caller.
+* `"flint_call"` from `flint.link/abi-exports`. Removing the function alone was
+  not enough: `rust-lld` failed with `symbol exported via --export not found`,
+  which is the link line asking for it by name.
+* `callSync` in `sdks/esm/src/guest.js`, and the two-path choice above it.
+
+`arg_alloc`, `arg_push`, `out_ptr` and `out_len` stay: they are how a host
+writes an encoded value in and reads one back, which the port needs too.
+
+### Not yet done
+
+`Program::call` and `flint_rt::native::call_on` still exist on the NATIVE side,
+and `sdks/rust`'s driver dispatches through them. Nothing reaches them from the
+CLI any more — `flint.ception` goes over the port — but the Rust SDK has its
+own inbox-and-driver model built on `call_on`, and moving it to the port
+protocol is its own change. Until then the rule holds for wasm and not for a
+natively embedded sandbox.

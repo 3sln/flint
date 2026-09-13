@@ -173,108 +173,19 @@ pub extern "C" fn arg_push(ptr: u32, len: u32) {
 // `flint_call` below when the call cannot park, or as a message on the system
 // port when it can.
 //
-// `arg_alloc` and `arg_push` stay: `flint_call` writes its encoded argument
-// vector through the same buffer.
+// `flint_call` used to live here: a named call with encoded arguments in and an
+// encoded answer out, synchronous, no scheduler involved. It is gone
+// (`DECISIONS.md#calls-are-ports`).
+//
+// It was the SECOND way into a sandbox, chosen when the module had no system
+// port, and it was cheaper for a module that could not park -- a pure module
+// linked no scheduler at all. One way in is worth more than that saving: a call
+// on the port can be distributed across a thread pool, can park, and makes the
+// sandbox boundary one thing rather than two that have to agree.
+//
+// `arg_alloc` and `arg_push` stay: they are how a host writes an encoded value
+// into the instance before delivering it.
 
-/// Call a named function with encoded arguments, and encode what it returns
-/// (`DECISIONS.md#structured-ports`).
-///
-/// The input is one encoded value: `[fn-name, arg, arg, …]`. The output is one
-/// encoded value, or -- when the call failed -- an encoded map
-/// `{:error kind :message text}`, so a caller decodes ONE thing either way and
-/// a failure is data rather than a second channel.
-///
-/// This is what a sandbox serves. `flint_main` is now one special case of it:
-/// the function the CLI calls when it is not told which.
-#[no_mangle]
-pub extern "C" fn flint_call(ptr: u32, len: u32) -> i32 {
-    unsafe {
-        let bytes = core::slice::from_raw_parts(ptr as *const u8, len as usize);
-        let rt = ensure_rt();
-        let call = match rt.decode(bytes) {
-            Ok(v) => v,
-            Err(e) => return encode_error(rt, "BadCall", &e),
-        };
-        // A vector: the name, then the arguments.
-        if !rt.is_vector(call) || rt.vec_count(call) == 0 {
-            return encode_error(rt, "BadCall", "a call is [name, args...]");
-        }
-        let base = rt.mark();
-        rt.push(call);
-        let namev = rt.vec_nth(rt.r(base), 0, crate::value::NIL);
-        let mut b = crate::rt::sbuf();
-        let name: alloc::string::String = match rt.as_str(namev, &mut b) {
-            Some(s) => s.into(),
-            None => {
-                rt.pop_to(base);
-                return encode_error(rt, "BadCall", "the first element must be a function name");
-            }
-        };
-        let n = rt.vec_count(rt.r(base)) as usize;
-        let mut args = alloc::vec::Vec::with_capacity(n - 1);
-        for i in 1..n {
-            args.push(rt.vec_nth(rt.r(base), i as u32, crate::value::NIL));
-        }
-        let out = rt.call_named(&name, &args);
-        rt.pop_to(base);
-        match out {
-            Err(e) => encode_error(rt, "NoSuchFunction", &e),
-            Ok(v) => {
-                if rt.failed() {
-                    let e = rt.clear_error();
-                    let kind = rt.ex_kind(e);
-                    let msg = rt.ex_message(e);
-                    let mut b1 = crate::rt::sbuf();
-                    let k: alloc::string::String = rt.as_str(kind, &mut b1).unwrap_or("Error").into();
-                    let mut b2 = crate::rt::sbuf();
-                    let m: alloc::string::String = rt.as_str(msg, &mut b2).unwrap_or("").into();
-                    return encode_error(rt, &k, &m);
-                }
-                match rt.encode(v) {
-                    Ok(bs) => {
-                        let o = &mut *core::ptr::addr_of_mut!(OUT);
-                        o.clear();
-                        o.extend_from_slice(&bs);
-                        0
-                    }
-                    Err(e) => encode_error(rt, "Unencodable", &e),
-                }
-            }
-        }
-    }
-}
-
-/// A failure as DATA: `{:error kind :message text}`, encoded like any other
-/// answer. One thing to decode either way beats a status code plus a side
-/// channel the caller has to remember to read.
-fn encode_error(rt: &mut Rt, kind: &str, message: &str) -> i32 {
-    unsafe {
-        let base = rt.mark();
-        let empty = rt.roots.shared.singletons[crate::rt::SING_EMPTY_MAP];
-        let acc = rt.push(empty);
-        let k = rt.keyword(None, "error");
-        rt.push(k);
-        let kv = rt.string(kind);
-        let cur = rt.r(acc);
-        let kk = rt.r(acc + 1);
-        let next = rt.map_assoc(cur, kk, kv);
-        rt.set_r(acc, next);
-        let mk = rt.keyword(None, "message");
-        rt.set_r(acc + 1, mk);
-        let mv = rt.string(message);
-        let cur = rt.r(acc);
-        let kk = rt.r(acc + 1);
-        let next = rt.map_assoc(cur, kk, mv);
-        rt.set_r(acc, next);
-        let v = rt.r(acc);
-        let bs = rt.encode(v).unwrap_or_default();
-        rt.pop_to(base);
-        let o = &mut *core::ptr::addr_of_mut!(OUT);
-        o.clear();
-        o.extend_from_slice(&bs);
-        1
-    }
-}
 
 /// Render the outcome of a run into `OUT` and give `main`'s status code.
 ///

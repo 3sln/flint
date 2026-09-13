@@ -69,10 +69,21 @@
                  pure-size check-cost (fs/size (wasm-of threaded-wasm))
                  (- (fs/size (wasm-of threaded-wasm)) (fs/size (wasm-of pure-wasm)))))
 
+;; THE PORT ABI IS IN EVERY MODULE NOW, and the SCHEDULER'S WORK is not
+;; (`DECISIONS.md#calls-are-ports`). A sandbox is reached only through its
+;; system port -- a call in, a request out, driving -- so a module without the
+;; port machinery is a module nothing can call. `flint.conc` is therefore in
+;; the link closure unconditionally.
+;;
+;; What a pure module still does NOT carry is the part it does not use:
+;; spawning, channels, sending. Those remain reachability-linked, which is what
+;; keeps this row meaningful rather than a tautology -- it would pass trivially
+;; if it only asserted what is present.
 (def pure-bytes (String. (fs/read-all-bytes (wasm-of pure-wasm)) "ISO-8859-1"))
-(doseq [sym ["flint_resume" "flint_drain" "flint_continue" "flint_b_spawn"
-             "flint_b_port_send" "flint_b_channel"]]
-  (check (str "a pure module has no " sym) (str/includes? pure-bytes sym) false))
+(doseq [sym ["flint_install_port" "flint_system_port" "flint_in_alloc"]]
+  (check (str "every module carries " sym) (str/includes? pure-bytes sym) true))
+(doseq [sym ["flint_b_spawn" "flint_b_port_send" "flint_b_channel"]]
+  (check (str "a pure module still has no " sym) (str/includes? pure-bytes sym) false))
 ;; The floor moved in 0009, deliberately and by a known amount: the interpreter
 ;; loop is instantiated twice so that a run with no budget has no counter in it,
 ;; and the biggest function in the module is therefore in it twice. The point of
@@ -429,7 +440,20 @@
 ;; slice, which is what makes the rooting above expressible in all three at
 ;; once. It is a fixed cost, and the next generated caller of a value pays none
 ;; of it.
-            (< pure-size 321000))
+            ;; SIXTH RAISE, and the largest by far: +106 525 bytes for the
+            ;; single entry point (`DECISIONS.md#calls-are-ports`), measured
+            ;; 376 644 against 270 119. A sandbox is reached only through its
+            ;; system port, so `flint.conc` is linked unconditionally -- every
+            ;; module is CALLED, so every module needs it. The green thread is
+            ;; what costs and it is not severable: a call runs as one precisely
+            ;; so the called function can park.
+            ;;
+            ;; This one is not "worth it together" with the four small ones
+            ;; above; it is a different kind of entry. Those were fixes paying
+            ;; their way in bytes. This is a boundary decision that was taken
+            ;; knowing the price, and the price turned out to be three times the
+            ;; 34 519 the estimate on record predicted.
+            (< pure-size 430000))
 
 ;; RE-BASELINED AGAIN, and this one is a decision rather than a drift:
 ;; 300 281 against 280 781, and 18 917 of it is ONE ARM IN THE WIRE CODEC.
