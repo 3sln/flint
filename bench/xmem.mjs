@@ -45,9 +45,28 @@ const engines = [
   ['node (V8)', 'node', ['bench/xrt-run.mjs']],
   ['bun (JavaScriptCore)', 'bun', ['bench/xrt-run.mjs']],
   ['deno (V8)', 'deno', ['run', '--allow-read', 'bench/xrt-run.mjs']],
-  ['wasmtime (Cranelift)', wasmtime, ['--invoke', 'main']],
-  ['wasm3 (interpreter)', 'wasm3', ['--func', 'main']],
-].filter(([, bin]) => have(bin));
+  // THESE TWO NO LONGER RUN, and it is not a missing binary.
+  //
+  // A flint module exports no `main`: it has no entry point and the runtime
+  // invokes nothing (`DECISIONS.md#structured-ports` step 5). Measured
+  // 2026-09-12 on a freshly built module:
+  //
+  //     Error: failed to run main module
+  //     Caused by: no func export named `main` found
+  //
+  // A STALE module in `out/` still answers, so the rows look alive whenever the
+  // family predates the export going -- which is how this survived. Driving a
+  // current module from a command line means writing arguments into its memory
+  // and calling `flint_call`, which `--invoke` cannot do
+  // (`DECISIONS.md#wasm-engine`).
+  //
+  // Left in place rather than deleted: whether to drop the rows or write the
+  // host code is an open question, and a row removed silently is a comparison
+  // that quietly got narrower. They are filtered out below so a run does not
+  // report a failure as a measurement.
+  ['wasmtime (Cranelift)', wasmtime, ['--invoke', 'main'], 'no `main` export'],
+  ['wasm3 (interpreter)', 'wasm3', ['--func', 'main'], 'no `main` export'],
+].filter(([, bin, , dead]) => !dead && have(bin));
 
 const REPS = Number(process.env.XMEM_REPS || 5);
 const pad = (s, w) => String(s).padEnd(w);
