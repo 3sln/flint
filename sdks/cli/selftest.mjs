@@ -14,7 +14,7 @@
 // passes when it ran nothing is worse than no check.
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +40,11 @@ function flint(args, opts = {}) {
       code: 0,
       out: execFileSync(process.execPath, [CLI, ...args], {
         encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], cwd: opts.cwd ?? here,
+        // `env` was NOT threaded through, so a row that set one silently got
+        // the parent's environment and asserted against a run that never saw
+        // its variable. The gas-limit row passed the limit, the CLI never
+        // received it, and the check read as a failure of the product.
+        env: opts.env ?? process.env,
       }),
     };
   } catch (e) {
@@ -116,6 +121,52 @@ console.log('== test ==');
   const r = flint(['test', ':path', FIXTURE]);
   check('every check on the path runs, including one nothing requires',
         r.code === 0 && r.out.includes('2/2 checks passed'), r.out);
+}
+
+console.log('== flint.sdk ==');
+{
+  // NOTHING GATED THIS SIDE UNTIL NOW. `test/sysns.clj` covers the SDK
+  // thoroughly, but it drives `target/release/flint` -- so every assertion
+  // about `flint.sdk` was about the native front end, and node's
+  // implementation was checked only by hand. That is the shape the `:checks`
+  // divergence had (`DECISIONS.md#aot-diverges-between-hosts`): one front end
+  // exercised, the other assumed.
+  const d = mkdtempSync(join(tmpdir(), 'flint-cli-sdk-'));
+  try {
+    writeFileSync(join(d, 'deps.edn'), '{}');
+    writeFileSync(join(d, 'drv.cljc'),
+      '(ns drv (:require [flint.sdk :as sdk]))\n'
+      + '(def src (str "(ns kid)\\n"\n'
+      + '              "(defn greet [a b] (str \\"hi \\" a \\" and \\" b))\\n"\n'
+      + '              "(defn main [args] (str \\"kid ran with \\" (count args) \\" args\\"))\\n"))\n'
+      + '(defn go [_]\n'
+      + '  (let [r (sdk/run {:sources {"kid" src} :fn "kid/main" :args ["x" "y"]})\n'
+      + '        img (sdk/compile {:sources {"kid" src} :fn "kid/main" :exports ["kid/greet"]})\n'
+      + '        b (sdk/sandbox img)\n'
+      + '        c (sdk/call b "kid/greet" ["ada" "alan"])]\n'
+      + '    (sdk/close b)\n'
+      + '    (str "run=" (:out r) " call=" c)))\n'
+      + '(defn mint [_] (:out (sdk/run {:sources {"kid" src} :fn "kid/main" :with ["fs"]})))\n');
+
+    // NO CAPABILITY IS ASKED FOR: the SDK takes source text and hands back
+    // bytes, so it reaches nothing a program could not already reach.
+    const r = flint(['run', ':path', '.', ':fn', 'drv/go'], { cwd: d });
+    check('the SDK compiles and runs a nested program, ungated',
+          r.out.includes('run=kid ran with 2 args'), r.out);
+    check('  ... and calls a named export with individual arguments',
+          r.out.includes('call=hi ada and alan'), r.out);
+
+    // AUTHORITY IS NOT CREATED: a caller holding nothing may lend nothing.
+    const m = flint(['run', ':path', '.', ':fn', 'drv/mint'], { cwd: d });
+    check('  ... and cannot lend a capability it does not hold',
+          m.code !== 0 && m.out.includes('cannot lend it'), m.out);
+
+    // OFF UNDER A GAS LIMIT, because a nested sandbox runs on its own budget.
+    const g = flint(['run', ':path', '.', ':fn', 'drv/go'],
+                    { cwd: d, env: { ...process.env, FLINT_STEP_LIMIT: '50000000' } });
+    check('  ... and is off under a gas limit, saying why',
+          g.code !== 0 && g.out.includes('off under a gas limit'), g.out);
+  } finally { rmSync(d, { recursive: true, force: true }); }
 }
 
 console.log('== compile ==');
