@@ -60,7 +60,7 @@ export const CATALOGUE = [
     ['use', [1]],
     ['reset', [0]],
   ]],
-  ['flint.sdk', [
+  ['flint.ception', [
     ['compile', [1]],
     ['run', [1]],
     ['sandbox', [1]],

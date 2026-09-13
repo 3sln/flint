@@ -1060,9 +1060,9 @@ impl Val {
     /// Write this value onto a `Wire`, as the encoding it was decoded from.
     ///
     /// The inverse of decoding, and it exists because a host that RECEIVES a
-    /// value sometimes has to SEND it on: `flint.sdk/call` takes the arguments
+    /// value sometimes has to SEND it on: `flint.ception/call` takes the arguments
     /// a program passed it and hands them to another sandbox
-    /// (`DECISIONS.md#flint-sdk`). Without this the arguments could only be
+    /// (`DECISIONS.md#flint-ception`). Without this the arguments could only be
     /// strings, which is exactly the restriction that stopped a port from
     /// being passed inward -- and a port is the one value worth passing.
     ///

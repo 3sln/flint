@@ -1,4 +1,4 @@
-;; The four IO protocols (`DECISIONS.md#flint-sdk`).
+;; The four IO protocols (`DECISIONS.md#flint-ception`).
 ;;
 ;; The logic under test is `test/io.cljc`, which runs inside a module: these
 ;; are protocols a compiled program implements and dispatches on, so checking

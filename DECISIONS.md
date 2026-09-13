@@ -6349,18 +6349,25 @@ What this costs: a machine with no JavaScript engine at all gets a clear
 refusal instead of a download. On macOS that machine does not exist. On Linux
 without node, bun or deno it does, and that case is open.
 
-## flint-sdk
+## flint-ception
 
 **Ratified:** ☐ not signed off
 
-Recorded 2026-09-12. `flint.sdk` is a served namespace giving flint code the
-compiler: `compile`, `run`, `version`.
+Recorded 2026-09-12, renamed 2026-09-13. `flint.ception` is a served namespace
+giving flint code the compiler: compile a program, construct a sandbox from it,
+call a function in it.
 
-`sdks/c`, `sdks/rust` and `sdks/esm` let C, Rust and JavaScript embed flint.
-This is the same offer made to the language itself, and the reason it can be
-made at all is that flint is self-hosted — the compiler is already linked into
-the binary, so a flint program compiling another flint program is a function
-call.
+### Why not `flint.sdk`
+
+Because `sdk` collides in this repo. `sdks/c`, `sdks/rust` and `sdks/esm` are
+host-side kits for embedding flint FROM another language; this points the other
+way — flint hosting flint. `flint.sdk` reads as "the SDK" when it is the
+opposite direction, which is the one-name-two-concepts shape that produced the
+`:checks` divergence and the duplicated dependency tables.
+
+The cost is discoverability: nobody hunting "how do I compile from flint" greps
+`ception`. That is paid off by the docstring and this record carrying the
+search terms, and the name is unambiguous once seen.
 
 ### What it replaces
 
@@ -6372,14 +6379,14 @@ to a temp directory and shells out to `bb bin/flint` to compile it, then to
 
 That is the hand-back the user's question was about: *why should the CLI tell
 the host to compile and run something, when the compiler can be imported into
-the CLI build?* It should not. With `flint.sdk` it does not have to, and with
+the CLI build?* It should not. With `flint.ception` it does not have to, and with
 `flint.sys.wasm` (`DECISIONS.md#wasm-engine`) the running half is covered too.
 
 ### The shape is the other SDKs' shape
 
 `sdks/rust` is the reference: `Compiler::compile(Compile { resolve, fn_name,
 exports, .. }) -> Image`, then `Image::sandbox() -> Sandbox`, then
-`Sandbox::call(name, args)`. `flint.sdk` is the same four steps —
+`Sandbox::call(name, args)`. `flint.ception` is the same four steps —
 `compile`, `sandbox`, `call`, `close` — because a program embedding flint
 should not find a different vocabulary than C, Rust or JavaScript would.
 
@@ -6483,7 +6490,7 @@ because it is a real change to a property this project stated deliberately.
 
 `:flint/nested` is in `flint.reader/default-features`, and a build whose
 `:features` omits it does not get the namespace emitted at all — so
-`(:require [flint.sdk])` is a COMPILE error and the artifact cannot reach the
+`(:require [flint.ception])` is a COMPILE error and the artifact cannot reach the
 SDK however it is later run. A feature rather than a grant, because it says
 what this artifact is allowed to BE rather than what it may reach.
 
@@ -6501,8 +6508,8 @@ A namespace the CLI withheld reads exactly like one the author misspelled, and
 the compiler cannot tell them apart — it was never offered either. So the CLI,
 the only side that knows, says so:
 
-    no source for flint.sdk
-    `flint.sdk` is not missing -- this build turned it off. `:features` was
+    no source for flint.ception
+    `flint.ception` is not missing -- this build turned it off. `:features` was
     given without `:flint/nested`, which is what makes the SDK nameable.
 
 ### `run` still may not lend what the caller lacks
@@ -6523,7 +6530,7 @@ somewhere else, for a reason that does not name this:
 
 Scoping goes one way, and both directions are tested: holding bare `fs` lends
 `fs:write`, and holding `fs:write` does **not** lend bare `fs`. The chain is
-bounded at every link, because a child's own `flint.sdk` is constructed with
+bounded at every link, because a child's own `flint.ception` is constructed with
 the child's capabilities.
 
 `test/sysns.clj` carries the attack and a control that differs in exactly one
@@ -6624,7 +6631,7 @@ a change to `lib/flint/cli.cljc` and to all three hosts, and is its own step.
 **Ratified:** ☐ not signed off
 
 Recorded 2026-09-12, **and fixed the same day.** Found while checking that
-`flint.sdk` had broken nothing; it was older than that work.
+`flint.ception` had broken nothing; it was older than that work.
 
 ### The symptom
 

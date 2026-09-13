@@ -18,7 +18,7 @@ import {
 } from './artifacts.mjs';
 import { buildSpec, testRoots } from './spec.mjs';
 import { Policy } from './policy.mjs';
-import { Fs, Env, Slurp, Wasm, Sdk } from './sys.mjs';
+import { Fs, Env, Slurp, Wasm, Ception } from './sys.mjs';
 import { Npm, Mvn, Git } from './deps.mjs';
 import { capabilitiesFor } from './serve.mjs';
 import { VERSION } from './version.mjs';
@@ -58,8 +58,8 @@ function wantsAot(optimize) {
 /// time -- 198 seconds against 10.
 // SYNCHRONOUS, and deliberately so. `new WebAssembly.Module` compiles without
 // a promise and `inst.run` is a pump rather than a task, so nothing here needs
-// to await -- which is what lets `flint.sdk` serve the compiler over a port
-// (`DECISIONS.md#flint-sdk`): a served `invoke` has to answer in one call.
+// to await -- which is what lets `flint.ception` serve the compiler over a port
+// (`DECISIONS.md#flint-ception`): a served `invoke` has to answer in one call.
 // Callers that still say `await compile(...)` are unaffected; awaiting a plain
 // value is a no-op.
 function runCompiler(args) {
@@ -86,9 +86,9 @@ function runCompiler(args) {
 
 /// The module bytes, without writing them anywhere.
 ///
-/// `flint.sdk` needs exactly this: it hands back an artifact rather than
+/// `flint.ception` needs exactly this: it hands back an artifact rather than
 /// writing one, because a path in that request is filesystem reach the caller
-/// did not grant (`DECISIONS.md#flint-sdk`).
+/// did not grant (`DECISIONS.md#flint-ception`).
 export function compileBytes(srcs, entry, optimize, to, meta,
                              { checks = null, exports = [], features = null } = {}) {
   const target = String(to ?? 'wasm').replace(/^:/, '');
@@ -122,7 +122,7 @@ export function compile(srcs, entry, outPath, optimize, to, meta,
   const out = runCompiler(['wasm', spec, b64encode(base)]);
   const module = b64decode(out.trim());
   writeFileSync(outPath, module);
-  // `flint.sdk` serves this to a PROGRAM, and a library call that prints to the
+  // `flint.ception` serves this to a PROGRAM, and a library call that prints to the
   // user's terminal is chatter the caller did not ask for -- `flint task` would
   // announce a temporary file on every run. The same split `runSource` makes.
   if (!quiet) process.stderr.write(
@@ -172,7 +172,7 @@ export function runSource(srcs, entry, args, caps, roots, { quiet = false } = {}
   // Running a module is EXECUTING CODE, so it is a grant like any other
   // (`DECISIONS.md#wasm-engine`).
   if (caps.some((c) => c === 'wasm' || c.startsWith('wasm:'))) services.push(new Wasm());
-  // The compiler, served to the program (`DECISIONS.md#flint-sdk`). The
+  // The compiler, served to the program (`DECISIONS.md#flint-ception`). The
   // functions are handed in rather than imported, because `sys.mjs` importing
   // this file back would be a cycle.
   //
@@ -180,7 +180,7 @@ export function runSource(srcs, entry, args, caps, roots, { quiet = false } = {}
   // hands back bytes, the SDK reaches nothing a program could not already
   // reach. It is off under a GAS LIMIT instead -- a limit is a promise about
   // the whole process, and a nested sandbox runs on its own budget.
-  services.push(new Sdk({
+  services.push(new Ception({
     compile, compileBytes, runSource, version: VERSION, caps,
     gas: process.env.FLINT_STEP_LIMIT ? Number(process.env.FLINT_STEP_LIMIT) : 0,
   }));

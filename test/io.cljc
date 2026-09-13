@@ -1,8 +1,8 @@
 (ns io
-  "The four IO protocols (`DECISIONS.md#flint-sdk`), from inside a module.
+  "The four IO protocols (`DECISIONS.md#flint-ception`), from inside a module.
 
   What matters here is that an implementation is a VALUE CARRYING FUNCTIONS and
-  not a type: that is what lets `flint.sdk` give an inner sandbox input and
+  not a type: that is what lets `flint.ception` give an inner sandbox input and
   output without granting it any, and what lets a caller substitute a buffer
   for a file without the program noticing."
   (:require [flint.protocols.io :as io]

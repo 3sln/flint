@@ -382,13 +382,13 @@ Gated by `:with [deps]`, sharing the same allowlist as the other two resolvers.
 
 **Change requests:** _none recorded_
 
-## flint.sdk
+## flint.ception
 
 **Reviewed:** ☐ not signed off
 
 6 public vars. `compile run sandbox call close version`
 
-NOT GATED (`DECISIONS.md#flint-sdk`): it takes source text and hands back bytes, so it reaches nothing a program could not already reach. Off under a gas limit, and removable at compile time by omitting `:flint/nested` from `:features`. `run` may lend only capabilities the caller already holds.
+NOT GATED (`DECISIONS.md#flint-ception`): it takes source text and hands back bytes, so it reaches nothing a program could not already reach. Off under a gas limit, and removable at compile time by omitting `:flint/nested` from `:features`. `run` may lend only capabilities the caller already holds.
 
 **Change requests:** _none recorded_
 

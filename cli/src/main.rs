@@ -288,9 +288,9 @@ fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
                    pods: &[(String, Vec<String>)],
                    strip_checks: bool,
                    features: Option<&[String]>) -> Result<String> {
-    // `:flint/nested` decides whether `flint.sdk` is offered at all. Absent
+    // `:flint/nested` decides whether `flint.ception` is offered at all. Absent
     // from an explicit set, the namespace is not emitted and a program naming
-    // it does not compile (`DECISIONS.md#flint-sdk`). Default is ON, so a build
+    // it does not compile (`DECISIONS.md#flint-ception`). Default is ON, so a build
     // that says nothing about features keeps it.
     let nested = features.map_or(true, |f| f.iter().any(|x| x == ":flint/nested"));
     let mut files: BTreeMap<String, String> = BTreeMap::new();
@@ -372,10 +372,10 @@ fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
     }
     for (ns, vars) in crate::sys::catalogue() {
         // NOT NAMEABLE without the feature. Omitting the workspace is what
-        // makes `(:require [flint.sdk])` a compile error rather than a run-time
+        // makes `(:require [flint.ception])` a compile error rather than a run-time
         // refusal -- an artifact built without it cannot reach the SDK however
         // it is later run.
-        if ns == "flint.sdk" && !nested {
+        if ns == "flint.ception" && !nested {
             continue;
         }
         out.push_str("{:prefix ");
@@ -541,7 +541,7 @@ fn wants_aot(optimize: &[String]) -> bool {
 
 /// Compile from SOURCE THE CALLER SUPPLIED, to a loadable image.
 ///
-/// The IO-free half of `compile` (`DECISIONS.md#flint-sdk`). There is no path
+/// The IO-free half of `compile` (`DECISIONS.md#flint-ception`). There is no path
 /// here and no output file: the caller hands over namespace-to-source text and
 /// gets bytes back, so `sdk` confers no reach into the filesystem at all. A
 /// caller that wants to compile a project on disk reads it with its own `fs`
@@ -556,7 +556,7 @@ fn wants_aot(optimize: &[String]) -> bool {
 pub(crate) fn sdk_compile(sources: &[(String, String)], entry: &str, exports: &[String],
                           optimize: &[String], shake: bool, checks: Option<bool>,
                           meta: &[(String, String)]) -> Result<Vec<u8>> {
-    let dir = std::env::temp_dir().join(format!("flint-sdk-{}-{}", std::process::id(), sources.len()));
+    let dir = std::env::temp_dir().join(format!("flint-ception-{}-{}", std::process::id(), sources.len()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir)?;
     for (ns, body) in sources {
@@ -621,16 +621,16 @@ pub(crate) fn sdk_compile(sources: &[(String, String)], entry: &str, exports: &[
 /// A namespace the CLI deliberately withheld reads exactly like one the author
 /// misspelled, and the compiler cannot tell them apart -- it was never offered
 /// either. Only this side knows the feature was off, so only this side can say
-/// so (`DECISIONS.md#flint-sdk`).
+/// so (`DECISIONS.md#flint-ception`).
 fn missing_message(missing: &str, features: Option<&[String]>) -> String {
     let mut m = format!(
         "no source for{}\nevery namespace a program requires has to be on the source path",
         missing.replace('\n', " ")
     );
     let nested_off = features.is_some_and(|f| !f.iter().any(|x| x == ":flint/nested"));
-    if nested_off && missing.contains("flint.sdk") {
+    if nested_off && missing.contains("flint.ception") {
         m.push_str(
-            "\n\n`flint.sdk` is not missing -- this build turned it off. `:features` was given \
+            "\n\n`flint.ception` is not missing -- this build turned it off. `:features` was given \
              without `:flint/nested`, which is what makes the SDK nameable. Add it, or drop \
              `:features` to get the default set.",
         );
@@ -730,7 +730,7 @@ pub(crate) fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize: 
 
 /// The same, without the "wrote ..." line.
 ///
-/// `flint.sdk` serves `compile` to a PROGRAM (`DECISIONS.md#flint-sdk`), and a
+/// `flint.ception` serves `compile` to a PROGRAM (`DECISIONS.md#flint-ception`), and a
 /// library call that prints to the user's terminal is chatter the caller did
 /// not ask for -- `flint task` would announce a temporary file on every run.
 /// The same split `run_source_q` makes, for the same reason.
@@ -857,9 +857,9 @@ pub(crate) fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps:
 /// Serve and run an image that is already compiled.
 ///
 /// The half of `run_source_q` after the compile, split out because
-/// `flint.sdk` needs exactly this and none of the rest: it has an image
+/// `flint.ception` needs exactly this and none of the rest: it has an image
 /// already, from source the caller supplied rather than from a path
-/// (`DECISIONS.md#flint-sdk`). One serving loop rather than two that agree
+/// (`DECISIONS.md#flint-ception`). One serving loop rather than two that agree
 /// until one of them is changed.
 pub(crate) fn run_image_q(bytes: &[u8], args: &[String], caps: &[String],
                           pods: Vec<crate::pod::Pod>, quiet: bool) -> Result<(i32, String)> {
@@ -943,7 +943,7 @@ pub(crate) fn run_image_gas(bytes: &[u8], args: &[String], caps: &[String],
     if caps.iter().any(|c| c == "wasm" || c.starts_with("wasm:")) {
         host.serve(Box::new(crate::sys::Wasm));
     }
-    // The compiler, served to the program (`DECISIONS.md#flint-sdk`).
+    // The compiler, served to the program (`DECISIONS.md#flint-ception`).
     //
     // NOT A GRANT, and it used to be one. Since `compile` takes source text
     // rather than paths and hands back bytes rather than writing a file, the
@@ -957,7 +957,7 @@ pub(crate) fn run_image_gas(bytes: &[u8], args: &[String], caps: &[String],
     // own budget -- so a program that could build one would step outside the
     // promise by construction, no matter how small its own allowance. The
     // guarantee has to hold for the whole process or it is not one.
-    host.serve(Box::new(crate::sys::Sdk {
+    host.serve(Box::new(crate::sys::Ception {
         caps: caps.to_vec(), sandboxes: Vec::new(), gas,
     }));
     // A booted pod is served whatever the grants say, because DECLARING one in
@@ -1429,9 +1429,9 @@ struct Args {
     // `:features [flint flint/check]` -- the reader's feature set, said rather
     // than defaulted. `None` means `flint.reader/default-features`.
     //
-    // It also decides whether `flint.sdk` is NAMEABLE: `:flint/nested` is in
+    // It also decides whether `flint.ception` is NAMEABLE: `:flint/nested` is in
     // the default set, and a build compiled without it cannot `:require` the
-    // SDK at all (`DECISIONS.md#flint-sdk`). A feature and not a grant, because
+    // SDK at all (`DECISIONS.md#flint-ception`). A feature and not a grant, because
     // the SDK confers no access -- it is a statement about what the artifact is
     // allowed to BE.
     features: Option<Vec<String>>,

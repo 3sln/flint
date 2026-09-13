@@ -779,8 +779,8 @@
   compile to nothing: the reader never hands it to the analyzer, so it costs no
   image bytes, no constants, and no shaking.
 
-  `:flint/nested` is ON by default and is what makes `flint.sdk` nameable
-  (`DECISIONS.md#flint-sdk`). Unlike the others it selects no reader branch:
+  `:flint/nested` is ON by default and is what makes `flint.ception` nameable
+  (`DECISIONS.md#flint-ception`). Unlike the others it selects no reader branch:
   the CLI reads it to decide whether to offer that virtual namespace at all, so
   a build compiled without it cannot `:require` the SDK rather than being
   refused later. It is a feature and not a grant because the SDK confers no

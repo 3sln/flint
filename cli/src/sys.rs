@@ -387,7 +387,7 @@ pub fn catalogue() -> Vec<(&'static str, Vec<(&'static str, &'static [u32])>)> {
     // The catalogue is the VAR LIST, so the capabilities it is built with are
     // irrelevant here -- what a caller holds decides what `run` may lend, not
     // which vars exist.
-    let sdk = Sdk { caps: Vec::new(), sandboxes: Vec::new(), gas: 0 };
+    let ception = Ception { caps: Vec::new(), sandboxes: Vec::new(), gas: 0 };
     vec![
         (fs.name_static(), fs.vars()),
         (env.name_static(), env.vars()),
@@ -396,7 +396,7 @@ pub fn catalogue() -> Vec<(&'static str, Vec<(&'static str, &'static [u32])>)> {
         (mvn.name_static(), mvn.vars()),
         (crate::deps::Git.name_static(), crate::deps::Git.vars()),
         (Wasm.name_static(), Wasm.vars()),
-        (sdk.name_static(), sdk.vars()),
+        (ception.name_static(), ception.vars()),
     ]
 }
 
@@ -826,7 +826,7 @@ fn decode_result(line: &str) -> Result<(i32, String), String> {
     ))
 }
 
-// ------------------------------------------------------------------ flint.sdk
+// ------------------------------------------------------------------ flint.ception
 
 /// flint's own SDK, served to flint.
 ///
@@ -845,7 +845,7 @@ fn decode_result(line: &str) -> Result<(i32, String), String> {
 /// compiled into this binary, so source can be executed without an artifact and
 /// without a wasm engine. `compile` is the one that produces a module, and
 /// `flint.sys.wasm` is what runs one afterwards.
-pub struct Sdk {
+pub struct Ception {
     /// What the CALLER was granted. A program may not confer what it does not
     /// hold: without this, `sdk` was the only capability anyone needed, because
     /// `(sdk/run {... :with ["fs"]})` minted the rest onto a child it wrote.
@@ -855,13 +855,13 @@ pub struct Sdk {
     /// later sandbox that reused the number.
     pub sandboxes: Vec<Option<flint_rt::native::Program>>,
     /// The gas limit the OUTER program is under, in instructions. Non-zero
-    /// turns this namespace off (`DECISIONS.md#flint-sdk`).
+    /// turns this namespace off (`DECISIONS.md#flint-ception`).
     pub gas: u64,
 }
 
-impl Sdk {
+impl Ception {
     fn name_static(&self) -> &'static str {
-        "flint.sdk"
+        "flint.ception"
     }
 }
 
@@ -869,7 +869,7 @@ impl Sdk {
 ///
 /// A MAP OF SOURCE TEXT, not a list of directories, and that is the whole of
 /// why `sdk` reaches no filesystem: there is no path in this request for a
-/// caller to point anywhere (`DECISIONS.md#flint-sdk`).
+/// caller to point anywhere (`DECISIONS.md#flint-ception`).
 fn sources_of(opts: &Val) -> Result<Vec<(String, String)>, String> {
     match opts.get("sources") {
         Some(Val::Map(es)) => {
@@ -903,7 +903,7 @@ fn strings_at(opts: &Val, key: &str) -> Result<Vec<String>, String> {
     }
 }
 
-impl Sdk {
+impl Ception {
     /// Whether the caller holds `want`, by the same spelling `:with` uses.
     ///
     /// A bare `fs` covers `fs:write`, because the bare name is the whole
@@ -915,9 +915,9 @@ impl Sdk {
     }
 }
 
-impl Service for Sdk {
+impl Service for Ception {
     fn name(&self) -> &str {
-        "flint.sdk"
+        "flint.ception"
     }
     fn vars(&self) -> Vec<(&'static str, &'static [u32])> {
         vec![("compile", &[1]), ("run", &[1]), ("sandbox", &[1]), ("call", &[3]),
@@ -933,7 +933,7 @@ impl Service for Sdk {
         // which names neither this namespace nor the limit that turned it off.
         if self.gas > 0 {
             return Err(format!(
-                "flint.sdk is off under a gas limit.\n\
+                "flint.ception is off under a gas limit.\n\
                  this program is limited to {} instructions, and a sandbox it built would run \
                  on its own budget -- so the limit would stop meaning what it says.\n\
                  run without FLINT_STEP_LIMIT to use it.",
@@ -1075,7 +1075,7 @@ impl Service for Sdk {
             "version" => {
                 w.string(crate::VERSION);
             }
-            _ => return Err(format!("flint.sdk has no {var}")),
+            _ => return Err(format!("flint.ception has no {var}")),
         }
         Ok(w)
     }

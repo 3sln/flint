@@ -85,8 +85,8 @@ console.log('== run ==');
   // failure, and the thing a host that installs a system port unconditionally
   // would quietly break.
   //
-  // REFUSED BY NAME, not by the transport being missing. `flint.sdk` is served
-  // to every program (`DECISIONS.md#flint-sdk`), so a system port now always
+  // REFUSED BY NAME, not by the transport being missing. `flint.ception` is served
+  // to every program (`DECISIONS.md#flint-ception`), so a system port now always
   // exists and the refusal names the namespace instead. Still a refusal, still
   // non-zero, and strictly more informative -- but the sentence changed, and
   // this row is what noticed.
@@ -123,11 +123,11 @@ console.log('== test ==');
         r.code === 0 && r.out.includes('2/2 checks passed'), r.out);
 }
 
-console.log('== flint.sdk ==');
+console.log('== flint.ception ==');
 {
   // NOTHING GATED THIS SIDE UNTIL NOW. `test/sysns.clj` covers the SDK
   // thoroughly, but it drives `target/release/flint` -- so every assertion
-  // about `flint.sdk` was about the native front end, and node's
+  // about `flint.ception` was about the native front end, and node's
   // implementation was checked only by hand. That is the shape the `:checks`
   // divergence had (`DECISIONS.md#aot-diverges-between-hosts`): one front end
   // exercised, the other assumed.
@@ -135,7 +135,7 @@ console.log('== flint.sdk ==');
   try {
     writeFileSync(join(d, 'deps.edn'), '{}');
     writeFileSync(join(d, 'drv.cljc'),
-      '(ns drv (:require [flint.sdk :as sdk]))\n'
+      '(ns drv (:require [flint.ception :as sdk]))\n'
       + '(def src (str "(ns kid)\\n"\n'
       + '              "(defn greet [a b] (str \\"hi \\" a \\" and \\" b))\\n"\n'
       + '              "(defn main [args] (str \\"kid ran with \\" (count args) \\" args\\"))\\n"))\n'

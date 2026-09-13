@@ -44,8 +44,8 @@
 
 ;; NOT GRANTED: the namespace is refused by name.
 (let [r (sh proj flint "run" ":path" "." ":fn" "app.a/go")]
-  ;; A NAMED REFUSAL, not "no system port". Since `flint.sdk` is served to
-  ;; every program (`DECISIONS.md#flint-sdk`) a system port now always exists,
+  ;; A NAMED REFUSAL, not "no system port". Since `flint.ception` is served to
+  ;; every program (`DECISIONS.md#flint-ception`) a system port now always exists,
   ;; so an ungranted namespace is refused BY NAME instead of the transport
   ;; being absent. Strictly more informative, and a real change to the old
   ;; "granted nothing has no port" property -- recorded rather than absorbed.
@@ -710,20 +710,20 @@
     (check "  ... and reports the module's exit code"
            (str/includes? (:out r) "code=0") (:out r))))
 
-;; --- flint.sdk: the compiler, served to flint ------------------------------
+;; --- flint.ception: the compiler, served to flint ------------------------------
 ;;
 ;; Self-hosting is what makes this possible: the compiler is already linked in,
 ;; so a flint program compiling another is a function call rather than a
-;; subprocess (`DECISIONS.md#flint-sdk`). `run` needs no module and no wasm
+;; subprocess (`DECISIONS.md#flint-ception`). `run` needs no module and no wasm
 ;; engine on this binary -- the runtime is compiled in.
 (let [p16 (str (fs/create-temp-dir))]
   (spit (str p16 "/deps.edn") "{}")
   (fs/create-dirs (str p16 "/inner"))
   (spit (str p16 "/inner/hi.cljc") "(ns inner.hi)\n(defn main [args] (str \"inner sees \" (count args) \" args\"))\n")
   ;; `:sources`, NOT `:paths`: the SDK reaches no filesystem, so the caller
-  ;; supplies the source text it wants compiled (`DECISIONS.md#flint-sdk`).
+  ;; supplies the source text it wants compiled (`DECISIONS.md#flint-ception`).
   (spit (str p16 "/drv.cljc")
-        (str "(ns drv (:require [flint.sdk :as sdk] [flint.bytes :as b]))\n"
+        (str "(ns drv (:require [flint.ception :as sdk] [flint.bytes :as b]))\n"
              "(def src \"(ns inner.hi)\\n(defn main [args] (str \\\"inner sees \\\" (count args) \\\" args\\\"))\\n\")\n"
              "(defn go [_] (let [r (sdk/run {:sources {\"inner.hi\" src} :fn \"inner.hi/main\"})\n"
              "                   img (sdk/compile {:sources {\"inner.hi\" src} :fn \"inner.hi/main\"})]\n"
@@ -757,16 +757,16 @@
     (check "  ... saying why, rather than looking absent"
            (str/includes? out "own budget") out)))
 
-;; --- flint.sdk: a sandbox constructor, holding nothing --------------------
+;; --- flint.ception: a sandbox constructor, holding nothing --------------------
 ;;
 ;; The shape `sdks/rust` and `sdks/c` have: compile to an artifact, construct a
 ;; sandbox from it, call a named function. The sandbox holds NOTHING -- no
 ;; ports, no capabilities, no IO -- so it reaches the world only through what it
-;; is later handed (`DECISIONS.md#flint-sdk`).
+;; is later handed (`DECISIONS.md#flint-ception`).
 (let [p18 (str (fs/create-temp-dir))]
   (spit (str p18 "/deps.edn") "{}")
   (spit (str p18 "/box.cljc")
-        (str "(ns box (:require [flint.sdk :as sdk]))\n"
+        (str "(ns box (:require [flint.ception :as sdk]))\n"
              "(def src (str \"(ns guest)\\n\"\n"
              "              \"(defn greet [a b] (str \\\"hi \\\" a \\\" and \\\" b))\\n\"\n"
              "              \"(defn main [args] \\\"entry\\\")\\n\"))\n"
@@ -794,7 +794,7 @@
   ;; what stopped a PORT being passed inward -- the one argument worth
   ;; passing, since a port is how a sandbox reaches anything at all.
   (spit (str p18 "/shapes.cljc")
-        (str "(ns shapes (:require [flint.sdk :as sdk]))\n"
+        (str "(ns shapes (:require [flint.ception :as sdk]))\n"
              "(def src (str \"(ns g)\\n\"\n"
              "              \"(defn f [n m v k] (str \\\"int=\\\" n \\\" map=\\\" (:a m) \\\" vec=\\\" (count v) \\\" kw=\\\" k))\\n\"\n"
              "              \"(defn main [args] \\\"entry\\\")\\n\"))\n"
@@ -811,7 +811,7 @@
     (check "  ... and a handle used after close says so"
            (str/includes? (:out r) "is closed") (:out r))))
 
-;; --- flint.sdk does not mint authority -------------------------------------
+;; --- flint.ception does not mint authority -------------------------------------
 ;;
 ;; `sdk/run` takes `:with`, so without a test the capability it lends is
 ;; whatever the CALLER asks for -- and `sdk` becomes the only grant anyone
@@ -824,7 +824,7 @@
   (spit (str p17 "/child/read.cljc")
         "(ns child.read (:require [flint.sys.fs :as fs]))\n(defn main [args] (str \"got \" (fs/read-file \"secret.txt\")))\n")
   (spit (str p17 "/attack.cljc")
-        (str "(ns attack (:require [flint.sdk :as sdk]))\n"
+        (str "(ns attack (:require [flint.ception :as sdk]))\n"
              "(def src \"(ns child.read (:require [flint.sys.fs :as fs]))\\n(defn main [args] (str \\\"got \\\" (fs/read-file \\\"secret.txt\\\")))\\n\")\n"
              "(defn go [_] (:out (sdk/run {:sources {\"child.read\" src} :fn \"child.read/main\" :with [\"fs\"]})))\n"))
   (let [r (sh p17 flint "run" ":path" "." ":fn" "attack/go")]

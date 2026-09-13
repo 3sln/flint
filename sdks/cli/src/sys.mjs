@@ -234,9 +234,9 @@ export class Wasm {
   }
 }
 
-// ------------------------------------------------------------------ flint.sdk
+// ------------------------------------------------------------------ flint.ception
 
-/// flint's own SDK, served to flint (`DECISIONS.md#flint-sdk`).
+/// flint's own SDK, served to flint (`DECISIONS.md#flint-ception`).
 ///
 /// `sdks/c`, `sdks/rust` and `sdks/esm` let C, Rust and JavaScript embed the
 /// compiler; this is the same offer made to the language itself, and
@@ -245,7 +245,7 @@ export class Wasm {
 /// The two functions are INJECTED rather than imported. `cli.mjs` imports this
 /// file, so importing it back would be a cycle; handing them in at construction
 /// says the same thing without one.
-export class Sdk {
+export class Ception {
   /// `ops.caps` is what the CALLER was granted. A program may not confer what
   /// it does not hold: without that test, `sdk` was the only capability anyone
   /// needed, because `(sdk/run {... :with ["fs"]})` minted the rest onto a
@@ -259,7 +259,7 @@ export class Sdk {
   /// ordinary spec builder keeps one of them rather than a second that agrees
   /// with it until it does not.
   spill(sources) {
-    const dir = mkdtempSync(join(tmpdir(), 'flint-sdk-'));
+    const dir = mkdtempSync(join(tmpdir(), 'flint-ception-'));
     for (const [ns, body] of sources) {
       const at = join(dir, `${ns.replace(/-/g, '_').replace(/\./g, '/')}.cljc`);
       mkdirSync(dirname(at), { recursive: true });
@@ -275,7 +275,7 @@ export class Sdk {
     const base = String(want).split(':')[0];
     return (this.ops.caps || []).some((c) => c === want || c === base);
   }
-  get name() { return 'flint.sdk'; }
+  get name() { return 'flint.ception'; }
   get vars() { return varsOf(this.name); }
 
   invoke(v, args, policy, c) {
@@ -285,7 +285,7 @@ export class Sdk {
     //
     // Served and refusing rather than absent, so the reason is said.
     if (this.ops.gas > 0) {
-      throw new Error(`flint.sdk is off under a gas limit.\n`
+      throw new Error(`flint.ception is off under a gas limit.\n`
         + `this program is limited to ${this.ops.gas} instructions, and a sandbox it built `
         + `would run on its own budget -- so the limit would stop meaning what it says.\n`
         + 'run without FLINT_STEP_LIMIT to use it.');
@@ -378,7 +378,7 @@ export class Sdk {
       case 'version':
         return c.str(this.ops.version);
       default:
-        throw new Error(`flint.sdk has no ${v}`);
+        throw new Error(`flint.ception has no ${v}`);
     }
   }
 }

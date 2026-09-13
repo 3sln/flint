@@ -90,9 +90,9 @@ export function buildSpec({
   srcs, entry, slots, aot = false, shake = false, meta = [], roots = null,
   pods = [], stdlib, stdlibDeps, stripChecks = false, exports = [], features = null,
 }) {
-  // `:flint/nested` decides whether `flint.sdk` is offered at all. Absent from
+  // `:flint/nested` decides whether `flint.ception` is offered at all. Absent from
   // an explicit set, the namespace is not emitted and a program naming it does
-  // not compile (`DECISIONS.md#flint-sdk`). Default is ON.
+  // not compile (`DECISIONS.md#flint-ception`). Default is ON.
   const nested = features === null || features.includes(':flint/nested');
   // The standard library first, so a project file of the same path wins.
   const files = new Map();
@@ -144,8 +144,8 @@ export function buildSpec({
   // compile error rather than a run-time one.
   for (const [ns, vars] of CATALOGUE) {
     // NOT NAMEABLE without the feature: omitting the workspace is what makes
-    // `(:require [flint.sdk])` a compile error rather than a run-time refusal.
-    if (ns === 'flint.sdk' && !nested) continue;
+    // `(:require [flint.ception])` a compile error rather than a run-time refusal.
+    if (ns === 'flint.ception' && !nested) continue;
     out += '{:prefix ';
     out += ednString(`${ns.replace(/\./g, '/')}/`);
     out += ' :name flint/sys :virtual true :vars [';

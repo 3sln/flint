@@ -8,8 +8,8 @@
   caller opened on its own authority. The program cannot tell, and must not
   need to.
 
-  This is what `flint.sdk` uses to give an inner sandbox IO without granting it
-  any (`DECISIONS.md#flint-sdk`). A sandbox constructed with no sources and no
+  This is what `flint.ception` uses to give an inner sandbox IO without granting it
+  any (`DECISIONS.md#flint-ception`). A sandbox constructed with no sources and no
   sinks can run its logic and reach nothing, which is what confined should mean
   by default rather than something a host has to remember to withhold -- the
   same inversion `DECISIONS.md#ports-are-the-hosts` made for ports.
