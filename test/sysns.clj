@@ -790,6 +790,21 @@
     ;; ends disagreed about this until they were made to agree.
     (check "a sandbox calls a named function with individual arguments"
            (str/includes? (:out r) "hi ada and alan") (:out r)))
+  ;; ANY VALUE CROSSES, not just strings. The restriction this replaces is
+  ;; what stopped a PORT being passed inward -- the one argument worth
+  ;; passing, since a port is how a sandbox reaches anything at all.
+  (spit (str p18 "/shapes.cljc")
+        (str "(ns shapes (:require [flint.sdk :as sdk]))\n"
+             "(def src (str \"(ns g)\\n\"\n"
+             "              \"(defn f [n m v k] (str \\\"int=\\\" n \\\" map=\\\" (:a m) \\\" vec=\\\" (count v) \\\" kw=\\\" k))\\n\"\n"
+             "              \"(defn main [args] \\\"entry\\\")\\n\"))\n"
+             "(defn go [_]\n"
+             "  (let [img (sdk/compile {:sources {\"g\" src} :fn \"g/main\" :exports [\"g/f\"]})\n"
+             "        b (sdk/sandbox img)]\n"
+             "    (str (sdk/call b \"g/f\" [42 {:a \"inner\"} [1 2 3] :kw]))))\n"))
+  (let [r (sh p18 flint "run" ":path" "." ":fn" "shapes/go")]
+    (check "  ... and arguments cross as values, not as strings"
+           (str/includes? (:out r) "int=42 map=inner vec=3 kw=:kw") (:out r)))
   ;; A CLOSED HANDLE IS CLOSED, not silently some later sandbox that reused the
   ;; number: the slot is kept rather than compacted.
   (let [r (sh p18 flint "run" ":path" "." ":fn" "box/stale")]

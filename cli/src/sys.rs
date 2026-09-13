@@ -994,13 +994,14 @@ impl Service for Sdk {
                 let h = args.first().and_then(|v| v.as_i64())
                     .ok_or("call needs the handle `sandbox` returned")? as usize;
                 let f = str_arg(args, 1, "fn")?;
-                let argv: Vec<String> = match args.get(2) {
-                    None | Some(Val::Nil) => Vec::new(),
-                    Some(Val::Vector(xs)) | Some(Val::List(xs)) => xs
-                        .iter()
-                        .map(|x| x.as_str().map(|s| s.to_string())
-                             .ok_or(String::from("call: args must be strings")))
-                        .collect::<Result<_, _>>()?,
+                // ANY VALUE, not just strings. `Sandbox::call` in `sdks/rust`
+                // takes values, and the restriction here was the thing that
+                // stopped a PORT being passed inward -- which is the one
+                // argument worth passing, since a port is how a sandbox reaches
+                // anything at all (`DECISIONS.md#ports-are-the-hosts`).
+                let argv: &[Val] = match args.get(2) {
+                    None | Some(Val::Nil) => &[],
+                    Some(Val::Vector(xs)) | Some(Val::List(xs)) => xs.as_slice(),
                     Some(_) => return Err("call: args must be a vector".into()),
                 };
                 let slot = self.sandboxes.get_mut(h)
@@ -1015,8 +1016,8 @@ impl Service for Sdk {
                 let mut c = Wire::new();
                 c.vector(1 + argv.len() as u32);
                 c.string(f);
-                for a in &argv {
-                    c.string(a);
+                for a in argv {
+                    a.write(&mut c);
                 }
                 let reply = p.call(c.as_bytes()).map_err(|e| format!("{e}"))?;
                 // Forwarded VERBATIM. The answer is already an encoded value,

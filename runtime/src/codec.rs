@@ -1057,6 +1057,44 @@ pub enum Val {
 }
 
 impl Val {
+    /// Write this value onto a `Wire`, as the encoding it was decoded from.
+    ///
+    /// The inverse of decoding, and it exists because a host that RECEIVES a
+    /// value sometimes has to SEND it on: `flint.sdk/call` takes the arguments
+    /// a program passed it and hands them to another sandbox
+    /// (`DECISIONS.md#flint-sdk`). Without this the arguments could only be
+    /// strings, which is exactly the restriction that stopped a port from
+    /// being passed inward -- and a port is the one value worth passing.
+    ///
+    /// `Port` goes through as `K_PORT`, which on the other side is the host
+    /// HANDING that port over: the decoder installs a bridge for it
+    /// (`DECISIONS.md#ports-are-the-hosts`). That is delegation, so a caller
+    /// forwarding a port is giving it away, not copying it.
+    pub fn write(&self, w: &mut Wire) {
+        match self {
+            Val::Nil => { w.nil(); }
+            Val::Bool(b) => { w.bool(*b); }
+            Val::Int(n) => { w.int(*n); }
+            Val::Float(f) => { w.float(*f); }
+            Val::Str(s) => { w.string(s); }
+            Val::Bytes(b) => { w.bytes(b); }
+            Val::Keyword(ns, n) => { w.keyword(ns.as_deref(), n); }
+            Val::Symbol(ns, n) => { w.symbol(ns.as_deref(), n); }
+            Val::Port(id) => { w.port(*id); }
+            Val::Opaque(id, label) => { w.opaque(*id, label); }
+            // COUNT FIRST, THEN ELEMENTS, which is the shape the decoder needs
+            // to build a collection without growing one.
+            Val::Vector(xs) => { w.vector(xs.len() as u32); for x in xs { x.write(w); } }
+            Val::List(xs) => { w.list(xs.len() as u32); for x in xs { x.write(w); } }
+            Val::Set(xs) => { w.set(xs.len() as u32); for x in xs { x.write(w); } }
+            Val::Map(es) => {
+                w.map(es.len() as u32);
+                for (k, v) in es { k.write(w); v.write(w); }
+            }
+            Val::Tagged(tag, v) => { w.tagged(); tag.write(w); v.write(w); }
+        }
+    }
+
     /// The value at keyword key `name` (no namespace), or `None`.
     ///
     /// The lookup a request handler does on every message, so it is here rather

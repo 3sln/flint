@@ -331,7 +331,13 @@ export class Sdk {
         // made `(call box "greet" ["ada" "alan"])` an arity error on node and
         // not on native: one surface, two meanings.
         try {
-          return c.from(this.boxes[h].call(strArg(args, 1, 'fn'), argv.map(String)));
+          // THE VALUES AS THEY ARRIVED, not stringified. `argv.map(String)`
+          // turned 42 into "42" and a map into "[object Object]", and it was
+          // also what stopped a PORT being passed inward -- the one argument
+          // worth passing, since a port is how a sandbox reaches anything
+          // (`DECISIONS.md#ports-are-the-hosts`). The driver's `call` encodes a
+          // plain JS value itself.
+          return c.from(this.boxes[h].call(strArg(args, 1, 'fn'), argv));
         } catch (e) {
           // A FAILURE IS DATA, not a second channel: `flint_call` encodes
           // `{:error kind :message text}` and the native side forwards it as
