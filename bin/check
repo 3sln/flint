@@ -37,6 +37,10 @@ for f in flint/cli flint/deps flint/deps/manifest flint/deps/registry; do
 done
 echo "  ok   the four lib namespaces babashka loads are still .cljc"
 
+# The API review list cannot fall behind the code: a namespace added with no
+# section would be silently unreviewed while the list looked complete.
+./bin/check-api-review || fail "bin/check-api-review"
+
 for s in reader_test cycles; do
   bb --classpath src "test/$s.clj" > /tmp/flint-check.out 2>&1 \
     || { cat /tmp/flint-check.out; fail "test/$s.clj"; }

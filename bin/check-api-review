@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Every built-in namespace has a section in `doc/api-review.md`.
+#
+# The list exists to be gone through a few namespaces at a time, which only
+# works if it cannot fall behind the code: a namespace added next month with no
+# section would be silently unreviewed, and the list would look complete.
+#
+# IT DOES NOT CHECK THE BOXES. Only the maintainer ticks those -- the same rule
+# `DECISIONS.md` follows, and for the same reason: a sign-off a script can
+# produce is not a sign-off.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+doc=doc/api-review.md
+[ -f "$doc" ] || { echo "  FAIL $doc is missing"; exit 1; }
+
+missing=0
+have() { grep -qE "^## $(printf '%s' "$1" | sed 's/\./\\./g')\$" "$doc"; }
+
+# Every namespace under `lib/`, by the name its own `ns` form gives.
+while read -r f; do
+  ns=$(head -1 "$f" | sed 's/(ns //;s/[" ].*//')
+  if ! have "$ns"; then
+    echo "  FAIL $ns ($f) has no section in $doc"
+    missing=$((missing + 1))
+  fi
+done < <(find lib -name '*.cljc' | sort)
+
+# Every SERVED namespace, from the catalogue the two CLIs agree on.
+while read -r ns; do
+  [ -n "$ns" ] || continue
+  if ! have "$ns"; then
+    echo "  FAIL $ns (served) has no section in $doc"
+    missing=$((missing + 1))
+  fi
+done < <(grep -oE "^  \['[a-z][a-z.]*'" sdks/cli/src/catalogue.mjs | tr -d " ['")
+
+# The reverse, too: a section for something that no longer exists is a list
+# that reads as covering more than it does.
+stale=0
+while read -r ns; do
+  [ -n "$ns" ] || continue
+  if ! find lib -name '*.cljc' -exec head -1 {} \; | sed 's/(ns //;s/[" ].*//' | grep -qx "$ns" \
+     && ! grep -qE "^  \['$ns'" sdks/cli/src/catalogue.mjs; then
+    echo "  FAIL $doc has a section for $ns, which no longer exists"
+    stale=$((stale + 1))
+  fi
+done < <(grep -oE '^## [a-z][a-z.]*$' "$doc" | sed 's/^## //')
+
+total=$(grep -cE '^\*\*Reviewed:\*\*' "$doc")
+signed=$(grep -cE '^\*\*Reviewed:\*\* ☑' "$doc" || true)
+if [ "$missing" -ne 0 ] || [ "$stale" -ne 0 ]; then
+  echo "check-api-review: $((missing + stale)) failure(s)"
+  exit 1
+fi
+echo "  ok   api review: $total namespaces listed, $signed signed off"
