@@ -6767,6 +6767,49 @@ old rule would have broken.
 `arg_alloc`, `arg_push`, `out_ptr` and `out_len` stay: they are how a host
 writes an encoded value in and reads one back, which the port needs too.
 
+### OPEN, AND IT BLOCKS THE GATE: gas no longer agrees across runtimes
+
+`bin/conform-hosts` compares the gas two workloads cost, native against jvm, to
+the INSTRUCTION. That row now fails:
+
+    FAIL gas differs by 682: 143717 native against 143035 [jvm]
+
+Measured either side, raw rather than as the difference the row reports:
+
+| | small | big | difference |
+|---|---|---|---|
+| native / wasm | 57 850 | 201 567 | 143 717 |
+| jvm | 57 253 | 200 288 | 143 035 |
+| overhead | +597 | +1 279 | +682 |
+
+**The jvm number did not move.** The wasm side rose, because a call is a green
+thread now and the scheduler's own work is counted as the program's gas. It
+does not cancel in the difference because it is not fixed: 597 steps on a
+57 000-step program and 1 279 on a 200 000-step one. It GROWS with the work —
+the thread's stack grows and the checkpoint runs more often.
+
+Two things are wrong and they need separating:
+
+1. **The ports have not made this change.** `RtSteps` calls `runProgram`
+   directly, and `runtimes/` has no `system_message` at all. So the rule — only
+   ports — holds for wasm and native and not for jvm or clr, which is the
+   convergence this project treats as a defect rather than a configuration.
+2. **Gas is supposed to be the PROGRAM's instruction count**, and now carries
+   the host's pump on two runtimes out of four. Determinism is what lets a
+   cross-engine comparison claim apples-to-apples, and construe's gates depend
+   on the number.
+
+**The tolerance is not the answer.** That row deliberately has none: the
+comment above it records that a 1% bound absorbed a real defect — the ports
+hashing twice where native hashed once — for as long as the bound existed. "A
+bound wide enough to absorb an unexplained difference will absorb the next one
+too." Widening it to fit 682 would be that, again.
+
+So the choice is between making the ports call over their system ports too,
+which makes every runtime pay the scheduler and bakes it into gas everywhere,
+and taking the scheduler's steps out of gas so it measures the program again.
+That is a decision about what gas MEANS.
+
 ### Not yet done
 
 `Program::call` and `flint_rt::native::call_on` still exist on the NATIVE side,
