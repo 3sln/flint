@@ -237,3 +237,34 @@ measurement, a wrong first approach, a fix that had to be reverted. That record
 is what stops the next reader repeating it.
 
 Commit or push only when asked. If on `main`, branch first.
+
+## 9. A new API surface is not finished until it is signed off
+
+`doc/api-review.md` carries one section per published surface, each with a
+`**Reviewed:**` box. **Adding a surface means adding its section.** The box is
+the maintainer's to tick — the same rule `DECISIONS.md` follows, and for the
+same reason: a sign-off a script can produce is not a sign-off. These are the
+counterpart to a roadmap tick.
+
+**Three kinds count, because a surface is a surface whichever way it faces:**
+
+* **guest-facing** — a namespace a program can `:require`, whether it is linked
+  from `lib/` or served over a port;
+* **sdk-facing** — anything under `sdks/`, which other people build against, so
+  a change there is a change to somebody else's build;
+* **cli-facing** — a command a user types.
+
+`bin/check-api-review` fails when a surface has no section, when a section
+names something that no longer exists, and when the two CLIs dispatch
+different command sets. It never ticks a box.
+
+**Leave a change request rather than an unticked box where you can.** An
+unticked box says only "not looked at yet"; a recorded request says what is
+wrong, which is the durable half.
+
+**What a review is for.** Not whether the code works — the gate answers that.
+Whether the NAMES, the ARITIES and the BOUNDARY are right: that this surface
+should exist, that its parts belong to it rather than somewhere else, and that
+nothing published is private or the reverse. Fourteen `lib/flint` namespaces
+were outside `doc/manifest.edn` for a long time with nothing recording whether
+that was deliberate, which is the state this file exists to prevent.

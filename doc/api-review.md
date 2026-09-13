@@ -1,7 +1,13 @@
 # API review
 
-Every built-in namespace, one section each, so they can be gone through a few
-at a time rather than all at once.
+Every published surface, one section each, so they can be gone through a few at
+a time rather than all at once.
+
+**Three kinds of surface, and all three need a sign-off**: what a GUEST program
+can name (namespaces, served or linked), what an EMBEDDER can call (the SDKs),
+and what a USER types (the CLI commands). A new one of any kind is not finished
+until it has a section here and that section is ticked — the counterpart to a
+roadmap tick, and `AGENTS.md` §9 states the rule.
 
 **How to use it.** Tick `**Reviewed:**` when the interface and the boundary
 look right. If they do not, leave it unticked and write what should change
@@ -479,6 +485,111 @@ namespace.
 **Reviewed:** ☐ not signed off
 
 28 public vars. Functional zippers, after Huet. A LOCATION is a vector `[node path]` whose METADATA carries the three functions that make a tree a tree: is this a branch, what are its children, and how do I...
+
+**Change requests:** _none recorded_
+
+---
+
+# The SDKs
+
+What an EMBEDDER calls. These are versioned surfaces other people build
+against, so a change here is a change to somebody else's build.
+
+## sdks/c
+
+**Reviewed:** ☐ not signed off
+
+The C embedding API: `flint.h`, and the `.c`/`.cpp` selftests that pin it. What a C or C++ host sees.
+
+**Change requests:** _none recorded_
+
+## sdks/rust
+
+**Reviewed:** ☐ not signed off
+
+The Rust embedding API: `Compiler`, `Compile`, `Image`, `Sandbox`, `Pending`, `Driver`. The reference shape the other SDKs and `flint.ception` mirror.
+
+**Change requests:** _none recorded_
+
+## sdks/esm
+
+**Reviewed:** ☐ not signed off
+
+The portable ESM SDK: `instantiate`, the guest driver and the wire codec. No `node:` import and no filesystem, which is what lets it run on any engine.
+
+**Change requests:** _none recorded_
+
+## sdks/cli
+
+**Reviewed:** ☐ not signed off
+
+The npm CLI package: the command surface, plus the artifacts it carries in `dist/`. Byte-identical output to the native CLI is asserted by its selftest.
+
+**Change requests:** _none recorded_
+
+---
+
+# CLI commands
+
+What a USER types. Both CLIs must dispatch the same set --
+`bin/check-api-review` compares them and fails on drift, which is how
+`flint wasm` was caught existing on one front end and not the other.
+
+Aliases (`-h`, `--help`, `-v`, `--version`) fold into the command they spell.
+
+## cli:compile
+
+**Reviewed:** ☐ not signed off
+
+`flint compile` — served by the native CLI and the npm CLI.
+
+**Change requests:** _none recorded_
+
+## cli:deps
+
+**Reviewed:** ☐ not signed off
+
+`flint deps` — served by the native CLI and the npm CLI.
+
+**Change requests:** _none recorded_
+
+## cli:help
+
+**Reviewed:** ☐ not signed off
+
+`flint help` — served by the native CLI and the npm CLI.
+
+**Change requests:** _none recorded_
+
+## cli:run
+
+**Reviewed:** ☐ not signed off
+
+`flint run` — served by the native CLI and the npm CLI.
+
+**Change requests:** _none recorded_
+
+## cli:test
+
+**Reviewed:** ☐ not signed off
+
+`flint test` — served by the native CLI and the npm CLI.
+
+**Change requests:** _none recorded_
+
+## cli:version
+
+**Reviewed:** ☐ not signed off
+
+`flint version` — served by the native CLI and the npm CLI.
+
+**Change requests:** _none recorded_
+
+## cli:wasm
+
+**Reviewed:** ☐ not signed off
+
+`flint wasm` — served by the native CLI and the npm CLI.
 
 **Change requests:** _none recorded_
 
