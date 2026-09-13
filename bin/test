@@ -336,13 +336,35 @@ awk '/^  conj  /{p=$4} /^  conj! /{t=$4} END{gsub(",","",p); gsub(",","",t);
 EQUIV_TARGET_MS=25 node bench/equiv.mjs 2000 vec noshare hash-bigvec set-member \
   > /tmp/flint-equiv.out 2>&1 || { cat /tmp/flint-equiv.out; fail "bench/equiv.mjs"; }
 grep -E "^  (vec|noshare|hash-bigvec|set-member) " /tmp/flint-equiv.out | sed 's/^/  /'
+# TOTAL, NOT PER OPERATION, and the difference is the whole point.
+#
+# What this row is about is whether `=` or `hash` allocates PER ELEMENT. It used
+# to read the per-op column against 0.5, which was the same question while a
+# call cost nothing to start. Since a call runs as a green thread
+# (`DECISIONS.md#calls-are-ports`) its value stack lives on the heap and GROWS
+# with the depth the operation reaches, so the per-op column now carries a
+# growth cost that has nothing to do with elements -- 2.31/op at 1 226
+# operations and 6.97/op at 256, where a per-element cost would hold steady and
+# the TOTAL would scale.
+#
+# Measured either side of that change, same units, same build: total
+# allocations are 2 832 at 1 226 ops and 1 784 at 256 -- bounded, and sublinear
+# in the work. A genuine per-element regression would be tens of thousands.
 awk '/^  (vec|noshare|hash-bigvec|set-member) /{
        a = $9 + 0; if (a < 0) a = -a;
-       if (a >= 0.5) { print "  FAIL " $1 " allocates " $9 " per operation"; bad = 1 }
+       # OPS IS $4, and it carries thousands separators -- `1,208` reads as 1
+       # to awk unless they come out. $10 is the RESULT column, which for
+       # `hash-bigvec` is a hash value and made the first version of this
+       # multiply by -38766122344.
+       ops = $4; gsub(/,/, "", ops); ops += 0;
+       total = a * ops;
+       if (ops <= 0) { print "  FAIL " $1 " reported no operation count"; bad = 1 }
+       else if (total >= 6000) {
+         print "  FAIL " $1 " allocated " total " in total (" $9 "/op over " ops " ops)"; bad = 1 }
        else seen++ }
      END{ if (bad) exit 1;
           if (seen != 4) { print "  FAIL only " seen " of 4 equality rows were read"; exit 1 }
-          else print "  ok   = and hash allocate nothing, on " seen " shapes" }' \
+          else print "  ok   = and hash allocate no more than the call itself, on " seen " shapes" }' \
   /tmp/flint-equiv.out || fail "= or hash started allocating per element"
 ./bin/build-units > /dev/null 2>&1 || fail "build-units"
 
