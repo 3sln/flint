@@ -6871,6 +6871,36 @@ merely whether it is a bridge.
 Wakes **debounce**: N arrivals between two runs cost one dispatch, which
 `Driver::wake` already requires and `Core.scheduled` already implements.
 
+### The control plane is FLINT CODE, not runtime code
+
+**The system thread is an ordinary flint closure.** Bootstrap mints it over the
+system port and spawns it as a green thread; nothing about it is special to the
+scheduler. That single choice is what keeps this from being a protocol ported
+four times:
+
+* the loop lives in `lib/`, is compiled into the image, and every runtime gets
+  it from the image;
+* `:tx` is a LOCAL in that loop, so there is no `TH_TX` slot and no
+  `answer_call`;
+* `hostDeliver` needs no system branch — the branch exists today only because
+  nothing can receive on the system port, so delivery has to handle the message
+  inline and "the bytes are given straight back: the request is consumed now,
+  so it holds no queue". Park a thread there and that reason is gone.
+
+So this DELETES rather than ports:
+
+| | | |
+|---|---|---|
+| `system_message` | Rust only | deleted |
+| `answer_call` | Rust only | deleted |
+| `TH_ARGS`, `TH_TX` | Rust only | deleted — `tx` is a local |
+| `hostDeliver`'s system branch | Rust only | deleted |
+
+**The JVM and CLR being a generation behind mostly stops mattering**, because
+the generation they missed is the one being removed. What they need is what
+every runtime needs: spawn the closure at bootstrap, and answer the readiness
+predicate. Both are small and neither is a protocol.
+
 ### The system thread, and why calls do not run on it
 
 The constructor takes a **system bridge end** — a sandbox cannot be built
@@ -6935,17 +6965,62 @@ bound ports.
 | JVM / CLR | `TH_LEN=12`, no `systemMessage`, no system branch in `hostDeliver` | the whole protocol |
 | constructor | no system port; installed afterwards | system bridge required |
 
-**The ports are a generation behind before this starts.** They never received
-`structured-ports` step 5: their thread object has no `TH_ARGS`/`TH_TX`, there
-is no `systemMessage`, and `hostDeliver` has no system-port branch — they still
-run `img.entry` directly.
+**The ports never received `structured-ports` step 5** — no `TH_ARGS`/`TH_TX`,
+no `systemMessage`, no system-port branch. Which turns out not to matter: those
+are the things being deleted. Recorded because it was nearly the other way
+round, and the version of this plan that ported them into Java and C# by hand
+would have been three times the work for a worse result.
 
-**And none of this is generated.** All 91 kin sources were checked: not one
-touches ports, concurrency or scheduling. `Conc` is hand-written three times, so
-parity is three hand ports of one protocol. That is the cost of the current
-arrangement, stated here rather than discovered per-runtime.
+**None of the concurrency is generated.** All 91 kin sources were checked: not
+one touches ports or scheduling, so `Conc` is hand-written three times. That is
+still true of the SCHEDULER; it stops being true of the protocol, which moves
+into the image. `^:mut ^Rt` is expressible in kin and used across the sources,
+and `kin/atoms.kin` already does compare-and-set-shaped work, so the scheduler
+is probably portable too — untested, and not this change.
 
 ### What it settles
 
 The gas divergence in `DECISIONS.md#calls-are-ports` closes when every runtime
 calls the same way, because every runtime then pays the same scheduler.
+
+## vars-is-its-own-grant
+
+**Ratified:** ☐ not signed off
+
+Recorded 2026-09-14. Resolving a var by NAME at run time is a capability of its
+own, `:vars`, and not part of `:host`.
+
+### What it is
+
+`Rt::var_named` exists (`runtime/src/vm.rs:1973`) and is not a builtin, so flint
+code cannot turn a string into a var's value. The system loop needs to:
+`{:op :call :fn "ns/f"}` names a function as text, and something has to resolve
+it (`DECISIONS.md#bridges-are-the-only-door`).
+
+### Why not `:host`
+
+`:host` means *may ask the host for something* — it gates `flint.host/request`,
+which reaches `flint.rt/request`, and `lib/deps.edn` holds it for exactly that
+reason. Reaching into the image's own var table is not asking the host
+anything. Putting both behind one name would make that name mean two unrelated
+things, which is the shape that produced the `:checks` axis on one CLI and not
+the other, and the duplicated dependency-kind tables.
+
+It is named for what it reaches, like `fs`, `env`, `net`, `deps` and `slurp`.
+
+### What it actually confers, stated plainly
+
+**An escape from the compile-time workspace guard.** `workspace-capabilities`
+decides which workspace may NAME which var, and it decides that while
+compiling. A string resolved at run time was never seen by that check. So
+`:vars` is not "a bit of reflection" — it is the authority to reach a var the
+compiler would have refused, and it should be granted with that in mind.
+
+That is also why it cannot simply be a builtin anyone may call: an ungated
+`var-named` would make every compile-time guard advisory.
+
+### Who holds it
+
+`lib/deps.edn`'s workspace, which is where the system loop lives. A guest
+program holds it only if an embedder grants it, and the ordinary case is that
+nobody does — a program names its functions at compile time like any other.
