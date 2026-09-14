@@ -715,6 +715,20 @@ public final class Builtins {
             }
             return Str.of(rt, new String(Character.toChars((int) c)));
         });
+        // A VAR BY NAME, at run time (`DECISIONS.md#vars-is-its-own-grant`).
+        // The system loop resolves `{:op :call :fn "ns/f"}`, where the function
+        // is named as TEXT. Guarded `:vars`: a name resolved now was never seen
+        // by the compile-time workspace guard, so this reaches a var the
+        // compiler would have refused. NIL for a name no var has -- asking
+        // should not cost a catch.
+        def("flint/var-named", (rt, at, n) -> {
+            String want = Str.text(rt, rt.vat(at));
+            for (int i = 0; i < rt.varNames.length; i++) {
+                long nv = rt.consts[rt.varNames[i]];
+                if (want.equals(Str.text(rt, nv))) return rt.roots.shared.globals[i];
+            }
+            return Val.NIL;
+        });
         def("flint/str-bytes", (rt, at, n) -> {
             // REFUSED BEFORE THE VECTOR IS BUILT, not billed after it. This
             // builds one element per byte, and billing afterwards is how the

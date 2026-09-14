@@ -201,6 +201,13 @@ public sealed class Rt : System.IDisposable {
     public byte[] code = System.Array.Empty<byte>();
     public long[] consts = System.Array.Empty<long>();
     public FnDef[] fns = System.Array.Empty<FnDef>();
+    /// Index into `consts` of each var's name, by var index.
+    ///
+    /// Kept for `flint/var-named` (`DECISIONS.md#vars-is-its-own-grant`), which
+    /// resolves a var from a string at run time. Copied out of the image beside
+    /// `consts` and `fns`, because this runtime keeps the image's parts rather
+    /// than the image.
+    public int[] varNames = System.Array.Empty<int>();
 
     public readonly List<Frame> frames = new();
     public readonly List<Handler> handlers = new();

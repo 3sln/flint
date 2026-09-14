@@ -625,6 +625,36 @@ builtins! {
         let from = if n > 2 { rt.as_i64(arg(rt, a, 2)).unwrap_or(0) } else { 0 };
         rt.str_index_of(h, needle, from)
     };
+    // A VAR BY NAME, at run time (`DECISIONS.md#vars-is-its-own-grant`).
+    //
+    // What the system loop needs: `{:op :call :fn "ns/f"}` names a function as
+    // TEXT, and something has to turn that into the function. Nothing could:
+    // `Rt::var_named` existed and was not reachable from flint.
+    //
+    // GUARDED `:vars`, and the guard is the point rather than a formality.
+    // `workspace-capabilities` decides which workspace may NAME which var, and
+    // it decides while compiling. A string resolved now was never seen by that
+    // check, so this is the authority to reach a var the compiler would have
+    // refused -- which is why it is not simply available. Ungated, it would
+    // make every compile-time guard advisory.
+    //
+    // Answers NIL for a name no var has, rather than throwing: "is there one"
+    // is a question a caller may reasonably ask, and a throw would make asking
+    // cost a catch. A name that resolves to something uncallable is the
+    // caller's problem at the call, exactly as it is for any other value.
+    "flint/var-named", flint_b_varnamed, b_varnamed, |rt, a, n| {
+        let _ = n;
+        let sv = arg(rt, a, 0);
+        let mut buf = crate::rt::sbuf();
+        let name: alloc::string::String = match rt.as_str(sv, &mut buf) {
+            Some(s) => s.into(),
+            None => return rt.throw_str("ClassCastException", "var-named wants a string"),
+        };
+        match rt.var_named(&name) {
+            Some(idx) => rt.roots.shared.globals.get(idx as usize).map_or(NIL, |g| g.get()),
+            None => NIL,
+        }
+    };
     "flint/str-bytes", flint_b_strbytes, b_strbytes, |rt, a, n| {
         let _ = n;
         let s = arg(rt, a, 0);

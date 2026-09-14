@@ -114,6 +114,7 @@ public final class Img {
         int nvars = (int) r.u32();
         out.varNames = new int[nvars];
         for (int i = 0; i < nvars; i++) out.varNames[i] = (int) r.u32();
+        rt.varNames = out.varNames;
         rt.roots.shared.globals = new long[nvars];
         java.util.Arrays.fill(rt.roots.shared.globals, Val.NIL);
 

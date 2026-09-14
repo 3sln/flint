@@ -109,6 +109,7 @@ public static class Img {
         int nvars = (int) r.U32();
         outl.varNames = new int[nvars];
         for (int i = 0; i < nvars; i++) outl.varNames[i] = (int) r.U32();
+        rt.varNames = outl.varNames;
         rt.roots.shared.Globals = new long[nvars];
         System.Array.Fill(rt.roots.shared.Globals, Val.Nil);
 

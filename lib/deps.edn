@@ -28,4 +28,15 @@
 ;; caller past `flint.host/request`'s own guard -- an application still holds
 ;; `:host` or it does not.
 {:flint/workspace flint/flint
- :flint/capabilities-grant [:host]}
+ ;; AND `:vars`, for the same reason and on the same terms. The system loop
+ ;; that drives a sandbox (`DECISIONS.md#bridges-are-the-only-door`) is flint
+ ;; code living here, and it resolves `{:op :call :fn "ns/f"}` -- a function
+ ;; named as TEXT -- through `flint/var-named`. That builtin is guarded
+ ;; `:vars` (`DECISIONS.md#vars-is-its-own-grant`), so the library implementing
+ ;; the capability holds it, exactly as it holds `:host` for `flint.host/request`.
+ ;;
+ ;; It is a SECOND grant rather than more of `:host` because they are unrelated
+ ;; authorities: `:host` is asking the host for something, `:vars` is reaching a
+ ;; var the compiler's workspace guard would have refused. One name for two
+ ;; things is the shape that has bitten this project repeatedly.
+ :flint/capabilities-grant [:host :vars]}

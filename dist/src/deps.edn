@@ -1,4 +1,4 @@
 {;; The loader names every builtin in the distributable, so it holds every
  ;; capability any of them is guarded with (DECISIONS.md#workspace-capabilities). Generated
  ;; by bin/build-dist; do not edit.
- :flint/capabilities-grant [:host]}
+ :flint/capabilities-grant [:host :vars]}

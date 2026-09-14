@@ -7019,6 +7019,19 @@ compiler would have refused, and it should be granted with that in mind.
 That is also why it cannot simply be a builtin anyone may call: an ungated
 `var-named` would make every compile-time guard advisory.
 
+### It reaches only what SURVIVED THE SHAKE
+
+A name resolved at run time does not keep a var alive — the shaker cannot see
+a string. Measured: a program whose only mention of `v/target` is
+`(var-named "v/target")` gets `nil`, and the same program with an ordinary
+reference to `target` elsewhere gets the function and calls it.
+
+That is the right behaviour and not a limitation to work around. It means
+`:exports` is what makes a function callable from outside
+(`DECISIONS.md#flint-ception` already uses it for exactly this), and it keeps
+`var-named` from quietly defeating the shaker: only reachable code ships, and
+this does not change what reachable means.
+
 ### Who holds it
 
 `lib/deps.edn`'s workspace, which is where the system loop lives. A guest

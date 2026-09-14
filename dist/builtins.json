@@ -153,6 +153,7 @@
   "flint/unchecked-mul",
   "flint/unchecked-sub",
   "flint/upper-case",
+  "flint/var-named",
   "flint/vec->b",
   "flint/volatile",
   "flint/volatile?",

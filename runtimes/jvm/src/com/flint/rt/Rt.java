@@ -270,6 +270,13 @@ public final class Rt {
     public byte[] code = new byte[0];
     public long[] consts = new long[0];
     public FnDef[] fns = new FnDef[0];
+    /// Index into `consts` of each var's name, by var index.
+    ///
+    /// Kept for `flint/var-named` (`DECISIONS.md#vars-is-its-own-grant`), which
+    /// resolves a var from a string at run time. Copied out of the image beside
+    /// `consts` and `fns`, because this runtime keeps the image's parts rather
+    /// than the image.
+    public int[] varNames = new int[0];
 
     public final ArrayList<Frame> frames = new ArrayList<>();
     public final ArrayList<Handler> handlers = new ArrayList<>();

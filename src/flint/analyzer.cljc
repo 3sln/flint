@@ -318,7 +318,13 @@
   not a general policy about which builtins are authority-bearing -- whether
   the port surface should demand something is a real design question and is
   not answered here."
-  {"flint/request" #{:host}})
+  {"flint/request" #{:host}
+   ;; `var-named` is NOT derived from a wrapper the way `request` is -- it is
+   ;; guarded in its own right (`DECISIONS.md#vars-is-its-own-grant`), because
+   ;; what it confers is an escape from THIS CHECK: a name resolved at run time
+   ;; was never seen by the compile-time guard that decides which workspace may
+   ;; name which var. Ungated, every guard above becomes advisory.
+   "flint/var-named" #{:vars}})
 
 (defn- guard-check!
   "Refuse a reference to a var its workspace guards (`DECISIONS.md#workspace-capabilities`).
