@@ -396,6 +396,14 @@ FLINT_DIST_FRESH=1 ./sdks/cli/build > /tmp/flint-test.out 2>&1 || { tail -25 /tm
 grep -E "^ *(ok|FAIL)" /tmp/flint-test.out | sed 's/^      /  /;s/^    /  /'
 
 echo
+sec "system: bind, call, unbind, close -- the only door into a sandbox"
+# The control plane (`DECISIONS.md#bridges-are-the-only-door`) as flint code,
+# driven over a LOCAL channel: what is under test is the protocol, and a bridge
+# would add a host and an executor to a failure that should be unambiguous.
+bb test/system.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/system.clj"; }
+grep -cE "^ *ok" /tmp/flint-test.out | sed 's/^/    /;s/$/ checks/'
+
+echo
 sec "io: sources and sinks, as protocols rather than capabilities"
 # NOT in `bin/check`, though it is 2 s: it runs the program through
 # `target/release/flint`, which embeds the standard library at cargo time, so

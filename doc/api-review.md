@@ -277,6 +277,16 @@ These are ours to design. Nothing constrains the names but us.
 
 **Change requests:** _none recorded_
 
+## flint.system
+
+**Reviewed:** ☐ not signed off
+
+1 public var (`serve`). A sandbox's control plane, as flint code rather than runtime code (`DECISIONS.md#bridges-are-the-only-door`). Bootstrap mints a closure over `serve` and spawns it on the system port; `bind`/`unbind`/`close` are the whole protocol, and calls run on bound ports rather than here.
+
+**Is this public?** Required by 1 compiled test program, 0 other `lib` namespaces, named 0 times in README. Guest programs have no reason to name it — bootstrap does — so the boundary question is whether `serve` should be public at all or reachable only from the runtime that spawns it.
+
+**Change requests:** _none recorded_
+
 ## flint.table
 
 **Reviewed:** ☐ not signed off
