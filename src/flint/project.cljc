@@ -470,7 +470,13 @@
     ;; where the namespace does not either -- so there is nothing to require and
     ;; nothing left behind. Under `:optimize [perf]` this root is simply not
     ;; added, and `flint.check` is not in the program at all.
-    (let [roots (cond-> (vec (or roots* ['clojure.core entry-ns]))
+    ;; `flint.system` is a root for a third reason: it is the sandbox's CONTROL
+    ;; PLANE (`DECISIONS.md#bridges-are-the-only-door`), spawned by bootstrap
+    ;; rather than called by the program. Nothing requires it and nothing
+    ;; references it, so the graph never reaches it and the shake would drop the
+    ;; only door into the module. Unconditional, because every module is reached
+    ;; as a sandbox now -- there is no other way in.
+    (let [roots (cond-> (vec (or roots* ['clojure.core entry-ns 'flint.system]))
                   (contains? features :flint/check) (conj 'flint.check))
           {:keys [sources order missing] :as r0}
           (collect resolve-ns roots features)

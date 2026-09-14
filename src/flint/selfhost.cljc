@@ -173,7 +173,21 @@
                                               sources))
                        :order (vec (filter (fn [n] (contains? sources n)) order))
                        :entry entry
-                       :exports (or (:exports spec) [])
+                       ;; `flint.system/serve` IS ALWAYS AN EXPORT. It is the
+                       ;; sandbox's control plane
+                       ;; (`DECISIONS.md#bridges-are-the-only-door`), spawned by
+                       ;; bootstrap rather than called from the program -- so
+                       ;; nothing in the program references it and the shake
+                       ;; would drop the only door into the module. Added here
+                       ;; rather than asked for, because a caller cannot be
+                       ;; expected to know the runtime needs it.
+                       ;; A SYMBOL, not a string: `extra-roots` feeds
+                       ;; reachability beside `entry-var`, which is a symbol,
+                       ;; and a string silently matches nothing -- the module
+                       ;; compiled, the namespace was in the program, and
+                       ;; `serve` was shaken anyway.
+                       :exports (vec (distinct (conj (or (:exports spec) [])
+                                                     'flint.system/serve)))
                        :builtins builtins
                        :features features})]
           {:builder (:builder result) :stats (:stats result)})))))

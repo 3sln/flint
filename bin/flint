@@ -913,9 +913,21 @@
                         (map (clojure.core/fn [pth] (ns-of (slurp (str pth)))))
                         (remove nil?)
                         vec))
+        ;; `flint.system` IS A ROOT HERE TOO, and the duplication is the point
+        ;; worth noticing: this file has its own `collect` and never calls
+        ;; `flint.project/resolve-project`, so a root added there reached the
+        ;; native CLI and not this front end. Caught by the tiny module growing
+        ;; 51 799 bytes under `flint compile` while `bin/flint` produced exactly
+        ;; the same bytes as before.
+        ;;
+        ;; It is the sandbox's control plane
+        ;; (`DECISIONS.md#bridges-are-the-only-door`): spawned by bootstrap,
+        ;; referenced by nothing, so the graph never reaches it and the shake
+        ;; would drop the only door into the module.
         roots (cond-> (if test-mode?
                         (cons 'clojure.core src-nses)
                         (cons entry-ns ['clojure.core]))
+                true (concat ['flint.system])
                 (contains? features :flint/check) (concat ['flint.check]))
         [sources order] (collect dirs roots features)
         ;; BEFORE ordering and before compiling: a refused require is an answer
@@ -984,8 +996,14 @@
         ;; what came back was `rust-lld: cannot open output file`, which names
         ;; the linker for something that is not the linker's doing.
         _ (when-let [d (fs/parent (fs/absolutize out))] (fs/create-dirs d))
+        ;; `flint.system/serve` is ALWAYS exported, for the same reason it is
+        ;; always a root: bootstrap spawns it and nothing references it, so
+        ;; reachability drops it and the module has no door. A SYMBOL, because
+        ;; `extra-roots` is compared against `entry-var` -- a string silently
+        ;; matches nothing, which is how the first attempt compiled fine and
+        ;; shook `serve` out anyway.
         spec {:sources sources :order order :entry fn
-              :exports exports
+              :exports (vec (distinct (conj (vec exports) 'flint.system/serve)))
               :features features
               :exclude exclude
               :excluded-builtins (select-keys (builtins-by-unit unit-path) (vec (or exclude [])))

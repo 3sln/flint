@@ -146,7 +146,16 @@
 ;; compared a module carrying `clojure.core` against itself -- `clojure.core`
 ;; already reaches a conc builtin, so both arms linked the unit and the numbers
 ;; were identical by construction.
-(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 430000))
+;; RAISED AGAIN, +67 409, for the control plane itself: `flint.system` is a
+;; root in every program and `flint.system/serve` is always exported, because
+;; bootstrap spawns it and nothing references it.
+;;
+;; THE RUNNING TOTAL FOR ONE WAY IN IS 173 934 BYTES on this module -- 270 119
+;; before `flint.conc` became unconditional, 444 053 now, +64%. Both raises are
+;; the same decision (`DECISIONS.md#bridges-are-the-only-door`) and are worth
+;; reading together rather than one at a time, which is what the comment above
+;; the other floor asks for.
+(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 500000))
 
 ;; --- absent, by name -------------------------------------------------------
 (doseq [sym ["flint_snapshot_capture" "flint_snapshot_restore" "flint_snapshot_ptr"

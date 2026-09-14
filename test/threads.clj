@@ -80,10 +80,20 @@
 ;; keeps this row meaningful rather than a tautology -- it would pass trivially
 ;; if it only asserted what is present.
 (def pure-bytes (String. (fs/read-all-bytes (wasm-of pure-wasm)) "ISO-8859-1"))
-(doseq [sym ["flint_install_port" "flint_system_port" "flint_in_alloc"]]
+;; THE CONTROL PLANE IS FLINT CODE AND IT USES THREADS AND PORTS
+;; (`DECISIONS.md#bridges-are-the-only-door`), so `spawn` and `port-send` are in
+;; every module now: `flint.system/serve` parks on the system port and spawns a
+;; call thread per bind. There is no "pure module" in the old sense any more --
+;; a module with no door is a module nothing can reach.
+(doseq [sym ["flint_install_port" "flint_system_port" "flint_in_alloc"
+             "flint_b_spawn" "flint_b_port_send"]]
   (check (str "every module carries " sym) (str/includes? pure-bytes sym) true))
-(doseq [sym ["flint_b_spawn" "flint_b_port_send" "flint_b_channel"]]
-  (check (str "a pure module still has no " sym) (str/includes? pure-bytes sym) false))
+;; What a module still does NOT carry is what only a PROGRAM uses. `channel` is
+;; a local channel between two green threads, which the control plane never
+;; makes -- it is handed its ports. This row is what keeps the one above from
+;; being a tautology: if everything were present it would pass trivially.
+(doseq [sym ["flint_b_channel"]]
+  (check (str "a program that makes none still has no " sym) (str/includes? pure-bytes sym) false))
 ;; The floor moved in 0009, deliberately and by a known amount: the interpreter
 ;; loop is instantiated twice so that a run with no budget has no counter in it,
 ;; and the biggest function in the module is therefore in it twice. The point of
@@ -453,7 +463,19 @@
             ;; their way in bytes. This is a boundary decision that was taken
             ;; knowing the price, and the price turned out to be three times the
             ;; 34 519 the estimate on record predicted.
-            (< pure-size 430000))
+            ;; SEVENTH RAISE: +67 409 more for the control plane itself
+            ;; (`DECISIONS.md#bridges-are-the-only-door`), 444 053 against
+            ;; 376 644. `flint.system` is a ROOT in every program and
+            ;; `flint.system/serve` is always exported, because bootstrap
+            ;; spawns it and nothing references it -- so reachability would
+            ;; drop the only door into the module.
+            ;;
+            ;; WITH THE SIXTH, ONE WAY IN HAS COST 173 934 BYTES on this
+            ;; module: 270 119 before `flint.conc` became unconditional,
+            ;; 444 053 now. +64%. That is the whole bill for "a bridge port is
+            ;; the only way to talk to a sandbox", and it is one number rather
+            ;; than two because the two halves are the same decision.
+            (< pure-size 500000))
 
 ;; RE-BASELINED AGAIN, and this one is a decision rather than a drift:
 ;; 300 281 against 280 781, and 18 917 of it is ONE ARM IN THE WIRE CODEC.
