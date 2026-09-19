@@ -340,6 +340,11 @@ fn to_json(args: &[Val]) -> String {
             Val::Vector(xs) | Val::List(xs) | Val::Set(xs) => {
                 J::Array(xs.iter().map(one).collect())
             }
+            // THE VALUE, WITHOUT ITS METADATA. JSON has nowhere to put it, and
+            // a pod's arguments are JSON -- so this is the same lossy edge the
+            // keyword arm above names, for the same reason. Dropping it beats
+            // inventing a representation a pod would have to know about.
+            Val::Meta(_, v) => one(v),
             Val::Map(es) => {
                 let mut m = serde_json::Map::new();
                 for (k, v) in es {

@@ -14,6 +14,78 @@ fn main() {
             o.push_str(if pred_hit(code, v) { "1" } else { "0" });
         }
     }
+    o.push(' ');
+    // CLASS-HIT. A class is `[n, (kind, a, b) * n]` at `class_base + off`.
+    let prog: Vec<u32> = vec![2, 0, 97, 0, 1, 48, 57];
+    for v in [97u32, 50, 98, 47, 57] {
+        o.push_str(if class_hit(&prog, 0, 0, v) { "1" } else { "0" });
+    }
+    o.push(' ');
+    let pred: Vec<u32> = vec![1, 2, 0, 0];
+    for v in [53u32, 97] {
+        o.push_str(if class_hit(&pred, 0, 0, v) { "1" } else { "0" });
+    }
+    o.push(' ');
+    let empty: Vec<u32> = vec![0];
+    o.push_str(if class_hit(&empty, 0, 0, 97) { "1" } else { "0" });
+    o.push(' ');
+    // THE BASE AND THE OFFSET ARE SUMMED, and this pair is the only field
+    // that says so: the same class reached two ways.
+    let shifted: Vec<u32> = vec![99, 99, 2, 0, 97, 0, 1, 48, 57];
+    o.push_str(if class_hit(&shifted, 2, 0, 97) { "1" } else { "0" });
+    o.push_str(if class_hit(&shifted, 0, 2, 97) { "1" } else { "0" });
+    o.push(' ');
+    // CONSUMES. Code at 0, classes at 15: five triples then `[1, 1,48,57]`
+    // -- one CL_RANGE over the digits.
+    let full: Vec<u32> = vec![0,97,0,  1,0,0,  10,0,0,  10,0,1,  5,0,0,  11,0,0,  1, 1,48,57];
+    for (pc, v) in [(0u32,97u32),(0,98),(1,98),(1,10),(2,53),(2,97),(3,53),(3,97),(4,97),(5,10),(5,97)] {
+        o.push_str(if consumes(&full, 0, 18, pc, v) { "1" } else { "0" });
+    }
+    o.push(' ');
+    // ADD-THREAD. Program: 0 SPLIT(1,4) | 1 SAVE(0) | 2 CHAR 'a' | 3 MATCH |
+    // 4 CHAR 'b'. nslots = 2, so scratch is (5+1)*2 and the caller's slots
+    // live in the last block, at 10.
+    {
+        let prog: Vec<u32> = vec![2,1,4,  4,0,0,  0,97,0,  5,0,0,  0,98,0];
+        let cps: Vec<u32> = vec![97, 98];
+        // ONE ARENA: rows at 0 (5*3), scratch at 15 (5*2), the caller's own
+        // slots at 25.
+        let mut mem = vec![-1i32; 27];
+        let mut seen = vec![false; 5];
+        let n = add_thread(&prog, 0, &cps, 2, 7, &mut mem, 0, 0, &mut seen, 0, 15, 25, 2);
+        o.push_str(&format!("{n}:"));
+        for k in 0..(n as usize * 3) {
+            if k > 0 { o.push(','); }
+            o.push_str(&mem[k].to_string());
+        }
+    }
+    o.push(' ');
+    // DEDUP: both arms of the split reach the same pc, which is added once.
+    {
+        let prog: Vec<u32> = vec![2,1,1,  0,97,0];
+        let cps: Vec<u32> = vec![97];
+        let mut mem = vec![-1i32; 12];
+        let mut seen = vec![false; 2];
+        o.push_str(&add_thread(&prog, 0, &cps, 1, 0, &mut mem, 0, 0, &mut seen, 0, 6, 10, 2).to_string());
+    }
+    o.push(' ');
+    // BOL then EOL, each at the position that satisfies it and one that does not.
+    for (op, i) in [(6u32, 0u32), (6, 1), (7, 2), (7, 1)] {
+        let prog: Vec<u32> = vec![op,0,0,  0,97,0];
+        let cps: Vec<u32> = vec![97, 98];
+        let mut mem = vec![-1i32; 12];
+        let mut seen = vec![false; 2];
+        o.push_str(&add_thread(&prog, 0, &cps, 2, i, &mut mem, 0, 0, &mut seen, 0, 6, 10, 2).to_string());
+    }
+    o.push(' ');
+    // WORD BOUNDARY inside a word: `\b` fails, `\B` holds.
+    for op in [8u32, 9] {
+        let prog: Vec<u32> = vec![op,0,0,  0,97,0];
+        let cps: Vec<u32> = vec![97, 98];
+        let mut mem = vec![-1i32; 12];
+        let mut seen = vec![false; 2];
+        o.push_str(&add_thread(&prog, 0, &cps, 2, 1, &mut mem, 0, 0, &mut seen, 0, 6, 10, 2).to_string());
+    }
     println!("{}", o);
 }
 --java
@@ -28,6 +100,55 @@ fn main() {
         for (int code = 0; code < 6; code++)
             for (int v : new int[]{48, 65, 32, 33})
                 o.append(predHit(code, v) ? "1" : "0");
+        o.append(' ');
+        int[] prog = { 2, 0, 97, 0, 1, 48, 57 };
+        for (int v : new int[]{ 97, 50, 98, 47, 57 }) o.append(classHit(prog, 0, 0, v) ? "1" : "0");
+        o.append(' ');
+        int[] pred = { 1, 2, 0, 0 };
+        for (int v : new int[]{ 53, 97 }) o.append(classHit(pred, 0, 0, v) ? "1" : "0");
+        o.append(' ');
+        int[] empty = { 0 };
+        o.append(classHit(empty, 0, 0, 97) ? "1" : "0");
+        o.append(' ');
+        int[] shifted = { 99, 99, 2, 0, 97, 0, 1, 48, 57 };
+        o.append(classHit(shifted, 2, 0, 97) ? "1" : "0");
+        o.append(classHit(shifted, 0, 2, 97) ? "1" : "0");
+        o.append(' ');
+        int[] full = { 0,97,0,  1,0,0,  10,0,0,  10,0,1,  5,0,0,  11,0,0,  1, 1,48,57 };
+        int[][] probes = {{0,97},{0,98},{1,98},{1,10},{2,53},{2,97},{3,53},{3,97},{4,97},{5,10},{5,97}};
+        for (int[] q : probes) o.append(consumes(full, 0, 18, q[0], q[1]) ? "1" : "0");
+        o.append(' ');
+        {
+            int[] prog2 = { 2,1,4,  4,0,0,  0,97,0,  5,0,0,  0,98,0 };
+            int[] cps2 = { 97, 98 };
+            int[] mem = new int[27]; java.util.Arrays.fill(mem, -1);
+            boolean[] seen = new boolean[5];
+            int n = addThread(prog2, 0, cps2, 2, 7, mem, 0, 0, seen, 0, 15, 25, 2);
+            o.append(n).append(':');
+            for (int k = 0; k < n * 3; k++) { if (k > 0) o.append(','); o.append(mem[k]); }
+        }
+        o.append(' ');
+        {
+            int[] prog2 = { 2,1,1,  0,97,0 };
+            int[] cps2 = { 97 };
+            int[] mem = new int[12]; java.util.Arrays.fill(mem, -1);
+            o.append(addThread(prog2, 0, cps2, 1, 0, mem, 0, 0, new boolean[2], 0, 6, 10, 2));
+        }
+        o.append(' ');
+        int[][] anchors = {{6,0},{6,1},{7,2},{7,1}};
+        for (int[] q : anchors) {
+            int[] prog2 = { q[0],0,0,  0,97,0 };
+            int[] cps2 = { 97, 98 };
+            int[] mem = new int[12]; java.util.Arrays.fill(mem, -1);
+            o.append(addThread(prog2, 0, cps2, 2, q[1], mem, 0, 0, new boolean[2], 0, 6, 10, 2));
+        }
+        o.append(' ');
+        for (int op : new int[]{ 8, 9 }) {
+            int[] prog2 = { op,0,0,  0,97,0 };
+            int[] cps2 = { 97, 98 };
+            int[] mem = new int[12]; java.util.Arrays.fill(mem, -1);
+            o.append(addThread(prog2, 0, cps2, 2, 1, mem, 0, 0, new boolean[2], 0, 6, 10, 2));
+        }
         System.out.println(o);
     }
 --csharp
@@ -42,10 +163,61 @@ fn main() {
         for (int code = 0; code < 6; code++)
             foreach (int v in new int[]{48, 65, 32, 33})
                 o.Append(PredHit(code, v) ? "1" : "0");
+        o.Append(' ');
+        int[] prog = { 2, 0, 97, 0, 1, 48, 57 };
+        foreach (int v in new int[]{ 97, 50, 98, 47, 57 }) o.Append(ClassHit(prog, 0, 0, v) ? "1" : "0");
+        o.Append(' ');
+        int[] pred = { 1, 2, 0, 0 };
+        foreach (int v in new int[]{ 53, 97 }) o.Append(ClassHit(pred, 0, 0, v) ? "1" : "0");
+        o.Append(' ');
+        int[] empty = { 0 };
+        o.Append(ClassHit(empty, 0, 0, 97) ? "1" : "0");
+        o.Append(' ');
+        int[] shifted = { 99, 99, 2, 0, 97, 0, 1, 48, 57 };
+        o.Append(ClassHit(shifted, 2, 0, 97) ? "1" : "0");
+        o.Append(ClassHit(shifted, 0, 2, 97) ? "1" : "0");
+        o.Append(' ');
+        int[] full = { 0,97,0,  1,0,0,  10,0,0,  10,0,1,  5,0,0,  11,0,0,  1, 1,48,57 };
+        int[][] probes = { new[]{0,97}, new[]{0,98}, new[]{1,98}, new[]{1,10}, new[]{2,53},
+                           new[]{2,97}, new[]{3,53}, new[]{3,97}, new[]{4,97},
+                           new[]{5,10}, new[]{5,97} };
+        foreach (var q in probes) o.Append(Consumes(full, 0, 18, q[0], q[1]) ? "1" : "0");
+        o.Append(' ');
+        {
+            int[] prog2 = { 2,1,4,  4,0,0,  0,97,0,  5,0,0,  0,98,0 };
+            int[] cps2 = { 97, 98 };
+            int[] mem = new int[27]; System.Array.Fill(mem, -1);
+            bool[] seen = new bool[5];
+            int n = AddThread(prog2, 0, cps2, 2, 7, mem, 0, 0, seen, 0, 15, 25, 2);
+            o.Append(n).Append(':');
+            for (int k = 0; k < n * 3; k++) { if (k > 0) o.Append(','); o.Append(mem[k]); }
+        }
+        o.Append(' ');
+        {
+            int[] prog2 = { 2,1,1,  0,97,0 };
+            int[] cps2 = { 97 };
+            int[] mem = new int[12]; System.Array.Fill(mem, -1);
+            o.Append(AddThread(prog2, 0, cps2, 1, 0, mem, 0, 0, new bool[2], 0, 6, 10, 2));
+        }
+        o.Append(' ');
+        int[][] anchors = { new[]{6,0}, new[]{6,1}, new[]{7,2}, new[]{7,1} };
+        foreach (var q in anchors) {
+            int[] prog2 = { q[0],0,0,  0,97,0 };
+            int[] cps2 = { 97, 98 };
+            int[] mem = new int[12]; System.Array.Fill(mem, -1);
+            o.Append(AddThread(prog2, 0, cps2, 2, q[1], mem, 0, 0, new bool[2], 0, 6, 10, 2));
+        }
+        o.Append(' ');
+        foreach (int op in new int[]{ 8, 9 }) {
+            int[] prog2 = { op,0,0,  0,97,0 };
+            int[] cps2 = { 97, 98 };
+            int[] mem = new int[12]; System.Array.Fill(mem, -1);
+            o.Append(AddThread(prog2, 0, cps2, 2, 1, mem, 0, 0, new bool[2], 0, 6, 10, 2));
+        }
         Console.WriteLine(o.ToString());
     }
 --expect
-11011111000000 11111100 100001111100001100101101
+11011111000000 11111100 100001111100001100101101 11001 10 0 11 10101001011 2:2,7,-1,4,-1,-1 1 1010 01
 --expect-why
 DERIVED BY HAND from `pike.kin`, evaluating each predicate against each probe
 codepoint. Nothing here was read off a run.
@@ -94,3 +266,41 @@ NEGATIONS of the even ones, so each pair must read as exact complements:
 giving `100001111100001100101101`. Code 5 is kin's `:else` rather than a
 listed arm, so it is the one that answers for every code the `case` does not
 name; it must still be the exact complement of code 4, and `1101` is that.
+
+  --- and ADD-THREAD, where the first field carries most of the contract ---
+
+  add-thread  `2:2,7,-1,4,-1,-1`
+                    A SPLIT WHOSE TWO ARMS DIVERGE THROUGH A SAVE, which is
+                    four separate promises in one field. The program is
+                    `0 SPLIT(1,4) | 1 SAVE(0) | 2 CHAR | 3 MATCH | 4 CHAR`,
+                    entered at 0 with position 7 and slots `[-1,-1]`.
+
+                    `2` before `4` -- the PREFERRED arm of a split is added
+                    first, and leftmost-first is decided by that order and by
+                    nothing downstream. Reverse the two recursive calls and
+                    this field is `4,...,2,...` while every other field in
+                    this file is unchanged.
+
+                    `7` in the first row's slot 0 -- `save` recorded the
+                    position for the arm that ran through it.
+
+                    `-1` in the SECOND row's slot 0 -- and this is the one
+                    that pins COPY semantics. The second arm never saw the
+                    save. An implementation that modified the slots in place
+                    rather than copying them would answer `4,7,-1` here and
+                    be wrong in a way no total or count would show.
+
+                    `2` rows, not 3 -- `MATCH` at pc 3 is never reached,
+                    because pc 2 consumes and stops.
+  add-thread  `1`   BOTH ARMS OF A SPLIT REACH ONE PC, and it is added once.
+                    `seen` is what makes this engine linear rather than
+                    exponential, so it gets a field of its own.
+  add-thread  `1010` BOL at position 0 and not at 1; EOL at the end and not
+                    before it. Each anchor tested where it holds AND where it
+                    does not, because an assertion that always passes reads
+                    exactly like one that works.
+  add-thread  `01`  INSIDE A WORD: `\b` does not hold and `\B` does. The two
+                    share one test and differ only in which answer they want,
+                    so one field covers both -- and taking them from inside a
+                    word rather than at an edge is deliberate: at an edge the
+                    out-of-range reads would mask a wrong word-ness test.

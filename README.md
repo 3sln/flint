@@ -1233,8 +1233,8 @@ claim fails the build.
 | `flint.data.transit` | 2 | 0 | n/a | n/a |
 | `flint.data.xml` | 9 | 0 | n/a | n/a |
 | `flint.doc` | 11 | 0 | n/a | n/a |
-| `flint.port` | 12 | 1 | n/a | n/a |
-| `flint.protocols` | 7 | 0 | n/a | n/a |
+| `flint.port` | 13 | 1 | n/a | n/a |
+| `flint.protocols` | 13 | 0 | n/a | n/a |
 | `flint.protocols.io` | 17 | 0 | n/a | n/a |
 | `flint.regex` | 11 | 0 | n/a | n/a |
 | `flint.rpc` | 6 | 0 | n/a | n/a |

@@ -87,6 +87,41 @@ fn main() {
         let accepted = flint_rt::snap::import_live(&mut rt, &bytes);
         println!("import of {src}: accepted={accepted}");
         if accepted {
+            // THE GAS STATE HAS TO SURVIVE THE CROSSING TOO, and checking
+            // the heap does not check it.
+            //
+            // `checkpoint` is DERIVED -- `min(gas_limit, slice_end)`, with
+            // "absent" written as a value the counter never reaches. That
+            // value CANNOT be the same bits on all three: this runtime counts
+            // in `u64` and the ports count in a signed `long`, so "never
+            // reached" is `u64::MAX` here and `Long.MAX_VALUE` there. A
+            // snapshot is refused on MAGIC and VERSION, which are identical on
+            // all three, so a port's snapshot is ACCEPTED here -- and it used
+            // to carry `checkpoint = 0`, which `Counting::tick` reads as "trip
+            // on the next instruction" from a field the writer meant as "never
+            // trip".
+            //
+            // So the property is not "the bits match". It is that after an
+            // import the runtime's gas state agrees with the LIMITS beside it:
+            // a snapshot whose `gas_limit` and `slice_end` are both zero must
+            // restore as a runtime that is not counting, whoever wrote it.
+            // That is false exactly when the field is adopted raw.
+            let implied = rt.gas_limit != 0 || rt.slice_end != 0;
+            println!(
+                "  gas: limit={} slice={} checkpoint={:#x} counting={} (implied {implied})",
+                rt.gas_limit, rt.slice_end, rt.checkpoint, rt.counting()
+            );
+            if rt.counting() != implied {
+                println!(
+                    "  FAIL the imported gas state does not match the limits it came \
+                     with: counting={} where the limits imply {implied}. `checkpoint` \
+                     is derived from `gas_limit` and `slice_end`; a snapshot that \
+                     restores it RAW carries the writing runtime's spelling of \
+                     \"nothing is counting\" into a runtime that spells it differently.",
+                    rt.counting()
+                );
+                std::process::exit(1);
+            }
             let root = rt.roots.shared.globals[0].get();
             let got = render(&mut rt, root);
             // AGAINST THE WHOLE STRUCTURE, rebuilt here, and not against a

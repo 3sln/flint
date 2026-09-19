@@ -1,0 +1,63 @@
+;; CONJ A MAP ONTO A MAP, written once.
+;;
+;; `(conj {:a 1} {:b 2})` merges. It is a small operation and it was written
+;; three times in three DIFFERENT SHAPES, which is why it is here:
+;;
+;;   * native walked the source with `map_for_each`, a callback walk that
+;;     charges one step per entry in `node_for_each`;
+;;   * the JVM and the CLR walked it with `seq`/`first`/`next`, which charges
+;;     whatever the seq walk charges and nothing besides.
+;;
+;; Two algorithms with two different gas costs for one operation. That is the
+;; shape `bin/conform-hosts` reports on its gas row and cannot attribute --
+;; the row compares a total, and a total cannot say which of a hundred
+;; operations was priced differently.
+;;
+;; THE POINT IS NOT THAT ONE WAS WRONG. Either walk is a fine way to merge two
+;; maps. The point is that "do the ports behave like native here?" was a
+;; QUESTION, asked and answered by reading three files, and it came back as a
+;; question every time somebody touched one of them. Generated, it is not a
+;; question: there is one walk, it charges once, and all three pay it because
+;; all three run it.
+;;
+;; The SEQ walk is the one kept. It is what both ports already did, it reuses
+;; `seqwalk` which is itself generated, and it needs no callback -- which kin
+;; cannot express and which is what kept this in three hand-written copies.
+(ns flint.rt.mapconj
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   nil? not while
+                                   mark push r set-r pop-to
+                                   slot-or-nth
+                                   Rt Value RootIx NIL]]
+            [flint.rt.seqwalk :refer [seq first next]]
+            [flint.rt.mapwrite :refer [map-assoc]]))
+
+(doc "Merge every entry of `src` into `m`, answering the new map."
+     ""
+     "ROOTED THROUGH THE WALK, both of them: `map-assoc` allocates, so a"
+     "collection between two entries would leave the accumulator and the"
+     "cursor pointing into the abandoned semispace. Nothing downstream can"
+     "tell that from a live pointer, which is why it is a root and not a"
+     "local."
+     ""
+     "An entry answers to `slot-or-nth`, so a MAP ENTRY and a two-element"
+     "vector are both accepted -- the same reading `conj` already gives a"
+     "single entry, and the reason a seq of entries needs no special case.")
+(defn ^:pub ^:method ^Value map-conj-map [^:mut ^Rt rt ^Value m ^Value src]
+  (let [^RootIx base (mark rt)
+        ^RootIx ai (push rt m)
+        ^Value s0 (seq rt src)
+        ^RootIx si (push rt s0)]
+    (while (not (nil? rt (r rt si)))
+      (let [^Value ent (first rt (r rt si))
+            ^RootIx ei (push rt ent)
+            ^Value k (slot-or-nth rt (r rt ei) 0)
+            ^Value v (slot-or-nth rt (r rt ei) 1)
+            ^Value nm (map-assoc rt (r rt ai) k v)]
+        (set-r rt ai nm)
+        (pop-to rt ei))
+      (let [^Value nx (next rt (r rt si))]
+        (set-r rt si nx)))
+    (let [^Value out (r rt ai)]
+      (pop-to rt base)
+      (return out))))

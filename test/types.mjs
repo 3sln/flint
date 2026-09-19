@@ -33,6 +33,22 @@ const loopCost = (mode, iters) => {
   const hot = run(mode, iters), cold = run(mode, 0);
   return { steps: hot.steps - cold.steps, out: hot.out };
 };
+
+// THE COST OF `n` MORE ITERATIONS, which is what "per iteration" actually
+// means. Differencing against a ZERO-iteration run cancels entry, dispatch and
+// printing, but it does not cancel a one-time event that only happens once the
+// loop is long enough -- a collection, most likely: up to 80 iterations these
+// loops cost exactly 20 instructions each and agree to the instruction, and
+// somewhere before 100 they both pay a one-off ~47 and stop agreeing by 2.
+//
+// Differencing two HOT runs cancels that too, because whatever happens once
+// happens in both. It is the stricter measurement and not the looser one: the
+// rows below still demand EXACT equality, they just demand it of a quantity
+// that is actually per-iteration.
+const slopeCost = (mode, n) => {
+  const twice = run(mode, 2 * n), once = run(mode, n);
+  return { steps: twice.steps - once.steps, out: twice.out };
+};
 const ITERS = 2000;
 const bare = loopCost('bare', ITERS), proven = loopCost('proven', ITERS),
       opaque = loopCost('opaque', ITERS);
@@ -62,25 +78,23 @@ console.log(`    the unproven loop pays ` +
 // in the first and a real check in the second, and the difference is what
 // narrowing is worth on code that was never annotated at all.
 //
-// KNOWN FAILING as of 2026-08-30, and PRE-EXISTING: both rows below fail at
-// 3854e4f and at every commit checked since, so this is not the check system
-// and not the metadata on the core predicates. Verified by running this file
-// against that tree with nothing else changed.
+// WAS failing, and the reason is worth keeping because the comment here
+// outlived the bug it described. It read "annotated 54,000 against unannotated
+// 48,000 -- so a `^int` inside `(if (int? x) ...)` is still emitting a check",
+// and that WAS true when it was written. It is not true now: a live check costs
+// 7.1 instructions an iteration, 14,189 over this loop, and what these rows
+// actually measured by 2026-09-18 was a difference of TWO -- 40,481 against
+// 40,483 -- which is not a check and never was.
 //
-// It went unnoticed because the gate stops at its first failure and never got
-// this far: `capability`, `cli`, `host_abi` and `aot` were all red ahead of it
-// on stale expectations, and fixing those is what let this one be seen.
+// What was left was the measurement. `loopCost` cancels one-time costs by
+// differencing against a zero-iteration run, but a collection that only happens
+// in the long run is not in the short one, so it survives the subtraction. The
+// slope does cancel it, and on the slope the two loops agree EXACTLY: 20,240
+// against 20,240 at n=1000, 40,478 against 40,478 at n=2000, 60,674 against
+// 60,674 at n=3000. Narrowing is free, to the instruction.
 //
-// The symptom is that the guard teaches the analyzer nothing -- annotated
-// 54,000 against unannotated 48,000, where equal is the claim -- so a `^int`
-// inside `(if (int? x) ...)` is still emitting a check. `flint.types`'
-// `native-projections` table is what should make it free, keyed on the BUILTIN
-// name because `(int? x)` is rewritten to one before narrowing runs. Whether
-// that rewrite still happens for these guards is the thing to establish first;
-// `test/inline.clj` now measures the closely related property that the alias
-// survives `:flint/value-meta`, and it passes, so the alias itself is intact.
-const narrowed = loopCost('narrowed', ITERS);
-const unnarrowed = loopCost('unnarrowed', ITERS);
+const narrowed = slopeCost('narrowed', ITERS);
+const unnarrowed = slopeCost('unnarrowed', ITERS);
 
 ok('an annotation inside an int? guard costs exactly nothing',
    narrowed.steps === unnarrowed.steps,
@@ -98,7 +112,7 @@ console.log(`    inside an int? guard: annotated ${n(narrowed)}, ` +
 // The same claim for `and`, which reaches the branch through the let it expands
 // to. Without that propagation every answer in the suite is still right and
 // this is the only thing that notices.
-const andA = loopCost('and-narrowed', ITERS), andB = loopCost('and-plain', ITERS);
+const andA = slopeCost('and-narrowed', ITERS), andB = slopeCost('and-plain', ITERS);
 ok('an annotation inside an `and` guard costs exactly nothing',
    andA.steps === andB.steps,
    `annotated ${n(andA)}, unannotated ${n(andB)} -- a difference means the ` +

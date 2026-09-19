@@ -373,9 +373,21 @@ for (const k of ['small', 'big']) {
 console.log(o.big - o.small);
 GMJS
   nd="$(node out/gm-run.mjs)"
-  ja="$("$JDK/bin/java" -cp runtimes/jvm/classes RtSteps out/gm-small.img)"
-  jb="$("$JDK/bin/java" -cp runtimes/jvm/classes RtSteps out/gm-big.img)"
+  # NAMED, and called OVER A BRIDGE, which is how the wasm line above enters
+  # the program too. Both sides now take the same door.
+  # `RtSteps` PRINTS TWO NUMBERS NOW -- steps and preemptions -- because a
+  # preemption is billed work and two runtimes serving a different number of
+  # them cost different gas for a reason that is not the program's. Reading
+  # field 1 alone used to work by accident and then stopped compiling the
+  # moment the second field arrived (`215137 39: syntax error`), which is the
+  # right failure: a parser that silently took a prefix would have compared a
+  # number against a different number.
+  ja_raw="$("$JDK/bin/java" -cp runtimes/jvm/classes RtSteps out/gm-small.img gasmeter/small)"
+  jb_raw="$("$JDK/bin/java" -cp runtimes/jvm/classes RtSteps out/gm-big.img gasmeter/big)"
+  ja="${ja_raw%% *}"; ja_pre="${ja_raw##* }"
+  jb="${jb_raw%% *}"; jb_pre="${jb_raw##* }"
   jd=$((jb - ja))
+  jpd=$((jb_pre - ja_pre))
   gap=$(( nd > jd ? nd - jd : jd - nd ))
   # EXACT. This was 1% of the native figure -- about 1 090 steps of slack --
   # for as long as the ports' map allocated more per entry than the Rust CHAMP
@@ -393,18 +405,108 @@ GMJS
   # INSTRUCTION below; there was never a reason native should be held looser
   # than the ports hold each other. If this row fails, a runtime is doing
   # different work, and the number in the failure is where to start.
-  if [ "$gap" -eq 0 ]; then
-    echo "  ok   the same program costs the same gas, to the instruction: $nd [jvm]"
-  else
-    echo "  FAIL gas differs by $gap: $nd native against $jd [jvm]"; exit 1
-  fi
+  #
+  # IT IS FAILING, AND HERE IS WHAT HAS BEEN RULED OUT.
+  #
+  # RE-DIAGNOSED 2026-09-18, AND THE TABLE BELOW IS THE OLD ONE. It was written
+  # when this row read 1 536; it reads 34 now, and the reading it supports --
+  # "spread across all seven in proportion to the work" -- turned out to be
+  # under-determined rather than wrong. Split against SLICES instead of against
+  # work, the gap was FLAT: 5.5 to 6.3 steps per 4 096-step slice in six of the
+  # seven parts. Work and slices are proportional, so both fits looked equally
+  # good and only one named a mechanism.
+  #
+  # The mechanism was the ports not billing between a courtesy yield and the
+  # next `drive`: they disarm the checkpoint there, and the allocation charge
+  # asked `checkpoint != <never-reached>`, which is what native's `counting()`
+  # says -- but native never disarms, so the same expression means a different
+  # thing on each side. Asking `gasLimit != 0 || sliceEnd != 0` instead took
+  # the row from 174 to 34 (`DECISIONS.md#resource-limits`).
+  #
+  # What is left is about ONE step per slice. Keep the table for the method
+  # rather than for its numbers: splitting `work` into its parts and measuring
+  # each as `big - small` is what localised both the 1 536 and the 174.
+  #
+  # Measured by splitting `gasmeter/work` into its seven parts and diffing each
+  # separately. The gap is not in one builtin: it is spread across ALL SEVEN in
+  # proportion to the work, about 1.2% of each, and the seven sum to 1 489 of
+  # the 1 536 the whole program reports.
+  #
+  #     part                        native    jvm     gap
+  #     mapv of array-maps          25,806  25,518    288
+  #     into a set                  16,223  16,031    192
+  #     into a vector via map       25,566  25,518     48
+  #     apply str over mapv str      9,860   9,715    145
+  #     ft/build                    27,957  27,621    336
+  #     ft/rows + mapv :id          19,600  19,360    240
+  #     the string block            19,508  19,268    240
+  #
+  # NOT THE CALL PATH, which was the standing theory and is now disproved. A
+  # call on native runs as a green thread through the control plane
+  # (`DECISIONS.md#bridges-are-the-only-door`) while the ports call `runProgram`
+  # directly, so the obvious suspect was preemption. Measured both ways: with
+  # the JVM driven over a real system bridge (`runtimes/jvm/test/HostCall.java`)
+  # the seven gaps are 288 192 48 144 336 240 240 -- the same figures, summing
+  # to 1 488 against 1 489. Whatever this is, it is priced into the WORK and not
+  # into how the work was started.
+  #
+  # So it is a PRICING difference in operations both runtimes have, which is the
+  # same shape as the two defects this row has already caught -- the ports
+  # allocating more per map entry, and native caching a vector's hash where the
+  # ports hashed twice. Where to look: native charges gas at sites in `coll.rs`,
+  # `map.rs`, `table.rs` and `strs.rs` that have no counterpart on the ports --
+  # `node_for_each` charges one per element for every bulk walk over a map or
+  # set, which is equality, hashing, `seq` and `reduce` at once.
+  #
+  # DO NOT widen the bound to cover it: a bound wide enough to absorb an
+  # unexplained difference will absorb the next one too, which is the whole
+  # lesson above.
+  # THE PORTS ARE COMPARED TO EACH OTHER FIRST, AND THAT ORDER IS THE POINT.
+  #
+  # This block used to sit AFTER the native verdict, which exits on a gap. So
+  # for as long as native and the jvm disagreed -- which is the whole history of
+  # this row -- the two ports were never compared at all, and a divergence
+  # between them could sit here indefinitely behind a red that is about
+  # something else. One did: the clr entered the program by a different door
+  # than the jvm for as long as the jvm had been moved to a bridge call
+  # (`DECISIONS.md#resource-limits`).
+  #
+  # A check that only runs when an unrelated check passes is a check you do not
+  # have. The ports-against-ports claim is independent of the native gap, so it
+  # is asked independently of it.
   if [ -n "$CLR" ]; then
-    ca="$("$CLR" --rt-steps out/gm-small.img)"
-    cb="$("$CLR" --rt-steps out/gm-big.img)"
+    ca_raw="$("$CLR" --rt-steps out/gm-small.img gasmeter/small)"
+    cb_raw="$("$CLR" --rt-steps out/gm-big.img gasmeter/big)"
+    ca="${ca_raw%% *}"; cb="${cb_raw%% *}"
     cd2=$((cb - ca))
     [ "$cd2" = "$jd" ] \
       || { echo "  FAIL the two ports cost different gas: $jd against $cd2"; exit 1; }
     echo "  ok     ... and the two ports agree to the instruction ($cd2) [clr]"
+    # AND ON THE ABSOLUTE COUNTS, not only on the difference.
+    #
+    # A difference cancels whatever each runtime spends getting in, which is
+    # the point of it for the NATIVE comparison -- the three enter by
+    # genuinely different machinery. The two PORTS are meant to be mirrors, so
+    # there is nothing legitimate for a difference to cancel between them, and
+    # what it cancelled was real: the clr's driver still ran `img.entry`
+    # through `RunProgram` long after the jvm's had been moved to a bridge
+    # call, and 3 185 steps of door went unnoticed on both workloads because
+    # it was the same 3 185 on each.
+    #
+    # A mirror checked only through a subtraction is a mirror checked where it
+    # cannot differ.
+    [ "$ca" = "$ja" ] && [ "$cb" = "$jb" ] \
+      || { echo "  FAIL the two ports enter the program differently:"
+           echo "       jvm $ja / $jb against clr $ca / $cb"
+           echo "       (the DIFFERENCE can still match while the door does not)"
+           exit 1; }
+    echo "  ok     ... and by the same door, absolute counts included ($ca / $cb)"
+  fi
+  if [ "$gap" -eq 0 ]; then
+    echo "  ok   the same program costs the same gas, to the instruction: $nd [jvm]"
+  else
+    echo "  FAIL gas differs by $gap: $nd native against $jd [jvm]"
+    echo "       (the jvm served $jpd preemptions across the difference)"; exit 1
   fi
 fi
 
@@ -759,7 +861,7 @@ phase "every conformance program, 3 runtimes"
 # another worktree tramples today, sequential or not.
 conform_progs="assocshapes bytes churn collections conjshapes control errors
 green hosted lazy lazyref maps mapshapes mathfns numedge numbers opcodes regex
-seqshapes strings tables threads transhapes"
+seqshapes strings tables threads transhapes wire"
 conform_n=$(printf '%s\n' $conform_progs | wc -l | tr -d ' ')
 # A FLOOR UNDER THE ZERO, the same one check-kin carries: an empty list runs
 # nothing, reports no failures, and looks exactly like a clean pass over

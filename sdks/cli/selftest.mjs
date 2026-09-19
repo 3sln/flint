@@ -143,7 +143,9 @@ console.log('== flint.ception ==');
       + '  (let [r (sdk/run {:sources {"kid" src} :fn "kid/main" :args ["x" "y"]})\n'
       + '        img (sdk/compile {:sources {"kid" src} :fn "kid/main" :exports ["kid/greet"]})\n'
       + '        b (sdk/sandbox img)\n'
-      + '        c (sdk/call b "kid/greet" ["ada" "alan"])]\n'
+      + '        k (sdk/caller b)\n'
+      + '        c (sdk/call k "kid/greet" ["ada" "alan"])]\n'
+      + '    (sdk/close-caller k)\n'
       + '    (sdk/close b)\n'
       + '    (str "run=" (:out r) " call=" c)))\n'
       + '(defn mint [_] (:out (sdk/run {:sources {"kid" src} :fn "kid/main" :with ["fs"]})))\n');
@@ -167,13 +169,15 @@ console.log('== flint.ception ==');
       + '              "(defn main [a] \\"e\\")\\n"))\n'
       + '(defn go [_]\n'
       + '  (let [img (ception/compile {:sources {"g" src} :fn "g/main" :exports ["g/peek"]})\n'
-      + '        b (ception/sandbox img {:with ["env"]})]\n'
-      + '    (str (ception/call b "g/peek" []))))\n'
+      + '        b (ception/sandbox img {:with ["env"]})\n'
+      + '        c (ception/caller b)]\n'
+      + '    (str (ception/call c "g/peek" []))))\n'
       + '(defn boom [_]\n'
       + '  (let [img (ception/compile {:sources {"g" "(ns g)\\n(defn bang [] (throw (ex-info \\"inner blew up\\" {})))\\n(defn main [a] \\"e\\")\\n"}\n'
       + '                              :fn "g/main" :exports ["g/bang"]})\n'
-      + '        b (ception/sandbox img)]\n'
-      + '    (try (ception/call b "g/bang" []) "NO THROW" (catch Throwable e (ex-message e)))))\n');
+      + '        b (ception/sandbox img)\n'
+      + '        c (ception/caller b)]\n'
+      + '    (try (ception/call c "g/bang" []) "NO THROW" (catch Throwable e (ex-message e)))))\n');
     const l = flint(['run', ':path', '.', ':fn', 'lent/go', ':with', '[env]'], { cwd: d });
     check('  ... and a sandbox lent a capability can use it',
           l.out.includes('inner:yes'), l.out);
@@ -240,6 +244,23 @@ try {
     }
     // THE CONTROL. Two arms that cannot be told apart would report every line
     // above as agreement, so one pair is compiled differently on purpose.
+    // A SCRIPT THROUGH BOTH DOORS. `compile <file>` is a capability the native
+    // CLI and `bin/flint` gained before this one did, and nothing here would
+    // have said so: the four arms above all pass `:path`, and
+    // `check-api-review` compares which COMMANDS exist and not what they
+    // accept. A front door that takes a shape the others do not is the drift
+    // `DECISIONS.md#standalone-scripts` is about, so it gets a row.
+    {
+      const sf = join(tmp, 'greet.fln');
+      writeFileSync(sf, '#!/usr/bin/env flint\n(ns ^:script greet)\n' +
+                        '(defn main [args] (str "hello " (first args) "!"))\n');
+      execFileSync(NATIVE, ['compile', sf, ':out', a],
+                   { stdio: ['ignore', 'ignore', 'ignore'] });
+      flint(['compile', sf, ':out', b]);
+      check('a script: byte-identical to the native CLI',
+            Buffer.compare(readFileSync(a), readFileSync(b)) === 0,
+            `native ${readFileSync(a).length} bytes, node ${readFileSync(b).length} bytes`);
+    }
     execFileSync(NATIVE, ['compile', ':path', FIXTURE, ':fn', 'demo.main/main', ':out', a],
                  { stdio: ['ignore', 'ignore', 'ignore'] });
     flint(['compile', ':path', FIXTURE, ':fn', 'demo.main/main', ':optimize', '[perf]', ':out', b]);

@@ -20,6 +20,24 @@ using System.Text;
 /// id plus its label, and guest code cannot mint that id (`flint/opaque` gives
 /// 0), so a host recognises its own grants and nothing else. That is the whole
 /// of the capability check, and it lives with the host rather than in here.
+///
+/// ---
+///
+/// **CORRECTION, 2026-09-19 -- the same one `Codec.java` carries, and for the
+/// same reasons; that file has the long version.** In short: `Conc.cs` does not
+/// reference `Codec` at all and `HostDeliver` queues bytes without decoding
+/// them, so "both run in the RUNTIME" has moved on; and "there is no builtin
+/// that encodes and none that decodes" is false, because `Builtins.cs` defines
+/// the `flint/wire-*` family in both directions.
+///
+/// The property survives by a different mechanism: minting is gated on the
+/// reader's provenance by `Wire.MayMint` (`Builtins.cs:979` and `:991`),
+/// generated from one kin source for all three runtimes and asserted both ways.
+///
+/// Still live here: the `K_*` constants, and `Encode`, whose only caller is
+/// `runtimes/clr/conform/Program.cs:667`. `Decode` has no caller anywhere.
+/// `DecodeGuest` has none either and is retained on purpose -- see the comment
+/// above it.
 public static class Codec {
 
     public const int K_NIL = 0, K_TRUE = 1, K_FALSE = 2, K_INT = 3,
@@ -32,10 +50,31 @@ public static class Codec {
         K_TAGGED = 17,
         /// A table (`DECISIONS.md#tables`), COLUMNAR: the schema, the row count,
         /// then each column in full before the next one starts.
-        K_TABLE = 18;
+        K_TABLE = 18,
+        /// A value WITH METADATA: the metadata, then the value.
+        ///
+        /// The same shape as `K_TAGGED`, and for the same reason -- one wrapper
+        /// tag rather than a metadata field on every type's encoding.
+        ///
+        /// WHAT REACHES HERE IS ALREADY THE ANSWER. `flint.port/for-the-wire`
+        /// asks `flint.protocols/WireMeta` which metadata should cross and
+        /// rebuilds the value carrying only that, so this encodes whatever it
+        /// is handed. The default is none, which is why most values never carry
+        /// this tag at all.
+        K_WITH_META = 19;
 
     /// `-1` means the namespace is ABSENT, which is not the same as empty.
-    internal const int NO_NS = -1;
+    public const int NO_NS = -1;
+
+    /// THE LARGEST COUNT ANY WIRE PRIMITIVE WILL TAKE, because it is what the
+    /// format WRITES: every count in the encoding is four little-endian bytes.
+    /// See `MAX_COUNT` in `runtime/src/codec.rs` for the hole this closes -- a
+    /// fixnum is 48 bits, so a larger count opens a frame that sign-extends
+    /// negative, and negative is the table's "a count is due here" marker.
+    public const long MAX_COUNT = 4294967295L;
+
+    /// A table's `ncols * nrows`, the one frame built by multiplying.
+    public const long MAX_CELLS = 1L << 40;
 
     /// What went wrong, so a caller can say it in flint's terms.
     public sealed class Refused : System.Exception {
@@ -65,6 +104,19 @@ public static class Codec {
 
     static void EncodeInto(Rt rt, long v, MemoryStream outs, int depth) {
         if (depth > 128) throw new Refused("value nested too deeply to encode");
+        // METADATA FIRST, as a wrapper around whatever the value is. Whatever
+        // is still on the value here is what `for-the-wire` decided should
+        // cross, so there is no selection to make and no protocol to dispatch.
+        if (!Val.IsNil(v)) {
+            long m = global::_3sln.Flint.Kgen.Rt.Meta.MetaOf(rt, v);
+            if (!Val.IsNil(m)) {
+                outs.WriteByte(K_WITH_META);
+                EncodeInto(rt, m, outs, depth + 1);
+                // The value WITHOUT its metadata, or this recurses on itself.
+                EncodeInto(rt, global::_3sln.Flint.Kgen.Rt.Meta.WithMeta(rt, v, Val.Nil), outs, depth + 1);
+                return;
+            }
+        }
         if (Val.IsNil(v)) { outs.WriteByte(K_NIL); return; }
         if (v == Val.True) { outs.WriteByte(K_TRUE); return; }
         if (v == Val.False) { outs.WriteByte(K_FALSE); return; }
@@ -280,6 +332,22 @@ public static class Codec {
                 return tag == K_KEYWORD ? Str.Keyword(rt, ns, name) : Str.Symbol(rt, ns, name);
             }
             case K_BYTES: return Bytes.Of(rt, r.Raw(r.U32()));
+            case K_WITH_META: {
+                // The metadata, then the value, then the two put together.
+                // ROOTED across the second decode: decoding allocates, and a
+                // C# local is not a root.
+                long m = DecodeAt(rt, r, live, depth + 1);
+                int bas = rt.Mark();
+                int mi = rt.Push(m);
+                long v2 = DecodeAt(rt, r, live, depth + 1);
+                int vi = rt.Push(v2);
+                // `WithMeta` answers the value UNCHANGED for a kind that cannot
+                // carry metadata, which is the right failure: bytes claiming
+                // metadata for a number produce the number, not an error.
+                long outv = global::_3sln.Flint.Kgen.Rt.Meta.WithMeta(rt, rt.R(vi), rt.R(mi));
+                rt.PopTo(bas);
+                return outv;
+            }
             case K_TAGGED: {
                 int bas = rt.Mark();
                 int ti = rt.Push(DecodeAt(rt, r, live, depth + 1));

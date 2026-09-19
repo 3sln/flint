@@ -140,6 +140,21 @@ public class RtSnapshot {
         e.roots.shared.globals = new long[1];
         ok("imports a live snapshot written by another runtime", Snap.importLive(e, other));
         ok("and reads back what that runtime had", render(e, e.roots.shared.globals[0]).equals(before));
+        // THE GAS STATE CROSSES TOO, and checking the heap does not check it.
+        //
+        // `checkpoint` is DERIVED -- `min(gasLimit, sliceEnd)` with "absent"
+        // written as a value the counter never reaches -- and that value CANNOT
+        // be the same bits on all three: native counts in `u64` and this
+        // runtime counts in a signed `long`, so "never reached" is `u64::MAX`
+        // there and `Long.MAX_VALUE` here. Read raw, native's sentinel arrives
+        // as `-1`, and `steps >= -1` is true for every value `steps` can hold:
+        // a snapshot meaning "nothing is counting" would restore as "trip on
+        // the next instruction". So the property is not that the bits match --
+        // it is that the restored runtime's gas state agrees with the LIMITS
+        // that came with it (`DECISIONS.md#resource-limits`).
+        boolean implied = e.gasLimit != 0 || e.sliceEnd != 0;
+        ok("and its gas state matches the limits it came with, not the writer's sentinel",
+           (e.checkpoint != Long.MAX_VALUE) == implied);
       } catch (java.io.IOException ex) {
         ok("could not read the crossing snapshot: " + ex.getMessage(), false);
       }

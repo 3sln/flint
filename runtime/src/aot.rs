@@ -192,6 +192,12 @@ pub extern "C" fn aot_native(
     rt.steps += gas as u64;
     #[cfg(feature = "diagnostics")]
     unsafe {
+        crate::aotstat::COUNTS[crate::aotstat::C_AOT_GAS] += gas as u64;
+        crate::aotstat::COUNTS[crate::aotstat::C_GAS_NATIVE] += gas as u64;
+        crate::aotstat::COUNTS[crate::aotstat::C_N_NATIVE] += 1;
+    }
+    #[cfg(feature = "diagnostics")]
+    unsafe {
         crate::aotstat::COUNTS[crate::aotstat::C_AOT_NATIVES] += 1;
     }
     rt.roots.stack_top = top as usize;
@@ -217,6 +223,12 @@ pub extern "C" fn aot_int_binop(
 ) -> u32 {
     let rt = unsafe { &mut *rt };
     rt.steps += gas as u64;
+    #[cfg(feature = "diagnostics")]
+    unsafe {
+        crate::aotstat::COUNTS[crate::aotstat::C_AOT_GAS] += gas as u64;
+        crate::aotstat::COUNTS[crate::aotstat::C_GAS_INTOP] += gas as u64;
+        crate::aotstat::COUNTS[crate::aotstat::C_N_INTOP] += 1;
+    }
     rt.roots.stack_top = top as usize;
     let out = rt.aot_int_binop_at(opcode, ip, block, next_ip, next_block);
     refresh(rt);
@@ -244,6 +256,12 @@ pub extern "C" fn aot_type_p(rt: *mut Rt, code: u32, top: u32) -> u64 {
 pub extern "C" fn aot_return(rt: *mut Rt, top: u32, gas: u32) {
     let rt = unsafe { &mut *rt };
     rt.steps += gas as u64;
+    #[cfg(feature = "diagnostics")]
+    unsafe {
+        crate::aotstat::COUNTS[crate::aotstat::C_AOT_GAS] += gas as u64;
+        crate::aotstat::COUNTS[crate::aotstat::C_GAS_RETURN] += gas as u64;
+        crate::aotstat::COUNTS[crate::aotstat::C_N_RETURN] += 1;
+    }
     rt.roots.stack_top = top as usize;
     rt.aot_return_here();
     refresh(rt);
@@ -268,6 +286,12 @@ pub extern "C" fn aot_call(
     // and this one is NOT handed back. Either it completes here or this function
     // pushes the frame itself; either way the interpreter never dispatches it.
     rt.steps += gas as u64 + 1;
+    #[cfg(feature = "diagnostics")]
+    unsafe {
+        crate::aotstat::COUNTS[crate::aotstat::C_AOT_GAS] += gas as u64;
+        crate::aotstat::COUNTS[crate::aotstat::C_GAS_CALL] += gas as u64;
+        crate::aotstat::COUNTS[crate::aotstat::C_N_CALL] += 1;
+    }
     rt.roots.stack_top = top as usize;
     let out = rt.aot_call_at(argc as usize, ip, block, next_ip, next_block);
     refresh(rt);
@@ -292,6 +316,12 @@ pub extern "C" fn aot_bail(
 ) {
     let rt = unsafe { &mut *rt };
     rt.steps += gas as u64;
+    #[cfg(feature = "diagnostics")]
+    unsafe {
+        crate::aotstat::COUNTS[crate::aotstat::C_AOT_GAS] += gas as u64;
+        crate::aotstat::COUNTS[crate::aotstat::C_GAS_BAIL] += gas as u64;
+        crate::aotstat::COUNTS[crate::aotstat::C_N_BAIL] += 1;
+    }
     #[cfg(feature = "diagnostics")]
     unsafe {
         crate::aotstat::COUNTS[crate::aotstat::C_AOT_BAILS] += 1;
@@ -339,6 +369,12 @@ pub extern "C" fn aot_tick(rt: *mut Rt, gas: u32, top: u32, ip: u32, block: u32)
     // simply not there.
     rt.roots.stack_top = top as usize;
     rt.steps += gas as u64;
+    #[cfg(feature = "diagnostics")]
+    unsafe {
+        crate::aotstat::COUNTS[crate::aotstat::C_AOT_GAS] += gas as u64;
+        crate::aotstat::COUNTS[crate::aotstat::C_GAS_TICK] += gas as u64;
+        crate::aotstat::COUNTS[crate::aotstat::C_N_TICK] += 1;
+    }
     #[cfg(feature = "diagnostics")]
     unsafe {
         crate::aotstat::COUNTS[crate::aotstat::C_AOT_TICKS] += 1;

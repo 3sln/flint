@@ -121,6 +121,15 @@ impl Core {
             // pool of one -- this is exactly what it did before.
             if let Some((slot, mut rt)) = self.claim_executor() {
                 self.on_executors.fetch_add(1, Ordering::Relaxed);
+                // ARM IT FIRST. A secondary executor has its own `steps` and
+                // its own `gas_limit`, and nothing had ever written a budget
+                // into one -- so a batch that landed here ran unbounded, which
+                // is the whole of the hole this closes
+                // (`DECISIONS.md#resource-limits`). Arming sets the end of its
+                // next slice of the SANDBOX's budget; a sandbox with no budget
+                // is unchanged, because arming a runtime with no shared limit
+                // does nothing.
+                rt.arm_shared_gas();
                 for request in batch {
                     let answer = dispatch_on(&mut rt, &request);
                     let _ = request.reply.send(answer);
@@ -128,6 +137,10 @@ impl Core {
                 *self.executors[slot].lock().unwrap() = Some(rt);
             } else {
                 let mut program = self.program.lock().unwrap();
+                // The primary is an executor too once the sandbox is pooled,
+                // so it takes a slice of the shared budget like any other
+                // rather than carrying the whole of it.
+                program.arm_shared_gas();
                 for request in batch {
                     let answer = dispatch(&mut program, &request);
                     // A dropped receiver means the caller stopped waiting.
@@ -253,7 +266,11 @@ impl Sandbox {
     }
 
     pub fn from_bytecode_with(bytecode: &[u8], driver: Arc<dyn Driver>) -> Result<Sandbox> {
-        let mut program = Program::load(bytecode, 2_000_000_000).map_err(Error::Load)?;
+        // `load_with`: the image's control plane spawns a green thread, and
+        // `flint/spawn` lives in the concurrency unit rather than the runtime.
+        let mut program = Program::load_with(bytecode, 2_000_000_000,
+                                             flint_conc::HOST_CATALOGUE)
+            .map_err(Error::Load)?;
 
         // One spare executor per EXTRA driver thread. The thread that gets
         // none falls back to the program's own, so a pool of N runs N-way and
@@ -368,23 +385,75 @@ impl Sandbox {
     /// (`DECISIONS.md#resource-limits`), so the same program stops at the same
     /// instruction on every machine.
     pub fn set_step_limit(&self, n: u64) {
-        self.core.program.lock().unwrap().set_step_limit(n);
+        let mut p = self.core.program.lock().unwrap();
+        // THE SANDBOX, NOT THE FIRST OF ITS THREADS.
+        //
+        // A pooled sandbox runs guest code on several executors that share a
+        // heap and nothing else -- each has its own `steps` and its own
+        // `gas_limit` -- so writing the budget into this one used to bound one
+        // thread. Measured: a pooled sandbox given 2 000 instructions ran
+        // sixteen ten-million-iteration calls to completion, because one
+        // dispatch carried all sixteen onto a secondary
+        // (`DECISIONS.md#resource-limits`).
+        //
+        // The shared path is taken only when there ARE other executors.
+        // Without them `set_step_limit` is already the whole answer and the
+        // two are the same thing, so an inline sandbox keeps exactly the
+        // behaviour it had.
+        p.set_step_limit(n);
+        if !self.core.executors.is_empty() {
+            p.set_shared_step_limit(n);
+        }
     }
 
     /// Instructions executed so far -- **only while a step limit is set**.
     ///
     /// This reads 0 on a sandbox with no limit, and that is not a bug to route
-    /// around. Counting every instruction would put an increment and a compare
-    /// in the interpreter's inner loop for every program, including the ones
-    /// that never ask; instead the unbudgeted loop has no counter at all and
-    /// the optimiser deletes the check (`DECISIONS.md#resource-limits`). So
-    /// `set_step_limit` is what turns counting on.
+    /// around: an embedder that did not ask for a budget is not told what one
+    /// would have cost.
     ///
-    /// It is exact because the program lock makes it exact. When several
-    /// threads really run one heap, gas becomes per-executor and summed -- a
-    /// single shared counter would put an atomic on the hottest line in the
-    /// interpreter -- and this will then be a snapshot true at a safepoint.
+    /// **The REASON changed, and the old one is worth recording because it read
+    /// as a guarantee.** It used to be that no counter existed to read: with no
+    /// limit the interpreter ran a loop with no increment in it, the optimiser
+    /// deleted the check, and `steps` stayed at zero by construction. That is
+    /// no longer how zero is reached. Every image now carries a control plane,
+    /// a scheduler therefore exists, a slice is armed, `checkpoint` stops being
+    /// `u64::MAX` -- and `counting()` is `checkpoint != u64::MAX`, so the
+    /// counting loop runs whether or not anybody asked. Measured: an unbudgeted
+    /// sandbox read 96 here, and the same program on wasm counts 41 392 steps
+    /// with no limit set.
+    ///
+    /// So the zero is now DELIBERATE rather than incidental -- `budgeted()` is
+    /// asked, and the raw counter is not reported when nothing was bought. The
+    /// hot loop is untouched; preemption still needs the count.
+    ///
+    /// **Two different figures, and which one you get depends on the driver.**
+    ///
+    /// An INLINE sandbox has one executor, so this is that executor's own
+    /// count and the program lock makes it exact.
+    ///
+    /// A POOLED sandbox has several, each with its own counter, and this is the
+    /// shared total they publish into. It is therefore a figure true AS OF THE
+    /// LAST PUBLISH rather than this instant: an executor's current batch is
+    /// still in its own `steps` and arrives at the next boundary. That is the
+    /// price of not putting an atomic read-modify-write on the hottest line in
+    /// the interpreter, and it is the same batching that makes
+    /// `set_step_limit` a bound on the SANDBOX rather than on one of its
+    /// threads (`DECISIONS.md#resource-limits`).
+    ///
+    /// The summing used to be unwired -- this and `set_step_limit` both reached
+    /// only the primary executor, so a pooled sandbox's budget bounded one
+    /// thread and what the others spent was never reported. Both now reach the
+    /// sandbox.
     pub fn gas(&self) -> u64 {
-        self.core.program.lock().unwrap().steps()
+        let p = self.core.program.lock().unwrap();
+        if !p.budgeted() {
+            return 0;
+        }
+        // POOLED, and then this executor's own `steps` is a fraction of the
+        // answer. What the sandbox spent is the shared total every executor
+        // publishes into -- true as of the last publish, which is what the
+        // docstring above means by a snapshot at a safepoint.
+        if self.core.executors.is_empty() { p.steps() } else { p.shared_gas() }
     }
 }

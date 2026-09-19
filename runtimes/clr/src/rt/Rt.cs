@@ -245,6 +245,29 @@ public sealed class Rt : System.IDisposable {
     /// a program that never spawns runs a loop with no counter in it at all.
     public bool schedInstalled;
 
+    /// Whether the control plane has been spawned on the system port.
+    ///
+    /// One-shot, checked on every `Drive`
+    /// (`DECISIONS.md#bridges-are-the-only-door`). Not a slot on the scheduler,
+    /// because a sandbox with no system port has no scheduler either and the
+    /// question is asked before that is known.
+    public bool systemBooted;
+
+    /// This image's initialisers, in order: a program's top-level forms.
+    public int[] init = new int[0];
+
+    /// Whether this image's initialisers have run.
+    ///
+    /// They run ONCE, on first use rather than at load
+    /// (`DECISIONS.md#structured-ports` step 5), because a sandbox is now a
+    /// thing a host CALLS -- there may be no entry function at all, and running
+    /// a program's top-level forms at load would run them for a sandbox nobody
+    /// ever calls.
+    ///
+    /// The conform host also runs them explicitly, which this makes harmless
+    /// rather than double: the flag is what makes it idempotent.
+    public bool started;
+
     /// True once this sandbox has more than one executor. Read once per
     /// instruction, so it is a plain field rather than a call.
     public bool safepoints;
@@ -265,11 +288,35 @@ public sealed class Rt : System.IDisposable {
     /// not. Conformance could not see it: it diffs ANSWERS, and a program
     /// allowed to run forever eventually produces the right one
     /// (`DECISIONS.md#resource-limits`).
+    ///
+    /// `long.MaxValue` MEANS NOTHING IS COUNTING, spelled the way the native
+    /// runtime spells it. This line used to map that back to `0`, and one
+    /// field with two sentinels is a trap rather than a style difference:
+    /// `checkpoint` goes into the snapshot, the stamp a snapshot is refused on
+    /// is MAGIC and VERSION, and those are identical on all three runtimes --
+    /// so a snapshot written here was ACCEPTED by native, which read the `0`
+    /// as "trip on the next instruction" from a field this runtime meant as
+    /// "never trip" (`DECISIONS.md#resource-limits`).
+    ///
+    /// Nothing about WHAT IS BILLED changed with the spelling. `MaxValue` is
+    /// not reached, so `steps >= checkpoint` is false exactly where
+    /// `checkpoint != 0 && steps >= checkpoint` was false -- and one fewer
+    /// comparison in the hot loop, because that guard existed only to stop
+    /// `steps >= 0` firing on every instruction.
     public void RefreshCheckpoint() {
         long a = gasLimit == 0 ? long.MaxValue : gasLimit;
         long b = sliceEnd == 0 ? long.MaxValue : sliceEnd;
-        long c = a < b ? a : b;
-        checkpoint = (c == long.MaxValue) ? 0 : c;
+        checkpoint = a < b ? a : b;
+    }
+
+    /// Is this runtime billing? Asked where work is charged, and NOT the same
+    /// question as "is the checkpoint armed" -- see `Rt.java`'s `billing()`,
+    /// which carries the reasoning and the measurement. The short of it: this
+    /// runtime disarms the checkpoint at the courtesy yield and native never
+    /// does, so the expression native uses means something different here at
+    /// the one moment it matters (`DECISIONS.md#resource-limits`).
+    public bool Billing() {
+        return gasLimit != 0 || sliceEnd != 0;
     }
 
     public void SetGasLimit(long limit) {
@@ -307,7 +354,14 @@ public sealed class Rt : System.IDisposable {
     public long parkOn = Val.Nil;
     public long gasLimit;
     public long sliceEnd;
-    public long checkpoint;
+    /// INITIALISED, because the sentinel is no longer the default for the type.
+    /// `long.MaxValue` means "nothing is counting"; a field left at `0` would
+    /// mean "trip on the next instruction", which is the sharpest possible way
+    /// for a respelling to go wrong.
+    public long checkpoint = long.MaxValue;
+    /// How many preemptions this sandbox has served -- see `Rt.java`'s
+    /// `restores`, which carries the reasoning.
+    public long restores;
     public int gasTrips;
     public int memTrips;
     public int status;
@@ -395,7 +449,7 @@ public sealed class Rt : System.IDisposable {
         // ALLOCATION CHARGES GAS, one unit per 8 bytes, mirroring `Rt::alloc`
         // in the Rust runtime. Without it the three runtimes bill differently
         // for the same program (`DECISIONS.md#resource-limits`). Only when COUNTING.
-        if (checkpoint != 0) ChargeWork(Obj.SizeFor(ty, len) >> 3);
+        if (Billing()) ChargeWork(Obj.SizeFor(ty, len) >> 3);
         return AllocUnbilled(ty, len);
     }
 
@@ -687,7 +741,7 @@ public sealed class Rt : System.IDisposable {
             // nowhere else.
             //
             // `safepoints` is false in a sandbox with one executor and
-            // `checkpoint` is 0 when nothing is counting, so a single-threaded
+            // `checkpoint` is `long.MaxValue` when nothing is counting, so a single-threaded
             // program with no scheduler runs a loop with neither test in it.
             // COMPILED CODE takes over when `Ip` reaches the point it named.
             // Every re-entry in the design funnels through this one comparison:
@@ -705,7 +759,7 @@ public sealed class Rt : System.IDisposable {
                 f.Ip = ip;
                 roots.shared.par.Park();
             }
-            if (checkpoint != 0 && steps >= checkpoint) {
+            if (steps >= checkpoint) {
                 f.Ip = ip;
                 // WHICH budget fired. One comparison covers both; telling them
                 // apart is a cold path.
@@ -722,7 +776,39 @@ public sealed class Rt : System.IDisposable {
                     if (!Unwind()) return Val.Nil;
                     continue;
                 }
-                checkpoint = 0;
+                // NOT AT A NESTED DEPTH. `baseDepth` is 0 only when this run
+                // IS a thread's own run; anything else means host frames sit
+                // underneath -- `Seqwalk.Force` calling a lazy seq's thunk is
+                // the one that happens constantly -- and a C# stack cannot be
+                // saved and resumed. Yielding there unwinds through those
+                // frames and never comes back to them: `Force` never records
+                // the forced value, and the value stack is left holding
+                // operands the caller has already moved past.
+                //
+                // The symptom on the JVM, where this was found, was a call
+                // answering `value is not a function (a double, 2 args)` from
+                // inside `reduce-seq`, for `(into [] (map inc (range 100)))`
+                // and for nothing else in the suite -- because a lazy seq is
+                // the only thing that re-enters the interpreter from generated
+                // code. It appeared the moment calls began running as green
+                // threads (`DECISIONS.md#bridges-are-the-only-door`); nothing
+                // before that ran a preemptible thread through a forced thunk.
+                //
+                // So let this call finish and preempt at the next chance, which
+                // is what the native runtime has always done here.
+                if (baseDepth != 0) {
+                    SetSliceEnd(steps + Conc.SLICE);
+                    continue;
+                }
+                // DISARMED, not "not counting". The value says "do not trip
+                // again before `Drive` re-arms the slice"; it does not say the
+                // program has stopped being measured. Under the old spelling
+                // those were the same number, which is how the scheduler's own
+                // allocation stopped being billed in this window and native's
+                // did not (`DECISIONS.md#resource-limits`). It is still the
+                // same number today -- `Alloc` asks the same question -- but
+                // now it is the same number for the same reason on all three.
+                checkpoint = long.MaxValue;
                 // A COURTESY yield, not a park: the thread stays runnable and
                 // must NOT rewind. Preemption is what keeps a thread with no
                 // `yield` in it from starving the others.
@@ -1748,6 +1834,27 @@ public sealed class Rt : System.IDisposable {
     /// the PARK sentinel and the answer is not ready -- that is when the
     /// scheduler takes over. A program with no concurrency in it never reaches
     /// the second branch at all.
+    /// Run this image's initialisers, once.
+    ///
+    /// WITHOUT PREEMPTION. A slice is armed the moment a scheduler exists, and
+    /// a yield inside an initialiser would come back with `parkOn` still set;
+    /// there is nothing to preempt anyway, because no other thread can be
+    /// runnable until the program is initialised. It matters here more than at
+    /// load: a CALL runs these on first use, so this now happens with a
+    /// scheduler already built and a slice already counting down.
+    public bool EnsureStarted() {
+        if (started) return true;
+        started = true;
+        long slice = sliceEnd;
+        SetSliceEnd(0);
+        foreach (int fn in init) {
+            Call(MakeClosure(fn, new long[0]), new long[0]);
+            if (Failed()) { SetSliceEnd(slice); return false; }
+        }
+        SetSliceEnd(slice);
+        return true;
+    }
+
     public long RunProgram(long closure, long[] args) {
         long v = Call(closure, args);
         if (!Parked() && !schedInstalled) return v;

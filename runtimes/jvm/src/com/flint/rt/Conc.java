@@ -201,7 +201,17 @@ public final class Conc {
         // has nothing saved until it parks.
         int ti = rt.push(newObj(rt, TY_THREAD, TH_LEN));
         if (Val.isNil(rt.r(ti))) { rt.popTo(base); return Val.NIL; }
-        rt.setSlot(Val.asHeap(rt.r(ti)), TH_STATUS, Val.fixnum(ST_RUNNABLE));
+        // UNLESS NOTHING IS RUNNING. A scheduler can now be created before any
+        // program has started -- a host that installs a port at construction
+        // makes one (`DECISIONS.md#ports-are-the-hosts`), and so does spawning
+        // the control plane at the top of `drive`
+        // (`DECISIONS.md#bridges-are-the-only-door`) -- and then thread 0
+        // represents no stack at all. Left RUNNABLE it is picked, restored from
+        // a `TH_STACK` of nil, and runs off the end of an empty value stack;
+        // the symptom is an index of -1 out of `vpop`. An empty frame stack is
+        // what says which case this is.
+        boolean running = !rt.frames.isEmpty();
+        rt.setSlot(Val.asHeap(rt.r(ti)), TH_STATUS, Val.fixnum(running ? ST_RUNNABLE : ST_DONE));
         rt.setSlot(Val.asHeap(rt.r(ti)), TH_ID, Val.fixnum(0));
         rt.setSlot(Val.asHeap(rt.r(ti)), TH_TOKEN, Val.fixnum(-1));
         rt.setSlot(Val.asHeap(rt.r(ti)), TH_BINDINGS, Maps.empty(rt));
@@ -285,7 +295,8 @@ public final class Conc {
         rt.roots.stackTop = 0;
     }
 
-    static void restoreState(Rt rt, long th) {
+    public static void restoreState(Rt rt, long th) {
+        rt.restores++;
         long sv = rt.slot(th, TH_STACK);
         rt.frames.clear();
         rt.handlers.clear();
@@ -331,10 +342,10 @@ public final class Conc {
 
     /// Signal a park. `parkOn` is the wake key; the PARK sentinel in `thrown`
     /// is what makes the interpreter unwind out to the scheduler.
+    /// GENERATED (`kin/sched.kin`). Two writes: what is being waited for,
+    /// and the sentinel that unwinds.
     public static long park(Rt rt, long on) {
-        rt.parkOn = on;
-        rt.thrown = Val.PARK;
-        return Val.NIL;
+        return com._3sln.flint.kgen.rt.Sched.park(rt, on);
     }
 
     // --- spawning -----------------------------------------------------------
@@ -377,76 +388,33 @@ public final class Conc {
     /// A waiter records WHICH THREAD is parked on WHICH PORT. Slots are reused
     /// through a free list rather than compacted, because a token is an index
     /// into this vector and compacting would invalidate every one held.
+    /// GENERATED (`kin/sched.kin`). Mints the token a host echoes back:
+    /// `(gen << 16) | (idx + 1)`, with `+ 1` so zero is never valid.
     static long newWaiter(Rt rt, long kind, long port) {
-        int base = rt.mark();
-        int pi = rt.push(port);
-        int si = rt.push(sched(rt));
-        int ti = rt.push(currentThread(rt));
-        long free = fx(rt.slot(rt.r(si), SC_WFREE));
-        long idx;
-        int wi;
-        if (free >= 0) {
-            long w = Vec.nth(rt, rt.slot(rt.r(si), SC_WAITERS), (int) free, Val.NOT_FOUND);
-            rt.setSlot(Val.asHeap(rt.r(si)), SC_WFREE, Val.fixnum(fx(rt.slot(w, W_NEXT))));
-            idx = free;
-            wi = rt.push(w);
-        } else {
-            long w = newObj(rt, TY_NODE, W_LEN);
-            if (Val.isNil(w)) { rt.popTo(base); return -1; }
-            wi = rt.push(w);
-            rt.setSlot(Val.asHeap(rt.r(wi)), W_GEN, Val.fixnum(0));
-            int wsi = rt.push(rt.slot(rt.r(si), SC_WAITERS));
-            long nws = Vec.conj(rt, rt.r(wsi), rt.r(wi));
-            idx = Vec.count(rt, nws) - 1;
-            rt.setSlot(Val.asHeap(rt.r(si)), SC_WAITERS, nws);
-        }
-        rt.setSlot(Val.asHeap(rt.r(wi)), W_THREAD, rt.r(ti));
-        rt.setSlot(Val.asHeap(rt.r(wi)), W_KIND, Val.fixnum(kind));
-        rt.setSlot(Val.asHeap(rt.r(wi)), W_PORT, rt.r(pi));
-        long gen = fx(rt.slot(rt.r(wi), W_GEN));
-        rt.popTo(base);
-        // 1-based, so that 0 is never a valid token: a host ABI where the zero
-        // value means something is a trap waiting for an uninitialised variable.
-        return (gen << 16) | (idx + 1);
+        return com._3sln.flint.kgen.rt.Sched.newWaiter(rt, kind, port);
     }
 
+    /// GENERATED (`kin/sched.kin`). The waiter a token names, or nil if
+    /// that token is stale -- which is what the generation in its high bits
+    /// is for: a freed slot is REUSED, so an index alone would let a late
+    /// answer wake whoever got the slot next.
     static long waiterAt(Rt rt, long token) {
-        if (token <= 0 || (token & 0xFFFF) == 0) return Val.NIL;
-        int idx = (int) (token & 0xFFFF) - 1;
-        long gen = token >> 16;
-        long w = Vec.nth(rt, waiters(rt), idx, Val.NOT_FOUND);
-        if (w == Val.NOT_FOUND || Val.isNil(w)) return Val.NIL;
-        if (fx(rt.slot(w, W_GEN)) != gen || Val.isNil(rt.slot(w, W_THREAD))) return Val.NIL;
-        return w;
+        return com._3sln.flint.kgen.rt.Sched.waiterAt(rt, token);
     }
 
-    /// Free a waiter slot and BUMP ITS GENERATION, so a token naming it can
-    /// never be honoured twice.
+    /// GENERATED (`kin/sched.kin`). Retire a waiter and return its slot to
+    /// the free list. The generated one ANSWERS the waiter it freed, or nil
+    /// if the token was already stale; this port's callers never needed that,
+    /// so it is dropped here rather than changing every call site.
     static void freeWaiter(Rt rt, long token) {
-        long w = waiterAt(rt, token);
-        if (Val.isNil(w)) return;
-        long idx = (token & 0xFFFF) - 1;
-        long gen = fx(rt.slot(w, W_GEN));
-        rt.setSlot(Val.asHeap(w), W_GEN, Val.fixnum((gen + 1) & 0xFFFF));
-        rt.setSlot(Val.asHeap(w), W_THREAD, Val.NIL);
-        rt.setSlot(Val.asHeap(w), W_PORT, Val.NIL);
-        long s = sched(rt);
-        rt.setSlot(Val.asHeap(w), W_NEXT, rt.slot(s, SC_WFREE));
-        rt.setSlot(Val.asHeap(s), SC_WFREE, Val.fixnum(idx));
+        com._3sln.flint.kgen.rt.Sched.freeWaiter(rt, token);
     }
 
-    /// How many green threads are parked with a token outstanding. A host that
-    /// never answers leaks these; the deadlock report names them.
+    /// GENERATED (`kin/sched.kin`). How many green threads are parked with a
+    /// token outstanding. A host that never answers leaks these; the deadlock
+    /// report names them.
     public static int outstandingWaiters(Rt rt) {
-        long s = sched(rt);
-        if (Val.isNil(s)) return 0;
-        long ws = waiters(rt);
-        int n = Vec.count(rt, ws), c = 0;
-        for (int i = 0; i < n; i++) {
-            long w = Vec.nth(rt, ws, i, Val.NOT_FOUND);
-            if (!Val.isNil(w) && w != Val.NOT_FOUND && !Val.isNil(rt.slot(w, W_THREAD))) c++;
-        }
-        return c;
+        return com._3sln.flint.kgen.rt.Sched.outstandingWaiters(rt);
     }
 
     /// Park until there is room in `p`'s ring.
@@ -475,25 +443,17 @@ public final class Conc {
         return park(rt, pv);
     }
 
+    /// GENERATED (`kin/sched.kin`). Register the waiter FIRST, park second,
+    /// and put the token on the thread so a wake can retire it without
+    /// searching the table.
     static long parkOnPort(Rt rt, long kind, long port) {
-        int base = rt.mark();
-        int pi = rt.push(port);
-        long token = newWaiter(rt, kind, rt.r(pi));
-        long th = currentThread(rt);
-        if (!Val.isNil(th)) rt.setSlot(Val.asHeap(th), TH_TOKEN, Val.fixnum(token));
-        long pv = rt.r(pi);
-        rt.popTo(base);
-        return park(rt, pv);
+        return com._3sln.flint.kgen.rt.Sched.parkOnPort(rt, kind, port);
     }
 
+    /// GENERATED (`kin/sched.kin`). The waiter is freed AFTER the thread's
+    /// park is cleared; the other order leaks a slot per wake.
     static void wakeWaiter(Rt rt, long w) {
-        long th = rt.slot(w, W_THREAD);
-        if (Val.isNil(th)) return;
-        rt.setSlot(Val.asHeap(th), TH_STATUS, Val.fixnum(ST_RUNNABLE));
-        rt.setSlot(Val.asHeap(th), TH_PARK_ON, Val.NIL);
-        long token = fx(rt.slot(th, TH_TOKEN));
-        rt.setSlot(Val.asHeap(th), TH_TOKEN, Val.fixnum(-1));
-        freeWaiter(rt, token);
+        com._3sln.flint.kgen.rt.Sched.wakeWaiter(rt, w);
     }
 
     /// Make every thread waiting on `p` runnable again.
@@ -501,14 +461,11 @@ public final class Conc {
     /// They RE-EXECUTE the call they parked in, which is what makes "wake"
     /// correct without anyone reasoning about who gets the value: whoever runs
     /// first takes it, and the others simply park again.
+    /// GENERATED (`kin/sched.kin`). Wake EVERY thread parked on `p`, not the
+    /// first: a woken thread re-executes what it parked on and parks again if
+    /// the queue is still full or empty.
     public static void wakeOn(Rt rt, long p) {
-        long ws = waiters(rt);
-        int n = Vec.count(rt, ws);
-        for (int i = 0; i < n; i++) {
-            long w = Vec.nth(rt, ws, i, Val.NOT_FOUND);
-            if (Val.isNil(w) || Val.isNil(rt.slot(w, W_THREAD))) continue;
-            if (rt.slot(w, W_PORT) == p) wakeWaiter(rt, w);
-        }
+        com._3sln.flint.kgen.rt.Sched.wakeOn(rt, p);
     }
 
     // --- channels -----------------------------------------------------------
@@ -722,7 +679,7 @@ public final class Conc {
 
     /// The peer of an id whose OBJECT has been collected. Read from the
     /// scheduler's pair list, which is the only place that survives it.
-    static long peerIdOfDead(Rt rt, long id) {
+    public static long peerIdOfDead(Rt rt, long id) {
         long ps = rt.slot(sched(rt), SC_PAIRS);
         int n = Vec.count(rt, ps);
         for (int i = 0; i < n; i++) {
@@ -735,26 +692,28 @@ public final class Conc {
     /// How many messages are in the ring, reservations included: a reserved
     /// slot is spoken for even before it is filled, and the bound this feeds is
     /// on occupancy.
+    /// GENERATED (`kin/portring.kin`).
     static int inboxCount(Rt rt, long p) {
-        return (int) Math.max(0, cursor(rt, p, PT_WRITE) - cursor(rt, p, PT_READ));
+        return com._3sln.flint.kgen.rt.Portring.ringInboxCount(rt, p);
     }
 
+    /// GENERATED (`kin/portring.kin`).
     static long cursor(Rt rt, long p, int which) {
-        return fx(slotAtomic(rt, p, which));
+        return com._3sln.flint.kgen.rt.Portring.ringCursor(rt, p, which);
     }
 
     /// One slot, read atomically. Cursors and sequence words are fixnums like
     /// any other slot -- the collector sees nothing unusual -- and the atomic
     /// operates on the TAGGED word, so a compare-and-swap compares tagged
     /// against tagged and never invents a value.
-    static long slotAtomic(Rt rt, long o, int i) {
+    public static long slotAtomic(Rt rt, long o, int i) {
         return rt.gc.sp.atomicLoad(Obj.slotAddr(Val.asHeap(o), i));
     }
 
     /// Compare-and-swap a slot, AND run the write barrier when it lands. See
     /// the Rust: a ring in the old generation pointing at a young value is an
     /// edge the collector finds only through the remembered set.
-    static boolean casSlotBarriered(Rt rt, long o, int i, long want, long next) {
+    public static boolean casSlotBarriered(Rt rt, long o, int i, long want, long next) {
         long obj = Val.asHeap(o);
         if (!rt.gc.sp.cas(Obj.slotAddr(obj, i), want, next)) return false;
         if (Val.isHeap(next) && rt.gc.isYoung(Val.asHeap(next)) && !rt.gc.isYoung(obj)) {
@@ -763,7 +722,7 @@ public final class Conc {
         return true;
     }
 
-    static boolean casSlot(Rt rt, long o, int i, long want, long next) {
+    public static boolean casSlot(Rt rt, long o, int i, long want, long next) {
         return rt.gc.sp.cas(Obj.slotAddr(Val.asHeap(o), i), want, next);
     }
 
@@ -773,35 +732,19 @@ public final class Conc {
     /// EMPTY for the message both claims the slot and fills it. Winning is the
     /// confirmation; losing means somebody took that slot and this sender looks
     /// at the next. Mirrors the Rust, including why there is no sequence word.
+    /// GENERATED (`kin/portring.kin`). Every message a sandbox receives goes
+    /// through this and its twin; a divergence in either loses a message or
+    /// delivers it twice, and the three copies agreed only because nothing
+    /// ever ran them against each other.
     static boolean enqueue(Rt rt, long p, long v) {
-        long ring = fx(rt.slot(p, PT_RING));
-        if (ring == 0) return false;
-        long inbox = rt.slot(p, PT_INBOX);
-        for (;;) {
-            long w = cursor(rt, p, PT_WRITE);
-            long r = cursor(rt, p, PT_READ);
-            if (w - r >= ring) return false;
-            int idx = (int) (w % ring);
-            if (!casSlot(rt, p, PT_WRITE, Val.fixnum(w), Val.fixnum(w + 1))) continue;
-            if (casSlotBarriered(rt, inbox, idx, Val.EMPTY, v)) return true;
-        }
+        return com._3sln.flint.kgen.rt.Portring.ringEnqueue(rt, p, v);
     }
 
     /// Take the next message, or NIL. The mirror image: swap the message out
     /// for EMPTY, freeing the slot in the step that takes the value.
+    /// GENERATED (`kin/portring.kin`) -- see `enqueue`.
     static long dequeue(Rt rt, long p) {
-        long ring = fx(rt.slot(p, PT_RING));
-        if (ring == 0) return Val.NIL;
-        long inbox = rt.slot(p, PT_INBOX);
-        for (;;) {
-            long r = cursor(rt, p, PT_READ);
-            if (r >= cursor(rt, p, PT_WRITE)) return Val.NIL;
-            int idx = (int) (r % ring);
-            long v = slotAtomic(rt, inbox, idx);
-            if (v == Val.EMPTY) return Val.NIL;
-            if (!casSlot(rt, p, PT_READ, Val.fixnum(r), Val.fixnum(r + 1))) continue;
-            if (casSlotBarriered(rt, inbox, idx, v, Val.EMPTY)) return v;
-        }
+        return com._3sln.flint.kgen.rt.Portring.ringDequeue(rt, p);
     }
 
     // --- what may cross a port ----------------------------------------------
@@ -926,7 +869,7 @@ public final class Conc {
     /// Append an outbound event. `payload` is a string (or byte string) whose
     /// bytes the host will read; the drain copies them into one contiguous
     /// buffer.
-    static void pushEvent(Rt rt, long kind, long a, long b, long payload) {
+    public static void pushEvent(Rt rt, long kind, long a, long b, long payload) {
         int base = rt.mark();
         int pi = rt.push(payload);
         int vi = rt.push(Vec.empty(rt));
@@ -978,9 +921,24 @@ public final class Conc {
         int base = rt.mark();
         int pi = rt.push(p), vi = rt.push(v);
         long kind = fx(rt.slot(rt.r(pi), PT_KIND));
+        // A WRITER IS AN ENCODING, NOT A VALUE, so it is not walked: there is
+        // nothing in it to check, and `checkSendable` would refuse the type it
+        // does not know (`DECISIONS.md#the-codec-is-guest-code`).
+        boolean writer = Wire.isWriter(rt, rt.r(vi));
+        if (writer && !crossesAHeap(kind)) {
+            rt.popTo(base);
+            return rt.throwStr("IllegalArgumentException",
+                "send: a wire writer is an encoding, and a channel carries values -- "
+                + "send the value itself, or send this on a bridge");
+        }
         int carry = crossesAHeap(kind) ? CARRY_CROSSING : CARRY_LOCAL;
-        String bad = checkSendableVia(rt, rt.r(vi), carry);
-        if (bad != null) { rt.popTo(base); return rt.throwStr("IllegalArgumentException", bad); }
+        if (!writer) {
+            String bad = checkSendableVia(rt, rt.r(vi), carry);
+            if (bad != null) {
+                rt.popTo(base);
+                return rt.throwStr("IllegalArgumentException", bad);
+            }
+        }
         if (crossesAHeap(kind)) {
             // ENCODING HAPPENS HERE, ALWAYS, AND ONLY HERE.
             //
@@ -992,15 +950,28 @@ public final class Conc {
             // `K_SENTINEL` carry their identity inline as integers a guest can
             // write, such a guest could mint any host id it liked. An opaque
             // value's whole meaning is that it cannot.
-            byte[] enc;
-            try {
-                enc = Codec.encode(rt, rt.r(vi));
-            } catch (Codec.Refused e) {
+            // STRUCTURALLY COMPLETE, or it does not go: `wire-vec 3` with two
+            // values emitted is a message no reader can read, and shipping it
+            // reports the fault at the end that did not commit it.
+            if (!writer) {
                 rt.popTo(base);
-                return rt.throwStr("IllegalArgumentException",
-                    "send: this cannot cross a bridge: " + e.getMessage());
+                return rt.throwStr("ClassCastException",
+                    "send: a bridge carries an encoding -- use `flint.port/send`, which "
+                    + "writes one, rather than the builtin with a bare value");
             }
-            rt.setR(vi, Bytes.of(rt, enc));
+            if (!Wire.complete(rt, rt.r(vi))) {
+                rt.popTo(base);
+                return rt.throwStr("IllegalStateException",
+                    "send: this encoding is unfinished -- a container was opened and "
+                    + "not filled");
+            }
+            long enc = Wire.finish(rt, rt.r(vi));
+            if (Val.isNil(enc)) {
+                rt.popTo(base);
+                return rt.throwStr("IllegalStateException",
+                    "send: this wire writer has already been sent");
+            }
+            rt.setR(vi, enc);
             // Bound the queue in BYTES: back-pressure exists to bound memory,
             // and one 4 MB message is not one message's worth of it.
             //
@@ -1008,7 +979,7 @@ public final class Conc {
             // is the host's registry and is not in any heap -- so it is its own
             // accounting, where a host port used to need a second object to
             // carry the count.
-            long len = enc.length;
+            long len = Bytes.count(rt, rt.r(vi));
             long cap = fx(rt.slot(rt.r(pi), PT_CAP));
             long queued = fx(rt.slot(rt.r(pi), PT_BYTES));
             if (queued > 0 && queued + len > cap) {
@@ -1051,6 +1022,19 @@ public final class Conc {
     }
 
     /// Take from this port's inbox. Parks when empty.
+    /// Receive on a BRIDGE as a live reader, for a guest that decodes itself.
+    ///
+    /// NIL for end of stream, exactly as `receive` answers it.
+    public static long receiveReader(Rt rt, long p) {
+        long v = receive(rt, p);
+        if (Val.isNil(v) || !Bytes.isBytes(rt, v)) return v;
+        int base = rt.mark();
+        int vi = rt.push(v);
+        long out = Wire.reader(rt, rt.r(vi), true);
+        rt.popTo(base);
+        return out;
+    }
+
     public static long receive(Rt rt, long p) {
         if (!needPort(rt, p, "receive")) return Val.NIL;
         int base = rt.mark();
@@ -1069,6 +1053,10 @@ public final class Conc {
                 // keyword as a string. On the Rust that was a segfault.
                 long item = rt.r(vi);
                 long n = fx(Vec.nth(rt, item, 0, Val.NOT_FOUND));
+                // `[len bytes ports]`. The ports are dropped here, which is
+                // where this stops short of the two-phase design: the bridge
+                // should hold them until the receiver has HYDRATED the message,
+                // not until it has taken it.
                 rt.setR(vi, Vec.nth(rt, item, 1, Val.NOT_FOUND));
                 long queued = fx(rt.slot(rt.r(pi), PT_BYTES));
                 rt.setSlot(Val.asHeap(rt.r(pi)), PT_BYTES, Val.fixnum(queued > n ? queued - n : 0));
@@ -1238,23 +1226,21 @@ public final class Conc {
         // That is the whole of "the host does what it wants with them": one
         // value crosses, and anything an opaque value carries survives the trip
         // because the codec already knew how to write one down.
-        int vi = rt.push(Vec.empty(rt));
-        rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.r(ni)));
-        int an = rt.isHeapTy(rt.r(ai), TY_VEC) ? Vec.count(rt, rt.r(ai)) : 0;
-        for (int k = 0; k < an; k++) {
-            rt.setR(vi, Vec.conj(rt, rt.r(vi), Vec.nth(rt, rt.r(ai), k, Val.NOT_FOUND)));
-        }
-        byte[] call;
-        try {
-            call = Codec.encode(rt, rt.r(vi));
-        } catch (Codec.Refused e) {
-            // A value the codec refuses is the PROGRAM's error, not the host's:
-            // say so here rather than sending something the host cannot read.
+        // ENCODED BY THE GUEST (`DECISIONS.md#the-codec-is-guest-code`).
+        // `flint.port/open` writes `[name ...args]` with `flint.wire` and hands
+        // the writer in; this checks it is finished and takes its bytes.
+        if (!Wire.complete(rt, rt.r(ai))) {
             rt.popTo(base);
-            return rt.throwStr("IllegalArgumentException",
-                "open: this cannot be sent to the host: " + e.getMessage());
+            return rt.throwStr("IllegalStateException",
+                "open: this encoding is unfinished -- a container was opened and not filled");
         }
-        int payi = rt.push(Bytes.of(rt, call));
+        long pay = Wire.finish(rt, rt.r(ai));
+        if (Val.isNil(pay)) {
+            rt.popTo(base);
+            return rt.throwStr("IllegalStateException",
+                "open: this encoding has already been sent");
+        }
+        int payi = rt.push(pay);
         long sysId = fx(rt.slot(rt.r(si), PT_ID));
         pushEvent(rt, EV_OPEN, token, sysId, rt.r(payi));
         long target = rt.r(si);
@@ -1287,9 +1273,15 @@ public final class Conc {
             // the way `portOpen` reads it off `isPort` -- a host answering nil
             // and a host refusing would be the same bits.
             if (rt.isHeapTy(pending, TY_VEC)) {
-                long v = Vec.count(rt, pending) > 0 ? Vec.nth(rt, pending, 0, Val.NOT_FOUND) : Val.NIL;
+                // THE ANSWER'S BYTES, AS A LIVE READER. The guest decodes it --
+                // `flint.host/request` calls `flint.wire/read-from`. Live
+                // because these bytes came from the host across the boundary
+                // (`DECISIONS.md#the-codec-is-guest-code`).
+                long b = Vec.count(rt, pending) > 0 ? Vec.nth(rt, pending, 0, Val.NOT_FOUND) : Val.NIL;
+                int bi = rt.push(b);
+                long out = Wire.reader(rt, rt.r(bi), true);
                 rt.popTo(base);
-                return v;
+                return out;
             }
             String n = Str.isString(rt, rt.r(ni)) ? Str.text(rt, rt.r(ni)) : "?";
             rt.popTo(base);
@@ -1310,23 +1302,21 @@ public final class Conc {
         long token = newWaiter(rt, WK_REQUEST, rt.r(si));
         rt.setSlot(Val.asHeap(rt.r(ti)), TH_TOKEN, Val.fixnum(token));
         rt.setSlot(Val.asHeap(rt.r(ti)), TH_PENDING, Val.fixnum(0));
-        // `[what & args]`, encoded -- the same payload shape `portOpen` sends,
-        // so a host that already routes one routes the other.
-        int vi = rt.push(Vec.empty(rt));
-        rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.r(ni)));
-        int an = rt.isHeapTy(rt.r(ai), TY_VEC) ? Vec.count(rt, rt.r(ai)) : 0;
-        for (int k = 0; k < an; k++) {
-            rt.setR(vi, Vec.conj(rt, rt.r(vi), Vec.nth(rt, rt.r(ai), k, Val.NOT_FOUND)));
-        }
-        byte[] call;
-        try {
-            call = Codec.encode(rt, rt.r(vi));
-        } catch (Codec.Refused e) {
+        // `[what & args]`, ENCODED BY THE GUEST -- the same payload shape
+        // `portOpen` sends, so a host that routes one routes the other, and
+        // written the same way it is (`DECISIONS.md#the-codec-is-guest-code`).
+        if (!Wire.complete(rt, rt.r(ai))) {
             rt.popTo(base);
-            return rt.throwStr("IllegalArgumentException",
-                "request: this cannot be sent to the host: " + e.getMessage());
+            return rt.throwStr("IllegalStateException",
+                "request: this encoding is unfinished -- a container was opened and not filled");
         }
-        int payi = rt.push(Bytes.of(rt, call));
+        long pay = Wire.finish(rt, rt.r(ai));
+        if (Val.isNil(pay)) {
+            rt.popTo(base);
+            return rt.throwStr("IllegalStateException",
+                "request: this encoding has already been sent");
+        }
+        int payi = rt.push(pay);
         long sysId = fx(rt.slot(rt.r(si), PT_ID));
         pushEvent(rt, EV_REQUEST, token, sysId, rt.r(payi));
         long target = rt.r(si);
@@ -1407,13 +1397,11 @@ public final class Conc {
         if (Val.isNil(w)) return false;
         int base = rt.mark();
         int wi = rt.push(w);
-        long v;
-        try {
-            v = Codec.decode(rt, bytes);
-        } catch (RuntimeException e) {
-            rt.popTo(base);
-            return false;
-        }
+        // NOT DECODED HERE (`DECISIONS.md#the-codec-is-guest-code`). The bytes
+        // reach the parked thread as bytes and the GUEST reads them. The
+        // WRAPPER stays, because an answer may be any value at all, nil
+        // included: "answered" is read off the wrapper, never off the value.
+        long v = Bytes.of(rt, bytes);
         int vi = rt.push(v);
         // Wrapped, so that a host answering nil is distinguishable from a host
         // refusing. See `hostRequest`.
@@ -1441,6 +1429,34 @@ public final class Conc {
     /// -- `decode`, not `decodeGuest`. That is the whole asymmetry: an opaque
     /// the host issued arrives as itself, with the id it was given, and nothing
     /// the guest can write reaches this call.
+    /// Walk an encoding and MINT EVERY PORT IN IT, answering them as a vector.
+    ///
+    /// NIL when the encoding cannot be read, which is how a malformed message
+    /// stays refused at the boundary. The WALK is `kin/wirescan.kin`; this is
+    /// the `byte[]`-shaped door to it.
+    static long scanPorts(Rt rt, byte[] bytes) {
+        int base = rt.mark();
+        int bi = rt.push(Bytes.of(rt, bytes));
+        // NOT LIVE: this reader is a cursor for the walk and is never handed to
+        // a guest.
+        int ri = rt.push(Wire.reader(rt, rt.r(bi), false));
+        int ai = rt.push(Vec.empty(rt));
+        boolean ok = com._3sln.flint.kgen.rt.Wirescan.wireScanAt(rt, rt.r(ri), ai, 0);
+        if (!ok || Wire.left(rt, rt.r(ri)) != 0) {
+            rt.popTo(base);
+            return Val.NIL;
+        }
+        long out = rt.r(ai);
+        rt.popTo(base);
+        return out;
+    }
+
+    /// Install a bridge port by host id, or NIL if this sandbox has no ports.
+    public static long mintBridgePort(Rt rt, long id) {
+        if (rt.bridgeHook == null) return Val.NIL;
+        return rt.bridgeHook.install(rt, id);
+    }
+
     public static boolean hostDeliver(Rt rt, long hostPortId, byte[] bytes) {
         long host = portById(rt, hostPortId);
         if (Val.isNil(host)) return false;
@@ -1463,10 +1479,13 @@ public final class Conc {
             if (queued > 0 && queued + len > cap) { rt.popTo(base); return false; }
             if (casSlot(rt, pv, PT_BYTES, Val.fixnum(queued), Val.fixnum(queued + len))) break;
         }
-        long v;
-        try {
-            v = Codec.decode(rt, bytes);
-        } catch (RuntimeException e) {
+        // SCANNED, NOT DECODED (`DECISIONS.md#the-codec-is-guest-code`). The
+        // bytes go into the queue as bytes and the GUEST decodes them; what
+        // must still happen here is the MINTING, because a port has to exist
+        // before anything can be delivered on it -- a host binds a port and
+        // calls on it without pumping in between, deliberately.
+        long ports = scanPorts(rt, bytes);
+        if (Val.isNil(ports)) {
             // Refused rather than delivered as anything else: a message the
             // format cannot read is the host's error, and turning it into a
             // string here would hand the guest something that silently was not
@@ -1475,14 +1494,17 @@ public final class Conc {
             rt.popTo(base);
             return false;
         }
-        int vi = rt.push(v);
-        // `[len value]`, because the refund has to be the number that was
-        // CHARGED and nothing about a decoded value says what that was.
+        int pri = rt.push(ports);
+        int vi = rt.push(Bytes.of(rt, bytes));
+        // `[len bytes ports]`. `len` because the refund has to be the number
+        // that was CHARGED; `ports` because THE BRIDGE OWNS THE REFERENCE while
+        // the message is in flight, and the intern table is weak on purpose.
         {
             int m = rt.mark();
             int ei = rt.push(Vec.empty(rt));
             rt.setR(ei, Vec.conj(rt, rt.r(ei), Val.fixnum(len)));
-            rt.setR(vi, Vec.conj(rt, rt.r(ei), rt.r(vi)));
+            rt.setR(ei, Vec.conj(rt, rt.r(ei), rt.r(vi)));
+            rt.setR(vi, Vec.conj(rt, rt.r(ei), rt.r(pri)));
             rt.popTo(m);
         }
         if (!enqueue(rt, rt.r(pi), rt.r(vi))) {
@@ -1646,68 +1668,25 @@ public final class Conc {
     /// PEER has gone can never proceed, so it is woken with an error rather than
     /// left hanging. Both facts are ones the collector has already worked out;
     /// this only reads them.
+    ///
+    /// GENERATED (`kin/reapports.kin`). A collection is a RELEASE for a bridge
+    /// and an ORPHANING for a channel, and this is the only place either is
+    /// noticed -- which is why it was worth writing once rather than three
+    /// times. The port that made it a candidate is recorded there: all three
+    /// copies rebuilt both lists on every drive iteration whether or not
+    /// anything had died, and allocation is billed, so the scheduler's own
+    /// bookkeeping was charged to the program -- on the native runtime only,
+    /// because this target's not-counting sentinel is `checkpoint == 0` where
+    /// the native one's is `u64::MAX`. The same waste, invisible here and
+    /// expensive there, is exactly the drift one definition removes.
     public static void reapPorts(Rt rt) {
-        long s = sched(rt);
-        if (Val.isNil(s)) return;
-        int base = rt.mark();
-        int si = rt.push(s);
-        // --- bridges: a collection is a RELEASE -----------------------------
-        //
-        // The handle is ordinary memory and is not rooted, so the collector
-        // finding it unreachable IS this sandbox letting the port go. One
-        // release per retain, which is what makes the host's count a count of
-        // holders rather than of arrivals (`DECISIONS.md#ports-are-the-hosts`).
-        int bi = rt.push(rt.slot(rt.r(si), SC_BRIDGES));
-        int bn = Vec.count(rt, rt.r(bi));
-        int hi = rt.push(Vec.empty(rt));
-        for (int k = 0; k < bn; k++) {
-            long id = fx(Vec.nth(rt, rt.r(bi), k, Val.NOT_FOUND));
-            if (Val.isNil(portById(rt, id))) {
-                // CLOSED as well as released. `DECISIONS.md#host-abi`: an end the
-                // collector finds unreachable IS the script having called
-                // `close`, so the host hears the same pair either way.
-                pushEvent(rt, EV_CLOSED, id, 0, Val.NIL);
-                pushEvent(rt, EV_RELEASE, id, 0, Val.NIL);
-                continue;
-            }
-            rt.setR(hi, Vec.conj(rt, rt.r(hi), Val.fixnum(id)));
-        }
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_BRIDGES, rt.r(hi));
-
-        // --- channels: a collected end orphans its peer ----------------------
-        int ii = rt.push(rt.slot(rt.r(si), SC_PORTS));
-        int n = Vec.count(rt, rt.r(ii));
-        int li = rt.push(Vec.empty(rt));
-        for (int k = 0; k < n; k++) {
-            long id = fx(Vec.nth(rt, rt.r(ii), k, Val.NOT_FOUND));
-            long p = portById(rt, id);
-            if (!Val.isNil(p)) {
-                rt.setR(li, Vec.conj(rt, rt.r(li), Val.fixnum(id)));
-                continue;
-            }
-            // This end has been collected. Tell whoever is affected.
-            long peer = portById(rt, peerIdOfDead(rt, id));
-            if (Val.isNil(peer)) continue;
-            int pi = rt.push(peer);
-            long pst = fx(rt.slot(rt.r(pi), PT_STATE));
-            if (pst != P_CLOSED && pst != P_ORPHANED) {
-                // Its peer vanished WITHOUT closing, which is not the same as a
-                // tidy close and should not read like one.
-                rt.setSlot(Val.asHeap(rt.r(pi)), PT_STATE, Val.fixnum(P_ORPHANED));
-            }
-            failWaitersOn(rt, rt.r(pi),
-                "the other end of this port is unreachable, so this can never complete");
-            wakeOn(rt, rt.r(pi));
-            rt.popTo(pi);
-        }
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_PORTS, rt.r(li));
-        rt.popTo(base);
+        com._3sln.flint.kgen.rt.Reapports.reapAll(rt);
     }
 
     /// Wake everything parked on `p` with an ERROR instead of a value. Used when
     /// the peer end has been collected: that receive can never succeed, and a
     /// hang is the worst possible way to say so.
-    static void failWaitersOn(Rt rt, long p, String msg) {
+    public static void failWaitersOn(Rt rt, long p, String msg) {
         int base = rt.mark();
         int pi = rt.push(p);
         int wsi = rt.push(waiters(rt));
@@ -1783,7 +1762,31 @@ public final class Conc {
     // --- the scheduler ------------------------------------------------------
 
     /// Record the outcome of the thread that was running, and take it off.
-    static void settle(Rt rt, long result) {
+    // THE SCHEDULER'S PREDICATES ARE `kin/sched.kin`, generated into all three
+    // runtimes. They were written three times and diverged: this one's
+    // `pendingEvents` guarded a nil scheduler where native's did not, and
+    // `drive` asked them in a different ORDER here for long enough to close a
+    // system port under a parked `open`
+    // (`DECISIONS.md#the-codec-is-guest-code`).
+    //
+    // `sched-pick` answers `-1` for "nothing runnable", signed for exactly
+    // that reason -- a count would force every caller to re-derive `n`.
+    static int pick(Rt rt) {
+        // `-1` FOR NONE is what this port's callers already expected, so the
+        // generated answer needs no translation at all.
+        return (int) com._3sln.flint.kgen.rt.Sched.schedPick(rt);
+    }
+
+    static boolean pendingEvents(Rt rt) {
+        return com._3sln.flint.kgen.rt.Sched.schedPendingEvents(rt);
+    }
+
+    static boolean needsHost(Rt rt) {
+        return com._3sln.flint.kgen.rt.Sched.schedNeedsHost(rt);
+    }
+
+    public static void settle(Rt rt, long result) {
+
         long th = currentThread(rt);
         if (Val.isNil(th)) return;
         int base = rt.mark();
@@ -1828,62 +1831,29 @@ public final class Conc {
         rt.popTo(base);
     }
 
-    /// Round-robin from just after the current thread. DETERMINISTIC by
-    /// construction: no randomness, no clock, no host-order dependence. That is
-    /// what lets three runtimes agree on an interleaving.
-    static int pick(Rt rt) {
-        long s = sched(rt);
-        long ts = rt.slot(s, SC_THREADS);
-        int n = Vec.count(rt, ts);
-        if (n == 0) return -1;
-        int cur = (int) fx(rt.slot(s, SC_CURRENT));
-        for (int k = 1; k <= n; k++) {
-            int i = (cur + k) % n;
-            long th = Vec.nth(rt, ts, i, Val.NOT_FOUND);
-            if (Val.isNil(th) || th == Val.NOT_FOUND) continue;
-            long st = fx(rt.slot(th, TH_STATUS));
-            if (st == ST_NEW || st == ST_RUNNABLE) return i;
-        }
-        return -1;
+    /// Install a thread's dynamic bindings as the live ones. Named by the
+    /// vocabulary so `kin/sched.kin` can say it; bindings travel WITH the
+    /// thread and `settle` saves them back.
+    public static void installBindings(Rt rt, long binds) {
+        rt.roots.shared.singletons[Rt.SING_BINDINGS] = binds;
     }
 
-    static void runOne(Rt rt, int i) {
-        long s = sched(rt);
-        rt.setSlot(Val.asHeap(s), SC_CURRENT, Val.fixnum(i));
-        long th = Vec.nth(rt, rt.slot(s, SC_THREADS), i, Val.NOT_FOUND);
-        if (Val.isNil(th) || th == Val.NOT_FOUND) return;
-        int base = rt.mark();
-        int ti = rt.push(th);
-        long st = fx(rt.slot(rt.r(ti), TH_STATUS));
-        rt.roots.shared.singletons[Rt.SING_BINDINGS] = rt.slot(rt.r(ti), TH_BINDINGS);
-        rt.setSliceEnd(rt.steps + SLICE);
-        long v;
-        if (st == ST_NEW) {
-            rt.frames.clear(); rt.handlers.clear(); rt.roots.stackTop = 0;
-            long f = rt.slot(rt.r(ti), TH_ENTRY);
-            rt.setSlot(Val.asHeap(rt.r(ti)), TH_STATUS, Val.fixnum(ST_RUNNABLE));
-            rt.setSlot(Val.asHeap(rt.r(ti)), TH_ENTRY, Val.NIL);
-            v = runEntry(rt, f);
-        } else {
-            restoreState(rt, rt.r(ti));
-            rt.setSlot(Val.asHeap(rt.r(ti)), TH_STACK, Val.NIL);
-            long fail = rt.slot(rt.r(ti), TH_FAIL);
-            if (Val.isNil(fail)) {
-                v = rt.run(0);
-            } else {
-                // Raised HERE, in the thread it concerns, rather than in
-                // whichever thread noticed the port had gone. `try` in this
-                // thread catches it like any other error.
-                rt.setSlot(Val.asHeap(rt.r(ti)), TH_FAIL, Val.NIL);
-                rt.thrown = fail;
-                v = rt.unwind() ? rt.run(0) : Val.NIL;
-            }
-        }
-        rt.popTo(base);
-        settle(rt, v);
+    /// Give the thread about to run a fresh turn, from the CURRENT step count.
+    public static void beginSlice(Rt rt) { rt.setSliceEnd(rt.steps + SLICE); }
+
+    /// Empty the interpreter, for a thread with no state to restore.
+    public static void resetExecState(Rt rt) {
+        rt.frames.clear(); rt.handlers.clear(); rt.roots.stackTop = 0;
     }
 
-    static long runEntry(Rt rt, long f) {
+    /// GENERATED (`kin/sched.kin`) -- the resume path, one source. Its cost
+    /// is billed to the program, so three implementations were three prices
+    /// for running the same code.
+    public static void runOne(Rt rt, int i) {
+        com._3sln.flint.kgen.rt.Sched.schedRunOne(rt, i);
+    }
+
+    public static long runEntry(Rt rt, long f) {
         int calleeAt = rt.roots.stackTop;
         rt.vpush(f);
         if (!rt.enter(f, calleeAt, 0)) { rt.roots.stackTop = calleeAt; return Val.NIL; }
@@ -1908,6 +1878,7 @@ public final class Conc {
     }
 
     static long mainResult(Rt rt) {
+
         long th = Vec.nth(rt, rt.slot(sched(rt), SC_THREADS), 0, Val.NOT_FOUND);
         long r = (Val.isNil(th) || th == Val.NOT_FOUND) ? Val.NIL : rt.slot(th, TH_RESULT);
         return r;
@@ -1932,79 +1903,89 @@ public final class Conc {
         return drive(rt);
     }
 
-    static boolean pendingEvents(Rt rt) {
-        long s = sched(rt);
-        if (Val.isNil(s)) return false;
-        return Vec.count(rt, rt.slot(s, SC_EVENTS)) > fx(rt.slot(s, SC_EHEAD));
+    /// Spawn the control plane on the system port, once.
+    ///
+    /// Asked on EVERY drive rather than at install, because a host may install
+    /// a system port after the first run -- and because the first native
+    /// version did it at install time, inside an ABI call, where the
+    /// initialisers ran in a context that could not report failure and it
+    /// returned false in silence.
+    public static void bootSystemThreadOnce(Rt rt) {
+        if (rt.systemBooted) return;
+        if (Val.isNil(systemPort(rt))) return;      // no door yet; asked again next drive
+        rt.systemBooted = true;
+        bootSystemThread(rt);
     }
 
-    /// Is there anything only the HOST can supply? An event it has not drained,
-    /// or a thread parked on a port whose other end is outside this heap.
-    static boolean needsHost(Rt rt) {
-        if (pendingEvents(rt)) return true;
+    /// **No guest code runs here.** `flint.system/boot` is a thunk, so this
+    /// takes its var's value and spawns it -- nothing is called. The native
+    /// runtime's first version called a flint function to build a closure over
+    /// the port, and that re-entered `drive` from inside `drive`: the nested
+    /// scheduler ran, found the boot flag already set, and the outer call came
+    /// back with nothing callable. The sandbox then tore itself down with no
+    /// message ever served, and the only visible symptom was "the call was
+    /// never answered".
+    ///
+    /// **Initialisers must have run**, because a var is nil until they have.
+    ///
+    /// Absent `flint.system` is NOT an error. A module built before this
+    /// existed has no control plane, and a sandbox nothing can call is a
+    /// coherent thing to be; failing here would make every old artifact
+    /// unloadable.
+    static void bootSystemThread(Rt rt) {
+        if (!rt.ensureStarted()) return;
+        for (int i = 0; i < rt.varNames.length; i++) {
+            if (!Str.text(rt, rt.consts[rt.varNames[i]]).equals("flint.system/boot")) continue;
+            long f = rt.roots.shared.globals[i];
+            if (Val.isNil(f) || !rt.isHeapTy(f, TY_CLOSURE)) return;
+            spawn(rt, f);
+            return;
+        }
+    }
+
+    /// THE ANSWER A SETTLED PROGRAM LEFT.
+    ///
+    /// Named to match native's `settled_answer`, which is the name
+    /// `kin/sched.kin` calls. It was `mainResult` here, from the model
+    /// in which thread 0 was `main`.
+    public static long settledAnswer(Rt rt) { return mainResult(rt); }
+
+    /// NAME THE DEADLOCK rather than hang on it. THREE implementations on
+    /// purpose: this builds a host string naming each stuck thread, and a
+    /// diagnostic message is the wrong thing to force through a generator.
+    public static void reportDeadlock(Rt rt) {
+        // Nothing runnable, nothing the host can help with: the remaining
+        // threads are waiting on each other. NAMED rather than hung.
         long ts = rt.slot(sched(rt), SC_THREADS);
         int n = Vec.count(rt, ts);
-        for (int i = 0; i < n; i++) {
-            long th = Vec.nth(rt, ts, i, Val.NOT_FOUND);
+        int stuck = 0;
+        StringBuilder detail = new StringBuilder();
+        for (int k = 0; k < n; k++) {
+            long th = Vec.nth(rt, ts, k, Val.NOT_FOUND);
             if (Val.isNil(th) || th == Val.NOT_FOUND) continue;
             if (fx(rt.slot(th, TH_STATUS)) != ST_PARKED) continue;
+            stuck++;
             long on = rt.slot(th, TH_PARK_ON);
-            if (isPort(rt, on) && crossesAHeap(fx(rt.slot(on, PT_KIND)))) return true;
+            String what;
+            if (isPort(rt, on)) {
+                long l = rt.slot(on, PT_LABEL);
+                String lab = Str.isString(rt, l) ? Str.text(rt, l) : "";
+                what = "port " + fx(rt.slot(on, PT_ID))
+                     + (lab.isEmpty() ? "" : " \"" + lab + "\"");
+            } else if (isThread(rt, on)) {
+                what = "thread " + fx(rt.slot(on, TH_ID));
+            } else {
+                what = "something";
+            }
+            detail.append("\n  thread ").append(fx(rt.slot(th, TH_ID)))
+                  .append(" waiting on ").append(what);
         }
-        return false;
+        rt.throwStr("IllegalStateException",
+            "deadlock: " + stuck + " green thread(s) are parked and nothing can wake them"
+            + detail);
     }
 
     public static long drive(Rt rt) {
-        for (;;) {
-            // What the collector left behind IS the lifetime rule: a flint end
-            // that nothing refers to any more has been closed, whether or not
-            // anybody said so (`DECISIONS.md#host-abi`).
-            reapPorts(rt);
-            int i = pick(rt);
-            if (i >= 0) { runOne(rt, i); continue; }
-            // The entry function's value IS the answer, so once it has returned
-            // and nothing else can run, the program is over -- whatever a
-            // service thread may still be parked on. Asking "does anything need
-            // the host?" first would keep a driver's reader alive for ever.
-            if (mainFinished(rt)) {
-                // Exit closes every flint end and leaves the events for one last
-                // drain, so a host never has to guess whether more is coming.
-                closeAllBridges(rt);
-                if (pendingEvents(rt)) { rt.status = 2; return Val.NIL; }
-                rt.status = 0;
-                return mainResult(rt);
-            }
-            if (needsHost(rt)) { rt.status = 2; return Val.NIL; }
-            rt.status = 0;
-            // Nothing runnable, nothing the host can help with: the remaining
-            // threads are waiting on each other. NAMED rather than hung.
-            long ts = rt.slot(sched(rt), SC_THREADS);
-            int n = Vec.count(rt, ts);
-            int stuck = 0;
-            StringBuilder detail = new StringBuilder();
-            for (int k = 0; k < n; k++) {
-                long th = Vec.nth(rt, ts, k, Val.NOT_FOUND);
-                if (Val.isNil(th) || th == Val.NOT_FOUND) continue;
-                if (fx(rt.slot(th, TH_STATUS)) != ST_PARKED) continue;
-                stuck++;
-                long on = rt.slot(th, TH_PARK_ON);
-                String what;
-                if (isPort(rt, on)) {
-                    long l = rt.slot(on, PT_LABEL);
-                    String lab = Str.isString(rt, l) ? Str.text(rt, l) : "";
-                    what = "port " + fx(rt.slot(on, PT_ID))
-                         + (lab.isEmpty() ? "" : " \"" + lab + "\"");
-                } else if (isThread(rt, on)) {
-                    what = "thread " + fx(rt.slot(on, TH_ID));
-                } else {
-                    what = "something";
-                }
-                detail.append("\n  thread ").append(fx(rt.slot(th, TH_ID)))
-                      .append(" waiting on ").append(what);
-            }
-            return rt.throwStr("IllegalStateException",
-                "deadlock: " + stuck + " green thread(s) are parked and nothing can wake them"
-                + detail);
-        }
+        return com._3sln.flint.kgen.rt.Sched.schedDrive(rt);
     }
 }

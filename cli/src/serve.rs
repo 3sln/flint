@@ -61,6 +61,29 @@ fn reply_for(tx: i64, payload: &[u8]) -> Option<Result<Vec<u8>, String>> {
     }
 }
 
+/// ONE BOUND PORT, and the calls made on it.
+///
+/// The protocol's shape, given a name. `:bind` hands the control plane a port
+/// and it spawns ONE thread serving calls on it
+/// (`DECISIONS.md#bridges-are-the-only-door`), so a caller IS that thread's
+/// queue: calls on one caller are serial, in arrival order, and concurrency is
+/// had by taking a second caller. The cost is visible rather than a thread
+/// appearing per call.
+///
+/// A HANDLE, not an owner. It carries the port id and nothing else, because
+/// making a call needs the host (to serve what the called function asks for)
+/// and the program (to drive it) -- so those are passed in rather than
+/// borrowed for the caller's whole life.
+pub struct Caller {
+    port: u32,
+}
+
+impl Caller {
+    pub fn port(&self) -> u32 {
+        self.port
+    }
+}
+
 pub struct Host {
     services: Vec<Box<dyn Service>>,
     /// port id -> index into `services`
@@ -106,23 +129,64 @@ impl Host {
         args: &[&str],
         named: &[(&str, u64)],
     ) -> Outcome {
-        // THE SYSTEM PORT FIRST. A sandbox asks for a capability by sending on
-        // the port it was given at construction, and one that was given none
-        // cannot ask at all -- it is told so rather than parked, which is the
-        // honest failure (`ports-are-the-hosts`) and is exactly what a program requiring
-        // `flint.sys.fs` hit before this line existed:
+        // A CALL, NOT AN INVOCATION. This used to reach `Program::run_with`,
+        // which builds `[argv caps]` in the guest heap and invokes the image's
+        // entry directly -- the last direct host-to-sandbox call on this path.
+        // Ports are the only door now (`DECISIONS.md#bridges-are-the-only-door`),
+        // so the same pair is ENCODED and sent as an ordinary call, which is
+        // what the npm CLI has always done (`sdks/cli/src/cli.mjs`). One
+        // protocol, both front ends.
         //
-        //     SecurityException: this sandbox was given no system port,
-        //     so it cannot ask for "flint.sys.fs"
-        //
-        // Installed only when something is actually served. A program that was
-        // granted nothing keeps the honest refusal instead of being handed a
-        // transport that can reach nothing.
-        // UNCONDITIONALLY. See `ensure_system`: the port is the boundary, not a
-        // convenience that appears when something is served.
-        let _ = self.ensure_system(p);
-        let out = p.run_with(args, named);
-        self.pump(p, out)
+        // The caps travel as OPAQUE values carrying the ids this host chose
+        // (`DECISIONS.md#opaque-values`). Guest code cannot mint those ids --
+        // `flint/opaque` gives 0 -- so a host recognises its own and nothing
+        // else, and whether one MEANS a capability stays the host's business.
+        let pair = Val::Vector(vec![
+            Val::Vector(args.iter().map(|a| Val::Str((*a).to_string())).collect()),
+            Val::Map(
+                named
+                    .iter()
+                    .map(|(n, id)| {
+                        (
+                            Val::Keyword(None, (*n).to_string()),
+                            Val::Opaque(*id, (*n).to_string()),
+                        )
+                    })
+                    .collect(),
+            ),
+        ]);
+        let caller = match self.caller(p) {
+            Ok(c) => c,
+            Err(msg) => return Outcome { code: 1, out: msg },
+        };
+        match self.call(p, &caller, "flint.main/-main", &[pair]) {
+            Err(msg) => Outcome { code: 1, out: msg },
+            Ok(bytes) => match codec::parse(&bytes) {
+                Ok(Val::Str(text)) => Outcome { code: 0, out: text },
+                // REFUSED, not printed, and the two cases are told apart because
+                // they mean different things to whoever is reading. Kept word
+                // for word from `Program::run_with`, which this replaced: a
+                // program must not answer differently depending on which door
+                // it came through.
+                Ok(Val::Nil) => Outcome {
+                    code: 1,
+                    out: String::from(
+                        "flint: the entry function returned nil, not a string -- if the program \
+                         has top-level forms, initialisation may not have finished",
+                    ),
+                },
+                Ok(_) => Outcome {
+                    code: 1,
+                    out: String::from(
+                        "flint: the entry function did not return a string (no render shim?)",
+                    ),
+                },
+                Err(e) => Outcome {
+                    code: 1,
+                    out: format!("flint: the answer did not decode: {e:?}"),
+                },
+            },
+        }
     }
 
     /// This sandbox's system port, installing it if it has none.
@@ -147,6 +211,39 @@ impl Host {
         Ok(id)
     }
 
+    /// Bind a port and hand back the caller that owns it.
+    ///
+    /// ONE MESSAGE TO THE CONTROL PLANE: `{:op :bind :port p}`, which spawns a
+    /// thread serving calls on `p` (`DECISIONS.md#bridges-are-the-only-door`).
+    /// Control and calls are separate ports on purpose -- a call that parks
+    /// must not park `close` behind it.
+    ///
+    /// The bind CARRIES the port rather than installing it first. Installing it
+    /// first is a race: `drive` begins by reaping, so a port the host installed
+    /// but the guest has not referenced yet is collected before the bind that
+    /// would reference it is served, and the queued call goes with it.
+    pub fn caller(&mut self, p: &mut Program) -> Result<Caller, String> {
+        let sys = self.ensure_system(p)?;
+        let id = self.next_port;
+        self.next_port += 1;
+        let mut w = Wire::new();
+        w.map(2);
+        w.keyword(None, "op");
+        w.keyword(None, "bind");
+        w.keyword(None, "port");
+        w.port(id);
+        if !p.host_deliver(sys, w.as_bytes()) {
+            let _ = p.resume();
+            if !p.host_deliver(sys, w.as_bytes()) {
+                return Err(String::from("the system port would not take the bind"));
+            }
+        }
+        // NOT RESUMED HERE. A port queues, so the call can be delivered behind
+        // the bind and waits for the thread the bind creates; the caller's loop
+        // pumps until the answer, which serves both.
+        Ok(Caller { port: id })
+    }
+
     /// Call a NAMED function and pump until it answers.
     ///
     /// The other half of `run_with`. `run_with` invokes the image's entry;
@@ -168,9 +265,9 @@ impl Host {
     /// the property `sdks/rust` states as "from inside, a call is a port send
     /// and a park": the caller's own green thread is parked in a served
     /// request, and no driver thread is held waiting on a driver thread.
-    pub fn call_named(&mut self, p: &mut Program, name: &str, args: &[Val])
-                      -> Result<Vec<u8>, String> {
-        let sys = self.ensure_system(p)?;
+    pub fn call(&mut self, p: &mut Program, caller: &Caller, name: &str, args: &[Val])
+                -> Result<Vec<u8>, String> {
+        let calls = caller.port;
         self.next_tx += 1;
         let tx = self.next_tx;
         let mut w = Wire::new();
@@ -186,10 +283,10 @@ impl Host {
         for a in args {
             a.write(&mut w);
         }
-        if !p.host_deliver(sys, w.as_bytes()) {
+        if !p.host_deliver(calls, w.as_bytes()) {
             let _ = p.resume();
-            if !p.host_deliver(sys, w.as_bytes()) {
-                return Err(String::from("the system port would not take the call"));
+            if !p.host_deliver(calls, w.as_bytes()) {
+                return Err(String::from("the call port would not take the call"));
             }
         }
         let mut out = p.resume();
@@ -201,11 +298,11 @@ impl Host {
             }
             for ev in p.drain_events() {
                 // OUR ANSWER, or somebody else's request. A `:return` on the
-                // system port carrying our `:tx` is the reply; anything else on
-                // any port is an ordinary request and goes to `handle`, which
+                // BOUND CALL PORT carrying our `:tx` is the reply; anything else
+                // on any port is an ordinary request and goes to `handle`, which
                 // is what lets the called function park on a capability and be
                 // answered while this call is outstanding.
-                if ev.kind == EV_MESSAGE && ev.a == sys {
+                if ev.kind == EV_MESSAGE && ev.a == calls {
                     if let Some(r) = reply_for(tx, &ev.payload) {
                         return r;
                     }

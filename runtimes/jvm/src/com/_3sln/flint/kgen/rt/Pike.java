@@ -9,6 +9,7 @@ import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
+import static com._3sln.flint.kgen.rt.Byteat.*;
 
 public final class Pike {
     public static boolean wordCp(int v) {
@@ -32,5 +33,305 @@ public final class Pike {
             default:
                 return !spaceCp(v);
         }
+    }
+    /// IS THIS CODE POINT IN THIS CHARACTER CLASS?
+    /// 
+    /// A class is `[n, (kind, a, b) * n]` sitting at `off` inside the class
+    /// table, which itself sits at `class-base` inside the program. THE
+    /// PROGRAM IS PASSED WHOLE and indexed from a base, rather than sliced:
+    /// Rust slices for nothing and the other three cannot, so slicing here
+    /// would be one runtime's convenience written into a shape the rest have
+    /// to work around. Native did exactly that -- `&prog[PROG_HDR + ..]` --
+    /// and the ports carried a different signature for the same function.
+    /// 
+    /// `^:shared` on the program is the whole point of this file being
+    /// generatable at all. `Vec<u32>` is copied in Rust and `int[]` is shared
+    /// everywhere else; unmarked, one spelling would mean two things. Shared
+    /// and READ-ONLY, so Rust takes `&[u32]` and an index stays an index.
+    /// 
+    /// ANY KIND THAT IS NOT `CL_ONE` OR `CL_RANGE` IS A PREDICATE, matching
+    /// the `_ =>` and `default:` the three copies already had. A class table
+    /// is built by this runtime's own compiler, so an unknown kind is a bug
+    /// in the emitter rather than input to validate -- and treating it as a
+    /// predicate is what all three already did.
+    public static boolean classHit(int[] prog, int classBase, int off, int v) {
+        // INDICES ARE `Idx`, which is `usize` in Rust and `int` elsewhere.
+        // The count comes back out of the array as a WORD, so it is `I32`
+        // and the loop counter matches it; only the subscripts convert.
+        int base = classBase + off;
+        int n = prog[base];
+        int k;
+        k = 0;
+        while (k < n) {
+            int b = (base + 1) + (k * 3);
+            int kind = prog[b];
+            if (kind == 0) {
+                if (v == prog[b + 1]) {
+                    return true;
+                }
+            } else if (kind == 1) {
+                if ((v >= prog[b + 1]) && (v <= prog[b + 2])) {
+                    return true;
+                }
+            } else if (predHit(prog[b + 1], v)) {
+                return true;
+            }
+            k += 1;
+        }
+        return false;
+    }
+    /// DOES THE INSTRUCTION AT `pc` CONSUME THIS CODE POINT?
+    /// 
+    /// Asked once per live thread per character, which is why the shape of
+    /// the program matters here more than anywhere else in the engine: the
+    /// program is indexed, not sliced and not copied into a runtime buffer.
+    /// 
+    /// `.` DOES NOT MATCH A NEWLINE. Java's does not without DOTALL, and the
+    /// backtracker this engine replaced did -- so the divergence is closed in
+    /// the direction of the language being imitated, in one place now rather
+    /// than in three that could drift apart again.
+    /// 
+    /// ANYTHING THAT IS NOT A CONSUMING OPCODE ANSWERS FALSE. `split`, `jmp`,
+    /// `save` and `match` are control, and `add-thread` has already followed
+    /// them; reaching one here means the thread list holds a pc it should not,
+    /// which is a bug in this file and not input to validate.
+    public static boolean consumes(int[] prog, int codeBase, int classBase, int pc, int v) {
+        int b = codeBase + (pc * 3);
+        int op = prog[b];
+        if (op == 0) {
+            return v == prog[b + 1];
+        }
+        if (op == 1) {
+            return v != 10;
+        }
+        // OP-ANYNL: any code point INCLUDING a newline. Not the user's
+        // `.` -- this is the unanchored search prefix walking forward
+        // looking for a place to start, and a walk that stops at a
+        // newline cannot reach anything after one.
+        if (op == 11) {
+            return true;
+        }
+        if (op == 10) {
+            boolean hit = classHit(prog, classBase, prog[b + 1], v);
+            if (prog[b + 2] == 1) {
+                return !hit;
+            } else {
+                return hit;
+            }
+        }
+        return false;
+    }
+    /// ADD `pc` AND EVERYTHING REACHABLE FROM IT WITHOUT CONSUMING, once.
+    /// 
+    /// The other half of a Pike step. `consumes` says whether an instruction
+    /// eats a character; this follows every instruction that does NOT -- jumps,
+    /// splits, captures and the zero-width assertions -- and appends whatever
+    /// is left to the thread list. `seen` is what makes the whole engine linear
+    /// rather than exponential: a pc already added this step is not added
+    /// again, however many paths reach it.
+    /// 
+    /// FLAT BUFFERS, NOT A LIST OF OBJECTS. The three hand-written copies each
+    /// held a growable list of a `Thread` struct with its own slot vector, and
+    /// kin has neither structs nor growth. Both turn out to be unnecessary:
+    /// `seen` admits each pc AT MOST ONCE per character, so the list is bounded
+    /// by the instruction count and the count can simply be returned.
+    /// 
+    /// AND THAT SAME FACT PLACES THE CAPTURE SLOTS. `save` has to hand its
+    /// successor a MODIFIED COPY of the slots, which is where the per-thread
+    /// allocation came from. Because each pc is visited once, the copy for the
+    /// visit to `pc` can live at `scratch-at + pc * nslots` -- no bump pointer,
+    /// no second value to thread back, and one allocation for the whole step
+    /// instead of one per capture.
+    /// 
+    /// ONE ARENA AND OFFSETS, not several buffers. The thread rows, the scratch
+    /// blocks and the caller's own slots all live in `mem`, because a thread's
+    /// saved slots are READ from the same memory the new rows are WRITTEN to.
+    /// Two `^:shared` parameters aliasing one array is what Rust refuses and
+    /// the other three accept -- the precise divergence the mark exists to
+    /// prevent -- and passing them as separate buffers would have forced a copy
+    /// of every live thread's slots on every character to get around it. One
+    /// array and three offsets has neither problem.
+    public static int addThread(int[] prog, int codeBase, int[] cps, int cpsLen, int i, int[] mem, int listAt, int n, boolean[] seen, int pc, int scratchAt, int savedAt, int nslots) {
+        if (seen[pc]) {
+            return n;
+        }
+        seen[pc] = true;
+        int b = codeBase + (pc * 3);
+        int op = prog[b];
+        int a = prog[b + 1];
+        int c = prog[b + 2];
+        // JMP: follow it and nothing else.
+        if (op == 3) {
+            return addThread(prog, codeBase, cps, cpsLen, i, mem, listAt, n, seen, a, scratchAt, savedAt, nslots);
+        }
+        // SPLIT: `a` is PREFERRED, so it goes in first -- leftmost-first
+        // is decided by the ORDER threads enter the list and by nothing
+        // else downstream.
+        if (op == 2) {
+            int n1 = addThread(prog, codeBase, cps, cpsLen, i, mem, listAt, n, seen, a, scratchAt, savedAt, nslots);
+            return addThread(prog, codeBase, cps, cpsLen, i, mem, listAt, n1, seen, c, scratchAt, savedAt, nslots);
+        }
+        // SAVE: copy the slots, write this position into slot `a`, and
+        // hand the copy to the successor at its own scratch block.
+        if (op == 4) {
+            int dst = scratchAt + ((pc + 1) * nslots);
+            int k;
+            k = 0;
+            while (k < nslots) {
+                mem[(dst + k)] = mem[savedAt + k];
+                k += 1;
+            }
+            if (a < nslots) {
+                mem[(dst + a)] = i;
+            }
+            return addThread(prog, codeBase, cps, cpsLen, i, mem, listAt, n, seen, pc + 1, scratchAt, dst, nslots);
+        }
+        // BOL and EOL: zero-width, and true only at the ends.
+        if (op == 6) {
+            if (i == 0) {
+                return addThread(prog, codeBase, cps, cpsLen, i, mem, listAt, n, seen, pc + 1, scratchAt, savedAt, nslots);
+            }
+            return n;
+        }
+        if (op == 7) {
+            if (i == cpsLen) {
+                return addThread(prog, codeBase, cps, cpsLen, i, mem, listAt, n, seen, pc + 1, scratchAt, savedAt, nslots);
+            }
+            return n;
+        }
+        // WORD BOUNDARY, and its negation, from the same test: a boundary
+        // is where word-ness CHANGES. Out of range counts as non-word,
+        // which is what makes the ends of the subject boundaries.
+        if ((op == 8) || (op == 9)) {
+            boolean before = (i > 0) && wordCp(cps[i - 1]);
+            boolean after = (i < cpsLen) && wordCp(cps[i]);
+            boolean at = before != after;
+            if ((op == 8) == at) {
+                return addThread(prog, codeBase, cps, cpsLen, i, mem, listAt, n, seen, pc + 1, scratchAt, savedAt, nslots);
+            }
+            return n;
+        }
+        // ANYTHING ELSE CONSUMES, so the thread stops here and is
+        // recorded: `pc` then its slots, one flat row of `1 + nslots`.
+        int row = listAt + (n * (nslots + 1));
+        mem[row] = pc;
+        int k2;
+        k2 = 0;
+        while (k2 < nslots) {
+            mem[((row + 1) + k2)] = mem[savedAt + k2];
+            k2 += 1;
+        }
+        return n + 1;
+    }
+    /// THE SIMULATOR: run a compiled program over the code points, once.
+    /// 
+    /// Every thread advances in LOCKSTEP, one character at a time, which is
+    /// what bounds the work at O(subject x program) and is the whole reason
+    /// this engine replaced a backtracker. `add-thread` builds the next step's
+    /// list; this decides what feeds it.
+    /// 
+    /// LEFTMOST-FIRST IS DECIDED BY THE `break`. Threads are walked in priority
+    /// order, and a `match` records its slots and STOPS the walk -- every
+    /// lower-priority thread is dropped rather than carried into the next
+    /// step. That is what makes `a|ab` answer `a`. The outer loop still
+    /// continues, so a HIGHER-priority thread that has not matched yet can go
+    /// on to a longer match; only the ones that lost the race are cut.
+    /// 
+    /// `full` DEMANDS THE END. `re-matches` passes it, and then a `match` that
+    /// is not at the end is not an answer -- the thread simply stops being
+    /// interesting and the walk goes on, which is what lets a LOWER-priority
+    /// alternative win there. That is the one place the two entry points
+    /// differ in behaviour rather than in where they start.
+    /// 
+    /// THE MEMORY IS THE CALLER'S. `a-at` and `b-at` are the two thread lists,
+    /// swapped each step; `scratch-at` is where `add-thread` puts its capture
+    /// copies; `start-at` holds the initial all-unset slots; `best-at` receives
+    /// the answer. One array, because a thread's slots are read from the same
+    /// memory the next step's rows are written to -- see `add-thread`.
+    public static boolean runOver(int[] prog, int ninstrs, int nslots, int[] cps, int cpsLen, int from, int entry, boolean full, int[] mem, int aAt, int bAt, int scratchAt, int startAt, int bestAt, boolean[] seen) {
+        if (from > cpsLen) {
+            return false;
+        }
+        int codeBase = 3;
+        int classBase = 3 + (ninstrs * 3);
+        int width = nslots + 1;
+        // THE INITIAL SLOTS ARE ALL UNSET, and -1 is what unset means
+        // everywhere downstream -- `groups->result` reads it.
+        int z;
+        z = 0;
+        while (z < nslots) {
+            mem[(startAt + z)] = -1;
+            z += 1;
+        }
+        int q;
+        q = 0;
+        while (q < ninstrs) {
+            seen[q] = false;
+            q += 1;
+        }
+        int cur;
+        int nxt;
+        int n;
+        int i;
+        boolean matched;
+        cur = aAt;
+        nxt = bAt;
+        i = from;
+        matched = false;
+        n = addThread(prog, codeBase, cps, cpsLen, from, mem, cur, 0, seen, entry, scratchAt, startAt, nslots);
+        for (;;) {
+            if (n == 0) {
+                break;
+            }
+            // SEEN IS CLEARED PER CHARACTER, not per call: within one step
+            // every thread shares it, which is what stops one pc being
+            // added twice by two different predecessors.
+            int q2;
+            q2 = 0;
+            while (q2 < ninstrs) {
+                seen[q2] = false;
+                q2 += 1;
+            }
+            int m;
+            int k;
+            m = 0;
+            k = 0;
+            while (k < n) {
+                int row = cur + (k * width);
+                int pc = mem[row];
+                int op = prog[codeBase + (pc * 3)];
+                if (op == 5) {
+                    // A MATCH. Record it and cut the rest of the walk.
+                    if (!full || (i == cpsLen)) {
+                        int w;
+                        w = 0;
+                        while (w < nslots) {
+                            mem[(bestAt + w)] = mem[(row + 1) + w];
+                            w += 1;
+                        }
+                        matched = true;
+                        break;
+                    }
+                } else {
+                    if (i < cpsLen) {
+                        if (consumes(prog, codeBase, classBase, pc, cps[i])) {
+                            m = addThread(prog, codeBase, cps, cpsLen, i + 1, mem, nxt, m, seen, pc + 1, scratchAt, row + 1, nslots);
+                        }
+                    }
+                }
+                k += 1;
+            }
+            // SWAP, by exchanging the two offsets: the list just built
+            // becomes the one walked next.
+            int t = cur;
+            cur = nxt;
+            nxt = t;
+            n = m;
+            if (i >= cpsLen) {
+                break;
+            }
+            i += 1;
+        }
+        return matched;
     }
 }

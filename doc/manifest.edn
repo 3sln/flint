@@ -1015,6 +1015,7 @@
     channel
     close
     closed?
+    for-the-wire
     label
     open
     port-id
@@ -1024,11 +1025,17 @@
     state
     with-open},
   :macros #{with-open},
-  :count 12},
+  :count 13},
  flint.protocols
  {:file "lib/flint/protocols.cljc",
   :present
-  #{Printable
+  #{-meta
+    -wire-meta
+    -with-meta
+    Meta
+    Printable
+    WireMeta
+    WithMeta
     extend-method
     methods-of
     print-data
@@ -1036,7 +1043,7 @@
     printer-for
     protocol-miss},
   :macros #{},
-  :count 7},
+  :count 13},
  flint.protocols.io
  {:file "lib/flint/protocols/io.cljc",
   :present

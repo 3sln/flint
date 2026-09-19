@@ -6,6 +6,7 @@ import com._3sln.flint.kgen.rt.Mapwrite;
 
 import com._3sln.flint.kgen.rt.Mapread;
 
+import com._3sln.flint.kgen.rt.Mapconj;
 import com._3sln.flint.kgen.rt.Mapcore;
 import com._3sln.flint.kgen.rt.Maptrans;
 import com._3sln.flint.kgen.rt.Transients;
@@ -345,14 +346,11 @@ public final class Builtins {
                                                       rt.slotOrNth(e, 0),
                                                       rt.slotOrNth(e, 1)));
                     } else if (Mapcore.isMap(rt, e)) {
-                        int ei = rt.push(Seqwalk.seq(rt, e));
-                        while (!Val.isNil(rt.r(ei))) {
-                            long ent = Seqwalk.first(rt, rt.r(ei));
-                            rt.setR(ai, Mapwrite.mapAssoc(rt, rt.r(ai),
-                                                          rt.slotOrNth(ent, 0),
-                                                          rt.slotOrNth(ent, 1)));
-                            rt.setR(ei, Seqwalk.next(rt, rt.r(ei)));
-                        }
+                        // GENERATED (`kin/mapconj.kin`). The walk itself lived
+                        // here and in `coll.rs` in two different shapes -- this
+                        // one over `seq`, native's over a callback -- for one
+                        // operation. One source now.
+                        rt.setR(ai, Mapconj.mapConjMap(rt, rt.r(ai), e));
                     } else {
                         rt.popTo(base);
                         return rt.throwStr("IllegalArgumentException",
@@ -952,6 +950,258 @@ public final class Builtins {
         def("flint/b-tcount", (rt, at, n) -> Val.fixnum(Bytes.tcount(rt, rt.vat(at))));
         def("flint/b-persistent!", (rt, at, n) -> Bytes.persistent(rt, rt.vat(at)));
 
+        // --- the wire writer (`DECISIONS.md#the-codec-is-guest-code`) --------
+        //
+        // ONE PRIMITIVE PER SHAPE, not one `emit` taking a tag: a tag argument
+        // puts a dispatch in the hottest loop the language has, and it hides
+        // the dangerous primitive among the harmless ones. `wire-port` and
+        // `wire-opaque` have their own signatures and can be audited alone.
+        //
+        // Every one answers the WRITER, so a guest encoder reads as a chain.
+        // The Rust copies are in `units-src/flint-conc`; the bytes must match.
+        def("flint/wire-writer", (rt, at, n) -> Wire.writer(rt));
+        // IS THIS A WRITER? `kind` answers `:other` -- a writer is not a value
+        // and has no kind. But `port/send` has to tell a finished encoding from
+        // a value to be encoded, and asking is not a capability.
+        def("flint/wire-writer?", (rt, at, n) -> Val.bool(Wire.isWriter(rt, rt.vat(at))));
+        def("flint/wire-nil", (rt, at, n) -> wput(rt, rt.vat(at), Codec.K_NIL, "wire-nil"));
+        def("flint/wire-bool", (rt, at, n) -> {
+            long v = rt.vat(at + 1);
+            return wput(rt, rt.vat(at),
+                        (v == Val.FALSE || Val.isNil(v)) ? Codec.K_FALSE : Codec.K_TRUE,
+                        "wire-bool");
+        });
+        def("flint/wire-meta", (rt, at, n) -> wput(rt, rt.vat(at), Codec.K_WITH_META, "wire-meta"));
+        // A TAGGED LITERAL: the tag byte, then the tag symbol and the form as
+        // ordinary values. Bare like `wire-meta` -- both are wrappers.
+        def("flint/wire-tagged", (rt, at, n) -> wput(rt, rt.vat(at), Codec.K_TAGGED, "wire-tagged"));
+        // A TABLE: the column count, a name and a type per column, then the ROW
+        // count, then the cells. The count sits AFTER values, which is why the
+        // table needed the writer to track structure first -- a primitive that
+        // wrote four raw bytes wherever it was called would let a guest put
+        // them where a VALUE is due, and `0000000f` there is `K_PORT` and an id.
+        def("flint/wire-table", (rt, at, n) -> {
+            long w = wcheck(rt, rt.vat(at), "wire-table");
+            if (Val.isNil(w)) return Val.NIL;
+            long v = rt.vat(at + 1);
+            if (!Num.isInt(rt, v)) {
+                return rt.throwStr("ClassCastException", "wire-table wants a column count");
+            }
+            long c = Num.asI64(rt, v);
+            if (!countOk(rt, c, "wire-table")) return Val.NIL;
+            if (!Wire.openTable(rt, w, c)) {
+                return rt.throwStr("IllegalStateException",
+                    "wire-table: no value is due here -- the message is already complete, "
+                    + "or a count was expected");
+            }
+            return wdone(rt, w, Wire.put(rt, w, Codec.K_TABLE) && Wire.u32(rt, w, c), "wire-table");
+        });
+        def("flint/wire-table-rows", (rt, at, n) -> {
+            long w = wcheck(rt, rt.vat(at), "wire-table-rows");
+            if (Val.isNil(w)) return Val.NIL;
+            long v = rt.vat(at + 1);
+            if (!Num.isInt(rt, v)) {
+                return rt.throwStr("ClassCastException", "wire-table-rows wants a row count");
+            }
+            if (!countOk(rt, Num.asI64(rt, v), "wire-table-rows")) return Val.NIL;
+            if (!Wire.expectRowcount(rt, w, Num.asI64(rt, v))) {
+                return rt.throwStr("IllegalStateException",
+                    "wire-table-rows: no row count is due here -- a table's columns are "
+                    + "named and typed first");
+            }
+            return wdone(rt, w, Wire.u32(rt, w, Num.asI64(rt, v)), "wire-table-rows");
+        });
+
+        // --- the wire reader -------------------------------------------------
+        //
+        // NOT the writer's mirror image: integers and strings come out freely,
+        // because reading bytes a guest already holds tells it nothing new.
+        // Only `wire-port-in` and `wire-opaque-in` are guarded, and by a flag
+        // on the reader rather than by refusing tags.
+        def("flint/wire-reader", (rt, at, n) -> {
+            long b = rt.vat(at);
+            if (!Bytes.isBytes(rt, b)) {
+                return rt.throwStr("ClassCastException", "wire-reader wants a byte string");
+            }
+            // NEVER MINTING from here: a guest's own bytes are a guest's own.
+            return Wire.reader(rt, b, false);
+        });
+        def("flint/wire-tag", (rt, at, n) -> {
+            long r = rcheck(rt, rt.vat(at), "wire-tag");
+            if (Val.isNil(r)) return Val.NIL;
+            if (Wire.left(rt, r) == 0) return Val.NIL;
+            byte[] b = Wire.take(rt, r, 1);
+            return b == null ? rshort(rt, "wire-tag") : Val.fixnum(b[0] & 0xff);
+        });
+        def("flint/wire-left", (rt, at, n) -> {
+            long r = rcheck(rt, rt.vat(at), "wire-left");
+            return Val.isNil(r) ? Val.NIL : Val.fixnum(Wire.left(rt, r));
+        });
+        def("flint/wire-u32", (rt, at, n) -> {
+            long r = rcheck(rt, rt.vat(at), "wire-u32");
+            if (Val.isNil(r)) return Val.NIL;
+            byte[] b = Wire.take(rt, r, 4);
+            return b == null ? rshort(rt, "wire-u32") : Val.fixnum(Wire.u32of(b, 0));
+        });
+        def("flint/wire-i64", (rt, at, n) -> {
+            long r = rcheck(rt, rt.vat(at), "wire-i64");
+            if (Val.isNil(r)) return Val.NIL;
+            byte[] b = Wire.take(rt, r, 8);
+            return b == null ? rshort(rt, "wire-i64") : Num.integer(rt, Wire.u64of(b, 0));
+        });
+        def("flint/wire-f64", (rt, at, n) -> {
+            long r = rcheck(rt, rt.vat(at), "wire-f64");
+            if (Val.isNil(r)) return Val.NIL;
+            byte[] b = Wire.take(rt, r, 8);
+            return b == null ? rshort(rt, "wire-f64")
+                             : Val.ofDouble(Double.longBitsToDouble(Wire.u64of(b, 0)));
+        });
+        def("flint/wire-text", (rt, at, n) -> rtext(rt, rt.vat(at), "wire-text"));
+        def("flint/wire-ns", (rt, at, n) -> {
+            long r = rcheck(rt, rt.vat(at), "wire-ns");
+            if (Val.isNil(r)) return Val.NIL;
+            byte[] lb = Wire.take(rt, r, 4);
+            if (lb == null) return rshort(rt, "wire-ns");
+            long len = Wire.u32of(lb, 0);
+            // ABSENT is not empty: the sentinel is `ffffffff`, and a decoder
+            // reading it as a length would ask for four billion bytes.
+            //
+            // MASKED, because `Codec.NO_NS` is an `int` holding -1 and `u32of`
+            // answers an unsigned `long`: `4294967295L == -1` is false, so the
+            // sentinel went unrecognised, the length became -1 on the cast, and
+            // the read crashed with `5 > 4`. Caught by the conformance program
+            // on its first run across the ports, which is what it is for.
+            if (len == (Codec.NO_NS & 0xffffffffL)) return Val.NIL;
+            byte[] b = Wire.take(rt, r, (int) len);
+            return b == null ? rshort(rt, "wire-ns")
+                             : Str.of(rt, new String(b, java.nio.charset.StandardCharsets.UTF_8));
+        });
+        def("flint/wire-blob", (rt, at, n) -> {
+            long r = rcheck(rt, rt.vat(at), "wire-blob");
+            if (Val.isNil(r)) return Val.NIL;
+            byte[] lb = Wire.take(rt, r, 4);
+            if (lb == null) return rshort(rt, "wire-blob");
+            byte[] b = Wire.take(rt, r, (int) Wire.u32of(lb, 0));
+            return b == null ? rshort(rt, "wire-blob") : Bytes.of(rt, b);
+        });
+        // THE TWO THAT MINT.
+        def("flint/wire-port-in", (rt, at, n) -> {
+            long r = rcheck(rt, rt.vat(at), "wire-port-in");
+            if (Val.isNil(r)) return Val.NIL;
+            if (!Wire.mayMint(rt, r)) {
+                return rt.throwStr("SecurityException",
+                    "wire-port-in: this reader is over bytes the program supplied, and a port "
+                  + "cannot be made from bytes -- only bytes that arrived on a bridge carry one");
+            }
+            byte[] b = Wire.take(rt, r, 4);
+            if (b == null) return rshort(rt, "wire-port-in");
+            return Conc.installBridgePort2(rt, Wire.u32of(b, 0));
+        });
+        def("flint/wire-opaque-in", (rt, at, n) -> {
+            long r = rcheck(rt, rt.vat(at), "wire-opaque-in");
+            if (Val.isNil(r)) return Val.NIL;
+            if (!Wire.mayMint(rt, r)) {
+                return rt.throwStr("SecurityException",
+                    "wire-opaque-in: this reader is over bytes the program supplied, and an "
+                  + "opaque value cannot be made from bytes");
+            }
+            byte[] ib = Wire.take(rt, r, 8);
+            if (ib == null) return rshort(rt, "wire-opaque-in");
+            long id = Wire.u64of(ib, 0);
+            byte[] lb = Wire.take(rt, r, 4);
+            if (lb == null) return rshort(rt, "wire-opaque-in");
+            byte[] b = Wire.take(rt, r, (int) Wire.u32of(lb, 0));
+            if (b == null) return rshort(rt, "wire-opaque-in");
+            int base = rt.mark();
+            int li = rt.push(Str.of(rt, new String(b, java.nio.charset.StandardCharsets.UTF_8)));
+            long o = com._3sln.flint.kgen.rt.Opaque.newOpaque(rt, rt.r(li), id);
+            rt.popTo(base);
+            return o;
+        });
+        def("flint/wire-int", (rt, at, n) -> {
+            long w = wcheck(rt, rt.vat(at), "wire-int");
+            if (Val.isNil(w)) return Val.NIL;
+            long v = rt.vat(at + 1);
+            if (!Num.isInt(rt, v)) return rt.throwStr("ClassCastException", "wire-int wants an integer");
+            if (!wexpect(rt, w, 0, "wire-int")) return Val.NIL;
+            return wdone(rt, w, Wire.put(rt, w, Codec.K_INT) && Wire.u64(rt, w, Num.asI64(rt, v)), "wire-int");
+        });
+        def("flint/wire-double", (rt, at, n) -> {
+            long w = wcheck(rt, rt.vat(at), "wire-double");
+            if (Val.isNil(w)) return Val.NIL;
+            long v = rt.vat(at + 1);
+            if (!Num.isNumber(rt, v)) return rt.throwStr("ClassCastException", "wire-double wants a number");
+            long bits = Double.doubleToRawLongBits(Num.f64(rt, v));
+            if (!wexpect(rt, w, 0, "wire-double")) return Val.NIL;
+            return wdone(rt, w, Wire.put(rt, w, Codec.K_DOUBLE) && Wire.u64(rt, w, bits), "wire-double");
+        });
+        def("flint/wire-str", (rt, at, n) -> {
+            long w = wcheck(rt, rt.vat(at), "wire-str");
+            if (Val.isNil(w)) return Val.NIL;
+            long v = rt.vat(at + 1);
+            if (!Str.isString(rt, v)) return rt.throwStr("ClassCastException", "wire-str wants a string");
+            if (!wexpect(rt, w, 0, "wire-str")) return Val.NIL;
+            return wdone(rt, w, Wire.put(rt, w, Codec.K_STRING) && Wire.text(rt, w, Str.text(rt, v)), "wire-str");
+        });
+        def("flint/wire-bytes", (rt, at, n) -> {
+            long w = wcheck(rt, rt.vat(at), "wire-bytes");
+            if (Val.isNil(w)) return Val.NIL;
+            long v = rt.vat(at + 1);
+            if (!Bytes.isBytes(rt, v)) return rt.throwStr("ClassCastException", "wire-bytes wants a byte string");
+            byte[] b = Bytes.toArray(rt, v);
+            if (!wexpect(rt, w, 0, "wire-bytes")) return Val.NIL;
+            return wdone(rt, w, Wire.put(rt, w, Codec.K_BYTES) && Wire.u32(rt, w, b.length)
+                                && Wire.raw(rt, w, b), "wire-bytes");
+        });
+        def("flint/wire-kw", (rt, at, n) -> wnamed(rt, at, Codec.K_KEYWORD, "wire-kw"));
+        def("flint/wire-sym", (rt, at, n) -> wnamed(rt, at, Codec.K_SYMBOL, "wire-sym"));
+        def("flint/wire-vec", (rt, at, n) -> wcounted(rt, at, Codec.K_VECTOR, "wire-vec"));
+        def("flint/wire-list", (rt, at, n) -> wcounted(rt, at, Codec.K_LIST, "wire-list"));
+        def("flint/wire-set", (rt, at, n) -> wcounted(rt, at, Codec.K_SET, "wire-set"));
+        def("flint/wire-map", (rt, at, n) -> wcounted(rt, at, Codec.K_MAP, "wire-map"));
+        // THE TWO THAT MATTER. Both take a VALUE and read its identity
+        // themselves; a guest cannot pass an id, because flint is given no way
+        // to turn an integer into a port or an opaque. That is the whole safety
+        // rule, and it is why these are primitives rather than `wire-int` calls
+        // a guest could make for itself.
+        def("flint/wire-port", (rt, at, n) -> {
+            long w = wcheck(rt, rt.vat(at), "wire-port");
+            if (Val.isNil(w)) return Val.NIL;
+            long p = rt.vat(at + 1);
+            if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "wire-port wants a port");
+            // A CHANNEL END IS NOT WRITABLE. `checkSendable` runs on a VALUE and
+            // never sees an encoding, so the rule has to be restated where the
+            // bytes are made: a channel lives wholly in this heap and the host
+            // was never told it exists, so its id names one of our objects from
+            // OUTSIDE -- the integer-to-port conversion the design exists to
+            // prevent. A bridge id is the host's own and already means
+            // something over there, which is what makes delegation possible.
+            if (!Conc.crossesAHeap(Val.asFixnum(rt.slot(p, Conc.PT_KIND)))) {
+                return rt.throwStr("IllegalArgumentException",
+                    "wire-port: a channel endpoint cannot be sent to the host -- both its ends "
+                    + "live in this heap and the host has never been told it exists, so its "
+                    + "id would name one of our objects from outside. A bridge port can be, "
+                    + "because its id is the host's own.");
+            }
+            long id = Val.asFixnum(rt.slot(p, Conc.PT_ID));
+            if (!wexpect(rt, w, 0, "wire-port")) return Val.NIL;
+            return wdone(rt, w, Wire.put(rt, w, Codec.K_PORT) && Wire.u32(rt, w, id), "wire-port");
+        });
+        def("flint/wire-opaque", (rt, at, n) -> {
+            long w = wcheck(rt, rt.vat(at), "wire-opaque");
+            if (Val.isNil(w)) return Val.NIL;
+            long o = rt.vat(at + 1);
+            if (!com._3sln.flint.kgen.rt.Opaque.isOpaque(rt, o)) {
+                return rt.throwStr("ClassCastException", "wire-opaque wants an opaque value");
+            }
+            long id = com._3sln.flint.kgen.rt.Opaque.opaqueHostId(rt, o);
+            long lv = com._3sln.flint.kgen.rt.Opaque.opaqueLabel(rt, o);
+            String label = Str.isString(rt, lv) ? Str.text(rt, lv) : "";
+            if (!wexpect(rt, w, 0, "wire-opaque")) return Val.NIL;
+            return wdone(rt, w, Wire.put(rt, w, Codec.K_SENTINEL) && Wire.u64(rt, w, id)
+                                && Wire.text(rt, w, label), "wire-opaque");
+        });
+
         // --- regex ------------------------------------------------------------
         //
         // The PATTERN is compiled to a program by flint's own library, in
@@ -1028,40 +1278,53 @@ public final class Builtins {
             if (!Str.isString(rt, name)) {
                 return rt.throwStr("ClassCastException", "open wants a name (a string)");
             }
-            // EVERY REMAINING ARGUMENT IS FORWARDED, and the runtime takes no
-            // view of any of them. A capability is an opaque value like any
-            // other and travels as one; nothing here knows the word, which is
-            // the point (`DECISIONS.md#opaque-values`).
-            int base = rt.mark();
-            int ni = rt.push(name);
-            int vi = rt.push(Vec.empty(rt));
-            for (int i = 1; i < n; i++) {
-                rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.vat(at + i)));
+            // THE PAYLOAD ARRIVES ENCODED
+            // (`DECISIONS.md#the-codec-is-guest-code`). `flint.port/open`
+            // builds `[name ...args]` and writes it with `flint.wire`, so the
+            // runtime takes no view of the arguments -- and now does not even
+            // walk them. The NAME is still passed separately, because it is
+            // what the refusal message says.
+            long w = rt.vat(at + 1);
+            if (!Wire.isWriter(rt, w)) {
+                return rt.throwStr("ClassCastException",
+                    "open wants its arguments encoded -- call `flint.port/open`, "
+                    + "which does that");
             }
-            long nm = rt.r(ni), args = rt.r(vi);
-            rt.popTo(base);
-            return Conc.portOpen(rt, nm, args);
+            return Conc.portOpen(rt, name, w);
         });
         def("flint/request", (rt, at, n) -> {
             long what = rt.vat(at);
             if (!Str.isString(rt, what)) {
                 return rt.throwStr("ClassCastException", "request wants a name (a string)");
             }
-            // Identical to `open` above, and deliberately so: same forwarding,
-            // same no-view-of-the-arguments. What differs is what comes back
-            // (`DECISIONS.md#workspace-capabilities` step 7).
-            int base = rt.mark();
-            int ni = rt.push(what);
-            int vi = rt.push(Vec.empty(rt));
-            for (int i = 1; i < n; i++) {
-                rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.vat(at + i)));
+            // Identical to `open` above, and deliberately so: the payload
+            // arrives ENCODED and what comes back is a live READER over the
+            // host's answer, so the runtime neither writes nor reads the
+            // format (`DECISIONS.md#the-codec-is-guest-code`).
+            //
+            // ARITY IS CHECKED, not assumed: a one-argument call would read the
+            // slot after the arguments it was given.
+            if (n < 2) {
+                return rt.throwStr("IllegalArgumentException",
+                    "request wants a name and an encoding -- call `flint.host/request`");
             }
-            long nm = rt.r(ni), args = rt.r(vi);
-            rt.popTo(base);
-            return Conc.hostRequest(rt, nm, args);
+            long w = rt.vat(at + 1);
+            if (!Wire.isWriter(rt, w)) {
+                return rt.throwStr("ClassCastException",
+                    "request wants its arguments encoded -- call `flint.host/request`, "
+                    + "which does that");
+            }
+            return Conc.hostRequest(rt, what, w);
         });
         def("flint/port-send", (rt, at, n) -> Conc.send(rt, rt.vat(at), rt.vat(at + 1)));
         def("flint/port-receive", (rt, at, n) -> Conc.receive(rt, rt.vat(at)));
+        def("flint/port-receive-reader", (rt, at, n) -> {
+            long p = rt.vat(at);
+            if (!Conc.isPort(rt, p)) {
+                return rt.throwStr("ClassCastException", "port-receive-reader wants a port");
+            }
+            return Conc.receiveReader(rt, p);
+        });
         def("flint/port-close", (rt, at, n) -> Conc.close(rt, rt.vat(at)));
         def("flint/port?", (rt, at, n) -> Val.bool(Conc.isPort(rt, rt.vat(at))));
         def("flint/port-id", (rt, at, n) -> {
@@ -1069,6 +1332,17 @@ public final class Builtins {
             if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-id wants a port");
             return rt.slot(p, Conc.PT_ID);
         });
+        /// This sandbox's system port, or nil if it was given none.
+        ///
+        /// It exists because the control plane has to be a THUNK. Bootstrap
+        /// spawns `flint.system/boot` by taking its var's value and spawning
+        /// it, and a green thread takes no arguments -- so the port cannot be
+        /// passed in and has to be fetched. The alternative was the runtime
+        /// calling a flint function to build a closure over the port, which
+        /// re-enters `drive` from inside `drive`: measured on the native
+        /// runtime, and the nested scheduler is what made the first version
+        /// silently never start (`DECISIONS.md#bridges-are-the-only-door`).
+        def("flint/system-port", (rt, at, n) -> Conc.systemPort(rt));
         def("flint/port-label", (rt, at, n) -> {
             long p = rt.vat(at);
             if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-label wants a port");
@@ -1317,5 +1591,128 @@ public final class Builtins {
             if (!(c == want || (orEqual && c == 0))) return Val.FALSE;
         }
         return Val.TRUE;
+    }
+
+    // --- wire writer helpers ------------------------------------------------
+
+    /// The writer, or nil after throwing. One shape for sixteen refusals.
+    /// Refuse a value the format does not allow here. The writer knows where it
+    /// is and does not take the guest's word for it.
+    static boolean wexpect(Rt rt, long w, long opens, String what) {
+        if (Wire.expectValue(rt, w, opens)) return true;
+        rt.throwStr("IllegalStateException",
+            what + ": no value is due here -- the message is already complete, or a "
+                 + "count was expected");
+        return false;
+    }
+
+    static long wcheck(Rt rt, long w, String what) {
+        if (Wire.isWriter(rt, w)) return w;
+        rt.throwStr("ClassCastException", what + " wants a wire writer");
+        return Val.NIL;
+    }
+
+    /// Answer the writer, or throw when it was already finished: appending
+    /// after that would grow bytes somebody has sent.
+    static long wdone(Rt rt, long w, boolean ok, String what) {
+        if (ok) return w;
+        return rt.throwStr("IllegalStateException", what + ": this writer has already been finished");
+    }
+
+    static long wput(Rt rt, long w, int tag, String what) {
+        long c = wcheck(rt, w, what);
+        if (Val.isNil(c)) return Val.NIL;
+        long opens = (tag == Codec.K_WITH_META || tag == Codec.K_TAGGED) ? 2 : 0;
+        if (!wexpect(rt, c, opens, what)) return Val.NIL;
+        return wdone(rt, c, Wire.put(rt, c, tag), what);
+    }
+
+    /// A keyword or symbol: the namespace (ABSENT is not empty -- that is what
+    /// separates `:kw` from `:/kw`), then the name.
+    static long wnamed(Rt rt, int at, int tag, String what) {
+        long w = wcheck(rt, rt.vat(at), what);
+        if (Val.isNil(w)) return Val.NIL;
+        long ns = rt.vat(at + 1), name = rt.vat(at + 2);
+        if (!Str.isString(rt, name)) {
+            return rt.throwStr("ClassCastException", what + " wants a name string");
+        }
+        if (!wexpect(rt, w, 0, what)) return Val.NIL;
+        boolean ok = Wire.put(rt, w, tag);
+        if (Val.isNil(ns)) {
+            ok = ok && Wire.u32(rt, w, Codec.NO_NS);
+        } else {
+            if (!Str.isString(rt, ns)) {
+                return rt.throwStr("ClassCastException", what + " wants a namespace string or nil");
+            }
+            ok = ok && Wire.text(rt, w, Str.text(rt, ns));
+        }
+        ok = ok && Wire.text(rt, w, Str.text(rt, name));
+        return wdone(rt, w, ok, what);
+    }
+
+    /// A counted opening: the tag, then how many values follow. COUNTS, NOT
+    /// BRACKETS, because that is what the format already says.
+    /// A COUNT THE FORMAT CAN ACTUALLY WRITE, or false having thrown.
+    ///
+    /// Every count in the encoding is four little-endian bytes, so one past
+    /// `u32` wrote a truncated count and opened an untruncated frame -- the
+    /// bytes and the writer's own idea of the message disagreeing, which is
+    /// what the frames exist to prevent.
+    ///
+    /// It was also the hole. A fixnum is 48 bits, sign-extended, so a frame of
+    /// `2^47 + 1` reads back NEGATIVE, and negative means "a count is due" --
+    /// the table's marker. `(wire-vec (+ 2^47 1))` wrote `1` to the wire and
+    /// left the writer willing to take a raw four-byte count where the reader
+    /// expects a value: `0f 00 00 00` is `K_PORT` and the start of an id.
+    static boolean countOk(Rt rt, long c, String what) {
+        if (c < 0) {
+            rt.throwStr("IllegalArgumentException", what + ": a count cannot be negative");
+            return false;
+        }
+        if (c > Codec.MAX_COUNT) {
+            rt.throwStr("IllegalArgumentException",
+                what + ": a count of " + c + " cannot be written -- the format writes a "
+                + "count as four bytes, so the largest is " + Codec.MAX_COUNT);
+            return false;
+        }
+        return true;
+    }
+
+    static long wcounted(Rt rt, int at, int tag, String what) {
+        long w = wcheck(rt, rt.vat(at), what);
+        if (Val.isNil(w)) return Val.NIL;
+        long v = rt.vat(at + 1);
+        if (!Num.isInt(rt, v)) return rt.throwStr("ClassCastException", what + " wants a count");
+        long c = Num.asI64(rt, v);
+        if (!countOk(rt, c, what)) return Val.NIL;
+        // A MAP OPENS TWICE ITS COUNT: `n` pairs are `2n` values, and counting
+        // them as `n` would call the message complete half way through.
+        long opens = (tag == Codec.K_MAP) ? c * 2 : c;
+        if (!wexpect(rt, w, opens, what)) return Val.NIL;
+        return wdone(rt, w, Wire.put(rt, w, tag) && Wire.u32(rt, w, c), what);
+    }
+
+    // --- wire reader helpers ------------------------------------------------
+
+    static long rcheck(Rt rt, long r, String what) {
+        if (Wire.isReader(rt, r)) return r;
+        rt.throwStr("ClassCastException", what + " wants a wire reader");
+        return Val.NIL;
+    }
+
+    /// Past the end is a THROW, not a nil: a decoder that read a truncated
+    /// message as a short one would build a value nobody sent.
+    static long rshort(Rt rt, String what) {
+        return rt.throwStr("IllegalArgumentException", what + ": the encoding ends early");
+    }
+
+    static long rtext(Rt rt, long r0, String what) {
+        long r = rcheck(rt, r0, what);
+        if (Val.isNil(r)) return Val.NIL;
+        byte[] lb = Wire.take(rt, r, 4);
+        if (lb == null) return rshort(rt, what);
+        byte[] b = Wire.take(rt, r, (int) Wire.u32of(lb, 0));
+        if (b == null) return rshort(rt, what);
+        return Str.of(rt, new String(b, java.nio.charset.StandardCharsets.UTF_8));
     }
 }

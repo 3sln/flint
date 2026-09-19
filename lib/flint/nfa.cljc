@@ -30,6 +30,16 @@
 (def OP-WORDB 8)
 (def OP-NWORDB 9)
 (def OP-CLASS 10) ; a = offset into the class table, b = 1 when negated
+;; ANY code point INCLUDING a newline, and it exists only for the unanchored
+;; search prefix below.
+;;
+;; `OP-ANY` is the user's `.`, which excludes a newline because Java's does
+;; without DOTALL. The search prefix is not the user's `.`: it is how the
+;; simulator walks forward looking for a place to start, and a walk that
+;; refuses to step over a newline cannot reach anything after one. Sharing the
+;; opcode made `(re-find #"b" "a\nb")` answer nil -- and every other pattern
+;; against every subject containing a newline.
+(def OP-ANYNL 11)
 
 ;; --- class table items -----------------------------------------------------
 (def CL-ONE 0)    ; x = code point
@@ -157,7 +167,10 @@
     ;; Both programs are one program: enter at 0 to search, at `ENTRY-ANCHORED`
     ;; to match exactly here. Emitting two would be two things to keep in step.
     (emit! st OP-SPLIT ENTRY-ANCHORED 1)
-    (emit! st OP-ANY 0 0)
+    ;; `OP-ANYNL`, NOT `OP-ANY`: this is the search walking forward, not the
+    ;; user's `.`. See the opcode's note -- with `OP-ANY` here no subject
+    ;; containing a newline could match anything after it.
+    (emit! st OP-ANYNL 0 0)
     (emit! st OP-JMP 0 0)
     (emit! st OP-SAVE 0 0)
     (c-node st ast)

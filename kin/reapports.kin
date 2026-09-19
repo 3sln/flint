@@ -1,0 +1,109 @@
+;; What a COLLECTION means for a port, written once.
+;;
+;; The handle a script holds is ordinary memory and is not rooted, so the
+;; collector finding it unreachable IS this sandbox letting the port go. This
+;; function is where that is noticed, and it was written three times.
+;;
+;; IT REBUILDS NOTHING UNLESS SOMETHING DIED, and that is the whole of why it
+;; is worth generating rather than leaving alone. The earlier shape allocated a
+;; fresh vector and conj'd every SURVIVING id into it on every drive iteration,
+;; for both lists, then stored it back -- an identical list, rebuilt, whenever
+;; nothing had been collected. Allocation is billed, so the scheduler's own
+;; bookkeeping was charged to the program: ~42 of the ~47 steps a resume cost,
+;; which was the whole of `conform-hosts`'s gas row and of `test/aot.clj`'s
+;; `colls` row (`DECISIONS.md#resource-limits`). The jvm and clr did the same
+;; wasted work and were not billed for it, because their not-counting sentinel
+;; is `checkpoint == 0` where the native runtime's is `u64::MAX` -- so the
+;; waste was invisible on two runtimes out of three and expensive on the
+;; third. One definition removes both halves of that.
+(ns flint.rt.reapports
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != not and or for continue
+                                   local set nil? as-fixnum fixnum64
+                                   mark push r pop-to set-r
+                                   slot set-slot sched empty-vec
+                                   Rt Value I32 I64 Bool NIL RootIx
+                                   SC_BRIDGES SC_PORTS PT_STATE
+                                   P_CLOSED P_ORPHANED EV_CLOSED EV_RELEASE
+                                   port-by-id push-event wake-on
+                                   peer-id-of-dead fail-waiters-unreachable]]
+            [flint.rt.vecread :refer [vec-count vec-nth]]
+            [flint.rt.vecwrite :refer [vec-conj]]))
+
+(doc "Has any id in this list lost its port? A scan allocates nothing, which is"
+     "the point: the rebuild below is the expensive part and is almost never"
+     "owed.")
+(defn ^:pub ^:method ^Bool any-collected [^:mut ^Rt rt ^Value ids]
+  (let [^I32 n (vec-count rt ids)]
+    (local ^:mut ^Bool gone)
+    (set gone false)
+    (for [^I32 k 0 n]
+      (if (nil? rt (port-by-id rt (as-fixnum (vec-nth rt ids k NIL))))
+        (set gone true)))
+    (return gone)))
+
+(doc "A bridge end the collector took: the host hears the same pair it would"
+     "have heard from an explicit close -- this sandbox is finished with the"
+     "port, and it has let go of its reference. One `EV_RELEASE` per"
+     "`EV_RETAIN`, which is what makes the host's count a count of holders"
+     "rather than of arrivals.")
+(defn ^:pub ^:method reap-bridges [^:mut ^Rt rt ^RootIx si]
+  (let [^RootIx bi (push rt (slot rt (r rt si) SC_BRIDGES))]
+    (if (not (any-collected rt (r rt bi)))
+      (return))
+    (let [^I32 bn (vec-count rt (r rt bi))
+          ^RootIx hi (push rt (empty-vec rt))]
+      (for [^I32 k 0 bn]
+        (let [^I64 id (as-fixnum (vec-nth rt (r rt bi) k NIL))]
+          (if (nil? rt (port-by-id rt id))
+            (do (push-event rt EV_CLOSED id 0 NIL)
+                (push-event rt EV_RELEASE id 0 NIL)
+                (continue)))
+          (comment "HOISTED, because Rust will not take two mutable borrows of"
+                   "`rt` in one expression -- the conj has to land in a local"
+                   "before `set-r` is handed it.")
+          (let [^Value nh (vec-conj rt (r rt hi) (fixnum64 id))]
+            (set-r rt hi nh))))
+      (set-slot rt (r rt si) SC_BRIDGES (r rt hi)))))
+
+(doc "A channel end the collector took ORPHANS its peer, which is not the same"
+     "as a tidy close and must not read like one. Anyone parked on the peer is"
+     "failed rather than left waiting for something that can never arrive.")
+(defn ^:pub ^:method reap-channels [^:mut ^Rt rt ^RootIx si]
+  (let [^RootIx ii (push rt (slot rt (r rt si) SC_PORTS))]
+    (if (not (any-collected rt (r rt ii)))
+      (return))
+    (let [^I32 n (vec-count rt (r rt ii))
+          ^RootIx li (push rt (empty-vec rt))]
+      (for [^I32 k 0 n]
+        (let [^I64 id (as-fixnum (vec-nth rt (r rt ii) k NIL))]
+          (if (not (nil? rt (port-by-id rt id)))
+            (do (let [^Value nl (vec-conj rt (r rt li) (fixnum64 id))]
+                  (set-r rt li nl))
+                (continue)))
+          (comment "This end has been collected. Tell whoever is affected --"
+                   "and the object is gone, so the pairing is looked up by id.")
+          (let [^I64 pid (peer-id-of-dead rt id)
+                ^Value peer (port-by-id rt pid)]
+            (if (nil? rt peer)
+              (continue))
+            (let [^RootIx pi (push rt peer)
+                  ^I64 pst (as-fixnum (slot rt (r rt pi) PT_STATE))]
+              (if (and (!= pst P_CLOSED) (!= pst P_ORPHANED))
+                (set-slot rt (r rt pi) PT_STATE (fixnum64 P_ORPHANED)))
+              (fail-waiters-unreachable rt (r rt pi))
+              (wake-on rt (r rt pi))
+              (pop-to rt pi)))))
+      (set-slot rt (r rt si) SC_PORTS (r rt li)))))
+
+(doc "Both lists, under one mark. A collection is a RELEASE for a bridge and an"
+     "ORPHANING for a channel, and neither is noticed anywhere else.")
+(defn ^:pub ^:method reap-all [^:mut ^Rt rt]
+  (let [^Value s (sched rt)]
+    (if (nil? rt s)
+      (return))
+    (let [^RootIx base (mark rt)
+          ^RootIx si (push rt s)]
+      (reap-bridges rt si)
+      (reap-channels rt si)
+      (pop-to rt base))))

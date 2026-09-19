@@ -5,7 +5,54 @@ set -e
 # would hide a failing test behind a successful `tail`. Every `bb` step below
 # therefore checks its own result.
 cd "$(dirname "$0")/.."
-fail() { echo; echo "FAILED: $1"; exit 1; }
+# HOW MANY SECTIONS THIS FILE HAS, counted from itself. A truncated run and a
+# complete one look identical in a log otherwise -- and one has been happening
+# for as long as `test/aot.clj` has been red: `fail` exits, so every section
+# after the failing one never runs. Twenty-two of sixty-two, reported as
+# "22 sections, 1 known failure", which reads like a baseline and is not one.
+_sec_total=$(grep -c '^sec "' "$0")
+_sec_n=0
+
+_failures=0
+_failed_names=""
+
+fail() {
+  echo
+  echo "FAILED: $1"
+  _failures=$((_failures + 1))
+  _failed_names="$_failed_names
+  $1"
+  # KEEP GOING, WHEN ASKED. Opt-in and off by default, because whether a suite
+  # stops at the first failure is a policy and not an agent's to change.
+  #
+  # What it is FOR: with `test/aot.clj` red, forty of sixty-two sections have
+  # never run, and the only probe that got past it found a second failure
+  # nobody knew about. A red suite that cannot be finished cannot be surveyed.
+  #
+  # `return 0` and not `return 1`, and the difference matters: `set -e` is on
+  # and every caller is `cmd || { ...; fail "x"; }`, so a non-zero return makes
+  # the `||` list fail and the shell exits anyway -- which is the thing this is
+  # trying not to do.
+  #
+  # THE CALLER'S CLEANUP STILL RUNS. Every `fail` that matters is preceded in
+  # its own `{ }` by the tidy-up it needs -- `./bin/build-units` after the AOT
+  # sections, putting the production units back. A first attempt at this
+  # removed that cleanup instead of the exit, and the next section then ran
+  # against the wrong units and reported a failure that was not real.
+  if [ -n "${FLINT_TEST_KEEP_GOING:-}" ]; then
+    echo "  (FLINT_TEST_KEEP_GOING: this section is RED and the run continues)"
+    return 0
+  fi
+  # WHAT THE FAILURE COST, not just that it happened. Everything below the
+  # failing section is unrun, and saying so is the difference between "one red
+  # row" and "two thirds of the gate did not execute".
+  if [ "$_sec_n" -lt "$_sec_total" ]; then
+    echo "  and the run STOPPED THERE: $_sec_n of $_sec_total sections ran,"
+    echo "  so $((_sec_total - _sec_n)) never executed. A green-looking tail is absent, not passing."
+    echo "  FLINT_TEST_KEEP_GOING=1 runs the rest and reports every red at the end."
+  fi
+  exit 1
+}
 
 # SECTION TIMING, because the 26 minutes this takes has never had an
 # itemisation and the remedy depends entirely on the shape of it: a handful of
@@ -27,6 +74,7 @@ sec() {
   [ -n "$_sec_name" ] && echo "$((_now - _sec_at)) $_sec_name" >> "$FLINT_TIMES"
   _sec_at=$_now
   _sec_name="$1"
+  _sec_n=$((_sec_n + 1))
   echo "== $1"
 }
 times_summary() {
@@ -38,6 +86,13 @@ times_summary() {
     printf '  %5ss  %s\n' "$secs" "$name"
   done
   printf '  %5ss  TOTAL\n' "$(awk '{t+=$1} END {print t}' "$FLINT_TIMES")"
+  echo
+  echo "  $_sec_n of $_sec_total sections ran"
+  if [ "$_failures" -gt 0 ]; then
+    echo
+    echo "  $_failures section(s) RED:$_failed_names"
+    exit 1
+  fi
 }
 
 # CARGO'S EXIT STATUS, not a grep for the word FAILED.
@@ -223,7 +278,10 @@ tail -3 /tmp/flint-test.out
 sec "aot: the same answer AND the same instruction count as the interpreter"
 # Its own build, like diagnostics: a production runtime cannot run compiled
 # arities and does not carry the machinery that would (DECISIONS.md#emit-wasm-instead-of-dispatch, 0016).
-./bin/build-units --aot > /dev/null || fail "build-units --aot"
+# `--diagnostics` TOO, because the row below is no longer a bare equality: it
+# accounts for the preemptions compiled code did not take, and `stat_region`
+# is how the preemption count is read (`DECISIONS.md#emit-wasm-instead-of-dispatch`).
+./bin/build-units --aot --diagnostics > /dev/null || fail "build-units --aot --diagnostics"
 bb test/aot.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; ./bin/build-units > /dev/null; fail "test/aot.clj"; }
 grep -E "^    |FAIL" /tmp/flint-test.out || true
 
@@ -235,6 +293,23 @@ grep -E "^    |FAIL" /tmp/flint-test.out || true
 # variable is the one being tested.
 echo
 sec "aot: the language suite answers the same with compiled arities"
+# ITS OWN UNITS, like every other section that needs a particular build.
+#
+# This used to inherit the `--aot` units from the section above, and that is a
+# dependency on a previous section's SIDE EFFECT. It broke under
+# `FLINT_TEST_KEEP_GOING`: when `test/aot.clj` fails -- which it does, on the
+# known `colls` instruction-count gap -- its failure path restores PRODUCTION
+# units on the way out, the run continues, and this section then asks a
+# production runtime to run compiled arities. It answers
+#
+#     this runtime cannot run compiled arities: build the units with
+#     `bin/build-units --aot`
+#
+# in one line, and the diff below reports 131 lines of suite output replaced by
+# that one, which reads exactly like the language suite disagreeing with itself.
+# It does not: built against its own units the two runs are byte for byte
+# identical, 129/129. Two RED sections in the survey, neither of them real.
+./bin/build-units --aot > /dev/null || fail "build-units --aot (for the suite diff)"
 ./bin/flint test :src test/common > /tmp/flint-common-i.out 2>&1 \
   || { cat /tmp/flint-common-i.out; ./bin/build-units > /dev/null; fail "test/common (interpreted, under aot units)"; }
 ./bin/flint test :src test/common --aot > /tmp/flint-common-a.out 2>&1 \
@@ -348,8 +423,25 @@ grep -E "^  (vec|noshare|hash-bigvec|set-member) " /tmp/flint-equiv.out | sed 's
 # the TOTAL would scale.
 #
 # Measured either side of that change, same units, same build: total
-# allocations are 2 832 at 1 226 ops and 1 784 at 256 -- bounded, and sublinear
+# allocations were 2 832 at 1 226 ops and 1 784 at 256 -- bounded, and sublinear
 # in the work. A genuine per-element regression would be tens of thousands.
+#
+# RE-BASELINED once calls started going through the control plane
+# (`DECISIONS.md#bridges-are-the-only-door`). A call is now several frames
+# deeper -- `serve-calls` then `answer` then `apply` then the function -- and
+# the saved value stack grows with depth, so the per-call figure roughly
+# doubled. It is the same COST, not a new one, and it is still not per element:
+# measured at three sizes on the current build, totals are
+#
+#     n=500   vec 6 891   hash-bigvec 7 465
+#     n=2000  vec 4 436   hash-bigvec 6 649
+#     n=8000  vec 3 277   hash-bigvec 3 256
+#
+# -- FALLING as the elements per operation rise, which is the shape that says
+# the cost belongs to the call and not to the elements. The bound below is set
+# to catch an order of magnitude, which is what a per-element regression is,
+# and not to pin the call's own cost; `DECISIONS.md#calls-are-ports` is where
+# that cost is argued, and `test/threads.clj` is what holds it.
 awk '/^  (vec|noshare|hash-bigvec|set-member) /{
        a = $9 + 0; if (a < 0) a = -a;
        # OPS IS $4, and it carries thousands separators -- `1,208` reads as 1
@@ -359,7 +451,7 @@ awk '/^  (vec|noshare|hash-bigvec|set-member) /{
        ops = $4; gsub(/,/, "", ops); ops += 0;
        total = a * ops;
        if (ops <= 0) { print "  FAIL " $1 " reported no operation count"; bad = 1 }
-       else if (total >= 6000) {
+       else if (total >= 15000) {
          print "  FAIL " $1 " allocated " total " in total (" $9 "/op over " ops " ops)"; bad = 1 }
        else seen++ }
      END{ if (bad) exit 1;
@@ -373,6 +465,18 @@ sec "distributable: the compiler and loader, driven by the SDK alone"
 # Rebuilt every run, because the artifacts are generated and a stale one that
 # still passes is the failure this section exists to catch.
 ./bin/build-dist > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "bin/build-dist"; }
+# AND THE CLI AGAIN, because `build-dist` just regenerated the compiler the CLI
+# CARRIES: `dist/flintc.bytecode` is `include_bytes!`d into the binary, so the
+# copy built at the top of this file is one step behind the moment anything
+# under `src/` changes.
+#
+# It is the byte-identical row below that this is for. That row compares the
+# native CLI's output against the npm CLI's, and both run the self-hosted
+# compiler -- so a stale embedding makes them disagree by a few hundred bytes
+# and reports a DIVERGENCE BETWEEN FRONT ENDS that does not exist. Measured: a
+# constant 893 bytes on every arm, which is exactly the shape of a real one.
+cargo build --release -p flint-cli > /tmp/flint-test.out 2>&1 \
+  || { tail -20 /tmp/flint-test.out; fail "cargo build --release -p flint-cli (after build-dist)"; }
 # The SDK is a separate package with its own build (`sdks/`), and what is
 # tested is the DISTRIBUTABLE: one portable ESM with the artifacts inside it.
 ./sdks/esm/build > /tmp/flint-test.out 2>&1 || { tail -25 /tmp/flint-test.out; fail "sdks/esm/build"; }

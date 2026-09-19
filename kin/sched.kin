@@ -1,0 +1,604 @@
+;; THE SCHEDULER'S DECISION PREDICATES, written once.
+;;
+;; `pick`, `pending-events` and `needs-host` are what `drive` consults to
+;; decide what runs and whether the program is over. All three runtimes wrote
+;; them separately, and the divergences were already there when this file was
+;; written: the JVM's `pendingEvents` guards a nil scheduler and native's does
+;; not, which is either a missing guard on one side or a dead branch on the
+;; other, and nothing could say which while there were three answers.
+;;
+;; THIS IS WHERE THE BUGS WERE. In one session the three `Conc`s disagreed
+;; about the order `drive` asks these questions in -- native had been changed
+;; because asking "has the entry finished?" first closed the system port under
+;; a call that had just parked on an `open`, and both ports still carried the
+;; superseded order AND its comment
+;; (`DECISIONS.md#the-codec-is-guest-code`). A predicate written three times is
+;; three chances to answer differently; `drive` itself follows once the
+;; `main`-versus-settled question these three feed is converged.
+(ns flint.rt.sched
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != < > >= <= not and or
+                                   + - rem to-i64 local set while forever continue
+                                   nil? as-fixnum to-i32 to-i64 fixnum64
+                                   bit-and bit-or shl ushr64 set-slot
+                                   new-obj current-thread RootIx TY_NODE
+                                   set-park-on set-thrown PARK
+                                   W_KIND W_LEN
+                                   boot-system-thread-once reap-ports run-one
+                                   close-all-bridges set-status settled-answer
+                                   report-deadlock gate-escaped? TH_RESULT
+                                   slot sched is-port crosses-a-heap
+                                   mark push r pop-to fixnum
+                                   install-bindings begin-slice reset-exec-state
+                                   run-entry restore-state vm-run set-thrown
+                                   unwind-to-handler settle
+                                   RootIx TH_BINDINGS TH_ENTRY TH_STACK TH_FAIL
+                                   SC_WAITERS SC_WFREE
+                                   W_GEN W_THREAD W_PORT W_NEXT TH_TOKEN
+                                   Rt Value I32 I64 Bool NIL NOT_FOUND
+                                   SC_THREADS SC_CURRENT SC_EVENTS SC_EHEAD
+                                   TH_STATUS TH_PARK_ON PT_KIND
+                                   ST_NEW ST_RUNNABLE ST_PARKED
+                                   ST_DONE ST_FAILED]]
+            [flint.rt.vecread :refer [vec-count vec-nth]]
+            [flint.rt.vecwrite :refer [vec-conj]]))
+
+(doc "The next thread to run, ROUND-ROBIN from just after the current one."
+     ""
+     "DETERMINISTIC by construction: no randomness, no clock, no dependence on"
+     "the order a host did anything. That is what lets three runtimes agree on"
+     "an INTERLEAVING and not merely on an answer, which `green.cljc` asserts."
+     ""
+     "`-1` MEANS NONE, and the return is `I64` for that reason alone: `I32` is"
+     "unsigned, so the obvious sentinel is not available in it."
+     ""
+     "The first version answered the THREAD COUNT instead -- the width-means-"
+     "absent idiom `tableref.kin` uses -- and that was wrong HERE for a reason"
+     "the idiom does not have elsewhere: a caller cannot test it without"
+     "knowing `n`, so every wrapper re-derived the scheduler, its thread"
+     "vector and its count purely to read the answer, on a path taken once"
+     "per `drive` iteration. A sentinel the caller can test on its own costs"
+     "one comparison instead."
+     ""
+     "NOT a per-target constant either: `u32::MAX` against `-1` is the same"
+     "thirty-two bits read two ways, which is exactly the agreeing-by-luck"
+     "`tableref.kin` warns about. Signed, one value, all three.")
+(defn ^:pub ^:method ^I64 sched-pick [^:mut ^Rt rt]
+  (let [^Value s (sched rt)]
+    (if (nil? rt s)
+      (return (- 0 1)))
+    (let [^Value ts (slot rt s SC_THREADS)
+          ^I32 n (vec-count rt ts)]
+      (if (== n 0)
+        (return (- 0 1)))
+      (let [^I32 cur (to-i32 (as-fixnum (slot rt s SC_CURRENT)))]
+        (local ^:mut ^I32 k)
+        (set k 1)
+        (while (<= k n)
+          (let [^I32 i (rem (+ cur k) n)
+                ^Value th (vec-nth rt ts i NIL)]
+            (if (not (nil? rt th))
+              (let [^I64 st (as-fixnum (slot rt th TH_STATUS))]
+                (if (or (== st ST_NEW) (== st ST_RUNNABLE))
+                  (return (to-i64 i))))))
+          (set k (+ k 1)))
+        (return (- 0 1))))))
+
+(doc "Anything the host has not drained yet.")
+(defn ^:pub ^:method ^Bool sched-pending-events [^:mut ^Rt rt]
+  (let [^Value s (sched rt)]
+    (comment "A NIL SCHEDULER ANSWERS FALSE. The JVM guarded this and native"
+             "did not; the guard is the safe reading and costs one compare.")
+    (if (nil? rt s)
+      (return false))
+    (let [^Value evs (slot rt s SC_EVENTS)
+          ^I64 head (as-fixnum (slot rt s SC_EHEAD))]
+      (return (> (to-i64 (vec-count rt evs)) head)))))
+
+(doc "Is there anything only the HOST can supply?"
+     ""
+     "An event it has not drained, or a thread parked on a port whose other"
+     "end is outside this heap."
+     ""
+     "NARROW ON PURPOSE. A thread parked on a CHANNEL does not count, because"
+     "no host can help it -- both ends live in this heap. Only a bridge does,"
+     "and that distinction is what keeps a program alive exactly as long as"
+     "the host might still act on it.")
+(defn ^:pub ^:method ^Bool sched-needs-host [^:mut ^Rt rt]
+  (if (sched-pending-events rt)
+    (return true))
+  (let [^Value s (sched rt)]
+    (if (nil? rt s)
+      (return false))
+    (let [^Value ts (slot rt s SC_THREADS)
+          ^I32 n (vec-count rt ts)]
+      (local ^:mut ^I32 i)
+      (set i 0)
+      (while (< i n)
+        (let [^Value th (vec-nth rt ts i NIL)]
+          (if (not (nil? rt th))
+            (if (== (as-fixnum (slot rt th TH_STATUS)) ST_PARKED)
+              (let [^Value on (slot rt th TH_PARK_ON)]
+                (if (is-port rt on)
+                  (if (crosses-a-heap rt (as-fixnum (slot rt on PT_KIND)))
+                    (return true)))))))
+        (set i (+ i 1)))
+      (return false))))
+
+(doc "Has EVERY thread finished, one way or another?"
+     ""
+     "This is what \"the sandbox has nothing left to do\" means once there is no"
+     "entry function to speak for the program. A thread still PARKED is not"
+     "settled -- something may yet wake it -- and `needs-host` has already been"
+     "asked by the time this is, so a park nobody can answer falls through to"
+     "the deadlock report rather than being mistaken for an ending."
+     ""
+     "NEITHER PORT HAD THIS. Both still ask whether THREAD 0 has finished,"
+     "which is the model from before the entry function was removed"
+     "(`DECISIONS.md#structured-ports` step 5): with a control plane spawned"
+     "into every module, thread 0 finishing says nothing about whether the"
+     "program is over. Generating it is what lets all three ask the same"
+     "question."
+     ""
+     "A NIL SCHEDULER IS SETTLED, not unsettled: no threads means none"
+     "outstanding, and answering false there would hang a program that never"
+     "made one.")
+(defn ^:pub ^:method ^Bool sched-all-settled [^:mut ^Rt rt]
+  (let [^Value s (sched rt)]
+    (if (nil? rt s)
+      (return true))
+    (let [^Value ts (slot rt s SC_THREADS)
+          ^I32 n (vec-count rt ts)]
+      (local ^:mut ^I32 i)
+      (set i 0)
+      (while (< i n)
+        (let [^Value th (vec-nth rt ts i NIL)]
+          (if (not (nil? rt th))
+            (let [^I64 st (as-fixnum (slot rt th TH_STATUS))]
+              (if (and (!= st ST_DONE) (!= st ST_FAILED))
+                (return false)))))
+        (set i (+ i 1)))
+      (return true))))
+
+(doc "The answer for a sandbox the GATE stopped."
+     ""
+     "`settled-answer` speaks for a program that ENDED; this speaks for one"
+     "that was STOPPED, and the two read different threads on purpose. A"
+     "settled program is answered by thread 0, which is the thread the host"
+     "called in. A gated one is answered by whichever thread was RUNNING when"
+     "the budget escaped every handler -- `SC_CURRENT` names it, and nothing"
+     "has run since to move it -- because that thread is the one holding the"
+     "error and it is almost never thread 0."
+     ""
+     "A FAILED thread's `TH_RESULT` is re-raised rather than returned, which is"
+     "the same shape `settled-answer` uses: a host asked for a value and must"
+     "not be handed a throw as though it were one.")
+(defn ^:pub ^:method ^Value gate-answer [^:mut ^Rt rt]
+  (let [^Value s (sched rt)]
+    (if (nil? rt s)
+      (return NIL))
+    (let [^Value ts (slot rt s SC_THREADS)
+          ^I32 i (to-i32 (as-fixnum (slot rt s SC_CURRENT)))
+          ^Value th (vec-nth rt ts i NIL)]
+      (if (nil? rt th)
+        (return NIL))
+      (let [^Value r (slot rt th TH_RESULT)]
+        (if (== (as-fixnum (slot rt th TH_STATUS)) ST_FAILED)
+          (do (set-thrown rt r)
+              (return NIL)))
+        (return r)))))
+
+(doc "THE SCHEDULER LOOP, and the ORDER is the whole point of generating it."
+     ""
+     "Run whatever is runnable; when nothing is, decide what that means. The"
+     "three runtimes answered that in a different ORDER for long enough to"
+     "matter: asking \"has the program finished?\" before \"does anything need"
+     "the host?\" closes the system port out from under a call that has just"
+     "parked on an `open`, and the grant then arrives for a port that is"
+     "already gone (`DECISIONS.md#the-codec-is-guest-code`). Native was fixed"
+     "and both ports kept the superseded order, comment and all, because an"
+     "order written three times is three orders."
+     ""
+     "WHAT IT CALLS stays per-runtime, reached through the vocabulary: running"
+     "a thread, reaping ports and closing bridges are each one line in every"
+     "target, and `report-deadlock` builds a host string naming the stuck"
+     "threads, which is a diagnostic rather than a decision.")
+(defn ^:pub ^:method ^Value sched-drive [^:mut ^Rt rt]
+  (boot-system-thread-once rt)
+  (forever
+    (comment "What the collector left behind IS the lifetime rule: a flint end"
+             "nothing refers to any more has been closed, whether or not"
+             "anybody said so.")
+    (reap-ports rt)
+    (comment "THE GATE IS ASKED BEFORE ANYTHING ELSE RUNS, and before the"
+             "host is asked at all."
+             ""
+             "Before the HOST because once the gate has escaped every handler"
+             "`needs-host` is telling it a lie: the budget is still exceeded,"
+             "so the next charge raises whatever the host sends -- including"
+             "the charges the control plane needs to build a reply. That is"
+             "what hung. A guest that spends the whole of GAS_GRACE inside a"
+             "`catch` leaves none for `flint.system/answer`, whose"
+             "`catch Throwable` the escape then skips as well, so no reply is"
+             "ever sent; and the control plane stays parked on the system"
+             "port, so `all-settled` is never reached and the path that"
+             "reports the failure is unreachable. The host pumped to its"
+             "guard and gave up."
+             ""
+             "Before PICK because running another thread after the gate has"
+             "escaped can only blow the budget again, and the LAST thread to"
+             "do so is the one `gate-answer` would then speak for. Measured:"
+             "the control plane ran next and failed in `receive <- serve`, so"
+             "the host was told the sandbox died in the runtime's own code"
+             "rather than in `spin <- main`, which is the guest's and is the"
+             "one worth naming.")
+    (if (gate-escaped? rt)
+      (do (close-all-bridges rt)
+          (if (sched-pending-events rt)
+            (do (set-status rt 2)
+                (return NIL)))
+          (set-status rt 0)
+          (return (gate-answer rt))))
+    (let [^I64 i (sched-pick rt)]
+      (if (>= i 0)
+        (do (run-one rt (to-i32 i))
+            (continue)))
+      (comment "THE HOST FIRST. There is no entry function whose return means"
+               "the program is over, so the only reason to stop is that"
+               "nothing can proceed.")
+      (if (sched-needs-host rt)
+        (do (set-status rt 2)
+            (return NIL)))
+      (if (sched-all-settled rt)
+        (do (comment "Exit closes every flint end and leaves the events for"
+                     "one last drain, so a host is never left guessing"
+                     "whether more is coming.")
+            (close-all-bridges rt)
+            (if (sched-pending-events rt)
+              (do (set-status rt 2)
+                  (return NIL)))
+            (set-status rt 0)
+            (return (settled-answer rt))))
+      (comment "Nothing runnable, nothing the host can help with: the threads"
+               "that remain are waiting on each other. NAMED rather than hung.")
+      (set-status rt 0)
+      (report-deadlock rt)
+      (return NIL))))
+
+;; ------------------------------------------------------------- the waiters
+
+(doc "THE WAITER A TOKEN NAMES, or NIL if that token is stale."
+     ""
+     "A token is `(gen << 16) | (idx + 1)`, and the generation is the whole"
+     "reason it is not just an index: a freed slot is REUSED, so a token"
+     "handed out before the free would otherwise name whoever got the slot"
+     "next. Bumping `W_GEN` on free makes every outstanding token for that"
+     "slot answer NIL here, which is what lets a late `host_deliver` be"
+     "ignored rather than waking the wrong thread."
+     ""
+     "`+ 1` on the index is why zero is not a token: `0` is the absent value"
+     "`TH_TOKEN` carries, and a slot-0 waiter has to be distinguishable from"
+     "no waiter at all. Both halves are checked -- a token whose low sixteen"
+     "bits are zero is malformed, not slot -1."
+     ""
+     "A waiter with no thread is a FREED one. The list keeps the object so"
+     "the free list can chain through it, so `W_THREAD` and not presence in"
+     "the vector is what says a slot is live.")
+(defn ^:pub ^:method ^Value waiter-at [^:mut ^Rt rt ^I64 token]
+  (if (or (<= token 0) (== (bit-and token 0xFFFF) 0))
+    (return NIL))
+  (let [^I32 idx (to-i32 (- (bit-and token 0xFFFF) 1))
+        ^I64 gen (ushr64 token 16)
+        ^Value w (vec-nth rt (slot rt (sched rt) SC_WAITERS) idx NOT_FOUND)]
+    (if (or (== w NOT_FOUND) (nil? rt w))
+      (return NIL))
+    (comment "STALE TOKEN, not a missing waiter: the slot is live and belongs"
+             "to a later registration. Answering NIL is how the old owner's"
+             "wake is dropped.")
+    (if (or (!= (as-fixnum (slot rt w W_GEN)) gen)
+            (nil? rt (slot rt w W_THREAD)))
+      (return NIL))
+    (return w)))
+
+(doc "RETIRE a waiter and put its slot back on the free list."
+     ""
+     "Answers the waiter it freed, or NIL if the token was already stale --"
+     "so a caller that wants to know whether it won the race can ask, and"
+     "one that does not can ignore it. Freeing twice is a no-op by the same"
+     "generation check that makes a stale token answer NIL."
+     ""
+     "THE GENERATION BUMP IS MASKED to sixteen bits deliberately: it shares"
+     "the token with a sixteen-bit index, so a generation that grew past"
+     "that would start colliding with the index of a different slot. It"
+     "wraps instead, and a wrap only aliases a token that has been"
+     "outstanding across 65 536 reuses of the SAME slot.")
+(defn ^:pub ^:method ^Value free-waiter [^:mut ^Rt rt ^I64 token]
+  (let [^Value w (waiter-at rt token)]
+    (if (nil? rt w)
+      (return NIL))
+    (let [^I64 idx (- (bit-and token 0xFFFF) 1)
+          ^I64 gen (as-fixnum (slot rt w W_GEN))]
+      (set-slot rt w W_GEN (fixnum64 (bit-and (+ gen 1) 0xFFFF)))
+      (comment "CLEARING THE THREAD IS WHAT FREES IT. Both `waiter-at` and"
+               "the outstanding count read `W_THREAD`, so this one write is"
+               "the retirement; the rest is tidying and the free list.")
+      (set-slot rt w W_THREAD NIL)
+      (set-slot rt w W_PORT NIL)
+      (let [^Value s (sched rt)]
+        (set-slot rt w W_NEXT (slot rt s SC_WFREE))
+        (set-slot rt s SC_WFREE (fixnum64 idx)))
+      (return w))))
+
+(doc "HOW MANY WAITERS ARE LIVE, which is how a host knows work is pending."
+     ""
+     "Walks rather than counts a field because the free list makes the"
+     "vector's length the HIGH-WATER MARK and not the population: a slot"
+     "that has been freed is still in the vector, holding the chain."
+     ""
+     "GUARDS A NIL SCHEDULER, and that was a divergence rather than a"
+     "choice -- both ports guarded it and native did not. Zero is the"
+     "answer that is true of a runtime which never made a scheduler, and"
+     "the alternative is reaching into nil to find out.")
+(defn ^:pub ^:method ^I32 outstanding-waiters [^:mut ^Rt rt]
+  (let [^Value s (sched rt)]
+    (if (nil? rt s)
+      (return 0))
+    (let [^Value ws (slot rt s SC_WAITERS)
+          ^I32 n (vec-count rt ws)]
+      (local ^:mut ^I32 c)
+      (local ^:mut ^I32 i)
+      (set c 0)
+      (set i 0)
+      (while (< i n)
+        (let [^Value w (vec-nth rt ws i NOT_FOUND)]
+          (if (and (!= w NOT_FOUND)
+                   (not (nil? rt w))
+                   (not (nil? rt (slot rt w W_THREAD))))
+            (set c (+ c 1))))
+        (set i (+ i 1)))
+      (return c))))
+
+;; -------------------------------------------------------- running a thread
+
+(doc "RUN ONE THREAD FOR ONE SLICE, and settle whatever it left."
+     ""
+     "The other half of `drive`. `sched-pick` chooses the index; this is what"
+     "happens to it, and it was the last part of the scheduler written three"
+     "times. That mattered more than it looks: gas is charged once per"
+     "interpreter step, so the resume path's cost is BILLED TO THE PROGRAM,"
+     "and three implementations of it are three different prices for running"
+     "the same code. `bin/conform-hosts` measured the difference at about 46"
+     "steps per 4096-step slice and could not say where it came from"
+     "(`DECISIONS.md#calls-are-ports`)."
+     ""
+     "TWO WAYS IN, and the difference is whether there is a stack to put back."
+     "A NEW thread has an entry closure and no state, so the interpreter is"
+     "emptied and the closure is entered. Any other thread has a saved stack,"
+     "and restoring it is the whole of resuming -- there is no separate"
+     "resume state, which is why a park can happen anywhere."
+     ""
+     "A FAILURE IS DELIVERED ON RESUME, not at the park. `TH_FAIL` carries a"
+     "throw the scheduler owes this thread -- a peer died, a host refused --"
+     "and it is armed here and unwound from here, so it lands as if the"
+     "parked call itself had thrown. If nothing catches it the thread is"
+     "done, which is why the answer is NIL rather than a second run.")
+(defn ^:pub ^:method ^Value sched-run-one [^:mut ^Rt rt ^I32 i]
+  (let [^Value s (sched rt)]
+    (set-slot rt s SC_CURRENT (fixnum i))
+    (let [^Value ts (slot rt s SC_THREADS)
+          ^Value th (vec-nth rt ts i NOT_FOUND)]
+      (if (or (nil? rt th) (== th NOT_FOUND))
+        (return NIL))
+      (let [^RootIx base (mark rt)
+            ^RootIx ti (push rt th)
+            ^I64 st (as-fixnum (slot rt (r rt ti) TH_STATUS))]
+        (comment "DYNAMIC BINDINGS TRAVEL WITH THE THREAD, so they are"
+                 "installed before it runs and saved back by `settle`.")
+        (install-bindings rt (slot rt (r rt ti) TH_BINDINGS))
+        (begin-slice rt)
+        (local ^:mut ^Value v)
+        (set v NIL)
+        (if (== st ST_NEW)
+          (do (reset-exec-state rt)
+              (let [^Value f (slot rt (r rt ti) TH_ENTRY)]
+                (set-slot rt (r rt ti) TH_STATUS (fixnum64 ST_RUNNABLE))
+                (comment "THE ENTRY IS RELEASED once taken: a thread holding"
+                         "its own closure after it has started keeps alive"
+                         "whatever the closure captured, for as long as the"
+                         "thread lives.")
+                (set-slot rt (r rt ti) TH_ENTRY NIL)
+                (set v (run-entry rt f))))
+          (do (restore-state rt (r rt ti))
+              (set-slot rt (r rt ti) TH_STACK NIL)
+              (let [^Value fail (slot rt (r rt ti) TH_FAIL)]
+                (if (nil? rt fail)
+                  (set v (vm-run rt))
+                  (do (set-slot rt (r rt ti) TH_FAIL NIL)
+                      (set-thrown rt fail)
+                      (if (unwind-to-handler rt)
+                        (set v (vm-run rt))
+                        (set v NIL)))))))
+        (pop-to rt base)
+        (settle rt v)
+        (return NIL)))))
+
+;; ------------------------------------------------------------- waking
+
+(doc "WAKE one waiter's thread, and retire the waiter."
+     ""
+     "The order is the contract: the thread is made RUNNABLE and its park"
+     "cleared BEFORE the waiter is freed, because freeing bumps the"
+     "generation and a token that named this waiter stops naming anything."
+     "Done the other way, a `host-deliver` arriving in between would find a"
+     "stale token, drop the answer, and leave a thread parked on a port that"
+     "has already been answered."
+     ""
+     "`TH_TOKEN` IS CLEARED FIRST for the same reason: a thread that is"
+     "runnable must not still be advertising a waiter, or the next answer"
+     "wakes it twice."
+     ""
+     "A WAITER WITH NO THREAD IS ALREADY FREE. Answering quietly rather than"
+     "throwing is what lets the callers walk the whole table without"
+     "filtering it first.")
+(defn ^:pub ^:method ^Value wake-waiter [^:mut ^Rt rt ^Value w]
+  (let [^Value th (slot rt w W_THREAD)]
+    (if (nil? rt th)
+      (return NIL))
+    (set-slot rt th TH_STATUS (fixnum64 ST_RUNNABLE))
+    (set-slot rt th TH_PARK_ON NIL)
+    (let [^I64 token (as-fixnum (slot rt th TH_TOKEN))]
+      (set-slot rt th TH_TOKEN (fixnum64 (- 0 1)))
+      (free-waiter rt token))
+    (return NIL)))
+
+(doc "WAKE EVERY THREAD PARKED ON `p`."
+     ""
+     "What a send does after putting a message in, and what a receive does"
+     "after taking one out -- both free something another thread may be"
+     "waiting for, and neither knows which thread that is."
+     ""
+     "IT WAKES ALL OF THEM, not the first. A woken thread re-executes the"
+     "operation it parked on and may find the queue full or empty again, in"
+     "which case it parks again; that is cheaper and far simpler to reason"
+     "about than picking a winner here, and it is what makes the ring's"
+     "`EMPTY` handshake safe -- a thread that wakes too early simply goes"
+     "back to sleep."
+     ""
+     "A FREED WAITER IS SKIPPED by its nil thread, so the table is walked"
+     "whole rather than compacted. The vector only ever grows.")
+(defn ^:pub ^:method ^Value wake-on [^:mut ^Rt rt ^Value p]
+  (let [^Value s (sched rt)]
+    (if (nil? rt s)
+      (return NIL))
+    (let [^Value ws (slot rt s SC_WAITERS)
+          ^I32 n (vec-count rt ws)]
+      (local ^:mut ^I32 i)
+      (set i 0)
+      (while (< i n)
+        (let [^Value w (vec-nth rt ws i NOT_FOUND)]
+          (if (and (!= w NOT_FOUND)
+                   (not (nil? rt w))
+                   (not (nil? rt (slot rt w W_THREAD)))
+                   (== (slot rt w W_PORT) p))
+            (wake-waiter rt w)))
+        (set i (+ i 1))))
+    (return NIL)))
+
+(doc "REGISTER a waiter for the current thread, and answer its TOKEN."
+     ""
+     "A token is `(gen << 16) | (idx + 1)` -- the slot and the generation that"
+     "slot is on. The host echoes it back and never reads it, so nothing"
+     "outside depends on the encoding; what depends on it is that a token"
+     "from before a free names NOTHING after it."
+     ""
+     "`+ 1` ON THE INDEX, so zero is never a valid token. `TH_TOKEN` carries"
+     "zero-meaning-absent, and a host ABI where the zero value means"
+     "something is a trap waiting for an uninitialised variable."
+     ""
+     "REUSE FIRST. `SC_WFREE` heads a chain through `W_NEXT`, so a freed slot"
+     "comes back before the vector grows -- which is what keeps the table"
+     "bounded by CONCURRENT parks rather than by total parks, and the vector"
+     "only ever grows."
+     ""
+     "A FRESH SLOT STARTS AT GENERATION 0 and a reused one keeps the"
+     "generation `free-waiter` bumped, which is the whole of why a stale"
+     "token cannot be honoured: it is the SAME slot with a number that has"
+     "moved on."
+     ""
+     "ROOTED ACROSS THE ALLOCATION, all four of them. `new-obj` and `vec-conj`"
+     "both collect, so the port, the scheduler, the thread and the waiter are"
+     "roots and not locals; an unrooted one comes back pointing into the"
+     "abandoned semispace, which nothing downstream can tell from a live"
+     "pointer."
+     ""
+     "`-1` WHEN THE ALLOCATION FAILS, which the caller reads as `no waiter`"
+     "rather than as slot -1.")
+(defn ^:pub ^:method ^I64 new-waiter [^:mut ^Rt rt ^I64 kind ^Value port]
+  (let [^RootIx base (mark rt)
+        ^RootIx pi (push rt port)
+        ^RootIx si (push rt (sched rt))
+        ^RootIx ti (push rt (current-thread rt))
+        ^I64 free (as-fixnum (slot rt (r rt si) SC_WFREE))]
+    (local ^:mut ^I64 idx)
+    (local ^:mut ^RootIx wi)
+    (if (>= free 0)
+      (do (let [^Value ws (slot rt (r rt si) SC_WAITERS)
+                ^Value w (vec-nth rt ws (to-i32 free) NOT_FOUND)]
+            (set-slot rt (r rt si) SC_WFREE (slot rt w W_NEXT))
+            (set idx free)
+            (set wi (push rt w))))
+      (do (let [^Value w (new-obj rt TY_NODE W_LEN)]
+            (if (nil? rt w)
+              (do (pop-to rt base)
+                  (return (- 0 1))))
+            (set wi (push rt w))
+            (set-slot rt (r rt wi) W_GEN (fixnum64 0))
+            (comment "THE VECTOR IS ROOTED TOO, because `vec-conj` allocates"
+                     "and the old one must survive long enough to be read.")
+            (let [^RootIx wsi (push rt (slot rt (r rt si) SC_WAITERS))
+                  ^Value nws (vec-conj rt (r rt wsi) (r rt wi))]
+              (set idx (- (to-i64 (vec-count rt nws)) 1))
+              (set-slot rt (r rt si) SC_WAITERS nws)))))
+    (set-slot rt (r rt wi) W_THREAD (r rt ti))
+    (set-slot rt (r rt wi) W_KIND (fixnum64 kind))
+    (set-slot rt (r rt wi) W_PORT (r rt pi))
+    (let [^I64 gen (as-fixnum (slot rt (r rt wi) W_GEN))]
+      (pop-to rt base)
+      (return (bit-or (shl gen 16) (+ idx 1))))))
+
+(doc "PARK the current thread on `on`, and leave the interpreter."
+     ""
+     "TWO WRITES, and both are necessary. `park-on` says WHAT is being waited"
+     "for, so `needs-host` can tell a bridge from a channel and the deadlock"
+     "report can name it. `thrown = PARK` is what actually leaves: a park"
+     "unwinds every frame between the builtin and the top, exactly as a throw"
+     "does, and the VM already checks `thrown` after every native call."
+     ""
+     "IT ANSWERS NIL, and the nil is never read. The caller is about to be"
+     "unwound past, so the value is a formality that keeps the builtin's"
+     "signature honest."
+     ""
+     "NOTHING IS REGISTERED HERE. Parking on a port without a waiter is a"
+     "thread that sleeps for ever, which is what `park-on-port` exists to"
+     "prevent -- but `park` itself is also used for a yield, where there is"
+     "deliberately nothing to register.")
+(defn ^:pub ^:method ^Value park [^:mut ^Rt rt ^Value on]
+  (set-park-on rt on)
+  (set-thrown rt PARK)
+  (return NIL))
+
+(doc "REGISTER a waiter for this thread, then park it on the port."
+     ""
+     "The other half of the wake path. `wake-on` walks the waiter table"
+     "looking for threads parked on a port; this is what puts them there, and"
+     "the two only agree because they read and write the same `W_PORT`."
+     ""
+     "THE TOKEN GOES ON THE THREAD, and that is what lets a wake retire the"
+     "waiter without searching: `wake-waiter` reads `TH_TOKEN` and frees"
+     "exactly that slot. A thread parked without one would be woken and leave"
+     "its waiter behind for ever."
+     ""
+     "REGISTER FIRST, PARK SECOND, and never the other way round. Between the"
+     "two there is no window -- this is one green thread and nothing else"
+     "runs until it yields -- but the ORDER still matters to a reader: a park"
+     "that happened before the registration would be a thread advertising a"
+     "wait nobody has recorded."
+     ""
+     "THE PORT IS ROOTED ACROSS `new-waiter`, which allocates. Everything"
+     "after re-reads it from the root rather than from a local, because the"
+     "local would be an address in the abandoned semispace."
+     ""
+     "A NIL CURRENT THREAD IS NOT AN ERROR. The runtime parks during startup"
+     "before a scheduler exists; the waiter is still registered and the park"
+     "still happens, and there is simply no thread slot to write the token"
+     "into.")
+(defn ^:pub ^:method ^Value park-on-port [^:mut ^Rt rt ^I64 kind ^Value port]
+  (let [^RootIx base (mark rt)
+        ^RootIx pi (push rt port)
+        ^I64 token (new-waiter rt kind (r rt pi))
+        ^Value th (current-thread rt)]
+    (if (not (nil? rt th))
+      (set-slot rt th TH_TOKEN (fixnum64 token)))
+    (let [^Value pv (r rt pi)]
+      (pop-to rt base)
+      (return (park rt pv)))))

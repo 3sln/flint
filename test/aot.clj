@@ -18,7 +18,14 @@
 
 (defn sh [& args]
   (let [p (.start (ProcessBuilder. (into-array String args)))
-        out (slurp (.getInputStream p)) err (slurp (.getErrorStream p))]
+        ;; STDERR IS DRAINED ON ITS OWN THREAD (`DECISIONS.md#the-codec-is-guest-code`,
+        ;; "the test helper deadlocked"). Reading stdout to completion and
+        ;; stderr after DEADLOCKS the moment a child writes more than a pipe
+        ;; buffer to stderr: the child blocks writing, this blocks reading, and
+        ;; neither moves again.
+        err (future (slurp (.getErrorStream p)))
+        out (slurp (.getInputStream p))
+        err @err]
     (.waitFor p) {:exit (.exitValue p) :out out :err err :all (str out err)}))
 
 (def d (str (fs/create-temp-dir)))
@@ -75,7 +82,11 @@
        "const fn = /out\\/aot-([a-z]+)-[ai]\\.wasm$/.exec(process.argv[1])[1] + '/main';"
        "const r = i.run(fn, []);"
        "console.log(JSON.stringify({out: r.out.trim(), code: r.code,"
-       " steps: Number(i.exports.stat_steps())}));})"))
+       " steps: Number(i.exports.stat_steps()),"
+       ;; C_RESTORES is counter 16, and `stat_region(80 + k)` reads `COUNTS[k]`
+       ;; (`runtime/src/abi.rs`). It counts PREEMPTIONS -- how many times a
+       ;; thread's state was restored -- which is what the row below needs.
+       " restores: Number(i.exports.stat_region(80 + 16))}));})"))
 
 (defn run! [wasm]
   (let [r (sh "node" "-e" runner wasm)]
@@ -83,11 +94,49 @@
       (println "run failed for" wasm ":" (:all r)) (System/exit 1))
     (json/parse-string (str/trim (:out r)) true)))
 
+;; WHAT "THE SAME INSTRUCTION COUNT" CAN MEAN, now that it has been measured.
+;;
+;; This was a bare equality and it was red on `colls` for a long time. The
+;; cause is not the emitter: it is that the two paths are PREEMPTED a different
+;; number of times, and a preemption costs billed steps.
+;;
+;; Compiled code notices a slice boundary only at a back-edge, so it trips
+;; LATE; `begin_slice` then gives the next thread a full turn from the current
+;; step count -- deliberately, so "every thread gets the same size turn however
+;; long the last one ran" -- and over a run the late tripping fits one fewer
+;; slice in. Measured across all five programs: compiled took exactly one fewer
+;; preemption on `arith` and `colls` and exactly the same number on the other
+;; three, and the step gap was -3, -3, 0, 0, 0.
+;;
+;; So the law is exact rather than approximate:
+;;
+;;     interpreted - compiled  ==  PREEMPT-COST * (preemptions saved)
+;;
+;; and the three programs with nothing saved are the controls that keep this
+;; from being a tolerance in disguise. A tolerance would pass them too; this
+;; only passes them at zero.
+;;
+;; THE CLAIM THE ROW EXISTS FOR IS UNHARMED. `resource-limits` cares that a
+;; program does not cost MORE compiled, because that would hit a limit the
+;; interpreter would not -- and that is asserted separately and absolutely
+;; below. What is no longer asserted is that the SCHEDULER costs the same in
+;; two runs where it demonstrably ran a different number of times.
+(def PREEMPT-COST
+  "Billed steps per preemption. Measured, not chosen: the step gap divided by
+  the preemption gap, and it is 3 on every program here that has one."
+  3)
+
 (doseq [n progs]
   (let [i (run! (build! n false))
-        a (run! (build! n true))]
+        a (run! (build! n true))
+        saved (- (:restores i) (:restores a))]
     (check (str n " — the same answer") (:out a) (:out i))
-    (check (str n " — the same instruction count") (:steps a) (:steps i))))
+    (println (format "    %s: steps %d interpreted / %d compiled, preemptions %d / %d"
+                     n (:steps i) (:steps a) (:restores i) (:restores a)))
+    (check-that (str n " — compiled never costs MORE than interpreted")
+                (<= (:steps a) (:steps i)))
+    (check (str n " — the same instruction count, net of preemptions not taken")
+           (- (:steps i) (:steps a)) (* PREEMPT-COST saved))))
 
 ;; And the rule that makes all of it optional: a module built without `--aot`
 ;; carries no compiled arities at all, which is what lets the interpreter's own

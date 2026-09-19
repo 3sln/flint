@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""The standard library's grants say the same thing at both front doors.
+
+`lib/deps.edn` names the workspace `flint/flint` and confers what it holds;
+`sdks/esm/src/flint.js` pushes the same workspace for embedders who take the
+library with them. They are two declarations of ONE fact, and both files
+already carry a paragraph saying so -- "Two front doors naming one workspace
+two ways is the defect this mechanism exists to stop."
+
+They drifted anyway. `:vars` was added to the EDN when the control plane began
+resolving a call's `:fn` by name (`DECISIONS.md#bridges-are-the-only-door`),
+the JS was not touched, and every program the SDK compiled was refused at
+`flint.system/answer` while the CLI compiled the same source. A comment asking
+two files to agree is not a mechanism; this is.
+"""
+import os, re, sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def read(*p):
+    try:
+        with open(os.path.join(ROOT, *p), encoding='utf-8') as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def edn_grants(src):
+    m = re.search(r':flint/capabilities-grant\s*\[([^\]]*)\]', src)
+    if not m:
+        return None
+    return frozenset(re.findall(r':([a-z-]+)', m.group(1)))
+
+
+def js_grants(src):
+    """Every `grants: [..]` pushed for `flint/flint`, as a set of sets.
+
+    A SET OF SETS so that two pushes that disagree with each other fail here
+    too: the library is one workspace however many prefixes point at it.
+    """
+    out = set()
+    for m in re.finditer(r"name:\s*'flint/flint'[^}]*grants:\s*\[([^\]]*)\]", src):
+        out.add(frozenset(re.findall(r"'([a-z-]+)'", m.group(1))))
+    for m in re.finditer(r"grants:\s*\[([^\]]*)\][^}]*name:\s*'flint/flint'", src):
+        out.add(frozenset(re.findall(r"'([a-z-]+)'", m.group(1))))
+    return out or None
+
+
+def main():
+    edn, js = read('lib', 'deps.edn'), read('sdks', 'esm', 'src', 'flint.js')
+    if edn is None or js is None:
+        print('  FAIL cannot read lib/deps.edn or sdks/esm/src/flint.js')
+        return 1
+    want, have = edn_grants(edn), js_grants(js)
+    # A CHECK THAT CANNOT FIND WHAT IT CHECKS MUST FAIL. Both shapes are
+    # hand-written and both have moved before; silence from a broken gate is
+    # indistinguishable from a pass.
+    if want is None:
+        print('  FAIL no :flint/capabilities-grant in lib/deps.edn -- has the shape changed?')
+        return 1
+    if have is None:
+        print("  FAIL no `name: 'flint/flint'` workspace with grants in sdks/esm/src/flint.js"
+              ' -- has the shape changed?')
+        return 1
+    bad = [g for g in have if g != want]
+    if bad:
+        shown = ' / '.join(' '.join(sorted(g)) or '(none)' for g in sorted(bad, key=sorted))
+        print(f"  FAIL the library grants {' '.join(sorted(want)) or '(none)'} in lib/deps.edn"
+              f' but {shown} in sdks/esm/src/flint.js')
+        print('       One workspace, one set of grants. Whichever is right, both say it.')
+        return 1
+    print(f"  ok   flint/flint grants {' '.join(sorted(want))} at both front doors")
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

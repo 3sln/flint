@@ -1,0 +1,161 @@
+;; WALKING AN ARRIVING MESSAGE TO MINT THE PORTS IN IT.
+;;
+;; A port's sandbox-side object used to be created as a SIDE EFFECT of decoding
+;; a message that happened to mention it. That is backwards -- a port is created
+;; with the thing it speaks into, and delivery has nothing to say about it --
+;; and it is also load-bearing: `Host::caller` delivers a bind and deliberately
+;; does not resume, then `Host::call` delivers on that port immediately, so the
+;; object has to exist before any guest code has run.
+;;
+;; Now that the GUEST decodes (`DECISIONS.md#the-codec-is-guest-code`), delivery
+;; keeps only the part that must happen at the boundary: mint the ports, and
+;; check the message is structurally readable at all.
+;;
+;; IT WALKS, IT DOES NOT PARSE. Nothing is allocated for a string, a keyword or
+;; a collection -- the lengths are read and skipped. What it answers is the
+;; ports, and the caller holds them: the intern table is weak on purpose
+;; (`register_port`: "the scheduler keeps ids, not references"), so a handle
+;; nobody holds is collectable before the guest reads the message it came in.
+;;
+;; The tag numbers are written as literals rather than named, because kin has
+;; no top-level constant and a vocabulary entry per tag would put nineteen
+;; names in every target's namespace to be used once each, here. They are the
+;; `K_*` values in `runtime/src/codec.rs`.
+(ns flint.rt.wirescan
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != < > >= <= not and or
+                                   + - * local set while mark push r set-r
+                                   pop-to nil? to-i32 to-i64 u<
+                                   Rt Value RootIx I32 I64 Bool NIL NO_NS
+                                   mint-bridge-port]]
+            [flint.rt.vecwrite :refer [vec-conj]]
+            [flint.rt.wirecore :refer [wire-left wire-skip wire-take-u8
+                                       wire-take-u32]]))
+
+(doc "Skip a length-prefixed run of bytes: a string, a blob, or a name."
+     ""
+     "`NO_NS` IS NOT A LENGTH. An absent namespace is `ffffffff` followed by"
+     "nothing at all, and a walk that treated it as a count would skip four"
+     "billion bytes and call the message truncated.")
+(defn ^:pub ^:method ^Bool wire-skip-run [^:mut ^Rt rt ^Value rd ^Bool absentable]
+  (if (< (wire-left rt rd) 4)
+    (return false))
+  (let [^I32 n (wire-take-u32 rt rd 0)]
+    (if (and absentable (== n NO_NS))
+      (return true))
+    (return (wire-skip rt rd n))))
+
+(doc "One value off `rd`, minting any port in it into the vector at `acc`."
+     ""
+     "False on a malformed encoding, which is how a message the format cannot"
+     "read stays the HOST's error and is refused at the boundary rather than"
+     "handed on to fail later inside a guest that cannot say where it came"
+     "from.")
+(defn ^:pub ^:method ^Bool wire-scan-at [^:mut ^Rt rt ^Value rd ^RootIx acc ^I32 depth]
+  (if (> depth 128)
+    (return false))
+  (if (< (wire-left rt rd) 1)
+    (return false))
+  (let [^I32 tag (wire-take-u8 rt rd 255)]
+    (comment "NIL, TRUE and FALSE are the tag and nothing else.")
+    (if (<= tag 2)
+      (return true))
+    (comment "An INT or a DOUBLE is eight bytes of payload, and the walk does"
+             "not care which number they spell.")
+    (if (or (== tag 3) (== tag 4))
+      (return (wire-skip rt rd 8)))
+    (comment "A STRING or a BLOB: a length and that many bytes. Neither can be"
+             "absent, so neither gets the `NO_NS` reading.")
+    (if (or (== tag 5) (== tag 14))
+      (return (wire-skip-run rt rd false)))
+    (comment "A KEYWORD or a SYMBOL is a namespace, WHICH MAY BE ABSENT, then"
+             "a name, which may not.")
+    (if (or (== tag 6) (== tag 7))
+      (do (if (not (wire-skip-run rt rd true))
+            (return false))
+          (return (wire-skip-run rt rd false))))
+    (comment "A VECTOR, LIST or SET: a count, then that many values.")
+    (if (or (== tag 8) (or (== tag 9) (== tag 11)))
+      (do (if (< (wire-left rt rd) 4)
+            (return false))
+          (let [^I32 n (wire-take-u32 rt rd 0)]
+            (local ^:mut ^I32 i)
+            (set i 0)
+            (while (u< i n)
+              (if (not (wire-scan-at rt rd acc (+ depth 1)))
+                (return false))
+              (set i (+ i 1)))
+            (return true))))
+    (comment "A MAP OPENS TWICE ITS COUNT: `n` pairs are `2n` values.")
+    (if (== tag 10)
+      (do (if (< (wire-left rt rd) 4)
+            (return false))
+          (let [^I32 n (wire-take-u32 rt rd 0)]
+            (local ^:mut ^I32 i)
+            (set i 0)
+            (while (u< i n)
+              (if (not (wire-scan-at rt rd acc (+ depth 1)))
+                (return false))
+              (if (not (wire-scan-at rt rd acc (+ depth 1)))
+                (return false))
+              (set i (+ i 1)))
+            (return true))))
+    (comment "A WRAPPER -- a tagged literal or metadata -- is two values.")
+    (if (or (== tag 17) (== tag 19))
+      (do (if (not (wire-scan-at rt rd acc (+ depth 1)))
+            (return false))
+          (return (wire-scan-at rt rd acc (+ depth 1)))))
+    (comment "A TABLE: a column count, a name and a type per column, then a ROW"
+             "count, then the cells column by column. The product is taken as"
+             "an I64 because two counts that each fit `u32` have one that does"
+             "not -- the same arithmetic the writer bounds.")
+    (if (== tag 18)
+      (do (if (< (wire-left rt rd) 4)
+            (return false))
+          (let [^I32 ncols (wire-take-u32 rt rd 0)]
+            (local ^:mut ^I32 c)
+            (set c 0)
+            (while (u< c ncols)
+              (if (not (wire-scan-at rt rd acc (+ depth 1)))
+                (return false))
+              (if (not (wire-scan-at rt rd acc (+ depth 1)))
+                (return false))
+              (set c (+ c 1)))
+            (if (< (wire-left rt rd) 4)
+              (return false))
+            (let [^I32 nrows (wire-take-u32 rt rd 0)
+                  ^I64 cells (* (to-i64 ncols) (to-i64 nrows))]
+              (local ^:mut ^I64 k)
+              (set k 0)
+              (while (< k cells)
+                (if (not (wire-scan-at rt rd acc (+ depth 1)))
+                  (return false))
+                (set k (+ k 1)))
+              (return true)))))
+    (comment "AN OPAQUE is a host id and a label. It is an identity like a port"
+             "and is minted by the decoder rather than here, because unlike a"
+             "port nothing has to reach it before the guest reads.")
+    (if (== tag 16)
+      (do (if (< (wire-left rt rd) 8)
+            (return false))
+          (if (not (wire-skip rt rd 8))
+            (return false))
+          (return (wire-skip-run rt rd false))))
+    (comment "A PORT, which is the whole reason this walk exists.")
+    (if (== tag 15)
+      (do (if (< (wire-left rt rd) 4)
+            (return false))
+          (let [^I32 id (wire-take-u32 rt rd 0)
+                ^Value p (mint-bridge-port rt (to-i64 id))]
+            (comment "NIL means this sandbox has no ports, so it cannot be"
+                     "being handed one -- the same refusal the decoder gave.")
+            (if (nil? rt p)
+              (return false))
+            (let [^RootIx pi (push rt p)
+                  ^Value grown (vec-conj rt (r rt acc) (r rt pi))]
+              (pop-to rt pi)
+              (set-r rt acc grown)
+              (return true)))))
+    (comment "AN UNKNOWN TAG is refused rather than skipped: there is no length"
+             "to skip by, so the walk cannot go on and must not pretend to.")
+    (return false)))

@@ -41,6 +41,139 @@ pub use crate::image::{
     K_VECTOR,
 };
 
+/// The writer's slots.
+///
+/// `WR_BUF` is a `TY_TBYTES` the guest has no way to name: there is no
+/// primitive that answers it, which is what stops a guest appending a raw tag
+/// byte (`DECISIONS.md#the-codec-is-guest-code`). `WR_LIVE` goes false when the
+/// writer is spent, so a second use is refused rather than appending to bytes
+/// somebody already sent.
+pub const WR_BUF: u32 = 0;
+pub const WR_LIVE: u32 = 1;
+/// HOW MANY VALUES ARE STILL DUE, innermost last -- the writer's own idea of
+/// where it is (`DECISIONS.md#the-codec-is-guest-code`).
+///
+/// A streaming encoder that ENFORCES VALIDITY needs to know what the format
+/// allows next, and it must not take the guest's word for it. Without this a
+/// guest can emit a count where a value is due, and four raw bytes at a value
+/// position are read by the far side as a tag and its payload -- `0x0000000F`
+/// is `K_PORT` followed by an id. That is a capability forged out of an
+/// integer, and no amount of care on the reading side can tell it from a real
+/// one, because it sits exactly where a real one would.
+///
+/// Starts `[1]`: one value is due, the message itself. Emitting a value
+/// decrements the innermost frame; a container pushes a frame of its own. When
+/// the outermost frame reaches zero the message is complete, and anything more
+/// is refused.
+pub const WR_NEED: u32 = 2;
+pub const WR_LEN: u32 = 3;
+
+// The WRITER'S STATE MACHINE IS `kin/wire.kin`, generated into all three
+// runtimes (`crate::kgen::rt::wire`). It was written three times here, in
+// `Wire.java` and in `Wire.cs`, and a marker bug had to be repaired three
+// times by hand before that was obviously the wrong shape. What stays below is
+// only what a Rust SLICE signature needs -- appending a `&[u8]` is not
+// something the three languages can share a body for.
+
+impl Rt {
+    pub fn wire_piece(&mut self, w: Value, tag: u8, payload: &[u8]) -> bool {
+        if !self.is_writer(w) || self.slot(w, WR_LIVE) != TRUE {
+            return false;
+        }
+        let base = self.mark();
+        let wi = self.push(w);
+        // RE-READ FROM THE ROOT before every append: `wire_byte` allocates,
+        // allocating can collect, and a copying collector moves the writer out
+        // from under a host local.
+        //
+        // AND ITS ANSWER IS CHECKED. `wire_byte` (`kin/wirecore.kin`) answers
+        // false when the buffer could not grow, and reporting `true` over that
+        // is what turned an allocation failure into a corrupt writer, a
+        // misleading bridge refusal and finally a hung host.
+        let wv = self.r(wi);
+        let mut ok = self.wire_byte(wv, tag as u32);
+        for b in payload {
+            if !ok {
+                break;
+            }
+            let wv = self.r(wi);
+            ok = self.wire_byte(wv, *b as u32);
+        }
+        self.pop_to(base);
+        ok
+    }
+
+    /// Append `n` raw bytes, for the payloads that are already bytes.
+    pub fn wire_raw(&mut self, w: Value, bytes: &[u8]) -> bool {
+        if !self.is_writer(w) || self.slot(w, WR_LIVE) != TRUE {
+            return false;
+        }
+        let base = self.mark();
+        let wi = self.push(w);
+        let mut ok = true;
+        for b in bytes {
+            if !ok {
+                break;
+            }
+            let wv = self.r(wi);
+            ok = self.wire_byte(wv, *b as u32);
+        }
+        self.pop_to(base);
+        ok
+    }
+
+    pub fn wire_u32(&mut self, w: Value, v: u32) -> bool {
+        self.wire_raw(w, &v.to_le_bytes())
+    }
+
+    pub fn wire_u64(&mut self, w: Value, v: u64) -> bool {
+        self.wire_raw(w, &v.to_le_bytes())
+    }
+
+    /// A length-prefixed string, the shape every name and text payload uses.
+    pub fn wire_text(&mut self, w: Value, s: &str) -> bool {
+        self.wire_u32(w, s.len() as u32) && self.wire_raw(w, s.as_bytes())
+    }
+
+}
+
+/// The reader's slots.
+///
+/// `RD_LIVE` is the whole of the safety rule on this side: true only for bytes
+/// that arrived on a bridge, so only such a reader may mint a port or an
+/// opaque. A guest building a reader over its own bytes gets false, and the two
+/// minting reads refuse -- which is what `decode_guest` did by refusing tags,
+/// stated once instead of once per runtime.
+pub const RD_BYTES: u32 = 0;
+pub const RD_POS: u32 = 1;
+pub const RD_LIVE: u32 = 2;
+pub const RD_LEN: u32 = 3;
+
+impl Rt {
+    /// The next `n` bytes, and the cursor moved. `None` past the end, which
+    /// every read turns into a refusal rather than a wrong value.
+    pub fn wire_take(&mut self, r: Value, n: usize) -> Option<alloc::vec::Vec<u8>> {
+        if !self.is_reader(r) {
+            return None;
+        }
+        let base = self.mark();
+        let ri = self.push(r);
+        let pos = self.slot(self.r(ri), RD_POS).as_fixnum() as usize;
+        let b = self.slot(self.r(ri), RD_BYTES);
+        let all = self.b_to_vec(b);
+        if pos + n > all.len() {
+            self.pop_to(base);
+            return None;
+        }
+        let out = all[pos..pos + n].to_vec();
+        let rv = self.r(ri);
+        self.set(rv, RD_POS, Value::fixnum((pos + n) as i64));
+        self.pop_to(base);
+        Some(out)
+    }
+
+}
+
 /// A byte string (`DECISIONS.md#no-runtime-linking`), so binary crosses without base64.
 pub const K_BYTES: u8 = 14;
 /// A port. The payload is its id; see the note above on why that is safe.
@@ -64,9 +197,53 @@ pub const K_TAGGED: u8 = 17;
 /// field. Column-major means a decoder can fill chunk runs directly, and it is
 /// what `bridges`'s columnar JSON mirrors at the format layer.
 pub const K_TABLE: u8 = 18;
+/// A value WITH METADATA: the metadata, then the value.
+///
+/// The same shape as `K_TAGGED`, and for the same reason -- one wrapper tag
+/// rather than a metadata field on every type's encoding, so a type that grows
+/// metadata later costs the format nothing.
+///
+/// WHAT REACHES HERE IS ALREADY THE ANSWER. `flint.port/for-the-wire` asks
+/// `flint.protocols/WireMeta` which metadata should cross and rebuilds the
+/// value carrying only that, so this encodes whatever metadata it is handed and
+/// asks no questions. The default is none, which is why most values never carry
+/// this tag at all.
+///
+/// The metadata goes through the ORDINARY encoder, so a map holding something
+/// that cannot cross -- a closure, a channel end -- fails the send by name
+/// rather than being dropped.
+pub const K_WITH_META: u8 = 19;
 
 /// `None` means the namespace is absent, which is not the same as empty.
-const NO_NS: u32 = u32::MAX;
+pub const NO_NS: u32 = u32::MAX;
+
+/// THE LARGEST COUNT ANY WIRE PRIMITIVE WILL TAKE.
+///
+/// It is `u32::MAX` because that is what the format WRITES -- every count in
+/// the encoding is four little-endian bytes. A primitive that accepted more
+/// wrote a truncated count and opened an untruncated frame, so the bytes and
+/// the writer's own idea of the message disagreed.
+///
+/// That was not merely untidy, it was the hole. A fixnum is 48 bits,
+/// sign-extended on the way out, so a frame of `2^47 + 1` READS BACK NEGATIVE
+/// -- and negative is exactly what "a row count is due here" means. So
+/// `(wire-vec (+ 2^47 1))` wrote `1` to the wire, telling a reader to expect
+/// one value, while leaving the writer in the state where it would accept a
+/// raw four-byte COUNT instead: `0f 00 00 00` at a value position, which is
+/// `K_PORT` and the beginning of an id. A capability minted from an integer,
+/// through the very machinery added to stop it.
+///
+/// With counts bounded here, every legitimate frame is at most `2^33` and no
+/// frame can sign-extend. Negative means marker and nothing else can produce
+/// one. `MAX_CELLS` keeps the table's product under the same roof.
+pub const MAX_COUNT: i64 = u32::MAX as i64;
+
+/// A table's `ncols * nrows`, which is the one frame built by multiplying.
+///
+/// Two counts that each fit `u32` have a product that does not fit a fixnum,
+/// so the product is checked rather than the factors. Well under `2^47`, so
+/// the sign-extension argument above holds for it too.
+pub const MAX_CELLS: i64 = 1 << 40;
 
 // --- encoding --------------------------------------------------------------
 
@@ -85,15 +262,49 @@ impl Rt {
     /// Encode one value. `Err` names what could not be encoded, in the same
     /// terms `check_sendable` uses -- a function's meaning is its environment,
     /// and that does not travel.
+    /// HOST-FACING ONLY, and not compiled into a guest module
+    /// (`DECISIONS.md#the-codec-is-guest-code`). Nothing a guest can reach
+    /// encodes or decodes in the runtime any more: `flint.wire` does, in the
+    /// image. What is left here is what an EMBEDDER calls -- `Program::encode`,
+    /// `Program::decode` and the `flint_call` ABI -- all of which live in
+    /// `native.rs`, which is itself `cfg(not(wasm32))`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn encode(&mut self, v: Value) -> Result<Vec<u8>, String> {
         let mut out = Vec::new();
         self.encode_into(v, &mut out, 0)?;
         Ok(out)
     }
 
+    /// HOST-FACING ONLY, and not compiled into a guest module
+    /// (`DECISIONS.md#the-codec-is-guest-code`). Nothing a guest can reach
+    /// encodes or decodes in the runtime any more: `flint.wire` does, in the
+    /// image. What is left here is what an EMBEDDER calls -- `Program::encode`,
+    /// `Program::decode` and the `flint_call` ABI -- all of which live in
+    /// `native.rs`, which is itself `cfg(not(wasm32))`.
+    #[cfg(not(target_arch = "wasm32"))]
     fn encode_into(&mut self, v: Value, out: &mut Vec<u8>, depth: u32) -> Result<(), String> {
         if depth > 128 {
             return Err(String::from("value nested too deeply to encode"));
+        }
+        // METADATA FIRST, as a wrapper around whatever the value is.
+        //
+        // Whatever metadata is still on the value at this point is what
+        // `flint.port/for-the-wire` decided should cross -- it narrows the
+        // value before the encoder ever sees it, so there is no selection to
+        // make here and no protocol to dispatch. Most values arrive with none.
+        //
+        // The re-entry guard is the `depth` bump: a metadata map is an ordinary
+        // value and is encoded as one, so a map that is its own metadata nests
+        // rather than looping.
+        if !v.is_nil() {
+            let m = self.meta_of(v);
+            if !m.is_nil() {
+                out.push(K_WITH_META);
+                self.encode_into(m, out, depth + 1)?;
+                // The value WITHOUT its metadata, or this recurses on itself.
+                let bare = self.with_meta(v, NIL);
+                return self.encode_into(bare, out, depth + 1);
+            }
         }
         if v.is_nil() {
             out.push(K_NIL);
@@ -251,6 +462,13 @@ impl Rt {
         }
     }
 
+    /// HOST-FACING ONLY, and not compiled into a guest module
+    /// (`DECISIONS.md#the-codec-is-guest-code`). Nothing a guest can reach
+    /// encodes or decodes in the runtime any more: `flint.wire` does, in the
+    /// image. What is left here is what an EMBEDDER calls -- `Program::encode`,
+    /// `Program::decode` and the `flint_call` ABI -- all of which live in
+    /// `native.rs`, which is itself `cfg(not(wasm32))`.
+    #[cfg(not(target_arch = "wasm32"))]
     fn encode_collection(&mut self, v: Value, out: &mut Vec<u8>, depth: u32) -> Result<(), String> {
         // The items are collected FIRST, then encoded. Encoding allocates --
         // `as_str` can build a flat string from a rope -- and walking a
@@ -324,11 +542,13 @@ impl Rt {
 
 // --- decoding --------------------------------------------------------------
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Reader<'a> {
     b: &'a [u8],
     i: usize,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<'a> Reader<'a> {
     fn u8(&mut self) -> Result<u8, String> {
         let v = *self.b.get(self.i).ok_or("the encoding ends mid-value")?;
@@ -349,6 +569,15 @@ impl<'a> Reader<'a> {
         a.copy_from_slice(s);
         Ok(u64::from_le_bytes(a))
     }
+    /// Past `n` bytes without reading them, for a walk that is not parsing.
+    fn skip(&mut self, n: usize) -> Result<(), String> {
+        let e = self.i.checked_add(n).ok_or("the encoding ends mid-value")?;
+        if e > self.b.len() {
+            return Err(String::from("the encoding ends mid-value"));
+        }
+        self.i = e;
+        Ok(())
+    }
     fn str(&mut self) -> Result<Option<String>, String> {
         let n = self.u32()?;
         if n == NO_NS {
@@ -367,23 +596,81 @@ impl<'a> Reader<'a> {
 
 impl Rt {
     /// Decode a value the HOST produced. Live tags are honoured.
+    /// HOST-FACING ONLY, and not compiled into a guest module
+    /// (`DECISIONS.md#the-codec-is-guest-code`). Nothing a guest can reach
+    /// encodes or decodes in the runtime any more: `flint.wire` does, in the
+    /// image. What is left here is what an EMBEDDER calls -- `Program::encode`,
+    /// `Program::decode` and the `flint_call` ABI -- all of which live in
+    /// `native.rs`, which is itself `cfg(not(wasm32))`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn decode(&mut self, bytes: &[u8]) -> Result<Value, String> {
         let mut r = Reader { b: bytes, i: 0 };
         self.decode_at(&mut r, true, 0)
     }
 
-    /// Decode a value the GUEST produced, where the live tags are refused.
+    // `decode_guest` WAS HERE, and it is gone because the thing it was waiting
+    // for arrived. It refused the live tags for a guest-produced encoding --
+    // "it exists so that whoever adds a guest-callable decoder finds it rather
+    // than writing the unsafe one" -- and a guest-callable decoder now exists:
+    // `flint.wire`, whose reader carries `RD_LIVE`. The rule moved from
+    // refusing tags to a flag on the reader, which is strictly better, because
+    // the tags are legal in the format and what decides is where the BYTES
+    // came from (`DECISIONS.md#the-codec-is-guest-code`).
+
+    /// Walk an encoding and MINT EVERY PORT IN IT, building no value.
     ///
-    /// This is the whole of `structured-ports`'s safety rule, and it is one line: a guest
-    /// that could decode arbitrary bytes into a port would have exactly the
-    /// integer-to-port conversion the sandbox forbids. Nothing calls this yet;
-    /// it exists so that whoever adds a guest-callable decoder finds it rather
-    /// than writing the unsafe one.
-    pub fn decode_guest(&mut self, bytes: &[u8]) -> Result<Value, String> {
-        let mut r = Reader { b: bytes, i: 0 };
-        self.decode_at(&mut r, false, 0)
+    /// The answer is the ports, so the caller can hold them: the intern table
+    /// is weak on purpose (`register_port`: "the scheduler keeps ids, not
+    /// references"), so a handle nobody holds is collectable before the guest
+    /// reads the message it arrived in.
+    ///
+    /// THE WALK ITSELF IS `kin/wirescan.kin`, generated into all three
+    /// runtimes. This is the slice-shaped door to it: the bytes become a
+    /// reader, and the reader is what the walk knows how to move.
+    pub fn wire_scan_ports(&mut self, bytes: &[u8]) -> Result<Value, String> {
+        let base = self.mark();
+        let bv = self.new_bytes(bytes);
+        let bi = self.push(bv);
+        // NOT LIVE. This reader is a cursor for the walk and is never handed to
+        // a guest; minting here goes through `mint_bridge_port` directly, so
+        // the flag that governs `wire-port-in` has no bearing on it.
+        let rd = self.wire_reader(self.r(bi), false);
+        let ri = self.push(rd);
+        let acc = self.empty_vec();
+        let ai = self.push(acc);
+        let ok = self.wire_scan_at(self.r(ri), ai, 0);
+        if !ok {
+            self.pop_to(base);
+            return Err(String::from("the encoding could not be read"));
+        }
+        if self.wire_left(self.r(ri)) != 0 {
+            self.pop_to(base);
+            return Err(String::from("the encoding has bytes left over"));
+        }
+        let out = self.r(ai);
+        self.pop_to(base);
+        Ok(out)
     }
 
+    /// Install a bridge port by host id, or NIL if this sandbox has no ports.
+    ///
+    /// The one runtime-specific step in the walk. Through `bridge_hook` rather
+    /// than straight to `install_bridge_port` for the SIZE reason `bridge_hook`
+    /// records.
+    pub fn mint_bridge_port(&mut self, id: i64) -> Value {
+        match self.bridge_hook {
+            Some(f) => f(self, id),
+            None => NIL,
+        }
+    }
+
+    /// HOST-FACING ONLY, and not compiled into a guest module
+    /// (`DECISIONS.md#the-codec-is-guest-code`). Nothing a guest can reach
+    /// encodes or decodes in the runtime any more: `flint.wire` does, in the
+    /// image. What is left here is what an EMBEDDER calls -- `Program::encode`,
+    /// `Program::decode` and the `flint_call` ABI -- all of which live in
+    /// `native.rs`, which is itself `cfg(not(wasm32))`.
+    #[cfg(not(target_arch = "wasm32"))]
     fn decode_at(&mut self, r: &mut Reader, live: bool, depth: u32) -> Result<Value, String> {
         if depth > 128 {
             return Err(String::from("value nested too deeply to decode"));
@@ -417,6 +704,27 @@ impl Rt {
                 let s = r.b.get(r.i..e).ok_or("the encoding ends mid-bytes")?.to_vec();
                 r.i = e;
                 Ok(self.new_bytes(&s))
+            }
+            K_WITH_META => {
+                // The metadata, then the value, then the two put together.
+                //
+                // ROOTED ACROSS THE SECOND DECODE, because decoding allocates
+                // and a Rust local is not a root -- the same rule `K_TAGGED`
+                // below follows.
+                //
+                // `with_meta` answers the value UNCHANGED for a kind that
+                // cannot carry metadata, which is the right failure: bytes that
+                // claim metadata for a number produce the number, not an error,
+                // and nothing downstream has to know the sender was confused.
+                let m = self.decode_at(r, live, depth + 1)?;
+                let base = self.mark();
+                let mi = self.push(m);
+                let v = self.decode_at(r, live, depth + 1)?;
+                let vi = self.push(v);
+                let (mv, vv) = (self.r(mi), self.r(vi));
+                let out = self.with_meta(vv, mv);
+                self.pop_to(base);
+                Ok(out)
             }
             K_TAGGED => {
                 let tag = self.decode_at(r, live, depth + 1)?;
@@ -542,10 +850,18 @@ impl Rt {
                 let id = r.u32()?;
                 // INTERN OR MINT. A port the host names in a message is a port
                 // it is handing to this sandbox, and that is how a capability
-                // gets delegated (`DECISIONS.md#ports-are-the-hosts`). It used to be refused
-                // unless the sandbox already held it, which made delegation
-                // impossible and was the pre-0027 rule that a port could only
-                // ever be one the sandbox had asked for.
+                // is delegated (`DECISIONS.md#ports-are-the-hosts`). It used to
+                // be refused unless the sandbox already held it, which made
+                // delegation impossible and was the pre-0027 rule that a port
+                // could only ever be one the sandbox had asked for.
+                //
+                // SHARED, NOT MOVED, and the encoder is where to see it: it
+                // writes the id and releases nothing, so a sender that passes a
+                // port on still holds it. Delegation here means the other side
+                // may now use it too, not that this side stopped being able to
+                // -- a port is a shared reference, counted per sandbox, and
+                // `wake_on` makes every thread parked on one runnable so
+                // several consumers are correct by construction.
                 //
                 // Arriving twice costs nothing and counts once: the handle is
                 // interned by host id, so the second arrival finds the first
@@ -686,24 +1002,42 @@ mod tests {
     /// `structured-ports`'s whole safety rule, as a test rather than a comment.
     ///
     /// A guest that could decode arbitrary bytes into a port would have the
-    /// integer-to-port conversion the sandbox forbids -- so the guest decoder
-    /// refuses the live tags, and the host decoder does not.
+    /// integer-to-port conversion the sandbox forbids.
+    ///
+    /// **The rule moved and the test moved with it.** It used to be
+    /// `decode_guest` refusing the live TAGS; it is now a flag on the READER,
+    /// because the tags are legal in the format and what decides is where the
+    /// bytes came from (`DECISIONS.md#the-codec-is-guest-code`). A reader a
+    /// guest built over its own bytes may not mint; one the runtime built over
+    /// a bridge's bytes may.
+    ///
+    /// This is the rule at the level this crate can see. The end-to-end
+    /// version -- a guest actually calling `wire-port-in` and getting a
+    /// `SecurityException` -- is in `runtimes/conform/wire.cljc`, on all four
+    /// builds.
     #[test]
     fn a_guest_cannot_decode_an_integer_into_a_port() {
         let mut rt = Rt::new();
         let mut bytes = alloc::vec![K_PORT];
         bytes.extend_from_slice(&7u32.to_le_bytes());
-        let err = rt.decode_guest(&bytes).expect_err("a guest decoded a port");
-        assert!(err.contains("identity"), "the refusal should say why: {err}");
+        let b = rt.new_bytes(&bytes);
+        let bi = rt.push(b);
 
-        let mut s = alloc::vec![K_SENTINEL];
-        s.extend_from_slice(&99u64.to_le_bytes());
-        s.extend_from_slice(&3u32.to_le_bytes());
-        s.extend_from_slice(b"fs\0");
-        assert!(rt.decode_guest(&s).is_err(), "a guest decoded a sentinel");
+        let guest = rt.wire_reader(rt.r(bi), false);
+        assert!(
+            !rt.wire_may_mint(guest),
+            "a reader over a guest's own bytes must not mint"
+        );
 
-        // And the same bytes, from the host, DO make a sentinel -- otherwise
-        // this test would pass with the whole tag unimplemented.
+        let live = rt.wire_reader(rt.r(bi), true);
+        assert!(
+            rt.wire_may_mint(live),
+            "a reader over a bridge's bytes must, or delegation is impossible"
+        );
+
+        // AND THE HOST DECODER IS UNAFFECTED, which is the asymmetry: the
+        // runtime decodes what the host sent and the guest never holds that
+        // decoder. Without this the test would pass with the tag unimplemented.
         let mut ok = alloc::vec![K_SENTINEL];
         ok.extend_from_slice(&99u64.to_le_bytes());
         ok.extend_from_slice(&2u32.to_le_bytes());
@@ -990,6 +1324,11 @@ impl Wire {
         self.b.push(K_TAGGED);
         self
     }
+    /// Open a metadata wrapper: write the metadata next, then the value.
+    pub fn with_meta(&mut self) -> &mut Wire {
+        self.b.push(K_WITH_META);
+        self
+    }
 }
 
 /// The shorthands. A host sending a string should not have to know there is a
@@ -1054,6 +1393,15 @@ pub enum Val {
     Port(u32),
     Opaque(u64, String),
     Tagged(alloc::boxed::Box<Val>, alloc::boxed::Box<Val>),
+    /// A value and the metadata that crossed with it: `(meta, value)`.
+    ///
+    /// WHAT CROSSED, not what the sender had. `flint.protocols/WireMeta`
+    /// selects that in the guest before the encoder sees it, so this is already
+    /// the narrowed set -- for a port, the protocols it speaks.
+    ///
+    /// A SEPARATE VARIANT rather than a field on every other one, because most
+    /// values carry none and a host that does not care should not have to look.
+    Meta(alloc::boxed::Box<Val>, alloc::boxed::Box<Val>),
 }
 
 impl Val {
@@ -1068,8 +1416,10 @@ impl Val {
     ///
     /// `Port` goes through as `K_PORT`, which on the other side is the host
     /// HANDING that port over: the decoder installs a bridge for it
-    /// (`DECISIONS.md#ports-are-the-hosts`). That is delegation, so a caller
-    /// forwarding a port is giving it away, not copying it.
+    /// (`DECISIONS.md#ports-are-the-hosts`). A caller forwarding a port SHARES
+    /// it -- this writes the id and releases nothing, so the sender keeps its
+    /// own handle and both ends may use it. A port is a shared reference,
+    /// counted per sandbox; there is no move and no single owner.
     pub fn write(&self, w: &mut Wire) {
         match self {
             Val::Nil => { w.nil(); }
@@ -1092,6 +1442,9 @@ impl Val {
                 for (k, v) in es { k.write(w); v.write(w); }
             }
             Val::Tagged(tag, v) => { w.tagged(); tag.write(w); v.write(w); }
+            // The metadata, then the value -- the order the guest decoder reads
+            // them in, so a host relaying one back sends what it received.
+            Val::Meta(m, v) => { w.with_meta(); m.write(w); v.write(w); }
         }
     }
 
@@ -1254,6 +1607,11 @@ impl<'a> HostReader<'a> {
                     out.push((k, v));
                 }
                 Val::Map(out)
+            }
+            K_WITH_META => {
+                let m = self.val()?;
+                let v = self.val()?;
+                Val::Meta(alloc::boxed::Box::new(m), alloc::boxed::Box::new(v))
             }
             K_PORT => Val::Port(self.u32()?),
             K_SENTINEL => {

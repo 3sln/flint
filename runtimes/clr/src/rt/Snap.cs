@@ -232,7 +232,15 @@ public static class Snap {
         rt.steps = r.U64();
         rt.gasLimit = r.U64();
         rt.sliceEnd = r.U64();
-        rt.checkpoint = r.U64();
+        // DERIVED, SO RE-DERIVED -- the field is read out of the stream and
+        // then thrown away. `checkpoint` is `min(gasLimit, sliceEnd)` with
+        // "absent" written as a sentinel, and the sentinels used to differ
+        // between this runtime and the native one. Computing it from the two
+        // fields beside it is what makes the crossing safe as a property of
+        // the FORMAT rather than of three files agreeing
+        // (`DECISIONS.md#resource-limits`).
+        r.U64();
+        rt.RefreshCheckpoint();
         rt.gasTrips = r.U32();
         rt.memTrips = r.U32();
         rt.status = r.U32();

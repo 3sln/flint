@@ -23,7 +23,14 @@
 
 (defn sh [& args]
   (let [p (.start (ProcessBuilder. (into-array String args)))
-        out (slurp (.getInputStream p)) err (slurp (.getErrorStream p))]
+        ;; STDERR IS DRAINED ON ITS OWN THREAD (`DECISIONS.md#the-codec-is-guest-code`,
+        ;; "the test helper deadlocked"). Reading stdout to completion and
+        ;; stderr after DEADLOCKS the moment a child writes more than a pipe
+        ;; buffer to stderr: the child blocks writing, this blocks reading, and
+        ;; neither moves again.
+        err (future (slurp (.getErrorStream p)))
+        out (slurp (.getInputStream p))
+        err @err]
     (.waitFor p) {:exit (.exitValue p) :out out :err err}))
 
 (println "tables: columnar storage that is a value (0026)")
@@ -135,7 +142,8 @@
            "  i.exports.set_step_limit(0x7ffffff000000000n);\n"
            "  const r = i.run('enc/main', [w]);\n"
            "  i.exports.collect_now();\n"
-           "  out[w] = { answer: r.out, peak: Number(i.exports.stat_peak_live()) };\n"
+           "  out[w] = { answer: r.out, peak: Number(i.exports.stat_peak_live()),\n"
+           "             alloc: Number(i.exports.stat_bytes_allocated()) };\n"
            "}\n"
            "console.log(JSON.stringify(out));\n"))
 (def enc (let [r (sh "node" "out/tbl-enc-run.mjs")]
@@ -150,20 +158,32 @@
        (get es "answer") "[20000 :a :a 7]")
 (check "  ... and a varying one still varies"
        (get ev "answer") "[20000 :a :b 7]")
-(println (format "    %-22s %10s" "" "peak live"))
+(println (format "    %-22s %10s %12s" "" "peak live" "allocated"))
 (doseq [[nm m] [["a column that varies" ev] ["a column that does not" es]]]
-  (println (format "    %-22s %10d" nm (get m "peak"))))
+  (println (format "    %-22s %10d %12d" nm (get m "peak") (get m "alloc"))))
 ;; A DIFFERENCE and not a ratio, because both runs are dominated by the vector
 ;; of maps they are built from, which is the same on either side. What the
 ;; encoding saves is one 8-byte slot per row -- 160 000 for 20 000 rows -- and
-;; what is asserted is that most of that actually came back. `stat_heap_used`
-;; was the first thing tried here and is the wrong instrument: it reports the
-;; heap's SIZE, so a 131 072-byte saving showed up as noise on 7.3 MB.
+;; what is asserted is that most of that actually came back.
+;;
+;; MEASURED ON ALLOCATION, and the instrument has been wrong twice before.
+;; `stat_heap_used` was first and reports the heap's SIZE, so a 131 072-byte
+;; saving showed up as noise on 7.3 MB. PEAK LIVE was second and is worse than
+;; useless here: it is sampled when the collector runs, so a build that
+;; allocates LESS collects less often and is sampled elsewhere -- with the
+;; builder fixed, the constant column's peak came out 27 584 HIGHER than the
+;; varying one's, which reads as a regression and is an artefact.
+;;
+;; Allocation is the one number here that is deterministic by construction
+;; (`DECISIONS.md#resource-limits`): the same program allocates the same bytes
+;; on every runtime and every run, with no dependence on when a collection
+;; happened. `peak live` is still printed, because watching it disagree with
+;; allocation is what caught the builder in the first place.
 (check-that "a constant column costs nothing per row"
-            (> (- (get ev "peak") (get es "peak")) 120000)
-            (format "peak %d against %d -- saved %d of the 160 000 a 20 000-row column holds"
-                    (get es "peak") (get ev "peak")
-                    (- (get ev "peak") (get es "peak"))))
+            (> (- (get ev "alloc") (get es "alloc")) 120000)
+            (format "allocated %d against %d -- saved %d of the 160 000 a 20 000-row column holds"
+                    (get es "alloc") (get ev "alloc")
+                    (- (get ev "alloc") (get es "alloc"))))
 (check-that "  ... and both runs really built a table"
             (and (> (get es "peak") 500000) (> (get ev "peak") 500000))
             "one of the runs did too little to compare")

@@ -12,11 +12,12 @@
 ;; still CHECKED: a decoder that skipped that would be a way to make a table
 ;; that is not closed, which is the one property everything else rests on.
 (ns flint.rt.tablebuild
-  (:require [flint.impl.rt :refer [defn return if let do comment doc == < > +
+  (:require [flint.impl.rt :refer [defn declarefn return if let do comment doc == < > +
                                    - not alloc heap slot set-slot fixnum
                                    empty-vec new-obj mark push r set-r pop-to
                                    for local set while charge-checked
                                    throw-str static-text Rt Value I32 RootIx
+                                   Bool CH_ENC ENC_CONST
                                    Text NIL TY_NODE TY_TABLE CHUNK CH_BASE
                                    SC_TYPES TB_SCHEMA TB_CHUNKS TB_COUNT
                                    TB_OFFSET TB_LEN]]
@@ -35,6 +36,8 @@
      "work, so checking every chunk bounds the overshoot at 256 rows and costs"
      "one branch per 256. Charging `rows * cols` up front is what this used to"
      "do, and it ran 637 379 steps past an exhausted budget.")
+(declarefn flint.rt.valeq/val-eq)
+
 (defn ^:pub ^:method ^Value new-table [^:mut ^Rt rt ^Value schema ^Value rows]
   (let [^RootIx base (mark rt)
         ^RootIx si (push rt schema)
@@ -56,24 +59,78 @@
       (let [^Value ch (new-chunk rt width take)
             ^RootIx chi (push rt ch)]
         (for [^I32 c 0 ncols]
+          (comment "NO RUN UNTIL A VALUE DIFFERS."
+                   ""
+                   "The run used to be allocated here, filled, and only then"
+                   "handed to `collapse` -- so a column that is constant"
+                   "allocated a full `CHUNK`-slot node and threw it away."
+                   "The finished table never held it, but it was live at the"
+                   "peak, which is why `test/tables.clj` could see only 32 288"
+                   "of the 160 632 bytes a constant column actually saves."
+                   ""
+                   "So the first value is remembered instead, and the run is"
+                   "allocated at the FIRST value that differs -- backfilling"
+                   "the rows already seen, which all held the first value. One"
+                   "pass still, and one comparison per value; the varying case"
+                   "reads each row exactly once, as before.")
           (let [^I32 id (schema-id-at rt (r rt si) c)
-                ^Value col (new-obj rt TY_NODE take)
-                ^RootIx coli (push rt col)
-                ^Value name (schema-name-at rt (r rt si) c)
+                ^Value name0 (schema-name-at rt (r rt si) c)
                 ^Value types (slot rt (r rt si) SC_TYPES)
-                ^Value tp (vec-nth rt types c NIL)]
+                ^Value tp0 (vec-nth rt types c NIL)
+                ;; ALL FOUR ROOTED, and that is not caution. The run is now
+                ;; allocated from INSIDE the row loop, and an allocation moves
+                ;; whatever a host local points at -- so the column's name and
+                ;; its declared type, which the old builder could read once
+                ;; because it allocated before reading them, would be read as
+                ;; something else from the row after the expansion. Measured:
+                ;; the type came back `:?` and a legal keyword was refused at
+                ;; row 5 890.
+                ^RootIx namei (push rt name0)
+                ^RootIx tpi (push rt tp0)
+                ^RootIx v0i (push rt NIL)
+                ^RootIx coli (push rt NIL)
+                ;; THE CURRENT VALUE, in a root that is reused rather than
+                ;; pushed per row: `val-eq` may allocate -- comparing two ropes
+                ;; can flatten one -- so the value cannot stay in a host local
+                ;; across it either.
+                ^RootIx vi (push rt NIL)]
+            (local ^:mut ^Bool expanded)
+            (set expanded false)
             (for [^I32 k 0 take]
               (let [^Value rowv (vec-nth rt (r rt ri) (+ row k) NIL)
-                    ^Value val (map-get rt rowv name NIL)]
-                (if (not (type-ok rt tp val))
+                    ^Value val (map-get rt rowv (r rt namei) NIL)]
+                (set-r rt vi val))
+              (if (not (type-ok rt (r rt tpi) (r rt vi)))
+                (do
+                  (let [^Text msg (column-type-error rt (r rt namei) (r rt tpi)
+                                                     (r rt vi) (+ row k))]
+                    (pop-to rt base)
+                    (return (throw-str rt "IllegalArgumentException" msg)))))
+              (if (== k 0)
+                (set-r rt v0i (r rt vi)))
+              (if expanded
+                (set-slot rt (r rt coli) k (r rt vi))
+                (if (not (val-eq rt (r rt v0i) (r rt vi)))
                   (do
-                    (let [^Text msg (column-type-error rt name tp val (+ row k))]
-                      (pop-to rt base)
-                      (return (throw-str rt "IllegalArgumentException" msg)))))
-                (set-slot rt (r rt coli) k val)))
-            (set-slot rt (r rt chi) (+ CH_BASE id) (r rt coli))
-            (collapse rt (r rt chi) id)
-            (pop-to rt coli)))
+                    (comment "A VALUE DIFFERS, so the run is needed after all."
+                             "Backfill what came before it -- every one of"
+                             "those rows held the first value, which is why"
+                             "they did not need storing until now.")
+                    (let [^Value col (new-obj rt TY_NODE take)]
+                      (set-r rt coli col))
+                    (for [^I32 j 0 k]
+                      (set-slot rt (r rt coli) j (r rt v0i)))
+                    (set-slot rt (r rt coli) k (r rt vi))
+                    (set expanded true)))))
+            (if expanded
+              (do (set-slot rt (r rt chi) (+ CH_BASE id) (r rt coli))
+                  (collapse rt (r rt chi) id))
+              (do (comment "CONSTANT: one value for the whole chunk and no run"
+                           "at all. `collapse` is not called -- this IS the"
+                           "state it would have reached.")
+                  (set-slot rt (r rt chi) (+ CH_BASE id) (r rt v0i))
+                  (set-slot rt (slot rt (r rt chi) CH_ENC) id (fixnum ENC_CONST))))
+            (pop-to rt namei)))
         (let [^Value nv (vec-conj rt (r rt ci) (r rt chi))]
           (set-r rt ci nv))
         (pop-to rt chi))

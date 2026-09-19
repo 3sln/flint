@@ -614,12 +614,39 @@ pub struct GcStats {
     pub bytes_promoted: u64,
     pub old_live: Addr,
     pub old_capacity: Addr,
-    /// High-water mark of live bytes -- old survivors plus whatever is in the
-    /// nursery -- sampled at every collection. This is the number a memory
-    /// claim has to be made against: "peak memory is proportional to content
-    /// actually fetched" is a statement about *this*, not about how much has
-    /// been allocated over a run (`bench/construe/document-resource.md`).
+    /// High-water mark of `old_live + young_used`, sampled at EVERY collection.
+    ///
+    /// **AN UPPER BOUND, not live bytes, and the name is older than the
+    /// understanding.** `old_live` is incremented on every old-space
+    /// allocation and only recomputed to the truth by `sweep_old`, which runs
+    /// at a MAJOR. Sampled after a minor it therefore counts every old object
+    /// allocated since the last major, dead ones included -- which is not a
+    /// defect in the sampling but what generational collection means: peak
+    /// LIVE cannot be known for old space between majors.
+    ///
+    /// Measured: `test/document.clj` read 4 039 744 here for a program whose
+    /// genuinely live set never exceeded about 530 KB, because `LARGE_OBJECT`
+    /// is 16 KB so a 64 KB wave is born in old space and 64 of them land
+    /// between majors (`DECISIONS.md#two-builds`).
+    ///
+    /// Use it as a ceiling. For a number that means live bytes, take
+    /// `peak_live_major`.
     pub peak_live: u64,
+    /// High-water mark of live bytes, sampled ONLY after a major -- which is
+    /// the only moment `old_live` is true, because `sweep_old` has just
+    /// recomputed it.
+    ///
+    /// The honest counterpart to `peak_live`. It can miss a spike that both
+    /// begins and ends between two majors; that is the price of being true
+    /// about what it does report, and it is the right direction for a memory
+    /// GUARD to be wrong in only if the guard is a claim about sustained
+    /// residency rather than about instantaneous worst case. `test/document.clj`
+    /// asks the former.
+    ///
+    /// NOT SERIALISED. `snap.rs` writes a named list of stats and this is
+    /// deliberately not in it: the snapshot format is byte-identical across the
+    /// three runtimes and a diagnostic counter is not worth changing that for.
+    pub peak_live_major: u64,
 }
 
 pub struct Gc {
@@ -931,12 +958,19 @@ impl Gc {
         size >= LARGE_OBJECT as Addr || self.bump.saturating_add(size) > self.from.saturating_add(self.half)
     }
 
-    /// Sample the high-water mark. Called after each collection, when the
+    /// Sample the high-water marks. Called after each collection, when the
     /// numbers mean something: mid-cycle the nursery is full of garbage.
-    fn note_peak(&mut self) {
+    ///
+    /// `major` says whether `sweep_old` has just run, and therefore whether
+    /// `old_live` is the truth or a ceiling. Only the truthful samples reach
+    /// `peak_live_major`; every sample reaches `peak_live`.
+    fn note_peak(&mut self, major: bool) {
         let live = self.old_live as u64 + self.young_used() as u64;
         if live > self.stats.peak_live {
             self.stats.peak_live = live;
+        }
+        if major && live > self.stats.peak_live_major {
+            self.stats.peak_live_major = live;
         }
     }
     pub fn old_capacity(&self) -> Addr {
@@ -1521,7 +1555,7 @@ impl Gc {
         core::mem::swap(&mut self.from, &mut self.to);
         self.bump = self.to_bump;
         self.from_end = self.from + self.half;
-        self.note_peak();
+        self.note_peak(false);
         // A root that still points into the abandoned half once the flip is
         // done. Nothing downstream can distinguish this from a live pointer --
         // `is_young` spans both semispaces -- so it has to be caught here or
@@ -1662,7 +1696,7 @@ impl Gc {
         self.sweep_old();
         #[cfg(debug_assertions)]
         self.sp.in_gc.set(false);
-        self.note_peak();
+        self.note_peak(true);
 
         // Clear marks on the (live) nursery.
         let mut a = self.from;
@@ -2075,6 +2109,77 @@ mod tests {
         let before = h.r.stack[0];
         h.gc.minor(&mut h.r);
         assert_eq!(h.r.stack[0], before, "a popped slot must not be rewritten");
+    }
+
+    /// THE MAJOR PATH, and the PORT table -- neither of which the test below
+    /// reaches.
+    ///
+    /// `weak_interns_drop_dead_entries_and_forward_live_ones` runs a MINOR
+    /// collection, where an entry survives by being forwarded (`TY_FWD`) and
+    /// dies by not being. A major collection decides the same question a
+    /// different way, by `marked`, and that arm had no test at all.
+    ///
+    /// `INTERN_PORT` because that is the table whose entries are a sandbox's
+    /// grip on its bridge ends: `conc.rs`'s `SC_BRIDGES` note says "after a
+    /// collection an id whose lookup misses is one whose handle was not
+    /// forwarded, and that is exactly this sandbox letting go". If this table
+    /// were NOT swept, a bridge would be pinned for the life of the sandbox and
+    /// the host would never be told it could let go -- a leak no other test
+    /// would see, because everything else about the port still works.
+    ///
+    /// BOTH ENTRIES ARE ROOTED ACROSS THE MINOR COLLECTION, and that is the
+    /// whole of what makes this test about the major path. Written the obvious
+    /// way -- allocate, intern, collect -- the dead entry dies in the NURSERY
+    /// and the minor sweep removes it, so the assertion below passes with the
+    /// major sweep deleted entirely. Verified by deleting it: the test still
+    /// passed. Promoting both first is what puts the question to `marked`.
+    #[test]
+    fn a_major_collection_sweeps_the_weak_port_table() {
+        let mut h = H::new();
+        let live = h.string("live-port");
+        let dead = h.string("dead-port");
+        let li = h.root(live);
+        let di = h.root(dead);
+        let slot = h.r.shared.interns[INTERN_PORT].lookup(1, |_| false).unwrap_err();
+        h.r.shared.interns[INTERN_PORT].insert_at(slot, 1, live);
+        let slot = h.r.shared.interns[INTERN_PORT].lookup(2, |_| false).unwrap_err();
+        h.r.shared.interns[INTERN_PORT].insert_at(slot, 2, dead);
+        assert_eq!(h.r.shared.interns[INTERN_PORT].count, 2);
+
+        // PROMOTED, and asserted to be. `PROMOTE_AGE` copies is what moves a
+        // survivor out of the nursery, and until it is out, the MINOR sweep is
+        // what settles its table entry -- `major` begins by calling `minor`, so
+        // a young entry never reaches the mark sweep at all. Two earlier
+        // versions of this test passed with the major sweep deleted for exactly
+        // that reason; `is_young` below is what stops a third.
+        for _ in 0..PROMOTE_AGE {
+            h.gc.minor(&mut h.r);
+        }
+        assert!(!h.gc.is_young(h.get(li).as_heap()), "the live entry should be old by now");
+        assert!(!h.gc.is_young(h.get(di).as_heap()), "and so should the one about to die");
+        assert_eq!(
+            h.r.shared.interns[INTERN_PORT].count, 2,
+            "both were rooted, so nothing is settled yet"
+        );
+
+        // Now drop the second root and collect the old generation. The entry is
+        // in old space and unreachable, so only `marked` can say so.
+        h.r.shadow.truncate(di);
+        h.gc.major(&mut h.r);
+
+        assert_eq!(
+            h.r.shared.interns[INTERN_PORT].count, 1,
+            "the unreachable port entry should be gone after a major collection"
+        );
+        assert!(
+            h.r.shared.interns[INTERN_PORT].lookup(1, |_| true).is_ok(),
+            "and the rooted one should still be there"
+        );
+        assert!(
+            h.r.shared.interns[INTERN_PORT].lookup(2, |_| true).is_err(),
+            "by id, not just by count"
+        );
+        let _ = li;
     }
 
     #[test]

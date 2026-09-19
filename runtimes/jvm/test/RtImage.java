@@ -34,6 +34,10 @@ public class RtImage {
     // HIGHER on the ported runtime than on the native one: it was not noticing
     // the failed assertions, and a port that beats the thing it mirrors is
     // never good news.
+    // THESE ARE THE INITIALISERS, so say so: `ensureStarted` is the runtime's
+    // own one-shot runner, and a control plane spawned later would otherwise
+    // run them a second time.
+    rt.started = true;
     for (int fn : img.init) {
       rt.call(rt.makeClosure(fn, new long[0]), new long[0]);
       if (!Val.isNil(rt.thrown)) { System.out.println("  FAIL " + why(rt)); System.exit(1); }

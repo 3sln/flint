@@ -36,3 +36,303 @@ pub(crate) fn pred_hit(code: u32, v: u32) -> bool {
         _ => !space_cp(v),
     };
 }
+/// IS THIS CODE POINT IN THIS CHARACTER CLASS?
+/// 
+/// A class is `[n, (kind, a, b) * n]` sitting at `off` inside the class
+/// table, which itself sits at `class-base` inside the program. THE
+/// PROGRAM IS PASSED WHOLE and indexed from a base, rather than sliced:
+/// Rust slices for nothing and the other three cannot, so slicing here
+/// would be one runtime's convenience written into a shape the rest have
+/// to work around. Native did exactly that -- `&prog[PROG_HDR + ..]` --
+/// and the ports carried a different signature for the same function.
+/// 
+/// `^:shared` on the program is the whole point of this file being
+/// generatable at all. `Vec<u32>` is copied in Rust and `int[]` is shared
+/// everywhere else; unmarked, one spelling would mean two things. Shared
+/// and READ-ONLY, so Rust takes `&[u32]` and an index stays an index.
+/// 
+/// ANY KIND THAT IS NOT `CL_ONE` OR `CL_RANGE` IS A PREDICATE, matching
+/// the `_ =>` and `default:` the three copies already had. A class table
+/// is built by this runtime's own compiler, so an unknown kind is a bug
+/// in the emitter rather than input to validate -- and treating it as a
+/// predicate is what all three already did.
+pub fn class_hit(prog: &[u32], class_base: u32, off: u32, v: u32) -> bool {
+    // INDICES ARE `Idx`, which is `usize` in Rust and `int` elsewhere.
+    // The count comes back out of the array as a WORD, so it is `I32`
+    // and the loop counter matches it; only the subscripts convert.
+    let base: u32 = class_base + off;
+    let n: u32 = prog[base as usize];
+    let mut k: u32;
+    k = 0;
+    while k < n {
+        let b: u32 = (base + 1) + (k * 3);
+        let kind: u32 = prog[b as usize];
+        if kind == 0 {
+            if v == prog[(b + 1) as usize] {
+                return true;
+            }
+        } else if kind == 1 {
+            if (v >= prog[(b + 1) as usize]) && (v <= prog[(b + 2) as usize]) {
+                return true;
+            }
+        } else if pred_hit(prog[(b + 1) as usize], v) {
+            return true;
+        }
+        k += 1;
+    }
+    return false;
+}
+/// DOES THE INSTRUCTION AT `pc` CONSUME THIS CODE POINT?
+/// 
+/// Asked once per live thread per character, which is why the shape of
+/// the program matters here more than anywhere else in the engine: the
+/// program is indexed, not sliced and not copied into a runtime buffer.
+/// 
+/// `.` DOES NOT MATCH A NEWLINE. Java's does not without DOTALL, and the
+/// backtracker this engine replaced did -- so the divergence is closed in
+/// the direction of the language being imitated, in one place now rather
+/// than in three that could drift apart again.
+/// 
+/// ANYTHING THAT IS NOT A CONSUMING OPCODE ANSWERS FALSE. `split`, `jmp`,
+/// `save` and `match` are control, and `add-thread` has already followed
+/// them; reaching one here means the thread list holds a pc it should not,
+/// which is a bug in this file and not input to validate.
+pub fn consumes(prog: &[u32], code_base: u32, class_base: u32, pc: u32, v: u32) -> bool {
+    let b: u32 = code_base + (pc * 3);
+    let op: u32 = prog[b as usize];
+    if op == 0 {
+        return v == prog[(b + 1) as usize];
+    }
+    if op == 1 {
+        return v != 10;
+    }
+    // OP-ANYNL: any code point INCLUDING a newline. Not the user's
+    // `.` -- this is the unanchored search prefix walking forward
+    // looking for a place to start, and a walk that stops at a
+    // newline cannot reach anything after one.
+    if op == 11 {
+        return true;
+    }
+    if op == 10 {
+        let hit: bool = class_hit(&*(prog), class_base, prog[(b + 1) as usize], v);
+        if prog[(b + 2) as usize] == 1 {
+            return !hit;
+        } else {
+            return hit;
+        }
+    }
+    return false;
+}
+/// ADD `pc` AND EVERYTHING REACHABLE FROM IT WITHOUT CONSUMING, once.
+/// 
+/// The other half of a Pike step. `consumes` says whether an instruction
+/// eats a character; this follows every instruction that does NOT -- jumps,
+/// splits, captures and the zero-width assertions -- and appends whatever
+/// is left to the thread list. `seen` is what makes the whole engine linear
+/// rather than exponential: a pc already added this step is not added
+/// again, however many paths reach it.
+/// 
+/// FLAT BUFFERS, NOT A LIST OF OBJECTS. The three hand-written copies each
+/// held a growable list of a `Thread` struct with its own slot vector, and
+/// kin has neither structs nor growth. Both turn out to be unnecessary:
+/// `seen` admits each pc AT MOST ONCE per character, so the list is bounded
+/// by the instruction count and the count can simply be returned.
+/// 
+/// AND THAT SAME FACT PLACES THE CAPTURE SLOTS. `save` has to hand its
+/// successor a MODIFIED COPY of the slots, which is where the per-thread
+/// allocation came from. Because each pc is visited once, the copy for the
+/// visit to `pc` can live at `scratch-at + pc * nslots` -- no bump pointer,
+/// no second value to thread back, and one allocation for the whole step
+/// instead of one per capture.
+/// 
+/// ONE ARENA AND OFFSETS, not several buffers. The thread rows, the scratch
+/// blocks and the caller's own slots all live in `mem`, because a thread's
+/// saved slots are READ from the same memory the new rows are WRITTEN to.
+/// Two `^:shared` parameters aliasing one array is what Rust refuses and
+/// the other three accept -- the precise divergence the mark exists to
+/// prevent -- and passing them as separate buffers would have forced a copy
+/// of every live thread's slots on every character to get around it. One
+/// array and three offsets has neither problem.
+pub fn add_thread(prog: &[u32], code_base: u32, cps: &[u32], cps_len: u32, i: u32, mem: &mut [i32], list_at: u32, n: u32, seen: &mut [bool], pc: u32, scratch_at: u32, saved_at: u32, nslots: u32) -> u32 {
+    if seen[pc as usize] {
+        return n;
+    }
+    seen[pc as usize] = true;
+    let b: u32 = code_base + (pc * 3);
+    let op: u32 = prog[b as usize];
+    let a: u32 = prog[(b + 1) as usize];
+    let c: u32 = prog[(b + 2) as usize];
+    // JMP: follow it and nothing else.
+    if op == 3 {
+        return add_thread(&*(prog), code_base, &*(cps), cps_len, i, &mut *(mem), list_at, n, &mut *(seen), a, scratch_at, saved_at, nslots);
+    }
+    // SPLIT: `a` is PREFERRED, so it goes in first -- leftmost-first
+    // is decided by the ORDER threads enter the list and by nothing
+    // else downstream.
+    if op == 2 {
+        let n1: u32 = add_thread(&*(prog), code_base, &*(cps), cps_len, i, &mut *(mem), list_at, n, &mut *(seen), a, scratch_at, saved_at, nslots);
+        return add_thread(&*(prog), code_base, &*(cps), cps_len, i, &mut *(mem), list_at, n1, &mut *(seen), c, scratch_at, saved_at, nslots);
+    }
+    // SAVE: copy the slots, write this position into slot `a`, and
+    // hand the copy to the successor at its own scratch block.
+    if op == 4 {
+        let dst: u32 = scratch_at + ((pc + 1) * nslots);
+        let mut k: u32;
+        k = 0;
+        while k < nslots {
+            mem[(dst + k) as usize] = mem[(saved_at + k) as usize];
+            k += 1;
+        }
+        if a < nslots {
+            mem[(dst + a) as usize] = i as i32;
+        }
+        return add_thread(&*(prog), code_base, &*(cps), cps_len, i, &mut *(mem), list_at, n, &mut *(seen), pc + 1, scratch_at, dst, nslots);
+    }
+    // BOL and EOL: zero-width, and true only at the ends.
+    if op == 6 {
+        if i == 0 {
+            return add_thread(&*(prog), code_base, &*(cps), cps_len, i, &mut *(mem), list_at, n, &mut *(seen), pc + 1, scratch_at, saved_at, nslots);
+        }
+        return n;
+    }
+    if op == 7 {
+        if i == cps_len {
+            return add_thread(&*(prog), code_base, &*(cps), cps_len, i, &mut *(mem), list_at, n, &mut *(seen), pc + 1, scratch_at, saved_at, nslots);
+        }
+        return n;
+    }
+    // WORD BOUNDARY, and its negation, from the same test: a boundary
+    // is where word-ness CHANGES. Out of range counts as non-word,
+    // which is what makes the ends of the subject boundaries.
+    if (op == 8) || (op == 9) {
+        let before: bool = (i > 0) && word_cp(cps[(i - 1) as usize]);
+        let after: bool = (i < cps_len) && word_cp(cps[i as usize]);
+        let at: bool = before != after;
+        if (op == 8) == at {
+            return add_thread(&*(prog), code_base, &*(cps), cps_len, i, &mut *(mem), list_at, n, &mut *(seen), pc + 1, scratch_at, saved_at, nslots);
+        }
+        return n;
+    }
+    // ANYTHING ELSE CONSUMES, so the thread stops here and is
+    // recorded: `pc` then its slots, one flat row of `1 + nslots`.
+    let row: u32 = list_at + (n * (nslots + 1));
+    mem[row as usize] = pc as i32;
+    let mut k2: u32;
+    k2 = 0;
+    while k2 < nslots {
+        mem[((row + 1) + k2) as usize] = mem[(saved_at + k2) as usize];
+        k2 += 1;
+    }
+    return n + 1;
+}
+/// THE SIMULATOR: run a compiled program over the code points, once.
+/// 
+/// Every thread advances in LOCKSTEP, one character at a time, which is
+/// what bounds the work at O(subject x program) and is the whole reason
+/// this engine replaced a backtracker. `add-thread` builds the next step's
+/// list; this decides what feeds it.
+/// 
+/// LEFTMOST-FIRST IS DECIDED BY THE `break`. Threads are walked in priority
+/// order, and a `match` records its slots and STOPS the walk -- every
+/// lower-priority thread is dropped rather than carried into the next
+/// step. That is what makes `a|ab` answer `a`. The outer loop still
+/// continues, so a HIGHER-priority thread that has not matched yet can go
+/// on to a longer match; only the ones that lost the race are cut.
+/// 
+/// `full` DEMANDS THE END. `re-matches` passes it, and then a `match` that
+/// is not at the end is not an answer -- the thread simply stops being
+/// interesting and the walk goes on, which is what lets a LOWER-priority
+/// alternative win there. That is the one place the two entry points
+/// differ in behaviour rather than in where they start.
+/// 
+/// THE MEMORY IS THE CALLER'S. `a-at` and `b-at` are the two thread lists,
+/// swapped each step; `scratch-at` is where `add-thread` puts its capture
+/// copies; `start-at` holds the initial all-unset slots; `best-at` receives
+/// the answer. One array, because a thread's slots are read from the same
+/// memory the next step's rows are written to -- see `add-thread`.
+pub fn run_over(prog: &[u32], ninstrs: u32, nslots: u32, cps: &[u32], cps_len: u32, from: u32, entry: u32, full: bool, mem: &mut [i32], a_at: u32, b_at: u32, scratch_at: u32, start_at: u32, best_at: u32, seen: &mut [bool]) -> bool {
+    if from > cps_len {
+        return false;
+    }
+    let code_base: u32 = 3;
+    let class_base: u32 = 3 + (ninstrs * 3);
+    let width: u32 = nslots + 1;
+    // THE INITIAL SLOTS ARE ALL UNSET, and -1 is what unset means
+    // everywhere downstream -- `groups->result` reads it.
+    let mut z: u32;
+    z = 0;
+    while z < nslots {
+        mem[(start_at + z) as usize] = -1;
+        z += 1;
+    }
+    let mut q: u32;
+    q = 0;
+    while q < ninstrs {
+        seen[q as usize] = false;
+        q += 1;
+    }
+    let mut cur: u32;
+    let mut nxt: u32;
+    let mut n: u32;
+    let mut i: u32;
+    let mut matched: bool;
+    cur = a_at;
+    nxt = b_at;
+    i = from;
+    matched = false;
+    n = add_thread(&*(prog), code_base, &*(cps), cps_len, from, &mut *(mem), cur, 0, &mut *(seen), entry, scratch_at, start_at, nslots);
+    loop {
+        if n == 0 {
+            break;
+        }
+        // SEEN IS CLEARED PER CHARACTER, not per call: within one step
+        // every thread shares it, which is what stops one pc being
+        // added twice by two different predecessors.
+        let mut q2: u32;
+        q2 = 0;
+        while q2 < ninstrs {
+            seen[q2 as usize] = false;
+            q2 += 1;
+        }
+        let mut m: u32;
+        let mut k: u32;
+        m = 0;
+        k = 0;
+        while k < n {
+            let row: u32 = cur + (k * width);
+            let pc: u32 = mem[row as usize] as u32;
+            let op: u32 = prog[(code_base + (pc * 3)) as usize];
+            if op == 5 {
+                // A MATCH. Record it and cut the rest of the walk.
+                if !full || (i == cps_len) {
+                    let mut w: u32;
+                    w = 0;
+                    while w < nslots {
+                        mem[(best_at + w) as usize] = mem[((row + 1) + w) as usize];
+                        w += 1;
+                    }
+                    matched = true;
+                    break;
+                }
+            } else {
+                if i < cps_len {
+                    if consumes(&*(prog), code_base, class_base, pc, cps[i as usize]) {
+                        m = add_thread(&*(prog), code_base, &*(cps), cps_len, i + 1, &mut *(mem), nxt, m, &mut *(seen), pc + 1, scratch_at, row + 1, nslots);
+                    }
+                }
+            }
+            k += 1;
+        }
+        // SWAP, by exchanging the two offsets: the list just built
+        // becomes the one walked next.
+        let t: u32 = cur;
+        cur = nxt;
+        nxt = t;
+        n = m;
+        if i >= cps_len {
+            break;
+        }
+        i += 1;
+    }
+    return matched;
+}

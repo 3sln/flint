@@ -288,6 +288,148 @@ fn a_pool_runs_guest_code_on_one_sandbox_in_parallel() {
     println!("    {on_exec} dispatches ran on a secondary executor");
 }
 
+/// A STEP LIMIT BOUNDS THE SANDBOX, NOT ONE OF ITS THREADS.
+///
+/// `resource-limits` says gas bounds a sandbox. A pooled sandbox runs guest
+/// code on several `Rt`s that share a heap, and `set_step_limit` reaches one
+/// of them -- so the question this asks is whether the cap an embedder set is
+/// the cap they got.
+///
+/// It is written so that the WRONG behaviour is a passing call rather than a
+/// slow one: `spin` is ten million iterations against a two-thousand
+/// instruction budget, so a call that is bounded cannot finish and a call that
+/// is not cannot help finishing. Every call must be refused; one `Ok` is the
+/// hole.
+#[test]
+fn a_step_limit_binds_every_executor_not_just_the_first() {
+    let img = image();
+    let pool = std::sync::Arc::new(flint::ThreadPool::new(4));
+    let sandbox = img.sandbox_with(pool).unwrap();
+    sandbox.set_step_limit(2_000);
+
+    let mut waiting = Vec::new();
+    for _ in 0..4 {
+        let s = sandbox.clone();
+        waiting.push(std::thread::spawn(move || {
+            (0..4).map(|_| s.call("app/spin", &[])).collect::<Vec<_>>()
+        }));
+    }
+    let mut escaped = 0usize;
+    let mut refused = 0usize;
+    for t in waiting {
+        for pending in t.join().unwrap() {
+            match pending.wait() {
+                Err(_) => refused += 1,
+                Ok(v) => {
+                    escaped += 1;
+                    println!("    a call ran past the budget and answered {v:?}");
+                }
+            }
+        }
+    }
+    // THE WITNESS, and without it this passes when nothing was parallel at
+    // all: if every dispatch fell back to the primary there would be no
+    // secondary to be unbounded, and a green row would mean "not tested".
+    let on_exec = sandbox.parallel_dispatches();
+    let (dispatches, served) = sandbox.dispatch_counts();
+    println!(
+        "    {refused} refused, {escaped} ran to completion; \
+         {dispatches} dispatches served {served} calls, {on_exec} of them on a secondary"
+    );
+    assert!(on_exec > 0, "no dispatch ran on a secondary executor -- this proves nothing");
+    assert_eq!(escaped, 0, "{escaped} call(s) outran a limit the sandbox was given");
+}
+
+/// AND THE CAP IS TIGHT, not merely present.
+///
+/// A cap that stops the program "somewhere after" the number it was given is
+/// not one an embedder can reason about, and a batched counter overshoots by
+/// the batch times the executors unless the batch narrows as the total nears
+/// the limit (`DECISIONS.md#resource-limits`). This puts a number on it.
+///
+/// The reported figure includes the GRACE window -- one executor is allowed
+/// `GAS_GRACE` more instructions so a `finally` can put things back -- so the
+/// bound asked for here is the limit plus that grace and a batch, not the
+/// limit. Asking for the limit exactly would be asking the runtime to drop a
+/// feature it has on purpose.
+///
+/// **This is not the test that guards the NARROWING**, and saying so matters
+/// because the name suggests otherwise. Grace dominates the measurement:
+/// 400 000 asked for and 467 548 spent, of which 65 536 is one executor's
+/// grace and about 2 000 is everything else. A flat batch would add at most
+/// `4 x 4096` and still land inside this bound. The arithmetic that makes the
+/// batch a cap is checked exactly, in `rt.rs`'s `shared_gas_tests`; what this
+/// checks is that the whole path is wired and lands where that arithmetic
+/// says it should.
+#[test]
+fn a_pooled_budget_stops_near_its_limit_rather_than_far_past_it() {
+    const LIMIT: u64 = 400_000;
+    let img = image();
+    let pool = std::sync::Arc::new(flint::ThreadPool::new(4));
+    let sandbox = img.sandbox_with(pool).unwrap();
+    sandbox.set_step_limit(LIMIT);
+
+    let mut waiting = Vec::new();
+    for _ in 0..4 {
+        let s = sandbox.clone();
+        waiting.push(std::thread::spawn(move || {
+            (0..8).map(|_| s.call("app/spin", &[])).collect::<Vec<_>>()
+        }));
+    }
+    for t in waiting {
+        for pending in t.join().unwrap() {
+            let _ = pending.wait();
+        }
+    }
+    let spent = sandbox.gas();
+    // GAS_GRACE is 64 KiB of instructions, granted once per executor that
+    // trips, and four executors may each be inside their grace.
+    let bound = LIMIT + 4 * 64 * 1024 + 4 * 4096;
+    println!("    limit {LIMIT}, spent {spent}, bound {bound}");
+    assert!(spent >= LIMIT, "the budget was not actually spent: {spent}");
+    assert!(spent <= bound, "overshot: spent {spent} against a bound of {bound}");
+}
+
+/// SHORT CALLS ARE NOT FREE.
+///
+/// The shared counter is batched: an executor runs a batch, then publishes
+/// what it spent. A call that ENDS before it reaches a batch boundary has
+/// therefore spent something nobody has been told about -- and if arming the
+/// executor for the next call simply moves the watermark to where `steps` now
+/// stands, that spending is discarded rather than deferred.
+///
+/// This is the case the batching hides, and it hides it completely: a stream
+/// of calls each shorter than a batch would never publish anything, so the
+/// total would stay at zero and the budget would never be spent no matter how
+/// long the sandbox ran. `call_blocking` is used deliberately -- it makes each
+/// dispatch carry ONE call, where a burst would be coalesced into a batch big
+/// enough to cross a boundary by itself and the leak would close by accident.
+#[test]
+fn a_stream_of_short_calls_still_spends_the_budget() {
+    const LIMIT: u64 = 60_000;
+    let img = image();
+    let pool = std::sync::Arc::new(flint::ThreadPool::new(4));
+    let sandbox = img.sandbox_with(pool).unwrap();
+    sandbox.set_step_limit(LIMIT);
+
+    let mut served = 0u32;
+    let mut refused = false;
+    for _ in 0..4_000 {
+        match sandbox.call_blocking("app/tally", &[]) {
+            Ok(_) => served += 1,
+            Err(_) => {
+                refused = true;
+                break;
+            }
+        }
+    }
+    println!("    {served} short calls served before the budget stopped it, gas {}",
+             sandbox.gas());
+    assert!(refused,
+            "4000 short calls ran under a {LIMIT}-instruction budget without \
+             spending it -- work below a batch boundary is being discarded");
+}
+
 /// The same, but allocation-heavy, so collections happen WHILE other threads
 /// are inside the interpreter. That is the case the safepoint exists for.
 #[test]

@@ -1,0 +1,364 @@
+;; The wire WRITER and READER (`DECISIONS.md#the-codec-is-guest-code`).
+;;
+;; WRITTEN ONCE, HERE, because the three runtimes carried it three times and
+;; that is the mistake this file exists to undo. The state machine below holds
+;; the codec's one safety property -- a guest cannot put four raw bytes where a
+;; value is due -- and a property kept by three hand-written copies is kept by
+;; care rather than by construction.
+;;
+;; The cost was paid before it was noticed. A marker reachable by arithmetic
+;; (see `expect-rowcount`) had to be found once and repaired in Rust, in Java
+;; and in C# by hand, and the only thing that made those three repairs agree
+;; was attention. `kin/tableref.kin` already records the same shape one level
+;; down: "Rust answered `-1` in an `i64` and both ports `-1` in an `int`; that
+;; happened to agree, but only because the type was signed."
+;;
+;; What stays hand-written per runtime is the REGISTRATION -- the `def` line,
+;; the argument type check, the throw by name -- exactly as every other builtin
+;; is done. What is here is the logic those three shims share.
+(ns flint.rt.wirecore
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != < > >= <= not nil? and or
+                                   + - * quot local set while mark push r set-r
+                                   pop-to slot set-slot heap-ty? new-obj
+                                   fixnum fixnum64 as-fixnum to-i32 ushr64 bit-and bit-or shl
+                                   empty-vec
+                                   Rt Value RootIx I32 I64 Bool
+                                   NIL TRUE NOT_FOUND
+                                   TY_WRITER TY_READER
+                                   WR_BUF WR_LIVE WR_NEED WR_LEN
+                                   RD_BYTES RD_POS RD_LIVE RD_LEN
+                                   MAX_CELLS]]
+            [flint.rt.byteat :refer [b-at]]
+            [flint.rt.bytecore :refer [b-count]]
+            [flint.rt.bytefold :refer [b-empty]]
+            [flint.rt.bytetrans :refer [b-transient]]
+            [flint.rt.bytetwrite :refer [b-conj b-persistent]]
+            [flint.rt.vecread :refer [vec-count vec-nth]]
+            [flint.rt.vecwrite :refer [vec-conj]]
+            [flint.rt.vecassoc :refer [vec-assoc vec-pop]]))
+
+;; --- the writer ------------------------------------------------------------
+
+(doc "Is `v` a writer?")
+(defn ^:pub ^:method ^Bool is-writer [^Rt rt ^Value v]
+  (return (heap-ty? rt v TY_WRITER)))
+
+(doc "A fresh writer: an empty transient, wrapped so only the wire primitives"
+     "can reach it."
+     ""
+     "A guest is given no way to name the buffer, so it cannot write a `K_PORT`"
+     "tag followed by an id it does not hold -- the safety rule stated as"
+     "\"flint is given no way to turn an integer into a port\", kept by making"
+     "these the only door."
+     ""
+     "`WR_NEED` starts `[1]`: one value is due, the message itself.")
+(defn ^:pub ^:method ^Value wire-writer [^:mut ^Rt rt]
+  (let [^RootIx base (mark rt)
+        ^Value empty (b-empty rt)
+        ^RootIx ei (push rt empty)
+        ^Value t (b-transient rt (r rt ei))
+        ^RootIx ti (push rt t)
+        ^Value w (new-obj rt TY_WRITER WR_LEN)]
+    (if (nil? rt w)
+      (do (pop-to rt base)
+          (return NIL)))
+    (let [^RootIx wi (push rt w)
+          ^Value need (empty-vec rt)
+          ^RootIx ni (push rt need)
+          ^Value one (vec-conj rt (r rt ni) (fixnum 1))]
+      (set-r rt ni one)
+      (comment "READ BACK OUT OF THE ROOTS: `vec-conj` allocates, and a copying"
+               "collector moves the writer out from under a host local.")
+      (set-slot rt (r rt wi) WR_BUF (r rt ti))
+      (set-slot rt (r rt wi) WR_LIVE TRUE)
+      (set-slot rt (r rt wi) WR_NEED (r rt ni))
+      (let [^Value out (r rt wi)]
+        (pop-to rt base)
+        (return out)))))
+
+(doc "Append one byte. False when `w` is not a LIVE writer, so every primitive"
+     "refuses in one shape -- a writer answers its bytes once, and appending"
+     "after that would grow bytes somebody has already sent."
+     ""
+     "FALSE ALSO WHEN THE BUFFER COULD NOT GROW, and that is the answer this"
+     "did not give. `b-conj` answers NIL when `tb-flush` cannot allocate a"
+     "fresh tail; the first version wrote that NIL into `WR_BUF` and returned"
+     "TRUE, so the writer was destroyed and every caller was told it had"
+     "worked. `port/send` was then handed a corpse and the bridge refused it"
+     "with \"a bridge carries an encoding -- use `flint.port/send`\", a true"
+     "sentence about a false situation since that is exactly what was used,"
+     "and `serve-calls` dropped the error so the caller pumped to its guard."
+     "Three layers, each quieter than the last, out of one unchecked return."
+     ""
+     "NOTHING IS RAISED HERE. An allocation failure has already set `thrown`,"
+     "and a transient that is no longer live throws from `b-conj` itself, so"
+     "answering false is enough -- and it is what lets the real error stand"
+     "rather than be replaced by a guess at what went wrong.")
+(defn ^:pub ^:method ^Bool wire-byte [^:mut ^Rt rt ^Value w ^I32 b]
+  (if (not (is-writer rt w))
+    (return false))
+  (if (!= (slot rt w WR_LIVE) TRUE)
+    (return false))
+  (let [^RootIx base (mark rt)
+        ^RootIx wi (push rt w)
+        ^Value buf (slot rt (r rt wi) WR_BUF)
+        ^Value nb (b-conj rt buf b)]
+    (if (nil? rt nb)
+      (do (pop-to rt base)
+          (return false)))
+    (set-slot rt (r rt wi) WR_BUF nb)
+    (pop-to rt base)
+    (return true)))
+
+(doc "Is a VALUE allowed here, and if so account for it."
+     ""
+     "`opens` is how many values this value itself contains -- zero for a"
+     "scalar, `n` for a vector of `n`, `2n` for a map of `n` pairs, two for a"
+     "wrapper like metadata or a tagged literal."
+     ""
+     "False when the message is already complete, which is the refusal that"
+     "stops a second top-level value being appended to bytes somebody is about"
+     "to send."
+     ""
+     "A NEGATIVE FRAME MEANS A COUNT IS DUE, NOT A VALUE -- the table's row"
+     "count, with the column count carried as its magnitude. Refusing a value"
+     "there is the whole reason a table can be written at all: the count goes"
+     "only where the reader expects a count, so its four bytes are never read"
+     "as a tag and an id.")
+(defn ^:pub ^:method ^Bool wire-expect-value [^:mut ^Rt rt ^Value w ^I64 opens]
+  (if (not (is-writer rt w))
+    (return false))
+  (let [^RootIx base (mark rt)
+        ^RootIx wi (push rt w)
+        ^Value need (slot rt (r rt wi) WR_NEED)
+        ^I32 depth (vec-count rt need)]
+    (if (== depth 0)
+      (do (pop-to rt base)
+          (return false)))
+    (let [^I64 top (as-fixnum (vec-nth rt need (- depth 1) NOT_FOUND))]
+      (if (<= top 0)
+        (do (pop-to rt base)
+            (return false)))
+      (let [^Value dec (vec-assoc rt need (- depth 1) (fixnum64 (- top 1)))
+            ^RootIx ni (push rt dec)]
+        (comment "A frame that reaches zero is POPPED: a completed container IS"
+                 "the value its parent was waiting for, and the parent was"
+                 "decremented when the container opened.")
+        (local ^:mut ^I32 d)
+        (set d (vec-count rt (r rt ni)))
+        (while (and (> d 0)
+                    (== (as-fixnum (vec-nth rt (r rt ni) (- d 1) NOT_FOUND)) 0))
+          (let [^Value popped (vec-pop rt (r rt ni))]
+            (set-r rt ni popped)
+            (set d (vec-count rt (r rt ni)))))
+        (if (> opens 0)
+          (let [^Value opened (vec-conj rt (r rt ni) (fixnum64 opens))]
+            (set-r rt ni opened)))
+        (set-slot rt (r rt wi) WR_NEED (r rt ni))
+        (pop-to rt base)
+        (return true)))))
+
+(doc "A table opens: `2 * ncols` values are due, and then a ROW COUNT."
+     ""
+     "Two frames, because what is due after the column pairs is not a value."
+     "`-ncols - 1` is the marker, and its magnitude is what the cells need"
+     "later.")
+(defn ^:pub ^:method ^Bool wire-open-table [^:mut ^Rt rt ^Value w ^I64 ncols]
+  (if (not (wire-expect-value rt w 0))
+    (return false))
+  (let [^RootIx base (mark rt)
+        ^RootIx wi (push rt w)
+        ^Value need (slot rt (r rt wi) WR_NEED)
+        ^RootIx ni (push rt need)]
+    (let [^Value marked (vec-conj rt (r rt ni) (fixnum64 (- (- 0 ncols) 1)))]
+      (set-r rt ni marked))
+    (if (> ncols 0)
+      (let [^Value pairs (vec-conj rt (r rt ni) (fixnum64 (* ncols 2)))]
+        (set-r rt ni pairs)))
+    (set-slot rt (r rt wi) WR_NEED (r rt ni))
+    (pop-to rt base)
+    (return true)))
+
+(doc "The ROW COUNT, legal only where one is due. Opens `ncols * nrows`."
+     ""
+     "THE MARKER MUST NOT BE REACHABLE BY ARITHMETIC, and this is the place it"
+     "was. A frame is a fixnum and a fixnum is 48 bits, SIGN-EXTENDED, so a"
+     "count of `2^47 + 1` opened a frame that read back negative -- a marker --"
+     "while writing `1` to the wire. A reader was told to expect one value and"
+     "the writer stood ready to take a raw four-byte count in its place:"
+     "`0f 00 00 00` there is `K_PORT` and the start of an id."
+     ""
+     "The counts are bounded at `u32` by the callers, which is what the format"
+     "writes anyway, so no legitimate frame can sign-extend. The product is the"
+     "one frame built by MULTIPLYING, so it is checked here.")
+(defn ^:pub ^:method ^Bool wire-expect-rowcount [^:mut ^Rt rt ^Value w ^I64 nrows]
+  (if (not (is-writer rt w))
+    (return false))
+  (if (< nrows 0)
+    (return false))
+  (let [^RootIx base (mark rt)
+        ^RootIx wi (push rt w)
+        ^Value need (slot rt (r rt wi) WR_NEED)
+        ^I32 depth (vec-count rt need)]
+    (if (== depth 0)
+      (do (pop-to rt base)
+          (return false)))
+    (let [^I64 top (as-fixnum (vec-nth rt need (- depth 1) NOT_FOUND))]
+      (comment "A VALUE is due, not a count: the column pairs are not finished.")
+      (if (>= top 0)
+        (do (pop-to rt base)
+            (return false)))
+      (let [^I64 ncols (- (- 0 top) 1)]
+        (if (and (!= nrows 0) (> ncols (quot MAX_CELLS nrows)))
+          (do (pop-to rt base)
+              (return false)))
+        (let [^I64 cells (* ncols nrows)
+              ^Value shorter (vec-pop rt need)
+              ^RootIx ni (push rt shorter)]
+          (if (> cells 0)
+            (let [^Value opened (vec-conj rt (r rt ni) (fixnum64 cells))]
+              (set-r rt ni opened))
+            (do (comment "An empty table completes here, and so may its parents.")
+                (local ^:mut ^I32 d)
+                (set d (vec-count rt (r rt ni)))
+                (while (and (> d 0)
+                            (== (as-fixnum (vec-nth rt (r rt ni) (- d 1) NOT_FOUND)) 0))
+                  (let [^Value popped (vec-pop rt (r rt ni))]
+                    (set-r rt ni popped)
+                    (set d (vec-count rt (r rt ni)))))))
+          (set-slot rt (r rt wi) WR_NEED (r rt ni))
+          (pop-to rt base)
+          (return true))))))
+
+(doc "Is the message STRUCTURALLY COMPLETE? `port/send` asks before shipping:"
+     "`wire-vec 3` with two values emitted is a message no reader can read.")
+(defn ^:pub ^:method ^Bool wire-complete [^Rt rt ^Value w]
+  (if (not (is-writer rt w))
+    (return false))
+  (return (== (vec-count rt (slot rt w WR_NEED)) 0)))
+
+(doc "Seal the writer and answer its bytes, or NIL if it was already sealed."
+     ""
+     "ONCE. `WR_LIVE` goes false here, so a second use is refused rather than"
+     "growing bytes somebody has already sent.")
+(defn ^:pub ^:method ^Value wire-finish [^:mut ^Rt rt ^Value w]
+  (if (not (is-writer rt w))
+    (return NIL))
+  (if (!= (slot rt w WR_LIVE) TRUE)
+    (return NIL))
+  (let [^RootIx base (mark rt)
+        ^RootIx wi (push rt w)
+        ^Value buf (slot rt (r rt wi) WR_BUF)
+        ^Value out (b-persistent rt buf)
+        ^RootIx oi (push rt out)]
+    (set-slot rt (r rt wi) WR_LIVE NIL)
+    (let [^Value v (r rt oi)]
+      (pop-to rt base)
+      (return v))))
+
+;; --- the reader ------------------------------------------------------------
+;;
+;; NOT THE WRITER'S MIRROR IMAGE. The writer is opaque because a guest that can
+;; write raw bytes can forge a `K_PORT` tag; a reader hands out integers and
+;; strings freely, because reading bytes a guest already holds tells it nothing
+;; new. Only the two MINTING reads are guarded, and by a flag on the reader --
+;; true only for bytes that arrived on a bridge -- rather than by refusing tags.
+
+(doc "Is `v` a reader?")
+(defn ^:pub ^:method ^Bool is-reader [^Rt rt ^Value v]
+  (return (heap-ty? rt v TY_READER)))
+
+(doc "A reader over `bytes`. `live` is whether it may MINT -- true only for"
+     "bytes that arrived on a bridge, never for bytes a program holds.")
+(defn ^:pub ^:method ^Value wire-reader [^:mut ^Rt rt ^Value bytes ^Bool live]
+  (let [^RootIx base (mark rt)
+        ^RootIx bi (push rt bytes)
+        ^Value rd (new-obj rt TY_READER RD_LEN)]
+    (if (nil? rt rd)
+      (do (pop-to rt base)
+          (return NIL)))
+    (let [^RootIx ri (push rt rd)]
+      (set-slot rt (r rt ri) RD_BYTES (r rt bi))
+      (set-slot rt (r rt ri) RD_POS (fixnum 0))
+      (if live
+        (set-slot rt (r rt ri) RD_LIVE TRUE)
+        (set-slot rt (r rt ri) RD_LIVE NIL))
+      (let [^Value out (r rt ri)]
+        (pop-to rt base)
+        (return out)))))
+
+(doc "May this reader mint a port or an opaque?"
+     ""
+     "A flag rather than a tag refusal: the tags are legal in the format, and"
+     "what decides is where the BYTES came from. A guest's own bytes are a"
+     "guest's own, and nothing in them is a capability.")
+(defn ^:pub ^:method ^Bool wire-may-mint [^Rt rt ^Value rd]
+  (if (not (is-reader rt rd))
+    (return false))
+  (return (== (slot rt rd RD_LIVE) TRUE)))
+
+(doc "How many bytes are left unread.")
+(defn ^:pub ^:method ^I32 wire-left [^Rt rt ^Value rd]
+  (if (not (is-reader rt rd))
+    (return 0))
+  (let [^I32 n (b-count rt (slot rt rd RD_BYTES))
+        ^I32 at (to-i32 (as-fixnum (slot rt rd RD_POS)))]
+    (if (>= at n)
+      (return 0))
+    (return (- n at))))
+
+(doc "The byte at offset `i` from the cursor, without moving it."
+     ""
+     "`dflt` is what a read past the end answers, because `I32` is UNSIGNED"
+     "here -- there is no `-1` to return, and inventing one in a signed type"
+     "is how the three runtimes came to agree by luck rather than by rule"
+     "(see `kin/tableref.kin`). A caller that must tell the cases apart asks"
+     "`wire-left` first.")
+(defn ^:pub ^:method ^Value wire-peek [^:mut ^Rt rt ^Value rd ^I32 i ^Value dflt]
+  (if (not (is-reader rt rd))
+    (return dflt))
+  (let [^I32 at (+ (to-i32 (as-fixnum (slot rt rd RD_POS))) i)]
+    (return (b-at rt (slot rt rd RD_BYTES) at dflt))))
+
+(doc "One byte off the cursor, advancing it. `dflt` when there is none."
+     ""
+     "The tag read. Every value in the format starts with one.")
+(defn ^:pub ^:method ^I32 wire-take-u8 [^:mut ^Rt rt ^Value rd ^I32 dflt]
+  (if (not (is-reader rt rd))
+    (return dflt))
+  (if (< (wire-left rt rd) 1)
+    (return dflt))
+  (let [^Value bs (slot rt rd RD_BYTES)
+        ^I32 at (to-i32 (as-fixnum (slot rt rd RD_POS)))
+        ^I32 b0 (to-i32 (as-fixnum (b-at rt bs at NOT_FOUND)))]
+    (set-slot rt rd RD_POS (fixnum (+ at 1)))
+    (return b0)))
+
+(doc "Four little-endian bytes off the cursor, advancing it."
+     ""
+     "`dflt` is the answer when fewer than four are left. Every count in the"
+     "format is four bytes, so this is the shape a walk reads them with.")
+(defn ^:pub ^:method ^I32 wire-take-u32 [^:mut ^Rt rt ^Value rd ^I32 dflt]
+  (if (not (is-reader rt rd))
+    (return dflt))
+  (if (< (wire-left rt rd) 4)
+    (return dflt))
+  (let [^Value bs (slot rt rd RD_BYTES)
+        ^I32 at (to-i32 (as-fixnum (slot rt rd RD_POS)))
+        ^I32 b0 (to-i32 (as-fixnum (b-at rt bs at NOT_FOUND)))
+        ^I32 b1 (to-i32 (as-fixnum (b-at rt bs (+ at 1) NOT_FOUND)))
+        ^I32 b2 (to-i32 (as-fixnum (b-at rt bs (+ at 2) NOT_FOUND)))
+        ^I32 b3 (to-i32 (as-fixnum (b-at rt bs (+ at 3) NOT_FOUND)))]
+    (set-slot rt rd RD_POS (fixnum (+ at 4)))
+    (return (bit-or b0 (bit-or (shl b1 8) (bit-or (shl b2 16) (shl b3 24)))))))
+
+(doc "Advance the cursor by `n`, answering whether there were that many left.")
+(defn ^:pub ^:method ^Bool wire-skip [^:mut ^Rt rt ^Value rd ^I32 n]
+  (if (not (is-reader rt rd))
+    (return false))
+  (if (< (wire-left rt rd) n)
+    (return false))
+  (let [^I32 at (to-i32 (as-fixnum (slot rt rd RD_POS)))]
+    (set-slot rt rd RD_POS (fixnum (+ at n)))
+    (return true)))

@@ -12,8 +12,10 @@
 ;; merge the A-Z and a-z ranges into one masked test. Convergence paying
 ;; rather than costing, as the rotate intrinsic did in `hash`.
 (ns flint.rt.pike
-  (:require [flint.impl.rt :refer [defn return case not and or ==
-                                   >= <= I32 Bool]]))
+  (:require [flint.impl.rt :refer [defn return case not and or == != < +
+                                   * do if let local set while doc comment
+                                   aget aset as-idx to-slot slot-idx > - >= <= I32 Idx Bool U32s I32Buf Flags
+                                   break forever]]))
 
 (defn ^:inline ^Bool word-cp [^I32 v]
   (return (or (and (>= v 48) (<= v 57))
@@ -32,3 +34,284 @@
     [3] (not (word-cp v))
     [4] (space-cp v)
     :else (not (space-cp v))))
+
+(doc "IS THIS CODE POINT IN THIS CHARACTER CLASS?"
+     ""
+     "A class is `[n, (kind, a, b) * n]` sitting at `off` inside the class"
+     "table, which itself sits at `class-base` inside the program. THE"
+     "PROGRAM IS PASSED WHOLE and indexed from a base, rather than sliced:"
+     "Rust slices for nothing and the other three cannot, so slicing here"
+     "would be one runtime's convenience written into a shape the rest have"
+     "to work around. Native did exactly that -- `&prog[PROG_HDR + ..]` --"
+     "and the ports carried a different signature for the same function."
+     ""
+     "`^:shared` on the program is the whole point of this file being"
+     "generatable at all. `Vec<u32>` is copied in Rust and `int[]` is shared"
+     "everywhere else; unmarked, one spelling would mean two things. Shared"
+     "and READ-ONLY, so Rust takes `&[u32]` and an index stays an index."
+     ""
+     "ANY KIND THAT IS NOT `CL_ONE` OR `CL_RANGE` IS A PREDICATE, matching"
+     "the `_ =>` and `default:` the three copies already had. A class table"
+     "is built by this runtime's own compiler, so an unknown kind is a bug"
+     "in the emitter rather than input to validate -- and treating it as a"
+     "predicate is what all three already did.")
+(defn ^:pub ^Bool class-hit [^:shared ^U32s prog ^I32 class-base ^I32 off ^I32 v]
+  (comment "INDICES ARE `Idx`, which is `usize` in Rust and `int` elsewhere."
+           "The count comes back out of the array as a WORD, so it is `I32`"
+           "and the loop counter matches it; only the subscripts convert.")
+  (let [^I32 base (+ class-base off)
+        ^I32 n (aget prog (as-idx base))]
+    (local ^:mut ^I32 k)
+    (set k 0)
+    (while (< k n)
+      (let [^I32 b (+ (+ base 1) (* k 3))
+            ^I32 kind (aget prog (as-idx b))]
+        (if (== kind 0)
+          (if (== v (aget prog (as-idx (+ b 1)))) (return true))
+          (if (== kind 1)
+            (if (and (>= v (aget prog (as-idx (+ b 1))))
+                     (<= v (aget prog (as-idx (+ b 2)))))
+              (return true))
+            (if (pred-hit (aget prog (as-idx (+ b 1))) v) (return true)))))
+      (set k (+ k 1)))
+    (return false)))
+
+(doc "DOES THE INSTRUCTION AT `pc` CONSUME THIS CODE POINT?"
+     ""
+     "Asked once per live thread per character, which is why the shape of"
+     "the program matters here more than anywhere else in the engine: the"
+     "program is indexed, not sliced and not copied into a runtime buffer."
+     ""
+     "`.` DOES NOT MATCH A NEWLINE. Java's does not without DOTALL, and the"
+     "backtracker this engine replaced did -- so the divergence is closed in"
+     "the direction of the language being imitated, in one place now rather"
+     "than in three that could drift apart again."
+     ""
+     "ANYTHING THAT IS NOT A CONSUMING OPCODE ANSWERS FALSE. `split`, `jmp`,"
+     "`save` and `match` are control, and `add-thread` has already followed"
+     "them; reaching one here means the thread list holds a pc it should not,"
+     "which is a bug in this file and not input to validate.")
+(defn ^:pub ^Bool consumes [^:shared ^U32s prog ^I32 code-base ^I32 class-base
+                            ^I32 pc ^I32 v]
+  (let [^I32 b (+ code-base (* pc 3))
+        ^I32 op (aget prog (as-idx b))]
+    (if (== op 0)
+      (return (== v (aget prog (as-idx (+ b 1))))))
+    (if (== op 1)
+      (return (!= v 10)))
+    (comment "OP-ANYNL: any code point INCLUDING a newline. Not the user's"
+             "`.` -- this is the unanchored search prefix walking forward"
+             "looking for a place to start, and a walk that stops at a"
+             "newline cannot reach anything after one.")
+    (if (== op 11)
+      (return true))
+    (if (== op 10)
+      (let [^Bool hit (class-hit prog class-base (aget prog (as-idx (+ b 1))) v)]
+        (if (== (aget prog (as-idx (+ b 2))) 1)
+          (return (not hit))
+          (return hit))))
+    (return false)))
+
+(doc "ADD `pc` AND EVERYTHING REACHABLE FROM IT WITHOUT CONSUMING, once."
+     ""
+     "The other half of a Pike step. `consumes` says whether an instruction"
+     "eats a character; this follows every instruction that does NOT -- jumps,"
+     "splits, captures and the zero-width assertions -- and appends whatever"
+     "is left to the thread list. `seen` is what makes the whole engine linear"
+     "rather than exponential: a pc already added this step is not added"
+     "again, however many paths reach it."
+     ""
+     "FLAT BUFFERS, NOT A LIST OF OBJECTS. The three hand-written copies each"
+     "held a growable list of a `Thread` struct with its own slot vector, and"
+     "kin has neither structs nor growth. Both turn out to be unnecessary:"
+     "`seen` admits each pc AT MOST ONCE per character, so the list is bounded"
+     "by the instruction count and the count can simply be returned."
+     ""
+     "AND THAT SAME FACT PLACES THE CAPTURE SLOTS. `save` has to hand its"
+     "successor a MODIFIED COPY of the slots, which is where the per-thread"
+     "allocation came from. Because each pc is visited once, the copy for the"
+     "visit to `pc` can live at `scratch-at + pc * nslots` -- no bump pointer,"
+     "no second value to thread back, and one allocation for the whole step"
+     "instead of one per capture."
+     ""
+     "ONE ARENA AND OFFSETS, not several buffers. The thread rows, the scratch"
+     "blocks and the caller's own slots all live in `mem`, because a thread's"
+     "saved slots are READ from the same memory the new rows are WRITTEN to."
+     "Two `^:shared` parameters aliasing one array is what Rust refuses and"
+     "the other three accept -- the precise divergence the mark exists to"
+     "prevent -- and passing them as separate buffers would have forced a copy"
+     "of every live thread's slots on every character to get around it. One"
+     "array and three offsets has neither problem.")
+(defn ^:pub ^I32 add-thread [^:shared ^U32s prog ^I32 code-base
+                             ^:shared ^U32s cps ^I32 cps-len ^I32 i
+                             ^:shared ^I32Buf mem ^I32 list-at ^I32 n
+                             ^:shared ^Flags seen ^I32 pc
+                             ^I32 scratch-at ^I32 saved-at
+                             ^I32 nslots]
+  (if (aget seen (as-idx pc))
+    (return n))
+  (aset seen (as-idx pc) true)
+  (let [^I32 b (+ code-base (* pc 3))
+        ^I32 op (aget prog (as-idx b))
+        ^I32 a (aget prog (as-idx (+ b 1)))
+        ^I32 c (aget prog (as-idx (+ b 2)))]
+    (comment "JMP: follow it and nothing else.")
+    (if (== op 3)
+      (return (add-thread prog code-base cps cps-len i mem list-at n seen a
+                          scratch-at saved-at nslots)))
+    (comment "SPLIT: `a` is PREFERRED, so it goes in first -- leftmost-first"
+             "is decided by the ORDER threads enter the list and by nothing"
+             "else downstream.")
+    (if (== op 2)
+      (let [^I32 n1 (add-thread prog code-base cps cps-len i mem list-at n seen a
+                                scratch-at saved-at nslots)]
+        (return (add-thread prog code-base cps cps-len i mem list-at n1 seen c
+                            scratch-at saved-at nslots))))
+    (comment "SAVE: copy the slots, write this position into slot `a`, and"
+             "hand the copy to the successor at its own scratch block.")
+    (if (== op 4)
+      (let [^I32 dst (+ scratch-at (* (+ pc 1) nslots))]
+        (local ^:mut ^I32 k)
+        (set k 0)
+        (while (< k nslots)
+          (aset mem (as-idx (+ dst k)) (aget mem (as-idx (+ saved-at k))))
+          (set k (+ k 1)))
+        (if (< a nslots)
+          (aset mem (as-idx (+ dst a)) (to-slot i)))
+        (return (add-thread prog code-base cps cps-len i mem list-at n seen (+ pc 1)
+                            scratch-at dst nslots))))
+    (comment "BOL and EOL: zero-width, and true only at the ends.")
+    (if (== op 6)
+      (do (if (== i 0)
+            (return (add-thread prog code-base cps cps-len i mem list-at n seen (+ pc 1)
+                                scratch-at saved-at nslots)))
+          (return n)))
+    (if (== op 7)
+      (do (if (== i cps-len)
+            (return (add-thread prog code-base cps cps-len i mem list-at n seen (+ pc 1)
+                                scratch-at saved-at nslots)))
+          (return n)))
+    (comment "WORD BOUNDARY, and its negation, from the same test: a boundary"
+             "is where word-ness CHANGES. Out of range counts as non-word,"
+             "which is what makes the ends of the subject boundaries.")
+    (if (or (== op 8) (== op 9))
+      (do (let [^Bool before (and (> i 0) (word-cp (aget cps (as-idx (- i 1)))))
+                ^Bool after (and (< i cps-len) (word-cp (aget cps (as-idx i))))
+                ^Bool at (!= before after)]
+            (if (== (== op 8) at)
+              (return (add-thread prog code-base cps cps-len i mem list-at n seen (+ pc 1)
+                                  scratch-at saved-at nslots))))
+          (return n)))
+    (comment "ANYTHING ELSE CONSUMES, so the thread stops here and is"
+             "recorded: `pc` then its slots, one flat row of `1 + nslots`.")
+    (let [^I32 row (+ list-at (* n (+ nslots 1)))]
+      (aset mem (as-idx row) (to-slot pc))
+      (local ^:mut ^I32 k2)
+      (set k2 0)
+      (while (< k2 nslots)
+        (aset mem (as-idx (+ (+ row 1) k2)) (aget mem (as-idx (+ saved-at k2))))
+        (set k2 (+ k2 1)))
+      (return (+ n 1)))))
+
+(doc "THE SIMULATOR: run a compiled program over the code points, once."
+     ""
+     "Every thread advances in LOCKSTEP, one character at a time, which is"
+     "what bounds the work at O(subject x program) and is the whole reason"
+     "this engine replaced a backtracker. `add-thread` builds the next step's"
+     "list; this decides what feeds it."
+     ""
+     "LEFTMOST-FIRST IS DECIDED BY THE `break`. Threads are walked in priority"
+     "order, and a `match` records its slots and STOPS the walk -- every"
+     "lower-priority thread is dropped rather than carried into the next"
+     "step. That is what makes `a|ab` answer `a`. The outer loop still"
+     "continues, so a HIGHER-priority thread that has not matched yet can go"
+     "on to a longer match; only the ones that lost the race are cut."
+     ""
+     "`full` DEMANDS THE END. `re-matches` passes it, and then a `match` that"
+     "is not at the end is not an answer -- the thread simply stops being"
+     "interesting and the walk goes on, which is what lets a LOWER-priority"
+     "alternative win there. That is the one place the two entry points"
+     "differ in behaviour rather than in where they start."
+     ""
+     "THE MEMORY IS THE CALLER'S. `a-at` and `b-at` are the two thread lists,"
+     "swapped each step; `scratch-at` is where `add-thread` puts its capture"
+     "copies; `start-at` holds the initial all-unset slots; `best-at` receives"
+     "the answer. One array, because a thread's slots are read from the same"
+     "memory the next step's rows are written to -- see `add-thread`.")
+(defn ^:pub ^Bool run-over [^:shared ^U32s prog ^I32 ninstrs ^I32 nslots
+                            ^:shared ^U32s cps ^I32 cps-len
+                            ^I32 from ^I32 entry ^Bool full
+                            ^:shared ^I32Buf mem ^I32 a-at ^I32 b-at
+                            ^I32 scratch-at ^I32 start-at ^I32 best-at
+                            ^:shared ^Flags seen]
+  (if (> from cps-len)
+    (return false))
+  (let [^I32 code-base 3
+        ^I32 class-base (+ 3 (* ninstrs 3))
+        ^I32 width (+ nslots 1)]
+    (comment "THE INITIAL SLOTS ARE ALL UNSET, and -1 is what unset means"
+             "everywhere downstream -- `groups->result` reads it.")
+    (local ^:mut ^I32 z)
+    (set z 0)
+    (while (< z nslots)
+      (aset mem (as-idx (+ start-at z)) -1)
+      (set z (+ z 1)))
+    (local ^:mut ^I32 q)
+    (set q 0)
+    (while (< q ninstrs)
+      (aset seen (as-idx q) false)
+      (set q (+ q 1)))
+    (local ^:mut ^I32 cur)
+    (local ^:mut ^I32 nxt)
+    (local ^:mut ^I32 n)
+    (local ^:mut ^I32 i)
+    (local ^:mut ^Bool matched)
+    (set cur a-at)
+    (set nxt b-at)
+    (set i from)
+    (set matched false)
+    (set n (add-thread prog code-base cps cps-len from mem cur 0 seen entry
+                       scratch-at start-at nslots))
+    (forever
+      (if (== n 0) (break))
+      (comment "SEEN IS CLEARED PER CHARACTER, not per call: within one step"
+               "every thread shares it, which is what stops one pc being"
+               "added twice by two different predecessors.")
+      (local ^:mut ^I32 q2)
+      (set q2 0)
+      (while (< q2 ninstrs)
+        (aset seen (as-idx q2) false)
+        (set q2 (+ q2 1)))
+      (local ^:mut ^I32 m)
+      (local ^:mut ^I32 k)
+      (set m 0)
+      (set k 0)
+      (while (< k n)
+        (let [^I32 row (+ cur (* k width))
+              ^I32 pc (slot-idx (aget mem (as-idx row)))
+              ^I32 op (aget prog (as-idx (+ code-base (* pc 3))))]
+          (if (== op 5)
+            (do (comment "A MATCH. Record it and cut the rest of the walk.")
+                (if (or (not full) (== i cps-len))
+                  (do (local ^:mut ^I32 w)
+                      (set w 0)
+                      (while (< w nslots)
+                        (aset mem (as-idx (+ best-at w))
+                              (aget mem (as-idx (+ (+ row 1) w))))
+                        (set w (+ w 1)))
+                      (set matched true)
+                      (break))))
+            (do (if (< i cps-len)
+                  (if (consumes prog code-base class-base pc (aget cps (as-idx i)))
+                    (set m (add-thread prog code-base cps cps-len (+ i 1) mem nxt m
+                                       seen (+ pc 1) scratch-at (+ row 1) nslots)))))))
+        (set k (+ k 1)))
+      (comment "SWAP, by exchanging the two offsets: the list just built"
+               "becomes the one walked next.")
+      (let [^I32 t cur]
+        (set cur nxt)
+        (set nxt t))
+      (set n m)
+      (if (>= i cps-len) (break))
+      (set i (+ i 1)))
+    (return matched)))

@@ -43,7 +43,8 @@ material that predates that rewrite.
 [namespace-units](#namespace-units) ·
 [exclude-and-unit-path](#exclude-and-unit-path) ·
 [module-metadata-and-shards](#module-metadata-and-shards) ·
-[no-runtime-linking](#no-runtime-linking)
+[no-runtime-linking](#no-runtime-linking) ·
+[the-shadow-stack-is-not-a-default](#the-shadow-stack-is-not-a-default)
 
 *III. Data structures and language surface*
 [strings-and-matching](#strings-and-matching) ·
@@ -60,7 +61,9 @@ material that predates that rewrite.
 [ports-are-the-hosts](#ports-are-the-hosts) ·
 [bridges](#bridges) ·
 [drivers](#drivers) ·
-[thread-pool](#thread-pool)
+[thread-pool](#thread-pool) ·
+[bridges-are-the-only-door](#bridges-are-the-only-door) ·
+[the-codec-is-guest-code](#the-codec-is-guest-code)
 
 *V. Capabilities, the CLI, and dependencies*
 [cli](#cli) ·
@@ -128,7 +131,10 @@ code and an open question the code cannot answer:
 * `cli` and `other-hosts` — does the native binary survive? The 5.8x that
   justified it measures 1.7x, and it serves five of thirteen commands.
 * `the-pike-vm-is-the-last-triplicate` — is generating `Rt` the goal? ~21 000
-  hand-duplicated lines and thirteen unportable tests turn on it.
+  hand-duplicated lines and thirteen unportable tests turn on it. (The pike VM
+  ITSELF is now generated, all four functions, and the capability question that
+  blocked it is settled — kin gained an aliasing axis on 2026-09-16. What is
+  left for you is the scope question about `Rt`, not a blocker.)
 * `llvm-ir-target` — should `:to :llvm` imply `:optimize [perf]`; where does
   `nativeabi/` belong?
 * `one-dependency-walk` — manifest parsing landed in `.cljc`, not the Rust
@@ -146,6 +152,35 @@ it is TRUE.
 
 A cheap way in: `port-tests-in-kin` has no status line at all, which makes it
 the one item in this file whose claim cannot even be assessed.
+
+> **THIS TRIAGE IS ITSELF STALE, corrected 2026-09-19 by counting.** Every
+> figure in it has moved, and one of them had moved in a way that hid work:
+>
+>     claim here                          counted 2026-09-19
+>     47 unratified                       55
+>     32 carry "not independently
+>       verified"                         1
+>     port-tests-in-kin is THE ONE
+>       item with no status line          it was one of EIGHT
+>
+> The 32 shrank because the verification this triage asks for was largely done.
+> The 47 grew because decisions kept being added. And the last line was the
+> costly one: seven more status-less sections had appeared since, so the item
+> named as the single unassessable claim was an eighth of the problem. All
+> eight now carry a status line, written 2026-09-19 against the code --
+> `port-tests-in-kin`, `wasm-engine`, `flint-ception`,
+> `aot-diverges-between-hosts`, `calls-are-ports`, `vars-is-its-own-grant`,
+> `the-codec-is-guest-code`, `bridges-are-the-only-door`.
+>
+> One internal contradiction, for the record: this triage lists
+> `port-tests-in-kin` among the eight "ratifiable as recorded -- built,
+> checked, behaving" AND as the item whose claim cannot be assessed. Both
+> cannot hold.
+>
+> **The lesson is the one this file exists to teach, turned on the file.** A
+> count written into prose is a status claim like any other, and it decays the
+> same way. `bin/check-decisions` proves a citation resolves; nothing proves a
+> NUMBER in a paragraph, so re-count before quoting these.
 
 AND THE STATUS CLAIMS IN THESE RECORDS ARE NOT RELIABLE. Several were verified
 wrong: one opens "NOT BUILT -- a spike, nothing in the tree uses it yet" and
@@ -619,6 +654,280 @@ passed while measuring nothing but its own baseline error.
 - **Hitting the memory cap collects first, then fails** — otherwise the cap
   would depend on GC timing, since a collection might have freed enough to
   continue.
+
+### DECIDED: gas charges ALL guest code, and the third mode is not worth it
+
+Three reds in the survey trace to one thing: gas was defined when a program ran
+with no scheduler under it, and every image now carries a control plane.
+Measured, not argued -- the native-jvm gap is one parked thread's scheduling
+cost (~46 steps a slice, scaling with thread count), and an unbudgeted wasm run
+counts 41 392 steps where the contract claims 0.
+
+A three-way mode was proposed -- `Off` / `Program` / `Total`, where `Program`
+billed the embedder's code and not the machinery. **Rejected, and the reason is
+worth keeping**, because the design looked free and is not.
+
+**Gas is already collected locally.** `par.rs` batches it: `GAS_BATCH = 4096`,
+"how many instructions an executor counts locally before telling anyone",
+because "a shared counter incremented once per instruction would put an atomic
+read-modify-write on the interpreter's hottest line and have every thread
+fighting for one cache line". Each executor has its own `Rt` and its own
+`steps`. (The publish half of that design turns out not to be wired -- see
+below -- but the LOCAL half is exactly how it already works.) So local
+collection is not something a per-thread mode would have to invent.
+
+I first argued the mode would force an atomic publish at every green-thread
+switch, since `SLICE` and `GAS_BATCH` are both 4096. **That was wrong and is
+worth correcting**, because it conflates two different operations. ATTRIBUTING
+an executor's local steps to some other counter at a switch is a local add --
+`counter += rt.steps - start` -- two reads and a subtract, no atomics.
+PUBLISHING to the shared total is the expensive one, and it can stay batched at
+4096 however often attribution happens. Per-thread accounting is cheap.
+
+The mode is still not wanted, but for the plainer reason: **all guest code is
+charged, including the control plane's.** It is guest code --
+`lib/flint/system.cljc`, compiled into the image like anything else -- and a
+sandbox that runs it is doing that work. Splitting the bill is a distinction
+the embedder did not ask for.
+
+### Two counters and two caps, because an entry limit is wanted anyway
+
+Per-ENTRY accounting is not the rejected mode wearing a hat: it buys something
+the sandbox-wide cap cannot. A global cap bounds a sandbox's whole life, so one
+runaway call either trips it -- killing a sandbox that was meant to serve many
+more calls -- or hides inside a budget large enough for all of them. **A
+per-entry limit stops the runaway call and leaves the sandbox alive**, which is
+the behaviour a server wants.
+
+So both, and they are independent:
+
+* **Per-entry count and limit.** Starts at zero when a call is entered, bounds
+  that call. Attribution is the local add above, done where green threads
+  switch.
+* **The live sandbox count and cap.** What exists today: batched per executor,
+  published every `GAS_BATCH`, bounding the sandbox's total.
+
+**The checkpoint already has room for it.** `refresh_checkpoint` is
+
+    checkpoint = min(gas_limit or MAX, slice_end or MAX)
+
+-- a merge of "stop to preempt" and "stop, budget spent". An entry limit is a
+third term in the same `min`, so the hot loop keeps ONE comparison against ONE
+number and learns nothing new. That is the property worth protecting, and this
+design keeps it.
+
+**And it dissolves the SDK row.** With an entry counter there is a real answer
+to "what did this call cost" that does not depend on whether anyone set a
+limit, so `gas()` reporting 0 for an unbudgeted sandbox stops being a fudge and
+starts being a different question with its own counter.
+
+### What still has to change, and it is smaller than a mode
+
+Charging everything does not make the reds go away; it says which way to fix
+them.
+
+**`conform-hosts`** compares a runtime that has a control plane against one
+that does not. `RtSteps` calls `runProgram` directly and `runtimes/` has no
+system port at all, so the two sides are not running the same program. With
+"charge everything" settled, the fix is the one this file's first option named:
+make the ports call over their system ports too. Then both pay, and the row
+compares like with like.
+
+**The SDK rows are a REPORTING question, not a counting one.** `counting()` is
+`checkpoint != u64::MAX`, and `refresh_checkpoint` sets
+
+    checkpoint = min(gas_limit or MAX, slice_end or MAX)
+
+so arming a slice makes `counting()` true with `gas_limit == 0`. That is one
+predicate doing two jobs: "I must stop at a boundary soon" and "I am billing".
+The interpreter has to count to preempt -- preemption is step-based -- and that
+is not the embedder asking for a bill. Nothing in the hot loop needs to change
+for this: the steps are needed either way. What needs deciding is what `gas()`
+REPORTS when no limit was ever set, and "0, because nothing was budgeted" keeps
+the SDK's assertion true without touching the counter.
+
+### The shared cap is BUILT AND UNWIRED, which changes the premise
+
+The discussion above assumed a sandbox-wide total that executors publish into.
+`par.rs` has one -- `set_limit`, `limit()`, `spent()`, `flush_gas(batch)` and
+the `GAS_BATCH = 4096` constant, with a docstring explaining the whole design.
+**None of it has a single caller.** Checked across `runtime/`, the units and
+the SDKs: `GAS_BATCH` appears once, at its own definition, and the three
+methods appear only where they are defined.
+
+What exists instead: `sdks/rust` holds `executors: Vec<Mutex<Option<Box<Rt>>>>`
+-- **each executor is its own `Rt`**, with its own `steps` and its own
+`gas_limit`, sharing only the heap -- and the SDK's two entry points touch only
+the first of them:
+
+    pub fn set_step_limit(&self, n: u64) {
+        self.core.program.lock().unwrap().set_step_limit(n);   // the PRIMARY only
+    }
+    pub fn gas(&self) -> u64 {
+        self.core.program.lock().unwrap().steps()              // the PRIMARY only
+    }
+
+So a spare executor is not merely counted separately -- it is **not limited at
+all**, and what it spends is **not reported at all**. Guest code really does run
+there: the SDK counts "dispatches that ran on a SECONDARY executor" and the gate
+prints the number. A budget set on a pooled sandbox bounds one of its threads.
+
+`gas`'s own docstring says as much, in the future tense: "When several threads
+really run one heap, gas becomes per-executor and summed ... and this WILL THEN
+BE a snapshot true at a safepoint." The intent was recorded; the wiring is what
+is missing, and `par.rs` holds the half that was written for it.
+
+That is latent rather than live -- `parallel` is off by default and on for the
+Rust SDK -- but it is the hole the unwired code was written to close, and the
+comment describing the batching reads as a description of shipped behaviour
+when it is a description of an intention.
+
+**And it makes the adaptive batch the right design rather than an optimisation.**
+The recorded price of batching is "a limit stops the program a little late --
+by at most this times the number of executors". Shrinking the local batch as
+`spent` approaches `limit` removes that: far from the limit an executor
+publishes every 4 096 instructions and the atomic stays off the hot line; near
+it, the batch narrows and the limit is enforced tightly. The common case keeps
+the cheap path and the endgame gets the exact one, which is the property a
+budget needs -- a cap that overshoots by `batch x executors` is not a cap
+anyone can reason about.
+
+**Not built.** Three independent pieces now: the ports' system-port entry, what
+an unbudgeted sandbox reports, and wiring the shared total with a batch that
+narrows as the limit nears.
+
+> ALL THREE ARE BUILT, and the third was already done when this said it was
+> not. What an unbudgeted sandbox reports was settled when `gas()` was made to
+> honour its own docstring. The shared total and its narrowing batch went in on
+> 2026-09-18. **The ports' system-port entry had ALREADY landed** -- both ports
+> have a system port and `bootSystemThreadOnce`, and the jvm's `RtSteps` calls
+> over a bridge -- so the text above, which says `runtimes/` has no system port
+> at all, was stale and was sending the next reader to do work that was done.
+> The clr's `RtSteps` was the genuinely unfinished half; see the section below.
+
+### BUILT: the cap is on the sandbox, and it was not before, 2026-09-18
+
+Picked up because this record named it unbuilt and because it is the only one
+of the three that is a broken GUARANTEE rather than a conformance row. It was
+worse than "latent".
+
+**Demonstrated before it was fixed, which is the only reason to believe any of
+this.** A pooled sandbox, four threads, given a two-thousand instruction
+budget, asked for sixteen calls to a ten-million-iteration loop:
+
+    0 refused, 16 ran to completion;
+    1 dispatches served 16 calls, 1 of them on a secondary
+
+ONE dispatch carried all sixteen calls onto a secondary executor, and that
+executor had never been told about the budget. The debouncing makes it worse
+than the per-thread picture suggests: a batch is unbounded in size, so one
+unbudgeted executor can serve an arbitrary number of calls. The primary, which
+does hold the limit, was never consulted.
+
+**What was wired.** The design was already written and already had no callers;
+this is the calling.
+
+* `Rt::arm_shared_gas` / `Rt::flush_shared_gas`. Under a shared budget
+  `gas_limit` stops meaning "the cap" and starts meaning "the end of this
+  executor's current batch", so the interpreter's trip path asks
+  `flush_shared_gas` BEFORE it raises anything: publish what this executor
+  spent, and carry on unless the SANDBOX is out. It answers true when there is
+  no shared budget, so an inline sandbox and the whole wasm build keep the old
+  meaning with no second test in the hot path.
+* `Rt::gas_batch(limit, spent, executors)` -- the narrowing. `remaining /
+  executors`, clamped to `[1, GAS_BATCH]`.
+* `Program::set_shared_step_limit` / `shared_gas` / `arm_shared_gas`, and the
+  SDK: `set_step_limit` sets the sandbox's budget when there are other
+  executors, both dispatch paths arm before running guest code, and `gas()`
+  reads the shared total rather than one executor's `steps`.
+
+**The narrowing is what makes it a cap rather than an estimate, and it is one
+line of arithmetic.** The recorded price of batching was "a limit stops the
+program late, by at most the batch times the number of executors". Dividing
+what is LEFT between the executors that could spend it turns that into
+`executors * batch <= remaining` -- every executor may run its whole batch and
+the total still lands on the limit rather than past it. Far from the limit the
+division exceeds `GAS_BATCH` and the clamp hands back the cheap path, which is
+the entire reason batching exists: one atomic per 4 096 instructions, off the
+interpreter's hottest line. Only the endgame pays for exactness.
+
+**Measured after: 400 000 asked for, 467 548 spent.** The overshoot is one
+`GAS_GRACE` (65 536, granted once so a `finally` can run) plus about two
+thousand. The batching contributes the two thousand.
+
+**THE BATCHING HIDES A LEAK, and I wrote it in before writing the test that
+found it.** Worth recording because the mistake is natural and the symptom is
+silence.
+
+An executor publishes when it reaches a batch boundary. A call that ENDS before
+it reaches one has therefore spent something nobody has been told about, and
+the obvious way to arm the executor for the next call -- move the watermark to
+where `steps` now stands -- DISCARDS that rather than deferring it. The
+consequence is not a small under-count: a stream of calls each shorter than a
+batch never publishes anything at all, so the total stays at zero and the
+budget is never spent however long the sandbox runs. A cap that holds for long
+calls and not for short ones is worse than no cap, because the long-call test
+passes.
+
+Arming now publishes first. Measured after: a 60 000-instruction budget stops a
+stream of `tally` calls after 1 432 of them, with `gas()` reading exactly
+60 000.
+
+The test that found it uses `call_blocking` ON PURPOSE. A burst would be
+coalesced into one dispatch big enough to cross a boundary by itself, and the
+leak would close by accident -- so the test that looks more realistic is the
+one that cannot see the bug.
+
+**Four gates, and every one was made to fail first.**
+
+    sdk.rs  a_step_limit_binds_every_executor_not_just_the_first
+            16 calls, every one must be refused. Written so the WRONG
+            behaviour is a passing call rather than a slow one, and it
+            asserts a secondary was used -- without that witness it would
+            pass just as well when nothing was parallel.
+    rt.rs   the_batch_never_lets_the_executors_overshoot_together
+            The arithmetic, over the whole endgame rather than at a point.
+            Flattening the batch back to GAS_BATCH: RED.
+    rt.rs   past_the_limit_the_batch_does_not_wrap
+            `spent` passes `limit` in the ordinary course -- the executor
+            that crosses publishes its whole batch -- and an underflow there
+            would hand back a colossal batch at exactly the moment the budget
+            needs to be tight. `wrapping_sub` instead of `saturating_sub`:
+            RED.
+    sdk.rs  a_stream_of_short_calls_still_spends_the_budget
+            4 000 calls of ~42 instructions under a 60 000 budget. It was
+            RED on the full gate before the arming was made to publish --
+            18 passed, 1 failed, and that one was this.
+
+The end-to-end test deliberately does NOT guard the narrowing, and says so in
+its own comment: grace dominates that measurement, and a flat batch would still
+land inside its bound. The arithmetic is guarded by the arithmetic test. A
+number that cannot discriminate is worse than no number, because it reads as
+coverage.
+
+**It costs the default build nothing**, which was a constraint rather than a
+hope: `parallel` is off by default and priced at 1 056 module bytes, so every
+line of this is inside `#[cfg(feature = "parallel")]`. The plain build compiles
+with no reference to any of it.
+
+**Full gate after, `FLINT_TEST_KEEP_GOING=1`: 62 of 62 sections, the same three
+reds as before with the same numbers** -- `test/aot.clj`'s `colls`,
+`conform-hosts` at 174, `test/document.clj`'s peak-memory row -- and the Rust
+SDK section green at 19 tests. The plain module is 503 538 bytes in that run
+and in the one before it, byte for byte, which is the evidence for "costs the
+default build nothing".
+
+**`gas()`'s docstring was corrected while it was being made true.** It said the
+summing "will then be" a snapshot at a safepoint and that it "is not wired".
+The first is now the present tense and the second is no longer so, and a
+docstring describing an intention in the voice of shipped behaviour is the
+failure mode this file exists to prevent.
+
+**Still open, and unchanged by this:** the ports' system-port entry, which is
+what the `conform-hosts` gas row needs; and the jvm and clr have no shared-budget
+path at all, because they have no executor pool to need one.
+
+
 
 ---
 
@@ -4915,12 +5224,42 @@ the native binary is the work that closes it.
 
 ### Still open
 
-* **Whether `flint compile` can produce a module from a script.** Only `run` is
-  wired. The entry and the source path are the same computation, so this is
-  plumbing rather than a decision — but it has not been done or tested.
-* **`bin/flint` has no script path.** The development CLI cannot run one. The
-  reader half (`#!`) is shared, so this is the front end only.
 * **Fetching, per above.**
+
+### Done 2026-09-16: both CLIs take a script
+
+**`flint compile <file>` builds a module from a script.** It was plumbing, as
+recorded -- the entry and the source paths are one computation, which is now
+`script_spec` in `cli/src/main.rs` and is used by `run` and `compile` both, so
+a change to what a script MEANS cannot reach one command and miss the other.
+
+Two things the doing settled that the note did not anticipate:
+
+* **The script has to come off the front before the options are parsed.**
+  `parse` treats a bare word as a source path, so leaving it in made the
+  script look like a `:src` and the guard fired on the command that was
+  correct.
+* **A script's `:capabilities` becomes METADATA, not a grant.** `compile`
+  already treats `:with` that way -- the arguments arrive later, so what a
+  program needs has to survive until then -- and a script declaring its needs
+  in the file is the same statement made in a different place. Consent stays
+  in `run`, where somebody is present to give it.
+
+**`bin/flint` takes one too, and the note UNDERSTATED it.** "The front end
+only" was wrong: this CLI's `:src` resolved a namespace to `<dir>/<ns>.<ext>`,
+so it could not take a single FILE at all, script or not. `source-candidates`
+now answers for a file entry by the namespace it is named after -- the same
+rule a directory follows -- and `bin/flint <file>` fills in the source and the
+entry from the file's own `^:script` mark.
+
+The mark is read with flint's own reader rather than by matching text, because
+`^:script` is metadata: a regex gets `^{:script go}` wrong, and that is
+precisely the form naming an entry other than `main`.
+
+Verified end to end on all three doors: `flint <file>` runs, `flint compile
+<file>` and `bin/flint <file>` both build a module that runs and prints the
+same answer, an `ns` without `^:script` is refused by name on both, and an
+ordinary `:src <dir>` project build is unchanged.
 
 ## dialects-and-preludes
 
@@ -5172,14 +5511,36 @@ An extension makes the claim explicit, and a resolver tag makes it checkable.
 
 ## the-pike-vm-is-the-last-triplicate
 
-**The regex engine is written three times, and the thing that blocks generating
-it is that kin cannot pass a mutable array**
+**The regex engine was written three times because no tag could say whether an
+array is shared or copied. One can now, and the engine is generated**
 
 **Ratified:** ☐ not signed off
 
-**Status: FINDING, nothing built.** Recorded 2026-09-11 while porting the
-remaining hand-written functions out of `bytes.rs`, `strs.rs`, `vector.rs` and
-`pike.rs`. The census below was re-derived from the tree, not quoted from
+**Status: DONE, pending your sign-off.** All four -- `class-hit`, `consumes`,
+`add-thread` and `run-over` -- are generated into the three runtimes from
+`kin/pike.kin` and called by all three. The `Thread` struct is gone from all
+three with them, and the per-thread slot allocation it existed to own went
+with it: a thread is a flat row in an arena the caller lays out.
+
+Verified beyond the drivers. `bb test/regex_pike.clj` passes whole -- nineteen
+patterns against babashka, the one documented divergence still exactly where
+it is documented, the simulator matching the `.cljc` reference span for span,
+400 rope pieces without materialising, and `(a+)+$` not squaring -- and one
+ten-pattern program covering alternation, captures, anchors, word boundaries,
+counted repetition and a subject containing a newline answers identically on
+native, the JVM and the CLR.
+
+**What the port cost, and it is not nothing**: an aliasing axis in kin, and
+one shipped bug found (below) that had been answering nil for every match
+after a newline. Recorded 2026-09-11 as a finding with nothing built; the blocker it
+named was retired 2026-09-16 by an ALIASING AXIS in kin -- `^:shared` and
+`^:copied` on a binding, with the tag supplying the per-target rendering. The
+original reasoning is kept below and marked where it was wrong, because half
+of it was right and the wrong half is instructive: the diagnosis was correct
+and the conclusion "adding a tag is a change to another library" was an
+ownership objection wearing a technical one.
+
+The census below was re-derived from the tree, not quoted from
 `doc/goals/kin-port.md`.
 
 ### What was found
@@ -5199,14 +5560,48 @@ keeping them out of `kin/` is a host array. That is the largest genuine
 triplicate left anywhere in the runtime, and it is the one where a silent
 divergence changes *what a regular expression matches*.
 
-### Why it is not generated yet, precisely
+### Why it was not generated, and what the answer turned out to be
+
+**SUPERSEDED, 2026-09-16. The blocker is gone and the remedy proposed below is
+the wrong one.** What follows is kept because the reasoning is instructive and
+because half of it was right.
 
 kin renders `^:mut` on a parameter as Rust's `mut x: T`, a by-value rebinding —
 not `&mut T`. So a tag whose Rust type is `Vec<i32>` and whose Java type is
 `int[]` means **pass by move on one target and pass by reference on the other
 two**: a callee that writes into it would be seen by the caller in Java and C#
-and not in Rust. There is no tag that spells a shared mutable array in all
-three, and adding one is a change to `kin.lang`, which is a separate library.
+and not in Rust. That diagnosis was correct, and it is worse than it reads:
+every target COMPILES, so nothing reports it.
+
+What was wrong was the conclusion — "there is no tag that spells a shared
+mutable array in all three, and adding one is a change to `kin.lang`, which is
+a separate library." That is an OWNERSHIP objection wearing a technical one.
+kin now carries an **aliasing axis**: `^:shared` and `^:copied` on a binding,
+with the TAG supplying the per-target rendering, because what a shared
+`U32s` looks like is a target's own business — `&[u32]` in Rust, `int[]`
+everywhere else. A tag that declares the question makes answering compulsory;
+a tag that cannot answer refuses the mark by name and target. Merged into kin
+as `A binding can say who owns the storage`, with `test/aliasing.clj`.
+
+**`^:mut` could never have been the answer, and the similar word is the trap.**
+`^:mut` says a binding is REASSIGNED — a question about the name. Aliasing is a
+question about the storage. `^:mut` on a RECEIVER does render `&mut self`, but
+that is the receiver position special-cased in the emitter, not a mechanism
+that could reach a parameter.
+
+**AND THE `Cps` REMEDY BELOW IS THE WORSE OPTION.** It was proposed to work
+around a limitation that, for these four functions, is not load-bearing:
+`run_over` takes no `&mut Rt` at all, and owns `clist`, `nlist` and `seen` as
+call-locals. Rust's aliasing rules never come into play, so a plain
+`&mut Vec<i32>` local is expressible — and indexes as an indexed load, where
+`cps_at` is a bounds-checked double indirection in the inner loop. The section
+below flags that cost itself and says it is "the measurement to take before
+committing". There is no longer anything to measure: the cheap shape works.
+
+What the `Cps` plan got right and still applies is the FLATTENING — `pc` then
+`nslots` values per thread rather than a `Vec<Thread>` — because kin has no
+user structs. It can flatten into a call-local buffer instead of a
+runtime-owned one, keeping the cheap indexing.
 
 The shape that *does* work is the one this runtime already uses for exactly
 this problem: **a buffer the runtime owns, named by an integer**. `Sink`, `Cps`
@@ -5233,6 +5628,43 @@ measurement to take before committing** — `DECISIONS.md#matching-over-ropes`
 records the Pike VM being four times slower than the backtracker it replaced
 until `re-find-all` existed, so this engine's constant factor has already been
 load-bearing once.
+
+### A SHIPPED BUG THE PORT FOUND: no match after a newline, ever
+
+Found 2026-09-16 while porting `consumes`, by running the generated function's
+own behaviour past the driver and against the other two runtimes.
+
+    (re-find #"b"   "a\nb")      => nil
+    (re-find #"abd" "a\nc abd")  => nil
+    (re-find #"a"   "\na")       => nil
+
+**Every pattern, on every subject containing a newline, for anything after the
+newline.** All three runtimes agreed, which is why nothing caught it: the
+conformance suite compares the runtimes against each other, and they were
+wrong together. `\t`, `\r`, `\\` and ordinary characters were all fine.
+
+The cause is one line in `lib/flint/nfa.cljc`. An unanchored search is compiled
+as a `.*?` prefix in front of the anchored program, and the prefix stepped
+forward with `OP-ANY`:
+
+    (emit! st OP-SPLIT ENTRY-ANCHORED 1)
+    (emit! st OP-ANY 0 0)          ;; <- the search walking forward
+    (emit! st OP-JMP 0 0)
+
+and `OP-ANY` is the USER'S `.`, which excludes a newline because Java's does
+without DOTALL. That reading is right for `.` and wrong for the search: a walk
+that refuses to step over a newline cannot reach anything past one.
+
+**Two meanings, one opcode.** `OP-ANYNL` (11) now carries the second: any code
+point INCLUDING a newline, emitted only by the search prefix. `.` is unchanged
+-- `(re-find #"a.c" "a\nc")` is still nil, which is the Java behaviour this
+engine deliberately adopted -- and `(re-find #"a.c" "a\nc abc")` now answers
+`abc`, which it could not before.
+
+**The fix landed in ONE place because `consumes` is generated.** Had it been
+found a week earlier it would have been three edits in three languages with
+nothing comparing them, which is the argument for the port stated as a cost
+rather than a principle.
 
 ### The divergences the three copies have already accumulated
 
@@ -6093,6 +6525,24 @@ the body, not assumed from the loop looking parallel.
 
 **Ratified:** ☐ not signed off
 
+**Status: the reasoning HOLDS; two counts in it have drifted. Verified
+2026-09-19 by listing the files, not by re-reading the record.** The one that
+moved did move: `runtimes/jvm/test/RtHash.java` is gone and `kin/hashtext.kin`
+with its `.drivers` is in the tree. The thirteen that did not are still
+hand-written, for the reason given below.
+
+What has drifted, and it is the direction that matters: there are now
+**fourteen** `main()` programs in `runtimes/jvm/test/` and fourteen `--rt-*`
+flags in `Program.cs`, not thirteen. Tests have been ADDED since this was
+written, so the duplication this section is about has grown rather than shrunk
+while the section sat still. The line counts moved with them -- 1 598 to 1 909
+on the jvm side, 1 442 to 1 569 on the clr -- and part of that last figure is
+mine, from mirroring `HostCall` into the clr on 2026-09-18.
+
+This section previously had NO status line, which the triage near the top of
+this file names as the one item whose claim could not be assessed at all. Seven
+others have since joined it; see that triage, which is itself corrected.
+
 Recorded 2026-09-12. `ROADMAP.md`'s "Port tests belong in kin" asked for the
 fourteen duplicated runtime port tests to move into `kin/`. One of them did.
 This records why the other thirteen did not, because "we ported one of
@@ -6243,6 +6693,22 @@ having.
 
 **Ratified:** ☐ not signed off
 
+**Status: BUILT -- verified 2026-09-19 in the handler table, not by looking
+for a file.** `flint.sys.wasm` is served at `cli/src/sys.rs:653`, alongside
+`flint.sys.fs`, `flint.sys.env` and `flint.sys.slurp`.
+
+Worth saying how this was nearly got wrong, because the next person will reach
+the same way I did: there is no `lib/flint/sys/wasm.cljc`, and its absence
+proves nothing. `flint.sys.*` namespaces are VIRTUAL -- no source by design,
+spoken to over a port (`flint.virtual`) -- so "does the file exist" is the
+wrong question and answers it in the wrong direction. The handler table is
+where a served namespace lives.
+
+Not re-checked here: this section's account of what `bin/flint` and
+`flint.cli/run` did BEFORE. `bin/flint` still mentions `node` and
+`lib/flint/cli.cljc` still returns `{:exec {...}}`, and whether those are the
+same occurrences this section describes as removed was not established.
+
 Recorded 2026-09-12. `flint.sys.wasm` is the served namespace for running a
 compiled module. It exists because running a module is the ONE host operation
 that differs between the three front ends in kind rather than in spelling, and
@@ -6352,6 +6818,16 @@ without node, bun or deno it does, and that case is open.
 ## flint-ception
 
 **Ratified:** ☐ not signed off
+
+**Status: BUILT -- verified 2026-09-19 in `cli/src/main.rs`.** `flint.ception`
+is served there (`main.rs:743`, "serves `compile` to a PROGRAM"), and the
+`:flint/nested` gate this section describes is real: `main.rs:378` makes
+`(:require [flint.ception])` a compile error when the feature is off, and
+`main.rs:630` turns the resulting "missing namespace" into a message that says
+the build turned it off rather than that it does not exist.
+
+Same caution as `wasm-engine`: there is no `lib/flint/ception.cljc` and there
+is not meant to be.
 
 Recorded 2026-09-12, renamed 2026-09-13. `flint.ception` is a served namespace
 giving flint code the compiler: compile a program, construct a sandbox from it,
@@ -6632,6 +7108,10 @@ a change to `lib/flint/cli.cljc` and to all three hosts, and is its own step.
 
 **Ratified:** ☐ not signed off
 
+**Status: FIXED, and the fix is still in place -- verified 2026-09-19.**
+`stripChecks` is defined at `sdks/cli/src/cli.mjs:46` and applied at both call
+sites, 106 and 126. The section's own account of the fix matches the code.
+
 Recorded 2026-09-12, **and fixed the same day.** Found while checking that
 `flint.ception` had broken nothing; it was older than that work.
 
@@ -6713,6 +7193,11 @@ both CLIs built, which is a test-tier requirement rather than a static one.
 ## calls-are-ports
 
 **Ratified:** ☐ not signed off
+
+**Status: BUILT -- verified 2026-09-19.** `flint_call` is gone as an entry
+point: `runtime/src/abi.rs:176` reads "`flint_call` used to live here", and the
+remaining mentions across the runtime are history in comments rather than an
+export. The system port is the way in.
 
 Recorded 2026-09-13. **A sandbox is reached only through its system port.** A
 call in, a request out, and driving are all messages on it. `flint_call` — the
@@ -6810,6 +7295,66 @@ which makes every runtime pay the scheduler and bakes it into gas everywhere,
 and taking the scheduler's steps out of gas so it measures the program again.
 That is a decision about what gas MEANS.
 
+### LOCALISED, 2026-09-16: it is ~46.5 steps per SLICE, and the analysis above is wrong
+
+The reading above -- "a PRICING difference in operations both runtimes have",
+spread across all seven parts in proportion to work -- does not survive a
+measurement it was never given. Micro-benchmarks, each one operation, native
+against jvm with BOTH now called over a bridge:
+
+    op         native      jvm     gap     pct
+    base        15945    15851      94   0.59%
+    allocv      96913    95863    1050   1.08%
+    mapv1      160284   158510    1774   1.11%
+    amaps       59309    58689     620   1.05%
+    intoset    203989   201737    2252   1.10%
+    strs       132330   130894    1436   1.09%
+
+The same ~1.1% on maps, on sets, on strings AND on a loop that conjes onto a
+vector. So it is not maps and it is not hashing. The decisive one is a pure
+arithmetic loop that allocates NOTHING and calls no builtin at all:
+
+    (loop [i 0 acc 0] (if (< i 20000) (recur (inc i) (+ acc i)) acc))
+
+    20 000 iterations   native 279 069   jvm 275 905   gap 3 164   1.133%
+    40 000 iterations   native 542 095   jvm 535 905   gap 6 190   1.142%
+
+`SLICE` is 4096 on all three. 279 069 / 4096 = 68 slices, and 3 164 / 68 =
+**46.4 steps per slice**; the 40 000 run gives **46.7**. A constant, and
+`HostCall.java`'s own comment predicted it -- "about 48 steps per 4096-step
+slice" -- before the row's analysis talked itself out of it.
+
+**Why the earlier experiment did not refute this, though it looks like it
+did.** That experiment drove the JVM over a real bridge and got "the same
+figures". It did, because it kept the DIFFERENCE-OF-TWO-WORKLOADS methodology,
+which cancels a fixed startup cost and does NOT cancel a cost proportional to
+the work -- and a per-slice charge is proportional to the work by definition.
+The control was measuring the wrong thing, so agreement proved nothing.
+
+**What is ruled out**, measured rather than reasoned:
+
+* allocation VOLUME -- `bytes-allocated` from `flint.rt/gc-stats` on the same
+  program: allocv 447 040 native against 445 776 jvm, 0.28%, against a gas gap
+  of 1.08%. It does not track;
+* the allocation CHARGE -- `size_for(ty, len) >> 3` in both, character for
+  character, and `Obj.sizeFor` matches `obj::size_for` branch for branch;
+* saving thread state -- `alloc_unbilled` / `allocUnbilled` on both;
+* restoring it -- neither charges; both write the array directly;
+* `conj` of a map onto a map, which WAS a genuine two-algorithm divergence and
+  is now generated (`kin/mapconj.kin`). The gap did not move, which is how we
+  know it was not this either.
+
+So the cost is in what a green thread pays to be PREEMPTED AND RESUMED, and
+native pays about 46 steps more of it than the jvm does, every slice. That is
+a `Conc` divergence in `run_one` and the interpreter's checkpoint, which is
+the one part of the scheduler still written three times.
+
+**This does not need the decision the section above poses.** Neither "make the
+ports call over their system ports" nor "take the scheduler out of gas" is
+required to close a 46-step-per-resume difference between two implementations
+of the same resume. They should simply agree, and the way to make them agree
+by construction is to generate the resume path.
+
 ### Not yet done
 
 `Program::call` and `flint_rt::native::call_on` still exist on the NATIVE side,
@@ -6822,6 +7367,57 @@ natively embedded sandbox.
 ## bridges-are-the-only-door
 
 **Ratified:** ☐ not signed off
+
+**Status: BUILT on the three runtimes checked -- verified 2026-09-19.** The
+one-shot boot exists under its own name in each: `boot_system_thread_once`
+(`runtime/src/conc.rs`), `bootSystemThreadOnce` (`Conc.java`),
+`BootSystemThreadOnce` (`Conc.cs`). The control plane it spawns is
+`lib/flint/system.cljc`, and it ships in EVERY module rather than on request --
+`test/twobuilds.clj:156` prices that at +67 409 bytes and asserts it, so the
+claim is gated rather than merely true today.
+
+**And the seven-row "what has to change" table below was checked row by row,
+2026-09-19.** It reads as a settled design; it is a PLAN, and roughly half of
+it has happened. What landed is the control plane -- a system port on each
+runtime, `bootSystemThreadOnce`, and the protocol itself moved into the image
+as `lib/flint/system.cljc`. What did not land is the structural half:
+
+    row              as the table describes "today"        now
+    bridge memory    ring inside the receiving sandbox     UNCHANGED
+                       (`PT_INBOX`)                          conc.rs:142, :783
+    executor         per-sandbox `Driver`                  UNCHANGED
+                                                             sandbox.rs:248
+    wake condition   on write                              UNCHANGED -- `wake_on`
+                                                             wakes ALL parked
+                                                             threads and they
+                                                             re-park
+    Rust SDK         `Mutex<VecDeque<Request>>`            UNCHANGED
+                                                             sandbox.rs:54
+    CLI              `Host`/`Service`, pumping inline      UNCHANGED
+                                                             cli/src/serve.rs:87
+    JVM / CLR        `TH_LEN=12`, no `systemMessage`       REACHED, by the other
+                                                             route -- see below
+    constructor      no system port; installed after       UNCHANGED
+
+The `JVM / CLR` row resolved the way this section's own note predicted: the
+ports never received `structured-ports` step 5, and did not need to, because
+the protocol moved into the image instead of being hand-ported. They have
+`installSystemPort` and `bootSystemThreadOnce`; `systemMessage` has zero
+occurrences on either and that is correct rather than missing.
+
+**One claim in this section is now FALSE and it is the interesting one.** It
+says "**None of the concurrency is generated.** All 91 kin sources were
+checked: not one touches ports or scheduling, so `Conc` is hand-written three
+times." There are 97 kin sources, and three of them are squarely this:
+`flint.rt.sched`, `flint.rt.portring` and `flint.rt.reapports`. `wake_on`,
+`wake_waiter`, `drive` and `reap_ports` are all generated -- `conc.rs:1217`
+says so in as many words. The section closes by guessing "the scheduler is
+probably portable too -- untested, and not this change", and that guess came
+good; the sentence three lines above it did not survive.
+
+The "eight implementations" phrasing is still not confirmed as a count: four
+hosts were never enumerated here, and only the three runtimes plus the Rust SDK
+and the CLI were looked at.
 
 Recorded 2026-09-13. The settled shape of `DECISIONS.md#drivers`, worked out
 across several rounds and written down before it is built, because eight
@@ -6978,6 +7574,18 @@ into the image. `^:mut ^Rt` is expressible in kin and used across the sources,
 and `kin/atoms.kin` already does compare-and-set-shaped work, so the scheduler
 is probably portable too — untested, and not this change.
 
+> **OVERTAKEN, 2026-09-19.** The guess in the last sentence came good and the
+> claim in the first no longer holds. There are 97 kin sources and three of
+> them are ports and scheduling outright -- `flint.rt.sched`,
+> `flint.rt.portring`, `flint.rt.reapports`. `wake_on`, `wake_waiter`, `drive`
+> and `reap_ports` are generated; `runtime/src/conc.rs:1217` says so where they
+> are called. `Conc` is no longer hand-written three times in the parts that
+> matter most for drift.
+>
+> Kept rather than edited, because the paragraph is a good record of how the
+> scope looked from here: the thing it called untested and out of scope is the
+> thing that got done, and the thing it stated as fact is what expired.
+
 ### What it settles
 
 The gas divergence in `DECISIONS.md#calls-are-ports` closes when every runtime
@@ -6986,6 +7594,17 @@ calls the same way, because every runtime then pays the same scheduler.
 ## vars-is-its-own-grant
 
 **Ratified:** ☐ not signed off
+
+**Status: BUILT, and the guard is ENFORCED rather than only documented --
+verified 2026-09-19.** `src/flint/analyzer.cljc:326` carries the table
+
+    {"flint/request"   #{:host}
+     "flint/var-named" #{:vars}}
+
+so the grant is a real entry in the analyzer's capability map, not a comment
+beside an ungated builtin. `runtime/src/builtins.rs:645` is the builtin itself.
+Checked in that order on purpose: a docstring saying GUARDED is what an
+ungated builtin looks like from the outside.
 
 Recorded 2026-09-14. Resolving a var by NAME at run time is a capability of its
 own, `:vars`, and not part of `:host`.
@@ -7037,3 +7656,3698 @@ this does not change what reachable means.
 `lib/deps.edn`'s workspace, which is where the system loop lives. A guest
 program holds it only if an embedder grants it, and the ordinary case is that
 nobody does — a program names its functions at compile time like any other.
+
+## the-codec-is-guest-code
+
+**Ratified:** ☐ not signed off
+
+**Status: BUILT -- verified 2026-09-19, and this section was written BEFORE it
+was built, which is the direction that misleads least.** `lib/flint/wire.cljc`
+is the codec in flint and it is live: `lib/flint/port.cljc` requires it and
+calls `wire/encode` at line 111. The primitives underneath are generated --
+`kin/wirecore.kin` and `kin/wirescan.kin`.
+
+**What did NOT happen is the deletion this section anticipates**, and the
+question left open on 2026-09-19 -- whether the three hand-written codecs are
+still on a live path -- was answered the same day. The answer differs per
+runtime, which is why one sentence could not cover it:
+
+* **Native: LIVE.** `runtime/src/codec.rs` is reached from
+  `runtime/src/native.rs` at 537, 542, 669 and 708 -- `Program::call` decodes
+  the encoded call through it. Not dead, not deletable.
+* **Both ports: DEAD except the tag constants.** `Conc.java` and `Conc.cs`
+  reference `Codec` ZERO times; `hostDeliver` queues the host's bytes by length
+  without decoding them. `Codec.decode` / `Codec.Decode` have no caller
+  anywhere in the repository. `encode` / `Encode` has exactly one each, and
+  both are test harnesses (`RtHostReq.java:155`, `Program.cs:667`).
+
+**And it was NOT deleted, deliberately.** `decodeGuest` carries a comment
+saying nothing calls it and that it exists so whoever adds a guest-reachable
+decoder finds the safe one rather than writing the unsafe one. That is a
+recorded decision; removing it on the strength of a caller count would override
+it. What was wrong here was the DOCUMENTATION, and that is what was fixed.
+
+**Both ports' `Codec` headers were stale in two ways, and the second was a
+SECURITY argument.** They said `send` encodes and `hostDeliver` decodes "and
+both run in the RUNTIME" -- neither does any more -- and, load-bearingly, that
+"there is no builtin that encodes and none that decodes", which is what they
+offered as the reason a guest cannot turn bytes into a port. There are
+twenty-seven `flint/wire-*` builtins and they run in both directions.
+
+**The property survives; the mechanism moved.** Minting is gated on the
+READER'S PROVENANCE -- `wire_may_mint` refuses a reader over bytes the program
+supplied and allows one over bytes that arrived on a bridge -- and that guard
+is GENERATED from one kin source for all three runtimes (`wirecore`), gated at
+both `wire-port-in` and `wire-opaque-in` on each port, and asserted in both
+directions at the unit level and end-to-end on all four builds. So this was a
+documentation defect and not a hole; but a header that offers an obsolete
+security argument is the kind of thing somebody reasons from, so both now carry
+a correction rather than a rewrite.
+
+Recorded 2026-09-14. Settled in conversation after `WireMeta` landed and made
+the seam obvious; written down before it is built, because it replaces code in
+three runtimes and two hosts.
+
+### The rule
+
+**The wire codec is flint, not runtime code.** Encoding and decoding a value
+that crosses a bridge is guest code running inside the sandbox, over a small
+set of runtime primitives — not a tag switch hand-written in Rust, Java and C#.
+
+The primitives are a STREAMING writer and reader, in the shape a JSON writer
+has: the guest emits pieces and the runtime turns them into bytes.
+
+### The writer
+
+ONE PRIMITIVE PER SHAPE, not one `emit` taking a tag. A tag argument would put
+a dispatch in the hottest loop the language has, and -- the reason that matters
+here -- it would hide the dangerous primitive among the harmless ones. Named
+separately, the one that needs auditing has its own name and its own signature:
+
+    (wire-nil w)  (wire-bool w b)  (wire-int w n)  (wire-double w x)
+    (wire-str w s)  (wire-bytes w b)
+    (wire-kw w ns name)  (wire-sym w ns name)
+    (wire-vec w n)  (wire-list w n)  (wire-set w n)  (wire-map w n)
+    (wire-meta w)   ; then the metadata, then the value
+    (wire-port w p)
+    (wire-opaque w o)
+
+**Counts, not brackets.** `wire-vec` takes the element count and the elements
+follow, because that is what the format already says (`K_VECTOR`, then a `u32`,
+then the elements). The wire does not change here -- only who writes it -- so
+every existing host keeps reading what it read before, and a differential test
+against the runtime encoder can assert byte-for-byte equality.
+
+**`wire-port` takes a PORT, never an id.** This is the whole safety rule, and it
+survives unchanged for the reason it held before: flint is given no way to turn
+an integer into a port (`DECISIONS.md#structured-ports`). A guest can only pass
+a port it holds, so a port tag can only appear in bytes written by someone who
+held one. Same for `wire-opaque`. What moves is WHERE the rule lives -- from a
+tag switch maintained in three languages to two primitives in one.
+
+**THE WRITER IS AN OPAQUE OBJECT, NOT A BYTE BUFFER, and this is the part that
+is easy to get wrong.** flint already has transient bytes -- `transient-bytes`,
+`conj-byte!`, `append!` -- and they look exactly like what a writer needs. They
+are the wrong thing, and reaching for them quietly destroys the rule above: a
+guest that can append an arbitrary byte can write a `K_PORT` tag followed by any
+id at all, and the bytes then claim a capability the sandbox never held.
+
+Today that is impossible because the guest never writes bytes -- the runtime
+encodes from a port VALUE, so the id can only be one the sandbox has. Moving the
+codec into flint gives up that guarantee unless the writer is a type the guest
+can only append to THROUGH the primitives. So it is: `port/send` takes a writer,
+not bytes, and a guest that builds a byte string by hand can still send it, but
+it crosses as `K_BYTES` -- a value -- rather than as an encoding anybody
+interprets.
+
+The alternative was considered and rejected: let the guest write bytes, and have
+the RECEIVING host verify that the sending sandbox actually holds every port id
+in them. The host has the holders table, so it could. But that is a new check in
+every host, written once per SDK -- which is the shape this decision exists to
+get rid of, reappearing on the other side of the boundary.
+
+### The reader
+
+`(wire-read r)` answers one piece at a time: a tag, and for a structural tag the
+count, so the guest reads that many and decides for itself what to build -- or
+stops, which is the point.
+
+**A reader carries whether it MAY mint.** A reader over bytes that arrived on a
+bridge may produce ports and opaques; a reader over bytes the guest supplied may
+not, and refuses those tags. That is exactly today's `decode_guest`, which
+exists because "a decoder is an encoder read backwards, and bytes are integers a
+guest can write". One flag on one primitive, instead of the same distinction
+made again in every port.
+
+### Why
+
+**The trust boundary shrinks to something one person can audit.** Today's rule
+is that a decoder reachable from the guest must refuse the live tags
+(`DECISIONS.md#structured-ports`): `K_PORT` and `K_SENTINEL` carry their
+identity inline, and that is safe only because a guest cannot write those bytes.
+It is enforced by a hand-written tag switch in three languages, and it has to be
+got right in all three. With primitives the invariant moves to ONE place and
+becomes a property of the primitive set: **`emit :port` is impossible for a port
+you do not hold.** Same rule, stated once, where it can be checked.
+
+**A streaming reader can refuse mid-message, which no decoder here can.** An
+inbound message is decoded WHOLE before anything gets to object to it — its
+depth, its size, a tag the receiver does not want. An event reader lets the
+guest stop reading. That is an integrity property, not tidiness.
+
+**Three implementations become one.** `runtime/src/codec.rs` and its mirrors in
+`runtimes/jvm` and `runtimes/clr` are the same file written three times, and
+every tag added since has had to be added three times — `K_WITH_META` most
+recently. Guest code is compiled once and runs on all four runtimes, which is
+the same argument `flint.system` already won (`DECISIONS.md#bridges-are-the-only-door`):
+a protocol in the image beats a protocol maintained in parallel.
+
+**The re-entrancy problem disappears.** `flint.port/for-the-wire` exists only
+because the encoder is runtime code and cannot dispatch a protocol: it walks the
+value in flint first, asks `WireMeta`, and hands the encoder something already
+narrowed. A flint encoder just asks. The pass goes.
+
+### What this does NOT do
+
+**The host side stays native.** A host — the Rust SDK, the ESM driver, the CLI
+— is not a sandbox and cannot run guest code to read its own mail. So this
+collapses the three RUNTIME copies into one and leaves the host-side codecs in
+Rust and JavaScript where they are. Two implementations, not one, and the
+remaining two are on the side of the boundary that is already trusted.
+
+### What it costs, measured
+
+Encoding stops being free runtime work and becomes billed guest work
+(`DECISIONS.md#resource-limits`). That is more honest — the guest asked for the
+send — and it moves every gas figure, including the parity row in
+`bin/conform-hosts`.
+
+The speed question was asked as "do we lose that much?", so it was measured
+rather than guessed:
+
+* an interpreted flint pass over a 200-entry structure of small maps costs
+  **0.48 µs per map**, by slope — 96 µs per walk, differencing 300 against
+  3 000 repetitions so process start-up cancels;
+* the same payload through a `flint.ception` round trip costs **about 1.1 µs per
+  map per encode/decode pass**, differencing a 2-map payload against a 200-map
+  one over 300 calls.
+
+So a native encode pass and an interpreted flint pass over the same structure
+are already the same order of magnitude, and the round trip's time is not going
+into encoding. **Caveat, stated because the number will be quoted:** the second
+figure divides by an assumed four passes per round trip. It is an inference from
+the protocol, not an instrumented count, and there is no encode-only benchmark
+in the tree to check it against. Build one before betting anything large on it.
+
+### Both sides track structure, and the table stops being special
+
+The three options below were written when the table looked like a format
+problem. It is not. It is the first place a missing property showed up, and the
+property is: **the codec machinery knows where it is, and the guest does not get
+to say.**
+
+**The reader API was backwards, and that was a hole.** As first built, the guest
+chose which read to make -- `wire-tag`, `wire-u32`, `wire-port-in` -- and the
+reader was a cursor that obeyed. `wire-port-in` took four bytes at whatever
+offset the cursor happened to be and minted a handle from them, with no check
+that a `K_PORT` tag preceded it. `RD_LIVE` stops a guest doing that to its OWN
+bytes, but not to a message it received: ask a peer to send a string whose
+payload is four chosen bytes, point the cursor inside it, and mint a handle to
+any id at all. Data into capability. Latent only because no live reader is
+reachable from flint yet, which is luck rather than design.
+
+So the reader TELLS the guest what is there, rather than being told what to
+read: one step answers what it found -- an int and its value, a vector and its
+count, a port already minted because the encoding said `K_PORT` at a place a
+port is allowed. There is no interpretation left for a guest to choose.
+
+**Reader context alone does not close the WRITER hole**, and it is worth being
+exact about why, because the symmetry is tempting. A forged `K_PORT` sits at a
+position where `K_PORT` is legal; a context-tracking reader sees a valid port
+tag in a valid place and mints, correctly, on a claim the sender was not
+entitled to make. Nothing on the reading side can tell the difference.
+
+**Both sides tracking is what closes it.** A writer that knows its own structure
+can offer a row count only where a row count is due -- and at that position the
+reader is expecting a count and will never read those four bytes as a tag. The
+forgery has nowhere to land. This is option 2 below, and it pays for itself
+twice over: it also catches a guest that declares `wire-vec 3` and emits two,
+which nothing catches today.
+
+**DECIDED: option 2, on both sides.** The writer is a streaming encoder that
+ENFORCES VALIDITY -- it refuses to write the next thing when the next thing is
+not what the format allows there. The reader answers what it found rather than
+obeying what it was asked for. Neither side lets the guest assert structure.
+
+What the writer has to refuse, and each of these is a bug it now catches rather
+than a byte sequence it emits:
+
+* a value where the format does not expect one -- a second top-level value, or
+  anything after the message is complete;
+* a count where a value is due, which is the forgery the table walked into;
+* a value where a count is due;
+* and, at `port/send`, a writer whose structure is UNFINISHED -- `wire-vec 3`
+  with two values emitted is a message no reader can read, and today it would
+  go out and fail on the far side.
+
+**BUILT (2026-09-15), on all four builds.** `wire-table` opens a frame meaning
+"a row count is due, with this many columns" -- negative, so `wire_expect_value`
+refuses a value there by the check it already had -- and `wire-table-rows`
+requires that frame and replaces it with the cell count. Every refusal above is
+asserted in `runtimes/conform/wire.cljc`, and the three runtimes answer
+identically. `test/host_abi.mjs` then compares the guest encoder against the
+runtime's byte for byte across 35 shapes, so the enforcement demonstrably did
+not change the FORMAT -- only who may write it.
+
+The options are kept below for the record.
+
+### The table as a format question (superseded by the section above)
+
+Every shape encodes through structured primitives except one. A table's
+encoding (`K_TABLE`) is: the tag, a column count, then a NAME and a TYPE per
+column as ordinary values, then a ROW COUNT, then the columns. The row count
+sits in the middle, after values, and there is no structured primitive that can
+put it there.
+
+**A bare `wire-u32` would be a forgery hole, and this was checked rather than
+assumed.** A guest emitting `0x0000000F` writes the bytes `0f 00 00 00`; at a
+value position a decoder reads the first as a tag, and `0x0F` is `K_PORT`. The
+next four bytes are then read as a port id -- which the guest supplies with a
+second bare `u32`. So a primitive that writes four raw bytes at a value
+position hands back exactly the capability forgery the opaque writer exists to
+prevent. Every other primitive is safe because it writes a COMPLETE,
+self-delimiting piece.
+
+Three ways out, none of them free:
+
+1. **Change the table's format** so both counts are in the header
+   (`K_TABLE`, ncols, nrows, then the pairs, then the columns). One primitive
+   writes the whole header. It costs the property that makes this decision
+   checkable -- the wire not changing, so a differential test can compare bytes.
+2. **Give the writer a state machine**: `wire-table` records that a row count
+   is due after `2 * ncols` values, and `wire-table-rows` is legal only there.
+   Principled, and it would catch count mismatches generally, but it is real
+   machinery in three runtimes.
+3. **Leave the table a leaf**: `wire-table` takes the TABLE and the runtime
+   encodes all of it, the way `wire-port` takes a port. Safe and small, and the
+   honest cost is that table encoding stays written three times -- which is the
+   thing this decision exists to stop.
+
+Unresolved. It blocks deleting the runtime codecs, not the reader, and not the
+encoder for every other shape.
+
+### The receiver cannot decode while delivery does
+
+Switching `port/receive` to the flint decoder needs `host_deliver` to stop
+decoding, so there are bytes left to hand the receiver. Tried, and it breaks
+`bind` then `call` -- for a reason worth writing down, because the obvious
+diagnosis is wrong.
+
+**Decoding does not create a port.** `install_bridge_port` creates the
+SANDBOX'S HANDLE to a bridge whose identity is the host's id, and it is
+idempotent -- an id that arrives twice finds the first handle and takes no
+second reference. The bridge is the host's, made when the host made it.
+
+What actually couples them is that **`host_deliver` looks the port up in the
+sandbox**:
+
+    pub fn host_deliver(&mut self, host_port_id: i64, bytes: &[u8]) -> bool {
+        let host = self.port_by_id(host_port_id);
+        if host.is_nil() { return false; }
+
+So a host putting bytes into a bridge IT OWNS is refused unless the sandbox
+happens to hold a handle already. With delivery no longer decoding, the bind
+that names the call port is queued but not read, the sandbox has no handle, and
+the host's next delivery to its own bridge is rejected.
+
+**And that is an artefact of bridges not being standalone yet.** This decision's
+neighbour says what a bridge should be -- "a standalone object with its own
+memory, owned by neither side, with two ends… bridges are host-side"
+(`DECISIONS.md#bridges-are-the-only-door`) -- and that is unbuilt. Today the
+queue IS the sandbox-side handle: `PT_INBOX`, `PT_RING`, `PT_READ` and
+`PT_WRITE` are slots on the `TY_PORT` in the guest heap. So "has the bridge
+somewhere to put bytes" and "has the sandbox a handle" are the same question,
+and decode timing answers both.
+
+With a real host-side bridge, delivery queues into the bridge, the sandbox takes
+a handle whenever it first names the port, and decode timing has nothing to say
+about either. **So the receive switch waits on the bridge work, not on anything
+in this decision.**
+
+### A port in flight has no owner, and that is a live bug
+
+**While a port is inside a bridge, the bridge owns a reference to it.** It does
+not today, and the hole is demonstrable rather than theoretical.
+
+`encode` writes a port as its tag and its id and nothing more -- bytes hold no
+reference. So a sandbox that sends a port and then drops its own handle has left
+the port referenced by nobody, and `reap_ports` does what it is supposed to: a
+flint end nothing refers to has been closed. The message naming it is still
+queued.
+
+Measured. A guest opens `passenger`, sends it through `carrier`, drops it, and
+allocates; the host reads the message and asks for the port's state WHILE THE
+PROGRAM IS STILL RUNNING:
+
+    passenger opened as 1001
+    message names port 1001
+    WHILE THE PROGRAM IS STILL RUNNING, port 1001 is: unknown
+
+`unknown` is 255 -- the runtime knows nothing about that id. The receiver has
+been handed the name of something that no longer exists.
+
+**It also explains the delivery-time decode.** In the host-to-guest direction
+the hole is closed by accident: delivery decodes, which installs the handle
+immediately, which is a reference. That is why deferring the decode has to come
+WITH this fix rather than before it -- otherwise the same hole opens in the
+direction that currently works.
+
+So the rule is: a port encoded INTO a bridge is retained by that bridge, and
+released when the message carrying it is read, or when the bridge dies. Which
+needs a bridge that can hold a reference -- a standalone object with its own
+memory (`DECISIONS.md#bridges-are-the-only-door`), not a queue living inside one
+side's handle.
+
+### Writing is a lease too: stream INTO the bridge
+
+Encoding into a sandbox-side writer and then copying the bytes into the bridge
+does the work twice. The symmetric design does not: **a write lease gives a
+place in the bridge's memory and a message writer over it, and the message is
+`submit`ted or `cancel`led.** The writer enforces the format, as above -- it is
+the same state machine, owned by the lease instead of by a sandbox-side object.
+
+**Back-pressure moves to the lease, which is where it belongs.** `port/send`
+today encodes the whole value and THEN discovers the byte bound is full; the
+work is already spent. A lease that cannot be granted says so before a byte is
+encoded.
+
+**Cancel becomes necessary rather than optional.** A sandbox-side encode that
+throws half way costs nothing -- the bytes were scratch. Writing into the
+bridge means a half-written message is in somebody else's memory, so an encode
+that fails must be able to take it back.
+
+Four things the design had to answer, and all four are now answered
+(2026-09-15).
+
+1. **The size is not known when streaming.** A lease cannot reserve `n` bytes up
+   front. Either the region is chunked and the chunks are chained at submit, or
+   a lease claims another chunk when it fills. Chunking is what lock-free MPSC
+   byte queues do and it keeps the claim a single compare-and-swap.
+
+   **DECIDED: chunked.** And the reason it costs nothing is the one that makes
+   it obvious in hindsight: *both encoding and decoding are streaming, so
+   nothing needs random access.* A chunk boundary is only a problem for a
+   reader that seeks -- and neither side does. The writer appends; the reader
+   walks forward and never looks back. So the chain is followed rather than
+   indexed, and the contiguous-region version buys nothing for its extra copy.
+2. **A port written into an uncommitted message is retained at WRITE, not at
+   submit.** Retaining at submit would mean re-walking the message to find the
+   ports, which is exactly what streaming avoids. So the lease records what it
+   retained and releases it on cancel -- the mirror of the read lease releasing
+   on ack. **DECIDED: retain at write.**
+3. **Death must release write leases**, and this is worse than the read side: an
+   unsubmitted lease pins a region of the bridge AND the ports it retained, and
+   there is no message anyone will ever read to notice. It rides the same
+   teardown walk as the read leases. **DECIDED: death releases leases**, both
+   directions, one walk.
+4. **No contention on the write path**, which the ring already demonstrates:
+   `PT_INBOX` says "claiming a slot and filling it are a single compare-and-swap"
+   and it is written that way because the read-modify-write version lost half
+   the traffic -- "4 000 sent, 2 000 received" with two executors on one channel.
+   The pattern and the lesson are both in the tree; what is new is a
+   variable-length region rather than a fixed slot. **DECIDED: minimise
+   contention** -- the claim stays a single compare-and-swap, which chunking is
+   what makes possible.
+
+**The guest never touches the bytes**, and that has to stay true. "The sandbox
+writes into the bridge" means the RUNTIME writes on its behalf through the
+primitives -- which matters most on wasm, where the bridge's memory is not in
+the guest's linear memory at all. The region bounds are enforced runtime-side
+and are never read off the lease handle the guest holds.
+
+### Minting at entry is the first increment, and the weak table forces its shape
+
+Probed rather than assumed (2026-09-15), because the recorded blocker deserved
+checking at the source:
+
+`Host::caller` delivers `{:op :bind :port p}` to the system port and
+DELIBERATELY DOES NOT RESUME -- its own comment says so, because a port queues
+and the call can wait behind the bind. `Host::call` then delivers on `p`
+immediately, and `host_deliver` begins with `port_by_id`. So the sandbox-side
+object for `p` must exist before any guest code has run at all.
+
+**Today it exists only because delivery DECODED the bind**, and decoding a
+`K_PORT` minted the handle. That is the coupling stated as a fact: port
+creation is a side effect of parsing a message that happens to mention the
+port. Nothing else creates it.
+
+**And the intern table is WEAK on purpose.** `register_port` says it plainly --
+"the scheduler keeps ids, not references: a strong list here would pin every
+port for ever and there would be nothing to notice." So minting at entry is not
+sufficient by itself: a handle nobody holds is collectable before the guest
+reads the message it arrived in. That is the same "a port in flight has no
+owner" bug measured earlier in this section, approached from the other side.
+
+**So the first increment is forced, and it is exactly the decided design:**
+
+1. `host_deliver` SCANS the encoding for ports and mints their handles, rather
+   than decoding it into a value. The scan builds nothing; it walks the
+   structure, which also keeps today's refusal of a malformed message at the
+   boundary.
+2. The queue entry carries `[len bytes ports]` -- the bridge HOLDING THE REFS
+   for everything inside the message, which is "retain at write" in its
+   smallest possible form and the thing the weak table makes mandatory.
+3. `port/receive` on a bridge answers a LIVE reader, and `flint.port/receive`
+   decodes it with `flint.wire/read-from`.
+
+What this increment does NOT do is leases: the refs are released when the
+message is dequeued rather than when the receiver has finished hydrating it, so
+a sandbox that takes a message and dies mid-decode drops them early. That is
+the two-phase work below, and it is the next increment rather than this one.
+
+**BUILT (2026-09-15).** `port/receive` decodes in flint on a bridge. The walk
+is `kin/wirescan.kin` -- generated into all three runtimes rather than written
+three times, with `kin/wirescan.drivers` running it on each target against a
+derived answer. The per-runtime part is the `byte[]`-shaped door to it and the
+mint, which is the only step that differs.
+
+**What it cost, measured.** 20 622 bytes on a pure module, 4.2%: 493 021 with
+the runtime decode against 513 643 with the guest one, by reverting the one
+line and rebuilding the units. `test/threads.clj`'s budget is raised to 525 000
+and says so. The raise is expected back when the runtime codecs go, since the
+runtime is linked INTO a wasm module and a dead encoder there is dead weight
+here.
+
+**Two things the drivers file caught that nothing else would have.** The
+`--expect` answer is derived rather than recorded, and the derivation was wrong
+twice: a truncated `K_INT` leaves TWO bytes, not zero, because the tag is
+consumed before its payload is checked. All three targets agreed on the right
+answer while the expectation was wrong -- which is exactly the case a
+cross-target comparison cannot report, and the reason kin demands an expected
+value as well as agreement.
+
+### Consuming a message is two phase
+
+The bridge cannot release its reference when the message is HANDED OVER, only
+when the receiver has finished hydrating it. So consumption is two steps:
+
+1. **take** -- the receiver gets the message and the bridge keeps its refs;
+2. **ack** -- the receiver has hydrated everything, and the bridge lets go.
+
+**The order is what makes it safe.** Every port in the message gains a sandbox
+handle DURING hydration, which is before the ack, so the bridge's reference is
+still held while the sandbox's is being taken. The count never dips through
+zero. Releasing first and hydrating after is the version that has the race, and
+it is the obvious way to write it.
+
+**This got harder, not easier, when the decoder moved into flint.** Hydration
+used to be one runtime step, atomic by construction. It is now guest code: it
+can be preempted mid-message, it can park, and it can throw half way through a
+value. The window between take and ack is unbounded and has arbitrary guest code
+in it, which is exactly why the ack has to be explicit rather than implied by
+the read returning.
+
+**An ack that never comes is a leak**, and that is the failure mode to design
+for rather than discover. A receiver that takes a message and then throws --
+malformed bytes, an unknown tag, a budget that runs out mid-decode -- must still
+release the bridge. Two things can guarantee it, and they compose: `receive`
+acks in a `finally` so the ordinary throw is covered, and the READER ITSELF
+holds the lock so that a reader nobody finished with releases when it is
+collected. The reader is the right holder because its lifetime is exactly the
+hydration.
+
+**Back-pressure moves with it.** `port_receive` refunds `PT_BYTES` on dequeue
+today. With two phases the refund belongs at the ACK, not the take: a message
+that has been taken but not hydrated is still occupying the bridge, and freeing
+its bytes early would let a sender past a bound that has not actually been
+released.
+
+**A take is a LEASE, and a lease must not block the queue.** Acking message two
+cannot be a precondition for taking message three -- a receiver that read ahead,
+or that hydrates several messages concurrently on different threads, would
+deadlock against its own back-pressure. So leases are per MESSAGE and are acked
+in whatever order they finish, which means the bridge needs a per-message
+lifetime and not a head pointer: a message is removed from the bridge's heap
+when ITS lease is acked, whether or not older ones have been.
+
+**The unacked backlog is bounded, and by a bound that already exists.** With the
+refund at the ack, a message taken and never acked goes on counting against
+`PT_CAP`, so a receiver that leaks leases stops being able to receive and
+senders meet back-pressure. That is the right failure: it is visible, it is the
+mechanism the system already has for "this end is not keeping up", and it turns
+what would otherwise be unbounded growth into a stall. Worth stating plainly
+because "not acking leaks memory" suggests something unbounded, and inside one
+sandbox's lifetime it is not.
+
+**Across a sandbox's lifetime it IS unbounded, and that is the case to design
+for.** A sandbox that dies holding leases must release them, or the bridge never
+frees those messages AND every port named inside them stays alive -- the refs
+the bridge holds on the sandbox's behalf outlive the sandbox that asked for
+them. Nothing collects that: the bridge is host-side and cannot see the guest's
+heap die.
+
+So a lease needs two releases, and they compose the way the two ack guarantees
+do. Inside the sandbox the READER holds it, so a reader nobody finished with
+releases when it is collected. Across the boundary it rides the teardown that
+already exists -- `close_all_bridges` walks `SC_PORTS` and releases every bridge
+end at exit, and the host's own `holders` table is what learns of it. Leases
+belong on that same walk, because it is the one path that runs whether the
+sandbox ended tidily or not.
+
+**And a parked decoder pins ports**, which is correct and worth saying out loud:
+a call thread that takes a message and parks mid-decode holds the bridge's refs
+until it finishes. That is the price of the guarantee, not a defect.
+
+### The send switch is made (2026-09-15)
+
+`port/send` encodes with `flint.wire` on a bridge. The runtime's encoder is
+still there and `port-send` still accepts a value, but nothing in `lib/` reaches
+it: what goes to a bridge is a finished writer, and the runtime's part is to
+check it is complete and take its bytes.
+
+Two things had to be true first, and both are now:
+
+**The table.** The encoder could not encode one (`this cannot cross a boundary:
+:table`), so switching would have turned every table sent over a bridge into a
+throw. `wire-table` and `wire-table-rows` exist on all four builds, the row
+count is legal only where a count is due, and `test/host_abi.mjs` compares the
+two encoders byte for byte across 35 shapes -- three of them tables.
+
+**A hole the switch would have opened, found by probing for it.** The rule that
+a CHANNEL end cannot be sent to the host lives in `check_sendable_via`, which
+runs on a VALUE. A guest-encoded message is not a value by the time it reaches
+`send`, so the check never sees it: `(p/send bridge (wire/encode channel-end))`
+wrote the id of an object the host was never told about into a message the host
+reads, which is the integer-to-port conversion the whole design exists to
+prevent. It was written as a failing test first and it failed -- `value=refused,
+encoded=NO THROW` -- so the fix could be checked rather than assumed.
+
+`wire-port` now refuses a port that does not cross a heap, on all three
+runtimes, and the test asserts the other half too: a BRIDGE port still encodes,
+or the guard would have taken delegation with it.
+
+**The lesson generalises past this switch.** A check written against values does
+not cover the path that bypasses values. Moving who does the encoding moved
+where the rule has to be stated, and only the probe said so.
+
+### The codec's state machine belongs in kin, and was written three times first
+
+**The wire writer and reader were hand-written in Rust, Java and C#.** They
+should have been one `kin/wire.kin` from the start, and they are now.
+
+This was not a close call and the tree already said so. `kin` generates 90
+modules into each of the three runtimes; the convention every other builtin
+follows is that the BODY is generated and only the registration -- the `def`
+line, the argument type check, the throw by name -- is written per runtime.
+`flint.system`'s own docstring makes the same argument one level up: "the
+alternative was the same protocol hand-written in `conc.rs`, `Conc.java` and
+`Conc.cs`, three copies kept in step by care."
+
+**The cost was paid before it was noticed.** The marker bug in the section
+below was found once and repaired three times, by hand, and what made those
+three repairs agree was attention rather than a generator. `kin/tableref.kin`
+already carries the same lesson from a previous round: "Rust answered `-1` in
+an `i64` and both ports `-1` in an `int`; that happened to agree, but only
+because the type was signed." A sentinel that agrees across three languages by
+luck is exactly what was shipped and then repaired here.
+
+**What moved and what did not.** `kin/wire.kin` holds the frames, the marker,
+the cell bound, the completion rule and the reader's cursor. What stays in each
+runtime is the slot LAYOUT and the byte-payload helpers -- appending a `&[u8]`,
+a `byte[]` or a `byte[]` is not a body three languages can share, and those are
+thin enough to read side by side.
+
+**Three things the port surfaced immediately**, each of which had been a
+divergence waiting to happen:
+
+* `local` DECLARES and does not initialise; the three-argument form was
+  accepted and the initialiser silently dropped, which emitted a read of an
+  uninitialised variable. Rust refused to compile it. Neither port would have.
+* `I32` is UNSIGNED in kin, so `wire-peek` could not answer `-1` for "past the
+  end" -- which is the `tableref.kin` lesson arriving again, and this time
+  before it shipped. It takes a default instead.
+* Rust rejects `set-r(ni, vec-conj(...))` as a second mutable borrow, so every
+  allocating call is hoisted into a `let`. The generator does not hide a
+  language's rules; it makes all three obey the one source that satisfies them.
+
+**And then it found a live one.** kin's `fixnum` ZERO-EXTENDS on the ports --
+correct, because its argument is an `I32`, which Java and C# spell as a signed
+`int`. The frames are `I64`, and this was the first source to pass a wide
+NEGATIVE value through it. Rust kept the sign and both ports masked it to 32
+bits, so `-2` became `4294967294`: the marker existed on one runtime and not on
+the other two, a well-formed table was refused and a VALUE was accepted where a
+count was due. The safety property the frames exist for, absent on two runtimes
+out of three, and `runtimes/conform/wire.cljc` caught it on the first run after
+the port. `fixnum64` is the form that keeps the sign and the width.
+
+That is the argument for the generator stated as an event rather than a
+principle: the same mistake in three hand-written copies is three mistakes to
+find, and each of them can be made differently.
+
+**And it is checked the way kin checks everything else.** `kin/wirecore.drivers`
+compiles and RUNS the generated module on all three targets against a toy heap
+and compares the output, which is the half that drift-checking cannot do: three
+identically-wrong implementations agree. The `--expect` answer is derived from
+the format rather than recorded from a run, and one of its six fields is the
+marker's sign read straight out of a frame -- `-4` for a table of three
+columns, a value that cannot be confused with `4294967292` by any formatting
+difference.
+
+`bin/check-kin` is green at 92 sources, every one against a written-down
+expected answer.
+
+### The marker was reachable by arithmetic, and that was the hole
+
+Enforcement bought with a new representation has to be checked against that
+representation's edges, and this one was not. Writing it down because the shape
+generalises: **the frames are fixnums, and a fixnum is 48 bits, sign-extended.**
+
+The table's marker -- "a row count is due here, not a value" -- is a NEGATIVE
+frame. So the question nobody asked was whether an ordinary count could become
+one. It could:
+
+    (-> (wire-writer) (wire-vec (+ 140737488355328 1))   ; 2^47 + 1
+        (wire-table-rows 15))                            ; accepted
+
+`2^47 + 1` is written to the wire as its low four bytes -- `1` -- so a reader is
+told to expect ONE value inside that vector. The frame, read back sign-extended,
+is negative: the writer believes a count is due. `wire-table-rows 15` then puts
+`0f 00 00 00` exactly where the reader will look for a tag, and `0f` is
+`K_PORT`. A capability minted from an integer, through the machinery added to
+make that impossible.
+
+Measured, not reasoned: the row above was accepted while `(wire-int 1)` in the
+same position was REFUSED, which is the writer saying in so many words that it
+was in the marker state.
+
+**The fix is a bound that was always implied: `u32`.** Every count in the format
+is four little-endian bytes, so a count past `u32::MAX` was already writing
+something other than what it opened -- the bytes and the writer's own idea of
+the message disagreeing, which is the one thing the frames exist to prevent.
+With counts bounded there, the largest legitimate frame is about `2^33`, nothing
+sign-extends, and negative means marker and nothing else. The table's
+`ncols * nrows` is the one frame built by multiplying, so it is checked against
+a cell bound as well.
+
+**What this says about the earlier decision.** "Both sides track structure" is
+still right, and the enforcement it bought is real. What was missing is that
+introducing a sentinel VALUE creates an obligation to prove nothing else can
+produce it -- and `-1` was chosen for being obviously distinguishable from a
+count, which it is mathematically and was not in 48 bits.
+
+The exploit is kept as rows in `runtimes/conform/wire.cljc`, refusing
+identically on all four builds, so no runtime can regress it quietly.
+
+### The test helper deadlocked, and it read as a slow gate
+
+Not codec work, recorded here because it is what three firings of this section
+actually spent their time on and the misdiagnosis was mine.
+
+`bin/test` stopped producing output at `== ropes: ...` and sat there. The
+reading was "ropes rebuilds the units twice, so it is slow" -- plausible, since
+`test/ropes.clj` does exactly that, and wrong. Measured instead of assumed: the
+`cargo` under it had used **0.02 seconds of CPU in 42 minutes**, which is not a
+slow build, it is a stopped one.
+
+**The helper reads stdout to completion and stderr afterwards.**
+
+    out (slurp (.getInputStream p)) err (slurp (.getErrorStream p))
+
+A child that writes more than a pipe buffer to stderr blocks writing it; the
+parent is still blocked reading stdout; neither moves again.
+`bin/build-units --diagnostics` emits **71 266 bytes** of cargo warnings
+against a 64 KB buffer. It is not marginal and it is not intermittent -- past
+that threshold it hangs every time.
+
+The volume is not new work's fault: 243 warnings, none of them from
+`kin/wirecore.kin` or `kin/wirescan.kin`. The shape has been latent in six test
+files and something ordinary pushed it over.
+
+**Fixed by draining stderr on its own thread**, in all six. `ropes` now
+finishes in under five minutes.
+
+**Two lessons worth keeping.** A plausible explanation for silence is not a
+diagnosis -- CPU time would have said "stopped" in one command, at any point
+across three firings. And a hang that looks like slowness is the expensive
+kind: it was blamed on the gate, then on interrupting the gate, and each wrong
+answer cost a full run.
+
+### The ports could not send on a bridge at all, and `bin/test` cannot see it
+
+**A regression this section introduced at step 2, found five steps later.**
+When `port/send` switched to `flint.wire`, `lib/flint/port.cljc` began handing
+`flint/port-send` a WRITER on a bridge. Native grew a branch for that. The JVM
+and the CLR did not: their `send` called `Codec.encode` on the writer
+unconditionally, which refused it, so **every bridge send on both ports threw**
+from that moment.
+
+**What made it invisible for so long.** `bin/test` does not run
+`bin/conform-hosts`, and the host-port drivers each print their own transcript
+and call every line `ok` -- 16 ok, 0 fail, while sending nothing. Only
+`bin/conform-hosts` compares the transcripts, with `cmp -s`, and that gate is
+itself blocked earlier by an older `gas differs by 1536`. So a total failure of
+the feature on two runtimes out of three sat behind a green-looking driver and
+a gate that stops before reaching it.
+
+It surfaced only because `port_open` needed the same treatment, which sent me
+to read `Conc.java`'s `send` and find it had no writer branch to read.
+
+**Fixed in both**: a writer is not walked by `checkSendable` (there is nothing
+in it to check, and the check would refuse a type it does not know), a channel
+refuses one by name, and a bridge requires one. `message(500,8,"ack")` now
+appears in all three transcripts.
+
+**The coverage gap is the real finding.** A driver that reports `ok` for
+whatever happened is not a test; it is a transcript. The assertion lives in a
+gate that does not run in `bin/test`, so anything it would catch can rot for as
+long as that gate stays red for another reason.
+
+**Still diverging, and NOT the receive switch**: native ends the fixture parked
+(`status 2`, port `half-closed`) where both ports finish (`status 0`,
+`closed`), and the open token is 1 against 2. The two ports agree with each
+other.
+
+Tested rather than assumed: reverting `flint.port/receive` to the runtime
+decode, rebuilding the units and the dist, and re-running leaves native parked
+exactly as before. So the guest-side decode is not the cause. All three
+runtimes implement `hostClosePort` identically -- P_HALF if P_OPEN -- so the
+state difference is a CONSEQUENCE of native's program not finishing, not a
+separate bug.
+
+**And this blocks the last migration.** `host_request`/`host_answer` are the
+only guest-facing codec uses left, and they should not be moved without
+coverage -- the ports' `send` regression above is exactly what happens when a
+runtime path is changed with nothing watching it. The natural place for that
+coverage is the host-port fixture, which all three drivers must reproduce
+line for line. It cannot be extended while its transcripts already disagree
+for a reason nobody has attributed.
+
+**Attributed as far as it can be without a HEAD bootstrap**, by elimination and
+by mechanism:
+
+* NOT the receive switch. Reverted it, rebuilt units and dist, re-ran: native
+  parks exactly as before.
+* NOT the `flint.system/boot` shake root. Reverted that hunk, rebuilt dist and
+  the fixture image, re-ran: unchanged.
+* NOT the driver under-pumping. Native's driver gives up after four resumes;
+  raised to sixteen and native still reports `status 2`.
+
+So a thread really is parked for ever, and it is the SYSTEM thread: the control
+plane ships in every module now, so every program has one, and it parks on a
+system port the host never closes. The runtimes disagreed about what "done"
+means with such a thread parked -- and **native was right, provably, from its
+own source.**
+
+`drive` asks two questions when nothing is runnable: has the entry finished,
+and does anything need the host? NATIVE ASKS THE HOST FIRST, and its comment
+says why it was changed to:
+
+> Asking `main_finished` first here closed the system port out from under a
+> call that had just parked on an `open` -- the grant then arrived for a port
+> that was already gone, and the guest saw its own capability refused.
+
+**Both ports still asked `mainFinished` first, carrying the superseded comment
+verbatim** -- the one native's comment quotes as the thing it replaced. So the
+fix was never propagated, and the two runtimes have disagreed about when a
+program is over ever since.
+
+`Host::call` settles which is right independently: it treats `code != 2` as
+"the sandbox stopped before answering" and returns an error. A live sandbox
+with its control plane parked MUST report 2, or every call into a JVM-hosted
+sandbox reads as a dead one.
+
+**Reordered in both ports.** `needsHost` is narrow on purpose -- a thread
+parked on a CHANNEL does not count, because no host can help it, only a bridge
+does -- so the change keeps a program alive exactly when the host might still
+act. The host-port transcript went from eight divergent lines to two, and
+`green`, `threads`, `wire`, `tables` and `collections` all still agree across
+the three runtimes.
+
+**Of the two lines that still differed, one was the drivers and is fixed.**
+Native prints `out.out` -- the answer as a string, empty when a program has not
+answered -- where both ports rendered the NIL as `nil`. Two renderings of the
+same "no answer", differing on a line where nothing had diverged. The ports now
+print nothing for an absent answer, as native does.
+
+**The last line is a real ordering divergence, and it is now measured rather
+than guessed.** Instrumenting waiter allocation in both runtimes:
+
+    native   [waiter] kind=1 idx=0   <- the entry's OPEN is first
+             [waiter] kind=3 idx=1   <- then the control plane parks
+    jvm      [waiter] kind=3 idx=0   <- the control plane parks FIRST
+             [waiter] kind=1 idx=1   <- then the entry's open
+
+So the open token reads 1 on native and 2 on the ports, because **the control
+plane's first run is ordered differently relative to the entry.** Native runs
+the entry on the live stack until it parks on `open`, and only then does
+`drive` boot the control plane; the ports let the control plane run first.
+
+That is a scheduler question -- when the control plane first runs -- and
+changing it touches the same ordering native's `drive` comment says was already
+got wrong once. It deserves its own decision rather than being tacked onto the
+codec migration, and it is the ONLY line still separating the three
+transcripts.
+
+> **REPRODUCED 2026-09-19**, independently and from scratch, by instrumenting
+> both generated `new_waiter`s: the table above comes out identical, kinds and
+> indices included. Still the only line separating the three transcripts.
+>
+> **And one candidate cause is now RULED OUT.** The two harnesses differ in
+> when they run initialisers -- `RtHostPorts.run` calls `ensureStarted` before
+> allocating the entry's arguments, `Program::run_with` after -- which looks
+> like the right shape for an ordering difference. It is not the cause: forcing
+> initialisers early on native (a temporary `ensure_started_probe`, since
+> reverted) leaves the order and the token unchanged.
+>
+> **ROOT CAUSE FOUND, 2026-09-19, and it is a gas divergence rather than a
+> scheduler one.** Probed at the entry call on both sides, same image:
+>
+>     native   entry-call: steps=  226  slice_end=4096   -> under the boundary
+>     jvm      entry-call: steps= 8135  sliceEnd =4096   -> ALREADY PAST it
+>
+> `slice_end` is 4096 on both -- it was armed when the scheduler came into
+> existence, at `installSystemPort`, while `steps` was near zero. By the time
+> the entry runs, the jvm has spent 8 135 steps and the saved slice is long
+> gone, so the entry trips on its FIRST tick (steps unchanged at 8 135),
+> yields, and the scheduler boots the control plane, which parks. Native is at
+> 226, still under 4 096, so its entry runs through to `open`. That is the
+> whole of the inversion.
+>
+> **Why the step counts differ by 36x for the same work.** Native disarms the
+> slice around the initialiser loop -- `set_slice_end(0)` -- and on this
+> runtime that switches the COUNTER off as well, because `checkpoint` becomes
+> `u64::MAX`, `counting()` goes false, and `run` dispatches to `NoBudget`,
+> whose `tick` is a constant the optimiser deletes. Measured directly:
+>
+>     PROBE pre-init:       steps=127  counting=true
+>     PROBE init-disarmed:             counting=false
+>     PROBE entry-call:     steps=226
+>
+> The jvm has no such dispatch. Its hot loop does `steps++` unconditionally
+> (`Rt.java:976`), so its initialisers are billed and native's are not.
+>
+> **So this row is not independent of `resource-limits` after all.** It is the
+> same question -- what counts as billable, and whether the two runtimes agree
+> -- surfacing as a token number instead of a gas number. Initialisers are free
+> on native and billed on the ports; that is a divergence in its own right,
+> and the open token is a symptom of it.
+>
+> RULED OUT along the way: initialiser TIMING (forcing them early on native
+> changes nothing) and slice ARMING as such (native re-arms the slice for the
+> entry too -- `vm.rs` says so and the probe confirms `slice_end=4096`). It is
+> not whether a slice is armed; it is how far `steps` has travelled by then.
+
+So the order is: settle what completion means with a parked system thread, then
+add a request exchange to the fixture and the three drivers, then move the
+pair, then delete and take the 27 082 bytes.
+
+### AND IT TRUNCATES THE GATE, which nobody noticed for as long as it has been red
+
+Found 2026-09-17, and it changes what the row below MEANS.
+
+`bin/test` fails fast -- `fail()` ends with `exit 1` -- and the `colls` row
+below is inside `test/aot.clj`. So the run stops there. **`bin/test` declares
+62 sections and 22 of them run.** Forty never execute, among them:
+
+* `distributable` -- which carries THE ONLY COMPARISON OF THE TWO FRONT ENDS'
+  OUTPUT, the byte-identical rows whose own comment says "nothing ran it until
+  now";
+* `system`, `io`, `bytes`, `shake`, `dist`, `binary`, `llvm`, `parallel`,
+  `hosts`, `global ports`.
+
+**It reads as a baseline and it is not one.** "22 sections, 1 known failure"
+is the phrase this failure has been reported under for many sessions,
+including in the standing instructions an agent works from -- and it sounds
+like a full run with one red row. It is a run that stopped a third of the way
+through. Every claim of the form "the gate is at its known baseline" made
+while this was true was weaker than it sounded, including several of mine.
+
+**Made visible rather than worked around.** `fail` now says how many sections
+ran of how many exist and that the remainder never executed, and the timing
+summary prints the same count on a clean run. That does not fix the coverage;
+it stops the absence from looking like a pass.
+
+**What it needs from you** is the policy, which is not an agent's to pick: a
+suite that stops at the first failure is a defensible choice and so is one
+that runs everything and reports every red. While `colls` is red and the
+policy is fail-fast, forty sections are dark -- so the two questions are the
+same question, and fixing `colls` closes both.
+
+### AND THE DARK SECTIONS WERE HIDING A SECOND RED
+
+Measured, not assumed: a copy of `bin/test` that continues past the `colls`
+row reaches four more sections and then fails on `test/types.mjs`.
+
+    FAIL an annotation inside an `and` guard costs exactly nothing
+         annotated 54,625, unannotated 54,627 -- a difference means the
+         projection did not survive the let that `and` expands to
+
+**Reproduced on its own, under the production units**, so it is not an
+artefact of running out of order. Two instructions on a 54 000-step program,
+where the test demands exactly zero -- it is an analyzer question (does an
+annotation's projection survive the `let` that `and` expands to?) and not a
+runtime one, and the test compares two arms of the SAME program so a runtime
+change cancels in it.
+
+**Not attributable to any recent work on the evidence available**, and it
+wants its own look. What matters here is that it was invisible: the gate has
+never reached the section it lives in.
+
+**The enumeration stops there**, because finding the next one needs the same
+keep-going mode and that is the policy question above. Two reds are known;
+how many more sit in the remaining thirty-six sections is not knowable until
+the suite is allowed to finish. A first probe of this reported a THIRD failure
+(`test/common --aot`) that turned out to be the probe's own doing -- the
+`colls` failure path restores the production units, and the next section needs
+the AOT ones -- which is worth recording as the shape of the trap: a suite
+that fails fast also CLEANS UP fast, so simply not exiting changes what the
+later sections run against.
+
+### THE DARK REGION, SURVEYED 2026-09-17 -- it is not one red row
+
+`bin/test` now honours `FLINT_TEST_KEEP_GOING=1`: opt-in, default unchanged
+and verified unchanged (a plain run still stops at 22 of 62 and says so). It
+exists because a suite that cannot be finished cannot be surveyed, and forty
+sections had never run.
+
+**Finished, it reports EIGHTEEN red sections.** That number is not the finding;
+what survives verification is.
+
+**Verified real**, re-run standalone under the units their section uses:
+
+    test/tables.clj    FAIL a constant column costs nothing per row
+    test/limits.clj    FAIL ... carries spent, limit and thread as data
+                            {:spent 1000000, :limit 1000000, :thread 2}
+    test/snapshot.clj  FAIL ... the snapshot taken while they were parked
+                            carries them -- found 1 THREAD objects
+    test/document.clj  FAIL ... peak memory stayed a fraction of the ask
+                       FAIL ... not one stale pointer was written
+
+**Verified NOT real**: `test/manifest.clj` passes standalone. It is a cascade
+-- something earlier left state it did not expect -- so the raw eighteen
+includes at least one phantom and the rest are unverified either way.
+
+**THE TRAP IN VERIFYING THEM**, which cost a wrong answer before it was
+noticed: a section's test must be re-run under the UNITS THAT SECTION BUILDS.
+`test/tables.clj` calls `stat_bytes_allocated`, which is
+`#[cfg(feature = "diagnostics")]`, and its section runs
+`./bin/build-units --diagnostics` first. Run against production units it dies
+with "stat_bytes_allocated is not a function", which reads exactly like a
+missing export in `link.cljc` -- and was nearly recorded as one.
+
+**Two of these are in code this session changed, and are NOT attributed.**
+`snapshot` is about parked threads carrying their saved stacks and frame
+records; `limits` reports `:thread 2` for a gas error. Both sit on the
+scheduler and thread machinery the `Conc` port moved into `kin/sched.kin`, and
+neither has been bisected against a baseline. They may be regressions from that
+work, they may be older than it, and saying which needs a run from before it --
+which nothing in the tree can currently produce, because the gate has not
+finished in long enough that no green baseline for these sections exists.
+
+**What this changes about every "the gate is at its known baseline" claim**
+made in this file and in the standing instructions: the baseline covered 22
+sections. The other forty were never a baseline at all.
+
+### The `colls` gap, narrowed 2026-09-17 -- and three of the old guesses are wrong
+
+Chased because it is the FIRST red and `fail` exits, so it is what keeps forty
+sections dark. Not fixed. What follows is what a session of bisection
+established, so the next attempt does not re-walk it.
+
+**FIRST, THE RECORD POINTED AT THE WRONG FILE.** The note below reasons about
+"`colls` is `(ns colls)` with no requires", which reads like
+`bench/progs/colls.cljc`. It is not: `test/aot.clj` WRITES ITS OWN five-line
+`colls` into a temp directory. The real `bench/progs/colls.cljc`, built and run
+the same way, shows a gap of ZERO. The reproducer is:
+
+    (ns colls)
+    (defn main [_]
+      (let [m (reduce (fn [m i] (assoc m i (* i i))) {} (range 500))
+            v (reduce conj [] (range 500))]
+        (str [(count m) (get m 30) (reduce + 0 v) (peek v)])))
+
+**The "what is special about colls" hypothesis does not survive.** `assoc` on a
+map, `conj` on a vector, `peek`, and `reduce +` were each built as a
+single-operation program, interpreted against compiled: **gap 0 for every one
+of them.** Whatever this is, it is not one of those operations.
+
+**IT IS DATA-DEPENDENT, AND NOT MONOTONIC.** The same source at different
+collection sizes:
+
+    n = 10, 50, 100, 150, 200, 250, 300, 400   gap 0
+    n = 500    gap 46
+    n = 1000   gap 2
+    n = 2000   gap 48
+
+A bug in how an OPERATION is charged would scale with the operation count.
+This does not.
+
+**IT IS ALSO LAYOUT-FRAGILE.** Adding one unrelated `flint.rt/gc-stats` call to
+the same program makes the counts agree exactly. So the trigger is the emitted
+LAYOUT -- where the chunk boundaries happen to fall -- and not the program's
+meaning.
+
+**Two mechanisms ruled out by measurement, not by argument:**
+
+* **NOT the collector.** `flint.rt/gc-stats` reports zero minors and zero
+  majors on both builds of the reproducer. Nothing collected.
+* **NOT the allocation charge.** The compiled build does allocate less -- 568
+  bytes on the reproducer -- and that looks like the answer until you measure
+  a program that PASSES: `arith` allocates 1 008 bytes less under AOT and
+  `hof` 264 less, and both have step counts identical to the instruction.
+  So an allocation difference between the two builds is normal and does not
+  move gas; it is unbilled allocation.
+
+**Where that leaves it.** `chunks` charges `(count is)`, minus one when the
+chunk hands its last instruction back for the interpreter to run -- so every
+instruction should be ticked exactly once, by the chunk or by the interpreter.
+Removing that decrement was tried: the compiled side then overshoots by 17 230
+on one probe, so the hand-back is load-bearing and broadly right. The gap is a
+narrow case where an instruction is ticked by NEITHER -- layout-dependent,
+which is why it appears and disappears with unrelated edits.
+
+### Narrowed again 2026-09-17, with the emitter's OWN handles
+
+The previous entry called for instrumentation. It already exists: `link.cljc`
+reads `FLINT_AOT_LIMIT`, `FLINT_AOT_ONLY`, `FLINT_AOT_PICK`, `FLINT_AOT_FROM`,
+`FLINT_AOT_SKIP_FROM`/`_TO`, `FLINT_AOT_NAME`, `FLINT_AOT_NAMES` and
+`FLINT_AOT_CHUNK_ALL`. A whole bisection harness, and two sessions of guessing
+happened beside it.
+
+**WHICH HALF: opcode emission, not chunk boundaries.** `FLINT_AOT_CHUNK_ALL=1`
+makes every instruction its own chunk, and its docstring says what the answer
+means: "if a failure survives maximal chunking then no boundary was missing and
+the fault is in how an opcode is EMITTED". **The gap survives it, at the same
+46.** So the fault is in an opcode's emitted form, and boundary placement is
+exonerated.
+
+**A THREE-FUNCTION REPRODUCER**, found by delta-debugging the arity set (34
+probes, from `{0..129}` down):
+
+    FLINT_AOT_PICK=118,120,129     gap 2
+
+    118 = reduce-seq  arity 0  (off 1733 len 75 argc 3)
+    120 = reduced?    arity 0  (off 1817 len 28 argc 1)
+    129 = conj        arity 1  (off 2072 len  9 argc 2)
+
+**Every PAIR of those three is clean**; all three together lose 2 steps. The
+full 46 is roughly twenty-three independent instances of the same thing, which
+is why bisecting for "the arity at fault" kept landing on interactions -- there
+is no single guilty arity.
+
+**It is RARE and data-dependent, even minimised.** The three-function set loses
+2 steps at `(range 500)` and ZERO at 50, 200 and 2000. A per-call
+mis-accounting would scale with the call count; this does not. Combined with
+"the fault is in emission", that points at a BRANCH inside one of the three
+that is taken occasionally -- `conj`'s slow path is the obvious candidate at
+nine instructions -- rather than at the common path of any of them.
+
+**The three functions, disassembled** (`./bin/flint ... --disasm conj`), so the
+next attempt starts from the code rather than from the offsets:
+
+    conj arity 1 (argc 2)        reduced? arity 0 (argc 1)
+      2072  local 0                1817  local 0
+      2074  local 1                1819  type-p
+      2076  native 30 2            1820  set-local 15
+      2080  return                 1822  return
+
+    reduce-seq arity 0 (argc 3) -- the loop, abridged
+      1745  local 4                1769  call 1        <- reduced?
+      1747  jump-if-false -> 1805  1771  jump-if-false -> 1787
+      1756  native 3 1             1791  native 4 1
+      1760  call 2        <- conj  1799  jump -57 -> 1745   <- BACK-EDGE
+
+`len` in the arity table is BYTES, not instructions: `conj` arity 1 is four
+instructions, not nine.
+
+**What the emission does with gas**, read rather than guessed:
+
+* `:native` is in `INLINED`, so a chunk CHARGES for it; the emitted form passes
+  the accumulated `GAS` to `aot_native`, which does `rt.steps += gas`, and then
+  resets the local to 0.
+* `:call` is in `CALLS`, so `handed-back?` is true and the chunk charges
+  `count - 1`; `aot_call` adds `gas + 1`, the `+ 1` being the call itself.
+* A back-edge flushes the accumulated gas and is where preemption is tested.
+
+Each of those is individually consistent. The loss is in their interaction --
+`reduce-seq`'s loop contains both a `call` and a `native` and a back-edge, and
+it is the only one of the three with a loop.
+
+**A usable instrument exists and is worth knowing about**: build the units with
+BOTH flags -- `./bin/build-units --aot --diagnostics` -- and a compiled module
+can then be read with `stat_region(60 + k)` for the `C_*` counters in
+`aotstat.rs`. An AOT module refuses to run under non-AOT units, which is why
+this combination is the one that works.
+
+**What those counters CANNOT do** is settle this, and that is worth recording
+so the next attempt does not spend the time: they count EVENTS, and they count
+different events in the two builds -- on the reproducer, `instrs` reads 79
+interpreted against 2 128 compiled, `calls` 3 407 against 1 904. Nothing there
+decomposes GAS, which is the quantity that differs by 2.
+
+### The gas ledger, built and read 2026-09-17
+
+`C_AOT_GAS` (`aotstat.rs`, index 30) now sums every `gas` value flushed out of
+compiled code, across all six helper sites in `aot.rs`. `steps` minus it is
+what the interpreter ticked, so a step count DECOMPOSES for the first time.
+Diagnostics-only, and kept -- it is the instrument this question needs.
+
+**THE FIRST READING OF IT WAS WRONG, and the export's own comment caused it.**
+`stat_region` documents itself as "`60..` the counters". There are FOUR
+histograms of twenty in front of them, so `COUNTS[k]` is at `80 + k`;
+`stat_region(60 + k)` returns `SEG_HIST[k]`, silently, with numbers that look
+entirely plausible. The `gas -203 / +203` figures first recorded here were
+segment histogram buckets. The comment is corrected in `abi.rs` and says why.
+
+**Read correctly, the ledger is self-consistent and the bug is elsewhere.**
+Interpreted runs are all ticks; a compiled run splits into ticks plus gas, and
+the two sum to the same total on every clean size:
+
+    n = 499   interpreted 113 282   compiled 86 582 ticks + 26 700 gas = 113 282
+    n = 500   interpreted 113 546   compiled 86 791 ticks + 26 753 gas = 113 544
+
+So the compiled build's own arithmetic adds up. What differs is the COST OF THE
+FIVE-HUNDREDTH ELEMENT: the interpreter charges 264 for it and compiled code
+charges 262. Every element before it costs both builds the same, which is why
+n = 499 agrees to the instruction.
+
+**Per exit, that increment is:** native +30 (6 more calls), return +11 (3),
+call +6 (5), tick +6 (2), bail +0 -- summing to the +53 of gas, against +209
+ticks. No single door is short; the shortfall is in the total for one
+element.
+
+**And a real bug in the diagnostics themselves, found on the way.**
+`C_SITES_SEEN` and `C_SITES_POLY` were 26 and 27 -- the indices `C_BAIL_CALLS`
+and `C_BAIL_BAD_CALLEE` already held. Both pairs are written, the bail pair from
+`aot.rs` and the site pair from `vm.rs`, so each slot read back as the sum of
+two unrelated measurements. Moved to 28 and 29. **Any past reading of those four
+numbers is suspect**, including whatever the inline-cache question was decided
+on.
+
+### What the threshold looks like, and why it resists
+
+* **Razor-thin**: `n = 499` is clean and `n = 500` is not.
+* **Needs BOTH collections large**: `m=500 v=200` and `m=200 v=500` are clean;
+  `m=500 v=499` and `m=499 v=500` both fail.
+* **The size of the gap is unstable**: 0, then 2, then 46 across single-element
+  changes of the input.
+* **Still no collector involvement**: zero minors and zero majors at every
+  failing configuration measured.
+* **Observation destroys it**: adding one `flint.rt/gc-stats` call to the
+  program makes the counts agree exactly.
+
+That combination -- heap-size sensitive, not GC, and destroyed by any added
+instruction -- says the trigger is where the emitted code lands relative to
+something size-dependent, and that reading it out of the program will not work.
+### FIVE INSTRUCTIONS ARE CHARGED BY NOBODY, 2026-09-17
+
+The per-exit breakdown (`C_GAS_*`, `C_N_*`, indices 31..42) said no single door
+is short, so the next instrument was the OPCODE HISTOGRAM -- `OPS`, at
+`stat_region(123 + op)` -- diffed between n=499 and n=500 on both builds. `OPS`
+is incremented only by the interpreter, so interpreted-minus-compiled is
+exactly the work compiled code took over.
+
+**The 500th element, decomposed:**
+
+    instructions the interpreter ran ........ 96   (interpreted build)
+    ... still interpreted when compiled ..... 38
+    ... moved into compiled code ............ 58
+
+    charged for those 58:
+      aot_call's `+ 1`, five calls ..........  5
+      chunk-accumulated gas ................. 48
+      ------------------------------------------
+      total .................................. 53   -- FIVE SHORT
+
+    other charges (allocation and the rest):
+      interpreted ........................... 168
+      compiled .............................. 171   -- THREE MORE
+
+    264 interpreted against 262 compiled, and the visible gap of 2 is the
+    five short offset by the three extra.
+
+**`OPS` is per-instruction and `steps` is not**, which is what makes the two
+columns add up: the whole interpreted run ticks 58 245 instructions against
+113 546 steps, the rest being allocation and other `charge_work`. Any future
+comparison has to keep those apart.
+
+**The fifty-eight, by opcode** (moved = interpreted delta minus compiled
+delta): local 20, jump-if-false 7, native 6, set-local 6, call 5, var 3,
+return 3, type-p 3, jump 2, false 2, const 1. The five `call`s are the handed-
+back ones and are accounted for; the missing five are somewhere in the other
+fifty-three, all of which are `INLINED` opcodes that a chunk should have
+charged for.
+
+**So the fault is a chunk whose `charge` does not cover every instruction it
+runs** -- which is what "the fault is in how an opcode is EMITTED" meant, now
+with a number on it. The next step is to make the emitter assert its own
+invariant: for each chunk, `charge` plus the hand-backs must equal the
+instruction count, checked at emit time rather than inferred from a step
+total three layers away.
+
+### An AOT parity failure that is not this section's, reported not absorbed
+
+With the deadlock fixed, `bin/test` reached the end for the first time and
+found ONE failure. Recorded here because it is the gate's only red and the next
+person to run it deserves to know what was already ruled out.
+
+    aot: compiled arities answer exactly as the interpreter does
+      FAIL colls -- the same instruction count
+            expected 113542   (interpreted)
+            got      113496   (compiled)
+
+Deterministic, and only `colls` -- `arith`, `hof`, `strs` and `handler` all
+pass the same check. What is special about `colls` is `assoc` on a map and
+`conj`/`peek` on a vector; the others do not touch either.
+
+**Not the codec work.** `colls` is `(ns colls)` with no requires: no ports, no
+`flint.wire`, nothing this section changed is reachable from it.
+
+**And not the `flint.system/boot` root**, which was the obvious suspect: the
+uncommitted compiler change puts that var in every module's roots, which
+changes image composition and therefore which arities AOT selects. Tested by
+reverting that hunk, rebuilding `dist`, rebuilding the units `--aot` and
+re-running: **the gap is unchanged at 46**. A good hypothesis, measured, and
+wrong -- which is the only way to know.
+
+What it takes to classify further is a baseline at HEAD, and that needs a full
+bootstrap (`dist/flintc.bytecode` is generated, not checked in, so a fresh
+worktree cannot build the CLI without one). Judged disproportionate to do
+inline for a failure off this section's path.
+
+**The accounting is deliberate and documented**, which is why 46 is a real
+number rather than noise: `test/aot.clj` explains that a compiled chunk's
+static gas "INCLUDES the back-edge instruction because compiled code jumps for
+itself, and then hands that same instruction back". Something in that
+hand-back is off for whichever arity `colls` now has compiled.
+
+### The deletion landed, and the module is smaller than before this started
+
+**DONE (2026-09-16).** Every guest-facing path encodes and decodes in flint.
+What remains of the Rust codec is host-facing -- `Program::encode`,
+`Program::decode` and the `flint_call` ABI -- and it now sits behind
+`cfg(not(target_arch = "wasm32"))`, so a guest module carries none of it.
+
+**Measured, and checked rather than assumed.** 513 643 bytes with the Rust
+codec linked against **487 287** without: **26 356 back**, within 700 of the
+27 082 the stub experiment predicted. The check is not the number alone --
+`strings dist/flint-runtime.wasm` no longer contains `value nested too deeply
+to decode`, which is `decode_at`'s and nothing else's.
+
+**The module is now smaller than before the guest codec existed**: 487 287
+against the 493 021 it measured while `receive` still used the runtime's
+decoder. The migration paid for itself and 5 734 bytes over, and
+`test/threads.clj`'s budget goes back from 525 000 to 500 000.
+
+**The cfg is the point, not the byte count.** Relying on the linker to drop an
+unreferenced function is a hope; `cfg` is a statement, and it fails the build
+the day someone reaches for the runtime codec from guest-facing code again.
+
+**One thing this uncovered.** `bin/build-units` had been FAILING since
+`hostreq.rs` was added -- a new `[[bin]]` without `required-features =
+["host-tools"]` is compiled for wasm32, where `HOST_CATALOGUE` is configured
+out and `std` collides with the runtime's `panic_impl`. It went unseen for two
+firings because the invocations were written `> /dev/null 2>&1`. That is the
+same silenced-compile trap recorded elsewhere in this file, and the same one
+that once made the ports look like they disagreed with native.
+
+### "Delete the runtime codec" is not a step, and the probe says why
+
+The plan carried "delete the three runtime codecs, needs send and receive" as
+the last step. Both switched; the codecs are NOT dead. Probed (2026-09-15),
+here is everything that still reaches them:
+
+| caller | direction | what it is |
+| --- | --- | --- |
+| `port_open` | guest → host | the open handshake encodes `[name, ...args]` |
+| `host_request` | guest → host | the request/response protocol's arguments |
+| `host_answer` | host → guest | the answer to one of those |
+| `native.rs::call_on` | host → guest → host | the `flint_call` ABI |
+| `Program::encode` / `decode` | host-facing | what an embedder calls |
+| `port_send` | guest → host | only the path where a VALUE is passed, which
+  `lib/` no longer takes |
+
+**Only two of those are ports at all.** The rest is a different protocol
+(request/response), a different ABI (`flint_call`), or the embedding API --
+none of which `port/send` and `port/receive` were ever going to touch. The step
+was written as though the port codec were the only codec.
+
+**What the end state actually is.** The runtime keeps a codec for the
+HOST-FACING surface, which is correct and not a compromise: `Program::encode`
+and `Program::decode` are what an embedder calls, and `call_on` is the
+`flint_call` ABI, which is host code by definition. What should still move is
+the GUEST-facing remainder -- `port_open` and `host_request` encoding, and
+`host_answer` decoding -- because the safety argument that moved `send` and
+`receive` applies unchanged: an answer can carry an opaque.
+
+So the real remaining step is "move the open and request paths to the guest
+codec", and the one after it is "delete what is then unreachable", which will
+be less than three whole codecs.
+
+**WHAT THE DELETION IS WORTH, measured (2026-09-15).** Stubbing the last two
+guest-facing codec uses so the encoder and decoder are unreachable in a wasm
+build and rebuilding the units: **486 561 bytes against 513 643, so 27 082
+back**. That is more than the 20 622 the guest codec cost, and it lands the
+module BELOW where it started -- 486 561 against the 493 021 it measured with
+the runtime decode still in `receive`. The 525 000 budget can go back to 500 000
+when this lands, which is the number to check.
+
+**`port_open` IS MOVED (2026-09-15).** `flint.port/open` writes `[name opts]`
+with `flint.wire` and hands the writer in; all three runtimes check it is
+finished and take its bytes. The wire form is unchanged, which the host-port
+conformance shows by still reporting
+`open(1,1,["fs" {:capability #opaque["fs" id=7]}])`.
+
+Three things worth keeping about the shape:
+
+* **The name crosses twice** -- once inside the payload, once as an argument --
+  and that is deliberate. The runtime needs it for the refusal message, and
+  reading it back out of the encoding would mean decoding in the runtime, which
+  is what this moved away from.
+* **A spent writer is refused by name** rather than sent as nothing. It is not
+  a path anyone reaches: `port_open` is re-entrant, running once to ask and
+  again when the host answers, and the second pass returns before the payload
+  is touched.
+* **Two drivers had to learn to encode.** `units-src/flint-conc/tests/hostports.rs`
+  drives the builtin directly with no `flint.port/open` to encode for it, so
+  its bytecode now writes the payload itself -- which is what a guest encoder
+  looks like in assembly, and it chains cleanly because every wire primitive
+  takes the writer and answers it.
+
+`host_request` and `host_answer` were NOT moved with them, because no host in
+this tree answered an `EV_REQUEST`: `bin/check-builtin-coverage` said as much
+about `flint/request`, and neither `cli/src/serve.rs` nor `host/flint.mjs`
+handled one. Migrating an unexercised path is changing code with nothing to
+catch a mistake -- the ports' `send` regression above is what that looks like.
+
+**So the host was written (2026-09-15).** `runtimes/conform-host/hostreq.cljc`
+and `units-src/flint-conc/src/bin/hostreq.rs` are the first host in the tree to
+answer one, and the transcript is:
+
+      ok   it asked: ["clock" ["utc"]]
+      ok   answered: true
+      ...
+      ok   requests seen: 4
+      ok   the program answered: ["tick" "tick" :refused nil]
+      ok   status 0
+
+That last line is the one that matters, and it is what makes the migration
+safe: it is the string the GUEST assembled from the answers, so it exercises
+`host_answer`'s decode and not merely the host's half. `request` throws on a
+refusal and `ask` answers nil, which is the whole difference between them.
+
+**Two things the fixture had to get right.**
+
+`runtimes/conform-host` needed a `deps.edn` granting `:host`, because
+`flint.host/request` is guarded and a guard is satisfied by what a workspace
+HOLDS, never by what it asserts (`DECISIONS.md#workspace-capabilities`).
+
+And the driver must CLOSE THE SYSTEM PORT before reading the answer. A sandbox
+whose control plane is parked is never "done" -- correctly, per `needs_host` --
+so the entry's value cannot be read while the host still holds the door. That
+is the same condition the host-port transcript shows as `status 2`, arrived at
+from the other side.
+
+**And it found a bug on its first run against the JVM.** `RtHostReq.java` is
+the same script against the same image, and the transcripts agree on every line
+but one:
+
+    native   ok   the program answered: ["tick" "tick" :refused nil]
+    jvm      ok   the program answered:
+
+Every exchange matches -- four requests asked, two answered, two refused, same
+payloads -- so the HOST half of the JVM's request path is right. What does not
+arrive is the answer.
+
+**And it is not the request path at all.** Bisected with the smallest program
+that could possibly show it:
+
+    (ns zzprobe)
+    (defn main [_] "CONSTANT")
+
+    native   ok   the program answered: CONSTANT
+    jvm      ok   the program answered:
+
+No request, no port, no codec. **The JVM loses the ENTRY'S VALUE whenever a
+system port is installed before the program runs** -- which every real host
+does, because `open` is a request on one.
+
+Instrumenting `settle` names the mechanism: the first settle of that two-line
+program is
+
+    [settle] cur=0 parkOn=SET thrown=nil result=nil
+
+`parkOn=SET` for a program that returns a constant and cannot park. Thread 0 is
+not the entry on the JVM. The scheduler is created at INSTALL, with no frames
+live, so `ensureSched` mints thread 0 as a DONE placeholder; the initialisers
+then run on the live stack and claim it, and the entry's value settles
+somewhere `mainResult` does not read. Native reads thread 0 too -- its
+`settled_answer` is the same shape -- so on native thread 0 really is the
+entry.
+
+**FOUND AND FIXED (2026-09-16), and it was neither the codec nor the
+bootstrap's thread numbering.** The entry PARKED -- `runProgram` came back
+`v=nil parked=true` for a program that returns a constant and cannot park.
+
+Native's `run_program` documents the cause in full, having been bitten by it:
+
+> A slice is armed the moment a scheduler exists, and a scheduler can exist
+> before this function is ever entered -- a host that installs a port at
+> construction creates one. The loop below then ran namespace initialisers
+> under a live slice, and a yield inside one is DISCARDED here ... and never
+> recorded the entry's value. The run reported "the entry function did not
+> return a string", and it reported it for a program whose entry was
+> `(defn main [_] "constant")`.
+
+Both ports ALREADY carry the fix -- `ensureStarted`/`EnsureStarted` disarm the
+slice around the initialiser loop. **The conformance DRIVERS bypassed it**,
+hand-rolling `started = true` plus a `call` per initialiser, and so ran them
+under a live slice. The drivers now call the runtime's one-shot runner, which
+is what their own comments claimed they were avoiding for a different reason.
+
+`RtHostPorts`, `RtHostReq` and the CLR's `RunAll` all had it. **The request
+transcript now matches native line for line on both ports.**
+
+**A prediction I made and got wrong:** this was recorded as "one root, two
+symptoms" with the open-token divergence. It is not -- the token still reads 1
+against 2 after the fix. The slice bug and the boot ordering are separate, and
+the token remains the single line between the three host-port transcripts.
+
+That is exactly what this coverage was written to catch, and it is the second
+time in this section that a runtime path with nothing watching it turned out to
+be broken on the ports -- the first was `send`, which had been refusing every
+bridge message for five steps.
+
+**So `host_request`/`host_answer` still must not move**, and now for a sharper
+reason than "untested": one of the three runtimes demonstrably does not deliver
+an answer at all. Migrating the encode and decode underneath that would mix a
+real defect with a refactor. Both are now done: the drivers are fixed and the CLR
+has a `--rt-hostreq`, so the request path is covered on all three.
+
+**AND THE PAIR IS MOVED (2026-09-16).** `flint.host/request` writes
+`[what & args]` with `flint.wire` and reads the answer with
+`flint.wire/read-from`; the runtime's part is to check the writer is finished,
+take its bytes, and hand back a LIVE reader over whatever the host answered.
+All three transcripts still read `["tick" "tick" :refused nil]`.
+
+**`grep -c 'self.encode(|self.decode(' runtime/src/conc.rs` is now 0.** No
+guest-facing path encodes or decodes in the runtime any more.
+
+Three things this cost, each worth keeping:
+
+* **`flint.host/ask` called the BUILTIN, not `request`.** Harmless while the
+  builtin took values; the moment it took an encoding, a one-argument call left
+  the writer slot unread and the runtime indexed past its own arguments -- an
+  out-of-bounds panic, not a type error. `ask` goes through `request` now and
+  every arity is checked in all three runtimes.
+* **A parking call must be BOUND, not nested.** `(wire/read-from (flint.rt/request ...))`
+  puts a call that PARKS in an argument position; `flint.port/receive` binds it
+  first for the same reason, and this now does too.
+* **The standard library is EMBEDDED in the CLI** via `cli/build.rs`, whose
+  `rerun-if-changed` does not fire for files inside `lib/`. An edit to
+  `lib/flint/host.cljc` reached nothing until `touch cli/build.rs`, and the
+  symptom was the new builtin insisting its argument was not a writer while the
+  source plainly passed one.
+
+**The transcript prints no tokens and no port ids**, deliberately. A request's
+token is an opaque handle the host echoes and never reads, so three
+implementations agreeing on its numeric value is not part of the contract --
+and they demonstrably do not agree, for scheduler reasons recorded above that
+have nothing to do with this protocol. Asserting it would pin a waiter index
+rather than a behaviour.
+
+**`decode_guest` IS gone**, and it is the one thing that was genuinely dead. It
+refused the live tags for guest-produced bytes and its own docstring said it
+was waiting: "it exists so that whoever adds a guest-callable decoder finds it
+rather than writing the unsafe one." That decoder arrived, and the rule it held
+is now `RD_LIVE` on the reader -- strictly better, because the tags are legal
+in the format and what decides is where the bytes came from. The test that
+asserted the rule moved to the reader rather than being deleted with it.
+
+**And the budget note needs correcting.** `test/threads.clj` says the 20 622
+bytes come back "when the runtime codecs go". Most of them will not: the
+encoder stays for the host-facing API. What can come back is whatever the
+guest-facing paths were keeping alive, and that number is not yet measured.
+
+### A writer passes through `send` unencoded
+
+`port/send` asks `flint.rt/wire-writer?` before encoding. A guest that encoded
+for itself hands over a writer, and encoding that again asks the encoder to
+encode its own output -- which it duly refused, `this cannot cross a boundary:
+:other`, because a writer has no kind. Answering "is this a writer" is not a
+capability: a guest holding one already knows what it made.
+
+### What has to be true first
+
+The codec must be in every image that owns a bridge, and must survive the shake
+— the same treatment `flint.system` needed, for the same reason: nothing
+references it, so reachability drops it. A module with no ports must not pay for
+it (`DECISIONS.md#namespace-units`).
+
+### Two of the dark-region reds are attributed, 2026-09-17 -- and one was never a runtime bug
+
+`snapshot` and `limits` were the two reds sitting in code this session moved
+into `kin/sched.kin`, and neither had been bisected. A worktree at HEAD
+(`git worktree add --detach`, which does not touch a tree carrying 145
+uncommitted files) answers both. Note the trap that cost the first attempt: the
+snapshot unit ships ONLY in a `--diagnostics` build
+(`DECISIONS.md#two-builds`), so a baseline built without it fails with `no such
+builtin: flint.rt/snapshot` and says nothing about the question being asked.
+
+**`snapshot` passed at HEAD and failed here — and the runtime was innocent.**
+The symptom read as one: "the snapshot taken while they were parked carries
+them -- found 1 THREAD objects", where four were expected. An object census of
+the same capture, both sides, is what broke it open:
+
+    HEAD  THREAD 4  PORT 3  CLOSURE 176  ATOM 1   walkErrors: []
+    now   THREAD 1  PORT 1  CLOSURE   0  ty44 1   walkErrors: at 1325560,
+                                                  size 4294639616, short 42216
+
+A size of 2^32 - 327680 is not a heap, it is a misread header — and `ty44` is
+the culprit standing right next to it. `host/snapshot.mjs` carried its own copy
+of `obj.rs`'s `layout_of`, in TWO places (`sizeOf` and `slots`), and neither
+knew `TY_BYTES` (44). A byte string was therefore sized `HDR + len * 8` instead
+of `HDR + len`, the linear walk advanced by the wrong stride, landed
+mid-object, and stopped — reporting the 42 216 bytes after it as ABSENT. The
+threads, ports and all 176 closures were in the snapshot the whole time.
+
+**The runtime had already paid for this exact bug**, and says so in `size_of`'s
+own comment: a type added to `layout_of` and not to the second copy of that
+match sized "a 513-byte `TY_BYTES` as 4 112", and the collector walked
+from-space with the wrong stride. Deriving the size from one table removed the
+second copy inside Rust. The third and fourth were in JS. What changed this
+session is only that the heap now CONTAINS a `TY_BYTES` where it did not
+before; the reader has been unable to walk one for as long as the type has
+existed.
+
+So the fix is one table (`LAYOUT_RAW`), read by both `sizeOf` and `slots`, plus
+the eight type names 42–53 that were missing outright. `snapshots: ok`.
+
+**And a guard, because a copy that drifts is not a copy.**
+`bin/check-snapshot-layout` parses `layout_of`'s `Layout::Raw` arm and every
+`pub const TY_*` out of `obj.rs` and fails if the inspector disagrees — on the
+raw set, on a missing name, on a name that means a different number. It is in
+`bin/check`'s fast loop. Both arms were made to fail on purpose before being
+believed: dropping `44 /* BYTES */` reproduces precisely this session's bug,
+and the message says what it will do ("will size it HDR+len*8 and derail the
+walk") rather than merely that two lists differ.
+
+The asymmetry is worth keeping in mind: a type missing from the NAME table
+reads as `ty44` and is harmless, while one missing from the RAW set fabricates
+absences. That is why the check reports both but only one of them can invent a
+bug.
+
+**`limits` failed at HEAD too, so it is not this session's** — but it had
+drifted, and the drift is the interesting half. The row asserts the gas error
+carries `:thread 0`; HEAD answers 1 and here it answers 2. `:thread 0` is the
+BOOTSTRAP thread, and asserting it encodes a world with no control plane. A
+call now arrives as a message on a bound port and is served on a thread
+`flint.system` spawned for it, precisely so a call that parks cannot park the
+control plane with it (`DECISIONS.md#bridges-are-the-only-door`). The extra
+step from 1 to 2 is this session's: the runtime boots the control plane itself
+in `sched_drive` (`boot_system_thread_once`) rather than leaving it to the
+host, so the chain is bootstrap 0, system thread 1, call thread 2. The id is an
+allocation order and pinning it just fails again the next time anything spawns
+earlier, so what the row now asserts is what it is named for — that the error
+carries the thread AS DATA.
+
+### A THIRD red, uncovered by fixing the second — and it IS this session's
+
+With the stale `:thread` expectation out of the way, `limits` fails one row
+further down, and this one passes at HEAD:
+
+    FAIL   ... by an error that escapes every handler
+           flint: the host pump made no progress
+
+The program is `(try (spin) (catch Throwable e (spin)))` — a gate a candidate
+can catch its way out of is not a gate. Expected: the second runaway escapes
+and the host is told `gas limit exceeded`. Actual: `flint_resume` answers 2
+(needs host) a million times over and the pump gives up, which `run` then
+reports as exit 1 with the pump's message instead of the gas error — which is
+why the row ABOVE it still passes and this one does not.
+
+**The mechanism is not established, and two plausible readings are already
+contradicted by the evidence** — recorded so the next attempt does not spend
+the time again:
+
+* *The catch handler is re-entered, so the throw catches itself forever.* But
+  the handler machinery is in `rt.rs`, whose entire diff this session is the
+  seven-line `system_booted` flag; and `unwind-to-handler` in `kin/sched.kin`
+  mirrors HEAD's `unwind_from_resume` call site exactly.
+* *The control plane parks on the system port for ever, so `sched_needs_host`
+  is true for ever and the sandbox can never settle to report a dead call.*
+  But the plain `spin` arm leaves the control plane parked in exactly the same
+  way and terminates cleanly with the right message. CATCHING is what differs,
+  not parking.
+
+What is known: `gas_error` sets `thrown` like any other catchable error and
+there is no terminal "this sandbox is out of gas" state, so once `steps >=
+gas_limit` every thread that resumes re-raises immediately — including,
+in principle, the control plane's own reply path, which must allocate a map to
+answer. Whether that is what spins is exactly the thing to measure next, and
+the cheap instrument is the resume-code and outstanding-waiter sequence across
+the pump's first few iterations rather than another reading of the source.
+
+It is left RED and unattributed in mechanism rather than patched, because the
+candidate fixes are design decisions about what a gas-exhausted sandbox owes a
+host, and guessing one in would be the second time this session that a
+plausible reading of a symptom pointed at the wrong layer entirely.
+
+### The third red, diagnosed against a baseline: the gate's escape is unreportable
+
+Measured, both sides, on the same three arms of `test/limits.clj` at a
+`--diagnostics` baseline worktree and here. The program is
+`(try (spin) (catch Throwable e (spin)))`.
+
+    HEAD  spin              ResourceExhausted: gas limit exceeded ... (thread 1)
+                            step limit exceeded; frames (2): spin <- main
+          caught-then-spin  ResourceExhausted: ... spent 1065589 of 1065589
+                            step limit exceeded; frames (2): spin <- main
+
+    now   spin              ResourceExhausted: ... (thread 2)
+                            frames (4): spin <- main <- answer <- serve-calls
+          caught-then-spin  flint: the host pump made no progress
+
+**`frames (2)` against `frames (4)` is the whole finding.** A guest call is now
+served INSIDE the control plane's own guest code — `answer` and `serve-calls`
+in `flint.system` — where at HEAD it ran with nothing under it. Everything
+below follows from that one change.
+
+**Why it hangs.** `vm.rs`'s gate is two-stage and deliberately so: the first
+trip grants `GAS_GRACE` (65 536 steps) so a `finally` can put things back and
+unwinds to a handler; a second trip `return`s NIL *escaping every handler*,
+because "a gate that a candidate can catch its way out of is not a gate". The
+arithmetic confirms it fires: steps freeze at 1 065 671, which is the limit
+plus GAS_GRACE plus 135.
+
+What that sentence did not anticipate is that the control plane is now one of
+those handlers. `(catch Throwable e (spin))` spends the ENTIRE grace itself, so
+when trip 2 escapes, `answer`'s `catch Throwable` — the code that would build
+`{:op :throw}` and send it — is escaped too. No reply is ever built. And the
+control-plane thread stays parked on the system port, so `sched_needs_host` is
+true for ever, `sched_all_settled` is never consulted, and `settled_answer` —
+the path that surfaced exactly this failure at HEAD — is unreachable. The host
+pumps to its million-iteration guard and gives up.
+
+**GAS_GRACE is a single global budget shared between the guest's handler and
+the control plane's reply path, and the guest can spend all of it.** That is
+the sentence to fix against. It is reachable on purpose, not only by accident:
+a guest that wants to hang its host need only burn the grace inside a `catch`.
+
+**What was measured, so the next attempt need not re-measure it:**
+
+* The 42 steps per resume are NOT guest code. Per-opcode counters
+  (`stat_region`, OPS base `NBUCKET*4 + 43`) show ZERO opcodes across a cycle;
+  the 42 are allocation charges from `reap_ports` rebuilding its `held` and
+  `live` vectors every `drive`. Housekeeping charges gas even when nothing
+  runs — true before this and worth knowing separately.
+* The host is not involved: ONE event (`retain`) in the entire run, so there is
+  no host/guest ping-pong.
+* Handler re-entry is ruled out: `unwind` pops (`self.handlers.pop()`).
+* `gas_trips` is reset only by `set_gas_limit`, and the grace path assigns
+  `gas_limit` directly, so trip 2 genuinely fires.
+
+**The fix is a design decision and is NOT taken here.** The narrow one: once
+the gate has escaped every handler the sandbox is finished — it cannot execute
+anything, since the limit is still exceeded and every charge raises — so
+`drive` should take the terminal path rather than claim the host can help,
+clearing on `set_gas_limit` so a host may still deliberately raise the budget
+and resume. That means a flag in the runtime, a check in `sched_drive` ahead of
+`needs_host`, and a way for the terminal answer to carry the failed thread's
+result rather than thread 0's. It is generated code, so it is one kin change
+and three targets plus an expectation DERIVED from the contract — the right
+shape of work, and not one to rush at the end of an investigation.
+
+### And the kind was being flattened to "Error" — fixed
+
+The same `frames (4)` reroute cost every runtime error its kind. `answer` read
+`(or (some-> e ex-data :kind) "Error")`, but a runtime error carries its kind
+in the object's `EX_KIND` slot, not in its data map — so gas, the memory cap
+and every `ClassCastException` arrived at a host as the generic `"Error"` the
+moment calls began passing through this catch. HEAD said `ResourceExhausted`
+and this said `Error`, on the same program.
+
+`flint.rt/ex-kind` is exactly "the kind a `catch` selects on" and already
+exists as a builtin (`kin/exinfo.kin`), so the fallback is one clause:
+`(or (some-> e ex-data :kind) (flint.rt/ex-kind e) "Error")`. A guest-declared
+kind still wins; what changes is only the case that used to be thrown away.
+Verified back to `ResourceExhausted`, matching the baseline exactly.
+
+**And it costs the ports nothing**, which is the control plane being flint code
+rather than runtime code paying off: one edit in `lib/flint/system.cljc` and
+all four runtimes have it, with no chance of three copies drifting
+(`DECISIONS.md#bridges-are-the-only-door`).
+
+### The gate's escape is reportable again, and it is generated (2026-09-17)
+
+The hang recorded above is fixed, in `kin/sched.kin` and therefore in all three
+runtimes at once. `test/limits.clj` is green.
+
+**No new state.** The question "has the gate escaped every handler?" is
+`gas_trips > 1`, which all three already compute identically and none of them
+exposed. Reading the counter rather than adding a flag means there is nothing
+new to keep in step, nothing new in the snapshot format, and `set_gas_limit`
+resetting it gives "a host may raise the budget and carry on" for free — which
+a flag would have had to reimplement.
+
+**The fix is an ORDER, which is why it belongs in the generated scheduler.**
+`drive` now asks the gate straight after `reap-ports`, ahead of BOTH `pick` and
+`needs-host`:
+
+* Ahead of `needs-host` because that is the check that was lying. A thread
+  parked on a bridge makes it answer "the host can help", and after the gate
+  has escaped no host can: the budget is still exceeded, so the next charge
+  raises whatever arrives — including the charges `flint.system/answer` needs
+  to build a reply.
+* Ahead of `pick` for a reason found by measuring rather than by reasoning.
+  With the check after `pick`, the sandbox kept running threads after the
+  escape, each blowing the budget again, and `gate-answer` then spoke for the
+  LAST one to do so. The host was told the sandbox died in `receive <- serve`
+  — the runtime's own control plane — instead of in the guest's `spin <- main`.
+  Running anything after the gate escapes can only manufacture a worse
+  diagnosis.
+
+`gate-answer` is separate from `settled-answer` on purpose: a settled program
+is spoken for by thread 0, the thread the host called in; a GATED one is spoken
+for by whichever thread was running when the budget escaped, which `SC_CURRENT`
+names and which is almost never thread 0.
+
+**The runtime side needed nothing.** `flint_resume` already renders a status-0
+run with `thrown` set through `finish_run`, which returns 1 with
+`"Kind: message"` in `OUT`. What was missing was on the HOST: `pumpFor` threw
+its own "the call was never answered" without ever looking. It now reads what
+the runtime rendered, and only on `code === 1` — precisely when this run
+rendered it, since `OUT` is cleared and rewritten per render and reading it
+after any other status risks replaying an older call's message.
+
+**The expectation was derived before anything ran, and it held**: `0111 011 20`
+on the first emit, on all three targets. Both halves were then made to fail on
+purpose, because three mirrors agreeing proves nothing:
+
+* the check moved back after `needs-host` → `2001 200 20`, which is the bug
+  exactly: status 2, bridges unclosed;
+* `>= 1` instead of `> 1` → the control row alone flips `20` → `01`, so the
+  row that pins the GRACE case is what catches that off-by-one.
+
+Note that in both probes all three targets agreed with each other and were
+wrong together. The derived answer is the only thing that separated them.
+
+**STILL OPEN, and it is a real question rather than a defect.** GAS_GRACE is a
+single global budget and green threads interleave, so the thread that takes the
+second trip is whichever happened to be running when the grace ran out — not
+necessarily the one that overspent. In the measured case the guest's handler
+spent the grace and the CONTROL PLANE took the trip, so the error names
+`receive <- serve` with `(thread 1)`. Moving the check ahead of `pick` stops
+the sandbox manufacturing further failures, but it does not decide whose fault
+a global budget is. Per-thread grace would, and is a larger design question
+than this fix.
+
+### And the module-size budget does NOT fail — that was a measuring error
+
+Recorded because it cost a detour and will cost the next one the same.
+`test/threads.clj` carries `pure-size < 500000` and reported **555 008**
+against it, which reads as the control plane's 67 409 bytes having blown a
+stated budget. It had not. The measurement was taken with `--diagnostics`
+units on disk, which are instrumented and larger; the section runs under
+PRODUCTION units, where the same build measures **487 757** and passes.
+
+The same trap as `test/tables.clj` needing diagnostics and `test/snapshot.clj`
+failing without them, in the other direction: `grep -n "build-units" bin/test`
+says which mode a section runs under, and a size measured in the wrong one is
+not a number about this program at all.
+
+### A SECOND hang, found by the gate run and NOT caused by the gate fix
+
+`bin/test` now stops at section 16, `test/capability.clj`, with the same words
+the gas hang used: `flint: the host pump made no progress`. It is a different
+bug, it is pre-existing, and the shared message is what makes it look like a
+relapse.
+
+**Narrowed to one option.** Three compiles through the ESM `Compiler`, same
+files, same entry:
+
+    plain            ok
+    with meta        ok
+    with exports     flint: the host pump made no progress
+
+So a SELF-HOSTED compile that is given `:exports` never answers. The same
+program with the same exports compiles fine through `./bin/flint`, which is the
+bb compiler rather than the sandboxed one — so the fault is in the self-hosted
+path, not in what `:exports` means.
+
+**Not this session's, and the elimination is recorded so it is not redone:**
+
+* the gate check neutralised (`gas_trips > 99999`), units, dist and the ESM
+  bundle all rebuilt — still hangs;
+* the `ex-kind` clause in `flint.system/answer` reverted, rebuilt — still
+  hangs;
+* and the run that first showed it used `sdks/esm/dist/flint.js` dated 07:22,
+  which predates both edits. Its runtime is EMBEDDED, so units on disk cannot
+  reach it.
+
+The gate fix is also structurally incapable of causing this one: `Compiler`
+calls `instantiate(this.module)` with no options, so `set_step_limit` is never
+called, `gas_limit` stays 0, no charge ever raises, and `gas_trips` cannot
+leave 0. The new check reads exactly that counter.
+
+**What is known about the mechanism** is only what the symptom says: the
+sandbox returns 2 for ever, so no reply is ever put on the call port. That is
+the same shape as the gas hang — something fails on the path that would build
+the answer, `serve-calls` swallows it, `receive` parks, and the control plane
+waits for a message that will never come. The ESM bundle now carries the
+`OUT`-reading fallback and it does NOT fire here, which says the sandbox never
+reaches a terminal status at all: it is not a failure being mis-reported, it is
+a failure that never ends.
+
+**Where to start**, since the instrument is already built: drive the same
+compile through `sdks/esm/src/guest.js` rather than the bundle, with the full
+spec the bundle builds — `:builtins`, `:slots` and the base image included,
+because a spec missing them fails EARLY with `builtin \`gt\` is not available at
+compile time` and answers a different question. Then read the per-opcode
+counters across one resume the way the gas hang was read: zero opcodes means
+the guest is not running at all and the charge is housekeeping.
+
+**And the artefact staleness is its own finding.** `sdks/esm/dist/flint.js` is
+a committed bundle with the runtime embedded, and nothing in `bin/test` rebuilds
+it — `bin/build-dist` does not, and `sdks/esm/build` is a separate script that
+also runs the selftest. So the ESM surface is tested against whatever bundle
+happens to be on disk, which can be arbitrarily old. That is the same trap as
+`build-dist` not rebuilding the CLI, one layer out.
+
+### A reply too large to encode
+
+The `test/capability.clj` hang is diagnosed. It is not about `:exports` and it
+is not a size limit; it is an allocation failure that three layers each turn
+into something quieter, ending in a host that pumps to its guard.
+
+**The chain, measured at each step.** A guest program asked to encode a large
+value:
+
+    len=765080  writer?=true      <- wire/encode answers a writer
+    len=765090  writer?=false     <- and here it answers a NON-writer:
+                                     kind=:other, not nil, no throw at all
+
+* `wire_piece` appends its payload ONE BYTE AT A TIME through `b_conj`. When
+  the tail fills, `tb_flush` allocates a fresh `TAIL_CAP` byte string, and on
+  failure returns false; `b_conj` turns that into NIL. `wire_piece` then writes
+  that NIL into `WR_BUF` and **returns `true`** -- it never looks at what
+  `b_conj` answered. The writer is destroyed and the caller is told it worked.
+* `port/send` therefore hands `flint.rt/port-send` a bare value, and the bridge
+  refuses it: *"a bridge carries an encoding -- use `flint.port/send`, which
+  writes one, rather than the builtin with a bare value"*. A true message
+  about a false situation -- `flint.port/send` is exactly what was used.
+* `serve-calls` wraps that send in `(catch Throwable _ nil)`, so the error is
+  dropped, the loop parks on `receive`, and the caller waits for a `:tx` that
+  can never arrive.
+
+**It is NOT a byte ceiling, and the first reading of the evidence said it was.**
+A single-string encode failed just above 765 085 bytes, which looked like a
+constant. It is not: the same compiler hands back an **821 400 byte** reply
+successfully. What differs is how much else is live when the encode runs, which
+is why `:exports` fails and the plain compile does not -- exports keep more
+reachable, so more is live. `set_memory_limit` does not move the threshold
+either, so the exhausted space is not the configured heap.
+
+**How it was found**, since the instruments are worth reusing: the snapshot
+inspector, on a compiler built with `flint.snapshot` reachable FROM `main` (a
+`:require` alone does not link the unit, so a host cannot capture what the
+shake removed). It read the hung sandbox directly:
+
+    THREAD id=0 DONE
+    THREAD id=1 PARKED -> PORT id=1 BRIDGE  (the control plane, system port)
+    THREAD id=2 PARKED -> PORT id=2 BRIDGE  (the call thread, read=1)
+    WAITER thread@..1 kind=RECEIVE   WAITER thread@..2 kind=RECEIVE
+
+Both parked on RECEIVE, and `PT_WRITE` nil with `PT_BYTES` 0 on both -- so the
+reply was never written at all, which is what pointed at the send rather than
+at the delivery. Note the walk was clean (`walkErrors: []`), which is the
+`TY_BYTES` sizing fix earning its keep on the first real use.
+
+**The fix has three candidate layers and the bottom one is the user's.**
+
+1. `wire_piece` and `wire_raw` must not ignore `b_conj`. That is a two-line
+   correctness fix and it converts a silent corruption into a throw -- but the
+   throw then needs a message that is not `wrote`'s "this writer has already
+   been finished", which would be false.
+2. `serve-calls` should ANSWER a failed send rather than dropping it. Written
+   and measured this session, and **deliberately not shipped**: `flint.system`
+   is in every module, so the extra code grew every image, and a reply already
+   near the cliff crossed it -- turning the plain compile from passing to
+   failing. The patch belongs WITH the encoder fix, not before it:
+
+       (try (port/send p (answer m))
+            (catch Throwable e
+              (try (port/send p {:tx (:tx m) :op :throw :kind "SendFailed"
+                                 :message (str "this call's answer could not "
+                                               "be sent back: " (ex-message e))})
+                   (catch Throwable _ nil))))
+
+3. **PER-CHUNK ACKS, which removes the cause rather than reporting it.** The
+   user's proposal, 2026-09-17: stream a bridge message in chunks, each acked
+   by the receiver, so neither side holds a whole huge message. Nothing needs
+   to materialise an 800 KB writer, so the allocation cliff has nowhere to
+   happen and bridge memory is bounded by the chunk.
+
+   The load-bearing property is the one the proposal states: **an ack means the
+   receiver has parsed AND HYDRATED every value fully contained in that chunk**,
+   which is what makes port handoff safe. The evidence says why it must be that
+   and not mere receipt: `K_PORT` carries identity, and `wire-port` refuses to
+   take an id precisely so a guest cannot mint a port from an integer. An ack
+   given before hydration would let a port's tag be seen without its hydration
+   having happened, and a split or a retry across that boundary could mint
+   twice.
+
+   **Two things to settle first.**
+
+   * *Do chunks cut at value boundaries?* If the ack means "hydrated", the
+     sender may only cut where a value ends -- and the writer ALREADY tracks
+     structure for this class of safety (`wire-table-rows` refuses unless a
+     count is what the writer expects), so it is the thing that can say where
+     a value ends. The alternative, arbitrary cuts plus a receiver-side partial
+     tail, is easier to send and moves "fully contained" to the receiver, which
+     weakens what the ack promises.
+   * *It changes what `needs-host` MEANS.* Today a parked control plane makes
+     it permanently true, which is why the gate fix had to be asked ahead of
+     it, and why `report-deadlock` is unreachable whenever a control plane
+     exists. A streaming send parks between chunks, so "needs host" becomes
+     real progress. That is an improvement, and the deadlock reporter's
+     reachability should be revisited in the same change.
+
+### And the ESM bundle was five hours stale, which was hiding this
+
+`sdks/esm/dist/flint.js` embeds its own runtime and compiler, and NOTHING in
+`bin/test` rebuilds it -- `bin/build-dist` does not, and `sdks/esm/build` is a
+separate script that also runs the selftest. The bundle on disk was from 07:22
+while the tree had moved on all morning, so the ESM surface was being tested
+against artefacts nobody had rebuilt.
+
+Rebuilding it is what turned one failing case into four, and that is the
+staleness lifting rather than a regression: the source is unchanged bar
+comments. Same trap as `build-dist` not rebuilding the CLI, one layer out, and
+worth a line in whatever runs before `bin/test`.
+
+### Where a chunk may be cut, settled
+
+The user, 2026-09-17: **chunks may split COMPOSED values -- collections,
+strings, byte strings, big integers -- but never ATOMIC ones like ports.**
+
+That resolves the boundary question above, and it resolves it the right way
+round. The thing an ack must never permit twice is the minting of identity:
+`K_PORT` and `K_OPAQUE` are the two tags that carry it, and `wire-port` refuses
+to take an id precisely so a guest cannot manufacture one. Keep those whole and
+an ack is unconditionally safe -- every port in an acked chunk was hydrated
+exactly once, because it was never in two chunks to begin with.
+
+It is also the cheap rule to honour. An atomic value's encoding is a tag and a
+fixed payload, so "do not cut inside one" costs the sender a few bytes of
+lookahead, where cutting only at VALUE boundaries would have meant never
+splitting a megabyte string -- which is the case this whole change exists for.
+
+**What it asks of the receiver** is the interesting half. A composed value may
+straddle, so "every value fully contained in this chunk" means every value that
+COMPLETES in it; a collection or string still in progress is hydrated when its
+last chunk lands. So the receiver carries resumable state -- for a string or
+byte string, bytes still owed; for a collection, how many elements remain at
+each open level. That is the same structure the WRITER already tracks to make
+`wire-table-rows` refusable, which suggests one description of "where am I in
+this value" serving both ends rather than two.
+
+**And it belongs to the TAG, not to a size.** Atomicity here is a property of
+each `K_*`, so the codec should say which tags are indivisible rather than
+leaving the sender to infer it from how small a payload looks. A tag added later
+that carries identity and is not marked would otherwise be splittable by
+default, which is the failure this rule exists to prevent.
+
+### It was never a size limit: the writer MOVED, 2026-09-17
+
+The hang above is fixed, and the diagnosis in the section before it is wrong in
+its final step. Recorded rather than edited, because the wrong reading was
+reached honestly and the way it fell apart is the useful part.
+
+**What it actually was.** Every `wire-*` builtin took its writer with
+`writer_arg`, which reads `arg(rt, a, 0)` into a Rust local, and ANSWERED that
+local at the end. In between it appended -- `wire_piece` conjs a byte at a time
+-- and appending allocates, allocating can collect, and the nursery is a
+copying collector. So the writer moves, and what came back was **the address
+the writer used to be at**.
+
+Below a collection's worth of payload that is the same address and everything
+works. It took roughly 765 KB to make a collection certain mid-append, and then
+the guest got back an object that was not its writer: `wire-writer?` false, not
+nil, so nothing threw. `port/send` passed it on, the bridge refused it with *"a
+bridge carries an encoding -- use `flint.port/send`"*, and `serve-calls` dropped
+that error, so the caller pumped to its guard.
+
+**The fix is one line per builtin**: answer `arg(rt, a, 0)`, re-read. The value
+stack is a root the collector updates, so it needs no push of its own -- the
+rooting was already there and only the READ-BACK was missing. Twelve sites,
+including the `wire_tag!` macro.
+
+    reply of 1 000 000 bytes   before: the host pump made no progress
+                               after:  code=0, len=1000000
+    reply of 2 000 000 bytes   after:  code=0, len=2000000
+    compile with :exports      before: hang     after: ok
+    ESM selftest               before: red      after: green
+    test/capability.clj        before: red      after: ok
+
+**HOW THE WRONG READING SURVIVED SO LONG, and it is worth naming.** Every
+observation fitted an allocation failure: the threshold ignored
+`set_memory_limit`, it moved with live-set pressure, and there was a real
+unchecked failure path sitting right there -- `tb_flush` answers false,
+`b_conj` turns that into NIL, and `wire_piece` wrote the NIL into `WR_BUF` and
+returned `true`. That path is genuinely broken and I fixed it. It was not this
+bug.
+
+What broke the theory was ONE measurement that the theory did not predict: with
+the allocation path fixed, the failure was unchanged. Asking the guest three
+questions instead of one then settled it --
+
+    count=770000  fresh-writer?=true  after-str-writer?=false  same?=false  w0-still?=true
+
+`w0-still?=true` is the whole answer. The writer the guest held was FINE; only
+the one the builtin handed back was not. An allocation failure cannot produce
+that, and a move is the only thing that can. "Is the object I passed in still
+good?" is the question that separates them, and asking it earlier would have
+saved most of a session.
+
+**The unchecked-growth fix stays**, on its own merits and with its own case.
+`kin/wirecore.kin`'s `wire-byte` now answers false when `b-conj` answers NIL,
+and does NOT store it; `wire_piece` and `wire_raw` check what it answers. The
+drivers case is `ok7 = 7` and the middle bit is the one that matters:
+
+* `1` the append is refused -- weak on its own, and the broken version can be
+  made to pass it;
+* `2` **and `WR_BUF` is untouched** -- compared against what it held BEFORE the
+  refusal. The original bug fails this, and so does a half-fix that answers
+  false and stores the NIL anyway. Both were run: the bug scores 4, the
+  half-fix 5, and on native the corrupted writer PANICS outright rather than
+  scoring anything;
+* `4` and the writer still works afterwards -- a refusal is not a kill, so a
+  transient failure does not leave a permanently dead writer.
+
+`wrote` no longer stamps "this writer has already been finished" over a
+failure that is already pending, because that sentence would be false for a
+buffer that was live and merely out of room.
+
+### The prescribed fix landed and the gas row did NOT close, 2026-09-17
+
+The section above concludes: "the way to make them agree by construction is to
+generate the resume path." That has now happened -- `sched_run_one` is
+generated, and all three runtimes call it (`conc::run_one` → `rt.sched_run_one`,
+`Conc.runOne` → `Sched.schedRunOne`, `Conc.RunOne` → `Sched.SchedRunOne`). The
+row is still red, and wider:
+
+    documented:  gas differs by  682: 143717 native against 143035 [jvm]
+    now:         gas differs by 1392: 144427 native against 143035 [jvm]
+
+The jvm figure is unchanged to the digit. So generating `run_one` was necessary
+and is not sufficient, and the remaining cost is NOT in `run_one` -- which
+narrows the earlier "a `Conc` divergence in `run_one` and the interpreter's
+checkpoint" to the checkpoint alone, the part still written three times and not
+a kin candidate.
+
+**The per-slice charge is still there, re-measured independently.** A pure
+arithmetic loop, no allocation and no builtin call, at two sizes:
+
+    wasm  small=266604  big=529628  diff=263024
+    jvm   small=275921  big=535921  diff=260000
+
+3 024 over roughly 64 extra slices is **47.25 steps per slice**, against the
+46.4 and 46.7 the earlier micro-benchmarks got. Three measurements, one number.
+
+**AND THE ROW'S METHODOLOGY IS SENSITIVE TO SLICE ALIGNMENT, which is new and
+matters more than the number.** The difference-of-two-workloads is supposed to
+cancel whatever each runtime spends starting up. It does not cancel a per-slice
+charge unless both sides cross the SAME number of slice boundaries -- and
+whether a workload crosses one depends on its ABSOLUTE step position, which
+differs because startup differs. A pair sized to fit inside one slice shows it:
+
+    wasm  tiny=4828   tiny2=6176   diff=1348
+    jvm   tiny=17217  tiny2=18517  diff=1300
+
+48 left over -- exactly one slice -- on workloads doing ~1 300 steps of actual
+work, because the jvm starts ~12 400 steps higher and therefore sits at a
+different offset within its slice. So while a preemption charge exists, this
+row is partly measuring "how many slice boundaries did each side happen to
+cross", which is not a property of the program. Any future reading of this row
+should treat sub-50-step disagreements as alignment rather than as pricing.
+
+**What is ruled out, added to the earlier list:**
+
+* `reap_ports` billing the guest for housekeeping. It DOES -- 42 steps per
+  `drive` with zero guest opcodes, measured earlier this session on a
+  port-using program -- but the loop above has no ports at all, so
+  `SC_BRIDGES` and `SC_PORTS` are the empty singleton and nothing is conj'd.
+  It cannot be paying the 47 here.
+* a different charge RATE. Both bill `size_for(ty, len) >> 3` on allocation and
+  both gate it on whether the sandbox is counting; the formulas match branch
+  for branch.
+* saving and restoring thread state: `alloc_unbilled` on both, and neither
+  charges to restore.
+
+**And one claim in the section above is now STALE.** It says "The ports have
+not made this change. `RtSteps` calls `runProgram` directly, and `runtimes/`
+has no `system_message` at all." Both halves have since been done:
+`runtimes/jvm/test/HostCall.java` installs a system port, sends `:bind`, and
+calls over it, and `Conc.bootSystemThreadOnce` mirrors native's boot. Its own
+comment even predicts this gap at "about 48 steps per 4096-step slice". The
+divergence is no longer that one side skips the scheduler.
+
+**The next instrument** is a count, not another reading: make `SLICE` large
+enough that the loop is never preempted, rebuild, and re-measure the same four
+workloads. If the 47 vanishes, it is the preemption path and the remaining
+question is only which charge inside it; if it survives, the per-slice framing
+is wrong for the third time and the arithmetic loop itself is priced
+differently.
+
+### And the instrument was run: the divergence IS the preemption charge
+
+`SLICE` raised to `1 << 30` on NATIVE ONLY, so the loop is never preempted,
+everything else unchanged:
+
+    wasm, SLICE 4096     small=266604  big=529628  diff=263024
+    wasm, never preempt  small=263534  big=523532  diff=259998
+    jvm,  SLICE 4096                                diff=260000
+
+**259 998 against 260 000.** Two steps apart on a 260 000-step difference, and
+the gap of 3 026 is gone. So the whole divergence is what NATIVE charges to be
+preempted and resumed -- 3 026 over ~64 slices, 47.3 steps each -- and the jvm
+charges approximately nothing for the same preemption, since its `SLICE 4096`
+figure equals native's never-preempted one. The earlier readings that called
+this a pricing difference in maps, in hashing, or in allocation volume were all
+looking at the wrong thing; it is one charge on one side of one path.
+
+`SLICE` was restored and the units rebuilt, and the original 263 024 came back,
+which is how we know the tree is as it was rather than as the probe left it.
+
+**What it is NOT, now checked line by line on both sides:** every allocation in
+`save_current_state` / `saveCurrentState` is `alloc_unbilled`; `restore_state`
+allocates nothing; `install_bindings`, `begin_slice` and the yield branch in
+the interpreter's checkpoint charge nothing; `run`/`run_with`/`run_inner` charge
+nothing on entry; and `reap_ports` cannot be it here because the program has no
+ports, so `SC_BRIDGES` and `SC_PORTS` are the empty singleton.
+
+So ~47 steps per resume are charged on native by a site not yet found, and the
+search is now small: it is on the path between "the checkpoint sets
+`PARK_YIELD`" and "the interpreter is running again", it is billed rather than
+unbilled, and it is absent from the jvm's copy of the same path. The instrument
+that will name it is a counter around each candidate charge -- or simply
+`steps` read immediately before the yield and immediately after the resume,
+which brackets it to one span without guessing which line.
+
+Worth noting for whoever does it: the fix is then a choice the earlier section
+already framed, and the measurement now settles which side is wrong. Gas is
+meant to be the PROGRAM's instruction count; a charge that depends on `SLICE`
+makes the same program cost different amounts at different slice sizes, and
+makes the row sensitive to startup alignment as shown above. Native charging
+and the jvm not charging means native is the one to change, not the ports.
+
+### NAMED: the charge is `reap_ports`, and the two runtimes disagree on a SENTINEL
+
+The ~47 steps are found, and it is not a pricing difference in anything the
+program does. Bracketing the span with temporary counters -- `steps` recorded
+where the checkpoint sets `PARK_YIELD`, again after `settle` saves state, again
+at the top of `run_one`, and again in `restore_state` -- split it three ways in
+one build:
+
+    resumes=127   settle=635   drive=5334   resume=0
+    per resume:   settle=5.0   drive=42.0   resume=0.0
+
+So 42 of the 47 are spent inside `drive`, between `settle` finishing and
+`run_one` starting. Bracketing `reap_ports` itself then pinned it: **43 steps
+per call**, and it is called once per drive iteration, so once per resume.
+
+**And it charges that with no ports in the program**, which is why an earlier
+elimination in this file was wrong to rule it out. The program has no ports of
+its own, but it HAS a control plane, and the system port is a bridge that
+`install_bridge_port` conjes onto `SC_BRIDGES`. `reap_ports` then rebuilds that
+one-element vector every iteration -- `vec_conj` allocates, `alloc` bills -- so
+the guest is charged for the scheduler re-deriving a list that did not change.
+
+**Why the jvm does not pay it, which is the actual divergence.** Both runtimes
+register the bridge, both run the same generated `drive`, both preempt at
+`SLICE`. They differ on what `checkpoint` MEANS when it is zero:
+
+* jvm: `alloc` charges `if (checkpoint != 0)`, and its yield sets
+  `checkpoint = 0`. So from the moment it yields until the slice is re-armed,
+  allocation is NOT billed -- and all of `reap_ports` falls in that window.
+* native: `counting()` is `checkpoint != u64::MAX`, and its yield leaves the
+  checkpoint at its slice value. Zero is not the "off" value here, so native
+  bills straight through the scheduler's own work.
+
+One field, two sentinels, opposite meanings -- the same shape as the warning
+already in `sched.kin`: "`u32::MAX` against `-1` is the same thirty-two bits
+read two ways". Neither side is obviously implementing a decision; the jvm's
+suppression looks like a side effect of zeroing the checkpoint to stop
+re-entering its own yield branch.
+
+**What to do, and it is now a small decision rather than an open question.**
+This file already states the principle: "Gas is supposed to be the PROGRAM's
+instruction count." Housekeeping the scheduler does between slices is not the
+program's work, so the jvm's OBSERVED behaviour is the correct one and native
+is the side to change. Two pieces, and they are separable:
+
+> SUPERSEDED IN PART, see `### DECIDED: gas charges ALL guest code, and the
+> third mode is not worth it`. Piece (1) below reads "do not bill the
+> scheduler"; the standing decision is that ALL GUEST CODE is billed, the
+> system thread included, so the answer is not to exempt a caller but to stop
+> the scheduler doing work it did not owe. That is what `kin/reapports.kin`
+> did. Piece (2), THE SENTINEL, IS DONE -- see the section below, and it was
+> hiding a live bug rather than an untidiness.
+
+1. **Do not bill the scheduler.** `reap_ports` should allocate unbilled, the
+   way `save_current_state` already does for exactly this reason, or `drive`
+   should suspend counting around its own bookkeeping. That closes the 47 and
+   removes gas's dependence on `SLICE`.
+2. **Then make the sentinel one thing.** Whatever the answer to (1), "am I
+   counting?" must not be spelled `!= 0` on one runtime and `!= u64::MAX` on
+   another. That is a convergence bug waiting to be found a second time.
+
+`reap_ports` rebuilding an unchanged list every iteration is worth fixing on
+its own merits regardless -- it is O(ports) allocation per slice for no change
+-- but the gas row only needs it to stop being billed.
+
+**Expect the row to move, not to vanish.** Gas is asserted in several places
+(module budgets, construe's gates, `test/limits.clj`'s exact counts), so
+removing a per-slice charge changes numbers that are written down. The probes
+were reverted and the units rebuilt, and the arithmetic loop measured 263 024
+again -- the same figure as before them -- which is how we know the tree is
+unchanged and the next person is measuring the same thing.
+
+### ONE CAUSE, TWO FAILURES: the `colls` AOT gap is the same charge
+
+The gas row and `bin/test`'s one standing known failure are the same bug. That
+is the most useful thing found in this line, and it was one experiment away
+from the section above.
+
+`test/aot.clj` compares a program interpreted against the same program with
+compiled arities, on the SAME runtime, and demands the same instruction count.
+`colls` has been 46 steps short for as long as the row has existed. With
+`SLICE` raised so nothing is ever preempted, and NOTHING else changed:
+
+    SLICE 4096         FAIL colls -- the same instruction count
+                            expected 113548  got 113502
+    SLICE 1 << 30      ok   colls -- the same instruction count
+                       aot: ok
+
+Restored to 4096 the failure comes back, so the link holds both ways. And the
+arithmetic is the giveaway: 46 is one resume's worth of the ~43-46 steps a
+resume costs. The two runs do not preempt the same number of times -- slice
+ends are set from `steps + SLICE` at each resume, so they DRIFT, and a tiny
+difference early compounds into one extra or one fewer resume -- and each
+resume charges the guest for `reap_ports` rebuilding lists that did not change.
+
+So the earlier reading of `colls` in this file -- "five instructions moved into
+compiled code and charged by no chunk" -- was measuring a real thing that is
+not this row's 46. A per-resume charge makes the interpreted and compiled runs
+of the same program differ by a multiple of ~46 whenever they land on different
+slice counts, which is exactly what "the same instruction count" cannot
+tolerate.
+
+**The jvm side, measured rather than inferred.** Last reading said the jvm's
+`checkpoint = 0` suppresses billing; that was read off the source, so it was
+instrumented:
+
+    jvm:  reap n=130  cost=126 steps  allocs=1040
+          total allocs=2716  billed=1210
+
+130 calls make **1 040 allocations** -- eight per call -- and are charged 126
+steps for all of them, about one step per call, against native's 43. So the jvm
+does the identical redundant work and is not billed for it, and 1 506 of its
+2 716 allocations fall outside its counting window. The mechanism is confirmed.
+
+**Which makes the fix better than "decide what gas means".** The rebuild is
+pure waste on every runtime: eight allocations per slice to reproduce a list
+whose contents are unchanged, 1 040 of them in a 130-slice program. Stop doing
+it -- write `SC_BRIDGES` and `SC_PORTS` back only when a port was actually
+dropped -- and three things follow at once:
+
+* every runtime allocates less and collects less often;
+* native stops charging the guest ~43 steps per resume, which closes the gas
+  row without anyone having to rule on whether the scheduler may bill;
+* `colls` stops depending on how the two runs land against slice boundaries,
+  which closes the known failure.
+
+The gas SEMANTICS question stays open and is still worth settling -- other
+scheduler work could bill, and the `checkpoint` sentinel means `!= 0` on one
+runtime and `!= u64::MAX` on another, which will be found again. But it is no
+longer what blocks either row.
+
+**Not implemented here.** `reap_ports` is hand-written three times, so the fix
+is three edits or a generated one, and it moves instruction counts that are
+asserted in several places -- including the two rows it fixes. It wants doing
+deliberately, with the numbers re-derived rather than adjusted to fit. `SLICE`
+was restored, the units rebuilt plain, and the arithmetic loop measures 263 024
+again, so the tree is as it was.
+
+> DONE, 2026-09-18, the generated way: `kin/reapports.kin` is the one
+> definition and all three runtimes' `reap_ports` is a delegation to it. The
+> rebuild is now guarded by a scan, so nothing is allocated when nothing was
+> collected. `colls` gap 46 -> 4 and no longer thread-scaling.
+> `doc/goals/kin-port.md` carries the numbers and the mutation probe that
+> proves the drivers file's expect was derived rather than recorded. **The
+> sentinel divergence named above is still open** -- one definition stopped the
+> two ports doing the wasted WORK; it did not make them agree about what is
+> billable.
+
+### FIXED: one sentinel, and the snapshot stops carrying a derived field, 2026-09-18
+
+The divergence named two sections above -- "am I counting?" spelled `!= 0` on
+the ports and `!= u64::MAX` on native -- was not a style difference. It was a
+live cross-runtime bug, and the reason nothing had caught it is that the only
+thing crossing between runtimes was being checked for its HEAP and not for its
+gas.
+
+**Measured first, at the byte level.** Three live snapshots of the same program
+state, written by the three runtimes:
+
+    native  gas_limit=0 slice_end=0 checkpoint=0xffffffffffffffff
+    jvm     gas_limit=0 slice_end=0 checkpoint=0x0
+    clr     gas_limit=0 slice_end=0 checkpoint=0x0
+
+Same limits -- nothing is counting -- and the field that says so disagrees.
+`import_live` assigned it RAW. A snapshot is refused on MAGIC and VERSION,
+which are identical on all three, so the crossing is ATTEMPTED rather than
+refused (`bin/conform-hosts` has a phase for exactly that, and it passes).
+
+**Both directions were wrong, and one of them was sharp.**
+
+* **port -> native.** `Counting::tick` is a bare `rt.steps >= rt.checkpoint`;
+  the `counting()` guard is the monomorphisation, not a second compare. A
+  restored `checkpoint = 0` therefore trips on the FIRST instruction, from a
+  field the writer meant as "never trip".
+* **native -> port.** The ports count in a signed `long`, so `u64::MAX` arrives
+  as `-1`. `steps >= -1` is true for every value `steps` can hold. Same shape,
+  same severity, opposite runtime.
+
+**The fix is two things, and only the second is the real one.**
+
+1. **One sentinel.** The ports now spell "nothing is counting" as
+   `Long.MAX_VALUE` / `long.MaxValue`, which is what the native runtime means
+   by `u64::MAX`. This is a pure respelling and moved NO numbers -- the gas
+   row read `174` before and after, and `bin/check` stayed green. It costs one
+   comparison LESS in each port's hot loop: `checkpoint != 0 && steps >=
+   checkpoint` existed only to stop `steps >= 0` firing on every instruction,
+   and a value that is never reached needs no guard. It also required
+   initialising the field, because the old "off" value is Java's and C#'s
+   default for a `long` and the new one is not -- the old spelling's OFF is the
+   new spelling's IMMEDIATELY, which is the sharpest way a respelling can go
+   wrong.
+
+2. **`checkpoint` is derived, so it is RE-DERIVED on import** -- in all three
+   runtimes, in every restore path. This is the fix that holds. The bit
+   patterns CANNOT be made equal: native counts in `u64` and the ports count in
+   a signed `long`, so "never reached" is genuinely a different number on each
+   side, and any scheme that carries the field across is one type change away
+   from the same bug. Computing it from the two fields beside it makes the
+   crossing safe as a property of the FORMAT rather than of three files staying
+   in step.
+
+**Gated in both directions, and both gates were made to fail first.**
+
+    livedump (native side)   after an import, `counting()` must agree with
+                             `gas_limit` and `slice_end`. Reverting the
+                             re-derive: FAILS on the real jvm snapshot AND on
+                             a native snapshot doctored to carry `0`.
+    RtSnapshot (both ports)  the same invariant on the other side. Reverting
+                             the jvm's re-derive: FAILS.
+
+The invariant is deliberately NOT "the bits match", which would be false by
+construction and would have to be relaxed the first time a type changed. It is
+that a snapshot whose limits are both zero restores as a runtime that is not
+counting, whoever wrote it.
+
+**Verified:** `bin/check` green; `check-kin` green at 97; both ports compile;
+the ports' gas bound still refuses at the same instruction (`29164`, over by
+17) and the two still agree; `RtFoundation`/`RtMaps`/`RtSnapshot`/`RtParallel`
+clean and jvm-vs-clr identical apart from the two benchmark timing lines; the
+stale-push check still fires on one and stays quiet on the other; `hostreq`
+identical across all three; `hostports` differing only by the known open-token
+line; and the `conform-hosts` gas row unmoved at 174, which is the evidence
+that piece (1) really was only a respelling.
+
+And the full gate, `FLINT_TEST_KEEP_GOING=1 ./bin/test`, 62 of 62 sections in
+3366s: THE SAME THREE REDS AS BEFORE THE CHANGE, with the same numbers --
+`test/aot.clj`'s `colls` at 112 460 compiled against 112 464 interpreted,
+`conform-hosts` at 174, and `test/document.clj`'s peak-memory row. Nothing new
+went red. `KEEP_GOING` is what makes that claim mean anything: a plain run
+stops at the first red, which is `test/aot.clj` at section 22 of 62, so it
+would have said nothing at all about the 40 sections after it.
+
+**What is still open.** The ports disarm billing between a yield and the next
+`drive` -- they set the checkpoint to the never-reached value there, and `alloc`
+asks `is anything counting?`, so the scheduler's own allocation goes unbilled
+where native's does not. That is now a VISIBLE line with a comment on it in
+both ports rather than a number hiding inside a sentinel, and it is a billing
+POLICY question, not a spelling one: it is piece (1) above, which the standing
+"charge all guest code" decision answers in principle and nothing has built.
+
+### The gas row's 174 is located, and 140 of it is gone, 2026-09-18
+
+Picked up because the record above named "the ports' system-port entry" as the
+last unbuilt piece and because `conform-hosts`'s gas row is one of three
+standing reds. Probing first found the record stale: both ports have a system
+port, and the jvm's `RtSteps` was moved to a bridge call some time ago. So the
+prescribed fix was done and the row was still red, which means nobody had
+re-diagnosed it since it was 1 536.
+
+**Localised by splitting `gasmeter/work` into its seven parts**, each its own
+entry point, each measured as `big - small` so start-up cancels -- the same
+method the 1 536 was split by:
+
+    part                        native   jvm     gap   per slice
+    mapv of array-maps          25,554  25,518    36       5.8
+    into a set                  16,055  16,031    24       6.1
+    into a vector via map       25,524  25,518     6       1.0
+    apply str over mapv str      9,730   9,716    14       5.9
+    ft/build                    27,663  27,621    42       6.2
+    ft/rows + mapv :id          19,390  19,360    30       6.3
+    the string block            19,294  19,268    26       5.5
+    sum of the seven                             178
+    whole program              143,209 143,035   174
+
+The seven account for the whole of it. **And it is not the "pricing difference
+spread in proportion to the work" that the comment in `bin/conform-hosts` still
+described** -- that reading dates from when the gap was 1 536. Against SLICES
+rather than against work it is flat: six of the seven sit at 5.5-6.3 steps per
+4 096-step slice, which is the residual an earlier entry in
+`doc/goals/kin-port.md` already measured at 5.1 a slice and separated from the
+42 that `reap_ports` was costing. Work and slices are proportional to each
+other, so the earlier reading was not wrong; it was under-determined.
+
+**The mechanism is the one recorded as open a firing earlier: the ports do not
+bill in the yield window.** Both ports disarm the checkpoint at the courtesy
+yield -- to stop re-entering that branch -- and their allocation charge asked
+`checkpoint != <the never-reached value>`, which is the expression NATIVE uses
+for `counting()`. Native never disarms out of band, so there the two questions
+have one answer; here they diverge for exactly the window between the yield and
+`drive` re-arming the slice, and the scheduler's own allocation went free.
+
+So the charge site now asks the thing it means:
+
+    boolean billing() { return gasLimit != 0 || sliceEnd != 0; }
+
+which is native's semantics exactly, written so it does not depend on whether
+the checkpoint happens to be armed. **Preemption is untouched** -- the
+checkpoint still disarms, because that is about where to STOP, not what to
+COUNT.
+
+**Measured: 174 -> 34**, and every part shrank by about six:
+
+    part                        was  now
+    mapv of array-maps           36    6
+    into a set                   24    4
+    into a vector via map         6    1
+    apply str over mapv str      14    2
+    ft/build                     42    7
+    ft/rows + mapv :id           30    5
+    the string block             26    4
+
+**THE CLR WAS A FIRING BEHIND, and the row was built so it could not tell.**
+Applying the same fix to the clr changed nothing, which is how the real
+divergence surfaced: its `RtSteps` still ran `img.entry` through `RunProgram`
+with `rt.started = true` and the initialisers by hand -- the model from before
+a sandbox became a thing you CALL -- so it never yielded and had no window to
+bill in. It also took no function NAME, deriving the entry from the image,
+which the jvm's own docstring calls "one rename away from measuring nothing and
+still printing a number".
+
+That had been true for as long as the jvm's move, and nothing could see it,
+**because the row compares DIFFERENCES**. The door costs the same in `small`
+and in `big` -- 3 185 steps, measured -- so it cancelled exactly. A difference
+is the right instrument against NATIVE, which enters by genuinely different
+machinery; between two runtimes that are meant to be mirrors there is nothing
+legitimate for it to cancel, and what it cancelled was the whole of one port's
+entry path.
+
+The clr now has a line-for-line mirror of `HostCall.java` and takes the name as
+an argument. The two ports agree at **71 962 and 215 137, absolute counts
+included** -- where they previously agreed only after subtraction -- and
+`bin/conform-hosts` now asserts that, with the reason written beside it. A
+mirror checked only through a subtraction is a mirror checked where it cannot
+differ.
+
+**Stated precisely, because the obvious stronger claim is not true today.**
+Reverting the clr to its old door on purpose, both checks now catch it: the
+difference reads 143 035 against the jvm's 143 175 as well as the absolutes
+reading 68 722/211 757 against 71 962/215 137. The difference only catches it
+because of the OTHER fix in this section -- a `RunProgram` clr has no yield
+window, so with the jvm now billing in one the door stops cancelling. Before
+that fix the difference matched to the instruction while the absolutes were
+3 185 apart, which is the state this was found in and is measured above.
+
+So the absolute check is not "the only one that can catch this". It is the one
+that does not depend on a second effect happening to make the door visible, and
+that is the reason to keep it.
+
+**The order was wrong too, and that is the more general fault.** The clr rows
+sat AFTER the native verdict, which exits on a gap -- so for the whole history
+of this row, which has never been green, the two ports were never compared at
+all. A divergence between them could sit behind a red that is about something
+else indefinitely, and one did. They are asked first now. A check that only
+runs when an unrelated check passes is a check you do not have.
+
+**What is left: 34, about 1 step per slice.** A precise target rather than a
+mystery, and the shape suggests where to look -- `aot.rs`'s `aot_tick` already
+documents a one-instruction accounting difference at exactly this boundary
+("the interpreter alone charges it twice: once at the tick that trips, once
+after the resume"). Not chased here, and NOT assumed: that is a hypothesis with
+a measurement attached to it, which is the only thing that would settle it.
+
+### The 34 IS a double charge at the slice boundary. The one-line fix is not landable yet, 2026-09-19
+
+The hypothesis above is confirmed, the line is identified, and the change is
+NOT in the tree. What blocks it is written down at the end, because it is the
+part the next attempt needs.
+
+**Measured on a program that allocates nothing**, so allocation billing cannot
+confound it -- a bare counting loop at six sizes, differences taken against the
+smallest so start-up cancels:
+
+    entry   d-native    d-jvm   gap   d-slices
+    n1k        9,013    9,011     2          3
+    n5k       45,067   45,056    11         11
+    n10k      90,133   90,113    20         22
+    n20k     180,265  180,223    42         44
+    n40k     360,529  360,443    86         88
+
+The gap is not proportional to work. It IS the slice count.
+
+**The mechanism, from the two loops.** Native's `Counting::tick` is
+
+    rt.steps += 1;
+    rt.steps >= rt.checkpoint
+
+-- increment, then test, then execute -- and it is called at the TOP of the
+loop, before the opcode is read. So on the iteration that trips, the
+instruction has been CHARGED and NOT EXECUTED; after the resume it is
+dispatched and charged again. The ports test first and charge second (`if
+(steps >= checkpoint)` ... then `opcode = u8(ip); ip += 1; steps++`), so they
+charge exactly the instructions they run. **The ports are right and native
+double-charges one instruction per slice.**
+
+That also makes native's gas depend on `SLICE`, which the same program should
+not. Demonstrated by rebuilding with it changed:
+
+    SLICE=2048  376,974
+    SLICE=4096  376,444
+    SLICE=8192  376,180
+
+Part of that spread is the scheduler's own per-resume work, which the standing
+decision says SHOULD bill -- so this measurement on its own does not separate
+the two. The cross-runtime 1-per-slice does, because both sides now bill the
+same scheduler work.
+
+**The fix, and what it did.** Making native test before charging:
+
+    if rt.steps >= rt.checkpoint { return true; }
+    rt.steps += 1;
+    false
+
+takes the gas row from **+34 to -6**, and -- the part that matters more than
+the number -- the residual stops scaling with slices: the spin probe's gap goes
+from 2/11/20/42/86 to a flat -2.
+
+**WHY IT IS NOT IN THE TREE.** It breaks the AOT/interpreter agreement, and I
+could not derive the pairing:
+
+    test/aot.clj    before          after
+    arith           exact           -3
+    colls           -4              -3
+    hof/strs/handler exact          exact
+
+One red becomes two. `aot_tick` hands one step back on a trip (`rt.steps -=
+1`), tuned against the interpreter's OLD two charges; removing that
+compensation overshoots badly (+63 on arith), so it is still needed and the
+residual is something else. Two models of the pairing were written down here
+and both were wrong against the measurement, which is the reason this stops
+rather than continues.
+
+**For the next attempt.** The trip counts are what would settle it and they
+need `bin/build-units --aot --diagnostics` together -- the modules
+`test/aot.clj` builds carry `--aot` only, so `stat_region` is absent and
+`stat_region(80 + C_AOT_TICK_TRIPS)` cannot be read from them. With per-program
+trip counts, "is the residual per-trip or a fixed three" is one subtraction.
+Note also that `arith` and `colls` are the only two affected and both by
+exactly 3, while three other programs stay exact -- a constant, not something
+proportional, which argues against a simple per-trip story.
+
+#### Measured 2026-09-19: NEITHER model, and the obstacle is alignment
+
+The trip counts, both states, `--aot --diagnostics` together:
+
+    prog      base gap  base trips   fix gap  fix trips   d-interp   d-aot
+    arith            0          63        -3         63        -64     -67
+    colls           -4          16        -3         17        -24     -23
+    hof              0           9         0          9         -9      -9
+    strs             0           1         0          1         -2      -2
+    handler          0           0         0          0          0       0
+
+**It is not per-trip.** At baseline `arith` has SIXTY-THREE trips and is exact
+while `colls` has sixteen and is off by four. A per-trip error cannot produce
+that.
+
+**And the standing `colls` red is not a slice-boundary effect at all**, which
+is worth saying plainly because filing it next to this work implied it was.
+It is the only program with a baseline gap, and it is not the one that trips
+most. Whatever it is, it is not this.
+
+**The obstacle to the fix is ALIGNMENT, not a constant.** `colls`'s AOT trip
+count CHANGES under the fix -- 16 to 17 -- while every other program's stays
+put. Moving where a slice boundary falls changes how many times a chunk trips,
+and each trip carries `aot_tick`'s one-step compensation. So the AOT residual
+is not a fixed offset waiting for the right constant: it moves with where the
+boundaries land. That is why two models of the pairing were written here and
+both were refuted, and it is the thing a third attempt has to account for
+rather than another compensation term.
+
+**A blind alley worth marking so it is not walked twice.** Compiled code
+allocates measurably LESS than interpreted -- `arith` -560 bytes, `colls` -824,
+`hof` -184, `strs` -32 -- while three of those five cost identical gas, which
+reads as "the two paths do different work and the counts match by luck". They
+do not. `stat_bytes_allocated` counts `Gc::alloc`, and the gas charge sits in
+`Rt::alloc` above it; collector promotion goes straight to the former and is
+deliberately excluded from the latter, because gas must not depend on when a
+collection ran. **`stat_bytes_allocated` is not a proxy for the allocation
+charge**, and comparing it across two builds measures GC timing.
+
+**The tree is at baseline.** `vm.rs`, `aot.rs` and `conc.rs` are byte-for-byte
+as they were, verified by diff against copies taken before the experiment; the
+units were rebuilt plain afterwards; `test/aot.clj` is back to its single
+`colls` failure at 112 464/112 460 and the gas row back to 34. Gas accounting
+is not a thing to leave half-changed.
+
+### The `colls` AOT red is ALIGNMENT, and that unifies it with the gas row, 2026-09-19
+
+Picked up because the entry above said this red "needs its own investigation
+and should not be expected to fall out of this one". It did not fall out of it;
+it turns out to be the same defect wearing different clothes.
+
+**It does not scale with the work.** The same program at four sizes:
+
+    n       interp      aot   gap   trips
+    100     34,035   34,035     0       3
+    250     62,648   62,648     0      10
+    500    112,464  112,460    -4      16
+    1000   217,905  217,903    -2      34
+
+Zero at two sizes, and the two non-zero values do not order with `n` or with
+trips. A per-operation pricing difference cannot produce that.
+
+**It moves with `SLICE`, which settles it.** The SAME program, rebuilt with the
+preemption quantum changed and nothing else:
+
+    SLICE    n=500              n=1000
+    4096     -4 (16 trips)      -2 (34 trips)
+    2048     -2 (30 trips)      -6 (78 trips)
+    8192      0 ( 9 trips)       0 (20 trips)
+
+A property of the program cannot depend on the preemption quantum. This one
+does, so it is not a property of the program: **the AOT/interpreter instruction
+counts agree by ALIGNMENT, not by construction**, and `test/aot.clj`'s "the
+same instruction count" is passing for four of its five programs the way a
+coin lands heads.
+
+**This CORRECTS what I wrote a firing earlier.** That entry says "the standing
+`colls` red is not a slice-boundary effect", reasoning that `arith` trips 63
+times and is exact while `colls` trips 16 and is off by four. The reasoning is
+sound and the conclusion was too strong: it rules out a SIMPLE PER-TRIP error,
+which it does, and I generalised that to "not a boundary effect at all", which
+the `SLICE` sweep refutes. Non-correlation with a count is not absence of a
+mechanism -- an alignment effect is exactly one that has a boundary cause and
+no proportionality to boundary COUNT.
+
+**And it unifies the two open threads.** The tick-order fix for the
+`conform-hosts` gas row was blocked because its AOT residual "is a function of
+where the boundaries land". That is this. One defect, showing up as a standing
+red in `test/aot.clj` and as the obstacle to closing the last 34 of the gas
+row. Fixing it is the thing that unblocks both; compensating for it in either
+place separately is what failed twice.
+
+**Refuted here, so it is not re-tried: frame demotion.** `aot_tick`'s trip sets
+`f.aot_ip = AOT_NEVER_U32`, which reads as "this frame stops re-entering
+compiled code", and would explain alignment-dependence neatly. It is not that.
+`aot_ticks` -- back-edges executed IN compiled code -- barely moves while trips
+vary four-fold:
+
+    SLICE 8192   20 trips   3,088 aot_ticks
+    SLICE 4096   34 trips   3,102 aot_ticks
+    SLICE 2048   78 trips   3,146 aot_ticks
+
+Compiled code keeps running across trips, so the frame is re-armed somewhere
+(`vm.rs`'s `Parked::Yielded` sets `aot_ip = next_ip`). Three mechanisms have
+now been proposed for this gap and all three measured false: per-trip, a fixed
+constant, and demotion.
+
+#### The candidate is REFUTED, and the mechanism is the PREEMPTION COUNT, 2026-09-19
+
+The candidate was that a chunk's static gas fails to match the instructions
+actually executed before a hand-over. It does not fail. `C_AOT_GAS` and the
+six per-door counters exist for exactly this question -- their own header names
+this `colls` row -- and swept across `SLICE` on the same program they give
+three invariants that do not move by a single unit:
+
+    SLICE   gap   tickgas-ntick   ntick-trips   chunkgas-trips
+    4096     -4            5643          1568           53,198
+    2048     -2            5643          1568           53,198
+    8192      0            5643          1568           53,198
+
+Total chunk gas is EXACTLY `53 198 + trips`. Each trip adds exactly one tick
+and exactly one unit of gas. **The compiled side's accounting has no alignment
+slop in it at all** -- if the static-versus-actual mapping were the mechanism,
+`chunkgas - trips` would wander, and it is constant to the unit. Four
+mechanisms proposed for this gap, four measured false.
+
+**It is the number of PREEMPTIONS.** `C_RESTORES` counts them, and it is the
+one thing that differs:
+
+    SLICE   interp preempts   aot preempts   delta   gap
+    4096                 24             23      -1      -4
+    2048                 47             47       0      -2
+    8192                 12             12       0       0
+
+At 4096 the compiled build is preempted ONE FEWER TIME than the interpreted
+one. A preemption costs about five interpreter steps -- the interpreted totals
+move ~5.2 per slice across this sweep -- and the gap there is four.
+
+**Why the counts can differ, which is the part that generalises.** Compiled
+code flushes gas in LUMPS: a chunk adds its whole static count in one go, and
+the slice check runs at the flush rather than at each instruction inside it.
+Two slice boundaries falling inside one lump therefore collapse into a single
+preemption. Lumping can only MERGE preemptions, never create them -- which is
+why every gap measured here is negative or zero and never positive. Compiled
+code is not mischarged for the work it does; it is billed for less SCHEDULER
+work, because it was interrupted less often.
+
+**Honestly bounded: this does not explain all of it.** At `SLICE = 2048` the
+two builds preempt the same number of times and the gap is still -2. So the
+preemption count is the dominant term at 4096 and there is a smaller residual
+underneath it. What is now settled is where NOT to look: not the chunk gas, not
+per-trip, not a fixed constant, not frame demotion.
+
+**What this means for the assertion.** `test/aot.clj` asks that compiled and
+interpreted code cost the same instruction count. Under lumping that is not a
+property either implementation can have exactly, because the compiled build is
+genuinely preempted a different number of times and preemption is billed. The
+question the next attempt has to answer is not "where is the missing charge"
+but "should scheduler work be inside the number these two are compared on" --
+which is the same question `resource-limits` has open about what gas MEANS, and
+it is a decision rather than a defect.
+
+**DO NOT close this by moving `SLICE`.** The gap is 0 at 8192 for both sizes
+tested, which makes "set it to 8192" look like a fix. It is the same move as
+widening a tolerance to cover an unexplained difference, which
+`bin/conform-hosts` already warns about at length on its gas row: a quantum
+chosen to make today's programs agree will be wrong for tomorrow's, and the
+red would come back as a mystery with its history erased.
+
+**The tree is at baseline**, verified by diff of `conc.rs` and `vm.rs` against
+copies taken before the sweep, `aot.rs` compensation intact, units rebuilt
+plain, and `test/aot.clj` back to its single `colls` failure at 112 464/112 460.
+
+### `test/tables.clj`'s red row is the BUILDER, not the encoding, 2026-09-17
+
+"a constant column costs nothing per row" fails by asking for 120 000 bytes of
+saving and seeing 32 288. Both halves of that turn out to be true statements
+about different things.
+
+**The encoding works, completely.** Measured on what SURVIVES a collection with
+only the table live -- a one-column table of 20 000 rows, churned until the
+collector had run several times, reading `old-live` from `flint.rt/gc-stats`:
+
+    a column that varies   old-live 190 376
+    a column that does not old-live  29 744   -> 160 632 saved
+
+160 632 against the 160 000 a 20 000-row column holds. So a constant column
+really does cost nothing per row to HOLD, which is what the row claims.
+
+**The builder pays for it anyway.** `new_table` (`kgen/rt/tablebuild.rs`) does
+this per chunk, per column:
+
+    let col = self.new_obj(TY_NODE, take);   // the full 256-slot run, always
+    ... fill it, type-checking each value ...
+    self.set(chi, CH_BASE + id, col);
+    self.collapse(chi, id);                  // and only NOW reduce to a constant
+
+The run is garbage the moment `collapse` runs and the finished table never
+keeps it -- but it was live at the peak. So peak live counts runs the table
+does not hold, and the saving it can see is only what happens to be collected
+before the peak: 32 288 of 160 632.
+
+**So the row is right to be red**, and the fix is in the builder rather than in
+the test. Scanning the chunk's values for the column BEFORE allocating -- they
+are already being read to type-check -- lets the constant case skip the run
+entirely. One extra comparison per value, no allocation, and then peak,
+allocation and retained all agree with each other and with the claim.
+
+It is `kin/tablebuild.kin`, so it is one source and three targets, and it wants
+a drivers case that a builder which allocates-then-collapses would fail. The
+obvious case does NOT distinguish them: both produce a table whose column reads
+back constant. What separates them is bytes allocated while building, which is
+what the case has to assert.
+
+**A WRONG TURN, recorded because it looked right.** The first move was to point
+the test at `old-live` instead of peak, since that is what "costs to hold"
+means. It passed on the one-column probe above and then inverted on the test's
+own two-column program -- `same` retained 1 488 192 against `vary`'s 356 672 --
+because `old-live` depends on when the collector promoted, and a churn loop
+promotes the garbage as readily as the table. A GC-timing-dependent number is
+not an instrument. The edit was inverted and the test is byte-for-byte as it
+was, bar a comment recording why the row stands.
+
+### The constant column allocates no run now, 2026-09-17
+
+`kin/tablebuild.kin` builds a chunk's column WITHOUT allocating a run until a
+value differs. `test/tables.clj` is green.
+
+**What changed.** `new_table` used to allocate the full `CHUNK`-slot node for
+every column of every chunk, fill it, and hand it to `collapse`, which threw it
+away again when the column turned out constant. It now remembers the first
+value, compares each one against it, and allocates only at the first that
+differs -- backfilling the rows already seen, which all held the first value.
+One pass still, one comparison per value, and the varying case reads each row
+exactly once as before.
+
+    allocation saved by a constant column, 20 000 rows:
+      before   47 224
+      after   207 856
+
+**The drivers case had to weigh the BUILD.** Both builders produce an identical
+table -- that is the whole point of `collapse` -- so no field that inspects the
+result can tell them apart. `saved=38` reads the probe allocator's bump either
+side of two builds of the same six-row table, one with a varying column and one
+without, and is DERIVED: six rows at `CHUNK` 4 is two chunks, `take` 4 then 2,
+and the probe charges `n + 16` a node, so the runs not made are 20 and 18. The
+old builder was reinstated to check: it scores `saved=0` and passes every other
+field in the file unchanged.
+
+**A REAL BUG THE FIRST VERSION HAD, worth recording because the old shape hid
+it.** Moving the allocation inside the row loop invalidates every host local
+around it -- a copying collector moves what they point at. The old builder
+allocated BEFORE reading the column's name and type, so it never had to care.
+The first version of this did not root them and the type came back as `:?`,
+refusing a legal keyword at row 5 890. Name, declared type, the first value and
+the current value are all rooted now. `val-eq` can allocate too (comparing two
+ropes flattens one), which is why the current value lives in a reused root
+rather than a host local across the comparison.
+
+**AND THE TEST'S INSTRUMENT WAS WRONG, for the third time.** `stat_heap_used`
+reported the heap's SIZE. `stat_peak_live` was sampled when the collector ran,
+so a build that allocates less collects less often and is sampled elsewhere --
+with the builder fixed, the constant column's peak came out 27 584 HIGHER than
+the varying one's, which reads as a regression and is an artefact. The row now
+measures ALLOCATION, which is deterministic by construction here
+(`DECISIONS.md#resource-limits`) and has no dependence on when a collection
+happened. Peak is still printed: watching it disagree with allocation is what
+caught the builder.
+
+The earlier note in this file that the row "is right to be red" and that the
+fix belongs in the builder stands -- this is that fix. What it got wrong was
+expecting peak to show it afterwards.
+
+### A stale pointer in `check_sendable_at`, and the PORTS were already right
+
+`test/document.clj`'s stale-pointer row was red with **6 stale pushes** (writes
+0, roots 0, coverage healthy: 8 collections walked, 416 886 pushes checked).
+Found, fixed, and the row is green.
+
+**Where.** `check_sendable_at`'s map and set branches cannot call back into
+themselves from inside `map_for_each` -- the borrow is already held -- so they
+gather the children into a host `Vec<Value>` first and then loop:
+
+    for it in items {
+        let ii = self.push(it);                     // <- line 1396
+        out = self.check_sendable_at(self.r(ii), depth + 1, carry);
+
+That vector is host memory and no root at all, and `check_sendable_at`
+ALLOCATES. So checking the first child moved every value still sitting in the
+vector, and the next push handed the collector an address that had already been
+forwarded. The sequential branch never had it, because it re-derives `first`
+from a rooted seq each time round.
+
+**The fix** is `check_each`: push the whole batch while it is still fresh --
+nothing allocates between the gather and the pushes -- then read each child
+BACK out of the shadow stack, which the collector updates. Both branches use it.
+
+**AND THE PORTS DID NOT HAVE THIS BUG.** They build a flint VECTOR and root it
+(`Sets.elementVector`, `rt.push(...)`) where native used a host `Vec`. So for
+once the divergence ran the other way: two hand-written mirrors were right and
+the original was wrong. Worth remembering next time a difference is assumed to
+be the ports lagging.
+
+**How it was found**, because the detector names what moved and not who moved
+it. `push` was given `#[track_caller]` under `diagnostics` and the stale-push
+recorder stored `Location::caller().line()` plus an FNV-1a hash of the file --
+`line 1396, hash 2179327419`, which matches `runtime/src/conc.rs` and nothing
+else in the tree. That is a five-minute instrument for a class of bug that
+otherwise costs a day, and it is worth rebuilding rather than reasoning about
+the next time `stat_stale_push` is non-zero. It was reverted afterwards:
+`track_caller` on `push` adds a hidden argument to a very hot function, and
+leaving it in a diagnostics build would tax every measurement taken with one.
+
+### What is left of `test/document.clj`, characterised
+
+One row still red: peak live 4 039 744 against 4 194 304 of content, where the
+claim is under a third. The module is holding 96% of the answer, which is what
+waves exist to prevent.
+
+**It is not the guest.** The script sums byte counts and keeps nothing;
+`rpc/drain-each` receives one message, calls `f`, and recurs, so each wave goes
+out of scope. The port's ring does clear consumed slots -- `ring-dequeue` CASes
+the taken slot back to `EMPTY`. And the test's own table shows peak flat at
+~240 KB for small documents, so this is the content and not the structure.
+
+That leaves the delivery side: if the store hands over all sixty-four waves
+before the guest reads any, the inbox holds the whole answer at once and peak is
+the total by construction. `DocStore` is test-side infrastructure in
+`test/document.mjs` with its own `budgetBytes`, so the next step is to measure
+WHEN it delivers relative to when the guest asks -- not to read more library
+code, which has now been cleared twice.
+
+### `test/document.clj`'s memory row, narrowed by elimination
+
+One row still red: peak live 4 039 744 against 4 194 304 of content, where the
+claim is under a third. What follows is what has been RULED OUT by measurement,
+so the next attempt starts where this one stopped rather than where it started.
+
+**It is not the guest, and not the library.** The script sums byte counts and
+keeps nothing. `rpc/drain-each` receives one message, calls `f`, and recurs, so
+each wave leaves scope. `ring-dequeue` CASes a taken slot back to `EMPTY`. And
+both `PT_BYTES` release sites decrement correctly when a message leaves the
+queue -- on guest receive and on host drain.
+
+**It is not the ring count**, which is the reading the numbers invited and it
+is wrong. Peak looked exactly like `RING_MESSAGES` (64) times the wave size:
+
+    budget 65536 -> 64 waves  -> peak 4 039 744   (64 x 64 KB)
+    budget  8192 -> 512 waves -> peak   807 296
+
+So `RING_MESSAGES` was halved to 32 and rebuilt. Peak came back **4 038 976** --
+768 bytes different, which is nothing. The ring is not what holds them, and the
+apparent arithmetic was a coincidence of two numbers that both happened to be
+64.
+
+**The byte bound does not bind either.** `DEFAULT_BRIDGE_CAP` is 1 MB and
+`host_deliver` checks it, so at 64 KB a wave it should admit about sixteen. Peak
+is four times that. Since the release sites are correct, the queue itself is
+within its bound at any instant -- which means what is live is RECEIVED waves,
+not queued ones.
+
+**What the two budgets actually say.** Subtracting the ~240 KB floor the test's
+own table shows for a small document, the live set is 58 waves' worth at 64 KB
+and 69 at 8 KB. Neither a constant count nor a constant size -- so the retainer
+scales with something not yet named, and guessing which has now been wrong
+three times in this row alone.
+
+**The instrument to use next is the snapshot inspector, not more reading.** It
+is repaired and it answers exactly this question: capture with the content live
+and take a type census, as was done for the parked-thread hang. That says WHAT
+is retained -- decoded strings, wave vectors, event records -- and the name of
+the type is the name of the bug. Every reading in this entry was reached by
+reasoning about the code and two of them were wrong.
+
+### NAMED: `stat_peak_live` counts old-space garbage, and the document row is right about the code
+
+The memory row is diagnosed. The program's memory behaviour is CORRECT -- about
+530 KB is ever genuinely live against 4 MB of content -- and the number the row
+reads is not live bytes.
+
+**`peak_live` is `old_live + young_used`, sampled after every collection.**
+`old_live` is incremented on every old-space allocation and only recomputed to
+the truth by `sweep_old`, which runs at a MAJOR. So after a minor it counts
+every old object allocated since the last major, alive or dead. `note_peak`'s
+own comment says it samples "when the numbers mean something"; after a minor,
+for old space, they do not.
+
+**`LARGE_OBJECT` is 16 KB, so a 64 KB wave is born in old space.** Sixty-four of
+them is 4 MB of old allocation between majors, which is the whole of the
+reported peak. An 8 KB wave is born young and swept by minors, which is why the
+same content measured 807 296 at that budget -- a difference the earlier reading
+could not explain and this one predicts.
+
+**Proved by a controlled change, not by argument.** `LARGE_OBJECT` raised to
+256 KB so the waves are born young, nothing else touched:
+
+    LARGE_OBJECT 16 KB    peak 4 039 744   FAIL
+    LARGE_OBJECT 256 KB   peak   530 456   documents: ok
+
+Restored, and the 4 039 744 came back. The census taken mid-run says the same
+thing from the other side: at wave 40 the live set is 13 `BYTES` objects
+totalling 856 856 -- about the 1 MB delivery cap, exactly as designed -- beside
+2 901 576 bytes of `FREE` blocks that `old_live` was still counting.
+
+**So the fix is in the accounting, and it is a decision rather than a defect.**
+Peak LIVE cannot be known for old space between majors; that is what generational
+collection means. Three shapes, and they differ in which way they are wrong:
+
+1. sample only after a major -- honest, and misses a young spike between them;
+2. after a minor, use the old_live recomputed at the last major -- under-counts
+   genuinely-live new old objects, and a memory GUARD that under-counts passes
+   when it should fail, which is the worse direction;
+3. keep the number and rename it, recording that it is an upper bound, and give
+   the memory rows a second counter sampled only after majors.
+
+(3) is the one that breaks nothing and stops the docstring being false. Any of
+them changes a published diagnostic that several memory rows assert, which is
+why it is written down rather than chosen here.
+
+**And the row itself is not wrong.** It asks that peak stay under a third of the
+content, and under a truthful instrument it is an eighth. Whatever is done to
+the counter, the claim stands.
+
+### `check-builtin-coverage`: a stale exemption, and the check earning its keep
+
+Green. `flint/request` was in `ACCOUNTED` on the grounds that covering it "means
+teaching three separate drivers, not writing a conformance program" -- and then
+`runtimes/conform-host` was added to the glob, which is exactly where those
+drivers live. `hostreq.cljc` calls `host/request` and has been covering it ever
+since; the exemption outlived its reason by however long that has been.
+
+Verified before acting on it rather than taking the check's word: `hostreq.cljc`
+requires `flint.host` and calls `host/request "clock"`, and that directory is
+globbed. Removed, and the reasoning around it rewritten so the comment no longer
+argues for an entry that is gone.
+
+The check was then made to fail on purpose -- accounting for `flint/add`, which
+is exercised by nearly everything -- and it reported the failure. It is doing
+exactly the job it exists for: an exemption list nobody re-checks is a list that
+silently stops being true.
+
+### `test/selfhost.clj`: gen0 is built by a path that yields an uncallable module
+
+Localised, not fixed. The fixpoint test builds gen0 (the compiler compiled by
+babashka, linked by `link/compose` in `build-module!`), then asks it to compile
+the compiler. The call is never answered:
+
+    gen0  linked out/flintc-gen0.wasm 763274 bytes
+    node failed: flint: the call to flint.selfhost/main was never answered
+
+**The spec and the compiler source are fine.** The SAME spec handed to
+`dist/flintc.wasm` -- same sources, built by `bin/flint` -- runs **439 527 001
+steps**, which is a real compile doing real work. gen0 stops after **135 373**.
+
+**gen0 has no running control plane.** Traced, the pump gets three iterations and
+codes 2, 2, 0: the sandbox settles and closes both ports without answering, and
+`OUT` is empty, so nothing failed. Status 0 means nothing was parked on a
+bridge, which is precisely the shape of a module whose control plane never
+started -- `boot_system_thread_once` returns silently when it cannot start one.
+
+**It is not the exports/reachability path**, which was the obvious suspect given
+`compile-image`'s comment about `test/shake.clj` getting "a module nothing could
+call". Adding `:exports ['flint.system/boot]` to the spec produced a
+**byte-identical** image (197 668 either way), because `extra-roots` already
+adds it. So the code is kept; something else stops it running.
+
+**The next instrument is one temporary export.** `boot_system_thread_once` has
+three early returns -- no system port, `ensure_started` false, `var_named
+"flint.system/boot"` absent -- and nothing currently distinguishes them from
+outside. A probe reporting which one fires names the cause in one build. Worth
+noting as a hint and not a finding: `strings` counts the name once in gen0 and
+twice in `dist/flintc.wasm`, which would fit `var_named` finding nothing, but
+string deduplication could explain it just as well and it has not been checked.
+
+### NAMED: gen0 has no `flint.system/boot` in its var-name table
+
+The selfhost fixpoint's uncallable module is down to one fact. A probe on
+`boot_system_thread_once`'s five early returns, plus the table it consults:
+
+    out/flintc-gen0.wasm   stage 4 (initialisers ran)
+                           var_names = 721   control lookup ok = 1
+
+Stage 4 means it got past `ensure_started` and then `var_named
+"flint.system/boot"` answered None. The table is not broken -- 721 entries, and
+a control lookup of `flint.selfhost/main` in the same image SUCCEEDS. So
+`flint.system/boot` is specifically absent, the control plane never spawns,
+nothing parks on a bridge, the sandbox settles, and the call is never answered.
+
+**Note the probe had to be a HIGH-WATER MARK to say anything.** Recording the
+last call's progress reported "stage 1, already booted" -- true and useless,
+because `drive` calls this every iteration and every call after the first
+short-circuits. The furthest stage reached is the question; the last one is
+noise. Worth remembering for any once-only path instrumented this way.
+
+**And `extra-roots` is not sufficient, which is the interesting half.**
+`compile-image` adds `'flint.system/boot` to `extra-roots` precisely so no
+caller has to, and its comment records `test/shake.clj` getting "a module
+nothing could call" before that was done. That keeps the code REACHABLE. It
+does not put the var's NAME in the image, which is what `var_named` reads --
+and `var_named` is the only way the runtime can find the thunk to spawn.
+
+Adding `:exports ['flint.system/boot]` to the spec makes no difference at all:
+the image is **byte-identical**, 197 668 either way, because `extra-roots`
+already contained it. So the exemption that was supposed to protect every
+caller protects the wrong half of the requirement.
+
+**What to check next, in one step.** `var-slot` (`src/flint/image.cljc`) records
+a name for every var it gives a global slot, so a kept `def` should have one.
+Either the item is not actually being kept -- `extra-roots`' symbol not matching
+any item's `:defines`, in which case the comment's promise has never worked and
+`bin/flint` is carried by its own `:exports` through a DIFFERENT entry point
+(`compile-project`, not `compile-image`) -- or the item is kept and emitted
+without a slot. Printing the `:defines` that `extra-roots` matches against, for
+this spec, separates those two in one bb run and needs no rebuild.
+
+The same probe is worth keeping in mind as a permanent fixture rather than a
+temporary one: `boot_system_thread_once` has five silent early returns in every
+runtime, and "the sandbox quietly cannot be called" has now cost two separate
+investigations. A status byte saying which precondition failed would have
+answered both in a minute.
+
+### FIXED: the selfhost spec never compiled the control plane
+
+`test/selfhost.clj`'s source set is built by its own `collect`, which follows
+`:require` from `flint.selfhost` and `clojure.core`. **Nothing requires
+`flint.system`** -- bootstrap spawns it by NAME -- so the namespace was never in
+the spec at all. `serve-calls` and `unbind` appear zero times in a dumped spec.
+
+So `extra-roots`' `'flint.system/boot` rooted a symbol with no source behind it:
+the item did not exist, no var slot was made, no name reached the image, and
+`var_named` answered nil. The module settled on its first drive and answered
+nothing. `flint.system` added as a `collect` root, and the image grew from
+197 668 to 205 688 bytes with natives from 159 to 197 -- the control plane
+arriving.
+
+**THIS IS THE FOURTH PLACE to need that root**, and `bin/flint` predicted it in
+writing: "the duplication is the point worth noticing: this file has its own
+`collect` and never calls `flint.project/resolve-project`, so a root added there
+reached the native CLI and not this front end." A fourth `collect` was a fourth
+chance to forget, and it did.
+
+**And `extra-roots` cannot cover this**, which is worth stating plainly because
+its comment implies otherwise. It roots a SYMBOL for reachability; it cannot
+conjure a namespace that was never handed in. It protects callers who already
+have the source and nobody else. The two halves of "callable" are the source
+being present and the var being named, and only the second was centralised.
+
+**A trap for the next person instrumenting this.** `src/flint/*.cljc` is
+compiled BY FLINT during selfhost, so a probe using `binding`, `*err*` or
+`System/getenv` in the compiler's own source does not fail at the probe -- it
+fails as a flint compile error inside `compile-image`, naming the form and not
+the reason. Probes for this path belong outside `src/`.
+
+### The `serve-calls` diagnostic is in, and the objection was the writer bug
+
+Recorded as held back earlier: answering a failed send grew every module and
+pushed a marginal reply over the encoder's ceiling, turning a passing compile
+into a failing one. That ceiling WAS the stale-writer bug in `wire-str`, since
+fixed -- 2 MB replies cross now -- so the objection no longer exists. It is in:
+
+    pure module   490 471 -> 490 600 bytes   (+129, budget 500 000)
+    four compiles plain / exports / exports-one / exports-self: all ok
+    ESM build and its selftest: green
+
+129 bytes, not the thousands the first reading feared; what broke last time was
+the cliff, not the size.
+
+### And selfhost has a SECOND failure, which is not the test's
+
+With the control plane compiled in, the fixpoint fails differently: `the host
+pump made no progress`. It is not the build path, because the SAME spec fails
+the same way on `dist/flintc.wasm`, the shipped compiler. And it is not a
+dropped answer, because the diagnostic above is now in and reports nothing --
+the send is never reached.
+
+What the trace says: the first resume runs **439 442 900** steps, and then every
+further iteration adds about **42** -- the `reap_ports` housekeeping signature of
+a sandbox with nothing runnable and the control plane parked. So the compile
+stops short and the call thread is gone or parked without answering.
+
+Next step is the pump trace already used twice here, on `dist/flintc.wasm` with
+this spec: resume codes and `stat_steps` per iteration, plus the host's event
+list, which says whether the thread is waiting on a host request nobody answers.
+
+### The second selfhost failure is the PRODUCTION runtime, and a failed thread is invisible
+
+Two findings, and the second matters more than the first.
+
+**The compile stalls three quarters of the way through, and only without
+diagnostics.** Same `bin/flint` command, same sources, only the units differ:
+
+    diagnostics units   code 0   608 154 297 steps   reply 276 891 chars
+    production units    code 1   459 434 875 steps   "the host pump made no progress"
+
+Production stops at 76% of the work, so this is NOT the reply path -- the reply
+is never built. It is not the heap cap either: 200 MB, 800 MB and 3 GB all fail
+identically. Small compiles succeed on production units, so it is pressure- or
+timing-dependent, and the diagnostics build not reproducing it is the shape of a
+memory-safety bug whose detector only exists in the build that does not hit it.
+
+The pump trace is unambiguous: first resume runs 459 434 875 steps, then every
+iteration adds ~42 -- `reap_ports` housekeeping -- with ONE host event in the
+whole run (`retain`). So nothing is runnable, nothing is pending, and the
+control plane is parked.
+
+**A FAILED CALL THREAD CANNOT BE REPORTED once a control plane exists, and that
+is the third time this blindness has bitten.** `flint_resume` renders a failure
+only when `status == 0 && failed()`. With a control plane parked on the system
+port, `sched_needs_host` is true, `drive` returns 2, and status is NEVER 0 --
+so a thread that dies takes its error with it and the host sees only "needs
+host" for ever. The same structural fact hid the gate's escape and made
+`report_deadlock` unreachable.
+
+That is worth fixing on its own merits, ahead of the compile bug it is currently
+hiding: the runtime knows a thread failed and has nowhere to say so. Either
+`flint_resume` should render a failure regardless of status, or a failed thread
+with no `:tx` to answer on should be surfaced the way `settled_answer` surfaces
+one at exit. Until then, every silent death in a called sandbox presents as this
+same message, which is why three separate investigations have started from it.
+
+**What is ruled out for the compile itself:** the reply path (never reached, and
+the `serve-calls` diagnostic reports nothing), the heap cap (three limits),
+the build path (identical command), and the source set (identical). What remains
+is a difference in what the production runtime does that the diagnostics one
+does not -- and since `cfg(feature = "diagnostics")` is supposed to add only
+counters, any place where it changes behaviour is the first thing to audit.
+
+### The stalling compile has TWO control planes, and the call thread is DONE
+
+Measured with a temporary probe over thread state, production units against
+diagnostics ones, same command and same sources:
+
+    production (stalls)          diagnostics (completes)
+    threads: 4                   threads: 3
+      id=0 DONE                    id=0 DONE
+      id=1 PARKED on port 1        id=1 PARKED on port 1
+      id=2 DONE                    id=2 RUNNABLE
+      id=3 PARKED on port 1
+
+`flint_system_port()` answers **1**, so ids 1 AND 3 are both parked on the
+SYSTEM port -- two `flint.system/serve` loops in one sandbox. The thread that
+served the call (id 2) is **DONE**, and no reply ever reached the host, so the
+sandbox sits at "needs host" for ever behind the parked pair.
+
+**No thread failed.** A probe on `settle`'s FAILED branch, rendering the first
+failure's kind and message, recorded nothing at all. So this is not an error
+being swallowed -- the call thread finished and answered nobody.
+
+**Two control planes should not be possible.** `boot_system_thread_once` guards
+on `system_booted`, which is one `bool` on one `Rt` -- and the unit's `rt()` goes
+through `flint_rt::abi::flint_rt_ptr()`, so the unit and the ABI share it. The
+"interpreter is instantiated twice" of `DECISIONS.md#resource-limits` is two
+MONOMORPHISATIONS of `run_with`, not two `Rt`s, so it cannot explain a second
+flag. A host-side port collision is also out: `SYSTEM_PORT` is 1 and
+`nextCallPort` starts at 2.
+
+So a second `serve` is being spawned by a path not yet found, and the duplicate
+is the thing to chase -- it is the only structural difference between the build
+that completes and the build that stalls.
+
+### AND A NEAR MISS WORTH MORE THAN THE FINDING
+
+Reverting the probe from `abi.rs` deleted **379 lines**: the revert was written
+as "cut from my probe's start to the next known anchor", and the next known
+anchor was four hundred lines further down than assumed. It took out
+`set_memory_limit`, `image_desc_addr`, every `stat_*` and `collect_now`.
+
+**`bin/check` caught it immediately** -- `test/cycles.clj` failed, and the link
+error named two missing exports -- which is the whole argument for running the
+gate after a revert and not only after a change.
+
+Recovery, and the shape matters given `never-checkout-in-a-dirty-tree`: a
+`git diff HEAD` showed **379 deletions and zero insertions**, which proves the
+working copy was a strict SUBSET of HEAD for that file, so reconstructing from
+`git show HEAD:` could not lose uncommitted work. That was verified
+line-by-line in the restore script before it wrote anything, rather than
+assumed. The one thing genuinely lost was this session's `stat_region`
+docstring correction, which lived inside the deleted span and was re-applied by
+hand afterwards.
+
+The rule to take from it: **a revert anchored at one end is not a revert.**
+Delete by matching the exact inserted text, or bound the range at BOTH ends
+with strings that were part of the insertion.
+
+### The duplicate control plane is a HEISENBUG, and that is the finding
+
+`boot_system_thread_once` spawns the control plane TWICE in the stalling build.
+Measured with a bare counter -- one increment, no `track_caller`, no codegen
+change -- at the spawn site inside that function:
+
+    boot spawned the control plane 2 time(s)
+
+**On the same `Rt`.** The pointer was recorded at each spawn and is identical
+(`0x8d60`), so this is not two runtimes with two flags. `system_booted` is one
+`bool`, set to true BEFORE the spawn, and the body ran twice anyway -- which
+means the flag read false on the second entry. Nothing in the code writes it
+back.
+
+**And it moves when looked at.** Three probe variants, three behaviours, same
+sources and same spec:
+
+    #[track_caller] on spawn_thread   3 spawns, and the error became a DEADLOCK report
+    + Rt pointer and flag fields      2 spawns, nonsense line numbers, stall returns
+    + a flag read at boot's ENTRY     1 spawn, and THE COMPILE SUCCEEDS (code 0)
+
+A bug that disappears when a `u32` is read at the top of a function is not a
+logic error in that function. It is layout- or timing-sensitive memory
+corruption, and `system_booted` is simply a byte near enough to whatever is
+being clobbered to show it. The duplicate control plane and the lost reply are
+SYMPTOMS.
+
+**Which explains the production/diagnostics split** recorded above: the
+diagnostics build has different layout and does not reproduce. That is also why
+this has been so hard to see -- the runtime HAS a detector for exactly this
+class, `STALE_PUSH`/`STALE_SET`/`STALE_ROOT`, and it is compiled only under
+`diagnostics`, which is the build where the bug does not happen.
+
+**So the actionable item is the detector, not the symptom.** The stale-pointer
+checks should be available behind their own cfg, independent of the rest of
+diagnostics, so they can run in a build that reproduces. Every instrument tried
+here perturbs the bug; that one is designed to catch it and is currently locked
+to the wrong build. It is a small change -- a feature flag and a handful of
+`cfg` attributes -- and it is worth doing before any further guessing.
+
+Two things NOT to repeat: instrumenting with `#[track_caller]` changes
+inlining, and adding fields to a static array changes layout. Both moved the
+bug. A counter alone did not, and is the only probe here whose reading can be
+trusted.
+
+### The stale detector CANNOT be separated from diagnostics, and that is the blocker
+
+Tried, and the answer is a clean negative worth recording rather than a fix.
+
+A `gcchecks` feature was added to run the stale-pointer checks without the rest
+of `diagnostics`, so they could run in the build that actually reproduces the
+corruption. Two of the three separate cleanly; the one that matters does not.
+
+* **the stale-ROOT scan** (after a collection, walk every root for a pointer
+  into the abandoned half) -- separates, needs only `in_live_half` widened;
+* **the stale-PUSH check** (`check_push`/`note_stale_push`) -- separates;
+* **the stale-SET check** -- DOES NOT. It reads `self.in_collect` and
+  `CUR_NATIVE`, both diagnostics-only, so widening its `cfg` fails to compile.
+  And it is the one that catches a stale WRITE at the instant it happens, which
+  is the class this bug looks like.
+
+**What the two separable halves found: nothing.** Built with the checks on and
+the rest of diagnostics off, the compile reported:
+
+    stale roots: 0    stale pushes: 0    collections walked: 934
+
+So across 934 collections no root survived into the abandoned half and no stale
+value was pushed. Either the corruption is a stale WRITE -- which only the
+unseparable check catches -- or the checks moved the bug again, because the
+failure ALSO changed: `memory limit exceeded` this time, a third distinct
+symptom from the same sources.
+
+**So the next step is concrete and small.** Separating `stale-SET` means
+bringing `in_collect` and `CUR_NATIVE` along -- both are cheap bookkeeping, not
+instrumentation, and neither belongs to the rest of the diagnostics surface.
+With those three widened, the detector built for this class of bug can finally
+run in a build that exhibits it. That is a better use of an hour than another
+probe, because every probe tried so far has moved the failure:
+
+    no probe                    stall, "host pump made no progress"
+    #[track_caller]             3 boot spawns, deadlock report
+    static array fields         2 boot spawns, stall
+    a flag read at boot entry   1 boot spawn, COMPILE SUCCEEDS
+    gcchecks (2 of 3 checks)    memory limit exceeded, 0 stale found
+
+Five configurations, five behaviours. Nothing about this bug should be believed
+from a single reading, including the zeros above.
+
+The probe was fully reverted -- `bin/build-units` and `runtime/Cargo.toml` are
+byte-identical to before it, `bin/check` is green -- and the `gcchecks` feature
+is NOT in the tree. It is written up here because the shape of the separation,
+and exactly which three `cfg`s have to move, is the part that took the time.
+
+### NOT corruption: `var-named` hands `answer` a LIST, and the detector says so
+
+The stale-pointer detector was separated from `diagnostics` and run on the
+failing compile. It found nothing, and the real error came out instead:
+
+    stale SET 0   stale ROOT 0   stale PUSH 0   collections walked 750
+    SendFailed: this call's answer could not be sent back:
+      value is not a function (a list, 2 args) in serve-calls
+
+So the memory-corruption hypothesis of the previous entry is WRONG. Nothing
+stale was written, rooted or pushed across 750 collections. What actually
+happens is in guest code: `flint.system/answer` does
+
+    f (flint.rt/var-named nm)
+    ... (if (some? f) {:tx tx :op :return :value (apply f (or (:args m) []))} ...)
+
+and `f` came back a LIST. `some?` is satisfied by a list, so the guard passes
+and `apply` fails on it. The frame is `serve-calls`, the throw escapes `answer`,
+and before the diagnostic shipped earlier today it was swallowed -- which is the
+whole reason this took five ticks to read.
+
+**The separation, for whoever needs it again.** Three checks, and the last one
+is the one that took work: `STALE_SET` reads `in_collect` and `CUR_NATIVE`, and
+the scan needs `in_live_half`. Fourteen `cfg` attributes across `gc.rs`,
+`rt.rs` and `vm.rs` widen cleanly to `any(feature = "diagnostics", feature =
+"gcchecks")`, and `stat_steps` can carry the counters packed so no export or
+unit manifest has to change. It is NOT in the tree; this paragraph is the
+recipe.
+
+**AND THE ZEROS WERE NEARLY BELIEVED WHEN THEY MEANT NOTHING.** The first
+attempt widened `cfg`s with a "nearest preceding attribute" heuristic, which
+matched the statics and missed both check BLOCKS -- the attributes there sit
+above an `unsafe {` with ordinary statements between. Everything reported 0,
+including `collections walked`, and 0 collections for a compile that allocates
+gigabytes is the only reason it was caught. A program allocating 200 000 maps
+then confirmed coverage at 31 collections before any zero was trusted.
+
+**A coverage field is not optional in a detector.** `STALE_ROOT[5]` -- how many
+collections the scan actually walked -- is what separated "nothing is wrong"
+from "nothing ran". `test/document.clj`'s stale row already asserts its own
+coverage before its zero, for exactly this reason; that instinct was right and
+this is the second time it has paid.
+
+**Next step.** `var-named` returning a list is now an ordinary guest-visible
+bug: find what `flint.rt/var-named "flint.selfhost/main"` resolves to in a
+gen0-style image and why it is not the function. `some?` being satisfied by a
+list also argues for `answer` checking callability rather than presence -- the
+message it produces today names the symptom three layers from the cause.
+
+### `var-named` is NOT the culprit, and the detector does not cover this
+
+`answer` now asks whether the resolved value is CALLABLE rather than merely
+present, and reports the kind it found when it is not:
+
+    (if (fn? f) ... {:message "this image has no callable `nm` -- its var holds a <kind>"})
+
+**It never fires.** So `flint.rt/var-named` hands back a genuine function for
+the called name, and the previous entry's reading -- "var-named returns a list"
+-- is wrong. The list is something else in that frame.
+
+**Narrowing what is left.** The message is `value is not a function (a list, 2
+args) in serve-calls`. Inside `serve-calls` the only var-resolved two-argument
+call is `port/send`; everything else there is one-argument or a builtin. So a
+global slot holding `flint.port/send` reads as a list at that moment.
+
+**And the same send works seconds later**, which is the part to keep in view:
+the `SendFailed` diagnostic is itself a `port/send`, and its message reached the
+host. One run, same var, two different values.
+
+**Why the stale detector's zeros do not contradict that.** It catches DANGLING
+pointers -- a root or a write pointing into the abandoned half. A global slot
+holding a valid list where a function belongs is not stale; it is the wrong
+VALUE, correctly formed. `STALE_ROOT` walks the roots looking for bad addresses,
+not for unexpected types, so 0 across 750 collections rules out a stale pointer
+and says nothing about a wild write of a live object. That distinction was not
+clear when the detector was unlocked and it is the reason those zeros read as
+more exonerating than they were.
+
+**Next instrument**, and it is small: `serve-calls` should report WHICH call
+failed, not just that one did. Wrapping the send alone -- rather than the send
+and `answer` together -- separates "the answer could not be built" from "the
+answer could not be sent", and the current message conflates them. A kind read
+off `flint.port/send`'s var immediately before the call would confirm or kill
+the narrowing above in one run.
+
+**The callability check stays.** It is a better question than `some?` asked in
+the same place, its message names the var and the kind rather than leaving
+`apply` to complain about an arity three layers away, and it costs 295 bytes of
+module (490 471 -> 490 766, budget 500 000). `test/system.clj` and
+`test/threads.clj` are green with it.
+
+### SEVEN configurations, seven behaviours: stop perturbing the runtime
+
+`serve-calls` now separates building the answer from sending it, so the message
+can finally say which failed. It did not get the chance: under the plain
+production build the failure is still a silent hang, and the ONE configuration
+that had reported `SendFailed` -- the `gcchecks` build -- now hangs too, because
+the split itself changed the module.
+
+That is the seventh configuration and the seventh distinct behaviour from one
+set of sources:
+
+    plain production            hang, "host pump made no progress"
+    diagnostics                 SUCCEEDS
+    #[track_caller]             3 boot spawns, deadlock report
+    static array fields         2 boot spawns, hang
+    flag read at boot entry     SUCCEEDS
+    gcchecks                    SendFailed: value is not a function (a list, 2 args)
+    gcchecks + answer/send split  hang again
+
+**So the method is wrong, not the effort.** Every instrument that touches the
+RUNTIME moves the bug, because what is being perturbed is exactly what the bug
+is sensitive to. Reading it by adding one more probe has been tried seven times
+and has produced seven readings, at least two of which were wrong when written
+down.
+
+**What to do instead: shrink the INPUT, not the runtime.** The spec is 576 KB of
+EDN naming ~60 namespaces, and it is DATA -- removing namespaces from it changes
+nothing about the module's layout, so the bug cannot dodge the way it has been
+dodging. Delta-debugging it to the smallest spec that still fails gives a
+reproducer small enough to read, and if it disappears as the spec shrinks then
+the threshold itself is the finding. Either outcome beats a seventh probe.
+
+`FLINT_DUMP_SPEC` already writes the spec out, and `host/flint-file.mjs` already
+takes it from a file, so the loop is: drop a namespace, rerun, keep or restore.
+No rebuild between iterations -- which is also why it will be fast.
+
+**Two improvements stay, both earned along the way.**
+
+`answer` asks `fn?` rather than `some?` and names the kind it found -- so a var
+that resolves to the wrong thing is reported against the NAME rather than left
+for `apply` to complain about an arity three layers away. `serve-calls` no
+longer reports "the answer could not be sent back" for a failure that happened
+while BUILDING the answer; those are different faults in different code and one
+`try` around both could not tell them apart. 408 bytes together
+(490 471 -> 490 879, budget 500 000), `system` and `threads` green.
+
+### The method worked: a minimal reproducer, 31 namespaces down to 8
+
+Shrinking the INPUT instead of the runtime, as the previous entry argued. It
+took one tick and produced what seven probes could not.
+
+**First, the signal was made cheap.** The hang costs a million pump iterations
+at the default guard; a HOST-SIDE copy of `guest.js` with the guard at 300 turns
+it into a **3.4 second** answer. Host-side is the whole point -- the module is
+untouched, so the bug cannot dodge the way it dodged every runtime probe.
+
+**Then three findings in order, each from one run.**
+
+* **It is not the output size.** A synthetic program of 200, 1 000 and 3 000
+  functions all compile fine. Size of what is being COMPILED is not it.
+* **It is not the entry.** Replacing `flint.selfhost/main` with
+  `(defn main [_] "hi")` while keeping the same sources still HANGS. So the
+  trigger is in ANALYSING the source set, not in compiling the program.
+* **And that makes the sources freely shrinkable**, because with a trivial
+  entry nothing requires them. Two greedy passes -- drop a namespace, keep the
+  drop if it still hangs; then drop each namespace together with everything
+  whose source mentions it -- reach a fixpoint:
+
+      31 namespaces, 576 KB   ->   8 namespaces, 187 KB
+
+      flint.aot  flint.regex  flint.nfa  flint.protocols
+      clojure.core  flint.wasm  clojure.string  app
+
+Every further removal breaks compilation rather than fixing the hang, so this
+is minimal for this shrink axis. `app` is three lines.
+
+**Kept for the next attempt** in the scratchpad: `min-spec.edn`, the `gen0.wasm`
+it fails against, and the runner. Keep the pair together, and if it stops
+reproducing, re-shrink rather than assume the bug is gone. (An earlier draft
+said the binary matters because the bug moves with the module's layout. That
+was never measured and is wrong: a gen0 rebuilt 723 bytes larger reproduces at
+the same threshold, to the element -- see `doc/goals/kin-port.md`.)
+
+**What it points at.** The surviving set is clojure.core's closure plus the
+regex/NFA machinery and `flint.aot`/`flint.wasm` -- and none of it is REACHED by
+a three-line entry, so all of it is shaken out of the result. The fault is
+therefore in reading and analysing those sources, on a path whose output is then
+discarded. That is a much smaller haystack than "the compiler compiles itself",
+and the next shrink axis is the SOURCE TEXT of the eight, which the same loop
+can chew on without a rebuild.
+
+### A nil message is not a goodbye
+
+`flint.port/receive` answers nil for three different things. The port is closed
+and drained; or the peer sent a nil; or, on a bridge, the decode produced
+nothing --
+
+    (let [r (flint.rt/port-receive-reader p)]
+      (when (some? r) (wire/read-from r)))
+
+-- and only the first is an end of stream. `serve-calls` used to read all three
+as the first and leave its loop, which is worse than it sounds: the port stays
+BOUND with no server on it, so that call and every later call on it is lost,
+and the host finds out only when its pump guard gives up a million iterations
+later. The sandbox is fine, the control plane is fine, one door is quietly
+walled up.
+
+It needs no exotic state to see. Against any module at all:
+
+    const c = inst.caller();
+    c.call('app/main', arg);        // answers
+    inst.deliver(c.port, null);     // a message, not a close
+    c.call('app/main', arg);        // never answered -- the server is gone
+
+So the loop ASKS rather than believes: nil ends it only when `port/closed?`
+says nothing further can arrive -- closed, half-closed or orphaned -- and
+anything else means this was a message it could not serve, so serving goes on.
+It cannot spin, because the nil consumed a message and the next `receive` parks
+like any other; and `unbind` still ends the thread, by closing the port, which
+is what `closed?` then reports.
+
+`test/system.cljc` carries the row, over a local channel: send nil, then call,
+and require the answer. It was checked in the only way such a guard can be --
+inverted on purpose, where it fails with "the program did not run: the host
+pump made no progress", and restored, where it passes. 752 bytes a module,
+which `flint.system` shipping everywhere makes a real number and this makes a
+fair trade.
+
+This is NOT the cause of the selfhost hang. That thread is finished by the
+runtime while 25 frames deep, not by a receive; see `doc/goals/kin-port.md`.
+The two were found together and are different bugs.
+
+## the-shadow-stack-is-not-a-default
+
+**The shadow stack is sized and placed on purpose**
+
+**Ratified:** ☐ not signed off
+
+**Status: shipped 2026-09-18 — `src/flint/link.cljc` links every module with
+`-z stack-size=1048576 --stack-first`, and it is the only place a module is
+linked.** Verified by moving the dial rather than by argument: at the old
+default `test/selfhost.clj` hangs and a 178-element literal breaks the
+compiler; with the flag the fixpoint passes, a 3 200-element literal compiles,
+and 4 000 traps cleanly instead of corrupting.
+
+`wasm-ld` gives a module 64 KiB of shadow stack and puts it above the static
+data. Every module flint links took that default, and it is wrong twice.
+
+**Too small.** The interpreter recurses on the Rust side in proportion to the
+guest structure it walks -- measured at 320 bytes a literal element -- so
+64 KiB ran out at a **178-element vector literal**. A 178-element literal is a
+lookup table, not an abuse.
+
+**Placed above the data.** An overflow then grows down into the statics and
+rewrites them, and the program keeps running with its own globals corrupted.
+That is how this presented, and none of it said "stack": a compile stopping
+mid-analysis ten million steps short; a serving thread marked done while 25
+frames deep; a second control-plane thread booting because `system_booted` had
+been overwritten; `test/selfhost.clj` failing with "the host pump made no
+progress". Weeks of symptoms, one cause, and the cause was in the link line.
+
+So the link is explicit now:
+
+    -z stack-size=1048576 --stack-first
+
+`--stack-first` puts the stack at the bottom, so an overflow runs off address
+zero and TRAPS -- `memory access out of bounds` at the instruction that did it,
+rather than silent corruption discovered later by its consequences. The proof
+it was always overflowing: at 64 KiB WITH `--stack-first`, a 177-element
+literal traps too. It had been "passing" by scribbling something it happened
+not to need.
+
+The cost is initial memory, not file size -- 5 pages to 20, **+960 KiB a
+module**, the `.wasm` unchanged. The number is a dial and the trade is
+measured:
+
+    | stack   | literal elements | initial memory |
+    |---------|------------------|----------------|
+    | 64 KiB  | 178              | 320 KiB        |
+    | 256 KiB | ~800             | +192 KiB       |
+    | 1 MiB   | ~3 400           | +960 KiB       |
+
+1 MiB is chosen because the ceiling should be a size no one reaches by writing
+ordinary code. 128 KiB is the floor -- enough for the compiler's own sources --
+and it still fails a 370-element literal, which is why it is not the answer.
+
+**There is a second stack, and it is not ours.** The recursion runs on the
+EMBEDDER's native stack too, so under a stock node the ceiling is about 1 100
+entries -- some 400 KiB of shadow stack -- and a `RangeError` naming wasm
+frames, not our trap. A stack past ~512 KiB therefore buys nothing on stock
+node, which is the honest argument for dialling this down if the memory ever
+matters. It stays at 1 MiB because embedders differ and the number should not
+be the thing that fails. Both limits now fail honestly, which is the part that
+changed.
+
+**This does not make the recursion bounded.** A large enough structure still
+exhausts any fixed stack; what changed is that it now stops honestly instead of
+corrupting the runtime.
+
+What recurses is named, and `--stack-first` is what made it readable: a trap
+carries a backtrace where silent corruption carried nothing. Forcing a lazy seq
+re-enters the VM --
+
+    flint_b_seq -> seqwalk::seq -> seqwalk::force
+      -> vm::call_value -> vm::run -> vm::run_inner -> flint_b_seq -> ...
+
+-- a six-frame unit per element, because `force` calls the thunk through a
+NESTED interpreter loop rather than driving it on the frame stack it is already
+standing on. Bounding it means making forcing iterative, and that is separate
+work; `doc/goals/kin-port.md` has the trace and the two shapes a fix could
+take.

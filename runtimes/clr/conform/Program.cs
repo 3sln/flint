@@ -18,8 +18,12 @@ public static class Program {
         if (args.Length >= 2 && args[0] == "--rt-aot") return RtAot(args[1]);
         if (args.Length >= 2 && args[0] == "--rt-flags") return RtFlags(args[1]);
         if (args.Length >= 2 && args[0] == "--rt-hostports") return RtHostPorts(args[1]);
+        if (args.Length >= 2 && args[0] == "--rt-hostreq") return RtHostReq(args[1]);
         if (args.Length >= 2 && args[0] == "--rt-gas") return RtGas(args[1]);
-        if (args.Length >= 2 && args[0] == "--rt-steps") return RtSteps(args[1]);
+        // NAMED BY THE CALLER, as the jvm and the wasm host name it
+        // (`DECISIONS.md#structured-ports`). Deriving the name from the path is
+        // one rename away from measuring nothing and still printing a number.
+        if (args.Length >= 3 && args[0] == "--rt-steps") return RtSteps(args[1], args[2]);
         if (args.Length >= 2 && args[0] == "--rt-image")
             return RtImage(args[1], args.Length > 2 ? args[2] : null);
         // No bare-argument form any more. It ran an image on the BOXED port,
@@ -177,6 +181,14 @@ public static class Program {
                        Flint.Rt.Snap.ImportLive(e, other));
                 SnapOk("and reads back what that runtime had",
                        SnapRender(e, e.roots.shared.Globals[0]) == before);
+                // THE GAS STATE CROSSES TOO -- see `RtSnapshot.java`, which
+                // carries the same check and the same reasoning. `checkpoint`
+                // is derived, native's "never reached" sentinel arrives here as
+                // `-1`, and `steps >= -1` is true for every `steps`
+                // (`DECISIONS.md#resource-limits`).
+                bool implied = e.gasLimit != 0 || e.sliceEnd != 0;
+                SnapOk("and its gas state matches the limits it came with, not the writer's sentinel",
+                       (e.checkpoint != long.MaxValue) == implied);
             }
         }
         SnapOk("at a DIFFERENT address, which is what relocating means",
@@ -235,6 +247,10 @@ public static class Program {
         if (img == null) return new AotRun("FAIL not a flint image", 0, 0, 0);
         int n = aot ? rt.CompileArities(chunkAll) : 0;
         Flint.Rt.Rt.aotEntries = 0;
+        // THESE ARE THE INITIALISERS, so say so: `EnsureStarted` is the
+        // runtime's own one-shot runner, and a control plane spawned later
+        // would otherwise run them a second time.
+        rt.started = true;
         foreach (int fn in img.init) {
             rt.Call(rt.MakeClosure(fn, System.Array.Empty<long>()), System.Array.Empty<long>());
             if (!Flint.Rt.Val.IsNil(rt.thrown))
@@ -457,10 +473,17 @@ public static class Program {
 
     /// `main`, then the scheduler -- what a host's `run` does.
     private static long RunAll(Flint.Rt.Rt rt, Flint.Rt.Img.Loaded img) {
-        foreach (int fn in img.init) {
-            rt.Call(rt.MakeClosure(fn, System.Array.Empty<long>()), System.Array.Empty<long>());
-            if (!Flint.Rt.Val.IsNil(rt.thrown) && !rt.Parked()) return Flint.Rt.Val.Nil;
-        }
+        // THE RUNTIME'S OWN ONE-SHOT RUNNER, not a loop of our own.
+        //
+        // Hand-rolling it ran the initialisers UNDER A LIVE SLICE -- a
+        // scheduler exists before this is entered whenever the host installed
+        // a port first, and a slice is armed the moment a scheduler exists.
+        // An initialiser then yields, the yield is discarded, and the entry's
+        // value is never recorded: a program whose entry is
+        // `(defn main [_] "CONSTANT")` answers nothing at all.
+        // `EnsureStarted` disarms the slice for exactly that reason
+        // (`DECISIONS.md#the-codec-is-guest-code`).
+        if (!rt.EnsureStarted()) return Flint.Rt.Val.Nil;
         // One opaque value PROJECTED IN as the entry's second argument, under an
         // id this driver chose. That is the whole of lending a capability: no
         // grant table, no declaration, and nothing in the runtime that knows
@@ -513,6 +536,154 @@ public static class Program {
         outb[4] = (byte) (u.Length >> 24);
         System.Array.Copy(u, 0, outb, 5, u.Length);
         return outb;
+    }
+
+    // --- calling over a bridge, the way a host does -------------------------
+    //
+    // A LINE-FOR-LINE MIRROR of `runtimes/jvm/test/HostCall.java`, and it exists
+    // for the reason that file gives: `RunProgram` on `img.entry` is the model
+    // from before a sandbox became a thing you CALL
+    // (`DECISIONS.md#bridges-are-the-only-door`), and a measurement whose sides
+    // enter the program by different doors is not measuring the program.
+    //
+    // The jvm was moved to this door and this runtime was not, which was
+    // invisible for as long as the gas row compared DIFFERENCES -- the door
+    // costs the same for both workloads, so it cancelled. Measured: 3 185 steps
+    // of door, identical in `small` and `big`. It stopped being invisible the
+    // moment the ports stopped agreeing on what they bill.
+    private const int CALLS = 2;
+
+    private sealed class W {
+        private readonly System.IO.MemoryStream b = new System.IO.MemoryStream();
+        public W Tag(int x) { b.WriteByte((byte) x); return this; }
+        public W U32(long v) {
+            for (int i = 0; i < 4; i++) b.WriteByte((byte) ((v >> (8 * i)) & 0xff));
+            return this;
+        }
+        public W I64(long v) {
+            for (int i = 0; i < 8; i++) b.WriteByte((byte) ((v >> (8 * i)) & 0xff));
+            return this;
+        }
+        public W Text(string s) {
+            byte[] u = System.Text.Encoding.UTF8.GetBytes(s);
+            U32(u.Length); b.Write(u, 0, u.Length); return this;
+        }
+        /// An unqualified keyword: absent namespace, then the name.
+        public W Kw(string n) { return Tag(Flint.Rt.Codec.K_KEYWORD).U32(0xffffffffL).Text(n); }
+        public W Str(string s) { return Tag(Flint.Rt.Codec.K_STRING).Text(s); }
+        public W Num(long n) { return Tag(Flint.Rt.Codec.K_INT).I64(n); }
+        public W Port(int id) { return Tag(Flint.Rt.Codec.K_PORT).U32(id); }
+        public W Map(int n) { return Tag(Flint.Rt.Codec.K_MAP).U32(n); }
+        public W Vec(int n) { return Tag(Flint.Rt.Codec.K_VECTOR).U32(n); }
+        public byte[] Done() { return b.ToArray(); }
+    }
+
+    /// Give this sandbox its door and bind a port to call on.
+    private static void HostCaller(Flint.Rt.Rt rt, int port) {
+        Flint.Rt.Conc.InstallSystemPort(rt, SYSTEM, Flint.Rt.Str.Of(rt, "system"));
+        Flint.Rt.Conc.HostDeliver(rt, SYSTEM, new W().Map(2)
+            .Kw("op").Kw("bind")
+            .Kw("port").Port(port)
+            .Done());
+    }
+
+    /// Bind the default caller and run `fn` on it. Answers the status `Drive`
+    /// last reported.
+    private static long HostCallRun(Flint.Rt.Rt rt, string fn, string[] args) {
+        HostCaller(rt, CALLS);
+        // NOT DRIVEN BETWEEN THE TWO. A port queues, so the call waits behind
+        // the bind for the thread the bind creates.
+        var w = new W().Map(4)
+            .Kw("tx").Num(1)
+            .Kw("op").Kw("call")
+            .Kw("fn").Str(fn)
+            .Kw("args").Vec(args.Length);
+        foreach (var a in args) w.Str(a);
+        Flint.Rt.Conc.HostDeliver(rt, CALLS, w.Done());
+
+        // PUMPED UNTIL THE ANSWER, not until the sandbox is idle: the control
+        // plane is parked on the system port, so "needs the host" is where it
+        // RESTS.
+        long code = Flint.Rt.Conc.Drive(rt);
+        for (int guard = 0; guard < 1000; guard++) {
+            if (HostAnswered(rt)) break;
+            if (code != 2) break;
+            code = Flint.Rt.Conc.Drive(rt);
+        }
+        return code;
+    }
+
+    /// Has an answer come back on the call port? The records are five
+    /// little-endian `u32`s -- `kind, a, b, off, len` -- which is the layout
+    /// every host reads (`DECISIONS.md#host-abi`). Kind 2 is a message and `a`
+    /// is the port it arrived on.
+    private static bool HostAnswered(Flint.Rt.Rt rt) {
+        var evs = Flint.Rt.Conc.DrainEvents(rt);
+        for (int i = 0; i < evs.Count; i++) {
+            if (HostWord(evs.Bytes, i * 20) == 2 && HostWord(evs.Bytes, i * 20 + 4) == CALLS) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static long HostWord(byte[] b, int at) {
+        long v = 0;
+        for (int i = 3; i >= 0; i--) v = (v << 8) | (b[at + i] & 0xffL);
+        return v;
+    }
+
+    /// The REQUEST/RESPONSE half of the host ABI, on the CLR.
+    ///
+    /// The same script as `units-src/flint-conc/src/bin/hostreq.rs` and
+    /// `RtHostReq.java`, against the same image, so `bin/conform-hosts` can
+    /// compare the three transcripts. It prints no tokens: a request's token is
+    /// an opaque handle the host echoes and never reads, so three
+    /// implementations agreeing on its numeric value is not the contract.
+    private static int RtHostReq(string path) {
+        var rt = new Flint.Rt.Rt(4L * 1024 * 1024, 512L * 1024 * 1024);
+        var img = Flint.Rt.Img.Load(rt, File.ReadAllBytes(path));
+        if (img == null) { Console.WriteLine("  FAIL not a flint image"); return 1; }
+        Flint.Rt.Conc.InstallSystemPort(rt, SYSTEM, Flint.Rt.Str.Of(rt, "system"));
+
+        long v = RunAll(rt, img);
+        int seen = 0;
+        for (int round = 0; round < 12 && Status(rt) == 2; round++) {
+            var evs = new System.Collections.Generic.List<Ev>(Drain(rt));
+            bool acted = false;
+            foreach (var e in evs) {
+                if (e.Kind != Flint.Rt.Conc.EV_REQUEST) continue;
+                seen++;
+                string what = Render(e.Payload);
+                Console.WriteLine("  ok   it asked: " + what);
+                // `nope` is REFUSED, which is a `SecurityException` on the
+                // guest side; everything else is answered with a string.
+                if (what.Contains("nope")) {
+                    Console.WriteLine("  ok   refused: "
+                        + Low(Flint.Rt.Conc.HostContinue(rt, e.A, false)));
+                } else {
+                    Console.WriteLine("  ok   answered: "
+                        + Low(Flint.Rt.Conc.HostAnswer(rt, e.A,
+                              Flint.Rt.Codec.Encode(rt, Flint.Rt.Str.Of(rt, "tick")))));
+                }
+                acted = true;
+            }
+            if (!acted && evs.Count == 0) break;
+            v = Flint.Rt.Conc.Resume(rt);
+        }
+        Console.WriteLine("  ok   requests seen: " + seen);
+        // AND NOW LET IT FINISH -- a sandbox whose control plane is parked is
+        // never done, so the entry's value cannot be read while the host still
+        // holds the door.
+        Flint.Rt.Conc.HostClosePort(rt, SYSTEM);
+        for (int i = 0; i < 8 && Status(rt) == 2; i++) {
+            Drain(rt);
+            v = Flint.Rt.Conc.Resume(rt);
+        }
+        Console.WriteLine("  ok   the program answered: "
+            + (Flint.Rt.Val.IsNil(v) ? "" : Rendered(rt, v)));
+        Console.WriteLine("  ok   status " + Status(rt));
+        return 0;
     }
 
     private static int RtHostPorts(string path) {
@@ -579,7 +750,10 @@ public static class Program {
             tail.AddRange(Drain(rt));
             v = Flint.Rt.Conc.Resume(rt);
         }
-        Console.WriteLine("  ok   the program answered: " + Rendered(rt, v));
+        // AN ABSENT ANSWER PRINTS AS NOTHING, matching native -- see the note
+        // in `RtHostPorts.java`.
+        Console.WriteLine("  ok   the program answered: "
+            + (Flint.Rt.Val.IsNil(v) ? "" : Rendered(rt, v)));
         Console.WriteLine("  ok   status " + Status(rt));
         Console.WriteLine("  ok   and was told the port closed: " + Show(tail));
 
@@ -607,14 +781,28 @@ public static class Program {
     /// The step count for an image, and nothing else -- the CLR half of
     /// `RtSteps`. Two workloads are compared by their DIFFERENCE, so start-up
     /// cancels and only the program's work is left.
-    private static int RtSteps(string path) {
+    ///
+    /// CALLED OVER A BRIDGE, exactly as native and the jvm are. This ran
+    /// `img.entry` through `RunProgram` until 2026-09-18 -- the model from
+    /// before a sandbox became a thing you CALL
+    /// (`DECISIONS.md#bridges-are-the-only-door`) -- and the jvm had already
+    /// been moved. That divergence survived because this row compares
+    /// DIFFERENCES: the door costs the same in `small` and `big`, so it
+    /// cancelled, and 3 185 steps of it went unnoticed.
+    ///
+    /// It also means the INITIALISERS are not run here by hand. They were, with
+    /// `rt.started = true` to stop the control plane running them twice, which
+    /// is the runtime's own job.
+    private static int RtSteps(string path, string fn) {
         var rt = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
         var img = Flint.Rt.Img.Load(rt, File.ReadAllBytes(path));
         if (img == null) { Console.WriteLine("-1"); return 0; }
+        // A LIMIT, not none: an unbudgeted sandbox deliberately keeps no
+        // counter.
         rt.SetGasLimit(0x7ffffff0L);
-        foreach (int fn in img.init) rt.Call(rt.MakeClosure(fn, new long[0]), new long[0]);
-        rt.RunProgram(rt.MakeClosure(img.entry, new long[0]), new long[]{ Flint.Rt.Val.Nil });
-        Console.WriteLine(rt.steps);
+        HostCallRun(rt, fn, new string[]{ "" });
+        // STEPS AND PREEMPTIONS -- see `RtSteps.java`.
+        Console.WriteLine(rt.steps + " " + rt.restores);
         return 0;
     }
 
@@ -630,6 +818,7 @@ public static class Program {
         // GENEROUS, not absent: a limit of 0 means "not counting", and an
         // unbudgeted sandbox deliberately maintains no counter.
         rt.SetGasLimit(0x7ffffff0L);
+        rt.started = true;
         foreach (int fn in img.init) rt.Call(rt.MakeClosure(fn, new long[0]), new long[0]);
         rt.RunProgram(rt.MakeClosure(img.entry, new long[0]), new long[]{ Flint.Rt.Val.Nil });
         bool threw = !Flint.Rt.Val.IsNil(rt.thrown);
@@ -641,6 +830,7 @@ public static class Program {
 
         var rt2 = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
         var img2 = Flint.Rt.Img.Load(rt2, File.ReadAllBytes(path));
+        rt2.started = true;
         foreach (int fn in img2.init) rt2.Call(rt2.MakeClosure(fn, new long[0]), new long[0]);
         long limit = rt2.steps + spent / 4;
         rt2.SetGasLimit(limit);
@@ -675,6 +865,7 @@ public static class Program {
         // `thrown` and unwinds to the top, where `Call` returns nil -- so
         // ignoring it means a program whose top-level `assert` FAILED runs on
         // to `main` and reports whatever `main` says.
+        rt.started = true;
         foreach (int fn in img.init) {
             rt.Call(rt.MakeClosure(fn, Array.Empty<long>()), Array.Empty<long>());
             if (!Flint.Rt.Val.IsNil(rt.thrown)) { Console.WriteLine("  FAIL " + Why(rt)); return 1; }
@@ -859,6 +1050,7 @@ public static class Program {
 
     /// Run until the step budget trips, leaving the runtime mid-program.
     static bool RunUntilPaused(Flint.Rt.Rt rt, Flint.Rt.Img.Loaded img, long budget) {
+        rt.started = true;
         foreach (int fn in img.init)
             rt.Call(rt.MakeClosure(fn, Array.Empty<long>()), Array.Empty<long>());
         long f = rt.MakeClosure(img.entry, Array.Empty<long>());
@@ -875,6 +1067,7 @@ public static class Program {
     // What the program says when nothing interrupts it.
     var plain = new Flint.Rt.Rt(4 * 1024 * 1024, 128L * 1024 * 1024);
     Flint.Rt.Img.Loaded pimg = Flint.Rt.Img.Load(plain, image);
+    plain.started = true;
     foreach (int fn in pimg.init) plain.Call(plain.MakeClosure(fn, new long[0]), new long[0]);
     string straight = SShow(plain, plain.Call(plain.MakeClosure(pimg.entry, new long[0]),
                                              new long[]{ Flint.Rt.Val.Nil }));
@@ -952,6 +1145,7 @@ public static class Program {
             if (rt.natives[i] == null) { missing++; if (missing <= 60) names.Append(" ").Append(img.nativeNames[i]); }
         }
         Console.WriteLine("  builtins it wants that this runtime lacks: " + missing + names);
+        rt.started = true;
         foreach (int fn in img.init)
             rt.Call(rt.MakeClosure(fn, Array.Empty<long>()), Array.Empty<long>());
         Console.WriteLine("  ok   " + img.init.Length + " initialisers ran");

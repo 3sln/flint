@@ -1,7 +1,12 @@
 ;; End-to-end: hand-assemble an image, link only the units and builtins it
-;; reaches, splice it in, and run the result under node.
+;; reaches, splice it in, and load the result under node.
 ;;
 ;; This is the test that "only reachable code ships" has to survive.
+;;
+;; LOADED, not run. See `loads-js` below: a hand-assembled image carries no
+;; control plane, and calling is a message to one now. Nothing about the shake
+;; needs the module to be called -- what it needs is for the module to be real,
+;; which instantiating proves.
 (require '[flint.image :as img] '[flint.link :as link] '[flint.wasm :as w]
          '[clojure.java.io :as io] '[clojure.string :as str])
 
@@ -14,13 +19,17 @@
 (defn int16 [n] [(op :int) (img/u16 n)])
 
 (defn expose!
-  "Bind `f` to the var `sym`, so a host can CALL it by name.
+  "Bind `f` to the var `sym`.
 
   Nothing is called automatically (`DECISIONS.md#structured-ports` step 5): a module has no
   entry point, so a function nobody can name is a function nobody can run. These
   images are assembled by hand and had only `set-entry!`, which is why they were
   the last thing still relying on `main`. One initialiser per image binds the
-  var, which is exactly what a compiled namespace does."
+  var, which is exactly what a compiled namespace does.
+
+  The var is what makes the shake's job non-trivial -- it is the root the
+  reachability walk starts from -- so it stays even though nothing here calls
+  through it any more."
   [b sym f]
   (let [v (img/var-slot b sym)
         init (img/add-fn b {:name (symbol (str sym "-init"))
@@ -79,13 +88,36 @@
                    :emit-image (fn [slots] (img/emit b slots))
                    :out out})))
 
-(defn run-node [path fname & args]
+(def loads-js
+  "Load a linked module under node and instantiate it, calling NOTHING.
+
+  WHY NOT `run`. These images are assembled by hand, so they contain no
+  `flint.system` -- and a call is a message to a control plane now
+  (`DECISIONS.md#bridges-are-the-only-door`), not a function the host invokes.
+  The synchronous `flint_call` that used to serve one is gone on purpose
+  (`DECISIONS.md#calls-are-ports`), so an image with no control plane is an
+  image nothing can call, which is a coherent thing for a linker fixture to be.
+
+  That a COMPILED module runs by name under node is covered where it belongs,
+  by every test that compiles source -- `shake.clj`, `bytes.clj`, `inline.clj`.
+  What is left here is what only this file has: a module linked out of
+  hand-assembled bytecode instantiates, exports the ABI, and carries the units
+  the shake decided it needed."
+  "import { load } from './host/flint.mjs';
+   import { instantiate } from './sdks/esm/src/guest.js';
+   const { module } = await load(process.argv[1]);
+   const i = instantiate(module, {});
+   const want = ['memory', 'flint_resume', 'flint_install_port', 'flint_in_alloc'];
+   const missing = want.filter((n) => !i.exports[n]);
+   console.log(missing.length ? ('missing ' + missing.join(' ')) : 'loads');")
+
+(defn loads-node [path]
   (let [p (.exec (Runtime/getRuntime)
-                 (into-array String (concat ["node" "host/flint.mjs" path fname] args)))
+                 (into-array String ["node" "--input-type=module" "-e" loads-js path]))
         out (slurp (.getInputStream p))
         err (slurp (.getErrorStream p))]
     (.waitFor p)
-    {:out (str/trim out) :err err :code (.exitValue p)}))
+    (if (zero? (.exitValue p)) (str/trim out) (str "threw: " (str/trim err)))))
 
 (defn check [label actual expected]
   (if (= actual expected)
@@ -93,20 +125,20 @@
     (do (println "  FAIL" label "expected" (pr-str expected) "got" (pr-str actual))
         (System/exit 1))))
 
-(println "e2e: hand-assembled images, linked and run under node")
+(println "e2e: hand-assembled images, linked and loaded under node")
 (.mkdirs (io/file "out"))
 
 (let [r (build! :hello "out/hello.wasm")]
   (println "  hello.wasm:" (:bytes r) "bytes," (:builtins r) "builtins," (:image-bytes r) "image bytes")
-  (check "hello" (:out (run-node "out/hello.wasm" "e2e/hello")) "hello from flint"))
+  (check "hello" (loads-node "out/hello.wasm") "loads"))
 
 (let [r (build! :arith "out/arith.wasm")]
   (println "  arith.wasm:" (:bytes r) "bytes," (:builtins r) "builtins")
-  (check "arith" (:out (run-node "out/arith.wasm" "e2e/arith")) "5"))
+  (check "arith" (loads-node "out/arith.wasm") "loads"))
 
 (let [r (build! :echo "out/echo.wasm")]
   (println "  echo.wasm:" (:bytes r) "bytes," (:builtins r) "builtins")
-  (check "echo" (:out (run-node "out/echo.wasm" "e2e/echo" "first-arg" "second")) "first-arg"))
+  (check "echo" (loads-node "out/echo.wasm") "loads"))
 
 (println "e2e: ok")
 

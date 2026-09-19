@@ -25,7 +25,8 @@ import { load, instantiate } from '../host/flint.mjs';
 // Built `:fn construe.bench.main/main`; a call names it (`structured-ports` step 5).
 const FN = 'construe.bench.main/main';
 
-const NB = 20, NCOUNT = 28, C = NB * 4, OPS_AT = C + NCOUNT, NAT_AT = OPS_AT + 256;
+const NB = 20, NCOUNT = 43, NOPS = 256, NNAT = 512;
+const C = NB * 4, OPS_AT = C + NCOUNT, NAT_AT = OPS_AT + NOPS;
 
 
 const OPNAME = ['NOP','CONST','NIL','TRUE','FALSE','INT','LOCAL','LOCAL_W','SET_LOCAL',
@@ -77,10 +78,10 @@ const census = async (args) => {
   const e = inst.exports;
   const g = (k) => Number(e.stat_region(k));
   const ops = [];
-  for (let i = 0; i < 256; i++) if (g(OPS_AT + i)) ops.push([OPNAME[i] ?? `0x${i.toString(16)}`, g(OPS_AT + i)]);
+  for (let i = 0; i < NOPS; i++) if (g(OPS_AT + i)) ops.push([OPNAME[i] ?? `0x${i.toString(16)}`, g(OPS_AT + i)]);
   ops.sort((a, b) => b[1] - a[1]);
   const nats = [];
-  for (let i = 0; i < 512; i++) if (g(NAT_AT + i)) nats.push({ name: nativeName(e, i), n: g(NAT_AT + i) });
+  for (let i = 0; i < NNAT; i++) if (g(NAT_AT + i)) nats.push({ name: nativeName(e, i), n: g(NAT_AT + i) });
   nats.sort((a, b) => b.n - a.n);
   return { total: g(C), calls: g(C + 2) + g(C + 3), natives: g(C + 4),
            // Counted as an OPCODE: once a predicate is specialised it is no

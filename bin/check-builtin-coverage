@@ -95,8 +95,13 @@ for _n in ["flint/sin", "flint/cos", "flint/tan", "flint/asin", "flint/acos",
 # all three runtimes already agreed. Two probes in a row finding nothing is
 # what a list of unknowns looks like when it is being worked honestly.
 #
-# `flint/request` stays: it needs a HOST that answers requests, so covering it
-# means teaching three separate drivers, not writing a conformance program.
+# `flint/request` NO LONGER STAYS. It was accounted for on the grounds that
+# covering it meant teaching three separate drivers rather than writing a
+# conformance program -- and then `runtimes/conform-host` was added to the glob
+# below, which is exactly where the drivers that answer requests live.
+# `hostreq.cljc` calls `host/request` and has been covering it ever since; the
+# exemption simply outlived its reason, and this check caught that, which is
+# the job it exists for.
 # `flint/bindings` and `flint/set-bindings` HAVE NO FLINT-LEVEL NAME. They live
 # in the concurrency unit and carry a green thread's dynamic bindings across a
 # spawn, and `src/flint/hostfns.cljc` has no entry for either -- so no program
@@ -113,13 +118,12 @@ for _n in ["flint/sin", "flint/cos", "flint/tan", "flint/asin", "flint/acos",
 #
 # `flint/gc-stats` is a DIAGNOSTIC: it reports collector counters, so its
 # answers are numbers a conformance run cannot compare across runtimes with
-# different heaps. `flint/request` needs a HOST that answers requests, so
-# covering it means teaching three separate drivers rather than writing a
-# conformance program. Both are named jobs, not oversights.
+# different heaps. That is a named job, not an oversight -- and it is now the
+# ONLY one, `flint/request` having been covered by `hostreq.cljc` since
+# `runtimes/conform-host` joined the glob.
 for _n in ["flint/bindings", "flint/set-bindings"]:
     ACCOUNTED[_n] = "no flint-level name exists; unreachable from a program"
-for _n in ["flint/gc-stats", "flint/request"]:
-    ACCOUNTED[_n] = "UNWATCHED -- no conformance program reaches it"
+ACCOUNTED["flint/gc-stats"] = "UNWATCHED -- no conformance program reaches it"
 
 CONST_KINDS_EMPTY = (0, 1, 2)
 CONST_KINDS_8 = (3, 4)

@@ -1,0 +1,13 @@
+;; The host-ABI conformance fixtures, as a WORKSPACE
+;; (`DECISIONS.md#workspace-capabilities`).
+;;
+;; It exists for ONE grant: `hostreq.cljc` calls `flint.host/request`, which is
+;; guarded `:host`, and a guard is satisfied by what a workspace HOLDS rather
+;; than by what it asserts -- the analyzer reads `:grants` and nothing else, so
+;; a fixture cannot mint the authority by claiming it.
+;;
+;; The name matters as much as the grant. Without this file a workspace's
+;; identity falls back to the source root's PATH, which is machine-specific and
+;; reads badly in a diagnostic, as `lib/deps.edn` says for the same reason.
+{:flint/workspace flint/conform-host
+ :flint/capabilities-grant [:host]}

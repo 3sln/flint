@@ -1,0 +1,457 @@
+--rust-head
+// A TOY SCHEDULER, A PORT TABLE, AND AN ALLOCATION COUNTER.
+//
+// One object table serves for both roles: a scheduler row, a port row and a
+// vector are all rows of `Value`, so `slot` and `vec-nth` index the same
+// thing. A `Value` is therefore either an index into that table or a fixnum,
+// and nothing here has to tell them apart -- which keeps the model small
+// enough to read, and a driver is only evidence while it stays readable.
+//
+// `allocs` IS THE POINT of half this file. What is being asserted is that
+// NOTHING is allocated when nothing was collected, and an allocation counter
+// is the only instrument that can see it: a list rebuilt from survivors and a
+// list left untouched hold the same ids in the same order, so every answer
+// derived from the lists themselves is equal either way. Case 1 below would
+// pass against the wasteful shape it replaced if `allocs` were not read.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_0000_0000_0000);
+// `SC_*`, `PT_*`, `P_*` and `EV_*` are spelled `crate::conc::…` by the
+// vocabulary, so the mock grows a module of that name.
+mod conc {
+    pub const SC_BRIDGES: u32 = 0;
+    pub const SC_PORTS: u32 = 1;
+    pub const PT_STATE: u32 = 0;
+    pub const P_CLOSED: i64 = 2;
+    pub const P_ORPHANED: i64 = 5;
+    pub const EV_CLOSED: i64 = 3;
+    pub const EV_RELEASE: i64 = 5;
+}
+impl Value {
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn is_nil(self) -> bool { self == NIL }
+}
+struct Rt {
+    objs: Vec<Vec<Value>>,
+    roots: Vec<Value>,
+    ports: Vec<(i64, Value)>,
+    pairs: Vec<(i64, i64)>,
+    events: Vec<(i64, i64)>,
+    failed: Vec<i64>,
+    woken: Vec<i64>,
+    allocs: u32,
+    sched_v: Value,
+    // `empty_vec` is `&self` in the real runtime -- the empty vector is a
+    // SHARED SINGLETON and costs no allocation -- so the model holds one and
+    // hands it back. Getting this wrong would have inflated every expected
+    // count by one and hidden the thing being counted.
+    empty: Value,
+}
+// A COLLECTION, from in here, is an id that is still in a list and no longer
+// has a row: `dead` ids are simply never registered. That is exactly what the
+// code under test can observe -- it asks `port-by-id` and gets nil -- so the
+// fixture does not have to model a heap to model the event.
+fn mk(bridges: &[i64], ports: &[i64], dead: &[i64], peer_state: i64) -> Rt {
+    let mut rt = Rt { objs: vec![], roots: vec![], ports: vec![], pairs: vec![],
+                      events: vec![], failed: vec![], woken: vec![], allocs: 0,
+                      sched_v: NIL, empty: NIL };
+    rt.empty = rt.obj(vec![]);
+    let bs: Vec<Value> = bridges.iter().map(|i| Value::fixnum(*i)).collect();
+    let ps: Vec<Value> = ports.iter().map(|i| Value::fixnum(*i)).collect();
+    let bv = rt.obj(bs);
+    let pv = rt.obj(ps);
+    rt.sched_v = rt.obj(vec![bv, pv]);
+    for id in bridges.iter().chain(ports.iter()) {
+        if dead.contains(id) { continue; }
+        let st = if ports.contains(id) { peer_state } else { 1 };
+        let row = rt.obj(vec![Value::fixnum(st), Value::fixnum(*id)]);
+        rt.ports.push((*id, row));
+    }
+    // Set-up allocations are not the subject. Zeroed here so the counter reads
+    // only what `reap-all` did.
+    rt.allocs = 0;
+    rt
+}
+impl Rt {
+    fn obj(&mut self, slots: Vec<Value>) -> Value {
+        self.objs.push(slots);
+        Value((self.objs.len() - 1) as u64)
+    }
+    fn slot(&self, v: Value, i: u32) -> Value { self.objs[v.0 as usize][i as usize] }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.objs[v.0 as usize][i as usize] = x; }
+    fn vec_count(&self, v: Value) -> u32 { self.objs[v.0 as usize].len() as u32 }
+    fn vec_nth(&self, v: Value, i: u32, d: Value) -> Value {
+        *self.objs[v.0 as usize].get(i as usize).unwrap_or(&d)
+    }
+    fn vec_conj(&mut self, v: Value, x: Value) -> Value {
+        self.allocs += 1;
+        let mut next = self.objs[v.0 as usize].clone();
+        next.push(x);
+        self.obj(next)
+    }
+    fn empty_vec(&self) -> Value { self.empty }
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn pop_to(&mut self, i: usize) { self.roots.truncate(i); }
+    fn sched(&self) -> Value { self.sched_v }
+    fn port_by_id(&mut self, id: i64) -> Value {
+        for (k, v) in &self.ports { if *k == id { return *v; } }
+        NIL
+    }
+    fn push_event(&mut self, kind: i64, a: i64, _b: i64, _p: Value) { self.events.push((kind, a)); }
+    fn wake_on(&mut self, p: Value) { let id = self.slot(p, 1).as_fixnum(); self.woken.push(id); }
+    fn fail_waiters_on(&mut self, p: Value, _m: &str) {
+        let id = self.slot(p, 1).as_fixnum();
+        self.failed.push(id);
+    }
+    fn peer_id_of_dead(&self, id: i64) -> i64 {
+        for (d, p) in &self.pairs { if *d == id { return *p; } }
+        -1
+    }
+--rust
+}
+fn main() {
+    // 1. NOTHING COLLECTED. Both lists stand, nothing is said, and -- the part
+    //    only `allocs` can see -- NOTHING IS ALLOCATED.
+    let mut a = mk(&[10, 11], &[20, 21], &[], 1);
+    a.reap_all();
+    let s = a.sched_v;
+    let ab = a.slot(s, conc::SC_BRIDGES);
+    let ap = a.slot(s, conc::SC_PORTS);
+    let r1 = format!("{} {} {} {}", a.allocs, a.vec_count(ab), a.vec_count(ap), a.events.len());
+
+    // 2. ONE BRIDGE COLLECTED. It leaves the list, the survivor keeps its
+    //    place, and the host hears CLOSED then RELEASE for that id and no
+    //    other. Two allocations: the fresh list, and the one survivor conj'd.
+    let mut b = mk(&[10, 11], &[], &[11], 1);
+    b.reap_all();
+    let s = b.sched_v;
+    let bb = b.slot(s, conc::SC_BRIDGES);
+    let kept = b.vec_nth(bb, 0, NIL).as_fixnum();
+    let r2 = format!("{} {} {} {} {} {} {}", b.allocs, b.vec_count(bb), kept,
+                     b.events[0].0, b.events[0].1, b.events[1].0, b.events[1].1);
+
+    // 3. A CHANNEL END COLLECTED, ITS PEER OPEN. The peer is ORPHANED -- not
+    //    closed -- and whoever is parked on it is failed and woken.
+    let mut c = mk(&[], &[20, 21], &[21], 1);
+    c.pairs.push((21, 20));
+    c.reap_all();
+    let s = c.sched_v;
+    let cp = c.slot(s, conc::SC_PORTS);
+    let peer = c.port_by_id(20);
+    let r3 = format!("{} {} {} {} {}", c.allocs, c.vec_count(cp),
+                     c.slot(peer, conc::PT_STATE).as_fixnum(), c.failed[0], c.woken[0]);
+
+    // 4. THE SAME, PEER ALREADY CLOSED. Its state must NOT be overwritten --
+    //    a tidy close outranks an orphaning -- and it is still failed and
+    //    woken, because a waiter on a closed port is still a waiter.
+    let mut d = mk(&[], &[20, 21], &[21], conc::P_CLOSED);
+    d.pairs.push((21, 20));
+    d.reap_all();
+    let peer = d.port_by_id(20);
+    let r4 = format!("{} {} {}", d.slot(peer, conc::PT_STATE).as_fixnum(), d.failed[0], d.woken[0]);
+
+    println!("{} {} {} {}", r1, r2, r3, r4);
+}
+--java-head
+    // THE SAME TOY AS THE RUST HEAD, field for field and case for case. The
+    // three fixtures agree with each other by construction, which is what
+    // makes ONE expected line legitimate evidence for three targets rather
+    // than three answers that happen to coincide.
+    static final long NIL = 0xFFFF000000000000L;
+    static final class Val {
+        static final long NIL = 0xFFFF000000000000L;
+        static boolean isNil(long v) { return v == NIL; }
+        static long asFixnum(long v) { return v; }
+        static long asHeap(long v) { return v; }
+        static long fixnum(long n) { return n; }
+    }
+    static final class Conc {
+        static final int SC_BRIDGES = 0, SC_PORTS = 1, PT_STATE = 0;
+        static final long P_CLOSED = 2, P_ORPHANED = 5, EV_CLOSED = 3, EV_RELEASE = 5;
+        static long sched(Rt rt) { return rt.schedV; }
+        static long portById(Rt rt, long id) {
+            for (int i = 0; i < rt.portIds.size(); i++)
+                if (rt.portIds.get(i) == id) return rt.portVals.get(i);
+            return NIL;
+        }
+        static void pushEvent(Rt rt, long k, long a, long b, long p) {
+            rt.evKind.add(k); rt.evId.add(a);
+        }
+        static void wakeOn(Rt rt, long p) { rt.woken.add(rt.slot(p, 1)); }
+        static void failWaitersOn(Rt rt, long p, String m) { rt.failed.add(rt.slot(p, 1)); }
+        static long peerIdOfDead(Rt rt, long id) {
+            for (int i = 0; i < rt.deadIds.size(); i++)
+                if (rt.deadIds.get(i) == id) return rt.peerIds.get(i);
+            return -1;
+        }
+    }
+    static final class Vec { static long empty(Rt rt) { return rt.empty; } }
+    static int vecCount(Rt rt, long v) { return rt.objs.get((int) v).length; }
+    static long vecNth(Rt rt, long v, int i, long d) {
+        long[] row = rt.objs.get((int) v);
+        return i < row.length ? row[i] : d;
+    }
+    static long vecConj(Rt rt, long v, long x) {
+        rt.allocs++;
+        long[] row = rt.objs.get((int) v);
+        long[] next = new long[row.length + 1];
+        System.arraycopy(row, 0, next, 0, row.length);
+        next[row.length] = x;
+        return rt.obj(next);
+    }
+    static final class Rt {
+        java.util.List<long[]> objs = new java.util.ArrayList<>();
+        java.util.List<Long> roots = new java.util.ArrayList<>();
+        java.util.List<Long> portIds = new java.util.ArrayList<>();
+        java.util.List<Long> portVals = new java.util.ArrayList<>();
+        java.util.List<Long> deadIds = new java.util.ArrayList<>();
+        java.util.List<Long> peerIds = new java.util.ArrayList<>();
+        java.util.List<Long> evKind = new java.util.ArrayList<>();
+        java.util.List<Long> evId = new java.util.ArrayList<>();
+        java.util.List<Long> failed = new java.util.ArrayList<>();
+        java.util.List<Long> woken = new java.util.ArrayList<>();
+        int allocs = 0;
+        long schedV = NIL;
+        // The shared empty vector -- see the Rust head.
+        long empty = NIL;
+        long obj(long[] slots) { objs.add(slots); return objs.size() - 1; }
+        long slot(long v, int i) { return objs.get((int) v)[i]; }
+        void setSlot(long v, int i, long x) { objs.get((int) v)[i] = x; }
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void setR(int i, long v) { roots.set(i, v); }
+        void popTo(int i) { while (roots.size() > i) roots.remove(roots.size() - 1); }
+    }
+    static Rt mk(long[] bridges, long[] ports, long[] dead, long peerState) {
+        Rt rt = new Rt();
+        rt.empty = rt.obj(new long[0]);
+        long bv = rt.obj(bridges.clone()), pv = rt.obj(ports.clone());
+        rt.schedV = rt.obj(new long[]{bv, pv});
+        for (long id : concat(bridges, ports)) {
+            boolean isDead = false;
+            for (long d : dead) if (d == id) isDead = true;
+            if (isDead) continue;
+            boolean isPort = false;
+            for (long p : ports) if (p == id) isPort = true;
+            long row = rt.obj(new long[]{isPort ? peerState : 1, id});
+            rt.portIds.add(id); rt.portVals.add(row);
+        }
+        rt.allocs = 0;
+        return rt;
+    }
+    static long[] concat(long[] a, long[] b) {
+        long[] out = new long[a.length + b.length];
+        System.arraycopy(a, 0, out, 0, a.length);
+        System.arraycopy(b, 0, out, a.length, b.length);
+        return out;
+    }
+--java
+    public static void main(String[] args) {
+        Rt a = mk(new long[]{10, 11}, new long[]{20, 21}, new long[]{}, 1);
+        reapAll(a);
+        long ab = a.slot(a.schedV, Conc.SC_BRIDGES), ap = a.slot(a.schedV, Conc.SC_PORTS);
+        String r1 = a.allocs + " " + vecCount(a, ab) + " " + vecCount(a, ap) + " " + a.evKind.size();
+
+        Rt b = mk(new long[]{10, 11}, new long[]{}, new long[]{11}, 1);
+        reapAll(b);
+        long bb = b.slot(b.schedV, Conc.SC_BRIDGES);
+        String r2 = b.allocs + " " + vecCount(b, bb) + " " + vecNth(b, bb, 0, NIL)
+                  + " " + b.evKind.get(0) + " " + b.evId.get(0)
+                  + " " + b.evKind.get(1) + " " + b.evId.get(1);
+
+        Rt c = mk(new long[]{}, new long[]{20, 21}, new long[]{21}, 1);
+        c.deadIds.add(21L); c.peerIds.add(20L);
+        reapAll(c);
+        long cp = c.slot(c.schedV, Conc.SC_PORTS);
+        long cpeer = Conc.portById(c, 20);
+        String r3 = c.allocs + " " + vecCount(c, cp) + " " + c.slot(cpeer, Conc.PT_STATE)
+                  + " " + c.failed.get(0) + " " + c.woken.get(0);
+
+        Rt d = mk(new long[]{}, new long[]{20, 21}, new long[]{21}, Conc.P_CLOSED);
+        d.deadIds.add(21L); d.peerIds.add(20L);
+        reapAll(d);
+        long dpeer = Conc.portById(d, 20);
+        String r4 = d.slot(dpeer, Conc.PT_STATE) + " " + d.failed.get(0) + " " + d.woken.get(0);
+
+        System.out.println(r1 + " " + r2 + " " + r3 + " " + r4);
+    }
+--csharp-head
+    // THE SAME TOY AGAIN, in this target's spelling.
+    const long NIL = unchecked((long)0xFFFF000000000000UL);
+    static class Val {
+        public const long Nil = unchecked((long)0xFFFF000000000000UL);
+        public static bool IsNil(long v) => v == Nil;
+        public static long AsFixnum(long v) => v;
+        public static long AsHeap(long v) => v;
+        public static long Fixnum(long n) => n;
+    }
+    static class Conc {
+        public const int SC_BRIDGES = 0, SC_PORTS = 1, PT_STATE = 0;
+        public const long P_CLOSED = 2, P_ORPHANED = 5, EV_CLOSED = 3, EV_RELEASE = 5;
+        public static long Sched(Rt rt) => rt.SchedV;
+        public static long PortById(Rt rt, long id) {
+            for (int i = 0; i < rt.PortIds.Count; i++)
+                if (rt.PortIds[i] == id) return rt.PortVals[i];
+            return Val.Nil;
+        }
+        public static void PushEvent(Rt rt, long k, long a, long b, long p) {
+            rt.EvKind.Add(k); rt.EvId.Add(a);
+        }
+        public static void WakeOn(Rt rt, long p) { rt.Woken.Add(rt.Slot(p, 1)); }
+        public static void FailWaitersOn(Rt rt, long p, string m) { rt.Failed.Add(rt.Slot(p, 1)); }
+        public static long PeerIdOfDead(Rt rt, long id) {
+            for (int i = 0; i < rt.DeadIds.Count; i++)
+                if (rt.DeadIds[i] == id) return rt.PeerIds[i];
+            return -1;
+        }
+    }
+    static class Vec { public static long Empty(Rt rt) => rt.Empty; }
+    static int VecCount(Rt rt, long v) => rt.Objs[(int)v].Length;
+    static long VecNth(Rt rt, long v, int i, long d) {
+        var row = rt.Objs[(int)v];
+        return i < row.Length ? row[i] : d;
+    }
+    static long VecConj(Rt rt, long v, long x) {
+        rt.Allocs++;
+        var row = rt.Objs[(int)v];
+        var next = new long[row.Length + 1];
+        System.Array.Copy(row, next, row.Length);
+        next[row.Length] = x;
+        return rt.MakeObj(next);
+    }
+    public class Rt {
+        public System.Collections.Generic.List<long[]> Objs = new System.Collections.Generic.List<long[]>();
+        public System.Collections.Generic.List<long> Roots = new System.Collections.Generic.List<long>();
+        public System.Collections.Generic.List<long> PortIds = new System.Collections.Generic.List<long>();
+        public System.Collections.Generic.List<long> PortVals = new System.Collections.Generic.List<long>();
+        public System.Collections.Generic.List<long> DeadIds = new System.Collections.Generic.List<long>();
+        public System.Collections.Generic.List<long> PeerIds = new System.Collections.Generic.List<long>();
+        public System.Collections.Generic.List<long> EvKind = new System.Collections.Generic.List<long>();
+        public System.Collections.Generic.List<long> EvId = new System.Collections.Generic.List<long>();
+        public System.Collections.Generic.List<long> Failed = new System.Collections.Generic.List<long>();
+        public System.Collections.Generic.List<long> Woken = new System.Collections.Generic.List<long>();
+        public int Allocs = 0;
+        public long SchedV = unchecked((long)0xFFFF000000000000UL);
+        // The shared empty vector -- see the Rust head.
+        public long Empty = unchecked((long)0xFFFF000000000000UL);
+        public long MakeObj(long[] slots) { Objs.Add(slots); return Objs.Count - 1; }
+        public long Slot(long v, int i) => Objs[(int)v][i];
+        public void SetSlot(long v, int i, long x) { Objs[(int)v][i] = x; }
+        public int Mark() => Roots.Count;
+        public int Push(long v) { Roots.Add(v); return Roots.Count - 1; }
+        public long R(int i) => Roots[i];
+        public void SetR(int i, long v) { Roots[i] = v; }
+        public void PopTo(int i) { while (Roots.Count > i) Roots.RemoveAt(Roots.Count - 1); }
+    }
+    static Rt Mk(long[] bridges, long[] ports, long[] dead, long peerState) {
+        var rt = new Rt();
+        rt.Empty = rt.MakeObj(new long[0]);
+        long bv = rt.MakeObj((long[])bridges.Clone());
+        long pv = rt.MakeObj((long[])ports.Clone());
+        rt.SchedV = rt.MakeObj(new long[]{bv, pv});
+        var all = new System.Collections.Generic.List<long>();
+        all.AddRange(bridges); all.AddRange(ports);
+        foreach (var id in all) {
+            bool isDead = false;
+            foreach (var d in dead) if (d == id) isDead = true;
+            if (isDead) continue;
+            bool isPort = false;
+            foreach (var p in ports) if (p == id) isPort = true;
+            long row = rt.MakeObj(new long[]{ isPort ? peerState : 1, id });
+            rt.PortIds.Add(id); rt.PortVals.Add(row);
+        }
+        rt.Allocs = 0;
+        return rt;
+    }
+--csharp
+    static void Main() {
+        var a = Mk(new long[]{10, 11}, new long[]{20, 21}, new long[]{}, 1);
+        ReapAll(a);
+        long ab = a.Slot(a.SchedV, Conc.SC_BRIDGES), ap = a.Slot(a.SchedV, Conc.SC_PORTS);
+        string r1 = a.Allocs + " " + VecCount(a, ab) + " " + VecCount(a, ap) + " " + a.EvKind.Count;
+
+        var b = Mk(new long[]{10, 11}, new long[]{}, new long[]{11}, 1);
+        ReapAll(b);
+        long bb = b.Slot(b.SchedV, Conc.SC_BRIDGES);
+        string r2 = b.Allocs + " " + VecCount(b, bb) + " " + VecNth(b, bb, 0, NIL)
+                  + " " + b.EvKind[0] + " " + b.EvId[0] + " " + b.EvKind[1] + " " + b.EvId[1];
+
+        var c = Mk(new long[]{}, new long[]{20, 21}, new long[]{21}, 1);
+        c.DeadIds.Add(21); c.PeerIds.Add(20);
+        ReapAll(c);
+        long cp = c.Slot(c.SchedV, Conc.SC_PORTS);
+        long cpeer = Conc.PortById(c, 20);
+        string r3 = c.Allocs + " " + VecCount(c, cp) + " " + c.Slot(cpeer, Conc.PT_STATE)
+                  + " " + c.Failed[0] + " " + c.Woken[0];
+
+        var d = Mk(new long[]{}, new long[]{20, 21}, new long[]{21}, Conc.P_CLOSED);
+        d.DeadIds.Add(21); d.PeerIds.Add(20);
+        ReapAll(d);
+        long dpeer = Conc.PortById(d, 20);
+        string r4 = d.Slot(dpeer, Conc.PT_STATE) + " " + d.Failed[0] + " " + d.Woken[0];
+
+        System.Console.WriteLine(r1 + " " + r2 + " " + r3 + " " + r4);
+    }
+--expect
+0 2 2 0 1 1 10 3 11 5 11 1 1 5 20 20 2 20 20
+--expect-why
+DERIVED FROM THE CONTRACT, not recorded from a run. Four cases, in the order
+the driver prints them.
+
+1. NOTHING COLLECTED -- `0 2 2 0`. Both scans answer false, so both functions
+   return before allocating: `0` allocations. Both lists are untouched, so
+   `2` and `2`. Nothing died, so `0` events.
+
+   THIS IS THE CASE THE WHOLE PORT EXISTS FOR, and the only reading that can
+   fail it is `allocs`. The shape this replaced rebuilt both lists on every
+   drive iteration whether or not anything had died, and it would answer
+   `2 2 0` for the other three readings exactly as this does. That waste was
+   ~42 of the ~47 steps a resume cost, billed to the program on the native
+   runtime and free on the other two -- so the counter is not belt and
+   braces, it is the assertion.
+
+2. ONE BRIDGE COLLECTED -- `1 1 10 3 11 5 11`. ONE allocation and no more:
+   the conj for the single survivor. The fresh vector itself is free --
+   `empty-vec` hands back a shared singleton -- so the count is the number of
+   SURVIVORS, which is the useful thing for it to be. The dead id is NOT
+   conj'd, so the list is `1` long, and the survivor kept is `10`. The host
+   must hear the pair an explicit close would have produced, in that order
+   and for that id: `EV_CLOSED`(3) `11`, then `EV_RELEASE`(5) `11`. Naming
+   both the kind AND the id is what stops a transposed or misattributed
+   event from passing.
+
+3. A CHANNEL END COLLECTED, PEER OPEN -- `1 1 5 20 20`. Same one
+   allocation, same one survivor. The peer's state becomes `P_ORPHANED`(5)
+   and not `P_CLOSED`(2): a peer that vanished is not a peer that said
+   goodbye, and a host that cannot tell them apart cannot report the
+   difference. The waiter on the peer is failed (`20`) and the peer is woken
+   (`20`) -- both, because failing a waiter that is never woken is a hang
+   dressed as an error.
+
+4. THE SAME, PEER ALREADY CLOSED -- `2 20 20`. The state stays `P_CLOSED`(2).
+   An orphaning must not overwrite a close, or a port that was tidily shut
+   would start reporting that its peer vanished. It is still failed and
+   still woken, because a closed port can still have someone parked on it.
+
+WHAT FAILS IF THE LOGIC IS WRONG -- RUN, not asserted. Six mutations of
+`kin/reapports.kin`, each the plausible way to get this wrong, every one
+caught on all three targets:
+
+    drop the `any-collected` guard    case 1 allocs   0 -> 2
+    conj the dead id too              case 2 count    1 -> 2
+    emit EV_CLOSED without EV_RELEASE case 2 has no second event -- crash
+    mark the peer CLOSED not ORPHANED case 3 state    5 -> 2
+    write the state unconditionally   case 4 state    2 -> 5
+    fail the peer but never wake it   case 3 wakes nobody -- crash
+
+The first is why this fixture reads `allocs` at all. Its answer differs from
+the correct one in THAT FIELD AND NOWHERE ELSE (`2 2 2 0` against `0 2 2 0`),
+so a driver built from the lists and the events alone would have passed the
+exact waste this source was written to remove. The two crashes are failures
+too, just cruder ones: the driver indexes the event and woken lists, and a
+missing entry takes the probe out rather than printing a wrong line.

@@ -11,7 +11,16 @@
 (defn sh [proj & args]
   (let [pb (doto (ProcessBuilder. (into-array String args)) (.directory (java.io.File. proj)))
         p (.start pb)
-        out (slurp (.getInputStream p)) err (slurp (.getErrorStream p))]
+        ;; STDERR IS DRAINED ON ITS OWN THREAD, and that is not a style
+        ;; choice. Reading stdout to completion first and stderr after
+        ;; DEADLOCKS the moment the child writes more than a pipe buffer to
+        ;; stderr: the child blocks writing, this blocks reading, and neither
+        ;; moves again. Measured 2026-09-15 -- `bin/build-units --diagnostics`
+        ;; emits 71 266 bytes of cargo warnings against a 64 KB buffer, and
+        ;; `bin/test` sat in `ropes` for 45 minutes looking merely slow.
+        err (future (slurp (.getErrorStream p)))
+        out (slurp (.getInputStream p))
+        err @err]
     (.waitFor p) {:exit (.exitValue p) :out (str out err)}))
 
 (def fails (atom 0))
@@ -776,14 +785,17 @@
              "  (let [img (sdk/compile {:sources {\"guest\" src} :fn \"guest/main\"\n"
              "                          :exports [\"guest/greet\"]})\n"
              "        b (sdk/sandbox img)\n"
-             "        r (sdk/call b \"guest/greet\" [\"ada\" \"alan\"])\n"
+             "        c (sdk/caller b)\n"
+             "        r (sdk/call c \"guest/greet\" [\"ada\" \"alan\"])\n"
+             "        _ (sdk/close-caller c)\n"
              "        _ (sdk/close b)]\n"
              "    (str \"reply=\" (pr-str r))))\n"
              "(defn stale [_]\n"
              "  (let [img (sdk/compile {:sources {\"guest\" src} :fn \"guest/main\"})\n"
-             "        b (sdk/sandbox img)]\n"
+             "        b (sdk/sandbox img)\n"
+             "        c (sdk/caller b)]\n"
              "    (sdk/close b)\n"
-             "    (sdk/call b \"guest/main\" [])))\n"))
+             "    (sdk/call c \"guest/main\" [])))\n"))
   (let [r (sh p18 flint "run" ":path" "." ":fn" "box/go")]
     ;; ARGUMENTS ARE PASSED INDIVIDUALLY -- the `flint_call` ABI -- and not
     ;; wrapped into one vector the way an entry's `[args]` is. The two front
@@ -802,13 +814,15 @@
              "              \"(defn main [args] \\\"e\\\")\\n\"))\n"
              "(defn go [_]\n"
              "  (let [img (ception/compile {:sources {\"g\" src} :fn \"g/main\" :exports [\"g/peek\"]})\n"
-             "        b (ception/sandbox img {:with [\"env\"]})]\n"
-             "    (str (ception/call b \"g/peek\" []))))\n"
+             "        b (ception/sandbox img {:with [\"env\"]})\n"
+             "        c (ception/caller b)]\n"
+             "    (str (ception/call c \"g/peek\" []))))\n"
              "(defn boom [_]\n"
              "  (let [img (ception/compile {:sources {\"g\" \"(ns g)\\n(defn bang [] (throw (ex-info \\\"inner blew up\\\" {})))\\n(defn main [a] \\\"e\\\")\\n\"}\n"
              "                              :fn \"g/main\" :exports [\"g/bang\"]})\n"
-             "        b (ception/sandbox img)]\n"
-             "    (try (ception/call b \"g/bang\" []) \"NO THROW\" (catch Throwable e (ex-message e)))))\n"))
+             "        b (ception/sandbox img)\n"
+             "        c (ception/caller b)]\n"
+             "    (try (ception/call c \"g/bang\" []) \"NO THROW\" (catch Throwable e (ex-message e)))))\n"))
   (let [r (sh p18 flint "run" ":path" "." ":fn" "lent/go" ":with" "[env]")]
     (check "  ... and a sandbox lent a capability can use it"
            (str/includes? (:out r) "inner:yes") (:out r)))
@@ -834,8 +848,9 @@
              "              \"(defn main [args] \\\"entry\\\")\\n\"))\n"
              "(defn go [_]\n"
              "  (let [img (sdk/compile {:sources {\"g\" src} :fn \"g/main\" :exports [\"g/f\"]})\n"
-             "        b (sdk/sandbox img)]\n"
-             "    (str (sdk/call b \"g/f\" [42 {:a \"inner\"} [1 2 3] :kw]))))\n"))
+             "        b (sdk/sandbox img)\n"
+             "        c (sdk/caller b)]\n"
+             "    (str (sdk/call c \"g/f\" [42 {:a \"inner\"} [1 2 3] :kw]))))\n"))
   (let [r (sh p18 flint "run" ":path" "." ":fn" "shapes/go")]
     (check "  ... and arguments cross as values, not as strings"
            (str/includes? (:out r) "int=42 map=inner vec=3 kw=:kw") (:out r)))
@@ -843,7 +858,55 @@
   ;; number: the slot is kept rather than compacted.
   (let [r (sh p18 flint "run" ":path" "." ":fn" "box/stale")]
     (check "  ... and a handle used after close says so"
-           (str/includes? (:out r) "is closed") (:out r))))
+           (str/includes? (:out r) "is closed") (:out r)))
+
+  ;; --- metadata on the wire is what `WireMeta` selects ---------------------
+  ;;
+  ;; ONE HOP, and deliberately: the inner side reports what ARRIVED. A round
+  ;; trip would measure something else, because an opt-in written as a closure
+  ;; in metadata does not itself cross -- so the far side falls back to the
+  ;; default and answers nil on the way home. That is correct and is not what
+  ;; these rows are about.
+  (spit (str p18 "/wire.cljc")
+        (str "(ns wire (:require [flint.ception :as sdk]))\n"
+             "(def src (str \"(ns g)\\n\"\n"
+             "              \"(defn saw [x] (pr-str (meta x)))\\n\"\n"
+             "              \"(defn main [_] \\\"e\\\")\\n\"))\n"
+             "(defn go [_]\n"
+             "  (let [img (sdk/compile {:sources {\"g\" src} :fn \"g/main\" :exports [\"g/saw\"]})\n"
+             "        b (sdk/sandbox img)\n"
+             "        c (sdk/caller b)\n"
+             "        plain (sdk/call c \"g/saw\" [(with-meta [1 2] {:a 1})])\n"
+             "        opted (sdk/call c \"g/saw\"\n"
+             "                        [(with-meta [3 4]\n"
+             "                           {:a 1 :keep :yes\n"
+             "                            (quote flint.protocols/-wire-meta)\n"
+             "                            (fn [x] {:keep (:keep (meta x))})})])]\n"
+             "    (str \"plain=\" plain \" opted=\" opted)))\n"
+             "(defn refused [_]\n"
+             "  (let [img (sdk/compile {:sources {\"g\" src} :fn \"g/main\" :exports [\"g/saw\"]})\n"
+             "        b (sdk/sandbox img)\n"
+             "        c (sdk/caller b)]\n"
+             "    (try (sdk/call c \"g/saw\"\n"
+             "                   [(with-meta [1]\n"
+             "                      {(quote flint.protocols/-wire-meta) (fn [_] {:f (fn [] 1)})})])\n"
+             "         \"NO ERROR\"\n"
+             "         (catch Throwable e (ex-message e)))))\n"))
+  (let [r (sh p18 flint "run" ":path" "." ":fn" "wire/go")]
+    ;; NOTHING BY DEFAULT, which is the half that keeps this from being a
+    ;; surprise: a program that never asked sends what it always sent.
+    (check "metadata does not cross a bridge unless WireMeta says so"
+           (str/includes? (:out r) "plain=nil") (:out r))
+    ;; AND THE SELECTED SUBSET, not the whole map: `:a` was on the value and
+    ;; stayed behind, and so did the implementation itself.
+    (check "  ... and then exactly the subset it selected"
+           (str/includes? (:out r) "opted={:keep :yes}") (:out r)))
+  ;; WHAT IT YIELDS MUST BE SENDABLE. The selected metadata goes through the
+  ;; ordinary encoder, so it is refused by name at the send rather than dropped.
+  (let [r (sh p18 flint "run" ":path" "." ":fn" "wire/refused")]
+    (check "  ... and metadata that cannot cross fails the send, by name"
+           (and (str/includes? (:out r) "a function cannot cross")
+                (not (str/includes? (:out r) "NO ERROR"))) (:out r))))
 
 ;; --- flint.ception does not mint authority -------------------------------------
 ;;

@@ -69,6 +69,29 @@ impl Build {
 extern "C" fn open_(rt: *mut Rt, b: u32, n: u32) -> u64 {
     flint_conc::flint_b_open(rt, b, n)
 }
+// THE WIRE PRIMITIVES, because `open` takes its arguments ENCODED now
+// (`DECISIONS.md#the-codec-is-guest-code`). A test that drives the builtin
+// directly has no `flint.port/open` to do that for it, so it writes the
+// payload itself -- which is what a guest encoder looks like in bytecode.
+//
+// Each one takes the writer as its first argument and ANSWERS THE WRITER, so
+// they chain on the stack: `[w]` in, `[w]` out, and the value being written is
+// pushed between.
+extern "C" fn wwriter_(rt: *mut Rt, b: u32, n: u32) -> u64 {
+    flint_conc::flint_b_wire_writer(rt, b, n)
+}
+extern "C" fn wvec_(rt: *mut Rt, b: u32, n: u32) -> u64 {
+    flint_conc::flint_b_wire_vec(rt, b, n)
+}
+extern "C" fn wstr_(rt: *mut Rt, b: u32, n: u32) -> u64 {
+    flint_conc::flint_b_wire_str(rt, b, n)
+}
+extern "C" fn wnil_(rt: *mut Rt, b: u32, n: u32) -> u64 {
+    flint_conc::flint_b_wire_nil(rt, b, n)
+}
+extern "C" fn wopaque_(rt: *mut Rt, b: u32, n: u32) -> u64 {
+    flint_conc::flint_b_wire_opaque(rt, b, n)
+}
 extern "C" fn recv_(rt: *mut Rt, b: u32, n: u32) -> u64 {
     flint_conc::flint_b_port_receive(rt, b, n)
 }
@@ -143,17 +166,34 @@ fn opener(cap_host_id: Option<u64>) -> Rt {
     let mut b = Build::new();
     let open = b.conc("flint/open", open_);
     let recv = b.conc("flint/port-receive", recv_);
+    let ww = b.conc("flint/wire-writer", wwriter_);
+    let wvec = b.conc("flint/wire-vec", wvec_);
+    let wstr = b.conc("flint/wire-str", wstr_);
+    let wnil = b.conc("flint/wire-nil", wnil_);
+    let wop = b.conc("flint/wire-opaque", wopaque_);
     let name = b.w.k_string("fs");
+    let one = b.w.k_int(1);
+    let three = b.w.k_int(3);
     let body = {
         let mut a = Asm::new();
+        // `[name, w]` on the stack throughout: the name for `open`'s refusal
+        // message, and the writer being filled beside it.
         a.konst(name);
+        a.native(ww, 0);
         if cap_host_id.is_some() {
-            a.op(op::NIL);
-            a.op(op::LOCAL).u8v(0);
-            a.native(open, 3);
+            a.konst(three);
         } else {
-            a.native(open, 1);
+            a.konst(one);
         }
+        a.native(wvec, 2);
+        a.konst(name);
+        a.native(wstr, 2);
+        if cap_host_id.is_some() {
+            a.native(wnil, 1);
+            a.op(op::LOCAL).u8v(0);
+            a.native(wop, 2);
+        }
+        a.native(open, 2);
         a.native(recv, 1).op(op::RETURN);
         a.done()
     };
@@ -277,8 +317,19 @@ fn open_asks_the_host_and_parks_until_it_answers() {
     let msg = wire(&mut rt, "hello");
     assert!(rt.host_deliver(GRANTED, &msg));
     let (v, tail) = finish(&mut rt);
+    // A BRIDGE DELIVERS BYTES NOW, and the guest decodes them
+    // (`DECISIONS.md#the-codec-is-guest-code`). This program calls the
+    // `flint/port-receive` BUILTIN rather than `flint.port/receive`, so no
+    // flint library is in the picture and what it gets is the encoding.
+    //
+    // Decoded here with the host-side decoder, which is what a host would do:
+    // the claim under test is that the message crossed intact, and that is the
+    // same claim it always was.
+    assert!(rt.is_bytes(v), "a bridge carries bytes: {v:?}");
+    let raw = rt.b_to_vec(v);
+    let decoded = rt.decode(&raw).expect("the delivered bytes decode");
     let mut sb = flint_rt::rt::sbuf();
-    assert_eq!(rt.as_str(v, &mut sb), Some("hello"));
+    assert_eq!(rt.as_str(decoded, &mut sb), Some("hello"));
     assert_eq!(rt.status, 0);
     // And the host was TOLD the port closed, rather than left to infer it.
     assert!(
@@ -378,14 +429,29 @@ fn a_send_leaves_as_one_event_carrying_its_bytes() {
     let mut b = Build::new();
     let open = b.conc("flint/open", open_);
     let send = b.conc("flint/port-send", send_);
+    let ww = b.conc("flint/wire-writer", wwriter_);
+    let wvec = b.conc("flint/wire-vec", wvec_);
+    let wstr = b.conc("flint/wire-str", wstr_);
     let name = b.w.k_string("log");
     let msg = b.w.k_string("a line");
+    let one = b.w.k_int(1);
     let body = {
         let mut a = Asm::new();
-        a.konst(name).native(open, 1);
+        a.konst(name);
+        a.native(ww, 0);
+        a.konst(one);
+        a.native(wvec, 2);
+        a.konst(name);
+        a.native(wstr, 2);
+        a.native(open, 2);
         a.op(op::SET_LOCAL).u8v(1);
         a.op(op::LOCAL).u8v(1);
+        // THE MESSAGE IS ENCODED TOO. A bridge carries an encoding, not a
+        // value, so this writes one the same way the payload above was
+        // written -- `flint.port/send` is what does it for ordinary code.
+        a.native(ww, 0);
         a.konst(msg);
+        a.native(wstr, 2);
         a.native(send, 2).op(op::RETURN);
         a.done()
     };
@@ -483,26 +549,45 @@ fn a_keyword_crosses_a_bridge_inbound() {
         };
         assert!(rt.host_deliver(GRANTED, &msg), "delivered {name}");
         let (v, _) = finish(&mut rt);
+        // BYTES, then the keyword. The builtin hands over the encoding and the
+        // decode is the guest's, so the keyword is recovered here rather than
+        // arriving as one -- see the comment in the grant test above.
+        //
+        // The lengths matter and are why this loops: a keyword's name is
+        // length-prefixed, and the inline/heap boundary sits between `abcd`
+        // and `abcde`.
+        assert!(rt.is_bytes(v), "{name}: a bridge carries bytes, not {v:?}");
+        let raw = rt.b_to_vec(v);
+        let decoded = rt.decode(&raw).expect("the delivered bytes decode");
         assert!(
-            rt.is_keyword(v),
-            "{name}: a keyword arrives as a keyword, not {v:?}"
+            rt.is_keyword(decoded),
+            "{name}: a keyword arrives as a keyword, not {decoded:?}"
         );
     }
 }
 
-/// A CALL is a message on the system port, and its answer is one too
-/// (`DECISIONS.md#structured-ports` step 5).
+/// A VAR IS FINDABLE BY NAME, and an absent one answers nil.
 ///
-/// Nothing here invokes an entry point. The host asks for a function by name,
-/// the runtime runs it as a green thread, and the result comes back on the same
-/// port carrying the same `:tx`.
+/// What this replaced: a test that delivered `{:tx n :op :call ..}` to the
+/// system port and expected the answer back on it. That protocol was moved out
+/// of the runtime and into the image (`DECISIONS.md#bridges-are-the-only-door`)
+/// -- the system port carries CONTROL only now, calls go on a port it binds,
+/// and `test/system.cljc` tests the protocol itself, in flint, once, for all
+/// four runtimes instead of once per runtime in three languages.
+///
+/// What is left here is the primitive that protocol rests on and that no flint
+/// test can reach: looking a var up by the name a host sent as a string.
+/// `flint.system/answer` calls it for every inbound call, and a miss is the
+/// ORDINARY case -- the shake drops unreachable code, and a string does not
+/// keep a var alive (`DECISIONS.md#vars-is-its-own-grant`) -- so nil-for-absent
+/// is as load-bearing as the hit.
 #[test]
-fn a_call_arrives_as_a_message_and_answers_as_one() {
+fn a_var_is_findable_by_name() {
     let mut b = Build::new();
-    // `(defn answer [x] x)` -- an identity, so the argument's round trip is
-    // visible in the reply. A VAR, because a call is looked up by name in the
-    // var table, and an initialiser that sets it, because that is how a program
-    // binds one.
+    // `(defn answer [x] x)` -- an identity, so that what comes back out of the
+    // var table is visibly the thing that went in. A VAR, because a call is
+    // looked up by name in the var table, and an initialiser that sets it,
+    // because that is how a program binds one.
     let fvar = {
         let c = b.w.k_string("mod/answer");
         b.w.add_var(c)
@@ -529,46 +614,24 @@ fn a_call_arrives_as_a_message_and_answers_as_one() {
     let bytes = b.w.finish();
     let mut rt = b.rt;
     assert!(rt.load_image(&bytes), "image did not load");
-    let l = rt.string("system");
-    rt.install_system_port(SYSTEM, l);
 
-    // {:tx 7 :op :call :fn "mod/answer" :args ["hello"]}
-    let call = {
-        let mut w = flint_rt::codec::Wire::new();
-        w.map(4);
-        w.keyword(None, "tx");
-        w.int(7);
-        w.keyword(None, "op");
-        w.keyword(None, "call");
-        w.keyword(None, "fn");
-        w.string("mod/answer");
-        w.keyword(None, "args");
-        w.vector(1);
-        w.string("hello");
-        w.done()
-    };
-    assert!(rt.host_deliver(SYSTEM, &call), "the system port took the call");
-    let _ = rt.resume();
-    let mut evs = drain(&mut rt);
-    for _ in 0..4 {
-        if evs.iter().any(|e| e.kind == conc::EV_MESSAGE as u32) {
-            break;
-        }
-        let _ = rt.resume();
-        evs.extend(drain(&mut rt));
-    }
-    let reply = evs
-        .iter()
-        .find(|e| e.kind == conc::EV_MESSAGE as u32)
-        .unwrap_or_else(|| panic!("no answer came back: {evs:?}"));
-    let v = rt.decode(&reply.payload).expect("the answer decodes");
-    let k = rt.keyword(None, "tx");
-    assert_eq!(rt.map_get(v, k, NIL).as_fixnum(), 7, "the answer carries its tx");
-    let k = rt.keyword(None, "op");
-    let want = rt.keyword(None, "return");
-    assert_eq!(rt.map_get(v, k, NIL), want, "and says it returned");
-    let k = rt.keyword(None, "value");
-    let got = rt.map_get(v, k, NIL);
-    let mut sb = flint_rt::rt::sbuf();
-    assert_eq!(rt.as_str(got, &mut sb), Some("hello"), "and carries the value");
+    // INITIALISERS FIRST. A var is nil until they have run, so a lookup before
+    // this finds the name and an empty global -- which is a different answer
+    // from "no such name" and would make the miss below meaningless.
+    assert!(rt.ensure_started(), "initialisers ran");
+
+    let idx = rt.var_named("mod/answer").expect("the name is in the var table");
+    let g = rt
+        .roots
+        .shared
+        .globals
+        .get(idx as usize)
+        .map_or(NIL, |g| g.get());
+    assert!(!g.is_nil(), "and the var holds something");
+    assert!(rt.is_callable(g), "and what it holds can be called");
+
+    assert!(
+        rt.var_named("mod/nope").is_none(),
+        "a name that is not there is nil, not an error"
+    );
 }

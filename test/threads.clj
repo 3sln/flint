@@ -17,7 +17,16 @@
 
 (defn sh [& args]
   (let [p (.start (ProcessBuilder. (into-array String args)))
-        out (slurp (.getInputStream p)) err (slurp (.getErrorStream p))]
+        ;; STDERR IS DRAINED ON ITS OWN THREAD, and that is not a style
+        ;; choice. Reading stdout to completion first and stderr after
+        ;; DEADLOCKS the moment the child writes more than a pipe buffer to
+        ;; stderr: the child blocks writing, this blocks reading, and neither
+        ;; moves again. Measured 2026-09-15 -- `bin/build-units --diagnostics`
+        ;; emits 71 266 bytes of cargo warnings against a 64 KB buffer, and
+        ;; `bin/test` sat in `ropes` for 45 minutes looking merely slow.
+        err (future (slurp (.getErrorStream p)))
+        out (slurp (.getInputStream p))
+        err @err]
     (.waitFor p) {:exit (.exitValue p) :out out :err err :all (str out err)}))
 
 (defn build! [ns-name & [out & flags]]
@@ -373,6 +382,40 @@
 ;; worth asking is whether they are worth it together, not whether the next
 ;; one is worth its own -- which is the question that turned 2 090 bytes into
 ;; nothing.
+
+;; RAISED 2026-09-15, from 500 000, for THE CODEC BECOMING GUEST CODE
+;; (`DECISIONS.md#the-codec-is-guest-code`).
+;;
+;; MEASURED by reverting `flint.port/receive` to the runtime decode and
+;; rebuilding the units: 493 021 against 513 643, so 20 622 bytes, 4.2%.
+;;
+;; What the bytes buy is that a guest decodes its own messages. The safety
+;; argument is the whole section: `K_PORT` and `K_SENTINEL` carry their
+;; identity inline, so a decoder reachable from a guest would let it mint any
+;; host id -- and the rule was enforced by a tag switch written three times, in
+;; `codec.rs`, `Codec.java` and `Codec.cs`. It is now two primitives that take
+;; a VALUE and read its identity themselves, and there is no way to hand them
+;; an integer.
+;;
+;; AND IT CAME BACK, 2026-09-16, which is why the number below is 500 000
+;; again rather than 525 000.
+;;
+;; Every guest-facing path now encodes and decodes in FLINT: `port/send`,
+;; `port/receive`, the `open` handshake and the request/response pair. What is
+;; left of the Rust codec is host-facing -- `Program::encode`, `Program::decode`
+;; and the `flint_call` ABI -- and all of it lives behind
+;; `cfg(not(target_arch = "wasm32"))`, so a guest module carries none of it.
+;;
+;; MEASURED: 513 643 with the Rust codec linked, 487 287 without, so 26 356
+;; bytes. Checked rather than assumed -- `strings dist/flint-runtime.wasm` no
+;; longer contains `value nested too deeply to decode`, which is `decode_at`'s.
+;;
+;; The module is now SMALLER than before the guest codec landed at all: 487 287
+;; against the 493 021 it measured while `receive` still used the runtime's
+;; decoder. The whole migration paid for itself and 5 734 bytes over.
+;;
+;; Recorded rather than quietly absorbed, because the rule this file states is
+;; that a budget raised once per fix is not a budget.
 (check-that "the floor is within the budget 0009, 0011, specialisation, bytes and call chose"
 ;; TABLES (`DECISIONS.md#tables`) cost 22 857 bytes here when they landed --
 ;; 287 854 shipped against 264 997 -- and then gave 15 832 of it back, which is
@@ -664,6 +707,12 @@
 ;; host was never told it exists, so sending one out would hand the host an id
 ;; naming one of our objects -- and a host that sent it back would be the
 ;; integer-to-port conversion the whole design forbids.
+;;
+;; RAISED BY THE ENCODER NOW, not by `check_sendable_at`: `port/send` encodes
+;; with `flint.wire` (`DECISIONS.md#the-codec-is-guest-code`), and a check that
+;; runs on a value never sees an encoding. This row is what noticed -- it went
+;; red on the WORDING while the refusal itself held, which is the right way for
+;; a message to be checked and the reason it is checked by its words.
 (check-that "a channel endpoint cannot leave the sandbox"
             (str/includes? crossing "a channel endpoint cannot be sent to the host"))
 

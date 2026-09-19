@@ -140,7 +140,34 @@ pub const TY_TABLEREF: u8 = 50;
 /// Like every transient it is NOT a value: no `eq`, no `hash`, no `kind`. It is
 /// a building site, and `persistent!` is what turns it back into a table.
 pub const TY_TTABLE: u8 = 51;
-pub const TY_MAX: u8 = 52;
+/// A WIRE WRITER: `[WR_BUF, WR_LIVE]`.
+///
+/// An OPAQUE handle around a transient byte string, and opaque is the whole
+/// point (`DECISIONS.md#the-codec-is-guest-code`). The guest appends through
+/// the `wire-*` primitives and cannot reach the buffer, so it cannot write a
+/// `K_PORT` tag followed by an id it does not hold. A transient byte string
+/// handed to the guest directly would give exactly that away, which is why this
+/// is a type of its own rather than `TY_TBYTES` under another name.
+///
+/// Like every transient it is NOT a value: no `eq`, no `hash`, no `kind`.
+pub const TY_WRITER: u8 = 52;
+
+/// A WIRE READER: `[RD_BYTES, RD_POS, RD_LIVE]`.
+///
+/// The counterpart to `TY_WRITER`, and NOT its mirror image. A writer must be
+/// opaque because a guest that can write raw bytes can forge a `K_PORT` tag; a
+/// reader has no such problem, because reading bytes a guest already has tells
+/// it nothing it did not know. So the reader may hand out plain integers and
+/// strings freely, and only two of its operations are guarded.
+///
+/// `RD_LIVE` is that guard: whether this reader MAY MINT a port or an opaque.
+/// It is true only for a reader the runtime made over bytes that arrived on a
+/// bridge. A guest constructing one over its own bytes always gets false, so
+/// the rule `decode_guest` enforced by refusing tags is now a flag on the
+/// reader, set in one place.
+pub const TY_READER: u8 = 53;
+
+pub const TY_MAX: u8 = 54;
 
 /// Every type tag must be distinct. This list exists because they were not:
 /// `TY_THREAD`/`TY_PORT`/`TY_SCHED` were first numbered 33..35, which silently
@@ -156,7 +183,7 @@ const _: () = {
         TY_RECORD, TY_REGEX, TY_REDUCED, TY_EXINFO, TY_MULTIFN, TY_DELAY,
         TY_VOLATILE, TY_RAW, TY_ITERSEQ, TY_CHUNKSEQ, TY_TYPE, TY_THREAD, TY_PORT,
         TY_SCHED, TY_ROPE, TY_OPAQUE, TY_BYTES, TY_BROPE, TY_TBYTES, TY_TAGGED,
-        TY_SCHEMA, TY_TABLE, TY_TABLEREF, TY_TTABLE,
+        TY_SCHEMA, TY_TABLE, TY_TABLEREF, TY_TTABLE, TY_WRITER, TY_READER,
     ];
     let mut i = 0;
     while i < tags.len() {

@@ -322,13 +322,9 @@ public static class Builtins {
                         rt.SetR(ai, Mapwrite.MapAssoc(rt, rt.R(ai),
                                                       rt.SlotOrNth(e, 0), rt.SlotOrNth(e, 1)));
                     } else if (Mapcore.IsMap(rt, e)) {
-                        int ei = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, e));
-                        while (!Val.IsNil(rt.R(ei))) {
-                            long ent = global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(ei));
-                            rt.SetR(ai, Mapwrite.MapAssoc(rt, rt.R(ai),
-                                                          rt.SlotOrNth(ent, 0), rt.SlotOrNth(ent, 1)));
-                            rt.SetR(ei, global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, rt.R(ei)));
-                        }
+                        // GENERATED (`kin/mapconj.kin`) -- see the note on the
+                        // JVM's copy and on `coll.rs`.
+                        rt.SetR(ai, global::_3sln.Flint.Kgen.Rt.Mapconj.MapConjMap(rt, rt.R(ai), e));
                     } else {
                         rt.PopTo(bas);
                         return rt.ThrowStr("IllegalArgumentException",
@@ -845,6 +841,255 @@ public static class Builtins {
         Def("flint/b-tcount", (rt, at, n) => Val.Fixnum(Bytes.Tcount(rt, rt.VAt(at))));
         Def("flint/b-persistent!", (rt, at, n) => Bytes.Persistent(rt, rt.VAt(at)));
 
+        // --- the wire writer (`DECISIONS.md#the-codec-is-guest-code`) --------
+        //
+        // ONE PRIMITIVE PER SHAPE, not one `emit` taking a tag: a tag argument
+        // puts a dispatch in the hottest loop the language has, and it hides
+        // the dangerous primitive among the harmless ones. `wire-port` and
+        // `wire-opaque` have their own signatures and can be audited alone.
+        //
+        // Every one answers the WRITER, so a guest encoder reads as a chain.
+        // The Rust copies are in `units-src/flint-conc`; the bytes must match.
+        Def("flint/wire-writer", (rt, at, n) => Wire.Writer(rt));
+        // IS THIS A WRITER? `kind` answers `:other` -- a writer is not a value
+        // and has no kind. But `port/send` has to tell a finished encoding from
+        // a value to be encoded, and asking is not a capability.
+        Def("flint/wire-writer?", (rt, at, n) => Val.Bool(Wire.IsWriter(rt, rt.VAt(at))));
+        Def("flint/wire-nil", (rt, at, n) => WPut(rt, rt.VAt(at), Codec.K_NIL, "wire-nil"));
+        Def("flint/wire-bool", (rt, at, n) => {
+            long v = rt.VAt(at + 1);
+            return WPut(rt, rt.VAt(at),
+                        (v == Val.False || Val.IsNil(v)) ? Codec.K_FALSE : Codec.K_TRUE, "wire-bool");
+        });
+        Def("flint/wire-meta", (rt, at, n) => WPut(rt, rt.VAt(at), Codec.K_WITH_META, "wire-meta"));
+        // A TAGGED LITERAL: the tag byte, then the tag symbol and the form as
+        // ordinary values. Bare like `wire-meta` -- both are wrappers.
+        Def("flint/wire-tagged", (rt, at, n) => WPut(rt, rt.VAt(at), Codec.K_TAGGED, "wire-tagged"));
+        // A TABLE: the column count, a name and a type per column, then the ROW
+        // count, then the cells. The count sits AFTER values, which is why the
+        // table needed the writer to track structure first -- four raw bytes
+        // where a VALUE is due are a tag and a payload on the far side, and
+        // `0000000f` there is `K_PORT` and an id.
+        Def("flint/wire-table", (rt, at, n) => {
+            long w = WCheck(rt, rt.VAt(at), "wire-table");
+            if (Val.IsNil(w)) return Val.Nil;
+            long v = rt.VAt(at + 1);
+            if (!Num.IsInt(rt, v)) {
+                return rt.ThrowStr("ClassCastException", "wire-table wants a column count");
+            }
+            long c = Num.AsI64(rt, v).Value;
+            if (!CountOk(rt, c, "wire-table")) return Val.Nil;
+            if (!Wire.OpenTable(rt, w, c)) {
+                return rt.ThrowStr("IllegalStateException",
+                    "wire-table: no value is due here -- the message is already complete, "
+                    + "or a count was expected");
+            }
+            return WDone(rt, w, Wire.Put(rt, w, Codec.K_TABLE) && Wire.U32(rt, w, c), "wire-table");
+        });
+        Def("flint/wire-table-rows", (rt, at, n) => {
+            long w = WCheck(rt, rt.VAt(at), "wire-table-rows");
+            if (Val.IsNil(w)) return Val.Nil;
+            long v = rt.VAt(at + 1);
+            if (!Num.IsInt(rt, v)) {
+                return rt.ThrowStr("ClassCastException", "wire-table-rows wants a row count");
+            }
+            long c = Num.AsI64(rt, v).Value;
+            if (!CountOk(rt, c, "wire-table-rows")) return Val.Nil;
+            if (!Wire.ExpectRowcount(rt, w, c)) {
+                return rt.ThrowStr("IllegalStateException",
+                    "wire-table-rows: no row count is due here -- a table's columns are "
+                    + "named and typed first");
+            }
+            return WDone(rt, w, Wire.U32(rt, w, c), "wire-table-rows");
+        });
+
+        // --- the wire reader -------------------------------------------------
+        //
+        // NOT the writer's mirror image: integers and strings come out freely,
+        // because reading bytes a guest already holds tells it nothing new.
+        // Only `wire-port-in` and `wire-opaque-in` are guarded, and by a flag
+        // on the reader rather than by refusing tags.
+        Def("flint/wire-reader", (rt, at, n) => {
+            long b = rt.VAt(at);
+            if (!Bytes.IsBytes(rt, b)) {
+                return rt.ThrowStr("ClassCastException", "wire-reader wants a byte string");
+            }
+            // NEVER MINTING from here: a guest's own bytes are a guest's own.
+            return Wire.Reader(rt, b, false);
+        });
+        Def("flint/wire-tag", (rt, at, n) => {
+            long r = RCheck(rt, rt.VAt(at), "wire-tag");
+            if (Val.IsNil(r)) return Val.Nil;
+            if (Wire.Left(rt, r) == 0) return Val.Nil;
+            byte[] b = Wire.Take(rt, r, 1);
+            return b == null ? RShort(rt, "wire-tag") : Val.Fixnum(b[0] & 0xff);
+        });
+        Def("flint/wire-left", (rt, at, n) => {
+            long r = RCheck(rt, rt.VAt(at), "wire-left");
+            return Val.IsNil(r) ? Val.Nil : Val.Fixnum(Wire.Left(rt, r));
+        });
+        Def("flint/wire-u32", (rt, at, n) => {
+            long r = RCheck(rt, rt.VAt(at), "wire-u32");
+            if (Val.IsNil(r)) return Val.Nil;
+            byte[] b = Wire.Take(rt, r, 4);
+            return b == null ? RShort(rt, "wire-u32") : Val.Fixnum(Wire.U32Of(b, 0));
+        });
+        Def("flint/wire-i64", (rt, at, n) => {
+            long r = RCheck(rt, rt.VAt(at), "wire-i64");
+            if (Val.IsNil(r)) return Val.Nil;
+            byte[] b = Wire.Take(rt, r, 8);
+            return b == null ? RShort(rt, "wire-i64") : Num.Integer(rt, Wire.U64Of(b, 0));
+        });
+        Def("flint/wire-f64", (rt, at, n) => {
+            long r = RCheck(rt, rt.VAt(at), "wire-f64");
+            if (Val.IsNil(r)) return Val.Nil;
+            byte[] b = Wire.Take(rt, r, 8);
+            return b == null ? RShort(rt, "wire-f64")
+                             : Val.OfDouble(System.BitConverter.Int64BitsToDouble(Wire.U64Of(b, 0)));
+        });
+        Def("flint/wire-text", (rt, at, n) => RText(rt, rt.VAt(at), "wire-text"));
+        Def("flint/wire-ns", (rt, at, n) => {
+            long r = RCheck(rt, rt.VAt(at), "wire-ns");
+            if (Val.IsNil(r)) return Val.Nil;
+            byte[] lb = Wire.Take(rt, r, 4);
+            if (lb == null) return RShort(rt, "wire-ns");
+            long len = Wire.U32Of(lb, 0);
+            // ABSENT is not empty: the sentinel is `ffffffff`.
+            //
+            // MASKED, because `Codec.NO_NS` is an `int` holding -1 and `U32Of`
+            // answers an unsigned `long`: `4294967295L == -1` is false, so the
+            // sentinel went unrecognised and the length became -1 on the cast.
+            if (len == (Codec.NO_NS & 0xffffffffL)) return Val.Nil;
+            byte[] b = Wire.Take(rt, r, (int) len);
+            return b == null ? RShort(rt, "wire-ns")
+                             : Str.Of(rt, System.Text.Encoding.UTF8.GetString(b));
+        });
+        Def("flint/wire-blob", (rt, at, n) => {
+            long r = RCheck(rt, rt.VAt(at), "wire-blob");
+            if (Val.IsNil(r)) return Val.Nil;
+            byte[] lb = Wire.Take(rt, r, 4);
+            if (lb == null) return RShort(rt, "wire-blob");
+            byte[] b = Wire.Take(rt, r, (int) Wire.U32Of(lb, 0));
+            return b == null ? RShort(rt, "wire-blob") : Bytes.Of(rt, b);
+        });
+        // THE TWO THAT MINT.
+        Def("flint/wire-port-in", (rt, at, n) => {
+            long r = RCheck(rt, rt.VAt(at), "wire-port-in");
+            if (Val.IsNil(r)) return Val.Nil;
+            if (!Wire.MayMint(rt, r)) {
+                return rt.ThrowStr("SecurityException",
+                    "wire-port-in: this reader is over bytes the program supplied, and a port "
+                  + "cannot be made from bytes -- only bytes that arrived on a bridge carry one");
+            }
+            byte[] b = Wire.Take(rt, r, 4);
+            if (b == null) return RShort(rt, "wire-port-in");
+            return Conc.InstallBridgePort(rt, Wire.U32Of(b, 0), Val.Nil, true);
+        });
+        Def("flint/wire-opaque-in", (rt, at, n) => {
+            long r = RCheck(rt, rt.VAt(at), "wire-opaque-in");
+            if (Val.IsNil(r)) return Val.Nil;
+            if (!Wire.MayMint(rt, r)) {
+                return rt.ThrowStr("SecurityException",
+                    "wire-opaque-in: this reader is over bytes the program supplied, and an "
+                  + "opaque value cannot be made from bytes");
+            }
+            byte[] ib = Wire.Take(rt, r, 8);
+            if (ib == null) return RShort(rt, "wire-opaque-in");
+            long id = Wire.U64Of(ib, 0);
+            byte[] lb = Wire.Take(rt, r, 4);
+            if (lb == null) return RShort(rt, "wire-opaque-in");
+            byte[] b = Wire.Take(rt, r, (int) Wire.U32Of(lb, 0));
+            if (b == null) return RShort(rt, "wire-opaque-in");
+            int bas = rt.Mark();
+            int li = rt.Push(Str.Of(rt, System.Text.Encoding.UTF8.GetString(b)));
+            long o = global::_3sln.Flint.Kgen.Rt.Opaque.NewOpaque(rt, rt.R(li), id);
+            rt.PopTo(bas);
+            return o;
+        });
+        Def("flint/wire-int", (rt, at, n) => {
+            long w = WCheck(rt, rt.VAt(at), "wire-int");
+            if (Val.IsNil(w)) return Val.Nil;
+            long v = rt.VAt(at + 1);
+            if (!Num.IsInt(rt, v)) return rt.ThrowStr("ClassCastException", "wire-int wants an integer");
+            if (!WExpect(rt, w, 0, "wire-int")) return Val.Nil;
+            return WDone(rt, w, Wire.Put(rt, w, Codec.K_INT) && Wire.U64(rt, w, Num.AsI64(rt, v).Value), "wire-int");
+        });
+        Def("flint/wire-double", (rt, at, n) => {
+            long w = WCheck(rt, rt.VAt(at), "wire-double");
+            if (Val.IsNil(w)) return Val.Nil;
+            long v = rt.VAt(at + 1);
+            if (!Num.IsNumber(rt, v)) return rt.ThrowStr("ClassCastException", "wire-double wants a number");
+            long bits = System.BitConverter.DoubleToInt64Bits(Num.F64(rt, v));
+            if (!WExpect(rt, w, 0, "wire-double")) return Val.Nil;
+            return WDone(rt, w, Wire.Put(rt, w, Codec.K_DOUBLE) && Wire.U64(rt, w, bits), "wire-double");
+        });
+        Def("flint/wire-str", (rt, at, n) => {
+            long w = WCheck(rt, rt.VAt(at), "wire-str");
+            if (Val.IsNil(w)) return Val.Nil;
+            long v = rt.VAt(at + 1);
+            if (!Str.IsString(rt, v)) return rt.ThrowStr("ClassCastException", "wire-str wants a string");
+            if (!WExpect(rt, w, 0, "wire-str")) return Val.Nil;
+            return WDone(rt, w, Wire.Put(rt, w, Codec.K_STRING) && Wire.Text(rt, w, Str.Text(rt, v)), "wire-str");
+        });
+        Def("flint/wire-bytes", (rt, at, n) => {
+            long w = WCheck(rt, rt.VAt(at), "wire-bytes");
+            if (Val.IsNil(w)) return Val.Nil;
+            long v = rt.VAt(at + 1);
+            if (!Bytes.IsBytes(rt, v)) return rt.ThrowStr("ClassCastException", "wire-bytes wants a byte string");
+            byte[] b = Bytes.ToArray(rt, v);
+            if (!WExpect(rt, w, 0, "wire-bytes")) return Val.Nil;
+            return WDone(rt, w, Wire.Put(rt, w, Codec.K_BYTES) && Wire.U32(rt, w, b.Length)
+                                && Wire.Raw(rt, w, b), "wire-bytes");
+        });
+        Def("flint/wire-kw", (rt, at, n) => WNamed(rt, at, Codec.K_KEYWORD, "wire-kw"));
+        Def("flint/wire-sym", (rt, at, n) => WNamed(rt, at, Codec.K_SYMBOL, "wire-sym"));
+        Def("flint/wire-vec", (rt, at, n) => WCounted(rt, at, Codec.K_VECTOR, "wire-vec"));
+        Def("flint/wire-list", (rt, at, n) => WCounted(rt, at, Codec.K_LIST, "wire-list"));
+        Def("flint/wire-set", (rt, at, n) => WCounted(rt, at, Codec.K_SET, "wire-set"));
+        Def("flint/wire-map", (rt, at, n) => WCounted(rt, at, Codec.K_MAP, "wire-map"));
+        // THE TWO THAT MATTER. Both take a VALUE and read its identity
+        // themselves; a guest cannot pass an id, because flint is given no way
+        // to turn an integer into a port or an opaque. That is the whole safety
+        // rule, and it is why these are primitives rather than `wire-int` calls
+        // a guest could make for itself.
+        Def("flint/wire-port", (rt, at, n) => {
+            long w = WCheck(rt, rt.VAt(at), "wire-port");
+            if (Val.IsNil(w)) return Val.Nil;
+            long p = rt.VAt(at + 1);
+            if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "wire-port wants a port");
+            // A CHANNEL END IS NOT WRITABLE. `CheckSendable` runs on a VALUE and
+            // never sees an encoding, so the rule has to be restated where the
+            // bytes are made: a channel lives wholly in this heap and the host
+            // was never told it exists, so its id names one of our objects from
+            // OUTSIDE -- the integer-to-port conversion the design exists to
+            // prevent. A bridge id is the host's own and already means
+            // something over there, which is what makes delegation possible.
+            if (!Conc.CrossesAHeap(Val.AsFixnum(rt.Slot(p, Conc.PT_KIND)))) {
+                return rt.ThrowStr("IllegalArgumentException",
+                    "wire-port: a channel endpoint cannot be sent to the host -- both its ends "
+                    + "live in this heap and the host has never been told it exists, so its "
+                    + "id would name one of our objects from outside. A bridge port can be, "
+                    + "because its id is the host's own.");
+            }
+            long id = Val.AsFixnum(rt.Slot(p, Conc.PT_ID));
+            if (!WExpect(rt, w, 0, "wire-port")) return Val.Nil;
+            return WDone(rt, w, Wire.Put(rt, w, Codec.K_PORT) && Wire.U32(rt, w, id), "wire-port");
+        });
+        Def("flint/wire-opaque", (rt, at, n) => {
+            long w = WCheck(rt, rt.VAt(at), "wire-opaque");
+            if (Val.IsNil(w)) return Val.Nil;
+            long o = rt.VAt(at + 1);
+            if (!global::_3sln.Flint.Kgen.Rt.Opaque.IsOpaque(rt, o)) {
+                return rt.ThrowStr("ClassCastException", "wire-opaque wants an opaque value");
+            }
+            long id = global::_3sln.Flint.Kgen.Rt.Opaque.OpaqueHostId(rt, o);
+            long lv = global::_3sln.Flint.Kgen.Rt.Opaque.OpaqueLabel(rt, o);
+            string label = Str.IsString(rt, lv) ? Str.Text(rt, lv) : "";
+            if (!WExpect(rt, w, 0, "wire-opaque")) return Val.Nil;
+            return WDone(rt, w, Wire.Put(rt, w, Codec.K_SENTINEL) && Wire.U64(rt, w, id)
+                                && Wire.Text(rt, w, label), "wire-opaque");
+        });
+
         // --- regex ------------------------------------------------------------
         //
         // The PATTERN is compiled to a program by flint's own library, in
@@ -918,35 +1163,45 @@ public static class Builtins {
             long name = rt.VAt(at);
             if (!Str.IsString(rt, name))
                 return rt.ThrowStr("ClassCastException", "open wants a name (a string)");
-            // EVERY REMAINING ARGUMENT IS FORWARDED, and the runtime takes no
-            // view of any of them. A capability is an opaque value like any
-            // other and travels as one; nothing here knows the word, which is
-            // the point (`DECISIONS.md#opaque-values`).
-            int bas = rt.Mark();
-            int ni = rt.Push(name);
-            int vi = rt.Push(Vec.Empty(rt));
-            for (int i = 1; i < n; i++) rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.VAt(at + i)));
-            long nm = rt.R(ni), args = rt.R(vi);
-            rt.PopTo(bas);
-            return Conc.PortOpen(rt, nm, args);
+            // THE PAYLOAD ARRIVES ENCODED
+            // (`DECISIONS.md#the-codec-is-guest-code`). `flint.port/open`
+            // builds `[name ...args]` and writes it with `flint.wire`, so the
+            // runtime takes no view of the arguments -- and now does not even
+            // walk them. The NAME is still passed separately, because it is
+            // what the refusal message says.
+            long w = rt.VAt(at + 1);
+            if (!Wire.IsWriter(rt, w))
+                return rt.ThrowStr("ClassCastException",
+                    "open wants its arguments encoded -- call `flint.port/open`, "
+                    + "which does that");
+            return Conc.PortOpen(rt, name, w);
         });
         Def("flint/request", (rt, at, n) => {
             long what = rt.VAt(at);
             if (!Str.IsString(rt, what))
                 return rt.ThrowStr("ClassCastException", "request wants a name (a string)");
-            // Identical to `open` above, and deliberately so: same forwarding,
-            // same no-view-of-the-arguments. What differs is what comes back
-            // (`DECISIONS.md#workspace-capabilities` step 7).
-            int bas = rt.Mark();
-            int ni = rt.Push(what);
-            int vi = rt.Push(Vec.Empty(rt));
-            for (int i = 1; i < n; i++) rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.VAt(at + i)));
-            long nm = rt.R(ni), args = rt.R(vi);
-            rt.PopTo(bas);
-            return Conc.HostRequest(rt, nm, args);
+            // The payload arrives ENCODED and a live READER comes back, as for
+            // `open` (`DECISIONS.md#the-codec-is-guest-code`). Arity is checked,
+            // not assumed: a one-argument call would read past its arguments.
+            if (n < 2)
+                return rt.ThrowStr("IllegalArgumentException",
+                    "request wants a name and an encoding -- call `flint.host/request`");
+            long w = rt.VAt(at + 1);
+            if (!Wire.IsWriter(rt, w))
+                return rt.ThrowStr("ClassCastException",
+                    "request wants its arguments encoded -- call `flint.host/request`, "
+                    + "which does that");
+            return Conc.HostRequest(rt, what, w);
         });
         Def("flint/port-send", (rt, at, n) => Conc.Send(rt, rt.VAt(at), rt.VAt(at + 1)));
         Def("flint/port-receive", (rt, at, n) => Conc.Receive(rt, rt.VAt(at)));
+        Def("flint/port-receive-reader", (rt, at, n) => {
+            long p = rt.VAt(at);
+            if (!Conc.IsPort(rt, p)) {
+                return rt.ThrowStr("ClassCastException", "port-receive-reader wants a port");
+            }
+            return Conc.ReceiveReader(rt, p);
+        });
         Def("flint/port-close", (rt, at, n) => Conc.Close(rt, rt.VAt(at)));
         Def("flint/port?", (rt, at, n) => Val.Bool(Conc.IsPort(rt, rt.VAt(at))));
         Def("flint/port-id", (rt, at, n) => {
@@ -954,6 +1209,17 @@ public static class Builtins {
             if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-id wants a port");
             return rt.Slot(p, Conc.PT_ID);
         });
+        /// This sandbox's system port, or nil if it was given none.
+        ///
+        /// It exists because the control plane has to be a THUNK. Bootstrap
+        /// spawns `flint.system/boot` by taking its var's value and spawning
+        /// it, and a green thread takes no arguments -- so the port cannot be
+        /// passed in and has to be fetched. The alternative was the runtime
+        /// calling a flint function to build a closure over the port, which
+        /// re-enters `drive` from inside `drive`: measured on the native
+        /// runtime, and the nested scheduler is what made the first version
+        /// silently never start (`DECISIONS.md#bridges-are-the-only-door`).
+        Def("flint/system-port", (rt, at, n) => Conc.SystemPort(rt));
         Def("flint/port-label", (rt, at, n) => {
             long p = rt.VAt(at);
             if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-label wants a port");
@@ -1219,5 +1485,122 @@ public static class Builtins {
             if (!(c == want || (orEqual && c == 0))) return Val.False;
         }
         return Val.True;
+    }
+
+    // --- wire writer helpers ------------------------------------------------
+
+    /// The writer, or nil after throwing. One shape for sixteen refusals.
+    /// Refuse a value the format does not allow here.
+    static bool WExpect(Rt rt, long w, long opens, string what) {
+        if (Wire.ExpectValue(rt, w, opens)) return true;
+        rt.ThrowStr("IllegalStateException",
+            what + ": no value is due here -- the message is already complete, or a "
+                 + "count was expected");
+        return false;
+    }
+
+    static long WCheck(Rt rt, long w, string what) {
+        if (Wire.IsWriter(rt, w)) return w;
+        rt.ThrowStr("ClassCastException", what + " wants a wire writer");
+        return Val.Nil;
+    }
+
+    /// Answer the writer, or throw when it was already finished: appending
+    /// after that would grow bytes somebody has sent.
+    static long WDone(Rt rt, long w, bool ok, string what) {
+        if (ok) return w;
+        return rt.ThrowStr("IllegalStateException", what + ": this writer has already been finished");
+    }
+
+    static long WPut(Rt rt, long w, int tag, string what) {
+        long c = WCheck(rt, w, what);
+        if (Val.IsNil(c)) return Val.Nil;
+        long opens = (tag == Codec.K_WITH_META || tag == Codec.K_TAGGED) ? 2 : 0;
+        if (!WExpect(rt, c, opens, what)) return Val.Nil;
+        return WDone(rt, c, Wire.Put(rt, c, tag), what);
+    }
+
+    /// A keyword or symbol: the namespace (ABSENT is not empty -- that is what
+    /// separates `:kw` from `:/kw`), then the name.
+    static long WNamed(Rt rt, int at, int tag, string what) {
+        long w = WCheck(rt, rt.VAt(at), what);
+        if (Val.IsNil(w)) return Val.Nil;
+        long ns = rt.VAt(at + 1), name = rt.VAt(at + 2);
+        if (!Str.IsString(rt, name)) {
+            return rt.ThrowStr("ClassCastException", what + " wants a name string");
+        }
+        if (!WExpect(rt, w, 0, what)) return Val.Nil;
+        bool ok = Wire.Put(rt, w, tag);
+        if (Val.IsNil(ns)) {
+            ok = ok && Wire.U32(rt, w, Codec.NO_NS);
+        } else {
+            if (!Str.IsString(rt, ns)) {
+                return rt.ThrowStr("ClassCastException", what + " wants a namespace string or nil");
+            }
+            ok = ok && Wire.Text(rt, w, Str.Text(rt, ns));
+        }
+        ok = ok && Wire.Text(rt, w, Str.Text(rt, name));
+        return WDone(rt, w, ok, what);
+    }
+
+    /// A counted opening: the tag, then how many values follow. COUNTS, NOT
+    /// BRACKETS, because that is what the format already says.
+    /// A COUNT THE FORMAT CAN ACTUALLY WRITE, or false having thrown.
+    ///
+    /// Every count in the encoding is four little-endian bytes, so one past
+    /// `u32` wrote a truncated count and opened an untruncated frame. It was
+    /// also the hole: a fixnum is 48 bits, sign-extended, so a frame of
+    /// `2^47 + 1` reads back NEGATIVE -- which is what "a count is due" means.
+    /// `(wire-vec (+ 2^47 1))` wrote `1` to the wire and left the writer
+    /// willing to take a raw four-byte count where the reader expects a value:
+    /// `0f 00 00 00` is `K_PORT` and the start of an id.
+    static bool CountOk(Rt rt, long c, string what) {
+        if (c < 0) {
+            rt.ThrowStr("IllegalArgumentException", what + ": a count cannot be negative");
+            return false;
+        }
+        if (c > Codec.MAX_COUNT) {
+            rt.ThrowStr("IllegalArgumentException",
+                what + ": a count of " + c + " cannot be written -- the format writes a "
+                + "count as four bytes, so the largest is " + Codec.MAX_COUNT);
+            return false;
+        }
+        return true;
+    }
+
+    static long WCounted(Rt rt, int at, int tag, string what) {
+        long w = WCheck(rt, rt.VAt(at), what);
+        if (Val.IsNil(w)) return Val.Nil;
+        long v = rt.VAt(at + 1);
+        if (!Num.IsInt(rt, v)) return rt.ThrowStr("ClassCastException", what + " wants a count");
+        long c = Num.AsI64(rt, v).Value;
+        if (!CountOk(rt, c, what)) return Val.Nil;
+        // A MAP OPENS TWICE ITS COUNT: `n` pairs are `2n` values.
+        long opens = (tag == Codec.K_MAP) ? c * 2 : c;
+        if (!WExpect(rt, w, opens, what)) return Val.Nil;
+        return WDone(rt, w, Wire.Put(rt, w, tag) && Wire.U32(rt, w, c), what);
+    }
+
+    // --- wire reader helpers ------------------------------------------------
+
+    static long RCheck(Rt rt, long r, string what) {
+        if (Wire.IsReader(rt, r)) return r;
+        rt.ThrowStr("ClassCastException", what + " wants a wire reader");
+        return Val.Nil;
+    }
+
+    /// Past the end is a THROW, not a nil: a decoder that read a truncated
+    /// message as a short one would build a value nobody sent.
+    static long RShort(Rt rt, string what) =>
+        rt.ThrowStr("IllegalArgumentException", what + ": the encoding ends early");
+
+    static long RText(Rt rt, long r0, string what) {
+        long r = RCheck(rt, r0, what);
+        if (Val.IsNil(r)) return Val.Nil;
+        byte[] lb = Wire.Take(rt, r, 4);
+        if (lb == null) return RShort(rt, what);
+        byte[] b = Wire.Take(rt, r, (int) Wire.U32Of(lb, 0));
+        if (b == null) return RShort(rt, what);
+        return Str.Of(rt, System.Text.Encoding.UTF8.GetString(b));
     }
 }

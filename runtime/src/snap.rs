@@ -521,7 +521,22 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
     rt.steps = steps;
     rt.gas_limit = gas_limit;
     rt.slice_end = slice_end;
-    rt.checkpoint = checkpoint;
+    // DERIVED, SO RE-DERIVED -- not read back.
+    //
+    // `checkpoint` is `min(gas_limit, slice_end)` with "absent" written as a
+    // sentinel, and the three runtimes did not spell that sentinel the same
+    // way: `u64::MAX` here, `0` on the jvm and the clr. The stamp a snapshot is
+    // refused on is MAGIC and VERSION, which are identical on all three, so a
+    // port's snapshot is ACCEPTED here -- and it carried `checkpoint = 0` for a
+    // program with no limits at all. `Counting::tick` is a bare
+    // `steps >= checkpoint`, so that restores as "trip on the next
+    // instruction", from a field the writer meant as "never trip".
+    //
+    // The sentinels agree now. This line is what makes that a property of the
+    // FORMAT rather than of three files staying in step: a value computed from
+    // two fields beside it is computed, and then no spelling of it can cross.
+    let _ = checkpoint;
+    rt.refresh_checkpoint();
     rt.gas_trips = gas_trips;
     rt.mem_trips = mem_trips;
     rt.status = status;
@@ -997,7 +1012,22 @@ pub fn import_live(rt: &mut Rt, bytes: &[u8]) -> bool {
     rt.steps = steps;
     rt.gas_limit = gas_limit;
     rt.slice_end = slice_end;
-    rt.checkpoint = checkpoint;
+    // DERIVED, SO RE-DERIVED -- not read back.
+    //
+    // `checkpoint` is `min(gas_limit, slice_end)` with "absent" written as a
+    // sentinel, and the three runtimes did not spell that sentinel the same
+    // way: `u64::MAX` here, `0` on the jvm and the clr. The stamp a snapshot is
+    // refused on is MAGIC and VERSION, which are identical on all three, so a
+    // port's snapshot is ACCEPTED here -- and it carried `checkpoint = 0` for a
+    // program with no limits at all. `Counting::tick` is a bare
+    // `steps >= checkpoint`, so that restores as "trip on the next
+    // instruction", from a field the writer meant as "never trip".
+    //
+    // The sentinels agree now. This line is what makes that a property of the
+    // FORMAT rather than of three files staying in step: a value computed from
+    // two fields beside it is computed, and then no spelling of it can cross.
+    let _ = checkpoint;
+    rt.refresh_checkpoint();
     rt.gas_trips = gas_trips;
     rt.mem_trips = mem_trips;
     rt.status = status as i32;

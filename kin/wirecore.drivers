@@ -1,0 +1,461 @@
+--rust-head
+// A TOY HEAP, enough to drive the FRAME LOGIC and nothing more.
+//
+// The frames are what this file exists to pin: the marker, its sign, and the
+// bound. So `Value` models the real 48-bit fixnum EXACTLY -- payload masked to
+// 48 bits, read back sign-extended -- because that width is the property under
+// test. A driver that used a plain i64 would agree on all three targets and
+// prove nothing about the thing that broke.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_0000_0000_0000);
+const TRUE: Value = Value(0xFFFF_0000_0000_0001);
+const NOT_FOUND: Value = Value(0xFFFF_0000_0000_0002);
+const TY_WRITER: u8 = 52;
+const TY_READER: u8 = 53;
+const TY_BYTES: u8 = 20;
+const TY_VEC: u8 = 9;
+mod codec {
+    pub const WR_BUF: u32 = 0;
+    pub const WR_LIVE: u32 = 1;
+    pub const WR_NEED: u32 = 2;
+    pub const WR_LEN: u32 = 3;
+    pub const RD_BYTES: u32 = 0;
+    pub const RD_POS: u32 = 1;
+    pub const RD_LIVE: u32 = 2;
+    pub const RD_LEN: u32 = 3;
+    pub const MAX_CELLS: i64 = 1 << 40;
+}
+impl Value {
+    fn is_nil(self) -> bool { self == NIL }
+    fn as_heap(self) -> usize { self.0 as usize }
+    fn fixnum(n: i64) -> Value { Value((0xD << 60) | ((n as u64) & 0x0000_FFFF_FFFF_FFFF)) }
+    fn as_fixnum(self) -> i64 { ((self.0 << 16) as i64) >> 16 }
+}
+struct Obj { ty: u8, slots: Vec<Value> }
+struct Rt { objs: Vec<Obj>, roots: Vec<Value>, full: bool }
+impl Rt {
+    fn obj(&mut self, ty: u8, slots: Vec<Value>) -> Value {
+        self.objs.push(Obj { ty, slots });
+        Value((self.objs.len() - 1) as u64)
+    }
+    fn new_obj(&mut self, ty: u8, n: u32) -> Value {
+        let s = vec![NIL; n as usize];
+        self.obj(ty, s)
+    }
+    fn is_heap_ty(&self, v: Value, t: u8) -> bool {
+        v != NIL && v != TRUE && v != NOT_FOUND && (v.0 >> 60) != 0xD
+            && (v.0 as usize) < self.objs.len() && self.objs[v.0 as usize].ty == t
+    }
+    fn slot(&self, v: Value, i: u32) -> Value { self.objs[v.as_heap()].slots[i as usize] }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.objs[v.as_heap()].slots[i as usize] = x; }
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    // PERSISTENT, like the real ones: every one answers a NEW vector, which is
+    // why the state machine has to write the result back into its root.
+    fn empty_vec(&mut self) -> Value { self.obj(TY_VEC, Vec::new()) }
+    fn vec_count(&self, v: Value) -> u32 { self.objs[v.as_heap()].slots.len() as u32 }
+    fn vec_nth(&self, v: Value, i: u32, d: Value) -> Value {
+        *self.objs[v.as_heap()].slots.get(i as usize).unwrap_or(&d)
+    }
+    fn vec_conj(&mut self, v: Value, x: Value) -> Value {
+        let mut s = self.objs[v.as_heap()].slots.clone();
+        s.push(x);
+        self.obj(TY_VEC, s)
+    }
+    fn vec_pop(&mut self, v: Value) -> Value {
+        let mut s = self.objs[v.as_heap()].slots.clone();
+        s.pop();
+        self.obj(TY_VEC, s)
+    }
+    fn vec_assoc(&mut self, v: Value, i: u32, x: Value) -> Value {
+        let mut s = self.objs[v.as_heap()].slots.clone();
+        s[i as usize] = x;
+        self.obj(TY_VEC, s)
+    }
+    // A byte string is an object of bytes-as-fixnums. Enough for the writer to
+    // append into and for the reader to walk.
+    fn b_empty(&mut self) -> Value { self.obj(TY_BYTES, Vec::new()) }
+    fn b_transient(&mut self, v: Value) -> Value {
+        let s = self.objs[v.as_heap()].slots.clone();
+        self.obj(TY_BYTES, s)
+    }
+    fn b_persistent(&mut self, v: Value) -> Value { v }
+    fn b_count(&self, v: Value) -> u32 { self.objs[v.as_heap()].slots.len() as u32 }
+    fn b_at(&self, v: Value, i: u32, d: Value) -> Value {
+        *self.objs[v.as_heap()].slots.get(i as usize).unwrap_or(&d)
+    }
+    // A BUFFER THAT CAN REFUSE TO GROW. The real `b-conj` answers NIL when
+    // `tb-flush` cannot allocate a fresh tail, and `full` is how the driver
+    // reaches that case without a heap to exhaust.
+    fn b_conj(&mut self, v: Value, b: u32) -> Value {
+        if self.full {
+            return NIL;
+        }
+        let mut s = self.objs[v.as_heap()].slots.clone();
+        s.push(Value::fixnum(b as i64));
+        self.obj(TY_BYTES, s)
+    }
+--rust
+}
+fn b(x: bool) -> u32 { if x { 1 } else { 0 } }
+fn main() {
+    let mut rt = Rt { objs: Vec::new(), roots: Vec::new(), full: false };
+    // 1. A well-formed table: one column, named and typed, then one row.
+    let w = rt.wire_writer();
+    let ok1 = b(rt.wire_open_table(w, 1))
+        + 2 * b(rt.wire_expect_value(w, 0)) + 4 * b(rt.wire_expect_value(w, 0))
+        + 8 * b(rt.wire_expect_rowcount(w, 1)) + 16 * b(rt.wire_expect_value(w, 0))
+        + 32 * b(rt.wire_complete(w));
+    // 2. A VALUE where the count is due -- the refusal the marker exists for.
+    let w2 = rt.wire_writer();
+    rt.wire_open_table(w2, 1);
+    rt.wire_expect_value(w2, 0);
+    rt.wire_expect_value(w2, 0);
+    let ok2 = b(rt.wire_expect_value(w2, 0));
+    // 3. A row count where no table is open.
+    let w3 = rt.wire_writer();
+    let ok3 = b(rt.wire_expect_rowcount(w3, 1));
+    // 4. An EMPTY table completes on its row count.
+    let w4 = rt.wire_writer();
+    rt.wire_open_table(w4, 1);
+    rt.wire_expect_value(w4, 0);
+    rt.wire_expect_value(w4, 0);
+    let ok4 = b(rt.wire_expect_rowcount(w4, 0)) + 2 * b(rt.wire_complete(w4));
+    // 5. THE PRODUCT BOUND, on a frame built by multiplying.
+    let w5 = rt.wire_writer();
+    rt.wire_open_table(w5, 2);
+    for _ in 0..4 { rt.wire_expect_value(w5, 0); }
+    let ok5 = b(rt.wire_expect_rowcount(w5, 1 << 40));
+    // 6. THE MARKER'S SIGN, read straight back out of a frame. This is the
+    // field that caught a 32-bit mask on the ports.
+    let w6 = rt.wire_writer();
+    rt.wire_open_table(w6, 3);
+    let need = rt.slot(w6, codec::WR_NEED);
+    let deep = rt.vec_count(need);
+    let marker = rt.vec_nth(need, deep - 2, NOT_FOUND).as_fixnum();
+    // 7. A BUFFER THAT CANNOT GROW. Two answers, and the second is the one
+    //    that matters: `wire-byte` must refuse (0), and it must leave `WR_BUF`
+    //    ALONE. A version that returns false and still stores the NIL passes
+    //    on the return alone, and that version is what hung a host.
+    let w7 = rt.wire_writer();
+    let before = rt.slot(w7, codec::WR_BUF);
+    rt.full = true;
+    let refused = b(!rt.wire_byte(w7, 7));
+    let intact = b(rt.slot(w7, codec::WR_BUF) == before);
+    rt.full = false;
+    // AND IT STILL WORKS AFTERWARDS: a refusal is not a kill. The writer was
+    // never finished, so once the buffer can grow again the byte goes on.
+    let again = b(rt.wire_byte(w7, 7));
+    let ok7 = refused + 2 * intact + 4 * again;
+    println!("{} {} {} {} {} {} {}", ok1, ok2, ok3, ok4, ok5, marker, ok7);
+}
+--java-head
+    static final long NIL = 0xFFFF000000000000L;
+    static final long TRUE = 0xFFFF000000000001L;
+    static final long NOT_FOUND = 0xFFFF000000000002L;
+    static final int TY_WRITER = 52, TY_READER = 53, TY_BYTES = 20, TY_VEC = 9;
+    static final class Codec { static final long MAX_CELLS = 1L << 40; }
+    static final class Wire {
+        static final int WR_BUF = 0, WR_LIVE = 1, WR_NEED = 2, WR_LEN = 3;
+        static final int RD_BYTES = 0, RD_POS = 1, RD_LIVE = 2, RD_LEN = 3;
+    }
+    static final class Val {
+        static final long NIL = Probe.NIL, TRUE = Probe.TRUE, NOT_FOUND = Probe.NOT_FOUND;
+        static boolean isNil(long v) { return v == NIL; }
+        static int asHeap(long v) { return (int) v; }
+        static long fixnum(long n) { return (0xDL << 60) | (n & 0x0000FFFFFFFFFFFFL); }
+        static long asFixnum(long v) { return (v << 16) >> 16; }
+    }
+    static final class Obj { int ty; java.util.ArrayList<Long> slots = new java.util.ArrayList<>(); }
+    static final class Rt {
+        java.util.ArrayList<Obj> objs = new java.util.ArrayList<>();
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        // A BUFFER THAT CAN REFUSE TO GROW -- see the Rust driver.
+        boolean full = false;
+        long obj(int ty, java.util.ArrayList<Long> s) {
+            Obj o = new Obj(); o.ty = ty; o.slots = s; objs.add(o);
+            return objs.size() - 1;
+        }
+        boolean isHeapTy(long v, int t) {
+            if (v == NIL || v == TRUE || v == NOT_FOUND) return false;
+            if ((v >>> 60) == 0xD) return false;
+            return v >= 0 && v < objs.size() && objs.get((int) v).ty == t;
+        }
+        long slot(long v, int i) { return objs.get((int) v).slots.get(i); }
+        void setSlot(int a, int i, long x) { objs.get(a).slots.set(i, x); }
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void setR(int i, long v) { roots.set(i, v); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+    }
+    static final class Conc {
+        static long newObj(Rt rt, int ty, int n) {
+            java.util.ArrayList<Long> s = new java.util.ArrayList<>();
+            for (int i = 0; i < n; i++) s.add(NIL);
+            return rt.obj(ty, s);
+        }
+    }
+    static java.util.ArrayList<Long> copy(Rt rt, long v) {
+        return new java.util.ArrayList<>(rt.objs.get((int) v).slots);
+    }
+    static final class Vec { static long empty(Rt rt) { return rt.obj(TY_VEC, new java.util.ArrayList<>()); } }
+    static int vecCount(Rt rt, long v) { return rt.objs.get((int) v).slots.size(); }
+    static long vecNth(Rt rt, long v, int i, long d) {
+        java.util.ArrayList<Long> s = rt.objs.get((int) v).slots;
+        return (i < 0 || i >= s.size()) ? d : s.get(i);
+    }
+    static long vecConj(Rt rt, long v, long x) {
+        java.util.ArrayList<Long> s = copy(rt, v); s.add(x); return rt.obj(TY_VEC, s);
+    }
+    static long vecPop(Rt rt, long v) {
+        java.util.ArrayList<Long> s = copy(rt, v);
+        if (!s.isEmpty()) s.remove(s.size() - 1);
+        return rt.obj(TY_VEC, s);
+    }
+    static long vecAssoc(Rt rt, long v, int i, long x) {
+        java.util.ArrayList<Long> s = copy(rt, v); s.set(i, x); return rt.obj(TY_VEC, s);
+    }
+    static long bEmpty(Rt rt) { return rt.obj(TY_BYTES, new java.util.ArrayList<>()); }
+    static long bTransient(Rt rt, long v) { return rt.obj(TY_BYTES, copy(rt, v)); }
+    static long bPersistent(Rt rt, long v) { return v; }
+    static int bCount(Rt rt, long v) { return rt.objs.get((int) v).slots.size(); }
+    static long bAt(Rt rt, long v, int i, long d) {
+        java.util.ArrayList<Long> s = rt.objs.get((int) v).slots;
+        return (i < 0 || i >= s.size()) ? d : s.get(i);
+    }
+    static long bConj(Rt rt, long v, int x) {
+        if (rt.full) return NIL;
+        java.util.ArrayList<Long> s = copy(rt, v); s.add(Val.fixnum(x)); return rt.obj(TY_BYTES, s);
+    }
+--java
+    static int b(boolean x) { return x ? 1 : 0; }
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        long w = wireWriter(rt);
+        int ok1 = b(wireOpenTable(rt, w, 1))
+            + 2 * b(wireExpectValue(rt, w, 0)) + 4 * b(wireExpectValue(rt, w, 0))
+            + 8 * b(wireExpectRowcount(rt, w, 1)) + 16 * b(wireExpectValue(rt, w, 0))
+            + 32 * b(wireComplete(rt, w));
+        long w2 = wireWriter(rt);
+        wireOpenTable(rt, w2, 1);
+        wireExpectValue(rt, w2, 0);
+        wireExpectValue(rt, w2, 0);
+        int ok2 = b(wireExpectValue(rt, w2, 0));
+        long w3 = wireWriter(rt);
+        int ok3 = b(wireExpectRowcount(rt, w3, 1));
+        long w4 = wireWriter(rt);
+        wireOpenTable(rt, w4, 1);
+        wireExpectValue(rt, w4, 0);
+        wireExpectValue(rt, w4, 0);
+        int ok4 = b(wireExpectRowcount(rt, w4, 0)) + 2 * b(wireComplete(rt, w4));
+        long w5 = wireWriter(rt);
+        wireOpenTable(rt, w5, 2);
+        for (int i = 0; i < 4; i++) wireExpectValue(rt, w5, 0);
+        int ok5 = b(wireExpectRowcount(rt, w5, 1L << 40));
+        long w6 = wireWriter(rt);
+        wireOpenTable(rt, w6, 3);
+        long need = rt.slot(w6, Wire.WR_NEED);
+        int deep = vecCount(rt, need);
+        long marker = Val.asFixnum(vecNth(rt, need, deep - 2, NOT_FOUND));
+        // 7. A BUFFER THAT CANNOT GROW -- see the Rust driver.
+        long w7 = wireWriter(rt);
+        long before = rt.slot(w7, Wire.WR_BUF);
+        rt.full = true;
+        int refused = b(!wireByte(rt, w7, 7));
+        int intact = b(rt.slot(w7, Wire.WR_BUF) == before);
+        rt.full = false;
+        int again = b(wireByte(rt, w7, 7));
+        int ok7 = refused + 2 * intact + 4 * again;
+        System.out.println(ok1 + " " + ok2 + " " + ok3 + " " + ok4 + " " + ok5 + " " + marker + " " + ok7);
+    }
+--csharp-head
+    internal const long NIL = unchecked((long) 0xFFFF000000000000UL);
+    internal const long TRUE = unchecked((long) 0xFFFF000000000001UL);
+    internal const long NOT_FOUND = unchecked((long) 0xFFFF000000000002UL);
+    internal const int TY_BYTES = 20, TY_VEC = 9;
+    // C# PASCALISES the type tags, which is exactly the spelling difference
+    // `kin/src/flint/impl/rt.cljc` keeps a table for.
+    internal static class Obj { internal const int TyWriter = 52, TyReader = 53; }
+    internal static class Codec { internal const long MAX_CELLS = 1L << 40; }
+    internal static class Wire {
+        internal const int WR_BUF = 0, WR_LIVE = 1, WR_NEED = 2, WR_LEN = 3;
+        internal const int RD_BYTES = 0, RD_POS = 1, RD_LIVE = 2, RD_LEN = 3;
+    }
+    internal static class Val {
+        internal const long Nil = Probe.NIL, True = Probe.TRUE, NotFound = Probe.NOT_FOUND;
+        internal static bool IsNil(long v) => v == NIL;
+        internal static int AsHeap(long v) => (int) v;
+        internal static long Fixnum(long n) =>
+            unchecked((long) ((0xDUL << 60) | ((ulong) n & 0x0000FFFFFFFFFFFFUL)));
+        internal static long AsFixnum(long v) => (v << 16) >> 16;
+    }
+    internal sealed class Cell { internal int Ty; internal System.Collections.Generic.List<long> Slots = new(); }
+    internal sealed class Rt {
+        internal System.Collections.Generic.List<Cell> Objs = new();
+        internal System.Collections.Generic.List<long> Roots = new();
+        // A BUFFER THAT CAN REFUSE TO GROW -- see the Rust driver.
+        internal bool Full = false;
+        internal long MakeObj(int ty, System.Collections.Generic.List<long> s) {
+            Objs.Add(new Cell { Ty = ty, Slots = s });
+            return Objs.Count - 1;
+        }
+        internal bool IsHeapTy(long v, int t) {
+            if (v == NIL || v == TRUE || v == NOT_FOUND) return false;
+            if ((ulong) v >> 60 == 0xD) return false;
+            return v >= 0 && v < Objs.Count && Objs[(int) v].Ty == t;
+        }
+        internal long Slot(long v, int i) => Objs[(int) v].Slots[i];
+        internal void SetSlot(int a, int i, long x) { Objs[a].Slots[i] = x; }
+        internal int Mark() => Roots.Count;
+        internal int Push(long v) { Roots.Add(v); return Roots.Count - 1; }
+        internal long R(int i) => Roots[i];
+        internal void SetR(int i, long v) { Roots[i] = v; }
+        internal void PopTo(int n) { while (Roots.Count > n) Roots.RemoveAt(Roots.Count - 1); }
+    }
+    internal static class Conc {
+        internal static long NewObj(Rt rt, int ty, int n) {
+            var s = new System.Collections.Generic.List<long>();
+            for (int i = 0; i < n; i++) s.Add(NIL);
+            return rt.MakeObj(ty, s);
+        }
+    }
+    static System.Collections.Generic.List<long> Copy(Rt rt, long v) =>
+        new System.Collections.Generic.List<long>(rt.Objs[(int) v].Slots);
+    internal static class Vec { internal static long Empty(Rt rt) => rt.MakeObj(TY_VEC, new System.Collections.Generic.List<long>()); }
+    static int VecCount(Rt rt, long v) => rt.Objs[(int) v].Slots.Count;
+    static long VecNth(Rt rt, long v, int i, long d) {
+        var s = rt.Objs[(int) v].Slots;
+        return (i < 0 || i >= s.Count) ? d : s[i];
+    }
+    static long VecConj(Rt rt, long v, long x) {
+        var s = Copy(rt, v); s.Add(x); return rt.MakeObj(TY_VEC, s);
+    }
+    static long VecPop(Rt rt, long v) {
+        var s = Copy(rt, v);
+        if (s.Count > 0) s.RemoveAt(s.Count - 1);
+        return rt.MakeObj(TY_VEC, s);
+    }
+    static long VecAssoc(Rt rt, long v, int i, long x) {
+        var s = Copy(rt, v); s[i] = x; return rt.MakeObj(TY_VEC, s);
+    }
+    static long BEmpty(Rt rt) => rt.MakeObj(TY_BYTES, new System.Collections.Generic.List<long>());
+    static long BTransient(Rt rt, long v) => rt.MakeObj(TY_BYTES, Copy(rt, v));
+    static long BPersistent(Rt rt, long v) => v;
+    static int BCount(Rt rt, long v) => rt.Objs[(int) v].Slots.Count;
+    static long BAt(Rt rt, long v, int i, long d) {
+        var s = rt.Objs[(int) v].Slots;
+        return (i < 0 || i >= s.Count) ? d : s[i];
+    }
+    static long BConj(Rt rt, long v, int x) {
+        if (rt.Full) return NIL;
+        var s = Copy(rt, v); s.Add(Val.Fixnum(x)); return rt.MakeObj(TY_BYTES, s);
+    }
+--csharp
+    static int B(bool x) => x ? 1 : 0;
+    static void Main() {
+        var rt = new Rt();
+        long w = WireWriter(rt);
+        int ok1 = B(WireOpenTable(rt, w, 1))
+            + 2 * B(WireExpectValue(rt, w, 0)) + 4 * B(WireExpectValue(rt, w, 0))
+            + 8 * B(WireExpectRowcount(rt, w, 1)) + 16 * B(WireExpectValue(rt, w, 0))
+            + 32 * B(WireComplete(rt, w));
+        long w2 = WireWriter(rt);
+        WireOpenTable(rt, w2, 1);
+        WireExpectValue(rt, w2, 0);
+        WireExpectValue(rt, w2, 0);
+        int ok2 = B(WireExpectValue(rt, w2, 0));
+        long w3 = WireWriter(rt);
+        int ok3 = B(WireExpectRowcount(rt, w3, 1));
+        long w4 = WireWriter(rt);
+        WireOpenTable(rt, w4, 1);
+        WireExpectValue(rt, w4, 0);
+        WireExpectValue(rt, w4, 0);
+        int ok4 = B(WireExpectRowcount(rt, w4, 0)) + 2 * B(WireComplete(rt, w4));
+        long w5 = WireWriter(rt);
+        WireOpenTable(rt, w5, 2);
+        for (int i = 0; i < 4; i++) WireExpectValue(rt, w5, 0);
+        int ok5 = B(WireExpectRowcount(rt, w5, 1L << 40));
+        long w6 = WireWriter(rt);
+        WireOpenTable(rt, w6, 3);
+        long need = rt.Slot(w6, Wire.WR_NEED);
+        int deep = VecCount(rt, need);
+        long marker = Val.AsFixnum(VecNth(rt, need, deep - 2, NOT_FOUND));
+        // 7. A BUFFER THAT CANNOT GROW -- see the Rust driver.
+        long w7 = WireWriter(rt);
+        long before = rt.Slot(w7, Wire.WR_BUF);
+        rt.Full = true;
+        int refused = B(!WireByte(rt, w7, 7));
+        int intact = B(rt.Slot(w7, Wire.WR_BUF) == before);
+        rt.Full = false;
+        int again = B(WireByte(rt, w7, 7));
+        int ok7 = refused + 2 * intact + 4 * again;
+        System.Console.WriteLine(ok1 + " " + ok2 + " " + ok3 + " " + ok4 + " " + ok5 + " " + marker + " " + ok7);
+    }
+--expect
+63 0 0 3 0 -4 7
+--expect-why
+DERIVED FROM THE FORMAT, field by field. Each is a bit-packed set of answers
+so that one wrong refusal cannot be hidden by another going the other way.
+
+  ok1 = 63   A WELL-FORMED TABLE, all six steps true (1+2+4+8+16+32):
+             open a table of one column; two values for its name and type;
+             the row count; one cell; and then the message is complete.
+             Any step refusing drops its bit, so 63 names the whole sequence
+             and not merely its end.
+
+  ok2 = 0    A VALUE WHERE THE COUNT IS DUE. This is the property the marker
+             exists for and the one a 32-bit mask destroyed: with the sign
+             lost, the frame reads as an ordinary positive count and the
+             value is ACCEPTED. Rust answered 0 and both ports answered 1
+             until `fixnum64` existed.
+
+  ok3 = 0    A ROW COUNT WHERE NO TABLE IS OPEN. The other half of the same
+             rule: a count goes only where a count is due, so its four bytes
+             can never be read as a tag and an id.
+
+  ok4 = 3    AN EMPTY TABLE completes on its row count (1) and reports
+             complete (2). Zero cells is the case where the writer finishes
+             on the count itself, with no cell following it.
+
+  ok5 = 0    THE PRODUCT BOUND. Two columns and 2^40 rows is 2^41 cells,
+             past `MAX_CELLS`, so the count is refused rather than wrapping.
+             An unchecked product wraps into the marker space -- which is the
+             same hole one level down.
+
+  marker = -4  THE SIGN ITSELF, read straight out of the frame. A table of
+             THREE columns stores `-ncols - 1`, and `-3 - 1` is -4. It is the
+             frame under the `2 * ncols` pairs frame, hence `deep - 2`.
+             Negative is the whole encoding of "a count is due", so this
+             field fails on any target that widens a signed 64-bit value
+             through a 32-bit mask: 0xFFFFFFFC read unsigned is 4294967292.
+             -4 and 4294967292 cannot be confused for a formatting
+             difference.
+
+  ok7 = 7    A BUFFER THAT CANNOT GROW, and all three bits matter
+             (1+2+4). `b-conj` answers NIL when `tb-flush` cannot allocate a
+             fresh tail, and the driver reaches that with a switch rather than
+             by exhausting a heap it does not have.
+
+             `1` the append is REFUSED. On its own this bit is weak: it is the
+                 obvious thing to assert and the broken version can be made to
+                 pass it by returning false after the damage is done.
+
+             `2` AND `WR_BUF` IS UNTOUCHED. This is the bit the bug would
+                 fail. The first version stored the NIL and answered true; a
+                 half-fix that answers false and still stores it leaves a
+                 writer whose buffer is nil, which is the same corpse by a
+                 quieter route. Comparing the slot against what it held
+                 BEFORE the refusal is what separates "declined" from
+                 "destroyed", and nothing else here does.
+
+             `4` AND THE WRITER STILL WORKS. A refusal is not a kill: the
+                 writer was never finished, so once the buffer can grow the
+                 byte goes on. Without this field, `wire-byte` could satisfy
+                 the first two by marking the writer dead -- which would turn
+                 a transient allocation failure into a permanently broken
+                 writer, and a retry into a second, more confusing error.

@@ -8,7 +8,7 @@ module free of them without `flint` needing a flag of its own
 import sys
 
 EXPORTS = [
-    "stat_bytes_allocated", "stat_collections", "stat_peak_live", "stat_heap_used",
+    "stat_bytes_allocated", "stat_collections", "stat_peak_live", "stat_peak_live_major", "stat_heap_used",
     "collect_now", "set_gc_stress", "set_gc_stress_window", "stat_allocs",
     "set_gc_upgrade_window",
     "set_gc_verify_remset", "stat_remset_violations",

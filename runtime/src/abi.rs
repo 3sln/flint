@@ -349,13 +349,28 @@ pub extern "C" fn stat_heap_used() -> u32 {
 pub extern "C" fn stat_bytes_allocated() -> u64 {
     unsafe { ensure_rt().gc.stats.bytes_allocated }
 }
-/// High-water mark of *live* bytes, sampled at each collection. The number a
-/// memory claim is made against: "peak memory is proportional to the content a
-/// script actually kept", not to how much it allocated on the way.
+/// High-water mark of `old_live + young_used`, sampled at each collection.
+///
+/// **AN UPPER BOUND.** After a minor, `old_live` still counts every old object
+/// allocated since the last major, dead ones included -- see `GcStats` for why
+/// that is generational collection rather than a sampling defect. For a figure
+/// that means LIVE bytes, read `stat_peak_live_major`.
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn stat_peak_live() -> u64 {
     unsafe { ensure_rt().gc.stats.peak_live }
+}
+
+/// High-water mark of LIVE bytes -- sampled only after a major, which is the
+/// only moment `old_live` is true.
+///
+/// The honest counterpart to `stat_peak_live`. It can miss a spike contained
+/// entirely between two majors; it never counts garbage
+/// (`DECISIONS.md#two-builds`).
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_peak_live_major() -> u64 {
+    unsafe { ensure_rt().gc.stats.peak_live_major }
 }
 
 /// Force a collection, so a measurement can be taken at a defined point rather
@@ -701,7 +716,15 @@ pub extern "C" fn stat_stale_push(i: u32) -> u32 {
 
 /// The region histogram of `DECISIONS.md#emit-wasm-instead-of-dispatch`. One export rather than one per
 /// array: `i < 20` is the per-frame histogram, `20..40` the per-run one,
-/// `40..60` the resumed-frame one, `60..` the counters.
+/// `40..60` the resumed-frame one, `60..80` the per-SEGMENT one, and `80..`
+/// the counters.
+///
+/// THE SEGMENT HISTOGRAM WAS MISSING FROM THIS LIST, which put the counters at
+/// 60 in the only place that says where they are. Reading `stat_region(60 + k)`
+/// for `COUNTS[k]` -- which this comment invites -- returns `SEG_HIST[k]`
+/// instead, silently and with plausible-looking numbers. Corrected 2026-09-17,
+/// after it produced a wrong measurement in
+/// `DECISIONS.md#emit-wasm-instead-of-dispatch`.
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn stat_region(i: u32) -> u64 {

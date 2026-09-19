@@ -78,16 +78,14 @@ impl Rt {
                     let (k, v) = (self.slot_or_nth(x, 0), self.slot_or_nth(x, 1));
                     self.map_assoc(coll, k, v)
                 } else if self.is_map(x) {
-                    let base = self.mark();
-                    let ci = self.push(coll);
-                    let mut st = ci;
-                    self.map_for_each(x, &mut st, &mut |rt, k, v, ci| {
-                        let nm = rt.map_assoc(rt.r(*ci), k, v);
-                        rt.set_r(*ci, nm);
-                    });
-                    let out = self.r(ci);
-                    self.pop_to(base);
-                    out
+                    // GENERATED (`kin/mapconj.kin`). This used to walk `x`
+                    // with `map_for_each`, a CALLBACK walk, while both ports
+                    // walked it with `seq`/`first`/`next` -- two algorithms
+                    // for one operation, with two different gas costs, which
+                    // `bin/conform-hosts` could see in a total and could not
+                    // attribute. One source now, so the question does not
+                    // arise.
+                    self.map_conj_map(coll, x)
                 } else {
                     self.throw_str("IllegalArgumentException", "conj on a map wants a map entry")
                 }

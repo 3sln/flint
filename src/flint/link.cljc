@@ -211,6 +211,39 @@
                               (map str (.listFiles (io/file sysroot)))))
         args (concat [(lld-path) "-flavor" "wasm" "--no-entry" "--gc-sections"
                       "--export-table"
+                      ;; THE SHADOW STACK, sized and placed on purpose.
+                      ;;
+                      ;; wasm-ld's default is 64 KiB placed ABOVE the static
+                      ;; data, and both halves of that default were wrong here.
+                      ;;
+                      ;; Too small: the interpreter recurses on the Rust side
+                      ;; in proportion to the guest structure it is walking --
+                      ;; about 305 bytes a literal element, measured -- so 64
+                      ;; KiB ran out at a 178-element vector literal. That is
+                      ;; not an exotic size; it is a lookup table.
+                      ;;
+                      ;; Placed above the data: an overflow then grows DOWN
+                      ;; into the statics and scribbles them, and the program
+                      ;; carries on with its own globals corrupted. That is how
+                      ;; this presented for weeks -- a compile that stopped
+                      ;; mid-analysis, a thread finished while 25 frames deep,
+                      ;; a second control-plane thread booting because the
+                      ;; `system_booted` flag had been overwritten. Nothing
+                      ;; said "stack".
+                      ;;
+                      ;; `--stack-first` puts it at the bottom instead, so an
+                      ;; overflow runs off address zero and TRAPS. Silent
+                      ;; corruption becomes `memory access out of bounds` at
+                      ;; the instruction that did it.
+                      ;;
+                      ;; 1 MiB carries a literal of about 3 400 elements. The
+                      ;; cost is initial memory, not file size: 5 pages to 20,
+                      ;; +960 KiB a module, the file unchanged. This number is
+                      ;; a dial -- 256 KiB buys ~800 elements for +192 KiB --
+                      ;; and the trade is written down in
+                      ;; `DECISIONS.md#the-shadow-stack-is-not-a-default`, with
+                      ;; the measurements in `doc/goals/kin-port.md`.
+                      "-z" "stack-size=1048576" "--stack-first"
                       "--export=__heap_base" "--export=FLINT_IMAGE_DESC"]
                      (map #(str "--export=" %) abi-exports)
                      (map #(str "--export=" %) (if (:loader? p) loader-exports []))

@@ -11,12 +11,18 @@
 // that the two front doors compile a project into the SAME BYTES. Where they
 // differ, they differ on purpose and it is written down here.
 
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, statSync } from 'node:fs';
+
+/// Is this a file we can read? A bare word that names one is a SCRIPT; a bare
+/// word that names nothing is a mistake, and saying so is `parse`'s job.
+function isFile(p) {
+  try { return p != null && statSync(p).isFile(); } catch { return false; }
+}
 import { instantiate } from '../dist/guest.js';
 import {
   compilerWasm, runtimeWasm, runtimeAotWasm, slots, slotsAot, stdlib, stdlibDeps,
 } from './artifacts.mjs';
-import { buildSpec, testRoots } from './spec.mjs';
+import { buildSpec, testRoots, scriptSpec } from './spec.mjs';
 import { Policy } from './policy.mjs';
 import { Fs, Env, Slurp, Wasm, Ception } from './sys.mjs';
 import { Npm, Mvn, Git } from './deps.mjs';
@@ -395,16 +401,36 @@ export async function main(argv) {
     return 0;
   }
   if (cmd === 'compile') {
-    const a = parse(argv.slice(1));
-    if (!a.entry) throw new Error('compile needs :fn ns/fn');
-    if (a.srcs.length === 0) throw new Error('compile needs at least one :src');
+    // A SCRIPT COMPILES HERE TOO, by naming the file. The native CLI and
+    // `bin/flint` both take one; this door did not, and a capability two front
+    // doors have and the third does not is exactly the drift
+    // `DECISIONS.md#standalone-scripts` is about.
+    //
+    // THE FILE COMES OFF THE FRONT BEFORE THE OPTIONS ARE PARSED, because
+    // `parse` reads a bare word as a source path -- leaving it in makes the
+    // script look like a `:src` and the guard fires on the correct command.
+    const script = isFile(argv[1]) ? argv[1] : null;
+    const a = parse(argv.slice(script ? 2 : 1));
+    let srcs = a.srcs, entry = a.entry;
+    if (script) {
+      if (a.entry || a.srcs.length) {
+        throw new Error(`compile was given both the script ${script} and :fn/:src.\n` +
+          'A script names its own entry and its own sources; pass one or the other.');
+      }
+      ({ srcs, entry } = scriptSpec(script));
+    } else {
+      if (!entry) throw new Error('compile needs :fn ns/fn, or the path of a script');
+      if (srcs.length === 0) {
+        throw new Error('compile needs at least one :src, or the path of a script');
+      }
+    }
     // `:with` on `compile` DECLARES rather than grants: the arguments arrive
     // later, so what a program needs has to survive until then, and metadata is
     // where it survives. flint does not read it -- this is the CLI writing down
     // its own convention where the next tool can find it.
     const meta = a.meta.slice();
     if (a.grants.length) meta.push(['capabilities', a.grants.join(' ')]);
-    await compile(a.srcs, a.entry, a.out ?? 'out.wasm', a.optimize, a.to ?? 'wasm', meta,
+    await compile(srcs, entry, a.out ?? 'out.wasm', a.optimize, a.to ?? 'wasm', meta,
                   { checks: a.checks, features: a.features });
     return 0;
   }

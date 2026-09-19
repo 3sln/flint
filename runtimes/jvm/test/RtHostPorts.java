@@ -144,10 +144,20 @@ public class RtHostPorts {
 
   /// `main`, then the scheduler -- what a host's `run` does.
   static long run(Rt rt, Img.Loaded img) {
-    for (int fn : img.init) {
-      rt.call(rt.makeClosure(fn, new long[0]), new long[0]);
-      if (!Val.isNil(rt.thrown) && !rt.parked()) return Val.NIL;
-    }
+    // THE RUNTIME'S OWN ONE-SHOT RUNNER, not a loop of our own.
+    //
+    // This used to hand-roll the loop -- `started = true` and then `call` per
+    // initialiser -- which ran them UNDER A LIVE SLICE. A scheduler exists
+    // before this is entered whenever the host installed a port first, and a
+    // slice is armed the moment a scheduler exists; an initialiser then yields,
+    // the yield is discarded here, and the entry's value is never recorded.
+    // The symptom is a program whose entry is `(defn main [_] "CONSTANT")`
+    // answering nothing at all.
+    //
+    // `ensureStarted` disarms the slice around the loop for exactly that
+    // reason, and it is one-shot, so a control plane spawned later cannot run
+    // them a second time (`DECISIONS.md#the-codec-is-guest-code`).
+    if (!rt.ensureStarted()) return Val.NIL;
     // One opaque value PROJECTED IN as the entry's second argument, under an id
     // this driver chose. That is the whole of lending a capability: no grant
     // table, no declaration, and nothing in the runtime that knows what it is
@@ -259,7 +269,13 @@ public class RtHostPorts {
       tail.addAll(java.util.Arrays.asList(drain(rt)));
       v = Conc.resume(rt);
     }
-    System.out.println("  ok   the program answered: " + rendered(rt, v));
+    // AN ABSENT ANSWER PRINTS AS NOTHING, which is what native does: its
+    // `out.out` is the answer as a string and a program that has not answered
+    // has none. Rendering the NIL as "nil" here made the transcripts differ on
+    // a line where nothing had actually diverged, and `bin/conform-hosts`
+    // compares them with `cmp -s`.
+    System.out.println("  ok   the program answered: "
+        + (Val.isNil(v) ? "" : rendered(rt, v)));
     System.out.println("  ok   status " + status(rt));
     System.out.println("  ok   and was told the port closed: " + show(tail));
 

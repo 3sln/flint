@@ -23,7 +23,8 @@ const NB = 20;
 // eight months, so every opcode in the mix was reported as the one four slots
 // below it -- NATIVE as RETHROW, CALL as NATIVE. The census caught it by
 // disagreeing with itself: NATIVE_CALLS totalled more than the NATIVE opcode.
-const NCOUNT = 28;
+const NCOUNT = 43;
+const NOPS = 256, NNAT = 512;
 const C = {
   INSTRS: 0, FRAMES: 1, CALLS: 2, TAILCALLS: 3, NATIVES: 4, APPLIES: 5,
   GUARDS: 6, GUARD_HITS: 7, RESUMED_INSTRS: 8, RESUMED_FRAMES: 9,
@@ -185,7 +186,7 @@ const OPNAME = ['NOP','CONST','NIL','TRUE','FALSE','INT','LOCAL','LOCAL_W','SET_
 /// guessing it is the same mistake as guessing the region length.
 function showOps(e, total) {
   const ops = [];
-  for (let i = 0; i < 256; i++) {
+  for (let i = 0; i < NOPS; i++) {
     const n = Number(e.stat_region(NB * 4 + NCOUNT + i));
     if (n) ops.push([OPNAME[i] ?? `0x${i.toString(16)}`, n]);
   }

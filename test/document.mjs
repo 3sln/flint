@@ -86,7 +86,19 @@ async function runWith(wasm, store, args = [], { stress = false } = {}) {
       "run `./bin/build-units --diagnostics` first (which is what `bin/test` does)");
   }
   e.collect_now();
-  return { out: r.out, messages, peakLive: Number(e.stat_peak_live()), exports: e };
+  // TWO PEAKS, because they mean different things.
+  //
+  // `stat_peak_live` is an UPPER BOUND: after a minor, `old_live` still counts
+  // every old object allocated since the last major, dead ones included.
+  // `stat_peak_live_major` is sampled only after a major, where `sweep_old`
+  // has just made `old_live` true (`DECISIONS.md#two-builds`).
+  //
+  // A claim about RESIDENCY wants the second. A comparison of two runs against
+  // each other can use either, since the bias is the same on both sides.
+  return { out: r.out, messages,
+           peakLive: Number(e.stat_peak_live()),
+           peakLiveMajor: Number(e.stat_peak_live_major()),
+           exports: e };
 }
 
 console.log('documents');
@@ -196,14 +208,30 @@ console.log('documents');
   const r = await runWith('out/doc-waves.wasm', store);
   const total = store.stats.bytesDelivered;
   console.log(`    ${total} bytes of content, ${budget} byte budget -> ` +
-              `${store.stats.waves} waves; module peak live ${r.peakLive} bytes`);
+              `${store.stats.waves} waves; peak live ${r.peakLiveMajor} bytes ` +
+              `(ceiling incl. old-space garbage: ${r.peakLive})`);
   ok('an ask several times the budget comes back in waves',
      store.stats.waves >= total / budget, `${store.stats.waves} waves for ${total}/${budget}`);
   ok('  ... and the script saw every one of them',
      r.out.includes(`:waves ${store.stats.waves}`), r.out);
   ok('  ... and read every byte', r.out.includes(`:bytes ${total}`), r.out);
+  // AGAINST THE TRUTHFUL PEAK, and the difference is not cosmetic.
+  //
+  // This read `stat_peak_live` and failed at 4 039 744 against a 4 194 304 ask
+  // -- for a program whose genuinely live set never exceeds about 530 KB. The
+  // number was right about what it measures and wrong about what this row
+  // claims: `LARGE_OBJECT` is 16 KB, so each 64 KB wave is born in OLD space,
+  // and sixty-four of them accumulate between majors while `old_live` counts
+  // every one of them alive or dead.
+  //
+  // The claim here is about RESIDENCY -- "peak memory is proportional to the
+  // content a script actually kept" -- so it is made against the counter that
+  // means that (`DECISIONS.md#two-builds`, which names this fix as the one
+  // that breaks nothing and stops the docstring being false).
   ok('  ... while peak memory stayed a fraction of the ask',
-     r.peakLive < total / 3, `peak live ${r.peakLive} against ${total} total`);
+     r.peakLiveMajor < total / 3,
+     `peak live ${r.peakLiveMajor} against ${total} total ` +
+     `(ceiling ${r.peakLive})`);
   // This run is the reproducer for the stale-pointer bug: `port_send` used to
   // hand its unrooted Rust argument to `check_sendable`, which allocates, and
   // pushed the result of that stale local as a root. One wave in sixty-four

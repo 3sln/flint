@@ -47,7 +47,14 @@
     (let [p (.start (ProcessBuilder.
                      (into-array String ["./bin/flint" ":src" (str tmpdir)
                                          ":fn" "probe/main" ":out" "out/probe.wasm"])))
-          out (slurp (.getInputStream p)) err (slurp (.getErrorStream p))]
+          ;; STDERR IS DRAINED ON ITS OWN THREAD (`DECISIONS.md#the-codec-is-guest-code`,
+        ;; "the test helper deadlocked"). Reading stdout to completion and
+        ;; stderr after DEADLOCKS the moment a child writes more than a pipe
+        ;; buffer to stderr: the child blocks writing, this blocks reading, and
+        ;; neither moves again.
+        err (future (slurp (.getErrorStream p)))
+        out (slurp (.getInputStream p))
+        err @err]
       (.waitFor p)
       (if (zero? (.exitValue p))
         (let [q (.start (ProcessBuilder.
@@ -141,7 +148,14 @@
     (let [p (.start (ProcessBuilder.
                      (into-array String ["./bin/flint" ":src" (str tmpdir)
                                          ":fn" "probe/main" ":out" "out/probe.wasm"])))
-          out (slurp (.getInputStream p)) err (slurp (.getErrorStream p))]
+          ;; STDERR IS DRAINED ON ITS OWN THREAD (`DECISIONS.md#the-codec-is-guest-code`,
+        ;; "the test helper deadlocked"). Reading stdout to completion and
+        ;; stderr after DEADLOCKS the moment a child writes more than a pipe
+        ;; buffer to stderr: the child blocks writing, this blocks reading, and
+        ;; neither moves again.
+        err (future (slurp (.getErrorStream p)))
+        out (slurp (.getInputStream p))
+        err @err]
       (.waitFor p)
       (spit "out/macro-probe.cljc" body)
       (check "all claimed macros compile" (zero? (.exitValue p))

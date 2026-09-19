@@ -14,6 +14,7 @@ import static com._3sln.flint.kgen.rt.Tablecell.*;
 import static com._3sln.flint.kgen.rt.Tablekind.*;
 import static com._3sln.flint.kgen.rt.Tablemeta.*;
 import static com._3sln.flint.kgen.rt.Tablesay.*;
+import static com._3sln.flint.kgen.rt.Valeq.*;
 import static com._3sln.flint.kgen.rt.Vecread.*;
 import static com._3sln.flint.kgen.rt.Vecwrite.*;
 
@@ -48,25 +49,70 @@ public final class Tablebuild {
             long ch = newChunk(rt, width, take);
             int chi = rt.push(ch);
             for (int c = 0; c < ncols; c++) {
+                // NO RUN UNTIL A VALUE DIFFERS.
+                // 
+                // The run used to be allocated here, filled, and only then
+                // handed to `collapse` -- so a column that is constant
+                // allocated a full `CHUNK`-slot node and threw it away.
+                // The finished table never held it, but it was live at the
+                // peak, which is why `test/tables.clj` could see only 32 288
+                // of the 160 632 bytes a constant column actually saves.
+                // 
+                // So the first value is remembered instead, and the run is
+                // allocated at the FIRST value that differs -- backfilling
+                // the rows already seen, which all held the first value. One
+                // pass still, and one comparison per value; the varying case
+                // reads each row exactly once, as before.
                 int id = schemaIdAt(rt, rt.r(si), c);
-                long col = Conc.newObj(rt, TY_NODE, take);
-                int coli = rt.push(col);
-                long name = schemaNameAt(rt, rt.r(si), c);
+                long name0 = schemaNameAt(rt, rt.r(si), c);
                 long types = rt.slot(rt.r(si), Table.SC_TYPES);
-                long tp = vecNth(rt, types, c, Val.NIL);
+                long tp0 = vecNth(rt, types, c, Val.NIL);
+                int namei = rt.push(name0);
+                int tpi = rt.push(tp0);
+                int v0i = rt.push(Val.NIL);
+                int coli = rt.push(Val.NIL);
+                int vi = rt.push(Val.NIL);
+                boolean expanded;
+                expanded = false;
                 for (int k = 0; k < take; k++) {
                     long rowv = vecNth(rt, rt.r(ri), row + k, Val.NIL);
-                    long val = mapGet(rt, rowv, name, Val.NIL);
-                    if (!typeOk(rt, tp, val)) {
-                        String msg = columnTypeError(rt, name, tp, val, row + k);
+                    long val = mapGet(rt, rowv, rt.r(namei), Val.NIL);
+                    rt.setR(vi, val);
+                    if (!typeOk(rt, rt.r(tpi), rt.r(vi))) {
+                        String msg = columnTypeError(rt, rt.r(namei), rt.r(tpi), rt.r(vi), row + k);
                         rt.popTo(base);
                         return rt.throwStr("IllegalArgumentException", msg);
                     }
-                    rt.setSlot(Val.asHeap(rt.r(coli)), k, val);
+                    if (k == 0) {
+                        rt.setR(v0i, rt.r(vi));
+                    }
+                    if (expanded) {
+                        rt.setSlot(Val.asHeap(rt.r(coli)), k, rt.r(vi));
+                    } else if (!valEq(rt, rt.r(v0i), rt.r(vi))) {
+                        // A VALUE DIFFERS, so the run is needed after all.
+                        // Backfill what came before it -- every one of
+                        // those rows held the first value, which is why
+                        // they did not need storing until now.
+                        long col = Conc.newObj(rt, TY_NODE, take);
+                        rt.setR(coli, col);
+                        for (int j = 0; j < k; j++) {
+                            rt.setSlot(Val.asHeap(rt.r(coli)), j, rt.r(v0i));
+                        }
+                        rt.setSlot(Val.asHeap(rt.r(coli)), k, rt.r(vi));
+                        expanded = true;
+                    }
                 }
-                rt.setSlot(Val.asHeap(rt.r(chi)), Table.CH_BASE + id, rt.r(coli));
-                collapse(rt, rt.r(chi), id);
-                rt.popTo(coli);
+                if (expanded) {
+                    rt.setSlot(Val.asHeap(rt.r(chi)), Table.CH_BASE + id, rt.r(coli));
+                    collapse(rt, rt.r(chi), id);
+                } else {
+                    // CONSTANT: one value for the whole chunk and no run
+                    // at all. `collapse` is not called -- this IS the
+                    // state it would have reached.
+                    rt.setSlot(Val.asHeap(rt.r(chi)), Table.CH_BASE + id, rt.r(v0i));
+                    rt.setSlot(Val.asHeap(rt.slot(rt.r(chi), Table.CH_ENC)), id, Val.fixnum(Table.ENC_CONST & 0xFFFFFFFFL));
+                }
+                rt.popTo(namei);
             }
             long nv = vecConj(rt, rt.r(ci), rt.r(chi));
             rt.setR(ci, nv);

@@ -13,7 +13,8 @@
 import { load, instantiate } from '../host/flint.mjs';
 import { fnOf } from './entry.mjs';
 
-const NB = 20, NCOUNT = 28, OPS_AT = NB * 4 + NCOUNT, NAT_AT = OPS_AT + 256;
+const NB = 20, NCOUNT = 43, NOPS = 256, NNAT = 512;
+const OPS_AT = NB * 4 + NCOUNT, NAT_AT = OPS_AT + NOPS;
 const SPEC = [0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B];
 const WORK = [['parse', ['parse', '20']], ['suggest', ['suggest', '1']]];
 
@@ -52,7 +53,7 @@ const countIt = async (file, args) => {
   const e = inst.exports;
   let spec = 0, checks = 0;
   for (const k of SPEC) spec += Number(e.stat_region(OPS_AT + k));
-  for (let k = 0; k < 512; k++) {
+  for (let k = 0; k < NNAT; k++) {
     const n = Number(e.stat_region(NAT_AT + k));
     if (n && nativeName(e, k) === 'flint/check-tag') checks += n;
   }

@@ -18,12 +18,73 @@ suite kept going. A check that cannot find what it checks must FAIL, not raise
 
 Run from the repo root. Exit 1 if anything is missing.
 """
+import pathlib
 import re
 import sys
 
 RUNTIME = re.compile(r'^\s*"([^"]+)",\s*flint_b_\w+', re.M)
+
 # A string literal WITH escapes, so an embedded quote does not shift the rest.
 STR = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+# THE UNITS COUNT TOO, and leaving them out was a real blind spot: every
+# concurrency builtin lives in `units-src/flint-conc`, so the whole ports and
+# threads surface went unchecked, and `flint/system-port` reached the native
+# runtime alone without this saying a word.
+#
+# A unit is optional for NATIVE -- a program that never names one does not link
+# it. It is not optional for the ports: `runtimes/jvm` and `runtimes/clr` are
+# monolithic, so anything a guest can name anywhere has to be there.
+#
+# TWO SOURCES, because there is no one registry. A unit that defines several
+# builtins carries a table in its own `lib.rs`; a one-builtin unit is named
+# only where it is built. Reading either alone undercounts, and undercounting
+# here is invisible -- the answer still looks like a number.
+UNITS = 'units-src'
+BUILD_UNITS = 'bin/build-units'
+# A unit table writes the pair as a tuple, so the name is preceded by `(`.
+UNIT_ENTRY = re.compile(r'\(\s*"([^"]+)",\s*flint_b_\w+\s*\)')
+# `:provides {"flint/x" {:symbol ..}}` and `build_parser .. "flint/x" ..`
+BUILT_ENTRY = re.compile(r'"(flint/[a-z0-9?!*+/<>=-]+)"')
+
+# HOST-PROVIDED BY DESIGN, not missing. The three self-contained runtimes carry
+# no parser and refuse by name -- "this runtime does not carry the builtin
+# `flint/json-parse`" -- identically on native, the JVM and the CLR; the JS
+# host supplies them. The same claim is made, with the same wording, in
+# `bin/check-builtin-coverage`.
+#
+# Asserted below rather than trusted: a name here that is not a unit builtin
+# any more is a stale excuse, and a list of excuses nobody rechecks is how the
+# question stops being asked.
+HOST_PROVIDED = {'flint/json-parse', 'flint/xml-parse', 'flint/html-parse'}
+
+# NOT PART OF THE SHIPPED SURFACE AT ALL. The snapshot unit is a DIAGNOSTICS
+# build only (`DECISIONS.md#two-builds`): a release CLI does not link it and
+# `(:require [flint.snapshot])` fails closed at compile time with "no such
+# builtin: flint.rt/snapshot". A port carrying it would widen the production
+# surface, not close a gap -- absent is the guarantee.
+#
+# The ports do have the machinery (`Snap.cs`, capture and restore); what they
+# do not have is a way for a GUEST to name it, which is the point.
+DIAGNOSTICS = {'flint/snapshot', 'flint/snapshot-size', 'flint/snapshot-restore'}
+
+# Both carve-outs are claims, so both are checked for staleness below.
+EXCUSED = HOST_PROVIDED | DIAGNOSTICS
+
+
+def unit_names():
+    out = set()
+    root = pathlib.Path(UNITS)
+    if not root.is_dir():
+        return None                  # shape changed: say so, do not pass
+    for lib in sorted(root.glob('*/src/lib.rs')):
+        out |= set(UNIT_ENTRY.findall(lib.read_text()))
+    try:
+        out |= set(BUILT_ENTRY.findall(open(BUILD_UNITS).read()))
+    except OSError:
+        return None
+    return out
+
 
 # COMPILER-EMITTED builtins, read out of the compiler rather than listed here.
 #
@@ -58,6 +119,16 @@ def main():
     if not names:
         print("no builtins found in runtime/src/builtins.rs -- has the shape changed?")
         return 1
+    units = unit_names()
+    if not units:
+        print(f"  FAIL no builtins found under {UNITS}/*/src/lib.rs -- has the shape changed?")
+        return 1
+    stale = sorted(EXCUSED - units)
+    if stale:
+        print(f"  FAIL {' '.join(stale)} is excused here, but is not a unit builtin any more")
+        return 1
+    core = len(names)
+    names |= units - EXCUSED
     emitted = compiler_emitted()
     if not emitted:
         # THE LESSON THIS FILE IS ABOUT. An extraction that finds nothing must
@@ -68,7 +139,9 @@ def main():
     if unknown:
         print(f"  FAIL the compiler emits {' '.join(unknown)}, which the runtime does not define")
         return 1
-    print(f"builtins: the native runtime carries {len(names)}, "
+    print(f"builtins: the native runtime carries {len(names)} "
+          f"({core} core + {len(names) - core} in units, "
+          f"{len(HOST_PROVIDED)} host-provided and {len(DIAGNOSTICS)} diagnostics-only), "
           f"{len(emitted)} of them emitted by the compiler ({' '.join(sorted(emitted))})")
     bad = 0
     for host, path in [("jvm", "runtimes/jvm/src/com/flint/rt/Builtins.java"),

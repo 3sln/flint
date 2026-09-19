@@ -1,0 +1,251 @@
+--rust-head
+// A TOY PORT, enough to drive its ring.
+//
+// A port is a row of slots and an inbox is a second row. `cas_slot` really
+// compares before it writes -- a stub that always succeeded would let every
+// field here pass while hiding the only thing the ring is for.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_0000_0000_0000);
+mod value {
+    pub const EMPTY: super::Value = super::Value(0xFFFF_0000_0000_0006);
+}
+mod conc {
+    pub const PT_RING: u32 = 0;
+    pub const PT_INBOX: u32 = 1;
+    pub const PT_WRITE: u32 = 2;
+    pub const PT_READ: u32 = 3;
+}
+impl Value {
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+}
+struct Rt {
+    objs: Vec<Vec<Value>>,
+    // HOW MANY TIMES a compare-and-swap was refused, which is the only
+    // evidence that the compare happened at all.
+    refused: u32,
+}
+impl Rt {
+    fn obj(&mut self, slots: Vec<Value>) -> Value {
+        self.objs.push(slots);
+        Value((self.objs.len() - 1) as u64)
+    }
+    fn slot(&mut self, v: Value, i: u32) -> Value { self.objs[v.0 as usize][i as usize] }
+    fn slot_atomic(&self, v: Value, i: u32) -> Value { self.objs[v.0 as usize][i as usize] }
+    fn cas(&mut self, v: Value, i: u32, want: Value, next: Value) -> bool {
+        if self.objs[v.0 as usize][i as usize] == want {
+            self.objs[v.0 as usize][i as usize] = next;
+            true
+        } else {
+            self.refused += 1;
+            false
+        }
+    }
+    fn cas_slot(&mut self, v: Value, i: u32, want: Value, next: Value) -> bool {
+        self.cas(v, i, want, next)
+    }
+    fn cas_slot_barriered(&mut self, v: Value, i: u32, want: Value, next: Value) -> bool {
+        self.cas(v, i, want, next)
+    }
+--rust
+}
+fn spin_hint() {}
+fn main() {
+    let mut rt = Rt { objs: Vec::new(), refused: 0 };
+    let mut o = String::new();
+    // A ring of 2. inbox slots start EMPTY, cursors at 0.
+    let inbox = rt.obj(vec![value::EMPTY, value::EMPTY]);
+    let p = rt.obj(vec![Value::fixnum(2), inbox, Value::fixnum(0), Value::fixnum(0)]);
+
+    // 1. EMPTY QUEUE: nothing to take, and the depth says so.
+    o.push_str(&format!("{}{} ", rt.ring_inbox_count(p),
+                        if rt.ring_dequeue(p) == NIL { "-" } else { "?" }));
+    // 2. FILL IT, then refuse the third.
+    let a = rt.ring_enqueue(p, Value(100));
+    let b = rt.ring_enqueue(p, Value(200));
+    let c = rt.ring_enqueue(p, Value(300));
+    o.push_str(&format!("{}{}{}{} ", a as u32, b as u32, c as u32, rt.ring_inbox_count(p)));
+    // 3. FIFO, and the depth falls as it drains.
+    let x = rt.ring_dequeue(p);
+    let y = rt.ring_dequeue(p);
+    o.push_str(&format!("{},{},{} ", x.0, y.0, rt.ring_inbox_count(p)));
+    // 4. DRAINED, and the cursors did NOT wrap -- they are at 2, past the
+    //    ring size, which is what lets the depth stay right for ever.
+    o.push_str(&format!("{}{} ", if rt.ring_dequeue(p) == NIL { "-" } else { "?" },
+                        rt.slot(p, conc::PT_WRITE).as_fixnum()));
+    // 5. REUSE: the slots are EMPTY again, so the ring takes two more.
+    let d = rt.ring_enqueue(p, Value(400));
+    let e = rt.ring_enqueue(p, Value(500));
+    o.push_str(&format!("{}{}{} ", d as u32, e as u32, rt.ring_dequeue(p).0));
+    // 6. A WRITER MID-PUBLISH. The read cursor is behind the write cursor, so
+    //    there is something to take -- but the slot still holds EMPTY, which
+    //    is a writer that reserved the index and has not published. NIL, and
+    //    the read cursor must NOT have moved.
+    let inbox2 = rt.obj(vec![value::EMPTY, value::EMPTY]);
+    let q = rt.obj(vec![Value::fixnum(2), inbox2, Value::fixnum(1), Value::fixnum(0)]);
+    o.push_str(&format!("{}{}", if rt.ring_dequeue(q) == NIL { "-" } else { "?" },
+                        rt.slot(q, conc::PT_READ).as_fixnum()));
+    // A ring of ZERO takes nothing and gives nothing.
+    let z = rt.obj(vec![Value::fixnum(0), inbox2, Value::fixnum(0), Value::fixnum(0)]);
+    o.push_str(&format!(" {}{}", rt.ring_enqueue(z, Value(1)) as u32,
+                        if rt.ring_dequeue(z) == NIL { "-" } else { "?" }));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFF000000000000L;
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static final long EMPTY = 0xFFFF000000000006L;
+        static long asFixnum(long v) { return v; }
+        static long fixnum(long n) { return n; }
+    }
+    static final class Conc {
+        static final int PT_RING = 0, PT_INBOX = 1, PT_WRITE = 2, PT_READ = 3;
+        static long slotAtomic(Rt rt, long v, int i) { return rt.objs.get((int) v).get(i); }
+        static boolean casSlot(Rt rt, long v, int i, long want, long next) {
+            return rt.cas(v, i, want, next);
+        }
+        static boolean casSlotBarriered(Rt rt, long v, int i, long want, long next) {
+            return rt.cas(v, i, want, next);
+        }
+    }
+    static final class Rt {
+        java.util.ArrayList<java.util.ArrayList<Long>> objs = new java.util.ArrayList<>();
+        int refused = 0;
+        long obj(long[] slots) {
+            java.util.ArrayList<Long> s = new java.util.ArrayList<>();
+            for (long x : slots) s.add(x);
+            objs.add(s);
+            return objs.size() - 1;
+        }
+        long slot(long v, int i) { return objs.get((int) v).get(i); }
+        boolean cas(long v, int i, long want, long next) {
+            if (objs.get((int) v).get(i) == want) { objs.get((int) v).set(i, next); return true; }
+            refused++;
+            return false;
+        }
+    }
+--java
+    static void spinHint() {}
+    public static void main(String[] argv) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long inbox = rt.obj(new long[]{ Val.EMPTY, Val.EMPTY });
+        long p = rt.obj(new long[]{ 2, inbox, 0, 0 });
+
+        o.append(ringInboxCount(rt, p)).append(ringDequeue(rt, p) == NIL ? "-" : "?").append(' ');
+        int a = ringEnqueue(rt, p, 100) ? 1 : 0;
+        int b = ringEnqueue(rt, p, 200) ? 1 : 0;
+        int c = ringEnqueue(rt, p, 300) ? 1 : 0;
+        o.append(a).append(b).append(c).append(ringInboxCount(rt, p)).append(' ');
+        long x = ringDequeue(rt, p), y = ringDequeue(rt, p);
+        o.append(x).append(',').append(y).append(',').append(ringInboxCount(rt, p)).append(' ');
+        o.append(ringDequeue(rt, p) == NIL ? "-" : "?").append(rt.slot(p, Conc.PT_WRITE)).append(' ');
+        int d = ringEnqueue(rt, p, 400) ? 1 : 0;
+        int e = ringEnqueue(rt, p, 500) ? 1 : 0;
+        o.append(d).append(e).append(ringDequeue(rt, p)).append(' ');
+        long inbox2 = rt.obj(new long[]{ Val.EMPTY, Val.EMPTY });
+        long q = rt.obj(new long[]{ 2, inbox2, 1, 0 });
+        o.append(ringDequeue(rt, q) == NIL ? "-" : "?").append(rt.slot(q, Conc.PT_READ));
+        long z = rt.obj(new long[]{ 0, inbox2, 0, 0 });
+        o.append(' ').append(ringEnqueue(rt, z, 1) ? 1 : 0)
+         .append(ringDequeue(rt, z) == NIL ? "-" : "?");
+        System.out.println(o.toString());
+    }
+--csharp-head
+    internal const long NIL = unchecked((long) 0xFFFF000000000000UL);
+    internal static class Val {
+        internal const long Nil = NIL;
+        internal const long Empty = unchecked((long) 0xFFFF000000000006UL);
+        internal static long AsFixnum(long v) => v;
+        internal static long Fixnum(long n) => n;
+    }
+    internal static class Conc {
+        internal const int PT_RING = 0, PT_INBOX = 1, PT_WRITE = 2, PT_READ = 3;
+        internal static long SlotAtomic(Rt rt, long v, int i) => rt.Objs[(int) v][i];
+        internal static bool CasSlot(Rt rt, long v, int i, long want, long next) =>
+            rt.Cas(v, i, want, next);
+        internal static bool CasSlotBarriered(Rt rt, long v, int i, long want, long next) =>
+            rt.Cas(v, i, want, next);
+    }
+    internal sealed class Rt {
+        internal System.Collections.Generic.List<System.Collections.Generic.List<long>> Objs = new();
+        internal int Refused = 0;
+        internal long MakeObj(long[] slots) {
+            Objs.Add(new System.Collections.Generic.List<long>(slots));
+            return Objs.Count - 1;
+        }
+        internal long Slot(long v, int i) => Objs[(int) v][i];
+        internal bool Cas(long v, int i, long want, long next) {
+            if (Objs[(int) v][i] == want) { Objs[(int) v][i] = next; return true; }
+            Refused++;
+            return false;
+        }
+    }
+--csharp
+    static void SpinHint() {}
+    static void Main(string[] argv) {
+        var rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long inbox = rt.MakeObj(new long[]{ Val.Empty, Val.Empty });
+        long p = rt.MakeObj(new long[]{ 2, inbox, 0, 0 });
+
+        o.Append(RingInboxCount(rt, p)).Append(RingDequeue(rt, p) == NIL ? "-" : "?").Append(' ');
+        int a = RingEnqueue(rt, p, 100) ? 1 : 0;
+        int b = RingEnqueue(rt, p, 200) ? 1 : 0;
+        int c = RingEnqueue(rt, p, 300) ? 1 : 0;
+        o.Append(a).Append(b).Append(c).Append(RingInboxCount(rt, p)).Append(' ');
+        long x = RingDequeue(rt, p), y = RingDequeue(rt, p);
+        o.Append(x).Append(',').Append(y).Append(',').Append(RingInboxCount(rt, p)).Append(' ');
+        o.Append(RingDequeue(rt, p) == NIL ? "-" : "?").Append(rt.Slot(p, Conc.PT_WRITE)).Append(' ');
+        int d = RingEnqueue(rt, p, 400) ? 1 : 0;
+        int e = RingEnqueue(rt, p, 500) ? 1 : 0;
+        o.Append(d).Append(e).Append(RingDequeue(rt, p)).Append(' ');
+        long inbox2 = rt.MakeObj(new long[]{ Val.Empty, Val.Empty });
+        long q = rt.MakeObj(new long[]{ 2, inbox2, 1, 0 });
+        o.Append(RingDequeue(rt, q) == NIL ? "-" : "?").Append(rt.Slot(q, Conc.PT_READ));
+        long z = rt.MakeObj(new long[]{ 0, inbox2, 0, 0 });
+        o.Append(' ').Append(RingEnqueue(rt, z, 1) ? 1 : 0)
+         .Append(RingDequeue(rt, z) == NIL ? "-" : "?");
+        System.Console.WriteLine(o.ToString());
+    }
+--expect
+0- 1102 100,200,0 -2 11400 -0 0-
+--expect-why
+DERIVED FROM WHAT A QUEUE PROMISES, field by field.
+
+  empty    `0-`    A FRESH RING. Depth zero, and a take answers nothing. The
+                   weakest field here and the one the rest assume.
+  fill     `1102`  Two puts succeed, THE THIRD IS REFUSED, and the depth is 2.
+                   `0` is the whole field: a ring of two holds two, and back-
+                   pressure is the caller's signal to park. An implementation
+                   that compared the INDEX rather than the depth would wrap
+                   silently and answer `1` here, overwriting an unread
+                   message -- which is the failure this whole file exists to
+                   make impossible.
+  fifo  `100,200,0` FIRST IN, FIRST OUT, and the depth falls to zero. Order is
+                   the promise; a stack would answer `200,100` and pass every
+                   other field in this file.
+  drain    `-2`    Drained, and THE WRITE CURSOR IS AT 2 -- past the ring
+                   size, not wrapped back to 0. The index wraps, the cursor
+                   does not, and that is what keeps the depth arithmetic
+                   correct after four billion messages. A cursor reset to 0 on
+                   wrap answers `0` here and computes a negative depth the
+                   moment the reader is behind.
+  reuse  `11400`   A drained ring TAKES MORE. The slots went back to `EMPTY`
+                   when they were read, which is the other half of the
+                   handshake -- a dequeue that returned the value without
+                   clearing the slot answers `1` then `0` here, because the
+                   second put finds the slot occupied.
+  mid      `-0`    A WRITER MID-PUBLISH, and this is the field that cannot be
+                   got right by accident. The write cursor is at 1 and the
+                   read cursor at 0, so the queue LOOKS non-empty -- and the
+                   slot still holds `EMPTY`, meaning a writer reserved the
+                   index and has not published. The answer is nothing, and
+                   THE READ CURSOR MUST NOT MOVE (`0`): consuming the slot
+                   would drop a message that was one instruction from
+                   arriving. Every other field in this file passes against an
+                   implementation that ignores `EMPTY` entirely.
+  zero     `0-`    A RING OF ZERO takes nothing and gives nothing, rather than
+                   dividing by it.

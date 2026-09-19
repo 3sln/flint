@@ -34,6 +34,10 @@ public class RtSelfHost {
       if (rt.natives[i] == null) { missing++; if (missing <= 60) names.append(" ").append(img.nativeNames[i]); }
     }
     System.out.println("  builtins it wants that this runtime lacks: " + missing + names);
+    // THESE ARE THE INITIALISERS, so say so: `ensureStarted` is the runtime's
+    // own one-shot runner, and a control plane spawned later would otherwise
+    // run them a second time.
+    rt.started = true;
     for (int fn : img.init) rt.call(rt.makeClosure(fn, new long[0]), new long[0]);
     System.out.println("  ok   " + img.init.length + " initialisers ran");
     // ROOTED. `makeClosure` allocates, allocating can collect, and the nursery

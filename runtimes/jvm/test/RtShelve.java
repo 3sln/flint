@@ -25,6 +25,10 @@ public class RtShelve {
 
   /// Run until the step budget trips, leaving the runtime mid-program.
   static boolean runUntilPaused(Rt rt, Img.Loaded img, long budget) {
+    // THESE ARE THE INITIALISERS, so say so: `ensureStarted` is the runtime's
+    // own one-shot runner, and a control plane spawned later would otherwise
+    // run them a second time.
+    rt.started = true;
     for (int fn : img.init) rt.call(rt.makeClosure(fn, new long[0]), new long[0]);
     long f = rt.makeClosure(img.entry, new long[0]);
     rt.setSliceEnd(budget);
@@ -39,6 +43,7 @@ public class RtShelve {
     // What the program says when nothing interrupts it.
     Rt plain = new Rt(4 * 1024 * 1024, 128L * 1024 * 1024);
     Img.Loaded pimg = Img.load(plain, image);
+    plain.started = true;
     for (int fn : pimg.init) plain.call(plain.makeClosure(fn, new long[0]), new long[0]);
     String straight = show(plain, plain.call(plain.makeClosure(pimg.entry, new long[0]),
                                              new long[]{ Val.NIL }));

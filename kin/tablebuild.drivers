@@ -14,6 +14,9 @@ pub mod table {
     pub const TB_COUNT: u32 = 2; pub const TB_OFFSET: u32 = 3;
     pub const TB_LEN: u32 = 4; pub const CH_BASE: u32 = 2;
     pub const CHUNK: u32 = 4;
+    // WHAT `collapse` ALREADY WRITES: it stores 1 for a constant column, so
+    // the builder's own constant path has to agree with it.
+    pub const ENC_CONST: u32 = 1;
     pub const SC_NAMES: u32 = 0; pub const SC_TYPES: u32 = 1; pub const SC_INDEX: u32 = 2;
     pub const SC_IDS: u32 = 3; pub const SC_WIDTH: u32 = 4; pub const SC_LEN: u32 = 5;
     pub const RF_SCHEMA: u32 = 0; pub const RF_LEN: u32 = 3;
@@ -202,6 +205,10 @@ impl Rt {
         self.set(ch, table::CH_ENC, enc);
         ch
     }
+    // IDENTITY, the same test `collapse` makes. The real `val-eq` is deeper;
+    // what this file checks is the BUILDER, and it must agree with the
+    // collapse it replaces.
+    fn val_eq(&mut self, a: Value, b: Value) -> bool { a.0 == b.0 }
     fn collapse(&mut self, ch: Value, id: u32) {
         let col = self.slot(ch, table::CH_BASE + id);
         let n = self.lens[col.0 as usize];
@@ -401,6 +408,32 @@ fn main() {
     rt.gas = 1;
     let starved = rt.new_table(s, rv);
     o.push_str(&format!("starved={}", starved.is_nil() as u32));
+    // A CONSTANT COLUMN ALLOCATES NO RUN, and the only way to see that is to
+    // WEIGH THE BUILD: both tables read back identically, so nothing about the
+    // result distinguishes a builder that skips the run from one that
+    // allocates it and collapses it afterwards.
+    rt.gas = 1000;
+    let mut vrows = alloc::vec::Vec::new();
+    let mut crows = alloc::vec::Vec::new();
+    for i in 0..6i64 {
+        let mut v = rt.empty_map();
+        v = rt.map_assoc(v, ka, Value::fixnum(10 + i));
+        v = rt.map_assoc(v, kb, hi);
+        vrows.push(v);
+        let mut c = rt.empty_map();
+        c = rt.map_assoc(c, ka, Value::fixnum(7));
+        c = rt.map_assoc(c, kb, hi);
+        crows.push(c);
+    }
+    let vv = rt.vector(&vrows);
+    let cv = rt.vector(&crows);
+    let before_v = rt.bump;
+    rt.new_table(s, vv);
+    let cost_v = rt.bump - before_v;
+    let before_c = rt.bump;
+    rt.new_table(s, cv);
+    let cost_c = rt.bump - before_c;
+    o.push_str(&format!(" saved={}", cost_v - cost_c));
     println!("{}", o);
 }
 --java-head
@@ -414,6 +447,8 @@ fn main() {
         static final int TB_SCHEMA = 0, TB_CHUNKS = 1, TB_COUNT = 2,
                          TB_OFFSET = 3, TB_LEN = 4;
         static final int CH_ROWS = 0, CH_ENC = 1, CH_BASE = 2, CHUNK = 4;
+        // `collapse` writes 1 for a constant column; the builder must agree.
+        static final int ENC_CONST = 1;
         static boolean typeOk(Rt rt, long t, long v) { return Probe.typeOk(rt, t, v); }
     }
     static final class Val {
@@ -648,6 +683,8 @@ fn main() {
         rt.set(ch, Table.CH_ENC, enc);
         return ch;
     }
+    // IDENTITY, the same test `collapse` makes -- see the Rust head.
+    static boolean valEq(Rt rt, long a, long b) { return a == b; }
     static void collapse(Rt rt, long ch, int id) {
         long col = rt.slot(ch, Table.CH_BASE + id);
         int n = rt.lens[(int) col];
@@ -731,6 +768,17 @@ fn main() {
         o.append("bad=[").append(m1).append("][").append(m2).append("] ");
         rt.gas = 1;
         o.append("starved=").append(newTable(rt, s, rv) == NIL ? 1 : 0);
+        // A CONSTANT COLUMN ALLOCATES NO RUN -- see the Rust driver.
+        rt.gas = 1000;
+        long[] vr = new long[6], cr = new long[6];
+        for (int i = 0; i < 6; i++) {
+            vr[i] = mapAssoc(rt, mapAssoc(rt, emptyMap(rt), ka, Val.fixnum(10 + i)), kb, hi);
+            cr[i] = mapAssoc(rt, mapAssoc(rt, emptyMap(rt), ka, Val.fixnum(7)), kb, hi);
+        }
+        long vv = vector(rt, vr), cv = vector(rt, cr);
+        long beforeV = rt.bump; newTable(rt, s, vv); long costV = rt.bump - beforeV;
+        long beforeC = rt.bump; newTable(rt, s, cv); long costC = rt.bump - beforeC;
+        o.append(" saved=").append(costV - costC);
         System.out.println(o.toString());
     }
 --csharp-pre
@@ -742,6 +790,8 @@ namespace Flint.Rt {
         internal const int TB_SCHEMA = 0, TB_CHUNKS = 1, TB_COUNT = 2,
                            TB_OFFSET = 3, TB_LEN = 4;
         internal const int CH_ROWS = 0, CH_ENC = 1, CH_BASE = 2, CHUNK = 4;
+        // `collapse` writes 1 for a constant column; the builder must agree.
+        internal const int ENC_CONST = 1;
         internal static bool typeOk(Probe.Rt rt, long t, long v) { return Probe.TypeOk(rt, t, v); }
     }
     internal static class Maps {
@@ -981,6 +1031,8 @@ namespace Flint.Rt {
         rt.Set(ch, global::Flint.Rt.Table.CH_ENC, enc);
         return ch;
     }
+    // IDENTITY, the same test `Collapse` makes -- see the Rust head.
+    internal static bool ValEq(Rt rt, long a, long b) => a == b;
     internal static void Collapse(Rt rt, long ch, int id) {
         long col = rt.Slot(ch, global::Flint.Rt.Table.CH_BASE + id);
         int n = rt.lens[(int) col];
@@ -1064,10 +1116,21 @@ namespace Flint.Rt {
         o.Append("bad=[").Append(m1).Append("][").Append(m2).Append("] ");
         rt.gas = 1;
         o.Append("starved=").Append(NewTable(rt, s, rv) == Val.Nil ? 1 : 0);
+        // A CONSTANT COLUMN ALLOCATES NO RUN -- see the Rust driver.
+        rt.gas = 1000;
+        var vr = new long[6]; var cr = new long[6];
+        for (int i = 0; i < 6; i++) {
+            vr[i] = MapAssoc(rt, MapAssoc(rt, EmptyMap(rt), ka, Val.Fixnum(10 + i)), kb, hi);
+            cr[i] = MapAssoc(rt, MapAssoc(rt, EmptyMap(rt), ka, Val.Fixnum(7)), kb, hi);
+        }
+        long vv = Vector(rt, vr); long cv = Vector(rt, cr);
+        long beforeV = rt.bump; NewTable(rt, s, vv); long costV = rt.bump - beforeV;
+        long beforeC = rt.bump; NewTable(rt, s, cv); long costC = rt.bump - beforeC;
+        o.Append(" saved=").Append(costV - costC);
         System.Console.WriteLine(o.ToString());
     }
 --expect
-rows=6|0[10.11.12.13],1[hi.hi.hi.hi];0[14.15],1[hi.hi] cols=6|0[10.11.12.13],1[hi.hi.hi.hi];0[14.15],1[hi.hi] same=1 empty=0| bad=[row 0, column :a holds :int and was given a string][row 0, column :a holds :int and was given a string] starved=1
+rows=6|0[10.11.12.13],1[hi.hi.hi.hi];0[14.15],1[hi.hi] cols=6|0[10.11.12.13],1[hi.hi.hi.hi];0[14.15],1[hi.hi] same=1 empty=0| bad=[row 0, column :a holds :int and was given a string][row 0, column :a holds :int and was given a string] starved=1 saved=38
 --expect-why
 DERIVED BY HAND from `tablebuild.kin`. `show_table` prints
 `count|chunk;chunk`, each chunk as `enc[cells],enc[cells]`, so the LEADING
@@ -1113,3 +1176,24 @@ makes six rows cross a boundary in a fixture small enough to read.
     charging `rows * cols` up front once ran 637 379 steps past an exhausted
     budget -- so the overshoot here is bounded at one chunk's work, and the
     table is refused rather than half-built.
+
+  saved = 38  A CONSTANT COLUMN ALLOCATES NO RUN, and this field is the only
+              one that can tell. Both tables read back identically -- a builder
+              that allocates the run and then collapses it produces exactly the
+              same table as one that never allocates it -- so nothing about the
+              RESULT distinguishes them. What distinguishes them is what the
+              build WEIGHED, which is why this reads `bump` either side.
+
+              Two builds of six rows over the same two-column schema: one where
+              `:a` runs 10..15, one where it is 7 every row. `:b` is constant in
+              both, so it cancels and what is left is the run for `:a`.
+
+              DERIVED FROM THE SHAPE, not read off a run. Six rows at CHUNK = 4
+              is two chunks, `take` = 4 then `take` = 2. The probe's allocator
+              charges `n + 16` for an object of `n` slots, so the two runs the
+              constant build does not make are 4 + 16 and 2 + 16:
+
+                  (4 + 16) + (2 + 16) = 38
+
+              A builder that still allocates the run and relies on `collapse`
+              scores 0 here and passes every other field in this file.

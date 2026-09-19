@@ -19,7 +19,8 @@ cd "$(dirname "$0")/.."
 fail() { echo; echo "FAILED: $1"; exit 1; }
 t0=$(date +%s)
 
-for c in check-decisions check-flattens check-builtins check-sys-catalogue; do
+for c in check-decisions check-flattens check-builtins check-sys-catalogue check-lib-grants \
+         check-snapshot-layout check-aotstat-layout; do
   ./bin/$c || fail "bin/$c"
 done
 

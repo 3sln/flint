@@ -17,6 +17,28 @@
          '[flint.cli :as cli] '[flint.deps :as deps]
          '[flint.wasm :as w] '[flint.modmeta :as modmeta])
 
+(defn script-ns
+  "What a file's `ns` form says, for the two things a script CLI needs: the
+  namespace, and the entry its `^:script` mark names.
+
+  Read with flint's own reader rather than by matching text, because
+  `^:script` is METADATA and metadata is the reader's business -- a regex over
+  the source would get `^{:script go}` wrong, and that is the form naming an
+  entry other than `main`. The reader also knows about `#!`, which is why the
+  shebang line needs no handling here."
+  [f]
+  (try
+    (let [st (reader/reader (slurp (str f)) {:file (str f)})
+          form (reader/read-form st)]
+      (when (and (seq? form) (= 'ns (first form)) (symbol? (second form)))
+        (let [nm (second form)
+              mark (:script (meta nm))]
+          {:ns (str nm)
+           :entry (cond (true? mark) (str nm "/main")
+                        (symbol? mark) (str nm "/" mark)
+                        :else nil)})))
+    (catch Exception _ nil)))
+
 (defn- option? [s] (or (str/starts-with? s ":") (str/starts-with? s "-")))
 
 (defn- take-list
@@ -90,6 +112,32 @@
         ;; (DECISIONS.md#construe-integration-bar).
         (= k "--emit-spec") (recur (rest a) (assoc m :emit-spec true))
         (= k "--const") (recur (drop 2 a) (assoc m :const (parse-long (second a))))
+        ;; A STANDALONE SCRIPT, named directly. `flint <file>` already runs one
+        ;; and `flint compile <file>` now builds one; this CLI could do
+        ;; neither, because its `:src` wanted a directory
+        ;; (`DECISIONS.md#standalone-scripts`).
+        ;;
+        ;; It fills in the two things the file already says -- itself as the
+        ;; source, and the entry its `^:script` mark names -- and then stops:
+        ;; everything after the file is left for the options that follow, so
+        ;; `:out` and the rest keep working exactly as they do for a project.
+        ;;
+        ;; NO ENTRY, NO RUN. A module deliberately has no entry point, and
+        ;; inventing one is what this codebase refuses everywhere else.
+        (and (fs/regular-file? k) (nil? (:fn m)))
+        (let [nsform (script-ns k)]
+          (when-not nsform
+            (println (str k " has no `ns` form, so it is not a flint script."))
+            (System/exit 2))
+          (when-not (:entry nsform)
+            (println (str "(ns " (:ns nsform) ") in " k " is not marked `^:script`,"
+                          " so nothing names its entry point."))
+            (println (str "  write (ns ^:script " (:ns nsform) " ...) to use "
+                          (:ns nsform) "/main, or name it with :fn"))
+            (System/exit 2))
+          (recur (rest a) (-> m
+                              (update :src (fnil conj []) k)
+                              (assoc :fn (symbol (:entry nsform))))))
         :else (do (println "unknown argument:" k) (System/exit 2)))
       m)))
 
@@ -98,13 +146,30 @@
 
 (defn source-candidates
   "Every file on the search path that could be namespace `n`, in path order.
-  More than one is not an error -- it is shadowing, and shadowing is reported."
+  More than one is not an error -- it is shadowing, and shadowing is reported.
+
+  A `:src` MAY BE A FILE and not only a directory. A standalone script is one
+  file and has no directory to be found under, so `:src <dir>` alone could not
+  reach it -- which is why this CLI could compile a project and not a script
+  (`DECISIONS.md#standalone-scripts`). A file entry answers for the namespace
+  it is NAMED after, the same rule a directory entry follows, so nothing else
+  in the search path changes meaning."
   [dirs n]
-  (for [d dirs
-        ext project/source-extensions
-        :let [f (io/file d (str (ns->path n) ext))]
-        :when (.exists f)]
-    (str f)))
+  (let [want (ns->path n)
+        leaf (last (str/split (str want) #"/"))]
+    (distinct
+      (concat
+        (for [d dirs
+              :let [f (io/file (str d))]
+              :when (and (.isFile f)
+                         (some (clojure.core/fn [ext] (= (.getName f) (str leaf ext)))
+                               project/source-extensions))]
+          (str f))
+        (for [d dirs
+              ext project/source-extensions
+              :let [f (io/file (str d) (str want ext))]
+              :when (.exists f)]
+          (str f))))))
 
 (defn- root-of
   "Which search-path dir a file came from. A file belongs to the project that
@@ -1003,7 +1068,7 @@
         ;; matches nothing, which is how the first attempt compiled fine and
         ;; shook `serve` out anyway.
         spec {:sources sources :order order :entry fn
-              :exports (vec (distinct (conj (vec exports) 'flint.system/serve)))
+              :exports (vec (distinct (conj (vec exports) 'flint.system/boot)))
               :features features
               :exclude exclude
               :excluded-builtins (select-keys (builtins-by-unit unit-path) (vec (or exclude [])))

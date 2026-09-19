@@ -1,0 +1,1393 @@
+--rust-head
+// A TOY SCHEDULER, enough to drive the three predicates.
+//
+// Values are small integers: a scheduler, threads and ports are rows in side
+// tables, and `slot` indexes them. What the predicates actually need is a
+// thread list, a current index, an event count and an event head -- so that is
+// all the model has.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_0000_0000_0000);
+const NOT_FOUND: Value = Value(0xFFFF_0000_0000_0002);
+const TY_NODE: u8 = 10;
+mod value { pub const PARK: super::Value = super::Value(0xFFFF_0000_0000_0004); }
+mod conc {
+    // WHAT `drive` CALLS. `run_one` marks the thread DONE, which is what makes
+    // the loop terminate in a harness with no interpreter under it.
+    pub fn run_one(rt: &mut super::Rt, i: u32) {
+        let ts = rt.objs[rt.sched_id.unwrap()][0];
+        let th = super::Rt::vec_nth_raw(rt, ts, i);
+        rt.objs[th.0 as usize][0] = super::Value(ST_DONE as u64);
+    }
+    pub fn settled_answer(rt: &mut super::Rt) -> super::Value { super::Value(999) }
+    pub fn report_deadlock(rt: &mut super::Rt) { rt.deadlocked = true; }
+    pub const SC_THREADS: u32 = 0;
+    pub const SC_CURRENT: u32 = 1;
+    pub const SC_EVENTS: u32 = 2;
+    pub const SC_EHEAD: u32 = 3;
+    pub const TH_STATUS: u32 = 0;
+    pub const TH_PARK_ON: u32 = 1;
+    pub const PT_KIND: u32 = 0;
+    pub const ST_NEW: i64 = 0;
+    pub const ST_RUNNABLE: i64 = 1;
+    pub const ST_PARKED: i64 = 2;
+    pub const ST_DONE: i64 = 3;
+    pub const ST_FAILED: i64 = 4;
+    // A BRIDGE crosses a heap; a channel does not. That distinction is the
+    // whole of `needs-host`.
+    pub fn crosses_a_heap(kind: i64) -> bool { kind == 1 }
+    // WHAT `run-one` CALLS. Each records a LETTER on the trace, which is the
+    // whole of what the expected answer asserts: not what a thread computed,
+    // but WHICH PATH it took and in what order.
+    pub fn run_entry(rt: &mut super::Rt, _f: super::Value) -> super::Value { rt.trace.push('E'); super::Value(7) }
+    pub fn restore_state(rt: &mut super::Rt, _th: super::Value) { rt.trace.push('T'); }
+    pub fn settle(rt: &mut super::Rt, _v: super::Value) { rt.trace.push('L'); }
+    pub const TH_BINDINGS: u32 = 2;
+    pub const TH_TOKEN: u32 = 6;
+    // A TOY INDEX, and deliberately not the real `TH_RESULT` (2, which is
+    // `TH_BINDINGS` here). What has to agree is the three harnesses, not this
+    // and `Conc`.
+    pub const TH_RESULT: u32 = 7;
+    pub const TH_ENTRY: u32 = 3;
+    pub const TH_STACK: u32 = 4;
+    pub const TH_FAIL: u32 = 5;
+    // THE WAITER TABLE. Toy indices -- what matters is that all three
+    // harnesses agree with each other, not with the real `Conc`.
+    pub const SC_WAITERS: u32 = 4;
+    pub const SC_WFREE: u32 = 5;
+    pub const W_GEN: u32 = 0;
+    pub const W_THREAD: u32 = 1;
+    pub const W_PORT: u32 = 2;
+    pub const W_NEXT: u32 = 3;
+    pub const W_KIND: u32 = 4;
+    pub const W_LEN: u32 = 5;
+}
+impl Value {
+    fn is_nil(self) -> bool { self == NIL }
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+}
+struct Rt {
+    // objects: rows of slots, each a Value
+    objs: Vec<Vec<Value>>,
+    // which object ids are ports
+    ports: Vec<bool>,
+    sched_id: Option<usize>,
+    // WHAT `run-one` DID, in order. A trace rather than a result: what is
+    // under test is the PATH, and two paths can reach the same value.
+    roots: Vec<Value>,
+    trace: String,
+    park_on: Value,
+    thrown: Value,
+    catches: bool,
+    // HOW MANY TIMES THE BUDGET BLEW. `> 1` is the gate having escaped every
+    // handler, which is the one thing `drive` asks it.
+    gas_trips: u32,
+    // WHAT `drive` DID, so the order can be asserted rather than inferred.
+    status: i32,
+    closed: bool,
+    deadlocked: bool,
+}
+impl Rt {
+    fn obj(&mut self, slots: Vec<Value>, is_port: bool) -> Value {
+        self.objs.push(slots);
+        self.ports.push(is_port);
+        Value((self.objs.len() - 1) as u64)
+    }
+    // THE ROOT STACK, which `run-one` brackets its work with.
+    fn mark(&mut self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, i: usize) { self.roots.truncate(i); }
+    fn install_bindings(&mut self, _b: Value) { self.trace.push('B'); }
+    fn begin_slice(&mut self) { self.trace.push('S'); }
+    fn reset_exec_state(&mut self) { self.trace.push('R'); }
+    fn restore_state(&mut self, th: Value) { conc::restore_state(self, th); }
+    fn run(&mut self, _n: u32) -> Value { self.trace.push('V'); Value(7) }
+    // WHETHER A HANDLER CAUGHT IT is the harness's to choose, so both arms of
+    // the failure path can be driven.
+    fn unwind_from_resume(&mut self) -> bool { self.trace.push('U'); self.catches }
+    fn boot_system_thread_once(&mut self) {}
+    fn reap_ports(&mut self) {}
+    fn close_all_bridges(&mut self) { self.closed = true; }
+    // `&self`, NOT `&mut self`, and that matters: the real `Rt::slot` and
+    // `Rt::sched` are both `&self`, so a harness that demands `&mut` is
+    // STRICTER THAN THE RUNTIME -- it rejects `self.set(w, i, self.slot(..))`,
+    // which native writes and the borrow checker accepts, and would push a
+    // hoist into the kin source to satisfy the toy rather than the target.
+    fn sched(&self) -> Value {
+        match self.sched_id { Some(i) => Value(i as u64), None => NIL }
+    }
+    fn slot(&self, v: Value, i: u32) -> Value { self.objs[v.0 as usize][i as usize] }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.objs[v.0 as usize][i as usize] = x; }
+    fn is_port(&self, v: Value) -> bool {
+        !v.is_nil() && (v.0 as usize) < self.ports.len() && self.ports[v.0 as usize]
+    }
+    // A VECTOR is an object whose slot 0 is its count; the items follow.
+    fn vec_count(&self, v: Value) -> u32 {
+        if v.is_nil() { return 0; }
+        self.objs[v.0 as usize][0].0 as u32
+    }
+    fn vec_nth_raw(rt: &mut Rt, v: Value, i: u32) -> Value {
+        rt.objs[v.0 as usize][(i + 1) as usize]
+    }
+    // ALLOCATION, enough for `new-waiter`. A fresh object is a row of NIL;
+    // `vec_conj` copies and appends, which is what makes the old vector's
+    // survival observable if it is not rooted.
+    fn new_obj(&mut self, _ty: u8, len: u32) -> Value {
+        self.objs.push(vec![NIL; len as usize]);
+        self.ports.push(false);
+        Value((self.objs.len() - 1) as u64)
+    }
+    fn vec_conj(&mut self, v: Value, x: Value) -> Value {
+        let mut items: Vec<Value> = self.objs[v.0 as usize].clone();
+        let n = items[0].0 as usize;
+        items.truncate(n + 1);
+        items.push(x);
+        items[0] = Value((n + 1) as u64);
+        self.objs.push(items);
+        self.ports.push(false);
+        Value((self.objs.len() - 1) as u64)
+    }
+    fn current_thread(&self) -> Value {
+        let s = self.sched();
+        if s.is_nil() { return NIL; }
+        let ts = self.slot(s, conc::SC_THREADS);
+        let i = self.slot(s, conc::SC_CURRENT).as_fixnum() as u32;
+        self.vec_nth(ts, i, NIL)
+    }
+    fn vec_nth(&self, v: Value, i: u32, d: Value) -> Value {
+        let n = self.vec_count(v);
+        if i >= n { return d; }
+        self.objs[v.0 as usize][(i + 1) as usize]
+    }
+--rust
+}
+fn fx(n: i64) -> Value { Value(n as u64) }
+fn main() {
+    // Threads: one RUNNABLE, one PARKED on a bridge, one PARKED on a channel.
+    let mut rt = Rt { objs: Vec::new(), ports: Vec::new(), sched_id: None,
+                      roots: Vec::new(), trace: String::new(), park_on: NIL,
+                      thrown: NIL, catches: true, gas_trips: 0,
+                      status: 0, closed: false, deadlocked: false };
+    let bridge = rt.obj(vec![fx(1)], true);
+    let channel = rt.obj(vec![fx(0)], true);
+    let t_run = rt.obj(vec![fx(conc::ST_RUNNABLE), NIL], false);
+    let t_bridge = rt.obj(vec![fx(conc::ST_PARKED), bridge], false);
+    let t_chan = rt.obj(vec![fx(conc::ST_PARKED), channel], false);
+    let t_new = rt.obj(vec![fx(conc::ST_NEW), NIL], false);
+
+    let mut out = String::new();
+
+    // 1. NOTHING RUNNABLE, and the answer is the COUNT, not a sentinel.
+    let ts = rt.obj(vec![fx(2), t_bridge, t_chan], false);
+    let evs = rt.obj(vec![fx(0)], false);
+    let s = rt.obj(vec![ts, fx(0), evs, fx(0), NIL, fx(-1)], false);
+    rt.sched_id = Some(s.0 as usize);
+    out.push_str(&format!("{} ", rt.sched_pick()));
+    out.push_str(&format!("{} ", rt.sched_needs_host() as u32));
+
+    // 2. ROUND-ROBIN FROM JUST AFTER CURRENT. Threads [parked, runnable, new]
+    //    with current = 0 must pick 1, and with current = 1 must pick 2.
+    let ts2 = rt.obj(vec![fx(3), t_bridge, t_run, t_new], false);
+    let s2 = rt.obj(vec![ts2, fx(0), evs, fx(0), NIL, fx(-1)], false);
+    rt.sched_id = Some(s2.0 as usize);
+    out.push_str(&format!("{} ", rt.sched_pick()));
+    let s3 = rt.obj(vec![ts2, fx(1), evs, fx(0), NIL, fx(-1)], false);
+    rt.sched_id = Some(s3.0 as usize);
+    out.push_str(&format!("{} ", rt.sched_pick()));
+
+    // 3. A CHANNEL PARK IS NOT THE HOST'S PROBLEM.
+    let ts4 = rt.obj(vec![fx(1), t_chan], false);
+    let s4 = rt.obj(vec![ts4, fx(0), evs, fx(0), NIL, fx(-1)], false);
+    rt.sched_id = Some(s4.0 as usize);
+    out.push_str(&format!("{} ", rt.sched_needs_host() as u32));
+
+    // 4. AN UNDRAINED EVENT IS, even with nothing parked at all.
+    let evs2 = rt.obj(vec![fx(2)], false);
+    let s5 = rt.obj(vec![ts4, fx(0), evs2, fx(0), NIL, fx(-1)], false);
+    rt.sched_id = Some(s5.0 as usize);
+    out.push_str(&format!("{} ", rt.sched_pending_events() as u32));
+    out.push_str(&format!("{} ", rt.sched_needs_host() as u32));
+    // ... and a head that has caught up is not.
+    let s6 = rt.obj(vec![ts4, fx(0), evs2, fx(2), NIL, fx(-1)], false);
+    rt.sched_id = Some(s6.0 as usize);
+    out.push_str(&format!("{} ", rt.sched_pending_events() as u32));
+
+    // 5. NO SCHEDULER AT ALL answers, rather than reaching into nil.
+    rt.sched_id = None;
+    out.push_str(&format!("{} ", rt.sched_pick()));
+    out.push_str(&format!("{} ", rt.sched_pending_events() as u32));
+    out.push_str(&format!("{} ", rt.sched_needs_host() as u32));
+    // 6. SETTLED. A nil scheduler is settled -- no threads, none outstanding.
+    out.push_str(&format!("{} ", rt.sched_all_settled() as u32));
+    let t_done = rt.obj(vec![fx(3), NIL], false);
+    let ts_done = rt.obj(vec![fx(1), t_done], false);
+    let s7 = rt.obj(vec![ts_done, fx(0), evs, fx(0), NIL, fx(-1)], false);
+    rt.sched_id = Some(s7.0 as usize);
+    out.push_str(&format!("{} ", rt.sched_all_settled() as u32));
+    // ... and ONE PARKED THREAD IS NOT SETTLED, even beside a finished one.
+    let ts_mixed = rt.obj(vec![fx(2), t_done, t_chan], false);
+    let s8 = rt.obj(vec![ts_mixed, fx(0), evs, fx(0), NIL, fx(-1)], false);
+    rt.sched_id = Some(s8.0 as usize);
+    out.push_str(&format!("{} ", rt.sched_all_settled() as u32));
+
+    // --- `drive`, and what it is asked FIRST ------------------------------
+    //
+    // 7. A THREAD PARKED ON A BRIDGE. The host may still wake it, so drive
+    //    must answer 2 and must NOT close the bridges -- that is the order
+    //    that was wrong on both ports.
+    let ts_b = rt.obj(vec![fx(1), t_bridge], false);
+    let s9 = rt.obj(vec![ts_b, fx(0), evs, fx(0), NIL, fx(-1)], false);
+    rt.sched_id = Some(s9.0 as usize);
+    rt.status = 0; rt.closed = false; rt.deadlocked = false;
+    let r1 = rt.sched_drive();
+    out.push_str(&format!("{}{}{} ", rt.status, rt.closed as u32,
+                          if r1 == NIL { 0 } else { 1 }));
+
+    // 8. EVERYTHING SETTLED. Bridges close, status 0, and the answer comes
+    //    from `settled-answer`.
+    let t_done2 = rt.obj(vec![fx(3), NIL], false);
+    let ts_d = rt.obj(vec![fx(1), t_done2], false);
+    let s10 = rt.obj(vec![ts_d, fx(0), evs, fx(0), NIL, fx(-1)], false);
+    rt.sched_id = Some(s10.0 as usize);
+    rt.status = 9; rt.closed = false; rt.deadlocked = false;
+    let r2 = rt.sched_drive();
+    out.push_str(&format!("{}{}{} ", rt.status, rt.closed as u32,
+                          if r2 == Value(999) { 1 } else { 0 }));
+
+    // 9. A RUNNABLE THREAD runs first, and only then is the question asked.
+    let t_run2 = rt.obj(vec![fx(1), NIL], false);
+    let ts_r = rt.obj(vec![fx(1), t_run2], false);
+    let s11 = rt.obj(vec![ts_r, fx(0), evs, fx(0), NIL, fx(-1)], false);
+    rt.sched_id = Some(s11.0 as usize);
+    rt.status = 9; rt.closed = false; rt.deadlocked = false;
+    rt.sched_drive();
+    out.push_str(&format!("{}{} ", rt.status, rt.closed as u32));
+
+    // 10. PARKED ON A CHANNEL, which no host can help: named, not hung.
+    let ts_c = rt.obj(vec![fx(1), t_chan], false);
+    let s12 = rt.obj(vec![ts_c, fx(0), evs, fx(0), NIL, fx(-1)], false);
+    rt.sched_id = Some(s12.0 as usize);
+    rt.status = 9; rt.closed = false; rt.deadlocked = false;
+    rt.sched_drive();
+    out.push_str(&format!("{}{} ", rt.status, rt.deadlocked as u32));
+
+    // 11. THE CASE THAT REPRODUCES THE BUG. A FINISHED thread beside one
+    //     parked on a BRIDGE. Asking "has the entry finished?" first answers
+    //     yes -- thread 0 IS done -- and closes the system port under a call
+    //     that has just parked on an `open`. Asking the host first answers 2
+    //     and leaves the bridges alone. No other case here separates them.
+    let t_done3 = rt.obj(vec![fx(3), NIL], false);
+    let ts_mix = rt.obj(vec![fx(2), t_done3, t_bridge], false);
+    let s13 = rt.obj(vec![ts_mix, fx(0), evs, fx(0), NIL, fx(-1)], false);
+    rt.sched_id = Some(s13.0 as usize);
+    rt.status = 9; rt.closed = false; rt.deadlocked = false;
+    rt.sched_drive();
+    out.push_str(&format!("{}{}", rt.status, rt.closed as u32));
+    // 12. THE WAITER TABLE. One LIVE waiter and one FREED, and then every way
+    //     a token can fail to name the live one. `t_run`'s status by now is
+    //     whatever earlier cases left it -- irrelevant here, since a waiter is
+    //     live if `W_THREAD` is non-nil and nothing else.
+    let w0 = rt.obj(vec![fx(0), t_run, NIL, fx(-1)], false);
+    let w1 = rt.obj(vec![fx(3), NIL, NIL, fx(-1)], false);
+    let ws = rt.obj(vec![fx(2), w0, w1], false);
+    let sw = rt.obj(vec![ts_mix, fx(0), evs, fx(0), ws, fx(-1)], false);
+    rt.sched_id = Some(sw.0 as usize);
+    out.push_str(" ");
+    out.push_str(&format!("{} ", (!rt.waiter_at(0).is_nil()) as u32));
+    out.push_str(&format!("{} ", (!rt.waiter_at(-1).is_nil()) as u32));
+    out.push_str(&format!("{} ", (!rt.waiter_at(1).is_nil()) as u32));
+    out.push_str(&format!("{} ", (!rt.waiter_at(65537).is_nil()) as u32));
+    out.push_str(&format!("{} ", (!rt.waiter_at(196610).is_nil()) as u32));
+    out.push_str(&format!("{} ", (!rt.waiter_at(9).is_nil()) as u32));
+    out.push_str(&format!("{} ", rt.outstanding_waiters()));
+    // FREEING: what it answers, that the token goes stale, that the count
+    // drops, and that the slot reaches the free list.
+    let freed = (!rt.free_waiter(1).is_nil()) as u32;
+    let stale = (!rt.waiter_at(1).is_nil()) as u32;
+    let left = rt.outstanding_waiters();
+    let head = rt.slot(sw, conc::SC_WFREE).as_fixnum();
+    out.push_str(&format!("{}{}{}{} ", freed, stale, left, head));
+    out.push_str(&format!("{} ", (!rt.free_waiter(1).is_nil()) as u32));
+    rt.sched_id = None;
+    out.push_str(&format!("{}", rt.outstanding_waiters()));
+    // 13. RUN-ONE, and each field is the PATH TAKEN rather than a value.
+    //     A thread is [status, park_on, bindings, entry, stack, fail].
+    let mut once = |rt: &mut Rt, st: i64, stack: Value, fail: Value, catches: bool| -> String {
+        let th = rt.obj(vec![fx(st), NIL, NIL, NIL, stack, fail], false);
+        let ts = rt.obj(vec![fx(1), th], false);
+        let sc = rt.obj(vec![ts, fx(0), evs, fx(0), NIL, fx(-1)], false);
+        rt.sched_id = Some(sc.0 as usize);
+        rt.trace = String::new();
+        rt.catches = catches;
+        rt.sched_run_one(0);
+        if rt.trace.is_empty() { "-".to_string() } else { rt.trace.clone() }
+    };
+    let stack = rt.obj(vec![fx(0)], false);
+    out.push_str(" ");
+    let t1 = once(&mut rt, conc::ST_NEW, NIL, NIL, true);
+    out.push_str(&format!("{t1} "));
+    let t2 = once(&mut rt, conc::ST_RUNNABLE, stack, NIL, true);
+    out.push_str(&format!("{t2} "));
+    let t3 = once(&mut rt, conc::ST_RUNNABLE, stack, fx(9), true);
+    out.push_str(&format!("{t3} "));
+    let t4 = once(&mut rt, conc::ST_RUNNABLE, stack, fx(9), false);
+    out.push_str(&format!("{t4} "));
+    // A THREAD THAT IS NOT THERE: nothing runs and nothing settles.
+    let ts_none = rt.obj(vec![fx(1), NIL], false);
+    let sc_none = rt.obj(vec![ts_none, fx(0), evs, fx(0), NIL, fx(-1)], false);
+    rt.sched_id = Some(sc_none.0 as usize);
+    rt.trace = String::new();
+    rt.sched_run_one(0);
+    out.push_str(if rt.trace.is_empty() { "-" } else { "?" });
+    out.push(' ');
+    // 14. WAKING. Two threads parked on two different ports, each with a
+    //     waiter naming it. Waking one port must move exactly one of them.
+    {
+        let pp = rt.obj(vec![fx(1)], true);
+        let qq = rt.obj(vec![fx(1)], true);
+        // [status, park_on, bindings, entry, stack, fail, token]
+        let t0 = rt.obj(vec![fx(conc::ST_PARKED), pp, NIL, NIL, NIL, NIL, fx(1)], false);
+        let t1 = rt.obj(vec![fx(conc::ST_PARKED), qq, NIL, NIL, NIL, NIL, fx(2)], false);
+        // [gen, thread, port, next]
+        let w0 = rt.obj(vec![fx(0), t0, pp, fx(-1)], false);
+        let w1 = rt.obj(vec![fx(0), t1, qq, fx(-1)], false);
+        let ws = rt.obj(vec![fx(2), w0, w1], false);
+        let ts = rt.obj(vec![fx(2), t0, t1], false);
+        let sc = rt.obj(vec![ts, fx(0), evs, fx(0), ws, fx(-1)], false);
+        rt.sched_id = Some(sc.0 as usize);
+        rt.wake_on(pp);
+        out.push_str(&format!("{},{},{},{},{} ",
+            rt.slot(t0, conc::TH_STATUS).as_fixnum(),
+            rt.slot(t0, conc::TH_TOKEN).as_fixnum(),
+            rt.slot(sc, 5).as_fixnum(),
+            rt.slot(t1, conc::TH_STATUS).as_fixnum(),
+            (!rt.waiter_at(1).is_nil()) as u32));
+        // 15. A PORT NOBODY WAITS ON. Nothing moves, and nothing is freed.
+        let rr = rt.obj(vec![fx(1)], true);
+        let before = rt.slot(sc, 5).as_fixnum();
+        rt.wake_on(rr);
+        out.push_str(&format!("{}{}", rt.slot(t1, conc::TH_STATUS).as_fixnum(),
+                              (rt.slot(sc, 5).as_fixnum() == before) as u32));
+    }
+    out.push(' ');
+    // 16. NEW-WAITER. A fresh table grows; a freed slot is REUSED, and the
+    //     token that comes back says which happened.
+    {
+        let pp = rt.obj(vec![fx(1)], true);
+        let t0 = rt.obj(vec![fx(conc::ST_RUNNABLE), NIL, NIL, NIL, NIL, NIL, fx(-1)], false);
+        let ts = rt.obj(vec![fx(1), t0], false);
+        let ws0 = rt.obj(vec![fx(0)], false);
+        let sc = rt.obj(vec![ts, fx(0), evs, fx(0), ws0, fx(-1)], false);
+        rt.sched_id = Some(sc.0 as usize);
+        // Two fresh slots: tokens 1 and 2, generation 0 on both.
+        let a = rt.new_waiter(7, pp);
+        let b = rt.new_waiter(7, pp);
+        out.push_str(&format!("{a},{b},"));
+        // FREE THE FIRST, then ask again: the slot comes BACK, and its
+        // generation has moved on -- so the token is 65537, not 1.
+        rt.free_waiter(a);
+        let c = rt.new_waiter(7, pp);
+        let scv = rt.sched();
+        let wsv = rt.slot(scv, conc::SC_WAITERS);
+        let n = rt.vec_count(wsv);
+        out.push_str(&format!("{c},{n}"));
+    }
+    out.push(' ');
+    // 17. PARK-ON-PORT. The waiter is registered, the token lands on the
+    //     THREAD, and the park records what is being waited for.
+    {
+        let pp = rt.obj(vec![fx(1)], true);
+        let t0 = rt.obj(vec![fx(conc::ST_RUNNABLE), NIL, NIL, NIL, NIL, NIL, fx(-1)], false);
+        let pts = rt.obj(vec![fx(1), t0], false);
+        let pws = rt.obj(vec![fx(0)], false);
+        let psc = rt.obj(vec![pts, fx(0), evs, fx(0), pws, fx(-1)], false);
+        rt.sched_id = Some(psc.0 as usize);
+        rt.park_on = NIL;
+        rt.thrown = NIL;
+        let r = rt.park_on_port(7, pp);
+        let w = rt.waiter_at(1);
+        out.push_str(&format!("{},{},{},{},{}",
+            rt.slot(t0, conc::TH_TOKEN).as_fixnum(),
+            (rt.park_on == pp) as u32,
+            (rt.thrown == value::PARK) as u32,
+            (r == NIL) as u32,
+            (!w.is_nil() && rt.slot(w, conc::W_PORT) == pp) as u32));
+        // AND THE TWO HALVES MEET: the park this made is wakeable by the wake
+        // path, which is the only reason they are a pair.
+        rt.set(t0, conc::TH_STATUS, fx(conc::ST_PARKED));
+        rt.wake_on(pp);
+        out.push_str(&format!(",{},{}",
+            rt.slot(t0, conc::TH_STATUS).as_fixnum(),
+            rt.slot(t0, conc::TH_TOKEN).as_fixnum()));
+    }
+    out.push(' ');
+    // 18. THE GATE, and the ORDER it is asked in. Three cases, and only the
+    //     first separates a right answer from the wrong one.
+    {
+        // (a) GATE ESCAPED, AND A THREAD PARKED ON A BRIDGE. `needs-host`
+        //     would say 2 -- and would be lying, because the budget is still
+        //     blown and nothing can run whatever the host sends. Asking the
+        //     gate FIRST is the whole fix; asked second, this answers 2 and
+        //     the host pumps for ever. No other case here separates them.
+        let t_failed = rt.obj(vec![fx(conc::ST_FAILED), NIL, NIL, NIL, NIL, NIL,
+                                   fx(-1), fx(555)], false);
+        let ts_g = rt.obj(vec![fx(2), t_failed, t_bridge], false);
+        let sg = rt.obj(vec![ts_g, fx(0), evs, fx(0), NIL, fx(-1)], false);
+        rt.sched_id = Some(sg.0 as usize);
+        rt.status = 9; rt.closed = false; rt.thrown = NIL; rt.gas_trips = 2;
+        let r = rt.sched_drive();
+        out.push_str(&format!("{}{}{}{} ", rt.status, rt.closed as u32,
+                              (rt.thrown == Value(555)) as u32,
+                              (r == NIL) as u32));
+        // (b) THE ANSWER COMES FROM THE CURRENT THREAD, not from thread 0.
+        //     A DONE thread hands its result back, and `999` is what
+        //     `settled-answer` would have said -- so this field is what tells
+        //     the two apart.
+        let t_ok = rt.obj(vec![fx(conc::ST_DONE), NIL, NIL, NIL, NIL, NIL,
+                               fx(-1), fx(777)], false);
+        let ts_h = rt.obj(vec![fx(2), t_bridge, t_ok], false);
+        let sh = rt.obj(vec![ts_h, fx(1), evs, fx(0), NIL, fx(-1)], false);
+        rt.sched_id = Some(sh.0 as usize);
+        rt.status = 9; rt.closed = false; rt.thrown = NIL; rt.gas_trips = 2;
+        let r2 = rt.sched_drive();
+        out.push_str(&format!("{}{}{} ", rt.status, rt.closed as u32,
+                              if r2 == Value(777) { 1 } else { 0 }));
+        // (c) THE CONTROL. Same shape, gate NOT escaped: the old answer must
+        //     come back untouched, or the check fires when it should not.
+        rt.sched_id = Some(sg.0 as usize);
+        rt.status = 9; rt.closed = false; rt.thrown = NIL; rt.gas_trips = 1;
+        rt.sched_drive();
+        out.push_str(&format!("{}{}", rt.status, rt.closed as u32));
+    }
+    println!("{out}");
+}
+--java-head
+    static final long NIL = 0xFFFF000000000000L;
+    static final long NOT_FOUND = 0xFFFF000000000002L;
+    static final class Conc {
+        static final int SC_THREADS = 0, SC_CURRENT = 1, SC_EVENTS = 2, SC_EHEAD = 3;
+        static final int TH_STATUS = 0, TH_PARK_ON = 1, PT_KIND = 0;
+        static final long ST_NEW = 0, ST_RUNNABLE = 1, ST_PARKED = 2,
+                          ST_DONE = 3, ST_FAILED = 4;
+        static boolean crossesAHeap(long kind) { return kind == 1; }
+        // WHAT `runOne` CALLS -- see the note in the Rust head. Each records a
+        // LETTER, and the trace is what the expected answer asserts.
+        static final int TH_BINDINGS = 2, TH_ENTRY = 3, TH_STACK = 4, TH_FAIL = 5;
+        static final int TH_TOKEN = 6;
+        // A TOY INDEX, matching the other two harnesses rather than `Conc`.
+        static final int TH_RESULT = 7;
+        static final int W_KIND = 4, W_LEN = 5;
+        static long currentThread(Rt rt) {
+            long s = sched(rt);
+            if (s == NIL) return NIL;
+            return vecNth(rt, rt.slot(s, SC_THREADS), (int) rt.slot(s, SC_CURRENT), NIL);
+        }
+        // ALLOCATION, enough for `newWaiter`.
+        static long newObj(Rt rt, int ty, int len) {
+            long[] z = new long[len];
+            java.util.Arrays.fill(z, NIL);
+            return rt.obj(z, false);
+        }
+        static long runEntry(Rt rt, long f) { rt.trace.append('E'); return 7; }
+        static void restoreState(Rt rt, long th) { rt.trace.append('T'); }
+        static void settle(Rt rt, long v) { rt.trace.append('L'); }
+        static void installBindings(Rt rt, long b) { rt.trace.append('B'); }
+        static void beginSlice(Rt rt) { rt.trace.append('S'); }
+        static void resetExecState(Rt rt) { rt.trace.append('R'); }
+        // THE WAITER TABLE, at toy indices: the three harnesses agree with
+        // each other, which is what the expected answer is derived against.
+        static final int SC_WAITERS = 4, SC_WFREE = 5;
+        static final int W_GEN = 0, W_THREAD = 1, W_PORT = 2, W_NEXT = 3;
+        // WHAT `drive` CALLS. `runOne` marks the thread DONE, which is what
+        // makes the loop terminate with no interpreter under it.
+        static void bootSystemThreadOnce(Rt rt) {}
+        static void reapPorts(Rt rt) {}
+        static void closeAllBridges(Rt rt) { rt.closed = true; }
+        static void runOne(Rt rt, int i) {
+            long ts = rt.objs.get(rt.schedId).get(0);
+            long th = rt.objs.get((int) ts).get(i + 1);
+            rt.objs.get((int) th).set(0, ST_DONE);
+        }
+        static long settledAnswer(Rt rt) { return 999; }
+        static void reportDeadlock(Rt rt) { rt.deadlocked = true; }
+        static long sched(Rt rt) { return rt.schedId < 0 ? NIL : rt.schedId; }
+        static boolean isPort(Rt rt, long v) {
+            return v != NIL && v >= 0 && v < rt.ports.size() && rt.ports.get((int) v);
+        }
+    }
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static boolean isNil(long v) { return v == Probe.NIL; }
+        static final long NOT_FOUND = Probe.NOT_FOUND;
+        static final long PARK = 0xFFFF000000000004L;
+        static long asFixnum(long v) { return v; }
+        static long fixnum(long n) { return n; }
+        // The generated code inserts `asHeap` at every slot write. Here a
+        // value IS its object id, so it is the identity.
+        static long asHeap(long v) { return v; }
+    }
+    // BARE, not on a `Vec` class: `vecread` exports them as free functions and
+    // the generated code static-imports them.
+    static int vecCount(Rt rt, long v) {
+        if (v == NIL) return 0;
+        return (int) (long) rt.objs.get((int) v).get(0);
+    }
+    static final int TY_NODE = 10;
+    static long vecConj(Rt rt, long v, long x) {
+        int n = vecCount(rt, v);
+        long[] items = new long[n + 2];
+        items[0] = n + 1;
+        for (int k = 0; k < n; k++) items[k + 1] = rt.objs.get((int) v).get(k + 1);
+        items[n + 1] = x;
+        return rt.obj(items, false);
+    }
+    static long vecNth(Rt rt, long v, int i, long d) {
+        int n = vecCount(rt, v);
+        return i >= n ? d : rt.objs.get((int) v).get(i + 1);
+    }
+    static final class Rt {
+        java.util.ArrayList<java.util.ArrayList<Long>> objs = new java.util.ArrayList<>();
+        java.util.ArrayList<Boolean> ports = new java.util.ArrayList<>();
+        int schedId = -1;
+        int status = 0;
+        boolean closed = false, deadlocked = false;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        StringBuilder trace = new StringBuilder();
+        long parkOn = NIL;
+        long thrown = NIL;
+        boolean catches = true;
+        // HOW MANY TIMES THE BUDGET BLEW; `> 1` is the gate having escaped.
+        int gasTrips = 0;
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int i) { while (roots.size() > i) roots.remove(roots.size() - 1); }
+        long run(int n) { trace.append('V'); return 7; }
+        boolean unwind() { trace.append('U'); return catches; }
+        long slot(long v, int i) { return objs.get((int) v).get(i); }
+        void setSlot(long v, int i, long x) { objs.get((int) v).set(i, x); }
+        long obj(long[] slots, boolean isPort) {
+            java.util.ArrayList<Long> s = new java.util.ArrayList<>();
+            for (long x : slots) s.add(x);
+            objs.add(s); ports.add(isPort);
+            return objs.size() - 1;
+        }
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        long bridge = rt.obj(new long[]{1}, true);
+        long channel = rt.obj(new long[]{0}, true);
+        long tRun = rt.obj(new long[]{Conc.ST_RUNNABLE, NIL}, false);
+        long tBridge = rt.obj(new long[]{Conc.ST_PARKED, bridge}, false);
+        long tChan = rt.obj(new long[]{Conc.ST_PARKED, channel}, false);
+        long tNew = rt.obj(new long[]{Conc.ST_NEW, NIL}, false);
+        StringBuilder out = new StringBuilder();
+
+        long ts = rt.obj(new long[]{2, tBridge, tChan}, false);
+        long evs = rt.obj(new long[]{0}, false);
+        long s = rt.obj(new long[]{ts, 0, evs, 0, NIL, -1}, false);
+        rt.schedId = (int) s;
+        out.append(schedPick(rt)).append(" ");
+        out.append(schedNeedsHost(rt) ? 1 : 0).append(" ");
+
+        long ts2 = rt.obj(new long[]{3, tBridge, tRun, tNew}, false);
+        long s2 = rt.obj(new long[]{ts2, 0, evs, 0, NIL, -1}, false);
+        rt.schedId = (int) s2;
+        out.append(schedPick(rt)).append(" ");
+        long s3 = rt.obj(new long[]{ts2, 1, evs, 0, NIL, -1}, false);
+        rt.schedId = (int) s3;
+        out.append(schedPick(rt)).append(" ");
+
+        long ts4 = rt.obj(new long[]{1, tChan}, false);
+        long s4 = rt.obj(new long[]{ts4, 0, evs, 0, NIL, -1}, false);
+        rt.schedId = (int) s4;
+        out.append(schedNeedsHost(rt) ? 1 : 0).append(" ");
+
+        long evs2 = rt.obj(new long[]{2}, false);
+        long s5 = rt.obj(new long[]{ts4, 0, evs2, 0, NIL, -1}, false);
+        rt.schedId = (int) s5;
+        out.append(schedPendingEvents(rt) ? 1 : 0).append(" ");
+        out.append(schedNeedsHost(rt) ? 1 : 0).append(" ");
+        long s6 = rt.obj(new long[]{ts4, 0, evs2, 2, NIL, -1}, false);
+        rt.schedId = (int) s6;
+        out.append(schedPendingEvents(rt) ? 1 : 0).append(" ");
+
+        rt.schedId = -1;
+        out.append(schedPick(rt)).append(" ");
+        out.append(schedPendingEvents(rt) ? 1 : 0).append(" ");
+        out.append(schedNeedsHost(rt) ? 1 : 0).append(" ");
+        out.append(schedAllSettled(rt) ? 1 : 0).append(" ");
+        long tDone = rt.obj(new long[]{3, NIL}, false);
+        long tsDone = rt.obj(new long[]{1, tDone}, false);
+        long s7 = rt.obj(new long[]{tsDone, 0, evs, 0, NIL, -1}, false);
+        rt.schedId = (int) s7;
+        out.append(schedAllSettled(rt) ? 1 : 0).append(" ");
+        long tsMixed = rt.obj(new long[]{2, tDone, tChan}, false);
+        long s8 = rt.obj(new long[]{tsMixed, 0, evs, 0, NIL, -1}, false);
+        rt.schedId = (int) s8;
+        out.append(schedAllSettled(rt) ? 1 : 0).append(" ");
+
+        long tsB = rt.obj(new long[]{1, tBridge}, false);
+        long s9 = rt.obj(new long[]{tsB, 0, evs, 0, NIL, -1}, false);
+        rt.schedId = (int) s9;
+        rt.status = 0; rt.closed = false; rt.deadlocked = false;
+        long r1 = schedDrive(rt);
+        out.append(rt.status).append(rt.closed ? 1 : 0)
+           .append(r1 == NIL ? 0 : 1).append(" ");
+
+        long tDone2 = rt.obj(new long[]{3, NIL}, false);
+        long tsD = rt.obj(new long[]{1, tDone2}, false);
+        long s10 = rt.obj(new long[]{tsD, 0, evs, 0, NIL, -1}, false);
+        rt.schedId = (int) s10;
+        rt.status = 9; rt.closed = false; rt.deadlocked = false;
+        long r2 = schedDrive(rt);
+        out.append(rt.status).append(rt.closed ? 1 : 0)
+           .append(r2 == 999 ? 1 : 0).append(" ");
+
+        long tRun2 = rt.obj(new long[]{1, NIL}, false);
+        long tsR = rt.obj(new long[]{1, tRun2}, false);
+        long s11 = rt.obj(new long[]{tsR, 0, evs, 0, NIL, -1}, false);
+        rt.schedId = (int) s11;
+        rt.status = 9; rt.closed = false; rt.deadlocked = false;
+        schedDrive(rt);
+        out.append(rt.status).append(rt.closed ? 1 : 0).append(" ");
+
+        long tsC = rt.obj(new long[]{1, tChan}, false);
+        long s12 = rt.obj(new long[]{tsC, 0, evs, 0, NIL, -1}, false);
+        rt.schedId = (int) s12;
+        rt.status = 9; rt.closed = false; rt.deadlocked = false;
+        schedDrive(rt);
+        out.append(rt.status).append(rt.deadlocked ? 1 : 0).append(" ");
+
+        long tDone3 = rt.obj(new long[]{3, NIL}, false);
+        long tsMix = rt.obj(new long[]{2, tDone3, tBridge}, false);
+        long s13 = rt.obj(new long[]{tsMix, 0, evs, 0, NIL, -1}, false);
+        rt.schedId = (int) s13;
+        rt.status = 9; rt.closed = false; rt.deadlocked = false;
+        schedDrive(rt);
+        out.append(rt.status).append(rt.closed ? 1 : 0);
+        // 12. THE WAITER TABLE -- see the note in the Rust driver.
+        long w0 = rt.obj(new long[]{0, tRun, NIL, -1}, false);
+        long w1 = rt.obj(new long[]{3, NIL, NIL, -1}, false);
+        long ws = rt.obj(new long[]{2, w0, w1}, false);
+        long sw = rt.obj(new long[]{tsMix, 0, evs, 0, ws, -1}, false);
+        rt.schedId = (int) sw;
+        out.append(" ");
+        out.append(Val.isNil(waiterAt(rt, 0)) ? 0 : 1).append(" ");
+        out.append(Val.isNil(waiterAt(rt, -1)) ? 0 : 1).append(" ");
+        out.append(Val.isNil(waiterAt(rt, 1)) ? 0 : 1).append(" ");
+        out.append(Val.isNil(waiterAt(rt, 65537)) ? 0 : 1).append(" ");
+        out.append(Val.isNil(waiterAt(rt, 196610)) ? 0 : 1).append(" ");
+        out.append(Val.isNil(waiterAt(rt, 9)) ? 0 : 1).append(" ");
+        out.append(outstandingWaiters(rt)).append(" ");
+        int freed = Val.isNil(freeWaiter(rt, 1)) ? 0 : 1;
+        int stale = Val.isNil(waiterAt(rt, 1)) ? 0 : 1;
+        int left = outstandingWaiters(rt);
+        long head = Val.asFixnum(rt.slot(sw, Conc.SC_WFREE));
+        out.append(freed).append(stale).append(left).append(head).append(" ");
+        out.append(Val.isNil(freeWaiter(rt, 1)) ? 0 : 1).append(" ");
+        rt.schedId = -1;
+        out.append(outstandingWaiters(rt));
+        // 13. RUN-ONE: each field is the PATH TAKEN. See the Rust driver.
+        long stack = rt.obj(new long[]{0}, false);
+        out.append(" ");
+        long[][] cases = {
+            { Conc.ST_NEW,      NIL,   NIL, 1 },
+            { Conc.ST_RUNNABLE, stack, NIL, 1 },
+            { Conc.ST_RUNNABLE, stack, 9,   1 },
+            { Conc.ST_RUNNABLE, stack, 9,   0 },
+        };
+        for (long[] c : cases) {
+            long rth = rt.obj(new long[]{ c[0], NIL, NIL, NIL, c[1], c[2] }, false);
+            long rts = rt.obj(new long[]{ 1, rth }, false);
+            long sc = rt.obj(new long[]{ rts, 0, evs, 0, NIL, -1 }, false);
+            rt.schedId = (int) sc;
+            rt.trace = new StringBuilder();
+            rt.catches = c[3] == 1;
+            schedRunOne(rt, 0);
+            out.append(rt.trace.length() == 0 ? "-" : rt.trace.toString()).append(" ");
+        }
+        long tsNone = rt.obj(new long[]{ 1, NIL }, false);
+        long scNone = rt.obj(new long[]{ tsNone, 0, evs, 0, NIL, -1 }, false);
+        rt.schedId = (int) scNone;
+        rt.trace = new StringBuilder();
+        schedRunOne(rt, 0);
+        out.append(rt.trace.length() == 0 ? "-" : "?");
+        out.append(' ');
+        {
+            long pp = rt.obj(new long[]{1}, true);
+            long qq = rt.obj(new long[]{1}, true);
+            long t0 = rt.obj(new long[]{ Conc.ST_PARKED, pp, NIL, NIL, NIL, NIL, 1 }, false);
+            long t1 = rt.obj(new long[]{ Conc.ST_PARKED, qq, NIL, NIL, NIL, NIL, 2 }, false);
+            long ww0 = rt.obj(new long[]{ 0, t0, pp, -1 }, false);
+            long ww1 = rt.obj(new long[]{ 0, t1, qq, -1 }, false);
+            long wws = rt.obj(new long[]{ 2, ww0, ww1 }, false);
+            long wts = rt.obj(new long[]{ 2, t0, t1 }, false);
+            long sc = rt.obj(new long[]{ wts, 0, evs, 0, wws, -1 }, false);
+            rt.schedId = (int) sc;
+            wakeOn(rt, pp);
+            out.append(rt.slot(t0, Conc.TH_STATUS)).append(',')
+               .append(rt.slot(t0, Conc.TH_TOKEN)).append(',')
+               .append(rt.slot(sc, 5)).append(',')
+               .append(rt.slot(t1, Conc.TH_STATUS)).append(',')
+               .append(Val.isNil(waiterAt(rt, 1)) ? 0 : 1).append(' ');
+            long rr = rt.obj(new long[]{1}, true);
+            long before = rt.slot(sc, 5);
+            wakeOn(rt, rr);
+            out.append(rt.slot(t1, Conc.TH_STATUS))
+               .append(rt.slot(sc, 5) == before ? 1 : 0);
+        }
+        out.append(' ');
+        {
+            long pp = rt.obj(new long[]{1}, true);
+            long t0 = rt.obj(new long[]{ Conc.ST_RUNNABLE, NIL, NIL, NIL, NIL, NIL, -1 }, false);
+            long nts = rt.obj(new long[]{ 1, t0 }, false);
+            long ws0 = rt.obj(new long[]{ 0 }, false);
+            long sc = rt.obj(new long[]{ nts, 0, evs, 0, ws0, -1 }, false);
+            rt.schedId = (int) sc;
+            long a = newWaiter(rt, 7, pp);
+            long b = newWaiter(rt, 7, pp);
+            out.append(a).append(',').append(b).append(',');
+            freeWaiter(rt, a);
+            long c = newWaiter(rt, 7, pp);
+            long scv = Conc.sched(rt);
+            out.append(c).append(',').append(vecCount(rt, rt.slot(scv, Conc.SC_WAITERS)));
+        }
+        out.append(' ');
+        {
+            long pp = rt.obj(new long[]{1}, true);
+            long t0 = rt.obj(new long[]{ Conc.ST_RUNNABLE, NIL, NIL, NIL, NIL, NIL, -1 }, false);
+            long pts = rt.obj(new long[]{ 1, t0 }, false);
+            long pws = rt.obj(new long[]{ 0 }, false);
+            long psc = rt.obj(new long[]{ pts, 0, evs, 0, pws, -1 }, false);
+            rt.schedId = (int) psc;
+            rt.parkOn = NIL; rt.thrown = NIL;
+            long r = parkOnPort(rt, 7, pp);
+            long w = waiterAt(rt, 1);
+            out.append(rt.slot(t0, Conc.TH_TOKEN)).append(',')
+               .append(rt.parkOn == pp ? 1 : 0).append(',')
+               .append(rt.thrown == Val.PARK ? 1 : 0).append(',')
+               .append(r == NIL ? 1 : 0).append(',')
+               .append(!Val.isNil(w) && rt.slot(w, Conc.W_PORT) == pp ? 1 : 0);
+            rt.setSlot(t0, Conc.TH_STATUS, Conc.ST_PARKED);
+            wakeOn(rt, pp);
+            out.append(',').append(rt.slot(t0, Conc.TH_STATUS))
+               .append(',').append(rt.slot(t0, Conc.TH_TOKEN));
+        }
+        out.append(' ');
+        // 18. THE GATE, and the ORDER it is asked in -- see the Rust driver.
+        {
+            long tFailed = rt.obj(new long[]{ Conc.ST_FAILED, NIL, NIL, NIL, NIL,
+                                              NIL, -1, 555 }, false);
+            long tsG = rt.obj(new long[]{ 2, tFailed, tBridge }, false);
+            long sg = rt.obj(new long[]{ tsG, 0, evs, 0, NIL, -1 }, false);
+            rt.schedId = (int) sg;
+            rt.status = 9; rt.closed = false; rt.thrown = NIL; rt.gasTrips = 2;
+            long rFail = schedDrive(rt);
+            out.append(rt.status).append(rt.closed ? 1 : 0)
+               .append(rt.thrown == 555 ? 1 : 0).append(rFail == NIL ? 1 : 0).append(' ');
+            long tOk = rt.obj(new long[]{ Conc.ST_DONE, NIL, NIL, NIL, NIL,
+                                          NIL, -1, 777 }, false);
+            long tsH = rt.obj(new long[]{ 2, tBridge, tOk }, false);
+            long sh = rt.obj(new long[]{ tsH, 1, evs, 0, NIL, -1 }, false);
+            rt.schedId = (int) sh;
+            rt.status = 9; rt.closed = false; rt.thrown = NIL; rt.gasTrips = 2;
+            long rOk = schedDrive(rt);
+            out.append(rt.status).append(rt.closed ? 1 : 0)
+               .append(rOk == 777 ? 1 : 0).append(' ');
+            rt.schedId = (int) sg;
+            rt.status = 9; rt.closed = false; rt.thrown = NIL; rt.gasTrips = 1;
+            schedDrive(rt);
+            out.append(rt.status).append(rt.closed ? 1 : 0);
+        }
+        System.out.println(out.toString());
+    }
+--csharp-head
+    internal const long NIL = unchecked((long) 0xFFFF000000000000UL);
+    internal const long NOT_FOUND = unchecked((long) 0xFFFF000000000002UL);
+    internal static class Conc {
+        internal const int SC_THREADS = 0, SC_CURRENT = 1, SC_EVENTS = 2, SC_EHEAD = 3;
+        internal const int TH_STATUS = 0, TH_PARK_ON = 1, PT_KIND = 0;
+        internal const long ST_NEW = 0, ST_RUNNABLE = 1, ST_PARKED = 2,
+                            ST_DONE = 3, ST_FAILED = 4;
+        internal static bool CrossesAHeap(long kind) => kind == 1;
+        // WHAT `RunOne` CALLS -- see the note in the Rust head.
+        internal const int TH_BINDINGS = 2, TH_ENTRY = 3, TH_STACK = 4, TH_FAIL = 5;
+        internal const int TH_TOKEN = 6;
+        // A TOY INDEX, matching the other two harnesses rather than `Conc`.
+        internal const int TH_RESULT = 7;
+        internal const int W_KIND = 4, W_LEN = 5;
+        internal static long CurrentThread(Rt rt) {
+            long s = Sched(rt);
+            if (s == NIL) return NIL;
+            return VecNth(rt, rt.Slot(s, SC_THREADS), (int) rt.Slot(s, SC_CURRENT), NIL);
+        }
+        internal static long NewObj(Rt rt, int ty, int len) {
+            var z = new long[len];
+            System.Array.Fill(z, NIL);
+            return rt.MakeObj(z, false);
+        }
+        internal static long RunEntry(Rt rt, long f) { rt.trace.Append('E'); return 7; }
+        internal static void RestoreState(Rt rt, long th) { rt.trace.Append('T'); }
+        internal static void Settle(Rt rt, long v) { rt.trace.Append('L'); }
+        internal static void InstallBindings(Rt rt, long b) { rt.trace.Append('B'); }
+        internal static void BeginSlice(Rt rt) { rt.trace.Append('S'); }
+        internal static void ResetExecState(Rt rt) { rt.trace.Append('R'); }
+        // THE WAITER TABLE, at the same toy indices as the other two.
+        internal const int SC_WAITERS = 4, SC_WFREE = 5;
+        internal const int W_GEN = 0, W_THREAD = 1, W_PORT = 2, W_NEXT = 3;
+        // WHAT `Drive` CALLS -- see the note in the Java head.
+        internal static void BootSystemThreadOnce(Rt rt) {}
+        internal static void ReapPorts(Rt rt) {}
+        internal static void CloseAllBridges(Rt rt) { rt.Closed = true; }
+        internal static void RunOne(Rt rt, int i) {
+            long ts = rt.Objs[rt.SchedId][0];
+            long th = rt.Objs[(int) ts][i + 1];
+            rt.Objs[(int) th][0] = ST_DONE;
+        }
+        internal static long SettledAnswer(Rt rt) => 999;
+        internal static void ReportDeadlock(Rt rt) { rt.Deadlocked = true; }
+        internal static long Sched(Rt rt) => rt.SchedId < 0 ? NIL : rt.SchedId;
+        internal static bool IsPort(Rt rt, long v) =>
+            v != NIL && v >= 0 && v < rt.Ports.Count && rt.Ports[(int) v];
+    }
+    internal static class Val {
+        internal const long Nil = NIL;
+        internal static bool IsNil(long v) => v == NIL;
+        internal const long NotFound = NOT_FOUND;
+        internal const long Park = unchecked((long) 0xFFFF000000000004UL);
+        internal static long AsFixnum(long v) => v;
+        internal static long Fixnum(long n) => n;
+        // Identity: here a value IS its object id, and the generated code
+        // inserts `AsHeap` at every slot write.
+        internal static long AsHeap(long v) => v;
+    }
+    // BARE, as `vecread` exports them.
+    static int VecCount(Rt rt, long v) => v == NIL ? 0 : (int) rt.Objs[(int) v][0];
+    // `TY_NODE` is `Obj.TyNode` on this target, which is a class the toy has
+    // to stand up even though it holds one constant.
+    internal static class Obj { internal const int TyNode = 10; }
+    static long VecConj(Rt rt, long v, long x) {
+        int n = VecCount(rt, v);
+        var items = new long[n + 2];
+        items[0] = n + 1;
+        for (int k = 0; k < n; k++) items[k + 1] = rt.Objs[(int) v][k + 1];
+        items[n + 1] = x;
+        return rt.MakeObj(items, false);
+    }
+    static long VecNth(Rt rt, long v, int i, long d) {
+        int n = VecCount(rt, v);
+        return i >= n ? d : rt.Objs[(int) v][i + 1];
+    }
+    internal sealed class Rt {
+        internal System.Collections.Generic.List<System.Collections.Generic.List<long>> Objs = new();
+        internal System.Collections.Generic.List<bool> Ports = new();
+        internal int SchedId = -1;
+        internal int status = 0;
+        internal bool Closed = false, Deadlocked = false;
+        internal System.Collections.Generic.List<long> Roots = new();
+        internal System.Text.StringBuilder trace = new();
+        internal long parkOn = NIL;
+        internal long thrown = NIL;
+        internal bool catches = true;
+        // HOW MANY TIMES THE BUDGET BLEW; `> 1` is the gate having escaped.
+        internal int gasTrips = 0;
+        internal int Mark() => Roots.Count;
+        internal int Push(long v) { Roots.Add(v); return Roots.Count - 1; }
+        internal long R(int i) => Roots[i];
+        internal void PopTo(int i) { while (Roots.Count > i) Roots.RemoveAt(Roots.Count - 1); }
+        internal long Run(int n) { trace.Append('V'); return 7; }
+        internal bool Unwind() { trace.Append('U'); return catches; }
+        internal long Slot(long v, int i) => Objs[(int) v][i];
+        internal void SetSlot(long v, int i, long x) { Objs[(int) v][i] = x; }
+        internal long MakeObj(long[] slots, bool isPort) {
+            var s = new System.Collections.Generic.List<long>(slots);
+            Objs.Add(s); Ports.Add(isPort);
+            return Objs.Count - 1;
+        }
+    }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        long bridge = rt.MakeObj(new long[]{1}, true);
+        long channel = rt.MakeObj(new long[]{0}, true);
+        long tRun = rt.MakeObj(new long[]{Conc.ST_RUNNABLE, NIL}, false);
+        long tBridge = rt.MakeObj(new long[]{Conc.ST_PARKED, bridge}, false);
+        long tChan = rt.MakeObj(new long[]{Conc.ST_PARKED, channel}, false);
+        long tNew = rt.MakeObj(new long[]{Conc.ST_NEW, NIL}, false);
+        var outp = new System.Text.StringBuilder();
+
+        long ts = rt.MakeObj(new long[]{2, tBridge, tChan}, false);
+        long evs = rt.MakeObj(new long[]{0}, false);
+        long s = rt.MakeObj(new long[]{ts, 0, evs, 0, NIL, -1}, false);
+        rt.SchedId = (int) s;
+        outp.Append(SchedPick(rt)).Append(" ");
+        outp.Append(SchedNeedsHost(rt) ? 1 : 0).Append(" ");
+
+        long ts2 = rt.MakeObj(new long[]{3, tBridge, tRun, tNew}, false);
+        long s2 = rt.MakeObj(new long[]{ts2, 0, evs, 0, NIL, -1}, false);
+        rt.SchedId = (int) s2;
+        outp.Append(SchedPick(rt)).Append(" ");
+        long s3 = rt.MakeObj(new long[]{ts2, 1, evs, 0, NIL, -1}, false);
+        rt.SchedId = (int) s3;
+        outp.Append(SchedPick(rt)).Append(" ");
+
+        long ts4 = rt.MakeObj(new long[]{1, tChan}, false);
+        long s4 = rt.MakeObj(new long[]{ts4, 0, evs, 0, NIL, -1}, false);
+        rt.SchedId = (int) s4;
+        outp.Append(SchedNeedsHost(rt) ? 1 : 0).Append(" ");
+
+        long evs2 = rt.MakeObj(new long[]{2}, false);
+        long s5 = rt.MakeObj(new long[]{ts4, 0, evs2, 0, NIL, -1}, false);
+        rt.SchedId = (int) s5;
+        outp.Append(SchedPendingEvents(rt) ? 1 : 0).Append(" ");
+        outp.Append(SchedNeedsHost(rt) ? 1 : 0).Append(" ");
+        long s6 = rt.MakeObj(new long[]{ts4, 0, evs2, 2, NIL, -1}, false);
+        rt.SchedId = (int) s6;
+        outp.Append(SchedPendingEvents(rt) ? 1 : 0).Append(" ");
+
+        rt.SchedId = -1;
+        outp.Append(SchedPick(rt)).Append(" ");
+        outp.Append(SchedPendingEvents(rt) ? 1 : 0).Append(" ");
+        outp.Append(SchedNeedsHost(rt) ? 1 : 0).Append(" ");
+        outp.Append(SchedAllSettled(rt) ? 1 : 0).Append(" ");
+        long tDone = rt.MakeObj(new long[]{3, NIL}, false);
+        long tsDone = rt.MakeObj(new long[]{1, tDone}, false);
+        long s7 = rt.MakeObj(new long[]{tsDone, 0, evs, 0, NIL, -1}, false);
+        rt.SchedId = (int) s7;
+        outp.Append(SchedAllSettled(rt) ? 1 : 0).Append(" ");
+        long tsMixed = rt.MakeObj(new long[]{2, tDone, tChan}, false);
+        long s8 = rt.MakeObj(new long[]{tsMixed, 0, evs, 0, NIL, -1}, false);
+        rt.SchedId = (int) s8;
+        outp.Append(SchedAllSettled(rt) ? 1 : 0).Append(" ");
+
+        long tsB = rt.MakeObj(new long[]{1, tBridge}, false);
+        long s9 = rt.MakeObj(new long[]{tsB, 0, evs, 0, NIL, -1}, false);
+        rt.SchedId = (int) s9;
+        rt.status = 0; rt.Closed = false; rt.Deadlocked = false;
+        long r1 = SchedDrive(rt);
+        outp.Append(rt.status).Append(rt.Closed ? 1 : 0)
+            .Append(r1 == NIL ? 0 : 1).Append(" ");
+
+        long tDone2 = rt.MakeObj(new long[]{3, NIL}, false);
+        long tsD = rt.MakeObj(new long[]{1, tDone2}, false);
+        long s10 = rt.MakeObj(new long[]{tsD, 0, evs, 0, NIL, -1}, false);
+        rt.SchedId = (int) s10;
+        rt.status = 9; rt.Closed = false; rt.Deadlocked = false;
+        long r2 = SchedDrive(rt);
+        outp.Append(rt.status).Append(rt.Closed ? 1 : 0)
+            .Append(r2 == 999 ? 1 : 0).Append(" ");
+
+        long tRun2 = rt.MakeObj(new long[]{1, NIL}, false);
+        long tsR = rt.MakeObj(new long[]{1, tRun2}, false);
+        long s11 = rt.MakeObj(new long[]{tsR, 0, evs, 0, NIL, -1}, false);
+        rt.SchedId = (int) s11;
+        rt.status = 9; rt.Closed = false; rt.Deadlocked = false;
+        SchedDrive(rt);
+        outp.Append(rt.status).Append(rt.Closed ? 1 : 0).Append(" ");
+
+        long tsC = rt.MakeObj(new long[]{1, tChan}, false);
+        long s12 = rt.MakeObj(new long[]{tsC, 0, evs, 0, NIL, -1}, false);
+        rt.SchedId = (int) s12;
+        rt.status = 9; rt.Closed = false; rt.Deadlocked = false;
+        SchedDrive(rt);
+        outp.Append(rt.status).Append(rt.Deadlocked ? 1 : 0).Append(" ");
+
+        long tDone3 = rt.MakeObj(new long[]{3, NIL}, false);
+        long tsMix = rt.MakeObj(new long[]{2, tDone3, tBridge}, false);
+        long s13 = rt.MakeObj(new long[]{tsMix, 0, evs, 0, NIL, -1}, false);
+        rt.SchedId = (int) s13;
+        rt.status = 9; rt.Closed = false; rt.Deadlocked = false;
+        SchedDrive(rt);
+        outp.Append(rt.status).Append(rt.Closed ? 1 : 0);
+        // 12. THE WAITER TABLE -- see the note in the Rust driver.
+        long w0 = rt.MakeObj(new long[]{0, tRun, NIL, -1}, false);
+        long w1 = rt.MakeObj(new long[]{3, NIL, NIL, -1}, false);
+        long ws = rt.MakeObj(new long[]{2, w0, w1}, false);
+        long sw = rt.MakeObj(new long[]{tsMix, 0, evs, 0, ws, -1}, false);
+        rt.SchedId = (int) sw;
+        outp.Append(" ");
+        outp.Append(Val.IsNil(WaiterAt(rt, 0)) ? 0 : 1).Append(" ");
+        outp.Append(Val.IsNil(WaiterAt(rt, -1)) ? 0 : 1).Append(" ");
+        outp.Append(Val.IsNil(WaiterAt(rt, 1)) ? 0 : 1).Append(" ");
+        outp.Append(Val.IsNil(WaiterAt(rt, 65537)) ? 0 : 1).Append(" ");
+        outp.Append(Val.IsNil(WaiterAt(rt, 196610)) ? 0 : 1).Append(" ");
+        outp.Append(Val.IsNil(WaiterAt(rt, 9)) ? 0 : 1).Append(" ");
+        outp.Append(OutstandingWaiters(rt)).Append(" ");
+        int freed = Val.IsNil(FreeWaiter(rt, 1)) ? 0 : 1;
+        int stale = Val.IsNil(WaiterAt(rt, 1)) ? 0 : 1;
+        int left = OutstandingWaiters(rt);
+        long head = Val.AsFixnum(rt.Slot(sw, Conc.SC_WFREE));
+        outp.Append(freed).Append(stale).Append(left).Append(head).Append(" ");
+        outp.Append(Val.IsNil(FreeWaiter(rt, 1)) ? 0 : 1).Append(" ");
+        rt.SchedId = -1;
+        outp.Append(OutstandingWaiters(rt));
+        // 13. RUN-ONE: each field is the PATH TAKEN. See the Rust driver.
+        long stack = rt.MakeObj(new long[]{0}, false);
+        outp.Append(" ");
+        long[][] cases = {
+            new long[]{ Conc.ST_NEW,      NIL,   NIL, 1 },
+            new long[]{ Conc.ST_RUNNABLE, stack, NIL, 1 },
+            new long[]{ Conc.ST_RUNNABLE, stack, 9,   1 },
+            new long[]{ Conc.ST_RUNNABLE, stack, 9,   0 },
+        };
+        foreach (var c in cases) {
+            long rth = rt.MakeObj(new long[]{ c[0], NIL, NIL, NIL, c[1], c[2] }, false);
+            long rts = rt.MakeObj(new long[]{ 1, rth }, false);
+            long sc = rt.MakeObj(new long[]{ rts, 0, evs, 0, NIL, -1 }, false);
+            rt.SchedId = (int) sc;
+            rt.trace = new System.Text.StringBuilder();
+            rt.catches = c[3] == 1;
+            SchedRunOne(rt, 0);
+            outp.Append(rt.trace.Length == 0 ? "-" : rt.trace.ToString()).Append(" ");
+        }
+        long tsNone = rt.MakeObj(new long[]{ 1, NIL }, false);
+        long scNone = rt.MakeObj(new long[]{ tsNone, 0, evs, 0, NIL, -1 }, false);
+        rt.SchedId = (int) scNone;
+        rt.trace = new System.Text.StringBuilder();
+        SchedRunOne(rt, 0);
+        outp.Append(rt.trace.Length == 0 ? "-" : "?");
+        outp.Append(' ');
+        {
+            long pp = rt.MakeObj(new long[]{1}, true);
+            long qq = rt.MakeObj(new long[]{1}, true);
+            long t0 = rt.MakeObj(new long[]{ Conc.ST_PARKED, pp, NIL, NIL, NIL, NIL, 1 }, false);
+            long t1 = rt.MakeObj(new long[]{ Conc.ST_PARKED, qq, NIL, NIL, NIL, NIL, 2 }, false);
+            long ww0 = rt.MakeObj(new long[]{ 0, t0, pp, -1 }, false);
+            long ww1 = rt.MakeObj(new long[]{ 0, t1, qq, -1 }, false);
+            long wws = rt.MakeObj(new long[]{ 2, ww0, ww1 }, false);
+            long wts = rt.MakeObj(new long[]{ 2, t0, t1 }, false);
+            long sc = rt.MakeObj(new long[]{ wts, 0, evs, 0, wws, -1 }, false);
+            rt.SchedId = (int) sc;
+            WakeOn(rt, pp);
+            outp.Append(rt.Slot(t0, Conc.TH_STATUS)).Append(',')
+                .Append(rt.Slot(t0, Conc.TH_TOKEN)).Append(',')
+                .Append(rt.Slot(sc, 5)).Append(',')
+                .Append(rt.Slot(t1, Conc.TH_STATUS)).Append(',')
+                .Append(Val.IsNil(WaiterAt(rt, 1)) ? 0 : 1).Append(' ');
+            long rr = rt.MakeObj(new long[]{1}, true);
+            long before = rt.Slot(sc, 5);
+            WakeOn(rt, rr);
+            outp.Append(rt.Slot(t1, Conc.TH_STATUS))
+                .Append(rt.Slot(sc, 5) == before ? 1 : 0);
+        }
+        outp.Append(' ');
+        {
+            long pp = rt.MakeObj(new long[]{1}, true);
+            long t0 = rt.MakeObj(new long[]{ Conc.ST_RUNNABLE, NIL, NIL, NIL, NIL, NIL, -1 }, false);
+            long nts = rt.MakeObj(new long[]{ 1, t0 }, false);
+            long ws0 = rt.MakeObj(new long[]{ 0 }, false);
+            long sc = rt.MakeObj(new long[]{ nts, 0, evs, 0, ws0, -1 }, false);
+            rt.SchedId = (int) sc;
+            long a = NewWaiter(rt, 7, pp);
+            long b = NewWaiter(rt, 7, pp);
+            outp.Append(a).Append(',').Append(b).Append(',');
+            FreeWaiter(rt, a);
+            long c = NewWaiter(rt, 7, pp);
+            long scv = Conc.Sched(rt);
+            outp.Append(c).Append(',').Append(VecCount(rt, rt.Slot(scv, Conc.SC_WAITERS)));
+        }
+        outp.Append(' ');
+        {
+            long pp = rt.MakeObj(new long[]{1}, true);
+            long t0 = rt.MakeObj(new long[]{ Conc.ST_RUNNABLE, NIL, NIL, NIL, NIL, NIL, -1 }, false);
+            long pts = rt.MakeObj(new long[]{ 1, t0 }, false);
+            long pws = rt.MakeObj(new long[]{ 0 }, false);
+            long psc = rt.MakeObj(new long[]{ pts, 0, evs, 0, pws, -1 }, false);
+            rt.SchedId = (int) psc;
+            rt.parkOn = NIL; rt.thrown = NIL;
+            long r = ParkOnPort(rt, 7, pp);
+            long w = WaiterAt(rt, 1);
+            outp.Append(rt.Slot(t0, Conc.TH_TOKEN)).Append(',')
+                .Append(rt.parkOn == pp ? 1 : 0).Append(',')
+                .Append(rt.thrown == Val.Park ? 1 : 0).Append(',')
+                .Append(r == NIL ? 1 : 0).Append(',')
+                .Append(!Val.IsNil(w) && rt.Slot(w, Conc.W_PORT) == pp ? 1 : 0);
+            rt.SetSlot(t0, Conc.TH_STATUS, Conc.ST_PARKED);
+            WakeOn(rt, pp);
+            outp.Append(',').Append(rt.Slot(t0, Conc.TH_STATUS))
+                .Append(',').Append(rt.Slot(t0, Conc.TH_TOKEN));
+        }
+        outp.Append(' ');
+        // 18. THE GATE, and the ORDER it is asked in -- see the Rust driver.
+        {
+            long tFailed = rt.MakeObj(new long[]{ Conc.ST_FAILED, NIL, NIL, NIL,
+                                                  NIL, NIL, -1, 555 }, false);
+            long tsG = rt.MakeObj(new long[]{ 2, tFailed, tBridge }, false);
+            long sg = rt.MakeObj(new long[]{ tsG, 0, evs, 0, NIL, -1 }, false);
+            rt.SchedId = (int) sg;
+            rt.status = 9; rt.Closed = false; rt.thrown = NIL; rt.gasTrips = 2;
+            long rFail = SchedDrive(rt);
+            outp.Append(rt.status).Append(rt.Closed ? 1 : 0)
+                .Append(rt.thrown == 555 ? 1 : 0).Append(rFail == NIL ? 1 : 0).Append(' ');
+            long tOk = rt.MakeObj(new long[]{ Conc.ST_DONE, NIL, NIL, NIL, NIL,
+                                              NIL, -1, 777 }, false);
+            long tsH = rt.MakeObj(new long[]{ 2, tBridge, tOk }, false);
+            long sh = rt.MakeObj(new long[]{ tsH, 1, evs, 0, NIL, -1 }, false);
+            rt.SchedId = (int) sh;
+            rt.status = 9; rt.Closed = false; rt.thrown = NIL; rt.gasTrips = 2;
+            long rOk = SchedDrive(rt);
+            outp.Append(rt.status).Append(rt.Closed ? 1 : 0)
+                .Append(rOk == 777 ? 1 : 0).Append(' ');
+            rt.SchedId = (int) sg;
+            rt.status = 9; rt.Closed = false; rt.thrown = NIL; rt.gasTrips = 1;
+            SchedDrive(rt);
+            outp.Append(rt.status).Append(rt.Closed ? 1 : 0);
+        }
+        System.Console.WriteLine(outp.ToString());
+    }
+--expect
+-1 1 1 2 0 1 1 0 -1 0 0 1 1 0 200 011 01 01 20 0 0 1 0 0 0 1 1000 0 0 BSREL BSTVL BSTUVL BSTUL - 1,-1,0,2,0 21 1,2,65537,2 1,1,1,1,1,1,-1 0111 011 20
+--expect-why
+DERIVED FROM WHAT THE SCHEDULER PROMISES, field by field.
+
+  pick      `-1` Two threads, both PARKED, so nothing is runnable.
+                 SIGNED, and the return type is `I64` for that alone: `I32` is
+                 unsigned, so `-1` is not expressible in it. The first version
+                 answered the thread COUNT instead, which a caller cannot test
+                 without knowing `n` -- so every wrapper re-derived the
+                 scheduler, its vector and its count to read one answer, once
+                 per `drive` iteration. This field is what pins the cheaper
+                 contract.
+  needsHost `1`  One of those two is parked on a BRIDGE, and only the host can
+                 wake it.
+  pick      `1`  Threads [parked, runnable, new] with current = 0. Round-robin
+                 starts at current+1, so it picks 1 and not 0 -- a search from
+                 zero would answer 1 here too, which is why the next field
+                 exists.
+  pick      `2`  THE SAME LIST with current = 1 answers 2, the NEW thread. A
+                 target that scanned from the start would answer 1 again, and
+                 only this pair can tell the two apart. Determinism is the
+                 property `green.cljc` leans on across three runtimes.
+  needsHost `0`  One thread, parked on a CHANNEL. Both ends live in this heap,
+                 so no host can help and the program is deadlocked rather than
+                 waiting. Getting this wrong hangs a sandbox that should be
+                 reported.
+  pending   `1`  Two events with a head of 0.
+  needsHost `1`  ... and an undrained event needs the host even with nothing
+                 parked on a bridge at all.
+  pending   `0`  The same two events with the head caught up at 2.
+  pick      `-1` NO SCHEDULER. Answers none rather than reaching into nil --
+                 one runtime guarded this and another did not, which is why it
+                 is pinned here. It reads the same as the first field on
+                 purpose: "nothing to run" has ONE answer, whether that is
+                 because every thread is parked or because there is no
+                 scheduler at all.
+  pending   `0`  Same, for the event question.
+  needsHost `0`  Same, for the whole question.
+  settled   `1`  A NIL SCHEDULER IS SETTLED. No threads means none
+                 outstanding, and answering false would hang a program that
+                 never made one.
+  settled   `1`  One thread, ST_DONE.
+  --- and then `drive` itself, each field `<status><flag>` ---
+
+  drive     `200`  ONE THREAD PARKED ON A BRIDGE: status 2, bridges NOT closed
+                   (0), answer NIL (0). The host may still wake it.
+  drive     `011`  EVERYTHING SETTLED: status 0, bridges closed (1), and the
+                   answer came from `settled-answer` (1).
+  drive     `01`   ONE RUNNABLE THREAD. `run-one` marks it done, the loop goes
+                   round again, and only then is the question asked: status 0,
+                   bridges closed. A `drive` that asked before running would
+                   report a deadlock on a program that had work to do.
+  drive     `01`   PARKED ON A CHANNEL: status 0 and `report-deadlock` fired.
+                   No host can help, so it is NAMED rather than hung.
+  drive     `20`   THE CASE THAT REPRODUCES THE BUG, and the only one here that
+                   separates the two orders: a FINISHED thread beside one
+                   parked on a BRIDGE. "Has the entry finished?" answers yes --
+                   thread 0 IS done -- and closes the system port under a call
+                   that has just parked on an `open`, so the grant arrives for
+                   a port that is gone. "Does anything need the host?" answers
+                   2 and leaves the bridges alone. Every other drive field here
+                   passes under either order.
+
+  settled   `0`  THE SAME FINISHED THREAD beside a parked one. This is the
+                 field that separates the question from the one both ports
+                 were asking: `mainFinished` looks at thread 0 alone and would
+                 answer yes here, because thread 0 IS done -- and with a
+                 control plane spawned into every module, that is the ordinary
+                 case rather than a corner.
+
+  --- and then the WAITER TABLE. A live waiter in slot 0 (gen 0) and a freed
+      one in slot 1 (gen 3), so a token is `(gen << 16) | (idx + 1)` ---
+
+  waiterAt  `0`  TOKEN 0. The low sixteen bits are the index PLUS ONE, so
+                 zero there is not slot -1, it is the absent value `TH_TOKEN`
+                 carries. Malformed, not missing.
+  waiterAt  `0`  A NEGATIVE token, the other half of the same guard.
+  waiterAt  `1`  Token 1 -- generation 0, slot 0 -- names the live waiter.
+                 This is the only field here that finds anything, and without
+                 it the other five would all pass against a function that
+                 answered NIL unconditionally.
+  waiterAt  `0`  TOKEN 65537 IS GENERATION 1 ON SLOT 0, and the slot is at
+                 generation 0. STALE, and this is the field the whole
+                 generation scheme exists for: the slot is LIVE and the token
+                 still must not name it, or a wake meant for a retired waiter
+                 lands on whoever got the slot next.
+  waiterAt  `0`  Token 196610 is generation 3 on slot 1, which MATCHES -- and
+                 still answers NIL, because that waiter has no thread. Freed
+                 is a property of `W_THREAD`, not of the generation.
+  waiterAt  `0`  Token 9 names slot 8 of a two-slot vector. Out of range
+                 arrives as `NOT_FOUND` rather than nil, which is a distinct
+                 value both ports check for and which reads as "found" to
+                 anything comparing against NIL alone.
+  outstand  `1`  Two waiters in the vector, ONE of them live. The count has to
+                 walk, because freeing returns a slot to the chain and leaves
+                 it in the vector -- the length is the high-water mark.
+  free   `1000`  Freeing token 1, read as four answers: it ANSWERS the waiter
+                 it freed (1); the token is then STALE (0); the outstanding
+                 count DROPS to 0; and the slot index reaches the head of the
+                 free list (0). The generation bump is what makes the second
+                 of those true, so this field pins the bump and the free list
+                 together.
+  free      `0`  FREEING TWICE IS A NO-OP, by the same check -- the second
+                 call finds a stale token and answers nil rather than bumping
+                 the generation again and corrupting the chain.
+  outstand  `0`  NO SCHEDULER. Both ports guarded this and native did not,
+                 which is the divergence this slice converges: zero is what is
+                 true of a runtime that never made a scheduler, and the
+                 alternative is reaching into nil to find out.
+
+  --- and RUN-ONE, where each field is a TRACE of the path taken:
+      B install-bindings, S begin-slice, R reset-exec-state, E run-entry,
+      T restore-state, V vm-run, U unwind, L settle ---
+
+  run-one  `BSREL`   A NEW THREAD. Bindings, slice, then the interpreter is
+                     EMPTIED and the entry closure entered. `R` before `E` is
+                     the whole point of the field: a new thread that inherited
+                     the last one's frame stack would run with somebody else's
+                     operands under it.
+  run-one  `BSTVL`   A PARKED THREAD, nothing owed. No `R`: the saved stack is
+                     RESTORED instead, which is the entire difference between
+                     starting and resuming. `T` where the other has `R`, and
+                     nowhere in this file do both appear.
+  run-one  `BSTUVL`  A PARKED THREAD WITH A FAILURE OWED. Restore first, THEN
+                     arm the throw and unwind -- a throw delivered before the
+                     stack is back would unwind a stack that is not there. The
+                     `U` sits between `T` and `V` and only this field pins it.
+  run-one  `BSTUL`   THE SAME, and nothing caught it. `U` answers false, so
+                     there is no `V`: the thread is done, and `settle` still
+                     runs, because a thread that died still has to be recorded
+                     as dead. An implementation that returned early here would
+                     leave it RUNNABLE for ever and the deadlock report would
+                     name a thread that had already finished.
+  run-one  `-`       AN INDEX NAMING NO THREAD. Nothing happens at all -- not
+                     even bindings, which is the first thing the other four do
+                     and so the one letter that would show a guard placed too
+                     late.
+
+  --- and WAKING, where the third field is the one with teeth ---
+
+  wake-on  `1,-1,0,2,0`
+                    TWO THREADS ON TWO PORTS, and one port woken. Read left
+                    to right: the woken thread is RUNNABLE (`1`); its token is
+                    cleared (`-1`), so a late answer on that token finds
+                    nothing and cannot wake it twice; THE FREED SLOT REACHED
+                    THE FREE LIST (`0`); the thread on the OTHER port is
+                    untouched (`2`, still parked); and the old token is now
+                    stale (`0`).
+
+                    THE THIRD FIELD IS THE ORDER. `wake-waiter` must free the
+                    waiter AFTER clearing the thread's park, and `free-waiter`
+                    refuses a waiter whose `W_THREAD` is already nil -- so an
+                    implementation that cleared the thread first would wake
+                    correctly, leak the slot, and answer `-1` here. Every
+                    other field in this row would still pass. At a few hundred
+                    parks that is a table that never stops growing.
+  wake-on  `21`     A PORT NOBODY WAITS ON. The parked thread stays parked and
+                    the free list does not move -- a walk that woke on a
+                    mismatched port, or freed as it went, fails one or the
+                    other.
+
+  --- and NEW-WAITER, where the third number is the whole point ---
+
+  new-waiter  `1,2,65537,2`
+                    Two fresh registrations on an empty table, then a free,
+                    then a third.
+
+                    `1` and `2` are generation 0 on slots 0 and 1 -- and they
+                    are 1 and 2 rather than 0 and 1 because a token is
+                    `idx + 1`, so that ZERO IS NEVER A VALID TOKEN. `TH_TOKEN`
+                    carries zero-meaning-absent; a host ABI whose zero value
+                    means something is a trap waiting for an uninitialised
+                    variable.
+
+                    `65537` IS THE FIELD WITH TEETH. It is `(1 << 16) | 1` --
+                    slot 0 again, at generation 1. So the free list was used
+                    rather than the vector grown, AND the generation moved, so
+                    the token handed out before the free names nothing now.
+                    An implementation that reused the slot WITHOUT the bump
+                    answers `1` here, every other field in this file passes,
+                    and a late `host-deliver` wakes a thread that has nothing
+                    to do with the answer.
+
+                    `2` is the vector's length: still two. Reuse did not grow
+                    it, which is what keeps the table bounded by CONCURRENT
+                    parks rather than by total parks over the program's life.
+
+  --- and PARK-ON-PORT, which closes the loop with the wake path ---
+
+  park  `1,1,1,1,1,1,-1`
+                    Seven answers about one park. The first five say it
+                    happened correctly: the token reached the THREAD (`1`, so
+                    a wake can retire the waiter without searching); `park-on`
+                    records the PORT, which is what lets `needs-host` tell a
+                    bridge from a channel; `thrown` holds the PARK sentinel,
+                    which is what actually unwinds; the call answered nil; and
+                    the registered waiter names the port that was parked on.
+
+                    THE LAST TWO ARE THE POINT. `wake-on` is then run against
+                    that same port, and the thread comes back RUNNABLE (`1`)
+                    with its token cleared (`-1`). Park and wake are a pair
+                    and they only agree because they read and write the same
+                    `W_PORT` and the same `TH_TOKEN` -- so the file tests them
+                    against EACH OTHER rather than each against a fixture.
+                    Register on the wrong slot, park on the wrong value, or
+                    write the token nowhere, and the first five fields can
+                    still pass while these two do not.
+
+  --- and THE GATE, which is an ORDER question and nothing else ---
+
+  gate  `0111`      GATE ESCAPED, WITH A THREAD PARKED ON A BRIDGE. Every
+                    field here is chosen so the WRONG order fails it.
+
+                    Nothing is runnable (one FAILED, one PARKED), so `pick`
+                    answers -1 and the question becomes which check runs next.
+                    `needs-host` would answer TRUE -- there is a thread parked
+                    on a bridge -- and would be LYING: `gas_trips > 1` means
+                    the budget blew, was caught, and blew again, so the limit
+                    is still exceeded and the next charge raises whatever the
+                    host sends. Asked in that order this reads `2` and the
+                    host pumps for ever, which is the bug.
+
+                    So: status `0`, not 2. Bridges CLOSED (`1`), because this
+                    is an ending and a host must not be left holding a port
+                    for a sandbox that cannot run. `thrown` holds the current
+                    thread's `TH_RESULT` (`1`), and the call answers NIL
+                    (`1`) -- a host asked for a value and is handed the throw
+                    as a throw, never as though it were the answer.
+
+  gate  `011`       AND THE ANSWER IS THE CURRENT THREAD'S, NOT THREAD 0's.
+                    `SC_CURRENT` is 1 and thread 1 is DONE carrying 777, while
+                    thread 0 is the bridge-parked one. The field is `1` only
+                    if 777 comes back.
+
+                    `settled-answer` answers `999` in this harness, so a
+                    `gate-answer` that fell back to it, or that read index 0
+                    the way `settled-answer` does, fails HERE and nowhere
+                    else. That is the whole reason the two are separate
+                    functions: a gated sandbox is spoken for by the thread
+                    that was RUNNING, and it is almost never thread 0.
+
+  gate  `20`        THE CONTROL, and without it the fix is untestable. The
+                    same scheduler, the same bridge, `gas_trips` at 1 -- blown
+                    once and caught, which is a program still entitled to run.
+                    The old answer must come back untouched: status `2`,
+                    bridges NOT closed (`0`).
+
+                    One trip is the GRACE case. A check written `>= 1` instead
+                    of `> 1` passes both gate rows above and fails this one,
+                    which is exactly the off-by-one that would turn a
+                    recoverable throw into a dead sandbox.

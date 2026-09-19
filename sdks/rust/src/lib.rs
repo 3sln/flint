@@ -18,8 +18,8 @@
 //!     fn_name: "my.app/handler",
 //!     ..Default::default()
 //! })?;
-//! let mut sandbox = image.sandbox()?;
-//! let out = sandbox.call("my.app/handler", &[Value::str("hello")])?;
+//! let sandbox = image.sandbox()?;
+//! let out = sandbox.call_blocking("my.app/handler", &[Value::str("hello")])?;
 //! # Ok::<(), flint::Error>(())
 //! ```
 //!
@@ -207,7 +207,11 @@ impl Compiler {
 
         let spec = build_spec(&files, opts.fn_name, opts.exports, &slots, aot, opts.shake,
                               &opts.meta);
-        let mut p = Program::load(&self.bytecode, 3_000_000_000)
+        // `load_with`, not `load`: see the note on the dependency in Cargo.toml.
+        // Plain `load` sees only the runtime's own registry, and every image
+        // needs `flint/spawn` from the concurrency unit.
+        let mut p = Program::load_with(&self.bytecode, 3_000_000_000,
+                                       flint_conc::HOST_CATALOGUE)
             .map_err(|e| Error::Load(format!("the embedded compiler did not load: {e}")))?;
         // The runtime module goes as its own ARGUMENT, never inside the spec:
         // three quarters of a megabyte of base64 in an EDN string is three

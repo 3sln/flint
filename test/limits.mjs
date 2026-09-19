@@ -54,9 +54,18 @@ console.log('limits');
   gas(inst, 1_000_000);
   const r = inst.run('limits/main', ['caught']);
   eq('the gas error is catchable', r.code, 0);
+  // THE THREAD IS PRESENT, NOT ZERO. `:thread 0` was the bootstrap thread, and
+  // asserting it encoded a world without a control plane: a call arrives as a
+  // message on a bound port and is served on a thread `flint.system` spawned
+  // for it (`DECISIONS.md#bridges-are-the-only-door`), precisely so that a call
+  // which parks cannot park the control plane with it. A guest call has not run
+  // on thread 0 since. The id it does get is an allocation order -- bootstrap,
+  // then the system thread, then this one -- and pinning it would fail again the
+  // next time anything spawns earlier, so what is asserted is what the row is
+  // named for: the error carries the thread AS DATA.
   ok('  ... and carries spent, limit and thread as data',
      r.out.includes(':spent 1000000') && r.out.includes(':limit 1000000') &&
-     r.out.includes(':thread 0'), r.out.slice(0, 200));
+     /:thread \d+/.test(r.out), r.out.slice(0, 200));
 }
 
 // --- catching it and carrying on does not defeat the gate -------------------

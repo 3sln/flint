@@ -1,0 +1,278 @@
+--rust-head
+// A TOY CURSOR, enough to drive the walk and nothing more.
+//
+// The walk reaches the bytes only through `wire-left`, `wire-skip`,
+// `wire-take-u8` and `wire-take-u32`, which belong to `wirecore` -- so they are
+// stubbed here rather than generated, and the cursor is a plain index. What is
+// under test is the WALK: which tags carry which payload shape, and which of
+// them mint.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_0000_0000_0000);
+const TRUE: Value = Value(0xFFFF_0000_0000_0001);
+const NOT_FOUND: Value = Value(0xFFFF_0000_0000_0002);
+const FALSE: Value = Value(0xFFFF_0000_0000_0003);
+mod codec {
+    pub const NO_NS: u32 = u32::MAX;
+}
+impl Value {
+    fn is_nil(self) -> bool { self == NIL }
+}
+struct Rt { b: Vec<u8>, pos: usize, roots: Vec<Value>, vecs: Vec<Vec<Value>>, minted: Vec<i64> }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn new_vec(&mut self) -> Value { self.vecs.push(Vec::new()); Value((self.vecs.len() - 1) as u64) }
+    fn vec_conj(&mut self, v: Value, x: Value) -> Value {
+        let mut s = self.vecs[v.0 as usize].clone();
+        s.push(x);
+        self.vecs.push(s);
+        Value((self.vecs.len() - 1) as u64)
+    }
+    fn wire_left(&mut self, _rd: Value) -> u32 { (self.b.len() - self.pos) as u32 }
+    fn wire_skip(&mut self, _rd: Value, n: u32) -> bool {
+        if self.pos + n as usize > self.b.len() { return false; }
+        self.pos += n as usize;
+        true
+    }
+    fn wire_take_u8(&mut self, _rd: Value, d: u32) -> u32 {
+        if self.pos >= self.b.len() { return d; }
+        let v = self.b[self.pos] as u32;
+        self.pos += 1;
+        v
+    }
+    fn wire_take_u32(&mut self, _rd: Value, d: u32) -> u32 {
+        if self.pos + 4 > self.b.len() { return d; }
+        let s = &self.b[self.pos..self.pos + 4];
+        self.pos += 4;
+        u32::from_le_bytes([s[0], s[1], s[2], s[3]])
+    }
+    // MINTING IS THE ONE RUNTIME-SPECIFIC STEP, and here it only records.
+    fn mint_bridge_port(&mut self, id: i64) -> Value {
+        // Id 0 stands for "this sandbox has no ports", so the refusal path is
+        // reachable from a driver that has no sandbox at all.
+        if id == 0 { return NIL; }
+        self.minted.push(id);
+        TRUE
+    }
+--rust
+}
+fn main() {
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        ("bind", vec![10,2,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,4,0,0,0,98,105,110,100,6,255,255,255,255,4,0,0,0,112,111,114,116,15,7,0,0,0]),
+        ("two", vec![8,2,0,0,0,15,3,0,0,0,15,4,0,0,0]),
+        ("trunc", vec![3,1,2]),
+        ("unknown", vec![99]),
+        ("qualified", vec![6,2,0,0,0,110,115,1,0,0,0,97]),
+        ("table", vec![18,1,0,0,0,6,255,255,255,255,2,0,0,0,105,100,6,255,255,255,255,3,0,0,0,105,110,116,1,0,0,0,15,9,0,0,0]),
+    ];
+    let mut out = String::new();
+    for (_name, bytes) in cases {
+        let mut rt = Rt { b: bytes, pos: 0, roots: Vec::new(), vecs: Vec::new(), minted: Vec::new() };
+        let acc = rt.new_vec();
+        let ai = rt.push(acc);
+        let ok = rt.wire_scan_at(NIL, ai, 0);
+        let left = rt.wire_left(NIL);
+        out.push_str(&format!("{}{}:", if ok { 1 } else { 0 }, left));
+        for (i, m) in rt.minted.iter().enumerate() {
+            if i > 0 { out.push(','); }
+            out.push_str(&format!("{m}"));
+        }
+        out.push(' ');
+    }
+    println!("{}", out.trim_end());
+}
+--java-head
+    static final long NIL = 0xFFFF000000000000L;
+    static final long TRUE = 0xFFFF000000000001L;
+    static final long NOT_FOUND = 0xFFFF000000000002L;
+    static final class Codec { static final int NO_NS = -1; }
+    static final class Val {
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static final class Rt {
+        byte[] b; int pos;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        java.util.ArrayList<java.util.ArrayList<Long>> vecs = new java.util.ArrayList<>();
+        java.util.ArrayList<Long> minted = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void setR(int i, long v) { roots.set(i, v); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long newVec() { vecs.add(new java.util.ArrayList<>()); return vecs.size() - 1; }
+    }
+    static long vecConj(Rt rt, long v, long x) {
+        java.util.ArrayList<Long> s = new java.util.ArrayList<>(rt.vecs.get((int) v));
+        s.add(x);
+        rt.vecs.add(s);
+        return rt.vecs.size() - 1;
+    }
+    static int wireLeft(Rt rt, long rd) { return rt.b.length - rt.pos; }
+    static boolean wireSkip(Rt rt, long rd, int n) {
+        if (rt.pos + n > rt.b.length) return false;
+        rt.pos += n;
+        return true;
+    }
+    static int wireTakeU8(Rt rt, long rd, int d) {
+        if (rt.pos >= rt.b.length) return d;
+        return rt.b[rt.pos++] & 0xFF;
+    }
+    static int wireTakeU32(Rt rt, long rd, int d) {
+        if (rt.pos + 4 > rt.b.length) return d;
+        int v = (rt.b[rt.pos] & 0xFF) | ((rt.b[rt.pos+1] & 0xFF) << 8)
+              | ((rt.b[rt.pos+2] & 0xFF) << 16) | ((rt.b[rt.pos+3] & 0xFF) << 24);
+        rt.pos += 4;
+        return v;
+    }
+    static final class Conc {
+        static long mintBridgePort(Rt rt, long id) {
+            if (id == 0) return NIL;
+            rt.minted.add(id);
+            return TRUE;
+        }
+    }
+--java
+    public static void main(String[] args) {
+        int[][] cases = {
+            {10,2,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,4,0,0,0,98,105,110,100,6,255,255,255,255,4,0,0,0,112,111,114,116,15,7,0,0,0},
+            {8,2,0,0,0,15,3,0,0,0,15,4,0,0,0},
+            {3,1,2},
+            {99},
+            {6,2,0,0,0,110,115,1,0,0,0,97},
+            {18,1,0,0,0,6,255,255,255,255,2,0,0,0,105,100,6,255,255,255,255,3,0,0,0,105,110,116,1,0,0,0,15,9,0,0,0},
+        };
+        StringBuilder out = new StringBuilder();
+        for (int[] c : cases) {
+            Rt rt = new Rt();
+            rt.b = new byte[c.length];
+            for (int i = 0; i < c.length; i++) rt.b[i] = (byte) c[i];
+            rt.pos = 0;
+            int ai = rt.push(rt.newVec());
+            boolean ok = wireScanAt(rt, NIL, ai, 0);
+            out.append(ok ? 1 : 0).append(wireLeft(rt, NIL)).append(":");
+            for (int i = 0; i < rt.minted.size(); i++) {
+                if (i > 0) out.append(",");
+                out.append(rt.minted.get(i));
+            }
+            out.append(" ");
+        }
+        System.out.println(out.toString().trim());
+    }
+--csharp-head
+    internal const long NIL = unchecked((long) 0xFFFF000000000000UL);
+    internal const long TRUE = unchecked((long) 0xFFFF000000000001UL);
+    internal const long NOT_FOUND = unchecked((long) 0xFFFF000000000002UL);
+    internal static class Codec { internal const int NO_NS = -1; }
+    internal static class Val {
+        internal static bool IsNil(long v) => v == NIL;
+    }
+    internal sealed class Rt {
+        internal byte[] B = System.Array.Empty<byte>();
+        internal int Pos;
+        internal System.Collections.Generic.List<long> Roots = new();
+        internal System.Collections.Generic.List<System.Collections.Generic.List<long>> Vecs = new();
+        internal System.Collections.Generic.List<long> Minted = new();
+        internal int Mark() => Roots.Count;
+        internal int Push(long v) { Roots.Add(v); return Roots.Count - 1; }
+        internal long R(int i) => Roots[i];
+        internal void SetR(int i, long v) { Roots[i] = v; }
+        internal void PopTo(int n) { while (Roots.Count > n) Roots.RemoveAt(Roots.Count - 1); }
+        internal long NewVec() { Vecs.Add(new System.Collections.Generic.List<long>()); return Vecs.Count - 1; }
+    }
+    static long VecConj(Rt rt, long v, long x) {
+        var s = new System.Collections.Generic.List<long>(rt.Vecs[(int) v]);
+        s.Add(x);
+        rt.Vecs.Add(s);
+        return rt.Vecs.Count - 1;
+    }
+    static int WireLeft(Rt rt, long rd) => rt.B.Length - rt.Pos;
+    static bool WireSkip(Rt rt, long rd, int n) {
+        if (rt.Pos + n > rt.B.Length) return false;
+        rt.Pos += n;
+        return true;
+    }
+    static int WireTakeU8(Rt rt, long rd, int d) {
+        if (rt.Pos >= rt.B.Length) return d;
+        return rt.B[rt.Pos++] & 0xFF;
+    }
+    static int WireTakeU32(Rt rt, long rd, int d) {
+        if (rt.Pos + 4 > rt.B.Length) return d;
+        int v = (rt.B[rt.Pos] & 0xFF) | ((rt.B[rt.Pos+1] & 0xFF) << 8)
+              | ((rt.B[rt.Pos+2] & 0xFF) << 16) | ((rt.B[rt.Pos+3] & 0xFF) << 24);
+        rt.Pos += 4;
+        return v;
+    }
+    internal static class Conc {
+        internal static long MintBridgePort(Rt rt, long id) {
+            if (id == 0) return NIL;
+            rt.Minted.Add(id);
+            return TRUE;
+        }
+    }
+--csharp
+    static void Main() {
+        int[][] cases = {
+            new[] {10,2,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,4,0,0,0,98,105,110,100,6,255,255,255,255,4,0,0,0,112,111,114,116,15,7,0,0,0},
+            new[] {8,2,0,0,0,15,3,0,0,0,15,4,0,0,0},
+            new[] {3,1,2},
+            new[] {99},
+            new[] {6,2,0,0,0,110,115,1,0,0,0,97},
+            new[] {18,1,0,0,0,6,255,255,255,255,2,0,0,0,105,100,6,255,255,255,255,3,0,0,0,105,110,116,1,0,0,0,15,9,0,0,0},
+        };
+        var outp = new System.Text.StringBuilder();
+        foreach (var c in cases) {
+            var rt = new Rt();
+            rt.B = new byte[c.Length];
+            for (int i = 0; i < c.Length; i++) rt.B[i] = (byte) c[i];
+            rt.Pos = 0;
+            int ai = rt.Push(rt.NewVec());
+            bool ok = WireScanAt(rt, NIL, ai, 0);
+            outp.Append(ok ? 1 : 0).Append(WireLeft(rt, NIL)).Append(":");
+            for (int i = 0; i < rt.Minted.Count; i++) {
+                if (i > 0) outp.Append(",");
+                outp.Append(rt.Minted[i]);
+            }
+            outp.Append(" ");
+        }
+        System.Console.WriteLine(outp.ToString().Trim());
+    }
+--expect
+10:7 10:3,4 02: 00: 10: 10:9
+--expect-why
+DERIVED FROM THE FORMAT. Each field is `<ok><bytes-left>:<ports minted>`, so a
+walk that stopped early is visible as leftover bytes rather than only as a
+verdict -- a scan that returned true having read half the message would pass a
+check that looked at `ok` alone.
+
+  bind      `10:7`   {:op :bind :port 7}. Reads to the end (0 left) and mints
+                     port 7 -- the message `Host::caller` actually sends, and
+                     the reason this walk exists: the port must exist before
+                     `Host::call` delivers on it.
+  two       `10:3,4` [port 3, port 4]. TWO ports from one message, in order,
+                     which is what a vector of capabilities looks like.
+  trunc     `02:`    `K_INT` with three bytes where eight are due. Refused,
+                     nothing minted, and TWO BYTES LEFT -- the tag is consumed
+                     before its payload is checked, so the cursor sits after it
+                     when the refusal happens. That `2` was derived as `0`
+                     first and the three targets said otherwise together, which
+                     is the case where an expected answer is worth more than a
+                     cross-target comparison: three agreeing implementations
+                     cannot tell you that your reasoning was wrong.
+  unknown   `00:`    Tag 99. There is no length to skip by, so the walk cannot
+                     go on and must not pretend to. Nothing is left because the
+                     tag was the whole message.
+  qualified `10:`    `:ns/a`. The NAMESPACE IS PRESENT here, where every other
+                     keyword in these cases has `ffffffff` for absent. Both are
+                     read to the end and mint nothing, which is the pair that
+                     says `NO_NS` is not being treated as a length -- a walk
+                     that did would try to skip 4 294 967 295 bytes and refuse
+                     the message.
+  table     `10:9`   One `:int` column and one row whose cell is port 9. The
+                     ROW COUNT sits after values, so a walk that read the
+                     table's parts in the wrong order lands on the wrong byte
+                     and either refuses or mints nothing -- and a port inside a
+                     table is exactly the case that would otherwise be missed.

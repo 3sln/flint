@@ -387,7 +387,7 @@ pub fn catalogue() -> Vec<(&'static str, Vec<(&'static str, &'static [u32])>)> {
     // The catalogue is the VAR LIST, so the capabilities it is built with are
     // irrelevant here -- what a caller holds decides what `run` may lend, not
     // which vars exist.
-    let ception = Ception { caps: Vec::new(), sandboxes: Vec::new(), gas: 0 };
+    let ception = Ception { caps: Vec::new(), sandboxes: Vec::new(), callers: Vec::new(), gas: 0 };
     vec![
         (fs.name_static(), fs.vars()),
         (env.name_static(), env.vars()),
@@ -860,6 +860,17 @@ pub struct Ception {
     /// hold: without this, `sdk` was the only capability anyone needed, because
     /// `(sdk/run {... :with ["fs"]})` minted the rest onto a child it wrote.
     pub caps: Vec<String>,
+    /// Callers this program took, by handle: which sandbox, and the bound port.
+    ///
+    /// A CALLER IS THE THING YOU CALL ON, not the sandbox
+    /// (`DECISIONS.md#bridges-are-the-only-door`). `:bind` gives the control
+    /// plane a port and it spawns ONE thread serving calls on it, so a caller
+    /// is that thread's queue -- serial, in arrival order -- and concurrency is
+    /// had by taking a second one. Naming it makes that cost visible instead of
+    /// hiding a thread per call behind `(call sandbox ..)`.
+    ///
+    /// `None` is a closed one, kept for the same reason the sandbox slots are.
+    pub callers: Vec<Option<(usize, crate::serve::Caller)>>,
     /// Sandboxes this program constructed, by handle. `None` is a closed one --
     /// the slot is kept so a stale handle reads as closed rather than as some
     /// later sandbox that reused the number.
@@ -930,7 +941,8 @@ impl Service for Ception {
         "flint.ception"
     }
     fn vars(&self) -> Vec<(&'static str, &'static [u32])> {
-        vec![("compile", &[1]), ("run", &[1]), ("sandbox", &[1, 2]), ("call", &[3]),
+        vec![("compile", &[1]), ("run", &[1]), ("sandbox", &[1, 2]), ("caller", &[1]),
+             ("call", &[3]), ("close-caller", &[1]),
              ("close", &[1]), ("version", &[0])]
     }
     fn invoke(&mut self, var: &str, args: &[Val], _p: &Policy) -> Answer {
@@ -1016,10 +1028,39 @@ impl Service for Ception {
                 self.sandboxes.push(Some(Sandboxed { program, host }));
                 w.int((self.sandboxes.len() - 1) as i64);
             }
-            // `(call sandbox "ns/f" [args])`
-            "call" => {
+            // `(caller sandbox)` -- bind a port and hand back what calls go on.
+            "caller" => {
                 let h = args.first().and_then(|v| v.as_i64())
-                    .ok_or("call needs the handle `sandbox` returned")? as usize;
+                    .ok_or("caller needs the handle `sandbox` returned")? as usize;
+                let slot = self.sandboxes.get_mut(h)
+                    .ok_or_else(|| format!("no such sandbox: {h}"))?;
+                let sb = slot.as_mut().ok_or_else(|| format!("sandbox {h} is closed"))?;
+                let c = sb.host.caller(&mut sb.program)?;
+                self.callers.push(Some((h, c)));
+                w.int((self.callers.len() - 1) as i64);
+            }
+            // `(close-caller caller)` -- `:unbind`, which closes the bound port
+            // and ends the thread serving it. The SANDBOX is untouched: other
+            // callers on it go on working, which is the whole reason they are
+            // separate things.
+            "close-caller" => {
+                let h = args.first().and_then(|v| v.as_i64())
+                    .ok_or("close-caller needs the handle `caller` returned")? as usize;
+                match self.callers.get_mut(h) {
+                    Some(slot) => { *slot = None; }
+                    None => return Err(format!("no such caller: {h}")),
+                }
+                w.nil();
+            }
+            // `(call caller "ns/f" [args])`
+            "call" => {
+                let ch = args.first().and_then(|v| v.as_i64())
+                    .ok_or("call needs the handle `caller` returned")? as usize;
+                let h = match self.callers.get(ch) {
+                    Some(Some((h, _))) => *h,
+                    Some(None) => return Err(format!("caller {ch} is closed")),
+                    None => return Err(format!("no such caller: {ch}")),
+                };
                 let f = str_arg(args, 1, "fn")?;
                 // ANY VALUE, not just strings. `Sandbox::call` in `sdks/rust`
                 // takes values, and the restriction here was the thing that
@@ -1041,7 +1082,16 @@ impl Service for Ception {
                 // port protocol, and a call there RUNS AS A GREEN THREAD, so
                 // the called function may park and the pump answers it while
                 // this call is outstanding (`DECISIONS.md#flint-ception`).
-                let reply = sb.host.call_named(&mut sb.program, f, argv)?;
+                // A CALLER, not a global call. One per sandbox, made on first
+                // use and kept: a caller is a bound port with a thread serving
+                // it, so minting one per call would spawn a thread per call --
+                // which is the cost `one bound port is a queue` exists to keep
+                // visible (`DECISIONS.md#bridges-are-the-only-door`).
+                let caller = match self.callers.get(ch) {
+                    Some(Some((_, c))) => c,
+                    _ => return Err(format!("caller {ch} is closed")),
+                };
+                let reply = sb.host.call(&mut sb.program, caller, f, argv)?;
                 // Forwarded VERBATIM. The answer is already an encoded value,
                 // so decoding it here to re-encode it would be two chances to
                 // disagree with the sandbox about what it said.

@@ -196,7 +196,17 @@ public static class Conc {
         // has nothing saved until it parks.
         int ti = rt.Push(NewObj(rt, Obj.TyThread, TH_LEN));
         if (Val.IsNil(rt.R(ti))) { rt.PopTo(bas); return Val.Nil; }
-        rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_STATUS, Val.Fixnum(ST_RUNNABLE));
+        // UNLESS NOTHING IS RUNNING. A scheduler can now be created before any
+        // program has started -- a host that installs a port at construction
+        // makes one (`DECISIONS.md#ports-are-the-hosts`), and so does spawning
+        // the control plane at the top of `drive`
+        // (`DECISIONS.md#bridges-are-the-only-door`) -- and then thread 0
+        // represents no stack at all. Left RUNNABLE it is picked, restored from
+        // a `TH_STACK` of nil, and runs off the end of an empty value stack;
+        // the symptom is an index of -1 out of `VPop`. An empty frame stack is
+        // what says which case this is.
+        bool running = rt.frames.Count != 0;
+        rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_STATUS, Val.Fixnum(running ? ST_RUNNABLE : ST_DONE));
         rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_ID, Val.Fixnum(0));
         rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_TOKEN, Val.Fixnum(-1));
         rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_BINDINGS, Maps.Empty(rt));
@@ -279,7 +289,8 @@ public static class Conc {
         rt.roots.StackTop = 0;
     }
 
-    static void RestoreState(Rt rt, long th) {
+    public static void RestoreState(Rt rt, long th) {
+        rt.restores++;
         long sv = rt.Slot(th, TH_STACK);
         rt.frames.Clear();
         rt.handlers.Clear();
@@ -325,10 +336,9 @@ public static class Conc {
 
     /// Signal a park. `parkOn` is the wake key; the PARK sentinel in `thrown`
     /// is what makes the interpreter unwind outv to the scheduler.
+    /// GENERATED (`kin/sched.kin`) -- see the note on the JVM's `park`.
     public static long Park(Rt rt, long on) {
-        rt.parkOn = on;
-        rt.thrown = Val.Park;
-        return Val.Nil;
+        return global::_3sln.Flint.Kgen.Rt.Sched.Park(rt, on);
     }
 
     // --- spawning -----------------------------------------------------------
@@ -371,76 +381,27 @@ public static class Conc {
     /// A waiter records WHICH THREAD is parked on WHICH PORT. Slots are reused
     /// through a free list rather than compacted, because a token names an
     /// index into this vector and compacting would invalidate every one held.
+    /// GENERATED (`kin/sched.kin`) -- see the note on the JVM's `newWaiter`.
     static long NewWaiter(Rt rt, long kind, long port) {
-        int bas = rt.Mark();
-        int pi = rt.Push(port);
-        int si = rt.Push(Sched(rt));
-        int ti = rt.Push(CurrentThread(rt));
-        long free = Fx(rt.Slot(rt.R(si), SC_WFREE));
-        long idx;
-        int wi;
-        if (free >= 0) {
-            long w = Vec.Nth(rt, rt.Slot(rt.R(si), SC_WAITERS), (int) free, Val.NotFound);
-            rt.SetSlot(Val.AsHeap(rt.R(si)), SC_WFREE, Val.Fixnum(Fx(rt.Slot(w, W_NEXT))));
-            idx = free;
-            wi = rt.Push(w);
-        } else {
-            long w = NewObj(rt, Obj.TyNode, W_LEN);
-            if (Val.IsNil(w)) { rt.PopTo(bas); return -1; }
-            wi = rt.Push(w);
-            rt.SetSlot(Val.AsHeap(rt.R(wi)), W_GEN, Val.Fixnum(0));
-            int wsi = rt.Push(rt.Slot(rt.R(si), SC_WAITERS));
-            long nws = Vec.Conj(rt, rt.R(wsi), rt.R(wi));
-            idx = Vec.Count(rt, nws) - 1;
-            rt.SetSlot(Val.AsHeap(rt.R(si)), SC_WAITERS, nws);
-        }
-        rt.SetSlot(Val.AsHeap(rt.R(wi)), W_THREAD, rt.R(ti));
-        rt.SetSlot(Val.AsHeap(rt.R(wi)), W_KIND, Val.Fixnum(kind));
-        rt.SetSlot(Val.AsHeap(rt.R(wi)), W_PORT, rt.R(pi));
-        long gen = Fx(rt.Slot(rt.R(wi), W_GEN));
-        rt.PopTo(bas);
-        // 1-based, so that 0 is never a valid token: a host ABI where the zero
-        // value means something is a trap waiting for an uninitialised variable.
-        return (gen << 16) | (idx + 1);
+        return global::_3sln.Flint.Kgen.Rt.Sched.NewWaiter(rt, kind, port);
     }
 
+    /// GENERATED (`kin/sched.kin`) -- see the note on the JVM's `waiterAt`.
     static long WaiterAt(Rt rt, long token) {
-        if (token <= 0 || (token & 0xFFFF) == 0) return Val.Nil;
-        int idx = (int) (token & 0xFFFF) - 1;
-        long gen = token >> 16;
-        long w = Vec.Nth(rt, Waiters(rt), idx, Val.NotFound);
-        if (w == Val.NotFound || Val.IsNil(w)) return Val.Nil;
-        if (Fx(rt.Slot(w, W_GEN)) != gen || Val.IsNil(rt.Slot(w, W_THREAD))) return Val.Nil;
-        return w;
+        return global::_3sln.Flint.Kgen.Rt.Sched.WaiterAt(rt, token);
     }
 
-    /// Free a waiter slot and BUMP ITS GENERATION, so a token naming it can
-    /// never be honoured twice.
+    /// GENERATED (`kin/sched.kin`). The generated one answers the waiter it
+    /// freed; this port's callers do not need it.
     static void FreeWaiter(Rt rt, long token) {
-        long w = WaiterAt(rt, token);
-        if (Val.IsNil(w)) return;
-        long idx = (token & 0xFFFF) - 1;
-        long gen = Fx(rt.Slot(w, W_GEN));
-        rt.SetSlot(Val.AsHeap(w), W_GEN, Val.Fixnum((gen + 1) & 0xFFFF));
-        rt.SetSlot(Val.AsHeap(w), W_THREAD, Val.Nil);
-        rt.SetSlot(Val.AsHeap(w), W_PORT, Val.Nil);
-        long s = Sched(rt);
-        rt.SetSlot(Val.AsHeap(w), W_NEXT, rt.Slot(s, SC_WFREE));
-        rt.SetSlot(Val.AsHeap(s), SC_WFREE, Val.Fixnum(idx));
+        global::_3sln.Flint.Kgen.Rt.Sched.FreeWaiter(rt, token);
     }
 
-    /// How many green threads are parked with a token outstanding. A host that
-    /// never answers leaks these; the deadlock report names them.
+    /// GENERATED (`kin/sched.kin`). How many green threads are parked with a
+    /// token outstanding. A host that never answers leaks these; the deadlock
+    /// report names them.
     public static int OutstandingWaiters(Rt rt) {
-        long s = Sched(rt);
-        if (Val.IsNil(s)) return 0;
-        long ws = Waiters(rt);
-        int n = Vec.Count(rt, ws), c = 0;
-        for (int i = 0; i < n; i++) {
-            long w = Vec.Nth(rt, ws, i, Val.NotFound);
-            if (!Val.IsNil(w) && w != Val.NotFound && !Val.IsNil(rt.Slot(w, W_THREAD))) c++;
-        }
-        return c;
+        return global::_3sln.Flint.Kgen.Rt.Sched.OutstandingWaiters(rt);
     }
 
     /// Park until there is room in `p`'s ring.
@@ -468,25 +429,14 @@ public static class Conc {
         return Park(rt, pv);
     }
 
+    /// GENERATED (`kin/sched.kin`) -- see the note on the JVM's `parkOnPort`.
     static long ParkOnPort(Rt rt, long kind, long port) {
-        int bas = rt.Mark();
-        int pi = rt.Push(port);
-        long token = NewWaiter(rt, kind, rt.R(pi));
-        long th = CurrentThread(rt);
-        if (!Val.IsNil(th)) rt.SetSlot(Val.AsHeap(th), TH_TOKEN, Val.Fixnum(token));
-        long pv = rt.R(pi);
-        rt.PopTo(bas);
-        return Park(rt, pv);
+        return global::_3sln.Flint.Kgen.Rt.Sched.ParkOnPort(rt, kind, port);
     }
 
+    /// GENERATED (`kin/sched.kin`) -- see the note on the JVM's `wakeWaiter`.
     static void WakeWaiter(Rt rt, long w) {
-        long th = rt.Slot(w, W_THREAD);
-        if (Val.IsNil(th)) return;
-        rt.SetSlot(Val.AsHeap(th), TH_STATUS, Val.Fixnum(ST_RUNNABLE));
-        rt.SetSlot(Val.AsHeap(th), TH_PARK_ON, Val.Nil);
-        long token = Fx(rt.Slot(th, TH_TOKEN));
-        rt.SetSlot(Val.AsHeap(th), TH_TOKEN, Val.Fixnum(-1));
-        FreeWaiter(rt, token);
+        global::_3sln.Flint.Kgen.Rt.Sched.WakeWaiter(rt, w);
     }
 
     /// Make every thread waiting on `p` runnable again.
@@ -494,14 +444,9 @@ public static class Conc {
     /// They RE-EXECUTE the call they parked in, which is what makes "wake"
     /// correct without anyone reasoning about who gets the value: whoever runs
     /// first takes it, and the others simply park again.
+    /// GENERATED (`kin/sched.kin`) -- see the note on the JVM's `wakeOn`.
     public static void WakeOn(Rt rt, long p) {
-        long ws = Waiters(rt);
-        int n = Vec.Count(rt, ws);
-        for (int i = 0; i < n; i++) {
-            long w = Vec.Nth(rt, ws, i, Val.NotFound);
-            if (Val.IsNil(w) || Val.IsNil(rt.Slot(w, W_THREAD))) continue;
-            if (rt.Slot(w, W_PORT) == p) WakeWaiter(rt, w);
-        }
+        global::_3sln.Flint.Kgen.Rt.Sched.WakeOn(rt, p);
     }
 
     // --- channels -----------------------------------------------------------
@@ -712,7 +657,7 @@ public static class Conc {
 
     /// The peer of an id whose OBJECT has been collected. Read from the
     /// scheduler's pair list, which is the only place that survives it.
-    static long PeerIdOfDead(Rt rt, long id) {
+    public static long PeerIdOfDead(Rt rt, long id) {
         long ps = rt.Slot(Sched(rt), SC_PAIRS);
         int n = Vec.Count(rt, ps);
         for (int i = 0; i < n; i++) {
@@ -724,22 +669,25 @@ public static class Conc {
 
     /// How many messages are in the ring, reservations included: a reserved
     /// slot is spoken for even before it is filled.
+    /// GENERATED (`kin/portring.kin`).
     static int InboxCount(Rt rt, long p) {
-        return (int) System.Math.Max(0, Cursor(rt, p, PT_WRITE) - Cursor(rt, p, PT_READ));
+        return global::_3sln.Flint.Kgen.Rt.Portring.RingInboxCount(rt, p);
     }
 
-    static long Cursor(Rt rt, long p, int which) => Fx(SlotAtomic(rt, p, which));
+    /// GENERATED (`kin/portring.kin`).
+    static long Cursor(Rt rt, long p, int which) =>
+        global::_3sln.Flint.Kgen.Rt.Portring.RingCursor(rt, p, which);
 
     /// One slot, read atomically. Cursors and sequence words are fixnums like
     /// any other slot -- the collector sees nothing unusual -- and the atomic
     /// operates on the TAGGED word.
-    static long SlotAtomic(Rt rt, long o, int i) =>
+    public static long SlotAtomic(Rt rt, long o, int i) =>
         rt.gc.sp.AtomicLoad(Obj.SlotAddr(Val.AsHeap(o), i));
 
     /// Compare-and-swap a slot, AND run the write barrier when it lands. See
     /// the Rust: a ring in the old generation pointing at a young value is an
     /// edge the collector finds only through the remembered set.
-    static bool CasSlotBarriered(Rt rt, long o, int i, long want, long next) {
+    public static bool CasSlotBarriered(Rt rt, long o, int i, long want, long next) {
         long obj = Val.AsHeap(o);
         if (!rt.gc.sp.Cas(Obj.SlotAddr(obj, i), want, next)) return false;
         if (Val.IsHeap(next) && rt.gc.IsYoung(Val.AsHeap(next)) && !rt.gc.IsYoung(obj)) {
@@ -748,7 +696,7 @@ public static class Conc {
         return true;
     }
 
-    static bool CasSlot(Rt rt, long o, int i, long want, long next) =>
+    public static bool CasSlot(Rt rt, long o, int i, long want, long next) =>
         rt.gc.sp.Cas(Obj.SlotAddr(Val.AsHeap(o), i), want, next);
 
     /// Put `v` in `p`'s ring. False means full.
@@ -756,35 +704,16 @@ public static class Conc {
     /// ONE compare-and-swap: the slot's own word is the lease, and swapping
     /// Empty for the message both claims the slot and fills it. Mirrors the
     /// Rust, including why there is no sequence word.
+    /// GENERATED (`kin/portring.kin`) -- see the note on the JVM's `enqueue`.
     static bool Enqueue(Rt rt, long p, long v) {
-        long ring = Fx(rt.Slot(p, PT_RING));
-        if (ring == 0) return false;
-        long inbox = rt.Slot(p, PT_INBOX);
-        for (;;) {
-            long w = Cursor(rt, p, PT_WRITE);
-            long r = Cursor(rt, p, PT_READ);
-            if (w - r >= ring) return false;
-            int idx = (int) (w % ring);
-            if (!CasSlot(rt, p, PT_WRITE, Val.Fixnum(w), Val.Fixnum(w + 1))) continue;
-            if (CasSlotBarriered(rt, inbox, idx, Val.Empty, v)) return true;
-        }
+        return global::_3sln.Flint.Kgen.Rt.Portring.RingEnqueue(rt, p, v);
     }
 
     /// Take the next message, or nil. The mirror image: swap the message out
     /// for Empty, freeing the slot in the step that takes the value.
+    /// GENERATED (`kin/portring.kin`) -- see the note on the JVM's `enqueue`.
     static long Dequeue(Rt rt, long p) {
-        long ring = Fx(rt.Slot(p, PT_RING));
-        if (ring == 0) return Val.Nil;
-        long inbox = rt.Slot(p, PT_INBOX);
-        for (;;) {
-            long r = Cursor(rt, p, PT_READ);
-            if (r >= Cursor(rt, p, PT_WRITE)) return Val.Nil;
-            int idx = (int) (r % ring);
-            long v = SlotAtomic(rt, inbox, idx);
-            if (v == Val.Empty) return Val.Nil;
-            if (!CasSlot(rt, p, PT_READ, Val.Fixnum(r), Val.Fixnum(r + 1))) continue;
-            if (CasSlotBarriered(rt, inbox, idx, v, Val.Empty)) return v;
-        }
+        return global::_3sln.Flint.Kgen.Rt.Portring.RingDequeue(rt, p);
     }
 
     // --- what may cross a port ----------------------------------------------
@@ -910,7 +839,7 @@ public static class Conc {
     /// Append an outbound event. `payload` is a string (or byte string) whose
     /// bytes the host will read; the drain copies them into one contiguous
     /// buffer.
-    static void PushEvent(Rt rt, long kind, long a, long b, long payload) {
+    public static void PushEvent(Rt rt, long kind, long a, long b, long payload) {
         int bas = rt.Mark();
         int pi = rt.Push(payload);
         int vi = rt.Push(Vec.Empty(rt));
@@ -962,9 +891,21 @@ public static class Conc {
         int bas = rt.Mark();
         int pi = rt.Push(p), vi = rt.Push(v);
         long kind = Fx(rt.Slot(rt.R(pi), PT_KIND));
+        // A WRITER IS AN ENCODING, NOT A VALUE, so it is not walked: there is
+        // nothing in it to check, and `CheckSendable` would refuse the type it
+        // does not know (`DECISIONS.md#the-codec-is-guest-code`).
+        bool writer = Wire.IsWriter(rt, rt.R(vi));
+        if (writer && !CrossesAHeap(kind)) {
+            rt.PopTo(bas);
+            return rt.ThrowStr("IllegalArgumentException",
+                "send: a wire writer is an encoding, and a channel carries values -- "
+                + "send the value itself, or send this on a bridge");
+        }
         int carry = CrossesAHeap(kind) ? CarryCrossing : CarryLocal;
-        string bad = CheckSendableVia(rt, rt.R(vi), carry);
-        if (bad != null) { rt.PopTo(bas); return rt.ThrowStr("IllegalArgumentException", bad); }
+        if (!writer) {
+            string bad = CheckSendableVia(rt, rt.R(vi), carry);
+            if (bad != null) { rt.PopTo(bas); return rt.ThrowStr("IllegalArgumentException", bad); }
+        }
         if (CrossesAHeap(kind)) {
             // ENCODING HAPPENS HERE, ALWAYS, AND ONLY HERE.
             //
@@ -976,15 +917,26 @@ public static class Conc {
             // `K_SENTINEL` carry their identity inline as integers a guest can
             // write, such a guest could mint any host id it liked. An opaque
             // value's whole meaning is that it cannot.
-            byte[] enc;
-            try {
-                enc = Codec.Encode(rt, rt.R(vi));
-            } catch (Codec.Refused e) {
+            // STRUCTURALLY COMPLETE, or it does not go.
+            if (!writer) {
                 rt.PopTo(bas);
-                return rt.ThrowStr("IllegalArgumentException",
-                    "send: this cannot cross a bridge: " + e.Message);
+                return rt.ThrowStr("ClassCastException",
+                    "send: a bridge carries an encoding -- use `flint.port/send`, which "
+                    + "writes one, rather than the builtin with a bare value");
             }
-            rt.SetR(vi, Bytes.Of(rt, enc));
+            if (!Wire.Complete(rt, rt.R(vi))) {
+                rt.PopTo(bas);
+                return rt.ThrowStr("IllegalStateException",
+                    "send: this encoding is unfinished -- a container was opened and "
+                    + "not filled");
+            }
+            long enc = Wire.Finish(rt, rt.R(vi));
+            if (Val.IsNil(enc)) {
+                rt.PopTo(bas);
+                return rt.ThrowStr("IllegalStateException",
+                    "send: this wire writer has already been sent");
+            }
+            rt.SetR(vi, enc);
             // Bound the queue in BYTES: back-pressure exists to bound memory,
             // and one 4 MB message is not one message's worth of it.
             //
@@ -992,7 +944,7 @@ public static class Conc {
             // is the host's registry and is not in any heap -- so it is its own
             // accounting, where a host port used to need a second object to
             // carry the count.
-            long len = enc.Length;
+            long len = Bytes.Count(rt, rt.R(vi));
             long cap = Fx(rt.Slot(rt.R(pi), PT_CAP));
             long queued = Fx(rt.Slot(rt.R(pi), PT_BYTES));
             if (queued > 0 && queued + len > cap) {
@@ -1034,6 +986,19 @@ public static class Conc {
     }
 
     /// Take from this port's inbox. Parks when empty.
+    /// Receive on a BRIDGE as a live reader, for a guest that decodes itself.
+    ///
+    /// NIL for end of stream, exactly as `Receive` answers it.
+    public static long ReceiveReader(Rt rt, long p) {
+        long v = Receive(rt, p);
+        if (Val.IsNil(v) || !Bytes.IsBytes(rt, v)) return v;
+        int bas = rt.Mark();
+        int vi = rt.Push(v);
+        long outv = Wire.Reader(rt, rt.R(vi), true);
+        rt.PopTo(bas);
+        return outv;
+    }
+
     public static long Receive(Rt rt, long p) {
         if (!NeedPort(rt, p, "receive")) return Val.Nil;
         int bas = rt.Mark();
@@ -1052,6 +1017,8 @@ public static class Conc {
                 // keyword as a string. On the Rust that was a segfault.
                 long item = rt.R(vi);
                 long n = Fx(Vec.Nth(rt, item, 0, Val.NotFound));
+            // `[len bytes ports]`. The ports are dropped here, which is where
+            // this stops short of the two-phase design.
                 rt.SetR(vi, Vec.Nth(rt, item, 1, Val.NotFound));
                 long queued = Fx(rt.Slot(rt.R(pi), PT_BYTES));
                 rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_BYTES, Val.Fixnum(queued > n ? queued - n : 0));
@@ -1221,23 +1188,21 @@ public static class Conc {
         // That is the whole of "the host does what it wants with them": one
         // value crosses, and anything an opaque value carries survives the trip
         // because the codec already knew how to write one down.
-        int vi = rt.Push(Vec.Empty(rt));
-        rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.R(ni)));
-        int an = rt.IsHeapTy(rt.R(ai), Obj.TyVec) ? Vec.Count(rt, rt.R(ai)) : 0;
-        for (int k = 0; k < an; k++) {
-            rt.SetR(vi, Vec.Conj(rt, rt.R(vi), Vec.Nth(rt, rt.R(ai), k, Val.NotFound)));
-        }
-        byte[] call;
-        try {
-            call = Codec.Encode(rt, rt.R(vi));
-        } catch (Codec.Refused e) {
-            // A value the codec refuses is the PROGRAM's error, not the host's:
-            // say so here rather than sending something the host cannot read.
+        // ENCODED BY THE GUEST (`DECISIONS.md#the-codec-is-guest-code`).
+        // `flint.port/open` writes `[name ...args]` with `flint.wire` and hands
+        // the writer in; this checks it is finished and takes its bytes.
+        if (!Wire.Complete(rt, rt.R(ai))) {
             rt.PopTo(bas);
-            return rt.ThrowStr("IllegalArgumentException",
-                "open: this cannot be sent to the host: " + e.Message);
+            return rt.ThrowStr("IllegalStateException",
+                "open: this encoding is unfinished -- a container was opened and not filled");
         }
-        int payi = rt.Push(Bytes.Of(rt, call));
+        long pay = Wire.Finish(rt, rt.R(ai));
+        if (Val.IsNil(pay)) {
+            rt.PopTo(bas);
+            return rt.ThrowStr("IllegalStateException",
+                "open: this encoding has already been sent");
+        }
+        int payi = rt.Push(pay);
         long sysId = Fx(rt.Slot(rt.R(si), PT_ID));
         PushEvent(rt, EV_OPEN, token, sysId, rt.R(payi));
         long target = rt.R(si);
@@ -1270,9 +1235,13 @@ public static class Conc {
             // the way `PortOpen` reads it off `IsPort` -- a host answering nil
             // and a host refusing would be the same bits.
             if (rt.IsHeapTy(pending, Obj.TyVec)) {
-                long v = Vec.Count(rt, pending) > 0 ? Vec.Nth(rt, pending, 0, Val.NotFound) : Val.Nil;
+                // THE ANSWER'S BYTES, AS A LIVE READER -- the guest decodes it
+                // (`DECISIONS.md#the-codec-is-guest-code`).
+                long b = Vec.Count(rt, pending) > 0 ? Vec.Nth(rt, pending, 0, Val.NotFound) : Val.Nil;
+                int bi = rt.Push(b);
+                long outv = Wire.Reader(rt, rt.R(bi), true);
                 rt.PopTo(bas);
-                return v;
+                return outv;
             }
             string nm2 = Str.IsString(rt, rt.R(ni)) ? Str.Text(rt, rt.R(ni)) : "?";
             rt.PopTo(bas);
@@ -1293,23 +1262,20 @@ public static class Conc {
         long token = NewWaiter(rt, WK_REQUEST, rt.R(si));
         rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_TOKEN, Val.Fixnum(token));
         rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_PENDING, Val.Fixnum(0));
-        // `[what & args]`, encoded -- the same payload shape `PortOpen` sends,
-        // so a host that already routes one routes the other.
-        int vi = rt.Push(Vec.Empty(rt));
-        rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.R(ni)));
-        int an = rt.IsHeapTy(rt.R(ai), Obj.TyVec) ? Vec.Count(rt, rt.R(ai)) : 0;
-        for (int k = 0; k < an; k++) {
-            rt.SetR(vi, Vec.Conj(rt, rt.R(vi), Vec.Nth(rt, rt.R(ai), k, Val.NotFound)));
-        }
-        byte[] call;
-        try {
-            call = Codec.Encode(rt, rt.R(vi));
-        } catch (Codec.Refused e) {
+        // `[what & args]`, ENCODED BY THE GUEST
+        // (`DECISIONS.md#the-codec-is-guest-code`).
+        if (!Wire.Complete(rt, rt.R(ai))) {
             rt.PopTo(bas);
-            return rt.ThrowStr("IllegalArgumentException",
-                "request: this cannot be sent to the host: " + e.Message);
+            return rt.ThrowStr("IllegalStateException",
+                "request: this encoding is unfinished -- a container was opened and not filled");
         }
-        int payi = rt.Push(Bytes.Of(rt, call));
+        long pay = Wire.Finish(rt, rt.R(ai));
+        if (Val.IsNil(pay)) {
+            rt.PopTo(bas);
+            return rt.ThrowStr("IllegalStateException",
+                "request: this encoding has already been sent");
+        }
+        int payi = rt.Push(pay);
         long sysId = Fx(rt.Slot(rt.R(si), PT_ID));
         PushEvent(rt, EV_REQUEST, token, sysId, rt.R(payi));
         long target = rt.R(si);
@@ -1390,13 +1356,10 @@ public static class Conc {
         if (Val.IsNil(w)) return false;
         int bas = rt.Mark();
         int wi = rt.Push(w);
-        long v;
-        try {
-            v = Codec.Decode(rt, bytes);
-        } catch (Exception) {
-            rt.PopTo(bas);
-            return false;
-        }
+        // NOT DECODED HERE (`DECISIONS.md#the-codec-is-guest-code`): the bytes
+        // reach the parked thread as bytes and the GUEST reads them. The
+        // wrapper stays -- an answer may be any value, nil included.
+        long v = Bytes.Of(rt, bytes);
         int vi = rt.Push(v);
         // Wrapped, so that a host answering nil is distinguishable from a host
         // refusing. See `HostRequest`.
@@ -1407,6 +1370,32 @@ public static class Conc {
         WakeWaiter(rt, rt.R(wi));
         rt.PopTo(bas);
         return true;
+    }
+
+    /// Walk an encoding and MINT EVERY PORT IN IT, answering them as a vector.
+    ///
+    /// NIL when the encoding cannot be read. The WALK is `kin/wirescan.kin`;
+    /// this is the `byte[]`-shaped door to it.
+    static long ScanPorts(Rt rt, byte[] bytes) {
+        int bas = rt.Mark();
+        int bi = rt.Push(Bytes.Of(rt, bytes));
+        // NOT LIVE: a cursor for the walk, never handed to a guest.
+        int ri = rt.Push(Wire.Reader(rt, rt.R(bi), false));
+        int ai = rt.Push(Vec.Empty(rt));
+        bool ok = global::_3sln.Flint.Kgen.Rt.Wirescan.WireScanAt(rt, rt.R(ri), ai, 0);
+        if (!ok || Wire.Left(rt, rt.R(ri)) != 0) {
+            rt.PopTo(bas);
+            return Val.Nil;
+        }
+        long outv = rt.R(ai);
+        rt.PopTo(bas);
+        return outv;
+    }
+
+    /// Install a bridge port by host id, or NIL if this sandbox has no ports.
+    public static long MintBridgePort(Rt rt, long id) {
+        if (rt.bridgeHook == null) return Val.Nil;
+        return rt.bridgeHook(rt, id);
     }
 
     /// Put a message into a bridge from the host's side. Wakes a parked
@@ -1440,10 +1429,12 @@ public static class Conc {
             if (queued > 0 && queued + len > cap) { rt.PopTo(bas); return false; }
             if (CasSlot(rt, pv, PT_BYTES, Val.Fixnum(queued), Val.Fixnum(queued + len))) break;
         }
-        long v;
-        try {
-            v = Codec.Decode(rt, bytes);
-        } catch (System.Exception) {
+        // SCANNED, NOT DECODED (`DECISIONS.md#the-codec-is-guest-code`). The
+        // bytes go into the queue as bytes and the GUEST decodes them; what
+        // must still happen here is the MINTING, because a port has to exist
+        // before anything can be delivered on it.
+        long ports = ScanPorts(rt, bytes);
+        if (Val.IsNil(ports)) {
             // Refused rather than delivered as anything else: a message the
             // format cannot read is the host's error, and turning it into a
             // string here would hand the guest something that silently was not
@@ -1452,14 +1443,17 @@ public static class Conc {
             rt.PopTo(bas);
             return false;
         }
-        int vi = rt.Push(v);
-        // `[len value]`, because the refund has to be the number that was
-        // CHARGED and nothing about a decoded value says what that was.
+        int pri = rt.Push(ports);
+        int vi = rt.Push(Bytes.Of(rt, bytes));
+        // `[len bytes ports]`. `len` because the refund has to be the number
+        // that was CHARGED; `ports` because THE BRIDGE OWNS THE REFERENCE while
+        // the message is in flight, and the intern table is weak on purpose.
         {
             int m = rt.Mark();
             int ei = rt.Push(Vec.Empty(rt));
             rt.SetR(ei, Vec.Conj(rt, rt.R(ei), Val.Fixnum(len)));
-            rt.SetR(vi, Vec.Conj(rt, rt.R(ei), rt.R(vi)));
+            rt.SetR(ei, Vec.Conj(rt, rt.R(ei), rt.R(vi)));
+            rt.SetR(vi, Vec.Conj(rt, rt.R(ei), rt.R(pri)));
             rt.PopTo(m);
         }
         if (!Enqueue(rt, rt.R(pi), rt.R(vi))) {
@@ -1623,68 +1617,25 @@ public static class Conc {
     /// PEER has gone can never proceed, so it is woken with an error rather than
     /// left hanging. Both facts are ones the collector has already worked out;
     /// this only reads them.
+    ///
+    /// GENERATED (`kin/reapports.kin`). A collection is a RELEASE for a bridge
+    /// and an ORPHANING for a channel, and this is the only place either is
+    /// noticed -- which is why it was worth writing once rather than three
+    /// times. The port that made it a candidate is recorded there: all three
+    /// copies rebuilt both lists on every drive iteration whether or not
+    /// anything had died, and allocation is billed, so the scheduler's own
+    /// bookkeeping was charged to the program -- on the native runtime only,
+    /// because this target's not-counting sentinel is `checkpoint == 0` where
+    /// the native one's is `ulong.MaxValue`. The same waste, invisible here and
+    /// expensive there, is exactly the drift one definition removes.
     public static void ReapPorts(Rt rt) {
-        long s = Sched(rt);
-        if (Val.IsNil(s)) return;
-        int bas = rt.Mark();
-        int si = rt.Push(s);
-        // --- bridges: a collection is a RELEASE -----------------------------
-        //
-        // The handle is ordinary memory and is not rooted, so the collector
-        // finding it unreachable IS this sandbox letting the port go. One
-        // release per retain, which is what makes the host's count a count of
-        // holders rather than of arrivals (`DECISIONS.md#ports-are-the-hosts`).
-        int bri = rt.Push(rt.Slot(rt.R(si), SC_BRIDGES));
-        int brn = Vec.Count(rt, rt.R(bri));
-        int hli = rt.Push(Vec.Empty(rt));
-        for (int k = 0; k < brn; k++) {
-            long bid = Fx(Vec.Nth(rt, rt.R(bri), k, Val.NotFound));
-            if (Val.IsNil(PortById(rt, bid))) {
-                // CLOSED as well as released. `DECISIONS.md#host-abi`: an end the
-                // collector finds unreachable IS the script having called
-                // `Close`, so the host hears the same pair either way.
-                PushEvent(rt, EV_CLOSED, bid, 0, Val.Nil);
-                PushEvent(rt, EV_RELEASE, bid, 0, Val.Nil);
-                continue;
-            }
-            rt.SetR(hli, Vec.Conj(rt, rt.R(hli), Val.Fixnum(bid)));
-        }
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_BRIDGES, rt.R(hli));
-
-        // --- channels: a collected end orphans its peer ----------------------
-        int ii = rt.Push(rt.Slot(rt.R(si), SC_PORTS));
-        int n = Vec.Count(rt, rt.R(ii));
-        int li = rt.Push(Vec.Empty(rt));
-        for (int k = 0; k < n; k++) {
-            long id = Fx(Vec.Nth(rt, rt.R(ii), k, Val.NotFound));
-            long p = PortById(rt, id);
-            if (!Val.IsNil(p)) {
-                rt.SetR(li, Vec.Conj(rt, rt.R(li), Val.Fixnum(id)));
-                continue;
-            }
-            // This end has been collected. Tell whoever is affected.
-            long peer = PortById(rt, PeerIdOfDead(rt, id));
-            if (Val.IsNil(peer)) continue;
-            int pi = rt.Push(peer);
-            long pst = Fx(rt.Slot(rt.R(pi), PT_STATE));
-            if (pst != P_CLOSED && pst != P_ORPHANED) {
-                // Its peer vanished WITHOUT closing, which is not the same as a
-                // tidy close and should not read like one.
-                rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_STATE, Val.Fixnum(P_ORPHANED));
-            }
-            FailWaitersOn(rt, rt.R(pi),
-                "the other end of this port is unreachable, so this can never complete");
-            WakeOn(rt, rt.R(pi));
-            rt.PopTo(pi);
-        }
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_PORTS, rt.R(li));
-        rt.PopTo(bas);
+        global::_3sln.Flint.Kgen.Rt.Reapports.ReapAll(rt);
     }
 
     /// Wake everything parked on `p` with an ERROR instead of a value. Used when
     /// the peer end has been collected: that receive can never succeed, and a
     /// hang is the worst possible way to say so.
-    static void FailWaitersOn(Rt rt, long p, string msg) {
+    public static void FailWaitersOn(Rt rt, long p, string msg) {
         int bas = rt.Mark();
         int pi = rt.Push(p);
         int wsi = rt.Push(Waiters(rt));
@@ -1760,7 +1711,20 @@ public static class Conc {
     // --- the scheduler ------------------------------------------------------
 
     /// Record the outcome of the thread that was running, and take it off.
-    static void Settle(Rt rt, long result) {
+    // THE SCHEDULER'S PREDICATES ARE `kin/sched.kin`, generated into all three
+    // runtimes -- see the note in `Conc.java`. `SchedPick` answers `-1` for
+    // "nothing runnable", which is what the callers here already expected.
+    static int Pick(Rt rt) =>
+        // `-1` FOR NONE is what this port's callers already expected.
+        (int) global::_3sln.Flint.Kgen.Rt.Sched.SchedPick(rt);
+
+    static bool PendingEvents(Rt rt) =>
+        global::_3sln.Flint.Kgen.Rt.Sched.SchedPendingEvents(rt);
+
+    static bool NeedsHost(Rt rt) =>
+        global::_3sln.Flint.Kgen.Rt.Sched.SchedNeedsHost(rt);
+
+    public static void Settle(Rt rt, long result) {
         long th = CurrentThread(rt);
         if (Val.IsNil(th)) return;
         int bas = rt.Mark();
@@ -1805,62 +1769,26 @@ public static class Conc {
         rt.PopTo(bas);
     }
 
-    /// Round-robin from just after the current thread. DETERMINISTIC by
-    /// construction: no randomness, no clock, no host-order dependence. That is
-    /// what lets three runtimes agree on an interleaving.
-    static int Pick(Rt rt) {
-        long s = Sched(rt);
-        long ts = rt.Slot(s, SC_THREADS);
-        int n = Vec.Count(rt, ts);
-        if (n == 0) return -1;
-        int cur = (int) Fx(rt.Slot(s, SC_CURRENT));
-        for (int k = 1; k <= n; k++) {
-            int i = (cur + k) % n;
-            long th = Vec.Nth(rt, ts, i, Val.NotFound);
-            if (Val.IsNil(th) || th == Val.NotFound) continue;
-            long st = Fx(rt.Slot(th, TH_STATUS));
-            if (st == ST_NEW || st == ST_RUNNABLE) return i;
-        }
-        return -1;
+    /// Install a thread's dynamic bindings as the live ones -- see the note
+    /// on the JVM's `installBindings`.
+    public static void InstallBindings(Rt rt, long binds) {
+        rt.roots.shared.Singletons[Rt.SingBindings] = binds;
     }
 
-    static void RunOne(Rt rt, int i) {
-        long s = Sched(rt);
-        rt.SetSlot(Val.AsHeap(s), SC_CURRENT, Val.Fixnum(i));
-        long th = Vec.Nth(rt, rt.Slot(s, SC_THREADS), i, Val.NotFound);
-        if (Val.IsNil(th) || th == Val.NotFound) return;
-        int bas = rt.Mark();
-        int ti = rt.Push(th);
-        long st = Fx(rt.Slot(rt.R(ti), TH_STATUS));
-        rt.roots.shared.Singletons[Rt.SingBindings] = rt.Slot(rt.R(ti), TH_BINDINGS);
-        rt.SetSliceEnd(rt.steps + SLICE);
-        long v;
-        if (st == ST_NEW) {
-            rt.frames.Clear(); rt.handlers.Clear(); rt.roots.StackTop = 0;
-            long f = rt.Slot(rt.R(ti), TH_ENTRY);
-            rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_STATUS, Val.Fixnum(ST_RUNNABLE));
-            rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_ENTRY, Val.Nil);
-            v = RunEntry(rt, f);
-        } else {
-            RestoreState(rt, rt.R(ti));
-            rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_STACK, Val.Nil);
-            long fail = rt.Slot(rt.R(ti), TH_FAIL);
-            if (Val.IsNil(fail)) {
-                v = rt.Run(0);
-            } else {
-                // Raised HERE, in the thread it concerns, rather than in
-                // whichever thread noticed the port had gone. `try` in this
-                // thread catches it like any other error.
-                rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_FAIL, Val.Nil);
-                rt.thrown = fail;
-                v = rt.Unwind() ? rt.Run(0) : Val.Nil;
-            }
-        }
-        rt.PopTo(bas);
-        Settle(rt, v);
+    /// Give the thread about to run a fresh turn, from the CURRENT step count.
+    public static void BeginSlice(Rt rt) { rt.SetSliceEnd(rt.steps + SLICE); }
+
+    /// Empty the interpreter, for a thread with no state to restore.
+    public static void ResetExecState(Rt rt) {
+        rt.frames.Clear(); rt.handlers.Clear(); rt.roots.StackTop = 0;
     }
 
-    static long RunEntry(Rt rt, long f) {
+    /// GENERATED (`kin/sched.kin`) -- see the note on the JVM's `runOne`.
+    public static void RunOne(Rt rt, int i) {
+        global::_3sln.Flint.Kgen.Rt.Sched.SchedRunOne(rt, i);
+    }
+
+    public static long RunEntry(Rt rt, long f) {
         int calleeAt = rt.roots.StackTop;
         rt.VPush(f);
         if (!rt.Enter(f, calleeAt, 0)) { rt.roots.StackTop = calleeAt; return Val.Nil; }
@@ -1909,50 +1837,55 @@ public static class Conc {
         return Drive(rt);
     }
 
-    static bool PendingEvents(Rt rt) {
-        long s = Sched(rt);
-        if (Val.IsNil(s)) return false;
-        return Vec.Count(rt, rt.Slot(s, SC_EVENTS)) > Fx(rt.Slot(s, SC_EHEAD));
+    /// Spawn the control plane on the system port, once.
+    ///
+    /// Asked on EVERY drive rather than at install, because a host may install
+    /// a system port after the first run -- and because the first native
+    /// version did it at install time, inside an ABI call, where the
+    /// initialisers ran in a context that could not report failure and it
+    /// returned false in silence.
+    public static void BootSystemThreadOnce(Rt rt) {
+        if (rt.systemBooted) return;
+        if (Val.IsNil(SystemPort(rt))) return;      // no door yet; asked again next drive
+        rt.systemBooted = true;
+        BootSystemThread(rt);
     }
 
-    /// Is there anything only the HOST can supply? An event it has not drained,
-    /// or a thread parked on a port whose other end is outside this heap.
-    static bool NeedsHost(Rt rt) {
-        if (PendingEvents(rt)) return true;
-        long ts = rt.Slot(Sched(rt), SC_THREADS);
-        int n = Vec.Count(rt, ts);
-        for (int i = 0; i < n; i++) {
-            long th = Vec.Nth(rt, ts, i, Val.NotFound);
-            if (Val.IsNil(th) || th == Val.NotFound) continue;
-            if (Fx(rt.Slot(th, TH_STATUS)) != ST_PARKED) continue;
-            long on = rt.Slot(th, TH_PARK_ON);
-            if (IsPort(rt, on) && CrossesAHeap(Fx(rt.Slot(on, PT_KIND)))) return true;
+    /// **No guest code runs here.** `flint.system/boot` is a thunk, so this
+    /// takes its var's value and spawns it -- nothing is called. The native
+    /// runtime's first version called a flint function to build a closure over
+    /// the port, and that re-entered `Drive` from inside `Drive`: the nested
+    /// scheduler ran, found the boot flag already set, and the outer call came
+    /// back with nothing callable. The sandbox then tore itself down with no
+    /// message ever served, and the only visible symptom was "the call was
+    /// never answered".
+    ///
+    /// **Initialisers must have run**, because a var is nil until they have.
+    ///
+    /// Absent `flint.system` is NOT an error. A module built before this
+    /// existed has no control plane, and a sandbox nothing can call is a
+    /// coherent thing to be; failing here would make every old artifact
+    /// unloadable.
+    static void BootSystemThread(Rt rt) {
+        if (!rt.EnsureStarted()) return;
+        for (int i = 0; i < rt.varNames.Length; i++) {
+            if (Str.Text(rt, rt.consts[rt.varNames[i]]) != "flint.system/boot") continue;
+            long f = rt.roots.shared.Globals[i];
+            if (Val.IsNil(f) || !rt.IsHeapTy(f, Obj.TyClosure)) return;
+            Spawn(rt, f);
+            return;
         }
-        return false;
     }
 
-    public static long Drive(Rt rt) {
-        for (;;) {
-            // What the collector left behind IS the lifetime rule: a flint end
-            // that nothing refers to any more has been closed, whether or not
-            // anybody said so (`DECISIONS.md#host-abi`).
-            ReapPorts(rt);
-            int i = Pick(rt);
-            if (i >= 0) { RunOne(rt, i); continue; }
-            // The entry function's value IS the answer, so once it has returned
-            // and nothing else can run, the program is over -- whatever a
-            // service thread may still be parked on. Asking "does anything need
-            // the host?" first would keep a driver's reader alive for ever.
-            if (MainFinished(rt)) {
-                // Exit closes every flint end and leaves the events for one last
-                // drain, so a host never has to guess whether more is coming.
-                CloseAllBridges(rt);
-                if (PendingEvents(rt)) { rt.status = 2; return Val.Nil; }
-                rt.status = 0;
-                return MainResult(rt);
-            }
-            if (NeedsHost(rt)) { rt.status = 2; return Val.Nil; }
-            rt.status = 0;
+    /// THE ANSWER A SETTLED PROGRAM LEFT -- named to match native's
+    /// `settled_answer`, which is what `kin/sched.kin` calls. It was
+    /// `MainResult` here, from the model in which thread 0 was `main`.
+    public static long SettledAnswer(Rt rt) => MainResult(rt);
+
+    /// NAME THE DEADLOCK rather than hang on it. THREE implementations on
+    /// purpose: this builds a host string naming each stuck thread, and a
+    /// diagnostic message is the wrong thing to force through a generator.
+    public static void ReportDeadlock(Rt rt) {
             // Nothing runnable, nothing the host can help with: the remaining
             // threads are waiting on each other. NAMED rather than hung.
             long ts = rt.Slot(Sched(rt), SC_THREADS);
@@ -1979,9 +1912,11 @@ public static class Conc {
                 detail.Append("\n  thread ").Append(Fx(rt.Slot(th, TH_ID)))
                       .Append(" waiting on ").Append(what);
             }
-            return rt.ThrowStr("IllegalStateException",
+            rt.ThrowStr("IllegalStateException",
                 "deadlock: " + stuck + " green thread(s) are parked and nothing can wake them"
                 + detail);
-        }
     }
+
+    public static long Drive(Rt rt) =>
+        global::_3sln.Flint.Kgen.Rt.Sched.SchedDrive(rt);
 }

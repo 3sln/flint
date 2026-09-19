@@ -82,10 +82,42 @@ pub const C_BAIL_BAD_CALLEE: usize = 27;
 /// Call sites, and how many of them ever saw a second callee. An inline cache
 /// is only worth building if the answer is "almost none", and that is a
 /// measurement rather than a folk belief about Clojure.
-pub const C_SITES_SEEN: usize = 26;
-pub const C_SITES_POLY: usize = 27;
+///
+/// THESE WERE 26 AND 27, WHICH `C_BAIL_CALLS` AND `C_BAIL_BAD_CALLEE` ALREADY
+/// HELD. Both pairs were being written -- the bail counters from `aot.rs`, the
+/// site counters from `vm.rs` -- into the same two slots, so each number read
+/// back as the sum of two unrelated measurements. Found 2026-09-17 while adding
+/// the counter below; any past reading of those four is suspect.
+pub const C_SITES_SEEN: usize = 28;
+pub const C_SITES_POLY: usize = 29;
 
-pub static mut COUNTS: [u64; 28] = [0; 28];
+/// TOTAL GAS FLUSHED OUT OF COMPILED CODE, across every helper that takes a
+/// `gas` argument. `steps` is the sum of this and the interpreter's own ticks,
+/// so the pair decomposes a step count into "charged by a chunk" and "ticked by
+/// the interpreter" -- which is the one thing the event counters above cannot
+/// say, and the question `DECISIONS.md#emit-wasm-instead-of-dispatch`'s open
+/// `colls` row turns on.
+pub const C_AOT_GAS: usize = 30;
+
+/// THE SAME TOTAL, SPLIT BY EXIT. `C_AOT_GAS` says two units of gas go
+/// missing; these say WHICH door they left by. One counter per helper that
+/// takes a `gas` argument, in the order they appear in `aot.rs`.
+pub const C_GAS_NATIVE: usize = 31;
+pub const C_GAS_INTOP: usize = 32;
+pub const C_GAS_RETURN: usize = 33;
+pub const C_GAS_CALL: usize = 34;
+pub const C_GAS_BAIL: usize = 35;
+pub const C_GAS_TICK: usize = 36;
+/// And how many times each was taken, because a total that differs can differ
+/// by the charge or by the COUNT, and those want opposite fixes.
+pub const C_N_NATIVE: usize = 37;
+pub const C_N_INTOP: usize = 38;
+pub const C_N_RETURN: usize = 39;
+pub const C_N_CALL: usize = 40;
+pub const C_N_BAIL: usize = 41;
+pub const C_N_TICK: usize = 42;
+
+pub static mut COUNTS: [u64; 43] = [0; 43];
 
 /// Executed instructions by opcode. Which opcodes an emitter must handle inline
 /// is a distribution too, and guessing it is the same mistake as guessing the

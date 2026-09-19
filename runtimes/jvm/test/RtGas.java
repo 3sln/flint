@@ -29,6 +29,10 @@ public class RtGas {
     // one would compare a counted run against an uncounted one and call the
     // difference a parity gap.
     rt.setGasLimit(0x7ffffff0L);
+    // THESE ARE THE INITIALISERS, so say so: `ensureStarted` is the runtime's
+    // own one-shot runner, and a control plane spawned later would otherwise
+    // run them a second time.
+    rt.started = true;
     for (int fn : img.init) rt.call(rt.makeClosure(fn, new long[0]), new long[0]);
     long f = rt.makeClosure(img.entry, new long[0]);
     rt.runProgram(f, new long[]{ Val.NIL });
@@ -45,6 +49,7 @@ public class RtGas {
     // too small".
     Rt rt2 = new Rt(1024 * 1024, 64L * 1024 * 1024);
     Img.Loaded img2 = Img.load(rt2, Files.readAllBytes(Path.of(a[0])));
+    rt2.started = true;
     for (int fn : img2.init) rt2.call(rt2.makeClosure(fn, new long[0]), new long[0]);
     long limit = rt2.steps + spent / 4;
     rt2.setGasLimit(limit);

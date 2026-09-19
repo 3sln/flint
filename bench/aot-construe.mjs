@@ -73,7 +73,7 @@ for (const [name, args, desc] of WORK) {
 // the 1.2-1.34x measures is dispatch removal, which is what 0013 already had.
 try {
   const { module } = await load('out/cb-diag.wasm');
-  const NB = 20, NCOUNT = 28, OPS_AT = NB * 4 + NCOUNT;
+  const NB = 20, NCOUNT = 43, OPS_AT = NB * 4 + NCOUNT;
   const SPEC = [0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B];
   console.log();
   console.log('  how much of this reaches the specialised path at all:');

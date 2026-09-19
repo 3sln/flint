@@ -25,7 +25,8 @@
   And what it does NOT buy: a workspace holding `:host` can wrap `request` in a
   function of its own and hand that to anyone. Authority is not transitive in
   name and is entirely transitive in effect. A guard makes the set of workspaces
-  that ask DIRECTLY small and declared; it does not confine what they pass on.")
+  that ask DIRECTLY small and declared; it does not confine what they pass on."
+  (:require [flint.wire :as wire]))
 
 (defn ^{:flint/capabilities-guard [:host]} request
   "Ask the host for `what`, forwarding `args` verbatim, and return its answer.
@@ -42,8 +43,28 @@
   Anything in `args` that is an opaque value (`DECISIONS.md#opaque-values`) crosses
   carrying the host id it was ISSUED with, so a host recognises what it lent and
   nothing else. The runtime takes no view of what any of it means."
-  ([what] (flint.rt/request what))
-  ([what args] (flint.rt/request what args)))
+  ([what] (request what nil))
+  ([what args]
+   ;; BOTH HALVES ARE FLINT (`DECISIONS.md#the-codec-is-guest-code`). The
+   ;; payload `[what & args]` is written here, and the answer comes back as a
+   ;; live reader -- live meaning the bytes crossed the boundary -- which is
+   ;; read here too. The runtime neither writes nor reads the format.
+   ;;
+   ;; `[what]` for the no-args call and `[what args]` otherwise, which is the
+   ;; shape the host has always received: the builtin used to build it by
+   ;; collecting its own arguments, and a host that routes an `open` routes
+   ;; this the same way.
+   ;;
+   ;; A REFUSAL THROWS INSIDE THE BUILTIN, so there is no reader to read and
+   ;; nothing here has to distinguish one -- which is the same reason the
+   ;; runtime still wraps an answer: an answer may be any value at all, nil
+   ;; included, so "answered" cannot be read off the value.
+   ;; BOUND FIRST, THEN READ, which is how `flint.port/receive` does it and not
+   ;; a matter of taste: `flint.rt/request` PARKS, and a parking call sitting
+   ;; in an argument position is re-entered by the rewind with a partly built
+   ;; frame under it.
+   (let [r (flint.rt/request what (wire/encode (if (nil? args) [what] [what args])))]
+     (wire/read-from r))))
 
 (defn ^{:flint/capabilities-guard [:host]} ask
   "`request`, answering nil instead of throwing when the host refuses.
@@ -54,5 +75,10 @@
   here; if that matters, use `request` and read the exception."
   ([what] (ask what nil))
   ([what args]
-   (try (if (nil? args) (flint.rt/request what) (flint.rt/request what args))
+   ;; THROUGH `request`, NOT THE BUILTIN. It used to call `flint.rt/request`
+   ;; itself, which was harmless while the builtin took values and became a
+   ;; crash the moment it took an ENCODING: a one-argument call left the
+   ;; writer slot unread and the runtime indexed past the arguments it was
+   ;; given (`DECISIONS.md#the-codec-is-guest-code`).
+   (try (request what args)
         (catch SecurityException _ nil))))

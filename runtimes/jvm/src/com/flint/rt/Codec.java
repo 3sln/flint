@@ -25,6 +25,40 @@ import java.nio.charset.StandardCharsets;
 /// id plus its label, and guest code cannot mint that id (`flint/opaque` gives
 /// 0), so a host recognises its own grants and nothing else. That is the whole
 /// of the capability check, and it lives with the host rather than in here.
+///
+/// ---
+///
+/// **CORRECTION, 2026-09-19: the two paragraphs above describe a world that has
+/// moved, and the second one states a SECURITY argument that is no longer the
+/// one in force.** The prose is kept rather than rewritten, because the
+/// reasoning is still the reasoning -- only the mechanism changed.
+///
+/// **"`send` encodes and `hostDeliver` decodes, and both run in the RUNTIME"**
+/// is no longer true here. `Conc.java` does not reference `Codec` at all --
+/// zero occurrences -- and `hostDeliver` queues the host's bytes by LENGTH,
+/// with back-pressure, without decoding them. The codec that runs is
+/// `lib/flint/wire.cljc`, compiled into the image: guest code over runtime
+/// primitives (`DECISIONS.md#the-codec-is-guest-code`).
+///
+/// **"there is no builtin that encodes and none that decodes"** is false.
+/// `Builtins.java` defines twenty-seven `flint/wire-*` builtins and they run in
+/// both directions, `wire-port-in` and `wire-opaque-in` among them.
+///
+/// **The property those two sentences protect is still held, by a different
+/// mechanism, and it is worth knowing which.** A guest cannot turn its own
+/// bytes into a port because minting is gated on the READER'S PROVENANCE:
+/// `Wire.mayMint` (`Builtins.java:1091` and `:1103`) refuses a reader over
+/// bytes the program supplied and allows one over bytes that arrived on a
+/// bridge. That guard is GENERATED -- `Wirecore.wireMayMint`, one kin source
+/// for all three runtimes -- and it is asserted both ways at the unit level in
+/// `runtime/src/codec.rs` and end-to-end in `runtimes/conform/wire.cljc`.
+///
+/// **What is still live in this file**, measured rather than assumed: the `K_*`
+/// tag constants, which the `flint/wire-*` builtins read; and `encode`, whose
+/// only caller is the test harness `runtimes/jvm/test/RtHostReq.java:155`.
+/// `decode` has no caller anywhere in the repository. `decodeGuest` has none
+/// either and is retained ON PURPOSE -- the comment above it says why, and that
+/// is a decision, not an oversight.
 public final class Codec {
 
     public static final int K_NIL = 0, K_TRUE = 1, K_FALSE = 2, K_INT = 3,
@@ -39,10 +73,31 @@ public final class Codec {
         /// then each column's values in full before the next one starts.
         /// Row-major would be a vector of maps with extra steps and would lose
         /// exactly what the type is for.
-        K_TABLE = 18;
+        K_TABLE = 18,
+        /// A value WITH METADATA: the metadata, then the value.
+        ///
+        /// The same shape as `K_TAGGED`, and for the same reason -- one wrapper
+        /// tag rather than a metadata field on every type's encoding.
+        ///
+        /// WHAT REACHES HERE IS ALREADY THE ANSWER. `flint.port/for-the-wire`
+        /// asks `flint.protocols/WireMeta` which metadata should cross and
+        /// rebuilds the value carrying only that, so this encodes whatever it
+        /// is handed. The default is none, which is why most values never carry
+        /// this tag at all.
+        K_WITH_META = 19;
 
     /// `-1` means the namespace is ABSENT, which is not the same as empty.
-    static final int NO_NS = -1;
+    public static final int NO_NS = -1;
+
+    /// THE LARGEST COUNT ANY WIRE PRIMITIVE WILL TAKE, because it is what the
+    /// format WRITES: every count in the encoding is four little-endian bytes.
+    /// See `MAX_COUNT` in `runtime/src/codec.rs` for the hole this closes -- a
+    /// fixnum is 48 bits, so a larger count opens a frame that sign-extends
+    /// negative, and negative is the table's "a count is due here" marker.
+    static final long MAX_COUNT = 4294967295L;
+
+    /// A table's `ncols * nrows`, the one frame built by multiplying.
+    public static final long MAX_CELLS = 1L << 40;
 
     /// What went wrong, so a caller can say it in flint's terms.
     public static final class Refused extends RuntimeException {
@@ -71,6 +126,19 @@ public final class Codec {
 
     static void encodeInto(Rt rt, long v, ByteArrayOutputStream out, int depth) {
         if (depth > 128) throw new Refused("value nested too deeply to encode");
+        // METADATA FIRST, as a wrapper around whatever the value is. Whatever
+        // is still on the value here is what `for-the-wire` decided should
+        // cross, so there is no selection to make and no protocol to dispatch.
+        if (!Val.isNil(v)) {
+            long m = com._3sln.flint.kgen.rt.Meta.metaOf(rt, v);
+            if (!Val.isNil(m)) {
+                out.write(K_WITH_META);
+                encodeInto(rt, m, out, depth + 1);
+                // The value WITHOUT its metadata, or this recurses on itself.
+                encodeInto(rt, com._3sln.flint.kgen.rt.Meta.withMeta(rt, v, Val.NIL), out, depth + 1);
+                return;
+            }
+        }
         if (Val.isNil(v)) { out.write(K_NIL); return; }
         if (v == Val.TRUE) { out.write(K_TRUE); return; }
         if (v == Val.FALSE) { out.write(K_FALSE); return; }
@@ -286,6 +354,22 @@ public final class Codec {
                 return tag == K_KEYWORD ? Str.keyword(rt, ns, name) : Str.symbol(rt, ns, name);
             }
             case K_BYTES: return Bytes.of(rt, r.raw(r.u32()));
+            case K_WITH_META: {
+                // The metadata, then the value, then the two put together.
+                // ROOTED across the second decode: decoding allocates, and a
+                // Java local is not a root.
+                long m = decodeAt(rt, r, live, depth + 1);
+                int base = rt.mark();
+                int mi = rt.push(m);
+                long v2 = decodeAt(rt, r, live, depth + 1);
+                int vi = rt.push(v2);
+                // `withMeta` answers the value UNCHANGED for a kind that cannot
+                // carry metadata, which is the right failure: bytes claiming
+                // metadata for a number produce the number, not an error.
+                long outv = com._3sln.flint.kgen.rt.Meta.withMeta(rt, rt.r(vi), rt.r(mi));
+                rt.popTo(base);
+                return outv;
+            }
             case K_TAGGED: {
                 int base = rt.mark();
                 int ti = rt.push(decodeAt(rt, r, live, depth + 1));

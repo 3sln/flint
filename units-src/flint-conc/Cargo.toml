@@ -28,5 +28,13 @@ required-features = ["host-tools"]
 name = "hostports"
 required-features = ["host-tools"]
 
+# The REQUEST/RESPONSE half, same arrangement: a host that answers an
+# `EV_REQUEST`, which nothing else in the tree does
+# (`DECISIONS.md#the-codec-is-guest-code`). HOST-ONLY, or the wasm build tries
+# to compile a driver that links `std`.
+[[bin]]
+name = "hostreq"
+required-features = ["host-tools"]
+
 [dependencies]
 flint-rt = { path = "../../runtime" }

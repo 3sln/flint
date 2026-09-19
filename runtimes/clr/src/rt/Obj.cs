@@ -42,7 +42,23 @@ public static class Obj {
                      // shares its chunks, a row ref holds the chunk and not the
                      // table, and the transient writes into an open chunk.
                      TySchema = 48, TyTable = 49, TyTableref = 50, TyTtable = 51,
-                     TyMax = 52;
+                     // A WIRE WRITER: `[WR_BUF, WR_LIVE]`. An OPAQUE handle
+                     // around a transient byte string, and opaque is the whole
+                     // point (`DECISIONS.md#the-codec-is-guest-code`): the guest
+                     // appends through the `wire-*` primitives and cannot reach
+                     // the buffer, so it cannot write a `K_PORT` tag followed by
+                     // an id it does not hold. Not a value: no eq, no hash, no
+                     // kind.
+                     TyWriter = 52,
+                     // A WIRE READER: `[RD_BYTES, RD_POS, RD_LIVE]`. NOT the
+                     // writer's mirror image -- a reader may hand out integers
+                     // and strings freely, because reading bytes a guest holds
+                     // tells it nothing new. `RD_LIVE` guards the two MINTING
+                     // reads and is true only for bytes that arrived on a
+                     // bridge: the rule `decode_guest` enforced by refusing
+                     // tags, as a flag set in one place.
+                     TyReader = 53,
+                     TyMax = 54;
 
     /// The three layout classes. Prefixed `L` where the JVM writes `VALS`,
     /// `STR`, `RAW`: C#'s PascalCase would make the layout constant `Str`

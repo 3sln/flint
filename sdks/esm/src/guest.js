@@ -89,10 +89,20 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     if (!n) return [];
     const base = e.flint_events_ptr();
     const mem = new Uint8Array(e.memory.buffer);
-    const words = new Uint32Array(e.memory.buffer, base, n * 5);
+    // A DataView rather than a Uint32Array: `flint_events_ptr` is a Rust Vec's
+    // data pointer and carries no four-byte alignment guarantee, so a typed
+    // array over it throws -- `start offset should be a multiple of 4` -- for a
+    // reason that has nothing to do with the events in it. It only ever threw
+    // once the control plane started allocating before the first drain, which
+    // is what shifted the buffer off a word boundary; the hazard was there all
+    // along. `test/globalport.mjs` has read it this way from the start.
+    const dv = new DataView(e.memory.buffer, base, n * 20);
     const out = [];
     for (let i = 0; i < n; i++) {
-      const [kind, a, b, off, len] = words.subarray(i * 5, i * 5 + 5);
+      const at = i * 20;
+      const kind = dv.getUint32(at, true), a = dv.getUint32(at + 4, true);
+      const b = dv.getUint32(at + 8, true), off = dv.getUint32(at + 12, true);
+      const len = dv.getUint32(at + 16, true);
       const data = mem.slice(base + off, base + off + len);
       if (kind === 1) {
         // THE ARGUMENTS, decoded. The payload used to be a bare name; it is
@@ -159,7 +169,17 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
   }
 
   function toBytes(value) {
-    if (value instanceof Uint8Array) return value;
+    // A `Uint8Array` IS A VALUE, not an encoding, and it used to be treated as
+    // an encoding: `deliver` passed one straight through as if the host had
+    // encoded it itself. So a host that DECODED a byte string and handed it
+    // back -- the most ordinary thing an echo does -- shipped the bytes raw,
+    // the runtime read the first one as a tag, and the delivery was refused.
+    // `flint_deliver` answers 0 and says nothing, so the guest parked on a
+    // receive that would never arrive: a hang, from a round trip.
+    //
+    // There was never a reason for the shortcut. `deliverBytes` and
+    // `tryDeliverBytes` are the low-level road and take raw bytes by name; this
+    // one takes a VALUE, and a byte string is one.
     return (value instanceof Val ? value : codec.from(value)).encode();
   }
 
@@ -351,6 +371,8 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
   /// calls `install` itself first; this is idempotent because the handle is
   /// interned by id.
   const SYSTEM_PORT = 1;
+  /// The port calls travel on, bound once.
+  ///
   let systemInstalled = false;
   function ensureSystem() {
     if (systemInstalled) return;
@@ -371,53 +393,53 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     return true;
   }
 
-  /// Ask the module to run a function, BY NAME (`DECISIONS.md#structured-ports` step 5).
+  /// A CALLER: one bound port, and the calls made on it.
   ///
-  /// Nothing is called automatically. A call is a message on the system port:
-  /// `{:tx n :op :call :fn "ns/name" :args [...]}`, and the answer comes back on
-  /// the same port carrying the same `:tx`. The runtime runs it as a green
-  /// thread, so the called function may open a port and park and this host can
-  /// answer that while the call is still outstanding.
+  /// This is the shape the protocol already had, given a name. `:bind` hands
+  /// the control plane a port and it spawns ONE thread serving calls on it
+  /// (`DECISIONS.md#bridges-are-the-only-door`), so a caller is that thread's
+  /// queue: calls on one caller are serial, in arrival order, and concurrency
+  /// is had by taking a SECOND caller. The cost is visible rather than a thread
+  /// appearing per call.
+  ///
+  /// The object is sugar. Everything under it is a message on a port, and the
+  /// encoding helpers below are private on purpose -- there is no global
+  /// `call(sandbox, name)` to reach past it with.
   let nextTx = 1;
+  let nextCallPort = 2;
   const pending = new Map();
-  function call(name, args = []) {
-    // ONE PATH: THE SYSTEM PORT. A call in, a request out, and driving are all
-    // messages on it, which is what lets calls be distributed across a thread
-    // pool and what makes the sandbox boundary one thing rather than two.
-    //
-    // There used to be a second, synchronous path -- `flint_call`, chosen when
-    // the module had no system port -- and it was cheaper for a module that
-    // could not park: a pure module linked no scheduler at all. That saving is
-    // given up deliberately. `test/threads.clj` holds the budget it cost, and
-    // `DECISIONS.md#calls-are-ports` records the trade.
-    //
-    // The port is ensured rather than probed. It used to be installed only when
-    // something was served, so a module with no capabilities had none -- and
-    // now that this is the only route in, a sandbox without one could not be
-    // called at all.
-    ensureSystem();
-    const sysId = e.flint_system_port ? e.flint_system_port() : 0;
-    if (!sysId) throw new Error('flint: this sandbox has no system port, so it cannot be called');
-    const tx = nextTx++;
-    const bytes = codec.map([
+
+  /// The bind, as bytes. The port TRAVELS IN the message rather than being
+  /// installed first: installing it first is a race, because `drive` begins by
+  /// reaping and a port the host has installed but the guest has not referenced
+  /// yet is collected before the bind that would reference it is served.
+  function bindBytes(port) {
+    return codec.map([
+      [codec.kw('op'), codec.kw('bind')],
+      [codec.kw('port'), codec.port(port)],
+    ]).encode();
+  }
+
+  function callBytes(tx, name, args) {
+    return codec.map([
       [codec.kw('tx'), codec.int(tx)],
       [codec.kw('op'), codec.kw('call')],
       [codec.kw('fn'), codec.str(name)],
       [codec.kw('args'), codec.vec(args.map((a) => (a instanceof Val ? a : codec.from(a))))],
     ]).encode();
-    if (!tryDeliverBytes(sysId, bytes)) {
-      throw new Error('flint: the system port would not take the call');
-    }
+  }
+
+  /// Pump until THIS call is answered, not until the sandbox is idle.
+  ///
+  /// A sandbox does not "finish" any more. `main` used to be the end -- its
+  /// return tore everything down, "whatever a service thread may still be
+  /// parked on" -- and with it gone a sandbox is a thing you call, which may
+  /// keep threads alive between calls. An RPC client's reader thread is exactly
+  /// that: parked on a receive for ever, by design. Waiting for the whole
+  /// sandbox to settle would wait for something that is never coming.
+  function pumpFor(tx, name) {
     let answer;
     pending.set(tx, (m) => { answer = m; });
-    // PUMPED UNTIL THIS CALL IS ANSWERED, not until the sandbox is idle.
-    //
-    // A sandbox does not "finish" any more. `main` used to be the end -- its
-    // return tore everything down, "whatever a service thread may still be
-    // parked on" -- and with it gone a sandbox is a thing you call, which may
-    // keep threads alive between calls. An RPC client's reader thread is
-    // exactly that: parked on a receive for ever, by design. Waiting for the
-    // whole sandbox to settle would wait for something that is never coming.
     let guard = 0;
     let code = e.flint_resume();
     while (answer === undefined) {
@@ -428,8 +450,24 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
       if (code !== 2) break;
       code = e.flint_resume();
     }
-    if (answer === undefined) throw new Error(`flint: the call to ${name} was never answered`);
     pending.delete(tx);
+    if (answer === undefined) {
+      // THE SANDBOX MAY HAVE ENDED RATHER THAN GONE QUIET, and those are
+      // different things to tell somebody. A call that cannot be answered
+      // because the gate stopped the program has a REASON, and the runtime has
+      // already rendered it: status 1 is `finish_run` having written
+      // "Kind: message" into `OUT` (`DECISIONS.md#resource-limits`).
+      //
+      // Only on `code === 1`, because that is exactly when this run rendered
+      // it. `OUT` is cleared and rewritten per render, so reading it after any
+      // other status risks handing back a message from an earlier call.
+      if (code === 1) {
+        const rendered = dec.decode(
+          new Uint8Array(e.memory.buffer, e.out_ptr(), e.out_len()));
+        if (rendered) throw new Error(rendered);
+      }
+      throw new Error(`flint: the call to ${name} was never answered`);
+    }
     if (answer[':op'] === ':throw') {
       const err = new Error(`${answer[':kind']}: ${answer[':message']}`);
       err.kind = answer[':kind'];
@@ -441,6 +479,70 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
       throw err;
     }
     return answer[':value'];
+  }
+
+  /// Bind a port and hand back the caller that owns it.
+  ///
+  /// `caller()` is where a call comes from; there is no other route in. The
+  /// synchronous `flint_call` that used to serve one is gone on purpose
+  /// (`DECISIONS.md#calls-are-ports`) -- it was cheaper for a module that could
+  /// not park, and that saving is given up so that the boundary is one thing.
+  function caller() {
+    // The port is ensured rather than probed. It used to be installed only when
+    // something was served, so a module with no capabilities had none -- and
+    // now that this is the only route in, a sandbox without one could not be
+    // called at all.
+    ensureSystem();
+    const sysId = e.flint_system_port ? e.flint_system_port() : 0;
+    if (!sysId) throw new Error('flint: this sandbox has no system port, so it cannot be called');
+    const port = nextCallPort++;
+    if (!tryDeliverBytes(sysId, bindBytes(port))) {
+      throw new Error('flint: the system port would not take the bind');
+    }
+    // NOT PUMPED HERE. A port queues, so the first call is delivered behind the
+    // bind and waits for the thread the bind creates; the pump below serves
+    // both. Pumping here was worse than unnecessary: it waited for `code !== 2`,
+    // and a sandbox whose control plane is parked on its system port is ALWAYS
+    // 2 -- "needs the host" is the resting state, not progress left to make --
+    // so that loop span its guard out and gave up every time.
+    let open = true;
+    return {
+      port,
+      /// `call("ns/f", a, b)`. Variadic, because a caller's arguments are the
+      /// function's arguments; nothing here is a list of them.
+      call(name, ...args) {
+        if (!open) throw new Error('flint: this caller was closed');
+        const tx = nextTx++;
+        if (!tryDeliverBytes(port, callBytes(tx, name, args))) {
+          throw new Error('flint: the call port would not take the call');
+        }
+        return pumpFor(tx, name);
+      },
+      /// `:unbind`, which CLOSES the bound port: the call thread's `receive`
+      /// answers nil and its loop ends. A thread told to stop by the thing it
+      /// is parked on needs no second channel to be told on.
+      close() {
+        if (!open) return;
+        open = false;
+        tryDeliverBytes(sysId, codec.map([
+          [codec.kw('op'), codec.kw('unbind')],
+          [codec.kw('port'), codec.port(port)],
+        ]).encode());
+        e.flint_resume();
+        for (const ev of drain()) handle(ev);
+      },
+    };
+  }
+
+  /// One caller, made on first use, for hosts that only ever make one.
+  ///
+  /// `inst.call(name, argsArray)` is sugar over it and keeps the ARRAY
+  /// signature it has always had; `caller().call(name, ...args)` is the
+  /// explicit road and is variadic.
+  let theCaller = null;
+  function call(name, args = []) {
+    if (!theCaller) theCaller = caller();
+    return theCaller.call(name, ...args);
   }
 
   const api = {
@@ -471,6 +573,7 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     flush,
     pump,
     call,
+    caller,
     grant: (name, handler) => { capabilities[name] = handler; ensureSystem(); },
     capabilities: (m) => { capabilities = m; ensureSystem(); },
     /// Answer `(request "name" ..)` from the guest. `fn(args, name, api)`

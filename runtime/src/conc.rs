@@ -313,6 +313,7 @@ pub const EV_REQUEST: i64 = 6;
 /// and the same order of host events must give the same result every time.
 pub const SLICE: u64 = 4096;
 
+
 fn fx(v: Value) -> i64 {
     v.as_fixnum()
 }
@@ -523,7 +524,7 @@ impl Rt {
         self.roots.stack_top = 0;
     }
 
-    fn restore_state(&mut self, th: Value) {
+    pub fn restore_state(&mut self, th: Value) {
         let sv = self.slot(th, TH_STACK);
         self.frames.clear();
         self.handlers.clear();
@@ -650,13 +651,15 @@ impl Rt {
 
     // --- parking -----------------------------------------------------------
 
-    /// Signal a park. `park_on` is the wake key; `park_on_port` is what
-    /// registers the waiter that gives it a token.
-    pub fn park(&mut self, on: Value) -> Value {
-        self.park_on = on;
-        self.thrown = PARK;
-        NIL
-    }
+    // `park` AND `park_on_port` ARE GENERATED (`kin/sched.kin`) and are
+    // methods on `Rt` from there.
+    //
+    // A park is TWO WRITES: `park_on` says what is being waited for, so
+    // `needs_host` can tell a bridge from a channel; `thrown = PARK` is what
+    // unwinds every frame between the builtin and the top, exactly as a throw
+    // does. `park_on_port` registers the waiter FIRST and parks second, and
+    // puts the token on the thread so a wake can retire the waiter without
+    // searching for it.
 
     // --- spawning ----------------------------------------------------------
 
@@ -667,6 +670,7 @@ impl Rt {
     /// at three in the morning will assume. The snapshot is taken here: later
     /// `binding` in the spawner does not reach the child.
     pub fn spawn_thread(&mut self, f: Value) -> Value {
+
         // Rooted first: `ensure_sched` allocates, and `f` is a Rust local.
         let base = self.mark();
         let fi = self.push(f);
@@ -900,7 +904,11 @@ impl Rt {
         }
     }
 
-    pub(crate) fn system_port(&mut self) -> Value {
+    /// `pub`, not `pub(crate)`: `flint/system-port` is a BUILTIN, and the
+    /// builtin lives in the `flint-conc` unit crate. `flint.system/boot` is a
+    /// thunk that fetches the port rather than closing over it, which is why
+    /// the guest can reach this at all (`DECISIONS.md#bridges-are-the-only-door`).
+    pub fn system_port(&mut self) -> Value {
         let s = self.sched();
         if s.is_nil() {
             return NIL;
@@ -970,15 +978,15 @@ impl Rt {
     /// this feeds is on occupancy rather than on readability: a reserved slot
     /// is spoken for. A reader asks `port_dequeue`, which tells readable from
     /// reserved by the sequence word.
+    /// GENERATED (`kin/portring.kin`).
     fn inbox_count(&self, p: Value) -> u32 {
-        let w = self.cursor(p, PT_WRITE);
-        let r = self.cursor(p, PT_READ);
-        w.saturating_sub(r) as u32
+        self.ring_inbox_count(p)
     }
 
     #[inline]
+    /// GENERATED (`kin/portring.kin`).
     fn cursor(&self, p: Value, which: u32) -> u64 {
-        fx(self.slot_atomic(p, which)) as u64
+        self.ring_cursor(p, which) as u64
     }
 
     /// One slot, read atomically. Cursors and sequence words are fixnums like
@@ -986,7 +994,7 @@ impl Rt {
     /// operates on the tagged word, so a compare-and-swap compares tagged
     /// against tagged and never invents a value.
     #[inline]
-    fn slot_atomic(&self, o: Value, i: u32) -> Value {
+    pub fn slot_atomic(&self, o: Value, i: u32) -> Value {
         Value(self.gc.sp.atomic_load(crate::obj::slot_addr(o.as_heap(), i)))
     }
 
@@ -1003,7 +1011,7 @@ impl Rt {
     /// cannot run in between: the only safepoint is the interpreter's
     /// checkpoint, and there is not one here.
     #[inline]
-    fn cas_slot_barriered(&mut self, o: Value, i: u32, want: Value, next: Value) -> bool {
+    pub fn cas_slot_barriered(&mut self, o: Value, i: u32, want: Value, next: Value) -> bool {
         let obj = o.as_heap();
         if !self.gc.sp.cas(crate::obj::slot_addr(obj, i), want.0, next.0) {
             return false;
@@ -1015,7 +1023,7 @@ impl Rt {
     }
 
     #[inline]
-    fn cas_slot(&self, o: Value, i: u32, want: Value, next: Value) -> bool {
+    pub fn cas_slot(&self, o: Value, i: u32, want: Value, next: Value) -> bool {
         self.gc.sp.cas(crate::obj::slot_addr(o.as_heap(), i), want.0, next.0)
     }
 
@@ -1052,35 +1060,12 @@ impl Rt {
     /// to say WHICH slot to try next. It is a hint about order, not a claim on
     /// anything -- so a sender that loses the race for a slot simply advances,
     /// and who claimed it never mattered.
+    /// GENERATED (`kin/portring.kin`). Every message a sandbox receives goes
+    /// through this and its twin, and a divergence in either is a message
+    /// lost or delivered twice -- which the three copies agreed on only
+    /// because nothing ever ran them against each other.
     fn port_enqueue(&mut self, p: Value, v: Value) -> bool {
-        let ring = fx(self.slot(p, PT_RING)) as u64;
-        if ring == 0 {
-            return false;
-        }
-        let inbox = self.slot(p, PT_INBOX);
-        loop {
-            let w = self.cursor(p, PT_WRITE);
-            let r = self.cursor(p, PT_READ);
-            if w.saturating_sub(r) >= ring {
-                return false;
-            }
-            let idx = (w % ring) as u32;
-            // The cursor moves FIRST, so two senders reading the same `w` do
-            // not both sit on one slot: the loser sees `w + 1` next time round
-            // and tries the slot after it. Failing here is contention, not
-            // fullness, and the fullness test above is the only thing that says
-            // full.
-            if !self.cas_slot(p, PT_WRITE, Value::fixnum(w as i64), Value::fixnum(w as i64 + 1)) {
-                continue;
-            }
-            if self.cas_slot_barriered(inbox, idx, crate::value::EMPTY, v) {
-                return true;
-            }
-            // The slot still holds a message nobody has taken. The cursor has
-            // moved past it, which is correct -- it is not a slot to write --
-            // and the next turn of the loop tries the next one.
-            core::hint::spin_loop();
-        }
+        self.ring_enqueue(p, v)
     }
 
     /// Take the next message, or `NIL` when there is none.
@@ -1089,32 +1074,9 @@ impl Rt {
     /// in the same step that takes the value. A slot holding `EMPTY` under the
     /// read cursor means the ring is drained, because a slot is never claimed
     /// without being filled.
+    /// GENERATED (`kin/portring.kin`) -- see `port_enqueue`.
     fn port_dequeue(&mut self, p: Value) -> Value {
-        let ring = fx(self.slot(p, PT_RING)) as u64;
-        if ring == 0 {
-            return NIL;
-        }
-        let inbox = self.slot(p, PT_INBOX);
-        loop {
-            let r = self.cursor(p, PT_READ);
-            if r >= self.cursor(p, PT_WRITE) {
-                return NIL;
-            }
-            let idx = (r % ring) as u32;
-            let v = self.slot_atomic(inbox, idx);
-            if v.bits() == crate::value::EMPTY.bits() {
-                // Claimed by a sender that has not landed its swap yet. It is
-                // one instruction away; there is nothing here to take.
-                return NIL;
-            }
-            if !self.cas_slot(p, PT_READ, Value::fixnum(r as i64), Value::fixnum(r as i64 + 1)) {
-                continue;
-            }
-            if self.cas_slot_barriered(inbox, idx, v, crate::value::EMPTY) {
-                return v;
-            }
-            core::hint::spin_loop();
-        }
+        self.ring_dequeue(p)
     }
 
     // --- waiters and their tokens ------------------------------------------
@@ -1123,157 +1085,149 @@ impl Rt {
         self.slot(self.sched(), SC_WAITERS)
     }
 
-    /// Register a waiter for the current thread and return its token.
-    fn new_waiter(&mut self, kind: i64, port: Value) -> i64 {
-        let base = self.mark();
-        let pi = self.push(port);
-        let s = self.sched();
-        let si = self.push(s);
-        let free = fx(self.slot(self.r(si), SC_WFREE));
-        let th = self.current_thread();
-        let ti = self.push(th);
-        let (idx, w) = if free >= 0 {
-            let ws = self.slot(self.r(si), SC_WAITERS);
-            let w = self.vec_nth(ws, free as u32, NIL);
-            let next = fx(self.slot(w, W_NEXT));
-            self.set(self.r(si), SC_WFREE, Value::fixnum(next));
-            (free, w)
-        } else {
-            let w = self.new_obj(TY_NODE, W_LEN);
-            if w.is_nil() {
-                self.pop_to(base);
-                return -1;
-            }
-            let wi = self.push(w);
-            self.set(self.r(wi), W_GEN, Value::fixnum(0));
-            let ws = self.slot(self.r(si), SC_WAITERS);
-            let wsi = self.push(ws);
-            let wv = self.r(wi);
-            let nws = self.vec_conj(self.r(wsi), wv);
-            let idx = self.vec_count(nws) as i64 - 1;
-            self.set(self.r(si), SC_WAITERS, nws);
-            (idx, self.r(wi))
-        };
-        let wi = self.push(w);
-        let t = self.r(ti);
-        self.set(self.r(wi), W_THREAD, t);
-        self.set(self.r(wi), W_KIND, Value::fixnum(kind));
-        let pv = self.r(pi);
-        self.set(self.r(wi), W_PORT, pv);
-        let gen = fx(self.slot(self.r(wi), W_GEN));
-        self.pop_to(base);
-        // 1-based, so that 0 is never a valid token: a host ABI where the
-        // zero value means something is a trap waiting for an uninitialised
-        // variable.
-        (gen << 16) | (idx + 1)
-    }
+    // `new_waiter` IS GENERATED (`kin/sched.kin`) and is a method on `Rt`
+    // from there. It mints the token a host echoes back: `(gen << 16) | (idx
+    // + 1)`, with `+ 1` so that zero is never valid -- `TH_TOKEN` carries
+    // zero-meaning-absent, and a host ABI whose zero value means something is
+    // a trap waiting for an uninitialised variable.
 
-    fn waiter_at(&mut self, token: i64) -> Value {
-        if token <= 0 || (token & 0xFFFF) == 0 {
-            return NIL;
-        }
-        let idx = (token & 0xFFFF) as u32 - 1;
-        let gen = token >> 16;
-        let ws = self.waiters();
-        let w = self.vec_nth(ws, idx, NIL);
-        if w.is_nil() {
-            return NIL;
-        }
-        if fx(self.slot(w, W_GEN)) != gen || self.slot(w, W_THREAD).is_nil() {
-            return NIL;
-        }
-        w
-    }
-
-    /// Free a waiter slot and bump its generation, so a token naming it can
-    /// never be honoured twice.
-    fn free_waiter(&mut self, token: i64) {
-        let w = self.waiter_at(token);
-        if w.is_nil() {
+    /// Spawn the control plane, ONCE, and only when there is a door.
+    ///
+    /// `drive` asks every iteration because the system port may not exist yet
+    /// when the loop first runs -- a host installs it, and until it has there
+    /// is nothing for the control plane to serve. Answering "not yet" is
+    /// therefore normal rather than an error.
+    ///
+    /// **No guest code runs here.** `flint.system/boot` is a THUNK, so this
+    /// takes its var's value and spawns it -- nothing is called. The first
+    /// version called a flint function to build a closure over the port, and
+    /// that re-entered `drive` from inside `drive`: the nested scheduler ran,
+    /// found the boot flag already set, and the outer call came back with
+    /// nothing callable. The sandbox then tore itself down with no message
+    /// ever served, and the only visible symptom was "the call was never
+    /// answered" (`DECISIONS.md#bridges-are-the-only-door`).
+    ///
+    /// **Initialisers must have run**, because a var is nil until they have --
+    /// which is what `ensure_started` is for.
+    ///
+    /// ABSENT `flint.system` IS NOT AN ERROR. A module built before this
+    /// existed has no control plane, and a sandbox nothing can call is a
+    /// coherent thing to be; failing here would make every old artefact
+    /// unloadable.
+    pub fn boot_system_thread_once(&mut self) {
+        if self.system_booted {
             return;
         }
-        let idx = (token & 0xFFFF) - 1;
-        let gen = fx(self.slot(w, W_GEN));
-        self.set(w, W_GEN, Value::fixnum((gen + 1) & 0xFFFF));
-        self.set(w, W_THREAD, NIL);
-        self.set(w, W_PORT, NIL);
+        if self.system_port().is_nil() {
+            return;
+        }
+        self.system_booted = true;
+        if !self.ensure_started() {
+            return;
+        }
+        let idx = match self.var_named("flint.system/boot") {
+            Some(i) => i,
+            None => return,
+        };
+        let f = self
+            .roots
+            .shared
+            .globals
+            .get(idx as usize)
+            .map_or(NIL, |g| g.get());
+        if f.is_nil() || !self.is_callable(f) {
+            return;
+        }
+        self.spawn_thread(f);
+    }
+
+    /// END the current thread where it stands, taking its waiter with it.
+    ///
+    /// For the one case that is not an ordinary return: a top-level form asked
+    /// the host while the program was still initialising, so the stack it was
+    /// parked on is about to be cut back and nothing may try to resume it.
+    ///
+    /// THE WAITER IS THE HALF THAT ACTUALLY BIT. Marking the thread done is
+    /// not enough: `port_open` registered a waiter naming it, and the next
+    /// `host_deliver` or `host_continue` fires that waiter and puts the thread
+    /// back to RUNNABLE. It was observed doing exactly that -- DONE at the end
+    /// of one `drive`, RUNNABLE at the start of the next, with nothing in
+    /// between but the host delivering the bind.
+    pub fn abandon_current_thread(&mut self) {
         let s = self.sched();
-        let free = self.slot(s, SC_WFREE);
-        self.set(w, W_NEXT, free);
-        self.set(s, SC_WFREE, Value::fixnum(idx));
-    }
-
-    /// How many green threads are parked with a token outstanding. A host that
-    /// never answers leaks these; the deadlock report names them.
-    pub fn outstanding_waiters(&mut self) -> u32 {
-        let ws = self.waiters();
-        let n = self.vec_count(ws);
-        let mut c = 0;
-        for i in 0..n {
-            let w = self.vec_nth(ws, i, NIL);
-            if !w.is_nil() && !self.slot(w, W_THREAD).is_nil() {
-                c += 1;
-            }
+        if s.is_nil() {
+            return;
         }
-        c
-    }
-
-    // --- parking -----------------------------------------------------------
-
-    /// Park the current thread until `port` (or any other object used as a wake
-    /// key -- a thread, for `join`) makes it runnable, registering a waiter. The VM sees
-    /// `thrown == PARK` in the check it already makes after every native call,
-    /// rewinds to the call, and returns; resuming re-executes the call. A
-    /// parking builtin must therefore decide to park **before** it changes
-    /// anything.
-    fn park_on_port(&mut self, kind: i64, port: Value) -> Value {
-        let base = self.mark();
-        let pi = self.push(port);
-        let pv = self.r(pi);
-        let token = self.new_waiter(kind, pv);
-        let th = self.current_thread();
-        if !th.is_nil() {
-            self.set(th, TH_TOKEN, Value::fixnum(token));
-        }
-        let pv = self.r(pi);
-        self.pop_to(base);
-        self.park(pv)
-    }
-
-    fn wake_waiter(&mut self, w: Value) {
-        let th = self.slot(w, W_THREAD);
+        let ts = self.slot(s, SC_THREADS);
+        let i = fx(self.slot(s, SC_CURRENT)) as u32;
+        let th = self.vec_nth(ts, i, NIL);
         if th.is_nil() {
             return;
         }
-        self.set(th, TH_STATUS, Value::fixnum(ST_RUNNABLE));
+        self.set(th, TH_STATUS, Value::fixnum(ST_DONE));
+        self.set(th, TH_STACK, NIL);
+        self.set(th, TH_FRAMES, NIL);
         self.set(th, TH_PARK_ON, NIL);
         let token = fx(self.slot(th, TH_TOKEN));
-        self.set(th, TH_TOKEN, Value::fixnum(-1));
-        self.free_waiter(token);
-    }
-
-    /// Make every thread waiting on `p` runnable again. They re-execute the
-    /// call they parked in, which is what makes "wake" correct without anyone
-    /// having to reason about who gets the value: whoever runs first takes it,
-    /// and the others simply park again.
-    pub fn wake_on(&mut self, p: Value) {
-        let ws = self.waiters();
-        let n = self.vec_count(ws);
-        for i in 0..n {
-            let w = self.vec_nth(ws, i, NIL);
-            if w.is_nil() || self.slot(w, W_THREAD).is_nil() {
-                continue;
-            }
-            if self.slot(w, W_PORT).bits() == p.bits() {
-                self.wake_waiter(w);
-            }
+        if token >= 0 {
+            self.free_waiter(token);
+            self.set(th, TH_TOKEN, Value::fixnum(-1));
         }
     }
+
+    /// Install a thread's dynamic bindings as the live ones.
+    ///
+    /// One line, named by the vocabulary so `kin/sched.kin` can say it.
+    /// Bindings travel WITH the thread: `settle` saves them back.
+    pub fn install_bindings(&mut self, binds: Value) {
+        self.roots.shared.singletons[crate::rt::SING_BINDINGS] = binds;
+    }
+
+    /// Give the thread about to run a fresh turn.
+    ///
+    /// From the CURRENT step count, so every thread gets the same size turn
+    /// however long the last one ran.
+    pub fn begin_slice(&mut self) {
+        let at = self.steps + SLICE;
+        self.set_slice_end(at);
+    }
+
+    /// Empty the interpreter, for a thread that has no state to restore.
+    ///
+    /// All three stacks together: a NEW thread starts on a clean interpreter
+    /// or it inherits whatever the last one left behind.
+    pub fn reset_exec_state(&mut self) {
+        self.frames.clear();
+        self.handlers.clear();
+        self.roots.stack_top = 0;
+    }
+
+    // THE WAITER TABLE IS GENERATED (`kin/sched.kin`): `waiter_at`,
+    // `free_waiter` and `outstanding_waiters` are methods on `Rt` from there,
+    // and the call sites below are unchanged.
+    //
+    // `outstanding_waiters` GAINED A NIL-SCHEDULER GUARD in the move. Both
+    // ports had one and this copy did not, so nothing could say whether that
+    // was a missing guard or a dead branch; zero is what is true of a runtime
+    // that never made a scheduler, and the alternative is reaching into nil to
+    // find out.
+
+    // --- parking -----------------------------------------------------------
+
+    // `wake_on` AND `wake_waiter` ARE GENERATED (`kin/sched.kin`) and are
+    // methods on `Rt` from there; the call sites below are unchanged.
+    //
+    // `wake_on` wakes ALL threads parked on a port, not the first: a woken
+    // thread re-executes the operation it parked on and parks again if the
+    // queue is still full or empty, which is what makes the ring's `EMPTY`
+    // handshake safe to wake early. And `wake_waiter` frees the waiter AFTER
+    // clearing the thread's park -- `free_waiter` refuses a waiter whose
+    // thread is already nil, so the other order leaks a slot per wake.
 
     /// Wake everything parked on `p` with an error instead of a value. Used
     /// when the peer end has been collected: that receive can never succeed,
     /// and a hang is the worst possible way to say so.
-    fn fail_waiters_on(&mut self, p: Value, msg: &str) {
+    pub(crate) fn fail_waiters_on(&mut self, p: Value, msg: &str) {
         let base = self.mark();
         let pi = self.push(p);
         let ws = self.waiters();
@@ -1332,6 +1286,47 @@ impl Rt {
             Some(s) if !s.is_empty() => s.into(),
             _ => "an anonymous fn".into(),
         }
+    }
+
+    /// Check a batch of children that was collected into a HOST vector.
+    ///
+    /// **ROOTED BEFORE ANY OF THEM IS CHECKED, and that is the whole point.**
+    /// `map_for_each` and `set_for_each` cannot call back into
+    /// `check_sendable_at` -- the borrow is already held -- so the children are
+    /// gathered into a `Vec<Value>` first. That vector is HOST memory and no
+    /// root at all, and `check_sendable_at` allocates: it interns the strings
+    /// it walks past. So checking the first child moved every one still sitting
+    /// in the vector, and the second push handed the collector an address that
+    /// had already been forwarded.
+    ///
+    /// The sequential branch never had this because it re-derives `first` from
+    /// a rooted seq each time round. This does the same thing the only way a
+    /// batch can: push them all while they are still fresh -- nothing allocates
+    /// between the gather and the pushes -- and then read each one BACK out of
+    /// the shadow stack, which the collector updates.
+    ///
+    /// Caught by `test/document.clj`'s stale-pointer row, which exists because
+    /// `port_send` had the identical bug one level up and was fixed there.
+    fn check_each(
+        &mut self,
+        items: &[Value],
+        depth: u32,
+        carry: u8,
+    ) -> Result<(), alloc::string::String> {
+        let ibase = self.mark();
+        for it in items {
+            self.push(*it);
+        }
+        let mut out = Ok(());
+        for n in 0..items.len() {
+            let child = self.r(ibase + n);
+            out = self.check_sendable_at(child, depth + 1, carry);
+            if out.is_err() {
+                break;
+            }
+        }
+        self.pop_to(ibase);
+        out
     }
 
     fn check_sendable_at(
@@ -1440,26 +1435,12 @@ impl Rt {
                         st.push(k);
                         st.push(val);
                     });
-                    for it in items {
-                        let ii = self.push(it);
-                        out = self.check_sendable_at(self.r(ii), depth + 1, carry);
-                        self.pop_to(ii);
-                        if out.is_err() {
-                            break;
-                        }
-                    }
+                    out = self.check_each(&items, depth, carry);
                 } else if self.is_set(self.r(vi)) {
                     let mut items: Vec<Value> = Vec::new();
                     let mut st = &mut items;
                     self.set_for_each(self.r(vi), &mut st, &mut |_rt, k, st| st.push(k));
-                    for it in items {
-                        let ii = self.push(it);
-                        out = self.check_sendable_at(self.r(ii), depth + 1, carry);
-                        self.pop_to(ii);
-                        if out.is_err() {
-                            break;
-                        }
-                    }
+                    out = self.check_each(&items, depth, carry);
                 } else if self.is_sequential(self.r(vi)) {
                     let s = self.seq(self.r(vi));
                     let si = self.push(s);
@@ -1493,7 +1474,7 @@ fn scheduler(rt: &mut Rt, first: Value) -> Value {
 }
 
 /// Record the outcome of the thread that was running, and take it off.
-fn settle(rt: &mut Rt, result: Value) {
+pub fn settle(rt: &mut Rt, result: Value) {
     let th = rt.current_thread();
     if th.is_nil() {
         return;
@@ -1528,7 +1509,6 @@ fn settle(rt: &mut Rt, result: Value) {
         rt.frames.clear();
         rt.handlers.clear();
         rt.roots.stack_top = 0;
-        answer_if_call(rt, rt.r(ti), true);
     } else {
         let ri = rt.push(result);
         rt.set(rt.r(ti), TH_STATUS, Value::fixnum(ST_DONE));
@@ -1540,131 +1520,35 @@ fn settle(rt: &mut Rt, result: Value) {
         rt.frames.clear();
         rt.handlers.clear();
         rt.roots.stack_top = 0;
-        answer_if_call(rt, rt.r(ti), false);
     }
     rt.pop_to(base);
 }
 
-/// A thread that was answering a CALL sends its result back on the system port.
+// THE SCHEDULER'S PREDICATES ARE GENERATED (`kin/sched.kin`) and are methods
+// on `Rt`: `sched_pick`, `sched_pending_events`, `sched_needs_host` and
+// `sched_all_settled`. The four free-function wrappers that used to stand here
+// are gone with the hand-written `drive` that was their only caller -- a
+// wrapper whose whole body is one delegating call is drift waiting to happen,
+// and the vocabulary already names what `drive` calls.
+
+/// Enter a NEW thread's closure, with the interpreter already emptied.
 ///
-/// This is where "nothing is called automatically" gets its other half: a call
-/// arrives as a message, runs as a thread, and its answer leaves as a message
-/// carrying the same `:tx`. A thread nobody asked for -- an ordinary `spawn` --
-/// has `TH_TX` of -1 and says nothing.
-fn answer_if_call(rt: &mut Rt, th: Value, threw: bool) {
-    let tx = fx(rt.slot(th, TH_TX));
-    if tx < 0 {
-        return;
-    }
-    // Cleared FIRST, so a thread cannot answer twice however it is settled
-    // again.
-    rt.set(th, TH_TX, Value::fixnum(-1));
-    let r = rt.slot(th, TH_RESULT);
-    rt.answer_call(tx, r, threw);
+/// `TH_ARGS` IS NOT PASSED, and that is not an omission: it is only ever
+/// written NIL, on both paths that create a thread. It is vestigial, from
+/// before a call carried its arguments on the thread object -- the control
+/// plane is flint now and `flint.system/serve` applies the arguments itself
+/// (`DECISIONS.md#bridges-are-the-only-door`). Neither port has the slot at
+/// all, which is how it was noticed.
+pub fn run_entry(rt: &mut Rt, f: Value) -> Value {
+    rt.run_thread_entry(f, NIL)
 }
 
-/// Round-robin from just after the current thread. Deterministic by
-/// construction: no randomness, no clock, no host-order dependence beyond the
-/// order in which the host actually answers.
-fn pick(rt: &mut Rt) -> Option<u32> {
-    let s = rt.sched();
-    let ts = rt.slot(s, SC_THREADS);
-    let n = rt.vec_count(ts);
-    if n == 0 {
-        return None;
-    }
-    let cur = fx(rt.slot(s, SC_CURRENT)) as u32;
-    for k in 1..=n {
-        let i = (cur + k) % n;
-        let th = rt.vec_nth(ts, i, NIL);
-        if th.is_nil() {
-            continue;
-        }
-        let st = fx(rt.slot(th, TH_STATUS));
-        if st == ST_NEW || st == ST_RUNNABLE {
-            return Some(i);
-        }
-    }
-    None
-}
-
-/// Anything the host has not taken yet.
-fn pending_events(rt: &mut Rt) -> bool {
-    let s = rt.sched();
-    let evs = rt.slot(s, SC_EVENTS);
-    let head = fx(rt.slot(s, SC_EHEAD)) as u32;
-    rt.vec_count(evs) > head
-}
-
-fn needs_host(rt: &mut Rt) -> bool {
-    if pending_events(rt) {
-        return true;
-    }
-    let s = rt.sched();
-    let ts = rt.slot(s, SC_THREADS);
-    let n = rt.vec_count(ts);
-    for i in 0..n {
-        let th = rt.vec_nth(ts, i, NIL);
-        if th.is_nil() {
-            continue;
-        }
-        if fx(rt.slot(th, TH_STATUS)) == ST_PARKED {
-            let on = rt.slot(th, TH_PARK_ON);
-            if rt.is_port(on) && crosses_a_heap(fx(rt.slot(on, PT_KIND))) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn run_one(rt: &mut Rt, i: u32) {
-    let s = rt.sched();
-    rt.set(s, SC_CURRENT, Value::fixnum(i as i64));
-    let ts = rt.slot(s, SC_THREADS);
-    let th = rt.vec_nth(ts, i, NIL);
-    if th.is_nil() {
-        return;
-    }
-    let base = rt.mark();
-    let ti = rt.push(th);
-    let st = fx(rt.slot(rt.r(ti), TH_STATUS));
-    let binds = rt.slot(rt.r(ti), TH_BINDINGS);
-    rt.roots.shared.singletons[crate::rt::SING_BINDINGS] = binds;
-    let at = rt.steps + SLICE;
-    rt.set_slice_end(at);
-    let v = if st == ST_NEW {
-        rt.frames.clear();
-        rt.handlers.clear();
-        rt.roots.stack_top = 0;
-        let f = rt.slot(rt.r(ti), TH_ENTRY);
-        let a = rt.slot(rt.r(ti), TH_ARGS);
-        rt.set(rt.r(ti), TH_STATUS, Value::fixnum(ST_RUNNABLE));
-        rt.set(rt.r(ti), TH_ENTRY, NIL);
-        rt.set(rt.r(ti), TH_ARGS, NIL);
-        rt.run_thread_entry(f, a)
-    } else {
-        let t = rt.r(ti);
-        rt.restore_state(t);
-        rt.set(rt.r(ti), TH_STACK, NIL);
-        let fail = rt.slot(rt.r(ti), TH_FAIL);
-        if fail.is_nil() {
-            rt.run(0)
-        } else {
-            // Raised here, in the thread it concerns, rather than in whichever
-            // thread noticed the port had gone. `try` in this thread can catch
-            // it like any other error.
-            rt.set(rt.r(ti), TH_FAIL, NIL);
-            rt.thrown = fail;
-            if rt.unwind_from_resume() {
-                rt.run(0)
-            } else {
-                NIL
-            }
-        }
-    };
-    rt.pop_to(base);
-    settle(rt, v);
+pub fn run_one(rt: &mut Rt, i: u32) {
+    // GENERATED (`kin/sched.kin`). The last part of the scheduler that was
+    // written three times, and the one whose cost is BILLED TO THE PROGRAM:
+    // gas is charged per interpreter step, so three implementations of the
+    // resume path are three prices for running the same code.
+    rt.sched_run_one(i);
 }
 
 /// Is the program over?
@@ -1679,7 +1563,7 @@ fn run_one(rt: &mut Rt, i: u32) {
 /// keeps the whole program alive for ever, which is the bug this replaced.
 /// The answer the thread a host started left behind: its value, or its error
 /// put back on `rt.thrown` where the boundary looks for it.
-fn settled_answer(rt: &mut Rt) -> Value {
+pub fn settled_answer(rt: &mut Rt) -> Value {
     let s = rt.sched();
     if s.is_nil() {
         return NIL;
@@ -1697,33 +1581,6 @@ fn settled_answer(rt: &mut Rt) -> Value {
     r
 }
 
-/// Has every thread finished, one way or another?
-///
-/// This is what "the sandbox has nothing left to do" means now that there is no
-/// entry function. A thread still PARKED is not settled -- something may yet
-/// wake it -- and `needs_host` has already been asked, so a park nobody can
-/// answer falls through to the deadlock report below.
-fn all_threads_settled(rt: &mut Rt) -> bool {
-    let s = rt.sched();
-    if s.is_nil() {
-        return true;
-    }
-    let ts = rt.slot(s, SC_THREADS);
-    let n = rt.vec_count(ts);
-    for i in 0..n {
-        let th = rt.vec_nth(ts, i, NIL);
-        if th.is_nil() {
-            continue;
-        }
-        let st = fx(rt.slot(th, TH_STATUS));
-        if st != ST_DONE && st != ST_FAILED {
-            return false;
-        }
-    }
-    true
-}
-
-
 /// The main loop, also re-entered from the host's `resume`.
 /// Re-enter the scheduler after the host has answered.
 ///
@@ -1739,105 +1596,75 @@ pub fn resume(rt: &mut Rt) -> Value {
     drive(rt)
 }
 
-pub fn drive(rt: &mut Rt) -> Value {
-    loop {
-        // What the collector left behind is the lifetime rule: a flint end that
-        // nothing refers to any more has been closed, whether or not anybody
-        // said so (DECISIONS.md#host-abi).
-        rt.reap_ports();
-        match pick(rt) {
-            Some(i) => run_one(rt, i),
-            None => {
-                // THE HOST FIRST, because there is no entry function whose
-                // return means "the program is over".
-                //
-                // It used to be the other way round: thread 0 was `main`, its
-                // value was the answer, and once it had returned everything else
-                // was torn down "whatever a service thread may still be parked
-                // on". With `main` gone (`DECISIONS.md#structured-ports` step 5) a sandbox
-                // is a thing the host CALLS, and the only reason to stop is that
-                // nothing can proceed. Asking `main_finished` first here closed
-                // the system port out from under a call that had just parked on
-                // an `open` -- the grant then arrived for a port that was
-                // already gone, and the guest saw its own capability refused.
-                if needs_host(rt) {
-                    rt.status = 2;
-                    return NIL;
-                }
-                // Nothing runnable and nothing outstanding: the sandbox has run
-                // out of work. Close the bridges and leave the events for one
-                // last drain, so a host is never left guessing whether more is
-                // coming.
-                if all_threads_settled(rt) {
-                    rt.close_all_bridges();
-                    if pending_events(rt) {
-                        rt.status = 2;
-                        return NIL;
+/// NAME the deadlock rather than hang on it.
+///
+/// Lifted out of `drive` when the loop became generated (`kin/sched.kin`) and
+/// left HAND-WRITTEN ON PURPOSE: it builds a host string naming each stuck
+/// thread and what it is waiting on, and a diagnostic message is the wrong
+/// thing to force through a generator. One vocabulary entry, three
+/// implementations, and nothing about the ORDER -- which is the part that was
+/// worth generating -- lives here.
+pub fn report_deadlock(rt: &mut Rt) {
+    // Nothing runnable, nothing the host can help with: the
+    // remaining threads are waiting on each other.
+    let s = rt.sched();
+    let ts = rt.slot(s, SC_THREADS);
+    let n = rt.vec_count(ts);
+    let mut stuck = 0;
+    let mut detail = alloc::string::String::new();
+    for i in 0..n {
+        let th = rt.vec_nth(ts, i, NIL);
+        if th.is_nil() {
+            continue;
+        }
+        let st = fx(rt.slot(th, TH_STATUS));
+        if st == ST_PARKED {
+            stuck += 1;
+            let on = rt.slot(th, TH_PARK_ON);
+            let what = if rt.is_port(on) {
+                let mut b = crate::rt::sbuf();
+                let l = rt.slot(on, PT_LABEL);
+                let lab: alloc::string::String =
+                    rt.as_str(l, &mut b).unwrap_or("").into();
+                alloc::format!(
+                    "port {}{}",
+                    fx(rt.slot(on, PT_ID)),
+                    if lab.is_empty() {
+                        alloc::string::String::new()
+                    } else {
+                        alloc::format!(" {lab:?}")
                     }
-                    rt.status = 0;
-                    // WHAT THE CALLING THREAD LEFT BEHIND.
-                    //
-                    // `settle` records a thread's answer -- and its error -- ON
-                    // THE THREAD, which is what makes a green thread joinable
-                    // rather than a crash. A caller reaching in from outside,
-                    // through `run_program` or `call_named`, has to be handed
-                    // both back or it sees a successful call returning nil.
-                    // `main_result` used to do this and went with `main`.
-                    return settled_answer(rt);
-                }
-                rt.status = 0;
-                {
-                    // Nothing runnable, nothing the host can help with: the
-                    // remaining threads are waiting on each other.
-                    let s = rt.sched();
-                    let ts = rt.slot(s, SC_THREADS);
-                    let n = rt.vec_count(ts);
-                    let mut stuck = 0;
-                    let mut detail = alloc::string::String::new();
-                    for i in 0..n {
-                        let th = rt.vec_nth(ts, i, NIL);
-                        if th.is_nil() {
-                            continue;
-                        }
-                        let st = fx(rt.slot(th, TH_STATUS));
-                        if st == ST_PARKED {
-                            stuck += 1;
-                            let on = rt.slot(th, TH_PARK_ON);
-                            let what = if rt.is_port(on) {
-                                let mut b = crate::rt::sbuf();
-                                let l = rt.slot(on, PT_LABEL);
-                                let lab: alloc::string::String =
-                                    rt.as_str(l, &mut b).unwrap_or("").into();
-                                alloc::format!(
-                                    "port {}{}",
-                                    fx(rt.slot(on, PT_ID)),
-                                    if lab.is_empty() {
-                                        alloc::string::String::new()
-                                    } else {
-                                        alloc::format!(" {lab:?}")
-                                    }
-                                )
-                            } else if rt.is_thread(on) {
-                                alloc::format!("thread {}", fx(rt.slot(on, TH_ID)))
-                            } else {
-                                "something".into()
-                            };
-                            detail.push_str(&alloc::format!(
-                                "\n  thread {} waiting on {}",
-                                fx(rt.slot(th, TH_ID)),
-                                what
-                            ));
-                        }
-                    }
-                    let msg = alloc::format!(
-                        "deadlock: {stuck} green thread(s) are parked and nothing can wake them{detail}"
-                    );
-                    rt.throw_str("IllegalStateException", &msg);
-                }
-                return NIL;
-            }
+                )
+            } else if rt.is_thread(on) {
+                alloc::format!("thread {}", fx(rt.slot(on, TH_ID)))
+            } else {
+                "something".into()
+            };
+            detail.push_str(&alloc::format!(
+                "\n  thread {} waiting on {}",
+                fx(rt.slot(th, TH_ID)),
+                what
+            ));
         }
     }
+    let msg = alloc::format!(
+        "deadlock: {stuck} green thread(s) are parked and nothing can wake them{detail}"
+    );
+    rt.throw_str("IllegalStateException", &msg);
+}
+
+/// THE SCHEDULER LOOP. GENERATED (`kin/sched.kin`), and the ORDER is why.
+///
+/// Run whatever is runnable; when nothing is, decide what that means. The
+/// three runtimes answered that in a different ORDER for long enough to
+/// matter: asking "has the program finished?" before "does anything need the
+/// host?" closes the system port out from under a call that has just parked
+/// on an `open`, and the grant then arrives for a port that is already gone
+/// (`DECISIONS.md#the-codec-is-guest-code`). Native was fixed and both ports
+/// kept the superseded order, comment and all, because an order written three
+/// times is three orders.
+pub fn drive(rt: &mut Rt) -> Value {
+    rt.sched_drive()
 }
 
 
@@ -1890,7 +1717,7 @@ impl Rt {
 
     /// Append an outbound event. `payload` is a string whose bytes the host will
     /// read; the drain copies them into one contiguous buffer.
-    fn push_event(&mut self, kind: i64, a: i64, b: i64, payload: Value) {
+    pub(crate) fn push_event(&mut self, kind: i64, a: i64, b: i64, payload: Value) {
         let base = self.mark();
         let pi = self.push(payload);
         let v = self.empty_vec();
@@ -1942,34 +1769,63 @@ impl Rt {
         let pi = self.push(p);
         let vi = self.push(v);
         let kind = fx(self.slot(self.r(pi), PT_KIND));
-        let carry = if crosses_a_heap(kind) { CARRY_CROSSING } else { CARRY_LOCAL };
-        if let Err(e) = self.check_sendable_via(self.r(vi), carry) {
+        // A WRITER IS AN ENCODING, NOT A VALUE, so it is not walked: there is
+        // nothing in it to check, and `check_sendable` would refuse the type it
+        // does not know (`DECISIONS.md#the-codec-is-guest-code`).
+        let writer = self.is_writer(self.r(vi));
+        if writer && !crosses_a_heap(kind) {
             self.pop_to(base);
-            return self.throw_str("IllegalArgumentException", &e);
+            return self.throw_str(
+                "IllegalArgumentException",
+                "send: a wire writer is an encoding, and a channel carries values -- \
+                 send the value itself, or send this on a bridge",
+            );
+        }
+        let carry = if crosses_a_heap(kind) { CARRY_CROSSING } else { CARRY_LOCAL };
+        if !writer {
+            if let Err(e) = self.check_sendable_via(self.r(vi), carry) {
+                self.pop_to(base);
+                return self.throw_str("IllegalArgumentException", &e);
+            }
         }
         if crosses_a_heap(kind) {
-            // ENCODING HAPPENS HERE, ALWAYS, AND ONLY HERE.
+            // THE ENCODING ARRIVES ALREADY WRITTEN. It is the GUEST that wrote
+            // it (`DECISIONS.md#the-codec-is-guest-code`): `flint.port/send`
+            // builds a writer, fills it and hands it over, and the runtime
+            // carries the bytes without ever holding an encoder.
             //
-            // A bridge carries bytes, and the runtime is what writes them. The
-            // guest hands over a VALUE and is handed one back; it never sees an
-            // encoding, has no encoder, and cannot choose one. That is not a
-            // convenience -- `codec.rs` states the safety rule it enforces: a
-            // decoder reachable from the guest would be an encoder read
-            // backwards, and since `K_PORT` and `K_SENTINEL` carry their
-            // identity inline as integers a guest can write, such a guest could
-            // mint any host id it liked. An opaque value's whole meaning is that
-            // it cannot.
-            match self.encode(self.r(vi)) {
-                Ok(b) => {
-                    let bv = self.new_bytes(&b);
-                    self.set_r(vi, bv);
-                }
-                Err(e) => {
-                    self.pop_to(base);
-                    let msg = alloc::format!("send: this cannot cross a bridge: {e}");
-                    return self.throw_str("IllegalArgumentException", &msg);
-                }
+            // That is the direction the safety rule runs in. A DECODER
+            // reachable from the guest would be an encoder read backwards, and
+            // since `K_PORT` and `K_SENTINEL` carry their identity inline as
+            // integers a guest can write, such a guest could mint any host id
+            // it liked. The guest writes; only `wirescan` mints, and only for
+            // bytes that actually arrived over a bridge.
+            if !writer {
+                self.pop_to(base);
+                return self.throw_str(
+                    "ClassCastException",
+                    "send: a bridge carries an encoding -- use `flint.port/send`, which \
+                     writes one, rather than the builtin with a bare value",
+                );
             }
+            // STRUCTURALLY COMPLETE, OR IT DOES NOT GO: `wire-vec 3` with two
+            // values emitted is a message no reader can read, and shipping it
+            // reports the fault at the end that did not commit it.
+            if !self.wire_complete(self.r(vi)) {
+                self.pop_to(base);
+                return self.throw_str(
+                    "IllegalStateException",
+                    "send: this encoding is unfinished -- a container was opened and \
+                     not filled",
+                );
+            }
+            let wv = self.r(vi);
+            let enc = self.wire_finish(wv);
+            if enc.is_nil() {
+                self.pop_to(base);
+                return self.throw_str("IllegalStateException", "send: this encoding is empty");
+            }
+            self.set_r(vi, enc);
             // Bound the queue in BYTES: back-pressure exists to bound memory,
             // and one 4 MB message is not one message's worth of it.
             //
@@ -2066,6 +1922,33 @@ impl Rt {
         let pv = self.r(pi);
         self.pop_to(base);
         self.park(pv)
+    }
+
+    /// Receive on a BRIDGE as a live reader, for a guest that decodes itself.
+    ///
+    /// Not a second way to receive: `flint.port/receive` uses this on a bridge
+    /// and `port-receive` on a channel, because a channel carries VALUES and
+    /// has no encoding to read.
+    ///
+    /// NIL FOR END OF STREAM, exactly as `port_receive` answers it -- and a
+    /// non-bytes value passes straight through, so a channel reaching here by
+    /// mistake answers what it holds rather than a reader over nothing.
+    ///
+    /// THE READER MAY MINT. These are bytes that arrived over a bridge, which
+    /// is the whole of what `RD_LIVE` distinguishes: a reader built over bytes
+    /// the guest already had must not be able to conjure a port
+    /// (`DECISIONS.md#the-codec-is-guest-code`).
+    pub fn port_receive_reader(&mut self, p: Value) -> Value {
+        let v = self.port_receive(p);
+        if v.is_nil() || !self.is_bytes(v) {
+            return v;
+        }
+        let base = self.mark();
+        let vi = self.push(v);
+        let vv = self.r(vi);
+        let out = self.wire_reader(vv, true);
+        self.pop_to(base);
+        out
     }
 
     pub fn port_receive(&mut self, p: Value) -> Value {
@@ -2245,37 +2128,31 @@ impl Rt {
         self.set(t, TH_PENDING, Value::fixnum(0));
         // THE ARGUMENTS, ENCODED, are the payload -- not a bare name string.
         // That is the whole of "the host does what it wants with them": one
-        // value crosses, the host decodes it, and anything an opaque value
-        // carries (`K_SENTINEL` plus the id the host issued) survives the trip
-        // because `codec.rs` already knew how to write one down.
-        let mut call: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
-        {
-            let v = self.empty_vec();
-            let vi = self.push(v);
-            let nm = self.r(ni);
-            let nv = self.vec_conj(self.r(vi), nm);
-            self.set_r(vi, nv);
-            let a = self.r(ai);
-            let n = if self.is_vector(a) { self.vec_count(a) } else { 0 };
-            for k in 0..n {
-                let x = self.vec_nth(self.r(ai), k, NIL);
-                let xi = self.push(x);
-                let nv = self.vec_conj(self.r(vi), self.r(xi));
-                self.set_r(vi, nv);
-                self.pop_to(xi);
-            }
-            // A value the codec refuses is the program's error, not the host's:
-            // say so here rather than sending something the host cannot read.
-            match self.encode(self.r(vi)) {
-                Ok(b) => call = b,
-                Err(e) => {
-                    self.pop_to(base);
-                    let msg = alloc::format!("open: this cannot be sent to the host: {e}");
-                    return self.throw_str("IllegalArgumentException", &msg);
-                }
-            }
+        // value crosses, and anything an opaque value carries survives the trip
+        // because the format already knew how to write one down.
+        //
+        // ENCODED BY THE GUEST (`DECISIONS.md#the-codec-is-guest-code`).
+        // `flint.port/open` writes `[name ...args]` with `flint.wire` and hands
+        // the writer in; this checks it is finished and takes its bytes. The
+        // runtime holds no encoder, which is the direction the safety rule runs
+        // in -- a decoder reachable from the guest would be an encoder read
+        // backwards, and `K_PORT`/`K_SENTINEL` carry their identity inline.
+        if !self.wire_complete(self.r(ai)) {
+            self.pop_to(base);
+            return self.throw_str(
+                "IllegalStateException",
+                "open: this encoding is unfinished -- a container was opened and not filled",
+            );
         }
-        let payload = self.new_bytes(&call);
+        let av = self.r(ai);
+        let payload = self.wire_finish(av);
+        if payload.is_nil() {
+            self.pop_to(base);
+            return self.throw_str(
+                "IllegalStateException",
+                "open: this encoding has already been sent",
+            );
+        }
         let pi = self.push(payload);
         let sys_id = fx(self.slot(self.r(si), PT_ID));
         let pv = self.r(pi);
@@ -2319,9 +2196,21 @@ impl Rt {
             // the way `port_open` reads it off `is_port` -- a host answering nil
             // and a host refusing would be the same bits.
             if self.is_vector(pending) {
-                let v = self.vec_nth(pending, 0, NIL);
+                // THE ANSWER'S BYTES, AS A LIVE READER. The guest decodes it --
+                // `flint.host/request` calls `flint.wire/read-from`. LIVE
+                // because these bytes came from the host across the boundary,
+                // which is the one place minting is allowed
+                // (`DECISIONS.md#the-codec-is-guest-code`).
+                let b = if self.vec_count(pending) > 0 {
+                    self.vec_nth(pending, 0, NIL)
+                } else {
+                    NIL
+                };
+                let bi = self.push(b);
+                let bv = self.r(bi);
+                let out = self.wire_reader(bv, true);
                 self.pop_to(base);
-                return v;
+                return out;
             }
             let mut b = crate::rt::sbuf();
             let n: alloc::string::String = self.as_str(self.r(ni), &mut b).unwrap_or("?").into();
@@ -2349,34 +2238,25 @@ impl Rt {
         self.set(t, TH_TOKEN, Value::fixnum(token));
         let t = self.r(ti);
         self.set(t, TH_PENDING, Value::fixnum(0));
-        // `[what & args]`, encoded -- the same payload shape `port_open` sends,
-        // so a host that already routes one routes the other.
-        let mut call: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
-        {
-            let v = self.empty_vec();
-            let vi = self.push(v);
-            let nm = self.r(ni);
-            let nv = self.vec_conj(self.r(vi), nm);
-            self.set_r(vi, nv);
-            let a = self.r(ai);
-            let n = if self.is_vector(a) { self.vec_count(a) } else { 0 };
-            for k in 0..n {
-                let x = self.vec_nth(self.r(ai), k, NIL);
-                let xi = self.push(x);
-                let nv = self.vec_conj(self.r(vi), self.r(xi));
-                self.set_r(vi, nv);
-                self.pop_to(xi);
-            }
-            match self.encode(self.r(vi)) {
-                Ok(b) => call = b,
-                Err(e) => {
-                    self.pop_to(base);
-                    let msg = alloc::format!("request: this cannot be sent to the host: {e}");
-                    return self.throw_str("IllegalArgumentException", &msg);
-                }
-            }
+        // `[what & args]`, ENCODED BY THE GUEST -- the same payload shape
+        // `port_open` sends, so a host that routes one routes the other, and
+        // written the same way it is (`DECISIONS.md#the-codec-is-guest-code`).
+        if !self.wire_complete(self.r(ai)) {
+            self.pop_to(base);
+            return self.throw_str(
+                "IllegalStateException",
+                "request: this encoding is unfinished -- a container was opened and not filled",
+            );
         }
-        let payload = self.new_bytes(&call);
+        let av = self.r(ai);
+        let payload = self.wire_finish(av);
+        if payload.is_nil() {
+            self.pop_to(base);
+            return self.throw_str(
+                "IllegalStateException",
+                "request: this encoding has already been sent",
+            );
+        }
         let pi = self.push(payload);
         let sys_id = fx(self.slot(self.r(si), PT_ID));
         let pv = self.r(pi);
@@ -2386,10 +2266,46 @@ impl Rt {
         self.park(target)
     }
 
+    /// Walk an encoding and MINT EVERY PORT IN IT, answering them as a vector.
+    ///
+    /// NIL when the encoding cannot be read, which is how a malformed message
+    /// stays refused at the boundary rather than arriving as something else.
+    /// The WALK is `kin/wirescan.kin`; this is the `&[u8]`-shaped door to it,
+    /// and the door is what stays per-runtime.
+    ///
+    /// MINTING HAS TO HAPPEN HERE even though decoding does not: a port must
+    /// exist before anything can be delivered on it, and a host binds a port
+    /// and calls on it without pumping in between, deliberately.
+    fn scan_ports(&mut self, bytes: &[u8]) -> Value {
+        let base = self.mark();
+        let b = self.new_bytes(bytes);
+        let bi = self.push(b);
+        // NOT LIVE: this reader is a cursor for the walk and is never handed to
+        // a guest, so it must not be able to mint on the guest's behalf.
+        let bv = self.r(bi);
+        let rd = self.wire_reader(bv, false);
+        let ri = self.push(rd);
+        let e = self.empty_vec();
+        let ai = self.push(e);
+        let rv = self.r(ri);
+        let ok = self.wire_scan_at(rv, ai, 0);
+        // TRAILING BYTES ARE A MALFORMED MESSAGE, not a short one: a walk that
+        // succeeded but left something unread has not read what was sent.
+        let rv = self.r(ri);
+        if !ok || self.wire_left(rv) != 0 {
+            self.pop_to(base);
+            return NIL;
+        }
+        let out = self.r(ai);
+        self.pop_to(base);
+        out
+    }
+
     /// The host's answer to an `EV_REQUEST`, as encoded bytes.
     ///
-    /// Decoded HERE, at the boundary, like every other thing crossing a bridge
-    /// (`DECISIONS.md#ports-are-the-hosts`): the guest gets a value and never a codec.
+    /// NOT decoded here. The bytes reach the parked thread as bytes and the
+    /// guest reads them (`DECISIONS.md#the-codec-is-guest-code`), which is the
+    /// mirror of `send` taking a writer rather than a value.
     pub fn host_answer(&mut self, token: i64, bytes: &[u8]) -> bool {
         let w = self.waiter_at(token);
         if w.is_nil() {
@@ -2397,13 +2313,11 @@ impl Rt {
         }
         let base = self.mark();
         let wi = self.push(w);
-        let v = match self.decode(bytes) {
-            Ok(v) => v,
-            Err(_) => {
-                self.pop_to(base);
-                return false;
-            }
-        };
+        // NOT DECODED HERE (`DECISIONS.md#the-codec-is-guest-code`). The bytes
+        // reach the parked thread as bytes and the GUEST reads them. The
+        // WRAPPER stays, because an answer may be any value at all, nil
+        // included: "answered" is read off the wrapper, never off the value.
+        let v = self.new_bytes(bytes);
         let vi = self.push(v);
         // Wrapped, so that a host answering nil is distinguishable from a host
         // refusing. See `host_request`.
@@ -2596,187 +2510,6 @@ impl Rt {
         true
     }
 
-    /// A message on the SYSTEM PORT is a request to the runtime, not a message
-    /// for the guest (`DECISIONS.md#structured-ports`, `ports-are-the-hosts`).
-    ///
-    /// The guest cannot name the system port, so nothing there could ever
-    /// receive one. This is where the host asks for work instead:
-    ///
-    /// ```text
-    /// {:tx n :op :call :fn "ns/name" :args [...]}
-    /// ```
-    ///
-    /// and gets back, on the same port and carrying the same `:tx`:
-    ///
-    /// ```text
-    /// {:tx n :op :return :value v}
-    /// {:tx n :op :throw  :kind "..." :message "..."}
-    /// ```
-    ///
-    /// **A call runs as a GREEN THREAD**, which is the whole reason this is not
-    /// a function the host calls straight through. The called function may open
-    /// a port and park, and the host has to be able to answer that while the
-    /// call is still outstanding -- a call on the host's stack could not park at
-    /// all. It also means several calls can be in flight at once, told apart by
-    /// their `:tx`, and `settle` sends each answer as its thread finishes.
-    ///
-    /// There is no entry point the runtime invokes. `main` was one, and it is
-    /// gone: nothing runs until somebody asks for it by name.
-    fn system_message(&mut self, msg: Value) -> bool {
-        let base = self.mark();
-        let mi = self.push(msg);
-        let k_tx = self.keyword(None, "tx");
-        let tx = self.map_get(self.r(mi), k_tx, NIL);
-        let k_op = self.keyword(None, "op");
-        let op = self.map_get(self.r(mi), k_op, NIL);
-        let k_call = self.keyword(None, "call");
-        if op != k_call {
-            self.pop_to(base);
-            return false;
-        }
-        let k_fn = self.keyword(None, "fn");
-        let namev = self.map_get(self.r(mi), k_fn, NIL);
-        let mut b = crate::rt::sbuf();
-        let name: alloc::string::String = match self.as_str(namev, &mut b) {
-            Some(n) => n.into(),
-            None => {
-                self.pop_to(base);
-                return false;
-            }
-        };
-        let k_args = self.keyword(None, "args");
-        let args = self.map_get(self.r(mi), k_args, NIL);
-        let ai = self.push(args);
-        // The initialisers run ONCE, on the first call rather than at load: a
-        // sandbox serves many calls and the state a program sets up must not be
-        // rebuilt per call.
-        if !self.ensure_started() {
-            let txv = fx(tx);
-            self.pop_to(base);
-            self.answer_call(txv, NIL, true);
-            return true;
-        }
-        let idx = match self.var_named(&name) {
-            Some(i) => i,
-            None => {
-                let txv = fx(tx);
-                self.pop_to(base);
-                let msg = alloc::format!("this module has no `{name}`");
-                self.throw_str("IllegalArgumentException", &msg);
-                self.answer_call(txv, NIL, true);
-                return true;
-            }
-        };
-        let f = self.roots.shared.globals.get(idx as usize).map_or(NIL, |g| g.get());
-        if f.is_nil() || !self.is_callable(f) {
-            let txv = fx(tx);
-            self.pop_to(base);
-            let msg = alloc::format!("`{name}` is not a function");
-            self.throw_str("IllegalArgumentException", &msg);
-            self.answer_call(txv, NIL, true);
-            return true;
-        }
-        let fi = self.push(f);
-        let fv = self.r(fi);
-        let th = self.spawn_thread(fv);
-        if th.is_nil() {
-            self.pop_to(base);
-            return false;
-        }
-        let thi = self.push(th);
-        let av = self.r(ai);
-        self.set(self.r(thi), TH_ARGS, av);
-        self.set(self.r(thi), TH_TX, tx);
-        self.pop_to(base);
-        true
-    }
-
-    /// Send a call's answer back on the system port, carrying its `:tx`.
-    fn answer_call(&mut self, tx: i64, value: Value, threw: bool) {
-        let sys = self.system_port();
-        if sys.is_nil() {
-            return;
-        }
-        let base = self.mark();
-        let si = self.push(sys);
-        let vi = self.push(value);
-        let mut m = self.empty_map();
-        let mi = self.push(m);
-        let k = self.keyword(None, "tx");
-        m = self.map_assoc(self.r(mi), k, Value::fixnum(tx));
-        self.set_r(mi, m);
-        let k = self.keyword(None, "op");
-        let opv = self.keyword(None, if threw { "throw" } else { "return" });
-        m = self.map_assoc(self.r(mi), k, opv);
-        self.set_r(mi, m);
-        if threw {
-            // The thrown value is rendered into two strings rather than sent as
-            // itself: an exception is an object with a stack in it, and what
-            // crosses a boundary is data (`DECISIONS.md#host-abi`).
-            let e = if self.failed() { self.clear_error() } else { self.r(vi) };
-            let ei = self.push(e);
-            let kindv = self.ex_kind(self.r(ei));
-            let msgv = self.ex_message(self.r(ei));
-            let kvi = self.push(kindv);
-            let mvi = self.push(msgv);
-            let k = self.keyword(None, "kind");
-            let kv = self.r(kvi);
-            m = self.map_assoc(self.r(mi), k, kv);
-            self.set_r(mi, m);
-            let k = self.keyword(None, "message");
-            let mv = self.r(mvi);
-            m = self.map_assoc(self.r(mi), k, mv);
-            self.set_r(mi, m);
-        } else {
-            let k = self.keyword(None, "value");
-            let vv = self.r(vi);
-            m = self.map_assoc(self.r(mi), k, vv);
-            self.set_r(mi, m);
-        }
-        let payload = self.r(mi);
-        match self.encode(payload) {
-            Ok(b) => {
-                let len = b.len() as i64;
-                let bv = self.new_bytes(&b);
-                let bi = self.push(bv);
-                let id = fx(self.slot(self.r(si), PT_ID));
-                let pv = self.r(bi);
-                self.push_event(EV_MESSAGE, id, len, pv);
-            }
-            Err(_) => {
-                // A value the wire cannot carry: say so, rather than dropping
-                // the answer and leaving the caller waiting for ever.
-                let mut m2 = self.empty_map();
-                let m2i = self.push(m2);
-                let k = self.keyword(None, "tx");
-                m2 = self.map_assoc(self.r(m2i), k, Value::fixnum(tx));
-                self.set_r(m2i, m2);
-                let k = self.keyword(None, "op");
-                let ov = self.keyword(None, "throw");
-                m2 = self.map_assoc(self.r(m2i), k, ov);
-                self.set_r(m2i, m2);
-                let k = self.keyword(None, "kind");
-                let kv = self.string("IllegalArgumentException");
-                m2 = self.map_assoc(self.r(m2i), k, kv);
-                self.set_r(m2i, m2);
-                let k = self.keyword(None, "message");
-                let mv = self.string("this answer cannot cross a bridge");
-                m2 = self.map_assoc(self.r(m2i), k, mv);
-                self.set_r(m2i, m2);
-                let payload = self.r(m2i);
-                if let Ok(b) = self.encode(payload) {
-                    let len = b.len() as i64;
-                    let bv = self.new_bytes(&b);
-                    let bi = self.push(bv);
-                    let id = fx(self.slot(self.r(si), PT_ID));
-                    let pv = self.r(bi);
-                    self.push_event(EV_MESSAGE, id, len, pv);
-                }
-            }
-        }
-        self.pop_to(base);
-    }
-
     /// Put a message into a bridge from the host's side. Wakes a parked
     /// receiver; it does not run anything.
     ///
@@ -2845,38 +2578,34 @@ impl Rt {
                 }
             }};
         }
-        let v = match self.decode(bytes) {
-            Ok(v) => v,
+        // SCANNED, NOT DECODED (`DECISIONS.md#the-codec-is-guest-code`). The
+        // bytes go into the queue AS BYTES and the guest decodes them; what
+        // must still happen here is the MINTING, because a port has to exist
+        // before anything can be delivered on it.
+        //
+        // THE SYSTEM PORT IS NOT SPECIAL HERE ANY MORE. It used to be routed
+        // out at this point into a runtime-side `system_message`; the control
+        // plane is flint code now (`DECISIONS.md#bridges-are-the-only-door`),
+        // so a control message is delivered like any other and `flint.system/serve`
+        // is what reads it.
+        let ports = self.scan_ports(bytes);
+        if ports.is_nil() {
             // Refused rather than delivered as anything else: a message the
             // format cannot read is the host's error, and turning it into a
             // string here would hand the guest something that silently was not
             // what was sent.
-            Err(_) => {
-                give_back!();
-                self.pop_to(base);
-                return false;
-            }
-        };
-        // THE SYSTEM PORT IS THE RUNTIME'S. A message there is a request to it,
-        // not a message for the guest -- the guest cannot name the port, so
-        // nothing could ever receive one. The bytes are given straight back:
-        // the request is consumed now, so it holds no queue.
-        {
-            let sys = self.system_port();
-            let here = self.r(pi);
-            if !sys.is_nil() && sys == here {
-                let vi = self.push(v);
-                let mv = self.r(vi);
-                let ok = self.system_message(mv);
-                give_back!();
-                self.pop_to(base);
-                return ok;
-            }
+            give_back!();
+            self.pop_to(base);
+            return false;
         }
+        let pri = self.push(ports);
+        let v = self.new_bytes(bytes);
         let vi = self.push(v);
-        // `[len value]`, because the refund has to be the number that was
-        // CHARGED and nothing about a decoded value says what that was. A mark
-        // of its own, since `pop_to(vi)` would drop the slot being written.
+        // `[len bytes ports]`. `len` because the refund has to be the number
+        // that was CHARGED and nothing about the bytes says what that was;
+        // `ports` because THE BRIDGE OWNS THE REFERENCE while the message is in
+        // flight, and the intern table is weak on purpose. A mark of its own,
+        // since `pop_to(vi)` would drop the slot being written.
         {
             let m = self.mark();
             let e = self.empty_vec();
@@ -2885,7 +2614,10 @@ impl Rt {
             self.set_r(ei, c1);
             let vv = self.r(vi);
             let c2 = self.vec_conj(self.r(ei), vv);
-            self.set_r(vi, c2);
+            self.set_r(ei, c2);
+            let pv = self.r(pri);
+            let c3 = self.vec_conj(self.r(ei), pv);
+            self.set_r(vi, c3);
             self.pop_to(m);
         }
         let (target, val) = (self.r(pi), self.r(vi));
@@ -3043,88 +2775,20 @@ impl Rt {
     /// *peer* has gone can never proceed, so it is woken with an error rather
     /// than left hanging. Both facts are ones the collector has already worked
     /// out; this only reads them.
+    /// GENERATED (`kin/reapports.kin`). A collection is a RELEASE for a bridge
+    /// and an ORPHANING for a channel, and this is the only place either is
+    /// noticed -- which is why it was worth writing once rather than three
+    /// times. The port that made it a candidate is recorded there: it used to
+    /// rebuild both lists on every drive iteration whether or not anything had
+    /// died, and the allocation is billed, so the scheduler's own bookkeeping
+    /// was charged to the program.
     pub fn reap_ports(&mut self) {
-        let s = self.sched();
-        if s.is_nil() {
-            return;
-        }
-        let base = self.mark();
-        let si = self.push(s);
-        // --- bridges: a collection is a RELEASE ------------------------------
-        //
-        // The handle is ordinary memory and is not rooted, so the collector
-        // finding it unreachable IS this sandbox letting the port go. One
-        // `EV_RELEASE` per `EV_RETAIN`, which is what makes the host's count a
-        // count of holders rather than of arrivals (`DECISIONS.md#ports-are-the-hosts`).
-        let brs = self.slot(self.r(si), SC_BRIDGES);
-        let bi = self.push(brs);
-        let bn = self.vec_count(self.r(bi));
-        let held = self.empty_vec();
-        let hi = self.push(held);
-        for k in 0..bn {
-            let id = fx(self.vec_nth(self.r(bi), k, NIL));
-            if self.port_by_id(id).is_nil() {
-                // CLOSED as well as released, and the two say different things.
-                // `DECISIONS.md#host-abi`: an end the collector finds unreachable
-                // IS the script having called `close`, so the host hears the
-                // same pair it would have heard from an explicit close -- this
-                // sandbox is finished with the port, and it has let go of its
-                // reference. A host that acts on `:closed` should not have to
-                // special-case which of the two ways it happened.
-                self.push_event(EV_CLOSED, id, 0, NIL);
-                self.push_event(EV_RELEASE, id, 0, NIL);
-                continue;
-            }
-            let nh = self.vec_conj(self.r(hi), Value::fixnum(id));
-            self.set_r(hi, nh);
-        }
-        let held = self.r(hi);
-        self.set(self.r(si), SC_BRIDGES, held);
-
-        // --- channels: a collected end orphans its peer -----------------------
-        let ids = self.slot(self.r(si), SC_PORTS);
-        let ii = self.push(ids);
-        let n = self.vec_count(self.r(ii));
-        let mut live = self.empty_vec();
-        let li = self.push(live);
-        for k in 0..n {
-            let id = fx(self.vec_nth(self.r(ii), k, NIL));
-            let p = self.port_by_id(id);
-            if !p.is_nil() {
-                let nl = self.vec_conj(self.r(li), Value::fixnum(id));
-                self.set_r(li, nl);
-                continue;
-            }
-            // This end has been collected. Tell whoever is affected.
-            let peer_id = self.peer_id_of_dead(id);
-            let peer = self.port_by_id(peer_id);
-            if peer.is_nil() {
-                continue;
-            }
-            let pi = self.push(peer);
-            let pst = fx(self.slot(self.r(pi), PT_STATE));
-            if pst != P_CLOSED && pst != P_ORPHANED {
-                // Its peer vanished without closing, which is not the same as a
-                // tidy close and should not read like one.
-                self.set(self.r(pi), PT_STATE, Value::fixnum(P_ORPHANED));
-            }
-            let target = self.r(pi);
-            self.fail_waiters_on(
-                target,
-                "the other end of this port is unreachable, so this can never complete",
-            );
-            let target = self.r(pi);
-            self.wake_on(target);
-            self.pop_to(pi);
-        }
-        live = self.r(li);
-        self.set(self.r(si), SC_PORTS, live);
-        self.pop_to(base);
+        self.reap_all();
     }
 
     /// The peer of a port that has already been collected. Recorded separately
     /// because the object is gone by the time we notice.
-    fn peer_id_of_dead(&mut self, id: i64) -> i64 {
+    pub(crate) fn peer_id_of_dead(&mut self, id: i64) -> i64 {
         let s = self.sched();
         let pairs = self.slot(s, SC_PAIRS);
         let n = self.vec_count(pairs);

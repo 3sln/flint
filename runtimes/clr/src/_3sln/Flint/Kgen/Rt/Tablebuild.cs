@@ -16,6 +16,7 @@ using static global::_3sln.Flint.Kgen.Rt.Tablecell;
 using static global::_3sln.Flint.Kgen.Rt.Tablekind;
 using static global::_3sln.Flint.Kgen.Rt.Tablemeta;
 using static global::_3sln.Flint.Kgen.Rt.Tablesay;
+using static global::_3sln.Flint.Kgen.Rt.Valeq;
 using static global::_3sln.Flint.Kgen.Rt.Vecread;
 using static global::_3sln.Flint.Kgen.Rt.Vecwrite;
 
@@ -50,25 +51,70 @@ public static class Tablebuild {
             long ch = NewChunk(rt, width, take);
             int chi = rt.Push(ch);
             for (int c = 0; c < ncols; c++) {
+                // NO RUN UNTIL A VALUE DIFFERS.
+                // 
+                // The run used to be allocated here, filled, and only then
+                // handed to `collapse` -- so a column that is constant
+                // allocated a full `CHUNK`-slot node and threw it away.
+                // The finished table never held it, but it was live at the
+                // peak, which is why `test/tables.clj` could see only 32 288
+                // of the 160 632 bytes a constant column actually saves.
+                // 
+                // So the first value is remembered instead, and the run is
+                // allocated at the FIRST value that differs -- backfilling
+                // the rows already seen, which all held the first value. One
+                // pass still, and one comparison per value; the varying case
+                // reads each row exactly once, as before.
                 int id = SchemaIdAt(rt, rt.R(si), c);
-                long col = Conc.NewObj(rt, Obj.TyNode, take);
-                int coli = rt.Push(col);
-                long name = SchemaNameAt(rt, rt.R(si), c);
+                long name0 = SchemaNameAt(rt, rt.R(si), c);
                 long types = rt.Slot(rt.R(si), global::Flint.Rt.Table.SC_TYPES);
-                long tp = VecNth(rt, types, c, Val.Nil);
+                long tp0 = VecNth(rt, types, c, Val.Nil);
+                int namei = rt.Push(name0);
+                int tpi = rt.Push(tp0);
+                int v0i = rt.Push(Val.Nil);
+                int coli = rt.Push(Val.Nil);
+                int vi = rt.Push(Val.Nil);
+                bool expanded;
+                expanded = false;
                 for (int k = 0; k < take; k++) {
                     long rowv = VecNth(rt, rt.R(ri), row + k, Val.Nil);
-                    long val = MapGet(rt, rowv, name, Val.Nil);
-                    if (!TypeOk(rt, tp, val)) {
-                        string msg = ColumnTypeError(rt, name, tp, val, row + k);
+                    long val = MapGet(rt, rowv, rt.R(namei), Val.Nil);
+                    rt.SetR(vi, val);
+                    if (!TypeOk(rt, rt.R(tpi), rt.R(vi))) {
+                        string msg = ColumnTypeError(rt, rt.R(namei), rt.R(tpi), rt.R(vi), row + k);
                         rt.PopTo(@base);
                         return rt.ThrowStr("IllegalArgumentException", msg);
                     }
-                    rt.SetSlot(Val.AsHeap(rt.R(coli)), k, val);
+                    if (k == 0) {
+                        rt.SetR(v0i, rt.R(vi));
+                    }
+                    if (expanded) {
+                        rt.SetSlot(Val.AsHeap(rt.R(coli)), k, rt.R(vi));
+                    } else if (!ValEq(rt, rt.R(v0i), rt.R(vi))) {
+                        // A VALUE DIFFERS, so the run is needed after all.
+                        // Backfill what came before it -- every one of
+                        // those rows held the first value, which is why
+                        // they did not need storing until now.
+                        long col = Conc.NewObj(rt, Obj.TyNode, take);
+                        rt.SetR(coli, col);
+                        for (int j = 0; j < k; j++) {
+                            rt.SetSlot(Val.AsHeap(rt.R(coli)), j, rt.R(v0i));
+                        }
+                        rt.SetSlot(Val.AsHeap(rt.R(coli)), k, rt.R(vi));
+                        expanded = true;
+                    }
                 }
-                rt.SetSlot(Val.AsHeap(rt.R(chi)), global::Flint.Rt.Table.CH_BASE + id, rt.R(coli));
-                Collapse(rt, rt.R(chi), id);
-                rt.PopTo(coli);
+                if (expanded) {
+                    rt.SetSlot(Val.AsHeap(rt.R(chi)), global::Flint.Rt.Table.CH_BASE + id, rt.R(coli));
+                    Collapse(rt, rt.R(chi), id);
+                } else {
+                    // CONSTANT: one value for the whole chunk and no run
+                    // at all. `collapse` is not called -- this IS the
+                    // state it would have reached.
+                    rt.SetSlot(Val.AsHeap(rt.R(chi)), global::Flint.Rt.Table.CH_BASE + id, rt.R(v0i));
+                    rt.SetSlot(Val.AsHeap(rt.Slot(rt.R(chi), global::Flint.Rt.Table.CH_ENC)), id, Val.Fixnum(global::Flint.Rt.Table.ENC_CONST & 0xFFFFFFFFL));
+                }
+                rt.PopTo(namei);
             }
             long nv = VecConj(rt, rt.R(ci), rt.R(chi));
             rt.SetR(ci, nv);

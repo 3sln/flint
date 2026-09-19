@@ -95,7 +95,14 @@
              "process.exit(bad ? 1 : 0);\n"))
   (println "aot: each body validated by the engine")
   (let [p (.start (ProcessBuilder. (into-array String ["node" "/tmp/aot-validate.mjs"])))
-        out (slurp (.getInputStream p)) err (slurp (.getErrorStream p))]
+        ;; STDERR IS DRAINED ON ITS OWN THREAD (`DECISIONS.md#the-codec-is-guest-code`,
+        ;; "the test helper deadlocked"). Reading stdout to completion and
+        ;; stderr after DEADLOCKS the moment a child writes more than a pipe
+        ;; buffer to stderr: the child blocks writing, this blocks reading, and
+        ;; neither moves again.
+        err (future (slurp (.getErrorStream p)))
+        out (slurp (.getInputStream p))
+        err @err]
     (.waitFor p)
     (print out) (print err)
     (when-not (zero? (.exitValue p)) (swap! fails inc))))

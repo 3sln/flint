@@ -50,25 +50,70 @@ impl Rt {
             let ch: Value = self.new_chunk(width, take);
             let chi: usize = self.push(ch);
             for c in 0..ncols {
+                // NO RUN UNTIL A VALUE DIFFERS.
+                // 
+                // The run used to be allocated here, filled, and only then
+                // handed to `collapse` -- so a column that is constant
+                // allocated a full `CHUNK`-slot node and threw it away.
+                // The finished table never held it, but it was live at the
+                // peak, which is why `test/tables.clj` could see only 32 288
+                // of the 160 632 bytes a constant column actually saves.
+                // 
+                // So the first value is remembered instead, and the run is
+                // allocated at the FIRST value that differs -- backfilling
+                // the rows already seen, which all held the first value. One
+                // pass still, and one comparison per value; the varying case
+                // reads each row exactly once, as before.
                 let id: u32 = self.schema_id_at(self.r(si), c);
-                let col: Value = self.new_obj(TY_NODE, take);
-                let coli: usize = self.push(col);
-                let name: Value = self.schema_name_at(self.r(si), c);
+                let name0: Value = self.schema_name_at(self.r(si), c);
                 let types: Value = self.slot(self.r(si), crate::table::SC_TYPES);
-                let tp: Value = self.vec_nth(types, c, NIL);
+                let tp0: Value = self.vec_nth(types, c, NIL);
+                let namei: usize = self.push(name0);
+                let tpi: usize = self.push(tp0);
+                let v0i: usize = self.push(NIL);
+                let coli: usize = self.push(NIL);
+                let vi: usize = self.push(NIL);
+                let mut expanded: bool;
+                expanded = false;
                 for k in 0..take {
                     let rowv: Value = self.vec_nth(self.r(ri), row + k, NIL);
-                    let val: Value = self.map_get(rowv, name, NIL);
-                    if !self.type_ok(tp, val) {
-                        let msg: alloc::string::String = self.column_type_error(name, tp, val, row + k);
+                    let val: Value = self.map_get(rowv, self.r(namei), NIL);
+                    self.set_r(vi, val);
+                    if !self.type_ok(self.r(tpi), self.r(vi)) {
+                        let msg: alloc::string::String = self.column_type_error(self.r(namei), self.r(tpi), self.r(vi), row + k);
                         self.pop_to(base);
                         return self.throw_str("IllegalArgumentException", &msg);
                     }
-                    self.set(self.r(coli), k, val);
+                    if k == 0 {
+                        self.set_r(v0i, self.r(vi));
+                    }
+                    if expanded {
+                        self.set(self.r(coli), k, self.r(vi));
+                    } else if !self.val_eq(self.r(v0i), self.r(vi)) {
+                        // A VALUE DIFFERS, so the run is needed after all.
+                        // Backfill what came before it -- every one of
+                        // those rows held the first value, which is why
+                        // they did not need storing until now.
+                        let col: Value = self.new_obj(TY_NODE, take);
+                        self.set_r(coli, col);
+                        for j in 0..k {
+                            self.set(self.r(coli), j, self.r(v0i));
+                        }
+                        self.set(self.r(coli), k, self.r(vi));
+                        expanded = true;
+                    }
                 }
-                self.set(self.r(chi), crate::table::CH_BASE + id, self.r(coli));
-                self.collapse(self.r(chi), id);
-                self.pop_to(coli);
+                if expanded {
+                    self.set(self.r(chi), crate::table::CH_BASE + id, self.r(coli));
+                    self.collapse(self.r(chi), id);
+                } else {
+                    // CONSTANT: one value for the whole chunk and no run
+                    // at all. `collapse` is not called -- this IS the
+                    // state it would have reached.
+                    self.set(self.r(chi), crate::table::CH_BASE + id, self.r(v0i));
+                    self.set(self.slot(self.r(chi), crate::table::CH_ENC), id, Value::fixnum(crate::table::ENC_CONST as i64));
+                }
+                self.pop_to(namei);
             }
             let nv: Value = self.vec_conj(self.r(ci), self.r(chi));
             self.set_r(ci, nv);

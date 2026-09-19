@@ -328,6 +328,14 @@ of these.
 Both the Rust and the JavaScript CLI must serve an identical list;
 `bin/check-sys-catalogue` fails on any drift in namespace, var, arity or order.
 
+## flint.wire
+
+**Reviewed:** ☐ not signed off
+
+3 public vars. The wire codec, as flint (`DECISIONS.md#the-codec-is-guest-code`): `encode` answers a writer ready for `port/send`, and `emit` writes one value into a writer that is already open. The runtime still carries an encoder; this is the one that replaces it, and `test/host_abi.mjs` holds the two to byte-for-byte agreement across 29 shapes.
+
+**Change requests:** _none recorded_
+
 ## flint.sys.fs
 
 **Reviewed:** ☐ not signed off

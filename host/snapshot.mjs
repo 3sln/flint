@@ -22,7 +22,9 @@ export const TY = {
   22: 'NATIVEFN', 23: 'VAR', 24: 'ATOM', 25: 'TVEC', 26: 'TMAP', 27: 'TSET',
   28: 'RECORD', 29: 'REGEX', 30: 'REDUCED', 31: 'EXINFO', 32: 'MULTIFN',
   33: 'DELAY', 34: 'VOLATILE', 35: 'RAW', 36: 'ITERSEQ', 37: 'CHUNKSEQ',
-  38: 'TYPE', 39: 'THREAD', 40: 'PORT', 41: 'SCHED',
+  38: 'TYPE', 39: 'THREAD', 40: 'PORT', 41: 'SCHED', 42: 'ROPE', 43: 'OPAQUE',
+  44: 'BYTES', 45: 'BROPE', 46: 'TBYTES', 47: 'TAGGED', 48: 'SCHEMA',
+  49: 'TABLE', 50: 'TABLEREF', 51: 'TTABLE', 52: 'WRITER', 53: 'READER',
 };
 const TY_FREE = 0, TY_FWD = 1, TY_STR = 2, TY_BIGINT = 3, TY_RAW = 35;
 const TAG_HEAP = 0xfff9;
@@ -116,12 +118,30 @@ export const readU64 = (s, addr) => {
 export const tyOf = (s, addr) => readU32(s, addr) >>> 24;
 export const lenOf = (s, addr) => readU32(s, addr + 4);
 
+/// Which shape an object's payload has, mirroring `obj.rs`'s `layout_of`.
+///
+/// ONE TABLE, read by both `sizeOf` and `slots`. It was two, and they were the
+/// stale third and fourth copies of a match that already bit the runtime once:
+/// `TY_BYTES` was added there and not here, so a byte string was sized
+/// `HDR + len * 8` rather than `HDR + len`. The walk then advanced by the wrong
+/// stride, landed mid-object, read a header that was not one, and stopped --
+/// reporting the 42 216 bytes after it as simply absent. That is the failure
+/// `objects` warns about in its own comment, arriving through the sizing rather
+/// than through the heap.
+///
+/// A type missing from this table is `Vals`, exactly as in `obj.rs`. That is
+/// safe for a value type and wrong for a raw one, which is why the raw list is
+/// the part that must be kept in step -- `bin/check-snapshot-layout` fails if
+/// it drifts from `obj.rs`.
+const LAYOUT_RAW = new Set([3 /* BIGINT */, 35 /* RAW */, 44 /* BYTES */,
+                            0 /* FREE */, 1 /* FWD */]);
+
 export function sizeOf(s, addr) {
   const t = tyOf(s, addr), n = lenOf(s, addr);
   if (t === TY_FREE) return n;
   if (t === TY_FWD) return 8;
   if (t === TY_STR) return align8(16 + n);
-  if (t === TY_BIGINT || t === TY_RAW) return align8(8 + n);
+  if (LAYOUT_RAW.has(t)) return align8(8 + n);
   return 8 + n * 8;
 }
 
@@ -161,7 +181,7 @@ export function* objects(s) {
 /// The slot values of an object, for the types that hold values.
 export function slots(s, addr) {
   const t = tyOf(s, addr);
-  if (t === TY_STR || t === TY_BIGINT || t === TY_RAW || t === TY_FREE || t === TY_FWD) return [];
+  if (t === TY_STR || LAYOUT_RAW.has(t)) return [];
   const n = lenOf(s, addr), out = [];
   for (let i = 0; i < n; i++) out.push(readU64(s, addr + 8 + i * 8));
   return out;

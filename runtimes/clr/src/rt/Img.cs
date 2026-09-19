@@ -119,6 +119,10 @@ public static class Img {
         int ninit = (int) r.U32();
         outl.init = new int[ninit];
         for (int i = 0; i < ninit; i++) outl.init[i] = (int) r.U32();
+        // ON THE RUNTIME TOO, alongside `consts`, `fns`, `varNames` and `code`.
+        // `EnsureStarted` runs these on first use, and it cannot ask the host
+        // for them: the host is not there when a CALL arrives.
+        rt.init = outl.init;
 
         // Compiled arities: skipped, but skipped EXACTLY, because the flags
         // word is behind them.

@@ -6,8 +6,17 @@
 // Zero means the branch was compiled knowing the type; one means it was not.
 import { load, instantiate } from '../host/flint.mjs';
 
-const NB = 20, NCOUNT = 28;
-const NAT_AT = NB * 4 + NCOUNT + 256;
+// `stat_region` is one export over several arrays laid end to end, so reading
+// the native counts means knowing where they start -- and that is
+// `NBUCKET * 4 + COUNTS.len() + 256` in `runtime/src/aotstat.rs`. These two
+// numbers are a COPY of constants that live there, and the copy went stale:
+// `COUNTS` grew from 28 entries to 43 and nothing here noticed, so every name
+// was paired with a count 15 slots away. Each shape then reported the same 97 --
+// some other native's total -- and the file read as "narrowing composes with
+// nothing", which was false in every row. `bin/check-aotstat-layout` now fails
+// if these drift again.
+const NB = 20, NCOUNT = 43, NOPS = 256, NNAT = 512;
+const NAT_AT = NB * 4 + NCOUNT + NOPS;
 
 const { module } = await load(process.argv[2] ?? 'out/narrow.wasm');
 
@@ -27,7 +36,7 @@ const checksIn = (shape) => {
   if (r.code !== 0) throw new Error(`${shape}: ${r.out}`);
   const e = inst.exports;
   let n = 0, sawAny = 0;
-  for (let i = 0; i < 512; i++) {
+  for (let i = 0; i < NNAT; i++) {
     const c = Number(e.stat_region(NAT_AT + i));
     if (!c) continue;
     sawAny += c;

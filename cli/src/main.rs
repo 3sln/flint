@@ -597,8 +597,7 @@ pub(crate) fn sdk_compile(sources: &[(String, String)], entry: &str, exports: &[
         t
     };
     let out = (|| -> Result<Vec<u8>> {
-        let mut c = Program::load(COMPILER, 3_000_000_000)
-            .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
+        let mut c = load_compiler()?;
         let r = c.run(&["project", &spec]);
         if r.code != 0 {
             bail!("{}", r.out.trim());
@@ -655,6 +654,18 @@ fn ns_to_path(ns: &str) -> String {
     out
 }
 
+/// The embedded compiler, loaded with every unit this binary carries.
+///
+/// `Program::load` is not enough any more. The compiler image now contains
+/// `flint.system` -- the control plane is a root in every program
+/// (`DECISIONS.md#bridges-are-the-only-door`), and the compiler is a program --
+/// so the image needs `flint/spawn` and the rest of the concurrency unit. A
+/// plain load answered "this runtime does not carry the builtin `flint/spawn`,
+/// which the image needs", which is the loader being right.
+fn load_compiler() -> Result<Program> {
+    load_sandbox(COMPILER).map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e:#}"))
+}
+
 /// Load an image so it can be called, with every unit this binary carries.
 ///
 /// `run_source_q` does the same thing for `flint run`; a sandbox needs it for
@@ -698,8 +709,7 @@ fn compile_llvm(srcs: &[PathBuf], entry: &str, out_path: &Path,
     // reaches, and there is no module here to cut. The equivalent for a
     // natively linked artifact is the linker's own `--gc-sections`.
     let spec = build_spec(srcs, entry, &slots, aot, false, &[], None, strip_checks, features)?;
-    let mut p = Program::load(COMPILER, 3_000_000_000)
-        .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
+    let mut p = load_compiler()?;
     let r = p.run(&["llvm", &spec]);
     if r.code != 0 {
         bail!("{}", r.out.trim());
@@ -761,8 +771,7 @@ pub(crate) fn compile_q(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize
     let base = if aot { RUNTIME_AOT } else { RUNTIME };
     let spec = build_spec(srcs, entry, &slots, aot, true, meta, None, strip_checks, features)?;
 
-    let mut p = Program::load(COMPILER, 3_000_000_000)
-        .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
+    let mut p = load_compiler()?;
     // The runtime module goes as its own ARGUMENT, never inside the spec: it is
     // three-quarters of a megabyte of base64, and inside an EDN string it is
     // three-quarters of a megabyte for flint's reader to scan a character at a
@@ -828,8 +837,7 @@ pub(crate) fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps:
         .collect();
     let spec = build_spec_with(srcs, entry, &parse_slots(SLOTS)?, false, false, &[], roots,
                                &pod_vars, false, None)?;
-    let mut c = Program::load(COMPILER, 3_000_000_000)
-        .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
+    let mut c = load_compiler()?;
     let r = c.run(&["project", &spec]);
     if r.code != 0 {
         bail!("{}", r.out.trim());
@@ -925,6 +933,7 @@ pub(crate) fn host_for(caps: &[String], args: &[String], gas: u64) -> crate::ser
     // promise by construction, no matter how small its own allowance. The
     // guarantee has to hold for the whole process or it is not one.
     host.serve(Box::new(crate::sys::Ception {
+        callers: Vec::new(),
         caps: caps.to_vec(), sandboxes: Vec::new(), gas,
     }));
     // A booted pod is served whatever the grants say, because DECLARING one in
@@ -1246,7 +1255,19 @@ fn script_argv(argv: &[String]) -> Result<Option<(PathBuf, Vec<String>, Vec<Stri
     Ok(None)
 }
 
-fn run_script(path: &Path, caps: &[String], args: &[String]) -> Result<i32> {
+/// WHAT A SCRIPT COMPILES TO, worked out once for every command that takes one.
+///
+/// `run` and `compile` need exactly the same three things -- the source paths,
+/// the entry, and what the file declared -- and they needed them badly enough
+/// that `run` grew its own copy and `compile` simply did not take a script at
+/// all (`DECISIONS.md#standalone-scripts`). One computation now, so a change to
+/// what a script MEANS cannot reach one command and miss the other.
+///
+/// It does NOT do consent. Granting is about RUNNING: `compile` writes what a
+/// script declared into the module's metadata and the person who runs the
+/// result answers for it then, which is the same order `flint compile :with`
+/// already uses.
+fn script_spec(path: &Path) -> Result<(Vec<PathBuf>, String, script::ScriptNs, String)> {
     let body = fs::read_to_string(path)
         .with_context(|| format!("cannot read {}", path.display()))?;
     let Some(nsf) = script::read_ns(&body) else {
@@ -1257,15 +1278,43 @@ fn run_script(path: &Path, caps: &[String], args: &[String]) -> Result<i32> {
     let Some(entry) = nsf.entry.clone() else {
         // `^:script` IS THE MARK, and its absence is not a detail to work
         // around. A module deliberately has no entry point
-        // (`DECISIONS.md#structured-ports`); running a file that never claimed
-        // to be runnable would have to invent one, and inventing an entry is
-        // exactly what this codebase refuses everywhere else.
+        // (`DECISIONS.md#structured-ports`); running or compiling a file that
+        // never claimed to be runnable would have to invent one, and inventing
+        // an entry is what this codebase refuses everywhere else.
         bail!("(ns {}) in {} is not marked `^:script`, so nothing names its entry point.\n\
-               A module has no entry by design. Write `(ns ^:script {} ...)` to run \
-               {}/main, or `(ns ^{{:script go}} {} ...)` to run {}/go -- or compile it \
-               as part of a project with `flint run :path <dir> :fn {}/main`.",
+               A module has no entry by design. Write `(ns ^:script {} ...)` to use \
+               {}/main, or `(ns ^{{:script go}} {} ...)` to use {}/go -- or build it \
+               as part of a project with `:path <dir> :fn {}/main`.",
               nsf.ns, path.display(), nsf.ns, nsf.ns, nsf.ns, nsf.ns, nsf.ns)
     };
+    if nsf.has_deps {
+        bail!("{} declares `:deps`, and this binary does not fetch dependencies for a \
+               script yet.\n\
+               `flint run`/`flint compile` build from the source path alone; fetching is \
+               `flint fetch`, which reads a deps.edn.\n\
+               Until a script's `:deps` is wired to it, name what you need with \
+               `(:paths [\"...\"])` and put it on disk.", path.display())
+    }
+    // THE SCRIPT ITSELF FIRST, then whatever it named. `:paths` are relative to
+    // the script rather than to the working directory, because a script is run
+    // from wherever the person happens to be standing and the file's own
+    // neighbours are the only thing it can mean.
+    let mut srcs = vec![path.to_path_buf()];
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    for pth in &nsf.paths {
+        let d = dir.join(pth);
+        if !d.is_dir() {
+            bail!("(ns {}) asks for the source directory {:?}, which is not a directory.\n\
+                   A script's `:paths` are relative to the script itself, so this was \
+                   looked for at {}.", nsf.ns, pth, d.display())
+        }
+        srcs.push(d);
+    }
+    Ok((srcs, entry, nsf, body))
+}
+
+fn run_script(path: &Path, caps: &[String], args: &[String]) -> Result<i32> {
+    let (srcs, entry, nsf, body) = script_spec(path)?;
     // WHAT THE SCRIPT ASKED FOR, once the person running it has said so.
     //
     // A script is self-contained, which is the point of it -- having to
@@ -1276,10 +1325,11 @@ fn run_script(path: &Path, caps: &[String], args: &[String]) -> Result<i32> {
     //
     // `:with` on the command line is added to whatever consent yields, so the
     // explicit route still works and still wins where there is no terminal.
+    //
+    // CONSENT IS ONLY HERE, and `script_spec` deliberately does not do it:
+    // `compile` takes the same script and asks nobody, because granting is
+    // about running and the person who runs the module answers for it then.
     let mut caps: Vec<String> = caps.to_vec();
-    // ONLY WHAT IS NOT ALREADY LENT. `:with [fs]` on the command line is the
-    // person saying it outright, and asking them again about something they
-    // just granted is how a prompt teaches people to stop reading it.
     let unmet: Vec<String> = nsf.capabilities.iter()
         .filter(|c| !caps.contains(c))
         .cloned()
@@ -1293,38 +1343,6 @@ fn run_script(path: &Path, caps: &[String], args: &[String]) -> Result<i32> {
         }
     }
     let caps = &caps[..];
-    if nsf.has_deps {
-        // STATED, not ignored. `:deps` is real surface -- the analyzer accepts
-        // it and refuses it outside a script -- but nothing in this binary
-        // fetches a dependency: that loop lives in `flint.cli`, which the host
-        // drives. Compiling anyway would fail as "no source for namespace
-        // some.lib", which is true and names the wrong thing.
-        bail!("{} declares `:deps`, and this binary does not fetch dependencies for a \
-               script yet.\n\
-               `flint run`/`flint compile` build from the source path alone; fetching is \
-               `flint fetch`, which reads a deps.edn.\n\
-               Until a script's `:deps` is wired to it, name what you need with \
-               `(:paths [\"...\"])` and put it on disk.", path.display())
-    }
-    // SRC IS THE FILE, PLUS WHAT THE SCRIPT EXPLICITLY NAMES. The script's own
-    // directory is NOT scanned, which is the property that makes it standalone:
-    // dropping a script into a working tree full of `.cljc` must not pull that
-    // tree into the build, and a script mailed to somebody must behave the same
-    // in their directory as in yours (`DECISIONS.md#standalone-scripts`).
-    let mut srcs = vec![path.to_path_buf()];
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    for p in &nsf.paths {
-        // RELATIVE TO THE SCRIPT and not to the working directory, for the same
-        // reason: what the file names has to mean the same thing wherever it is
-        // run from.
-        let d = dir.join(p);
-        if !d.is_dir() {
-            bail!("(ns {}) asks for the source directory {:?}, which is not a directory.\n\
-                   A script's `:paths` are relative to the script itself, so this was \
-                   looked for at {}.", nsf.ns, p, d.display())
-        }
-        srcs.push(d);
-    }
     Ok(run_source(&srcs, &entry, args, caps, None)?.0)
 }
 
@@ -1587,11 +1605,58 @@ fn main() -> Result<()> {
         }
         "help" | "--help" | "-h" => usage(),
         "compile" => {
-            let a = parse(&argv[1..])?;
-            let Some(entry) = a.entry else { bail!("compile needs :fn ns/fn") };
-            if a.srcs.is_empty() {
-                bail!("compile needs at least one :src");
-            }
+            // THE SCRIPT IS TAKEN OFF THE FRONT BEFORE THE OPTIONS ARE READ.
+            // `parse` treats a bare word as a source path, so leaving it in
+            // would make the script look like a `:src` and the guard below
+            // fire on the command that is actually correct.
+            let script = argv.get(1).map(PathBuf::from).filter(|p| p.is_file());
+            let rest: Vec<String> = if script.is_some() {
+                argv[2..].to_vec()
+            } else {
+                argv[1..].to_vec()
+            };
+            let a = parse(&rest)?;
+            // A SCRIPT COMPILES TOO, and by naming the file rather than a
+            // directory and an entry. `flint <file>` already runs one; not
+            // being able to BUILD the same file was the gap
+            // (`DECISIONS.md#standalone-scripts`), and it was a gap in the
+            // front end only -- the entry and the source paths are the same
+            // computation either way, which `script_spec` now does once.
+            //
+            // WHAT IT DECLARED BECOMES METADATA rather than a grant. `:with`
+            // on `compile` already means "write down what this will need",
+            // because the arguments arrive later and the person who runs the
+            // module answers for them then. A script's `:capabilities` is the
+            // same statement made in the file instead of on the line, so it
+            // lands in the same place and is merged with `:with` rather than
+            // replacing it.
+            let (srcs, entry, mut grants) = match &script {
+                Some(p) => {
+                    if a.entry.is_some() || !a.srcs.is_empty() {
+                        bail!("compile was given both the script {} and :fn/:src.\n\
+                               A script names its own entry and its own sources; pass one \
+                               or the other.", p.display())
+                    }
+                    let (srcs, entry, nsf, _) = script_spec(p)?;
+                    let mut g = a.grants.clone();
+                    for c in &nsf.capabilities {
+                        if !g.contains(c) {
+                            g.push(c.clone());
+                        }
+                    }
+                    (srcs, entry, g)
+                }
+                None => {
+                    let Some(entry) = a.entry.clone() else {
+                        bail!("compile needs :fn ns/fn, or the path of a script")
+                    };
+                    if a.srcs.is_empty() {
+                        bail!("compile needs at least one :src, or the path of a script");
+                    }
+                    (a.srcs.clone(), entry, a.grants.clone())
+                }
+            };
+            let _ = &mut grants;
             let out = a.out.unwrap_or_else(|| "out.wasm".to_string());
             let to = a.to.clone().unwrap_or_else(|| "wasm".to_string());
             // `:with` on `compile` DECLARES rather than grants: the arguments
@@ -1600,10 +1665,10 @@ fn main() -> Result<()> {
             // is the CLI writing down its own convention where the next tool
             // can find it (`DECISIONS.md#cli`).
             let mut meta = a.meta.clone();
-            if !a.grants.is_empty() {
-                meta.push(("capabilities".to_string(), a.grants.join(" ")));
+            if !grants.is_empty() {
+                meta.push(("capabilities".to_string(), grants.join(" ")));
             }
-            compile_q(&a.srcs, &entry, Path::new(&out), &a.optimize, &to, &meta, a.checks,
+            compile_q(&srcs, &entry, Path::new(&out), &a.optimize, &to, &meta, a.checks,
                       false, a.features.as_deref())
         }
         // `test` is `run` with a generated entry: the compiler collects every

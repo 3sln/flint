@@ -250,7 +250,7 @@ export class Ception {
   /// it does not hold: without that test, `sdk` was the only capability anyone
   /// needed, because `(sdk/run {... :with ["fs"]})` minted the rest onto a
   /// child it wrote.
-  constructor(ops) { this.ops = ops; this.boxes = []; }
+  constructor(ops) { this.ops = ops; this.boxes = []; this.callers = []; }
 
   /// Caller-supplied sources, in a private temporary directory.
   ///
@@ -332,8 +332,35 @@ export class Ception {
         return c.int(this.boxes.length - 1);
       }
       // `(call sandbox "ns/f" [args])`
-      case 'call': {
+      // `(caller sandbox)` -- bind a port and hand back what calls go on.
+      //
+      // A CALLER IS THE THING YOU CALL ON, not the sandbox
+      // (`DECISIONS.md#bridges-are-the-only-door`). `:bind` gives the control
+      // plane a port and it spawns ONE thread serving calls on it, so a caller
+      // is that thread's queue -- serial, in arrival order -- and concurrency
+      // is had by taking a second one. Naming it makes that cost visible
+      // instead of hiding a thread per call behind `(call sandbox ..)`.
+      case 'caller': {
         const h = args[0];
+        if (this.boxes[h] === undefined) throw new Error(`no such sandbox: ${h}`);
+        if (this.boxes[h] === null) throw new Error(`sandbox ${h} is closed`);
+        this.callers.push({ box: h, caller: this.boxes[h].caller() });
+        return c.int(this.callers.length - 1);
+      }
+      // `(close-caller caller)` -- the SANDBOX is untouched: other callers on
+      // it go on working, which is the whole reason they are separate things.
+      case 'close-caller': {
+        const ch = args[0];
+        if (this.callers[ch] === undefined) throw new Error(`no such caller: ${ch}`);
+        if (this.callers[ch] !== null) this.callers[ch].caller.close();
+        this.callers[ch] = null;
+        return c.nil();
+      }
+      case 'call': {
+        const ch = args[0];
+        if (this.callers[ch] === undefined) throw new Error(`no such caller: ${ch}`);
+        if (this.callers[ch] === null) throw new Error(`caller ${ch} is closed`);
+        const h = this.callers[ch].box;
         if (this.boxes[h] === undefined) throw new Error(`no such sandbox: ${h}`);
         if (this.boxes[h] === null) throw new Error(`sandbox ${h} is closed`);
         const argv = args[2] === undefined || args[2] === null ? [] : args[2];
@@ -350,7 +377,10 @@ export class Ception {
           // worth passing, since a port is how a sandbox reaches anything
           // (`DECISIONS.md#ports-are-the-hosts`). The driver's `call` encodes a
           // plain JS value itself.
-          return c.from(this.boxes[h].call(strArg(args, 1, 'fn'), argv));
+          // ON THE CALLER, not the sandbox. `sandbox.call` is sugar over a
+          // default caller; here the caller is the thing the guest named, so
+          // its own bound port is what this goes on.
+          return c.from(this.callers[ch].caller.call(strArg(args, 1, 'fn'), ...argv));
         } catch (e) {
           // A THROW INSIDE THE SANDBOX RAISES HERE, so the caller can catch it.
           //

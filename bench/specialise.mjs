@@ -18,10 +18,10 @@
 import { load, instantiate } from '../host/flint.mjs';
 import { fnOf } from './entry.mjs';
 
-const NB = 20, NCOUNT = 28;
+const NB = 20, NCOUNT = 43, NOPS = 256, NNAT = 512;
 const OPS_AT = NB * 4 + NCOUNT;
-const NAT_AT = OPS_AT + 256;
-const FIX_AT = NAT_AT + 512;
+const NAT_AT = OPS_AT + NOPS;
+const FIX_AT = NAT_AT + NNAT;
 const C = { INSTRS: 0, FRAMES: 1, CALLS: 2, TAILCALLS: 3, NATIVES: 4, APPLIES: 5 };
 
 const num = (n) => n.toLocaleString('en-US');
@@ -66,7 +66,7 @@ for (const [name, args, desc] of WORKLOADS) {
   console.log(`  ${num(instrs)} instructions executed`);
 
   const ops = [];
-  for (let i = 0; i < 256; i++) {
+  for (let i = 0; i < NOPS; i++) {
     const n = g(OPS_AT + i);
     if (n) ops.push([OPNAME[i] ?? `0x${i.toString(16)}`, n]);
   }
@@ -82,7 +82,7 @@ for (const [name, args, desc] of WORKLOADS) {
 
   const nats = [];
   let natTotal = 0, fixTotal = 0;
-  for (let i = 0; i < 512; i++) {
+  for (let i = 0; i < NNAT; i++) {
     const n = g(NAT_AT + i), f = g(FIX_AT + i);
     if (!n) continue;
     natTotal += n; fixTotal += f;

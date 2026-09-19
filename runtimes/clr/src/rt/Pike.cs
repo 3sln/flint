@@ -39,132 +39,49 @@ public static class Pike {
     public const int RX_SOURCE = 0, RX_PROG = 1, RX_NGROUPS = 2;
 
 
+    /// GENERATED (`kin/pike.kin`) -- see the note on the JVM's `classHit`.
     static bool ClassHit(int[] prog, int classBase, int off, int v) {
-        int n = prog[classBase + off];
-        for (int k = 0; k < n; k++) {
-            int b = classBase + off + 1 + k * 3;
-            bool hit;
-            switch (prog[b]) {
-                case CL_ONE: hit = v == prog[b + 1]; break;
-                case CL_RANGE: hit = v >= prog[b + 1] && v <= prog[b + 2]; break;
-                default: hit = PredHit(prog[b + 1], v); break;
-            }
-            if (hit) return true;
-        }
-        return false;
+        return global::_3sln.Flint.Kgen.Rt.Pike.ClassHit(prog, classBase, off, v);
     }
 
-    sealed class Thread {
-        public readonly int pc;
-        public readonly int[] saved;
-        public Thread(int pc, int[] saved) { this.pc = pc; this.saved = saved; }
-    }
+    // `Thread` IS GONE -- a thread is a flat row in the arena now, `pc` then
+    // its capture slots, and the per-thread allocation went with the object.
 
     /// Add `pc` and everything reachable from it WITHOUT consuming a character.
     ///
     /// The dedup set is what makes this linear, and the ORDER is what makes it
     /// leftmost-first: SPLIT's preferred branch is followed first, and whoever
     /// arrives first at an instruction keeps it.
-    static void AddThread(int[] prog, int codeBase, int classBase, int[] cps, int i,
-                          List<Thread> list, bool[] seen, int pc, int[] saved) {
-        if (seen[pc]) return;
-        seen[pc] = true;
-        int b = codeBase + pc * 3;
-        int op = prog[b], a = prog[b + 1], c = prog[b + 2];
-        switch (op) {
-            case OP_JMP:
-                AddThread(prog, codeBase, classBase, cps, i, list, seen, a, saved);
-                break;
-            case OP_SPLIT:
-                AddThread(prog, codeBase, classBase, cps, i, list, seen, a, saved);
-                AddThread(prog, codeBase, classBase, cps, i, list, seen, c, saved);
-                break;
-            case OP_SAVE: {
-                int[] s2 = (int[]) saved.Clone();
-                if (a < s2.Length) s2[a] = i;
-                AddThread(prog, codeBase, classBase, cps, i, list, seen, pc + 1, s2);
-                break;
-            }
-            case OP_BOL:
-                if (i == 0) AddThread(prog, codeBase, classBase, cps, i, list, seen, pc + 1, saved);
-                break;
-            case OP_EOL:
-                if (i == cps.Length) AddThread(prog, codeBase, classBase, cps, i, list, seen, pc + 1, saved);
-                break;
-            case OP_WORDB:
-            case OP_NWORDB: {
-                bool before = i > 0 && WordCp(cps[i - 1]);
-                bool after = i < cps.Length && WordCp(cps[i]);
-                bool at = before != after;
-                if ((op == OP_WORDB) == at) {
-                    AddThread(prog, codeBase, classBase, cps, i, list, seen, pc + 1, saved);
-                }
-                break;
-            }
-            default:
-                list.Add(new Thread(pc, saved));
-                break;
-        }
-    }
+    // `AddThread` IS GENERATED (`kin/pike.kin`) and takes the arena. Nothing
+    // here calls it directly -- the generated `RunOver` does.
 
+    /// GENERATED (`kin/pike.kin`) -- see the note on the JVM's `consumes`.
     static bool Consumes(int[] prog, int codeBase, int classBase, int pc, int v) {
-        int b = codeBase + pc * 3;
-        switch (prog[b]) {
-            case OP_CHAR: return v == prog[b + 1];
-            // NOT a newline. Java's `.` excludes it without DOTALL, and the
-            // backtracker this replaced matched it -- the divergence is closed
-            // here rather than left to the host.
-            case OP_ANY: return v != 10;
-            case OP_CLASS: {
-                bool hit = ClassHit(prog, classBase, prog[b + 1], v);
-                return prog[b + 2] == 1 ? !hit : hit;
-            }
-            default: return false;
-        }
+        return global::_3sln.Flint.Kgen.Rt.Pike.Consumes(prog, codeBase, classBase, pc, v);
     }
 
     /// The simulator proper: no `Rt`, so it can be run many times over ONE
     /// decoding of the subject. That is what `reFindAll` needs, and giving it
     /// `reRun` in a loop was quadratic -- each call decoded the whole subject
     /// again.
+    /// GENERATED (`kin/pike.kin`) -- see the note on the JVM's `runOver`.
+    /// This lays out the arena; the simulation is one source for all three.
     static int[] RunOver(int[] prog, int ninstrs, int nslots, int[] cps,
                          int from, int entry, bool full) {
-        int codeBase = PROG_HDR;
-        int classBase = PROG_HDR + ninstrs * 3;
-        if (from > cps.Length) return null;
-        List<Thread> clist = new List<Thread>();
-        List<Thread> nlist = new List<Thread>();
+        int width = nslots + 1;
+        int aAt = 0, bAt = ninstrs * width;
+        int scratchAt = 2 * ninstrs * width;
+        int startAt = scratchAt + ninstrs * nslots;
+        int bestAt = startAt + nslots;
+        int[] mem = new int[bestAt + nslots];
+        System.Array.Fill(mem, -1);
         bool[] seen = new bool[ninstrs];
-        int[] start = new int[nslots];
-        System.Array.Fill(start, -1);
-        AddThread(prog, codeBase, classBase, cps, from, clist, seen, entry, start);
-        int[] best = null;
-        int i = from;
-        for (;;) {
-            if (clist.Count == 0) break;
-            bool have = i < cps.Length;
-            int v = have ? cps[i] : 0;
-            nlist.Clear();
-            System.Array.Fill(seen, false);
-            foreach (Thread t in clist) {
-                int op = prog[codeBase + t.pc * 3];
-                if (op == OP_MATCH) {
-                    // A FULL match must reach the end. Rejecting rather than
-                    // cutting is what lets a LOWER-priority alternative win --
-                    // `(a|ab)` against "ab" is `ab`, which a backtracker gets
-                    // by backtracking against the anchor and this gets by
-                    // carrying both threads.
-                    if (!full || i == cps.Length) { best = t.saved; break; }
-                    continue;
-                }
-                if (have && Consumes(prog, codeBase, classBase, t.pc, v)) {
-                    AddThread(prog, codeBase, classBase, cps, i + 1, nlist, seen, t.pc + 1, t.saved);
-                }
-            }
-            List<Thread> swap = clist; clist = nlist; nlist = swap;
-            if (i >= cps.Length) break;
-            i++;
-        }
+        bool hit = global::_3sln.Flint.Kgen.Rt.Pike.RunOver(
+            prog, ninstrs, nslots, cps, cps.Length, from, entry, full,
+            mem, aAt, bAt, scratchAt, startAt, bestAt, seen);
+        if (!hit) return null;
+        int[] best = new int[nslots];
+        System.Array.Copy(mem, bestAt, best, 0, nslots);
         return best;
     }
 

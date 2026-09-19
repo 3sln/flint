@@ -820,7 +820,23 @@
           ;; Reachability from a single entry is right for the second and wrong
           ;; for the first: a function nobody calls from `main` is exactly the
           ;; one a host wants to call, and it was being dropped as unreachable.
-          extra-roots (vec exports)
+          ;; THE CONTROL PLANE IS ALWAYS ONE, whether or not a caller asked.
+          ;; `flint.system/boot` is spawned by bootstrap and referenced by
+          ;; nothing (`DECISIONS.md#bridges-are-the-only-door`), so reachability
+          ;; drops it and the image loses the only door into itself. The symptom
+          ;; is never a compile error: the bind is delivered, nothing is there to
+          ;; serve it, every thread settles, and the module closes its own ports
+          ;; -- "the call to <entry> was never answered".
+          ;;
+          ;; HERE rather than in each caller. `src/flint/selfhost.cljc` and
+          ;; `bin/flint` both add it to `:exports` and both were right; the
+          ;; third caller, `test/shake.clj`, built an image straight through
+          ;; this function and got a module nothing could call. A fact every
+          ;; caller must state is a fact this function should state once.
+          extra-roots (let [v (vec exports)]
+                        (if (some #{'flint.system/boot} v)
+                          v
+                          (conj v 'flint.system/boot)))
           items (:items @cc)
           ;; Reachability is a fixpoint, not one pass. Two things make it so:
           ;; including a namespace brings in its bare top-level expressions, and

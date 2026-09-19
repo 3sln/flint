@@ -216,7 +216,7 @@ public final class Aot {
         rt.roots.stackTop = top;
         rt.steps += gas;
         Rt.aotTicks++;
-        if (rt.checkpoint != 0 && rt.steps >= rt.checkpoint) {
+        if (rt.steps >= rt.checkpoint) {
                 // ONE BACK, because the back-edge instruction is about to be
                 // charged a second time. `gas` is the chunk's static count and
                 // the back-edge is IN it -- compiled code jumps for itself.

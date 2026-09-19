@@ -359,27 +359,23 @@ impl Rt {
         wrote
     }
 
-
-    // --- the trie, exposed for transients ----------------------------------
-
-    pub fn champ_find(&mut self, root: Value, h: u32, key: Value) -> Value {
-        self.node_find(root, 0, h, key)
-    }
-    pub fn champ_assoc(&mut self, root: Value, h: u32, k: Value, v: Value, edit: Value) -> Value {
-        self.node_assoc(root, 0, h, k, v, edit)
-    }
-    pub fn champ_dissoc(&mut self, root: Value, h: u32, k: Value, edit: Value) -> Value {
-        self.node_dissoc(root, 0, h, k, edit)
-    }
-    pub fn champ_wrap(&mut self, cnt: u32, root: Value) -> Value {
-        self.new_hash_map(cnt, root, NIL)
-    }
-    pub fn array_map_to_hash(&mut self, m: Value) -> Value {
-        self.promote(m)
-    }
-    pub fn champ_empty_root(&mut self) -> Value {
-        self.bn_new(0, 0, NIL)
-    }
+    // THE TRIE'S DELEGATING WRAPPERS WERE REMOVED, 2026-09-18.
+    //
+    // `champ_find`, `champ_assoc`, `champ_dissoc`, `champ_wrap`,
+    // `array_map_to_hash` and `champ_empty_root` each forwarded one call --
+    // `champ_find` was `node_find(root, 0, h, key)` and the rest the same
+    // shape -- under the heading "exposed for transients". Nothing ever called
+    // them: not this crate, not a unit, not a host, not the SDKs. The map
+    // operations that do this work are GENERATED (`kgen/rt/mapwrite.rs`,
+    // `mapread.rs`) and call `node_assoc` / `node_find` / `node_dissoc`
+    // directly, so the wrappers were bypassed by the very code they existed
+    // for. The JVM and CLR never had them at all.
+    //
+    // They are noted here rather than silently dropped because
+    // `doc/goals/kin-port.md` ranked them as the one remaining piece of `Maps`
+    // that needed no new capability -- "worth doing" -- and that ranking was
+    // measured against a premise that had stopped being true. Porting them
+    // would have ADDED two definitions to buy back one nobody called.
 }
 
 #[cfg(test)]

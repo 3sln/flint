@@ -13,17 +13,35 @@
 const K = {
   NIL: 0, TRUE: 1, FALSE: 2, INT: 3, DOUBLE: 4, STRING: 5, KEYWORD: 6,
   SYMBOL: 7, VECTOR: 8, LIST: 9, MAP: 10, SET: 11, BYTES: 14, PORT: 15,
-  SENTINEL: 16,
+  SENTINEL: 16, TAGGED: 17, TABLE: 18, WITH_META: 19,
 };
 const NO_NS = 0xffffffff;
 const TAG_NAME = {
   0: 'nil', 1: 'boolean', 2: 'boolean', 3: 'int', 4: 'double', 5: 'string',
   6: 'keyword', 7: 'symbol', 8: 'vector', 9: 'list', 10: 'map', 11: 'set',
-  14: 'bytes', 15: 'port', 16: 'sentinel',
+  14: 'bytes', 15: 'port', 16: 'sentinel', 17: 'tagged', 18: 'table',
+  19: 'with-meta',
 };
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
+
+/// Metadata that arrived with a decoded value.
+///
+/// A SIDE TABLE, not a property on the value. JavaScript has no metadata, so
+/// the choices were to hang one on the object or to keep it beside; a property
+/// loses either way. `v.meta` collides with a flint map that has a string key
+/// `"meta"` -- which decodes to exactly `{meta: ...}` -- and a non-enumerable
+/// one is invisible to `Object.keys`, `JSON.stringify` and every equality check
+/// a host might already be doing, which is worse than absent because it is
+/// absent only sometimes.
+///
+/// WEAK, so holding metadata never keeps a decoded value alive.
+///
+/// Only objects can be keys, which costs nothing: the kinds that carry metadata
+/// in flint -- vectors, maps, sets, lists, ports -- all decode to objects here,
+/// and the ones that cannot carry it are the primitives.
+const META = new WeakMap();
 
 class Writer {
   constructor() { this.parts = []; this.n = 0; }
@@ -153,6 +171,78 @@ export const codec = {
     for (const [k, val] of entries) { k._write(w); val._write(w); }
   }),
 
+  /// A TAGGED LITERAL: `tagged('my.ns/thing', form)`.
+  ///
+  /// The tag is a SYMBOL, so a plain string here is written as one -- that is
+  /// what `#my.ns/thing` means and a keyword would be a different value.
+  tagged: (tag, form) => v((w) => {
+    w.byte(K.TAGGED);
+    (tag instanceof Val ? tag : codec.sym(String(tag)))._write(w);
+    (form instanceof Val ? form : codec.from(form))._write(w);
+  }),
+
+  /// A TABLE: `table([[name, type], …], rows)`, rows being objects.
+  ///
+  /// The SCHEMA IS NOT INFERRED. A column of whole numbers could be `:int` or
+  /// `:double` and an empty table has no values to guess from at all, so the
+  /// types are said. Names and types are keywords: they are written as
+  /// keywords whether or not the caller wrote the colon, because there is no
+  /// other thing they could be.
+  ///
+  /// COLUMN BY COLUMN on the wire, which is why the rows are walked once per
+  /// column here: the format exists so a receiver reading one field reads one
+  /// run (`DECISIONS.md#tables`).
+  table: (schema, rows) => v((w) => {
+    const kwOf = (x) => {
+      if (x instanceof Val) return x;
+      const str = String(x);
+      const bare = str.startsWith(':') ? str.slice(1) : str;
+      const i = bare.indexOf('/');
+      return i > 0 ? codec.kw(bare.slice(0, i), bare.slice(i + 1)) : codec.kw(bare);
+    };
+    const names = schema.map(([n]) => n);
+    w.byte(K.TABLE);
+    w.u32(schema.length);
+    for (const [n, t] of schema) { kwOf(n)._write(w); kwOf(t)._write(w); }
+    w.u32(rows.length);
+    for (const n of names) {
+      const key = n instanceof Val ? null : String(n).replace(/^:/, '');
+      for (const row of rows) {
+        // BOTH SPELLINGS, because `decode` gives `{id: 1}` and a host writing
+        // one by hand may well write `{':id': 1}` -- and a round trip that
+        // needed the keys rewritten in between would not be a round trip.
+        const cell = key !== null && key in row ? row[key]
+                   : key !== null && `:${key}` in row ? row[`:${key}`]
+                   : undefined;
+        if (cell === undefined) {
+          throw new TypeError(`flint: this table row has no \`${key}\`, and a table is closed`);
+        }
+        (cell instanceof Val ? cell : codec.from(cell))._write(w);
+      }
+    }
+  }),
+
+  /// A value carrying METADATA: `withMeta(meta, value)`.
+  ///
+  /// What crosses is decided by the SENDER, and on the guest side that is
+  /// `flint.protocols/WireMeta` -- the default is that nothing crosses, so a
+  /// host that wants metadata on the wire says so here explicitly.
+  ///
+  /// The metadata goes through the ordinary encoder, so a map holding something
+  /// that cannot cross fails the send by name rather than being dropped.
+  withMeta: (m, v) => new Val((w) => {
+    w.byte(K.WITH_META);
+    (m instanceof Val ? m : codec.from(m))._write(w);
+    (v instanceof Val ? v : codec.from(v))._write(w);
+  }),
+
+  /// The metadata that arrived with `v`, or undefined.
+  ///
+  /// Kept beside the value rather than on it -- see `META` above for why. A
+  /// host reads a port's declared protocols through this.
+  metaOf: (v) => (v !== null && (typeof v === 'object' || typeof v === 'function')
+    ? META.get(v) : undefined),
+
   /// A JS value, guessed by shape.
   ///
   /// A JS object has STRING keys, so string keys are what it means.
@@ -162,6 +252,9 @@ export const codec = {
   /// the right way round: the explicit builder is always there.
   from(x, opts = {}) {
     const kwKeys = !!opts.keywordizeKeys;
+    // Guards the one re-entry above: `go(x)` on a value that HAS metadata would
+    // otherwise wrap it again, for ever.
+    const SEEN = new Set();
     const go = (x) => {
       if (x === null || x === undefined) return codec.nil();
       if (typeof x === 'boolean') return codec.bool(x);
@@ -173,6 +266,19 @@ export const codec = {
         return x.startsWith(':') && x.length > 1 ? kwOf(x.slice(1)) : codec.str(x);
       }
       if (x instanceof Val) return x;
+      // METADATA SURVIVES A ROUND TRIP. `from` exists so a host can decode a
+      // message, look at it and send it back without taking it apart; metadata
+      // that silently fell off in the middle would make that false for exactly
+      // the values it matters for -- a port, whose protocols are the reason it
+      // is carried at all. `bare` re-enters without the metadata, so this wraps
+      // once rather than for ever.
+      {
+        const m = codec.metaOf(x);
+        if (m !== undefined && !SEEN.has(x)) {
+          SEEN.add(x);
+          try { return codec.withMeta(go(m), go(x)); } finally { SEEN.delete(x); }
+        }
+      }
       // The shapes `decode` PRODUCES, recognised so that a host can decode a
       // message, look at it, and send it back without taking it apart. Matched
       // on the exact key set rather than on the presence of a key, so an
@@ -185,6 +291,13 @@ export const codec = {
         if (ks.length === 2 && ks.includes('sentinel') && ks.includes('hostId')
             && Number.isInteger(x.hostId)) {
           return codec.sentinel(x.hostId, String(x.sentinel));
+        }
+        if (ks.length === 2 && ks.includes('tag') && ks.includes('form')) {
+          return codec.tagged(x.tag, x.form);
+        }
+        if (ks.length === 2 && ks.includes('table') && ks.includes('schema')
+            && Array.isArray(x.table) && Array.isArray(x.schema)) {
+          return codec.table(x.schema, x.table);
         }
       }
       if (x instanceof Uint8Array) return codec.bytes(x);
@@ -271,6 +384,50 @@ function read(r, opts) {
       // the others without lying about them.
       if (entries.every(([k]) => typeof k === 'string')) return Object.fromEntries(entries);
       return new Map(entries);
+    }
+    case K.WITH_META: {
+      // The metadata, then the value. Read in that order because that is the
+      // order the runtime writes them (`runtime/src/codec.rs`, `K_WITH_META`).
+      const m = read(r, opts);
+      const v = read(r, opts);
+      // A PRIMITIVE SILENTLY KEEPS NONE, which is the same answer the guest
+      // decoder gives: `with-meta` on a kind that cannot carry any returns the
+      // value unchanged. Bytes claiming metadata for a number produce the
+      // number, not an error.
+      if (v !== null && (typeof v === 'object' || typeof v === 'function')) {
+        META.set(v, m);
+      }
+      return v;
+    }
+    case K.TAGGED: {
+      // A tag and a form, both ordinary values. `{ tag, form }` because a
+      // tagged literal is not the thing it wraps and flattening it to the form
+      // would lose the only part a host reads it for.
+      const tag_ = read(r, opts);
+      return { tag: tag_, form: read(r, opts) };
+    }
+    case K.TABLE: {
+      // COLUMN BY COLUMN on the wire, row by row in JS. A host gets the rows
+      // it would write by hand, and the schema beside them -- the column TYPES
+      // are not recoverable from the values, and a host that round-trips a
+      // table needs them to send one back.
+      const ncols = readU32(r);
+      const schema = [];
+      for (let i = 0; i < ncols; i++) schema.push([read(r, opts), read(r, opts)]);
+      const nrows = readU32(r);
+      const cols = [];
+      for (let c = 0; c < ncols; c++) {
+        const col = [];
+        for (let i = 0; i < nrows; i++) col.push(read(r, opts));
+        cols.push(col);
+      }
+      const rows = [];
+      for (let i = 0; i < nrows; i++) {
+        const row = {};
+        for (let c = 0; c < ncols; c++) row[schema[c][0]] = cols[c][i];
+        rows.push(row);
+      }
+      return { table: rows, schema };
     }
     case K.PORT: { const id = readU32(r); return { port: id }; }
     case K.SENTINEL: {

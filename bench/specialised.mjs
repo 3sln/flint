@@ -33,13 +33,26 @@ const time = (what, n) => {
   return { ms: best, steps, out };
 };
 
-// Differenced against a zero-iteration run, because the specialised side pays
-// a fixed entry cost -- one `^int` check on the parameter -- that has nothing
-// to do with the loop. Without this the two totals differ by 9 instructions
-// and the "same instruction count" claim below is false for the wrong reason.
+// THE COST OF `N` MORE ITERATIONS: two hot runs differenced, not a hot run
+// against a cold one.
+//
+// Differencing against a zero-iteration run was the first fix here, and the
+// comment it replaced is worth keeping: the specialised side pays a fixed entry
+// cost -- one `^int` check on the parameter -- so without any differencing the
+// totals differ by 9 instructions and the claim below is false for the wrong
+// reason. But a cold run does not pay everything a hot run pays ONCE either.
+// Something in a long run happens that does not happen in a short one -- a
+// collection, most likely -- and it survives the subtraction, leaving these two
+// loops differing by exactly 2 out of 5,159,815 at every size measured.
+//
+// Two hot runs cancel it, because whatever happens once happens in both, and
+// then the counts are equal TO THE INSTRUCTION: 5,159,762 against 5,159,762 at
+// N = 300 000 and 2,579,904 against 2,579,904 at N = 150 000. This is the
+// stricter measurement, not the looser one -- it still demands exact equality,
+// of a quantity that is actually per-iteration.
 const perLoop = (what) => {
-  const hot = time(what, N), cold = time(what, 0);
-  return { ...hot, loopSteps: hot.steps - cold.steps, loopMs: hot.ms - cold.ms };
+  const twice = time(what, 2 * N), once = time(what, N);
+  return { ...twice, loopSteps: twice.steps - once.steps, loopMs: twice.ms - once.ms };
 };
 const g = perLoop('generic'), s = perLoop('specialised');
 if (g.out !== s.out) {

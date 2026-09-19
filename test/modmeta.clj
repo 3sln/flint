@@ -18,7 +18,16 @@
 
 (defn sh [& args]
   (let [p (.start (ProcessBuilder. (into-array String args)))
-        out (slurp (.getInputStream p)) err (slurp (.getErrorStream p))]
+        ;; STDERR IS DRAINED ON ITS OWN THREAD, and that is not a style
+        ;; choice. Reading stdout to completion first and stderr after
+        ;; DEADLOCKS the moment the child writes more than a pipe buffer to
+        ;; stderr: the child blocks writing, this blocks reading, and neither
+        ;; moves again. Measured 2026-09-15 -- `bin/build-units --diagnostics`
+        ;; emits 71 266 bytes of cargo warnings against a 64 KB buffer, and
+        ;; `bin/test` sat in `ropes` for 45 minutes looking merely slow.
+        err (future (slurp (.getErrorStream p)))
+        out (slurp (.getInputStream p))
+        err @err]
     (.waitFor p) {:exit (.exitValue p) :out out :err err :all (str out err)}))
 
 (println "modmeta: what a module says about itself (0020)")

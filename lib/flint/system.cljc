@@ -58,34 +58,121 @@
     (try
       (let [nm (:fn m)
             f (flint.rt/var-named nm)]
-        (if (some? f)
+        ;; CALLABLE, not merely present. `some?` is satisfied by anything the
+        ;; var happens to hold, so a slot holding the wrong value reached
+        ;; `apply` and failed there -- and `apply`'s message names the KIND it
+        ;; was handed and the arity it was called with, three layers from the
+        ;; name that resolved wrongly. Asking the real question here means the
+        ;; answer says which NAME is broken.
+        (if (fn? f)
           {:tx tx :op :return :value (apply f (or (:args m) []))}
           ;; NOT AN INTERNAL ERROR. A name that is absent is the ordinary case
           ;; for a function the shake removed -- only reachable code ships, and
           ;; a string does not keep a var alive (`DECISIONS.md#vars-is-its-own-grant`).
           ;; So it answers like any other failure and says what to do about it.
           {:tx tx :op :throw :kind "IllegalArgumentException"
-           :message (str "this image has no `" nm "`; if it should be callable, "
+           :message (str "this image has no callable `" nm "`"
+                         (if (nil? f)
+                           ""
+                           (str " -- its var holds a " (str (flint.rt/kind f))))
+                         "; if it should be callable, "
                          "name it in `:exports` so the shake keeps it")}))
       (catch Throwable e
         {:tx tx :op :throw
-         :kind (or (some-> e ex-data :kind) "Error")
+         ;; THE KIND A `catch` SELECTS ON, not the word "Error".
+         ;;
+         ;; `ex-data :kind` stays first because a guest may declare its own;
+         ;; what was missing is the fallback, and the gap was not cosmetic. A
+         ;; runtime error carries its kind in the object's `EX_KIND` slot
+         ;; rather than in its data map, so EVERY one of them -- gas,
+         ;; ClassCastException, the memory cap -- reached a host as the
+         ;; generic "Error". Measured against a pre-control-plane run: the
+         ;; gas error read `ResourceExhausted` before calls were served
+         ;; through here and `Error` afterwards, because the throw now passes
+         ;; through this catch on its way out.
+         ;;
+         ;; `DECISIONS.md#bridges-are-the-only-door` says failure is data. A
+         ;; kind every failure shares is not data a host can act on.
+         :kind (or (some-> e ex-data :kind) (flint.rt/ex-kind e) "Error")
          :message (or (ex-message e) "the call failed")}))))
 
 (defn- serve-calls
   "Serve one bound port until it closes.
 
   `receive` answers nil once the port is closed and drained, which is how
-  `unbind` stops this: nothing has to be signalled out of band."
+  `unbind` stops this: nothing has to be signalled out of band -- but nil is
+  ASKED ABOUT rather than believed; see the loop's else branch."
   [p]
   (loop []
     (let [m (port/receive p)]
-      (when (some? m)
-        ;; The SEND may itself fail -- a peer that went away mid-call -- and
-        ;; that must not end the loop either: the next message is still
-        ;; servable.
-        (try (port/send p (answer m)) (catch Throwable _ nil))
-        (recur)))))
+      (if (some? m)
+        (do
+          ;; The SEND may itself fail -- a peer that went away mid-call -- and
+          ;; that must not end the loop either: the next message is still
+          ;; servable.
+          ;;
+          ;; A DROPPED ANSWER IS A HANG. The caller is pumping for THIS `:tx`
+          ;; and nothing else will ever arrive for it, so swallowing the failure
+          ;; turns a reportable error into a host that spins to its guard and
+          ;; gives up -- which is how every reply that could not be encoded has
+          ;; presented (`DECISIONS.md#the-codec-is-guest-code`).
+          ;;
+          ;; So the failure is ANSWERED: a small message carrying the same `:tx`,
+          ;; which is the one thing certain to fit where the real answer did not.
+          ;; If even that cannot be sent the loop still continues, because the
+          ;; peer really may be gone -- and then there is no one to tell.
+          ;;
+          ;; HELD BACK ONCE, and the reason is worth keeping. `flint.system` ships
+          ;; in every module, so this code grows every image, and when it was
+          ;; first written a reply within a few kilobytes of the encoder's ceiling
+          ;; crossed it and a passing compile started failing. That ceiling was
+          ;; the stale-writer bug in `wire-str`, since fixed -- a 2 MB reply
+          ;; crosses now -- so the objection is gone and the diagnostic is worth
+          ;; more than the bytes.
+          ;; BUILDING THE ANSWER AND SENDING IT ARE SEPARATE FAILURES, and one
+          ;; `try` around both cannot say which happened. `answer` catches
+          ;; everything guest code can do, so a throw escaping it is a fault in
+          ;; the control plane itself rather than in the call -- and reporting
+          ;; that as "could not be sent back" sends the reader to the encoder for
+          ;; a bug that is nowhere near it.
+          (let [reply (try (answer m)
+                           (catch Throwable e
+                             {:tx (:tx m) :op :throw :kind "AnswerFailed"
+                              :message (str "building this call's answer failed: "
+                                            (ex-message e))}))]
+            (try (port/send p reply)
+                 (catch Throwable e
+                   (try (port/send p {:tx (:tx m) :op :throw
+                                      :kind "SendFailed"
+                                      :message (str "this call's answer could not be "
+                                                    "sent back: " (ex-message e))})
+                        (catch Throwable _ nil)))))
+          (recur))
+        ;; NIL IS NOT PROOF THE PORT ENDED, and treating it as proof cost this
+        ;; sandbox a call. `flint.port/receive` on a bridge is
+        ;;
+        ;;     (let [r (flint.rt/port-receive-reader p)]
+        ;;       (when (some? r) (wire/read-from r)))
+        ;;
+        ;; so it answers nil for THREE different things: the port really is
+        ;; closed and drained, the peer sent a nil, or the decode produced
+        ;; nothing. Only the first is an end of stream. Reading the other two
+        ;; as one ended this thread mid-service: the port stayed bound with no
+        ;; server on it, every later call on it was lost, and the host learned
+        ;; nothing until its pump guard gave up a million iterations later.
+        ;;
+        ;; Measured, and it needs no exotic state: a host that delivers a bare
+        ;; `nil` on a bound port kills that port's thread. Three lines against
+        ;; any module (`doc/goals/kin-port.md`).
+        ;;
+        ;; So ASK. `closed?` covers closed, half-closed and orphaned -- every
+        ;; way nothing further can arrive -- and anything else means this was a
+        ;; message we could not serve, not a goodbye. Carrying on cannot spin:
+        ;; the nil consumed a message, so the next `receive` parks like any
+        ;; other, and a port that IS finished answers `closed?` true and ends
+        ;; the loop exactly as before.
+        (when-not (port/closed? p)
+          (recur))))))
 
 ;; -------------------------------------------------------------- control
 
@@ -134,3 +221,16 @@
           (if go
             (recur bound*)
             nil))))))
+
+(defn boot
+  "The control plane, as a THUNK bootstrap can spawn directly.
+
+  A green thread takes no arguments, so the port cannot be handed in -- it is
+  fetched. That is why `flint/system-port` exists, and why this is a `defn`
+  rather than a closure bootstrap builds: taking a var's value and spawning it
+  runs NO guest code, where calling a flint function to build a closure
+  re-enters the scheduler from inside itself. Measured
+  (`DECISIONS.md#bridges-are-the-only-door`): the nested `drive` is what made
+  the first version silently never start."
+  []
+  (serve (flint.rt/system-port)))

@@ -57,6 +57,13 @@ impl StrCursor {
 }
 
 pub struct Rt {
+    /// Whether the control plane has been spawned on the system port.
+    ///
+    /// One-shot, checked on every `drive`
+    /// (`DECISIONS.md#bridges-are-the-only-door`). Not a slot on the scheduler,
+    /// because a sandbox with no system port has no scheduler either and the
+    /// question is asked before that is known.
+    pub system_booted: bool,
     /// The heap, when this `Rt` is the one that made it.
     ///
     /// A sandbox has ONE heap and may have several executors on it
@@ -80,6 +87,14 @@ pub struct Rt {
     /// is counting.
     #[cfg(feature = "parallel")]
     running: bool,
+    /// Where this executor's `steps` stood when it last published into the
+    /// sandbox's shared gas total.
+    ///
+    /// The shared counter is batched on purpose -- one atomic per instruction
+    /// would put a read-modify-write on the interpreter's hottest line -- so
+    /// what an executor owes the total is the distance from here to `steps`.
+    #[cfg(feature = "parallel")]
+    gas_published: u64,
     pub gc: crate::gc::GcPtr,
     pub roots: Roots,
     /// GROWABLE BYTE BUFFERS, owned by the runtime and addressed by index.
@@ -317,6 +332,7 @@ impl Rt {
             &mut (*heap.as_ptr()).host_natives
         }));
         Rt {
+            system_booted: false,
             bridge_hook: None,
             owned_heap,
             image,
@@ -327,6 +343,8 @@ impl Rt {
             exec_id: None,
             #[cfg(feature = "parallel")]
             running: false,
+            #[cfg(feature = "parallel")]
+            gas_published: 0,
             gc,
             roots: Roots::new(shared),
             sinks: alloc::vec::Vec::new(),
@@ -612,6 +630,157 @@ impl Rt {
         if par.stop_requested() {
             par.park();
         }
+    }
+
+    // --- the shared gas budget ---------------------------------------------
+    //
+    // A cap is on a SANDBOX (`DECISIONS.md#resource-limits`). A pooled sandbox
+    // runs guest code on several `Rt`s that share a heap, each with its own
+    // `steps`, so a cap written into one of them bounds one thread and not the
+    // sandbox. Measured before this was written: a pooled sandbox given a
+    // 2 000-instruction budget ran sixteen ten-million-iteration calls to
+    // completion, because one dispatch carried all sixteen onto a secondary
+    // executor that had never been told about the limit.
+    //
+    // The shape is the one `par.rs` was written for and nothing had called:
+    // count LOCALLY, publish in batches, and let the local limit be the end of
+    // the current batch rather than the budget. The local limit therefore
+    // fires often and usually means "time to publish", which is why the trip
+    // path asks this before it raises anything.
+
+    /// Arm this executor for its next slice of the sandbox's shared budget.
+    ///
+    /// A no-op when there is no shared budget, so an inline sandbox keeps the
+    /// old meaning of `gas_limit` exactly: the limit IS the budget.
+    #[cfg(feature = "parallel")]
+    pub fn arm_shared_gas(&mut self) {
+        if self.exec_id.is_none() {
+            return;
+        }
+        let par: &crate::par::Parallel = unsafe { &(*self.heap.as_ptr()).par };
+        let limit = par.limit();
+        if limit == 0 {
+            return;
+        }
+        // PUBLISH BEFORE RE-ARMING, and this is not tidiness.
+        //
+        // A call that ENDS before it reaches a batch boundary has spent
+        // something nobody has been told about. Moving the watermark to where
+        // `steps` now stands would DISCARD it rather than defer it -- and the
+        // batching hides that completely: a stream of calls each shorter than
+        // a batch would never publish anything, the total would stay at zero,
+        // and the budget would never be spent however long the sandbox ran.
+        // Written the wrong way first, and `a_stream_of_short_calls_still_
+        // spends_the_budget` is the test that caught it.
+        let total = self.publish_gas();
+        self.gas_limit = if total >= limit {
+            // Already spent. Trip at the next instruction rather than grant a
+            // batch; the trip path raises, because `flush_shared_gas` will
+            // answer true.
+            self.steps.max(1)
+        } else {
+            self.steps + Self::gas_batch(limit, total, par.executors())
+        };
+        self.refresh_checkpoint();
+    }
+
+    /// Hand this executor's unpublished steps to the shared total, and answer
+    /// what the total now stands at.
+    ///
+    /// `saturating_sub` because `gas_published` is a watermark and the grace
+    /// window moves `steps` in ways this does not own. Nothing owed still reads
+    /// the total, because the caller's next decision depends on it.
+    #[cfg(feature = "parallel")]
+    fn publish_gas(&mut self) -> u64 {
+        let par: &crate::par::Parallel = unsafe { &(*self.heap.as_ptr()).par };
+        let owed = self.steps.saturating_sub(self.gas_published);
+        self.gas_published = self.steps;
+        if owed == 0 { par.spent() } else { par.flush_gas(owed) }
+    }
+
+    /// How far an executor may run before it has to publish.
+    ///
+    /// **The batch NARROWS as the total approaches the limit, and that is what
+    /// makes this a cap rather than an approximation.** The recorded price of
+    /// batching was "a limit stops the program late, by at most the batch
+    /// times the number of executors". Dividing what is left between the
+    /// executors that could be spending it turns that bound into "not past the
+    /// limit at all": `executors * batch <= remaining`, so every executor can
+    /// run its whole batch and the total still lands on the limit rather than
+    /// beyond it.
+    ///
+    /// Far from the limit the division is larger than `GAS_BATCH` and the
+    /// clamp gives the cheap path back -- one atomic per 4 096 instructions,
+    /// which is the reason batching exists. The endgame is the only place that
+    /// pays for exactness.
+    ///
+    /// At least 1, because a batch of zero is an executor that publishes
+    /// without running and spins.
+    #[cfg(feature = "parallel")]
+    fn gas_batch(limit: u64, spent: u64, executors: u32) -> u64 {
+        let remaining = limit.saturating_sub(spent);
+        let share = remaining / (executors.max(1) as u64);
+        share.clamp(1, crate::par::GAS_BATCH)
+    }
+
+    /// Set the SANDBOX's budget: every executor on this heap is bounded by this
+    /// one number together, rather than each by its own copy of it.
+    ///
+    /// N executors each given `n` is a sandbox that may spend `N * n`, which is
+    /// not the cap the embedder asked for. This is the cap they asked for.
+    #[cfg(feature = "parallel")]
+    pub fn set_shared_gas_limit(&mut self, n: u64) {
+        if self.exec_id.is_none() {
+            return;
+        }
+        let par: &crate::par::Parallel = unsafe { &(*self.heap.as_ptr()).par };
+        par.set_limit(n);
+        self.arm_shared_gas();
+    }
+
+    /// What this sandbox has spent across every executor.
+    ///
+    /// PUBLISHED steps only, which is what makes it cheap: an executor's
+    /// current batch is still in its own `steps` and arrives at the next
+    /// boundary. It is a figure true as of the last publish, and the batching
+    /// that makes it so is the same batching that keeps the atomic off the
+    /// interpreter's hottest line.
+    #[cfg(feature = "parallel")]
+    pub fn shared_gas_spent(&self) -> u64 {
+        if self.exec_id.is_none() {
+            return 0;
+        }
+        let par: &crate::par::Parallel = unsafe { &(*self.heap.as_ptr()).par };
+        par.spent()
+    }
+
+    /// Publish what this executor has spent since its last publish, and re-arm
+    /// it for the next batch.
+    ///
+    /// Answers TRUE when the SANDBOX's budget is spent -- which is the only
+    /// case the caller should treat as a blown budget. False means "that was a
+    /// batch boundary, carry on", and the local limit has been moved forward.
+    ///
+    /// Also true when there is no shared budget at all, so the trip path needs
+    /// no second test: an inline sandbox reaching its `gas_limit` really has
+    /// spent its budget.
+    #[cfg(feature = "parallel")]
+    pub fn flush_shared_gas(&mut self) -> bool {
+        if self.exec_id.is_none() {
+            return true;
+        }
+        let par: &crate::par::Parallel = unsafe { &(*self.heap.as_ptr()).par };
+        let limit = par.limit();
+        if limit == 0 {
+            return true;
+        }
+        let total = self.publish_gas();
+        if total >= limit {
+            return true;
+        }
+        self.gas_limit = self.steps + Self::gas_batch(limit, total, par.executors());
+        self.refresh_checkpoint();
+        false
     }
 
     /// Register this `Rt` as an executor on its heap.
@@ -1018,3 +1187,63 @@ impl Frame {
 }
 
 pub type ValVec = Vec<Value>;
+
+#[cfg(all(test, feature = "parallel"))]
+mod shared_gas_tests {
+    use super::*;
+
+    /// THE PROPERTY THAT MAKES A BATCHED COUNTER A CAP.
+    ///
+    /// Every executor may run a whole batch before it publishes, so the most a
+    /// sandbox can spend past the last publish is `executors * batch`. If that
+    /// is never more than what is left, the total cannot pass the limit before
+    /// somebody notices -- which is the difference between a cap and an
+    /// estimate.
+    ///
+    /// Checked over the shape of the endgame rather than at one point, because
+    /// the interesting behaviour is all in the last few thousand instructions
+    /// and a single sample would sit in the flat part where the clamp hides
+    /// everything.
+    #[test]
+    fn the_batch_never_lets_the_executors_overshoot_together() {
+        let limit = 1_000_000u64;
+        for execs in [1u32, 2, 4, 8, 64] {
+            let mut spent = 0u64;
+            while spent < limit {
+                let batch = Rt::gas_batch(limit, spent, execs);
+                assert!(batch >= 1, "a zero batch is an executor that spins");
+                let remaining = limit - spent;
+                // The clamp to 1 is the only case allowed to exceed, and it is
+                // bounded by the executor count rather than by `GAS_BATCH`.
+                if remaining >= execs as u64 {
+                    assert!(
+                        batch * execs as u64 <= remaining,
+                        "execs={execs} spent={spent}: {execs} x {batch} passes {remaining}"
+                    );
+                }
+                spent += batch * execs as u64;
+            }
+        }
+    }
+
+    /// AND THE CHEAP PATH IS STILL THERE. The whole reason gas is batched is to
+    /// keep an atomic off the interpreter's hottest line, so a budget that is
+    /// nowhere near spent must still publish only every `GAS_BATCH`. A
+    /// narrowing that narrowed everywhere would be correct and much slower.
+    #[test]
+    fn far_from_the_limit_the_batch_is_the_cheap_one() {
+        assert_eq!(Rt::gas_batch(u64::MAX, 0, 64), crate::par::GAS_BATCH);
+        assert_eq!(Rt::gas_batch(1_000_000_000, 0, 4), crate::par::GAS_BATCH);
+    }
+
+    /// A SPENT BUDGET STILL ANSWERS. `saturating_sub` rather than a subtraction,
+    /// because `spent` passes `limit` in the ordinary course of things -- the
+    /// executor that crosses it publishes its whole batch -- and an underflow
+    /// here would hand back a colossal batch at exactly the moment the budget
+    /// needs to be tight.
+    #[test]
+    fn past_the_limit_the_batch_does_not_wrap() {
+        assert_eq!(Rt::gas_batch(1_000, 1_000, 4), 1);
+        assert_eq!(Rt::gas_batch(1_000, 50_000, 4), 1);
+    }
+}

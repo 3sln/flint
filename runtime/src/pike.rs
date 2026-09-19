@@ -61,20 +61,16 @@ pub const RX_PROG: u32 = 1;
 pub const RX_NGROUPS: u32 = 2;
 
 
+/// GENERATED (`kin/pike.kin`). Whether a code point is in a character class.
+///
+/// THE SLICE IS THIS RUNTIME'S CONVENIENCE, not the shape. Rust can slice the
+/// class table out of the program for nothing and the other three cannot, so
+/// the generated function takes the program WHOLE and a base to index from --
+/// which is what both ports already did, and why they carried a different
+/// signature for the same function. Passing an already-sliced table with a
+/// base of zero is the same call.
 fn class_hit(classes: &[u32], off: usize, v: u32) -> bool {
-    let n = classes[off] as usize;
-    for k in 0..n {
-        let b = off + 1 + k * 3;
-        let hit = match classes[b] {
-            CL_ONE => v == classes[b + 1],
-            CL_RANGE => v >= classes[b + 1] && v <= classes[b + 2],
-            _ => pred_hit(classes[b + 1], v),
-        };
-        if hit {
-            return true;
-        }
-    }
-    false
+    crate::kgen::rt::pike::class_hit(classes, 0, off as u32, v)
 }
 
 /// The characters of a string, in order, without materialising it.
@@ -91,85 +87,20 @@ struct Cursor {
 impl Rt {
 }
 
-struct Thread {
-    pc: u32,
-    saved: alloc::vec::Vec<i32>,
-}
+// `Thread` AND `add_thread` ARE GENERATED (`kin/pike.kin`), and the struct is
+// gone with them. A thread is a flat row of `1 + nslots` words in an arena the
+// caller lays out -- `pc` then its capture slots -- which is what let the
+// recursion cross into kin: no growable list, no per-thread allocation, and
+// no second object type to keep in step across three runtimes.
 
-fn add_thread(
-    code: &[u32],
-    classes: &[u32],
-    cps: &[u32],
-    i: usize,
-    list: &mut alloc::vec::Vec<Thread>,
-    seen: &mut alloc::vec::Vec<bool>,
-    pc: u32,
-    saved: &[i32],
-) {
-    if seen[pc as usize] {
-        return;
-    }
-    seen[pc as usize] = true;
-    let b = (pc * 3) as usize;
-    let (op, a, c) = (code[b], code[b + 1], code[b + 2]);
-    match op {
-        OP_JMP => add_thread(code, classes, cps, i, list, seen, a, saved),
-        OP_SPLIT => {
-            add_thread(code, classes, cps, i, list, seen, a, saved);
-            add_thread(code, classes, cps, i, list, seen, c, saved);
-        }
-        OP_SAVE => {
-            let mut s2 = saved.to_vec();
-            if (a as usize) < s2.len() {
-                s2[a as usize] = i as i32;
-            }
-            add_thread(code, classes, cps, i, list, seen, pc + 1, &s2);
-        }
-        OP_BOL => {
-            if i == 0 {
-                add_thread(code, classes, cps, i, list, seen, pc + 1, saved);
-            }
-        }
-        OP_EOL => {
-            if i == cps.len() {
-                add_thread(code, classes, cps, i, list, seen, pc + 1, saved);
-            }
-        }
-        OP_WORDB | OP_NWORDB => {
-            let before = i > 0 && word_cp(cps[i - 1]);
-            let after = i < cps.len() && word_cp(cps[i]);
-            let at = before != after;
-            if (op == OP_WORDB) == at {
-                add_thread(code, classes, cps, i, list, seen, pc + 1, saved);
-            }
-        }
-        _ => list.push(Thread {
-            pc,
-            saved: saved.to_vec(),
-        }),
-    }
-}
-
-#[inline]
-fn consumes(code: &[u32], classes: &[u32], pc: u32, v: u32) -> bool {
-    let b = (pc * 3) as usize;
-    match code[b] {
-        OP_CHAR => v == code[b + 1],
-        // Not a newline. Java's `.` excludes it without DOTALL; the backtracker
-        // this replaces matched it, so the divergence is being closed.
-        OP_ANY => v != 10,
-        OP_CLASS => {
-            let hit = class_hit(classes, code[b + 1] as usize, v);
-            if code[b + 2] == 1 {
-                !hit
-            } else {
-                hit
-            }
-        }
-        _ => false,
-    }
-}
-
+/// GENERATED (`kin/pike.kin`). Whether the instruction at `pc` consumes a code
+/// point.
+///
+/// THE PROGRAM IS INDEXED, NOT SLICED. Both ports already took the program
+/// whole plus two bases, because neither can slice for free; native took two
+/// slices and so carried a different signature for the same function. This
+/// wrapper is gone -- the call site below passes the bases directly, which is
+/// what `run_over` has in hand anyway.
 impl Rt {
     /// Run a compiled program against `s`, anchored at code-point index `from`.
     /// Returns the slot vector of the best match, or `None`.
@@ -189,82 +120,40 @@ impl Rt {
         let ci = self.code_points(s);
         let cps = core::mem::take(&mut self.cps[ci as usize]);
         self.cps_close(ci);
-        run_over(prog, ninstrs, nslots, &cps, from, entry, full)
-    }
-}
-
-/// The simulator proper: no `Rt`, so it can be run many times over one decoding
-/// of the subject.
-fn run_over(
-    prog: &[u32],
-    ninstrs: usize,
-    nslots: usize,
-    cps: &[u32],
-    from: usize,
-    entry: u32,
-    full: bool,
-) -> Option<alloc::vec::Vec<i32>> {
-    {
-        let code = &prog[PROG_HDR..PROG_HDR + ninstrs * 3];
-        let classes = &prog[PROG_HDR + ninstrs * 3..];
-        if from > cps.len() {
-            return None;
-        }
-        let mut clist: alloc::vec::Vec<Thread> = alloc::vec::Vec::new();
-        let mut nlist: alloc::vec::Vec<Thread> = alloc::vec::Vec::new();
+        // ONE ARENA, laid out here because the simulator is generated and
+        // cannot allocate (`kin/pike.kin`). Two thread lists, the scratch the
+        // capture copies live in, the initial slots and the answer:
+        //
+        //     [ list A ][ list B ][ scratch ][ start ][ best ]
+        //
+        // A list is `ninstrs` rows of `1 + nslots`, because `seen` admits each
+        // pc at most once per character and so bounds the row count.
+        let width = nslots + 1;
+        let a_at = 0usize;
+        let b_at = ninstrs * width;
+        let scratch_at = 2 * ninstrs * width;
+        let start_at = scratch_at + ninstrs * nslots;
+        let best_at = start_at + nslots;
+        let mut mem = alloc::vec![-1i32; best_at + nslots];
         let mut seen = alloc::vec![false; ninstrs];
-        let start = alloc::vec![-1i32; nslots];
-        add_thread(code, classes, cps, from, &mut clist, &mut seen, entry, &start);
-        let mut best: Option<alloc::vec::Vec<i32>> = None;
-        let mut i = from;
-        loop {
-            if clist.is_empty() {
-                break;
-            }
-            let v = if i < cps.len() { Some(cps[i]) } else { None };
-            nlist.clear();
-            for x in seen.iter_mut() {
-                *x = false;
-            }
-            for t in clist.iter() {
-                let op = code[(t.pc * 3) as usize];
-                if op == OP_MATCH {
-                    // A full match must reach the end. Rejecting rather than
-                    // cutting is what lets a LOWER-priority alternative win --
-                    // `(a|ab)` against "ab" is `ab`, which a backtracker gets by
-                    // backtracking against the anchor and this gets by carrying
-                    // both threads.
-                    if !full || i == cps.len() {
-                        best = Some(t.saved.clone());
-                        break;
-                    }
-                    continue;
-                }
-                if let Some(v) = v {
-                    if consumes(code, classes, t.pc, v) {
-                        add_thread(
-                            code,
-                            classes,
-                            cps,
-                            i + 1,
-                            &mut nlist,
-                            &mut seen,
-                            t.pc + 1,
-                            &t.saved,
-                        );
-                    }
-                }
-            }
-            core::mem::swap(&mut clist, &mut nlist);
-            if i >= cps.len() {
-                break;
-            }
-            i += 1;
+        let hit = crate::kgen::rt::pike::run_over(
+            prog, ninstrs as u32, nslots as u32, &cps, cps.len() as u32,
+            from as u32, entry, full, &mut mem,
+            a_at as u32, b_at as u32, scratch_at as u32,
+            start_at as u32, best_at as u32, &mut seen);
+        if hit {
+            Some(mem[best_at..best_at + nslots].to_vec())
+        } else {
+            None
         }
-        best
     }
 }
 
+// `run_over` IS GENERATED (`kin/pike.kin`). The simulator proper -- lockstep
+// over the code points, leftmost-first decided by cutting the walk at a match
+// -- with no `Rt` in it, so one decoding of the subject can be run many times.
+// `pike_run` above lays out the arena it works in, because generated code
+// cannot allocate.
 impl Rt {
     /// Build a `TY_REGEX` from a program the shared cljc compiler emitted.
     ///
@@ -352,20 +241,34 @@ impl Rt {
         let mut found: alloc::vec::Vec<i32> = alloc::vec::Vec::new();
         let mut at = 0usize;
         let mut count = 0i64;
+        // THE ARENA IS ALLOCATED ONCE for every match in the subject, which is
+        // most of why this function exists: `re-seq`, `split` and `replace`
+        // used to call `find-from` in a loop and decode the subject again
+        // every time. `run_over` clears `seen` and writes `start` itself, so a
+        // second call needs nothing reset between matches.
+        let width = nslots + 1;
+        let (a_at, b_at) = (0usize, ninstrs * width);
+        let scratch_at = 2 * ninstrs * width;
+        let start_at = scratch_at + ninstrs * nslots;
+        let best_at = start_at + nslots;
+        let mut mem = alloc::vec![-1i32; best_at + nslots];
+        let mut seen = alloc::vec![false; ninstrs];
         while at <= cps.len() {
             if limit > 0 && count >= limit {
                 break;
             }
-            match run_over(&prog, ninstrs, nslots, &cps, at, 0, false) {
-                None => break,
-                Some(slots) => {
-                    let (st, en) = (slots[0], slots[1]);
-                    found.extend_from_slice(&slots);
-                    count += 1;
-                    // An empty match must still advance, or this never ends.
-                    at = if en > st { en as usize } else { en as usize + 1 };
-                }
+            let hit = crate::kgen::rt::pike::run_over(
+                &prog, ninstrs as u32, nslots as u32, &cps, cps.len() as u32,
+                at as u32, 0, false, &mut mem,
+                a_at as u32, b_at as u32, scratch_at as u32,
+                start_at as u32, best_at as u32, &mut seen);
+            if !hit {
+                break;
             }
+            let (st, en) = (mem[best_at], mem[best_at + 1]);
+            found.extend_from_slice(&mem[best_at..best_at + nslots]);
+            count += 1;
+            at = if en > st { en as usize } else { en as usize + 1 };
         }
         let base = self.mark();
         let mut v = self.empty_vec();

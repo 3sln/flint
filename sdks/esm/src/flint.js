@@ -247,9 +247,21 @@ function collectSources({ resolve, files, workspaces, target, withLib }) {
       for (const m of String(src).matchAll(/\[([a-zA-Z0-9._-]+)\s/g)) want.push(m[1]);
     }
   }
-  for (const w of workspaces ?? []) spaces.push(w);
-  // The standard library is its own WORKSPACE, and last so anything the caller
-  // declared wins the prefix.
+  // The standard library is its own WORKSPACE, and FIRST so that it keeps its
+  // own files whatever the caller declares.
+  //
+  // It used to be last, so that "anything the caller declared wins the prefix".
+  // That rule was about the caller's OWN files and it stopped being safe when
+  // the control plane started shipping in every image
+  // (`DECISIONS.md#bridges-are-the-only-door`): a caller declaring
+  // `{prefix: ''}` -- one workspace for everything, which is the documented way
+  // to say "do not check within my project" -- swallowed `flint/system.cljc`
+  // too, and the library's grants went with it. The program then failed to
+  // compile at `flint.system/answer` for naming a `:vars`-guarded builtin,
+  // which is a sentence about the embedder's prefix and nothing they wrote.
+  //
+  // A caller cannot re-scope `flint/` or `clojure/` any more. Those are not
+  // their files to scope, and the ability was never used for anything else.
   //
   // Without this every guard in the standard library would be unenforceable
   // through the SDK: a guard is only checked ACROSS workspaces, and a program
@@ -277,10 +289,21 @@ function collectSources({ resolve, files, workspaces, target, withLib }) {
   // KEEP THIS THE SAME SENTENCE AS `lib/deps.edn`. Two front doors naming one
   // workspace two ways is the defect this mechanism exists to stop, and a
   // grant on one and not the other is exactly that.
+  //
+  // AND `:vars`, for the same reason and on the same terms: the system loop
+  // that drives a sandbox (`DECISIONS.md#bridges-are-the-only-door`) is flint
+  // code in this library and resolves `{:op :call :fn "ns/f"}` -- a function
+  // named as TEXT -- through the `:vars`-guarded `flint/var-named`.
+  //
+  // This is the drift the paragraph above warns about, caught being made:
+  // `lib/deps.edn` gained `:vars` and this did not, so every program the SDK
+  // compiled was refused at `flint.system/answer` while the CLI compiled the
+  // same source. Two front doors, one workspace, one sentence -- in two files.
   if (withLib) {
-    spaces.push({ prefix: 'clojure/', name: 'flint/flint', grants: ['host'] });
-    spaces.push({ prefix: 'flint/', name: 'flint/flint', grants: ['host'] });
+    spaces.push({ prefix: 'clojure/', name: 'flint/flint', grants: ['host', 'vars'] });
+    spaces.push({ prefix: 'flint/', name: 'flint/flint', grants: ['host', 'vars'] });
   }
+  for (const w of workspaces ?? []) spaces.push(w);
   return { files: all, workspaces: spaces };
 }
 

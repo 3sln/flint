@@ -175,8 +175,75 @@
   is not spelled."
   {:name 'Bytes :types {:rust "&[u8]" :java "byte[]" :csharp "byte[]"} :methods {}})
 
-(def U32s {:name 'U32s :types {:rust "Vec<u32>" :java "int[]" :csharp "int[]"} :methods {}})
+(def U32s
+  "A flat array of 32-bit words -- a compiled regex program, and whatever else
+  wants words rather than `Value`s.
+
+  IT DECLARES ITS ALIASING, which makes answering compulsory wherever it is
+  used. `Vec<u32>` is COPIED in Rust and `int[]` is SHARED in Java and C#, so
+  an unmarked parameter of this type means two different things and every
+  target compiles: a callee's writes land on three runtimes and not on the
+  fourth. That is the divergence that kept `pike.rs` written three times
+  (`DECISIONS.md#the-pike-vm-is-the-last-triplicate`), and it was sitting in
+  this table as three spellings with nothing said about what they meant.
+
+  `:shared` is a BORROW and not a mutable one: the program is read and never
+  written, so Rust takes `&[u32]` and pays nothing for the indexing -- which
+  is the whole reason not to reach for a runtime-owned buffer here, where
+  every read would be a bounds-checked double indirection instead."
+  {:name 'U32s
+   :types {:rust "Vec<u32>" :java "int[]" :csharp "int[]"}
+   :shared {:rust "&[u32]" :java "int[]" :csharp "int[]"}
+   ;; `&*(x)` AND NOT `&x`, because the argument may itself already be a
+   ;; borrow. `&x` on a `Vec<u32>` local is right, and on a `&[u32]` PARAMETER
+   ;; it is a borrow-of-a-borrow Rust will not reborrow implicitly -- which is
+   ;; precisely what a recursive function passing its own parameter onward
+   ;; does, and how `add-thread` found this. The deref form is right for both,
+   ;; and the other three spend nothing either way.
+   :shared-arg {:rust "&*({0})" :java "{0}" :csharp "{0}"}
+   :methods {}})
 (def U64s {:name 'U64s :types {:rust "Vec<u64>" :java "long[]" :csharp "long[]"} :methods {}})
+
+(def I32Buf
+  "A flat SIGNED word buffer the caller owns and the callee WRITES INTO.
+
+  `:shared` is the only way it is ever passed, and it is a MUTABLE borrow:
+  Rust takes `&mut [i32]`, the other three take their array type, which is
+  already a reference for them. A fixed slice rather than a `Vec` because
+  nothing generated grows one -- the Pike VM's thread list is bounded by the
+  instruction count, since `seen` admits each pc once per character.
+
+  THE ARGUMENT MUST BE A LOCAL OR A PARAMETER, never a field reached through
+  another argument. `f(&mut self.buf, self)` is fine in Java and C# and
+  rejected in Rust, which is the one way this tag could be sound on three
+  targets and not the fourth."
+  {:name 'I32Buf
+   :types {:rust "Vec<i32>" :java "int[]" :csharp "int[]"}
+   :shared {:rust "&mut [i32]" :java "int[]" :csharp "int[]"}
+   :shared-arg {:rust "&mut *({0})" :java "{0}" :csharp "{0}"}
+   :methods {}})
+
+(def Flags
+  "A flat boolean buffer, written by the callee. `seen` in the Pike VM, and
+  nothing else yet.
+
+  Its own tag rather than `I32Buf` with a convention, because the element type
+  is what the three targets spell differently -- `bool`, `boolean`, `bool` --
+  and a tag that lied about it would be a cast at every read."
+  {:name 'Flags
+   :types {:rust "Vec<bool>" :java "boolean[]" :csharp "bool[]"}
+   :shared {:rust "&mut [bool]" :java "boolean[]" :csharp "bool[]"}
+   :shared-arg {:rust "&mut *({0})" :java "{0}" :csharp "{0}"}
+   :methods {}})
+
+(def I32s
+  "A flat signed word array the callee only READS. Rust borrows it; the other
+  three pass their array, which is the same thing for them."
+  {:name 'I32s
+   :types {:rust "Vec<i32>" :java "int[]" :csharp "int[]"}
+   :shared {:rust "&[i32]" :java "int[]" :csharp "int[]"}
+   :shared-arg {:rust "&*({0})" :java "{0}" :csharp "{0}"}
+   :methods {}})
 
 (def Interns
   "An intern table: open-addressed, linear-probed, weak. Parallel `hashes`
@@ -205,7 +272,8 @@
 (def tags {'Rt Rt 'Value Value 'Cat Cat 'Ty Ty 'Bool Bool 'I32 I32 'I64 I64 'Cmp Cmp 'U32 U32 'RootIx RootIx
                'Text Text 'StaticText StaticText 'Sink Sink 'Walk Walk 'Cps Cps
                'F64 F64 'Addr Addr 'Idx Idx 'Bits Bits 'Bytes Bytes
-               'U32s U32s 'U64s U64s 'Interns Interns})
+               'U32s U32s 'U64s U64s 'I32Buf I32Buf 'Flags Flags 'I32s I32s
+               'Interns Interns})
 
 (defn- t [ctx] (:target ctx))
 
@@ -287,7 +355,11 @@
     ;; can hold needs a KIND of its own or it cannot be dispatched on at all,
     ;; so the closed set has to name every tag -- these are the ones no source
     ;; had needed until it.
-    TY_BIGINT TY_ITERSEQ TY_CHUNKSEQ TY_PORT TY_THREAD TY_TAGGED TY_OPAQUE])
+    TY_BIGINT TY_ITERSEQ TY_CHUNKSEQ TY_PORT TY_THREAD TY_TAGGED TY_OPAQUE
+    ;; The wire codec's two (`DECISIONS.md#the-codec-is-guest-code`). A writer
+    ;; is opaque to a guest and a reader is not, and the asymmetry is the whole
+    ;; safety rule -- see `kin/wire.kin`.
+    TY_WRITER TY_READER])
 
 (defn- csharp-tag
   "`TY_EMPTY_LIST` -> `Obj.TyEmptyList`."
@@ -315,6 +387,155 @@
    ;; nobody wrote down is one the next rename can quietly break.
    'RF_SCHEMA {:rust "crate::table::RF_SCHEMA"
                :java "Table.RF_SCHEMA" :csharp "global::Flint.Rt.Table.RF_SCHEMA"}
+
+   ;; THE SCHEDULER'S SLOT LAYOUT, for `kin/sched.kin`.
+   ;;
+   ;; Spelled identically by all three -- `conc.rs` bare, `Conc` as a class
+   ;; constant on the ports -- and listed anyway, because the table is where
+   ;; agreement is ASSERTED and an agreement nobody wrote down is one the next
+   ;; rename can quietly break.
+   'SC_THREADS {:rust "crate::conc::SC_THREADS"
+               :java "Conc.SC_THREADS" :csharp "Conc.SC_THREADS"}
+   'SC_CURRENT {:rust "crate::conc::SC_CURRENT"
+               :java "Conc.SC_CURRENT" :csharp "Conc.SC_CURRENT"}
+   'SC_EVENTS {:rust "crate::conc::SC_EVENTS"
+              :java "Conc.SC_EVENTS" :csharp "Conc.SC_EVENTS"}
+   'SC_EHEAD {:rust "crate::conc::SC_EHEAD"
+             :java "Conc.SC_EHEAD" :csharp "Conc.SC_EHEAD"}
+   ;; THE WAITER TABLE. `SC_WAITERS` is the vector of waiter objects and
+   ;; `SC_WFREE` the head of the free chain through their `W_NEXT` -- a
+   ;; fixnum index, or -1 for none. The vector only ever grows: freeing
+   ;; returns a slot to the chain rather than shortening it, which is why
+   ;; the population has to be walked rather than read off the length.
+   'SC_WAITERS {:rust "crate::conc::SC_WAITERS"
+               :java "Conc.SC_WAITERS" :csharp "Conc.SC_WAITERS"}
+   'SC_WFREE {:rust "crate::conc::SC_WFREE"
+             :java "Conc.SC_WFREE" :csharp "Conc.SC_WFREE"}
+   ;; A waiter's own slots. `W_GEN` is the reuse counter a token carries in
+   ;; its high bits, and `W_THREAD` is the one that says the slot is LIVE:
+   ;; nil there means freed, whatever else the row holds.
+   'W_GEN {:rust "crate::conc::W_GEN"
+          :java "Conc.W_GEN" :csharp "Conc.W_GEN"}
+   'W_THREAD {:rust "crate::conc::W_THREAD"
+             :java "Conc.W_THREAD" :csharp "Conc.W_THREAD"}
+   'W_PORT {:rust "crate::conc::W_PORT"
+           :java "Conc.W_PORT" :csharp "Conc.W_PORT"}
+   'W_NEXT {:rust "crate::conc::W_NEXT"
+           :java "Conc.W_NEXT" :csharp "Conc.W_NEXT"}
+   'TH_STATUS {:rust "crate::conc::TH_STATUS"
+              :java "Conc.TH_STATUS" :csharp "Conc.TH_STATUS"}
+   'TH_PARK_ON {:rust "crate::conc::TH_PARK_ON"
+               :java "Conc.TH_PARK_ON" :csharp "Conc.TH_PARK_ON"}
+   ;; The rest of a thread's own slots, as `run-one` reads them. `TH_STACK`
+   ;; is the saved value stack -- present exactly when the thread is parked,
+   ;; which is what makes "is there a stack to put back?" the test for
+   ;; whether this is a start or a resume.
+   'TH_BINDINGS {:rust "crate::conc::TH_BINDINGS"
+                :java "Conc.TH_BINDINGS" :csharp "Conc.TH_BINDINGS"}
+   'TH_ENTRY {:rust "crate::conc::TH_ENTRY"
+             :java "Conc.TH_ENTRY" :csharp "Conc.TH_ENTRY"}
+   'TH_STACK {:rust "crate::conc::TH_STACK"
+             :java "Conc.TH_STACK" :csharp "Conc.TH_STACK"}
+   ;; A throw the SCHEDULER owes this thread, delivered when it next runs
+   ;; rather than at the moment it was decided.
+   'TH_FAIL {:rust "crate::conc::TH_FAIL"
+            :java "Conc.TH_FAIL" :csharp "Conc.TH_FAIL"}
+   ;; What the thread ANSWERED -- its value when it is DONE, and the throw that
+   ;; ended it when it is FAILED. One slot for both, because which it holds is
+   ;; exactly what `TH_STATUS` already says.
+   'TH_RESULT {:rust "crate::conc::TH_RESULT"
+              :java "Conc.TH_RESULT" :csharp "Conc.TH_RESULT"}
+   ;; The waiter token this thread is parked on, or -1. Cleared when it wakes,
+   ;; so a late answer on the same token finds nothing to wake.
+   'TH_TOKEN {:rust "crate::conc::TH_TOKEN"
+             :java "Conc.TH_TOKEN" :csharp "Conc.TH_TOKEN"}
+   ;; A waiter's remaining slots. `W_LEN` is how many a waiter has, which is
+   ;; what `new-obj` is asked for.
+   'W_KIND {:rust "crate::conc::W_KIND"
+           :java "Conc.W_KIND" :csharp "Conc.W_KIND"}
+   'W_LEN {:rust "crate::conc::W_LEN"
+          :java "Conc.W_LEN" :csharp "Conc.W_LEN"}
+   'PT_KIND {:rust "crate::conc::PT_KIND"
+            :java "Conc.PT_KIND" :csharp "Conc.PT_KIND"}
+   ;; THE RING. `PT_RING` is its capacity, `PT_INBOX` the slot array, and the
+   ;; two cursors only ever grow -- the INDEX wraps, by `rem`, and the cursor
+   ;; does not.
+   'PT_RING {:rust "crate::conc::PT_RING"
+            :java "Conc.PT_RING" :csharp "Conc.PT_RING"}
+   'PT_INBOX {:rust "crate::conc::PT_INBOX"
+             :java "Conc.PT_INBOX" :csharp "Conc.PT_INBOX"}
+   'PT_WRITE {:rust "crate::conc::PT_WRITE"
+             :java "Conc.PT_WRITE" :csharp "Conc.PT_WRITE"}
+   'PT_READ {:rust "crate::conc::PT_READ"
+            :java "Conc.PT_READ" :csharp "Conc.PT_READ"}
+   ;; What a port's state says, and the two states `reap-ports` must not
+   ;; overwrite: a tidy close and a peer that vanished are different things to
+   ;; have happened, and only the second is an orphaning.
+   'PT_STATE {:rust "crate::conc::PT_STATE"
+             :java "Conc.PT_STATE" :csharp "Conc.PT_STATE"}
+   'P_CLOSED {:rust "crate::conc::P_CLOSED"
+             :java "Conc.P_CLOSED" :csharp "Conc.P_CLOSED"}
+   'P_ORPHANED {:rust "crate::conc::P_ORPHANED"
+               :java "Conc.P_ORPHANED" :csharp "Conc.P_ORPHANED"}
+   ;; The scheduler's two lists of live ends. `SC_BRIDGES` is host-facing and
+   ;; `SC_PORTS` is channels; a collection of either end is what `reap-ports`
+   ;; notices.
+   'SC_BRIDGES {:rust "crate::conc::SC_BRIDGES"
+               :java "Conc.SC_BRIDGES" :csharp "Conc.SC_BRIDGES"}
+   'SC_PORTS {:rust "crate::conc::SC_PORTS"
+             :java "Conc.SC_PORTS" :csharp "Conc.SC_PORTS"}
+   ;; One `EV_RELEASE` per `EV_RETAIN`, which is what makes the host's count a
+   ;; count of holders rather than of arrivals (`DECISIONS.md#ports-are-the-hosts`).
+   'EV_CLOSED {:rust "crate::conc::EV_CLOSED"
+              :java "Conc.EV_CLOSED" :csharp "Conc.EV_CLOSED"}
+   'EV_RELEASE {:rust "crate::conc::EV_RELEASE"
+               :java "Conc.EV_RELEASE" :csharp "Conc.EV_RELEASE"}
+   ;; An unpublished slot. The handshake between a writer that has reserved an
+   ;; index and a reader that has reached it.
+   'EMPTY {:rust "crate::value::EMPTY" :java "Val.EMPTY" :csharp "Val.Empty"}
+   ;; The sentinel a parked thread leaves in `thrown`.
+   'PARK {:rust "crate::value::PARK" :java "Val.PARK" :csharp "Val.Park"}
+   'ST_NEW {:rust "crate::conc::ST_NEW"
+           :java "Conc.ST_NEW" :csharp "Conc.ST_NEW"}
+   'ST_RUNNABLE {:rust "crate::conc::ST_RUNNABLE"
+                :java "Conc.ST_RUNNABLE" :csharp "Conc.ST_RUNNABLE"}
+   'ST_PARKED {:rust "crate::conc::ST_PARKED"
+              :java "Conc.ST_PARKED" :csharp "Conc.ST_PARKED"}
+   'ST_DONE {:rust "crate::conc::ST_DONE"
+             :java "Conc.ST_DONE" :csharp "Conc.ST_DONE"}
+   'ST_FAILED {:rust "crate::conc::ST_FAILED"
+               :java "Conc.ST_FAILED" :csharp "Conc.ST_FAILED"}
+
+   ;; THE WIRE CODEC'S SLOT LAYOUT (`DECISIONS.md#the-codec-is-guest-code`).
+   ;; The LOGIC over these slots is `kin/wire.kin`; what stays in each runtime
+   ;; is the layout itself and the thin builtin that registers a name, exactly
+   ;; as `Table` keeps its own layout for `tableref.kin` to walk.
+   'WR_BUF {:rust "crate::codec::WR_BUF"
+            :java "Wire.WR_BUF" :csharp "Wire.WR_BUF"}
+   'WR_LIVE {:rust "crate::codec::WR_LIVE"
+             :java "Wire.WR_LIVE" :csharp "Wire.WR_LIVE"}
+   'WR_NEED {:rust "crate::codec::WR_NEED"
+             :java "Wire.WR_NEED" :csharp "Wire.WR_NEED"}
+   'WR_LEN {:rust "crate::codec::WR_LEN"
+            :java "Wire.WR_LEN" :csharp "Wire.WR_LEN"}
+   'RD_BYTES {:rust "crate::codec::RD_BYTES"
+              :java "Wire.RD_BYTES" :csharp "Wire.RD_BYTES"}
+   'RD_POS {:rust "crate::codec::RD_POS"
+            :java "Wire.RD_POS" :csharp "Wire.RD_POS"}
+   'RD_LIVE {:rust "crate::codec::RD_LIVE"
+             :java "Wire.RD_LIVE" :csharp "Wire.RD_LIVE"}
+   'RD_LEN {:rust "crate::codec::RD_LEN"
+            :java "Wire.RD_LEN" :csharp "Wire.RD_LEN"}
+   ;; The bound on a table's `ncols * nrows`, which is the one frame built by
+   ;; multiplying. `MAX_COUNT` is NOT here: it is the callers' rule, checked in
+   ;; each runtime's shim beside the other argument checks.
+   'MAX_CELLS {:rust "crate::codec::MAX_CELLS"
+               :java "Codec.MAX_CELLS" :csharp "Codec.MAX_CELLS"}
+   ;; `NO_NS` MEANS THE NAMESPACE IS ABSENT, which is not the same as empty: it
+   ;; is followed by no bytes at all, so a walk that treated it as a length
+   ;; would skip four billion.
+   'NO_NS {:rust "crate::codec::NO_NS"
+           :java "Codec.NO_NS" :csharp "Codec.NO_NS"}
 
    ;; THE TABLE'S SLOT LAYOUT. All three targets spell these identically --
    ;; Rust bare on `crate::table`, both ports as constants on their `Table`
@@ -848,6 +1069,13 @@
                       :java "Integer.remainderUnsigned({0}, {1})"
                       :csharp "((int)((uint) {0} % (uint) {1}))"})
     'as-idx (core/call {:rust "{0} as usize" :java "{0}" :csharp "{0}"})
+    ;; A CAPTURE SLOT IS SIGNED, because -1 means "not captured" and every
+    ;; other index is non-negative. `I32` is UNSIGNED on Rust and signed on
+    ;; the other three, so storing a pc or a position into a slot buffer needs
+    ;; the cast said out loud on the one target that distinguishes them.
+    'to-slot (core/call {:rust "({0} as i32)" :java "{0}" :csharp "{0}"})
+    ;; And back: a slot read as an index, for a pc taken out of a thread row.
+    'slot-idx (core/call {:rust "({0} as u32)" :java "{0}" :csharp "{0}"})
     'alen (core/call {:rust "{0}.len()" :java "{0}.length" :csharp "{0}.Length"})
     ;; The raw bits of a value. Rust wraps them in a newtype; the others do not.
     'bits (core/call {:rust "{0}.0" :java "{0}" :csharp "{0}"})
@@ -1439,6 +1667,179 @@
     ;; back a raw address and 0 for a failure, which every caller then has to
     ;; test and wrap identically -- so they do it here instead. Both ports kept
     ;; TWO copies of this, one on `Conc` and one on `Table`.
+    ;; WHAT `drive` CALLS. Each is a one-liner in every runtime and names
+    ;; flint's own internals, so all of it is project-local and none of it is a
+    ;; kin capability. `drive` itself is `kin/sched.kin`: its ORDER is the part
+    ;; that had diverged, and an order can only be single-sourced if the things
+    ;; it orders are reachable from the source.
+    ;;
+    ;; `report-deadlock` stays three implementations on purpose -- it builds a
+    ;; host string naming each stuck thread, and a diagnostic message is the
+    ;; wrong thing to force through a generator.
+    'boot-system-thread-once (core/call {:rust "{0}.boot_system_thread_once()"
+                                         :java "Conc.bootSystemThreadOnce({0})"
+                                         :csharp "Conc.BootSystemThreadOnce({0})"})
+    'reap-ports (core/call {:rust "{0}.reap_ports()"
+                            :java "Conc.reapPorts({0})"
+                            :csharp "Conc.ReapPorts({0})"})
+    ;; --- what `reap-ports` itself is written in ---------------------------
+    'port-by-id (core/call {:rust "{0}.port_by_id({1})"
+                            :java "Conc.portById({0}, {1})"
+                            :csharp "Conc.PortById({0}, {1})"})
+    'push-event (core/call {:rust "{0}.push_event({1}, {2}, {3}, {4})"
+                            :java "Conc.pushEvent({0}, {1}, {2}, {3}, {4})"
+                            :csharp "Conc.PushEvent({0}, {1}, {2}, {3}, {4})"})
+    'wake-on (core/call {:rust "{0}.wake_on({1})"
+                         :java "Conc.wakeOn({0}, {1})"
+                         :csharp "Conc.WakeOn({0}, {1})"})
+    ;; The object is gone by the time we notice, so the pairing is recorded
+    ;; separately and looked up by id.
+    'peer-id-of-dead (core/call {:rust "{0}.peer_id_of_dead({1})"
+                                 :java "Conc.peerIdOfDead({0}, {1})"
+                                 :csharp "Conc.PeerIdOfDead({0}, {1})"})
+    ;; THE MESSAGE IS THE VOCABULARY'S, not the source's, for the reason
+    ;; `report-deadlock` gives: a host string is a diagnostic rather than a
+    ;; decision, and kin has no string type to carry one. All three runtimes
+    ;; already spelled it identically -- checked before it was moved here, so
+    ;; this entry preserves the wording rather than choosing it.
+    'fail-waiters-unreachable
+    (core/call {:rust "{0}.fail_waiters_on({1}, \"the other end of this port is unreachable, so this can never complete\")"
+                :java "Conc.failWaitersOn({0}, {1}, \"the other end of this port is unreachable, so this can never complete\")"
+                :csharp "Conc.FailWaitersOn({0}, {1}, \"the other end of this port is unreachable, so this can never complete\")"})
+    'run-one (core/call {:rust "crate::conc::run_one({0}, {1})"
+                         :java "Conc.runOne({0}, {1})"
+                         :csharp "Conc.RunOne({0}, {1})"})
+    'close-all-bridges (core/call {:rust "{0}.close_all_bridges()"
+                                   :java "Conc.closeAllBridges({0})"
+                                   :csharp "Conc.CloseAllBridges({0})"})
+    'set-status (core/call {:rust "{0}.status = ({1} as i32)"
+                            :java "{0}.status = (int) {1}"
+                            :csharp "{0}.status = (int) {1}"})
+    ;; HAS THE GATE ESCAPED EVERY HANDLER? -- `gas_trips > 1`, which is a
+    ;; question all three already answer the same way and none of them exposed.
+    ;;
+    ;; It is READ rather than stored because the counter is already there and
+    ;; already snapshotted: a second flag would be a second thing to keep in
+    ;; step, and `set_gas_limit` resetting the counter is exactly the "a host
+    ;; may raise the budget and carry on" behaviour a flag would have had to
+    ;; reimplement.
+    'gate-escaped? (core/call {:rust "({0}.gas_trips > 1)"
+                               :java "({0}.gasTrips > 1)"
+                               :csharp "({0}.gasTrips > 1)"}
+                              {:tag Bool})
+    'settled-answer (core/call {:rust "crate::conc::settled_answer({0})"
+                                :java "Conc.settledAnswer({0})"
+                                :csharp "Conc.SettledAnswer({0})"}
+                               {:tag Value})
+    'report-deadlock (core/call {:rust "crate::conc::report_deadlock({0})"
+                                 :java "Conc.reportDeadlock({0})"
+                                 :csharp "Conc.ReportDeadlock({0})"})
+    ;; --- THE RESUME PATH, which `run-one` orchestrates -------------------
+    ;;
+    ;; Each of these is one line in every target and names flint's own
+    ;; internals, so all of it is project-local. What they have in common is
+    ;; that they touch the INTERPRETER's own state -- its frame stack, its
+    ;; handler stack, its value stack -- which is a host structure in all
+    ;; three and is the reason the resume path stayed hand-written while the
+    ;; scheduler's decisions moved into `sched.kin`.
+    'install-bindings (core/call
+                       {:rust "{0}.install_bindings({1})"
+                        :java "Conc.installBindings({0}, {1})"
+                        :csharp "Conc.InstallBindings({0}, {1})"})
+    ;; The slice is what makes preemption happen at all: a thread runs until
+    ;; `steps` reaches this, then yields. Set from the CURRENT step count, so
+    ;; every thread gets the same size turn however long the last one ran.
+    'begin-slice (core/call {:rust "{0}.begin_slice()"
+                             :java "Conc.beginSlice({0})"
+                             :csharp "Conc.BeginSlice({0})"})
+    ;; Frame stack, handler stack and value stack, all emptied together: a NEW
+    ;; thread starts on a clean interpreter or it inherits whatever the last
+    ;; one left, which is a use-after-free with extra steps.
+    'reset-exec-state (core/call {:rust "{0}.reset_exec_state()"
+                                  :java "Conc.resetExecState({0})"
+                                  :csharp "Conc.ResetExecState({0})"})
+    'run-entry (core/call {:rust "crate::conc::run_entry({0}, {1})"
+                           :java "Conc.runEntry({0}, {1})"
+                           :csharp "Conc.RunEntry({0}, {1})"})
+    'restore-state (core/call {:rust "{0}.restore_state({1})"
+                               :java "Conc.restoreState({0}, {1})"
+                               :csharp "Conc.RestoreState({0}, {1})"})
+    'vm-run (core/call {:rust "{0}.run(0)" :java "{0}.run(0)" :csharp "{0}.Run(0)"})
+    ;; A PARK IS TWO WRITES, and both are necessary. `park_on` says WHAT the
+    ;; thread is waiting for, so the scheduler can decide whether anything can
+    ;; wake it; `thrown = PARK` is what unwinds every frame between the
+    ;; builtin and the top, since a park has to leave the interpreter the same
+    ;; way a throw does.
+    'set-park-on (core/call {:rust "{0}.park_on = {1}"
+                             :java "{0}.parkOn = {1}"
+                             :csharp "{0}.parkOn = {1}"})
+    'set-thrown (core/call {:rust "{0}.thrown = {1}"
+                            :java "{0}.thrown = {1}"
+                            :csharp "{0}.thrown = {1}"})
+    ;; NAMED `unwind-to-handler` and not `unwind`: native spells the public
+    ;; entry `unwind_from_resume`, which is a `pub` wrapper over the same
+    ;; `unwind` both ports expose directly. One act, three spellings.
+    'unwind-to-handler (core/call {:rust "{0}.unwind_from_resume()"
+                                   :java "{0}.unwind()"
+                                   :csharp "{0}.Unwind()"})
+    ;; THE THREAD THAT IS RUNNING, or nil when there is no scheduler. Every
+    ;; runtime already had it; naming it is what asserts they agree.
+    'current-thread (core/call {:rust "{0}.current_thread()"
+                                :java "Conc.currentThread({0})"
+                                :csharp "Conc.CurrentThread({0})"})
+    'settle (core/call {:rust "crate::conc::settle({0}, {1})"
+                        :java "Conc.settle({0}, {1})"
+                        :csharp "Conc.Settle({0}, {1})"})
+    ;; --- THE PORT RING, and the words that make it atomic ----------------
+    ;;
+    ;; A cursor and a sequence word are fixnums like any other slot -- the
+    ;; collector sees nothing unusual -- and the atomic operates on the TAGGED
+    ;; word, so a compare-and-swap compares tagged bits. All three already
+    ;; spelled these identically; listing them is what asserts that.
+    'slot-atomic (core/call {:rust "{0}.slot_atomic({1}, {2})"
+                             :java "Conc.slotAtomic({0}, {1}, {2})"
+                             :csharp "Conc.SlotAtomic({0}, {1}, {2})"})
+    'cas-slot (core/call {:rust "{0}.cas_slot({1}, {2}, {3}, {4})"
+                          :java "Conc.casSlot({0}, {1}, {2}, {3}, {4})"
+                          :csharp "Conc.CasSlot({0}, {1}, {2}, {3}, {4})"})
+    ;; BARRIERED, and it stays hand-written on every target: it reaches the
+    ;; collector's remembered set, which is on the never-generate list. One
+    ;; vocabulary entry, three implementations, and the ring above it is one.
+    'cas-slot-barriered (core/call {:rust "{0}.cas_slot_barriered({1}, {2}, {3}, {4})"
+                                    :java "Conc.casSlotBarriered({0}, {1}, {2}, {3}, {4})"
+                                    :csharp "Conc.CasSlotBarriered({0}, {1}, {2}, {3}, {4})"})
+    ;; A HINT AND NOTHING ELSE. It tells the processor this is a spin so it
+    ;; can back off; removing it changes no answer. Native had one and the two
+    ;; ports did not, which is the kind of difference that is invisible until
+    ;; somebody asks why one runtime is slower under contention.
+    'spin-hint (core/call {:rust "core::hint::spin_loop()"
+                           :java "java.lang.Thread.onSpinWait()"
+                           :csharp "System.Threading.Thread.SpinWait(1)"})
+
+
+    ;; THE SCHEDULER OBJECT, and the two predicates over it that every
+    ;; runtime wrote for itself. `kin/sched.kin` is the one source now.
+    'sched (core/call {:rust "{0}.sched()"
+                       :java "Conc.sched({0})"
+                       :csharp "Conc.Sched({0})"}
+                      {:tag Value})
+    'is-port (core/call {:rust "{0}.is_port({1})"
+                         :java "Conc.isPort({0}, {1})"
+                         :csharp "Conc.IsPort({0}, {1})"})
+    ;; A PORT KIND that crosses a heap -- a bridge, never a channel. Takes the
+    ;; KIND rather than the port, which is why it needs no `rt`.
+    'crosses-a-heap (core/call {:rust "crate::conc::crosses_a_heap({1})"
+                                :java "Conc.crossesAHeap({1})"
+                                :csharp "Conc.CrossesAHeap({1})"})
+
+    ;; INSTALL A BRIDGE PORT BY HOST ID, answering NIL when this sandbox has
+    ;; no ports to install one into. The one runtime-specific step in the walk
+    ;; that `kin/wirescan.kin` does over an arriving message.
+    'mint-bridge-port (core/call {:rust "{0}.mint_bridge_port({1})"
+                                  :java "Conc.mintBridgePort({0}, {1})"
+                                  :csharp "Conc.MintBridgePort({0}, {1})"}
+                                 {:tag Value})
+
     'new-obj (core/call {:rust "{0}.new_obj({1}, {2})"
                          :java "Conc.newObj({0}, {1}, {2})"
                          :csharp "Conc.NewObj({0}, {1}, {2})"}
@@ -1464,6 +1865,24 @@
     'fixnum (core/call {:rust "Value::fixnum({0} as i64)"
                         :java "Val.fixnum({0} & 0xFFFFFFFFL)"
                         :csharp "Val.Fixnum({0} & 0xFFFFFFFFL)"})
+
+    ;; THE SAME THING FOR AN `I64`, AND THE MASK WOULD RUIN IT.
+    ;;
+    ;; `fixnum` above zero-extends because its argument is an `I32` -- kin's
+    ;; unsigned 32-bit -- and Java and C# spell that `int`, which is signed. A
+    ;; SIGNED 64-bit value is the opposite case: masking it to 32 bits turns
+    ;; `-2` into `4294967294` and any value past `2^32` into its low half.
+    ;;
+    ;; The first source to pass a wide negative was `kin/wire.kin`, whose frame
+    ;; stack uses a NEGATIVE entry to mean "a row count is due here". Rust kept
+    ;; the sign and both ports lost it, so the marker existed on one target and
+    ;; not on the other two: a well-formed table was refused and a VALUE was
+    ;; accepted where a count was due -- the safety property the frames exist
+    ;; for, gone on two runtimes out of three. `runtimes/conform/wire.cljc`
+    ;; caught it on the first run after the port.
+    'fixnum64 (core/call {:rust "Value::fixnum({0})"
+                          :java "Val.fixnum({0})"
+                          :csharp "Val.Fixnum({0})"})
 
     ;; --- ROOTING --------------------------------------------------------
     ;;

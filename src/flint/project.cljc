@@ -474,9 +474,25 @@
     ;; PLANE (`DECISIONS.md#bridges-are-the-only-door`), spawned by bootstrap
     ;; rather than called by the program. Nothing requires it and nothing
     ;; references it, so the graph never reaches it and the shake would drop the
-    ;; only door into the module. Unconditional, because every module is reached
-    ;; as a sandbox now -- there is no other way in.
-    (let [roots (cond-> (vec (or roots* ['clojure.core entry-ns 'flint.system]))
+    ;; only door into the module.
+    ;;
+    ;; ADDED EVEN WHEN THE CALLER SUPPLIES `roots*`, and it did not use to be.
+    ;; A caller's list REPLACES the default one -- that is what `:roots` is for,
+    ;; and `flint test` uses it to start from every namespace on the path rather
+    ;; than from an entry. It replaced the control plane along with the rest, so
+    ;; `flint test` through the self-hosted compiler built a sandbox with no
+    ;; door and the call died as "the call to flint.main/-main was never
+    ;; answered": the bind was delivered, nothing was there to serve it, every
+    ;; thread settled, and the module closed its own ports. `bin/flint` adds it
+    ;; unconditionally and was right; this is the same sentence, in the second
+    ;; place it has to be said.
+    ;;
+    ;; Not a caller's to opt out of, either. A module is reached as a sandbox
+    ;; now and there is no other way in, so a root list without this is not a
+    ;; smaller program, it is an unreachable one.
+    (let [given (vec (or roots* ['clojure.core entry-ns]))
+          roots (cond-> given
+                  (not (some #{'flint.system} given)) (conj 'flint.system)
                   (contains? features :flint/check) (conj 'flint.check))
           {:keys [sources order missing] :as r0}
           (collect resolve-ns roots features)

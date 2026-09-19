@@ -22,6 +22,10 @@ public class RtAot {
     if (img == null) return new Run("FAIL not a flint image", 0, 0, 0);
     int n = aot ? rt.compileArities(chunkAll) : 0;
     Rt.aotEntries = 0;
+    // THESE ARE THE INITIALISERS, so say so: `ensureStarted` is the runtime's
+    // own one-shot runner, and a control plane spawned later would otherwise
+    // run them a second time.
+    rt.started = true;
     for (int fn : img.init) {
       rt.call(rt.makeClosure(fn, new long[0]), new long[0]);
       if (!Val.isNil(rt.thrown)) return new Run(why(rt), rt.steps, n, Rt.aotEntries);

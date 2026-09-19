@@ -67,7 +67,7 @@
   gone, and so is the raw byte mode it sat on: a port that carried strings the
   program had already serialised was the same hole seen from the other side."
   (:refer-clojure :exclude [send])
-  (:require [flint.rt]))
+  (:require [flint.rt] [flint.protocols :as proto] [flint.wire :as wire]))
 
 (defn channel
   "A coupled pair `[a b]`: what goes into one comes out of the other, both ways.
@@ -99,7 +99,16 @@
       (p/open \"fs\")                   ; ask, present nothing
       (p/open \"fs\" {:capability c})   ; present what you hold"
   ([name] (open name nil))
-  ([name opts] (flint.rt/open name (or opts {}))))
+  ([name opts]
+   ;; ENCODED HERE, IN FLINT (`DECISIONS.md#the-codec-is-guest-code`). The
+   ;; payload is `[name opts]` -- the shape the host has always received -- and
+   ;; the runtime's part is to check the writer is finished and take its bytes.
+   ;;
+   ;; The name goes over TWICE, once in the payload and once as an argument,
+   ;; and that is deliberate: the runtime needs it for the refusal message, and
+   ;; reading it back out of the encoding would mean decoding in the runtime,
+   ;; which is the thing this moved away from.
+   (flint.rt/open name (wire/encode [name (or opts {})]))))
 
 (defn port? [x] (flint.rt/port? x))
 
@@ -145,6 +154,82 @@
   [p]
   (flint.rt/port-id p))
 
+(defn- wire-differs?
+  "Does anything in `v` need CHANGING before it goes on the wire?
+
+  The question is whether what a node currently carries is what should cross --
+  NOT whether it has something to declare. Those differ in the case that
+  matters: a value carrying `{:a 1}` whose `WireMeta` answers nil needs its
+  metadata STRIPPED, and a predicate asking only `is there wire metadata`
+  answers no and leaves it on. The encoder emits whatever metadata it is handed,
+  so that is `{:a 1}` crossing a bridge for a program that never asked -- which
+  is exactly the default this feature promises not to break. Found by the gate,
+  after a first version that asked the wrong question.
+
+  Asked FIRST, so that the common answer -- nothing differs -- costs one pass
+  and changes nothing. That is not an optimisation, it is the other half of the
+  correctness rule: `for-the-wire` rebuilds, and rebuilding a value that did not
+  need it is not invisible. `(into {} ..)` gives back a map with the same
+  entries in a different ORDER, and a host test that had always seen
+  `{:a #{1 2}, :b [:x]}` started seeing `{:b [:x], :a #{1 2}}`. A value with
+  nothing to change crosses as the object it already was."
+  [v]
+  (or
+    ;; THE CHEAP QUESTION FIRST, and it is not only for speed. `WireMeta`
+    ;; SELECTS FROM metadata, so a value with none has nothing to select and
+    ;; nothing to strip -- the answer is no without asking.
+    ;;
+    ;; Asking anyway costs more than time. `-wire-meta` dispatches through
+    ;; `find-protocol-method`, which looks a SYMBOL up in a map, and symbol
+    ;; hashing is not in every image: a minimal program that sends one message
+    ;; and never names a symbol should not have to carry it.
+    (and (some? (meta v)) (not= (proto/-wire-meta v) (meta v)))
+    (cond
+      (vector? v) (boolean (some wire-differs? v))
+      (set? v) (boolean (some wire-differs? v))
+      (map? v) (boolean (some (fn [e] (or (wire-differs? (key e))
+                                          (wire-differs? (val e)))) v))
+      ;; `list?` IS `seq?` here, so this catches a lazy seq and walking one
+      ;; forces it. Not a hazard the way it would be elsewhere: the encoder has
+      ;; to force it anyway to write it down, so the forcing is brought forward
+      ;; rather than added.
+      (list? v) (boolean (some wire-differs? v))
+      :else false)))
+
+(defn for-the-wire
+  "`v` rebuilt with only the metadata that should cross.
+
+  One pass over the structure, asking `flint.protocols/-wire-meta` at each node
+  and keeping what it answers. The default answer is nil for every built-in
+  kind, so a program that has not opted in sends exactly what it sent before
+  this existed -- the same object, unrebuilt, with its metadata dropped at the
+  boundary as the encoder has always dropped it.
+
+  DONE HERE, IN FLINT, and not in the encoder. The encoder is runtime code; a
+  protocol is dispatched in the image. Reaching from one to the other would mean
+  the runtime calling guest code in the middle of a `send`, which is re-entrancy
+  into the interpreter at the worst possible moment -- a send can happen
+  anywhere, including inside a forced lazy seq. A pass up here is ordinary flint
+  calling ordinary flint, and what reaches the encoder is a plain value whose
+  metadata is already the answer.
+
+  ONLY ON A BRIDGE, because only a bridge encodes. A channel hands the object
+  over as it stands, so nothing is selected and nothing is lost.
+
+  It walks the whole structure, so a port nested inside a map is asked too."
+  [v]
+  (if-not (wire-differs? v)
+    v
+    (let [m (proto/-wire-meta v)
+          walked (cond
+                   (vector? v) (mapv for-the-wire v)
+                   (set? v) (into #{} (map for-the-wire v))
+                   (map? v) (into {} (map (fn [e] [(for-the-wire (key e))
+                                                   (for-the-wire (val e))]) v))
+                   (list? v) (apply list (map for-the-wire v))
+                   :else v)]
+      (if (nil? m) walked (with-meta walked m)))))
+
 (defn send
   "Put `v` into the other end. Parks if that end's buffer is full.
 
@@ -154,18 +239,61 @@
   here, naming the value — not a quiet coercion.
 
   A function is refused **by name**, on any port: a closure's meaning is its
-  environment and an environment does not travel."
+  environment and an environment does not travel.
+
+  ## Metadata
+
+  On a bridge, what crosses is what `flint.protocols/WireMeta` selects, and the
+  default for every built-in kind is NONE. See `for-the-wire` below.
+
+  On a CHANNEL nothing is selected and nothing is dropped: the value moves by
+  pointer, so it arrives as the same object with the metadata it always had.
+  The two are not inconsistent -- a channel does not serialise, so there is no
+  question of what to write down.
+
+  ## Who writes the bytes
+
+  `flint.wire`, which is flint (`DECISIONS.md#the-codec-is-guest-code`). The
+  runtime still carries an encoder and `port-send` still accepts a value, but
+  nothing in the library reaches it any more: what goes to a bridge is a
+  writer, already finished, and the runtime's part is to check it is complete
+  and take its bytes.
+
+  The encoding is therefore GUEST WORK and billed as guest work. It is also
+  where a value the format cannot carry is refused -- by name, naming the kind,
+  before any of it reaches the port.
+
+  A WRITER PASSES STRAIGHT THROUGH. A guest that encoded for itself -- a
+  streaming encoder over a structure it never builds -- hands over the writer,
+  and encoding that again would ask the encoder to encode its own output."
   [p v]
-  (flint.rt/port-send p v))
+  (flint.rt/port-send p (if (and (flint.rt/port-bridge? p)
+                                 (not (flint.rt/wire-writer? v)))
+                          (wire/encode (for-the-wire v))
+                          v)))
 
 (defn receive
   "Take the next message. Parks if there is none; returns `nil` once the port is
   closed and drained.
 
-  On a bridge the bytes are decoded by the runtime before you see them, so this
-  answers a value on every kind of port."
+  On a bridge the bytes are decoded HERE, by `flint.wire` -- guest code reading
+  a guest encoding (`DECISIONS.md#the-codec-is-guest-code`). On a channel the
+  value is handed over as it stands. Either way this answers a value."
   [p]
-  (flint.rt/port-receive p))
+  (if (flint.rt/port-bridge? p)
+    ;; A BRIDGE CARRIES BYTES AND THE GUEST READS THEM. The runtime answers a
+    ;; live reader -- live meaning these bytes arrived over a bridge, which is
+    ;; what licenses minting -- and `flint.wire` does the rest.
+    ;;
+    ;; What delivery still does is mint the PORTS in the message, at the
+    ;; boundary, because a port has to exist before anything can be delivered
+    ;; on it: a host binds a port and calls on it without pumping in between,
+    ;; deliberately (`DECISIONS.md#the-codec-is-guest-code`).
+    (let [r (flint.rt/port-receive-reader p)]
+      ;; NIL IS END OF STREAM, not an empty message, and it must not be turned
+      ;; into a decode of nothing.
+      (when (some? r) (wire/read-from r)))
+    (flint.rt/port-receive p)))
 
 (defn close
   "Close a port — any port, not only one you opened. Anybody parked on it wakes

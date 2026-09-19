@@ -234,6 +234,7 @@ dependencies = [
 name = "flint"
 version = "0.0.1"
 dependencies = [
+ "flint-conc",
  "flint-rt",
 ]
 

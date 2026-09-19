@@ -582,6 +582,34 @@ impl Program {
         unsafe { self.rt.executor() }
     }
 
+    /// Set the budget for the whole SANDBOX rather than for this executor.
+    ///
+    /// `set_step_limit` writes into one `Rt`. A pooled sandbox has several, so
+    /// that bounds one thread; this bounds the sandbox they make up
+    /// (`DECISIONS.md#resource-limits`). A no-op on a sandbox that never made a
+    /// second executor, where `set_step_limit` is already the whole answer.
+    #[cfg(feature = "parallel")]
+    pub fn set_shared_step_limit(&mut self, n: u64) {
+        self.rt.set_shared_gas_limit(if n == u64::MAX { u64::MAX - 1 } else { n });
+    }
+
+    /// What the sandbox has spent across every executor, as of the last
+    /// publish.
+    #[cfg(feature = "parallel")]
+    pub fn shared_gas(&self) -> u64 {
+        self.rt.shared_gas_spent()
+    }
+
+    /// Arm this executor for its next slice of the shared budget.
+    ///
+    /// Called before guest code runs on it, because an executor that has not
+    /// been armed has no local limit and would run to the end of the work
+    /// rather than to the end of a batch.
+    #[cfg(feature = "parallel")]
+    pub fn arm_shared_gas(&mut self) {
+        self.rt.arm_shared_gas();
+    }
+
     /// What the image says about itself, if it says anything.
     pub fn var_exists(&mut self, name: &str) -> bool {
         self.rt.var_named(name).is_some()
@@ -589,8 +617,25 @@ impl Program {
 
     /// The instruction count, which is deterministic (`DECISIONS.md#resource-limits`) and
     /// therefore the same here as under any wasm engine.
+    ///
+    /// RAW, and it counts whether or not a budget was asked for: the scheduler
+    /// arms a slice in every image that has a control plane, and preemption is
+    /// step-based, so the counter runs. A caller that wants "what did the
+    /// embedder's budget spend" wants `budgeted()` first.
     pub fn steps(&self) -> u64 {
         self.rt.steps
+    }
+
+    /// Was a step limit asked for? Zero disables it, as `set_step_limit` says.
+    ///
+    /// This exists because `steps()` stopped being able to answer the question
+    /// on its own. It used to: with no limit the interpreter ran a loop with no
+    /// counter in it, so an unbudgeted program left `steps` at zero and the two
+    /// questions had one answer. A control plane in every image arms a slice,
+    /// `checkpoint` stops being `u64::MAX`, and the counting loop runs whether
+    /// or not anybody is buying.
+    pub fn budgeted(&self) -> bool {
+        self.rt.gas_limit != 0
     }
 
     /// The gas limit, in instructions. Zero disables it.

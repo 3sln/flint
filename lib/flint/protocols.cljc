@@ -77,6 +77,95 @@
               (find-protocol-method Printable__impls 'flint.protocols/print-data x))]
     (if f (f x) (protocol-miss 'flint.protocols/Printable 'flint.protocols/print-human x))))
 
+(def Meta__impls (atom {}))
+(def WithMeta__impls (atom {}))
+
+;; `Meta` and `WithMeta`: metadata, as a protocol rather than only a builtin.
+;;
+;; `meta` and `with-meta` in `clojure.core` are direct builtin calls and stay
+;; that way -- they are on hot paths (`reduced` is `(with-meta [x] ..)`) and a
+;; protocol dispatch per call is not a price worth paying for a question the
+;; runtime answers from a type tag. These exist ALONGSIDE, so that:
+;;
+;; * `(satisfies? Meta x)` and `(satisfies? WithMeta x)` answer truthfully for a
+;;   builtin, rather than answering false for every type in the language and
+;;   true only for things a library wrote;
+;; * the slow, protocol-dispatched path WORKS, so code that is generic over
+;;   "things carrying metadata" can be written once against the protocol;
+;; * a library type can carry metadata by implementing these, without the
+;;   runtime having to grow a tag for it.
+;;
+;; TWO PROTOCOLS, NOT ONE. Reading metadata and REPLACING it are different
+;; capabilities: a type can reasonably answer `meta` while refusing `with-meta`,
+;; and `satisfies?` has to be able to say which. Everything the runtime tags as
+;; meta-capable satisfies both, but that is a fact about the builtins rather
+;; than a rule about the protocols.
+;;
+;; LONGHAND, for the reason `Printable` above is: `defprotocol` emits calls into
+;; THIS namespace, so a namespace that defines the machinery cannot also use it.
+;; The shape is exactly what it emits, so `extend`, `extend-method`,
+;; `extend-protocol` and `satisfies?` all work on these unchanged.
+(def Meta
+  (hash-map :flint/protocol 'flint.protocols/Meta
+            :impls Meta__impls
+            :method-keys '[flint.protocols/-meta]))
+
+(def WithMeta
+  (hash-map :flint/protocol 'flint.protocols/WithMeta
+            :impls WithMeta__impls
+            :method-keys '[flint.protocols/-with-meta]))
+
+(defn -meta
+  "`x`'s metadata, through the protocol. `clojure.core/meta` short-circuits to
+  the builtin; this is the dispatched path and the one a library type reaches."
+  [x]
+  (let [f (find-protocol-method Meta__impls 'flint.protocols/-meta x)]
+    (if f (f x) (protocol-miss 'flint.protocols/Meta 'flint.protocols/-meta x))))
+
+(defn -with-meta
+  "`x` with `m` as its metadata, through the protocol.
+
+  What it answers is the type's business: a value type gives a COPY, because
+  metadata is part of the value and changing one must not change the other; a
+  REFERENCE type gives another reference to the same thing, because there the
+  metadata belongs to the handle and not to what it points at."
+  [x m]
+  (let [f (find-protocol-method WithMeta__impls 'flint.protocols/-with-meta x)]
+    (if f (f x m) (protocol-miss 'flint.protocols/WithMeta 'flint.protocols/-with-meta x))))
+
+
+(def WireMeta__impls (atom {}))
+
+;; `WireMeta`: WHICH of a value's metadata crosses a port.
+;;
+;; Metadata does not travel by default and should not: a value carries whatever
+;; the program put on it, and shipping all of it would send a program's private
+;; bookkeeping to whoever is on the other end, at whatever size it happens to
+;; be. So the question is not "does metadata cross" but "which metadata is part
+;; of what this value MEANS to a reader" -- and only the type knows.
+;;
+;; The answer is a map, or nil for "none", and nil is the default for every
+;; built-in kind. A port answers with its protocol list, because what a port
+;; speaks is a fact about the port rather than the sender's bookkeeping.
+;;
+;; IMPLEMENTABLE IN METADATA, like any protocol here, and that is the point:
+;; a program that KNOWS a particular port speaks something can say so on that
+;; one value, without the type having to have anticipated it.
+;;
+;; WHAT IT RETURNS MUST BE SENDABLE. It is encoded with the value, through the
+;; same encoder, so a map holding a local channel end or a closure fails the
+;; send -- by name, at the send, rather than crossing as something lossy.
+(def WireMeta
+  (hash-map :flint/protocol 'flint.protocols/WireMeta
+            :impls WireMeta__impls
+            :method-keys '[flint.protocols/-wire-meta]))
+
+(defn -wire-meta
+  "The metadata `x` should carry across a port, or nil for none."
+  [x]
+  (let [f (find-protocol-method WireMeta__impls 'flint.protocols/-wire-meta x)]
+    (if f (f x) nil)))
+
 (defn printer-for
   "The implementation that prints `x`, or `nil` when nothing does.
 
@@ -163,3 +252,18 @@
   a string, resolved against the protocol rather than against the caller."
   [protocol kind mname f]
   (extend protocol kind (hash-map (method-key protocol mname) f)))
+
+;; EVERY meta-capable kind, extended to both. The list is the runtime's own:
+;; `kin/meta.kin`'s `has-meta` is what decides whether `with-meta` does anything,
+;; so these two have to agree or `satisfies?` lies in one direction or the other.
+;; `test/common/lang/meta.cljc` asserts they do, kind by kind.
+(doseq [k [:symbol :vector :map :set :list :fn :atom :tagged]]
+  (extend-method Meta k "-meta" (fn [x] (flint.rt/meta x)))
+  (extend-method WithMeta k "-with-meta" (fn [x m] (flint.rt/with-meta x m))))
+
+;; NOTHING CROSSES BY DEFAULT. Every built-in kind answers nil, so a program
+;; that has not asked for metadata on the wire gets exactly what it got before
+;; this existed. Opting in is per value (metadata beats kind) or per type (a
+;; library extending `WireMeta` for its own).
+(doseq [k [:symbol :vector :map :set :list :fn :atom :tagged]]
+  (extend-method WireMeta k "-wire-meta" (fn [_] nil)))

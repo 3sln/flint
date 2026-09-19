@@ -41,132 +41,60 @@ public final class Pike {
     public static final int RX_SOURCE = 0, RX_PROG = 1, RX_NGROUPS = 2;
 
 
+    /// GENERATED (`kin/pike.kin`). This port's signature is the one the
+    /// generated function took -- the program whole, indexed from a base --
+    /// because it is the shape every target can spell.
     static boolean classHit(int[] prog, int classBase, int off, int v) {
-        int n = prog[classBase + off];
-        for (int k = 0; k < n; k++) {
-            int b = classBase + off + 1 + k * 3;
-            boolean hit;
-            switch (prog[b]) {
-                case CL_ONE: hit = v == prog[b + 1]; break;
-                case CL_RANGE: hit = v >= prog[b + 1] && v <= prog[b + 2]; break;
-                default: hit = predHit(prog[b + 1], v);
-            }
-            if (hit) return true;
-        }
-        return false;
+        return com._3sln.flint.kgen.rt.Pike.classHit(prog, classBase, off, v);
     }
 
-    static final class Thread {
-        final int pc;
-        final int[] saved;
-        Thread(int pc, int[] saved) { this.pc = pc; this.saved = saved; }
-    }
+    // `Thread` IS GONE. A thread is a flat row in the arena now: `pc` then
+    // its capture slots. The object existed to own a slot array per thread,
+    // and the per-thread allocation went with it.
 
     /// Add `pc` and everything reachable from it WITHOUT consuming a character.
     ///
     /// The dedup set is what makes this linear, and the ORDER is what makes it
     /// leftmost-first: SPLIT's preferred branch is followed first, and whoever
     /// arrives first at an instruction keeps it.
-    static void addThread(int[] prog, int codeBase, int classBase, int[] cps, int i,
-                          ArrayList<Thread> list, boolean[] seen, int pc, int[] saved) {
-        if (seen[pc]) return;
-        seen[pc] = true;
-        int b = codeBase + pc * 3;
-        int op = prog[b], a = prog[b + 1], c = prog[b + 2];
-        switch (op) {
-            case OP_JMP:
-                addThread(prog, codeBase, classBase, cps, i, list, seen, a, saved);
-                break;
-            case OP_SPLIT:
-                addThread(prog, codeBase, classBase, cps, i, list, seen, a, saved);
-                addThread(prog, codeBase, classBase, cps, i, list, seen, c, saved);
-                break;
-            case OP_SAVE: {
-                int[] s2 = saved.clone();
-                if (a < s2.length) s2[a] = i;
-                addThread(prog, codeBase, classBase, cps, i, list, seen, pc + 1, s2);
-                break;
-            }
-            case OP_BOL:
-                if (i == 0) addThread(prog, codeBase, classBase, cps, i, list, seen, pc + 1, saved);
-                break;
-            case OP_EOL:
-                if (i == cps.length) addThread(prog, codeBase, classBase, cps, i, list, seen, pc + 1, saved);
-                break;
-            case OP_WORDB:
-            case OP_NWORDB: {
-                boolean before = i > 0 && wordCp(cps[i - 1]);
-                boolean after = i < cps.length && wordCp(cps[i]);
-                boolean at = before != after;
-                if ((op == OP_WORDB) == at) {
-                    addThread(prog, codeBase, classBase, cps, i, list, seen, pc + 1, saved);
-                }
-                break;
-            }
-            default:
-                list.add(new Thread(pc, saved));
-        }
-    }
+    // `addThread` IS GENERATED (`kin/pike.kin`) and takes the arena rather
+    // than a list and a struct. Nothing here calls it directly any more --
+    // the generated `runOver` does.
 
+    /// GENERATED (`kin/pike.kin`). Asked once per live thread per character,
+    /// so the program stays indexed rather than sliced or copied.
     static boolean consumes(int[] prog, int codeBase, int classBase, int pc, int v) {
-        int b = codeBase + pc * 3;
-        switch (prog[b]) {
-            case OP_CHAR: return v == prog[b + 1];
-            // NOT a newline. Java's `.` excludes it without DOTALL, and the
-            // backtracker this replaced matched it -- the divergence is closed
-            // here rather than left to the host.
-            case OP_ANY: return v != 10;
-            case OP_CLASS: {
-                boolean hit = classHit(prog, classBase, prog[b + 1], v);
-                return prog[b + 2] == 1 ? !hit : hit;
-            }
-            default: return false;
-        }
+        return com._3sln.flint.kgen.rt.Pike.consumes(prog, codeBase, classBase, pc, v);
     }
 
     /// The simulator proper: no `Rt`, so it can be run many times over ONE
     /// decoding of the subject. That is what `reFindAll` needs, and giving it
     /// `reRun` in a loop was quadratic -- each call decoded the whole subject
     /// again.
+    /// GENERATED (`kin/pike.kin`). This is the arena the simulator works in;
+    /// the simulation itself is one source for all three runtimes now.
+    ///
+    ///     [ list A ][ list B ][ scratch ][ start ][ best ]
+    ///
+    /// A list is `ninstrs` rows of `1 + nslots` -- `pc` then its capture slots
+    /// -- and that bound is exact because `seen` admits each pc at most once
+    /// per character. The old shape was a growable list of a `Thread` object
+    /// holding its own slot array, which is two things kin has neither of and
+    /// neither of which turned out to be needed.
     static int[] runOver(int[] prog, int ninstrs, int nslots, int[] cps,
                          int from, int entry, boolean full) {
-        int codeBase = PROG_HDR;
-        int classBase = PROG_HDR + ninstrs * 3;
-        if (from > cps.length) return null;
-        ArrayList<Thread> clist = new ArrayList<>();
-        ArrayList<Thread> nlist = new ArrayList<>();
+        int width = nslots + 1;
+        int aAt = 0, bAt = ninstrs * width;
+        int scratchAt = 2 * ninstrs * width;
+        int startAt = scratchAt + ninstrs * nslots;
+        int bestAt = startAt + nslots;
+        int[] mem = new int[bestAt + nslots];
+        java.util.Arrays.fill(mem, -1);
         boolean[] seen = new boolean[ninstrs];
-        int[] start = new int[nslots];
-        java.util.Arrays.fill(start, -1);
-        addThread(prog, codeBase, classBase, cps, from, clist, seen, entry, start);
-        int[] best = null;
-        int i = from;
-        for (;;) {
-            if (clist.isEmpty()) break;
-            boolean have = i < cps.length;
-            int v = have ? cps[i] : 0;
-            nlist.clear();
-            java.util.Arrays.fill(seen, false);
-            for (Thread t : clist) {
-                int op = prog[codeBase + t.pc * 3];
-                if (op == OP_MATCH) {
-                    // A FULL match must reach the end. Rejecting rather than
-                    // cutting is what lets a LOWER-priority alternative win --
-                    // `(a|ab)` against "ab" is `ab`, which a backtracker gets
-                    // by backtracking against the anchor and this gets by
-                    // carrying both threads.
-                    if (!full || i == cps.length) { best = t.saved; break; }
-                    continue;
-                }
-                if (have && consumes(prog, codeBase, classBase, t.pc, v)) {
-                    addThread(prog, codeBase, classBase, cps, i + 1, nlist, seen, t.pc + 1, t.saved);
-                }
-            }
-            ArrayList<Thread> swap = clist; clist = nlist; nlist = swap;
-            if (i >= cps.length) break;
-            i++;
-        }
-        return best;
+        boolean hit = com._3sln.flint.kgen.rt.Pike.runOver(
+            prog, ninstrs, nslots, cps, cps.length, from, entry, full,
+            mem, aAt, bAt, scratchAt, startAt, bestAt, seen);
+        return hit ? java.util.Arrays.copyOfRange(mem, bestAt, bestAt + nslots) : null;
     }
 
 

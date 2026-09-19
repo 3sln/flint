@@ -95,7 +95,28 @@ public final class Obj {
     public static final int TY_TABLEREF = 50;
     /// A TRANSIENT TABLE: `[schema, chunks, count, open, live]`.
     public static final int TY_TTABLE = 51;
-    public static final int TY_MAX = 52;
+    /// A WIRE WRITER: `[WR_BUF, WR_LIVE]`.
+    ///
+    /// An OPAQUE handle around a transient byte string, and opaque is the whole
+    /// point (`DECISIONS.md#the-codec-is-guest-code`). The guest appends through
+    /// the `wire-*` primitives and cannot reach the buffer, so it cannot write a
+    /// `K_PORT` tag followed by an id it does not hold. A transient byte string
+    /// handed to the guest directly would give exactly that away.
+    ///
+    /// Like every transient it is NOT a value: no `eq`, no `hash`, no `kind`.
+    public static final int TY_WRITER = 52;
+    /// A WIRE READER: `[RD_BYTES, RD_POS, RD_LIVE]`.
+    ///
+    /// NOT the writer's mirror image. A writer must be opaque because a guest
+    /// that can write raw bytes can forge a `K_PORT` tag; a reader may hand out
+    /// integers and strings freely, because reading bytes a guest already holds
+    /// tells it nothing new. Only the two MINTING reads are guarded.
+    ///
+    /// `RD_LIVE` is that guard: true only for a reader the runtime made over
+    /// bytes that arrived on a bridge. The rule `decode_guest` enforced by
+    /// refusing tags is now a flag, set in one place.
+    public static final int TY_READER = 53;
+    public static final int TY_MAX = 54;
 
     public static final int VALS = 0, STR = 1, RAW = 2;
 

@@ -43,8 +43,20 @@
         _ (port/send sys-a {:op :no-such-op})
         still (call! call-a 5 "system/tally" [])
 
+        ;; A NIL MESSAGE IS NOT A GOODBYE. `receive` answers nil for a port
+        ;; that is closed and drained AND for a peer that simply sent nil, and
+        ;; reading the second as the first ended the serving thread in the
+        ;; middle of its work: the port stayed bound with nobody on it, every
+        ;; later call on it was lost, and a host learned only when its pump
+        ;; guard gave up. This row is that case. It DEADLOCKS rather than
+        ;; fails if the loop goes back to believing nil, because the call
+        ;; after it is never served -- which the deadlock detector reports.
+        _ (port/send call-a nil)
+        after-nil (call! call-a 6 "system/tally" [])
+
         ;; `unbind` closes the bound port, so the call thread's `receive`
-        ;; answers nil and it ends. Nothing is signalled out of band.
+        ;; answers nil AND the port says it is closed, which is what ends the
+        ;; loop. Nothing is signalled out of band.
         _ (port/send sys-a {:op :unbind :port call-b})
         _ (port/send sys-a {:op :close})]
     (str/join "\n"
@@ -58,6 +70,8 @@
                      (str/includes? (str (:message absent)) ":exports"))
               "ok" (str "FAIL " absent)))
        (str "unknown-op-ignored " (if (= 7 (:value still)) "ok" (str "FAIL " still)))
-       (str "tx-preserved " (if (= [1 2 3 4 5] [(:tx ok) (:tx threw) (:tx after)
-                                                (:tx absent) (:tx still)])
+       (str "nil-message-is-not-a-close "
+            (if (= 7 (:value after-nil)) "ok" (str "FAIL " after-nil)))
+       (str "tx-preserved " (if (= [1 2 3 4 5 6] [(:tx ok) (:tx threw) (:tx after)
+                                                  (:tx absent) (:tx still) (:tx after-nil)])
                               "ok" "FAIL"))])))

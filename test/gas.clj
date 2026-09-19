@@ -22,7 +22,14 @@
 
 (defn sh [& args]
   (let [p (.start (ProcessBuilder. (into-array String args)))
-        out (slurp (.getInputStream p)) err (slurp (.getErrorStream p))]
+        ;; STDERR IS DRAINED ON ITS OWN THREAD (`DECISIONS.md#the-codec-is-guest-code`,
+        ;; "the test helper deadlocked"). Reading stdout to completion and
+        ;; stderr after DEADLOCKS the moment a child writes more than a pipe
+        ;; buffer to stderr: the child blocks writing, this blocks reading, and
+        ;; neither moves again.
+        err (future (slurp (.getErrorStream p)))
+        out (slurp (.getInputStream p))
+        err @err]
     (.waitFor p) {:exit (.exitValue p) :out out :err err}))
 
 (println "gas: no operation does unbounded work for bounded gas (0009)")

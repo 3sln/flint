@@ -187,7 +187,7 @@
                        ;; compiled, the namespace was in the program, and
                        ;; `serve` was shaken anyway.
                        :exports (vec (distinct (conj (or (:exports spec) [])
-                                                     'flint.system/serve)))
+                                                     'flint.system/boot)))
                        :builtins builtins
                        :features features})]
           {:builder (:builder result) :stats (:stats result)})))))

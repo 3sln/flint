@@ -315,9 +315,32 @@ public final class Rt {
     public boolean safepoints;
 
     /// True once a scheduler exists. `run` compares `steps` against
-    /// `checkpoint` once per instruction; 0 there means nothing is counting, so
-    /// a program that never spawns runs a loop with no counter in it at all.
+    /// `checkpoint` once per instruction; `Long.MAX_VALUE` there means nothing
+    /// is counting, so a program that never spawns never reaches it.
     public boolean schedInstalled;
+
+    /// Whether the control plane has been spawned on the system port.
+    ///
+    /// One-shot, checked on every `drive`
+    /// (`DECISIONS.md#bridges-are-the-only-door`). Not a slot on the scheduler,
+    /// because a sandbox with no system port has no scheduler either and the
+    /// question is asked before that is known.
+    public boolean systemBooted;
+
+    /// This image's initialisers, in order: a program's top-level forms.
+    public int[] init = new int[0];
+
+    /// Whether this image's initialisers have run.
+    ///
+    /// They run ONCE, on first use rather than at load
+    /// (`DECISIONS.md#structured-ports` step 5), because a sandbox is now a
+    /// thing a host CALLS -- there may be no entry function at all, and running
+    /// a program's top-level forms at load would run them for a sandbox nobody
+    /// ever calls.
+    ///
+    /// The conform host also runs them explicitly, which this makes harmless
+    /// rather than double: the flag is what makes it idempotent.
+    public boolean started;
 
     public void setSliceEnd(long at) {
         sliceEnd = at;
@@ -333,11 +356,53 @@ public final class Rt {
     /// these two did not. Conformance could not see it: it diffs ANSWERS, and a
     /// program that is allowed to run forever eventually produces the right one
     /// (`DECISIONS.md#resource-limits`).
+    ///
+    /// `Long.MAX_VALUE` MEANS NOTHING IS COUNTING, and it is spelled that way
+    /// because the native runtime spells it that way. This line used to map
+    /// that back to `0`, and one field with two sentinels is a trap rather
+    /// than a style difference: `checkpoint` goes into the snapshot, the stamp
+    /// a snapshot is refused on is MAGIC and VERSION, and those are identical
+    /// on all three runtimes -- so a snapshot written here was ACCEPTED by
+    /// native, which read the `0` as "trip on the next instruction" from a
+    /// field this runtime meant as "never trip". Measured: a program with
+    /// `gasLimit == 0` and `sliceEnd == 0` wrote `checkpoint = 0` where native
+    /// wrote `0xffff_ffff_ffff_ffff`, and `livedump` now fails on the crossing
+    /// rather than passing it (`DECISIONS.md#resource-limits`).
+    ///
+    /// Nothing about WHAT IS BILLED changed with the spelling. `MAX` is not
+    /// reached, so `steps >= checkpoint` is false exactly where `checkpoint
+    /// != 0 && steps >= checkpoint` was false -- and one fewer comparison in
+    /// the hot loop, because the guard was only needed to stop `steps >= 0`
+    /// firing on every instruction.
     public void refreshCheckpoint() {
         long a = gasLimit == 0 ? Long.MAX_VALUE : gasLimit;
         long b = sliceEnd == 0 ? Long.MAX_VALUE : sliceEnd;
-        long c = a < b ? a : b;
-        checkpoint = (c == Long.MAX_VALUE) ? 0 : c;
+        checkpoint = a < b ? a : b;
+    }
+
+    /// Is this runtime billing? Asked where work is charged, and NOT the same
+    /// question as "is the checkpoint armed".
+    ///
+    /// **They differ at exactly one moment, and it was worth 140 steps of the
+    /// `conform-hosts` gas row.** This used to be spelled `checkpoint !=
+    /// <the never-reached value>` at the charge site, which is what the native
+    /// runtime's `counting()` says -- but native NEVER disarms its checkpoint
+    /// out of band, so there the two questions have one answer. This runtime
+    /// disarms at the courtesy yield, to stop re-entering that branch, and
+    /// from then until `drive` re-arms the slice the charge site read
+    /// "nothing is being billed" and the scheduler's own allocation went free.
+    /// Native billed straight through the same window.
+    ///
+    /// Measured by splitting the gas probe into its seven parts: the gap was
+    /// about 6 steps per 4 096-step slice in six of the seven, and asking this
+    /// question instead took the whole-program gap from 174 to 34
+    /// (`DECISIONS.md#resource-limits`).
+    ///
+    /// So the predicate names the thing it means. Preemption is untouched --
+    /// the checkpoint still disarms, because that is about where to STOP, not
+    /// about what to COUNT.
+    public boolean billing() {
+        return gasLimit != 0 || sliceEnd != 0;
     }
 
     public void setGasLimit(long limit) {
@@ -371,7 +436,24 @@ public final class Rt {
     public long parkOn = Val.NIL;
     public long gasLimit;
     public long sliceEnd;
-    public long checkpoint;
+    /// INITIALISED, because the sentinel is no longer Java's default.
+    ///
+    /// `Long.MAX_VALUE` means "nothing is counting" now, matching the native
+    /// runtime. A field left at Java's `0` would mean "trip on the next
+    /// instruction" -- the old spelling's "off" is the new spelling's
+    /// "immediately", which is the sharpest possible way for a respelling to
+    /// go wrong.
+    public long checkpoint = Long.MAX_VALUE;
+    /// How many times a thread's state has been RESTORED -- that is, how many
+    /// preemptions this sandbox has served.
+    ///
+    /// Native counts the same thing as `C_RESTORES` and reads it through
+    /// `stat_region`; this port has no counter array, so it is a field. It
+    /// exists because "the same program costs the same gas" cannot be asserted
+    /// between two runtimes without it: a preemption is billed work, and two
+    /// runs that preempt a different number of times cost different gas for
+    /// reasons that are not the program's (`DECISIONS.md#resource-limits`).
+    public long restores;
     public int gasTrips;
     public int memTrips;
     public int status;
@@ -555,7 +637,7 @@ public final class Rt {
         //
         // Only when COUNTING: an unbudgeted sandbox does not count, which is
         // what the second interpreter instantiation exists to express.
-        if (checkpoint != 0) chargeWork(Obj.sizeFor(ty, len) >> 3);
+        if (billing()) chargeWork(Obj.sizeFor(ty, len) >> 3);
         return allocUnbilled(ty, len);
     }
 
@@ -810,19 +892,19 @@ public final class Rt {
             // "not a number: an integer and nil" from a builtin whose second
             // argument had never been pushed.
             //
-            // One comparison against a precomputed value, and only when
-            // something is counting: `checkpoint` is 0 in a program with no
-            // scheduler, so that loop has no counter in it at all.
+            // One comparison against a precomputed value. `checkpoint` is
+            // `Long.MAX_VALUE` in a program with no scheduler and no gas
+            // limit, so the comparison is there and never true.
             // THE SAFEPOINT (`DECISIONS.md#drivers`), and the slice check, at the
             // same place -- because they want the same place. `ip` has been
             // written back and every live value is on the value stack by
             // construction, which is what makes it safe to stop here and
             // nowhere else.
             //
-            // One comparison guards both. `checkpoint` is 0 when nothing is
-            // counting, and `safepoints` is false in a sandbox with one
-            // executor, so a single-threaded program with no scheduler runs a
-            // loop with neither test in it.
+            // One comparison guards both. `checkpoint` is `Long.MAX_VALUE`
+            // when nothing is counting, and `safepoints` is false in a sandbox
+            // with one executor, so neither test ever fires in a
+            // single-threaded program with no scheduler.
             // COMPILED CODE takes over when `ip` reaches the point it named.
             // Every re-entry in the design funnels through this one comparison:
             // an entry, a return from a call, a resumed thread, an unwind into a
@@ -839,7 +921,7 @@ public final class Rt {
                 f.ip = ip;
                 roots.shared.par.park();
             }
-            if (checkpoint != 0 && steps >= checkpoint) {
+            if (steps >= checkpoint) {
                 f.ip = ip;
                 // WHICH budget fired. One comparison covers both; telling them
                 // apart is a cold path.
@@ -858,7 +940,39 @@ public final class Rt {
                     if (!unwind()) return Val.NIL;
                     continue;
                 }
-                checkpoint = 0;
+                // NOT AT A NESTED DEPTH. `baseDepth` is 0 only when this run
+                // IS a thread's own run; anything else means host frames sit
+                // underneath -- `Seqwalk.force` calling a lazy seq's thunk is
+                // the one that happens constantly -- and a Java stack cannot be
+                // saved and resumed. Yielding there unwinds through those
+                // frames and never comes back to them: `force` never records
+                // the forced value, and the value stack is left holding
+                // operands the caller has already moved past.
+                //
+                // The symptom was a call answering `value is not a function
+                // (a double, 2 args)` from inside `reduce-seq`, for
+                // `(into [] (map inc (range 100)))` and for nothing else in the
+                // suite -- because a lazy seq is the only thing that re-enters
+                // the interpreter from generated code. It appeared the moment
+                // calls began running as green threads
+                // (`DECISIONS.md#bridges-are-the-only-door`); nothing before
+                // that ran a preemptible thread through a forced thunk.
+                //
+                // So let this call finish and preempt at the next chance, which
+                // is what the native runtime has always done here.
+                if (baseDepth != 0) {
+                    setSliceEnd(steps + Conc.SLICE);
+                    continue;
+                }
+                // DISARMED, not "not counting". The value says "do not trip
+                // again before `drive` re-arms the slice"; it does not say the
+                // program has stopped being measured. Under the old spelling
+                // those were the same number, which is how the scheduler's own
+                // allocation stopped being billed in this window and native's
+                // did not (`DECISIONS.md#resource-limits`). It is still the
+                // same number today -- `alloc` asks the same question -- but
+                // now it is the same number for the same reason on all three.
+                checkpoint = Long.MAX_VALUE;
                 // A COURTESY yield, not a park: the thread stays runnable and
                 // must NOT rewind. Preemption is what keeps a thread with no
                 // `yield` in it from starving the others.
@@ -1415,7 +1529,7 @@ public final class Rt {
         return com._3sln.flint.kgen.rt.Meta.hasMeta(this, v) ? com._3sln.flint.kgen.rt.Meta.metaSlot(this, v) : -1;
     }
 
-    boolean isHeapTy(long v, int t) {
+    public boolean isHeapTy(long v, int t) {
         return Val.isHeap(v) && ty(gc.sp, Val.asHeap(v)) == t;
     }
 
@@ -1925,6 +2039,27 @@ public final class Rt {
         long v = callValue(save, args.length);
         if (!parked()) roots.stackTop = save;
         return v;
+    }
+
+    /// Run this image's initialisers, once.
+    ///
+    /// WITHOUT PREEMPTION. A slice is armed the moment a scheduler exists, and
+    /// a yield inside an initialiser would come back with `parkOn` still set;
+    /// there is nothing to preempt anyway, because no other thread can be
+    /// runnable until the program is initialised. It matters here more than at
+    /// load: a CALL runs these on first use, so this now happens with a
+    /// scheduler already built and a slice already counting down.
+    public boolean ensureStarted() {
+        if (started) return true;
+        started = true;
+        long slice = sliceEnd;
+        setSliceEnd(0);
+        for (int fn : init) {
+            call(makeClosure(fn, new long[0]), new long[0]);
+            if (failed()) { setSliceEnd(slice); return false; }
+        }
+        setSliceEnd(slice);
+        return true;
     }
 
     /// Carry on a program a snapshot restored.

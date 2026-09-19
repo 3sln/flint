@@ -13,6 +13,13 @@ license = "MIT"
 # On here and off in the wasm build, because that is the target that can use
 # it -- native threads on a real shared heap, no wasm threads proposal needed.
 flint-rt = { path = "../../runtime", features = ["parallel"] }
+# THE CONCURRENCY UNIT'S BUILTINS, which a natively-linked host has to hand over
+# because there is no wasm table to look them up in. Every image carries the
+# control plane (`DECISIONS.md#bridges-are-the-only-door`) and bootstrap SPAWNS
+# it, so every image needs `flint/spawn` -- and without this the SDK could not
+# load any image at all. `cli/` and `nativeabi/` already link it for the same
+# reason.
+flint-conc = { path = "../../units-src/flint-conc" }
 
 [features]
 default = []

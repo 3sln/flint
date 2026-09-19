@@ -1,0 +1,269 @@
+--rust-head
+// A TOY MAP AND A TOY SEQ, enough to drive one merge.
+//
+// A map is an ordered list of pairs; `map_assoc` REPLACES IN PLACE when the
+// key is present and appends when it is not, which is the ordering property
+// the expected answer pins. A seq is a cursor into one.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_0000_0000_0000);
+impl Value {
+    fn is_nil(self) -> bool { self == NIL }
+}
+struct Rt {
+    maps: Vec<Vec<(u64, u64)>>,
+    // a cursor: which map, and how far in
+    seqs: Vec<(usize, usize)>,
+    // an entry handed to `slot_or_nth_pub`
+    ents: Vec<(u64, u64)>,
+    roots: Vec<Value>,
+}
+impl Rt {
+    fn new_map(&mut self, kvs: Vec<(u64, u64)>) -> Value {
+        self.maps.push(kvs);
+        Value((self.maps.len() - 1) as u64)
+    }
+    // THE ROOT STACK, which the generated walk uses and which the last field
+    // of the expected answer asserts is left balanced.
+    fn mark(&mut self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn pop_to(&mut self, i: usize) { self.roots.truncate(i); }
+    fn seq(&mut self, v: Value) -> Value {
+        if v.is_nil() || self.maps[v.0 as usize].is_empty() { return NIL; }
+        self.seqs.push((v.0 as usize, 0));
+        Value(0x1000_0000 | (self.seqs.len() - 1) as u64)
+    }
+    fn first(&mut self, s: Value) -> Value {
+        let (m, i) = self.seqs[(s.0 & 0xFFF_FFFF) as usize];
+        let kv = self.maps[m][i];
+        self.ents.push(kv);
+        Value(0x2000_0000 | (self.ents.len() - 1) as u64)
+    }
+    fn next(&mut self, s: Value) -> Value {
+        let ix = (s.0 & 0xFFF_FFFF) as usize;
+        let (m, i) = self.seqs[ix];
+        if i + 1 >= self.maps[m].len() { return NIL; }
+        self.seqs.push((m, i + 1));
+        Value(0x1000_0000 | (self.seqs.len() - 1) as u64)
+    }
+    fn slot_or_nth_pub(&mut self, e: Value, i: u32) -> Value {
+        let (k, v) = self.ents[(e.0 & 0xFFF_FFFF) as usize];
+        Value(if i == 0 { k } else { v })
+    }
+    // PERSISTENT: a fresh map every time, so a stale root would be visible as
+    // a stale ANSWER rather than as a silently-shared mutation.
+    fn map_assoc(&mut self, m: Value, k: Value, v: Value) -> Value {
+        let mut kvs = self.maps[m.0 as usize].clone();
+        match kvs.iter().position(|p| p.0 == k.0) {
+            Some(at) => kvs[at].1 = v.0,
+            None => kvs.push((k.0, v.0)),
+        }
+        self.new_map(kvs)
+    }
+--rust
+}
+fn show(rt: &Rt, m: Value) -> String {
+    let mut s = String::new();
+    for (k, v) in &rt.maps[m.0 as usize] {
+        s.push((*k as u8) as char);
+        s.push_str(&v.to_string());
+    }
+    s
+}
+fn main() {
+    let mut rt = Rt { maps: Vec::new(), seqs: Vec::new(), ents: Vec::new(), roots: Vec::new() };
+    let a = 'a' as u64; let b = 'b' as u64; let c = 'c' as u64;
+    let mut out = String::new();
+
+    // 1. INTO AN EMPTY MAP: every entry of the source, in its order.
+    let empty = rt.new_map(vec![]);
+    let src = rt.new_map(vec![(a, 1), (b, 2)]);
+    let r1 = rt.map_conj_map(empty, src);
+    out.push_str(&format!("{} ", show(&rt, r1)));
+
+    // 2. THE SOURCE WINS, and an existing key KEEPS ITS PLACE.
+    let m2 = rt.new_map(vec![(a, 9), (c, 3)]);
+    let r2 = rt.map_conj_map(m2, src);
+    out.push_str(&format!("{} ", show(&rt, r2)));
+
+    // 3. AN EMPTY SOURCE IS THE IDENTITY -- `seq` answers nil and the loop
+    //    never runs.
+    let m3 = rt.new_map(vec![(a, 1)]);
+    let none = rt.new_map(vec![]);
+    let r3 = rt.map_conj_map(m3, none);
+    out.push_str(&format!("{} ", show(&rt, r3)));
+
+    // 4. THE ROOT STACK IS LEFT AS IT WAS FOUND.
+    out.push_str(&format!("{}", rt.roots.len()));
+    println!("{out}");
+}
+--java-head
+    static final long NIL = 0xFFFF000000000000L;
+    static final class Val { static boolean isNil(long v) { return v == NIL; } }
+    static final class Rt {
+        java.util.ArrayList<java.util.ArrayList<long[]>> maps = new java.util.ArrayList<>();
+        java.util.ArrayList<int[]> seqs = new java.util.ArrayList<>();
+        java.util.ArrayList<long[]> ents = new java.util.ArrayList<>();
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        long newMap(java.util.ArrayList<long[]> kvs) { maps.add(kvs); return maps.size() - 1; }
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void setR(int i, long v) { roots.set(i, v); }
+        void popTo(int i) { while (roots.size() > i) roots.remove(roots.size() - 1); }
+        long slotOrNth(long e, int i) {
+            long[] kv = ents.get((int) (e & 0xFFFFFFFL));
+            return i == 0 ? kv[0] : kv[1];
+        }
+    }
+    static long seq(Rt rt, long v) {
+        if (v == NIL || rt.maps.get((int) v).isEmpty()) return NIL;
+        rt.seqs.add(new int[]{ (int) v, 0 });
+        return 0x10000000L | (rt.seqs.size() - 1);
+    }
+    static long first(Rt rt, long s) {
+        int[] cur = rt.seqs.get((int) (s & 0xFFFFFFFL));
+        long[] kv = rt.maps.get(cur[0]).get(cur[1]);
+        rt.ents.add(kv);
+        return 0x20000000L | (rt.ents.size() - 1);
+    }
+    static long next(Rt rt, long s) {
+        int[] cur = rt.seqs.get((int) (s & 0xFFFFFFFL));
+        if (cur[1] + 1 >= rt.maps.get(cur[0]).size()) return NIL;
+        rt.seqs.add(new int[]{ cur[0], cur[1] + 1 });
+        return 0x10000000L | (rt.seqs.size() - 1);
+    }
+    static long mapAssoc(Rt rt, long m, long k, long v) {
+        java.util.ArrayList<long[]> kvs = new java.util.ArrayList<>();
+        for (long[] p : rt.maps.get((int) m)) kvs.add(new long[]{ p[0], p[1] });
+        for (long[] p : kvs) if (p[0] == k) { p[1] = v; return rt.newMap(kvs); }
+        kvs.add(new long[]{ k, v });
+        return rt.newMap(kvs);
+    }
+--java
+    static String show(Rt rt, long m) {
+        StringBuilder s = new StringBuilder();
+        for (long[] p : rt.maps.get((int) m)) s.append((char) p[0]).append(p[1]);
+        return s.toString();
+    }
+    public static void main(String[] argv) {
+        Rt rt = new Rt();
+        long a = 'a', b = 'b', c = 'c';
+        StringBuilder out = new StringBuilder();
+
+        java.util.ArrayList<long[]> e0 = new java.util.ArrayList<>();
+        long empty = rt.newMap(e0);
+        java.util.ArrayList<long[]> s0 = new java.util.ArrayList<>();
+        s0.add(new long[]{ a, 1 }); s0.add(new long[]{ b, 2 });
+        long src = rt.newMap(s0);
+        out.append(show(rt, mapConjMap(rt, empty, src))).append(" ");
+
+        java.util.ArrayList<long[]> m2 = new java.util.ArrayList<>();
+        m2.add(new long[]{ a, 9 }); m2.add(new long[]{ c, 3 });
+        out.append(show(rt, mapConjMap(rt, rt.newMap(m2), src))).append(" ");
+
+        java.util.ArrayList<long[]> m3 = new java.util.ArrayList<>();
+        m3.add(new long[]{ a, 1 });
+        java.util.ArrayList<long[]> none = new java.util.ArrayList<>();
+        out.append(show(rt, mapConjMap(rt, rt.newMap(m3), rt.newMap(none)))).append(" ");
+
+        out.append(rt.roots.size());
+        System.out.println(out.toString());
+    }
+--csharp-head
+    internal const long NIL = unchecked((long) 0xFFFF000000000000UL);
+    internal static class Val { internal static bool IsNil(long v) => v == NIL; }
+    internal sealed class Rt {
+        internal System.Collections.Generic.List<System.Collections.Generic.List<long[]>> Maps = new();
+        internal System.Collections.Generic.List<int[]> Seqs = new();
+        internal System.Collections.Generic.List<long[]> Ents = new();
+        internal System.Collections.Generic.List<long> Roots = new();
+        internal long NewMap(System.Collections.Generic.List<long[]> kvs) { Maps.Add(kvs); return Maps.Count - 1; }
+        internal int Mark() => Roots.Count;
+        internal int Push(long v) { Roots.Add(v); return Roots.Count - 1; }
+        internal long R(int i) => Roots[i];
+        internal void SetR(int i, long v) { Roots[i] = v; }
+        internal void PopTo(int i) { while (Roots.Count > i) Roots.RemoveAt(Roots.Count - 1); }
+        internal long SlotOrNth(long e, int i) {
+            var kv = Ents[(int) (e & 0xFFFFFFFL)];
+            return i == 0 ? kv[0] : kv[1];
+        }
+    }
+    static long Seq(Rt rt, long v) {
+        if (v == NIL || rt.Maps[(int) v].Count == 0) return NIL;
+        rt.Seqs.Add(new int[]{ (int) v, 0 });
+        return 0x10000000L | (rt.Seqs.Count - 1);
+    }
+    static long First(Rt rt, long s) {
+        var cur = rt.Seqs[(int) (s & 0xFFFFFFFL)];
+        var kv = rt.Maps[cur[0]][cur[1]];
+        rt.Ents.Add(kv);
+        return 0x20000000L | (rt.Ents.Count - 1);
+    }
+    static long Next(Rt rt, long s) {
+        var cur = rt.Seqs[(int) (s & 0xFFFFFFFL)];
+        if (cur[1] + 1 >= rt.Maps[cur[0]].Count) return NIL;
+        rt.Seqs.Add(new int[]{ cur[0], cur[1] + 1 });
+        return 0x10000000L | (rt.Seqs.Count - 1);
+    }
+    static long MapAssoc(Rt rt, long m, long k, long v) {
+        var kvs = new System.Collections.Generic.List<long[]>();
+        foreach (var p in rt.Maps[(int) m]) kvs.Add(new long[]{ p[0], p[1] });
+        foreach (var p in kvs) if (p[0] == k) { p[1] = v; return rt.NewMap(kvs); }
+        kvs.Add(new long[]{ k, v });
+        return rt.NewMap(kvs);
+    }
+--csharp
+    static string Show(Rt rt, long m) {
+        var s = new System.Text.StringBuilder();
+        foreach (var p in rt.Maps[(int) m]) s.Append((char) p[0]).Append(p[1]);
+        return s.ToString();
+    }
+    static void Main(string[] argv) {
+        var rt = new Rt();
+        long a = 'a', b = 'b', c = 'c';
+        var outp = new System.Text.StringBuilder();
+
+        long empty = rt.NewMap(new System.Collections.Generic.List<long[]>());
+        var s0 = new System.Collections.Generic.List<long[]>{ new long[]{ a, 1 }, new long[]{ b, 2 } };
+        long src = rt.NewMap(s0);
+        outp.Append(Show(rt, MapConjMap(rt, empty, src))).Append(" ");
+
+        var m2 = new System.Collections.Generic.List<long[]>{ new long[]{ a, 9 }, new long[]{ c, 3 } };
+        outp.Append(Show(rt, MapConjMap(rt, rt.NewMap(m2), src))).Append(" ");
+
+        var m3 = new System.Collections.Generic.List<long[]>{ new long[]{ a, 1 } };
+        outp.Append(Show(rt, MapConjMap(rt, rt.NewMap(m3), rt.NewMap(new System.Collections.Generic.List<long[]>())))).Append(" ");
+
+        outp.Append(rt.Roots.Count);
+        System.Console.WriteLine(outp.ToString());
+    }
+--expect
+a1b2 a1c3b2 a1 0
+--expect-why
+DERIVED FROM WHAT `conj` PROMISES OF A MAP, field by field.
+
+  merge   `a1b2`    INTO AN EMPTY MAP. Every entry of the source, in the
+                    source's order. The weakest field here -- it would pass
+                    against almost any walk -- and it is what says the walk
+                    runs at all, which the next two assume.
+  merge   `a1c3b2`  THE SOURCE WINS AND POSITION IS KEPT. `{a 9, c 3}` conjed
+                    with `{a 1, b 2}` answers `a1c3b2`, not `c3a1b2`: `a` is
+                    overwritten WHERE IT IS, and only `b` is new and appended.
+                    Both halves matter. A walk that removed and re-added a
+                    present key would answer `c3a1b2` and be wrong about
+                    ordering while right about contents, which is exactly the
+                    kind of difference two hand-written copies drift into and
+                    no equality test notices.
+  merge   `a1`      AN EMPTY SOURCE IS THE IDENTITY. `seq` of an empty map is
+                    NIL, so the loop never runs -- this pins that the nil is
+                    tested BEFORE the first `first`, which is the one arm the
+                    other two fields never enter.
+  roots   `0`       THE ROOT STACK IS LEFT AS IT WAS FOUND, after three merges
+                    and six allocations. `map-assoc` allocates, so the
+                    accumulator and the cursor are roots and not locals; a
+                    walk that pushed the entry and forgot to pop it would
+                    answer every other field correctly and leak one slot per
+                    entry. Three calls, and the stack is still empty.

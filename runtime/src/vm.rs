@@ -316,8 +316,28 @@ pub struct Counting;
 impl BudgetPolicy for Counting {
     #[inline(always)]
     fn tick(rt: &mut Rt) -> bool {
+        // TEST, THEN CHARGE -- and the order is the whole of a defect that
+        // made gas depend on `SLICE`.
+        //
+        // This ran `steps += 1` first and tested after, and `tick` is called
+        // BEFORE the opcode is read. So on the iteration that trips, the
+        // instruction had been CHARGED and NOT EXECUTED; after the resume it
+        // was dispatched and charged again. Exactly one double charge per
+        // slice.
+        //
+        // Measured on a counting loop that allocates nothing, so allocation
+        // billing could not confound it: against the ports the gap was not
+        // proportional to the work, it EQUALLED the slice count --
+        // 2/11/20/42/86 against 3/11/22/44/88 slices. The ports test first and
+        // charge second and were right (`DECISIONS.md#resource-limits`).
+        //
+        // It also made the same program cost different gas at different
+        // preemption quanta, which a program's instruction count must not do.
+        if rt.steps >= rt.checkpoint {
+            return true;
+        }
         rt.steps += 1;
-        rt.steps >= rt.checkpoint
+        false
     }
 }
 
@@ -973,6 +993,22 @@ impl Rt {
                 // than "you have hung" -- so gas costs nothing extra exactly
                 // where concurrency already made the counter necessary.
                 if self.gas_limit != 0 && self.steps >= self.gas_limit {
+                    // A BATCH BOUNDARY, USUALLY -- not a blown budget.
+                    //
+                    // Under a shared budget `gas_limit` is the end of this
+                    // executor's current batch rather than the sandbox's cap,
+                    // so the first question is whether the SANDBOX is out of
+                    // gas, not whether this executor reached a number. When it
+                    // is not, this publishes what was spent, moves the local
+                    // limit forward and carries on (`DECISIONS.md#resource-limits`).
+                    //
+                    // The answer is TRUE when there is no shared budget, which
+                    // is every inline sandbox and the whole wasm build -- so
+                    // the old meaning survives without a second test here.
+                    #[cfg(feature = "parallel")]
+                    if !self.flush_shared_gas() {
+                        continue;
+                    }
                     let t = self.frame_trace();
                     let e = self.gas_error(&alloc::format!("\n{t}"));
                     self.thrown = e;
@@ -1858,8 +1894,25 @@ impl Rt {
         //
         // There is nothing to preempt here anyway: no other thread can be
         // runnable until the program has been initialised.
+        // NOT PREEMPTIBLE, BUT STILL BILLED -- and those are two questions that
+        // `checkpoint` answers with one number.
+        //
+        // This set `slice_end` to 0, which stops preemption (what the paragraph
+        // above needs) and ALSO stops counting, because `refresh_checkpoint`
+        // then leaves `checkpoint` at `u64::MAX` and `run` dispatches to
+        // `NoBudget`, whose `tick` never increments. Initialisers were
+        // therefore FREE here and BILLED on the jvm and the clr, whose
+        // interpreters increment unconditionally -- measured at 226 steps
+        // against 8 135 reaching the entry on the same image.
+        //
+        // Initialisers are top-level forms, which is guest code, and the
+        // standing decision is that all guest code is charged
+        // (`DECISIONS.md#resource-limits`). So the ports were right. A slice
+        // end that cannot be reached suspends preemption without suspending
+        // the counter: `counting()` stays true because the checkpoint is not
+        // the sentinel, and `steps` never climbs anywhere near it.
         let slice = self.slice_end;
-        self.set_slice_end(0);
+        self.set_slice_end(u64::MAX - 1);
         for i in 0..self.image.init.len() {
             let f = self.image.init[i];
             let c = self.make_closure(f, &[]);
@@ -1941,6 +1994,15 @@ impl Rt {
             return true;
         }
         self.set_started(true);
+        // THE STACK IS RESTORED ON EVERY EXIT, including the refusal below.
+        //
+        // A park leaves the value stack holding its continuation -- that is the
+        // point of not truncating it -- and this loop cannot resume one, so it
+        // has to be cut back. `run_program` marks and pops for exactly this;
+        // without it the loop returned with a stack the park had cut down and
+        // the next `vpop` read index `usize::MAX`. A panic, from a program
+        // whose only sin was a top-level `(fs/exists? ..)`.
+        let base = self.mark();
         // WITHOUT PREEMPTION, for the reason `run_program` gives at length: a
         // slice is armed the moment a scheduler exists, a yield inside an
         // initialiser is discarded here (`let _ =`), and the thread comes back
@@ -1956,12 +2018,54 @@ impl Rt {
             let f = self.image.init[i];
             let c = self.make_closure(f, &[]);
             let _ = self.invoke(c, &[]);
+            // A GENUINE PARK IS REFUSED, where a yield is merely impossible.
+            //
+            // The line above disarms preemption so nothing YIELDS in here. A
+            // park is the other thing: a top-level form that asks the HOST
+            // comes back with `park_on` set and no way to be resumed, because
+            // this loop is not re-entrant -- there is no saved position to come
+            // back to. Discarding it is what `let _` does, and the thread then
+            // carries on with a value stack the park had already cut down: the
+            // symptom is `index out of bounds: the index is <usize::MAX>` out
+            // of `vpop`, which is a panic and not a diagnosis.
+            //
+            // `ports-are-the-hosts` says a sandbox that cannot ask is TOLD so
+            // rather than parked. This is that sentence one phase earlier: it
+            // cannot ask HERE, so say so at the form that asked.
+            //
+            // `run_program` has carried this since a top-level `slurp` found
+            // it. This copy did not, and nothing reached it until the entry
+            // itself became a CALL (`DECISIONS.md#bridges-are-the-only-door`) --
+            // which runs the initialisers through here instead.
+            //
+            // NOT GUARDED ON `!failed()`. A park travels as `thrown == PARK`,
+            // so `failed()` is TRUE for one; the copy in `run_program` carries
+            // that condition and this one deliberately does not. Both halves of
+            // the park state are cleared explicitly, or the scheduler goes on
+            // believing this thread is waiting for an answer.
+            if !self.park_on.is_nil() {
+                self.park_on = NIL;
+                if self.thrown == crate::value::PARK {
+                    self.thrown = NIL;
+                }
+                // The stack this thread was parked on is about to be cut back,
+                // so nothing may try to resume it. See `abandon_current_thread`.
+                self.abandon_current_thread();
+                self.throw_str(
+                    "IllegalStateException",
+                    "a top-level form asked the host while the program was still \
+                     initialising, and cannot wait for the answer there. Move the \
+                     call into a function the entry reaches.",
+                );
+            }
             if self.failed() {
                 self.set_slice_end(slice);
+                self.pop_to(base);
                 return false;
             }
         }
         self.set_slice_end(slice);
+        self.pop_to(base);
         true
     }
 
