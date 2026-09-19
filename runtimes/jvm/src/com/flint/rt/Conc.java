@@ -275,7 +275,11 @@ public final class Conc {
         }
         rt.setSlot(Val.asHeap(rt.r(ti)), TH_FRAMES, fb);
 
-        long hb = newObj(rt, TY_RAW, rt.handlers.size() * 16);
+        // UNBILLED, like the stack and frame buffers above -- see
+        // `runtime/src/conc.rs`, which carries the reasoning. Charging it made
+        // gas depend on where a thread happened to be preempted.
+        long a2 = rt.allocUnbilled(TY_RAW, rt.handlers.size() * 16);
+        long hb = a2 == 0 ? Val.NIL : Val.heap(a2);
         if (!Val.isNil(hb)) {
             long a = Val.asHeap(hb) + HDR;
             for (int k = 0; k < rt.handlers.size(); k++) {

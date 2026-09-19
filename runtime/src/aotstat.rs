@@ -119,6 +119,27 @@ pub const C_N_TICK: usize = 42;
 
 pub static mut COUNTS: [u64; 43] = [0; 43];
 
+/// How many BILLED allocations of each object type, and what they were charged.
+///
+/// Two arrays rather than one because a pricing difference can be in the COUNT
+/// or in the SIZE and those want opposite fixes -- the same reason
+/// `C_N_NATIVE` sits beside `C_GAS_NATIVE`.
+///
+/// **Why this exists.** `bin/conform-hosts`'s gas row came down to four
+/// allocations in a four-line program, and there was no way to ask which four:
+/// `stat_allocs` is a total and `stat_origin` answers "who allocated THIS
+/// address" and cannot be summed. A run that differs by a handful of objects
+/// is the shape a pricing divergence takes every time this row has caught one
+/// -- the ports allocating more per map entry, the vector hash cached on one
+/// side and not the others -- so naming the objects is the question worth
+/// being able to ask.
+///
+/// Indexed by `TY_*`; 64 slots for 55 types, so a new one does not silently
+/// land out of range. Counted where the CHARGE happens, so the two agree with
+/// `steps` by construction.
+pub static mut ALLOC_N: [u64; 64] = [0; 64];
+pub static mut ALLOC_GAS: [u64; 64] = [0; 64];
+
 /// Executed instructions by opcode. Which opcodes an emitter must handle inline
 /// is a distribution too, and guessing it is the same mistake as guessing the
 /// region length.

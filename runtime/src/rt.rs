@@ -541,7 +541,14 @@ impl Rt {
         // A charge that appears when nobody asked for a budget is not free: it
         // is the counter the second instantiation exists to avoid.
         if self.counting() {
-            self.charge_work((crate::obj::size_for(ty, len) as u64) >> 3);
+            let g = (crate::obj::size_for(ty, len) as u64) >> 3;
+            #[cfg(feature = "diagnostics")]
+            unsafe {
+                let i = (ty as usize) & 63;
+                crate::aotstat::ALLOC_N[i] += 1;
+                crate::aotstat::ALLOC_GAS[i] += g;
+            }
+            self.charge_work(g);
         }
         #[cfg(feature = "parallel")]
         if self.exec_id.is_some() {

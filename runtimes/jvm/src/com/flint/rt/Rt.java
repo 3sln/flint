@@ -454,6 +454,18 @@ public final class Rt {
     /// runs that preempt a different number of times cost different gas for
     /// reasons that are not the program's (`DECISIONS.md#resource-limits`).
     public long restores;
+    /// Billed allocations by object type: how many, and what they were
+    /// charged. The mirror of native's `ALLOC_N` / `ALLOC_GAS`
+    /// (`runtime/src/aotstat.rs`), and it exists for the same reason -- a
+    /// pricing row that differs by a handful of objects cannot be diagnosed
+    /// from a total. Indexed by `TY_*`, 64 slots for 55 types.
+    public final long[] allocN = new long[64];
+    public final long[] allocGas = new long[64];
+    /// Instructions dispatched, separate from `steps`. `steps` is instructions
+    /// PLUS charged work, so the two together split a gas total into the part
+    /// that is the program running and the part that is work priced by size.
+    /// Native answers the same question with `C_INSTRS`.
+    public long instrs;
     public int gasTrips;
     public int memTrips;
     public int status;
@@ -637,7 +649,12 @@ public final class Rt {
         //
         // Only when COUNTING: an unbudgeted sandbox does not count, which is
         // what the second interpreter instantiation exists to express.
-        if (billing()) chargeWork(Obj.sizeFor(ty, len) >> 3);
+        if (billing()) {
+            long g = Obj.sizeFor(ty, len) >> 3;
+            allocN[ty & 63]++;
+            allocGas[ty & 63] += g;
+            chargeWork(g);
+        }
         return allocUnbilled(ty, len);
     }
 
@@ -984,6 +1001,7 @@ public final class Rt {
             int opcode = u8(ip);
             ip += 1;
             steps++;
+            instrs++;
 
             switch (opcode) {
                 case Op.CONST -> { vpush(consts[u16(ip)]); ip += 2; }

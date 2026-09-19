@@ -269,7 +269,10 @@ public static class Conc {
         }
         rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_FRAMES, fb);
 
-        long hb = NewObj(rt, Obj.TyRaw, rt.handlers.Count * 16);
+        // UNBILLED, like the stack and frame buffers above -- see
+        // `runtime/src/conc.rs` for the reasoning.
+        long a2 = rt.AllocUnbilled(Obj.TyRaw, rt.handlers.Count * 16);
+        long hb = a2 == 0 ? Val.Nil : Val.Heap(a2);
         if (!Val.IsNil(hb)) {
             long a = Val.AsHeap(hb) + Obj.Hdr;
             for (int k = 0; k < rt.handlers.Count; k++) {

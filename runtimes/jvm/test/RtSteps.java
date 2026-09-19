@@ -36,5 +36,17 @@ public class RtSteps {
     // a preemption is billed work and two runtimes may serve a different
     // number of them for the same program.
     System.out.println(rt.steps + " " + rt.restores);
+    // The per-type billed-allocation histogram, for the rows that compare
+    // gas across runtimes. Only non-zero types, so the line stays readable.
+    if (System.getenv("FLINT_ALLOC_HIST") != null) {
+      StringBuilder sb = new StringBuilder();
+      for (int t = 0; t < 64; t++)
+        if (rt.allocN[t] != 0) sb.append(t).append(':').append(rt.allocN[t])
+                                 .append('/').append(rt.allocGas[t]).append(' ');
+      System.out.println("HIST " + sb);
+      long ag = 0; for (long g : rt.allocGas) ag += g;
+      System.out.println("SPLIT instrs=" + rt.instrs + " allocgas=" + ag
+                         + " other=" + (rt.steps - rt.instrs - ag));
+    }
   }
 }

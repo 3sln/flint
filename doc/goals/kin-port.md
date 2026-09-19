@@ -6650,3 +6650,60 @@ diverges.
 allocations in a four-line program, and it is still not a mechanism. A
 tolerance would hide it, and `bin/conform-hosts` is right that the next one
 would hide behind the same tolerance.
+
+### The histogram paid for itself immediately: a billed buffer nobody meant to bill (2026-09-19)
+
+Built the instrument the entry above asked for -- a per-TYPE billed-allocation
+histogram, count and charged gas, on native AND on the jvm -- and it found a
+real defect on its first question.
+
+**The defect.** `save_current_state` saves three buffers when a thread parks:
+the value stack, the frame records, and the handler records. The first two use
+`alloc_unbilled`, with a comment explaining that their SIZE is a property of
+the calling convention rather than of the program. The third used `new_obj`,
+which charges. Nothing argued for the difference; there was no comment on it.
+All three runtimes carried it, the oversight having been ported faithfully.
+
+The consequence: **gas depended on where a thread happened to be preempted**,
+because what is charged is the number of handlers live at that instant. That
+is precisely what the `alloc_unbilled` comment beside it was written to
+prevent.
+
+**How the histogram found it.** Two orderings of the same two expressions
+differed by 6 steps; asking which object types differed returned exactly one
+line -- `TY_RAW`, one allocation, five gas. Two billed `TY_RAW` sites exist and
+one is the regex blob, which these programs do not touch.
+
+**What the fix bought, and it was more than the 6.** With the handler buffer
+unbilled in all three runtimes a preemption costs NOTHING, and
+`test/aot.clj`'s compiled-versus-interpreted counts agree EXACTLY again --
+`arith` 275 876 both ways while preempting 64 times against 63, `colls`
+112 320 both ways at 24 against 23. The law that row briefly asserted
+("equal, net of preemptions not taken", with a measured constant of 3) is
+gone, and its constant WAS the defect. An exact equality that is true beats a
+law with a constant in it.
+
+**The remaining 6 on `conform-hosts` is now attributed exactly.** Splitting gas
+into its three sources on both runtimes:
+
+    difference (big - small)   native      jvm    gap
+    instructions               98,878   98,878      0
+    allocation charges         38,795   38,795      0
+    everything else             5,356    5,362     -6
+
+Instructions identical. Billed allocation identical -- per type, per count, per
+charge, across the whole probe. **The entire residual is non-allocation charged
+work**, and the jvm charges the extra. Per part it is one expression again:
+`(into [] (map inc (range n)))`, -4 there and 0 in all six others.
+
+**Next.** The instrument wanted now is the same trick one level along: a
+per-SITE breakdown of `charge_work` / `charge_bytes` calls, the way `C_GAS_*`
+already decomposes the AOT doors. The category is small -- about 5 360 steps
+across the difference -- and one expression carries the divergence.
+
+**A tooling mistake of mine, recorded because it cost a gate run.** I ran
+`bin/build-units` while `bin/test` was running, and the gate reported
+`bin/build-dist` red with `could not copy ... to units/flint/rt.o`. That is not
+a regression, it is two builds in one directory. The gate owns the tree while
+it runs; a concurrent build is the same class of error as a predicate that can
+see itself.

@@ -587,6 +587,27 @@ pub extern "C" fn stat_allocs() -> u64 {
     unsafe { ensure_rt().gc.alloc_seq }
 }
 
+/// Billed allocations of object type `ty` -- the COUNT.
+///
+/// Pair it with `stat_alloc_gas_by_ty`: a pricing difference can be in how
+/// many objects were made or in how big they were, and those want opposite
+/// fixes. Indexed by `TY_*`, masked to 64 slots.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_alloc_by_ty(ty: u32) -> u64 {
+    unsafe { crate::aotstat::ALLOC_N[(ty as usize) & 63] }
+}
+
+/// Gas charged for billed allocations of object type `ty`.
+///
+/// Counted at the charge site, so summing this over every type equals the
+/// allocation share of `stat_steps` exactly.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_alloc_gas_by_ty(ty: u32) -> u64 {
+    unsafe { crate::aotstat::ALLOC_GAS[(ty as usize) & 63] }
+}
+
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn set_gc_stress(on: u32) {

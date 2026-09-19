@@ -488,7 +488,24 @@ impl Rt {
         }
         self.set(self.r(ti), TH_FRAMES, fb);
 
-        let hb = self.new_obj(TY_RAW, (self.handlers.len() * 16) as u32);
+        // UNBILLED, like the two buffers above it, and it was the odd one out.
+        //
+        // The stack and the frames are saved with `alloc_unbilled` because
+        // their SIZE is a property of the calling convention rather than of
+        // the program; the handler buffer is the same kind of thing and was
+        // allocated with `new_obj`, which charges. Nothing argued for the
+        // difference -- there was no comment on it -- and the consequence was
+        // that gas depended on WHERE a thread happened to be preempted, since
+        // what is charged is the number of handlers live at that moment.
+        //
+        // That is the defect `bin/conform-hosts`'s gas row had been reporting
+        // as 6 steps. Found by asking a per-type allocation histogram which
+        // objects differed between two orderings of the same two expressions:
+        // exactly one, `TY_RAW`, five gas (`DECISIONS.md#resource-limits`).
+        let hb = {
+            let a = self.alloc_unbilled(TY_RAW, (self.handlers.len() * 16) as u32);
+            if a == 0 { NIL } else { Value::heap(a) }
+        };
         if !hb.is_nil() {
             let addr = hb.as_heap();
             let bytes = self.gc.sp.bytes_mut(addr + HDR, (self.handlers.len() * 16) as u32);
