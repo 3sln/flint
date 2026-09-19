@@ -6592,3 +6592,61 @@ exact equality on that row and spends twenty lines explaining why a tolerance
 wide enough to cover an unexplained difference will cover the next one too. The
 difference is now explained down to two expressions but not to a mechanism, and
 a bound is still the wrong instrument.
+
+### The last 6, reduced to a four-line reproducer (2026-09-19)
+
+Took the next step the entry above named. Not closed, but the question is now
+small enough to hand over, and five candidate mechanisms are dead.
+
+**The reproducer.** Two expressions, run separately and then composed, at two
+sizes:
+
+    (count (into #{} (range n)))            ; q2
+    (count (into [] (map inc (range n))))   ; q3
+
+Composition overhead is `work(pair) - work(q2) - work(q3)`, measured against an
+empty program so start-up cancels:
+
+                        native    jvm
+    q2 then q3 @100         76     79
+    q2 then q3 @400         70     84
+    q3 then q2 @100         70     74
+    q3 then q2 @400         70     74
+
+**The reverse order is FLAT on both runtimes. The forward order scales, and in
+OPPOSITE DIRECTIONS: native -6, the jvm +5.** That is the row's residual, and
+it is not one runtime being wrong while the other is right -- both are
+order-and-size sensitive here and they disagree about which way.
+
+**What that rules out, each measured rather than argued:**
+
+* **Control flow.** `C_INSTRS` is IDENTICAL between composed and separate on
+  native -- 27 300 either way. The entire difference is charged work, so no
+  amount of reading the emitter will explain it.
+* **Collection timing.** `stat_collections` is ZERO in every variant. Nothing
+  is collected, nothing is promoted, and the record's promise that gas does not
+  depend on when a collection ran is not what is at stake.
+* **The collector being billed.** Both runtimes promote through the unbilled
+  path (`alloc_old` / `allocOld`).
+* **Interning.** Capacities are identical on all three and neither expression
+  interns -- they are collections of integers.
+* **Preemption.** Counts are equal at 28 across the whole program, and this
+  effect reproduces in programs with no preemption difference at all.
+
+**What it IS, as far as the measurement goes.** Allocation, and a small number
+of small objects: at n=100 the forward order makes FOUR more allocations than
+the reverse and costs six more steps, and at n=400 the two orders agree to one
+allocation. Removing the lazy `map` -- `(into [] (range n))` instead -- flips
+the native scaling from -6 to +3, so the lazy seq is part of it.
+
+**Where to go next.** The gap is four small allocations, so the instrument
+wanted is a per-TYPE or per-SITE allocation histogram, which does not exist;
+`stat_origin` answers "who allocated THIS address" and cannot be summed.
+Adding a type histogram behind `diagnostics` is probably the cheapest way to
+name the four objects, and it would pay for itself the next time a pricing row
+diverges.
+
+**Still not papered over.** The difference is now characterised to four
+allocations in a four-line program, and it is still not a mechanism. A
+tolerance would hide it, and `bin/conform-hosts` is right that the next one
+would hide behind the same tolerance.
