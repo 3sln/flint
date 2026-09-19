@@ -6532,3 +6532,63 @@ alongside steps broke `bin/conform-hosts`, which did arithmetic on its output:
 `215137 39: syntax error`. That is the right failure -- a parser that silently
 took the prefix would have compared one number against a different one -- and
 both ports' parsing now takes the fields explicitly.
+
+### The last 6 is ONE expression pair, and the two runtimes move opposite ways (2026-09-19)
+
+Continued on the only red left. Not closed, but narrowed from "6 steps
+somewhere in a 143 175-step program" to two named expressions, which is the
+difference between a mystery and a next step.
+
+**Bisected by cumulative prefix.** Seven programs, each one part longer, same
+`big - small` difference on both runtimes:
+
+    prefix                nat diff   jvm diff   gap   jump
+    +mapv array-maps        25,548     25,548     0      0
+    +into a set             41,599     41,599     0      0
+    +into a vector         67,113     67,119    -6     -6
+    +apply str              76,843     76,849    -6      0
+    +ft/build              104,495    104,501    -6      0
+    +ft/rows               123,882    123,888    -6      0
+    +string block          143,169    143,175    -6      0
+
+**The whole gap arrives when `(into [] (map inc (range n)))` joins, and every
+later part contributes exactly zero.** Six of the seven parts are innocent, and
+the row's residual is one expression deep.
+
+**It is an INTERACTION, not a cost.** That part measured alone is +1. Measured
+after the others it is -6. Pairing it with each predecessor separates them:
+
+    p1 alone      0      p1+p2    0
+    p2 alone      0      p1+p3   +2
+    p3 alone     +1      p2+p3  -10      <- `into #{}` then `into []`
+
+And against the sum of its own parts, `p2+p3` moves in OPPOSITE DIRECTIONS on
+the two runtimes: native costs 6 LESS than p2-alone plus p3-alone, the jvm
+costs 5 MORE. Neither is additive and they are not non-additive in the same
+way, which is why no per-preemption law fitted: this is not about preemption at
+all. Preemption counts are equal at 28 across the whole program.
+
+**Ruled out this firing, each by reading the code rather than guessing:**
+
+* **The collector being billed on one side.** Native keeps promotion out of the
+  charged path (`alloc_old` directly, so gas does not depend on when a
+  collection ran) and the jvm does the same -- `Gc.java:270` promotes through
+  `allocOld`, and the billed path is `Rt.java:640`.
+* **Intern capacity.** Identical on all three: 1024 / 1024 / 512 / 4, and
+  `INTERN_MAX` is 32 on native with the ports reading the generated
+  `Interns.INTERN_MAX`. Neither expression interns anything anyway -- both are
+  collections of integers.
+
+**Where the next attempt should start.** Build only `(into #{} (range n))`
+followed by `(into [] (map inc (range n)))` -- that pair alone reproduces a
+-10, larger than the row's own -6 -- and decompose it with the diagnostics
+counters on the native side. Two collection builds, one CHAMP and one vector
+trie, over a lazy seq; what one leaves behind that changes the other's price
+is a small enough question to answer. **It is NOT a scheduler question**, which
+is where four firings of this investigation looked.
+
+**Not closed, and deliberately not papered over.** `bin/conform-hosts` demands
+exact equality on that row and spends twenty lines explaining why a tolerance
+wide enough to cover an unexplained difference will cover the next one too. The
+difference is now explained down to two expressions but not to a mechanism, and
+a bound is still the wrong instrument.
