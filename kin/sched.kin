@@ -32,7 +32,8 @@
                                    install-bindings begin-slice reset-exec-state
                                    run-entry restore-state vm-run set-thrown
                                    unwind-to-handler settle
-                                   RootIx TH_BINDINGS TH_ENTRY TH_STACK TH_FAIL
+                                   RootIx TH_BINDINGS TH_ENTRY TH_STACK
+                                   TH_FRAMES TH_FAIL
                                    SC_WAITERS SC_WFREE
                                    W_GEN W_THREAD W_PORT W_NEXT TH_TOKEN
                                    Rt Value I32 I64 Bool NIL NOT_FOUND
@@ -602,3 +603,44 @@
     (let [^Value pv (r rt pi)]
       (pop-to rt base)
       (return (park rt pv)))))
+
+
+(doc "END the current thread where it stands, TAKING ITS WAITER WITH IT."
+     ""
+     "For the one case that is not an ordinary return: a top-level form asked"
+     "the host while the program was still initialising, so the stack it is"
+     "parked on is about to be cut back and nothing may try to resume it."
+     ""
+     "THE WAITER IS THE HALF THAT ACTUALLY BIT, and it is the only reason this"
+     "is a function rather than one `set-slot`. Marking the thread DONE is not"
+     "enough: `park-on-port` registered a waiter naming this thread, and the"
+     "next `host-deliver` or `host-continue` fires that waiter and puts the"
+     "thread back to RUNNABLE. It was observed doing exactly that -- DONE at"
+     "the end of one `drive`, RUNNABLE at the start of the next, with nothing"
+     "in between but the host delivering the bind."
+     ""
+     "So the drivers file does not stop at the status. It wakes the port"
+     "AFTERWARDS and asks the status again, which is the only field here that"
+     "separates freeing the waiter from merely marking the thread."
+     ""
+     "BOTH HALVES OF THE SAVED STATE GO, not just the value stack. A thread"
+     "holding frames without operands would be resumed onto frames that do not"
+     "match, which is a worse failure than the one this prevents."
+     ""
+     "A NIL CURRENT THREAD IS NOT AN ERROR, the same reading `park-on-port`"
+     "takes: the runtime can park during startup before a scheduler exists,"
+     "and there is then simply no thread slot to clear.")
+(defn ^:pub ^:method ^Value abandon-current-thread [^:mut ^Rt rt]
+  (let [^Value th (current-thread rt)]
+    (if (nil? rt th)
+      (return NIL))
+    (set-slot rt th TH_STATUS (fixnum64 ST_DONE))
+    (set-slot rt th TH_STACK NIL)
+    (set-slot rt th TH_FRAMES NIL)
+    (set-slot rt th TH_PARK_ON NIL)
+    (let [^I64 token (as-fixnum (slot rt th TH_TOKEN))]
+      (if (>= token 0)
+        (do
+          (free-waiter rt token)
+          (set-slot rt th TH_TOKEN (fixnum64 (- 0 1))))))
+    (return NIL)))

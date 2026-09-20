@@ -172,50 +172,26 @@ public static class Conc {
     /// Create the scheduler on first use, enrolling whatever is running now as
     /// THREAD 0. Built here rather than at startup so a program that never
     /// spawns runs a straight line with no scheduler in it at all.
+    /// Install the scheduler as the singleton the collector already traces.
+    public static void InstallSched(Rt rt, long s) {
+        rt.roots.shared.Singletons[Rt.SingSched] = s;
+    }
+
+    /// Is a program actually running? An empty frame stack means thread 0
+    /// represents no stack at all.
+    public static bool SomethingRunning(Rt rt) {
+        return rt.frames.Count != 0;
+    }
+
+    /// Make the scheduler if there is not one. The OBJECT is generated, from
+    /// `kin/schedmake.kin`.
     public static long EnsureSched(Rt rt) {
         long s = Sched(rt);
         if (!Val.IsNil(s)) return s;
         // The decoder's route to `InstallBridgePort`, set HERE and nowhere else.
-        // See `Rt.bridgeHook`: reaching it directly from the codec put the whole
-        // scheduler into every wasm module, including ones with no ports.
         rt.bridgeHook = (r, id) => InstallBridgePort(r, id, Val.Nil, true);
-        int bas = rt.Mark();
-        int si = rt.Push(NewObj(rt, Obj.TySched, SC_LEN));
-        if (Val.IsNil(rt.R(si))) { rt.PopTo(bas); return Val.Nil; }
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_EVENTS, Vec.Empty(rt));
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_EHEAD, Val.Fixnum(0));
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_PORTS, Vec.Empty(rt));
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_PAIRS, Vec.Empty(rt));
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_BRIDGES, Vec.Empty(rt));
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_WAITERS, Vec.Empty(rt));
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_WFREE, Val.Fixnum(-1));
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_NEXTID, Val.Fixnum(1));
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_CURRENT, Val.Fixnum(0));
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_SYSTEM, Val.Nil);
-        // The running thread becomes thread 0. Its stack is the LIVE one, so it
-        // has nothing saved until it parks.
-        int ti = rt.Push(NewObj(rt, Obj.TyThread, TH_LEN));
-        if (Val.IsNil(rt.R(ti))) { rt.PopTo(bas); return Val.Nil; }
-        // UNLESS NOTHING IS RUNNING. A scheduler can now be created before any
-        // program has started -- a host that installs a port at construction
-        // makes one (`DECISIONS.md#ports-are-the-hosts`), and so does spawning
-        // the control plane at the top of `drive`
-        // (`DECISIONS.md#bridges-are-the-only-door`) -- and then thread 0
-        // represents no stack at all. Left RUNNABLE it is picked, restored from
-        // a `TH_STACK` of nil, and runs off the end of an empty value stack;
-        // the symptom is an index of -1 out of `VPop`. An empty frame stack is
-        // what says which case this is.
-        bool running = rt.frames.Count != 0;
-        rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_STATUS, Val.Fixnum(running ? ST_RUNNABLE : ST_DONE));
-        rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_ID, Val.Fixnum(0));
-        rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_TOKEN, Val.Fixnum(-1));
-        rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_BINDINGS, Maps.Empty(rt));
-        int tsi = rt.Push(Vec.Empty(rt));
-        long ts = Vec.Conj(rt, rt.R(tsi), rt.R(ti));
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_THREADS, ts);
-        long outv = rt.R(si);
-        rt.roots.shared.Singletons[Rt.SingSched] = outv;
-        rt.PopTo(bas);
+        long outv = global::_3sln.Flint.Kgen.Rt.Schedmake.NewSchedAt(rt);
+        if (Val.IsNil(outv)) return Val.Nil;
         rt.schedInstalled = true;
         rt.SetSliceEnd(rt.steps + SLICE);
         return outv;
@@ -352,29 +328,9 @@ public static class Conc {
     /// Clojure conveys to `future` and agents, and what somebody debugging at
     /// three in the morning will assume. A snapshot: later `binding` in the
     /// spawner does not reach the child.
+    /// GENERATED, from `kin/portmake.kin`.
     public static long Spawn(Rt rt, long f) {
-        // Rooted FIRST: `ensureSched` allocates, and `f` is a host local.
-        int bas = rt.Mark();
-        int fi = rt.Push(f);
-        EnsureSched(rt);
-        int ti = rt.Push(NewObj(rt, Obj.TyThread, TH_LEN));
-        if (Val.IsNil(rt.R(ti))) { rt.PopTo(bas); return Val.Nil; }
-        int si = rt.Push(Sched(rt));
-        long id = Fx(rt.Slot(rt.R(si), SC_NEXTID));
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_NEXTID, Val.Fixnum(id + 1));
-        rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_STATUS, Val.Fixnum(ST_NEW));
-        rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_ID, Val.Fixnum(id));
-        rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_TOKEN, Val.Fixnum(-1));
-        rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_ENTRY, rt.R(fi));
-        long binds = rt.roots.shared.Singletons[Rt.SingBindings];
-        if (Val.IsNil(binds)) binds = Maps.Empty(rt);
-        rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_BINDINGS, binds);
-        int tsi = rt.Push(rt.Slot(rt.R(si), SC_THREADS));
-        long nts = Vec.Conj(rt, rt.R(tsi), rt.R(ti));
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_THREADS, nts);
-        long outv = rt.R(ti);
-        rt.PopTo(bas);
-        return outv;
+        return global::_3sln.Flint.Kgen.Rt.Portmake.SpawnAt(rt, f);
     }
 
     // --- waiters ------------------------------------------------------------
@@ -455,19 +411,9 @@ public static class Conc {
     // --- channels -----------------------------------------------------------
 
     /// A coupled pair. What goes into one comes out of the other, both ways.
+    /// GENERATED, from `kin/portmake.kin`.
     public static long Channel(Rt rt, long cap, long label) {
-        EnsureSched(rt);
-        int bas = rt.Mark();
-        int li = rt.Push(label);
-        int ai = rt.Push(NewPort(rt, cap, rt.R(li), K_CHANNEL, P_OPEN, -1));
-        int bi = rt.Push(NewPort(rt, cap, rt.R(li), K_CHANNEL, P_OPEN, -1));
-        LinkPeers(rt, rt.R(ai), rt.R(bi));
-        int vi = rt.Push(Vec.Empty(rt));
-        rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.R(ai)));
-        rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.R(bi)));
-        long outv = rt.R(vi);
-        rt.PopTo(bas);
-        return outv;
+        return global::_3sln.Flint.Kgen.Rt.Portmake.ChannelAt(rt, cap, label);
     }
 
     /// The handle in THIS sandbox for the host's port `hostId`, minting one if
@@ -497,24 +443,9 @@ public static class Conc {
     /// NOT ROOTED, unlike the host end this replaces: a handle nothing refers
     /// to is precisely what a release is for. The system port is the exception
     /// and is rooted by living in `SC_SYSTEM`.
+    /// GENERATED, from `kin/portinstall.kin`.
     public static long InstallBridgePort(Rt rt, long hostId, long label, bool announce) {
-        EnsureSched(rt);
-        if (hostId < 0) return Val.Nil;
-        long existing = PortById(rt, hostId);
-        if (!Val.IsNil(existing) && Fx(rt.Slot(existing, PT_KIND)) == K_BRIDGE) return existing;
-        int bas = rt.Mark();
-        int li = rt.Push(label);
-        int pi = rt.Push(NewPort(rt, DEFAULT_BRIDGE_CAP, rt.R(li), K_BRIDGE, P_OPEN, hostId));
-        if (Val.IsNil(rt.R(pi))) { rt.PopTo(bas); return Val.Nil; }
-        // Recorded as HELD, which is what `ReapPorts` walks to notice the drop.
-        int si = rt.Push(Sched(rt));
-        int bi = rt.Push(rt.Slot(rt.R(si), SC_BRIDGES));
-        long nb = Vec.Conj(rt, rt.R(bi), Val.Fixnum(hostId));
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_BRIDGES, nb);
-        if (announce) PushEvent(rt, EV_RETAIN, hostId, 0, Val.Nil);
-        long outv = rt.R(pi);
-        rt.PopTo(bas);
-        return outv;
+        return global::_3sln.Flint.Kgen.Rt.Portinstall.InstallBridgeAt(rt, hostId, label, announce);
     }
 
     /// Install the system port: the bridge a sandbox is DRIVEN over.
@@ -522,16 +453,9 @@ public static class Conc {
     /// A sandbox that is given one can ask for more ports on it; a sandbox that
     /// is not has no way to reach anything outside itself, which is the honest
     /// meaning of "no capabilities" and is the default.
+    /// GENERATED, from `kin/portinstall.kin`.
     public static long InstallSystemPort(Rt rt, long hostId, long label) {
-        long p = InstallBridgePort(rt, hostId, label, false);
-        if (Val.IsNil(p)) return Val.Nil;
-        int bas = rt.Mark();
-        int pi = rt.Push(p);
-        int si = rt.Push(Sched(rt));
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_SYSTEM, rt.R(pi));
-        long outv = rt.R(pi);
-        rt.PopTo(bas);
-        return outv;
+        return global::_3sln.Flint.Kgen.Rt.Portinstall.InstallSystemAt(rt, hostId, label);
     }
 
     /// The system port. NOT reachable from guest code, and that is the point.
@@ -552,42 +476,9 @@ public static class Conc {
     /// A port object. `id` is `-1` to mint one from this sandbox's counter,
     /// which is what a channel end does; a bridge handle passes the HOST's id
     /// instead, because that is the id that means the same thing on both sides.
+    /// GENERATED, from `kin/portmake.kin`.
     static long NewPort(Rt rt, long cap, long label, long kind, long state, long id) {
-        int bas = rt.Mark();
-        int li = rt.Push(label);
-        int pi = rt.Push(NewObj(rt, Obj.TyPort, PT_LEN));
-        if (Val.IsNil(rt.R(pi))) { rt.PopTo(bas); return Val.Nil; }
-        int si = rt.Push(Sched(rt));
-        if (id < 0) {
-            id = Fx(rt.Slot(rt.R(si), SC_NEXTID));
-            rt.SetSlot(Val.AsHeap(rt.R(si)), SC_NEXTID, Val.Fixnum(id + 1));
-        }
-        long p = Val.AsHeap(rt.R(pi));
-        rt.SetSlot(p, PT_ID, Val.Fixnum(id));
-        rt.SetSlot(p, PT_STATE, Val.Fixnum(state));
-        rt.SetSlot(p, PT_CAP, Val.Fixnum(cap));
-        // The ring, allocated ONCE: a send must not allocate. ONE array: a
-        // slot's own word says whether it is vacant.
-        long ring = kind == K_CHANNEL ? System.Math.Max(cap, 1) : RingMessages;
-        rt.SetSlot(p, PT_RING, Val.Fixnum(ring));
-        int sli = rt.Push(NewObj(rt, Obj.TyNode, (int) ring));
-        for (int i = 0; i < ring; i++) rt.SetSlot(Val.AsHeap(rt.R(sli)), i, Val.Empty);
-        rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_INBOX, rt.R(sli));
-        p = Val.AsHeap(rt.R(pi));
-        rt.SetSlot(p, PT_READ, Val.Fixnum(0));
-        rt.SetSlot(p, PT_WRITE, Val.Fixnum(0));
-        rt.SetSlot(p, PT_BYTES, Val.Fixnum(0));
-        // PEERS ARE LINKED BY ID, never by object. When one end is collected
-        // its object is gone, and a field holding the peer would keep it alive
-        // -- which is exactly what `DECISIONS.md#host-abi` says must not happen:
-        // an unreachable flint end MEANS the script is finished with it.
-        rt.SetSlot(p, PT_PEER, Val.Fixnum(-1));
-        rt.SetSlot(p, PT_LABEL, rt.R(li));
-        rt.SetSlot(p, PT_KIND, Val.Fixnum(kind));
-        RegisterPort(rt, rt.R(pi));
-        long outv = rt.R(pi);
-        rt.PopTo(bas);
-        return outv;
+        return global::_3sln.Flint.Kgen.Rt.Portmake.NewPortAt(rt, cap, label, kind, state, id);
     }
 
     /// The registry. WEAK on purpose (`DECISIONS.md#host-abi`): the flint end of a
@@ -595,7 +486,7 @@ public static class Conc {
     /// unreachable that MEANS the script is finished with it. The scheduler
     /// keeps IDS, not references -- a strong list would pin every port for ever
     /// and there would be nothing to notice.
-    static void RegisterPort(Rt rt, long p) {
+    public static void RegisterPort(Rt rt, long p) {
         int id = (int) Fx(rt.Slot(p, PT_ID));
         int bas = rt.Mark();
         int pi = rt.Push(p);
@@ -636,27 +527,13 @@ public static class Conc {
     /// Link two ends. IDS ONLY, and the pairing is recorded in the scheduler as
     /// well, because when one end is collected its object is gone and the other
     /// end still has to be able to find out what happened to it.
+    /// GENERATED, from `kin/portmake.kin`.
     static void LinkPeers(Rt rt, long a, long b) {
-        long ida = Fx(rt.Slot(a, PT_ID)), idb = Fx(rt.Slot(b, PT_ID));
-        rt.SetSlot(Val.AsHeap(a), PT_PEER, Val.Fixnum(idb));
-        rt.SetSlot(Val.AsHeap(b), PT_PEER, Val.Fixnum(ida));
-        int bas = rt.Mark();
-        int si = rt.Push(Sched(rt));
-        long[][] pairs = { new long[]{ida, idb}, new long[]{idb, ida} };
-        foreach (long[] xy in pairs) {
-            int pi = rt.Push(rt.Slot(rt.R(si), SC_PAIRS));
-            int ei = rt.Push(Vec.Empty(rt));
-            rt.SetR(ei, Vec.Conj(rt, rt.R(ei), Val.Fixnum(xy[0])));
-            rt.SetR(ei, Vec.Conj(rt, rt.R(ei), Val.Fixnum(xy[1])));
-            long np = Vec.Conj(rt, rt.R(pi), rt.R(ei));
-            rt.SetSlot(Val.AsHeap(rt.R(si)), SC_PAIRS, np);
-            rt.PopTo(pi);
-        }
-        rt.PopTo(bas);
+        global::_3sln.Flint.Kgen.Rt.Portmake.LinkPeersAt(rt, a, b);
     }
 
     /// The peer of a port that may itself be gone.
-    static long PeerOf(Rt rt, long p) { return PortById(rt, Fx(rt.Slot(p, PT_PEER))); }
+    public static long PeerOf(Rt rt, long p) { return PortById(rt, Fx(rt.Slot(p, PT_PEER))); }
 
     /// The peer of an id whose OBJECT has been collected. Read from the
     /// scheduler's pair list, which is the only place that survives it.
@@ -842,19 +719,9 @@ public static class Conc {
     /// Append an outbound event. `payload` is a string (or byte string) whose
     /// bytes the host will read; the drain copies them into one contiguous
     /// buffer.
+    /// GENERATED, from `kin/schedlists.kin`.
     public static void PushEvent(Rt rt, long kind, long a, long b, long payload) {
-        int bas = rt.Mark();
-        int pi = rt.Push(payload);
-        int vi = rt.Push(Vec.Empty(rt));
-        foreach (long x in new long[]{ kind, a, b }) {
-            rt.SetR(vi, Vec.Conj(rt, rt.R(vi), Val.Fixnum(x)));
-        }
-        rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.R(pi)));
-        int si = rt.Push(Sched(rt));
-        int ei = rt.Push(rt.Slot(rt.R(si), SC_EVENTS));
-        long nevs = Vec.Conj(rt, rt.R(ei), rt.R(vi));
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_EVENTS, nevs);
-        rt.PopTo(bas);
+        global::_3sln.Flint.Kgen.Rt.Schedlists.PushEventAt(rt, kind, a, b, payload);
     }
 
     /// Does this KIND carry BYTES across a boundary, rather than values inside
@@ -950,7 +817,8 @@ public static class Conc {
             long len = Bytes.Count(rt, rt.R(vi));
             long cap = Fx(rt.Slot(rt.R(pi), PT_CAP));
             long queued = Fx(rt.Slot(rt.R(pi), PT_BYTES));
-            if (queued > 0 && queued + len > cap) {
+            // THE SAME PREDICATE THE HOST PATH USES -- see the Java copy.
+            if (!global::_3sln.Flint.Kgen.Rt.Portbytes.FitsInBudget(rt, queued, len, cap)) {
                 long tgt = rt.R(pi);
                 rt.PopTo(bas);
                 return ParkOnPort(rt, WK_SEND, tgt);
@@ -1032,37 +900,13 @@ public static class Conc {
             rt.PopTo(bas);
             return outv;
         }
-        long st = Fx(rt.Slot(rt.R(pi), PT_STATE));
-        // Drained and finished cleanly: end of stream, a normal answer.
-        if (st == P_CLOSED || st == P_HALF) { rt.PopTo(bas); return Val.Nil; }
-        // Drained and the peer vanished: nobody said goodbye, so say so rather
-        // than pretending the stream ended tidily -- and never park, because a
-        // script blocked for ever on a host that hung up is the same failure as
-        // a host leaking a handle, seen from the other side.
-        if (st == P_ORPHANED) {
+        // WHAT A DRAINED PORT DOES IS GENERATED, from `kin/portdrain.kin`.
+        // Only the THROW stays here, its message being a host string.
+        int drained = global::_3sln.Flint.Kgen.Rt.Portdrain.ReceiveDrained(rt, rt.R(pi));
+        if (drained == 1) { rt.PopTo(bas); return Val.Nil; }
+        if (drained == 2) {
             rt.PopTo(bas);
-            return rt.ThrowStr("IllegalStateException",
-                "receive: the other end of this port is gone, so this can never complete");
-        }
-        // A BRIDGE has no peer OBJECT to ask about: the far end is the
-        // host's registry and is not in any heap (`DECISIONS.md#ports-are-the-hosts`). Its own
-        // state is the whole answer, and the states above have already covered
-        // every way that can say "no more" -- so an empty buffer here means
-        // "nothing yet", which is what parking is for.
-        if (Fx(rt.Slot(rt.R(pi), PT_KIND)) != K_BRIDGE) {
-            long peer = PeerOf(rt, rt.R(pi));
-            if (Val.IsNil(peer)) {
-                rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_STATE, Val.Fixnum(P_ORPHANED));
-                rt.PopTo(bas);
-                return rt.ThrowStr("IllegalStateException",
-                    "receive: the other end of this port is gone, so this can never complete");
-            }
-            long pst = Fx(rt.Slot(peer, PT_STATE));
-            if (pst == P_CLOSED || pst == P_HALF || pst == P_ORPHANED) {
-                rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_STATE, Val.Fixnum(P_HALF));
-                rt.PopTo(bas);
-                return Val.Nil;
-            }
+            return rt.ThrowStr("IllegalStateException", "receive: the other end of this port is gone, so this can never complete");
         }
         long target = rt.R(pi);
         rt.PopTo(bas);
@@ -1084,50 +928,15 @@ public static class Conc {
     /// Everything that follows from an end closing, however it closed: tell the
     /// host if it is the peer, and wake anybody parked on either side.
     /// Drop `id` from the held list, so the sweep does not release it twice.
-    static void ForgetBridge(Rt rt, long id) {
-        long s = Sched(rt);
-        if (Val.IsNil(s)) return;
-        int bas = rt.Mark();
-        int si = rt.Push(s);
-        int bi = rt.Push(rt.Slot(rt.R(si), SC_BRIDGES));
-        int n = Vec.Count(rt, rt.R(bi));
-        int ki = rt.Push(Vec.Empty(rt));
-        for (int k = 0; k < n; k++) {
-            long x = Fx(Vec.Nth(rt, rt.R(bi), k, Val.NotFound));
-            if (x == id) continue;
-            rt.SetR(ki, Vec.Conj(rt, rt.R(ki), Val.Fixnum(x)));
-        }
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_BRIDGES, rt.R(ki));
-        rt.PopTo(bas);
+    /// GENERATED, from `kin/schedlists.kin`.
+    public static void ForgetBridge(Rt rt, long id) {
+        global::_3sln.Flint.Kgen.Rt.Schedlists.ForgetBridgeAt(rt, id);
     }
 
-    static void CloseSideEffects(Rt rt, long p) {
-        int bas = rt.Mark();
-        int pi = rt.Push(p);
-        if (CrossesAHeap(Fx(rt.Slot(rt.R(pi), PT_KIND)))) {
-            // A CLOSE IS A RELEASE, and it is the prompt one.
-            //
-            // Dropping the last reference and waiting for the collector gets
-            // here too, via `ReapPorts`, but that is the backstop rather than
-            // the mechanism -- it is not prompt, and a host holding a socket
-            // until then is a real cost. Closing says so now. The id leaves
-            // `SC_BRIDGES` in the same breath, so the sweep does not send a
-            // second release for a port already let go.
-            long id = Fx(rt.Slot(rt.R(pi), PT_ID));
-            PushEvent(rt, EV_CLOSED, id, 0, Val.Nil);
-            ForgetBridge(rt, id);
-            PushEvent(rt, EV_RELEASE, id, 0, Val.Nil);
-        }
-        WakeOn(rt, rt.R(pi));
-        // The peer becomes HALF-closed rather than closed: it may still drain
-        // what is already in its buffer, and only then reads end-of-stream. The
-        // channel is not freed until both ends are done.
-        long peer2 = PeerOf(rt, rt.R(pi));
-        if (!Val.IsNil(peer2) && Fx(rt.Slot(peer2, PT_STATE)) == P_OPEN) {
-            rt.SetSlot(Val.AsHeap(peer2), PT_STATE, Val.Fixnum(P_HALF));
-            WakeOn(rt, peer2);
-        }
-        rt.PopTo(bas);
+    /// GENERATED, from `kin/reapports.kin`. One line, as `ReapPorts` and
+    /// `CloseAllBridges` are.
+    public static void CloseSideEffects(Rt rt, long p) {
+        global::_3sln.Flint.Kgen.Rt.Reapports.CloseEffects(rt, p);
     }
 
     // --- opening a capability -----------------------------------------------
@@ -1424,13 +1233,10 @@ public static class Conc {
         // delivering into one end would both read the same `queued`, both find
         // room, and both write -- and the bound that exists to cap memory would
         // be the one thing not enforced.
-        long cap = Fx(rt.Slot(rt.R(pi), PT_CAP));
         long len = bytes.Length;
-        for (;;) {
-            long pv = rt.R(pi);
-            long queued = Fx(SlotAtomic(rt, pv, PT_BYTES));
-            if (queued > 0 && queued + len > cap) { rt.PopTo(bas); return false; }
-            if (CasSlot(rt, pv, PT_BYTES, Val.Fixnum(queued), Val.Fixnum(queued + len))) break;
+        if (!global::_3sln.Flint.Kgen.Rt.Portbytes.ClaimBytes(rt, rt.R(pi), len)) {
+            rt.PopTo(bas);
+            return false;
         }
         // SCANNED, NOT DECODED (`DECISIONS.md#the-codec-is-guest-code`). The
         // bytes go into the queue as bytes and the GUEST decodes them; what
@@ -1473,12 +1279,9 @@ public static class Conc {
     }
 
     /// Return bytes claimed against a port's bound for a message never delivered.
+    /// GENERATED, from `kin/portbytes.kin`.
     static void GiveBack(Rt rt, long p, long len) {
-        for (;;) {
-            long q = Fx(SlotAtomic(rt, p, PT_BYTES));
-            long back = q > len ? q - len : 0;
-            if (CasSlot(rt, p, PT_BYTES, Val.Fixnum(q), Val.Fixnum(back))) return;
-        }
+        global::_3sln.Flint.Kgen.Rt.Portbytes.GiveBack(rt, p, len);
     }
 
     /// The host lets go of its end. The port may now be collected.
@@ -1661,25 +1464,9 @@ public static class Conc {
     /// Program exit: close and release every bridge, so a host is never left
     /// holding a reference for a sandbox that has finished, and leave the
     /// events for the final drain.
+    /// GENERATED, from `kin/reapports.kin`. One line here, as `ReapPorts` is.
     public static void CloseAllBridges(Rt rt) {
-        long s = Sched(rt);
-        if (Val.IsNil(s)) return;
-        int bas = rt.Mark();
-        int si = rt.Push(s);
-        int ii = rt.Push(rt.Slot(rt.R(si), SC_PORTS));
-        int n = Vec.Count(rt, rt.R(ii));
-        for (int k = 0; k < n; k++) {
-            long p = PortById(rt, Fx(Vec.Nth(rt, rt.R(ii), k, Val.NotFound)));
-            if (Val.IsNil(p)) continue;
-            int pi = rt.Push(p);
-            if (CrossesAHeap(Fx(rt.Slot(rt.R(pi), PT_KIND)))
-                && Fx(rt.Slot(rt.R(pi), PT_STATE)) != P_CLOSED) {
-                rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_STATE, Val.Fixnum(P_CLOSED));
-                CloseSideEffects(rt, rt.R(pi));
-            }
-            rt.PopTo(pi);
-        }
-        rt.PopTo(bas);
+        global::_3sln.Flint.Kgen.Rt.Reapports.CloseBridges(rt);
     }
 
     // --- joining ------------------------------------------------------------
@@ -1774,6 +1561,11 @@ public static class Conc {
 
     /// Install a thread's dynamic bindings as the live ones -- see the note
     /// on the JVM's `installBindings`.
+    /// The bindings live RIGHT NOW, which a spawn inherits.
+    public static long CurrentBindings(Rt rt) {
+        return rt.roots.shared.Singletons[Rt.SingBindings];
+    }
+
     public static void InstallBindings(Rt rt, long binds) {
         rt.roots.shared.Singletons[Rt.SingBindings] = binds;
     }

@@ -177,50 +177,30 @@ public final class Conc {
     /// Create the scheduler on first use, enrolling whatever is running now as
     /// THREAD 0. Built here rather than at startup so a program that never
     /// spawns runs a straight line with no scheduler in it at all.
+    /// Install the scheduler as the singleton the collector already traces.
+    public static void installSched(Rt rt, long s) {
+        rt.roots.shared.singletons[Rt.SING_SCHED] = s;
+    }
+
+    /// Is a program actually running? An empty frame stack means thread 0
+    /// represents no stack at all.
+    public static boolean somethingRunning(Rt rt) {
+        return !rt.frames.isEmpty();
+    }
+
+    /// Make the scheduler if there is not one. The OBJECT is generated, from
+    /// `kin/schedmake.kin`; what stays here is the bridge hook, which is a
+    /// function reference, and this runtime's own "a scheduler exists" flag.
     public static long ensureSched(Rt rt) {
         long s = sched(rt);
         if (!Val.isNil(s)) return s;
-        // The decoder's route to `installBridgePort`, set HERE and nowhere else.
-        // See `Rt.bridgeHook`: reaching it directly from the codec put the whole
-        // scheduler into every wasm module, including ones with no ports.
+        // The decoder's route to `installBridgePort`, set HERE and nowhere
+        // else. See `Rt.bridgeHook`: reaching it directly from the codec put
+        // the whole scheduler into every wasm module, including ones with no
+        // ports.
         rt.bridgeHook = Conc::installBridgePort2;
-        int base = rt.mark();
-        int si = rt.push(newObj(rt, TY_SCHED, SC_LEN));
-        if (Val.isNil(rt.r(si))) { rt.popTo(base); return Val.NIL; }
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_EVENTS, Vec.empty(rt));
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_EHEAD, Val.fixnum(0));
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_PORTS, Vec.empty(rt));
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_PAIRS, Vec.empty(rt));
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_BRIDGES, Vec.empty(rt));
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_WAITERS, Vec.empty(rt));
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_WFREE, Val.fixnum(-1));
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_NEXTID, Val.fixnum(1));
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_CURRENT, Val.fixnum(0));
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_SYSTEM, Val.NIL);
-        // The running thread becomes thread 0. Its stack is the LIVE one, so it
-        // has nothing saved until it parks.
-        int ti = rt.push(newObj(rt, TY_THREAD, TH_LEN));
-        if (Val.isNil(rt.r(ti))) { rt.popTo(base); return Val.NIL; }
-        // UNLESS NOTHING IS RUNNING. A scheduler can now be created before any
-        // program has started -- a host that installs a port at construction
-        // makes one (`DECISIONS.md#ports-are-the-hosts`), and so does spawning
-        // the control plane at the top of `drive`
-        // (`DECISIONS.md#bridges-are-the-only-door`) -- and then thread 0
-        // represents no stack at all. Left RUNNABLE it is picked, restored from
-        // a `TH_STACK` of nil, and runs off the end of an empty value stack;
-        // the symptom is an index of -1 out of `vpop`. An empty frame stack is
-        // what says which case this is.
-        boolean running = !rt.frames.isEmpty();
-        rt.setSlot(Val.asHeap(rt.r(ti)), TH_STATUS, Val.fixnum(running ? ST_RUNNABLE : ST_DONE));
-        rt.setSlot(Val.asHeap(rt.r(ti)), TH_ID, Val.fixnum(0));
-        rt.setSlot(Val.asHeap(rt.r(ti)), TH_TOKEN, Val.fixnum(-1));
-        rt.setSlot(Val.asHeap(rt.r(ti)), TH_BINDINGS, Maps.empty(rt));
-        int tsi = rt.push(Vec.empty(rt));
-        long ts = Vec.conj(rt, rt.r(tsi), rt.r(ti));
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_THREADS, ts);
-        long out = rt.r(si);
-        rt.roots.shared.singletons[Rt.SING_SCHED] = out;
-        rt.popTo(base);
+        long out = com._3sln.flint.kgen.rt.Schedmake.newSchedAt(rt);
+        if (Val.isNil(out)) return Val.NIL;
         rt.schedInstalled = true;
         rt.setSliceEnd(rt.steps + SLICE);
         return out;
@@ -360,29 +340,9 @@ public final class Conc {
     /// Clojure conveys to `future` and agents, and what somebody debugging at
     /// three in the morning will assume. A snapshot: later `binding` in the
     /// spawner does not reach the child.
+    /// GENERATED, from `kin/portmake.kin`.
     public static long spawn(Rt rt, long f) {
-        // Rooted FIRST: `ensureSched` allocates, and `f` is a host local.
-        int base = rt.mark();
-        int fi = rt.push(f);
-        ensureSched(rt);
-        int ti = rt.push(newObj(rt, TY_THREAD, TH_LEN));
-        if (Val.isNil(rt.r(ti))) { rt.popTo(base); return Val.NIL; }
-        int si = rt.push(sched(rt));
-        long id = fx(rt.slot(rt.r(si), SC_NEXTID));
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_NEXTID, Val.fixnum(id + 1));
-        rt.setSlot(Val.asHeap(rt.r(ti)), TH_STATUS, Val.fixnum(ST_NEW));
-        rt.setSlot(Val.asHeap(rt.r(ti)), TH_ID, Val.fixnum(id));
-        rt.setSlot(Val.asHeap(rt.r(ti)), TH_TOKEN, Val.fixnum(-1));
-        rt.setSlot(Val.asHeap(rt.r(ti)), TH_ENTRY, rt.r(fi));
-        long binds = rt.roots.shared.singletons[Rt.SING_BINDINGS];
-        if (Val.isNil(binds)) binds = Maps.empty(rt);
-        rt.setSlot(Val.asHeap(rt.r(ti)), TH_BINDINGS, binds);
-        int tsi = rt.push(rt.slot(rt.r(si), SC_THREADS));
-        long nts = Vec.conj(rt, rt.r(tsi), rt.r(ti));
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_THREADS, nts);
-        long out = rt.r(ti);
-        rt.popTo(base);
-        return out;
+        return com._3sln.flint.kgen.rt.Portmake.spawnAt(rt, f);
     }
 
     // --- waiters ------------------------------------------------------------
@@ -475,19 +435,9 @@ public final class Conc {
     // --- channels -----------------------------------------------------------
 
     /// A coupled pair. What goes into one comes out of the other, both ways.
+    /// GENERATED, from `kin/portmake.kin`.
     public static long channel(Rt rt, long cap, long label) {
-        ensureSched(rt);
-        int base = rt.mark();
-        int li = rt.push(label);
-        int ai = rt.push(newPort(rt, cap, rt.r(li), K_CHANNEL, P_OPEN, -1));
-        int bi = rt.push(newPort(rt, cap, rt.r(li), K_CHANNEL, P_OPEN, -1));
-        linkPeers(rt, rt.r(ai), rt.r(bi));
-        int vi = rt.push(Vec.empty(rt));
-        rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.r(ai)));
-        rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.r(bi)));
-        long out = rt.r(vi);
-        rt.popTo(base);
-        return out;
+        return com._3sln.flint.kgen.rt.Portmake.channelAt(rt, cap, label);
     }
 
     /// The handle in THIS sandbox for the host's port `hostId`, minting one if
@@ -518,24 +468,11 @@ public final class Conc {
     /// NOT ROOTED, unlike the host end this replaces: a handle nothing refers
     /// to is precisely what a release is for. The system port is the exception
     /// and is rooted by living in `SC_SYSTEM`.
+    /// GENERATED, from `kin/portinstall.kin`. See the note there: the label
+    /// must be rooted BEFORE the scheduler is built, and all three runtimes
+    /// had it the other way round.
     public static long installBridgePort(Rt rt, long hostId, long label, boolean announce) {
-        ensureSched(rt);
-        if (hostId < 0) return Val.NIL;
-        long existing = portById(rt, hostId);
-        if (!Val.isNil(existing) && fx(rt.slot(existing, PT_KIND)) == K_BRIDGE) return existing;
-        int base = rt.mark();
-        int li = rt.push(label);
-        int pi = rt.push(newPort(rt, DEFAULT_BRIDGE_CAP, rt.r(li), K_BRIDGE, P_OPEN, hostId));
-        if (Val.isNil(rt.r(pi))) { rt.popTo(base); return Val.NIL; }
-        // Recorded as HELD, which is what `reapPorts` walks to notice the drop.
-        int si = rt.push(sched(rt));
-        int bi = rt.push(rt.slot(rt.r(si), SC_BRIDGES));
-        long nb = Vec.conj(rt, rt.r(bi), Val.fixnum(hostId));
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_BRIDGES, nb);
-        if (announce) pushEvent(rt, EV_RETAIN, hostId, 0, Val.NIL);
-        long out = rt.r(pi);
-        rt.popTo(base);
-        return out;
+        return com._3sln.flint.kgen.rt.Portinstall.installBridgeAt(rt, hostId, label, announce);
     }
 
     /// Install the system port: the bridge a sandbox is DRIVEN over.
@@ -548,16 +485,9 @@ public final class Conc {
         return installBridgePort(rt, hostId, Val.NIL, true);
     }
 
+    /// GENERATED, from `kin/portinstall.kin`.
     public static long installSystemPort(Rt rt, long hostId, long label) {
-        long p = installBridgePort(rt, hostId, label, false);
-        if (Val.isNil(p)) return Val.NIL;
-        int base = rt.mark();
-        int pi = rt.push(p);
-        int si = rt.push(sched(rt));
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_SYSTEM, rt.r(pi));
-        long out = rt.r(pi);
-        rt.popTo(base);
-        return out;
+        return com._3sln.flint.kgen.rt.Portinstall.installSystemAt(rt, hostId, label);
     }
 
     /// The system port. NOT reachable from guest code, and that is the point.
@@ -576,42 +506,9 @@ public final class Conc {
     /// A port object. `id` is `-1` to mint one from this sandbox's counter,
     /// which is what a channel end does; a bridge handle passes the HOST's id
     /// instead, because that is the id that means the same thing on both sides.
+    /// GENERATED, from `kin/portmake.kin`.
     static long newPort(Rt rt, long cap, long label, long kind, long state, long id) {
-        int base = rt.mark();
-        int li = rt.push(label);
-        int pi = rt.push(newObj(rt, TY_PORT, PT_LEN));
-        if (Val.isNil(rt.r(pi))) { rt.popTo(base); return Val.NIL; }
-        int si = rt.push(sched(rt));
-        if (id < 0) {
-            id = fx(rt.slot(rt.r(si), SC_NEXTID));
-            rt.setSlot(Val.asHeap(rt.r(si)), SC_NEXTID, Val.fixnum(id + 1));
-        }
-        long p = Val.asHeap(rt.r(pi));
-        rt.setSlot(p, PT_ID, Val.fixnum(id));
-        rt.setSlot(p, PT_STATE, Val.fixnum(state));
-        rt.setSlot(p, PT_CAP, Val.fixnum(cap));
-        // The ring, allocated ONCE: a send must not allocate. ONE array: a
-        // slot's own word says whether it is vacant.
-        long ring = kind == K_CHANNEL ? Math.max(cap, 1) : RING_MESSAGES;
-        rt.setSlot(p, PT_RING, Val.fixnum(ring));
-        int sli = rt.push(newObj(rt, TY_NODE, (int) ring));
-        for (int i = 0; i < ring; i++) rt.setSlot(Val.asHeap(rt.r(sli)), i, Val.EMPTY);
-        rt.setSlot(Val.asHeap(rt.r(pi)), PT_INBOX, rt.r(sli));
-        p = Val.asHeap(rt.r(pi));
-        rt.setSlot(p, PT_READ, Val.fixnum(0));
-        rt.setSlot(p, PT_WRITE, Val.fixnum(0));
-        rt.setSlot(p, PT_BYTES, Val.fixnum(0));
-        // PEERS ARE LINKED BY ID, never by object. When one end is collected
-        // its object is gone, and a field holding the peer would keep it alive
-        // -- which is exactly what `DECISIONS.md#host-abi` says must not happen:
-        // an unreachable flint end MEANS the script is finished with it.
-        rt.setSlot(p, PT_PEER, Val.fixnum(-1));
-        rt.setSlot(p, PT_LABEL, rt.r(li));
-        rt.setSlot(p, PT_KIND, Val.fixnum(kind));
-        registerPort(rt, rt.r(pi));
-        long out = rt.r(pi);
-        rt.popTo(base);
-        return out;
+        return com._3sln.flint.kgen.rt.Portmake.newPortAt(rt, cap, label, kind, state, id);
     }
 
     /// The registry. WEAK on purpose (`DECISIONS.md#host-abi`): the flint end of a
@@ -619,7 +516,7 @@ public final class Conc {
     /// unreachable that MEANS the script is finished with it. The scheduler
     /// keeps IDS, not references -- a strong list would pin every port for ever
     /// and there would be nothing to notice.
-    static void registerPort(Rt rt, long p) {
+    public static void registerPort(Rt rt, long p) {
         int id = (int) fx(rt.slot(p, PT_ID));
         int base = rt.mark();
         int pi = rt.push(p);
@@ -659,27 +556,13 @@ public final class Conc {
     /// Link two ends. IDS ONLY, and the pairing is recorded in the scheduler as
     /// well, because when one end is collected its object is gone and the other
     /// end still has to be able to find out what happened to it.
+    /// GENERATED, from `kin/portmake.kin`.
     static void linkPeers(Rt rt, long a, long b) {
-        long ida = fx(rt.slot(a, PT_ID)), idb = fx(rt.slot(b, PT_ID));
-        rt.setSlot(Val.asHeap(a), PT_PEER, Val.fixnum(idb));
-        rt.setSlot(Val.asHeap(b), PT_PEER, Val.fixnum(ida));
-        int base = rt.mark();
-        int si = rt.push(sched(rt));
-        long[][] pairs = { {ida, idb}, {idb, ida} };
-        for (long[] xy : pairs) {
-            int pi = rt.push(rt.slot(rt.r(si), SC_PAIRS));
-            int ei = rt.push(Vec.empty(rt));
-            rt.setR(ei, Vec.conj(rt, rt.r(ei), Val.fixnum(xy[0])));
-            rt.setR(ei, Vec.conj(rt, rt.r(ei), Val.fixnum(xy[1])));
-            long np = Vec.conj(rt, rt.r(pi), rt.r(ei));
-            rt.setSlot(Val.asHeap(rt.r(si)), SC_PAIRS, np);
-            rt.popTo(pi);
-        }
-        rt.popTo(base);
+        com._3sln.flint.kgen.rt.Portmake.linkPeersAt(rt, a, b);
     }
 
     /// The peer of a port that may itself be gone.
-    static long peerOf(Rt rt, long p) { return portById(rt, fx(rt.slot(p, PT_PEER))); }
+    public static long peerOf(Rt rt, long p) { return portById(rt, fx(rt.slot(p, PT_PEER))); }
 
     /// The peer of an id whose OBJECT has been collected. Read from the
     /// scheduler's pair list, which is the only place that survives it.
@@ -873,19 +756,9 @@ public final class Conc {
     /// Append an outbound event. `payload` is a string (or byte string) whose
     /// bytes the host will read; the drain copies them into one contiguous
     /// buffer.
+    /// GENERATED, from `kin/schedlists.kin`.
     public static void pushEvent(Rt rt, long kind, long a, long b, long payload) {
-        int base = rt.mark();
-        int pi = rt.push(payload);
-        int vi = rt.push(Vec.empty(rt));
-        for (long x : new long[]{ kind, a, b }) {
-            rt.setR(vi, Vec.conj(rt, rt.r(vi), Val.fixnum(x)));
-        }
-        rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.r(pi)));
-        int si = rt.push(sched(rt));
-        int ei = rt.push(rt.slot(rt.r(si), SC_EVENTS));
-        long nevs = Vec.conj(rt, rt.r(ei), rt.r(vi));
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_EVENTS, nevs);
-        rt.popTo(base);
+        com._3sln.flint.kgen.rt.Schedlists.pushEventAt(rt, kind, a, b, payload);
     }
 
     /// Does this KIND carry BYTES across a boundary, rather than values inside
@@ -986,7 +859,10 @@ public final class Conc {
             long len = Bytes.count(rt, rt.r(vi));
             long cap = fx(rt.slot(rt.r(pi), PT_CAP));
             long queued = fx(rt.slot(rt.r(pi), PT_BYTES));
-            if (queued > 0 && queued + len > cap) {
+            // THE SAME PREDICATE THE HOST PATH USES, generated from
+            // `kin/portbytes.kin`: one path parks where the other refuses, and
+            // what they must never differ in is WHICH MESSAGES FIT.
+            if (!com._3sln.flint.kgen.rt.Portbytes.fitsInBudget(rt, queued, len, cap)) {
                 long target = rt.r(pi);
                 rt.popTo(base);
                 return parkOnPort(rt, WK_SEND, target);
@@ -1071,37 +947,14 @@ public final class Conc {
             rt.popTo(base);
             return out;
         }
-        long st = fx(rt.slot(rt.r(pi), PT_STATE));
-        // Drained and finished cleanly: end of stream, a normal answer.
-        if (st == P_CLOSED || st == P_HALF) { rt.popTo(base); return Val.NIL; }
-        // Drained and the peer vanished: nobody said goodbye, so say so rather
-        // than pretending the stream ended tidily -- and never park, because a
-        // script blocked for ever on a host that hung up is the same failure as
-        // a host leaking a handle, seen from the other side.
-        if (st == P_ORPHANED) {
+        // WHAT A DRAINED PORT DOES IS GENERATED, from `kin/portdrain.kin`,
+        // and it makes the state changes that go with its answer. Only the
+        // THROW stays here, its message being a host string.
+        int drained = com._3sln.flint.kgen.rt.Portdrain.receiveDrained(rt, rt.r(pi));
+        if (drained == 1) { rt.popTo(base); return Val.NIL; }
+        if (drained == 2) {
             rt.popTo(base);
-            return rt.throwStr("IllegalStateException",
-                "receive: the other end of this port is gone, so this can never complete");
-        }
-        // A BRIDGE has no peer OBJECT to ask about: the far end is the
-        // host's registry and is not in any heap (`DECISIONS.md#ports-are-the-hosts`). Its own
-        // state is the whole answer, and the states above have already covered
-        // every way that can say "no more" -- so an empty buffer here means
-        // "nothing yet", which is what parking is for.
-        if (fx(rt.slot(rt.r(pi), PT_KIND)) != K_BRIDGE) {
-            long peer = peerOf(rt, rt.r(pi));
-            if (Val.isNil(peer)) {
-                rt.setSlot(Val.asHeap(rt.r(pi)), PT_STATE, Val.fixnum(P_ORPHANED));
-                rt.popTo(base);
-                return rt.throwStr("IllegalStateException",
-                    "receive: the other end of this port is gone, so this can never complete");
-            }
-            long pst = fx(rt.slot(peer, PT_STATE));
-            if (pst == P_CLOSED || pst == P_HALF || pst == P_ORPHANED) {
-                rt.setSlot(Val.asHeap(rt.r(pi)), PT_STATE, Val.fixnum(P_HALF));
-                rt.popTo(base);
-                return Val.NIL;
-            }
+            return rt.throwStr("IllegalStateException", "receive: the other end of this port is gone, so this can never complete");
         }
         long target = rt.r(pi);
         rt.popTo(base);
@@ -1122,51 +975,16 @@ public final class Conc {
 
     /// Everything that follows from an end closing, however it closed: tell the
     /// host if this was a bridge, and wake anybody parked on either side.
-    static void closeSideEffects(Rt rt, long p) {
-        int base = rt.mark();
-        int pi = rt.push(p);
-        if (crossesAHeap(fx(rt.slot(rt.r(pi), PT_KIND)))) {
-            // A CLOSE IS A RELEASE, and it is the prompt one.
-            //
-            // Dropping the last reference and waiting for the collector gets
-            // here too, via `reapPorts`, but that is the backstop rather than
-            // the mechanism -- it is not prompt, and a host holding a socket
-            // until then is a real cost. Closing says so now. The id leaves
-            // `SC_BRIDGES` in the same breath, so the sweep does not send a
-            // second release for a port already let go.
-            long id = fx(rt.slot(rt.r(pi), PT_ID));
-            pushEvent(rt, EV_CLOSED, id, 0, Val.NIL);
-            forgetBridge(rt, id);
-            pushEvent(rt, EV_RELEASE, id, 0, Val.NIL);
-        }
-        wakeOn(rt, rt.r(pi));
-        // The peer becomes HALF-closed rather than closed: it may still drain
-        // what is already in its buffer, and only then reads end-of-stream. The
-        // channel is not freed until both ends are done.
-        long peer = peerOf(rt, rt.r(pi));
-        if (!Val.isNil(peer) && fx(rt.slot(peer, PT_STATE)) == P_OPEN) {
-            rt.setSlot(Val.asHeap(peer), PT_STATE, Val.fixnum(P_HALF));
-            wakeOn(rt, peer);
-        }
-        rt.popTo(base);
+    /// GENERATED, from `kin/reapports.kin`. One line, as `reapPorts` and
+    /// `closeAllBridges` are.
+    public static void closeSideEffects(Rt rt, long p) {
+        com._3sln.flint.kgen.rt.Reapports.closeEffects(rt, p);
     }
 
     /// Drop `id` from the held list, so the sweep does not release it twice.
-    static void forgetBridge(Rt rt, long id) {
-        long s = sched(rt);
-        if (Val.isNil(s)) return;
-        int base = rt.mark();
-        int si = rt.push(s);
-        int bi = rt.push(rt.slot(rt.r(si), SC_BRIDGES));
-        int n = Vec.count(rt, rt.r(bi));
-        int ki = rt.push(Vec.empty(rt));
-        for (int k = 0; k < n; k++) {
-            long x = fx(Vec.nth(rt, rt.r(bi), k, Val.NOT_FOUND));
-            if (x == id) continue;
-            rt.setR(ki, Vec.conj(rt, rt.r(ki), Val.fixnum(x)));
-        }
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_BRIDGES, rt.r(ki));
-        rt.popTo(base);
+    /// GENERATED, from `kin/schedlists.kin`.
+    public static void forgetBridge(Rt rt, long id) {
+        com._3sln.flint.kgen.rt.Schedlists.forgetBridgeAt(rt, id);
     }
 
     // --- opening a capability -----------------------------------------------
@@ -1475,13 +1293,10 @@ public final class Conc {
         // delivering into one end would both read the same `queued`, both find
         // room, and both write -- and the bound that exists to cap memory would
         // be the one thing not enforced.
-        long cap = fx(rt.slot(rt.r(pi), PT_CAP));
         long len = bytes.length;
-        for (;;) {
-            long pv = rt.r(pi);
-            long queued = fx(slotAtomic(rt, pv, PT_BYTES));
-            if (queued > 0 && queued + len > cap) { rt.popTo(base); return false; }
-            if (casSlot(rt, pv, PT_BYTES, Val.fixnum(queued), Val.fixnum(queued + len))) break;
+        if (!com._3sln.flint.kgen.rt.Portbytes.claimBytes(rt, rt.r(pi), len)) {
+            rt.popTo(base);
+            return false;
         }
         // SCANNED, NOT DECODED (`DECISIONS.md#the-codec-is-guest-code`). The
         // bytes go into the queue as bytes and the GUEST decodes them; what
@@ -1527,12 +1342,9 @@ public final class Conc {
 
     /// Return bytes claimed against a port's bound for a message that was never
     /// delivered.
+    /// GENERATED, from `kin/portbytes.kin`.
     static void giveBack(Rt rt, long p, long len) {
-        for (;;) {
-            long q = fx(slotAtomic(rt, p, PT_BYTES));
-            long back = q > len ? q - len : 0;
-            if (casSlot(rt, p, PT_BYTES, Val.fixnum(q), Val.fixnum(back))) return;
-        }
+        com._3sln.flint.kgen.rt.Portbytes.giveBack(rt, p, len);
     }
 
     /// The host lets go of its end.
@@ -1713,25 +1525,13 @@ public final class Conc {
     /// Program exit: close and release every bridge, so a host is never left
     /// holding a reference for a sandbox that has finished, and leave the
     /// events for the final drain.
+    /// GENERATED, from `kin/reapports.kin`. One line here, as `reapPorts` is:
+    /// what a shutdown means for a port is a decision, and it was written three
+    /// times. `closeSideEffects` below stays hand-written -- it pushes events
+    /// and touches the bridge registry, which is bookkeeping rather than a
+    /// decision.
     public static void closeAllBridges(Rt rt) {
-        long s = sched(rt);
-        if (Val.isNil(s)) return;
-        int base = rt.mark();
-        int si = rt.push(s);
-        int ii = rt.push(rt.slot(rt.r(si), SC_PORTS));
-        int n = Vec.count(rt, rt.r(ii));
-        for (int k = 0; k < n; k++) {
-            long p = portById(rt, fx(Vec.nth(rt, rt.r(ii), k, Val.NOT_FOUND)));
-            if (Val.isNil(p)) continue;
-            int pi = rt.push(p);
-            if (crossesAHeap(fx(rt.slot(rt.r(pi), PT_KIND)))
-                && fx(rt.slot(rt.r(pi), PT_STATE)) != P_CLOSED) {
-                rt.setSlot(Val.asHeap(rt.r(pi)), PT_STATE, Val.fixnum(P_CLOSED));
-                closeSideEffects(rt, rt.r(pi));
-            }
-            rt.popTo(pi);
-        }
-        rt.popTo(base);
+        com._3sln.flint.kgen.rt.Reapports.closeBridges(rt);
     }
 
     // --- joining ------------------------------------------------------------
@@ -1838,6 +1638,12 @@ public final class Conc {
     /// Install a thread's dynamic bindings as the live ones. Named by the
     /// vocabulary so `kin/sched.kin` can say it; bindings travel WITH the
     /// thread and `settle` saves them back.
+    /// The bindings live RIGHT NOW, which a spawn inherits. The read side of
+    /// `installBindings` below.
+    public static long currentBindings(Rt rt) {
+        return rt.roots.shared.singletons[Rt.SING_BINDINGS];
+    }
+
     public static void installBindings(Rt rt, long binds) {
         rt.roots.shared.singletons[Rt.SING_BINDINGS] = binds;
     }

@@ -1,0 +1,233 @@
+;; MAKING THE THINGS A SANDBOX RUNS ON, written once: a port, a channel's
+;; two ends wired together, and a green thread.
+;;
+;; Initialisation looks like the least interesting code in `Conc` and it is
+;; not: every slot it sets is a default that something later READS without
+;; checking, so a slot left unset is a wrong answer somewhere far away rather
+;; than a failure here. Three copies of a twelve-slot constructor is three
+;; chances for one of them to drift by a single line.
+;;
+;; TWO DECISIONS HIDE IN IT, and both are easy to get backwards:
+;;
+;;   * a channel's ring is sized from its CAP and a bridge's is not. A
+;;     channel's cap is a count of messages; a bridge's is a budget in BYTES,
+;;     so sizing its ring from it would allocate one slot per byte allowed.
+;;   * an id given from OUTSIDE must not consume one from the counter. Host
+;;     ids are the host's to choose, and bumping `SC_NEXTID` for one would
+;;     eventually hand the same number out twice.
+(ns flint.rt.portmake
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != < >= not and or for
+                                   + - to-i32
+                                   local set nil? as-fixnum fixnum64
+                                   mark push r pop-to set-r
+                                   slot set-slot sched new-obj empty-vec
+                                   register-port EMPTY maps-empty
+                                   current-bindings ensure-sched
+                                   Rt Value I32 I64 NIL RootIx
+                                   TY_PORT TY_NODE PT_LEN PT_ID PT_STATE
+                                   PT_CAP PT_RING PT_INBOX PT_READ PT_WRITE
+                                   PT_BYTES PT_PEER PT_LABEL PT_KIND
+                                   K_CHANNEL RING_MESSAGES P_OPEN
+                                   TY_THREAD TH_LEN TH_ID TH_ENTRY
+                                   TH_STATUS TH_TOKEN TH_BINDINGS ST_NEW
+                                   SC_NEXTID SC_PAIRS SC_THREADS]]
+            [flint.rt.vecwrite :refer [vec-conj]]))
+
+(doc "A NEW PORT, with every slot of it set."
+     ""
+     "`id` BELOW ZERO means \"choose one\", and only then is `SC_NEXTID`"
+     "consumed. A host-assigned id is the host's own and must leave the"
+     "counter alone, or the same number is handed out twice later."
+     ""
+     "THE RING IS ALLOCATED ONCE AND NEVER AGAIN, because a send must not"
+     "allocate -- allocation is where the old inbox lost messages. Its size is"
+     "the channel's cap, floored at one: a zero-capacity channel with a"
+     "zero-length ring can never accept anything, and `channel` is allowed to"
+     "ask for nothing. A bridge takes `RING_MESSAGES` instead, its own cap"
+     "being a byte budget rather than a message count."
+     ""
+     "EVERY SLOT IS FILLED even where the value is the type's zero, and that"
+     "is deliberate: a fresh object's slots are whatever `new-obj` left, and"
+     "every reader downstream treats these as initialised."
+     ""
+     "`PT_PEER` IS AN ID AND STARTS AT -1. A field holding the peer OBJECT"
+     "would keep it alive, and an unreachable flint end is precisely what says"
+     "the script is done with it.")
+(defn ^:pub ^:method ^Value new-port-at
+  [^:mut ^Rt rt ^I64 cap ^Value label ^I64 kind ^I64 state ^I64 id]
+  (let [^RootIx base (mark rt)
+        ^RootIx li (push rt label)
+        ^Value p0 (new-obj rt TY_PORT PT_LEN)]
+    (if (nil? rt p0)
+      (do (pop-to rt base)
+          (return NIL)))
+    (let [^RootIx pi (push rt p0)
+          ^RootIx si (push rt (sched rt))]
+      (local ^:mut ^I64 use-id)
+      (set use-id id)
+      (if (< id 0)
+        (do
+          (set use-id (as-fixnum (slot rt (r rt si) SC_NEXTID)))
+          (set-slot rt (r rt si) SC_NEXTID (fixnum64 (+ use-id 1)))))
+      (set-slot rt (r rt pi) PT_ID (fixnum64 use-id))
+      (set-slot rt (r rt pi) PT_STATE (fixnum64 state))
+      (set-slot rt (r rt pi) PT_CAP (fixnum64 cap))
+      (local ^:mut ^I64 ring)
+      (set ring RING_MESSAGES)
+      (if (== kind K_CHANNEL)
+        (do
+          (set ring cap)
+          (if (< ring 1)
+            (set ring 1))))
+      (set-slot rt (r rt pi) PT_RING (fixnum64 ring))
+      (comment "THE ALLOCATION IS BOUND BEFORE IT IS PUSHED. Both `new-obj`"
+               "and `push` take the runtime mutably, so nesting them is two"
+               "overlapping mutable borrows in Rust -- the hand-written copy"
+               "hoisted it for the same reason.")
+      (let [^Value slots (new-obj rt TY_NODE (to-i32 ring))
+            ^RootIx sli (push rt slots)]
+        (for [^I32 i 0 (to-i32 ring)]
+          (set-slot rt (r rt sli) i EMPTY))
+        (set-slot rt (r rt pi) PT_INBOX (r rt sli)))
+      (set-slot rt (r rt pi) PT_READ (fixnum64 0))
+      (set-slot rt (r rt pi) PT_WRITE (fixnum64 0))
+      (set-slot rt (r rt pi) PT_BYTES (fixnum64 0))
+      (set-slot rt (r rt pi) PT_PEER (fixnum64 (- 0 1)))
+      (set-slot rt (r rt pi) PT_LABEL (r rt li))
+      (set-slot rt (r rt pi) PT_KIND (fixnum64 kind))
+      (register-port rt (r rt pi))
+      (let [^Value out (r rt pi)]
+        (pop-to rt base)
+        (return out)))))
+
+(doc "ONE DIRECTION of a pairing, appended to `SC_PAIRS`."
+     ""
+     "Its own function because it is done TWICE and the two calls differ only"
+     "in the order of their arguments -- which is exactly the shape a reader"
+     "skims past when it is written out twice inline.")
+(defn ^:pub ^:method ^Value pair-into [^:mut ^Rt rt ^RootIx si ^I64 x ^I64 y]
+  (let [^RootIx pi (push rt (slot rt (r rt si) SC_PAIRS))
+        ^RootIx ei (push rt (empty-vec rt))]
+    (comment "BOUND, THEN SET. `vec-conj` and `set-r` both take the runtime"
+             "mutably, so nesting them is two overlapping borrows in Rust --"
+             "the same hoist `reap-bridges` makes for the same reason.")
+    (let [^Value e1 (vec-conj rt (r rt ei) (fixnum64 x))]
+      (set-r rt ei e1))
+    (let [^Value e2 (vec-conj rt (r rt ei) (fixnum64 y))]
+      (set-r rt ei e2))
+    (let [^Value np (vec-conj rt (r rt pi) (r rt ei))]
+      (set-slot rt (r rt si) SC_PAIRS np))
+    (pop-to rt pi)
+    (return NIL)))
+
+(doc "WIRE TWO ENDS TOGETHER, in BOTH directions and in both places."
+     ""
+     "Each end learns the other's id, and the scheduler learns the pairing"
+     "TWICE -- `[a b]` and `[b a]`. The lookup that uses it walks the list"
+     "comparing the first element, so a pairing recorded one way only answers"
+     "one way, and the end that was second would find no peer at all. That is"
+     "indistinguishable from an orphaned port, which is the failure it would"
+     "actually present as.")
+(defn ^:pub ^:method ^Value link-peers-at [^:mut ^Rt rt ^Value a ^Value b]
+  (let [^I64 ida (as-fixnum (slot rt a PT_ID))
+        ^I64 idb (as-fixnum (slot rt b PT_ID))]
+    (set-slot rt a PT_PEER (fixnum64 idb))
+    (set-slot rt b PT_PEER (fixnum64 ida))
+    (let [^RootIx base (mark rt)
+          ^RootIx si (push rt (sched rt))]
+      (pair-into rt si ida idb)
+      (pair-into rt si idb ida)
+      (pop-to rt base)
+      (return NIL))))
+
+
+(doc "A CHANNEL: two ends of one conversation, already wired."
+     ""
+     "BOTH ENDS GET THE SAME CAP AND THE SAME LABEL. The cap because a channel"
+     "is one queue seen from two sides and a bound that differed by direction"
+     "would be a channel that accepts more one way than the other; the label"
+     "because it names the CHANNEL, and an end that reported a different name"
+     "from its peer would make a diagnostic read as though two conversations"
+     "were involved."
+     ""
+     "THE ENDS ARE RETURNED IN ORDER, `[a b]`, and the caller destructures"
+     "them positionally. Nothing distinguishes the two ends otherwise -- they"
+     "are symmetric, which is exactly why the order has to be fixed here"
+     "rather than discovered.")
+(defn ^:pub ^:method ^Value channel-at [^:mut ^Rt rt ^I64 cap ^Value label]
+  (let [^RootIx base (mark rt)
+        ^RootIx li (push rt label)]
+    (comment "ROOTED FIRST, THEN THE SCHEDULER. `ensure-sched` ALLOCATES and"
+             "`label` arrives as a host local, so running it before the push"
+             "leaves that local naming the abandoned semispace. The"
+             "hand-written copies ran it before the mark.")
+    (ensure-sched rt)
+    (let [^Value pa (new-port-at rt cap (r rt li) K_CHANNEL P_OPEN (- 0 1))
+          ^RootIx ai (push rt pa)
+          ^Value pb (new-port-at rt cap (r rt li) K_CHANNEL P_OPEN (- 0 1))
+          ^RootIx bi (push rt pb)]
+      (link-peers-at rt (r rt ai) (r rt bi))
+      (let [^RootIx vi (push rt (empty-vec rt))]
+        (let [^Value v1 (vec-conj rt (r rt vi) (r rt ai))]
+          (set-r rt vi v1))
+        (let [^Value v2 (vec-conj rt (r rt vi) (r rt bi))]
+          (set-r rt vi v2))
+        (let [^Value out (r rt vi)]
+          (pop-to rt base)
+          (return out))))))
+
+(doc "A GREEN THREAD, NEW and not yet runnable."
+     ""
+     "`ST_NEW` AND NOT `ST_RUNNABLE`, and the difference is what `run-one`"
+     "reads to decide between STARTING this thread at its entry and RESUMING"
+     "one that parked. A thread marked runnable before it has ever run would"
+     "be restored from a `TH_STACK` of nil and continue off the end of an"
+     "empty value stack."
+     ""
+     "IT INHERITS THE BINDINGS LIVE AT THE MOMENT OF THE SPAWN, which is what"
+     "makes a dynamic binding dynamic across a `spawn` rather than something"
+     "the new thread has to be handed. `TH_BINDINGS` travels with the thread"
+     "and `install-bindings` puts it back each time the thread is scheduled."
+     ""
+     "AND AN EMPTY MAP WHEN THERE ARE NONE. The singleton is nil before"
+     "anything has bound, and a thread carrying nil there would have every"
+     "later binding push onto nothing."
+     ""
+     "THE ID COMES FROM `SC_NEXTID`, the same counter a port's does: it is the"
+     "sandbox's counter and not either table's index, so a thread and a port"
+     "never share a number and neither is a position in anything."
+     ""
+     "THE ENTRY IS ROOTED FIRST. Everything below allocates.")
+(defn ^:pub ^:method ^Value spawn-at [^:mut ^Rt rt ^Value f]
+  (let [^RootIx base (mark rt)
+        ^RootIx fi (push rt f)]
+    (comment "ROOTED FIRST, AND THIS IS THE ONE THAT BIT. `ensure-sched`"
+             "ALLOCATES and `f` is a host local; the hand-written copy carried"
+             "that warning in as many words. Moving the call out to three"
+             "wrappers put it BEFORE the push and made the ordering nobody's"
+             "to state -- `conform-hosts`'s GC-stress row caught it within the"
+             "hour, with `green` answering a raw address.")
+    (ensure-sched rt)
+    (let [^Value th (new-obj rt TY_THREAD TH_LEN)]
+      (if (nil? rt th)
+        (do (pop-to rt base)
+            (return NIL)))
+      (let [^RootIx ti (push rt th)
+            ^RootIx si (push rt (sched rt))
+            ^I64 id (as-fixnum (slot rt (r rt si) SC_NEXTID))]
+        (set-slot rt (r rt si) SC_NEXTID (fixnum64 (+ id 1)))
+        (set-slot rt (r rt ti) TH_STATUS (fixnum64 ST_NEW))
+        (set-slot rt (r rt ti) TH_ID (fixnum64 id))
+        (set-slot rt (r rt ti) TH_TOKEN (fixnum64 (- 0 1)))
+        (set-slot rt (r rt ti) TH_ENTRY (r rt fi))
+        (let [^Value binds (current-bindings rt)]
+          (if (nil? rt binds)
+            (set-slot rt (r rt ti) TH_BINDINGS (maps-empty rt))
+            (set-slot rt (r rt ti) TH_BINDINGS binds)))
+        (let [^RootIx tsi (push rt (slot rt (r rt si) SC_THREADS))
+              ^Value nts (vec-conj rt (r rt tsi) (r rt ti))]
+          (set-slot rt (r rt si) SC_THREADS nts))
+        (let [^Value out (r rt ti)]
+          (pop-to rt base)
+          (return out))))))

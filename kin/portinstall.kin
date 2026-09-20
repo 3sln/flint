@@ -1,0 +1,107 @@
+;; INSTALLING A HOST PORT, written once.
+;;
+;; A bridge appears in this sandbox because the HOST put it here -- there is no
+;; flint call that makes one. That makes this the boundary's front door, and it
+;; runs at the worst possible moment: before anything else exists. A host that
+;; installs a port at construction reaches here with no scheduler, no thread,
+;; and nothing allocated but the label it is handing in.
+;;
+;; THE ORDER IS THE WHOLE OF IT, and all three runtimes had it wrong. Each
+;; called `ensure-sched` FIRST and rooted the label second:
+;;
+;;     ensure_sched();            <- allocates: a scheduler, a thread, vectors
+;;     let li = self.push(label); <- roots the address `label` USED to have
+;;
+;; `label` arrives as a host local. If the scheduler's construction collects --
+;; and under a collection at every allocation it always does -- the string moves
+;; and the root points into the abandoned semispace. Nothing downstream can tell
+;; that from a live pointer; the collector finds it on its next trace and dies
+;; computing the size of whatever is there now. Reproduced on the jvm in one
+;; run: `to-space overflow: 4294639616 past 4259840`, thrown from `Gc.forward`
+;; reached through `Roots.forEach`.
+;;
+;; It survived because nothing stresses this path. `bin/conform-hosts` re-runs
+;; every conformance program under `-Dflint.gcstress`, and not one of them
+;; installs a host port -- the programs that do are driven by `hostports` and
+;; `hostreq`, which the stress row does not cover.
+(ns flint.rt.portinstall
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != < not and or nil?
+                                   as-fixnum fixnum64
+                                   mark push r pop-to slot set-slot
+                                   sched ensure-sched port-by-id push-event
+                                   Rt Value I64 Bool NIL RootIx
+                                   PT_KIND PT_LABEL SC_BRIDGES SC_SYSTEM
+                                   K_BRIDGE P_OPEN DEFAULT_BRIDGE_CAP
+                                   EV_RETAIN]]
+            [flint.rt.portmake :refer [new-port-at]]
+            [flint.rt.vecwrite :refer [vec-conj]]))
+
+(doc "PUT A HOST PORT IN THIS SANDBOX, or hand back the one already here."
+     ""
+     "IDEMPOTENT BY ID. A host that installs the same id twice gets the SAME"
+     "object and the host hears nothing the second time -- one `EV_RETAIN` per"
+     "handle, or the host's count of holders stops meaning anything."
+     ""
+     "THE LABEL IS ROOTED BEFORE THE SCHEDULER IS BUILT. See the note at the"
+     "top of this file: every runtime had these two the other way round, and"
+     "it is a live rooting bug rather than a tidiness point. `ensure-sched` is"
+     "a word precisely so this order can be stated ONCE."
+     ""
+     "A NEGATIVE ID IS REFUSED. Ids come from the host and -1 is the absent"
+     "marker used throughout; minting a port for it would make `port-by-id`"
+     "answer for a handle nobody holds."
+     ""
+     "ANNOUNCED ONLY WHEN ASKED. The system port is installed without an"
+     "`EV_RETAIN` because the host did not ask for it -- it IS the host's end"
+     "of the door, and telling it to hold something it already owns would"
+     "leave a retain no release ever matches.")
+(defn ^:pub ^:method ^Value install-bridge-at
+  [^:mut ^Rt rt ^I64 host-id ^Value label ^Bool announce]
+  (if (< host-id 0)
+    (return NIL))
+  (let [^RootIx base (mark rt)
+        ^RootIx li (push rt label)]
+    (comment "ROOTED FIRST, THEN THE SCHEDULER -- the whole point of this file.")
+    (ensure-sched rt)
+    (let [^Value existing (port-by-id rt host-id)]
+      (if (and (not (nil? rt existing))
+               (== (as-fixnum (slot rt existing PT_KIND)) K_BRIDGE))
+        (do (pop-to rt base)
+            (return existing))))
+    (let [^Value p (new-port-at rt DEFAULT_BRIDGE_CAP (r rt li) K_BRIDGE P_OPEN host-id)]
+      (if (nil? rt p)
+        (do (pop-to rt base)
+            (return NIL)))
+      (let [^RootIx pi (push rt p)
+            ^RootIx si (push rt (sched rt))]
+        (comment "RECORDED AS HELD, which is what `reap-all` walks to notice"
+                 "that the script has let the handle go.")
+        (let [^RootIx bi (push rt (slot rt (r rt si) SC_BRIDGES))
+              ^Value nb (vec-conj rt (r rt bi) (fixnum64 host-id))]
+          (set-slot rt (r rt si) SC_BRIDGES nb))
+        (if announce
+          (push-event rt EV_RETAIN host-id 0 NIL))
+        (let [^Value out (r rt pi)]
+          (pop-to rt base)
+          (return out))))))
+
+(doc "INSTALL THE SYSTEM PORT: the one the control plane parks on."
+     ""
+     "NOT ANNOUNCED. It is the host's own end of the door rather than a handle"
+     "the host asked for, so a retain here would never be matched."
+     ""
+     "RECORDED IN `SC_SYSTEM` so `drive` can find it without a search -- it is"
+     "consulted on every iteration.")
+(defn ^:pub ^:method ^Value install-system-at
+  [^:mut ^Rt rt ^I64 host-id ^Value label]
+  (let [^Value p (install-bridge-at rt host-id label false)]
+    (if (nil? rt p)
+      (return NIL))
+    (let [^RootIx base (mark rt)
+          ^RootIx pi (push rt p)
+          ^RootIx si (push rt (sched rt))]
+      (set-slot rt (r rt si) SC_SYSTEM (r rt pi))
+      (let [^Value out (r rt pi)]
+        (pop-to rt base)
+        (return out)))))

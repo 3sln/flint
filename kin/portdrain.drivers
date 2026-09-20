@@ -1,0 +1,206 @@
+--rust-head
+// A TOY PORT, and nothing else. What `receive-drained` reads is a state, a
+// kind and a peer, so that is the whole model: no ring, no waiters, no
+// scheduler. A fixture that modelled more would be asserting more than the
+// function decides.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_0000_0000_0000);
+mod conc {
+    pub const PT_STATE: u32 = 0;
+    pub const PT_KIND: u32 = 1;
+    // The REAL values, because the expected answers below are written as the
+    // numbers a reader will see in a transcript.
+    pub const P_OPEN: i64 = 1;
+    pub const P_CLOSED: i64 = 2;
+    pub const P_HALF: i64 = 4;
+    pub const P_ORPHANED: i64 = 5;
+    pub const K_CHANNEL: i64 = 0;
+    pub const K_BRIDGE: i64 = 1;
+    pub fn crosses_a_heap(kind: i64) -> bool { kind == K_BRIDGE }
+}
+impl Value {
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn is_nil(self) -> bool { self == NIL }
+}
+struct Rt { objs: Vec<Vec<Value>> }
+impl Rt {
+    fn obj(&mut self, slots: Vec<Value>) -> Value {
+        self.objs.push(slots);
+        Value((self.objs.len() - 1) as u64)
+    }
+    fn slot(&self, v: Value, i: u32) -> Value { self.objs[v.0 as usize][i as usize] }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.objs[v.0 as usize][i as usize] = x; }
+    // SLOT 2 IS THE PEER, held directly rather than by id: `peer-of` is the
+    // only way this function reaches it, so a registry would be scaffolding.
+    fn peer_of(&mut self, p: Value) -> Value { self.slot(p, 2) }
+--rust
+}
+// `<state> <kind> <peer state, or absent>` in, `<code>:<state after>` out.
+fn one(state: i64, kind: i64, peer: Option<i64>) -> String {
+    let mut rt = Rt { objs: vec![] };
+    let pv = match peer {
+        Some(ps) => rt.obj(vec![Value::fixnum(ps), Value::fixnum(conc::K_CHANNEL), NIL]),
+        None => NIL,
+    };
+    let p = rt.obj(vec![Value::fixnum(state), Value::fixnum(kind), pv]);
+    let code = rt.receive_drained(p);
+    format!("{}:{}", code, rt.slot(p, conc::PT_STATE).as_fixnum())
+}
+fn main() {
+    use conc::*;
+    let out = [
+        one(P_OPEN, K_CHANNEL, Some(P_OPEN)),
+        one(P_OPEN, K_CHANNEL, Some(P_CLOSED)),
+        one(P_OPEN, K_CHANNEL, Some(P_HALF)),
+        one(P_OPEN, K_CHANNEL, Some(P_ORPHANED)),
+        one(P_OPEN, K_CHANNEL, None),
+        one(P_HALF, K_CHANNEL, None),
+        one(P_CLOSED, K_CHANNEL, None),
+        one(P_ORPHANED, K_CHANNEL, None),
+        one(P_OPEN, K_BRIDGE, None),
+        one(P_CLOSED, K_BRIDGE, None),
+    ];
+    println!("{}", out.join(" "));
+}
+--java-head
+    // THE SAME TOY, field for field, so one expected line is evidence for
+    // three targets rather than three answers that happen to coincide.
+    static final long NIL = 0xFFFF000000000000L;
+    static final class Val {
+        static boolean isNil(long v) { return v == NIL; }
+        static long fixnum(long n) { return n; }
+        static long asHeap(long v) { return v; }
+        static long asFixnum(long v) { return v; }
+    }
+    static long fx(long v) { return v; }
+    static final class Conc {
+        static final int PT_STATE = 0, PT_KIND = 1;
+        static final long P_OPEN = 1, P_CLOSED = 2, P_HALF = 4, P_ORPHANED = 5;
+        static final long K_CHANNEL = 0, K_BRIDGE = 1;
+        static boolean crossesAHeap(long kind) { return kind == K_BRIDGE; }
+        // Slot 2 is the peer -- see the Rust head.
+        static long peerOf(Rt rt, long p) { return rt.slot(p, 2); }
+    }
+    static final class Rt {
+        java.util.List<long[]> objs = new java.util.ArrayList<>();
+        long obj(long[] slots) { objs.add(slots); return objs.size() - 1; }
+        long slot(long v, int i) { return objs.get((int) v)[i]; }
+        void setSlot(long v, int i, long x) { objs.get((int) v)[i] = x; }
+    }
+--java
+    static String one(long state, long kind, Long peer) {
+        Rt rt = new Rt();
+        long pv = peer == null ? NIL
+                : rt.obj(new long[]{peer, Conc.K_CHANNEL, NIL});
+        long p = rt.obj(new long[]{state, kind, pv});
+        long code = receiveDrained(rt, p);
+        return code + ":" + rt.slot(p, Conc.PT_STATE);
+    }
+    public static void main(String[] args) {
+        String[] out = {
+            one(Conc.P_OPEN, Conc.K_CHANNEL, Conc.P_OPEN),
+            one(Conc.P_OPEN, Conc.K_CHANNEL, Conc.P_CLOSED),
+            one(Conc.P_OPEN, Conc.K_CHANNEL, Conc.P_HALF),
+            one(Conc.P_OPEN, Conc.K_CHANNEL, Conc.P_ORPHANED),
+            one(Conc.P_OPEN, Conc.K_CHANNEL, null),
+            one(Conc.P_HALF, Conc.K_CHANNEL, null),
+            one(Conc.P_CLOSED, Conc.K_CHANNEL, null),
+            one(Conc.P_ORPHANED, Conc.K_CHANNEL, null),
+            one(Conc.P_OPEN, Conc.K_BRIDGE, null),
+            one(Conc.P_CLOSED, Conc.K_BRIDGE, null),
+        };
+        System.out.println(String.join(" ", out));
+    }
+--csharp-head
+    // THE SAME TOY AGAIN, in this target's spelling.
+    const long NIL = unchecked((long)0xFFFF000000000000UL);
+    static class Val {
+        public const long Nil = unchecked((long)0xFFFF000000000000UL);
+        public static bool IsNil(long v) => v == Nil;
+        public static long Fixnum(long n) => n;
+        public static long AsHeap(long v) => v;
+        public static long AsFixnum(long v) => v;
+    }
+    static long Fx(long v) => v;
+    static class Conc {
+        public const int PT_STATE = 0, PT_KIND = 1;
+        public const long P_OPEN = 1, P_CLOSED = 2, P_HALF = 4, P_ORPHANED = 5;
+        public const long K_CHANNEL = 0, K_BRIDGE = 1;
+        public static bool CrossesAHeap(long kind) => kind == K_BRIDGE;
+        // Slot 2 is the peer -- see the Rust head.
+        public static long PeerOf(Rt rt, long p) => rt.Slot(p, 2);
+    }
+    public class Rt {
+        public System.Collections.Generic.List<long[]> Objs = new System.Collections.Generic.List<long[]>();
+        public long MakeObj(long[] slots) { Objs.Add(slots); return Objs.Count - 1; }
+        public long Slot(long v, int i) => Objs[(int) v][i];
+        public void SetSlot(long v, int i, long x) { Objs[(int) v][i] = x; }
+    }
+--csharp
+    static string One(long state, long kind, long? peer) {
+        var rt = new Rt();
+        long pv = peer == null ? NIL
+                : rt.MakeObj(new long[]{ peer.Value, Conc.K_CHANNEL, NIL });
+        long p = rt.MakeObj(new long[]{ state, kind, pv });
+        long code = ReceiveDrained(rt, p);
+        return code + ":" + rt.Slot(p, Conc.PT_STATE);
+    }
+    static void Main() {
+        string[] outp = {
+            One(Conc.P_OPEN, Conc.K_CHANNEL, Conc.P_OPEN),
+            One(Conc.P_OPEN, Conc.K_CHANNEL, Conc.P_CLOSED),
+            One(Conc.P_OPEN, Conc.K_CHANNEL, Conc.P_HALF),
+            One(Conc.P_OPEN, Conc.K_CHANNEL, Conc.P_ORPHANED),
+            One(Conc.P_OPEN, Conc.K_CHANNEL, null),
+            One(Conc.P_HALF, Conc.K_CHANNEL, null),
+            One(Conc.P_CLOSED, Conc.K_CHANNEL, null),
+            One(Conc.P_ORPHANED, Conc.K_CHANNEL, null),
+            One(Conc.P_OPEN, Conc.K_BRIDGE, null),
+            One(Conc.P_CLOSED, Conc.K_BRIDGE, null),
+        };
+        System.Console.WriteLine(string.Join(" ", outp));
+    }
+--expect
+0:1 1:4 1:4 1:4 2:5 1:4 1:2 2:5 0:1 1:2
+--expect-why
+DERIVED FROM WHAT A DRAINED PORT PROMISES. Each field is `<code>:<state after>`,
+where the code is 0 PARK, 1 END OF STREAM, 2 GONE.
+
+  1  `0:1`  A LIVE CHANNEL WITH A LIVE PEER. Nothing yet, so park -- and the
+            state is untouched, which is the field that refuses an
+            implementation eager to mark something half-closed.
+  2  `1:4`  THE PEER CLOSED. End of stream, and this end becomes HALF: what is
+            already buffered still drains, and only then does a reader see the
+            end. Closing it outright here would discard messages that were
+            legitimately sent.
+  3  `1:4`  THE PEER IS ITSELF HALF-CLOSED -- it closed first and we are the
+            other side of the same conversation. Same answer.
+  4  `1:4`  THE PEER WAS ORPHANED. Still an end of stream for this end: the
+            peer's own failure is not this port's to report twice.
+  5  `2:5`  NO PEER AT ALL. Nobody said goodbye, so this is GONE rather than a
+            tidy end -- and it is RECORDED as `P_ORPHANED`, so a second receive
+            answers the same way without looking again. A version that returned
+            the code without the write would read `2:1` here.
+  6  `1:4`  ALREADY HALF, and the peer is ABSENT ON PURPOSE. This port's own
+            state answers completely, so the peer is never consulted -- and if
+            the order were reversed, the missing peer would orphan it and this
+            field would read `2:5`. Fields 6-8 are the order check.
+  7  `1:2`  ALREADY CLOSED: end of stream, and the state is NOT rewritten to
+            HALF. A tidy close outranks a half, the same reading `reap-all`
+            takes.
+  8  `2:5`  ALREADY ORPHANED: GONE, and unchanged.
+  9  `0:1`  **A LIVE BRIDGE WITH NO PEER OBJECT, AND IT PARKS.** This is the
+            field the whole source exists for. A bridge's far end is the host's
+            registry and is in no heap, so `peer-of` answers nil for a
+            perfectly healthy port. Without the `crosses-a-heap` exemption this
+            reads `2:5` -- every empty receive on a live bridge throwing "the
+            other end of this port is gone", and the port marked orphaned so it
+            keeps throwing. It is field 5's fixture with one thing changed, the
+            KIND, which is what makes the pair evidence rather than two
+            unrelated rows.
+ 10  `1:2`  AND A BRIDGE IS STILL SUBJECT TO ITS OWN STATE. The exemption is
+            from the PEER question only; a closed bridge is still an end of
+            stream. An implementation that returned early on every bridge would
+            pass field 9 and fail this one.

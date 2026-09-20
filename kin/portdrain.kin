@@ -1,0 +1,69 @@
+;; WHAT AN EMPTY PORT DOES, written once.
+;;
+;; `receive` has two halves. Taking a message off the ring is bookkeeping --
+;; a dequeue and a byte refund -- and it stays in each runtime. What to do when
+;; there is NOTHING to take is a decision, with five answers and one exemption,
+;; and it was written three times.
+;;
+;; THE EXEMPTION IS THE WHOLE REASON THIS IS WORTH GENERATING. A channel has a
+;; peer OBJECT in this heap, so "is the other end still there?" is a question it
+;; can ask. A bridge does not: the far end is the host's registry and is in no
+;; heap at all (`DECISIONS.md#ports-are-the-hosts`). Asking anyway finds nil,
+;; reads it as "the other end is gone", and turns every empty receive on a live
+;; bridge into a throw. Its own state has already answered every way the stream
+;; can be over, so an empty buffer means "nothing yet" -- which is what parking
+;; is for.
+(ns flint.rt.portdrain
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != or not and nil? as-fixnum fixnum64
+                                   slot set-slot crosses-a-heap peer-of
+                                   Rt Value I32 I64 NIL
+                                   PT_STATE PT_KIND
+                                   P_CLOSED P_HALF P_ORPHANED]]))
+
+(doc "What a receive on a DRAINED port should do. Answers a code, and makes"
+     "whatever state change goes with it."
+     ""
+     "    0  PARK      nothing yet; wait to be woken"
+     "    1  END       end of stream, which is an ordinary nil to the caller"
+     "    2  GONE      the other end vanished without saying so -- the caller"
+     "                 throws, because a script blocked for ever on a host that"
+     "                 hung up is the same failure as a leaked handle seen from"
+     "                 the other side"
+     ""
+     "THE CODE AND THE STATE WRITE TRAVEL TOGETHER. Splitting them would leave"
+     "three runtimes each deciding when to mark a port HALF or ORPHANED, which"
+     "is the part that was already written three times. What stays with the"
+     "caller is only the THROW, because its message is a host string and kin"
+     "has no string to carry one -- the same line `report-deadlock` draws."
+     ""
+     "ORDER MATTERS. This port's OWN state is asked first and completely: by"
+     "the time the peer is consulted, every way the stream can already be over"
+     "has been ruled out. A peer check that ran first would re-derive answers"
+     "this port already knows and would have to agree with them.")
+(defn ^:pub ^:method ^I32 receive-drained [^:mut ^Rt rt ^Value p]
+  (let [^I64 st (as-fixnum (slot rt p PT_STATE))]
+    (if (or (== st P_CLOSED) (== st P_HALF))
+      (return 1))
+    (if (== st P_ORPHANED)
+      (return 2))
+    (comment "A BRIDGE STOPS HERE. It has no peer object to ask about, and"
+             "the states above have covered every way it can be finished.")
+    (if (crosses-a-heap rt (as-fixnum (slot rt p PT_KIND)))
+      (return 0))
+    (let [^Value peer (peer-of rt p)]
+      (if (nil? rt peer)
+        (do
+          (comment "NOBODY SAID GOODBYE. Recorded on this end so a second"
+                   "receive answers the same way without looking again.")
+          (set-slot rt p PT_STATE (fixnum64 P_ORPHANED))
+          (return 2)))
+      (let [^I64 pst (as-fixnum (slot rt peer PT_STATE))]
+        (if (or (== pst P_CLOSED) (or (== pst P_HALF) (== pst P_ORPHANED)))
+          (do
+            (comment "THE PEER IS DONE, so this end is half-closed: whatever"
+                     "is already buffered still drains, and only then does a"
+                     "reader see the end of the stream.")
+            (set-slot rt p PT_STATE (fixnum64 P_HALF))
+            (return 1)))))
+    (return 0)))

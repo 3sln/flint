@@ -1,0 +1,102 @@
+;; THE SCHEDULER'S OWN LISTS, written once.
+;;
+;; Two writes that look like bookkeeping and are not. Each has an ORDER
+;; property that nothing downstream re-derives: the event queue is read
+;; POSITIONALLY by the host's drain, and the held-bridge list is walked in
+;; place. A copy that built a record with two fields transposed, or rebuilt a
+;; list backwards, would produce something structurally valid that means
+;; something else -- the failure that has no error message.
+;;
+;; NAMED `-at` and not after the words each runtime exposes: a kin function
+;; shadows a vocabulary word of the same name under whole-project generation,
+;; and `push-event` in particular is a word that other kin sources call and
+;; that their drivers stub. Same split as `reap-ports` over `reap-all`.
+(ns flint.rt.schedlists
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != for continue
+                                   nil? as-fixnum fixnum64
+                                   mark push r pop-to set-r
+                                   slot set-slot sched empty-vec
+                                   Rt Value I32 I64 NIL RootIx
+                                   SC_EVENTS SC_BRIDGES]]
+            [flint.rt.vecread :refer [vec-count vec-nth]]
+            [flint.rt.vecwrite :refer [vec-conj]]))
+
+(doc "APPEND ONE EVENT for the host to drain."
+     ""
+     "The record is `[kind a b payload]` and the HOST READS IT POSITIONALLY --"
+     "five `u32`s per event in the drained buffer, and nothing in the record"
+     "says which field is which. Two of them transposed is a well-formed event"
+     "meaning something else: a close reported against the wrong id, or a"
+     "length read as a token. There is no error to raise for it, which is why"
+     "the order is pinned in the drivers rather than left to reading."
+     ""
+     "APPENDED, NOT PREPENDED. The queue is drained from the head with"
+     "`SC_EHEAD`, so the order events are pushed in is the order the host sees"
+     "them -- and for the `EV_CLOSED`/`EV_RELEASE` pair that is the whole"
+     "meaning: released-then-closed is a host being told to let go of"
+     "something it has not yet been told is finished."
+     ""
+     "THE PAYLOAD IS ROOTED FIRST, before anything that allocates. Every"
+     "`vec-conj` below can collect, and a payload held only in a local would"
+     "come back naming the address it had in the abandoned semispace -- which"
+     "nothing downstream can distinguish from a live pointer.")
+(defn ^:pub ^:method ^Value push-event-at
+  [^:mut ^Rt rt ^I64 kind ^I64 a ^I64 b ^Value payload]
+  (let [^RootIx base (mark rt)
+        ^RootIx pi (push rt payload)
+        ^RootIx vi (push rt (empty-vec rt))]
+    (let [^Value v1 (vec-conj rt (r rt vi) (fixnum64 kind))]
+      (set-r rt vi v1))
+    (let [^Value v2 (vec-conj rt (r rt vi) (fixnum64 a))]
+      (set-r rt vi v2))
+    (let [^Value v3 (vec-conj rt (r rt vi) (fixnum64 b))]
+      (set-r rt vi v3))
+    (let [^Value v4 (vec-conj rt (r rt vi) (r rt pi))]
+      (set-r rt vi v4))
+    (let [^RootIx si (push rt (sched rt))
+          ^RootIx ei (push rt (slot rt (r rt si) SC_EVENTS))
+          ^Value nevs (vec-conj rt (r rt ei) (r rt vi))]
+      (set-slot rt (r rt si) SC_EVENTS nevs))
+    (pop-to rt base)
+    (return NIL)))
+
+(doc "DROP `id` FROM THE HELD-BRIDGE LIST."
+     ""
+     "So the collector's sweep does not send a SECOND release for a bridge the"
+     "program has already closed. One release per retain is what makes the"
+     "host's count a count of holders rather than of arrivals; a duplicate"
+     "makes it let go of a port somebody still holds."
+     ""
+     "THE SURVIVORS KEEP THEIR ORDER. Nothing downstream depends on it today"
+     "-- the list is searched, not indexed -- and it is pinned anyway, because"
+     "a rebuild that reversed would be invisible until something did depend on"
+     "it, and then the cause would be a long way from the symptom."
+     ""
+     "IT REBUILDS EVEN WHEN THE ID IS ABSENT, and that is left exactly as the"
+     "three copies had it. Skipping the rebuild is a real improvement -- it is"
+     "the shape `reap-all` was fixed into -- and it is NOT made here: this"
+     "allocates, allocation is billed, and `conform-hosts` asserts the gas to"
+     "the instruction. A behaviour-preserving port and a change to what gets"
+     "charged are two commits, not one."
+     ""
+     "A NIL SCHEDULER IS NOT AN ERROR: the runtime can be torn down before one"
+     "was ever built.")
+(defn ^:pub ^:method ^Value forget-bridge-at [^:mut ^Rt rt ^I64 id]
+  (let [^Value s (sched rt)]
+    (if (nil? rt s)
+      (return NIL))
+    (let [^RootIx base (mark rt)
+          ^RootIx si (push rt s)
+          ^RootIx bi (push rt (slot rt (r rt si) SC_BRIDGES))
+          ^I32 n (vec-count rt (r rt bi))
+          ^RootIx ki (push rt (empty-vec rt))]
+      (for [^I32 k 0 n]
+        (let [^I64 x (as-fixnum (vec-nth rt (r rt bi) k NIL))]
+          (if (== x id)
+            (continue))
+          (let [^Value nk (vec-conj rt (r rt ki) (fixnum64 x))]
+            (set-r rt ki nk))))
+      (set-slot rt (r rt si) SC_BRIDGES (r rt ki))
+      (pop-to rt base)
+      (return NIL))))

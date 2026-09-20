@@ -1,0 +1,296 @@
+--rust-head
+// A TOY HEAP. `new_obj` FILLS WITH NIL, exactly as the real allocator does --
+// the collector asserts that a fresh slot reads nil so a half-built object
+// traces sanely, and one of the properties below depends on it: `SC_SYSTEM` is
+// nil because nobody wrote it, not because somebody wrote nil.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_0000_0000_0000);
+const TY_SCHED: u8 = 41;
+const TY_THREAD: u8 = 31;
+mod conc {
+    pub const SC_EVENTS: u32 = 0;
+    pub const SC_EHEAD: u32 = 1;
+    pub const SC_PORTS: u32 = 2;
+    pub const SC_PAIRS: u32 = 3;
+    pub const SC_BRIDGES: u32 = 4;
+    pub const SC_WAITERS: u32 = 5;
+    pub const SC_WFREE: u32 = 6;
+    pub const SC_NEXTID: u32 = 7;
+    pub const SC_CURRENT: u32 = 8;
+    pub const SC_SYSTEM: u32 = 9;
+    pub const SC_THREADS: u32 = 10;
+    pub const SC_LEN: u32 = 11;
+    pub const TH_STATUS: u32 = 0;
+    pub const TH_ID: u32 = 1;
+    pub const TH_TOKEN: u32 = 2;
+    pub const TH_BINDINGS: u32 = 3;
+    pub const TH_LEN: u32 = 4;
+    // THE REAL VALUES, because the expected answers name them.
+    pub const ST_RUNNABLE: i64 = 1;
+    pub const ST_DONE: i64 = 3;
+}
+impl Value {
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn is_nil(self) -> bool { self == NIL }
+}
+struct Rt { objs: Vec<Vec<Value>>, roots: Vec<Value>, empty: Value,
+            empty_map_v: Value, installed: Value, running: bool }
+impl Rt {
+    fn obj(&mut self, slots: Vec<Value>) -> Value {
+        self.objs.push(slots);
+        Value((self.objs.len() - 1) as u64)
+    }
+    fn new_obj(&mut self, _ty: u8, len: u32) -> Value { self.obj(vec![NIL; len as usize]) }
+    fn slot(&self, v: Value, i: u32) -> Value { self.objs[v.0 as usize][i as usize] }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.objs[v.0 as usize][i as usize] = x; }
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, i: usize) { self.roots.truncate(i); }
+    fn empty_vec(&self) -> Value { self.empty }
+    fn empty_map(&self) -> Value { self.empty_map_v }
+    fn vec_conj(&mut self, v: Value, x: Value) -> Value {
+        let mut next = self.objs[v.0 as usize].clone();
+        next.push(x);
+        self.obj(next)
+    }
+    fn vec_count(&self, v: Value) -> u32 { self.objs[v.0 as usize].len() as u32 }
+    fn install_sched(&mut self, s: Value) { self.installed = s; }
+    fn something_running(&self) -> bool { self.running }
+--rust
+}
+fn built(running: bool) -> String {
+    let mut rt = Rt { objs: vec![], roots: vec![], empty: NIL, empty_map_v: NIL,
+                      installed: NIL, running };
+    rt.empty = rt.obj(vec![]);
+    rt.empty_map_v = rt.obj(vec![]);
+    let s = rt.new_sched_at();
+    let vecs = [conc::SC_EVENTS, conc::SC_PORTS, conc::SC_PAIRS,
+                conc::SC_BRIDGES, conc::SC_WAITERS]
+        .iter().all(|i| !rt.slot(s, *i).is_nil());
+    let ts = rt.slot(s, conc::SC_THREADS);
+    let th = rt.objs[ts.0 as usize][0];
+    format!("{} {} {} {} {} {} {} {} {} {} {} {}",
+        if rt.installed == s { 1 } else { 0 },
+        if vecs { 1 } else { 0 },
+        rt.slot(s, conc::SC_EHEAD).as_fixnum(),
+        rt.slot(s, conc::SC_WFREE).as_fixnum(),
+        rt.slot(s, conc::SC_NEXTID).as_fixnum(),
+        rt.slot(s, conc::SC_CURRENT).as_fixnum(),
+        if rt.slot(s, conc::SC_SYSTEM).is_nil() { 1 } else { 0 },
+        rt.vec_count(ts),
+        rt.slot(th, conc::TH_ID).as_fixnum(),
+        rt.slot(th, conc::TH_TOKEN).as_fixnum(),
+        if rt.slot(th, conc::TH_BINDINGS).is_nil() { 1 } else { 0 },
+        rt.slot(th, conc::TH_STATUS).as_fixnum())
+}
+fn main() {
+    println!("{} | {}", built(true), built(false));
+}
+--java-head
+    // THE SAME TOY, field for field.
+    static final long NIL = 0xFFFF000000000000L;
+    static final int TY_SCHED = 41, TY_THREAD = 31;
+    static final class Val {
+        static final long NIL = 0xFFFF000000000000L;
+        static boolean isNil(long v) { return v == NIL; }
+        static long fixnum(long n) { return n; }
+        static long asHeap(long v) { return v; }
+        static long asFixnum(long v) { return v; }
+    }
+    static long fx(long v) { return v; }
+    static final class Conc {
+        static final int SC_EVENTS = 0, SC_EHEAD = 1, SC_PORTS = 2, SC_PAIRS = 3,
+                         SC_BRIDGES = 4, SC_WAITERS = 5, SC_WFREE = 6,
+                         SC_NEXTID = 7, SC_CURRENT = 8, SC_SYSTEM = 9,
+                         SC_THREADS = 10, SC_LEN = 11;
+        static final int TH_STATUS = 0, TH_ID = 1, TH_TOKEN = 2,
+                         TH_BINDINGS = 3, TH_LEN = 4;
+        static final long ST_RUNNABLE = 1, ST_DONE = 3;
+        static long newObj(Rt rt, int ty, int len) { return rt.newObj(ty, len); }
+        static void installSched(Rt rt, long s) { rt.installed = s; }
+        static boolean somethingRunning(Rt rt) { return rt.running; }
+    }
+    static final class Maps { static long empty(Rt rt) { return rt.emptyMapV; } }
+    static final class Vec2 { static long empty(Rt rt) { return rt.empty; } }
+    static final class Rt {
+        java.util.List<long[]> objs = new java.util.ArrayList<>();
+        java.util.List<Long> roots = new java.util.ArrayList<>();
+        long empty = NIL, emptyMapV = NIL, installed = NIL;
+        boolean running = false;
+        long obj(long[] slots) { objs.add(slots); return objs.size() - 1; }
+        long newObj(int ty, int len) {
+            long[] row = new long[len];
+            java.util.Arrays.fill(row, NIL);
+            return obj(row);
+        }
+        long slot(long v, int i) { return objs.get((int) v)[i]; }
+        void setSlot(long v, int i, long x) { objs.get((int) v)[i] = x; }
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int i) { while (roots.size() > i) roots.remove(roots.size() - 1); }
+        long emptyVec() { return empty; }
+    }
+    static final class Vec { static long empty(Rt rt) { return rt.empty; } }
+    static long vecConj(Rt rt, long v, long x) {
+        long[] cur = rt.objs.get((int) v);
+        long[] next = java.util.Arrays.copyOf(cur, cur.length + 1);
+        next[cur.length] = x;
+        return rt.obj(next);
+    }
+    static int vecCount(Rt rt, long v) { return rt.objs.get((int) v).length; }
+--java
+    static String built(boolean running) {
+        Rt rt = new Rt();
+        rt.running = running;
+        rt.empty = rt.obj(new long[0]);
+        rt.emptyMapV = rt.obj(new long[0]);
+        long s = newSchedAt(rt);
+        boolean vecs = true;
+        for (int i : new int[]{Conc.SC_EVENTS, Conc.SC_PORTS, Conc.SC_PAIRS,
+                               Conc.SC_BRIDGES, Conc.SC_WAITERS})
+            if (rt.slot(s, i) == NIL) vecs = false;
+        long ts = rt.slot(s, Conc.SC_THREADS);
+        long th = rt.objs.get((int) ts)[0];
+        return (rt.installed == s ? 1 : 0) + " " + (vecs ? 1 : 0)
+             + " " + rt.slot(s, Conc.SC_EHEAD) + " " + rt.slot(s, Conc.SC_WFREE)
+             + " " + rt.slot(s, Conc.SC_NEXTID) + " " + rt.slot(s, Conc.SC_CURRENT)
+             + " " + (rt.slot(s, Conc.SC_SYSTEM) == NIL ? 1 : 0)
+             + " " + vecCount(rt, ts)
+             + " " + rt.slot(th, Conc.TH_ID) + " " + rt.slot(th, Conc.TH_TOKEN)
+             + " " + (rt.slot(th, Conc.TH_BINDINGS) == NIL ? 1 : 0)
+             + " " + rt.slot(th, Conc.TH_STATUS);
+    }
+    public static void main(String[] args) {
+        System.out.println(built(true) + " | " + built(false));
+    }
+--csharp-head
+    // THE SAME TOY AGAIN, in this target's spelling.
+    const long NIL = unchecked((long)0xFFFF000000000000UL);
+    static class Obj { public const int TySched = 41, TyThread = 31; }
+    static class Val {
+        public const long Nil = unchecked((long)0xFFFF000000000000UL);
+        public static bool IsNil(long v) => v == Nil;
+        public static long Fixnum(long n) => n;
+        public static long AsHeap(long v) => v;
+        public static long AsFixnum(long v) => v;
+    }
+    static long Fx(long v) => v;
+    static class Conc {
+        public const int SC_EVENTS = 0, SC_EHEAD = 1, SC_PORTS = 2, SC_PAIRS = 3,
+                         SC_BRIDGES = 4, SC_WAITERS = 5, SC_WFREE = 6,
+                         SC_NEXTID = 7, SC_CURRENT = 8, SC_SYSTEM = 9,
+                         SC_THREADS = 10, SC_LEN = 11;
+        public const int TH_STATUS = 0, TH_ID = 1, TH_TOKEN = 2,
+                         TH_BINDINGS = 3, TH_LEN = 4;
+        public const long ST_RUNNABLE = 1, ST_DONE = 3;
+        public static long NewObj(Rt rt, int ty, int len) => rt.NewObj(ty, len);
+        public static void InstallSched(Rt rt, long s) { rt.Installed = s; }
+        public static bool SomethingRunning(Rt rt) => rt.Running;
+    }
+    static class Maps { public static long Empty(Rt rt) => rt.EmptyMapV; }
+    static class Vec { public static long Empty(Rt rt) => rt.EmptyV; }
+    public class Rt {
+        public System.Collections.Generic.List<long[]> Objs = new System.Collections.Generic.List<long[]>();
+        public System.Collections.Generic.List<long> Roots = new System.Collections.Generic.List<long>();
+        public long EmptyV = NIL, EmptyMapV = NIL, Installed = NIL;
+        public bool Running = false;
+        public long MakeObj(long[] slots) { Objs.Add(slots); return Objs.Count - 1; }
+        public long NewObj(int ty, int len) {
+            var row = new long[len];
+            for (int i = 0; i < len; i++) row[i] = NIL;
+            return MakeObj(row);
+        }
+        public long Slot(long v, int i) => Objs[(int) v][i];
+        public void SetSlot(long v, int i, long x) { Objs[(int) v][i] = x; }
+        public int Mark() => Roots.Count;
+        public int Push(long v) { Roots.Add(v); return Roots.Count - 1; }
+        public long R(int i) => Roots[i];
+        public void PopTo(int i) { while (Roots.Count > i) Roots.RemoveAt(Roots.Count - 1); }
+    }
+    static long VecConj(Rt rt, long v, long x) {
+        var cur = rt.Objs[(int) v];
+        var next = new long[cur.Length + 1];
+        System.Array.Copy(cur, next, cur.Length);
+        next[cur.Length] = x;
+        return rt.MakeObj(next);
+    }
+    static int VecCount(Rt rt, long v) => rt.Objs[(int) v].Length;
+--csharp
+    static string Built(bool running) {
+        var rt = new Rt();
+        rt.Running = running;
+        rt.EmptyV = rt.MakeObj(new long[0]);
+        rt.EmptyMapV = rt.MakeObj(new long[0]);
+        long s = NewSchedAt(rt);
+        bool vecs = true;
+        foreach (int i in new int[]{Conc.SC_EVENTS, Conc.SC_PORTS, Conc.SC_PAIRS,
+                                    Conc.SC_BRIDGES, Conc.SC_WAITERS})
+            if (rt.Slot(s, i) == NIL) vecs = false;
+        long ts = rt.Slot(s, Conc.SC_THREADS);
+        long th = rt.Objs[(int) ts][0];
+        return (rt.Installed == s ? 1 : 0) + " " + (vecs ? 1 : 0)
+             + " " + rt.Slot(s, Conc.SC_EHEAD) + " " + rt.Slot(s, Conc.SC_WFREE)
+             + " " + rt.Slot(s, Conc.SC_NEXTID) + " " + rt.Slot(s, Conc.SC_CURRENT)
+             + " " + (rt.Slot(s, Conc.SC_SYSTEM) == NIL ? 1 : 0)
+             + " " + VecCount(rt, ts)
+             + " " + rt.Slot(th, Conc.TH_ID) + " " + rt.Slot(th, Conc.TH_TOKEN)
+             + " " + (rt.Slot(th, Conc.TH_BINDINGS) == NIL ? 1 : 0)
+             + " " + rt.Slot(th, Conc.TH_STATUS);
+    }
+    static void Main() {
+        System.Console.WriteLine(Built(true) + " | " + Built(false));
+    }
+--expect
+1 1 0 -1 1 0 1 1 0 -1 0 1 | 1 1 0 -1 1 0 1 1 0 -1 0 3
+--expect-why
+DERIVED FROM WHAT A NEW SCHEDULER PROMISES. The two groups are the same build
+with one thing changed -- whether a program is ALREADY RUNNING -- and every
+field but the last is identical between them on purpose.
+
+Fields: `<installed> <vectors set> <ehead> <wfree> <nextid> <current>
+<system nil> <threads> <thread id> <token> <bindings nil> <status>`.
+
+  `1`   INSTALLED AS THE SINGLETON, and installed with the value returned. A
+        builder that made a correct scheduler and did not install it leaves the
+        next `sched` answering nil, which reads as "no scheduler yet" and
+        builds a SECOND one.
+  `1`   THE FIVE LIST SLOTS HOLD VECTORS, not nil. `SC_EVENTS`, `SC_PORTS`,
+        `SC_PAIRS`, `SC_BRIDGES` and `SC_WAITERS` are all walked without a nil
+        check by something.
+  `0`   the drain head starts at the front.
+  `-1`  **THE FREE LIST IS EMPTY, AND THAT IS `-1` AND NOT `0`.** Zero names
+        waiter slot zero, which is a real slot -- a free list starting at 0
+        hands out a waiter nobody allocated. This is the field that separates
+        "empty" from "a count", and nothing else here does.
+  `1`   **IDS START AT ONE**, because thread 0's id is handed out below without
+        consulting the counter. Starting at 0 gives the first spawned thread
+        the same id as thread 0, and ids are what the host names ports and
+        threads by.
+  `0`   the current thread is thread 0.
+  `1`   **`SC_SYSTEM` IS NIL, AND NOTHING WROTE IT THERE.** The two ports wrote
+        an explicit nil here and native did not; a fresh object's slots start
+        nil by construction, which the collector asserts. The field is kept
+        because the property is real -- something reads this slot expecting
+        nil -- and the WRITE is gone from all three, so the next reader does
+        not have to wonder whether an omission elsewhere was deliberate.
+  `1`   THREAD 0 IS ENROLLED. A scheduler whose thread list is empty has
+        nothing to pick and reports the program finished immediately.
+  `0`   its id is zero, taken directly and not from the counter.
+  `-1`  no waiter.
+  `0`   ITS BINDINGS ARE THE EMPTY MAP, not nil: every later binding pushes
+        onto this, and nil has nothing to push onto.
+  `1` / `3`
+        **THE ONLY FIELD THAT DIFFERS, AND THE WHOLE REASON THIS IS NOT A
+        CONSTRUCTOR.** With a program running, thread 0 is the thread already
+        running and is RUNNABLE. With nothing running -- a host that installs a
+        port at construction builds a scheduler before any program starts --
+        thread 0 represents NO STACK AT ALL. Left runnable it would be picked,
+        restored from a `TH_STACK` of nil, and run off the end of an empty
+        value stack; the symptom recorded for it is an index of -1 out of
+        `vpop`. `ST_DONE` says this thread has nothing to contribute. Two
+        groups rather than one because a single case cannot show a
+        CONDITIONAL: whichever way it was hard-coded, one group would pass.

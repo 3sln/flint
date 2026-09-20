@@ -345,6 +345,24 @@ impl Rt {
     /// Create the scheduler on first use, enrolling whatever is running now as
     /// thread 0. Installing the hook here -- rather than at startup -- is what
     /// keeps `run_program` a straight line in a program that never spawns.
+    /// Install the scheduler as the singleton the collector already traces.
+    pub(crate) fn install_sched(&mut self, s: Value) {
+        self.roots.shared.singletons[SING_SCHED] = s;
+    }
+
+    /// Is a program actually running? See `something-running` in the kin
+    /// vocabulary: an empty frame stack means thread 0 represents no stack.
+    pub(crate) fn something_running(&self) -> bool {
+        !self.frames.is_empty()
+    }
+
+    /// Make the scheduler if there is not one, and hand it back.
+    ///
+    /// The OBJECT is generated, from `kin/schedmake.kin` -- twelve slots and
+    /// five on thread 0, every one of them a default something later reads
+    /// without checking. What stays here is what kin has no answer for: two
+    /// function references, and this runtime's own notion of "a scheduler now
+    /// exists".
     pub fn ensure_sched(&mut self) -> Value {
         let s = self.sched();
         if !s.is_nil() {
@@ -354,61 +372,10 @@ impl Rt {
         // else. See `Rt::bridge_hook`: reaching it directly from `codec.rs` put
         // the whole scheduler in every module, including ones with no ports.
         self.bridge_hook = Some(|rt, id| rt.install_bridge_port(id, NIL, true));
-        let base = self.mark();
-        let sc = self.new_obj(TY_SCHED, SC_LEN);
-        if sc.is_nil() {
+        let out = self.new_sched_at();
+        if out.is_nil() {
             return NIL;
         }
-        let si = self.push(sc);
-        let ev = self.empty_vec();
-        let pv = self.empty_vec();
-        self.set(self.r(si), SC_EVENTS, ev);
-        self.set(self.r(si), SC_EHEAD, Value::fixnum(0));
-        self.set(self.r(si), SC_PORTS, pv);
-        let pairs = self.empty_vec();
-        self.set(self.r(si), SC_PAIRS, pairs);
-        let brs = self.empty_vec();
-        self.set(self.r(si), SC_BRIDGES, brs);
-        let ws = self.empty_vec();
-        self.set(self.r(si), SC_WAITERS, ws);
-        self.set(self.r(si), SC_WFREE, Value::fixnum(-1));
-        self.set(self.r(si), SC_NEXTID, Value::fixnum(1));
-        self.set(self.r(si), SC_CURRENT, Value::fixnum(0));
-        // The running thread becomes thread 0. Its stack is the live one, so it
-        // has nothing saved until it parks.
-        //
-        // UNLESS NOTHING IS RUNNING. A scheduler can now be created before any
-        // program has started -- a host that installs a port at construction
-        // makes one (`DECISIONS.md#ports-are-the-hosts`) -- and then thread 0 represents no
-        // stack at all. Left RUNNABLE it would be picked, restored from a
-        // `TH_STACK` of nil, and run off the end of an empty value stack. An
-        // empty frame stack is what says which case this is.
-        let th = self.new_obj(TY_THREAD, TH_LEN);
-        if th.is_nil() {
-            self.pop_to(base);
-            return NIL;
-        }
-        let ti = self.push(th);
-        let running = !self.frames.is_empty();
-        self.set(
-            self.r(ti),
-            TH_STATUS,
-            Value::fixnum(if running { ST_RUNNABLE } else { ST_DONE }),
-        );
-        self.set(self.r(ti), TH_ID, Value::fixnum(0));
-        self.set(self.r(ti), TH_TOKEN, Value::fixnum(-1));
-        self.set(self.r(ti), TH_ARGS, NIL);
-        self.set(self.r(ti), TH_TX, Value::fixnum(-1));
-        let empty = self.empty_map();
-        self.set(self.r(ti), TH_BINDINGS, empty);
-        let ts = self.empty_vec();
-        let tsi = self.push(ts);
-        let t = self.r(ti);
-        let ts = self.vec_conj(self.r(tsi), t);
-        self.set(self.r(si), SC_THREADS, ts);
-        let out = self.r(si);
-        self.roots.shared.singletons[SING_SCHED] = out;
-        self.pop_to(base);
         self.sched_hook = Some(scheduler);
         let at = self.steps + SLICE;
         self.set_slice_end(at);
@@ -686,43 +653,10 @@ impl Rt {
     /// what Clojure conveys to `future` and agents, and what somebody debugging
     /// at three in the morning will assume. The snapshot is taken here: later
     /// `binding` in the spawner does not reach the child.
+    /// GENERATED, from `kin/portmake.kin`. Every slot it fills is a default
+    /// something later reads without checking.
     pub fn spawn_thread(&mut self, f: Value) -> Value {
-
-        // Rooted first: `ensure_sched` allocates, and `f` is a Rust local.
-        let base = self.mark();
-        let fi = self.push(f);
-        self.ensure_sched();
-        let th = self.new_obj(TY_THREAD, TH_LEN);
-        if th.is_nil() {
-            self.pop_to(base);
-            return NIL;
-        }
-        let ti = self.push(th);
-        let s = self.sched();
-        let si = self.push(s);
-        let id = fx(self.slot(self.r(si), SC_NEXTID));
-        self.set(self.r(si), SC_NEXTID, Value::fixnum(id + 1));
-        self.set(self.r(ti), TH_STATUS, Value::fixnum(ST_NEW));
-        self.set(self.r(ti), TH_ID, Value::fixnum(id));
-        self.set(self.r(ti), TH_TOKEN, Value::fixnum(-1));
-        self.set(self.r(ti), TH_ARGS, NIL);
-        self.set(self.r(ti), TH_TX, Value::fixnum(-1));
-        let ff = self.r(fi);
-        self.set(self.r(ti), TH_ENTRY, ff);
-        // Inherit a SNAPSHOT of the spawner's dynamic bindings, as Clojure
-        // conveys them to `future` and agents. A snapshot: rebinding in the
-        // spawner afterwards does not reach the child.
-        let binds = self.roots.shared.singletons[crate::rt::SING_BINDINGS];
-        let binds = if binds.is_nil() { self.empty_map() } else { binds };
-        self.set(self.r(ti), TH_BINDINGS, binds);
-        let ts = self.slot(self.r(si), SC_THREADS);
-        let tsi = self.push(ts);
-        let t = self.r(ti);
-        let nts = self.vec_conj(self.r(tsi), t);
-        self.set(self.r(si), SC_THREADS, nts);
-        let out = self.r(ti);
-        self.pop_to(base);
-        out
+        self.spawn_at(f)
     }
     // --- ports -------------------------------------------------------------
 
@@ -742,7 +676,7 @@ impl Rt {
         }
     }
 
-    fn register_port(&mut self, p: Value) {
+    pub(crate) fn register_port(&mut self, p: Value) {
         let id = fx(self.slot(p, PT_ID)) as u32;
         self.intern_into(INTERN_PORT, id, p);
         // The scheduler keeps ids, not references: a strong list here would
@@ -762,54 +696,11 @@ impl Rt {
     /// A port object. `id` is `-1` to mint one from this sandbox's counter,
     /// which is what a channel end does; a bridge handle passes the HOST's id
     /// instead, because that is the id that means the same thing on both sides.
+    /// GENERATED, from `kin/portmake.kin`. Every slot of a port is a default
+    /// something later READS without checking, so three copies of this were
+    /// three chances for one to drift by a line.
     fn new_port(&mut self, cap: i64, label: Value, kind: i64, state: i64, id: i64) -> Value {
-        let base = self.mark();
-        let li = self.push(label);
-        let p = self.new_obj(TY_PORT, PT_LEN);
-        if p.is_nil() {
-            self.pop_to(base);
-            return NIL;
-        }
-        let pi = self.push(p);
-        let s = self.sched();
-        let si = self.push(s);
-        let id = if id >= 0 {
-            id
-        } else {
-            let n = fx(self.slot(self.r(si), SC_NEXTID));
-            self.set(self.r(si), SC_NEXTID, Value::fixnum(n + 1));
-            n
-        };
-        self.set(self.r(pi), PT_ID, Value::fixnum(id));
-        self.set(self.r(pi), PT_STATE, Value::fixnum(state));
-        self.set(self.r(pi), PT_CAP, Value::fixnum(cap));
-        // The ring, allocated ONCE and never again: a send must not allocate,
-        // because allocation is where the old inbox lost messages.
-        //
-        // A channel's ring is what `channel` was asked for; a bridge's is
-        // `RING_MESSAGES`, because its own bound (`PT_CAP`) is in BYTES and the
-        // two are different questions.
-        let ring = if kind == K_CHANNEL { cap.max(1) } else { RING_MESSAGES };
-        self.set(self.r(pi), PT_RING, Value::fixnum(ring));
-        let slots = self.new_obj(crate::obj::TY_NODE, ring as u32);
-        let sli = self.push(slots);
-        for i in 0..ring as u32 {
-            self.set(self.r(sli), i, crate::value::EMPTY);
-        }
-        let sv = self.r(sli);
-        self.set(self.r(pi), PT_INBOX, sv);
-        self.set(self.r(pi), PT_READ, Value::fixnum(0));
-        self.set(self.r(pi), PT_WRITE, Value::fixnum(0));
-        self.set(self.r(pi), PT_BYTES, Value::fixnum(0));
-        self.set(self.r(pi), PT_PEER, Value::fixnum(-1));
-        let l = self.r(li);
-        self.set(self.r(pi), PT_LABEL, l);
-        self.set(self.r(pi), PT_KIND, Value::fixnum(kind));
-        let pv = self.r(pi);
-        self.register_port(pv);
-        let out = self.r(pi);
-        self.pop_to(base);
-        out
+        self.new_port_at(cap, label, kind, state, id)
     }
 
     /// The handle in THIS sandbox for the host's port `host_id`, minting one if
@@ -846,39 +737,11 @@ impl Rt {
     /// rooted, because a handle nothing refers to is precisely what a release
     /// is for. The system port is the exception, and it is rooted by being in
     /// `SC_SYSTEM` rather than by anything here.
+    /// GENERATED, from `kin/portinstall.kin`. The ORDER is the point: every
+    /// runtime rooted the label AFTER building the scheduler, which is a live
+    /// rooting bug on the first host port installed into a fresh sandbox.
     pub fn install_bridge_port(&mut self, host_id: i64, label: Value, announce: bool) -> Value {
-        self.ensure_sched();
-        if host_id < 0 {
-            return NIL;
-        }
-        // Already held: hand back the SAME object and say nothing to the host.
-        let existing = self.port_by_id(host_id);
-        if !existing.is_nil() && fx(self.slot(existing, PT_KIND)) == K_BRIDGE {
-            return existing;
-        }
-        let base = self.mark();
-        let li = self.push(label);
-        let l = self.r(li);
-        let p = self.new_port(DEFAULT_BRIDGE_CAP, l, K_BRIDGE, P_OPEN, host_id);
-        if p.is_nil() {
-            self.pop_to(base);
-            return NIL;
-        }
-        let pi = self.push(p);
-        // Recorded as HELD, which is what `reap_ports` walks to notice the drop.
-        let sc = self.sched();
-        let sci = self.push(sc);
-        let brs = self.slot(self.r(sci), SC_BRIDGES);
-        let bi = self.push(brs);
-        let nb = self.vec_conj(self.r(bi), Value::fixnum(host_id));
-        self.set(self.r(sci), SC_BRIDGES, nb);
-        // One increment, now that the handle exists and is interned.
-        if announce {
-            self.push_event(EV_RETAIN, host_id, 0, NIL);
-        }
-        let out = self.r(pi);
-        self.pop_to(base);
-        out
+        self.install_bridge_at(host_id, label, announce)
     }
 
     /// Install the system port: the bridge a sandbox is DRIVEN over.
@@ -886,20 +749,9 @@ impl Rt {
     /// A sandbox that is given one can ask for more ports on it; a sandbox that
     /// is not has no way to reach anything outside itself, which is the honest
     /// meaning of "no capabilities" and is the default.
+    /// GENERATED, from `kin/portinstall.kin`.
     pub fn install_system_port(&mut self, host_id: i64, label: Value) -> Value {
-        let p = self.install_bridge_port(host_id, label, false);
-        if p.is_nil() {
-            return NIL;
-        }
-        let base = self.mark();
-        let pi = self.push(p);
-        let s = self.sched();
-        let si = self.push(s);
-        let pv = self.r(pi);
-        self.set(self.r(si), SC_SYSTEM, pv);
-        let out = self.r(pi);
-        self.pop_to(base);
-        out
+        self.install_system_at(host_id, label)
     }
 
     /// The system port. **Not reachable from guest code, and that is the point.**
@@ -933,58 +785,19 @@ impl Rt {
         self.slot(s, SC_SYSTEM)
     }
 
+    /// GENERATED, from `kin/portmake.kin`.
     fn link_peers(&mut self, a: Value, b: Value) {
-        let ida = fx(self.slot(a, PT_ID));
-        let idb = fx(self.slot(b, PT_ID));
-        self.set(a, PT_PEER, Value::fixnum(idb));
-        self.set(b, PT_PEER, Value::fixnum(ida));
-        // Ids only. When one end is collected its object is gone, so the
-        // pairing has to be recorded somewhere that does not hold it alive.
-        let base = self.mark();
-        let sc = self.sched();
-        let si = self.push(sc);
-        for (x, y) in [(ida, idb), (idb, ida)] {
-            let pairs = self.slot(self.r(si), SC_PAIRS);
-            let pi = self.push(pairs);
-            let e = self.empty_vec();
-            let ei = self.push(e);
-            let ne = self.vec_conj(self.r(ei), Value::fixnum(x));
-            self.set_r(ei, ne);
-            let ne = self.vec_conj(self.r(ei), Value::fixnum(y));
-            self.set_r(ei, ne);
-            let ev = self.r(ei);
-            let np = self.vec_conj(self.r(pi), ev);
-            self.set(self.r(si), SC_PAIRS, np);
-            self.pop_to(pi);
-        }
-        self.pop_to(base);
+        self.link_peers_at(a, b);
     }
 
     /// A coupled pair. What goes into one comes out of the other, both ways.
+    /// GENERATED, from `kin/portmake.kin`. Every slot it fills is a default
+    /// something later reads without checking.
     pub fn make_channel(&mut self, cap: i64, label: Value) -> Value {
-        self.ensure_sched();
-        let base = self.mark();
-        let li = self.push(label);
-        let l = self.r(li);
-        let a = self.new_port(cap, l, K_CHANNEL, P_OPEN, -1);
-        let ai = self.push(a);
-        let l = self.r(li);
-        let b = self.new_port(cap, l, K_CHANNEL, P_OPEN, -1);
-        let bi = self.push(b);
-        let (av, bv) = (self.r(ai), self.r(bi));
-        self.link_peers(av, bv);
-        let v = self.empty_vec();
-        let vi = self.push(v);
-        let av = self.r(ai);
-        let nv = self.vec_conj(self.r(vi), av);
-        self.set_r(vi, nv);
-        let bv = self.r(bi);
-        let nv = self.vec_conj(self.r(vi), bv);
-        self.pop_to(base);
-        nv
+        self.channel_at(cap, label)
     }
 
-    fn peer_of(&mut self, p: Value) -> Value {
+    pub(crate) fn peer_of(&mut self, p: Value) -> Value {
         let id = fx(self.slot(p, PT_PEER));
         self.port_by_id(id)
     }
@@ -1158,38 +971,15 @@ impl Rt {
         self.spawn_thread(f);
     }
 
-    /// END the current thread where it stands, taking its waiter with it.
-    ///
-    /// For the one case that is not an ordinary return: a top-level form asked
-    /// the host while the program was still initialising, so the stack it was
-    /// parked on is about to be cut back and nothing may try to resume it.
-    ///
-    /// THE WAITER IS THE HALF THAT ACTUALLY BIT. Marking the thread done is
-    /// not enough: `port_open` registered a waiter naming it, and the next
-    /// `host_deliver` or `host_continue` fires that waiter and puts the thread
-    /// back to RUNNABLE. It was observed doing exactly that -- DONE at the end
-    /// of one `drive`, RUNNABLE at the start of the next, with nothing in
-    /// between but the host delivering the bind.
-    pub fn abandon_current_thread(&mut self) {
-        let s = self.sched();
-        if s.is_nil() {
-            return;
-        }
-        let ts = self.slot(s, SC_THREADS);
-        let i = fx(self.slot(s, SC_CURRENT)) as u32;
-        let th = self.vec_nth(ts, i, NIL);
-        if th.is_nil() {
-            return;
-        }
-        self.set(th, TH_STATUS, Value::fixnum(ST_DONE));
-        self.set(th, TH_STACK, NIL);
-        self.set(th, TH_FRAMES, NIL);
-        self.set(th, TH_PARK_ON, NIL);
-        let token = fx(self.slot(th, TH_TOKEN));
-        if token >= 0 {
-            self.free_waiter(token);
-            self.set(th, TH_TOKEN, Value::fixnum(-1));
-        }
+    // `abandon_current_thread` IS GENERATED, from `kin/sched.kin`, and lands
+    // on `Rt` in `crate::kgen::rt::sched` -- so callers here reach it by name
+    // with nothing in between. It was hand-written in this file and in neither
+    // port, which is how a top-level park went unreported on both of them.
+
+    /// The bindings live RIGHT NOW, which a spawn inherits. The read side of
+    /// `install_bindings` below.
+    pub(crate) fn current_bindings(&self) -> Value {
+        self.roots.shared.singletons[crate::rt::SING_BINDINGS]
     }
 
     /// Install a thread's dynamic bindings as the live ones.
@@ -1734,26 +1524,11 @@ impl Rt {
 
     /// Append an outbound event. `payload` is a string whose bytes the host will
     /// read; the drain copies them into one contiguous buffer.
+    /// GENERATED, from `kin/schedlists.kin`. The record is read POSITIONALLY
+    /// by the host's drain, so its field order is a contract with no error to
+    /// raise when it is wrong.
     pub(crate) fn push_event(&mut self, kind: i64, a: i64, b: i64, payload: Value) {
-        let base = self.mark();
-        let pi = self.push(payload);
-        let v = self.empty_vec();
-        let vi = self.push(v);
-        for x in [kind, a, b] {
-            let nv = self.vec_conj(self.r(vi), Value::fixnum(x));
-            self.set_r(vi, nv);
-        }
-        let p = self.r(pi);
-        let nv = self.vec_conj(self.r(vi), p);
-        self.set_r(vi, nv);
-        let s = self.sched();
-        let si = self.push(s);
-        let evs = self.slot(self.r(si), SC_EVENTS);
-        let ei = self.push(evs);
-        let e = self.r(vi);
-        let nevs = self.vec_conj(self.r(ei), e);
-        self.set(self.r(si), SC_EVENTS, nevs);
-        self.pop_to(base);
+        self.push_event_at(kind, a, b, payload);
     }
 
     pub fn port_send(&mut self, p: Value, v: Value) -> Value {
@@ -1853,7 +1628,11 @@ impl Rt {
             let len = self.b_count(self.r(vi)) as i64;
             let cap = fx(self.slot(self.r(pi), PT_CAP));
             let queued = fx(self.slot(self.r(pi), PT_BYTES));
-            if queued > 0 && queued + len > cap {
+            // THE SAME PREDICATE THE HOST PATH USES, generated from
+            // `kin/portbytes.kin`. The two paths park where the other refuses
+            // and claim atomically where the other does not; what they must
+            // never differ in is WHICH MESSAGES FIT.
+            if !self.fits_in_budget(queued, len, cap) {
                 let target = self.r(pi);
                 self.pop_to(base);
                 return self.park_on_port(WK_SEND, target);
@@ -2005,44 +1784,20 @@ impl Rt {
             self.pop_to(base);
             return out;
         }
-        let st = fx(self.slot(self.r(pi), PT_STATE));
-        // Drained and finished cleanly: end of stream, a normal answer.
-        if st == P_CLOSED || st == P_HALF {
-            self.pop_to(base);
-            return NIL;
-        }
-        // Drained and the peer vanished: nobody said goodbye, so say so rather
-        // than pretending the stream ended tidily -- and never park, because a
-        // script blocked forever on a host that hung up is the same failure as
-        // a host leaking a handle, seen from the other side.
-        if st == P_ORPHANED {
-            self.pop_to(base);
-            return self.throw_str(
-                "IllegalStateException",
-                "receive: the other end of this port is gone, so this can never complete",
-            );
-        }
-        // A BRIDGE has no peer OBJECT to ask about: the far end is the
-        // host's registry and is not in any heap (`DECISIONS.md#ports-are-the-hosts`). Its own
-        // state is the whole answer, and the states above have already covered
-        // every way that can say "no more" -- so an empty buffer here means
-        // "nothing yet", which is what parking is for.
-        if fx(self.slot(self.r(pi), PT_KIND)) != K_BRIDGE {
-            let peer = self.peer_of(self.r(pi));
-            if peer.is_nil() {
-                self.set(self.r(pi), PT_STATE, Value::fixnum(P_ORPHANED));
-                self.pop_to(base);
-                return self.throw_str(
-                    "IllegalStateException",
-                    "receive: the other end of this port is gone, so this can never complete",
-                );
-            }
-            let pst = fx(self.slot(peer, PT_STATE));
-            if pst == P_CLOSED || pst == P_HALF || pst == P_ORPHANED {
-                self.set(self.r(pi), PT_STATE, Value::fixnum(P_HALF));
+        // WHAT A DRAINED PORT DOES IS GENERATED, from `kin/portdrain.kin`,
+        // and it makes the state changes that go with its answer. Only the
+        // THROW stays here: its message is a host string, and kin has no
+        // string to carry one -- the same line `report_deadlock` draws.
+        match self.receive_drained(self.r(pi)) {
+            1 => {
                 self.pop_to(base);
                 return NIL;
             }
+            2 => {
+                self.pop_to(base);
+                return self.throw_str("IllegalStateException", "receive: the other end of this port is gone, so this can never complete");
+            }
+            _ => {}
         }
         let target = self.r(pi);
         self.pop_to(base);
@@ -2395,61 +2150,18 @@ impl Rt {
 
     /// Everything that follows from an end closing, however it closed: tell the
     /// host if this was a bridge, and wake anybody parked on either side.
-    fn close_side_effects(&mut self, p: Value) {
-        let base = self.mark();
-        let pi = self.push(p);
-        let kind = fx(self.slot(self.r(pi), PT_KIND));
-        if crosses_a_heap(kind) {
-            // A CLOSE IS A RELEASE, and it is the prompt one.
-            //
-            // Dropping the last reference and waiting for the collector gets
-            // here too, via `reap_ports`, but that is the backstop rather than
-            // the mechanism -- it is not prompt, and a host holding a socket
-            // until then is a real cost. Closing says so now. The id is dropped
-            // from `SC_BRIDGES` in the same breath, so the sweep does not send
-            // a second release for a port already let go.
-            let id = fx(self.slot(self.r(pi), PT_ID));
-            self.push_event(EV_CLOSED, id, 0, NIL);
-            self.forget_bridge(id);
-            self.push_event(EV_RELEASE, id, 0, NIL);
-        }
-        let target = self.r(pi);
-        self.wake_on(target);
-        // The peer becomes HALF-closed rather than closed: it may still drain
-        // what is already in its buffer, and only then reads end-of-stream. The
-        // channel is not freed until both ends are done.
-        let peer = self.peer_of(self.r(pi));
-        if !peer.is_nil() && fx(self.slot(peer, PT_STATE)) == P_OPEN {
-            self.set(peer, PT_STATE, Value::fixnum(P_HALF));
-            self.wake_on(peer);
-        }
-        self.pop_to(base);
+    /// GENERATED, from `kin/reapports.kin`. One line, as `reap_ports` and
+    /// `close_all_bridges` are: what follows from an end closing is a DECISION
+    /// -- which events, in which order, and that the PEER goes half-closed
+    /// rather than closed -- and it was written three times.
+    pub(crate) fn close_side_effects(&mut self, p: Value) {
+        self.close_effects(p);
     }
 
     /// Drop `id` from the held list, so the sweep does not release it twice.
-    fn forget_bridge(&mut self, id: i64) {
-        let base = self.mark();
-        let s = self.sched();
-        if s.is_nil() {
-            return;
-        }
-        let si = self.push(s);
-        let brs = self.slot(self.r(si), SC_BRIDGES);
-        let bi = self.push(brs);
-        let n = self.vec_count(self.r(bi));
-        let keep = self.empty_vec();
-        let ki = self.push(keep);
-        for k in 0..n {
-            let x = fx(self.vec_nth(self.r(bi), k, NIL));
-            if x == id {
-                continue;
-            }
-            let nk = self.vec_conj(self.r(ki), Value::fixnum(x));
-            self.set_r(ki, nk);
-        }
-        let keep = self.r(ki);
-        self.set(self.r(si), SC_BRIDGES, keep);
-        self.pop_to(base);
+    /// GENERATED, from `kin/schedlists.kin`.
+    pub(crate) fn forget_bridge(&mut self, id: i64) {
+        self.forget_bridge_at(id);
     }
 
     // --- the host's side ---------------------------------------------------
@@ -2563,36 +2275,19 @@ impl Rt {
         // both write -- and the bound that exists to cap memory would be the
         // one thing not enforced. Claimed BEFORE the message is built, and
         // given back if anything after this refuses.
-        let cap = fx(self.slot(self.r(pi), PT_CAP));
         let len = bytes.len() as i64;
-        loop {
-            let pv = self.r(pi);
-            let queued = fx(self.slot_atomic(pv, PT_BYTES));
-            if queued > 0 && queued + len > cap {
-                self.pop_to(base);
-                return false;
-            }
-            if self.cas_slot(
-                pv,
-                PT_BYTES,
-                Value::fixnum(queued),
-                Value::fixnum(queued + len),
-            ) {
-                break;
-            }
+        let pv = self.r(pi);
+        if !self.claim_bytes(pv, len) {
+            self.pop_to(base);
+            return false;
         }
         // From here every refusal has to hand the bytes back, or a message the
         // guest never saw goes on counting against its bound for ever.
         macro_rules! give_back {
             () => {{
+                // GENERATED, from `kin/portbytes.kin`.
                 let pv = self.r(pi);
-                loop {
-                    let q = fx(self.slot_atomic(pv, PT_BYTES));
-                    let back = if q > len { q - len } else { 0 };
-                    if self.cas_slot(pv, PT_BYTES, Value::fixnum(q), Value::fixnum(back)) {
-                        break;
-                    }
-                }
+                self.give_back(pv, len);
             }};
         }
         // SCANNED, NOT DECODED (`DECISIONS.md#the-codec-is-guest-code`). The
@@ -2818,35 +2513,21 @@ impl Rt {
         -1
     }
 
-    /// Program exit: close and release every bridge, so a host is never left
-    /// holding a reference for a sandbox that has finished, and leave the events
-    /// for the final drain.
+    // Program exit: close and release every bridge, so a host is never left
+    // holding a reference for a sandbox that has finished, and leave the events
+    // for the final drain.
+    //
+    // GENERATED, from `kin/reapports.kin`. One line, as `reap_ports` is: the
+    // body is `close_bridges` next door, and this name stays because it is the
+    // vocabulary word `sched-drive` calls -- a kin function of the same name
+    // would shadow the word and leave the scheduler's drivers unable to stub it.
+    //
+    // Three hand-written copies before this, and they did not agree on the
+    // `vec_nth` default: native passed `NIL` and both ports passed `NOT_FOUND`.
+    // Unreachable, `k` being bounded by the count, which is exactly the kind of
+    // difference that survives.
     pub fn close_all_bridges(&mut self) {
-        let s = self.sched();
-        if s.is_nil() {
-            return;
-        }
-        let base = self.mark();
-        let si = self.push(s);
-        let ids = self.slot(self.r(si), SC_PORTS);
-        let ii = self.push(ids);
-        let n = self.vec_count(self.r(ii));
-        for k in 0..n {
-            let id = fx(self.vec_nth(self.r(ii), k, NIL));
-            let p = self.port_by_id(id);
-            if p.is_nil() {
-                continue;
-            }
-            let pi = self.push(p);
-            if crosses_a_heap(fx(self.slot(self.r(pi), PT_KIND)))
-                && fx(self.slot(self.r(pi), PT_STATE)) != P_CLOSED
-            {
-                self.set(self.r(pi), PT_STATE, Value::fixnum(P_CLOSED));
-                let pv = self.r(pi);
-                self.close_side_effects(pv);
-            }
-            self.pop_to(pi);
-        }
-        self.pop_to(base);
+        self.close_bridges();
     }
+
 }

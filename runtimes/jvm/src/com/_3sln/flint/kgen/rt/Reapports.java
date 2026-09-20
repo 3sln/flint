@@ -103,4 +103,101 @@ public final class Reapports {
         reapChannels(rt, si);
         rt.popTo(base);
     }
+    /// EVERYTHING THAT FOLLOWS FROM ONE END CLOSING, however it closed.
+    /// 
+    /// Two things happen, and only the first depends on what kind of port it is.
+    /// 
+    /// A BRIDGE MUST TELL THE HOST, and a close IS a release -- the prompt one.
+    /// Dropping the last reference and waiting for the collector gets here too,
+    /// through `reap-all`, but that is the backstop rather than the mechanism:
+    /// it is not prompt, and a host holding a socket until then is a real cost.
+    /// The id LEAVES `SC_BRIDGES` between the two events, so the sweep does not
+    /// send a second release for a port already let go. A channel says nothing
+    /// to anybody -- both its ends are in this heap.
+    /// 
+    /// THE PEER BECOMES HALF-CLOSED, NOT CLOSED, and that is the subtle half.
+    /// It may still drain what is already in its buffer and only then read
+    /// end-of-stream; the channel is not finished until both ends are. Closing
+    /// it here would throw away messages that were legitimately sent.
+    /// 
+    /// AND ONLY AN OPEN PEER IS MOVED. A peer already closed or orphaned has
+    /// had something more specific happen to it, and `P_HALF` would overwrite
+    /// it -- the same reading `reap-all` takes when it refuses to orphan a peer
+    /// that was tidily closed. It is not woken either: the `wake-on` is inside
+    /// the same test, because there is nothing new for it to learn.
+    /// 
+    /// NAMED `close-effects` and not `close-side-effects`: the latter is the
+    /// word each runtime exposes, and a kin function of that name would shadow
+    /// it under whole-project generation. Same split as `reap-ports` over
+    /// `reap-all`.
+    public static long closeEffects(Rt rt, long p) {
+        int base = rt.mark();
+        int pi = rt.push(p);
+        if (Conc.crossesAHeap(Val.asFixnum(rt.slot(rt.r(pi), Conc.PT_KIND)))) {
+            long id = Val.asFixnum(rt.slot(rt.r(pi), Conc.PT_ID));
+            Conc.pushEvent(rt, Conc.EV_CLOSED, id, 0, Val.NIL);
+            Conc.forgetBridge(rt, id);
+            Conc.pushEvent(rt, Conc.EV_RELEASE, id, 0, Val.NIL);
+        }
+        Conc.wakeOn(rt, rt.r(pi));
+        long peer = Conc.peerOf(rt, rt.r(pi));
+        if (!Val.isNil(peer) && (Val.asFixnum(rt.slot(peer, Conc.PT_STATE)) == Conc.P_OPEN)) {
+            rt.setSlot(Val.asHeap(peer), Conc.PT_STATE, Val.fixnum(Conc.P_HALF));
+            Conc.wakeOn(rt, peer);
+        }
+        rt.popTo(base);
+        return Val.NIL;
+    }
+    /// CLOSE EVERY BRIDGE THIS SANDBOX HOLDS, which is what ending it means.
+    /// 
+    /// NAMED `close-bridges` AND NOT `close-all-bridges`, which is the word each
+    /// runtime still exposes: a kin function shadows a vocabulary word of the
+    /// same name under whole-project generation, and `sched-drive` needs the
+    /// WORD so the scheduler drivers can stub it. Same split as `reap-ports`
+    /// (the word) over `reap-all` (this file).
+    /// 
+    /// A bridge crosses a heap, so the other side is somebody else's and has to
+    /// be TOLD; a channel lives entirely in here and simply stops mattering.
+    /// That is the whole of the `crosses-a-heap` test -- the list is walked
+    /// whole and only the bridges are acted on.
+    /// 
+    /// ALREADY-CLOSED ENDS ARE SKIPPED, and not as an optimisation: the side
+    /// effects push an `EV_CLOSED`/`EV_RELEASE` pair, and a second pair for a
+    /// port already let go would make the host's count of holders wrong. One
+    /// release per retain is the property, and the state test is what keeps it.
+    /// 
+    /// ROOTED PER ITERATION. `close-side-effects` pushes events and wakes
+    /// threads, both of which allocate, so the port cannot be held in a local
+    /// across it -- and the id list cannot either, which is why `ii` is a root
+    /// and not a value.
+    /// 
+    /// THE DEFAULT IS `NIL`, and the three copies did not agree on it: native
+    /// passed `NIL` to `vec-nth` and both ports passed `NOT_FOUND`. Nothing
+    /// could reach it -- `k` is bounded by the count -- so it was a difference
+    /// that could not show, which is exactly the kind that survives. Generating
+    /// it settles the question by removing it.
+    public static long closeBridges(Rt rt) {
+        long s = Conc.sched(rt);
+        if (Val.isNil(s)) {
+            return Val.NIL;
+        }
+        int base = rt.mark();
+        int si = rt.push(s);
+        int ii = rt.push(rt.slot(rt.r(si), Conc.SC_PORTS));
+        int n = vecCount(rt, rt.r(ii));
+        for (int k = 0; k < n; k++) {
+            long p = Conc.portById(rt, Val.asFixnum(vecNth(rt, rt.r(ii), k, Val.NIL)));
+            if (Val.isNil(p)) {
+                continue;
+            }
+            int pi = rt.push(p);
+            if (Conc.crossesAHeap(Val.asFixnum(rt.slot(rt.r(pi), Conc.PT_KIND))) && (Val.asFixnum(rt.slot(rt.r(pi), Conc.PT_STATE)) != Conc.P_CLOSED)) {
+                rt.setSlot(Val.asHeap(rt.r(pi)), Conc.PT_STATE, Val.fixnum(Conc.P_CLOSED));
+                Conc.closeSideEffects(rt, rt.r(pi));
+            }
+            rt.popTo(pi);
+        }
+        rt.popTo(base);
+        return Val.NIL;
+    }
 }

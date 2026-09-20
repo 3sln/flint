@@ -612,4 +612,45 @@ public static class Sched {
         rt.PopTo(@base);
         return Park(rt, pv);
     }
+    /// END the current thread where it stands, TAKING ITS WAITER WITH IT.
+    /// 
+    /// For the one case that is not an ordinary return: a top-level form asked
+    /// the host while the program was still initialising, so the stack it is
+    /// parked on is about to be cut back and nothing may try to resume it.
+    /// 
+    /// THE WAITER IS THE HALF THAT ACTUALLY BIT, and it is the only reason this
+    /// is a function rather than one `set-slot`. Marking the thread DONE is not
+    /// enough: `park-on-port` registered a waiter naming this thread, and the
+    /// next `host-deliver` or `host-continue` fires that waiter and puts the
+    /// thread back to RUNNABLE. It was observed doing exactly that -- DONE at
+    /// the end of one `drive`, RUNNABLE at the start of the next, with nothing
+    /// in between but the host delivering the bind.
+    /// 
+    /// So the drivers file does not stop at the status. It wakes the port
+    /// AFTERWARDS and asks the status again, which is the only field here that
+    /// separates freeing the waiter from merely marking the thread.
+    /// 
+    /// BOTH HALVES OF THE SAVED STATE GO, not just the value stack. A thread
+    /// holding frames without operands would be resumed onto frames that do not
+    /// match, which is a worse failure than the one this prevents.
+    /// 
+    /// A NIL CURRENT THREAD IS NOT AN ERROR, the same reading `park-on-port`
+    /// takes: the runtime can park during startup before a scheduler exists,
+    /// and there is then simply no thread slot to clear.
+    public static long AbandonCurrentThread(Rt rt) {
+        long th = Conc.CurrentThread(rt);
+        if (Val.IsNil(th)) {
+            return Val.Nil;
+        }
+        rt.SetSlot(Val.AsHeap(th), Conc.TH_STATUS, Val.Fixnum(Conc.ST_DONE));
+        rt.SetSlot(Val.AsHeap(th), Conc.TH_STACK, Val.Nil);
+        rt.SetSlot(Val.AsHeap(th), Conc.TH_FRAMES, Val.Nil);
+        rt.SetSlot(Val.AsHeap(th), Conc.TH_PARK_ON, Val.Nil);
+        long token = Val.AsFixnum(rt.Slot(th, Conc.TH_TOKEN));
+        if (token >= 0) {
+            FreeWaiter(rt, token);
+            rt.SetSlot(Val.AsHeap(th), Conc.TH_TOKEN, Val.Fixnum(0 - 1));
+        }
+        return Val.Nil;
+    }
 }

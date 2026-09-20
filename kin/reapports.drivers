@@ -22,6 +22,15 @@ mod conc {
     pub const SC_BRIDGES: u32 = 0;
     pub const SC_PORTS: u32 = 1;
     pub const PT_STATE: u32 = 0;
+    // A TOY 2, beside the id at 1. `crosses_a_heap` is the whole of what
+    // separates a bridge from a channel, so the mock needs a kind to test.
+    pub const PT_KIND: u32 = 2;
+    // The toy row is [state, id, kind], so the id IS slot 1 -- which `wake_on`
+    // already read. `P_OPEN`/`P_HALF` are the real values.
+    pub const PT_ID: u32 = 1;
+    pub const P_OPEN: i64 = 1;
+    pub const P_HALF: i64 = 4;
+    pub fn crosses_a_heap(kind: i64) -> bool { kind == 1 }
     pub const P_CLOSED: i64 = 2;
     pub const P_ORPHANED: i64 = 5;
     pub const EV_CLOSED: i64 = 3;
@@ -40,6 +49,10 @@ struct Rt {
     events: Vec<(i64, i64)>,
     failed: Vec<i64>,
     woken: Vec<i64>,
+    // WHICH PORTS HAD SIDE EFFECTS FIRED, in order. A count would not do: the
+    // question is whether an ALREADY-CLOSED bridge fires a second time, and
+    // that is a question about which ids appear.
+    closed_fx: Vec<i64>,
     allocs: u32,
     sched_v: Value,
     // `empty_vec` is `&self` in the real runtime -- the empty vector is a
@@ -54,8 +67,8 @@ struct Rt {
 // fixture does not have to model a heap to model the event.
 fn mk(bridges: &[i64], ports: &[i64], dead: &[i64], peer_state: i64) -> Rt {
     let mut rt = Rt { objs: vec![], roots: vec![], ports: vec![], pairs: vec![],
-                      events: vec![], failed: vec![], woken: vec![], allocs: 0,
-                      sched_v: NIL, empty: NIL };
+                      events: vec![], failed: vec![], woken: vec![], closed_fx: vec![],
+                      allocs: 0, sched_v: NIL, empty: NIL };
     rt.empty = rt.obj(vec![]);
     let bs: Vec<Value> = bridges.iter().map(|i| Value::fixnum(*i)).collect();
     let ps: Vec<Value> = ports.iter().map(|i| Value::fixnum(*i)).collect();
@@ -65,7 +78,9 @@ fn mk(bridges: &[i64], ports: &[i64], dead: &[i64], peer_state: i64) -> Rt {
     for id in bridges.iter().chain(ports.iter()) {
         if dead.contains(id) { continue; }
         let st = if ports.contains(id) { peer_state } else { 1 };
-        let row = rt.obj(vec![Value::fixnum(st), Value::fixnum(*id)]);
+        // Slot 2 is the KIND: anything in `bridges` crosses a heap.
+        let kind = if bridges.contains(id) { 1 } else { 0 };
+        let row = rt.obj(vec![Value::fixnum(st), Value::fixnum(*id), Value::fixnum(kind)]);
         rt.ports.push((*id, row));
     }
     // Set-up allocations are not the subject. Zeroed here so the counter reads
@@ -102,6 +117,28 @@ impl Rt {
         NIL
     }
     fn push_event(&mut self, kind: i64, a: i64, _b: i64, _p: Value) { self.events.push((kind, a)); }
+    // THE OTHER END, looked up SYMMETRICALLY: `pairs` records one direction
+    // and a channel has two, so asking from either side must answer.
+    fn peer_of(&mut self, p: Value) -> Value {
+        let id = self.slot(p, conc::PT_ID).as_fixnum();
+        for (a, b) in self.pairs.clone() {
+            if a == id { return self.port_by_id(b); }
+            if b == id { return self.port_by_id(a); }
+        }
+        NIL
+    }
+    fn forget_bridge(&mut self, id: i64) {
+        let s = self.sched();
+        let bv = self.slot(s, conc::SC_BRIDGES);
+        let kept: Vec<Value> = self.objs[bv.0 as usize].clone().into_iter()
+            .filter(|x| x.as_fixnum() != id).collect();
+        let nv = self.obj(kept);
+        self.set(s, conc::SC_BRIDGES, nv);
+    }
+    fn close_side_effects(&mut self, p: Value) {
+        let id = self.slot(p, 1).as_fixnum();
+        self.closed_fx.push(id);
+    }
     fn wake_on(&mut self, p: Value) { let id = self.slot(p, 1).as_fixnum(); self.woken.push(id); }
     fn fail_waiters_on(&mut self, p: Value, _m: &str) {
         let id = self.slot(p, 1).as_fixnum();
@@ -154,7 +191,95 @@ fn main() {
     let peer = d.port_by_id(20);
     let r4 = format!("{} {} {}", d.slot(peer, conc::PT_STATE).as_fixnum(), d.failed[0], d.woken[0]);
 
-    println!("{} {} {} {}", r1, r2, r3, r4);
+    // 5. CLOSING EVERY BRIDGE. Four ports, and THREE OF THE FOUR FIELDS CAN
+    //    FAIL -- which is the point, because "it closed the bridge" passes
+    //    under any implementation including one that closes everything.
+    //
+    //      10  bridge, open        -> CLOSED, side effects ONCE
+    //      11  CHANNEL, open       -> untouched. Catches closing everything
+    //      12  bridge, ALREADY closed -> no second side effect. Catches a
+    //                                 missing state test, which would tell the
+    //                                 host a port was released twice
+    //      13  DEAD, no row        -> skipped. Catches a missing nil check
+    let mut e = mk(&[], &[], &[], 1);
+    let p10 = e.obj(vec![Value::fixnum(1), Value::fixnum(10), Value::fixnum(1)]);
+    let p11 = e.obj(vec![Value::fixnum(1), Value::fixnum(11), Value::fixnum(0)]);
+    let p12 = e.obj(vec![Value::fixnum(conc::P_CLOSED), Value::fixnum(12), Value::fixnum(1)]);
+    e.ports.push((10, p10));
+    e.ports.push((11, p11));
+    e.ports.push((12, p12));
+    let ids = e.obj(vec![Value::fixnum(10), Value::fixnum(11),
+                         Value::fixnum(12), Value::fixnum(13)]);
+    let none = e.obj(vec![]);
+    e.sched_v = e.obj(vec![none, ids]);
+    e.close_bridges();
+    let fx: Vec<String> = e.closed_fx.iter().map(|i| i.to_string()).collect();
+    let r5 = format!("{} {} {} {}",
+                     e.slot(p10, conc::PT_STATE).as_fixnum(),
+                     e.slot(p11, conc::PT_STATE).as_fixnum(),
+                     e.slot(p12, conc::PT_STATE).as_fixnum(),
+                     if fx.is_empty() { "-".to_string() } else { fx.join(",") });
+
+    // 6. NO SCHEDULER is not an error. Reaching the next line is the assertion.
+    let mut f = mk(&[], &[], &[], 1);
+    f.sched_v = NIL;
+    f.close_bridges();
+    let r6 = "1";
+
+    // 7-10. WHAT FOLLOWS FROM ONE END CLOSING. Each case is a fresh fixture,
+    //        and each field below moves under a DIFFERENT mistake.
+    let fmt = |rt: &Rt, peer: Value| -> String {
+        let ev: Vec<String> = rt.events.iter().map(|(k, a)| format!("{k}:{a}")).collect();
+        let wk: Vec<String> = rt.woken.iter().map(|i| i.to_string()).collect();
+        let s = rt.sched_v;
+        let bn = rt.vec_count(rt.slot(s, conc::SC_BRIDGES));
+        format!("{} {} {} {}",
+                if ev.is_empty() { "-".to_string() } else { ev.join(",") },
+                bn,
+                if wk.is_empty() { "-".to_string() } else { wk.join(",") },
+                if peer.is_nil() { "-".to_string() }
+                else { rt.slot(peer, conc::PT_STATE).as_fixnum().to_string() })
+    };
+    // 7. A BRIDGE, peer OPEN. The host hears CLOSED then RELEASE, the id has
+    //    LEFT the held list between them, both ends are woken, and the peer is
+    //    HALF-closed.
+    let mut g = mk(&[30], &[], &[], 1);
+    let p31 = g.obj(vec![Value::fixnum(conc::P_OPEN), Value::fixnum(31), Value::fixnum(0)]);
+    g.ports.push((31, p31));
+    g.pairs.push((30, 31));
+    let p30 = g.port_by_id(30);
+    g.close_effects(p30);
+    let r7 = fmt(&g, p31);
+
+    // 8. A CHANNEL. Both ends are in this heap, so THE HOST HEARS NOTHING --
+    //    the field that refuses an implementation which events unconditionally.
+    let mut h = mk(&[], &[40], &[], conc::P_OPEN);
+    let p41 = h.obj(vec![Value::fixnum(conc::P_OPEN), Value::fixnum(41), Value::fixnum(0)]);
+    h.ports.push((41, p41));
+    h.pairs.push((40, 41));
+    let p40 = h.port_by_id(40);
+    h.close_effects(p40);
+    let r8 = fmt(&h, p41);
+
+    // 9. THE PEER IS ALREADY CLOSED. It must NOT be moved to HALF -- a tidy
+    //    close outranks a half -- and it must NOT be woken, because there is
+    //    nothing new for it to learn. Both are the same `if`, and only the
+    //    woken list can tell whether the test guards the wake too.
+    let mut i = mk(&[50], &[], &[], 1);
+    let p51 = i.obj(vec![Value::fixnum(conc::P_CLOSED), Value::fixnum(51), Value::fixnum(0)]);
+    i.ports.push((51, p51));
+    i.pairs.push((50, 51));
+    let p50 = i.port_by_id(50);
+    i.close_effects(p50);
+    let r9 = fmt(&i, p51);
+
+    // 10. NO PEER AT ALL. Reaching the line is the assertion.
+    let mut j = mk(&[60], &[], &[], 1);
+    let p60 = j.port_by_id(60);
+    j.close_effects(p60);
+    let r10 = fmt(&j, NIL);
+
+    println!("{} {} {} {} {} {} {} {} {} {}", r1, r2, r3, r4, r5, r6, r7, r8, r9, r10);
 }
 --java-head
     // THE SAME TOY AS THE RUST HEAD, field for field and case for case. The
@@ -171,6 +296,30 @@ fn main() {
     }
     static final class Conc {
         static final int SC_BRIDGES = 0, SC_PORTS = 1, PT_STATE = 0;
+        // A TOY 2, beside the id at 1 -- see the Rust head.
+        static final int PT_KIND = 2;
+        // The toy row is [state, id, kind] -- see the Rust head.
+        static final int PT_ID = 1;
+        static final long P_OPEN = 1, P_HALF = 4;
+        static long peerOf(Rt rt, long p) {
+            long id = rt.slot(p, PT_ID);
+            for (int i = 0; i < rt.deadIds.size(); i++) {
+                if (rt.deadIds.get(i) == id) return portById(rt, rt.peerIds.get(i));
+                if (rt.peerIds.get(i) == id) return portById(rt, rt.deadIds.get(i));
+            }
+            return NIL;
+        }
+        static void forgetBridge(Rt rt, long id) {
+            long bv = rt.slot(rt.schedV, SC_BRIDGES);
+            long[] row = rt.objs.get((int) bv);
+            java.util.List<Long> kept = new java.util.ArrayList<>();
+            for (long x : row) if (x != id) kept.add(x);
+            long[] out = new long[kept.size()];
+            for (int i = 0; i < out.length; i++) out[i] = kept.get(i);
+            rt.setSlot(rt.schedV, SC_BRIDGES, rt.obj(out));
+        }
+        static boolean crossesAHeap(long kind) { return kind == 1; }
+        static void closeSideEffects(Rt rt, long p) { rt.closedFx.add(rt.slot(p, 1)); }
         static final long P_CLOSED = 2, P_ORPHANED = 5, EV_CLOSED = 3, EV_RELEASE = 5;
         static long sched(Rt rt) { return rt.schedV; }
         static long portById(Rt rt, long id) {
@@ -214,6 +363,8 @@ fn main() {
         java.util.List<Long> evId = new java.util.ArrayList<>();
         java.util.List<Long> failed = new java.util.ArrayList<>();
         java.util.List<Long> woken = new java.util.ArrayList<>();
+        // WHICH PORTS HAD SIDE EFFECTS FIRED -- see the Rust head.
+        java.util.List<Long> closedFx = new java.util.ArrayList<>();
         int allocs = 0;
         long schedV = NIL;
         // The shared empty vector -- see the Rust head.
@@ -238,7 +389,9 @@ fn main() {
             if (isDead) continue;
             boolean isPort = false;
             for (long p : ports) if (p == id) isPort = true;
-            long row = rt.obj(new long[]{isPort ? peerState : 1, id});
+            boolean isBridge = false;
+            for (long b : bridges) if (b == id) isBridge = true;
+            long row = rt.obj(new long[]{isPort ? peerState : 1, id, isBridge ? 1 : 0});
             rt.portIds.add(id); rt.portVals.add(row);
         }
         rt.allocs = 0;
@@ -278,7 +431,73 @@ fn main() {
         long dpeer = Conc.portById(d, 20);
         String r4 = d.slot(dpeer, Conc.PT_STATE) + " " + d.failed.get(0) + " " + d.woken.get(0);
 
-        System.out.println(r1 + " " + r2 + " " + r3 + " " + r4);
+        // 5. CLOSING EVERY BRIDGE -- see the Rust case for what each id is for.
+        Rt e = mk(new long[0], new long[0], new long[0], 1);
+        long p10 = e.obj(new long[]{1, 10, 1});
+        long p11 = e.obj(new long[]{1, 11, 0});
+        long p12 = e.obj(new long[]{Conc.P_CLOSED, 12, 1});
+        e.portIds.add(10L); e.portVals.add(p10);
+        e.portIds.add(11L); e.portVals.add(p11);
+        e.portIds.add(12L); e.portVals.add(p12);
+        long ids = e.obj(new long[]{10, 11, 12, 13});
+        long none = e.obj(new long[0]);
+        e.schedV = e.obj(new long[]{none, ids});
+        closeBridges(e);
+        StringBuilder fx = new StringBuilder();
+        for (long id : e.closedFx) { if (fx.length() > 0) fx.append(','); fx.append(id); }
+        String r5 = e.slot(p10, Conc.PT_STATE) + " " + e.slot(p11, Conc.PT_STATE)
+                  + " " + e.slot(p12, Conc.PT_STATE)
+                  + " " + (fx.length() == 0 ? "-" : fx.toString());
+
+        // 6. NO SCHEDULER is not an error.
+        Rt f = mk(new long[0], new long[0], new long[0], 1);
+        f.schedV = NIL;
+        closeBridges(f);
+        String r6 = "1";
+
+        // 7-10. WHAT FOLLOWS FROM ONE END CLOSING -- see the Rust cases.
+        Rt g = mk(new long[]{30}, new long[0], new long[0], 1);
+        long g31 = g.obj(new long[]{Conc.P_OPEN, 31, 0});
+        g.portIds.add(31L); g.portVals.add(g31);
+        g.deadIds.add(30L); g.peerIds.add(31L);
+        closeEffects(g, Conc.portById(g, 30));
+        String r7 = fmtClose(g, g31);
+
+        Rt h = mk(new long[0], new long[]{40}, new long[0], Conc.P_OPEN);
+        long h41 = h.obj(new long[]{Conc.P_OPEN, 41, 0});
+        h.portIds.add(41L); h.portVals.add(h41);
+        h.deadIds.add(40L); h.peerIds.add(41L);
+        closeEffects(h, Conc.portById(h, 40));
+        String r8 = fmtClose(h, h41);
+
+        Rt i2 = mk(new long[]{50}, new long[0], new long[0], 1);
+        long i51 = i2.obj(new long[]{Conc.P_CLOSED, 51, 0});
+        i2.portIds.add(51L); i2.portVals.add(i51);
+        i2.deadIds.add(50L); i2.peerIds.add(51L);
+        closeEffects(i2, Conc.portById(i2, 50));
+        String r9 = fmtClose(i2, i51);
+
+        Rt j = mk(new long[]{60}, new long[0], new long[0], 1);
+        closeEffects(j, Conc.portById(j, 60));
+        String r10 = fmtClose(j, NIL);
+
+        System.out.println(r1 + " " + r2 + " " + r3 + " " + r4 + " " + r5 + " " + r6
+                           + " " + r7 + " " + r8 + " " + r9 + " " + r10);
+    }
+
+    static String fmtClose(Rt rt, long peer) {
+        StringBuilder ev = new StringBuilder();
+        for (int i = 0; i < rt.evKind.size(); i++) {
+            if (ev.length() > 0) ev.append(',');
+            ev.append(rt.evKind.get(i)).append(':').append(rt.evId.get(i));
+        }
+        StringBuilder wk = new StringBuilder();
+        for (long w : rt.woken) { if (wk.length() > 0) wk.append(','); wk.append(w); }
+        long bv = rt.slot(rt.schedV, Conc.SC_BRIDGES);
+        int bn = rt.objs.get((int) bv).length;
+        return (ev.length() == 0 ? "-" : ev.toString()) + " " + bn + " "
+             + (wk.length() == 0 ? "-" : wk.toString()) + " "
+             + (peer == NIL ? "-" : String.valueOf(rt.slot(peer, Conc.PT_STATE)));
     }
 --csharp-head
     // THE SAME TOY AGAIN, in this target's spelling.
@@ -292,6 +511,28 @@ fn main() {
     }
     static class Conc {
         public const int SC_BRIDGES = 0, SC_PORTS = 1, PT_STATE = 0;
+        // A TOY 2, beside the id at 1 -- see the Rust head.
+        public const int PT_KIND = 2;
+        // The toy row is [state, id, kind] -- see the Rust head.
+        public const int PT_ID = 1;
+        public const long P_OPEN = 1, P_HALF = 4;
+        public static long PeerOf(Rt rt, long p) {
+            long id = rt.Slot(p, PT_ID);
+            for (int i = 0; i < rt.DeadIds.Count; i++) {
+                if (rt.DeadIds[i] == id) return PortById(rt, rt.PeerIds[i]);
+                if (rt.PeerIds[i] == id) return PortById(rt, rt.DeadIds[i]);
+            }
+            return Val.Nil;
+        }
+        public static void ForgetBridge(Rt rt, long id) {
+            long bv = rt.Slot(rt.SchedV, SC_BRIDGES);
+            var row = rt.Objs[(int) bv];
+            var kept = new System.Collections.Generic.List<long>();
+            foreach (long x in row) if (x != id) kept.Add(x);
+            rt.SetSlot(rt.SchedV, SC_BRIDGES, rt.MakeObj(kept.ToArray()));
+        }
+        public static bool CrossesAHeap(long kind) => kind == 1;
+        public static void CloseSideEffects(Rt rt, long p) { rt.ClosedFx.Add(rt.Slot(p, 1)); }
         public const long P_CLOSED = 2, P_ORPHANED = 5, EV_CLOSED = 3, EV_RELEASE = 5;
         public static long Sched(Rt rt) => rt.SchedV;
         public static long PortById(Rt rt, long id) {
@@ -335,6 +576,8 @@ fn main() {
         public System.Collections.Generic.List<long> EvId = new System.Collections.Generic.List<long>();
         public System.Collections.Generic.List<long> Failed = new System.Collections.Generic.List<long>();
         public System.Collections.Generic.List<long> Woken = new System.Collections.Generic.List<long>();
+        // WHICH PORTS HAD SIDE EFFECTS FIRED -- see the Rust head.
+        public System.Collections.Generic.List<long> ClosedFx = new System.Collections.Generic.List<long>();
         public int Allocs = 0;
         public long SchedV = unchecked((long)0xFFFF000000000000UL);
         // The shared empty vector -- see the Rust head.
@@ -362,7 +605,9 @@ fn main() {
             if (isDead) continue;
             bool isPort = false;
             foreach (var p in ports) if (p == id) isPort = true;
-            long row = rt.MakeObj(new long[]{ isPort ? peerState : 1, id });
+            bool isBridge = false;
+            foreach (long b in bridges) if (b == id) isBridge = true;
+            long row = rt.MakeObj(new long[]{ isPort ? peerState : 1, id, isBridge ? 1 : 0 });
             rt.PortIds.Add(id); rt.PortVals.Add(row);
         }
         rt.Allocs = 0;
@@ -395,10 +640,73 @@ fn main() {
         long dpeer = Conc.PortById(d, 20);
         string r4 = d.Slot(dpeer, Conc.PT_STATE) + " " + d.Failed[0] + " " + d.Woken[0];
 
-        System.Console.WriteLine(r1 + " " + r2 + " " + r3 + " " + r4);
+        // 5. CLOSING EVERY BRIDGE -- see the Rust case for what each id is for.
+        Rt e = Mk(new long[0], new long[0], new long[0], 1);
+        long p10 = e.MakeObj(new long[]{1, 10, 1});
+        long p11 = e.MakeObj(new long[]{1, 11, 0});
+        long p12 = e.MakeObj(new long[]{Conc.P_CLOSED, 12, 1});
+        e.PortIds.Add(10); e.PortVals.Add(p10);
+        e.PortIds.Add(11); e.PortVals.Add(p11);
+        e.PortIds.Add(12); e.PortVals.Add(p12);
+        long ids = e.MakeObj(new long[]{10, 11, 12, 13});
+        long none = e.MakeObj(new long[0]);
+        e.SchedV = e.MakeObj(new long[]{none, ids});
+        CloseBridges(e);
+        var fxs = new System.Collections.Generic.List<string>();
+        foreach (long id in e.ClosedFx) fxs.Add(id.ToString());
+        string r5 = e.Slot(p10, Conc.PT_STATE) + " " + e.Slot(p11, Conc.PT_STATE)
+                  + " " + e.Slot(p12, Conc.PT_STATE)
+                  + " " + (fxs.Count == 0 ? "-" : string.Join(",", fxs));
+
+        // 6. NO SCHEDULER is not an error.
+        Rt f = Mk(new long[0], new long[0], new long[0], 1);
+        f.SchedV = Val.Nil;
+        CloseBridges(f);
+        string r6 = "1";
+
+        // 7-10. WHAT FOLLOWS FROM ONE END CLOSING -- see the Rust cases.
+        Rt g = Mk(new long[]{30}, new long[0], new long[0], 1);
+        long g31 = g.MakeObj(new long[]{Conc.P_OPEN, 31, 0});
+        g.PortIds.Add(31); g.PortVals.Add(g31);
+        g.DeadIds.Add(30); g.PeerIds.Add(31);
+        CloseEffects(g, Conc.PortById(g, 30));
+        string r7 = FmtClose(g, g31);
+
+        Rt h = Mk(new long[0], new long[]{40}, new long[0], Conc.P_OPEN);
+        long h41 = h.MakeObj(new long[]{Conc.P_OPEN, 41, 0});
+        h.PortIds.Add(41); h.PortVals.Add(h41);
+        h.DeadIds.Add(40); h.PeerIds.Add(41);
+        CloseEffects(h, Conc.PortById(h, 40));
+        string r8 = FmtClose(h, h41);
+
+        Rt i2 = Mk(new long[]{50}, new long[0], new long[0], 1);
+        long i51 = i2.MakeObj(new long[]{Conc.P_CLOSED, 51, 0});
+        i2.PortIds.Add(51); i2.PortVals.Add(i51);
+        i2.DeadIds.Add(50); i2.PeerIds.Add(51);
+        CloseEffects(i2, Conc.PortById(i2, 50));
+        string r9 = FmtClose(i2, i51);
+
+        Rt j = Mk(new long[]{60}, new long[0], new long[0], 1);
+        CloseEffects(j, Conc.PortById(j, 60));
+        string r10 = FmtClose(j, Val.Nil);
+
+        System.Console.WriteLine(r1 + " " + r2 + " " + r3 + " " + r4 + " " + r5 + " " + r6
+                                 + " " + r7 + " " + r8 + " " + r9 + " " + r10);
+    }
+
+    static string FmtClose(Rt rt, long peer) {
+        var ev = new System.Collections.Generic.List<string>();
+        for (int i = 0; i < rt.EvKind.Count; i++) ev.Add(rt.EvKind[i] + ":" + rt.EvId[i]);
+        var wk = new System.Collections.Generic.List<string>();
+        foreach (long w in rt.Woken) wk.Add(w.ToString());
+        long bv = rt.Slot(rt.SchedV, Conc.SC_BRIDGES);
+        int bn = rt.Objs[(int) bv].Length;
+        return (ev.Count == 0 ? "-" : string.Join(",", ev)) + " " + bn + " "
+             + (wk.Count == 0 ? "-" : string.Join(",", wk)) + " "
+             + (peer == Val.Nil ? "-" : rt.Slot(peer, Conc.PT_STATE).ToString());
     }
 --expect
-0 2 2 0 1 1 10 3 11 5 11 1 1 5 20 20 2 20 20
+0 2 2 0 1 1 10 3 11 5 11 1 1 5 20 20 2 20 20 2 1 2 10 1 3:30,5:30 0 30,31 4 - 0 40,41 4 3:50,5:50 0 50 2 3:60,5:60 0 60 -
 --expect-why
 DERIVED FROM THE CONTRACT, not recorded from a run. Four cases, in the order
 the driver prints them.
@@ -455,3 +763,75 @@ so a driver built from the lists and the events alone would have passed the
 exact waste this source was written to remove. The two crashes are failures
 too, just cruder ones: the driver indexes the event and woken lists, and a
 missing entry takes the probe out rather than printing a wrong line.
+
+  --- and case 5, closing every bridge: `<p10> <p11> <p12> <fired>` ---
+
+  close `2`   PORT 10 IS CLOSED. A bridge, open, so it is the one port this
+              function exists to act on. `P_CLOSED` is 2.
+  close `1`   **PORT 11 IS STILL OPEN**, and this is the field that refuses an
+              implementation which closes the list rather than the bridges in
+              it. It is a CHANNEL: both its ends live in this heap, nobody
+              outside is waiting to be told, and closing it here would end a
+              conversation between two green threads that the sandbox shutting
+              its front door has no business ending. `crosses-a-heap` is the
+              whole test, and only this field checks that it is asked.
+  close `2`   PORT 12 WAS ALREADY CLOSED and is unchanged -- which on its own
+              proves nothing, since 2 is what closing it again would also
+              leave. The next field is what makes it mean something.
+  close `10`  **THE SIDE EFFECTS FIRED FOR 10 AND FOR NOTHING ELSE.** Written
+              as the ids in order, not as a count, because the question is
+              WHICH: an implementation missing the `P_CLOSED` test would read
+              `10,12` here and would have told the host that port 12 was
+              closed and released a SECOND time. One release per retain is
+              what makes the host's number a count of holders rather than of
+              arrivals, so a duplicate is not a tidiness problem -- it makes
+              the host let go of a port somebody still holds. Id 13 is in the
+              list with no row at all, so a missing nil check prints nothing
+              here at all rather than a wrong value.
+  close `1`   A NIL SCHEDULER IS NOT AN ERROR. Reaching the line is the
+              assertion, the same reading `park-on-port` takes: the runtime
+              can be torn down before a scheduler was ever built.
+
+  --- and cases 7-10, what follows from one end closing:
+      `<events> <held> <woken> <peer>` ---
+
+  close `3:30,5:30`  CLOSED THEN RELEASE, in that order, both naming the port's
+                     own id. Written as `kind:id` pairs rather than counted,
+                     because the ORDER is part of the contract and a count
+                     cannot see it: swapping the two reads `5:30,3:30` here.
+  close `0`          THE ID HAS LEFT THE HELD LIST. That is what stops the
+                     collector's sweep sending a SECOND release for a port the
+                     program has already let go, and one release per retain is
+                     what makes the host's number a count of holders. (Where
+                     `forget-bridge` sits BETWEEN the two events is not
+                     observable and is not asserted -- it pushes nothing, and
+                     no host can see the interleaving. Saying so beats implying
+                     a field covers it.)
+  close `30,31`      BOTH ENDS WOKEN, this one and the peer.
+  close `4`          THE PEER IS HALF-CLOSED, NOT CLOSED. It may still drain
+                     what is already in its buffer and only then read
+                     end-of-stream; closing it here would throw away messages
+                     that were legitimately sent.
+
+  close `-`          **A CHANNEL SAYS NOTHING TO THE HOST.** Both its ends live
+                     in this heap, so there is nobody outside to tell. This is
+                     the field that refuses an implementation which events
+                     unconditionally -- it reads `3:40,5:40` without the
+                     `crosses-a-heap` test, and every other field in that group
+                     is unchanged.
+  close `0 40,41 4`  ... and everything that does NOT depend on the kind still
+                     happens: both ends woken, peer half-closed.
+
+  close `3:50,5:50 0 50 2`
+                     **A PEER ALREADY CLOSED IS LEFT ENTIRELY ALONE.** Not moved
+                     to HALF -- a tidy close outranks a half, the same reading
+                     `reap-all` takes when it refuses to orphan a closed peer --
+                     and NOT WOKEN, because there is nothing new for it to
+                     learn. Both live in one `if`, and the woken list is the
+                     only field that can tell whether the test guards the wake
+                     as well as the write: dropping the test reads
+                     `50,51 4` here.
+  close `3:60,5:60 0 60 -`
+                     NO PEER AT ALL. The bridge half still happens in full;
+                     reaching the line is the assertion for the nil check.
+

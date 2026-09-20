@@ -50,6 +50,9 @@ mod conc {
     pub const TH_RESULT: u32 = 7;
     pub const TH_ENTRY: u32 = 3;
     pub const TH_STACK: u32 = 4;
+    // TH_FRAMES is a TOY 8, free beside the others. What has to agree is
+    // the three harnesses, not this and the real `Conc`.
+    pub const TH_FRAMES: u32 = 8;
     pub const TH_FAIL: u32 = 5;
     // THE WAITER TABLE. Toy indices -- what matters is that all three
     // harnesses agree with each other, not with the real `Conc`.
@@ -461,6 +464,46 @@ fn main() {
         rt.sched_drive();
         out.push_str(&format!("{}{}", rt.status, rt.closed as u32));
     }
+    out.push(' ');
+    // 19. ABANDONING THE CURRENT THREAD, and THE WAITER IS THE POINT.
+    //
+    //     Marking a thread DONE is the obvious half and the one that passes
+    //     either way. The last field is the one that does not: it WAKES the
+    //     port afterwards, and a waiter still naming this thread would put it
+    //     straight back to RUNNABLE -- which is the failure exactly as it was
+    //     observed, DONE at the end of one drive and RUNNABLE at the start of
+    //     the next.
+    {
+        let ap = rt.obj(vec![fx(1)], true);
+        // NINE SLOTS, so the toy `TH_FRAMES` at 8 exists to be cleared.
+        let at = rt.obj(vec![fx(conc::ST_RUNNABLE), NIL, NIL, NIL, NIL, NIL,
+                             fx(-1), NIL, NIL], false);
+        let ats = rt.obj(vec![fx(1), at], false);
+        let aws = rt.obj(vec![fx(0)], false);
+        let asc = rt.obj(vec![ats, fx(0), evs, fx(0), aws, fx(-1)], false);
+        rt.sched_id = Some(asc.0 as usize);
+        rt.park_on = NIL;
+        rt.thrown = NIL;
+        rt.park_on_port(1, ap);
+        // SOMETHING TO LOSE. Both saved halves start non-nil, or "cleared"
+        // and "never set" are the same observation.
+        rt.set(at, conc::TH_STACK, Value(42));
+        rt.set(at, conc::TH_FRAMES, Value(43));
+        rt.abandon_current_thread();
+        out.push_str(&format!("{},{},{},{},{}",
+            rt.slot(at, conc::TH_STATUS).as_fixnum(),
+            rt.slot(at, conc::TH_TOKEN).as_fixnum(),
+            rt.slot(at, conc::TH_STACK).is_nil() as u32,
+            rt.slot(at, conc::TH_FRAMES).is_nil() as u32,
+            rt.outstanding_waiters()));
+        rt.wake_on(ap);
+        out.push_str(&format!(",{}", rt.slot(at, conc::TH_STATUS).as_fixnum()));
+        // AND A NIL SCHEDULER IS NOT AN ERROR. Reaching the next line is the
+        // assertion; a runtime that indexed into nil would not.
+        rt.sched_id = None;
+        rt.abandon_current_thread();
+        out.push_str(",1");
+    }
     println!("{out}");
 }
 --java-head
@@ -475,6 +518,8 @@ fn main() {
         // WHAT `runOne` CALLS -- see the note in the Rust head. Each records a
         // LETTER, and the trace is what the expected answer asserts.
         static final int TH_BINDINGS = 2, TH_ENTRY = 3, TH_STACK = 4, TH_FAIL = 5;
+        // TH_FRAMES is a TOY 8, free beside the others.
+        static final int TH_FRAMES = 8;
         static final int TH_TOKEN = 6;
         // A TOY INDEX, matching the other two harnesses rather than `Conc`.
         static final int TH_RESULT = 7;
@@ -803,6 +848,36 @@ fn main() {
             schedDrive(rt);
             out.append(rt.status).append(rt.closed ? 1 : 0);
         }
+        out.append(' ');
+        // 19. ABANDONING THE CURRENT THREAD, and THE WAITER IS THE POINT. The
+        //     last field wakes the port afterwards: a waiter still naming this
+        //     thread would put it back to RUNNABLE.
+        {
+            long ap = rt.obj(new long[]{ 1 }, true);
+            // NINE SLOTS, so the toy TH_FRAMES at 8 exists to be cleared.
+            long at = rt.obj(new long[]{ Conc.ST_RUNNABLE, NIL, NIL, NIL, NIL,
+                                         NIL, -1, NIL, NIL }, false);
+            long ats = rt.obj(new long[]{ 1, at }, false);
+            long aws = rt.obj(new long[]{ 0 }, false);
+            long asc = rt.obj(new long[]{ ats, 0, evs, 0, aws, -1 }, false);
+            rt.schedId = (int) asc;
+            rt.parkOn = NIL;
+            rt.thrown = NIL;
+            parkOnPort(rt, 1, ap);
+            rt.setSlot(at, Conc.TH_STACK, 42);
+            rt.setSlot(at, Conc.TH_FRAMES, 43);
+            abandonCurrentThread(rt);
+            out.append(rt.slot(at, Conc.TH_STATUS)).append(',')
+               .append(rt.slot(at, Conc.TH_TOKEN)).append(',')
+               .append(rt.slot(at, Conc.TH_STACK) == NIL ? 1 : 0).append(',')
+               .append(rt.slot(at, Conc.TH_FRAMES) == NIL ? 1 : 0).append(',')
+               .append(outstandingWaiters(rt));
+            wakeOn(rt, ap);
+            out.append(',').append(rt.slot(at, Conc.TH_STATUS));
+            rt.schedId = -1;
+            abandonCurrentThread(rt);
+            out.append(",1");
+        }
         System.out.println(out.toString());
     }
 --csharp-head
@@ -816,6 +891,8 @@ fn main() {
         internal static bool CrossesAHeap(long kind) => kind == 1;
         // WHAT `RunOne` CALLS -- see the note in the Rust head.
         internal const int TH_BINDINGS = 2, TH_ENTRY = 3, TH_STACK = 4, TH_FAIL = 5;
+        // TH_FRAMES is a TOY 8, free beside the others.
+        internal const int TH_FRAMES = 8;
         internal const int TH_TOKEN = 6;
         // A TOY INDEX, matching the other two harnesses rather than `Conc`.
         internal const int TH_RESULT = 7;
@@ -1137,10 +1214,40 @@ fn main() {
             SchedDrive(rt);
             outp.Append(rt.status).Append(rt.Closed ? 1 : 0);
         }
+        outp.Append(' ');
+        // 19. ABANDONING THE CURRENT THREAD, and THE WAITER IS THE POINT. The
+        //     last field wakes the port afterwards: a waiter still naming this
+        //     thread would put it back to RUNNABLE.
+        {
+            long ap = rt.MakeObj(new long[]{ 1 }, true);
+            // NINE SLOTS, so the toy TH_FRAMES at 8 exists to be cleared.
+            long at = rt.MakeObj(new long[]{ Conc.ST_RUNNABLE, NIL, NIL, NIL,
+                                             NIL, NIL, -1, NIL, NIL }, false);
+            long ats = rt.MakeObj(new long[]{ 1, at }, false);
+            long aws = rt.MakeObj(new long[]{ 0 }, false);
+            long asc = rt.MakeObj(new long[]{ ats, 0, evs, 0, aws, -1 }, false);
+            rt.SchedId = (int) asc;
+            rt.parkOn = NIL;
+            rt.thrown = NIL;
+            ParkOnPort(rt, 1, ap);
+            rt.SetSlot(at, Conc.TH_STACK, 42);
+            rt.SetSlot(at, Conc.TH_FRAMES, 43);
+            AbandonCurrentThread(rt);
+            outp.Append(rt.Slot(at, Conc.TH_STATUS)).Append(',')
+                .Append(rt.Slot(at, Conc.TH_TOKEN)).Append(',')
+                .Append(rt.Slot(at, Conc.TH_STACK) == NIL ? 1 : 0).Append(',')
+                .Append(rt.Slot(at, Conc.TH_FRAMES) == NIL ? 1 : 0).Append(',')
+                .Append(OutstandingWaiters(rt));
+            WakeOn(rt, ap);
+            outp.Append(',').Append(rt.Slot(at, Conc.TH_STATUS));
+            rt.SchedId = -1;
+            AbandonCurrentThread(rt);
+            outp.Append(",1");
+        }
         System.Console.WriteLine(outp.ToString());
     }
 --expect
--1 1 1 2 0 1 1 0 -1 0 0 1 1 0 200 011 01 01 20 0 0 1 0 0 0 1 1000 0 0 BSREL BSTVL BSTUVL BSTUL - 1,-1,0,2,0 21 1,2,65537,2 1,1,1,1,1,1,-1 0111 011 20
+-1 1 1 2 0 1 1 0 -1 0 0 1 1 0 200 011 01 01 20 0 0 1 0 0 0 1 1000 0 0 BSREL BSTVL BSTUVL BSTUL - 1,-1,0,2,0 21 1,2,65537,2 1,1,1,1,1,1,-1 0111 011 20 3,-1,1,1,0,3,1
 --expect-why
 DERIVED FROM WHAT THE SCHEDULER PROMISES, field by field.
 
@@ -1391,3 +1498,31 @@ DERIVED FROM WHAT THE SCHEDULER PROMISES, field by field.
                     of `> 1` passes both gate rows above and fails this one,
                     which is exactly the off-by-one that would turn a
                     recoverable throw into a dead sandbox.
+
+  --- and abandoning the current thread, `<st>,<tok>,<stack>,<frames>,<live>,<stAfterWake>,<end>` ---
+
+  abandon `3`   ST_DONE. The thread is over, not parked and not runnable.
+  abandon `-1`  THE TOKEN IS CLEARED, so a late answer arriving on it finds
+                nothing to wake. Leaving the token while freeing the waiter
+                would let a REUSED slot -- same index, bumped generation --
+                be mistaken for this thread's.
+  abandon `1`   `TH_STACK` is nil. The driver sets it to 42 first, or
+                "cleared" and "never set" would be the same observation.
+  abandon `1`   `TH_FRAMES` is nil TOO, and it is the field that made this a
+                port rather than a copy: both halves of a saved state travel
+                together, and a thread holding frames without operands would
+                be resumed onto frames its stack does not match.
+  abandon `0`   NO LIVE WAITER. `park-on-port` registered one; if this only
+                marked the thread DONE the count would read 1, and every
+                field above would still pass.
+  abandon `3`   **THE FIELD THAT SEPARATES THE TWO IMPLEMENTATIONS.** The
+                port is WOKEN after the abandon. A waiter still naming this
+                thread makes `wake-waiter` set ST_RUNNABLE, so this field
+                would read `1` -- which is the bug as it was actually seen:
+                DONE at the end of one `drive`, RUNNABLE at the start of the
+                next, with nothing in between but the host delivering a bind.
+                Every other field in this group passes either way.
+  abandon `1`   A NIL SCHEDULER IS NOT AN ERROR. The runtime can park during
+                startup before a scheduler exists. Reaching this line IS the
+                assertion: a target that indexed into nil would not print it.
+

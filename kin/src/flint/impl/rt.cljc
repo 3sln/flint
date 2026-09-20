@@ -355,7 +355,7 @@
     ;; can hold needs a KIND of its own or it cannot be dispatched on at all,
     ;; so the closed set has to name every tag -- these are the ones no source
     ;; had needed until it.
-    TY_BIGINT TY_ITERSEQ TY_CHUNKSEQ TY_PORT TY_THREAD TY_TAGGED TY_OPAQUE
+    TY_BIGINT TY_ITERSEQ TY_CHUNKSEQ TY_PORT TY_THREAD TY_SCHED TY_TAGGED TY_OPAQUE
     ;; The wire codec's two (`DECISIONS.md#the-codec-is-guest-code`). A writer
     ;; is opaque to a guest and a reader is not, and the asymmetry is the whole
     ;; safety rule -- see `kin/wire.kin`.
@@ -436,6 +436,12 @@
              :java "Conc.TH_ENTRY" :csharp "Conc.TH_ENTRY"}
    'TH_STACK {:rust "crate::conc::TH_STACK"
              :java "Conc.TH_STACK" :csharp "Conc.TH_STACK"}
+   ;; The saved FRAME stack, the other half of what a park puts away. It
+   ;; travels with `TH_STACK` everywhere it is written: a thread holding one
+   ;; and not the other is a thread that would be resumed onto frames that do
+   ;; not match its operands.
+   'TH_FRAMES {:rust "crate::conc::TH_FRAMES"
+              :java "Conc.TH_FRAMES" :csharp "Conc.TH_FRAMES"}
    ;; A throw the SCHEDULER owes this thread, delivered when it next runs
    ;; rather than at the moment it was decided.
    'TH_FAIL {:rust "crate::conc::TH_FAIL"
@@ -468,6 +474,57 @@
              :java "Conc.PT_WRITE" :csharp "Conc.PT_WRITE"}
    'PT_READ {:rust "crate::conc::PT_READ"
             :java "Conc.PT_READ" :csharp "Conc.PT_READ"}
+   ;; The rest of a port's own slots, as `new-port` fills them. `PT_LEN` is how
+   ;; many a port has.
+   'PT_LEN {:rust "crate::conc::PT_LEN"
+           :java "Conc.PT_LEN" :csharp "Conc.PT_LEN"}
+   ;; How many slots a THREAD has, and its own id. A thread's id comes from the
+   ;; SAME counter a port's does -- `SC_NEXTID` is the sandbox's, not the port
+   ;; table's -- so the two never collide and neither is an index into anything.
+   'TH_LEN {:rust "crate::conc::TH_LEN"
+           :java "Conc.TH_LEN" :csharp "Conc.TH_LEN"}
+   'TH_ID {:rust "crate::conc::TH_ID"
+          :java "Conc.TH_ID" :csharp "Conc.TH_ID"}
+   ;; THE BOUND, and it means two different things by KIND: a channel's is a
+   ;; count of MESSAGES and is what its ring is sized to; a bridge's is a
+   ;; budget in BYTES, and its ring is `RING_MESSAGES` instead. Sizing a
+   ;; bridge's ring from its cap would allocate one slot per byte allowed.
+   'PT_CAP {:rust "crate::conc::PT_CAP"
+           :java "Conc.PT_CAP" :csharp "Conc.PT_CAP"}
+   'PT_BYTES {:rust "crate::conc::PT_BYTES"
+             :java "Conc.PT_BYTES" :csharp "Conc.PT_BYTES"}
+   ;; PEERS ARE LINKED BY ID, never by object: a field holding the peer would
+   ;; keep it alive, and an unreachable flint end is exactly what says the
+   ;; script is finished with it. `-1` is "no peer".
+   'PT_PEER {:rust "crate::conc::PT_PEER"
+            :java "Conc.PT_PEER" :csharp "Conc.PT_PEER"}
+   'PT_LABEL {:rust "crate::conc::PT_LABEL"
+             :java "Conc.PT_LABEL" :csharp "Conc.PT_LABEL"}
+   'K_CHANNEL {:rust "crate::conc::K_CHANNEL"
+              :java "Conc.K_CHANNEL" :csharp "Conc.K_CHANNEL"}
+   'K_BRIDGE {:rust "crate::conc::K_BRIDGE"
+             :java "Conc.K_BRIDGE" :csharp "Conc.K_BRIDGE"}
+   ;; A BRIDGE'S RING, in messages. Its `PT_CAP` is a byte budget and a
+   ;; different question -- see `kin/portbytes.kin`.
+   'DEFAULT_BRIDGE_CAP {:rust "crate::conc::DEFAULT_BRIDGE_CAP"
+                       :java "Conc.DEFAULT_BRIDGE_CAP"
+                       :csharp "Conc.DEFAULT_BRIDGE_CAP"}
+   ;; THE HOST IS NOW HOLDING THIS PORT. One `EV_RETAIN` per handle handed
+   ;; out, matched by one `EV_RELEASE` when it goes.
+   'EV_RETAIN {:rust "crate::conc::EV_RETAIN"
+              :java "Conc.EV_RETAIN" :csharp "Conc.EV_RETAIN"}
+   ;; PASCALISED ON THE CLR ALONE, and it is the only constant in that file
+   ;; that is -- `PT_LEN`, `K_CHANNEL` and the rest are all SCREAMING there.
+   ;; Checked in all three before this entry was written, because a name table
+   ;; that guesses a spelling emits an undefined constant into one target.
+   'RING_MESSAGES {:rust "crate::conc::RING_MESSAGES"
+                  :java "Conc.RING_MESSAGES" :csharp "Conc.RingMessages"}
+   'SC_NEXTID {:rust "crate::conc::SC_NEXTID"
+              :java "Conc.SC_NEXTID" :csharp "Conc.SC_NEXTID"}
+   ;; Both directions of every channel pairing, as two-element vectors. A
+   ;; lookup walks it, so a pairing recorded one way only answers one way.
+   'SC_PAIRS {:rust "crate::conc::SC_PAIRS"
+             :java "Conc.SC_PAIRS" :csharp "Conc.SC_PAIRS"}
    ;; What a port's state says, and the two states `reap-ports` must not
    ;; overwrite: a tidy close and a peer that vanished are different things to
    ;; have happened, and only the second is an orphaning.
@@ -477,6 +534,19 @@
              :java "Conc.P_CLOSED" :csharp "Conc.P_CLOSED"}
    'P_ORPHANED {:rust "crate::conc::P_ORPHANED"
                :java "Conc.P_ORPHANED" :csharp "Conc.P_ORPHANED"}
+   ;; OPEN, and HALF-closed. A close makes the PEER half-closed rather than
+   ;; closed: it may still drain what is already in its buffer and only then
+   ;; reads end-of-stream, so the channel is not finished until both ends are.
+   ;; Only an OPEN peer is moved -- a peer already closed or orphaned has had
+   ;; something more specific happen to it, and `P_HALF` would overwrite it.
+   'P_OPEN {:rust "crate::conc::P_OPEN"
+           :java "Conc.P_OPEN" :csharp "Conc.P_OPEN"}
+   'P_HALF {:rust "crate::conc::P_HALF"
+           :java "Conc.P_HALF" :csharp "Conc.P_HALF"}
+   ;; A port's own id, which is what the HOST knows it by: every event carries
+   ;; this rather than the address, because an address is this heap's business.
+   'PT_ID {:rust "crate::conc::PT_ID"
+          :java "Conc.PT_ID" :csharp "Conc.PT_ID"}
    ;; The scheduler's two lists of live ends. `SC_BRIDGES` is host-facing and
    ;; `SC_PORTS` is channels; a collection of either end is what `reap-ports`
    ;; notices.
@@ -484,6 +554,14 @@
                :java "Conc.SC_BRIDGES" :csharp "Conc.SC_BRIDGES"}
    'SC_PORTS {:rust "crate::conc::SC_PORTS"
              :java "Conc.SC_PORTS" :csharp "Conc.SC_PORTS"}
+   ;; The system port, if this sandbox has one. Its own slot rather than a
+   ;; search, because the control plane is found on every `drive`.
+   'SC_SYSTEM {:rust "crate::conc::SC_SYSTEM"
+              :java "Conc.SC_SYSTEM" :csharp "Conc.SC_SYSTEM"}
+   ;; HOW MANY SLOTS A SCHEDULER HAS. NOT `SC_LEN`, which is the table
+   ;; module's and is 5 -- see the note there.
+   'SCHED_LEN {:rust "crate::conc::SC_LEN"
+              :java "Conc.SC_LEN" :csharp "Conc.SC_LEN"}
    ;; One `EV_RELEASE` per `EV_RETAIN`, which is what makes the host's count a
    ;; count of holders rather than of arrivals (`DECISIONS.md#ports-are-the-hosts`).
    'EV_CLOSED {:rust "crate::conc::EV_CLOSED"
@@ -553,6 +631,13 @@
            :java "Table.SC_IDS" :csharp "global::Flint.Rt.Table.SC_IDS"}
    'SC_WIDTH {:rust "crate::table::SC_WIDTH"
              :java "Table.SC_WIDTH" :csharp "global::Flint.Rt.Table.SC_WIDTH"}
+   ;; A SCHEMA's length, and note the prefix clash: `SC_*` names the TABLE
+   ;; module here and the SCHEDULER module everywhere else in this file. The
+   ;; scheduler's own length is `SCHED_LEN` below and deliberately not `SC_LEN`,
+   ;; because this name was taken first and a source reaching for the obvious
+   ;; one gets a 5 where it wanted an 11. Rust's module paths caught that; on
+   ;; the ports both constants exist under different classes and the generated
+   ;; code would have compiled a five-slot scheduler.
    'SC_LEN {:rust "crate::table::SC_LEN"
            :java "Table.SC_LEN" :csharp "global::Flint.Rt.Table.SC_LEN"}
    'TB_SCHEMA {:rust "crate::table::TB_SCHEMA"
@@ -1692,6 +1777,23 @@
     'wake-on (core/call {:rust "{0}.wake_on({1})"
                          :java "Conc.wakeOn({0}, {1})"
                          :csharp "Conc.WakeOn({0}, {1})"})
+    ;; THE OTHER END, while it still exists -- `peer-id-of-dead` below is the
+    ;; same question asked after the collector has taken it.
+    'peer-of (core/call {:rust "{0}.peer_of({1})"
+                         :java "Conc.peerOf({0}, {1})"
+                         :csharp "Conc.PeerOf({0}, {1})"})
+    ;; DROP AN ID FROM THE HELD LIST, so the collector's sweep does not release
+    ;; a bridge the program has already let go of. It rebuilds a vector, which
+    ;; is the runtime's own bookkeeping rather than a decision.
+    ;; PUT A PORT IN THE REGISTRY. Stays a word: it takes the interns lock and
+    ;; looks up through a PREDICATE, and a closure is the one shape kin has no
+    ;; answer for.
+    'register-port (core/call {:rust "{0}.register_port({1})"
+                               :java "Conc.registerPort({0}, {1})"
+                               :csharp "Conc.RegisterPort({0}, {1})"})
+    'forget-bridge (core/call {:rust "{0}.forget_bridge({1})"
+                               :java "Conc.forgetBridge({0}, {1})"
+                               :csharp "Conc.ForgetBridge({0}, {1})"})
     ;; The object is gone by the time we notice, so the pairing is recorded
     ;; separately and looked up by id.
     'peer-id-of-dead (core/call {:rust "{0}.peer_id_of_dead({1})"
@@ -1709,9 +1811,23 @@
     'run-one (core/call {:rust "crate::conc::run_one({0}, {1})"
                          :java "Conc.runOne({0}, {1})"
                          :csharp "Conc.RunOne({0}, {1})"})
+    ;; `close-all-bridges` is still a WORD, and its body is now generated from
+    ;; `kin/reapports.kin`: each target's `Conc.closeAllBridges` is a one-line
+    ;; delegation, exactly as `reap-ports` delegates to `reap-all`. The word
+    ;; stays because `sched-drive` calls it and the drivers' toy scheduler has
+    ;; no port list to walk -- a stub there is the right model of it.
     'close-all-bridges (core/call {:rust "{0}.close_all_bridges()"
                                    :java "Conc.closeAllBridges({0})"
                                    :csharp "Conc.CloseAllBridges({0})"})
+    ;;
+    ;;
+    ;; EVERYTHING THAT FOLLOWS FROM AN END CLOSING: tell the host if this was a
+    ;; bridge, drop it from `SC_BRIDGES`, and wake both sides. It pushes events
+    ;; and touches the bridge registry, which is the runtime's own bookkeeping
+    ;; rather than a decision, so it stays one line per target.
+    'close-side-effects (core/call {:rust "{0}.close_side_effects({1})"
+                                    :java "Conc.closeSideEffects({0}, {1})"
+                                    :csharp "Conc.CloseSideEffects({0}, {1})"})
     'set-status (core/call {:rust "{0}.status = ({1} as i32)"
                             :java "{0}.status = (int) {1}"
                             :csharp "{0}.status = (int) {1}"})
@@ -1746,6 +1862,47 @@
                        {:rust "{0}.install_bindings({1})"
                         :java "Conc.installBindings({0}, {1})"
                         :csharp "Conc.InstallBindings({0}, {1})"})
+    ;; THE READ SIDE of the same singleton. A spawned thread INHERITS the
+    ;; bindings live at the moment of the spawn -- that is what makes a dynamic
+    ;; binding dynamic across a `spawn` -- and `install-bindings` above is what
+    ;; puts a thread's own back when it is scheduled.
+    ;;
+    ;; PASCALISED ON THE CLR, like `RingMessages`: `Rt.SingBindings` against
+    ;; `Rt.SING_BINDINGS` on the other two. Checked in all three before this
+    ;; entry was written.
+    ;; A CALL AND NOT A FIELD PATH, deliberately. Spelling it
+    ;; `roots.shared.singletons[SING_BINDINGS]` would make every fixture mirror
+    ;; an internal layout to satisfy a word, and would pin that layout in three
+    ;; targets at once. `install-bindings` beside it is a call for the same
+    ;; reason; the pair should read the same way.
+    ;; MAKE THE SCHEDULER IF THERE IS NOT ONE. Idempotent, and it ALLOCATES --
+    ;; which is why it is a word rather than something a caller does first: a
+    ;; caller that runs it before rooting its arguments leaves a host local
+    ;; pointing into the abandoned semispace, and `spawn` carried a comment
+    ;; saying exactly that. Made a word so the ORDER lives in the one source
+    ;; instead of in three wrappers.
+    ;; INSTALL THE SCHEDULER as the singleton the collector already traces.
+    ;; A call and not a field path, for the reason `current-bindings` gives.
+    'install-sched (core/call {:rust "{0}.install_sched({1})"
+                               :java "Conc.installSched({0}, {1})"
+                               :csharp "Conc.InstallSched({0}, {1})"})
+    ;; IS A PROGRAM ACTUALLY RUNNING? An empty frame stack says the scheduler
+    ;; is being built before anything has started -- a host that installs a
+    ;; port at construction does that -- and thread 0 then represents no stack
+    ;; at all. It decides whether thread 0 is RUNNABLE or already DONE.
+    'something-running (core/call {:rust "{0}.something_running()"
+                                   :java "Conc.somethingRunning({0})"
+                                   :csharp "Conc.SomethingRunning({0})"})
+    'ensure-sched (core/call {:rust "{0}.ensure_sched()"
+                              :java "Conc.ensureSched({0})"
+                              :csharp "Conc.EnsureSched({0})"})
+    'current-bindings (core/call {:rust "{0}.current_bindings()"
+                                  :java "Conc.currentBindings({0})"
+                                  :csharp "Conc.CurrentBindings({0})"})
+    ;; THE EMPTY MAP, which is a shared singleton and allocates nothing.
+    'maps-empty (core/call {:rust "{0}.empty_map()"
+                            :java "Maps.empty({0})"
+                            :csharp "Maps.Empty({0})"})
     ;; The slice is what makes preemption happen at all: a thread runs until
     ;; `steps` reaches this, then yields. Set from the CURRENT step count, so
     ;; every thread gets the same size turn however long the last one ran.

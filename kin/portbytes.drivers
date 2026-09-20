@@ -1,0 +1,253 @@
+--rust-head
+// A TOY PORT, enough to drive its byte budget: a cap and a counter.
+//
+// `cas_slot` REALLY COMPARES, and it counts what it refused -- a stub that
+// always succeeded would let every field here pass while hiding the only thing
+// the loop is for. `steal` is how a single-threaded fixture models the race:
+// set it, and the next compare-and-swap finds the counter already moved, as if
+// another host thread had claimed in between.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_0000_0000_0000);
+mod conc {
+    pub const PT_CAP: u32 = 0;
+    pub const PT_BYTES: u32 = 1;
+}
+impl Value {
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+}
+struct Rt { objs: Vec<Vec<Value>>, refused: u32, steal: i64 }
+impl Rt {
+    fn obj(&mut self, slots: Vec<Value>) -> Value {
+        self.objs.push(slots);
+        Value((self.objs.len() - 1) as u64)
+    }
+    fn slot(&mut self, v: Value, i: u32) -> Value { self.objs[v.0 as usize][i as usize] }
+    fn slot_atomic(&self, v: Value, i: u32) -> Value { self.objs[v.0 as usize][i as usize] }
+    fn cas_slot(&mut self, v: Value, i: u32, want: Value, next: Value) -> bool {
+        if self.steal != 0 {
+            let cur = self.objs[v.0 as usize][i as usize].as_fixnum();
+            self.objs[v.0 as usize][i as usize] = Value::fixnum(cur + self.steal);
+            self.steal = 0;
+        }
+        if self.objs[v.0 as usize][i as usize] == want {
+            self.objs[v.0 as usize][i as usize] = next;
+            true
+        } else {
+            self.refused += 1;
+            false
+        }
+    }
+--rust
+}
+// `<result>:<bytes after>:<refusals>`, where result is 1/0 for a claim and
+// `-` for a refund.
+fn claim(cap: i64, start: i64, len: i64, steal: i64) -> String {
+    let mut rt = Rt { objs: vec![], refused: 0, steal };
+    let p = rt.obj(vec![Value::fixnum(cap), Value::fixnum(start)]);
+    let ok = rt.claim_bytes(p, len);
+    format!("{}:{}:{}", if ok { 1 } else { 0 },
+            rt.slot_atomic(p, conc::PT_BYTES).as_fixnum(), rt.refused)
+}
+fn fits(queued: i64, len: i64, cap: i64) -> String {
+    let mut rt = Rt { objs: vec![], refused: 0, steal: 0 };
+    if rt.fits_in_budget(queued, len, cap) { "y".to_string() } else { "n".to_string() }
+}
+fn refund(start: i64, len: i64, steal: i64) -> String {
+    let mut rt = Rt { objs: vec![], refused: 0, steal };
+    let p = rt.obj(vec![Value::fixnum(1000), Value::fixnum(start)]);
+    rt.give_back(p, len);
+    format!("-:{}:{}", rt.slot_atomic(p, conc::PT_BYTES).as_fixnum(), rt.refused)
+}
+fn main() {
+    let out = [
+        claim(100, 0, 10, 0),
+        claim(100, 10, 10, 0),
+        claim(100, 95, 10, 0),
+        claim(100, 0, 500, 0),
+        claim(100, 90, 10, 0),
+        claim(100, 0, 10, 7),
+        refund(100, 30, 0),
+        refund(10, 30, 0),
+        refund(100, 30, 5),
+        fits(0, 500, 100), fits(1, 500, 100), fits(90, 10, 100), fits(91, 10, 100),
+    ];
+    println!("{}", out.join(" "));
+}
+--java-head
+    // THE SAME TOY, field for field.
+    static final class Val {
+        static final long NIL = 0xFFFF000000000000L;
+        static long fixnum(long n) { return n; }
+        static long asFixnum(long v) { return v; }
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static final long NIL = 0xFFFF000000000000L;
+    static final class Conc {
+        static final int PT_CAP = 0, PT_BYTES = 1;
+        static long slotAtomic(Rt rt, long v, int i) { return rt.objs.get((int) v)[i]; }
+        static boolean casSlot(Rt rt, long v, int i, long want, long next) {
+            long[] row = rt.objs.get((int) v);
+            if (rt.steal != 0) { row[i] = row[i] + rt.steal; rt.steal = 0; }
+            if (row[i] == want) { row[i] = next; return true; }
+            rt.refused++;
+            return false;
+        }
+    }
+    static final class Rt {
+        java.util.List<long[]> objs = new java.util.ArrayList<>();
+        int refused = 0;
+        long steal = 0;
+        long obj(long[] slots) { objs.add(slots); return objs.size() - 1; }
+        long slot(long v, int i) { return objs.get((int) v)[i]; }
+    }
+--java
+    static String claim(long cap, long start, long len, long steal) {
+        Rt rt = new Rt();
+        rt.steal = steal;
+        long p = rt.obj(new long[]{cap, start});
+        boolean ok = claimBytes(rt, p, len);
+        return (ok ? 1 : 0) + ":" + Conc.slotAtomic(rt, p, Conc.PT_BYTES) + ":" + rt.refused;
+    }
+    static String fits(long queued, long len, long cap) {
+        return fitsInBudget(new Rt(), queued, len, cap) ? "y" : "n";
+    }
+    static String refund(long start, long len, long steal) {
+        Rt rt = new Rt();
+        rt.steal = steal;
+        long p = rt.obj(new long[]{1000, start});
+        giveBack(rt, p, len);
+        return "-:" + Conc.slotAtomic(rt, p, Conc.PT_BYTES) + ":" + rt.refused;
+    }
+    public static void main(String[] args) {
+        String[] out = {
+            claim(100, 0, 10, 0),
+            claim(100, 10, 10, 0),
+            claim(100, 95, 10, 0),
+            claim(100, 0, 500, 0),
+            claim(100, 90, 10, 0),
+            claim(100, 0, 10, 7),
+            refund(100, 30, 0),
+            refund(10, 30, 0),
+            refund(100, 30, 5),
+            fits(0, 500, 100), fits(1, 500, 100), fits(90, 10, 100), fits(91, 10, 100),
+        };
+        System.out.println(String.join(" ", out));
+    }
+--csharp-head
+    // THE SAME TOY AGAIN, in this target's spelling.
+    static class Val {
+        public const long Nil = unchecked((long)0xFFFF000000000000UL);
+        public static long Fixnum(long n) => n;
+        public static long AsFixnum(long v) => v;
+        public static bool IsNil(long v) => v == Nil;
+    }
+    const long NIL = unchecked((long)0xFFFF000000000000UL);
+    static class Conc {
+        public const int PT_CAP = 0, PT_BYTES = 1;
+        public static long SlotAtomic(Rt rt, long v, int i) => rt.Objs[(int) v][i];
+        public static bool CasSlot(Rt rt, long v, int i, long want, long next) {
+            var row = rt.Objs[(int) v];
+            if (rt.Steal != 0) { row[i] = row[i] + rt.Steal; rt.Steal = 0; }
+            if (row[i] == want) { row[i] = next; return true; }
+            rt.Refused++;
+            return false;
+        }
+    }
+    public class Rt {
+        public System.Collections.Generic.List<long[]> Objs = new System.Collections.Generic.List<long[]>();
+        public int Refused = 0;
+        public long Steal = 0;
+        public long MakeObj(long[] slots) { Objs.Add(slots); return Objs.Count - 1; }
+        public long Slot(long v, int i) => Objs[(int) v][i];
+    }
+--csharp
+    static string Claim(long cap, long start, long len, long steal) {
+        var rt = new Rt();
+        rt.Steal = steal;
+        long p = rt.MakeObj(new long[]{ cap, start });
+        bool ok = ClaimBytes(rt, p, len);
+        return (ok ? 1 : 0) + ":" + Conc.SlotAtomic(rt, p, Conc.PT_BYTES) + ":" + rt.Refused;
+    }
+    static string Fits(long queued, long len, long cap) {
+        return FitsInBudget(new Rt(), queued, len, cap) ? "y" : "n";
+    }
+    static string Refund(long start, long len, long steal) {
+        var rt = new Rt();
+        rt.Steal = steal;
+        long p = rt.MakeObj(new long[]{ 1000, start });
+        GiveBack(rt, p, len);
+        return "-:" + Conc.SlotAtomic(rt, p, Conc.PT_BYTES) + ":" + rt.Refused;
+    }
+    static void Main() {
+        string[] outp = {
+            Claim(100, 0, 10, 0),
+            Claim(100, 10, 10, 0),
+            Claim(100, 95, 10, 0),
+            Claim(100, 0, 500, 0),
+            Claim(100, 90, 10, 0),
+            Claim(100, 0, 10, 7),
+            Refund(100, 30, 0),
+            Refund(10, 30, 0),
+            Refund(100, 30, 5),
+            Fits(0, 500, 100), Fits(1, 500, 100), Fits(90, 10, 100), Fits(91, 10, 100),
+        };
+        System.Console.WriteLine(string.Join(" ", outp));
+    }
+--expect
+1:10:0 1:20:0 0:95:0 1:500:0 1:100:0 1:17:1 -:70:0 -:0:0 -:75:1 y n y n
+--expect-why
+DERIVED FROM WHAT THE BYTE BUDGET PROMISES. Each field is
+`<result>:<bytes after>:<refusals>`; result is 1/0 for a claim, `-` for a
+refund, and refusals counts compare-and-swaps the toy actually rejected.
+
+  1  `1:10:0`   AN EMPTY PORT ACCEPTS. The ordinary case, and it fixes the
+                arithmetic: the counter holds what was claimed, not the cap
+                minus it.
+  2  `1:20:0`   A SECOND CLAIM ADDS to the first rather than replacing it.
+  3  `0:95:0`   OVER THE BOUND IS REFUSED -- 95 + 10 exceeds 100 -- and the
+                `:0` is the second half of that: **A REFUSAL TOUCHES NOTHING.**
+                It returns before the compare-and-swap, so the counter still
+                reads 95. A version that charged and then refused would drain
+                the budget by being asked, and the host retries a refusal.
+  4  `1:500:0`  **AN EMPTY QUEUE ACCEPTS A MESSAGE LARGER THAN THE WHOLE
+                BUDGET.** This is the `queued > 0` in the test and it is the
+                field the source exists for. Without it there is no state of
+                the queue in which such a message fits, so it is refused FOR
+                EVER rather than delayed -- back-pressure silently becomes a
+                permanent rejection, and the host cannot tell the two apart.
+                The bound is there to stop messages ACCUMULATING; a maximum
+                message size is a different rule and is not this one.
+  5  `1:100:0`  THE BOUNDARY IS INCLUSIVE. Filling the budget exactly is
+                allowed and only going past it is refused, which is `>` rather
+                than `>=`. Reads `0:90:0` if that is wrong, and no other field
+                here separates the two.
+  6  `1:17:1`   **THE READ IS INSIDE THE LOOP.** The fixture steals 7 bytes
+                between the read and the swap, as another host thread would.
+                One refusal is counted, the claim is retried against what the
+                winner actually left, and the total is 7 + 10. An
+                implementation that hoisted the read out of the loop would
+                retry with the stale 0 -- writing 10 and losing the other
+                thread's 7 entirely, which is the bound failing in the exact
+                case it exists for.
+  7  `-:70:0`   A REFUND SUBTRACTS.
+  8  `-:0:0`    AND IS CLAMPED AT ZERO. A refund larger than the balance must
+                not wrap: the counter is unsigned on one target and signed on
+                the others, so this would be a huge positive number in one
+                runtime and a negative in the other two -- a port that refuses
+                everything on exactly one of them.
+  9  `-:75:1`   AND THE REFUND RE-READS TOO, by the same steal. 100 becomes
+                105 under it, the swap is refused once, and 105 - 30 is what
+                lands. Field 6 does not cover this: the two loops are written
+                separately and only this says the second one is also correct.
+
+  10-13 `y n y n`  THE PREDICATE ON ITS OWN, because three runtimes now call
+                it DIRECTLY from their send paths rather than only through the
+                claim. `fits(0,500,100)` is the empty-queue rule; `fits(1,...)`
+                is the same message one byte later and must refuse, which is
+                what makes the pair say the rule rather than an accident.
+                `fits(90,10,100)` fills the bound exactly and `fits(91,10,100)`
+                goes one past it -- the inclusive boundary, stated where a
+                reader of the send path can find it.
+

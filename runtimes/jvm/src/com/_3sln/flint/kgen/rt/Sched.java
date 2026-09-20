@@ -610,4 +610,45 @@ public final class Sched {
         rt.popTo(base);
         return park(rt, pv);
     }
+    /// END the current thread where it stands, TAKING ITS WAITER WITH IT.
+    /// 
+    /// For the one case that is not an ordinary return: a top-level form asked
+    /// the host while the program was still initialising, so the stack it is
+    /// parked on is about to be cut back and nothing may try to resume it.
+    /// 
+    /// THE WAITER IS THE HALF THAT ACTUALLY BIT, and it is the only reason this
+    /// is a function rather than one `set-slot`. Marking the thread DONE is not
+    /// enough: `park-on-port` registered a waiter naming this thread, and the
+    /// next `host-deliver` or `host-continue` fires that waiter and puts the
+    /// thread back to RUNNABLE. It was observed doing exactly that -- DONE at
+    /// the end of one `drive`, RUNNABLE at the start of the next, with nothing
+    /// in between but the host delivering the bind.
+    /// 
+    /// So the drivers file does not stop at the status. It wakes the port
+    /// AFTERWARDS and asks the status again, which is the only field here that
+    /// separates freeing the waiter from merely marking the thread.
+    /// 
+    /// BOTH HALVES OF THE SAVED STATE GO, not just the value stack. A thread
+    /// holding frames without operands would be resumed onto frames that do not
+    /// match, which is a worse failure than the one this prevents.
+    /// 
+    /// A NIL CURRENT THREAD IS NOT AN ERROR, the same reading `park-on-port`
+    /// takes: the runtime can park during startup before a scheduler exists,
+    /// and there is then simply no thread slot to clear.
+    public static long abandonCurrentThread(Rt rt) {
+        long th = Conc.currentThread(rt);
+        if (Val.isNil(th)) {
+            return Val.NIL;
+        }
+        rt.setSlot(Val.asHeap(th), Conc.TH_STATUS, Val.fixnum(Conc.ST_DONE));
+        rt.setSlot(Val.asHeap(th), Conc.TH_STACK, Val.NIL);
+        rt.setSlot(Val.asHeap(th), Conc.TH_FRAMES, Val.NIL);
+        rt.setSlot(Val.asHeap(th), Conc.TH_PARK_ON, Val.NIL);
+        long token = Val.asFixnum(rt.slot(th, Conc.TH_TOKEN));
+        if (token >= 0) {
+            freeWaiter(rt, token);
+            rt.setSlot(Val.asHeap(th), Conc.TH_TOKEN, Val.fixnum(0 - 1));
+        }
+        return Val.NIL;
+    }
 }

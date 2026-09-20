@@ -1,0 +1,100 @@
+;; BUILDING THE SCHEDULER, written once.
+;;
+;; Twelve slots on the scheduler and five on thread 0, and every one of them is
+;; a default something later reads WITHOUT checking. Three copies of that is
+;; three chances for one slot to drift, and the drift is silent: a scheduler
+;; missing an initialiser is a scheduler that works until the first thing to
+;; read that slot, which may be a different program on a different day.
+;;
+;; THE THREE COPIES HAD ALREADY DRIFTED, in three places, and every one of them
+;; was harmless -- which is the point. Native wrote `TH_ARGS` and `TH_TX` that
+;; the ports do not have at all; the ports wrote `SC_SYSTEM` that native does
+;; not. All three writes are redundant: a fresh object's slots START nil (the
+;; collector asserts it, so that a half-built object traces and reads sanely),
+;; `TH_ARGS` is vestigial by its own comment, and `TH_TX` has no reader
+;; anywhere in the tree. So nothing was broken and nobody could have noticed --
+;; and the next slot to drift would have looked exactly the same until it was
+;; one that mattered.
+(ns flint.rt.schedmake
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != + - not nil?
+                                   as-fixnum fixnum64
+                                   mark push r pop-to slot set-slot
+                                   new-obj empty-vec maps-empty
+                                   install-sched something-running
+                                   Rt Value I32 I64 NIL RootIx
+                                   TY_SCHED TY_THREAD SCHED_LEN TH_LEN
+                                   SC_EVENTS SC_EHEAD SC_PORTS SC_PAIRS
+                                   SC_BRIDGES SC_WAITERS SC_WFREE SC_NEXTID
+                                   SC_CURRENT SC_SYSTEM SC_THREADS
+                                   TH_STATUS TH_ID TH_TOKEN TH_BINDINGS
+                                   ST_RUNNABLE ST_DONE]]
+            [flint.rt.vecwrite :refer [vec-conj]]))
+
+(doc "A SCHEDULER WITH THREAD 0 ALREADY IN IT, installed as the singleton."
+     ""
+     "The caller decides WHETHER to build one -- that guard and the bridge"
+     "hook stay in each runtime, the hook because it is a function reference"
+     "and kin has no answer for one. What is here is the object."
+     ""
+     "THREAD 0 IS THE THREAD THAT IS ALREADY RUNNING, adopted rather than"
+     "started: its stack is the LIVE one, so it has nothing saved until it"
+     "parks, which is why `TH_STACK` is left nil."
+     ""
+     "UNLESS NOTHING IS RUNNING, and that is the subtle half. A scheduler can"
+     "be built before any program has started -- a host that installs a port"
+     "at construction makes one -- and thread 0 then represents no stack at"
+     "all. Left RUNNABLE it would be PICKED, restored from a `TH_STACK` of"
+     "nil, and run off the end of an empty value stack; the symptom recorded"
+     "for it is an index of -1 out of `vpop`. An empty frame stack is what"
+     "tells the two apart, and `ST_DONE` is what says this thread has nothing"
+     "to contribute."
+     ""
+     "INSTALLED WHILE STILL ROOTED. The singleton write happens before the"
+     "roots are dropped, so there is no window in which the only reference to"
+     "a fresh scheduler is a local -- the same discipline `spawn-at` learned"
+     "the hard way."
+     ""
+     "SLOTS THAT ARE ALREADY NIL ARE NOT WRITTEN. `SC_SYSTEM` had an explicit"
+     "nil on the two ports and not on native, and a fresh object's slots start"
+     "nil by construction. Writing one is harmless and saying so is not: the"
+     "next reader has to work out whether the omission somewhere else is"
+     "deliberate. Everything here is written because something depends on its"
+     "value, and nil is left to the allocator.")
+(defn ^:pub ^:method ^Value new-sched-at [^:mut ^Rt rt]
+  (let [^RootIx base (mark rt)
+        ^Value sc (new-obj rt TY_SCHED SCHED_LEN)]
+    (if (nil? rt sc)
+      (do (pop-to rt base)
+          (return NIL)))
+    (let [^RootIx si (push rt sc)]
+      (set-slot rt (r rt si) SC_EVENTS (empty-vec rt))
+      (set-slot rt (r rt si) SC_EHEAD (fixnum64 0))
+      (set-slot rt (r rt si) SC_PORTS (empty-vec rt))
+      (set-slot rt (r rt si) SC_PAIRS (empty-vec rt))
+      (set-slot rt (r rt si) SC_BRIDGES (empty-vec rt))
+      (set-slot rt (r rt si) SC_WAITERS (empty-vec rt))
+      (comment "NOT A COUNT AND NOT AN INDEX. `-1` is the empty free list;"
+               "`0` would name waiter slot zero, which is a real slot.")
+      (set-slot rt (r rt si) SC_WFREE (fixnum64 (- 0 1)))
+      (comment "IDS START AT ONE. Zero is thread 0's, handed out below"
+               "without consulting the counter.")
+      (set-slot rt (r rt si) SC_NEXTID (fixnum64 1))
+      (set-slot rt (r rt si) SC_CURRENT (fixnum64 0))
+      (let [^Value th (new-obj rt TY_THREAD TH_LEN)]
+        (if (nil? rt th)
+          (do (pop-to rt base)
+              (return NIL)))
+        (let [^RootIx ti (push rt th)]
+          (if (something-running rt)
+            (set-slot rt (r rt ti) TH_STATUS (fixnum64 ST_RUNNABLE))
+            (set-slot rt (r rt ti) TH_STATUS (fixnum64 ST_DONE)))
+          (set-slot rt (r rt ti) TH_ID (fixnum64 0))
+          (set-slot rt (r rt ti) TH_TOKEN (fixnum64 (- 0 1)))
+          (set-slot rt (r rt ti) TH_BINDINGS (maps-empty rt))
+          (let [^Value ts (vec-conj rt (empty-vec rt) (r rt ti))]
+            (set-slot rt (r rt si) SC_THREADS ts))
+          (let [^Value out (r rt si)]
+            (install-sched rt out)
+            (pop-to rt base)
+            (return out)))))))

@@ -1,0 +1,579 @@
+--rust-head
+// A TOY HEAP. A port is a row of slots, a vector is a row of items, and the
+// scheduler is a row of two. Nothing models the interns table: `register-port`
+// is a word, so what the fixture has to observe is only THAT it was called and
+// with which id.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_0000_0000_0000);
+mod value { pub const EMPTY: super::Value = super::Value(0xFFFF_0000_0000_0006); }
+const EMPTY: Value = Value(0xFFFF_0000_0000_0006);
+const TY_PORT: u8 = 30;
+const TY_THREAD: u8 = 31;
+const TY_NODE: u8 = 10;
+mod conc {
+    // TOY INDICES, dense and small. What has to agree is the three fixtures,
+    // not these and the real `Conc`.
+    pub const PT_ID: u32 = 0;
+    pub const PT_STATE: u32 = 1;
+    pub const PT_CAP: u32 = 2;
+    pub const PT_INBOX: u32 = 3;
+    pub const PT_RING: u32 = 4;
+    pub const PT_READ: u32 = 5;
+    pub const PT_WRITE: u32 = 6;
+    pub const PT_BYTES: u32 = 7;
+    pub const PT_PEER: u32 = 8;
+    pub const PT_LABEL: u32 = 9;
+    pub const PT_KIND: u32 = 10;
+    pub const PT_LEN: u32 = 11;
+    pub const SC_NEXTID: u32 = 0;
+    pub const SC_PAIRS: u32 = 1;
+    pub const SC_THREADS: u32 = 2;
+    // A TOY THREAD, five slots.
+    pub const TH_STATUS: u32 = 0;
+    pub const TH_ID: u32 = 1;
+    pub const TH_TOKEN: u32 = 2;
+    pub const TH_ENTRY: u32 = 3;
+    pub const TH_BINDINGS: u32 = 4;
+    pub const TH_LEN: u32 = 5;
+    // THE REAL VALUES, because the expected answers name them.
+    pub const ST_NEW: i64 = 0;
+    pub const P_OPEN: i64 = 1;
+    pub const K_CHANNEL: i64 = 0;
+    // THE REAL VALUE, because the expected answers name it.
+    pub const RING_MESSAGES: i64 = 64;
+}
+impl Value {
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn is_nil(self) -> bool { self == NIL }
+}
+struct Rt { objs: Vec<Vec<Value>>, roots: Vec<Value>, sched_v: Value,
+            empty: Value, registered: Vec<i64>,
+            // The live dynamic bindings, which a spawn INHERITS. Nil until
+            // something has bound, which is the case the empty-map default is
+            // for.
+            binds: Value, empty_map_v: Value }
+impl Rt {
+    fn obj(&mut self, slots: Vec<Value>) -> Value {
+        self.objs.push(slots);
+        Value((self.objs.len() - 1) as u64)
+    }
+    fn new_obj(&mut self, _ty: u8, len: u32) -> Value { self.obj(vec![NIL; len as usize]) }
+    fn slot(&self, v: Value, i: u32) -> Value { self.objs[v.0 as usize][i as usize] }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.objs[v.0 as usize][i as usize] = x; }
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn pop_to(&mut self, i: usize) { self.roots.truncate(i); }
+    fn sched(&self) -> Value { self.sched_v }
+    fn empty_vec(&self) -> Value { self.empty }
+    fn vec_conj(&mut self, v: Value, x: Value) -> Value {
+        let mut next = self.objs[v.0 as usize].clone();
+        next.push(x);
+        self.obj(next)
+    }
+    fn vec_count(&self, v: Value) -> u32 { self.objs[v.0 as usize].len() as u32 }
+    fn vec_nth_raw(&self, v: Value, i: u32) -> Value { self.objs[v.0 as usize][i as usize] }
+    fn empty_map(&self) -> Value { self.empty_map_v }
+    // The fixture always has one, so this is the no-op branch of the real thing.
+    fn ensure_sched(&mut self) -> Value { self.sched_v }
+    fn current_bindings(&self) -> Value { self.binds }
+    fn register_port(&mut self, p: Value) {
+        let id = self.slot(p, conc::PT_ID).as_fixnum();
+        self.registered.push(id);
+    }
+--rust
+}
+fn fresh(next_id: i64) -> Rt {
+    let mut rt = Rt { objs: vec![], roots: vec![], sched_v: NIL, empty: NIL,
+                      registered: vec![], binds: NIL, empty_map_v: NIL };
+    rt.empty = rt.obj(vec![]);
+    rt.empty_map_v = rt.obj(vec![]);
+    let pairs = rt.obj(vec![]);
+    let threads = rt.obj(vec![]);
+    rt.sched_v = rt.obj(vec![Value::fixnum(next_id), pairs, threads]);
+    rt
+}
+// `<id> <nextid after> <ring> <inbox len> <all EMPTY> <read> <write> <bytes>
+//  <peer> <kind> <registered>`
+fn made(rt: &Rt, p: Value) -> String {
+    let inbox = rt.slot(p, conc::PT_INBOX);
+    let n = rt.vec_count(inbox);
+    let all_empty = (0..n).all(|i| rt.slot(inbox, i) == EMPTY);
+    let reg: Vec<String> = rt.registered.iter().map(|i| i.to_string()).collect();
+    format!("{} {} {} {} {} {} {} {} {} {} {}",
+            rt.slot(p, conc::PT_ID).as_fixnum(),
+            rt.slot(rt.sched_v, conc::SC_NEXTID).as_fixnum(),
+            rt.slot(p, conc::PT_RING).as_fixnum(),
+            n,
+            if all_empty { 1 } else { 0 },
+            rt.slot(p, conc::PT_READ).as_fixnum(),
+            rt.slot(p, conc::PT_WRITE).as_fixnum(),
+            rt.slot(p, conc::PT_BYTES).as_fixnum(),
+            rt.slot(p, conc::PT_PEER).as_fixnum(),
+            rt.slot(p, conc::PT_KIND).as_fixnum(),
+            if reg.is_empty() { "-".to_string() } else { reg.join(",") })
+}
+fn main() {
+    // 1. A CHANNEL, id CHOSEN. Every slot set, the counter consumed.
+    let mut a = fresh(7);
+    let lbl = a.obj(vec![]);
+    let pa = a.new_port_at(4, lbl, conc::K_CHANNEL, 1, -1);
+    let r1 = made(&a, pa);
+
+    // 2. A CHANNEL ASKING FOR NOTHING. The ring is floored at one.
+    let mut b = fresh(7);
+    let lbl = b.obj(vec![]);
+    let pb = b.new_port_at(0, lbl, conc::K_CHANNEL, 1, -1);
+    let r2 = format!("{} {}", b.slot(pb, conc::PT_RING).as_fixnum(),
+                     b.vec_count(b.slot(pb, conc::PT_INBOX)));
+
+    // 3. A BRIDGE WITH A BYTE BUDGET AND A GIVEN ID. The ring is
+    //    RING_MESSAGES and NOT the cap, and the counter is untouched.
+    let mut c = fresh(7);
+    let lbl = c.obj(vec![]);
+    let pc = c.new_port_at(65536, lbl, 1, 1, 99);
+    let r3 = format!("{} {} {} {}",
+                     c.slot(pc, conc::PT_ID).as_fixnum(),
+                     c.slot(c.sched_v, conc::SC_NEXTID).as_fixnum(),
+                     c.slot(pc, conc::PT_RING).as_fixnum(),
+                     c.vec_count(c.slot(pc, conc::PT_INBOX)));
+
+    // 4. LINKING TWO ENDS, both directions in both places.
+    let mut d = fresh(1);
+    let l1 = d.obj(vec![]);
+    let p1 = d.new_port_at(1, l1, conc::K_CHANNEL, 1, -1);
+    let l2 = d.obj(vec![]);
+    let p2 = d.new_port_at(1, l2, conc::K_CHANNEL, 1, -1);
+    d.link_peers_at(p1, p2);
+    let pairs = d.slot(d.sched_v, conc::SC_PAIRS);
+    let np = d.vec_count(pairs);
+    let mut rendered: Vec<String> = vec![];
+    for i in 0..np {
+        let e = d.slot(pairs, i);
+        rendered.push(format!("{}:{}", d.slot(e, 0).as_fixnum(), d.slot(e, 1).as_fixnum()));
+    }
+    let r4 = format!("{} {} {}",
+                     d.slot(p1, conc::PT_PEER).as_fixnum(),
+                     d.slot(p2, conc::PT_PEER).as_fixnum(),
+                     rendered.join(","));
+
+    // 5. A CHANNEL: two ends, same cap, same label, wired, returned in order.
+    let mut ch = fresh(5);
+    let clbl = ch.obj(vec![]);
+    let pair = ch.channel_at(4, clbl);
+    let ca = ch.vec_nth_raw(pair, 0);
+    let cb = ch.vec_nth_raw(pair, 1);
+    let r5 = format!("{} {} {} {} {} {} {} {}",
+        ch.vec_count(pair),
+        ch.slot(ca, conc::PT_ID).as_fixnum(), ch.slot(cb, conc::PT_ID).as_fixnum(),
+        ch.slot(ca, conc::PT_CAP).as_fixnum(), ch.slot(cb, conc::PT_CAP).as_fixnum(),
+        ch.slot(ca, conc::PT_PEER).as_fixnum(), ch.slot(cb, conc::PT_PEER).as_fixnum(),
+        if ch.slot(ca, conc::PT_LABEL) == ch.slot(cb, conc::PT_LABEL) { 1 } else { 0 });
+
+    // 6. A SPAWN WITH NO BINDINGS LIVE. The empty map is used, not nil.
+    let mut sp1 = fresh(5);
+    let entry = sp1.obj(vec![]);
+    let th = sp1.spawn_at(entry);
+    let gs = sp1.sched_v;
+    let r6 = format!("{} {} {} {} {} {}",
+        sp1.slot(th, conc::TH_STATUS).as_fixnum(),
+        sp1.slot(th, conc::TH_ID).as_fixnum(),
+        sp1.slot(th, conc::TH_TOKEN).as_fixnum(),
+        if sp1.slot(th, conc::TH_ENTRY) == entry { 1 } else { 0 },
+        if sp1.slot(th, conc::TH_BINDINGS).is_nil() { 1 } else { 0 },
+        sp1.vec_count(sp1.slot(gs, conc::SC_THREADS)));
+
+    // 7. A SPAWN WITH BINDINGS LIVE. They are INHERITED, not replaced.
+    let mut sp2 = fresh(5);
+    let m = sp2.obj(vec![]);
+    sp2.binds = m;
+    let entry2 = sp2.obj(vec![]);
+    let th2 = sp2.spawn_at(entry2);
+    let r7 = if sp2.slot(th2, conc::TH_BINDINGS) == m { "1" } else { "0" };
+
+    println!("{} | {} | {} | {} | {} | {} | {}", r1, r2, r3, r4, r5, r6, r7);
+}
+--java-head
+    // THE SAME TOY, field for field.
+    static final long NIL = 0xFFFF000000000000L;
+    static final long EMPTY = 0xFFFF000000000006L;
+    static final int TY_PORT = 30, TY_NODE = 10, TY_THREAD = 31;
+    static final class Val {
+        static final long NIL = 0xFFFF000000000000L;
+        static final long EMPTY = 0xFFFF000000000006L;
+        static boolean isNil(long v) { return v == NIL; }
+        static long fixnum(long n) { return n; }
+        static long asHeap(long v) { return v; }
+        static long asFixnum(long v) { return v; }
+    }
+    static long fx(long v) { return v; }
+    static final class Conc {
+        static final int PT_ID = 0, PT_STATE = 1, PT_CAP = 2, PT_INBOX = 3,
+                         PT_RING = 4, PT_READ = 5, PT_WRITE = 6, PT_BYTES = 7,
+                         PT_PEER = 8, PT_LABEL = 9, PT_KIND = 10, PT_LEN = 11;
+        static final int SC_NEXTID = 0, SC_PAIRS = 1, SC_THREADS = 2;
+        // A TOY THREAD, five slots -- see the Rust head.
+        static final int TH_STATUS = 0, TH_ID = 1, TH_TOKEN = 2,
+                         TH_ENTRY = 3, TH_BINDINGS = 4, TH_LEN = 5;
+        static final long ST_NEW = 0, P_OPEN = 1;
+        static long currentBindings(Rt rt) { return rt.binds; }
+        static long ensureSched(Rt rt) { return rt.schedV; }
+        static final long K_CHANNEL = 0, RING_MESSAGES = 64;
+        static void registerPort(Rt rt, long p) { rt.registered.add(rt.slot(p, PT_ID)); }
+        static long newObj(Rt rt, int ty, int len) { return rt.newObj(ty, len); }
+        static long sched(Rt rt) { return rt.schedV; }
+    }
+    static final class Maps { static long empty(Rt rt) { return rt.emptyMapV; } }
+    static final class Rt {
+        java.util.List<long[]> objs = new java.util.ArrayList<>();
+        java.util.List<Long> roots = new java.util.ArrayList<>();
+        java.util.List<Long> registered = new java.util.ArrayList<>();
+        long schedV = NIL, empty = NIL, binds = NIL, emptyMapV = NIL;
+        long obj(long[] slots) { objs.add(slots); return objs.size() - 1; }
+        long newObj(int ty, int len) {
+            long[] row = new long[len];
+            java.util.Arrays.fill(row, NIL);
+            return obj(row);
+        }
+        long slot(long v, int i) { return objs.get((int) v)[i]; }
+        void setSlot(long v, int i, long x) { objs.get((int) v)[i] = x; }
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void setR(int i, long v) { roots.set(i, v); }
+        void popTo(int i) { while (roots.size() > i) roots.remove(roots.size() - 1); }
+    }
+    static final class Vec { static long empty(Rt rt) { return rt.empty; } }
+    static long vecConj(Rt rt, long v, long x) {
+        long[] cur = rt.objs.get((int) v);
+        long[] next = java.util.Arrays.copyOf(cur, cur.length + 1);
+        next[cur.length] = x;
+        return rt.obj(next);
+    }
+    static int vecCount(Rt rt, long v) { return rt.objs.get((int) v).length; }
+--java
+    static Rt fresh(long nextId) {
+        Rt rt = new Rt();
+        rt.empty = rt.obj(new long[0]);
+        rt.emptyMapV = rt.obj(new long[0]);
+        long pairs = rt.obj(new long[0]);
+        long threads = rt.obj(new long[0]);
+        rt.schedV = rt.obj(new long[]{nextId, pairs, threads});
+        return rt;
+    }
+    static String made(Rt rt, long p) {
+        long inbox = rt.slot(p, Conc.PT_INBOX);
+        int n = vecCount(rt, inbox);
+        boolean allEmpty = true;
+        for (int i = 0; i < n; i++) if (rt.slot(inbox, i) != EMPTY) allEmpty = false;
+        StringBuilder reg = new StringBuilder();
+        for (long id : rt.registered) { if (reg.length() > 0) reg.append(','); reg.append(id); }
+        return rt.slot(p, Conc.PT_ID) + " " + rt.slot(rt.schedV, Conc.SC_NEXTID)
+             + " " + rt.slot(p, Conc.PT_RING) + " " + n + " " + (allEmpty ? 1 : 0)
+             + " " + rt.slot(p, Conc.PT_READ) + " " + rt.slot(p, Conc.PT_WRITE)
+             + " " + rt.slot(p, Conc.PT_BYTES) + " " + rt.slot(p, Conc.PT_PEER)
+             + " " + rt.slot(p, Conc.PT_KIND)
+             + " " + (reg.length() == 0 ? "-" : reg.toString());
+    }
+    public static void main(String[] args) {
+        Rt a = fresh(7);
+        long pa = newPortAt(a, 4, a.obj(new long[0]), Conc.K_CHANNEL, 1, -1);
+        String r1 = made(a, pa);
+
+        Rt b = fresh(7);
+        long pb = newPortAt(b, 0, b.obj(new long[0]), Conc.K_CHANNEL, 1, -1);
+        String r2 = rt2(b, pb);
+
+        Rt c = fresh(7);
+        long pc = newPortAt(c, 65536, c.obj(new long[0]), 1, 1, 99);
+        String r3 = c.slot(pc, Conc.PT_ID) + " " + c.slot(c.schedV, Conc.SC_NEXTID)
+                  + " " + c.slot(pc, Conc.PT_RING) + " "
+                  + vecCount(c, c.slot(pc, Conc.PT_INBOX));
+
+        Rt d = fresh(1);
+        long p1 = newPortAt(d, 1, d.obj(new long[0]), Conc.K_CHANNEL, 1, -1);
+        long p2 = newPortAt(d, 1, d.obj(new long[0]), Conc.K_CHANNEL, 1, -1);
+        linkPeersAt(d, p1, p2);
+        long pairs = d.slot(d.schedV, Conc.SC_PAIRS);
+        StringBuilder rend = new StringBuilder();
+        for (int i = 0; i < vecCount(d, pairs); i++) {
+            long e = d.slot(pairs, i);
+            if (rend.length() > 0) rend.append(',');
+            rend.append(d.slot(e, 0)).append(':').append(d.slot(e, 1));
+        }
+        String r4 = d.slot(p1, Conc.PT_PEER) + " " + d.slot(p2, Conc.PT_PEER)
+                  + " " + rend;
+        Rt ch = fresh(5);
+        long clbl = ch.obj(new long[0]);
+        long pair = channelAt(ch, 4, clbl);
+        long ca = ch.slot(pair, 0), cb = ch.slot(pair, 1);
+        String r5 = vecCount(ch, pair) + " " + ch.slot(ca, Conc.PT_ID) + " " + ch.slot(cb, Conc.PT_ID)
+                  + " " + ch.slot(ca, Conc.PT_CAP) + " " + ch.slot(cb, Conc.PT_CAP)
+                  + " " + ch.slot(ca, Conc.PT_PEER) + " " + ch.slot(cb, Conc.PT_PEER)
+                  + " " + (ch.slot(ca, Conc.PT_LABEL) == ch.slot(cb, Conc.PT_LABEL) ? 1 : 0);
+
+        Rt sp1 = fresh(5);
+        long entry = sp1.obj(new long[0]);
+        long th = spawnAt(sp1, entry);
+        String r6 = sp1.slot(th, Conc.TH_STATUS) + " " + sp1.slot(th, Conc.TH_ID)
+                  + " " + sp1.slot(th, Conc.TH_TOKEN)
+                  + " " + (sp1.slot(th, Conc.TH_ENTRY) == entry ? 1 : 0)
+                  + " " + (sp1.slot(th, Conc.TH_BINDINGS) == NIL ? 1 : 0)
+                  + " " + vecCount(sp1, sp1.slot(sp1.schedV, Conc.SC_THREADS));
+
+        Rt sp2 = fresh(5);
+        long m = sp2.obj(new long[0]);
+        sp2.binds = m;
+        long th2 = spawnAt(sp2, sp2.obj(new long[0]));
+        String r7 = sp2.slot(th2, Conc.TH_BINDINGS) == m ? "1" : "0";
+
+        System.out.println(r1 + " | " + r2 + " | " + r3 + " | " + r4
+                           + " | " + r5 + " | " + r6 + " | " + r7);
+    }
+    static String rt2(Rt rt, long p) {
+        return rt.slot(p, Conc.PT_RING) + " " + vecCount(rt, rt.slot(p, Conc.PT_INBOX));
+    }
+--csharp-head
+    // THE SAME TOY AGAIN, in this target's spelling.
+    const long NIL = unchecked((long)0xFFFF000000000000UL);
+    const long EMPTY = unchecked((long)0xFFFF000000000006UL);
+    static class Obj { public const int TyPort = 30, TyNode = 10, TyThread = 31; }
+    static class Maps { public static long Empty(Rt rt) => rt.EmptyMapV; }
+    static class Val {
+        public const long Nil = unchecked((long)0xFFFF000000000000UL);
+        public const long Empty = unchecked((long)0xFFFF000000000006UL);
+        public static bool IsNil(long v) => v == Nil;
+        public static long Fixnum(long n) => n;
+        public static long AsHeap(long v) => v;
+        public static long AsFixnum(long v) => v;
+    }
+    static long Fx(long v) => v;
+    static class Conc {
+        public const int PT_ID = 0, PT_STATE = 1, PT_CAP = 2, PT_INBOX = 3,
+                         PT_RING = 4, PT_READ = 5, PT_WRITE = 6, PT_BYTES = 7,
+                         PT_PEER = 8, PT_LABEL = 9, PT_KIND = 10, PT_LEN = 11;
+        public const int SC_NEXTID = 0, SC_PAIRS = 1, SC_THREADS = 2;
+        // A TOY THREAD, five slots -- see the Rust head.
+        public const int TH_STATUS = 0, TH_ID = 1, TH_TOKEN = 2,
+                         TH_ENTRY = 3, TH_BINDINGS = 4, TH_LEN = 5;
+        public const long ST_NEW = 0, P_OPEN = 1;
+        public static long CurrentBindings(Rt rt) => rt.Binds;
+        public static long EnsureSched(Rt rt) => rt.SchedV;
+        public const long K_CHANNEL = 0, RingMessages = 64;
+        public static void RegisterPort(Rt rt, long p) { rt.Registered.Add(rt.Slot(p, PT_ID)); }
+        public static long NewObj(Rt rt, int ty, int len) => rt.NewObj(ty, len);
+        public static long Sched(Rt rt) => rt.SchedV;
+        public static long EmptyMap(Rt rt) => rt.EmptyMapV;
+    }
+    public class Rt {
+        public System.Collections.Generic.List<long[]> Objs = new System.Collections.Generic.List<long[]>();
+        public System.Collections.Generic.List<long> Roots = new System.Collections.Generic.List<long>();
+        public System.Collections.Generic.List<long> Registered = new System.Collections.Generic.List<long>();
+        public long SchedV = NIL, Empty = NIL, Binds = NIL, EmptyMapV = NIL;
+        public long MakeObj(long[] slots) { Objs.Add(slots); return Objs.Count - 1; }
+        public long NewObj(int ty, int len) {
+            var row = new long[len];
+            for (int i = 0; i < len; i++) row[i] = NIL;
+            return MakeObj(row);
+        }
+        public long Slot(long v, int i) => Objs[(int) v][i];
+        public void SetSlot(long v, int i, long x) { Objs[(int) v][i] = x; }
+        public int Mark() => Roots.Count;
+        public int Push(long v) { Roots.Add(v); return Roots.Count - 1; }
+        public long R(int i) => Roots[i];
+        public void SetR(int i, long v) { Roots[i] = v; }
+        public void PopTo(int i) { while (Roots.Count > i) Roots.RemoveAt(Roots.Count - 1); }
+    }
+    static class Vec { public static long Empty(Rt rt) => rt.Empty; }
+    static long VecConj(Rt rt, long v, long x) {
+        var cur = rt.Objs[(int) v];
+        var next = new long[cur.Length + 1];
+        System.Array.Copy(cur, next, cur.Length);
+        next[cur.Length] = x;
+        return rt.MakeObj(next);
+    }
+    static int VecCount(Rt rt, long v) => rt.Objs[(int) v].Length;
+--csharp
+    static Rt Fresh(long nextId) {
+        var rt = new Rt();
+        rt.Empty = rt.MakeObj(new long[0]);
+        rt.EmptyMapV = rt.MakeObj(new long[0]);
+        long pairs = rt.MakeObj(new long[0]);
+        long threads = rt.MakeObj(new long[0]);
+        rt.SchedV = rt.MakeObj(new long[]{ nextId, pairs, threads });
+        return rt;
+    }
+    static string Made(Rt rt, long p) {
+        long inbox = rt.Slot(p, Conc.PT_INBOX);
+        int n = VecCount(rt, inbox);
+        bool allEmpty = true;
+        for (int i = 0; i < n; i++) if (rt.Slot(inbox, i) != EMPTY) allEmpty = false;
+        var reg = new System.Collections.Generic.List<string>();
+        foreach (long id in rt.Registered) reg.Add(id.ToString());
+        return rt.Slot(p, Conc.PT_ID) + " " + rt.Slot(rt.SchedV, Conc.SC_NEXTID)
+             + " " + rt.Slot(p, Conc.PT_RING) + " " + n + " " + (allEmpty ? 1 : 0)
+             + " " + rt.Slot(p, Conc.PT_READ) + " " + rt.Slot(p, Conc.PT_WRITE)
+             + " " + rt.Slot(p, Conc.PT_BYTES) + " " + rt.Slot(p, Conc.PT_PEER)
+             + " " + rt.Slot(p, Conc.PT_KIND)
+             + " " + (reg.Count == 0 ? "-" : string.Join(",", reg));
+    }
+    static void Main() {
+        var a = Fresh(7);
+        long pa = NewPortAt(a, 4, a.MakeObj(new long[0]), Conc.K_CHANNEL, 1, -1);
+        string r1 = Made(a, pa);
+
+        var b = Fresh(7);
+        long pb = NewPortAt(b, 0, b.MakeObj(new long[0]), Conc.K_CHANNEL, 1, -1);
+        string r2 = b.Slot(pb, Conc.PT_RING) + " " + VecCount(b, b.Slot(pb, Conc.PT_INBOX));
+
+        var c = Fresh(7);
+        long pc = NewPortAt(c, 65536, c.MakeObj(new long[0]), 1, 1, 99);
+        string r3 = c.Slot(pc, Conc.PT_ID) + " " + c.Slot(c.SchedV, Conc.SC_NEXTID)
+                  + " " + c.Slot(pc, Conc.PT_RING) + " "
+                  + VecCount(c, c.Slot(pc, Conc.PT_INBOX));
+
+        var d = Fresh(1);
+        long p1 = NewPortAt(d, 1, d.MakeObj(new long[0]), Conc.K_CHANNEL, 1, -1);
+        long p2 = NewPortAt(d, 1, d.MakeObj(new long[0]), Conc.K_CHANNEL, 1, -1);
+        LinkPeersAt(d, p1, p2);
+        long pairs = d.Slot(d.SchedV, Conc.SC_PAIRS);
+        var rend = new System.Collections.Generic.List<string>();
+        for (int i = 0; i < VecCount(d, pairs); i++) {
+            long e = d.Slot(pairs, i);
+            rend.Add(d.Slot(e, 0) + ":" + d.Slot(e, 1));
+        }
+        string r4 = d.Slot(p1, Conc.PT_PEER) + " " + d.Slot(p2, Conc.PT_PEER)
+                  + " " + string.Join(",", rend);
+        var ch = Fresh(5);
+        long clbl = ch.MakeObj(new long[0]);
+        long pair = ChannelAt(ch, 4, clbl);
+        long ca = ch.Slot(pair, 0), cb = ch.Slot(pair, 1);
+        string r5 = VecCount(ch, pair) + " " + ch.Slot(ca, Conc.PT_ID) + " " + ch.Slot(cb, Conc.PT_ID)
+                  + " " + ch.Slot(ca, Conc.PT_CAP) + " " + ch.Slot(cb, Conc.PT_CAP)
+                  + " " + ch.Slot(ca, Conc.PT_PEER) + " " + ch.Slot(cb, Conc.PT_PEER)
+                  + " " + (ch.Slot(ca, Conc.PT_LABEL) == ch.Slot(cb, Conc.PT_LABEL) ? 1 : 0);
+
+        var sp1 = Fresh(5);
+        long entry = sp1.MakeObj(new long[0]);
+        long th = SpawnAt(sp1, entry);
+        string r6 = sp1.Slot(th, Conc.TH_STATUS) + " " + sp1.Slot(th, Conc.TH_ID)
+                  + " " + sp1.Slot(th, Conc.TH_TOKEN)
+                  + " " + (sp1.Slot(th, Conc.TH_ENTRY) == entry ? 1 : 0)
+                  + " " + (sp1.Slot(th, Conc.TH_BINDINGS) == NIL ? 1 : 0)
+                  + " " + VecCount(sp1, sp1.Slot(sp1.SchedV, Conc.SC_THREADS));
+
+        var sp2 = Fresh(5);
+        long m = sp2.MakeObj(new long[0]);
+        sp2.Binds = m;
+        long th2 = SpawnAt(sp2, sp2.MakeObj(new long[0]));
+        string r7 = sp2.Slot(th2, Conc.TH_BINDINGS) == m ? "1" : "0";
+
+        System.Console.WriteLine(r1 + " | " + r2 + " | " + r3 + " | " + r4
+                                 + " | " + r5 + " | " + r6 + " | " + r7);
+    }
+--expect
+7 8 4 4 1 0 0 0 -1 0 7 | 1 1 | 99 7 64 64 | 2 1 1:2,2:1 | 2 5 6 4 4 6 5 1 | 0 5 -1 1 0 1 | 1
+--expect-why
+DERIVED FROM WHAT MAKING A PORT PROMISES.
+
+  Case 1, a CHANNEL of capacity 4 with the id left to the runtime. Fields are
+  `<id> <nextid after> <ring> <inbox len> <all EMPTY> <read> <write> <bytes>
+  <peer> <kind> <registered>`:
+
+    `7`   THE COUNTER'S VALUE became this port's id.
+    `8`   ... and the counter was CONSUMED. Case 3 is the other half of this.
+    `4`   the ring is the channel's cap.
+    `4`   and the inbox array is actually that long -- `PT_RING` saying 4 while
+          the array is 64 would be a ring that wraps inside a larger buffer,
+          which reads correct until the day something walks the array.
+    `1`   EVERY SLOT IS `EMPTY`, not nil. A vacant slot's own word is what says
+          it is vacant, so a ring left full of nil has no vacancies at all --
+          and nil is a value a guest can legitimately send.
+    `0 0 0`  the cursors and the byte count start at zero.
+    `-1`  NO PEER, as an ID rather than an object.
+    `0`   the kind it was asked for.
+    `7`   and it was REGISTERED, under that id. A port the registry never heard
+          of cannot be found by any later lookup.
+
+  Case 2, a channel asking for capacity 0. `1 1`: THE RING IS FLOORED AT ONE,
+  in `PT_RING` and in the array. `channel` is allowed to ask for nothing, and
+  a zero-length ring can never accept anything -- every send on it would find
+  no vacancy for ever. Without the floor this reads `0 0`.
+
+  Case 3, a BRIDGE with a byte budget of 65536 and an id given from outside.
+  `99 7 64 64`:
+
+    `99`  the given id is USED as given.
+    `7`   **AND THE COUNTER IS NOT TOUCHED.** A host id is the host's own to
+          choose; consuming a counter value for one hands the same number out
+          twice later. Case 1's `8` and this `7` are the pair -- neither field
+          alone says the rule, because an implementation that always bumped
+          passes case 1 and one that never bumped passes case 3.
+    `64`  **THE RING IS `RING_MESSAGES`, NOT THE CAP.** A bridge's cap is a
+          budget in BYTES and its ring is a count of MESSAGES; sizing one from
+          the other would allocate 65 536 slots for a port allowed 65 536
+          bytes. The two are different questions and this is the field that
+          says so -- it reads `65536` if they are confused.
+    `64`  and the array is that long too.
+
+  Case 4, linking two ends. `2 1 1:2,2:1`:
+
+    `2 1` each end learns the OTHER's id.
+    `1:2,2:1`  **AND THE SCHEDULER LEARNS IT TWICE, BOTH WAYS ROUND.** The
+          lookup walks this list comparing the FIRST element, so a pairing
+          recorded one way only answers one way -- and the end that was second
+          would find no peer at all, which is indistinguishable from an
+          orphaned port and is how it would actually present. Recording only
+          `1:2` still passes both of the fields before it.
+
+  --- case 5, a CHANNEL: `<len> <a id> <b id> <a cap> <b cap> <a peer> <b peer>
+      <labels equal>` ---
+
+  chan `2`      TWO ENDS, returned as a vector the caller destructures.
+  chan `5 6`    THE ENDS ARE IN THE ORDER THEY WERE MADE. Nothing else
+                distinguishes them -- they are symmetric -- so the order has to
+                be fixed here rather than discovered, and the ids are what show
+                it: reversed, this reads `6 5`.
+  chan `4 4`    **BOTH ENDS GET THE CAP.** A channel is one queue seen from two
+                sides; a bound that differed by direction would accept more one
+                way than the other, and only the second field says the second
+                end got it. Reads `4 0` if the cap reaches one end only.
+  chan `6 5`    AND THEY ARE WIRED, each naming the other. `-1 -1` if
+                `link-peers-at` is not called -- which is a channel whose two
+                ends have never heard of each other and which presents as two
+                orphaned ports.
+  chan `1`      BOTH ENDS CARRY THE SAME LABEL. It names the CHANNEL; an end
+                reporting a different name from its peer makes a diagnostic
+                read as though two conversations were involved.
+
+  --- cases 6-7, a SPAWN: `<status> <id> <token> <entry kept> <bindings nil>
+      <threads>` then `<bindings inherited>` ---
+
+  spawn `0`     **`ST_NEW`, NOT `ST_RUNNABLE`.** That is what `run-one` reads to
+                choose between STARTING this thread at its entry and RESUMING
+                one that parked. Marked runnable before it has ever run, it is
+                restored from a `TH_STACK` of nil and continues off the end of
+                an empty value stack. Reads `1` if the state is wrong.
+  spawn `5`     THE ID CAME FROM `SC_NEXTID` -- the sandbox's counter, the same
+                one a port's id comes from, so a thread and a port never share
+                a number and neither is an index into anything.
+  spawn `-1`    NO WAITER YET.
+  spawn `1`     THE ENTRY IS KEPT, and it is the value that was passed rather
+                than anything derived from it.
+  spawn `0`     **THE BINDINGS ARE NOT NIL**, even though nothing had bound:
+                the empty map is used. A thread carrying nil there would have
+                every later binding push onto nothing.
+  spawn `1`     AND IT IS ENROLLED. A thread the scheduler does not hold is a
+                thread nothing will ever pick; reads `0` if the append is
+                missing, and every field before it still passes.
+  spawn `1`     **BINDINGS LIVE AT THE SPAWN ARE INHERITED**, which is the
+                whole of what makes a dynamic binding dynamic across a spawn.
+                This case is the previous one's fixture with one thing changed
+                -- a map is bound first -- and it reads `0` if the new thread
+                is given the empty map regardless. Case 6's `0` cannot see
+                that: both a correct inherit and a blanket empty-map are
+                non-nil there.
+

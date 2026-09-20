@@ -1,0 +1,314 @@
+--rust-head
+// A TOY SCHEDULER WITH TWO LISTS. A vector is a row whose slots ARE its items;
+// the scheduler is a row of two. Nothing else is modelled, because nothing
+// else is read.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_0000_0000_0000);
+mod conc {
+    pub const SC_EVENTS: u32 = 0;
+    pub const SC_BRIDGES: u32 = 1;
+}
+impl Value {
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn is_nil(self) -> bool { self == NIL }
+}
+struct Rt { objs: Vec<Vec<Value>>, roots: Vec<Value>, sched_v: Value, empty: Value }
+impl Rt {
+    fn obj(&mut self, slots: Vec<Value>) -> Value {
+        self.objs.push(slots);
+        Value((self.objs.len() - 1) as u64)
+    }
+    fn slot(&self, v: Value, i: u32) -> Value { self.objs[v.0 as usize][i as usize] }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.objs[v.0 as usize][i as usize] = x; }
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn pop_to(&mut self, i: usize) { self.roots.truncate(i); }
+    fn sched(&self) -> Value { self.sched_v }
+    // A SHARED SINGLETON, as the real one is: it allocates nothing, and a toy
+    // that allocated here would make every conj below look one bigger.
+    fn empty_vec(&self) -> Value { self.empty }
+    fn vec_conj(&mut self, v: Value, x: Value) -> Value {
+        let mut next = self.objs[v.0 as usize].clone();
+        next.push(x);
+        self.obj(next)
+    }
+    fn vec_count(&self, v: Value) -> u32 { self.objs[v.0 as usize].len() as u32 }
+    fn vec_nth(&self, v: Value, i: u32, d: Value) -> Value {
+        *self.objs[v.0 as usize].get(i as usize).unwrap_or(&d)
+    }
+--rust
+}
+fn fresh(bridges: &[i64]) -> Rt {
+    let mut rt = Rt { objs: vec![], roots: vec![], sched_v: NIL, empty: NIL };
+    rt.empty = rt.obj(vec![]);
+    let evs = rt.obj(vec![]);
+    let bs: Vec<Value> = bridges.iter().map(|i| Value::fixnum(*i)).collect();
+    let bv = rt.obj(bs);
+    rt.sched_v = rt.obj(vec![evs, bv]);
+    rt
+}
+fn events(rt: &Rt) -> String {
+    let evs = rt.slot(rt.sched_v, conc::SC_EVENTS);
+    let n = rt.vec_count(evs);
+    let mut out: Vec<String> = vec![];
+    for i in 0..n {
+        let e = rt.vec_nth(evs, i, NIL);
+        out.push(format!("{}:{}:{}:{}",
+            rt.vec_nth(e, 0, NIL).as_fixnum(),
+            rt.vec_nth(e, 1, NIL).as_fixnum(),
+            rt.vec_nth(e, 2, NIL).as_fixnum(),
+            if rt.vec_nth(e, 3, NIL).is_nil() { "n" } else { "p" }));
+    }
+    if out.is_empty() { "-".to_string() } else { out.join(",") }
+}
+fn bridges(rt: &Rt) -> String {
+    let bv = rt.slot(rt.sched_v, conc::SC_BRIDGES);
+    let n = rt.vec_count(bv);
+    let out: Vec<String> = (0..n).map(|i| rt.vec_nth(bv, i, NIL).as_fixnum().to_string()).collect();
+    if out.is_empty() { "-".to_string() } else { out.join(",") }
+}
+fn main() {
+    // 1-2. TWO EVENTS, in the order they were pushed, with `b` in the third
+    //      field and a payload only on the second.
+    let mut a = fresh(&[]);
+    a.push_event_at(3, 10, 0, NIL);
+    let payload = a.obj(vec![]);
+    a.push_event_at(5, 11, 7, payload);
+    let r1 = events(&a);
+
+    // 3. FORGETTING ONE, with the survivors in their original order.
+    let mut b = fresh(&[10, 11, 12]);
+    b.forget_bridge_at(11);
+    let r2 = bridges(&b);
+
+    // 4. FORGETTING ONE THAT IS NOT THERE leaves the contents alone.
+    let mut c = fresh(&[10, 11, 12]);
+    c.forget_bridge_at(99);
+    let r3 = bridges(&c);
+
+    // 5. NO SCHEDULER is not an error; reaching the line is the assertion.
+    let mut d = fresh(&[10]);
+    d.sched_v = NIL;
+    d.forget_bridge_at(10);
+    println!("{} | {} | {} | 1", r1, r2, r3);
+}
+--java-head
+    // THE SAME TOY, field for field.
+    static final long NIL = 0xFFFF000000000000L;
+    static final class Val {
+        static final long NIL = 0xFFFF000000000000L;
+        static boolean isNil(long v) { return v == NIL; }
+        static long fixnum(long n) { return n; }
+        static long asHeap(long v) { return v; }
+        static long asFixnum(long v) { return v; }
+    }
+    static long fx(long v) { return v; }
+    static final class Conc {
+        static final int SC_EVENTS = 0, SC_BRIDGES = 1;
+        static long sched(Rt rt) { return rt.schedV; }
+    }
+    static final class Vec { static long empty(Rt rt) { return rt.empty; } }
+    static final class Rt {
+        java.util.List<long[]> objs = new java.util.ArrayList<>();
+        java.util.List<Long> roots = new java.util.ArrayList<>();
+        long schedV = NIL, empty = NIL;
+        long obj(long[] slots) { objs.add(slots); return objs.size() - 1; }
+        long slot(long v, int i) { return objs.get((int) v)[i]; }
+        void setSlot(long v, int i, long x) { objs.get((int) v)[i] = x; }
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void setR(int i, long v) { roots.set(i, v); }
+        void popTo(int i) { while (roots.size() > i) roots.remove(roots.size() - 1); }
+    }
+    static long vecConj(Rt rt, long v, long x) {
+        long[] cur = rt.objs.get((int) v);
+        long[] next = java.util.Arrays.copyOf(cur, cur.length + 1);
+        next[cur.length] = x;
+        return rt.obj(next);
+    }
+    static int vecCount(Rt rt, long v) { return rt.objs.get((int) v).length; }
+    static long vecNth(Rt rt, long v, int i, long d) {
+        long[] row = rt.objs.get((int) v);
+        return i < row.length ? row[i] : d;
+    }
+--java
+    static Rt fresh(long[] bridges) {
+        Rt rt = new Rt();
+        rt.empty = rt.obj(new long[0]);
+        long evs = rt.obj(new long[0]);
+        long bv = rt.obj(bridges.clone());
+        rt.schedV = rt.obj(new long[]{evs, bv});
+        return rt;
+    }
+    static String events(Rt rt) {
+        long evs = rt.slot(rt.schedV, Conc.SC_EVENTS);
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < vecCount(rt, evs); i++) {
+            long e = vecNth(rt, evs, i, NIL);
+            if (out.length() > 0) out.append(',');
+            out.append(vecNth(rt, e, 0, NIL)).append(':')
+               .append(vecNth(rt, e, 1, NIL)).append(':')
+               .append(vecNth(rt, e, 2, NIL)).append(':')
+               .append(vecNth(rt, e, 3, NIL) == NIL ? "n" : "p");
+        }
+        return out.length() == 0 ? "-" : out.toString();
+    }
+    static String bridges(Rt rt) {
+        long bv = rt.slot(rt.schedV, Conc.SC_BRIDGES);
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < vecCount(rt, bv); i++) {
+            if (out.length() > 0) out.append(',');
+            out.append(vecNth(rt, bv, i, NIL));
+        }
+        return out.length() == 0 ? "-" : out.toString();
+    }
+    public static void main(String[] args) {
+        Rt a = fresh(new long[0]);
+        pushEventAt(a, 3, 10, 0, NIL);
+        pushEventAt(a, 5, 11, 7, a.obj(new long[0]));
+        String r1 = events(a);
+
+        Rt b = fresh(new long[]{10, 11, 12});
+        forgetBridgeAt(b, 11);
+        String r2 = bridges(b);
+
+        Rt c = fresh(new long[]{10, 11, 12});
+        forgetBridgeAt(c, 99);
+        String r3 = bridges(c);
+
+        Rt d = fresh(new long[]{10});
+        d.schedV = NIL;
+        forgetBridgeAt(d, 10);
+        System.out.println(r1 + " | " + r2 + " | " + r3 + " | 1");
+    }
+--csharp-head
+    // THE SAME TOY AGAIN, in this target's spelling.
+    const long NIL = unchecked((long)0xFFFF000000000000UL);
+    static class Val {
+        public const long Nil = unchecked((long)0xFFFF000000000000UL);
+        public static bool IsNil(long v) => v == Nil;
+        public static long Fixnum(long n) => n;
+        public static long AsHeap(long v) => v;
+        public static long AsFixnum(long v) => v;
+    }
+    static long Fx(long v) => v;
+    static class Conc {
+        public const int SC_EVENTS = 0, SC_BRIDGES = 1;
+        public static long Sched(Rt rt) => rt.SchedV;
+    }
+    static class Vec { public static long Empty(Rt rt) => rt.Empty; }
+    public class Rt {
+        public System.Collections.Generic.List<long[]> Objs = new System.Collections.Generic.List<long[]>();
+        public System.Collections.Generic.List<long> Roots = new System.Collections.Generic.List<long>();
+        public long SchedV = NIL, Empty = NIL;
+        public long MakeObj(long[] slots) { Objs.Add(slots); return Objs.Count - 1; }
+        public long Slot(long v, int i) => Objs[(int) v][i];
+        public void SetSlot(long v, int i, long x) { Objs[(int) v][i] = x; }
+        public int Mark() => Roots.Count;
+        public int Push(long v) { Roots.Add(v); return Roots.Count - 1; }
+        public long R(int i) => Roots[i];
+        public void SetR(int i, long v) { Roots[i] = v; }
+        public void PopTo(int i) { while (Roots.Count > i) Roots.RemoveAt(Roots.Count - 1); }
+    }
+    static long VecConj(Rt rt, long v, long x) {
+        var cur = rt.Objs[(int) v];
+        var next = new long[cur.Length + 1];
+        System.Array.Copy(cur, next, cur.Length);
+        next[cur.Length] = x;
+        return rt.MakeObj(next);
+    }
+    static int VecCount(Rt rt, long v) => rt.Objs[(int) v].Length;
+    static long VecNth(Rt rt, long v, int i, long d) {
+        var row = rt.Objs[(int) v];
+        return i < row.Length ? row[i] : d;
+    }
+--csharp
+    static Rt Fresh(long[] bridges) {
+        var rt = new Rt();
+        rt.Empty = rt.MakeObj(new long[0]);
+        long evs = rt.MakeObj(new long[0]);
+        long bv = rt.MakeObj((long[]) bridges.Clone());
+        rt.SchedV = rt.MakeObj(new long[]{ evs, bv });
+        return rt;
+    }
+    static string Events(Rt rt) {
+        long evs = rt.Slot(rt.SchedV, Conc.SC_EVENTS);
+        var outp = new System.Collections.Generic.List<string>();
+        for (int i = 0; i < VecCount(rt, evs); i++) {
+            long e = VecNth(rt, evs, i, NIL);
+            outp.Add(VecNth(rt, e, 0, NIL) + ":" + VecNth(rt, e, 1, NIL) + ":"
+                   + VecNth(rt, e, 2, NIL) + ":" + (VecNth(rt, e, 3, NIL) == NIL ? "n" : "p"));
+        }
+        return outp.Count == 0 ? "-" : string.Join(",", outp);
+    }
+    static string Bridges(Rt rt) {
+        long bv = rt.Slot(rt.SchedV, Conc.SC_BRIDGES);
+        var outp = new System.Collections.Generic.List<string>();
+        for (int i = 0; i < VecCount(rt, bv); i++) outp.Add(VecNth(rt, bv, i, NIL).ToString());
+        return outp.Count == 0 ? "-" : string.Join(",", outp);
+    }
+    static void Main() {
+        var a = Fresh(new long[0]);
+        PushEventAt(a, 3, 10, 0, NIL);
+        PushEventAt(a, 5, 11, 7, a.MakeObj(new long[0]));
+        string r1 = Events(a);
+
+        var b = Fresh(new long[]{10, 11, 12});
+        ForgetBridgeAt(b, 11);
+        string r2 = Bridges(b);
+
+        var c = Fresh(new long[]{10, 11, 12});
+        ForgetBridgeAt(c, 99);
+        string r3 = Bridges(c);
+
+        var d = Fresh(new long[]{10});
+        d.SchedV = NIL;
+        ForgetBridgeAt(d, 10);
+        System.Console.WriteLine(r1 + " | " + r2 + " | " + r3 + " | 1");
+    }
+--expect
+3:10:0:n,5:11:7:p | 10,12 | 10,11,12 | 1
+--expect-why
+DERIVED FROM WHAT THE TWO LIST WRITES PROMISE.
+
+  `3:10:0:n,5:11:7:p`  TWO EVENTS, and four things at once:
+
+      * THE ORDER THEY WERE PUSHED IN. The host drains from the head, so this
+        is the order it sees them -- and for the `EV_CLOSED`/`EV_RELEASE` pair
+        that IS the meaning: released-then-closed tells a host to let go of
+        something it has not yet been told is finished. A prepend reads
+        `5:11:7:p,3:10:0:n` and every other field here is unchanged.
+      * THE FIELD ORDER `kind a b payload`. Both events use DISTINCT numbers
+        so that a transposition shows: swapping `a` and `b` reads
+        `3:0:10:n,5:7:11:p`, checked by mutating the source rather than
+        assumed. The first event's `b` is 0 because that is what a real
+        `EV_CLOSED`/`EV_RELEASE` carries -- it is the realistic shape, not the
+        discriminating one, and the second event is what makes the pair say
+        the field order rather than one number's position.
+      * THAT `b` IS THE THIRD FIELD AND NOT THE SECOND. The host reads five
+        `u32`s positionally and nothing in the record says which is which, so
+        a transposition is a well-formed event meaning something else -- a
+        close reported against the wrong id, or a length read as a token.
+        There is no error for it to raise, ever.
+      * THE PAYLOAD TRAVELS, and nil is a legitimate payload. `n` on the first
+        and `p` on the second is what says the slot is written from the
+        argument rather than defaulted.
+
+  `10,12`     FORGETTING 11 KEEPS THE SURVIVORS IN ORDER. Nothing indexes this
+              list today, so a reversal would be invisible until something did
+              -- and then the cause would be a long way from the symptom.
+              Reads `12,10` if the rebuild is backwards.
+
+  `10,11,12`  AN ID THAT IS NOT THERE CHANGES NOTHING. It still REBUILDS, and
+              that is deliberately left as the three copies had it: skipping
+              the rebuild is a real improvement and a change to what gets
+              CHARGED, and `conform-hosts` asserts the gas to the instruction.
+              A behaviour-preserving port and a gas change are two commits.
+
+  `1`         A NIL SCHEDULER IS NOT AN ERROR. Reaching the line is the
+              assertion; a target that indexed into nil would not print it.
