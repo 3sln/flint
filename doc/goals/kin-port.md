@@ -6707,3 +6707,52 @@ across the difference -- and one expression carries the divergence.
 a regression, it is two builds in one directory. The gate owns the tree while
 it runs; a concurrent build is the same class of error as a predicate that can
 see itself.
+
+### Allocation and byte-charges are both ruled out, and my own instrument is the limit (2026-09-19)
+
+Took the next step -- splitting the non-allocation share of gas -- and it ruled
+out half of what was left before running into the accuracy of the instrument
+itself.
+
+**A second counter: `charge_bytes` gas, on native and the jvm.** The
+`charge_tick` and `charge_checked` sites carry labels ("apply", "str-join",
+"str-bytes") and those sets are IDENTICAL across the two runtimes, checked by
+diffing them. The `charge_bytes` calls carry no label, so they needed a total.
+
+**Byte-charges are identical: 2 on each side**, for the expression that
+diverges. Together with the per-type allocation histogram agreeing exactly,
+that leaves the residual in neither allocation nor string work.
+
+**The divergence follows the LAZY SEQ, not the vector.** Four variants, gap in
+the non-allocation bucket:
+
+    (into [] (range n))                    0
+    (into [] (map inc (range n)))         -5
+    (reduce + 0 (map inc (range n)))      -4
+    (mapv inc (range n))                   0
+
+So it is `map` producing a lazy seq that `reduce`/`into` then walks. Eager
+`mapv` does not do it; `into []` without a `map` does not do it.
+
+**And a real asymmetry found by reading, which is NOT this one.** Native's
+`map.rs` charges per element in `node_for_each` -- "every bulk walk over a map
+or set comes through here -- equality, hashing, `seq`, `reduce`" -- and the
+jvm's `Maps.java` has no such charge. That is exactly the divergence
+`bin/conform-hosts`'s own comment predicted. It does not show in these numbers
+because `(count (into #{} ...))` builds a set and never WALKS it: `count` is
+O(1). **It is latent, it is real, and a probe that walks a map or a set will
+find it.** Worth fixing on its own account rather than waiting for a row to go
+red.
+
+**WHERE THE INSTRUMENT STOPS, and this is the honest part.** The split is
+`steps - instrs - allocgas - bytesgas`, and for a program that does NOTHING
+that remainder is 103 with zero preemptions. So the bucket holds real charges
+the split does not attribute, and it is not small compared with a 5-step
+difference. Conclusions drawn from it about WHICH charge are not safe, and I
+am not drawing any.
+
+What is safe: allocation is identical per type and per charge, byte-charges are
+identical, and the labelled tick/checked sites are the same set on both
+runtimes. The next instrument has to attribute that remaining ~100, which means
+labelling the charge sites the way `C_GAS_*` labels the AOT doors rather than
+counting one family at a time.

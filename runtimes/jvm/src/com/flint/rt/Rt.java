@@ -1671,7 +1671,11 @@ public final class Rt {
     /// answers a different number for the same program, and the number is the
     /// whole point.
     public void chargeWork(long n) { steps += n; }
-    public void chargeBytes(long n) { chargeWork((n / 8) + 1); }
+    /// Gas charged by `chargeBytes` -- the string and byte work share of the
+    /// non-allocation total. Native counts the same thing; see
+    /// `runtime/src/aotstat.rs`.
+    public long chargeBytesGas;
+    public void chargeBytes(long n) { long g = (n / 8) + 1; chargeBytesGas += g; chargeWork(g); }
 
     /// How often `chargeTick` looks at the budget: a power of two so the test
     /// is a mask, small enough that the overshoot is not worth measuring.

@@ -140,6 +140,15 @@ pub static mut COUNTS: [u64; 43] = [0; 43];
 pub static mut ALLOC_N: [u64; 64] = [0; 64];
 pub static mut ALLOC_GAS: [u64; 64] = [0; 64];
 
+/// How many `charge_bytes` calls, and what they charged.
+///
+/// Splits the non-allocation share of gas into string/byte work and
+/// everything else. The `charge_bytes` calls carry no label -- unlike
+/// `charge_tick`'s, which name a builtin -- so reading the source cannot say
+/// which of them a program hit, and comparing two runtimes needs the total.
+pub static mut CHARGE_BYTES_N: u64 = 0;
+pub static mut CHARGE_BYTES_GAS: u64 = 0;
+
 /// Executed instructions by opcode. Which opcodes an emitter must handle inline
 /// is a distribution too, and guessing it is the same mistake as guessing the
 /// region length.

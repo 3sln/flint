@@ -1079,7 +1079,13 @@ impl Rt {
     /// a megabyte of concatenation from costing 1.
     #[inline]
     pub fn charge_bytes(&mut self, n: u32) {
-        self.charge_work((n as u64 / 8) + 1);
+        let g = (n as u64 / 8) + 1;
+        #[cfg(feature = "diagnostics")]
+        unsafe {
+            crate::aotstat::CHARGE_BYTES_N += 1;
+            crate::aotstat::CHARGE_BYTES_GAS += g;
+        }
+        self.charge_work(g);
     }
 
     /// The error a blown gas budget raises: catchable, and carrying what was

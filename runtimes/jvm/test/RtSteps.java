@@ -46,7 +46,8 @@ public class RtSteps {
       System.out.println("HIST " + sb);
       long ag = 0; for (long g : rt.allocGas) ag += g;
       System.out.println("SPLIT instrs=" + rt.instrs + " allocgas=" + ag
-                         + " other=" + (rt.steps - rt.instrs - ag));
+                         + " other=" + (rt.steps - rt.instrs - ag)
+                         + " bytesgas=" + rt.chargeBytesGas);
     }
   }
 }

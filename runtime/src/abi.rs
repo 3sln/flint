@@ -608,6 +608,15 @@ pub extern "C" fn stat_alloc_gas_by_ty(ty: u32) -> u64 {
     unsafe { crate::aotstat::ALLOC_GAS[(ty as usize) & 63] }
 }
 
+/// Gas charged by `charge_bytes` -- the string and byte work share of the
+/// non-allocation total. Pair it with `stat_steps`, `stat_region(80)` and the
+/// per-type allocation gas to account for every step a program spent.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_charge_bytes_gas() -> u64 {
+    unsafe { crate::aotstat::CHARGE_BYTES_GAS }
+}
+
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn set_gc_stress(on: u32) {
