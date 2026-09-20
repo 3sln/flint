@@ -4707,7 +4707,54 @@ is deliberately not a claim about the whole runtime.
 
 **Ratified:** ☐ not signed off
 
-**Status: the work was done; the harness is BROKEN and none of the ns/instruction figures below can be reproduced today. Checked 2026-09-12 at 639430e.**
+**Status: the work was done; the harness is BROKEN and none of the ns/instruction figures below can be reproduced today. Checked 2026-09-12 at 639430e; RE-RUN AND RE-DIAGNOSED 2026-09-19 — still broken, but not for the reasons recorded below.**
+
+**The banner is TRUE and was re-checked rather than repeated.** `./bin/bench-xruntime`
+today: exit 0, every engine row `FAILED`, the ns/instruction table empty, the
+resident-memory table printed. Exactly as described.
+
+**But both named breakages have moved, and one of them is already fixed.**
+
+* *Breakage (2), the hard-coded entry*, is FIXED IN THE TREE. `bench/xrt-run.mjs`
+  derives `construe.bench.xrt<N>/main` from the module filename and says so in
+  its own comment — "this is that one fixed". Nothing updated this record, so it
+  still sends a reader to repair something already repaired.
+* *The live blocker is a THIRD breakage nobody wrote down*: `flint_call` is no
+  longer an export. `node bench/xrt-run.mjs out/xrt-0.wasm construe.bench.xrt0/main`
+  now fails with `TypeError: e.flint_call is not a function`. The module's
+  exports are the PORT PROTOCOL — `flint_system_port`, `flint_deliver`,
+  `flint_resume`, `flint_drain`, `flint_continue` — because a call is a message
+  on the system port (`calls-are-ports`), and the single-shot entry the
+  benchmark driver was built on went with it.
+
+**THIS WANTS A DECISION, NOT A PATCH, and that is the finding.** `xrt-run.mjs`
+is deliberately "nothing but a `WebAssembly.Instance` — the JS engines'
+equivalent of `wasmtime --invoke main`", and the table's claim rests on that:
+the SLOPE is comparable because every engine does the SAME minimal thing. Two
+things follow, and they point the same way:
+
+* the wasmtime and wasm3 rows cannot be rescued in the driver at all. There is
+  no `main` to `--invoke` and a bare invoker cannot drive a bind/call/pump
+  protocol;
+* giving node, bun, deno and SpiderMonkey an SDK-style pump WOULD work, and
+  would make them do strictly more work than the two standalone engines. The
+  table would still print six rows and would no longer be comparing the same
+  thing.
+
+A partial fix here is the exact failure this record already caught itself in
+once: *"The control was measuring the wrong thing, so agreement proved
+nothing."* Six plausible rows that are not comparable is worse than an empty
+table, because an empty table is obviously empty.
+
+So the choice is between **exporting a benchmark shim** — one `main`-like
+export that runs a named function, so every engine can do the same minimal
+thing again, at the cost of an export in every module and a deliberate
+exception to "nothing is called automatically" (`structured-ports` step 5) —
+and **narrowing the table to the JS engines** and saying in the header that
+wasmtime and wasm3 are no longer measurable this way. Not taken here: the
+first spends module budget on a benchmark and the second gives up the
+comparison this decision exists for.
+
 This decision directly decided `other-hosts`' JVM tier, and one of its own
 central predictions turned out to be backwards once actually measured — both
 of those still stand on the record. What does not stand is the table: run
@@ -7252,7 +7299,61 @@ old rule would have broken.
 `arg_alloc`, `arg_push`, `out_ptr` and `out_len` stay: they are how a host
 writes an encoded value in and reads one back, which the port needs too.
 
-### OPEN, AND IT BLOCKS THE GATE: gas no longer agrees across runtimes
+### CLOSED 2026-09-19 -- was "OPEN, AND IT BLOCKS THE GATE": gas no longer agrees across runtimes
+
+**The row is green and was re-run today**: `bin/conform-hosts` exits 0 and reads
+
+    ok   the same program costs the same gas, to the instruction: 143035 [jvm]
+
+Everything below is kept rather than deleted, because the reasoning is the part
+worth having -- and because one of its conclusions was wrong in a way that is
+worth carrying forward. THE OLD TITLE IS KEPT IN THIS HEADING so citations to
+*OPEN, AND IT BLOCKS THE GATE* still find it.
+
+**The decision this section poses was never taken, and was never needed.**
+Neither "make the ports call over their system ports" nor "take the scheduler's
+steps out of gas" happened. The gap closed as three ordinary defects, recorded
+in full in `doc/goals/kin-port.md`:
+
+* **a preemption that COST billed steps.** `save_current_state` saved three
+  buffers and billed one of them -- the handler buffer -- while the stack and
+  frame buffers were deliberately unbilled, their size being a property of the
+  calling convention rather than of the program. Nothing argued for the
+  difference. It made gas depend on WHERE a thread happened to be preempted;
+* **native billing the slice boundary differently** from the ports, and
+  initialisers billed on one side and not the other;
+* **an instruction that ran free.** `tick` tests before it charges, so the
+  iteration that trips a slice does not increment `steps`. When the runtime
+  can preempt, it returns and nothing is lost; when it CANNOT -- Rust frames
+  underneath, which is what forcing a lazy seq looks like -- native re-armed
+  the slice and FELL THROUGH to execute the instruction anyway. The jvm and
+  the clr already `continue`d there and so charged it.
+
+**What the ports did change, and it is not what this section asked for.** Both
+`RtSteps` drivers now enter the program through a bridge call rather than
+`runProgram` -- dated 2026-09-18 in their own comments -- so the "the two enter
+by a different door" half of point 1 is closed. `system_message` still exists
+on native (`runtime/src/conc.rs`, `cli/src/serve.rs`) and still does not exist
+in `runtimes/`, checked today. That remains true and is no longer a gas
+question.
+
+**THE CORRECTION WORTH CARRYING.** *LOCALISED, 2026-09-16* below was right
+about WHERE -- constant per SLICE, in the preempt/resume path, and the handler
+buffer is exactly that. Its prescription was not what fixed it:
+
+> the way to make them agree by construction is to generate the resume path.
+
+Generating it would have made two implementations agree on a charge that
+**should not have existed on either of them**. Convergence is not correctness:
+"make them agree by construction" answers which answer they give and says
+nothing about whether it is the right one, and a generated resume path would
+have frozen the wrong number into all three at once. The same trap the
+section at `doc/goals/kin-port.md` records from the other side -- "the port
+made the scheduler agree and the numbers still disagreed, because the numbers
+are not produced by the part that was generated."
+
+---
+
 
 `bin/conform-hosts` compares the gas two workloads cost, native against jvm, to
 the INSTRUCTION. That row now fails:
@@ -7294,6 +7395,10 @@ So the choice is between making the ports call over their system ports too,
 which makes every runtime pay the scheduler and bakes it into gas everywhere,
 and taking the scheduler's steps out of gas so it measures the program again.
 That is a decision about what gas MEANS.
+
+**Neither was chosen and neither was needed** -- see the status at the top of
+this section. The framing was not wrong to pose; it was answered by the gap
+turning out not to be about the scheduler at all.
 
 ### LOCALISED, 2026-09-16: it is ~46.5 steps per SLICE, and the analysis above is wrong
 

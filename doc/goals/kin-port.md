@@ -1175,6 +1175,12 @@ buffers, which kin has no subject for. The rule the two of them draw:
 raw heap memory and builds host byte buffers, which is the `Gc` case wearing
 different clothes.
 
+> **SUPERSEDED, 2026-09-20 — see *Re-ranked against Rust* at the end of this
+> file.** This table is `jvm`/`clr` RAW LINES with Rust absent, which is the
+> complaint OPEN ITEM 2 records about it. Re-measured on CODE lines across all
+> three, with a portability classifier: the order changes, `Str` at #2 is
+> wrong, and `Img` at #4 needs a technique rather than an afternoon.
+
 ### Why `Conc` is first, and it is not the line count
 
 Three cross-runtime defects were found in `Conc` in a single session, all of
@@ -1876,16 +1882,66 @@ is not yet measured, only that it cannot be doing what native does.
 parked. Native says it; the ports do not, which leaves a guest with a
 non-start or a downstream error instead of the sentence naming the cause.
 
-NOT FIXED HERE. It is a `Vm` change rather than a `Conc` one, it wants a
-fixture that actually parks at top level on all three, and this slice is the
-waiter table. It belongs on the list rather than in the change.
+**CLOSED, 2026-09-19**, and what it actually did was worse than "not
+reported": see the section at the end of this file. Both ports answered the
+EMPTY STRING, and the fixture that says so is
+`runtimes/conform-host/initpark.cljc`, now run three ways by
+`bin/conform-hosts`.
+
+### OPEN: a bad value-stack root when `settle` saves a parked thread
+
+Found 2026-09-20 by the stress row added that day, and PROVED pre-existing --
+see "Two rooting bugs on a path nothing stressed" at the end of this file.
+
+    java -Dflint.gcstress=1 -cp runtimes/jvm/classes RtHostPorts out/conform/hostport.img
+
+    to-space overflow: 4298768384 past 8454144
+      Gc.forward <- Roots.forEach(Roots.java:90) <- Gc.minor <- alloc
+      <- saveCurrentState <- settle <- scheduler <- runProgram
+
+`Roots.java:90` is the VALUE stack. Not a port: `saveCurrentState` is on the
+never-port list (raw byte buffers), so this is a fix in the runtime rather than
+a slice of the port.
+
+**LOCALISED 2026-09-20, not fixed.** Instrumented copies of the jvm sources in
+a scratch tree (the working tree was not touched). What is now known, all of it
+observed rather than reasoned:
+
+* the failing root is VALUE STACK SLOT 1, with `stackTop` = 2;
+* at the top of `saveCurrentState`, BEFORE its first allocation, the spaces are
+  `from=0x410000 to=0x10000` and the two live slots are
+
+      [0] a=0x410000  inFrom=true   ty=21 len=2
+      [1] a=0x10020   inFrom=FALSE  ty=9  len=6
+
+  Slot 1 is a perfectly well-formed object -- **and it is in TO-SPACE while the
+  mutator is running.** That is the violated invariant: between collections,
+  nothing a root names should live in to-space. It is a stale forwarding
+  target, and it is only fatal once `stackTop` grows far enough to include that
+  slot in the walk;
+* by the time `minor` walks the roots, the spaces read `from=0x10000
+  to=0x410000` -- swapped relative to the probe taken a few statements earlier
+  -- and slot 1's header then reads `ty=0 len=-458752`, which is a flint VALUE
+  where a header should be. `forward` computes a 4 GB size from it and trips
+  the to-space bound.
+
+The two halves that still need an answer: WHO leaves a root naming to-space,
+and WHY the spaces differ between the top of `saveCurrentState` and the root
+walk inside its own first allocation, with only `mark` and `push` in between.
+Answering either probably needs the collector's flip protocol read properly
+rather than inferred -- which is what stopped this investigation rather than a
+lack of reproduction.
+
+    reproduce:  java -Dflint.gcstress=1 -cp runtimes/jvm/classes \
+                     RtHostPorts out/conform/hostport.img
+    it is deterministic, and the addresses above are stable across runs.
 
 ### Ready to do, no decision needed
 
 | | item | why |
 | --- | --- | --- |
 | 1 | ~~**Port the rest of `Interns`**~~ **DONE, and this row was stale** | `mask`, `needs-grow`, `insert-at` and `raw-insert` are all four in `kin/interns.kin` and called by all three runtimes -- checked 2026-09-16 by reading the call sites, not the status. What is still out is `lookup` and `grow`: `lookup` takes a `FnMut(Value) -> bool` PREDICATE, and a closure is the one shape kin has no answer for; `grow` allocates the new arrays. The aliasing axis does not help `lookup` and might help `grow` on the pike pattern -- caller allocates, generated code fills |
-| 2 | **Re-rank phase 3 against Rust** | the ratio table is `jvm` vs `clr` with Rust absent, and every blocker actually met has been a Rust divergence. `Maps`, `Table`, `Str`, `Bytes`, `Vec`, `Snap`, `Pike` are all scored 0-1% on a metric that cannot see the thing that blocks them |
+| 2 | ~~**Re-rank phase 3 against Rust**~~ **DONE 2026-09-20** | measured across all three on code lines, with a blocker classifier. See *Re-ranked against Rust* at the end of this file. The complaint was right and the conclusion was not what it expected: those areas score low because they are 93-97% FINISHED, not because they are blocked |
 ### Wants a decision first
 
 | | item | the question |
@@ -6809,3 +6865,897 @@ written beside it.
 partial decomposition is a tolerance wearing a different hat: the remainder
 absorbs whatever you were looking for, and it absorbed this for four firings.
 The counters that close are worth more than the counters that are easy.
+
+---
+
+## The AOT `try` defect, closed: a guard reading a counter nobody incremented
+
+2026-09-19. `aot_try`, `tables` and `green` are back in the AOT row on both
+ports, and the exclusion is gone rather than moved.
+
+**The defect was one missing line, twice.** `aotCallAt` decides whether compiled
+code may carry on after a nested compiled call returns, and an unwind to a
+handler in THAT VERY FRAME is the case a frame-count test cannot see: it
+truncates back to exactly the depth the call started at. So the guard asks a
+second question --
+
+    frames.size() == before && unwinds == unwindsBefore && !aotUnwoundOut
+
+-- and both ports had ported the field, and the read, and not the `unwinds++`
+in `unwind` that the Rust has. The counter was zero for the life of the
+process. The second conjunct was the constant `true`. The guard degenerated
+into exactly the frame-count test its own comment warns against, and compiled
+code ran on past the handler with an unwound stack.
+
+**A guard whose input never changes still looks like a guard.** It reads
+correctly, it has a comment explaining the case it defends, and it type-checks.
+Nothing distinguishes it from a working one except asking what writes its
+input, and `grep unwinds` over each port answers in one screen: declared once,
+read once, assigned never. That grep is cheaper than everything else done here
+and would have ended it at the start.
+
+**The bisection handle answered a narrower question than it was read as
+answering.** `chunkAll` exists to split "a boundary is missing" from "an opcode
+is mis-emitted", and the note that stood on `aot_try.cljc` had drawn the second
+conclusion from it -- correctly, by the handle's own terms. The failure was in
+neither. The crossing protocol runs whatever the emitter emitted, and the
+handle says nothing about it. What settled it was making the emitter emit
+NOTHING: un-inlining every opcode, so every instruction bails to the
+interpreter, and the failure reproduced unchanged.
+
+*A two-way bisection cannot tell you the answer is not in either half. It can
+only tell you which half, and it will name one regardless.* The way to ask the
+wider question was the degenerate case -- turn the whole suspect mechanism off
+and see whether the symptom cares.
+
+**What the row now has that it did not.** `aot_try.cljc` had sat in the tree
+since the defect was found, as a reduction nothing executed -- it was not in
+`conform_progs` at all. It is now, and it is FIRST in the AOT loop, so the
+four-line program fails before `tables` and `green` do. Three-way agreement is
+exact: 335 arities / 1020 entries / 10387 gas on both ports, and the same for
+the other two.
+
+**Native was correct and UNGUARDED, and that was measured rather than assumed.**
+`test/aot.clj` had a `try` fixture already -- `handler`, one `try` per call --
+so the shape looked covered. It is not the same shape: a second throw caught in
+the same frame that made the compiled call is what makes the two readings of
+the guard differ, and one `try` never gets there. `twotry` joins the list, and
+the proof that it earns its place is that native was broken ON PURPOSE:
+replacing `self.unwinds += 1` with `+= 0` in `runtime/src/vm.rs` leaves
+`handler` PASSING and fails `twotry` on both the answer and the count (18 017
+interpreted against 16 344 compiled). The old fixture does not cover this; the
+new one does; and neither claim rests on reading the code.
+
+*A fixture that exercises the same feature is not a fixture that exercises the
+same failure.* `handler` and `twotry` are both `try` under a compiled arity, and
+exactly one of them can see this bug.
+
+
+## The initialising park, closed — and a transcript that hid it
+
+2026-09-19. The OPEN ITEMS entry above was written from READING all three
+runtimes, and it was careful to say so: "what a port actually DOES here is not
+yet measured, only that it cannot be doing what native does." Measuring it
+first was the right order, and it changed the shape of the fix.
+
+**What the ports did.** `runtimes/conform-host/initpark.cljc` is `hostreq.cljc`
+with the same `host/request` moved to a top-level `def`. One image, the three
+existing host-request drivers:
+
+| | before | after |
+| --- | --- | --- |
+| native | `IllegalStateException: a top-level form asked the host while the program was still initialising…` | unchanged |
+| jvm | *(empty)* | the same sentence |
+| clr | *(empty)* | the same sentence |
+
+Not a missing diagnostic — a SILENT EMPTY ANSWER, which is the half-built
+program `ports-are-the-hosts` exists to rule out. The cause is one line of
+reading: a park travels as `thrown == PARK`, so the `if (failed())` already in
+`ensureStarted` was TRUE for one, and the loop returned false with the park
+mistaken for an ordinary failure.
+
+**`abandon_current_thread` is now GENERATED, from `kin/sched.kin`.** It was
+hand-written on native and absent from both ports, and it is squarely inside
+what kin expresses -- it only moves values through the heap. Writing it once
+gave both ports the half that actually bites: the WAITER. Marking a thread DONE
+is not enough, because `park-on-port` registered a waiter naming it and the next
+host answer puts it back to RUNNABLE.
+
+**The drivers file pins exactly that, and the mutation proves it does.** The
+expected field group is `3,-1,1,1,0,3,1`, derived from the contract. Deleting
+the `free-waiter` call from the kin source and re-verifying gives
+`3,-1,1,1,1,1,1` -- the status, the token and BOTH cleared slots pass either
+way, and only the live-waiter count and the status-after-a-wake move. That last
+field is the bug as it was originally observed: DONE at the end of one `drive`,
+RUNNABLE at the start of the next.
+
+*An obvious field is not a useless one, but it must not be the only one.* Four
+of this group's seven fields cannot fail.
+
+**The transcript had its own defect, and it was hiding the answer.** The first
+measurement after the runtime fix still printed nothing, and the guard was
+firing correctly the whole time: the port drivers rendered
+
+    (Val.isNil(v) ? "" : rendered(rt, v))
+
+and `rendered` is the branch that reports a throw. A run that throws returns
+nil, so the one case that most needs reporting was the one case that could
+never reach it. Native prints its error text and the ports printed `""`.
+
+*A reporting path guarded by the success value cannot report a failure.* Both
+port drivers had it, in `hostreq` and `hostports` alike, and it would have made
+any future throw in either transcript invisible in exactly the same way.
+
+**And `hostreq` was never compared.** Three drivers existed for the
+request/response half of the host ABI -- native, jvm, clr -- and
+`bin/conform-hosts` did not mention the fixture. A trio nobody diffs is three
+ABIs again, which is the thing that section was built to prevent. Both
+fixtures now run there, `initpark` beside `hostreq`, and the native row
+additionally ASSERTS the sentence rather than only comparing: three runtimes
+agreeing on an empty answer is also "identical", and that is precisely what
+they used to agree on.
+
+---
+
+## `close-all-bridges` generated, and a name that shadowed a word
+
+2026-09-20. The next slice of the spike's #1 (`Conc`). What a shutdown means
+for a port is a DECISION, and it was written three times; it is now
+`close-bridges` in `kin/reapports.kin`, generated into all three, with each
+runtime's `closeAllBridges` a one-line delegation — the shape `reap-ports` over
+`reap-all` already had.
+
+**A latent divergence, settled by removing it.** The three copies did not agree
+on the `vec_nth` default: native passed `NIL`, both ports passed `NOT_FOUND`.
+Nothing could reach it — `k` is bounded by the count — so it was a difference
+that could not show, which is exactly the kind that survives a review. One
+definition has no such question in it.
+
+**The drivers pin what is easy to get wrong, and the mutations prove which
+fields do the work.** Four ports: a bridge, a CHANNEL, a bridge already closed,
+and a dead id with no row. Expected `2 1 2 10 1`, derived. Breaking the source
+on purpose:
+
+    baseline               2 1 2 10 1
+    no `crosses-a-heap`    2 2 2 10,11 1      the channel closed too
+    no `P_CLOSED` test     2 1 2 10,12 1      port 12 released a SECOND time
+
+The third field — port 12's state — never moves under either mutation. It reads
+like the assertion that covers the already-closed case and it covers nothing:
+`2` is what closing it again would also leave. Only the FIRED LIST separates
+them, and what it is protecting is not tidiness — a second `EV_RELEASE` makes
+the host let go of a port somebody still holds.
+
+*Write down which field catches which mutation, or a group of five can have one
+that works and four that decorate.*
+
+**THE TRAP, and single-source verification cannot see it.** A kin function
+SHADOWS a vocabulary word of the same name under whole-project generation. I
+first wrote this into `kin/sched.kin`, where `close-all-bridges` is a word that
+`sched-drive` calls; `kin/scripts/emit kin/sched.kin` and
+`kin/scripts/verify kin/sched.kin` were both perfectly happy, and `bin/check-kin`
+— which generates everything together — then failed with the generated `Sched`
+importing `Reapports`. The word had quietly stopped being a word.
+
+That matters beyond the name: the scheduler's drivers STUB `close-all-bridges`,
+and its toy scheduler has no port list at all, so resolving it to the real
+function would have forced a rewrite of a passing drivers file and changed
+every `drive` expectation that asserts "bridges closed". Renaming the kin
+function to `close-bridges` keeps the word a word. The house already had the
+pattern and I did not recognise it until the second failure.
+
+*`verify <one source>` answers a narrower question than `check-kin` does.* Run
+the whole-project check before believing a new name is free.
+
+**And `kin/scripts/gen` PRINTS; `kin/scripts/emit` WRITES.** Two regeneration
+attempts went nowhere because I reached for `gen`, read plausible code on
+stdout, and concluded the tree was updated. Both scripts say so in their own
+headers. `emit` with no arguments emits every source atomically, which is the
+right call whenever one source's names can reach another's.
+
+---
+
+## `close-side-effects` generated: the peer rule, and a mutation that lied
+
+2026-09-20, continuing the spike's #1. What follows from one end closing is a
+DECISION — which events, in which order, that the id leaves the held list, and
+that the PEER goes half-closed rather than closed — and it was written three
+times. It is now `close-effects` in `kin/reapports.kin`, generated into all
+three, with each runtime's `closeSideEffects` a one-line delegation. Five new
+vocabulary words (`PT_ID`, `P_OPEN`, `P_HALF`, `peer-of`, `forget-bridge`), and
+`peer_of`/`forget_bridge` widened from private on all three.
+
+**The subtle half is the peer, and the drivers pin it two ways.** A peer that is
+already closed must not be moved to `P_HALF` — a tidy close outranks a half —
+and must not be WOKEN either, because there is nothing new for it to learn.
+Both live in one `if`, so only the woken list can tell whether the test guards
+the wake as well as the write. Four mutations, each caught by a different
+field:
+
+    no `crosses-a-heap`   case 8  `-`        -> `3:40,5:40`   a channel told the host
+    no `P_OPEN` test      case 9  `50 2`     -> `50,51 4`     closed peer overwritten AND woken
+    peer not woken        case 7  `30,31`    -> `30`          state still right, wake lost
+    events swapped        case 7  `3:30,...` -> `5:30,...`    order
+
+The `--expect-why` also states what the group does NOT cover: where
+`forget-bridge` sits between the two events is not observable — it pushes
+nothing, and no host can see the interleaving. Saying so beats letting a reader
+assume a field covers it.
+
+**A MUTATION THAT FAILS TO APPLY READS EXACTLY LIKE A FIELD THAT DOES NOT
+DISCRIMINATE.** `crosses-a-heap` now appears twice in this file — in
+`close-effects` and in `close-bridges` — so the first mutation's replace
+matched two sites, did nothing, and the harness printed the BASELINE row under
+the label "no crosses-a-heap". That is indistinguishable by eye from "this
+field catches nothing", and the honest conclusion from it would have been to
+weaken or drop the case. What saved it was `assert s.count(old) == 1` in the
+mutation helper, which fired loudly enough to notice.
+
+*An adversarial probe needs its own adversarial check: assert the mutation
+LANDED before believing what it reports.*
+
+**And kin's vocabulary calls are positional templates with NO ARITY CHECK.** A
+stray `rt` in `(push-event rt EV_RELEASE rt id 0 NIL)` emitted
+`self.push_event(EV_RELEASE, self, id, 0)` — one argument shifted, the last one
+dropped, and `emit` reported success. Rust's compiler caught it here; a target
+whose template happened to type-check would have shipped a silently wrong call.
+Read the generated line after adding any vocabulary call, and prefer that to
+trusting a clean emit.
+
+**A fixture extended for a new case can leave the old paths under-modelled.**
+The C# toy still built two-slot port rows after the Rust and Java toys grew a
+third for `PT_KIND`; a whitespace difference had made the earlier edit miss it.
+It passed anyway, because the cases that existed then never read slot 2 — and
+it failed with an index-out-of-range only when these new cases did. `verify`
+reports that as "csharp produced no output", which names the symptom and not
+the cause: `dotnet run 2>/dev/null` in `kin/scripts/verify` drops the
+exception. A patched copy that keeps stderr found it in one run.
+
+---
+
+## `receive`'s drained half generated, and a scan that found nothing
+
+2026-09-20, still on the spike's #1. `kin/portdrain.kin` is new — 98 sources —
+and is the sibling of `kin/portring.kin`, which already held the inbox half.
+Between them, `receive` now has both of its decisions in one place: what to do
+when there IS a message, and what to do when there is not.
+
+**Zero new vocabulary.** `crosses_a_heap(kind)` is exactly `kind == K_BRIDGE`,
+so the bridge test the source needed was already a word. A slice that costs
+nothing to the vocabulary is worth preferring when one is available.
+
+**The code and the state write travel together.** `receive-drained` answers
+0 PARK / 1 END / 2 GONE and performs the `P_HALF` and `P_ORPHANED` writes
+itself. Splitting them would leave three runtimes each deciding when to mark a
+port, which is the part that was already written three times. What stays with
+the caller is only the THROW, because its message is a host string and kin has
+none — the line `report-deadlock` already draws.
+
+**The bridge exemption is the whole reason this is worth generating.** A
+channel has a peer OBJECT and can ask whether the other end is still there; a
+bridge's far end is the host's registry and is in no heap, so the same question
+answers nil for a perfectly healthy port. Without the exemption every empty
+receive on a live bridge throws "the other end of this port is gone" AND marks
+the port orphaned, so it keeps throwing.
+
+**Four mutations, and each one verifies a claim the `--expect-why` makes by
+name:**
+
+    no bridge exemption      field  9  `0:1` -> `2:5`   live bridge throws
+    exemption hoisted FIRST  field 10  `1:2` -> `0:2`   and 9 still passes
+    no ORPHANED write        field  5  `2:5` -> `2:1`
+    no HALF write            fields 2-4 `1:4` -> `1:1`
+
+The second is the one worth keeping: field 9 alone cannot tell a correct
+exemption from one that returns early on EVERY bridge, and field 10 is the
+only thing that separates them. Fields 9 and 10 are the same fixture differing
+in one value, which is what makes the pair evidence.
+
+### The scan that found nothing, and what it was worth
+
+Before picking, the three `Conc`s were compared by CONTROL-FLOW SHAPE — the
+ordered sequence of branch keywords and called names, normalised — to look for
+a divergence rather than a duplicate. **Across all 81 methods the two ports
+agree modulo language spelling.** No divergence is hiding in `Conc`; what is
+left there is dedup.
+
+That is worth the ten minutes it cost, and the scan's LIMITS are worth writing
+down beside the result, because the first reading of it was wrong twice. It
+flagged `sched` as differing: the extractor had run two functions together (a
+one-line body ending `}` on its own line) and then missed the JVM's
+`Conc::installBridgePort2`, a method reference with no parentheses for the
+tokeniser to find. Every `rust != jvm` row was noise for the same reason —
+different helper names on a different language.
+
+*A shape comparison is evidence when it says SAME and a lead when it says
+DIFFERENT.* Read every difference it reports before believing any of them.
+
+### A new kin source needs a `pub mod` line, and Rust says so unhelpfully
+
+`runtime/src/kgen/rt.rs` carries one line per source and `bin/check-kin`
+enforces it, for the reason its own header gives: a missing `pub mod` is not a
+compile error, it is a module that quietly never gets built. What happens
+first, though, is `cargo build` failing with `no method named receive_drained
+found for &mut Rt` — which reads like the generator not having emitted it. The
+file was there the whole time.
+
+---
+
+## Making a port, generated — and two borrows the hand-written code had hoisted
+
+2026-09-20, still the spike's #1. `kin/portmake.kin` is new — 99 sources —
+carrying `new-port-at` and `link-peers-at`. `registerPort` stays a word: it
+takes the interns lock and looks up through a PREDICATE, and a closure is the
+one shape kin has no answer for.
+
+**Initialisation looks like the least interesting code in `Conc` and is not.**
+Every slot `new-port` sets is a default that something later reads WITHOUT
+checking, so a slot left unset is a wrong answer somewhere far away rather than
+a failure here. Two decisions hide in it, and both are easy to get backwards:
+
+* a channel's ring is sized from its CAP and a bridge's is not — a channel's
+  cap counts MESSAGES, a bridge's is a budget in BYTES, so sizing a bridge's
+  ring from it allocates one slot per byte allowed;
+* an id given from OUTSIDE must not consume one from the counter, or the same
+  number is handed out twice later.
+
+**Five mutations, one per claim the `--expect-why` makes:**
+
+    no ring floor              case 2  `1 1`   -> `0 0`
+    bridge ring from cap       case 3  `64 64` -> `65536 65536`
+    counter taken for a given id  case 3  `99 7` -> `7 8`
+    one pairing direction      case 4  `1:2,2:1` -> `1:2`
+    ring not pre-filled        case 1  `1` -> `0`
+
+Cases 1 and 3 are a PAIR on the counter rule and neither says it alone: an
+implementation that always bumps passes case 1, and one that never bumps passes
+case 3.
+
+### Two double-borrows, and the hand-written code already knew
+
+Twice the obvious kin spelling generated Rust that will not compile:
+
+    (push rt (new-obj rt TY_NODE ...))     -> self.push(self.new_obj(..))
+    (set-r rt ei (vec-conj rt ...))        -> self.set_r(ei, self.vec_conj(..))
+
+Both are two overlapping mutable borrows. Both were ALREADY hoisted in the
+hand-written copies for exactly that reason, and `reap-bridges` in
+`kin/reapports.kin` carries a comment saying so — "before `set-r` is handed
+it". The house rule is bind, then set.
+
+*The shape a hand-written copy has for no visible reason is worth reading
+before replacing it.* Neither hoist looks load-bearing; both are.
+
+**And the probe is where this surfaced, not the build.** `kin/scripts/verify`
+compiles the generated functions against a toy, so the borrow error appeared
+before the module was ever wired into the runtime. That is the probe doing more
+than checking an answer — worth knowing when deciding how much to trust an
+`emit` that merely succeeded.
+
+### A naming inconsistency, found by the vocabulary
+
+`RING_MESSAGES` is `Conc.RingMessages` on the CLR and `RING_MESSAGES` on the
+other two — and it is the only constant in that file pascalised, `PT_LEN`,
+`K_CHANNEL` and the rest all being SCREAMING there. Same value, so nothing
+behaves differently; the vocabulary entry carries the difference and says so.
+It was found by checking all three spellings before writing the entry, which
+`kin/scripts/check-names` would otherwise have caught as an undefined constant
+in one target.
+
+---
+
+## The byte budget: one rule that was written six times
+
+2026-09-20. `kin/portbytes.kin` is new — 100 sources — with `claim-bytes`,
+`give-back` and `fits-in-budget`.
+
+**THE FINDING, and it was not what I set out to port.** A bridge's byte bound
+is tested on TWO paths in each runtime: the guest's `send`, which parks when
+there is no room, and the host's `deliver`, which refuses. The two differ in
+everything except the test — one claims atomically, the other does not; one
+parks, the other returns false — and the test itself was written out six times,
+twice per runtime. All six agreed today. Nothing made them.
+
+    grep -c 'queued > 0'   before: rust 2, jvm 2, clr 2      after: 0 0 0
+
+A message accepted by one path and refused by the other is a bridge that
+behaves differently depending on which end spoke, and no conformance program
+would show it unless one happened to sit exactly on the boundary.
+
+*It surfaced while wiring the first copy: `grep` for the expression found a
+second hit at an unrelated line number.* Porting a function is a good time to
+ask whether its DECISION lives anywhere else.
+
+**The subtle rule is `queued > 0`.** An empty queue accepts a message larger
+than the whole budget. Without that clause there is no state of the queue in
+which such a message fits, so it is refused FOR EVER rather than delayed —
+back-pressure silently becoming a permanent rejection, which the host cannot
+tell from ordinary congestion. The bound exists to stop messages ACCUMULATING;
+a maximum message size is a different rule and would have to be stated where a
+caller can see it.
+
+**Four mutations, and the fourth did not return.**
+
+    no empty-queue rule   field 4  `1:500:0` -> `0:0:0`
+    boundary exclusive    field 5  `1:100:0` -> `0:90:0`
+    refund not clamped    field 8  `-:0:0`   -> `-:-20:0`
+    read hoisted out of the loop            HUNG
+
+The last is the strongest evidence any probe has given here. The fixture steals
+bytes between the read and the swap, as a second host thread would; with the
+read hoisted, the compare can never match again and the loop spins for ever. It
+does not compute a wrong number — it wedges the delivering thread. That took a
+ten-minute timeout to observe, which is the cost of learning it.
+
+*A mutation harness needs a per-run time bound.* Mine did not have one, and an
+infinite loop is exactly the kind of wrongness a mutation is trying to produce.
+
+**`fits-in-budget` takes the NUMBERS, not the port, and that is deliberate:**
+the deliver path has to test the value it is about to compare-and-swap
+*against*, and a predicate that re-read the port would test one number and swap
+on another. It is also the first kin function here that takes the runtime and
+ignores it — every kin function is a method and there is no non-method
+precedent to follow, so the parameter stays and the body does not use it.
+
+**Instruction-neutral, checked rather than assumed**: `conform-hosts`'s gas row
+still reads 143 035 to the instruction.
+
+---
+
+## The duplicate-decision sweep, widened — and the scheduler's two list writes
+
+2026-09-20. Last firing's find was a RULE written six times, and it turned up
+by accident: a grep to wire one copy returned a second hit. This firing began
+by asking that question on purpose.
+
+**Three sweeps, and they agree that `Conc` has no divergence left.**
+
+* CONSTANTS PER FUNCTION, across the three. Constants survive language
+  differences where control flow does not, so a function naming `P_HALF` in
+  two runtimes and not the third is a real signal. 40 functions present in all
+  three; three flagged, all three artefacts of one-line bodies my extractor
+  runs past (native's `sched`, the ports' `peerOf` and `portById`).
+* CONDITIONS STATED TWICE WITHIN ONE FILE, which is the shape `queued > 0`
+  had. Across `conc.rs`, both ports' `Conc` and `vm.rs`: three hits, all
+  incidental nil checks or one shared `Wire.complete` guard whose RULE already
+  lives in one function and whose messages legitimately differ per caller.
+* THE SAME, WIDENED to every file in `runtime/src` and both ports' runtime
+  directories, restricted to conditions naming a runtime constant. **One hit
+  in the entire tree**, `isHeapTy(v, TY_VEC)` in `Builtins.java` — two builtins
+  each asking "is this a vector", which is not a policy.
+
+*The six-copy budget rule was the only one of its kind.* That is worth as much
+as finding another would have been: the question is now answered rather than
+open, and the method is written down for the next person to re-run.
+
+### `kin/schedlists.kin`
+
+101 sources. `push-event-at` and `forget-bridge-at` — the scheduler's two list
+writes, both previously vocabulary words this port had been leaning on.
+
+**The event record is read POSITIONALLY** — five `u32`s in the drained buffer,
+nothing in it saying which field is which. Two transposed is a well-formed
+event meaning something else: a close reported against the wrong id, or a
+length read as a token. There is no error for it to raise, ever, which is why
+the order is pinned by a case rather than left to reading.
+
+Four mutations, each caught:
+
+    a and b transposed   `3:10:0:n,5:11:7:p` -> `3:0:10:n,5:7:11:p`
+    payload dropped      second event `:p` -> `:n`
+    filter inverted      `10,12` -> `11`
+    no filter at all     `10,12` -> `10,11,12`
+
+**And the harness now bounds each run.** Last firing a mutation HUNG and cost a
+ten-minute timeout to discover; this one kills a run at 100s and prints
+`*** HUNG ***`. An infinite loop is exactly the kind of wrongness a mutation
+sets out to produce, so the harness has to survive producing one.
+
+**A claim in my own `--expect-why` was wrong, and the mutation output is what
+showed it.** I had written that the first event's `3:10:0` "reads the same
+either way round" and so could not catch a transposition; the transposed run
+prints `3:0:10`, so it can. The note now says what the mutation actually
+showed, and says the first event is the REALISTIC shape rather than the
+discriminating one. *Prose written beside a test is not tested by it.*
+
+**`forget-bridge` still rebuilds when the id is absent, deliberately.**
+Skipping that is a real improvement — it is the shape `reap-all` was fixed
+into — and it is not made here: it allocates, allocation is billed, and
+`conform-hosts` asserts the gas to the instruction. A behaviour-preserving port
+and a change to what gets charged are two commits, not one. Checked rather than
+assumed: the gas row still reads 143 035.
+
+---
+
+## Re-ranked against Rust (OPEN ITEM 2, closed)
+
+The ranked spike above is `jvm`/`clr` RAW LINES with Rust absent. Re-measured:
+CODE lines only (these files are comment-heavy and raw lines flatter the
+wrong areas), all three runtimes, plus the generated side, plus a classifier
+for what BLOCKS each area.
+
+### What is already done, by volume
+
+| area | generated | rust hand | jvm hand | clr hand | done |
+| --- | --- | --- | --- | --- | --- |
+| `Coll`/`Table` | 2322 | 401 | 72 | 68 | **97%** |
+| `Bytes` | 946 | 284 | 53 | 50 | **95%** |
+| `Maps` | 1263 | 531 | 83 | 80 | **94%** |
+| `Vec` | 674 | 299 | 47 | 47 | **93%** |
+| `Str` | 2112 | 515 | 307 | 307 | **87%** |
+| `Codec` | 416 | 1183 | 334 | 335 | 55% |
+| `Conc` | 784 | 1487 | 1045 | 1029 | 43% |
+| `Rt`/`Vm` | ~0 | 2194 | 1225 | 1196 | 0% |
+| `Img` | ~0 | 453 | 185 | 183 | 0% |
+
+**The open item's complaint was right and its expectation was not.** It says
+`Maps`, `Table`, `Str`, `Bytes`, `Vec` "are all scored 0-1% on a metric that
+cannot see the thing that blocks them". Nothing blocks them: they are 87-97%
+FINISHED. What the old metric could not see was the generated side.
+
+### Ranked by what can actually be ported
+
+Raw debt says `Rt`/`Vm` is the biggest duplicate at 2421 lines. It is, and it
+is nearly all unportable: `runLoop` alone is 369 code lines of bytecode
+dispatch over host buffers, and the tail touches host collections. Ranking by
+raw size would have sent the next several firings at the least portable file in
+the tree.
+
+| | area | remaining | cleanly portable | dominant blocker |
+| --- | --- | --- | --- | --- |
+| 1 | **`Conc`** | 851 | **235 (27%)** | host string, 322 |
+| 2 | `Rt`/`Vm` | 998 | 96 (9%) | host collections, 622 |
+| 3 | `Maps` | 51 | 51 (100%) | — |
+| 4 | `Snap` | 397 | 38 (9%) | host buffer, 351 |
+| 5 | `Builtins` | 116 | 35 (30%) | host string, 81 |
+| 6 | `Codec` | 287 | 27 (9%) | host string, 167 |
+| 7 | `Str` | 239 | 23 (9%) | host buffer, 151 |
+| 8 | `Img` | 170 | **0 (0%)** | host string, 163 |
+| — | `Gc` | 237 | 64 | raw memory, 126 |
+
+`Conc` stays #1 by a factor of 2.4x, and that is now a measurement rather than
+the habit of six firings.
+
+**THESE ARE THE SECOND NUMBERS, and the first ones were 25% too high.** The
+classifier read method BODIES and not signatures, so every function taking a
+`byte[]` parameter with a tidy body scored as portable — `hostDeliver` was
+reported as one of `Conc`'s largest clean methods when its whole job is a host
+byte array. `Conc` fell 311 -> 235, `Str` 56 -> 23, `Img` 4 -> 0. The ORDER did
+not change, which is the only reason the first table's conclusion survived; it
+is not a reason to have trusted it.
+
+*What a function is handed is part of what it is.* A classifier that reads only
+the body sees a function's work and not its obligations.
+
+### The classifier's own limits, stated because they change the reading
+
+"Cleanly portable" counts methods with NO host contact at all, and it is
+therefore an UNDERCOUNT of what this port can actually take. Three of the
+slices already shipped — `close-side-effects`, `receive-drained`, `claim-bytes`
+— would every one have been scored unportable, because the enclosing method
+throws with a host string. What made them portable was extracting the DECISION
+and leaving the throw behind.
+
+So the "dominant blocker" column is really a column of TECHNIQUES:
+
+* **host string** (`Conc` 307, `Codec` 164, `Img` 159, `Builtins` 76) — the
+  blocker this port has a proven answer for. Return a code, make the state
+  changes in kin, leave the message with the caller. Everything in this row is
+  reachable.
+* **host buffer** and **raw memory** (`Snap` 337, `Str` 137, `Gc` 126) — no
+  technique, and the standing decision not to port `Gc` and `Snap` is
+  confirmed rather than revisited: the classifier only agreed with it once a
+  raw-memory rule was added, and `Gc.forward` was the false positive that
+  showed the rule was missing.
+* **host collections** (`Rt` 622) — the interpreter's own frames and roots.
+
+**`Img` is the correction worth acting on**, and the first reading of it was
+also wrong. The old table has it at #4, "small, byte-parsing, probably worth
+it"; it is 0% cleanly portable and 96% blocked by the classifier's "host
+string" category, from which this file first concluded "blocked by error
+messages, so it is decision-extraction, the purest instance of that technique
+left".
+
+**`Img.java` contains ZERO error messages.** Checked by reading every `String`
+in it the firing after that was written. They are `new String(bytes, UTF_8)`
+constructing a guest string FROM image bytes, `Str.text` pulling one back out
+to rebuild a keyword, a `String[]` of native names handed to the loader, and a
+`kindName` diagnostic. That is host-to-guest conversion at the loader boundary,
+and there is no technique for it.
+
+What `Img` would actually need is a HOST BYTE CURSOR in the vocabulary —
+`img-u8`, `img-u32`, `img-i64`, `img-bytes` over an index into an array the
+runtime holds. kin has a byte cursor already (`wire-take-u8` and friends in
+`kin/wirecore.kin`) but it reads a heap READER OBJECT, and the image is what
+builds the heap. Wrapping the image bytes in a heap object first would copy the
+whole image in, which is a cost and a behaviour change, not a port.
+
+*The classifier names a CATEGORY and not a CAUSE.* "Host string" covered error
+messages in `Conc`, where a technique applies, and string CONSTRUCTION in
+`Img`, where none does — and nothing but reading the file separates them. Every
+row of the blocker column is a hypothesis until someone opens the file.
+
+### Method, so it can be re-run
+
+Code lines = non-blank, non-comment. Generated side = `runtime/src/kgen/rt/*.rs`
+bucketed by filename prefix. Blockers = regex over each method's RETURN TYPE,
+PARAMETER LIST AND BODY for `byte[]`/`String`/`ArrayList`/`sp.`/`Op.` dispatch
+and friends.
+
+TWO THINGS CAUGHT IT BEING WRONG, and both are worth repeating on any rerun:
+
+* run it against the standing "never" list. `Gc` and `Snap` must come out
+  unportable; they did not until raw address arithmetic was recognised, and
+  `Gc.forward` -- which copies within the flat space -- was the false positive
+  that showed the rule was missing;
+* check its top few answers against a function you have actually read.
+  `hostDeliver` was the second answer for `Conc` and is host-shaped from its
+  signature inwards, which is what exposed the body-only bug.
+
+The per-method NAMES in the "biggest clean" column are less reliable than the
+totals: a one-line body ends a method where this regex does not, so `Conc` and
+`sched` in that column are really their following neighbours. The line counts
+are sound; treat the names as leads.
+
+---
+
+## A rooting bug I wrote, caught in an hour by the row that exists for it
+
+2026-09-20. `channel-at` and `spawn-at` join `kin/portmake.kin` — making a
+channel's two ends, and a green thread. Picked by the re-ranked table rather
+than by eye: `Conc` is still #1 on portable debt, and these were the largest
+clean methods left in it once the extractor was fixed to handle one-line
+bodies.
+
+### The bug
+
+`bin/conform-hosts` went red on one row and one row only:
+
+    FAIL green disagrees under GC STRESS -- a rooting bug [jvm]
+        ported 0xfff9000000110038
+
+A raw address where native answered a map. **Established as mine and not
+pre-existing before touching anything**: the same row is `ok` in the two
+previous runs' captured output.
+
+The cause was one line of ordering. The hand-written `spawn` opens:
+
+    // Rooted FIRST: `ensureSched` allocates, and `f` is a host local.
+    int base = rt.mark();  int fi = rt.push(f);  ensureSched(rt);
+
+I left `ensureSched` in the three wrappers, which put it BEFORE the push. `f`
+then spent one allocating call unrooted, and under a collection at every
+allocation that is a pointer into the abandoned semispace — indistinguishable
+from a live one to everything downstream.
+
+**The comment warning about it was sitting on the function I was porting.** I
+read that function, quoted its sibling's comments into the kin doc, and moved
+the call anyway, because the wrapper looked like plumbing rather than part of
+the logic.
+
+*An ordering constraint is a DECISION, and this port exists to stop decisions
+living in three places.* The fix is not to put `ensureSched` back in three
+wrappers correctly — it is that `ensure-sched` is now a vocabulary word called
+from inside the generated function, after the argument is rooted, with the
+reason beside it. Three wrappers cannot disagree about an order they no longer
+state.
+
+`channel-at` got the same treatment even though its hand-written original ran
+`ensureSched` before the mark and had never been observed to fail: rooting the
+label first is strictly safer and costs nothing.
+
+### What the row is worth
+
+The GC-stress row runs each conformance program a second time with a
+collection at every allocation, and it exists because a rooting bug is
+invisible unless a collection lands in the exact window. This one was found
+within an hour of being written, by a check nobody had to remember to run.
+Every other row in the suite — including `green` itself, run normally — passed
+with the bug in place.
+
+### The slice
+
+Five mutations, each caught on a different field:
+
+    cap to one end only    `4 4` -> `4 0`
+    ends not linked        `6 5` -> `-1 -1`
+    spawned ST_RUNNABLE    status `0` -> `1`
+    bindings replaced      case 7 `1` -> `0`
+    thread not enrolled    threads `1` -> `0`
+
+The bindings pair is the one worth keeping: case 6 spawns with nothing bound
+and asserts the slot is NOT nil, and case 7 spawns with a map bound and asserts
+it is THAT map. Case 6 alone cannot tell a correct inherit from a blanket
+empty-map, because both are non-nil there.
+
+---
+
+## The scheduler, generated — and a constant that meant something else
+
+2026-09-20. `kin/schedmake.kin` is new — 102 sources — carrying `new-sched-at`:
+the scheduler object and thread 0, twelve slots and five. Chosen by measurement
+again: `ensureSched` was the largest thing left in `Conc` once the extractor
+was taught about one-line bodies, and it is blocked only by a FUNCTION
+REFERENCE (the bridge hook), which is the shape where one line stays and the
+rest moves.
+
+### `SC_LEN` is the table module's, not the scheduler's
+
+The obvious word for "how many slots a scheduler has" was already taken:
+
+    crate::table::SC_LEN   = 5     a schema's length
+    crate::conc::SC_LEN    = 11    the scheduler's
+
+and the vocabulary's `SC_LEN` is the FIRST one. Every other `SC_*` word in that
+file is the scheduler's, which is exactly what makes the one exception
+dangerous. The generated source asked for eleven slots and got five.
+
+**Rust's module paths caught it; the ports would not have.** `crate::table::`
+against `crate::conc::` is a compile error the moment the module is not
+imported. On the JVM and CLR both constants exist as `Table.SC_LEN` and
+`Conc.SC_LEN`, so the generated code would have compiled a FIVE-SLOT scheduler
+and failed later, writing `SC_THREADS` at slot 10 of an 11-slot object that had
+5.
+
+The scheduler's is `SCHED_LEN` now, and both entries carry a note pointing at
+the other. *A prefix shared by two families is a name collision waiting for
+whoever reaches for the obvious member.*
+
+### Three drifts between the copies, all harmless, which is the point
+
+Native wrote `TH_ARGS` and `TH_TX` that the ports do not have at all; the ports
+wrote `SC_SYSTEM` that native does not. Every one of the three is redundant:
+
+* a fresh object's slots START nil -- the collector asserts it, so a half-built
+  object traces and reads sanely -- so an explicit nil write is a no-op;
+* `TH_ARGS` is vestigial by its own comment in `run_entry`;
+* `TH_TX` has no reader anywhere in the tree, checked by grep across all three
+  runtimes and the kin sources.
+
+So nothing was broken and nobody could have noticed. The generated version
+writes only what something depends on and leaves nil to the allocator. Checked
+gas-neutral rather than assumed: `set` does not charge, and the row still reads
+143 035.
+
+*Three copies that have drifted only in harmless ways are three copies that
+have been drifting unobserved.* The next slot to diverge looks identical until
+it is one that matters.
+
+### The mutations, and why two groups
+
+    free list is 0     `-1` -> `0`      a free list that hands out a real slot
+    ids start at 0     `1`  -> `0`      the first spawn collides with thread 0
+    status hardcoded   second group only
+    not installed      `1`  -> `0`      the next `sched` builds a SECOND one
+    events unset       `1`  -> `0`
+
+The third is why the fixture builds the scheduler TWICE, once with a program
+running and once without. A single case cannot show a CONDITIONAL: whichever
+way the status were hard-coded, one group would pass. The rule it protects is
+recorded with a symptom -- thread 0 left RUNNABLE with no stack is picked,
+restored from a nil `TH_STACK`, and runs off the end of an empty value stack.
+
+### A caution: do not run the suite mid-build
+
+`bin/conform-hosts` was run with the runtime lib rebuilt but the CLI and units
+stale, and it did not finish inside ten minutes -- which read exactly like an
+infinite loop introduced by the change. Nothing reproduced: `green` runs in
+three seconds on native and on the jvm, and five under GC stress. With the
+workspace fully built the suite completes in 275s, zero failures.
+
+**No cause was established**, and this is recorded as a caution rather than a
+finding. What it cost was the assumption that a suite timing out must be the
+code under test -- the build state is a variable too, and `cargo build
+--release -p flint-rt` leaves the CLI linked against the previous lib.
+
+---
+
+## Two rooting bugs on a path nothing stressed
+
+2026-09-20. `kin/portinstall.kin` — 103 sources — carrying `install-bridge-at`
+and `install-system-at`. Picked from the measured clean remainder; what it
+found was worth more than the dedup.
+
+### Bug one: the label, and all three had it
+
+Every runtime opened `installBridgePort` the same way:
+
+    ensure_sched();            // allocates: a scheduler, a thread, vectors
+    let li = self.push(label); // roots the address `label` USED to have
+
+`label` arrives as a host local. If building the scheduler collects — and under
+a collection at every allocation it always does — the string moves and the root
+names the abandoned semispace. The jvm dies in one run:
+
+    to-space overflow: 4294639616 past 4259840
+      Gc.forward <- Roots.forEach <- Gc.minor <- alloc <- newObj
+      <- newPortAt <- newPort <- installBridgePort <- installSystemPort
+
+**This is the same bug I wrote into `spawn` last firing and fixed there**, in
+the sibling function, pre-existing, and with no comment warning about it. The
+fix is the same shape: `ensure-sched` is a word, called from inside the
+generated body AFTER the label is rooted, so the order is stated once instead
+of three times.
+
+Proven three ways, not asserted: the probe crashes before the fix and passes
+after; restoring the old order in the kin source brings the crash back
+verbatim; and the new guard dies on it.
+
+### Why it survived: the stress row had a hole
+
+`bin/conform-hosts` re-runs every conformance program under
+`-Dflint.gcstress`, and **not one of them installs a host port**. The programs
+that do are driven from the host side, which the stress row never reached. So
+the single path into the runtime that runs before anything else exists — the
+one where nothing is rooted yet — was the one path with no stress coverage.
+
+`runtimes/jvm/test/RtRooting.java` is the guard now: install a system port
+into a fresh sandbox with a freshly allocated label, read the label back, and
+install the same id twice.
+
+### Bug two: OPEN, and it is older
+
+The obvious guard was to re-run the whole `RtHostPorts` transcript under the
+flag. It does not go green, and not because of bug one:
+
+    to-space overflow: 4298768384 past 8454144
+      Gc.forward <- Roots.forEach(Roots.java:90) <- Gc.minor <- alloc
+      <- saveCurrentState <- settle <- scheduler <- runProgram
+
+Line 90 is the VALUE stack, where bug one was the shadow stack (line 91): a
+bad value-stack root while `settle` saves a parked thread.
+
+**Proved pre-existing rather than assumed.** With `installBridgePort` restored
+to hand-written code — the original body with only the rooting order corrected,
+no generated code involved at all — the same failure occurs in the same place.
+Bug one was MASKING it: the run used to die at the install and never reached
+the settle.
+
+    reproduce:  java -Dflint.gcstress=1 -cp runtimes/jvm/classes \
+                     RtHostPorts out/conform/hostport.img
+
+NOT FIXED HERE. It is a GC/scheduler interaction rather than a port, and the
+stress row was deliberately narrowed to the install path instead of carrying a
+row that cannot go green -- a row nobody can make pass is a row somebody
+deletes. It belongs on the list rather than in this change.
+
+*A path with no coverage hides more than one thing.* The first bug found there
+was the one I was looking at; the second had been sitting behind it, and the
+only reason either is visible is that the row now exists.
+
+---
+
+## Localising the settle bug, and stopping short of a fix
+
+2026-09-20, second firing of the day. The open item recorded last time — a bad
+value-stack root when `settle` saves a parked thread — was taken up and
+LOCALISED but not fixed. The detail is in the OPEN item above; what belongs
+here is the shape of the work and where it stopped.
+
+**The instrument had to be checked before its silence meant anything.** A
+header-sanity check over the value stack reported nothing at all, three probes
+deep, while the collector was dying on that same stack a few statements later.
+Making it print unconditionally is what resolved it: both slots really are
+well-formed objects at that moment, so the checker was right and the
+CONTRADICTION was the finding — the slot is a valid object in the wrong
+semispace, not a corrupt value.
+
+*An instrument that disagrees with a crash is either broken or telling you the
+crash is not what you think.* It cost one run to tell those apart and would
+have cost the whole investigation to assume the first.
+
+**Where it stopped, and why that is a stopping point rather than a failure.**
+Two observations are established and neither is explained: a root naming
+to-space while the mutator runs, and the semispaces differing between the top
+of `saveCurrentState` and the root walk inside its own first allocation, with
+only a `mark` and a `push` in between. Every further step was costing a full
+run of inference against a collector whose flip protocol I had not read, and
+guessing at a fix in a copying collector is how a rooting bug becomes a
+corruption bug. The item is better than it was — it has a violated invariant
+and exact addresses instead of a stack trace — and the next person can start
+from the collector rather than from the symptom.
+
+**The working tree was never touched.** All instrumentation was applied to a
+scratch copy of `runtimes/jvm/src`, which is why the diff for this firing is
+one paragraph of prose.
+

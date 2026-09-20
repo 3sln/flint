@@ -6,10 +6,16 @@ set -e
 # therefore checks its own result.
 cd "$(dirname "$0")/.."
 # HOW MANY SECTIONS THIS FILE HAS, counted from itself. A truncated run and a
-# complete one look identical in a log otherwise -- and one has been happening
-# for as long as `test/aot.clj` has been red: `fail` exits, so every section
-# after the failing one never runs. Twenty-two of sixty-two, reported as
-# "22 sections, 1 known failure", which reads like a baseline and is not one.
+# complete one look identical in a log otherwise, and one WAS happening: while
+# `test/aot.clj` was red, `fail` exited and every section after it never ran.
+# Twenty-two of sixty-two, reported as "22 sections, 1 known failure", which
+# reads like a baseline and is not one.
+#
+# That row is green now (2026-09-19) and this count is why anybody can say so
+# -- the run reports 62 of 62. Kept in the PAST tense deliberately: the check
+# earns its place by what it would catch next time, not by a failure it is
+# currently catching, and a comment naming a live known-red is read as
+# permission for one.
 _sec_total=$(grep -c '^sec "' "$0")
 _sec_n=0
 
@@ -297,16 +303,23 @@ sec "aot: the language suite answers the same with compiled arities"
 #
 # This used to inherit the `--aot` units from the section above, and that is a
 # dependency on a previous section's SIDE EFFECT. It broke under
-# `FLINT_TEST_KEEP_GOING`: when `test/aot.clj` fails -- which it does, on the
-# known `colls` instruction-count gap -- its failure path restores PRODUCTION
-# units on the way out, the run continues, and this section then asks a
-# production runtime to run compiled arities. It answers
+# `FLINT_TEST_KEEP_GOING`: when `test/aot.clj` fails, its failure path restores
+# PRODUCTION units on the way out, the run continues, and this section then asks
+# a production runtime to run compiled arities. It answers
 #
 #     this runtime cannot run compiled arities: build the units with
 #     `bin/build-units --aot`
 #
 # in one line, and the diff below reports 131 lines of suite output replaced by
 # that one, which reads exactly like the language suite disagreeing with itself.
+#
+# THE `colls` GAP THAT PROMPTED THIS IS CLOSED (2026-09-19, and the gate has run
+# 62/62 green since) -- a preemption billed the handler buffer and so made gas
+# depend on where a thread was preempted; `test/aot.clj` carries the account.
+# The dependency this section removes is not about that row, though: any failure
+# above restores production units, so owning its own build is right whether or
+# not anything is currently red. Stated in the past tense on purpose, because a
+# comment naming a CURRENT known failure is read as permission for one.
 # It does not: built against its own units the two runs are byte for byte
 # identical, 129/129. Two RED sections in the survey, neither of them real.
 ./bin/build-units --aot > /dev/null || fail "build-units --aot (for the suite diff)"

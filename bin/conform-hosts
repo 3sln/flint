@@ -676,6 +676,26 @@ if ./bin/flint :src runtimes/conform-host :fn hostport/main --emit-image \
     || { diff "$FLINT_SCRATCH"/flint-hp-native.out "$FLINT_SCRATCH"/flint-hp-jvm.out | head -20; \
          echo "  FAIL the jvm port drives the host protocol differently"; exit 1; }
   echo "  ok   the jvm port produces the same transcript, line for line"
+  # AND THE INSTALL PATH UNDER A COLLECTION AT EVERY ALLOCATION.
+  #
+  # The conformance loop stresses every program it runs and NOT ONE of them
+  # installs a host port -- the programs that do are driven from here, so this
+  # was the one way into the runtime with no stress coverage at all. What lived
+  # there: `installBridgePort` built the scheduler BEFORE rooting the label it
+  # had been handed, on all three runtimes, so the first host port installed
+  # into a fresh sandbox rooted the address a moved string used to have. Fixed
+  # in `kin/portinstall.kin`; this is what would have caught it.
+  #
+  # NARROW ON PURPOSE. Re-running the whole `RtHostPorts` transcript under the
+  # flag is the obvious row and it trips over a SECOND, OLDER rooting bug on
+  # the settle path -- proved pre-existing, written up in
+  # `doc/goals/kin-port.md`, and not fixed here. A row that cannot go green is
+  # a row somebody deletes.
+  "$JDK/bin/java" -Dflint.gcstress=1 -cp runtimes/jvm/classes RtRooting \
+      > "$FLINT_SCRATCH"/flint-root-gcs.out 2>&1 \
+    || { cat "$FLINT_SCRATCH"/flint-root-gcs.out
+         echo "  FAIL the host-port install does not survive a collection at every allocation"; exit 1; }
+  cat "$FLINT_SCRATCH"/flint-root-gcs.out
   if [ -n "$CLR" ]; then
     "$CLR" --rt-hostports out/conform/hostport.img > "$FLINT_SCRATCH"/flint-hp-clr.out 2>&1 \
       || { cat "$FLINT_SCRATCH"/flint-hp-clr.out; echo "  FAIL host ports [clr]"; exit 1; }
@@ -688,6 +708,57 @@ else
   echo "  FAIL the hostport fixture does not compile"
   exit 1
 fi
+
+phase "host requests"
+# HOST REQUESTS: the REQUEST/RESPONSE half of the host ABI, three ways.
+#
+# `hostport` next door covers the port half. This is the other one -- a
+# sandbox asking for an ANSWER rather than a channel -- and it had three
+# drivers written for it and NOTHING COMPARING THEM. The trio existed;
+# `bin/conform-hosts` never mentioned it. A transcript nobody diffs is three
+# ABIs again, which is the whole thing this section was built to prevent.
+#
+# `initpark` is the SAME CALL FROM TOP LEVEL, where it is refused. Native named
+# that failure and both ports answered the EMPTY STRING: the guard was in
+# `run_program` and `ensure_started` on native and in neither `ensureStarted`.
+# It is a pair on purpose -- what separates the two fixtures is not the call
+# but WHERE it is, and only running both keeps the refusal from being mistaken
+# for the call simply not working.
+cargo build --release -p flint-conc --bin hostreq --features host-tools \
+  > "$FLINT_SCRATCH"/flint-hq-build.log 2>&1 \
+  || { tail -20 "$FLINT_SCRATCH"/flint-hq-build.log; \
+       echo "  FAIL the native host-request driver does not build"; exit 1; }
+for hqf in hostreq initpark; do
+  ./bin/flint :src runtimes/conform-host :fn "$hqf/main" --emit-image \
+       :out "out/conform/$hqf.img" >/dev/null 2>&1 \
+    || { echo "  FAIL the $hqf fixture does not compile"; exit 1; }
+  ./target/release/hostreq "out/conform/$hqf.img" > "$FLINT_SCRATCH"/flint-hq-native.out 2>&1 \
+    || { cat "$FLINT_SCRATCH"/flint-hq-native.out; echo "  FAIL host requests $hqf [native]"; exit 1; }
+  # THE REFUSAL IS ASSERTED, not merely compared. Three runtimes agreeing on an
+  # empty answer is also "identical", and that is exactly what they used to
+  # agree on -- so this names the sentence the transcript must carry.
+  if [ "$hqf" = initpark ]; then
+    grep -q 'still initialising' "$FLINT_SCRATCH"/flint-hq-native.out \
+      || { cat "$FLINT_SCRATCH"/flint-hq-native.out; \
+           echo "  FAIL a top-level park is not refused by name [native]"; exit 1; }
+  fi
+  sed 's/$/ ['"$hqf"' native]/' "$FLINT_SCRATCH"/flint-hq-native.out
+  "$JDK/bin/java" -cp runtimes/jvm/classes RtHostReq "out/conform/$hqf.img" \
+    > "$FLINT_SCRATCH"/flint-hq-jvm.out 2>&1 \
+    || { cat "$FLINT_SCRATCH"/flint-hq-jvm.out; echo "  FAIL host requests $hqf [jvm]"; exit 1; }
+  cmp -s "$FLINT_SCRATCH"/flint-hq-native.out "$FLINT_SCRATCH"/flint-hq-jvm.out \
+    || { diff "$FLINT_SCRATCH"/flint-hq-native.out "$FLINT_SCRATCH"/flint-hq-jvm.out | head -20; \
+         echo "  FAIL the jvm port answers $hqf differently"; exit 1; }
+  echo "  ok   the jvm port produces the same $hqf transcript, line for line"
+  if [ -n "$CLR" ]; then
+    "$CLR" --rt-hostreq "out/conform/$hqf.img" > "$FLINT_SCRATCH"/flint-hq-clr.out 2>&1 \
+      || { cat "$FLINT_SCRATCH"/flint-hq-clr.out; echo "  FAIL host requests $hqf [clr]"; exit 1; }
+    cmp -s "$FLINT_SCRATCH"/flint-hq-native.out "$FLINT_SCRATCH"/flint-hq-clr.out \
+      || { diff "$FLINT_SCRATCH"/flint-hq-native.out "$FLINT_SCRATCH"/flint-hq-clr.out | head -20; \
+           echo "  FAIL the clr port answers $hqf differently"; exit 1; }
+    echo "  ok   and so does the clr port"
+  fi
+done
 
 # MAPS: the array-map, the promotion to CHAMP at 9 entries, and the two
 # properties CHAMP is chosen FOR -- canonical form (a map built by deleting
@@ -859,9 +930,9 @@ phase "every conformance program, 3 runtimes"
 # `"$FLINT_SCRATCH"/flint-c-jvm.out` and three others at fixed names, which twenty-three
 # concurrent jobs would trample -- and which a concurrent run of this script in
 # another worktree tramples today, sequential or not.
-conform_progs="assocshapes bytes churn collections conjshapes control errors
-green hosted lazy lazyref maps mapshapes mathfns numedge numbers opcodes regex
-seqshapes strings tables threads transhapes wire"
+conform_progs="aot_try assocshapes bytes churn collections conjshapes control
+errors green hosted lazy lazyref maps mapshapes mathfns numedge numbers opcodes
+regex seqshapes strings tables threads transhapes wire"
 conform_n=$(printf '%s\n' $conform_progs | wc -l | tr -d ' ')
 # A FLOOR UNDER THE ZERO, the same one check-kin carries: an empty list runs
 # nothing, reports no failures, and looks exactly like a clean pass over
@@ -1031,28 +1102,14 @@ fi
 # And that compiled code was ENTERED. The first version of this port left the
 # frame's `aotIp` at NEVER, so every arity compiled, every answer matched, every
 # gas count matched, and not one instruction of compiled code ever ran.
-# `tables` is diffed for ANSWERS above but not compiled here, and the reason is
-# a KNOWN-OPEN DEFECT rather than a convenience: two `try` regions in one
-# function come apart under a compiled arity on both ports.
-# `runtimes/conform/aot_try.cljc` is that reduced to four lines, and the whole
-# note is there. It is PRE-EXISTING -- the ports fail it at the previous commit
-# too -- and it survived because no conformance program had a `try` inside an
-# arity the AOT layer compiles. `tables` was the first, which is how it was
-# found. Excluded here rather than deleted, so the exclusion is one grep away
-# from whoever fixes it.
-#
-# `green` JOINS IT, 2026-09-19, and for the same defect. It crashes with
-# `POP_HANDLER` on an empty handler list -- `handlers.remove(size() - 1)` at
-# index -1 -- which is two `try` regions coming apart under a compiled arity,
-# exactly what `aot_try.cljc` reduces.
-#
-# **It is PRE-EXISTING and that was PROVED, not assumed**: reverting the only
-# change this commit makes to the jvm's `Conc` (the handler buffer, now
-# unbilled) leaves the crash identical. It had never run because
-# `bin/conform-hosts` exited at its gas row long before reaching here, and that
-# row went green today. A row that has never executed is not a row that passes,
-# which is the same lesson `FLINT_TEST_KEEP_GOING` was added for.
-for prog in churn collections control hosted lazy maps numbers regex strings threads; do
+# `aot_try`, `tables` and `green` were EXCLUDED here until 2026-09-19, for a
+# defect that is now fixed: `unwind` never incremented `unwinds` on either port,
+# so `aotCallAt`'s guard read a constant and told compiled code to carry on past
+# a handler in its own frame. They are in the loop below because the fix is only
+# worth having if something runs it -- `aot_try.cljc` had sat in the tree as a
+# reduction that nothing executed. THE REDUCTION IS FIRST: when this row goes
+# red again, the four-line program says what broke before the two large ones do.
+for prog in aot_try tables green churn collections control hosted lazy maps numbers regex strings threads; do
   img="out/conform/$prog.img"
   [ -f "$img" ] || continue
   # `|| { echo; exit 1; }` and not a bare `|| exit 1`: the output is CAPTURED
