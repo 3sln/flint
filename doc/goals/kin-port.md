@@ -1898,6 +1898,37 @@ entry's argument out to a host local, dropped its roots, and then called
 `hostreq` transcripts now run under `-Dflint.gcstress` and must come back
 identical, not merely not crash.
 
+### An invariant held by accident: `thrown` and `parkOn` are not roots
+
+Noticed while chasing the driver bug, checked properly afterwards, and NOT a
+defect today.
+
+Neither runtime's root walk visits `Rt::thrown` or `Rt::park_on` -- they are
+plain fields, and `Roots::for_each` covers the value stack, the shadow stack,
+globals, consts, singletons and every other executor's stacks, and nothing
+else. Both fields can hold a HEAP value: `thrown` an exception object,
+`parkOn` the port a thread parked on. A heap value held in either across an
+allocation is stale afterwards, and after the flip its address names to-space
+-- the same shape the driver bug had.
+
+**It never fires.** Instrumented at BOTH allocation paths (`alloc` and
+`allocUnbilled`), under `-Dflint.gcstress`, across `hostport`, `hostreq` and
+`green`: zero occurrences of either field holding a heap value at an
+allocation. The probe was verified to be reached rather than trusted for its
+silence.
+
+So the invariant is "nothing allocates while `thrown` or `parkOn` holds a heap
+value", and it is currently true by accident rather than by construction:
+`unwind` pushes the exception before doing anything that allocates, and a park
+unwinds straight out to the scheduler, which reads `parkOn` into a root before
+its first allocation. Nobody wrote that down, and the next allocation added to
+either path breaks it silently.
+
+Two ways to close it, neither taken here: visit both fields in `for_each` on
+all four runtimes, which costs two compares per collection; or assert in a
+debug build that neither holds a heap value at an allocation, which costs
+nothing shipped and names the rule where it can be broken.
+
 ### Ready to do, no decision needed
 
 | | item | why |
