@@ -1040,7 +1040,19 @@ fi
 # arity the AOT layer compiles. `tables` was the first, which is how it was
 # found. Excluded here rather than deleted, so the exclusion is one grep away
 # from whoever fixes it.
-for prog in churn collections control green hosted lazy maps numbers regex strings threads; do
+#
+# `green` JOINS IT, 2026-09-19, and for the same defect. It crashes with
+# `POP_HANDLER` on an empty handler list -- `handlers.remove(size() - 1)` at
+# index -1 -- which is two `try` regions coming apart under a compiled arity,
+# exactly what `aot_try.cljc` reduces.
+#
+# **It is PRE-EXISTING and that was PROVED, not assumed**: reverting the only
+# change this commit makes to the jvm's `Conc` (the handler buffer, now
+# unbilled) leaves the crash identical. It had never run because
+# `bin/conform-hosts` exited at its gas row long before reaching here, and that
+# row went green today. A row that has never executed is not a row that passes,
+# which is the same lesson `FLINT_TEST_KEEP_GOING` was added for.
+for prog in churn collections control hosted lazy maps numbers regex strings threads; do
   img="out/conform/$prog.img"
   [ -f "$img" ] || continue
   # `|| { echo; exit 1; }` and not a bare `|| exit 1`: the output is CAPTURED

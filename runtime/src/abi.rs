@@ -617,6 +617,25 @@ pub extern "C" fn stat_charge_bytes_gas() -> u64 {
     unsafe { crate::aotstat::CHARGE_BYTES_GAS }
 }
 
+/// Gas added by each of the four `steps`-raising paths: 0 `charge`,
+/// 1 `charge_work`, 2 `charge_tick`, 3 `charge_checked`.
+///
+/// With `stat_region(80)` (instructions) these account for `stat_steps`
+/// exactly. A partial split leaves a remainder, and a remainder is where a
+/// difference hides.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_gas_path(which: u32) -> u64 {
+    unsafe {
+        match which {
+            0 => crate::aotstat::G_CHARGE,
+            1 => crate::aotstat::G_WORK,
+            2 => crate::aotstat::G_TICK,
+            _ => crate::aotstat::G_CHECKED,
+        }
+    }
+}
+
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn set_gc_stress(on: u32) {

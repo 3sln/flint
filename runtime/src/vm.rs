@@ -1036,9 +1036,31 @@ impl Rt {
                     // this call finish and preempt at the next chance.
                     let at = self.steps + crate::conc::SLICE;
                     self.set_slice_end(at);
+                    // AND GO ROUND AGAIN, so the instruction is CHARGED.
+                    //
+                    // `tick` tests before it charges, so the iteration that
+                    // trips does not increment `steps`. Falling through from
+                    // here executed the instruction anyway -- one instruction
+                    // run for free, every time a slice boundary landed where
+                    // the runtime could not preempt. That is a deferred
+                    // preemption, and forcing a lazy seq is the common way to
+                    // be inside one (`Seqwalk` re-enters the interpreter with
+                    // Rust frames underneath).
+                    //
+                    // The jvm and the clr already `continue` here and so
+                    // charged it. This was the whole of `bin/conform-hosts`'s
+                    // last gas difference: a complete decomposition of `steps`
+                    // balanced on the ports and came out NEGATIVE on native,
+                    // by exactly the number of these
+                    // (`DECISIONS.md#resource-limits`).
+                    //
+                    // It cannot spin: the slice end has just been moved past
+                    // `steps`, so the next tick charges and proceeds.
+                    continue;
                 } else {
                     let at = self.steps + crate::conc::SLICE;
                     self.set_slice_end(at);
+                    continue;
                 }
             }
             let opcode = self.u8_at(ip);

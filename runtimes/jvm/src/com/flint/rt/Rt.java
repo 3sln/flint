@@ -1670,7 +1670,12 @@ public final class Rt {
     /// that dispatches the same opcodes but does not charge for the same scans
     /// answers a different number for the same program, and the number is the
     /// whole point.
-    public void chargeWork(long n) { steps += n; }
+    /// Gas added by each of the paths that can raise `steps`, mirroring
+    /// native's `G_*` counters. Counting ALL of them is what makes
+    /// `steps - instrs` fully attributed; a partial split leaves a remainder,
+    /// and a remainder is where a cross-runtime difference hides.
+    public long gWork, gTick, gChecked;
+    public void chargeWork(long n) { gWork += n; steps += n; }
     /// Gas charged by `chargeBytes` -- the string and byte work share of the
     /// non-allocation total. Native counts the same thing; see
     /// `runtime/src/aotstat.rs`.
@@ -1689,6 +1694,7 @@ public final class Rt {
     /// instruction, so a native that charges a million and then loops a million
     /// times still burns a million iterations (`DECISIONS.md#resource-limits`).
     public boolean chargeTick(long i, long n, String where) {
+        gTick += n;
         steps += n;
         if ((i & TICK_MASK) != 0) return true;
         if (gasLimit != 0 && steps >= gasLimit) { gasError(where); return false; }
@@ -1700,6 +1706,7 @@ public final class Rt {
     /// never begins work it cannot pay for. Charges NOTHING when it refuses.
     public boolean chargeChecked(long n, String where) {
         if (gasLimit != 0 && steps + n >= gasLimit) { gasError(where); return false; }
+        gChecked += n;
         steps += n;
         return true;
     }

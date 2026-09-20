@@ -48,6 +48,10 @@ public class RtSteps {
       System.out.println("SPLIT instrs=" + rt.instrs + " allocgas=" + ag
                          + " other=" + (rt.steps - rt.instrs - ag)
                          + " bytesgas=" + rt.chargeBytesGas);
+      System.out.println("PATHS work=" + rt.gWork + " tick=" + rt.gTick
+                         + " checked=" + rt.gChecked
+                         + " unattributed=" + (rt.steps - rt.instrs - rt.gWork
+                                               - rt.gTick - rt.gChecked));
     }
   }
 }

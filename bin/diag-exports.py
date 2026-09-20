@@ -9,7 +9,7 @@ import sys
 
 EXPORTS = [
     "stat_bytes_allocated", "stat_collections", "stat_peak_live", "stat_peak_live_major", "stat_heap_used",
-    "stat_alloc_by_ty", "stat_alloc_gas_by_ty", "stat_charge_bytes_gas",
+    "stat_alloc_by_ty", "stat_alloc_gas_by_ty", "stat_charge_bytes_gas", "stat_gas_path",
     "collect_now", "set_gc_stress", "set_gc_stress_window", "stat_allocs",
     "set_gc_upgrade_window",
     "set_gc_verify_remset", "stat_remset_violations",

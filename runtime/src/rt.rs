@@ -1002,6 +1002,8 @@ impl Rt {
     /// part-way may.
     #[inline]
     pub fn charge(&mut self, n: u64) -> bool {
+        #[cfg(feature = "diagnostics")]
+        unsafe { crate::aotstat::G_CHARGE += n; }
         self.steps = self.steps.saturating_add(n);
         self.counting() && self.steps >= self.checkpoint
     }
@@ -1015,6 +1017,8 @@ impl Rt {
     /// bound anything.
     #[inline]
     pub fn charge_work(&mut self, n: u64) {
+        #[cfg(feature = "diagnostics")]
+        unsafe { crate::aotstat::G_WORK += n; }
         self.steps = self.steps.saturating_add(n);
     }
 
@@ -1057,12 +1061,16 @@ impl Rt {
             self.gas_error(where_);
             return false;
         }
+        #[cfg(feature = "diagnostics")]
+        unsafe { crate::aotstat::G_CHECKED += n; }
         self.steps = self.steps.saturating_add(n);
         true
     }
 
     #[inline]
     pub fn charge_tick(&mut self, i: u64, n: u64, where_: &str) -> bool {
+        #[cfg(feature = "diagnostics")]
+        unsafe { crate::aotstat::G_TICK += n; }
         self.steps = self.steps.saturating_add(n);
         if (i & Self::TICK_MASK) != 0 {
             return true;

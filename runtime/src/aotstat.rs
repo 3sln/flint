@@ -149,6 +149,19 @@ pub static mut ALLOC_GAS: [u64; 64] = [0; 64];
 pub static mut CHARGE_BYTES_N: u64 = 0;
 pub static mut CHARGE_BYTES_GAS: u64 = 0;
 
+/// Gas added to `steps` by each of the four paths that can add to it.
+///
+/// **A COMPLETE decomposition, which the earlier partial one was not.**
+/// `steps` grows in exactly four places -- the interpreter's tick, and
+/// `charge`, `charge_work`, `charge_tick`, `charge_checked` -- so counting all
+/// of them means `steps - instrs` is fully attributed and nothing hides in a
+/// remainder. The partial split left 103 steps unattributed for a program that
+/// did nothing, which is not small next to the difference being chased.
+pub static mut G_CHARGE: u64 = 0;
+pub static mut G_WORK: u64 = 0;
+pub static mut G_TICK: u64 = 0;
+pub static mut G_CHECKED: u64 = 0;
+
 /// Executed instructions by opcode. Which opcodes an emitter must handle inline
 /// is a distribution too, and guessing it is the same mistake as guessing the
 /// region length.

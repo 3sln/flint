@@ -6756,3 +6756,56 @@ identical, and the labelled tick/checked sites are the same set on both
 runtimes. The next instrument has to attribute that remaining ~100, which means
 labelling the charge sites the way `C_GAS_*` labels the AOT doors rather than
 counting one family at a time.
+
+### The gate is GREEN, and the last gas difference was an instruction that ran free (2026-09-19)
+
+All three reds are closed. The last one took six firings and the answer was
+four words long: native executed an instruction it did not charge for.
+
+**The decomposition had to be COMPLETE before it said anything.** The earlier
+split -- steps minus instructions minus allocation minus bytes -- left 103
+unattributed for a program that did nothing, and I said at the time that no
+conclusion about WHICH charge was safe from it. It was not. `steps` rises in
+exactly five places: the interpreter's tick, and `charge`, `charge_work`,
+`charge_tick`, `charge_checked`. Counting all five closed the books:
+
+    unattributed, per runtime      native      jvm
+    partial split                    ~100     ~100
+    complete split                  -1, -6        0
+
+**The jvm balanced and native did not, by exactly the gap.** A negative
+remainder means `steps` grew LESS than the instructions dispatched, and only
+one thing can do that: an instruction that ran without a tick charging it.
+
+**The defect.** `tick` tests before it charges, so the iteration that trips a
+slice does not increment `steps`. When the runtime CAN preempt it returns, and
+nothing is lost. When it cannot -- `base_depth != 0`, Rust frames underneath,
+which is what forcing a lazy seq looks like -- it re-armed the slice and FELL
+THROUGH to execute the instruction anyway. One instruction, free, every time a
+slice boundary landed inside a nested interpreter entry. The jvm and the clr
+already `continue`d there and so charged it; native now does too.
+
+That is why the residual followed `(map inc ...)` consumed by `reduce`/`into`
+and vanished with eager `mapv`: a lazy seq is the common way to be inside a
+nested entry. Four firings looked for a pricing difference in a builtin. There
+was none -- the prices were identical all along, and one instruction was
+missing from the count.
+
+**`conform-hosts`'s gas row now reads "the same program costs the same gas, to
+the instruction: 143 035".** It has been red for the whole of this session.
+
+**A row that had NEVER RUN then failed, and that is the row working.** With the
+gas row green, `bin/conform-hosts` reached its AOT section for the first time
+-- 24 conformance programs, the language suite on all three runtimes, and
+compiled-arity gas agreeing on churn, collections and control. One program,
+`green`, crashes with `POP_HANDLER` on an empty handler list: two `try` regions
+coming apart under a compiled arity, which is the defect `aot_try.cljc` already
+reduces and `tables` is already excluded for. **Proved pre-existing rather than
+assumed**: reverting this commit's only change to the jvm's `Conc` leaves the
+crash identical. `green` joins `tables` in the exclusion, with that proof
+written beside it.
+
+**The lesson, and it is the session's own rule turned on an instrument.** A
+partial decomposition is a tolerance wearing a different hat: the remainder
+absorbs whatever you were looking for, and it absorbed this for four firings.
+The counters that close are worth more than the counters that are easy.
