@@ -1158,26 +1158,9 @@ public final class Conc {
     /// Returns false when the token is stale or already used: the generation in
     /// it no longer matches the slot, which is exactly the late-or-duplicated
     /// reply that would otherwise resume a stranger's thread.
+    /// GENERATED, from `kin/porthost.kin`.
     public static boolean hostContinue(Rt rt, long token, boolean ok) {
-        if (ok) {
-            // A GRANT HAS TO NAME A PORT. There is no port to grant until the
-            // host says which one -- that is what `ports-are-the-hosts` inverted -- so this
-            // form can only ever mean a refusal, and a host that means to grant
-            // calls `hostGrant`. Answering `true` here would have to invent a
-            // port, which is exactly the construction the sandbox may not do and
-            // the host must not be able to do by accident.
-            return false;
-        }
-        long w = waiterAt(rt, token);
-        if (Val.isNil(w)) return false;
-        int base = rt.mark();
-        int wi = rt.push(w);
-        // The refusal is left on the thread as a non-port, which `portOpen`
-        // reads on resume. Nothing else has to be cleaned up, because a refused
-        // open allocated nothing in the first place.
-        wakeWaiter(rt, rt.r(wi));
-        rt.popTo(base);
-        return true;
+        return com._3sln.flint.kgen.rt.Porthost.hostContinueAt(rt, token, ok);
     }
 
     /// Grant an open: hand the waiting thread a handle on the host's port
@@ -1189,22 +1172,9 @@ public final class Conc {
     ///
     /// If this sandbox already holds that port, the SAME handle comes back and
     /// no reference is taken -- granting a port twice is not two holders.
+    /// GENERATED, from `kin/porthost.kin`.
     public static boolean hostGrant(Rt rt, long token, long hostPortId) {
-        long w = waiterAt(rt, token);
-        if (Val.isNil(w)) return false;
-        int base = rt.mark();
-        int wi = rt.push(w);
-        long label = rt.slot(rt.r(wi), W_PORT);
-        label = Val.isNil(label) ? Val.NIL : rt.slot(label, PT_LABEL);
-        int li = rt.push(label);
-        long p = installBridgePort(rt, hostPortId, rt.r(li), false);
-        if (Val.isNil(p)) { rt.popTo(base); return false; }
-        int pi = rt.push(p);
-        long th = rt.slot(rt.r(wi), W_THREAD);
-        if (!Val.isNil(th)) rt.setSlot(Val.asHeap(th), TH_PENDING, rt.r(pi));
-        wakeWaiter(rt, rt.r(wi));
-        rt.popTo(base);
-        return true;
+        return com._3sln.flint.kgen.rt.Porthost.hostGrantAt(rt, token, hostPortId);
     }
 
     /// The host's answer to an `EV_REQUEST`, as encoded bytes.
@@ -1353,29 +1323,15 @@ public final class Conc {
     /// there to be read, and only when that is drained does it read as end of
     /// stream. There is one object now, not a pair, so this is the state of the
     /// handle itself rather than of a second end standing in for it.
+    /// GENERATED, from `kin/porthost.kin`.
     public static void hostClosePort(Rt rt, long hostPortId) {
-        long host = portById(rt, hostPortId);
-        if (Val.isNil(host)) return;
-        int base = rt.mark();
-        int hi = rt.push(host);
-        if (fx(rt.slot(rt.r(hi), PT_STATE)) == P_OPEN) {
-            rt.setSlot(Val.asHeap(rt.r(hi)), PT_STATE, Val.fixnum(P_HALF));
-        }
-        wakeOn(rt, rt.r(hi));
-        rt.popTo(base);
+        com._3sln.flint.kgen.rt.Porthost.hostCloseAt(rt, hostPortId);
     }
 
     /// until then would be a notification wearing a query's clothes.
+    /// GENERATED, from `kin/porthost.kin`.
     public static long portStateNow(Rt rt, long p) {
-        long st = fx(rt.slot(p, PT_STATE));
-        if (st != P_OPEN) return st;
-        long peerId = fx(rt.slot(p, PT_PEER));
-        if (peerId < 0) return st;
-        if (Val.isNil(portById(rt, peerId))) {
-            rt.setSlot(Val.asHeap(p), PT_STATE, Val.fixnum(P_ORPHANED));
-            return P_ORPHANED;
-        }
-        return st;
+        return com._3sln.flint.kgen.rt.Porthost.portStateNowAt(rt, p);
     }
 
     /// THE QUERY, NOT THE NOTIFICATION. What state is the RUNTIME end of this

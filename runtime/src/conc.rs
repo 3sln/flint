@@ -2176,29 +2176,9 @@ impl Rt {
     /// Returns false when the token is stale or already used: the generation in
     /// it no longer matches the slot, which is exactly the late-or-duplicated
     /// reply that would otherwise resume a stranger's thread.
+    /// GENERATED, from `kin/porthost.kin`.
     pub fn host_continue(&mut self, token: i64, ok: bool) -> bool {
-        if ok {
-            // A GRANT HAS TO NAME A PORT. There is no port to grant until the
-            // host says which one -- that is what `ports-are-the-hosts` inverted -- so this
-            // form can only ever mean a refusal, and a host that means to grant
-            // calls `host_grant`. Answering `true` here would have to invent a
-            // port, which is exactly the construction the sandbox may not do
-            // and the host must not be able to do by accident.
-            return false;
-        }
-        let w = self.waiter_at(token);
-        if w.is_nil() {
-            return false;
-        }
-        let base = self.mark();
-        let wi = self.push(w);
-        // The refusal is left on the thread as a non-port, which `port_open`
-        // reads on resume. Nothing else has to be cleaned up, because a refused
-        // open allocated nothing in the first place.
-        let wv = self.r(wi);
-        self.wake_waiter(wv);
-        self.pop_to(base);
-        true
+        self.host_continue_at(token, ok)
     }
 
     /// Grant an open: hand the waiting thread a handle on the host's port
@@ -2210,33 +2190,9 @@ impl Rt {
     ///
     /// If this sandbox already holds that port, the SAME handle comes back and
     /// no reference is taken -- granting a port twice is not two holders.
+    /// GENERATED, from `kin/porthost.kin`.
     pub fn host_grant(&mut self, token: i64, host_port_id: i64) -> bool {
-        let w = self.waiter_at(token);
-        if w.is_nil() {
-            return false;
-        }
-        let base = self.mark();
-        let wi = self.push(w);
-        let label = self.slot(self.r(wi), W_PORT);
-        let label = if label.is_nil() { NIL } else { self.slot(label, PT_LABEL) };
-        let li = self.push(label);
-        let l = self.r(li);
-        let p = self.install_bridge_port(host_port_id, l, false);
-        if p.is_nil() {
-            self.pop_to(base);
-            return false;
-        }
-        let pi = self.push(p);
-        // Onto the thread that asked, which `port_open` reads when it resumes.
-        let th = self.slot(self.r(wi), W_THREAD);
-        if !th.is_nil() {
-            let pv = self.r(pi);
-            self.set(th, TH_PENDING, pv);
-        }
-        let wv = self.r(wi);
-        self.wake_waiter(wv);
-        self.pop_to(base);
-        true
+        self.host_grant_at(token, host_port_id)
     }
 
     /// Put a message into a bridge from the host's side. Wakes a parked
@@ -2349,23 +2305,9 @@ impl Rt {
     }
 
     /// The host lets go of its end. The port may now be collected.
+    /// GENERATED, from `kin/porthost.kin`.
     pub fn host_close_port(&mut self, host_port_id: i64) {
-        let host = self.port_by_id(host_port_id);
-        if host.is_nil() {
-            return;
-        }
-        let base = self.mark();
-        let hi = self.push(host);
-        // HALF-CLOSED, not closed: whatever the host already delivered is still
-        // there to be read, and only when that is drained does it read as end
-        // of stream. There is one object now, not a pair, so this is the state
-        // of the handle itself rather than of a second end standing in for it.
-        if fx(self.slot(self.r(hi), PT_STATE)) == P_OPEN {
-            self.set(self.r(hi), PT_STATE, Value::fixnum(P_HALF));
-        }
-        let target = self.r(hi);
-        self.wake_on(target);
-        self.pop_to(base);
+        self.host_close_at(host_port_id);
     }
 
     /// This end's state, resolved rather than remembered.
@@ -2373,20 +2315,9 @@ impl Rt {
     /// A port whose peer has been collected is orphaned whether or not the
     /// scheduler has got round to noticing, and a query that answered `:open`
     /// until then would be a notification wearing a query's clothes.
+    /// GENERATED, from `kin/porthost.kin`.
     pub fn port_state_now(&mut self, p: Value) -> i64 {
-        let st = fx(self.slot(p, PT_STATE));
-        if st != P_OPEN {
-            return st;
-        }
-        let peer_id = fx(self.slot(p, PT_PEER));
-        if peer_id < 0 {
-            return st;
-        }
-        if self.port_by_id(peer_id).is_nil() {
-            self.set(p, PT_STATE, Value::fixnum(P_ORPHANED));
-            return P_ORPHANED;
-        }
-        st
+        self.port_state_now_at(p)
     }
 
     /// **The query, not the notification.** What state is the *runtime* end of

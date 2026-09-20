@@ -1,0 +1,151 @@
+;; WHAT THE HOST DOES TO A PORT, written once.
+;;
+;; Four entry points the host calls from outside, and every one of them is a
+;; decision about a token or a state rather than anything the guest asked for.
+;; They were written three times.
+;;
+;; THE COMMON SHAPE IS "SAY NO QUIETLY". A token that names no waiter, an id
+;; that names no port, a grant that named nothing to grant -- each answers
+;; false or does nothing at all, because the host is allowed to be late, to
+;; repeat itself, and to be wrong about what is still live. A runtime that
+;; threw at any of those would make a host's ordinary race into a crash.
+(ns flint.rt.porthost
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != < >= not and or nil?
+                                   as-fixnum fixnum64 local set
+                                   mark push r pop-to slot set-slot
+                                   port-by-id wake-on
+                                   Rt Value I64 Bool NIL RootIx
+                                   W_PORT W_THREAD TH_PENDING PT_LABEL
+                                   PT_STATE PT_PEER P_OPEN P_HALF P_ORPHANED]]
+            [flint.rt.sched :refer [waiter-at wake-waiter]]
+            [flint.rt.portinstall :refer [install-bridge-at]]))
+
+(doc "GRANT a capability: the host answers an open with a port of its own."
+     ""
+     "THE LABEL COMES FROM THE REQUEST, not from the host. The waiter holds the"
+     "port the guest was parked on, and its label is the name the guest asked"
+     "under -- so a diagnostic about the granted port says what was requested"
+     "rather than an id the guest has never seen. A waiter with no port is not"
+     "an error: the label is simply absent, and the grant still happens."
+     ""
+     "NOT ANNOUNCED. The host is not told it now holds this port, because the"
+     "host is the one that just handed it over -- a retain here would be the"
+     "host telling itself, and nothing would ever match it with a release."
+     ""
+     "THE PORT IS LEFT ON THE THREAD, not returned to it. `port-open`"
+     "re-executes its call when the thread resumes and finds the answer in"
+     "`TH_PENDING`, which is what makes a resumed open one request rather than"
+     "two. A waiter whose thread is already gone still counts as granted: the"
+     "port exists and the host must be told the same story either way."
+     ""
+     "FALSE FOR A TOKEN THAT NAMES NOTHING, and false if the port could not be"
+     "made -- and in the second case nothing has been woken, so the host may"
+     "try again.")
+(defn ^:pub ^:method ^Bool host-grant-at
+  [^:mut ^Rt rt ^I64 token ^I64 host-port-id]
+  (let [^Value w (waiter-at rt token)]
+    (if (nil? rt w)
+      (return false))
+    (let [^RootIx base (mark rt)
+          ^RootIx wi (push rt w)
+          ^Value wp (slot rt (r rt wi) W_PORT)]
+      (local ^:mut ^Value label)
+      (set label NIL)
+      (if (not (nil? rt wp))
+        (set label (slot rt wp PT_LABEL)))
+      (let [^RootIx li (push rt label)
+            ^Value p (install-bridge-at rt host-port-id (r rt li) false)]
+        (if (nil? rt p)
+          (do (pop-to rt base)
+              (return false)))
+        (let [^RootIx pi (push rt p)
+              ^Value th (slot rt (r rt wi) W_THREAD)]
+          (if (not (nil? rt th))
+            (set-slot rt th TH_PENDING (r rt pi)))
+          (wake-waiter rt (r rt wi))
+          (pop-to rt base)
+          (return true))))))
+
+(doc "The other answer to an open: a REFUSAL."
+     ""
+     "`ok` TRUE CAN ONLY MEAN A REFUSAL ANYWAY, and it is refused itself. There"
+     "is no port to grant until the host says WHICH one -- that is the whole of"
+     "what `ports-are-the-hosts` inverted -- so a host meaning to grant calls"
+     "`host-grant` and names it. Answering true here would have to INVENT a"
+     "port, which is exactly the construction a sandbox may not do and the host"
+     "must not be able to do by accident. It returns before touching anything,"
+     "so a host that calls it this way has changed nothing and can call the"
+     "right one."
+     ""
+     "THE REFUSAL ITSELF IS LEFT ON THE THREAD AS AN ABSENCE. `TH_PENDING` is"
+     "not written, so `port-open` resumes, finds no port, and raises its own"
+     "refusal -- there is nothing to clean up because a refused open allocated"
+     "nothing in the first place.")
+(defn ^:pub ^:method ^Bool host-continue-at [^:mut ^Rt rt ^I64 token ^Bool ok]
+  (if ok
+    (return false))
+  (let [^Value w (waiter-at rt token)]
+    (if (nil? rt w)
+      (return false))
+    (let [^RootIx base (mark rt)
+          ^RootIx wi (push rt w)]
+      (wake-waiter rt (r rt wi))
+      (pop-to rt base)
+      (return true))))
+
+(doc "THE HOST HANGS UP on a port it holds."
+     ""
+     "HALF-CLOSED, NOT CLOSED, and only from OPEN. What is already in the"
+     "guest's buffer is still the guest's to read; closing outright would throw"
+     "away messages the host itself sent. A port already closed or orphaned has"
+     "had something more specific happen to it and is left alone."
+     ""
+     "AND EVERYONE PARKED ON IT IS WOKEN REGARDLESS, which is why the wake sits"
+     "outside that test. A thread parked on a port that was ALREADY half-closed"
+     "is waiting for something that is never coming, and a host hanging up is"
+     "the last event that will ever arrive on it -- so this is the moment it"
+     "gets to find out, whatever the state was."
+     ""
+     "AN UNKNOWN ID DOES NOTHING. The host may close a port the collector has"
+     "already taken.")
+(defn ^:pub ^:method ^Value host-close-at [^:mut ^Rt rt ^I64 host-port-id]
+  (let [^Value host (port-by-id rt host-port-id)]
+    (if (nil? rt host)
+      (return NIL))
+    (let [^RootIx base (mark rt)
+          ^RootIx hi (push rt host)]
+      (if (== (as-fixnum (slot rt (r rt hi) PT_STATE)) P_OPEN)
+        (set-slot rt (r rt hi) PT_STATE (fixnum64 P_HALF)))
+      (wake-on rt (r rt hi))
+      (pop-to rt base)
+      (return NIL))))
+
+(doc "A PORT'S STATE, with an orphaning noticed lazily."
+     ""
+     "A channel end whose peer has been collected is ORPHANED, and nothing"
+     "reports that when it happens -- the peer's object simply stops existing."
+     "So it is noticed on the next ask, recorded, and answered. Recorded rather"
+     "than merely returned, so the next ask does not have to look again and"
+     "every later reader agrees."
+     ""
+     "ONLY AN OPEN PORT CAN BE ORPHANED. A closed or half-closed one has had"
+     "something more specific happen and keeps it; overwriting a tidy close"
+     "with an orphaning would turn an ordinary end-of-stream into an error."
+     ""
+     "A NEGATIVE PEER ID IS A BRIDGE, and is left alone. Its far end is the"
+     "host's registry and is in no heap, so there is no object to look for --"
+     "and looking would find nothing and orphan a perfectly live port, which is"
+     "the same mistake `receive-drained` makes a case out of.")
+(defn ^:pub ^:method ^I64 port-state-now-at [^:mut ^Rt rt ^Value p]
+  (let [^I64 st (as-fixnum (slot rt p PT_STATE))]
+    (if (!= st P_OPEN)
+      (return st))
+    (let [^I64 peer-id (as-fixnum (slot rt p PT_PEER))]
+      (if (< peer-id 0)
+        (return st))
+      (if (nil? rt (port-by-id rt peer-id))
+        (do
+          (set-slot rt p PT_STATE (fixnum64 P_ORPHANED))
+          (return P_ORPHANED)))
+      (return st))))

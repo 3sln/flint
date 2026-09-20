@@ -7825,3 +7825,45 @@ cheapest moment to convert prose into a check is while the reason is still
 fresh, which is the same argument the drivers files make about expected
 answers.
 
+---
+
+## The host's four entry points, generated
+
+2026-09-20. `kin/porthost.kin` -- 104 sources -- with `host-grant`,
+`host-continue`, `host-close` and `port-state-now`. This is the rest of the
+host-facing cluster picked two firings ago and abandoned mid-slice when
+`installBridgePort` turned out to carry a rooting bug. `Conc` across the three
+is 5 893 lines now, down 850 since this line of work began.
+
+**The shape they share is "say no quietly".** A token naming no waiter, an id
+naming no port, a grant that named nothing to grant -- each answers false or
+does nothing at all, because the host is allowed to be late, to repeat itself,
+and to be wrong about what is still live. A runtime that threw at any of those
+would turn an ordinary host race into a crash.
+
+**Three rules that pass either way unless a case is built for them**, and each
+got one:
+
+    `ok` true is refused AND TOUCHES NOTHING   case 6 reads `0:0`; drop the
+        early return and it reads `0:1`. The `:0` is half the contract -- the
+        host has changed nothing and can call `host-grant` instead.
+
+    the close wake sits OUTSIDE the state test  case 10 is an ALREADY-CLOSED
+        port: state unchanged, still woken. Move the wake inside the `if` and
+        cases 8 and 9 both still pass while 10 reads `2:0`. A thread parked on
+        an already half-closed port is waiting for something that will never
+        come, and a host hanging up is the last event it will ever get.
+
+    a bridge is not orphaned                    case 12 counts LOOKUPS and
+        expects 0: the `peer-id < 0` test returns before asking. Without it the
+        case reads `5:5:1` -- one lookup, and a live bridge marked orphaned,
+        because a bridge's far end is the host's registry and is in no heap.
+
+Five mutations, each caught, and the close one was rewritten after the first
+attempt: DELETING the wake is a weaker test than the mistake actually claimed,
+which is moving it inside the `if`. Deleting it fails cases 9 and 10 together
+and says nothing about which of the two rules broke.
+
+*A mutation should be the mistake someone would really make.* An easier
+mutation that fails more fields looks like stronger evidence and is weaker.
+

@@ -485,6 +485,11 @@
            :java "Conc.TH_LEN" :csharp "Conc.TH_LEN"}
    'TH_ID {:rust "crate::conc::TH_ID"
           :java "Conc.TH_ID" :csharp "Conc.TH_ID"}
+   ;; WHAT A PARKED THREAD IS WAITING FOR, left there by the host and read when
+   ;; the thread next runs. `port-open` re-executes its call on resume and
+   ;; finds the answer here rather than making a second request.
+   'TH_PENDING {:rust "crate::conc::TH_PENDING"
+               :java "Conc.TH_PENDING" :csharp "Conc.TH_PENDING"}
    ;; THE BOUND, and it means two different things by KIND: a channel's is a
    ;; count of MESSAGES and is what its ring is sized to; a bridge's is a
    ;; budget in BYTES, and its ring is `RING_MESSAGES` instead. Sizing a

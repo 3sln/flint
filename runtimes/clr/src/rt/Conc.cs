@@ -1107,26 +1107,9 @@ public static class Conc {
     /// Returns false when the token is stale or already used: the generation in
     /// it no longer matches the slot, which is exactly the late-or-duplicated
     /// reply that would otherwise resume a stranger's thread.
+    /// GENERATED, from `kin/porthost.kin`.
     public static bool HostContinue(Rt rt, long token, bool ok) {
-        if (ok) {
-            // A GRANT HAS TO NAME A PORT. There is no port to grant until the
-            // host says which one -- that is what `ports-are-the-hosts` inverted -- so this
-            // form can only ever mean a refusal, and a host that means to grant
-            // calls `HostGrant`. Answering `true` here would have to invent a
-            // port, which is exactly the construction the sandbox may not do and
-            // the host must not be able to do by accident.
-            return false;
-        }
-        long w = WaiterAt(rt, token);
-        if (Val.IsNil(w)) return false;
-        int bas = rt.Mark();
-        int wi = rt.Push(w);
-        // The refusal is left on the thread as a non-port, which `PortOpen`
-        // reads on resume. Nothing else has to be cleaned up, because a refused
-        // open allocated nothing in the first place.
-        WakeWaiter(rt, rt.R(wi));
-        rt.PopTo(bas);
-        return true;
+        return global::_3sln.Flint.Kgen.Rt.Porthost.HostContinueAt(rt, token, ok);
     }
 
     /// Grant an open: hand the waiting thread a handle on the host's port
@@ -1138,22 +1121,9 @@ public static class Conc {
     ///
     /// If this sandbox already holds that port, the SAME handle comes back and
     /// no reference is taken -- granting a port twice is not two holders.
+    /// GENERATED, from `kin/porthost.kin`.
     public static bool HostGrant(Rt rt, long token, long hostPortId) {
-        long w = WaiterAt(rt, token);
-        if (Val.IsNil(w)) return false;
-        int bas = rt.Mark();
-        int wi = rt.Push(w);
-        long label = rt.Slot(rt.R(wi), W_PORT);
-        label = Val.IsNil(label) ? Val.Nil : rt.Slot(label, PT_LABEL);
-        int li = rt.Push(label);
-        long p = InstallBridgePort(rt, hostPortId, rt.R(li), false);
-        if (Val.IsNil(p)) { rt.PopTo(bas); return false; }
-        int pi = rt.Push(p);
-        long th = rt.Slot(rt.R(wi), W_THREAD);
-        if (!Val.IsNil(th)) rt.SetSlot(Val.AsHeap(th), TH_PENDING, rt.R(pi));
-        WakeWaiter(rt, rt.R(wi));
-        rt.PopTo(bas);
-        return true;
+        return global::_3sln.Flint.Kgen.Rt.Porthost.HostGrantAt(rt, token, hostPortId);
     }
 
     /// The host's answer to an `EV_REQUEST`, as encoded bytes.
@@ -1289,16 +1259,9 @@ public static class Conc {
     /// there to be read, and only when that is drained does it read as end of
     /// stream. There is one object now, not a pair, so this is the state of the
     /// handle itself rather than of a second end standing in for it.
+    /// GENERATED, from `kin/porthost.kin`.
     public static void HostClosePort(Rt rt, long hostPortId) {
-        long p = PortById(rt, hostPortId);
-        if (Val.IsNil(p)) return;
-        int bas = rt.Mark();
-        int hi = rt.Push(p);
-        if (Fx(rt.Slot(rt.R(hi), PT_STATE)) == P_OPEN) {
-            rt.SetSlot(Val.AsHeap(rt.R(hi)), PT_STATE, Val.Fixnum(P_HALF));
-        }
-        WakeOn(rt, rt.R(hi));
-        rt.PopTo(bas);
+        global::_3sln.Flint.Kgen.Rt.Porthost.HostCloseAt(rt, hostPortId);
     }
 
     /// This end's state, RESOLVED rather than remembered.
@@ -1306,16 +1269,9 @@ public static class Conc {
     /// A port whose peer has been collected is orphaned whether or not the
     /// scheduler has got round to noticing, and a query that answered `:open`
     /// until then would be a notification wearing a query's clothes.
+    /// GENERATED, from `kin/porthost.kin`.
     public static long PortStateNow(Rt rt, long p) {
-        long st = Fx(rt.Slot(p, PT_STATE));
-        if (st != P_OPEN) return st;
-        long peerId = Fx(rt.Slot(p, PT_PEER));
-        if (peerId < 0) return st;
-        if (Val.IsNil(PortById(rt, peerId))) {
-            rt.SetSlot(Val.AsHeap(p), PT_STATE, Val.Fixnum(P_ORPHANED));
-            return P_ORPHANED;
-        }
-        return st;
+        return global::_3sln.Flint.Kgen.Rt.Porthost.PortStateNowAt(rt, p);
     }
 
     /// THE QUERY, NOT THE NOTIFICATION. What state is the RUNTIME end of this
