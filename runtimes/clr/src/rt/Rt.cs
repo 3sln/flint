@@ -456,6 +456,13 @@ public sealed class Rt : System.IDisposable {
     /// Allocate WITHOUT charging, for the runtime's own bookkeeping: state
     /// whose SIZE is a property of the runtime rather than of the program.
     public long AllocUnbilled(int ty, int len) {
+        // NOTHING MAY ALLOCATE WHILE `thrown` OR `parkOn` HOLDS A HEAP VALUE --
+        // see the Rust copy. Under the stress flag only.
+        if (Gc.Stress && (Val.IsHeap(thrown) || Val.IsHeap(parkOn))) {
+            throw new System.InvalidOperationException(
+                "flint: allocating while " + (Val.IsHeap(thrown) ? "`thrown`" : "`parkOn`")
+                + " holds a heap value -- it is not a root");
+        }
         Parallel par = roots.shared.par;
         if (par.Executors() <= 1) return gc.Alloc(roots, ty, len);
 

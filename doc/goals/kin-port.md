@@ -1898,36 +1898,18 @@ entry's argument out to a host local, dropped its roots, and then called
 `hostreq` transcripts now run under `-Dflint.gcstress` and must come back
 identical, not merely not crash.
 
-### An invariant held by accident: `thrown` and `parkOn` are not roots
+### ~~An invariant held by accident: `thrown` and `parkOn` are not roots~~ CLOSED
 
-Noticed while chasing the driver bug, checked properly afterwards, and NOT a
-defect today.
+Named 2026-09-21 and enforced the same day. Neither field is visited by any
+runtime's root walk, and both can hold a heap value, so the rule is "nothing
+allocates while either holds one". It was true by accident; it is checked now.
 
-Neither runtime's root walk visits `Rt::thrown` or `Rt::park_on` -- they are
-plain fields, and `Roots::for_each` covers the value stack, the shadow stack,
-globals, consts, singletons and every other executor's stacks, and nothing
-else. Both fields can hold a HEAP value: `thrown` an exception object,
-`parkOn` the port a thread parked on. A heap value held in either across an
-allocation is stale afterwards, and after the flip its address names to-space
--- the same shape the driver bug had.
-
-**It never fires.** Instrumented at BOTH allocation paths (`alloc` and
-`allocUnbilled`), under `-Dflint.gcstress`, across `hostport`, `hostreq` and
-`green`: zero occurrences of either field holding a heap value at an
-allocation. The probe was verified to be reached rather than trusted for its
-silence.
-
-So the invariant is "nothing allocates while `thrown` or `parkOn` holds a heap
-value", and it is currently true by accident rather than by construction:
-`unwind` pushes the exception before doing anything that allocates, and a park
-unwinds straight out to the scheduler, which reads `parkOn` into a root before
-its first allocation. Nobody wrote that down, and the next allocation added to
-either path breaks it silently.
-
-Two ways to close it, neither taken here: visit both fields in `for_each` on
-all four runtimes, which costs two compares per collection; or assert in a
-debug build that neither holds a heap value at an allocation, which costs
-nothing shipped and names the rule where it can be broken.
+`alloc_unbilled` refuses it on all three: a `debug_assert!` on native, which
+costs nothing in release and runs throughout `cargo test`; a stress-flag check
+on the two ports, which costs nothing unless `-Dflint.gcstress` is set and runs
+in all 29 stress rows `bin/conform-hosts` now has. Two `#[should_panic]` tests
+in `runtime/src/rt.rs` violate it on purpose -- one per field, because they are
+two rules wearing one comment and a fix to one would not touch the other.
 
 ### Ready to do, no decision needed
 
@@ -7811,4 +7793,35 @@ under the flag and are compared to the native transcript BYTE FOR BYTE, which
 is stronger than not crashing. `RtRooting` stays beside them -- it installs a
 port into a fresh sandbox and checks the label survives, which is the one shape
 that stays readable when it fires.
+
+---
+
+## Enforcing the rule that was held by accident
+
+2026-09-21. The invariant named yesterday is now checked rather than merely
+recorded: nothing may allocate while `thrown` or `park_on` holds a heap value,
+because neither is a root.
+
+**Where it costs nothing.** `debug_assert!` on native -- compiled out of
+release, live in `cargo test`, where the runtime's own stress tests
+(`rt.gc.stress = true`, a dozen of them) exercise it hard. On the two ports it
+rides the stress flag, so an ordinary run does not pay for it and every row of
+`bin/conform-hosts`'s stress coverage does.
+
+**It holds everywhere it now runs**, which is the answer to the question the
+naming left open: 124 rust tests, 29 stress rows across every conformance
+program, and the three host transcripts. Yesterday's evidence was one runtime
+and three workloads; this is all three runtimes and everything the gate has.
+
+**And it is proved not to be inert, in both directions.** The jvm guard was
+driven with a heap value in `thrown` -- silent without the flag, refused with
+it -- and native carries two `#[should_panic]` tests, one per field. A check
+for a rule nothing violates is a check nobody knows is wired up, and the two
+rooting bugs this fortnight both took a run to find precisely because the thing
+that would have caught them did not exist yet.
+
+*A rule written in a comment is a rule until someone adds an allocation.* The
+cheapest moment to convert prose into a check is while the reason is still
+fresh, which is the same argument the drivers files make about expected
+answers.
 

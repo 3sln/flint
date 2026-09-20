@@ -666,6 +666,14 @@ public final class Rt {
     /// values live across a call than the interpreter does, so billing it made
     /// the same program cost more interpreted than compiled.
     public long allocUnbilled(int ty, int len) {
+        // NOTHING MAY ALLOCATE WHILE `thrown` OR `parkOn` HOLDS A HEAP VALUE --
+        // see the Rust copy for why. Under the stress flag only, which is
+        // where this class of bug shows up and costs nothing otherwise.
+        if (gc.stress && (Val.isHeap(thrown) || Val.isHeap(parkOn))) {
+            throw new IllegalStateException(
+                "flint: allocating while " + (Val.isHeap(thrown) ? "`thrown`" : "`parkOn`")
+                + " holds a heap value -- it is not a root");
+        }
         Parallel par = roots.shared.par;
         if (par.executors() <= 1) return gc.alloc(roots, ty, len);
 

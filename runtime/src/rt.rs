@@ -503,6 +503,28 @@ impl Rt {
     /// bigger, it must be billed.
     #[inline]
     pub fn alloc_unbilled(&mut self, ty: u8, len: u32) -> crate::mem::Addr {
+        // NOTHING MAY ALLOCATE WHILE `thrown` OR `park_on` HOLDS A HEAP VALUE.
+        //
+        // Neither is a ROOT: `Roots::for_each` walks the value stack, the
+        // shadow stack, globals, consts, singletons and the other executors'
+        // stacks, and these two fields are not among them. A heap value held
+        // in either across a collection is stale afterwards, and after the
+        // flip its address names to-space -- which is the shape of the last
+        // two rooting bugs this runtime had.
+        //
+        // The rule held by accident until this line: `unwind` pushes the
+        // exception before anything that allocates, and a park unwinds
+        // straight out to the scheduler, which roots `park_on` before its
+        // first allocation. Neither is written down anywhere else, and the
+        // next allocation added to either path would break it silently.
+        debug_assert!(
+            !self.thrown.is_heap(),
+            "flint: allocating while `thrown` holds a heap value -- it is not a root"
+        );
+        debug_assert!(
+            !self.park_on.is_heap(),
+            "flint: allocating while `park_on` holds a heap value -- it is not a root"
+        );
         #[cfg(feature = "parallel")]
         if self.exec_id.is_some() {
             return self.alloc_shared(ty, len);
@@ -1266,5 +1288,39 @@ mod shared_gas_tests {
     fn past_the_limit_the_batch_does_not_wrap() {
         assert_eq!(Rt::gas_batch(1_000, 1_000, 4), 1);
         assert_eq!(Rt::gas_batch(1_000, 50_000, 4), 1);
+    }
+
+}
+
+/// The rooting rule the allocator now enforces, which no feature gates.
+#[cfg(test)]
+mod root_rule_tests {
+    use super::*;
+
+    /// THE GUARD IN `alloc_unbilled` IS NOT INERT.
+    ///
+    /// It enforces a rule that is otherwise held by accident: `thrown` and
+    /// `park_on` are not roots, so a heap value in either is stale after any
+    /// collection, and after the flip its address names to-space. A check for
+    /// a rule nothing violates is a check nobody knows is wired up, so this
+    /// violates it on purpose.
+    #[test]
+    #[should_panic(expected = "`thrown` holds a heap value")]
+    fn allocating_with_a_heap_thrown_is_refused() {
+        let mut rt = Rt::new();
+        let s = rt.string("an exception stand-in");
+        rt.thrown = s;
+        let _ = rt.alloc_unbilled(crate::obj::TY_NODE, 4);
+    }
+
+    /// The same for the other field, because they are two rules wearing one
+    /// comment and a fix to one would not touch the other.
+    #[test]
+    #[should_panic(expected = "`park_on` holds a heap value")]
+    fn allocating_with_a_heap_park_on_is_refused() {
+        let mut rt = Rt::new();
+        let s = rt.string("a port stand-in");
+        rt.park_on = s;
+        let _ = rt.alloc_unbilled(crate::obj::TY_NODE, 4);
     }
 }
