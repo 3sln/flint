@@ -686,16 +686,28 @@ if ./bin/flint :src runtimes/conform-host :fn hostport/main --emit-image \
   # into a fresh sandbox rooted the address a moved string used to have. Fixed
   # in `kin/portinstall.kin`; this is what would have caught it.
   #
-  # NARROW ON PURPOSE. Re-running the whole `RtHostPorts` transcript under the
-  # flag is the obvious row and it trips over a SECOND, OLDER rooting bug on
-  # the settle path -- proved pre-existing, written up in
-  # `doc/goals/kin-port.md`, and not fixed here. A row that cannot go green is
-  # a row somebody deletes.
+  # TWO ROWS, and the narrow one is not redundant. `RtRooting` installs a port
+  # into a FRESH sandbox and checks the label survives, which is the exact
+  # shape of the bug above and stays readable when it fires. The whole
+  # transcript below is the coverage.
   "$JDK/bin/java" -Dflint.gcstress=1 -cp runtimes/jvm/classes RtRooting \
       > "$FLINT_SCRATCH"/flint-root-gcs.out 2>&1 \
     || { cat "$FLINT_SCRATCH"/flint-root-gcs.out
          echo "  FAIL the host-port install does not survive a collection at every allocation"; exit 1; }
   cat "$FLINT_SCRATCH"/flint-root-gcs.out
+  # AND THE WHOLE TRANSCRIPT, which has to come back IDENTICAL rather than
+  # merely not crash. This row was held back for one firing because it tripped
+  # over a second rooting bug -- which turned out to be in the DRIVER, not the
+  # runtime: it read the entry's argument out to a host local, dropped its
+  # roots, and then called `makeClosure`, which allocates.
+  "$JDK/bin/java" -Dflint.gcstress=1 -cp runtimes/jvm/classes RtHostPorts \
+      out/conform/hostport.img > "$FLINT_SCRATCH"/flint-hp-gcs.out 2>&1 \
+    || { cat "$FLINT_SCRATCH"/flint-hp-gcs.out
+         echo "  FAIL host ports [jvm] did not survive a collection at every allocation"; exit 1; }
+  cmp -s "$FLINT_SCRATCH"/flint-hp-native.out "$FLINT_SCRATCH"/flint-hp-gcs.out \
+    || { diff "$FLINT_SCRATCH"/flint-hp-native.out "$FLINT_SCRATCH"/flint-hp-gcs.out | head -20
+         echo "  FAIL host ports [jvm] answers differently under GC STRESS -- a rooting bug"; exit 1; }
+  echo "  ok     ... and the whole transcript is the same under one [jvm]"
   if [ -n "$CLR" ]; then
     "$CLR" --rt-hostports out/conform/hostport.img > "$FLINT_SCRATCH"/flint-hp-clr.out 2>&1 \
       || { cat "$FLINT_SCRATCH"/flint-hp-clr.out; echo "  FAIL host ports [clr]"; exit 1; }
@@ -750,6 +762,16 @@ for hqf in hostreq initpark; do
     || { diff "$FLINT_SCRATCH"/flint-hq-native.out "$FLINT_SCRATCH"/flint-hq-jvm.out | head -20; \
          echo "  FAIL the jvm port answers $hqf differently"; exit 1; }
   echo "  ok   the jvm port produces the same $hqf transcript, line for line"
+  # UNDER A COLLECTION AT EVERY ALLOCATION TOO. `RtHostReq` carried the same
+  # unrooted-argument bug its sibling did, and nothing here would have shown it.
+  "$JDK/bin/java" -Dflint.gcstress=1 -cp runtimes/jvm/classes RtHostReq \
+      "out/conform/$hqf.img" > "$FLINT_SCRATCH"/flint-hq-gcs.out 2>&1 \
+    || { cat "$FLINT_SCRATCH"/flint-hq-gcs.out
+         echo "  FAIL host requests $hqf [jvm] did not survive GC stress"; exit 1; }
+  cmp -s "$FLINT_SCRATCH"/flint-hq-native.out "$FLINT_SCRATCH"/flint-hq-gcs.out \
+    || { diff "$FLINT_SCRATCH"/flint-hq-native.out "$FLINT_SCRATCH"/flint-hq-gcs.out | head -10
+         echo "  FAIL host requests $hqf [jvm] differs under GC STRESS -- a rooting bug"; exit 1; }
+  echo "  ok     ... and the same under a collection at every allocation"
   if [ -n "$CLR" ]; then
     "$CLR" --rt-hostreq "out/conform/$hqf.img" > "$FLINT_SCRATCH"/flint-hq-clr.out 2>&1 \
       || { cat "$FLINT_SCRATCH"/flint-hq-clr.out; echo "  FAIL host requests $hqf [clr]"; exit 1; }

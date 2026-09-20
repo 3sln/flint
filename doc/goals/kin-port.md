@@ -1888,53 +1888,15 @@ EMPTY STRING, and the fixture that says so is
 `runtimes/conform-host/initpark.cljc`, now run three ways by
 `bin/conform-hosts`.
 
-### OPEN: a bad value-stack root when `settle` saves a parked thread
+### ~~OPEN: a bad value-stack root when `settle` saves a parked thread~~ CLOSED
 
-Found 2026-09-20 by the stress row added that day, and PROVED pre-existing --
-see "Two rooting bugs on a path nothing stressed" at the end of this file.
-
-    java -Dflint.gcstress=1 -cp runtimes/jvm/classes RtHostPorts out/conform/hostport.img
-
-    to-space overflow: 4298768384 past 8454144
-      Gc.forward <- Roots.forEach(Roots.java:90) <- Gc.minor <- alloc
-      <- saveCurrentState <- settle <- scheduler <- runProgram
-
-`Roots.java:90` is the VALUE stack. Not a port: `saveCurrentState` is on the
-never-port list (raw byte buffers), so this is a fix in the runtime rather than
-a slice of the port.
-
-**LOCALISED 2026-09-20, not fixed.** Instrumented copies of the jvm sources in
-a scratch tree (the working tree was not touched). What is now known, all of it
-observed rather than reasoned:
-
-* the failing root is VALUE STACK SLOT 1, with `stackTop` = 2;
-* at the top of `saveCurrentState`, BEFORE its first allocation, the spaces are
-  `from=0x410000 to=0x10000` and the two live slots are
-
-      [0] a=0x410000  inFrom=true   ty=21 len=2
-      [1] a=0x10020   inFrom=FALSE  ty=9  len=6
-
-  Slot 1 is a perfectly well-formed object -- **and it is in TO-SPACE while the
-  mutator is running.** That is the violated invariant: between collections,
-  nothing a root names should live in to-space. It is a stale forwarding
-  target, and it is only fatal once `stackTop` grows far enough to include that
-  slot in the walk;
-* by the time `minor` walks the roots, the spaces read `from=0x10000
-  to=0x410000` -- swapped relative to the probe taken a few statements earlier
-  -- and slot 1's header then reads `ty=0 len=-458752`, which is a flint VALUE
-  where a header should be. `forward` computes a 4 GB size from it and trips
-  the to-space bound.
-
-The two halves that still need an answer: WHO leaves a root naming to-space,
-and WHY the spaces differ between the top of `saveCurrentState` and the root
-walk inside its own first allocation, with only `mark` and `push` in between.
-Answering either probably needs the collector's flip protocol read properly
-rather than inferred -- which is what stopped this investigation rather than a
-lack of reproduction.
-
-    reproduce:  java -Dflint.gcstress=1 -cp runtimes/jvm/classes \
-                     RtHostPorts out/conform/hostport.img
-    it is deterministic, and the addresses above are stable across runs.
+Found 2026-09-20 by the stress row added that day, localised the same day, and
+CLOSED the day after -- see "The second rooting bug was in the driver" at the
+end of this file. It was never in the runtime: the host drivers read the
+entry's argument out to a host local, dropped its roots, and then called
+`makeClosure`, which allocates. Three drivers had it. The whole `hostports` and
+`hostreq` transcripts now run under `-Dflint.gcstress` and must come back
+identical, not merely not crash.
 
 ### Ready to do, no decision needed
 
@@ -7758,4 +7720,64 @@ from the collector rather than from the symptom.
 **The working tree was never touched.** All instrumentation was applied to a
 scratch copy of `runtimes/jvm/src`, which is why the diff for this firing is
 one paragraph of prose.
+
+---
+
+## The second rooting bug was in the driver, and the chase was four wrong turns
+
+2026-09-21. The open item from the previous firing is closed. It was not in the
+collector, not in `settle`, and not in `saveCurrentState` -- all three of which
+this file had named. It was in the test drivers:
+
+    long pair = rt.r(vi);
+    rt.popTo(base);                                       // pair is unrooted
+    return rt.runProgram(rt.makeClosure(...), new long[]{ pair });
+                                  //  ^^^^^^^^^^^ allocates
+
+`makeClosure` allocates with `pair` held only in a host local. Under a
+collection at every allocation the pair moves, the entry is handed the address
+it used to have, and after the flip that address names TO-SPACE -- which is
+precisely the invariant violation the previous firing had observed and could
+not explain. `RtHostPorts`, `RtHostReq` and the CLR's `Program.cs` all had it.
+
+### What each wrong turn cost, because the pattern is the useful part
+
+**"The semispaces differ across `mark` and `push`."** They do not. The probe
+was at the top of `saveCurrentState` and the crash was at its SECOND
+allocation, not its first -- one complete collection ran in between and flipped
+them. Reading the line number in the stack trace against the function body
+would have settled it in a minute; I had inferred the site instead of checking
+it.
+
+**"`minor` must flip at the start."** It flips at step 5, the end. One `sed` on
+`Gc.minor` said so. This file had already recorded that the investigation
+"probably needs the collector's flip protocol read properly rather than
+inferred" -- and then the next firing inferred it again for three rounds.
+
+**"`stackTop` is raised over uninitialised slots."** Measured and refuted: an
+instrumented setter on every one of the 48 assignment sites showed the raise
+that mattered went 0 -> 2 through `vpush`, which writes each slot as it goes.
+
+**"`thrown` and `parkOn` are not roots, so a value held there goes stale."**
+True -- neither field is visited, on EITHER runtime -- and refuted as the cause
+here by instrumenting every collection for it. Worth keeping as a fact about
+the root set; it was not this.
+
+What actually found it was the cheapest instrument of the lot: flag the first
+`vpush` of a value that already names to-space, and print the Java stack. One
+run, and it named `Rt.call` <- `runProgram` <- `RtHostPorts.run:177`.
+
+*Four hypotheses about the runtime, and the answer was in the harness.* The
+common thread is that each wrong turn was reasoned from a symptom rather than
+measured at the point of the write -- and the instrument that asks "who wrote
+this bad value" beats any amount of reasoning about who might have.
+
+### The rows are wider now
+
+The stress row was narrowed last firing to the install path alone, because the
+full transcript could not go green. It can: `hostports` and `hostreq` both run
+under the flag and are compared to the native transcript BYTE FOR BYTE, which
+is stronger than not crashing. `RtRooting` stays beside them -- it installs a
+port into a fresh sandbox and checks the label survives, which is the one shape
+that stays readable when it fires.
 

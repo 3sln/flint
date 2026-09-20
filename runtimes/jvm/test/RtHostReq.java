@@ -105,9 +105,19 @@ public class RtHostReq {
     int vi = rt.push(Vec.empty(rt));
     rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.r(ai)));
     rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.r(mi)));
-    long pair = rt.r(vi);
+    // THE CLOSURE IS MADE WHILE THE PAIR IS STILL ROOTED, and the roots are
+    // dropped after the call rather than before it.
+    //
+    // `makeClosure` ALLOCATES. Reading `pair` out to a host local and then
+    // `popTo` left it unrooted across that allocation, so under a collection at
+    // every allocation the pair moved and the entry was handed the address it
+    // used to have. After the flip that address names to-space, and the next
+    // collection traced it and died in `Gc.forward` -- nowhere near here.
+    long fn = rt.makeClosure(img.entry, new long[0]);
+    int fi = rt.push(fn);
+    long out = rt.runProgram(rt.r(fi), new long[]{ rt.r(vi) });
     rt.popTo(base);
-    return rt.runProgram(rt.makeClosure(img.entry, new long[0]), new long[]{ pair });
+    return out;
   }
 
   static int status(Rt rt) {

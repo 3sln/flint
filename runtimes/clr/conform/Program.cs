@@ -499,9 +499,14 @@ public static class Program {
         rt.SetR(vi, Flint.Rt.Vec.Conj(rt, rt.R(vi), rt.R(ai)));
         rt.SetR(vi, Flint.Rt.Vec.Conj(rt, rt.R(vi), rt.R(mi)));
         long pair = rt.R(vi);
+        // THE CLOSURE IS MADE WHILE THE PAIR IS STILL ROOTED -- see the Java
+        // copy. `MakeClosure` allocates, and reading the pair out to a host
+        // local before `PopTo` left it unrooted across that allocation.
+        long fn = rt.MakeClosure(img.entry, System.Array.Empty<long>());
+        int fi = rt.Push(fn);
+        long outv = rt.RunProgram(rt.R(fi), new long[]{ rt.R(vi) });
         rt.PopTo(bas);
-        return rt.RunProgram(rt.MakeClosure(img.entry, System.Array.Empty<long>()),
-                             new long[]{ pair });
+        return outv;
     }
 
     /// The status a host sees, in the same three values the Rust reports:
