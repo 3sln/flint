@@ -189,6 +189,8 @@ public class RtHostPorts {
       long e = rt.thrown;
       return Str.text(rt, rt.exKind(e)) + ": " + Str.text(rt, rt.exMessage(e));
     }
+    // NIL WITH NOTHING THROWN stays empty, which is what the call site meant.
+    if (Val.isNil(v)) return "";
     return Str.isString(rt, v) ? Str.text(rt, v) : rt.describe(v);
   }
 
@@ -274,8 +276,9 @@ public class RtHostPorts {
     // has none. Rendering the NIL as "nil" here made the transcripts differ on
     // a line where nothing had actually diverged, and `bin/conform-hosts`
     // compares them with `cmp -s`.
-    System.out.println("  ok   the program answered: "
-        + (Val.isNil(v) ? "" : rendered(rt, v)));
+    // See `RtHostReq.java`: the nil test used to swallow a throw, because a
+    // run that threw returns nil and never reached `rendered`.
+    System.out.println("  ok   the program answered: " + rendered(rt, v));
     System.out.println("  ok   status " + status(rt));
     System.out.println("  ok   and was told the port closed: " + show(tail));
 

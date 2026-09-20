@@ -511,11 +511,19 @@ public static class Program {
         return Flint.Rt.Val.IsNil(rt.thrown) ? 0 : 1;
     }
 
+    /// A FAILED RUN AND AN EMPTY ANSWER USED TO BE THE SAME LINE. The throw
+    /// branch below existed, and a nil test at the call site meant the one case
+    /// that most needs reporting never reached it -- a run that threw returns
+    /// nil. Measured against `initpark.img`, where the runtime refuses by name
+    /// and this transcript said nothing at all.
     private static string Rendered(Flint.Rt.Rt rt, long v) {
         if (!Flint.Rt.Val.IsNil(rt.thrown)) {
             long e = rt.thrown;
             return Flint.Rt.Str.Text(rt, rt.ExKind(e)) + ": " + Flint.Rt.Str.Text(rt, rt.ExMessage(e));
         }
+        // NIL WITH NOTHING THROWN stays empty: a program that answered
+        // nothing, rather than one that failed to answer.
+        if (Flint.Rt.Val.IsNil(v)) return "";
         return Flint.Rt.Str.IsString(rt, v) ? Flint.Rt.Str.Text(rt, v) : rt.Describe(v);
     }
 
@@ -680,8 +688,7 @@ public static class Program {
             Drain(rt);
             v = Flint.Rt.Conc.Resume(rt);
         }
-        Console.WriteLine("  ok   the program answered: "
-            + (Flint.Rt.Val.IsNil(v) ? "" : Rendered(rt, v)));
+        Console.WriteLine("  ok   the program answered: " + Rendered(rt, v));
         Console.WriteLine("  ok   status " + Status(rt));
         return 0;
     }
@@ -752,8 +759,7 @@ public static class Program {
         }
         // AN ABSENT ANSWER PRINTS AS NOTHING, matching native -- see the note
         // in `RtHostPorts.java`.
-        Console.WriteLine("  ok   the program answered: "
-            + (Flint.Rt.Val.IsNil(v) ? "" : Rendered(rt, v)));
+        Console.WriteLine("  ok   the program answered: " + Rendered(rt, v));
         Console.WriteLine("  ok   status " + Status(rt));
         Console.WriteLine("  ok   and was told the port closed: " + Show(tail));
 

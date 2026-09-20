@@ -2016,6 +2016,21 @@ public final class Rt {
     /// what they were when the handler was installed, which is what makes a
     /// throw out of arbitrarily deep code leave no residue.
     public boolean unwind() {
+        // COUNTED, because `aotCallAt` asks whether one happened.
+        //
+        // The field and its reader were both ported and this increment was not,
+        // so the guard's second condition was the constant `true` and the guard
+        // degenerated to exactly the frame-count test its own comment warns
+        // against. An unwind to a handler in the SAME frame as the call leaves
+        // the frame count where it started, so compiled code was told to carry
+        // on -- past the handler, with an unwound stack. Two `try` regions in
+        // one compiled arity is the smallest program that shows it
+        // (`runtimes/conform/aot_try.cljc`); one `try` never reaches the call
+        // path that consults this.
+        //
+        // Unconditional here where the Rust has it under `feature = "aot"`:
+        // the ports have no such switch and the counter is a long add.
+        unwinds++;
         while (!handlers.isEmpty()) {
             // A HANDLER BELOW THIS `run` IS NOT THIS `run`'S TO JUMP TO.
             // Unwinding past a native frame truncates the shadow stack under
@@ -2085,6 +2100,36 @@ public final class Rt {
         setSliceEnd(0);
         for (int fn : init) {
             call(makeClosure(fn, new long[0]), new long[0]);
+            // A TOP-LEVEL FORM THAT ASKED THE HOST, which is the one thing it
+            // may not do. It comes back with `parkOn` set and no way to be
+            // resumed: this loop is not re-entrant, so there is no saved
+            // position to come back to.
+            //
+            // `DECISIONS.md#ports-are-the-hosts` says a sandbox that cannot
+            // ask is TOLD so rather than parked. Without this the park fell
+            // through the `failed()` test below -- a park travels as
+            // `thrown == PARK`, so `failed()` is ALREADY true for one -- and
+            // the program answered the EMPTY STRING with no reason given.
+            // Measured on both ports against the same image native refuses
+            // by name (`runtimes/conform-host/initpark.cljc`).
+            //
+            // NOT GUARDED ON `!failed()`, and that is the difference from the
+            // copy in the Rust's `run_program`: this one has to fire for a
+            // state where `failed()` is true.
+            if (!Val.isNil(parkOn)) {
+                parkOn = Val.NIL;
+                if (thrown == Val.PARK) thrown = Val.NIL;
+                // The stack this thread is parked on is about to be cut back,
+                // so nothing may try to resume it -- and the WAITER is the
+                // half that bites: the next host answer would otherwise find
+                // it and put the thread back to RUNNABLE. Generated from
+                // `kin/sched.kin`, which pins exactly that with a wake.
+                com._3sln.flint.kgen.rt.Sched.abandonCurrentThread(this);
+                throwStr("IllegalStateException",
+                         "a top-level form asked the host while the program was still "
+                         + "initialising, and cannot wait for the answer there. Move the "
+                         + "call into a function the entry reaches.");
+            }
             if (failed()) { setSliceEnd(slice); return false; }
         }
         setSliceEnd(slice);

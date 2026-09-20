@@ -1382,6 +1382,14 @@ public sealed class Rt : System.IDisposable {
     /// what they were when the handler was installed, which is what makes a
     /// throw out of arbitrarily deep code leave no residue.
     public bool Unwind() {
+        // COUNTED, because `AotCallAt` asks whether one happened. The field and
+        // its reader were both ported and this increment was not, so the guard's
+        // second condition was the constant `true` and it degenerated to exactly
+        // the frame-count test its own comment warns against: an unwind to a
+        // handler in the SAME frame as the call leaves the frame count where it
+        // started, and compiled code was told to carry on past the handler with
+        // an unwound stack. See `runtimes/conform/aot_try.cljc`.
+        unwinds++;
         while (handlers.Count != 0) {
             // A HANDLER BELOW THIS `Run` IS NOT THIS `Run`'S TO JUMP TO.
             // Unwinding past a native frame truncates the shadow stack under
@@ -1849,6 +1857,31 @@ public sealed class Rt : System.IDisposable {
         SetSliceEnd(0);
         foreach (int fn in init) {
             Call(MakeClosure(fn, new long[0]), new long[0]);
+            // A TOP-LEVEL FORM THAT ASKED THE HOST. It comes back with
+            // `parkOn` set and no way to be resumed -- this loop is not
+            // re-entrant, so there is no saved position to come back to.
+            //
+            // `DECISIONS.md#ports-are-the-hosts` says a sandbox that cannot
+            // ask is TOLD so rather than parked. Without this the park fell
+            // through the `Failed()` test below -- a park travels as
+            // `thrown == PARK`, so `Failed()` is ALREADY true for one -- and
+            // the program answered the EMPTY STRING with no reason given.
+            // See `runtimes/conform-host/initpark.cljc`.
+            //
+            // NOT GUARDED ON `!Failed()`: this has to fire for a state where
+            // `Failed()` is true.
+            if (!Val.IsNil(parkOn)) {
+                parkOn = Val.Nil;
+                if (thrown == Val.Park) thrown = Val.Nil;
+                // The WAITER is the half that bites: the next host answer
+                // would otherwise find it and put this thread back to
+                // RUNNABLE. Generated from `kin/sched.kin`.
+                global::_3sln.Flint.Kgen.Rt.Sched.AbandonCurrentThread(this);
+                ThrowStr("IllegalStateException",
+                         "a top-level form asked the host while the program was still "
+                         + "initialising, and cannot wait for the answer there. Move the "
+                         + "call into a function the entry reaches.");
+            }
             if (Failed()) { SetSliceEnd(slice); return false; }
         }
         SetSliceEnd(slice);

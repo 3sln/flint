@@ -168,8 +168,13 @@ public class RtHostReq {
       drain(rt);
       v = Conc.resume(rt);
     }
-    System.out.println("  ok   the program answered: "
-        + (Val.isNil(v) ? "" : rendered(rt, v)));
+    // A FAILED RUN AND AN EMPTY ANSWER WERE THE SAME LINE. `rendered` already
+    // reports a throw, and the nil test in front of it meant the one case that
+    // most needs reporting never reached it: a run that threw returns nil, so
+    // this printed the empty string and the reason was discarded. Measured
+    // against `initpark.img`, where the runtime refuses by name and this
+    // transcript said nothing at all.
+    System.out.println("  ok   the program answered: " + rendered(rt, v));
     System.out.println("  ok   status " + status(rt));
   }
 
@@ -178,6 +183,10 @@ public class RtHostReq {
       long e = rt.thrown;
       return Str.text(rt, rt.exKind(e)) + ": " + Str.text(rt, rt.exMessage(e));
     }
+    // NIL WITH NOTHING THROWN stays the empty string, which is what this line
+    // meant before: a program that answered nothing, rather than one that
+    // failed to answer.
+    if (Val.isNil(v)) return "";
     return Str.isString(rt, v) ? Str.text(rt, v) : rt.describe(v);
   }
 }

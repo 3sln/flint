@@ -56,7 +56,22 @@
                      "(defn main [_]\n"
                      "  (str (mapv (fn [i] (try (boom i) (catch Exception _ -1))) (range 6))))"))
 
-(def progs ["arith" "colls" "hof" "strs" "handler"])
+(src! "twotry" (str "(ns twotry)\n"
+                    ;; TWO `try` REGIONS IN ONE FUNCTION, which is a different
+                    ;; shape from `handler` above and not a bigger one. A throw
+                    ;; caught in the SAME frame that made the compiled call
+                    ;; leaves the frame count exactly where it started, so the
+                    ;; only thing that can tell compiled code to stop is the
+                    ;; unwind COUNTER. Both ports shipped the guard that reads
+                    ;; it and neither incremented it, and the guard read as a
+                    ;; constant for the life of the process
+                    ;; (`runtimes/conform/aot_try.cljc`). Native has the
+                    ;; increment; this is what notices if it ever loses it.
+                    "(defn- t [f] (try (str (f)) (catch Exception e (str \"T \" (ex-message e)))))\n"
+                    "(defn main [_]\n"
+                    "  (str [(t (fn [] (nth [1 2] 99))) (t (fn [] (/ 1 0)))]))"))
+
+(def progs ["arith" "colls" "hof" "strs" "handler" "twotry"])
 
 (defn build! [n aot?]
   (let [out (str "out/aot-" n (if aot? "-a" "-i") ".wasm")
