@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Where is the porting work, and have the three runtimes drifted?
+# Reports; does not gate. See the docstring in port_survey.py for why not.
+exec python3 "$(dirname "$0")/port_survey.py" "$@"

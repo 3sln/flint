@@ -7387,6 +7387,38 @@ for what BLOCKS each area.
 cannot see the thing that blocks them". Nothing blocks them: they are 87-97%
 FINISHED. What the old metric could not see was the generated side.
 
+### ~~Ranked by what can actually be ported~~ SUPERSEDED, re-run 2026-09-21
+
+**THE ORDER HAS INVERTED AND THE TABLE BELOW IS THE OLD ONE.** Re-run with
+`bin/port-survey --rank`:
+
+    area        hand   clean    %   dominant blocker
+    Rt           687     168   24%  host string, 257
+    Conc         474     112   24%  host collections
+    AotEmit      182      52   29%  host collections, 86
+    Builtins     149      44   30%  host string, 96
+    Parallel      65      44   68%  host string, 12
+    Snap         392      41   10%  host bytes, 273
+    Str          247      36   15%  host bytes, 140
+    Gc           278      30   11%  host collections
+
+`Conc` was #1 "by a factor of 2.4x" and is now second, within 1.5x of `Rt`.
+Its clean residue has gone 235 -> 112 because the port ate it, and its three
+biggest remaining clean methods are 19, 10 and 9 lines.
+
+**THESE NUMBERS ARE NOT COMPARABLE TO THE OLD TABLE'S, and only the ORDER is.**
+The old row bucketed `Rt`/`Vm` together at 998 lines where this measures
+`Rt.java` alone at 687, and the classifier has five corrections the old one
+did not. A number that was measured differently is not a number that moved.
+
+**And the far more useful answer came from the other half**
+(`bin/port-survey --drift`): of the 38 functions still hand-written in all
+three copies of `Conc`, NOT ONE disagrees. So `Conc` is not merely second on
+volume -- there is nothing left in it to repair, and a slice there now buys
+lock-in rather than a fix. `Rt` has never been swept.
+
+### The old table, kept for its method
+
 ### Ranked by what can actually be ported
 
 Raw debt says `Rt`/`Vm` is the biggest duplicate at 2421 lines. It is, and it
@@ -8461,4 +8493,89 @@ itself. Renamed to `park-for-room`. This is the same shadowing hazard as a
 collision is with a WORD, here with the very function that is about to
 delegate to it. `cargo` would have caught this one; the vocabulary case is the
 silent one.
+
+---
+
+## The rank re-run, and a method that was prose could not be re-run
+
+2026-09-21. Not a slice. Last firing's sweep found no divergence left in
+`Conc`'s hand-written residue, which makes the ranked spike -- the table the
+next person picks from -- the thing most worth checking. It was written before
+~1 200 lines came out of `Conc`.
+
+### The order has inverted
+
+    area        hand   clean    %      old table
+    Rt           687     168   24%     96 clean, ranked 2nd
+    Conc         474     112   24%    235 clean, ranked 1st "by 2.4x"
+
+`Conc` is second now, within 1.5x of `Rt`, and its three biggest remaining
+clean methods are 19, 10 and 9 lines. **The absolutes are not comparable** --
+the old row bucketed `Rt`/`Vm` at 998 lines where this measures `Rt.java`
+alone, and the classifier has five corrections the old one did not. Only the
+order is comparable, and the order changed.
+
+**The decision-relevant half is the drift check, not the rank.** Of the 38
+functions still hand-written in all three copies of `Conc`, none disagrees. So
+`Conc` is not merely second on volume: there is nothing left in it to repair.
+`Rt` has never been swept.
+
+### A method recorded as prose is a method that gets reimplemented
+
+`doc/goals/kin-port.md` carried this under *"Method, so it can be re-run"*,
+with two warnings about how it goes wrong. Re-running it meant rewriting it,
+and the rewrite hit BOTH recorded bugs and three the prose had not thought to
+mention:
+
+    recorded    run it against the standing never list
+                  -- `Gc.alloc` scored portable; the raw-memory rule matched
+                     only `sp.`/`slotAddr` and an address here is a bare
+                     `long` moving between bump pointers
+    recorded    check the top answers against a function you have read
+                  -- `Rt.callValue` ranked FIRST and dispatches through
+                     `Builtins.Fn`, a host callback table
+    new         the return-type group matched PURE WHITESPACE, so every
+                  `def("flint/x", ...)` in `Builtins` parsed as a method
+                  named `def` and the file scored 63% portable on several
+                  hundred of them
+    new         a string built by CONCATENATION -- `"a" + x` -- which is how
+                  every diagnostic in this codebase is written
+    new         `new Frame()` into `rt.frames.add(f)`: a host object
+                  allocated into a host list, and `Snap.readVmState` scored
+                  clean while doing both
+
+*The two recorded warnings were the two I would not have found alone, and they
+were still not enough.* A method that has to be reimplemented to be re-run is
+a method that will be reimplemented differently -- so it is now
+`bin/port-survey`, holding both halves and every one of those five corrections
+as a comment beside the rule it produced.
+
+It REPORTS and does not gate, and says so in its own docstring. Both halves
+are heuristics over source text with a false-positive rate that a threshold
+would either hide or trip over; `bin/check-kin` and `bin/conform-hosts` are
+the gates.
+
+### The never-list is an assertion, not an exclusion
+
+`Gc` and `Snap` must score near zero or a blocker rule is too narrow. Encoding
+them out would make the check unable to fail -- which is the same shape as the
+index that agreed with its own banners by construction
+(`bin/check_decisions.py`'s docstring). They now read 11% and 10%, and the
+residue is `Gc.collectCycle`-style orchestration: methods whose own body
+touches no memory while the thing they orchestrate is nothing else. That is a
+limit of per-method classification and is recorded rather than tuned away.
+
+### Two counts I wrote and then had to correct
+
+Writing this up I put "thirteen concurrency sources" and "42 of 88 functions"
+into `DECISIONS.md` from memory. Counted: **fifteen** -- I had double-counted
+`mainanswer`, listing it inside the thirteen and again beside them -- and
+**44 of 88, exactly half**. Both were wrong in the direction of understating
+progress, which is the harmless direction and still wrong.
+
+`DECISIONS.md#bridges-are-the-only-door` said "none of the concurrency is
+generated"; a note corrected that to 97 sources and three files on 2026-09-19,
+and that correction was stale within two days. *A correction decays at the
+same rate as what it corrected* -- and here what makes the count wrong is the
+work going well, which is the one cause nobody thinks to guard against.
 

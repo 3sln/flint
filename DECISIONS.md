@@ -7631,12 +7631,23 @@ occurrences on either and that is correct rather than missing.
 **One claim in this section is now FALSE and it is the interesting one.** It
 says "**None of the concurrency is generated.** All 91 kin sources were
 checked: not one touches ports or scheduling, so `Conc` is hand-written three
-times." There are 97 kin sources, and three of them are squarely this:
-`flint.rt.sched`, `flint.rt.portring` and `flint.rt.reapports`. `wake_on`,
-`wake_waiter`, `drive` and `reap_ports` are all generated -- `conc.rs:1217`
-says so in as many words. The section closes by guessing "the scheduler is
-probably portable too -- untested, and not this change", and that guess came
-good; the sentence three lines above it did not survive.
+times." The section closes by guessing "the scheduler is probably portable too
+-- untested, and not this change", and that guess came good; the sentence
+three lines above it did not survive.
+
+**Re-counted 2026-09-21, and the correction had gone stale too.** The note
+below this one said 97 sources and three concurrency files; it is now 109
+sources and FIFTEEN of them are ports and scheduling outright -- `sched`,
+`schedlists`, `schedmake`, `settle`, `portring`, `portdrain`, `portmake`,
+`portbytes`, `portinstall`, `porthost`, `portrecv`, `portpark`, `reapports`,
+`threadjoin` and `mainanswer`. `Conc` across the three runtimes has gone from
+6 743 lines to 5 540, and 44 of its 88 functions are now one-line delegations
+to generated code -- exactly half.
+
+*A correction decays at the same rate as what it corrected.* This is the
+second time this sentence has been rewritten and the first rewrite lasted two
+days; what makes the count wrong is the work going well, which is the one
+cause nobody thinks to guard against.
 
 The "eight implementations" phrasing is still not confirmed as a count: four
 hosts were never enumerated here, and only the three runtimes plus the Rust SDK
