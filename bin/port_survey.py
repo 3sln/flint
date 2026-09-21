@@ -72,7 +72,18 @@ def rank():
     rows = []
     for path in sorted(glob.glob("runtimes/jvm/src/com/flint/rt/*.java")):
         area = os.path.basename(path)[:-5]
-        hand = clean = 0
+        # DOES THE THIRD RUNTIME HAVE ONE? `clean` says the code could be
+        # expressed in kin. It does NOT say there are three copies to replace.
+        # `Rt.lookup` ranked first among clean methods and native has no
+        # matching function at all -- its `apply_keyword` is shaped
+        # differently -- so generating it would have produced a third
+        # implementation that nothing calls. A two-way dedup is worth less
+        # than a three-way one and is a different job; the rank has to say
+        # which it is offering.
+        nat = {}
+        if area in AREAS:
+            nat = extract_all(AREAS[area][2], N_PAT)
+        hand = clean = three = 0
         why, big = collections.Counter(), []
         for name, txt, n in java_methods(path):
             if "kgen" in txt:
@@ -83,19 +94,28 @@ def rank():
                 why[hit] += n
             else:
                 clean += n
-                big.append((n, name))
+                has3 = norm(name) in nat
+                if has3:
+                    three += n
+                big.append((n, name, has3))
         if hand:
-            rows.append((clean, hand, area, why, sorted(big, reverse=True)[:3]))
+            rows.append((clean, hand, area, why,
+                         sorted(big, reverse=True)[:3], three, bool(nat)))
     rows.sort(reverse=True)
-    print(f"  {'area':<12} {'hand':>6} {'clean':>6} {'%':>4}   dominant blocker")
-    for clean, hand, area, why, big in rows[:12]:
+    print(f"  {'area':<12} {'hand':>6} {'clean':>6} {'in 3':>6} {'%':>4}   dominant blocker")
+    for clean, hand, area, why, big, three, checked in rows[:12]:
         top = why.most_common(1)[0] if why else ("--", 0)
-        print(f"  {area:<12} {hand:>6} {clean:>6} {round(100*clean/hand):>3}%   {top[0]}, {top[1]}")
+        col = f"{three:>6}" if checked else "    --"
+        print(f"  {area:<12} {hand:>6} {clean:>6} {col} {round(100*clean/hand):>3}%   {top[0]}, {top[1]}")
         if clean and big:
             print("               biggest clean: "
-                  + ", ".join(f"{n} {nm}" for n, nm in big))
+                  + ", ".join(f"{n} {nm}{'' if h else ' (2-way)'}" for n, nm, h in big))
+    print("\n  `in 3` is clean lines whose method ALSO exists on native -- three")
+    print("  copies to replace with one. The rest are a two-way dedup between the")
+    print("  ports, which is worth having and is a different job. `--` means the")
+    print("  area is not in AREAS, so the third runtime was not looked for.")
     print("\n  never-list (these must stay low, or a blocker rule is too narrow):")
-    for clean, hand, area, why, big in rows:
+    for clean, hand, area, why, big, three, checked in rows:
         if area in NEVER:
             pct = round(100 * clean / hand)
             print(f"    {'ok  ' if pct <= 12 else 'HIGH'} {area:<6} {pct:>3}% clean of {hand}")

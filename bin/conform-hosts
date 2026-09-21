@@ -933,7 +933,7 @@ cargo build --release -p flint-conc --bin hostreq --features host-tools \
   > "$FLINT_SCRATCH"/flint-hq-build.log 2>&1 \
   || { tail -20 "$FLINT_SCRATCH"/flint-hq-build.log; \
        echo "  FAIL the native host-request driver does not build"; exit 1; }
-for hqf in hostreq initpark selfjoin plainthrow; do
+for hqf in hostreq initpark selfjoin plainthrow kwrow; do
   ./bin/flint :src runtimes/conform-host :fn "$hqf/main" --emit-image \
        :out "out/conform/$hqf.img" >/dev/null 2>&1 \
     || { echo "  FAIL the $hqf fixture does not compile"; exit 1; }
@@ -956,6 +956,17 @@ for hqf in hostreq initpark selfjoin plainthrow; do
     grep -q 'cannot join itself' "$FLINT_SCRATCH"/flint-hq-native.out \
       || { cat "$FLINT_SCRATCH"/flint-hq-native.out; \
            echo "  FAIL a self-join is not refused by name [native]"; exit 1; }
+  fi
+  # A ROW REF READS AS THE MAP IT IS, which `lib/flint/table.cljc` promises in
+  # as many words -- "`count`, `get`, `(:col row)`, `keys`, `vals` and `=`
+  # against a map all work". The two spellings take different paths: native
+  # answers `(:col row)` from an arm of `apply_keyword` that names table refs,
+  # and the ports reach it because a row ref answers `isMap`. Two routes to
+  # one promise, and nothing compared them.
+  if [ "$hqf" = kwrow ]; then
+    grep -q 'get="n0" kw="n0"' "$FLINT_SCRATCH"/flint-hq-native.out \
+      || { cat "$FLINT_SCRATCH"/flint-hq-native.out; \
+           echo "  FAIL a keyword and `get` disagree on a table row [native]"; exit 1; }
   fi
   if [ "$hqf" = plainthrow ]; then
     grep -q 'ExceptionInfo: boom' "$FLINT_SCRATCH"/flint-hq-native.out \

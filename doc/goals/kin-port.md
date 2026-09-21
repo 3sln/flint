@@ -8922,3 +8922,71 @@ its emitter is structured differently -- and `Gc.Stress`, which the jvm holds
 as a plain field. Both are absences rather than disagreements, listed by the
 report every run rather than suppressed.
 
+---
+
+## "Clean" was not "there are three copies", and the rank had been saying so
+
+2026-09-21. The re-rank two firings ago named `Rt` as the place to port next,
+168 clean lines against `Conc`'s 112, and the biggest clean method in it was
+`Rt.lookup` at 17. This firing went to take that slice and found the rank was
+measuring the wrong thing.
+
+**Native has no `lookup`.** Its keyword-as-function path is `apply_keyword` in
+`vm.rs`, shaped differently -- it handles the arity error and resets the value
+stack itself. Generating `lookup` would have produced a third implementation
+that nothing calls.
+
+*`clean` says the code COULD be expressed in kin. It does not say there are
+three copies to replace.* A method the two ports share and native does not is
+a two-way dedup: worth having, worth less than a three-way one, and a
+different job. The rank now has an `in 3` column and marks the rest `(2-way)`:
+
+    area      hand  clean   in 3    biggest clean
+    Rt         687    168    115    17 lookup (2-way), 11 makeClosure, 10 invoke
+    Conc       474    112     85    19 registerPort, 10 bootSystemThread (2-way)
+
+So `Rt`'s real three-way pool is 115, not 168, and the next slice there is
+`makeClosure` or `invoke` -- not the method that ranked first.
+
+### Two divergences suspected, two disproved, and the second is now a fixture
+
+Reading `lookup` against `apply_keyword` turned up two apparent gaps. Both
+were wrong, and both were cheap because they were PROBED rather than argued.
+
+**`TY_MAPENTRY`.** `lookup` has no arm for it, native's `call_value` has
+`TY_VEC | TY_MAPENTRY`. The mistake was mine: `lookup` is reached with
+`(coll, KEYWORD, dflt)` -- it is keyword-as-function, not
+collection-as-function -- and the jvm's `callValue` has its own `TY_MAPENTRY`
+arm a few lines further down. *Read which arguments a function is CALLED
+with before comparing it to one that looks like it.*
+
+**The table row ref.** `apply_keyword` has an arm for it and the ports'
+`lookup` does not, and native's own comment records this exact bug being
+fixed once for tagged values: *"This arm used to fall to `dflt` for everything
+that was not a map or a set, so `(get x :tag)` answered and `(:tag x)` did
+not -- the same lookup by two spellings disagreeing."* The ports looked like
+they had received the `tagged` half of that fix and not the `table_ref` half.
+
+Measured instead: `(:name row)` and `(get row :name)` agree on all three. The
+ports reach it because a row ref answers `isMap` and goes to `mapGet`; native
+names table refs explicitly. **Two routes to one promise** -- and
+`lib/flint/table.cljc` promises it in as many words, *"a ref reads as the map
+it is: `count`, `get`, `(:col row)`, `keys`, `vals` and `=` against a map all
+work"* -- with nothing comparing the routes. `runtimes/conform-host/kwrow.cljc`
+compares them now, in the three-way transcript loop.
+
+### A dead branch, left alone
+
+`lookup` tests `isHeapTy(coll, TY_VEC)` and `TY_TABLE` and then requires
+`Val.isFixnum(k)`. The key is always a keyword on that path, so neither arm
+can fire. Noted rather than removed: the same two ports, the same two dead
+arms, and removing them is a change to behaviour nobody has measured.
+
+### The cost of the two dead ends was the fixture and the column
+
+Neither hypothesis survived, and the firing still produced the rank
+correction, a conformance fixture for a documented claim that had none, and
+the reason `Rt.lookup` should not be the next slice. *A disproved hypothesis
+that leaves a fixture behind is cheaper than a correct one that leaves
+nothing.*
+
