@@ -8370,3 +8370,95 @@ about. The local arity was already 2; the vocabulary's is now 2 as well.
     over-supply    kin refuses the call -- and nothing downstream could have,
                    because the output is valid code
 
+---
+
+## The hand-written residue has converged, and `close`/`park-for-space` are the last two decisions in it
+
+2026-09-21. `kin/portpark.kin` -- 109 sources. `Conc` across the three is
+5 540 lines, down 1 203 since this line of work began.
+
+### First, the sweep: there is no divergence left to hunt
+
+Every slice for weeks has been picked by reading three copies side by side and
+looking for drift. That has paid -- the self-join, the throw from `main`, two
+rooting bugs -- so before picking again I asked the question mechanically.
+
+A normaliser over `Conc.java`, `Conc.cs` and `conc.rs`: extract each function,
+strip comments and string literals, fold `camelCase` / `snake_case` /
+`PascalCase` to one spelling, drop language noise, and compare the token
+multisets. **39 functions exist in all three and are still hand-written. Not
+one of them disagrees.** The lowest similarity between the two PORTS -- which
+are meant to be mirrors -- was `!isEmpty()` against `Count != 0`, and
+`TY_NODE` against `Obj.TyNode`.
+
+That changes what a slice is worth. Porting is no longer repair; it is the
+difference between three copies that agree TODAY and one that cannot stop
+agreeing. Worth doing, and no longer the place to look for defects.
+
+**The instrument lied first, and the shape of the lie is worth keeping.** Three
+functions came out as the WORST mismatches in the file -- `slotAtomic`,
+`casSlot`, `somethingRunning` -- and all three were artefacts. C# writes
+`static long F(..) => expr;` with no braces, and a brace-depth walk over an
+expression-bodied member runs on until the NEXT function's closing brace,
+swallowing it whole. *A structural comparison that mis-parses one language
+reports the other two as having diverged from it.*
+
+### The slice: two decisions, six mutations
+
+    1  side effects run on every close, not only a real one   row 2 -> `2:1:0`
+    2  close tests "not open" instead of "not closed"         row 3 -> `4:0:0`
+    3  the waiter is not retired before yielding              rows 5,7 -> 1 live
+    4  the token is left pointing at a retired waiter         (no token cleared)
+    5  full tested with `<=` rather than `<`                  rows 4,8 -> yield
+    6  the yield parks on the port instead                    crashes: the root
+                                                                is already popped
+
+Row 2 is the one worth naming. **Closing a closed port must do NOTHING**, and
+the side effects are inside the state test for that reason: a second close
+would otherwise tell the host again, wake the peer again, and half-close a far
+end that is already half-closed. A second close is not an error -- both ends
+may close, and a host may close a port the guest already closed -- so it has
+to be a no-op rather than a refusal.
+
+Row 3 is the reason `close` tests `!= P_CLOSED` rather than `== P_OPEN`.
+`P_HALF` means the FAR end went away, which is not this end closing; testing
+"is it open" leaves a half-closed port half-closed for ever with its own side
+effects never run.
+
+### `fixnum` zero-extends, and the drivers caught me using it on a negative
+
+`park-for-space` clears the thread's token to `-1`, and I wrote
+`(fixnum (- 0 1))`. The three targets disagreed on the first run:
+
+    rust     -1
+    jvm      4294967295
+    csharp   4294967295
+
+`fixnum`'s port templates are `Val.fixnum({0} & 0xFFFFFFFFL)` -- the mask is
+right for an `I32`, kin's UNSIGNED 32-bit, which Java and C# spell with a
+signed `int`. A negative written through it survives as its unsigned reading,
+and the real runtime agrees: `Val.fixnum` keeps 48 bits and `asFixnum`
+sign-extends from bit 47, so `0xFFFFFFFF` reads back as 4 294 967 295 rather
+than `-1`. `fixnum64` exists for exactly this and the vocabulary entry beside
+it already says so, naming `kin/wire.kin` as the first source that lost a
+negative this way.
+
+*The trap was documented and I walked into it anyway*, which is the argument
+for the drivers rather than for the comment. The three-way comparison is what
+said so, before a runtime ever ran it.
+
+**A hunt followed, and found nothing live.** Seven other call sites pass a
+subtraction to `fixnum`; each is either guarded by a `>` test, masked with
+`bit-and`, or a count that cannot reach zero at that point. Recorded because
+the next negative will not announce itself either.
+
+### A generated name can collide with the wrapper that calls it
+
+`park-for-space` generates `park_for_space`, which is what native's
+hand-written wrapper is already called -- so the wrapper would have called
+itself. Renamed to `park-for-room`. This is the same shadowing hazard as a
+`^:pub` kin function shadowing a vocabulary word, one layer out: there the
+collision is with a WORD, here with the very function that is about to
+delegate to it. `cargo` would have caught this one; the vocabulary case is the
+silent one.
+

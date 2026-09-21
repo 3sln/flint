@@ -368,24 +368,11 @@ public static class Conc {
     /// The re-check after registering is not belt and braces: `WakeOn` reaches
     /// only waiters ALREADY in the list, so a receive that drains the ring
     /// between the failed reservation and the registration would wake nobody.
+    /// GENERATED (`kin/portpark.kin`). Park until there is room in `p`'s
+    /// ring -- and look AGAIN after registering, because `WakeOn` reaches
+    /// only waiters already in the list.
     static long ParkForSpace(Rt rt, long p) {
-        int bas = rt.Mark();
-        int pi = rt.Push(p);
-        long token = NewWaiter(rt, WK_SEND, rt.R(pi));
-        long th = CurrentThread(rt);
-        if (!Val.IsNil(th)) rt.SetSlot(Val.AsHeap(th), TH_TOKEN, Val.Fixnum(token));
-        long ring = Fx(rt.Slot(rt.R(pi), PT_RING));
-        if (InboxCount(rt, rt.R(pi)) < ring) {
-            FreeWaiter(rt, token);
-            if (!Val.IsNil(th)) rt.SetSlot(Val.AsHeap(th), TH_TOKEN, Val.Fixnum(-1));
-            rt.PopTo(bas);
-            // A yield rather than a park: the thread stays runnable and the
-            // send runs again on its next turn.
-            return Park(rt, PARK_YIELD);
-        }
-        long pv = rt.R(pi);
-        rt.PopTo(bas);
-        return Park(rt, pv);
+        return global::_3sln.Flint.Kgen.Rt.Portpark.ParkForRoom(rt, p);
     }
 
     /// GENERATED (`kin/sched.kin`) -- see the note on the JVM's `parkOnPort`.
@@ -879,16 +866,12 @@ public static class Conc {
         return global::_3sln.Flint.Kgen.Rt.Portrecv.ReceiveAt(rt, p);
     }
 
+    /// GENERATED (`kin/portpark.kin`). Close `p`, once. The `NeedPort`
+    /// check and its message are a host string and stay here, which is also
+    /// where they belong in the order: nothing is rooted yet when it runs.
     public static long Close(Rt rt, long p) {
         if (!NeedPort(rt, p, "close")) return Val.Nil;
-        int bas = rt.Mark();
-        int pi = rt.Push(p);
-        if (Fx(rt.Slot(rt.R(pi), PT_STATE)) != P_CLOSED) {
-            rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_STATE, Val.Fixnum(P_CLOSED));
-            CloseSideEffects(rt, rt.R(pi));
-        }
-        rt.PopTo(bas);
-        return Val.Nil;
+        return global::_3sln.Flint.Kgen.Rt.Portpark.CloseAt(rt, p);
     }
 
     /// Everything that follows from an end closing, however it closed: tell the

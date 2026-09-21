@@ -586,6 +586,12 @@
    ;; comparison into an identity question.
    'PARK_YIELD {:rust "crate::conc::PARK_YIELD"
                 :java "Conc.PARK_YIELD" :csharp "Conc.PARK_YIELD"}
+   ;; THE WAIT KIND for a send that found the ring full -- a thread waiting
+   ;; for SPACE. Its mirror is `WK_RECEIVE` below: the two park on the same
+   ;; port for opposite reasons, and `wake-on` wakes both because either
+   ;; event can be the one the other was waiting for.
+   'WK_SEND {:rust "crate::conc::WK_SEND"
+             :java "Conc.WK_SEND" :csharp "Conc.WK_SEND"}
    ;; THE WAIT KIND for a receive that found the ring empty. Distinct from
    ;; `WK_SEND`, which is a thread waiting for SPACE: the two park on the same
    ;; port for opposite reasons, and `wake-on` wakes both because either event

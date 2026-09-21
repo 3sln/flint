@@ -1,0 +1,100 @@
+;; CLOSING A PORT, AND WAITING FOR ROOM IN ONE -- written once.
+;;
+;; Two decisions the guest side makes about a port it already holds, and the
+;; last two in `Conc` that were still written three times. Neither had
+;; diverged: a structural sweep of all thirty-nine hand-written functions that
+;; exist in all three runtimes found no disagreement left in the residue. This
+;; slice is therefore not a repair -- it is the difference between three
+;; copies that agree today and one that cannot stop agreeing.
+;;
+;; THE TWO SHARE A SHAPE: each re-reads the port AFTER doing something that
+;; could have moved underneath it, because both sit at the point where another
+;; thread's progress is exactly what they are waiting for.
+(ns flint.rt.portpark
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != < - not nil? fixnum fixnum64 as-fixnum to-i64
+                                   mark push r pop-to slot set-slot
+                                   current-thread close-side-effects
+                                   Rt Value I64 I32 RootIx NIL
+                                   PT_STATE PT_RING TH_TOKEN
+                                   P_CLOSED PARK_YIELD WK_SEND]]
+            [flint.rt.portring :refer [ring-inbox-count]]
+            [flint.rt.sched :refer [new-waiter free-waiter park]]))
+
+(doc "Close `p`, once."
+     ""
+     "`p` IS ALREADY KNOWN TO BE A PORT. The check and its message are a host"
+     "string and stay with the caller, which is also where they belong in the"
+     "order: nothing here has been rooted yet when that test runs."
+     ""
+     "CLOSING A CLOSED PORT DOES NOTHING, and says so by answering the same"
+     "nil as a close that worked. A second close is not an error -- both ends"
+     "may close, a host may close a port the guest already closed, and a"
+     "runtime that refused the second would turn an ordinary race into a"
+     "failure."
+     ""
+     "THE SIDE EFFECTS ARE INSIDE THE TEST, which is the whole reason the"
+     "state is read before it is written. Telling the host twice, waking the"
+     "peer twice and half-closing an already-half-closed far end are what a"
+     "second close would do if the test were only around the state write.")
+(defn ^:pub ^:method ^Value close-at [^:mut ^Rt rt ^Value p]
+  (let [^RootIx base (mark rt)
+        ^RootIx pi (push rt p)]
+    (if (!= (as-fixnum (slot rt (r rt pi) PT_STATE)) P_CLOSED)
+      (do
+        (set-slot rt (r rt pi) PT_STATE (fixnum P_CLOSED))
+        (comment "THE PORT IS RE-READ from the root rather than reused: what"
+                 "follows from an end closing allocates, and a raw local"
+                 "would be a pointer into the abandoned semispace the moment"
+                 "it did.")
+        (close-side-effects rt (r rt pi))))
+    (pop-to rt base)
+    (return NIL)))
+
+(doc "Park until there is room in `p`'s ring."
+     ""
+     "REGISTER FIRST, THEN LOOK AGAIN. `wake-on` reaches only waiters ALREADY"
+     "in the list, so a receive that drained the ring between a failed"
+     "reservation and this registration would wake nobody, and this thread"
+     "would sleep with space in front of it. The re-check after registering is"
+     "not belt and braces: it is the only thing that closes that window."
+     ""
+     "AND IF THE ROOM IS THERE, THE WAITER IS RETIRED BEFORE YIELDING. A"
+     "waiter left in the list is a thread the deadlock reporter counts as"
+     "parked and a host answer could still wake."
+     ""
+     "A YIELD RATHER THAN A PARK, which is the part that looks wrong and is"
+     "not. The thread stays RUNNABLE and the send runs again on its next"
+     "turn; parking would wait for a wake that has already been and gone,"
+     "because the space it would wait for is there now."
+     ""
+     "A NIL CURRENT THREAD IS NOT AN ERROR. The token is simply not recorded"
+     "anywhere, and the park still happens -- the same reading `park-on-port`"
+     "takes, because a runtime with no scheduler still has to answer.")
+(defn ^:pub ^:method ^Value park-for-room [^:mut ^Rt rt ^Value p]
+  (let [^RootIx base (mark rt)
+        ^RootIx pi (push rt p)
+        ^I64 token (new-waiter rt WK_SEND (r rt pi))
+        ^Value th (current-thread rt)]
+    (if (not (nil? rt th))
+      (set-slot rt th TH_TOKEN (fixnum token)))
+    (let [^I64 ring (as-fixnum (slot rt (r rt pi) PT_RING))]
+      (comment "WIDENED EXPLICITLY. The count is 32-bit and the capacity is"
+               "64-bit; Java and C# widen silently and Rust does not, so the"
+               "conversion is said here rather than left to whichever target"
+               "happens to tolerate it.")
+      (if (< (to-i64 (ring-inbox-count rt (r rt pi))) ring)
+        (do
+          (free-waiter rt token)
+          (comment "`fixnum64`, NOT `fixnum`. The narrow one zero-extends an"
+                   "I32 -- Java and C# spell it `& 0xFFFFFFFFL` -- so a"
+                   "negative written through it comes back as 4294967295 on"
+                   "the two ports and -1 on native. The drivers caught it as"
+                   "a three-way disagreement before it reached a runtime.")
+          (if (not (nil? rt th))
+            (set-slot rt th TH_TOKEN (fixnum64 (to-i64 (- 0 1)))))
+          (pop-to rt base)
+          (return (park rt PARK_YIELD)))))
+    (let [^Value target (r rt pi)]
+      (pop-to rt base)
+      (return (park rt target)))))

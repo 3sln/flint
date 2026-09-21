@@ -1,0 +1,316 @@
+--rust-head
+// A TOY PORT AND A TOY WAITER LIST. Both functions here DECIDE and then act
+// on the outside: close tells the world an end went away, and park-for-space
+// puts a thread on a list and takes it off again. So the toy records the acts
+// -- how many times the side effects ran, which waiters exist, what was
+// parked on -- and models nothing else.
+//
+// `new-waiter`, `free-waiter`, `park` and `close-side-effects` are STUBBED:
+// each is pinned in its own drivers file, and what matters here is WHETHER
+// each is reached, in what order, and with what.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_0000_0000_0000);
+mod conc {
+    pub const PT_STATE: u32 = 0;
+    pub const PT_RING: u32 = 1;
+    pub const TH_TOKEN: u32 = 0;
+    // THE REAL VALUES, because the expected answers name them.
+    pub const P_OPEN: i64 = 1;
+    pub const P_CLOSED: i64 = 2;
+    pub const P_HALF: i64 = 4;
+    pub const WK_SEND: i64 = 2;
+    pub const PARK_YIELD: super::Value = super::Value(0);
+}
+impl Value {
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn is_nil(self) -> bool { self == NIL }
+}
+struct Rt {
+    // HANDLES AT 1000 so no object collides with `PARK_YIELD`, the fixnum 0.
+    objs: Vec<Vec<Value>>,
+    rootv: Vec<Value>,
+    cur: Value,
+    inbox: i32,
+    effects: u32,
+    // LIVE WAITER TOKENS. `new-waiter` mints, `free-waiter` retires, and what
+    // is asserted is that a yield leaves NONE behind.
+    waiters: Vec<i64>,
+    next_token: i64,
+    parked: Vec<Value>,
+}
+impl Rt {
+    fn obj(&mut self, slots: Vec<Value>) -> Value {
+        self.objs.push(slots);
+        Value((self.objs.len() - 1) as u64 + 1000)
+    }
+    fn slot(&self, v: Value, i: u32) -> Value { self.objs[(v.0 - 1000) as usize][i as usize] }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.objs[(v.0 - 1000) as usize][i as usize] = x; }
+    fn mark(&self) -> usize { self.rootv.len() }
+    fn push(&mut self, v: Value) -> usize { self.rootv.push(v); self.rootv.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.rootv[i] }
+    fn pop_to(&mut self, i: usize) { self.rootv.truncate(i); }
+    fn current_thread(&self) -> Value { self.cur }
+    fn close_side_effects(&mut self, _p: Value) { self.effects += 1; }
+    fn ring_inbox_count(&mut self, _p: Value) -> i32 { self.inbox }
+    fn new_waiter(&mut self, _kind: i64, _port: Value) -> i64 {
+        self.next_token += 1;
+        self.waiters.push(self.next_token);
+        self.next_token
+    }
+    fn free_waiter(&mut self, token: i64) -> Value {
+        self.waiters.retain(|t| *t != token);
+        NIL
+    }
+    fn park(&mut self, on: Value) -> Value { self.parked.push(on); Value(3000) }
+--rust
+}
+fn fresh() -> Rt {
+    Rt { objs: vec![], rootv: vec![], cur: NIL, inbox: 0, effects: 0,
+         waiters: vec![], next_token: 0, parked: vec![] }
+}
+// `<state after>:<side effects>:<roots left>`
+fn closed(state: i64) -> String {
+    let mut rt = fresh();
+    let p = rt.obj(vec![Value::fixnum(state), Value::fixnum(4)]);
+    rt.close_at(p);
+    format!("{}:{}:{}", rt.slot(p, conc::PT_STATE).as_fixnum(), rt.effects, rt.rootv.len())
+}
+// `<parked on>:<live waiters>:<token on thread>:<roots left>`
+fn spaced(cap: i64, used: i32, has_thread: bool) -> String {
+    let mut rt = fresh();
+    let p = rt.obj(vec![Value::fixnum(conc::P_OPEN), Value::fixnum(cap)]);
+    let th = if has_thread { let t = rt.obj(vec![NIL]); rt.cur = t; t } else { NIL };
+    rt.inbox = used;
+    rt.park_for_room(p);
+    let on = match rt.parked.last() {
+        None => "-".to_string(),
+        Some(v) if *v == p => "port".to_string(),
+        Some(v) if v.0 == conc::PARK_YIELD.0 => "yield".to_string(),
+        Some(_) => "?".to_string(),
+    };
+    let tok = if th.is_nil() { "-".to_string() }
+              else { rt.slot(th, conc::TH_TOKEN).as_fixnum().to_string() };
+    format!("{}:{}:{}:{}", on, rt.waiters.len(), tok, rt.rootv.len())
+}
+fn main() {
+    // 1. AN OPEN PORT CLOSES, and the side effects run once.
+    let r1 = closed(conc::P_OPEN);
+    // 2. AN ALREADY-CLOSED PORT. Nothing happens -- and NOTHING is the point:
+    //    telling the host twice and waking the peer twice is what a test only
+    //    around the state write would do.
+    let r2 = closed(conc::P_CLOSED);
+    // 3. A HALF-CLOSED PORT still closes. Only `P_CLOSED` is terminal; the
+    //    far end going away first does not close this one.
+    let r3 = closed(conc::P_HALF);
+    // 4. THE RING IS FULL. Parked on the PORT, the waiter stays, and the
+    //    token is on the thread so a wake can retire it without searching.
+    let r4 = spaced(4, 4, true);
+    // 5. ROOM APPEARED WHILE REGISTERING. A YIELD, not a park -- and the
+    //    waiter is retired and the token cleared to -1 before yielding.
+    let r5 = spaced(4, 1, true);
+    // 6. THE RING IS OVER-FULL. Still a park: the test is `<`, so equal is
+    //    full, and anything above it is more full.
+    let r6 = spaced(4, 9, true);
+    // 7. NOBODY RUNNING, AND ROOM. The yield still happens and the waiter is
+    //    still retired; only the token has nowhere to be recorded.
+    let r7 = spaced(4, 1, false);
+    // 8. NOBODY RUNNING, AND FULL. Parked, with no token written anywhere.
+    let r8 = spaced(4, 4, false);
+    println!("{} | {} | {} | {} | {} | {} | {} | {}", r1, r2, r3, r4, r5, r6, r7, r8);
+}
+--java-head
+    // THE SAME TOY, field for field.
+    static final long NIL = 0xFFFF000000000000L;
+    static final class Val {
+        static final long NIL = 0xFFFF000000000000L;
+        static boolean isNil(long v) { return v == NIL; }
+        static long fixnum(long n) { return n; }
+        static long asFixnum(long v) { return v; }
+        static long asHeap(long v) { return v; }
+    }
+    static final class Conc {
+        static final int PT_STATE = 0, PT_RING = 1, TH_TOKEN = 0;
+        static final long P_OPEN = 1, P_CLOSED = 2, P_HALF = 4;
+        static final long WK_SEND = 2, PARK_YIELD = 0;
+        static void closeSideEffects(Rt rt, long p) { rt.effects++; }
+        static long currentThread(Rt rt) { return rt.cur; }
+    }
+    // BARE, not on a class: cross-namespace kin calls land unqualified.
+    static int ringInboxCount(Rt rt, long p) { return rt.inbox; }
+    static long newWaiter(Rt rt, long kind, long port) {
+        rt.nextToken++; rt.waiters.add(rt.nextToken); return rt.nextToken;
+    }
+    static long freeWaiter(Rt rt, long token) {
+        rt.waiters.remove(Long.valueOf(token)); return NIL;
+    }
+    static long park(Rt rt, long on) { rt.parked.add(on); return 3000L; }
+    static final class Rt {
+        java.util.List<long[]> objs = new java.util.ArrayList<>();
+        java.util.List<Long> rootv = new java.util.ArrayList<>();
+        java.util.List<Long> waiters = new java.util.ArrayList<>();
+        java.util.List<Long> parked = new java.util.ArrayList<>();
+        long cur = NIL, nextToken = 0;
+        int inbox = 0, effects = 0;
+        long obj(long[] slots) { objs.add(slots); return objs.size() - 1 + 1000; }
+        long slot(long v, int i) { return objs.get((int) (v - 1000))[i]; }
+        void setSlot(long v, int i, long x) { objs.get((int) (v - 1000))[i] = x; }
+        int mark() { return rootv.size(); }
+        int push(long v) { rootv.add(v); return rootv.size() - 1; }
+        long r(int i) { return rootv.get(i); }
+        void popTo(int i) { while (rootv.size() > i) rootv.remove(rootv.size() - 1); }
+    }
+--java
+    static Rt fresh() { return new Rt(); }
+    static String closed(long state) {
+        Rt rt = fresh();
+        long p = rt.obj(new long[]{state, 4});
+        closeAt(rt, p);
+        return rt.slot(p, Conc.PT_STATE) + ":" + rt.effects + ":" + rt.rootv.size();
+    }
+    static String spaced(long cap, int used, boolean hasThread) {
+        Rt rt = fresh();
+        long p = rt.obj(new long[]{Conc.P_OPEN, cap});
+        long th = NIL;
+        if (hasThread) { th = rt.obj(new long[]{NIL}); rt.cur = th; }
+        rt.inbox = used;
+        parkForRoom(rt, p);
+        String on;
+        if (rt.parked.isEmpty()) on = "-";
+        else {
+            long v = rt.parked.get(rt.parked.size() - 1);
+            on = (v == p) ? "port" : (v == Conc.PARK_YIELD) ? "yield" : "?";
+        }
+        String tok = (th == NIL) ? "-" : String.valueOf(rt.slot(th, Conc.TH_TOKEN));
+        return on + ":" + rt.waiters.size() + ":" + tok + ":" + rt.rootv.size();
+    }
+    public static void main(String[] args) {
+        System.out.println(
+            closed(Conc.P_OPEN) + " | " + closed(Conc.P_CLOSED) + " | " + closed(Conc.P_HALF)
+            + " | " + spaced(4, 4, true) + " | " + spaced(4, 1, true)
+            + " | " + spaced(4, 9, true) + " | " + spaced(4, 1, false)
+            + " | " + spaced(4, 4, false));
+    }
+--csharp-head
+    // THE SAME TOY, field for field.
+    const long NIL = unchecked((long) 0xFFFF000000000000UL);
+    public static class Val {
+        public const long Nil = unchecked((long) 0xFFFF000000000000UL);
+        public static bool IsNil(long v) { return v == Nil; }
+        public static long Fixnum(long n) { return n; }
+        public static long AsFixnum(long v) { return v; }
+        public static long AsHeap(long v) { return v; }
+    }
+    public static class Conc {
+        public const int PT_STATE = 0, PT_RING = 1, TH_TOKEN = 0;
+        public const long P_OPEN = 1, P_CLOSED = 2, P_HALF = 4;
+        public const long WK_SEND = 2, PARK_YIELD = 0;
+        public static void CloseSideEffects(Rt rt, long p) { rt.effects++; }
+        public static long CurrentThread(Rt rt) { return rt.cur; }
+    }
+    static int RingInboxCount(Rt rt, long p) { return rt.inbox; }
+    static long NewWaiter(Rt rt, long kind, long port) {
+        rt.nextToken++; rt.waiters.Add(rt.nextToken); return rt.nextToken;
+    }
+    static long FreeWaiter(Rt rt, long token) { rt.waiters.Remove(token); return NIL; }
+    static long Park(Rt rt, long on) { rt.parked.Add(on); return 3000L; }
+    public class Rt {
+        public System.Collections.Generic.List<long[]> objs = new System.Collections.Generic.List<long[]>();
+        public System.Collections.Generic.List<long> rootv = new System.Collections.Generic.List<long>();
+        public System.Collections.Generic.List<long> waiters = new System.Collections.Generic.List<long>();
+        public System.Collections.Generic.List<long> parked = new System.Collections.Generic.List<long>();
+        public long cur = NIL, nextToken = 0;
+        public int inbox = 0, effects = 0;
+        public long Obj(long[] slots) { objs.Add(slots); return objs.Count - 1 + 1000; }
+        public long Slot(long v, int i) { return objs[(int)(v - 1000)][i]; }
+        public void SetSlot(long v, int i, long x) { objs[(int)(v - 1000)][i] = x; }
+        public int Mark() { return rootv.Count; }
+        public int Push(long v) { rootv.Add(v); return rootv.Count - 1; }
+        public long R(int i) { return rootv[i]; }
+        public void PopTo(int i) { while (rootv.Count > i) rootv.RemoveAt(rootv.Count - 1); }
+    }
+--csharp
+    static Rt Fresh() { return new Rt(); }
+    static string Closed(long state) {
+        Rt rt = Fresh();
+        long p = rt.Obj(new long[]{state, 4});
+        CloseAt(rt, p);
+        return rt.Slot(p, Conc.PT_STATE) + ":" + rt.effects + ":" + rt.rootv.Count;
+    }
+    static string Spaced(long cap, int used, bool hasThread) {
+        Rt rt = Fresh();
+        long p = rt.Obj(new long[]{Conc.P_OPEN, cap});
+        long th = NIL;
+        if (hasThread) { th = rt.Obj(new long[]{NIL}); rt.cur = th; }
+        rt.inbox = used;
+        ParkForRoom(rt, p);
+        string on;
+        if (rt.parked.Count == 0) on = "-";
+        else {
+            long v = rt.parked[rt.parked.Count - 1];
+            on = (v == p) ? "port" : (v == Conc.PARK_YIELD) ? "yield" : "?";
+        }
+        string tok = (th == NIL) ? "-" : rt.Slot(th, Conc.TH_TOKEN).ToString();
+        return on + ":" + rt.waiters.Count + ":" + tok + ":" + rt.rootv.Count;
+    }
+    static void Main() {
+        System.Console.WriteLine(
+            Closed(Conc.P_OPEN) + " | " + Closed(Conc.P_CLOSED) + " | " + Closed(Conc.P_HALF)
+            + " | " + Spaced(4, 4, true) + " | " + Spaced(4, 1, true)
+            + " | " + Spaced(4, 9, true) + " | " + Spaced(4, 1, false)
+            + " | " + Spaced(4, 4, false));
+    }
+--expect
+2:1:0 | 2:0:0 | 2:1:0 | port:1:1:0 | yield:0:-1:0 | port:1:1:0 | yield:0:-:0 | port:1:-:0
+--expect-why
+DERIVED FROM THE CONTRACT. Three close rows as
+`<state after>:<side effects>:<roots left>`, then five park rows as
+`<parked on>:<live waiters>:<token on thread>:<roots left>`.
+
+1  AN OPEN PORT CLOSES -- `2:1:0`. State `P_CLOSED`, side effects once.
+
+2  AN ALREADY-CLOSED PORT -- `2:0:0`. State unchanged and the side effects do
+   NOT run. The `0` is the load-bearing field. Putting the test around only
+   the state write leaves this row at `2:1:0`, which tells the host a second
+   time, wakes the peer a second time, and half-closes a far end that is
+   already half-closed. A second close is not an error -- both ends may
+   close, and a host may close a port the guest already closed -- so it has
+   to be a no-op rather than a refusal.
+
+3  A HALF-CLOSED PORT STILL CLOSES -- `2:1:0`. Only `P_CLOSED` is terminal.
+   `P_HALF` means the FAR end went away, which is not this end closing, and
+   testing "not open" instead of "not closed" would leave this port
+   half-closed for ever with its own side effects never run.
+
+4  THE RING IS FULL -- `port:1:1:0`. Parked on the PORT, one waiter still
+   live, and the token on the thread so a wake can retire it without
+   searching the table.
+
+5  ROOM APPEARED WHILE REGISTERING -- `yield:0:-1:0`, and all three fields
+   carry a separate claim. `yield` rather than `port`: the space is there
+   NOW, and parking would wait for a wake that has already been and gone.
+   `0` waiters: the waiter is RETIRED before yielding, or the deadlock
+   reporter counts a thread that is not waiting and a host answer could wake
+   it. `-1`: the token is cleared, not left pointing at a retired slot.
+
+   This row is the whole reason the re-check exists. `wake-on` reaches only
+   waiters ALREADY in the list, so a receive that drained the ring between a
+   failed reservation and this registration would wake nobody -- and this
+   thread would sleep with space in front of it.
+
+6  THE RING IS OVER-FULL -- `port:1:1:0`, the same as row 4. The test is
+   `<`, so a ring holding exactly its capacity is full and anything above it
+   is more so. `<=` would make row 4 yield for ever against a ring that
+   never drains.
+
+7  NOBODY RUNNING, AND ROOM -- `yield:0:-:0`. The yield still happens and the
+   waiter is still retired; only the token has nowhere to be recorded. A nil
+   current thread is not an error, which is the same reading `park-on-port`
+   takes.
+
+8  NOBODY RUNNING, AND FULL -- `port:1:-:0`. Parked, with no token written
+   anywhere, and the waiter left live.
+
+`0` IN THE LAST FIELD OF EVERY ROW. Both exits from each function pop to the
+mark they took, including the early one.

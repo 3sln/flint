@@ -387,24 +387,11 @@ public final class Conc {
     /// only waiters ALREADY in the list, so a receive that drains the ring
     /// between the failed reservation and the registration would wake nobody
     /// and this thread would sleep with space in front of it.
+    /// GENERATED (`kin/portpark.kin`). Park until there is room in `p`'s
+    /// ring -- and look AGAIN after registering, because `wakeOn` reaches
+    /// only waiters already in the list.
     static long parkForSpace(Rt rt, long p) {
-        int base = rt.mark();
-        int pi = rt.push(p);
-        long token = newWaiter(rt, WK_SEND, rt.r(pi));
-        long th = currentThread(rt);
-        if (!Val.isNil(th)) rt.setSlot(Val.asHeap(th), TH_TOKEN, Val.fixnum(token));
-        long ring = fx(rt.slot(rt.r(pi), PT_RING));
-        if (inboxCount(rt, rt.r(pi)) < ring) {
-            freeWaiter(rt, token);
-            if (!Val.isNil(th)) rt.setSlot(Val.asHeap(th), TH_TOKEN, Val.fixnum(-1));
-            rt.popTo(base);
-            // A yield rather than a park: the thread stays runnable and the
-            // send runs again on its next turn.
-            return park(rt, PARK_YIELD);
-        }
-        long pv = rt.r(pi);
-        rt.popTo(base);
-        return park(rt, pv);
+        return com._3sln.flint.kgen.rt.Portpark.parkForRoom(rt, p);
     }
 
     /// GENERATED (`kin/sched.kin`). Register the waiter FIRST, park second,
@@ -924,20 +911,14 @@ public final class Conc {
         return com._3sln.flint.kgen.rt.Portrecv.receiveAt(rt, p);
     }
 
+    /// GENERATED (`kin/portpark.kin`). Close `p`, once. The `needPort`
+    /// check and its message are a host string and stay here, which is also
+    /// where they belong in the order: nothing is rooted yet when it runs.
     public static long close(Rt rt, long p) {
         if (!needPort(rt, p, "close")) return Val.NIL;
-        int base = rt.mark();
-        int pi = rt.push(p);
-        if (fx(rt.slot(rt.r(pi), PT_STATE)) != P_CLOSED) {
-            rt.setSlot(Val.asHeap(rt.r(pi)), PT_STATE, Val.fixnum(P_CLOSED));
-            closeSideEffects(rt, rt.r(pi));
-        }
-        rt.popTo(base);
-        return Val.NIL;
+        return com._3sln.flint.kgen.rt.Portpark.closeAt(rt, p);
     }
 
-    /// Everything that follows from an end closing, however it closed: tell the
-    /// host if this was a bridge, and wake anybody parked on either side.
     /// GENERATED, from `kin/reapports.kin`. One line, as `reapPorts` and
     /// `closeAllBridges` are.
     public static void closeSideEffects(Rt rt, long p) {

@@ -1642,34 +1642,11 @@ impl Rt {
     /// the ring between the failed reservation and the registration would wake
     /// nobody, and this thread would sleep with space in front of it. Register,
     /// look again, and give the token back if the answer changed.
+    /// GENERATED (`kin/portpark.kin`). Park until there is room in `p`'s
+    /// ring -- and look AGAIN after registering, because `wake_on` reaches
+    /// only waiters already in the list.
     fn park_for_space(&mut self, p: Value) -> Value {
-        let base = self.mark();
-        let pi = self.push(p);
-        let pv = self.r(pi);
-        let token = self.new_waiter(WK_SEND, pv);
-        let th = self.current_thread();
-        if !th.is_nil() {
-            self.set(th, TH_TOKEN, Value::fixnum(token));
-        }
-        let pv = self.r(pi);
-        let ring = fx(self.slot(pv, PT_RING)) as u64;
-        if (self.inbox_count(pv) as u64) < ring {
-            // Room appeared while we were registering. Drop the waiter and let
-            // the send run again immediately rather than waiting for a wake
-            // that has already been and gone.
-            self.free_waiter(token);
-            if !th.is_nil() {
-                self.set(th, TH_TOKEN, Value::fixnum(-1));
-            }
-            self.pop_to(base);
-            // A yield rather than a park: the thread stays runnable and the
-            // send runs again on its next turn, which is what "look again"
-            // means when there is nothing left to wait for.
-            return self.park(PARK_YIELD);
-        }
-        let pv = self.r(pi);
-        self.pop_to(base);
-        self.park(pv)
+        self.park_for_room(p)
     }
 
     /// Receive on a BRIDGE as a live reader, for a guest that decodes itself.
@@ -2026,19 +2003,14 @@ impl Rt {
         self.join_at(t)
     }
 
+    /// GENERATED (`kin/portpark.kin`). Close `p`, once. The `need_port`
+    /// check and its message are a host string and stay here, which is also
+    /// where they belong in the order: nothing is rooted yet when it runs.
     pub fn port_close(&mut self, p: Value) -> Value {
         if !self.need_port(p, "close") {
             return NIL;
         }
-        let base = self.mark();
-        let pi = self.push(p);
-        if fx(self.slot(self.r(pi), PT_STATE)) != P_CLOSED {
-            self.set(self.r(pi), PT_STATE, Value::fixnum(P_CLOSED));
-            let pv = self.r(pi);
-            self.close_side_effects(pv);
-        }
-        self.pop_to(base);
-        NIL
+        self.close_at(p)
     }
 
     /// Everything that follows from an end closing, however it closed: tell the
