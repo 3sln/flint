@@ -156,12 +156,22 @@ the one item in this file whose claim cannot even be assessed.
 > **THIS TRIAGE IS ITSELF STALE, corrected 2026-09-19 by counting.** Every
 > figure in it has moved, and one of them had moved in a way that hid work:
 >
->     claim here                          counted 2026-09-19
->     47 unratified                       55
+>     claim here                          counted 2026-09-19   2026-09-20
+>     47 unratified                       55                   55
 >     32 carry "not independently
->       verified"                         1
+>       verified"                         1                    0
 >     port-tests-in-kin is THE ONE
->       item with no status line          it was one of EIGHT
+>       item with no status line          it was one of EIGHT  --
+>
+> Counted again 2026-09-20 by grep, not by reading: 56 `##` headings, 55 of
+> them `Ratified: ☐`, none ticked. The 56th is *about this file*.
+>
+> **THE LAST ONE WENT 2026-09-20**, and it was worth the check: `other-hosts`
+> not only repeated an unverified status, it carried TWO that contradicted
+> each other about whether native AOT was built, and a sentence that stopped
+> mid-clause. Four of its six factual claims were false, all in the direction
+> the preamble above calls the dangerous one -- saying unbuilt about something
+> that ships and is gated by `bin/check-llvm`.
 >
 > The 32 shrank because the verification this triage asks for was largely done.
 > The 47 grew because decisions kept being added. And the last line was the
@@ -4173,33 +4183,84 @@ would plausibly be fetching source from git at all.
 
 **Ratified:** ☐ not signed off
 
-**Status (re-read 2026-09-11): partly built, and THIS LINE HAS BEEN MISREAD.**
-The native target works — flint's own runtime runs with no wasm engine present
-at all, and `bin/flint` is built on it. The compiler running as native code
-took a compile from 15.6 s to 3.5 s, in a 2.1 MB binary rather than 7.1 MB.
-Native AOT is not built.
+**Status: partly built -- VERIFIED 2026-09-20 by running each target, not by
+reading about it. This section was the last one in the file still carrying
+"per the record; not independently verified", and it was ALSO contradicting
+itself on the same page.**
 
-**"Compiled through LLVM" here means RUSTC, not a flint→LLVM backend.** The
-runtime is Rust, and every Rust binary is compiled through LLVM. This sentence
-reads as though flint emits LLVM IR, and it does not: `flint.emitter` is "AST
-to bytecode", `flint.aot` is "bytecode to wasm", and nothing in `src/` or
-`lib/` emits IR. `:to :llvm` refuses.
+    claim, as it stood                        checked 2026-09-20
+    "nothing in `src/` or `lib/` emits IR"    `src/flint/llvm.cljc`
+    "`:to :llvm` refuses"                     emits 2 135 218 bytes of IR
+    `"llvm" | "native"` is ONE match arm      two arms, cli/src/main.rs:760-761
+    "Native AOT is not built"                 contradicted three lines below
+    "`bin/flint` is built on it"              `bin/flint` is a babashka script
+    "a 2.1 MB binary"                         4.9 MB
 
-The distinction matters because the refusal in `cli/src/main.rs` compounds it:
-`"llvm" | "native"` is ONE match arm for two different targets, refused with a
-reason — "emitting a native artifact needs a linker" — that applies only to the
-second. Emitting IR is writing a `.ll` or `.bc` file and needs no linker. The
-real blocker for `:to :llvm` is that no IR emitter exists. The JVM and CLR ports are the rest of this document; see
-**Status (per the record; not independently verified): partly built.** The native target (flint's own runtime, compiled
-through LLVM to run with no wasm engine present at all) works, and `bin/flint`
-is built on it — the compiler running as native code took a compile from
-15.6 s to 3.5 s, in a 2.1 MB binary rather than 7.1 MB. **Native AOT is now
-built** (2026-09-11, `llvm-ir-target`): `flint compile :to :llvm
+**`:to :llvm` IS BUILT and works end to end.** `bin/check-llvm` exits 0 today:
+seven programs at two optimisation levels each, IR emitted, linked by `clang`
+against `nativeabi/`, and every answer matched against the interpreter's. A
+single compile writes 2 135 218 bytes beginning `; flint program, as LLVM IR`.
+
+**`:to :native` is the one that refuses, and it refuses for its own reason.**
+`cli/src/main.rs` has separate arms: `"llvm"` dispatches to `compile_llvm`,
+`"native"` bails with a message about linking that points the reader at
+`:to :llvm` and at `nativeabi/`, and an unrecognised target names the two real
+ones. The "one arm for two targets" this section complained about was fixed
+with the emitter and the complaint was never retired.
+
+**`bin/flint` IS NOT BUILT ON THE NATIVE TARGET**, and that is the most
+misleading line here rather than the most wrong. They are two separate front
+doors: `bin/flint` is a 1 172-line babashka script that `require`s
+`flint.compiler` out of `src/` and `lib/`, and `target/release/flint` is the
+Rust crate `flint-cli`, which carries an EMBEDDED compiler sandbox and loads
+it through `load_compiler`. Neither invokes the other.
+
+**The 15.6 s -> 3.5 s figure could not be reproduced, and the direction did
+not hold on the one program measured.** Compiling `slicegap/small` from
+`runtimes/conform`: the babashka front end took 3.86 s wall, and the native
+binary 4.60 s best of three. That is NOT a like-for-like comparison and is not
+offered as a refutation -- the two write different modules, 494 437 bytes
+against 621 223 -- only as a reason the recorded figure should not be quoted
+until somebody says what it compiled.
+
+**The two front doors compile the SAME PROGRAM**, which was worth checking
+before the size difference was read as a divergence: both modules answer
+`199990000` and bill 275 937 steps, to the instruction. The 127 KB is
+packaging, not semantics. See `one-dependency-walk` for the standing hazard
+that every front door builds its own compile spec.
+
+Native AOT is built (2026-09-11, `llvm-ir-target`): `flint compile :to :llvm
 :optimize [perf]` emits compiled arities as LLVM functions against the same
 helper ABI the wasm emitter uses, and `nativeabi/` is the archive they link
-against. This line said native AOT was not built, and it was not until that
-change. The JVM and CLR ports are the rest of this document; see
+against. The JVM and CLR ports are the rest of this document; see
 `jvm-runtime` and `clr-runtime`.
+
+### What stood here, kept because the distinction is still worth having
+
+The paragraphs below were written when `:to :llvm` genuinely did refuse, and
+their point -- that "compiled through LLVM" meaning RUSTC is a different claim
+from flint emitting IR -- is a real distinction that a reader can still make
+the mistake of collapsing. They no longer describe the code.
+
+They are kept for a second reason. A later edit spliced a new status INTO the
+middle of them: the sentence "The JVM and CLR ports are the rest of this
+document; see" was left dangling with no target, the closing paragraph was
+duplicated, and the section ended up carrying two Status banners that
+disagreed about whether native AOT was built. *A record that contradicts
+itself on one page has usually been edited, not reasoned about* -- and neither
+banner was wrong when it was written.
+
+> **"Compiled through LLVM" here means RUSTC, not a flint->LLVM backend.** The
+> runtime is Rust, and every Rust binary is compiled through LLVM. This
+> sentence reads as though flint emits LLVM IR, and it does not:
+> `flint.emitter` is "AST to bytecode", `flint.aot` is "bytecode to wasm", and
+> nothing in `src/` or `lib/` emits IR. `:to :llvm` refuses.
+>
+> The distinction matters because the refusal in `cli/src/main.rs` compounds
+> it: `"llvm" | "native"` is ONE match arm for two different targets, refused
+> with a reason -- "emitting a native artifact needs a linker" -- that applies
+> only to the second. Emitting IR is writing a `.ll` or `.bc` file and needs
+> no linker. The real blocker for `:to :llvm` is that no IR emitter exists.
 
 ### What was decided
 

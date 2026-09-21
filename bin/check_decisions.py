@@ -23,6 +23,22 @@ resolve. 400-odd files cite decisions by slug -- `DECISIONS.md#strings-and-match
 -- and a renamed, merged or deleted section turns every one of them into a
 dangling pointer that nothing would otherwise notice. That is a real failure
 with a mechanical answer, which is the kind worth automating.
+
+AND, SINCE 2026-09-20, THAT EACH SECTION CARRIES EXACTLY ONE STATUS BANNER.
+That is structure rather than content, so the objection above does not apply:
+it says nothing about whether a status is TRUE, only that there is one claim
+to argue with rather than none or two.
+
+Both failures had already happened. `other-hosts` carried TWO banners that
+disagreed about whether native AOT was built -- a later edit had spliced a new
+one into the middle of the old prose, leaving a sentence stopped at "see" and
+the closing paragraph duplicated -- and a reader who scrolled to the first
+banner got the opposite answer from one who scrolled to the second. Separately,
+eight sections once carried NO banner at all, and the triage that noticed
+named only one of the eight, because nobody had counted.
+
+Neither is a judgement call, which is what makes it automatable: a section
+either has one banner or it does not.
 """
 import os, re, subprocess, sys
 
@@ -39,6 +55,41 @@ def main():
         if s in seen:
             errs.append(f"DECISIONS.md has two sections called {s!r} -- an anchor can only mean one")
         seen.add(s)
+
+    # EXACTLY ONE STATUS BANNER PER SECTION. A section is everything from its
+    # `## ` heading to the next one, and a banner is a line beginning
+    # `**Status`. Two means an edit spliced one in rather than replacing the
+    # old; zero means a claim nobody can argue with, because there is none.
+    #
+    # A SECTION IS A DECISION IFF IT CARRIES A `**Ratified:**` LINE, which is
+    # how the file already distinguishes one -- the preamble "about this file,
+    # and the sign-off" is a `## ` heading and is not a decision. Keying on the
+    # heading TEXT would have meant a hardcoded name here, and a second
+    # non-decision section would then be silently required to have a status.
+    #
+    # But "no Ratified line" must not become a way to opt out, so the count of
+    # such sections is asserted too: exactly one, the preamble. A new section
+    # that forgets both lines is still caught, by the second check rather than
+    # the first.
+    bodies = re.split(r'^## ', text, flags=re.M)[1:]
+    not_decisions = []
+    for body in bodies:
+        name = body.split('\n', 1)[0].strip()
+        if not re.search(r'^\*\*Ratified:', body, re.M):
+            not_decisions.append(name)
+            continue
+        n = len(re.findall(r'^\*\*Status', body, re.M))
+        if n == 0:
+            errs.append(f"{name!r} has no status line -- a decision with no claim "
+                        f"cannot be checked against the code")
+        elif n > 1:
+            errs.append(f"{name!r} has {n} status lines -- an edit spliced one in "
+                        f"rather than replacing it, and they can disagree")
+    if len(not_decisions) != 1:
+        errs.append(f"{len(not_decisions)} sections carry no `**Ratified:**` line "
+                    f"({', '.join(repr(n) for n in not_decisions) or 'none'}) -- "
+                    f"exactly one, the preamble, is expected; a decision without "
+                    f"one is skipped by the status check above")
 
     # TRACKED *AND* UNTRACKED-BUT-NOT-IGNORED. Plain `git ls-files` lists only
     # tracked files, so a brand-new file's citations went unchecked until the
@@ -74,7 +125,8 @@ def main():
             print("  FAIL " + e)
         print(f"check-decisions: {len(errs)} failure(s)")
         return 1
-    print(f"check-decisions: {len(seen)} decisions, {len(cited)} cited by slug, every citation resolves")
+    print(f"check-decisions: {len(seen) - len(not_decisions)} decisions, one status "
+          f"line each, {len(cited)} cited by slug, every citation resolves")
     return 0
 
 if __name__ == '__main__':

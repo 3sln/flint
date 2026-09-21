@@ -8125,3 +8125,77 @@ which is the guard the `gasmeter` row above it already carries in prose.
 native against the jvm. The two ports agree here to the instruction at both
 sizes -- but nobody had asked.
 
+---
+
+## `other-hosts` verified: four claims false, and the section had been edited rather than reasoned about
+
+2026-09-20. Not a port slice. `other-hosts` was the LAST section in
+`DECISIONS.md` still carrying *"per the record; not independently verified"* --
+the phrase that file's own triage names as the remaining work -- and it was
+contradicting itself on the same page: the prose said `:to :llvm` refuses and
+"nothing in `src/` or `lib/` emits IR", while a status three lines below said
+native AOT was built.
+
+Checked by RUNNING each target:
+
+    claim, as it stood                        checked 2026-09-20
+    "nothing in `src/` or `lib/` emits IR"    `src/flint/llvm.cljc`
+    "`:to :llvm` refuses"                     2 135 218 bytes of IR
+    `"llvm" | "native"` is ONE match arm      two arms, main.rs:760-761
+    "Native AOT is not built"                 contradicted three lines below
+    "`bin/flint` is built on it"              `bin/flint` is a babashka script
+    "a 2.1 MB binary"                         4.9 MB
+
+`bin/check-llvm` exits 0: seven programs at two optimisation levels, IR
+emitted, linked by `clang`, answers matched against the interpreter. The
+feature the record called unbuilt is not merely built, it is GATED.
+
+### Two front doors, and the record conflated them
+
+**`bin/flint` is not built on the native target.** It is a 1 172-line babashka
+script that `require`s `flint.compiler` out of `src/` and `lib/`;
+`target/release/flint` is the Rust crate `flint-cli` carrying an EMBEDDED
+compiler sandbox. Neither invokes the other, and only the second accepts
+`:to`. The recorded "15.6 s -> 3.5 s" compares two things this record does not
+identify, and on the one program measured the direction did not hold -- 3.86 s
+for babashka against 4.60 s for the binary, best of three.
+
+*Which is not offered as a refutation*, and the record now says so: the two
+write different modules, 494 437 bytes against 621 223. What was worth
+checking before reading that as a divergence is whether they compile the same
+PROGRAM, and they do -- both answer `199990000` and bill 275 937 steps, to the
+instruction. The 127 KB is packaging.
+
+### The damage was structural, so a script can catch it
+
+The section had TWO `**Status` banners. A later edit spliced a new one into
+the middle of the old prose: a sentence stopped mid-clause at "see", the
+closing paragraph was duplicated, and a reader who scrolled to the first
+banner got the opposite answer from one who scrolled to the second.
+
+*A record that contradicts itself on one page has usually been edited, not
+reasoned about* -- and neither banner was wrong when it was written.
+
+`bin/check_decisions.py` asserts **exactly one status banner per decision**
+now. That does not violate the rule in its own docstring -- "a check that
+compares two copies of one claim is not a check", and only the CODE can say
+whether a status is true -- because this is structure, not content: a section
+either has one claim to argue with or it does not.
+
+**A section is a decision iff it carries a `**Ratified:**` line**, which is
+how the file already tells one from the preamble. Keying on the heading text
+would have hardcoded a name. But "no Ratified line" must not become a way to
+opt out, so the number of such sections is asserted too: exactly one. A new
+section that forgets BOTH lines is caught by the second check rather than
+skipped by the first.
+
+Made to fail on purpose, three ways: a spliced second banner (`'calls-are-ports'
+has 2 status lines`), a removed banner (`has no status line`), and a removed
+`Ratified:` line (`2 sections carry no **Ratified:** line`). Then restored and
+re-run green. It is in `bin/check` and `bin/test` already.
+
+**The other eight-section failure this would have caught had already
+happened.** The file's triage once named `port-tests-in-kin` as "THE ONE item
+with no status line"; it was one of eight, and nobody had counted. Both the
+zero case and the two case were real before the check existed for either.
+
