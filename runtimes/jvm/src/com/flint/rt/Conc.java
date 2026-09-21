@@ -1545,50 +1545,13 @@ public final class Conc {
         return com._3sln.flint.kgen.rt.Sched.schedNeedsHost(rt);
     }
 
+    /// GENERATED (`kin/settle.kin`). The end of every turn a thread takes,
+    /// and the one place that decides which of three things just happened.
+    /// Written three times before this; the park branch's clear of the PARK
+    /// sentinel was in both ports and not in native, and the generated body
+    /// keeps it.
     public static void settle(Rt rt, long result) {
-
-        long th = currentThread(rt);
-        if (Val.isNil(th)) return;
-        int base = rt.mark();
-        int ti = rt.push(th);
-        // Dynamic bindings travel WITH the thread.
-        rt.setSlot(Val.asHeap(rt.r(ti)), TH_BINDINGS, rt.roots.shared.singletons[Rt.SING_BINDINGS]);
-        if (!Val.isNil(rt.parkOn)) {
-            long on = rt.parkOn;
-            rt.parkOn = Val.NIL;
-            // AND the sentinel. A park travels as `thrown = PARK` so that every
-            // frame between the builtin and here unwinds; this is where it stops
-            // being in flight. Leaving it set made the NEXT thread's clean
-            // finish read as a failure -- it ran fine, returned a value, and
-            // `settle` recorded the sentinel as its result.
-            rt.thrown = Val.NIL;
-            if (on == PARK_YIELD) {
-                // A COURTESY yield: still runnable, and it must NOT rewind.
-                // Re-executing the `yield` yields again, for ever.
-                rt.setSlot(Val.asHeap(rt.r(ti)), TH_STATUS, Val.fixnum(ST_RUNNABLE));
-                rt.setSlot(Val.asHeap(rt.r(ti)), TH_PARK_ON, Val.NIL);
-            } else {
-                int oi = rt.push(on);
-                rt.setSlot(Val.asHeap(rt.r(ti)), TH_STATUS, Val.fixnum(ST_PARKED));
-                rt.setSlot(Val.asHeap(rt.r(ti)), TH_PARK_ON, rt.r(oi));
-            }
-            saveCurrentState(rt, rt.r(ti));
-        } else if (!Val.isNil(rt.thrown)) {
-            int ei = rt.push(rt.thrown);
-            rt.thrown = Val.NIL;
-            rt.setSlot(Val.asHeap(rt.r(ti)), TH_STATUS, Val.fixnum(ST_FAILED));
-            rt.setSlot(Val.asHeap(rt.r(ti)), TH_RESULT, rt.r(ei));
-            wakeOn(rt, rt.r(ti));
-            rt.frames.clear(); rt.handlers.clear(); rt.roots.stackTop = 0;
-        } else {
-            int ri = rt.push(result);
-            rt.setSlot(Val.asHeap(rt.r(ti)), TH_STATUS, Val.fixnum(ST_DONE));
-            rt.setSlot(Val.asHeap(rt.r(ti)), TH_RESULT, rt.r(ri));
-            rt.setSlot(Val.asHeap(rt.r(ti)), TH_STACK, Val.NIL);
-            wakeOn(rt, rt.r(ti));
-            rt.frames.clear(); rt.handlers.clear(); rt.roots.stackTop = 0;
-        }
-        rt.popTo(base);
+        com._3sln.flint.kgen.rt.Settle.settleThread(rt, result);
     }
 
     /// Install a thread's dynamic bindings as the live ones. Named by the

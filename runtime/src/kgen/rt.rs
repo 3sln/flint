@@ -101,6 +101,7 @@ pub mod tableref;
 pub mod portbytes;
 pub mod portdrain;
 pub mod porthost;
+pub mod settle;
 pub mod portinstall;
 pub mod portmake;
 pub mod portring;

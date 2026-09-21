@@ -405,7 +405,7 @@ impl Rt {
         self.slot(th, TH_STACK)
     }
 
-    fn save_current_state(&mut self, th: Value) {
+    pub(crate) fn save_current_state(&mut self, th: Value) {
         let base = self.mark();
         let ti = self.push(th);
         let n = self.roots.stack_top as u32;
@@ -1281,54 +1281,15 @@ fn scheduler(rt: &mut Rt, first: Value) -> Value {
 }
 
 /// Record the outcome of the thread that was running, and take it off.
+/// GENERATED (`kin/settle.kin`). The end of every turn a thread takes, and
+/// the one place that decides which of three things just happened. It was
+/// written three times, and the copies had already drifted on the park
+/// branch: both ports cleared the PARK sentinel here and this one did not,
+/// because `parked` in the VM had already cleared it. The generated body
+/// keeps the clear -- free where it is redundant, load-bearing where it is
+/// not -- so the three no longer disagree about a field they all write.
 pub fn settle(rt: &mut Rt, result: Value) {
-    let th = rt.current_thread();
-    if th.is_nil() {
-        return;
-    }
-    let base = rt.mark();
-    let ti = rt.push(th);
-    // Dynamic bindings travel with the thread.
-    let binds = rt.roots.shared.singletons[crate::rt::SING_BINDINGS];
-    rt.set(rt.r(ti), TH_BINDINGS, binds);
-    if !rt.park_on.is_nil() {
-        let on = rt.park_on;
-        rt.park_on = NIL;
-        if on.bits() == PARK_YIELD.bits() {
-            rt.set(rt.r(ti), TH_STATUS, Value::fixnum(ST_RUNNABLE));
-            rt.set(rt.r(ti), TH_PARK_ON, NIL);
-        } else {
-            let oi = rt.push(on);
-            rt.set(rt.r(ti), TH_STATUS, Value::fixnum(ST_PARKED));
-            let o = rt.r(oi);
-            rt.set(rt.r(ti), TH_PARK_ON, o);
-        }
-        let t = rt.r(ti);
-        rt.save_current_state(t);
-    } else if rt.failed() {
-        let e = rt.clear_error();
-        let ei = rt.push(e);
-        rt.set(rt.r(ti), TH_STATUS, Value::fixnum(ST_FAILED));
-        let ev = rt.r(ei);
-        rt.set(rt.r(ti), TH_RESULT, ev);
-        let t = rt.r(ti);
-        rt.wake_on(t);
-        rt.frames.clear();
-        rt.handlers.clear();
-        rt.roots.stack_top = 0;
-    } else {
-        let ri = rt.push(result);
-        rt.set(rt.r(ti), TH_STATUS, Value::fixnum(ST_DONE));
-        let rv = rt.r(ri);
-        rt.set(rt.r(ti), TH_RESULT, rv);
-        rt.set(rt.r(ti), TH_STACK, NIL);
-        let t = rt.r(ti);
-        rt.wake_on(t);
-        rt.frames.clear();
-        rt.handlers.clear();
-        rt.roots.stack_top = 0;
-    }
-    rt.pop_to(base);
+    rt.settle_thread(result);
 }
 
 // THE SCHEDULER'S PREDICATES ARE GENERATED (`kin/sched.kin`) and are methods

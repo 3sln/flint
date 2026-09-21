@@ -580,6 +580,12 @@
    'PARK {:rust "crate::value::PARK" :java "Val.PARK" :csharp "Val.Park"}
    'ST_NEW {:rust "crate::conc::ST_NEW"
            :java "Conc.ST_NEW" :csharp "Conc.ST_NEW"}
+   ;; A COURTESY YIELD, and it is a FIXNUM rather than a heap value on
+   ;; purpose: `settle` compares against it by BITS, which is what native's
+   ;; copy already did. A heap sentinel would need a root and would turn the
+   ;; comparison into an identity question.
+   'PARK_YIELD {:rust "crate::conc::PARK_YIELD"
+                :java "Conc.PARK_YIELD" :csharp "Conc.PARK_YIELD"}
    'ST_RUNNABLE {:rust "crate::conc::ST_RUNNABLE"
                 :java "Conc.ST_RUNNABLE" :csharp "Conc.ST_RUNNABLE"}
    'ST_PARKED {:rust "crate::conc::ST_PARKED"
@@ -1938,6 +1944,34 @@
     'set-thrown (core/call {:rust "{0}.thrown = {1}"
                             :java "{0}.thrown = {1}"
                             :csharp "{0}.thrown = {1}"})
+    ;; THE OTHER HALF OF THOSE TWO WRITES, read back. `settle` is the one
+    ;; place that has to ask what a thread parked ON before deciding what to
+    ;; record, and `is-parked` is deliberately separate from `park-on`: the
+    ;; test comes first and the read only happens on the branch that took it.
+    'is-parked (core/call {:rust "!{0}.park_on.is_nil()"
+                            :java "!Val.isNil({0}.parkOn)"
+                            :csharp "!Val.IsNil({0}.parkOn)"}
+                           {:tag Bool})
+    'park-on (core/call {:rust "{0}.park_on"
+                          :java "{0}.parkOn"
+                          :csharp "{0}.parkOn"}
+                         {:tag Value})
+    'thrown (core/call {:rust "{0}.thrown"
+                         :java "{0}.thrown"
+                         :csharp "{0}.thrown"}
+                        {:tag Value})
+    ;; SAVE THE CONTINUATION. Allocates -- which is exactly why `park_on` is
+    ;; cleared before this is reached: `park_on` is not a root on any runtime.
+    'save-current-state (core/call {:rust "{0}.save_current_state({1})"
+                                     :java "Conc.saveCurrentState({0}, {1})"
+                                     :csharp "Conc.SaveCurrentState({0}, {1})"})
+    ;; THE INTERPRETER, EMPTIED. Three writes everywhere, and they are only
+    ;; ever done together: a thread that is finished has no frames, no
+    ;; handlers, and nothing rooted on the value stack. Named as one act so
+    ;; that a copy cannot forget the third.
+    'cut-stacks (core/call {:rust "{ {0}.frames.clear(); {0}.handlers.clear(); {0}.roots.stack_top = 0; }"
+                             :java "{ {0}.frames.clear(); {0}.handlers.clear(); {0}.roots.stackTop = 0; }"
+                             :csharp "{ {0}.frames.Clear(); {0}.handlers.Clear(); {0}.roots.StackTop = 0; }"})
     ;; NAMED `unwind-to-handler` and not `unwind`: native spells the public
     ;; entry `unwind_from_resume`, which is a `pub` wrapper over the same
     ;; `unwind` both ports expose directly. One act, three spellings.

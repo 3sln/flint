@@ -1,0 +1,423 @@
+--rust-head
+// A TOY THREAD AND THE FIELDS AROUND IT. What `settle` writes is five slots
+// on one object; what it READS is four fields on the runtime, none of which
+// is a root. The toy therefore models the fields exactly and stubs the two
+// acts that reach outside -- saving a continuation and waking a key -- as
+// counters, because it is WHETHER and WHEN they happen that the contract
+// fixes, not what they build.
+//
+// `save_current_state` RECORDS `park_on` AS IT SEES IT. That is the rooting
+// rule made observable: the real one allocates, `park_on` is not scanned, so
+// the clear must already have happened. Field 9 of every park row says so.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_0000_0000_0000);
+mod conc {
+    // PACKED for the toy; the real thread object is wider and the indices are
+    // its own. Nothing here depends on the numbers, only on their distinctness.
+    pub const TH_STATUS: u32 = 0;
+    pub const TH_PARK_ON: u32 = 1;
+    pub const TH_RESULT: u32 = 2;
+    pub const TH_STACK: u32 = 3;
+    pub const TH_BINDINGS: u32 = 4;
+    // THE REAL VALUES, because the expected answers name them.
+    pub const ST_RUNNABLE: i64 = 1;
+    pub const ST_PARKED: i64 = 2;
+    pub const ST_DONE: i64 = 3;
+    pub const ST_FAILED: i64 = 4;
+    // A FIXNUM ZERO, exactly as the runtimes spell it -- and not nil, which is
+    // what makes `is-parked` true for a yield at all.
+    pub const PARK_YIELD: super::Value = super::Value(0);
+}
+impl Value {
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn is_nil(self) -> bool { self == NIL }
+    // NOT USED BY THE CONTRACT. It is here so the wrong yield test -- "is
+    // this not a heap object" -- can be written and run against row 4.
+    #[allow(dead_code)]
+    fn is_heap(self) -> bool { !self.is_nil() && self.0 >= 1000 }
+}
+struct Roots { stack_top: usize }
+struct Rt {
+    // HANDLES START AT 1000 so no object can collide with `PARK_YIELD`, which
+    // is the fixnum zero. A toy that numbered objects from zero would have its
+    // first object compare equal to a courtesy yield.
+    objs: Vec<Vec<Value>>,
+    rootv: Vec<Value>,
+    roots: Roots,
+    frames: Vec<u8>,
+    handlers: Vec<u8>,
+    park_on: Value,
+    thrown: Value,
+    cur: Value,
+    binds: Value,
+    saves: u32,
+    saw: Value,
+    woke: u32,
+}
+impl Rt {
+    fn obj(&mut self, slots: Vec<Value>) -> Value {
+        self.objs.push(slots);
+        Value((self.objs.len() - 1) as u64 + 1000)
+    }
+    fn slot(&self, v: Value, i: u32) -> Value { self.objs[(v.0 - 1000) as usize][i as usize] }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.objs[(v.0 - 1000) as usize][i as usize] = x; }
+    fn mark(&self) -> usize { self.rootv.len() }
+    fn push(&mut self, v: Value) -> usize { self.rootv.push(v); self.rootv.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.rootv[i] }
+    fn pop_to(&mut self, i: usize) { self.rootv.truncate(i); }
+    fn current_thread(&self) -> Value { self.cur }
+    fn current_bindings(&self) -> Value { self.binds }
+    fn save_current_state(&mut self, _th: Value) { self.saves += 1; self.saw = self.park_on; }
+    fn wake_on(&mut self, _k: Value) { self.woke += 1; }
+--rust
+}
+fn fresh() -> Rt {
+    Rt { objs: vec![], rootv: vec![], roots: Roots { stack_top: 7 },
+         frames: vec![1], handlers: vec![1],
+         park_on: NIL, thrown: NIL, cur: NIL, binds: NIL,
+         saves: 0, saw: NIL, woke: 0 }
+}
+// `<status>:<TH_PARK_ON>:<TH_RESULT>:<TH_STACK>:<TH_BINDINGS>
+//  :<rt.park_on>:<rt.thrown>:<saves>:<park_on as the save saw it>
+//  :<wakes>:<interpreter still loaded>:<roots left>`
+fn after(rt: &Rt, th: Value, on: Value, err: Value, res: Value, stk: Value) -> String {
+    let name = |v: Value| -> String {
+        if v.is_nil() { "-".to_string() }
+        else if v == on { "on".to_string() }
+        else if v == err { "e".to_string() }
+        else if v == res { "r".to_string() }
+        else if v == stk { "s".to_string() }
+        else if v == rt.binds { "b".to_string() }
+        else { "?".to_string() }
+    };
+    let loaded = !(rt.frames.is_empty() && rt.handlers.is_empty() && rt.roots.stack_top == 0);
+    format!("{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+            rt.slot(th, conc::TH_STATUS).0 as i64,
+            name(rt.slot(th, conc::TH_PARK_ON)),
+            name(rt.slot(th, conc::TH_RESULT)),
+            name(rt.slot(th, conc::TH_STACK)),
+            name(rt.slot(th, conc::TH_BINDINGS)),
+            if rt.park_on.is_nil() { "-" } else { "P" },
+            if rt.thrown.is_nil() { "-" } else { "T" },
+            rt.saves,
+            if rt.saw.is_nil() { "-" } else { "P" },
+            rt.woke,
+            if loaded { 1 } else { 0 },
+            rt.rootv.len())
+}
+// One live thread. THE PARK KEY IS MADE INSIDE, because a handle minted in
+// another sandbox would collide with this one's -- and it collided with the
+// bindings object first time, which is how the toy said so.
+// `kind`: 0 not parked, 1 a heap key, 2 `PARK_YIELD`, 3 a fixnum that is not.
+fn run(kind: i32, thrown_is_err: bool) -> String {
+    let mut rt = fresh();
+    let b = rt.obj(vec![]);
+    let e = rt.obj(vec![]);
+    let s = rt.obj(vec![]);
+    let res = rt.obj(vec![]);
+    let th = rt.obj(vec![Value::fixnum(conc::ST_RUNNABLE), NIL, NIL, s, NIL]);
+    let on = match kind {
+        1 => rt.obj(vec![]),
+        2 => conc::PARK_YIELD,
+        3 => Value::fixnum(5),
+        _ => NIL,
+    };
+    rt.binds = b;
+    rt.cur = th;
+    rt.park_on = on;
+    if thrown_is_err { rt.thrown = e; }
+    rt.settle_thread(res);
+    after(&rt, th, on, e, res, s)
+}
+fn main() {
+    // 1. NO SCHEDULER, and an error in flight. Nothing is settled, nothing is
+    //    woken, the interpreter is left loaded -- AND the error is still
+    //    there, because the host boundary is the one that reads it.
+    //    `<saves>:<wakes>:<still loaded>:<thrown>`
+    let mut a = fresh();
+    let ae = a.obj(vec![]);
+    a.thrown = ae;
+    a.settle_thread(NIL);
+    let r1 = format!("{}:{}:{}:{}", a.saves, a.woke,
+                     if a.frames.is_empty() { 0 } else { 1 },
+                     if a.thrown.is_nil() { "-" } else { "T" });
+
+    // 2. A PARK, WITH THE SENTINEL STILL SET. This is the ordinary shape -- a
+    //    park travels as a throw -- so it is also the order test: ask about
+    //    the throw first and this row records a FAILURE.
+    let r2 = run(1, true);
+
+    // 3. A COURTESY YIELD. Still runnable, waiting for NOTHING, and its
+    //    continuation is saved all the same.
+    let r3 = run(2, true);
+
+    // 4. A PARK ON A FIXNUM THAT IS NOT `PARK_YIELD`. The yield test is by
+    //    BITS against one value, not "is this a fixnum" or "is this not a
+    //    heap object" -- both of those would read this as a yield.
+    let r4 = run(3, true);
+
+    // 5. A FAILURE. The error becomes the result, the joiners are woken, the
+    //    interpreter is emptied -- and `TH_STACK` is LEFT ALONE, which is the
+    //    asymmetry with a clean finish below.
+    let r5 = run(0, true);
+
+    // 6. A CLEAN FINISH. The result is the value, and `TH_STACK` is cleared:
+    //    a done thread's continuation is the one thing certain never to be
+    //    resumed, and holding it holds its whole heap.
+    let r6 = run(0, false);
+
+    println!("{} | {} | {} | {} | {} | {}", r1, r2, r3, r4, r5, r6);
+}
+--java-head
+    // THE SAME TOY, field for field.
+    static final long NIL = 0xFFFF000000000000L;
+    static final class Val {
+        static final long Nil = 0xFFFF000000000000L;
+        static final long NIL = 0xFFFF000000000000L;
+        static boolean isNil(long v) { return v == NIL; }
+        static boolean isHeap(long v) { return v != NIL && v >= 1000; }
+        static long fixnum(long n) { return n; }
+        static long asHeap(long v) { return v; }
+    }
+    static final class Conc {
+        static final int TH_STATUS = 0, TH_PARK_ON = 1, TH_RESULT = 2;
+        static final int TH_STACK = 3, TH_BINDINGS = 4;
+        static final long ST_RUNNABLE = 1, ST_PARKED = 2, ST_DONE = 3, ST_FAILED = 4;
+        static final long PARK_YIELD = 0;
+        static long currentThread(Rt rt) { return rt.cur; }
+        static long currentBindings(Rt rt) { return rt.binds; }
+        static void saveCurrentState(Rt rt, long th) { rt.saves++; rt.saw = rt.parkOn; }
+        static void wakeOn(Rt rt, long k) { rt.woke++; }
+    }
+    static final class Roots { int stackTop = 7; }
+    static final class Counter { java.util.List<Integer> l = new java.util.ArrayList<>();
+        void clear() { l.clear(); } boolean isEmpty() { return l.isEmpty(); } }
+    static final class Rt {
+        java.util.List<long[]> objs = new java.util.ArrayList<>();
+        java.util.List<Long> rootv = new java.util.ArrayList<>();
+        Roots roots = new Roots();
+        Counter frames = new Counter();
+        Counter handlers = new Counter();
+        long parkOn = NIL, thrown = NIL, cur = NIL, binds = NIL, saw = NIL;
+        int saves = 0, woke = 0;
+        long obj(long[] slots) { objs.add(slots); return objs.size() - 1 + 1000; }
+        long slot(long v, int i) { return objs.get((int) (v - 1000))[i]; }
+        void setSlot(long v, int i, long x) { objs.get((int) (v - 1000))[i] = x; }
+        int mark() { return rootv.size(); }
+        int push(long v) { rootv.add(v); return rootv.size() - 1; }
+        long r(int i) { return rootv.get(i); }
+        void popTo(int i) { while (rootv.size() > i) rootv.remove(rootv.size() - 1); }
+    }
+--java
+    static Rt fresh() {
+        Rt rt = new Rt();
+        rt.frames.l.add(1); rt.handlers.l.add(1);
+        return rt;
+    }
+    static String name(Rt rt, long v, long on, long err, long res, long stk) {
+        if (v == NIL) return "-";
+        if (v == on) return "on";
+        if (v == err) return "e";
+        if (v == res) return "r";
+        if (v == stk) return "s";
+        if (v == rt.binds) return "b";
+        return "?";
+    }
+    static String after(Rt rt, long th, long on, long err, long res, long stk) {
+        boolean loaded = !(rt.frames.isEmpty() && rt.handlers.isEmpty() && rt.roots.stackTop == 0);
+        return rt.slot(th, Conc.TH_STATUS)
+            + ":" + name(rt, rt.slot(th, Conc.TH_PARK_ON), on, err, res, stk)
+            + ":" + name(rt, rt.slot(th, Conc.TH_RESULT), on, err, res, stk)
+            + ":" + name(rt, rt.slot(th, Conc.TH_STACK), on, err, res, stk)
+            + ":" + name(rt, rt.slot(th, Conc.TH_BINDINGS), on, err, res, stk)
+            + ":" + (rt.parkOn == NIL ? "-" : "P")
+            + ":" + (rt.thrown == NIL ? "-" : "T")
+            + ":" + rt.saves
+            + ":" + (rt.saw == NIL ? "-" : "P")
+            + ":" + rt.woke
+            + ":" + (loaded ? 1 : 0)
+            + ":" + rt.rootv.size();
+    }
+    static String run(int kind, boolean thrownIsErr) {
+        Rt rt = fresh();
+        long b = rt.obj(new long[]{});
+        long e = rt.obj(new long[]{});
+        long s = rt.obj(new long[]{});
+        long res = rt.obj(new long[]{});
+        long th = rt.obj(new long[]{Conc.ST_RUNNABLE, NIL, NIL, s, NIL});
+        long on = kind == 1 ? rt.obj(new long[]{})
+                : kind == 2 ? Conc.PARK_YIELD
+                : kind == 3 ? 5 : NIL;
+        rt.binds = b; rt.cur = th; rt.parkOn = on;
+        if (thrownIsErr) rt.thrown = e;
+        settleThread(rt, res);
+        return after(rt, th, on, e, res, s);
+    }
+    public static void main(String[] args) {
+        Rt a = fresh();
+        long ae = a.obj(new long[]{});
+        a.thrown = ae;
+        settleThread(a, NIL);
+        String r1 = a.saves + ":" + a.woke + ":" + (a.frames.isEmpty() ? 0 : 1)
+                    + ":" + (a.thrown == NIL ? "-" : "T");
+        String r2 = run(1, true);
+        String r3 = run(2, true);
+        String r4 = run(3, true);
+        String r5 = run(0, true);
+        String r6 = run(0, false);
+        System.out.println(r1 + " | " + r2 + " | " + r3 + " | " + r4 + " | " + r5 + " | " + r6);
+    }
+--csharp-head
+    // THE SAME TOY, field for field.
+    const long NIL = unchecked((long) 0xFFFF000000000000UL);
+    public static class Val {
+        public const long Nil = unchecked((long) 0xFFFF000000000000UL);
+        public static bool IsNil(long v) { return v == Nil; }
+        public static bool IsHeap(long v) { return v != Nil && v >= 1000; }
+        public static long Fixnum(long n) { return n; }
+        public static long AsHeap(long v) { return v; }
+    }
+    public static class Conc {
+        public const int TH_STATUS = 0, TH_PARK_ON = 1, TH_RESULT = 2;
+        public const int TH_STACK = 3, TH_BINDINGS = 4;
+        public const long ST_RUNNABLE = 1, ST_PARKED = 2, ST_DONE = 3, ST_FAILED = 4;
+        public const long PARK_YIELD = 0;
+        public static long CurrentThread(Rt rt) { return rt.cur; }
+        public static long CurrentBindings(Rt rt) { return rt.binds; }
+        public static void SaveCurrentState(Rt rt, long th) { rt.saves++; rt.saw = rt.parkOn; }
+        public static void WakeOn(Rt rt, long k) { rt.woke++; }
+    }
+    public class Roots { public int StackTop = 7; }
+    public class Counter { public System.Collections.Generic.List<int> L = new System.Collections.Generic.List<int>();
+        public void Clear() { L.Clear(); } public bool IsEmpty() { return L.Count == 0; } }
+    public class Rt {
+        public System.Collections.Generic.List<long[]> objs = new System.Collections.Generic.List<long[]>();
+        public System.Collections.Generic.List<long> rootv = new System.Collections.Generic.List<long>();
+        public Roots roots = new Roots();
+        public Counter frames = new Counter();
+        public Counter handlers = new Counter();
+        public long parkOn = NIL, thrown = NIL, cur = NIL, binds = NIL, saw = NIL;
+        public int saves = 0, woke = 0;
+        public long Obj(long[] slots) { objs.Add(slots); return objs.Count - 1 + 1000; }
+        public long Slot(long v, int i) { return objs[(int)(v - 1000)][i]; }
+        public void SetSlot(long v, int i, long x) { objs[(int)(v - 1000)][i] = x; }
+        public int Mark() { return rootv.Count; }
+        public int Push(long v) { rootv.Add(v); return rootv.Count - 1; }
+        public long R(int i) { return rootv[i]; }
+        public void PopTo(int i) { while (rootv.Count > i) rootv.RemoveAt(rootv.Count - 1); }
+    }
+--csharp
+    static Rt Fresh() {
+        Rt rt = new Rt();
+        rt.frames.L.Add(1); rt.handlers.L.Add(1);
+        return rt;
+    }
+    static string Name(Rt rt, long v, long on, long err, long res, long stk) {
+        if (v == NIL) return "-";
+        if (v == on) return "on";
+        if (v == err) return "e";
+        if (v == res) return "r";
+        if (v == stk) return "s";
+        if (v == rt.binds) return "b";
+        return "?";
+    }
+    static string After(Rt rt, long th, long on, long err, long res, long stk) {
+        bool loaded = !(rt.frames.IsEmpty() && rt.handlers.IsEmpty() && rt.roots.StackTop == 0);
+        return rt.Slot(th, Conc.TH_STATUS)
+            + ":" + Name(rt, rt.Slot(th, Conc.TH_PARK_ON), on, err, res, stk)
+            + ":" + Name(rt, rt.Slot(th, Conc.TH_RESULT), on, err, res, stk)
+            + ":" + Name(rt, rt.Slot(th, Conc.TH_STACK), on, err, res, stk)
+            + ":" + Name(rt, rt.Slot(th, Conc.TH_BINDINGS), on, err, res, stk)
+            + ":" + (rt.parkOn == NIL ? "-" : "P")
+            + ":" + (rt.thrown == NIL ? "-" : "T")
+            + ":" + rt.saves
+            + ":" + (rt.saw == NIL ? "-" : "P")
+            + ":" + rt.woke
+            + ":" + (loaded ? 1 : 0)
+            + ":" + rt.rootv.Count;
+    }
+    static string Run(int kind, bool thrownIsErr) {
+        Rt rt = Fresh();
+        long b = rt.Obj(new long[]{});
+        long e = rt.Obj(new long[]{});
+        long s = rt.Obj(new long[]{});
+        long res = rt.Obj(new long[]{});
+        long th = rt.Obj(new long[]{Conc.ST_RUNNABLE, NIL, NIL, s, NIL});
+        long on = kind == 1 ? rt.Obj(new long[]{})
+                : kind == 2 ? Conc.PARK_YIELD
+                : kind == 3 ? 5 : NIL;
+        rt.binds = b; rt.cur = th; rt.parkOn = on;
+        if (thrownIsErr) rt.thrown = e;
+        SettleThread(rt, res);
+        return After(rt, th, on, e, res, s);
+    }
+    static void Main() {
+        Rt a = Fresh();
+        long ae = a.Obj(new long[]{});
+        a.thrown = ae;
+        SettleThread(a, NIL);
+        string r1 = a.saves + ":" + a.woke + ":" + (a.frames.IsEmpty() ? 0 : 1)
+                    + ":" + (a.thrown == NIL ? "-" : "T");
+        string r2 = Run(1, true);
+        string r3 = Run(2, true);
+        string r4 = Run(3, true);
+        string r5 = Run(0, true);
+        string r6 = Run(0, false);
+        System.Console.WriteLine(r1 + " | " + r2 + " | " + r3 + " | " + r4 + " | " + r5 + " | " + r6);
+    }
+--expect
+0:0:1:T | 2:on:-:s:b:-:-:1:-:0:1:0 | 1:-:-:s:b:-:-:1:-:0:1:0 | 2:on:-:s:b:-:-:1:-:0:1:0 | 4:-:e:s:b:-:-:0:-:1:0:0 | 3:-:r:-:b:-:-:0:-:1:0:0
+--expect-why
+DERIVED FROM THE CONTRACT, not recorded from a run. Twelve fields per thread
+row: the five slots `settle` writes, the two runtime fields it consumes, the
+two stubbed acts, the wake count, whether the interpreter is still loaded, and
+how many roots are left behind.
+
+1  NO SCHEDULER, AND AN ERROR IN FLIGHT -- `0:0:1:T`. Nothing saved, nothing
+   woken, the interpreter untouched, AND the error still set. A program with
+   no threads still runs its entry, and the host boundary is what reads
+   `thrown` afterwards; consuming it here would lose the only copy.
+
+2  A PARK, WITH THE SENTINEL STILL SET -- `2:on:...:-:-:1:-:0:1:0`. `2` is
+   `ST_PARKED`, `on` is the key it waits on, and both runtime fields come back
+   `-`: the park cleared BOTH. THIS ROW IS THE ORDER TEST. A park travels as
+   `thrown = PARK`, so a parked thread is also a thrown one; ask about the
+   throw first and this row reads `4:-:e:s:b:-:-:0:-:1:0:0` -- a failure, with
+   the sentinel recorded as the thread's result and its joiners woken.
+
+3  A COURTESY YIELD -- `1:-:...:1:-:0:1:0`. `1` is `ST_RUNNABLE` and
+   `TH_PARK_ON` is `-`: it waits for nothing, so `pick` may choose it again
+   with no wake at all. The saves count is still `1` -- BOTH park branches
+   save a continuation, because the thread was interrupted mid-execution
+   either way. Only the status and the wake key differ.
+
+4  A PARK ON A FIXNUM THAT IS NOT `PARK_YIELD` -- `2:on:...`, the same as row
+   2. The yield test compares BITS against one value. "Is it a fixnum" and "is
+   it not a heap object" both read this row as a yield and answer `1:-:...`,
+   and both are the mistake an author reaches for when `PARK_YIELD` is spelled
+   as the fixnum zero.
+
+5  A FAILURE -- `4:-:e:s:b:-:-:0:-:1:0:0`. The error becomes `TH_RESULT`,
+   which is what makes a dead thread impossible to ignore: its joiner
+   re-throws it. `e` REQUIRES THE PUSH BEFORE THE CLEAR -- `thrown` is not a
+   root, so the order is forced, and clearing first reads `-`. No save, one
+   wake, and `0` for the interpreter: a thread that is off has no frames, no
+   handlers and nothing rooted.
+
+6  A CLEAN FINISH -- `3:-:r:-:b:...`. The result is the value, and `TH_STACK`
+   is `-`: cleared, unlike row 5's `s`. That asymmetry is deliberate. A failed
+   thread's continuation is still on the object because nothing has decided it
+   is unreachable; a done thread's never runs again, and holding it holds its
+   whole heap.
+
+`b` IN EVERY THREAD ROW. Bindings are saved before the branch, on all three
+paths, rather than on the one path that will read them back.
+
+`0` IN THE LAST FIELD OF EVERY THREAD ROW. Every path pops to the mark it
+took, including the two that return early.
+
+FIELD 9 IS THE ROOTING RULE. The toy's `save_current_state` records `park_on`
+as it sees it, and the real one allocates while `park_on` is scanned by no
+root walk on any runtime. `-` says the clear already happened. Move the clear
+below the save and every park row reads `P`.

@@ -1470,49 +1470,13 @@ public static class Conc {
     static bool NeedsHost(Rt rt) =>
         global::_3sln.Flint.Kgen.Rt.Sched.SchedNeedsHost(rt);
 
+    /// GENERATED (`kin/settle.kin`). The end of every turn a thread takes,
+    /// and the one place that decides which of three things just happened.
+    /// Written three times before this; the park branch's clear of the PARK
+    /// sentinel was in both ports and not in native, and the generated body
+    /// keeps it.
     public static void Settle(Rt rt, long result) {
-        long th = CurrentThread(rt);
-        if (Val.IsNil(th)) return;
-        int bas = rt.Mark();
-        int ti = rt.Push(th);
-        // Dynamic bindings travel WITH the thread.
-        rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_BINDINGS, rt.roots.shared.Singletons[Rt.SingBindings]);
-        if (!Val.IsNil(rt.parkOn)) {
-            long on = rt.parkOn;
-            rt.parkOn = Val.Nil;
-            // AND the sentinel. A park travels as `thrown = PARK` so that every
-            // frame between the builtin and here unwinds; this is where it stops
-            // being in flight. Leaving it set made the NEXT thread's clean
-            // finish read as a failure -- it ran fine, returned a value, and
-            // `settle` recorded the sentinel as its result.
-            rt.thrown = Val.Nil;
-            if (on == PARK_YIELD) {
-                // A COURTESY yield: still runnable, and it must NOT rewind.
-                // Re-executing the `yield` yields again, for ever.
-                rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_STATUS, Val.Fixnum(ST_RUNNABLE));
-                rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_PARK_ON, Val.Nil);
-            } else {
-                int oi = rt.Push(on);
-                rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_STATUS, Val.Fixnum(ST_PARKED));
-                rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_PARK_ON, rt.R(oi));
-            }
-            SaveCurrentState(rt, rt.R(ti));
-        } else if (!Val.IsNil(rt.thrown)) {
-            int ei = rt.Push(rt.thrown);
-            rt.thrown = Val.Nil;
-            rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_STATUS, Val.Fixnum(ST_FAILED));
-            rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_RESULT, rt.R(ei));
-            WakeOn(rt, rt.R(ti));
-            rt.frames.Clear(); rt.handlers.Clear(); rt.roots.StackTop = 0;
-        } else {
-            int ri = rt.Push(result);
-            rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_STATUS, Val.Fixnum(ST_DONE));
-            rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_RESULT, rt.R(ri));
-            rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_STACK, Val.Nil);
-            WakeOn(rt, rt.R(ti));
-            rt.frames.Clear(); rt.handlers.Clear(); rt.roots.StackTop = 0;
-        }
-        rt.PopTo(bas);
+        global::_3sln.Flint.Kgen.Rt.Settle.SettleThread(rt, result);
     }
 
     /// Install a thread's dynamic bindings as the live ones -- see the note

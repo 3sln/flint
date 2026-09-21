@@ -7867,3 +7867,78 @@ and says nothing about which of the two rules broke.
 *A mutation should be the mistake someone would really make.* An easier
 mutation that fails more fields looks like stronger evidence and is weaker.
 
+---
+
+## `settle` generated: where a turn ends, and a clear that only two copies had
+
+2026-09-20. `kin/settle.kin` -- 105 sources. `settle` runs at the end of every
+turn a thread takes and is the ONE place that decides which of three things
+just happened: it parked, it failed, or it finished. Everything downstream --
+can this wake, is the program over, what does a joiner get -- reads the slots
+it writes. `Conc` across the three is 5 781 lines, down 112 more.
+
+**The copies had already drifted, on the park branch.** Both ports clear the
+PARK sentinel there, under a comment naming the bug that put it there: leaving
+it set made the NEXT thread's clean finish read as a failure. Native does not
+clear it -- because native's `parked` in `vm.rs` had already done so, one
+layer out. The generated body keeps the clear. It is free where it is
+redundant and load-bearing where it is not, and the two runtimes no longer
+disagree about a field all three write.
+
+*A field that two of three copies clear is not obviously a bug in the third.*
+It is a question about where the invariant lives, and generating the function
+is what forces it to be answered once.
+
+### Six mutations, six different fields
+
+    1  ask about the throw before the park      rows 2/3/4 -> `4:-:e:...`
+    2  the park branch leaves `thrown` set      field 7 -> `T`
+    3  clear `park-on` BELOW the save           field 9 -> `P`
+    4  yield tested by "not a heap object"      row 4 -> `1:-:...`
+    5  a failed thread's stack cleared too      row 5 field 4 -> `-`
+    6  `thrown` cleared before the push         row 5 field 3 -> `e` -> `-`
+
+Rows 2 and 3 are the newly-enforced rooting rule, read back. Neither `thrown`
+nor `park_on` is visited by any runtime's root walk, so the order of two
+adjacent lines is the whole invariant: `park_on` is cleared before
+`save-current-state`, which allocates, and the error is PUSHED before `thrown`
+is cleared. The toy's `save_current_state` records `park_on` as it sees it,
+which turns a rule that used to be a comment into field 9 of three rows.
+
+**Mutation 1 is the order test, and the order is not arbitrary.** A park
+travels as `thrown = PARK`, so a parked thread is ALSO a thrown one. Ask about
+the throw first and every park in the system is recorded as a failure, with
+the sentinel itself stored as the thread's result and its joiners woken to
+re-throw it.
+
+**Mutation 4 is the one an author would really write.** `PARK_YIELD` is the
+fixnum zero, so "is this not a heap object" and "is this a fixnum" both read a
+park on any fixnum key as a courtesy yield -- leaving a thread runnable that
+is waiting for something. Row 4 exists only for that: a park on `fixnum 5`,
+which is otherwise indistinguishable from row 2.
+
+**The toy gained `is-heap` for the sake of the mutation.** The contract does
+not use it. It is in the sandbox so the wrong answer can be written and run,
+which is the only way row 4 proves anything.
+
+### An asymmetry worth pinning: whose stack is cleared
+
+A DONE thread has `TH_STACK` set to nil; a FAILED one does not. That reads
+like an oversight and is not: a done thread's continuation is the one thing
+certain never to be resumed, and holding it holds its whole heap, while a
+failed thread's is still on the object because nothing has yet decided it is
+unreachable. Rows 5 and 6 differ in exactly that field (`s` against `-`) and
+mutation 5 is the tidy-up that would have erased the distinction.
+
+### `head` on a filtered build log hid a build error
+
+`cargo build --release 2>&1 | grep -E "^error" -A 6 | head -40` printed
+warnings and nothing else, and the build had in fact failed: the generated
+`settle.rs` called `save_current_state`, which was private to `conc.rs`. Forty
+lines of warnings came first. `conform-hosts` found it ten minutes later with
+"the native runtime does not build, so there is nothing to compare against".
+
+*A filter that finds the thing and a `head` that cuts before it reads exactly
+like a clean build.* Count first (`grep -c`), print second. The fix was one
+`pub(crate)`, and the ten minutes were the cost of trusting a truncated log.
+
