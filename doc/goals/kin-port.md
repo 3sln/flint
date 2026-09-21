@@ -8841,3 +8841,84 @@ same effect seen from the other side: the boot spawns threads of its own, and
 each is two slots smaller now. The gasmeter row is unchanged at 143 035,
 because a fixed offset is exactly what its subtraction cancels.
 
+---
+
+## Every constant the two ports share, gated -- and four ways the reader had been reading almost nothing
+
+2026-09-21. `--consts` paid on its first run last firing, on `Conc` alone.
+This firing ran it everywhere, and most of the work was making it actually
+read what it claimed to.
+
+**It now compares 398 constants by name across all 30 file pairs the two
+ports both have, plus 7 paired across a naming difference, and they agree on
+every one.** `bin/check-port-consts` is a gate: the two ports are meant to be
+mirrors, so a number they disagree about is a defect outright -- a type tag,
+a slot index or a format code that differs is not a wrong answer, it is
+corruption. The drift sweep beside it stays ungated, being a similarity
+heuristic.
+
+### The reader had four separate ways of seeing less than it said
+
+Each one reported `0 DISAGREE` over whatever subset it managed to parse.
+
+    name folding      `MAGIC` against `Magic` never matched, so 18 of Rt's
+                      and Snap's constants were never VALUE-compared -- while
+                      the report said "the two ports agree on every constant
+                      they share"
+    multi-line        the clr declares its type tags as ONE `public const int`
+                      over eight source lines; a line-anchored match took none
+                      of them. `Obj` went 2 shared -> 38 once joined
+    trailing comment  the jvm writes `TY_RECORD = 28;   // [type, basis, ...]`
+                      and the pattern needed the `;` to end the line. 38 -> 57
+    nested class      (found last firing, same family) the clr keeps three
+                      methods one indent deeper than the extractor anchored on
+
+Total effect: 183 constants compared before this firing's fixes, 398 after.
+**`Obj`'s type tags -- the constants in this system it is least survivable to
+disagree about -- went from 2 compared to 57.**
+
+*Four bugs, one shape.* Every one of them made a parser silently accept less
+input, and none of them could be seen in the output, because the output is a
+count of problems found and not of things looked at. So the tool reports its
+own COVERAGE now -- declarations parsed against lines that LOOK like
+declarations -- which is the cheapest way to notice the fifth.
+
+### Every one-sided name turned out to be forced by C#, not chosen
+
+    ExKindSlot   `Rt.cs` also has a METHOD `ExKind(long)`, and C# will not
+                 take two members of one type with the same name. Java's
+                 fields and methods do not collide, so the jvm keeps `EX_KIND`
+    LVals/LStr   `Str` is a class in the clr runtime
+    /LRaw
+    staleCheck   the jvm accepts `-Dflint.stale` OR `FLINT_STALE`; C# has no
+                 system properties, so the clr can only read the env var
+
+The first two are PAIRED rather than folded away -- the pair is printed with
+both values, so a mismatch is as loud as any other, and conflating `X` with
+`XSlot` silently could hide a real second constant named that. The third is
+excluded on principle: *configuration is not layout.* A developer escape
+hatch read from the environment is not a number the two runtimes have to
+agree on, and leaving it in meant this check could never read zero -- which is
+how a report starts being skimmed.
+
+### Proved failing, three ways
+
+A gate that has only ever passed is a gate nobody has tested.
+
+    a shared-name mismatch     TH_PARK_ON/TH_RESULT swapped -> both named,
+                                 with native shown as the tiebreaker
+    through the PAIRING        ExMsgSlot/ExDataSlot swapped -> 2 DISAGREE,
+                                 the path that was blind until today
+    through the GATE           TyNode 10 -> 11, exit 1, naming both values
+
+Each injection is a SWAP, which leaves the set of values unchanged. A check
+comparing "the set of slot indices" would pass all three; only a per-name
+comparison catches them.
+
+### What is still on one side only, and why it is left
+
+Eleven local-slot indices in `AotEmit` that the clr does not declare at all --
+its emitter is structured differently -- and `Gc.Stress`, which the jvm holds
+as a plain field. Both are absences rather than disagreements, listed by the
+report every run rather than suppressed.
+

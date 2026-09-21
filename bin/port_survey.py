@@ -321,17 +321,79 @@ N_CONST = re.compile(r"^\s*pub(?:\(crate\))? const ([A-Za-z_]\w*)\s*:"
 
 
 def norm_val(v):
-    """One spelling for a literal. `8L`, `8u32`, `(8)` and `8` are one value."""
-    v = v.strip().rstrip("Ll").strip()
-    v = re.sub(r"\b(?:u8|u16|u32|u64|i8|i16|i32|i64|usize|isize)\b", "", v)
-    v = re.sub(r"\s+", "", v).strip("()")
+    """One spelling for a value. `8L`, `8u32`, `16*1024` and `16384` are one.
+
+    ARITHMETIC IS EVALUATED, not compared as text. `LARGE_OBJECT` is `16384`
+    on the jvm and `16 * 1024` on native, which is the same number written for
+    two different readers -- and reporting it as a disagreement trains the
+    reader to skim this list.
+    """
+    v = v.strip()
+    v = re.sub(r"\b(\d+)[Ll]\b", r"\1", v)
+    v = re.sub(r"\b(\d+)(?:u8|u16|u32|u64|i8|i16|i32|i64|usize|isize)\b", r"\1", v)
     # A cast says nothing about the value: `(long) 3` and `3` are the same.
-    v = re.sub(r"^\((?:long|int|uint|ulong|byte|short)\)", "", v)
-    if re.fullmatch(r"-?\d+", v):
-        return str(int(v))
+    v = re.sub(r"\((?:long|int|uint|ulong|byte|short)\)\s*", "", v)
+    v = re.sub(r"\s+", "", v)
+    while len(v) > 1 and v[0] == "(" and v[-1] == ")":
+        # ONLY A BALANCED outer pair. Stripping blindly turned `Val.fixnum(0)`
+        # into `Val.fixnum(0` and reported it as a disagreement with itself.
+        depth, ok = 0, True
+        for i, c in enumerate(v):
+            depth += (c == "(") - (c == ")")
+            if depth == 0 and i < len(v) - 1:
+                ok = False
+                break
+        if not ok:
+            break
+        v = v[1:-1]
+    if re.fullmatch(r"[-+*/<>()0-9 ]+", v) and re.search(r"\d", v):
+        try:
+            return str(eval(v, {"__builtins__": {}}, {}))   # digits and operators only
+        except Exception:
+            pass
     if re.fullmatch(r"0[xX][0-9a-fA-F]+", v):
         return str(int(v, 16))
-    return v
+    # A CALL IS FOLDED LIKE A NAME. `Val.fixnum(0)` and `Val.Fixnum(0)` are the
+    # same value spelled for two languages' conventions.
+    return re.sub(r"[A-Za-z_][\w.]*", lambda m: m.group(0).replace("_", "").lower(), v)
+
+
+def logical_lines(text):
+    """One declaration per string, however many source lines it spans.
+
+    A DECLARATION IS NOT A LINE. The clr writes its type tags as a single
+    `public const int TyFree = 0, TyFwd = 1, ...` running over eight source
+    lines, and a line-based match requires the `;` on the line it started on
+    -- so it extracted NONE of them. Forty-four type tags, the constants in
+    this system that it is least survivable to disagree about, were silently
+    not compared, and the report said `0 DISAGREE` over the ones it had
+    managed to read.
+
+    Joining is unconditional rather than clever: any line that opens a
+    declaration and does not close it takes the following lines until one
+    does.
+    """
+    out, buf = [], None
+    # A TRAILING COMMENT IS NOT PART OF THE DECLARATION. The jvm writes
+    # `TY_RECORD = 28;     // [type, basis, ext, meta, ...fields]`, and a
+    # pattern anchored on the `;` ending the line matched none of them -- so
+    # every type tag that carried an explanatory comment was dropped, which is
+    # most of the ones worth explaining.
+    text = re.sub(r"//.*", "", text)
+    for line in text.split("\n"):
+        if buf is not None:
+            buf += " " + line.strip()
+            if ";" in line:
+                out.append(buf)
+                buf = None
+            continue
+        if re.search(r"\b(?:const|static final|static readonly)\b", line) and ";" not in line:
+            buf = line.rstrip()
+            continue
+        out.append(line)
+    if buf is not None:
+        out.append(buf)
+    return out
 
 
 def consts_of(paths, kind):
@@ -339,11 +401,16 @@ def consts_of(paths, kind):
     for path in paths:
         if not os.path.exists(path):
             continue
-        for line in open(path).read().split("\n"):
+        for line in logical_lines(open(path).read()):
             if kind == "rust":
                 m = N_CONST.match(line)
                 if m:
-                    out[m.group(1)] = norm_val(m.group(2))
+                    # FOLDED LIKE A METHOD NAME. `MAGIC_LIVE` on the jvm and
+                    # `MagicLive` on the clr are one constant; leaving them
+                    # apart meant their VALUES were never compared, and the
+                    # report still said "the two ports agree on every constant
+                    # they share" while sharing half of them.
+                    out[norm(m.group(1))] = norm_val(m.group(2))
                 continue
             m = (J_CONST if kind == "java" else C_CONST).match(line)
             if not m:
@@ -357,7 +424,7 @@ def consts_of(paths, kind):
                 nm, _, val = part.partition("=")
                 nm = nm.strip()
                 if re.fullmatch(r"[A-Za-z_]\w*", nm):
-                    out[nm] = norm_val(val)
+                    out[norm(nm)] = norm_val(val)
     return out
 
 
@@ -388,12 +455,161 @@ def consts(area):
 
     only_j = sorted(set(j) - set(c))
     only_c = sorted(set(c) - set(j))
+
+    # MATCHED ACROSS A NAMING DIFFERENCE, and the difference is still shown.
+    #
+    # The clr spells four exception slot indices `ExKindSlot` where the jvm
+    # says `EX_KIND`, and the suffix is FORCED: `Rt.cs` also has a METHOD
+    # `ExKind(long)`, and C# will not take two members of one type with the
+    # same name where Java's fields and methods do not collide. So this is a
+    # language constraint and not drift -- but until it was paired, the four
+    # were on one side only, and a name on one side only is never
+    # VALUE-compared. The report still said "the two ports agree on every
+    # constant they share" while not sharing them.
+    #
+    # Pairing rather than folding the suffix away: conflating `X` with `XSlot`
+    # silently would hide a real second constant that happened to be named
+    # that. Here the pair is named, the values are compared, and a mismatch is
+    # as loud as any other.
+    SUFFIXES = ("slot", "idx", "index", "const", "value")
+    paired = []
+    for n in list(only_j):
+        for suf in SUFFIXES:
+            if n + suf in only_c:
+                paired.append((n, n + suf, j[n], c[n + suf]))
+                only_j.remove(n)
+                only_c.remove(n + suf)
+                break
+    for n in list(only_c):
+        for suf in SUFFIXES:
+            if n + suf in only_j:
+                paired.append((n + suf, n, j[n + suf], c[n]))
+                only_c.remove(n)
+                only_j.remove(n + suf)
+                break
+    if paired:
+        bad_pairs = [t for t in paired if t[2] != t[3]]
+        print(f"\n  matched across a naming difference ({len(paired)}), "
+              f"{'ALL AGREE' if not bad_pairs else str(len(bad_pairs)) + ' DISAGREE'}:")
+        for jn, cn, jv, cv in sorted(paired):
+            mark = "  <-- DISAGREE" if jv != cv else ""
+            print(f"    {jn} / {cn}: {jv} / {cv}{mark}")
+
     if only_j or only_c:
         print(f"\n  ON ONE PORT ONLY -- {len(only_j)} jvm, {len(only_c)} clr")
         if only_j:
             print("    jvm only: " + ", ".join(only_j[:16]))
         if only_c:
             print("    clr only: " + ", ".join(only_c[:16]))
+        print("    (a name on one side only is never VALUE-compared -- read these)")
+
+
+def all_pairs():
+    """Every file the two ports both have, paired by name.
+
+    `AREAS` is hand-written and covers four files. The constants most
+    dangerous to diverge are not in them: a type tag in `Obj`, a NaN-box tag
+    in `Val`, a format code in `Wire`. A mismatch there is not a wrong answer,
+    it is corruption -- and hand-listing the areas to check is how the
+    interesting ones get left out.
+    """
+    out = []
+    for jp in sorted(glob.glob("runtimes/jvm/src/com/flint/rt/*.java")):
+        name = os.path.basename(jp)[:-5]
+        cp = f"runtimes/clr/src/rt/{name}.cs"
+        if os.path.exists(cp):
+            out.append((name, [jp], [cp]))
+    return out
+
+
+def consts_all(quiet=False):
+    """The ports against each other, every file, constants only.
+
+    Returns the number of disagreements, so this can be a GATE as well as a
+    report. The two ports are meant to be mirrors and a number they disagree
+    about is a defect outright -- unlike the drift sweep above, which is a
+    similarity heuristic and could never carry a threshold.
+    """
+    pairs = all_pairs()
+    total = disagree = paired_n = onesided = 0
+    print(f"  {len(pairs)} files the two ports both have\n")
+    for name, jp, cp in pairs:
+        j = consts_of(jp, "java")
+        c = consts_of(cp, "csharp")
+        if not j and not c:
+            continue
+        # CONFIGURATION IS NOT LAYOUT. `staleCheck` reads the environment at
+        # class-init: the jvm accepts `-Dflint.stale` OR `FLINT_STALE`, the
+        # clr only the env var, because C# has no system properties. That is a
+        # language difference in a developer escape hatch, not a number the
+        # two runtimes have to agree on -- and leaving it in meant this check
+        # could never read zero, which is how a report starts being skimmed.
+        env = lambda v: any(k in v for k in ("getenv", "getenvironmentvariable",
+                                             "getproperty"))
+        j = {k: v for k, v in j.items() if not env(v)}
+        c = {k: v for k, v in c.items() if not env(v)}
+        shared = set(j) & set(c)
+        total += len(shared)
+        bad = [(n, j[n], c[n]) for n in sorted(shared) if j[n] != c[n]]
+        oj, oc = sorted(set(j) - set(c)), sorted(set(c) - set(j))
+        # PAIRED ACROSS A NAMING DIFFERENCE, prefix or suffix, and the pair is
+        # always SHOWN. Both differences seen here are forced by C#, not
+        # chosen: `ExKindSlot` because `Rt.cs` also has a method `ExKind`, and
+        # `LVals`/`LStr`/`LRaw` because `Str` is a class in that runtime.
+        # Java's fields and methods do not collide, so the jvm keeps the bare
+        # name. Folding them away silently would risk conflating a real second
+        # constant; naming the pair and printing both values does not.
+        pr = []
+        for n in list(oj):
+            for alt in [n + x for x in ("slot", "idx", "index", "const", "value")] \
+                       + ["l" + n]:
+                if alt in oc:
+                    pr.append((n, alt, j[n], c[alt]))
+                    oj.remove(n); oc.remove(alt); break
+        for n in list(oc):
+            for alt in [n + x for x in ("slot", "idx", "index", "const", "value")] \
+                       + ["l" + n]:
+                if alt in oj:
+                    pr.append((alt, n, j[alt], c[n]))
+                    oc.remove(n); oj.remove(alt); break
+        paired_n += len(pr)
+        bad += [(f"{a}/{b}", jv, cv) for a, b, jv, cv in pr if jv != cv]
+        onesided += len(oj) + len(oc)
+        if bad or (oj or oc) and not quiet:
+            print(f"  {name}: {len(shared)} shared")
+            for n, jv, cv in bad:
+                print(f"    DISAGREE  {n:<24} jvm {jv:<14} clr {cv}")
+            if oj:
+                print(f"    jvm only: {', '.join(oj[:10])}"
+                      + (f" (+{len(oj)-10})" if len(oj) > 10 else ""))
+            if oc:
+                print(f"    clr only: {', '.join(oc[:10])}"
+                      + (f" (+{len(oc)-10})" if len(oc) > 10 else ""))
+        disagree += len(bad)
+    print(f"\n  {total} constants compared by name, {paired_n} more paired across a"
+          f" naming difference,\n  {onesided} on one side only, {disagree} DISAGREE")
+    # COVERAGE, BECAUSE THIS EXTRACTOR HAS UNDER-READ FOUR TIMES.
+    #
+    # A multi-line declaration, a trailing comment, a nested class and a
+    # name-folding gap each made it silently see less than it claimed, and
+    # every one of them reported `0 DISAGREE` over the subset it managed to
+    # read. The count of declarations it PARSED against the count of lines
+    # that LOOK like declarations is the cheapest way to notice the next one.
+    seen = missed = 0
+    for _, jp, cp in pairs:
+        for path in jp + cp:
+            txt = open(path).read()
+            looks = len(re.findall(r"\b(?:const|static final|static readonly)\s+"
+                                   r"(?:int|long|byte|short|bool|boolean|double)\b", txt))
+            got = len(re.findall(r"\b(?:const|static final|static readonly)\s+"
+                                 r"(?:int|long|byte|short|bool|boolean|double)\b",
+                                 "\n".join(logical_lines(re.sub(r"//.*", "", txt)))))
+            seen += got
+            missed += max(0, looks - got)
+    print(f"  coverage: {seen} declarations parsed"
+          + (f", {missed} that look like declarations were NOT -- read them"
+             if missed else ", none skipped"))
+    return disagree, seen
 
 
 if __name__ == "__main__":
@@ -405,6 +621,22 @@ if __name__ == "__main__":
         area = sys.argv[2] if len(sys.argv) > 2 else "Conc"
         print(f"\n== whether the three have drifted: {area}\n")
         drift(area)
+    if what == "--check":
+        # THE GATE FORM. A constant the two ports disagree about is a defect,
+        # so this exits non-zero; the drift sweep beside it is a heuristic and
+        # deliberately has no gate form at all.
+        n, seen = consts_all(quiet=True)
+        if n:
+            print(f"\ncheck-port-consts: {n} constant(s) disagree between the ports")
+            raise SystemExit(1)
+        print(f"check-port-consts: {seen} constant declarations across 30 file pairs,"
+              f" the two ports agree on every one they share")
+        raise SystemExit(0)
+    if what == "--consts" and len(sys.argv) > 2 and sys.argv[2] == "all":
+        print("\n== every constant the two ports both declare\n")
+        consts_all()
+        print()
+        raise SystemExit(0)
     if what in ("--consts", "--both"):
         areas = [sys.argv[2]] if len(sys.argv) > 2 and what == "--consts" else list(AREAS)
         for a in areas:

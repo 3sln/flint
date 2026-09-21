@@ -20,7 +20,7 @@ fail() { echo; echo "FAILED: $1"; exit 1; }
 t0=$(date +%s)
 
 for c in check-decisions check-flattens check-builtins check-sys-catalogue check-lib-grants \
-         check-snapshot-layout check-aotstat-layout; do
+         check-snapshot-layout check-aotstat-layout check-port-consts; do
   ./bin/$c || fail "bin/$c"
 done
 

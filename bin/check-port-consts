@@ -1,0 +1,9 @@
+#!/bin/sh
+# Every constant the two ported runtimes both declare has the same value.
+#
+# The two ports are meant to be MIRRORS, so a number they disagree about is a
+# defect outright -- a type tag, a slot index or a format code that differs is
+# not a wrong answer, it is corruption. This is a gate for that reason, where
+# the drift sweep beside it (`bin/port-survey --drift`) is a similarity
+# heuristic and has no gate form at all.
+exec python3 "$(dirname "$0")/port_survey.py" --check
