@@ -7400,7 +7400,56 @@ That is a decision about what gas MEANS.
 this section. The framing was not wrong to pose; it was answered by the gap
 turning out not to be about the scheduler at all.
 
-### LOCALISED, 2026-09-16: it is ~46.5 steps per SLICE, and the analysis above is wrong
+### ~~LOCALISED, 2026-09-16: it is ~46.5 steps per SLICE~~ CLOSED, re-measured 2026-09-20
+
+**THE PER-SLICE CHARGE IS GONE, and the note below is kept for its method.**
+The same shape of program, re-measured today across all three runtimes:
+
+    slicegap/small (20 000)   wasm 275 937   jvm 275 843   clr 275 843
+    slicegap/big   (40 000)   wasm 535 937   jvm 535 843   clr 535 843
+
+    raw gap wasm against jvm:   94 at 20 000,  94 at 40 000
+    the note below predicted:  3 164          6 190
+
+**A CONSTANT, NOT A SLOPE, which is the whole claim.** The small run is
+preempted 64 times and the big one 127; a charge of ~46.5 per slice would show
+as a gap that grew by about 2 930 between the two numbers, and it grew by
+zero. `big - small` is 260 000 on all three, to the instruction -- a loop that
+allocates nothing and calls no builtin now costs exactly the same everywhere.
+
+**The fix this section prescribed is in the tree.** It asked for the resume
+path to be generated so the three would agree by construction; `run_one` is
+`sched_run_one` / `schedRunOne` / `SchedRunOne` out of `kin/sched.kin` on all
+three, and `settle` followed it into `kin/settle.kin` on 2026-09-20. What
+closed the number, though, were the three ordinary defects listed under the
+CLOSED banner above -- the billed handler buffer, the slice-boundary billing,
+and the instruction that ran free -- not the generation. Both things are true
+and only one of them is the cause.
+
+**What is left is a fixed per-program offset**, and it is not one number: 94
+on `slicegap`, 97 on `gasmeter`. It does not move with the work within a
+program, so it is what each runtime spends getting in, and it is exactly what
+the difference-of-two-workloads method exists to cancel. `gasmeter` reports
+143 035 on wasm and on the jvm, which is the figure `bin/conform-hosts`
+asserts.
+
+**AND IT IS GATED NOW, which it was not before.** The `gasmeter` row subtracts
+two workloads, and a constant is precisely what a subtraction hides -- so for
+as long as the gap was constant, nothing in the tree could tell a fixed offset
+from a per-slice charge that had shrunk. `bin/conform-hosts` gained a
+`slicegap` row that asserts the SHAPE: the raw gap must be the same at both
+sizes. It was run against a deliberately reintroduced defect -- 46 steps
+charged per preemption on the jvm -- and read 2 850 at 20 000 against 5 794 at
+40 000, failing as it should. The row also asserts that the big run is still
+preempted far more than the small one, because two constants compared on a
+program that never crosses a slice boundary would pass for the wrong reason.
+
+**The clr is in this measurement for the first time.** The note below only
+ever compared native against the jvm; the two ports agree here to the
+instruction on both sizes.
+
+### The 2026-09-16 note, kept for its method
+
 
 The reading above -- "a PRICING difference in operations both runtimes have",
 spread across all seven parts in proportion to work -- does not survive a
@@ -7459,6 +7508,14 @@ ports call over their system ports" nor "take the scheduler out of gas" is
 required to close a 46-step-per-resume difference between two implementations
 of the same resume. They should simply agree, and the way to make them agree
 by construction is to generate the resume path.
+
+> **DONE, AND THE NUMBER WAS CLOSED BY SOMETHING ELSE.** The resume path is
+> generated -- `sched_run_one` out of `kin/sched.kin`, and `settle` out of
+> `kin/settle.kin` -- and the gap is a flat 94 rather than a slope. But it was
+> the three defects under the CLOSED banner that moved the number, not the
+> generation, and a reader who took this paragraph's word for the remedy would
+> have credited the wrong change. Re-measured 2026-09-20; see the heading
+> above this note.
 
 ### Not yet done
 

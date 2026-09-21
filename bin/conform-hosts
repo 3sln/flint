@@ -510,6 +510,93 @@ GMJS
   fi
 fi
 
+# AND THE SHAPE OF WHAT IS LEFT, which the row above cannot state.
+#
+# `DECISIONS.md#calls-are-ports` carried a LOCALISED note reading "it is ~46.5
+# steps per SLICE": a charge PROPORTIONAL to how many 4 096-step slices a
+# program crosses, measured at 3 164 steps over 20 000 iterations and 6 190
+# over 40 000. That is closed -- re-measured 2026-09-20, the gap is a CONSTANT
+# 94 at both sizes -- but nothing in this file could have told the difference,
+# because the row above subtracts two workloads and a constant is exactly what
+# a subtraction hides.
+#
+# So this asks the other question. `slicegap` is a pure arithmetic loop that
+# allocates NOTHING and calls no builtin, at two sizes with a 2x ratio, and
+# what is asserted is that the raw native-against-port gap DOES NOT MOVE with
+# the work. A fixed cost of getting started does not move; a per-slice charge
+# doubles.
+#
+# THE INSTRUMENT IS KNOWN TO HAVE POWER, which is the part worth stating: the
+# small run is preempted 64 times and the big one 127, so a charge of c per
+# preemption would show as a gap that grows by 63c. At the 46.5 this row was
+# built to catch, that is 2 930 steps of difference between two numbers this
+# asserts are equal.
+#
+# It is also the first time the CLR has been in this measurement at all -- the
+# old note only ever compared native against the jvm.
+if ./bin/flint :src runtimes/conform :fn slicegap/small --emit-image \
+     :out out/sg-small.img >/dev/null 2>&1; then
+  ./bin/flint :src runtimes/conform :fn slicegap/big --emit-image :out out/sg-big.img >/dev/null 2>&1
+  ./bin/flint :src runtimes/conform :fn slicegap/small :out out/sg-small.wasm >/dev/null 2>&1
+  ./bin/flint :src runtimes/conform :fn slicegap/big :out out/sg-big.wasm >/dev/null 2>&1
+  cat > out/sg-run.mjs <<'SGJS'
+import { load, instantiate } from '../host/flint.mjs';
+const o = {};
+for (const k of ['small', 'big']) {
+  const { module } = await load(`out/sg-${k}.wasm`);
+  const i = instantiate(module);
+  i.exports.set_step_limit(0x7ffffff0n);
+  i.run(`slicegap/${k}`, ['']);
+  o[k] = Number(i.exports.stat_steps());
+}
+console.log(`${o.small} ${o.big}`);
+SGJS
+  sg_n="$(node out/sg-run.mjs)"
+  sgn_a="${sg_n%% *}"; sgn_b="${sg_n##* }"
+  # BOTH FIELDS, ASSERTED NUMERIC. This row splits one line on a space, and a
+  # `console.log` that ever printed two lines instead would leave `sgn_a`
+  # holding a WORD -- which `$(( ))` reads as zero, making the gap equal to
+  # the whole step count and the comparison meaningless rather than failed.
+  # That is not hypothetical: it happened to a hand-run of this very block.
+  case "$sgn_a$sgn_b" in
+    *[!0-9]*|'') echo "  FAIL slicegap's wasm side did not print two numbers: [$sg_n]"; exit 1 ;;
+  esac
+  sgj_a_raw="$("$JDK/bin/java" -cp runtimes/jvm/classes RtSteps out/sg-small.img slicegap/small)"
+  sgj_b_raw="$("$JDK/bin/java" -cp runtimes/jvm/classes RtSteps out/sg-big.img slicegap/big)"
+  sgj_a="${sgj_a_raw%% *}"; sgj_a_pre="${sgj_a_raw##* }"
+  sgj_b="${sgj_b_raw%% *}"; sgj_b_pre="${sgj_b_raw##* }"
+  ga=$(( sgn_a > sgj_a ? sgn_a - sgj_a : sgj_a - sgn_a ))
+  gb=$(( sgn_b > sgj_b ? sgn_b - sgj_b : sgj_b - sgn_b ))
+  # THE POWER CLAIM, ASSERTED RATHER THAN ASSUMED. If the big run stopped
+  # being preempted substantially more than the small one, the equality below
+  # would start passing for the wrong reason -- two constants compared on a
+  # program that never crosses a slice boundary proves nothing about a
+  # per-slice charge.
+  [ "$sgj_b_pre" -gt "$(( sgj_a_pre + sgj_a_pre / 2 ))" ] \
+    || { echo "  FAIL slicegap no longer separates the two: $sgj_a_pre and $sgj_b_pre preemptions"
+         echo "       (the big run must be preempted much more, or this row cannot see a per-slice charge)"
+         exit 1; }
+  [ "$ga" = "$gb" ] \
+    || { echo "  FAIL the gas gap SCALES with the work: $ga at 20k, $gb at 40k"
+         echo "       native $sgn_a / $sgn_b against jvm $sgj_a / $sgj_b"
+         echo "       ($sgj_a_pre and $sgj_b_pre preemptions -- a per-slice charge is back)"
+         exit 1; }
+  echo "  ok   the gas gap does not scale with the work: $ga at both sizes ($sgj_a_pre/$sgj_b_pre preemptions) [jvm]"
+  if [ -n "$CLR" ]; then
+    sgc_a_raw="$("$CLR" --rt-steps out/sg-small.img slicegap/small)"
+    sgc_b_raw="$("$CLR" --rt-steps out/sg-big.img slicegap/big)"
+    sgc_a="${sgc_a_raw%% *}"; sgc_b="${sgc_b_raw%% *}"
+    [ "$sgc_a" = "$sgj_a" ] && [ "$sgc_b" = "$sgj_b" ] \
+      || { echo "  FAIL the two ports bill the interpreter differently:"
+           echo "       jvm $sgj_a / $sgj_b against clr $sgc_a / $sgc_b"; exit 1; }
+    echo "  ok     ... and the two ports agree on both, to the instruction [clr]"
+  fi
+  sgd_n=$(( sgn_b - sgn_a )); sgd_j=$(( sgj_b - sgj_a ))
+  [ "$sgd_n" = "$sgd_j" ] \
+    || { echo "  FAIL a loop that allocates nothing costs different gas: $sgd_n against $sgd_j"; exit 1; }
+  echo "  ok     ... and a loop that allocates nothing costs the same: $sgd_n"
+fi
+
 phase "gas bounds every runtime"
 # GAS IS A BOUND ON EVERY RUNTIME, not just the native one
 # (`DECISIONS.md#resource-limits`).

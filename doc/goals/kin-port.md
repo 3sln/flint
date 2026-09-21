@@ -8050,3 +8050,78 @@ neither this slice nor the last was looking for.
 *When a fix does not show up, probe something simpler that should already
 work.* If THAT is broken too, the fix was never the subject.
 
+---
+
+## The 46-steps-per-slice gap, re-measured: it is gone, and a subtraction could not have told me
+
+2026-09-20. Not a port slice. `DECISIONS.md#calls-are-ports` carried a
+LOCALISED note reading "it is ~46.5 steps per SLICE" -- a gas charge
+PROPORTIONAL to how many 4 096-step slices a program crosses -- and prescribed
+generating the resume path to close it. `run_one` HAS been generated since,
+and `settle` went the same way this week, so the record was worth re-deriving
+rather than citing.
+
+**Measured, three runtimes, a pure arithmetic loop at two sizes:**
+
+    slicegap/small (20 000)   wasm 275 937   jvm 275 843   clr 275 843
+    slicegap/big   (40 000)   wasm 535 937   jvm 535 843   clr 535 843
+
+    raw gap wasm against jvm:   94 at 20 000,  94 at 40 000
+    the note predicted:        3 164          6 190
+
+A CONSTANT, not a slope. The small run is preempted 64 times and the big one
+127, so a 46.5-per-slice charge would have grown the gap by about 2 930
+between those two numbers; it grew by zero. `big - small` is 260 000 on all
+three, to the instruction.
+
+**The prescribed fix is in place AND is not what closed it.** The three
+defects listed under the section's own CLOSED banner -- a billed handler
+buffer, slice-boundary billing, and an instruction that ran free -- moved the
+number. Generating `run_one` made the three agree by construction, which is
+worth having and is a different claim. *Both things being true is exactly how
+a record ends up crediting the wrong change.*
+
+### The instrument could not have stated the thing it was guarding
+
+`gasmeter` compares `big - small` across runtimes, which cancels whatever each
+runtime spends getting started. **A constant is precisely what a subtraction
+hides.** So for as long as the gap was constant, nothing in the tree could
+tell a fixed offset from a per-slice charge that had merely shrunk -- and
+"143 035, to the instruction" would have read as full agreement either way.
+
+`bin/conform-hosts` gained a `slicegap` row that asserts the SHAPE instead:
+the raw gap must be the SAME at both sizes. On a program that allocates
+nothing and calls no builtin, so a drift in allocation charging and a drift in
+preemption charging are no longer the same failure.
+
+**Run against a deliberately reintroduced defect** -- `rt.steps += 46` beside
+`rt.restores++` on the jvm -- it read 2 850 at 20 000 against 5 794 at 40 000
+and failed. The growth, 2 944, is the predicted 63 x 46 = 2 898 plus one extra
+preemption the injected steps themselves caused.
+
+The row also asserts that the big run is still preempted far more than the
+small one. Two constants compared on a program that never crosses a slice
+boundary would pass, and would prove nothing.
+
+### Three things this cost, all of them familiar
+
+**The existing row failed first and exited.** With the defect injected, the
+`gasmeter` ports-against-ports check fired before my new row was reached, so
+the full script could not verify it. This file already names that trap -- *a
+check that only runs when an unrelated check passes is a check you do not
+have* -- and it applies to VERIFYING a new check, not only to running one. I
+ran the new row's body standalone instead.
+
+**And the standalone run used a stale script.** My hand probe printed two
+lines (`small 275937` / `big 535937`); the row's own heredoc prints one line
+with both numbers. Splitting the two-line output on a space put the WORD
+`small` in the first field, `$(( ))` read it as zero, and the gap printed as
+278 787 -- the whole step count. It still said FAIL, for entirely the wrong
+reason. *A check that fails for the wrong reason looks exactly like a check
+that works.* The row now asserts both fields are digits before comparing them,
+which is the guard the `gasmeter` row above it already carries in prose.
+
+**The clr had never been in this measurement.** The note only ever compared
+native against the jvm. The two ports agree here to the instruction at both
+sizes -- but nobody had asked.
+
