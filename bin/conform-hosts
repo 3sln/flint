@@ -501,6 +501,45 @@ GMJS
            echo "       (the DIFFERENCE can still match while the door does not)"
            exit 1; }
     echo "  ok     ... and by the same door, absolute counts included ($ca / $cb)"
+    # AND ON THE ATTRIBUTION, not only on the count.
+    #
+    # The two rows above compare a TOTAL. A total that matches says the two
+    # ports billed the same amount and says nothing about billing it for the
+    # same things -- an instruction miscounted one way and an allocation
+    # miscounted the other cancel exactly, and this file has already been
+    # bitten twice by a difference hiding inside an aggregate: a 1% tolerance
+    # that absorbed the ports hashing twice, and a subtraction that cancelled
+    # 3 185 steps of door.
+    #
+    # `FLINT_ALLOC_HIST` makes both step reporters print three more lines --
+    # the per-type allocation histogram, the split into instructions against
+    # allocation gas, and the four charging paths with what is left
+    # UNATTRIBUTED. Those lines localised the last cross-runtime gas gap
+    # (`DECISIONS.md#calls-are-ports`), and until 2026-09-21 the clr could not
+    # produce them at all: every attribution counter was on native and the jvm
+    # and on neither of the clr's fields. A total that cannot be SPLIT on one
+    # runtime is a total nobody can localise a divergence in.
+    jh="$(FLINT_ALLOC_HIST=1 "$JDK/bin/java" -cp runtimes/jvm/classes RtSteps \
+            out/gm-big.img gasmeter/big 2>&1 | grep -E '^(HIST|SPLIT|PATHS)')"
+    ch="$(FLINT_ALLOC_HIST=1 "$CLR" --rt-steps out/gm-big.img gasmeter/big 2>&1 \
+            | grep -E '^(HIST|SPLIT|PATHS)')"
+    if [ -z "$jh" ] || [ -z "$ch" ]; then
+      echo "  FAIL a step reporter printed no attribution at all"
+      echo "       jvm: [$jh]"; echo "       clr: [$ch]"; exit 1
+    fi
+    [ "$jh" = "$ch" ] \
+      || { echo "  FAIL the two ports bill the same total for different things:"
+           printf '%s\n' "$jh" > "$FLINT_SCRATCH"/attr-jvm.txt
+           printf '%s\n' "$ch" > "$FLINT_SCRATCH"/attr-clr.txt
+           diff "$FLINT_SCRATCH"/attr-jvm.txt "$FLINT_SCRATCH"/attr-clr.txt | head -12
+           exit 1; }
+    # AND NOTHING UNACCOUNTED FOR. `unattributed` is the total minus the four
+    # paths that can charge; a non-zero means a fifth path exists and is not
+    # named, which is how a pricing difference stays invisible to the split.
+    printf '%s\n' "$jh" | grep -q 'unattributed=0' \
+      || { printf '%s\n' "$jh" | grep PATHS
+           echo "  FAIL some gas is charged by a path the split does not name"; exit 1; }
+    echo "  ok     ... and on WHAT it was billed for, line for line, nothing unattributed"
   fi
   if [ "$gap" -eq 0 ]; then
     echo "  ok   the same program costs the same gas, to the instruction: $nd [jvm]"

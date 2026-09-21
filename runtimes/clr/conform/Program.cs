@@ -814,6 +814,27 @@ public static class Program {
         HostCallRun(rt, fn, new string[]{ "" });
         // STEPS AND PREEMPTIONS -- see `RtSteps.java`.
         Console.WriteLine(rt.steps + " " + rt.restores);
+        // AND THE SAME ATTRIBUTION, under the same environment variable and in
+        // the same three lines as `RtSteps.java`, because what these are FOR
+        // is being diffed against it. A gas total that differs between the two
+        // ports is a defect; a total that cannot be SPLIT on one of them is a
+        // defect nobody can localise.
+        if (Environment.GetEnvironmentVariable("FLINT_ALLOC_HIST") != null) {
+            var sb = new System.Text.StringBuilder();
+            for (int t = 0; t < 64; t++)
+                if (rt.allocN[t] != 0)
+                    sb.Append(t).Append(':').Append(rt.allocN[t])
+                      .Append('/').Append(rt.allocGas[t]).Append(' ');
+            Console.WriteLine("HIST " + sb);
+            long ag = 0; foreach (long g in rt.allocGas) ag += g;
+            Console.WriteLine("SPLIT instrs=" + rt.instrs + " allocgas=" + ag
+                              + " other=" + (rt.steps - rt.instrs - ag)
+                              + " bytesgas=" + rt.chargeBytesGas);
+            Console.WriteLine("PATHS work=" + rt.gWork + " tick=" + rt.gTick
+                              + " checked=" + rt.gChecked
+                              + " unattributed=" + (rt.steps - rt.instrs - rt.gWork
+                                                    - rt.gTick - rt.gChecked));
+        }
         return 0;
     }
 

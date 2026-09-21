@@ -154,30 +154,72 @@ def extract(path, pat):
     return fns
 
 
-def drift():
-    jvm = extract("runtimes/jvm/src/com/flint/rt/Conc.java",
-                  r"^    (?:public |private )?static \S+ (\w+)\(")
-    clr = extract("runtimes/clr/src/rt/Conc.cs",
-                  r"^    (?:public |private |internal )?static \S+ (\w+)\(")
-    nat = extract("runtime/src/conc.rs",
-                  r"^\s*(?:pub(?:\(crate\))? )?fn (\w+)\s*[(<]")
+# WHICH FILES HOLD ONE AREA, per runtime. Native does not split the same way
+# the ports do: `Rt`'s methods live across `rt.rs`, `vm.rs` and `err.rs`, so
+# the native side of a pairing is a LIST and is concatenated before extraction.
+AREAS = {
+    "Conc": (["runtimes/jvm/src/com/flint/rt/Conc.java"],
+             ["runtimes/clr/src/rt/Conc.cs"],
+             ["runtime/src/conc.rs"]),
+    "Rt":   (["runtimes/jvm/src/com/flint/rt/Rt.java"],
+             ["runtimes/clr/src/rt/Rt.cs"],
+             ["runtime/src/rt.rs", "runtime/src/vm.rs", "runtime/src/err.rs"]),
+    "Gc":   (["runtimes/jvm/src/com/flint/rt/Gc.java"],
+             ["runtimes/clr/src/rt/Gc.cs"],
+             ["runtime/src/gc.rs"]),
+    "Snap": (["runtimes/jvm/src/com/flint/rt/Snap.java"],
+             ["runtimes/clr/src/rt/Snap.cs"],
+             ["runtime/src/snap.rs"]),
+}
+
+# INSTANCE METHODS TOO, not only statics. `Conc` is a static utility class and
+# `Rt` is not -- sweeping it with the static-only pattern found 3 of its 100-odd
+# methods and reported the file as clean, which is the shape of a pass over
+# almost nothing.
+J_PAT = (r"^    (?:(?:public|private|protected|static|final|synchronized)\s+)*"
+         r"(?:[A-Za-z_][\w.]*(?:<[^>]*>)?(?:\[\])?)\s+([A-Za-z_]\w*)\s*\(")
+C_PAT = (r"^    (?:(?:public|private|protected|internal|static|readonly|override|sealed)\s+)*"
+         r"(?:[A-Za-z_][\w.]*(?:<[^>]*>)?(?:\[\])?)\s+([A-Za-z_]\w*)\s*\(")
+N_PAT = r"^\s*(?:pub(?:\(crate\))? )?fn (\w+)\s*[(<]"
+
+
+def extract_all(paths, pat):
+    out = {}
+    for p in paths:
+        if os.path.exists(p):
+            out.update(extract(p, pat))
+    return out
+
+
+def drift(area="Conc"):
+    jpaths, cpaths, npaths = AREAS[area]
+    jvm = extract_all(jpaths, J_PAT)
+    clr = extract_all(cpaths, C_PAT)
+    nat = extract_all(npaths, N_PAT)
 
     def sim(a, b):
         ca, cb = collections.Counter(a), collections.Counter(b)
         return sum((ca & cb).values()) / max(len(a), len(b), 1)
 
-    rows = []
+    rows, pairs = [], 0
     for n, body in jvm.items():
-        if "kgen" in body or n not in clr or n not in nat:
+        if "kgen" in body or n not in clr:
             continue
         tj = toks(body)
-        if tj:
-            rows.append((sim(tj, toks(clr[n])), sim(tj, toks(nat[n])), n, len(tj)))
-    rows.sort()
-    print(f"  {len(rows)} functions hand-written in all three of Conc")
+        if not tj:
+            continue
+        pairs += 1
+        # NATIVE IS OPTIONAL in the pairing. The two PORTS are meant to be
+        # mirrors, so a difference between them is a defect outright; native
+        # differs legitimately in structure and is reported beside, not gated.
+        sn = sim(tj, toks(nat[n])) if n in nat else float("nan")
+        rows.append((sim(tj, toks(clr[n])), sn, n, len(tj)))
+    rows.sort(key=lambda r: r[0])
+    print(f"  {area}: {len(jvm)} methods on the jvm side, {pairs} hand-written and present on both ports")
     print(f"  {'jvm~clr':>8} {'jvm~nat':>8} {'toks':>5}  name   (read the lowest; the rest are spelling)")
-    for sc, sn, n, L in rows[:8]:
-        print(f"  {sc:8.2f} {sn:8.2f} {L:5}  {n}")
+    for sc, sn, n, L in rows[:10]:
+        ns = "  --  " if sn != sn else f"{sn:6.2f}"
+        print(f"  {sc:8.2f}   {ns} {L:5}  {n}")
 
 
 if __name__ == "__main__":
@@ -186,6 +228,7 @@ if __name__ == "__main__":
         print("\n== where the portable lines are\n")
         rank()
     if what in ("--drift", "--both"):
-        print("\n== whether the three have drifted\n")
-        drift()
+        area = sys.argv[2] if len(sys.argv) > 2 else "Conc"
+        print(f"\n== whether the three have drifted: {area}\n")
+        drift(area)
     print()

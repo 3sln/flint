@@ -364,6 +364,25 @@ public sealed class Rt : System.IDisposable {
     public long restores;
     public int gasTrips;
     public int memTrips;
+    /// GAS ATTRIBUTION, mirroring `Rt.java`'s counters of the same names and
+    /// native's `aotstat.rs`. They were on native and the jvm and NOT here,
+    /// which meant a gas divergence involving the clr could be seen as a
+    /// total and never split -- and splitting a total is exactly how the last
+    /// one was localised (`DECISIONS.md#calls-are-ports`).
+    ///
+    /// NONE OF THESE IS BILLED. They count what `steps` already counted, so
+    /// adding them changes no answer and no gas; `bin/conform-hosts` asserts
+    /// the instruction count is unmoved.
+    ///
+    /// Indexed by `TY_*`, 64 slots for 55 types.
+    public readonly long[] allocN = new long[64];
+    public readonly long[] allocGas = new long[64];
+    /// Instructions dispatched, separate from `steps`. `steps` is instructions
+    /// PLUS charged work, so the two together split a gas total into the part
+    /// that is the program running and the part that is work priced by size.
+    public long instrs;
+    public long gWork, gTick, gChecked;
+    public long chargeBytesGas;
     public int status;
     public bool champAdded;
 
@@ -449,7 +468,12 @@ public sealed class Rt : System.IDisposable {
         // ALLOCATION CHARGES GAS, one unit per 8 bytes, mirroring `Rt::alloc`
         // in the Rust runtime. Without it the three runtimes bill differently
         // for the same program (`DECISIONS.md#resource-limits`). Only when COUNTING.
-        if (Billing()) ChargeWork(Obj.SizeFor(ty, len) >> 3);
+        if (Billing()) {
+            long g = Obj.SizeFor(ty, len) >> 3;
+            allocN[ty & 63]++;
+            allocGas[ty & 63] += g;
+            ChargeWork(g);
+        }
         return AllocUnbilled(ty, len);
     }
 
@@ -827,6 +851,7 @@ public sealed class Rt : System.IDisposable {
             int opcode = U8(ip);
             ip += 1;
             steps++;
+            instrs++;
 
             switch (opcode) {
                 case Op.Const: { VPush(consts[U16(ip)]); ip += 2; } break;
@@ -1549,8 +1574,8 @@ public sealed class Rt : System.IDisposable {
     /// that dispatches the same opcodes but does not charge for the same scans
     /// answers a different number for the same program, and the number is the
     /// whole point.
-    public void ChargeWork(long n) { steps += n; }
-    public void ChargeBytes(long n) { ChargeWork((n / 8) + 1); }
+    public void ChargeWork(long n) { gWork += n; steps += n; }
+    public void ChargeBytes(long n) { long g = (n / 8) + 1; chargeBytesGas += g; ChargeWork(g); }
 
     public const long TICK_MASK = 63;
 
@@ -1559,6 +1584,7 @@ public sealed class Rt : System.IDisposable {
     /// `ChargeWork` only adds to a counter nobody reads until the next
     /// instruction (`DECISIONS.md#resource-limits`).
     public bool ChargeTick(long i, long n, string where) {
+        gTick += n;
         steps += n;
         if ((i & TICK_MASK) != 0) return true;
         if (gasLimit != 0 && steps >= gasLimit) { GasError(where); return false; }
@@ -1569,6 +1595,7 @@ public sealed class Rt : System.IDisposable {
     /// budget cannot cover it. Charges NOTHING when it refuses.
     public bool ChargeChecked(long n, string where) {
         if (gasLimit != 0 && steps + n >= gasLimit) { GasError(where); return false; }
+        gChecked += n;
         steps += n;
         return true;
     }

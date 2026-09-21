@@ -8579,3 +8579,86 @@ and that correction was stale within two days. *A correction decays at the
 same rate as what it corrected* -- and here what makes the count wrong is the
 work going well, which is the one cause nobody thinks to guard against.
 
+---
+
+## `Rt` swept for the first time: no divergence, but the clr could not be asked
+
+2026-09-21. Last firing's re-rank ended with *"`Rt` has never been swept"*, so
+this one swept it. `bin/port-survey --drift` gained an area argument and the
+file table each runtime uses -- native does not split the way the ports do,
+so `Rt`'s native side is `rt.rs` + `vm.rs` + `err.rs` concatenated.
+
+**The static-only pattern had to go first.** `Conc` is a static utility class
+and `Rt` is not; sweeping `Rt` with the pattern written for `Conc` found 3 of
+its 108 methods and reported the file clean. *A pass over almost nothing looks
+exactly like a pass over everything* -- the sentence `bin/check-kin` already
+carries about its own floor, met one directory over.
+
+With instance methods included: **89 pairs, and no divergence.** `Rt`'s
+jvm-against-clr scores run 0.16 to 0.67 where `Conc`'s run 0.83 and up, which
+looked alarming and is calibration. `Conc` is slot arithmetic and spells the
+same in both; `Rt` holds host data structures and the two ports chose
+differently -- `Arrays.copyOf(buf, len)` against `new int[len]` plus
+`Array.Copy`, a Java `List.get(c)` against a C# `cpsLens[c]`. **A similarity
+score is not comparable across areas**, only within one.
+
+### What the sweep actually found was a missing instrument
+
+`chargeBytes` scored low on both axes, and reading it turned up no defect --
+the arithmetic is identical. What the read turned up was the line beside it:
+
+    jvm   public bool ChargeTick(..) { gTick += n; steps += n; ...
+    clr   public bool ChargeTick(..) {            steps += n; ...
+
+Counted across the whole file, the clr was missing **every gas-attribution
+counter**: `allocN`, `allocGas`, `instrs`, `chargeBytesGas`, `gWork`, `gTick`,
+`gChecked`. It had `restores`, `gasTrips` and `memTrips` and nothing else.
+Native carries the full set in `aotstat.rs`; the jvm mirrors it; the clr
+mirrored none of it.
+
+**That is not a cosmetic gap.** `RtSteps.java` uses exactly those counters,
+behind `FLINT_ALLOC_HIST`, to print three lines -- the per-type allocation
+histogram, the split of the total into instructions against allocation gas,
+and the four charging paths with whatever is left UNATTRIBUTED. Those lines
+localised the last cross-runtime gas gap. The clr could not print them, so a
+gas divergence involving the clr could be seen as a total and never split --
+and the `Rt.java` comment beside `allocN` says why that matters in as many
+words: *"a pricing row that differs by a handful of objects cannot be
+diagnosed from a total."*
+
+The clr has them now, and they agree with the jvm field for field on both
+`gasmeter` workloads, with `unattributed=0` on each. **None of them is
+billed**, which `conform-hosts` proves by reporting the same 143 035.
+
+### The row that would have caught a cancelling miscount
+
+`conform-hosts` now diffs the whole attribution between the two ports, and
+asserts nothing is unattributed. Proved by injecting a miscount that moves
+units from `instrs` to `gWork` -- the TOTAL is untouched, so every existing
+row stays green:
+
+    ok     ... and by the same door, absolute counts included (71905 / 214940)
+    FAIL the two ports bill the same total for different things:
+    < SPLIT instrs=146825 allocgas=61381 other=6734
+    > SPLIT instrs=0      allocgas=61381 other=153559
+
+The line above the failure is the existing absolute check PASSING on the same
+run. That is the whole argument for the row: this file already carries two
+notes about a difference hiding inside an aggregate -- a 1% tolerance that
+absorbed the ports hashing twice, and a subtraction that cancelled 3 185 steps
+of door -- and *a total that matches says the two ports billed the same
+amount, not that they billed it for the same things.*
+
+`unattributed=0` is asserted separately, because a fifth charging path that
+nobody named would make the split agree while explaining less than it claims.
+
+### `bash -n` does not check a `#!/bin/sh` script
+
+I wrote `diff <(printf ...) <(printf ...)` into the new row and checked it
+with `bash -n`, which passed. `bin/conform-hosts` is `#!/bin/sh`: process
+substitution is a bashism, and the script died at runtime 28 lines in, on a
+line the syntax check had already approved.
+
+*A syntax check run under the wrong interpreter is a check of a different
+program.* `sh -n` is the one that matches the shebang, and it caught it.
+
