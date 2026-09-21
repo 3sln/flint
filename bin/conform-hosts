@@ -636,6 +636,65 @@ SGJS
   echo "  ok     ... and a loop that allocates nothing costs the same: $sgd_n"
 fi
 
+# AND A PROGRAM THAT SPAWNS, which nothing here did until 2026-09-21.
+#
+# Every gas fixture in this file exercises collections, strings and loops. Not
+# one started a THREAD -- so the size of a thread object had never been billed
+# under comparison, and allocation is charged by size. Native carried two dead
+# slots the ports did not (`TH_ARGS` and `TH_TX`, neither with a reader
+# anywhere in the tree), so `TH_LEN` was 14 against 12 and every spawn cost
+# TWO GAS more on native. Measured at 10 spawns and 40: the gap ran 114 then
+# 174, a slope of exactly 2 a spawn.
+#
+# `kin/schedmake.kin` had already noticed that drift and called it harmless,
+# because nothing READ either slot. Nothing had to: `new_obj(TY_THREAD,
+# TH_LEN)` bills for the slots whether or not anybody reads them.
+#
+# THE SLOPE IS THE ASSERTION, not the gap. A fixed cost of getting started
+# does not scale with the number of spawns and a per-object charge does, which
+# is the same shape the `slicegap` row above tests for preemptions.
+if ./bin/flint :src runtimes/conform :fn spawngas/small --emit-image \
+     :out out/sp-small.img >/dev/null 2>&1; then
+  ./bin/flint :src runtimes/conform :fn spawngas/big --emit-image :out out/sp-big.img >/dev/null 2>&1
+  ./bin/flint :src runtimes/conform :fn spawngas/small :out out/sp-small.wasm >/dev/null 2>&1
+  ./bin/flint :src runtimes/conform :fn spawngas/big :out out/sp-big.wasm >/dev/null 2>&1
+  cat > out/sp-run.mjs <<'SPJS'
+import { load, instantiate } from '../host/flint.mjs';
+const o = {};
+for (const k of ['small', 'big']) {
+  const { module } = await load(`out/sp-${k}.wasm`);
+  const i = instantiate(module);
+  i.exports.set_step_limit(0x7ffffff0n);
+  i.run(`spawngas/${k}`, ['']);
+  o[k] = Number(i.exports.stat_steps());
+}
+console.log(`${o.small} ${o.big}`);
+SPJS
+  sp_n="$(node out/sp-run.mjs)"
+  spn_a="${sp_n%% *}"; spn_b="${sp_n##* }"
+  case "$spn_a$spn_b" in
+    *[!0-9]*|'') echo "  FAIL spawngas's wasm side did not print two numbers: [$sp_n]"; exit 1 ;;
+  esac
+  spj_a="$("$JDK/bin/java" -cp runtimes/jvm/classes RtSteps out/sp-small.img spawngas/small)"
+  spj_b="$("$JDK/bin/java" -cp runtimes/jvm/classes RtSteps out/sp-big.img spawngas/big)"
+  spj_a="${spj_a%% *}"; spj_b="${spj_b%% *}"
+  spa=$(( spn_a > spj_a ? spn_a - spj_a : spj_a - spn_a ))
+  spb=$(( spn_b > spj_b ? spn_b - spj_b : spj_b - spn_b ))
+  [ "$spa" = "$spb" ] \
+    || { echo "  FAIL spawning costs different gas per thread: gap $spa at 10, $spb at 40"
+         echo "       native $spn_a / $spn_b against jvm $spj_a / $spj_b"
+         echo "       (a thread object is a different SIZE on one runtime)"
+         exit 1; }
+  echo "  ok   spawning a thread costs the same on every runtime: gap $spa at both sizes [jvm]"
+  if [ -n "$CLR" ]; then
+    spc_a="$("$CLR" --rt-steps out/sp-small.img spawngas/small)"; spc_a="${spc_a%% *}"
+    spc_b="$("$CLR" --rt-steps out/sp-big.img spawngas/big)"; spc_b="${spc_b%% *}"
+    [ "$spc_a" = "$spj_a" ] && [ "$spc_b" = "$spj_b" ] \
+      || { echo "  FAIL the two ports bill a spawn differently: $spj_a/$spj_b against $spc_a/$spc_b"; exit 1; }
+    echo "  ok     ... and the two ports agree on both, to the instruction [clr]"
+  fi
+fi
+
 phase "gas bounds every runtime"
 # GAS IS A BOUND ON EVERY RUNTIME, not just the native one
 # (`DECISIONS.md#resource-limits`).

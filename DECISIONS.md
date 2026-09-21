@@ -7719,11 +7719,21 @@ four times:
 
 So this DELETES rather than ports:
 
+> **THE TWO SLOTS ARE ACTUALLY GONE NOW, 2026-09-21, and leaving them cost
+> more than "Rust only" suggests.** `TH_ARGS` and `TH_TX` had no reader
+> anywhere in the tree, so an earlier note in `kin/schedmake.kin` called the
+> drift harmless. A thread object is allocated with `TH_LEN` slots and
+> allocation is charged by SIZE: two dead slots billed two gas on every spawn,
+> on native and not on the ports, against `resource-limits`' rule that the
+> same program costs the same gas everywhere. No fixture spawned a thread, so
+> nothing asked. `runtimes/conform/spawngas.cljc` asks now and
+> `bin/conform-hosts` asserts the per-spawn cost does not differ.
+
 | | | |
 |---|---|---|
 | `system_message` | Rust only | deleted |
 | `answer_call` | Rust only | deleted |
-| `TH_ARGS`, `TH_TX` | Rust only | deleted — `tx` is a local |
+| `TH_ARGS`, `TH_TX` | Rust only | **deleted 2026-09-21** — `tx` is a local |
 | `hostDeliver`'s system branch | Rust only | deleted |
 
 **The JVM and CLR being a generation behind mostly stops mattering**, because

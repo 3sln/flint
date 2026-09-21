@@ -6,15 +6,26 @@
 ;; missing an initialiser is a scheduler that works until the first thing to
 ;; read that slot, which may be a different program on a different day.
 ;;
-;; THE THREE COPIES HAD ALREADY DRIFTED, in three places, and every one of them
-;; was harmless -- which is the point. Native wrote `TH_ARGS` and `TH_TX` that
-;; the ports do not have at all; the ports wrote `SC_SYSTEM` that native does
-;; not. All three writes are redundant: a fresh object's slots START nil (the
-;; collector asserts it, so that a half-built object traces and reads sanely),
-;; `TH_ARGS` is vestigial by its own comment, and `TH_TX` has no reader
-;; anywhere in the tree. So nothing was broken and nobody could have noticed --
-;; and the next slot to drift would have looked exactly the same until it was
-;; one that mattered.
+;; THE THREE COPIES HAD ALREADY DRIFTED, in three places. Native wrote
+;; `TH_ARGS` and `TH_TX` that the ports do not have at all; the ports wrote
+;; `SC_SYSTEM` that native does not. All three writes are redundant: a fresh
+;; object's slots START nil (the collector asserts it, so that a half-built
+;; object traces and reads sanely), `TH_ARGS` was vestigial by its own
+;; comment, and `TH_TX` had no reader anywhere in the tree.
+;;
+;; THIS NOTE USED TO SAY THAT WAS HARMLESS, and it was wrong. Corrected
+;; 2026-09-21: a thread object is allocated `new-obj TY_THREAD TH_LEN` and
+;; allocation is CHARGED BY SIZE, so two slots nobody reads still cost two gas
+;; on every spawn -- on native and not on the ports. `TH_LEN` was 14 against
+;; 12. Measured at 10 spawns and 40, the gap ran 114 then 174: a slope of
+;; exactly 2 a spawn over a fixed startup offset.
+;;
+;; *Unread is not unbilled.* The reasoning stopped at "who reads this" when
+;; the question was "what does it cost to exist", and every gas fixture in the
+;; tree exercised collections, strings and loops -- not one spawned a thread,
+;; so nothing asked. `runtimes/conform/spawngas.cljc` asks now, and both slots
+;; are deleted, which `DECISIONS.md#bridges-are-the-only-door` had already
+;; called for.
 (ns flint.rt.schedmake
   (:require [flint.impl.rt :refer [defn return if let do comment doc
                                    == != + - not nil?

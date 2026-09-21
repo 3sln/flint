@@ -299,6 +299,103 @@ def drift(area="Conc"):
         print(f"  {sc:6.2f} {sq:6.2f} {ns} {L:5}  {n}{flag}")
 
 
+# --- the constants -----------------------------------------------------------
+#
+# METHOD BODIES ARE NOT THE WHOLE SURFACE. The drift sweep above compares what
+# the three runtimes DO and says nothing about the numbers they agree to do it
+# with. A slot index, a type tag or a capacity that differs between two ports
+# is silent to every check in this repo: the code is identical, the constant is
+# not, and the conformance transcripts only catch it if some program happens to
+# reach the slot that moved.
+#
+# This is the same shape as the last real find -- seven counters the clr did
+# not have -- one level down, at the declaration rather than the definition.
+
+J_CONST = re.compile(r"^\s*(?:public |private |protected )?static final "
+                     r"(?:int|long|byte|short|boolean|double) (.+?);\s*$")
+C_CONST = re.compile(r"^\s*(?:public |private |protected |internal )?"
+                     r"(?:const|static readonly) "
+                     r"(?:int|long|byte|short|bool|double) (.+?);\s*$")
+N_CONST = re.compile(r"^\s*pub(?:\(crate\))? const ([A-Za-z_]\w*)\s*:"
+                     r"\s*[\w:]+\s*=\s*(.+?);\s*$")
+
+
+def norm_val(v):
+    """One spelling for a literal. `8L`, `8u32`, `(8)` and `8` are one value."""
+    v = v.strip().rstrip("Ll").strip()
+    v = re.sub(r"\b(?:u8|u16|u32|u64|i8|i16|i32|i64|usize|isize)\b", "", v)
+    v = re.sub(r"\s+", "", v).strip("()")
+    # A cast says nothing about the value: `(long) 3` and `3` are the same.
+    v = re.sub(r"^\((?:long|int|uint|ulong|byte|short)\)", "", v)
+    if re.fullmatch(r"-?\d+", v):
+        return str(int(v))
+    if re.fullmatch(r"0[xX][0-9a-fA-F]+", v):
+        return str(int(v, 16))
+    return v
+
+
+def consts_of(paths, kind):
+    out = {}
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        for line in open(path).read().split("\n"):
+            if kind == "rust":
+                m = N_CONST.match(line)
+                if m:
+                    out[m.group(1)] = norm_val(m.group(2))
+                continue
+            m = (J_CONST if kind == "java" else C_CONST).match(line)
+            if not m:
+                continue
+            # ONE LINE, SEVERAL CONSTANTS. Java and C# both allow
+            # `int A = 0, B = 1;` and this file uses it heavily -- splitting on
+            # the comma is not optional, it is most of the declarations.
+            for part in m.group(1).split(","):
+                if "=" not in part:
+                    continue
+                nm, _, val = part.partition("=")
+                nm = nm.strip()
+                if re.fullmatch(r"[A-Za-z_]\w*", nm):
+                    out[nm] = norm_val(val)
+    return out
+
+
+def consts(area):
+    jpaths, cpaths, npaths = AREAS[area]
+    j = consts_of(jpaths, "java")
+    c = consts_of(cpaths, "csharp")
+    n = consts_of(npaths, "rust")
+    print(f"  {area}: {len(j)} jvm, {len(c)} clr, {len(n)} native constants")
+
+    # THE DANGEROUS CASE FIRST: same name, different number.
+    bad = []
+    for nm in sorted(set(j) & set(c)):
+        if j[nm] != c[nm]:
+            bad.append((nm, j[nm], c[nm], n.get(nm, "--")))
+    if bad:
+        print("\n  DISAGREE between the two ports:")
+        for nm, jv, cv, nv in bad:
+            print(f"    {nm:<22} jvm {jv:<12} clr {cv:<12} nat {nv}")
+    else:
+        print("  the two ports agree on every constant they share")
+
+    nat_bad = [(nm, j[nm], n[nm]) for nm in sorted(set(j) & set(n)) if j[nm] != n[nm]]
+    if nat_bad:
+        print("\n  jvm against native (native spells some differently -- read these):")
+        for nm, jv, nv in nat_bad[:12]:
+            print(f"    {nm:<22} jvm {jv:<12} nat {nv}")
+
+    only_j = sorted(set(j) - set(c))
+    only_c = sorted(set(c) - set(j))
+    if only_j or only_c:
+        print(f"\n  ON ONE PORT ONLY -- {len(only_j)} jvm, {len(only_c)} clr")
+        if only_j:
+            print("    jvm only: " + ", ".join(only_j[:16]))
+        if only_c:
+            print("    clr only: " + ", ".join(only_c[:16]))
+
+
 if __name__ == "__main__":
     what = sys.argv[1] if len(sys.argv) > 1 else "--both"
     if what in ("--rank", "--both"):
@@ -308,4 +405,9 @@ if __name__ == "__main__":
         area = sys.argv[2] if len(sys.argv) > 2 else "Conc"
         print(f"\n== whether the three have drifted: {area}\n")
         drift(area)
+    if what in ("--consts", "--both"):
+        areas = [sys.argv[2]] if len(sys.argv) > 2 and what == "--consts" else list(AREAS)
+        for a in areas:
+            print(f"\n== the numbers they agree to work with: {a}\n")
+            consts(a)
     print()

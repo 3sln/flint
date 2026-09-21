@@ -8754,3 +8754,90 @@ is referenced by no gate script, so `bin/test` would have proved nothing about
 this change; what proves it is the two injections above, re-run against the
 committed version, plus `bin/check` green.
 
+---
+
+## Two dead slots cost two gas a spawn, and "nothing reads it" was the wrong question
+
+2026-09-21. The last finding named the sweep's remaining hole: *"constants and
+field declarations are not compared -- only method bodies. A `static final int`
+that differs between the ports would pass this sweep silently."* So
+`bin/port-survey` gained `--consts`, and the first run found it.
+
+    Conc: 23 jvm, 23 clr, 77 native constants
+    jvm against native:
+      TH_LEN            jvm 12        nat 14
+
+**Native's thread object had two more slots than the ports'.** `TH_ARGS` at 12
+and `TH_TX` at 13, neither with a reader anywhere in the tree -- and both
+already condemned: `DECISIONS.md#bridges-are-the-only-door` lists them as
+*"Rust only | deleted -- `tx` is a local"*, and `kin/schedmake.kin` had
+noticed the drift in an earlier firing and called it **harmless**, because
+nothing read either one.
+
+It was not harmless. A thread object is allocated `new-obj TY_THREAD TH_LEN`
+-- from ONE kin source, generating three runtimes -- and allocation is charged
+by SIZE. Two slots nobody reads still cost two gas on every spawn.
+
+### Measured, then fixed, then measured again
+
+No fixture in the tree spawned a thread, so nothing had ever asked.
+`runtimes/conform/spawngas.cljc` spawns 10 and 40.
+
+    before        wasm 16497 / 18444     ports 16383 / 18270
+                  gap 114 at 10 spawns, 174 at 40
+                  -> 60 gas over 30 extra spawns = 2 a spawn,
+                     over a fixed 94-step startup offset
+
+    after         wasm 16471 / 18358     ports 16383 / 18270
+                  gap 88 at BOTH sizes -- no slope
+                  big - small: 1887 on every runtime
+
+The slope is exactly the prediction: two slots x 8 bytes / 8 = 2. The
+remainder, 94, is the same fixed startup offset measured two firings ago on an
+unrelated program -- which is how the arithmetic closes.
+
+`DECISIONS.md#resource-limits` says the same program costs the same gas on
+every runtime. It did not, for any program that started a thread.
+
+### *Unread is not unbilled*
+
+That is the whole of it. The earlier reasoning stopped at "who reads this
+slot" when the question was "what does it cost to exist" -- and for anything
+allocated by a length, the answer is that it costs whether or not anyone ever
+looks. The note that called it harmless is corrected in place rather than
+deleted, because the reasoning it used is the reusable part: *a slot with no
+reader is invisible to every check that asks what the code DOES.*
+
+### The rebuild that hid the fix for one measurement
+
+Deleting the slots and running `cargo build --release` changed nothing: the
+numbers came back byte-identical. The wasm runtime is not built by cargo --
+`bin/build-units` compiles the runtime to relocatable wasm objects with
+nightly rustc, and `bin/flint` only links them. One `./bin/build-units` later
+the numbers moved.
+
+*A measurement that does not move after a change is a claim about the build,
+not about the change.* The tree's own rule already says `build-dist` does not
+rebuild the CLI; this is the same rule one artefact over, and the tell was the
+numbers being IDENTICAL rather than merely close.
+
+### Gated, and the row proved with an injection
+
+`bin/conform-hosts` asserts the per-spawn cost does not differ: the raw gap
+must be the SAME at 10 spawns and at 40, which is the shape the `slicegap` row
+uses for preemptions. Proved by putting one extra slot back -- on the jvm this
+time, where the rebuild is seconds -- and watching the gap run 75 then 45.
+
+That injection also showed why the row had to be proved standalone: an extra
+thread slot shifts the gasmeter program too, so the ports-against-ports
+absolute check fires first and `conform-hosts` exits before reaching the new
+row. *The check you are trying to verify is the one the earlier checks stop
+you reaching.*
+
+### One number moved that was not the point
+
+The `slicegap` row now reads a fixed gap of 88 where it read 94. That is the
+same effect seen from the other side: the boot spawns threads of its own, and
+each is two slots smaller now. The gasmeter row is unchanged at 143 035,
+because a fixed offset is exactly what its subtraction cancels.
+

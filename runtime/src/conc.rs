@@ -65,19 +65,23 @@ pub const TH_TOKEN: u32 = 10;
 /// scheduler uses it to say "the other end of your port is gone" in the thread
 /// that cares rather than in whichever thread noticed.
 pub const TH_FAIL: u32 = 11;
-/// Arguments for the thread's entry, or nil for the no-argument case a
-/// `spawn` makes. A CALL from the host arrives with them
-/// (`DECISIONS.md#structured-ports`), and a green thread is what runs it -- the called
-/// function may open a port and park, and a call that ran on the host's stack
-/// could not.
-pub const TH_ARGS: u32 = 12;
-/// The transaction id of the CALL this thread is answering, or -1.
-///
-/// A thread with one sends its result back on the system port when it finishes,
-/// which is the whole of "nothing is called automatically": there is no entry
-/// point the runtime invokes, only calls the host asks for and answers it gets.
-pub const TH_TX: u32 = 13;
-pub const TH_LEN: u32 = 14;
+// `TH_ARGS` AND `TH_TX` WERE HERE, at 12 and 13, and are deleted --
+// `DECISIONS.md#bridges-are-the-only-door` says to: the system thread is an
+// ordinary flint closure, the loop lives in `lib/`, and `:tx` is a LOCAL in
+// that loop. Neither slot had a reader anywhere in the tree.
+//
+// `kin/schedmake.kin` noticed the drift and called it harmless, because
+// nothing read either one. IT WAS NOT HARMLESS. A thread object is allocated
+// with `TH_LEN` slots and allocation is charged by size, so two dead slots
+// cost TWO GAS PER SPAWN -- on native and not on the ports, for any program
+// that starts a thread. Measured before the deletion, 10 spawns against 40:
+// the gap ran 114 then 174, a slope of exactly 2 a spawn over a fixed
+// 94-step startup offset.
+//
+// `DECISIONS.md#resource-limits` says the same program costs the same gas on
+// every runtime. It did not, and no fixture spawned a thread, so nothing
+// asked. `runtimes/conform/spawngas.cljc` asks now.
+pub const TH_LEN: u32 = 12;
 
 pub const ST_NEW: i64 = 0;
 pub const ST_RUNNABLE: i64 = 1;
