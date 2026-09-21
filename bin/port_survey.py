@@ -21,7 +21,7 @@ portable on several hundred of them; a host callback table; and a host object
 allocated into a host list. A method that has to be reimplemented to be re-run
 is a method that will be reimplemented differently.
 """
-import re, glob, os, sys, collections
+import re, glob, os, sys, collections, difflib
 
 # --- the rank ---------------------------------------------------------------
 
@@ -114,12 +114,34 @@ def norm(tok):
     return re.sub(r"(?<!^)(?=[A-Z])", "", tok.replace("_", "")).lower()
 
 
+# OPERATORS ARE TOKENS TOO, and leaving them out was the tool's biggest hole.
+# Identifiers and numbers alone cannot see `<` become `<=`, `==` become `!=`,
+# or `+` become `-` -- which is to say it could not see an off-by-one or an
+# inverted test, the two divergences most worth finding. Demonstrated: flipping
+# `<` to `<=` in the collector's `InFrom` address predicate, a real boundary
+# bug, moved the similarity score by exactly zero.
+#
+# LONGEST MATCH FIRST, or `<=` reads as `<` then `=`. And `->`/`=>` are
+# EXCLUDED: they are a Java lambda and a C# expression body, syntax the two
+# languages spell differently for the same thing, so including them would add
+# noise to the one comparison that matters most.
+OPS = (r"<<=|>>>=|>>=|>>>|<<|>>|<=|>=|==|!=|&&|\|\||[-+*/%&|^!<>~]")
+
+
 def toks(body):
     body = re.sub(r"//.*|/\*.*?\*/|///.*", "", body, flags=re.S)
     body = re.sub(r'"(?:[^"\\]|\\.)*"', " STR ", body)
-    return [t for t in (norm(m.group(0))
-            for m in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+", body))
-            if t and t not in NOISE]
+    body = body.replace("->", " ").replace("=>", " ")
+    out = []
+    for m in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+|" + OPS, body):
+        t = m.group(0)
+        if t[0].isalpha() or t[0] == "_" or t[0].isdigit():
+            t = norm(t)
+            if t and t not in NOISE:
+                out.append(t)
+        else:
+            out.append(t)
+    return out
 
 
 def extract(path, pat):
@@ -176,9 +198,20 @@ AREAS = {
 # `Rt` is not -- sweeping it with the static-only pattern found 3 of its 100-odd
 # methods and reported the file as clean, which is the shape of a pass over
 # almost nothing.
-J_PAT = (r"^    (?:(?:public|private|protected|static|final|synchronized)\s+)*"
+# INDENT `\s{4,}`, NOT EXACTLY FOUR. The clr keeps `NewOpaque`, `NewTagged`
+# and `OpaqueHostId` inside a NESTED class at eight spaces, so a four-space
+# anchor missed all three and the absence report named them as jvm-only. A
+# report of what one side is missing must not be able to invent an absence.
+#
+# The keyword guard is what makes the looser anchor safe: at eight spaces
+# `new Frame(` reads as type `new`, name `Frame`, and `return Foo(` as type
+# `return`.
+NOT_A_TYPE = r"(?!(?:new|return|if|while|for|switch|else|catch|using|lock|throw)\b)"
+J_PAT = (r"^\s{4,}(?:(?:public|private|protected|static|final|synchronized)\s+)*"
+         + NOT_A_TYPE +
          r"(?:[A-Za-z_][\w.]*(?:<[^>]*>)?(?:\[\])?)\s+([A-Za-z_]\w*)\s*\(")
-C_PAT = (r"^    (?:(?:public|private|protected|internal|static|readonly|override|sealed)\s+)*"
+C_PAT = (r"^\s{4,}(?:(?:public|private|protected|internal|static|readonly|override|sealed)\s+)*"
+         + NOT_A_TYPE +
          r"(?:[A-Za-z_][\w.]*(?:<[^>]*>)?(?:\[\])?)\s+([A-Za-z_]\w*)\s*\(")
 N_PAT = r"^\s*(?:pub(?:\(crate\))? )?fn (\w+)\s*[(<]"
 
@@ -198,8 +231,43 @@ def drift(area="Conc"):
     nat = extract_all(npaths, N_PAT)
 
     def sim(a, b):
+        """How much of the same VOCABULARY, ignoring order."""
         ca, cb = collections.Counter(a), collections.Counter(b)
         return sum((ca & cb).values()) / max(len(a), len(b), 1)
+
+    def seq(a, b):
+        """How much of the same SEQUENCE.
+
+        A multiset comparison cannot see a reordering: swap two statements and
+        the tokens are identical. That is the blind spot that matters most
+        here, because ORDER is where this project's real bugs have been --
+        rooting a value after the call that allocates, clearing a field after
+        the save that reads it, waking before the state write. `sim` high and
+        `seq` low means the two sides say the same words in a different order,
+        which is the signal worth reading.
+        """
+        return difflib.SequenceMatcher(None, a, b).ratio()
+
+    # PRESENT ON ONE PORT AND NOT THE OTHER, reported FIRST. The pairwise
+    # comparison below can only look at methods both sides have, so the one
+    # thing it structurally cannot see is an absence -- and an absence is what
+    # the last real find was: the clr was missing seven gas-attribution
+    # counters the jvm had, so a divergence involving it could be seen as a
+    # total and never split.
+    #
+    # Names are folded the same way the bodies are, so `wakeOn` and `WakeOn`
+    # are one name and a genuine spelling difference is not reported as a gap.
+    only_j = sorted(set(jvm) - set(clr))
+    only_c = sorted(set(clr) - set(jvm))
+    if only_j or only_c:
+        print(f"  ONLY ON ONE PORT -- {len(only_j)} jvm, {len(only_c)} clr")
+        if only_j:
+            print("    jvm only: " + ", ".join(only_j[:14])
+                  + (f" (+{len(only_j)-14})" if len(only_j) > 14 else ""))
+        if only_c:
+            print("    clr only: " + ", ".join(only_c[:14])
+                  + (f" (+{len(only_c)-14})" if len(only_c) > 14 else ""))
+        print()
 
     rows, pairs = [], 0
     for n, body in jvm.items():
@@ -212,14 +280,23 @@ def drift(area="Conc"):
         # NATIVE IS OPTIONAL in the pairing. The two PORTS are meant to be
         # mirrors, so a difference between them is a defect outright; native
         # differs legitimately in structure and is reported beside, not gated.
+        tc = toks(clr[n])
         sn = sim(tj, toks(nat[n])) if n in nat else float("nan")
-        rows.append((sim(tj, toks(clr[n])), sn, n, len(tj)))
-    rows.sort(key=lambda r: r[0])
+        rows.append((sim(tj, tc), seq(tj, tc), sn, n, len(tj)))
+    rows.sort(key=lambda r: min(r[0], r[1]))
     print(f"  {area}: {len(jvm)} methods on the jvm side, {pairs} hand-written and present on both ports")
-    print(f"  {'jvm~clr':>8} {'jvm~nat':>8} {'toks':>5}  name   (read the lowest; the rest are spelling)")
-    for sc, sn, n, L in rows[:10]:
+    print(f"  {'words':>6} {'order':>6} {'~nat':>6} {'toks':>5}  name")
+    for sc, sq, sn, n, L in rows[:10]:
         ns = "  --  " if sn != sn else f"{sn:6.2f}"
-        print(f"  {sc:8.2f}   {ns} {L:5}  {n}")
+        # SAME WORDS, DIFFERENT ORDER is the row to read first: it is what a
+        # reordering looks like and what the multiset alone cannot show.
+        # THE GAP SCALES WITH HOW MUCH MOVED, not with how bad it is: three
+        # statements swapped inside an 80-token function shifts `order` by
+        # 0.06 and leaves `words` untouched. So the threshold is small on
+        # purpose, and the flag means "read this for ORDER" rather than
+        # "this is wrong".
+        flag = "  <-- same words, different order" if sc - sq > 0.04 else ""
+        print(f"  {sc:6.2f} {sq:6.2f} {ns} {L:5}  {n}{flag}")
 
 
 if __name__ == "__main__":

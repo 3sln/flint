@@ -8662,3 +8662,95 @@ line the syntax check had already approved.
 *A syntax check run under the wrong interpreter is a check of a different
 program.* `sh -n` is the one that matches the shebang, and it caught it.
 
+---
+
+## The sweep could not see an off-by-one, and two earlier "no divergence" findings were weaker than they read
+
+2026-09-21. `Gc` and `Snap` had never been swept, so this firing swept them --
+and then asked whether the sweep could see anything.
+
+**It could not see an operator.** `toks()` matched
+`[A-Za-z_][A-Za-z0-9_]*|[0-9]+`: identifiers and numbers, nothing else. So
+`<` against `<=`, `==` against `!=`, `+` against `-` were all invisible --
+which is to say it could not see an off-by-one or an inverted test, the two
+divergences most worth finding.
+
+Demonstrated rather than reasoned. Flipping `<` to `<=` in the collector's
+`InFrom` -- a real boundary bug, an address exactly at `half` classified into
+the wrong space -- moved the similarity score by **exactly zero**.
+
+    before injection   0.67  infrom
+    after  injection   0.67  infrom
+
+**So the two findings that said "no divergence" were weaker than they read.**
+*The residue has converged* (Conc, 39 functions) and *Rt swept, 89 pairs, no
+divergence* were both produced by this tokeniser. Neither conclusion has
+changed -- everything has been re-run and re-read below -- but both were worth
+less at the time than they claimed, and nothing in them said so.
+
+### Operators are tokens now, and order is a second measure
+
+With operators in, the same injection moves 0.75 -> 0.62. Longest-match first,
+or `<=` reads as `<` then `=`; and `->`/`=>` are excluded, being a Java lambda
+and a C# expression body -- the same thing spelled differently, which is noise
+in the one comparison that matters most.
+
+**The second hole was order.** A multiset comparison cannot see a reordering:
+swap two statements and the tokens are identical. That is the blind spot that
+matters most here, because ORDER is where this project's real bugs have been
+-- rooting a value after the call that allocates, clearing a field after the
+save that reads it, binding before pushing. Every one of those is invisible to
+a bag of words.
+
+There are two columns now, `words` and `order`, sorted on the lower of the
+two. Swapping three statements inside `SweepOld` leaves `words` at 0.82 and
+drops `order` to 0.76. *The gap scales with how much moved, not with how bad
+it is*, so the flag means "read this for order" and not "this is wrong".
+
+### And a third hole: it could only compare what both sides HAVE
+
+The pairwise walk skips any method one port lacks -- which is structurally
+blind to exactly the shape of the last real find, the clr missing seven
+gas-attribution counters. The absence is reported first now.
+
+It found three leads and all three are benign, which is the useful outcome for
+a first run: `installBridgePort2` is a named method Java needs for
+`Conc::installBridgePort2` where C# writes a lambda -- and the builtin that
+calls it passes `(id, NIL, true)` on both; `AddExact`/`MulExact`/`SubExact`
+are C# standing in for `Math.addExact`; `Dispose` is `IDisposable`.
+
+**The absence report invented three absences on its first run**, and that had
+to be fixed before it could be believed: the clr keeps `NewOpaque`,
+`NewTagged` and `OpaqueHostId` inside a NESTED class at eight spaces, and the
+extractor anchored on exactly four. *A report of what one side is missing must
+not be able to invent an absence* -- it is the one kind of finding a reader
+cannot check cheaply, because the evidence is that nothing is there.
+
+### Re-swept, and the result holds
+
+All four areas, with operators, order and absences: **Conc 43 pairs, Rt 92,
+Gc 26, Snap 14 -- 175, and none disagrees.** Every low scorer read out as
+idiom:
+
+    Long.compareUnsigned(x, y) < 0   against  (ulong)x < (ulong)y
+    Arrays.copyOf(buf, len)          against  new int[len] + Array.Copy
+    new String(bytes, UTF_8)         against  Encoding.UTF8.GetString(bytes)
+    list.isEmpty()                   against  list.Count == 0
+
+Those same idioms are why the order flag has a real false-positive rate: a
+cast moves the `<` relative to its operands, so three of `Gc`'s four address
+predicates flag while being equivalent. It is a reading prompt, not a gate,
+and `bin/port-survey`'s docstring says so.
+
+### What is still not covered, said plainly
+
+Constants and field declarations are not compared -- only method bodies. A
+`static final int` that differs between the ports would pass this sweep
+silently, and that is the same shape as the missing counters. Named here
+rather than left for the next person to find out by being wrong about it.
+
+**Not gated, and the full gate was not the instrument.** `bin/port_survey.py`
+is referenced by no gate script, so `bin/test` would have proved nothing about
+this change; what proves it is the two injections above, re-run against the
+committed version, plus `bin/check` green.
+
