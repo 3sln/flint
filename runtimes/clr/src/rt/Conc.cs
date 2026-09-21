@@ -870,47 +870,13 @@ public static class Conc {
         return outv;
     }
 
+    /// GENERATED (`kin/portrecv.kin`). The read half of the port protocol.
+    /// The `NeedPort` check and its message are a host string and stay here,
+    /// which is also where they belong in the order: nothing is rooted yet
+    /// when that test runs.
     public static long Receive(Rt rt, long p) {
         if (!NeedPort(rt, p, "receive")) return Val.Nil;
-        int bas = rt.Mark();
-        int pi = rt.Push(p);
-        if (InboxCount(rt, rt.R(pi)) > 0) {
-            int vi = rt.Push(Dequeue(rt, rt.R(pi)));
-            if (CrossesAHeap(Fx(rt.Slot(rt.R(pi), PT_KIND)))) {
-                // A bridge queues `[len value]`, and `len` is what
-                // `HostDeliver` actually CHARGED -- the length of the encoded
-                // message, which is what bounds the host's queue.
-                //
-                // It used to be recomputed from the value, `Str.ByteLen` on
-                // whatever came out of the ring. That was wrong twice: it
-                // refunded the string's length where the encoded length had
-                // been charged, and once a bridge carried VALUES it walked a
-                // keyword as a string. On the Rust that was a segfault.
-                long item = rt.R(vi);
-                long n = Fx(Vec.Nth(rt, item, 0, Val.NotFound));
-            // `[len bytes ports]`. The ports are dropped here, which is where
-            // this stops short of the two-phase design.
-                rt.SetR(vi, Vec.Nth(rt, item, 1, Val.NotFound));
-                long queued = Fx(rt.Slot(rt.R(pi), PT_BYTES));
-                rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_BYTES, Val.Fixnum(queued > n ? queued - n : 0));
-            }
-            // Space freed: whoever was blocked sending here can try again.
-            WakeOn(rt, rt.R(pi));
-            long outv = rt.R(vi);
-            rt.PopTo(bas);
-            return outv;
-        }
-        // WHAT A DRAINED PORT DOES IS GENERATED, from `kin/portdrain.kin`.
-        // Only the THROW stays here, its message being a host string.
-        int drained = global::_3sln.Flint.Kgen.Rt.Portdrain.ReceiveDrained(rt, rt.R(pi));
-        if (drained == 1) { rt.PopTo(bas); return Val.Nil; }
-        if (drained == 2) {
-            rt.PopTo(bas);
-            return rt.ThrowStr("IllegalStateException", "receive: the other end of this port is gone, so this can never complete");
-        }
-        long target = rt.R(pi);
-        rt.PopTo(bas);
-        return ParkOnPort(rt, WK_RECEIVE, target);
+        return global::_3sln.Flint.Kgen.Rt.Portrecv.ReceiveAt(rt, p);
     }
 
     public static long Close(Rt rt, long p) {

@@ -1,0 +1,359 @@
+--rust-head
+// A TOY PORT WITH A ONE-MESSAGE RING. What `receive` DOES is decide: hand
+// back a message and refund, end the stream, refuse, or park. So the ring
+// itself is a pair of dials -- how many messages, and what the next one is --
+// and the four outcomes are recorded.
+//
+// `ring-dequeue`, `receive-drained` and `park-on-port` are STUBBED, not
+// modelled: what each builds is pinned in its own drivers file, and what
+// matters here is WHICH is reached and with what.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_0000_0000_0000);
+mod conc {
+    pub const PT_BYTES: u32 = 0;
+    pub const PT_KIND: u32 = 1;
+    // THE REAL VALUES, because the expected answers name them.
+    pub const K_CHANNEL: i64 = 0;
+    pub const K_BRIDGE: i64 = 1;
+    pub const WK_RECEIVE: i64 = 3;
+    pub fn crosses_a_heap(k: i64) -> bool { k == K_BRIDGE }
+}
+impl Value {
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn is_nil(self) -> bool { self == NIL }
+}
+struct Rt {
+    // HANDLES AT 1000, VECTORS AT 5000, so a handle cannot be read as a
+    // fixnum kind and the two tables cannot be confused for each other.
+    objs: Vec<Vec<Value>>,
+    vecs: Vec<Vec<Value>>,
+    rootv: Vec<Value>,
+    inbox: i32,
+    queued: Value,
+    drained: u32,
+    wakes: u32,
+    threw: Vec<(String, String)>,
+    parked: Vec<i64>,
+}
+impl Rt {
+    fn obj(&mut self, slots: Vec<Value>) -> Value {
+        self.objs.push(slots);
+        Value((self.objs.len() - 1) as u64 + 1000)
+    }
+    fn vec(&mut self, items: Vec<Value>) -> Value {
+        self.vecs.push(items);
+        Value((self.vecs.len() - 1) as u64 + 5000)
+    }
+    fn slot(&self, v: Value, i: u32) -> Value { self.objs[(v.0 - 1000) as usize][i as usize] }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.objs[(v.0 - 1000) as usize][i as usize] = x; }
+    fn mark(&self) -> usize { self.rootv.len() }
+    fn push(&mut self, v: Value) -> usize { self.rootv.push(v); self.rootv.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.rootv[i] }
+    fn set_r(&mut self, i: usize, v: Value) { self.rootv[i] = v; }
+    fn pop_to(&mut self, i: usize) { self.rootv.truncate(i); }
+    fn vec_nth(&mut self, v: Value, i: u32, dflt: Value) -> Value {
+        let items = &self.vecs[(v.0 - 5000) as usize];
+        if (i as usize) < items.len() { items[i as usize] } else { dflt }
+    }
+    fn ring_inbox_count(&mut self, _p: Value) -> i32 { self.inbox }
+    fn ring_dequeue(&mut self, _p: Value) -> Value { self.inbox -= 1; self.queued }
+    fn receive_drained(&mut self, _p: Value) -> u32 { self.drained }
+    fn wake_on(&mut self, _p: Value) { self.wakes += 1; }
+    fn park_on_port(&mut self, kind: i64, _p: Value) -> Value {
+        self.parked.push(kind);
+        Value(3000)
+    }
+    fn throw_str(&mut self, class: &str, msg: &str) -> Value {
+        self.threw.push((class.into(), msg.into()));
+        NIL
+    }
+--rust
+}
+fn fresh() -> Rt {
+    Rt { objs: vec![], vecs: vec![], rootv: vec![], inbox: 0, queued: NIL,
+         drained: 0, wakes: 0, threw: vec![], parked: vec![] }
+}
+// `<answer>:<PT_BYTES after>:<wakes>:<throw>:<parks>:<roots left>`
+fn run(kind: i64, bytes: i64, msg_len: i64, has_msg: bool, drained: u32) -> String {
+    let mut rt = fresh();
+    let p = rt.obj(vec![Value::fixnum(bytes), Value::fixnum(kind)]);
+    // The payload a bridge queues is `[len bytes ports]`; a channel queues the
+    // value itself. Both go through the same ring.
+    let payload = rt.obj(vec![]);
+    let ports = rt.obj(vec![]);
+    let trip = rt.vec(vec![Value::fixnum(msg_len), payload, ports]);
+    if has_msg {
+        rt.inbox = 1;
+        rt.queued = if kind == conc::K_BRIDGE { trip } else { payload };
+    }
+    rt.drained = drained;
+    let ans = rt.receive_at(p);
+    let name = if ans.is_nil() { "-".to_string() }
+               else if ans == payload { "v".to_string() }
+               else if ans == trip { "trip".to_string() }
+               else if ans.0 == 3000 { "park".to_string() }
+               else { "?".to_string() };
+    let thr = match rt.threw.last() {
+        None => "-".to_string(),
+        Some((c, m)) => format!("{}:{}",
+            if c == "IllegalStateException" { "IS" } else { "??" },
+            if m.starts_with("receive: the other end") { 1 } else { 0 }),
+    };
+    let parks = match rt.parked.last() {
+        None => "0".to_string(),
+        Some(k) => format!("1@{}", k),
+    };
+    format!("{}:{}:{}:{}:{}:{}",
+            name, rt.slot(p, conc::PT_BYTES).as_fixnum(), rt.wakes, thr, parks,
+            rt.rootv.len())
+}
+fn main() {
+    // 1. A CHANNEL WITH A MESSAGE. The value back, and NOTHING refunded: the
+    //    byte budget bounds what crosses a HEAP, and a channel's messages
+    //    never leave this one.
+    let r1 = run(conc::K_CHANNEL, 100, 30, true, 0);
+    // 2. A BRIDGE WITH A MESSAGE. The BYTES element back -- not the triple --
+    //    and the refund is the length that was CHARGED, read from slot 0.
+    let r2 = run(conc::K_BRIDGE, 100, 30, true, 0);
+    // 3. A REFUND LARGER THAN THE BALANCE. Clamped at zero, not negative: a
+    //    negative budget would refuse every later send for ever.
+    let r3 = run(conc::K_BRIDGE, 10, 30, true, 0);
+    // 4. A REFUND EXACTLY THE BALANCE. Also zero, and it is the boundary the
+    //    `>` sits on -- `>=` and `>` differ here and nowhere else.
+    let r4 = run(conc::K_BRIDGE, 30, 30, true, 0);
+    // 5. EMPTY, AND THE STREAM HAS ENDED. Nil, no wake, no park: there is
+    //    nothing to wait for and nothing was freed.
+    let r5 = run(conc::K_BRIDGE, 100, 30, false, 1);
+    // 6. EMPTY, AND THE FAR END IS GONE. A throw, by class and by message.
+    let r6 = run(conc::K_BRIDGE, 100, 30, false, 2);
+    // 7. EMPTY, AND STILL LIVE. Parked, on the receive wait kind.
+    let r7 = run(conc::K_BRIDGE, 100, 30, false, 0);
+    println!("{} | {} | {} | {} | {} | {} | {}", r1, r2, r3, r4, r5, r6, r7);
+}
+--java-head
+    // THE SAME TOY, field for field.
+    static final long NIL = 0xFFFF000000000000L;
+    static final class Val {
+        static final long NIL = 0xFFFF000000000000L;
+        static boolean isNil(long v) { return v == NIL; }
+        static long fixnum(long n) { return n; }
+        static long asFixnum(long v) { return v; }
+        static long asHeap(long v) { return v; }
+    }
+    static final class Conc {
+        static final int PT_BYTES = 0, PT_KIND = 1;
+        static final long K_CHANNEL = 0, K_BRIDGE = 1, WK_RECEIVE = 3;
+        static boolean crossesAHeap(long k) { return k == K_BRIDGE; }
+        static void wakeOn(Rt rt, long p) { rt.wakes++; }
+    }
+    // BARE, not on a class: cross-namespace kin calls land unqualified.
+    static int ringInboxCount(Rt rt, long p) { return rt.inbox; }
+    static long ringDequeue(Rt rt, long p) { rt.inbox--; return rt.queued; }
+    static int receiveDrained(Rt rt, long p) { return rt.drained; }
+    static long vecNth(Rt rt, long v, int i, long dflt) {
+        java.util.List<Long> items = rt.vecs.get((int) (v - 5000));
+        return i < items.size() ? items.get(i) : dflt;
+    }
+    static long parkOnPort(Rt rt, long kind, long p) { rt.parked.add(kind); return 3000L; }
+    static final class Rt {
+        java.util.List<long[]> objs = new java.util.ArrayList<>();
+        java.util.List<java.util.List<Long>> vecs = new java.util.ArrayList<>();
+        java.util.List<Long> rootv = new java.util.ArrayList<>();
+        java.util.List<String> threwC = new java.util.ArrayList<>();
+        java.util.List<String> threwM = new java.util.ArrayList<>();
+        java.util.List<Long> parked = new java.util.ArrayList<>();
+        int inbox = 0, drained = 0, wakes = 0;
+        long queued = NIL;
+        long obj(long[] slots) { objs.add(slots); return objs.size() - 1 + 1000; }
+        long vec(java.util.List<Long> items) { vecs.add(items); return vecs.size() - 1 + 5000; }
+        long slot(long v, int i) { return objs.get((int) (v - 1000))[i]; }
+        void setSlot(long v, int i, long x) { objs.get((int) (v - 1000))[i] = x; }
+        int mark() { return rootv.size(); }
+        int push(long v) { rootv.add(v); return rootv.size() - 1; }
+        long r(int i) { return rootv.get(i); }
+        void setR(int i, long v) { rootv.set(i, v); }
+        void popTo(int i) { while (rootv.size() > i) rootv.remove(rootv.size() - 1); }
+        long throwStr(String c, String m) { threwC.add(c); threwM.add(m); return NIL; }
+    }
+--java
+    static Rt fresh() { return new Rt(); }
+    static String run(long kind, long bytes, long msgLen, boolean hasMsg, int drained) {
+        Rt rt = fresh();
+        long p = rt.obj(new long[]{bytes, kind});
+        long payload = rt.obj(new long[]{});
+        long ports = rt.obj(new long[]{});
+        java.util.List<Long> items = new java.util.ArrayList<>();
+        items.add(msgLen); items.add(payload); items.add(ports);
+        long trip = rt.vec(items);
+        if (hasMsg) {
+            rt.inbox = 1;
+            rt.queued = (kind == Conc.K_BRIDGE) ? trip : payload;
+        }
+        rt.drained = drained;
+        long ans = receiveAt(rt, p);
+        String name = (ans == NIL) ? "-"
+                    : (ans == payload) ? "v"
+                    : (ans == trip) ? "trip"
+                    : (ans == 3000L) ? "park" : "?";
+        String thr;
+        if (rt.threwC.isEmpty()) thr = "-";
+        else {
+            String c = rt.threwC.get(rt.threwC.size() - 1);
+            String m = rt.threwM.get(rt.threwM.size() - 1);
+            thr = (c.equals("IllegalStateException") ? "IS" : "??") + ":"
+                + (m.startsWith("receive: the other end") ? 1 : 0);
+        }
+        String parks = rt.parked.isEmpty() ? "0" : "1@" + rt.parked.get(rt.parked.size() - 1);
+        return name + ":" + rt.slot(p, Conc.PT_BYTES) + ":" + rt.wakes + ":" + thr
+             + ":" + parks + ":" + rt.rootv.size();
+    }
+    public static void main(String[] args) {
+        System.out.println(
+            run(Conc.K_CHANNEL, 100, 30, true, 0) + " | " +
+            run(Conc.K_BRIDGE, 100, 30, true, 0) + " | " +
+            run(Conc.K_BRIDGE, 10, 30, true, 0) + " | " +
+            run(Conc.K_BRIDGE, 30, 30, true, 0) + " | " +
+            run(Conc.K_BRIDGE, 100, 30, false, 1) + " | " +
+            run(Conc.K_BRIDGE, 100, 30, false, 2) + " | " +
+            run(Conc.K_BRIDGE, 100, 30, false, 0));
+    }
+--csharp-head
+    // THE SAME TOY, field for field.
+    const long NIL = unchecked((long) 0xFFFF000000000000UL);
+    public static class Val {
+        public const long Nil = unchecked((long) 0xFFFF000000000000UL);
+        public static bool IsNil(long v) { return v == Nil; }
+        public static long Fixnum(long n) { return n; }
+        public static long AsFixnum(long v) { return v; }
+        public static long AsHeap(long v) { return v; }
+    }
+    public static class Conc {
+        public const int PT_BYTES = 0, PT_KIND = 1;
+        public const long K_CHANNEL = 0, K_BRIDGE = 1, WK_RECEIVE = 3;
+        public static bool CrossesAHeap(long k) { return k == K_BRIDGE; }
+        public static void WakeOn(Rt rt, long p) { rt.wakes++; }
+    }
+    static int RingInboxCount(Rt rt, long p) { return rt.inbox; }
+    static long RingDequeue(Rt rt, long p) { rt.inbox--; return rt.queued; }
+    static int ReceiveDrained(Rt rt, long p) { return rt.drained; }
+    static long VecNth(Rt rt, long v, int i, long dflt) {
+        var items = rt.vecs[(int)(v - 5000)];
+        return i < items.Count ? items[i] : dflt;
+    }
+    static long ParkOnPort(Rt rt, long kind, long p) { rt.parked.Add(kind); return 3000L; }
+    public class Rt {
+        public System.Collections.Generic.List<long[]> objs = new System.Collections.Generic.List<long[]>();
+        public System.Collections.Generic.List<System.Collections.Generic.List<long>> vecs
+            = new System.Collections.Generic.List<System.Collections.Generic.List<long>>();
+        public System.Collections.Generic.List<long> rootv = new System.Collections.Generic.List<long>();
+        public System.Collections.Generic.List<string> threwC = new System.Collections.Generic.List<string>();
+        public System.Collections.Generic.List<string> threwM = new System.Collections.Generic.List<string>();
+        public System.Collections.Generic.List<long> parked = new System.Collections.Generic.List<long>();
+        public int inbox = 0, drained = 0, wakes = 0;
+        public long queued = NIL;
+        public long Obj(long[] slots) { objs.Add(slots); return objs.Count - 1 + 1000; }
+        public long Vec(System.Collections.Generic.List<long> items) { vecs.Add(items); return vecs.Count - 1 + 5000; }
+        public long Slot(long v, int i) { return objs[(int)(v - 1000)][i]; }
+        public void SetSlot(long v, int i, long x) { objs[(int)(v - 1000)][i] = x; }
+        public int Mark() { return rootv.Count; }
+        public int Push(long v) { rootv.Add(v); return rootv.Count - 1; }
+        public long R(int i) { return rootv[i]; }
+        public void SetR(int i, long v) { rootv[i] = v; }
+        public void PopTo(int i) { while (rootv.Count > i) rootv.RemoveAt(rootv.Count - 1); }
+        public long ThrowStr(string c, string m) { threwC.Add(c); threwM.Add(m); return NIL; }
+    }
+--csharp
+    static Rt Fresh() { return new Rt(); }
+    static string Run(long kind, long bytes, long msgLen, bool hasMsg, int drained) {
+        Rt rt = Fresh();
+        long p = rt.Obj(new long[]{bytes, kind});
+        long payload = rt.Obj(new long[]{});
+        long ports = rt.Obj(new long[]{});
+        var items = new System.Collections.Generic.List<long>();
+        items.Add(msgLen); items.Add(payload); items.Add(ports);
+        long trip = rt.Vec(items);
+        if (hasMsg) {
+            rt.inbox = 1;
+            rt.queued = (kind == Conc.K_BRIDGE) ? trip : payload;
+        }
+        rt.drained = drained;
+        long ans = ReceiveAt(rt, p);
+        string name = (ans == NIL) ? "-"
+                    : (ans == payload) ? "v"
+                    : (ans == trip) ? "trip"
+                    : (ans == 3000L) ? "park" : "?";
+        string thr;
+        if (rt.threwC.Count == 0) thr = "-";
+        else {
+            string c = rt.threwC[rt.threwC.Count - 1];
+            string m = rt.threwM[rt.threwM.Count - 1];
+            thr = (c == "IllegalStateException" ? "IS" : "??") + ":"
+                + (m.StartsWith("receive: the other end") ? 1 : 0);
+        }
+        string parks = rt.parked.Count == 0 ? "0" : "1@" + rt.parked[rt.parked.Count - 1];
+        return name + ":" + rt.Slot(p, Conc.PT_BYTES) + ":" + rt.wakes + ":" + thr
+             + ":" + parks + ":" + rt.rootv.Count;
+    }
+    static void Main() {
+        System.Console.WriteLine(
+            Run(Conc.K_CHANNEL, 100, 30, true, 0) + " | " +
+            Run(Conc.K_BRIDGE, 100, 30, true, 0) + " | " +
+            Run(Conc.K_BRIDGE, 10, 30, true, 0) + " | " +
+            Run(Conc.K_BRIDGE, 30, 30, true, 0) + " | " +
+            Run(Conc.K_BRIDGE, 100, 30, false, 1) + " | " +
+            Run(Conc.K_BRIDGE, 100, 30, false, 2) + " | " +
+            Run(Conc.K_BRIDGE, 100, 30, false, 0));
+    }
+--expect
+v:100:1:-:0:0 | v:70:1:-:0:0 | v:0:1:-:0:0 | v:0:1:-:0:0 | -:100:0:-:0:0 | -:100:0:IS:1:0:0 | park:100:0:-:1@3:0
+--expect-why
+DERIVED FROM THE CONTRACT. Seven rows as
+`<answer>:<PT_BYTES after>:<wakes>:<throw>:<parks>:<roots left>`.
+
+1  A CHANNEL WITH A MESSAGE -- `v:100:1:-:0:0`. The value back, and `PT_BYTES`
+   UNCHANGED at 100. The byte budget bounds what crosses a HEAP; a channel's
+   messages never leave this one, so nothing was charged and nothing is
+   refunded. Refunding unconditionally reads slot 0 of a value that has no
+   length there -- which is a number invented from whatever the value happens
+   to be.
+
+2  A BRIDGE WITH A MESSAGE -- `v:70:1:-:0:0`. TWO claims in one row. The
+   answer is `v`, the BYTES element, not `trip`: the queued item is
+   `[len bytes ports]` and what the receiver asked for is the message. And
+   100 - 30 = 70, where 30 is read from slot 0 -- the length that was
+   CHARGED -- rather than recomputed from the value. Recomputing was the
+   defect in all three runtimes: it refunded a different number than was
+   charged, and once a bridge carried values it walked a keyword as a string
+   and read off the end of the heap.
+
+3  A REFUND LARGER THAN THE BALANCE -- `v:0:...`. Clamped, not negative. A
+   host that charged less than it queued is not an error to report, and a
+   negative budget would refuse every later send for ever.
+
+4  A REFUND EXACTLY THE BALANCE -- `v:0:...`. This row exists for the
+   comparison alone: 30 against 30 is the single point where `>` and `>=`
+   differ, and both give zero here only because the clamp catches what the
+   subtraction would. Change `queued > n` to `queued >= n` and this row is
+   unmoved; change the clamp and it is not.
+
+5  EMPTY, STREAM ENDED -- `-:100:0:-:0:0`. Nil, NO wake and NO park. Nothing
+   was freed, so there is nobody to wake; nothing more is coming, so there is
+   nothing to wait for.
+
+6  EMPTY, FAR END GONE -- `-:100:0:IS:1:0:0`. A throw, by class and by the
+   first words of its message. It does NOT park, and that is the point: a
+   thread parked on a port whose other end is gone waits for something that
+   can never arrive.
+
+7  EMPTY, STILL LIVE -- `park:100:0:-:1@3:0`. Parked on `WK_RECEIVE`. `3` is
+   the wait kind, distinct from `WK_SEND`: the two park on the same port for
+   opposite reasons, and `wake-on` wakes both because either event can be the
+   one the other was waiting for.
+
+`0` IN THE LAST FIELD OF EVERY ROW. All four exits pop to the mark they took.
+
+NO WAKE ON ANY EMPTY ROW. The wake belongs to the path that FREED a slot.
+Moving it out of that branch makes rows 5, 6 and 7 read `1`, and wakes
+every sender parked on a port that just failed to produce anything.

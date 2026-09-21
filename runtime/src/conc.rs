@@ -1699,61 +1699,15 @@ impl Rt {
         out
     }
 
+    /// GENERATED (`kin/portrecv.kin`). The read half of the port protocol.
+    /// The `need_port` check and its message are a host string and stay here,
+    /// which is also where they belong in the order: nothing is rooted yet
+    /// when that test runs.
     pub fn port_receive(&mut self, p: Value) -> Value {
         if !self.need_port(p, "receive") {
             return NIL;
         }
-        let base = self.mark();
-        let pi = self.push(p);
-        if self.inbox_count(self.r(pi)) > 0 {
-            let target = self.r(pi);
-            let v = self.port_dequeue(target);
-            let vi = self.push(v);
-            if crosses_a_heap(fx(self.slot(self.r(pi), PT_KIND))) {
-                // A bridge queues `[len value]`, and `len` is the number
-                // `host_deliver` actually CHARGED -- the length of the encoded
-                // message, which is what bounds the host's queue.
-                //
-                // It used to be recomputed from the value, `s_bytes` on
-                // whatever came out of the ring. That was wrong twice. It
-                // refunded the string's length where the encoded length had
-                // been charged, so the bound drifted every message; and once a
-                // bridge carried VALUES rather than bytes it walked a keyword
-                // as a string and read off the end of the heap. `abcd` arriving
-                // on a port was a segfault.
-                let item = self.r(vi);
-                let n = fx(self.vec_nth(item, 0, NIL));
-                let v = self.vec_nth(item, 1, NIL);
-                self.set_r(vi, v);
-                let queued = fx(self.slot(self.r(pi), PT_BYTES));
-                let left = if queued > n { queued - n } else { 0 };
-                self.set(self.r(pi), PT_BYTES, Value::fixnum(left));
-            }
-            // Space freed: whoever was blocked sending here can try again.
-            let target = self.r(pi);
-            self.wake_on(target);
-            let out = self.r(vi);
-            self.pop_to(base);
-            return out;
-        }
-        // WHAT A DRAINED PORT DOES IS GENERATED, from `kin/portdrain.kin`,
-        // and it makes the state changes that go with its answer. Only the
-        // THROW stays here: its message is a host string, and kin has no
-        // string to carry one -- the same line `report_deadlock` draws.
-        match self.receive_drained(self.r(pi)) {
-            1 => {
-                self.pop_to(base);
-                return NIL;
-            }
-            2 => {
-                self.pop_to(base);
-                return self.throw_str("IllegalStateException", "receive: the other end of this port is gone, so this can never complete");
-            }
-            _ => {}
-        }
-        let target = self.r(pi);
-        self.pop_to(base);
-        self.park_on_port(WK_RECEIVE, target)
+        self.receive_at(p)
     }
 
     /// Ask the host to open `name`, forwarding `args` verbatim. Blocking from

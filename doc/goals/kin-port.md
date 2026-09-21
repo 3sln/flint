@@ -8199,3 +8199,90 @@ happened.** The file's triage once named `port-tests-in-kin` as "THE ONE item
 with no status line"; it was one of eight, and nobody had counted. Both the
 zero case and the two case were real before the check existed for either.
 
+---
+
+## `receive` generated, and a vocabulary word that is called wrong silently
+
+2026-09-20. `kin/portrecv.kin` -- 108 sources. `Conc` across the three is
+5 604 lines. No divergence this time: all three copies of `receive` agreed,
+line for line, which is worth saying because it is the first slice in a while
+where the reading found nothing. What it locks is the byte refund, and that
+one HAS been wrong in all three before.
+
+### The refund is the part with history
+
+A bridge queues `[len bytes ports]`, and `len` is what `host-deliver` actually
+CHARGED -- the length of the encoded message. It used to be recomputed from
+the value, and that was wrong twice: it refunded a different number than was
+charged, so the bound drifted every message; and once a bridge carried VALUES
+rather than bytes, recomputing walked a keyword as a string and read off the
+end of the heap. `abcd` arriving on a port was a segfault on native. The fix
+was the same edit in three files, which is the argument for the rule being in
+one.
+
+Seven mutations, seven different fields:
+
+    1  refund on every port, not only a bridge   row 1 crashes -- it reads
+                                                   slot 0 of a value that has
+                                                   no length there, which IS
+                                                   the old segfault
+    2  the triple handed back, not its body      rows 2-4 -> `trip`
+    3  no clamp on the refund                    row 3 -> `-20`
+    4  the wake moved out of the message branch  rows 1-4 -> `0` wakes
+    5  a drained stream parks                    row 5 -> `park`
+    6  a dead far end parks                      row 6 -> `park`
+    7  the refund read from the wrong slot       row 2 -> `0`
+
+Row 4 exists only for the comparison: a refund of exactly the balance is the
+single point where `>` and `>=` differ.
+
+### A vocabulary word called with too few arguments emits `{1}` into Rust
+
+`crosses-a-heap` carries the comment *"Takes the KIND rather than the port,
+which is why it needs no `rt`"* -- and its template is `crosses_a_heap({1})`,
+so the receiver IS still passed, as the ignored `{0}`. Reading the comment, I
+wrote `(crosses-a-heap kind)`. The kind landed in `{0}`, nothing filled `{1}`,
+and the generated Rust read:
+
+    if crate::conc::crosses_a_heap({1}) {
+
+*A positional template with no arity check does not fail; it copies the
+placeholder through.* All three compilers do reject it, so nothing ships --
+but the error blames generated code nobody wrote, three steps from the call
+that is wrong.
+
+Two fixes, because the comment caused it and the check catches it:
+
+* the vocabulary entry now says `rt` IS passed and ignored, why the table has
+  no exceptions to receiver-first, and what the wrong call produces;
+* `bin/check-kin` scans generated output for a surviving `{N}` and names the
+  file, the line, and the cause. It runs FIRST -- it is a text scan over files
+  that already exist, and putting it after four minutes of probe compiles
+  meant the adversarial test alone took three runs to do.
+
+**Comments are stripped before the scan, and that is not cosmetic.** Three
+generated files legitimately carry `#{1}`, `{:a 1}` and `#{0}` inside doc
+comments -- Clojure set and map literals quoted in prose -- and a check that
+flagged those would be turned off within a week. Verified both ways: a stray
+placeholder in code fires with file and line; the same text in a comment does
+not.
+
+**The over-supply case is still silent**, and this check cannot see it: an
+extra argument shifts the rest along and the last one is dropped, producing
+valid code that does the wrong thing. Catching that wants the arity known at
+the call site, which is the generator's job and lives in the kin repo. Named
+here so the next person does not rediscover it.
+
+### `open(f, "w").write(expr)` destroyed this source once
+
+The mutation harness wrote `open(SRC, "w").write(mut(...))`. Python opens --
+and TRUNCATES -- before evaluating the argument, so when `mut` raised on a
+string that was no longer present, `kin/portrecv.kin` was left at zero bytes.
+It was untracked, so git had nothing; it was reconstructed from the session.
+
+*The harness that edits a file to test it is the one thing in the loop that
+must not be able to lose it.* The harness now builds the text first, asserts
+it is a non-empty string, opens in a `with`, and restores in a `finally` --
+and asserts the base source is over a thousand bytes before it starts, so a
+second run against a truncated file stops instead of amplifying.
+

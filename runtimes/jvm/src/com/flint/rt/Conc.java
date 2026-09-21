@@ -915,50 +915,13 @@ public final class Conc {
         return out;
     }
 
+    /// GENERATED (`kin/portrecv.kin`). The read half of the port protocol.
+    /// The `needPort` check and its message are a host string and stay here,
+    /// which is also where they belong in the order: nothing is rooted yet
+    /// when that test runs.
     public static long receive(Rt rt, long p) {
         if (!needPort(rt, p, "receive")) return Val.NIL;
-        int base = rt.mark();
-        int pi = rt.push(p);
-        if (inboxCount(rt, rt.r(pi)) > 0) {
-            int vi = rt.push(dequeue(rt, rt.r(pi)));
-            if (crossesAHeap(fx(rt.slot(rt.r(pi), PT_KIND)))) {
-                // A bridge queues `[len value]`, and `len` is what
-                // `hostDeliver` actually CHARGED -- the length of the encoded
-                // message, which is what bounds the host's queue.
-                //
-                // It used to be recomputed from the value, `Str.byteLen` on
-                // whatever came out of the ring. That was wrong twice: it
-                // refunded the string's length where the encoded length had
-                // been charged, and once a bridge carried VALUES it walked a
-                // keyword as a string. On the Rust that was a segfault.
-                long item = rt.r(vi);
-                long n = fx(Vec.nth(rt, item, 0, Val.NOT_FOUND));
-                // `[len bytes ports]`. The ports are dropped here, which is
-                // where this stops short of the two-phase design: the bridge
-                // should hold them until the receiver has HYDRATED the message,
-                // not until it has taken it.
-                rt.setR(vi, Vec.nth(rt, item, 1, Val.NOT_FOUND));
-                long queued = fx(rt.slot(rt.r(pi), PT_BYTES));
-                rt.setSlot(Val.asHeap(rt.r(pi)), PT_BYTES, Val.fixnum(queued > n ? queued - n : 0));
-            }
-            // Space freed: whoever was blocked sending here can try again.
-            wakeOn(rt, rt.r(pi));
-            long out = rt.r(vi);
-            rt.popTo(base);
-            return out;
-        }
-        // WHAT A DRAINED PORT DOES IS GENERATED, from `kin/portdrain.kin`,
-        // and it makes the state changes that go with its answer. Only the
-        // THROW stays here, its message being a host string.
-        int drained = com._3sln.flint.kgen.rt.Portdrain.receiveDrained(rt, rt.r(pi));
-        if (drained == 1) { rt.popTo(base); return Val.NIL; }
-        if (drained == 2) {
-            rt.popTo(base);
-            return rt.throwStr("IllegalStateException", "receive: the other end of this port is gone, so this can never complete");
-        }
-        long target = rt.r(pi);
-        rt.popTo(base);
-        return parkOnPort(rt, WK_RECEIVE, target);
+        return com._3sln.flint.kgen.rt.Portrecv.receiveAt(rt, p);
     }
 
     public static long close(Rt rt, long p) {

@@ -1,0 +1,95 @@
+;; TAKING A MESSAGE OFF A PORT, written once.
+;;
+;; `receive` is the read half of the port protocol and was written three
+;; times. It has three outcomes and they are not symmetric: a message, an
+;; answer that the stream has ended, or a park -- and the empty ring is the
+;; only one of the three that waits, because the other two are already final.
+;;
+;; THE BYTE REFUND IS THE PART THAT WAS WRONG BEFORE, in all three. A bridge
+;; queues `[len bytes ports]`, and `len` is what `host-deliver` actually
+;; CHARGED -- the length of the ENCODED message. Recomputing it from the value
+;; refunded a different number than was charged, so the bound drifted every
+;; message; and once a bridge carried VALUES rather than bytes, recomputing it
+;; walked a keyword as a string and read off the end of the heap. `abcd`
+;; arriving on a port was a segfault on native. The fix was the same edit in
+;; three files, which is the argument for this one being in one.
+(ns flint.rt.portrecv
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == > - not nil? fixnum as-fixnum
+                                   mark push r set-r pop-to slot set-slot
+                                   wake-on crosses-a-heap
+                                   throw-str static-text
+                                   Rt Value I64 I32 RootIx NIL
+                                   PT_KIND PT_BYTES WK_RECEIVE]]
+            [flint.rt.portring :refer [ring-inbox-count ring-dequeue]]
+            [flint.rt.portdrain :refer [receive-drained]]
+            [flint.rt.vecread :refer [vec-nth]]
+            [flint.rt.sched :refer [park-on-port]]))
+
+(doc "Take the next message from `p`, or park until there is one."
+     ""
+     "`p` IS ALREADY KNOWN TO BE A PORT. The check and its message are a host"
+     "string and stay with the caller, which is also where they belong in the"
+     "order: nothing here has been rooted yet when that test runs."
+     ""
+     "A MESSAGE IF THERE IS ONE, and the refund that goes with it. A bridge"
+     "queues `[len bytes ports]` and the FIRST element is the number that was"
+     "charged; the refund reads it rather than recomputing it from the value."
+     "The ports are dropped here, which is where this stops short of the"
+     "two-phase design: the bridge should hold them until the receiver has"
+     "HYDRATED the message, not until it has taken it."
+     ""
+     "A CHANNEL REFUNDS NOTHING, because nothing was charged: the byte budget"
+     "bounds what crosses a HEAP, and a channel's messages never leave this"
+     "one. That is why the refund is behind `crosses-a-heap` and not behind"
+     "\"is there a length in slot 0\" -- a channel's queued value has no"
+     "length there, and asking would read a message as a pair."
+     ""
+     "SPACE FREED IS A WAKE. Whoever was blocked SENDING here can try again,"
+     "and they are woken by the same call that wakes a blocked receiver,"
+     "because either event can be the one the other was waiting for."
+     ""
+     "OTHERWISE THE RING IS EMPTY, and what a drained port does is its own"
+     "decision: `1` ends the stream, `2` says the far end is gone and can"
+     "never deliver, and anything else parks. Only the second allocates a"
+     "message, and it is the one case where waiting would be a lie.")
+(defn ^:pub ^:method ^Value receive-at [^:mut ^Rt rt ^Value p]
+  (let [^RootIx base (mark rt)
+        ^RootIx pi (push rt p)]
+    (if (> (ring-inbox-count rt (r rt pi)) 0)
+      (do
+        (comment "BOUND, THEN PUSHED. `ring-dequeue` takes the runtime"
+                 "mutably and so does `push`, so nesting them is two"
+                 "mutable borrows at once and Rust refuses it. The house"
+                 "rule for every generated call that feeds a push.")
+        (let [^Value got (ring-dequeue rt (r rt pi))
+              ^RootIx vi (push rt got)]
+          (if (crosses-a-heap rt (as-fixnum (slot rt (r rt pi) PT_KIND)))
+            (let [^Value item (r rt vi)
+                  ^I64 n (as-fixnum (vec-nth rt item 0 NIL))
+                  ^Value body (vec-nth rt item 1 NIL)]
+              (set-r rt vi body)
+              (let [^I64 queued (as-fixnum (slot rt (r rt pi) PT_BYTES))]
+                (comment "NEVER BELOW ZERO. A refund larger than the balance"
+                         "is not an error to report -- it is a host that"
+                         "charged less than it queued -- and a negative"
+                         "budget would refuse every later send for ever.")
+                (if (> queued n)
+                  (set-slot rt (r rt pi) PT_BYTES (fixnum (- queued n))))
+                (if (not (> queued n))
+                  (set-slot rt (r rt pi) PT_BYTES (fixnum 0))))))
+          (wake-on rt (r rt pi))
+          (let [^Value out (r rt vi)]
+            (pop-to rt base)
+            (return out)))))
+    (let [^I32 drained (receive-drained rt (r rt pi))]
+      (if (== drained 1)
+        (do (pop-to rt base)
+            (return NIL)))
+      (if (== drained 2)
+        (do (pop-to rt base)
+            (return (throw-str rt "IllegalStateException"
+                               (static-text "receive: the other end of this port is gone, so this can never complete")))))
+      (let [^Value target (r rt pi)]
+        (pop-to rt base)
+        (return (park-on-port rt WK_RECEIVE target))))))

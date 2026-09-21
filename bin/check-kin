@@ -42,7 +42,6 @@
 # markers. It now snapshots the forty-two files kin owns outright and diffs
 # them whole. Same question, larger unit, and nothing left that a hand edit
 # can hide in.
-set -e
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 # A PRIVATE WORK DIRECTORY PER RUN. A fixed one is deleted out from under a
@@ -52,6 +51,38 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/check-kin.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/snap"
 fails=0
+
+# NO TEMPLATE PLACEHOLDER SURVIVES INTO GENERATED CODE.
+#
+# A vocabulary word is a POSITIONAL template with no arity check. Call one with
+# too few arguments and the unfilled `{N}` is copied through verbatim: on
+# 2026-09-20 `(crosses-a-heap kind)` -- correct-looking, and missing the
+# receiver every other word in the table takes -- emitted
+# `crosses_a_heap({1})` into a Rust file.
+#
+# That IS caught, eventually, by all three compilers. What it is not caught
+# WITH is a message naming the cause: the error blames generated code that
+# nobody wrote, three steps from the call that is wrong. This says it here,
+# with the file and the line.
+#
+# COMMENTS ARE STRIPPED FIRST, and that is not cosmetic. Three generated files
+# legitimately carry `#{1}`, `{:a 1}` and `#{0}` inside doc comments -- Clojure
+# set and map literals quoted in prose -- and a check that flagged those would
+# be turned off within a week.
+stray=$(for f in runtime/src/kgen/rt/*.rs \
+                 runtimes/jvm/src/com/_3sln/flint/kgen/rt/*.java \
+                 runtimes/clr/src/_3sln/Flint/Kgen/Rt/*.cs; do
+          [ -f "$f" ] || continue
+          sed 's|//.*||' "$f" | grep -nE '\{[0-9]\}' | sed "s|^|$f:|"
+        done)
+if [ -n "$stray" ]; then
+  echo "check-kin: a vocabulary template left an unfilled placeholder in generated code."
+  echo "$stray" | sed 's/^/  /'
+  echo "  A word in kin/src/flint/impl/rt.cljc was called with too FEW arguments."
+  echo "  Every word takes the runtime first, including the ones that ignore it."
+  exit 1
+fi
+set -e
 
 # --- 0. The NAME TABLE, before any source is asked to use one. --------------
 #

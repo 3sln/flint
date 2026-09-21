@@ -586,6 +586,12 @@
    ;; comparison into an identity question.
    'PARK_YIELD {:rust "crate::conc::PARK_YIELD"
                 :java "Conc.PARK_YIELD" :csharp "Conc.PARK_YIELD"}
+   ;; THE WAIT KIND for a receive that found the ring empty. Distinct from
+   ;; `WK_SEND`, which is a thread waiting for SPACE: the two park on the same
+   ;; port for opposite reasons, and `wake-on` wakes both because either event
+   ;; can be the one the other was waiting for.
+   'WK_RECEIVE {:rust "crate::conc::WK_RECEIVE"
+                :java "Conc.WK_RECEIVE" :csharp "Conc.WK_RECEIVE"}
    ;; THE WAIT KIND for a join. A thread is a wake key like any port, which
    ;; is why `wake-on` takes a value rather than a port and why joining needs
    ;; no machinery of its own.
@@ -2031,8 +2037,20 @@
                            :java "Conc.isThread({0}, {1})"
                            :csharp "Conc.IsThread({0}, {1})"}
                           {:tag Bool})
-    ;; A PORT KIND that crosses a heap -- a bridge, never a channel. Takes the
-    ;; KIND rather than the port, which is why it needs no `rt`.
+    ;; A PORT KIND that crosses a heap -- a bridge, never a channel.
+    ;;
+    ;; IT IS ANSWERED FROM THE KIND, not from the port, so the runtime has
+    ;; nothing to do here -- but `rt` IS STILL PASSED, as the ignored `{0}`,
+    ;; because every word in this table is called receiver-first and one
+    ;; exception is a trap rather than a saving. Written `(crosses-a-heap rt
+    ;; kind)`.
+    ;;
+    ;; Calling it `(crosses-a-heap kind)` does not fail. The template is
+    ;; POSITIONAL and unchecked, so the kind lands in `{0}`, nothing fills
+    ;; `{1}`, and the generated line carries the literal text `{1}` into a
+    ;; Rust file -- a compile error two steps later, blaming the generated
+    ;; code rather than the call. That happened on 2026-09-20 in
+    ;; `kin/portrecv.kin`.
     'crosses-a-heap (core/call {:rust "crate::conc::crosses_a_heap({1})"
                                 :java "Conc.crossesAHeap({1})"
                                 :csharp "Conc.CrossesAHeap({1})"})
