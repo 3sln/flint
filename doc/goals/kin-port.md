@@ -1888,6 +1888,25 @@ EMPTY STRING, and the fixture that says so is
 `runtimes/conform-host/initpark.cljc`, now run three ways by
 `bin/conform-hosts`.
 
+### ~~A FIFTH and a SIXTH `Conc`-family divergence: a self-join, and a throw from `main`~~ CLOSED
+
+Both found and closed 2026-09-20, both while reading the three copies of
+`join` side by side, and neither on any list before that. **Both reported a
+FAILURE as a SUCCESS**, which is the direction that matters at a host
+boundary.
+
+* **A thread joining itself.** Native refused it by name; both ports parked
+  and let the deadlock reporter catch it one scheduler turn later. Generated
+  into `kin/threadjoin.kin`; fixture `runtimes/conform-host/selfjoin.cljc`.
+* **A throw from `main`.** Both ports answered status 0 with an ex-info for a
+  value, because `mainResult` read `TH_RESULT` and not the `TH_STATUS` beside
+  it. Generated into `kin/mainanswer.kin`; fixture
+  `runtimes/conform-host/plainthrow.cljc`.
+
+Both fixtures are rows in `bin/conform-hosts` and both assert the SENTENCE and
+the STATUS rather than only comparing the three. See the section at the end of
+this file.
+
 ### ~~OPEN: a bad value-stack root when `settle` saves a parked thread~~ CLOSED
 
 Found 2026-09-20 by the stress row added that day, localised the same day, and
