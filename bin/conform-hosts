@@ -730,6 +730,14 @@ phase "host requests"
 # `bin/conform-hosts` never mentioned it. A transcript nobody diffs is three
 # ABIs again, which is the whole thing this section was built to prevent.
 #
+# `selfjoin` and `plainthrow` are the two ROOMS OFF THE SAME CORRIDOR, both
+# found 2026-09-20 and both the same shape: the ports reported a FAILURE as a
+# SUCCESS. A thread joining itself was refused by native alone, and the ports
+# let their deadlock reporter catch it a turn later. A plain `(throw (ex-info
+# "boom" {}))` from `main` came back from both ports as status 0 with an
+# ex-info for a value, because `mainResult` read `TH_RESULT` without reading
+# the status beside it -- one slot holding two different things.
+#
 # `initpark` is the SAME CALL FROM TOP LEVEL, where it is refused. Native named
 # that failure and both ports answered the EMPTY STRING: the guard was in
 # `run_program` and `ensure_started` on native and in neither `ensureStarted`.
@@ -740,7 +748,7 @@ cargo build --release -p flint-conc --bin hostreq --features host-tools \
   > "$FLINT_SCRATCH"/flint-hq-build.log 2>&1 \
   || { tail -20 "$FLINT_SCRATCH"/flint-hq-build.log; \
        echo "  FAIL the native host-request driver does not build"; exit 1; }
-for hqf in hostreq initpark; do
+for hqf in hostreq initpark selfjoin plainthrow; do
   ./bin/flint :src runtimes/conform-host :fn "$hqf/main" --emit-image \
        :out "out/conform/$hqf.img" >/dev/null 2>&1 \
     || { echo "  FAIL the $hqf fixture does not compile"; exit 1; }
@@ -753,6 +761,24 @@ for hqf in hostreq initpark; do
     grep -q 'still initialising' "$FLINT_SCRATCH"/flint-hq-native.out \
       || { cat "$FLINT_SCRATCH"/flint-hq-native.out; \
            echo "  FAIL a top-level park is not refused by name [native]"; exit 1; }
+  fi
+  # THE SAME TRAP, TWICE MORE. Both of these were reported as SUCCESSES by the
+  # two ports -- `selfjoin` because only native refused it, `plainthrow`
+  # because `mainResult` returned a failed thread's error as its VALUE. Two
+  # runtimes agreeing on "status 0, an ex-info" is identical too, so the
+  # sentence AND the status are named here rather than only compared.
+  if [ "$hqf" = selfjoin ]; then
+    grep -q 'cannot join itself' "$FLINT_SCRATCH"/flint-hq-native.out \
+      || { cat "$FLINT_SCRATCH"/flint-hq-native.out; \
+           echo "  FAIL a self-join is not refused by name [native]"; exit 1; }
+  fi
+  if [ "$hqf" = plainthrow ]; then
+    grep -q 'ExceptionInfo: boom' "$FLINT_SCRATCH"/flint-hq-native.out \
+      || { cat "$FLINT_SCRATCH"/flint-hq-native.out; \
+           echo "  FAIL a throw from main is not reported as one [native]"; exit 1; }
+    grep -q 'status 1' "$FLINT_SCRATCH"/flint-hq-native.out \
+      || { cat "$FLINT_SCRATCH"/flint-hq-native.out; \
+           echo "  FAIL a throw from main does not set a failing status [native]"; exit 1; }
   fi
   sed 's/$/ ['"$hqf"' native]/' "$FLINT_SCRATCH"/flint-hq-native.out
   "$JDK/bin/java" -cp runtimes/jvm/classes RtHostReq "out/conform/$hqf.img" \

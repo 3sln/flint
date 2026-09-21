@@ -1,0 +1,235 @@
+--rust-head
+// A TOY SCHEDULER WITH ONE THREAD VECTOR. Everything this function reads is
+// a slot; the only thing it WRITES is `thrown`, so the toy models the field
+// and nothing else.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_0000_0000_0000);
+mod conc {
+    pub const SC_THREADS: u32 = 0;
+    pub const TH_STATUS: u32 = 0;
+    pub const TH_RESULT: u32 = 1;
+    // THE REAL VALUES, because the expected answers name them.
+    pub const ST_RUNNABLE: i64 = 1;
+    pub const ST_PARKED: i64 = 2;
+    pub const ST_DONE: i64 = 3;
+    pub const ST_FAILED: i64 = 4;
+}
+impl Value {
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn is_nil(self) -> bool { self == NIL }
+}
+struct Rt {
+    objs: Vec<Vec<Value>>,
+    vecs: Vec<Vec<Value>>,
+    sched: Value,
+    thrown: Value,
+}
+impl Rt {
+    // OBJECTS AT 1000, VECTORS AT 5000, so a handle cannot be read as a
+    // status fixnum and the two tables cannot be confused for each other.
+    fn obj(&mut self, slots: Vec<Value>) -> Value {
+        self.objs.push(slots);
+        Value((self.objs.len() - 1) as u64 + 1000)
+    }
+    fn vec(&mut self, items: Vec<Value>) -> Value {
+        self.vecs.push(items);
+        Value((self.vecs.len() - 1) as u64 + 5000)
+    }
+    fn slot(&self, v: Value, i: u32) -> Value { self.objs[(v.0 - 1000) as usize][i as usize] }
+    fn sched(&self) -> Value { self.sched }
+    fn vec_nth(&mut self, v: Value, i: u32, dflt: Value) -> Value {
+        let items = &self.vecs[(v.0 - 5000) as usize];
+        if (i as usize) < items.len() { items[i as usize] } else { dflt }
+    }
+--rust
+}
+fn fresh() -> Rt {
+    Rt { objs: vec![], vecs: vec![], sched: NIL, thrown: NIL }
+}
+// `<answer>:<thrown>`
+fn case(has_sched: bool, thread0: i32, st: i64) -> String {
+    let mut rt = fresh();
+    let r = rt.obj(vec![]);
+    // `thread0`: 0 none at all, 1 an empty vector, 2 a nil hole, 3 a thread.
+    let th = if thread0 == 3 { rt.obj(vec![Value(st as u64), r]) } else { NIL };
+    let items = match thread0 {
+        1 => vec![],
+        2 => vec![NIL],
+        3 => vec![th],
+        _ => vec![],
+    };
+    let ts = rt.vec(items);
+    if has_sched {
+        let s = rt.obj(vec![ts]);
+        rt.sched = s;
+    }
+    let ans = rt.main_answer();
+    let name = |v: Value| -> &'static str {
+        if v.is_nil() { "-" } else if v == r { "r" } else { "?" }
+    };
+    format!("{}:{}", name(ans), name(rt.thrown))
+}
+fn main() {
+    // 1. NO SCHEDULER. Nil, and nothing thrown: a program that never started
+    //    a thread has no outcome, and inventing a failure for it would make
+    //    an empty program look like a broken one.
+    let r1 = case(false, 3, conc::ST_DONE);
+    // 2. A SCHEDULER WITH NO THREADS. The same, by the out-of-range read.
+    let r2 = case(true, 1, conc::ST_DONE);
+    // 3. A NIL HOLE WHERE THREAD 0 WAS. The same again -- a retired slot is
+    //    not a thread, and reading its slots would fault.
+    let r3 = case(true, 2, conc::ST_DONE);
+    // 4. FINISHED. The value, and `thrown` stays clear.
+    let r4 = case(true, 3, conc::ST_DONE);
+    // 5. FAILED. NIL BACK AND THE ERROR ON `thrown`. This is the row the two
+    //    ports got wrong: they answered `r:-`, so a host saw a success whose
+    //    value happened to be an exception.
+    let r5 = case(true, 3, conc::ST_FAILED);
+    // 6-7. STILL GOING. Neither terminal state, so `TH_RESULT` is whatever
+    //      was last written there -- reported as a value, never as a failure.
+    let r6 = case(true, 3, conc::ST_RUNNABLE);
+    let r7 = case(true, 3, conc::ST_PARKED);
+    println!("{} | {} | {} | {} | {} | {} | {}", r1, r2, r3, r4, r5, r6, r7);
+}
+--java-head
+    // THE SAME TOY, field for field.
+    static final long NIL = 0xFFFF000000000000L;
+    static final class Val {
+        static final long NIL = 0xFFFF000000000000L;
+        static boolean isNil(long v) { return v == NIL; }
+        static long asFixnum(long v) { return v; }
+    }
+    static final class Conc {
+        static final int SC_THREADS = 0, TH_STATUS = 0, TH_RESULT = 1;
+        static final long ST_RUNNABLE = 1, ST_PARKED = 2, ST_DONE = 3, ST_FAILED = 4;
+        static long sched(Rt rt) { return rt.sched; }
+    }
+    // BARE, not on a class: cross-namespace kin calls land unqualified.
+    static long vecNth(Rt rt, long v, int i, long dflt) {
+        java.util.List<Long> items = rt.vecs.get((int) (v - 5000));
+        return i < items.size() ? items.get(i) : dflt;
+    }
+    static final class Rt {
+        java.util.List<long[]> objs = new java.util.ArrayList<>();
+        java.util.List<java.util.List<Long>> vecs = new java.util.ArrayList<>();
+        long sched = NIL, thrown = NIL;
+        long obj(long[] slots) { objs.add(slots); return objs.size() - 1 + 1000; }
+        long vec(java.util.List<Long> items) { vecs.add(items); return vecs.size() - 1 + 5000; }
+        long slot(long v, int i) { return objs.get((int) (v - 1000))[i]; }
+    }
+--java
+    static Rt fresh() { return new Rt(); }
+    static String caseOf(boolean hasSched, int thread0, long st) {
+        Rt rt = fresh();
+        long r = rt.obj(new long[]{});
+        long th = thread0 == 3 ? rt.obj(new long[]{st, r}) : NIL;
+        java.util.List<Long> items = new java.util.ArrayList<>();
+        if (thread0 == 2) items.add(NIL);
+        if (thread0 == 3) items.add(th);
+        long ts = rt.vec(items);
+        if (hasSched) rt.sched = rt.obj(new long[]{ts});
+        long ans = mainAnswer(rt);
+        return nameOf(ans, r) + ":" + nameOf(rt.thrown, r);
+    }
+    static String nameOf(long v, long r) {
+        if (v == NIL) return "-";
+        if (v == r) return "r";
+        return "?";
+    }
+    public static void main(String[] args) {
+        System.out.println(
+            caseOf(false, 3, Conc.ST_DONE) + " | " +
+            caseOf(true, 1, Conc.ST_DONE) + " | " +
+            caseOf(true, 2, Conc.ST_DONE) + " | " +
+            caseOf(true, 3, Conc.ST_DONE) + " | " +
+            caseOf(true, 3, Conc.ST_FAILED) + " | " +
+            caseOf(true, 3, Conc.ST_RUNNABLE) + " | " +
+            caseOf(true, 3, Conc.ST_PARKED));
+    }
+--csharp-head
+    // THE SAME TOY, field for field.
+    const long NIL = unchecked((long) 0xFFFF000000000000UL);
+    public static class Val {
+        public const long Nil = unchecked((long) 0xFFFF000000000000UL);
+        public static bool IsNil(long v) { return v == Nil; }
+        public static long AsFixnum(long v) { return v; }
+    }
+    public static class Conc {
+        public const int SC_THREADS = 0, TH_STATUS = 0, TH_RESULT = 1;
+        public const long ST_RUNNABLE = 1, ST_PARKED = 2, ST_DONE = 3, ST_FAILED = 4;
+        public static long Sched(Rt rt) { return rt.sched; }
+    }
+    static long VecNth(Rt rt, long v, int i, long dflt) {
+        var items = rt.vecs[(int)(v - 5000)];
+        return i < items.Count ? items[i] : dflt;
+    }
+    public class Rt {
+        public System.Collections.Generic.List<long[]> objs = new System.Collections.Generic.List<long[]>();
+        public System.Collections.Generic.List<System.Collections.Generic.List<long>> vecs
+            = new System.Collections.Generic.List<System.Collections.Generic.List<long>>();
+        public long sched = NIL, thrown = NIL;
+        public long Obj(long[] slots) { objs.Add(slots); return objs.Count - 1 + 1000; }
+        public long Vec(System.Collections.Generic.List<long> items) { vecs.Add(items); return vecs.Count - 1 + 5000; }
+        public long Slot(long v, int i) { return objs[(int)(v - 1000)][i]; }
+    }
+--csharp
+    static Rt Fresh() { return new Rt(); }
+    static string NameOf(long v, long r) {
+        if (v == NIL) return "-";
+        if (v == r) return "r";
+        return "?";
+    }
+    static string CaseOf(bool hasSched, int thread0, long st) {
+        Rt rt = Fresh();
+        long r = rt.Obj(new long[]{});
+        long th = thread0 == 3 ? rt.Obj(new long[]{st, r}) : NIL;
+        var items = new System.Collections.Generic.List<long>();
+        if (thread0 == 2) items.Add(NIL);
+        if (thread0 == 3) items.Add(th);
+        long ts = rt.Vec(items);
+        if (hasSched) rt.sched = rt.Obj(new long[]{ts});
+        long ans = MainAnswer(rt);
+        return NameOf(ans, r) + ":" + NameOf(rt.thrown, r);
+    }
+    static void Main() {
+        System.Console.WriteLine(
+            CaseOf(false, 3, Conc.ST_DONE) + " | " +
+            CaseOf(true, 1, Conc.ST_DONE) + " | " +
+            CaseOf(true, 2, Conc.ST_DONE) + " | " +
+            CaseOf(true, 3, Conc.ST_DONE) + " | " +
+            CaseOf(true, 3, Conc.ST_FAILED) + " | " +
+            CaseOf(true, 3, Conc.ST_RUNNABLE) + " | " +
+            CaseOf(true, 3, Conc.ST_PARKED));
+    }
+--expect
+-:- | -:- | -:- | r:- | -:r | r:- | r:-
+--expect-why
+DERIVED FROM THE CONTRACT. Seven rows as `<answer>:<thrown>`, and one of them
+is the whole reason this function is being generated.
+
+1-3  NO SCHEDULER, NO THREADS, A NIL HOLE -- all `-:-`. Nil, and nothing
+     thrown. A program that never started a thread has no outcome to report,
+     and inventing a failure for it would make an empty program look like a
+     broken one. The three ways of having no thread 0 are kept apart on
+     purpose: a missing scheduler, a vector too short, and a retired slot are
+     three different states of the same table.
+
+4    FINISHED -- `r:-`. The value, and `thrown` stays clear.
+
+5    FAILED -- `-:r`. NIL BACK, AND THE ERROR ON `thrown`. THIS IS THE ROW
+     BOTH PORTS GOT WRONG. Their `mainResult` returned `TH_RESULT`
+     unconditionally, which for a failed thread is the error, so a host saw
+     status 0 and a value that happened to be an exception. Measured with a
+     two-line fixture: native said `ExceptionInfo: boom` and status 1, both
+     ports said `an ex-info` and status 0.
+
+     `TH_RESULT` HOLDS TWO DIFFERENT THINGS and the status says which. That
+     is the trap: a copy that reads the slot without reading the status is
+     correct on every row but this one, and this one is the failure path.
+
+6-7  STILL GOING -- `r:-` both. Neither `ST_RUNNABLE` nor `ST_PARKED` is
+     terminal, so nothing is a failure yet and whatever sits in `TH_RESULT`
+     is reported as a value. Only `ST_FAILED` diverts to `thrown`; testing
+     "not done" instead would report a running thread's empty result slot as
+     a thrown value.

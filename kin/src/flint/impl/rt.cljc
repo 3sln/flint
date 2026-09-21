@@ -586,6 +586,11 @@
    ;; comparison into an identity question.
    'PARK_YIELD {:rust "crate::conc::PARK_YIELD"
                 :java "Conc.PARK_YIELD" :csharp "Conc.PARK_YIELD"}
+   ;; THE WAIT KIND for a join. A thread is a wake key like any port, which
+   ;; is why `wake-on` takes a value rather than a port and why joining needs
+   ;; no machinery of its own.
+   'WK_JOIN {:rust "crate::conc::WK_JOIN"
+             :java "Conc.WK_JOIN" :csharp "Conc.WK_JOIN"}
    'ST_RUNNABLE {:rust "crate::conc::ST_RUNNABLE"
                 :java "Conc.ST_RUNNABLE" :csharp "Conc.ST_RUNNABLE"}
    'ST_PARKED {:rust "crate::conc::ST_PARKED"
@@ -2022,6 +2027,10 @@
     'is-port (core/call {:rust "{0}.is_port({1})"
                          :java "Conc.isPort({0}, {1})"
                          :csharp "Conc.IsPort({0}, {1})"})
+    'is-thread (core/call {:rust "{0}.is_thread({1})"
+                           :java "Conc.isThread({0}, {1})"
+                           :csharp "Conc.IsThread({0}, {1})"}
+                          {:tag Bool})
     ;; A PORT KIND that crosses a heap -- a bridge, never a channel. Takes the
     ;; KIND rather than the port, which is why it needs no `rt`.
     'crosses-a-heap (core/call {:rust "crate::conc::crosses_a_heap({1})"

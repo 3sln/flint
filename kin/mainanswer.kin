@@ -1,0 +1,60 @@
+;; WHAT A SETTLED PROGRAM LEFT BEHIND, written once.
+;;
+;; A host starts a sandbox and eventually asks what happened. This is the one
+;; place that answers, and it was written three times and had DIVERGED --
+;; silently, and in the direction that loses a failure.
+;;
+;; Native puts a failed thread's error back on `thrown` and answers nil; both
+;; ports returned `TH_RESULT` unconditionally, so a program that THREW came
+;; back as a program that RETURNED AN EXCEPTION OBJECT, with a success status.
+;; Measured with a two-line fixture -- `(defn main [_] (throw (ex-info "boom"
+;; {})))` -- the same image, three ways:
+;;
+;;     native   ExceptionInfo: boom          status 1
+;;     jvm      an ex-info                   status 0
+;;     clr      an ex-info                   status 0
+;;
+;; `DECISIONS.md#ports-are-the-hosts` says a sandbox that cannot do what was
+;; asked is TOLD so. A host that cannot tell a failure from a value has not
+;; been told anything; it has been handed the evidence and left to guess.
+(ns flint.rt.mainanswer
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == not nil? as-fixnum
+                                   sched slot set-thrown
+                                   Rt Value I64 NIL
+                                   SC_THREADS TH_STATUS TH_RESULT ST_FAILED]]
+            [flint.rt.vecread :refer [vec-nth]]))
+
+(doc "The answer the thread a host started left behind."
+     ""
+     "THREAD 0 SPEAKS FOR THE PROGRAM. It is the thread the host started, so"
+     "its outcome is the program's outcome; anything else still parked when"
+     "the scheduler settles is waiting for something that is never coming."
+     ""
+     "A FAILURE GOES BACK ON `thrown`, AND THE ANSWER IS NIL. That is the"
+     "whole point: `TH_RESULT` holds the error for a failed thread and the"
+     "value for a finished one, so returning it either way hands the host a"
+     "value it cannot classify. The boundary looks at `thrown` to decide"
+     "status, and this is what puts it there."
+     ""
+     "NO SCHEDULER, OR NO THREAD 0, IS NIL rather than a throw. A program"
+     "that never started a thread has no outcome to report, and inventing a"
+     "failure for it would make an empty program look like a broken one.")
+(defn ^:pub ^:method ^Value main-answer [^:mut ^Rt rt]
+  (let [^Value s (sched rt)]
+    (if (nil? rt s)
+      (return NIL))
+    (let [^Value ts (slot rt s SC_THREADS)
+          ^Value th (vec-nth rt ts 0 NIL)]
+      (if (nil? rt th)
+        (return NIL))
+      (let [^Value r (slot rt th TH_RESULT)
+            ^I64 st (as-fixnum (slot rt th TH_STATUS))]
+        (if (== st ST_FAILED)
+          (do
+            (comment "STRAIGHT ACROSS, unwrapped. Nothing allocates between"
+                     "the read and the write, which is what lets a heap value"
+                     "pass through a field no root walk visits.")
+            (set-thrown rt r)
+            (return NIL)))
+        (return r)))))

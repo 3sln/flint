@@ -1331,22 +1331,13 @@ pub fn run_one(rt: &mut Rt, i: u32) {
 /// keeps the whole program alive for ever, which is the bug this replaced.
 /// The answer the thread a host started left behind: its value, or its error
 /// put back on `rt.thrown` where the boundary looks for it.
+/// GENERATED (`kin/mainanswer.kin`). What a settled program left behind.
+/// The two ports returned `TH_RESULT` unconditionally, so a program that
+/// THREW came back as one that RETURNED AN EXCEPTION OBJECT, with a success
+/// status. One slot holding two different things, and only the status saying
+/// which -- see the drivers file.
 pub fn settled_answer(rt: &mut Rt) -> Value {
-    let s = rt.sched();
-    if s.is_nil() {
-        return NIL;
-    }
-    let ts = rt.slot(s, SC_THREADS);
-    let th = rt.vec_nth(ts, 0, NIL);
-    if th.is_nil() {
-        return NIL;
-    }
-    let r = rt.slot(th, TH_RESULT);
-    if fx(rt.slot(th, TH_STATUS)) == ST_FAILED {
-        rt.thrown = r;
-        return NIL;
-    }
-    r
+    rt.main_answer()
 }
 
 /// The main loop, also re-entered from the host's `resume`.
@@ -2073,25 +2064,12 @@ impl Rt {
     /// would always be runnable, so the scheduler would never get the chance to
     /// hand control back to the host and a thread waiting on a host port would
     /// never be answered.
+    /// GENERATED (`kin/threadjoin.kin`). Wait for `t` and answer its value.
+    /// The self-join refusal was HERE AND NOWHERE ELSE: both ports parked and
+    /// let the deadlock reporter catch it a turn later, naming the symptom
+    /// rather than the mistake. All three refuse it by name now.
     pub fn thread_join(&mut self, t: Value) -> Value {
-        if !self.is_thread(t) {
-            let msg = alloc::format!("join wants a thread, got {}", self.describe(t));
-            return self.throw_str("ClassCastException", &msg);
-        }
-        let st = fx(self.slot(t, TH_STATUS));
-        if st == ST_DONE {
-            return self.slot(t, TH_RESULT);
-        }
-        if st == ST_FAILED {
-            let e = self.slot(t, TH_RESULT);
-            self.thrown = e;
-            return NIL;
-        }
-        let cur = self.current_thread();
-        if !cur.is_nil() && cur.bits() == t.bits() {
-            return self.throw_str("IllegalStateException", "a thread cannot join itself");
-        }
-        self.park_on_port(WK_JOIN, t)
+        self.join_at(t)
     }
 
     pub fn port_close(&mut self, p: Value) -> Value {

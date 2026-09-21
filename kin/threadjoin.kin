@@ -1,0 +1,77 @@
+;; WAITING FOR A THREAD, AND ASKING WHAT IT IS DOING -- written once.
+;;
+;; Two functions the guest calls directly, and both were written three times.
+;; `join` had DIVERGED: native refuses a thread that joins itself by name, and
+;; neither port did. What the ports do instead is not a hang -- their deadlock
+;; reporter catches it and prints "thread 0 waiting on thread 0", which is
+;; good -- but the sentence names a symptom and not the mistake, and it
+;; arrives when the scheduler gives up rather than at the call that made it.
+;;
+;; `state` WAS GOING TO BE HERE TOO, and pulling it revealed something
+;; better than a port: `Conc.state` and `Conc.State` are DEAD in both ports --
+;; nothing calls either -- and they disagree with the live `flint/thread-state`
+;; builtin on two answers, saying nil where it throws and `:runnable` where it
+;; says `:new`. Generating them would have cemented the wrong contract into
+;; the vocabulary. They are deleted instead.
+;;
+;; MEASURED, not read: the same image, three ways.
+;;
+;;     native   IllegalStateException: a thread cannot join itself
+;;     jvm      IllegalStateException: deadlock: 1 green thread(s) are
+;;              parked and nothing can wake them / thread 0 waiting on thread 0
+;;     clr      the same as the jvm
+(ns flint.rt.threadjoin
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != not nil? bits
+                                   as-fixnum slot set-thrown
+                                   current-thread is-thread
+                                   throw-str str-cat static-text
+                                   Rt Value Text I64 Bool NIL
+                                   WK_JOIN TH_STATUS TH_RESULT
+                                   ST_DONE ST_FAILED]]
+            [flint.rt.nouns :refer [describe]]
+            [flint.rt.sched :refer [park-on-port]]))
+
+(doc "Wait for `t` and answer its value; re-throw if it failed."
+     ""
+     "A DEAD THREAD'S FAILURE BECOMES THE JOINER'S, which is what makes a"
+     "silent dead thread impossible to ignore. It is not wrapped and not"
+     "renamed: the value on `TH_RESULT` goes straight back on `thrown`, so a"
+     "joiner sees exactly what the thread saw."
+     ""
+     "A FINISHED THREAD DOES NOT PARK. Both terminal states answer at once --"
+     "there is nothing to wait for, and parking on a thread that has already"
+     "settled would wait for a wake that has been and gone."
+     ""
+     "A THREAD MAY NOT JOIN ITSELF. It is the one join that can never be"
+     "satisfied: `settle` is what wakes a joiner, and `settle` runs only when"
+     "the thread finishes, which it cannot do while parked. Refusing it by"
+     "name says so AT THE CALL. Left to run, it becomes a deadlock report one"
+     "scheduler turn later, naming the symptom -- a thread waiting on itself"
+     "-- rather than the mistake."
+     ""
+     "OTHERWISE, PARKED ON THE THREAD OBJECT. A thread is a wake key like any"
+     "port; that is why `wake-on` takes a value rather than a port, and why"
+     "joining needs no machinery of its own.")
+(defn ^:pub ^:method ^Value join-at [^:mut ^Rt rt ^Value t]
+  (if (not (is-thread rt t))
+    (let [^Text what (describe rt t)]
+      (return (throw-str rt "ClassCastException"
+                         (str-cat (static-text "join wants a thread, got ") what)))))
+  (let [^I64 st (as-fixnum (slot rt t TH_STATUS))]
+    (if (== st ST_DONE)
+      (return (slot rt t TH_RESULT)))
+    (if (== st ST_FAILED)
+      (do
+        (comment "STRAIGHT BACK ON `thrown`, unwrapped: the joiner sees what"
+                 "the thread saw. Nothing allocates here, which is what lets"
+                 "the value be read out of a slot and written to a field that"
+                 "no root walk visits.")
+        (set-thrown rt (slot rt t TH_RESULT))
+        (return NIL))))
+  (let [^Value cur (current-thread rt)]
+    (if (not (nil? rt cur))
+      (if (== (bits cur) (bits t))
+        (return (throw-str rt "IllegalStateException"
+                           (static-text "a thread cannot join itself"))))))
+  (return (park-on-port rt WK_JOIN t)))

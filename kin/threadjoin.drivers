@@ -1,0 +1,332 @@
+--rust-head
+// A TOY THREAD TABLE. What these two functions do is DECIDE -- answer, throw,
+// park, or say nothing -- so the toy records the four outcomes and models
+// nothing else. `park_on_port` is stubbed: what it builds is pinned in
+// `kin/sched.drivers`, and what matters here is WHETHER it is reached and
+// with which wait kind.
+extern crate alloc;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_0000_0000_0000);
+mod conc {
+    pub const TH_STATUS: u32 = 0;
+    pub const TH_RESULT: u32 = 1;
+    // THE REAL VALUES, because the expected answers name them.
+    pub const ST_NEW: i64 = 0;
+    pub const ST_RUNNABLE: i64 = 1;
+    pub const ST_PARKED: i64 = 2;
+    pub const ST_DONE: i64 = 3;
+    pub const ST_FAILED: i64 = 4;
+    pub const WK_JOIN: i64 = 4;
+}
+impl Value {
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn is_nil(self) -> bool { self == NIL }
+}
+struct Rt {
+    objs: Vec<Vec<Value>>,
+    threads: Vec<u64>,
+    kws: Vec<alloc::string::String>,
+    thrown: Value,
+    cur: Value,
+    // WHAT WAS THROWN and WHAT WAS PARKED ON, in the order it happened.
+    threw: Vec<(alloc::string::String, alloc::string::String)>,
+    parked: Vec<i64>,
+}
+impl Rt {
+    // HANDLES START AT 1000 so no object collides with a fixnum status, and
+    // keywords at 2000 so an answer can be told apart from a slot value.
+    fn obj(&mut self, slots: Vec<Value>) -> Value {
+        self.objs.push(slots);
+        Value((self.objs.len() - 1) as u64 + 1000)
+    }
+    fn slot(&self, v: Value, i: u32) -> Value { self.objs[(v.0 - 1000) as usize][i as usize] }
+    fn is_thread(&self, v: Value) -> bool { self.threads.contains(&v.0) }
+    fn current_thread(&self) -> Value { self.cur }
+    fn describe(&mut self, _v: Value) -> alloc::string::String { "a fixnum".into() }
+    fn keyword(&mut self, _ns: Option<()>, name: &str) -> Value {
+        self.kws.push(name.into());
+        Value((self.kws.len() - 1) as u64 + 2000)
+    }
+    fn throw_str(&mut self, class: &str, msg: &str) -> Value {
+        self.threw.push((class.into(), msg.into()));
+        NIL
+    }
+    fn park_on_port(&mut self, kind: i64, _port: Value) -> Value {
+        self.parked.push(kind);
+        Value(3000)
+    }
+--rust
+}
+fn fresh() -> Rt {
+    Rt { objs: vec![], threads: vec![], kws: vec![], thrown: NIL, cur: NIL,
+         threw: vec![], parked: vec![] }
+}
+// `<answer>:<thrown>:<throw>:<parks>`
+fn joined(rt: &Rt, ans: Value, res: Value) -> String {
+    let name = |v: Value| -> &'static str {
+        if v.is_nil() { "-" } else if v == res { "res" }
+        else if v.0 == 3000 { "park" } else { "?" }
+    };
+    let thr = match rt.threw.last() {
+        None => "-".to_string(),
+        Some((c, m)) => {
+            let short = if c == "ClassCastException" { "CC" }
+                        else if c == "IllegalStateException" { "IS" } else { "??" };
+            let ok = m == "join wants a thread, got a fixnum"
+                  || m == "a thread cannot join itself";
+            format!("{}:{}", short, if ok { 1 } else { 0 })
+        }
+    };
+    let parks = match rt.parked.last() {
+        None => "0".to_string(),
+        Some(k) => format!("1@{}", k),
+    };
+    format!("{}:{}:{}:{}", name(ans), name(rt.thrown), thr, parks)
+}
+// A thread in status `st`, joined by `cur_is_self`'s current thread.
+fn join_case(is_thread: bool, st: i64, cur: i32) -> String {
+    let mut rt = fresh();
+    let res = rt.obj(vec![]);
+    let t = rt.obj(vec![Value(st as u64), res]);
+    if is_thread { rt.threads.push(t.0); }
+    // `cur`: 0 nobody running, 1 the joined thread itself, 2 somebody else.
+    if cur == 1 { rt.cur = t; }
+    if cur == 2 { let o = rt.obj(vec![]); rt.threads.push(o.0); rt.cur = o; }
+    let ans = rt.join_at(t);
+    joined(&rt, ans, res)
+}
+fn main() {
+    // 1. NOT A THREAD. A throw, by class, and the message names what it got.
+    let r1 = join_case(false, conc::ST_RUNNABLE, 2);
+    // 2. ALREADY DONE. The value, at once -- no park, and `thrown` untouched.
+    let r2 = join_case(true, conc::ST_DONE, 2);
+    // 3. ALREADY FAILED. Nil BACK, and the thread's error on `thrown`: the
+    //    failure becomes the joiner's, unwrapped.
+    let r3 = join_case(true, conc::ST_FAILED, 2);
+    // 4. JOINING ITSELF. Refused BY NAME, and NOTHING is parked.
+    let r4 = join_case(true, conc::ST_RUNNABLE, 1);
+    // 5. AN ORDINARY JOIN. Parked, on the join wait kind.
+    let r5 = join_case(true, conc::ST_PARKED, 2);
+    // 6. NO THREAD RUNNING. Still parks: a nil current thread is not a
+    //    self-join, and the guard must not read through it.
+    let r6 = join_case(true, conc::ST_RUNNABLE, 0);
+    // 7. A THREAD THAT HAS NEVER RUN. Parks -- `ST_NEW` is not terminal.
+    let r7 = join_case(true, conc::ST_NEW, 2);
+    println!("{} | {} | {} | {} | {} | {} | {}", r1, r2, r3, r4, r5, r6, r7);
+}
+--java-head
+    // THE SAME TOY, field for field.
+    static final long NIL = 0xFFFF000000000000L;
+    static final class Val {
+        static final long NIL = 0xFFFF000000000000L;
+        static boolean isNil(long v) { return v == NIL; }
+        static long asFixnum(long v) { return v; }
+    }
+    static final class Conc {
+        static final int TH_STATUS = 0, TH_RESULT = 1;
+        static final long ST_NEW = 0, ST_RUNNABLE = 1, ST_PARKED = 2,
+                          ST_DONE = 3, ST_FAILED = 4;
+        static final long WK_JOIN = 4;
+        static boolean isThread(Rt rt, long v) { return rt.threads.contains(v); }
+        static long currentThread(Rt rt) { return rt.cur; }
+    }
+    // BARE, not on a class: cross-namespace kin calls land unqualified.
+    static String describe(Rt rt, long v) { return "a fixnum"; }
+    static long parkOnPort(Rt rt, long kind, long port) {
+        rt.parked.add(kind);
+        return 3000L;
+    }
+    static final class Str {
+        static long keyword(Rt rt, Object ns, String name) {
+            rt.kws.add(name);
+            return rt.kws.size() - 1 + 2000;
+        }
+    }
+    static final class Rt {
+        java.util.List<long[]> objs = new java.util.ArrayList<>();
+        java.util.List<Long> threads = new java.util.ArrayList<>();
+        java.util.List<String> kws = new java.util.ArrayList<>();
+        java.util.List<String> threwC = new java.util.ArrayList<>();
+        java.util.List<String> threwM = new java.util.ArrayList<>();
+        java.util.List<Long> parked = new java.util.ArrayList<>();
+        long thrown = NIL, cur = NIL;
+        long obj(long[] slots) { objs.add(slots); return objs.size() - 1 + 1000; }
+        long slot(long v, int i) { return objs.get((int) (v - 1000))[i]; }
+        long throwStr(String cls, String msg) { threwC.add(cls); threwM.add(msg); return NIL; }
+    }
+--java
+    static Rt fresh() { return new Rt(); }
+    static String nameOf(long v, long res) {
+        if (v == NIL) return "-";
+        if (v == res) return "res";
+        if (v == 3000L) return "park";
+        return "?";
+    }
+    static String joined(Rt rt, long ans, long res) {
+        String thr;
+        if (rt.threwC.isEmpty()) thr = "-";
+        else {
+            String c = rt.threwC.get(rt.threwC.size() - 1);
+            String m = rt.threwM.get(rt.threwM.size() - 1);
+            String shortC = c.equals("ClassCastException") ? "CC"
+                          : c.equals("IllegalStateException") ? "IS" : "??";
+            boolean ok = m.equals("join wants a thread, got a fixnum")
+                      || m.equals("a thread cannot join itself");
+            thr = shortC + ":" + (ok ? 1 : 0);
+        }
+        String parks = rt.parked.isEmpty() ? "0"
+                     : "1@" + rt.parked.get(rt.parked.size() - 1);
+        return nameOf(ans, res) + ":" + nameOf(rt.thrown, res) + ":" + thr + ":" + parks;
+    }
+    static String joinCase(boolean isThread, long st, int cur) {
+        Rt rt = fresh();
+        long res = rt.obj(new long[]{});
+        long t = rt.obj(new long[]{st, res});
+        if (isThread) rt.threads.add(t);
+        if (cur == 1) rt.cur = t;
+        if (cur == 2) { long o = rt.obj(new long[]{}); rt.threads.add(o); rt.cur = o; }
+        long ans = joinAt(rt, t);
+        return joined(rt, ans, res);
+    }
+    public static void main(String[] args) {
+        System.out.println(
+            joinCase(false, Conc.ST_RUNNABLE, 2) + " | " +
+            joinCase(true, Conc.ST_DONE, 2) + " | " +
+            joinCase(true, Conc.ST_FAILED, 2) + " | " +
+            joinCase(true, Conc.ST_RUNNABLE, 1) + " | " +
+            joinCase(true, Conc.ST_PARKED, 2) + " | " +
+            joinCase(true, Conc.ST_RUNNABLE, 0) + " | " +
+            joinCase(true, Conc.ST_NEW, 2));
+    }
+--csharp-head
+    // THE SAME TOY, field for field.
+    const long NIL = unchecked((long) 0xFFFF000000000000UL);
+    public static class Val {
+        public const long Nil = unchecked((long) 0xFFFF000000000000UL);
+        public static bool IsNil(long v) { return v == Nil; }
+        public static long AsFixnum(long v) { return v; }
+    }
+    public static class Conc {
+        public const int TH_STATUS = 0, TH_RESULT = 1;
+        public const long ST_NEW = 0, ST_RUNNABLE = 1, ST_PARKED = 2,
+                          ST_DONE = 3, ST_FAILED = 4;
+        public const long WK_JOIN = 4;
+        public static bool IsThread(Rt rt, long v) { return rt.threads.Contains(v); }
+        public static long CurrentThread(Rt rt) { return rt.cur; }
+    }
+    static string Describe(Rt rt, long v) { return "a fixnum"; }
+    static long ParkOnPort(Rt rt, long kind, long port) {
+        rt.parked.Add(kind);
+        return 3000L;
+    }
+    public static class Str {
+        public static long Keyword(Rt rt, object? ns, string name) {
+            rt.kws.Add(name);
+            return rt.kws.Count - 1 + 2000;
+        }
+    }
+    public class Rt {
+        public System.Collections.Generic.List<long[]> objs = new System.Collections.Generic.List<long[]>();
+        public System.Collections.Generic.List<long> threads = new System.Collections.Generic.List<long>();
+        public System.Collections.Generic.List<string> kws = new System.Collections.Generic.List<string>();
+        public System.Collections.Generic.List<string> threwC = new System.Collections.Generic.List<string>();
+        public System.Collections.Generic.List<string> threwM = new System.Collections.Generic.List<string>();
+        public System.Collections.Generic.List<long> parked = new System.Collections.Generic.List<long>();
+        public long thrown = NIL, cur = NIL;
+        public long Obj(long[] slots) { objs.Add(slots); return objs.Count - 1 + 1000; }
+        public long Slot(long v, int i) { return objs[(int)(v - 1000)][i]; }
+        public long ThrowStr(string cls, string msg) { threwC.Add(cls); threwM.Add(msg); return NIL; }
+    }
+--csharp
+    static Rt Fresh() { return new Rt(); }
+    static string NameOf(long v, long res) {
+        if (v == NIL) return "-";
+        if (v == res) return "res";
+        if (v == 3000L) return "park";
+        return "?";
+    }
+    static string Joined(Rt rt, long ans, long res) {
+        string thr;
+        if (rt.threwC.Count == 0) thr = "-";
+        else {
+            string c = rt.threwC[rt.threwC.Count - 1];
+            string m = rt.threwM[rt.threwM.Count - 1];
+            string shortC = c == "ClassCastException" ? "CC"
+                          : c == "IllegalStateException" ? "IS" : "??";
+            bool ok = m == "join wants a thread, got a fixnum"
+                   || m == "a thread cannot join itself";
+            thr = shortC + ":" + (ok ? 1 : 0);
+        }
+        string parks = rt.parked.Count == 0 ? "0"
+                     : "1@" + rt.parked[rt.parked.Count - 1];
+        return NameOf(ans, res) + ":" + NameOf(rt.thrown, res) + ":" + thr + ":" + parks;
+    }
+    static string JoinCase(bool isThread, long st, int cur) {
+        Rt rt = Fresh();
+        long res = rt.Obj(new long[]{});
+        long t = rt.Obj(new long[]{st, res});
+        if (isThread) rt.threads.Add(t);
+        if (cur == 1) rt.cur = t;
+        if (cur == 2) { long o = rt.Obj(new long[]{}); rt.threads.Add(o); rt.cur = o; }
+        long ans = JoinAt(rt, t);
+        return Joined(rt, ans, res);
+    }
+    static void Main() {
+        System.Console.WriteLine(
+            JoinCase(false, Conc.ST_RUNNABLE, 2) + " | " +
+            JoinCase(true, Conc.ST_DONE, 2) + " | " +
+            JoinCase(true, Conc.ST_FAILED, 2) + " | " +
+            JoinCase(true, Conc.ST_RUNNABLE, 1) + " | " +
+            JoinCase(true, Conc.ST_PARKED, 2) + " | " +
+            JoinCase(true, Conc.ST_RUNNABLE, 0) + " | " +
+            JoinCase(true, Conc.ST_NEW, 2));
+    }
+--expect
+-:-:CC:1:0 | res:-:-:0 | -:res:-:0 | -:-:IS:1:0 | park:-:-:1@4 | park:-:-:1@4 | park:-:-:1@4
+--expect-why
+DERIVED FROM THE CONTRACT. Seven rows as `<answer>:<thrown>:<throw>:<parks>`.
+
+1  NOT A THREAD -- `-:-:CC:1:0`. A `ClassCastException`, and the `1` says the
+   message names what it actually got rather than only what it wanted. No
+   park: a caller who passed the wrong thing is not made to wait for it.
+
+2  ALREADY DONE -- `res:-:-:0`. The value, AT ONCE. `thrown` is untouched and
+   nothing is parked -- parking on a thread that has already settled waits for
+   a wake that has been and gone, because `settle` is what wakes a joiner and
+   `settle` has already run.
+
+3  ALREADY FAILED -- `-:res:-:0`. Nil back, and the thread's own error on
+   `thrown`, unwrapped and unrenamed: the joiner sees exactly what the thread
+   saw. Returning the error AS A VALUE instead reads `res:-:-:0` and makes a
+   dead thread silently indistinguishable from one that returned an exception.
+
+4  JOINING ITSELF -- `-:-:IS:1:0`. THIS IS THE DIVERGENCE THIS SLICE CLOSES.
+   Native refused it by name; both ports parked, and their deadlock reporter
+   caught it one scheduler turn later as "thread 0 waiting on thread 0". The
+   final `0` is the load-bearing field: refusing must not ALSO park. Drop the
+   guard and the row reads `park:-:-:1@4`.
+
+5  AN ORDINARY JOIN -- `park:-:-:1@4`. Parked on the thread object itself,
+   under the join wait kind. `4` is `WK_JOIN`; a thread is a wake key like any
+   port, which is why joining needs no machinery of its own.
+
+6  NOTHING RUNNING -- `park:-:-:1@4`. A nil current thread is not a self-join.
+   The guard tests for nil before comparing, and this row is what says the
+   comparison is not reached through it.
+
+7  NEVER RUN -- `park:-:-:1@4`. `ST_NEW` is not terminal. Answering here would
+   hand back a result slot that no thread has written.
+
+AND THE SEVEN STATE ROWS THAT USED TO FOLLOW ARE GONE, with the function
+they tested. `Conc.state` and `Conc.State` turned out to be DEAD in both
+ports -- nothing calls either -- and to disagree with the live
+`flint/thread-state` builtin on two answers: nil where it throws, `:runnable`
+where it says `:new`. The guest-facing doc in `lib/flint/thread.cljc` names
+`:new` among the answers, so the live builtin is right and the dead copies
+were wrong. Generating them would have written the wrong contract into the
+vocabulary, where every later caller would inherit it.
+
+*A duplicate nothing calls is not harmless.* It is a second answer to a
+question the code has already answered, with nothing to keep the two in step,
+and it reads exactly like the live one to anybody porting from it.

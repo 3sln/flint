@@ -1492,32 +1492,18 @@ public final class Conc {
 
     // --- joining ------------------------------------------------------------
 
+    /// GENERATED (`kin/threadjoin.kin`). Wait for `t` and answer its value.
+    /// The self-join refusal was in NATIVE AND NOWHERE ELSE: this copy parked
+    /// and let the deadlock reporter catch it a turn later, naming the
+    /// symptom ("thread 0 waiting on thread 0") rather than the mistake.
     public static long join(Rt rt, long t) {
-        if (!isThread(rt, t)) return rt.throwStr("ClassCastException", "join wants a thread, got " + rt.describe(t));
-        long st = fx(rt.slot(t, TH_STATUS));
-        if (st == ST_DONE) return rt.slot(t, TH_RESULT);
-        if (st == ST_FAILED) {
-            // The thread's failure becomes the joiner's, which is what makes a
-            // silent dead thread impossible to ignore.
-            rt.thrown = rt.slot(t, TH_RESULT);
-            return Val.NIL;
-        }
-        // Parked ON THE THREAD OBJECT, which `settle` wakes when it finishes.
-        // A thread is a wake key like any port -- that is why `wakeOn` takes a
-        // value rather than a port.
-        return parkOnPort(rt, WK_JOIN, t);
+        return com._3sln.flint.kgen.rt.Threadjoin.joinAt(rt, t);
     }
 
-    public static long state(Rt rt, long t) {
-        if (!isThread(rt, t)) return Val.NIL;
-        switch ((int) fx(rt.slot(t, TH_STATUS))) {
-            case ST_NEW:
-            case ST_RUNNABLE: return Str.keyword(rt, null, "runnable");
-            case ST_PARKED: return Str.keyword(rt, null, "parked");
-            case ST_DONE: return Str.keyword(rt, null, "done");
-            default: return Str.keyword(rt, null, "failed");
-        }
-    }
+    // `state` WAS HERE and is gone. It was DEAD -- nothing called it -- and it
+    // disagreed with the live `flint/thread-state` builtin on two answers: nil
+    // where that throws, `:runnable` where that says `:new`. See
+    // `kin/threadjoin.drivers`.
 
     // --- the scheduler ------------------------------------------------------
 
@@ -1599,19 +1585,8 @@ public final class Conc {
     ///
     /// Defining completion any other way means a program that leaves a reader
     /// parked never terminates.
-    static boolean mainFinished(Rt rt) {
-        long th = Vec.nth(rt, rt.slot(sched(rt), SC_THREADS), 0, Val.NOT_FOUND);
-        if (Val.isNil(th) || th == Val.NOT_FOUND) return true;
-        long st = fx(rt.slot(th, TH_STATUS));
-        return st == ST_DONE || st == ST_FAILED;
-    }
-
-    static long mainResult(Rt rt) {
-
-        long th = Vec.nth(rt, rt.slot(sched(rt), SC_THREADS), 0, Val.NOT_FOUND);
-        long r = (Val.isNil(th) || th == Val.NOT_FOUND) ? Val.NIL : rt.slot(th, TH_RESULT);
-        return r;
-    }
+    // `mainFinished` WAS HERE and is gone: dead, replaced by the generated
+    // `schedAllSettled`. `mainResult` is gone too -- see `settledAnswer`.
 
     /// The scheduler hook: settle whatever just stopped, then drive.
     public static long scheduler(Rt rt, long first) {
@@ -1677,7 +1652,13 @@ public final class Conc {
     /// Named to match native's `settled_answer`, which is the name
     /// `kin/sched.kin` calls. It was `mainResult` here, from the model
     /// in which thread 0 was `main`.
-    public static long settledAnswer(Rt rt) { return mainResult(rt); }
+    /// GENERATED (`kin/mainanswer.kin`). It returned `TH_RESULT`
+    /// unconditionally, which for a FAILED thread is the error -- so a host
+    /// saw status 0 and a value that happened to be an exception. Native put
+    /// it back on `thrown`; this did not, and nothing compared them.
+    public static long settledAnswer(Rt rt) {
+        return com._3sln.flint.kgen.rt.Mainanswer.mainAnswer(rt);
+    }
 
     /// NAME THE DEADLOCK rather than hang on it. THREE implementations on
     /// purpose: this builds a host string naming each stuck thread, and a

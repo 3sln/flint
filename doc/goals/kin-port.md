@@ -7942,3 +7942,92 @@ lines of warnings came first. `conform-hosts` found it ten minutes later with
 like a clean build.* Count first (`grep -c`), print second. The fix was one
 `pub(crate)`, and the ten minutes were the cost of trusting a truncated log.
 
+---
+
+## Two more divergences, and both of them reported a failure as a success
+
+2026-09-20, the same firing as `settle`. `kin/threadjoin.kin` and
+`kin/mainanswer.kin` -- 107 sources. `Conc` is 5 721 lines. Neither of these
+was on any list: both turned up while reading the three copies of `join` side
+by side, which is what this port keeps being worth.
+
+### A thread joining itself
+
+Native refuses it by name. Neither port did. **Measured** with a three-line
+fixture, `runtimes/conform-host/selfjoin.cljc`, the same image three ways:
+
+    native   IllegalStateException: a thread cannot join itself   status 1
+    jvm      IllegalStateException: deadlock: 1 green thread(s)
+             are parked and nothing can wake them
+             thread 0 waiting on thread 0                         status 1
+    clr      the same as the jvm
+
+The ports are not wrong so much as late. Their deadlock reporter catches it
+one scheduler turn later, and the sentence it prints is a good one -- it even
+names the thread twice, which IS the diagnosis. But it names a SYMPTOM, and it
+arrives when the scheduler gives up rather than at the call that made the
+mistake. A self-join is the one join that can never be satisfied: `settle` is
+what wakes a joiner, and `settle` runs only when the thread finishes, which it
+cannot do while parked.
+
+Seven mutations. The load-bearing one is that refusing must not ALSO park:
+drop the guard and row 4 reads `park:-:-:1@4` instead of `-:-:IS:1:0`, which
+is the ports as they stood.
+
+### `Conc.state` was dead, and disagreed with the live builtin
+
+`state` was going to be ported alongside `join`. It should not be: `Conc.state`
+and `Conc.State` are **dead in both ports** -- nothing calls either -- and they
+disagree with the live `flint/thread-state` builtin on two answers, saying nil
+where it throws and `:runnable` where it says `:new`. The guest-facing doc in
+`lib/flint/thread.cljc` names `:new` among the answers, so the builtin is right
+and the dead copies are wrong. They are deleted.
+
+*A duplicate nothing calls is not harmless.* It is a second answer to a
+question the code has already answered, with nothing keeping the two in step,
+and it reads exactly like the live one to anybody porting from it. Generating
+it would have written the wrong contract into the vocabulary, where every
+later caller inherits it. `mainFinished`/`MainFinished` went the same way in
+the same firing -- dead since `schedAllSettled` was generated.
+
+### The bigger one: a throw from `main` was a SUCCESS on both ports
+
+Found by probing whether the self-join fix had landed, and it had -- the
+REPORTING was broken. A two-line fixture, `plainthrow.cljc`:
+
+    (defn main [_] (throw (ex-info "boom" {})))
+
+    native   ExceptionInfo: boom    status 1
+    jvm      an ex-info             status 0
+    clr      an ex-info             status 0
+
+`settled_answer` puts a failed thread's error back on `thrown` and answers
+nil. Both ports' `mainResult` returned `TH_RESULT` unconditionally -- and
+`TH_RESULT` holds the ERROR for a failed thread and the VALUE for a finished
+one. So a host asking what happened got a success whose value happened to be
+an exception, with no way to tell the two apart.
+
+**`DECISIONS.md#ports-are-the-hosts` says a sandbox that cannot do what was
+asked is TOLD so.** A host that cannot distinguish a failure from a value has
+not been told anything; it has been handed the evidence and left to guess.
+
+*One slot holding two things, with the status beside it saying which.* A copy
+that reads the slot and not the status is correct on every row but one, and
+that one is the failure path -- the row least likely to be exercised by a test
+that is checking answers.
+
+Both fixtures are now rows in `bin/conform-hosts`, and both assert the
+SENTENCE and the STATUS rather than only comparing. Three runtimes agreeing on
+"status 0, an ex-info" is identical too, and that is exactly what two of them
+used to agree on.
+
+### A probe is a suspect before a fix is
+
+The chase went: fix the self-join, run it, see the ports answer `an ex-info`
+with status 0, and start to suspect the fix. The fix was fine. The next probe
+settled it in one run -- a plain throw, no join anywhere -- and named a defect
+neither this slice nor the last was looking for.
+
+*When a fix does not show up, probe something simpler that should already
+work.* If THAT is broken too, the fix was never the subject.
+
