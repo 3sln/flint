@@ -8286,3 +8286,87 @@ it is a non-empty string, opens in a `with`, and restores in a `finally` --
 and asserts the base source is over a thousand bytes before it starts, so a
 second run against a truncated file stops instead of amplifying.
 
+---
+
+## The over-supply hole is closed, in kin, where the arity is known
+
+2026-09-21. The previous firing named this and did not do it: *"an extra
+argument shifts the rest along and the last one is dropped, producing valid
+code that does the wrong thing. Catching that wants the arity known at the
+call site, which is the generator's job and lives in the kin repo."* It is
+done, in `../kin` via a worktree, merged fast-forward onto `main`
+(`c522528`).
+
+**Measured first, because the previous note asserted it.** `(wake-on rt (r rt
+pi) 99 (r rt pi))` -- two extra arguments -- generated
+`self.wake_on(self.r(pi));` with no complaint on any of the three targets. The
+extras simply vanish: `fmt` reduces over `(range (count args))` and substitutes
+only the indices the template NAMES.
+
+So the two miscounts fail in opposite and quiet ways:
+
+    too few    the unfilled `{N}` is copied into the target language --
+               a compile error three steps away, blaming generated code
+               nobody wrote (caught, last firing, by a check-kin scan)
+    too many   the extras are never referenced -- CODE THAT COMPILES and
+               does the wrong thing, and nothing was looking for it
+
+`kin.lang/call` now asserts the count and says which direction it went,
+because the two want opposite fixes. `template-arity` is the highest `{N}`
+plus one; a template may SKIP an index, so `crosses_a_heap({1})` is arity 2
+even though it reads only the second argument.
+
+### The survey came before the rule, and it is why the rule is strict
+
+Reading the templates and counting the arguments at all 5 259 call sites
+across the 108 sources: **two mismatches, both the same word.** `spin-hint` is
+the only word in flint's vocabulary whose text names no argument at all, and
+it is still written `(spin-hint rt)`.
+
+That one exception decided the design. Read off the template alone, the rule
+would have demanded `(spin-hint)` -- making the single word that needs no
+receiver the single word called differently from every other. So `core/call`
+gained `{:arity n}` for a word that TAKES an argument it does not SPELL, and
+`spin-hint` declares it. The vocabulary now has no exceptions to
+receiver-first, and the check holds with no special cases.
+
+*A rule with one exception is a rule worth reshaping until it has none, if the
+exception is cheap to state.* The alternative -- relaxing to "at least as many
+as the template names" -- would have kept the dangerous half of the hole open
+for the sake of one word.
+
+### kin's own test suite had the bug, in a fixture
+
+`test/link.clj` defines `thing` twice over -- a vocabulary form and a local
+`defn` -- to show one name resolving to the vocabulary BEFORE the local
+definition and to the local after. The vocabulary template was
+`VOCAB_thing({0})` and the call was `(thing rt x)`, so the fixture
+over-supplied and asserted the truncated output.
+
+Fixing it makes the test truer to its own subject. *A name that resolves two
+ways has to take the same arguments both ways*, or the two readings of
+`(thing rt x)` are not the same call -- which is precisely what that test is
+about. The local arity was already 2; the vocabulary's is now 2 as well.
+
+### What was verified, and how
+
+* `bb test` in the kin worktree: all fourteen files, exit 0.
+* Six new assertions in `test/diagnostics.clj` -- too few, too many, the
+  template quoted in the message, a correct call untouched, a declared arity
+  honoured, and a declared arity still CHECKED rather than merely recorded.
+  **Four go red with the check disabled**; the two that stay green are the
+  ones asserting correct calls still emit, which is what they are for.
+* `bin/check-kin` under the new kin: 108/108, and **every generated module
+  still matches**. This is a pure check -- it changes no output.
+* Three adversarial calls injected into `kin/portrecv.kin` and run through
+  `gen`: too many, too few, and too many on a three-argument word. All three
+  refused, each naming the word, both counts, the template, and the direction.
+
+### Both halves of the hazard are now covered, in different places
+
+    under-supply   kin refuses the call; and bin/check-kin scans generated
+                   output for a surviving `{N}`, in case a template is ever
+                   filled some other way
+    over-supply    kin refuses the call -- and nothing downstream could have,
+                   because the output is valid code
+

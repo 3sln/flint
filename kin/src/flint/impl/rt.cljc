@@ -2019,9 +2019,16 @@
     ;; can back off; removing it changes no answer. Native had one and the two
     ;; ports did not, which is the kind of difference that is invisible until
     ;; somebody asks why one runtime is slower under contention.
+    ;; `:arity 1` BECAUSE IT TAKES THE RECEIVER AND DOES NOT SPELL IT. This
+    ;; is the one word in the table whose text names no argument at all, and
+    ;; it is still written `(spin-hint rt)` -- every other word is
+    ;; receiver-first and an exception is a trap rather than a saving. Saying
+    ;; so here is what lets the arity check hold with no special cases: read
+    ;; off the template alone this would demand `(spin-hint)`.
     'spin-hint (core/call {:rust "core::hint::spin_loop()"
                            :java "java.lang.Thread.onSpinWait()"
-                           :csharp "System.Threading.Thread.SpinWait(1)"})
+                           :csharp "System.Threading.Thread.SpinWait(1)"}
+                          {:arity 1})
 
 
     ;; THE SCHEDULER OBJECT, and the two predicates over it that every
