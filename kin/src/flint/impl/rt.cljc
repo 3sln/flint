@@ -419,6 +419,24 @@
    'TRUE {:rust "TRUE" :java "Val.TRUE" :csharp "Val.True"}
    'FALSE {:rust "FALSE" :java "Val.FALSE" :csharp "Val.False"}
    'NOT_FOUND {:rust "NOT_FOUND" :java "Val.NOT_FOUND" :csharp "Val.NotFound"}
+   ;; THE FIXNUM BOUNDARY, named on all three runtimes -- so this word NAMES
+   ;; them rather than spelling the value out. It emitted `((1L << 47) - 1)`
+   ;; for a few minutes and `check-kin` refused it: "no file under
+   ;; runtimes/jvm/src/com/flint/rt defines `((1L << 47) - 1)`". That check
+   ;; exists for exactly this, and it caught the vocabulary committing the
+   ;; same sin the function below was written to remove. `value.rs:82`,
+   ;; `Val.java:74` and `Val.cs:51` each declare it; both ports' `Num.integer`
+   ;; then inlined the bound as a literal anyway (`n >= -(1L << 47) && n <
+   ;; (1L << 47)`, the same test the other way round). The two PORTS' copies
+   ;; are gated against each other by `bin/check-port-consts`; native's is
+   ;; compared with nothing, that checker being port-versus-port.
+   ;; QUALIFIED on rust, as `HDR` is: a generated module's preamble imports a
+   ;; fixed set from `crate::value`, and these are not in it. The path is what
+   ;; makes the name resolve without touching that preamble -- and the probe
+   ;; harness answers it the same way `objsize.drivers` answers `crate::obj`,
+   ;; with a module of that name.
+   'FIXNUM_MIN {:rust "crate::value::FIXNUM_MIN" :java "Val.FIXNUM_MIN" :csharp "Val.FixnumMin"}
+   'FIXNUM_MAX {:rust "crate::value::FIXNUM_MAX" :java "Val.FIXNUM_MAX" :csharp "Val.FixnumMax"}
    ;; The lazy-seq slot indices. These USED to need an entry here: the CLR
    ;; spelled them `LsThunk` and `LsSeq` while the other two spelled them
    ;; SCREAMING_SNAKE, so passing them through verbatim emitted `LS_THUNK`
@@ -1827,6 +1845,21 @@
                           :java "{0}.gc.sp.writeU8({1}, {2})"
                           :csharp "{0}.gc.sp.WriteU8({1}, {2})"})
 
+    ;; RAW 64-BIT ACCESS, which is how a BIGINT carries its payload: eight
+    ;; bytes at `HDR`, no tag. Every runtime already has the pair -- `mem.rs`
+    ;; `read_u64`/`write_u64`, `Space.java` `readU64`/`writeU64` and the clr's
+    ;; twin -- and all three use NATIVE byte order, which is little-endian on
+    ;; every target flint builds for. Native's hand-written `integer` spelled
+    ;; it `to_le_bytes` and `from_le_bytes`, making explicit what the other
+    ;; two left implicit; the three agree, and this word is where that stops
+    ;; being a coincidence of three spellings.
+    'write-u64 (core/call {:rust "{0}.gc.sp.write_u64({1}, {2} as u64)"
+                            :java "{0}.gc.sp.writeU64({1}, {2})"
+                            :csharp "{0}.gc.sp.WriteU64({1}, {2})"})
+    'read-u64 (core/call {:rust "({0}.gc.sp.read_u64({1}) as i64)"
+                           :java "{0}.gc.sp.readU64({1})"
+                           :csharp "{0}.gc.sp.ReadU64({1})"}
+                          {:tag I64})
     'read-u8 (core/call {:rust "({0}.gc.sp.read_u8({1}) as u32)"
                          :java "{0}.gc.sp.readU8({1})"
                          :csharp "{0}.gc.sp.ReadU8({1})"})

@@ -37,12 +37,21 @@ public final class Num {
 
     // @kin:link:ns: flint.rt.num
     // @kin:link:form:integer: {:template "Num.integer({0}, {1})"}
+    /// GENERATED (`kin/numint.kin`). The BOUND is why: this file inlined
+    /// `n >= -(1L << 47) && n < (1L << 47)` and so did the clr -- while
+    /// `Val.FIXNUM_MAX` sat two files away, already declared here and on both
+    /// other runtimes. `bin/check-port-consts` does compare this constant
+    /// against the clr's `Val.FixnumMax`; what it cannot compare is either of
+    /// them against NATIVE, being port-versus-port by construction. And
+    /// nothing at all checks that `Num.integer` uses the constant rather than
+    /// writing the bound out again, which is what it did.
+    ///
+    /// A DELEGATOR RATHER THAN A RENAME, because the generated code lands in
+    /// a different CLASS here where native's lands as a method on `Rt`: 20
+    /// call sites say `Num.integer` on this side and 20 more on the clr, and
+    /// that asymmetry is structural rather than neglect.
     public static long integer(Rt rt, long n) {
-        if (n >= -(1L << 47) && n < (1L << 47)) return Val.fixnum(n);
-        long a = rt.alloc(TY_BIGINT, 8);
-        if (a == 0) return Val.NIL;
-        rt.gc.sp.writeU64(a + HDR, n);
-        return Val.heap(a);
+        return com._3sln.flint.kgen.rt.Numint.makeInteger(rt, n);
     }
 
     /// Is `v` an integer -- a fixnum or a BIGINT? GENERATED, from
@@ -68,9 +77,12 @@ public final class Num {
     /// reaching for `Val.asFixnum` instead, which reads the tagged payload and
     /// is simply the wrong bits for a BIGINT -- `Table.tableAssoc` did exactly
     /// that with the row index it then put in an error message.
+    /// GENERATED (`kin/numint.kin`). The TOTAL form is the shared one:
+    /// `asI64` answers "the integer, or nothing", which is a boxed `Long`
+    /// here and `Option<i64>` on native -- a nullable type kin has not got,
+    /// so it stays hand-written below.
     public static long i64Of(Rt rt, long v) {
-        Long n = asI64(rt, v);
-        return n == null ? 0L : n;
+        return com._3sln.flint.kgen.rt.Numint.integerValue(rt, v);
     }
 
     public static Long asI64(Rt rt, long v) {

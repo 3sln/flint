@@ -35,13 +35,16 @@ public static class Num {
 
     // @kin:link:ns: flint.rt.num
     // @kin:link:form:integer: {:template "Num.Integer({0}, {1})"}
-    public static long Integer(Rt rt, long n) {
-        if (n >= -(1L << 47) && n < (1L << 47)) return Val.Fixnum(n);
-        long a = rt.Alloc(Obj.TyBigint, 8);
-        if (a == 0) return Val.Nil;
-        rt.gc.sp.WriteU64(a + Obj.Hdr, n);
-        return Val.Heap(a);
-    }
+    /// GENERATED (`kin/numint.kin`) as `MakeInteger` -- a different name on
+    /// purpose, because `integer` is the FORM the annotation above binds and
+    /// a generated function of that name would shadow it.
+    ///
+    /// `Val.FixnumMax` was declared two files away the whole time and this
+    /// method inlined the bound anyway. That copy IS gated against the jvm's
+    /// `FIXNUM_MAX` by `bin/check-port-consts`; neither is compared against
+    /// native, which is port-versus-port by construction. See the Java copy.
+    public static long Integer(Rt rt, long n) =>
+        global::_3sln.Flint.Kgen.Rt.Numint.MakeInteger(rt, n);
 
     /// Is `v` an integer -- a fixnum or a BIGINT? GENERATED, from
     /// `kin/numkind.kin`. A delegator rather than a copy -- see the Java one.
@@ -57,10 +60,12 @@ public static class Num {
     /// "not an integer" and "the integer 0" must be distinguishable, and that
     /// distinction is what drives every promotion below.
     /// The integer value, or 0 when `v` is not an integer -- see the Java copy.
-    public static long I64Of(Rt rt, long v) {
-        long? n = AsI64(rt, v);
-        return n.HasValue ? n.Value : 0L;
-    }
+    /// GENERATED as `IntegerValue`. The TOTAL form is the shared one: `AsI64`
+    /// answers "the integer, or nothing", which is `long?` here and
+    /// `Option<i64>` on native -- a nullable type kin has not got, so it
+    /// stays hand-written.
+    public static long I64Of(Rt rt, long v) =>
+        global::_3sln.Flint.Kgen.Rt.Numint.IntegerValue(rt, v);
 
     public static long? AsI64(Rt rt, long v) {
         if (Val.IsFixnum(v)) return Val.AsFixnum(v);

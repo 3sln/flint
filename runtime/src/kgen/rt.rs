@@ -56,6 +56,7 @@ pub mod codepoints;
 pub mod casetable;
 pub mod casemap;
 pub mod casechange;
+pub mod numint;
 pub mod numkind;
 pub mod valeq;
 pub mod valhash;

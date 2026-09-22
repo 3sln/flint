@@ -1,0 +1,240 @@
+--rust-head
+// THE BOUND IS THE SUBJECT, so the toy carries the REAL constants. A toy that
+// picked a small boundary would still catch a reversed comparison and would
+// not catch a wrong bound, and a wrong bound is the failure with no symptom
+// until some integer near 2^47 comes back with its top bits gone.
+//
+// THE HEAP IS REAL ENOUGH TO ROUND-TRIP. `integer` writes eight raw bytes and
+// `i64-of` reads them; a toy that stubbed the write would be checking which
+// BRANCH ran and not whether the payload survives, which is the half that
+// endianness and width mistakes live in.
+extern crate alloc;
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_FFFF_FFFF);
+const TY_BIGINT: u8 = 3;
+const FIXNUM_MIN: i64 = -(1 << 47);
+const FIXNUM_MAX: i64 = (1 << 47) - 1;
+// The generated code says `crate::value::FIXNUM_MIN`, so the probe carries a
+// module of that name -- the same shape `objsize.drivers` uses for
+// `crate::obj::HDR`.
+mod value { pub const FIXNUM_MIN: i64 = -(1 << 47); pub const FIXNUM_MAX: i64 = (1 << 47) - 1; }
+mod obj { pub const HDR: super::Addr = 8; }
+impl Value {
+    // A fixnum carries its payload; the toy tags it in the top bits so that
+    // `is_fixnum` can tell one from a heap address without a type table.
+    fn fixnum(n: i64) -> Value { Value(((n as u64) & 0xFFFF_FFFF_FFFF) | (1 << 62)) }
+    fn is_fixnum(self) -> bool { self.0 & (1 << 62) != 0 }
+    fn as_fixnum(self) -> i64 { ((self.0 & 0xFFFF_FFFF_FFFF) << 16) as i64 >> 16 }
+    fn heap(a: Addr) -> Value { Value(a) }
+    fn is_heap(self) -> bool { self.0 != NIL.0 && self.0 & (1 << 62) == 0 }
+    fn as_heap(self) -> Addr { self.0 }
+}
+struct Space { m: alloc::vec::Vec<u8> }
+impl Space {
+    // `&mut self` here, where the real `Space` takes `&self` and reaches the
+    // bytes through a raw pointer. The generated caller is already `&mut`, so
+    // the toy does not need that machinery -- and borrowing honestly is what
+    // keeps this a test of `integer` rather than of unsafe code.
+    fn write_u64(&mut self, a: Addr, v: u64) {
+        self.m[a as usize..a as usize + 8].copy_from_slice(&v.to_le_bytes());
+    }
+    fn read_u64(&self, a: Addr) -> u64 {
+        let mut b = [0u8; 8];
+        b.copy_from_slice(&self.m[a as usize..a as usize + 8]);
+        u64::from_le_bytes(b)
+    }
+}
+struct Gc { sp: Space }
+struct Rt { gc: Gc, bump: Addr, starve: bool }
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Rt {
+    // ALLOCATION CAN FAIL, and `starve` is how the fixture reaches that arm:
+    // it is the one branch whose answer is NIL rather than a number.
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        if self.starve { return 0; }
+        let a = self.bump;
+        self.bump += n as u64 + obj::HDR;
+        self.gc.sp.m[a as usize] = t;
+        a
+    }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { gc: Gc { sp: Space { m: alloc::vec![0u8; 4000] } },
+                      bump: 64, starve: false };
+    // `<tier>:<round trip>` for each, where the tier is what `integer` chose.
+    let mut row = |rt: &mut Rt, n: i64| -> alloc::string::String {
+        let v = rt.make_integer(n);
+        let tier = if v == NIL { "N" } else if v.is_fixnum() { "F" } else { "B" };
+        alloc::format!("{}:{}", tier, rt.integer_value(v))
+    };
+    let mut o = alloc::vec::Vec::new();
+    o.push(row(&mut rt, 0));
+    o.push(row(&mut rt, -1));
+    o.push(row(&mut rt, FIXNUM_MAX));         // at the top bound: must NOT box
+    o.push(row(&mut rt, FIXNUM_MAX + 1));     // one past: must box
+    o.push(row(&mut rt, FIXNUM_MIN));         // at the bottom bound: must NOT box
+    o.push(row(&mut rt, FIXNUM_MIN - 1));     // one past: must box
+    o.push(row(&mut rt, i64::MAX));
+    o.push(row(&mut rt, i64::MIN));
+    // A NON-INTEGER answers 0, and NIL is the one to try: it is not a fixnum
+    // and `is_heap` refuses it, so both guards have to hold.
+    o.push(alloc::format!("x:{}", rt.integer_value(NIL)));
+    rt.starve = true;
+    o.push(row(&mut rt, i64::MAX));           // allocation refused
+    println!("{}", o.join(" "));
+}
+--java-head
+    static final long NIL = 0xFFFFFFFFFFFFL;
+    static final int TY_BIGINT = 3;
+    static final long FIXNUM_MIN = -(1L << 47), FIXNUM_MAX = (1L << 47) - 1;
+    static final class Obj { static final long HDR = 8; }
+    static final class Val {
+        static long fixnum(long n) { return (n & 0xFFFFFFFFFFFFL) | (1L << 62); }
+        static boolean isFixnum(long v) { return (v & (1L << 62)) != 0; }
+        static long asFixnum(long v) { return ((v & 0xFFFFFFFFFFFFL) << 16) >> 16; }
+        static long heap(long a) { return a; }
+        static boolean isHeap(long v) { return v != NIL && (v & (1L << 62)) == 0; }
+        static long asHeap(long v) { return v; }
+        static final long NIL = 0xFFFFFFFFFFFFL;
+        static final long FIXNUM_MIN = -(1L << 47), FIXNUM_MAX = (1L << 47) - 1;
+    }
+    static final class Space {
+        byte[] m = new byte[4000];
+        void writeU64(long a, long v) {
+            for (int i = 0; i < 8; i++) m[(int) a + i] = (byte) (v >>> (8 * i));
+        }
+        long readU64(long a) {
+            long r = 0;
+            for (int i = 0; i < 8; i++) r |= (m[(int) a + i] & 0xFFL) << (8 * i);
+            return r;
+        }
+    }
+    static final class Gc { Space sp = new Space(); }
+    static final class Rt {
+        Gc gc = new Gc();
+        long bump = 64;
+        boolean starve = false;
+        long alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump;
+            bump += n + Obj.HDR;
+            gc.sp.m[(int) a] = (byte) t;
+            return a;
+        }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xff; }
+--java
+    static String row(Rt rt, long n) {
+        long v = makeInteger(rt, n);
+        String tier = v == Val.NIL ? "N" : Val.isFixnum(v) ? "F" : "B";
+        return tier + ":" + integerValue(rt, v);
+    }
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long[] cases = { 0, -1, FIXNUM_MAX, FIXNUM_MAX + 1, FIXNUM_MIN, FIXNUM_MIN - 1,
+                         Long.MAX_VALUE, Long.MIN_VALUE };
+        for (long n : cases) { if (o.length() > 0) o.append(" "); o.append(row(rt, n)); }
+        o.append(" x:").append(integerValue(rt, Val.NIL));
+        rt.starve = true;
+        o.append(" ").append(row(rt, Long.MAX_VALUE));
+        System.out.println(o.toString());
+    }
+--csharp-head
+    const long NIL = 0xFFFFFFFFFFFFL;
+    const long FIXNUM_MIN = -(1L << 47), FIXNUM_MAX = (1L << 47) - 1;
+    internal static class Obj {
+        internal const long Hdr = 8;
+        internal const int TyBigint = 3;
+        public static int Ty(Space sp, long a) { return sp.m[(int) a]; }
+    }
+    internal static class Val {
+        public static long Fixnum(long n) { return (n & 0xFFFFFFFFFFFFL) | (1L << 62); }
+        public static bool IsFixnum(long v) { return (v & (1L << 62)) != 0; }
+        public static long AsFixnum(long v) { return ((v & 0xFFFFFFFFFFFFL) << 16) >> 16; }
+        public static long Heap(long a) { return a; }
+        public static bool IsHeap(long v) { return v != NIL && (v & (1L << 62)) == 0; }
+        public static long AsHeap(long v) { return v; }
+        public const long Nil = 0xFFFFFFFFFFFFL;
+        public const long FixnumMin = -(1L << 47), FixnumMax = (1L << 47) - 1;
+    }
+    internal sealed class Space {
+        public byte[] m = new byte[4000];
+        public void WriteU64(long a, long v) {
+            for (int i = 0; i < 8; i++) m[(int) a + i] = (byte) (v >> (8 * i));
+        }
+        public long ReadU64(long a) {
+            long r = 0;
+            for (int i = 0; i < 8; i++) r |= (long) (m[(int) a + i] & 0xFF) << (8 * i);
+            return r;
+        }
+    }
+    internal sealed class Gc { public Space sp = new Space(); }
+    internal sealed class Rt {
+        public Gc gc = new Gc();
+        public long bump = 64;
+        public bool starve = false;
+        public long Alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump;
+            bump += n + Obj.Hdr;
+            gc.sp.m[(int) a] = (byte) t;
+            return a;
+        }
+    }
+--csharp
+    static string Row(Rt rt, long n) {
+        long v = MakeInteger(rt, n);
+        string tier = v == Val.Nil ? "N" : Val.IsFixnum(v) ? "F" : "B";
+        return tier + ":" + IntegerValue(rt, v);
+    }
+    static void Main() {
+        var rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long[] cases = { 0, -1, FIXNUM_MAX, FIXNUM_MAX + 1, FIXNUM_MIN, FIXNUM_MIN - 1,
+                         long.MaxValue, long.MinValue };
+        foreach (var n in cases) { if (o.Length > 0) o.Append(" "); o.Append(Row(rt, n)); }
+        o.Append(" x:").Append(IntegerValue(rt, Val.Nil));
+        rt.starve = true;
+        o.Append(" ").Append(Row(rt, long.MaxValue));
+        System.Console.WriteLine(o.ToString());
+    }
+--expect
+F:0 F:-1 F:140737488355327 B:140737488355328 F:-140737488355328 B:-140737488355329 B:9223372036854775807 B:-9223372036854775808 x:0 N:0
+--expect-why
+DERIVED FROM THE BOUND, not recorded. `FIXNUM_MAX` is 2^47 - 1 =
+140 737 488 355 327 and `FIXNUM_MIN` is -2^47 = -140 737 488 355 328.
+
+Each entry is `<tier>:<round trip>`: `F` a fixnum, `B` a BIGINT, `N` nil, and
+the number is what `i64-of` reads back. Every round trip must equal the input,
+which is the property that makes the tier choice safe rather than merely
+consistent.
+
+ 1-2. `F:0`, `F:-1` -- small, and NEGATIVE, because a fixnum constructor that
+      zero-extends a 32-bit value answers 4294967295 here on the ports and -1
+      on native. That has shipped in this repository before, which is why the
+      second case is not another positive.
+ 3. `F:140737488355327` -- AT the top bound. This is the case a `<` written
+    where `<=` belongs gets wrong, and the cost is a heap object for a number
+    that fits.
+ 4. `B:140737488355328` -- ONE PAST it. The mirror: a `<=` written where `<`
+    belongs truncates this to a 47-bit fixnum and the round trip stops
+    matching. Cases 3 and 4 are adjacent integers and must land in different
+    tiers; either alone proves nothing.
+ 5. `F:-140737488355328` -- AT the bottom bound, which is INCLUSIVE where the
+    top is exclusive, because two's complement has one more negative than
+    positive. A bound written symmetrically boxes this needlessly.
+ 6. `B:-140737488355329` -- one past the bottom.
+ 7-8. The extremes, which must round-trip through eight raw bytes. A payload
+      written at the wrong width or read with the wrong sign answers something
+      else for `i64::MIN` in particular.
+ 9. `x:0` -- `i64-of` of NIL. Not a fixnum, and not a heap value either, so
+    both guards must hold; a missing `is-heap` test reads a type tag off a
+    value that has none.
+10. `N:0` -- allocation refused. The answer is NIL rather than a value built
+    on address 0, and `i64-of` of NIL is 0, so the pair reads `N:0`.

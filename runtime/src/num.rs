@@ -21,16 +21,30 @@ impl Rt {
     /// Canonical integer: fixnum when it fits, boxed otherwise.
     // @kin:link:ns: flint.rt.num
     // @kin:link:form:integer: {:template "{0}.integer({1})"}
+    /// GENERATED (`kin/numint.kin`) as `make_integer`. The BOUND is why it
+    /// moved, and it took two wrong readings to state this correctly. ALL
+    /// THREE runtimes name it -- `value.rs:82`, `Val.java:74`, `Val.cs:51` --
+    /// and `bin/check-port-consts` DOES compare the two ports' copies: both
+    /// spellings normalise to `fixnummax` and the expression evaluates, so
+    /// they are gated against each other.
+    ///
+    /// WHAT IS NOT GATED IS THIS RUNTIME. That checker is port-versus-port by
+    /// construction, so native's constant is compared with nothing. And both
+    /// ports' `Num.integer` ignored the constant sitting two files away and
+    /// re-inlined `-(1L << 47)` as a literal, which no check covers either.
+    /// Generating the function is what makes the bound one statement.
+    ///
+    /// THE NAME IS WHY THIS SHIM EXISTS. `integer` is a kin FORM -- this file
+    /// carries a link-form annotation below binding it to `{0}.integer({1})`;
+    /// it cannot be named in prose here, because kin REFUSES a marker it does
+    /// not recognise rather than skipping it, and a mention in a comment
+    /// reads exactly like a misspelt one -- so a generated function of that
+    /// name would
+    /// shadow the form for every kin source that calls it, and three of them
+    /// do. The generated body took a different name; this keeps the one the
+    /// form and 24 call sites already use.
     pub fn integer(&mut self, n: i64) -> Value {
-        if Value::fits_fixnum(n) {
-            return Value::fixnum(n);
-        }
-        let a = self.alloc(TY_BIGINT, 8);
-        if a == 0 {
-            return NIL;
-        }
-        self.gc.sp.bytes_mut(a + HDR, 8).copy_from_slice(&n.to_le_bytes());
-        Value::heap(a)
+        self.make_integer(n)
     }
 
     #[inline]
@@ -42,8 +56,14 @@ impl Rt {
     /// The integer value, or 0 when `v` is not an integer. The TOTAL form,
     /// for callers that have already asked `is_int` -- see the Java copy for
     /// what the ports were doing instead.
+    /// GENERATED as `integer_value`, and the TOTAL form is what is shared:
+    /// `as_i64` answers "the integer, or nothing", which is `Option<i64>`
+    /// here and a boxed `Long` on both ports -- a nullable type kin has not
+    /// got, so it stays hand-written below. `i64-of` is itself a vocabulary
+    /// word bound to `{0}.i64_of({1})`, which is the other half of why the
+    /// generated body is not called that.
     pub fn i64_of(&self, v: Value) -> i64 {
-        self.as_i64(v).unwrap_or(0)
+        self.integer_value(v)
     }
 
     pub fn as_i64(&self, v: Value) -> Option<i64> {

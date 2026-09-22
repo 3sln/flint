@@ -1,0 +1,110 @@
+;; BOXING AND UNBOXING AN INTEGER, which is written three times today and
+;; carries a constant written three times with it.
+;;
+;; flint's integers have two tiers: a FIXNUM up to 47 bits carried in the
+;; value itself, and a BIGINT -- eight raw bytes at `HDR` -- for anything
+;; wider. Deciding which tier a `long` belongs in is one rule, and all three
+;; runtimes state it separately:
+;;
+;;     native   Value::fits_fixnum(n)        n >= FIXNUM_MIN && n <= FIXNUM_MAX
+;;     jvm      n >= -(1L << 47) && n < (1L << 47)
+;;     clr      n >= -(1L << 47) && n < (1L << 47)
+;;
+;; THEY AGREE -- `n <= X - 1` and `n < X` are the same test on integers.
+;;
+;; AND ALL THREE ALREADY NAMED THE BOUND: `value.rs:82`, `Val.java:74` and
+;; `Val.cs:51` each declare it, and both ports' `Num.integer` then ignored the
+;; constant sitting two files away and wrote the literal out again. Stated
+;; three times, re-stated twice.
+;;
+;; THE TWO PORTS' COPIES ARE GATED against each other --
+;; `bin/check-port-consts` normalises `FIXNUM_MAX` and `FixnumMax` to one key
+;; and evaluates the expression, so they are compared. NATIVE'S IS NOT: that
+;; checker is port-versus-port by construction. Nor does anything check that
+;; `Num.integer` reaches for the constant instead of writing the bound out
+;; again. Generating the function is what makes it one statement.
+;;
+;; (Two wrong readings preceded that paragraph -- first "only native names
+;; it", then "nothing compares them". Both were written before looking. The
+;; checker's own regexes and `norm` settle it in one probe.)
+;;
+;; AND THE VOCABULARY COMMITTED THE SAME SIN FIRST. `FIXNUM_MIN`/`FIXNUM_MAX`
+;; were added to `flint.impl.rt` emitting `((1L << 47) - 1)` -- the literal
+;; again, a fourth copy, in the very word written to stop there being copies.
+;; `check-kin` refused it by name: "no file under runtimes/jvm/src/com/flint/rt
+;; defines `((1L << 47) - 1)`". The word names `Val.FIXNUM_MAX`,
+;; `Val.FixnumMax` and `crate::value::FIXNUM_MAX` now, so the generated code
+;; reaches each runtime's own declaration -- and the two ports' declarations
+;; are the pair `check-port-consts` already compares.
+;;
+;; THE PAYLOAD IS EIGHT RAW BYTES, and native says so explicitly with
+;; `to_le_bytes`/`from_le_bytes` where the ports use `writeU64`/`readU64` in
+;; native byte order. Equivalent on every target flint builds for, all of them
+;; little-endian -- see `write-u64` in `flint.impl.rt`, which is where that
+;; stops being a coincidence of three spellings.
+;;
+;; `as-i64` IS NOT HERE, and cannot be. It answers "the integer, or nothing",
+;; which the ports spell `Long` and native spells `Option<i64>` -- a nullable
+;; box, and kin has no optional type. The TOTAL form is what is shared: callers
+;; that have already asked `is-int` want the value, and 0 for a non-integer is
+;; the answer `i64-of` has always given.
+(ns flint.rt.numint
+  (:require [flint.impl.rt :refer [defn return if let and doc
+                                   == >= <= + is-fixnum as-fixnum fixnum64
+                                   is-heap as-heap ty heap alloc
+                                   write-u64 read-u64
+                                   Rt Value I64 Addr
+                                   NIL HDR TY_BIGINT FIXNUM_MIN FIXNUM_MAX]]))
+
+(doc "`n` as a flint integer: a fixnum if it fits, a BIGINT if it does not."
+     ""
+     "THE BOUND IS THE WHOLE FUNCTION. A value one past it must box, and one"
+     "at it must not -- get that backwards and every integer near 2^47 is"
+     "either a fixnum with its top bits cut off or a heap object nobody"
+     "needed. The drivers walk both sides of both ends for that reason."
+     ""
+     "ALLOCATION CAN FAIL, and the answer then is NIL rather than a value"
+     "built on address 0. Native checks `a == 0` and both ports do; this is"
+     "one place all three already agreed.")
+;; NAMED `make-integer`, NOT `integer`, and that is not cosmetic. `integer`
+;; is already a FORM -- the three runtimes carry `@kin:link:form:integer`
+;; annotations binding it to `Num.integer`, `Num.Integer` and `{0}.integer`
+;; -- and `i64-of` is already a vocabulary word in `flint.impl.rt`. A `^:pub`
+;; kin function of either name SHADOWS it project-wide, so every caller in
+;; `numarith`, `numdiv` and `strnum` would resolve to this module instead,
+;; and those three drivers stub the words in their toys: two stubs each for
+;; `integer`, nine each for `i64Of`. The house answer is a different name for
+;; the generated body, as `reap-ports` (word) sits over `reap-all`
+;; (generated).
+(defn ^:pub ^:method ^Value make-integer [^:mut ^Rt rt ^I64 n]
+  (if (and (>= n FIXNUM_MIN) (<= n FIXNUM_MAX))
+    (return (fixnum64 n)))
+  (let [^Addr a (alloc rt TY_BIGINT 8)]
+    (if (== a 0)
+      (return NIL))
+    (write-u64 rt (+ a HDR) n)
+    (return (heap a))))
+
+(doc "The integer `v` holds, or 0 when it is not an integer."
+     ""
+     "THE TOTAL FORM. Callers that need to tell \"not an integer\" from \"the"
+     "integer 0\" ask `as-i64`, which stays hand-written because its answer is"
+     "a nullable box. Everything else has already asked `is-int` and wants the"
+     "number."
+     ""
+     "A BIGINT'S PAYLOAD IS READ RAW, not through a slot: it is eight bytes at"
+     "`HDR`, not a `Value`, and reading it as a slot would answer whatever a"
+     "tagged read makes of arbitrary bits.")
+;; NOT `^:mut`. This function only reads -- a tag test, a type tag and eight
+;; bytes -- and native's hand-written `i64_of` took `&self`. Declaring it
+;; mutable here changed that signature, and a GENERATED caller in
+;; `kin/dblstr.kin` immediately stopped compiling on `self.put_i64(sk,
+;; self.i64_of(v))`: two mutable borrows of `self` in one expression. The
+;; borrow a kin signature asks for is part of its contract with every caller,
+;; including the ones in other kin sources.
+(defn ^:pub ^:method ^I64 integer-value [^Rt rt ^Value v]
+  (if (is-fixnum rt v)
+    (return (as-fixnum v)))
+  (if (and (is-heap v) (== (ty rt (as-heap v)) TY_BIGINT))
+    (return (read-u64 rt (+ (as-heap v) HDR))))
+  (return 0))
