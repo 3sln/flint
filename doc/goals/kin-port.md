@@ -8990,3 +8990,77 @@ the reason `Rt.lookup` should not be the next slice. *A disproved hypothesis
 that leaves a fixture behind is cheaper than a correct one that leaves
 nothing.*
 
+---
+
+## The first slice out of `Rt`: eleven lines that are almost entirely a rooting rule
+
+2026-09-21. `kin/closure.kin` -- 110 sources. `make-closure` is the first
+function generated out of `Rt` rather than `Conc`, which is where last
+firing's corrected rank pointed once `lookup` was seen to be a two-way method
+native does not have.
+
+It needed a new type. `Values` -- `&[Value]` borrowed on Rust, `long[]` on the
+two ports -- because `U64s` already spells `long[]` on the ports and
+`Vec<u64>` on Rust, and a `Vec<u64>` does not go where `&[Value]` is wanted.
+*One spelling per target is exactly what the type table is for.*
+
+### The toy collects on every allocation, which is the whole test
+
+Eleven lines, and nine of them are the rooting discipline: the upvalues are
+pushed BEFORE the single allocation and read back out of the ROOTS, never out
+of the caller's array. A host array is walked by no collector here, so an
+upvalue read from it after a collection points at where an object used to be.
+
+A toy whose `alloc` never collected would pass with the order reversed. This
+one collects every time and REWRITES every rooted value by a fixed offset
+while leaving the caller's array alone -- so a correctly-rooted upvalue reads
+`live` and a stale one reads `STALE`, and the two are otherwise identical.
+
+    1  upvalues read from the host array      rows 2,3 -> `STALE`
+    2  the push loop removed entirely         crashes: nothing is rooted
+    3  the mark not popped when alloc fails   row 4 -> `...:2` roots left
+    4  the meta slot not written              SURVIVES -- see below
+    5  the upvalues written in reverse        row 3 -> `?1030,live,?1010`
+
+Row 3 is why there are three upvalues and not one. With a single upvalue
+every wrong order still reads `live`; it takes three for "rooted just before
+its own write" to show as `STALE,STALE,live`.
+
+### A mutation that survives, recorded rather than engineered around
+
+Deleting the write that nils the meta slot changes nothing, and that is
+correct: `Gc.alloc` calls `zeroBody` on every path, which writes NIL to every
+slot of a `VALS`-layout object. The slot is already nil.
+
+**So my own docstring was wrong.** It justified the write as "a half-built
+object has to trace sanely if the very next allocation collects" -- a real
+concern that this line does not address, because the allocator has already
+addressed it. Corrected in place.
+
+The write is KEPT: all three hand-written copies had it, and a port is not the
+place to change behaviour. It is the same redundant-write shape
+`kin/schedmake.kin` already records for `TH_ARGS` and `SC_SYSTEM` -- with the
+difference that those two cost two gas a spawn and this one costs nothing,
+since slot writes are not billed.
+
+*Making the toy hand out dirty slots would catch the mutation and would be
+modelling a runtime this project does not have.* An honest hole beats a test
+that passes against a fiction, so the hole is written into the `--expect-why`
+where the next reader meets it.
+
+### Three build errors, all from the new type crossing a boundary
+
+The probe `kin/scripts/verify` builds is self-contained, and a type has to
+stand up inside it:
+
+    `&[crate::value::Value]`   unresolvable in the probe; `Value` spells
+                                itself unqualified in the type table and so
+                                must a slice of it
+    `Addr`                     its own type in the runtime, not an alias for
+                                `u64`, and the toy has to say so
+    `Obj.TyClosure`            C# qualifies a type tag where Java and Rust
+                                write it bare, so the toy needs an `Obj`
+
+None of these is a kin limitation; all three are the difference between a
+type that works where it was written and one that works anywhere.
+

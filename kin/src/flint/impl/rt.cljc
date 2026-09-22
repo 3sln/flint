@@ -204,6 +204,31 @@
    :methods {}})
 (def U64s {:name 'U64s :types {:rust "Vec<u64>" :java "long[]" :csharp "long[]"} :methods {}})
 
+(def Values
+  "A flat run of VALUES the caller owns, read and never written.
+
+  NOT `U64s`, though the two ports spell both `long[]`. A `Value` is a newtype
+  on the Rust side and a bare `long` on the other two, so a slice of them is
+  `&[Value]` there and `long[]` here -- and passing a `Vec<u64>` where
+  `&[Value]` is wanted does not compile. One spelling per target is exactly
+  what this table is for.
+
+  `:shared` and a BORROW, like `U32s` above: every caller of `make-closure`
+  hands over a run it already has -- an upvalue list the emitter built, or the
+  empty one a host driver passes to enter a program -- and none of them wants
+  it back changed."
+  {:name 'Values
+   ;; `Value` UNQUALIFIED, as the `Value` type above spells itself. A
+   ;; crate-qualified path is right inside the runtime and unresolvable in the
+   ;; self-contained probe `kin/scripts/verify` builds, which is the one place
+   ;; a type has to stand on its own.
+   :types {:rust "Vec<Value>" :java "long[]" :csharp "long[]"}
+   :shared {:rust "&[Value]" :java "long[]" :csharp "long[]"}
+   ;; `&*({0})` for the same reason `U32s` gives: the argument may already be
+   ;; a borrow, and `&x` on one is a borrow-of-a-borrow Rust will not reborrow.
+   :shared-arg {:rust "&*({0})" :java "{0}" :csharp "{0}"}
+   :methods {}})
+
 (def I32Buf
   "A flat SIGNED word buffer the caller owns and the callee WRITES INTO.
 
@@ -272,7 +297,7 @@
 (def tags {'Rt Rt 'Value Value 'Cat Cat 'Ty Ty 'Bool Bool 'I32 I32 'I64 I64 'Cmp Cmp 'U32 U32 'RootIx RootIx
                'Text Text 'StaticText StaticText 'Sink Sink 'Walk Walk 'Cps Cps
                'F64 F64 'Addr Addr 'Idx Idx 'Bits Bits 'Bytes Bytes
-               'U32s U32s 'U64s U64s 'I32Buf I32Buf 'Flags Flags 'I32s I32s
+               'U32s U32s 'U64s U64s 'Values Values 'I32Buf I32Buf 'Flags Flags 'I32s I32s
                'Interns Interns})
 
 (defn- t [ctx] (:target ctx))
@@ -359,7 +384,10 @@
     ;; The wire codec's two (`DECISIONS.md#the-codec-is-guest-code`). A writer
     ;; is opaque to a guest and a reader is not, and the asymmetry is the whole
     ;; safety rule -- see `kin/wire.kin`.
-    TY_WRITER TY_READER])
+    TY_WRITER TY_READER
+    ;; What a closure is. `kind-of` never needed it -- a guest sees a function
+    ;; and not its representation -- but `make-closure` BUILDS one.
+    TY_CLOSURE])
 
 (defn- csharp-tag
   "`TY_EMPTY_LIST` -> `Obj.TyEmptyList`."

@@ -790,21 +790,12 @@ public final class Rt {
         }
     }
 
+    /// GENERATED (`kin/closure.kin`). The upvalues are pushed BEFORE the
+    /// single allocation and read back out of the roots: a `long[]` is not
+    /// walked by the collector, so an upvalue read from it after a collection
+    /// points at where an object used to be.
     public long makeClosure(int fnIdx, long[] upvals) {
-        int base = mark();
-        for (long u : upvals) push(u);
-        // `2 + n`: METADATA IS THE LAST SLOT, not the second. The obvious
-        // layout is the expensive one -- putting it after the function index
-        // shifts every upvalue by one, and `UPVAL` is indexed arithmetically in
-        // the interpreter AND in the AOT emitter. At the end, every `1 + i`
-        // stays exactly as it was.
-        long a = alloc(TY_CLOSURE, 2 + upvals.length);
-        if (a == 0) { popTo(base); return Val.NIL; }
-        setSlot(a, 0, Val.fixnum(fnIdx));
-        for (int i = 0; i < upvals.length; i++) setSlot(a, 1 + i, r(base + i));
-        setSlot(a, 1 + upvals.length, Val.NIL);
-        popTo(base);
-        return Val.heap(a);
+        return com._3sln.flint.kgen.rt.Closure.makeClosureAt(this, fnIdx, upvals);
     }
 
     int u8(int ip) { return code[ip] & 0xFF; }

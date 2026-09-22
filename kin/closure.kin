@@ -1,0 +1,76 @@
+;; BUILDING A CLOSURE, written once.
+;;
+;; Three copies of eleven lines, and the eleven are almost entirely a ROOTING
+;; DISCIPLINE: the upvalues are pushed BEFORE the allocation and read back out
+;; of the roots afterwards, because `alloc` can collect and a host array is
+;; not a root on any runtime. Get the order wrong and the closure captures
+;; pointers into the abandoned semispace -- which is indistinguishable from a
+;; live capture until the first time one is called.
+;;
+;; The three agreed, character for character, when this was taken.
+(ns flint.rt.closure
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == + < not local set while
+                                   mark push r pop-to alloc set-at heap fixnum
+                                   alen aget as-idx to-i32
+                                   Rt Value Values I32 RootIx Addr NIL
+                                   TY_CLOSURE]]))
+
+(doc "A closure over `upvals`, or nil if the heap is full."
+     ""
+     "THE UPVALUES ARE ROOTED BEFORE ANYTHING ALLOCATES, and read back out of"
+     "the root stack afterwards rather than out of the caller's array. The"
+     "array is a HOST array -- a Java `long[]`, a Rust slice -- and no"
+     "runtime's collector walks it. `alloc` may collect; every value in that"
+     "array is then a pointer to where an object used to be, and a closure"
+     "built from one captures the abandoned semispace."
+     ""
+     "TWO SLOTS BEFORE THE UPVALUES AND ONE AFTER. Slot 0 is the function"
+     "index; the upvalues follow; the LAST slot is nil and is the closure's"
+     "meta."
+     ""
+     "THE META WRITE IS REDUNDANT AND IS KEPT. `Gc.alloc` calls `zeroBody` on"
+     "every path and that nils every slot of a `VALS`-layout object, so the"
+     "slot is already nil when this runs. All three hand-written copies wrote"
+     "it anyway and a port is not the place to stop -- removing it is a change"
+     "to behaviour nobody has measured, and it is the same redundant-write"
+     "shape `kin/schedmake.kin` records for `TH_ARGS` and `SC_SYSTEM`."
+     ""
+     "The drivers say so too: the mutation that deletes this line SURVIVES,"
+     "which is the honest result and is recorded rather than engineered"
+     "around. A toy whose allocator did not nil its slots would catch it and"
+     "would be modelling a runtime this project does not have."
+     ""
+     "NIL WHEN THE HEAP IS FULL, and the roots are released first. Answering"
+     "nil rather than throwing is what lets the caller decide: a host driver"
+     "entering a program treats it as a failure to start, and the emitter"
+     "treats it as a compile that cannot proceed.")
+(defn ^:pub ^:method ^Value make-closure-at
+  [^:mut ^Rt rt ^I32 fn-idx ^:shared ^Values upvals]
+  (let [^I32 n (to-i32 (alen upvals))
+        ^RootIx base (mark rt)]
+    (comment "PUSHED FIRST, ALL OF THEM. The loop cannot be fused with the"
+             "one below: every upvalue must be rooted before the single"
+             "allocation, not each one rooted just before its own write.")
+    (local ^:mut ^I32 i)
+    (do
+      (set i 0)
+      (while (< i n)
+        (push rt (aget upvals (as-idx i)))
+        (set i (+ i 1))))
+    (let [^Addr a (alloc rt TY_CLOSURE (to-i32 (+ 2 n)))]
+      (if (== a 0)
+        (do (pop-to rt base)
+            (return NIL)))
+      (set-at rt a 0 (fixnum fn-idx))
+      (local ^:mut ^I32 k)
+      (do
+        (set k 0)
+        (while (< k n)
+          (set-at rt a (to-i32 (+ 1 k)) (r rt (+ base (as-idx k))))
+          (set k (+ k 1))))
+      (comment "THE META SLOT. Redundant -- `zeroBody` has already nilled it"
+               "-- and kept because all three copies had it. See the docstring.")
+      (set-at rt a (to-i32 (+ 1 n)) NIL)
+      (pop-to rt base)
+      (return (heap a)))))

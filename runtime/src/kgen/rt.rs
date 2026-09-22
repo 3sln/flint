@@ -106,6 +106,7 @@ pub mod threadjoin;
 pub mod mainanswer;
 pub mod portrecv;
 pub mod portpark;
+pub mod closure;
 pub mod portinstall;
 pub mod portmake;
 pub mod portring;

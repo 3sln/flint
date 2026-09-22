@@ -1,0 +1,267 @@
+--rust-head
+// A TOY HEAP THAT MOVES ON EVERY ALLOCATION, which is the whole point.
+//
+// `make-closure` is eleven lines of rooting discipline: the upvalues are
+// pushed before the single allocation and read back out of the ROOTS, not out
+// of the caller's array. A toy whose `alloc` never collected would pass with
+// the order reversed -- so this one collects every time, and collecting
+// REWRITES every value on the root stack to its new address while leaving the
+// caller's array pointing at the old one.
+//
+// That is what a real semispace collector does to anything it does not walk,
+// and a host array is not walked by any of the three.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_0000_0000_0000);
+// A MOVE IS +1000 PER COLLECTION, so an address carries how many collections
+// it has survived and a stale one is visible rather than merely wrong.
+const MOVE: u64 = 1000;
+const TY_CLOSURE: u32 = 7;
+// `Addr` IS ITS OWN TYPE in the runtime -- a raw heap address, before it
+// becomes a `Value`. `alloc` answers one and the slots of a half-built object
+// are written through it, so the probe keeps the distinction rather than
+// calling both `u64`.
+type Addr = u64;
+impl Value {
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn heap(a: u64) -> Value { Value(a) }
+}
+struct Rt {
+    objs: Vec<(u32, Vec<Value>)>,
+    rootv: Vec<Value>,
+    // HOW MANY SLOTS ARE LEFT. `0` makes the next allocation fail, which is
+    // the other contract: nil, and the roots released first.
+    room: i32,
+    collections: u32,
+}
+impl Rt {
+    fn mark(&self) -> usize { self.rootv.len() }
+    fn push(&mut self, v: Value) -> usize { self.rootv.push(v); self.rootv.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.rootv[i] }
+    fn pop_to(&mut self, i: usize) { self.rootv.truncate(i); }
+    fn alloc(&mut self, ty: u32, len: u32) -> u64 {
+        if self.room <= 0 { return 0; }
+        self.room -= 1;
+        // COLLECT FIRST, as an allocator under stress does. Everything ROOTED
+        // moves; the caller's array does not, because nothing walks it.
+        self.collections += 1;
+        for v in self.rootv.iter_mut() {
+            if *v != NIL { *v = Value(v.0 + MOVE); }
+        }
+        self.objs.push((ty, vec![NIL; len as usize]));
+        (self.objs.len() - 1) as u64 + 1
+    }
+    fn set_slot(&mut self, a: u64, i: u32, v: Value) {
+        self.objs[(a - 1) as usize].1[i as usize] = v;
+    }
+--rust
+}
+fn fresh(room: i32) -> Rt {
+    Rt { objs: vec![], rootv: vec![], room, collections: 0 }
+}
+// `<answer>:<ty>:<slot0>:<upvals as stored>:<meta>:<roots left>`
+fn built(n: usize, room: i32) -> String {
+    let mut rt = fresh(room);
+    // Upvalues as the caller holds them: 10, 20, 30 ... in a HOST array.
+    let ups: Vec<Value> = (1..=n).map(|k| Value((k as u64) * 10)).collect();
+    let c = rt.make_closure_at(7, &ups);
+    if c == NIL {
+        return format!("nil:-:-:-:-:{}", rt.rootv.len());
+    }
+    let (ty, slots) = &rt.objs[(c.0 - 1) as usize];
+    // WHAT THE UPVALUES BECAME. Each was `k*10` and has survived
+    // `collections` moves, so a correctly-rooted one reads
+    // `k*10 + collections*MOVE`. A stale one still reads `k*10`.
+    let want_shift = rt.collections as u64 * MOVE;
+    let body: Vec<String> = (0..n).map(|k| {
+        let got = slots[1 + k].0;
+        let fresh_v = (k as u64 + 1) * 10 + want_shift;
+        if got == fresh_v { "live".to_string() }
+        else if got == (k as u64 + 1) * 10 { "STALE".to_string() }
+        else { format!("?{got}") }
+    }).collect();
+    format!("{}:{}:{}:{}:{}:{}",
+            "ok", ty, slots[0].0,
+            if body.is_empty() { "-".to_string() } else { body.join(",") },
+            if slots[1 + n] == NIL { "nil" } else { "SET" },
+            rt.rootv.len())
+}
+fn main() {
+    // 1. NO UPVALUES. The shape alone: type, function index, the meta slot
+    //    nil, and the roots back where they started.
+    let r1 = built(0, 8);
+    // 2. ONE UPVALUE, through a collection. `live` is the claim: the value
+    //    stored is the one the collector MOVED, not the one the caller's
+    //    array still holds.
+    let r2 = built(1, 8);
+    // 3. THREE UPVALUES, in order. Order matters as much as liveness: slot
+    //    `1+k` must hold the k-th upvalue and not some other one.
+    let r3 = built(3, 8);
+    // 4. THE HEAP IS FULL. Nil, and the roots released -- a caller that gets
+    //    nil must not be left holding a mark it cannot pop.
+    let r4 = built(2, 0);
+    println!("{} | {} | {} | {}", r1, r2, r3, r4);
+}
+--java-head
+    // THE SAME TOY, field for field.
+    static final long NIL = 0xFFFF000000000000L;
+    static final long MOVE = 1000;
+    static final int TY_CLOSURE = 7;
+    static final class Val {
+        static final long NIL = 0xFFFF000000000000L;
+        static long fixnum(long n) { return n; }
+        static long heap(long a) { return a; }
+    }
+    static final class Rt {
+        java.util.List<int[]> tys = new java.util.ArrayList<>();
+        java.util.List<long[]> objs = new java.util.ArrayList<>();
+        java.util.List<Long> rootv = new java.util.ArrayList<>();
+        int room; int collections = 0;
+        Rt(int room) { this.room = room; }
+        int mark() { return rootv.size(); }
+        int push(long v) { rootv.add(v); return rootv.size() - 1; }
+        long r(int i) { return rootv.get(i); }
+        void popTo(int i) { while (rootv.size() > i) rootv.remove(rootv.size() - 1); }
+        long alloc(int ty, int len) {
+            if (room <= 0) return 0;
+            room--;
+            collections++;
+            for (int i = 0; i < rootv.size(); i++)
+                if (rootv.get(i) != NIL) rootv.set(i, rootv.get(i) + MOVE);
+            long[] slots = new long[len];
+            java.util.Arrays.fill(slots, NIL);
+            objs.add(slots); tys.add(new int[]{ty});
+            return objs.size();
+        }
+        void setSlot(long a, int i, long v) { objs.get((int) (a - 1))[i] = v; }
+    }
+--java
+    static String built(int n, int room) {
+        Rt rt = new Rt(room);
+        long[] ups = new long[n];
+        for (int k = 0; k < n; k++) ups[k] = (k + 1) * 10L;
+        long c = makeClosureAt(rt, 7, ups);
+        if (c == NIL) return "nil:-:-:-:-:" + rt.rootv.size();
+        long[] slots = rt.objs.get((int) (c - 1));
+        int ty = rt.tys.get((int) (c - 1))[0];
+        long shift = rt.collections * MOVE;
+        StringBuilder body = new StringBuilder();
+        for (int k = 0; k < n; k++) {
+            if (k > 0) body.append(',');
+            long got = slots[1 + k];
+            long freshV = (k + 1) * 10L + shift;
+            body.append(got == freshV ? "live" : got == (k + 1) * 10L ? "STALE" : "?" + got);
+        }
+        return "ok:" + ty + ":" + slots[0] + ":" + (n == 0 ? "-" : body.toString())
+             + ":" + (slots[1 + n] == NIL ? "nil" : "SET") + ":" + rt.rootv.size();
+    }
+    public static void main(String[] args) {
+        System.out.println(built(0, 8) + " | " + built(1, 8) + " | "
+                           + built(3, 8) + " | " + built(2, 0));
+    }
+--csharp-head
+    // THE SAME TOY, field for field.
+    const long NIL = unchecked((long) 0xFFFF000000000000UL);
+    const long MOVE = 1000;
+    public static class Obj { public const int TyClosure = 7; }
+    public static class Val {
+        public const long Nil = unchecked((long) 0xFFFF000000000000UL);
+        public static long Fixnum(long n) { return n; }
+        public static long Heap(long a) { return a; }
+    }
+    public class Rt {
+        public System.Collections.Generic.List<int> tys = new System.Collections.Generic.List<int>();
+        public System.Collections.Generic.List<long[]> objs = new System.Collections.Generic.List<long[]>();
+        public System.Collections.Generic.List<long> rootv = new System.Collections.Generic.List<long>();
+        public int room; public int collections = 0;
+        public Rt(int room) { this.room = room; }
+        public int Mark() { return rootv.Count; }
+        public int Push(long v) { rootv.Add(v); return rootv.Count - 1; }
+        public long R(int i) { return rootv[i]; }
+        public void PopTo(int i) { while (rootv.Count > i) rootv.RemoveAt(rootv.Count - 1); }
+        public long Alloc(int ty, int len) {
+            if (room <= 0) return 0;
+            room--;
+            collections++;
+            for (int i = 0; i < rootv.Count; i++)
+                if (rootv[i] != NIL) rootv[i] = rootv[i] + MOVE;
+            long[] slots = new long[len];
+            for (int i = 0; i < len; i++) slots[i] = NIL;
+            objs.Add(slots); tys.Add(ty);
+            return objs.Count;
+        }
+        public void SetSlot(long a, int i, long v) { objs[(int)(a - 1)][i] = v; }
+    }
+--csharp
+    static string Built(int n, int room) {
+        Rt rt = new Rt(room);
+        long[] ups = new long[n];
+        for (int k = 0; k < n; k++) ups[k] = (k + 1) * 10L;
+        long c = MakeClosureAt(rt, 7, ups);
+        if (c == NIL) return "nil:-:-:-:-:" + rt.rootv.Count;
+        long[] slots = rt.objs[(int)(c - 1)];
+        int ty = rt.tys[(int)(c - 1)];
+        long shift = rt.collections * MOVE;
+        var body = new System.Text.StringBuilder();
+        for (int k = 0; k < n; k++) {
+            if (k > 0) body.Append(',');
+            long got = slots[1 + k];
+            long freshV = (k + 1) * 10L + shift;
+            body.Append(got == freshV ? "live" : got == (k + 1) * 10L ? "STALE" : "?" + got);
+        }
+        return "ok:" + ty + ":" + slots[0] + ":" + (n == 0 ? "-" : body.ToString())
+             + ":" + (slots[1 + n] == NIL ? "nil" : "SET") + ":" + rt.rootv.Count;
+    }
+    static void Main() {
+        System.Console.WriteLine(Built(0, 8) + " | " + Built(1, 8) + " | "
+                                 + Built(3, 8) + " | " + Built(2, 0));
+    }
+--expect
+ok:7:7:-:nil:0 | ok:7:7:live:nil:0 | ok:7:7:live,live,live:nil:0 | nil:-:-:-:-:0
+--expect-why
+DERIVED FROM THE CONTRACT. Four rows as
+`<answer>:<ty>:<slot0>:<upvals as stored>:<meta>:<roots left>`.
+
+THE TOY'S ALLOCATOR COLLECTS ON EVERY CALL, and a collection moves everything
+ROOTED by a fixed offset while leaving the caller's array untouched. That is
+what a semispace collector does to anything it does not walk, and a host array
+(a Java `long[]`, a Rust slice) is walked by none of the three. So an
+upvalue read back out of the ROOTS reads `live` and one read back out of the
+caller's ARRAY reads `STALE`, and the two are otherwise indistinguishable.
+
+1  NO UPVALUES -- `ok:7:7:-:nil:0`. The shape on its own: the type tag, the
+   function index in slot 0, the meta slot explicitly nil, and the roots back
+   at the mark. Nothing here depends on the collector, which is why it is
+   first: a failure in row 1 is a failure of the LAYOUT and not of the order.
+
+2  ONE UPVALUE, THROUGH A COLLECTION -- `live`. This is the whole slice. The
+   value stored is the one the collector MOVED. Fuse the two loops -- push
+   each upvalue and write it immediately, which reads perfectly well -- and
+   this row still says `live`, because with one upvalue there is nothing to
+   get wrong. It is here to make row 3 legible, not to catch anything.
+
+3  THREE UPVALUES -- `live,live,live`, and this is the row that catches it.
+   Writing from the caller's array instead of the roots reads
+   `STALE,STALE,STALE`. Rooting each upvalue just before its own write --
+   the plausible fusion -- leaves the EARLIER ones stale, because each later
+   allocation moves what is already rooted: `STALE,STALE,live` or similar.
+   The order within the run matters too: slot `1+k` must hold the k-th
+   upvalue, so a reversed loop reads `?30,?20,?10` rather than three `live`s.
+
+4  THE HEAP IS FULL -- `nil:-:-:-:-:0`, and the LAST field is the claim. A
+   caller handed nil must not also be left holding a mark it cannot pop, so
+   the roots are released before answering. Drop the `pop-to` on that path
+   and this row reads `...:2` -- the two upvalues still rooted, for ever, on
+   a runtime that has just told its caller there was no room.
+
+`nil` IN THE META SLOT OF EVERY BUILT ROW, and THIS ROW CANNOT FAIL. Deleting
+the write that sets it leaves it nil anyway, because the toy's allocator nils
+what it hands out -- and so does the real one: `Gc.alloc` calls `zeroBody` on
+every path and that writes NIL to every slot of a `VALS`-layout object.
+
+So the explicit write is redundant, the mutation that removes it SURVIVES, and
+both facts are recorded rather than engineered around. Making the toy hand out
+dirty slots would catch the mutation and would be modelling a runtime this
+project does not have -- which is a worse trade than an honest hole. The write
+is kept because all three hand-written copies had it and a port is not the
+place to change behaviour.

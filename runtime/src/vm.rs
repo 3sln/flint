@@ -410,24 +410,12 @@ impl Rt {
     /// `(meta (with-meta f {:a 1}))` was nil and nothing said why. That is what
     /// made per-function protocol implementations impossible, since dispatch
     /// looks at metadata first.
+    /// GENERATED (`kin/closure.kin`). Eleven lines that are almost entirely
+    /// a rooting discipline: the upvalues are pushed BEFORE the single
+    /// allocation and read back out of the roots, because a host slice is not
+    /// walked by any collector here.
     pub fn make_closure(&mut self, fn_idx: u32, upvals: &[Value]) -> Value {
-        let base = self.mark();
-        for v in upvals {
-            self.push(*v);
-        }
-        let a = self.alloc(TY_CLOSURE, 2 + upvals.len() as u32);
-        if a == 0 {
-            self.pop_to(base);
-            return NIL;
-        }
-        self.set_slot(a, 0, Value::fixnum(fn_idx as i64));
-        for i in 0..upvals.len() {
-            let v = self.r(base + i);
-            self.set_slot(a, 1 + i as u32, v);
-        }
-        self.set_slot(a, 1 + upvals.len() as u32, NIL);
-        self.pop_to(base);
-        Value::heap(a)
+        self.make_closure_at(fn_idx, upvals)
     }
 
     pub fn make_native(&mut self, native_idx: u32, name: Value) -> Value {

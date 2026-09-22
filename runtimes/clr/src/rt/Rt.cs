@@ -638,20 +638,12 @@ public sealed class Rt : System.IDisposable {
         }
     }
 
+    /// GENERATED (`kin/closure.kin`). The upvalues are pushed BEFORE the
+    /// single allocation and read back out of the roots: a `long[]` is not
+    /// walked by the collector, so an upvalue read from it after a collection
+    /// points at where an object used to be.
     public long MakeClosure(int fnIdx, long[] upvals) {
-        int mk = Mark();
-        foreach (long u in upvals) Push(u);
-        // `2 + n`: METADATA IS THE LAST SLOT, not the second. Putting it after
-        // the function index would shift every upvalue by one, and `Upval` is
-        // indexed arithmetically in the interpreter AND in the IL emitter. At
-        // the end, every `1 + i` stays exactly as it was.
-        long a = Alloc(TyClosure, 2 + upvals.Length);
-        if (a == 0) { PopTo(mk); return Val.Nil; }
-        SetSlot(a, 0, Val.Fixnum(fnIdx));
-        for (int i = 0; i < upvals.Length; i++) SetSlot(a, 1 + i, R(mk + i));
-        SetSlot(a, 1 + upvals.Length, Val.Nil);
-        PopTo(mk);
-        return Val.Heap(a);
+        return global::_3sln.Flint.Kgen.Rt.Closure.MakeClosureAt(this, fnIdx, upvals);
     }
 
     int U8(int ip) { return code[ip] & 0xFF; }
