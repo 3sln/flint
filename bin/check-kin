@@ -273,4 +273,16 @@ if [ "$expected" -lt "$verified" ]; then
   exit 1
 fi
 echo "check-kin: $verified kin sources agree, all $expected against a written-down expected answer,"
-echo "           every generated module matches, and every one is reached"
+echo "           every generated module matches, and every one is DECLARED where"
+echo "           Rust would otherwise not build it"
+# "DECLARED", NOT "REACHED", AND THE DIFFERENCE IS THE WHOLE POINT OF CHECK 3.
+# This line read "and every one is reached" until 2026-09-22, which is a
+# stronger claim than anything here tests: the loop above asserts a `pub mod`
+# line exists, not that a call site does. The two come apart exactly where the
+# header says the silence is waiting -- a module whose callers are all inside
+# the generated tree, or one added before its first caller. An audit that day
+# found 11 modules reached only from within the generated tree and one,
+# `wire-peek`, generated into three runtimes and called from none of them,
+# not even its own drivers. All twelve pass this check, as they should: being
+# declared is what it verifies. A banner that says more is the failure mode
+# this file's own preamble warns about one section earlier.

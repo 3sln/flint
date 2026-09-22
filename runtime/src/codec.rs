@@ -69,7 +69,7 @@ pub const WR_NEED: u32 = 2;
 pub const WR_LEN: u32 = 3;
 
 // The WRITER'S STATE MACHINE IS `kin/wire.kin`, generated into all three
-// runtimes (`crate::kgen::rt::wire`). It was written three times here, in
+// runtimes (`crate::kgen::rt::wirecore`). It was written three times here, in
 // `Wire.java` and in `Wire.cs`, and a marker bug had to be repaired three
 // times by hand before that was obviously the wrong shape. What stays below is
 // only what a Rust SLICE signature needs -- appending a `&[u8]` is not

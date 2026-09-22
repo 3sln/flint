@@ -25,7 +25,6 @@ public static class Seqs {
 
     /// `Cons`, under the name its callers already use -- the body is
     /// generated, as `Seqcore.Cons`.
-    public static long Cons(Rt rt, long head, long tail) { return _3sln.Flint.Kgen.Rt.Seqcore.Cons(rt, head, tail); }
     public const int C_FIRST = 0, C_REST = 1, C_META = 2, C_COUNT = 3;
 
 

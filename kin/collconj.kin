@@ -1,0 +1,102 @@
+;; `conj`'s DISPATCH, written once.
+;;
+;; The arms were already generated -- `vec-conj`, `set-conj`, `map-assoc`,
+;; `map-conj-map`, `table-conj` and `map-entry-as-vec` are all kin functions
+;; with three targets each. What stayed hand-written three times is the choice
+;; BETWEEN them, and the three copies had drifted into two different shapes:
+;; native's `conj` builtin loops over its arguments calling `Rt::conj` per
+;; element, so it re-reads the collection's type tag once per argument, while
+;; both ports read the tag ONCE and then loop calling `Vec.conj` directly.
+;;
+;; THAT DIFFERENCE IS NOT BILLED -- `runtimes/conform/conjgas.cljc` measures
+;; 1 200 extra conj operations at 76 962 gas on native and 76 964 on the jvm,
+;; so the extra tag reads cost nothing. It is still two algorithms for one
+;; operation, which is the same thing `coll.rs` records having fixed for
+;; `map-conj-map`: "two algorithms for one operation, with two different gas
+;; costs, which `bin/conform-hosts` could see in a total and could not
+;; attribute."
+;;
+;; NO NEW VOCABULARY. Every callee here is reached by `:require`/`:refer` over
+;; a kin namespace, not by a word that emits a call into hand-written code. A
+;; vocabulary word would have been a fourth spelling of something that already
+;; exists in three.
+(ns flint.rt.collconj
+  (:require [flint.impl.rt :refer [defn return if let do doc
+                                   == or not is-heap as-heap ty nil?
+                                   mark push r pop-to slot-or-nth
+                                   empty-list throw-str str-cat static-text text
+                                   Rt Value Text Ty RootIx
+                                   TY_VEC TY_SET TY_ARRAYMAP TY_HASHMAP
+                                   TY_TABLE TY_MAPENTRY]]
+            [flint.rt.vecwrite :refer [vec-conj]]
+            [flint.rt.setcore :refer [set-conj]]
+            [flint.rt.mapwrite :refer [map-assoc]]
+            [flint.rt.mapconj :refer [map-conj-map]]
+            [flint.rt.mapcore :refer [is-map]]
+            [flint.rt.tablerow :refer [table-conj]]
+            [flint.rt.seqcore :refer [cons]]
+            [flint.rt.nouns :refer [describe]]
+            [flint.rt.vecroots :refer [map-entry-as-vec]]))
+
+(doc "What `conj` means for ONE element, on whatever `coll` turns out to be."
+     ""
+     "NIL CONSES ONTO THE EMPTY LIST, which is what makes `(conj nil 1)` a"
+     "list rather than an error -- the one arm where the answer's TYPE is not"
+     "the argument's."
+     ""
+     "A NON-HEAP VALUE IS REFUSED BY NAME. The tag read below goes through"
+     "`as-heap`; `(conj 1 2)` once took a fixnum's payload as an address, read"
+     "whatever `ty` found there, missed every arm and consed -- answering"
+     "`(2)` from a type read off a value that has no type to read. Clojure"
+     "throws here, both ports threw, and native was the one inventing an"
+     "answer. Only NON-HEAP is refused: a list, a cons or a lazy seq reaches"
+     "the default arm and conses, which is what `conj` means on them."
+     ""
+     "A TABLE APPENDS A ROW, because that is what conj means on every indexed"
+     "collection here, and the default arm would cons -- a table consed onto"
+     "is not a table."
+     ""
+     "A MAP ENTRY IS A VECTOR, so conj APPENDS rather than consing:"
+     "`(conj (first {:a 1}) 9)` is `[:a 1 9]`, as in Clojure. It is also"
+     "sequential, so both readings are available and Clojure picks the vector"
+     "one.")
+(defn ^:pub ^:method ^Value coll-conj [^:mut ^Rt rt ^Value coll ^Value x]
+  (if (nil? rt coll)
+    (let [^Value e (empty-list rt)]
+      (return (cons rt x e))))
+  (if (not (is-heap coll))
+    (let [^Text what (describe rt coll)]
+      (return (throw-str rt "ClassCastException"
+                         (str-cat (static-text "cannot conj onto ") what)))))
+  (let [^Ty t (ty rt (as-heap coll))]
+    (if (== t TY_VEC)
+      (return (vec-conj rt coll x)))
+    (if (== t TY_SET)
+      (return (set-conj rt coll x)))
+    (if (or (== t TY_ARRAYMAP) (== t TY_HASHMAP))
+      (do
+        (if (is-heap x)
+          (let [^Ty xt (ty rt (as-heap x))]
+            (if (or (== xt TY_MAPENTRY) (== xt TY_VEC))
+              (let [^Value k (slot-or-nth rt x 0)
+                    ^Value v (slot-or-nth rt x 1)]
+                (return (map-assoc rt coll k v))))))
+        (if (is-map rt x)
+          (return (map-conj-map rt coll x)))
+        (return (throw-str rt "IllegalArgumentException"
+                           (text "conj on a map wants a map entry")))))
+    (if (== t TY_TABLE)
+      (return (table-conj rt coll x)))
+    (if (== t TY_MAPENTRY)
+      ;; ROOTED: `map-entry-as-vec` allocates, so `x` is a host local across an
+      ;; allocating call and must be on the root stack BEFORE it, not after.
+      (let [^RootIx base (mark rt)
+            ^RootIx xi (push rt x)
+            ^Value v (map-entry-as-vec rt coll)
+            ^RootIx vi (push rt v)
+            ^Value vv (r rt vi)
+            ^Value xv (r rt xi)
+            ^Value out (vec-conj rt vv xv)]
+        (pop-to rt base)
+        (return out)))
+    (return (cons rt x coll))))

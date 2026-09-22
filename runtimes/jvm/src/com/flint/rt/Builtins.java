@@ -307,99 +307,32 @@ public final class Builtins {
         // out of range on a byte string plainly long enough.
         def("nth", (rt, at, n) -> Collwrite.collNth(rt, rt.vat(at), rt.vat(at + 1),
                                                     n > 2 ? rt.vat(at + 2) : Val.NOT_FOUND));
+        // GENERATED DISPATCH (`kin/collconj.kin`). This used to read the
+        // collection's type ONCE and then loop, while native looped calling
+        // `Rt::conj` per argument and re-read the tag each time -- two shapes
+        // for one operation. The arms were already generated; only the choice
+        // between them was still written three times.
+        //
+        // The shape now matches native's builtin as well as its dispatch: root
+        // the accumulator, and re-dispatch per argument. Not billed either way
+        // (`runtimes/conform/conjgas.cljc`).
         def("conj", (rt, at, n) -> {
-            long v = rt.vat(at);
-            // `conj` on a table APPENDS A ROW, which is what conj means on
-            // every indexed collection here.
-            if (Table.isTable(rt, v)) {
-                long acc = v;
-                for (int i = 1; i < n; i++) acc = Table.tableConj(rt, acc, rt.vat(at + i));
-                return acc;
+            long acc = rt.vat(at);
+            int ai = rt.push(acc);
+            for (int i = 1; i < n; i++) {
+                long x = rt.vat(at + i);
+                rt.setR(ai, com._3sln.flint.kgen.rt.Collconj.collConj(rt, rt.r(ai), x));
             }
-            if (rt.isHeapTy(v, TY_VEC)) {
-                long acc = v;
-                for (int i = 1; i < n; i++) acc = Vec.conj(rt, acc, rt.vat(at + i));
-                return acc;
-            }
-            if (Sets.isSet(rt, v)) {
-                long acc = v;
-                for (int i = 1; i < n; i++) acc = Sets.conj(rt, acc, rt.vat(at + i));
-                return acc;
-            }
-            if (Mapcore.isMap(rt, v)) {
-                // `conj` onto a map takes an ENTRY, a two-element vector, or
-                // ANOTHER MAP, which merges. Anything else is refused.
-                //
-                // It used to take `first` and `first (rest ..)` of whatever
-                // arrived, which answers `nil` for both halves of a value that
-                // is neither -- so `(conj {:a 1} 7)` produced `{:a 1, nil nil}`
-                // and `(conj {:a 1} {:b 2})` produced `{:a 1, [:b 2] nil}`,
-                // silently, where native and Clojure throw and merge. Nothing
-                // compared the three: `collections.cljc` conjes onto a vector
-                // and a set, which were never in doubt.
-                int base = rt.mark();
-                int ai = rt.push(v);
-                for (int i = 1; i < n; i++) {
-                    long e = rt.vat(at + i);
-                    if (rt.isHeapTy(e, TY_MAPENTRY) || rt.isHeapTy(e, TY_VEC)) {
-                        rt.setR(ai, Mapwrite.mapAssoc(rt, rt.r(ai),
-                                                      rt.slotOrNth(e, 0),
-                                                      rt.slotOrNth(e, 1)));
-                    } else if (Mapcore.isMap(rt, e)) {
-                        // GENERATED (`kin/mapconj.kin`). The walk itself lived
-                        // here and in `coll.rs` in two different shapes -- this
-                        // one over `seq`, native's over a callback -- for one
-                        // operation. One source now.
-                        rt.setR(ai, Mapconj.mapConjMap(rt, rt.r(ai), e));
-                    } else {
-                        rt.popTo(base);
-                        return rt.throwStr("IllegalArgumentException",
-                                           "conj on a map wants a map entry");
-                    }
-                }
-                long out = rt.r(ai);
-                rt.popTo(base);
-                return out;
-            }
-            // `conj` on a SEQ prepends, where on a vector it appends. That
-            // asymmetry is Clojure's and is about where the collection is cheap
-            // to grow, not about consistency.
-            // A MAP ENTRY conses, exactly as `coll.rs`'s default arm does.
-            // It is sequential -- the type-test switch says so now -- and
-            // `Seqs.seq` already knows how to walk one.
-            // A MAP ENTRY appends, because it is a vector (Clojure). It is
-            // ALSO sequential, so it would otherwise cons in the branch below
-            // -- both readings exist and Clojure picks the vector one.
-            if (rt.isHeapTy(v, TY_MAPENTRY)) {
-                int mb = rt.mark();
-                int vi = rt.push(com._3sln.flint.kgen.rt.Vecroots.mapEntryAsVec(rt, v));
-                for (int i = 1; i < n; i++) rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.vat(at + i)));
-                long out = rt.r(vi);
-                rt.popTo(mb);
-                return out;
-            }
-            if (Val.isNil(v) || rt.isSeq(v)) {
-                long acc = Val.isNil(v) ? Seqs.emptyList(rt) : v;
-                for (int i = 1; i < n; i++) acc = Seqs.cons(rt, rt.vat(at + i), acc);
-                return acc;
-            }
-            // A NON-HEAP VALUE IS NOT A COLLECTION, and never will be, so it is
-            // a TYPE ERROR and not a missing feature. The message below means
-            // "this port has not got that data structure yet", which is true of
-            // a map or a set and nonsense about an integer. Clojure throws
-            // `ClassCastException` and native does now.
-            if (!Val.isHeap(v)) {
-                return rt.throwStr("ClassCastException", "cannot conj onto " + rt.describe(v));
-            }
-            return rt.throwStr("UnsupportedOperationException",
-"conj onto " + rt.describe(v) + " needs more of the data structures");
+            acc = rt.r(ai);
+            rt.popTo(ai);
+            return acc;
         });
 
         def("seq", (rt, at, n) -> com._3sln.flint.kgen.rt.Seqwalk.seq(rt, rt.vat(at)));
         def("first", (rt, at, n) -> Seqwalk.first(rt, rt.vat(at)));
         def("next", (rt, at, n) -> com._3sln.flint.kgen.rt.Seqwalk.next(rt, rt.vat(at)));
         def("rest", (rt, at, n) -> Seqwalk.rest(rt, rt.vat(at)));
-        def("cons", (rt, at, n) -> Seqs.cons(rt, rt.vat(at), rt.vat(at + 1)));
+        def("cons", (rt, at, n) -> com._3sln.flint.kgen.rt.Seqcore.cons(rt, rt.vat(at), rt.vat(at + 1)));
 
         // Transients. A transient is a MUTABLE handle on a persistent value,
         // and the whole contract is that the persistent one it came from is

@@ -4834,6 +4834,51 @@ is deliberately not a claim about the whole runtime.
 
 ---
 
+### `conj`'s dispatch is generated, and a bridge wrapper was removed to let it be, 2026-09-22
+
+Two decisions, taken while porting and recorded here because neither is
+obvious from the diff.
+
+**THE DISPATCH IS THE THING WORTH PORTING, not the arms.** `vec-conj`,
+`set-conj`, `map-assoc`, `map-conj-map`, `table-conj` and `map-entry-as-vec`
+were already kin functions with three targets each. What stayed hand-written
+three times was the CHOICE between them -- and the three copies had drifted
+into two shapes: native looped over the arguments calling `Rt::conj` per
+element, re-reading the collection's type tag each time, while both ports read
+the tag once and then looped. `kin/collconj.kin` is that choice, written once,
+and all three runtimes now loop per argument over the generated function.
+
+The shapes cost the same: `runtimes/conform/conjgas.cljc` measures 1 200 extra
+conj operations at 76 962 gas on native and 76 964 on the jvm, so the extra tag
+reads are not billed. This was a convergence, not a bug fix. It removed 63
+hand-written lines from `coll.rs`, 87 from `Builtins.java` and 80 from
+`Builtins.cs` -- 230 lines, for 97 of kin source.
+
+**NO NEW VOCABULARY, AND THAT IS THE GENERAL RULE.** Every callee is reached by
+`:require`/`:refer` over a kin namespace. A vocabulary word emits a call into
+HAND-WRITTEN code; when the thing being called is itself a kin function, a word
+would be a fourth spelling of something that already exists in three. Reach for
+`:refer` first and add a word only for what the runtime alone can do.
+
+**A BRIDGE WRAPPER THAT COLLIDES WITH ITS OWN GENERATED FUNCTION IS REMOVED,
+NOT WORKED AROUND.** `Seqs.cons` on the jvm and `Seqs.Cons` on the clr were
+one-line delegations to the generated `Seqcore.cons`. Every generated module
+imports hand-written `Seqs` AND the kin modules it requires, so the first kin
+source to need `cons` -- this one -- would not compile: *"reference to cons is
+ambiguous"* on the jvm, `CS0121` on the clr. The wrapper had two call sites per
+port. Deleting it and pointing those four at the generated name is smaller than
+any workaround, and it is the direction the tree is going anyway.
+
+That generalises: these wrappers were scaffolding for a migration that has
+largely happened, and an audit of the tree on 2026-09-22 counted **450 of them
+across 957 lines** (rust 32, jvm 209, clr 209, the two ports exact mirrors).
+174 of those have the same name as the function they delegate to and could go
+with a static import and no call-site edits at all. Removing them is not
+urgent; knowing the number is, because `Vec.java`'s own comment defers the job
+by citing "53 call sites" and the real figure is 25 on the jvm and 22 on the
+clr -- the cost that bought "worth doing LAST" is overstated about twofold.
+
+
 ## cross-runtime-benchmarks
 
 **Benchmark across wasm runtimes, because every number so far was V8**

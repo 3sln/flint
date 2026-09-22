@@ -29,7 +29,6 @@ public final class Seqs {
     /// `cons`, under the name its callers already use. The body is GENERATED,
     /// as `Seqcore.cons`; renaming ~20 call sites across this runtime for a
     /// naming win is the trade `doc/goals/kin-port.md` answered with "LAST".
-    public static long cons(Rt rt, long head, long tail) { return com._3sln.flint.kgen.rt.Seqcore.cons(rt, head, tail); }
     private Seqs() {}
 
     public static final int C_FIRST = 0, C_REST = 1, C_META = 2, C_COUNT = 3;

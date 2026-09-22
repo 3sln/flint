@@ -9,7 +9,16 @@
 #     kin/scripts/verify kin/codec.kin
 set -e
 root=$(cd "$(dirname "$0")/../.." && pwd)   # kin/scripts -> repo root
-src=${1:-kin/codec.kin}
+# NO DEFAULT SOURCE. This used to be `${1:-kin/codec.kin}`, and `kin/codec.kin`
+# does not exist -- the codec port was generated, measured at three times the
+# instructions of the hand-written version, and refused. Running this bare
+# then failed on a missing DRIVERS file, which names the wrong thing: the
+# source was never there. Ask for a source instead of guessing one.
+if [ $# -lt 1 ]; then
+  echo "usage: kin/scripts/verify <source.kin>" >&2
+  exit 2
+fi
+src=$1
 # A PRIVATE WORK DIRECTORY PER RUN.
 #
 # This used to be a fixed `$TMPDIR/kin-verify`, which two concurrent runs

@@ -287,92 +287,27 @@ public static class Builtins {
         // out of range on a byte string plainly long enough.
         Def("nth", (rt, at, n) => Collwrite.CollNth(rt, rt.VAt(at), rt.VAt(at + 1),
                                                     n > 2 ? rt.VAt(at + 2) : Val.NotFound));
+        // GENERATED DISPATCH (`kin/collconj.kin`) -- see the note in the jvm's
+        // `Builtins.java`. The arms were already generated; the choice between
+        // them was the part still written three times, in two different
+        // shapes.
         Def("conj", (rt, at, n) => {
-            long v = rt.VAt(at);
-            // `conj` on a table APPENDS A ROW.
-            if (Flint.Rt.Table.isTable(rt, v)) {
-                long tacc = v;
-                for (int i = 1; i < n; i++) tacc = Flint.Rt.Table.tableConj(rt, tacc, rt.VAt(at + i));
-                return tacc;
+            long acc = rt.VAt(at);
+            int ai = rt.Push(acc);
+            for (int i = 1; i < n; i++) {
+                long x = rt.VAt(at + i);
+                rt.SetR(ai, global::_3sln.Flint.Kgen.Rt.Collconj.CollConj(rt, rt.R(ai), x));
             }
-            if (rt.IsHeapTy(v, Obj.TyVec)) {
-                long acc = v;
-                for (int i = 1; i < n; i++) acc = Vec.Conj(rt, acc, rt.VAt(at + i));
-                return acc;
-            }
-            if (Sets.IsSet(rt, v)) {
-                long acc2 = v;
-                for (int i = 1; i < n; i++) acc2 = Sets.Conj(rt, acc2, rt.VAt(at + i));
-                return acc2;
-            }
-            if (Mapcore.IsMap(rt, v)) {
-                // `conj` onto a map takes an ENTRY, a two-element vector, or
-                // ANOTHER MAP, which merges. Anything else is refused.
-                //
-                // It used to take `first` and `first (rest ..)` of whatever
-                // arrived, which answers `nil` for both halves of a value that
-                // is neither -- so `(conj {:a 1} 7)` produced `{:a 1, nil nil}`
-                // and `(conj {:a 1} {:b 2})` produced `{:a 1, [:b 2] nil}`,
-                // silently, where native and Clojure throw and merge.
-                int bas = rt.Mark();
-                int ai = rt.Push(v);
-                for (int i = 1; i < n; i++) {
-                    long e = rt.VAt(at + i);
-                    if (rt.IsHeapTy(e, Obj.TyMapentry) || rt.IsHeapTy(e, Obj.TyVec)) {
-                        rt.SetR(ai, Mapwrite.MapAssoc(rt, rt.R(ai),
-                                                      rt.SlotOrNth(e, 0), rt.SlotOrNth(e, 1)));
-                    } else if (Mapcore.IsMap(rt, e)) {
-                        // GENERATED (`kin/mapconj.kin`) -- see the note on the
-                        // JVM's copy and on `coll.rs`.
-                        rt.SetR(ai, global::_3sln.Flint.Kgen.Rt.Mapconj.MapConjMap(rt, rt.R(ai), e));
-                    } else {
-                        rt.PopTo(bas);
-                        return rt.ThrowStr("IllegalArgumentException",
-                                           "conj on a map wants a map entry");
-                    }
-                }
-                long outc = rt.R(ai);
-                rt.PopTo(bas);
-                return outc;
-            }
-            // `conj` on a SEQ prepends, where on a vector it appends. That
-            // asymmetry is Clojure's and is about where the collection is cheap
-            // to grow, not about consistency.
-            // A MAP ENTRY conses, exactly as `coll.rs`'s default arm does.
-            // It is sequential -- the type-test switch says so now -- and
-            // `Seqs.Seq` already knows how to walk one.
-            // A MAP ENTRY appends, because it is a vector (Clojure). It is
-            // ALSO sequential, so it would otherwise cons in the branch below
-            // -- both readings exist and Clojure picks the vector one.
-            if (rt.IsHeapTy(v, Obj.TyMapentry)) {
-                int mb = rt.Mark();
-                int vi = rt.Push(global::_3sln.Flint.Kgen.Rt.Vecroots.MapEntryAsVec(rt, v));
-                for (int i = 1; i < n; i++) rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.VAt(at + i)));
-                long o2 = rt.R(vi);
-                rt.PopTo(mb);
-                return o2;
-            }
-            if (Val.IsNil(v) || rt.IsSeq(v)) {
-                long acc = Val.IsNil(v) ? Seqs.EmptyList(rt) : v;
-                for (int i = 1; i < n; i++) acc = Seqs.Cons(rt, rt.VAt(at + i), acc);
-                return acc;
-            }
-            // A NON-HEAP VALUE IS NOT A COLLECTION, and never will be, so it is
-            // a TYPE ERROR and not a missing feature. The message below means
-            // "this port has not got that data structure yet", which is true of
-            // a map or a set and nonsense about an integer. Clojure throws
-            // `ClassCastException` and native does now.
-            if (!Val.IsHeap(v)) {
-                return rt.ThrowStr("ClassCastException", "cannot conj onto " + rt.Describe(v));
-            }
-            return rt.ThrowStr("UnsupportedOperationException", "conj onto " + rt.Describe(v) + " needs more of the data structures");
+            acc = rt.R(ai);
+            rt.PopTo(ai);
+            return acc;
         });
 
         Def("seq", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, rt.VAt(at)));
         Def("first", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.VAt(at)));
         Def("next", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, rt.VAt(at)));
         Def("rest", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Seqwalk.Rest(rt, rt.VAt(at)));
-        Def("cons", (rt, at, n) => Seqs.Cons(rt, rt.VAt(at), rt.VAt(at + 1)));
+        Def("cons", (rt, at, n) => _3sln.Flint.Kgen.Rt.Seqcore.Cons(rt, rt.VAt(at), rt.VAt(at + 1)));
 
         // Transients. A transient is a MUTABLE handle on a persistent value,
         // and the whole contract is that the persistent one it came from is

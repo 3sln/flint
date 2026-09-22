@@ -49,68 +49,16 @@ impl Rt {
 
     // --- conj / assoc / get -------------------------------------------------
 
+    /// GENERATED (`kin/collconj.kin`). The ARMS were already generated --
+    /// `vec_conj`, `set_conj`, `map_assoc`, `map_conj_map`, `table_conj` and
+    /// `map_entry_as_vec` each have three targets -- and what stayed
+    /// hand-written three times was the choice between them. The two shapes
+    /// had drifted: this side re-read the type tag once per argument, both
+    /// ports read it once and then looped. Not billed either way
+    /// (`runtimes/conform/conjgas.cljc` measures it), but two algorithms for
+    /// one operation is what `map_conj_map` was generated to stop.
     pub fn conj(&mut self, coll: Value, x: Value) -> Value {
-        if coll.is_nil() {
-            let e = self.empty_list();
-            return self.cons(x, e);
-        }
-        // A NON-HEAP VALUE IS NOT A COLLECTION, and the line below reads a type
-        // tag through `as_heap`. `(conj 1 2)` took a fixnum's payload as an
-        // address, read whatever `ty` found there, missed every arm and consed:
-        // the answer was `(2)`, from a type read off a value that has no type
-        // to read. Clojure throws `ClassCastException` here, both ports throw,
-        // and native was the one making something up.
-        //
-        // Only NON-HEAP is refused: every heap type that reaches the default
-        // arm -- a list, a cons, a lazy seq -- still conses, which is what
-        // `conj` means on them.
-        if !coll.is_heap() {
-            let what = self.describe(coll);
-            let msg = alloc::format!("cannot conj onto {what}");
-            return self.throw_str("ClassCastException", &msg);
-        }
-        match ty(&self.gc.sp, coll.as_heap()) {
-            TY_VEC => self.vec_conj(coll, x),
-            TY_SET => self.set_conj(coll, x),
-            TY_ARRAYMAP | TY_HASHMAP => {
-                // conj on a map takes a map entry or a 2-element vector.
-                if x.is_heap() && matches!(ty(&self.gc.sp, x.as_heap()), TY_MAPENTRY | TY_VEC) {
-                    let (k, v) = (self.slot_or_nth(x, 0), self.slot_or_nth(x, 1));
-                    self.map_assoc(coll, k, v)
-                } else if self.is_map(x) {
-                    // GENERATED (`kin/mapconj.kin`). This used to walk `x`
-                    // with `map_for_each`, a CALLBACK walk, while both ports
-                    // walked it with `seq`/`first`/`next` -- two algorithms
-                    // for one operation, with two different gas costs, which
-                    // `bin/conform-hosts` could see in a total and could not
-                    // attribute. One source now, so the question does not
-                    // arise.
-                    self.map_conj_map(coll, x)
-                } else {
-                    self.throw_str("IllegalArgumentException", "conj on a map wants a map entry")
-                }
-            }
-            // `conj` on a table APPENDS A ROW, which is what conj means on
-            // every indexed collection here. The default arm conses, and a
-            // table consed onto is not a table.
-            crate::obj::TY_TABLE => self.table_conj(coll, x),
-            // A MAP ENTRY is a vector, so `conj` APPENDS rather than consing:
-            // `(conj (first {:a 1}) 9)` is `[:a 1 9]`, as in Clojure. It falls
-            // through to the cons arm otherwise, because a map entry is also
-            // sequential -- both readings are available and Clojure picks the
-            // vector one.
-            TY_MAPENTRY => {
-                let base = self.mark();
-                let xi = self.push(x);
-                let v = self.map_entry_as_vec(coll);
-                let vi = self.push(v);
-                let (vv, xv) = (self.r(vi), self.r(xi));
-                let out = self.vec_conj(vv, xv);
-                self.pop_to(base);
-                out
-            }
-            _ => self.cons(x, coll),
-        }
+        self.coll_conj(coll, x)
     }
 
     /// `first_foreign_key` walks a map's entries and needs the key half of

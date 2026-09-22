@@ -1250,7 +1250,7 @@ public static class Program {
         rt.EnterGuest();
         int bas = rt.Mark();
         for (int i = 0; i < n; i++)
-            rt.Push(Flint.Rt.Seqs.Cons(rt, Flint.Rt.Val.Fixnum(tag * 1_000_000 + i), Flint.Rt.Val.Nil));
+            rt.Push(_3sln.Flint.Kgen.Rt.Seqcore.Cons(rt, Flint.Rt.Val.Fixnum(tag * 1_000_000 + i), Flint.Rt.Val.Nil));
         // A cell whose pointer was not fixed up after a move reads as the WRONG
         // NUMBER here, rather than crashing. That is the failure worth
         // catching: a crash would at least be obvious.

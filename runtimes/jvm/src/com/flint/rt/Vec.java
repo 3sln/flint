@@ -79,7 +79,10 @@ public final class Vec {
         return out;
     }
 
-    /// `conj`, under the name 53 call sites in this runtime already use.
+    /// `conj`, under the name 23 call sites in this runtime already use
+    /// (20 on the clr). This line said 53 until it was counted on
+    /// 2026-09-22; the figure that bought "worth doing LAST" below was
+    /// roughly twice the real bill.
     ///
     /// The body is GENERATED, as `Vecwrite.vecConj`, and Rust's callers say
     /// `vec_conj` directly. Renaming these would be 53 edits here and 53 more

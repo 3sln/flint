@@ -1,0 +1,250 @@
+--rust-head
+// THE TOY STUBS EVERY ARM, because what this function decides is the CHOICE,
+// not the collection operation. Each callee answers a distinguishable marker,
+// so the transcript names the arm that ran. Testing the arms themselves would
+// be testing `vec-conj` and `map-assoc`, which have their own sources and
+// their own drivers.
+//
+// THE TAGS ARE THE REAL ONES. A toy with round numbers would catch a wrong
+// branch and miss a wrong constant, and the map arm turns on four tags.
+//
+// THE ROOTS ARE REAL. The map-entry arm is the only place this function roots
+// anything, and a toy whose `push`/`r` were no-ops could not tell correct
+// rooting from none -- so the fixture also prints the root depth afterwards,
+// which is 0 only if `pop-to` ran.
+extern crate alloc;
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_VEC: u8 = 9; const TY_SET: u8 = 10;
+const TY_ARRAYMAP: u8 = 11; const TY_HASHMAP: u8 = 12;
+const TY_MAPENTRY: u8 = 13; const TY_TABLE: u8 = 45;
+const TY_LIST: u8 = 14;            // names no arm: must reach the cons default
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+}
+struct Space { m: alloc::vec::Vec<u8> }
+struct Gc { sp: Space }
+struct Rt { gc: Gc, roots: alloc::vec::Vec<Value>, log: alloc::string::String }
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Rt {
+    fn say(&mut self, s: &str) -> Value { self.log.push_str(s); Value(0x700) }
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn empty_list(&mut self) -> Value { self.say("EMPTY") }
+    fn cons(&mut self, _x: Value, _c: Value) -> Value { self.say("CONS") }
+    fn vec_conj(&mut self, _v: Value, _x: Value) -> Value { self.say("VEC") }
+    fn set_conj(&mut self, _s: Value, _x: Value) -> Value { self.say("SET") }
+    fn map_assoc(&mut self, _m: Value, _k: Value, _v: Value) -> Value { self.say("ASSOC") }
+    fn map_conj_map(&mut self, _m: Value, _o: Value) -> Value { self.say("CONJMAP") }
+    fn table_conj(&mut self, _t: Value, _r: Value) -> Value { self.say("TABLE") }
+    fn map_entry_as_vec(&mut self, _e: Value) -> Value { self.say("ASVEC+") }
+    fn slot_or_nth_pub(&mut self, _v: Value, _i: u32) -> Value { Value(0x800) }
+    fn is_map(&mut self, v: Value) -> bool {
+        v.is_heap() && matches!(ty(&self.gc.sp, v.as_heap()), TY_ARRAYMAP | TY_HASHMAP)
+    }
+    fn describe(&mut self, _v: Value) -> alloc::string::String {
+        alloc::string::String::from("a number")
+    }
+    fn throw_str(&mut self, kind: &str, _m: &alloc::string::String) -> Value {
+        self.log.push_str(if kind == "ClassCastException" { "CCE" } else { "IAE" });
+        NIL
+    }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { gc: Gc { sp: Space { m: alloc::vec![0u8; 400] } },
+                      roots: alloc::vec::Vec::new(),
+                      log: alloc::string::String::new() };
+    let mut at = |t: u8, a: u64| -> Value { rt.gc.sp.m[a as usize] = t; Value(a) };
+    let v = at(TY_VEC, 100); let s = at(TY_SET, 110);
+    let am = at(TY_ARRAYMAP, 120); let hm = at(TY_HASHMAP, 130);
+    let me = at(TY_MAPENTRY, 140); let tb = at(TY_TABLE, 150);
+    let li = at(TY_LIST, 160); let fix = Value(7);
+    let mut out = alloc::vec::Vec::new();
+    let mut run = |rt: &mut Rt, coll: Value, x: Value| {
+        rt.log.clear(); rt.coll_conj(coll, x); out.push(rt.log.clone());
+    };
+    run(&mut rt, NIL, fix);      //  1. nil conses onto the empty list
+    run(&mut rt, fix, fix);      //  2. a non-heap value is refused BY NAME
+    run(&mut rt, v, fix);        //  3. vector
+    run(&mut rt, s, fix);        //  4. set
+    run(&mut rt, am, me);        //  5. array map + a map entry  -> assoc
+    run(&mut rt, hm, v);         //  6. hash map + a VECTOR      -> assoc
+    run(&mut rt, am, hm);        //  7. map + a map              -> conj-map
+    run(&mut rt, am, fix);       //  8. map + neither            -> refused
+    run(&mut rt, tb, fix);       //  9. table appends a row
+    run(&mut rt, me, fix);       // 10. map entry becomes a vector FIRST
+    run(&mut rt, li, fix);       // 11. a tag no arm names conses
+    println!("{} | roots={}", out.join(" "), rt.roots.len());
+}
+--java-head
+    static final int TY_VEC = 9, TY_SET = 10, TY_ARRAYMAP = 11, TY_HASHMAP = 12,
+                     TY_MAPENTRY = 13, TY_TABLE = 45, TY_LIST = 14;
+    static final long NIL = 0xFFFFL;
+    static final class Space { byte[] m = new byte[400]; }
+    static final class Gc { Space sp = new Space(); }
+    static final class Val {
+        static boolean isHeap(long v) { return v >= 100 && v != NIL; }
+        static long asHeap(long v) { return v; }
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xff; }
+    static final class Rt {
+        Gc gc = new Gc();
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        StringBuilder log = new StringBuilder();
+        long say(String s) { log.append(s); return 0x700L; }
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long slotOrNth(long v, int i) { return 0x800L; }
+        long throwStr(String kind, String m) {
+            log.append(kind.equals("ClassCastException") ? "CCE" : "IAE"); return NIL;
+        }
+    }
+    static long cons(Rt rt, long x, long c) { return rt.say("CONS"); }
+    static long vecConj(Rt rt, long v, long x) { return rt.say("VEC"); }
+    static long setConj(Rt rt, long s, long x) { return rt.say("SET"); }
+    // KIN FUNCTIONS, reached by `:require`/`:refer`: static, and rt is an
+    // argument. Only the VOCABULARY words are methods on `Rt`.
+    static long mapAssoc(Rt rt, long m, long k, long v) { return rt.say("ASSOC"); }
+    static long mapConjMap(Rt rt, long m, long o) { return rt.say("CONJMAP"); }
+    static long tableConj(Rt rt, long t, long row) { return rt.say("TABLE"); }
+    static long mapEntryAsVec(Rt rt, long e) { return rt.say("ASVEC+"); }
+    static boolean isMap(Rt rt, long v) {
+        return Val.isHeap(v) && (ty(rt.gc.sp, Val.asHeap(v)) == TY_ARRAYMAP
+                              || ty(rt.gc.sp, Val.asHeap(v)) == TY_HASHMAP);
+    }
+    static String describe(Rt rt, long v) { return "a number"; }
+    static final class com { static final class flint { static final class rt {
+        static final class Seqs { static long emptyList(Rt rt) { return rt.say("EMPTY"); } }
+    } } }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        java.util.function.BiFunction<Integer, Long, Long> at = (t, a) -> {
+            rt.gc.sp.m[(int)(long) a] = (byte)(int) t; return a; };
+        long v = at.apply(TY_VEC, 100L), s = at.apply(TY_SET, 110L);
+        long am = at.apply(TY_ARRAYMAP, 120L), hm = at.apply(TY_HASHMAP, 130L);
+        long me = at.apply(TY_MAPENTRY, 140L), tb = at.apply(TY_TABLE, 150L);
+        long li = at.apply(TY_LIST, 160L), fix = 7L;
+        long[][] cases = {{NIL, fix}, {fix, fix}, {v, fix}, {s, fix}, {am, me},
+                          {hm, v}, {am, hm}, {am, fix}, {tb, fix}, {me, fix}, {li, fix}};
+        StringBuilder o = new StringBuilder();
+        for (long[] c : cases) {
+            rt.log.setLength(0);
+            collConj(rt, c[0], c[1]);
+            if (o.length() > 0) o.append(" ");
+            o.append(rt.log);
+        }
+        System.out.println(o + " | roots=" + rt.roots.size());
+    }
+--csharp-pre
+// `empty-list` emits `global::Flint.Rt.Seqs.EmptyList(rt)`, which names a
+// NAMESPACE rather than a class in scope -- so it cannot live inside `Probe`.
+namespace Flint.Rt {
+    internal static class Seqs {
+        internal static long EmptyList(Probe.Rt rt) { return rt.Say("EMPTY"); }
+    }
+}
+--csharp-head
+    const long NIL = 0xFFFFL;
+    internal sealed class Space { public byte[] m = new byte[400]; }
+    internal sealed class Gc { public Space sp = new Space(); }
+    internal static class Val {
+        public static bool IsHeap(long v) { return v >= 100 && v != NIL; }
+        public static long AsHeap(long v) { return v; }
+        public static bool IsNil(long v) { return v == NIL; }
+    }
+    internal static class Obj {
+        public static int Ty(Space sp, long a) { return sp.m[(int) a]; }
+        internal const int TyVec = 9, TySet = 10, TyArraymap = 11, TyHashmap = 12,
+                          TyMapentry = 13, TyTable = 45, TyList = 14;
+    }
+    internal sealed class Rt {
+        public Gc gc = new Gc();
+        public System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        public System.Text.StringBuilder log = new System.Text.StringBuilder();
+        public long Say(string s) { log.Append(s); return 0x700L; }
+        public int Mark() { return roots.Count; }
+        public int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        public long R(int i) { return roots[i]; }
+        public void PopTo(int n) { while (roots.Count > n) roots.RemoveAt(roots.Count - 1); }
+        public long SlotOrNth(long v, int i) { return 0x800L; }
+        public long ThrowStr(string kind, string m) {
+            log.Append(kind == "ClassCastException" ? "CCE" : "IAE"); return NIL;
+        }
+    }
+    static long Cons(Rt rt, long x, long c) { return rt.Say("CONS"); }
+    static long VecConj(Rt rt, long v, long x) { return rt.Say("VEC"); }
+    static long SetConj(Rt rt, long s, long x) { return rt.Say("SET"); }
+    static long MapAssoc(Rt rt, long m, long k, long v) { return rt.Say("ASSOC"); }
+    static long MapConjMap(Rt rt, long m, long o) { return rt.Say("CONJMAP"); }
+    static long TableConj(Rt rt, long t, long row) { return rt.Say("TABLE"); }
+    static long MapEntryAsVec(Rt rt, long e) { return rt.Say("ASVEC+"); }
+    static bool IsMap(Rt rt, long v) {
+        return Val.IsHeap(v) && (Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyArraymap
+                              || Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyHashmap);
+    }
+    static string Describe(Rt rt, long v) { return "a number"; }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        System.Func<int, long, long> at = (t, a) => { rt.gc.sp.m[(int) a] = (byte) t; return a; };
+        long v = at(Obj.TyVec, 100), s = at(Obj.TySet, 110);
+        long am = at(Obj.TyArraymap, 120), hm = at(Obj.TyHashmap, 130);
+        long me = at(Obj.TyMapentry, 140), tb = at(Obj.TyTable, 150);
+        long li = at(Obj.TyList, 160), fix = 7;
+        long[][] cases = { new[]{NIL, fix}, new[]{fix, fix}, new[]{v, fix}, new[]{s, fix},
+                           new[]{am, me}, new[]{hm, v}, new[]{am, hm}, new[]{am, fix},
+                           new[]{tb, fix}, new[]{me, fix}, new[]{li, fix} };
+        var o = new System.Text.StringBuilder();
+        foreach (var c in cases) {
+            rt.log.Length = 0;
+            CollConj(rt, c[0], c[1]);
+            if (o.Length > 0) o.Append(" ");
+            o.Append(rt.log);
+        }
+        System.Console.WriteLine(o + " | roots=" + rt.roots.Count);
+    }
+--expect
+EMPTYCONS CCE VEC SET ASSOC ASSOC CONJMAP IAE TABLE ASVEC+VEC CONS | roots=0
+--expect-why
+DERIVED FROM THE CONTRACT, arm by arm, not recorded from a run.
+
+ 1. `EMPTYCONS` -- nil is the one arm whose answer is not the argument's type:
+    it asks for the empty list and conses onto THAT, so both markers appear
+    and in that order. A `CONS` alone would mean it consed onto nil itself.
+ 2. `CCE` -- a fixnum is not a collection. This is the arm that once read a
+    fixnum's payload as an address and consed, answering from a type tag that
+    was never written; it must be refused BY NAME.
+ 3-4. `VEC`, `SET` -- the two direct arms.
+ 5. `ASSOC` -- a map conjed with a MAP ENTRY takes it apart into key and value.
+ 6. `ASSOC` -- and a two-element VECTOR is the same case, which is why the
+    guard tests two tags rather than one. A toy that only tried a map entry
+    would pass with the vector tag dropped.
+ 7. `CONJMAP` -- a map conjed with a map merges, and must not be mistaken for
+    case 6: it reaches `is-map`, which only the second branch asks.
+ 8. `IAE` -- a map conjed with anything else is refused, and with a DIFFERENT
+    exception from case 2. One `throw-str` arm answering both would pass a
+    test that only checked "it threw".
+ 9. `TABLE` -- a table appends a row. The default arm would cons, and a table
+    consed onto is not a table, so this must not fall through.
+10. `ASVEC+VEC` -- a map entry is converted to a vector FIRST and then conjed,
+    in that order. `VEC` alone would mean the conversion was skipped; `ASVEC+`
+    alone would mean the result was returned unconjed. It is also sequential,
+    so a missing arm here falls to `CONS` and still looks plausible.
+11. `CONS` -- a tag no arm names conses, which is what `conj` means on a list.
+
+`roots=0` is the rooting claim. Case 10 is the only arm that pushes, and it
+pushes twice; the depth is 0 afterwards only if `pop-to` ran. A leak would
+read `roots=2` and every other marker would be unchanged.

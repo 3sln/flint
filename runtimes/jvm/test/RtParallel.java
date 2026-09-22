@@ -38,7 +38,7 @@ public class RtParallel {
     rt.enterGuest();
     int base = rt.mark();
     for (int i = 0; i < n; i++) {
-      rt.push(Seqs.cons(rt, Val.fixnum(tag * 1_000_000 + i), Val.NIL));
+      rt.push(com._3sln.flint.kgen.rt.Seqcore.cons(rt, Val.fixnum(tag * 1_000_000 + i), Val.NIL));
     }
     // A cell whose pointer was not fixed up after a move reads as the WRONG
     // NUMBER here, rather than crashing. That is the failure worth catching: a

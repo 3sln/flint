@@ -66,6 +66,7 @@ pub mod hash;
 pub mod hashtext;
 pub mod interns;
 pub mod collhash;
+pub mod collconj;
 pub mod collvec;
 pub mod mapconj;
 pub mod mapcore;

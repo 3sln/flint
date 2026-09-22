@@ -2327,10 +2327,15 @@ One hoist for Rust's borrow checker: `node-set` takes `&mut self` and so does
 Every target reads the hoisted form fine.
 
 `conj` KEEPS its old name on the ports, as a one-line delegation to the
-generated `vecConj`. 53 call sites per port use `Vec.conj`, in files that have
-nothing to do with vectors, and renaming them is the same trade this file
-already recorded against the `champ_*` wrappers and answered with "worth doing
-LAST".
+generated `vecConj`. 23 call sites on the jvm and 20 on the clr use
+`Vec.conj`, in files that have nothing to do with vectors, and renaming them is
+the same trade this file already recorded against the `champ_*` wrappers and
+answered with "worth doing LAST".
+
+**This said 53 per port until it was counted, 2026-09-22.** The real bill is 43
+edits across both ports, not 106 -- so the cost that bought "worth doing LAST"
+was overstated about twofold. The verdict may still be right; it was reached
+against a number nobody had measured.
 
 `^:pub` came back on `vec-shift`, `tail-off` and `node-clone`, which the sweep
 two commits ago had taken off. `vecwrite` `:refer`s them, and a require of a
@@ -2416,9 +2421,10 @@ covering both.
 The ports keep their old names as ONE-LINE DELEGATIONS to the generated
 bodies: `Vec.conj`, `Vec.assoc`, `Vec.pop`, `Vec.tconj`, `Vec.tassoc`,
 `Vec.tpop`, `Vec.tpersistent`, `Vec.transientOf`, `Vec.newEditToken` and the
-rest. That is 53 call sites for `conj` alone, in files that have nothing to do
-with vectors; renaming them is the trade this file already answered with
-"worth doing LAST".
+rest. That is 23 call sites on the jvm and 20 on the clr for `conj` alone, in
+files that have nothing to do with vectors; renaming them is the trade this
+file already answered with "worth doing LAST" -- against a figure of 53 that
+turned out, when counted, to be about twice the truth.
 
 Two fixture notes, both the same lesson one more time. The C# probe hit CS0136
 -- a local named `ret` in two nested scopes -- which is the same rule that
@@ -9542,3 +9548,58 @@ could be believed. The failure names the true location:
 
     DECISIONS.md cites `reap_ports` at runtime/src/conc.rs:1500, which is not
     within 8 lines of there -- it is at 734, 2022, 2290, 2297
+
+## `conj`'s dispatch, and the first wrapper the port had to delete
+
+2026-09-22. 113 kin sources. The roadmap had named `conj`'s dispatch as "the
+next real candidate, not yet ported" and it still was: `coll.rs` dispatched on
+a hand-written `match`, `Builtins.java` and `Builtins.cs` on their own
+if-chains.
+
+**The arms were already generated.** `vec-conj`, `set-conj`, `map-assoc`,
+`map-conj-map`, `table-conj` and `map-entry-as-vec` each had three targets
+already. What was still written three times was the CHOICE between them, which
+is the part that had drifted -- native re-read the collection's type tag once
+per argument, both ports read it once and then looped. 230 hand-written lines
+(63 + 87 + 80) replaced by 97 of kin.
+
+### No new vocabulary, which was the first thing I got wrong
+
+The initial plan listed eight vocabulary words to add. All eight already
+existed as `^:pub` kin functions, reachable by `:require`/`:refer` --
+`kin/collvec.kin:26` had been doing exactly that all along. A word emits a
+call into HAND-WRITTEN code; when the callee is itself generated, a word is a
+fourth spelling of something that already exists in three.
+
+### The wrapper that made the module uncompilable
+
+Every generated module imports hand-written `Seqs` as well as the kin modules
+it requires. `Seqs.cons` was a one-line delegation to the generated
+`Seqcore.cons` -- so the first kin source to need `cons` could not compile:
+
+    error: reference to cons is ambiguous        (jvm)
+    error CS0121: The call is ambiguous ...      (clr)
+
+Two call sites per port. Deleted the wrapper, pointed the four call sites at
+the generated name. An audit run the same day counts **450 such wrappers
+across 957 lines** (rust 32, jvm 209, clr 209 -- the two ports exact mirrors),
+of which 174 share the name of the function they delegate to and could go with
+a static import and no call-site edits.
+
+### Three ways to get a false green, all hit in one slice
+
+* **`cargo build ... | grep ...; echo $?`** reports GREP's status. The first
+  "native builds clean" was grep finding no matches in a build that had
+  failed. `${pipestatus[1]}` is the answer, and it is the same trap as
+  [[head-on-a-filtered-log]] one layer along.
+* **`runtime/src/kgen/rt.rs` is hand-maintained.** `emit` does not add the
+  `pub mod` line, and its own header says why that matters: a missing `pub
+  mod` is not a compile error, it is a module that quietly never gets built.
+  `bin/check-kin` asserts the line exists -- and this slice is a case where
+  running it earlier would have cost less than not running it.
+* **The toy must match the RUNTIME, not the generated code.** I annotated the
+  root mark `^I32`, the generator emitted `u32`, and I wrote the toy's `mark`
+  to return `u32` so the drivers passed on all three targets. The real `mark`
+  returns `usize`. A toy shaped to agree with the generated code cannot
+  disagree with it; `^RootIx` is the annotation, and the toy now mirrors the
+  runtime.
