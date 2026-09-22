@@ -50,15 +50,21 @@ public static class Val {
     /// integer opcodes have to test rather than assume.
     public const long FixnumMax = (1L << 47) - 1;
     public const long FixnumMin = -(1L << 47);
-    public static bool FitsFixnum(long n) => n >= FixnumMin && n <= FixnumMax;
+    /// GENERATED (`kin/valtag.kin`).
+    public static bool FitsFixnum(long n) => global::_3sln.Flint.Kgen.Rt.Valtag.FitsFixnum(n);
 
     public static bool IsFixnum(long v) => Tag(v) == TagFixnum;
-    public static long Fixnum(long n) => (TagFixnum << 48) | (n & Payload);
+    /// GENERATED as `MakeFixnum` -- see the Java copy for why it delegates
+    /// rather than being renamed.
+    public static long Fixnum(long n) => global::_3sln.Flint.Kgen.Rt.Valtag.MakeFixnum(n);
     /// Sign-extended from 48 bits; larger integers are `TY_BIGINT` on the heap.
-    public static long AsFixnum(long v) => (v << 16) >> 16;
+    /// GENERATED as `FixnumPayload`.
+    public static long AsFixnum(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.FixnumPayload(v);
 
     public static bool IsHeap(long v) => Tag(v) == TagHeap;
-    public static long Heap(long addr) => (TagHeap << 48) | (addr & Payload);
+    /// GENERATED as `MakeHeap` -- the one the three runtimes had come apart
+    /// on, native ORing the address in whole where this masked it.
+    public static long Heap(long addr) => global::_3sln.Flint.Kgen.Rt.Valtag.MakeHeap(addr);
     /// MASK, not merely a cast: a 48-bit address would otherwise come back
     /// carrying its tag.
     public static long AsHeap(long v) => v & Payload;

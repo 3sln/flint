@@ -1,0 +1,114 @@
+--rust-head
+// NO HEAP AND NO `Rt`. These six are pure bit manipulation over a 64-bit
+// word, which is why they are free functions -- so the toy is the real
+// constants, the newtype, and nothing else.
+//
+// THE CONSTANTS ARE THE REAL ONES. A toy that picked a narrow tag would still
+// catch a shift in the wrong direction and would NOT catch a missing mask,
+// which is the defect this source exists to make impossible.
+extern crate alloc;
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+mod value {
+    pub const TAG_HEAP: u64 = 0xFFF9;
+    pub const TAG_FIXNUM: u64 = 0xFFFA;
+    pub const PAYLOAD: u64 = 0x0000_FFFF_FFFF_FFFF;
+    pub const FIXNUM_MAX: i64 = (1 << 47) - 1;
+    pub const FIXNUM_MIN: i64 = -(1 << 47);
+}
+--rust
+fn main() {
+    let b = |x: bool| if x { 1 } else { 0 };
+    println!("{} {} | {}{}{}{} | {} {} {} {} | {} {} {} | {} {}",
+             // 1-2. THE TAG COMES BACK, from each constructor.
+             tag_of(make_fixnum(0)), tag_of(make_heap(0)),
+             // 3-6. THE BOUND, both sides of both ends.
+             b(fits_fixnum(value::FIXNUM_MAX)), b(fits_fixnum(value::FIXNUM_MAX + 1)),
+             b(fits_fixnum(value::FIXNUM_MIN)), b(fits_fixnum(value::FIXNUM_MIN - 1)),
+             // 7-10. FIXNUM ROUND TRIP, including the negatives that the mask
+             // and the sign extension both have to get right.
+             fixnum_payload(make_fixnum(0)), fixnum_payload(make_fixnum(-1)),
+             fixnum_payload(make_fixnum(value::FIXNUM_MAX)),
+             fixnum_payload(make_fixnum(value::FIXNUM_MIN)),
+             // 11-13. HEAP ROUND TRIP, then the address that separated the
+             // three runtimes: 2^48 is one past the payload field.
+             heap_payload(make_heap(0x1234)),
+             heap_payload(make_heap(1 << 48)),
+             tag_of(make_heap(1 << 48)),
+             // 14-15. And an address with BOTH halves set: the payload must
+             // survive and the tag must not be touched.
+             heap_payload(make_heap((1 << 48) | 0x1234)),
+             tag_of(make_heap((1 << 48) | 0x1234)));
+}
+--java-head
+    static final class Val {
+        static final long TAG_HEAP = 0xFFF9L;
+        static final long TAG_FIXNUM = 0xFFFAL;
+        static final long PAYLOAD = 0x0000_FFFF_FFFF_FFFFL;
+        static final long FIXNUM_MAX = (1L << 47) - 1;
+        static final long FIXNUM_MIN = -(1L << 47);
+    }
+--java
+    public static void main(String[] args) {
+        System.out.println(
+            tagOf(makeFixnum(0)) + " " + tagOf(makeHeap(0)) + " | "
+            + (fitsFixnum(Val.FIXNUM_MAX) ? 1 : 0) + (fitsFixnum(Val.FIXNUM_MAX + 1) ? 1 : 0)
+            + (fitsFixnum(Val.FIXNUM_MIN) ? 1 : 0) + (fitsFixnum(Val.FIXNUM_MIN - 1) ? 1 : 0)
+            + " | " + fixnumPayload(makeFixnum(0)) + " " + fixnumPayload(makeFixnum(-1))
+            + " " + fixnumPayload(makeFixnum(Val.FIXNUM_MAX))
+            + " " + fixnumPayload(makeFixnum(Val.FIXNUM_MIN))
+            + " | " + heapPayload(makeHeap(0x1234))
+            + " " + heapPayload(makeHeap(1L << 48))
+            + " " + tagOf(makeHeap(1L << 48))
+            + " | " + heapPayload(makeHeap((1L << 48) | 0x1234))
+            + " " + tagOf(makeHeap((1L << 48) | 0x1234)));
+    }
+--csharp-head
+    internal static class Val {
+        public const long TagHeap = 0xFFF9L;
+        public const long TagFixnum = 0xFFFAL;
+        public const long Payload = 0x0000_FFFF_FFFF_FFFFL;
+        public const long FixnumMax = (1L << 47) - 1;
+        public const long FixnumMin = -(1L << 47);
+    }
+--csharp
+    static void Main() {
+        System.Console.WriteLine(
+            TagOf(MakeFixnum(0)) + " " + TagOf(MakeHeap(0)) + " | "
+            + (FitsFixnum(Val.FixnumMax) ? 1 : 0) + (FitsFixnum(Val.FixnumMax + 1) ? 1 : 0)
+            + (FitsFixnum(Val.FixnumMin) ? 1 : 0) + (FitsFixnum(Val.FixnumMin - 1) ? 1 : 0)
+            + " | " + FixnumPayload(MakeFixnum(0)) + " " + FixnumPayload(MakeFixnum(-1))
+            + " " + FixnumPayload(MakeFixnum(Val.FixnumMax))
+            + " " + FixnumPayload(MakeFixnum(Val.FixnumMin))
+            + " | " + HeapPayload(MakeHeap(0x1234))
+            + " " + HeapPayload(MakeHeap(1L << 48))
+            + " " + TagOf(MakeHeap(1L << 48))
+            + " | " + HeapPayload(MakeHeap((1L << 48) | 0x1234))
+            + " " + TagOf(MakeHeap((1L << 48) | 0x1234)));
+    }
+--expect
+65530 65529 | 1010 | 0 -1 140737488355327 -140737488355328 | 4660 0 65529 | 4660 65529
+--expect-why
+DERIVED FROM THE LAYOUT, not recorded. A value is a 16-bit TAG over a 48-bit
+PAYLOAD; `TAG_FIXNUM` is 0xFFFA = 65530 and `TAG_HEAP` is 0xFFF9 = 65529.
+
+ 1-2. `65530 65529` -- each constructor's tag survives its own round trip. A
+      shift of the wrong width puts the tag somewhere else entirely and both
+      of these change together, which is why both are here.
+ 3-6. `1010` -- the bound at both ends. `FIXNUM_MAX` fits and one past does
+      not; `FIXNUM_MIN` fits and one past does not. The bottom is INCLUSIVE
+      where the top is exclusive, two's complement having one more negative
+      than positive, so a symmetrically written bound answers `1011`.
+ 7-10. The fixnum round trip. `0` and the two bounds are the easy half; `-1`
+      is the case with teeth. A negative is all ones above bit 47, so WITHOUT
+      the mask in `make-fixnum` those bits land in the TAG and the value reads
+      back as some other kind entirely -- and without the sign extension in
+      `fixnum-payload`, `-1` answers 281474976710655 instead.
+11-13. `4660 0 65529` -- the heap round trip, then 2^48, which is ONE PAST the
+      payload field. This is the exact input that separated the three
+      runtimes: both ports masked it to 0, native ORed it into the tag. The
+      tag must still read 65529 afterwards.
+14-15. `4660 65529` -- an address with both halves set. The low bits must
+      survive and the tag must be untouched. Case 12 alone would pass an
+      implementation that returned 0 for everything; this one will not.

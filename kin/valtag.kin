@@ -1,0 +1,91 @@
+;; THE TAG LAYOUT: how a flint value carries what it is.
+;;
+;; A value is 64 bits -- a 16-bit TAG over a 48-bit PAYLOAD -- and this is the
+;; layer every other one stands on. It was written three times, and the three
+;; copies were not the same: until 2026-09-22 native's `heap` ORed the address
+;; in whole where both ports masked it into the payload field, so an address
+;; at or above 2^48 would have corrupted the TAG on one runtime and been
+;; truncated on the other two. Unreachable -- the heap is a wasm linear memory
+;; bounded at 2^32 -- and invisible to every instrument here: the two PORTS
+;; agree, so a port-versus-port diff sees nothing; no conformance program can
+;; reach that address; and the constants are identical, so a constants gate
+;; passes over it too. The difference was in the EXPRESSION.
+;;
+;; THAT IS THE ARGUMENT FOR GENERATING IT rather than fixing it. The mask was
+;; put back by hand, and nothing stops it going again; one source cannot
+;; disagree with itself.
+;;
+;; THE NAMES ARE NEW ON PURPOSE. `fixnum`, `as-fixnum`, `heap`, `as-heap`,
+;; `is-fixnum` and `is-heap` are all vocabulary words already -- they emit
+;; `Val.fixnum(..)` and its siblings -- and a `^:pub` kin function of any of
+;; those names would shadow the word for every source that calls it. The
+;; generated bodies take different names and each runtime's `Val` keeps the
+;; name its callers use, which is the same shape `make-integer` sits under
+;; `Num.integer` in `kin/numint.kin`.
+;;
+;; `^:inline` ON ALL SIX, which is not decoration here. Each is a single
+;; expression on the hottest path the runtime has -- `fixnum` and `heap` run
+;; for essentially every value it creates -- and the hand-written originals
+;; all carried `#[inline(always)]`. Generated code does not get the marker by
+;; default (`vecwrite`, `eq` and `mapread` have none); `kin/hash.kin` asks for
+;; it the same way.
+;;
+;; `bits` AND `of-bits` ARE THE NEWTYPE SEAM. Native wraps a value in
+;; `Value(..)` where the ports pass a bare `long`; those two words are the
+;; whole of that difference, and they are why this source can speak in bits
+;; and still answer a `Value` on all three.
+(ns flint.rt.valtag
+  (:require [flint.impl.rt :refer [defn return doc
+                                   and >= <= == shl ushr64 sar64 bit-and bit-or
+                                   bits of-bits to-addr
+                                   Value I64 Addr Bool
+                                   TAG_HEAP TAG_FIXNUM PAYLOAD
+                                   FIXNUM_MIN FIXNUM_MAX]]))
+
+(doc "The 16-bit tag `v` carries -- what kind of value it is."
+     ""
+     "AN UNSIGNED SHIFT, because the tag lives in the top bits and an"
+     "arithmetic shift would smear the sign of a heap value across it.")
+(defn ^:pub ^:inline ^I64 tag-of [^Value v]
+  (return (ushr64 (bits v) 48)))
+
+(doc "Whether `n` fits a fixnum's 48 signed bits."
+     ""
+     "PAST THIS A VALUE IS A BOXED BIGINT, which still answers `is-int` --"
+     "which is why the specialised integer opcodes have to test rather than"
+     "assume.")
+(defn ^:pub ^:inline ^Bool fits-fixnum [^I64 n]
+  (return (and (>= n FIXNUM_MIN) (<= n FIXNUM_MAX))))
+
+(doc "`n` as a fixnum value."
+     ""
+     "MASKED, not merely shifted in: a negative `n` is all ones above bit 47,"
+     "and without the mask those bits land in the TAG and the answer reads"
+     "back as a value of some other kind.")
+(defn ^:pub ^:inline ^Value make-fixnum [^I64 n]
+  ;; `to-addr` IS THE CAST NATIVE ALREADY WRITES: `(n as u64) & PAYLOAD`.
+  ;; `n` is signed and `PAYLOAD` is not, and Rust will not mix the two -- on
+  ;; both ports it is a `long` either way and the word emits nothing.
+  (return (of-bits (bit-or (shl TAG_FIXNUM 48) (bit-and (to-addr n) PAYLOAD)))))
+
+(doc "The integer a fixnum carries, sign-extended from 48 bits."
+     ""
+     "SHIFT UP THEN ARITHMETIC DOWN. The payload is signed and 48 bits wide,"
+     "so the sign has to be propagated from bit 47; masking alone would"
+     "answer a large positive for every negative fixnum.")
+(defn ^:pub ^:inline ^I64 fixnum-payload [^Value v]
+  (return (sar64 (shl (bits v) 16) 16)))
+
+(doc "A heap address as a value."
+     ""
+     "MASK, do not merely cast -- the comment both ports carried and native"
+     "did not, which is exactly where the three copies came apart.")
+(defn ^:pub ^:inline ^Value make-heap [^Addr off]
+  (return (of-bits (bit-or (shl TAG_HEAP 48) (bit-and off PAYLOAD)))))
+
+(doc "The address a heap value points at."
+     ""
+     "MASK, do not merely cast: with a 48-bit address the tag would otherwise"
+     "come back as part of the answer.")
+(defn ^:pub ^:inline ^Addr heap-payload [^Value v]
+  (return (bit-and (bits v) PAYLOAD)))

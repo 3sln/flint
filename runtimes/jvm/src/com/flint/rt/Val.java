@@ -73,19 +73,35 @@ public final class Val {
     /// integer opcodes have to test rather than assume.
     public static final long FIXNUM_MAX = (1L << 47) - 1;
     public static final long FIXNUM_MIN = -(1L << 47);
-    public static boolean fitsFixnum(long n) { return n >= FIXNUM_MIN && n <= FIXNUM_MAX; }
+    /// GENERATED (`kin/valtag.kin`).
+    public static boolean fitsFixnum(long n) {
+        return com._3sln.flint.kgen.rt.Valtag.fitsFixnum(n);
+    }
 
     public static boolean isFixnum(long v) { return tag(v) == TAG_FIXNUM; }
 
-    public static long fixnum(long n) { return (TAG_FIXNUM << 48) | (n & PAYLOAD); }
+    /// GENERATED as `makeFixnum`. A delegator rather than a rename: the
+    /// generated code lands in a different class here, and `Val.fixnum` is
+    /// the name every caller and every kin vocabulary word already uses.
+    public static long fixnum(long n) {
+        return com._3sln.flint.kgen.rt.Valtag.makeFixnum(n);
+    }
 
     /// Sign-extended from 48 bits. A fixnum is a 48-bit signed integer; larger
     /// integers are `TY_BIGINT` on the heap.
-    public static long asFixnum(long v) { return (v << 16) >> 16; }
+    /// GENERATED as `fixnumPayload`.
+    public static long asFixnum(long v) {
+        return com._3sln.flint.kgen.rt.Valtag.fixnumPayload(v);
+    }
 
     public static boolean isHeap(long v) { return tag(v) == TAG_HEAP; }
 
-    public static long heap(long addr) { return (TAG_HEAP << 48) | (addr & PAYLOAD); }
+    /// GENERATED as `makeHeap`. This is the one the three runtimes had come
+    /// apart on -- native ORed the address in whole where this masked it --
+    /// and one source is what stops it happening again.
+    public static long heap(long addr) {
+        return com._3sln.flint.kgen.rt.Valtag.makeHeap(addr);
+    }
 
     /// MASK, do not merely cast: with a 48-bit address the tag would otherwise
     /// come back as part of the answer.

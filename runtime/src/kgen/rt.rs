@@ -126,6 +126,7 @@ pub mod seqs;
 pub mod seqwalk;
 pub mod vecnode;
 pub mod vecread;
+pub mod valtag;
 pub mod vecassoc;
 pub mod vecwrite;
 pub mod vectwrite;

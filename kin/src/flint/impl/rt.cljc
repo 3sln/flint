@@ -435,6 +435,15 @@
    ;; makes the name resolve without touching that preamble -- and the probe
    ;; harness answers it the same way `objsize.drivers` answers `crate::obj`,
    ;; with a module of that name.
+   ;; THE TAG LAYOUT. A value is a 16-bit tag over a 48-bit payload, and these
+   ;; three are what every constructor and accessor in `Val` is built from.
+   ;; Named on all three runtimes -- `PAYLOAD` only since 2026-09-22, when
+   ;; native's `heap` was found omitting the mask the ports both apply, which
+   ;; is far easier to miss against a bare `0x0000_FFFF_FFFF_FFFF` than
+   ;; against a name.
+   'TAG_HEAP {:rust "crate::value::TAG_HEAP" :java "Val.TAG_HEAP" :csharp "Val.TagHeap"}
+   'TAG_FIXNUM {:rust "crate::value::TAG_FIXNUM" :java "Val.TAG_FIXNUM" :csharp "Val.TagFixnum"}
+   'PAYLOAD {:rust "crate::value::PAYLOAD" :java "Val.PAYLOAD" :csharp "Val.Payload"}
    'FIXNUM_MIN {:rust "crate::value::FIXNUM_MIN" :java "Val.FIXNUM_MIN" :csharp "Val.FixnumMin"}
    'FIXNUM_MAX {:rust "crate::value::FIXNUM_MAX" :java "Val.FIXNUM_MAX" :csharp "Val.FixnumMax"}
    ;; The lazy-seq slot indices. These USED to need an entry here: the CLR
@@ -1177,6 +1186,16 @@
     'sar (core/call {:rust "((({0} as i32) >> {1}) as u32)"
                      :java "({0} >> {1})"
                      :csharp "({0} >> {1})"})
+
+    ;; THE 64-BIT ARITHMETIC SHIFT, which `sar` is not: that one narrows to
+    ;; `i32` on the way through, which is right for a 32-bit field and wrong
+    ;; for sign-extending a 48-bit fixnum payload -- it would cut the value in
+    ;; half before propagating anything. `ushr64` had no arithmetic twin until
+    ;; `valtag` needed one.
+    'sar64 (core/call {:rust "((({0} as i64) >> {1}) as i64)"
+                        :java "({0} >> {1})"
+                        :csharp "({0} >> {1})"}
+                       {:tag I64})
 
     ;; --- UNSIGNED COMPARISON AND DIVISION -------------------------------
     ;;

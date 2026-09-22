@@ -121,17 +121,24 @@ impl Value {
     pub const fn is_fixnum(self) -> bool {
         self.tag() == TAG_FIXNUM
     }
+    /// GENERATED (`kin/valtag.kin`) as `make_fixnum`. NOT `const` any more:
+    /// the generated body is a plain fn, and nothing here builds a fixnum in
+    /// a const context -- checked before relaxing it.
     #[inline(always)]
-    pub const fn fixnum(n: i64) -> Value {
-        Value((TAG_FIXNUM << 48) | ((n as u64) & PAYLOAD))
+    pub fn fixnum(n: i64) -> Value {
+        crate::kgen::rt::valtag::make_fixnum(n)
     }
+    /// GENERATED as `fixnum_payload`. The sign extension is the point: the
+    /// payload is 48 bits SIGNED, so bit 47 has to be propagated or every
+    /// negative fixnum reads back as a large positive.
     #[inline(always)]
-    pub const fn as_fixnum(self) -> i64 {
-        ((self.0 << 16) as i64) >> 16
+    pub fn as_fixnum(self) -> i64 {
+        crate::kgen::rt::valtag::fixnum_payload(self)
     }
+    /// GENERATED as `fits_fixnum`.
     #[inline(always)]
-    pub const fn fits_fixnum(n: i64) -> bool {
-        n >= FIXNUM_MIN && n <= FIXNUM_MAX
+    pub fn fits_fixnum(n: i64) -> bool {
+        crate::kgen::rt::valtag::fits_fixnum(n)
     }
 
     #[inline(always)]
@@ -139,14 +146,15 @@ impl Value {
         self.tag() == TAG_HEAP
     }
     #[inline(always)]
-    /// MASK, do not merely cast -- the comment both ports carry and this one
-    /// did not. `off` is an `Addr`, which is `u64`: at or above 2^48 it would
-    /// OR into the TAG and answer a value of some other kind entirely, where
-    /// both ports truncate instead. Unreachable while the heap is a wasm
-    /// linear memory bounded at 2^32, and a divergence in the definition of
-    /// every heap value regardless.
-    pub const fn heap(off: crate::mem::Addr) -> Value {
-        Value((TAG_HEAP << 48) | (off as u64 & PAYLOAD))
+    /// GENERATED (`kin/valtag.kin`) as `make_heap`, which is what finally
+    /// settles the mask: this runtime ORed the address in whole where both
+    /// ports masked it, and one source cannot disagree with itself. At or
+    /// above 2^48 an unmasked address lands in the TAG and answers a value of
+    /// some other kind; unreachable while the heap is a wasm linear memory
+    /// bounded at 2^32, and a divergence in the definition regardless.
+    #[inline(always)]
+    pub fn heap(off: crate::mem::Addr) -> Value {
+        crate::kgen::rt::valtag::make_heap(off)
     }
     #[inline(always)]
     pub const fn as_heap(self) -> crate::mem::Addr {
