@@ -548,6 +548,13 @@ That is what `cli/src/sys.rs`'s catalogue already is, extended to cover what
 
 - [ ] ONE spec builder, in flint code, called by both front ends — retiring
       `build_spec_with`'s Rust half and `bin/flint`'s map half
+      — but note that retiring those two does not end the duplication: FOUR
+      places assemble this shape independently, and the other two are
+      `src/flint/project.cljc` (what the self-hosted compiler uses, so the npm
+      CLI and the ESM SDK run it) and `sdks/esm/src/flint.js` (workspace names
+      and grants for embedders). Checked 2026-09-22: all four mention
+      `:workspaces`/`:entry`/`:builtins`, and `cli/src/main.rs:181`'s
+      `build_spec` assembles it as EDN text by hand
 - [ ] Move the compiler-driving half of `bin/flint` into `flint.cli`
 - [ ] Retire the Rust reimplementations once `:to :llvm` compiles the driver
 
