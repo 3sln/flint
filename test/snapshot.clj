@@ -7,6 +7,24 @@
 ;; inspector being able to answer the questions the instruments could not.
 (require '[clojure.string :as str] '[babashka.fs :as fs])
 
+;; SAY WHICH BUILD IS MISSING, rather than failing on whatever it reaches
+;; first. This file needs a DIAGNOSTICS build of the units, which `bin/test`
+;; makes before running it. Run by hand against production units it used to
+;; die with `no such builtin: flint.rt/snapshot` -- which names a symptom, not a
+;; cause, and five suites were once reported RED against a tree where every
+;; one of them passed.
+;;
+;; `bin/build-units` records which build it made (`units/.build-mode`), so
+;; this is one question rather than an inference. Absence is not failure: a
+;; tree that has never built units has no stamp, which is not the same as
+;; having the wrong one.
+(when (= "production" (when (fs/exists? "units/.build-mode")
+                        (str/trim (slurp "units/.build-mode"))))
+  (println "this test needs a DIAGNOSTICS build of the units.")
+  (println "  run ./bin/test-diagnostics, which builds them and puts the")
+  (println "  production build back afterwards (which is what bin/test does).")
+  (System/exit 1))
+
 (def fails (atom 0))
 (defn check [label actual expected]
   (if (= actual expected)
