@@ -10437,6 +10437,37 @@ both ports rather than a number hiding inside a sentinel, and it is a billing
 POLICY question, not a spelling one: it is piece (1) above, which the standing
 "charge all guest code" decision answers in principle and nothing has built.
 
+**Measured 2026-09-22, and it is worth ZERO PER YIELD.** No gas fixture here
+had ever yielded -- every one of them runs on a single thread, so the
+scheduler never ran between two instructions and the disarmed window was never
+entered under comparison. `runtimes/conform/yieldgas.cljc` puts two threads in
+it, each yielding `n` times, at 10 and 40:
+
+    native  16 229 / 16 889    delta 660
+    jvm     16 141 / 16 801    delta 660
+    clr     16 141 / 16 801    delta 660
+
+Eleven gas a yield on all three, to the instruction, and the two ports agree
+exactly. What remains is a CONSTANT 88, which does not move with the yield
+count -- so whatever the ports leave unbilled in that window, it is not
+proportional to how often the scheduler runs, and a program that yields more
+does not drift further from native.
+
+And 88 is not this fixture's number: the spawn row beside it reports **the
+same 88**, on a program that yields never and spawns forty threads. A constant
+that survives changing the workload is a cost of STARTING, which is what it
+was always said to be -- and now with two independent programs saying so.
+
+THE SLOPE IS THE CLAIM, not the gap; a difference of two workloads cannot tell
+"agrees" from "disagrees by a constant", which is why both sizes are recorded
+and both are asserted. `bin/conform-hosts` now carries the row, and the
+comparison was checked against doctored numbers first: three gas a yield going
+unbilled on one side reads as 88 at 10 and 268 at 40, and fails.
+
+This does not answer the policy question -- whether the scheduler's own
+allocation SHOULD be billed is still a decision, and still yours. It removes
+the reason to hurry: the divergence it was feared to cause is not accumulating.
+
 ### The gas row's 174 is located, and 140 of it is gone, 2026-09-18
 
 Picked up because the record above named "the ports' system-port entry" as the

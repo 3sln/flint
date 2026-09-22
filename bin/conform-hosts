@@ -695,6 +695,73 @@ SPJS
   fi
 fi
 
+# AND A PROGRAM THAT YIELDS, which nothing here did until 2026-09-22.
+#
+# `DECISIONS.md#the-codec-is-guest-code` records as open that the ports disarm billing
+# between a yield and the next `drive` -- they set the checkpoint to the
+# never-reached value, and `alloc` asks whether anything is counting -- so the
+# scheduler's own allocation goes unbilled there where native's does not. It
+# is filed as a billing POLICY question. Nothing had measured what the policy
+# is worth, and no fixture here yielded at all: every gas program above runs
+# on one thread, so the scheduler never runs between two instructions.
+#
+# MEASURED, and the answer is zero per yield. Two threads each yielding n
+# times, at 10 and 40:
+#
+#     native  16229 / 16889    delta 660
+#     jvm     16141 / 16801    delta 660
+#     clr     16141 / 16801    delta 660
+#
+# Eleven gas a yield on all three, to the instruction. What is left is a
+# CONSTANT 88 that does not move with the yield count, so whatever the ports
+# leave unbilled, it is not proportional to how often the scheduler runs.
+#
+# THE SLOPE IS THE ASSERTION, as in the spawn row above: a constant gap is a
+# fixed cost of getting started and a growing one is work that goes unbilled
+# per yield. Only the second would make the open question cost anything.
+if ./bin/flint :src runtimes/conform :fn yieldgas/small --emit-image \
+     :out out/yg-small.img >/dev/null 2>&1; then
+  ./bin/flint :src runtimes/conform :fn yieldgas/big --emit-image :out out/yg-big.img >/dev/null 2>&1
+  ./bin/flint :src runtimes/conform :fn yieldgas/small :out out/yg-small.wasm >/dev/null 2>&1
+  ./bin/flint :src runtimes/conform :fn yieldgas/big :out out/yg-big.wasm >/dev/null 2>&1
+  cat > out/yg-run.mjs <<'YGJS'
+import { load, instantiate } from '../host/flint.mjs';
+const o = {};
+for (const k of ['small', 'big']) {
+  const { module } = await load(`out/yg-${k}.wasm`);
+  const i = instantiate(module);
+  i.exports.set_step_limit(0x7ffffff0n);
+  i.run(`yieldgas/${k}`, ['']);
+  o[k] = Number(i.exports.stat_steps());
+}
+console.log(`${o.small} ${o.big}`);
+YGJS
+  yg_n="$(node out/yg-run.mjs)"
+  ygn_a="${yg_n%% *}"; ygn_b="${yg_n##* }"
+  case "$ygn_a$ygn_b" in
+    *[!0-9]*|'') echo "  FAIL yieldgas's wasm side did not print two numbers: [$yg_n]"; exit 1 ;;
+  esac
+  ygj_a="$("$JDK/bin/java" -cp runtimes/jvm/classes RtSteps out/yg-small.img yieldgas/small)"
+  ygj_b="$("$JDK/bin/java" -cp runtimes/jvm/classes RtSteps out/yg-big.img yieldgas/big)"
+  ygj_a="${ygj_a%% *}"; ygj_b="${ygj_b%% *}"
+  yga=$(( ygn_a > ygj_a ? ygn_a - ygj_a : ygj_a - ygn_a ))
+  ygb=$(( ygn_b > ygj_b ? ygn_b - ygj_b : ygj_b - ygn_b ))
+  [ "$yga" = "$ygb" ] \
+    || { echo "  FAIL yielding costs different gas per yield: gap $yga at 10, $ygb at 40"
+         echo "       native $ygn_a / $ygn_b against jvm $ygj_a / $ygj_b"
+         echo "       (the ports disarm billing between a yield and the next drive;"
+         echo "        a gap that GROWS means that is now costing something)"
+         exit 1; }
+  echo "  ok   a yield costs the same on every runtime: gap $yga at both sizes [jvm]"
+  if [ -n "$CLR" ]; then
+    ygc_a="$("$CLR" --rt-steps out/yg-small.img yieldgas/small)"; ygc_a="${ygc_a%% *}"
+    ygc_b="$("$CLR" --rt-steps out/yg-big.img yieldgas/big)"; ygc_b="${ygc_b%% *}"
+    [ "$ygc_a" = "$ygj_a" ] && [ "$ygc_b" = "$ygj_b" ] \
+      || { echo "  FAIL the two ports bill a yield differently: $ygj_a/$ygj_b against $ygc_a/$ygc_b"; exit 1; }
+    echo "  ok     ... and the two ports agree on both, to the instruction [clr]"
+  fi
+fi
+
 phase "gas bounds every runtime"
 # GAS IS A BOUND ON EVERY RUNTIME, not just the native one
 # (`DECISIONS.md#resource-limits`).
