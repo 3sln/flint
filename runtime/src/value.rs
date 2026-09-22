@@ -37,6 +37,12 @@ pub const TAG_STR: u64 = 0xFFFC;
 pub const TAG_KW: u64 = 0xFFFD;
 pub const TAG_MIN_BOXED: u64 = TAG_HEAP;
 
+/// THE PAYLOAD FIELD: the 48 bits under the tag. Both ports have named this
+/// since they were written (`Val.PAYLOAD`, `Val.Payload`); this runtime
+/// inlined `0x0000_FFFF_FFFF_FFFF` at each use instead, which is how `heap`
+/// below came to omit the mask altogether without looking out of place.
+pub const PAYLOAD: u64 = 0x0000_FFFF_FFFF_FFFF;
+
 pub const CANONICAL_NAN: u64 = 0x7FF8_0000_0000_0000;
 
 /// Longest inline (immediate) string, in UTF-8 bytes.
@@ -117,7 +123,7 @@ impl Value {
     }
     #[inline(always)]
     pub const fn fixnum(n: i64) -> Value {
-        Value((TAG_FIXNUM << 48) | ((n as u64) & 0x0000_FFFF_FFFF_FFFF))
+        Value((TAG_FIXNUM << 48) | ((n as u64) & PAYLOAD))
     }
     #[inline(always)]
     pub const fn as_fixnum(self) -> i64 {
@@ -133,8 +139,14 @@ impl Value {
         self.tag() == TAG_HEAP
     }
     #[inline(always)]
+    /// MASK, do not merely cast -- the comment both ports carry and this one
+    /// did not. `off` is an `Addr`, which is `u64`: at or above 2^48 it would
+    /// OR into the TAG and answer a value of some other kind entirely, where
+    /// both ports truncate instead. Unreachable while the heap is a wasm
+    /// linear memory bounded at 2^32, and a divergence in the definition of
+    /// every heap value regardless.
     pub const fn heap(off: crate::mem::Addr) -> Value {
-        Value((TAG_HEAP << 48) | off as u64)
+        Value((TAG_HEAP << 48) | (off as u64 & PAYLOAD))
     }
     #[inline(always)]
     pub const fn as_heap(self) -> crate::mem::Addr {

@@ -543,9 +543,16 @@ def norm_val(v):
     # `\d+` before the `L`, and `0xFFFAL` has hex digits -- so it fell through
     # to the identifier fold and `0xfffal` was reported as disagreeing with
     # native's `65530`, which is the same number.
-    m = re.fullmatch(r"(0[xX][0-9a-fA-F]+)[lLuU]*", v)
+    # DIGIT SEPARATORS TOO. All three languages allow `_` inside a literal and
+    # this repository uses it for the wide masks: `0x0000_FFFF_FFFF_FFFFL` on
+    # the jvm against `0x0000_FFFF_FFFF_FFFF` on native is one number written
+    # for two readers, and without this it is two strings.
+    m = re.fullmatch(r"(0[xX][0-9a-fA-F_]+)[lLuU]*", v)
     if m:
-        return str(int(m.group(1), 16))
+        return str(int(m.group(1).replace("_", ""), 16))
+    m = re.fullmatch(r"(\d[\d_]*)[lLuU]*", v)
+    if m:
+        return str(int(m.group(1).replace("_", "")))
     # `u32::MAX`, and the cast that sometimes follows it. Rust names the limit
     # where the ports write it out.
     m = re.fullmatch(r"([ui](?:8|16|32|64))::(MAX|MIN)(?:as[ui](?:8|16|32|64))?", v)
