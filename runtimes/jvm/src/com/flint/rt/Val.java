@@ -59,7 +59,8 @@ public final class Val {
         return com._3sln.flint.kgen.rt.Valtag.tagOf(v);
     }
 
-    public static boolean isDouble(long v) { return tag(v) < TAG_MIN_BOXED; }
+    /// GENERATED (`kin/valtag.kin`) as `doubleTagged`.
+    public static boolean isDouble(long v) { return com._3sln.flint.kgen.rt.Valtag.doubleTagged(v); }
 
     public static double asDouble(long v) { return Double.longBitsToDouble(v); }
 
@@ -81,7 +82,8 @@ public final class Val {
         return com._3sln.flint.kgen.rt.Valtag.fitsFixnum(n);
     }
 
-    public static boolean isFixnum(long v) { return tag(v) == TAG_FIXNUM; }
+    /// GENERATED as `fixnumTagged`.
+    public static boolean isFixnum(long v) { return com._3sln.flint.kgen.rt.Valtag.fixnumTagged(v); }
 
     /// GENERATED as `makeFixnum`. A delegator rather than a rename: the
     /// generated code lands in a different class here, and `Val.fixnum` is
@@ -97,7 +99,8 @@ public final class Val {
         return com._3sln.flint.kgen.rt.Valtag.fixnumPayload(v);
     }
 
-    public static boolean isHeap(long v) { return tag(v) == TAG_HEAP; }
+    /// GENERATED as `heapTagged`.
+    public static boolean isHeap(long v) { return com._3sln.flint.kgen.rt.Valtag.heapTagged(v); }
 
     /// GENERATED as `makeHeap`. This is the one the three runtimes had come
     /// apart on -- native ORed the address in whole where this masked it --
@@ -153,17 +156,19 @@ public final class Val {
         return out;
     }
 
-    public static boolean isNil(long v) { return v == NIL; }
-    public static boolean isTrue(long v) { return v == TRUE; }
+    public static boolean isNil(long v) { return com._3sln.flint.kgen.rt.Valtag.isNil(v); }
+    public static boolean isTrue(long v) { return com._3sln.flint.kgen.rt.Valtag.isTrue(v); }
 
     /// Is `v` either boolean? Rust has `is_bool` on the value; both ports had
     /// only `v == TRUE || v == FALSE` spelled out at each site.
     public static boolean isBool(long v) { return v == TRUE || v == FALSE; }
-    public static boolean isFalse(long v) { return v == FALSE; }
+    public static boolean isFalse(long v) { return com._3sln.flint.kgen.rt.Valtag.isFalse(v); }
 
     /// Only `nil` and `false` are false. Zero, the empty string and the empty
     /// vector are all true.
-    public static boolean truthy(long v) { return v != NIL && v != FALSE; }
+    /// GENERATED. nil and false are the only false things -- a fixnum 0 is
+    /// TRUE, which is the case a port gets wrong by testing for zero.
+    public static boolean truthy(long v) { return com._3sln.flint.kgen.rt.Valtag.truthy(v); }
 
     public static long bool(boolean b) { return b ? TRUE : FALSE; }
 }

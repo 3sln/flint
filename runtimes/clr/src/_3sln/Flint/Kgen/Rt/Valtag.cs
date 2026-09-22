@@ -92,4 +92,41 @@ public static class Valtag {
     public static long KwAsStr(long v) {
         return (v & Val.Payload) | (Val.TagStr << 48);
     }
+    /// Whether `v` is a double.
+    /// 
+    /// EVERY TAG BELOW THE BOXED RANGE IS A DOUBLE, which is the whole trick of
+    /// this representation: a float needs no tag of its own, it is simply any
+    /// bit pattern that is not one of ours. `TAG_MIN_BOXED` is where ours
+    /// begin.
+    public static bool DoubleTagged(long v) {
+        return TagOf(v) < Val.TagMinBoxed;
+    }
+    /// Whether `v` carries the fixnum tag.
+    public static bool FixnumTagged(long v) {
+        return TagOf(v) == Val.TagFixnum;
+    }
+    /// Whether `v` carries the heap tag.
+    public static bool HeapTagged(long v) {
+        return TagOf(v) == Val.TagHeap;
+    }
+    /// Whether `v` is nil.
+    public static bool IsNil(long v) {
+        return v == Val.Nil;
+    }
+    /// Whether `v` is the boolean true.
+    public static bool IsTrue(long v) {
+        return v == Val.True;
+    }
+    /// Whether `v` is the boolean false.
+    public static bool IsFalse(long v) {
+        return v == Val.False;
+    }
+    /// Whether `v` counts as true in a conditional.
+    /// 
+    /// NIL AND FALSE ARE THE ONLY FALSE THINGS, as in Clojure: 0 is true, the
+    /// empty string is true, an empty collection is true. Anything else would
+    /// be a different language.
+    public static bool Truthy(long v) {
+        return (v != Val.Nil) && (v != Val.False);
+    }
 }

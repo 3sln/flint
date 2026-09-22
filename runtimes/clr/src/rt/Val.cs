@@ -37,7 +37,8 @@ public static class Val {
     /// GENERATED (`kin/valtag.kin`) as `TagOf`.
     public static long Tag(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.TagOf(v);
 
-    public static bool IsDouble(long v) => Tag(v) < TagMinBoxed;
+    /// GENERATED (`kin/valtag.kin`) as `DoubleTagged`.
+    public static bool IsDouble(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.DoubleTagged(v);
     public static double AsDouble(long v) => System.BitConverter.Int64BitsToDouble(v);
 
     public static long OfDouble(double d) {
@@ -54,7 +55,7 @@ public static class Val {
     /// GENERATED (`kin/valtag.kin`).
     public static bool FitsFixnum(long n) => global::_3sln.Flint.Kgen.Rt.Valtag.FitsFixnum(n);
 
-    public static bool IsFixnum(long v) => Tag(v) == TagFixnum;
+    public static bool IsFixnum(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.FixnumTagged(v);
     /// GENERATED as `MakeFixnum` -- see the Java copy for why it delegates
     /// rather than being renamed.
     public static long Fixnum(long n) => global::_3sln.Flint.Kgen.Rt.Valtag.MakeFixnum(n);
@@ -62,7 +63,7 @@ public static class Val {
     /// GENERATED as `FixnumPayload`.
     public static long AsFixnum(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.FixnumPayload(v);
 
-    public static bool IsHeap(long v) => Tag(v) == TagHeap;
+    public static bool IsHeap(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.HeapTagged(v);
     /// GENERATED as `MakeHeap` -- the one the three runtimes had come apart
     /// on, native ORing the address in whole where this masked it.
     public static long Heap(long addr) => global::_3sln.Flint.Kgen.Rt.Valtag.MakeHeap(addr);
@@ -107,13 +108,15 @@ public static class Val {
         return outb;
     }
 
-    public static bool IsNil(long v) => v == Nil;
-    public static bool IsTrue(long v) => v == True;
+    public static bool IsNil(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.IsNil(v);
+    public static bool IsTrue(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.IsTrue(v);
 
     /// Is `v` either boolean? See the Java copy.
     public static bool IsBool(long v) => v == True || v == False;
-    public static bool IsFalse(long v) => v == False;
+    public static bool IsFalse(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.IsFalse(v);
     /// Only `nil` and `false` are false.
-    public static bool Truthy(long v) => v != Nil && v != False;
+    /// GENERATED. nil and false are the only false things -- a fixnum 0 is
+    /// TRUE, the case a port gets wrong by testing for zero.
+    public static bool Truthy(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.Truthy(v);
     public static long Bool(bool b) => b ? True : False;
 }

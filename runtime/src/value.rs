@@ -101,8 +101,11 @@ impl Value {
         crate::kgen::rt::valtag::tag_of(self) as u64
     }
     #[inline(always)]
+    /// GENERATED (`kin/valtag.kin`) as `double_tagged`. Every tag below the
+    /// boxed range is a double: a float needs no tag of its own, it is any
+    /// pattern that is not one of ours.
     pub fn is_double(self) -> bool {
-        self.tag() < TAG_MIN_BOXED
+        crate::kgen::rt::valtag::double_tagged(self)
     }
 
     #[inline(always)]
@@ -121,8 +124,9 @@ impl Value {
     }
 
     #[inline(always)]
+    /// GENERATED as `fixnum_tagged`.
     pub fn is_fixnum(self) -> bool {
-        self.tag() == TAG_FIXNUM
+        crate::kgen::rt::valtag::fixnum_tagged(self)
     }
     /// GENERATED (`kin/valtag.kin`) as `make_fixnum`. NOT `const` any more:
     /// the generated body is a plain fn, and nothing here builds a fixnum in
@@ -145,8 +149,9 @@ impl Value {
     }
 
     #[inline(always)]
+    /// GENERATED as `heap_tagged`.
     pub fn is_heap(self) -> bool {
-        self.tag() == TAG_HEAP
+        crate::kgen::rt::valtag::heap_tagged(self)
     }
     #[inline(always)]
     /// GENERATED (`kin/valtag.kin`) as `make_heap`, which is what finally
@@ -169,21 +174,24 @@ impl Value {
     }
 
     #[inline(always)]
-    pub const fn is_nil(self) -> bool {
-        self.0 == NIL.0
+    pub fn is_nil(self) -> bool {
+        crate::kgen::rt::valtag::is_nil(self)
     }
     #[inline(always)]
-    pub const fn is_true(self) -> bool {
-        self.0 == TRUE.0
+    pub fn is_true(self) -> bool {
+        crate::kgen::rt::valtag::is_true(self)
     }
     #[inline(always)]
-    pub const fn is_false(self) -> bool {
-        self.0 == FALSE.0
+    pub fn is_false(self) -> bool {
+        crate::kgen::rt::valtag::is_false(self)
     }
     /// Clojure truthiness: everything except `nil` and `false`.
     #[inline(always)]
-    pub const fn truthy(self) -> bool {
-        self.0 != NIL.0 && self.0 != FALSE.0
+    /// GENERATED (`kin/valtag.kin`). Clojure truthiness: nil and false are
+    /// the only false things, so a fixnum 0 is TRUE -- the case a port gets
+    /// wrong by testing for zero somewhere in the chain.
+    pub fn truthy(self) -> bool {
+        crate::kgen::rt::valtag::truthy(self)
     }
     #[inline(always)]
     pub const fn boolean(b: bool) -> Value {

@@ -108,3 +108,47 @@ pub fn inline_length(v: Value) -> u32 {
 pub fn kw_as_str(v: Value) -> Value {
     return Value((v.0 & crate::value::PAYLOAD) | (crate::value::TAG_STR << 48));
 }
+/// Whether `v` is a double.
+/// 
+/// EVERY TAG BELOW THE BOXED RANGE IS A DOUBLE, which is the whole trick of
+/// this representation: a float needs no tag of its own, it is simply any
+/// bit pattern that is not one of ours. `TAG_MIN_BOXED` is where ours
+/// begin.
+#[inline]
+pub fn double_tagged(v: Value) -> bool {
+    return (tag_of(v) as Addr) < crate::value::TAG_MIN_BOXED;
+}
+/// Whether `v` carries the fixnum tag.
+#[inline]
+pub fn fixnum_tagged(v: Value) -> bool {
+    return (tag_of(v) as Addr) == crate::value::TAG_FIXNUM;
+}
+/// Whether `v` carries the heap tag.
+#[inline]
+pub fn heap_tagged(v: Value) -> bool {
+    return (tag_of(v) as Addr) == crate::value::TAG_HEAP;
+}
+/// Whether `v` is nil.
+#[inline]
+pub fn is_nil(v: Value) -> bool {
+    return v.0 == NIL.0;
+}
+/// Whether `v` is the boolean true.
+#[inline]
+pub fn is_true(v: Value) -> bool {
+    return v.0 == TRUE.0;
+}
+/// Whether `v` is the boolean false.
+#[inline]
+pub fn is_false(v: Value) -> bool {
+    return v.0 == FALSE.0;
+}
+/// Whether `v` counts as true in a conditional.
+/// 
+/// NIL AND FALSE ARE THE ONLY FALSE THINGS, as in Clojure: 0 is true, the
+/// empty string is true, an empty collection is true. Anything else would
+/// be a different language.
+#[inline]
+pub fn truthy(v: Value) -> bool {
+    return (v.0 != NIL.0) && (v.0 != FALSE.0);
+}

@@ -14,17 +14,25 @@ mod value {
     pub const TAG_HEAP: u64 = 0xFFF9;
     pub const TAG_STR: u64 = 0xFFFC;
     pub const TAG_KW: u64 = 0xFFFD;
+    pub const TAG_MIN_BOXED: u64 = TAG_HEAP;
     pub const TAG_FIXNUM: u64 = 0xFFFA;
     pub const PAYLOAD: u64 = 0x0000_FFFF_FFFF_FFFF;
     pub const FIXNUM_MAX: i64 = (1 << 47) - 1;
     pub const FIXNUM_MIN: i64 = -(1 << 47);
 }
+// THE SPECIAL VALUES, tagged 0xFFFB so they sit inside the boxed range --
+// `double-tagged` must answer false for them, and a tag below TAG_MIN_BOXED
+// would make nil read as a float. The templates emit these as bare names, so
+// they are top level rather than in `value`.
+const NIL: Value = Value(0xFFFB_0000_0000_0001);
+const TRUE: Value = Value(0xFFFB_0000_0000_0002);
+const FALSE: Value = Value(0xFFFB_0000_0000_0003);
 --rust
 fn main() {
     let b = |x: bool| if x { 1 } else { 0 };
     // A three-byte inline KEYWORD, "ABC": tag, length in bits 40-47, bytes below.
     let kw = Value((value::TAG_KW << 48) | (3u64 << 40) | 0x414243);
-    println!("{} {} | {}{}{}{} | {} {} {} {} | {} {} {} | {} {} | {} {} {} {} {} {}",
+    println!("{} {} | {}{}{}{} | {} {} {} {} | {} {} {} | {} {} | {} {} {} {} {} {} | {}{}{}{} {}{}{} {}{} {}",
              // 1-2. THE TAG COMES BACK, from each constructor.
              tag_of(make_fixnum(0)), tag_of(make_heap(0)),
              // 3-6. THE BOUND, both sides of both ends.
@@ -50,13 +58,24 @@ fn main() {
              b(inline_keyword(kw)), b(inline_string(kw)), inline_length(kw),
              b(inline_string(kw_as_str(kw))),
              b(heap_payload(kw_as_str(kw)) == heap_payload(kw)),
-             inline_length(kw_as_str(kw)));
+             inline_length(kw_as_str(kw)),
+             // THE PREDICATES. nil and false are the only false things; a
+             // fixnum 0 is true, which is the case that separates this from
+             // most languages.
+             b(is_nil(NIL)), b(is_nil(FALSE)), b(is_true(TRUE)), b(is_false(FALSE)),
+             b(truthy(NIL)), b(truthy(FALSE)), b(truthy(make_fixnum(0))),
+             b(fixnum_tagged(make_fixnum(1))), b(heap_tagged(make_heap(8))),
+             b(double_tagged(NIL)));
 }
 --java-head
     static final class Val {
         static final long TAG_HEAP = 0xFFF9L;
         static final long TAG_STR = 0xFFFCL;
         static final long TAG_KW = 0xFFFDL;
+        static final long TAG_MIN_BOXED = TAG_HEAP;
+        static final long NIL = 0xFFFB000000000001L;
+        static final long TRUE = 0xFFFB000000000002L;
+        static final long FALSE = 0xFFFB000000000003L;
         static final long TAG_FIXNUM = 0xFFFAL;
         static final long PAYLOAD = 0x0000_FFFF_FFFF_FFFFL;
         static final long FIXNUM_MAX = (1L << 47) - 1;
@@ -80,13 +99,26 @@ fn main() {
             + " | " + (inlineKeyword(kw) ? 1 : 0) + " " + (inlineString(kw) ? 1 : 0)
             + " " + inlineLength(kw) + " " + (inlineString(kwAsStr(kw)) ? 1 : 0)
             + " " + (heapPayload(kwAsStr(kw)) == heapPayload(kw) ? 1 : 0)
-            + " " + inlineLength(kwAsStr(kw)));
+            + " " + inlineLength(kwAsStr(kw))
+            + " | " + (isNil(Val.NIL) ? 1 : 0) + (isNil(Val.FALSE) ? 1 : 0)
+            + (isTrue(Val.TRUE) ? 1 : 0) + (isFalse(Val.FALSE) ? 1 : 0)
+            + " " + (truthy(Val.NIL) ? 1 : 0) + (truthy(Val.FALSE) ? 1 : 0)
+            + (truthy(makeFixnum(0)) ? 1 : 0)
+            + " " + (fixnumTagged(makeFixnum(1)) ? 1 : 0) + (heapTagged(makeHeap(8)) ? 1 : 0)
+            + " " + (doubleTagged(Val.NIL) ? 1 : 0));
     }
 --csharp-head
     internal static class Val {
         public const long TagHeap = 0xFFF9L;
         public const long TagStr = 0xFFFCL;
         public const long TagKw = 0xFFFDL;
+        public const long TagMinBoxed = TagHeap;
+        // UNCHECKED, because the tag sets the sign bit: C# reads
+        // `0xFFFB...` as a `ulong` and refuses the implicit narrowing, where
+        // java and rust take the same literal without comment.
+        public const long Nil = unchecked((long) 0xFFFB000000000001UL);
+        public const long True = unchecked((long) 0xFFFB000000000002UL);
+        public const long False = unchecked((long) 0xFFFB000000000003UL);
         public const long TagFixnum = 0xFFFAL;
         public const long Payload = 0x0000_FFFF_FFFF_FFFFL;
         public const long FixnumMax = (1L << 47) - 1;
@@ -110,10 +142,16 @@ fn main() {
             + " | " + (InlineKeyword(kw) ? 1 : 0) + " " + (InlineString(kw) ? 1 : 0)
             + " " + InlineLength(kw) + " " + (InlineString(KwAsStr(kw)) ? 1 : 0)
             + " " + (HeapPayload(KwAsStr(kw)) == HeapPayload(kw) ? 1 : 0)
-            + " " + InlineLength(KwAsStr(kw)));
+            + " " + InlineLength(KwAsStr(kw))
+            + " | " + (IsNil(Val.Nil) ? 1 : 0) + (IsNil(Val.False) ? 1 : 0)
+            + (IsTrue(Val.True) ? 1 : 0) + (IsFalse(Val.False) ? 1 : 0)
+            + " " + (Truthy(Val.Nil) ? 1 : 0) + (Truthy(Val.False) ? 1 : 0)
+            + (Truthy(MakeFixnum(0)) ? 1 : 0)
+            + " " + (FixnumTagged(MakeFixnum(1)) ? 1 : 0) + (HeapTagged(MakeHeap(8)) ? 1 : 0)
+            + " " + (DoubleTagged(Val.Nil) ? 1 : 0));
     }
 --expect
-65530 65529 | 1010 | 0 -1 140737488355327 -140737488355328 | 4660 0 65529 | 4660 65529 | 1 0 3 1 1 3
+65530 65529 | 1010 | 0 -1 140737488355327 -140737488355328 | 4660 0 65529 | 4660 65529 | 1 0 3 1 1 3 | 1011 001 11 0
 --expect-why
 DERIVED FROM THE LAYOUT, not recorded. A value is a 16-bit TAG over a 48-bit
 PAYLOAD; `TAG_FIXNUM` is 0xFFFA = 65530 and `TAG_HEAP` is 0xFFF9 = 65529.

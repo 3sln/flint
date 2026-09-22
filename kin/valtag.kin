@@ -36,10 +36,11 @@
 ;; and still answer a `Value` on all three.
 (ns flint.rt.valtag
   (:require [flint.impl.rt :refer [defn return doc
-                                   and >= <= == shl ushr64 sar64 bit-and bit-or
+                                   and >= <= == != < not shl ushr64 sar64 bit-and bit-or
                                    bits of-bits to-addr to-i32
                                    Value I64 I32 Addr Bool
-                                   TAG_HEAP TAG_FIXNUM TAG_STR TAG_KW PAYLOAD
+                                   TAG_HEAP TAG_FIXNUM TAG_STR TAG_KW
+                                   TAG_MIN_BOXED PAYLOAD NIL TRUE FALSE
                                    FIXNUM_MIN FIXNUM_MAX]]))
 
 (doc "The 16-bit tag `v` carries -- what kind of value it is."
@@ -130,3 +131,40 @@
 ;; two were checked for, this one was not.
 (defn ^:pub ^:inline ^Value kw-as-str [^Value v]
   (return (of-bits (bit-or (bit-and (bits v) PAYLOAD) (shl TAG_STR 48)))))
+
+(doc "Whether `v` is a double."
+     ""
+     "EVERY TAG BELOW THE BOXED RANGE IS A DOUBLE, which is the whole trick of"
+     "this representation: a float needs no tag of its own, it is simply any"
+     "bit pattern that is not one of ours. `TAG_MIN_BOXED` is where ours"
+     "begin.")
+(defn ^:pub ^:inline ^Bool double-tagged [^Value v]
+  (return (< (to-addr (tag-of v)) TAG_MIN_BOXED)))
+
+(doc "Whether `v` carries the fixnum tag.")
+(defn ^:pub ^:inline ^Bool fixnum-tagged [^Value v]
+  (return (== (to-addr (tag-of v)) TAG_FIXNUM)))
+
+(doc "Whether `v` carries the heap tag.")
+(defn ^:pub ^:inline ^Bool heap-tagged [^Value v]
+  (return (== (to-addr (tag-of v)) TAG_HEAP)))
+
+(doc "Whether `v` is nil.")
+(defn ^:pub ^:inline ^Bool is-nil [^Value v]
+  (return (== (bits v) (bits NIL))))
+
+(doc "Whether `v` is the boolean true.")
+(defn ^:pub ^:inline ^Bool is-true [^Value v]
+  (return (== (bits v) (bits TRUE))))
+
+(doc "Whether `v` is the boolean false.")
+(defn ^:pub ^:inline ^Bool is-false [^Value v]
+  (return (== (bits v) (bits FALSE))))
+
+(doc "Whether `v` counts as true in a conditional."
+     ""
+     "NIL AND FALSE ARE THE ONLY FALSE THINGS, as in Clojure: 0 is true, the"
+     "empty string is true, an empty collection is true. Anything else would"
+     "be a different language.")
+(defn ^:pub ^:inline ^Bool truthy [^Value v]
+  (return (and (!= (bits v) (bits NIL)) (!= (bits v) (bits FALSE)))))

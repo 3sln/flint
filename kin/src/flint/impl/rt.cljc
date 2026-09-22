@@ -441,6 +441,7 @@
    ;; native's `heap` was found omitting the mask the ports both apply, which
    ;; is far easier to miss against a bare `0x0000_FFFF_FFFF_FFFF` than
    ;; against a name.
+   'TAG_MIN_BOXED {:rust "crate::value::TAG_MIN_BOXED" :java "Val.TAG_MIN_BOXED" :csharp "Val.TagMinBoxed"}
    'TAG_STR {:rust "crate::value::TAG_STR" :java "Val.TAG_STR" :csharp "Val.TagStr"}
    'TAG_KW {:rust "crate::value::TAG_KW" :java "Val.TAG_KW" :csharp "Val.TagKw"}
    'TAG_HEAP {:rust "crate::value::TAG_HEAP" :java "Val.TAG_HEAP" :csharp "Val.TagHeap"}
