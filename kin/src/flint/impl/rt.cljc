@@ -204,6 +204,18 @@
    :methods {}})
 (def U64s {:name 'U64s :types {:rust "Vec<u64>" :java "long[]" :csharp "long[]"} :methods {}})
 
+(def Layout
+  "WHICH OF THE THREE SHAPES an object has: slots, string bytes, raw bytes.
+
+  An ENUM on Rust and a bare `int` on the two ports, which is why it needs an
+  entry rather than riding on `I32`: `layout_of` answers `Layout::Vals` there
+  and `Obj.VALS` here, and a tag that called both `int` would emit an integer
+  where Rust wants a variant. The enum derives `PartialEq`, so `==` is the
+  comparison on every target."
+  {:name 'Layout
+   :types {:rust "crate::obj::Layout" :java "int" :csharp "int"}
+   :methods {}})
+
 (def Values
   "A flat run of VALUES the caller owns, read and never written.
 
@@ -297,7 +309,7 @@
 (def tags {'Rt Rt 'Value Value 'Cat Cat 'Ty Ty 'Bool Bool 'I32 I32 'I64 I64 'Cmp Cmp 'U32 U32 'RootIx RootIx
                'Text Text 'StaticText StaticText 'Sink Sink 'Walk Walk 'Cps Cps
                'F64 F64 'Addr Addr 'Idx Idx 'Bits Bits 'Bytes Bytes
-               'U32s U32s 'U64s U64s 'Values Values 'I32Buf I32Buf 'Flags Flags 'I32s I32s
+               'U32s U32s 'U64s U64s 'Values Values 'Layout Layout 'I32Buf I32Buf 'Flags Flags 'I32s I32s
                'Interns Interns})
 
 (defn- t [ctx] (:target ctx))
@@ -376,6 +388,11 @@
     ;; The byte-string tiers (`DECISIONS.md#strings-and-matching`'s rope argument, applied to
     ;; bytes): a flat leaf, a B-tree node over leaves, and the transient.
     TY_BROPE TY_TBYTES
+    ;; THE THREE THE ALLOCATOR NEEDS AND NO GUEST EVER SEES. `TY_FREE` is a
+    ;; hole in the old space, `TY_FWD` an object that has moved, and `TY_RAW`
+    ;; opaque bytes -- none is a `kind-of` answer, and `size-for` has to name
+    ;; all three because they are the RAW-layout arm of the size rule.
+    TY_RAW TY_FREE TY_FWD
     ;; The rest of what `kind-of` dispatches over. `threads-and-ports` says a value a guest
     ;; can hold needs a KIND of its own or it cannot be dispatched on at all,
     ;; so the closed set has to name every tag -- these are the ones no source
@@ -832,6 +849,12 @@
    ;; Where a FLAT STRING's bytes begin, which is not `HDR`: a `TY_STR` carries
    ;; a header of its own before them.
    'STR_DATA {:rust "crate::obj::STR_DATA" :java "Obj.STR_DATA" :csharp "Obj.StrData"}
+   ;; THE THREE LAYOUTS. A variant on Rust and an `int` on the ports -- see
+   ;; the `Layout` tag. The clr prefixes them because `Str` is a class there
+   ;; and `Obj.STR` would collide with it.
+   'L_VALS {:rust "crate::obj::Layout::Vals" :java "Obj.VALS" :csharp "Obj.LVals"}
+   'L_STR {:rust "crate::obj::Layout::Str" :java "Obj.STR" :csharp "Obj.LStr"}
+   'L_RAW {:rust "crate::obj::Layout::Raw" :java "Obj.RAW" :csharp "Obj.LRaw"}
    ;; A slice smaller than this COPIES rather than shares. It is `Str`'s
    ;; constant in both ports and `rope`'s in Rust -- the same number in a
    ;; different home, which is what this table is for.
@@ -1352,6 +1375,14 @@
     ;; other honest answer, and they are eleven different subjects.
     ;; Population count. Three intrinsics for one idea -- the shape a
     ;; vocabulary exists for.
+    ;; ROUND UP TO EIGHT. Every object starts on an eight-byte boundary, so
+    ;; the two layouts whose size is a BYTE count round and the one measured
+    ;; in slots does not. It is `(n + 7) & ~7` in all three and has been for
+    ;; as long as there have been three.
+    'align8 (core/call {:rust "crate::obj::align8({0})"
+                         :java "Obj.align8({0})"
+                         :csharp "Obj.Align8({0})"}
+                        {:tag Addr})
     'popcount (core/call {:rust "{0}.count_ones()"
                           :java "Integer.bitCount({0})"
                           :csharp "System.Numerics.BitOperations.PopCount((uint)({0}))"})

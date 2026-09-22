@@ -1,0 +1,147 @@
+--rust-head
+// NO HEAP AT ALL. These two are pure arithmetic over a type tag and a length
+// -- that is the point of them being free functions -- so the toy is the
+// three constants and the rounding rule, and nothing else.
+//
+// THE CONSTANTS ARE THE REAL ONES. A toy that picked round numbers would
+// still catch a wrong BRANCH and would not catch a wrong constant, and the
+// header size is exactly the sort of thing that drifts between three
+// runtimes.
+type Addr = u64;
+mod obj {
+    pub const HDR: super::Addr = 8;
+    pub const STR_DATA: super::Addr = 16;
+    #[derive(PartialEq, Eq, Clone, Copy, Debug)]
+    pub enum Layout { Vals, Str, Raw }
+    pub fn align8(n: super::Addr) -> super::Addr { (n + 7) & !7 }
+    // The five the size rule names, at their real values.
+    pub const TY_FREE: u8 = 0;
+    pub const TY_FWD: u8 = 1;
+    pub const TY_STR: u8 = 2;
+    pub const TY_BIGINT: u8 = 3;
+    pub const TY_BYTES: u8 = 44;
+    pub const TY_RAW: u8 = 35;
+    // And two that must fall through to VALS.
+    pub const TY_VEC: u8 = 9;
+    pub const TY_CLOSURE: u8 = 27;
+}
+use obj::{TY_FREE, TY_FWD, TY_STR, TY_BIGINT, TY_BYTES, TY_RAW};
+--rust
+fn main() {
+    // `<layout>:<size>` for each type at a fixed length, then the lengths
+    // that exercise the rounding.
+    let lay = |ty: u8| match layout_of(ty) {
+        obj::Layout::Vals => "V",
+        obj::Layout::Str => "S",
+        obj::Layout::Raw => "R",
+    };
+    let row = |ty: u8, len: u32| format!("{}:{}", lay(ty), size_for(ty, len));
+    println!("{} | {} | {} | {} | {} | {} | {} | {} | {} | {}",
+             // 1-2. THE SLOT LAYOUT, at zero and at ten.
+             row(obj::TY_VEC, 0), row(obj::TY_VEC, 10),
+             // 3. A TYPE THE RULE DOES NOT NAME still lays out as slots.
+             row(obj::TY_CLOSURE, 3),
+             // 4-6. THE STRING LAYOUT, across a rounding boundary.
+             row(TY_STR, 0), row(TY_STR, 1), row(TY_STR, 8),
+             // 7-8. THE RAW LAYOUT, across the same boundary.
+             row(TY_BYTES, 1), row(TY_BYTES, 8),
+             // 9-10. THE ALLOCATOR'S OWN TWO, which no guest ever sees.
+             row(TY_FREE, 0), row(TY_FWD, 0));
+}
+--java-head
+    // THE SAME TOY, field for field.
+    static final class Obj {
+        static final long HDR = 8, STR_DATA = 16;
+        static final int VALS = 0, STR = 1, RAW = 2;
+        static long align8(long n) { return (n + 7) & ~7L; }
+        static final int TY_FREE = 0, TY_FWD = 1, TY_STR = 2, TY_BIGINT = 3;
+        static final int TY_BYTES = 44, TY_RAW = 35;
+        static final int TY_VEC = 9, TY_CLOSURE = 27;
+    }
+    static final int TY_FREE = Obj.TY_FREE, TY_FWD = Obj.TY_FWD;
+    static final int TY_STR = Obj.TY_STR, TY_BIGINT = Obj.TY_BIGINT;
+    static final int TY_BYTES = Obj.TY_BYTES, TY_RAW = Obj.TY_RAW;
+--java
+    static String lay(int ty) {
+        int l = layoutOf(ty);
+        return l == Obj.VALS ? "V" : l == Obj.STR ? "S" : "R";
+    }
+    static String row(int ty, int len) { return lay(ty) + ":" + sizeFor(ty, len); }
+    public static void main(String[] args) {
+        System.out.println(
+            row(Obj.TY_VEC, 0) + " | " + row(Obj.TY_VEC, 10) + " | "
+            + row(Obj.TY_CLOSURE, 3) + " | "
+            + row(TY_STR, 0) + " | " + row(TY_STR, 1) + " | " + row(TY_STR, 8) + " | "
+            + row(TY_BYTES, 1) + " | " + row(TY_BYTES, 8) + " | "
+            + row(TY_FREE, 0) + " | " + row(TY_FWD, 0));
+    }
+--csharp-head
+    // THE SAME TOY, field for field.
+    public static class Obj {
+        public const long Hdr = 8, StrData = 16;
+        public const int LVals = 0, LStr = 1, LRaw = 2;
+        public static long Align8(long n) { return (n + 7) & ~7L; }
+        // PASCAL CASE, because that is what the tag table emits for csharp --
+        // `Obj.TyFwd` where java and rust get `TY_FWD` bare.
+        public const int TyFree = 0, TyFwd = 1, TyStr = 2, TyBigint = 3;
+        public const int TyBytes = 44, TyRaw = 35;
+        public const int TyVec = 9, TyClosure = 27;
+    }
+--csharp
+    static string Lay(int ty) {
+        int l = LayoutOf(ty);
+        return l == Obj.LVals ? "V" : l == Obj.LStr ? "S" : "R";
+    }
+    static string Row(int ty, int len) { return Lay(ty) + ":" + SizeFor(ty, len); }
+    static void Main() {
+        System.Console.WriteLine(
+            Row(Obj.TyVec, 0) + " | " + Row(Obj.TyVec, 10) + " | "
+            + Row(Obj.TyClosure, 3) + " | "
+            + Row(Obj.TyStr, 0) + " | " + Row(Obj.TyStr, 1) + " | " + Row(Obj.TyStr, 8) + " | "
+            + Row(Obj.TyBytes, 1) + " | " + Row(Obj.TyBytes, 8) + " | "
+            + Row(Obj.TyFree, 0) + " | " + Row(Obj.TyFwd, 0));
+    }
+--expect
+V:8 | V:88 | V:32 | S:16 | S:24 | S:24 | R:16 | R:16 | R:8 | R:8
+--expect-why
+DERIVED FROM THE CONTRACT, with `HDR` 8 and `STR_DATA` 16. Ten rows as
+`<layout>:<size in bytes>`.
+
+`len` MEANS DIFFERENT THINGS PER LAYOUT, and that is the whole reason these
+two are one function rather than three call sites. For slots it is a COUNT and
+each slot is eight bytes; for the other two it is already a byte count.
+
+1-2  THE SLOT LAYOUT -- `V:8` and `V:88`. Zero slots is the header alone.
+     Ten slots is `8 + 10 * 8`. Read `len` as BYTES here and a ten-element
+     vector sizes at 18, and the collector walks off the end of it into
+     whatever was allocated next.
+
+3    A TYPE THE RULE DOES NOT NAME -- `V:32`. `TY_CLOSURE` appears in neither
+     branch and must fall through to slots, which is the SAFE default: a type
+     the allocator has not heard of gets traced. Defaulting to RAW would hide
+     a new type's references from the collector, and the failure would be a
+     freed live object rather than a wasted word.
+
+4-6  THE STRING LAYOUT -- `S:16`, `S:24`, `S:24`. Its bytes begin at
+     `STR_DATA` and not at `HDR`, because a flat string carries a header of
+     its own before them. Using `HDR` here reads `8`, `16`, `16` and every
+     string in the image is allocated eight bytes short.
+
+     Rows 5 and 6 are the ROUNDING pair and they are equal on purpose: 17
+     rounds to 24 and 24 is already 24. Drop `align8` and row 5 reads `S:17`,
+     which is not a legal object start.
+
+7-8  THE RAW LAYOUT -- `R:16` and `R:16`, the same pair one constant lower:
+     9 rounds to 16 and 16 stays. Rows 4-6 against 7-8 are what separate the
+     two byte layouts; a rule that used `HDR` for both makes rows 4-6 equal
+     rows 7-8 and nothing else moves.
+
+9-10 THE ALLOCATOR'S OWN -- `R:8` twice. `TY_FREE` is a hole in the old space
+     and `TY_FWD` an object that has moved, and no guest ever sees either.
+     Both are still walked by the sweeper, so both must size correctly or the
+     walk steps into the middle of the next object. They are in the RAW arm
+     rather than the slot arm because neither has slots to trace.
+
+ONLY THE BYTE LAYOUTS ROUND. A slot count times eight is already a multiple
+of eight, so rounding row 2 would be a no-op that could only hide a mistake in
+the multiply -- which is why row 2 is 88 and not a rounded number.

@@ -858,6 +858,14 @@ def calls(limit=10):
                     ok.add(norm(n)); changed = True
             if not changed:
                 break
+        # A VOCABULARY WORD IS NOT A TARGET, and `--rank` has filtered them
+        # since the day that check existed. This view did not, so its top
+        # answers for `Rt` were `chargeTick` and for `Conc` `newObj` -- both
+        # words kin already emits, both circular to generate. Two views of one
+        # question that disagree about what counts are two chances to be sent
+        # somewhere pointless.
+        words = vocabulary_names()
+        ok -= words
         good = sum(c for n, t, c in ms if norm(n) in ok)
         allh = sum(c for _, _, c in ms)
         tot += good; hand += allh

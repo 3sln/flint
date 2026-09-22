@@ -120,20 +120,17 @@ public final class Obj {
 
     public static final int VALS = 0, STR = 1, RAW = 2;
 
+    /// GENERATED (`kin/objsize.kin`). Which of the three shapes `ty` has.
     public static int layoutOf(int ty) {
-        if (ty == TY_STR) return STR;
-        if (ty == TY_BIGINT || ty == TY_RAW || ty == TY_BYTES || ty == TY_FREE || ty == TY_FWD) return RAW;
-        return VALS;
+        return com._3sln.flint.kgen.rt.Objsize.layoutOf(ty);
     }
 
     public static long align8(long n) { return (n + 7) & ~7L; }
 
+    /// GENERATED (`kin/objsize.kin`). How many BYTES an object occupies --
+    /// and so, after `>> 3`, what every allocation costs in gas.
     public static long sizeFor(int ty, int len) {
-        switch (layoutOf(ty)) {
-            case VALS: return HDR + (long) len * 8;
-            case STR: return align8(STR_DATA + len);
-            default: return align8(HDR + len);
-        }
+        return com._3sln.flint.kgen.rt.Objsize.sizeFor(ty, len);
     }
 
     public static long sizeOf(Space sp, long addr) {

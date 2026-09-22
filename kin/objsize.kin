@@ -1,0 +1,73 @@
+;; HOW BIG AN OBJECT IS, written once.
+;;
+;; Twelve lines across three runtimes, and every allocation in flint goes
+;; through them: `alloc` charges `size_for(ty, len) >> 3` in gas, so these two
+;; functions set the price of every object the guest ever makes. The three
+;; copies agreed when this was taken -- `DECISIONS.md#calls-are-ports` records
+;; someone reading them "branch for branch" during the gas-gap hunt, which is
+;; the check this replaces with one that cannot drift.
+;;
+;; THEY ARE FREE FUNCTIONS, not methods: a size depends on the type tag and
+;; the length and on nothing in the runtime, which is why the AOT emitter can
+;; fold it at compile time.
+(ns flint.rt.objsize
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == or + * align8 to-addr
+                                   Ty I32 Addr Layout
+                                   HDR STR_DATA
+                                   L_VALS L_STR L_RAW
+                                   TY_STR TY_BIGINT TY_RAW TY_BYTES
+                                   TY_FREE TY_FWD]]))
+
+(doc "Which of the three shapes `ty` has."
+     ""
+     "SLOTS UNLESS NAMED OTHERWISE, and the default is the safe one: a type"
+     "the allocator has not heard of is laid out as values, so the collector"
+     "traces it. Defaulting to RAW would hide a new type's references from"
+     "the collector, and the failure would be a freed live object rather than"
+     "a wasted word."
+     ""
+     "A STRING IS ITS OWN SHAPE because its bytes do not begin where every"
+     "other object's body does -- `STR_DATA` and not `HDR`."
+     ""
+     "THE RAW FIVE ARE THE ALLOCATOR'S OWN, three of which no guest ever"
+     "sees: `TY_FREE` is a hole in the old space and `TY_FWD` an object that"
+     "has moved. Both are walked by the sweeper, so both must size correctly"
+     "or the walk steps into the middle of the next object.")
+(defn ^:pub ^Layout layout-of [^Ty ty]
+  (if (== ty TY_STR)
+    (return L_STR))
+  (if (or (== ty TY_BIGINT) (or (== ty TY_RAW) (or (== ty TY_BYTES)
+                                                   (or (== ty TY_FREE)
+                                                       (== ty TY_FWD)))))
+    (return L_RAW))
+  (return L_VALS))
+
+(doc "How many BYTES an object of `ty` with `len` occupies."
+     ""
+     "`len` MEANS DIFFERENT THINGS PER LAYOUT, which is the whole reason this"
+     "is one function and not three call sites. For slots it is a COUNT and"
+     "each is eight bytes wide; for the other two it is already a byte count."
+     "Reading it as bytes for a vector would size a ten-element vector at"
+     "ten bytes and hand back an object the collector walks off the end of."
+     ""
+     "ONLY THE BYTE LAYOUTS ROUND. A slot count multiplied by eight is"
+     "already a multiple of eight, so rounding it is a no-op that would only"
+     "hide a mistake in the multiply; the two byte layouts round because a"
+     "caller may ask for any length at all."
+     ""
+     "THE ANSWER IS BYTES AND THE CHARGE IS `>> 3`. The caller divides; this"
+     "does not, because the sweeper walks in bytes and would step wrong on a"
+     "size already divided.")
+(defn ^:pub ^Addr size-for [^Ty ty ^I32 len]
+  (let [^Layout lay (layout-of ty)]
+    (comment "WIDENED BEFORE THE ARITHMETIC. A length is 32-bit and an"
+             "address is 64; Java and C# widen silently and Rust does not,"
+             "so the conversion is said here rather than left to whichever"
+             "target happens to tolerate it. Native's copy says `len as"
+             "Addr` in the same three places.")
+    (if (== lay L_VALS)
+      (return (+ HDR (* (to-addr len) 8))))
+    (if (== lay L_STR)
+      (return (align8 (+ STR_DATA (to-addr len)))))
+    (return (align8 (+ HDR (to-addr len))))))

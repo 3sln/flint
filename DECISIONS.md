@@ -136,12 +136,32 @@ code and an open question the code cannot answer:
   blocked it is settled — kin gained an aliasing axis on 2026-09-16. What is
   left for you is the scope question about `Rt`, not a blocker.)
 
-  **MEASURED 2026-09-21, because the decision turns on that number.** Of the
-  jvm's 3 274 hand-written METHOD lines, **166 are three-way and generatable**
-  — every call AND every field access in them is something kin can already
-  emit, and the same method exists on native, so there are three copies to
-  replace. Spread across a dozen areas with no single item above twenty lines;
-  the largest pools are `Rt` at 65 and `Conc` at 31.
+  **MEASURED 2026-09-21, because the decision turns on that number. The
+  figure has now been corrected downward three times; read the history below
+  before quoting it.** Of the jvm's hand-written METHOD lines, **95 are
+  three-way and generatable** as of `38877f16` — and that is still an upper
+  bound.
+
+      published   what it missed
+        228       field accesses: a method reading `rt.gc.from` and iterating
+                  `rt.gc.oldChunks` counted as generatable, because neither is
+                  a CALL
+        166       vocabulary words: `chargeTick` and `newObj` are words kin
+                  already emits, so generating them is circular. `--rank` had
+                  filtered them since that check existed and `--calls`, which
+                  produced this figure, did not
+         95       current. 23 of the difference is `node-entries`, taken and
+                  generated; the rest is the filter
+
+  *Every refinement has moved it down and none has moved it up.* Treat 95 as a
+  ceiling rather than a measurement: the remaining classifier leniencies are
+  named in `doc/goals/kin-port.md` and all of them point the same way.
+
+  The original wording, for the record: of the jvm's 3 274 hand-written METHOD
+  lines, 166 were said to be three-way and generatable
+  — every call and field access in them being something kin can already emit,
+  and the same method existing on native. The pools now are `Rt` at 35, `Obj`
+  at 14 and `Val` at 13, with no single method above eight lines.
 
   That is **under one per cent** of the 21 000, which counts duplication of
   every kind and is mostly host strings, host collections, raw memory and host

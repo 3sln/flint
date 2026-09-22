@@ -9334,3 +9334,70 @@ be yes.
 added a few firings ago has the same property -- it fires at the call site --
 and so does this one. Both are only as good as the coverage of the sources.
 
+---
+
+## The price of every object, generated: `kin/objsize.kin`
+
+2026-09-21. 112 sources. `size_for` and `layout_of` are twelve lines across
+three runtimes and every allocation flint makes goes through them: `alloc`
+charges `size_for(ty, len) >> 3`, so these two set the price of every object a
+guest ever creates.
+
+`DECISIONS.md#calls-are-ports` records someone checking them during the
+gas-gap hunt -- *"`size_for(ty, len) >> 3` in both, character for character,
+and `Obj.sizeFor` matches `obj::size_for` branch for branch"*. That was a
+reading. This replaces it with a check that cannot drift.
+
+The strongest evidence it landed is the number that did NOT move:
+`conform-hosts` still reads **143 035**. A slice that changed what an object
+costs would move it on the first allocation.
+
+### Seven vocabulary additions for twelve lines, and they were all missing
+
+    TY_RAW, TY_FREE, TY_FWD    the three the allocator needs and no guest
+                                 sees -- a hole in the old space, an object
+                                 that has moved, opaque bytes
+    align8                     `(n + 7) & ~7` in all three, for as long as
+                                 there have been three
+    Layout                     an ENUM on Rust and an `int` on the ports, so
+                                 it needs a tag rather than riding on `I32`
+    L_VALS, L_STR, L_RAW       and the clr prefixes them because `Str` is a
+                                 class there
+
+The `Layout` tag is the interesting one. `layout_of` answers `Layout::Vals` on
+native and `Obj.VALS` on the jvm, and a tag that called both `int` would emit
+an integer where Rust wants a variant. The enum already derives `PartialEq`,
+so `==` is the comparison everywhere.
+
+### `len` means different things per layout, and that is the contract
+
+For slots it is a COUNT, eight bytes each; for the two byte layouts it is
+already a byte count. Six mutations, six caught:
+
+    1  an unnamed type defaults to RAW, not slots   rows 1-3 -> `R`
+    2  the slot length read as bytes                row 2 -> `V:18`
+    3  a string's bytes begin at HDR                rows 4-6 eight short
+    4  the byte layouts do not round                row 5 -> `S:17`
+    5  TY_FWD dropped from the raw arm              row 10 -> `V:8`
+    6  the slot arm rounds, hiding a bad multiply   row 2 -> `V:48`
+
+Row 3 is the SAFE-DEFAULT row. `TY_CLOSURE` appears in neither branch and must
+fall through to slots, because a type the allocator has not heard of then gets
+TRACED. Defaulting to raw would hide a new type's references from the
+collector, and the failure is a freed live object rather than a wasted word.
+
+Row 2 is why the expect carries 88 rather than a rounded number: a slot count
+times eight is already a multiple of eight, so rounding the slot arm would be
+a no-op that could only hide a mistake in the multiply. Mutation 6 is exactly
+that mistake, and it is invisible if the slot arm rounds.
+
+Rows 9 and 10 are `TY_FREE` and `TY_FWD`, which no guest ever sees. Both are
+still walked by the sweeper, so both must size correctly or the walk steps
+into the middle of the next object.
+
+### The remaining pool, after two slices
+
+`--calls` reads **86** three-way generatable lines, down from 95 this morning
+and 118 before `node-entries`. `Rt` holds 35 of them with nothing above eight
+lines. The tail is what it looked like from a distance.
+

@@ -67,19 +67,16 @@ public static class Obj {
     /// host's own naming rules force a different spelling.
     public const int LVals = 0, LStr = 1, LRaw = 2;
 
-    public static int LayoutOf(int ty) {
-        if (ty == TyStr) return LStr;
-        if (ty == TyBigint || ty == TyRaw || ty == TyBytes || ty == TyFree || ty == TyFwd) return LRaw;
-        return LVals;
-    }
+    /// GENERATED (`kin/objsize.kin`). Which of the three shapes `ty` has.
+    public static int LayoutOf(int ty) =>
+        global::_3sln.Flint.Kgen.Rt.Objsize.LayoutOf(ty);
 
     public static long Align8(long n) => (n + 7) & ~7L;
 
-    public static long SizeFor(int ty, int len) => LayoutOf(ty) switch {
-        LVals => Hdr + (long) len * 8,
-        LStr => Align8(StrData + len),
-        _ => Align8(Hdr + len),
-    };
+    /// GENERATED (`kin/objsize.kin`). How many BYTES an object occupies --
+    /// and so, after `>> 3`, what every allocation costs in gas.
+    public static long SizeFor(int ty, int len) =>
+        global::_3sln.Flint.Kgen.Rt.Objsize.SizeFor(ty, len);
 
     public static long SizeOf(Space sp, long addr) {
         int w0 = sp.ReadU32(addr);

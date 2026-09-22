@@ -205,12 +205,9 @@ pub enum Layout {
 }
 
 #[inline]
+/// GENERATED (`kin/objsize.kin`). Which of the three shapes `ty` has.
 pub fn layout_of(ty: u8) -> Layout {
-    match ty {
-        TY_STR => Layout::Str,
-        TY_BIGINT | TY_RAW | TY_BYTES | TY_FREE | TY_FWD => Layout::Raw,
-        _ => Layout::Vals,
-    }
+    crate::kgen::rt::objsize::layout_of(ty)
 }
 
 #[inline(always)]
@@ -267,12 +264,10 @@ mod layout_tests {
 }
 
 #[inline]
+/// GENERATED (`kin/objsize.kin`). How many BYTES an object occupies -- and
+/// so, after `>> 3`, what every allocation in flint costs in gas.
 pub fn size_for(ty: u8, len: u32) -> Addr {
-    match layout_of(ty) {
-        Layout::Vals => HDR + len as Addr * 8,
-        Layout::Str => align8(STR_DATA + len as Addr),
-        Layout::Raw => align8(HDR + len as Addr),
-    }
+    crate::kgen::rt::objsize::size_for(ty, len)
 }
 
 // --- header fields ---------------------------------------------------------
