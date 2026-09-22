@@ -330,33 +330,12 @@ impl Rt {
     }
 
     #[cfg(feature = "bench")]
+    /// GENERATED (`kin/mapwalk.kin`). Push every key and value under `node`
+    /// onto the roots and answer the PAIR count. Not `node_entries` beside
+    /// it, which takes an index and is a different function -- the two names
+    /// are three characters apart and do different things.
     fn node_entries_flat(&mut self, node: Value) -> u32 {
-        let mut wrote: u32 = 0;
-        if !self.is_bmnode(node) {
-            let cnt = self.cn_count(node);
-            for i in 0..cnt {
-                let k = self.cn_key(node, i);
-                self.push(k);
-                let v = self.cn_val(node, i);
-                self.push(v);
-                wrote += 1;
-            }
-        } else {
-            let ne = self.bn_datamap(node).count_ones();
-            let nn = self.bn_nodemap(node).count_ones();
-            for i in 0..ne {
-                let k = self.bn_key(node, i);
-                self.push(k);
-                let v = self.bn_val(node, i);
-                self.push(v);
-                wrote += 1;
-            }
-            for j in 0..nn {
-                let sub = self.bn_node(node, j);
-                wrote += self.node_entries_flat(sub);
-            }
-        }
-        wrote
+        self.push_node_entries(node)
     }
 
     // THE TRIE'S DELEGATING WRAPPERS WERE REMOVED, 2026-09-18.

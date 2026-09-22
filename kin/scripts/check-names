@@ -79,7 +79,18 @@
     ;; `BitConverter.DoubleToInt64Bits` -- and the three names share nothing,
     ;; which is exactly why `f64-bits` is a vocabulary entry. A flint spelling
     ;; would be three copies of a cast that no language will do with a cast.
-    "to_bits" "doubleToLongBits" "DoubleToInt64Bits"})
+    "to_bits" "doubleToLongBits" "DoubleToInt64Bits"
+    ;; POPCOUNT, on the same argument as the predicates above: how many bits
+    ;; are set is a question every host answers already, usually in one
+    ;; instruction. A flint spelling would be three copies of a bit-twiddling
+    ;; loop waiting to disagree, on the hot path of every CHAMP walk.
+    ;;
+    ;; `count_ones` is absent from this list and does not need to be: Rust
+    ;; spells it as a method and native's own `map.rs` already calls it, so
+    ;; the check finds it in the tree. The asymmetry is the check working --
+    ;; it asks whether the RUNTIME defines what a template names, and for
+    ;; Rust the answer happens to be yes.
+    "bitCount" "PopCount"})
 
 (defn check [what nm target spelling]
   (let [id (ident spelling)]

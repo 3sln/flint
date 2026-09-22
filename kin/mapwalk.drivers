@@ -1,0 +1,286 @@
+--rust-head
+// A TOY CHAMP NODE, and ONE DELIBERATE CRUELTY: every bitmap node's entry
+// array is longer than its datamap says.
+//
+// A bitmap node stores its inline entries and its children in one slot array,
+// and the bitmaps are how long each run is. Reading the ARRAY LENGTH instead
+// of `popcount` is the mistake available here, and on a toy whose arrays are
+// exactly as long as the bitmaps claim it is undetectable. So each node here
+// carries one extra pair of padding that no bitmap accounts for: a
+// length-based walk pushes it, a popcount-based one does not.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+struct Node {
+    bm: bool,
+    dm: u32,
+    nm: u32,
+    // Entries as k,v,k,v ... followed by PADDING the bitmaps do not name.
+    ents: Vec<Value>,
+    kids: Vec<Value>,
+}
+struct Rt {
+    objs: Vec<Node>,
+    rootv: Vec<Value>,
+}
+impl Rt {
+    // Handles at 1000 so a node cannot be confused with a key or a value.
+    fn node(&mut self, n: Node) -> Value {
+        self.objs.push(n);
+        Value((self.objs.len() - 1) as u64 + 1000)
+    }
+    fn at(&self, v: Value) -> &Node { &self.objs[(v.0 - 1000) as usize] }
+    fn push(&mut self, v: Value) -> usize { self.rootv.push(v); self.rootv.len() - 1 }
+    fn is_bmnode(&mut self, v: Value) -> bool { self.at(v).bm }
+    fn cn_count(&mut self, v: Value) -> u32 { (self.at(v).ents.len() / 2) as u32 }
+    fn cn_key(&mut self, v: Value, i: u32) -> Value { self.at(v).ents[(i * 2) as usize] }
+    fn cn_val(&mut self, v: Value, i: u32) -> Value { self.at(v).ents[(i * 2 + 1) as usize] }
+    fn bn_datamap(&mut self, v: Value) -> u32 { self.at(v).dm }
+    fn bn_nodemap(&mut self, v: Value) -> u32 { self.at(v).nm }
+    fn bn_key(&mut self, v: Value, i: u32) -> Value { self.at(v).ents[(i * 2) as usize] }
+    fn bn_val(&mut self, v: Value, i: u32) -> Value { self.at(v).ents[(i * 2 + 1) as usize] }
+    fn bn_node(&mut self, v: Value, i: u32) -> Value { self.at(v).kids[i as usize] }
+--rust
+}
+fn fresh() -> Rt { Rt { objs: vec![], rootv: vec![] } }
+// A key/value pair numbered `n`: key `n*10`, value `n*10 + 1`.
+fn kv(n: u64) -> (Value, Value) { (Value(n * 10), Value(n * 10 + 1)) }
+// `<answered>:<roots, in order>`
+fn walked(rt: &mut Rt, root: Value) -> String {
+    let n = rt.push_node_entries(root);
+    let seen: Vec<String> = rt.rootv.iter().map(|v| v.0.to_string()).collect();
+    format!("{}:{}", n, if seen.is_empty() { "-".to_string() } else { seen.join(",") })
+}
+// A collision node over pairs `ns`, with no padding: its count IS its length.
+fn coll(rt: &mut Rt, ns: &[u64]) -> Value {
+    let mut ents = vec![];
+    for n in ns { let (k, v) = kv(*n); ents.push(k); ents.push(v); }
+    rt.node(Node { bm: false, dm: 0, nm: 0, ents, kids: vec![] })
+}
+// A bitmap node with `ns` inline entries and `kids` children -- PLUS one pair
+// of padding the datamap does not count.
+fn bm(rt: &mut Rt, ns: &[u64], kids: Vec<Value>) -> Value {
+    let mut ents = vec![];
+    for n in ns { let (k, v) = kv(*n); ents.push(k); ents.push(v); }
+    ents.push(Value(999)); ents.push(Value(998));      // padding, unnamed
+    let dm = if ns.is_empty() { 0 } else { (1u32 << ns.len()) - 1 };
+    let nm = if kids.is_empty() { 0 } else { (1u32 << kids.len()) - 1 };
+    rt.node(Node { bm: true, dm, nm, ents, kids })
+}
+fn main() {
+    // 1. A COLLISION NODE, two entries. The base case: flat, terminal, and
+    //    two pushes per entry with the ANSWER counting pairs.
+    let mut a = fresh();
+    let r1 = { let n = coll(&mut a, &[1, 2]); walked(&mut a, n) };
+
+    // 2. AN EMPTY COLLISION NODE. Nothing pushed, nothing counted -- and it
+    //    must not be mistaken for an error.
+    let mut b = fresh();
+    let r2 = { let n = coll(&mut b, &[]); walked(&mut b, n) };
+
+    // 3. A BITMAP NODE, two inline entries and no children. This is the
+    //    padding row: the array holds three pairs and the datamap names two.
+    let mut c = fresh();
+    let r3 = { let n = bm(&mut c, &[1, 2], vec![]); walked(&mut c, n) };
+
+    // 4. ONE INLINE ENTRY AND ONE CHILD. The order row: this node's pair
+    //    comes before the child's, which is what keeps a node's entries
+    //    contiguous on the root stack.
+    let mut d = fresh();
+    let r4 = { let kid = coll(&mut d, &[7, 8]);
+               let n = bm(&mut d, &[1], vec![kid]);
+               walked(&mut d, n) };
+
+    // 5. NO INLINE ENTRIES, TWO CHILDREN. The count is the sum of theirs and
+    //    nothing of its own.
+    let mut e = fresh();
+    let r5 = { let k1 = coll(&mut e, &[3]);
+               let k2 = coll(&mut e, &[4, 5]);
+               let n = bm(&mut e, &[], vec![k1, k2]);
+               walked(&mut e, n) };
+
+    // 6. THREE DEEP. A bitmap under a bitmap: the recursion has to carry the
+    //    count up through more than one level.
+    let mut f = fresh();
+    let r6 = { let leaf = coll(&mut f, &[9]);
+               let mid = bm(&mut f, &[6], vec![leaf]);
+               let top = bm(&mut f, &[1], vec![mid]);
+               walked(&mut f, top) };
+
+    println!("{} | {} | {} | {} | {} | {}", r1, r2, r3, r4, r5, r6);
+}
+--java-head
+    // THE SAME TOY, field for field.
+    static final class Node {
+        boolean bm; int dm; int nm;
+        java.util.List<Long> ents = new java.util.ArrayList<>();
+        java.util.List<Long> kids = new java.util.ArrayList<>();
+    }
+    static final class Rt {
+        java.util.List<Node> objs = new java.util.ArrayList<>();
+        java.util.List<Long> rootv = new java.util.ArrayList<>();
+        long node(Node n) { objs.add(n); return objs.size() - 1 + 1000; }
+        Node at(long v) { return objs.get((int) (v - 1000)); }
+        int push(long v) { rootv.add(v); return rootv.size() - 1; }
+    }
+    // BARE, not on a class: cross-namespace kin calls land unqualified.
+    static boolean isBmnode(Rt rt, long v) { return rt.at(v).bm; }
+    static int cnCount(Rt rt, long v) { return rt.at(v).ents.size() / 2; }
+    static long cnKey(Rt rt, long v, int i) { return rt.at(v).ents.get(i * 2); }
+    static long cnVal(Rt rt, long v, int i) { return rt.at(v).ents.get(i * 2 + 1); }
+    static int bnDatamap(Rt rt, long v) { return rt.at(v).dm; }
+    static int bnNodemap(Rt rt, long v) { return rt.at(v).nm; }
+    static long bnKey(Rt rt, long v, int i) { return rt.at(v).ents.get(i * 2); }
+    static long bnVal(Rt rt, long v, int i) { return rt.at(v).ents.get(i * 2 + 1); }
+    static long bnNode(Rt rt, long v, int i) { return rt.at(v).kids.get(i); }
+--java
+    static Rt fresh() { return new Rt(); }
+    static String walked(Rt rt, long root) {
+        int n = pushNodeEntries(rt, root);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < rt.rootv.size(); i++) {
+            if (i > 0) sb.append(',');
+            sb.append(rt.rootv.get(i));
+        }
+        return n + ":" + (rt.rootv.isEmpty() ? "-" : sb.toString());
+    }
+    static long coll(Rt rt, long[] ns) {
+        Node nd = new Node(); nd.bm = false;
+        for (long n : ns) { nd.ents.add(n * 10); nd.ents.add(n * 10 + 1); }
+        return rt.node(nd);
+    }
+    static long bm(Rt rt, long[] ns, long[] kids) {
+        Node nd = new Node(); nd.bm = true;
+        for (long n : ns) { nd.ents.add(n * 10); nd.ents.add(n * 10 + 1); }
+        nd.ents.add(999L); nd.ents.add(998L);
+        for (long k : kids) nd.kids.add(k);
+        nd.dm = ns.length == 0 ? 0 : (1 << ns.length) - 1;
+        nd.nm = kids.length == 0 ? 0 : (1 << kids.length) - 1;
+        return rt.node(nd);
+    }
+    public static void main(String[] args) {
+        Rt a = fresh(); String r1 = walked(a, coll(a, new long[]{1, 2}));
+        Rt b = fresh(); String r2 = walked(b, coll(b, new long[]{}));
+        Rt c = fresh(); String r3 = walked(c, bm(c, new long[]{1, 2}, new long[]{}));
+        Rt d = fresh();
+        long dk = coll(d, new long[]{7, 8});
+        String r4 = walked(d, bm(d, new long[]{1}, new long[]{dk}));
+        Rt e = fresh();
+        long e1 = coll(e, new long[]{3}), e2 = coll(e, new long[]{4, 5});
+        String r5 = walked(e, bm(e, new long[]{}, new long[]{e1, e2}));
+        Rt f = fresh();
+        long fl = coll(f, new long[]{9});
+        long fm = bm(f, new long[]{6}, new long[]{fl});
+        String r6 = walked(f, bm(f, new long[]{1}, new long[]{fm}));
+        System.out.println(r1 + " | " + r2 + " | " + r3 + " | " + r4 + " | " + r5 + " | " + r6);
+    }
+--csharp-head
+    // THE SAME TOY, field for field.
+    public class Node {
+        public bool bm; public int dm; public int nm;
+        public System.Collections.Generic.List<long> ents = new System.Collections.Generic.List<long>();
+        public System.Collections.Generic.List<long> kids = new System.Collections.Generic.List<long>();
+    }
+    public class Rt {
+        public System.Collections.Generic.List<Node> objs = new System.Collections.Generic.List<Node>();
+        public System.Collections.Generic.List<long> rootv = new System.Collections.Generic.List<long>();
+        public long Node_(Node n) { objs.Add(n); return objs.Count - 1 + 1000; }
+        public Node At(long v) { return objs[(int)(v - 1000)]; }
+        public int Push(long v) { rootv.Add(v); return rootv.Count - 1; }
+    }
+    static bool IsBmnode(Rt rt, long v) { return rt.At(v).bm; }
+    static int CnCount(Rt rt, long v) { return rt.At(v).ents.Count / 2; }
+    static long CnKey(Rt rt, long v, int i) { return rt.At(v).ents[i * 2]; }
+    static long CnVal(Rt rt, long v, int i) { return rt.At(v).ents[i * 2 + 1]; }
+    static int BnDatamap(Rt rt, long v) { return rt.At(v).dm; }
+    static int BnNodemap(Rt rt, long v) { return rt.At(v).nm; }
+    static long BnKey(Rt rt, long v, int i) { return rt.At(v).ents[i * 2]; }
+    static long BnVal(Rt rt, long v, int i) { return rt.At(v).ents[i * 2 + 1]; }
+    static long BnNode(Rt rt, long v, int i) { return rt.At(v).kids[i]; }
+--csharp
+    static Rt Fresh() { return new Rt(); }
+    static string Walked(Rt rt, long root) {
+        int n = PushNodeEntries(rt, root);
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < rt.rootv.Count; i++) {
+            if (i > 0) sb.Append(',');
+            sb.Append(rt.rootv[i]);
+        }
+        return n + ":" + (rt.rootv.Count == 0 ? "-" : sb.ToString());
+    }
+    static long Coll(Rt rt, long[] ns) {
+        var nd = new Node(); nd.bm = false;
+        foreach (long n in ns) { nd.ents.Add(n * 10); nd.ents.Add(n * 10 + 1); }
+        return rt.Node_(nd);
+    }
+    static long Bm(Rt rt, long[] ns, long[] kids) {
+        var nd = new Node(); nd.bm = true;
+        foreach (long n in ns) { nd.ents.Add(n * 10); nd.ents.Add(n * 10 + 1); }
+        nd.ents.Add(999L); nd.ents.Add(998L);
+        foreach (long k in kids) nd.kids.Add(k);
+        nd.dm = ns.Length == 0 ? 0 : (1 << ns.Length) - 1;
+        nd.nm = kids.Length == 0 ? 0 : (1 << kids.Length) - 1;
+        return rt.Node_(nd);
+    }
+    static void Main() {
+        Rt a = Fresh(); string r1 = Walked(a, Coll(a, new long[]{1, 2}));
+        Rt b = Fresh(); string r2 = Walked(b, Coll(b, new long[]{}));
+        Rt c = Fresh(); string r3 = Walked(c, Bm(c, new long[]{1, 2}, new long[]{}));
+        Rt d = Fresh();
+        long dk = Coll(d, new long[]{7, 8});
+        string r4 = Walked(d, Bm(d, new long[]{1}, new long[]{dk}));
+        Rt e = Fresh();
+        long e1 = Coll(e, new long[]{3}), e2 = Coll(e, new long[]{4, 5});
+        string r5 = Walked(e, Bm(e, new long[]{}, new long[]{e1, e2}));
+        Rt f = Fresh();
+        long fl = Coll(f, new long[]{9});
+        long fm = Bm(f, new long[]{6}, new long[]{fl});
+        string r6 = Walked(f, Bm(f, new long[]{1}, new long[]{fm}));
+        System.Console.WriteLine(r1 + " | " + r2 + " | " + r3 + " | " + r4 + " | " + r5 + " | " + r6);
+    }
+--expect
+2:10,11,20,21 | 0:- | 2:10,11,20,21 | 3:10,11,70,71,80,81 | 3:30,31,40,41,50,51 | 3:10,11,60,61,90,91
+--expect-why
+DERIVED FROM THE CONTRACT. Six rows as `<answered>:<roots, in order>`. A pair
+numbered `n` is key `n*10` and value `n*10 + 1`, so `10,11` is one entry and
+the sequence shows both WHAT was pushed and IN WHICH ORDER.
+
+EVERY BITMAP NODE IN THIS TOY CARRIES ONE PAIR OF PADDING -- `999,998` -- that
+its datamap does not count. A walk that took the entry array's LENGTH instead
+of `popcount` of the datamap would push it, and there is no other way to tell
+those two apart: on a node whose array is exactly as long as its bitmap
+claims, both readings agree. Rows 3, 4, 5 and 6 all carry it and none of them
+shows a `999`.
+
+1  A COLLISION NODE, two entries -- `2:10,11,20,21`. The base case: flat,
+   terminal, nothing below it. TWO claims at once -- two pushes per entry, and
+   the answer counting PAIRS rather than pushes. A caller popping `2 * n`
+   where this answered `n` is the mistake the name guards against, so the
+   count and the root list are reported side by side.
+
+2  AN EMPTY COLLISION NODE -- `0:-`. Nothing pushed and nothing counted. It is
+   not an error and not a special case: `cn-count` is zero and the loop does
+   not run.
+
+3  A BITMAP NODE, TWO INLINE, NO CHILDREN -- `2:10,11,20,21`, identical to row
+   1 and reached down the other branch. The array holds THREE pairs and the
+   datamap names two. Read the length and this row is `3:10,11,20,21,999,998`.
+
+4  ONE INLINE ENTRY, ONE CHILD -- `3:10,11,70,71,80,81`. THE ORDER ROW. This
+   node's pair comes first and the child's two follow, which is what keeps one
+   node's entries contiguous on the root stack. Descend before pushing and it
+   reads `3:70,71,80,81,10,11` -- the same count, the same values, a different
+   layout, and a caller slicing per node gets the wrong pairs.
+
+5  NO INLINE, TWO CHILDREN -- `3:30,31,40,41,50,51`. The count is the sum of
+   the children's and nothing of its own: one pair from the first, two from
+   the second. Counting the node itself as an entry reads `4` or `5`.
+
+6  THREE DEEP -- `3:10,11,60,61,90,91`. A bitmap under a bitmap, so the
+   recursion carries a count up through more than one level rather than one.
+   Returning the child's count instead of ADDING it reads `1`; adding but
+   dropping the deepest level reads `2`.
+
+`popcount` OF THE NODEMAP BOUNDS THE CHILD LOOP, for the same reason it bounds
+the entry loop: both runs live in one node and only the bitmaps say where each
+ends. Rows 5 and 6 would descend into a child that does not exist if the
+children were counted any other way.

@@ -9268,3 +9268,69 @@ the wrong reason -- and the same leniency can miss a real counterpart living
 under a different name. Read the native side before taking any slice this
 check offers.
 
+---
+
+## The largest slice left, taken: `node-entries` into `kin/mapwalk.kin`
+
+2026-09-21. 111 sources. The previous firing named this one and verified it
+rather than trusting the rank: 23 lines, the biggest three-way generatable
+method in the tree, and native's counterpart is `node_entries_flat` -- NOT its
+`node_entries`, which takes an extra index and is a different function. Three
+characters apart, different jobs.
+
+It needed no new vocabulary at all. Every accessor is already a kin function
+in `flint.rt.nodeclass`, `flint.rt.champ` or `flint.rt.collnode`, and
+`popcount` was already a word.
+
+### The toy's cruelty is one pair of padding
+
+A bitmap node stores its inline entries and its children in ONE slot array,
+and the bitmaps are how long each run is. Reading the array's LENGTH instead
+of `popcount` of the datamap is the mistake available here -- and on a toy
+whose arrays are exactly as long as the bitmaps claim, the two readings agree
+and the mutation passes.
+
+So every bitmap node in the drivers carries one pair of padding, `999,998`,
+that no bitmap accounts for. Four of six rows carry it and none shows it:
+
+    1  entry run bounded by the array, not popcount   `999,998` surfaces in 4 rows
+    2  descend before pushing this node's entries     row 4 -> `70,71,80,81,10,11`
+    3  the answer counts pushes, not pairs            row 1 -> `4`
+    4  a child's count replaces the running total     row 6 -> `1`
+    5  the child loop bounded by the datamap          crashes: no such child
+    6  the node-kind test inverted                    five rows move
+
+Row 4 is the ORDER row and the reason the expect carries the whole root list
+rather than a count. Descending first gives the same count, the same values
+and a different layout -- and a caller slicing the roots per node then gets
+the wrong pairs. A count alone cannot see it.
+
+### `popcount` had never been used, so its templates had never been checked
+
+`check-kin` refused the first build:
+
+    FAIL a template emits `bitCount` for java, and no file under
+         runtimes/jvm/src/com/flint/rt defines it
+
+The word was in the vocabulary and no source had ever called it, and
+`kin/scripts/check-names` only asks about names a source actually reaches. So
+its java and csharp templates -- `Integer.bitCount` and
+`BitOperations.PopCount` -- were unvalidated until something used them.
+
+The fix is the `host-library` list the check already keeps, whose docstring
+says exactly this: *"Listed rather than pattern-matched: each one is a
+decision that this call is the host's to answer, and a list this short having
+to grow is the right kind of friction."* Counting set bits is the host's to
+answer, usually in one instruction, and a flint spelling would be three copies
+of a bit-twiddling loop on the hot path of every CHAMP walk.
+
+**`count_ones` is not on the list and does not need to be**, which is the
+check working rather than a gap: Rust spells it as a method and native's own
+`map.rs` already calls it, so the check finds it in the tree. It asks whether
+the RUNTIME defines what a template names, and for Rust the answer happens to
+be yes.
+
+*A vocabulary word nobody calls is a claim nobody has tested.* The arity check
+added a few firings ago has the same property -- it fires at the call site --
+and so does this one. Both are only as good as the coverage of the sources.
+

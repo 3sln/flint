@@ -153,28 +153,11 @@ public final class Maps {
         return 0;
     }
 
+    /// GENERATED (`kin/mapwalk.kin`). Push every key and value under `node`
+    /// onto the roots and answer the PAIR count -- two pushes per entry, and
+    /// the answer is entries and not pushes.
     static int nodeEntries(Rt rt, long node) {
-        int wrote = 0;
-        if (!isBmnode(rt, node)) {
-            int cnt = cnCount(rt, node);
-            for (int i = 0; i < cnt; i++) {
-                rt.push(cnKey(rt, node, i));
-                rt.push(cnVal(rt, node, i));
-                wrote++;
-            }
-        } else {
-            int ne = Integer.bitCount(bnDatamap(rt, node));
-            int nn = Integer.bitCount(bnNodemap(rt, node));
-            for (int i = 0; i < ne; i++) {
-                rt.push(bnKey(rt, node, i));
-                rt.push(bnVal(rt, node, i));
-                wrote++;
-            }
-            for (int j = 0; j < nn; j++) {
-                wrote += nodeEntries(rt, bnNode(rt, node, j));
-            }
-        }
-        return wrote;
+        return com._3sln.flint.kgen.rt.Mapwalk.pushNodeEntries(rt, node);
     }
 
     // --- transients ---------------------------------------------------------

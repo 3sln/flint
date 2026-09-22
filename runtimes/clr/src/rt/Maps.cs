@@ -150,28 +150,11 @@ public static class Maps {
         return 0;
     }
 
+    /// GENERATED (`kin/mapwalk.kin`). Push every key and value under `node`
+    /// onto the roots and answer the PAIR count -- two pushes per entry, and
+    /// the answer is entries and not pushes.
     static int NodeEntries(Rt rt, long node) {
-        int wrote = 0;
-        if (!IsBmnode(rt, node)) {
-            int cnt = CnCount(rt, node);
-            for (int i = 0; i < cnt; i++) {
-                rt.Push(CnKey(rt, node, i));
-                rt.Push(CnVal(rt, node, i));
-                wrote++;
-            }
-        } else {
-            int ne = System.Numerics.BitOperations.PopCount((uint)(BnDatamap(rt, node)));
-            int nn = System.Numerics.BitOperations.PopCount((uint)(BnNodemap(rt, node)));
-            for (int i = 0; i < ne; i++) {
-                rt.Push(BnKey(rt, node, i));
-                rt.Push(BnVal(rt, node, i));
-                wrote++;
-            }
-            for (int j = 0; j < nn; j++) {
-                wrote += NodeEntries(rt, BnNode(rt, node, j));
-            }
-        }
-        return wrote;
+        return global::_3sln.Flint.Kgen.Rt.Mapwalk.PushNodeEntries(rt, node);
     }
 
     // --- transients ---------------------------------------------------------

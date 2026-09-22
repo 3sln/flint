@@ -1,0 +1,78 @@
+;; EVERY ENTRY OF A CHAMP NODE, ONTO THE ROOTS -- written once.
+;;
+;; The read half of `into` and `seq` over a map: walk the trie and push each
+;; key and each value onto the root stack, answering how many PAIRS were
+;; written. The caller pops them; this only knows how to lay them out.
+;;
+;; IT PUSHES RATHER THAN BUILDING, and that is the whole shape. A walk that
+;; allocated a collection as it went would have to root the half-built thing
+;; against its own next allocation; pushing onto the roots makes the root
+;; stack the accumulator, and the collector already walks that.
+;;
+;; The three copies agreed line for line when this was taken -- and native's
+;; is `node_entries_flat`, NOT its `node_entries`, which takes an extra
+;; index and is a different function. The two names are three characters
+;; apart and do different things.
+(ns flint.rt.mapwalk
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   not + popcount push
+                                   for local set
+                                   Rt Value I32 RootIx]]
+            [flint.rt.nodeclass :refer [is-bmnode]]
+            [flint.rt.champ :refer [bn-datamap bn-key bn-node bn-nodemap bn-val]]
+            [flint.rt.collnode :refer [cn-count cn-key cn-val]]))
+
+(doc "Push every key and value under `node` onto the roots; answer the count."
+     ""
+     "TWO PUSHES PER ENTRY, key then value, and the answer counts PAIRS and"
+     "not pushes. A caller popping `2 * n` where this answered `n` is the"
+     "mistake the name is chosen against."
+     ""
+     "A COLLISION NODE IS THE BASE CASE. `is-bmnode` false means this is a"
+     "run of entries that hashed alike, stored flat, and its count is its"
+     "own -- there is nothing below it to descend into."
+     ""
+     "A BITMAP NODE HOLDS ENTRIES AND CHILDREN IN TWO SEPARATE RUNS, and the"
+     "bitmaps are how long each run is: `popcount` of the datamap counts the"
+     "inline entries, `popcount` of the nodemap counts the children. Reading"
+     "the arrays' length instead would count both runs at once, because they"
+     "share one slot array."
+     ""
+     "THE ENTRIES COME BEFORE THE CHILDREN, and the order is the contract a"
+     "caller sees: it is what makes the pairs of one node contiguous on the"
+     "root stack. Descending first would interleave a child's entries with"
+     "this node's."
+     ""
+     "EACH ACCESSOR IS BOUND BEFORE ITS PUSH. `push` takes the runtime"
+     "mutably and so does every `cn-`/`bn-` reader, so nesting them is two"
+     "mutable borrows at once -- the house rule, and the reason native's copy"
+     "reads the same way.")
+(defn ^:pub ^:method ^I32 push-node-entries [^:mut ^Rt rt ^Value node]
+  (local ^:mut ^I32 wrote)
+  (set wrote 0)
+  (if (not (is-bmnode rt node))
+    (do
+      (comment "A COLLISION RUN, flat and terminal.")
+      (let [^I32 cnt (cn-count rt node)]
+        (for [^I32 i 0 cnt]
+          (let [^Value k (cn-key rt node i)]
+            (push rt k))
+          (let [^Value v (cn-val rt node i)]
+            (push rt v))
+          (set wrote (+ wrote 1)))))
+    (do
+      (let [^I32 ne (popcount (bn-datamap rt node))
+            ^I32 nn (popcount (bn-nodemap rt node))]
+        (comment "THE INLINE ENTRIES FIRST, so one node's pairs stay"
+                 "contiguous on the root stack.")
+        (for [^I32 i 0 ne]
+          (let [^Value k (bn-key rt node i)]
+            (push rt k))
+          (let [^Value v (bn-val rt node i)]
+            (push rt v))
+          (set wrote (+ wrote 1)))
+        (comment "THEN THE CHILDREN, each contributing its own count.")
+        (for [^I32 j 0 nn]
+          (let [^Value sub (bn-node rt node j)]
+            (set wrote (+ wrote (push-node-entries rt sub))))))))
+  (return wrote))
