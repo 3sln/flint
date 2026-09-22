@@ -56,4 +56,38 @@ public final class Valtag {
     public static long heapPayload(long v) {
         return v & Val.PAYLOAD;
     }
+    /// TAG COMPARISONS CAST. `tag-of` answers `I64` and the tag constants are
+    /// `u64` on native, which Rust will not compare across -- `Val.tag`'s own
+    /// shim casts for exactly this reason. `to-addr` emits the cast there and
+    /// nothing on either port.
+    /// 
+    /// Whether `v` is an INLINE string -- five bytes or fewer carried in the
+    /// value itself rather than on the heap.
+    /// 
+    /// FIVE, because the payload is 48 bits: eight for the length and forty for
+    /// the bytes. That covers most keywords, which is what makes a map keyed by
+    /// keywords cheap -- the comparison is one 64-bit compare and allocates
+    /// nothing.
+    public static boolean inlineString(long v) {
+        return tagOf(v) == Val.TAG_STR;
+    }
+    /// Whether `v` is an inline keyword.
+    public static boolean inlineKeyword(long v) {
+        return tagOf(v) == Val.TAG_KW;
+    }
+    /// How many bytes an inline value carries: the length field, bits 40-47.
+    public static int inlineLength(long v) {
+        return (int) ((v >>> 40) & 255);
+    }
+    /// An inline KEYWORD as the inline STRING of its name.
+    /// 
+    /// A TAG SWAP, NOT A REBUILD. Going through the bytes --
+    /// `inline-str(inline-bytes(v))` -- allocates an array to copy at most five
+    /// bytes onto themselves, and all three runtimes carried a comment saying
+    /// while ALL THREE wrote the mask out by hand: `Val.java`, `Val.cs` and
+    /// `value.rs` each spelled `0x0000_FFFF_FFFF_FFFF` here, every one of them
+    /// with `PAYLOAD` declared in the same file.
+    public static long kwAsStr(long v) {
+        return (v & Val.PAYLOAD) | (Val.TAG_STR << 48);
+    }
 }

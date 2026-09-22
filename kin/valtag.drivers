@@ -12,6 +12,8 @@ type Addr = u64;
 struct Value(u64);
 mod value {
     pub const TAG_HEAP: u64 = 0xFFF9;
+    pub const TAG_STR: u64 = 0xFFFC;
+    pub const TAG_KW: u64 = 0xFFFD;
     pub const TAG_FIXNUM: u64 = 0xFFFA;
     pub const PAYLOAD: u64 = 0x0000_FFFF_FFFF_FFFF;
     pub const FIXNUM_MAX: i64 = (1 << 47) - 1;
@@ -20,7 +22,9 @@ mod value {
 --rust
 fn main() {
     let b = |x: bool| if x { 1 } else { 0 };
-    println!("{} {} | {}{}{}{} | {} {} {} {} | {} {} {} | {} {}",
+    // A three-byte inline KEYWORD, "ABC": tag, length in bits 40-47, bytes below.
+    let kw = Value((value::TAG_KW << 48) | (3u64 << 40) | 0x414243);
+    println!("{} {} | {}{}{}{} | {} {} {} {} | {} {} {} | {} {} | {} {} {} {} {} {}",
              // 1-2. THE TAG COMES BACK, from each constructor.
              tag_of(make_fixnum(0)), tag_of(make_heap(0)),
              // 3-6. THE BOUND, both sides of both ends.
@@ -39,11 +43,20 @@ fn main() {
              // 14-15. And an address with BOTH halves set: the payload must
              // survive and the tag must not be touched.
              heap_payload(make_heap((1 << 48) | 0x1234)),
-             tag_of(make_heap((1 << 48) | 0x1234)));
+             tag_of(make_heap((1 << 48) | 0x1234)),
+             // THE INLINE HALF, on ONE line with the rest: a second
+             // `println!` differed from the ports in whitespace alone, which
+             // is a disagreement about formatting rather than about values.
+             b(inline_keyword(kw)), b(inline_string(kw)), inline_length(kw),
+             b(inline_string(kw_as_str(kw))),
+             b(heap_payload(kw_as_str(kw)) == heap_payload(kw)),
+             inline_length(kw_as_str(kw)));
 }
 --java-head
     static final class Val {
         static final long TAG_HEAP = 0xFFF9L;
+        static final long TAG_STR = 0xFFFCL;
+        static final long TAG_KW = 0xFFFDL;
         static final long TAG_FIXNUM = 0xFFFAL;
         static final long PAYLOAD = 0x0000_FFFF_FFFF_FFFFL;
         static final long FIXNUM_MAX = (1L << 47) - 1;
@@ -51,6 +64,7 @@ fn main() {
     }
 --java
     public static void main(String[] args) {
+        long kw = (Val.TAG_KW << 48) | (3L << 40) | 0x414243L;
         System.out.println(
             tagOf(makeFixnum(0)) + " " + tagOf(makeHeap(0)) + " | "
             + (fitsFixnum(Val.FIXNUM_MAX) ? 1 : 0) + (fitsFixnum(Val.FIXNUM_MAX + 1) ? 1 : 0)
@@ -62,11 +76,17 @@ fn main() {
             + " " + heapPayload(makeHeap(1L << 48))
             + " " + tagOf(makeHeap(1L << 48))
             + " | " + heapPayload(makeHeap((1L << 48) | 0x1234))
-            + " " + tagOf(makeHeap((1L << 48) | 0x1234)));
+            + " " + tagOf(makeHeap((1L << 48) | 0x1234))
+            + " | " + (inlineKeyword(kw) ? 1 : 0) + " " + (inlineString(kw) ? 1 : 0)
+            + " " + inlineLength(kw) + " " + (inlineString(kwAsStr(kw)) ? 1 : 0)
+            + " " + (heapPayload(kwAsStr(kw)) == heapPayload(kw) ? 1 : 0)
+            + " " + inlineLength(kwAsStr(kw)));
     }
 --csharp-head
     internal static class Val {
         public const long TagHeap = 0xFFF9L;
+        public const long TagStr = 0xFFFCL;
+        public const long TagKw = 0xFFFDL;
         public const long TagFixnum = 0xFFFAL;
         public const long Payload = 0x0000_FFFF_FFFF_FFFFL;
         public const long FixnumMax = (1L << 47) - 1;
@@ -74,6 +94,7 @@ fn main() {
     }
 --csharp
     static void Main() {
+        long kw = (Val.TagKw << 48) | (3L << 40) | 0x414243L;
         System.Console.WriteLine(
             TagOf(MakeFixnum(0)) + " " + TagOf(MakeHeap(0)) + " | "
             + (FitsFixnum(Val.FixnumMax) ? 1 : 0) + (FitsFixnum(Val.FixnumMax + 1) ? 1 : 0)
@@ -85,10 +106,14 @@ fn main() {
             + " " + HeapPayload(MakeHeap(1L << 48))
             + " " + TagOf(MakeHeap(1L << 48))
             + " | " + HeapPayload(MakeHeap((1L << 48) | 0x1234))
-            + " " + TagOf(MakeHeap((1L << 48) | 0x1234)));
+            + " " + TagOf(MakeHeap((1L << 48) | 0x1234))
+            + " | " + (InlineKeyword(kw) ? 1 : 0) + " " + (InlineString(kw) ? 1 : 0)
+            + " " + InlineLength(kw) + " " + (InlineString(KwAsStr(kw)) ? 1 : 0)
+            + " " + (HeapPayload(KwAsStr(kw)) == HeapPayload(kw) ? 1 : 0)
+            + " " + InlineLength(KwAsStr(kw)));
     }
 --expect
-65530 65529 | 1010 | 0 -1 140737488355327 -140737488355328 | 4660 0 65529 | 4660 65529
+65530 65529 | 1010 | 0 -1 140737488355327 -140737488355328 | 4660 0 65529 | 4660 65529 | 1 0 3 1 1 3
 --expect-why
 DERIVED FROM THE LAYOUT, not recorded. A value is a 16-bit TAG over a 48-bit
 PAYLOAD; `TAG_FIXNUM` is 0xFFFA = 65530 and `TAG_HEAP` is 0xFFF9 = 65529.

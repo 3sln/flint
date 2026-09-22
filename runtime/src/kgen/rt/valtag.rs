@@ -70,3 +70,41 @@ pub fn make_heap(off: Addr) -> Value {
 pub fn heap_payload(v: Value) -> Addr {
     return v.0 & crate::value::PAYLOAD;
 }
+/// TAG COMPARISONS CAST. `tag-of` answers `I64` and the tag constants are
+/// `u64` on native, which Rust will not compare across -- `Val.tag`'s own
+/// shim casts for exactly this reason. `to-addr` emits the cast there and
+/// nothing on either port.
+/// 
+/// Whether `v` is an INLINE string -- five bytes or fewer carried in the
+/// value itself rather than on the heap.
+/// 
+/// FIVE, because the payload is 48 bits: eight for the length and forty for
+/// the bytes. That covers most keywords, which is what makes a map keyed by
+/// keywords cheap -- the comparison is one 64-bit compare and allocates
+/// nothing.
+#[inline]
+pub fn inline_string(v: Value) -> bool {
+    return (tag_of(v) as Addr) == crate::value::TAG_STR;
+}
+/// Whether `v` is an inline keyword.
+#[inline]
+pub fn inline_keyword(v: Value) -> bool {
+    return (tag_of(v) as Addr) == crate::value::TAG_KW;
+}
+/// How many bytes an inline value carries: the length field, bits 40-47.
+#[inline]
+pub fn inline_length(v: Value) -> u32 {
+    return ((((v.0 as u64) >> 40) as i64) & 255) as u32;
+}
+/// An inline KEYWORD as the inline STRING of its name.
+/// 
+/// A TAG SWAP, NOT A REBUILD. Going through the bytes --
+/// `inline-str(inline-bytes(v))` -- allocates an array to copy at most five
+/// bytes onto themselves, and all three runtimes carried a comment saying
+/// while ALL THREE wrote the mask out by hand: `Val.java`, `Val.cs` and
+/// `value.rs` each spelled `0x0000_FFFF_FFFF_FFFF` here, every one of them
+/// with `PAYLOAD` declared in the same file.
+#[inline]
+pub fn kw_as_str(v: Value) -> Value {
+    return Value((v.0 & crate::value::PAYLOAD) | (crate::value::TAG_STR << 48));
+}

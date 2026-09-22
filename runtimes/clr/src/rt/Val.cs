@@ -83,17 +83,22 @@ public static class Val {
         return (tag << 48) | ((long) bytes.Length << 40) | payload;
     }
 
-    public static bool IsInlineStr(long v) => Tag(v) == TagStr;
-    public static bool IsInlineKw(long v) => Tag(v) == TagKw;
+    /// GENERATED (`kin/valtag.kin`) as `InlineString`.
+    public static bool IsInlineStr(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.InlineString(v);
+    /// GENERATED as `InlineKeyword`.
+    public static bool IsInlineKw(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.InlineKeyword(v);
 
     /// An inline KEYWORD as the inline STRING of its name -- a tag swap. See
     /// the Rust copy.
-    public static long KwToStr(long v) => (v & 0x0000FFFFFFFFFFFFL) | (TagStr << 48);
+    /// GENERATED as `KwToStr`. This spelled the payload mask out as a
+    /// literal, as the jvm and native both did.
+    public static long KwToStr(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.KwAsStr(v);
 
     public static long InlineStr(byte[] b) => InlineOf(TagStr, b);
     public static long InlineKw(byte[] b) => InlineOf(TagKw, b);
 
-    public static int InlineLen(long v) => (int) (((ulong)v >> 40) & 0xFF);
+    /// GENERATED as `InlineLength`.
+    public static int InlineLen(long v) => (int) global::_3sln.Flint.Kgen.Rt.Valtag.InlineLength(v);
 
     public static byte[] InlineBytes(long v) {
         int n = InlineLen(v);

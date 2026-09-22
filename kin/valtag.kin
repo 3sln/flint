@@ -37,9 +37,9 @@
 (ns flint.rt.valtag
   (:require [flint.impl.rt :refer [defn return doc
                                    and >= <= == shl ushr64 sar64 bit-and bit-or
-                                   bits of-bits to-addr
-                                   Value I64 Addr Bool
-                                   TAG_HEAP TAG_FIXNUM PAYLOAD
+                                   bits of-bits to-addr to-i32
+                                   Value I64 I32 Addr Bool
+                                   TAG_HEAP TAG_FIXNUM TAG_STR TAG_KW PAYLOAD
                                    FIXNUM_MIN FIXNUM_MAX]]))
 
 (doc "The 16-bit tag `v` carries -- what kind of value it is."
@@ -89,3 +89,44 @@
      "come back as part of the answer.")
 (defn ^:pub ^:inline ^Addr heap-payload [^Value v]
   (return (bit-and (bits v) PAYLOAD)))
+
+(doc "TAG COMPARISONS CAST. `tag-of` answers `I64` and the tag constants are"
+     "`u64` on native, which Rust will not compare across -- `Val.tag`'s own"
+     "shim casts for exactly this reason. `to-addr` emits the cast there and"
+     "nothing on either port."
+     ""
+     "Whether `v` is an INLINE string -- five bytes or fewer carried in the"
+     "value itself rather than on the heap."
+     ""
+     "FIVE, because the payload is 48 bits: eight for the length and forty for"
+     "the bytes. That covers most keywords, which is what makes a map keyed by"
+     "keywords cheap -- the comparison is one 64-bit compare and allocates"
+     "nothing.")
+(defn ^:pub ^:inline ^Bool inline-string [^Value v]
+  (return (== (to-addr (tag-of v)) TAG_STR)))
+
+(doc "Whether `v` is an inline keyword.")
+(defn ^:pub ^:inline ^Bool inline-keyword [^Value v]
+  (return (== (to-addr (tag-of v)) TAG_KW)))
+
+(doc "How many bytes an inline value carries: the length field, bits 40-47.")
+(defn ^:pub ^:inline ^I32 inline-length [^Value v]
+  (return (to-i32 (bit-and (ushr64 (bits v) 40) 255))))
+
+(doc "An inline KEYWORD as the inline STRING of its name."
+     ""
+     "A TAG SWAP, NOT A REBUILD. Going through the bytes --"
+     "`inline-str(inline-bytes(v))` -- allocates an array to copy at most five"
+     "bytes onto themselves, and all three runtimes carried a comment saying"
+     "while ALL THREE wrote the mask out by hand: `Val.java`, `Val.cs` and"
+     "`value.rs` each spelled `0x0000_FFFF_FFFF_FFFF` here, every one of them"
+     "with `PAYLOAD` declared in the same file.")
+;; NAMED `kw-as-str`, NOT `kw-to-str`, and I got this wrong first: `kw-to-str`
+;; is already a vocabulary word and `kin/names.kin` calls it, with its drivers
+;; stubbing it three times. A `^:pub` function of that name shadows the word
+;; project-wide, so `names` silently started resolving to this module --
+;; `check-kin` caught it as drift in a file I had not touched, which is the
+;; only reason it did not ship. Third time today this trap came up; the first
+;; two were checked for, this one was not.
+(defn ^:pub ^:inline ^Value kw-as-str [^Value v]
+  (return (of-bits (bit-or (bit-and (bits v) PAYLOAD) (shl TAG_STR 48)))))

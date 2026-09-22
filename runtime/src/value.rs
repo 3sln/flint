@@ -200,12 +200,14 @@ impl Value {
 
     /// True for the inline (immediate) string representation.
     #[inline(always)]
+    /// GENERATED (`kin/valtag.kin`) as `inline_string`.
     pub fn is_inline_str(self) -> bool {
-        self.tag() == TAG_STR
+        crate::kgen::rt::valtag::inline_string(self)
     }
     #[inline(always)]
+    /// GENERATED as `inline_keyword`.
     pub fn is_inline_kw(self) -> bool {
-        self.tag() == TAG_KW
+        crate::kgen::rt::valtag::inline_keyword(self)
     }
 
     /// Build an inline string/keyword. `bytes.len()` must be <= INLINE_MAX.
@@ -237,15 +239,20 @@ impl Value {
     /// differ -- and every runtime was going through `inline_str(inline_bytes
     /// (v))`, which on both ports allocates a byte array to copy eight bytes
     /// onto themselves.
+    /// GENERATED (`kin/valtag.kin`). This spelled the payload mask out as a
+    /// literal, as both ports did -- three copies of `PAYLOAD` with the
+    /// constant declared in every one of the three files.
     #[inline(always)]
-    pub const fn kw_to_str(self) -> Value {
-        Value((self.0 & 0x0000_FFFF_FFFF_FFFF) | (TAG_STR << 48))
+    pub fn kw_to_str(self) -> Value {
+        crate::kgen::rt::valtag::kw_as_str(self)
     }
 
     /// Length in bytes of an inline string/keyword payload.
+    /// GENERATED as `inline_length`, which answers the `I32` the ports use;
+    /// this runtime wants a `usize` for indexing.
     #[inline(always)]
-    pub const fn inline_len(self) -> usize {
-        ((self.0 >> 40) & 0xFF) as usize
+    pub fn inline_len(self) -> usize {
+        crate::kgen::rt::valtag::inline_length(self) as usize
     }
 
     /// Copy the inline payload into `buf` and return the populated slice.
