@@ -1163,6 +1163,94 @@ mod tests {
         assert!(rt.is_tagged(back), "comes back TAGGED, not as a map");
         assert!(rt.val_eq(t, back));
     }
+
+
+    /// WHAT SHARING COSTS ON THE WIRE, as a number rather than a sentence.
+    ///
+    /// The decision record names this as still open: back-references are not
+    /// built, so "a value whose subtree is shared ten times currently encodes
+    /// ten times, a real, named, and still-open cost". Prose cannot say how
+    /// big the cost is, and nothing else here measures it.
+    ///
+    /// THE CONTROL IS THE POINT. Encoding N references to ONE object and N
+    /// DISTINCT but equal objects must come to the SAME number of bytes today
+    /// -- that is precisely what "no back-references" means. A test that only
+    /// measured the shared case would pass just as happily if the encoder
+    /// memoised perfectly, because it would have nothing to compare against.
+    ///
+    /// AND IT IS MEASURED AT TWO SIZES, because a single size cannot tell
+    /// "grows once per reference" from "grows by a constant": the difference
+    /// between them is a slope, not a value.
+    ///
+    /// This test goes RED the day back-references land. That is intended --
+    /// the number it prints is the size of the win, and this is the place to
+    /// record it.
+    #[test]
+    fn a_shared_subtree_still_encodes_once_per_reference() {
+        const LEAF: &str = "a subtree worth sharing, long enough to see";
+
+        // `n` references to ONE inner vector.
+        fn shared(rt: &mut Rt, n: u32) -> usize {
+            let base = rt.mark();
+            let leaf = rt.string(LEAF);
+            rt.push(leaf);
+            let inner = rt.vec_from_roots(base, 1);
+            rt.pop_to(base);
+            for _ in 0..n {
+                rt.push(inner);
+            }
+            let outer = rt.vec_from_roots(base, n);
+            rt.pop_to(base);
+            rt.push(outer);
+            let held = rt.r(base);
+            let bytes = rt.encode(held).expect("encode").len();
+            rt.pop_to(base);
+            bytes
+        }
+
+        // `n` SEPARATELY BUILT inner vectors that are `=` to each other.
+        fn distinct(rt: &mut Rt, n: u32) -> usize {
+            let base = rt.mark();
+            for _ in 0..n {
+                let inner_base = rt.mark();
+                let leaf = rt.string(LEAF);
+                rt.push(leaf);
+                let inner = rt.vec_from_roots(inner_base, 1);
+                rt.pop_to(inner_base);
+                rt.push(inner);
+            }
+            let outer = rt.vec_from_roots(base, n);
+            rt.pop_to(base);
+            rt.push(outer);
+            let held = rt.r(base);
+            let bytes = rt.encode(held).expect("encode").len();
+            rt.pop_to(base);
+            bytes
+        }
+
+        let mut rt = Rt::new();
+        let (s2, s20) = (shared(&mut rt, 2), shared(&mut rt, 20));
+        let (d2, d20) = (distinct(&mut rt, 2), distinct(&mut rt, 20));
+
+        let per_ref = (s20 - s2) / 18;
+        std::eprintln!(
+            "sharing on the wire: shared {s2} -> {s20} bytes, distinct {d2} -> {d20}, \
+             {per_ref} bytes per extra reference to the SAME object"
+        );
+
+        assert_eq!(
+            (s2, s20), (d2, d20),
+            "sharing bought something -- back-references appear to be BUILT. \
+             If that is the change you just made, this test is the one to \
+             update, and `per_ref` is the size of the win"
+        );
+        assert!(
+            per_ref >= LEAF.len(),
+            "each extra reference cost {per_ref} bytes, less than the {} of \
+             the leaf it repeats -- something is already collapsing it",
+            LEAF.len()
+        );
+    }
 }
 
 // --- the host's side of the codec -------------------------------------------
@@ -1709,3 +1797,4 @@ mod host_reader_tests {
         assert!(parse(&w.done()).is_err());
     }
 }
+

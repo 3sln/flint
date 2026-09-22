@@ -3138,7 +3138,13 @@ mechanism (the sweep walks the bridge table after every collection and
 releases ids whose lookup misses) rather than the full fixup-on-forward
 scheme described above. And **back-references in the codec are not built**
 — a value whose subtree is shared ten times currently encodes ten times,
-a real, named, and still-open cost.
+a real, named, and still-open cost. **Measured, 2026-09-22:** twenty
+references to ONE subtree encode to 1 065 bytes, and twenty separately built
+subtrees that are merely `=` to each other encode to 1 065 bytes as well —
+identical at two sizes, which is what "no back-references" means stated as a
+number. Each extra reference costs **53 bytes**, the whole of the subtree
+again. `codec::tests::a_shared_subtree_still_encodes_once_per_reference`
+holds that, control and all, and goes red the day the cost is paid off.
 
 ---
 
