@@ -48,3 +48,8 @@ runtimes/clr/*/obj/
 # Agent worktrees, created inside the repo by the Agent tool. Untracked and
 # large -- a `git add -A` would otherwise stage a whole second checkout.
 .claude/worktrees/
+
+# `bin/port_survey.py` is a module as well as a script -- the survey's data is
+# worth querying from a one-off rather than re-deriving, and an `import`
+# leaves this behind. It recurs, so it is ignored rather than deleted.
+__pycache__/

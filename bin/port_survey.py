@@ -33,7 +33,11 @@ BLOCK = [
     (r"\bsp\.\w|gc\.sp\b|slotAddr|\bbump\b|fromEnd|toEnd|zeroBody|\bforward\(|"
      r"Space\b|\bheapBase\b|Unsafe|ByteBuffer", "raw memory"),
     (r"\bOp\.[A-Z_]{2,}", "opcode dispatch"),
-    (r"\bFn\b|\.apply\(|->\s*\{|::\w+\)", "host callback"),
+    (r"\bFn\b|\.apply\(|::\w+\)", "host callback"),
+    # HOST EXCEPTION HANDLING. kin has no `try`/`finally`; a function whose
+    # shape is "take a lock, do the thing, release it whatever happens" is not
+    # a body that can be generated.
+    (r"\btry\s*\{|\bfinally\s*\{|\block\s*\(", "host try/lock"),
 ]
 
 # THE STANDING NEVER LIST, used as an ASSERTION rather than an exclusion:
@@ -83,39 +87,59 @@ def rank():
         nat = {}
         if area in AREAS:
             nat = extract_all(AREAS[area][2], N_PAT)
-        hand = clean = three = 0
+        hand = clean = three = isvoc = 0
         why, big = collections.Counter(), []
         for name, txt, n in java_methods(path):
             if "kgen" in txt:
                 continue                       # already generated
             hand += n
             hit = next((lbl for rx, lbl in BLOCK if re.search(rx, txt)), None)
+            # A LAMBDA IS NOT A SWITCH ARM, and `->` is both. `-> {` caught
+            # only the block form, so `t.lookup(id, v -> false)` in
+            # `registerPort` scored clean for four rankings running -- a
+            # closure passed to a host function, which kin cannot express at
+            # all. Java writes switch arms `case X -> ...` and those ARE
+            # portable, so the line has to be excluded rather than the arrow.
+            if not hit and any("->" in ln and "case " not in ln
+                               for ln in txt.split("\n")):
+                hit = "host callback"
             if hit:
                 why[hit] += n
             else:
                 clean += n
+                # ALREADY A WORD? Then it is a primitive kin is written in
+                # terms of, not a duplicate kin could replace.
+                if norm(name) in vocabulary_names():
+                    isvoc += n
+                    big.append((n, name, None))
+                    continue
                 has3 = norm(name) in nat
                 if has3:
                     three += n
                 big.append((n, name, has3))
         if hand:
             rows.append((clean, hand, area, why,
-                         sorted(big, reverse=True)[:3], three, bool(nat)))
+                         sorted(big, key=lambda t: -t[0])[:4], three, bool(nat), isvoc))
     rows.sort(reverse=True)
-    print(f"  {'area':<12} {'hand':>6} {'clean':>6} {'in 3':>6} {'%':>4}   dominant blocker")
-    for clean, hand, area, why, big, three, checked in rows[:12]:
+    print(f"  {'area':<12} {'hand':>6} {'clean':>6} {'in 3':>6} {'voc':>5} {'%':>4}   dominant blocker")
+    for clean, hand, area, why, big, three, checked, isvoc in rows[:12]:
         top = why.most_common(1)[0] if why else ("--", 0)
         col = f"{three:>6}" if checked else "    --"
-        print(f"  {area:<12} {hand:>6} {clean:>6} {col} {round(100*clean/hand):>3}%   {top[0]}, {top[1]}")
+        print(f"  {area:<12} {hand:>6} {clean:>6} {col} {isvoc:>5} {round(100*clean/hand):>3}%   {top[0]}, {top[1]}")
         if clean and big:
             print("               biggest clean: "
-                  + ", ".join(f"{n} {nm}{'' if h else ' (2-way)'}" for n, nm, h in big))
+                  + ", ".join(f"{n} {nm}"
+                              + (" (IS a word)" if h is None else "" if h else " (2-way)")
+                              for n, nm, h in big))
+    print("\n  `voc` is clean lines in a method that IS a vocabulary word already --")
+    print("  a primitive kin is written in terms of, not a duplicate it could")
+    print("  replace. Generating one would be circular.")
     print("\n  `in 3` is clean lines whose method ALSO exists on native -- three")
     print("  copies to replace with one. The rest are a two-way dedup between the")
     print("  ports, which is worth having and is a different job. `--` means the")
     print("  area is not in AREAS, so the third runtime was not looked for.")
     print("\n  never-list (these must stay low, or a blocker rule is too narrow):")
-    for clean, hand, area, why, big, three, checked in rows:
+    for clean, hand, area, why, big, three, checked, isvoc in rows:
         if area in NEVER:
             pct = round(100 * clean / hand)
             print(f"    {'ok  ' if pct <= 12 else 'HIGH'} {area:<6} {pct:>3}% clean of {hand}")
@@ -131,7 +155,14 @@ global namespace using import package throw throws catch try finally""".split())
 
 
 def norm(tok):
-    return re.sub(r"(?<!^)(?=[A-Z])", "", tok.replace("_", "")).lower()
+    """One spelling for a name across four languages AND kin.
+
+    HYPHENS TOO, not just underscores. kin's vocabulary is kebab-case --
+    `crosses-a-heap`, `current-thread`, `peer-of` -- and stripping only `_`
+    meant none of them matched `crossesAHeap` or `CurrentThread`. The
+    vocabulary check silently reclassified one method out of forty.
+    """
+    return re.sub(r"(?<!^)(?=[A-Z])", "", tok.replace("_", "").replace("-", "")).lower()
 
 
 # OPERATORS ARE TOKENS TOO, and leaving them out was the tool's biggest hole.
@@ -522,6 +553,31 @@ def consts(area):
         if only_c:
             print("    clr only: " + ", ".join(only_c[:16]))
         print("    (a name on one side only is never VALUE-compared -- read these)")
+
+
+VOC = None
+
+
+def vocabulary_names():
+    """Every word the kin vocabulary already names, folded.
+
+    A METHOD THAT IS ALREADY A VOCABULARY WORD IS NOT A PORTING TARGET. kin
+    reaches `mark`, `push`, `r`, `alloc`, `slot` and three dozen others by
+    NAMING them -- every generated source is written in terms of them. They
+    score "clean" because their bodies touch nothing host-shaped, and
+    generating one would be circular: kin would emit a call to the word that
+    is supposed to be the thing it emitted.
+
+    The rank could not tell those apart from real targets, so the tail of the
+    list is mostly primitives and reads as work remaining.
+    """
+    global VOC
+    if VOC is None:
+        txt = open("kin/src/flint/impl/rt.cljc").read()
+        txt = "\n".join(re.sub(r";;.*", "", ln) for ln in txt.split("\n"))
+        VOC = {norm(m.group(1))
+               for m in re.finditer(r"^\s{2,}'([^\s()]+)\s*\(core/call", txt, re.M)}
+    return VOC
 
 
 def all_pairs():

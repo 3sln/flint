@@ -9064,3 +9064,74 @@ stand up inside it:
 None of these is a kin limitation; all three are the difference between a
 type that works where it was written and one that works anywhere.
 
+---
+
+## `Conc` is finished, and the rank had been counting the vocabulary as work
+
+2026-09-21. This firing went to take the next slice the rank named and
+discovered the rank had been overstating what is left, in two independent
+ways. Both were found the same way: by trying to use the answer.
+
+### `registerPort` was never portable
+
+It ranked as `Conc`'s biggest clean method for four rankings running. It takes
+an intern-table lock in a `try`/`finally` and passes `t.lookup(id, v -> false)`
+-- a CLOSURE to a host function, which kin cannot express at all.
+
+The callback marker was `->\s*\{`, which catches a block lambda and not an
+expression one. And `->` is also a Java switch arm, which IS portable, so the
+arrow cannot simply be banned: the rule is a line containing `->` that is not
+a `case`. `try {` and `finally {` are markers now too.
+
+`Conc`'s clean total fell 112 -> 93 on that alone.
+
+### And half of what remained was the vocabulary itself
+
+The bigger error. kin reaches `mark`, `push`, `r`, `alloc`, `slot`, `sched`,
+`current-thread`, `peer-id-of-dead` and three dozen others by NAMING them:
+every generated source is written in terms of those words. Their bodies touch
+nothing host-shaped, so they scored clean -- and generating one would be
+circular, kin emitting a call to the word that is supposed to be the thing it
+emitted.
+
+*The rank could not tell a primitive from a duplicate.* It has a `voc` column
+now, cross-referenced against the 169 `core/call` entries in the vocabulary
+table.
+
+**That check found one method out of forty until `norm` was fixed.** It folds
+`_` and case so `TH_STATUS`, `ThStatus` and `th_status` are one name -- and
+kin's vocabulary is KEBAB-case. `crosses-a-heap` never matched `crossesAHeap`,
+`peer-of` never matched `peerOf`. One character class, and the check was
+silently doing almost nothing: the same shape as the four extraction bugs in
+the constants sweep, and the fifth of that family.
+
+### What is actually left
+
+    area   clean   already a word   three-way and NOT a word
+    Conc      93               50   20 lines over 6 methods, largest 5
+    Rt       148               38   70 lines over 16 methods, largest 10
+
+**`Conc` is finished.** It began this line of work at 6 743 lines across the
+three runtimes and is at 5 540; half its functions are one-line delegations;
+and what remains three-way, portable and not already a word is twenty lines
+spread over six methods, the biggest of which is five. There is no slice left
+in it worth the drivers file.
+
+`Rt` has 70 lines over 16 methods and the same shape of tail -- `invoke` and
+`aotIntBinopAt` at ten each, then nothing above eight. Both are thin wrappers
+over machinery that is not portable; `invoke` would need six new vocabulary
+words to generate ten lines, four of which call straight back into
+`callValue`.
+
+*The port has reached its floor, and the floor is where the duplicated
+DECISIONS run out and the primitives begin.* The rank says so by construction
+now rather than by assertion, which is the part worth having: the next person
+reads `voc` and `in 3` and does not spend a firing rediscovering it.
+
+### The slice I did not take
+
+`peerIdOfDead`, nine lines, three-way, agreeing on all three -- and
+`'peer-id-of-dead` is a vocabulary word at `rt.cljc:1855`. Had the `voc`
+column not existed I would have generated it and wired the three runtimes to
+call a generated function that kin itself calls as a primitive.
+
