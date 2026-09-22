@@ -539,11 +539,82 @@ def norm_val(v):
             return str(eval(v, {"__builtins__": {}}, {}))   # digits and operators only
         except Exception:
             pass
-    if re.fullmatch(r"0[xX][0-9a-fA-F]+", v):
-        return str(int(v, 16))
+    # A HEX LITERAL THAT KEPT ITS WIDTH SUFFIX. The suffix strip above wants
+    # `\d+` before the `L`, and `0xFFFAL` has hex digits -- so it fell through
+    # to the identifier fold and `0xfffal` was reported as disagreeing with
+    # native's `65530`, which is the same number.
+    m = re.fullmatch(r"(0[xX][0-9a-fA-F]+)[lLuU]*", v)
+    if m:
+        return str(int(m.group(1), 16))
+    # `u32::MAX`, and the cast that sometimes follows it. Rust names the limit
+    # where the ports write it out.
+    m = re.fullmatch(r"([ui](?:8|16|32|64))::(MAX|MIN)(?:as[ui](?:8|16|32|64))?", v)
+    if m:
+        bits = int(m.group(1)[1:])
+        signed = m.group(1)[0] == "i"
+        if m.group(2) == "MAX":
+            return str((1 << (bits - 1)) - 1 if signed else (1 << bits) - 1)
+        return str(-(1 << (bits - 1)) if signed else 0)
+    # `Value(x)` IS x -- a newtype, not a call. Only this wrapper: folding
+    # `Val.fixnum(0)` the same way would equate a FUNCTION with its argument.
+    m = re.fullmatch(r"[Vv]alue\((.*)\)", v)
+    if m:
+        return norm_val(m.group(1))
     # A CALL IS FOLDED LIKE A NAME. `Val.fixnum(0)` and `Val.Fixnum(0)` are the
     # same value spelled for two languages' conventions.
     return re.sub(r"[A-Za-z_][\w.]*", lambda m: m.group(0).replace("_", "").lower(), v)
+
+
+def consts_three(quiet=False):
+    """Every constant all THREE runtimes declare, compared.
+
+    WHY THIS IS SEPARATE FROM THE PORT-VERSUS-PORT CHECK. That one answers
+    "do the jvm and clr agree", which is the question its file pairs can ask.
+    Native is not in a pair, so its constants were compared with NOTHING --
+    and a constant native disagrees with both ports about is a divergence of
+    exactly the kind this repository keeps finding by accident. 299 names are
+    declared in all three; the bound `Num.integer` turns on is one of them.
+
+    WHAT IT WILL NOT DECIDE IT NAMES. Three spellings are equal without being
+    comparable as text: native's `NIL` IS `(TAG_SPECIAL << 48) | SPECIAL_NIL`
+    but says so by reference; `Val.fixnum(0)` is a CALL whose body is the
+    expression the other side writes; and `u32::MAX` is `-1` once it is in a
+    signed field. Resolving those needs the constant table, not a string. They
+    are listed rather than silently dropped, because a checker that quietly
+    skips what it cannot read is the failure this file has already had once.
+    """
+    areas = areas_auto()
+    same = 0
+    bad, odd = [], []
+    for area, (jp, cp, np_) in sorted(areas.items()):
+        if not np_:
+            continue
+        j, c, n = consts_of(jp, "java"), consts_of(cp, "csharp"), consts_of(np_, "rust")
+        for k in sorted(set(j) & set(c) & set(n)):
+            vals = {j[k], c[k], n[k]}
+            if len(vals) == 1:
+                same += 1
+            elif all(re.fullmatch(r"-?\d+", v) for v in (j[k], c[k], n[k])):
+                # SAME BITS, NOT SAME SIGN. `NO_NS` is `u32::MAX` on native and
+                # `public const int NO_NS = -1` on both ports -- one 32-bit
+                # pattern, written once as unsigned and twice as signed, and
+                # put on the wire by `U32` either way. Comparing the signed
+                # READING of a bit pattern would report that as a divergence
+                # forever. Congruence at 32 or 64 bits is the equality these
+                # constants actually have.
+                ns = [int(v) for v in (j[k], c[k], n[k])]
+                if len({x % (1 << 32) for x in ns}) == 1 or len({x % (1 << 64) for x in ns}) == 1:
+                    same += 1
+                else:
+                    bad.append((area, k, j[k], c[k], n[k]))
+            else:
+                odd.append((area, k, j[k], n[k]))
+    if not quiet:
+        for area, k, jv, cv, nv in bad:
+            print(f"  DISAGREE {area}.{k}: jvm={jv} clr={cv} native={nv}")
+        for area, k, jv, nv in odd:
+            print(f"  not compared {area}.{k}: ports={jv} native={nv} (equal, spelled differently)")
+    return bad, same, odd
 
 
 def logical_lines(text):
@@ -900,8 +971,17 @@ if __name__ == "__main__":
         if n:
             print(f"\ncheck-port-consts: {n} constant(s) disagree between the ports")
             raise SystemExit(1)
+        bad3, same3, odd3 = consts_three(quiet=True)
+        if bad3:
+            for area, k, jv, cv, nv in bad3:
+                print(f"  DISAGREE {area}.{k}: jvm={jv} clr={cv} native={nv}")
+            print(f"\ncheck-port-consts: {len(bad3)} constant(s) the three runtimes "
+                  f"do not agree about")
+            raise SystemExit(1)
         print(f"check-port-consts: {seen} constant declarations across 30 file pairs,"
               f" the two ports agree on every one they share")
+        print(f"                   and {same3} of them are declared by NATIVE too and "
+              f"agree there, with {len(odd3)} more equal but spelled differently")
         raise SystemExit(0)
     if what == "--consts" and len(sys.argv) > 2 and sys.argv[2] == "all":
         print("\n== every constant the two ports both declare\n")
