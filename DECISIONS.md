@@ -4879,6 +4879,49 @@ by citing "53 call sites" and the real figure is 25 on the jvm and 22 on the
 clr -- the cost that bought "worth doing LAST" is overstated about twofold.
 
 
+### The clr canonicalised NaN to different bits, 2026-09-22
+
+**The clr now matches native and the jvm.** `Val.OfDouble` canonicalises a
+double whose top bits collide with the tag range, and all three runtimes
+derived the replacement from their own host:
+
+    native   CANONICAL_NAN                     0x7FF8000000000000
+    jvm      Double.doubleToRawLongBits(NaN)   0x7FF8000000000000
+    clr      BitConverter.DoubleToInt64Bits(double.NaN)
+                                               0xFFF8000000000000
+
+Measured, not inferred: .NET's `double.NaN` is the NEGATIVE canonical quiet
+NaN where Java's and Rust's is positive. So for every double reaching that arm
+-- native's comment says "only negative NaNs with a large payload collide with
+the tag range" -- the clr produced a different bit pattern from the other two.
+
+**WHY IT MATTERED AND WHY NOTHING SAW IT.** Both answers are NaN, so `=` never
+noticed: NaN compares false to everything including itself. What does notice is
+anything that reads the BITS -- hashing, snapshots, the wire codec -- where two
+values that must be identical across runtimes were not.
+
+And the three runtimes looked consistent while it was true. Each derived the
+value from its host's own NaN constant, so the EXPRESSIONS matched and only the
+values differed. `bin/check-port-consts` had nothing to compare, because
+neither port declared a constant. Naming it is what made the comparison
+possible at all -- and the gate flagged the two ports within seconds of the
+name existing, before the port had even been written.
+
+**The decision:** name the value on all three rather than derive it from a
+host that is entitled to a different one. `CANONICAL_NAN` (jvm) and
+`CanonicalNan` (clr) now sit beside native's, and all three are under the
+three-way constants gate: 299 constants agree across the runtimes, up from
+298.
+
+C# cannot write that literal plainly -- `0x7FF8000000000000UL` is a `ulong`
+and the narrowing must be explicit -- so it reads `unchecked((long) ...)`,
+which `norm_val` now strips. That is the sixth normalisation the constants
+gate has needed and the sixth to come from a real case rather than an
+anticipated one.
+
+Verified: `conform-hosts` green at 363 rows, 0 failures, with the clr rebuilt.
+
+
 ## cross-runtime-benchmarks
 
 **Benchmark across wasm runtimes, because every number so far was V8**

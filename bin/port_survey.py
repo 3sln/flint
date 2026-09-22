@@ -521,6 +521,14 @@ def norm_val(v):
     v = re.sub(r"\b(\d+)(?:u8|u16|u32|u64|i8|i16|i32|i64|usize|isize)\b", r"\1", v)
     # A cast says nothing about the value: `(long) 3` and `3` are the same.
     v = re.sub(r"\((?:long|int|uint|ulong|byte|short)\)\s*", "", v)
+    # NOR DOES `unchecked`. C# cannot write a `long` literal with the sign bit
+    # set any other way -- `0x7FF8000000000000UL` is a `ulong` and the
+    # narrowing must be explicit -- where java and rust take the same number
+    # plainly. Without this, `CANONICAL_NAN` reads as a disagreement with
+    # itself.
+    m = re.fullmatch(r"unchecked\((.*)\)", v.strip())
+    if m:
+        v = re.sub(r"\((?:long|int|uint|ulong|byte|short)\)\s*", "", m.group(1)).strip()
     v = re.sub(r"\s+", "", v)
     while len(v) > 1 and v[0] == "(" and v[-1] == ")":
         # ONLY A BALANCED outer pair. Stripping blindly turned `Val.fixnum(0)`

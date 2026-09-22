@@ -16,6 +16,12 @@ public static class Val {
 
     public const long Payload = 0x0000_FFFF_FFFF_FFFFL;
 
+    /// See the java copy: this was `DoubleToInt64Bits(double.NaN)`, and .NET's
+    /// NaN is `0xFFF8000000000000` where java's and native's is
+    /// `0x7FF8000000000000`. This runtime canonicalised to a different bit
+    /// pattern than the other two for every double reaching that arm.
+    public const long CanonicalNan = unchecked((long) 0x7FF8000000000000UL);
+
     const long SpecialNil = 0, SpecialFalse = 1, SpecialTrue = 2;
     const long SpecialNotFound = 3, SpecialPark = 4, SpecialOom = 5, SpecialEmpty = 6;
 
@@ -43,8 +49,7 @@ public static class Val {
 
     public static long OfDouble(double d) {
         long b = System.BitConverter.DoubleToInt64Bits(d);
-        return ((ulong)b >> 48) >= (ulong)TagMinBoxed
-            ? System.BitConverter.DoubleToInt64Bits(double.NaN) : b;
+        return ((ulong)b >> 48) >= (ulong)TagMinBoxed ? CanonicalNan : b;
     }
 
     /// A fixnum's payload is 48 bits, signed. Past this a value is a boxed

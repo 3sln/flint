@@ -31,6 +31,15 @@ public final class Val {
 
     public static final long PAYLOAD = 0x0000_FFFF_FFFF_FFFFL;
 
+    /// The NaN an out-of-range double canonicalises to, named rather than
+    /// derived. This was `Double.doubleToRawLongBits(Double.NaN)` and the clr
+    /// wrote the same expression with ITS host's NaN -- which is
+    /// `0xFFF8000000000000`, the NEGATIVE canonical NaN, where java's and
+    /// native's is positive. Measured 2026-09-22: the two ports disagreed in
+    /// the bits for every double that reaches this arm. Both are NaN, so `=`
+    /// never noticed; hashing, snapshots and the wire codec would.
+    public static final long CANONICAL_NAN = 0x7FF8_0000_0000_0000L;
+
     static final long SPECIAL_NIL = 0;
     static final long SPECIAL_FALSE = 1;
     static final long SPECIAL_TRUE = 2;
@@ -69,7 +78,7 @@ public final class Val {
     /// heap pointer is worse than a NaN that lost its payload.
     public static long ofDouble(double d) {
         long b = Double.doubleToRawLongBits(d);
-        return (b >>> 48) >= TAG_MIN_BOXED ? Double.doubleToRawLongBits(Double.NaN) : b;
+        return (b >>> 48) >= TAG_MIN_BOXED ? CANONICAL_NAN : b;
     }
 
     /// A fixnum's payload is 48 bits, signed. Past this a value is a boxed
