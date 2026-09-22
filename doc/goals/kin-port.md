@@ -9614,3 +9614,40 @@ a static import and no call-site edits.
   These gates are long enough that waiting feels wasteful, which is exactly
   why this will happen again unless the edit goes somewhere the run cannot
   read.
+
+## The next slice, and a divergence found by sizing it up
+
+2026-09-22, after `collconj` and `numint`. Re-measuring what is still
+hand-written per class puts `Val` at the top by a different measure than
+`Str`: **25 methods, none of them delegating**. It is the tag layer --
+`fixnum`, `asFixnum`, `heap`, `asHeap`, `isFixnum`, `isHeap`, `fitsFixnum`,
+`ofDouble` -- pure bit manipulation over a 48-bit payload and a 16-bit tag,
+which is the shape kin handles best and the most fundamental invariant in the
+system to have three copies of.
+
+**AND THE THREE COPIES ARE NOT THE SAME.** Sizing the slice up found it:
+
+    jvm     heap(addr)  (TAG_HEAP << 48) | (addr & PAYLOAD)      masks
+    clr     Heap(addr)  (TagHeap << 48) | (addr & Payload)       masks
+    native  heap(off)   Value((TAG_HEAP << 48) | off as u64)     does NOT
+
+Both ports mask the address into the payload field; native ORs it in whole.
+For an address at or above 2^48 the ports would truncate and native would
+corrupt the TAG -- two different wrong answers, from the function that decides
+what every heap value in the system looks like.
+
+**It is unreachable today**, which is why it has survived: `Addr` is `u64`,
+but the heap is a wasm linear memory bounded at 2^32, so no address comes near
+the 48-bit field. That makes it a divergence in the source of truth rather
+than a live defect. It is also invisible to every instrument here -- the ports
+AGREE with each other, so a port-versus-port diff sees nothing, and no
+conformance program can reach the input that separates them.
+
+Worth recording as the shape rather than the instance: two runtimes agreeing
+is what makes the third one's difference look like the safe reading. The same
+census that found this one is the argument for generating the layer rather
+than auditing it again in six months.
+
+`Val`'s own comment on the masking rule -- "MASK, do not merely cast: with a
+48-bit address the tag would otherwise come back as part of the answer" --
+appears on both ports and on neither's native counterpart.
