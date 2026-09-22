@@ -102,8 +102,13 @@ are separate, further-along efforts — see §4.
 | Virtual namespaces (a namespace served over RPC instead of linked in) | done | [`workspace-capabilities`](DECISIONS.md#workspace-capabilities) step 4, actually shipped via `system-namespaces-and-deps`'s work — see capabilities section for the banner mismatch |
 | A park across a Rust frame crashes (`apply`, lazy-seq force) — general park-resumption bug | done (fixed) | the decision index (now folded into `DECISIONS.md`) — found while building `system-namespaces-and-deps`; root cause was "a rewind may only land before the call-back-in"; fixed with a per-thread re-entry stack |
 
-**Note on `structured-ports`:** the file's own banner says nothing in it exists. That's no
-longer accurate. `ports-are-the-hosts` (built) explicitly says "the wire codec already exists
+**~~Note on `structured-ports`.~~ The banner was corrected on 2026-09-11; this
+note outlived it.** It used to say the file's own banner claimed nothing in it
+exists, which was no longer accurate. That banner now opens "BUILT. The 'NOT
+BUILT -- a proposal' banner it carried was wrong, and was wrong for most of
+this record's life", with a claim-by-claim table. The note's closing advice --
+re-read against the actual tree before trusting either the banner or the note
+-- is what retired it. `ports-are-the-hosts` (built) explicitly says "the wire codec already exists
 for exactly this shape" and reuses `structured-ports`'s tag vocabulary (`K_PORT`,
 `K_SENTINEL`); `tables` step 9 and `bridges`/`tagged-literals` describe and ship `K_TAGGED`,
 `K_TABLE`, and per-format codecs (`:json`, `:json-strict`, `:edn`, `:cbor`)
@@ -135,18 +140,18 @@ byte.
 | jank dialect-suite comparison (language conformance against a different Clojure-on-LLVM implementation) | done (measurement) | [`doc/jank.md`](doc/jank.md) — 64–65% pass; the native/port `pass-*` sets are **test-for-test identical**, which is the strongest evidence the ports are faithful mirrors |
 | kin: shared runtime logic written once, generated into Rust/Java/C# | in progress, heavily — see §5 | [`kin`](DECISIONS.md#kin) |
 
-**Another stale note, this one inside a single file rather than between two.**
-the decision index (now folded into `DECISIONS.md`)'s own "What is actually next" numbered list (item 5,
-below its dated `0a`–`0v` entries) reads "The JVM, tier 2 (`other-hosts`) — the route
-is decided and not built... `cross-runtime-benchmarks` is what settled it." That directly
-contradicts the status table at the **top of the same file**, which already
-says (row for `other-hosts`) "JVM and CLR shipped — see `jvm-runtime`, `clr-runtime`" and (row for
-`jvm-runtime`) "Partly shipped... self-hosts byte for byte." The numbered list reads
-as an older planning list nobody pruned once the JVM/CLR ports actually
-landed. The table above it — the one `bin/check-decisions` gates — is
-correct; the "native AOT" and other numbered items may be similarly worth
-re-checking against the table before trusting the list's ordering as current
-priority.
+**~~Another stale note, this one inside a single file rather than between
+two.~~ The list it complains about is gone.** It described a "What is actually
+next" numbered list whose item 5 read "The JVM, tier 2 (`other-hosts`) -- the
+route is decided and not built", contradicting the status table at the top of
+the same file, which already said the JVM and CLR had shipped. No such list
+survives the fold into `DECISIONS.md` (checked 2026-09-22 by grep, for the
+list and for its item-5 wording), and `other-hosts` now carries a status
+verified "by running each target, not by reading about it".
+
+The note's own diagnosis was right and is worth keeping: it was an older
+planning list nobody pruned once the ports landed. A priority list is a status
+claim that nothing gates, which is why it drifted furthest.
 
 ## 5. kin — the shared-logic code generator
 
@@ -230,14 +235,27 @@ shipping nowhere by design.
 | Deleting the old babashka-shells-out dependency path | decided, not started (deliberately left standing while the new path is young) | `system-namespaces-and-deps` step 10 |
 | `^:internal` / `^:private` visibility, two boundaries (namespace vs. workspace) | done, var-level; namespace-level mark decided but not started | the decision index (now folded into `DECISIONS.md`) item `0g` |
 
-**Note on the `workspace-capabilities`/`system-namespaces-and-deps` banner mismatch:** `workspace-capabilities`'s own top banner lists
-"virtual namespaces, pods, load-time binding and the host-facing half" as **not
-built**, in the same sentence as saying the resolver/grants/guards **are**
-built. But `system-namespaces-and-deps` — which depends on virtual namespaces existing — has its own
-"What is built" section listing virtual namespaces, `flint.sys.*`, and pods as
-shipped, with commits to match. Read `system-namespaces-and-deps`'s banner as the current truth on
-virtual namespaces and pods; `workspace-capabilities`'s banner is accurate only for load-time
-binding and the host-facing token half, which really are still open.
+**~~Note on the `workspace-capabilities`/`system-namespaces-and-deps` banner
+mismatch.~~ The mismatch is gone — the banner was corrected on 2026-09-12, and
+this note outlived it.** It used to say: `workspace-capabilities`'s top banner
+listed "virtual namespaces, pods, load-time binding and the host-facing half"
+as **not built**, in the same sentence as saying the resolver/grants/guards
+**are**, while `system-namespaces-and-deps` — which depends on virtual
+namespaces existing — listed virtual namespaces, `flint.sys.*` and pods as
+shipped. The advice was to read the second as the current truth.
+
+That banner now reads "partly built — and two items this line called 'not
+built' have shipped", naming virtual namespaces and pods as in, and leaving
+exactly the two things this note said were genuinely open: the load-time
+reference-guard binding (step 9) and the host-facing token half (step 10).
+Spot-checked 2026-09-22 rather than taken on trust — `:virtual` is read by
+`flint.analyzer`, and `:pod` is a coordinate kind in `lib/flint/deps.cljc`.
+
+Worth noticing as a shape rather than a one-off: the fix here was to correct
+the banner, and a note explaining which of two contradicting records to
+believe is a workaround that then needs its own maintenance. `bin/check-decisions`
+now asserts one status line per decision, which is the mechanical half of the
+same problem.
 
 ## 7. The CLI
 
