@@ -127,6 +127,15 @@ def main():
         sym, path, n = m.group(1), m.group(2), int(m.group(3))
         if '/' not in path:
             continue
+        # TWO CITATIONS IN A ROW are not a symbol and its line. `` `bin/flint:861`,
+        # `cli/src/sys.rs:840` `` matches the house form with the FIRST citation
+        # standing where the symbol goes, and `bin/flint` is then looked for
+        # inside sys.rs and not found -- a correct pair reported as drift. Found
+        # in `doc/goals/kin-port.md` while measuring whether this check was worth
+        # pointing at the goal docs (it is not -- one citation in the house form
+        # across all of them, and it was this artefact).
+        if re.search(r':\d+$', sym):
+            continue
         p = os.path.join(ROOT, path)
         if not os.path.isfile(p):
             errs.append(f"DECISIONS.md cites `{sym}` at {path}:{n}, and there is no such file")

@@ -1951,7 +1951,7 @@ almost nothing, and the two that block most were not on the list at all.
 
 **HOLES 9, 10 AND 11 ARE CLOSED**, and this table went on ranking them
 highest for four more shipped files. They were paid for by the work that
-needed them -- `and`/`or` is `kin/src/kin/lang.cljc:160`, and `alloc`, `Addr`,
+needed them -- `and`/`or` is `../kin/src/kin/lang.cljc:245`, and `alloc`, `Addr`,
 `NIL`, `is-fixnum` and the sibling call are all in `flint/impl/rt.cljc` -- and
 nothing updated the list that says what is blocked. A blocker list nobody
 retires entries from reads exactly like a blocker list, which is how `and`/`or`
@@ -5402,9 +5402,10 @@ converging `run_one` closed none of it. That is a useful negative: it takes
 `run_one` off the list and leaves the other thing the section named.
 
 **What is left, and it is still hand-written three times.** The slice arming
-itself: `SLICE = 4096` and `set_slice_end(steps + SLICE)` at
-`runtime/src/conc.rs:413` and `:1191`, against `Conc.java:225` and
-`beginSlice` at `:1884`, with the CLR's copy alongside. Whether the 46 steps
+itself: `SLICE = 4096` (`runtime/src/conc.rs:318`) and
+`set_slice_end(steps + SLICE)` at `:385` and `:1003`, against `Conc.java`'s
+`SLICE` at `:157`, `setSliceEnd` at `:205` and `beginSlice` at `:1501`, with
+the CLR's copy alongside. Whether the 46 steps
 live there or in what the interpreter does at the checkpoint is not settled
 here -- what IS settled is that it is not `run_one`, and that the answer is a
 convergence rather than a choice.
