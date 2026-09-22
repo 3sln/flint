@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""Every generated function is called by something.
+
+WHAT `check-kin` ASKS AND WHAT IT DOES NOT. Its check 3 is titled "is every
+generated module actually reached?" and what it verifies is that each module
+has a `pub mod` line in `runtime/src/kgen/rt.rs` -- which is worth verifying,
+because a missing one is not a compile error, it is a file that quietly never
+gets built. But a module can be declared, compiled, and called by nobody.
+
+THAT GAP COST FOUR FUNCTIONS IN ONE DAY (2026-09-22). `wire-peek` was
+generated into three runtimes and called from none, and its own drivers never
+mentioned it either -- three spellings of something nothing had executed.
+`b-to-flat` was exercised seventeen times by its drivers and called by no
+runtime, which is a function the runtimes do not have. And `tag-of` and
+`heap-payload` were generated and left unwired by the very commit that
+recorded the first two. Every one passed `check-kin` green.
+
+A NAME, NOT A MODULE, IS THE UNIT. All four sat in modules that were reached
+-- `wirecore`, `byteflat` and `valtag` all had other functions in use -- so
+nothing at module granularity could have seen them.
+
+ALL THREE RUNTIMES, OR THE ANSWER IS WRONG. A function used by native and not
+by the jvm is ordinary: the runtimes need different things. Asking one
+runtime reports four false positives out of six, which is what a jvm-only
+sweep of this actually produced before it was widened.
+
+INDEXED ONCE. The naive form -- every name against every file -- is 440
+patterns over 400 files and took more than five minutes, which is no use in a
+gate. Tokenising each file once into a counter and looking names up is
+seconds, and gives the same answer.
+"""
+import collections, glob, os, re, sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(ROOT)
+
+GEN = {
+    # `pub(crate) fn` TOO. Generated rust uses both, and matching only
+    # `pub fn` missed `unordered_step` -- which then read as unreached,
+    # because the jvm spelling was the only one the scan had found to group
+    # with. A pattern that misses a DEFINITION invents an absence.
+    "rust":   ("runtime/src/kgen/rt/*.rs",  r"pub(?:\(crate\))? fn (\w+)"),
+    "java":   ("runtimes/jvm/src/com/_3sln/flint/kgen/rt/*.java", r"public static [\w.<>\[\]]+ (\w+)\s*\("),
+    "csharp": ("runtimes/clr/src/_3sln/Flint/Kgen/Rt/*.cs",       r"public static [\w.<>\[\]]+ (\w+)\s*\("),
+}
+# Every place a call can appear, generated trees included: a generated
+# function called only by another generated function IS reached.
+CORPUS = ["runtime/src/**/*.rs", "runtimes/jvm/src/**/*.java", "runtimes/jvm/test/*.java",
+          "runtimes/clr/src/**/*.cs", "runtimes/clr/conform/*.cs"]
+
+IDENT = re.compile(r"[A-Za-z_]\w*")
+
+def main():
+    # name -> how many times it appears anywhere, and how many are definitions
+    seen = collections.Counter()
+    for pat in CORPUS:
+        for p in glob.glob(pat, recursive=True):
+            seen.update(IDENT.findall(open(p, errors="replace").read()))
+
+    defs = collections.Counter()
+    names = {}
+    for lang, (pat, rx) in GEN.items():
+        rx = re.compile(rx)
+        for p in glob.glob(pat):
+            mod = os.path.basename(p).rsplit(".", 1)[0]
+            for m in rx.finditer(open(p, errors="replace").read()):
+                defs[m.group(1)] += 1
+                names.setdefault(m.group(1), set()).add(f"{lang}:{mod}")
+
+    # ONE KIN FUNCTION, THREE SPELLINGS. `is_tagged`, `isTagged` and
+    # `IsTagged` are one `defn`, and a function native calls but the jvm does
+    # not is ORDINARY -- kin emits every source to every target, so each
+    # runtime carries some it has no use for. The question this gate asks is
+    # whether ANY runtime calls it; asking per-spelling reports 13 where the
+    # answer is 0, which is the same scope error as asking one runtime.
+    def key(n):
+        return re.sub(r"[^a-z0-9]", "", n.lower())
+
+    by_key = collections.defaultdict(lambda: {"defs": 0, "uses": 0, "where": set()})
+    for n, d in defs.items():
+        e = by_key[key(n)]
+        e["defs"] += d
+        e["uses"] += seen[n]
+        e["where"] |= names[n]
+
+    unreached = sorted(k for k, e in by_key.items() if e["uses"] <= e["defs"])
+    if unreached:
+        for k in unreached:
+            e = by_key[k]
+            print(f"  FAIL {k} is generated into {', '.join(sorted(e['where']))} "
+                  f"and called by nothing, on any runtime")
+        print(f"\ncheck-generated-reached: {len(unreached)} generated function(s) nothing calls")
+        return 1
+    print(f"check-generated-reached: {len(by_key)} generated functions, every one called "
+          f"from some runtime")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
