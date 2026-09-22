@@ -306,20 +306,6 @@ impl Rt {
         }
         return n - at;
     }
-    /// The byte at offset `i` from the cursor, without moving it.
-    /// 
-    /// `dflt` is what a read past the end answers, because `I32` is UNSIGNED
-    /// here -- there is no `-1` to return, and inventing one in a signed type
-    /// is how the three runtimes came to agree by luck rather than by rule
-    /// (see `kin/tableref.kin`). A caller that must tell the cases apart asks
-    /// `wire-left` first.
-    pub fn wire_peek(&mut self, rd: Value, i: u32, dflt: Value) -> Value {
-        if !self.is_reader(rd) {
-            return dflt;
-        }
-        let at: u32 = (self.slot(rd, crate::codec::RD_POS).as_fixnum() as u32) + i;
-        return self.b_at(self.slot(rd, crate::codec::RD_BYTES), at, dflt);
-    }
     /// One byte off the cursor, advancing it. `dflt` when there is none.
     /// 
     /// The tag read. Every value in the format starts with one.

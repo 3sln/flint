@@ -34,7 +34,8 @@ public static class Val {
 
     /// Logical shift, not arithmetic: a signed shift sign-extends and every tag
     /// on a boxed value comes back as -1.
-    public static long Tag(long v) => (long)((ulong)v >> 48);
+    /// GENERATED (`kin/valtag.kin`) as `TagOf`.
+    public static long Tag(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.TagOf(v);
 
     public static bool IsDouble(long v) => Tag(v) < TagMinBoxed;
     public static double AsDouble(long v) => System.BitConverter.Int64BitsToDouble(v);
@@ -67,7 +68,8 @@ public static class Val {
     public static long Heap(long addr) => global::_3sln.Flint.Kgen.Rt.Valtag.MakeHeap(addr);
     /// MASK, not merely a cast: a 48-bit address would otherwise come back
     /// carrying its tag.
-    public static long AsHeap(long v) => v & Payload;
+    /// GENERATED as `HeapPayload`.
+    public static long AsHeap(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.HeapPayload(v);
 
     /// Five, because the payload is 48 bits: 8 for the length and 40 for the
     /// bytes. That covers most keywords and short strings -- so a keyword

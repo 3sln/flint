@@ -42,18 +42,6 @@ public static class Byteflat {
             BAppend(rt, rt.Slot(v, global::Flint.Rt.Bytes.BB_KIDS + i), s);
         }
     }
-    /// `v` as one flat byte string, whatever tier it was.
-    /// 
-    /// The sink is opened and closed HERE, which is the shape every user of one
-    /// should have: whoever opens it closes it, and nothing else can be holding
-    /// an index into it by the time it goes.
-    public static long BToFlat(Rt rt, long v) {
-        int s = rt.SinkOpen();
-        BAppend(rt, v, s);
-        long @out = rt.SinkBytes(s);
-        rt.SinkClose(s);
-        return @out;
-    }
     /// Append bytes `[from, to)` of `v` to the sink `s`.
     /// 
     /// The range walk, and the reason it is not `b-append` over a slice: a slice

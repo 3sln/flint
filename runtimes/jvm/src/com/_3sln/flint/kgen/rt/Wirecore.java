@@ -305,20 +305,6 @@ public final class Wirecore {
         }
         return n - at;
     }
-    /// The byte at offset `i` from the cursor, without moving it.
-    /// 
-    /// `dflt` is what a read past the end answers, because `I32` is UNSIGNED
-    /// here -- there is no `-1` to return, and inventing one in a signed type
-    /// is how the three runtimes came to agree by luck rather than by rule
-    /// (see `kin/tableref.kin`). A caller that must tell the cases apart asks
-    /// `wire-left` first.
-    public static long wirePeek(Rt rt, long rd, int i, long dflt) {
-        if (!isReader(rt, rd)) {
-            return dflt;
-        }
-        int at = ((int) Val.asFixnum(rt.slot(rd, Wire.RD_POS))) + i;
-        return bAt(rt, rt.slot(rd, Wire.RD_BYTES), at, dflt);
-    }
     /// One byte off the cursor, advancing it. `dflt` when there is none.
     /// 
     /// The tag read. Every value in the format starts with one.

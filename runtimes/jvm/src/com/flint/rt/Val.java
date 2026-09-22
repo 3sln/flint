@@ -54,7 +54,10 @@ public final class Val {
 
     /// The top sixteen bits. `>>> 48` and not `>> 48`: an arithmetic shift on a
     /// boxed value sign-extends and every tag comes back as -1.
-    public static long tag(long v) { return v >>> 48; }
+    /// GENERATED (`kin/valtag.kin`) as `tagOf`.
+    public static long tag(long v) {
+        return com._3sln.flint.kgen.rt.Valtag.tagOf(v);
+    }
 
     public static boolean isDouble(long v) { return tag(v) < TAG_MIN_BOXED; }
 
@@ -105,7 +108,10 @@ public final class Val {
 
     /// MASK, do not merely cast: with a 48-bit address the tag would otherwise
     /// come back as part of the answer.
-    public static long asHeap(long v) { return v & PAYLOAD; }
+    /// GENERATED as `heapPayload`.
+    public static long asHeap(long v) {
+        return com._3sln.flint.kgen.rt.Valtag.heapPayload(v);
+    }
 
     /// A string of five bytes or fewer lives IN the value, not on the heap.
     ///

@@ -308,18 +308,17 @@
       (return 0))
     (return (- n at))))
 
-(doc "The byte at offset `i` from the cursor, without moving it."
-     ""
-     "`dflt` is what a read past the end answers, because `I32` is UNSIGNED"
-     "here -- there is no `-1` to return, and inventing one in a signed type"
-     "is how the three runtimes came to agree by luck rather than by rule"
-     "(see `kin/tableref.kin`). A caller that must tell the cases apart asks"
-     "`wire-left` first.")
-(defn ^:pub ^:method ^Value wire-peek [^:mut ^Rt rt ^Value rd ^I32 i ^Value dflt]
-  (if (not (is-reader rt rd))
-    (return dflt))
-  (let [^I32 at (+ (to-i32 (as-fixnum (slot rt rd RD_POS))) i)]
-    (return (b-at rt (slot rt rd RD_BYTES) at dflt))))
+
+;; `wire-peek` WAS HERE and is gone, 2026-09-22. A byte at an offset from the
+;; cursor without moving it -- generated into all three runtimes and called by
+;; none of them, inside the generated tree or out, on native, the jvm or the
+;; clr. Its own drivers never exercised it either, so its templates had never
+;; run in any language: three spellings of something nothing had executed.
+;;
+;; `bin/check-kin` passed it green every time, because what that check asks is
+;; whether a generated module has its `pub mod` line -- not whether anything
+;; calls it. A survey of the 442 generated functions found exactly two with no
+;; caller anywhere; this was one.
 
 (doc "One byte off the cursor, advancing it. `dflt` when there is none."
      ""

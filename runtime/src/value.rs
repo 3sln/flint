@@ -94,11 +94,14 @@ impl Value {
         self.0
     }
     #[inline(always)]
-    pub const fn tag(self) -> u64 {
-        self.0 >> 48
+    /// GENERATED (`kin/valtag.kin`) as `tag_of`. Not `const` any more, and
+    /// nor are `is_fixnum`/`is_heap` below, which call it -- nothing in the
+    /// crate needs any of the three in a const context.
+    pub fn tag(self) -> u64 {
+        crate::kgen::rt::valtag::tag_of(self) as u64
     }
     #[inline(always)]
-    pub const fn is_double(self) -> bool {
+    pub fn is_double(self) -> bool {
         self.tag() < TAG_MIN_BOXED
     }
 
@@ -118,7 +121,7 @@ impl Value {
     }
 
     #[inline(always)]
-    pub const fn is_fixnum(self) -> bool {
+    pub fn is_fixnum(self) -> bool {
         self.tag() == TAG_FIXNUM
     }
     /// GENERATED (`kin/valtag.kin`) as `make_fixnum`. NOT `const` any more:
@@ -142,7 +145,7 @@ impl Value {
     }
 
     #[inline(always)]
-    pub const fn is_heap(self) -> bool {
+    pub fn is_heap(self) -> bool {
         self.tag() == TAG_HEAP
     }
     #[inline(always)]
@@ -157,13 +160,12 @@ impl Value {
         crate::kgen::rt::valtag::make_heap(off)
     }
     #[inline(always)]
-    pub const fn as_heap(self) -> crate::mem::Addr {
-        // MASK to the payload, do not merely cast. `self.0 as u32` was right
-        // while an address was 32 bits -- the cast did the masking. With a
-        // wider address the tag would come back as part of the value, so the
-        // 48 payload bits are taken explicitly and the cast then narrows to
-        // whatever this target's `Addr` is.
-        (self.0 & 0x0000_FFFF_FFFF_FFFF) as crate::mem::Addr
+    /// GENERATED as `heap_payload`. MASK to the payload, do not merely cast:
+    /// `self.0 as u32` was right while an address was 32 bits, the cast doing
+    /// the masking; with a wider address the tag comes back as part of the
+    /// value.
+    pub fn as_heap(self) -> crate::mem::Addr {
+        crate::kgen::rt::valtag::heap_payload(self)
     }
 
     #[inline(always)]
@@ -198,11 +200,11 @@ impl Value {
 
     /// True for the inline (immediate) string representation.
     #[inline(always)]
-    pub const fn is_inline_str(self) -> bool {
+    pub fn is_inline_str(self) -> bool {
         self.tag() == TAG_STR
     }
     #[inline(always)]
-    pub const fn is_inline_kw(self) -> bool {
+    pub fn is_inline_kw(self) -> bool {
         self.tag() == TAG_KW
     }
 

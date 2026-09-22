@@ -48,18 +48,6 @@ impl Rt {
             self.b_append(self.slot(v, crate::bytes::BB_KIDS + i), s);
         }
     }
-    /// `v` as one flat byte string, whatever tier it was.
-    /// 
-    /// The sink is opened and closed HERE, which is the shape every user of one
-    /// should have: whoever opens it closes it, and nothing else can be holding
-    /// an index into it by the time it goes.
-    pub fn b_to_flat(&mut self, v: Value) -> Value {
-        let s: u32 = self.sink_open();
-        self.b_append(v, s);
-        let out: Value = self.sink_bytes(s);
-        self.sink_close(s);
-        return out;
-    }
     /// Append bytes `[from, to)` of `v` to the sink `s`.
     /// 
     /// The range walk, and the reason it is not `b-append` over a slice: a slice

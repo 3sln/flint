@@ -41,6 +41,17 @@ impl Rt {
             _ => 0,
         }
     }
+    // WHAT `b-to-flat` USED TO BE. It was a `^:pub` kin function whose only
+    // caller was this probe -- generated into three runtimes and reached by
+    // none of them -- so it was deleted and the three lines it stood for live
+    // here, where the one caller is.
+    fn flat(&mut self, v: Value) -> Value {
+        let s = self.sink_open();
+        self.b_append(v, s);
+        let out = self.sink_bytes(s);
+        self.sink_close(s);
+        out
+    }
     fn sink_open(&mut self) -> u32 { self.sinks.push(Vec::new()); (self.sinks.len() - 1) as u32 }
     fn sink_close(&mut self, s: u32) { self.sinks.truncate(s as usize); }
     fn sink_len(&self, s: u32) -> u32 { self.sinks[s as usize].len() as u32 }
@@ -99,17 +110,17 @@ fn main() {
     let inner = rt.node(&[l2, l3]);
     let tree = rt.node(&[l1, inner]);
     // A LEAF, a shallow node, and a NESTED one -- the walk has to recurse.
-    let f1 = rt.b_to_flat(l1); let f2 = rt.b_to_flat(inner); let f3 = rt.b_to_flat(tree);
+    let f1 = rt.flat(l1); let f2 = rt.flat(inner); let f3 = rt.flat(tree);
     o.push_str(&format!("leaf={} inner={} tree={} ", show(&rt, f1), show(&rt, f2), show(&rt, f3)));
     // NOT A BYTE STRING appends nothing.
     let other = Value::heap(rt.alloc(TY_VEC, 2));
-    let fo = rt.b_to_flat(other);
+    let fo = rt.flat(other);
     o.push_str(&format!("other={} ", rt.lens[fo.0 as usize]));
     // THE CACHED FLATTENING is used when present: point BB_FLAT at a leaf whose
     // bytes DIFFER, and the answer must come from it rather than the children.
     let lie = rt.leaf(&[9, 9, 9, 9, 9, 9]);
     rt.set_slot(tree.as_heap(), bytes::BB_FLAT, lie);
-    let f4 = rt.b_to_flat(tree);
+    let f4 = rt.flat(tree);
     o.push_str(&format!("cached={} ", show(&rt, f4)));
     // SINKS NEST, and closing one releases those opened after it.
     let a = rt.sink_open(); let b = rt.sink_open();
@@ -148,6 +159,15 @@ fn main() {
         long r(int i) { return roots.get(i); }
         void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
         void set(long n, int i, long v) { h[(int) n + i] = v; }
+        // WHAT `b-to-flat` USED TO BE -- see the rust probe. Its only caller
+        // was this fixture, on all three targets.
+        long flat(long v) {
+            int s = sinkOpen();
+            bAppend(this, v, s);
+            long out = sinkBytes(s);
+            sinkClose(s);
+            return out;
+        }
         int sinkOpen() { sinks.add(new java.io.ByteArrayOutputStream()); return sinks.size() - 1; }
         void sinkClose(int s) { while (sinks.size() > s) sinks.remove(sinks.size() - 1); }
         int sinkLen(int s) { return sinks.get(s).size(); }
@@ -209,14 +229,14 @@ fn main() {
         long l3 = leaf(rt, new int[]{6});
         long inner = node(rt, new long[]{l2, l3});
         long tree = node(rt, new long[]{l1, inner});
-        o.append("leaf=").append(show(rt, bToFlat(rt, l1)))
-         .append(" inner=").append(show(rt, bToFlat(rt, inner)))
-         .append(" tree=").append(show(rt, bToFlat(rt, tree))).append(' ');
+        o.append("leaf=").append(show(rt, rt.flat(l1)))
+         .append(" inner=").append(show(rt, rt.flat(inner)))
+         .append(" tree=").append(show(rt, rt.flat(tree))).append(' ');
         long other = Val.heap(rt.alloc(TY_VEC, 2));
-        o.append("other=").append(olen(rt, bToFlat(rt, other))).append(' ');
+        o.append("other=").append(olen(rt, rt.flat(other))).append(' ');
         long lie = leaf(rt, new int[]{9,9,9,9,9,9});
         rt.setSlot(tree, Bytes.BB_FLAT, lie);
-        o.append("cached=").append(show(rt, bToFlat(rt, tree))).append(' ');
+        o.append("cached=").append(show(rt, rt.flat(tree))).append(' ');
         int a = rt.sinkOpen(), b = rt.sinkOpen();
         bAppend(rt, l1, a); bAppend(rt, l2, b);
         o.append("nested=").append(rt.sinkLen(a)).append(',').append(rt.sinkLen(b)).append(' ');
@@ -262,6 +282,13 @@ fn main() {
         internal long R(int i) { return roots[i]; }
         internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
         internal void Set(long n, int i, long v) { h[(int) n + i] = v; }
+        internal long Flat(long v) {
+            int s = SinkOpen();
+            BAppend(this, v, s);
+            long o = SinkBytes(s);
+            SinkClose(s);
+            return o;
+        }
         internal int SinkOpen() { sinks.Add(new System.IO.MemoryStream()); return sinks.Count - 1; }
         internal void SinkClose(int s) { while (sinks.Count > s) sinks.RemoveAt(sinks.Count - 1); }
         internal int SinkLen(int s) { return (int) sinks[s].Length; }
@@ -328,14 +355,14 @@ namespace Flint.Rt {
         long l3 = Leaf(rt, new int[]{6});
         long inner = Node(rt, new long[]{l2, l3});
         long tree = Node(rt, new long[]{l1, inner});
-        o.Append("leaf=").Append(Show(rt, BToFlat(rt, l1)))
-         .Append(" inner=").Append(Show(rt, BToFlat(rt, inner)))
-         .Append(" tree=").Append(Show(rt, BToFlat(rt, tree))).Append(' ');
+        o.Append("leaf=").Append(Show(rt, rt.Flat(l1)))
+         .Append(" inner=").Append(Show(rt, rt.Flat(inner)))
+         .Append(" tree=").Append(Show(rt, rt.Flat(tree))).Append(' ');
         long other = Val.Heap(rt.Alloc(Obj.TyVec, 2));
-        o.Append("other=").Append(Olen(rt, BToFlat(rt, other))).Append(' ');
+        o.Append("other=").Append(Olen(rt, rt.Flat(other))).Append(' ');
         long lie = Leaf(rt, new int[]{9,9,9,9,9,9});
         rt.SetSlot(tree, global::Flint.Rt.Bytes.BB_FLAT, lie);
-        o.Append("cached=").Append(Show(rt, BToFlat(rt, tree))).Append(' ');
+        o.Append("cached=").Append(Show(rt, rt.Flat(tree))).Append(' ');
         int a = rt.SinkOpen(), b = rt.SinkOpen();
         BAppend(rt, l1, a); BAppend(rt, l2, b);
         o.Append("nested=").Append(rt.SinkLen(a)).Append(',').Append(rt.SinkLen(b)).Append(' ');

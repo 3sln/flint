@@ -44,17 +44,16 @@
       (for [^I32 i 0 n]
         (b-append rt (slot rt v (+ BB_KIDS i)) s)))))
 
-(doc "`v` as one flat byte string, whatever tier it was."
-     ""
-     "The sink is opened and closed HERE, which is the shape every user of one"
-     "should have: whoever opens it closes it, and nothing else can be holding"
-     "an index into it by the time it goes.")
-(defn ^:pub ^:method ^Value b-to-flat [^:mut ^Rt rt ^Value v]
-  (let [^Sink s (sink-open rt)]
-    (b-append rt v s)
-    (let [^Value out (sink-bytes rt s)]
-      (sink-close rt s)
-      (return out))))
+;; `b-to-flat` WAS HERE and is gone, 2026-09-22. It opened a sink, appended a
+;; byte value into it, took the bytes and closed it -- three lines, `^:pub`,
+;; generated into all three runtimes, and called by nothing anywhere except
+;; its own probe. Unlike `wire-peek`, which went the same day, its templates
+;; WERE exercised: the drivers used it seventeen times. Being tested is not
+;; the same as being reached, and a function whose only caller is the fixture
+;; that tests it is a function the runtimes do not have.
+;;
+;; The three lines live in the probe now, where the one caller is, so the
+;; fixture's answers are unchanged.
 
 (doc "Append bytes `[from, to)` of `v` to the sink `s`."
      ""
