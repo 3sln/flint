@@ -132,13 +132,28 @@ byte.
 | wasm/native reference runtime | done | README, throughout |
 | Native (LLVM) target: `flint_rt::native::Program`, no wasm engine anywhere, single binary CLI | done | [`other-hosts`](DECISIONS.md#other-hosts) |
 | **AOT for the native target** | decided, not started | the decision index (now folded into `DECISIONS.md`) priority item 4 — "the native interpreter gives up most of the benefit without it" |
-| JVM runtime (`runtimes/jvm`, 132 files): all 46 opcodes, all 155 builtins, self-hosts byte-for-byte, AOT to real bytecode (12×), parallel executors on one heap | in progress | [`jvm-runtime`](DECISIONS.md#jvm-runtime) — collector is ported verbatim from Rust (`gc.rs`), not "leaning on the host's" as first planned; **nine defects found late by ranking against Rust** (gas/alloc parity gaps in `Maps.eq`/`Pike`/`Seqs`, perf drift, two dead branches, a false claim in a snapshot header) — the decision index (now folded into `DECISIONS.md`) item `0f`, not yet all fixed |
-| CLR runtime (`runtimes/clr`, 119 files): same shape as JVM, passed conformance on first run | in progress | [`clr-runtime`](DECISIONS.md#clr-runtime) — same `0f` defect list applies (both ports share the bugs; a runtime-vs-runtime diff can't see a bug both sides have) |
+| JVM runtime (`runtimes/jvm`, **158** files, 132 when this was written): all **39** opcodes and all **223** builtins (46 and 155 then -- the opcode count FELL because seven dead ones were deleted rather than ported, and `bin/check` asserts the jvm carries all 223), self-hosts byte-for-byte, AOT to real bytecode (12×), parallel executors on one heap | in progress | [`jvm-runtime`](DECISIONS.md#jvm-runtime) — collector is ported verbatim from Rust (`gc.rs`), not "leaning on the host's" as first planned; **nine defects found late by ranking against Rust** (gas/alloc parity gaps in `Maps.eq`/`Pike`/`Seqs`, perf drift, two dead branches, a false claim in a snapshot header) — the decision index (now folded into `DECISIONS.md`) item `0f`, not yet all fixed |
+| CLR runtime (`runtimes/clr`, **145** files, 119 then): same shape as JVM, carries all 223 builtins too, passed conformance on first run | in progress | [`clr-runtime`](DECISIONS.md#clr-runtime) — same `0f` defect list applies (both ports share the bugs; a runtime-vs-runtime diff can't see a bug both sides have) |
 | Cross-runtime benchmarks across 8 wasm engines (node, deno, bun, workerd, wasmtime, SpiderMonkey, wasm3, Chicory) | done | [`cross-runtime-benchmarks`](DECISIONS.md#cross-runtime-benchmarks) — decided the JVM tier question (Chicory at 39–500× V8 rules out an embedded-wasm SDK for the JVM) |
 | construe integration bar: real parser candidate runs and agrees, flint compiles **inside** a deployed Worker, gas comparable across candidates, library surface, memory bounded | in progress / live milestone | [`construe-integration-bar`](DECISIONS.md#construe-integration-bar) — both compile-in-Worker halves demonstrated; regex/string bottleneck resolved (56× → 11.6× babashka via ropes + Pike VM) |
 | No compile-time linking: one prebuilt runtime per target, compiler embeds it as data, `flint compile wasm`/`wasm-aot` splices | in progress | [`no-runtime-linking`](DECISIONS.md#no-runtime-linking) — splice + tree-shaker (57–79% of `wasm-ld`'s result, no linker) done; byte strings done (the blocker); JVM/CLR as further embedded targets not started |
 | jank dialect-suite comparison (language conformance against a different Clojure-on-LLVM implementation) | done (measurement) | [`doc/jank.md`](doc/jank.md) — 64–65% pass; the native/port `pass-*` sets are **test-for-test identical**, which is the strongest evidence the ports are faithful mirrors |
 | kin: shared runtime logic written once, generated into Rust/Java/C# | in progress, heavily — see §5 | [`kin`](DECISIONS.md#kin) |
+
+**Every number in the two port rows was re-measured on 2026-09-22, and every
+one had moved.** Files grow, builtins grow, and the opcode count FELL -- three
+different directions, which is why re-measuring beats adjusting. Four commands:
+
+    git ls-files 'runtimes/jvm/**' | wc -l
+    git ls-files 'runtimes/clr/**' | wc -l
+    ./bin/check | grep '^builtins:'
+    ./bin/check-builtin-coverage | tail -3
+
+Opcodes are counted from `runtime/src/vm.rs`'s own `pub mod op`: it declares
+40, of which 39 are dispatched. The fortieth is `SUPER_BASE`, a boundary
+marker for superinstructions rather than an opcode, so the number to quote is
+39 -- and the coverage check's header says 39 independently.
+
 
 **~~Another stale note, this one inside a single file rather than between
 two.~~ The list it complains about is gone.** It described a "What is actually
