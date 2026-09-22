@@ -1,8 +1,25 @@
 # Goal — port the runtimes' shared logic to kin
 
-**Status:** phase 1 begun — the codec's primitive writers are generated and
-verified byte-identical on all three targets.
+**Status:** 112 kin sources, verified green at `14bd8f30` — *"112 kin sources
+agree, all 112 against a written-down expected answer, every generated module
+matches, and every one is reached"* (`bin/check-kin`). 111 of them generate a
+module into each of the three non-wasm runtimes, Rust, Java and C# carrying
+exactly 111 apiece; the 112th, `unsigned.kin`, has no `.targets` and ships
+nowhere by design, existing only to pin what a form MEANS in three languages.
+`Conc` is finished, and the remaining three-way generatable pool measures 86
+lines with nothing in it above eight.
 **Design:** `DECISIONS.md#kin`. **Tool:** `kin/`.
+
+*This line used to read "phase 1 begun — the codec's primitive writers are
+generated and verified byte-identical on all three targets", and `ROADMAP.md`
+flagged it as understating its own body, declining to fix it as out of scope
+for that pass. It was worse than an understatement: the codec writers are the
+one piece of this work that was REFUSED. Generated, verified byte-identical,
+then measured at three times the instructions of the hand-written version with
+two integer-overflow holes it did not have, and shipped nowhere — recorded
+below as the case where "the generator worked" and "ship it" turned out to be
+different questions. The file's headline achievement was the thing thrown
+away.*
 
 ## The objective
 

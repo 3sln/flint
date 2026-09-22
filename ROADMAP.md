@@ -152,7 +152,7 @@ priority.
 
 `kin`'s own banner says "NOT BUILT — a spike... nothing in the tree uses it
 yet." **That is now the most out-of-date banner in the whole decision set.**
-`kin/` is a real, separate tool (89 `.kin` sources) with its own driver
+`kin/` is a real, separate tool (**112** `.kin` sources as of 2026-09-22; 89 when this was written) with its own driver
 scripts, and `git log` shows dozens of commits shipping real generated logic
 into all three non-wasm-only runtimes: murmur3, `Eq.category`, CHAMP node
 accessors, `Seqs.rangeEmpty`, the whole Maps/Vec/Table/Bytes/Str/Seqs/Interns
@@ -194,13 +194,20 @@ three, and sharing structure drops to 1.15µs. All are listed with fix commits
 in the decision index (now folded into `DECISIONS.md`) items `0h`–`0v`, `doc/goals/README.md`, and
 `doc/goals/data-structures.md`.
 
-**One more stale banner, in the same family as `kin`'s.** `doc/goals/kin-port.md`
-carries its own status line at the top of the file — "phase 1 begun — the
-codec's primitive writers are generated and verified byte-identical" — which
-undersells its own body: the same file's "Where things stand" section, and the
-git log, both show Hash, `Eq.category`, `Num`, the whole transient family, Vec,
-Table, Str's rope half, Bytes, Interns and Seqs already shipped. Flagged here,
-not fixed — it's a live working log, out of scope for this pass to edit.
+**~~One more stale banner, in the same family as `kin`'s.~~ Fixed 2026-09-22.**
+`doc/goals/kin-port.md` carried its own status line at the top of the file —
+"phase 1 begun — the codec's primitive writers are generated and verified
+byte-identical" — which undersold its own body: the same file's "Where things
+stand" section, and the git log, both show Hash, `Eq.category`, `Num`, the
+whole transient family, Vec, Table, Str's rope half, Bytes, Interns and Seqs
+already shipped.
+
+It was worse than an understatement, which is why it was worth going back for.
+The codec's primitive writers are the one piece of that work REFUSED — the row
+in the table above says so — so the file's headline achievement named the thing
+thrown away. It now states what `bin/check-kin` answers: 112 sources green,
+111 generating a module into each of the three runtimes, and `unsigned.kin`
+shipping nowhere by design.
 
 ## 6. Capabilities & sandboxing
 
