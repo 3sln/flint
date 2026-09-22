@@ -1134,7 +1134,7 @@ returned a **5 276 704-byte** memcpy image, which `host/snapshot.mjs` parsed
 and validated in one pass (**2 757 objects walked, 0 problems**, gas counter
 carried); `flint_snapshot_restore` returned 1; `flint_snapshot_export`
 returned a **41 430-byte** live set with magic `XSLF`
-(`snap::MAGIC_LIVE`, `runtime/src/snap.rs:563`), and
+(`snap::MAGIC_LIVE`, `runtime/src/snap.rs:578`), and
 `flint_snapshot_import` accepted it **into a different instance** — which is
 the "two formats, two jobs" split recorded below, demonstrated rather than
 asserted. The opt-in half was probed adversarially, since a snapshot export
@@ -2700,9 +2700,9 @@ metadata map at all.
 checked: the token really is an index with a generation — `new_waiter` /
 `waiter_at` / `free_waiter` (`conc.rs:1126`–`1205`) pack the index in the low
 16 bits, bump the generation on free, and reject a mismatch — and there is one
-queue, `SC_EVENTS`, written only by `push_event` (`conc.rs:1893`) and read only
+queue, `SC_EVENTS`, written only by `push_event` (`conc.rs:1486`) and read only
 by `drain_events` (`conc.rs:2969`), carrying all six event kinds. Two
-lifetimes: `reap_ports` (`conc.rs:3045`) treats a flint end the collector lost
+lifetimes: `reap_ports` (`conc.rs:2297`) treats a flint end the collector lost
 as a `close`, pushing `EV_CLOSED` and `EV_RELEASE`, while the host end is held
 by a holder count. Exercised end to end: `target/release/flint run :with [env]`
 (the shipped binary, not `bin/flint`) on a program
@@ -2844,7 +2844,7 @@ the code, claim by claim:
 | what it decided | where it lives |
 | --- | --- |
 | a single wire codec for every value crossing the boundary | `runtime/src/codec.rs`, 1 315 lines |
-| the host calls any function BY NAME | `Sandbox::call(name, args)`, `sdks/rust/src/sandbox.rs:308` |
+| the host calls any function BY NAME | `Sandbox::call(name, args)`, `sdks/rust/src/sandbox.rs:325` |
 | arguments are DATA, not strings | that same signature takes `&[Value]` |
 | a port can be sent through a port | `K_PORT` in the codec, carrying identity inline |
 
@@ -2989,7 +2989,7 @@ see "A banner that lied," below, which the project's own closing
 documentation held up as its worked example of why a banner must be checked
 against the code rather than trusted. How this was checked, taking the two
 exceptions rather than the headline: the weak-table fixup is indeed still the
-simpler sweep — `reap_ports` (`runtime/src/conc.rs:3045`) walks `SC_BRIDGES`
+simpler sweep — `reap_ports` (`runtime/src/conc.rs:2297`) walks `SC_BRIDGES`
 after a collection and pushes `EV_CLOSED`/`EV_RELEASE` for any id whose
 `port_by_id` lookup now misses, with no fixup-on-forward anywhere; and codec
 back-references are still not built — `runtime/src/codec.rs`'s own header says
@@ -3160,7 +3160,7 @@ the six verbs exists — no `reserve`/`grow`/`commit`/`abort` contract, no
 word "bridge" IS everywhere in the runtime, but it names the thing
 `ports-are-the-hosts` shipped — a port whose far end is the host — not this.
 The premise this document rests on is also still true: `push_event`
-(`runtime/src/conc.rs:1893`) is still a read-modify-write that `vec_conj`s onto
+(`runtime/src/conc.rs:1486`) is still a read-modify-write that `vec_conj`s onto
 the `SC_EVENTS` persistent vector in the sending sandbox's own heap, with
 allocations in the middle, so a message still cannot outlive its sandbox.
 (Note for whoever picks this up: the ring in `port_enqueue`, `conc.rs:1055`,
@@ -3271,7 +3271,7 @@ name are now CLOSED.** The SDK shape exists in Rust — `Driver`, `Inline`,
 of the single-threaded `Rt` struct and two executors genuinely share one heap
 across real collections. What this line used to say was still unsafe is no
 longer: the intern tables take a lock per table held across the probe
-(`Rt::lock_intern`, `runtime/src/rt.rs:549`, used by `runtime/src/strs.rs`),
+(`Rt::lock_intern`, `runtime/src/rt.rs:596`, used by `runtime/src/strs.rs`),
 the remembered set is per-executor and every parked executor's list is drained
 by whoever stages the collection (`Rt::alloc_shared`, `runtime/src/rt.rs`), and
 `globals` is an array of atomics (`GlobalSlot`, `runtime/src/gc.rs:260`). The
@@ -3704,7 +3704,7 @@ graph, and version-conflict resolution.
 
 **Status: shipped, and two clauses of the old status line were wrong. Verified 2026-09-12 at 639430e.**
 `(opaque)` / `(opaque "label")` and `TY_OPAQUE` are real — `kin/opaque.kin`,
-`runtime/src/obj.rs:78`, `flint/opaque` in `dist/builtins.json` — and identities
+`runtime/src/obj.rs:92`, `flint/opaque` in `dist/builtins.json` — and identities
 are **preserved** across a snapshot rather than erased, reversing this
 document's own original answer (`runtime/src/snap.rs:269-291`, whose
 `count_host_opaques` counts and leaves alone). This decision is heavily cited
@@ -3729,7 +3729,7 @@ send. (2) **"reaching the entry function as its second argument" describes a
 `flint_main` that no longer exists** (`runtime/src/abi.rs:157-162`,
 `src/flint/bundle.cljc:147-151`; removed by `structured-ports` step 5). A host
 names a function through `flint_call`, and a host-minted opaque travels as an
-ordinary encoded argument (`K_SENTINEL`, `runtime/src/codec.rs:232`) or over a
+ordinary encoded argument (`K_SENTINEL`, `runtime/src/codec.rs:184`) or over a
 port. The `{:args :capabilities}` entry map is still unstarted.
 
 ### What was decided
@@ -4010,18 +4010,40 @@ Requiring `flint.sys.net`, `flint.sys.proc` or `flint.sys.clock` answers
 `git`, `curl` and `unzip` at lines 648-714, so the babashka path is still there.
 
 *The delegation correction, which is a capability claim and therefore was
-probed rather than read.* `system-namespaces-and-deps`' own three delegation
-rules are **inert in the shipped binary**. `lending-errors` in
-`lib/flint/deps/resolve.cljc:383` implements rules 1 and 2 and **has no caller
-anywhere in the tree**; `flint deps add` (`cli/src/depscmd.rs`) never asks for
-or writes a grant, so rule 3 is absent too. Running it: a project holding
-nothing and writing `:flint/capabilities-grant [:host]` on a dependency entry
-— the exact "mint authority from nothing" case rule 1 exists to refuse — is not
-refused. `flint deps tree` answers `left-pad 1.3.0` followed by `note: left-pad
--- :flint/capabilities-grant is not a key npm understands, and is ignored`, and
-the same for a `:local/root` entry. The key is not in any kind's known-key set
-(`lib/flint/deps.cljc` `coord-notes`), so it neither grants nor refuses: it
-does nothing at all, silently, in the direction that reads like success.
+probed rather than read.* **Rule 1 was inert and is now live; rules 2 and 3
+still are not.** As first written this paragraph said all three of
+`system-namespaces-and-deps`' delegation rules were inert in the shipped
+binary, and that `lending-errors` had no caller anywhere in the tree. That was
+true when it was written and `25c50dc6` fixed the first of the three; the
+paragraph was not updated with it, so it went on citing a file the function had
+by then left. What holds today, re-probed:
+
+* **Rule 1 — you cannot lend what you do not hold — is enforced.**
+  `lending-errors` now lives in `lib/flint/deps.cljc:707` (it moved out of
+  `flint.deps.resolve`, which `flint.cli` can never require: that namespace
+  pulls in `flint.deps.npm` and `flint.deps.git`, which are VIRTUAL and served
+  by the CLI, so the rule was structurally unreachable from the only place a
+  refusal can happen). `lib/flint/cli.cljc:225` calls it before anything is
+  fetched and refuses `build`, `task`, `paths` and `fetch`. `bb test/cli.clj`
+  passes today, including the refusal and both controls — a project that HOLDS
+  the capability may lend it, and a project with no grants is untouched.
+* **Rule 2 — a dependency declaring a guard must be granted it — is written but
+  cannot fire.** `lending-errors` implements it, but only in its 3-arity, from
+  a `guards` map of each dependency's own demands. The one caller uses the
+  2-arity, so `guards` is always `{}` and the rule contributes nothing. It
+  needs the fetch plan to supply each fetched dependency's guards, which it
+  does not yet.
+* **Rule 3 — `flint deps add` writing the grant it found — is still absent.**
+  `cli/src/depscmd.rs` neither asks for nor writes a grant.
+
+The original probe, kept because it is what the refusal now prevents: a project
+holding nothing and writing `:flint/capabilities-grant [:host]` on a dependency
+entry — the exact "mint authority from nothing" case — used to be answered by
+`flint deps tree` with `left-pad 1.3.0` followed by `note: left-pad --
+:flint/capabilities-grant is not a key npm understands, and is ignored`, the
+same for a `:local/root` entry. The key was in no kind's known-key set
+(`lib/flint/deps.cljc` `coord-notes`), so it neither granted nor refused: it
+did nothing at all, silently, in the direction that reads like success.
 
 ### What was decided
 
@@ -7738,7 +7760,7 @@ thread pool, or a single thread.
 **A sandbox is runnable exactly when a thread parked on a bridge end has a
 value waiting** — not when a bridge is written. A write nobody is parked on
 does nothing; a thread parked on an empty bridge does nothing. The predicate is
-a sibling of `needs_host` (`runtime/src/conc.rs:1599`): the same walk over
+a sibling of `needs_host` (`runtime/src/conc.rs:1300`): the same walk over
 `SC_THREADS` and `TH_PARK_ON`, asking whether the port has a value rather than
 merely whether it is a bridge.
 
@@ -7866,7 +7888,7 @@ is probably portable too — untested, and not this change.
 > claim in the first no longer holds. There are 97 kin sources and three of
 > them are ports and scheduling outright -- `flint.rt.sched`,
 > `flint.rt.portring`, `flint.rt.reapports`. `wake_on`, `wake_waiter`, `drive`
-> and `reap_ports` are generated; `runtime/src/conc.rs:1217` says so where they
+> and `reap_ports` are generated; `runtime/src/conc.rs:1028` says so where they
 > are called. `Conc` is no longer hand-written three times in the parts that
 > matter most for drift.
 >
@@ -7899,7 +7921,7 @@ own, `:vars`, and not part of `:host`.
 
 ### What it is
 
-`Rt::var_named` exists (`runtime/src/vm.rs:1973`) and is not a builtin, so flint
+`Rt::var_named` exists (`runtime/src/vm.rs:2087`) and is not a builtin, so flint
 code cannot turn a string into a var's value. The system loop needs to:
 `{:op :call :fn "ns/f"}` names a function as text, and something has to resolve
 it (`DECISIONS.md#bridges-are-the-only-door`).

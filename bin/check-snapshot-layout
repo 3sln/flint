@@ -34,6 +34,11 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OBJ = ROOT / "runtime" / "src" / "obj.rs"
 MJS = ROOT / "host" / "snapshot.mjs"
+# `layout_of` LEFT obj.rs. It is generated from `kin/objsize.kin` now, and what
+# stands at its old address is a one-line delegate to here. The check went on
+# parsing obj.rs, found no match arm, and died saying its own parse was stale
+# -- which was true, and said nothing about the reason. Read it where it lives.
+LAY = ROOT / "runtime" / "src" / "kgen" / "rt" / "objsize.rs"
 
 # A check that cannot find what it checks must FAIL, not pass quietly: silence
 # from a broken gate is indistinguishable from a clean one.
@@ -42,11 +47,12 @@ def die(msg):
     sys.exit(1)
 
 
-for p in (OBJ, MJS):
+for p in (OBJ, MJS, LAY):
     if not p.exists():
         die(f"{p.relative_to(ROOT)} is not there; this check cannot run")
 
 obj_src = OBJ.read_text()
+lay_src = LAY.read_text()
 mjs_src = MJS.read_text()
 
 # --- the runtime's side ----------------------------------------------------
@@ -62,13 +68,24 @@ for m in re.finditer(r"^pub const TY_(\w+): u8 = (\d+);", obj_src, re.M):
 if not rust_types:
     die("found no `pub const TY_* : u8` in obj.rs; the parse is stale")
 
-# `TY_BIGINT | TY_RAW | TY_BYTES | TY_FREE | TY_FWD => Layout::Raw,`
-raw_arm = re.search(r"^\s*((?:TY_\w+\s*\|\s*)*TY_\w+)\s*=>\s*Layout::Raw,",
-                    obj_src, re.M)
+# The generated shape is an `if` chain, not a match arm -- kin emits a guarded
+# `return` per branch:
+#
+#     if (ty == TY_BIGINT) || ((ty == TY_RAW) || (... || (ty == TY_FWD))) {
+#         return crate::obj::Layout::Raw;
+#     }
+#
+# So take the condition of whichever `if` returns `Layout::Raw` and read every
+# `TY_*` out of it, which is insensitive to how the `||`s are parenthesised.
+raw_arm = re.search(r"if (.+?) \{\s*\n\s*return crate::obj::Layout::Raw;",
+                    lay_src)
 if not raw_arm:
-    die("found no `=> Layout::Raw` arm in obj.rs's `layout_of`; the parse is stale")
+    die(f"found no branch returning `Layout::Raw` in {LAY.relative_to(ROOT)}; "
+        f"the parse is stale")
 
 rust_raw_names = set(re.findall(r"TY_(\w+)", raw_arm.group(1)))
+if not rust_raw_names:
+    die("the `Layout::Raw` branch names no `TY_*` at all; the parse is stale")
 by_name = {v: k for k, v in rust_types.items()}
 missing_const = rust_raw_names - set(by_name)
 if missing_const:
@@ -99,12 +116,12 @@ problems = []
 # THE ONE THAT FABRICATES BUGS: a raw type walked as values derails the walk.
 for n in sorted(rust_raw - js_raw):
     problems.append(
-        f"TY_{rust_types[n]} ({n}) is Layout::Raw in obj.rs but not in "
+        f"TY_{rust_types[n]} ({n}) is Layout::Raw in kgen/rt/objsize.rs but not in "
         f"LAYOUT_RAW -- snapshot.mjs will size it HDR+len*8 and derail the walk")
 for n in sorted(js_raw - rust_raw):
     nm = rust_types.get(n, "?")
     problems.append(
-        f"TY_{nm} ({n}) is in LAYOUT_RAW but is not Layout::Raw in obj.rs -- "
+        f"TY_{nm} ({n}) is in LAYOUT_RAW but is not Layout::Raw in kgen/rt/objsize.rs -- "
         f"snapshot.mjs will size it HDR+len and derail the walk")
 
 # Cosmetic by comparison, but a type nobody named is a type nobody looked at.
@@ -120,7 +137,7 @@ for n in sorted(set(rust_types) & set(js_names)):
                         f"'{js_names[n]}' in snapshot.mjs")
 
 if problems:
-    print("check-snapshot-layout: the inspector has drifted from obj.rs")
+    print("check-snapshot-layout: the inspector has drifted from the runtime")
     for p in problems:
         print(f"  {p}")
     sys.exit(1)

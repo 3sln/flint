@@ -45,8 +45,23 @@ import os, re, subprocess, sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOC = os.path.join(ROOT, 'DECISIONS.md')
 
+# A citation in one of the two house forms: `sym` (`path:line`) and
+# (`sym`, `path:line`). Deliberately narrow -- see the loop that uses it.
+CITE = re.compile(r'`([A-Za-z_][\w:.\-/]*)`[,)]? *\(?`([\w./-]+\.(?:rs|java|cs|cljc|clj|mjs)):(\d+)`')
+WIN = 8   # lines either side; code moves a little without the citation being wrong
+
+def fold(s):
+    """`Rt::lock_intern`, `lockIntern` and `lock-intern` are one name here.
+
+    The ports spell the same thing three ways and the record cites whichever
+    it was discussing, so a comparison that respects case and separators
+    reports drift that is only spelling.
+    """
+    return s.replace('_', '').replace('-', '').replace('/', '').replace('.', '').lower()
+
 def main():
     errs = []
+    cited_lines = []
     text = open(DOC, encoding='utf-8').read()
     heads = re.findall(r'^## (.+)$', text, re.M)
     slugs = [h.strip() for h in heads]
@@ -91,6 +106,46 @@ def main():
                     f"exactly one, the preamble, is expected; a decision without "
                     f"one is skipped by the status check above")
 
+    # A CITED `symbol` (`path:line`) STILL HAS THAT SYMBOL AT THAT LINE. Line
+    # numbers rot silently and in the direction that reads like success: the
+    # file is still there, the number is still in range, and the line now holds
+    # unrelated code. A sweep on 2026-09-22 found ten -- `reap_ports` cited at
+    # `conc.rs:3045` in a 2333-line file AND at `conc.rs:1217` when it sits at
+    # 2297, `TY_OPAQUE` cited 14 lines early, `Rt::var_named` 114 lines early.
+    # Every one of them was true when it was written.
+    #
+    # WHY ONLY THE HOUSE FORM. The general question -- "which symbol is this
+    # citation about?" -- has no mechanical answer. Guessing it (nearest
+    # backticked word before the number) flagged four CORRECT citations out of
+    # thirty, and a gate with a 13% false-positive rate is a gate somebody
+    # switches off. So this reads only the forms that put the subject next to
+    # the number, and says nothing about the rest: eight citations today, all
+    # passing. A narrow check that can gate beats a broad one that cannot.
+    #
+    # A bare filename (`conc.rs:900`) is skipped: it is prose, not a pointer.
+    for m in CITE.finditer(text):
+        sym, path, n = m.group(1), m.group(2), int(m.group(3))
+        if '/' not in path:
+            continue
+        p = os.path.join(ROOT, path)
+        if not os.path.isfile(p):
+            errs.append(f"DECISIONS.md cites `{sym}` at {path}:{n}, and there is no such file")
+            continue
+        lines = open(p, encoding='utf-8', errors='replace').read().split('\n')
+        if n > len(lines):
+            errs.append(f"DECISIONS.md cites `{sym}` at {path}:{n}, past the end of "
+                        f"a {len(lines)}-line file")
+            continue
+        leaf = fold(sym.split('::')[-1].split('/')[-1].split('.')[-1])
+        lo, hi = max(0, n - 1 - WIN), min(len(lines), n + WIN)
+        if not any(leaf in fold(l) for l in lines[lo:hi]):
+            at = [i + 1 for i, l in enumerate(lines) if leaf in fold(l)]
+            where = (f" -- it is at {', '.join(map(str, at[:4]))}" if at
+                     else " -- it is not in that file at all")
+            errs.append(f"DECISIONS.md cites `{sym}` at {path}:{n}, which is not within "
+                        f"{WIN} lines of there{where}")
+        cited_lines.append(path)
+
     # TRACKED *AND* UNTRACKED-BUT-NOT-IGNORED. Plain `git ls-files` lists only
     # tracked files, so a brand-new file's citations went unchecked until the
     # commit that added it -- `bin/check` passed, the commit landed, and the
@@ -126,7 +181,8 @@ def main():
         print(f"check-decisions: {len(errs)} failure(s)")
         return 1
     print(f"check-decisions: {len(seen) - len(not_decisions)} decisions, one status "
-          f"line each, {len(cited)} cited by slug, every citation resolves")
+          f"line each, {len(cited)} cited by slug, every citation resolves, "
+          f"{len(cited_lines)} symbol+line citations still point at their symbol")
     return 0
 
 if __name__ == '__main__':

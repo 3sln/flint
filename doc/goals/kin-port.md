@@ -9401,3 +9401,126 @@ into the middle of the next object.
 and 118 before `node-entries`. `Rt` holds 35 of them with nothing above eight
 lines. The tail is what it looked like from a distance.
 
+
+
+## The slice that moved a function also broke the checker reading its address
+
+2026-09-22. `bin/check` was **RED at `2f1fb358`**, the commit that generated
+`layout_of`, and it was committed that way:
+
+    check-snapshot-layout: found no `=> Layout::Raw` arm in obj.rs's
+    `layout_of`; the parse is stale
+
+    FAILED: bin/check-snapshot-layout
+
+Nothing about the slice was wrong. `layout_of` moved out of `obj.rs` into
+`kin/objsize.kin`, what stands at its old address is a one-line delegate to
+`crate::kgen::rt::objsize::layout_of`, and `conform-hosts` still reads 143 035.
+What broke is a THIRD party: `bin/check-snapshot-layout` parses the runtime for
+which types are `Layout::Raw` and compares that set against `host/snapshot.mjs`,
+and it was reading `obj.rs`.
+
+This is [[extracting-code-moves-it-across-boundaries]] with a reader instead of
+a caller. Extracting a function is reviewed as a change to that function; every
+tool that knew its ADDRESS is off the diff entirely. `check-kin` cannot see it
+either, because the generated tree is perfectly in sync with the sources -- the
+stale thing is a script that never heard of kin.
+
+Two details worth keeping:
+
+* **The message was true and unhelpful.** "The parse is stale" is exactly
+  right, and says nothing about why, so the reading is "somebody's regex rotted"
+  rather than "the code you are looking for is somewhere else now". The check
+  now names the file it reads and why it reads that one.
+* **The generated shape is an `if` chain, not a match arm.** kin emits a
+  guarded `return` per branch, so the old regex could not have matched wherever
+  it pointed. The check now takes the condition of whichever `if` returns
+  `Layout::Raw` and reads every `TY_*` out of it, which is insensitive to how
+  kin parenthesises its `||`s.
+
+Verified by breaking it on purpose: dropping `44 /* BYTES */` from
+`snapshot.mjs`'s `LAYOUT_RAW` gives
+
+    TY_BYTES (44) is Layout::Raw in kgen/rt/objsize.rs but not in LAYOUT_RAW
+    -- snapshot.mjs will size it HDR+len*8 and derail the walk
+
+which is the original bug this check was written for, caught again. `bin/check`
+green in 16s.
+
+### The lesson is about the gate, not the checker
+
+A slice is not done when `check-kin` is green and the transcripts agree. Those
+answer "did the port preserve behaviour". They do not answer "does anything
+else in the tree name the place this used to be", and `grep` for the moved
+symbol across `bin/` costs one command. The rule that would have caught it is
+older and duller: run `bin/check` before committing, not after.
+
+## Ten stale line citations in `DECISIONS.md`, and one dead diagnosis
+
+Same firing, chosen because `check-decisions` gates the file's structure and
+`check-port-consts` gates its constants, but nothing checked whether a status's
+cited **line** still holds what it claims. That is how `other-hosts` carried
+four false claims.
+
+Of 104 file citations, most are bare filenames -- prose, not pointers. 45 are
+`file:line`, 34 of those carry a path, and **33 were in range**. In range is a
+weak test: a line number rots in the direction that reads like success, because
+the file is still there and the number still resolves. Checking the SYMBOL
+instead found ten wrong:
+
+    `reap_ports`      conc.rs:3045 (twice) and conc.rs:1217   ->  2297
+    `Rt::var_named`   vm.rs:1973          114 lines early     ->  2087
+    `push_event`      conc.rs:1893 (twice)                    ->  1486
+    `TY_OPAQUE`       obj.rs:78            14 lines early     ->    92
+    `snap::MAGIC_LIVE` snap.rs:563                            ->   578
+    `Rt::lock_intern` rt.rs:549                               ->   596
+    `Sandbox::call`   sandbox.rs:308                          ->   325
+    `K_SENTINEL`      codec.rs:232                            ->   184
+    `needs_host`      conc.rs:1599                            ->  1300
+
+Every one was true when it was written.
+
+### The one that was not a line number
+
+`lending-errors` was cited at `lib/flint/deps/resolve.cljc:383`, and the
+paragraph around it said all three of `system-namespaces-and-deps`' delegation
+rules were inert in the shipped binary, that the function **had no caller
+anywhere in the tree**, and that the mint-authority-from-nothing case was not
+refused.
+
+`25c50dc6` fixed that on 2026-09-12 -- moved the function to
+`lib/flint/deps.cljc:707`, called it from `lib/flint/cli.cljc:225` before
+anything is fetched, and added the test. It touched four files and **none of
+them was `DECISIONS.md`**, so the record went on describing a hole that had
+been closed for ten days, citing a file the function had left.
+
+Re-probed rather than read, since it is a capability claim: `bb test/cli.clj`
+passes today including *"lending a capability the project does not hold is
+REFUSED"* and both controls. Rule 1 is live. Rule 2 is written but cannot fire
+-- it needs a `guards` map, and the only caller uses the 2-arity, so `guards` is
+always `{}`. Rule 3 is still absent; `cli/src/depscmd.rs` never writes a grant.
+The paragraph now says that, and says which of it was checked today.
+
+### A narrow gate, because the broad one flagged correct citations
+
+The general question -- *which symbol is this citation about?* -- has no
+mechanical answer. Guessing it (nearest backticked word before the number)
+flagged four CORRECT citations out of thirty: `reader.cljc:600` and
+`twobuilds.clj:156` are right as written, and the heuristic simply grabbed the
+wrong word. A gate with a 13% false-positive rate is a gate somebody switches
+off.
+
+So `check_decisions.py` now checks only the two forms that put the subject next
+to the number -- ``` `sym` (`path:line`) ``` and ``` (`sym`, `path:line`) ``` --
+and says nothing about the rest. Eight citations today, all passing, no false
+positives. A narrow check that can gate beats a broad one that cannot.
+
+Proven by breaking it in all three directions: a wrong-but-in-range line, a
+past-the-end line, and a missing file. The first attempt to break it PASSED,
+because the citation I perturbed was a bare `conc.rs:2297` with no path, which
+the check skips by design -- [[verify-the-check-covers-your-case]] again, and
+the second time this session that a check had to be made to fail before it
+could be believed. The failure names the true location:
+
+    DECISIONS.md cites `reap_ports` at runtime/src/conc.rs:1500, which is not
+    within 8 lines of there -- it is at 734, 2022, 2290, 2297
