@@ -4025,14 +4025,15 @@ paragraph was not updated with it, so it went on citing a file the function had
 by then left. What holds today, re-probed:
 
 * **Rule 1 — you cannot lend what you do not hold — is enforced.**
-  `lending-errors` now lives in `lib/flint/deps.cljc:707` (it moved out of
+  `lending-errors` (`lib/flint/deps.cljc:707`) moved out of
   `flint.deps.resolve`, which `flint.cli` can never require: that namespace
   pulls in `flint.deps.npm` and `flint.deps.git`, which are VIRTUAL and served
   by the CLI, so the rule was structurally unreachable from the only place a
-  refusal can happen). `lib/flint/cli.cljc:225` calls it before anything is
-  fetched and refuses `build`, `task`, `paths` and `fetch`. `bb test/cli.clj`
-  passes today, including the refusal and both controls — a project that HOLDS
-  the capability may lend it, and a project with no grants is untouched.
+  refusal can happen. `lending-errors` (`lib/flint/cli.cljc:225`) is called
+  before anything is fetched, and refuses `build`, `task`, `paths` and
+  `fetch`. `bb test/cli.clj` passes today, including the refusal and both
+  controls — a project that HOLDS the capability may lend it, and a project
+  with no grants is untouched.
 * **Rule 2 — a dependency declaring a guard must be granted it — is written but
   cannot fire.** `lending-errors` implements it, but only in its 3-arity, from
   a `guards` map of each dependency's own demands. The one caller uses the
