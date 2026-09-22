@@ -6705,8 +6705,9 @@ the body, not assumed from the loop looking parallel.
 
 **Ratified:** ☐ not signed off
 
-**Status: the reasoning HOLDS; two counts in it have drifted. Verified
-2026-09-19 by listing the files, not by re-reading the record.** The one that
+**Status: the reasoning HOLDS; the counts in it drift every time anybody
+looks. Verified 2026-09-22 by listing the files, not by re-reading the
+record.** The one that
 moved did move: `runtimes/jvm/test/RtHash.java` is gone and `kin/hashtext.kin`
 with its `.drivers` is in the tree. The thirteen that did not are still
 hand-written, for the reason given below.
@@ -6718,6 +6719,28 @@ written, so the duplication this section is about has grown rather than shrunk
 while the section sat still. The line counts moved with them -- 1 598 to 1 909
 on the jvm side, 1 442 to 1 569 on the clr -- and part of that last figure is
 mine, from mirroring `HostCall` into the clr on 2026-09-18.
+
+**And again by 2026-09-22, three days later: fifteen and fifteen**, 1 909 to
+**2 016** on the jvm side and 1 569 to **1 602** on the clr. The fifteenth is
+`runtimes/jvm/test/RtRooting.java`, added by `da10c833` -- mine as well.
+
+Three measurements, three different numbers, every one of them larger:
+thirteen, fourteen, fifteen. That is worth more than any of the individual
+figures. This section argues the remaining duplication is not worth porting,
+and the argument may well be right -- but it is being made about a quantity
+that grows whenever the ports are worked on, which is often, and the growth
+comes from the people who read this section and agree with it. A count in
+prose is a snapshot; what is actually true here is a rate. Re-measure rather
+than trusting any of the three figures above; it is four commands:
+
+    grep -l 'static void main' runtimes/jvm/test/*.java | wc -l
+    grep -o '\-\-rt-[a-zA-Z-]*' runtimes/clr/conform/Program.cs | sort -u | wc -l
+    cat runtimes/jvm/test/*.java | wc -l
+    cat runtimes/clr/conform/*.cs  | wc -l
+
+`ls` is the wrong first command and gives sixteen: `HostCall.java` is a shared
+helper, not a program, and it is the one this record already mentions
+mirroring into the clr. Count `main()`, not files.
 
 This section previously had NO status line, which the triage near the top of
 this file names as the one item whose claim could not be assessed at all. Seven
