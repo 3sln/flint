@@ -9811,6 +9811,16 @@ failing without them, in the other direction: `grep -n "build-units" bin/test`
 says which mode a section runs under, and a size measured in the wrong one is
 not a number about this program at all.
 
+**It no longer has to be inferred from `bin/test`, 2026-09-22.**
+`bin/build-units` records which build it made in `units/.build-mode`, written
+BEFORE the build so an interrupted diagnostics run is still marked as one;
+`bin/check` refuses to measure a tree that says `diagnostics`, and
+`test/threads.clj` asserts it directly above the budget this section is about
+-- which is where a wrong answer is expensive, because every size there is
+read against a budget and the failure would name the budget rather than the
+build. Absence is not failure: a tree that has never built units has no stamp,
+and that is not the same as having the wrong one.
+
 ### A SECOND hang, found by the gate run and NOT caused by the gate fix
 
 `bin/test` now stops at section 16, `test/capability.clj`, with the same words

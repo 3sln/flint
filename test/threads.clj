@@ -416,6 +416,27 @@
 ;;
 ;; Recorded rather than quietly absorbed, because the rule this file states is
 ;; that a budget raised once per fix is not a budget.
+;; A SIZE MEASURED AGAINST THE WRONG UNITS IS NOT A NUMBER ABOUT THIS PROGRAM.
+;; `pure-size` read 555 008 once and was taken for the control plane blowing
+;; the budget below. It had not: the units on disk were `--diagnostics`, which
+;; are instrumented and larger, and the same build measures 487 757 against
+;; production ones. That cost a detour, and the record of it says plainly that
+;; it will cost the next person the same
+;; (`DECISIONS.md#the-codec-is-guest-code`).
+;;
+;; It no longer has to be inferred. `bin/build-units` records which build it
+;; made, BEFORE it makes it, so an interrupted diagnostics build is still
+;; marked as one. Asked here rather than only in `bin/check`, because this is
+;; where a wrong answer is expensive: every size below is read against a
+;; budget, and a failure would name the budget rather than the build.
+;;
+;; Absence is not failure -- a tree that has never run `build-units` has no
+;; stamp, and that is not the same as having the wrong one.
+(check-that "the units on disk are the production build, or every size below is a different number"
+            (not= "diagnostics"
+                  (when (fs/exists? "units/.build-mode")
+                    (str/trim (slurp "units/.build-mode")))))
+
 (check-that "the floor is within the budget 0009, 0011, specialisation, bytes and call chose"
 ;; TABLES (`DECISIONS.md#tables`) cost 22 857 bytes here when they landed --
 ;; 287 854 shipped against 264 997 -- and then gave 15 832 of it back, which is
