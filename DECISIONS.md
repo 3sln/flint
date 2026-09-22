@@ -137,15 +137,28 @@ code and an open question the code cannot answer:
   left for you is the scope question about `Rt`, not a blocker.)
 
   **MEASURED 2026-09-21, because the decision turns on that number.** Of the
-  jvm's 3 274 hand-written METHOD lines, 487 have every call they make
-  expressible in kin and 228 of those also exist on native — three copies to
-  replace. A second, independent classifier puts it at 256. So the generatable
-  remainder is roughly 230–260 lines across a dozen areas, no single item above
-  ten lines: about one per cent of the 21 000, which counts duplication of
+  jvm's 3 274 hand-written METHOD lines, **166 are three-way and generatable**
+  — every call AND every field access in them is something kin can already
+  emit, and the same method exists on native, so there are three copies to
+  replace. Spread across a dozen areas with no single item above twenty lines;
+  the largest pools are `Rt` at 65 and `Conc` at 31.
+
+  That is **under one per cent** of the 21 000, which counts duplication of
   every kind and is mostly host strings, host collections, raw memory and host
-  callbacks. `bin/port-survey --rank` and `--calls` re-derive both figures; the
-  working is in `doc/goals/kin-port.md`. The scope question is still yours —
-  this only says what answering it yes would buy.
+  callbacks — none of which a generator can take.
+
+  **The first figure published here was 228 and it was an upper bound.** It
+  came from a classifier that checked every CALL a method makes and not its
+  FIELD accesses, so twenty lines of raw heap walking
+  (`Snap.countHostOpaques`, which reads `rt.gc.from` and iterates
+  `rt.gc.oldChunks`) counted as generatable. A blocklist run alongside it said
+  256, and the two were described here as independent agreement; they were not
+  independent enough to be worth that. 166 is the figure with both calls and
+  fields checked, and it is the one to quote.
+
+  `bin/port-survey --calls` re-derives it; the working and the correction are
+  in `doc/goals/kin-port.md`. The scope question is still yours — this only
+  says what answering it yes would buy.
 * `llvm-ir-target` — should `:to :llvm` imply `:optimize [perf]`; where does
   `nativeabi/` belong?
 * `one-dependency-walk` — manifest parsing landed in `.cljc`, not the Rust

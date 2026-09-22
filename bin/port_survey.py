@@ -91,6 +91,23 @@ def vocabulary_java_callees():
     return out
 
 
+def vocabulary_java_fields():
+    """Every FIELD a vocabulary word reads or writes on the jvm.
+
+    The callee set above covers `Val.isNil(x)`; it says nothing about
+    `rt.gc.from`. Several words are field access and nothing else --
+    `park-on` is `{0}.parkOn`, `thrown` is `{0}.thrown` -- so a field is
+    expressible exactly when some word names it.
+    """
+    txt = open("kin/src/flint/impl/rt.cljc").read()
+    txt = "\n".join(re.sub(r";;.*", "", ln) for ln in txt.split("\n"))
+    out = set()
+    for m in re.finditer(r':java\s+"([^"]*)"', txt):
+        for f in re.finditer(r"\.([A-Za-z_]\w*)(?!\s*\()", m.group(1)):
+            out.add(norm(f.group(1)))
+    return out
+
+
 def generated_names():
     """Every function kin already generates, folded."""
     out = set()
@@ -107,7 +124,7 @@ BENIGN = {"if", "while", "for", "switch", "return", "new", "int", "long",
           "assert", "synchronized", "instanceof", "sizeof"}
 
 
-def unportable_calls(txt, voc, gen, local_ok):
+def unportable_calls(txt, voc, gen, local_ok, fields=frozenset()):
     """Every name this body CALLS that nothing can generate.
 
     AN ALLOWLIST, and the reason it replaced a blocklist. Six times a regex
@@ -136,6 +153,18 @@ def unportable_calls(txt, voc, gen, local_ok):
         # A QUALIFIED call into a class kin knows by name is fine; one into a
         # host type is not, and the type is what to report.
         bad.add(call if "." in call else leaf)
+    # AND FIELD ACCESSES, which a call-based allowlist cannot see at all.
+    #
+    # `Snap.countHostOpaques` passed it: every CALL in it -- `Obj.sizeOf`,
+    # `Obj.ty`, `compareUnsigned` -- is expressible, and what makes it
+    # unportable is `rt.gc.from`, `rt.gc.bump` and iterating
+    # `rt.gc.oldChunks`, a host list. None of those is a call. The same hole
+    # let twenty lines of raw heap walking rank as the biggest generatable
+    # method in the tree.
+    for m in re.finditer(r"\.([A-Za-z_]\w*)(?!\s*\()", txt):
+        f = norm(m.group(1))
+        if f not in fields and f not in voc and f not in gen and f not in local_ok:
+            bad.add("." + m.group(1))
     # Host atomics and locks are reached as FIELDS too, not only as calls.
     for pat in (r"\bAtomic\w+", r"\bInterlocked\b", r"\bVarHandle\b",
                 r"\bReentrantLock\b", r"\bUnsafe\b"):
@@ -810,6 +839,7 @@ def calls(limit=10):
     Neither is a gate. Read both and then read the method.
     """
     voc = vocabulary_names() | vocabulary_java_callees()
+    fields = vocabulary_java_fields()
     gen = generated_names()
     tot = hand = 0
     rows = []
@@ -824,7 +854,7 @@ def calls(limit=10):
             for n, t, c in ms:
                 if norm(n) in ok:
                     continue
-                if not unportable_calls(t, voc, gen, ok | {norm(n)}):
+                if not unportable_calls(t, voc, gen, ok | {norm(n)}, fields):
                     ok.add(norm(n)); changed = True
             if not changed:
                 break

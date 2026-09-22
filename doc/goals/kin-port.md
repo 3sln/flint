@@ -9210,3 +9210,61 @@ about 230-260 lines spread across a dozen areas with no single item above ten
 lines. The ranked spike now carries `in 3`, `voc` and `--calls`, so the next
 reader sees that without spending a firing on it.
 
+---
+
+## The figure I published was an upper bound: 228 -> 166
+
+2026-09-21, immediately after publishing it. The previous section put **228**
+in `DECISIONS.md` as the answer to a decision the triage says is the user's --
+how much would generating `Rt` actually buy. It was an upper bound, and I
+found out by trying to use it.
+
+**The allowlist checked every CALL and no FIELD ACCESS.** So
+`Snap.countHostOpaques` -- twenty lines that walk the heap by raw address,
+reading `rt.gc.from` and `rt.gc.bump` and iterating `rt.gc.oldChunks`, a host
+list of `long[]` -- came out as the biggest generatable method in the tree.
+Every call in it (`Obj.sizeOf`, `Obj.ty`, `compareUnsigned`) is expressible;
+none of what makes it unportable is a call at all.
+
+A field is expressible exactly when some vocabulary word names it -- `park-on`
+is `{0}.parkOn`, `thrown` is `{0}.thrown` -- so the allowed set comes out of
+the templates the same way the callees do. With both checked:
+
+    calls only          487 expressible, 228 also on native
+    calls AND fields    351 expressible, 166 also on native
+
+`DECISIONS.md` now says 166 and says why the first figure was wrong.
+
+**And the "two independent classifiers agree" claim was worth less than I
+said.** The blocklist's 256 has its own ad-hoc field markers -- `bump`,
+`fromEnd`, `zeroBody` -- so it did catch `countHostOpaques`; the two were not
+sharing that blind spot. But they are both lenient, in different places, and
+calling their agreement independent corroboration was dressing up a range as
+a measurement. The range is 166-256 and the low end is the honest one, because
+every refinement so far has moved it down.
+
+### A discrepancy between the tool and the number I had just published
+
+The measurement was a one-off script; `--calls` in the committed tool did not
+pass the allowed-field set, so it defaulted to empty and flagged EVERY field.
+The tool printed 147/45 against the 166 I had just written into
+`DECISIONS.md`. Wired through; both say 351/166 now.
+
+*A figure derived in a scratch script and a figure the committed tool prints
+are two claims, and only one of them is reproducible.* Publishing the first
+without running the second is how the two drift apart on the same afternoon.
+
+### The next slice, verified rather than ranked
+
+`Maps.nodeEntries`, 23 lines -- the largest three-way generatable method left.
+A recursive CHAMP walk that pushes each key and value onto the roots: every
+call and field in it is expressible, and native's counterpart is
+`node_entries_flat`, which is the same body line for line.
+
+**Its name nearly cost it.** The in-3 check matches by NAME, and native has
+both `node_entries` (which takes an extra `at` and is a different function)
+and `node_entries_flat` (which is the twin). The classification was right for
+the wrong reason -- and the same leniency can miss a real counterpart living
+under a different name. Read the native side before taking any slice this
+check offers.
+
