@@ -5,9 +5,12 @@
 # is the wrong default -- most changes cannot break most of it, and a gate that
 # expensive gets run less carefully rather than more.
 #
-#   bin/check          ~5 s      every change
-#   bin/test           ~20 min   before pushing, and on a PR
-#   bin/release-gate   ~25 min   before a versioned release
+#   bin/check            ~5 s      every change
+#   bin/test             ~20 min   before pushing, and on a PR
+#   bin/test-diagnostics ~10 min   the five suites inside `bin/test` that need
+#                                  a DIAGNOSTICS units build, with the
+#                                  production build put back afterwards
+#   bin/release-gate     ~25 min   before a versioned release
 #
 # WHAT IS IN HERE WAS CHOSEN BY MEASURING, not by guessing. The four static
 # checks are sub-second each; `reader_test` is 1 s and `cycles` is 3 s. Two
@@ -17,6 +20,20 @@
 set -e
 cd "$(dirname "$0")/.."
 fail() { echo; echo "FAILED: $1"; exit 1; }
+
+# A DIAGNOSTICS UNITS TREE IS NOT WHAT THIS MEASURES. `bin/build-units
+# --diagnostics` leaves an instrumented runtime in `units/`, and every size,
+# gas figure and allocation count taken against it is a different number.
+# `bin/test` builds it deliberately and puts the production build back as its
+# last section -- but anything that stops in between leaves it there, and
+# nothing said so. Cheap to ask, and wrong answers here are expensive.
+if [ "$(cat units/.build-mode 2>/dev/null)" = diagnostics ]; then
+  echo "FAILED: units/ holds a DIAGNOSTICS build, so every figure here would"
+  echo "        be measuring the wrong artefact. Put it back with:"
+  echo
+  echo "            ./bin/build-units"
+  exit 1
+fi
 t0=$(date +%s)
 
 for c in check-decisions check-flattens check-builtins check-sys-catalogue check-lib-grants \

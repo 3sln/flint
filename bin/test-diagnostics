@@ -1,0 +1,68 @@
+#!/bin/sh
+# THE FIVE SUITES THAT NEED A DIAGNOSTICS BUILD OF THE UNITS, run correctly.
+#
+# `bin/test` builds them at its "units: the DIAGNOSTICS build" section and puts
+# the production build back at its last one. Anything run BETWEEN those two
+# points cannot be run on its own without repeating both halves -- and the
+# failures you get if you forget do not say "wrong build", they say:
+#
+#   no such builtin: flint.rt/snapshot
+#   TypeError: i.exports.stat_bytes_allocated is not a function
+#   TypeError: inst.exports.set_gc_verify_remset is not a function
+#   TypeError: inst.exports.stat_heap_used is not a function
+#
+# Four of the five read as ordinary reds. Only `test/document.clj` names the
+# cause, and it names it because someone hit this before. Five suites reported
+# RED against a tree where all five passed -- which is the expensive direction
+# for a check to be wrong in.
+#
+# WHY THIS EXISTS AS A SCRIPT rather than a note. `bin/test` is ~35 minutes and
+# does not always get to finish; verifying HEAD then means running pieces of
+# it, and this is the piece with a precondition and a postcondition. A
+# paragraph describing them gets reimplemented, with the restore left out.
+#
+# THE RESTORE IS UNCONDITIONAL -- AND THAT IS STILL NOT ENOUGH. A killed
+# process runs no cleanup, and this script was killed between its build and
+# its restore on its first run, leaving exactly the diagnostics tree the line
+# below exists to prevent. Control flow cannot promise this.
+#
+# So the state is DECLARED rather than merely tidied up: `bin/build-units`
+# stamps `units/.build-mode` before it starts, and `bin/check` refuses to
+# measure a tree that says `diagnostics`. Run whatever you like here; the
+# worst case is now a loud failure with the fix in it, rather than every
+# figure afterwards quietly meaning something else.
+set -e
+cd "$(dirname "$0")/.."
+
+SUITES="gc_stress limits snapshot tables document"
+status=0
+
+echo "== building the diagnostics units"
+./bin/build-units --diagnostics > /tmp/flint-diag-build.out 2>&1 || {
+  tail -5 /tmp/flint-diag-build.out
+  echo "FAILED: build-units --diagnostics"
+  exit 1
+}
+
+for f in $SUITES; do
+  printf '  %-11s ' "$f"
+  if bb "test/$f.clj" > "/tmp/flint-diag-$f.out" 2>&1; then
+    echo "ok"
+  else
+    echo "RED   (see /tmp/flint-diag-$f.out)"
+    status=1
+  fi
+done
+
+# Always, even if a suite above went red: see the header.
+echo "== restoring the production units build"
+if ./bin/build-units > /tmp/flint-prod-build.out 2>&1; then
+  echo "  ok"
+else
+  tail -5 /tmp/flint-prod-build.out
+  echo "FAILED: build-units (the tree is left DIAGNOSTICS -- rerun ./bin/build-units)"
+  exit 1
+fi
+
+[ "$status" -eq 0 ] && echo "test-diagnostics: 5 suites green, production build restored"
+exit "$status"

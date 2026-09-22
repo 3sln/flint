@@ -46,6 +46,25 @@ for arg in "$@"; do
 done
 mkdir -p out units/.sysroot
 
+# WHICH BUILD IS IN THE TREE, recorded where anything can read it. A
+# diagnostics units tree is not a broken one, it is a DIFFERENT one -- it
+# carries `stat_heap_used`, `set_gc_verify_remset` and the rest -- and
+# everything measured against it afterwards means something else. Nothing used
+# to say which was there.
+#
+# Written BEFORE the build, not after, and that direction is the point: a
+# build that is killed half way has left diagnostics units behind, and the
+# stamp must already say so. Recording it on success would leave the stamp
+# reading `production` over a tree that is no longer production -- silent, and
+# in the flattering direction.
+#
+# This happened: `bin/test-diagnostics` was killed between its build and its
+# restore, and the only reason it was noticed is that the restore is the line
+# after. `bin/check` reads this.
+if [ -n "$DIAG" ]; then echo diagnostics > units/.build-mode
+else echo production > units/.build-mode
+fi
+
 # cargo builds the DEPENDENCY rlibs once (serde_json, xmlparser, htmlparser and
 # their transitive deps). Unit objects themselves are emitted by rustc below, so
 # a `flint` invocation never runs cargo.
