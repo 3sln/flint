@@ -27,7 +27,7 @@ public final class Hashtext {
         if (d == 0.0) {
             return 0;
         }
-        long bits = Double.doubleToLongBits(d);
+        long bits = Double.doubleToRawLongBits(d);
         return (int) (bits ^ (bits >>> 32));
     }
     /// A run of bytes: `h = h*31 + byte`, finished through `hash-int`.

@@ -4922,6 +4922,49 @@ anticipated one.
 Verified: `conform-hosts` green at 363 rows, 0 failures, with the clr rebuilt.
 
 
+### A generated function answered differently on three runtimes, 2026-09-22
+
+**The worst shape this project can produce, and it was live.** `hash-double`
+is generated from `kin/hashtext.kin` into all three runtimes. It answered
+2 146 959 360 on the jvm and -524 288 on native and the clr, for any NaN
+carrying a sign bit or a payload.
+
+Not a hand-written copy that drifted -- those are ordinary, and porting is the
+cure. This was ONE SOURCE, generated, which is supposed to make disagreement
+impossible. The cause was a word:
+
+    'f64-bits   rust    {0}.to_bits()                     raw
+                java    Double.doubleToLongBits({0})      CANONICALISES NaN
+                csharp  BitConverter.DoubleToInt64Bits    raw
+
+`doubleToLongBits` collapses every NaN to `0x7FF8000000000000`; the other two
+preserve the payload. So the word meant "the bits of this double" in two
+languages and "the bits of this double, unless it is a NaN" in the third.
+
+**GENERATING FROM ONE SOURCE GUARANTEES CONSISTENCY ONLY IF THE PRIMITIVES ARE
+CONSISTENT**, and nothing was checking that. Every instrument agreed while it
+was false: `check-kin` verified the three targets matched their source, the
+drivers passed, `conform-hosts` was green. All true. None of them can see a
+vocabulary word whose three templates do different things.
+
+**Why no fixture caught it.** `hash-double`'s own docstring says NaN "is not
+special here and must not be -- `(= ##NaN ##NaN)` is false, so nothing looks it
+up". That is exactly right about LOOKUP and exactly wrong about BITS, which is
+what a hash is made of. Every double in the fixture was ordinary.
+
+**The decision:** `f64-bits` emits `doubleToRawLongBits` on the jvm, matching
+the other two, and `kin/hashtext.drivers` now passes `0xFFF8000000000000` on
+all three targets so the word cannot drift back. Verified: jvm and native both
+answer -524 288; `conform-hosts` green at 363 rows, 0 failures.
+
+**What this says about the rest of the vocabulary.** 176 words, each with three
+templates written by hand, and the only thing asserting they agree is whichever
+drivers file happens to exercise them over whichever inputs its author chose.
+That is a real gap, and this is the first instance found in it. A word used by
+one source over a narrow range of values is a word whose three spellings have
+been compared on that range and nowhere else.
+
+
 ## cross-runtime-benchmarks
 
 **Benchmark across wasm runtimes, because every number so far was V8**

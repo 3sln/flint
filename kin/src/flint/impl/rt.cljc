@@ -1134,8 +1134,16 @@
     ;; spells the same way, and not one any of them will do with a cast: `as`
     ;; in Rust CONVERTS the number, `(long) d` in Java and C# truncates it.
     ;; Each host has a named intrinsic and the three names share nothing.
+    ;; RAW BITS, and the java spelling matters. This emitted
+    ;; `Double.doubleToLongBits`, which COLLAPSES every NaN to the canonical
+    ;; one, where `to_bits()` and `DoubleToInt64Bits` preserve the payload --
+    ;; so one kin source meant two different things. Measured 2026-09-22:
+    ;; `hash-double` of a negative NaN answered 2146959360 on the jvm and
+    ;; -524288 on native and the clr. A word that does not mean the same in
+    ;; three languages is the one failure kin exists to prevent, and no
+    ;; drivers file caught it because none passes a non-canonical NaN.
     'f64-bits (core/call {:rust "({0}.to_bits() as i64)"
-                          :java "Double.doubleToLongBits({0})"
+                          :java "Double.doubleToRawLongBits({0})"
                           :csharp "System.BitConverter.DoubleToInt64Bits({0})"}
                          {:tag I64})
 

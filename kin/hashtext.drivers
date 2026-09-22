@@ -47,9 +47,16 @@ fn main() {
     // `false` cannot say which side moved.
     let emoji = "\u{1F600}";
     let raw: [u8; 4] = [0xF0, 0x9F, 0x98, 0x80];
-    println!("{} {} {} {} {} | {} {} {} {} {} | {} {} {} | {} {} {} | {} {} | {} {}",
+    println!("{} {} {} {} {} {} | {} {} {} {} {} | {} {} {} | {} {} {} | {} {} | {} {}",
         hash_double(0.0) as i32, hash_double(-0.0) as i32, hash_double(1.0) as i32,
         hash_double(1.5) as i32, hash_double(-2.75) as i32,
+        // A NaN WITH THE SIGN BIT SET, which is the case that separated the
+        // runtimes: `f64-bits` emitted java's CANONICALISING
+        // `doubleToLongBits` where rust and c# preserve the payload, so this
+        // one value answered 2146959360 on the jvm and -524288 elsewhere. No
+        // fixture passed a non-canonical NaN, so one kin source meant two
+        // things and nothing said so.
+        hash_double(f64::from_bits(0xFFF8_0000_0000_0000)) as i32,
         hash_bytes(b"") as i32, hash_bytes(b"a") as i32, hash_bytes(b"abc") as i32,
         hash_bytes(b"hello, world") as i32, hash_bytes("日本語".as_bytes()) as i32,
         hash_symbol(b"", b"a") as i32, hash_symbol(b"", b"abc") as i32,
@@ -88,7 +95,8 @@ fn main() {
         StringBuilder o = new StringBuilder();
         o.append(hashDouble(0.0)).append(' ').append(hashDouble(-0.0)).append(' ')
          .append(hashDouble(1.0)).append(' ').append(hashDouble(1.5)).append(' ')
-         .append(hashDouble(-2.75)).append(" | ")
+         .append(hashDouble(-2.75)).append(' ')
+         .append(hashDouble(Double.longBitsToDouble(0xFFF8000000000000L))).append(" | ")
          .append(hashBytes(b(""))).append(' ').append(hashBytes(b("a"))).append(' ')
          .append(hashBytes(b("abc"))).append(' ').append(hashBytes(b("hello, world")))
          .append(' ').append(hashBytes(b("日本語"))).append(" | ")
@@ -131,7 +139,8 @@ fn main() {
         var o = new StringBuilder();
         o.Append(HashDouble(0.0)).Append(' ').Append(HashDouble(-0.0)).Append(' ')
          .Append(HashDouble(1.0)).Append(' ').Append(HashDouble(1.5)).Append(' ')
-         .Append(HashDouble(-2.75)).Append(" | ")
+         .Append(HashDouble(-2.75)).Append(' ')
+         .Append(HashDouble(System.BitConverter.Int64BitsToDouble(unchecked((long) 0xFFF8000000000000UL)))).Append(" | ")
          .Append(HashBytes(B(""))).Append(' ').Append(HashBytes(B("a"))).Append(' ')
          .Append(HashBytes(B("abc"))).Append(' ').Append(HashBytes(B("hello, world")))
          .Append(' ').Append(HashBytes(B("日本語"))).Append(" | ")
@@ -147,8 +156,23 @@ fn main() {
         Console.WriteLine(o.ToString());
     }
 --expect
-0 0 1072693248 1073217536 -1073348608 | 0 1455541201 74834163 136167191 1534549342 | 849029948 -1195848122 1403326929 | -791501579 1458587647 -237204598 | 898984994 898984994 | -1390931727 -1390931727
+0 0 1072693248 1073217536 -1073348608 -524288 | 0 1455541201 74834163 136167191 1534549342 | 849029948 -1195848122 1403326929 | -791501579 1458587647 -237204598 | 898984994 898984994 | -1390931727 -1390931727
 --expect-why
+THE SIXTH DOUBLE IS A NEGATIVE NaN, and it is the reason this line changed on
+2026-09-22. `hash-double` is GENERATED from one kin source into three
+runtimes, and it answered 2146959360 on the jvm against -524288 on native and
+the clr -- because the vocabulary word `f64-bits` emitted java's
+`doubleToLongBits`, which collapses every NaN to the canonical one, where
+`to_bits()` and `DoubleToInt64Bits` preserve the payload.
+
+One source meaning two things is the single failure kin exists to prevent, and
+no fixture here had ever passed a NaN with a sign or payload: the docstring
+says NaN "is not special here", which is true of LOOKUP -- nothing can find a
+NaN key, since `(= ##NaN ##NaN)` is false -- and false of BITS, which is what
+a hash is made of.
+
+-524288 is `to-i32(bits ^ (bits >>> 32))` for `bits = 0xFFF8000000000000`:
+`0xFFF80000FFF80000`, truncated to 32 bits as `0xFFF80000`.
 COMPUTED FROM `clojure.lang.Murmur3` AND `clojure.lang.Util`, on Clojure 1.12
 through the `clojure` CLI, in a script that implements the fold and the
 combination independently of anything in this repository. Nothing below was
