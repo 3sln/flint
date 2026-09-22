@@ -9135,3 +9135,78 @@ reads `voc` and `in 3` and does not spend a firing rediscovering it.
 column not existed I would have generated it and wired the three runtimes to
 call a generated function that kin itself calls as a primitive.
 
+---
+
+## What "generating `Rt`" would actually cost, measured
+
+2026-09-21. `DECISIONS.md`'s triage lists seven decisions as *"needs a
+decision from you before it means anything"*, and one of them is this port's:
+
+> `the-pike-vm-is-the-last-triplicate` -- is generating `Rt` the goal?
+> **~21 000 hand-duplicated lines** and thirteen unportable tests turn on it.
+
+That number is the one the decision turns on and it is a figure in prose. This
+firing measured it. **Not to take the decision** -- the scope question is not
+mine -- but a question waiting on a number is answerable once somebody counts.
+
+### The counts
+
+    hand-written runtime code, today      jvm 6 402   clr 6 331   native 13 691
+    generated from kin                    jvm 11 301  clr 11 537  native 11 900
+                                          34 876 lines from 12 942 of kin, 2.69x
+
+    of the jvm's 3 274 hand-written METHOD lines
+      487   have every call they make expressible in kin
+      228     ... and also exist on native -- three copies to replace
+
+The blocklist view reaches the same place by a different route: 256 lines
+three-way, not already a vocabulary word, no host-shaped construct. **Two
+independent methods, 228 and 256.**
+
+So the generatable remainder is somewhere around 230-260 lines. The 21 000
+counts duplication of every kind, most of it host strings, host collections,
+raw memory and host callbacks -- and about one per cent of it is code a
+generator could take.
+
+### Six classifier misses, and the blocklist replaced
+
+Every one was found by trying to TAKE the slice the rank named, and each put a
+method that cannot be generated at the top of the list of things to generate:
+
+    `def("flint/x", ...)` parsed as a declaration   Builtins scored 63% portable
+    a `long[]` parameter                            fine, as `make-closure` showed
+    a bare-expression lambda `v -> false`           registerPort, four rankings
+    `try`/`finally` around an intern lock           the same method
+    a host callback table `Builtins.Fn`             Rt.callValue ranked FIRST
+    `AtomicInteger.compareAndSet`                   Parallel, 68% and none of it
+
+*A blocklist over source text is always one construct behind whatever the code
+does next.* So there is an allowlist now, `--calls`: a method is generatable
+when every call in it is a vocabulary word, a function kin already generates,
+or another method in the same file that is itself generatable -- a fixed point.
+It NAMES the blocker rather than guessing a category, and it is keyed on the
+TEMPLATES rather than the kin names, because `nil?` renders `Val.isNil` and
+keying on the word rejected three of the most-used entries in the table.
+
+The two views disagree and both are kept. The blocklist is lenient and
+categorises; the allowlist is strict and names. Neither is a gate.
+
+### And the hand-written area table was the wrong four
+
+`AREAS` listed four areas against native for weeks. Auto-mapping by folded
+filename reaches 22 of 30, and the densest-looking area in the tree turned out
+to be `Parallel` at 44 clean lines of 65 -- which had never been compared
+against native at all, because it was not in the table.
+
+It is also not portable: `AtomicInteger` throughout. *A list of what to
+examine, written by hand, decides what gets examined* -- and the thing it
+leaves out is invisible rather than merely unranked.
+
+### Where this leaves the port
+
+`Conc` is finished, `Rt`'s remainder is 68-81 lines of thin wrappers over
+machinery that is not portable, and the total three-way generatable pool is
+about 230-260 lines spread across a dozen areas with no single item above ten
+lines. The ranked spike now carries `in 3`, `voc` and `--calls`, so the next
+reader sees that without spending a firing on it.
+

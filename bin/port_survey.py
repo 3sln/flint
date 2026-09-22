@@ -72,6 +72,78 @@ def java_methods(path):
     return out
 
 
+def vocabulary_java_callees():
+    """What each vocabulary word EMITS on the jvm, as a callable name.
+
+    KEYED ON THE TEMPLATE, not on the kin name. `nil?` renders
+    `Val.isNil({1})`, so the question "can kin express `Val.isNil(x)`?" is
+    answered by the template and not by the word -- and keying on the word
+    made the allowlist reject `Val.isNil`, `Vec.nth` and `Vec.count`, which
+    are three of the most-used words in the table.
+    """
+    txt = open("kin/src/flint/impl/rt.cljc").read()
+    txt = "\n".join(re.sub(r";;.*", "", ln) for ln in txt.split("\n"))
+    out = set()
+    for m in re.finditer(r':java\s+"([^"]*)"', txt):
+        for c in re.finditer(r"([A-Za-z_][\w.]*)\s*\(", m.group(1)):
+            out.add(norm(c.group(1).split(".")[-1]))
+            out.add(c.group(1))
+    return out
+
+
+def generated_names():
+    """Every function kin already generates, folded."""
+    out = set()
+    for f in glob.glob("runtimes/jvm/src/com/_3sln/flint/kgen/rt/*.java"):
+        for m in re.finditer(r"static \S+ (\w+)\(", open(f).read()):
+            out.add(norm(m.group(1)))
+    return out
+
+
+# LANGUAGE, NOT HOST. Control flow and casts a generator emits itself.
+BENIGN = {"if", "while", "for", "switch", "return", "new", "int", "long",
+          "boolean", "double", "byte", "short", "char", "void", "this",
+          "super", "case", "else", "do", "try", "catch", "finally", "throw",
+          "assert", "synchronized", "instanceof", "sizeof"}
+
+
+def unportable_calls(txt, voc, gen, local_ok):
+    """Every name this body CALLS that nothing can generate.
+
+    AN ALLOWLIST, and the reason it replaced a blocklist. Six times a regex
+    over the source missed a construct -- `def(` parsed as a declaration, a
+    `long[]` parameter, a bare-expression lambda, `try`/`finally`, a host
+    callback table, and `AtomicInteger.compareAndSet` -- and each miss put a
+    method that cannot be generated at the top of the list of things to
+    generate. A blocklist is always one construct behind whatever the code
+    does next.
+
+    Asking the other way round cannot be: a method is generatable when every
+    call in it is a kin vocabulary word, a function kin already generates, or
+    another method in the same file that is itself generatable. Anything else
+    is NAMED rather than guessed at, so the report says `AtomicInteger` and
+    `compareAndSet` instead of "host collections".
+    """
+    bad = set()
+    for m in re.finditer(r"([A-Za-z_][\w.]*)\s*\(", txt):
+        call = m.group(1)
+        leaf = norm(call.split(".")[-1])
+        head = call.split(".")[0]
+        if leaf in BENIGN or call in BENIGN:
+            continue
+        if leaf in voc or leaf in gen or leaf in local_ok or call in voc:
+            continue
+        # A QUALIFIED call into a class kin knows by name is fine; one into a
+        # host type is not, and the type is what to report.
+        bad.add(call if "." in call else leaf)
+    # Host atomics and locks are reached as FIELDS too, not only as calls.
+    for pat in (r"\bAtomic\w+", r"\bInterlocked\b", r"\bVarHandle\b",
+                r"\bReentrantLock\b", r"\bUnsafe\b"):
+        for m in re.finditer(pat, txt):
+            bad.add(m.group(0))
+    return bad
+
+
 def rank():
     rows = []
     for path in sorted(glob.glob("runtimes/jvm/src/com/flint/rt/*.java")):
@@ -84,9 +156,7 @@ def rank():
         # implementation that nothing calls. A two-way dedup is worth less
         # than a three-way one and is a different job; the rank has to say
         # which it is offering.
-        nat = {}
-        if area in AREAS:
-            nat = extract_all(AREAS[area][2], N_PAT)
+        nat = extract_all(native_for(area), N_PAT)
         hand = clean = three = isvoc = 0
         why, big = collections.Counter(), []
         for name, txt, n in java_methods(path):
@@ -120,7 +190,13 @@ def rank():
         if hand:
             rows.append((clean, hand, area, why,
                          sorted(big, key=lambda t: -t[0])[:4], three, bool(nat), isvoc))
-    rows.sort(reverse=True)
+    # SORTED BY `in 3`, not by `clean`. `clean` is "could be expressed in kin"
+    # and includes the vocabulary and the two-way methods; `in 3` is the only
+    # column that answers "how much duplication is there here to remove". Sorting
+    # by `clean` put `Parallel` -- 44 generatable lines out of 65, the densest
+    # area in the tree -- fifth, below three areas whose clean lines are mostly
+    # primitives or two-way.
+    rows.sort(key=lambda r: (r[5], r[0]), reverse=True)
     print(f"  {'area':<12} {'hand':>6} {'clean':>6} {'in 3':>6} {'voc':>5} {'%':>4}   dominant blocker")
     for clean, hand, area, why, big, three, checked, isvoc in rows[:12]:
         top = why.most_common(1)[0] if why else ("--", 0)
@@ -230,6 +306,38 @@ def extract(path, pat):
 # WHICH FILES HOLD ONE AREA, per runtime. Native does not split the same way
 # the ports do: `Rt`'s methods live across `rt.rs`, `vm.rs` and `err.rs`, so
 # the native side of a pairing is a LIST and is concatenated before extraction.
+# NATIVE DOES NOT SPLIT THE WAY THE PORTS DO, and hand-listing the areas was
+# how the interesting ones got left out. Four were listed for weeks; auto-
+# mapping by folded filename reaches 22 of 30, and the densest remaining
+# three-way work turned out to be in `Parallel` (44 lines of 65) and `Space`
+# (27 of 43) -- neither of which was ever in the hand-written table, so the
+# rank never compared them against native at all.
+#
+# The exceptions are the subjects the two trees genuinely name differently.
+NAT_ALIAS = {"str": ["strs"], "vec": ["vector"], "maps": ["map"], "sets": ["set"],
+             "img": ["image"], "val": ["value"], "space": ["mem"],
+             "parallel": ["par"], "rt": ["rt", "vm", "err"],
+             "seqs": ["seqs", "coll"]}
+
+
+def native_for(area):
+    """The native file(s) holding one area, or [] if none is found."""
+    have = {os.path.basename(p)[:-3]: p for p in glob.glob("runtime/src/*.rs")}
+    key = norm(area)
+    return [have[c] for c in NAT_ALIAS.get(key, [key]) if c in have]
+
+
+def areas_auto():
+    """Every jvm file paired with its clr twin and its native counterpart."""
+    out = {}
+    for jp in sorted(glob.glob("runtimes/jvm/src/com/flint/rt/*.java")):
+        area = os.path.basename(jp)[:-5]
+        cp = f"runtimes/clr/src/rt/{area}.cs"
+        if os.path.exists(cp):
+            out[area] = ([jp], [cp], native_for(area))
+    return out
+
+
 AREAS = {
     "Conc": (["runtimes/jvm/src/com/flint/rt/Conc.java"],
              ["runtimes/clr/src/rt/Conc.cs"],
@@ -688,6 +796,55 @@ def consts_all(quiet=False):
     return disagree, seen
 
 
+def calls(limit=10):
+    """Which methods have every call they make expressible in kin.
+
+    THE ALLOWLIST VIEW, beside `--rank`'s blocklist. They answer different
+    questions and disagree, which is the useful part: the blocklist asks "does
+    this body contain a construct I know kin cannot express" and the allowlist
+    asks "is every call in it something kin can emit". The first is one
+    construct behind whatever the code does next; the second names the
+    blocker instead of guessing at it, and is strict enough to reject
+    something a human would port by hand.
+
+    Neither is a gate. Read both and then read the method.
+    """
+    voc = vocabulary_names() | vocabulary_java_callees()
+    gen = generated_names()
+    tot = hand = 0
+    rows = []
+    for jp in sorted(glob.glob("runtimes/jvm/src/com/flint/rt/*.java")):
+        area = os.path.basename(jp)[:-5]
+        ms = [(n, t, c) for n, t, c in java_methods(jp) if "kgen" not in t]
+        if not ms:
+            continue
+        ok = set()
+        for _ in range(8):                 # fixed point over same-file helpers
+            changed = False
+            for n, t, c in ms:
+                if norm(n) in ok:
+                    continue
+                if not unportable_calls(t, voc, gen, ok | {norm(n)}):
+                    ok.add(norm(n)); changed = True
+            if not changed:
+                break
+        good = sum(c for n, t, c in ms if norm(n) in ok)
+        allh = sum(c for _, _, c in ms)
+        tot += good; hand += allh
+        nat = extract_all(native_for(area), N_PAT)
+        three = sum(c for n, t, c in ms if norm(n) in ok and norm(n) in nat)
+        if good:
+            rows.append((three, good, allh, area,
+                         sorted(((c, n) for n, t, c in ms if norm(n) in ok),
+                                reverse=True)[:3]))
+    print(f"  {tot} of {hand} hand-written lines have every call expressible;"
+          f" {sum(r[0] for r in rows)} of those are also present on native\n")
+    print(f"  {'in 3':>5} {'able':>5} {'hand':>5}  area")
+    for three, good, allh, area, big in sorted(rows, reverse=True)[:limit]:
+        print(f"  {three:>5} {good:>5} {allh:>5}  {area}")
+        print("            " + ", ".join(f"{c} {n}" for c, n in big))
+
+
 if __name__ == "__main__":
     what = sys.argv[1] if len(sys.argv) > 1 else "--both"
     if what in ("--rank", "--both"):
@@ -711,6 +868,11 @@ if __name__ == "__main__":
     if what == "--consts" and len(sys.argv) > 2 and sys.argv[2] == "all":
         print("\n== every constant the two ports both declare\n")
         consts_all()
+        print()
+        raise SystemExit(0)
+    if what == "--calls":
+        print("\n== whose every call kin can already emit\n")
+        calls()
         print()
         raise SystemExit(0)
     if what in ("--consts", "--both"):

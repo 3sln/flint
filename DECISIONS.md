@@ -135,6 +135,17 @@ code and an open question the code cannot answer:
   ITSELF is now generated, all four functions, and the capability question that
   blocked it is settled — kin gained an aliasing axis on 2026-09-16. What is
   left for you is the scope question about `Rt`, not a blocker.)
+
+  **MEASURED 2026-09-21, because the decision turns on that number.** Of the
+  jvm's 3 274 hand-written METHOD lines, 487 have every call they make
+  expressible in kin and 228 of those also exist on native — three copies to
+  replace. A second, independent classifier puts it at 256. So the generatable
+  remainder is roughly 230–260 lines across a dozen areas, no single item above
+  ten lines: about one per cent of the 21 000, which counts duplication of
+  every kind and is mostly host strings, host collections, raw memory and host
+  callbacks. `bin/port-survey --rank` and `--calls` re-derive both figures; the
+  working is in `doc/goals/kin-port.md`. The scope question is still yours —
+  this only says what answering it yes would buy.
 * `llvm-ir-target` — should `:to :llvm` imply `:optimize [perf]`; where does
   `nativeabi/` belong?
 * `one-dependency-walk` — manifest parsing landed in `.cljc`, not the Rust
