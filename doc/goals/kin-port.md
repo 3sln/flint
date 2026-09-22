@@ -9586,7 +9586,7 @@ across 957 lines** (rust 32, jvm 209, clr 209 -- the two ports exact mirrors),
 of which 174 share the name of the function they delegate to and could go with
 a static import and no call-site edits.
 
-### Three ways to get a false green, all hit in one slice
+### Four ways to get a false green, all hit in one slice
 
 * **`cargo build ... | grep ...; echo $?`** reports GREP's status. The first
   "native builds clean" was grep finding no matches in a build that had
@@ -9603,3 +9603,14 @@ a static import and no call-site edits.
   returns `usize`. A toy shaped to agree with the generated code cannot
   disagree with it; `^RootIx` is the annotation, and the toy now mirrors the
   runtime.
+* **Editing a shell script while it is running.** `sh` reads a script
+  incrementally by BYTE OFFSET, so rewriting `bin/check-kin` during an
+  11-minute run of it made the interpreter resume mid-line and execute a
+  fragment: `line 184: e: command not found`, pointing at a line that holds
+  `targets=$(./kin/scripts/destinations)` -- which runs fine standalone and
+  exits 0. Nothing was wrong with the script; the reader had moved under it.
+  And the run then exited 0 with its summary banner never printed, which is
+  the shape that matters: a gate that dies half way and still reports success.
+  These gates are long enough that waiting feels wasteful, which is exactly
+  why this will happen again unless the edit goes somewhere the run cannot
+  read.

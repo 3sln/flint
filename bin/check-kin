@@ -39,7 +39,8 @@
 # WHAT THIS USED TO COMPARE, and it is worth saying because the answer
 # changed: regions. It snapshotted the eighteen hand-written files that had
 # `kin:begin`/`kin:end` markers in them and diffed the lines between the
-# markers. It now snapshots the forty-two files kin owns outright and diffs
+# markers. It now snapshots every file kin owns outright -- 336 of them as of
+# 2026-09-22, and it said "forty-two" until then -- and diffs
 # them whole. Same question, larger unit, and nothing left that a hand edit
 # can hide in.
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -108,7 +109,7 @@ verified=0
 # concurrent runs..."). Concurrency was anticipated here; nothing used it.
 #
 # Output is collected and SORTED rather than streamed, because interleaved
-# lines from ninety jobs are unreadable and, worse, unstable -- a gate whose
+# lines from one job per source are unreadable and, worse, unstable -- a gate whose
 # output reorders between runs cannot be diffed.
 _kin_jobs=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 _kin_out=$(mktemp "${TMPDIR:-/tmp}/check-kin.XXXXXX")
@@ -138,7 +139,31 @@ printf '%s\n' kin/*.kin | xargs -P "$_kin_jobs" -n1 sh -c '
   fi
 ' _ >> "$_kin_out" 2>&1
 sort "$_kin_out"
-verified=$(ls kin/*.kin | wc -l | tr -d ' ')
+# COUNT WHAT THE LOOP ANSWERED, NOT WHAT IS ON DISK. This read
+# `ls kin/*.kin | wc -l` until 2026-09-22 -- a count of sources that EXIST,
+# which the floor below then tested. That guard's own message is "A pass over
+# almost nothing looks exactly like a pass over everything", and counting
+# files is precisely the way to make it unfireable: delete the loop entirely
+# and the number is unchanged, so the check certifies its own absence.
+#
+# The loop runs under `xargs`, so it cannot increment a variable in this
+# shell -- which is how the file count got here. Its OUTPUT crosses the
+# boundary, so count that.
+_kin_ok=$(grep -c '^  ok   ' "$_kin_out" || true)
+_kin_bad=$(grep -c '^  FAIL' "$_kin_out" || true)
+_kin_src=$(ls kin/*.kin | wc -l | tr -d ' ')
+verified=$_kin_ok
+# EVERY SOURCE ACCOUNTED FOR, which is exact and needs no maintenance. A
+# floor ("at least 70") is a guess that rots in the safe-looking direction:
+# it was 70 against 113 sources, so a run that silently checked 71 of them
+# passed. Ok + failed must equal the number of sources; anything else means
+# the loop did not reach one, and that is the shape the floor was aiming at.
+if [ "$((_kin_ok + _kin_bad))" -ne "$_kin_src" ]; then
+  echo "check-kin: $_kin_src sources, but the loop answered for $((_kin_ok + _kin_bad))"
+  echo "  ($_kin_ok ok, $_kin_bad failed) -- one was never reached, and a pass"
+  echo "  over almost nothing looks exactly like a pass over everything."
+  exit 1
+fi
 # AN `--expect` SECTION IS THE OTHER HALF, counted rather than merely
 # available. `verify` compares the three targets WITH EACH OTHER, which cannot
 # see a logic error in the one source they all come from -- three identically
@@ -242,11 +267,6 @@ trap 'rm -rf "$work"' EXIT
 #
 # A floor rather than the exact count, so adding a source does not fail the
 # gate that exists to protect the sources.
-[ "$verified" -ge 70 ] || {
-  echo "check-kin: only $verified kin sources were checked, and at least 70 are expected"
-  echo "  A pass over almost nothing looks exactly like a pass over everything."
-  exit 1
-}
 # EVERY SOURCE CARRIES AN EXPECTATION, and this is the same argument as the
 # floor above, one level up.
 #
@@ -259,8 +279,8 @@ trap 'rm -rf "$work"' EXIT
 # because it protects a gate from the act of adding a source. A margin here
 # would do the opposite: it would let the next source arrive with no
 # expectation and no complaint, which is exactly how the previous state --
-# ninety drivers and not one expected value -- was reached without anyone
-# deciding on it. All ninety have one, so the check is `all of them`, and a
+# every driver and not one expected value -- was reached without anyone
+# deciding on it. All of them have one, so the check is `all of them`, and a
 # new source writes its expectation as part of being written.
 if [ "$expected" -lt "$verified" ]; then
   echo "check-kin: $expected of $verified kin sources carry an --expect section."

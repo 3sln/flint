@@ -738,14 +738,21 @@ sec "casetable: the Unicode tables are what the derivation says"
 # version moved says so here rather than in someone's string.
 ./bin/casetable --check || fail "bin/casetable --check"
 
-sec "kin: the sources agree, and the committed regions match them"
-# The generated regions are COMMITTED on purpose -- a runtime build must not
-# need babashka -- and the cost is that source and output can drift. Nothing
+sec "kin: the sources agree, and the committed output matches them"
+# The generated output is COMMITTED on purpose -- a runtime build must not
+# need babashka -- and the cost is that source and output can drift. It used
+# to be REGIONS, spliced between `kin:begin`/`kin:end` markers in otherwise
+# hand-written files; it is whole files now, and no marker survives anywhere
+# in the tree (checked 2026-09-22). Nothing
 # checked that until now: a `fixnum` fix left two files stale, and the only
 # thing that would have re-emitted them was somebody remembering to.
 ./bin/check-kin > "$TMPDIR/flint-kin.out" 2>&1 || {
   sed 's/^/  /' "$TMPDIR/flint-kin.out"; fail "bin/check-kin"; }
-tail -1 "$TMPDIR/flint-kin.out" | sed 's/^/  /'
+# THE WHOLE SUMMARY, not `tail -1`. The banner is more than one line -- it
+# was two and is now three -- so a fixed tail showed a trailing fragment with
+# the counts cut off. Print from the `check-kin:` line to the end and the
+# display stops depending on how long the summary happens to be.
+sed -n '/^check-kin:/,$p' "$TMPDIR/flint-kin.out" | sed 's/^/  /'
 
 echo
 sec "decisions: the index agrees with what is in the tree"

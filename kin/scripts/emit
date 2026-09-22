@@ -17,9 +17,9 @@
 ;; nowhere in one to put a hand edit.
 ;;
 ;; The scanning is kin's now, not this script's: `emit-all!` walks the source
-;; vfs and emits every source ATOMICALLY -- all sixteen and all three targets,
+;; vfs and emits every source ATOMICALLY -- all of them and all three targets,
 ;; or nothing. A partial tree is a state nobody designed and no gate
-;; describes: with eight of sixteen emitted, check-kin reports the other eight
+;; describes: with half of them emitted, check-kin reports the rest
 ;; as drifted, which is true and says nothing about what happened.
 ;;
 ;; The I/O is still ours -- every byte goes through the vfs on each target in

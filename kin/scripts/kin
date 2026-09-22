@@ -17,8 +17,8 @@
     (println (format "    %-26s %s" label (str/join " " (sort (map str xs)))))))
 
 (defn- wrapped
-  "A list of names, indented and wrapped, because sixteen sources one per line
-  is a page and the same sixteen on three lines is a glance."
+  "A list of names, indented and wrapped, because a hundred sources one per line
+  is a page and the same names wrapped is a glance."
   [indent xs]
   (let [w (count indent)]
     (loop [line indent xs (sort xs)]
