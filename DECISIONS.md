@@ -5662,8 +5662,23 @@ An extension makes the claim explicit, and a resolver tag makes it checkable.
 
 ### Open, and needing sign-off
 
-* **Ordering.** Recorded as later-overrides-earlier above; the alternative is
-  earlier-wins, which makes the prelude a base nobody can shadow.
+* ~~**Ordering.**~~ **Settled 2026-09-22 -- and it was settled in this
+  section's own body, two hundred lines above where this item sat.** The item
+  said ordering was "recorded as later-overrides-earlier above". Nothing above
+  records that. What the body says is that a name excluded from an earlier
+  entry is simply not in the prelude, so **the collision never forms**; that
+  one which DOES form is **an error, not an order-resolved silent win**; and
+  therefore that **order in the list is load order, and only that**.
+  `flint.analyzer/prelude-resolve` implements exactly that -- two entries
+  offering one name THROWS, naming both and the `:exclude` that settles it --
+  and `test/sysns.clj` pins it with "two entries offering one name is refused"
+  and "the refusal names the exclusion that settles it". Both pass at
+  `a54c5269`.
+
+  Left on the sign-off list this was worse than stale. A reader who went
+  looking for what still needed deciding would have found an ordering
+  semantics to choose, and implementing either answer removes a refusal the
+  rest of the section argues for at length.
 * ~~Whether `.fln` is the extension.~~ **Settled 2026-09-11: `.fln`.** The
   first choice was `.fl`, and it was rejected on legibility. `fl` is a
   TYPOGRAPHIC LIGATURE -- many fonts render it as the single glyph `ﬂ` -- and
