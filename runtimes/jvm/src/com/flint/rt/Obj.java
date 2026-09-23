@@ -125,7 +125,7 @@ public final class Obj {
         return com._3sln.flint.kgen.rt.Objsize.layoutOf(ty);
     }
 
-    public static long align8(long n) { return (n + 7) & ~7L; }
+    public static long align8(long n) { return com._3sln.flint.kgen.rt.Objhdr.objAlign8(n); }
 
     /// GENERATED (`kin/objsize.kin`). How many BYTES an object occupies --
     /// and so, after `>> 3`, what every allocation costs in gas.
@@ -133,18 +133,7 @@ public final class Obj {
         return com._3sln.flint.kgen.rt.Objsize.sizeFor(ty, len);
     }
 
-    public static long sizeOf(Space sp, long addr) {
-        int w0 = sp.readU32(addr);
-        int ty = w0 >>> 24;
-        int len = sp.readU32(addr + 4);
-        // Two special cases, then `sizeFor`. Deriving it removes a second
-        // table: a type added to `layoutOf` and not to a copy of this match was
-        // sized wrongly, the collector walked with the wrong stride, and the
-        // symptom named an object that was plainly fine.
-        if (ty == TY_FREE) return Integer.toUnsignedLong(len);
-        if (ty == TY_FWD) return HDR;
-        return sizeFor(ty, len);
-    }
+    public static long sizeOf(Space sp, long addr) { return com._3sln.flint.kgen.rt.Objsize.objSizeOf(sp, addr); }
 
     /// GENERATED (`kin/objhdr.kin`). The header layer is rooted at the SPACE
     /// and not at the `Rt`, which is why it needed a `Space` tag in kin

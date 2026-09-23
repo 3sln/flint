@@ -122,3 +122,10 @@ pub fn obj_set_forward(sp: &Space, a: Addr, dest: Addr) {
 pub fn obj_forward_target(sp: &Space, a: Addr) -> Addr {
     return (((sp.read_u32(a) & 16777215) as Addr) << 32) | (sp.read_u32(a + 4) as Addr);
 }
+/// Round an address up to the next multiple of eight.
+/// 
+/// Every object starts on an eight-byte boundary, so the two layouts whose
+/// size is a BYTE count round and the one measured in slots does not.
+pub fn obj_align8(n: Addr) -> Addr {
+    return (n + 7) & (!7);
+}

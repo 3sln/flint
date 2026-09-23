@@ -37,7 +37,8 @@
   (:require [flint.impl.rt :refer [defn return comment doc if != + bit-and bit-or
                                    bit-not shl ushr ushr64 to-i32 addr-of-u32 TY_FWD
                                    Space Addr I32 U32 Bool
-                                   sp-read-u32 sp-write-u32]]))
+                                   sp-read-u32 sp-write-u32]]
+))
 
 (doc "The type tag: the top byte of word zero."
      ""
@@ -142,3 +143,10 @@
 (defn ^:pub ^Addr obj-forward-target [^Space sp ^Addr a]
   (return (bit-or (shl (addr-of-u32 (bit-and (sp-read-u32 sp a) 16777215)) 32)
                   (addr-of-u32 (sp-read-u32 sp (+ a 4))))))
+
+(doc "Round an address up to the next multiple of eight."
+     ""
+     "Every object starts on an eight-byte boundary, so the two layouts whose"
+     "size is a BYTE count round and the one measured in slots does not.")
+(defn ^:pub ^Addr obj-align8 [^Addr n]
+  (return (bit-and (+ n 7) (bit-not 7))))

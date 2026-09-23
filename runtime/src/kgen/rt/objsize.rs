@@ -14,6 +14,7 @@ use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
+use crate::kgen::rt::objhdr::*;
 
 /// Which of the three shapes `ty` has.
 /// 
@@ -69,4 +70,39 @@ pub fn size_for(ty: u8, len: u32) -> Addr {
         return crate::obj::align8(crate::obj::STR_DATA + (len as Addr));
     }
     return crate::obj::align8(crate::obj::HDR + (len as Addr));
+}
+/// How many bytes this object occupies, header included.
+/// 
+/// IN THIS FILE AND NOT `objhdr.kin`, which is where it was written
+/// first and where it did not compile: the generated module globs both
+/// the hand-written `Obj` and its own siblings, and `size-for` exists in
+/// BOTH -- once here and once as the delegator `Obj` keeps for its four
+/// callers. Two globs offering one name make it ambiguous rather than
+/// resolving it. Beside `size-for` the call is to a LOCAL definition,
+/// which shadows a glob on all three targets, and the two belong
+/// together anyway: they must agree for every type, since one measures
+/// a live object and the other reserves room for a new one.
+/// 
+/// TWO SPECIAL CASES AND THEN `size-for`, which is the point. This used to
+/// carry its own copy of the layout match, and a type added to `layout-of`
+/// but not to that copy was sized as `HDR + len * 8` -- a 513-byte
+/// `TY_BYTES` measured as 4112. The collector then walked from-space with
+/// the wrong stride and blamed an object that was perfectly fine. Deriving
+/// the size from one table removes the second one.
+/// 
+/// A FREE BLOCK'S LENGTH IS ITS SIZE IN BYTES, and it is the one length
+/// that can genuinely set the high bit -- which is why it is widened with
+/// `addr-of-u32` rather than `to-addr`. All three runtimes already did this
+/// by three different routes: `len as Addr`, `Integer.toUnsignedLong(len)`
+/// and `(uint) len`.
+pub fn obj_size_of(sp: &Space, addr: Addr) -> Addr {
+    let ty: u8 = obj_ty(sp, addr) as u8;
+    let len: u32 = obj_len(sp, addr);
+    if ty == TY_FREE {
+        return len as Addr;
+    }
+    if ty == TY_FWD {
+        return crate::obj::HDR;
+    }
+    return size_for(ty, len);
 }

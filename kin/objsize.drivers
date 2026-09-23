@@ -8,6 +8,24 @@
 // header size is exactly the sort of thing that drifts between three
 // runtimes.
 type Addr = u64;
+// A HEAP AFTER ALL, for `size-of` alone -- four bytes of it. `size-for` above
+// is still pure arithmetic; `size-of` READS a header before it can ask, so
+// the toy needs somewhere to put one. `obj-ty` and `obj-len` are generated
+// siblings from `kin/objhdr.kin`, stubbed here the way every sibling is.
+struct Space { m: Vec<u8> }
+impl Space {
+    fn read_u32(&self, a: Addr) -> u32 {
+        let i = a as usize;
+        u32::from_le_bytes([self.m[i], self.m[i+1], self.m[i+2], self.m[i+3]])
+    }
+    fn write_u32(&self, a: Addr, v: u32) {
+        let i = a as usize;
+        let p = self.m.as_ptr() as *mut u8;
+        unsafe { core::ptr::copy_nonoverlapping(v.to_le_bytes().as_ptr(), p.add(i), 4) };
+    }
+}
+fn obj_ty(sp: &Space, a: Addr) -> u32 { sp.read_u32(a) >> 24 }
+fn obj_len(sp: &Space, a: Addr) -> u32 { sp.read_u32(a + 4) }
 mod obj {
     pub const HDR: super::Addr = 8;
     pub const STR_DATA: super::Addr = 16;
@@ -36,7 +54,7 @@ fn main() {
         obj::Layout::Raw => "R",
     };
     let row = |ty: u8, len: u32| format!("{}:{}", lay(ty), size_for(ty, len));
-    println!("{} | {} | {} | {} | {} | {} | {} | {} | {} | {}",
+    let mut o = format!("{} | {} | {} | {} | {} | {} | {} | {} | {} | {}",
              // 1-2. THE SLOT LAYOUT, at zero and at ten.
              row(obj::TY_VEC, 0), row(obj::TY_VEC, 10),
              // 3. A TYPE THE RULE DOES NOT NAME still lays out as slots.
@@ -47,6 +65,17 @@ fn main() {
              row(TY_BYTES, 1), row(TY_BYTES, 8),
              // 9-10. THE ALLOCATOR'S OWN TWO, which no guest ever sees.
              row(TY_FREE, 0), row(TY_FWD, 0));
+    // `size-of`, which READS the type and length rather than being handed
+    // them. The free block's length has its HIGH BIT SET.
+    let sp = Space { m: vec![0u8; 16] };
+    for (i, (w0, w1)) in [(0u32 << 24, 0x8000_0008u32), (1u32 << 24, 7),
+                          (9u32 << 24, 3)].iter().enumerate() {
+        sp.write_u32(0, *w0);
+        sp.write_u32(4, *w1);
+        o.push_str(&format!("{}{}", if i == 0 { " || " } else { " | " },
+                            obj_size_of(&sp, 0)));
+    }
+    println!("{}", o);
 }
 --java-head
     // THE SAME TOY, field for field.
@@ -58,6 +87,23 @@ fn main() {
         static final int TY_BYTES = 44, TY_RAW = 35;
         static final int TY_VEC = 9, TY_CLOSURE = 27;
     }
+    // A HEAP AFTER ALL, for `size-of` alone. `size-for` is still pure
+    // arithmetic; `size-of` READS a header before it can ask.
+    static final class Space {
+        final byte[] m = new byte[16];
+        int readU32(long a) {
+            int i = (int) a;
+            return (m[i] & 0xFF) | ((m[i+1] & 0xFF) << 8)
+                 | ((m[i+2] & 0xFF) << 16) | ((m[i+3] & 0xFF) << 24);
+        }
+        void writeU32(long a, int v) {
+            int i = (int) a;
+            m[i] = (byte) v; m[i+1] = (byte) (v >>> 8);
+            m[i+2] = (byte) (v >>> 16); m[i+3] = (byte) (v >>> 24);
+        }
+    }
+    static int objTy(Space sp, long a) { return sp.readU32(a) >>> 24; }
+    static int objLen(Space sp, long a) { return sp.readU32(a + 4); }
     static final int TY_FREE = Obj.TY_FREE, TY_FWD = Obj.TY_FWD;
     static final int TY_STR = Obj.TY_STR, TY_BIGINT = Obj.TY_BIGINT;
     static final int TY_BYTES = Obj.TY_BYTES, TY_RAW = Obj.TY_RAW;
@@ -68,12 +114,21 @@ fn main() {
     }
     static String row(int ty, int len) { return lay(ty) + ":" + sizeFor(ty, len); }
     public static void main(String[] args) {
-        System.out.println(
+        System.out.print(
             row(Obj.TY_VEC, 0) + " | " + row(Obj.TY_VEC, 10) + " | "
             + row(Obj.TY_CLOSURE, 3) + " | "
             + row(TY_STR, 0) + " | " + row(TY_STR, 1) + " | " + row(TY_STR, 8) + " | "
             + row(TY_BYTES, 1) + " | " + row(TY_BYTES, 8) + " | "
             + row(TY_FREE, 0) + " | " + row(TY_FWD, 0));
+        Space sp = new Space();
+        StringBuilder o = new StringBuilder();
+        int[][] hs = { {0 << 24, 0x80000008}, {1 << 24, 7}, {9 << 24, 3} };
+        for (int i = 0; i < hs.length; i++) {
+            sp.writeU32(0, hs[i][0]);
+            sp.writeU32(4, hs[i][1]);
+            o.append(i == 0 ? " || " : " | ").append(objSizeOf(sp, 0));
+        }
+        System.out.println(o);
     }
 --csharp-head
     // THE SAME TOY, field for field.
@@ -88,21 +143,47 @@ fn main() {
         public const int TyVec = 9, TyClosure = 27;
     }
 --csharp
+    // A HEAP AFTER ALL, for `size-of` alone.
+    internal sealed class Space {
+        internal readonly byte[] m = new byte[16];
+        internal int ReadU32(long a) {
+            int i = (int) a;
+            return (m[i] & 0xFF) | ((m[i+1] & 0xFF) << 8)
+                 | ((m[i+2] & 0xFF) << 16) | ((m[i+3] & 0xFF) << 24);
+        }
+        internal void WriteU32(long a, int v) {
+            int i = (int) a;
+            m[i] = (byte) v; m[i+1] = (byte) ((uint) v >> 8);
+            m[i+2] = (byte) ((uint) v >> 16); m[i+3] = (byte) ((uint) v >> 24);
+        }
+    }
+    static int ObjTy(Space sp, long a) { return (int)((uint) sp.ReadU32(a) >> 24); }
+    static int ObjLen(Space sp, long a) { return sp.ReadU32(a + 4); }
     static string Lay(int ty) {
         int l = LayoutOf(ty);
         return l == Obj.LVals ? "V" : l == Obj.LStr ? "S" : "R";
     }
     static string Row(int ty, int len) { return Lay(ty) + ":" + SizeFor(ty, len); }
     static void Main() {
-        System.Console.WriteLine(
+        System.Console.Write(
             Row(Obj.TyVec, 0) + " | " + Row(Obj.TyVec, 10) + " | "
             + Row(Obj.TyClosure, 3) + " | "
             + Row(Obj.TyStr, 0) + " | " + Row(Obj.TyStr, 1) + " | " + Row(Obj.TyStr, 8) + " | "
             + Row(Obj.TyBytes, 1) + " | " + Row(Obj.TyBytes, 8) + " | "
             + Row(Obj.TyFree, 0) + " | " + Row(Obj.TyFwd, 0));
+        var sp = new Space();
+        var o = new StringBuilder();
+        int[][] hs = { new int[]{0 << 24, unchecked((int) 0x80000008)},
+                       new int[]{1 << 24, 7}, new int[]{9 << 24, 3} };
+        for (int i = 0; i < hs.Length; i++) {
+            sp.WriteU32(0, hs[i][0]);
+            sp.WriteU32(4, hs[i][1]);
+            o.Append(i == 0 ? " || " : " | ").Append(ObjSizeOf(sp, 0));
+        }
+        System.Console.WriteLine(o.ToString());
     }
 --expect
-V:8 | V:88 | V:32 | S:16 | S:24 | S:24 | R:16 | R:16 | R:8 | R:8
+V:8 | V:88 | V:32 | S:16 | S:24 | S:24 | R:16 | R:16 | R:8 | R:8 || 2147483656 | 8 | 32
 --expect-why
 DERIVED FROM THE CONTRACT, with `HDR` 8 and `STR_DATA` 16. Ten rows as
 `<layout>:<size in bytes>`.

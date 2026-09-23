@@ -11,6 +11,7 @@ using static global::Flint.Rt.Eq;
 using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
+using static global::_3sln.Flint.Kgen.Rt.Objhdr;
 
 public static class Objsize {
     /// Which of the three shapes `ty` has.
@@ -67,5 +68,40 @@ public static class Objsize {
             return Obj.Align8(Obj.StrData + len);
         }
         return Obj.Align8(Obj.Hdr + len);
+    }
+    /// How many bytes this object occupies, header included.
+    /// 
+    /// IN THIS FILE AND NOT `objhdr.kin`, which is where it was written
+    /// first and where it did not compile: the generated module globs both
+    /// the hand-written `Obj` and its own siblings, and `size-for` exists in
+    /// BOTH -- once here and once as the delegator `Obj` keeps for its four
+    /// callers. Two globs offering one name make it ambiguous rather than
+    /// resolving it. Beside `size-for` the call is to a LOCAL definition,
+    /// which shadows a glob on all three targets, and the two belong
+    /// together anyway: they must agree for every type, since one measures
+    /// a live object and the other reserves room for a new one.
+    /// 
+    /// TWO SPECIAL CASES AND THEN `size-for`, which is the point. This used to
+    /// carry its own copy of the layout match, and a type added to `layout-of`
+    /// but not to that copy was sized as `HDR + len * 8` -- a 513-byte
+    /// `TY_BYTES` measured as 4112. The collector then walked from-space with
+    /// the wrong stride and blamed an object that was perfectly fine. Deriving
+    /// the size from one table removes the second one.
+    /// 
+    /// A FREE BLOCK'S LENGTH IS ITS SIZE IN BYTES, and it is the one length
+    /// that can genuinely set the high bit -- which is why it is widened with
+    /// `addr-of-u32` rather than `to-addr`. All three runtimes already did this
+    /// by three different routes: `len as Addr`, `Integer.toUnsignedLong(len)`
+    /// and `(uint) len`.
+    public static long ObjSizeOf(Space sp, long addr) {
+        int ty = ObjTy(sp, addr);
+        int len = ObjLen(sp, addr);
+        if (ty == Obj.TyFree) {
+            return (long)(uint) len;
+        }
+        if (ty == Obj.TyFwd) {
+            return Obj.Hdr;
+        }
+        return SizeFor(ty, len);
     }
 }

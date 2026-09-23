@@ -6,6 +6,7 @@ type Addr = u64;
 // this level -- so the shared reference in the signature is not a weakening
 // of the fixture.
 const TY_FWD: u8 = 1;   // the forwarding tag, as `obj.rs` declares it
+
 struct Space { m: Vec<u8> }
 impl Space {
     fn read_u32(&self, a: Addr) -> u32 {
@@ -61,6 +62,9 @@ fn main() {
         obj_set_forward(&sp, f, *dest);
         o.push_str(&format!("{}{} {}", if i == 0 { " ||| " } else { " | " },
                             obj_ty(&sp, f), obj_forward_target(&sp, f)));
+    }
+    for n in [0u64, 1, 7, 8, 9] {
+        o.push_str(&format!("{}{}", if n == 0 { " |||| " } else { " " }, obj_align8(n)));
     }
     println!("{}", o);
 }
@@ -122,6 +126,10 @@ fn show(sp: &Space, a: Addr) -> String {
             objSetForward(sp, f, dests[i]);
             o.append(i == 0 ? " ||| " : " | ")
              .append(objTy(sp, f)).append(' ').append(objForwardTarget(sp, f));
+        }
+        long[] ns = { 0, 1, 7, 8, 9 };
+        for (int i = 0; i < ns.length; i++) {
+            o.append(i == 0 ? " |||| " : " ").append(objAlign8(ns[i]));
         }
         System.out.println(o);
     }
@@ -186,6 +194,10 @@ fn show(sp: &Space, a: Addr) -> String {
             o.Append(i == 0 ? " ||| " : " | ")
              .Append(ObjTy(sp, f)).Append(' ').Append(ObjForwardTarget(sp, f));
         }
+        long[] ns = { 0, 1, 7, 8, 9 };
+        for (int i = 0; i < ns.Length; i++) {
+            o.Append(i == 0 ? " |||| " : " ").Append(ObjAlign8(ns[i]));
+        }
         System.Console.WriteLine(o.ToString());
     }
     static string Show(Space sp, long a) {
@@ -194,7 +206,7 @@ fn show(sp: &Space, a: Addr) -> String {
              + (ObjStrAscii(sp, a) ? 1 : 0) + " " + ObjLen(sp, a);
     }
 --expect
-171 5 1 0 1 1234 | 0 0 0 0 0 0 | 255 7 0 1 0 2147483647 | 0 0 1 0 0 8 | 0 0 0 0 1 16 || 7 0 0 0 0 99 | 7 5 0 0 0 99 | 7 0 0 0 0 99 | 7 0 1 1 1 99 | 7 0 0 1 1 99 | 7 0 0 0 1 99 | 7 0 0 0 0 99 ||| 1 8 | 1 736586891265 | 1 281474976710655 | 1 0
+171 5 1 0 1 1234 | 0 0 0 0 0 0 | 255 7 0 1 0 2147483647 | 0 0 1 0 0 8 | 0 0 0 0 1 16 || 7 0 0 0 0 99 | 7 5 0 0 0 99 | 7 0 0 0 0 99 | 7 0 1 1 1 99 | 7 0 0 1 1 99 | 7 0 0 0 1 99 | 7 0 0 0 0 99 ||| 1 8 | 1 736586891265 | 1 281474976710655 | 1 0 |||| 0 8 8 8 16
 --expect-why
 DERIVED from the header layout stated at the top of `kin/objhdr.kin`: the tag
 is bits 31..24, the age 23..21, marked is bit 20, in-remset 19, ascii 18, and
@@ -259,10 +271,20 @@ which is the arrangement that catches an off-by-one in a clear mask. `~(1 <<
 20)` written as `~(1 << 19)` leaves group five looking correct -- marked does
 go false -- and shows up only as the remset bit vanishing a step early.
 
+AFTER THE `||||` IS `align8`. Rounding runs over 0, 1, 7, 8
+and 9 -- the two boundaries that matter are that 8 stays 8 rather than
+becoming 16, and that 1 and 7 both reach 8, which is what separates
+`(n + 7) & ~7` from `(n | 7) + 1` and from a version that rounds down.
+
+  0 -> 0    1 -> 8    7 -> 8    8 -> 8    9 -> 16
+
+`size-of` lives in `kin/objsize.drivers`, beside the `size-for` it calls.
+
 NOT COVERED HERE, and named rather than left quiet: `set-forward` and
 `forward-target` split a 48-bit address across both header words and need a
 u32-to-address widening that ZERO-extends. The three runtimes each spell that
 differently -- `as Addr`, `Integer.toUnsignedLong`, `(long)(uint)` -- and
 `to-addr` is not it, since on both ports it emits nothing and an `int` would
-widen with its sign. `align8`, `slot-addr` and `size-of` are also still
-hand-written.
+widen with its sign. `slot-addr`, `slot`, `str-hash` and `set-str-hash` are still hand-written.
+`slot` in particular is NOT a clean port: native carries a debug assertion
+there about reading a forwarded pointer, which neither port has.

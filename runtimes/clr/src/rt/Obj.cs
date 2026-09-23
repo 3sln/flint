@@ -71,24 +71,14 @@ public static class Obj {
     public static int LayoutOf(int ty) =>
         global::_3sln.Flint.Kgen.Rt.Objsize.LayoutOf(ty);
 
-    public static long Align8(long n) => (n + 7) & ~7L;
+    public static long Align8(long n) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjAlign8(n);
 
     /// GENERATED (`kin/objsize.kin`). How many BYTES an object occupies --
     /// and so, after `>> 3`, what every allocation costs in gas.
     public static long SizeFor(int ty, int len) =>
         global::_3sln.Flint.Kgen.Rt.Objsize.SizeFor(ty, len);
 
-    public static long SizeOf(Space sp, long addr) {
-        int w0 = sp.ReadU32(addr);
-        int ty = (int)((uint) w0 >> 24);
-        int len = sp.ReadU32(addr + 4);
-        // Two special cases, then `SizeFor`. Deriving it removes a second
-        // table: a type added to `LayoutOf` and not to a copy of this match was
-        // sized wrongly, and the collector then walked with the wrong stride.
-        if (ty == TyFree) return (uint) len;
-        if (ty == TyFwd) return Hdr;
-        return SizeFor(ty, len);
-    }
+    public static long SizeOf(Space sp, long addr) => global::_3sln.Flint.Kgen.Rt.Objsize.ObjSizeOf(sp, addr);
 
     /// GENERATED (`kin/objhdr.kin`). The header layer is rooted at the SPACE
     /// and not at the `Rt`, which is why it needed a `Space` tag in kin before

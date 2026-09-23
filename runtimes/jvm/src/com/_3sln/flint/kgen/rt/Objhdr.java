@@ -118,4 +118,11 @@ public final class Objhdr {
     public static long objForwardTarget(Space sp, long a) {
         return (Integer.toUnsignedLong(sp.readU32(a) & 16777215) << 32) | Integer.toUnsignedLong(sp.readU32(a + 4));
     }
+    /// Round an address up to the next multiple of eight.
+    /// 
+    /// Every object starts on an eight-byte boundary, so the two layouts whose
+    /// size is a BYTE count round and the one measured in slots does not.
+    public static long objAlign8(long n) {
+        return (n + 7) & (~7);
+    }
 }

@@ -212,7 +212,7 @@ pub fn layout_of(ty: u8) -> Layout {
 
 #[inline(always)]
 pub fn align8(n: Addr) -> Addr {
-    (n + 7) & !7
+    crate::kgen::rt::objhdr::obj_align8(n)
 }
 
 /// Byte size of an object in the heap, always a multiple of 8.
@@ -220,20 +220,7 @@ pub fn align8(n: Addr) -> Addr {
 /// A byte SIZE, but `Addr`-wide: it is almost always added to an address, and
 /// a size that had to be cast at every such site would be a cast per line.
 pub fn size_of(sp: &Space, addr: Addr) -> Addr {
-    let w0 = sp.read_u32(addr);
-    let ty = (w0 >> 24) as u8;
-    let len = sp.read_u32(addr + 4);
-    // Two special cases, then `size_for`. This used to carry its own copy of
-    // the layout match, and a type added to `layout_of` but not to that copy
-    // was sized as `HDR + len * 8` -- a 513-byte `TY_BYTES` measured as 4 112.
-    // The collector then walked from-space with the wrong stride, and the
-    // symptom was `forward: N is not the start of a from-space object` about
-    // an object that was plainly fine. Deriving it removes the second table.
-    match ty {
-        TY_FREE => len as Addr,
-        TY_FWD => HDR,
-        _ => size_for(ty, len),
-    }
+    crate::kgen::rt::objsize::obj_size_of(sp, addr)
 }
 
 /// `size_of` and `size_for` must agree for every type, since one measures a

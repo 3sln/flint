@@ -1115,6 +1115,13 @@
                            :java "Val.asFixnum({0})"
                            :csharp "Val.AsFixnum({0})"})
     'to-i32 (core/call {:rust "({0} as u32)" :java "((int) {0})" :csharp "((int) {0})"})
+    ;; A NUMBER NARROWED TO A TYPE TAG. Rust spells a `Ty` `u8` and both ports
+    ;; call it an `int`, so this is a real cast on one target and nothing on
+    ;; the other two -- which is the whole reason it is a word rather than a
+    ;; bare expression. `obj-size-of` is the first source to take a tag out of
+    ;; a header word and then hand it to something typed `Ty`.
+    'to-ty (core/call {:rust "({0} as u8)" :java "{0}" :csharp "{0}"}
+                      {:tag Ty})
     ;; WRAPPING ARITHMETIC, which a hash needs and plain `*` cannot give: Rust
     ;; PANICS on overflow in a debug build, so `h * 31` would be correct in
     ;; release and a crash in the build that runs the tests. Java's `int` wraps

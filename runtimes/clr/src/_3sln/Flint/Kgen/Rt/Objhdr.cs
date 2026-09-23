@@ -120,4 +120,11 @@ public static class Objhdr {
     public static long ObjForwardTarget(Space sp, long a) {
         return (((long)(uint) (sp.ReadU32(a) & 16777215)) << 32) | ((long)(uint) sp.ReadU32(a + 4));
     }
+    /// Round an address up to the next multiple of eight.
+    /// 
+    /// Every object starts on an eight-byte boundary, so the two layouts whose
+    /// size is a BYTE count round and the one measured in slots does not.
+    public static long ObjAlign8(long n) {
+        return (n + 7) & (~7);
+    }
 }
