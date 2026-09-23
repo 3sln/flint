@@ -9791,3 +9791,117 @@ were dead was enough to make them look alive -- excluding markdown did not fix
 that either, since the tool's own docstring named them next. Counting only
 `.rs` is the rule without that shape: a Rust function can only be called from
 Rust. 25 today.
+
+## `Obj`, all of it but one, and the type that unblocked it
+
+The entry above recorded `Obj` as blocked on a TYPE and priced clearing it as
+"real work on the type machinery". The blocker was real -- kin's memory
+vocabulary reaches memory as `{0}.gc.sp.read_u64(...)`, so generated code must
+hold an `Rt`, and the header layer cannot: the collector reads a header from
+`&mut self` methods of `Gc`, which is a field of `Rt`, so borrowing the whole
+`Rt` there does not compile.
+
+**The price was never measured, and it was a name and three type strings:**
+
+    {:name 'Space :types {:rust "&Space" :java "Space" :csharp "Space"}}
+
+plus one vocabulary word and one line of the Rust preamble. Rust taking it by
+SHARED reference is not a compromise either: `Space`'s writers are `&self`
+too, because the space is an arena whose interior mutability lives below this
+level, so one tag serves reads and writes alike.
+
+That is the lesson worth keeping from this slice, and it is about the
+ESTIMATE rather than the work: that a blocker is real says nothing about what
+clearing it costs, and a blocker written down as expensive is exactly the kind
+of thing that stays undone on the strength of its own note.
+
+`Obj` went from 2 delegating against 21 to **21 against 2**. What is left is
+its private constructor and `slot`.
+
+### `slot` cannot go, which is a finding and not a gap
+
+Native guards it with a `debug_assertions` check that a forwarded pointer is
+never read outside the collector. Reading one elsewhere means the edge INTO
+that object was never traced -- the collector moved the target and nothing
+updated the slot -- and asserting it in the universal accessor catches the
+whole class rather than needing a check wherever a stale pointer happens to
+surface. kin has no way to spell a debug-only assertion and neither port
+carries the check at all, so porting `slot` would silently drop it.
+
+The asymmetry reaches the vocabulary: it gained `sp-write-u64` and NOT
+`sp-read-u64`, because the write is portable and the read is the one with the
+guard on it.
+
+### Three words, each earning itself immediately
+
+`bit-not`, because clearing a field in place is `w & ~(7 << 21)` and Rust
+spells the complement `!` where both ports say `~`. No generated code had ever
+cleared a field, so no source had needed it.
+
+`addr-of-u32`, a widening that ZERO-extends. `to-addr` is the trap and not a
+hypothetical: swap it into `forward-target` and rust answers 736586891265 and
+281474976710655 where both ports answer -2147483647 and -1. Rust is right
+either way, because `as Addr` from a `u32` zero-extends on its own, and
+`to-addr` emits NOTHING on both ports so an `int` widens with its sign. All
+three hand-written `forwardTarget`s already did the right thing by three
+different routes -- `as Addr`, `Integer.toUnsignedLong`, a trip through
+`uint` -- which is exactly the shape a vocabulary word exists for.
+
+`to-ty`, a real cast on Rust and nothing on the other two.
+
+A FOURTH was written speculatively and refused. Four space-rooted words went
+in at once -- read and write, 32 and 64 -- and only one had a caller.
+`bin/check-vocab-used` failed the build that afternoon, and again later for
+`sp-read-u64`. That gate fired twice inside one port, which is what it is for:
+`uquot` and `urem` got into the vocabulary the same way, by being obviously
+useful.
+
+### A compile failure that was a design signal
+
+`size-of` was written into `kin/objhdr.kin` and did not build. The generated
+module globs both the hand-written `Obj` and its own siblings, and `size_for`
+exists in BOTH -- once generated in `objsize`, once as the delegator `Obj`
+keeps for its four callers in `gc.rs` and `rt.rs`. Two globs offering one name
+make it ambiguous rather than resolving it, which is what `defines-symbol` in
+`targets.cljc` already warns about.
+
+Moving `size-of` into `kin/objsize.kin` fixes it by making the call LOCAL, and
+a local definition shadows a glob on all three targets. It is also the better
+home: `obj.rs` has long said the two "must agree for every type, since one
+measures a live object and the other reserves room for a new one", and they
+are in one file now.
+
+That move cost `kin/objsize.drivers` its headline. It opened with "NO HEAP AT
+ALL", true of `size-for` and not of `size-of`, which READS a type and a length
+before it can ask. The comment says what the file does now rather than what it
+used to.
+
+### What the fixtures had to be built to catch
+
+Every one of these is a case that a reasonable-looking fixture would have
+omitted:
+
+* `write-header` runs over a word with EVERY BIT SET. A version that ORed its
+  type in, or read the old word first, inherits an age of 7 and all three
+  flags from whatever lived at that address before -- and no later group
+  notices, because each of them sets its own field explicitly.
+* `set-age(8)` must answer 0 WHILE THE TYPE TAG STAYS 7. Masking after the
+  shift rather than before writes a 1 into bit 24, the bottom of the tag,
+  turning type 7 into type 6 while the age still reads correctly.
+* the flag bits at 20, 19 and 18 are cleared ONE AT A TIME WITH BOTH
+  NEIGHBOURS SET. `~(1 << 20)` written as `~(1 << 19)` leaves the marked bit
+  looking right and shows only as the remset bit vanishing a step early.
+* the age fixture carries a LARGE TYPE TAG, because dropping the `& 7` answers
+  1373 and 2047 rather than 5 and 7 -- and a fixture whose tag is zero, which
+  is what `TY_FREE` and an uninitialised probe both are, passes either way.
+* `size-of`'s free block carries a length with its HIGH BIT SET. A free
+  block's length is its size in bytes and is the one length that can genuinely
+  set it.
+* the slot fixture takes indices 0, 1 and 2, because index 0 answers `HDR`
+  itself and the step from 72 to 80 is the `* 8`. A single index pins neither.
+
+And one that had to be kept OUT: the cached string hash is below 2^31 on
+purpose. `str-hash` answers an `I32`, and a value with its high bit set prints
+as 3735928559 on native against -559038737 on both ports -- a disagreement
+about PRINTING rather than about the code, which would fail the file for a
+reason it is not about.
