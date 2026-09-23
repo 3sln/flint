@@ -9905,3 +9905,135 @@ purpose. `str-hash` answers an `I32`, and a value with its high bit set prints
 as 3735928559 on native against -559038737 on both ports -- a disagreement
 about PRINTING rather than about the code, which would fail the file for a
 reason it is not about.
+
+## `Gc`, to the line where the diagnostics start
+
+`kin/gcspace.kin` took the young generation's bounds -- `is-young`,
+`in-from`, `in-live-half`, `young-used`, `heap-used` -- and `kin/objsize.kin`
+took `would-collect`. All three runtimes delegate. The `Gc` tag is the
+`Space` tag one level up, and the five field words it needed line up across
+all three runtimes by name, which was the part that could have been ugly and
+was not.
+
+**Pricing it first was the whole difference.** The previous entry said "not a
+small port", which is an adjective. Replacing it with a list -- a tag, five
+field words, an unsigned 64-bit compare -- made it a morning's work, and the
+list was right except for one omission: `wsub`, because these predicates are
+built on `wrapping_sub` and Rust panics on an overflowing `-` in a debug
+build. That is the `Obj` lesson running forward rather than being re-learned.
+
+### `ult64`, and the third time Rust being right proved nothing
+
+`<` is unsigned-aware at 32 bits only. Swap it in for `ult64` and both ports
+answer 1 for `in-from(999)` where native answers 0: one byte below `from`, the
+subtraction wraps to 2^64 - 1 on Rust's `Addr` and compares as a NEGATIVE
+`long` on a port.
+
+That is the same shape as `to-addr` and as `fixnum` before it. Three separate
+vocabulary pairs now where the trap is invisible on native and fires on both
+ports, because Rust spells the type unsigned and Java and C# do not. Reading
+the Rust and finding it correct is not evidence about the other two.
+
+### A name collision that nearly cost a wrong wiring
+
+Native's `Gc::heap_used` is the FOOTPRINT -- `old_capacity + half * 2` -- and
+feeds the heap limit and the `stat_heap_used` export. Both ports' `heapUsed`
+is LIVE BYTES, `young_used + old_live`, which native spells INLINE inside
+`note_peak`. Two names one letter apart for two different numbers.
+
+The obvious wiring -- generated `gc_heap_used` into native's `heap_used` --
+would have compiled, passed every gate, and silently changed what a debugging
+statistic reports. It went into `note_peak` instead.
+
+### `would-collect` was a divergence, and the saturation went
+
+Native saturated where both ports added plainly. Unreachable: `max_heap` is
+built from a `u32`, so every operand is at most 4 GiB and the sum at most
+about 2^33, nowhere near where a 64-bit add wraps. Plain addition IS the
+saturating answer over that range, so the three converged on the simpler body
+rather than on a guard that cannot fire -- with the condition written down in
+both the kin source and native's comment.
+
+The alternative was a `sat-add` word and it would have been worse than the
+problem: neither port has a saturating add, so its template would have read
+`((a + b) < 0 ? MAX : (a + b))` -- an argument evaluated twice, in a
+vocabulary word, guarding a case that cannot happen.
+
+## Where the frontier actually is
+
+Three ticks of measurement, so the next person does not re-derive it.
+
+**A `cfg` ON a function ports; a `cfg` INSIDE its body does not.** Whole-
+function conditionals are fine -- the generated body is unconditional and the
+delegator keeps the attribute, which is how `would-collect` ported while
+carrying `#[cfg(feature = "parallel")]`. A conditional INSIDE the body means
+the body differs between builds, and generating it drops whichever build's
+version lost.
+
+That blocks the collector, and not marginally: 22 of `gc.rs`'s 80 functions
+carry native-only instrumentation, concentrated in the core -- `minor` 8
+blocks, `forward` 4, `major` 4. It is the same rule that keeps `Obj::slot`
+hand-written.
+
+**The byte-array blocker is not a missing type**, which is what `Val`'s
+comments have said for months and what I set out to fix by adding one:
+
+    native  fn inline_bytes(self, buf: &mut [u8; INLINE_MAX]) -> &[u8]
+    ports   byte[] inlineBytes(long v)
+
+Native takes a caller-provided buffer and returns a BORROWED SLICE; the ports
+allocate and return. That is a deliberate difference in allocation discipline
+-- `no_std` on wasm against collected hosts -- and it differs in ARITY and
+lifetime, not body. No tag fixes it. It blocks `Str`'s `string-hash` and
+`keyword-hash` too, so it is one blocker wearing three names.
+
+`Wire` waits on a DECISION rather than a capability: native writes tag and
+payload in one call, both ports compose `put` with a payload writer, and there
+is no single shape to generate until one factoring wins.
+
+**Two things checked and found fine**, recorded so the suspicion is not
+re-run. `Snap` looked like 1316 lines of unreferenced code on the ports and is
+not -- its callers are in `runtimes/*/test/` and `runtimes/clr/conform/`.
+Cross-runtime snapshot interop is not a goal, so the three formats agreeing
+byte for byte is not an unchecked claim. And `class-of` was declined: four
+lines, three runtimes already identical, and porting it would cost a third
+visibility widening for no divergence risk.
+
+## The bridges the port left behind
+
+`bin/dead-runtime-fns` grew to cover all three runtimes, and the first thing
+it found was `link_peers` -- a one-line delegator onto a generated function,
+dead in ALL THREE, ported faithfully three times and called by none of them. A
+hand-porting process replicates dead code as carefully as live code.
+
+Then 47 more, all the same shape:
+`static X name(...) { return Generated.name(...); }`, written so hand-written
+code could call a generated function by the name it used to have, and then no
+hand-written code ever did. The VISIBILITY SPLIT is what made them safe to
+remove: private and package-private delegators cannot be surface for an
+embedder either, so "no caller" is the whole story. Public ones were left,
+because that is a judgement about API and not a fact about reachability.
+
+### The tool was wrong three times before it was right
+
+Worth recording in full, because every failure was in a different direction.
+
+* **Too narrow invents findings.** 187 dead functions, before it indexed
+  `runtime/tests/` and `units-src/`. 168 would have been wrong.
+* **Too wide hides them.** The count fell from 19 to 16 with no code change: a
+  DECISIONS record NAMING three dead functions made them look alive. Excluding
+  markdown was not enough either -- the tool's own docstring named them next.
+  Counting only `.rs` is the rule without that shape.
+* **A definition regex that matches calls.** For Java and C# a definition is
+  `<modifiers> <type> <name>(` and a call at the start of a line is
+  `<indent><name>(`. A type pattern containing a SPACE lets the indentation
+  stand in for the type: 244 calls parsed as definitions for one member, which
+  inflates the count until every most-called member reports as dead.
+* **A one-line delegator says its own name twice.** `typeOk(...) { return
+  Tablekind.typeOk(...); }`, so "one mention per definition site" is the wrong
+  threshold for exactly the members most likely to be dead.
+
+The answer was not a better regex but a PROBE: each language names a member
+known live and one known dead, and the tool refuses to report that language if
+either lands on the wrong side. The fourth bug was caught by the probe rather
+than by me, which is the only reason the number is 198 and not 107.
