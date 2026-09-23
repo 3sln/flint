@@ -14,8 +14,22 @@ commit was 75 behind and the gate's own closing phrase had changed too. It is
 the first thing a session reads, so it is the worst place in the tree to carry
 a stale number.*
 
-`Conc` is finished, and the remaining three-way generatable pool measures 86
-lines with nothing in it above eight.
+`Conc` is finished. **The remaining three-way generatable pool is 213 lines**
+(`bin/port-survey`, run 2026-09-23), spread over eleven areas: `Rt` 70,
+`Parallel` 42, `Gc` 23, `Space` 22, `Conc` 20, `Snap` 16, `Aot` 6, `Codec` 6,
+`Str` 4, `Builtins` 3, `Num` 1. That column counts clean lines whose method
+ALSO exists on native -- three copies to replace with one -- and it already
+excludes lines belonging to a method that IS a kin vocabulary word, which
+would be circular to generate.
+
+*This sentence said "86 lines with nothing in it above eight" and was written
+2026-09-22 07:22.* The committed tool did not print that. Its `in 3` logic is
+unchanged since: the three commits that touched `bin/port_survey.py` afterwards
+(13:27, 13:49, 17:21) are all in the CONSTANTS half, and `AREAS` did not
+change. So the figure was measured some other way, and the lesson is the one
+already written down -- publish what the committed tool prints, because a
+hand-configured one-off encodes decisions the committed path lacks.
+
 **Design:** `DECISIONS.md#kin`. **Tool:** `kin/`.
 
 *This line used to read "phase 1 begun — the codec's primitive writers are
