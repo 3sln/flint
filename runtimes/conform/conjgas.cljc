@@ -23,6 +23,12 @@
   comparing a DIFFERENCE of two workloads rather than a total: it is what the
   two runtimes spend getting started, and it is not the program's.
 
+  CORROBORATED BY A FIXTURE THAT SHARES NOTHING WITH THIS ONE. `bin/conform-
+  hosts` already runs `slicegap`, and its row reads "the gas gap does not
+  scale with the work: 88 at both sizes". Different program, different
+  workload, same 88 -- which is what a fixed cost of entering the two runtimes
+  should look like, and what a per-program accident should not.
+
   WHY THE OLD FIGURES SAID 88 AND 86. The entry points were `small` and `big`,
   and on wasm the gas depends on how long the entry point's name is:
 
