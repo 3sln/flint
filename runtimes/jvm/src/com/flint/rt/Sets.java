@@ -61,9 +61,6 @@ public final class Sets {
 
     public static final int TS_MAP = 0, TS_EDIT = 1;
 
-    public static boolean isTransient(Rt rt, long v) {
-        return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_TSET;
-    }
 
     // `transientOf`, `tconj`, `tdisj`, `tcount`, `tget` and `tpersistent` are
     // GENERATED, from `kin/maptrans.kin`.

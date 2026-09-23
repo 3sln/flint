@@ -49,13 +49,6 @@ public static class Builtins {
     public static Fn ByName(string n) => Table.TryGetValue(n, out var f) ? f : null;
     static void Def(string n, Fn f) => Table[n] = f;
 
-    /// flint's integers OVERFLOW rather than wrap. The JVM has `Math.*Exact`;
-    /// .NET has `checked`, and `DECISIONS.md#other-hosts` names silent wrapping as
-    /// one of the ways two hosts quietly disagree -- so every one of these is
-    /// checked.
-    static long AddExact(long a, long b) { checked { return a + b; } }
-    static long SubExact(long a, long b) { checked { return a - b; } }
-    static long MulExact(long a, long b) { checked { return a * b; } }
 
     static Builtins() {
         // Arithmetic goes through `Num`, which owns the PROMOTION RULE:

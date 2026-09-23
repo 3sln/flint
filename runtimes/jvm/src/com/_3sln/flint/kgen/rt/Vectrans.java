@@ -25,12 +25,6 @@ public final class Vectrans {
         }
         return Val.heap(a);
     }
-    public static boolean isTransientVector(Rt rt, long v) {
-        if (!Val.isHeap(v)) {
-            return false;
-        }
-        return ty(rt.gc.sp, Val.asHeap(v)) == TY_TVEC;
-    }
     /// THE FOUR READERS BELOW ARE THE VECTOR'S, AND THAT IS DELIBERATE.
     /// 
     /// A TRANSIENT'S HEADER IS A VECTOR'S HEADER, PREFIX-WISE. A `TY_VEC` is

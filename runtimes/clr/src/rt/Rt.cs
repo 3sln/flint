@@ -1239,12 +1239,6 @@ public sealed class Rt : System.IDisposable {
         }
     }
 
-    /// flint's integers OVERFLOW rather than wrap. The JVM has `Math.*Exact`;
-    /// .NET has `checked`, and `DECISIONS.md#other-hosts` names silent wrapping as one
-    /// of the ways two hosts quietly disagree.
-    static long AddExact(long a, long b) { checked { return a + b; } }
-    static long SubExact(long a, long b) { checked { return a - b; } }
-    static long MulExact(long a, long b) { checked { return a * b; } }
 
     /// A call whose callee is not a closure.
     ///

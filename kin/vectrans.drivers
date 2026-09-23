@@ -160,8 +160,6 @@ fn main() {
     // A 33-element vector, then a transient over it.
     let v = rt.build(33, BITS);
     let t = rt.vec_transient(v);
-    o.push_str(&format!("istv={} isvec={} ", rt.is_transient_vector(t) as u32,
-                        rt.is_transient_vector(v) as u32));
     o.push_str(&format!("cnt={} sh={} toff={} alive={} ",
         rt.tvec_count(t), rt.tvec_shift(t), rt.tvec_tail_off(t), rt.tvec_alive(t) as u32));
 
@@ -343,8 +341,6 @@ fn main() {
         o.append("tok=").append(e1 != e2 ? 1 : 0).append(' ');
         long v = build(rt, 33, BITS);
         long t = vecTransient(rt, v);
-        o.append("istv=").append(isTransientVector(rt, t) ? 1 : 0)
-         .append(" isvec=").append(isTransientVector(rt, v) ? 1 : 0).append(' ');
         o.append("cnt=").append(tvecCount(rt, t)).append(" sh=").append(tvecShift(rt, t))
          .append(" toff=").append(tvecTailOff(rt, t))
          .append(" alive=").append(tvecAlive(rt, t) ? 1 : 0).append(' ');
@@ -513,8 +509,6 @@ fn main() {
         o.Append("tok=").Append(e1 != e2 ? 1 : 0).Append(' ');
         long v = Build(rt, 33, BITS);
         long t = VecTransient(rt, v);
-        o.Append("istv=").Append(IsTransientVector(rt, t) ? 1 : 0)
-         .Append(" isvec=").Append(IsTransientVector(rt, v) ? 1 : 0).Append(' ');
         o.Append("cnt=").Append(TvecCount(rt, t)).Append(" sh=").Append(TvecShift(rt, t))
          .Append(" toff=").Append(TvecTailOff(rt, t))
          .Append(" alive=").Append(TvecAlive(rt, t) ? 1 : 0).Append(' ');
@@ -541,7 +535,7 @@ fn main() {
         System.Console.WriteLine(o.ToString());
     }
 --expect
-tok=1 istv=1 isvec=0 cnt=33 sh=5 toff=32 alive=1 tailwide=32 srctail=1 rootshared=1 own=1 copied=1 nowowned=1 a0=1 a32=1 t0=4096 t32=4128 tover=57005 dead=0
+tok=1 cnt=33 sh=5 toff=32 alive=1 tailwide=32 srctail=1 rootshared=1 own=1 copied=1 nowowned=1 a0=1 a32=1 t0=4096 t32=4128 tover=57005 dead=0
 --expect-why
 DERIVED BY HAND from `vectrans.kin` against the fixture's 33-element vector,
 not pasted from a run. `build(33, BITS)` lays it out explicitly: tail-off 32,

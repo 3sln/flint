@@ -51,8 +51,6 @@ public static class Sets {
 
     public const int TS_MAP = 0, TS_EDIT = 1;
 
-    public static bool IsTransient(Rt rt, long v) =>
-        Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyTset;
 
     // `TransientOf`, `TConj`, `TDisj`, `TCount`, `TGet` and `TPersistent` are
     // GENERATED, from `kin/maptrans.kin`.

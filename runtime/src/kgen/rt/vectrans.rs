@@ -31,12 +31,6 @@ impl Rt {
         }
         return Value::heap(a);
     }
-    pub fn is_transient_vector(&self, v: Value) -> bool {
-        if !v.is_heap() {
-            return false;
-        }
-        return ty(&self.gc.sp, v.as_heap()) == TY_TVEC;
-    }
     /// THE FOUR READERS BELOW ARE THE VECTOR'S, AND THAT IS DELIBERATE.
     /// 
     /// A TRANSIENT'S HEADER IS A VECTOR'S HEADER, PREFIX-WISE. A `TY_VEC` is

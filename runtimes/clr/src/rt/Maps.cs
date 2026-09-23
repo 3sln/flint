@@ -166,8 +166,6 @@ public static class Maps {
 
     public const int TM_CNT = 0, TM_ROOT = 1, TM_EDIT = 2;
 
-    public static bool IsTransient(Rt rt, long v) =>
-        Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyTmap;
 
     // `TransientOf`, `TGet`, `TAssoc`, `TDissoc`, `TCount` and `TPersistent`
     // are GENERATED, from `kin/maptrans.kin`, and callers name `Maptrans`

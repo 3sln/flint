@@ -27,12 +27,6 @@ public static class Vectrans {
         }
         return Val.Heap(a);
     }
-    public static bool IsTransientVector(Rt rt, long v) {
-        if (!Val.IsHeap(v)) {
-            return false;
-        }
-        return Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyTvec;
-    }
     /// THE FOUR READERS BELOW ARE THE VECTOR'S, AND THAT IS DELIBERATE.
     /// 
     /// A TRANSIENT'S HEADER IS A VECTOR'S HEADER, PREFIX-WISE. A `TY_VEC` is

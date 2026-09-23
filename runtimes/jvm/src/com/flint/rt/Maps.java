@@ -169,9 +169,6 @@ public final class Maps {
 
     public static final int TM_CNT = 0, TM_ROOT = 1, TM_EDIT = 2;
 
-    public static boolean isTransient(Rt rt, long v) {
-        return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_TMAP;
-    }
 
     // `transientOf`, `tget`, `tassoc`, `tdissoc`, `tcount` and `tpersistent`
     // are GENERATED, from `kin/maptrans.kin`, and callers name `Maptrans`

@@ -41,11 +41,6 @@
       (return NIL))
     (return (heap a))))
 
-(defn ^:pub ^:method ^Bool is-transient-vector [^Rt rt ^Value v]
-  (if (not (is-heap v))
-    (return false))
-  (return (== (ty rt (as-heap v)) TY_TVEC)))
-
 (doc "THE FOUR READERS BELOW ARE THE VECTOR'S, AND THAT IS DELIBERATE."
      ""
      "A TRANSIENT'S HEADER IS A VECTOR'S HEADER, PREFIX-WISE. A `TY_VEC` is"

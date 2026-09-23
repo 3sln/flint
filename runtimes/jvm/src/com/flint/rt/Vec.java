@@ -95,9 +95,6 @@ public final class Vec {
     public static long pop(Rt rt, long v) { return vecPop(rt, v); }
     public static long nth(Rt rt, long v, int i, long dflt) { return vecNth(rt, v, i, dflt); }
 
-    /// The TRANSIENT surface, under the names its callers already use. Bodies
-    /// generated -- `Vectrans` for the plumbing, `Vectwrite` for the writes.
-    public static boolean isTransient(Rt rt, long v) { return isTransientVector(rt, v); }
     public static int tcount(Rt rt, long t) { return tvecCount(rt, t); }
     public static boolean alive(Rt rt, long t) { return tvecAlive(rt, t); }
     public static long transientOf(Rt rt, long v) { return vecTransient(rt, v); }
