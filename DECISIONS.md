@@ -6950,7 +6950,8 @@ and not a separate piece of work.
 
 **Status: built 2026-09-12.** `kin/scripts/verify` reads an `--expect` section
 from the `.drivers` file and compares it, byte for byte, against the output the
-targets agreed on. **All 90 kin sources carry one**, and `bin/check-kin`
+targets agreed on. **EVERY kin source carries one** -- 119 of them as of 2026-09-23,
+where this line said 90 until then -- and `bin/check-kin`
 refuses if any source does not — not a floor with a margin, because a margin
 is how ninety drivers came to hold not one expected value without anyone
 deciding on it.
