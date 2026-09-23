@@ -8247,6 +8247,46 @@ the protocol moved into the image instead of being hand-ported. They have
 `installSystemPort` and `bootSystemThreadOnce`; `systemMessage` has zero
 occurrences on either and that is correct rather than missing.
 
+**The wasm outside edge, MEASURED 2026-09-23 rather than described.** The
+design this section is named for is "one door": a `boot`/`init` that accepts a
+bridge port, which becomes the system port, and nothing else. Read off a
+freshly linked module, the edge is 25 exports plus 90 `flint_b_*`:
+
+* the bridge protocol, TWELVE functions, not one -- `flint_install_port`,
+  `flint_system_port`, `flint_deliver`, `flint_drain`, `flint_events_ptr`,
+  `flint_continue`, `flint_resume`, `flint_close`, `flint_port_state`,
+  `flint_in_alloc`, `flint_grant`, `flint_answer`
+  (`units-src/flint-conc/src/bin/manifest.rs:14`);
+* the value codec `arg_alloc` / `arg_push` / `out_ptr` / `out_len`, resource
+  control `set_step_limit` / `set_memory_limit` / `stat_steps`, and
+  `image_desc_addr`, `FLINT_IMAGE_DESC`, `flint_opaque_host_id`
+  (`src/flint/link.cljc:156`, `abi-exports`).
+
+There is no `boot` or `init` export at all. `flint_install_port(id, len,
+system)` is the wasm projection of "the bridge port becomes the system port",
+and it takes a NAME out of a byte buffer plus a flag, not a port. The rest of
+the twelve are the transport a C ABI needs underneath a port -- a wasm boundary
+cannot pass one -- rather than second doors, which is why `calls-are-ports`
+stays true with twelve exports.
+
+*The 90 builtins are not a widening of that surface, and this is worth writing
+down because it reads like one.* `src/flint/link.cljc:464` already settles it:
+they are "internal linkage detail, hundreds of them, and nothing a runner can
+do with the names", `--export`ed only so the registry table survives
+`--gc-sections`, and the module's own `:exports` metadata COUNTS them rather
+than listing them. The declared ABI is the 25.
+
+**Do not read the edge off `out/a.wasm`.** It is stale in the direction that
+misleads: it still exports `main` and has no `flint_system_port`, so it
+describes the ABI as it was before `calls-are-ports` landed.
+
+**The caller port is real and calls do not travel on the system port.**
+`lib/flint/system.cljc:189` -- `:bind {:port p}` spawns `serve-calls` on `p`,
+and a call is `{:op :call :fn ... :args ... :tx n}` on THAT port, answered
+`:return`/`:throw`. The system port carries only `:bind`, `:unbind`, `:close`.
+The one difference from the design as usually stated: the caller port is handed
+IN by the host at bind time rather than created by the system port.
+
 **One claim in this section is now FALSE and it is the interesting one.** It
 says "**None of the concurrency is generated.** All 91 kin sources were
 checked: not one touches ports or scheduling, so `Conc` is hand-written three
