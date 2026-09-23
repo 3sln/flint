@@ -61,7 +61,7 @@ public final class Strnum {
                 return Val.ofDouble(Double.POSITIVE_INFINITY);
             }
             if ((len == 5) && ((rt.cpsAt(c, lo + 2) == 78) && ((rt.cpsAt(c, lo + 3) == 97) && (rt.cpsAt(c, lo + 4) == 78)))) {
-                return Val.ofDouble(Double.NaN);
+                return Val.ofDouble(Double.longBitsToDouble(Val.CANONICAL_NAN));
             }
             if ((len == 6) && ((rt.cpsAt(c, lo + 2) == 45) && ((rt.cpsAt(c, lo + 3) == 73) && ((rt.cpsAt(c, lo + 4) == 110) && (rt.cpsAt(c, lo + 5) == 102))))) {
                 return Val.ofDouble(-1.0 * Double.POSITIVE_INFINITY);

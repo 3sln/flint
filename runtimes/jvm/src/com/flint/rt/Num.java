@@ -93,10 +93,22 @@ public final class Num {
         return null;
     }
 
+    /// GENERATED as `numberF64` (`kin/numf64.kin`). THE NOT-A-NUMBER ANSWER
+    /// IS WHY. Each runtime wrote its own host's constant, and `double.NaN`
+    /// on .NET is FFF8000000000000 -- the NEGATIVE quiet NaN -- where
+    /// `Double.NaN` here and `f64::NAN` on native are both 7FF8000000000000.
+    ///
+    /// Nothing caught it because `=` on two NaNs is false whichever bits they
+    /// carry. The bits escape through `hashDouble`, the snapshot and the wire
+    /// codec, which is a different program from the one that made them, and
+    /// `bin/check-port-consts` compares the two ports' DECLARED constants --
+    /// `Double.NaN` belongs to the host, not to this file.
+    ///
+    /// A delegator rather than a rename, for the reason `integer` above is
+    /// one: the generated code lands in a different CLASS here where native's
+    /// lands as a method on `Rt`.
     public static double f64(Rt rt, long v) {
-        if (Val.isDouble(v)) return Val.asDouble(v);
-        Long n = asI64(rt, v);
-        return n == null ? Double.NaN : (double) n;
+        return com._3sln.flint.kgen.rt.Numf64.numberF64(rt, v);
     }
 
     // A failing arithmetic builtin SETS `thrown` and returns nil, exactly as
@@ -147,11 +159,12 @@ public final class Num {
 
     /// -1, 0 or 1. NaN sorts as EQUAL to everything, matching `Double.compare`'s
     /// use inside Clojure's `compare`.
+    /// GENERATED as `numberCmp`. It went with `f64` because it was the other
+    /// caller of `asI64`, and neither wanted the NULLABILITY -- both used it
+    /// only to ask whether the value is an integer, which `isInt` answers as
+    /// a predicate. `asI64` keeps its other callers and stays here.
     public static int cmp(Rt rt, long a, long b) {
-        Long x = asI64(rt, a), y = asI64(rt, b);
-        if (x != null && y != null) return Long.compare(x, y);
-        double p = f64(rt, a), q = f64(rt, b);
-        return p < q ? -1 : p > q ? 1 : 0;
+        return com._3sln.flint.kgen.rt.Numf64.numberCmp(rt, a, b);
     }
 
     /// A number's hash, GENERATED from `kin/numarith.kin`.

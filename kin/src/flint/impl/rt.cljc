@@ -825,7 +825,20 @@
    ;; for integers -- so a reader has to stop and check which this is.
    'F64_INF {:rust "f64::INFINITY" :java "Double.POSITIVE_INFINITY"
              :csharp "double.PositiveInfinity"}
-   'F64_NAN {:rust "f64::NAN" :java "Double.NaN" :csharp "double.NaN"}
+   ;; NOT THE HOST'S NaN. This was `f64::NAN` / `Double.NaN` / `double.NaN`,
+   ;; and .NET's is the NEGATIVE quiet NaN -- FFF8000000000000 against
+   ;; 7FF8000000000000 on the other two. It is the `##NaN` READER LITERAL, so
+   ;; the divergence was one character of ordinary flint source away, and the
+   ;; bits reach `hash-double`, the snapshot and the wire codec. `=` could
+   ;; never see it: two NaNs are unequal whichever bits they carry.
+   ;;
+   ;; Reinterpreting `CANONICAL_NAN` makes the three the same NUMBER rather
+   ;; than three hosts' idea of one. `longBitsToDouble` is the safe half of
+   ;; the jvm pair -- it hands back the pattern it was given, where
+   ;; `doubleToLongBits` canonicalises and caused a divergence of its own.
+   'F64_NAN {:rust "f64::from_bits(crate::value::CANONICAL_NAN)"
+             :java "Double.longBitsToDouble(Val.CANONICAL_NAN)"
+             :csharp "System.BitConverter.Int64BitsToDouble(Val.CanonicalNan)"}
    'INTERN_MAX {:rust "crate::strs::INTERN_MAX"
                 :java "com.flint.rt.Interns.INTERN_MAX"
                 :csharp "global::Flint.Rt.Interns.InternMax"}

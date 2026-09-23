@@ -75,11 +75,22 @@ public static class Num {
         return null;
     }
 
-    public static double F64(Rt rt, long v) {
-        if (Val.IsDouble(v)) return Val.AsDouble(v);
-        long? n = AsI64(rt, v);
-        return n == null ? Double.NaN : (double) n.Value;
-    }
+    /// GENERATED as `NumberF64` (`kin/numf64.kin`). THE NOT-A-NUMBER ANSWER
+    /// IS WHY. Each runtime wrote its own host's constant, and `double.NaN`
+    /// here is FFF8000000000000 -- the NEGATIVE quiet NaN -- where
+    /// `Double.NaN` on the jvm and `f64::NAN` on native are both 7FF8000000000000.
+    ///
+    /// Nothing caught it because `=` on two NaNs is false whichever bits they
+    /// carry. The bits escape through `HashDouble`, the snapshot and the wire
+    /// codec, which is a different program from the one that made them, and
+    /// `bin/check-port-consts` compares the two ports' DECLARED constants --
+    /// `Double.NaN` belongs to the host, not to this file.
+    ///
+    /// A delegator rather than a rename, for the reason `Integer` above is
+    /// one: the generated code lands in a different CLASS here where native's
+    /// lands as a method on `Rt`.
+    public static double F64(Rt rt, long v) =>
+        global::_3sln.Flint.Kgen.Rt.Numf64.NumberF64(rt, v);
 
     // A failing arithmetic builtin SETS `thrown` and returns nil, exactly as
     // the Rust does. Throwing a host exception here would leave flint's `try`
@@ -124,12 +135,12 @@ public static class Num {
 
     /// -1, 0 or 1. NaN sorts as EQUAL to everything, matching `Double.compare`'s
     /// use inside Clojure's `compare`.
-    public static int Cmp(Rt rt, long a, long b) {
-        long? x = AsI64(rt, a), y = AsI64(rt, b);
-        if (x != null && y != null) return x.Value.CompareTo(y.Value);
-        double p = F64(rt, a), q = F64(rt, b);
-        return p < q ? -1 : p > q ? 1 : 0;
-    }
+    /// GENERATED as `NumberCmp`. It went with `F64` because it was the other
+    /// caller of `AsI64`, and neither wanted the NULLABILITY -- both used it
+    /// only to ask whether the value is an integer, which `IsInt` answers as
+    /// a predicate. `AsI64` keeps its other callers and stays here.
+    public static int Cmp(Rt rt, long a, long b) =>
+        global::_3sln.Flint.Kgen.Rt.Numf64.NumberCmp(rt, a, b);
 
     /// Fully qualified because `Num` declares its own `Hash`, which shadows the
     /// `Hash` CLASS inside this file -- the same clash `Maps` has.

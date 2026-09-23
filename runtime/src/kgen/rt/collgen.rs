@@ -13,11 +13,19 @@ use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
-use crate::kgen::rt::hash::*;
-use crate::kgen::rt::hashtext::*;
-use crate::kgen::rt::pike::*;
-use crate::kgen::rt::casetable::*;
-use crate::kgen::rt::hamt::*;
+use crate::kgen::rt::bytecore::*;
+use crate::kgen::rt::mapcore::*;
+use crate::kgen::rt::maptrans::*;
+use crate::kgen::rt::nouns::*;
+use crate::kgen::rt::ropemeas::*;
+use crate::kgen::rt::seqcore::*;
+use crate::kgen::rt::seqwalk::*;
+use crate::kgen::rt::setcore::*;
+use crate::kgen::rt::tablemeta::*;
+use crate::kgen::rt::tabletrans::*;
+use crate::kgen::rt::vecassoc::*;
+use crate::kgen::rt::vecread::*;
+use crate::kgen::rt::vectrans::*;
 
 impl Rt {
     /// How many things are in it.

@@ -13,11 +13,14 @@ use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
-use crate::kgen::rt::hash::*;
-use crate::kgen::rt::hashtext::*;
-use crate::kgen::rt::pike::*;
-use crate::kgen::rt::casetable::*;
-use crate::kgen::rt::hamt::*;
+use crate::kgen::rt::eq::*;
+use crate::kgen::rt::mapcore::*;
+use crate::kgen::rt::names::*;
+use crate::kgen::rt::numkind::*;
+use crate::kgen::rt::ropemeas::*;
+use crate::kgen::rt::seqcore::*;
+use crate::kgen::rt::setcore::*;
+use crate::kgen::rt::vecread::*;
 
 impl Rt {
     /// Is `v` a function -- a closure, a native, or a multifn?

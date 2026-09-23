@@ -13,11 +13,10 @@ use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
-use crate::kgen::rt::hash::*;
-use crate::kgen::rt::hashtext::*;
-use crate::kgen::rt::pike::*;
-use crate::kgen::rt::casetable::*;
-use crate::kgen::rt::hamt::*;
+use crate::kgen::rt::tablecell::*;
+use crate::kgen::rt::tablemeta::*;
+use crate::kgen::rt::tableref::*;
+use crate::kgen::rt::tablesay::*;
 
 impl Rt {
     /// `(reduce-column t :col f init)` -- `f` over one column.

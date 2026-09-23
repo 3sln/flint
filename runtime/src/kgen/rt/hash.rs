@@ -13,10 +13,6 @@ use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
-use crate::kgen::rt::hashtext::*;
-use crate::kgen::rt::pike::*;
-use crate::kgen::rt::casetable::*;
-use crate::kgen::rt::hamt::*;
 
 pub(crate) const C1: u32 = 0xcc9e2d51;
 pub(crate) const C2: u32 = 0x1b873593;

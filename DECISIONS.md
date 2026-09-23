@@ -4964,6 +4964,119 @@ That is a real gap, and this is the first instance found in it. A word used by
 one source over a narrow range of values is a word whose three spellings have
 been compared on that range and nowhere else.
 
+### A fourth NaN, and the constant the earlier fix could not reach
+
+**Found 2026-09-22 while porting `Num.f64` and `Num.cmp` to kin.** The three
+runtimes disagreed about what `num_f64` answers when handed something that is
+not a number. Each spelled it as its own host's constant, and two of those are
+the same number and one is not:
+
+    rust     f64::NAN      7FF8000000000000
+    java     Double.NaN    7FF8000000000000
+    csharp   double.NaN    FFF8000000000000     <- the sign bit
+
+**Measured on all three hosts, not argued from the specs**, and the
+measurement corrected the first guess twice over. `double.NaN` on .NET really
+is the negative quiet NaN, at runtime and not merely as a folded constant.
+But ARITHMETIC NaN is not the divergence: `0.0/0.0`, `sqrt(-1)` and
+`inf-inf` all produce `7FF8000000000000` on all three hosts here. The first
+probe said otherwise only because `0.0/0.0` written as a literal is folded by
+the C# compiler, which does not use the hardware's answer. The named constant
+is the whole of it.
+
+**Why every instrument agreed.** `=` on two NaNs is false whichever bits they
+carry, so equality could not see it. The bits escape through `hash-double`,
+the snapshot and the wire codec -- a different program from the one that made
+them. `bin/check-port-consts` compares the two ports' DECLARED constants, and
+`Double.NaN` is the host's, not either port's, so there was nothing to
+compare.
+
+**The earlier `CANONICAL_NAN` fix could not reach this**, and the reason is
+worth keeping. When the same divergence was found in `Val`, all three runtimes
+were given a named `CANONICAL_NAN` and `make-double` (`kin/valtag.kin`) folds
+a NaN to it. But it folds only a pattern whose tag is at or above
+`TAG_MIN_BOXED`, `0xFFF9`, because that is the range that would collide with a
+tagged value. `0xFFF8` is one short of it. The CLR's NaN passes that filter
+untouched. A canonicalising constructor is not a guarantee that every NaN in
+the system is canonical -- it is a guarantee about the range it was written to
+defend.
+
+**The decision:** `num_f64` and `num_cmp` are generated, from `kin/numf64.kin`,
+and the not-a-number answer is `f64-of-bits CANONICAL_NAN` -- the same number
+in three languages because it stopped being the host's. Native's `num_f64`
+(`runtime/src/num.rs:93`) and the clr's `F64` (`runtimes/clr/src/rt/Num.cs:92`)
+are delegators onto `number_f64` (`runtime/src/kgen/rt/numf64.rs:32`).
+
+**`Option<i64>` was the stated blocker and was not one.** All three files
+carried the same note: `asI64` answers "the integer, or nothing", a nullable
+type kin has not got, so `f64` and `cmp` stay hand-written. True about
+`as_i64`, which keeps its thirty-odd other callers. False about these two --
+they used the nullability only to ASK whether a value is an integer, and
+`is-int` answers that as a predicate. `numkind.kin` had already recorded the
+same substitution for `both-ints`. A blocker attached to a shared helper had
+been read as a blocker on every caller of it.
+
+**`kin/numf64.drivers` pins it** with the not-a-number case printed as RAW
+bits, since NaN is not equal to itself and a probe comparing doubles would
+report agreement whatever each runtime produced. The jvm probe uses
+`doubleToRawLongBits` for the same reason its non-raw sibling caused the
+`f64-bits` divergence above. Two more cases earn their place: `2^53+1`
+against `2^53` must compare as 1 and -1, though both convert to the same
+double, so a `num_cmp` that promoted first would call two integers that
+differ by one equal; and a mixed integer/double pair must NOT take the
+integer path.
+
+**A second finding, from the same change.** Rust's sibling imports in
+`targets.cljc` were a HAND-KEPT list of five module names, and the comment
+beside it already said that was a trap -- a new free-function source compiles
+on both ports and fails only on Rust, with "cannot find function" at the
+caller, and `hamt` had cost exactly that. `valtag` then cost it again. The
+comment did not prevent the second instance, because a paragraph asking
+someone to remember a list is not a mechanism that remembers it.
+`siblings-used` (`kin/src/flint/impl/targets.cljc:220`) had been deriving the
+same thing for Java and C# two hundred lines up. Rust now uses it: 115
+generated files, 552 import lines removed and 342 added.
+
+**AND THE SAME BUG WAS ALSO IN THE VOCABULARY, one file away.** Sweeping for
+other host NaN constants after fixing `num_f64` found `F64_NAN`, whose three
+templates were `f64::NAN`, `Double.NaN` and `double.NaN` -- and it is what
+`kin/strnum.kin` returns for the `##NaN` READER LITERAL. So the divergence was
+one character of ordinary flint source away from any program, not buried
+behind an unguarded internal call. It now reinterprets `CANONICAL_NAN` on all
+three.
+
+**`kin/strnum.drivers` already parsed `##NaN` and could never have seen it.**
+Its printer answered `dNaN` for any NaN, because that is how you print a
+double without depending on the host's formatter -- and a label agrees no
+matter which bits arrived. It prints `NaN:%016X` now. Proven by reverting the
+C# template alone: the probe then reports `dNaN:FFF8000000000000` against
+`dNaN:7FF8000000000000` on the other two and FAILS, which is also the
+end-to-end confirmation that the reader really did produce different bits on
+the CLR.
+
+**A bounded survey, so this is not left as "there may be more".** The
+vocabulary has 158 constants with three literal templates. All but four
+resolve to a constant one of the runtimes DECLARES -- those are what
+`bin/check-port-consts` already compares. The four the hosts supply are
+`I64_MIN`, `I64_MAX`, `F64_INF` and `F64_NAN`. The first three cannot differ:
+two's complement fixes the integer bounds and +infinity has one
+representation. `F64_NAN` is the only host-supplied constant in the
+vocabulary whose value was free to vary between hosts, and it was the one
+that varied.
+
+**A third, found by the fix tripping a gate.** `check-names` refused the new
+`F64_NAN` template: "no file under runtimes/jvm/src/com/flint/rt defines
+`CANONICAL_NAN)`" -- with the closing paren. Its `ident` took the last
+`.`/`:`-separated chunk, which is the whole of a dotted path and not the whole
+of an EXPRESSION, and `F64_NAN` is the first name template that had to be one.
+It now takes the last identifier. The failure was worth reading rather than
+working around: it named a real constant and a real tree and said nothing
+defined it, and every word was true of the string it had built. Proven still
+sharp by planting `NO_SUCH_CONSTANT` inside the same call shape, which it
+catches.
+
+
+
 
 ## cross-runtime-benchmarks
 

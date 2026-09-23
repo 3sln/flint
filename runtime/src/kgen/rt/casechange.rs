@@ -13,11 +13,10 @@ use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
-use crate::kgen::rt::hash::*;
-use crate::kgen::rt::hashtext::*;
-use crate::kgen::rt::pike::*;
+use crate::kgen::rt::casemap::*;
 use crate::kgen::rt::casetable::*;
-use crate::kgen::rt::hamt::*;
+use crate::kgen::rt::codepoints::*;
+use crate::kgen::rt::ropemeas::*;
 
 impl Rt {
     /// Write `cp` to `sk` as UTF-8, and answer how many bytes that took.

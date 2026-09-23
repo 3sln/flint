@@ -78,12 +78,20 @@ impl Rt {
     }
 
     #[inline]
+    /// GENERATED as `number_f64`. THE NOT-A-NUMBER ANSWER IS WHY. This wrote
+    /// `f64::NAN`, the jvm wrote `Double.NaN` and the clr wrote `double.NaN`
+    /// -- and the last of those is the NEGATIVE quiet NaN, FFF8000000000000
+    /// against 7FF8000000000000 on the other two. Measured on all three
+    /// hosts, at runtime rather than as a folded constant.
+    ///
+    /// `=` on two NaNs is false whichever bits they carry, so every equality
+    /// test agreed; the bits escape through `hash_double`, the snapshot and
+    /// the wire codec, which is a different program from the one that made
+    /// them. `bin/check-port-consts` could not see it either -- it compares
+    /// the two ports' declared CONSTANTS, and `double.NaN` is the host's, not
+    /// theirs. The generated body asks `CANONICAL_NAN` instead of the host.
     pub fn num_f64(&self, v: Value) -> f64 {
-        if v.is_double() {
-            v.as_f64()
-        } else {
-            self.as_i64(v).map(|n| n as f64).unwrap_or(f64::NAN)
-        }
+        self.number_f64(v)
     }
 
 
@@ -105,28 +113,12 @@ impl Rt {
 
     /// `compare` for numbers: -1, 0 or 1. NaN sorts as equal to everything,
     /// matching `Double.compare`'s use inside Clojure's `compare`.
+    /// GENERATED as `number_cmp`. It went with `num_f64` because it was the
+    /// other caller of `as_i64`, and neither wanted the NULLABILITY -- both
+    /// used it only to ask whether the value is an integer, which `is_int`
+    /// answers as a predicate. `as_i64` keeps its thirty-odd other callers.
     pub fn num_cmp(&self, a: Value, b: Value) -> i32 {
-        match (self.as_i64(a), self.as_i64(b)) {
-            (Some(x), Some(y)) => {
-                if x < y {
-                    -1
-                } else if x > y {
-                    1
-                } else {
-                    0
-                }
-            }
-            _ => {
-                let (x, y) = (self.num_f64(a), self.num_f64(b));
-                if x < y {
-                    -1
-                } else if x > y {
-                    1
-                } else {
-                    0
-                }
-            }
-        }
+        self.number_cmp(a, b)
     }
 
 }

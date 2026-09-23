@@ -13,11 +13,16 @@ use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
-use crate::kgen::rt::hash::*;
-use crate::kgen::rt::hashtext::*;
-use crate::kgen::rt::pike::*;
-use crate::kgen::rt::casetable::*;
-use crate::kgen::rt::hamt::*;
+use crate::kgen::rt::mapread::*;
+use crate::kgen::rt::mapwrite::*;
+use crate::kgen::rt::names::*;
+use crate::kgen::rt::tablecell::*;
+use crate::kgen::rt::tablekind::*;
+use crate::kgen::rt::tablemeta::*;
+use crate::kgen::rt::tableref::*;
+use crate::kgen::rt::tablesay::*;
+use crate::kgen::rt::vecread::*;
+use crate::kgen::rt::vecwrite::*;
 
 impl Rt {
     /// `[[name type] ...]` -> a schema.

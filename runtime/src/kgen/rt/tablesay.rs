@@ -13,11 +13,14 @@ use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
-use crate::kgen::rt::hash::*;
-use crate::kgen::rt::hashtext::*;
-use crate::kgen::rt::pike::*;
-use crate::kgen::rt::casetable::*;
-use crate::kgen::rt::hamt::*;
+use crate::kgen::rt::mapcore::*;
+use crate::kgen::rt::names::*;
+use crate::kgen::rt::ropemeas::*;
+use crate::kgen::rt::tablecell::*;
+use crate::kgen::rt::tablekind::*;
+use crate::kgen::rt::tablemeta::*;
+use crate::kgen::rt::tableref::*;
+use crate::kgen::rt::vecread::*;
 
 impl Rt {
     /// A keyword's name as host text, or `?` when it has none.

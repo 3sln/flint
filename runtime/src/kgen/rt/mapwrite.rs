@@ -13,11 +13,13 @@ use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
-use crate::kgen::rt::hash::*;
-use crate::kgen::rt::hashtext::*;
-use crate::kgen::rt::pike::*;
-use crate::kgen::rt::casetable::*;
-use crate::kgen::rt::hamt::*;
+use crate::kgen::rt::assoc::*;
+use crate::kgen::rt::collnode::*;
+use crate::kgen::rt::dissoc::*;
+use crate::kgen::rt::mapcore::*;
+use crate::kgen::rt::mapread::*;
+use crate::kgen::rt::tableref::*;
+use crate::kgen::rt::valhash::*;
 
 impl Rt {
     /// An array map rebuilt as a CHAMP. The one-way door between the two

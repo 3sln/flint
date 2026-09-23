@@ -13,11 +13,14 @@ use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
-use crate::kgen::rt::hash::*;
-use crate::kgen::rt::hashtext::*;
-use crate::kgen::rt::pike::*;
-use crate::kgen::rt::casetable::*;
-use crate::kgen::rt::hamt::*;
+use crate::kgen::rt::assoc::*;
+use crate::kgen::rt::dissoc::*;
+use crate::kgen::rt::find::*;
+use crate::kgen::rt::mapcore::*;
+use crate::kgen::rt::mapwrite::*;
+use crate::kgen::rt::setcore::*;
+use crate::kgen::rt::valhash::*;
+use crate::kgen::rt::vectrans::*;
 
 impl Rt {
     /// A transient view of `m`.

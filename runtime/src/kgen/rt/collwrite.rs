@@ -13,11 +13,19 @@ use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
-use crate::kgen::rt::hash::*;
-use crate::kgen::rt::hashtext::*;
-use crate::kgen::rt::pike::*;
-use crate::kgen::rt::casetable::*;
-use crate::kgen::rt::hamt::*;
+use crate::kgen::rt::byteat::*;
+use crate::kgen::rt::bytecore::*;
+use crate::kgen::rt::mapwrite::*;
+use crate::kgen::rt::names::*;
+use crate::kgen::rt::numkind::*;
+use crate::kgen::rt::opaque::*;
+use crate::kgen::rt::ropemeas::*;
+use crate::kgen::rt::seqwalk::*;
+use crate::kgen::rt::tablemake::*;
+use crate::kgen::rt::tablerow::*;
+use crate::kgen::rt::vecassoc::*;
+use crate::kgen::rt::vecread::*;
+use crate::kgen::rt::vecroots::*;
 
 impl Rt {
     /// `(assoc coll k v)`, whichever associative thing `coll` is.

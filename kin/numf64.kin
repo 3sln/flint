@@ -1,0 +1,94 @@
+;; THE NOT-A-NUMBER ANSWER, which is where the three runtimes differed.
+;;
+;; `num_f64` promotes any number to a double, and answers NaN when handed
+;; something that is not a number at all. All three spelled that answer as
+;; their own host's constant -- `f64::NAN`, `Double.NaN`, `double.NaN` -- and
+;; TWO OF THOSE ARE THE SAME NUMBER AND ONE IS NOT:
+;;
+;;   rust   f64::NAN    7FF8000000000000
+;;   java   Double.NaN  7FF8000000000000
+;;   csharp double.NaN  FFF8000000000000   <- the sign bit
+;;
+;; Measured, not reasoned about: `double.NaN` really is the negative quiet NaN
+;; on .NET, at runtime and not merely as a folded constant. Arithmetic NaN is
+;; not the culprit -- `0.0/0.0`, `sqrt(-1)` and `inf-inf` all produce
+;; 7FF8000000000000 on all three hosts here. It is the NAMED CONSTANT alone.
+;;
+;; WHY NOTHING CAUGHT IT. `=` on two NaNs is false whichever bits they carry,
+;; so every equality test agreed. The bits escape through `hash-double`, the
+;; snapshot and the wire codec, and that is a different program from the one
+;; that produced them. `bin/check-port-consts` compares the ports' CONSTANTS
+;; to each other and `Double.NaN` is not a constant either port declares -- it
+;; belongs to the host.
+;;
+;; THE EARLIER FIX DID NOT REACH HERE. `CANONICAL_NAN` was named on all three
+;; runtimes when the same divergence was found in `Val`, and `make-double`
+;; folds a NaN to it -- but only for a bit pattern whose tag is at or above
+;; `TAG_MIN_BOXED` (0xFFF9), because that is the range that would collide with
+;; a tagged value. 0xFFF8 is one short of it. The CLR's NaN passes that filter
+;; untouched, which is exactly why naming the constant in `Val` left this
+;; alone. The answer is to stop asking the host: `f64-of-bits CANONICAL_NAN`
+;; is the same number in three languages.
+;;
+;; `Option<i64>` IS NOT NEEDED HERE, which is the other half of why this can
+;; be generated at all. Both runtimes' `asI64` returns "the integer, or
+;; nothing" -- a nullable type kin has not got, and the stated reason all of
+;; this stayed hand-written. But neither of these two functions wants the
+;; nullability: they use it only to ASK whether the value is an integer, and
+;; `is-int` answers that as a predicate. `numkind.kin` recorded the same
+;; substitution for `both-ints`. `as_i64` keeps its other thirty-odd callers
+;; and stays hand-written; these two stop being among them.
+(ns flint.rt.numf64
+  (:require [flint.impl.rt :refer [defn return if let comment doc == < > and
+                                   is-double i64-of f64-of-bits to-f64
+                                   Rt Value F64 I64 Cmp CANONICAL_NAN]]
+            [flint.rt.valtag :refer [double-value]]
+            [flint.rt.numkind :refer [is-int]]))
+
+(doc "Any number as a double; NaN when `v` is not a number."
+     ""
+     "The double first, because it is the test on the value word and needs no"
+     "tag read. `double-value` is a REINTERPRETATION of the bits and not a"
+     "conversion -- the number is already there."
+     ""
+     "`f64-of-bits` is `Double.longBitsToDouble` on the jvm, which is the"
+     "SAFE direction of that pair: it hands back the pattern it was given."
+     "Its opposite, `doubleToLongBits`, canonicalises every NaN it is shown"
+     "and produced a generated-code divergence of its own -- see the"
+     "`f64-bits` record in DECISIONS.md. Reading bits into a double is not"
+     "the hazard; writing a double out to bits is.")
+(defn ^:pub ^:method ^F64 number-f64 [^Rt rt ^Value v]
+  (if (is-double rt v)
+    (return (double-value v)))
+  (if (is-int rt v)
+    (return (to-f64 (i64-of rt v))))
+  (return (f64-of-bits CANONICAL_NAN)))
+
+(doc "-1, 0 or 1. NaN sorts as EQUAL to everything, matching the use of"
+     "`Double.compare` inside Clojure's `compare`."
+     ""
+     "BOTH INTEGERS TAKE THE INTEGER PATH, and the reason is not speed: two"
+     "i64s past 2^53 are not distinguishable once promoted to double, so"
+     "comparing them as doubles would call unequal integers equal."
+     ""
+     "The branch is spelled out rather than delegated to a host comparator."
+     "`Long.compare` and `CompareTo` are each documented to return only the"
+     "SIGN, and both happen to return -1/0/1; native already wrote the"
+     "branch. Three hosts with three idioms is three chances to decide an"
+     "edge differently, which is what `(quot MIN -1)` did.")
+(defn ^:pub ^:method ^Cmp number-cmp [^Rt rt ^Value a ^Value b]
+  (if (and (is-int rt a) (is-int rt b))
+    (let [^I64 x (i64-of rt a)
+          ^I64 y (i64-of rt b)]
+      (if (< x y)
+        (return -1))
+      (if (> x y)
+        (return 1))
+      (return 0)))
+  (let [^F64 p (number-f64 rt a)
+        ^F64 q (number-f64 rt b)]
+    (if (< p q)
+      (return -1))
+    (if (> p q)
+      (return 1))
+    (return 0)))

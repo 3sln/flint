@@ -321,22 +321,29 @@
           ;; ports. `vecread` is the first generated source to name one.
           "use crate::vector::*;\n"
           "use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};\n"
-          ;; The modules whose exports a sibling names UNQUALIFIED. Three are
-          ;; free-function modules; the rest of the generated tree is methods,
-          ;; and a method needs no import in Rust at all.
+          ;; The modules whose exports a sibling names UNQUALIFIED. Free
+          ;; functions need this; so does a `defdata`, which emits
+          ;; module-level `static`s and `const`s that a sibling reaches the
+          ;; same way. The rest of the generated tree is methods, and a
+          ;; method needs no import in Rust at all -- those glob in as
+          ;; nothing, which is why importing a mentioned sibling is always
+          ;; safe here.
           ;;
-          ;; THIS LIST IS HAND-KEPT AND JAVA'S IS NOT, which is a trap worth
-          ;; naming: a new free-function source compiles on both ports and
-          ;; fails only on Rust, with "cannot find function" at the CALLER.
-          ;; `hamt` was the third and cost exactly that.
+          ;; DERIVED, the same way Java's and C#'s are. This was a hand-kept
+          ;; list of five names, and its own comment called that a trap: a
+          ;; new free-function source compiles on both ports and fails only
+          ;; on Rust, with "cannot find function" at the CALLER. `hamt` cost
+          ;; exactly that, the comment was written, and `valtag` then cost it
+          ;; again -- the comment had not stopped the second one, because a
+          ;; paragraph asking to remember a list is not a mechanism that
+          ;; remembers it. `siblings-used` already existed two hundred lines
+          ;; up and already answered this question for the other two targets.
           ;;
-          ;; `casetable` is the third and a different kind: a `defdata` emits
-          ;; module-level `static`s and `const`s, which a sibling reaches the
-          ;; same way it reaches a free function. `defn`'s cross-unit rule
-          ;; qualifies for Java and C# and does nothing for Rust -- right for
-          ;; an inherent `impl` method, which is what it was written for, and
-          ;; not a rule about data. An import is what Rust wants instead.
-          (str/join (for [s ["hash" "hashtext" "pike" "casetable" "hamt"] :when (not= s self)]
+          ;; Importing them ALL is the version that does not work, and the
+          ;; reason is in `defines-symbol`: two modules offering one name
+          ;; make it ambiguous rather than making it resolve. Deriving from
+          ;; what the source MENTIONS is what avoids that.
+          (str/join (for [s (siblings-used forms self)]
                       (str "use crate::" (str/join "::" (:rust generated-root))
                            "::" (str/join "::" (first (ns-tail ns-name)))
                            "::" s "::*;\n"))))

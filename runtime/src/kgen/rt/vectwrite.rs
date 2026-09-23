@@ -13,11 +13,11 @@ use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
-use crate::kgen::rt::hash::*;
-use crate::kgen::rt::hashtext::*;
-use crate::kgen::rt::pike::*;
-use crate::kgen::rt::casetable::*;
-use crate::kgen::rt::hamt::*;
+use crate::kgen::rt::vecassoc::*;
+use crate::kgen::rt::vecnode::*;
+use crate::kgen::rt::vecread::*;
+use crate::kgen::rt::vectrans::*;
+use crate::kgen::rt::vecwrite::*;
 
 impl Rt {
     /// Fold the tail into the trie, taking ownership of the spine as it goes.

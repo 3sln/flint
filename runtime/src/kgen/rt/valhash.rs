@@ -13,11 +13,17 @@ use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
+use crate::kgen::rt::bytehash::*;
+use crate::kgen::rt::collhash::*;
 use crate::kgen::rt::hash::*;
 use crate::kgen::rt::hashtext::*;
-use crate::kgen::rt::pike::*;
-use crate::kgen::rt::casetable::*;
-use crate::kgen::rt::hamt::*;
+use crate::kgen::rt::names::*;
+use crate::kgen::rt::ropeflat::*;
+use crate::kgen::rt::ropemeas::*;
+use crate::kgen::rt::seqwalk::*;
+use crate::kgen::rt::tablemeta::*;
+use crate::kgen::rt::tableref::*;
+use crate::kgen::rt::vecread::*;
 
 impl Rt {
     /// A PLAIN VECTOR IS HASHED BY INDEX, not by walking a seq.

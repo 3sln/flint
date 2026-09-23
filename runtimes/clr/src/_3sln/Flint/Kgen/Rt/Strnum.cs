@@ -63,7 +63,7 @@ public static class Strnum {
                 return Val.OfDouble(double.PositiveInfinity);
             }
             if ((len == 5) && ((rt.CpsAt(c, lo + 2) == 78) && ((rt.CpsAt(c, lo + 3) == 97) && (rt.CpsAt(c, lo + 4) == 78)))) {
-                return Val.OfDouble(double.NaN);
+                return Val.OfDouble(System.BitConverter.Int64BitsToDouble(Val.CanonicalNan));
             }
             if ((len == 6) && ((rt.CpsAt(c, lo + 2) == 45) && ((rt.CpsAt(c, lo + 3) == 73) && ((rt.CpsAt(c, lo + 4) == 110) && (rt.CpsAt(c, lo + 5) == 102))))) {
                 return Val.OfDouble(-1.0 * double.PositiveInfinity);

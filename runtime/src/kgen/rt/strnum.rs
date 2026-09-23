@@ -13,11 +13,8 @@ use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
-use crate::kgen::rt::hash::*;
-use crate::kgen::rt::hashtext::*;
-use crate::kgen::rt::pike::*;
-use crate::kgen::rt::casetable::*;
-use crate::kgen::rt::hamt::*;
+use crate::kgen::rt::codepoints::*;
+use crate::kgen::rt::ropemeas::*;
 
 impl Rt {
     /// Is `ch` a space, tab, newline, carriage return or form feed?
@@ -68,7 +65,7 @@ impl Rt {
                 return Value::from_f64(f64::INFINITY);
             }
             if (len == 5) && ((self.cps_at(c, lo + 2) == 78) && ((self.cps_at(c, lo + 3) == 97) && (self.cps_at(c, lo + 4) == 78))) {
-                return Value::from_f64(f64::NAN);
+                return Value::from_f64(f64::from_bits(crate::value::CANONICAL_NAN));
             }
             if (len == 6) && ((self.cps_at(c, lo + 2) == 45) && ((self.cps_at(c, lo + 3) == 73) && ((self.cps_at(c, lo + 4) == 110) && (self.cps_at(c, lo + 5) == 102)))) {
                 return Value::from_f64(-1.0 * f64::INFINITY);

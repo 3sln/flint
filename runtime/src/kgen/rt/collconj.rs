@@ -13,11 +13,15 @@ use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
-use crate::kgen::rt::hash::*;
-use crate::kgen::rt::hashtext::*;
-use crate::kgen::rt::pike::*;
-use crate::kgen::rt::casetable::*;
-use crate::kgen::rt::hamt::*;
+use crate::kgen::rt::mapconj::*;
+use crate::kgen::rt::mapcore::*;
+use crate::kgen::rt::mapwrite::*;
+use crate::kgen::rt::nouns::*;
+use crate::kgen::rt::seqcore::*;
+use crate::kgen::rt::setcore::*;
+use crate::kgen::rt::tablerow::*;
+use crate::kgen::rt::vecroots::*;
+use crate::kgen::rt::vecwrite::*;
 
 impl Rt {
     /// What `conj` means for ONE element, on whatever `coll` turns out to be.

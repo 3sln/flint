@@ -41,7 +41,21 @@
 ;; The bare identifier a spelling ends in: `Obj.TyCons` is defined as `TyCons`,
 ;; `Val.NIL` as `NIL`. Qualification is the CALLER's business and says nothing
 ;; about how the definition is written.
-(defn ident [s] (last (str/split s #"[.:]")))
+(defn ident
+  "The last IDENTIFIER in a name template.
+
+  This was `(last (str/split s #\"[.:]\"))`, which assumes a name template is
+  a DOTTED PATH and nothing else -- `Val.NIL`, `crate::obj::HDR`. That held
+  until a template had to be an EXPRESSION: `F64_NAN` reinterprets
+  `CANONICAL_NAN` rather than naming the host's NaN, so java emits
+  `Double.longBitsToDouble(Val.CANONICAL_NAN)` and the old split answered
+  `CANONICAL_NAN)` -- with the paren -- which no file defines. The constant
+  was there the whole time; the extraction was not looking for an identifier.
+
+  THE FAILURE READ AS A REAL ONE, which is the part worth keeping: it named a
+  constant, named the tree, and said no file defined it, and every word of
+  that was true about the string it had built."
+  [s] (last (re-seq #"[A-Za-z_][A-Za-z0-9_]*" s)))
 
 (def failures (atom 0))
 

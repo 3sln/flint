@@ -6,6 +6,11 @@
 // correctness.
 #[derive(Clone, Copy, PartialEq)]
 struct Value(u64);
+// THE REAL CONSTANT, written out in all three probes. `##NaN` is a reader
+// literal and the three runtimes used to answer it with their own host's
+// NaN, one of which is the NEGATIVE quiet NaN. If a runtime ever
+// disagrees about this number, these lines are where it shows.
+pub mod value { pub const CANONICAL_NAN: u64 = 0x7FF8_0000_0000_0000; }
 const NIL: Value = Value(0xFFFF_FFFF_FFFF_FFFF);
 struct Rt { ints: Vec<i64>, strs: Vec<String>, cps: Vec<Vec<u32>> }
 // NAN-BOXED, because `of-double` takes no runtime: there is nowhere to put a
@@ -50,7 +55,7 @@ fn main() {
         let r = rt.str_to_num(v);
         if r == NIL { o.push_str("nil"); }
         else if r.tag() == 1 { o.push_str(&format!("i{}", rt.ints[r.idx()])); }
-        else { let d = r.as_f64(); o.push_str(&format!("d{}", if d.is_nan() { String::from("NaN") } else if d.is_infinite() { String::from(if d > 0.0 { "Inf" } else { "-Inf" }) } else { format!("{:e}", d) })); }
+        else { let d = r.as_f64(); o.push_str(&format!("d{}", if d.is_nan() { format!("NaN:{:016X}", d.to_bits()) } else if d.is_infinite() { String::from(if d > 0.0 { "Inf" } else { "-Inf" }) } else { format!("{:e}", d) })); }
         o.push(' ');
     }
     println!("{}", o);
@@ -92,6 +97,7 @@ fn main() {
         static long integer(Rt rt, long n) { rt.ints.add(n); return BOX | (1L << 32) | (rt.ints.size() - 1); }
     }
     static final class Val {
+        static final long CANONICAL_NAN = 0x7FF8000000000000L;
         static final long NIL = Probe.NIL;
         static long ofDouble(double d) { return Double.doubleToRawLongBits(d); }
     }
@@ -116,7 +122,10 @@ fn main() {
     // The SAME spelling as Rust's `{:e}`, so three targets can be compared
     // without the answer depending on how each host prints a double.
     static String show(double d) {
-        if (Double.isNaN(d)) return "NaN";
+        // BITS, not the label. `##NaN` is a READER LITERAL and each runtime
+        // used to answer it with its own host constant, one of which is the
+        // negative quiet NaN. Printing "NaN" agreed no matter which arrived.
+        if (Double.isNaN(d)) return String.format("NaN:%016X", Double.doubleToRawLongBits(d));
         if (Double.isInfinite(d)) return d > 0 ? "Inf" : "-Inf";
         java.math.BigDecimal b = new java.math.BigDecimal(Double.toString(d));
         String digits = b.unscaledValue().abs().toString();
@@ -167,6 +176,7 @@ fn main() {
         internal static long Integer(Rt rt, long n) { rt.Ints.Add(n); return BOX | (1L << 32) | (rt.Ints.Count - 1); }
     }
     internal static class Val {
+        internal const long CanonicalNan = unchecked((long) 0x7FF8000000000000UL);
         internal const long Nil = NIL;
         internal static long OfDouble(double d) { return System.BitConverter.DoubleToInt64Bits(d); }
     }
@@ -191,7 +201,7 @@ fn main() {
     // The SAME spelling as Rust's `{:e}`, so three targets can be compared
     // without the answer depending on how each host prints a double.
     static string Show(double d) {
-        if (double.IsNaN(d)) return "NaN";
+        if (double.IsNaN(d)) return "NaN:" + System.BitConverter.DoubleToInt64Bits(d).ToString("X16");
         if (double.IsInfinity(d)) return d > 0 ? "Inf" : "-Inf";
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         // "R" AND NOT "E16": the point is the SHORTEST digits, which is what
@@ -220,7 +230,7 @@ fn main() {
         return m + "e" + exp;
     }
 --expect
-i42 i-42 i7 d1.5e0 d-1.5e0 d1e3 d1e3 i31 i31 nil dInf d-Inf dNaN nil nil nil nil nil nil d1e20 i5 nil nil i9223372036854775807 i-9223372036854775808 d9.223372036854776e18 i0 i0 d0e0 d-0e0 d5e-1 d5e0 nil d1e3 d1e-3 nil nil
+i42 i-42 i7 d1.5e0 d-1.5e0 d1e3 d1e3 i31 i31 nil dInf d-Inf dNaN:7FF8000000000000 nil nil nil nil nil nil d1e20 i5 nil nil i9223372036854775807 i-9223372036854775808 d9.223372036854776e18 i0 i0 d0e0 d-0e0 d5e-1 d5e0 nil d1e3 d1e-3 nil nil
 --expect-why
 DERIVED BY READING `parse-run` AGAINST EACH TOKEN, in order. This is the file
 where "three hand-written parsers did not agree about what a number even
