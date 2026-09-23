@@ -9244,11 +9244,20 @@ and the CLR did not: their `send` called `Codec.encode` on the writer
 unconditionally, which refused it, so **every bridge send on both ports threw**
 from that moment.
 
-**What made it invisible for so long.** `bin/test` does not run
-`bin/conform-hosts`, and the host-port drivers each print their own transcript
-and call every line `ok` -- 16 ok, 0 fail, while sending nothing. Only
-`bin/conform-hosts` compares the transcripts, with `cmp -s`, and that gate is
-itself blocked earlier by an older `gas differs by 1536`. So a total failure of
+**What made it invisible for so long.** `bin/test` did not run
+`bin/conform-hosts` THEN, and the host-port drivers each print their own
+transcript and call every line `ok` -- 16 ok, 0 fail, while sending nothing.
+Only `bin/conform-hosts` compares the transcripts, with `cmp -s`, and that
+gate was itself blocked earlier by an older `gas differs by 1536`.
+
+*Both halves of that are past tense now, checked 2026-09-23.* `bin/test:705`
+runs `./bin/conform-hosts` and fails the suite on a nonzero exit, inside the
+`hosts` section; and the `1536` that blocked it is gone -- the row reads `the
+same program costs the same gas, to the instruction: 143035`, and the gate ran
+365 rows with zero failures. The sentence is kept because the SHAPE is the
+lesson and it is not dated: a driver that prints its own transcript and calls
+every line `ok` cannot fail, and only something that COMPARES two transcripts
+can. So a total failure of
 the feature on two runtimes out of three sat behind a green-looking driver and
 a gate that stops before reaching it.
 
