@@ -5282,6 +5282,41 @@ a design decision rather than a gap in kin.
 **`Interns` is unchanged** and still blocked on a callback type, as its own
 comment says.
 
+### Where the dead-code sweep stops, and why native is different
+
+69 unreferenced members were removed across the three runtimes. 10 remain on
+native, 7 on the jvm, 9 on the clr, and the native ten stop for a reason the
+ports' did not.
+
+**The ports carry no packaging metadata.** No `pom.xml`, no gradle, and
+`Flint.csproj` has no `PackageId`, `IsPackable` or `GeneratePackageOnBuild`.
+Their only consumers are the generated tree and the in-repo tests, both of
+which `bin/dead-runtime-fns` indexes. So `public` there means "reachable from
+`com._3sln.flint.kgen.rt`", and a public member the generated tree does not
+reach is dead with no surface to protect.
+
+**`flint-rt` is publishable.** `runtime/Cargo.toml` carries a crates.io
+`description` and no `publish = false`. `pub fn var_exists` on `Program` --
+the native entry point that mirrors `abi.rs` -- may therefore be API for an
+embedder outside this repository, and reachability inside it cannot tell.
+That is a question about intended surface, and it is not one a count answers.
+
+So the native remainder is left, named rather than swept:
+
+* `var_exists`, `collect_all`, `set_from_map`, `throw_value` -- thin `pub`
+  wrappers over `major`, `new_set`, a field write and `var_named`;
+* `from_now`, `bump_now`, `to_now`, `half_now` -- `cfg(diagnostics)`
+  accessors for `pub(crate)` collector fields, so their whole purpose is to
+  let something OUTSIDE the crate read collector state. Eight other
+  `cfg(diagnostics)` functions do have callers, so the surface is used; these
+  four are the ones no consumer has wanted;
+* `forget_fixed`, `u32s` -- the last two, unexamined.
+
+**rustc already covers the other half.** Its `dead_code` lint reports 18
+PRIVATE items in the runtime and says nothing about `pub` ones, which is
+exactly the gap this tool fills -- and exactly why the native half of its list
+is the half without a compiler behind it.
+
 **A measurement caveat, recorded because it has now misled me three times.**
 Matching members across runtimes by NAME undercounts: `probe` is
 `intern_probe` on native, `publish` is `intern_publish`, `contiguous` is
