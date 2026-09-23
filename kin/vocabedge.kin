@@ -33,6 +33,7 @@
   (:require [flint.impl.rt :refer [defn return doc
                                    shl ushr sar to-i32 bit-and bit-or bit-xor
                                    f64-bits f64-of-bits to-f64
+                                   wmul wadd
                                    Rt I32 I64 U32 F64]]))
 
 (doc "Logical right shift of a value with the high bit set."
@@ -107,3 +108,19 @@
 (doc "The numeric conversion, for contrast with the reinterpretation above.")
 (defn ^:method ^I64 as-double-bits [^Rt rt ^I64 n]
   (return (f64-bits (to-f64 n))))
+
+(doc "Multiplication that WRAPS rather than trapping."
+     ""
+     "Rust PANICS on overflow in a debug build, so a plain `*` would be right"
+     "in release and a crash in the build the tests run under. Java's `int`"
+     "wraps on its own. C# is unchecked by DEFAULT -- and the default is a"
+     "compiler setting, so the word says `unchecked` explicitly rather than"
+     "depending on one. That last point is why this is tested: a project-level"
+     "change would turn overflow into an exception on one runtime and nowhere"
+     "else, and nothing else here would notice.")
+(defn ^:method ^I32 wrap-mul [^Rt rt ^I32 a ^I32 b]
+  (return (wmul a b)))
+
+(doc "Addition that wraps, for the same reasons.")
+(defn ^:method ^I32 wrap-add [^Rt rt ^I32 a ^I32 b]
+  (return (wadd a b)))

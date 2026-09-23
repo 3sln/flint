@@ -15,7 +15,7 @@ fn main() {
     // THE f64 FAMILY. The NaN carries a payload of 1, which is the only thing
     // separating a preserving read from a canonicalising one.
     let nan = f64::from_bits(0x7FF8_0000_0000_0001);
-    println!("{} {} {} {} {} {} {} {} {} {} | {} {} {} {}",
+    println!("{} {} {} {} {} {} {} {} {} {} | {} {} {} {} | {} {}",
              rt.ushr_high(hi, 1) as i32, rt.ushr_high(hi, 31) as i32,
              rt.sar_high(hi, 1) as i32,  rt.sar_high(hi, 31) as i32,
              rt.shl_into_sign(1, 31) as i32, rt.shl_into_sign(3, 30) as i32,
@@ -24,7 +24,9 @@ fn main() {
              rt.bits_and(hi, 0xFFFF) as i32,
              rt.bits_xor(hi, 0xFFFF_FFFF) as i32,
              rt.bits_of(nan), rt.bits_round_trip(nan),
-             rt.bits_of(1.5), rt.as_double_bits(1));
+             rt.bits_of(1.5), rt.as_double_bits(1),
+             // WRAPPING, which must not trap on any of the three.
+             rt.wrap_mul(0x7FFF_FFFF, 3) as i32, rt.wrap_add(0x7FFF_FFFF, 1) as i32);
 }
 --java-head
     // AN EMPTY `Rt`, because these are `^:method` and take one. There is no
@@ -43,7 +45,8 @@ fn main() {
             + narrow(rt, 0x123456789L) + " " + narrow(rt, -1L) + " "
             + bitsAnd(rt, hi, 0xFFFF) + " " + bitsXor(rt, hi, 0xFFFFFFFF)
             + " | " + bitsOf(rt, nan) + " " + bitsRoundTrip(rt, nan)
-            + " " + bitsOf(rt, 1.5) + " " + asDoubleBits(rt, 1));
+            + " " + bitsOf(rt, 1.5) + " " + asDoubleBits(rt, 1)
+            + " | " + wrapMul(rt, 0x7FFFFFFF, 3) + " " + wrapAdd(rt, 0x7FFFFFFF, 1));
     }
 --csharp-head
     internal sealed class Rt { }
@@ -59,10 +62,11 @@ fn main() {
             + Narrow(rt, 0x123456789L) + " " + Narrow(rt, -1L) + " "
             + BitsAnd(rt, hi, 0xFFFF) + " " + BitsXor(rt, hi, unchecked((int) 0xFFFFFFFFu))
             + " | " + BitsOf(rt, nan) + " " + BitsRoundTrip(rt, nan)
-            + " " + BitsOf(rt, 1.5) + " " + AsDoubleBits(rt, 1));
+            + " " + BitsOf(rt, 1.5) + " " + AsDoubleBits(rt, 1)
+            + " | " + WrapMul(rt, 0x7FFFFFFF, 3) + " " + WrapAdd(rt, 0x7FFFFFFF, 1));
     }
 --expect
-1073741824 1 -1073741824 -1 -2147483648 -1073741824 591751049 -1 1 2147483646 | 9221120237041090561 9221120237041090561 4609434218613702656 4607182418800017408
+1073741824 1 -1073741824 -1 -2147483648 -1073741824 591751049 -1 1 2147483646 | 9221120237041090561 9221120237041090561 4609434218613702656 4607182418800017408 | 2147483645 -2147483648
 --expect-why
 DERIVED FROM THE BIT PATTERNS. The input is `0x80000001` throughout: the high
 bit set and the low bit set, so a shift bringing in the wrong thing shows in
@@ -109,3 +113,20 @@ read from a canonicalising one.
     CONVERTS where `f64-of-bits` REINTERPRETS -- the same input 1 gives 1.0
     through one and 5e-324 through the other, and the names do not say
     which.
+
+THE WRAPPING PAIR, after the second bar. Overflow must WRAP on all three and
+trap on none.
+
+15. `wmul(0x7FFFFFFF, 3)` = 6442450941 mod 2^32 = 2147483645. Rust would
+    PANIC here in a debug build without `wrapping_mul` -- which is the build
+    the tests run under, so a plain `*` would be right in release and a crash
+    in the only place anyone would see it.
+16. `wadd(0x7FFFFFFF, 1)` = `0x80000000`, printed through the signed reading
+    as -2147483648 so the three can be compared at all; Rust calls the same
+    bits 2147483648.
+
+C# IS THE REASON THESE ARE HERE. It is unchecked by DEFAULT, so the word
+would appear to work with no `unchecked` in the template at all -- until a
+project-level `CheckForOverflowUnderflow` turned overflow into an exception on
+one runtime and nowhere else. The template says `unchecked` explicitly and
+this asserts that it still does.
