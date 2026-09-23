@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""Every vocabulary word is called by some kin source.
+
+WHY THIS IS NOT PEDANTRY. A vocabulary word is three hand-written templates,
+one per target language, and the ONLY thing that ever compares them is a kin
+source calling the word and a drivers file running the result on all three. A
+word nothing calls has never been executed in any language: its three
+spellings have been read by a person and by nothing else.
+
+TWO OF THEM WERE LIVE ON 2026-09-22. `uquot` and `urem` -- six templates
+between them -- had never run. `check-kin` was green, `conform-hosts` was
+green, every drivers file passed, because none of those can exercise a word
+nothing calls. They turned out to be correct, which was an untested claim
+until somebody called them.
+
+The related trap is documented at `kin/vocabedge.kin`: `kin/unsigned.kin`
+reads as though it covers the unsigned forms and does not, because it was
+rewritten to use the TAG-DRIVEN generic operators. A word can look covered by
+a file whose subject is the same idea.
+
+A CALL, NOT A MENTION. Appearing in a `:refer` list is not being executed, so
+this counts `(word ...)` and nothing else -- the first version of this survey
+counted refer mentions and reported these two as used.
+"""
+import glob, os, re, sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(ROOT)
+
+VOCAB = "kin/src/flint/impl/rt.cljc"
+WORD = re.compile(r"^ *'([a-z][a-z0-9-]*) ", re.M)
+
+def main():
+    words = set(WORD.findall(open(VOCAB, encoding="utf-8").read()))
+    src = "\n".join(open(p, encoding="utf-8", errors="replace").read()
+                    for p in glob.glob("kin/*.kin"))
+    uncalled = sorted(w for w in words
+                      if not re.search(rf"\({re.escape(w)}[\s)]", src))
+    if uncalled:
+        for w in uncalled:
+            print(f"  FAIL `{w}` is a vocabulary word no kin source calls -- its three "
+                  f"templates have never run")
+        print(f"\ncheck-vocab-used: {len(uncalled)} word(s) nothing calls")
+        return 1
+    print(f"check-vocab-used: {len(words)} vocabulary words, every one called from a kin source")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
