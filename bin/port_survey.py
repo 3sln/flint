@@ -963,6 +963,15 @@ def calls(limit=10):
             for n, t, c in ms:
                 if norm(n) in ok:
                     continue
+                # BOTH RULES, because each is blind where the other sees.
+                # This view asks "is every CALL expressible" and an OPERATOR is
+                # not a call: `gasError` is `"gas limit exceeded: spent " +
+                # steps + " of " + gasLimit`, has no unportable call in it, and
+                # ranked second in `Rt`. `BLOCK` catches that with `"\s*\+`
+                # and misses the atomics this one catches. A method has to pass
+                # both to be offered.
+                if any(re.search(rx, t) for rx, _ in BLOCK):
+                    continue
                 if not unportable_calls(t, voc, gen, ok | {norm(n)}, fields):
                     ok.add(norm(n)); changed = True
             if not changed:
