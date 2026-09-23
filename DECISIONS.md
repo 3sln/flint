@@ -5075,6 +5075,57 @@ defined it, and every word was true of the string it had built. Proven still
 sharp by planting `NO_SUCH_CONSTANT` inside the same call shape, which it
 catches.
 
+### What is left to port, and why each one is blocked
+
+**Surveyed 2026-09-22, after `Num` finished.** The remaining hand-written mass
+in the runtime is `Obj`, `Wire` and `Gc`, and none of the three is blocked for
+the reason "nobody has got to it yet". Each was probed rather than assumed, so
+the next session can start from a verified blocker instead of re-deriving one.
+
+**`Obj` -- kin's memory vocabulary is ROOTED AT `Rt`, and `Obj` is rooted at
+`Space`.** Twenty-one hand-written functions, almost all bit-packing over the
+object header, and the bit positions AGREE across all three runtimes -- every
+shift and mask, fifteen functions compared -- so there is no divergence to
+fix, only three copies to collapse. What stops it is a type: `read-u64`
+(`kin/src/flint/impl/rt.cljc:1912`) emits `{0}.gc.sp.read_u64({1})`, so a
+generated accessor must take an `Rt` and reach the space through it, while
+`ty` (`runtime/src/obj.rs:276`) takes `&Space` directly.
+
+That signature is LOAD-BEARING and not an accident of style. The collector
+calls these as `ty(&self.sp, a)` from `&mut self` methods of `Gc`, which is a
+field of `Rt` -- borrowing the whole `Rt` there would not compile. kin has no
+`Space` tag, so the port needs one, plus `sp-read-u32`/`sp-write-u32`
+vocabulary taking a space as argument zero. That is real work on the type
+machinery and it is what the port costs; it is not a large amount of work on
+`Obj` itself.
+
+**`Wire` -- the three runtimes FACTOR THE WRITER DIFFERENTLY**, so there is no
+single shape to generate. Native writes a tag and its payload in one call,
+`wire_piece` (`runtime/src/codec.rs:79`), with 19 call sites. Both ports have
+no equivalent and instead compose `Wire.put(tag)` with a payload writer --
+`put` has 10 call sites on the jvm, `u64` 3, `text` 4. Eleven of `Wire`'s
+methods are already generated and every hand-written one is `Rt`-rooted, so
+the usual blockers do not apply: what has to happen first is a DECISION about
+which factoring wins, and then the other two runtimes' builtins change to
+match. That is a refactor with no known bug behind it, which is why it is
+recorded rather than done.
+
+The asymmetry left three superseded helpers behind on native --
+`wire_u64`, `wire_text` and `wire_scan_ports` have no caller in any tracked
+file, while the ports' `u64` and `text` are live. `bin/dead-runtime-fns`
+reports them among its 19.
+
+**`Gc` -- shape, not blockers.** Instance methods on a `Gc` that owns the
+space, with `minor` at 42 lines and `major` at 31. Nothing about it is
+impossible; it is simply not a small port, and it should follow `Obj`, since
+a `Space` tag is exactly what it would want too.
+
+**`Val`'s last four and `Interns` are unchanged** and still blocked on a
+byte-array type and a callback type respectively, as their own comments say.
+
+
+
+
 
 
 
