@@ -47,6 +47,28 @@ matching calls again the probe's site count rises and this refuses to report
 anything. A dead-code tool that cannot be trusted is worse than none, and
 this one has now been wrong in both directions.
 
+A MENTION INSIDE THE GENERATED TREE IS USUALLY NOT THIS MEMBER. Generated
+Java calls its siblings by BARE name through a static import, and on the jvm a
+hand-written delegator has the SAME name as the generated function it wraps --
+`Table.typeOk` wrapping `Tablekind.typeOk`. So every generated call to the
+sibling counted as a call to the delegator, and every jvm delegator looked
+alive. C# escapes it only by convention: generated names are PascalCase and
+the delegators camelCase, so they never collide.
+
+The rule that fixes it without over-correcting: inside the generated tree a
+mention counts only when it is QUALIFIED with the owning class. Hand-written
+members genuinely called from generated code are always qualified there --
+`Num.i64Of(rt, v)` -- because there is no import that would make them bare.
+Both directions are probed below.
+
+A ONE-LINE DELEGATOR MENTIONS ITS OWN NAME TWICE. `typeOk(...) { return
+Tablekind.typeOk(...); }` declares the name and then calls the generated
+function of the SAME name, so "one mention per definition site" is the wrong
+threshold for exactly the members most likely to be dead. Native escapes it
+because its generated names are prefixed -- `ty` delegates to `obj_ty` -- and
+the jvm does not. So the threshold is the number of times the name actually
+occurs on its own definition lines, not the number of lines.
+
 This is a NAME match, not a call-graph. A name mentioned in a comment counts
 as a mention, which is the direction that under-reports -- the safe one.
 
@@ -87,8 +109,10 @@ KEYWORD = {"if", "for", "while", "switch", "return", "catch", "else", "do",
            "using", "lock", "foreach", "fixed"}
 
 # (language, extension, source root, generated-dir marker, probe member)
-PORTS = (("jvm", ".java", "runtimes/jvm/src/", "/kgen/", "def"),
-         ("clr", ".cs", "runtimes/clr/src/", "/Kgen/", "Def"))
+# (language, extension, source root, generated marker, parse probe,
+#  a delegator known LIVE from generated code, one known DEAD)
+PORTS = (("jvm", ".java", "runtimes/jvm/src/", "/kgen/", "def", "i64Of", "typeOk"),
+         ("clr", ".cs", "runtimes/clr/src/", "/Kgen/", "Def", "I64Of", "typeOk"))
 
 def rust_definitions():
     out = {}
@@ -120,7 +144,8 @@ def rust_definitions():
     return out
 
 def port_definitions(tracked, ext, root, genmark):
-    out = {}
+    """Returns (definitions, owning class per member name)."""
+    out, owners = {}, {}
     for p in tracked:
         if not (p.endswith(ext) and p.startswith(root)) or genmark in p:
             continue
@@ -129,18 +154,40 @@ def port_definitions(tracked, ext, root, genmark):
             if not m or m.group(1) in KEYWORD or m.group(2) in KEYWORD:
                 continue
             out.setdefault(m.group(2), []).append(f"{p}:{i + 1}")
-    return out
+            owners[m.group(2)] = os.path.basename(p).rsplit(".", 1)[0]
+    return out, owners
 
-def mentions(tracked, exts):
+def mentions(tracked, exts, genmark=None, owners=None):
+    """Identifier counts. Inside the generated tree (`genmark`) a name counts
+    only when QUALIFIED by its owning class -- see the docstring."""
     c = collections.Counter()
     for p in tracked:
         if not p.endswith(exts):
             continue
         try:
-            c.update(WORD.findall(open(p, encoding="utf-8", errors="replace").read()))
+            text = open(p, encoding="utf-8", errors="replace").read()
         except OSError:
-            pass
+            continue
+        if genmark and genmark in p and owners is not None:
+            for n, cls in owners.items():
+                c[n] += len(re.findall(rf"\b{re.escape(cls)}\.{re.escape(n)}\b", text))
+        else:
+            c.update(WORD.findall(text))
     return c
+
+def self_mentions(name, sites):
+    """How many times `name` occurs on its own definition lines -- see the
+    docstring: a one-line delegator says it twice."""
+    total = 0
+    for site in sites:
+        path, line = site.rsplit(":", 1)
+        try:
+            text = open(path, encoding="utf-8", errors="replace").read().split("\n")[int(line) - 1]
+        except (OSError, IndexError):
+            total += 1
+            continue
+        total += max(1, len(re.findall(rf"\b{re.escape(name)}\b", text)))
+    return total
 
 def report(label, defs, counts, probe=None):
     if probe is not None:
@@ -150,7 +197,7 @@ def report(label, defs, counts, probe=None):
                   f"{sites} definitions, not 1 -- the member regex is matching "
                   f"calls again. See the docstring.")
             return None
-    dead = sorted((n, s) for n, s in defs.items() if counts[n] <= len(s))
+    dead = sorted((n, s) for n, s in defs.items() if counts[n] <= self_mentions(n, s))
     for n, sites in dead:
         print(f"  {label:4s} {n:26s} {', '.join(sites)}")
     return len(defs), len(dead)
@@ -163,9 +210,21 @@ def main():
     r = report("rs", rust_definitions(), mentions(tracked, (".rs",)))
     if r:
         totals.append(("native", *r))
-    for lang, ext, root, genmark, probe in PORTS:
-        r = report(lang, port_definitions(tracked, ext, root, genmark),
-                   mentions(tracked, (ext,)), probe)
+    for lang, ext, root, genmark, probe, live, dead_probe in PORTS:
+        defs, owners = port_definitions(tracked, ext, root, genmark)
+        counts = mentions(tracked, (ext,), genmark, owners)
+        # TWO-SIDED PROBE. `live` is a delegator genuinely called from
+        # generated code and must not be reported; `dead_probe` is one whose
+        # only generated mentions are of its same-named sibling, and must be.
+        bad = []
+        if live and counts[live] <= self_mentions(live, defs.get(live, [])):
+            bad.append(f"`{live}` is called from generated code and came back dead")
+        if dead_probe and counts[dead_probe] > self_mentions(dead_probe, defs.get(dead_probe, [])):
+            bad.append(f"`{dead_probe}` is an uncalled delegator and came back alive")
+        if bad:
+            print(f"  REFUSING to report {lang}: " + "; ".join(bad))
+            continue
+        r = report(lang, defs, counts, probe)
         if r:
             totals.append((lang, *r))
     print()
