@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Hand-written runtime functions nothing mentions.
 
-REPORTS, DOES NOT GATE. There are 19 as of 2026-09-22 and none of them has
+REPORTS, DOES NOT GATE. There are 25 as of 2026-09-22 and none of them has
 been individually investigated, so failing on them would be asserting
 something this has not established. What it does assert is a NUMBER that can
 be re-derived, which a paragraph in a commit message cannot.
@@ -34,6 +34,26 @@ reads exactly like a real finding.
 
 This is a NAME match, not a call-graph. A name mentioned in a comment counts
 as a mention, which is the direction that under-reports -- the safe one.
+
+ONLY `.rs` FILES ARE COUNTED, because a Rust function can only be called from
+Rust. That sounds obvious and it was arrived at the hard way, twice.
+
+The first version indexed every tracked file. The count then fell from 19 to
+16 with no code change at all: a DECISIONS.md record had NAMED `wire_u64`,
+`wire_text` and `wire_scan_ports` while explaining that they were dead, and
+naming them was enough to make them look alive. Documenting a dead function
+removed it from the dead-function report, silently, in the direction that
+reads like progress.
+
+Excluding markdown was not enough. The three came back as alive AGAIN, this
+time because THIS FILE names them in the paragraph above, and a python script
+is not markdown. Any rule phrased as "skip the kinds of file that hold prose"
+loses to prose appearing somewhere new -- including in the tool itself.
+
+Counting only `.rs` is the rule that does not have that shape. It admits every
+caller root that can hold one, `runtime/tests/` and `units-src/` included, and
+admits nothing that cannot call Rust at all. A mention in a `.rs` COMMENT
+still counts, which is the conservative direction and deliberate.
 """
 import collections, os, re, subprocess, sys
 
@@ -78,6 +98,11 @@ def main():
     tracked = subprocess.run(["git", "ls-files"], capture_output=True, text=True).stdout.split("\n")
     for p in tracked:
         if not p or not os.path.isfile(p):
+            continue
+        # See the module docstring: only Rust can call a Rust function, and
+        # any looser rule counts a document about the code -- or this file --
+        # as a caller of what it describes.
+        if not p.endswith(".rs"):
             continue
         try:
             t = open(p, encoding="utf-8", errors="replace").read()

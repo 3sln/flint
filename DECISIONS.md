@@ -5111,9 +5111,9 @@ match. That is a refactor with no known bug behind it, which is why it is
 recorded rather than done.
 
 The asymmetry left three superseded helpers behind on native --
-`wire_u64`, `wire_text` and `wire_scan_ports` have no caller in any tracked
-file, while the ports' `u64` and `text` are live. `bin/dead-runtime-fns`
-reports them among its 19.
+`wire_u64`, `wire_text` and `wire_scan_ports` are named in no Rust source but
+their own definitions, while the ports' `u64` and `text` are live. `bin/dead-runtime-fns`
+reports them among its 25.
 
 **`Gc` -- shape, not blockers.** Instance methods on a `Gc` that owns the
 space, with `minor` at 42 lines and `major` at 31. Nothing about it is
