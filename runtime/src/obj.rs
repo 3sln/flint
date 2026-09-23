@@ -281,10 +281,6 @@ pub fn len(sp: &Space, a: Addr) -> u32 {
     sp.read_u32(a + 4)
 }
 #[inline(always)]
-pub fn set_len(sp: &Space, a: Addr, n: u32) {
-    sp.write_u32(a + 4, n)
-}
-#[inline(always)]
 /// Stamp a forwarding pointer, and read one back.
 ///
 /// A forwarded object's new address does NOT fit in `len` any more: an address
