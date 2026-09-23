@@ -56,10 +56,22 @@ alive. C# escapes it only by convention: generated names are PascalCase and
 the delegators camelCase, so they never collide.
 
 The rule that fixes it without over-correcting: inside the generated tree a
-mention counts only when it is QUALIFIED with the owning class. Hand-written
-members genuinely called from generated code are always qualified there --
-`Num.i64Of(rt, v)` -- because there is no import that would make them bare.
-Both directions are probed below.
+mention counts when it is QUALIFIED BY SOMETHING THAT IS NOT A GENERATED
+CLASS. Three shapes have to be told apart:
+
+    com...kgen...Tablekind.typeOk   the generated sibling    -- not this member
+    typeOk(rt, ...)         the same sibling, bare import    -- not this member
+    Table.tableConj(...)            a hand-written static    -- THIS member
+    rt.cpsOpen()                    a hand-written instance  -- THIS member
+    com.flint.rt.Seqs.emptyList     fully qualified          -- THIS member
+
+The first version of this rule asked for the OWNING CLASS as the qualifier,
+which gets the first three right and the fourth wrong: an instance method is
+reached through a receiver VARIABLE, `rt`, not through `Rt`. That reported 39
+of the ports' `Rt` members dead -- `cpsOpen`, `sinkBytes` and the rest of the
+sink and codepoint machinery -- every one of them called from generated code
+on the line the vocabulary emits. Three probes below, one per shape that has
+been wrong.
 
 A ONE-LINE DELEGATOR MENTIONS ITS OWN NAME TWICE. `typeOk(...) { return
 Tablekind.typeOk(...); }` declares the name and then calls the generated
@@ -117,8 +129,11 @@ KEYWORD = {"if", "for", "while", "switch", "return", "catch", "else", "do",
 # (language, extension, source root, generated-dir marker, probe member)
 # (language, extension, source root, generated marker, parse probe,
 #  a delegator known LIVE from generated code, one known DEAD)
-PORTS = (("jvm", ".java", "runtimes/jvm/src/", "/kgen/", "def", "i64Of", "typeOk"),
-         ("clr", ".cs", "runtimes/clr/src/", "/Kgen/", "Def", "I64Of", "typeOk"))
+# (language, ext, source root, generated marker, parse probe,
+#  a hand-written STATIC called from generated code, one known DEAD,
+#  a hand-written INSTANCE method called as `rt.name()`)
+PORTS = (("jvm", ".java", "runtimes/jvm/src/", "/kgen/", "def", "i64Of", "amSet", "emptyList"),
+         ("clr", ".cs", "runtimes/clr/src/", "/Kgen/", "Def", "I64Of", "AmSet", "EmptyList"))
 
 def rust_definitions():
     out = {}
@@ -175,8 +190,16 @@ def mentions(tracked, exts, genmark=None, owners=None):
         except OSError:
             continue
         if genmark and genmark in p and owners is not None:
-            for n, cls in owners.items():
-                c[n] += len(re.findall(rf"\b{re.escape(cls)}\.{re.escape(n)}\b", text))
+            # ANY DOTTED REFERENCE IS HAND-WRITTEN, unless its prefix names
+            # the generated package. Generated code calls its own siblings
+            # BARE, through a static import, so a dot means it reached out:
+            # `rt.cpsOpen()`, `Val.isNil(...)`, `com.flint.rt.Seqs.emptyList`.
+            # Matching the whole dotted prefix is what makes the last one
+            # work -- there is a generated `Seqs` too, and keying on the
+            # immediate qualifier alone confused the two.
+            for m in re.finditer(r"((?:[A-Za-z_]\w*\s*\.\s*)+)([A-Za-z_]\w*)", text):
+                if genmark.strip("/").lower() not in m.group(1).lower():
+                    c[m.group(2)] += 1
         else:
             c.update(WORD.findall(text))
     return c
@@ -216,7 +239,7 @@ def main():
     r = report("rs", rust_definitions(), mentions(tracked, (".rs",)))
     if r:
         totals.append(("native", *r))
-    for lang, ext, root, genmark, probe, live, dead_probe in PORTS:
+    for lang, ext, root, genmark, probe, live, dead_probe, live_inst in PORTS:
         defs, owners = port_definitions(tracked, ext, root, genmark)
         counts = mentions(tracked, (ext,), genmark, owners)
         # TWO-SIDED PROBE. `live` is a delegator genuinely called from
@@ -227,6 +250,9 @@ def main():
             bad.append(f"`{live}` is called from generated code and came back dead")
         if dead_probe and counts[dead_probe] > self_mentions(dead_probe, defs.get(dead_probe, [])):
             bad.append(f"`{dead_probe}` is an uncalled delegator and came back alive")
+        if live_inst and counts[live_inst] <= self_mentions(live_inst, defs.get(live_inst, [])):
+            bad.append(f"`{live_inst}` is an instance method called from generated "
+                       f"code and came back dead")
         if bad:
             print(f"  REFUSING to report {lang}: " + "; ".join(bad))
             continue
