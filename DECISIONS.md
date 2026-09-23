@@ -8250,17 +8250,47 @@ occurrences on either and that is correct rather than missing.
 **The wasm outside edge, MEASURED 2026-09-23 rather than described.** The
 design this section is named for is "one door": a `boot`/`init` that accepts a
 bridge port, which becomes the system port, and nothing else. Read off a
-freshly linked module, the edge is 25 exports plus 90 `flint_b_*`:
+freshly linked module, the edge was 25 exports plus 90 `flint_b_*` when this
+was written and is 23 now, two of them having been measured dead and removed
+the same day (see the sweep below):
 
 * the bridge protocol, TWELVE functions, not one -- `flint_install_port`,
   `flint_system_port`, `flint_deliver`, `flint_drain`, `flint_events_ptr`,
   `flint_continue`, `flint_resume`, `flint_close`, `flint_port_state`,
   `flint_in_alloc`, `flint_grant`, `flint_answer`
   (`units-src/flint-conc/src/bin/manifest.rs:14`);
-* the value codec `arg_alloc` / `arg_push` / `out_ptr` / `out_len`, resource
-  control `set_step_limit` / `set_memory_limit` / `stat_steps`, and
-  `image_desc_addr`, `FLINT_IMAGE_DESC`, `flint_opaque_host_id`
-  (`src/flint/link.cljc:156`, `abi-exports`).
+* the byte transport `arg_alloc` / `out_ptr` / `out_len`, resource control
+  `set_step_limit` / `set_memory_limit` / `stat_steps`, and `FLINT_IMAGE_DESC`,
+  `flint_opaque_host_id` -- all of them named by `abi-exports`
+  (`src/flint/link.cljc:156`).
+
+**WHICH OF THESE IS LEGACY, by call site rather than by reading.** Counted
+across `host/`, `sdks/`, `cli/src/`, `test/` and `bench/`, every export above
+has live callers except three, and the three are not alike:
+
+* `arg_push` -- ZERO callers, all eight mentions comments. It built an argument
+  list for `flint_call` and outlived it; the `static mut ARGS` behind it was
+  written by one export and read by nobody. REMOVED 2026-09-23.
+* `image_desc_addr` -- ZERO callers, and redundant: both consumers read
+  `FLINT_IMAGE_DESC` as an exported GLOBAL instead (`runtime/src/native.rs:43`,
+  `src/flint/bundle.cljc:127`). REMOVED 2026-09-23.
+* `flint_opaque_host_id` -- zero callers and NOT dead, which is why the other
+  two needed checking one at a time. Its PRESENCE in the export list is the
+  `:capabilities` flag (`src/flint/bundle.cljc:168`, `src/flint/link.cljc:497`).
+  Removing it means re-sourcing that flag first.
+
+`arg_alloc` survives on a technicality worth writing down: its only remaining
+callers load an IMAGE (`host/run.mjs:71`, `test/loader.clj`), which is
+`loader-exports` work. A production module built without `--loader` has no user
+for it at all. Moving it is a decision rather than a cleanup, and it would
+likely be overtaken by `boot`/`loop` below.
+
+*The codec is therefore NOT a second way to make values inside a sandbox.*
+That reading is natural and was half right: the one export that genuinely
+assembled a value from pushed arguments was `arg_push`, and it was already
+dead. What is left moves BYTES for the port -- the live driver writes inbound
+through `flint_in_alloc` (`sdks/esm/src/guest.js:159`, `:238`, `:386`) and
+reads outbound through `out_ptr`/`out_len` (`:76`, `:466`).
 
 There is no `boot` or `init` export at all. `flint_install_port(id, len,
 system)` is the wasm projection of "the bridge port becomes the system port",
