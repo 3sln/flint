@@ -28,7 +28,10 @@ public final class Gc {
     ///
     /// 16 KB, matching the Rust. At 8192 more objects skip the nursery, which
     /// is a different heap shape for no stated reason.
-    static final long LARGE_OBJECT = 16384;
+    /// PUBLIC because the generated tree reads it -- see the young-generation
+    /// bounds above for why a different package by construction means Java
+    /// cannot express native's `pub(crate)`.
+    public static final long LARGE_OBJECT = 16384;
     /// 0..63 exact (size = i*8), 64 = "big".
     static final int NCLASS = 65;
     static final long MIN_CHUNK = 1024 * 1024;
@@ -186,10 +189,7 @@ public final class Gc {
     /// collection. Conservative on purpose: a false yes costs one needless
     /// safepoint, a false no would let the collector move objects while
     /// another thread was running.
-    public boolean wouldCollect(int ty, int len) {
-        long size = sizeFor(ty, len);
-        return size >= LARGE_OBJECT || bump + size > from + half;
-    }
+    public boolean wouldCollect(int ty, int len) { return com._3sln.flint.kgen.rt.Objsize.gcWouldCollect(this, ty, len); }
 
     public long alloc(Roots roots, int ty, int len) {
         long size = sizeFor(ty, len);

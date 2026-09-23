@@ -22,7 +22,9 @@ public sealed class Gc : System.IDisposable {
     /// Bigger than this goes straight to the old space: copying it twice costs
     /// more than the generational hypothesis is worth on one object.
     /// 16 KB, matching the Rust.
-    const long LARGE_OBJECT = 16384;
+    /// INTERNAL because the generated tree reads it; same assembly, so
+    /// `internal` is the whole of what that costs here.
+    internal const long LARGE_OBJECT = 16384;
     /// 0..63 exact (size = i*8), 64 = "big".
     const int NCLASS = 65;
     const long MIN_CHUNK = 1024 * 1024;
@@ -164,10 +166,7 @@ public sealed class Gc : System.IDisposable {
     /// collection. Conservative on purpose: a false yes costs one needless
     /// safepoint, a false no would let the collector move objects while another
     /// thread was running.
-    public bool WouldCollect(int ty, int len) {
-        long size = SizeFor(ty, len);
-        return size >= LARGE_OBJECT || bump + size > from + half;
-    }
+    public bool WouldCollect(int ty, int len) => global::_3sln.Flint.Kgen.Rt.Objsize.GcWouldCollect(this, ty, len);
 
     public long Alloc(Roots roots, int ty, int len) {
         long size = SizeFor(ty, len);

@@ -922,6 +922,14 @@
    ;; The object header's width. A leaf's bytes begin `HDR` past its address,
    ;; which is the one place a generated source does address arithmetic.
    'HDR {:rust "crate::obj::HDR" :java "Obj.HDR" :csharp "Obj.Hdr"}
+   ;; THE LARGE-OBJECT THRESHOLD, which is a NAME and not a form: kin refuses
+   ;; a constant-shaped symbol that no name table spells, on the ground that
+   ;; passing it through verbatim is only right when every target agrees --
+   ;; and here they do not. Native declares it a `u32` and both ports a
+   ;; `long`, so the Rust spelling widens, because everything compared against
+   ;; it is a size and a size is an `Addr`.
+   'LARGE_OBJECT {:rust "(crate::gc::LARGE_OBJECT as Addr)"
+                  :java "Gc.LARGE_OBJECT" :csharp "Gc.LARGE_OBJECT"}
    ;; Where a FLAT STRING's bytes begin, which is not `HDR`: a `TY_STR` carries
    ;; a header of its own before them.
    'STR_DATA {:rust "crate::obj::STR_DATA" :java "Obj.STR_DATA" :csharp "Obj.StrData"}

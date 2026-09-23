@@ -104,4 +104,33 @@ public static class Objsize {
         }
         return SizeFor(ty, len);
     }
+    /// Would allocating a `ty`/`len` object trigger a collection?
+    /// 
+    /// Asked BEFORE allocating, because under several executors a collection
+    /// has to be staged -- everyone stopped -- and staging one around every
+    /// allocation would be a stop-the-world per allocation. Conservative on
+    /// purpose: a false yes costs one needless safepoint, a false no would let
+    /// the collector move objects while another thread was running.
+    /// 
+    /// IN THIS FILE for the reason `size-of` is: it calls `size-for`, and
+    /// beside `size-for` that is a LOCAL call. From anywhere else the
+    /// generated module globs both the hand-written `Obj` and its siblings,
+    /// both of which offer a `size_for`, and two globs offering one name make
+    /// it ambiguous rather than resolving it.
+    /// 
+    /// NATIVE SATURATED HERE AND THE PORTS DID NOT -- `bump.saturating_add`
+    /// against a plain `+`. That is a real difference and it is unreachable:
+    /// `max_heap` is built from a `u32`, so every operand is at most 4 GiB and
+    /// the sum is at most about 2^33, nowhere near where a 64-bit add wraps.
+    /// Plain addition IS the saturating answer over that range, so the three
+    /// converge on the simpler body rather than on a guard that cannot fire.
+    /// If the heap limit ever stops being a `u32`, this is the line that has
+    /// to change with it.
+    public static bool GcWouldCollect(Gc gc, int ty, int len) {
+        long size = SizeFor(ty, len);
+        if (size >= Gc.LARGE_OBJECT) {
+            return true;
+        }
+        return (gc.bump + size) > (gc.from + gc.half);
+    }
 }

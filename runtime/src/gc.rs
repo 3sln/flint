@@ -958,9 +958,16 @@ impl Gc {
     /// purpose: a false yes costs one needless safepoint, a false no would let
     /// the collector move objects while another thread was running.
     #[cfg(feature = "parallel")]
+    /// GENERATED as `gc_would_collect`. THE SATURATION WENT, deliberately.
+    /// This said `saturating_add` where both ports said `+`, which is a real
+    /// difference and an unreachable one: `max_heap` is built from a `u32`,
+    /// so every operand is at most 4 GiB and the sum at most about 2^33 --
+    /// nowhere near where a 64-bit add wraps. Plain addition IS the
+    /// saturating answer over that range, so the three converge on the
+    /// simpler body rather than on a guard that cannot fire. If the heap
+    /// limit stops being a `u32`, `kin/objsize.kin` is where this changes.
     pub fn would_collect(&self, ty: u8, len_: u32) -> bool {
-        let size = size_for(ty, len_);
-        size >= LARGE_OBJECT as Addr || self.bump.saturating_add(size) > self.from.saturating_add(self.half)
+        crate::kgen::rt::objsize::gc_would_collect(self, ty, len_)
     }
 
     /// Sample the high-water marks. Called after each collection, when the
