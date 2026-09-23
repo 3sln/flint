@@ -5146,10 +5146,46 @@ The asymmetry left three superseded helpers behind on native --
 their own definitions, while the ports' `u64` and `text` are live. `bin/dead-runtime-fns`
 reports them among its 25.
 
-**`Gc` -- shape, not blockers.** Instance methods on a `Gc` that owns the
-space, with `minor` at 42 lines and `major` at 31. Nothing about it is
-impossible; it is simply not a small port, and it should follow `Obj`, since
-a `Space` tag is exactly what it would want too.
+**`Gc` -- priced, and carrying a divergence.** Instance methods on a `Gc`
+that owns the space, with `minor` at 42 lines and `major` at 31. The `Space`
+tag `Obj` introduced is not enough on its own; the field predicates need,
+exactly:
+
+* a `Gc` tag, `{:rust "&Gc" :java "Gc" :csharp "Gc"}`, the same shape as
+  `Space`;
+* five field words -- `young-base`, `half`, `from`, `bump`, `old-live`. The
+  names line up across all three runtimes, which is the part that could have
+  been ugly and is not;
+* an UNSIGNED 64-BIT COMPARISON, which the vocabulary has not got. `<` is
+  unsigned-aware at 32 bits only -- `Integer.compareUnsigned` on the jvm --
+  and these predicates are built on the wrap trick, `(addr - from) <u (bump -
+  from)`, which needs the 64-bit form.
+
+Pricing it rather than calling it "not a small port" is the lesson from `Obj`
+applied: that entry called a blocker expensive without measuring and was
+wrong by an order of magnitude.
+
+**AND `would-collect` ALREADY DIVERGES.** Native saturates where both ports
+do not:
+
+    native  size >= LARGE_OBJECT || bump.saturating_add(size)
+                                      > from.saturating_add(half)
+    ports   size >= LARGE_OBJECT || bump + size > from + half
+
+All three are live, called from the same place in `Rt`. Overflow is
+unreachable -- the heap is bounded far below 2^63 -- so this is a divergence
+in the DEFINITION rather than a live defect, the same shape as `Value::heap`
+masking on two runtimes and not the third. It matters more than most because
+of what the predicate is for: `would_collect`
+(`runtime/src/gc.rs:956`) is asked before allocating so a collection can be
+STAGED across executors, and its own comment says a false yes costs a
+needless safepoint while a false no "would let the collector move objects
+while another thread was running". Plain addition that wrapped would answer
+false -- the unsafe direction.
+
+Not hand-patched into the two ports, deliberately: three hand-written copies
+agreeing is not the same as one source, and the patch would be deleted by the
+port that fixes it properly.
 
 **`Val`'s last four and `Interns` are unchanged** and still blocked on a
 byte-array type and a callback type respectively, as their own comments say.
