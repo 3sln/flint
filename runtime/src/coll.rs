@@ -7,26 +7,6 @@ use crate::obj::*;
 use crate::rt::Rt;
 use crate::value::{Value, INLINE_MAX, NIL};
 
-/// Substring search over bytes. Naive, which is what the gas charge above is
-/// priced for, and enough for the one-character separators that dominate.
-fn find_bytes(h: &[u8], n: &[u8]) -> Option<usize> {
-    if n.is_empty() {
-        return Some(0);
-    }
-    if n.len() > h.len() {
-        return None;
-    }
-    let first = n[0];
-    let last = h.len() - n.len();
-    let mut i = 0;
-    while i <= last {
-        if h[i] == first && &h[i..i + n.len()] == n {
-            return Some(i);
-        }
-        i += 1;
-    }
-    None
-}
 
 impl Rt {
     // --- count -------------------------------------------------------------
@@ -584,30 +564,6 @@ impl Rt {
     }
 }
 
-fn fmt_i64(mut n: i64, buf: &mut [u8; 24]) -> &str {
-    if n == 0 {
-        buf[0] = b'0';
-        return core::str::from_utf8(&buf[..1]).unwrap();
-    }
-    let neg = n < 0;
-    let mut i = buf.len();
-    // Work in the negative domain so i64::MIN does not overflow.
-    if !neg {
-        n = -n;
-    }
-    while n != 0 {
-        i -= 1;
-        buf[i] = b'0' + ((-(n % 10)) as u8);
-        n /= 10;
-    }
-    if neg {
-        i -= 1;
-        buf[i] = b'-';
-    }
-    let len = buf.len() - i;
-    buf.copy_within(i.., 0);
-    core::str::from_utf8(&buf[..len]).unwrap()
-}
 
 // --- transient maps and sets -------------------------------------------------
 

@@ -32,10 +32,12 @@ impl Rt {
 
     // --- compare -----------------------------------------------------------
 
-    /// `compare`. Total within a type; ordering across unrelated types is an
-    /// error in Clojure and returns 0 here after setting `thrown`.
-    /// Two strings in UTF-16 CODE UNIT order, ACROSS ALL THREE TIERS.
-    ///
+    // WHAT `compare` USED TO SAY, kept as a NOTE rather than a doc comment:
+    // total within a type, and ordering across unrelated types is an error in
+    // Clojure and returns 0 here after setting `thrown`; two strings compare
+    // in UTF-16 CODE UNIT order across all three tiers. It was a `///` block
+    // describing a function that moved to kin, and it had silently attached
+    // itself to `eq_value` below -- a different function entirely.
     // `str_cmp` IS GENERATED NOW, from `kin/ropecmp.kin`. What went with it:
     // this flattened BOTH operands through `value_text` and then synthesised
     // UTF-16 code units out of the UTF-8 to reproduce `String.compareTo`'s
@@ -50,24 +52,10 @@ impl Rt {
     // read `str_bytes`, which debug-asserts `TY_STR`, so a release build
     // compared a rope's slots as UTF-8.
 
-    pub fn eq_value(&mut self, a: Value, b: Value) -> Value {
-        if self.val_eq(a, b) {
-            TRUE
-        } else {
-            FALSE
-        }
-    }
 }
 
 
 impl Rt {
-    pub fn nil_or(&self, c: bool) -> Value {
-        if c {
-            TRUE
-        } else {
-            NIL
-        }
-    }
 }
 
 #[cfg(test)]

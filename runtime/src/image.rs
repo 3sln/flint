@@ -428,6 +428,17 @@ pub struct ImageWriter {
     pub init: Vec<u32>,
 }
 
+/// A TEST FIXTURE, and the only consumer is `runtime/tests/vm.rs`: it builds
+/// an image by hand so the VM can be driven without a compiler in the loop.
+///
+/// SEVERAL `k_*` CONSTRUCTORS HAVE NO CALLER and that is deliberate. The image
+/// format has twelve constant kinds and this writer covers eight, so the set
+/// is already partial -- what is here is what a test has wanted so far, and
+/// `k_nil`, `k_double`, `k_symbol`, `k_vector` and `k_map` are the ones no
+/// test has needed yet. `bin/dead-runtime-fns` reports them, correctly by its
+/// own definition and wrongly for this file, because it cannot tell a fixture
+/// from the runtime: both live under `runtime/src`. Removing them would cost
+/// the next test and buy a smaller number.
 impl ImageWriter {
     pub fn new() -> ImageWriter {
         Default::default()

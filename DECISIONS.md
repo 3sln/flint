@@ -3735,7 +3735,7 @@ send. (2) **"reaching the entry function as its second argument" describes a
 `flint_main` that no longer exists** (`runtime/src/abi.rs:157-162`,
 `src/flint/bundle.cljc:147-151`; removed by `structured-ports` step 5). A host
 names a function through `flint_call`, and a host-minted opaque travels as an
-ordinary encoded argument (`K_SENTINEL`, `runtime/src/codec.rs:184`) or over a
+ordinary encoded argument (`K_SENTINEL`, `runtime/src/codec.rs:174`) or over a
 port. The `{:args :capabilities}` entry map is still unstarted.
 
 ### What was decided

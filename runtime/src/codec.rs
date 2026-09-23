@@ -122,9 +122,6 @@ impl Rt {
         ok
     }
 
-    pub fn wire_u32(&mut self, w: Value, v: u32) -> bool {
-        self.wire_raw(w, &v.to_le_bytes())
-    }
 
 
 
