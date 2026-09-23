@@ -109,8 +109,6 @@ public final class Table {
     // NIL empty map, so every `schemaId` lookup answered -1 while the column
     // NAMES read fine -- "no column :score; the columns are :id :score :tag",
     // which is a message that contradicts itself and says so.
-    static long emptyVec(Rt rt) { return Vec.empty(rt); }
-    static long emptyMap(Rt rt) { return Maps.empty(rt); }
     static void set(Rt rt, long obj, int i, long v) { rt.setSlot(Val.asHeap(obj), i, v); }
 
     // --- migration ----------------------------------------------------------

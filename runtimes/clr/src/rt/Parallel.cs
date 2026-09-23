@@ -69,7 +69,6 @@ public sealed class Parallel {
     long limitv;
 
     public int Executors() => Volatile.Read(ref live);
-    public int Running() => Volatile.Read(ref active);
 
     public int Register() {
         int n = Interlocked.Increment(ref live);
@@ -195,10 +194,5 @@ public sealed class Parallel {
 
     // --- gas ----------------------------------------------------------------
 
-    public void SetLimit(long n) { Volatile.Write(ref limitv, n); Volatile.Write(ref spent, 0); }
-    public long Limit() => Volatile.Read(ref limitv);
-    public long Spent() => Volatile.Read(ref spent);
 
-    /// Add this executor's batch to the total and read the total back.
-    public long FlushGas(long batch) => Interlocked.Add(ref spent, batch);
 }

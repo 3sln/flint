@@ -101,7 +101,6 @@ public static class Maps {
     internal static long NewEmpty(Rt rt) { return NewArrayMap(rt, 0); }
 
 
-    static void AmSet(Rt rt, long m, int i, long v) { rt.SetSlot(Val.AsHeap(m), i, v); }
 
 
 

@@ -72,16 +72,13 @@ public static class Vec {
     public static long Assoc(Rt rt, long v, int i, long x) { return VecAssoc(rt, v, i, x); }
     public static long Pop(Rt rt, long v) { return VecPop(rt, v); }
     public static long Nth(Rt rt, long v, int i, long dflt) { return VecNth(rt, v, i, dflt); }
-    public static long TNth(Rt rt, long t, int i, long dflt) { return TvecNth(rt, t, i, dflt); }
 
     /// The TRANSIENT surface, under the names its callers already use.
     public static bool IsTransient(Rt rt, long v) { return IsTransientVector(rt, v); }
     public static int TCount(Rt rt, long t) { return TvecCount(rt, t); }
-    public static bool Alive(Rt rt, long t) { return TvecAlive(rt, t); }
     public static long TransientOf(Rt rt, long v) { return VecTransient(rt, v); }
     public static long TConj(Rt rt, long t, long x) { return TvecConj(rt, t, x); }
     public static long TAssoc(Rt rt, long t, int i, long x) { return TvecAssoc(rt, t, i, x); }
-    public static long TPop(Rt rt, long t) { return TvecPop(rt, t); }
     public static long TPersistent(Rt rt, long t) { return TvecPersistent(rt, t); }
 
 

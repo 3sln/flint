@@ -217,10 +217,7 @@ public final class Parallel {
 
     // --- gas ----------------------------------------------------------------
 
-    public void setLimit(long n) { limit.set(n); spent.set(0); }
     public long limit() { return limit.get(); }
     public long spent() { return spent.get(); }
 
-    /// Add this executor's batch to the total and read the total back.
-    public long flushGas(long batch) { return spent.addAndGet(batch); }
 }

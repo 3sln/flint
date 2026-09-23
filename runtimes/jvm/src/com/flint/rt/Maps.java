@@ -104,7 +104,6 @@ public final class Maps {
     static long newEmpty(Rt rt) { return newArrayMap(rt, 0); }
 
 
-    static void amSet(Rt rt, long m, int i, long v) { rt.setSlot(Val.asHeap(m), i, v); }
 
 
 

@@ -94,7 +94,6 @@ public final class Vec {
     public static long assoc(Rt rt, long v, int i, long x) { return vecAssoc(rt, v, i, x); }
     public static long pop(Rt rt, long v) { return vecPop(rt, v); }
     public static long nth(Rt rt, long v, int i, long dflt) { return vecNth(rt, v, i, dflt); }
-    public static long tnth(Rt rt, long t, int i, long dflt) { return tvecNth(rt, t, i, dflt); }
 
     /// The TRANSIENT surface, under the names its callers already use. Bodies
     /// generated -- `Vectrans` for the plumbing, `Vectwrite` for the writes.
@@ -104,7 +103,6 @@ public final class Vec {
     public static long transientOf(Rt rt, long v) { return vecTransient(rt, v); }
     public static long tconj(Rt rt, long t, long x) { return tvecConj(rt, t, x); }
     public static long tassoc(Rt rt, long t, int i, long x) { return tvecAssoc(rt, t, i, x); }
-    public static long tpop(Rt rt, long t) { return tvecPop(rt, t); }
     public static long tpersistent(Rt rt, long t) { return tvecPersistent(rt, t); }
 
 

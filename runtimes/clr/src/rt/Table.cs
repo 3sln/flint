@@ -98,8 +98,6 @@ public static class Table {
     // NIL empty map, so every `schemaId` lookup answered -1 while the column
     // NAMES read fine -- "no column :score; the columns are :id :score :tag",
     // which is a message that contradicts itself and says so.
-    static long emptyVec(Rt rt) { return Vec.Empty(rt); }
-    static long emptyMap(Rt rt) { return Maps.Empty(rt); }
     static void set(Rt rt, long obj, int i, long v) { rt.SetSlot(Val.AsHeap(obj), i, v); }
 
     // --- migration ----------------------------------------------------------

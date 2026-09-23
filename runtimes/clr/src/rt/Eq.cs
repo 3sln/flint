@@ -55,7 +55,6 @@ public static class Eq {
     // the generated arm reaches it by -- native was reading a rope's SLOTS as
     // UTF-8 where this port materialised and was right.
 
-    static long NsOf(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Names.NsOf(rt, v);
     static long NameOf(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Names.NameOf(rt, v);
 
     /// Length first is WRONG for sequences: `[1 2]` is less than `[1 3]`, and

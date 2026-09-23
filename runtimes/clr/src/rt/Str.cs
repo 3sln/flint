@@ -495,8 +495,6 @@ public static class Str {
     /// `str` of two strings. O(1) once the pieces are big enough to matter.
     public static long Concat(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Ropecat.SConcat(rt, a, b); }
 
-    /// How many levels of node sit above the leaves. A leaf is 0.
-    static int RopeHeight(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Ropecat.RopeHeight(rt, v);
 
 
 

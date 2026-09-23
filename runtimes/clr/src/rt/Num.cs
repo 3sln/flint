@@ -100,7 +100,6 @@ public static class Num {
     public static long NotNumber(Rt rt, long a, long b) =>
         rt.ThrowStr("ClassCastException",
                     "not a number: " + rt.Describe(a) + " and " + rt.Describe(b));
-    static long DivByZero(Rt rt) => rt.ThrowStr("ArithmeticException", "Divide by zero");
 
     /// flint's integers OVERFLOW rather than wrap; .NET's `checked` is the
     /// analogue of the JVM's `Math.*Exact`.

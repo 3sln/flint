@@ -56,7 +56,6 @@ public static class Builtins {
     static long AddExact(long a, long b) { checked { return a + b; } }
     static long SubExact(long a, long b) { checked { return a - b; } }
     static long MulExact(long a, long b) { checked { return a * b; } }
-    static long NegExact(long a) { checked { return -a; } }
 
     static Builtins() {
         // Arithmetic goes through `Num`, which owns the PROMOTION RULE:
