@@ -5109,11 +5109,26 @@ The lesson is about the estimate rather than the work: a blocker that is real
 says nothing about what clearing it costs, and this one was recorded as
 expensive without being priced.
 
-**What remains of `Obj`** is the WRITERS -- `write-header`, `set-age`,
-`set-marked`, `set-str-ascii`, `set-forward` -- plus `forward-target`,
-`align8`, `slot-addr` and `size-of`. They need `sp-write-u32`, which was
-written alongside `sp-read-u32`, refused by `bin/check-vocab-used` for having
-no caller, and removed. It comes back in the change that calls it.
+**`Obj` IS DONE**, at 21 delegating against 2 hand-written: its private
+constructor, and `slot`.
+
+`slot` cannot go, and that is a finding rather than a gap. Native guards it
+with a `debug_assertions` check that a forwarded pointer is never read outside
+the collector -- reading one elsewhere means the edge INTO that object was
+never traced, so the collector moved the target and nothing updated the slot.
+kin has no way to spell a debug-only assertion and neither port carries the
+check at all, so porting it would silently drop an assertion that exists to
+catch a class of collector bug. The asymmetry runs into the vocabulary: it
+gained `sp-write-u64` and NOT `sp-read-u64`, because the write is portable and
+the read is the one with the guard on it.
+
+Three vocabulary words were needed along the way and each earned itself
+immediately: `bit-not`, because clearing a field in place is `w & ~(7 << 21)`
+and Rust spells the complement `!` where both ports say `~`; `addr-of-u32`,
+which zero-extends where `to-addr` would sign-extend on both ports; and
+`to-ty`, a real cast on Rust and nothing on the other two. A fourth,
+`sp-read-u64`, was written speculatively and refused by
+`bin/check-vocab-used` for having no caller.
 
 **`Wire` -- the three runtimes FACTOR THE WRITER DIFFERENTLY**, so there is no
 single shape to generate. Native writes a tag and its payload in one call,
