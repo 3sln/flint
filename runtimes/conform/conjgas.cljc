@@ -8,22 +8,43 @@
   fixed for `map_conj_map`, where the two algorithms had two different gas
   costs that `bin/conform-hosts` could see in a total and could not attribute.
 
-  MEASURED 2026-09-22, and NOT YET SETTLED. Per-element cost is identical:
-  1200 extra conj operations cost native 76 962 and the jvm 76 964, so the
-  extra type-tag reads are not billed. But the native/port gap is 88 at 100
-  iterations and 86 at 400, and a gap that MOVES is the thing every other gas
-  row here asserts cannot happen.
+  SETTLED 2026-09-23, having been recorded here as an open question since
+  2026-09-22. The answer is that the gap does not move, and the thing that
+  looked like movement was THE NAME OF THE ENTRY POINT.
 
-  It is not the startup difference between two programs -- these two entry
-  points differ only in a literal, and an earlier version of this fixture that
-  DID differ in code shape was rewritten for exactly that reason. It is not
-  per-iteration either: 300 extra iterations moved it by 2. A one-time
-  threshold crossed at different points is the remaining guess, and it is a
-  guess.
+  The measurement that settled it. Four sizes, entry points named alike:
 
-  SO THIS FIXTURE IS NOT WIRED INTO `bin/conform-hosts`. A row asserting the
-  gap is constant would fail, and a row asserting nothing is not a row. It is
-  here to reproduce the question."
+      n100  wasm 67 434   jvm 67 346    gap 88
+      n120  wasm 77 744   jvm 77 656    gap 88
+      n400  wasm 224 362  jvm 224 274   gap 88
+      n500  wasm 276 762  jvm 276 674   gap 88
+
+  A constant 88, which is what every other gas fixture here removes by
+  comparing a DIFFERENCE of two workloads rather than a total: it is what the
+  two runtimes spend getting started, and it is not the program's.
+
+  WHY THE OLD FIGURES SAID 88 AND 86. The entry points were `small` and `big`,
+  and on wasm the gas depends on how long the entry point's name is:
+
+      qq (2)  big (3)  zzz (3)       wasm 224 360
+      n400 (4)  m400 (4)  zzzzz (5)  wasm 224 362
+
+  Two steps, thresholded between three characters and four, on programs whose
+  code is identical -- `(churn 400)` in every one. The jvm bills 224 274 for
+  all six. So `small` and `big` sit on opposite sides of that threshold, and
+  comparing them mixed a real work difference with a two-step difference in
+  what they are CALLED.
+
+  That is a divergence of its own and a small one: the same program entered by
+  a longer name costs two more steps on wasm and the same on the jvm. It is
+  recorded here rather than fixed because it is about the entry path, not
+  about `conj`, and because two steps on a 224 000-step program is the kind of
+  thing that only matters when something else is being measured against it --
+  which is exactly what happened.
+
+  The entry points below are named `small` and `large`, five characters each,
+  so the comparison is of the work and nothing else. Verified: 67 434/67 346
+  and 224 362/224 274, gap 88 both."
   (:require [flint.thread :as th]))
 
 (defn- churn [n]
@@ -33,4 +54,4 @@
       (count v))))
 
 (defn small [_] (str (churn 100)))
-(defn big [_] (str (churn 400)))
+(defn large [_] (str (churn 400)))
