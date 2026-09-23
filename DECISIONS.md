@@ -5089,15 +5089,31 @@ shift and mask, fifteen functions compared -- so there is no divergence to
 fix, only three copies to collapse. What stops it is a type: `read-u64`
 (`kin/src/flint/impl/rt.cljc:1912`) emits `{0}.gc.sp.read_u64({1})`, so a
 generated accessor must take an `Rt` and reach the space through it, while
-`ty` (`runtime/src/obj.rs:276`) takes `&Space` directly.
+`ty` (`runtime/src/obj.rs:283`) takes `&Space` directly.
 
 That signature is LOAD-BEARING and not an accident of style. The collector
 calls these as `ty(&self.sp, a)` from `&mut self` methods of `Gc`, which is a
-field of `Rt` -- borrowing the whole `Rt` there would not compile. kin has no
-`Space` tag, so the port needs one, plus `sp-read-u32`/`sp-write-u32`
-vocabulary taking a space as argument zero. That is real work on the type
-machinery and it is what the port costs; it is not a large amount of work on
-`Obj` itself.
+field of `Rt` -- borrowing the whole `Rt` there would not compile.
+
+**DONE for the readers, and the estimate above was wrong.** "Real work on the
+type machinery" was a name and three type strings -- `{:name 'Space :types
+{:rust "&Space" :java "Space" :csharp "Space"}}` -- plus one vocabulary word
+and one line of the Rust preamble. Rust taking it by SHARED reference is not a
+compromise: `Space`'s writers are `&self` too, because the space is an arena
+whose interior mutability lives below this level, so one tag serves both
+directions. `kin/objhdr.kin` generates `obj-ty`, `obj-len`, `obj-age`,
+`obj-marked`, `obj-in-remset` and `obj-str-ascii`, and all three runtimes
+delegate.
+
+The lesson is about the estimate rather than the work: a blocker that is real
+says nothing about what clearing it costs, and this one was recorded as
+expensive without being priced.
+
+**What remains of `Obj`** is the WRITERS -- `write-header`, `set-age`,
+`set-marked`, `set-str-ascii`, `set-forward` -- plus `forward-target`,
+`align8`, `slot-addr` and `size-of`. They need `sp-write-u32`, which was
+written alongside `sp-read-u32`, refused by `bin/check-vocab-used` for having
+no caller, and removed. It comes back in the change that calls it.
 
 **`Wire` -- the three runtimes FACTOR THE WRITER DIFFERENTLY**, so there is no
 single shape to generate. Native writes a tag and its payload in one call,
