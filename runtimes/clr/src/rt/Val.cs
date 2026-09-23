@@ -113,11 +113,9 @@ public static class Val {
     }
 
     public static bool IsNil(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.IsNil(v);
-    public static bool IsTrue(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.IsTrue(v);
 
     /// Is `v` either boolean? See the Java copy.
     public static bool IsBool(long v) => v == True || v == False;
-    public static bool IsFalse(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.IsFalse(v);
     /// Only `nil` and `false` are false.
     /// GENERATED. nil and false are the only false things -- a fixnum 0 is
     /// TRUE, the case a port gets wrong by testing for zero.

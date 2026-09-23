@@ -62,7 +62,6 @@ public final class Table {
     // ROWS IN AND OUT, generated from `kin/tablerow.kin`.
     public static long tableSlice(Rt rt, long t, long from, long to) { return com._3sln.flint.kgen.rt.Tablerow.tableSlice(rt, t, from, to); }
     public static long tableAssoc(Rt rt, long t, long k, long row) { return com._3sln.flint.kgen.rt.Tablerow.tableAssoc(rt, t, k, row); }
-    public static long tableConj(Rt rt, long t, long row) { return com._3sln.flint.kgen.rt.Tablerow.tableConj(rt, t, row); }
 
     // MIGRATION, generated from `kin/tablemigrate.kin`.
     public static long tableMigrate(Rt rt, long t, long want, long defaults) { return com._3sln.flint.kgen.rt.Tablemigrate.tableMigrate(rt, t, want, defaults); }
@@ -73,28 +72,20 @@ public final class Table {
 
     // MAKING A SCHEMA and reading a column, generated from `kin/tablemake.kin`.
     public static long newSchema(Rt rt, long pairs) { return com._3sln.flint.kgen.rt.Tablemake.newSchema(rt, pairs); }
-    public static long refAssoc(Rt rt, long r, long k, long v) { return com._3sln.flint.kgen.rt.Tablemake.refAssoc(rt, r, k, v); }
     public static long tableColumn(Rt rt, long t, long name) { return com._3sln.flint.kgen.rt.Tablemake.tableColumn(rt, t, name); }
 
     // THE CLOSED SET of `threads-and-ports`, generated from `kin/tablekind.kin`.
-    public static boolean typeOk(Rt rt, long t, long v) { return com._3sln.flint.kgen.rt.Tablekind.typeOk(rt, t, v); }
 
     // THE REFUSALS, generated from `kin/tablesay.kin` -- `checks`.
     static String kwName(Rt rt, long v) { return com._3sln.flint.kgen.rt.Tablesay.kwName(rt, v); }
-    public static boolean checkRow(Rt rt, long s, long row, int rowno) { return com._3sln.flint.kgen.rt.Tablesay.checkRow(rt, s, row, rowno); }
 
     // THE TRANSIENT, generated from `kin/tabletrans.kin`.
-    public static long tableTransient(Rt rt, long t) { return com._3sln.flint.kgen.rt.Tabletrans.tableTransient(rt, t); }
-    public static long ttableConj(Rt rt, long t, long row) { return com._3sln.flint.kgen.rt.Tabletrans.ttableConj(rt, t, row); }
-    public static long ttablePersistent(Rt rt, long t) { return com._3sln.flint.kgen.rt.Tabletrans.ttablePersistent(rt, t); }
-    public static int ttableCount(Rt rt, long t) { return com._3sln.flint.kgen.rt.Tabletrans.ttableCount(rt, t); }
 
     // THE FILL HALF, generated from `kin/tablefill.kin`.
 
     // THE CHUNK HALF, generated from `kin/tablecell.kin`. `newObj` is gone
     // rather than shimmed: it was a second copy of `Conc.newObj`, and the
     // vocabulary now points at that one.
-    public static boolean isTtable(Rt rt, long v) { return com._3sln.flint.kgen.rt.Tablecell.isTtable(rt, v); }
 
     // The ROW-REF HALF, generated from `kin/tableref.kin`.
     public static int schemaId(Rt rt, long s, long name) { return com._3sln.flint.kgen.rt.Tableref.schemaId(rt, s, name); }
@@ -107,15 +98,9 @@ public final class Table {
     public static boolean isTable(Rt rt, long v) { return com._3sln.flint.kgen.rt.Tablemeta.isTable(rt, v); }
     public static boolean isTableRef(Rt rt, long v) { return com._3sln.flint.kgen.rt.Tablemeta.isTableRef(rt, v); }
     public static int schemaLen(Rt rt, long s) { return com._3sln.flint.kgen.rt.Tablemeta.schemaLen(rt, s); }
-    public static int schemaWidth(Rt rt, long s) { return com._3sln.flint.kgen.rt.Tablemeta.schemaWidth(rt, s); }
-    public static int schemaIdAt(Rt rt, long s, int c) { return com._3sln.flint.kgen.rt.Tablemeta.schemaIdAt(rt, s, c); }
     public static long schemaNameAt(Rt rt, long s, int c) { return com._3sln.flint.kgen.rt.Tablemeta.schemaNameAt(rt, s, c); }
     public static long schemaTypeAt(Rt rt, long s, int c) { return com._3sln.flint.kgen.rt.Tablemeta.schemaTypeAt(rt, s, c); }
-    public static boolean schemaEq(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Tablemeta.schemaEq(rt, a, b); }
     public static int tableCount(Rt rt, long t) { return com._3sln.flint.kgen.rt.Tablemeta.tableCount(rt, t); }
-    public static int tableOffset(Rt rt, long t) { return com._3sln.flint.kgen.rt.Tablemeta.tableOffset(rt, t); }
-    public static int chunkRows(Rt rt, long ch) { return com._3sln.flint.kgen.rt.Tablemeta.chunkRows(rt, ch); }
-    public static long chunkGet(Rt rt, long ch, int id, int row) { return com._3sln.flint.kgen.rt.Tablemeta.chunkGet(rt, ch, id, row); }
     public static final int TT_SCHEMA = 0, TT_CHUNKS = 1, TT_COUNT = 2, TT_OPEN = 3,
         TT_LIVE = 4, TT_LEN = 5;
 

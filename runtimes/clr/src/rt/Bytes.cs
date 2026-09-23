@@ -68,8 +68,6 @@ public static class Bytes {
 
 
 
-    /// Copy the range out into a fresh leaf -- see the Java and Rust copies.
-    public static long CopyRange(Rt rt, long v, int from, int to) { return global::_3sln.Flint.Kgen.Rt.Byteflat.BCopyRange(rt, v, from, to); }
 
     public static long CopyConcat(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Byteflat.BCopyConcat(rt, a, b); }
 
@@ -124,7 +122,6 @@ public static class Bytes {
     /// into the copying tier and reintroduce the quadratic it removes.
     public const int TAIL_CAP = FLAT_MAX;
 
-        public static bool IsTransient(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Bytecore.IsTbytes(rt, v); }
 
     public static long TransientOf(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Bytetrans.BTransient(rt, v); }
 

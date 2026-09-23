@@ -54,8 +54,6 @@ public static class Table {
 
     // ROWS IN AND OUT, generated from `kin/tablerow.kin`.
     public static long tableSlice(Rt rt, long t, long from, long to) { return global::_3sln.Flint.Kgen.Rt.Tablerow.TableSlice(rt, t, from, to); }
-    public static long tableAssoc(Rt rt, long t, long k, long row) { return global::_3sln.Flint.Kgen.Rt.Tablerow.TableAssoc(rt, t, k, row); }
-    public static long tableConj(Rt rt, long t, long row) { return global::_3sln.Flint.Kgen.Rt.Tablerow.TableConj(rt, t, row); }
 
     // MIGRATION, generated from `kin/tablemigrate.kin`.
     public static long tableMigrate(Rt rt, long t, long want, long defaults) { return global::_3sln.Flint.Kgen.Rt.Tablemigrate.TableMigrate(rt, t, want, defaults); }
@@ -66,25 +64,17 @@ public static class Table {
 
     // MAKING A SCHEMA and reading a column -- see the Java copy.
     public static long newSchema(Rt rt, long pairs) { return global::_3sln.Flint.Kgen.Rt.Tablemake.NewSchema(rt, pairs); }
-    public static long refAssoc(Rt rt, long r, long k, long v) { return global::_3sln.Flint.Kgen.Rt.Tablemake.RefAssoc(rt, r, k, v); }
     public static long tableColumn(Rt rt, long t, long name) { return global::_3sln.Flint.Kgen.Rt.Tablemake.TableColumn(rt, t, name); }
 
     // THE CLOSED SET of `threads-and-ports`, generated from `kin/tablekind.kin`.
-    public static bool typeOk(Rt rt, long t, long v) { return global::_3sln.Flint.Kgen.Rt.Tablekind.TypeOk(rt, t, v); }
 
     // THE REFUSALS, generated from `kin/tablesay.kin` -- `checks`.
-    public static bool checkRow(Rt rt, long s, long row, int rowno) { return global::_3sln.Flint.Kgen.Rt.Tablesay.CheckRow(rt, s, row, rowno); }
 
     // THE TRANSIENT, generated from `kin/tabletrans.kin`.
-    public static long tableTransient(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Tabletrans.TableTransient(rt, t); }
-    public static long ttableConj(Rt rt, long t, long row) { return global::_3sln.Flint.Kgen.Rt.Tabletrans.TtableConj(rt, t, row); }
-    public static long ttablePersistent(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Tabletrans.TtablePersistent(rt, t); }
-    public static int ttableCount(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Tabletrans.TtableCount(rt, t); }
 
     // THE FILL HALF, generated from `kin/tablefill.kin`.
 
     // THE CHUNK HALF, generated from `kin/tablecell.kin` -- see the Java copy.
-    public static bool isTtable(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Tablecell.IsTtable(rt, v); }
 
     // The ROW-REF HALF, generated from `kin/tableref.kin`.
     public static int schemaId(Rt rt, long s, long name) { return global::_3sln.Flint.Kgen.Rt.Tableref.SchemaId(rt, s, name); }
@@ -97,15 +87,9 @@ public static class Table {
     public static bool isTable(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.IsTable(rt, v); }
     public static bool isTableRef(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.IsTableRef(rt, v); }
     public static int schemaLen(Rt rt, long s) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.SchemaLen(rt, s); }
-    public static int schemaWidth(Rt rt, long s) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.SchemaWidth(rt, s); }
-    public static int schemaIdAt(Rt rt, long s, int c) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.SchemaIdAt(rt, s, c); }
     public static long schemaNameAt(Rt rt, long s, int c) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.SchemaNameAt(rt, s, c); }
     public static long schemaTypeAt(Rt rt, long s, int c) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.SchemaTypeAt(rt, s, c); }
-    public static bool schemaEq(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.SchemaEq(rt, a, b); }
     public static int tableCount(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.TableCount(rt, t); }
-    public static int tableOffset(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.TableOffset(rt, t); }
-    public static int chunkRows(Rt rt, long ch) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.ChunkRows(rt, ch); }
-    public static long chunkGet(Rt rt, long ch, int id, int row) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.ChunkGet(rt, ch, id, row); }
     public const int TT_SCHEMA = 0, TT_CHUNKS = 1, TT_COUNT = 2, TT_OPEN = 3,
         TT_LIVE = 4, TT_LEN = 5;
 

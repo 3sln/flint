@@ -469,7 +469,6 @@ public static class Str {
     /// back unchanged, and only the two edge children are cut.
     public static long RopeSlice(Rt rt, long v, int from, int to) { return global::_3sln.Flint.Kgen.Rt.Ropeslice.RopeSlice(rt, v, from, to); }
 
-    public static int Pow31Public(Rt rt, int n) => global::_3sln.Flint.Kgen.Rt.Bytehash.Pow31(rt, n);
 
 
     static System.Collections.Generic.List<long[]> CopyStack(System.Collections.Generic.List<long[]> s) {
@@ -541,7 +540,6 @@ public static class Str {
     /// every correctness test and is slower than the flat string it replaced.
     public static long Flatten(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Ropeflat.SFlatten(rt, v); }
     public static int RopeHash(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Ropeflat.RopeHash(rt, v); }
-    public static bool TreeEq(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Ropeeq.TreeEq(rt, a, b); }
     static int Utf8Width(Rt rt, int b0) { return global::_3sln.Flint.Kgen.Rt.Ropecp.Utf8Width(rt, b0); }
     public static int SBytes(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Ropemeas.SBytes(rt, v); }
     public static int SCount(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Ropemeas.SCount(rt, v); }

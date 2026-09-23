@@ -75,11 +75,6 @@ public final class Bytes {
     /// and the caller pops -- see the Rust and C# copies, which say the same.
     static long node(Rt rt, int base, int n) { return com._3sln.flint.kgen.rt.Bytenode.bNode(rt, base, n); }
 
-    /// Copy the range out into a fresh leaf. The SINK half, still hand-written,
-    /// reached from the generated tree half. `SLICE_MIN` is the retention fix --
-    /// a three-byte slice must not keep a 509 KB section alive -- so this path
-    /// exists to STOP sharing, deliberately.
-    public static long copyRange(Rt rt, long v, int from, int to) { return com._3sln.flint.kgen.rt.Byteflat.bCopyRange(rt, v, from, to); }
 
     public static long copyConcat(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Byteflat.bCopyConcat(rt, a, b); }
 
@@ -143,7 +138,6 @@ public final class Bytes {
     /// into the copying tier and reintroduce the quadratic it removes.
     public static final int TAIL_CAP = FLAT_MAX;
 
-        public static boolean isTransient(Rt rt, long v) { return com._3sln.flint.kgen.rt.Bytecore.isTbytes(rt, v); }
 
     public static long transientOf(Rt rt, long v) { return com._3sln.flint.kgen.rt.Bytetrans.bTransient(rt, v); }
 

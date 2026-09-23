@@ -595,7 +595,6 @@ public final class Str {
     /// replaced.
     public static long flatten(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropeflat.sFlatten(rt, v); }
     public static int ropeHash(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropeflat.ropeHash(rt, v); }
-    public static boolean treeEq(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Ropeeq.treeEq(rt, a, b); }
     static int utf8Width(Rt rt, int b0) { return com._3sln.flint.kgen.rt.Ropecp.utf8Width(rt, b0); }
     public static int sBytes(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropemeas.sBytes(rt, v); }
     public static int sCount(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropemeas.sCount(rt, v); }

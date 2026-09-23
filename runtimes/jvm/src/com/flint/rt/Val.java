@@ -165,12 +165,10 @@ public final class Val {
     }
 
     public static boolean isNil(long v) { return com._3sln.flint.kgen.rt.Valtag.isNil(v); }
-    public static boolean isTrue(long v) { return com._3sln.flint.kgen.rt.Valtag.isTrue(v); }
 
     /// Is `v` either boolean? Rust has `is_bool` on the value; both ports had
     /// only `v == TRUE || v == FALSE` spelled out at each site.
     public static boolean isBool(long v) { return v == TRUE || v == FALSE; }
-    public static boolean isFalse(long v) { return com._3sln.flint.kgen.rt.Valtag.isFalse(v); }
 
     /// Only `nil` and `false` are false. Zero, the empty string and the empty
     /// vector are all true.
