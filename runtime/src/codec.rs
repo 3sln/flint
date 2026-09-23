@@ -126,14 +126,7 @@ impl Rt {
         self.wire_raw(w, &v.to_le_bytes())
     }
 
-    pub fn wire_u64(&mut self, w: Value, v: u64) -> bool {
-        self.wire_raw(w, &v.to_le_bytes())
-    }
 
-    /// A length-prefixed string, the shape every name and text payload uses.
-    pub fn wire_text(&mut self, w: Value, s: &str) -> bool {
-        self.wire_u32(w, s.len() as u32) && self.wire_raw(w, s.as_bytes())
-    }
 
 }
 
@@ -617,40 +610,6 @@ impl Rt {
     // the tags are legal in the format and what decides is where the BYTES
     // came from (`DECISIONS.md#the-codec-is-guest-code`).
 
-    /// Walk an encoding and MINT EVERY PORT IN IT, building no value.
-    ///
-    /// The answer is the ports, so the caller can hold them: the intern table
-    /// is weak on purpose (`register_port`: "the scheduler keeps ids, not
-    /// references"), so a handle nobody holds is collectable before the guest
-    /// reads the message it arrived in.
-    ///
-    /// THE WALK ITSELF IS `kin/wirescan.kin`, generated into all three
-    /// runtimes. This is the slice-shaped door to it: the bytes become a
-    /// reader, and the reader is what the walk knows how to move.
-    pub fn wire_scan_ports(&mut self, bytes: &[u8]) -> Result<Value, String> {
-        let base = self.mark();
-        let bv = self.new_bytes(bytes);
-        let bi = self.push(bv);
-        // NOT LIVE. This reader is a cursor for the walk and is never handed to
-        // a guest; minting here goes through `mint_bridge_port` directly, so
-        // the flag that governs `wire-port-in` has no bearing on it.
-        let rd = self.wire_reader(self.r(bi), false);
-        let ri = self.push(rd);
-        let acc = self.empty_vec();
-        let ai = self.push(acc);
-        let ok = self.wire_scan_at(self.r(ri), ai, 0);
-        if !ok {
-            self.pop_to(base);
-            return Err(String::from("the encoding could not be read"));
-        }
-        if self.wire_left(self.r(ri)) != 0 {
-            self.pop_to(base);
-            return Err(String::from("the encoding has bytes left over"));
-        }
-        let out = self.r(ai);
-        self.pop_to(base);
-        Ok(out)
-    }
 
     /// Install a bridge port by host id, or NIL if this sandbox has no ports.
     ///
@@ -1432,13 +1391,6 @@ impl Wire {
     pub fn of_int(n: i64) -> Vec<u8> {
         let mut w = Wire::new();
         w.int(n);
-        w.done()
-    }
-    /// One port handle, as a whole message: the shape that delegates a
-    /// capability in a single call.
-    pub fn of_port(id: u32) -> Vec<u8> {
-        let mut w = Wire::new();
-        w.port(id);
         w.done()
     }
 }
