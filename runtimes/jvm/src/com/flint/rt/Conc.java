@@ -490,13 +490,6 @@ public final class Conc {
         return Val.isNil(s) ? Val.NIL : rt.slot(s, SC_SYSTEM);
     }
 
-    /// A port object. `id` is `-1` to mint one from this sandbox's counter,
-    /// which is what a channel end does; a bridge handle passes the HOST's id
-    /// instead, because that is the id that means the same thing on both sides.
-    /// GENERATED, from `kin/portmake.kin`.
-    static long newPort(Rt rt, long cap, long label, long kind, long state, long id) {
-        return com._3sln.flint.kgen.rt.Portmake.newPortAt(rt, cap, label, kind, state, id);
-    }
 
     /// The registry. WEAK on purpose (`DECISIONS.md#host-abi`): the flint end of a
     /// port is ordinary reachable memory, and when the collector finds it
@@ -558,13 +551,6 @@ public final class Conc {
         return -1;
     }
 
-    /// How many messages are in the ring, reservations included: a reserved
-    /// slot is spoken for even before it is filled, and the bound this feeds is
-    /// on occupancy.
-    /// GENERATED (`kin/portring.kin`).
-    static int inboxCount(Rt rt, long p) {
-        return com._3sln.flint.kgen.rt.Portring.ringInboxCount(rt, p);
-    }
 
     /// GENERATED (`kin/portring.kin`).
     static long cursor(Rt rt, long p, int which) {
@@ -609,12 +595,6 @@ public final class Conc {
         return com._3sln.flint.kgen.rt.Portring.ringEnqueue(rt, p, v);
     }
 
-    /// Take the next message, or NIL. The mirror image: swap the message out
-    /// for EMPTY, freeing the slot in the step that takes the value.
-    /// GENERATED (`kin/portring.kin`) -- see `enqueue`.
-    static long dequeue(Rt rt, long p) {
-        return com._3sln.flint.kgen.rt.Portring.ringDequeue(rt, p);
-    }
 
     // --- what may cross a port ----------------------------------------------
 
@@ -1466,9 +1446,6 @@ public final class Conc {
         return com._3sln.flint.kgen.rt.Sched.schedPendingEvents(rt);
     }
 
-    static boolean needsHost(Rt rt) {
-        return com._3sln.flint.kgen.rt.Sched.schedNeedsHost(rt);
-    }
 
     /// GENERATED (`kin/settle.kin`). The end of every turn a thread takes,
     /// and the one place that decides which of three things just happened.

@@ -458,15 +458,6 @@ public static class Conc {
         return Val.IsNil(s) ? Val.Nil : rt.Slot(s, SC_SYSTEM);
     }
 
-    /// A port of any kind. The id comes from the scheduler so that every port
-    /// in a sandbox has a distinct one, which is what the registry is keyed by.
-    /// A port object. `id` is `-1` to mint one from this sandbox's counter,
-    /// which is what a channel end does; a bridge handle passes the HOST's id
-    /// instead, because that is the id that means the same thing on both sides.
-    /// GENERATED, from `kin/portmake.kin`.
-    static long NewPort(Rt rt, long cap, long label, long kind, long state, long id) {
-        return global::_3sln.Flint.Kgen.Rt.Portmake.NewPortAt(rt, cap, label, kind, state, id);
-    }
 
     /// The registry. WEAK on purpose (`DECISIONS.md#host-abi`): the flint end of a
     /// port is ordinary reachable memory, and when the collector finds it
@@ -529,12 +520,6 @@ public static class Conc {
         return -1;
     }
 
-    /// How many messages are in the ring, reservations included: a reserved
-    /// slot is spoken for even before it is filled.
-    /// GENERATED (`kin/portring.kin`).
-    static int InboxCount(Rt rt, long p) {
-        return global::_3sln.Flint.Kgen.Rt.Portring.RingInboxCount(rt, p);
-    }
 
     /// GENERATED (`kin/portring.kin`).
     static long Cursor(Rt rt, long p, int which) =>
@@ -571,12 +556,6 @@ public static class Conc {
         return global::_3sln.Flint.Kgen.Rt.Portring.RingEnqueue(rt, p, v);
     }
 
-    /// Take the next message, or nil. The mirror image: swap the message out
-    /// for Empty, freeing the slot in the step that takes the value.
-    /// GENERATED (`kin/portring.kin`) -- see the note on the JVM's `enqueue`.
-    static long Dequeue(Rt rt, long p) {
-        return global::_3sln.Flint.Kgen.Rt.Portring.RingDequeue(rt, p);
-    }
 
     // --- what may cross a port ----------------------------------------------
 
