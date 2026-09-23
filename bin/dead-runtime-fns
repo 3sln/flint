@@ -304,9 +304,18 @@ def main():
         if r:
             totals.append((lang, *r))
     print()
+    bad_ports = 0
     for lang, ndef, ndead in totals:
         print(f"dead-runtime-fns: {lang:6s} {ndef:4d} hand-written, "
               f"{ndead:3d} mentioned nowhere but their own definition")
+        if lang in ("jvm", "clr") and ndead:
+            bad_ports += ndead
+    if bad_ports:
+        print(f"\nFAILED: {bad_ports} unreferenced member(s) on a port. Both ports "
+              f"were at zero; something new is unreachable, or this tool has\n"
+              f"        found its ninth blind spot -- read the member before "
+              f"believing either.")
+        return 1
     return 0
 
 if __name__ == "__main__":
