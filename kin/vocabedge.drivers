@@ -15,7 +15,7 @@ fn main() {
     // THE f64 FAMILY. The NaN carries a payload of 1, which is the only thing
     // separating a preserving read from a canonicalising one.
     let nan = f64::from_bits(0x7FF8_0000_0000_0001);
-    println!("{} {} {} {} {} {} {} {} {} {} | {} {} {} {} | {} {}",
+    println!("{} {} {} {} {} {} {} {} {} {} | {} {} {} {} | {} {} | {} {}",
              rt.ushr_high(hi, 1) as i32, rt.ushr_high(hi, 31) as i32,
              rt.sar_high(hi, 1) as i32,  rt.sar_high(hi, 31) as i32,
              rt.shl_into_sign(1, 31) as i32, rt.shl_into_sign(3, 30) as i32,
@@ -26,7 +26,11 @@ fn main() {
              rt.bits_of(nan), rt.bits_round_trip(nan),
              rt.bits_of(1.5), rt.as_double_bits(1),
              // WRAPPING, which must not trap on any of the three.
-             rt.wrap_mul(0x7FFF_FFFF, 3) as i32, rt.wrap_add(0x7FFF_FFFF, 1) as i32);
+             rt.wrap_mul(0x7FFF_FFFF, 3) as i32, rt.wrap_add(0x7FFF_FFFF, 1) as i32,
+             // UNSIGNED DIVISION against a literal, which is the only way to
+             // ask for it -- `quot` needs BOTH sides tagged and a literal
+             // carries no tag.
+             rt.udiv_lit(hi) as i32, rt.umod_lit(hi) as i32);
 }
 --java-head
     // AN EMPTY `Rt`, because these are `^:method` and take one. There is no
@@ -46,7 +50,8 @@ fn main() {
             + bitsAnd(rt, hi, 0xFFFF) + " " + bitsXor(rt, hi, 0xFFFFFFFF)
             + " | " + bitsOf(rt, nan) + " " + bitsRoundTrip(rt, nan)
             + " " + bitsOf(rt, 1.5) + " " + asDoubleBits(rt, 1)
-            + " | " + wrapMul(rt, 0x7FFFFFFF, 3) + " " + wrapAdd(rt, 0x7FFFFFFF, 1));
+            + " | " + wrapMul(rt, 0x7FFFFFFF, 3) + " " + wrapAdd(rt, 0x7FFFFFFF, 1)
+            + " | " + udivLit(rt, hi) + " " + umodLit(rt, hi));
     }
 --csharp-head
     internal sealed class Rt { }
@@ -63,10 +68,11 @@ fn main() {
             + BitsAnd(rt, hi, 0xFFFF) + " " + BitsXor(rt, hi, unchecked((int) 0xFFFFFFFFu))
             + " | " + BitsOf(rt, nan) + " " + BitsRoundTrip(rt, nan)
             + " " + BitsOf(rt, 1.5) + " " + AsDoubleBits(rt, 1)
-            + " | " + WrapMul(rt, 0x7FFFFFFF, 3) + " " + WrapAdd(rt, 0x7FFFFFFF, 1));
+            + " | " + WrapMul(rt, 0x7FFFFFFF, 3) + " " + WrapAdd(rt, 0x7FFFFFFF, 1)
+            + " | " + UdivLit(rt, hi) + " " + UmodLit(rt, hi));
     }
 --expect
-1073741824 1 -1073741824 -1 -2147483648 -1073741824 591751049 -1 1 2147483646 | 9221120237041090561 9221120237041090561 4609434218613702656 4607182418800017408 | 2147483645 -2147483648
+1073741824 1 -1073741824 -1 -2147483648 -1073741824 591751049 -1 1 2147483646 | 9221120237041090561 9221120237041090561 4609434218613702656 4607182418800017408 | 2147483645 -2147483648 | 715827883 0
 --expect-why
 DERIVED FROM THE BIT PATTERNS. The input is `0x80000001` throughout: the high
 bit set and the low bit set, so a shift bringing in the wrong thing shows in
@@ -130,3 +136,19 @@ would appear to work with no `unchecked` in the template at all -- until a
 project-level `CheckForOverflowUnderflow` turned overflow into an exception on
 one runtime and nowhere else. The template says `unchecked` explicitly and
 this asserts that it still does.
+
+THE UNSIGNED PAIR, after the third bar, and these two had NEVER RUN. A survey
+of the 167 vocabulary words on 2026-09-22 found exactly two that no kin source
+mentions: `uquot` and `urem`. Three hand-written templates each, in three
+languages, never once executed.
+
+17. `uquot(0x80000001, 3)` = 715827883. Signed division would answer
+    -715827882: `0x80000001` is 2147483649 unsigned and -2147483647 signed.
+18. `urem(0x80000001, 3)` = 0. Signed would answer -1.
+
+THE LITERAL IS WHY THEY EXIST. `quot` and `rem` are `both-u32` -- they emit
+the unsigned spelling only when BOTH arguments are tagged, and a literal
+carries no tag, so `(quot h 3)` silently gets the signed operator.
+`kin/unsigned.kin` reads as though it covers this and does not: it was
+rewritten to use the tag-driven generic operators, which is the case a tag CAN
+answer.

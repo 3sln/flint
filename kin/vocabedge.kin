@@ -34,6 +34,7 @@
                                    shl ushr sar to-i32 bit-and bit-or bit-xor
                                    f64-bits f64-of-bits to-f64
                                    wmul wadd
+                                   uquot urem
                                    Rt I32 I64 U32 F64]]))
 
 (doc "Logical right shift of a value with the high bit set."
@@ -124,3 +125,27 @@
 (doc "Addition that wraps, for the same reasons.")
 (defn ^:method ^I32 wrap-add [^Rt rt ^I32 a ^I32 b]
   (return (wadd a b)))
+
+(doc "Unsigned division and remainder, against a LITERAL divisor."
+     ""
+     "THESE TWO HAD NEVER RUN. A survey of the 167 vocabulary words on"
+     "2026-09-22 found exactly two that no kin source mentions at all, and"
+     "these are they -- three hand-written templates each, in three languages,"
+     "never once executed. `kin/unsigned.kin` reads as though it covers them"
+     "and does not: it was rewritten to use the TAG-DRIVEN generic operators,"
+     "which answer the unsigned form when both arguments carry `^U32`."
+     ""
+     "THE LITERAL IS THE WHOLE REASON THEY EXIST. `quot` and `rem` are"
+     "`both-u32`: they emit the unsigned spelling only when BOTH arguments are"
+     "tagged, and a literal carries no tag -- so `(quot h 3)` silently gets"
+     "the SIGNED operator. Naming the unsigned one is how a source says what"
+     "it means where a tag cannot."
+     ""
+     "AND THE TWO ANSWERS ARE FAR APART, which is what makes this a test:"
+     "0x80000001 is 2147483649 unsigned and -2147483647 signed, so the"
+     "quotients are 715827883 and -715827882 and the remainders are 0 and -1.")
+(defn ^:method ^U32 udiv-lit [^Rt rt ^U32 a]
+  (return (uquot a 3)))
+
+(defn ^:method ^U32 umod-lit [^Rt rt ^U32 a]
+  (return (urem a 3)))
