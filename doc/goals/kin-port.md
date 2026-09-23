@@ -9994,8 +9994,11 @@ is no single shape to generate until one factoring wins.
 **Two things checked and found fine**, recorded so the suspicion is not
 re-run. `Snap` looked like 1316 lines of unreferenced code on the ports and is
 not -- its callers are in `runtimes/*/test/` and `runtimes/clr/conform/`.
-Cross-runtime snapshot interop is not a goal, so the three formats agreeing
-byte for byte is not an unchecked claim. And `class-of` was declined: four
+Cross-runtime snapshot interop IS a goal and IS checked, contrary to what
+this paragraph said until 2026-09-23: `bin/conform-hosts` has native read the
+live snapshot the jvm wrote and the one the clr wrote, asserting the contents
+match rather than that the import was accepted. I had looked for that
+assertion in the prose, not in the harness. And `class-of` was declined: four
 lines, three runtimes already identical, and porting it would cost a third
 visibility widening for no divergence risk.
 

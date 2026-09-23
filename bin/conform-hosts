@@ -702,6 +702,65 @@ SPJS
   fi
 fi
 
+# AND A PROGRAM THAT WRITES TO A WIRE, which nothing here did either.
+#
+# `runtimes/conform/wire.cljc` checks what a writer REFUSES and that it
+# refuses alike everywhere. It carries no workload pair, so no gas row had
+# ever seen a wire-heavy program -- and the two runtimes FACTOR THE WRITER
+# DIFFERENTLY, which is the one thing still blocking `Wire` from being
+# generated (`DECISIONS.md`). Native writes a tag and its payload in one
+# call, `wire_piece`, checking the writer is live ONCE; both ports compose
+# `put(tag)` with a payload writer, and each of those checks for itself. So a
+# port does two `isWriter`/`WR_LIVE` reads and two mark/push cycles per value
+# where native does one.
+#
+# THE DIFFERENCE IS THE ASSERTION, not the total. Measured 2026-09-23 the two
+# sides agree to the instruction over 300 extra values -- 7 302 each -- with
+# the constant 88 between totals that every fixture here removes the same way.
+# If that stops being true, one factoring has started billing for its extra
+# liveness check and the choice between them stops being free.
+if ./bin/flint :src runtimes/conform :fn wiregas/small --emit-image \
+     :out out/wg-small.img >/dev/null 2>&1; then
+  ./bin/flint :src runtimes/conform :fn wiregas/large --emit-image :out out/wg-large.img >/dev/null 2>&1
+  ./bin/flint :src runtimes/conform :fn wiregas/small :out out/wg-small.wasm >/dev/null 2>&1
+  ./bin/flint :src runtimes/conform :fn wiregas/large :out out/wg-large.wasm >/dev/null 2>&1
+  cat > out/wg-run.mjs <<'WGJS'
+import { load, instantiate } from '../host/flint.mjs';
+const o = {};
+for (const k of ['small', 'large']) {
+  const { module } = await load(`out/wg-${k}.wasm`);
+  const i = instantiate(module);
+  i.exports.set_step_limit(0x7ffffff0n);
+  i.run(`wiregas/${k}`, ['']);
+  o[k] = Number(i.exports.stat_steps());
+}
+console.log(`${o.small} ${o.large}`);
+WGJS
+  wg_n="$(node out/wg-run.mjs)"
+  wgn_a="${wg_n%% *}"; wgn_b="${wg_n##* }"
+  case "$wgn_a$wgn_b" in
+    *[!0-9]*|'') echo "  FAIL wiregas's wasm side did not print two numbers: [$wg_n]"; exit 1 ;;
+  esac
+  wgj_a="$("$JDK/bin/java" -cp runtimes/jvm/classes RtSteps out/wg-small.img wiregas/small)"
+  wgj_b="$("$JDK/bin/java" -cp runtimes/jvm/classes RtSteps out/wg-large.img wiregas/large)"
+  wgj_a="${wgj_a%% *}"; wgj_b="${wgj_b%% *}"
+  wgd_n=$(( wgn_b - wgn_a )); wgd_j=$(( wgj_b - wgj_a ))
+  [ "$wgd_n" = "$wgd_j" ] \
+    || { echo "  FAIL writing to a wire costs different gas: $wgd_n native against $wgd_j jvm"
+         echo "       ($wgn_a / $wgn_b against $wgj_a / $wgj_b)"
+         echo "       (one writer factoring is billing for its extra liveness check)"
+         exit 1; }
+  echo "  ok   writing to a wire costs the same on every runtime: $wgd_n over 300 values [jvm]"
+  if [ -n "$CLR" ]; then
+    wgc_a="$("$CLR" --rt-steps out/wg-small.img wiregas/small)"; wgc_a="${wgc_a%% *}"
+    wgc_b="$("$CLR" --rt-steps out/wg-large.img wiregas/large)"; wgc_b="${wgc_b%% *}"
+    [ "$wgc_a" = "$wgj_a" ] && [ "$wgc_b" = "$wgj_b" ] \
+      || { echo "  FAIL the two ports bill a wire write differently: $wgj_a/$wgj_b against $wgc_a/$wgc_b"; exit 1; }
+    echo "  ok     ... and the two ports agree on both, to the instruction [clr]"
+  fi
+fi
+
+
 # AND A PROGRAM THAT YIELDS, which nothing here did until 2026-09-22.
 #
 # `DECISIONS.md#the-codec-is-guest-code` records as open that the ports disarm billing

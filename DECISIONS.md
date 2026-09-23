@@ -5253,10 +5253,21 @@ in `runtimes/jvm/test/` and `runtimes/clr/conform/`, which a search of
 `runtimes/*/src/` does not see. Capture/restore round-trips, both refusal
 cases and export/import are all covered per runtime.
 
-Cross-runtime snapshot interop is NOT a goal, so the three formats agreeing
-byte for byte is not a claim anything fails to check. The round-trip this
-section calls byte-identical is within one runtime, and a snapshot is pinned
-to its image by construction.
+**CORRECTION, 2026-09-23.** The paragraph here said cross-runtime snapshot
+interop is NOT a goal and therefore not a claim anything checks. Both halves
+were wrong, and `bin/conform-hosts` says so on two rows: native READS THE LIVE
+SNAPSHOT THE JVM WROTE, and the one the clr wrote, asserting `matches=true`
+rather than merely that the import was accepted -- a distinction the harness
+learned the hard way, because checking `accepted` once passed a real snapshot
+with a byte flipped in the middle of it.
+
+How I got it wrong is the part worth keeping. I read this section, found its
+byte-identical claim describes a round trip WITHIN one runtime, found no
+cross-runtime assertion in the text, and concluded none existed anywhere. The
+assertion was in the harness, not the prose, and I never ran the harness --
+I was looking for a gap and stopped at the first place that could have held
+one. `export-live` is relocatable BY DESIGN, and these rows are what holds the
+three encoders to it.
 
 **`Val`'s last four are NOT blocked on a byte-array type**, which is what
 their comments have said and what I set out to fix by adding one. kin has had
