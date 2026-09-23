@@ -14,15 +14,24 @@ commit was 75 behind and the gate's own closing phrase had changed too. It is
 the first thing a session reads, so it is the worst place in the tree to carry
 a stale number.*
 
-`Conc` is finished. **The remaining three-way generatable pool is 75 lines**
--- `bin/port-survey --calls`, run 2026-09-23: Rt 35, Conc 13, Num 8, Space 8,
-Val 7, Gc 4. That view calls a method portable only when EVERY call in it is a
-kin vocabulary word, a function kin already generates, or a same-file helper
-that is itself portable.
+`Conc` is finished. **The remaining three-way generatable pool is 36 lines**
+-- `bin/port-survey --calls`, run 2026-09-23: Rt 17, Space 8, Conc 6, Gc 4,
+Num 1. Named, because at this size the list is shorter than the number:
+`Space.take` 7, `Rt.setGasLimit` 5, `refreshCheckpoint` 5, `setSliceEnd` 4,
+`Conc.systemPort` 4, `Gc.classOf` 4, and six smaller.
 
-*Do not publish the `--rank` table's `in 3` column for this.* It says 165 --
-213 before the atomics rule below was added -- and it is the weaker of the two
-views: `rank()` still classifies with `BLOCK`, the
+A method is offered only when it passes BOTH rules -- every call expressible
+AND no blocked construct. It took both, and finding out why cost a session
+apiece. `--calls` asks about CALLS, and an OPERATOR is not one, so
+`Rt.gasError` -- `"gas limit exceeded: spent " + steps` -- ranked second in
+its area. `BLOCK` has patterns for host strings and none for atomics, so
+`Parallel`, which is host counters end to end, ranked densest in the tree.
+Requiring both took the pool 75 -> 36, and what left is what the tree already
+documents as unportable: `makeError` and `gasError` take `String`, `asI64`
+answers a nullable type "kin has not got".
+
+*Do not publish the `--rank` table's `in 3` column for this.* It says 165 and
+applies only the blocklist half: `rank()` still classifies with `BLOCK`, the
 blocklist, while `unportable_calls` -- the allowlist written to replace it, in
 the same file -- is what `--calls` uses. The file already says the blocklist
 "is always one construct behind whatever the code does next" and names
