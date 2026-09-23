@@ -930,6 +930,11 @@
    ;; it is a size and a size is an `Addr`.
    'LARGE_OBJECT {:rust "(crate::gc::LARGE_OBJECT as Addr)"
                   :java "Gc.LARGE_OBJECT" :csharp "Gc.LARGE_OBJECT"}
+   ;; HOW MANY SIZE CLASSES the free lists carry. Cast on rust for the same
+   ;; reason `LARGE_OBJECT` is: it is a `usize` there and the comparison it
+   ;; takes part in is against an `Addr`.
+   'NCLASS {:rust "(crate::gc::NCLASS as i64)"
+            :java "Gc.NCLASS" :csharp "Gc.NCLASS"}
    ;; Where a FLAT STRING's bytes begin, which is not `HDR`: a `TY_STR` carries
    ;; a header of its own before them.
    'STR_DATA {:rust "crate::obj::STR_DATA" :java "Obj.STR_DATA" :csharp "Obj.StrData"}

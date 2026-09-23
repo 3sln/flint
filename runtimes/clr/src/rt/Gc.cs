@@ -26,7 +26,7 @@ public sealed class Gc : System.IDisposable {
     /// `internal` is the whole of what that costs here.
     internal const long LARGE_OBJECT = 16384;
     /// 0..63 exact (size = i*8), 64 = "big".
-    const int NCLASS = 65;
+    internal const int NCLASS = 65;
     const long MIN_CHUNK = 1024 * 1024;
 
     public readonly Space sp;
@@ -96,8 +96,7 @@ public sealed class Gc : System.IDisposable {
     }
 
     static int ClassOf(long size) {
-        long c = size / 8;
-        return c >= NCLASS ? NCLASS - 1 : (int) c;
+        return (int) global::_3sln.Flint.Kgen.Rt.Gcclass.GcClassOf(size);
     }
 
     void PushFree(long addr, long size) {

@@ -38,7 +38,7 @@ use crate::value::Value;
 pub const PROMOTE_AGE: u32 = 2;
 /// Objects at least this big skip the nursery entirely.
 pub const LARGE_OBJECT: u32 = 16 * 1024;
-const NCLASS: usize = 65; // 0..63 exact (size = i*8), 64 = "big"
+pub const NCLASS: usize = 65; // 0..63 exact (size = i*8), 64 = "big"
 const MIN_CHUNK: u32 = 1024 * 1024;
 
 // ---------------------------------------------------------------------------
@@ -1033,12 +1033,7 @@ impl Gc {
 
     #[inline]
     fn class_of(size: Addr) -> usize {
-        let c = (size / 8) as usize;
-        if c >= NCLASS {
-            NCLASS - 1
-        } else {
-            c
-        }
+        crate::kgen::rt::gcclass::gc_class_of(size) as usize
     }
 
     fn push_free(&mut self, addr: Addr, size: Addr) {

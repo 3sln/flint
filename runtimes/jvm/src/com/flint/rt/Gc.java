@@ -33,7 +33,7 @@ public final class Gc {
     /// cannot express native's `pub(crate)`.
     public static final long LARGE_OBJECT = 16384;
     /// 0..63 exact (size = i*8), 64 = "big".
-    static final int NCLASS = 65;
+    public static final int NCLASS = 65;
     static final long MIN_CHUNK = 1024 * 1024;
 
     public final Space sp;
@@ -119,8 +119,7 @@ public final class Gc {
     }
 
     static int classOf(long size) {
-        long c = size / 8;
-        return c >= NCLASS ? NCLASS - 1 : (int) c;
+        return (int) com._3sln.flint.kgen.rt.Gcclass.gcClassOf(size);
     }
 
     void pushFree(long addr, long size) {

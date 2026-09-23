@@ -1,0 +1,57 @@
+--rust-head
+type Addr = u64;
+// THE ONE CONSTANT, spelled where the vocabulary reaches for it. `NCLASS` is
+// 65 and the classes are 0..64, so `NCLASS - 1` is the last list and not an
+// off-by-one.
+mod gc { pub const NCLASS: usize = 65; }
+--rust
+fn main() {
+    let mut o = String::new();
+    for s in [0u64, 7, 8, 511, 512, 519, 520, 100000] {
+        o.push_str(&format!("{}{}", if o.is_empty() { "" } else { " " }, gc_class_of(s)));
+    }
+    println!("{}", o);
+}
+--java-head
+    static final class Gc { static final int NCLASS = 65; }
+--java
+    public static void main(String[] args) {
+        long[] sizes = { 0, 7, 8, 511, 512, 519, 520, 100000 };
+        StringBuilder o = new StringBuilder();
+        for (int i = 0; i < sizes.length; i++) {
+            o.append(i == 0 ? "" : " ").append(gcClassOf(sizes[i]));
+        }
+        System.out.println(o.toString());
+    }
+--csharp-pre
+static class Gc { internal const int NCLASS = 65; }
+--csharp-head
+--csharp
+    public static void Main() {
+        long[] sizes = { 0, 7, 8, 511, 512, 519, 520, 100000 };
+        var o = new System.Text.StringBuilder();
+        for (int i = 0; i < sizes.Length; i++) {
+            if (i != 0) o.Append(' ');
+            o.Append(GcClassOf(sizes[i]));
+        }
+        System.Console.WriteLine(o.ToString());
+    }
+--expect
+0 0 1 63 64 64 64 64
+--expect-why
+DERIVED from "one list per eight bytes, clamped to the last", not recorded
+from a run.
+
+`0`, `7` and `8` pin the division: a hole smaller than one unit is class 0,
+and the unit boundary is at 8 rather than at 1.
+
+`511` -> 63 and `512` -> 64 pin the top of the exact range. 64 IS a real
+class here, the last one, so a clamp that fired at `NCLASS - 1` instead of at
+`NCLASS` would answer 63 for 512 and be wrong by one list.
+
+`520` IS THE CASE THIS FILE EXISTS FOR. 520 >> 3 is 65, which is one PAST the
+last list, so the answer must still be 64. Write the comparison as `c >
+NCLASS` -- the plausible misreading, since `NCLASS` is a count and 65 looks
+like the first bad value -- and this row answers 65 while EVERY OTHER ROW
+above stays right. `100000` only confirms the clamp holds far out; it would
+pass either way.
