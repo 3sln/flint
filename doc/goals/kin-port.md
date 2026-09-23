@@ -14,21 +14,28 @@ commit was 75 behind and the gate's own closing phrase had changed too. It is
 the first thing a session reads, so it is the worst place in the tree to carry
 a stale number.*
 
-`Conc` is finished. **The remaining three-way generatable pool is 213 lines**
-(`bin/port-survey`, run 2026-09-23), spread over eleven areas: `Rt` 70,
-`Parallel` 42, `Gc` 23, `Space` 22, `Conc` 20, `Snap` 16, `Aot` 6, `Codec` 6,
-`Str` 4, `Builtins` 3, `Num` 1. That column counts clean lines whose method
-ALSO exists on native -- three copies to replace with one -- and it already
-excludes lines belonging to a method that IS a kin vocabulary word, which
-would be circular to generate.
+`Conc` is finished. **The remaining three-way generatable pool is 75 lines**
+-- `bin/port-survey --calls`, run 2026-09-23: Rt 35, Conc 13, Num 8, Space 8,
+Val 7, Gc 4. That view calls a method portable only when EVERY call in it is a
+kin vocabulary word, a function kin already generates, or a same-file helper
+that is itself portable.
 
-*This sentence said "86 lines with nothing in it above eight" and was written
-2026-09-22 07:22.* The committed tool did not print that. Its `in 3` logic is
-unchanged since: the three commits that touched `bin/port_survey.py` afterwards
-(13:27, 13:49, 17:21) are all in the CONSTANTS half, and `AREAS` did not
-change. So the figure was measured some other way, and the lesson is the one
-already written down -- publish what the committed tool prints, because a
-hand-configured one-off encodes decisions the committed path lacks.
+*Do not publish the `--rank` table's `in 3` column for this.* It says 213 and
+it is the weaker of the two views: `rank()` still classifies with `BLOCK`, the
+blocklist, while `unportable_calls` -- the allowlist written to replace it, in
+the same file -- is what `--calls` uses. The file already says the blocklist
+"is always one construct behind whatever the code does next" and names
+`AtomicInteger.compareAndSet` as one of six constructs it missed.
+
+`Parallel` is what that costs, and it is worth keeping as the example.
+`--rank` scores it 42 of 63 lines portable, 67%, the densest area in the
+table, and its four biggest -- `enter`, `lockAlloc`, `lockIntern`, `register`
+-- are nothing but host atomics: `stop.get()`, `active.incrementAndGet()`,
+`alloc.compareAndSet(0, 1)`, `Thread.onSpinWait()`. `BLOCK` has no pattern for
+any of it, so it all reads as clean. kin's only atomic words are `cas-slot`,
+`cas-slot-barriered` and `slot-atomic`, and every one of them addresses a slot
+on a flint heap object, not a host counter. `Parallel` does not appear in
+`--calls` at all, which is the right answer.
 
 **Design:** `DECISIONS.md#kin`. **Tool:** `kin/`.
 
