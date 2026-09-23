@@ -4454,9 +4454,12 @@ what the wasm compiler emits`**, exit 0.
 *Three numbers corrected.* **"all 46 opcodes" → 39.** Seven were retired and
 their numbers deliberately not reused (`src/flint/emitter.cljc:27-67`, 39
 entries; `bin/opcov-gate` says "All 39 defined opcodes"). **"all 155 builtins"
-→ 168**; `./bin/check-builtins` answers `the native runtime carries 168, 2 of
-them emitted by the compiler` / `ok jvm carries all 168, the 2 mandatory
-included`. The port carrying *all* of them is still true — the count moved, not
+→ 223** (this line said 168 until 2026-09-23, which is the second time the
+figure has gone stale); `./bin/check-builtins` answers `the native runtime
+carries 223 (169 core + 54 in units, 3 host-provided and 3 diagnostics-only),
+2 of them emitted by the compiler` / `ok jvm carries all 223, the 2 mandatory
+included`. Quoting the command is the durable part; quoting its OUTPUT is what
+rots. The port carrying *all* of them is still true — the count moved, not
 the claim. (`runtimes/jvm/README.md`'s "141 of the 144 the compiler imports;
 the 3 missing are regex" and its "Self-hosting: close, not there" are both
 stale against this; the self-host run above needed nothing.) **"all nine
@@ -4562,10 +4565,17 @@ a stale-build artefact).
 **Ratified:** ☐ not signed off
 
 **Status: partly built, at the same level of completeness as `jvm-runtime`. Self-hosting verified; the builtin and conformance counts were stale. Verified 2026-09-12 at 639430e.**
-All **168** builtins (not 155), **25** conformance cases (not nine), several
-threads sharing one program, AOT to real IL, and **the flint compiler
-self-hosting on .NET to the byte-identical image the native compiler
-produces**.
+All **223** builtins, **30** conformance programs, several threads sharing
+one program, AOT to real IL, and **the flint compiler self-hosting on .NET to
+the byte-identical image the native compiler produces**.
+
+*Both counts have now gone stale TWICE.* This line said 155 and nine, was
+corrected to 168 and 25 on 2026-09-12, and read 223 and 30 when re-measured on
+2026-09-23. The claim that matters -- the port carries ALL of them -- has been
+true throughout; it is the number beside it that rots, because nothing keeps a
+figure pasted into prose honest. `./bin/check-builtins` and
+`ls runtimes/conform/*.cljc` are the durable half of this sentence. Re-run
+them rather than reading the numbers here.
 
 *How the self-hosting claim was checked.* `DOTNET_ROOT=/opt/homebrew/opt/dotnet/libexec`,
 `dotnet build -v q --nologo -c Release` in `runtimes/clr/conform`, then
