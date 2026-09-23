@@ -38,12 +38,23 @@ BLOCK = [
     # shape is "take a lock, do the thing, release it whatever happens" is not
     # a body that can be generated.
     (r"\btry\s*\{|\bfinally\s*\{|\block\s*\(", "host try/lock"),
+    # HOST ATOMICS. The type is declared on the FIELD, so a method body that
+    # spins on one contains no `Atomic` token at all -- `enter` is
+    # `stop.get()`, `active.incrementAndGet()`, `Thread.onSpinWait()` and
+    # nothing else. With no rule here `Parallel` ranked 67% clean, the densest
+    # area in the table, and sent a session off to generate a file where every
+    # top method is a host counter. kin's atomic words (`cas-slot`,
+    # `cas-slot-barriered`, `slot-atomic`) all address a slot on a flint
+    # object; none of them can touch one of these.
+    (r"\bAtomic\w+|compareAndSet|incrementAndGet|decrementAndGet|"
+     r"getAndIncrement|getAndDecrement|getAndSet|getAndAdd|addAndGet|"
+     r"onSpinWait|\bInterlocked\b|\bVolatile\.|\bVarHandle\b", "host atomics"),
 ]
 
 # THE STANDING NEVER LIST, used as an ASSERTION rather than an exclusion:
 # encoding these away would make the check unable to fail. `Gc.alloc` scoring
 # portable is how the raw-memory rule was found to be too narrow, twice.
-NEVER = {"Gc", "Snap"}
+NEVER = {"Gc", "Snap", "Parallel"}
 
 DECL = re.compile(
     r"^    (?:(?:public|private|protected|static|final|abstract|synchronized)\s+)*"
@@ -186,6 +197,16 @@ def rank():
         # than a three-way one and is a different job; the rank has to say
         # which it is offering.
         nat = extract_all(native_for(area), N_PAT)
+        # WHICH FIELDS ARE ATOMICS, read from the declarations rather than
+        # guessed from the call. `executors` is `return live.get();` and
+        # `unlockAlloc` is `alloc.set(0);` -- nothing in either body names a
+        # host type, and `.get(`/`.set(` are far too common to blocklist by
+        # name. The declaration is the only place the truth is written down.
+        src = open(path).read()
+        afields = set(re.findall(
+            r"\b(?:Atomic\w+|VarHandle)(?:\s*\[\s*\])?\s+(\w+)\s*[=;]", src))
+        atouch = (re.compile(r"\b(?:" + "|".join(sorted(afields)) + r")\s*[.\[]")
+                  if afields else None)
         hand = clean = three = isvoc = 0
         why, big = collections.Counter(), []
         for name, txt, n in java_methods(path):
@@ -202,6 +223,8 @@ def rank():
             if not hit and any("->" in ln and "case " not in ln
                                for ln in txt.split("\n")):
                 hit = "host callback"
+            if not hit and atouch and atouch.search(txt):
+                hit = "host atomics"
             if hit:
                 why[hit] += n
             else:
