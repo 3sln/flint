@@ -5,6 +5,7 @@ type Addr = u64;
 // runtime too -- the space is an arena whose interior mutability lives below
 // this level -- so the shared reference in the signature is not a weakening
 // of the fixture.
+const TY_FWD: u8 = 1;   // the forwarding tag, as `obj.rs` declares it
 struct Space { m: Vec<u8> }
 impl Space {
     fn read_u32(&self, a: Addr) -> u32 {
@@ -52,6 +53,15 @@ fn main() {
     obj_set_marked(&sp, w, false);            o.push_str(&format!(" | {}", show(&sp, w)));
     obj_set_in_remset(&sp, w, false);         o.push_str(&format!(" | {}", show(&sp, w)));
     obj_set_str_ascii(&sp, w, false);         o.push_str(&format!(" | {}", show(&sp, w)));
+    // THE FORWARD PAIR, round-tripped. Two of these four separate a
+    // zero-extending widening from a sign-extending one.
+    let f: Addr = 48;
+    for (i, dest) in [8u64, 0x0000_00AB_8000_0001, 0x0000_FFFF_FFFF_FFFF,
+                      0xAB00_0000_0000_0000].iter().enumerate() {
+        obj_set_forward(&sp, f, *dest);
+        o.push_str(&format!("{}{} {}", if i == 0 { " ||| " } else { " | " },
+                            obj_ty(&sp, f), obj_forward_target(&sp, f)));
+    }
     println!("{}", o);
 }
 fn show(sp: &Space, a: Addr) -> String {
@@ -60,6 +70,7 @@ fn show(sp: &Space, a: Addr) -> String {
         obj_in_remset(sp, a) as u32, obj_str_ascii(sp, a) as u32, obj_len(sp, a))
 }
 --java-head
+    static final int TY_FWD = 1;
     static final class Space {
         final byte[] m = new byte[64];
         int readU32(long a) {
@@ -102,6 +113,16 @@ fn show(sp: &Space, a: Addr) -> String {
         objSetMarked(sp, w, false);     o.append(" | ").append(show(sp, w));
         objSetInRemset(sp, w, false);   o.append(" | ").append(show(sp, w));
         objSetStrAscii(sp, w, false);   o.append(" | ").append(show(sp, w));
+        // THE FORWARD PAIR, round-tripped. Two of these four separate a
+        // zero-extending widening from a sign-extending one.
+        long f = 48;
+        long[] dests = { 8L, 0x000000AB80000001L, 0x0000FFFFFFFFFFFFL,
+                         0xAB00000000000000L };
+        for (int i = 0; i < dests.length; i++) {
+            objSetForward(sp, f, dests[i]);
+            o.append(i == 0 ? " ||| " : " | ")
+             .append(objTy(sp, f)).append(' ').append(objForwardTarget(sp, f));
+        }
         System.out.println(o);
     }
     static String show(Space sp, long a) {
@@ -110,6 +131,7 @@ fn show(sp: &Space, a: Addr) -> String {
              + (objStrAscii(sp, a) ? 1 : 0) + " " + objLen(sp, a);
     }
 --csharp-head
+    static class Obj { internal const int TyFwd = 1; }
     internal sealed class Space {
         internal readonly byte[] m = new byte[64];
         internal int ReadU32(long a) {
@@ -154,6 +176,16 @@ fn show(sp: &Space, a: Addr) -> String {
         ObjSetMarked(sp, w, false);     o.Append(" | ").Append(Show(sp, w));
         ObjSetInRemset(sp, w, false);   o.Append(" | ").Append(Show(sp, w));
         ObjSetStrAscii(sp, w, false);   o.Append(" | ").Append(Show(sp, w));
+        // THE FORWARD PAIR, round-tripped. Two of these four separate a
+        // zero-extending widening from a sign-extending one.
+        long f = 48;
+        long[] dests = { 8L, 0x000000AB80000001L, 0x0000FFFFFFFFFFFFL,
+                         unchecked((long) 0xAB00000000000000UL) };
+        for (int i = 0; i < dests.Length; i++) {
+            ObjSetForward(sp, f, dests[i]);
+            o.Append(i == 0 ? " ||| " : " | ")
+             .Append(ObjTy(sp, f)).Append(' ').Append(ObjForwardTarget(sp, f));
+        }
         System.Console.WriteLine(o.ToString());
     }
     static string Show(Space sp, long a) {
@@ -162,7 +194,7 @@ fn show(sp: &Space, a: Addr) -> String {
              + (ObjStrAscii(sp, a) ? 1 : 0) + " " + ObjLen(sp, a);
     }
 --expect
-171 5 1 0 1 1234 | 0 0 0 0 0 0 | 255 7 0 1 0 2147483647 | 0 0 1 0 0 8 | 0 0 0 0 1 16 || 7 0 0 0 0 99 | 7 5 0 0 0 99 | 7 0 0 0 0 99 | 7 0 1 1 1 99 | 7 0 0 1 1 99 | 7 0 0 0 1 99 | 7 0 0 0 0 99
+171 5 1 0 1 1234 | 0 0 0 0 0 0 | 255 7 0 1 0 2147483647 | 0 0 1 0 0 8 | 0 0 0 0 1 16 || 7 0 0 0 0 99 | 7 5 0 0 0 99 | 7 0 0 0 0 99 | 7 0 1 1 1 99 | 7 0 0 1 1 99 | 7 0 0 0 1 99 | 7 0 0 0 0 99 ||| 1 8 | 1 736586891265 | 1 281474976710655 | 1 0
 --expect-why
 DERIVED from the header layout stated at the top of `kin/objhdr.kin`: the tag
 is bits 31..24, the age 23..21, marked is bit 20, in-remset 19, ascii 18, and

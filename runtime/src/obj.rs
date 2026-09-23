@@ -299,15 +299,17 @@ pub fn len(sp: &Space, a: Addr) -> u32 {
 /// The two live together so the packing cannot drift; splitting them is how a
 /// reader ends up with half the address.
 pub fn set_forward(sp: &Space, a: Addr, dest: Addr) {
-    let hi = ((dest >> 32) & 0x00FF_FFFF) as u32;
-    sp.write_u32(a, ((TY_FWD as u32) << 24) | hi);
-    sp.write_u32(a + 4, dest as u32);
+    crate::kgen::rt::objhdr::obj_set_forward(sp, a, dest)
 }
 
 #[inline]
+/// GENERATED. The low word is widened by `addr-of-u32`, which ZERO-extends
+/// on all three targets. `to-addr` is the trap and is not a hypothetical: put
+/// it here instead and the drivers report -2147483647 and -1 on both ports
+/// while this one stays correct, because Rust's `as Addr` from a `u32`
+/// zero-extends on its own and an `int` on the ports does not.
 pub fn forward_target(sp: &Space, a: Addr) -> Addr {
-    let hi = (sp.read_u32(a) & 0x00FF_FFFF) as Addr;
-    (hi << 32) | sp.read_u32(a + 4) as Addr
+    crate::kgen::rt::objhdr::obj_forward_target(sp, a)
 }
 
 pub fn write_header(sp: &Space, a: Addr, ty: u8, len: u32) {

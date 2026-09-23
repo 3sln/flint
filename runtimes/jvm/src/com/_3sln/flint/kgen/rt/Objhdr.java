@@ -93,4 +93,29 @@ public final class Objhdr {
             sp.writeU32(a, sp.readU32(a) & (~(1 << 18)));
         }
     }
+    /// Stamp a forwarding pointer: this object has MOVED, and `dest` is where.
+    /// 
+    /// A forwarded object's new address does not fit in the length word any
+    /// more, so it is split -- the top 24 bits share word zero with the
+    /// `TY_FWD` tag, the low 32 are word one. 24 + 32 is 56, comfortably past
+    /// the 48 bits an address actually uses.
+    /// 
+    /// The high half is masked to 24 bits so it cannot reach up into the tag
+    /// it shares the word with.
+    public static void objSetForward(Space sp, long a, long dest) {
+        sp.writeU32(a, (((int) TY_FWD) << 24) | ((int) ((dest >>> 32) & 16777215)));
+        sp.writeU32(a + 4, (int) dest);
+    }
+    /// Read a forwarding pointer back.
+    /// 
+    /// `addr-of-u32` AND NOT `to-addr` on the low word, which is the whole
+    /// hazard here: a low word at or above 2^31 has its high bit set, and
+    /// widening it with its sign yields an address with all 32 top bits set
+    /// rather than the address that was written. All three hand-written
+    /// versions got this right by three different routes -- `as Addr`,
+    /// `Integer.toUnsignedLong`, a trip through `uint` -- and the word is what
+    /// keeps the fourth from getting it wrong.
+    public static long objForwardTarget(Space sp, long a) {
+        return (Integer.toUnsignedLong(sp.readU32(a) & 16777215) << 32) | Integer.toUnsignedLong(sp.readU32(a + 4));
+    }
 }

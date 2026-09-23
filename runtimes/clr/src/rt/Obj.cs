@@ -138,13 +138,12 @@ public static class Obj {
     /// in no remembered set, so its low 24 bits are free. 24 + 32 = 56 against
     /// the 48 an address can hold. The pair lives together so the packing
     /// cannot drift.
-    public static void SetForward(Space sp, long a, long dest) {
-        sp.WriteU32(a, (TyFwd << 24) | (int)((dest >> 32) & 0x00FF_FFFFL));
-        sp.WriteU32(a + 4, (int) dest);
-    }
+    public static void SetForward(Space sp, long a, long dest) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjSetForward(sp, a, dest);
 
-    public static long ForwardTarget(Space sp, long a) {
-        long hi = sp.ReadU32(a) & 0x00FF_FFFFL;
-        return (hi << 32) | (uint) sp.ReadU32(a + 4);
-    }
+    /// GENERATED. The low word is widened by `addr-of-u32`, which ZERO-extends
+    /// on all three targets. `to-addr` is the trap and is not a hypothetical:
+    /// put it there instead and this port reports -2147483647 and -1 where
+    /// native stays correct, because Rust's `as Addr` from a `u32`
+    /// zero-extends on its own and an `int` here does not.
+    public static long ForwardTarget(Space sp, long a) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjForwardTarget(sp, a);
 }

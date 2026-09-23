@@ -24,20 +24,18 @@
 ;; and Rust spells the complement `!` where both ports say `~`. Nothing else
 ;; generated had ever cleared a field, so no source had needed the word.
 ;;
-;; NOT HERE YET: `set-forward` and `forward-target`, which split a 48-bit
-;; address across both header words. They need a u32-to-address widening that
-;; ZERO-extends, and the three runtimes each spell that differently -- `as
-;; Addr`, `Integer.toUnsignedLong`, `(long)(uint)`. A word for it is exactly
-;; the kind of primitive worth getting right on its own rather than in the
-;; margin of a larger change; `to-addr` is NOT it, since on both ports it
-;; emits nothing and an `int` would widen with its sign.
+;; THE FORWARD PAIR splits a 48-bit address across both header words: the top
+;; 24 bits share word zero with the `TY_FWD` tag, and the low 32 are word one.
+;; It needed `addr-of-u32`, a widening that ZERO-extends -- `to-addr` is the
+;; trap, since on both ports it emits nothing and a low word at or above 2^31
+;; would widen with its sign into an address with its top 32 bits set.
 ;;
 ;; The names are prefixed because `ty` and `len` are VOCABULARY WORDS -- `(ty
 ;; rt (as-heap v))` is how ten sources ask a value's type -- and a `^:pub`
 ;; function shadows a word of the same name across the whole project.
 (ns flint.rt.objhdr
   (:require [flint.impl.rt :refer [defn return comment doc if != + bit-and bit-or
-                                   bit-not shl ushr
+                                   bit-not shl ushr ushr64 to-i32 addr-of-u32 TY_FWD
                                    Space Addr I32 U32 Bool
                                    sp-read-u32 sp-write-u32]]))
 
@@ -117,3 +115,30 @@
   (if v
     (sp-write-u32 sp a (bit-or (sp-read-u32 sp a) (shl 1 18)))
     (sp-write-u32 sp a (bit-and (sp-read-u32 sp a) (bit-not (shl 1 18))))))
+
+(doc "Stamp a forwarding pointer: this object has MOVED, and `dest` is where."
+     ""
+     "A forwarded object's new address does not fit in the length word any"
+     "more, so it is split -- the top 24 bits share word zero with the"
+     "`TY_FWD` tag, the low 32 are word one. 24 + 32 is 56, comfortably past"
+     "the 48 bits an address actually uses."
+     ""
+     "The high half is masked to 24 bits so it cannot reach up into the tag"
+     "it shares the word with.")
+(defn ^:pub obj-set-forward [^Space sp ^Addr a ^Addr dest]
+  (sp-write-u32 sp a (bit-or (shl (to-i32 TY_FWD) 24)
+                             (to-i32 (bit-and (ushr64 dest 32) 16777215))))
+  (sp-write-u32 sp (+ a 4) (to-i32 dest)))
+
+(doc "Read a forwarding pointer back."
+     ""
+     "`addr-of-u32` AND NOT `to-addr` on the low word, which is the whole"
+     "hazard here: a low word at or above 2^31 has its high bit set, and"
+     "widening it with its sign yields an address with all 32 top bits set"
+     "rather than the address that was written. All three hand-written"
+     "versions got this right by three different routes -- `as Addr`,"
+     "`Integer.toUnsignedLong`, a trip through `uint` -- and the word is what"
+     "keeps the fourth from getting it wrong.")
+(defn ^:pub ^Addr obj-forward-target [^Space sp ^Addr a]
+  (return (bit-or (shl (addr-of-u32 (bit-and (sp-read-u32 sp a) 16777215)) 32)
+                  (addr-of-u32 (sp-read-u32 sp (+ a 4))))))

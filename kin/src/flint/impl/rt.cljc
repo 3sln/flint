@@ -1968,6 +1968,21 @@
     ;; both ports; `as-idx` widens to `usize`, which is 32 bits on wasm and
     ;; would silently be the wrong type here.
     'to-addr (core/call {:rust "({0} as Addr)" :java "{0}" :csharp "{0}"})
+    ;; A 32-BIT WORD WIDENED TO AN ADDRESS, ZERO-EXTENDED. Not `to-addr`,
+    ;; which is the trap: on both ports `to-addr` emits NOTHING, so a value
+    ;; the host is holding in an `int` widens with its SIGN, and a low word at
+    ;; or above 2^31 becomes a 64-bit address with its top 32 bits set.
+    ;;
+    ;; The three runtimes each spell the correct thing differently -- Rust's
+    ;; `as Addr` from a `u32` zero-extends on its own, the jvm needs
+    ;; `Integer.toUnsignedLong` and the clr a trip through `uint` -- which is
+    ;; exactly the shape a vocabulary word exists for. All three hand-written
+    ;; `forward_target`s already did this correctly and by three different
+    ;; routes; the word is what stops the fourth one getting it wrong.
+    'addr-of-u32 (core/call {:rust "({0} as Addr)"
+                             :java "Integer.toUnsignedLong({0})"
+                             :csharp "((long)(uint) {0})"}
+                            {:tag Addr})
 
     ;; ALLOCATE AND WRAP, answering NIL when the heap refused. `alloc` hands
     ;; back a raw address and 0 for a failure, which every caller then has to
