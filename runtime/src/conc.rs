@@ -789,11 +789,6 @@ impl Rt {
         self.slot(s, SC_SYSTEM)
     }
 
-    /// GENERATED, from `kin/portmake.kin`.
-    fn link_peers(&mut self, a: Value, b: Value) {
-        self.link_peers_at(a, b);
-    }
-
     /// A coupled pair. What goes into one comes out of the other, both ways.
     /// GENERATED, from `kin/portmake.kin`. Every slot it fills is a default
     /// something later reads without checking.

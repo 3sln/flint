@@ -543,11 +543,6 @@ public final class Conc {
     /// Link two ends. IDS ONLY, and the pairing is recorded in the scheduler as
     /// well, because when one end is collected its object is gone and the other
     /// end still has to be able to find out what happened to it.
-    /// GENERATED, from `kin/portmake.kin`.
-    static void linkPeers(Rt rt, long a, long b) {
-        com._3sln.flint.kgen.rt.Portmake.linkPeersAt(rt, a, b);
-    }
-
     /// The peer of a port that may itself be gone.
     public static long peerOf(Rt rt, long p) { return portById(rt, fx(rt.slot(p, PT_PEER))); }
 
