@@ -10037,3 +10037,84 @@ The answer was not a better regex but a PROBE: each language names a member
 known live and one known dead, and the tool refuses to report that language if
 either lands on the wrong side. The fourth bug was caught by the probe rather
 than by me, which is the only reason the number is 198 and not 107.
+
+### Both ports reached zero, and four more blind spots on the way
+
+198 became 86 removed and 10 left, all native. The count fell by deletion and
+by correction in roughly equal measure, which is the part worth recording: of
+the 198, **36 were alive** and the tool could not see how they were called.
+
+Four more shapes, each found by USING the output rather than reading the tool:
+
+* **An instance method is reached through a receiver VARIABLE.** The rule
+  asked for the owning class -- `Rt.cpsOpen` -- and generated code writes
+  `rt.cpsOpen()`. Lower-case `r`, and 39 live members vanished: `cpsOpen`,
+  `sinkBytes`, the whole sink and codepoint machinery, which is the HOST SIDE
+  OF VOCABULARY WORDS. If they were dead, ten kin sources would not compile.
+  That is what made it obviously wrong rather than plausibly right.
+* **A fully qualified call names the class through its package.**
+  `com.flint.rt.Seqs.emptyList(rt)`. Keying on the immediately preceding
+  identifier reads that as `Seqs`, and there is a GENERATED `Seqs` too, so the
+  hand-written one was classed as a sibling and dropped.
+* **A bare call in generated code is not always a sibling.** Generated files
+  static-import HAND-WRITTEN classes as well: `import static
+  com.flint.rt.Maps.*` is why `olen(rt, x)` appears with no qualifier. Only a
+  name a GENERATED class also defines is ambiguous. Treating every bare name
+  as a sibling reported `olen` dead, and removing it stopped `Champ` and
+  `Vecnode` compiling.
+* **`Dispose` is called by a `using` block, not by a name.** `Gc`, `Rt` and
+  `Space` all declare `: System.IDisposable`. A member reached through an
+  INTERFACE is reached by contract, which no textual search sees, and the
+  class would not compile without it.
+
+### And the probe that had gone vacuous
+
+The dead probe was `typeOk`, which an earlier sweep had deleted. `defs` was
+empty, the count was zero, and `0 > 0` passed without testing anything. A
+probe that cannot fail is not a probe. It is `amSet` now -- still present,
+genuinely dead, and sharing its name with a generated sibling, which is the
+collision being tested.
+
+### The cascade, three times
+
+Removing a dead wrapper orphans what it wrapped. `isttable`,
+`istransientvector` and `wire_u32` each became unreachable the moment their
+only caller went, and `check-generated-reached` said so each time.
+
+That is structure rather than coincidence: **the two checks were holding each
+other up.** A generated function wrapped by a dead delegator counts as
+REACHED, because reached does not require the caller to be live; the delegator
+is invisible to everything else. Neither check can see the pair. Removing one
+end collapses it, which makes "how many are dead" a moving number.
+
+### Where it stops, and why native is different
+
+The ports carry NO packaging metadata -- no `pom.xml`, no gradle, no
+`PackageId` -- and their only consumers are the generated tree and the in-repo
+tests, both indexed. So `public` there means "reachable from
+`com._3sln.flint.kgen.rt`", and a public member the generated tree does not
+reach has no surface to protect. That is what made 42 of them safe.
+
+`flint-rt` is PUBLISHABLE: `runtime/Cargo.toml` carries a crates.io
+`description` and no `publish = false`. `pub fn var_exists` on `Program` may
+be API for an embedder outside this repository, and reachability inside it
+cannot tell. Ten native members stop there, named in `DECISIONS.md`.
+
+I had assumed the opposite for the ports and deferred them three times on it.
+Four commands settled that, and the same four settle this one the other way.
+
+### The ports gate on zero now
+
+`dead-runtime-fns` runs in `bin/check` and fails if a port gains an
+unreferenced member -- the same shape as `check-generated-reached` and
+`check-vocab-used`, which are gates only because their counts were driven to
+zero first.
+
+Gating THIS tool is not obviously right and the caution is written into it: it
+has been wrong eight times, three toward calling live code dead, and a gate
+turns that into a broken build rather than a bad suggestion. What makes it
+acceptable is that the four probes refuse to report a language whose counting
+has drifted -- the failure mode is "refuses to answer", not "answers wrongly"
+-- and every member it currently reports has been read. The failure message
+says so: something new is unreachable, or this is the ninth blind spot, and
+the member should be read before either is believed.
