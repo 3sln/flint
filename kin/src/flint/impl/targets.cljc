@@ -312,6 +312,11 @@
           "use crate::eq::*;\n"
           "use crate::map::*;\n"
           "use crate::mem::Addr;\n"
+          ;; `Space` joined `Addr` when `kin/objhdr.kin` arrived: the object
+          ;; header layer is rooted at the SPACE rather than at the `Rt`,
+          ;; because the collector reads a header from `&mut self` methods of
+          ;; `Gc` and cannot borrow the whole `Rt` to do it.
+          "use crate::mem::Space;\n"
           "use crate::obj::*;\n"
           "use crate::rt::Rt;\n"
           "use crate::seqs::*;\n"

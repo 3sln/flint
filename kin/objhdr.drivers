@@ -1,0 +1,152 @@
+--rust-head
+type Addr = u64;
+// A SPACE IS A BYTE ARRAY HERE, which is all these six need it to be: they
+// read one 32-bit word and take it apart. `read_u32` is `&self` in the real
+// runtime too -- the space is an arena whose interior mutability lives below
+// this level -- so the shared reference in the signature is not a weakening
+// of the fixture.
+struct Space { m: Vec<u8> }
+impl Space {
+    fn read_u32(&self, a: Addr) -> u32 {
+        let i = a as usize;
+        u32::from_le_bytes([self.m[i], self.m[i + 1], self.m[i + 2], self.m[i + 3]])
+    }
+    fn write_u32(&mut self, a: Addr, v: u32) {
+        let i = a as usize;
+        self.m[i..i + 4].copy_from_slice(&v.to_le_bytes());
+    }
+}
+--rust
+fn main() {
+    let mut sp = Space { m: vec![0u8; 64] };
+    let cases: [(u32, u32); 5] = [
+        (0xABB4_0000, 1234), (0, 0), (0xFFE8_0000, 0x7FFF_FFFF),
+        (0x0010_0000, 8), (0x0004_0000, 16),
+    ];
+    let mut o = String::new();
+    for (i, (w0, w1)) in cases.iter().enumerate() {
+        let a = (i * 8) as Addr;
+        sp.write_u32(a, *w0);
+        sp.write_u32(a + 4, *w1);
+    }
+    for i in 0..cases.len() {
+        let a = (i * 8) as Addr;
+        if i > 0 { o.push_str(" | "); }
+        o.push_str(&format!("{} {} {} {} {} {}",
+            obj_ty(&sp, a), obj_age(&sp, a),
+            obj_marked(&sp, a) as u32, obj_in_remset(&sp, a) as u32,
+            obj_str_ascii(&sp, a) as u32, obj_len(&sp, a)));
+    }
+    println!("{}", o);
+}
+--java-head
+    static final class Space {
+        final byte[] m = new byte[64];
+        int readU32(long a) {
+            int i = (int) a;
+            return (m[i] & 0xFF) | ((m[i+1] & 0xFF) << 8)
+                 | ((m[i+2] & 0xFF) << 16) | ((m[i+3] & 0xFF) << 24);
+        }
+        void writeU32(long a, int v) {
+            int i = (int) a;
+            m[i] = (byte) v; m[i+1] = (byte) (v >>> 8);
+            m[i+2] = (byte) (v >>> 16); m[i+3] = (byte) (v >>> 24);
+        }
+    }
+--java
+    public static void main(String[] args) {
+        Space sp = new Space();
+        int[][] cases = { {0xABB40000, 1234}, {0, 0}, {0xFFE80000, 0x7FFFFFFF},
+                          {0x00100000, 8}, {0x00040000, 16} };
+        for (int i = 0; i < cases.length; i++) {
+            sp.writeU32(i * 8L, cases[i][0]);
+            sp.writeU32(i * 8L + 4, cases[i][1]);
+        }
+        StringBuilder o = new StringBuilder();
+        for (int i = 0; i < cases.length; i++) {
+            long a = i * 8L;
+            if (i > 0) o.append(" | ");
+            o.append(objTy(sp, a)).append(' ').append(objAge(sp, a)).append(' ')
+             .append(objMarked(sp, a) ? 1 : 0).append(' ')
+             .append(objInRemset(sp, a) ? 1 : 0).append(' ')
+             .append(objStrAscii(sp, a) ? 1 : 0).append(' ')
+             .append(objLen(sp, a));
+        }
+        System.out.println(o);
+    }
+--csharp-head
+    internal sealed class Space {
+        internal readonly byte[] m = new byte[64];
+        internal int ReadU32(long a) {
+            int i = (int) a;
+            return (m[i] & 0xFF) | ((m[i+1] & 0xFF) << 8)
+                 | ((m[i+2] & 0xFF) << 16) | ((m[i+3] & 0xFF) << 24);
+        }
+        internal void WriteU32(long a, int v) {
+            int i = (int) a;
+            m[i] = (byte) v; m[i+1] = (byte) ((uint) v >> 8);
+            m[i+2] = (byte) ((uint) v >> 16); m[i+3] = (byte) ((uint) v >> 24);
+        }
+    }
+--csharp
+    static void Main() {
+        var sp = new Space();
+        int[][] cases = { new int[]{unchecked((int) 0xABB40000), 1234},
+                          new int[]{0, 0},
+                          new int[]{unchecked((int) 0xFFE80000), 0x7FFFFFFF},
+                          new int[]{0x00100000, 8}, new int[]{0x00040000, 16} };
+        for (int i = 0; i < cases.Length; i++) {
+            sp.WriteU32(i * 8L, cases[i][0]);
+            sp.WriteU32(i * 8L + 4, cases[i][1]);
+        }
+        var o = new StringBuilder();
+        for (int i = 0; i < cases.Length; i++) {
+            long a = i * 8L;
+            if (i > 0) o.Append(" | ");
+            o.Append(ObjTy(sp, a)).Append(' ').Append(ObjAge(sp, a)).Append(' ')
+             .Append(ObjMarked(sp, a) ? 1 : 0).Append(' ')
+             .Append(ObjInRemset(sp, a) ? 1 : 0).Append(' ')
+             .Append(ObjStrAscii(sp, a) ? 1 : 0).Append(' ')
+             .Append(ObjLen(sp, a));
+        }
+        System.Console.WriteLine(o.ToString());
+    }
+--expect
+171 5 1 0 1 1234 | 0 0 0 0 0 0 | 255 7 0 1 0 2147483647 | 0 0 1 0 0 8 | 0 0 0 0 1 16
+--expect-why
+DERIVED from the header layout stated at the top of `kin/objhdr.kin`: the tag
+is bits 31..24, the age 23..21, marked is bit 20, in-remset 19, ascii 18, and
+word one is the length. Each group printed is
+`ty age marked in-remset ascii len`.
+
+  0xABB40000  ty 0xAB = 171, age 5, marked, not in the remset, ascii
+  0x00000000  every field clear
+  0xFFE80000  ty 0xFF = 255, age 7, not marked, in the remset, not ascii
+  0x00100000  bit 20 alone
+  0x00040000  bit 18 alone
+
+THE FIRST AND THIRD GROUPS ARE WHY THE AGE IS MASKED. `obj-age` shifts right
+by 21 and then masks to 7, and the mask is not decoration: the tag sits
+directly above the age field, so dropping the `& 7` would answer 1373 for the
+first group and 2047 for the third instead of 5 and 7. A fixture whose type
+tag was zero -- which is what `TY_FREE` is, and what an uninitialised probe
+would use -- passes either way, so both groups carry a large tag on purpose.
+
+THE LAST TWO GROUPS SEPARATE THE THREE FLAG BITS, which sit adjacent at 20,
+19 and 18. Each is set alone, so a source reading the neighbouring bit answers
+false where the expectation is true. The second group is their control: with
+every bit clear, all three must be false, which catches the opposite error of
+a predicate that ignores its mask and reports the whole word as truthy.
+
+THE THIRD GROUP'S LENGTH IS `0x7FFFFFFF`, THE LARGEST WITH ITS HIGH BIT CLEAR,
+and that boundary is deliberate rather than shy. `obj-len` is tagged `U32`
+because a FREE BLOCK's size may genuinely set the high bit, and at that point
+the three targets stop agreeing about how to PRINT it -- native's `u32` says
+4294967295 where both ports' `int` say -1. That is a property of the runtimes
+this file is generated for and not of the generated code, so the probe stays
+below the boundary and the tag records the fact instead.
+
+NOT COVERED HERE, and named rather than left quiet: the WRITERS
+(`write-header`, `set-age`, `set-marked`, `set-str-ascii`, `set-forward`) and
+`forward-target`, `align8` and `slot-addr` are all still hand-written in the
+three runtimes. This file is the readers only.

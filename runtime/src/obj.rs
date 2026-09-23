@@ -273,12 +273,19 @@ pub fn size_for(ty: u8, len: u32) -> Addr {
 // --- header fields ---------------------------------------------------------
 
 #[inline(always)]
+/// GENERATED (`kin/objhdr.kin`). The header layer is rooted at the SPACE and
+/// not at the `Rt`, which is why it needed a `Space` tag in kin before it
+/// could be generated at all: the collector reads these from `&mut self`
+/// methods of `Gc`, and `Gc` is a field of `Rt`.
+///
+/// The three copies AGREED before the port -- every shift and mask, compared
+/// across all three runtimes -- so this is a consolidation and not a fix.
 pub fn ty(sp: &Space, a: Addr) -> u8 {
-    (sp.read_u32(a) >> 24) as u8
+    crate::kgen::rt::objhdr::obj_ty(sp, a) as u8
 }
 #[inline(always)]
 pub fn len(sp: &Space, a: Addr) -> u32 {
-    sp.read_u32(a + 4)
+    crate::kgen::rt::objhdr::obj_len(sp, a)
 }
 #[inline(always)]
 /// Stamp a forwarding pointer, and read one back.
@@ -309,7 +316,7 @@ pub fn write_header(sp: &Space, a: Addr, ty: u8, len: u32) {
 }
 #[inline(always)]
 pub fn age(sp: &Space, a: Addr) -> u32 {
-    (sp.read_u32(a) >> 21) & 7
+    crate::kgen::rt::objhdr::obj_age(sp, a)
 }
 #[inline(always)]
 pub fn set_age(sp: &Space, a: Addr, age: u32) {
@@ -318,7 +325,7 @@ pub fn set_age(sp: &Space, a: Addr, age: u32) {
 }
 #[inline(always)]
 pub fn marked(sp: &Space, a: Addr) -> bool {
-    sp.read_u32(a) & (1 << 20) != 0
+    crate::kgen::rt::objhdr::obj_marked(sp, a)
 }
 #[inline(always)]
 pub fn set_marked(sp: &Space, a: Addr, m: bool) {
@@ -354,7 +361,7 @@ pub const RP_KIDS: u32 = 4;
 
 #[inline(always)]
 pub fn str_is_ascii(sp: &Space, a: Addr) -> bool {
-    sp.read_u32(a) & (1 << 18) != 0
+    crate::kgen::rt::objhdr::obj_str_ascii(sp, a)
 }
 #[inline(always)]
 pub fn set_str_ascii(sp: &Space, a: Addr, v: bool) {
@@ -364,7 +371,7 @@ pub fn set_str_ascii(sp: &Space, a: Addr, v: bool) {
 
 #[inline(always)]
 pub fn in_remset(sp: &Space, a: Addr) -> bool {
-    sp.read_u32(a) & (1 << 19) != 0
+    crate::kgen::rt::objhdr::obj_in_remset(sp, a)
 }
 #[inline(always)]
 pub fn set_in_remset(sp: &Space, a: Addr, m: bool) {

@@ -58,6 +58,7 @@ pub mod casemap;
 pub mod casechange;
 pub mod numint;
 pub mod numf64;
+pub mod objhdr;
 pub mod numkind;
 pub mod valeq;
 pub mod valhash;

@@ -90,29 +90,35 @@ public static class Obj {
         return SizeFor(ty, len);
     }
 
-    public static int Ty(Space sp, long a) => (int)((uint) sp.ReadU32(a) >> 24);
-    public static int Len(Space sp, long a) => sp.ReadU32(a + 4);
+    /// GENERATED (`kin/objhdr.kin`). The header layer is rooted at the SPACE
+    /// and not at the `Rt`, which is why it needed a `Space` tag in kin before
+    /// it could be generated: native's collector reads these from `&mut self`
+    /// methods of `Gc` and cannot borrow the whole `Rt` to do it. The three
+    /// copies AGREED before the port, every shift and mask, so this is a
+    /// consolidation and not a fix.
+    public static int Ty(Space sp, long a) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjTy(sp, a);
+    public static int Len(Space sp, long a) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjLen(sp, a);
 
     public static void WriteHeader(Space sp, long a, int ty, int len) {
         sp.WriteU32(a, ty << 24);
         sp.WriteU32(a + 4, len);
     }
 
-    public static int Age(Space sp, long a) => ((int)((uint) sp.ReadU32(a) >> 21)) & 7;
+    public static int Age(Space sp, long a) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjAge(sp, a);
 
     public static void SetAge(Space sp, long a, int age) {
         int w = sp.ReadU32(a);
         sp.WriteU32(a, (w & ~(7 << 21)) | ((age & 7) << 21));
     }
 
-    public static bool Marked(Space sp, long a) => (sp.ReadU32(a) & (1 << 20)) != 0;
+    public static bool Marked(Space sp, long a) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjMarked(sp, a);
 
     public static void SetMarked(Space sp, long a, bool m) {
         int w = sp.ReadU32(a);
         sp.WriteU32(a, m ? (w | (1 << 20)) : (w & ~(1 << 20)));
     }
 
-    public static bool InRemset(Space sp, long a) => (sp.ReadU32(a) & (1 << 19)) != 0;
+    public static bool InRemset(Space sp, long a) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjInRemset(sp, a);
 
     public static void SetInRemset(Space sp, long a, bool m) {
         int w = sp.ReadU32(a);
@@ -123,7 +129,7 @@ public static class Obj {
     /// CODE POINT, so a byte index and a character index coincide only for
     /// ASCII -- without it `subs` and `nth` walk, and splitting a string was
     /// quadratic.
-    public static bool StrIsAscii(Space sp, long a) => (sp.ReadU32(a) & (1 << 18)) != 0;
+    public static bool StrIsAscii(Space sp, long a) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjStrAscii(sp, a);
 
     public static void SetStrAscii(Space sp, long a, bool v) {
         int w = sp.ReadU32(a);

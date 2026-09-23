@@ -1,0 +1,69 @@
+;; THE OBJECT HEADER, read. Two 32-bit words in front of every heap object.
+;;
+;;   word 0   bits 31..24  the type tag        bits 23..21  the age
+;;            bit  20      marked              bit  19      in the remset
+;;            bit  18      this string is ascii
+;;   word 1   the length, whose UNIT depends on the layout
+;;
+;; ROOTED AT THE SPACE, not at the `Rt`, and that is the whole reason this
+;; file needed a new tag before it could exist. Every other memory word in the
+;; vocabulary reaches memory as `{0}.gc.sp.read_u64(...)`, which is right for
+;; generated code that already holds an `Rt`. The header layer cannot hold
+;; one: the collector reads these from `&mut self` methods of `Gc`, and `Gc`
+;; is a field of `Rt`, so borrowing the whole `Rt` there does not compile.
+;; `sp-read-u32` takes the space as argument zero instead.
+;;
+;; THE THREE COPIES ALREADY AGREED. Before porting, every shift and mask in
+;; all three runtimes was extracted and compared -- fifteen functions, and
+;; they match exactly. So this is a consolidation and not a bug fix, which is
+;; worth saying plainly: the value is that the next change to the header is
+;; made once rather than three times.
+;;
+;; The names are prefixed because `ty` and `len` are VOCABULARY WORDS -- `(ty
+;; rt (as-heap v))` is how ten sources ask a value's type -- and a `^:pub`
+;; function shadows a word of the same name across the whole project.
+(ns flint.rt.objhdr
+  (:require [flint.impl.rt :refer [defn return comment doc != + bit-and shl ushr
+                                   Space Addr I32 U32 Bool
+                                   sp-read-u32]]))
+
+(doc "The type tag: the top byte of word zero."
+     ""
+     "Answered as an `I32` rather than a `Ty` so that one spelling serves all"
+     "three targets -- native's `ty` narrows to `u8` in its own wrapper, and"
+     "both ports call a `Ty` an `int` already.")
+(defn ^:pub ^I32 obj-ty [^Space sp ^Addr a]
+  (return (ushr (sp-read-u32 sp a) 24)))
+
+(doc "The length word, whose UNIT is the layout's business and not this"
+     "file's: slots for a vals layout, bytes for a string, and for a free"
+     "block the size of the block itself."
+     ""
+     "`U32` AND NOT `I32`, which is the one place these six differ from each"
+     "other. `I32` promises its high bit is clear; a FREE BLOCK's size has"
+     "made no such promise, which is why `size-of` reaches for"
+     "`Integer.toUnsignedLong` on the jvm rather than using the value as it"
+     "stands. Same host types either way -- `u32` and `int` -- so this changes"
+     "no generated character; it changes what the next reader is told.")
+(defn ^:pub ^U32 obj-len [^Space sp ^Addr a]
+  (return (sp-read-u32 sp (+ a 4))))
+
+(doc "How many collections this object has survived, three bits of it."
+     ""
+     "Masked to 7 AFTER the shift, because the tag sits above it and would"
+     "otherwise come along.")
+(defn ^:pub ^I32 obj-age [^Space sp ^Addr a]
+  (return (bit-and (ushr (sp-read-u32 sp a) 21) 7)))
+
+(doc "The mark bit, bit 20.")
+(defn ^:pub ^Bool obj-marked [^Space sp ^Addr a]
+  (return (!= (bit-and (sp-read-u32 sp a) (shl 1 20)) 0)))
+
+(doc "In the remembered set, bit 19: an old object holding a young pointer.")
+(defn ^:pub ^Bool obj-in-remset [^Space sp ^Addr a]
+  (return (!= (bit-and (sp-read-u32 sp a) (shl 1 19)) 0)))
+
+(doc "This string's bytes are all ascii, bit 18, so its length in characters"
+     "is its length in bytes and indexing need not decode.")
+(defn ^:pub ^Bool obj-str-ascii [^Space sp ^Addr a]
+  (return (!= (bit-and (sp-read-u32 sp a) (shl 1 18)) 0)))

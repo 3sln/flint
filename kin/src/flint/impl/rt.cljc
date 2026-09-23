@@ -42,6 +42,24 @@
   an `int`, and nothing depends on the width."
   {:name 'Cat :types {:rust "u8" :java "int" :csharp "int"} :methods {}})
 
+(def Space
+  "THE HEAP ITSELF, passed as a value rather than reached through an `Rt`.
+
+  Every other memory word here is rooted at `Rt` -- `read-u64` emits
+  `{0}.gc.sp.read_u64({1})` -- and for most generated code that is right,
+  because most generated code already has an `Rt` in hand. The object HEADER
+  layer cannot: the collector calls `ty(&self.sp, a)` from `&mut self` methods
+  of `Gc`, and `Gc` is a field of `Rt`, so borrowing the whole `Rt` there does
+  not compile. The space-first signature is load-bearing and this tag is what
+  lets kin spell it.
+
+  Rust takes it by SHARED reference and that is not a compromise: `Space`'s
+  writers are `&self` too, because the space is an arena whose interior
+  mutability lives below this level. So one tag serves reads and writes alike.
+
+  Both ports name the class directly, having no such distinction to make."
+  {:name 'Space :types {:rust "&Space" :java "Space" :csharp "Space"} :methods {}})
+
 (def Bool {:name 'Bool :types {:rust "bool" :java "boolean" :csharp "bool"} :methods {}})
 
 (def I64
@@ -307,6 +325,7 @@
   {:name 'Addr :types {:rust "Addr" :java "long" :csharp "long"} :methods {}})
 
 (def tags {'Rt Rt 'Value Value 'Cat Cat 'Ty Ty 'Bool Bool 'I32 I32 'I64 I64 'Cmp Cmp 'U32 U32 'RootIx RootIx
+               'Space Space
                'Text Text 'StaticText StaticText 'Sink Sink 'Walk Walk 'Cps Cps
                'F64 F64 'Addr Addr 'Idx Idx 'Bits Bits 'Bytes Bytes
                'U32s U32s 'U64s U64s 'Values Values 'Layout Layout 'I32Buf I32Buf 'Flags Flags 'I32s I32s
@@ -1906,6 +1925,22 @@
     ;; it `to_le_bytes` and `from_le_bytes`, making explicit what the other
     ;; two left implicit; the three agree, and this word is where that stops
     ;; being a coincidence of three spellings.
+    ;; SPACE-ROOTED, for code handed a `Space` rather than an `Rt` -- see the
+    ;; `Space` tag. Argument zero is the space itself, where in the four words
+    ;; below it is the `Rt` the space is reached through.
+    ;;
+    ;; ONE WORD AND NOT FOUR. The write and 64-bit forms were written at the
+    ;; same time as this one, on the reasoning that a space-rooted layer would
+    ;; obviously want them, and `bin/check-vocab-used` refused all three the
+    ;; same afternoon: nothing called them, so their nine templates had never
+    ;; run. That is the gate doing exactly its job -- `uquot` and `urem` got
+    ;; into the vocabulary the same way, by being obviously useful. The header
+    ;; words are 32 bits, so the 64-bit pair had no caller in prospect either.
+    ;; `sp-write-u32` comes back with the header WRITERS, in the change that
+    ;; calls it.
+    'sp-read-u32 (core/call {:rust "{0}.read_u32({1})"
+                             :java "{0}.readU32({1})" :csharp "{0}.ReadU32({1})"}
+                            {:tag I32})
     'write-u64 (core/call {:rust "{0}.gc.sp.write_u64({1}, {2} as u64)"
                             :java "{0}.gc.sp.writeU64({1}, {2})"
                             :csharp "{0}.gc.sp.WriteU64({1}, {2})"})

@@ -146,29 +146,35 @@ public final class Obj {
         return sizeFor(ty, len);
     }
 
-    public static int ty(Space sp, long a) { return sp.readU32(a) >>> 24; }
-    public static int len(Space sp, long a) { return sp.readU32(a + 4); }
+    /// GENERATED (`kin/objhdr.kin`). The header layer is rooted at the SPACE
+    /// and not at the `Rt`, which is why it needed a `Space` tag in kin
+    /// before it could be generated: native's collector reads these from
+    /// `&mut self` methods of `Gc`, and cannot borrow the whole `Rt` to do
+    /// it. The three copies AGREED before the port, every shift and mask, so
+    /// this is a consolidation and not a fix.
+    public static int ty(Space sp, long a) { return com._3sln.flint.kgen.rt.Objhdr.objTy(sp, a); }
+    public static int len(Space sp, long a) { return com._3sln.flint.kgen.rt.Objhdr.objLen(sp, a); }
 
     public static void writeHeader(Space sp, long a, int ty, int len) {
         sp.writeU32(a, ty << 24);
         sp.writeU32(a + 4, len);
     }
 
-    public static int age(Space sp, long a) { return (sp.readU32(a) >>> 21) & 7; }
+    public static int age(Space sp, long a) { return com._3sln.flint.kgen.rt.Objhdr.objAge(sp, a); }
 
     public static void setAge(Space sp, long a, int age) {
         int w = sp.readU32(a);
         sp.writeU32(a, (w & ~(7 << 21)) | ((age & 7) << 21));
     }
 
-    public static boolean marked(Space sp, long a) { return (sp.readU32(a) & (1 << 20)) != 0; }
+    public static boolean marked(Space sp, long a) { return com._3sln.flint.kgen.rt.Objhdr.objMarked(sp, a); }
 
     public static void setMarked(Space sp, long a, boolean m) {
         int w = sp.readU32(a);
         sp.writeU32(a, m ? (w | (1 << 20)) : (w & ~(1 << 20)));
     }
 
-    public static boolean inRemset(Space sp, long a) { return (sp.readU32(a) & (1 << 19)) != 0; }
+    public static boolean inRemset(Space sp, long a) { return com._3sln.flint.kgen.rt.Objhdr.objInRemset(sp, a); }
 
     public static void setInRemset(Space sp, long a, boolean m) {
         int w = sp.readU32(a);
@@ -177,7 +183,7 @@ public final class Obj {
 
     /// Is every byte of this string ASCII? A byte index is then a code-point
     /// index, which is what makes `subs` and `nth` O(1) instead of a walk.
-    public static boolean strIsAscii(Space sp, long a) { return (sp.readU32(a) & (1 << 18)) != 0; }
+    public static boolean strIsAscii(Space sp, long a) { return com._3sln.flint.kgen.rt.Objhdr.objStrAscii(sp, a); }
 
     public static void setStrAscii(Space sp, long a, boolean v) {
         int w = sp.readU32(a);
