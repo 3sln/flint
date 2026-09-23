@@ -132,8 +132,8 @@ KEYWORD = {"if", "for", "while", "switch", "return", "catch", "else", "do",
 # (language, ext, source root, generated marker, parse probe,
 #  a hand-written STATIC called from generated code, one known DEAD,
 #  a hand-written INSTANCE method called as `rt.name()`)
-PORTS = (("jvm", ".java", "runtimes/jvm/src/", "/kgen/", "def", "i64Of", "amSet", "emptyList"),
-         ("clr", ".cs", "runtimes/clr/src/", "/Kgen/", "Def", "I64Of", "AmSet", "EmptyList"))
+PORTS = (("jvm", ".java", "runtimes/jvm/src/", "/kgen/", "def", "i64Of", "amSet", "emptyList", "olen"),
+         ("clr", ".cs", "runtimes/clr/src/", "/Kgen/", "Def", "I64Of", "AmSet", "EmptyList", "Olen"))
 
 def rust_definitions():
     out = {}
@@ -178,7 +178,7 @@ def port_definitions(tracked, ext, root, genmark):
             owners[m.group(2)] = os.path.basename(p).rsplit(".", 1)[0]
     return out, owners
 
-def mentions(tracked, exts, genmark=None, owners=None):
+def mentions(tracked, exts, genmark=None, owners=None, gendefs=frozenset()):
     """Identifier counts. Inside the generated tree (`genmark`) a name counts
     only when QUALIFIED by its owning class -- see the docstring."""
     c = collections.Counter()
@@ -197,9 +197,21 @@ def mentions(tracked, exts, genmark=None, owners=None):
             # Matching the whole dotted prefix is what makes the last one
             # work -- there is a generated `Seqs` too, and keying on the
             # immediate qualifier alone confused the two.
+            seen_dotted = set()
             for m in re.finditer(r"((?:[A-Za-z_]\w*\s*\.\s*)+)([A-Za-z_]\w*)", text):
                 if genmark.strip("/").lower() not in m.group(1).lower():
                     c[m.group(2)] += 1
+                seen_dotted.add(m.span(2))
+            # BARE: generated files static-import HAND-WRITTEN classes too --
+            # `import static com.flint.rt.Maps.*` is why `olen(rt, x)` appears
+            # with no qualifier. A bare name is ambiguous ONLY when a generated
+            # class also defines it; otherwise it can only be the hand-written
+            # member and must count. Treating every bare name as a sibling is
+            # what reported `olen` dead, and removing it stopped `Champ` and
+            # `Vecnode` compiling.
+            for m in re.finditer(r"(?<![\w.])([A-Za-z_]\w*)\s*\(", text):
+                if m.span(1) not in seen_dotted and m.group(1) not in gendefs:
+                    c[m.group(1)] += 1
         else:
             c.update(WORD.findall(text))
     return c
@@ -239,9 +251,17 @@ def main():
     r = report("rs", rust_definitions(), mentions(tracked, (".rs",)))
     if r:
         totals.append(("native", *r))
-    for lang, ext, root, genmark, probe, live, dead_probe, live_inst in PORTS:
+    for lang, ext, root, genmark, probe, live, dead_probe, live_inst, live_bare in PORTS:
         defs, owners = port_definitions(tracked, ext, root, genmark)
-        counts = mentions(tracked, (ext,), genmark, owners)
+        gendefs = set()
+        for p in tracked:
+            if not (p.endswith(ext) and genmark in p):
+                continue
+            for l in open(p, encoding="utf-8", errors="replace").read().split("\n"):
+                m = MEMBER.match(l)
+                if m and m.group(1) not in KEYWORD and m.group(2) not in KEYWORD:
+                    gendefs.add(m.group(2))
+        counts = mentions(tracked, (ext,), genmark, owners, gendefs)
         # TWO-SIDED PROBE. `live` is a delegator genuinely called from
         # generated code and must not be reported; `dead_probe` is one whose
         # only generated mentions are of its same-named sibling, and must be.
@@ -253,6 +273,9 @@ def main():
         if live_inst and counts[live_inst] <= self_mentions(live_inst, defs.get(live_inst, [])):
             bad.append(f"`{live_inst}` is an instance method called from generated "
                        f"code and came back dead")
+        if live_bare and counts[live_bare] <= self_mentions(live_bare, defs.get(live_bare, [])):
+            bad.append(f"`{live_bare}` is called BARE from generated code through a "
+                       f"static import and came back dead")
         if bad:
             print(f"  REFUSING to report {lang}: " + "; ".join(bad))
             continue
