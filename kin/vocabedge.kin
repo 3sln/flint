@@ -32,7 +32,8 @@
 (ns flint.rt.vocabedge
   (:require [flint.impl.rt :refer [defn return doc
                                    shl ushr sar to-i32 bit-and bit-or bit-xor
-                                   Rt I32 I64 U32]]))
+                                   f64-bits f64-of-bits to-f64
+                                   Rt I32 I64 U32 F64]]))
 
 (doc "Logical right shift of a value with the high bit set."
      ""
@@ -80,3 +81,29 @@
 
 (defn ^:method ^I32 bits-xor [^Rt rt ^I32 a ^I32 b]
   (return (bit-xor a b)))
+
+(doc "The bits of a double, for a NaN that carries a payload."
+     ""
+     "THIS IS THE WORD THAT LIED. Until 2026-09-22 `f64-bits` emitted java's"
+     "`doubleToLongBits`, which collapses EVERY NaN to the canonical one,"
+     "where `to_bits()` and `DoubleToInt64Bits` preserve the payload. So"
+     "`hash-double` -- generated from one source into three runtimes --"
+     "answered 2146959360 on the jvm and -524288 on the other two."
+     ""
+     "Nothing caught it because no fixture passed a NaN with a payload:"
+     "ordinary doubles agree under both spellings, which is exactly why they"
+     "prove nothing here.")
+(defn ^:method ^I64 bits-of [^Rt rt ^F64 d]
+  (return (f64-bits d)))
+
+(doc "And back again, which must be the identity on the bits."
+     ""
+     "A REINTERPRETATION, not a conversion. `to-f64` is the conversion and is"
+     "tested below precisely because the two are easy to swap: the integer 1"
+     "goes to 1.0 through one of them and to 5e-324 through the other.")
+(defn ^:method ^I64 bits-round-trip [^Rt rt ^F64 d]
+  (return (f64-bits (f64-of-bits (f64-bits d)))))
+
+(doc "The numeric conversion, for contrast with the reinterpretation above.")
+(defn ^:method ^I64 as-double-bits [^Rt rt ^I64 n]
+  (return (f64-bits (to-f64 n))))

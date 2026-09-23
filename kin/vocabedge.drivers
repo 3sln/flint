@@ -12,14 +12,19 @@ fn main() {
     // brings in the wrong thing shows in the top digit and a shift that
     // drops the wrong end shows in the bottom.
     let hi: u32 = 0x8000_0001;
-    println!("{} {} {} {} {} {} {} {} {} {}",
+    // THE f64 FAMILY. The NaN carries a payload of 1, which is the only thing
+    // separating a preserving read from a canonicalising one.
+    let nan = f64::from_bits(0x7FF8_0000_0000_0001);
+    println!("{} {} {} {} {} {} {} {} {} {} | {} {} {} {}",
              rt.ushr_high(hi, 1) as i32, rt.ushr_high(hi, 31) as i32,
              rt.sar_high(hi, 1) as i32,  rt.sar_high(hi, 31) as i32,
              rt.shl_into_sign(1, 31) as i32, rt.shl_into_sign(3, 30) as i32,
              rt.narrow(0x1_2345_6789u64 as i64) as i32,
              rt.narrow(-1i64) as i32,
              rt.bits_and(hi, 0xFFFF) as i32,
-             rt.bits_xor(hi, 0xFFFF_FFFF) as i32);
+             rt.bits_xor(hi, 0xFFFF_FFFF) as i32,
+             rt.bits_of(nan), rt.bits_round_trip(nan),
+             rt.bits_of(1.5), rt.as_double_bits(1));
 }
 --java-head
     // AN EMPTY `Rt`, because these are `^:method` and take one. There is no
@@ -30,12 +35,15 @@ fn main() {
     public static void main(String[] args) {
         Rt rt = new Rt();
         int hi = 0x80000001;
+        double nan = Double.longBitsToDouble(0x7FF8000000000001L);
         System.out.println(
             ushrHigh(rt, hi, 1) + " " + ushrHigh(rt, hi, 31) + " "
             + sarHigh(rt, hi, 1) + " " + sarHigh(rt, hi, 31) + " "
             + shlIntoSign(rt, 1, 31) + " " + shlIntoSign(rt, 3, 30) + " "
             + narrow(rt, 0x123456789L) + " " + narrow(rt, -1L) + " "
-            + bitsAnd(rt, hi, 0xFFFF) + " " + bitsXor(rt, hi, 0xFFFFFFFF));
+            + bitsAnd(rt, hi, 0xFFFF) + " " + bitsXor(rt, hi, 0xFFFFFFFF)
+            + " | " + bitsOf(rt, nan) + " " + bitsRoundTrip(rt, nan)
+            + " " + bitsOf(rt, 1.5) + " " + asDoubleBits(rt, 1));
     }
 --csharp-head
     internal sealed class Rt { }
@@ -43,15 +51,18 @@ fn main() {
     static void Main() {
         var rt = new Rt();
         int hi = unchecked((int) 0x80000001u);
+        double nan = System.BitConverter.Int64BitsToDouble(0x7FF8000000000001L);
         System.Console.WriteLine(
             UshrHigh(rt, hi, 1) + " " + UshrHigh(rt, hi, 31) + " "
             + SarHigh(rt, hi, 1) + " " + SarHigh(rt, hi, 31) + " "
             + ShlIntoSign(rt, 1, 31) + " " + ShlIntoSign(rt, 3, 30) + " "
             + Narrow(rt, 0x123456789L) + " " + Narrow(rt, -1L) + " "
-            + BitsAnd(rt, hi, 0xFFFF) + " " + BitsXor(rt, hi, unchecked((int) 0xFFFFFFFFu)));
+            + BitsAnd(rt, hi, 0xFFFF) + " " + BitsXor(rt, hi, unchecked((int) 0xFFFFFFFFu))
+            + " | " + BitsOf(rt, nan) + " " + BitsRoundTrip(rt, nan)
+            + " " + BitsOf(rt, 1.5) + " " + AsDoubleBits(rt, 1));
     }
 --expect
-1073741824 1 -1073741824 -1 -2147483648 -1073741824 591751049 -1 1 2147483646
+1073741824 1 -1073741824 -1 -2147483648 -1073741824 591751049 -1 1 2147483646 | 9221120237041090561 9221120237041090561 4609434218613702656 4607182418800017408
 --expect-why
 DERIVED FROM THE BIT PATTERNS. The input is `0x80000001` throughout: the high
 bit set and the low bit set, so a shift bringing in the wrong thing shows in
@@ -78,3 +89,23 @@ the top digit and one dropping the wrong end shows in the bottom.
     7 carries the weight.
  9. `bit-and(0x80000001, 0xFFFF)` = 1.
 10. `bit-xor(0x80000001, 0xFFFFFFFF)` = `0x7FFFFFFE` = 2147483646.
+
+THE f64 FAMILY, after the bar. The NaN is `0x7FF8000000000001` -- canonical
+except for a payload of 1, which is the only thing separating a preserving
+read from a canonicalising one.
+
+11. `f64-bits(nan)` = 9221120237041090561 = `0x7FF8000000000001`. THE PAYLOAD
+    SURVIVES. This is the case `f64-bits` failed until 2026-09-22: java's
+    `doubleToLongBits` collapses every NaN to `0x7FF8000000000000` and would
+    answer 9221120237041090560 here, one less, while `to_bits()` and
+    `DoubleToInt64Bits` preserve. `hash-double` is generated from one source
+    into three runtimes and answered differently because of it.
+12. The round trip through `f64-of-bits` gives the same number back, which is
+    what makes it a reinterpretation rather than a conversion.
+13. `f64-bits(1.5)` = 4609434218613702656 = `0x3FF8000000000000`, an ordinary
+    double for contrast: it agrees under BOTH spellings, which is why no
+    fixture of ordinary values could ever have caught case 11.
+14. `f64-bits(to-f64(1))` = 4607182418800017408 = the bits of 1.0. `to-f64`
+    CONVERTS where `f64-of-bits` REINTERPRETS -- the same input 1 gives 1.0
+    through one and 5e-324 through the other, and the names do not say
+    which.
