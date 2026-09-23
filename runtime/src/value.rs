@@ -109,18 +109,19 @@ impl Value {
     }
 
     #[inline(always)]
+    /// GENERATED (`kin/valtag.kin`) as `make_double`. A double needs no tag
+    /// of its own -- any pattern that is not one of ours IS one -- except a
+    /// NaN whose top bits land in the tag range, which would read back as a
+    /// value of another kind. Only a negative NaN with a LARGE payload can:
+    /// `0xFFF8...` does not, its tag being 65528 against TAG_MIN_BOXED's
+    /// 65529.
     pub fn from_f64(d: f64) -> Value {
-        let b = d.to_bits();
-        // Only negative NaNs with a large payload collide with the tag range.
-        if b >> 48 >= TAG_MIN_BOXED {
-            Value(CANONICAL_NAN)
-        } else {
-            Value(b)
-        }
+        crate::kgen::rt::valtag::make_double(d)
     }
     #[inline(always)]
+    /// GENERATED as `double_value`. A REINTERPRETATION, not a conversion.
     pub fn as_f64(self) -> f64 {
-        f64::from_bits(self.0)
+        crate::kgen::rt::valtag::double_value(self)
     }
 
     #[inline(always)]

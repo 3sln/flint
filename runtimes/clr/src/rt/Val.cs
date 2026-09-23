@@ -45,12 +45,11 @@ public static class Val {
 
     /// GENERATED (`kin/valtag.kin`) as `DoubleTagged`.
     public static bool IsDouble(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.DoubleTagged(v);
-    public static double AsDouble(long v) => System.BitConverter.Int64BitsToDouble(v);
+    /// GENERATED as `DoubleValue`.
+    public static double AsDouble(long v) => global::_3sln.Flint.Kgen.Rt.Valtag.DoubleValue(v);
 
-    public static long OfDouble(double d) {
-        long b = System.BitConverter.DoubleToInt64Bits(d);
-        return ((ulong)b >> 48) >= (ulong)TagMinBoxed ? CanonicalNan : b;
-    }
+    /// GENERATED (`kin/valtag.kin`) as `MakeDouble`.
+    public static long OfDouble(double d) => global::_3sln.Flint.Kgen.Rt.Valtag.MakeDouble(d);
 
     /// A fixnum's payload is 48 bits, signed. Past this a value is a boxed
     /// bigint -- which still answers `int?`, which is why the specialised

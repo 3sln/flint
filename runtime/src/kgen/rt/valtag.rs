@@ -152,3 +152,34 @@ pub fn is_false(v: Value) -> bool {
 pub fn truthy(v: Value) -> bool {
     return (v.0 != NIL.0) && (v.0 != FALSE.0);
 }
+/// `d` as a value.
+/// 
+/// A DOUBLE NEEDS NO TAG: any bit pattern that is not one of ours IS one,
+/// which is what makes this representation cheap. The exception is a NaN
+/// whose top bits land in the tag range -- only negative NaNs with a large
+/// payload can -- and such a value would read back as a heap pointer or a
+/// keyword. It is replaced by the canonical NaN, losing a payload nobody
+/// carries, rather than answering a value of the wrong kind.
+/// 
+/// ALL THREE DERIVED THAT REPLACEMENT FROM THEIR OWN HOST until 2026-09-22,
+/// and .NET's `double.NaN` is the NEGATIVE canonical NaN where java's and
+/// rust's is positive -- so the clr answered different BITS from the other
+/// two for every double reaching this arm. Both are NaN, so `=` never
+/// noticed; hashing, snapshots and the wire codec would.
+#[inline]
+pub fn make_double(d: f64) -> Value {
+    let b: i64 = d.to_bits() as i64;
+    if ((((b as u64) >> 48) as i64) as Addr) >= crate::value::TAG_MIN_BOXED {
+        return Value(crate::value::CANONICAL_NAN);
+    }
+    return Value(b as Addr);
+}
+/// The double `v` carries.
+/// 
+/// A REINTERPRETATION, not a conversion: the same 64 bits read as a float.
+/// `to-f64` is the other operation and would turn the integer 1 into 1.0
+/// rather than into 5e-324.
+#[inline]
+pub fn double_value(v: Value) -> f64 {
+    return f64::from_bits(v.0 as u64);
+}

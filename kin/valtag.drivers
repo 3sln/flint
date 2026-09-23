@@ -15,6 +15,7 @@ mod value {
     pub const TAG_STR: u64 = 0xFFFC;
     pub const TAG_KW: u64 = 0xFFFD;
     pub const TAG_MIN_BOXED: u64 = TAG_HEAP;
+    pub const CANONICAL_NAN: u64 = 0x7FF8_0000_0000_0000;
     pub const TAG_FIXNUM: u64 = 0xFFFA;
     pub const PAYLOAD: u64 = 0x0000_FFFF_FFFF_FFFF;
     pub const FIXNUM_MAX: i64 = (1 << 47) - 1;
@@ -32,7 +33,7 @@ fn main() {
     let b = |x: bool| if x { 1 } else { 0 };
     // A three-byte inline KEYWORD, "ABC": tag, length in bits 40-47, bytes below.
     let kw = Value((value::TAG_KW << 48) | (3u64 << 40) | 0x414243);
-    println!("{} {} | {}{}{}{} | {} {} {} {} | {} {} {} | {} {} | {} {} {} {} {} {} | {}{}{}{} {}{}{} {}{} {}",
+    println!("{} {} | {}{}{}{} | {} {} {} {} | {} {} {} | {} {} | {} {} {} {} {} {} | {}{}{}{} {}{}{} {}{} {} | {} {} {}",
              // 1-2. THE TAG COMES BACK, from each constructor.
              tag_of(make_fixnum(0)), tag_of(make_heap(0)),
              // 3-6. THE BOUND, both sides of both ends.
@@ -65,7 +66,16 @@ fn main() {
              b(is_nil(NIL)), b(is_nil(FALSE)), b(is_true(TRUE)), b(is_false(FALSE)),
              b(truthy(NIL)), b(truthy(FALSE)), b(truthy(make_fixnum(0))),
              b(fixnum_tagged(make_fixnum(1))), b(heap_tagged(make_heap(8))),
-             b(double_tagged(NIL)));
+             b(double_tagged(NIL)),
+             // DOUBLES. 1.5 round-trips. The NaN is 0xFFF9000000000001 and
+             // the payload matters: 0xFFF8... does NOT collide -- its tag is
+             // 65528 against TAG_MIN_BOXED's 65529 -- so it passes through
+             // unchanged. Only a negative NaN with a LARGE PAYLOAD reaches
+             // the arm, which is what native's comment says and what a
+             // first attempt at this fixture got wrong.
+             double_value(make_double(1.5)),
+             make_double(f64::from_bits(0xFFF9_0000_0000_0001)).0 as i64,
+             b(double_tagged(make_double(1.5))));
 }
 --java-head
     static final class Val {
@@ -73,6 +83,7 @@ fn main() {
         static final long TAG_STR = 0xFFFCL;
         static final long TAG_KW = 0xFFFDL;
         static final long TAG_MIN_BOXED = TAG_HEAP;
+        static final long CANONICAL_NAN = 0x7FF8000000000000L;
         static final long NIL = 0xFFFB000000000001L;
         static final long TRUE = 0xFFFB000000000002L;
         static final long FALSE = 0xFFFB000000000003L;
@@ -105,7 +116,10 @@ fn main() {
             + " " + (truthy(Val.NIL) ? 1 : 0) + (truthy(Val.FALSE) ? 1 : 0)
             + (truthy(makeFixnum(0)) ? 1 : 0)
             + " " + (fixnumTagged(makeFixnum(1)) ? 1 : 0) + (heapTagged(makeHeap(8)) ? 1 : 0)
-            + " " + (doubleTagged(Val.NIL) ? 1 : 0));
+            + " " + (doubleTagged(Val.NIL) ? 1 : 0)
+            + " | " + doubleValue(makeDouble(1.5))
+            + " " + makeDouble(Double.longBitsToDouble(0xFFF9000000000001L))
+            + " " + (doubleTagged(makeDouble(1.5)) ? 1 : 0));
     }
 --csharp-head
     internal static class Val {
@@ -113,6 +127,7 @@ fn main() {
         public const long TagStr = 0xFFFCL;
         public const long TagKw = 0xFFFDL;
         public const long TagMinBoxed = TagHeap;
+        public const long CanonicalNan = 0x7FF8000000000000L;
         // UNCHECKED, because the tag sets the sign bit: C# reads
         // `0xFFFB...` as a `ulong` and refuses the implicit narrowing, where
         // java and rust take the same literal without comment.
@@ -148,10 +163,13 @@ fn main() {
             + " " + (Truthy(Val.Nil) ? 1 : 0) + (Truthy(Val.False) ? 1 : 0)
             + (Truthy(MakeFixnum(0)) ? 1 : 0)
             + " " + (FixnumTagged(MakeFixnum(1)) ? 1 : 0) + (HeapTagged(MakeHeap(8)) ? 1 : 0)
-            + " " + (DoubleTagged(Val.Nil) ? 1 : 0));
+            + " " + (DoubleTagged(Val.Nil) ? 1 : 0)
+            + " | " + DoubleValue(MakeDouble(1.5))
+            + " " + MakeDouble(System.BitConverter.Int64BitsToDouble(unchecked((long) 0xFFF9000000000001UL)))
+            + " " + (DoubleTagged(MakeDouble(1.5)) ? 1 : 0));
     }
 --expect
-65530 65529 | 1010 | 0 -1 140737488355327 -140737488355328 | 4660 0 65529 | 4660 65529 | 1 0 3 1 1 3 | 1011 001 11 0
+65530 65529 | 1010 | 0 -1 140737488355327 -140737488355328 | 4660 0 65529 | 4660 65529 | 1 0 3 1 1 3 | 1011 001 11 0 | 1.5 9221120237041090560 1
 --expect-why
 DERIVED FROM THE LAYOUT, not recorded. A value is a 16-bit TAG over a 48-bit
 PAYLOAD; `TAG_FIXNUM` is 0xFFFA = 65530 and `TAG_HEAP` is 0xFFF9 = 65529.

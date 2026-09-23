@@ -71,15 +71,14 @@ public final class Val {
     /// GENERATED (`kin/valtag.kin`) as `doubleTagged`.
     public static boolean isDouble(long v) { return com._3sln.flint.kgen.rt.Valtag.doubleTagged(v); }
 
-    public static double asDouble(long v) { return Double.longBitsToDouble(v); }
+    /// GENERATED as `doubleValue` -- a reinterpretation, not a conversion.
+    public static double asDouble(long v) { return com._3sln.flint.kgen.rt.Valtag.doubleValue(v); }
 
     /// A double, unless it is a NaN that would collide with the tag space --
     /// in which case it is canonicalised, because a value that reads back as a
     /// heap pointer is worse than a NaN that lost its payload.
-    public static long ofDouble(double d) {
-        long b = Double.doubleToRawLongBits(d);
-        return (b >>> 48) >= TAG_MIN_BOXED ? CANONICAL_NAN : b;
-    }
+    /// GENERATED (`kin/valtag.kin`) as `makeDouble`.
+    public static long ofDouble(double d) { return com._3sln.flint.kgen.rt.Valtag.makeDouble(d); }
 
     /// A fixnum's payload is 48 bits, signed. Past this a value is a boxed
     /// bigint -- which still answers `int?`, which is why the specialised

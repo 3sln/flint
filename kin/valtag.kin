@@ -35,13 +35,13 @@
 ;; whole of that difference, and they are why this source can speak in bits
 ;; and still answer a `Value` on all three.
 (ns flint.rt.valtag
-  (:require [flint.impl.rt :refer [defn return doc
+  (:require [flint.impl.rt :refer [defn return doc let if
                                    and >= <= == != < not shl ushr64 sar64 bit-and bit-or
-                                   bits of-bits to-addr to-i32
-                                   Value I64 I32 Addr Bool
+                                   bits of-bits to-addr to-i32 f64-bits f64-of-bits
+                                   Value I64 I32 Addr Bool F64
                                    TAG_HEAP TAG_FIXNUM TAG_STR TAG_KW
                                    TAG_MIN_BOXED PAYLOAD NIL TRUE FALSE
-                                   FIXNUM_MIN FIXNUM_MAX]]))
+                                   FIXNUM_MIN FIXNUM_MAX CANONICAL_NAN]]))
 
 (doc "The 16-bit tag `v` carries -- what kind of value it is."
      ""
@@ -168,3 +168,34 @@
      "be a different language.")
 (defn ^:pub ^:inline ^Bool truthy [^Value v]
   (return (and (!= (bits v) (bits NIL)) (!= (bits v) (bits FALSE)))))
+
+(doc "`d` as a value."
+     ""
+     "A DOUBLE NEEDS NO TAG: any bit pattern that is not one of ours IS one,"
+     "which is what makes this representation cheap. The exception is a NaN"
+     "whose top bits land in the tag range -- only negative NaNs with a large"
+     "payload can -- and such a value would read back as a heap pointer or a"
+     "keyword. It is replaced by the canonical NaN, losing a payload nobody"
+     "carries, rather than answering a value of the wrong kind."
+     ""
+     "ALL THREE DERIVED THAT REPLACEMENT FROM THEIR OWN HOST until 2026-09-22,"
+     "and .NET's `double.NaN` is the NEGATIVE canonical NaN where java's and"
+     "rust's is positive -- so the clr answered different BITS from the other"
+     "two for every double reaching this arm. Both are NaN, so `=` never"
+     "noticed; hashing, snapshots and the wire codec would.")
+(defn ^:pub ^:inline ^Value make-double [^F64 d]
+  (let [^I64 b (f64-bits d)]
+    (if (>= (to-addr (ushr64 b 48)) TAG_MIN_BOXED)
+      (return (of-bits CANONICAL_NAN)))
+    ;; `to-addr` because `f64-bits` answers `I64` and the newtype wraps a
+    ;; `u64` on native; the ports are a `long` either way and it emits
+    ;; nothing there.
+    (return (of-bits (to-addr b)))))
+
+(doc "The double `v` carries."
+     ""
+     "A REINTERPRETATION, not a conversion: the same 64 bits read as a float."
+     "`to-f64` is the other operation and would turn the integer 1 into 1.0"
+     "rather than into 5e-324.")
+(defn ^:pub ^:inline ^F64 double-value [^Value v]
+  (return (f64-of-bits (bits v))))

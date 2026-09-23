@@ -127,4 +127,33 @@ public final class Valtag {
     public static boolean truthy(long v) {
         return (v != Val.NIL) && (v != Val.FALSE);
     }
+    /// `d` as a value.
+    /// 
+    /// A DOUBLE NEEDS NO TAG: any bit pattern that is not one of ours IS one,
+    /// which is what makes this representation cheap. The exception is a NaN
+    /// whose top bits land in the tag range -- only negative NaNs with a large
+    /// payload can -- and such a value would read back as a heap pointer or a
+    /// keyword. It is replaced by the canonical NaN, losing a payload nobody
+    /// carries, rather than answering a value of the wrong kind.
+    /// 
+    /// ALL THREE DERIVED THAT REPLACEMENT FROM THEIR OWN HOST until 2026-09-22,
+    /// and .NET's `double.NaN` is the NEGATIVE canonical NaN where java's and
+    /// rust's is positive -- so the clr answered different BITS from the other
+    /// two for every double reaching this arm. Both are NaN, so `=` never
+    /// noticed; hashing, snapshots and the wire codec would.
+    public static long makeDouble(double d) {
+        long b = Double.doubleToRawLongBits(d);
+        if ((b >>> 48) >= Val.TAG_MIN_BOXED) {
+            return Val.CANONICAL_NAN;
+        }
+        return b;
+    }
+    /// The double `v` carries.
+    /// 
+    /// A REINTERPRETATION, not a conversion: the same 64 bits read as a float.
+    /// `to-f64` is the other operation and would turn the integer 1 into 1.0
+    /// rather than into 5e-324.
+    public static double doubleValue(long v) {
+        return Double.longBitsToDouble(v);
+    }
 }

@@ -442,6 +442,7 @@
    ;; is far easier to miss against a bare `0x0000_FFFF_FFFF_FFFF` than
    ;; against a name.
    'TAG_MIN_BOXED {:rust "crate::value::TAG_MIN_BOXED" :java "Val.TAG_MIN_BOXED" :csharp "Val.TagMinBoxed"}
+   'CANONICAL_NAN {:rust "crate::value::CANONICAL_NAN" :java "Val.CANONICAL_NAN" :csharp "Val.CanonicalNan"}
    'TAG_STR {:rust "crate::value::TAG_STR" :java "Val.TAG_STR" :csharp "Val.TagStr"}
    'TAG_KW {:rust "crate::value::TAG_KW" :java "Val.TAG_KW" :csharp "Val.TagKw"}
    'TAG_HEAP {:rust "crate::value::TAG_HEAP" :java "Val.TAG_HEAP" :csharp "Val.TagHeap"}
@@ -1146,6 +1147,15 @@
                           :java "Double.doubleToRawLongBits({0})"
                           :csharp "System.BitConverter.DoubleToInt64Bits({0})"}
                          {:tag I64})
+
+    ;; AND THE REVERSE, which is a REINTERPRETATION and not a conversion --
+    ;; `to-f64` is `as f64`, which turns the integer 1 into 1.0, where this
+    ;; turns the bits of 1 into 5e-324. Two different operations that a
+    ;; careless reading of the names would swap.
+    'f64-of-bits (core/call {:rust "f64::from_bits({0} as u64)"
+                              :java "Double.longBitsToDouble({0})"
+                              :csharp "System.BitConverter.Int64BitsToDouble({0})"}
+                             {:tag F64})
 
     ;; THE LOGICAL RIGHT SHIFT AT 64 BITS. `ushr` next door is the 32-bit one
     ;; and its C# spelling casts through `uint`, which would take the top half
