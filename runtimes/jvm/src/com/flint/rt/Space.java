@@ -90,10 +90,6 @@ public final class Space implements AutoCloseable {
         return (long) I64_ATOMIC.getVolatile(mem, addr);
     }
 
-    public void atomicStore(long addr, long v) {
-        I64_ATOMIC.setVolatile(mem, addr, v);
-    }
-
     /// Compare-and-swap. True when this thread won the slot.
     public boolean cas(long addr, long want, long next) {
         return I64_ATOMIC.compareAndSet(mem, addr, want, next);

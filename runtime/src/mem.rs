@@ -374,11 +374,6 @@ impl Space {
         self.atomic_at(addr).load(core::sync::atomic::Ordering::Acquire)
     }
 
-    #[inline(always)]
-    pub fn atomic_store(&self, addr: Addr, v: u64) {
-        self.atomic_at(addr).store(v, core::sync::atomic::Ordering::Release)
-    }
-
     /// Compare-and-swap. `Ok(())` when this thread won the slot.
     #[inline(always)]
     pub fn cas(&self, addr: Addr, want: u64, next: u64) -> bool {

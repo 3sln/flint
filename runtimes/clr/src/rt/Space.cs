@@ -58,7 +58,10 @@ public sealed unsafe class Space : System.IDisposable {
 
     // --- atomic word access -------------------------------------------------
     //
-    // Mirrors the Rust `Space::atomic_load` / `atomic_store` / `cas`. Every
+    // Mirrors the Rust `Space::atomic_load` / `cas`. There was an
+    // `atomic_store` in all three and nothing ever called it: publication
+    // goes through `cas`, which also runs the WRITE BARRIER, so a bare
+    // atomic store to a slot would skip it. Removed 2026-09-23. Every
     // object is 8-aligned -- `SizeFor` rounds each layout to a multiple of 8 --
     // so `SlotAddr`, which is `base + 8 + i * 8`, is always aligned, which is
     // what makes an interlocked operation on it legal.
@@ -69,9 +72,6 @@ public sealed unsafe class Space : System.IDisposable {
     // at a safepoint -- so ordinary slots need no synchronisation.
     public long AtomicLoad(long addr) =>
         System.Threading.Volatile.Read(ref *(long*)(_base + addr));
-
-    public void AtomicStore(long addr, long v) =>
-        System.Threading.Volatile.Write(ref *(long*)(_base + addr), v);
 
     /// Compare-and-swap. True when this thread won the slot.
     public bool Cas(long addr, long want, long next) =>
