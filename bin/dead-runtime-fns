@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Hand-written runtime functions nothing mentions.
+
+REPORTS, DOES NOT GATE. There are 19 as of 2026-09-22 and none of them has
+been individually investigated, so failing on them would be asserting
+something this has not established. What it does assert is a NUMBER that can
+be re-derived, which a paragraph in a commit message cannot.
+
+WHY THE COMPILER IS NO HELP. Rust's `dead_code` lint does not fire on a `pub`
+item in a library crate -- a library's public surface is meant to have callers
+it cannot see. Every item in `runtime/src` is `pub` so sibling modules can
+reach it, which switches the lint off across the whole runtime.
+`bin/check-generated-reached` covers the generated tree; this is the same
+question asked of the hand-written half. `obj::set_len` was found this way:
+one mention in the repository, its own definition, and neither port ever had
+a `setLen` to match.
+
+FOUR THINGS ARE EXCLUDED, each because it is called by something other than a
+mention of its name:
+
+  * `#[test]` functions -- the harness calls them by attribute;
+  * `#[no_mangle]` and `extern "C"` -- called from wasm, the CLI, or a host;
+  * trait impl methods -- reached through the trait, so `deref_mut` looks dead
+    in every codebase that has one;
+  * the generated tree under `kgen/`, which has its own check.
+
+COUNTING IS OVER EVERY GIT-TRACKED FILE, and that is not fussiness. Three
+successive runs of this survey said 187, then 49, then 19, and both drops were
+roots the earlier version had not looked in: `runtime/tests/` holds the
+integration tests, which is where the `k_int` image builder is called from,
+and `units-src/` holds the wasm unit crates, which is where `thread_join` and
+`port_close` are called from. A dead-code report that misses a caller root
+reads exactly like a real finding.
+
+This is a NAME match, not a call-graph. A name mentioned in a comment counts
+as a mention, which is the direction that under-reports -- the safe one.
+"""
+import collections, os, re, subprocess, sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(ROOT)
+
+FN = re.compile(r"\s*(?:pub(?:\([\w:]+\))?\s+)?(?:const\s+|unsafe\s+|extern\s+\"C\"\s+)*fn\s+(\w+)")
+WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+def definitions():
+    out = {}
+    for dirpath, _, names in os.walk("runtime/src"):
+        if "kgen" in dirpath.split(os.sep):
+            continue
+        for nm in names:
+            if not nm.endswith(".rs"):
+                continue
+            p = os.path.join(dirpath, nm)
+            lines = open(p, encoding="utf-8", errors="replace").read().split("\n")
+            for i, l in enumerate(lines):
+                m = FN.match(l)
+                if not m:
+                    continue
+                back = "\n".join(lines[max(0, i - 4):i])
+                if ("#[test]" in back or "#[no_mangle]" in back
+                        or 'extern "C"' in l or "#[used]" in back):
+                    continue
+                ctx = None
+                for k in range(i, max(-1, i - 400), -1):
+                    mm = re.match(r"\s*(?:unsafe\s+)?impl\b(.*)", lines[k])
+                    if mm:
+                        ctx = mm.group(1)
+                        break
+                if ctx and " for " in ctx:
+                    continue
+                out.setdefault(m.group(1), []).append(f"{p}:{i + 1}")
+    return out
+
+def main():
+    defs = definitions()
+    counts = collections.Counter()
+    tracked = subprocess.run(["git", "ls-files"], capture_output=True, text=True).stdout.split("\n")
+    for p in tracked:
+        if not p or not os.path.isfile(p):
+            continue
+        try:
+            t = open(p, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        counts.update(WORD.findall(t))
+    dead = sorted((n, s) for n, s in defs.items() if counts[n] <= len(s))
+    for n, sites in dead:
+        print(f"  {n:24s} {', '.join(sites)}")
+    print(f"\ndead-runtime-fns: {len(defs)} hand-written runtime functions, "
+          f"{len(dead)} mentioned nowhere but their own definition")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
