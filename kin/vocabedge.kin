@@ -1,0 +1,82 @@
+;; WHAT THE SHIFT AND NARROWING WORDS MEAN, pinned across three languages.
+;;
+;; This source ships NOWHERE -- it has no `.targets` -- and exists only to be
+;; verified, exactly as `kin/unsigned.kin` does. That file pins the unsigned
+;; comparison family; this one pins the shifts and the narrowing conversion,
+;; which are the other place the three languages genuinely differ.
+;;
+;; WHY THIS FILE EXISTS AT ALL. On 2026-09-22 `f64-bits` was found meaning two
+;; different things: `to_bits()` and `DoubleToInt64Bits` preserve a NaN's
+;; payload, and java's `doubleToLongBits` collapses every NaN to the canonical
+;; one. `hash-double` is GENERATED from one source into three runtimes and
+;; still answered differently, because the word underneath it did.
+;;
+;; Generating from one source guarantees consistency only if the PRIMITIVES
+;; are consistent, and nothing was checking that. There are 176 vocabulary
+;; words, each with three hand-written templates, and the only thing asserting
+;; the three agree is whichever drivers file happens to exercise that word
+;; over whatever inputs its author chose. A word used over a narrow range has
+;; had its spellings compared on that range and nowhere else.
+;;
+;; `Rt` IS IN THE REFER LIST, and it has to be. Left out, the annotation
+;; `^Rt` does not error -- it silently DEFAULTS, and the ports emitted
+;; `static int ushrHigh(long rt, ...)` while Rust hid the mistake by turning
+;; `^:method` into `&self`. An unreferred type tag is the second silent
+;; default this vocabulary has produced today; the first made a function whose
+;; declared return type contradicted its body.
+;;
+;; THE INPUTS ARE THE POINT. Ordinary values agree by construction; these are
+;; chosen where the languages have something to disagree about -- the high bit
+;; set, so `I32` is a large unsigned in Rust and a negative `int` on both
+;; ports.
+(ns flint.rt.vocabedge
+  (:require [flint.impl.rt :refer [defn return doc
+                                   shl ushr sar to-i32 bit-and bit-or bit-xor
+                                   Rt I32 I64 U32]]))
+
+(doc "Logical right shift of a value with the high bit set."
+     ""
+     "`ushr` is `>>` on Rust's `u32`, `>>>` on java's `int` and a cast pair on"
+     "c#'s. All three must bring in zeros; a `>>` that sign-extended on either"
+     "port would answer a large negative here and agree with nothing.")
+(defn ^:method ^I32 ushr-high [^Rt rt ^I32 x ^I32 n]
+  (return (ushr x n)))
+
+(doc "Arithmetic right shift of the same value."
+     ""
+     "`sar` narrows to `i32` on Rust on the way through, which is what makes"
+     "it arithmetic there at all -- the value is a `u32` otherwise and `>>`"
+     "would bring in zeros. The ports' `int` is already signed.")
+(defn ^:method ^I32 sar-high [^Rt rt ^I32 x ^I32 n]
+  (return (sar x n)))
+
+(doc "Left shift into and past the sign bit."
+     ""
+     "The bit that lands in position 31 makes the value negative on both ports"
+     "and merely large on Rust, which is the same 32 bits read two ways. What"
+     "must agree is the BITS.")
+(defn ^:method ^I32 shl-into-sign [^Rt rt ^I32 x ^I32 n]
+  (return (shl x n)))
+
+(doc "Narrowing a 64-bit value to 32."
+     ""
+     "`to-i32` is `as u32` on Rust and `(int)` on both ports. Truncation, not"
+     "saturation -- a value that does not fit keeps its low 32 bits, and a"
+     "language that clamped instead would answer the maximum.")
+(defn ^:method ^I32 narrow [^Rt rt ^I64 x]
+  (return (to-i32 x)))
+
+(doc "The bitwise trio over a value with the high bit set."
+     ""
+     "`&`, `|` and `^` are the same three characters in all three languages,"
+     "which is exactly why nothing has ever checked them: a word that looks"
+     "identical is not the same as a word that behaves identically when one"
+     "side is unsigned and two are not.")
+(defn ^:method ^I32 bits-and [^Rt rt ^I32 a ^I32 b]
+  (return (bit-and a b)))
+
+(defn ^:method ^I32 bits-or [^Rt rt ^I32 a ^I32 b]
+  (return (bit-or a b)))
+
+(defn ^:method ^I32 bits-xor [^Rt rt ^I32 a ^I32 b]
+  (return (bit-xor a b)))

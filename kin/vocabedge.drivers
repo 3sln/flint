@@ -1,0 +1,80 @@
+--rust-head
+// NO RUNTIME AT ALL. Every function here is arithmetic over a 32-bit word, so
+// the toy is an empty `Rt` -- these take one only because `^:method` does.
+extern crate alloc;
+struct Rt;
+impl Rt {
+--rust
+}
+fn main() {
+    let rt = Rt;
+    // 0x8000_0001: the high bit set and the low bit set, so a shift that
+    // brings in the wrong thing shows in the top digit and a shift that
+    // drops the wrong end shows in the bottom.
+    let hi: u32 = 0x8000_0001;
+    println!("{} {} {} {} {} {} {} {} {} {}",
+             rt.ushr_high(hi, 1) as i32, rt.ushr_high(hi, 31) as i32,
+             rt.sar_high(hi, 1) as i32,  rt.sar_high(hi, 31) as i32,
+             rt.shl_into_sign(1, 31) as i32, rt.shl_into_sign(3, 30) as i32,
+             rt.narrow(0x1_2345_6789u64 as i64) as i32,
+             rt.narrow(-1i64) as i32,
+             rt.bits_and(hi, 0xFFFF) as i32,
+             rt.bits_xor(hi, 0xFFFF_FFFF) as i32);
+}
+--java-head
+    // AN EMPTY `Rt`, because these are `^:method` and take one. There is no
+    // runtime here to stand in for -- every function is arithmetic over a
+    // 32-bit word.
+    static final class Rt { }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        int hi = 0x80000001;
+        System.out.println(
+            ushrHigh(rt, hi, 1) + " " + ushrHigh(rt, hi, 31) + " "
+            + sarHigh(rt, hi, 1) + " " + sarHigh(rt, hi, 31) + " "
+            + shlIntoSign(rt, 1, 31) + " " + shlIntoSign(rt, 3, 30) + " "
+            + narrow(rt, 0x123456789L) + " " + narrow(rt, -1L) + " "
+            + bitsAnd(rt, hi, 0xFFFF) + " " + bitsXor(rt, hi, 0xFFFFFFFF));
+    }
+--csharp-head
+    internal sealed class Rt { }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        int hi = unchecked((int) 0x80000001u);
+        System.Console.WriteLine(
+            UshrHigh(rt, hi, 1) + " " + UshrHigh(rt, hi, 31) + " "
+            + SarHigh(rt, hi, 1) + " " + SarHigh(rt, hi, 31) + " "
+            + ShlIntoSign(rt, 1, 31) + " " + ShlIntoSign(rt, 3, 30) + " "
+            + Narrow(rt, 0x123456789L) + " " + Narrow(rt, -1L) + " "
+            + BitsAnd(rt, hi, 0xFFFF) + " " + BitsXor(rt, hi, unchecked((int) 0xFFFFFFFFu)));
+    }
+--expect
+1073741824 1 -1073741824 -1 -2147483648 -1073741824 591751049 -1 1 2147483646
+--expect-why
+DERIVED FROM THE BIT PATTERNS. The input is `0x80000001` throughout: the high
+bit set and the low bit set, so a shift bringing in the wrong thing shows in
+the top digit and one dropping the wrong end shows in the bottom.
+
+ 1. `ushr(0x80000001, 1)` = `0x40000000` = 1073741824. LOGICAL: zeros come in
+    at the top. A `>>` that sign-extended on either port answers -1073741823.
+ 2. `ushr(0x80000001, 31)` = 1. All but the sign bit shifted out.
+ 3. `sar(0x80000001, 1)` = `0xC0000000` = -1073741824. ARITHMETIC: the sign
+    propagates. This is the case that needs Rust's `as i32` round trip -- the
+    value is a `u32` there, and `>>` on it would bring in zeros and answer
+    case 1's number instead.
+ 4. `sar(0x80000001, 31)` = -1. Every bit becomes the sign.
+ 5. `shl(1, 31)` = `0x80000000` = -2147483648 read as a signed `int`, which is
+    what both ports call it and Rust calls 2147483648. THE BITS ARE THE SAME;
+    the fixture prints the signed reading on all three so they can be
+    compared at all.
+ 6. `shl(3, 30)` = `0xC0000000` = -1073741824. Two bits land in the top two,
+    one of them the sign.
+ 7. `narrow(0x123456789)` = `0x23456789` = 591751049. TRUNCATION, not
+    saturation: a language that clamped would answer 2147483647.
+ 8. `narrow(-1)` = -1. All ones stay all ones; a widening-then-narrowing that
+    went through an unsigned reading would answer the same, which is why case
+    7 carries the weight.
+ 9. `bit-and(0x80000001, 0xFFFF)` = 1.
+10. `bit-xor(0x80000001, 0xFFFFFFFF)` = `0x7FFFFFFE` = 2147483646.

@@ -119,11 +119,17 @@
   languages; `kin/scripts/verify` is the whole of its job and no runtime
   wants a file of it. `:path` answering nil is how a source says so.
 
+  `vocabedge.kin` joined it on 2026-09-22 for the same reason, over the shift
+  and narrowing words. Forgetting to add it here is caught immediately now:
+  `bin/check-generated-reached` reported six generated functions nothing
+  calls, which is exactly what a verification-only source looks like once it
+  has been written into the runtimes by mistake.
+
   Said ONCE, because it is two answers to the same question: nothing writes
   it, and nothing can import it either. The first version of this had the
   name in the three `:path` functions and not in the sibling list, so every
   generated Java file imported a class that does not exist."
-  '#{flint.rt.unsigned})
+  '#{flint.rt.unsigned flint.rt.vocabedge})
 
 (defn- read-forms
   "Every top-level form of a kin source, as data."
