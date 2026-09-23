@@ -5202,8 +5202,30 @@ vocabulary word, guarding a case that cannot happen.
 **The rest of `Gc` still stands as priced above**, minus the two pieces now
 done: the five field predicates and `would-collect`. What remains is the
 collector proper -- `forward` at 40 lines, `minor` at 42, `major` at 31,
-`scan-object` at 29 -- plus the free-list machinery, and those want more than
-field reads.
+`scan-object` at 29 -- and it is BLOCKED, for a reason worth stating as a
+general rule rather than per function.
+
+**A `cfg` ON a function is portable; a `cfg` INSIDE its body is not.** When
+the whole function is conditional, the generated body is unconditional and
+native's delegator keeps the attribute -- which is exactly how `would-collect`
+was ported while carrying `#[cfg(feature = "parallel")]`. When the
+CONDITIONAL PART IS INSIDE, the body differs between builds, kin has no
+conditional compilation, and generating it would silently drop whichever
+build's version lost.
+
+That is what blocks the collector, and it is not incidental: 22 of `gc.rs`'s
+80 functions carry native-only instrumentation, concentrated in exactly the
+core -- `minor` 8 blocks, `forward` 4, `major` 4, `collect-cycle` 2. `forward`
+alone tracks `limbo_refs`, stamps `limbo_bad`, and asserts
+`plausible_from_object`, none of which either port has. It is the same shape
+that keeps `Obj::slot` hand-written, where a `debug_assertions` block checks
+that a forwarded pointer is never read outside the collector.
+
+So the rule sorts the runtime cleanly: predicates and arithmetic over fields
+generate, and the instrumented core does not. `Gc` is finished as a porting
+target at the five field predicates and `would-collect` unless someone decides
+the diagnostics should move too, which is a question about the diagnostics and
+not about kin.
 
 **`class-of` was assessed and DECLINED**, which is worth recording so it is
 not re-assessed. It is four lines -- `size / 8`, clamped to `NCLASS - 1` --
