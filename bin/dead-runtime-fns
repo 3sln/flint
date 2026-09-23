@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hand-written runtime functions nothing mentions.
+"""Hand-written runtime functions nothing mentions, in all three runtimes.
 
 REPORTS, DOES NOT GATE. There are 25 as of 2026-09-22 and none of them has
 been individually investigated, so failing on them would be asserting
@@ -32,6 +32,21 @@ and `units-src/` holds the wasm unit crates, which is where `thread_join` and
 `port_close` are called from. A dead-code report that misses a caller root
 reads exactly like a real finding.
 
+THE PORTS TOOK FOUR TRIES TO PARSE. Rust is easy -- `fn` is a keyword, so
+the definition regex is `fn` followed by a name, and cannot match anything else. Java and
+C# have no such marker: a definition is `<modifiers> <type> <name>(`, and a
+CALL at the start of a line is `<indent><name>(`. The first version's type
+pattern included a space, so the indentation satisfied it and every call
+parsed as a definition -- 244 of them for the clr's `Def` alone. That inflates
+the definition count until `mentions <= definitions` is trivially true, and
+the tool reports its most-called members as dead.
+
+So each language carries a PROBE: a member known to be called many times,
+which must come back with exactly one definition site. If the regex starts
+matching calls again the probe's site count rises and this refuses to report
+anything. A dead-code tool that cannot be trusted is worse than none, and
+this one has now been wrong in both directions.
+
 This is a NAME match, not a call-graph. A name mentioned in a comment counts
 as a mention, which is the direction that under-reports -- the safe one.
 
@@ -63,7 +78,19 @@ os.chdir(ROOT)
 FN = re.compile(r"\s*(?:pub(?:\([\w:]+\))?\s+)?(?:const\s+|unsafe\s+|extern\s+\"C\"\s+)*fn\s+(\w+)")
 WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
-def definitions():
+# `<modifiers> <type> <name>(`. The TYPE must begin with a letter, which is
+# what stops indentation from standing in for it -- see the docstring.
+MOD = (r"(?:public|private|protected|internal|static|final|sealed|override"
+       r"|virtual|abstract|synchronized|unsafe|readonly|extern|new)")
+MEMBER = re.compile(rf"^\s*(?:{MOD}\s+)*([A-Za-z_][\w.<>,]*(?:\[\])?)\s+(\w+)\s*\(")
+KEYWORD = {"if", "for", "while", "switch", "return", "catch", "else", "do",
+           "using", "lock", "foreach", "fixed"}
+
+# (language, extension, source root, generated-dir marker, probe member)
+PORTS = (("jvm", ".java", "runtimes/jvm/src/", "/kgen/", "def"),
+         ("clr", ".cs", "runtimes/clr/src/", "/Kgen/", "Def"))
+
+def rust_definitions():
     out = {}
     for dirpath, _, names in os.walk("runtime/src"):
         if "kgen" in dirpath.split(os.sep):
@@ -92,28 +119,59 @@ def definitions():
                 out.setdefault(m.group(1), []).append(f"{p}:{i + 1}")
     return out
 
-def main():
-    defs = definitions()
-    counts = collections.Counter()
-    tracked = subprocess.run(["git", "ls-files"], capture_output=True, text=True).stdout.split("\n")
+def port_definitions(tracked, ext, root, genmark):
+    out = {}
     for p in tracked:
-        if not p or not os.path.isfile(p):
+        if not (p.endswith(ext) and p.startswith(root)) or genmark in p:
             continue
-        # See the module docstring: only Rust can call a Rust function, and
-        # any looser rule counts a document about the code -- or this file --
-        # as a caller of what it describes.
-        if not p.endswith(".rs"):
+        for i, l in enumerate(open(p, encoding="utf-8", errors="replace").read().split("\n")):
+            m = MEMBER.match(l)
+            if not m or m.group(1) in KEYWORD or m.group(2) in KEYWORD:
+                continue
+            out.setdefault(m.group(2), []).append(f"{p}:{i + 1}")
+    return out
+
+def mentions(tracked, exts):
+    c = collections.Counter()
+    for p in tracked:
+        if not p.endswith(exts):
             continue
         try:
-            t = open(p, encoding="utf-8", errors="replace").read()
+            c.update(WORD.findall(open(p, encoding="utf-8", errors="replace").read()))
         except OSError:
-            continue
-        counts.update(WORD.findall(t))
+            pass
+    return c
+
+def report(label, defs, counts, probe=None):
+    if probe is not None:
+        sites = len(defs.get(probe, []))
+        if sites != 1:
+            print(f"  REFUSING to report {label}: the probe `{probe}` parsed as "
+                  f"{sites} definitions, not 1 -- the member regex is matching "
+                  f"calls again. See the docstring.")
+            return None
     dead = sorted((n, s) for n, s in defs.items() if counts[n] <= len(s))
     for n, sites in dead:
-        print(f"  {n:24s} {', '.join(sites)}")
-    print(f"\ndead-runtime-fns: {len(defs)} hand-written runtime functions, "
-          f"{len(dead)} mentioned nowhere but their own definition")
+        print(f"  {label:4s} {n:26s} {', '.join(sites)}")
+    return len(defs), len(dead)
+
+def main():
+    tracked = [p for p in subprocess.run(["git", "ls-files"], capture_output=True,
+                                         text=True).stdout.split("\n")
+               if p and os.path.isfile(p)]
+    totals = []
+    r = report("rs", rust_definitions(), mentions(tracked, (".rs",)))
+    if r:
+        totals.append(("native", *r))
+    for lang, ext, root, genmark, probe in PORTS:
+        r = report(lang, port_definitions(tracked, ext, root, genmark),
+                   mentions(tracked, (ext,)), probe)
+        if r:
+            totals.append((lang, *r))
+    print()
+    for lang, ndef, ndead in totals:
+        print(f"dead-runtime-fns: {lang:6s} {ndef:4d} hand-written, "
+              f"{ndead:3d} mentioned nowhere but their own definition")
     return 0
 
 if __name__ == "__main__":
