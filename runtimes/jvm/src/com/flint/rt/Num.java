@@ -120,9 +120,6 @@ public final class Num {
         return rt.throwStr("ClassCastException",
             "not a number: " + rt.describe(a) + " and " + rt.describe(b));
     }
-    static long divByZero(Rt rt) {
-        return rt.throwStr("ArithmeticException", "Divide by zero");
-    }
 
     /// `+`, `-` and `*`. GENERATED, from `kin/numarith.kin` -- delegators
     /// rather than copies, for the reason `isInt` above is one: hand-written

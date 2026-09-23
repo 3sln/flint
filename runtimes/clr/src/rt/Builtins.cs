@@ -12,15 +12,6 @@ using _3sln.Flint.Kgen.Rt;
 public static class Builtins {
     public delegate long Fn(Rt rt, int at, int argc);
 
-    /// `:tag` and `:form` on a tagged literal (`DECISIONS.md#tagged-literals`). Shared
-    /// with the keyword-apply path, or the same lookup by two spellings
-    /// disagrees.
-    /// A keyword's name, for a message that has to say WHICH key.
-    static long KwName(Rt rt, long v) {
-        if (Val.IsInlineKw(v)) return Val.InlineStr(Val.InlineBytes(v));
-        if (rt.IsHeapTy(v, Obj.TyKw) || rt.IsHeapTy(v, Obj.TySym)) return rt.Slot(v, 1);
-        return v;
-    }
 
     internal static long TaggedGet(Rt rt, long t, long k, long dflt) {
         if (k == Str.Keyword(rt, null, "tag")) return rt.Slot(t, 0);

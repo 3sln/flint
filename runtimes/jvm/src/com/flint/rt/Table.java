@@ -77,7 +77,6 @@ public final class Table {
     // THE CLOSED SET of `threads-and-ports`, generated from `kin/tablekind.kin`.
 
     // THE REFUSALS, generated from `kin/tablesay.kin` -- `checks`.
-    static String kwName(Rt rt, long v) { return com._3sln.flint.kgen.rt.Tablesay.kwName(rt, v); }
 
     // THE TRANSIENT, generated from `kin/tabletrans.kin`.
 

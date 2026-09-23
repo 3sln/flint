@@ -57,10 +57,4 @@ public static class Eq {
 
     static long NameOf(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Names.NameOf(rt, v);
 
-    /// Length first is WRONG for sequences: `[1 2]` is less than `[1 3]`, and
-    /// both are less than `[1 2 3]`. So shorter-is-less only decides a tie.
-    static byte[] NsBytes(Rt rt, long v) {
-        long ns = rt.Slot(v, 0);
-        return Val.IsNil(ns) ? null : Str.Bytes(rt, ns);
-    }
 }

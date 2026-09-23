@@ -31,12 +31,6 @@ public final class Builtins {
 
     public interface Fn { long apply(Rt rt, int at, int argc); }
 
-    /// A keyword's name, for a message that has to say WHICH key.
-    static long kwName(Rt rt, long v) {
-        if (Val.isInlineKw(v)) return Val.inlineStr(Val.inlineBytes(v));
-        if (rt.isHeapTy(v, TY_KW) || rt.isHeapTy(v, TY_SYM)) return rt.slot(v, 1);
-        return v;
-    }
 
     /// `:tag` and `:form` on a tagged literal, which is how anyone reads one
     /// (`DECISIONS.md#tagged-literals`). Kept beside the `get` builtin because the

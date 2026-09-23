@@ -521,9 +521,6 @@ public static class Conc {
     }
 
 
-    /// GENERATED (`kin/portring.kin`).
-    static long Cursor(Rt rt, long p, int which) =>
-        global::_3sln.Flint.Kgen.Rt.Portring.RingCursor(rt, p, which);
 
     /// One slot, read atomically. Cursors and sequence words are fixnums like
     /// any other slot -- the collector sees nothing unusual -- and the atomic
@@ -1369,15 +1366,8 @@ public static class Conc {
     // THE SCHEDULER'S PREDICATES ARE `kin/sched.kin`, generated into all three
     // runtimes -- see the note in `Conc.java`. `SchedPick` answers `-1` for
     // "nothing runnable", which is what the callers here already expected.
-    static int Pick(Rt rt) =>
-        // `-1` FOR NONE is what this port's callers already expected.
-        (int) global::_3sln.Flint.Kgen.Rt.Sched.SchedPick(rt);
 
-    static bool PendingEvents(Rt rt) =>
-        global::_3sln.Flint.Kgen.Rt.Sched.SchedPendingEvents(rt);
 
-    static bool NeedsHost(Rt rt) =>
-        global::_3sln.Flint.Kgen.Rt.Sched.SchedNeedsHost(rt);
 
     /// GENERATED (`kin/settle.kin`). The end of every turn a thread takes,
     /// and the one place that decides which of three things just happened.

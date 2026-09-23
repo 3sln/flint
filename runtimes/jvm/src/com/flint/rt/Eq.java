@@ -53,10 +53,4 @@ public final class Eq {
     /// keep in step.
     static long nameOf(Rt rt, long v) { return com._3sln.flint.kgen.rt.Names.nameOf(rt, v); }
 
-    /// Length first is WRONG for sequences: `[1 2]` is less than `[1 3]`, and
-    /// both are less than `[1 2 3]`. So shorter-is-less only decides a tie.
-    static byte[] nsBytes(Rt rt, long v) {
-        long ns = rt.slot(v, 0);
-        return Val.isNil(ns) ? null : Str.bytes(rt, ns);
-    }
 }
