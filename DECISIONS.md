@@ -5205,6 +5205,27 @@ collector proper -- `forward` at 40 lines, `minor` at 42, `major` at 31,
 `scan-object` at 29 -- plus the free-list machinery, and those want more than
 field reads.
 
+**`class-of` was assessed and DECLINED**, which is worth recording so it is
+not re-assessed. It is four lines -- `size / 8`, clamped to `NCLASS - 1` --
+and all three runtimes already agree character for character. Porting it
+would cost a third visibility widening, since native's `NCLASS` is private to
+`gc.rs`, plus a name-table entry and a `usize`/`int` mismatch at the wrapper.
+That is friction bought for no divergence risk. The pieces worth porting are
+the ones where the three copies can drift or already have.
+
+**AND `Snap` WAS CHECKED AND IS FINE**, also recorded so the suspicion is not
+re-run. It looked like 1316 lines of unreferenced hand-written code across
+the two ports -- native reaches its `snap.rs` through the `flint-snap` wasm
+unit, which the ports have no equivalent of -- and it is not: the callers are
+in `runtimes/jvm/test/` and `runtimes/clr/conform/`, which a search of
+`runtimes/*/src/` does not see. Capture/restore round-trips, both refusal
+cases and export/import are all covered per runtime.
+
+Cross-runtime snapshot interop is NOT a goal, so the three formats agreeing
+byte for byte is not a claim anything fails to check. The round-trip this
+section calls byte-identical is within one runtime, and a snapshot is pinned
+to its image by construction.
+
 **`Val`'s last four and `Interns` are unchanged** and still blocked on a
 byte-array type and a callback type respectively, as their own comments say.
 
