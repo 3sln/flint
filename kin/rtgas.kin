@@ -1,0 +1,53 @@
+;; WHERE THE INTERPRETER STOPS, precomputed.
+;;
+;; Two budgets bound a running thread: `gas-limit`, the guest's whole
+;; allowance, and `slice-end`, where the scheduler wants it to yield. The
+;; interpreter tests ONE field per instruction, so the nearer of the two is
+;; kept in `checkpoint` and refreshed whenever either moves.
+;;
+;; ZERO MEANS UNLIMITED, in both, and that is the whole reason this is not a
+;; minimum. `min(gas-limit, slice-end)` with either one unset answers 0 --
+;; "stop immediately" -- which is the exact opposite of what 0 means.
+;;
+;; WRITTEN AS "START AT THE CEILING AND LOWER IT", where all three runtimes
+;; map each field to a maximum and then take a minimum of the two. The two
+;; forms agree on every input; this one is three statements where the original
+;; needs `if` as an EXPRESSION, and kin's `if` is a statement. Rather than
+;; bend the source around that, the order of the tests is the proof: each
+;; budget lowers the checkpoint only if it is set AND nearer, so an unset one
+;; cannot win and neither can the further of two set ones.
+;;
+;; `I64_MAX` RATHER THAN A 64-BIT ALL-ONES. Native wrote `u64::MAX` here and
+;; both ports wrote `Long.MAX_VALUE`, which are not the same number --
+;; 2^64-1 against 2^63-1. Nothing can observe the difference, because
+;; `checkpoint` is only ever compared against a step count that would need
+;; nine quintillion instructions to reach either, and only one of the two is
+;; representable on all three targets. So the generated form is the ports'.
+(ns flint.rt.rtgas
+  (:require [flint.impl.rt :refer [defn doc if and not == ult64
+                                   rt-gas-limit rt-slice-end rt-checkpoint
+                                   set-rt-checkpoint set-rt-gas-limit
+                                   clear-rt-gas-trips
+                                   NO_CHECKPOINT Rt Addr]]))
+
+(doc "Recompute `checkpoint` as the nearer of the two budgets."
+     ""
+     "Call after either budget moves. A budget of 0 is UNSET, and cannot"
+     "lower the checkpoint however small a number 0 is.")
+(defn ^:pub ^:method rt-refresh-checkpoint [^:mut ^Rt rt]
+  (set-rt-checkpoint rt NO_CHECKPOINT)
+  (if (and (not (== (rt-gas-limit rt) 0))
+           (ult64 (rt-gas-limit rt) (rt-checkpoint rt)))
+    (set-rt-checkpoint rt (rt-gas-limit rt)))
+  (if (and (not (== (rt-slice-end rt) 0))
+           (ult64 (rt-slice-end rt) (rt-checkpoint rt)))
+    (set-rt-checkpoint rt (rt-slice-end rt))))
+
+(doc "Set the guest's whole gas allowance, and re-arm the checkpoint."
+     ""
+     "`gas-trips` is cleared because the count it carries is of overruns"
+     "against the OLD limit; a new limit starts a new tally.")
+(defn ^:pub ^:method rt-set-gas-limit [^:mut ^Rt rt ^Addr limit]
+  (set-rt-gas-limit rt limit)
+  (clear-rt-gas-trips rt)
+  (rt-refresh-checkpoint rt))

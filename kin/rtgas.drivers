@@ -1,0 +1,100 @@
+--rust-head
+type Addr = u64;
+// FOUR FIELDS AND NOTHING ELSE. `gas_trips` is narrower than the other three
+// on every runtime, and the toy keeps it so -- a `u32` here, an `int` on both
+// ports -- because the only write to it is the clear, and a toy that widened
+// it would stop testing that the clear compiles at the real width.
+struct Rt { gas_limit: Addr, slice_end: Addr, checkpoint: Addr, gas_trips: u32 }
+impl Rt {
+--rust
+}
+// PRINTS THE ROLE, NOT THE BITS. `NO_CHECKPOINT` is `u64::MAX` here and
+// `Long.MAX_VALUE` on both ports, deliberately -- each runtime tests against
+// its own -- so a toy that printed the number would make the three disagree
+// over the one thing they are meant to differ on.
+fn at(gas: Addr, slice: Addr) -> String {
+    let mut rt = Rt { gas_limit: gas, slice_end: slice, checkpoint: 0, gas_trips: 0 };
+    rt.rt_refresh_checkpoint();
+    if rt.checkpoint == u64::MAX { "none".to_string() } else { format!("{}", rt.checkpoint) }
+}
+fn set(limit: Addr, slice: Addr) -> String {
+    let mut rt = Rt { gas_limit: 0, slice_end: slice, checkpoint: 0, gas_trips: 7 };
+    rt.rt_set_gas_limit(limit);
+    format!("{}/{}", rt.checkpoint, rt.gas_trips)
+}
+fn main() {
+    println!("{} {} {} {} {} | {} {}",
+             at(0, 0), at(100, 0), at(0, 50), at(100, 50), at(50, 100),
+             set(200, 50), set(10, 50));
+}
+--java-head
+    static final class Rt { long gasLimit, sliceEnd, checkpoint; int gasTrips; }
+--java
+    static String at(long gas, long slice) {
+        Rt rt = new Rt();
+        rt.gasLimit = gas; rt.sliceEnd = slice;
+        rtRefreshCheckpoint(rt);
+        return rt.checkpoint == Long.MAX_VALUE ? "none" : Long.toString(rt.checkpoint);
+    }
+    static String set(long limit, long slice) {
+        Rt rt = new Rt();
+        rt.sliceEnd = slice; rt.gasTrips = 7;
+        rtSetGasLimit(rt, limit);
+        return rt.checkpoint + "/" + rt.gasTrips;
+    }
+    public static void main(String[] args) {
+        System.out.println(at(0, 0) + " " + at(100, 0) + " " + at(0, 50) + " "
+                           + at(100, 50) + " " + at(50, 100) + " | "
+                           + set(200, 50) + " " + set(10, 50));
+    }
+--csharp-pre
+class Rt { public long gasLimit, sliceEnd, checkpoint; public int gasTrips; }
+--csharp-head
+--csharp
+    static string At(long gas, long slice) {
+        var rt = new Rt();
+        rt.gasLimit = gas; rt.sliceEnd = slice;
+        RtRefreshCheckpoint(rt);
+        return rt.checkpoint == long.MaxValue ? "none" : rt.checkpoint.ToString();
+    }
+    static string Set(long limit, long slice) {
+        var rt = new Rt();
+        rt.sliceEnd = slice; rt.gasTrips = 7;
+        RtSetGasLimit(rt, limit);
+        return rt.checkpoint + "/" + rt.gasTrips;
+    }
+    public static void Main() {
+        System.Console.WriteLine(At(0, 0) + " " + At(100, 0) + " " + At(0, 50) + " "
+                                 + At(100, 50) + " " + At(50, 100) + " | "
+                                 + Set(200, 50) + " " + Set(10, 50));
+    }
+--expect
+none 100 50 50 50 | 50/0 10/0
+--expect-why
+DERIVED from "zero means unlimited, and the checkpoint is the nearer of the
+two budgets", not recorded from a run.
+
+THE FIRST THREE ROWS ARE THE WHOLE TEST, and a plain minimum fails all three.
+`min(0, 0)` is 0, `min(100, 0)` is 0 and `min(0, 50)` is 0 -- "stop
+immediately" -- where the contract says an unset budget cannot stop anything.
+So the answers are `none`, then 100, then 50. Verified by injecting exactly
+that: all three targets agreed on `0 0 0 50 50` and rows four onwards stayed
+right, so those rows alone would have passed it.
+
+`none` RATHER THAN A NUMBER, and this is the point of the case. "Nothing is
+counting" is spelled `u64::MAX` on native and `Long.MAX_VALUE` on both ports,
+2^64-1 against 2^63-1, and each runtime tests against ITS OWN -- `rt.rs:1007`
+is `self.checkpoint != u64::MAX`. Converging the literal was tried first and
+is a BUG: native would write a checkpoint its own `counting()` reads as a live
+budget, so an unbounded guest would take the counting loop. The toy therefore
+asks each host whether the checkpoint is ITS sentinel, which is the property
+that has to agree.
+
+Rows four and five pin the minimum in BOTH directions, so a comparison written
+backwards answers 100 for one of them. They say nothing about the zero rule,
+which is why they are not first.
+
+`50/0` and `10/0` are `rt-set-gas-limit`: the limit lands, the checkpoint is
+re-armed against whichever budget is nearer -- the slice at 50, then the new
+limit at 10 -- and `gas_trips` goes from 7 to 0. Seeded at 7 rather than 0 so
+that "the clear did nothing" and "the clear worked" are different answers.

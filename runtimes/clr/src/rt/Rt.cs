@@ -304,9 +304,7 @@ public sealed class Rt : System.IDisposable {
     /// comparison in the hot loop, because that guard existed only to stop
     /// `steps >= 0` firing on every instruction.
     public void RefreshCheckpoint() {
-        long a = gasLimit == 0 ? long.MaxValue : gasLimit;
-        long b = sliceEnd == 0 ? long.MaxValue : sliceEnd;
-        checkpoint = a < b ? a : b;
+        global::_3sln.Flint.Kgen.Rt.Rtgas.RtRefreshCheckpoint(this);
     }
 
     /// Is this runtime billing? Asked where work is charged, and NOT the same
@@ -320,9 +318,7 @@ public sealed class Rt : System.IDisposable {
     }
 
     public void SetGasLimit(long limit) {
-        gasLimit = limit;
-        gasTrips = 0;
-        RefreshCheckpoint();
+        global::_3sln.Flint.Kgen.Rt.Rtgas.RtSetGasLimit(this, limit);
     }
 
     /// Room for a handler to unwind after the budget blew. Small, and once.

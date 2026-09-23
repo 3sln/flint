@@ -851,6 +851,21 @@
    ;; guard gets written once instead of three host idioms deep.
    'I64_MIN {:rust "i64::MIN" :java "Long.MIN_VALUE" :csharp "long.MinValue"}
    'I64_MAX {:rust "i64::MAX" :java "Long.MAX_VALUE" :csharp "long.MaxValue"}
+    ;; "NOTHING IS COUNTING", and the ONE entry in this table whose three
+   ;; spellings are DIFFERENT NUMBERS on purpose. Native's sentinel is
+   ;; `u64::MAX` and both ports' is `Long.MAX_VALUE` -- 2^64-1 against
+   ;; 2^63-1 -- and each runtime TESTS AGAINST ITS OWN: `rt.rs:1007` is
+   ;; `self.checkpoint != u64::MAX`, and `Rt.java:360` says "`Long.MAX_VALUE`
+   ;; MEANS NOTHING IS COUNTING". Converging the value would leave native
+   ;; writing a checkpoint its own `counting()` reads as a live budget, which
+   ;; is the interpreter choosing its counting loop when no budget is set.
+   ;;
+   ;; SO `bin/check-port-consts` COMPARES NOTHING HERE, and that is correct
+   ;; rather than a gap: what has to agree is the ROLE, and a generated source
+   ;; naming this word is how the role stays one thing. Anything comparing
+   ;; these two literals would be comparing the wrong thing and would fail.
+   'NO_CHECKPOINT {:rust "u64::MAX" :java "Long.MAX_VALUE"
+                   :csharp "long.MaxValue"}
    ;; THE TWO DOUBLES WITH NO LITERAL. `1.0 / 0.0` and `0.0 / 0.0` produce
    ;; them on every one of these hosts, but writing that is a puzzle where a
    ;; name will do, and one of the three spells division by zero as an error
@@ -2001,6 +2016,38 @@
     'gc-young-base (core/call {:rust "{0}.young_base"
                                :java "{0}.youngBase" :csharp "{0}.youngBase"}
                               {:tag Addr})
+    ;; --- THE GAS AND SLICE BUDGET, on the `Rt` ------------------------
+    ;;
+    ;; Four fields and one derived one. `gas_limit` is the guest's whole
+    ;; budget and `slice_end` is where the scheduler wants this thread to
+    ;; yield; `checkpoint` is the NEARER of the two, precomputed so the
+    ;; interpreter's per-instruction test is one comparison rather than three.
+    ;;
+    ;; ZERO MEANS UNLIMITED in both of the first two, which is why the
+    ;; refresh cannot simply take a minimum.
+    ;;
+    ;; TAGGED `Addr`, NOT `I64`: native declares all three `u64` where both
+    ;; ports declare `long`, which is exactly the pair `Addr` exists to name.
+    ;; A ceiling written into one of them therefore goes through `to-addr`.
+    'rt-gas-limit (core/call {:rust "{0}.gas_limit" :java "{0}.gasLimit"
+                              :csharp "{0}.gasLimit"} {:tag Addr})
+    'rt-slice-end (core/call {:rust "{0}.slice_end" :java "{0}.sliceEnd"
+                              :csharp "{0}.sliceEnd"} {:tag Addr})
+    'rt-checkpoint (core/call {:rust "{0}.checkpoint" :java "{0}.checkpoint"
+                               :csharp "{0}.checkpoint"} {:tag Addr})
+    'set-rt-gas-limit (core/call {:rust "{0}.gas_limit = {1}"
+                                  :java "{0}.gasLimit = {1}"
+                                  :csharp "{0}.gasLimit = {1}"})
+    'set-rt-checkpoint (core/call {:rust "{0}.checkpoint = {1}"
+                                   :java "{0}.checkpoint = {1}"
+                                   :csharp "{0}.checkpoint = {1}"})
+    ;; `gas_trips` IS NARROWER THAN THE REST -- a `u32` on native and an `int`
+    ;; on both ports, where the three above are 64 bits. The only value ever
+    ;; written here is 0, so the setter takes none and says so, rather than
+    ;; offering a width the callers would have to think about.
+    'clear-rt-gas-trips (core/call {:rust "{0}.gas_trips = 0"
+                                    :java "{0}.gasTrips = 0"
+                                    :csharp "{0}.gasTrips = 0"})
     'gc-half (core/call {:rust "{0}.half" :java "{0}.half" :csharp "{0}.half"}
                         {:tag Addr})
     'gc-from (core/call {:rust "{0}.from" :java "{0}.from" :csharp "{0}.from"}

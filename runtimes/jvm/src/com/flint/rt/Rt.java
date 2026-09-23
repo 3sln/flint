@@ -375,9 +375,7 @@ public final class Rt {
     /// the hot loop, because the guard was only needed to stop `steps >= 0`
     /// firing on every instruction.
     public void refreshCheckpoint() {
-        long a = gasLimit == 0 ? Long.MAX_VALUE : gasLimit;
-        long b = sliceEnd == 0 ? Long.MAX_VALUE : sliceEnd;
-        checkpoint = a < b ? a : b;
+        com._3sln.flint.kgen.rt.Rtgas.rtRefreshCheckpoint(this);
     }
 
     /// Is this runtime billing? Asked where work is charged, and NOT the same
@@ -406,9 +404,7 @@ public final class Rt {
     }
 
     public void setGasLimit(long limit) {
-        gasLimit = limit;
-        gasTrips = 0;
-        refreshCheckpoint();
+        com._3sln.flint.kgen.rt.Rtgas.rtSetGasLimit(this, limit);
     }
 
     /// Room for a handler to unwind after the budget blew. Small, and granted

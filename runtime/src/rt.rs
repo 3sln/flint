@@ -984,15 +984,11 @@ impl Rt {
     /// Recompute the single value the interpreter's hot loop compares against.
     #[inline]
     pub fn refresh_checkpoint(&mut self) {
-        let a = if self.gas_limit == 0 { u64::MAX } else { self.gas_limit };
-        let b = if self.slice_end == 0 { u64::MAX } else { self.slice_end };
-        self.checkpoint = if a < b { a } else { b };
+        self.rt_refresh_checkpoint();
     }
 
     pub fn set_gas_limit(&mut self, limit: u64) {
-        self.gas_limit = limit;
-        self.gas_trips = 0;
-        self.refresh_checkpoint();
+        self.rt_set_gas_limit(limit);
     }
 
     /// Room for a handler to unwind after the budget blew. Small, and granted
