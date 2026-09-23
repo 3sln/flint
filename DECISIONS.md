@@ -5226,8 +5226,36 @@ byte for byte is not a claim anything fails to check. The round-trip this
 section calls byte-identical is within one runtime, and a snapshot is pinned
 to its image by construction.
 
-**`Val`'s last four and `Interns` are unchanged** and still blocked on a
-byte-array type and a callback type respectively, as their own comments say.
+**`Val`'s last four are NOT blocked on a byte-array type**, which is what
+their comments have said and what I set out to fix by adding one. kin has had
+a `Bytes` tag all along -- `&[u8]` / `byte[]` / `byte[]` -- so the missing
+piece was supposed to be a MUTABLE one. It is not. The signatures differ:
+
+    native  fn inline_bytes(self, buf: &mut [u8; INLINE_MAX]) -> &[u8]
+    ports   byte[] inlineBytes(long v)
+
+Native takes a caller-provided buffer, fills its first `n` bytes and returns a
+BORROWED SLICE of it; both ports ALLOCATE a fresh array and return it. That is
+a deliberate difference in allocation discipline -- native is `no_std` on wasm
+and avoids the allocation, the ports are on collected hosts and do not care --
+and it is a difference in ARITY and lifetime, not in body. No tag fixes it,
+because the ports' version does not take a buffer at all. Generating one
+signature would mean choosing which runtime's memory contract wins.
+
+The same shape blocks `Str`'s remaining surface, which is why `string-hash`
+and `keyword-hash` cannot be ported either: native reaches `inline_bytes`
+through a stack buffer. So this is one blocker wearing three names, and it is
+a design decision rather than a gap in kin.
+
+**`Interns` is unchanged** and still blocked on a callback type, as its own
+comment says.
+
+**A measurement caveat, recorded because it has now misled me three times.**
+Matching members across runtimes by NAME undercounts: `probe` is
+`intern_probe` on native, `publish` is `intern_publish`, `contiguous` is
+`contiguous_string`, `of` is `string`. Any count of "how much of this class
+has a native twin" built on snake-casing the port's name is a floor, not an
+answer.
 
 
 
