@@ -114,12 +114,12 @@ public static class Obj {
 
     /// Cached at +8, inside the object, so a string carries its own hash and a
     /// map lookup does not walk the bytes twice.
-    public static int StrHash(Space sp, long a) => sp.ReadU32(a + Hdr);
-    public static void SetStrHash(Space sp, long a, int h) => sp.WriteU32(a + Hdr, h);
+    public static int StrHash(Space sp, long a) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjStrHash(sp, a);
+    public static void SetStrHash(Space sp, long a, int h) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjSetStrHash(sp, a, h);
 
-    public static long SlotAddr(long a, int i) => a + Hdr + (long) i * 8;
+    public static long SlotAddr(long a, int i) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjSlotAddr(a, i);
     public static long Slot(Space sp, long a, int i) => sp.ReadU64(SlotAddr(a, i));
-    public static void SetSlotRaw(Space sp, long a, int i, long v) => sp.WriteU64(SlotAddr(a, i), v);
+    public static void SetSlotRaw(Space sp, long a, int i, long v) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjSetSlotRaw(sp, a, i, v);
 
     /// A forwarding pointer, packed into the header.
     ///

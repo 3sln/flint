@@ -6,6 +6,8 @@ type Addr = u64;
 // this level -- so the shared reference in the signature is not a weakening
 // of the fixture.
 const TY_FWD: u8 = 1;   // the forwarding tag, as `obj.rs` declares it
+mod obj { pub const HDR: super::Addr = 8; }
+struct Value(u64);
 
 struct Space { m: Vec<u8> }
 impl Space {
@@ -16,6 +18,16 @@ impl Space {
     // `&self`, matching the real `Space`: it is an arena whose interior
     // mutability lives below this level, which is what lets one `Space` tag
     // serve both the readers and the writers.
+    fn read_u64(&self, a: Addr) -> u64 {
+        let i = a as usize;
+        u64::from_le_bytes([self.m[i], self.m[i+1], self.m[i+2], self.m[i+3],
+                            self.m[i+4], self.m[i+5], self.m[i+6], self.m[i+7]])
+    }
+    fn write_u64(&self, a: Addr, v: u64) {
+        let i = a as usize;
+        let p = self.m.as_ptr() as *mut u8;
+        unsafe { core::ptr::copy_nonoverlapping(v.to_le_bytes().as_ptr(), p.add(i), 8) };
+    }
     fn write_u32(&self, a: Addr, v: u32) {
         let i = a as usize;
         let p = self.m.as_ptr() as *mut u8;
@@ -24,7 +36,7 @@ impl Space {
 }
 --rust
 fn main() {
-    let sp = Space { m: vec![0u8; 64] };
+    let sp = Space { m: vec![0u8; 128] };
     let cases: [(u32, u32); 5] = [
         (0xABB4_0000, 1234), (0, 0), (0xFFE8_0000, 0x7FFF_FFFF),
         (0x0010_0000, 8), (0x0004_0000, 16),
@@ -66,6 +78,17 @@ fn main() {
     for n in [0u64, 1, 7, 8, 9] {
         o.push_str(&format!("{}{}", if n == 0 { " |||| " } else { " " }, obj_align8(n)));
     }
+    // SLOT ADDRESSING and the two cached-hash accessors. The slots are at 64
+    // and the string hash at 104, because both live at `a + HDR` and would
+    // otherwise be the same word.
+    for (k, i) in [0u32, 1, 2].iter().enumerate() {
+        o.push_str(&format!("{}{}", if k == 0 { " ||||| " } else { " " },
+                            obj_slot_addr(64, *i)));
+    }
+    obj_set_slot_raw(&sp, 64, 2, Value(0x0123_4567_89AB_CDEF));
+    o.push_str(&format!(" | {}", sp.read_u64(obj_slot_addr(64, 2))));
+    obj_set_str_hash(&sp, 104, 2125987055);
+    o.push_str(&format!(" | {}", obj_str_hash(&sp, 104)));
     println!("{}", o);
 }
 fn show(sp: &Space, a: Addr) -> String {
@@ -75,8 +98,18 @@ fn show(sp: &Space, a: Addr) -> String {
 }
 --java-head
     static final int TY_FWD = 1;
+    static final class Obj { static final long HDR = 8; }
     static final class Space {
-        final byte[] m = new byte[64];
+        final byte[] m = new byte[128];
+        long readU64(long a) {
+            int i = (int) a; long r = 0;
+            for (int k = 7; k >= 0; k--) r = (r << 8) | (m[i+k] & 0xFFL);
+            return r;
+        }
+        void writeU64(long a, long v) {
+            int i = (int) a;
+            for (int k = 0; k < 8; k++) m[i+k] = (byte) (v >>> (8 * k));
+        }
         int readU32(long a) {
             int i = (int) a;
             return (m[i] & 0xFF) | ((m[i+1] & 0xFF) << 8)
@@ -131,6 +164,14 @@ fn show(sp: &Space, a: Addr) -> String {
         for (int i = 0; i < ns.length; i++) {
             o.append(i == 0 ? " |||| " : " ").append(objAlign8(ns[i]));
         }
+        int[] idx = { 0, 1, 2 };
+        for (int k = 0; k < idx.length; k++) {
+            o.append(k == 0 ? " ||||| " : " ").append(objSlotAddr(64, idx[k]));
+        }
+        objSetSlotRaw(sp, 64, 2, 0x0123456789ABCDEFL);
+        o.append(" | ").append(sp.readU64(objSlotAddr(64, 2)));
+        objSetStrHash(sp, 104, 2125987055);
+        o.append(" | ").append(objStrHash(sp, 104));
         System.out.println(o);
     }
     static String show(Space sp, long a) {
@@ -139,9 +180,18 @@ fn show(sp: &Space, a: Addr) -> String {
              + (objStrAscii(sp, a) ? 1 : 0) + " " + objLen(sp, a);
     }
 --csharp-head
-    static class Obj { internal const int TyFwd = 1; }
+    static class Obj { internal const int TyFwd = 1; internal const long Hdr = 8; }
     internal sealed class Space {
-        internal readonly byte[] m = new byte[64];
+        internal readonly byte[] m = new byte[128];
+        internal long ReadU64(long a) {
+            int i = (int) a; long r = 0;
+            for (int k = 7; k >= 0; k--) r = (r << 8) | (long)(m[i+k] & 0xFF);
+            return r;
+        }
+        internal void WriteU64(long a, long v) {
+            int i = (int) a;
+            for (int k = 0; k < 8; k++) m[i+k] = (byte) ((ulong) v >> (8 * k));
+        }
         internal int ReadU32(long a) {
             int i = (int) a;
             return (m[i] & 0xFF) | ((m[i+1] & 0xFF) << 8)
@@ -198,6 +248,14 @@ fn show(sp: &Space, a: Addr) -> String {
         for (int i = 0; i < ns.Length; i++) {
             o.Append(i == 0 ? " |||| " : " ").Append(ObjAlign8(ns[i]));
         }
+        int[] idx = { 0, 1, 2 };
+        for (int k = 0; k < idx.Length; k++) {
+            o.Append(k == 0 ? " ||||| " : " ").Append(ObjSlotAddr(64, idx[k]));
+        }
+        ObjSetSlotRaw(sp, 64, 2, 0x0123456789ABCDEFL);
+        o.Append(" | ").Append(sp.ReadU64(ObjSlotAddr(64, 2)));
+        ObjSetStrHash(sp, 104, 2125987055);
+        o.Append(" | ").Append(ObjStrHash(sp, 104));
         System.Console.WriteLine(o.ToString());
     }
     static string Show(Space sp, long a) {
@@ -206,7 +264,7 @@ fn show(sp: &Space, a: Addr) -> String {
              + (ObjStrAscii(sp, a) ? 1 : 0) + " " + ObjLen(sp, a);
     }
 --expect
-171 5 1 0 1 1234 | 0 0 0 0 0 0 | 255 7 0 1 0 2147483647 | 0 0 1 0 0 8 | 0 0 0 0 1 16 || 7 0 0 0 0 99 | 7 5 0 0 0 99 | 7 0 0 0 0 99 | 7 0 1 1 1 99 | 7 0 0 1 1 99 | 7 0 0 0 1 99 | 7 0 0 0 0 99 ||| 1 8 | 1 736586891265 | 1 281474976710655 | 1 0 |||| 0 8 8 8 16
+171 5 1 0 1 1234 | 0 0 0 0 0 0 | 255 7 0 1 0 2147483647 | 0 0 1 0 0 8 | 0 0 0 0 1 16 || 7 0 0 0 0 99 | 7 5 0 0 0 99 | 7 0 0 0 0 99 | 7 0 1 1 1 99 | 7 0 0 1 1 99 | 7 0 0 0 1 99 | 7 0 0 0 0 99 ||| 1 8 | 1 736586891265 | 1 281474976710655 | 1 0 |||| 0 8 8 8 16 ||||| 72 80 88 | 81985529216486895 | 2125987055
 --expect-why
 DERIVED from the header layout stated at the top of `kin/objhdr.kin`: the tag
 is bits 31..24, the age 23..21, marked is bit 20, in-remset 19, ascii 18, and
@@ -280,11 +338,33 @@ becoming 16, and that 1 and 7 both reach 8, which is what separates
 
 `size-of` lives in `kin/objsize.drivers`, beside the `size-for` it calls.
 
+AFTER THE `|||||` ARE SLOT ADDRESSING AND THE CACHED HASH. Slots are taken
+at object 64 and the string hash at 104, because both live at `a + HDR` and at
+one address would be the same word.
+
+  slot-addr(64, 0..2)   72 80 88     past the header, eight bytes apart
+  set-slot-raw(64, 2)   81985529216486895   0x0123456789ABCDEF, read back raw
+  set-str-hash(104)     2125987055          stored and read back
+
+THE THREE SLOT ADDRESSES ARE TWO NUMBERS. Index 0 gives `HDR` itself, which is
+what catches a version that forgot to skip the header; the step from 72 to 80
+is the `* 8`, which catches one measured in slots rather than bytes. A single
+index would pin neither.
+
+THE HASH IS BELOW 2^31 ON PURPOSE. `str-hash` answers an `I32`, and a value
+with its high bit set prints as 3735928559 on native and -559038737 on both
+ports -- a disagreement about PRINTING rather than about the code, which would
+make this file fail for a reason it is not about. `kin/valhash.drivers` is
+where hash values with the high bit set belong.
+
 NOT COVERED HERE, and named rather than left quiet: `set-forward` and
 `forward-target` split a 48-bit address across both header words and need a
 u32-to-address widening that ZERO-extends. The three runtimes each spell that
 differently -- `as Addr`, `Integer.toUnsignedLong`, `(long)(uint)` -- and
 `to-addr` is not it, since on both ports it emits nothing and an `int` would
-widen with its sign. `slot-addr`, `slot`, `str-hash` and `set-str-hash` are still hand-written.
-`slot` in particular is NOT a clean port: native carries a debug assertion
-there about reading a forwarded pointer, which neither port has.
+widen with its sign. `slot` is the one that stays hand-written, and not for want of trying: native
+guards it with a `debug_assertions` check that a forwarded pointer is never
+read outside the collector, which kin cannot spell and neither port carries.
+Porting it would mean silently dropping an assertion that has caught real
+bugs. Its WRITE counterpart is here, which is why `sp-write-u64` exists in the
+vocabulary and `sp-read-u64` does not.

@@ -1961,6 +1961,13 @@
     ;; header WRITERS are the change that calls it.
     'sp-write-u32 (core/call {:rust "{0}.write_u32({1}, {2})"
                               :java "{0}.writeU32({1}, {2})" :csharp "{0}.WriteU32({1}, {2})"})
+    ;; The 64-bit write, for a SLOT. Its read counterpart is deliberately
+    ;; absent: `slot` is the only thing that would want one, and `slot` is not
+    ;; portable -- native guards it with a `debug_assertions` check that a
+    ;; forwarded pointer is never read outside the collector, which kin has no
+    ;; way to spell and neither port has at all.
+    'sp-write-u64 (core/call {:rust "{0}.write_u64({1}, {2} as u64)"
+                              :java "{0}.writeU64({1}, {2})" :csharp "{0}.WriteU64({1}, {2})"})
     'write-u64 (core/call {:rust "{0}.gc.sp.write_u64({1}, {2} as u64)"
                             :java "{0}.gc.sp.writeU64({1}, {2})"
                             :csharp "{0}.gc.sp.WriteU64({1}, {2})"})

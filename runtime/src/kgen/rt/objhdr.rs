@@ -129,3 +129,29 @@ pub fn obj_forward_target(sp: &Space, a: Addr) -> Addr {
 pub fn obj_align8(n: Addr) -> Addr {
     return (n + 7) & (!7);
 }
+/// Where slot `i` of this object lives: past the header, eight bytes each.
+/// 
+/// Every VALS-layout object addresses its contents through this, so the
+/// `* 8` and the `HDR` are the two numbers that decide what every slot
+/// read in the system points at.
+pub fn obj_slot_addr(a: Addr, i: u32) -> Addr {
+    return (a + crate::obj::HDR) + ((i as Addr) * 8);
+}
+/// Write a slot WITHOUT a write barrier -- the `raw` in the name.
+/// 
+/// Its read counterpart is NOT here. `slot` is guarded on native by a
+/// `debug_assertions` check that a forwarded pointer is never read outside
+/// the collector, which kin cannot spell and neither port carries, so
+/// porting it would mean silently dropping an assertion that has caught
+/// real bugs. One of the five is not like the others and this is it.
+pub fn obj_set_slot_raw(sp: &Space, a: Addr, i: u32, v: Value) {
+    sp.write_u64(obj_slot_addr(a, i), v.0 as u64);
+}
+/// A flat string caches its hash in the first word after the header.
+pub fn obj_str_hash(sp: &Space, a: Addr) -> u32 {
+    return sp.read_u32(a + crate::obj::HDR);
+}
+/// Store that cached hash.
+pub fn obj_set_str_hash(sp: &Space, a: Addr, h: u32) {
+    sp.write_u32(a + crate::obj::HDR, h);
+}

@@ -166,12 +166,12 @@ public final class Obj {
 
     public static void setStrAscii(Space sp, long a, boolean v) { com._3sln.flint.kgen.rt.Objhdr.objSetStrAscii(sp, a, v); }
 
-    public static int strHash(Space sp, long a) { return sp.readU32(a + HDR); }
-    public static void setStrHash(Space sp, long a, int h) { sp.writeU32(a + HDR, h); }
+    public static int strHash(Space sp, long a) { return com._3sln.flint.kgen.rt.Objhdr.objStrHash(sp, a); }
+    public static void setStrHash(Space sp, long a, int h) { com._3sln.flint.kgen.rt.Objhdr.objSetStrHash(sp, a, h); }
 
-    public static long slotAddr(long a, int i) { return a + HDR + (long) i * 8; }
+    public static long slotAddr(long a, int i) { return com._3sln.flint.kgen.rt.Objhdr.objSlotAddr(a, i); }
     public static long slot(Space sp, long a, int i) { return sp.readU64(slotAddr(a, i)); }
-    public static void setSlotRaw(Space sp, long a, int i, long v) { sp.writeU64(slotAddr(a, i), v); }
+    public static void setSlotRaw(Space sp, long a, int i, long v) { com._3sln.flint.kgen.rt.Objhdr.objSetSlotRaw(sp, a, i, v); }
 
     /// A forwarding pointer, packed into the header.
     ///

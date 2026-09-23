@@ -35,10 +35,11 @@
 ;; function shadows a word of the same name across the whole project.
 (ns flint.rt.objhdr
   (:require [flint.impl.rt :refer [defn return comment doc if != + bit-and bit-or
-                                   bit-not shl ushr ushr64 to-i32 addr-of-u32 TY_FWD
+                                   bit-not shl ushr ushr64 to-i32 to-addr
+                                   addr-of-u32 bits * TY_FWD HDR
+                                   Value
                                    Space Addr I32 U32 Bool
-                                   sp-read-u32 sp-write-u32]]
-))
+                                   sp-read-u32 sp-write-u32 sp-write-u64]]))
 
 (doc "The type tag: the top byte of word zero."
      ""
@@ -150,3 +151,29 @@
      "size is a BYTE count round and the one measured in slots does not.")
 (defn ^:pub ^Addr obj-align8 [^Addr n]
   (return (bit-and (+ n 7) (bit-not 7))))
+
+(doc "Where slot `i` of this object lives: past the header, eight bytes each."
+     ""
+     "Every VALS-layout object addresses its contents through this, so the"
+     "`* 8` and the `HDR` are the two numbers that decide what every slot"
+     "read in the system points at.")
+(defn ^:pub ^Addr obj-slot-addr [^Addr a ^I32 i]
+  (return (+ (+ a HDR) (* (to-addr i) 8))))
+
+(doc "Write a slot WITHOUT a write barrier -- the `raw` in the name."
+     ""
+     "Its read counterpart is NOT here. `slot` is guarded on native by a"
+     "`debug_assertions` check that a forwarded pointer is never read outside"
+     "the collector, which kin cannot spell and neither port carries, so"
+     "porting it would mean silently dropping an assertion that has caught"
+     "real bugs. One of the five is not like the others and this is it.")
+(defn ^:pub obj-set-slot-raw [^Space sp ^Addr a ^I32 i ^Value v]
+  (sp-write-u64 sp (obj-slot-addr a i) (bits v)))
+
+(doc "A flat string caches its hash in the first word after the header.")
+(defn ^:pub ^I32 obj-str-hash [^Space sp ^Addr a]
+  (return (sp-read-u32 sp (+ a HDR))))
+
+(doc "Store that cached hash.")
+(defn ^:pub obj-set-str-hash [^Space sp ^Addr a ^I32 h]
+  (sp-write-u32 sp (+ a HDR) h))

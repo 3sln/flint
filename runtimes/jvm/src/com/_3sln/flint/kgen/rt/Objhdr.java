@@ -125,4 +125,30 @@ public final class Objhdr {
     public static long objAlign8(long n) {
         return (n + 7) & (~7);
     }
+    /// Where slot `i` of this object lives: past the header, eight bytes each.
+    /// 
+    /// Every VALS-layout object addresses its contents through this, so the
+    /// `* 8` and the `HDR` are the two numbers that decide what every slot
+    /// read in the system points at.
+    public static long objSlotAddr(long a, int i) {
+        return (a + Obj.HDR) + (i * 8);
+    }
+    /// Write a slot WITHOUT a write barrier -- the `raw` in the name.
+    /// 
+    /// Its read counterpart is NOT here. `slot` is guarded on native by a
+    /// `debug_assertions` check that a forwarded pointer is never read outside
+    /// the collector, which kin cannot spell and neither port carries, so
+    /// porting it would mean silently dropping an assertion that has caught
+    /// real bugs. One of the five is not like the others and this is it.
+    public static void objSetSlotRaw(Space sp, long a, int i, long v) {
+        sp.writeU64(objSlotAddr(a, i), v);
+    }
+    /// A flat string caches its hash in the first word after the header.
+    public static int objStrHash(Space sp, long a) {
+        return sp.readU32(a + Obj.HDR);
+    }
+    /// Store that cached hash.
+    public static void objSetStrHash(Space sp, long a, int h) {
+        sp.writeU32(a + Obj.HDR, h);
+    }
 }

@@ -367,7 +367,7 @@ pub fn set_in_remset(sp: &Space, a: Addr, m: bool) {
 
 #[inline(always)]
 pub fn slot_addr(a: Addr, i: u32) -> Addr {
-    a + HDR + i as Addr * 8
+    crate::kgen::rt::objhdr::obj_slot_addr(a, i)
 }
 #[inline(always)]
 pub fn slot(sp: &Space, a: Addr, i: u32) -> Value {
@@ -394,7 +394,7 @@ pub fn slot(sp: &Space, a: Addr, i: u32) -> Value {
 /// through `Gc::set_slot` so the write barrier runs.
 #[inline(always)]
 pub fn set_slot_raw(sp: &Space, a: Addr, i: u32, v: Value) {
-    sp.write_u64(slot_addr(a, i), v.0)
+    crate::kgen::rt::objhdr::obj_set_slot_raw(sp, a, i, v)
 }
 
 #[inline]
@@ -408,11 +408,11 @@ pub fn str_bytes<'a>(sp: &'a Space, a: Addr) -> &'a [u8] {
 }
 #[inline]
 pub fn str_hash(sp: &Space, a: Addr) -> u32 {
-    sp.read_u32(a + HDR)
+    crate::kgen::rt::objhdr::obj_str_hash(sp, a)
 }
 #[inline]
 pub fn set_str_hash(sp: &Space, a: Addr, h: u32) {
-    sp.write_u32(a + HDR, h)
+    crate::kgen::rt::objhdr::obj_set_str_hash(sp, a, h)
 }
 #[inline]
 pub fn raw_bytes<'a>(sp: &'a Space, a: Addr) -> &'a [u8] {
