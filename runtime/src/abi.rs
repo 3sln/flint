@@ -62,7 +62,6 @@ pub static mut FLINT_IMAGE_DESC: [u32; 2] = [0, 0];
 pub static mut FLINT_BUILTIN_REGISTRY: [u32; 2] = [0, 0];
 
 static mut RT: Option<Rt> = None;
-static mut ARGS: Vec<(u32, u32)> = Vec::new();
 /// One owned buffer per argument. A single growing buffer would be simpler and
 /// wrong: reallocating it moves bytes the host has already written through a
 /// pointer we handed back. Each `Vec`'s own allocation is stable even as the
@@ -157,21 +156,18 @@ pub extern "C" fn flint_opaque_host_id(lo: u32, hi: u32) -> u32 {
 }
 
 
-#[no_mangle]
-pub extern "C" fn arg_push(ptr: u32, len: u32) {
-    unsafe {
-        ensure_arena();
-        let a = &mut *core::ptr::addr_of_mut!(ARGS);
-        a.push((ptr, len));
-    }
-}
+// `arg_push` used to live here, with a `static mut ARGS` behind it. It is gone:
+// it fed `flint_call`'s argument list and nothing else, so when that went
+// (`DECISIONS.md#calls-are-ports`) the vector it pushed onto was written by one
+// export and read by nobody. The port path never used it -- inbound bytes go
+// through `flint_in_alloc` and outbound through `OUT`.
 
 // `flint_main` used to live here: the module's ONE entry point, invoked by the
 // runtime with `[argv caps]` and its answer rendered into `OUT`. It is gone
 // (`DECISIONS.md#structured-ports` step 5). Nothing is called automatically, a module has
-// no distinguished function, and a caller names the one it wants -- through
-// `flint_call` below when the call cannot park, or as a message on the system
-// port when it can.
+// no distinguished function, and a caller names the one it wants -- as a
+// message on the system port, which is now the only way (`flint_call`, the
+// other half of that sentence, is gone too; see below).
 //
 // `flint_call` used to live here: a named call with encoded arguments in and an
 // encoded answer out, synchronous, no scheduler involved. It is gone

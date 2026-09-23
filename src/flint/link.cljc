@@ -173,10 +173,21 @@
   ;; `flint_call` is GONE (`DECISIONS.md#calls-are-ports`). It was the second
   ;; way into a sandbox -- a named call, synchronous, no scheduler -- and one
   ;; way in is worth more than the saving it bought a module that could not
-  ;; park. `arg_alloc`, `arg_push`, `out_ptr` and `out_len` stay: they are how a
-  ;; host writes an encoded value in and reads one back, which the port needs
-  ;; too.
-  ["arg_alloc" "arg_push" "out_ptr" "out_len"
+  ;; park. `out_ptr` and `out_len` stay because the PORT path reads outbound
+  ;; bytes through them (`sdks/esm/src/guest.js:76`, `:466`).
+  ;;
+  ;; `arg_push` went with it, 2026-09-23. This comment used to say it "stays --
+  ;; how a host writes an encoded value in", and that was measured and found
+  ;; false: inbound bytes go through `flint_in_alloc`, `arg_push` had ZERO
+  ;; callers in the tree, and the `static mut ARGS` behind it was written by
+  ;; one export and read by nobody.
+  ;;
+  ;; `arg_alloc` is still here and its only remaining callers load an IMAGE
+  ;; (`host/run.mjs:71`, `test/loader.clj`), which is `loader-exports` work --
+  ;; a production module that cannot be handed an image has no user for it.
+  ;; Moving it is a decision, not a cleanup, so it is written down rather than
+  ;; done.
+  ["arg_alloc" "out_ptr" "out_len"
    "image_desc_addr" "set_step_limit" "stat_steps" "set_memory_limit"
    "flint_opaque_host_id"])
 
