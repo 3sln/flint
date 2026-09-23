@@ -317,6 +317,10 @@
           ;; because the collector reads a header from `&mut self` methods of
           ;; `Gc` and cannot borrow the whole `Rt` to do it.
           "use crate::mem::Space;\n"
+          ;; `Gc` joined them when `kin/gcspace.kin` arrived, for the same
+          ;; reason: the young generation's predicates are asked from inside
+          ;; the collector, which holds a `Gc`.
+          "use crate::gc::Gc;\n"
           "use crate::obj::*;\n"
           "use crate::rt::Rt;\n"
           "use crate::seqs::*;\n"

@@ -61,18 +61,20 @@ public sealed class Gc : System.IDisposable {
         AddChunk(MIN_CHUNK);
     }
 
-    public bool IsYoung(long addr) { return (ulong)(addr - youngBase) < (ulong)(half * 2); }
+    public bool IsYoung(long addr) => global::_3sln.Flint.Kgen.Rt.Gcspace.GcIsYoung(this, addr);
     /// COLLECT AT EVERY ALLOCATION -- see the use in `Alloc`.
     public static readonly bool Stress =
         Environment.GetEnvironmentVariable("FLINT_GCSTRESS") != null;
-    bool InFrom(long addr) { return (ulong)(addr - from) < (ulong)half; }
+    bool InFrom(long addr) => global::_3sln.Flint.Kgen.Rt.Gcspace.GcInFrom(this, addr);
     /// Is `addr` in the part of the young half that is actually LIVE? An
     /// address that is young but past the bump pointer is a pre-collection
     /// address: the object moved and this is where it used to be. See
     /// `Rt.CheckPush` and the JVM's `inLiveHalf`.
-    public bool InLiveHalf(long addr) { return (ulong)(addr - from) < (ulong)(bump - from); }
-    public long YoungUsed() { return bump - from; }
-    public long HeapUsed() { return YoungUsed() + oldLive; }
+    public bool InLiveHalf(long addr) => global::_3sln.Flint.Kgen.Rt.Gcspace.GcInLiveHalf(this, addr);
+    public long YoungUsed() => global::_3sln.Flint.Kgen.Rt.Gcspace.GcYoungUsed(this);
+    /// NOT the same quantity as native's `Gc::heap_used`, which is the
+    /// FOOTPRINT. This is LIVE BYTES; native spells it inline in `note_peak`.
+    public long HeapUsed() => global::_3sln.Flint.Kgen.Rt.Gcspace.GcHeapUsed(this);
 
     // --- old space ---------------------------------------------------------
 

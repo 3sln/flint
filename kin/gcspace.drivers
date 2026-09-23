@@ -1,0 +1,109 @@
+--rust-head
+type Addr = u64;
+// THE FOUR BOUNDS AND THE OLD-SPACE TOTAL, and nothing else: every function
+// here is one subtraction and one unsigned comparison over them. Field NAMES
+// matter -- the vocabulary emits `{0}.young_base` and the two ports'
+// `{0}.youngBase` -- so the toy spells them the way each runtime does.
+struct Gc { young_base: Addr, half: Addr, from: Addr, bump: Addr, old_live: Addr }
+--rust
+fn main() {
+    // from-space is [1000, 1100), allocated up to 1050; to-space is
+    // [1100, 1200); the old generation is holding 500 bytes.
+    let gc = Gc { young_base: 1000, half: 100, from: 1000, bump: 1050, old_live: 500 };
+    let b = |x: bool| if x { 1 } else { 0 };
+    let mut o = String::new();
+    for a in [999u64, 1000, 1199, 1200] {
+        o.push_str(&format!("{}{}", if o.is_empty() { "" } else { " " }, b(gc_is_young(&gc, a))));
+    }
+    o.push_str(" |");
+    for a in [999u64, 1099, 1100] { o.push_str(&format!(" {}", b(gc_in_from(&gc, a)))); }
+    o.push_str(" |");
+    for a in [1049u64, 1050, 1099] { o.push_str(&format!(" {}", b(gc_in_live_half(&gc, a)))); }
+    println!("{} | {} {}", o, gc_young_used(&gc), gc_heap_used(&gc));
+}
+--java-head
+    static final class Gc { long youngBase, half, from, bump, oldLive; }
+--java
+    public static void main(String[] args) {
+        Gc gc = new Gc();
+        gc.youngBase = 1000; gc.half = 100; gc.from = 1000;
+        gc.bump = 1050; gc.oldLive = 500;
+        StringBuilder o = new StringBuilder();
+        long[] ys = { 999, 1000, 1199, 1200 };
+        for (int i = 0; i < ys.length; i++) {
+            o.append(i == 0 ? "" : " ").append(gcIsYoung(gc, ys[i]) ? 1 : 0);
+        }
+        o.append(" |");
+        for (long a : new long[]{ 999, 1099, 1100 }) o.append(' ').append(gcInFrom(gc, a) ? 1 : 0);
+        o.append(" |");
+        for (long a : new long[]{ 1049, 1050, 1099 }) o.append(' ').append(gcInLiveHalf(gc, a) ? 1 : 0);
+        System.out.println(o + " | " + gcYoungUsed(gc) + " " + gcHeapUsed(gc));
+    }
+--csharp-head
+    internal sealed class Gc {
+        internal long youngBase, half, from, bump, oldLive;
+    }
+--csharp
+    static void Main() {
+        var gc = new Gc();
+        gc.youngBase = 1000; gc.half = 100; gc.from = 1000;
+        gc.bump = 1050; gc.oldLive = 500;
+        var o = new StringBuilder();
+        long[] ys = { 999, 1000, 1199, 1200 };
+        for (int i = 0; i < ys.Length; i++) {
+            o.Append(i == 0 ? "" : " ").Append(GcIsYoung(gc, ys[i]) ? 1 : 0);
+        }
+        o.Append(" |");
+        foreach (long a in new long[]{ 999, 1099, 1100 }) o.Append(' ').Append(GcInFrom(gc, a) ? 1 : 0);
+        o.Append(" |");
+        foreach (long a in new long[]{ 1049, 1050, 1099 }) o.Append(' ').Append(GcInLiveHalf(gc, a) ? 1 : 0);
+        System.Console.WriteLine(o.ToString() + " | " + GcYoungUsed(gc) + " " + GcHeapUsed(gc));
+    }
+--expect
+0 1 1 0 | 0 1 0 | 1 0 0 | 50 550
+--expect-why
+DERIVED from the fixture, which is a semispace of two 100-byte halves:
+from-space is [1000, 1100), allocated up to 1050, to-space is [1100, 1200),
+and the old generation holds 500 bytes.
+
+`is-young` covers BOTH halves, which is what the `* 2` is for -- a young
+object is young whether it is still in from-space or has already been copied.
+
+  999 -> 0   one byte below the base
+  1000 -> 1  the base itself
+  1199 -> 1  the last byte of to-space
+  1200 -> 0  one past both halves
+
+THE 999 AND THE 1200 ARE THE WHOLE POINT OF `ult64`. The comparison is
+`(addr - young_base) <u (half * 2)`, and at 999 that subtraction WRAPS to
+2^64 - 1. Unsigned, it fails; SIGNED, -1 is less than 200 and the answer
+flips to 1. Rust cannot make that mistake because `Addr` is a `u64`, so this
+row separates the two ports from a correct implementation and native from
+nothing -- which is exactly why it is here and why `<` was not good enough.
+The `in-from` row repeats it at 999 for the same reason.
+
+  in-from   999 -> 0    1099 -> 1    1100 -> 0
+
+1100 is the boundary: it is the first byte of to-space, in the young
+generation and NOT in from-space, so a `<=` in place of `<` shows up here and
+nowhere else.
+
+`in-live-half` is the narrower question and the last row is why it exists
+separately:
+
+  1049 -> 1   the last allocated byte
+  1050 -> 0   the bump pointer itself, not yet handed out
+  1099 -> 0   inside from-space, PAST the bump
+
+1099 is in from-space and is not an object. A version that asked `in-from`
+would answer 1 and the collector would walk into unallocated bytes. That row
+is the difference between the two predicates stated as a test.
+
+`young-used` is 1050 - 1000 = 50 and `heap-used` is 50 + 500 = 550.
+
+NOT WHAT NATIVE CALLS `heap_used`, and the collision is worth stating here
+because it cost a wrong wiring once: native's `Gc::heap_used` is the
+FOOTPRINT, `old_capacity + half * 2`, and feeds the heap limit and the
+`stat_heap_used` export. The quantity generated here is LIVE BYTES, which
+both ports call `heapUsed` and which native spells inline inside `note_peak`.
+Two names one letter apart for two different numbers.

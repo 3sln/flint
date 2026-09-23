@@ -60,6 +60,18 @@
   Both ports name the class directly, having no such distinction to make."
   {:name 'Space :types {:rust "&Space" :java "Space" :csharp "Space"} :methods {}})
 
+(def Gc
+  "THE COLLECTOR'S STATE, passed as a value the way `Space` is.
+
+  The young generation's bounds live here -- `from`, `bump`, `half`,
+  `young-base` -- and the predicates over them are asked from inside the
+  collector, so they take the `Gc` rather than reaching it through an `Rt`.
+  Same reason as `Space`, one level up.
+
+  Rust takes it by SHARED reference: every predicate built on these fields
+  only reads them."
+  {:name 'Gc :types {:rust "&Gc" :java "Gc" :csharp "Gc"} :methods {}})
+
 (def Bool {:name 'Bool :types {:rust "bool" :java "boolean" :csharp "bool"} :methods {}})
 
 (def I64
@@ -326,6 +338,7 @@
 
 (def tags {'Rt Rt 'Value Value 'Cat Cat 'Ty Ty 'Bool Bool 'I32 I32 'I64 I64 'Cmp Cmp 'U32 U32 'RootIx RootIx
                'Space Space
+               'Gc Gc
                'Text Text 'StaticText StaticText 'Sink Sink 'Walk Walk 'Cps Cps
                'F64 F64 'Addr Addr 'Idx Idx 'Bits Bits 'Bytes Bytes
                'U32s U32s 'U64s U64s 'Values Values 'Layout Layout 'I32Buf I32Buf 'Flags Flags 'I32s I32s
@@ -1130,6 +1143,14 @@
     'wmul (core/call {:rust "{0}.wrapping_mul({1})"
                       :java "({0} * {1})"
                       :csharp "unchecked({0} * {1})"})
+    ;; WRAPPING SUBTRACTION, which the young-generation predicates are built
+    ;; on: `(addr - from) <u (half)` is in range exactly when `addr` is, and
+    ;; an address BELOW `from` is meant to wrap to something enormous rather
+    ;; than panic. Rust would panic in a debug build without this, which is
+    ;; why native already spells it `wrapping_sub` by hand.
+    'wsub (core/call {:rust "{0}.wrapping_sub({1})"
+                      :java "({0} - {1})"
+                      :csharp "unchecked({0} - {1})"})
     'wadd (core/call {:rust "{0}.wrapping_add({1})"
                       :java "({0} + {1})"
                       :csharp "unchecked({0} + {1})"})
@@ -1953,6 +1974,29 @@
     ;; words are 32 bits, so the 64-bit pair had no caller in prospect either.
     ;; `sp-write-u32` comes back with the header WRITERS, in the change that
     ;; calls it.
+    ;; UNSIGNED LESS-THAN AT 64 BITS. `<` is unsigned-aware at 32 only --
+    ;; `Integer.compareUnsigned` on the jvm -- and an ADDRESS comparison needs
+    ;; the wider one. Rust gets it free because `Addr` is a `u64`; both ports
+    ;; spell a `long` signed and have to say so.
+    'ult64 (core/call {:rust "({0} < {1})"
+                       :java "(Long.compareUnsigned({0}, {1}) < 0)"
+                       :csharp "((ulong) {0} < (ulong) {1})"}
+                      {:tag Bool})
+    ;; THE `Gc`'S YOUNG-GENERATION BOUNDS, read. The names line up across all
+    ;; three runtimes, which is why these are five one-line words and not a
+    ;; negotiation.
+    'gc-young-base (core/call {:rust "{0}.young_base"
+                               :java "{0}.youngBase" :csharp "{0}.youngBase"}
+                              {:tag Addr})
+    'gc-half (core/call {:rust "{0}.half" :java "{0}.half" :csharp "{0}.half"}
+                        {:tag Addr})
+    'gc-from (core/call {:rust "{0}.from" :java "{0}.from" :csharp "{0}.from"}
+                        {:tag Addr})
+    'gc-bump (core/call {:rust "{0}.bump" :java "{0}.bump" :csharp "{0}.bump"}
+                        {:tag Addr})
+    'gc-old-live (core/call {:rust "{0}.old_live"
+                             :java "{0}.oldLive" :csharp "{0}.oldLive"}
+                            {:tag Addr})
     'sp-read-u32 (core/call {:rust "{0}.read_u32({1})"
                              :java "{0}.readU32({1})" :csharp "{0}.ReadU32({1})"}
                             {:tag I32})

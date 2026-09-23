@@ -1,0 +1,62 @@
+;; THE YOUNG GENERATION'S BOUNDS, asked five ways.
+;;
+;; A semispace collector keeps two halves and a bump pointer. `young-base` is
+;; where the pair starts, `half` is the size of one of them, `from` is the
+;; live half's base and `bump` is where the next object goes. Everything below
+;; is one subtraction and one comparison over those four.
+;;
+;; ROOTED AT THE `Gc`, for the same reason `objhdr.kin` is rooted at the
+;; `Space`: these are asked from inside the collector, which holds a `Gc` and
+;; cannot borrow the whole `Rt` to reach one.
+;;
+;; THE WRAP IS THE POINT, not an optimisation. `(addr - from) <u half` is true
+;; exactly when `from <= addr < from + half`, because an address BELOW `from`
+;; wraps to something enormous and fails the comparison. That is one
+;; subtraction and one branch where the direct form is two branches -- and it
+;; is why `wsub` had to exist: Rust panics on an overflowing `-` in a debug
+;; build, which is why native already wrote `wrapping_sub` by hand.
+;;
+;; `ult64` HAD TO EXIST TOO. The comparison is UNSIGNED and 64 bits wide;
+;; kin's `<` is unsigned-aware at 32 bits only. Rust gets it free because
+;; `Addr` is a `u64`, and both ports spell a `long` signed and must say so.
+(ns flint.rt.gcspace
+  (:require [flint.impl.rt :refer [defn return comment doc + - *
+                                   wsub ult64
+                                   gc-young-base gc-half gc-from gc-bump
+                                   gc-old-live
+                                   Gc Addr Bool]]))
+
+(doc "Is `addr` in the young generation -- EITHER half of it?"
+     ""
+     "Both halves, which is what `* 2` is doing: a young object is young"
+     "whether it is in from-space or has already been copied to to-space.")
+(defn ^:pub ^Bool gc-is-young [^Gc gc ^Addr addr]
+  (return (ult64 (wsub addr (gc-young-base gc)) (* (gc-half gc) 2))))
+
+(doc "Is `addr` in from-space -- the half being collected out of?")
+(defn ^:pub ^Bool gc-in-from [^Gc gc ^Addr addr]
+  (return (ult64 (wsub addr (gc-from gc)) (gc-half gc))))
+
+(doc "Is `addr` in the part of from-space that has been ALLOCATED?"
+     ""
+     "Narrower than `gc-in-from`: that one asks about the half, this one"
+     "about the half up to the bump pointer. An address between `bump` and"
+     "the end of the half is in from-space and is not an object."
+     ""
+     "Native wrote this as `addr >= from && addr < bump` where both ports"
+     "used the wrap. The two agree whenever `from <= bump`, which a bump"
+     "pointer guarantees, and the wrap is the form that generates -- one"
+     "subtraction and one branch on all three rather than two branches.")
+(defn ^:pub ^Bool gc-in-live-half [^Gc gc ^Addr addr]
+  (return (ult64 (wsub addr (gc-from gc)) (wsub (gc-bump gc) (gc-from gc)))))
+
+(doc "How much of the live half has been handed out.")
+(defn ^:pub ^Addr gc-young-used [^Gc gc]
+  (return (- (gc-bump gc) (gc-from gc))))
+
+(doc "Young plus old: everything the heap is holding."
+     ""
+     "The old generation's figure is a RUNNING TOTAL the collector maintains"
+     "rather than a subtraction, because the old space is not a bump region.")
+(defn ^:pub ^Addr gc-heap-used [^Gc gc]
+  (return (+ (gc-young-used gc) (gc-old-live gc))))

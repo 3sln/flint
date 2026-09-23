@@ -8,6 +8,7 @@ use crate::eq::*;
 use crate::map::*;
 use crate::mem::Addr;
 use crate::mem::Space;
+use crate::gc::Gc;
 use crate::obj::*;
 use crate::rt::Rt;
 use crate::seqs::*;

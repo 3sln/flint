@@ -929,20 +929,25 @@ impl Gc {
     /// barrier and the generational invariant check.
     #[cfg(feature = "diagnostics")]
     #[inline(always)]
+    /// GENERATED as `gc_in_live_half`. This read `addr >= self.from && addr
+    /// < self.bump` where both ports used the WRAP -- `(addr - from) <u (bump
+    /// - from)` -- which agrees whenever `from <= bump`, as a bump pointer
+    /// guarantees. The wrap is the form that generates: one subtraction and
+    /// one branch on all three rather than two branches here.
     pub fn in_live_half(&self, addr: Addr) -> bool {
-        addr >= self.from && addr < self.bump
+        crate::kgen::rt::gcspace::gc_in_live_half(self, addr)
     }
     #[inline(always)]
     pub fn is_young(&self, addr: Addr) -> bool {
-        addr.wrapping_sub(self.young_base) < self.half * 2
+        crate::kgen::rt::gcspace::gc_is_young(self, addr)
     }
     #[inline(always)]
     fn in_from(&self, addr: Addr) -> bool {
-        addr.wrapping_sub(self.from) < self.half
+        crate::kgen::rt::gcspace::gc_in_from(self, addr)
     }
 
     pub fn young_used(&self) -> Addr {
-        self.bump - self.from
+        crate::kgen::rt::gcspace::gc_young_used(self)
     }
 
     /// Would allocating `size` bytes collect?
@@ -965,7 +970,14 @@ impl Gc {
     /// `old_live` is the truth or a ceiling. Only the truthful samples reach
     /// `peak_live_major`; every sample reaches `peak_live`.
     fn note_peak(&mut self, major: bool) {
-        let live = self.old_live as u64 + self.young_used() as u64;
+        // `gc_heap_used` IS THIS EXPRESSION, generated. Note that it is NOT
+        // `Gc::heap_used` below, which is a different quantity wearing a
+        // confusingly similar name -- the FOOTPRINT, `old_capacity + half *
+        // 2`, for the heap limit and the `stat_heap_used` export. Both ports
+        // spell the live-bytes one `heapUsed`, which is why the generated
+        // function carries that name and native's own `heap_used` does not
+        // delegate to it.
+        let live = crate::kgen::rt::gcspace::gc_heap_used(self) as u64;
         if live > self.stats.peak_live {
             self.stats.peak_live = live;
         }

@@ -35,7 +35,12 @@ public final class Gc {
 
     public final Space sp;
 
-    long youngBase, half, from, to, toBump, bump, fromEnd;
+    /// PUBLIC because the generated tree reads them. `kin/gcspace.kin` is
+    /// emitted into `com._3sln.flint.kgen.rt`, a different package by
+    /// construction, and Java has no equivalent of native's `pub(crate)` --
+    /// so the same four bounds that are crate-visible there have to be public
+    /// here. `sp` above is public for exactly this reason already.
+    public long youngBase, half, from, to, toBump, bump, fromEnd;
 
     /// Old-space chunks, and the free lists that carve them up.
     final ArrayList<long[]> oldChunks = new ArrayList<>();   // {addr, len}
@@ -76,19 +81,22 @@ public final class Gc {
         addChunk(MIN_CHUNK);
     }
 
-    public boolean isYoung(long addr) { return Long.compareUnsigned(addr - youngBase, half * 2) < 0; }
+    public boolean isYoung(long addr) { return com._3sln.flint.kgen.rt.Gcspace.gcIsYoung(this, addr); }
 
     /// Is `addr` in the half that is currently live?
     ///
     /// The other half of the stale-value check below. A young address outside
     /// `[from, bump)` is in the DEAD half: it was valid before the last
     /// collection and is not now.
-    public boolean inLiveHalf(long addr) {
-        return Long.compareUnsigned(addr - from, bump - from) < 0;
-    }
-    boolean inFrom(long addr) { return Long.compareUnsigned(addr - from, half) < 0; }
-    public long youngUsed() { return bump - from; }
-    public long heapUsed() { return youngUsed() + oldLive; }
+    public boolean inLiveHalf(long addr) { return com._3sln.flint.kgen.rt.Gcspace.gcInLiveHalf(this, addr); }
+    boolean inFrom(long addr) { return com._3sln.flint.kgen.rt.Gcspace.gcInFrom(this, addr); }
+    public long youngUsed() { return com._3sln.flint.kgen.rt.Gcspace.gcYoungUsed(this); }
+    /// NOT the same quantity as native's `Gc::heap_used`, which is the
+    /// FOOTPRINT -- `old_capacity + half * 2` -- for the heap limit and the
+    /// `stat_heap_used` export. This is LIVE BYTES, and native spells it
+    /// inline inside `note_peak`. Two names one letter apart for two
+    /// different numbers; the generated one carries this meaning.
+    public long heapUsed() { return com._3sln.flint.kgen.rt.Gcspace.gcHeapUsed(this); }
 
     // --- old space ---------------------------------------------------------
 
