@@ -406,9 +406,16 @@ GMJS
   # than the ports hold each other. If this row fails, a runtime is doing
   # different work, and the number in the failure is where to start.
   #
-  # IT IS FAILING, AND HERE IS WHAT HAS BEEN RULED OUT.
+  # IT IS PASSING, AS OF 2026-09-23. The row reads `gap -eq 0` and prints
+  # "to the instruction: 143035"; `bin/test` ran it 62/62 green on the same
+  # day. What follows was written while it was RED and is kept for the method,
+  # which is the part that transfers -- splitting `gasmeter/work` into its
+  # seven parts and measuring each as `big - small` is what localised both the
+  # 1 536 and the 174. The banner said IT IS FAILING until this edit, which is
+  # worse than an out-of-date number: a comment telling the next reader that a
+  # green row is expected to be red is permission to skim past a real one.
   #
-  # RE-DIAGNOSED 2026-09-18, AND THE TABLE BELOW IS THE OLD ONE. It was written
+  # THE HISTORY, AND THE TABLE BELOW IS THE OLD ONE. It was written
   # when this row read 1 536; it reads 34 now, and the reading it supports --
   # "spread across all seven in proportion to the work" -- turned out to be
   # under-determined rather than wrong. Split against SLICES instead of against
