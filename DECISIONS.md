@@ -11091,18 +11091,29 @@ all. A divergence between them could sit behind a red that is about something
 else indefinitely, and one did. They are asked first now. A check that only
 runs when an unrelated check passes is a check you do not have.
 
-**What is left: 34, about 1 step per slice.** A precise target rather than a
-mystery, and the shape suggests where to look -- `aot.rs`'s `aot_tick` already
+**What was left at the time: 34, about 1 step per slice.** A precise target
+rather than a mystery, and the shape suggests where to look -- `aot.rs`'s `aot_tick` already
 documents a one-instruction accounting difference at exactly this boundary
 ("the interpreter alone charges it twice: once at the tick that trips, once
 after the resume"). Not chased here, and NOT assumed: that is a hypothesis with
 a measurement attached to it, which is the only thing that would settle it.
 
-### The 34 IS a double charge at the slice boundary. The one-line fix is not landable yet, 2026-09-19
+### The 34 IS a double charge at the slice boundary. FIXED, and this heading said otherwise until 2026-09-23
 
-The hypothesis above is confirmed, the line is identified, and the change is
-NOT in the tree. What blocks it is written down at the end, because it is the
-part the next attempt needs.
+**THE CHANGE IS IN THE TREE.** `vm.rs:336` tests `rt.steps >= rt.checkpoint`
+and `vm.rs:339` charges afterwards -- test first, charge second, exactly the
+swap prescribed below -- and `tick` carries the whole account in a comment.
+The gasmeter row it was blocking reads `the same program costs the same gas,
+to the instruction: 143035`, and `bin/conform-hosts` ran 365 rows with zero
+failures on 2026-09-23.
+
+Everything under this heading is kept as the DIAGNOSIS, which is the part
+worth having: the measurement that separated "proportional to work" from
+"equal to the slice count" is what named the mechanism, and the same split
+would name the next one. What is not worth having is a heading that says a
+landed fix is not landable, which is why it has been rewritten rather than
+appended to -- the same correction this file already records for
+`conform-hosts`, whose banner said IT IS FAILING above a row that passes.
 
 **Measured on a program that allocates nothing**, so allocation billing cannot
 confound it -- a bare counting loop at six sizes, differences taken against the
