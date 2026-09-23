@@ -20,15 +20,16 @@ Val 7, Gc 4. That view calls a method portable only when EVERY call in it is a
 kin vocabulary word, a function kin already generates, or a same-file helper
 that is itself portable.
 
-*Do not publish the `--rank` table's `in 3` column for this.* It says 213 and
-it is the weaker of the two views: `rank()` still classifies with `BLOCK`, the
+*Do not publish the `--rank` table's `in 3` column for this.* It says 165 --
+213 before the atomics rule below was added -- and it is the weaker of the two
+views: `rank()` still classifies with `BLOCK`, the
 blocklist, while `unportable_calls` -- the allowlist written to replace it, in
 the same file -- is what `--calls` uses. The file already says the blocklist
 "is always one construct behind whatever the code does next" and names
 `AtomicInteger.compareAndSet` as one of six constructs it missed.
 
 `Parallel` is what that costs, and it is worth keeping as the example.
-`--rank` scores it 42 of 63 lines portable, 67%, the densest area in the
+`--rank` scored it 42 of 63 lines portable, 67%, the densest area in the
 table, and its four biggest -- `enter`, `lockAlloc`, `lockIntern`, `register`
 -- are nothing but host atomics: `stop.get()`, `active.incrementAndGet()`,
 `alloc.compareAndSet(0, 1)`, `Thread.onSpinWait()`. `BLOCK` has no pattern for
@@ -36,6 +37,11 @@ any of it, so it all reads as clean. kin's only atomic words are `cas-slot`,
 `cas-slot-barriered` and `slot-atomic`, and every one of them addresses a slot
 on a flint heap object, not a host counter. `Parallel` does not appear in
 `--calls` at all, which is the right answer.
+
+That specific hole is now closed -- `BLOCK` gained an atomics rule, the rank
+reads which FIELDS are atomics from their declarations, and `Parallel` sits on
+the never-list beside `Gc` and `Snap` at 0%. The two views still disagree, 165
+against 75, so the warning above stands.
 
 **Design:** `DECISIONS.md#kin`. **Tool:** `kin/`.
 
