@@ -188,7 +188,7 @@
   ;; Moving it is a decision, not a cleanup, so it is written down rather than
   ;; done.
   ["arg_alloc" "out_ptr" "out_len"
-   "image_desc_addr" "set_step_limit" "stat_steps" "set_memory_limit"
+   "set_step_limit" "stat_steps" "set_memory_limit"
    "flint_opaque_host_id"])
 
 (def loader-exports
