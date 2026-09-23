@@ -54,4 +54,45 @@ public static class Objhdr {
     public static bool ObjStrAscii(Space sp, long a) {
         return (sp.ReadU32(a) & (1 << 18)) != 0;
     }
+    /// Stamp a fresh header: the type in the top byte of word zero, the length
+    /// in word one, and EVERY OTHER FIELD CLEARED -- age zero, unmarked, not in
+    /// the remset, not ascii. That is what makes it a `write` rather than a
+    /// `set`: it does not read the old word, so a recycled address cannot
+    /// inherit a mark or an age from whatever lived there before.
+    public static void ObjWriteHeader(Space sp, long a, int ty, int len) {
+        sp.WriteU32(a, ty << 24);
+        sp.WriteU32(a + 4, len);
+    }
+    /// Set the age, bits 23..21, leaving every other field alone.
+    /// 
+    /// The age is masked to 7 BEFORE it is shifted in, so a caller passing 8
+    /// cannot write into the type tag above it, and the destination is cleared
+    /// with `~(7 << 21)` first so the old age does not OR through.
+    public static void ObjSetAge(Space sp, long a, int age) {
+        sp.WriteU32(a, (sp.ReadU32(a) & (~(7 << 21))) | ((age & 7) << 21));
+    }
+    /// Set or clear the mark bit, bit 20.
+    public static void ObjSetMarked(Space sp, long a, bool m) {
+        if (m) {
+            sp.WriteU32(a, sp.ReadU32(a) | (1 << 20));
+        } else {
+            sp.WriteU32(a, sp.ReadU32(a) & (~(1 << 20)));
+        }
+    }
+    /// Set or clear the remembered-set bit, bit 19.
+    public static void ObjSetInRemset(Space sp, long a, bool m) {
+        if (m) {
+            sp.WriteU32(a, sp.ReadU32(a) | (1 << 19));
+        } else {
+            sp.WriteU32(a, sp.ReadU32(a) & (~(1 << 19)));
+        }
+    }
+    /// Set or clear the ascii bit, bit 18.
+    public static void ObjSetStrAscii(Space sp, long a, bool v) {
+        if (v) {
+            sp.WriteU32(a, sp.ReadU32(a) | (1 << 18));
+        } else {
+            sp.WriteU32(a, sp.ReadU32(a) & (~(1 << 18)));
+        }
+    }
 }

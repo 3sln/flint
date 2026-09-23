@@ -11,14 +11,18 @@ impl Space {
         let i = a as usize;
         u32::from_le_bytes([self.m[i], self.m[i + 1], self.m[i + 2], self.m[i + 3]])
     }
-    fn write_u32(&mut self, a: Addr, v: u32) {
+    // `&self`, matching the real `Space`: it is an arena whose interior
+    // mutability lives below this level, which is what lets one `Space` tag
+    // serve both the readers and the writers.
+    fn write_u32(&self, a: Addr, v: u32) {
         let i = a as usize;
-        self.m[i..i + 4].copy_from_slice(&v.to_le_bytes());
+        let p = self.m.as_ptr() as *mut u8;
+        unsafe { core::ptr::copy_nonoverlapping(v.to_le_bytes().as_ptr(), p.add(i), 4) };
     }
 }
 --rust
 fn main() {
-    let mut sp = Space { m: vec![0u8; 64] };
+    let sp = Space { m: vec![0u8; 64] };
     let cases: [(u32, u32); 5] = [
         (0xABB4_0000, 1234), (0, 0), (0xFFE8_0000, 0x7FFF_FFFF),
         (0x0010_0000, 8), (0x0004_0000, 16),
@@ -32,12 +36,28 @@ fn main() {
     for i in 0..cases.len() {
         let a = (i * 8) as Addr;
         if i > 0 { o.push_str(" | "); }
-        o.push_str(&format!("{} {} {} {} {} {}",
-            obj_ty(&sp, a), obj_age(&sp, a),
-            obj_marked(&sp, a) as u32, obj_in_remset(&sp, a) as u32,
-            obj_str_ascii(&sp, a) as u32, obj_len(&sp, a)));
+        o.push_str(&show(&sp, a));
     }
+    // THE WRITERS, over ONE address that starts dirty. Every step below is a
+    // read-modify-write, so each observation depends on the one before it.
+    let w: Addr = 40;
+    sp.write_u32(w, 0xFFFF_FFFF);
+    sp.write_u32(w + 4, 0xFFFF_FFFF);
+    obj_write_header(&sp, w, 7, 99);          o.push_str(&format!(" || {}", show(&sp, w)));
+    obj_set_age(&sp, w, 5);                   o.push_str(&format!(" | {}", show(&sp, w)));
+    obj_set_age(&sp, w, 8);                   o.push_str(&format!(" | {}", show(&sp, w)));
+    obj_set_in_remset(&sp, w, true);
+    obj_set_str_ascii(&sp, w, true);
+    obj_set_marked(&sp, w, true);             o.push_str(&format!(" | {}", show(&sp, w)));
+    obj_set_marked(&sp, w, false);            o.push_str(&format!(" | {}", show(&sp, w)));
+    obj_set_in_remset(&sp, w, false);         o.push_str(&format!(" | {}", show(&sp, w)));
+    obj_set_str_ascii(&sp, w, false);         o.push_str(&format!(" | {}", show(&sp, w)));
     println!("{}", o);
+}
+fn show(sp: &Space, a: Addr) -> String {
+    format!("{} {} {} {} {} {}",
+        obj_ty(sp, a), obj_age(sp, a), obj_marked(sp, a) as u32,
+        obj_in_remset(sp, a) as u32, obj_str_ascii(sp, a) as u32, obj_len(sp, a))
 }
 --java-head
     static final class Space {
@@ -66,13 +86,28 @@ fn main() {
         for (int i = 0; i < cases.length; i++) {
             long a = i * 8L;
             if (i > 0) o.append(" | ");
-            o.append(objTy(sp, a)).append(' ').append(objAge(sp, a)).append(' ')
-             .append(objMarked(sp, a) ? 1 : 0).append(' ')
-             .append(objInRemset(sp, a) ? 1 : 0).append(' ')
-             .append(objStrAscii(sp, a) ? 1 : 0).append(' ')
-             .append(objLen(sp, a));
+            o.append(show(sp, a));
         }
+        // THE WRITERS, over ONE address that starts dirty. Every step is a
+        // read-modify-write, so each observation depends on the one before.
+        long w = 40;
+        sp.writeU32(w, 0xFFFFFFFF);
+        sp.writeU32(w + 4, 0xFFFFFFFF);
+        objWriteHeader(sp, w, 7, 99);   o.append(" || ").append(show(sp, w));
+        objSetAge(sp, w, 5);            o.append(" | ").append(show(sp, w));
+        objSetAge(sp, w, 8);            o.append(" | ").append(show(sp, w));
+        objSetInRemset(sp, w, true);
+        objSetStrAscii(sp, w, true);
+        objSetMarked(sp, w, true);      o.append(" | ").append(show(sp, w));
+        objSetMarked(sp, w, false);     o.append(" | ").append(show(sp, w));
+        objSetInRemset(sp, w, false);   o.append(" | ").append(show(sp, w));
+        objSetStrAscii(sp, w, false);   o.append(" | ").append(show(sp, w));
         System.out.println(o);
+    }
+    static String show(Space sp, long a) {
+        return objTy(sp, a) + " " + objAge(sp, a) + " "
+             + (objMarked(sp, a) ? 1 : 0) + " " + (objInRemset(sp, a) ? 1 : 0) + " "
+             + (objStrAscii(sp, a) ? 1 : 0) + " " + objLen(sp, a);
     }
 --csharp-head
     internal sealed class Space {
@@ -103,16 +138,31 @@ fn main() {
         for (int i = 0; i < cases.Length; i++) {
             long a = i * 8L;
             if (i > 0) o.Append(" | ");
-            o.Append(ObjTy(sp, a)).Append(' ').Append(ObjAge(sp, a)).Append(' ')
-             .Append(ObjMarked(sp, a) ? 1 : 0).Append(' ')
-             .Append(ObjInRemset(sp, a) ? 1 : 0).Append(' ')
-             .Append(ObjStrAscii(sp, a) ? 1 : 0).Append(' ')
-             .Append(ObjLen(sp, a));
+            o.Append(Show(sp, a));
         }
+        // THE WRITERS, over ONE address that starts dirty. Every step is a
+        // read-modify-write, so each observation depends on the one before.
+        long w = 40;
+        sp.WriteU32(w, unchecked((int) 0xFFFFFFFF));
+        sp.WriteU32(w + 4, unchecked((int) 0xFFFFFFFF));
+        ObjWriteHeader(sp, w, 7, 99);   o.Append(" || ").Append(Show(sp, w));
+        ObjSetAge(sp, w, 5);            o.Append(" | ").Append(Show(sp, w));
+        ObjSetAge(sp, w, 8);            o.Append(" | ").Append(Show(sp, w));
+        ObjSetInRemset(sp, w, true);
+        ObjSetStrAscii(sp, w, true);
+        ObjSetMarked(sp, w, true);      o.Append(" | ").Append(Show(sp, w));
+        ObjSetMarked(sp, w, false);     o.Append(" | ").Append(Show(sp, w));
+        ObjSetInRemset(sp, w, false);   o.Append(" | ").Append(Show(sp, w));
+        ObjSetStrAscii(sp, w, false);   o.Append(" | ").Append(Show(sp, w));
         System.Console.WriteLine(o.ToString());
     }
+    static string Show(Space sp, long a) {
+        return ObjTy(sp, a) + " " + ObjAge(sp, a) + " "
+             + (ObjMarked(sp, a) ? 1 : 0) + " " + (ObjInRemset(sp, a) ? 1 : 0) + " "
+             + (ObjStrAscii(sp, a) ? 1 : 0) + " " + ObjLen(sp, a);
+    }
 --expect
-171 5 1 0 1 1234 | 0 0 0 0 0 0 | 255 7 0 1 0 2147483647 | 0 0 1 0 0 8 | 0 0 0 0 1 16
+171 5 1 0 1 1234 | 0 0 0 0 0 0 | 255 7 0 1 0 2147483647 | 0 0 1 0 0 8 | 0 0 0 0 1 16 || 7 0 0 0 0 99 | 7 5 0 0 0 99 | 7 0 0 0 0 99 | 7 0 1 1 1 99 | 7 0 0 1 1 99 | 7 0 0 0 1 99 | 7 0 0 0 0 99
 --expect-why
 DERIVED from the header layout stated at the top of `kin/objhdr.kin`: the tag
 is bits 31..24, the age 23..21, marked is bit 20, in-remset 19, ascii 18, and
@@ -146,7 +196,41 @@ the three targets stop agreeing about how to PRINT it -- native's `u32` says
 this file is generated for and not of the generated code, so the probe stays
 below the boundary and the tag records the fact instead.
 
-NOT COVERED HERE, and named rather than left quiet: the WRITERS
-(`write-header`, `set-age`, `set-marked`, `set-str-ascii`, `set-forward`) and
-`forward-target`, `align8` and `slot-addr` are all still hand-written in the
-three runtimes. This file is the readers only.
+AFTER THE `||` ARE THE WRITERS, over ONE address that starts with both words
+set to all ones. Every step is a read-modify-write, so each group depends on
+the one before it, and a writer that clobbered a neighbouring field would show
+up in a LATER group rather than its own.
+
+  write-header(7, 99)   7 0 0 0 0 99   over 0xFFFFFFFF / 0xFFFFFFFF
+  set-age(5)            7 5 0 0 0 99   the tag survives
+  set-age(8)            7 0 0 0 0 99   8 & 7 = 0, and the tag still survives
+  set-marked(true)      7 0 1 1 1 99   remset and ascii were set first
+  set-marked(false)     7 0 0 1 1 99   the neighbours survive
+  set-in-remset(false)  7 0 0 0 1 99
+  set-str-ascii(false)  7 0 0 0 0 99
+
+THE FIRST GROUP IS WHY `write-header` IS NOT A `set`. It runs over a word with
+every bit set -- a recycled address -- and must answer with every field but
+the type CLEAR. A version that ORed its type in, or that read the old word
+first, would inherit an age of 7 and all three flags from whatever lived there
+before, and no later group would notice because they all set their own field
+explicitly.
+
+THE THIRD GROUP IS THE AGE MASK ON THE WRITE SIDE. `set-age(8)` must answer 0,
+not 8: eight does not fit in three bits, and a version that shifted before
+masking would write a 1 into bit 24 -- the bottom of the TYPE TAG -- turning
+type 7 into type 6 while the age still read 0. The group asserts the tag as
+well as the age for exactly that reason.
+
+GROUPS FOUR THROUGH SEVEN CLEAR ONE BIT AT A TIME with both neighbours set,
+which is the arrangement that catches an off-by-one in a clear mask. `~(1 <<
+20)` written as `~(1 << 19)` leaves group five looking correct -- marked does
+go false -- and shows up only as the remset bit vanishing a step early.
+
+NOT COVERED HERE, and named rather than left quiet: `set-forward` and
+`forward-target` split a 48-bit address across both header words and need a
+u32-to-address widening that ZERO-extends. The three runtimes each spell that
+differently -- `as Addr`, `Integer.toUnsignedLong`, `(long)(uint)` -- and
+`to-addr` is not it, since on both ports it emits nothing and an `int` would
+widen with its sign. `align8`, `slot-addr` and `size-of` are also still
+hand-written.

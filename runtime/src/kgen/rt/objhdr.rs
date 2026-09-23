@@ -56,3 +56,44 @@ pub fn obj_in_remset(sp: &Space, a: Addr) -> bool {
 pub fn obj_str_ascii(sp: &Space, a: Addr) -> bool {
     return (sp.read_u32(a) & (1 << 18)) != 0;
 }
+/// Stamp a fresh header: the type in the top byte of word zero, the length
+/// in word one, and EVERY OTHER FIELD CLEARED -- age zero, unmarked, not in
+/// the remset, not ascii. That is what makes it a `write` rather than a
+/// `set`: it does not read the old word, so a recycled address cannot
+/// inherit a mark or an age from whatever lived there before.
+pub fn obj_write_header(sp: &Space, a: Addr, ty: u32, len: u32) {
+    sp.write_u32(a, ty << 24);
+    sp.write_u32(a + 4, len);
+}
+/// Set the age, bits 23..21, leaving every other field alone.
+/// 
+/// The age is masked to 7 BEFORE it is shifted in, so a caller passing 8
+/// cannot write into the type tag above it, and the destination is cleared
+/// with `~(7 << 21)` first so the old age does not OR through.
+pub fn obj_set_age(sp: &Space, a: Addr, age: u32) {
+    sp.write_u32(a, (sp.read_u32(a) & (!(7 << 21))) | ((age & 7) << 21));
+}
+/// Set or clear the mark bit, bit 20.
+pub fn obj_set_marked(sp: &Space, a: Addr, m: bool) {
+    if m {
+        sp.write_u32(a, sp.read_u32(a) | (1 << 20));
+    } else {
+        sp.write_u32(a, sp.read_u32(a) & (!(1 << 20)));
+    }
+}
+/// Set or clear the remembered-set bit, bit 19.
+pub fn obj_set_in_remset(sp: &Space, a: Addr, m: bool) {
+    if m {
+        sp.write_u32(a, sp.read_u32(a) | (1 << 19));
+    } else {
+        sp.write_u32(a, sp.read_u32(a) & (!(1 << 19)));
+    }
+}
+/// Set or clear the ascii bit, bit 18.
+pub fn obj_set_str_ascii(sp: &Space, a: Addr, v: bool) {
+    if v {
+        sp.write_u32(a, sp.read_u32(a) | (1 << 18));
+    } else {
+        sp.write_u32(a, sp.read_u32(a) & (!(1 << 18)));
+    }
+}

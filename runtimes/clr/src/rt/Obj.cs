@@ -99,31 +99,20 @@ public static class Obj {
     public static int Ty(Space sp, long a) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjTy(sp, a);
     public static int Len(Space sp, long a) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjLen(sp, a);
 
-    public static void WriteHeader(Space sp, long a, int ty, int len) {
-        sp.WriteU32(a, ty << 24);
-        sp.WriteU32(a + 4, len);
-    }
+    public static void WriteHeader(Space sp, long a, int ty, int len) =>
+        global::_3sln.Flint.Kgen.Rt.Objhdr.ObjWriteHeader(sp, a, ty, len);
 
     public static int Age(Space sp, long a) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjAge(sp, a);
 
-    public static void SetAge(Space sp, long a, int age) {
-        int w = sp.ReadU32(a);
-        sp.WriteU32(a, (w & ~(7 << 21)) | ((age & 7) << 21));
-    }
+    public static void SetAge(Space sp, long a, int age) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjSetAge(sp, a, age);
 
     public static bool Marked(Space sp, long a) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjMarked(sp, a);
 
-    public static void SetMarked(Space sp, long a, bool m) {
-        int w = sp.ReadU32(a);
-        sp.WriteU32(a, m ? (w | (1 << 20)) : (w & ~(1 << 20)));
-    }
+    public static void SetMarked(Space sp, long a, bool m) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjSetMarked(sp, a, m);
 
     public static bool InRemset(Space sp, long a) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjInRemset(sp, a);
 
-    public static void SetInRemset(Space sp, long a, bool m) {
-        int w = sp.ReadU32(a);
-        sp.WriteU32(a, m ? (w | (1 << 19)) : (w & ~(1 << 19)));
-    }
+    public static void SetInRemset(Space sp, long a, bool m) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjSetInRemset(sp, a, m);
 
     /// The ASCII flag is not a micro-optimisation. flint indexes strings by
     /// CODE POINT, so a byte index and a character index coincide only for
@@ -131,10 +120,7 @@ public static class Obj {
     /// quadratic.
     public static bool StrIsAscii(Space sp, long a) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjStrAscii(sp, a);
 
-    public static void SetStrAscii(Space sp, long a, bool v) {
-        int w = sp.ReadU32(a);
-        sp.WriteU32(a, v ? (w | (1 << 18)) : (w & ~(1 << 18)));
-    }
+    public static void SetStrAscii(Space sp, long a, bool v) => global::_3sln.Flint.Kgen.Rt.Objhdr.ObjSetStrAscii(sp, a, v);
 
     /// Cached at +8, inside the object, so a string carries its own hash and a
     /// map lookup does not walk the bytes twice.

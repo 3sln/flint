@@ -311,8 +311,7 @@ pub fn forward_target(sp: &Space, a: Addr) -> Addr {
 }
 
 pub fn write_header(sp: &Space, a: Addr, ty: u8, len: u32) {
-    sp.write_u32(a, (ty as u32) << 24);
-    sp.write_u32(a + 4, len);
+    crate::kgen::rt::objhdr::obj_write_header(sp, a, ty as u32, len)
 }
 #[inline(always)]
 pub fn age(sp: &Space, a: Addr) -> u32 {
@@ -320,8 +319,7 @@ pub fn age(sp: &Space, a: Addr) -> u32 {
 }
 #[inline(always)]
 pub fn set_age(sp: &Space, a: Addr, age: u32) {
-    let w = sp.read_u32(a);
-    sp.write_u32(a, (w & !(7 << 21)) | ((age & 7) << 21));
+    crate::kgen::rt::objhdr::obj_set_age(sp, a, age)
 }
 #[inline(always)]
 pub fn marked(sp: &Space, a: Addr) -> bool {
@@ -329,8 +327,7 @@ pub fn marked(sp: &Space, a: Addr) -> bool {
 }
 #[inline(always)]
 pub fn set_marked(sp: &Space, a: Addr, m: bool) {
-    let w = sp.read_u32(a);
-    sp.write_u32(a, if m { w | (1 << 20) } else { w & !(1 << 20) });
+    crate::kgen::rt::objhdr::obj_set_marked(sp, a, m)
 }
 /// Strings record whether they are pure ASCII, because if they are, a code
 /// point index IS a byte index. Without this, `subs` and `nth` are O(n) and
@@ -365,8 +362,7 @@ pub fn str_is_ascii(sp: &Space, a: Addr) -> bool {
 }
 #[inline(always)]
 pub fn set_str_ascii(sp: &Space, a: Addr, v: bool) {
-    let w = sp.read_u32(a);
-    sp.write_u32(a, if v { w | (1 << 18) } else { w & !(1 << 18) });
+    crate::kgen::rt::objhdr::obj_set_str_ascii(sp, a, v)
 }
 
 #[inline(always)]
@@ -375,8 +371,7 @@ pub fn in_remset(sp: &Space, a: Addr) -> bool {
 }
 #[inline(always)]
 pub fn set_in_remset(sp: &Space, a: Addr, m: bool) {
-    let w = sp.read_u32(a);
-    sp.write_u32(a, if m { w | (1 << 19) } else { w & !(1 << 19) });
+    crate::kgen::rt::objhdr::obj_set_in_remset(sp, a, m)
 }
 
 // --- slot access -----------------------------------------------------------

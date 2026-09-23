@@ -1473,6 +1473,14 @@
                          :java "Obj.align8({0})"
                          :csharp "Obj.Align8({0})"}
                         {:tag Addr})
+    ;; BITWISE COMPLEMENT, for clearing a field: `w & ~(7 << 21)`. Rust spells
+    ;; it `!` where both ports say `~`, which is the whole reason it is a word
+    ;; -- and the reason to be careful with it, since Rust's `!` on a `bool` is
+    ;; LOGICAL not. Every caller here applies it to a mask.
+    ;;
+    ;; No kin source had needed one until the header writers: nothing else
+    ;; generated clears a field in place.
+    'bit-not (core/call {:rust "(!{0})" :java "(~{0})" :csharp "(~{0})"})
     'popcount (core/call {:rust "{0}.count_ones()"
                           :java "Integer.bitCount({0})"
                           :csharp "System.Numerics.BitOperations.PopCount((uint)({0}))"})
@@ -1941,6 +1949,11 @@
     'sp-read-u32 (core/call {:rust "{0}.read_u32({1})"
                              :java "{0}.readU32({1})" :csharp "{0}.ReadU32({1})"}
                             {:tag I32})
+    ;; BACK, with a caller this time. It was written alongside `sp-read-u32`,
+    ;; refused by `bin/check-vocab-used` for having none, and removed; the
+    ;; header WRITERS are the change that calls it.
+    'sp-write-u32 (core/call {:rust "{0}.write_u32({1}, {2})"
+                              :java "{0}.writeU32({1}, {2})" :csharp "{0}.WriteU32({1}, {2})"})
     'write-u64 (core/call {:rust "{0}.gc.sp.write_u64({1}, {2} as u64)"
                             :java "{0}.gc.sp.writeU64({1}, {2})"
                             :csharp "{0}.gc.sp.WriteU64({1}, {2})"})

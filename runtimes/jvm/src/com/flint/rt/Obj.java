@@ -156,39 +156,26 @@ public final class Obj {
     public static int len(Space sp, long a) { return com._3sln.flint.kgen.rt.Objhdr.objLen(sp, a); }
 
     public static void writeHeader(Space sp, long a, int ty, int len) {
-        sp.writeU32(a, ty << 24);
-        sp.writeU32(a + 4, len);
+        com._3sln.flint.kgen.rt.Objhdr.objWriteHeader(sp, a, ty, len);
     }
 
     public static int age(Space sp, long a) { return com._3sln.flint.kgen.rt.Objhdr.objAge(sp, a); }
 
-    public static void setAge(Space sp, long a, int age) {
-        int w = sp.readU32(a);
-        sp.writeU32(a, (w & ~(7 << 21)) | ((age & 7) << 21));
-    }
+    public static void setAge(Space sp, long a, int age) { com._3sln.flint.kgen.rt.Objhdr.objSetAge(sp, a, age); }
 
     public static boolean marked(Space sp, long a) { return com._3sln.flint.kgen.rt.Objhdr.objMarked(sp, a); }
 
-    public static void setMarked(Space sp, long a, boolean m) {
-        int w = sp.readU32(a);
-        sp.writeU32(a, m ? (w | (1 << 20)) : (w & ~(1 << 20)));
-    }
+    public static void setMarked(Space sp, long a, boolean m) { com._3sln.flint.kgen.rt.Objhdr.objSetMarked(sp, a, m); }
 
     public static boolean inRemset(Space sp, long a) { return com._3sln.flint.kgen.rt.Objhdr.objInRemset(sp, a); }
 
-    public static void setInRemset(Space sp, long a, boolean m) {
-        int w = sp.readU32(a);
-        sp.writeU32(a, m ? (w | (1 << 19)) : (w & ~(1 << 19)));
-    }
+    public static void setInRemset(Space sp, long a, boolean m) { com._3sln.flint.kgen.rt.Objhdr.objSetInRemset(sp, a, m); }
 
     /// Is every byte of this string ASCII? A byte index is then a code-point
     /// index, which is what makes `subs` and `nth` O(1) instead of a walk.
     public static boolean strIsAscii(Space sp, long a) { return com._3sln.flint.kgen.rt.Objhdr.objStrAscii(sp, a); }
 
-    public static void setStrAscii(Space sp, long a, boolean v) {
-        int w = sp.readU32(a);
-        sp.writeU32(a, v ? (w | (1 << 18)) : (w & ~(1 << 18)));
-    }
+    public static void setStrAscii(Space sp, long a, boolean v) { com._3sln.flint.kgen.rt.Objhdr.objSetStrAscii(sp, a, v); }
 
     public static int strHash(Space sp, long a) { return sp.readU32(a + HDR); }
     public static void setStrHash(Space sp, long a, int h) { sp.writeU32(a + HDR, h); }

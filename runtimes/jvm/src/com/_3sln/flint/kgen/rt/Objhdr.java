@@ -52,4 +52,45 @@ public final class Objhdr {
     public static boolean objStrAscii(Space sp, long a) {
         return (sp.readU32(a) & (1 << 18)) != 0;
     }
+    /// Stamp a fresh header: the type in the top byte of word zero, the length
+    /// in word one, and EVERY OTHER FIELD CLEARED -- age zero, unmarked, not in
+    /// the remset, not ascii. That is what makes it a `write` rather than a
+    /// `set`: it does not read the old word, so a recycled address cannot
+    /// inherit a mark or an age from whatever lived there before.
+    public static void objWriteHeader(Space sp, long a, int ty, int len) {
+        sp.writeU32(a, ty << 24);
+        sp.writeU32(a + 4, len);
+    }
+    /// Set the age, bits 23..21, leaving every other field alone.
+    /// 
+    /// The age is masked to 7 BEFORE it is shifted in, so a caller passing 8
+    /// cannot write into the type tag above it, and the destination is cleared
+    /// with `~(7 << 21)` first so the old age does not OR through.
+    public static void objSetAge(Space sp, long a, int age) {
+        sp.writeU32(a, (sp.readU32(a) & (~(7 << 21))) | ((age & 7) << 21));
+    }
+    /// Set or clear the mark bit, bit 20.
+    public static void objSetMarked(Space sp, long a, boolean m) {
+        if (m) {
+            sp.writeU32(a, sp.readU32(a) | (1 << 20));
+        } else {
+            sp.writeU32(a, sp.readU32(a) & (~(1 << 20)));
+        }
+    }
+    /// Set or clear the remembered-set bit, bit 19.
+    public static void objSetInRemset(Space sp, long a, boolean m) {
+        if (m) {
+            sp.writeU32(a, sp.readU32(a) | (1 << 19));
+        } else {
+            sp.writeU32(a, sp.readU32(a) & (~(1 << 19)));
+        }
+    }
+    /// Set or clear the ascii bit, bit 18.
+    public static void objSetStrAscii(Space sp, long a, boolean v) {
+        if (v) {
+            sp.writeU32(a, sp.readU32(a) | (1 << 18));
+        } else {
+            sp.writeU32(a, sp.readU32(a) & (~(1 << 18)));
+        }
+    }
 }

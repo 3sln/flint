@@ -19,13 +19,27 @@
 ;; worth saying plainly: the value is that the next change to the header is
 ;; made once rather than three times.
 ;;
+;; THE WRITERS ARE HERE TOO, and the read-modify-write they do is the reason
+;; `bit-not` had to be added: clearing a field in place is `w & ~(7 << 21)`,
+;; and Rust spells the complement `!` where both ports say `~`. Nothing else
+;; generated had ever cleared a field, so no source had needed the word.
+;;
+;; NOT HERE YET: `set-forward` and `forward-target`, which split a 48-bit
+;; address across both header words. They need a u32-to-address widening that
+;; ZERO-extends, and the three runtimes each spell that differently -- `as
+;; Addr`, `Integer.toUnsignedLong`, `(long)(uint)`. A word for it is exactly
+;; the kind of primitive worth getting right on its own rather than in the
+;; margin of a larger change; `to-addr` is NOT it, since on both ports it
+;; emits nothing and an `int` would widen with its sign.
+;;
 ;; The names are prefixed because `ty` and `len` are VOCABULARY WORDS -- `(ty
 ;; rt (as-heap v))` is how ten sources ask a value's type -- and a `^:pub`
 ;; function shadows a word of the same name across the whole project.
 (ns flint.rt.objhdr
-  (:require [flint.impl.rt :refer [defn return comment doc != + bit-and shl ushr
+  (:require [flint.impl.rt :refer [defn return comment doc if != + bit-and bit-or
+                                   bit-not shl ushr
                                    Space Addr I32 U32 Bool
-                                   sp-read-u32]]))
+                                   sp-read-u32 sp-write-u32]]))
 
 (doc "The type tag: the top byte of word zero."
      ""
@@ -67,3 +81,39 @@
      "is its length in bytes and indexing need not decode.")
 (defn ^:pub ^Bool obj-str-ascii [^Space sp ^Addr a]
   (return (!= (bit-and (sp-read-u32 sp a) (shl 1 18)) 0)))
+
+(doc "Stamp a fresh header: the type in the top byte of word zero, the length"
+     "in word one, and EVERY OTHER FIELD CLEARED -- age zero, unmarked, not in"
+     "the remset, not ascii. That is what makes it a `write` rather than a"
+     "`set`: it does not read the old word, so a recycled address cannot"
+     "inherit a mark or an age from whatever lived there before.")
+(defn ^:pub obj-write-header [^Space sp ^Addr a ^I32 ty ^U32 len]
+  (sp-write-u32 sp a (shl ty 24))
+  (sp-write-u32 sp (+ a 4) len))
+
+(doc "Set the age, bits 23..21, leaving every other field alone."
+     ""
+     "The age is masked to 7 BEFORE it is shifted in, so a caller passing 8"
+     "cannot write into the type tag above it, and the destination is cleared"
+     "with `~(7 << 21)` first so the old age does not OR through.")
+(defn ^:pub obj-set-age [^Space sp ^Addr a ^I32 age]
+  (sp-write-u32 sp a (bit-or (bit-and (sp-read-u32 sp a) (bit-not (shl 7 21)))
+                             (shl (bit-and age 7) 21))))
+
+(doc "Set or clear the mark bit, bit 20.")
+(defn ^:pub obj-set-marked [^Space sp ^Addr a ^Bool m]
+  (if m
+    (sp-write-u32 sp a (bit-or (sp-read-u32 sp a) (shl 1 20)))
+    (sp-write-u32 sp a (bit-and (sp-read-u32 sp a) (bit-not (shl 1 20))))))
+
+(doc "Set or clear the remembered-set bit, bit 19.")
+(defn ^:pub obj-set-in-remset [^Space sp ^Addr a ^Bool m]
+  (if m
+    (sp-write-u32 sp a (bit-or (sp-read-u32 sp a) (shl 1 19)))
+    (sp-write-u32 sp a (bit-and (sp-read-u32 sp a) (bit-not (shl 1 19))))))
+
+(doc "Set or clear the ascii bit, bit 18.")
+(defn ^:pub obj-set-str-ascii [^Space sp ^Addr a ^Bool v]
+  (if v
+    (sp-write-u32 sp a (bit-or (sp-read-u32 sp a) (shl 1 18)))
+    (sp-write-u32 sp a (bit-and (sp-read-u32 sp a) (bit-not (shl 1 18))))))
