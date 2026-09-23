@@ -244,11 +244,7 @@ fn main() {
     let d = rt.table_cell(sliced, 0, 0).as_fixnum();
     let e = rt.table_cell(sliced, 0, 99).as_fixnum();
     o.push_str(&format!("cell={}.{}.{}/{}.{} ", a, b, c, d, e));
-    // A TRANSIENT TABLE, and everything that is not one.
-    let tt = rt.obj(TY_TTABLE, 1);
-    o.push_str(&format!("ttable={}{}{}{} steps={}", rt.is_ttable(tt) as u32,
-                        rt.is_ttable(tab) as u32, rt.is_ttable(NIL) as u32,
-                        rt.is_ttable(Value::fixnum(3)) as u32, rt.steps));
+    o.push_str(&format!("steps={}", rt.steps));
     println!("{}", o);
 }
 --java-head
@@ -469,10 +465,7 @@ fn main() {
          .append(Val.asFixnum(tableCell(rt, tab, 0, 256))).append('/')
          .append(Val.asFixnum(tableCell(rt, sliced, 0, 0))).append('.')
          .append(Val.asFixnum(tableCell(rt, sliced, 0, 99))).append(' ');
-        long tt = obj(rt, TY_TTABLE, 1);
-        o.append("ttable=").append(isTtable(rt, tt) ? 1 : 0).append(isTtable(rt, tab) ? 1 : 0)
-         .append(isTtable(rt, NIL) ? 1 : 0).append(isTtable(rt, Val.fixnum(3)) ? 1 : 0)
-         .append(" steps=").append(rt.steps);
+        o.append("steps=").append(rt.steps);
         System.out.println(o.toString());
     }
 --csharp-pre
@@ -695,14 +688,11 @@ namespace Flint.Rt {
          .Append(Val.AsFixnum(TableCell(rt, tab, 0, 256))).Append('/')
          .Append(Val.AsFixnum(TableCell(rt, sliced, 0, 0))).Append('.')
          .Append(Val.AsFixnum(TableCell(rt, sliced, 0, 99))).Append(' ');
-        long tt = Obj2(rt, Obj.TyTtable, 1);
-        o.Append("ttable=").Append(IsTtable(rt, tt) ? 1 : 0).Append(IsTtable(rt, tab) ? 1 : 0)
-         .Append(IsTtable(rt, Val.Nil) ? 1 : 0).Append(IsTtable(rt, Val.Fixnum(3)) ? 1 : 0)
-         .Append(" steps=").Append(rt.steps);
+        o.Append("steps=").Append(rt.steps);
         System.Console.WriteLine(o.ToString());
     }
 --expect
-fresh=5 rows=7 encs=000 zerowide=2 zencs=1 enc=100 const=7 read=7.7.7.7/7.7.7.8 pos=0.1.0 rowcol=41.42/41.42 absent=1 cell=0.255.256/300.399 ttable=1000 steps=14
+fresh=5 rows=7 encs=000 zerowide=2 zencs=1 enc=100 const=7 read=7.7.7.7/7.7.7.8 pos=0.1.0 rowcol=41.42/41.42 absent=1 cell=0.255.256/300.399 steps=14
 --expect-why
 DERIVED BY HAND from `tablecell.kin` against this fixture. Lengths come from
 the layout constants, the collapse decisions from the column contents, and the
@@ -765,9 +755,10 @@ number:
   The offset is added BEFORE the shift. Added after, the slice would read
   chunk 0 and print 0 and 99.
 
-ttable=1000: `is-ttable` is true of the TY_TTABLE object and false of a table,
-of NIL, and of a fixnum -- the last two through the `is-heap` guard, which is
-what stops a type tag being read out of a non-pointer.
+`is-ttable` was REMOVED 2026-09-23. Nothing called it -- not this
+probe's subject, not any kin source, not any runtime -- and it survived
+`check-generated-reached` only because a hand-written delegator wrapped it.
+Deleting that delegator is what surfaced it.
 
 steps=14 IS A COUNT OF CHARGED WORK, and it is derivable:
   collapse column 0: charge 4 (the column length)

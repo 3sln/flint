@@ -110,8 +110,3 @@
         ^Value ch (vec-nth rt (slot rt t TB_CHUNKS) (ushr phys CHUNK_SHIFT) NIL)]
     (return (chunk-get rt ch id (bit-and phys (- CHUNK 1))))))
 
-(doc "Is `v` a transient table?")
-(defn ^:pub ^:method ^Bool is-ttable [^Rt rt ^Value v]
-  (if (not (is-heap v))
-    (return false))
-  (return (== (ty rt (as-heap v)) TY_TTABLE)))

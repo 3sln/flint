@@ -121,11 +121,4 @@ impl Rt {
         let ch: Value = self.vec_nth(self.slot(t, crate::table::TB_CHUNKS), phys >> crate::table::CHUNK_SHIFT, NIL);
         return self.chunk_get(ch, id, phys & (crate::table::CHUNK - 1));
     }
-    /// Is `v` a transient table?
-    pub fn is_ttable(&self, v: Value) -> bool {
-        if !v.is_heap() {
-            return false;
-        }
-        return ty(&self.gc.sp, v.as_heap()) == TY_TTABLE;
-    }
 }

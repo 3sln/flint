@@ -117,11 +117,4 @@ public static class Tablecell {
         long ch = VecNth(rt, rt.Slot(t, global::Flint.Rt.Table.TB_CHUNKS), (int)((uint) phys >> global::Flint.Rt.Table.CHUNK_SHIFT), Val.Nil);
         return ChunkGet(rt, ch, id, phys & (global::Flint.Rt.Table.CHUNK - 1));
     }
-    /// Is `v` a transient table?
-    public static bool IsTtable(Rt rt, long v) {
-        if (!Val.IsHeap(v)) {
-            return false;
-        }
-        return Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyTtable;
-    }
 }

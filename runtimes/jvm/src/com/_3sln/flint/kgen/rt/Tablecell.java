@@ -115,11 +115,4 @@ public final class Tablecell {
         long ch = vecNth(rt, rt.slot(t, Table.TB_CHUNKS), phys >>> Table.CHUNK_SHIFT, Val.NIL);
         return chunkGet(rt, ch, id, phys & (Table.CHUNK - 1));
     }
-    /// Is `v` a transient table?
-    public static boolean isTtable(Rt rt, long v) {
-        if (!Val.isHeap(v)) {
-            return false;
-        }
-        return ty(rt.gc.sp, Val.asHeap(v)) == TY_TTABLE;
-    }
 }
