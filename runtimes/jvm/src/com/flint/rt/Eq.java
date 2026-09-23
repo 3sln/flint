@@ -48,7 +48,6 @@ public final class Eq {
     // `String.compareTo`, which differs from code point order only above
     // U+FFFF, and reaching it meant materialising both ropes first.
 
-    static long nsOf(Rt rt, long v) { return com._3sln.flint.kgen.rt.Names.nsOf(rt, v); }
     /// THE SECOND COPY IS GONE. `Eq` had its own `nameOf` that skipped the
     /// type check -- fine for the values it was handed, and one more place to
     /// keep in step.

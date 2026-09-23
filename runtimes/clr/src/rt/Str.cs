@@ -492,11 +492,6 @@ public static class Str {
         return Val.NotFound;
     }
 
-    /// A node over `kids`, whose aggregates are SUMMED from them rather than
-    /// derived from their bytes. That is what makes `count` O(1) on a tree.
-    /// A node over the `n` values ALREADY ROOTED at `bas`. The caller pushes
-    /// and the caller pops -- see the Rust and Java copies, which say the same.
-    static long RopeNode(Rt rt, int bas, int n) { return global::_3sln.Flint.Kgen.Rt.Ropenode.RopeNode(rt, bas, n); }
 
     /// `str` of two strings. O(1) once the pieces are big enough to matter.
     public static long Concat(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Ropecat.SConcat(rt, a, b); }
@@ -504,13 +499,7 @@ public static class Str {
     /// How many levels of node sit above the leaves. A leaf is 0.
     static int RopeHeight(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Ropecat.RopeHeight(rt, v);
 
-    /// Wrap `v` in single-kid nodes until it stands `h` levels tall, which is
-    /// what keeps every leaf at the SAME depth.
-    static long RopeLift(Rt rt, long v, int h) { return global::_3sln.Flint.Kgen.Rt.Ropenode.RopeLift(rt, v, h); }
 
-    /// Append `b` into the rightmost subtree of `a` that has room, rebuilding
-    /// the spine above it. Nil when the right spine is full at every level.
-    static long RopeAppend(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Ropecat.RopeAppend(rt, a, b); }
 
     /// Copy the range out into a fresh string -- the DECODE half.
     // @kin:link:form:s-copy-range: {:template "Str.SCopyRange({0}, {1}, {2}, {3})"}

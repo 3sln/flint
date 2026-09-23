@@ -513,11 +513,6 @@ public final class Str {
 
     static int ropeKids(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropecat.ropeKids(rt, v); }
 
-    /// A node over `kids`, whose aggregates are SUMMED from them rather than
-    /// derived from their bytes. That is what makes `count` O(1) on a tree.
-    /// A node over the `n` values ALREADY ROOTED at `base`. The caller pushes
-    /// and the caller pops -- see the Rust and C# copies, which say the same.
-    static long ropeNode(Rt rt, int base, int n) { return com._3sln.flint.kgen.rt.Ropenode.ropeNode(rt, base, n); }
 
     /// A slice that SHARES its interior.
     ///
@@ -557,17 +552,8 @@ public final class Str {
     /// `str` of two strings. O(1) once the pieces are big enough to matter.
     public static long concat(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Ropecat.sConcat(rt, a, b); }
 
-    /// How many levels of node sit above the leaves. A leaf is 0.
-    static int ropeHeight(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropecat.ropeHeight(rt, v); }
 
-    /// Wrap `v` in single-kid nodes until it stands `h` levels tall, which is
-    /// what keeps every leaf at the SAME depth.
-    static long ropeLift(Rt rt, long v, int h) { return com._3sln.flint.kgen.rt.Ropenode.ropeLift(rt, v, h); }
 
-    /// Append `b` into the rightmost subtree of `a` that has room, rebuilding
-    /// the spine above it. NIL when the right spine is full at every level,
-    /// which is the only time the caller adds one.
-    static long ropeAppend(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Ropecat.ropeAppend(rt, a, b); }
 
     /// Copy the range out into a fresh string -- the DECODE half, see the Rust copy.
     // @kin:link:form:s-copy-range: {:template "Str.sCopyRange({0}, {1}, {2}, {3})"}

@@ -66,13 +66,7 @@ public static class Bytes {
 
         public static int Depth(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Bytecore.BDepth(rt, v); }
 
-    /// A leaf joining a deeper node is PROMOTED rather than sitting beside
-    /// subtrees: a node's children must all be the same depth.
-    static long WrapTo(Rt rt, long v, int d) { return global::_3sln.Flint.Kgen.Rt.Bytenode.BWrapTo(rt, v, d); }
 
-    /// A node over the `n` values ALREADY ROOTED at `bas`. The caller pushes
-    /// and the caller pops -- see the Rust and Java copies, which say the same.
-    static long Node(Rt rt, int bas, int n) { return global::_3sln.Flint.Kgen.Rt.Bytenode.BNode(rt, bas, n); }
 
     /// Copy the range out into a fresh leaf -- see the Java and Rust copies.
     public static long CopyRange(Rt rt, long v, int from, int to) { return global::_3sln.Flint.Kgen.Rt.Byteflat.BCopyRange(rt, v, from, to); }
@@ -81,13 +75,7 @@ public static class Bytes {
 
     public static long Concat(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Byteconcat.BConcat(rt, a, b); }
 
-    /// `a`'s rightmost leaf followed by `b`, if the two fit in one leaf. NIL if
-    /// they do not, or if there is no leaf to merge into.
-    static long MergeRight(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Byteconcat.BMergeRight(rt, a, b); }
 
-    /// Put `b` in the deepest node on `a`'s right spine that has room, or NIL.
-    /// Depth is UNCHANGED when this succeeds, which is the whole point.
-    static long Absorb(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Byteconcat.BAbsorb(rt, a, b); }
 
     /// A contiguous copy, CACHED on the node so a second walk is free.
     public static long Flatten(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Byteflat.BFlatten(rt, v); }
@@ -142,10 +130,6 @@ public static class Bytes {
 
         static bool Live(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Bytecore.TbLive(rt, t); }
 
-    /// Fold the full tail into the tree and start a fresh one. A FULL tail is
-    /// handed over WHOLE rather than copied -- it is exactly the leaf the tree
-    /// wants.
-    static bool Flush(Rt rt, long t, int fill) { return global::_3sln.Flint.Kgen.Rt.Bytetwrite.TbFlush(rt, t, fill); }
 
     /// Append one byte: no allocation and no copy until the tail fills.
     ///

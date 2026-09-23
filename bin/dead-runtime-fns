@@ -69,6 +69,12 @@ because its generated names are prefixed -- `ty` delegates to `obj_ty` -- and
 the jvm does not. So the threshold is the number of times the name actually
 occurs on its own definition lines, not the number of lines.
 
+SAME-NAMED MEMBERS IN DIFFERENT CLASSES ARE CONFLATED. This keys by bare
+name, so the jvm's `Builtins.kwName` and `Table.kwName` are one entry. That
+direction is safe for the thing this is used for: conflation raises the
+mention count, so a conflated member comes back ALIVE and never dead. It can
+hide dead code; it cannot cause a wrong deletion.
+
 This is a NAME match, not a call-graph. A name mentioned in a comment counts
 as a mention, which is the direction that under-reports -- the safe one.
 

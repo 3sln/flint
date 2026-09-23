@@ -70,9 +70,6 @@ public final class Bytes {
 
         public static int depth(Rt rt, long v) { return com._3sln.flint.kgen.rt.Bytecore.bDepth(rt, v); }
 
-    /// A leaf joining a deeper node is PROMOTED rather than sitting beside
-    /// subtrees: a node's children must all be the same depth.
-    static long wrapTo(Rt rt, long v, int d) { return com._3sln.flint.kgen.rt.Bytenode.bWrapTo(rt, v, d); }
 
     /// A node over the `n` values ALREADY ROOTED at `base`. The caller pushes
     /// and the caller pops -- see the Rust and C# copies, which say the same.
@@ -88,13 +85,7 @@ public final class Bytes {
 
     public static long concat(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Byteconcat.bConcat(rt, a, b); }
 
-    /// `a`'s rightmost leaf followed by `b`, if the two fit in one leaf. NIL if
-    /// they do not, or if there is no leaf to merge into.
-    static long mergeRight(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Byteconcat.bMergeRight(rt, a, b); }
 
-    /// Put `b` in the deepest node on `a`'s right spine that has room, or NIL.
-    /// Depth is UNCHANGED when this succeeds, which is the whole point.
-    static long absorb(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Byteconcat.bAbsorb(rt, a, b); }
 
     /// A contiguous copy, CACHED on the node so a second walk is free.
     public static long flatten(Rt rt, long v) { return com._3sln.flint.kgen.rt.Byteflat.bFlatten(rt, v); }
