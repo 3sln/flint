@@ -5183,9 +5183,27 @@ needless safepoint while a false no "would let the collector move objects
 while another thread was running". Plain addition that wrapped would answer
 false -- the unsafe direction.
 
-Not hand-patched into the two ports, deliberately: three hand-written copies
-agreeing is not the same as one source, and the patch would be deleted by the
-port that fixes it properly.
+**FIXED by porting it**, which is why it was not hand-patched into the two
+ports: three hand-written copies agreeing is not one source, and the patch
+would have been deleted by the port that fixed it properly.
+
+The saturation WENT rather than spreading, on a reachability argument.
+`max_heap` is built from a `u32`, so every operand is at most 4 GiB and the
+sum at most about 2^33 -- nowhere near where a 64-bit add wraps. Plain
+addition IS the saturating answer over that range. The condition is recorded
+in both `kin/objsize.kin` and native's comment: if the heap limit stops being
+a `u32`, that is the line that changes with it.
+
+The alternative was a `sat-add` vocabulary word, and it would have been worse
+than the problem. Neither port has a saturating add, so the template would
+have read `((a + b) < 0 ? MAX : (a + b))` -- an argument evaluated twice, in a
+vocabulary word, guarding a case that cannot happen.
+
+**The rest of `Gc` still stands as priced above**, minus the two pieces now
+done: the five field predicates and `would-collect`. What remains is the
+collector proper -- `forward` at 40 lines, `minor` at 42, `major` at 31,
+`scan-object` at 29 -- plus the free-list machinery, and those want more than
+field reads.
 
 **`Val`'s last four and `Interns` are unchanged** and still blocked on a
 byte-array type and a callback type respectively, as their own comments say.
