@@ -8464,6 +8464,44 @@ bound ports.
 | JVM / CLR | `TH_LEN=12`, no `systemMessage`, no system branch in `hostDeliver` | the whole protocol |
 | constructor | no system port; installed afterwards | system bridge required |
 
+**PRICED 2026-09-23, because "UNCHANGED" seven times reads as expensive and
+the table was costed against a world that has since gone.** The question asked
+was whether the wasm edge can become `boot(bridge_ptr)` plus `loop()`. What it
+would touch, counted:
+
+| piece | size | note |
+| --- | --- | --- |
+| the twelve externs | 78 lines, `units-src/flint-conc/src/lib.rs` | collapse into two |
+| `sdks/esm/src/guest.js` | 29 lines of 589 | the ONLY hand-written driver |
+| `sdks/esm/src/flint.js` | one export (`flint_system_port`) | |
+| `sdks/cli/src/sys.mjs` | one export (`flint_resume`) | |
+| tests | 4 files | `host_abi.mjs`, `globalport.mjs`, `threads.clj`, `e2e_link.clj` |
+| `sdks/*/dist/*` | generated | rebuilt, not edited |
+| `cli/src/` | ZERO references | the native CLI drives `conc.rs` directly |
+
+*The row that changes the estimate is the ring itself.* This table says
+"bridge memory: ring inside the receiving sandbox -- UNCHANGED", and it was
+written while this section also said "None of the concurrency is generated ...
+`Conc` is hand-written three times" -- the claim this section now marks FALSE.
+The inbox ring is `kin/portring.kin`, 112 lines, "A PORT'S INBOX, WRITTEN
+ONCE", generating into Rust, Java and C# from one source; its four siblings
+(`portdrain`, `portinstall`, `porthost`, `portrecv`) are another 419. So row
+one is an edit to ONE source with three-way drivers, not to three hand-mirrored
+copies, and every "UNCHANGED" here was priced before that was true.
+
+**What stays, and why it is not an exception worth arguing about.**
+`set_step_limit`, `set_memory_limit` and `stat_steps` cannot become messages:
+a sandbox that has exhausted its gas has no gas with which to process a message
+about gas. `memory` must stay exported or the host cannot reach the ring at
+all. That puts the floor at six -- `boot`, `loop`, three limit/metric calls and
+`memory` -- plus the loader set when built with `--loader`.
+
+**The risk is not in the line count.** `portring.kin`'s own header says the
+three copies "agreed on every test because no test ran them concurrently
+against each other", and moving ownership of a lock-free ring from the
+receiving sandbox to the bridge changes exactly that structure. Price the
+DRIVERS for the new discipline before the code, not after.
+
 **The ports never received `structured-ports` step 5** — no `TH_ARGS`/`TH_TX`,
 no `systemMessage`, no system-port branch. Which turns out not to matter: those
 are the things being deleted. Recorded because it was nearly the other way
