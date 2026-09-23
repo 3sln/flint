@@ -9651,3 +9651,143 @@ than auditing it again in six months.
 `Val`'s own comment on the masking rule -- "MASK, do not merely cast: with a
 48-bit address the tag would otherwise come back as part of the answer" --
 appears on both ports and on neither's native counterpart.
+
+## The slice landed, and it carried two divergences rather than one
+
+`kin/valtag.kin`, nineteen `^:inline` functions: `tag-of`, `fits-fixnum`,
+`make-fixnum`, `fixnum-payload`, `make-heap`, `heap-payload`, `inline-string`,
+`inline-keyword`, `inline-length`, `kw-as-str`, the three tag predicates, the
+three nil/true/false tests, `truthy`, `make-double` and `double-value`. All
+three runtimes' `Val`/`Value` now delegate.
+
+The masking divergence sized up in the previous entry is **fixed**: native's
+`heap` masks now, because the generated body does, and there is one body.
+
+**The second one was not visible from the census.** All three derived their
+canonical NaN from their own host, and .NET's is the NEGATIVE quiet NaN --
+`FFF8000000000000` where the jvm and native have `7FF8000000000000`. The
+EXPRESSIONS matched, which is why a census comparing spellings saw nothing,
+and `=` on two NaNs is false whichever bits they carry, so no conformance row
+could see it either. All three declare `CANONICAL_NAN` now.
+
+### And a third, in a vocabulary word, which is the worst shape
+
+`f64-bits` emitted `doubleToLongBits` on the jvm and the raw form on the other
+two. `doubleToLongBits` CANONICALISES every NaN it is shown; the others hand
+back the pattern they were given. So `hash-double` -- generated from one
+source, compiled to three targets -- answered `2146959360` on the jvm and
+`-524288` on native and the clr.
+
+**Generating from one source guarantees consistency only if the PRIMITIVES are
+consistent**, and nothing was checking that. `check-kin` verified each target
+matched its source; the drivers passed; `conform-hosts` was green. All true.
+None of them can see a vocabulary word whose three templates do different
+things.
+
+## Two words that had never executed, and the gate that says so
+
+Sizing the vocabulary up: 167 words, each three hand-written templates, and
+the only thing that ever compares them is a source CALLING the word and a
+drivers file running the result on three targets. `uquot` and `urem` had never
+been called from any `.kin` source. Six templates that no instrument had ever
+compared, and every gate green.
+
+`kin/unsigned.kin` is why they looked covered. It reads as though it exercises
+the unsigned forms and does not -- it was rewritten to use the tag-driven
+generic operators. A word can look covered by a file whose SUBJECT is the same
+idea.
+
+`bin/check-vocab-used` refuses a vocabulary word no source calls, 0.7 s, and
+counts `(word ...)` rather than `:refer` mentions -- the first version of that
+survey counted refer-list appearances and reported both words as used.
+Appearing in a refer list is not being executed.
+
+`kin/vocabedge.kin` is where the never-executed corners now get called. It
+`ships-nowhere`, the set in `targets.cljc` for sources that generate and are
+written nowhere, so pinning a primitive costs no runtime code.
+
+## The fourth NaN, one character of flint source away
+
+Porting `num_f64` and `num_cmp` -- `kin/numf64.kin` -- found the same
+divergence a fourth time. All three answered "not a number" with their own
+host's constant, and `double.NaN` on .NET is the negative quiet NaN.
+
+**The measurement corrected the guess twice.** `0.0/0.0`, `sqrt(-1)` and
+`inf-inf` give `7FF8000000000000` on all three hosts; the first probe said
+otherwise only because a literal `0.0/0.0` is folded by the C# COMPILER rather
+than evaluated. It is the named constant alone.
+
+**The earlier `CANONICAL_NAN` fix could not reach it.** `make-double` folds a
+NaN only at or above `TAG_MIN_BOXED`, `0xFFF9`, because that is the range that
+would collide with a tagged value -- and `0xFFF8` is one short. A
+canonicalising constructor guarantees the range it was written to defend, not
+that every NaN in the system is canonical.
+
+**`Option<i64>` was the stated blocker and was not one.** All three files
+carried the same note: `asI64` answers "the integer, or nothing", a nullable
+kin has not got. True of `as_i64`, which keeps its thirty-odd other callers.
+False of the two functions citing it -- both used the nullability only to ASK
+whether a value is an integer, and `is-int` answers that as a predicate.
+`numkind.kin` had already recorded the same substitution for `both-ints`. A
+blocker written where the hard thing lives gets copied into every caller.
+
+### The same bug was in the vocabulary, and that one was reachable
+
+`F64_NAN` is what the reader returns for the `##NaN` LITERAL, and its three
+templates were the three hosts' constants. `kin/strnum.drivers` already parsed
+`##NaN` and could never have caught it: its printer answered `dNaN` for any
+NaN, because that is how you print a double without depending on the host's
+formatter, and a LABEL agrees no matter which bits arrived. It prints
+`NaN:%016X` now, and reverting the C# template alone makes it report
+`FFF8000000000000` against `7FF8000000000000` and fail.
+
+**A bounded survey rather than "there may be more":** 158 vocabulary constants
+have three literal templates; all but four resolve to something a runtime
+DECLARES, which `bin/check-port-consts` already compares. The four the hosts
+supply are `I64_MIN`, `I64_MAX`, `F64_INF` and `F64_NAN`. Two's complement
+fixes the integer bounds and +infinity has one representation. `F64_NAN` was
+the only one free to vary, and it varied.
+
+## What the port keeps finding is gates, not bugs
+
+`bin/check-generated-reached` -- 455 generated functions, every one called
+from some runtime. It caught `vocabedge` shipping seven dead functions into
+three runtimes before the `ships-nowhere` entry existed, and it is what makes
+"generated" mean "reached".
+
+Rust's sibling imports in `targets.cljc` were a HAND-KEPT list of five module
+names whose own comment called that a trap -- a new free-function source
+compiles on both ports and fails only on Rust, at the CALLER, and `hamt` had
+cost exactly that. `valtag` cost it again. A paragraph asking someone to
+remember a list is not a mechanism that remembers it. `siblings-used` had been
+deriving the same thing for Java and C# two hundred lines up; Rust uses it
+now, and 115 generated files lost 552 import lines.
+
+`check-names` then refused the new `F64_NAN` template: no file defines
+`CANONICAL_NAN)` -- with the paren. Its `ident` took the last `.`/`:`
+separated chunk, which is the whole of a dotted path and not of an EXPRESSION,
+and `F64_NAN` is the first name template that had to be one.
+
+## Three targets left, three verified blockers
+
+Recorded in `DECISIONS.md` rather than re-derived next time. `Obj` is blocked
+on a TYPE: its twenty-one header functions agree across all three runtimes,
+every shift and mask, but kin's memory vocabulary is rooted at `Rt` and `Obj`
+is rooted at `Space` -- and that signature is load-bearing, since the collector
+calls `ty(&self.sp, a)` from `&mut self` methods of `Gc`. `Wire` is blocked on
+a DECISION: native writes tag and payload in one call, `wire_piece`, and both
+ports compose `put(tag)` with a payload writer, so there is no single shape to
+generate. `Gc` is shape rather than blockers, and should follow `Obj`.
+
+### And three times the instrument was the finding
+
+Worth stating together, because it kept happening in one week. Three `Obj`
+functions flagged as diverging across the runtimes were an extractor rejecting
+`0x00FF_FFFFL`, where the literal suffix made the trailing character a word
+character. A dead-code survey said 187 before it indexed `runtime/tests/` and
+`units-src/`, so 168 of those would have been wrong. And then it said 16,
+because a DECISIONS record NAMING three dead functions while explaining they
+were dead was enough to make them look alive -- excluding markdown did not fix
+that either, since the tool's own docstring named them next. Counting only
+`.rs` is the rule without that shape: a Rust function can only be called from
+Rust. 25 today.
