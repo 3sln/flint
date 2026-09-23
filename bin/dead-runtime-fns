@@ -15,7 +15,18 @@ question asked of the hand-written half. `obj::set_len` was found this way:
 one mention in the repository, its own definition, and neither port ever had
 a `setLen` to match.
 
-FOUR THINGS ARE EXCLUDED, each because it is called by something other than a
+IMPLICITLY INVOKED MEMBERS ARE EXCLUDED BY NAME, because no textual search
+can see the call. `Gc`, `Rt` and `Space` all declare `: System.IDisposable`,
+so each carries a `Dispose()` that a `using` block invokes without ever
+naming it -- and that the class would not compile without. The same is true
+of `toString`, `equals`, `hashCode`, `close` on the jvm and their .NET
+counterparts.
+
+LISTED RATHER THAN PATTERN-MATCHED, like `check-names`' `host-library` set:
+each entry is a decision that the RUNTIME calls this, not our code, and a
+list this short having to grow is the right kind of friction.
+
+FIVE THINGS ARE EXCLUDED, each because it is called by something other than a
 mention of its name:
 
   * `#[test]` functions -- the harness calls them by attribute;
@@ -126,6 +137,14 @@ MEMBER = re.compile(rf"^\s*(?:{MOD}\s+)*([A-Za-z_][\w.<>,]*(?:\[\])?)\s+(\w+)\s*
 KEYWORD = {"if", "for", "while", "switch", "return", "catch", "else", "do",
            "using", "lock", "foreach", "fixed"}
 
+# Invoked by the host or by a language construct, never by a mention of the
+# name. See the docstring: `Dispose` is the one that matters here, because
+# three clr classes declare `IDisposable` and could not compile without it.
+IMPLICIT = {"Dispose", "ToString", "Equals", "GetHashCode", "GetEnumerator",
+            "MoveNext", "Current", "CompareTo",
+            "toString", "equals", "hashCode", "close", "run", "call",
+            "compareTo", "iterator", "next", "hasNext", "finalize"}
+
 # (language, extension, source root, generated-dir marker, probe member)
 # (language, extension, source root, generated marker, parse probe,
 #  a delegator known LIVE from generated code, one known DEAD)
@@ -173,6 +192,8 @@ def port_definitions(tracked, ext, root, genmark):
         for i, l in enumerate(open(p, encoding="utf-8", errors="replace").read().split("\n")):
             m = MEMBER.match(l)
             if not m or m.group(1) in KEYWORD or m.group(2) in KEYWORD:
+                continue
+            if m.group(2) in IMPLICIT:
                 continue
             out.setdefault(m.group(2), []).append(f"{p}:{i + 1}")
             owners[m.group(2)] = os.path.basename(p).rsplit(".", 1)[0]
