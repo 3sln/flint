@@ -62,6 +62,10 @@ pub static mut FLINT_IMAGE_DESC: [u32; 2] = [0, 0];
 pub static mut FLINT_BUILTIN_REGISTRY: [u32; 2] = [0, 0];
 
 static mut RT: Option<Rt> = None;
+/// A SANDBOX HAS EXACTLY ONE IMAGE, and this is how a second is refused.
+/// Set by a successful `flint_load_image`; an EMBEDDED image needs no flag,
+/// since `FLINT_IMAGE_DESC` still names it.
+static mut IMAGE_LOADED: bool = false;
 static mut OUT: Vec<u8> = Vec::new();
 
 fn heap_start() -> u32 {
@@ -666,25 +670,40 @@ pub extern "C" fn builtin_registry_addr() -> u32 {
 /// Returns 0 on success, 1 if the bytes are not an image, 2 if the image needs
 /// a builtin this module does not carry -- and in that case `out_ptr`/`out_len`
 /// name it, because "wrong builtin set" is otherwise indistinguishable from a
-/// corrupt image.
+/// corrupt image -- and 3 if this sandbox ALREADY has one. A sandbox holds
+/// exactly one image for its whole life.
 #[no_mangle]
 pub extern "C" fn flint_load_image(ptr: u32, len: u32) -> i32 {
     unsafe {
+        // ONE IMAGE PER SANDBOX, and a second is REFUSED rather than swapped
+        // in. A host with two programs creates two sandboxes; booting one is
+        // not expensive enough for sharing to buy anything, and a sandbox that
+        // can be re-imaged has a lifetime nobody can reason about.
+        //
+        // What went with this rule: a block that cleared `frames`, `handlers`,
+        // the started flag, `stack_top` and `thrown` so a swap would not
+        // inherit the last image's state. It carried its own bug history -- a
+        // swapped image found the started flag already set, never bound its
+        // vars, and answered "`two/main` is not a function" -- which is the
+        // shape of defect a re-imageable sandbox keeps producing. A fresh `Rt`
+        // needs none of it.
+        // ONLY the flag, and the reason is worth recording: a `--loader` module
+        // EMBEDS an image of its own as well as accepting one, so
+        // `!image_bytes().is_empty()` refuses the first load. That the two can
+        // coexist at all is the incoherence this rule is meant to remove, and
+        // it is not the runtime's to fix -- see
+        // `DECISIONS.md#construe-integration-bar`.
+        if IMAGE_LOADED {
+            let o = &mut *core::ptr::addr_of_mut!(OUT);
+            o.clear();
+            o.extend_from_slice(
+                b"this sandbox already has an image, and a sandbox has exactly \
+                  one. Create another sandbox for another program.",
+            );
+            return 3;
+        }
         let bytes = core::slice::from_raw_parts(ptr as *const u8, len as usize);
         let rt = ensure_rt();
-        // A second image must not inherit the first one's frames. `load_image`
-        // already clears the constants and the globals.
-        rt.frames.clear();
-        rt.handlers.clear();
-        // NOR ITS INITIALISERS. `ensure_started` runs a program's `init`
-        // functions ONCE, and that once was per SANDBOX; with `main` gone a
-        // call is what triggers them (`DECISIONS.md#structured-ports` step 5), so a
-        // swapped image found the flag already set, never bound its vars, and
-        // answered "`two/main` is not a function". `run_program` used to run
-        // `image.init` unconditionally on every entry, which hid it.
-        rt.set_started(false);
-        rt.roots.stack_top = 0;
-        rt.thrown = crate::value::NIL;
         if !rt.load_image(bytes) {
             return 1;
         }
@@ -698,7 +717,10 @@ pub extern "C" fn flint_load_image(ptr: u32, len: u32) -> i32 {
             core::slice::from_raw_parts(p as *const u8, l as usize)
         };
         match rt.resolve_natives(reg) {
-            Ok(()) => 0,
+            Ok(()) => {
+                IMAGE_LOADED = true;
+                0
+            }
             Err(name) => {
                 let msg = alloc::format!(
                     "this module does not carry the builtin `{name}`, which the \

@@ -104,15 +104,21 @@
     (str/trim (str (:out r) (:err r)))))
 
 ;; The whole claim: a module built for `one` runs `two`, having never seen it,
-;; and the two do not contaminate each other across a swap.
+;; and one module serves many SANDBOXES without them contaminating each other.
+;;
+;; NOT A SWAP, and the titles used to say it was. The driver above takes a
+;; fresh instance per image and always did -- its own comment says why -- so
+;; these rows were never evidence that an image could replace another inside a
+;; live sandbox. That capability existed in `flint_load_image` until
+;; 2026-09-24, tested by nothing, and is now refused outright.
 (let [got (drive "out/loader.wasm" "out/one.image=4=one/main" "out/two.image=3=two/main"
                  "out/one.image=2=one/main" "out/two.image=1=two/main")]
   (println (str "    " got))
   (check-that "an image runs in a module that never linked it"
               (str/includes? got "x0,x1,x4,x9"))
-  (check-that "  ... and a second image replaces it cleanly"
+  (check-that "  ... and a different image in a NEW sandbox, off the same module"
               (str/includes? got "FLINT-FLINT-FLINT"))
-  (check-that "  ... in either order, any number of times"
+  (check-that "  ... in either order, any number of sandboxes"
               (and (str/includes? got "\"x0,x1\"") (str/includes? got "\"FLINT\"")))
   (check-that "  ... with no failures along the way"
               (not (str/includes? got "\"why\""))))
@@ -123,6 +129,46 @@
 (let [got (drive "out/plain.wasm" "out/one.image=2=one/main")]
   (check-that "a module built WITHOUT --loader refuses, by name"
               (str/includes? got "no flint_load_image export")))
+
+;; ONE IMAGE PER SANDBOX, asserted rather than assumed. Every driver above takes
+;; a fresh instance per image, so none of them could ever have caught a second
+;; load succeeding -- which is how the swap path survived untested. This one
+;; loads TWICE into ONE instance and wants the second refused with 3.
+(def twice
+  (str "(async () => {
+     const fs = require('fs');
+     const { instantiate } = await import('./sdks/esm/src/guest.js');
+     const mod = new WebAssembly.Module(fs.readFileSync('out/loader.wasm'));
+     const inst = instantiate(mod, { stepLimit: 0 });
+     const e = inst.exports;
+     const load = (path) => {
+       const img = fs.readFileSync(path);
+       const p = e.flint_in_alloc(img.length);
+       new Uint8Array(e.memory.buffer).set(img, p);
+       return e.flint_load_image(p, img.length);
+     };
+     const first = load('out/one.image');
+     const second = load('out/two.image');
+     const why = new TextDecoder().decode(
+       new Uint8Array(e.memory.buffer).subarray(e.out_ptr(), e.out_ptr() + e.out_len()));
+     // AND THE FIRST IMAGE STILL WORKS. A refusal that damaged the sandbox on
+     // the way out would be worse than the swap it replaced.
+     let still = '';
+     try { still = String(inst.call('one/main', ['2'])); } catch (err) { still = 'THREW ' + err; }
+     console.log(JSON.stringify({first, second, why, still}));
+   })()"))
+
+(let [r (sh "node" "-e" twice)
+      got (str/trim (str (:out r) (:err r)))]
+  (println (str "    " got))
+  (check-that "the FIRST image into a sandbox is accepted"
+              (str/includes? got "\"first\":0"))
+  (check-that "  ... and a SECOND is refused with 3, not swapped in"
+              (str/includes? got "\"second\":3"))
+  (check-that "  ... saying a sandbox has exactly one, and to create another"
+              (and (str/includes? got "exactly") (str/includes? got "another sandbox")))
+  (check-that "  ... and the refusal leaves the first image running"
+              (str/includes? got "x0,x1")))
 
 (println (if (zero? @fails) "loader: ok" (str "loader: " @fails " FAILURES")))
 (System/exit (if (zero? @fails) 0 1))
