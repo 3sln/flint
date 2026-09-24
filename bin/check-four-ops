@@ -5,18 +5,22 @@
 ;; only the spelling is not. `test/four-ops/contract.edn` is that sentence as data;
 ;; this asks each target's harness the questions in it and compares.
 ;;
-;; WHAT MAKES THIS A GATE AND NOT A LOOP OVER WHAT EXISTS. Three of the faces are
-;; not built, and a check that walked the tree and tested what it found would print
-;; green today and keep printing green if the JVM face were deleted tomorrow. So the
-;; target table is DECLARED here, each row saying built or not, and:
+;; WHAT THIS GATE IS FOR, AND WHAT IT STOPPED BEING. It RUNS a face and compares
+;; the behaviour. It no longer declares which faces exist.
 ;;
-;;   * a row marked built that cannot be exercised is a FAILURE;
-;;   * a row marked not-built whose face EXISTS is also a failure, because that is
-;;     the table rotting in the direction that reads like success.
+;; It used to, and the duplication was real: `bin/check-artifact-ops` declares the
+;; same table -- every target, a `built` flag, and BOTH failure directions (a built
+;; row with no face, a not-built row whose face exists) -- over all three faces,
+;; with those rules adversarially probed. Two gates declaring which faces exist is
+;; one fact in two places, which is the defect this project has most of.
 ;;
-;; Coverage is printed either way: "1 of 4 targets" is the honest headline while
-;; three are missing, and a run that does not say how many it skipped is not a
-;; measurement. A run that exercised NOTHING fails outright.
+;; So the split is: `check-artifact-ops` owns the faces and the contract, statically.
+;; This owns BEHAVIOUR, and carries a row only for a target it can actually run.
+;;
+;; WHAT SURVIVES OF THE OLD DISCIPLINE, because it was the good part: a row here
+;; that cannot be exercised is still a FAILURE, and a run that exercised NOTHING
+;; fails outright. A check that walked the tree and tested what it found would print
+;; green today and keep printing green if the JVM harness were deleted tomorrow.
 (require '[babashka.fs :as fs] '[clojure.edn :as edn] '[clojure.string :as str]
          '[babashka.process :as p])
 (def root (str (fs/parent (fs/parent (fs/real-path *file*)))))
@@ -77,16 +81,12 @@
                :image-natives nnat)))))
 
 (def targets
+  ;; ONE ROW, because one target has a harness. `clr`, `wasm` and `native` faces
+  ;; exist or will, and WHICH exist is `bin/check-artifact-ops`'s to assert -- it
+  ;; does, for all three. A row appears here when a target gains a `:run`, and
+  ;; until then its absence costs nothing that the other gate does not cover.
   [{:name "jvm"    :built? true
-    :face (str root "/src/flint/jvm.cljc") :run run-jvm}
-   ;; NOT BUILT. `DECISIONS.md#four-operations` says the CLR face is written and
-   ;; runs, and cites `src/flint/clr.cljc` and `runtimes/clr/src/rt/Artifact.cs` --
-   ;; NEITHER OF WHICH IS IN THE TREE at the commit this was written against. Marked
-   ;; not-built, and this row FAILS the moment either lands without a `:run` beside
-   ;; it, which is the point: the record and the tree disagreeing is what to surface.
-   {:name "clr"    :built? false :face (str root "/runtimes/clr/src/rt/Artifact.cs")}
-   {:name "wasm"   :built? false :face (str root "/src/flint/wasmfour.cljc")}
-   {:name "native" :built? false :face (str root "/src/flint/nativefour.cljc")}])
+    :face (str root "/src/flint/jvm.cljc") :run run-jvm}])
 
 ;; ---------------------------------------------------------------- the checks
 
