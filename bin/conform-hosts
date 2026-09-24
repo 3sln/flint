@@ -45,9 +45,48 @@ phase() {
   _ph_at=$_now
   _ph_name="$1"
 }
+# EVERY PHASE MUST HAVE RUN, and this exists because it did not.
+#
+# With `units/` absent this script ran only the 17 foundation rows and EXITED 0
+# -- a subagent hit it and the green was worthless. A gate that can pass by
+# doing almost nothing is worse than no gate: it is a gate plus a false belief.
+#
+# The count is DERIVED from the script, not written down beside it: `phase` is
+# called once per phase, so grepping this file for those calls is the expected
+# number and it cannot drift when a phase is added or removed. A hardcoded floor
+# would have to be maintained by whoever adds the eighteenth, which is exactly
+# the maintenance nobody does.
+conform_ran_everything() {
+  # `bin/conform-hosts` LITERALLY, not `$0`. The first version of this used
+  # `$0` and a probe caught it failing in the PASS direction: sourced into a
+  # shell, `$0` is `sh`, the grep found no file, `want` was empty, and
+  # `[ "$got" -lt "" ]` errored and evaluated false -- so it printed "all
+  # phases ran" and exited 0. That is the same vacuous pass this function
+  # exists to prevent, reproduced inside the fix for it. The script has
+  # already `cd`-ed to the repo root by the time this runs.
+  want=$(grep -cE '^phase ' bin/conform-hosts 2>/dev/null || echo 0)
+  got=$(wc -l < "$FLINT_CONF_TIMES" 2>/dev/null | tr -d ' ' || echo 0)
+  # AN INDETERMINATE CHECK IS A FAILURE, not a pass. If either number cannot be
+  # read there is nothing to compare, and answering "ok" would be the worst of
+  # the three possible answers.
+  case "$want" in ''|*[!0-9]*|0) echo; echo "  FAIL conform-hosts cannot count its own phases -- refusing to report a pass"; exit 1;; esac
+  case "$got"  in ''|*[!0-9]*)   echo; echo "  FAIL conform-hosts cannot read its phase log -- refusing to report a pass"; exit 1;; esac
+  if [ "$got" -lt "$want" ]; then
+    echo
+    echo "  FAIL conform-hosts ran $got of $want phases and would have exited 0."
+    echo "       A run that stops early is not a pass. The usual cause is a"
+    echo "       missing \`units/\` tree -- build it with ./bin/build-units."
+    echo "       Phases that ran:"
+    cut -d' ' -f2- "$FLINT_CONF_TIMES" | sed 's/^/         /'
+    exit 1
+  fi
+  echo "  ok   all $want phases ran"
+}
+
 conform_times() {
   _now=$(date +%s)
   [ -n "$_ph_name" ] && echo "$((_now - _ph_at)) $_ph_name" >> "$FLINT_CONF_TIMES"
+  conform_ran_everything
   echo
   echo "  == conform-hosts, where the time went (seconds)"
   sort -rn "$FLINT_CONF_TIMES" | head -10 | while read -r secs name; do
