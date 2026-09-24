@@ -16,6 +16,8 @@
             [flint.wasm :as w]
             [flint.bundle :as bundle]
             [flint.llvm :as llvm]
+            [flint.clr :as clr]
+            [flint.modmeta :as modmeta]
             [flint.wasmshake :as wshake]
 
             [clojure.string :as str]
@@ -358,17 +360,73 @@
            :compiled (when res (:compiled res))
            :arities (when res (:total res))})))))
 
+(defn compile-to-clr
+  "Compile a program to ONE .NET assembly (`DECISIONS.md#four-operations`).
+
+  `spec` is `compile-to-llvm`'s. Nothing is linked and nothing needs to be: the
+  assembly carries the program -- the bytecode as a `FieldRva` static array, plus
+  the three operations -- and NAMES flint's runtime as an assembly reference. The
+  interpreter, the collector and the builtins come from the host.
+
+  EMPTY SLOTS, like the LLVM path and unlike wasm's. The natives resolve BY NAME
+  against whatever table the host carries, so a slot index would name a table
+  this artifact does not have.
+
+  The metadata goes in as a `CustomAttribute` row rather than being answered by a
+  call, which is why there is no `prop` here or anywhere: a reader decides
+  WHETHER to load an artifact, and that cannot depend on having loaded it.
+
+  Bytes out, so the caller base64s them -- the opposite of `:ll`, which is text."
+  [spec-edn]
+  (let [spec (reader/read-one spec-edn)
+        built (build-image spec (set (keys (:slots spec))))]
+    (if (:missing built)
+      {:missing (:missing built)}
+      (if (:refused built)
+        {:refused (:refused built)}
+        (let [image (img/emit (:builder built) {})
+              ;; THE SAME BUILDER EVERY TARGET USES. The compatibility key is
+              ;; computed once, here, and not re-derived per target -- which is
+              ;; the whole reason `flint.modmeta` exists rather than each
+              ;; emitter writing its own map.
+              meta-map (modmeta/describe
+                         {:abi :clr
+                          :memory :unshared
+                          :gas-in-aot false
+                          :version (:version spec)
+                          ;; The artifact's ABI SURFACE, which is the three
+                          ;; operations. Not the flint functions a host may name.
+                          :exports ["boot" "loop" "link"]
+                          :builtins (count (:builtins spec))
+                          :imports []
+                          :units []
+                          :features (:features spec)
+                          :meta (:meta spec)})]
+          ;; `:bytes` out of the map `assemble` answers -- it also carries the
+          ;; per-method assembly facts, which nothing here wants.
+          {:clr (:bytes (clr/assemble {:name (or (:name spec) "Program")
+                                       :image image
+                                       :meta (pr-str meta-map)}))})))))
+
 (defn main [args]
   ;; Two entries, chosen by the first argument. `spec` is the original: the
   ;; caller resolved every namespace and handed over a finished map, which is
   ;; what the bootstrap does because babashka is already reading files.
   ;; `project` is the one a host with no Clojure reader can use.
   (let [mode (first args)
-        known? (or (= mode "project") (= mode "wasm") (= mode "llvm"))
+        ;; A MODE MISSING FROM `known?` IS NOT A REFUSAL, it is silently read as
+        ;; a SPEC. The `[mode spec-edn]` line below reinterprets the first
+        ;; argument as the spec when it does not recognise it, so a target added
+        ;; to the `cond` and forgotten here compiles the word "clr" as a program
+        ;; and reports something about the reader. The two lists must move
+        ;; together.
+        known? (or (= mode "project") (= mode "wasm") (= mode "llvm")
+                   (= mode "clr"))
         [mode spec-edn] (if known? [mode (second args)] ["spec" mode])
         r (cond
             (= mode "wasm") (compile-to-wasm spec-edn (nth args 2 ""))
             (= mode "llvm") (compile-to-llvm spec-edn)
+            (= mode "clr") (compile-to-clr spec-edn)
             (= mode "project") (compile-project spec-edn)
             :else (compile-to-base64 spec-edn))]
     (cond
@@ -396,6 +454,9 @@
       ;; LLVM IR is TEXT and leaves as text -- no base64 on the way out, which
       ;; is the one visible difference from every other target here.
       (:ll r) (:ll r)
+      ;; A CLR assembly is BYTES, so it does need base64 -- the opposite of
+      ;; `:ll` immediately above, and the reason these two cannot share an arm.
+      (:clr r) (base64 (:clr r))
       :else
       ;; One string out: base64 image, newline, then the native import order,
       ;; one per line, which is what the host needs to assign slots.

@@ -98,7 +98,13 @@ function runCompiler(args) {
 export function compileBytes(srcs, entry, optimize, to, meta,
                              { checks = null, exports = [], features = null } = {}) {
   const target = String(to ?? 'wasm').replace(/^:/, '');
-  if (target !== 'wasm') throw new Error(`no such target \`${target}\` (\`:to :wasm\`)`);
+  // BYTES BACK, so this one serves wasm and clr and refuses everything else.
+  // `:to :llvm` is text and has no place in a function called `compileBytes`.
+  if (target === 'clr') return compileClrBytes(srcs, entry, optimize, meta,
+                                               { checks, exports, features });
+  if (target !== 'wasm') {
+    throw new Error(`no such target \`${target}\` (\`:to :wasm\`, \`:to :clr\`)`);
+  }
   const aot = wantsAot(optimize);
   const spec = buildSpec({
     srcs, entry, slots: aot ? slotsAot() : slots(), aot, shake: true, meta, roots: null,
@@ -108,15 +114,51 @@ export function compileBytes(srcs, entry, optimize, to, meta,
   return b64decode(runCompiler(['wasm', spec, b64encode(aot ? runtimeAotWasm() : runtimeWasm())]).trim());
 }
 
+/// `:to :clr`: one .NET assembly, bytes out.
+///
+/// No `shake` and `SLOTS`, not `SLOTS_AOT`, matching the native CLI's
+/// `compile_clr`: the assembly's natives resolve BY NAME against whatever table
+/// the host carries, and there is no prebuilt module here to cut down.
+function compileClrBytes(srcs, entry, optimize, meta,
+                         { checks = null, exports = [], features = null } = {}) {
+  const aot = wantsAot(optimize);
+  const spec = buildSpec({
+    srcs, entry, slots: slots(), aot, shake: false, meta, roots: null,
+    stdlib: stdlib(), stdlibDeps: stdlibDeps(),
+    stripChecks: stripChecks(optimize, checks), exports, features,
+  });
+  const asm = b64decode(runCompiler(['clr', spec]).trim());
+  // A SNIFF TEST, for the reason the native CLI gives: the guest answers with a
+  // string either way, so a diagnostic written into an artifact would be found
+  // out by whoever loaded it with no idea which step lied. `MZ` starts every PE.
+  if (asm.length < 2 || asm[0] !== 0x4d || asm[1] !== 0x5a) {
+    throw new Error('the compiler did not answer with a PE assembly (no `MZ`)');
+  }
+  return asm;
+}
+
 export function compile(srcs, entry, outPath, optimize, to, meta,
                         { quiet = false, checks = null, features = null } = {}) {
   const target = String(to).replace(/^:/, '');
+  // `:to :llvm` IS BUILT -- on the native CLI (`cli/src/main.rs`, and
+  // `bin/check-llvm` gates it). This used to say it was not built anywhere,
+  // which was drift: the refusal belongs to THIS PACKAGE lacking the emitter,
+  // not to the target lacking an implementation.
   if (target === 'llvm' || target === 'native') {
     throw new Error(
-      '`:to :llvm` is not built yet: emitting a native artifact needs a linker,\n' +
-      'and this package carries none. The way to run natively today is `flint run`.');
+      `\`:to :${target}\` is not available from this package. It emits wasm and clr;\n` +
+      '`:to :llvm` is built in the native CLI (`flint compile ... :to :llvm`), and\n' +
+      '`:to :native` is a LINK that neither carries.');
   }
-  if (target !== 'wasm') throw new Error(`no such target \`${target}\` (\`:to :wasm\`)`);
+  if (target === 'clr') {
+    const asm = compileClrBytes(srcs, entry, optimize, meta, { checks, features });
+    writeFileSync(outPath, asm);
+    if (!quiet) process.stderr.write(`wrote ${outPath} (${asm.length} bytes)\n`);
+    return;
+  }
+  if (target !== 'wasm') {
+    throw new Error(`no such target \`${target}\` (\`:to :wasm\`, \`:to :clr\`)`);
+  }
   const aot = wantsAot(optimize);
   const table = aot ? slotsAot() : slots();
   const base = aot ? runtimeAotWasm() : runtimeWasm();
@@ -347,6 +389,14 @@ export function usage() {
       \`:with\` DECLARES rather than grants: it is recorded in the artifact's
       metadata, because the arguments arrive later and what a program needs
       has to survive until then.
+
+  flint compile :path <dir> :fn <ns/fn> :to :clr [:out <file.dll>]
+                [:optimize [perf]] [:checks true|false] [:meta k=v]
+      Compile to one .NET assembly, for any host with a CLR. The bytecode rides
+      in \`.text\` as a static byte array and the assembly exposes
+      \`boot\`/\`loop\`/\`link\`; its metadata is a \`CustomAttribute\`. It carries the
+      PROGRAM and names flint's runtime as a reference, so \`Flint.dll\` goes
+      beside it.
 
   flint test :path <dir>
       Run every var marked \`^:flint.check/test\` under \`:path\`, and report.

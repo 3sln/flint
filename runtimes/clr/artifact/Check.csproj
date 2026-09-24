@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <AssemblyName>Check</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Check.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The runtime the artifact NAMES and does not contain. A host carries it;
+         this harness is a host. -->
+    <ProjectReference Include="../src/Flint.csproj" />
+  </ItemGroup>
+</Project>

@@ -281,7 +281,8 @@ same problem.
 | `:to :llvm` (LLVM IR out, no linker) | built — `bin/check-llvm` links seven programs with clang and holds each to the same answer AND the same gas as the interpreter | [`llvm-ir-target`](DECISIONS.md#llvm-ir-target) |
 | `:to :native` (an executable, which is a link) | decided, not started — refuses with its own reason now, rather than borrowing `:to :llvm`'s | `llvm-ir-target` |
 | A host for a program linked from `:to :llvm` (`fs`, `env`, ports) | not started — the archive runs and computes; a program that opens a port parks for ever | `llvm-ir-target` |
-| The remaining cross-compilation backends (`:to :jvm`, `:to :clr`) | decided, not started, blocked on nothing technical — the runtimes exist, the CLI wiring doesn't | `cli`, `other-hosts` |
+| `:to :clr` | **shipped** — a from-scratch ECMA-335 writer in cljc (`src/flint/clr.cljc`), bytecode as a `FieldRva` array in `.text`, `boot`/`loop`/`link`, metadata as a namespaced `CustomAttribute`. Gated end to end by `bin/check-clr`: the loader, Roslyn as a reference reader, and the same answer the interpreter gives. No AOT yet — every arity is interpreted. | `four-operations`, `cli` |
+| `:to :jvm` | decided, not started — the runtime exists and the contract is written (`four-operations`); a class file has no data section, so the bytecode goes in the constant pool as `CONSTANT_Utf8` entries capped at 65 535 bytes each, which is the one part that is not a port of the CLR writer | `four-operations`, `other-hosts` |
 | nREPL | decided, not started — overlaps `debug-runner`'s debug runner design, "these should be one implementation" | `cli` §nREPL |
 | `{:args :capabilities}` entry map (vs. today's bare `:args` vector) | decided, not started — explicitly the breaking change to make exactly once, before anything is published | `cli`, `structured-ports` |
 

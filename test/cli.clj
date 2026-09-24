@@ -187,6 +187,19 @@
                    (str/includes? o "other-hosts"))))
 (check-that "an unknown target lists the real ones"
             (str/includes? (cli true "build" ":target" "wat") "no such target: wat"))
+;; A BUILT TARGET MUST NOT BE REFUSED, which is the half the `jvm` case above
+;; cannot check. `clr` was `:ok false` in this list while `:to :clr` worked from
+;; every other front door, so `flint build :target clr` refused a target the
+;; compiler had. The two lists are different surfaces -- `:target` here, `:to`
+;; for compile -- and nothing but this connects them.
+(check-that "a built target is not refused"
+            (let [o (cli true "build" ":target" "clr")]
+              (not (str/includes? o "cannot emit for clr"))))
+(check-that "targets lists clr as buildable"
+            (let [o (cli true "targets")]
+              (and (str/includes? o "clr")
+                   ;; `!` is how `describe-targets` marks one it cannot emit for.
+                   (not (re-find #"!\s*clr" o)))))
 (check-that "build with no entry point says how to give one"
             (str/includes? (cli true "build") ":flint/main"))
 
