@@ -14,12 +14,18 @@ commit was 75 behind and the gate's own closing phrase had changed too. It is
 the first thing a session reads, so it is the worst place in the tree to carry
 a stale number.*
 
-`Conc` is finished. **The remaining three-way generatable pool is 36 lines**
--- `bin/port-survey --calls`, run 2026-09-23: Rt 17, Space 8, Conc 6, Gc 4,
-Num 1. Named, because at this size the list is shorter than the number:
-`Space.take` 7, `Rt.setGasLimit` 5, `refreshCheckpoint` 5, `setSliceEnd` 4,
-`Conc.systemPort` 4, `Gc.classOf` 4, and six smaller. **`classOf` is DONE**
-(`kin/gcclass.kin`), and **`take` is a FALSE entry** -- see below.
+`Conc` is finished. **The remaining three-way generatable pool is 18 lines**
+-- `bin/port-survey --calls`, run 2026-09-23 after `gcclass` and `rtgas`
+landed: `Space` 8, `Conc` 6, `Rt` 3, `Num` 1. SEVEN of those 18 are
+`Space.take`, which is a false entry (below), so the honest figure is about
+eleven lines and the three-way work is effectively done. `Rt` fell from 17 and
+`Gc` to nothing.
+
+It was 36 lines that morning, and the list is kept because what happened to
+each entry is the useful part: `Gc.classOf` 4 DONE (`kin/gcclass.kin`),
+`Rt.setGasLimit` 5, `refreshCheckpoint` 5 and `setSliceEnd` 4 DONE
+(`kin/rtgas.kin`), `Space.take` 7 a FALSE entry (below), `Conc.systemPort` 4
+and six smaller still open.
 
 *`in 3` MATCHES BY NAME, which is not the same as by function.* The rank's own
 comment says so for `Rt.lookup`, whose native counterpart "is shaped
