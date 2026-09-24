@@ -12514,6 +12514,83 @@ new rule a version-matched host carries all 88 and nothing changes; a host that
 deliberately TRIMMED its builtin set would now fail to boot a program it could
 have run. That trade is chosen, not overlooked.
 
+### `loop` is called by SEVERAL REAL THREADS, except on wasm
+
+Native, the JVM and the CLR must all expect concurrent `loop()`. wasm does not
+support it today and the ABI is built so that it can later without changing
+shape.
+
+**Why wasm cannot, and why it is not a small fix.** `src/flint/link.cljc:483`
+hardcodes `:memory :unshared` for every module -- a literal, not an option --
+and `flint.modmeta` makes memory a COMPATIBILITY KEY, so a mismatch is a refusal
+naming it. One instance therefore cannot be driven by several OS threads at all.
+Flipping it invalidates every existing artifact, which is what that key is FOR,
+and pulls in `SharedArrayBuffer`, atomics and host threads. Separate work.
+
+The other three already have the machinery: `runtime/src/par.rs` is 355 lines of
+"several executors inside one sandbox, one heap, K threads on it" behind
+`#[cfg(feature = "parallel")]`, and `Parallel.java` mirrors it.
+
+**What concurrency-ready costs the ABI, concretely:**
+
+* **no implicit "current thread" anywhere.** `loop()` takes nothing and answers
+  a status, which is already safe. But a `link`ed callback must carry the port
+  AND the green thread explicitly -- a callback that means "the thread I happen
+  to be on" cannot be called from an arbitrary executor;
+* **a result travels through the BRIDGE, with its `:tx`, and never through a
+  shared buffer.** `runtime/src/abi.rs` has one `static mut OUT`, and
+  `finish_run` puts a run's result in it: two threads finishing at once race on
+  one `Vec`. The port path is already correct -- `lib/flint/system.cljc` answers
+  `{:tx n :op :call ...}` with `:return`/`:throw`, and a correlation id is what
+  makes concurrent answers separable. `out_ptr`/`out_len` survive only for
+  pre-`boot` `flint_load_image` refusals, which are single-threaded by
+  construction;
+* **re-entry is refused by a FLAG, and the flag is PER-EXECUTOR.** Set on the
+  way into a callback that forbids re-entry, cleared on the way out, and every
+  entry point checks it -- so a callback that calls back in is told no instead of
+  corrupting a half-updated heap. A SINGLE flag would be wrong the moment
+  `loop()` runs on two threads: one executor inside a callback would refuse
+  another executor's legitimate entry. It belongs beside the other per-executor
+  state in `gc.rs`'s `ExecRoots`, which is per-executor for the same class of
+  reason -- "a shared `Vec` pushed to from the barrier would reallocate under
+  another thread's push". It must also be cleared when the callback leaves by an
+  ERROR path, or one refused call wedges that executor for good;
+* **a `link`ed callback may not allocate, re-enter the sandbox, or block.**
+  `par.rs`: "the only safepoint is the interpreter's checkpoint, between two
+  bytecode instructions, where `ip` has been written back and every live value
+  is on the value stack" -- because a collection MOVES objects, so a thread
+  stopped elsewhere holding a `Value` in a host local resumes holding a stale
+  pointer. Parking happens at a safepoint, so the park/unpark callbacks land
+  legally; anything that allocated or re-entered there would not. The runtime is
+  `#![no_std]` with no `Mutex` and no `Condvar`, so the guest side has atomics
+  only and every blocking primitive lives host-side.
+
+### The waiter registry is the host's, not the sandbox's
+
+Which ports can unblock a sandbox is answered by a registry the HOST owns and
+shares across sandboxes. The runtime is handed functions through `link` that
+add and remove a green thread from a bridge port's waiter list; a bridge that
+receives data consults that list to know what to wake.
+
+This is the unlanded half of `bridges-are-the-only-door`'s table, arriving from
+the other direction -- that table already prescribes bridge memory moving to
+"the bridge's own, host-side", the executor to "one, shared", and the wake
+condition to "parked thread + non-empty end".
+
+**It means `loop` does NOT report blockers**, and that deletes two things: the
+`1e6` counter in `sdks/esm/src/guest.js:67` whose message is "the host pump made
+no progress" -- a magic number standing in for a signal the ABI never carried --
+and a proposed fourth `Stuck` status. A host that owns the registry already
+knows whether anything it holds can unblock anyone.
+
+**One thing does NOT move out.** `runtime/src/conc.rs:1361`'s `report_deadlock`
+detects threads waiting on EACH OTHER rather than on ports, and no host-side
+port registry can see that. Today the scheduler returns status 0 for both a
+clean finish and a deadlock (`kgen/rt/sched.rs:255-268`), distinguishing them
+only by a diagnostic string -- so "settled" and "wedged" are the same number to
+a host. That is the one case where `loop` still has to say something a host
+cannot infer, and it is unresolved.
+
 ### Where the targets may differ, and where they may not
 
 The SEMANTICS above are identical everywhere. The spelling is not, and forcing
