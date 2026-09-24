@@ -25,6 +25,12 @@ import com.flint.rt.Sandbox;
 ///   answer printable  what came back on the caller port
 /// </pre>
 ///
+/// `FourOps` FOR THREE OPERATIONS, and the name is kept on purpose. The record is
+/// `DECISIONS.md#four-operations`, the gate is `bin/check-four-ops` and the case is
+/// `test/four-ops/contract.edn` -- a reader following that chain should not lose it
+/// at the last link because `prop` was dropped and one file was renamed. The record
+/// kept its own slug for the same reason.
+///
 /// It goes through `flint.Artifact` REFLECTIVELY and touches nothing in
 /// `com.flint.rt` but the three operations, `Bridge` and `Builtins.byName`. That
 /// restriction is the test: this file is one package outside the runtime, so `javac`

@@ -4,7 +4,7 @@
   ## What it does and where it stops
 
   It writes a constant pool, static fields, and methods whose bodies are
-  STRAIGHT LINES -- no branches. That is not a placeholder: the four operations
+  STRAIGHT LINES -- no branches. That is not a placeholder: the three operations
   an artifact exposes are delegations, and a delegation is a straight line.
 
   It stops exactly where `StackMapTable` begins. From class-file version 50 the

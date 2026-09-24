@@ -16,11 +16,11 @@ import java.util.Deque;
 /// IT IS IN `com.flint`, NOT `com.flint.rt`, and that is the test. A consumer of
 /// an artifact sees only public members of the runtime package, so putting this one
 /// package out means the compiler refuses anything this file reaches for that the
-/// four operations do not offer. `runtimes/jvm/test/HostCall.java` reaches into
+/// three operations do not offer. `runtimes/jvm/test/HostCall.java` reaches into
 /// `Conc.installSystemPort` and `Conc.drive` directly and proves the RUNTIME works;
 /// only this proves the CONTRACT does.
 ///
-/// It is also why this file carries a wire writer. The four operations take BYTES
+/// It is also why this file carries a wire writer. The three operations take BYTES
 /// on a bridge; the encoder belongs in an SDK beside `sdks/esm/src/codec.js`, and
 /// there is no JVM SDK yet. Written by hand, tag for tag, exactly as `HostCall`
 /// does and for the same reason: the bind message has to carry a port the guest

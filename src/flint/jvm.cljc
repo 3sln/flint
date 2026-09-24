@@ -53,7 +53,7 @@
 
 ;; --------------------------------------------------------------- the face
 ;;
-;; The generated class is the artifact's OWN name for the four operations, and
+;; The generated class is the artifact's OWN name for the three operations, and
 ;; that is its whole job: a consumer calls `flint.Artifact.boot`, never
 ;; `com.flint.rt.Sandbox.boot`, so which interpreter is underneath stays a
 ;; detail. Every body is one delegation, which is why this needs no dataflow

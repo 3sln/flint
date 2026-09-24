@@ -29,7 +29,7 @@ import java.util.Map;
 ///
 /// "Self-contained" means *contains all of the program's code*, NOT *runs
 /// standalone*. This class, the collector and the builtins are the HOST's: an
-/// artifact is one class file carrying bytecode and the four operations, and it
+/// artifact is one class file carrying bytecode and the three operations, and it
 /// needs a JVM with flint's runtime on the classpath. Saying it the other way
 /// round is the mistake the record warns about first.
 ///
