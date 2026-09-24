@@ -990,8 +990,16 @@ def calls(limit=10):
         nat = extract_all(native_for(area), N_PAT)
         three = sum(c for n, t, c in ms if norm(n) in ok and norm(n) in nat)
         if good:
+            # MARKED `(2-way)` WHEN NATIVE HAS NO SUCH FUNCTION, the same way
+            # `--rank` marks them. Without it the list and the `in 3` beside it
+            # do not correspond: `Rt` read `in 3 3` over a list headed by
+            # `3 billing`, and native has no `billing` at all -- the ports
+            # needed a predicate native does not, which is written up on the
+            # method itself. A reader who takes the list as the three spends
+            # the firing reading the one entry that cannot be ported.
             rows.append((three, good, allh, area,
-                         sorted(((c, n) for n, t, c in ms if norm(n) in ok),
+                         sorted(((c, n if norm(n) in nat else n + " (2-way)")
+                                 for n, t, c in ms if norm(n) in ok),
                                 reverse=True)[:3]))
     print(f"  {tot} of {hand} hand-written lines have every call expressible;"
           f" {sum(r[0] for r in rows)} of those are also present on native\n")
