@@ -1,0 +1,252 @@
+#!/usr/bin/env bb
+;; THE THREE OPERATIONS, ASKED OF EVERY TARGET, against one file of expectations.
+;;
+;; `DECISIONS.md#four-operations` says the semantics are identical everywhere and
+;; only the spelling is not. `test/four-ops/contract.edn` is that sentence as data;
+;; this asks each target's harness the questions in it and compares.
+;;
+;; WHAT MAKES THIS A GATE AND NOT A LOOP OVER WHAT EXISTS. Three of the faces are
+;; not built, and a check that walked the tree and tested what it found would print
+;; green today and keep printing green if the JVM face were deleted tomorrow. So the
+;; target table is DECLARED here, each row saying built or not, and:
+;;
+;;   * a row marked built that cannot be exercised is a FAILURE;
+;;   * a row marked not-built whose face EXISTS is also a failure, because that is
+;;     the table rotting in the direction that reads like success.
+;;
+;; Coverage is printed either way: "1 of 4 targets" is the honest headline while
+;; three are missing, and a run that does not say how many it skipped is not a
+;; measurement. A run that exercised NOTHING fails outright.
+(require '[babashka.fs :as fs] '[clojure.edn :as edn] '[clojure.string :as str]
+         '[babashka.process :as p])
+(def root (str (fs/parent (fs/parent (fs/real-path *file*)))))
+
+(defn jdk []
+  (let [c (or (System/getenv "FLINT_JDK") (System/getenv "JAVA_HOME")
+              "/opt/homebrew/opt/openjdk")]
+    (first (filter #(fs/executable? (str % "/bin/javac"))
+                   [c "/opt/homebrew/opt/openjdk"]))))
+
+(defn sh! [& args]
+  ;; OPTS FIRST. `p/sh` takes them as the leading argument, and a trailing map is
+  ;; passed through to the command -- which `bin/flint` then reported as "unknown
+  ;; argument: {:dir ...}", naming the map rather than the mistake.
+  (let [r (apply p/sh (cons {:dir root} args))]
+    (when-not (zero? (:exit r))
+      (throw (ex-info (str "failed: " (str/join " " args) "\n" (:out r) (:err r)) {})))
+    r))
+
+;; ---------------------------------------------------------------- the targets
+
+(defn run-jvm
+  "Compile the case program, emit the artifact, and run the JVM harness.
+
+  Returns the harness's lines as `{[key arg] value}` plus `:image-natives`, which
+  this reads out of the IMAGE rather than asking the artifact: the natives a program
+  declares are a property of the bytecode, and the `prop(\"natives\")` that used to
+  answer it is gone along with `prop`."
+  [case-map]
+  (when-let [jdk (jdk)]
+    (let [work (str root "/out/four-ops/jvm")
+          src (str work "/src")
+          rt-jar (str root "/dist/flint-rt.jar")]
+      (fs/create-dirs src)
+      (spit (str src "/t.cljc") (:program case-map))
+      ;; ALWAYS, not when missing. A jar left over from before the change being
+      ;; checked reads exactly like a passing run, which is the stale-artifact trap
+      ;; this project has been bitten by more than once. Three seconds.
+      (sh! "sh" (str root "/bin/build-jvm-runtime"))
+      ;; THROUGH THE COMMITTED TOOLS, not inline: a hand-configured one-off encodes
+      ;; decisions the real path lacks.
+      (sh! "bb" (str root "/bin/flint") ":src" src ":fn" (:entry case-map)
+           "--emit-image" ":out" (str work "/t.image"))
+      (sh! "bb" (str root "/bin/build-jvm-artifact") ":fn" (:entry case-map)
+           ":image" (str work "/t.image") ":class" work)
+      (let [r (apply sh! (concat [(str jdk "/bin/java") "-cp" (str rt-jar ":" work)
+                                  "com.flint.FourOps" (:entry case-map)]
+                                 (:call-args case-map)))
+            img (fs/read-all-bytes (str work "/t.image"))
+            ;; `nnatives` is the first `u32` after "FLINTIMG" and the version
+            ;; (`src/flint/image.cljc`), little-endian.
+            nnat (reduce (fn [a i] (+ a (bit-shift-left (bit-and (aget ^bytes img (+ 12 i)) 0xff)
+                                                        (* 8 i))))
+                         0 (range 4))]
+        (assoc (->> (str/split-lines (:out r))
+                    (keep (fn [l] (let [[k a v] (str/split l #"\t" 3)] (when v [[k a] v]))))
+                    (into {}))
+               :image-natives nnat)))))
+
+(def targets
+  [{:name "jvm"    :built? true
+    :face (str root "/src/flint/jvm.cljc") :run run-jvm}
+   ;; NOT BUILT. `DECISIONS.md#four-operations` says the CLR face is written and
+   ;; runs, and cites `src/flint/clr.cljc` and `runtimes/clr/src/rt/Artifact.cs` --
+   ;; NEITHER OF WHICH IS IN THE TREE at the commit this was written against. Marked
+   ;; not-built, and this row FAILS the moment either lands without a `:run` beside
+   ;; it, which is the point: the record and the tree disagreeing is what to surface.
+   {:name "clr"    :built? false :face (str root "/runtimes/clr/src/rt/Artifact.cs")}
+   {:name "wasm"   :built? false :face (str root "/src/flint/wasmfour.cljc")}
+   {:name "native" :built? false :face (str root "/src/flint/nativefour.cljc")}])
+
+;; ---------------------------------------------------------------- the checks
+
+(def case-map (edn/read-string (slurp (str root "/test/four-ops/contract.edn"))))
+(def version (:version (edn/read-string (slurp (str root "/meta.edn")))))
+
+(def fails (atom []))
+(defn fail! [t m] (swap! fails conj (str "  FAIL " t ": " m)))
+
+(defn check-ops! [t got]
+  (let [want (set (:operations case-map))
+        ;; The emitted class has no other public members, so every public method is
+        ;; an operation. A fourth showing up here is the drift to catch.
+        have (set (some-> (get got ["ops" "names"]) (str/split #",")))]
+    (when-not (= want have)
+      (fail! t (str "exposes " (str/join "," (sort have)) " but the contract is "
+                    (str/join "," (sort want))
+                    (when (seq (remove want have))
+                      (str " -- " (str/join "," (sort (remove want have)))
+                           " is not an operation this contract has")))))))
+
+(defn check-meta! [t got]
+  (let [m (:meta case-map)
+        raw (get got ["meta" (:section m)])
+        wrong (get got ["meta" (:must-not-answer-to m)])]
+    (if (or (nil? raw) (= "(absent)" raw))
+      (fail! t (str "carries no " (:section m) " metadata in its container. It is the"
+                    " only way a reader gets at this WITHOUT executing the artifact,"
+                    " which is why `prop` was dropped."))
+      (let [parsed (try (edn/read-string raw) (catch Exception _ ::bad))]
+        (if (= ::bad parsed)
+          (fail! t (str (:section m) " is not readable EDN: "
+                        (pr-str (subs raw 0 (min 80 (count raw))))))
+          (do
+            (doseq [k (:keys m)]
+              (when-not (contains? parsed k)
+                (fail! t (str (:section m) " carries no " k))))
+            ;; The metadata's own list of operations against the class's actual
+            ;; methods. Two facts, one source; they disagreed for a while and nothing
+            ;; looked.
+            (when (:exports-are-the-operations m)
+              (let [declared (set (:exports parsed))
+                    want (set (:operations case-map))]
+                (when-not (= declared want)
+                  (fail! t (str (:section m) " declares :exports "
+                                (str/join "," (sort declared)) " but the artifact has "
+                                (str/join "," (sort want))
+                                " -- a host reading the metadata would look up a"
+                                " method that is not there")))))
+            (when-not (= version (:version parsed))
+              (fail! t (str (:section m) " says version " (pr-str (:version parsed))
+                            " but " (:version-from m) " says " (pr-str version))))
+            (let [ck (get-in parsed [:compat :key])]
+              (when-not (and (string? ck)
+                             (re-find (re-pattern (:compat-key-matches m)) ck))
+                (fail! t (str (:section m) " compat key is " (pr-str ck) ", want /"
+                              (:compat-key-matches m) "/"))))))))
+    ;; THE UN-NAMESPACED NAME MUST ANSWER NOTHING. JVMS 4.7 requires an unrecognised
+    ;; attribute to be silently ignored, so a collision is QUIET -- which is exactly
+    ;; why the name is reverse-DNS and why this asks.
+    (when-not (contains? #{nil "(absent)" "null"} wrong)
+      (fail! t (str "also answers to the un-namespaced name "
+                    (pr-str (:must-not-answer-to m))
+                    ", which is the collision the namespace exists to avoid")))))
+
+(defn check-link! [t got]
+  (let [want (:link case-map)]
+    (doseq [[when* k] [["before" :before-boot] ["after" :after-boot]]]
+      (let [w (name (get want k))
+            g (get got ["link" when*])]
+        (when-not (= w g)
+          (fail! t (str "link " when* " boot: " g ", want " w
+                        (when (= :after-boot k)
+                          (str " -- natives resolve exactly once when the image loads,"
+                               " so an override registered now would silently never"
+                               " apply")))))))))
+
+(defn check-boot! [t got]
+  (let [want (:boot case-map)
+        declared (:image-natives got)
+        missing (get got ["boot" "missing"])
+        ok (get got ["boot" "ok"])]
+    (when-not (= (:declared-natives want) declared)
+      (fail! t (str "this program's image declares " declared " natives, the contract"
+                    " says " (:declared-natives want)
+                    " -- that count is a property of the IMAGE, so every target must"
+                    " find the same number for the same program")))
+    (when (= "BOOTED ANYWAY" missing)
+      (fail! t (str "boot succeeded with a declared native absent. The contract says it"
+                    " must FAIL: the version says what has to be linked, so a gap is a"
+                    " version mismatch and is refused now rather than when something"
+                    " reaches it.")))
+    (when (and (:message-names-it want) missing
+               (not (str/includes? (str missing) "flint/str2")))
+      (fail! t (str "boot failed on a missing native without naming it: "
+                    (pr-str missing))))
+    (when-not (= "booted" ok)
+      (fail! t (str "boot failed with every native present: " (pr-str ok))))))
+
+(defn check-loop! [t got]
+  ;; AT REST IS 2, and a harness that called this a failure would fail on every
+  ;; working program. This is the assertion that keeps `NeedsHost` a resting state
+  ;; rather than drifting into an error on some target.
+  (doseq [[k arg] [[:at-rest "at-rest"] [:after-call "after-call"]]]
+    (let [w (str (get-in case-map [:loop k]))
+          g (get got ["loop" arg])]
+      (when-not (= w g)
+        (fail! t (str "loop " arg " answered " g ", want " w " ("
+                      (get-in case-map [:status (get-in case-map [:loop k])]) ")")))))
+  (let [a (get got ["answer" "printable"])]
+    (when-not (and a (str/includes? a "return") (str/includes? a (:expect-answer case-map)))
+      (fail! t (str "the call's answer was " (pr-str a) ", want a :return carrying "
+                    (pr-str (:expect-answer case-map)))))))
+
+;; ---------------------------------------------------------------- run
+
+(let [ran (atom 0) skipped (atom [])]
+  (doseq [{:keys [name built? face run]} targets]
+    (cond
+      ;; The table rotting the safe-looking way: a face that exists while the row says
+      ;; it does not.
+      (and (not built?) (fs/exists? face))
+      (fail! name (str face " exists but this gate's table says the " name
+                       " face is not built. Mark it built and give the row a :run, or"
+                       " the check is passing over a real implementation."))
+
+      (not built?)
+      (swap! skipped conj name)
+
+      :else
+      (let [got (try (run case-map)
+                     (catch Exception e
+                       (fail! name (str "the harness did not run: " (ex-message e)))
+                       ::err))]
+        (cond
+          (= ::err got) nil
+          (nil? got) (do (swap! skipped conj (str name " (no toolchain)"))
+                         (println (str "  --   " name ": no toolchain, skipped")))
+          :else (let [before (count @fails)]
+                  ;; The row's verdict is printed AFTER its checks, and only if they
+                  ;; passed. Printing "ok" first and the failures afterwards is how a
+                  ;; log gets skimmed as green.
+                  (swap! ran inc)
+                  (check-ops! name got)
+                  (check-meta! name got)
+                  (check-link! name got)
+                  (check-boot! name got)
+                  (check-loop! name got)
+                  (println (if (= before (count @fails))
+                             (str "  ok   " name ": three operations, "
+                                  (:image-natives got) " natives declared, metadata in "
+                                  (get-in case-map [:meta :section])
+                                  ", boot refuses a missing native, loop 2 at rest")
+                             (str "  FAIL " name ": " (- (count @fails) before)
+                                  " disagreement(s) with test/four-ops/contract.edn"))))))))
+  (doseq [f @fails] (println f))
+  (println (format "check-four-ops: %d of %d targets exercised against test/four-ops/contract.edn%s"
+                   @ran (count targets)
+                   (if (seq @skipped) (str "; not built: " (str/join ", " @skipped)) "")))
+  (when (zero? @ran)
+    (println "  FAIL nothing was exercised, so this run asserts nothing")
+    (System/exit 1))
+  (when (seq @fails) (System/exit 1)))

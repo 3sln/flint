@@ -244,6 +244,25 @@
         [p c] (code-attr p body max-stack max-locals)]
     [p [(u16 access) (u16 n) (u16 d) (u16 1) c]]))
 
+(defn attribute
+  "An `attribute_info`: a name in the pool, a `u4` length, and the bytes.
+
+  CLASS-LEVEL ATTRIBUTES ARE WHERE AN ARTIFACT'S METADATA LIVES
+  (`DECISIONS.md#four-operations`). JVMS 4.7 REQUIRES a reader to silently ignore
+  an attribute whose name it does not recognise, which is what makes a custom one
+  legal and inert -- and also what makes the NAME have to be namespaced, because a
+  collision there is quiet rather than loud. The name is `flint.modmeta/section-name`,
+  the same string the wasm custom section uses; the whole point is one name, not
+  one per target.
+
+  `bytes` is a byte string, written verbatim. NOT modified UTF-8: an attribute's
+  payload is `u1[]` and means whatever its reader says, unlike a `CONSTANT_Utf8`.
+  So the metadata goes in as plain UTF-8 text a `slurp` can read, and nothing
+  outside this file has to know about the `0xC0 0x80` rule."
+  [p nm bytes]
+  (let [[p n] (utf8 p nm)]
+    [p [(u16 n) (u32 (flint.rt/b-count bytes)) bytes]]))
+
 (defn field [p access nm desc]
   (let [[p n] (utf8 p nm)
         [p d] (utf8 p desc)]
@@ -252,7 +271,7 @@
 (defn class-file
   "Assemble it. `fields` and `methods` are the byte trees `field`/`method` built
   against the SAME pool `p`, which must therefore be the pool they left behind."
-  [p access this-internal super-internal fields methods]
+  [p access this-internal super-internal fields methods attrs]
   (let [[p this] (class-ref p this-internal)
         [p super] (class-ref p super-internal)]
     ;; The pool goes in AFTER `this` and `super` are interned, which is why it is
@@ -266,4 +285,4 @@
       (u16 0)
       (u16 (count fields)) fields
       (u16 (count methods)) methods
-      (u16 0)])))
+      (u16 (count attrs)) attrs])))

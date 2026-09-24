@@ -42,6 +42,16 @@ for c in check-version check-decisions check-flattens check-builtins check-sys-c
   ./bin/$c || fail "bin/$c"
 done
 
+# THE FOUR OPERATIONS, on every target that has them
+# (`DECISIONS.md#four-operations`). It compiles a program and runs it, so it is
+# slower than the checks above -- about twenty seconds, against their one -- and
+# it belongs in the fast tier anyway: the failure it catches is two targets
+# answering different questions and both passing, which nothing else looks for.
+#
+# It SKIPS a target with no toolchain and says so, and FAILS if nothing at all
+# was exercised. A run that asserts nothing must not read as a pass.
+./bin/check-four-ops || fail "bin/check-four-ops"
+
 # THE FOUR FILES BABASHKA LOADS OUT OF `lib/` MUST STAY `.cljc`.
 #
 # `bin/flint` runs under babashka and requires these from `lib/`; babashka

@@ -1,250 +1,235 @@
 package com.flint.rt;
 
-
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/// THE FOUR OPERATIONS AN ARTIFACT HAS, on the JVM.
+/// THE THREE OPERATIONS, on the JVM (`DECISIONS.md#four-operations`).
 ///
-/// `boot`, `loop`, `link`, `prop` -- and nothing else. Every target is meant to
-/// expose these four and no more; this is the JVM face of them.
+/// `boot`, `loop`, `link`. The semantics are the record's and are identical on
+/// every target; only the spelling is this one's.
 ///
-/// ## "Self-contained" means ALL OF THE PROGRAM'S CODE, not "runs standalone"
+/// ## `prop` WAS THE FOURTH AND IS GONE
 ///
-/// An artifact is one class file: the bytecode, the compiled arities when there
-/// are any, and the four operations. It does NOT contain the interpreter, the
-/// collector or the builtins -- the HOST carries those and plugs them in, the
-/// builtins through the resolver `boot` takes (`Natives`) and an override through
-/// `link`. So `java -cp flint-rt.jar:. ...` is the shape, and an artifact on its
-/// own runs nothing.
+/// The metadata is a class ATTRIBUTE on the generated `flint.Artifact`, named
+/// `com.3sln.flint.meta` -- the same string the wasm custom section uses. All three
+/// container formats carry metadata a reader gets at WITHOUT executing the
+/// artifact, and a method call never can. So nothing here answers questions about
+/// the artifact: a reader with the class file has the answers already, and one
+/// without it was never going to get them from a method.
 ///
-/// That is the opposite of what this file said while the interpreter travelled in
-/// the jar beside the image, and the difference is worth stating rather than
-/// quietly correcting: a reader who takes "self-contained" to mean "needs nothing
-/// else" will be wrong about the deployment.
+/// Reading it needs no JVM and no class loading -- JVMS 4.7 requires an
+/// unrecognised attribute to be silently ignored, which is what makes a custom one
+/// legal and inert, and also what makes the namespace load-bearing: a colliding
+/// attribute name is not an error, it is wrong data read as right.
 ///
-/// ## The program is data ON A CLASS, not a file beside one
+/// ## The artifact carries the PROGRAM, not the runtime
 ///
-/// `boot` is handed the image as string constants and the properties as a string,
-/// both of which live in the constant pool of `flint.Artifact` -- the class
-/// `src/flint/jvm.cljc` emits for each program. There is NO `flint/program.image`
-/// resource and nothing here opens one.
+/// "Self-contained" means *contains all of the program's code*, NOT *runs
+/// standalone*. This class, the collector and the builtins are the HOST's: an
+/// artifact is one class file carrying bytecode and the four operations, and it
+/// needs a JVM with flint's runtime on the classpath. Saying it the other way
+/// round is the mistake the record warns about first.
 ///
-/// That is a deliberate reversal of the obvious design. A resource is fewer moving
-/// parts and makes the bytecode a FILE the artifact contains; constant data makes
-/// it part of what the artifact IS, which is the shape the CLR will use as well, so
-/// the two targets stay uniform rather than each being natural on its own terms.
+/// ## Where this differs from wasm, and why that is allowed
 ///
-/// It also keeps the format an implementation detail in the way that matters:
-/// nothing public says where the program came from, so an AOT packager emitting
-/// compiled classes beside `flint.Artifact` moves no signature here.
+/// A JVM sandbox can be handed a real OBJECT, so the bridge is one `Bridge` with
+/// five methods over a `(port, bytes)` pair -- mirroring the CLR's `TryTake`,
+/// `Put`, `Open`, `Answer`, `Closed`. wasm needs fourteen exports because most of
+/// them exist only to move bytes across a boundary that cannot pass an array or a
+/// callback: `flint_in_alloc` plus `flint_deliver` is `Put` inverted,
+/// `flint_drain` plus `flint_events_ptr` plus five-`u32` record parsing is
+/// `TryTake`, and `flint_grant`/`flint_answer`/`flint_continue` are `Open` and
+/// `Answer` with the return value replaced by a token the host has to keep.
 ///
-/// The difference from `runtimes/jvm/test/RtSteps.java`, which reads a `.image`
-/// from the command line, is the point: a consumer of an artifact has an artifact,
-/// not a filesystem layout.
-///
-/// ## What the JVM does that a pointer ABI cannot
-///
-/// A bridge is ONE OBJECT with both directions on it. On wasm the host writes
-/// into linear memory (`flint_in_alloc`) and then names a port id
-/// (`flint_deliver`), drains with `flint_drain`, and reads five-`u32` records at
-/// `flint_events_ptr` -- five ABI functions for what is here two methods on a
-/// `Bridge`, because a JVM sandbox can hand the host a callable and a wasm
-/// module cannot. The same reason removes `flint_grant`, `flint_answer` and
-/// `flint_continue`: a host's answer to an `open` is this `Bridge`'s RETURN
-/// VALUE, so there is no token to keep and no stale-token generation to check.
-///
-/// ## What it cannot do better
-///
-/// `prop(name, buf)` keeps the pointer shape -- a caller-supplied buffer and a
-/// length back -- because the contract says four operations and `String
-/// prop(String)` would be a fifth thing to keep in step. It is written the way
-/// wasm will have to write it; see the note on the method.
+/// THE INBOUND DIRECTION IS A PULL, and that is the part worth noticing. The
+/// sandbox asks the bridge for the next message rather than the host pushing one
+/// in, so the host never needs a handle on the sandbox to deliver -- which is
+/// what lets `boot` take one argument and still serve every port the host owns.
+/// An earlier draft of this file pushed, and needed a fifth operation to attach
+/// each further port to the sandbox first.
 public final class Sandbox {
 
     // --- the bridge --------------------------------------------------------
 
-    /// A port the HOST owns, with both directions on it.
+    /// A message on a port. The `(port, bytes)` pair the five methods work over.
     ///
-    /// `id` is the host's, and that is the inversion the whole port design
-    /// rests on (`DECISIONS.md#ports-are-the-hosts`): the sandbox does not mint
-    /// an endpoint and offer it up, so an id means the same thing in every
-    /// sandbox holding it.
+    /// BYTES, not text: a port's format may be binary (Transit over msgpack is),
+    /// so decoding as UTF-8 here would replace whatever is not valid and corrupt
+    /// the message.
+    public record Msg(int port, byte[] bytes) {}
+
+    /// The host's whole side of the bridge.
     ///
-    /// Subclass it, implement `message`, and call `send`. `send` before `boot`
-    /// throws rather than dropping the bytes -- a message delivered to nothing
-    /// is the failure that reads as "the call was never answered".
+    /// ONE OBJECT FOR EVERY PORT, not one per port: the id travels in the
+    /// arguments, which is what `(port, bytes)` means. The id is the HOST's, and
+    /// that is the inversion the port design rests on
+    /// (`DECISIONS.md#ports-are-the-hosts`) -- the sandbox does not mint an
+    /// endpoint and offer it up, so an id means the same thing in every sandbox
+    /// holding it.
     public abstract static class Bridge {
-        public final int id;
+        /// The port that becomes this sandbox's SYSTEM port -- the one it can ask
+        /// the host for things through. A sandbox given none runs logic and can
+        /// ask for nothing, which is a coherent thing to be.
+        public final int systemPort;
         public final String label;
-        private Sandbox box;
 
-        public Bridge(int id, String label) { this.id = id; this.label = label; }
+        public Bridge(int systemPort, String label) {
+            this.systemPort = systemPort;
+            this.label = label;
+        }
 
-        /// Tell this bridge which sandbox it belongs to.
+        /// HOST TO GUEST, pulled. The next message the host has for the sandbox,
+        /// or null when it has none. `loop` calls this until it answers null.
+        protected abstract Msg tryTake();
+
+        /// GUEST TO HOST. The sandbox sent these bytes on that port.
+        protected abstract void put(int port, byte[] wire);
+
+        /// The guest called `open` on a capability, on the port it asked through.
+        /// Return the host port id to GRANT, or 0 to refuse -- a refusal is a
+        /// normal outcome and surfaces in the program as a catchable error.
         ///
-        /// NOT A FIFTH OPERATION. `boot` takes the system port and nothing
-        /// else, exactly as the contract says; every other port the host owns is
-        /// either granted through `open` -- which attaches it for you -- or
-        /// declared here, on the HOST's own object, before the host sends on it.
-        /// wasm cannot do this and needs a thirteenth ABI function
-        /// (`flint_install_port`) for the same job, because there is no host
-        /// object for a wasm module to hold onto.
-        public final Bridge attach(Sandbox box) { box.wire(this); return this; }
-
-        /// GUEST TO HOST. The bytes are the wire format
-        /// (`DECISIONS.md#structured-ports`), and they are BYTES: a port's
-        /// format may be binary, so decoding them as UTF-8 here would corrupt
-        /// whatever is not valid.
-        protected abstract void message(byte[] wire);
-
-        /// The guest closed its end. Nothing more will arrive on this bridge.
-        protected void closed() {}
-
-        /// The guest called `open` on a capability. Return the bridge to grant
-        /// it, or null to refuse -- a refusal is a normal outcome and surfaces
-        /// in the program as a catchable error.
-        ///
-        /// A GRANT NAMES A PORT, which is why this returns one rather than a
+        /// A GRANT NAMES A PORT, which is why this answers an id rather than a
         /// boolean: there is no port until the host says which one.
-        protected Bridge open(String capability, byte[] args) { return null; }
+        protected int open(int port, String capability, byte[] args) { return 0; }
 
         /// The guest asked the host for a value that is not a port
         /// (`DECISIONS.md#workspace-capabilities` step 7). Return the encoded
         /// value, or null to refuse.
-        protected byte[] request(byte[] wire) { return null; }
+        protected byte[] answer(int port, byte[] wire) { return null; }
 
-        /// HOST TO GUEST. Enqueues and wakes; it never re-enters the scheduler,
-        /// so it is safe from inside `message`. Call `loop` afterwards.
-        public final void send(byte[] wire) {
-            if (box == null) throw new IllegalStateException(
-                "bridge " + id + " is not wired to a sandbox: call Sandbox.boot(bridge) first");
-            box.pending = true;
-            Conc.hostDeliver(box.rt, id, wire);
-        }
-
-        /// Close the host's end.
-        public final void close() {
-            if (box != null) Conc.hostClosePort(box.rt, id);
-        }
+        /// The guest closed its end of that port.
+        protected void closed(int port) {}
     }
 
-    // --- the runtime the host plugs in -------------------------------------
+    // --- status ------------------------------------------------------------
 
-    /// HOW THE RUNTIME ARRIVES: one function from a builtin's name to its
-    /// implementation.
+    /// `loop`'s answers, and THE EXISTING ABI NUMBERS -- this project treats them
+    /// as the ABI itself, so they are not re-enumerated here.
     ///
-    /// The artifact carries the program's code and not the runtime, so the
-    /// builtins have to come from outside -- and the image declares them BY NAME:
-    /// 88 of them for `(ns t) (defn main [args] "x")`, which is `clojure.core`'s
-    /// reach rather than the program's, against 223 the runtime carries in all.
-    ///
-    /// EIGHTY-EIGHT `link` CALLS IS THE WRONG SHAPE, and not only because it is a
-    /// loop the host writes by hand. The image's native table is fixed the moment
-    /// the bytecode is read, so resolution has to happen DURING boot -- a host
-    /// linking 88 names beforehand has no sandbox to link them into. A resolver is
-    /// the only form that can be asked at the right time, and it makes the whole
-    /// case one expression:
-    ///
-    /// <pre>Sandbox.boot(port, Builtins::byName, image, props)</pre>
-    ///
-    /// A bulk `link(Map)` would be strictly worse: it forces the host to
-    /// materialise a map of every builtin whether the program reaches it or not,
-    /// when `Builtins.TABLE` is already that map and a lookup is already the
-    /// operation. `link(name, fn)` then means exactly one thing -- OVERRIDE a name
-    /// on a running sandbox -- and its return count tells the host whether the
-    /// program uses it at all.
-    ///
-    /// A name this cannot answer leaves the slot EMPTY rather than failing the
-    /// load, which is `Img.load`'s rule and the right one: an image imports every
-    /// builtin its namespaces mention, and a program that never calls the missing
-    /// one runs fine. The failure names it if it is reached.
-    public interface Natives { Builtins.Fn get(String name); }
+    /// `NEEDS_HOST` IS THE RESTING STATE, not an error. The control plane is a
+    /// green thread parked on the system port, so a healthy idle sandbox reports
+    /// it.
+    public static final int DONE = 0, THREW = 1, NEEDS_HOST = 2;
 
     // --- state -------------------------------------------------------------
 
-    /// `loop`'s answers. The numbers are the runtime's own `status`, not a
-    /// second enumeration on top of it: 0 is settled, 2 is "the host has to do
-    /// something".
-    public static final int SETTLED = 0, NEEDS_HOST = 2;
+    /// Overrides waiting for a boot, and whether one has happened.
+    ///
+    /// STATIC, because `link` has to be callable with no sandbox in hand -- it
+    /// must precede `boot`. One sandbox per class loader, which is the same reason
+    /// the generated `flint.Artifact` keeps its sandbox in a static field.
+    private static final Map<String, Builtins.Fn> OVERRIDES = new LinkedHashMap<>();
+    private static Sandbox current;
 
     private final Rt rt;
-    private final Map<Integer, Bridge> bridges = new HashMap<>();
-    private boolean pending;
-    private int declared, resolved;
+    private final Bridge bridge;
 
-    private Sandbox(Rt rt) { this.rt = rt; }
+    private Sandbox(Rt rt, Bridge bridge) { this.rt = rt; this.bridge = bridge; }
 
     // --- 1. boot -----------------------------------------------------------
 
     /// Load the artifact's image and give the sandbox its door.
     ///
-    /// The bridge becomes the SYSTEM port: the one the sandbox can ask the host
-    /// for things through. A sandbox given none runs logic and can ask for
-    /// nothing, which is a coherent thing to be -- but there is no `boot()`
-    /// overload for it, because a second entry point is a second contract.
+    /// `imageChunks` IS PASSED IN: the bytes are constant data on the generated
+    /// `flint.Artifact` class, which calls this. Nothing here opens a resource, so
+    /// the program is not a file the artifact contains -- it is data the artifact is
+    /// made of, and the CLR carries it the same way.
     ///
-    /// `imageChunks` AND `propsText` ARE PASSED IN, and that is the whole
-    /// arrangement: they are constant data on the generated `flint.Artifact`
-    /// class, which calls this. Nothing here opens a resource, so the program is
-    /// not a file the artifact contains -- it is data the artifact is made of, and
-    /// the CLR will carry it identically.
+    /// IT FAILS ON A MISSING NATIVE, naming it. See below.
     ///
-    /// The heap and gas bounds come out of the artifact's own properties rather
-    /// than the caller, for the same reason the image does: a consumer has an
-    /// artifact, and whoever built it knew what it needs.
-    public static Sandbox boot(Bridge system, Natives natives,
-                               String[] imageChunks, String propsText) {
-        Map<String, byte[]> props = readProps(propsText);
-        Rt rt = new Rt(propLong(props, "nursery", 1024 * 1024),
-                       propLong(props, "heap", 64L * 1024 * 1024));
-        Sandbox box = new Sandbox(rt);
+    /// ONE PROGRAM FOR THE SANDBOX'S WHOLE LIFE
+    /// (`DECISIONS.md#construe-integration-bar`). Booting twice is refused rather
+    /// than replacing the image: a second program in the same sandbox would share
+    /// a heap with the first.
+    public static Sandbox boot(Bridge system, String[] imageChunks) {
+        if (current != null) throw new IllegalStateException(
+            "this sandbox is already booted: a sandbox is ONE program for its whole life");
+        Rt rt = new Rt(NURSERY, HEAP);
+        Sandbox box = new Sandbox(rt, system);
         byte[] image = decode(imageChunks);
         if (Img.load(rt, image) == null) throw new IllegalStateException(
             "the artifact's image is not a flint image, or is a version this runtime does not"
             + " speak (this runtime reads version " + Img.VERSION + ", got " + image.length
             + " bytes in " + imageChunks.length + " chunk(s))");
-        // RE-RESOLVED THROUGH THE HOST'S RESOLVER, over whatever `Img.load` bound.
-        // `Img` reaches for `Builtins.byName` itself, which is the right default for
-        // a host that has the runtime beside it and the wrong one for a host that
-        // means to supply its own -- so the resolver wins, and a null answer clears
-        // the slot rather than leaving the default in place. Anything else would
-        // make "the host supplies the runtime" true only for names the default
-        // happened to lack.
-        box.declared = rt.nativeNames == null ? 0 : rt.nativeNames.length;
-        for (int i = 0; i < box.declared; i++) {
-            Builtins.Fn f = natives == null ? null : natives.get(rt.nativeNames[i]);
-            rt.natives[i] = f;
-            if (f != null) box.resolved++;
+
+        // NATIVES RESOLVE EXACTLY ONCE, here. `Img.load` has just bound each slot
+        // through `Builtins.byName` -- the host's own table, which is what "the
+        // host carries the runtime" means on this target -- and the overrides
+        // `link` collected go on top before anything runs. That is why `link`
+        // refuses after this point: there is no second resolution to join.
+        //
+        // A NAME NOBODY ANSWERS FOR STAYS NULL rather than failing the load. An
+        // image imports every builtin its namespaces MENTION, and a program that
+        // never calls the missing one runs fine; the failure names it if reached.
+        int n = rt.nativeNames == null ? 0 : rt.nativeNames.length;
+        java.util.List<String> missing = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            // `containsKey`, NOT a null check on `get`. An entry whose value is null
+            // means the host declared the native ABSENT, and reading that as "no
+            // override" would silently fall back to the host's own -- turning a
+            // deliberate declaration into a no-op and making the boot failure
+            // untestable.
+            if (OVERRIDES.containsKey(rt.nativeNames[i])) {
+                rt.natives[i] = OVERRIDES.get(rt.nativeNames[i]);
+            }
+            if (rt.natives[i] == null) missing.add(rt.nativeNames[i]);
         }
-        long gas = propLong(props, "gas", 0);
-        if (gas > 0) rt.setGasLimit(gas);
-        box.wire(system);
-        Conc.installSystemPort(rt, system.id, Str.of(rt, system.label));
+        // BOOT FAILS ON A MISSING NATIVE, and this is a deliberate change away from
+        // `Img.load`'s null-tolerance. `Img` leaves a slot null on purpose -- an
+        // image imports every builtin its namespaces MENTION, so a program that
+        // never calls the missing one runs fine -- and the record chose the other
+        // trade: the VERSION says what must be linked, so a gap is a version
+        // mismatch and is worth refusing now rather than when something reaches it.
+        //
+        // A version-matched host carries all 88 a trivial program declares and
+        // nothing changes. A host that deliberately TRIMMED its builtins now fails
+        // to boot a program it could have run; that is the cost, and it is chosen.
+        //
+        // THE MESSAGE NAMES THEM, capped, because a host whose table is a version
+        // behind is missing a handful and a host built wrong is missing dozens --
+        // and a failure that says "8 natives are missing" sends someone reading the
+        // wrong file.
+        if (!missing.isEmpty()) {
+            current = null;
+            int shown = Math.min(missing.size(), 8);
+            throw new IllegalStateException(
+                "this runtime does not carry " + missing.size() + " of the "
+                + n + " natives this program declares: "
+                + String.join(", ", missing.subList(0, shown))
+                + (missing.size() > shown ? ", ... (" + (missing.size() - shown) + " more)" : "")
+                + ". The artifact's version says what has to be linked, so this is a"
+                + " version mismatch between it and this host -- read"
+                + " com.3sln.flint.meta on the artifact's class for the version it"
+                + " was built against.");
+        }
+
+        Conc.installSystemPort(rt, system.systemPort, Str.of(rt, system.label));
+        current = box;
         return box;
     }
 
-    /// How many builtins this program's image DECLARES, and how many the host's
-    /// resolver answered for.
+    /// The heap the sandbox boots with.
     ///
-    /// A diagnostic, not one of the four. It exists because the interesting failure
-    /// on this target is silent: a resolver that answers for 60 of 88 produces a
-    /// sandbox that works until the program reaches one of the other 28, and the
-    /// host has no other way to find out early.
-    public int declared() { return declared; }
-    public int resolved() { return resolved; }
+    /// FIXED, and not read off the artifact. They were metadata for a while:
+    /// `nursery`, `heap` and `gas` rode in the properties so `boot` could apply what
+    /// the builder chose. Nothing ever set them, and once `prop` was gone there was
+    /// no way for a host to act on them either -- so they were metadata carried and
+    /// never read, which is exactly the thing this project has a commit about. When
+    /// a program needs its own bounds, they become arguments to `boot` or a second
+    /// attribute the HOST reads and applies; a constant here is honest until then.
+    static final long NURSERY = 1024 * 1024, HEAP = 64L * 1024 * 1024;
 
     /// The image, out of the string constants that carry it.
     ///
     /// ONE CHARACTER PER BYTE, so this is a cast and a copy. The class file stores
     /// each character in modified UTF-8 -- one byte for `0x01`..`0x7F`, two for
     /// `0x00` and for `0x80`..`0xFF` -- and `charAt` gives the character back, so
-    /// nothing here decodes anything. The chunking exists because a
-    /// `CONSTANT_Utf8_info` length is a `u2`; concatenation is the only thing it
-    /// costs.
+    /// nothing here decodes anything. The chunking exists only because a
+    /// `CONSTANT_Utf8_info` length is a `u2`.
     private static byte[] decode(String[] chunks) {
         int n = 0;
         for (String s : chunks) n += s.length();
@@ -256,53 +241,60 @@ public final class Sandbox {
         return out;
     }
 
-    private void wire(Bridge b) {
-        if (b.box != null && b.box != this) throw new IllegalStateException(
-            "bridge " + b.id + " is already wired to another sandbox");
-        b.box = this;
-        bridges.put(b.id, b);
-    }
-
     // --- 2. loop -----------------------------------------------------------
 
-    /// Pump until there is no more work, dispatching everything the guest said
-    /// on the way.
+    /// Pump. `DONE`, `THREW` or `NEEDS_HOST`.
     ///
-    /// Returns `SETTLED` when nothing will ever run again, or `NEEDS_HOST` when
-    /// some green thread is parked on a bridge and the host has not answered
-    /// yet. NEEDS_HOST is not a failure and not a suspension: the interpreter
-    /// simply has nothing runnable, so the host writes to a bridge and calls
-    /// this again.
+    /// DRAIN, DRIVE, DRAIN AGAIN, which the record is explicit about: the
+    /// scheduler reports `NEEDS_HOST` while it is still holding undrained events,
+    /// so a pump that skipped the trailing drain would report work it was itself
+    /// holding and the host would answer a question nobody had asked yet.
     ///
-    /// IT DOES NOT RETURN THE ANSWER. A program's answer comes back as a
-    /// message on a bridge, because a bridge is the only door
+    /// The inbound pull comes first, so whatever the host queued is in the
+    /// sandbox's inboxes before the scheduler looks for something runnable.
+    ///
+    /// IT DOES NOT RETURN THE ANSWER. A program's answer comes back as a message
+    /// on a bridge, because a bridge is the only door
     /// (`DECISIONS.md#bridges-are-the-only-door`) -- and a `loop` that also
-    /// answered would be two contracts, one of which only works for programs
-    /// with a distinguished entry point. Those do not exist: a caller names the
-    /// function it wants.
+    /// answered would only work for programs with a distinguished entry point.
+    /// Those do not exist: a caller names the function it wants.
     ///
-    /// PROGRESS, NOT A SPIN GUARD. `sdks/esm/src/guest.js` loops while the code
-    /// is 2 and counts to a million before giving up; here the condition is
-    /// whether this turn dispatched anything or whether a `Bridge.send`
-    /// enqueued anything, which is the actual question and needs no ceiling.
+    /// THE LOOP CONDITION IS PROGRESS, not a spin count.
+    /// `sdks/esm/src/guest.js` loops while the code is 2 and gives up at a
+    /// million; here the question is whether this turn moved anything, which is
+    /// the actual question and needs no ceiling.
     public int loop() {
         for (;;) {
-            pending = false;
+            boolean took = pull();
+            boolean before = drain();
             Conc.drive(rt);
-            int status = rt.status;
-            boolean progress = dispatch();
-            if (status != NEEDS_HOST) return status;
-            if (!progress && !pending) return NEEDS_HOST;
+            boolean after = drain();
+            if (rt.status != NEEDS_HOST) {
+                // THE BOUNDARY LOOKS AT `thrown` TO DECIDE STATUS, and
+                // `Mainanswer.mainAnswer` is what puts it there: `TH_RESULT`
+                // holds the error for a failed thread and the value for a
+                // finished one, so the status cannot be read off the answer.
+                return Val.isNil(rt.thrown) ? DONE : THREW;
+            }
+            if (!took && !before && !after) return NEEDS_HOST;
         }
     }
 
-    /// Everything pending, handed to the bridges that own it. True if anything
-    /// was dispatched.
+    /// Everything the host has queued, into the sandbox. True if anything moved.
+    private boolean pull() {
+        boolean any = false;
+        for (Msg m = bridge.tryTake(); m != null; m = bridge.tryTake()) {
+            Conc.hostDeliver(rt, m.port(), m.bytes());
+            any = true;
+        }
+        return any;
+    }
+
+    /// Everything the guest said, to the bridge. True if anything moved.
     ///
-    /// The five-`u32` records exist here too, because `Conc.drainEvents` is the
-    /// port's shared shape -- but they are UNPACKED HERE rather than by the
-    /// host. A wasm host has to do this itself over linear memory.
-    private boolean dispatch() {
+    /// The five-`u32` records are unpacked HERE rather than by the host. A wasm
+    /// host has to do this itself, over linear memory, at `flint_events_ptr`.
+    private boolean drain() {
         Conc.Events evs = Conc.drainEvents(rt);
         if (evs.count() == 0) return false;
         byte[] b = evs.bytes();
@@ -313,28 +305,26 @@ public final class Sandbox {
             byte[] payload = new byte[len];
             System.arraycopy(b, off, payload, 0, len);
             switch (kind) {
-                case Conc.EV_MESSAGE -> { Bridge p = bridges.get(a); if (p != null) p.message(payload); }
-                case Conc.EV_CLOSED -> { Bridge p = bridges.get(a); if (p != null) p.closed(); }
+                case Conc.EV_MESSAGE -> bridge.put(a, payload);
+                case Conc.EV_CLOSED -> bridge.closed(a);
                 // `bb` is the SYSTEM port the request came out on, not a port
                 // made for it: there is no port until the host grants one.
                 case Conc.EV_OPEN -> {
-                    Bridge on = bridges.get(bb);
-                    Bridge granted = on == null ? null : on.open(capabilityName(payload), payload);
-                    if (granted == null) { Conc.hostContinue(rt, a, false); break; }
-                    wire(granted);
-                    if (!Conc.hostGrant(rt, a, granted.id)) Conc.hostContinue(rt, a, false);
+                    int granted = bridge.open(bb, capabilityName(payload), payload);
+                    if (granted == 0 || !Conc.hostGrant(rt, a, granted)) {
+                        Conc.hostContinue(rt, a, false);
+                    }
                 }
                 case Conc.EV_REQUEST -> {
-                    Bridge on = bridges.get(bb);
-                    byte[] answer = on == null ? null : on.request(payload);
-                    if (answer == null) Conc.hostContinue(rt, a, false);
-                    else if (!Conc.hostAnswer(rt, a, answer)) Conc.hostContinue(rt, a, false);
+                    byte[] answer = bridge.answer(bb, payload);
+                    if (answer == null || !Conc.hostAnswer(rt, a, answer)) {
+                        Conc.hostContinue(rt, a, false);
+                    }
                 }
-                // EV_RETAIN / EV_RELEASE are the host's reference count on its
-                // own ports. Nothing here keeps one: this sandbox holds every
-                // bridge it was handed for its whole life, so a count of
-                // holders has nothing to say to it. A host that shares a port
-                // between sandboxes needs them; that host is not this class.
+                // EV_RETAIN / EV_RELEASE are the host's reference count on its own
+                // ports. A host sharing a port between sandboxes needs them; this
+                // sandbox holds every port it was handed for its whole life, so a
+                // count of holders has nothing to say to it.
                 default -> { }
             }
         }
@@ -343,97 +333,51 @@ public final class Sandbox {
 
     // --- 3. link -----------------------------------------------------------
 
-    /// Wire a runtime hook in BY NAME.
+    /// Override the native called `name`.
     ///
-    /// Returns how many of this image's native slots took the hook -- 0 means
-    /// the program never imports that name, which is worth knowing and is not
-    /// an error. A hook for something the program does not call cannot be
-    /// reached whatever this did.
+    /// AN OVERRIDE MECHANISM AND NOT A WIRING ONE, and the difference is the whole
+    /// design. A trivial program's image declares 88 natives -- `clojure.core`'s
+    /// reach, not the program's -- against 223 the runtime carries, and a host
+    /// makes ZERO `link` calls in the normal case because `Img.load` resolves them
+    /// all against `Builtins.byName`. A bulk or resolver API that required all 88
+    /// would be actively wrong: a missing native is left NULL rather than refused,
+    /// so demanding every one of them would reject programs that run.
     ///
-    /// IT WORKS AFTER `boot`, which wasm's cannot. `Img.load` resolves natives
-    /// through `Builtins.byName` at load time, so on a pointer ABI a hook has to
-    /// be an import supplied at instantiation and the ordering is forced. Here
-    /// the slots are an array on a live sandbox, so this re-resolves them and
-    /// the order stops mattering. It is also PER-SANDBOX for the same reason:
-    /// `Builtins.TABLE` is static and one sandbox's hook must not be another's,
-    /// so nothing is written to it.
-    ///
-    /// AOT-compiled code honours this too: compiled code reaches a native
-    /// through `rt.natives[idx]` at call time (`Aot.aotNative`), never a cached
-    /// reference.
-    ///
-    /// The signature is the one blemish and it is real: `Builtins.Fn` reads its
-    /// arguments straight off a NaN-boxed value stack, which is not something a
-    /// consumer of an artifact can write. See the report.
-    public int link(String name, Builtins.Fn fn) {
-        if (rt.nativeNames == null) return 0;
-        int n = 0;
-        for (int i = 0; i < rt.nativeNames.length; i++) {
-            if (name.equals(rt.nativeNames[i])) { rt.natives[i] = fn; n++; }
-        }
-        return n;
+    /// IT MUST PRECEDE `boot` and refuses afterwards, because natives resolve
+    /// exactly once when the image loads. Refusing is the point: an override
+    /// registered after boot would silently not apply, and a host would be left
+    /// with a hook it believed in.
+    public static void link(String name, Builtins.Fn fn) {
+        if (current != null) throw new IllegalStateException(
+            "link(" + name + ") after boot: natives resolve exactly once when the image loads,"
+            + " so an override registered now would never apply. Call link before boot.");
+        // A NULL `fn` DECLARES THE NATIVE ABSENT, and does not forget the override.
+        // That is the only sense it can have now that `boot` fails on a missing
+        // native: a host saying "I do not carry this" is saying something, and it is
+        // the only way anything can exercise that failure through this surface.
+        // Reverting to the host's own is `link(name, Builtins.byName(name))`.
+        OVERRIDES.put(name, fn);
     }
 
-    // --- 4. prop -----------------------------------------------------------
-
-    /// Read a metadata property of the artifact -- `prop("version", buf)`.
-    ///
-    /// Returns how many bytes the value NEEDS, and writes as many of them as
-    /// fit; -1 if there is no such property. So a caller with a short buffer
-    /// learns the length and can ask again, which is what a pointer ABI has to
-    /// do and what this keeps doing on purpose.
-    ///
-    /// The values are FLAT TEXT, flattened at build time. `src/flint/modmeta.cljc`
-    /// builds a nested EDN map, and a runtime that had to read one would need an
-    /// EDN reader to answer `prop("version")` -- so `src/flint/jvm.cljc`, which
-    /// has a printer, flattens it to one `key\tvalue` line each and keeps the
-    /// whole map under `meta` for a caller that wants it. Nothing here parses EDN.
-    ///
-    /// STATIC, and `propsText` is passed in for the same reason `boot`'s image is:
-    /// it is constant data on the generated class. A runner decides whether to
-    /// load an artifact at all from what it says about itself, so this answers
-    /// with no sandbox alive. `flint inspect` reads a wasm module's custom section
-    /// without instantiating it, and this is the same question.
-    public static int prop(String name, byte[] buf, String propsText) {
-        byte[] v = readProps(propsText).get(name);
-        if (v == null) return -1;
-        if (buf != null) System.arraycopy(v, 0, buf, 0, Math.min(v.length, buf.length));
-        return v.length;
-    }
-
-    /// Every property name the artifact has. Not one of the four -- a
-    /// diagnostic, so `prop` is discoverable without a list kept somewhere else.
-    public static List<String> propNames(String propsText) {
-        return new ArrayList<>(readProps(propsText).keySet());
-    }
-
-    // --- the property text -------------------------------------------------
-
-    private static Map<String, byte[]> readProps(String raw) {
-        Map<String, byte[]> out = new java.util.LinkedHashMap<>();
-        if (raw == null) return out;
-        for (String line : raw.split("\n")) {
-            int t = line.indexOf('\t');
-            if (t > 0) out.put(line.substring(0, t), line.substring(t + 1).getBytes(StandardCharsets.UTF_8));
-        }
-        return out;
-    }
-
-    private static long propLong(Map<String, byte[]> props, String name, long dflt) {
-        byte[] v = props.get(name);
-        if (v == null) return dflt;
-        try { return Long.parseLong(new String(v, StandardCharsets.UTF_8).trim()); }
-        catch (NumberFormatException e) { return dflt; }
-    }
+    // --- there is no fourth ---
+    //
+    // `prop(name, buf)` lived here. It answered a metadata property, and the
+    // metadata is now a class attribute the CONTAINER carries
+    // (`DECISIONS.md#four-operations`) -- so `readProps`, `propLong`, the
+    // `name<TAB>value` flattening and the NO-LINKAGE-REPORT tally went with it.
+    //
+    // What replaced the tally is `boot` failing above. An earlier face grew
+    // `prop("natives")` and `prop("natives-unresolved")` so a host with a trimmed
+    // runtime could discover a gap before a program reached it; refusing to boot
+    // tells it the same thing at the same moment and needs no operation.
 
     /// The capability an `open` asked for, out of the encoded argument vector.
     ///
     /// NOT A DECODER. The payload is `[name & args]` as one encoded value, and
     /// reading the name properly means the wire codec -- which belongs in an SDK
-    /// beside `sdks/esm/src/codec.js`, not in the runtime. This reads the first
-    /// string it can see so a host's `open` handler has something to switch on,
-    /// and the whole payload goes with it so a host with a real decoder can
-    /// ignore this.
+    /// beside `sdks/esm/src/codec.js`, not in the runtime. This finds the first
+    /// string so a host's `open` has something to switch on, and the whole payload
+    /// goes with it so a host with a real decoder can ignore this.
     private static String capabilityName(byte[] payload) {
         for (int i = 0; i + 5 <= payload.length; i++) {
             if ((payload[i] & 0xff) != 5) continue;          // Codec.K_STRING

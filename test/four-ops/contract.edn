@@ -1,0 +1,108 @@
+;; THE SAME QUESTIONS ASKED OF EVERY TARGET'S ARTIFACT, one expected answer each.
+;;
+;; `DECISIONS.md#four-operations` says the SEMANTICS are identical on every target
+;; and only the spelling is not. This file is that sentence as data, so a second
+;; target cannot quietly answer a different question or a different value for the
+;; same program. `bin/check-four-ops` reads it; each target's harness answers it.
+;; Nothing here is JVM-specific.
+;;
+;; WHY A FILE AND NOT FOUR HARNESSES. The failure this guards against is not a
+;; target answering wrongly -- that shows up immediately -- it is two targets
+;; answering DIFFERENT QUESTIONS and both passing. A metadata section called
+;; `com.3sln.flint.meta` on one and `flint` on the other is a contract with two
+;; spellings, and the only way a check sees it is by being handed the name once.
+;;
+;; IT IS `contract.edn` AND WAS `prop.edn`. `prop` was the fourth operation and is
+;; gone: the metadata is what the container carries, not what a call answers.
+
+{;; --------------------------------------------------------------- the program
+ ;;
+ ;; The smallest thing that still pulls in `clojure.core`, which is what makes the
+ ;; native count interesting: 88 is `clojure.core`'s reach and not this program's.
+ :program "(ns t)\n(defn main [args] \"x\")\n"
+ :entry "t/main"
+ :call-args ["hello"]
+ :expect-answer "x"
+
+ ;; --------------------------------------------------------- the three operations
+ ;;
+ ;; THREE, not four. A harness reporting a fourth is reporting an operation this
+ ;; contract does not have, and the checker says so -- the drift to guard against is
+ ;; a target keeping `prop` because its host found it convenient.
+ :operations ["boot" "loop" "link"]
+
+ ;; --------------------------------------------------------------- the metadata
+ ;;
+ ;; IN THE CONTAINER, read WITHOUT executing the artifact. Every format has a path
+ ;; the platform already understands -- a wasm custom section, a JVM class
+ ;; attribute, a CLR CustomAttribute row -- and all three are FLAT namespaces
+ ;; shared with everything else in the toolchain. JVMS 4.7 requires an unrecognised
+ ;; class attribute to be silently ignored, so on the JVM a collision is QUIET: the
+ ;; wrong data is read as the right data and nothing complains.
+ :meta
+ {:section "com.3sln.flint.meta"
+  :must-not-answer-to "flint"
+  :why-namespaced "It was the bare word `flint` until 2026-09-24. `flint.modmeta/section-name`
+                   is the one place it is written for the compiler; this file is the
+                   one place it is written for the checker, and the check is that they
+                   agree."
+  ;; Keys the metadata must carry, whatever else it carries. Read with a real EDN
+  ;; reader, because the container hands over text and the checker has one -- which
+  ;; is the argument that killed `prop`: a runtime answering `version` from inside
+  ;; needed ~100 lines of delimiter-counting to find it.
+  :keys [:flint/module :version :compat :exports]
+  ;; AND `:exports` MUST BE THE OPERATIONS, exactly. It said `["boot" "link" "loop"
+  ;; "prop"]` for a while after `prop` was removed from the class -- the artifact had
+  ;; three operations and its own metadata advertised four, which is worse than either
+  ;; being wrong alone, because a host reading the metadata would look up a method
+  ;; that is not there. Checking that the two AGREE is what finds it; checking only
+  ;; that `:exports` is present does not.
+  :exports-are-the-operations true
+  ;; `:version` comes from `meta.edn`, which `bin/check-version` already gates
+  ;; across every manifest. This gates that it reaches the artifact too.
+  :version-from "meta.edn"
+  ;; PER-TARGET on purpose, so no literal here: a wasm module's compatibility key
+  ;; covers a linear-memory ABI the JVM and the CLR have not got, so the keys MUST
+  ;; differ and a shared value would be asserting a collision. What is shared is the
+  ;; SHAPE, and that two builds of one program agree.
+  :compat-key-matches "^[0-9a-f]{8}$"}
+
+ ;; --------------------------------------------------------------- loop
+ ;;
+ ;; THE EXISTING ABI NUMBERS, which this project treats as the ABI itself.
+ :status
+ {0 "Done"
+  1 "Threw"
+  2 "NeedsHost -- THE RESTING STATE. The control plane is a green thread parked on
+     the system port, so a healthy idle sandbox reports it, and a harness that
+     treats 2 as failure fails on every working program."}
+ ;; What a sandbox answers with nothing queued, and again after a call has been
+ ;; served. Both 2: serving a call does not finish the program.
+ :loop {:at-rest 2 :after-call 2}
+
+ ;; --------------------------------------------------------------- link
+ :link
+ {:calls-in-normal-case 0
+  :before-boot :accepted
+  :after-boot :refused
+  :why "Natives resolve exactly once when the image loads, so an override
+        registered after boot would silently never apply. Refusing is the contract:
+        a host must not be left holding a hook it believes in. And the normal case
+        is ZERO calls -- a bulk or resolver API requiring all 88 would reject
+        programs that run."}
+
+ ;; --------------------------------------------------------------- boot
+ :boot
+ {:declared-natives 88
+  :on-missing-native :fail
+  :message-names-it true
+  :why "SHARED ACROSS TARGETS, and the strongest number in the file: the natives a
+        program declares are a property of the IMAGE, so every target compiling
+        this program must find the same 88. A target seeing 87 or 89 has a
+        different image or a different clojure.core.
+
+        Failing on a missing one is a deliberate change away from the null-tolerance
+        in `runtime/src/image.rs` and `Img.java`: the VERSION says what has to be
+        linked, so a gap is a version mismatch. A version-matched host carries all
+        88 and nothing changes; a deliberately trimmed runtime now fails to boot a
+        program it could have run, and that trade is chosen."}}
