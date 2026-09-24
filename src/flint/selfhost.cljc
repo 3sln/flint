@@ -16,6 +16,7 @@
             [flint.wasm :as w]
             [flint.bundle :as bundle]
             [flint.llvm :as llvm]
+            [flint.jvm :as jvm]
             [flint.wasmshake :as wshake]
 
             [clojure.string :as str]
@@ -358,16 +359,49 @@
            :compiled (when res (:compiled res))
            :arities (when res (:total res))})))))
 
+(defn compile-to-jvm
+  "Compile a program to a self-contained, runnable JAR (`:to :jvm`).
+
+  `spec` is `compile-project`'s. `base-b64` is `dist/flint-rt.jar`, the prebuilt
+  interpreter, and it arrives as its own ARGUMENT for exactly the reason
+  `compile-to-wasm`'s module does: half a megabyte of base64 inside an EDN string
+  is half a megabyte for flint's reader to scan a character at a time.
+
+  EMPTY SLOTS, like the LLVM target and unlike wasm. This port resolves every
+  native BY NAME when it loads the image (`Img.java`), so a table index would
+  name a table this artifact has not got.
+
+  Nothing is linked and no JDK is involved. `javac` ran once, when flint was
+  built; appending one class to a finished jar is byte manipulation
+  (`DECISIONS.md#no-runtime-linking`)."
+  [spec-edn base-b64]
+  (let [spec (reader/read-one spec-edn)
+        built (build-image spec (set (keys (:slots spec))))]
+    (if (:missing built)
+      {:missing (:missing built)}
+      (if (:refused built)
+        {:refused (:refused built)}
+        (let [builder (:builder built)
+              image (img/emit builder {})]
+          {:module (base64 (jvm/pack (base64-decode base-b64) image
+                                     {:version (:version spec)
+                                      :meta (:meta spec)
+                                      :builtins (count (img/natives builder))}))})))))
+
 (defn main [args]
   ;; Two entries, chosen by the first argument. `spec` is the original: the
   ;; caller resolved every namespace and handed over a finished map, which is
   ;; what the bootstrap does because babashka is already reading files.
   ;; `project` is the one a host with no Clojure reader can use.
   (let [mode (first args)
-        known? (or (= mode "project") (= mode "wasm") (= mode "llvm"))
+        known? (or (= mode "project") (= mode "wasm") (= mode "llvm") (= mode "jvm"))
         [mode spec-edn] (if known? [mode (second args)] ["spec" mode])
         r (cond
             (= mode "wasm") (compile-to-wasm spec-edn (nth args 2 ""))
+            ;; A JAR comes back the way a wasm module does -- base64, under
+            ;; `:module` -- because it is the same thing: a finished artifact with
+            ;; the program spliced in, and nothing for the host to link.
+            (= mode "jvm") (compile-to-jvm spec-edn (nth args 2 ""))
             (= mode "llvm") (compile-to-llvm spec-edn)
             (= mode "project") (compile-project spec-edn)
             :else (compile-to-base64 spec-edn))]

@@ -1,0 +1,87 @@
+#!/usr/bin/env bb
+;; `:to :jvm`, driven from babashka: a program in, ONE CLASS FILE out.
+;;
+;;     bin/build-jvm-artifact :src <dir> :fn <ns/fn> :class <dir>   # the artifact
+;;     bin/build-jvm-artifact :src <dir> :fn <ns/fn> :out <app.jar> # and a runtime
+;;
+;; THE EMITTING IS `src/flint/jvm.cljc` AND NOTHING HERE. This file reads files,
+;; shells out to `bin/flint` for the image, and writes bytes -- the three things a
+;; flint program has no business doing. Everything between the image and the class
+;; file is cljc, so the same code runs when flint compiles itself and there is no
+;; JDK and no babashka in the room (`DECISIONS.md#no-runtime-linking`).
+;;
+;; THE ARTIFACT DOES NOT CONTAIN THE RUNTIME. `:class` writes what a consumer
+;; deploys; the interpreter and the builtins are the host's and arrive through
+;; `boot`'s resolver. `:out` is a convenience that puts a copy of the runtime in a
+;; jar beside it so `java -jar` works with an empty classpath.
+;;
+;; It is a SPIKE driver, not the front door. The front door is `flint compile :to
+;; :jvm`, which means the Rust CLI embedding `dist/flint-rt.jar` the way it
+;; already embeds `dist/flint-runtime.wasm`; see the report.
+(require '[babashka.fs :as fs] '[clojure.edn :as edn] '[babashka.process :as p])
+(def root (str (fs/parent (fs/parent (fs/real-path *file*)))))
+(babashka.classpath/add-classpath (str root "/src:" root "/lib"))
+(require '[flint.jvm :as jvm] '[flint.jar :as jar] '[flint.rt])
+
+(defn die! [m] (binding [*out* *err*] (println m)) (System/exit 1))
+
+(let [args (vec *command-line-args*)
+      m (loop [a args m {}]
+          (cond
+            (empty? a) m
+            (= ":src" (first a)) (recur (drop 2 a) (update m :src (fnil conj []) (second a)))
+            (= ":fn" (first a)) (recur (drop 2 a) (assoc m :fn (second a)))
+            (= ":out" (first a)) (recur (drop 2 a) (assoc m :out (second a)))
+            ;; ONE CLASS FILE AND NOTHING ELSE -- the artifact proper. The jar is
+            ;; the convenience wrapper that also carries the interpreter, which the
+            ;; artifact no longer contains: the runtime is the HOST's and arrives
+            ;; through `link`. `:class <dir>` writes `<dir>/flint/Artifact.class`.
+            (= ":class" (first a)) (recur (drop 2 a) (assoc m :class (second a)))
+            (= ":image" (first a)) (recur (drop 2 a) (assoc m :image (second a)))
+            :else (die! (str "unknown argument " (first a)))))
+      entry (or (:fn m) (die! "usage: bin/build-jvm-artifact :src <dir> :fn <ns/fn> :out <app.jar>"))
+      out (or (:out m) (str "out/" (clojure.string/replace entry #"/" "-") ".jar"))
+      rt-jar (str root "/dist/flint-rt.jar")
+      _ (when-not (fs/exists? rt-jar)
+          (die! "dist/flint-rt.jar is missing. It is generated: run bin/build-jvm-runtime first."))
+      ;; The IMAGE, from the one tool that writes one. Reused when `:image` names
+      ;; a file that is already there, so the packaging can be re-measured
+      ;; without paying the compile again.
+      img-path (or (:image m) (str "out/" (clojure.string/replace entry #"/" "-") ".image"))
+      _ (when-not (and (:image m) (fs/exists? img-path))
+          (fs/create-dirs (fs/parent (fs/absolutize img-path)))
+          (let [r (apply p/sh (concat ["bb" (str root "/bin/flint") ":fn" entry
+                                      "--emit-image" ":out" img-path]
+                                      (mapcat (fn [d] [":src" d]) (or (:src m) []))))]
+            (when-not (zero? (:exit r)) (die! (str (:out r) (:err r))))))
+      image (fs/read-all-bytes img-path)
+      version (:version (edn/read-string (slurp (str root "/meta.edn"))))
+      t0 (System/nanoTime)
+      ;; THE ARTIFACT, and it is one class file. The image's bytes are constant
+      ;; data in its constant pool; the interpreter is NOT in it. `jvm/emit` is the
+      ;; only door, so the properties cannot go missing from one path and not the
+      ;; other -- which is exactly what happened when this called `artifact-class`
+      ;; directly and `pack` built the properties.
+      klass (jvm/emit image {:version version :meta {} :builtins 0})
+      t1 (System/nanoTime)
+      n (alength ^bytes image)
+      kn (alength ^bytes klass)]
+  (if-let [dir (:class m)]
+    (let [f (str dir "/" jvm/ARTIFACT-CLASS ".class")]
+      (fs/create-dirs (fs/parent (fs/absolutize f)))
+      (with-open [o (java.io.FileOutputStream. f)] (.write o ^bytes klass))
+      (println (format "wrote %s (%d bytes)" f kn)))
+    ;; The jar is the CONVENIENCE wrapper: the same class, plus the interpreter, so
+    ;; `java -jar` works with nothing else on the classpath. The artifact proper is
+    ;; the class; the runtime in here is the host's copy travelling along.
+    (let [base (fs/read-all-bytes rt-jar)
+          _ (when-not (fs/exists? rt-jar)
+              (die! "dist/flint-rt.jar is missing. Run bin/build-jvm-runtime first."))
+          bytes (jvm/pack base image {:version version :meta {} :builtins 0})]
+      (fs/create-dirs (fs/parent (fs/absolutize out)))
+      (with-open [o (java.io.FileOutputStream. (str out))] (.write o ^bytes bytes))
+      (println (format "wrote %s (%d bytes = %d host runtime jar + %d artifact class)"
+                       out (alength ^bytes bytes) (alength ^bytes base)
+                       (- (alength ^bytes bytes) (alength ^bytes base))))))
+  (println (format "  image %d bytes -> %d on the class (%.3fx), %d CONSTANT_Utf8 chunk(s), emitted in %.0fms"
+                   n kn (/ (double kn) n) (count (jvm/chunks image)) (/ (- t1 t0) 1e6))))

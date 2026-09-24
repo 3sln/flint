@@ -17,7 +17,7 @@ JDK="${FLINT_JDK:-${JAVA_HOME:-/opt/homebrew/opt/openjdk}}"
 if [ -x "$JDK/bin/javac" ]; then
   rm -rf runtimes/jvm/classes
   if ! "$JDK/bin/javac" -d runtimes/jvm/classes \
-       runtimes/jvm/src/com/flint/rt/*.java runtimes/jvm/src/com/_3sln/flint/kgen/rt/*.java \
+       runtimes/jvm/src/com/flint/*.java runtimes/jvm/src/com/flint/rt/*.java runtimes/jvm/src/com/_3sln/flint/kgen/rt/*.java \
        runtimes/jvm/test/*.java > /tmp/flint-ports-javac.out 2>&1; then
     head -20 /tmp/flint-ports-javac.out
     echo "  FAIL the jvm port does not compile"
