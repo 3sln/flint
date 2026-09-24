@@ -27,8 +27,21 @@
 (def section-name
   "The wasm custom section this lives in. Custom sections are ignored by every
   engine and readable straight from the bytes, which is what lets a runner
-  decide whether to instantiate at all."
-  "flint")
+  decide whether to instantiate at all.
+
+  NAMESPACED, and it was not until 2026-09-24. Custom section names are a FLAT
+  GLOBAL namespace shared with every wasm producer -- the format reserves
+  nothing and registers nothing -- so a section called `flint` was one collision
+  away from a toolchain that also liked the word. Reverse DNS, matching the
+  package names everywhere else: `@3sln/flint` on npm, `com._3sln.flint` on the
+  jvm, `_3sln.Flint` on the clr.
+
+  THE SAME RULE BINDS THE OTHER TWO TARGETS (`DECISIONS.md#four-operations`).
+  A jvm class attribute and a clr custom attribute both live in namespaces
+  shared with everything else loaded, and JVMS 4.7 is explicit that an
+  unrecognised attribute must be silently ignored -- which is what makes a
+  collision quiet rather than loud."
+  "com.3sln.flint.meta")
 
 (def format-version 1)
 

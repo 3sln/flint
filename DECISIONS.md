@@ -12437,7 +12437,7 @@ and NOT *runs standalone* -- it requires a host carrying flint's runtime. That
 distinction was stated backwards for most of a day and misled two agents; it is
 the first thing to get right in any prose about an artifact.
 
-### The four
+### The three
 
     boot(bridge)        the bridge becomes this sandbox's SYSTEM PORT, and
                         everything is driven through it. A sandbox is ONE
@@ -12445,7 +12445,19 @@ the first thing to get right in any prose about an artifact.
     loop()   -> Status  pump. 0 Done, 1 Threw, 2 NeedsHost -- THE EXISTING ABI
                         NUMBERS, which this project treats as the ABI itself.
     link(name, fn)      override the native called `name`.
-    prop(name, buf)     a metadata property; answers the byte count, or -1.
+
+**`prop` WAS THE FOURTH AND IS GONE, 2026-09-24.** It answered a metadata
+property, and the section below is where that answer belongs instead: all three
+container formats already carry namespaced metadata, readable WITHOUT executing
+the artifact, which a call can never be.
+
+The wasm implementation is what argued against it. A module cannot read its own
+custom sections -- they are not in linear memory -- so `prop` needed a SECOND
+copy of the metadata spliced into a data segment, a `FLINT_META_DESC` descriptor
+to find it, ~100 lines of Rust to scan EDN for a key with balanced-delimiter
+counting and whole-key matching, and a gate to assert the two copies agreed. All
+of that to answer from inside what the container answers from outside. Written,
+measured, reverted the same day.
 
 **`loop()` returning `NeedsHost` is the RESTING state, not an error.** The
 control plane is a green thread parked on the system port, so a healthy idle
@@ -12463,13 +12475,44 @@ bulk or resolver API that required all 88 would be actively WRONG: it would
 reject programs that run. `link` MUST precede `boot` and refuse afterwards,
 because natives resolve exactly once when the image loads.
 
-**`prop` reports facts and decides nothing.** No `compatible?`. Which semver
-relation counts as compatible is unsettled, and pre-1.0 makes the usual "same
-major" rule say every release breaks everything. `prop` answers `version` from
-`meta.edn` (see `bin/check-version`), `compat-key`, `runtime`, and
-`natives`/`natives-unresolved` -- those last two being the only ones that need
-`boot`, because they describe what linking against THIS host produced rather
-than the inert artifact.
+### Metadata lives in the container, namespaced
+
+All three formats carry arbitrary metadata a reader gets at WITHOUT executing
+anything, and each has a path the platform already understands:
+
+    wasm          a custom section        `host/modmeta.mjs` already reads it
+    jvm class     a class attribute       JVMS 4.7 REQUIRES an unrecognised
+                                          attribute to be silently ignored
+    clr assembly  a CustomAttribute row   `GetCustomAttribute<T>()`, no reader
+
+**NAMESPACED, and this is the part that is easy to get wrong.** All three are
+flat namespaces shared with everything else in the process or the toolchain, and
+JVMS 4.7's "silently ignored" rule means a collision there is QUIET. So reverse
+DNS, matching the package names already in use -- `@3sln/flint` on npm,
+`com._3sln.flint` on the jvm, `_3sln.Flint` on the clr. The wasm section is
+`com.3sln.flint.meta`; it was the bare word `flint` until 2026-09-24.
+
+`host/modmeta.mjs` cannot read cljc, so the name is stated twice, and
+`test/modmeta.clj` asserts the two agree AND that it contains a dot -- checked
+by breaking it on purpose rather than by reading it.
+
+**Which semver relation counts as compatible is still unsettled**, and pre-1.0
+the usual "same major" rule says every release breaks everything. The metadata
+carries the version and nothing decides on it yet.
+
+**NO LINKAGE REPORT.** An earlier CLR face grew `prop("natives")` and
+`prop("natives-unresolved")`, because a host with a trimmed runtime would
+otherwise discover a gap only when a program reached it. Dropped: the VERSION
+says what must be linked, so a missing native means a version mismatch, and
+`boot` FAILS rather than handing back a tally nobody reads.
+
+*That is a real behaviour change and it is worth naming.* `runtime/src/image.rs`
+and `Img.cs:138` today leave a missing builtin NULL on purpose -- "an image
+imports every builtin its namespaces mention, and a program that never calls the
+missing one runs fine" -- and a trivial program declares 88 of them. Under the
+new rule a version-matched host carries all 88 and nothing changes; a host that
+deliberately TRIMMED its builtin set would now fail to boot a program it could
+have run. That trade is chosen, not overlooked.
 
 ### Where the targets may differ, and where they may not
 

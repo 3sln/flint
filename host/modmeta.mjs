@@ -4,7 +4,10 @@
 // instantiate, and on what glue, and that decision cannot depend on having
 // already done it. Custom sections are ignored by every engine and sit in the
 // byte stream, so this is a few lines of parsing anywhere.
-export const SECTION = 'flint';
+// MUST EQUAL `flint.modmeta/section-name`. Two front doors for one fact is how
+// this repo breaks, so `test/modmeta.clj` asserts these agree rather than
+// trusting the comment.
+export const SECTION = 'com.3sln.flint.meta';
 
 function uleb(b, i) {
   let n = 0, shift = 0, byte;
