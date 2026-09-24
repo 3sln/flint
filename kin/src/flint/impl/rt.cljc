@@ -2038,6 +2038,9 @@
     'set-rt-gas-limit (core/call {:rust "{0}.gas_limit = {1}"
                                   :java "{0}.gasLimit = {1}"
                                   :csharp "{0}.gasLimit = {1}"})
+    'set-rt-slice-end (core/call {:rust "{0}.slice_end = {1}"
+                                 :java "{0}.sliceEnd = {1}"
+                                 :csharp "{0}.sliceEnd = {1}"})
     'set-rt-checkpoint (core/call {:rust "{0}.checkpoint = {1}"
                                    :java "{0}.checkpoint = {1}"
                                    :csharp "{0}.checkpoint = {1}"})

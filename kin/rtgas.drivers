@@ -22,10 +22,17 @@ fn set(limit: Addr, slice: Addr) -> String {
     rt.rt_set_gas_limit(limit);
     format!("{}/{}", rt.checkpoint, rt.gas_trips)
 }
+// SEEDED WITH A WRONG CHECKPOINT, 999, so "it did not refresh" and "it
+// refreshed" are different answers rather than both looking right.
+fn slice(at_: Addr, gas: Addr) -> String {
+    let mut rt = Rt { gas_limit: gas, slice_end: 0, checkpoint: 999, gas_trips: 7 };
+    rt.rt_set_slice_end(at_);
+    format!("{}/{}", rt.checkpoint, rt.gas_trips)
+}
 fn main() {
-    println!("{} {} {} {} {} | {} {}",
+    println!("{} {} {} {} {} | {} {} | {} {}",
              at(0, 0), at(100, 0), at(0, 50), at(100, 50), at(50, 100),
-             set(200, 50), set(10, 50));
+             set(200, 50), set(10, 50), slice(30, 100), slice(0, 100));
 }
 --java-head
     static final class Rt { long gasLimit, sliceEnd, checkpoint; int gasTrips; }
@@ -42,10 +49,17 @@ fn main() {
         rtSetGasLimit(rt, limit);
         return rt.checkpoint + "/" + rt.gasTrips;
     }
+    static String slice(long at_, long gas) {
+        Rt rt = new Rt();
+        rt.gasLimit = gas; rt.checkpoint = 999; rt.gasTrips = 7;
+        rtSetSliceEnd(rt, at_);
+        return rt.checkpoint + "/" + rt.gasTrips;
+    }
     public static void main(String[] args) {
         System.out.println(at(0, 0) + " " + at(100, 0) + " " + at(0, 50) + " "
                            + at(100, 50) + " " + at(50, 100) + " | "
-                           + set(200, 50) + " " + set(10, 50));
+                           + set(200, 50) + " " + set(10, 50) + " | "
+                           + slice(30, 100) + " " + slice(0, 100));
     }
 --csharp-pre
 class Rt { public long gasLimit, sliceEnd, checkpoint; public int gasTrips; }
@@ -63,13 +77,20 @@ class Rt { public long gasLimit, sliceEnd, checkpoint; public int gasTrips; }
         RtSetGasLimit(rt, limit);
         return rt.checkpoint + "/" + rt.gasTrips;
     }
+    static string Slice(long at_, long gas) {
+        var rt = new Rt();
+        rt.gasLimit = gas; rt.checkpoint = 999; rt.gasTrips = 7;
+        RtSetSliceEnd(rt, at_);
+        return rt.checkpoint + "/" + rt.gasTrips;
+    }
     public static void Main() {
         System.Console.WriteLine(At(0, 0) + " " + At(100, 0) + " " + At(0, 50) + " "
                                  + At(100, 50) + " " + At(50, 100) + " | "
-                                 + Set(200, 50) + " " + Set(10, 50));
+                                 + Set(200, 50) + " " + Set(10, 50) + " | "
+                                 + Slice(30, 100) + " " + Slice(0, 100));
     }
 --expect
-none 100 50 50 50 | 50/0 10/0
+none 100 50 50 50 | 50/0 10/0 | 30/7 100/7
 --expect-why
 DERIVED from "zero means unlimited, and the checkpoint is the nearer of the
 two budgets", not recorded from a run.
@@ -98,3 +119,13 @@ which is why they are not first.
 re-armed against whichever budget is nearer -- the slice at 50, then the new
 limit at 10 -- and `gas_trips` goes from 7 to 0. Seeded at 7 rather than 0 so
 that "the clear did nothing" and "the clear worked" are different answers.
+
+`30/7` and `100/7` are `rt-set-slice-end`, and BOTH halves of each are a
+claim. The checkpoint is seeded at 999 first, so a version that set the field
+and forgot to re-arm answers 999 twice. And `gas_trips` stays 7 where
+`rt-set-gas-limit` clears it -- the asymmetry is deliberate, a slice ending
+being the scheduler's business rather than an overrun of the guest's budget,
+so a copy-paste of the limit setter answers `30/0` and is caught.
+
+`slice(0, 100)` -> 100 is the zero rule from the other direction: UNSETTING
+the slice has to let the gas limit win, not leave a stale 999 or a 0.

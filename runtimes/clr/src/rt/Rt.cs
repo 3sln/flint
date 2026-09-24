@@ -276,8 +276,7 @@ public sealed class Rt : System.IDisposable {
     public bool running;
 
     public void SetSliceEnd(long at) {
-        sliceEnd = at;
-        RefreshCheckpoint();
+        global::_3sln.Flint.Kgen.Rt.Rtgas.RtSetSliceEnd(this, at);
     }
 
     /// Whichever budget runs out first.

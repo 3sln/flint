@@ -343,8 +343,7 @@ public final class Rt {
     public boolean started;
 
     public void setSliceEnd(long at) {
-        sliceEnd = at;
-        refreshCheckpoint();
+        com._3sln.flint.kgen.rt.Rtgas.rtSetSliceEnd(this, at);
     }
 
     /// The single value the interpreter's hot loop compares against: whichever

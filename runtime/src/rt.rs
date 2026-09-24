@@ -996,8 +996,7 @@ impl Rt {
     pub const GAS_GRACE: u64 = 64 * 1024;
 
     pub fn set_slice_end(&mut self, at: u64) {
-        self.slice_end = at;
-        self.refresh_checkpoint();
+        self.rt_set_slice_end(at);
     }
 
     /// Is anything counting? When nothing is, the interpreter runs a loop with

@@ -27,6 +27,7 @@
   (:require [flint.impl.rt :refer [defn doc if and not == ult64
                                    rt-gas-limit rt-slice-end rt-checkpoint
                                    set-rt-checkpoint set-rt-gas-limit
+                                   set-rt-slice-end
                                    clear-rt-gas-trips
                                    NO_CHECKPOINT Rt Addr]]))
 
@@ -50,4 +51,14 @@
 (defn ^:pub ^:method rt-set-gas-limit [^:mut ^Rt rt ^Addr limit]
   (set-rt-gas-limit rt limit)
   (clear-rt-gas-trips rt)
+  (rt-refresh-checkpoint rt))
+
+(doc "Set where the scheduler wants this thread to yield, and re-arm."
+     ""
+     "The counterpart of `rt-set-gas-limit` and deliberately NOT symmetrical"
+     "with it: there is no tally to clear here. `gas-trips` counts overruns"
+     "of the guest's own budget, and a slice ending is the scheduler's"
+     "business rather than the guest's fault.")
+(defn ^:pub ^:method rt-set-slice-end [^:mut ^Rt rt ^Addr at]
+  (set-rt-slice-end rt at)
   (rt-refresh-checkpoint rt))

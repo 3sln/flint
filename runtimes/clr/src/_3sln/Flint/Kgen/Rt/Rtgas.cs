@@ -35,4 +35,14 @@ public static class Rtgas {
         rt.gasTrips = 0;
         RtRefreshCheckpoint(rt);
     }
+    /// Set where the scheduler wants this thread to yield, and re-arm.
+    /// 
+    /// The counterpart of `rt-set-gas-limit` and deliberately NOT symmetrical
+    /// with it: there is no tally to clear here. `gas-trips` counts overruns
+    /// of the guest's own budget, and a slice ending is the scheduler's
+    /// business rather than the guest's fault.
+    public static void RtSetSliceEnd(Rt rt, long at) {
+        rt.sliceEnd = at;
+        RtRefreshCheckpoint(rt);
+    }
 }

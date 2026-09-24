@@ -39,4 +39,14 @@ impl Rt {
         self.gas_trips = 0;
         self.rt_refresh_checkpoint();
     }
+    /// Set where the scheduler wants this thread to yield, and re-arm.
+    /// 
+    /// The counterpart of `rt-set-gas-limit` and deliberately NOT symmetrical
+    /// with it: there is no tally to clear here. `gas-trips` counts overruns
+    /// of the guest's own budget, and a slice ending is the scheduler's
+    /// business rather than the guest's fault.
+    pub fn rt_set_slice_end(&mut self, at: Addr) {
+        self.slice_end = at;
+        self.rt_refresh_checkpoint();
+    }
 }
