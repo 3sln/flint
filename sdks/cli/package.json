@@ -1,6 +1,6 @@
 {
   "name": "@3sln/flint-cli",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "The flint compiler as a command line, on node: compile Clojure to WebAssembly, or run it here.",
   "type": "module",
   "author": "Ray Stubbs",

@@ -1,6 +1,6 @@
 [package]
 name = "flint-c"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 description = "flint's C ABI: the shared and static libraries C, C++ and every other FFI links against."
 license = "MIT"

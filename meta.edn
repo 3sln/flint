@@ -1,0 +1,18 @@
+;; WHAT THIS PROJECT SAYS ABOUT ITSELF, in one place.
+;;
+;; ONE FACT, SIXTEEN DECLARATIONS. Before this file the version disagreed 8 to
+;; 8 -- `0.0.1` in the CLI, the SDKs and every `package.json`, `0.1.0` in the
+;; runtime, the units and the fallback that actually reaches a compiled
+;; artifact -- and nothing compared them. The whole compatibility design rests
+;; on a host reading that number out of an artifact and deciding what to link,
+;; so a version supplied by whichever manifest you happened to read is not a
+;; contract.
+;;
+;; `bin/set-version` writes it out; `bin/check-version` is the gate that says it
+;; was written, and `bin/check` runs that.
+;;
+;; SEMVER, NOT A DATE. A compatibility date reads better and cannot be spelled:
+;; `2026-09-24` is rejected by cargo and is not valid semver (a hyphen opens a
+;; prerelease), and `2026.09.24` is rejected for the leading zeros. `2026.9.24`
+;; and `20260924.1.0` are both legal, and both make every release a major bump.
+{:version "0.1.0"}

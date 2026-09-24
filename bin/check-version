@@ -1,0 +1,5 @@
+#!/bin/sh
+# Every manifest states what `meta.edn` says. See `bin/set_version.py`.
+set -e
+cd "$(dirname "$0")/.."
+exec python3 bin/set_version.py --check

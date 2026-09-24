@@ -1,6 +1,6 @@
 [package]
 name = "flint"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 description = "Compile pure Clojure and run it in a sandbox, natively."
 license = "MIT"

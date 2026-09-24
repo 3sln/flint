@@ -1,0 +1,14 @@
+#!/bin/sh
+# Write `meta.edn`'s `:version` into every package manifest that states one.
+#
+# ONE FACT, SIXTEEN DECLARATIONS. Before this existed they disagreed 8 to 8 --
+# `0.0.1` in the CLI, the SDKs and every `package.json`, `0.1.0` in the runtime,
+# the units and the fallback that actually reaches an artifact. Nothing compared
+# them, and the whole compatibility design rests on a host reading that number
+# out of an artifact and deciding what to link.
+#
+# Run before a build or a release. `bin/check-version` is the gate that says it
+# was run, and `bin/check` calls it.
+set -e
+cd "$(dirname "$0")/.."
+exec python3 bin/set_version.py "$@"
