@@ -12635,6 +12635,40 @@ only by a diagnostic string -- so "settled" and "wedged" are the same number to
 a host. That is the one case where `loop` still has to say something a host
 cannot infer, and it is unresolved.
 
+### MEASURED 2026-09-24: the two faces diverge on a STATIC vs INSTANCE surface
+
+The first honest cross-target run found it, and it is a design question rather
+than a spelling one:
+
+    clr    static void Boot(IBridge)          static Status Loop()
+    jvm    static Sandbox boot(...)           int loop()   -- an INSTANCE method
+
+**The jvm's shape is the one that survives this record's own concurrency
+requirement, and the clr's does not.** A static `Loop()` means one sandbox per
+process: static state is shared, so a second sandbox in the same load context
+would drive the first. The clr face already admits the symptom from the other
+end -- only one flint artifact can live in a load context, because appending
+cannot rename an assembly. An object per sandbox is what makes "several real
+threads call `loop`" and "many sandboxes, one program each" both true at once.
+
+So `boot` ANSWERS A SANDBOX and `loop`/`link` are that sandbox's, on every
+target. On wasm, where there is no object to hand back, the equivalent is that
+`boot` answers a handle the other two take -- which is also what lets one module
+instance serve one sandbox rather than being a process-wide singleton.
+
+The status values are the same three numbers spelled two ways -- `enum Status
+{ Done, Threw, NeedsHost }` against `static final int DONE, THREW, NEEDS_HOST`.
+The NUMBERS are the ABI and both agree on those; the contract should assert the
+numbers and stop asserting the spelling.
+
+*How this was found is the point.* `bin/check-artifact-ops` looked for the jvm
+face at `.../rt/Artifact.java`, which was a GUESS; the real one is
+`.../rt/Sandbox.java`. It printed "no face ..., skipping" and exited 0, so the
+jvm face landed and was never checked. Each row now declares whether it is
+supposed to exist, and BOTH directions fail: a built row with no face, and a
+not-built row whose face exists. The moment it stopped skipping it found both
+divergences above.
+
 ### Where the targets may differ, and where they may not
 
 The SEMANTICS above are identical everywhere. The spelling is not, and forcing

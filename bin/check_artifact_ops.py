@@ -34,12 +34,25 @@ import os, re, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Where each target's face lives. A target absent from this map has no face yet;
-# one present whose file is missing is a skipped row.
+# Where each target's face lives, AND WHETHER IT IS SUPPOSED TO EXIST YET.
+#
+# The second half was missing and it made this gate vacuous for any target it
+# could not find. It looked for the jvm face at `.../rt/Artifact.java`, the real
+# one is `.../rt/Sandbox.java`, and it printed "no face ..., skipping" and exited
+# 0 -- so the jvm face landed and was never checked. A guessed filename plus a
+# silent skip is the same failure `bin/conform-hosts` had: a gate that passes by
+# doing nothing.
+#
+# So each row now DECLARES, and both directions fail:
+#
+#   built True  and the face is missing  -> FAIL (it regressed, or moved again)
+#   built False and the face EXISTS      -> FAIL (a real implementation is being
+#                                          passed over, which is how the first
+#                                          one of these was caught)
 FACES = {
-    'clr': 'runtimes/clr/src/rt/Artifact.cs',
-    'jvm': 'runtimes/jvm/src/com/flint/rt/Artifact.java',
-    'wasm': 'runtime/src/fourops.rs',
+    'clr':  ('runtimes/clr/src/rt/Artifact.cs',            True),
+    'jvm':  ('runtimes/jvm/src/com/flint/rt/Sandbox.java', True),
+    'wasm': ('runtime/src/fourops.rs',                     False),
 }
 
 
@@ -177,9 +190,18 @@ def main():
     present = []
 
     for target in sorted(FACES):
-        txt = read(FACES[target])
+        rel, built = FACES[target]
+        txt = read(rel)
+        if txt is None and built:
+            fails.append('%s is declared BUILT and has no face at %s -- it moved or '
+                        'regressed. A missing face is not a skip.' % (target, rel))
+            continue
+        if txt is not None and not built:
+            fails.append('%s is declared NOT built and yet %s exists -- this gate would '
+                        'pass over a real implementation. Flip the row.' % (target, rel))
+            continue
         if txt is None:
-            rows.append('  --   %-4s no face at %s, skipping' % (target, FACES[target]))
+            rows.append('  --   %-4s not built yet (%s)' % (target, rel))
             continue
         present.append(target)
         face = EXTRACT[target](txt)
