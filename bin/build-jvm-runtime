@@ -1,0 +1,50 @@
+#!/bin/sh
+# dist/flint-rt.jar: the interpreter, prebuilt, for `:to :jvm` to append to.
+#
+# The wasm half of this is `bin/build-dist` producing `dist/flint-runtime.wasm`,
+# and the reason is identical (`DECISIONS.md#no-runtime-linking`): the runtime is
+# compiled ONCE, when flint is built, and everything a compile does afterwards is
+# byte manipulation on a finished artifact. flint cannot run `javac` any more than
+# it can run `wasm-ld`.
+#
+# So this needs a JDK and the compiler does not. That is the whole point of the
+# split: `src/flint/jvm.cljc` appends zip entries and emits one branch-free class,
+# both of which run wherever flint runs.
+#
+# STORED, NOT DEFLATED (`jar -0`). `flint.jar/append` copies the base jar's local
+# records verbatim and never inflates anything, so compression here would work
+# either way -- but an uncompressed base makes the appended artifact's size
+# readable as "the runtime plus the program" rather than as two compression
+# ratios, and `bin/check-dist` is the kind of gate that wants that.
+set -e
+cd "$(dirname "$0")/.."
+JDK="${FLINT_JDK:-${JAVA_HOME:-/opt/homebrew/opt/openjdk}}"
+[ -x "$JDK/bin/javac" ] || JDK=/opt/homebrew/opt/openjdk
+if [ ! -x "$JDK/bin/javac" ]; then
+  echo "no javac at $JDK: set FLINT_JDK or JAVA_HOME" >&2
+  exit 1
+fi
+
+out=dist/flint-rt.jar
+classes=out/jvm-rt-classes
+rm -rf "$classes"
+mkdir -p "$classes" dist
+
+"$JDK/bin/javac" -d "$classes" \
+  runtimes/jvm/src/com/flint/*.java \
+  runtimes/jvm/src/com/flint/rt/*.java \
+  runtimes/jvm/src/com/_3sln/flint/kgen/rt/*.java
+
+# The MANIFEST names `com.flint.Main`, which is a class the RUNTIME carries --
+# not one the compiler generates. So `java -jar` works on every artifact without
+# the packager ever touching the manifest, which it could not do anyway: the
+# manifest is an entry in this jar and appending a second one would be a
+# duplicate.
+mkdir -p out
+cat > out/jvm-rt-manifest <<'EOF'
+Manifest-Version: 1.0
+Main-Class: com.flint.Main
+EOF
+
+"$JDK/bin/jar" --create --file "$out" -0 --manifest=out/jvm-rt-manifest -C "$classes" .
+echo "wrote $out ($(wc -c < "$out" | tr -d ' ') bytes, $("$JDK/bin/jar" --list --file "$out" | grep -c '\.class$') classes)"

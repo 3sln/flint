@@ -17,6 +17,7 @@
             [flint.bundle :as bundle]
             [flint.llvm :as llvm]
             [flint.clr :as clr]
+            [flint.jvm :as jvm]
             [flint.modmeta :as modmeta]
             [flint.wasmshake :as wshake]
 
@@ -408,6 +409,35 @@
                                        :image image
                                        :meta (pr-str meta-map)}))})))))
 
+(defn compile-to-jvm
+  "Compile a program to a self-contained, runnable JAR (`:to :jvm`).
+
+  `spec` is `compile-project`'s. `base-b64` is `dist/flint-rt.jar`, the prebuilt
+  interpreter, and it arrives as its own ARGUMENT for exactly the reason
+  `compile-to-wasm`'s module does: half a megabyte of base64 inside an EDN string
+  is half a megabyte for flint's reader to scan a character at a time.
+
+  EMPTY SLOTS, like the LLVM target and unlike wasm. This port resolves every
+  native BY NAME when it loads the image (`Img.java`), so a table index would
+  name a table this artifact has not got.
+
+  Nothing is linked and no JDK is involved. `javac` ran once, when flint was
+  built; appending one class to a finished jar is byte manipulation
+  (`DECISIONS.md#no-runtime-linking`)."
+  [spec-edn base-b64]
+  (let [spec (reader/read-one spec-edn)
+        built (build-image spec (set (keys (:slots spec))))]
+    (if (:missing built)
+      {:missing (:missing built)}
+      (if (:refused built)
+        {:refused (:refused built)}
+        (let [builder (:builder built)
+              image (img/emit builder {})]
+          {:module (base64 (jvm/pack (base64-decode base-b64) image
+                                     {:version (:version spec)
+                                      :meta (:meta spec)
+                                      :builtins (count (img/natives builder))}))})))))
+
 (defn main [args]
   ;; Two entries, chosen by the first argument. `spec` is the original: the
   ;; caller resolved every namespace and handed over a finished map, which is
@@ -419,14 +449,18 @@
         ;; argument as the spec when it does not recognise it, so a target added
         ;; to the `cond` and forgotten here compiles the word "clr" as a program
         ;; and reports something about the reader. The two lists must move
-        ;; together.
+        ;; together, and `test/selfhost-targets.clj` asserts they do.
         known? (or (= mode "project") (= mode "wasm") (= mode "llvm")
-                   (= mode "clr"))
+                   (= mode "clr") (= mode "jvm"))
         [mode spec-edn] (if known? [mode (second args)] ["spec" mode])
         r (cond
             (= mode "wasm") (compile-to-wasm spec-edn (nth args 2 ""))
-            (= mode "llvm") (compile-to-llvm spec-edn)
+            ;; A JAR comes back the way a wasm module does -- base64, under
+            ;; `:module` -- because it is the same thing: a finished artifact with
+            ;; the program spliced in, and nothing for the host to link.
+            (= mode "jvm") (compile-to-jvm spec-edn (nth args 2 ""))
             (= mode "clr") (compile-to-clr spec-edn)
+            (= mode "llvm") (compile-to-llvm spec-edn)
             (= mode "project") (compile-project spec-edn)
             :else (compile-to-base64 spec-edn))]
     (cond
@@ -454,9 +488,6 @@
       ;; LLVM IR is TEXT and leaves as text -- no base64 on the way out, which
       ;; is the one visible difference from every other target here.
       (:ll r) (:ll r)
-      ;; A CLR assembly is BYTES, so it does need base64 -- the opposite of
-      ;; `:ll` immediately above, and the reason these two cannot share an arm.
-      (:clr r) (base64 (:clr r))
       :else
       ;; One string out: base64 image, newline, then the native import order,
       ;; one per line, which is what the host needs to assign slots.
