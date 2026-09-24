@@ -182,12 +182,12 @@
   ;; callers in the tree, and the `static mut ARGS` behind it was written by
   ;; one export and read by nobody.
   ;;
-  ;; `arg_alloc` is still here and its only remaining callers load an IMAGE
-  ;; (`host/run.mjs:71`, `test/loader.clj`), which is `loader-exports` work --
-  ;; a production module that cannot be handed an image has no user for it.
-  ;; Moving it is a decision, not a cleanup, so it is written down rather than
-  ;; done.
-  ["arg_alloc" "out_ptr" "out_len"
+  ;; `arg_alloc` went too, and NOT to `loader-exports` as this comment first
+  ;; proposed. The question "what is it even for" answered itself: it handed
+  ;; back a scratch buffer, its `static mut BUFS` was written by it and read by
+  ;; nothing, and every call leaked one. `flint_in_alloc` is the same primitive
+  ;; reusing one buffer, and the loader uses that now.
+  ["out_ptr" "out_len"
    "set_step_limit" "stat_steps" "set_memory_limit"
    "flint_opaque_host_id"])
 

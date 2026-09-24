@@ -62,11 +62,6 @@ pub static mut FLINT_IMAGE_DESC: [u32; 2] = [0, 0];
 pub static mut FLINT_BUILTIN_REGISTRY: [u32; 2] = [0, 0];
 
 static mut RT: Option<Rt> = None;
-/// One owned buffer per argument. A single growing buffer would be simpler and
-/// wrong: reallocating it moves bytes the host has already written through a
-/// pointer we handed back. Each `Vec`'s own allocation is stable even as the
-/// outer `Vec` grows.
-static mut BUFS: Vec<Vec<u8>> = Vec::new();
 static mut OUT: Vec<u8> = Vec::new();
 
 fn heap_start() -> u32 {
@@ -128,17 +123,18 @@ unsafe fn ensure_rt() -> &'static mut Rt {
     slot.as_mut().unwrap()
 }
 
-#[no_mangle]
-pub extern "C" fn arg_alloc(len: u32) -> u32 {
-    unsafe {
-        ensure_arena();
-        let bufs = &mut *core::ptr::addr_of_mut!(BUFS);
-        let v = alloc::vec![0u8; len as usize];
-        let p = v.as_ptr() as u32;
-        bufs.push(v);
-        p
-    }
-}
+// `arg_alloc` used to live here, with a `static mut BUFS` behind it, and it is
+// gone 2026-09-23. It handed the host a stable scratch buffer in linear memory
+// and its name says what for: marshalling `flint_call`'s arguments, one owned
+// `Vec` per argument. `flint_call` went with `calls-are-ports` and `arg_push`
+// with it, leaving one caller -- writing an IMAGE before `flint_load_image`.
+//
+// `flint_in_alloc` is the same primitive and a better one. It reuses a single
+// buffer where this leaked a fresh `Vec` on every call: `BUFS` was pushed to by
+// this function and read by NOTHING, which it had to be, because the `Vec` has
+// to outlive the pointer handed back and nothing ever reclaimed it. It is also
+// always exported now that `flint.conc` is in the link closure unconditionally,
+// so the loader lost nothing by moving to it.
 
 
 /// The host id of an opaque value, or 0 if it is not one or was guest-minted.

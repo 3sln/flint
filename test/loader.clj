@@ -83,7 +83,7 @@
        const inst = instantiate(mod, { stepLimit: 0 });
        const e = inst.exports;
        const img = fs.readFileSync(path);
-       const p = e.arg_alloc(img.length);
+       const p = e.flint_in_alloc(img.length);
        new Uint8Array(e.memory.buffer).set(img, p);
        const rc = e.flint_load_image ? e.flint_load_image(p, img.length) : -1;
        if (rc !== 0) { res.push({rc, why: rc === -1 ? 'no flint_load_image export' : 'refused'}); continue; }

@@ -68,7 +68,7 @@ export async function run(file, args, { loaderPath, capabilities, fn } = {}) {
   if (!e.flint_load_image) {
     throw new Error(`${loaderPath} was not built with --loader: it has no flint_load_image`);
   }
-  const p = e.arg_alloc(bytes.length);
+  const p = e.flint_in_alloc(bytes.length);
   new Uint8Array(e.memory.buffer).set(bytes, p);
   const rc = e.flint_load_image(p, bytes.length);
   if (rc !== 0) {

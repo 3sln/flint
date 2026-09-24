@@ -1,6 +1,6 @@
 // Run a flint module. The module is self-contained: no imports, no host
 // functions, nothing to wire up. This wrapper exists only to turn
-// `main("a","b")` into the module's arg_alloc / arg_push / main / out_ptr ABI.
+// a call into a message on the module's system port (`calls-are-ports`).
 import { readFileSync } from 'fs';
 // The guest driver -- arguments, the pump, capabilities -- is portable and
 // lives with the SDK, which needs the same thing. This file is the node half:
