@@ -15,7 +15,7 @@ hosts it.
 
 ```
 flint run :path <dir> :fn <ns/fn> [:with [cap...]] [:args [arg...]]
-flint compile :path <dir> :fn <ns/fn> [:to :wasm] [:out <file>]
+flint compile :path <dir> :fn <ns/fn> [:to :wasm|:clr] [:out <file>]
               [:with [cap...]] [:optimize [perf]] [:meta k=v]
 flint test :path <dir>
 flint version

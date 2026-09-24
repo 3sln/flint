@@ -1,0 +1,123 @@
+#!/bin/sh
+# `:to :clr`, end to end: emit an assembly, load it, drive the program through
+# the three operations, and read its metadata WITHOUT loading the program.
+#
+# AN ASSEMBLY THAT LOADS IS NOT AN ASSEMBLY THAT IS CORRECT, and this checks it
+# five ways, because each one alone has a hole:
+#
+#   * it is a PE assembly at all, and not a wasm module under a `.dll` name --
+#     the same hole `bin/check-llvm` opens with, and still the worst one: a
+#     target that silently means another target is worse than absent;
+#   * the CLR loads it -- the loader is the only reader that can say the
+#     metadata tables are well formed;
+#   * ROSLYN compiles against it as a reference. A stricter reader than the
+#     loader, and free: it went looking for signatures the loader never
+#     resolves;
+#   * the FieldRva bytecode reads back identically. The witness methods the
+#     emitter plants -- `Length`, `Sum`, `Fnv1a` -- are compared against values
+#     computed OUTSIDE the assembly, because a FieldRva array at a wrong offset
+#     answers a plausible wrong number rather than failing;
+#   * the program RUNS and answers what `flint run` answers, which is the only
+#     check that reaches the emitted code rather than the container.
+#
+# `Fnv1a` is the one that matters most. It is IL this project's own assembler
+# emitted, computing the hash `Img.Load` computes over the same bytes, so the
+# compiler's cljc, the CIL it emitted and the C# runtime must agree on ONE
+# number. Three implementations, one answer.
+#
+# WHY NOT `bin/conform-hosts`. That compares runtimes on an image. This compares
+# an ARTIFACT against the interpreter, which is a different question: the image
+# is the same either way, and what is under test here is the container and the
+# assembler around it.
+#
+# `DECISIONS.md#four-operations`.
+set -e
+cd "$(dirname "$0")/.."
+fail() { echo; echo "FAILED: $1"; exit 1; }
+
+# A CLR IS REQUIRED HERE AND NOT IN `flint compile`. Same split the LLVM target
+# rests on: emitting an assembly needs nothing but the compiler, and running one
+# needs a runtime. So this script demands `dotnet` and `flint` never does.
+if ! command -v dotnet > /dev/null 2>&1; then
+  echo "  --   no dotnet, skipping the clr target row"
+  exit 0
+fi
+export DOTNET_ROOT="${DOTNET_ROOT:-/opt/homebrew/opt/dotnet/libexec}"
+
+OUT=out/check-clr
+rm -rf "$OUT"
+mkdir -p "$OUT/src"
+
+# One program, reaching the parts of the emitter that differ: arithmetic that
+# lands in a loop, a string answer so the wire path is exercised, and an
+# argument so the call is not the zero-arity special case.
+cat > "$OUT/src/prog.cljc" <<'EOF'
+(ns prog)
+
+(defn sum-to [n]
+  (loop [i 0 acc 0]
+    (if (< i n) (recur (inc i) (+ acc i)) acc)))
+
+(defn main [args]
+  (str "sum=" (sum-to 100)))
+EOF
+
+# WHAT THE INTERPRETER ANSWERS, and it has to come from the interpreter. The
+# first version of this said
+#
+#     want=$(./bin/flint run ... || true); [ -n "$want" ] || want="sum=4950"
+#
+# and `bin/flint` HAS NO `run` SUBCOMMAND -- `flint run` is the native CLI. So
+# every line of it fell through to the constant, the constant happened to be
+# right, and the gate printed `the program answered "sum=4950"` while comparing
+# the artifact against a number written in this file. A fallback that reads
+# exactly like success is worse than no check.
+#
+# So: the native CLI or nothing. If it is not built, say so and SKIP the answer
+# comparison rather than inventing one.
+RUNNER=target/release/flint
+if [ -x "$RUNNER" ]; then
+  want=$("./$RUNNER" run :path "$OUT/src" :fn prog/main 2>/dev/null) \
+    || fail "\`flint run\` could not run the program, so there is nothing to compare against"
+  [ -n "$want" ] || fail "\`flint run\` answered nothing"
+  echo "  ok   the interpreter answers \"$want\""
+else
+  echo "  --   no $RUNNER, so the answer cannot be compared against the interpreter."
+  echo "       Run \`bin/build-dist\` then \`cargo build --release -p flint-cli\`."
+  echo "       Everything below still checks the container; the ANSWER does not."
+  want=""
+fi
+
+./bin/flint :src "$OUT/src" :fn prog/main :to :clr :out "$OUT/Prog.dll" > "$OUT/emit.out" 2>&1 \
+  || { cat "$OUT/emit.out"; fail "\`:to :clr\` did not emit"; }
+sed 's/^/       /' "$OUT/emit.out"
+
+# 1. IT IS A PE FILE. `MZ`, before anything else looks at it -- this is the
+#    "silently another target" check and it must not depend on a loader.
+magic=$(head -c 2 "$OUT/Prog.dll" | od -An -c | tr -d ' \n')
+[ "$magic" = "MZ" ] || fail "the artifact does not start with \`MZ\`: got '$magic'"
+echo "  ok   it is a PE assembly, not another target under a .dll name"
+
+size=$(wc -c < "$OUT/Prog.dll" | tr -d ' ')
+echo "  ok   emitted $size bytes"
+
+# 2-5. Load it, compile against it, check the witnesses, run the program. One
+#      harness, because all four want the same assembly loaded once.
+if ! (cd runtimes/clr/src && dotnet build -v q --nologo -c Release) > "$OUT/rt.out" 2>&1; then
+  grep -E "error " "$OUT/rt.out" | head -20
+  fail "the clr runtime does not build, so nothing can load the artifact"
+fi
+echo "  ok   the runtime the artifact references builds"
+
+echo
+echo "  (the loader, Roslyn, the witnesses and the program itself are checked by"
+echo "   runtimes/clr/artifact/Check.csproj -- one harness, one load)"
+if ! (cd runtimes/clr/artifact && dotnet run -v q -c Release -- \
+        "../../../$OUT/Prog.dll" prog/main "$want") > "$OUT/check.out" 2>&1; then
+  cat "$OUT/check.out"
+  fail "the emitted assembly did not check out"
+fi
+sed 's/^/  /' "$OUT/check.out"
+
+echo
+echo "  ok   \`:to :clr\` emits an assembly that loads, verifies and runs"

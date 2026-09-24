@@ -681,6 +681,56 @@ pub(crate) fn load_sandbox(image: &[u8]) -> Result<Program> {
         .map_err(|e| anyhow::anyhow!("the image did not load: {e}"))
 }
 
+/// `:to :clr`: the program as one .NET assembly, and no linker anywhere.
+///
+/// What comes back is BASE64, not text -- an assembly is bytes, which is the one
+/// visible difference from the LLVM path beside this and the reason the two
+/// cannot share an arm. (Sharing an arm between two targets is exactly the
+/// mistake `DECISIONS.md#llvm-ir-target` records: `:to :llvm` and `:to :native`
+/// shared one, and the refusal it printed was true of the second and never of
+/// the first.)
+///
+/// `SLOTS`, not `SLOTS_AOT`, and no shaking -- both for `compile_llvm`'s reasons.
+/// The assembly's natives resolve BY NAME against whatever table the host
+/// carries, so a slot index would name a table this artifact does not have; and
+/// there is no prebuilt module here to cut down.
+///
+/// The artifact carries the PROGRAM, not the runtime: the bytecode as a
+/// `FieldRva` static array, `boot`/`loop`/`link`, and an assembly reference to
+/// flint's runtime. So it needs `Flint.dll` beside it and is not standalone.
+fn compile_clr(srcs: &[PathBuf], entry: &str, out_path: &Path,
+               optimize: &[String], checks: Option<bool>, quiet: bool,
+               features: Option<&[String]>) -> Result<()> {
+    let aot = wants_aot(optimize);
+    let strip_checks = strip_checks(optimize, checks);
+    let slots = parse_slots(SLOTS)?;
+    let spec = build_spec(srcs, entry, &slots, aot, false, &[], None, strip_checks, features)?;
+    let mut p = load_compiler()?;
+    let r = p.run(&["clr", &spec]);
+    if r.code != 0 {
+        bail!("{}", r.out.trim());
+    }
+    if let Some(rest) = r.out.strip_prefix("!missing") {
+        bail!("{}", missing_message(rest, features));
+    }
+    if let Some(rest) = r.out.strip_prefix("!refused") {
+        bail!("{}", rest.trim());
+    }
+    let asm = base64_decode(r.out.trim())?;
+    // A SNIFF TEST, for `compile_llvm`'s reason: the guest answers with a string
+    // either way, and a compiler that wrote a diagnostic into an artifact would
+    // be found out by whoever loaded it, with no idea which step lied. `MZ` is
+    // the first two bytes of every PE file.
+    if asm.len() < 2 || asm[0] != 0x4d || asm[1] != 0x5a {
+        bail!("the compiler did not answer with a PE assembly (no `MZ`):\n{}",
+              r.out.chars().take(400).collect::<String>().trim());
+    }
+    fs::write(out_path, &asm)?;
+    if !quiet { eprintln!("wrote {} ({} bytes{})", out_path.display(), asm.len(),
+              if aot { ", compiled arities" } else { "" }); }
+    Ok(())
+}
+
 /// `:to :llvm`: the program as one LLVM IR module, and no linker anywhere.
 ///
 /// What comes back is TEXT, which is the whole difference from the wasm path:
@@ -758,13 +808,16 @@ pub(crate) fn compile_q(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize
     match to.trim_start_matches(':') {
         "wasm" => {}
         "llvm" => return compile_llvm(srcs, entry, out_path, optimize, checks, quiet, features),
+        // A THIRD ARM, not a second target on the LLVM one. IR is text and an
+        // assembly is bytes; the record above is about exactly this mistake.
+        "clr" => return compile_clr(srcs, entry, out_path, optimize, checks, quiet, features),
         "native" => bail!(
             "`:to :native` is not built: an executable is a LINK, and this binary carries\n\
              no linker. `:to :llvm` emits the LLVM IR for the same program and needs none;\n\
              linking it is then your own `clang` (see `nativeabi/`). To just run the\n\
              program, `flint run` executes it natively here."
         ),
-        other => bail!("no such target `{other}` (`:to :wasm`, `:to :llvm`)"),
+        other => bail!("no such target `{other}` (`:to :wasm`, `:to :llvm`, `:to :clr`)"),
     }
     let aot = wants_aot(optimize);
     let slots = parse_slots(if aot { SLOTS_AOT } else { SLOTS })?;
@@ -1369,6 +1422,14 @@ fn usage() -> ! {
 
           cargo build --release -p flint-native-abi
           clang prog.ll target/release/libflintnative.a -o prog
+
+  flint compile :path <dir> :fn <ns/fn> :to :clr [:out <file.dll>]
+                [:optimize [perf]] [:meta k=v]
+      Compile to one .NET assembly, for any host with a CLR. The bytecode
+      rides in `.text` as a static byte array and the assembly exposes
+      `boot`/`loop`/`link`; its metadata is a `CustomAttribute`, readable with
+      `GetCustomAttribute` without loading the program. It carries the PROGRAM
+      and names flint's runtime as a reference, so `Flint.dll` goes beside it.
 
   flint test :path <dir>
       Run every var marked `^:flint.check/test` under `:path`, and report.

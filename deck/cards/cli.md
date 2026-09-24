@@ -42,15 +42,21 @@ A few things the usage text is explicit about:
 - A value can repeat the key or use a bracketed list — `:path [src lib]` and
   `:path src :path lib` mean the same thing. In zsh, quote the bracket form:
   `:path '[src lib]'`.
-- Only `:to :wasm` actually compiles today. Asking for `:to :llvm` or
-  `:to :native` fails with an explicit message rather than a silent
-  fallback: *"`:to :llvm` is not built yet: emitting a native artifact needs
-  a linker, and this binary carries none. The native runtime itself IS
-  built — it is what `flint run` uses — so the way to run natively today is
-  `flint run`."* (This is the `cli` decision's design, partly shipped — the
-  native binary, this command surface, and `deps.edn` work; a native
-  cross-compiler and an "entry map" concept from that decision do not exist
-  yet.)
+- **Three targets compile today: `:to :wasm`, `:to :llvm` and `:to :clr`.**
+  `:to :clr` emits one .NET assembly with the bytecode in `.text` as a static
+  byte array, exposing `boot`/`loop`/`link`, its metadata a `CustomAttribute`
+  (`four-operations`); it carries the program and names flint's runtime, so
+  `Flint.dll` goes beside it. Only `:to :native` is refused, and only because
+  an executable is a LINK and no flint binary carries a linker — `:to :llvm`
+  emits the IR for the same program and one `clang` finishes it. An unknown
+  target lists the real ones rather than guessing:
+  *"no such target `dotnet` (`:to :wasm`, `:to :llvm`, `:to :clr`)"*.
+
+  *This bullet said "Only `:to :wasm` actually compiles today" and quoted a
+  refusal for `:to :llvm` long after that target shipped. The quoted message
+  no longer exists anywhere.* (The `cli` decision's design is otherwise partly
+  shipped: the native binary, this command surface and `deps.edn` work; the
+  "entry map" concept does not exist yet.)
 
 ## Capabilities: `:with`
 

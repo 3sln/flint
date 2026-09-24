@@ -15,7 +15,24 @@
          ;; flint code, in `lib/`, because 0021's argument is that it has to
          ;; survive losing babashka. What is in this file is the host half.
          '[flint.cli :as cli] '[flint.deps :as deps]
-         '[flint.wasm :as w] '[flint.modmeta :as modmeta])
+         '[flint.wasm :as w] '[flint.modmeta :as modmeta]
+         ;; The CLR writer, for `:to :clr`. Portable cljc, so babashka and the
+         ;; self-hosted compiler load the same emitter.
+         '[flint.clr :as clr] '[flint.rt])
+
+(defn clr-name
+  "An assembly name from the output path: the basename, minus its extension, with
+  anything not legal in an identifier replaced.
+
+  THE NAME IS NOT COSMETIC. An assembly's identity is this string, and the CLR
+  resolves references by it -- two artifacts sharing one name cannot be loaded
+  into the same context. Deriving it from the path is what makes
+  `:out app.dll` and `:out other.dll` distinct rather than both `Program`."
+  [out]
+  (let [base (last (str/split (str out) #"/"))
+        stem (str/replace base #"\.[^.]*$" "")
+        safe (str/replace stem #"[^A-Za-z0-9_]" "_")]
+    (if (re-find #"^[A-Za-z_]" safe) safe (str "_" safe))))
 
 (defn script-ns
   "What a file's `ns` form says, for the two things a script CLI needs: the
@@ -107,6 +124,11 @@
         ;; Emit the bytecode IMAGE and stop -- no linker, no module. This is the
         ;; half of the toolchain that can run somewhere `rust-lld` cannot.
         (= k "--emit-image") (recur (rest a) (assoc m :emit-image true))
+        ;; `:to` LIVES HERE TOO NOW. Without this clause the `:else` at the
+        ;; bottom of this `cond` says "unknown argument: :to" -- so
+        ;; `bin/flint ... :to :clr` died naming the flag rather than the target,
+        ;; which reads like a typo rather than a missing feature.
+        (= k ":to") (recur (drop 2 a) (assoc m :to (str/replace (str (second a)) #"^:" "")))
         ;; The compiler's INPUT, written out. `out/flintc-gen0.wasm` takes this
         ;; and nothing else, so it is what a Worker has to be handed
         ;; (DECISIONS.md#construe-integration-bar).
@@ -848,8 +870,17 @@
                      (.start (Thread. (clojure.core/fn [] (io/copy (.getInputStream p) System/out))))
                      (.start (Thread. (clojure.core/fn [] (io/copy (.getErrorStream p) System/err))))
                      (.waitFor p)))
+            ;; THE TARGET HAS TO TRAVEL. `lib/flint/cli.cljc` put `:target` in
+            ;; the build request and this re-entry dropped it, so
+            ;; `flint build :target clr` emitted a wasm module while the CLI that
+            ;; asked believed otherwise -- invisible for as long as `clr` was
+            ;; refused upstream, and a silent wrong artifact the moment it was
+            ;; not. "wasm" is the default and needs no flag.
             code (run! (concat ["bb" (str root "/bin/flint") ":fn" (:entry b) ":out" (:out b)]
-                               srcs (when (:image? b) ["--emit-image"])))]
+                               srcs
+                               (when (and (:target b) (not= "wasm" (:target b)))
+                                 [":to" (:target b)])
+                               (when (:image? b) ["--emit-image"])))]
         ;; An image needs a loader to be instantiated into, so building one
         ;; builds the other. One loader serves every image (0023), so it is
         ;; built once and left alone after that.
@@ -921,7 +952,7 @@
     (flush)
     (System/exit (if (or (re-find #"FAILED" (str out)) (not (zero? (.exitValue p)))) 1 0))))
 
-(let [{:keys [src fn out stats keep-names explain disasm const self exclude exports wasm-path aot optimize loader emit-image emit-spec features]}
+(let [{:keys [src fn out stats keep-names explain disasm const self exclude exports wasm-path aot optimize loader emit-image emit-spec features to]}
       (parse-args (if test-mode? (rest *command-line-args*) *command-line-args*))
       fn (if test-mode? 'flint.check.registry/run fn)]
   (when-not fn
@@ -1138,6 +1169,34 @@
               (with-open [o (java.io.FileOutputStream. (str out))]
                 (.write o (byte-array (map unchecked-byte bytes))))
               (println "wrote" out (str "(" (count bytes) " bytes, image only)"))
+              (System/exit 0)))
+        ;; `:to :clr` -- BESIDE `--emit-image` and before `link/compose`, because
+        ;; a CLR assembly is not a link. The bytecode goes in as a `FieldRva`
+        ;; static array and flint's runtime is an assembly REFERENCE, so there is
+        ;; nothing for `rust-lld` to do and calling it would produce a wasm module
+        ;; nobody asked for.
+        _ (when (= to "clr")
+            (let [image (if self (:image selfres) (img/emit builder {}))
+                  meta-map (modmeta/describe
+                             {:abi :clr :memory :unshared :gas-in-aot false
+                              :version (or (System/getenv "FLINT_VERSION") "0.1.0")
+                              :exports ["boot" "loop" "link"]
+                              :builtins (count needed)
+                              :imports [] :units []
+                              :features (or features {})
+                              :meta {}})
+                  dll (clr/assemble {:name (clr-name out) :image (flint.rt/vec->b (vec image))
+                                     :meta (pr-str meta-map)})
+                  ;; `:bytes`, NOT `dll`. `assemble` answers a map -- the bytes
+                  ;; and the per-method assembly facts -- and both new callers
+                  ;; of it assumed the byte string it used to return. The symptom
+                  ;; was `MapEntry cannot be cast to Character` from inside
+                  ;; `flint.rt/b->vec`, four frames from anything named.
+                  bytes (flint.rt/b->vec (:bytes dll))]
+              (with-open [o (java.io.FileOutputStream. (str out))]
+                (.write o (byte-array (map unchecked-byte bytes))))
+              (println "wrote" out (str "(" (count bytes) " bytes, "
+                                        (count image) " of it bytecode)"))
               (System/exit 0)))
         result (link/compose {:unit-path unit-path
                               :sysroot (str root "/units/.sysroot")

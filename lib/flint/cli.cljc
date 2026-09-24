@@ -59,8 +59,9 @@
     :note "a self-contained module, or a bytecode image (0023)"}
    {:target "jvm" :ok false
     :note "needs the JVM backend -- DECISIONS.md#other-hosts"}
-   {:target "clr" :ok false
-    :note "needs the CLR backend -- DECISIONS.md#other-hosts"}])
+   {:target "clr" :ok true
+    :note "one .NET assembly: bytecode in `.text`, boot/loop/link, metadata as a
+           CustomAttribute (DECISIONS.md#four-operations)"}])
 
 (defn target-named
   "The target entry for `nm`, or nil."

@@ -632,6 +632,18 @@ if ./target/release/flint compile :path /tmp/flint-smoke :fn smoke/main \
 fi
 [ ! -f /tmp/flint-smoke/no.out ] || fail ":to :native wrote a file anyway"
 
+# And a target that exists must not be reachable by a NEAR MISS. `:to :dotnet`
+# is the obvious wrong spelling of `:to :clr`, and the error has to list the
+# real ones rather than guess.
+if ./target/release/flint compile :path /tmp/flint-smoke :fn smoke/main \
+     :to :dotnet :out /tmp/flint-smoke/no2.out >/dev/null 2>&1; then
+  fail ":to :dotnet claimed to work"
+fi
+./target/release/flint compile :path /tmp/flint-smoke :fn smoke/main \
+  :to :dotnet :out /tmp/flint-smoke/no2.out 2>&1 | grep -q ':to :clr' \
+  || fail "the unknown-target message does not list :to :clr"
+[ ! -f /tmp/flint-smoke/no2.out ] || fail ":to :dotnet wrote a file anyway"
+
 # `:to :llvm` IS built, and the guarantee the old assertion was really making --
 # that it does not quietly emit wasm -- is now made by checking the artifact
 # rather than by refusing to produce one. `bin/check-llvm` emits IR for seven
@@ -651,6 +663,15 @@ fi
 # and ends the suite with no message at all, which would turn a change to
 # check-llvm's output format into a silent abort here.
 sed -n 's/^    \([a-z]*:\)/  \1/p' /tmp/flint-llvm.out
+
+echo
+sec "clr: one assembly out, loaded, verified by Roslyn, answering what the interpreter answers"
+# THE SCRIPT'S OWN STATUS, for `check-llvm`'s reason immediately above.
+if ! ./bin/check-clr > /tmp/flint-clr.out 2>&1; then
+  cat /tmp/flint-clr.out
+  fail "bin/check-clr"
+fi
+sed -n 's/^  \(ok   \)/  \1/p' /tmp/flint-clr.out | tail -6
 
 ls -l target/release/flint | awk '{printf "    binary %.1f MB\n", $5/1048576}'
 
