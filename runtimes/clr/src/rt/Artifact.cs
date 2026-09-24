@@ -365,6 +365,18 @@ public static class Artifact {
             case "natives-unresolved":
                 v = Encoding.UTF8.GetBytes(string.Join(",", unresolved));
                 break;
+            // The image's FNV-1a, as `Img.Load` computed it. Also needs `Boot`.
+            //
+            // A CROSS-CHECK, not a feature. `flint.clr` emits IL that computes
+            // this same hash over the same `FieldRva` bytes, so three
+            // independent implementations -- the compiler's cljc, the CIL it
+            // emitted, and this C# -- have to agree on one number. A
+            // `FieldRva` array at the wrong offset returns a plausible wrong
+            // hash rather than failing, and this is what makes that visible.
+            case "fingerprint":
+                v = Encoding.UTF8.GetBytes(booted ? rt.fingerprint.ToString()
+                                                  : "unknown until boot");
+                break;
             default: return -1;
         }
         if (v == null) return -1;

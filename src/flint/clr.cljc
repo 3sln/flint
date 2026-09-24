@@ -38,10 +38,12 @@
 
   ## What this does NOT do
 
-  This emits one type, one `FieldRva` array, and three static methods. It is
-  the container, proven: a real `:to :clr` needs `MemberRef`/`TypeSpec` for
-  calls into the runtime, a general IL assembler, and the AOT codegen. See the
-  report for what each costs."
+  One type, one `FieldRva` array, and six static methods -- the container and a
+  real CIL assembler, both proven. Still missing for a full `:to :clr`: N types
+  (only methods are data-driven here), `TypeSpec` for generic instantiations,
+  `CustomAttribute` (so no `TargetFrameworkAttribute`), an entry point for the
+  exe variant, and the bytecode-to-CIL translation itself -- which is
+  `flint.aot`'s job for wasm and has no CLR counterpart yet."
   (:require [flint.rt]))
 
 ;; ---------------------------------------------------------------- byte output
@@ -171,21 +173,258 @@
   [w n]
   (if (= w 2) (u16 n) (u32 n)))
 
-;; ------------------------------------------------------------------ IL bodies
+;; ----------------------------------------------------------------- CIL: the ISA
+;;
+;; `flint.wasm` has no counterpart to this section, and the reason is worth
+;; stating because it is the one place CIL is genuinely harder than wasm rather
+;; than merely different. Wasm needs NEITHER of the two things below:
+;;
+;;   * its branches name a LABEL DEPTH, not a byte displacement, so there is no
+;;     short/long form to choose and no fixup pass;
+;;   * its stack is VALIDATED by the engine from the types, so a function never
+;;     declares how deep it gets.
+;;
+;; CIL needs both. A branch carries a signed displacement that is one byte or
+;; four, and a method body declares `MaxStack`, which the runtime believes.
+;;
+;; What IS mirrored is `flint.aot/max-depth`, deliberately: `max-stack` below is
+;; the same worklist over the same kind of graph, for the reason that function's
+;; docstring gives -- two edges of one branch leave different depths, so a
+;; running total quietly gets one of them wrong. Its refusal discipline is
+;; mirrored too: an instruction whose effect is unknown returns nil and refuses
+;; the method, because a depth this cannot bound is not one to guess.
 
-(def ^:private op
-  {:ldarg.0 0x02 :ldloc.0 0x06 :ldloc.1 0x07 :stloc.0 0x0a :stloc.1 0x0b
-   :ldc.i4.0 0x16 :ldc.i4.1 0x17 :ldc.i4 0x20 :ret 0x2a :br.s 0x2b
-   :blt.un.s 0x37 :ldind.u1 0x47 :add 0x58 :ldsflda 0x7f})
+(def ^:private CIL
+  "Opcode table. `:pop`/`:push` are the stack effect; nil means the instruction
+  must carry its own, which is how `call` works -- the effect is in the callee's
+  signature and this table cannot see it.
+
+  `:short`/`:long` mark a branch, whose opcode depends on the displacement the
+  fixup pass settles on. `:wide` marks one whose encoding depends on its
+  operand, which is the same idea one level down."
+  {:nop       {:code [0x00] :operand :none :pop 0 :push 0}
+   :dup       {:code [0x25] :operand :none :pop 1 :push 2}
+   :pop       {:code [0x26] :operand :none :pop 1 :push 0}
+   :ldnull    {:code [0x14] :operand :none :pop 0 :push 1}
+   :ldc.i4    {:operand :i4  :pop 0 :push 1 :wide :ldc-i4}
+   :ldc.i8    {:code [0x21] :operand :i8 :pop 0 :push 1}
+   :ldc.r8    {:code [0x23] :operand :r8 :pop 0 :push 1}
+   :ldstr     {:code [0x72] :operand :tok :pop 0 :push 1}
+   :ldarg     {:operand :index :pop 0 :push 1 :wide :ldarg}
+   :ldloc     {:operand :index :pop 0 :push 1 :wide :ldloc}
+   :stloc     {:operand :index :pop 1 :push 0 :wide :stloc}
+   :ldloca    {:operand :index :pop 0 :push 1 :wide :ldloca}
+   :ldsfld    {:code [0x7e] :operand :tok :pop 0 :push 1}
+   :ldsflda   {:code [0x7f] :operand :tok :pop 0 :push 1}
+   :stsfld    {:code [0x80] :operand :tok :pop 1 :push 0}
+   :ldfld     {:code [0x7b] :operand :tok :pop 1 :push 1}
+   :ldflda    {:code [0x7c] :operand :tok :pop 1 :push 1}
+   :stfld     {:code [0x7d] :operand :tok :pop 2 :push 0}
+   :ldind.i1  {:code [0x46] :operand :none :pop 1 :push 1}
+   :ldind.u1  {:code [0x47] :operand :none :pop 1 :push 1}
+   :ldind.i4  {:code [0x4a] :operand :none :pop 1 :push 1}
+   :ldind.i8  {:code [0x4c] :operand :none :pop 1 :push 1}
+   :add       {:code [0x58] :operand :none :pop 2 :push 1}
+   :sub       {:code [0x59] :operand :none :pop 2 :push 1}
+   :mul       {:code [0x5a] :operand :none :pop 2 :push 1}
+   :div       {:code [0x5b] :operand :none :pop 2 :push 1}
+   :rem       {:code [0x5d] :operand :none :pop 2 :push 1}
+   :and       {:code [0x5f] :operand :none :pop 2 :push 1}
+   :or        {:code [0x60] :operand :none :pop 2 :push 1}
+   :xor       {:code [0x61] :operand :none :pop 2 :push 1}
+   :shl       {:code [0x62] :operand :none :pop 2 :push 1}
+   :shr       {:code [0x63] :operand :none :pop 2 :push 1}
+   :shr.un    {:code [0x64] :operand :none :pop 2 :push 1}
+   :neg       {:code [0x65] :operand :none :pop 1 :push 1}
+   :not       {:code [0x66] :operand :none :pop 1 :push 1}
+   :conv.i4   {:code [0x69] :operand :none :pop 1 :push 1}
+   :conv.i8   {:code [0x6a] :operand :none :pop 1 :push 1}
+   :conv.r8   {:code [0x6c] :operand :none :pop 1 :push 1}
+   :conv.u8   {:code [0x6e] :operand :none :pop 1 :push 1}
+   :conv.u2   {:code [0xd1] :operand :none :pop 1 :push 1}
+   :conv.u1   {:code [0xd2] :operand :none :pop 1 :push 1}
+   :ceq       {:code [0xfe 0x01] :operand :none :pop 2 :push 1}
+   :cgt       {:code [0xfe 0x02] :operand :none :pop 2 :push 1}
+   :cgt.un    {:code [0xfe 0x03] :operand :none :pop 2 :push 1}
+   :clt       {:code [0xfe 0x04] :operand :none :pop 2 :push 1}
+   :clt.un    {:code [0xfe 0x05] :operand :none :pop 2 :push 1}
+   :newarr    {:code [0x8d] :operand :tok :pop 1 :push 1}
+   :ldlen     {:code [0x8e] :operand :none :pop 1 :push 1}
+   :box       {:code [0x8c] :operand :tok :pop 1 :push 1}
+   :throw     {:code [0x7a] :operand :none :pop 1 :push 0 :terminal true}
+   ;; `call` and friends CANNOT have a static effect here: it is the callee's
+   ;; signature, which this table cannot see. So they demand their own, and a
+   ;; call written without one refuses the method rather than guessing.
+   :call      {:code [0x28] :operand :tok :pop nil :push nil}
+   :callvirt  {:code [0x6f] :operand :tok :pop nil :push nil}
+   :newobj    {:code [0x73] :operand :tok :pop nil :push nil}
+   ;; `ret` is TERMINAL, so its pop never raises the maximum -- the depth at the
+   ;; return was already counted by whatever pushed it. Recording 0 here is
+   ;; conservative in the safe direction.
+   :ret       {:code [0x2a] :operand :none :pop 0 :push 0 :terminal true}
+   :br        {:operand :target :pop 0 :push 0 :short 0x2b :long 0x38 :terminal true}
+   :brfalse   {:operand :target :pop 1 :push 0 :short 0x2c :long 0x39}
+   :brtrue    {:operand :target :pop 1 :push 0 :short 0x2d :long 0x3a}
+   :beq       {:operand :target :pop 2 :push 0 :short 0x2e :long 0x3b}
+   :bge       {:operand :target :pop 2 :push 0 :short 0x2f :long 0x3c}
+   :bgt       {:operand :target :pop 2 :push 0 :short 0x30 :long 0x3d}
+   :ble       {:operand :target :pop 2 :push 0 :short 0x31 :long 0x3e}
+   :blt       {:operand :target :pop 2 :push 0 :short 0x32 :long 0x3f}
+   :bne.un    {:operand :target :pop 2 :push 0 :short 0x33 :long 0x40}
+   :bge.un    {:operand :target :pop 2 :push 0 :short 0x34 :long 0x41}
+   :bgt.un    {:operand :target :pop 2 :push 0 :short 0x35 :long 0x42}
+   :ble.un    {:operand :target :pop 2 :push 0 :short 0x36 :long 0x43}
+   :blt.un    {:operand :target :pop 2 :push 0 :short 0x37 :long 0x44}})
+
+(defn- wide-form
+  "The compact encodings. CIL spells the first four locals and arguments, and
+  any index under 256, in fewer bytes -- and `ldc.i4` has eleven spellings for
+  small constants. Purely a size win, but a loop body is tens of bytes of IL
+  against twelve of header, so the win is most of the body."
+  [kind n]
+  (case kind
+    :ldc-i4 (cond (and (>= n -1) (<= n 8)) [(+ 0x16 n)]      ; ldc.i4.m1 .. ldc.i4.8
+                  (and (>= n -128) (<= n 127)) [0x1f (bit-and n 0xff)]
+                  :else (cons 0x20 (u32 n)))
+    :ldarg  (cond (<= n 3) [(+ 0x02 n)]
+                  (<= n 255) [0x0e n]
+                  :else (concat [0xfe 0x09] (u16 n)))
+    :ldloc  (cond (<= n 3) [(+ 0x06 n)]
+                  (<= n 255) [0x11 n]
+                  :else (concat [0xfe 0x0c] (u16 n)))
+    :stloc  (cond (<= n 3) [(+ 0x0a n)]
+                  (<= n 255) [0x13 n]
+                  :else (concat [0xfe 0x0e] (u16 n)))
+    :ldloca (if (<= n 255) [0x12 n] (concat [0xfe 0x0d] (u16 n)))))
+
+(defn- effect
+  "`[pops pushes]` for one instruction, or nil if unknown -- an opcode not in the
+  table, or a call that did not declare its own arity."
+  [[o _ p q]]
+  (let [e (get CIL o)]
+    (cond
+      (nil? e) nil
+      (nil? (:pop e)) (when (and p q) [p q])
+      :else [(:pop e) (:push e)])))
+
+(defn- instr-size
+  "Encoded size of one instruction, given whether a branch went long."
+  [[o a] long?]
+  (let [e (get CIL o)]
+    (case (:operand e)
+      :none (count (:code e))
+      :tok (+ (count (:code e)) 4)
+      :i8 (+ (count (:code e)) 8)
+      :r8 (+ (count (:code e)) 8)
+      (:i4 :index) (count (wide-form (:wide e) a))
+      :target (if long? 5 2))))
+
+(defn max-stack
+  "The deepest the CIL evaluation stack gets. A WORKLIST, mirroring
+  `flint.aot/max-depth` and for its stated reason: the two edges of a branch
+  leave different depths, and a running total would quietly get one of them
+  wrong. Returns nil if any instruction's effect is unknown.
+
+  `code` is the instruction vector with labels already removed; `label-at` maps
+  a label to its index in it."
+  [code label-at]
+  (loop [work [[0 0]] seen {} best 0 guard 0]
+    (cond
+      (> guard 200000) nil
+      (empty? work) best
+      :else
+      (let [[i d] (peek work) work (pop work)]
+        (if (or (>= i (count code)) (<= d (get seen i -1)))
+          (recur work seen best (inc guard))
+          (let [ins (nth code i)
+                e (effect ins)]
+            (if (nil? e)
+              nil
+              (let [[pops pushes] e
+                    after (+ (- d pops) pushes)
+                    spec (get CIL (first ins))
+                    tgt (when (= :target (:operand spec)) (get label-at (second ins)))
+                    more (cond-> []
+                           (not (:terminal spec)) (conj [(inc i) after])
+                           tgt (conj [tgt after]))]
+                (when (neg? after)
+                  (throw (ex-info "CIL stack underflow" {:at i :instr ins :depth d})))
+                (recur (into work more) (assoc seen i d)
+                       (max best d after) (inc guard))))))))))
+
+(defn assemble-il
+  "Instructions to bytes, with branch displacements resolved and the short or
+  long form chosen per branch.
+
+  ITERATE TO A FIXED POINT, assuming short first. Widening a branch pushes
+  everything after it further away, which can force another branch to widen; the
+  loop terminates because widening is MONOTONE -- a branch never goes back to
+  short -- so it can happen at most once per branch.
+
+  An instruction is `[op]`, `[op operand]`, or `[op operand pops pushes]` for a
+  call. `[:label :name]` is a marker and emits nothing.
+
+  Returns `{:bytes <seq of byte seqs> :max-stack n}`."
+  [instrs]
+  (let [code (vec (remove #(= :label (first %)) instrs))
+        ;; Label -> index of the next real instruction, by walking the original
+        ;; sequence and counting the real ones seen so far.
+        label-at (:labels
+                   (reduce (fn [acc [o a]]
+                             (if (= :label o)
+                               (update acc :labels assoc a (:n acc))
+                               (update acc :n inc)))
+                           {:labels {} :n 0} instrs))
+        n (count code)]
+    (loop [long? #{} guard 0]
+      (when (> guard (+ n 4))
+        (throw (ex-info "branch widening did not settle" {:instrs n})))
+      (let [offs (reduce (fn [v i]
+                           (conj v (+ (peek v) (instr-size (nth code i) (contains? long? i)))))
+                         [0] (range n))
+            ;; The displacement is measured from the END of the branch, which is
+            ;; why this reads `offs` at `(inc i)` and not at `i`.
+            disp (fn [i]
+                   (let [t (get label-at (second (nth code i)))]
+                     (when (nil? t)
+                       (throw (ex-info "no such label" {:label (second (nth code i))})))
+                     (- (nth offs t) (nth offs (inc i)))))
+            need (reduce (fn [s i]
+                           (if (not= :target (:operand (get CIL (first (nth code i)))))
+                             s
+                             (let [d (disp i)]
+                               (if (and (>= d -128) (<= d 127)) s (conj s i)))))
+                         #{} (range n))]
+        (if (= need long?)
+          (let [ms (max-stack code label-at)]
+            (when (nil? ms)
+              (throw (ex-info "cannot bound the CIL stack for this method"
+                              {:instrs (mapv first code)})))
+            {:max-stack ms
+             :bytes (mapv (fn [i]
+                            (let [[o a] (nth code i)
+                                  spec (get CIL o)]
+                              (case (:operand spec)
+                                :none (:code spec)
+                                :tok (concat (:code spec) (u32 a))
+                                :i8 (concat (:code spec) (u64 a))
+                                :r8 (concat (:code spec) (u64 a))
+                                (:i4 :index) (wide-form (:wide spec) a)
+                                :target (if (contains? long? i)
+                                          (cons (:long spec) (u32 (disp i)))
+                                          [(:short spec) (bit-and (disp i) 0xff)]))))
+                          (range n))})
+          (recur (into long? need) (inc guard)))))))
+
+;; ------------------------------------------------------------------ IL bodies
 
 (defn- tiny-body
   "A method body in the tiny format: one header byte. Only legal with no locals,
   code under 64 bytes and a stack no deeper than 8 -- and `fat-body` is not an
   optimisation away from it, it is the only legal form once any of those fails."
-  [code]
-  (let [n (count code)]
-    (when (>= n 64) (throw (ex-info "tiny body too long" {:len n})))
-    [(bit-or (bit-shift-left n 2) 0x02) code]))
+  [code len]
+  (when (>= len 64) (throw (ex-info "tiny body too long" {:len len})))
+  [(bit-or (bit-shift-left len 2) 0x02) code])
 
 (defn- fat-body
   "The 12-byte fat header, which must be 4-BYTE ALIGNED -- the caller pads. A
@@ -195,12 +434,30 @@
   reads it to size the frame and rejects a body whose declared depth is too
   small. Getting it wrong yields an `InvalidProgramException` at first call,
   with no hint that the number is what was wrong."
-  [code max-stack local-sig-tok]
+  [code max-stack local-sig-tok len]
   (concat (u16 (bit-or (bit-shift-left 3 12) 0x13))   ; 3 dwords, fat + InitLocals
           (u16 max-stack)
-          (u32 (count code))
+          (u32 len)
           (u32 local-sig-tok)
           code))
+
+(defn body
+  "Assemble one method body, choosing its own format.
+
+  The choice is NOT an optimisation: the tiny form is simply illegal once there
+  are locals, or the code reaches 64 bytes, or the stack goes deeper than 8. All
+  three are known only after assembly, which is why this wraps `assemble-il`
+  rather than sitting beside it."
+  [instrs nlocals local-sig-tok]
+  (let [{:keys [bytes max-stack]} (assemble-il instrs)
+        len (reduce + (map count bytes))
+        tiny? (and (zero? nlocals) (< len 64) (<= max-stack 8))]
+    {:bytes (->bytes (if tiny?
+                       (tiny-body bytes len)
+                       (fat-body bytes max-stack local-sig-tok len)))
+     :max-stack max-stack
+     :code-len len
+     :tiny? tiny?}))
 
 ;; ------------------------------------------------------------- .text layout
 
@@ -305,17 +562,83 @@
 
 ;; ------------------------------------------------------------------ the shape
 ;;
-;; ONE TYPE, ONE ARRAY, THREE METHODS. The methods are chosen to exercise the
-;; parts that go wrong rather than to be useful:
+;; ONE TYPE, ONE ARRAY, SIX METHODS. The methods exist to exercise the parts
+;; that go wrong rather than to be useful:
 ;;
-;;   Length()   tiny body, a 4-byte inline operand
-;;   At(int)    tiny body, reads THROUGH the `FieldRva` pointer
-;;   Sum()      fat body: locals, a `StandAloneSig`, a forward and a backward
-;;              short branch, and a `MaxStack` that is not 8
+;;   Length()        tiny body, a 4-byte inline operand
+;;   At(int)         tiny body, reads THROUGH the `FieldRva` pointer
+;;   Sum()           fat: locals, a `StandAloneSig`, short branches both ways,
+;;                   and a `MaxStack` that is not 8
+;;   Fnv1a()         fat, 64-bit: the SAME hash `Img.Load` computes over the
+;;                   same bytes, so the emitted IL can be checked against the
+;;                   runtime's own `rt.fingerprint` and not merely against
+;;                   itself
+;;   LongBranch()    a forward branch over more than 127 bytes, which is the
+;;                   only way to prove the fixup pass ever chooses the long form
+;;   MaxOf(long,long) a `call` through a `MemberRef` into the framework
 ;;
-;; `Sum` is the one that matters. If the image bytes were not really in `.text`
-;; at the RVA the `FieldRva` row claims, it would return a wrong total rather
-;; than failing, so the caller compares it against a sum computed outside.
+;; `Sum` and `Fnv1a` are the ones that matter. If the image bytes were not
+;; really at the RVA the `FieldRva` row claims, both would return a plausible
+;; wrong number rather than failing, so the caller compares them against values
+;; computed outside the assembly.
+
+(def ^:private E-I4 0x08)
+(def ^:private E-I8 0x0a)
+
+(defn- method-sig
+  "A `MethodDefSig`/`MemberRefSig`: default calling convention, parameter count,
+  return type, parameters."
+  [ret params]
+  (concat [0x00 (count params) ret] params))
+
+(defn- locals-sig
+  "A `LocalVarSig`. `0x07` is the one thing that distinguishes it from a method
+  signature, and a body whose `LocalVarSigTok` points at a method signature
+  fails at first call rather than at load."
+  [types]
+  (concat [0x07 (count types)] types))
+
+(defn- fnv-il
+  "FNV-1a over the whole array, as CIL. The constants are `Img.cs`'s, and the
+  basis is written in decimal because `0xcbf29ce484222325` has its high bit set
+  and is not a readable long literal."
+  [fld n]
+  [[:ldc.i8 -3750763034362895579]  ; 0xcbf29ce484222325
+   [:stloc 0]
+   [:ldc.i4 0] [:stloc 1]
+   [:br :test]
+   [:label :body]
+   [:ldloc 0]
+   [:ldsflda fld] [:ldloc 1] [:add] [:ldind.u1] [:conv.i8]
+   [:xor]
+   [:ldc.i8 1099511628211]          ; 0x100000001b3
+   [:mul]
+   [:stloc 0]
+   [:ldloc 1] [:ldc.i4 1] [:add] [:stloc 1]
+   [:label :test]
+   [:ldloc 1] [:ldc.i4 n] [:blt.un :body]
+   [:ldloc 0] [:ret]])
+
+(defn- sum-il
+  [fld n]
+  [[:ldc.i4 0] [:stloc 0]
+   [:ldc.i4 0] [:stloc 1]
+   [:br :test]
+   [:label :body]
+   [:ldloc 0] [:ldsflda fld] [:ldloc 1] [:add] [:ldind.u1] [:add] [:stloc 0]
+   [:ldloc 1] [:ldc.i4 1] [:add] [:stloc 1]
+   [:label :test]
+   [:ldloc 1] [:ldc.i4 n] [:blt.un :body]
+   [:ldloc 0] [:ret]])
+
+(defn- long-branch-il
+  "A forward branch over `pad` bytes of `nop`. The ONLY way to show the fixup
+  pass ever widens: with 200 bytes in the way the displacement does not fit in
+  a signed byte, so `br.s` (0x2b) must become `br` (0x38)."
+  [pad]
+  (concat [[:br :over]]
+          (repeat pad [:nop])
+          [[:label :over] [:ldc.i4 1] [:ret]]))
 
 (defn assemble
   "Emit a loadable .NET assembly carrying `image` as a static byte array.
@@ -324,68 +647,85 @@
   [{:keys [name image]}]
   (let [img-len (flint.rt/b-count image)
         fld-tok 0x04000001                                ; Field table, row 1
-        sig-tok 0x11000001                                ; StandAloneSig, row 1
 
-        ;; ---- IL, with the branch displacements worked out by hand. A real
-        ;; assembler needs a fixup pass; three methods do not, and pretending
-        ;; otherwise would hide that the pass is missing.
-        il-length (->bytes [(:ldc.i4 op) (u32 img-len) (:ret op)])
-        il-at (->bytes [(:ldsflda op) (u32 fld-tok) (:ldarg.0 op)
-                        (:add op) (:ldind.u1 op) (:ret op)])
-        il-sum (->bytes
-                 [(:ldc.i4.0 op) (:stloc.0 op)            ; 0  sum = 0
-                  (:ldc.i4.0 op) (:stloc.1 op)            ; 2  i = 0
-                  (:br.s op) 0x0f                         ; 4  -> test at 21
-                  (:ldloc.0 op)                           ; 6
-                  (:ldsflda op) (u32 fld-tok)             ; 7
-                  (:ldloc.1 op) (:add op) (:ldind.u1 op)  ; 12
-                  (:add op) (:stloc.0 op)                 ; 15
-                  (:ldloc.1 op) (:ldc.i4.1 op)            ; 17
-                  (:add op) (:stloc.1 op)                 ; 19
-                  (:ldloc.1 op)                           ; 21 test
-                  (:ldc.i4 op) (u32 img-len)              ; 22
-                  (:blt.un.s op) 0xe9                     ; 27 -> body at 6
-                  (:ldloc.0 op) (:ret op)])               ; 29
+        ;; ---- type and member references. TypeRef rows, in order, then the
+        ;; MemberRefs that hang off them.
+        typerefs [["System" "Object"] ["System" "ValueType"] ["System" "Math"]]
+        sig-max (method-sig E-I8 [E-I8 E-I8])
+        memberrefs [{:parent-table 0x01 :parent-rid 3 :name "Max" :sig sig-max}]
+        ;; MemberRef tokens are table 0x0a.
+        max-tok 0x0a000001
 
-        bodies (->bytes [(tiny-body il-length)
-                         (tiny-body il-at)
-                         ;; 4-BYTE ALIGNED. Two tiny bodies of 6 and 9 bytes
-                         ;; plus their header bytes land at 17, so this pad is
-                         ;; load-bearing rather than cosmetic.
-                         (zeros (- (align 17 4) 17))
-                         (fat-body il-sum 3 sig-tok)])
+        ;; ---- local variable signatures, one StandAloneSig row each.
+        locals [[E-I4 E-I4]                               ; Sum:   sum, i
+                [E-I8 E-I4]]                              ; Fnv1a: h, i
+        sig-tok (fn [n] (+ 0x11000000 n))                 ; StandAloneSig tokens
+
+        ;; ---- the methods, as data. Each is assembled independently and then
+        ;; laid out in order; a method's RVA is not knowable until the ones
+        ;; before it have been assembled, which is why this is a reduction and
+        ;; not a map.
+        specs [{:name "Length" :sig (method-sig E-I4 [])
+                :locals 0
+                :il [[:ldc.i4 img-len] [:ret]]}
+               {:name "At" :sig (method-sig E-I4 [E-I4])
+                :locals 0
+                :il [[:ldsflda fld-tok] [:ldarg 0] [:add] [:ldind.u1] [:ret]]}
+               {:name "Sum" :sig (method-sig E-I4 [])
+                :locals 2 :local-sig (sig-tok 1)
+                :il (sum-il fld-tok img-len)}
+               {:name "Fnv1a" :sig (method-sig E-I8 [])
+                :locals 2 :local-sig (sig-tok 2)
+                :il (fnv-il fld-tok img-len)}
+               {:name "LongBranch" :sig (method-sig E-I4 [])
+                :locals 0
+                :il (long-branch-il 200)}
+               {:name "MaxOf" :sig (method-sig E-I8 [E-I8 E-I8])
+                :locals 0
+                ;; THE CALL DECLARES ITS OWN ARITY. `CIL` cannot know it: the
+                ;; effect is in the callee's signature, which lives in a blob.
+                :il [[:ldarg 0] [:ldarg 1] [:call max-tok 2 1] [:ret]]}]
+
+        ;; Assemble bodies and place them. A fat header must be 4-byte aligned,
+        ;; so each body is padded to a 4-byte boundary before the next starts --
+        ;; simpler than aligning only the fat ones and correct either way.
+        placed (reduce
+                 (fn [{:keys [at out]} s]
+                   (let [b (body (:il s) (:locals s) (or (:local-sig s) 0))
+                         len (flint.rt/b-count (:bytes b))
+                         pad (- (align len 4) len)]
+                     {:at (+ at len pad)
+                      :out (conj out (assoc b :spec s :off at :pad pad))}))
+                 {:at 0 :out []} specs)
+        bodies (->bytes (for [m (:out placed)] [(:bytes m) (zeros (:pad m))]))
         body-len (flint.rt/b-count bodies)
         lay (text-layout body-len img-len)
-
-        rva-length (+ text-rva (:bodies lay))
-        rva-at (+ rva-length 7)                           ; 1 header + 6 code
-        rva-sum (+ text-rva (align (+ (:bodies lay) 17) 4))
         rva-image (+ text-rva (:image lay))
+        method-rva (fn [i] (+ text-rva (:bodies lay) (:off (nth (:out placed) i))))
 
-        ;; ---- heaps. Every string and blob this assembly names, interned
-        ;; before a single row is encoded.
+        ;; ---- heaps
         arr-type (str "$ArrayType$" img-len)
-        strs [(str name ".dll") "<Module>" "Program" arr-type
-              "Object" "System" "ValueType" "IMAGE" "Length" "At" "Sum"
-              name "System.Runtime"]
+        strs (concat [(str name ".dll") "<Module>" "Program" arr-type "IMAGE"
+                      name "System.Runtime"]
+                     (map first typerefs) (map second typerefs)
+                     (map :name memberrefs)
+                     (map :name specs))
         sh (strings-heap strs)
 
         sig-field [0x06 0x11 (first (cint (coded :type-def-or-ref 0x02 3)))]
-        sig-length [0x00 0x00 0x08]                       ; () -> int32
-        sig-at [0x00 0x01 0x08 0x08]                      ; (int32) -> int32
-        sig-locals [0x07 0x02 0x08 0x08]                  ; 2 locals, int32
-        ;; The ECMA public key TOKEN for the framework assemblies. A token, not
-        ;; a key: `AssemblyRef.Flags` leaves bit 0 clear to say which it is.
         ecma-token [0xb0 0x3f 0x5f 0x7f 0x11 0xd5 0x0a 0x3a]
-        bh (blob-heap [sig-field sig-length sig-at sig-locals ecma-token])
+        bh (blob-heap (concat [sig-field ecma-token]
+                             (map :sig specs)
+                             (map :sig memberrefs)
+                             (map locals-sig locals)))
 
         S (fn [s] (get (:index sh) s))
         B (fn [b] (get (:index bh) (vec b)))
 
-        ;; ---- row counts, hence index widths. This is the size-first pass.
-        rows {0x00 1 0x01 2 0x02 3 0x04 1 0x06 3
-              0x0f 1 0x11 1 0x1d 1 0x20 1 0x23 1}
-        ;; Heap index widths: bit 0 #Strings, bit 1 #GUID, bit 2 #Blob.
+        ;; ---- row counts, hence index widths. The size-first pass.
+        rows {0x00 1 0x01 (count typerefs) 0x02 3 0x04 1
+              0x06 (count specs) 0x0a (count memberrefs)
+              0x0f 1 0x11 (count locals) 0x1d 1 0x20 1 0x23 1}
         heap-sizes (bit-or (if (>= (:size sh) 0x10000) 1 0)
                            (if (>= 16 0x10000) 2 0)
                            (if (>= (:size bh) 0x10000) 4 0))
@@ -395,57 +735,53 @@
         wt (fn [t] (if (>= (get rows t 0) 0x10000) 4 2))
         wtdr (coded-width :type-def-or-ref rows)
         wrs (coded-width :resolution-scope rows)
+        wmrp (coded-width :member-ref-parent rows)
 
         row-bytes
-        {;; Module
-         0x00 [(u16 0) (ix ws (S (str name ".dll"))) (ix wg 1) (ix wg 0) (ix wg 0)]
-         ;; TypeRef: System.Object, System.ValueType -- both in AssemblyRef 1
-         0x01 [[(ix wrs (coded :resolution-scope 0x23 1)) (ix ws (S "Object")) (ix ws (S "System"))]
-               [(ix wrs (coded :resolution-scope 0x23 1)) (ix ws (S "ValueType")) (ix ws (S "System"))]]
+        {0x00 [(u16 0) (ix ws (S (str name ".dll"))) (ix wg 1) (ix wg 0) (ix wg 0)]
+         0x01 (for [[ns' n'] typerefs]
+                [(ix wrs (coded :resolution-scope 0x23 1))
+                 (ix ws (S n')) (ix ws (S ns'))])
          ;; TypeDef. FieldList/MethodList are RANGE STARTS: a row owns from its
-         ;; own start up to the next row's, which is why `<Module>` and
-         ;; `Program` both say 1 and `<Module>` therefore owns nothing.
-         0x02 [[(u32 0) (ix ws (S "<Module>")) (ix ws 0) (ix wtdr 0) (ix (wt 0x04) 1) (ix (wt 0x06) 1)]
+         ;; own start up to the next row's, which is why `<Module>` and `Program`
+         ;; both say 1 and `<Module>` therefore owns nothing. The third row must
+         ;; start PAST the end of both lists, or it would claim `Program`'s
+         ;; members as its own.
+         0x02 [[(u32 0) (ix ws (S "<Module>")) (ix ws 0) (ix wtdr 0)
+                (ix (wt 0x04) 1) (ix (wt 0x06) 1)]
                [(u32 0x00100001)                          ; Public | BeforeFieldInit
                 (ix ws (S "Program")) (ix ws 0)
                 (ix wtdr (coded :type-def-or-ref 0x01 1)) ; extends System.Object
                 (ix (wt 0x04) 1) (ix (wt 0x06) 1)]
-               [(u32 0x00000111)                          ; Private | ExplicitLayout | Sealed
+               [(u32 0x00000111)                          ; Private|ExplicitLayout|Sealed
                 (ix ws (S arr-type)) (ix ws 0)
                 (ix wtdr (coded :type-def-or-ref 0x01 2)) ; extends System.ValueType
-                (ix (wt 0x04) 2) (ix (wt 0x06) 4)]]
-         ;; Field: Static | Private | HasFieldRVA
+                (ix (wt 0x04) 2) (ix (wt 0x06) (inc (count specs)))]]
          0x04 [(u16 0x0111) (ix ws (S "IMAGE")) (ix wb (B sig-field))]
-         ;; MethodDef: Public | Static | HideBySig
-         0x06 [[(u32 rva-length) (u16 0) (u16 0x0016) (ix ws (S "Length")) (ix wb (B sig-length)) (ix (wt 0x08) 1)]
-               [(u32 rva-at) (u16 0) (u16 0x0016) (ix ws (S "At")) (ix wb (B sig-at)) (ix (wt 0x08) 1)]
-               [(u32 rva-sum) (u16 0) (u16 0x0016) (ix ws (S "Sum")) (ix wb (B sig-length)) (ix (wt 0x08) 1)]]
-         ;; ClassLayout: this is where the array's LENGTH is declared.
+         0x06 (map-indexed
+                (fn [i s]
+                  [(u32 (method-rva i)) (u16 0) (u16 0x0016)
+                   (ix ws (S (:name s))) (ix wb (B (:sig s))) (ix (wt 0x08) 1)])
+                specs)
+         0x0a (for [m memberrefs]
+                [(ix wmrp (coded :member-ref-parent (:parent-table m) (:parent-rid m)))
+                 (ix ws (S (:name m))) (ix wb (B (:sig m)))])
          0x0f [(u16 1) (u32 img-len) (ix (wt 0x02) 3)]
-         0x11 [(ix wb (B sig-locals))]
+         0x11 (for [l locals] [(ix wb (B (locals-sig l)))])
          0x1d [(u32 rva-image) (ix (wt 0x04) 1)]
-         ;; Assembly. HashAlgId 0 -- nothing hashes an assembly that is not
-         ;; strong-named, and this one is not.
          0x20 [(u32 0) (u16 0) (u16 0) (u16 0) (u16 0) (u32 0)
                (ix wb 0) (ix ws (S name)) (ix ws 0)]
-         ;; AssemblyRef: System.Runtime 10.0.0.0. The FACADE, not
-         ;; System.Private.CoreLib -- it is what a compiler references and it
-         ;; type-forwards to whatever the running framework actually uses.
          0x23 [(u16 10) (u16 0) (u16 0) (u16 0) (u32 0)
                (ix wb (B ecma-token)) (ix ws (S "System.Runtime")) (ix ws 0) (ix wb 0)]}
 
         md (metadata {:rows rows :row-bytes row-bytes :heap-sizes heap-sizes
                       :strings sh :blobs bh
-                      ;; The MVID. Fixed, so the same input gives the same
-                      ;; bytes: a compiler whose output differs run to run
-                      ;; cannot be diffed, and a fresh GUID would buy nothing.
                       :guid (concat (u32 0x5f544e4c) (u32 0x00544e49)
                                     (u32 0x00000001) (u32 0x00000001))})
         md-len (flint.rt/b-count md)
 
         text (->bytes
-               [;; CLI header (COR20)
-                (u32 cli-header-size) (u16 2) (u16 5)
+               [(u32 cli-header-size) (u16 2) (u16 5)
                 (u32 (+ text-rva (:metadata lay))) (u32 md-len)
                 (u32 1)                                   ; ILONLY
                 (u32 0)                                   ; no entry point: a library
@@ -498,8 +834,8 @@
        (u32 0) (u32 16)
        ;; Sixteen data directories, of which ONLY number 14 is set. No import
        ;; table, no IAT, no relocations: those exist for the legacy Windows
-       ;; loader's `mscoree!_CorDllMain` stub, and a library with no entry
-       ;; point on CoreCLR needs none of them.
+       ;; loader's `mscoree!_CorDllMain` stub, and a library with no entry point
+       ;; on CoreCLR needs none of them.
        (for [i (range 16)]
          (if (= i 14)
            [(u32 text-rva) (u32 cli-header-size)]
@@ -514,3 +850,21 @@
 
        ;; ---- the section itself
        text (zeros (- text-raw text-len))])))
+
+(defn describe
+  "What `assemble` would emit, without emitting it: the per-method assembly
+  facts. For the gate and for a human checking that the fixup pass did what it
+  claims -- a `MaxStack` nobody looks at is a number nobody has checked."
+  [{:keys [image]}]
+  (let [n (flint.rt/b-count image)
+        fld 0x04000001]
+    (for [[nm il nlocals]
+          [["Length" [[:ldc.i4 n] [:ret]] 0]
+           ["At" [[:ldsflda fld] [:ldarg 0] [:add] [:ldind.u1] [:ret]] 0]
+           ["Sum" (sum-il fld n) 2]
+           ["Fnv1a" (fnv-il fld n) 2]
+           ["LongBranch" (long-branch-il 200) 0]
+           ["MaxOf" [[:ldarg 0] [:ldarg 1] [:call 0x0a000001 2 1] [:ret]] 0]]]
+      (let [b (body il nlocals (if (pos? nlocals) 0x11000001 0))]
+        {:name nm :max-stack (:max-stack b) :code-len (:code-len b)
+         :form (if (:tiny? b) :tiny :fat)}))))
