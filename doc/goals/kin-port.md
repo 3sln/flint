@@ -14,18 +14,37 @@ commit was 75 behind and the gate's own closing phrase had changed too. It is
 the first thing a session reads, so it is the worst place in the tree to carry
 a stale number.*
 
-`Conc` is finished. **The remaining three-way generatable pool is 18 lines**
--- `bin/port-survey --calls`, run 2026-09-23 after `gcclass` and `rtgas`
-landed: `Space` 8, `Conc` 6, `Rt` 3, `Num` 1. SEVEN of those 18 are
-`Space.take`, which is a false entry (below), so the honest figure is about
-eleven lines and the three-way work is effectively done. `Rt` fell from 17 and
-`Gc` to nothing.
+`Conc` is finished, and **so is the three-way work**. `bin/port-survey --calls`
+reports 14 lines, and every one was checked against a real native definition
+rather than a name -- 10 of the 14 are false and the remainder are single-line
+functions that would not pay for their own `.drivers`:
 
-It was 36 lines that morning, and the list is kept because what happened to
-each entry is the useful part: `Gc.classOf` 4 DONE (`kin/gcclass.kin`),
-`Rt.setGasLimit` 5, `refreshCheckpoint` 5 and `setSliceEnd` 4 DONE
-(`kin/rtgas.kin`), `Space.take` 7 a FALSE entry (below), `Conc.systemPort` 4
-and six smaller still open.
+    take     7  FALSE -- the ports bump a pointer; native searches a free-run
+                list, then splits on `cfg(target_arch = "wasm32")`
+    billing  3  FALSE -- native has no such function AT ALL. The ports needed
+                a predicate native does not, because native never disarms its
+                checkpoint, and it was worth 140 steps of the gas row
+    alignUp  1  } native definitions exist and the shapes were not compared;
+    u8       1  } one line each, so the drivers would outweigh the saving
+    u16      1  } (`u8`/`u16` belong to `snap.rs` and `image.rs`, not `Rt`)
+    waiters  1  }
+    fx       1  }
+    isFloat  1  }
+
+Five functions were ported out of this pool on 2026-09-23 -- `Gc.classOf`
+(`kin/gcclass.kin`), `refreshCheckpoint`, `setGasLimit` and `setSliceEnd`
+(`kin/rtgas.kin`), and `Conc.systemPort` (added to `kin/portinstall.kin`
+beside the install it reads back) -- taking 21 lines of triplicated logic to
+one source each. `Rt`'s share fell from 17 to 3 and `Gc`'s to nothing.
+
+*What is left is not a backlog, it is a floor.* Anything further has to come
+from widening the vocabulary or from a two-way dedup between the ports, which
+this file has always said is a different job.
+
+*The figure moved three times in one day* -- 86, then 213 when I published the
+wrong view's column, then 75, then 36 once both rules were required, and 14
+once each entry was checked. Every step down was a measurement correcting a
+reading, which is why the table above names methods rather than a total.
 
 *`in 3` MATCHES BY NAME, which is not the same as by function.* The rank's own
 comment says so for `Rt.lookup`, whose native counterpart "is shaped
