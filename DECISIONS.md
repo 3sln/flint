@@ -5642,6 +5642,36 @@ figures name a runtime but no machine and no repeatable command. Since this is
 the one item the bar itself calls "binary, not a matter of degree", it should
 be re-demonstrated on a machine with workerd before the handoff is judged met.
 
+**THE SHAPE THIS BAR ASKS FOR IS DISAVOWED, 2026-09-24, and the artefact
+demonstrating it has not run since 2026-09-13.** Both halves matter and neither
+was written down.
+
+*The ruling.* A sandbox is ONE program. A host that runs many programs creates
+many sandboxes; it does not share one by loading images into it. So "a resident
+loader instantiated ONCE per isolate, an image loaded per request" -- which
+`bench/workerd/worker.js` opens by calling "the shape construe actually runs" --
+is not the intended model.
+
+*And that file cannot have run for eleven days.* Its `wireCall` ends in
+`e.flint_call(p, b.length)`. `calls-are-ports` deleted that export on
+2026-09-13 (`e6d55a31`); the file was last touched 2026-09-11 (`8cee498d`).
+Nothing in `bin/test` drives it and there is no workerd on the development
+machine, so the one item this bar calls "binary, not a matter of degree" has
+been demonstrated by dead code. The note above already said the figures could
+not be re-run; it did not say the harness was broken.
+
+*What this does NOT settle.* `flint_load_image` supports REPLACING the image in
+a live sandbox -- `abi.rs` clears frames, handlers, the started flag, the stack
+top and `thrown` for exactly that, and carries a bug history for it ("a swapped
+image found the flag already set, never bound its vars, and answered
+`two/main` is not a function"). Every working consumer loads exactly ONE image
+per instance: `host/run.mjs`, `bench/xrt-image.mjs`, `bench/xtail.mjs`, one call
+each. Only `test/loader.clj` loads a second, to assert that replacement works.
+So nothing working depends on replacement, and removing it is cheap -- but this
+bar names the resident-loader shape as a CUSTOMER requirement, and "no code
+depends on it" is not "no customer depends on it". That is the open question,
+and it is not the runtime's to answer.
+
 *Superseded by a later measurement.* "Word frequency at 11.6× babashka" is a
 `strings-and-matching`/`matching-over-ropes` figure, not one this document
 regenerates; the construe run above shows the related `clojure.string/split,

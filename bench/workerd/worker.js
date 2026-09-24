@@ -1,6 +1,17 @@
-// The shape construe actually runs: a resident loader instantiated ONCE per
-// isolate, an image loaded per request, nothing shared between runs because the
-// image's top-level initialisers re-run on every `main()`.
+// THIS FILE HAS NOT RUN SINCE 2026-09-13 and describes a shape that is now
+// disavowed. Both are recorded rather than fixed, because the fix is a
+// decision: see `DECISIONS.md#construe-integration-bar`.
+//
+// It calls `flint_call` at the bottom, which `calls-are-ports` deleted on
+// 2026-09-13; this file was last touched 2026-09-11. Nothing in `bin/test`
+// drives it and there is no workerd on the development machine, so eleven days
+// passed without anyone noticing.
+//
+// What it says it demonstrates, and what is now disavowed: "a resident loader
+// instantiated ONCE per isolate, an image loaded per request, nothing shared
+// between runs because the image's top-level initialisers re-run on every
+// `main()`". A sandbox is ONE program. A host that runs many programs creates
+// many sandboxes; it does not swap images into one.
 import loaderWasm from './xrt-loader.wasm';
 import imageBytes from './xrt.image';
 import image0 from './xrt0.image';
@@ -19,7 +30,7 @@ function ensure() {
 function runOnce(i, which) {
   const e = i.exports;
   const img = new Uint8Array(which === '0' ? image0 : imageBytes);
-  const p = e.arg_alloc(img.length);
+  const p = e.flint_in_alloc(img.length);
   new Uint8Array(e.memory.buffer).set(img, p);
   const rc = e.flint_load_image(p, img.length);
   if (rc !== 0) throw new Error('image load failed: ' + rc);
