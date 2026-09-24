@@ -1,0 +1,123 @@
+;; THE FOUR OPERATIONS, AS DATA. `DECISIONS.md#four-operations` is the prose;
+;; this is the part a script can check, and `bin/check-four-ops` is that script.
+;;
+;; WHY THIS FILE EXISTS AT ALL. Four faces designed in parallel is how this
+;; project produced sixteen version declarations and four compile-spec front
+;; ends. The CLR face is the only one that exists today, so an assertion written
+;; now covers one target -- and that is the point: the second face is checked
+;; the moment it appears, against this, rather than against the first face by
+;; whoever remembers to look.
+;;
+;; It lives under `runtimes/` rather than beside any one port because it belongs
+;; to none of them. `runtimes/clr`, `runtimes/jvm` and the wasm target all
+;; answer to it.
+;;
+;; A NOTE ON `:expect`. Some answers are exact and some are only shaped. An
+;; exact answer is stated here and the gate compares it; a shaped one names a
+;; regex, because "eight hex digits" is checkable and the digits themselves are
+;; not this file's business. Anything cross-target -- `fingerprint` especially --
+;; is marked `:same-across-targets`, meaning every face must produce the SAME
+;; answer for the same image. That is the assertion with teeth: it is how a
+;; `FieldRva` array at a wrong offset, or a JVM constant pool that lost a byte,
+;; gets caught rather than returning a plausible wrong number.
+
+{:format 1
+
+ ;; ---------------------------------------------------------------- the four
+ ;;
+ ;; `:spelling` is per target and deliberately NOT forced to match. Wasm cannot
+ ;; pass an object or a callback, so its bridge is the host satisfying imports;
+ ;; a CLR or JVM host hands over a real object. Forcing one spelling on all
+ ;; three would be the mistake. The SEMANTICS below are not negotiable.
+ :operations
+ [{:op "boot"
+   :takes "the bridge, which becomes this sandbox's system port"
+   :returns "nothing"
+   :spelling {:clr "Boot" :jvm "boot" :wasm "flint_boot"}}
+  {:op "loop"
+   :takes "nothing"
+   :returns "a status; see :status below"
+   :spelling {:clr "Loop" :jvm "loop" :wasm "flint_loop"}}
+  {:op "link"
+   :takes "a name and a function, overriding the native called that"
+   :returns "nothing"
+   :spelling {:clr "Link" :jvm "link" :wasm "flint_link"}}
+  {:op "prop"
+   :takes "a property name and a buffer"
+   :returns "the byte count the value needs, or -1 if there is no such property"
+   :spelling {:clr "Prop" :jvm "prop" :wasm "flint_prop"}}]
+
+ ;; THESE NUMBERS ARE THE ABI. They are `flint_resume`'s and `rt.status`'s,
+ ;; unchanged, and this project treats them as the contract itself rather than
+ ;; as an implementation detail to be renamed per host. A face may give them
+ ;; names -- the CLR's is an enum -- but not different values.
+ :status {0 "Done" 1 "Threw" 2 "NeedsHost"}
+
+ ;; ------------------------------------------------------------------- rules
+ ;;
+ ;; Each of these is a sentence from the record that a face can get wrong
+ ;; silently, paired with what the gate looks for.
+ :rules
+ [{:rule "link must precede boot, and refuse afterwards"
+   :because "natives resolve exactly once, while the image loads, so a hook
+             registered later is never reached and doing nothing quietly is the
+             worst available answer"
+   :evidence {:clr {:file "runtimes/clr/src/rt/Artifact.cs"
+                    :must-contain "`Link` must be called before `Boot`"}}}
+  {:rule "loop drains, drives, then drains again"
+   :because "the scheduler reports NeedsHost while it holds undrained events, so
+             a pump that skipped the trailing drain would report work it was
+             itself holding"
+   :evidence {:clr {:file "runtimes/clr/src/rt/Artifact.cs"
+                    :must-contain "DRAIN, THEN RUN, THEN DRAIN"}}}
+  {:rule "prop decides nothing; there is no compatible?"
+   :because "which semver relation counts as compatible is unsettled, and pre-1.0
+             makes the usual same-major rule say every release breaks everything"
+   :evidence {:clr {:file "runtimes/clr/src/rt/Artifact.cs"
+                    :must-not-match "(?i)\\bbool\\s+(is)?compatible"}}}
+  {:rule "link is an override mechanism, not a wiring one"
+   :because "an image imports every builtin its namespaces mention -- 88 for a
+             trivial program -- and a missing one is left null on purpose, so a
+             bulk API that demanded all of them would reject programs that run"
+   :evidence {:clr {:file "runtimes/clr/src/rt/Artifact.cs"
+                    :must-contain "NOT refused"}}}]
+
+ ;; ------------------------------------------------------------------- props
+ ;;
+ ;; THE SHARED CONFORMANCE CASE: the same questions asked of every face, with
+ ;; one expected answer each. A runtime driver reads this; so does the static
+ ;; gate, which checks that a face HANDLES exactly these keys -- both
+ ;; directions, so a key handled but not listed is a finding too.
+ :props
+ [{:key "version" :needs-boot false
+   :expect {:from "meta.edn" :at [:version]}
+   :note "one fact, and `bin/check-version` is the gate that it is written once"}
+  {:key "abi" :needs-boot false
+   :expect {:per-target {:clr ":clr" :jvm ":jvm" :wasm ":wasm"}}}
+  {:key "runtime" :needs-boot false
+   :expect {:per-target {:clr "clr" :jvm "jvm" :wasm "wasm"}}}
+  {:key "compat-key" :needs-boot false
+   :expect {:matches "^[0-9a-f]{8}$"}
+   :note "FNV-1a over the :compat subset only, so a diagnostics build and a
+          production build of one ABI share it"}
+  {:key "image-version" :needs-boot false
+   :expect {:from "runtimes/clr/src/rt/Img.cs" :symbol "Version"}}
+  {:key "meta" :needs-boot false
+   :expect {:matches "^\\{.*\\}$"}
+   :note "the whole map, for a caller that does want to parse it"}
+  {:key "natives" :needs-boot true
+   :expect {:matches "^[0-9]+/[0-9]+ resolved$"}
+   :note "needs boot because it describes what linking against THIS host
+          produced, not the inert artifact"}
+  {:key "natives-unresolved" :needs-boot true
+   :expect {:matches "^([^,]+(,[^,]+)*)?$"}}
+  {:key "fingerprint" :needs-boot true
+   :expect {:matches "^-?[0-9]+$" :same-across-targets true}
+   :note "FNV-1a over the whole image, which every face computes independently.
+          The one answer that must be IDENTICAL everywhere, and therefore the
+          one that catches a payload read from the wrong offset."}]
+
+ ;; An unknown key answers -1 everywhere. Stated because "returns the size" and
+ ;; "returns -1" are the same C# int, and a face that threw instead would be
+ ;; wrong in a way no positive test notices.
+ :absent-key-answer -1}
