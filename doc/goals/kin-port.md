@@ -9302,6 +9302,23 @@ about 230-260 lines spread across a dozen areas with no single item above ten
 lines. The ranked spike now carries `in 3`, `voc` and `--calls`, so the next
 reader sees that without spending a firing on it.
 
+**SUPERSEDED 2026-09-23, and both figures were too high.** The pool is 18
+lines and `Rt`'s share of it is 3 -- see the status line at the top of this
+file, which is the one place to read it. The `230-260` came from the ranked
+spike's `in 3`, which classifies with the blocklist alone; requiring a method
+to pass the allowlist TOO took the whole figure to 36 before four functions
+were ported out of it.
+
+*And the paragraph above this one had already found `Parallel`.* It says so in
+as many words -- "It is also not portable: `AtomicInteger` throughout" -- two
+days before a session read the rank, believed the 67%, and started generating
+it. What was missing was never the knowledge; it was a rule in `BLOCK` and an
+entry on the never-list, so the tool went on offering the file that this very
+section had ruled out. **A finding recorded in prose beside the tool does not
+constrain the tool.** That is the same lesson as "a method in prose gets
+reimplemented", arriving from the other direction: there, the prose was
+rewritten worse; here it was read too late to stop the work it warned about.
+
 ---
 
 ## The figure I published was an upper bound: 228 -> 166
