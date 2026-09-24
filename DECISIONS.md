@@ -12596,19 +12596,29 @@ channel nobody writes reports:
                             can wake them / thread 0 waiting on port 1
     clr                     identical to the jvm
 
-**The two ports give the real diagnostic and the other two give a message about
-a "host pump".** Native HAS `report_deadlock` -- it is right there in
-`conc.rs` -- and its output never reaches a user, because the HOST PUMP'S GUARD
-FIRES FIRST. `sdks/esm/src/guest.js`'s `1e6` counter gives up while the
-scheduler is still answering `NeedsHost`, so the branch that would conclude
-"nothing can help" and name the stuck threads is never reached. The ports'
-drivers drive the scheduler directly and do reach it.
+**AND THE FIRST READING OF THIS WAS WRONG, which is worth keeping because the
+wrong reading is the obvious one.** It looked like the host pump's guard was
+MASKING a diagnostic the runtime had already produced. It is not. The runtime is
+answering correctly and the two ports are the ones in an unusual state.
 
-So the magic number is not merely standing in for a signal the ABI never
-carried. It is ACTIVELY MASKING the signal that already exists on the runtime
-side. That is the strongest argument yet for the host-side waiter registry: a
-host that knows which ports have waiters does not need a counter, and the
-runtime's own diagnostic stops being unreachable.
+`sched-needs-host` answers true when any parked thread waits on a port that
+`crosses-a-heap` -- which is `kind == K_BRIDGE` and nothing else. The control
+plane is a green thread parked on the SYSTEM PORT, which is a bridge. So once a
+system port exists, `sched-needs-host` is true for ever and the deadlock branch
+is UNREACHABLE BY DESIGN: the host could send a call at any moment, so the
+sandbox is not deadlocked, it is idle awaiting the host. Answering "deadlock"
+there would be a lie.
+
+The two ports reach the deadlock report only because their test driver installs
+no system port. `bootSystemThreadOnce` returns early -- "no door yet; asked again
+next drive" (`Conc.java:1534`, and `conc.rs:946` the same) -- so no control
+plane, no bridge park, and a channel nobody writes really is terminal.
+
+**So the divergence is real but it is not a runtime defect, and the fix is not in
+the runtime.** Whether anything more is coming is a fact only the HOST holds, and
+`guest.js`'s `1e6` counter is a guess at it. That is the argument for the
+host-side waiter registry stated exactly: the runtime cannot know, the host can,
+and a counter is what stands in for the answer until the host is asked.
 
 **Nothing tests any of this.** The message is written three times -- `conc.rs`,
 `Conc.java`, `Conc.cs` -- and grepping the tree for it finds no test, no
