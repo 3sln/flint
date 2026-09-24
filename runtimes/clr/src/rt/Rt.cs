@@ -337,6 +337,18 @@ public sealed class Rt : System.IDisposable {
     /// belong to the module it was linked against and mean nothing here, which
     /// is what makes an image portable between hosts at all.
     public Builtins.Fn[] natives = System.Array.Empty<Builtins.Fn>();
+
+    /// How this sandbox resolves a native by name, or null for the default.
+    ///
+    /// PER SANDBOX, not per process, and that is the whole point. `Builtins.Table`
+    /// is one static dictionary, so a hook registered in it belongs to everything
+    /// in the load context -- which was fine while a sandbox was a static thing
+    /// and is wrong now that a host can hold several. Two sandboxes overriding the
+    /// same native differently is the case this exists for.
+    ///
+    /// Consulted by `Img.Load`, once, while the image loads. That is why `link`
+    /// has to precede `boot` on every target.
+    public System.Func<string, Builtins.Fn> nativeResolver;
     public string[] nativeNames = System.Array.Empty<string>();
 
     /// The rest of the interpreter's state, all of it snapshot-visible.

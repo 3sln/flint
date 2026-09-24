@@ -144,7 +144,12 @@ public static class Img {
         rt.nativeNames = outl.nativeNames;
         for (int i = 0; i < nnat; i++) {
             outl.nativeNames[i] = Str.Text(rt, consts[nativeNameConst[i]]);
-            rt.natives[i] = Builtins.ByName(outl.nativeNames[i]);
+            // The sandbox's own resolver first, if it has one, then the static
+            // table. `rt.nativeResolver` is what makes `link` per-sandbox instead
+            // of per-process; see its comment on `Rt`.
+            rt.natives[i] = rt.nativeResolver != null
+                ? rt.nativeResolver(outl.nativeNames[i])
+                : Builtins.ByName(outl.nativeNames[i]);
         }
         return outl;
     }

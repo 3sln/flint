@@ -38,11 +38,11 @@
 
   ## What this does NOT do
 
-  One type, one `FieldRva` array, and six static methods -- the container and a
-  real CIL assembler, both proven. Still missing for a full `:to :clr`: N types
-  (only methods are data-driven here), `TypeSpec` for generic instantiations,
-  `CustomAttribute` (so no `TargetFrameworkAttribute`), an entry point for the
-  exe variant, and the bytecode-to-CIL translation itself -- which is
+  One type, one `FieldRva` array, and nine methods -- the container and a real
+  CIL assembler, both proven. Still missing for a full `:to :clr`: N types
+  (only methods are data-driven here), `TypeSpec` for generic instantiations (so
+  `link` forwards `object` rather than `Func<byte[],byte[]>`), an entry point for
+  the exe variant, and the bytecode-to-CIL translation itself -- which is
   `flint.aot`'s job for wasm and has no CLR counterpart yet."
   (:require [flint.rt]))
 
@@ -774,17 +774,22 @@
         [{:key :max :parent [0x01 T-MATH] :name "Max" :sig (method-sig E-I8 [E-I8 E-I8])}
          {:key :init-array :parent [0x01 T-HELPERS] :name "InitializeArray"
           :sig (method-sig E-VOID [(e-class T-ARRAY) (e-valuetype T-FIELDHANDLE)])}
+         ;; `Boot` ANSWERS THE SANDBOX now: a static factory returning the
+         ;; instance that carries `Loop`. It was `static void Boot` and that made
+         ;; one sandbox per load context, silently -- a second `Loop` would have
+         ;; driven the first sandbox's scheduler with no error anywhere.
          {:key :boot :parent [0x01 T-ARTIFACT] :name "Boot"
-          :sig (method-sig E-VOID [(e-class T-BRIDGE) sig-bytes])}
-         {:key :loop :parent [0x01 T-ARTIFACT] :name "Loop"
-          :sig (method-sig (e-valuetype T-STATUS) [])}
+          :sig (method-sig (e-class T-ARTIFACT) [(e-class T-BRIDGE) sig-bytes])}
          ;; `object`, NOT `Func<byte[],byte[]>`. A generic instantiation needs a
          ;; `TypeSpec` row and a `GENERICINST` signature, which this writer does
          ;; not emit yet; `Artifact.Link(string, object)` exists so the forwarder
          ;; can be spelled without one. The cast happens one frame in, and the
          ;; refusal names both shapes it accepts.
+         ;; `Link` takes the BRIDGE, because it must precede `Boot` and the image
+         ;; loads inside `Boot` -- so there is no sandbox to hang it on yet, and
+         ;; the bridge is the sandbox's identity before the sandbox exists.
          {:key :link :parent [0x01 T-ARTIFACT] :name "Link"
-          :sig (method-sig E-VOID [E-STRING E-OBJECT])}
+          :sig (method-sig E-VOID [(e-class T-BRIDGE) E-STRING E-OBJECT])}
          ;; The two attribute constructors. `0x20` is HASTHIS: an instance
          ;; method, which a `.ctor` is, and the one bit that distinguishes this
          ;; signature from the static ones above.
@@ -809,7 +814,7 @@
         ;; are listed first and the rid is the position. A forward reference in
         ;; metadata is ordinary -- a token is just a table row number -- but it
         ;; does mean the order here is load-bearing.
-        method-names ["Image" "Boot" "Loop" "Link"
+        method-names ["Image" "Boot" "Link"
                       "Length" "At" "Sum" "Fnv1a" "LongBranch" "MaxOf"]
         mdef (fn [nm] (+ 0x06000000
                          (inc (first (keep-indexed (fn [i n] (when (= nm n) i))
@@ -829,16 +834,21 @@
          ;; ---- THE THREE OPERATIONS, forwarded to the runtime the host carries.
          ;; There is no fourth: metadata is a `CustomAttribute` row, readable
          ;; without calling anything, which is the whole reason `prop` went.
-         {:name "Boot" :sig (method-sig E-VOID [(e-class T-BRIDGE)]) :locals 0
-          :il [[:ldarg 0] [:call (mdef "Image") 0 1] [:call (mref :boot) 2 0] [:ret]]}
+         ;; `boot` hands back the sandbox, and `loop` is ITS method rather than a
+         ;; static one here. So the generated face is `Boot` and `Link`; `Loop`
+         ;; lives on the returned object, which is what "boot answers a sandbox"
+         ;; means. Generating a static `Loop` would have to stash the instance in a
+         ;; static field and put the one-sandbox-per-process bug back.
+         {:name "Boot" :sig (method-sig (e-class T-ARTIFACT) [(e-class T-BRIDGE)])
+          :locals 0
+          :il [[:ldarg 0] [:call (mdef "Image") 0 1] [:call (mref :boot) 2 1] [:ret]]}
          ;; Returns the enum, matching the runtime it forwards to. The ABI
          ;; NUMBERS are what the contract fixes -- 0 Done, 1 Threw, 2 NeedsHost --
          ;; and an enum carrying them is the .NET spelling of those numbers, not
          ;; a different thing.
-         {:name "Loop" :sig (method-sig (e-valuetype T-STATUS) []) :locals 0
-          :il [[:call (mref :loop) 0 1] [:ret]]}
-         {:name "Link" :sig (method-sig E-VOID [E-STRING E-OBJECT]) :locals 0
-          :il [[:ldarg 0] [:ldarg 1] [:call (mref :link) 2 0] [:ret]]}
+         {:name "Link" :sig (method-sig E-VOID [(e-class T-BRIDGE) E-STRING E-OBJECT])
+          :locals 0
+          :il [[:ldarg 0] [:ldarg 1] [:ldarg 2] [:call (mref :link) 3 0] [:ret]]}
          ;; ---- the assembler's own witnesses. Not part of the contract; they
          ;; exist so a wrong `FieldRva` offset or a mis-sized branch is visible.
          {:name "Length" :sig (method-sig E-I4 []) :locals 0

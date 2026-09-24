@@ -61,17 +61,168 @@ public static class Check {
     static void Fail(string what) { fails++; Console.WriteLine("FAIL " + what); }
     static void Want(bool cond, string what) { if (cond) Ok(what); else Fail(what); }
 
+
+    // --- report mode -------------------------------------------------------
+    //
+    // ONE JUDGE, N REPORTERS. This mode OBSERVES and does not decide: it prints
+    // `key<TAB>arg<TAB>value` and `bin/check-four-ops` compares every target's
+    // rows against the one contract. The self-judging mode below stays, because
+    // `bin/check-clr` wants a verdict about THIS target's container; but "the
+    // three operations mean the same thing everywhere" is not a question a single
+    // target can answer about itself, and letting each one try is how "same
+    // semantics" decays into "each target's own opinion".
+
+    static void Row(string key, string arg, string value) {
+        // `(absent)` for a missing answer, and escapes so a value can never
+        // contain the field separator or a line break. A reporter whose output can
+        // be reshaped by the thing it is reporting is not a reporter.
+        string v = value == null ? "(absent)"
+                 : value.Replace("\\", "\\\\").Replace("\t", "\\t")
+                        .Replace("\r", "\\r").Replace("\n", "\\n");
+        Console.WriteLine(key + "\t" + arg + "\t" + v);
+    }
+
+    /// A native this image actually imports, so `boot missing` tests a real gap.
+    ///
+    /// NOT A HARD-CODED NAME. `flint/fabs` was hard-coded here first and the
+    /// refusal did not name it -- because the program does not import it. An image
+    /// imports what its NAMESPACES mention, so the only safe choice is one the
+    /// image itself declares.
+    static string SomeImportedNative(byte[] image) {
+        var probe = new Rt(1L << 20, 1L << 26);
+        var l = Img.Load(probe, image);
+        return l != null && l.nativeNames.Length > 0 ? l.nativeNames[0] : null;
+    }
+
+    static int Report(string path, string fn, string[] metaNames) {
+        var asm = Assembly.LoadFrom(path);
+        var ty = asm.GetType("Program");
+
+        // --- ops. THE CANONICAL NAMES, lowercased, not this target's spelling.
+        // The CLR spells them `Boot`/`Loop`/`Link` and the JVM spells them
+        // `boot`/`loop`/`link`; a judge comparing raw strings across targets would
+        // report a divergence the contract explicitly permits. So the reporter
+        // normalises and the contract carries the per-target spelling.
+        //
+        // `loop` is looked for on the SANDBOX, not on the artifact's own type.
+        // That is the shape, not an accident: `boot` answers a sandbox and `loop`
+        // is its, because a static `Loop` means one sandbox per load context.
+        var found = new List<string>();
+        if (ty.GetMethod("Boot") != null) found.Add("boot");
+        if (ty.GetMethod("Link") != null) found.Add("link");
+        if (typeof(Artifact).GetMethod("Loop") != null) found.Add("loop");
+        found.Sort();
+        Row("ops", "names", string.Join(",", found));
+
+        // --- meta. The carrier answers; a bare name must not.
+        var meta = asm.GetCustomAttribute<_3sln.Flint.MetaAttribute>();
+        foreach (var name in metaNames) {
+            bool carrier = name == "_3sln.Flint.MetaAttribute"
+                        || name == "com.3sln.flint.meta";
+            Row("meta", name, carrier ? meta?.Edn : null);
+        }
+
+        var image = (byte[]) ty.GetMethod("Image").Invoke(null, null);
+        var bridge = new Bridge();
+        var link = ty.GetMethod("Link");
+        var boot = ty.GetMethod("Boot");
+
+        // --- link, before boot.
+        try {
+            link.Invoke(null, new object[]{ bridge, "flint/__probe",
+                                            (Func<byte[],byte[]>) (w => w) });
+            Row("link", "before", "accepted");
+        } catch (Exception e) {
+            Row("link", "before", "refused: " + (e.InnerException ?? e).Message);
+        }
+
+        // --- boot, with a native missing. MUST fail.
+        string victim = SomeImportedNative(image);
+        if (victim == null) {
+            Row("boot", "missing", "(no natives imported, nothing to remove)");
+            Row("link", "restore", null);
+        } else {
+            Artifact.LinkRaw(bridge, victim, null);
+            try {
+                boot.Invoke(null, new object[]{ bridge });
+                Row("boot", "missing", "BOOTED ANYWAY");
+            } catch (TargetInvocationException e) {
+                Row("boot", "missing", e.InnerException.Message);
+            }
+            // NOTHING TO RESTORE, and that is a property of the instance design
+            // rather than luck: hooks are keyed per bridge and `Boot` CONSUMES
+            // them, so the failed attempt took the poisoned hook with it. The
+            // static version had to put a global table entry back by hand, and a
+            // silent failure there would have made every row below a lie.
+            Row("link", "restore", null);
+        }
+
+        // --- boot, for real. Same bridge: the failed attempt never registered it.
+        object sandbox = null;
+        try {
+            sandbox = boot.Invoke(null, new object[]{ bridge });
+            Row("boot", "ok", "booted");
+        } catch (TargetInvocationException e) {
+            Row("boot", "ok", e.InnerException.Message);
+        }
+
+        // --- link, after boot. MUST refuse.
+        try {
+            link.Invoke(null, new object[]{ bridge, "flint/__late",
+                                            (Func<byte[],byte[]>) (w => w) });
+            Row("link", "after", "accepted");
+        } catch (Exception) { Row("link", "after", "refused"); }
+
+        if (sandbox == null) {
+            Row("loop", "at-rest", null);
+            Row("loop", "after-call", null);
+            Row("answer", "printable", null);
+            return 0;
+        }
+
+        // --- loop, at rest and after a call. On the SANDBOX.
+        var a = (Artifact) sandbox;
+        Row("loop", "at-rest", ((int) a.Loop()).ToString());
+
+        bridge.Out.Enqueue(new Artifact.Msg(Artifact.SystemPort,
+            new W().Map(2).Kw("op").Kw("bind").Kw("port").Port(CALL_PORT).Done()));
+        bridge.Out.Enqueue(new Artifact.Msg(CALL_PORT,
+            new W().Map(4).Kw("tx").Num(1).Kw("op").Kw("call")
+                   .Kw("fn").Str(fn).Kw("args").Vec(1).Vec(0).Done()));
+        int status = (int) a.Loop();
+        for (int i = 0; i < 16 && bridge.In.Count == 0 && status == 2; i++) {
+            status = (int) a.Loop();
+        }
+        Row("loop", "after-call", status.ToString());
+
+        string answer = null;
+        foreach (var m in bridge.In) foreach (var s in Strings(m.Bytes)) answer = s;
+        Row("answer", "printable", answer);
+        return 0;
+    }
+
     public static int Main(string[] argv) {
+        if (argv.Length >= 1 && argv[0] == "--report") {
+            if (argv.Length < 3) {
+                Console.Error.WriteLine("usage: Check --report <assembly> <ns/fn> [meta-name ...]");
+                return 2;
+            }
+            var names = argv.Length > 3
+                ? argv[3..]
+                : new[]{ "_3sln.Flint.MetaAttribute", "com.3sln.flint.meta", "flint" };
+            return Report(Path.GetFullPath(argv[1]), argv[2], names);
+        }
         if (argv.Length < 2) {
             Console.Error.WriteLine("usage: Check <assembly> <ns/fn> [expected]");
+            Console.Error.WriteLine("       Check --report <assembly> <ns/fn> [meta-name ...]");
             return 2;
         }
         string path = Path.GetFullPath(argv[0]), fn = argv[1];
         string expected = argv.Length > 2 ? argv[2] : "";
 
         // --- the metadata tables, read straight off disk. Before anything is
-        // loaded, because a malformed table should be named as such rather than
-        // as "the assembly would not load".
+        // loaded, because a malformed table should be named as such rather than as
+        // "the assembly would not load".
         int imageLen;
         using (var fs = File.OpenRead(path)) {
             using var pe = new PEReader(fs);
@@ -82,7 +233,6 @@ public static class Check {
             Want(md.GetHeapSize(HeapIndex.Blob) < 0x10000,
                  $"the blob heap stays under 64 KB, so every index stays 2 bytes ({md.GetHeapSize(HeapIndex.Blob)} bytes)");
 
-            // MaxStack, read back out of the fat headers rather than trusted.
             int fat = 0;
             foreach (var mh in md.MethodDefinitions) {
                 var m = md.GetMethodDefinition(mh);
@@ -90,18 +240,15 @@ public static class Check {
                 var bb = pe.GetMethodBody(m.RelativeVirtualAddress);
                 string nm = md.GetString(m.Name);
                 if (!bb.LocalSignature.IsNil) fat++;
-                Want(bb.MaxStack > 0 && bb.MaxStack <= 8,
-                     $"{nm} declares MaxStack {bb.MaxStack}");
+                // MaxStack, read back out of the header rather than trusted.
+                Want(bb.MaxStack > 0 && bb.MaxStack <= 8, $"{nm} declares MaxStack {bb.MaxStack}");
             }
             Want(fat >= 1, $"at least one body needed the fat format ({fat})");
 
-            // The FieldRva row, which is where the bytecode is.
             imageLen = 0;
             foreach (var th in md.TypeDefinitions) {
                 var t = md.GetTypeDefinition(th);
-                if (md.GetString(t.Name).StartsWith("$ArrayType$")) {
-                    imageLen = t.GetLayout().Size;
-                }
+                if (md.GetString(t.Name).StartsWith("$ArrayType$")) imageLen = t.GetLayout().Size;
                 foreach (var fh in t.GetFields()) {
                     var f = md.GetFieldDefinition(fh);
                     if (md.GetString(f.Name) == "IMAGE") {
@@ -113,13 +260,12 @@ public static class Check {
             Want(imageLen > 0, $"the bytecode's length is declared in a ClassLayout ({imageLen} bytes)");
         }
 
-        // --- the loader.
         var asm = Assembly.LoadFrom(path);
         Ok($"the CLR loads it: {asm.GetName().Name}");
 
-        // --- METADATA WITHOUT EXECUTING ANYTHING. Not a call, not a boot; this
-        // is what replaced the `prop` operation, and the whole point is that it
-        // works before deciding whether to load the program at all.
+        // --- METADATA WITHOUT EXECUTING ANYTHING. Not a call, not a boot; this is
+        // what replaced the `prop` operation, and the whole point is that it works
+        // before deciding whether to load the program at all.
         var meta = asm.GetCustomAttribute<_3sln.Flint.MetaAttribute>();
         Want(meta != null, "the metadata is a CustomAttribute, read without calling in");
         if (meta != null) {
@@ -145,29 +291,26 @@ public static class Check {
         Want((int) ty.GetMethod("Sum").Invoke(null, null) == sum,
              $"Sum() agrees with a sum computed outside the assembly ({sum})");
 
+        long want;
         unchecked {
             long h = -3750763034362895579L;                       // 0xcbf29ce484222325
             foreach (var b in image) h = (h ^ (b & 0xff)) * 1099511628211L;
-            long got = (long) ty.GetMethod("Fnv1a").Invoke(null, null);
-            Want(got == h, $"Fnv1a() -- emitted IL -- agrees with this C# ({h})");
-            // And with the RUNTIME's own, which `Img.Load` computes. Three
-            // independent implementations, one number.
-            Want(true, "(the runtime's own fingerprint is checked after boot)");
+            want = h;
         }
+        Want((long) ty.GetMethod("Fnv1a").Invoke(null, null) == want,
+             $"Fnv1a() -- emitted IL -- agrees with this C# ({want})");
         Want((int) ty.GetMethod("LongBranch").Invoke(null, null) == 1,
              "LongBranch() returns 1, so the widened branch landed where it meant to");
 
-        // --- the program, through the three operations.
+        // --- the program, through the three operations. `Boot` answers the
+        // sandbox; `Loop` is the sandbox's.
         var bridge = new Bridge();
-        ty.GetMethod("Boot").Invoke(null, new object[]{ bridge });
+        var a = (Artifact) ty.GetMethod("Boot").Invoke(null, new object[]{ bridge });
         Ok("Boot: the bridge became the system port, and every native resolved");
+        Want(a != null, "Boot answered a sandbox rather than nothing");
 
-        long fp = Artifact.Runtime.fingerprint;
-        unchecked {
-            long h = -3750763034362895579L;
-            foreach (var b in image) h = (h ^ (b & 0xff)) * 1099511628211L;
-            Want(fp == h, $"the runtime's own fingerprint agrees too ({fp})");
-        }
+        Want(a.Runtime.fingerprint == want,
+             $"the runtime's own fingerprint agrees too ({a.Runtime.fingerprint})");
 
         bridge.Out.Enqueue(new Artifact.Msg(Artifact.SystemPort,
             new W().Map(2).Kw("op").Kw("bind").Kw("port").Port(CALL_PORT).Done()));
@@ -175,28 +318,25 @@ public static class Check {
             new W().Map(4).Kw("tx").Num(1).Kw("op").Kw("call")
                    .Kw("fn").Str(fn).Kw("args").Vec(1).Vec(0).Done()));
 
-        var loop = ty.GetMethod("Loop");
-        int status = (int) loop.Invoke(null, null);
-        for (int i = 0; i < 16 && bridge.In.Count == 0 && status == 2; i++) {
-            status = (int) loop.Invoke(null, null);
-        }
+        int status = (int) a.Loop();
+        for (int i = 0; i < 16 && bridge.In.Count == 0 && status == 2; i++) status = (int) a.Loop();
         Ok($"Loop: {(Artifact.Status) status}");
 
-        // The answer. Scanned out of the wire bytes rather than decoded, which is
-        // all this needs -- the codec has its own tests.
-        // AN EMPTY `expected` MEANS THERE IS NOTHING TO COMPARE AGAINST, and it
-        // must not read as a pass. `bin/check-clr` passes "" when the native CLI
-        // is not built, because the alternative it tried first -- falling back to
-        // a constant -- printed a passing comparison against a number in the
-        // script.
+        // A SECOND SANDBOX, which the static version could not have. Its own
+        // bridge, its own image, its own scheduler -- and the first one still
+        // answers afterwards, which is the property the instance rewrite bought.
+        var bridge2 = new Bridge();
+        var b2 = (Artifact) ty.GetMethod("Boot").Invoke(null, new object[]{ bridge2 });
+        Want(b2 != null && !ReferenceEquals(a, b2),
+             "a second sandbox boots in the same load context, and is not the first");
+        Want(b2.Runtime != a.Runtime, "the two sandboxes hold different runtimes");
+
         if (expected.Length == 0) {
             Console.WriteLine("--   the answer was NOT compared: no interpreter to compare against");
             Want(bridge.In.Count > 0, $"the program at least answered something ({Render(bridge.In)})");
         } else {
             string found = null;
-            foreach (var m in bridge.In) {
-                foreach (var s in Strings(m.Bytes)) if (s == expected) found = s;
-            }
+            foreach (var m in bridge.In) foreach (var s in Strings(m.Bytes)) if (s == expected) found = s;
             Want(found == expected,
                  $"the program answered {Quote(expected)}, the same as the interpreter" +
                  (found == expected ? "" : $" -- got {Render(bridge.In)}"));

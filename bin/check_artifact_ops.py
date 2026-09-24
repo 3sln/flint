@@ -34,12 +34,22 @@ import os, re, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Where each target's face lives. A target absent from this map has no face yet;
-# one present whose file is missing is a skipped row.
+# Where each target's face lives, and whether it is BUILT.
+#
+# BOTH DIRECTIONS FAIL, and that rule is why this table has a flag rather than
+# just a path. `built: False` with a file that exists means a face landed and this
+# gate passed over it; `built: True` with no file means the table claims something
+# that is not there.
+#
+# THE FIRST OF THOSE ACTUALLY HAPPENED HERE. This guessed the JVM face was
+# `rt/Artifact.java`; the real one is `rt/Sandbox.java`. The gate printed
+# `no face ..., skipping` and exited 0 while a whole JVM face went unchecked. A
+# GUESSED PATH IS THE HAZARD, not a missing one -- absence and wrongness look
+# identical from here, and the flag is the only thing that separates them.
 FACES = {
-    'clr': 'runtimes/clr/src/rt/Artifact.cs',
-    'jvm': 'runtimes/jvm/src/com/flint/rt/Artifact.java',
-    'wasm': 'runtime/src/fourops.rs',
+    'clr': {'path': 'runtimes/clr/src/rt/Artifact.cs', 'built': True},
+    'jvm': {'path': 'runtimes/jvm/src/com/flint/rt/Sandbox.java', 'built': False},
+    'wasm': {'path': 'runtime/src/fourops.rs', 'built': False},
 }
 
 
@@ -130,8 +140,11 @@ class Edn:
 # per target.
 
 def clr_face(txt):
+    # STATIC AND INSTANCE BOTH. `Loop` is an instance method now -- `Boot` answers
+    # a sandbox and `Loop` is its, because a static `Loop` means one sandbox per
+    # load context. A pattern matching only `public static` stopped finding it.
     ops = set()
-    for m in re.finditer(r'public\s+static\s+[\w\.<>\[\]?]+\s+(\w+)\s*\(', txt):
+    for m in re.finditer(r'public\s+(?:static\s+)?[\w\.<>\[\]?]+\s+(\w+)\s*\(', txt):
         ops.add(m.group(1))
     status = {}
     body = re.search(r'enum\s+Status\s*\{(.*?)\}', txt, re.S)
@@ -177,9 +190,20 @@ def main():
     present = []
 
     for target in sorted(FACES):
-        txt = read(FACES[target])
+        spec = FACES[target]
+        txt = read(spec['path'])
+        # The two-way rule. Neither of these may look like the other.
+        if txt is None and spec['built']:
+            fails.append('%s: the table says this face is BUILT and %s does not exist. '
+                         'Either the path is wrong or the flag is.' % (target, spec['path']))
+            continue
+        if txt is not None and not spec['built']:
+            fails.append('%s: %s exists but this table says the face is not built. '
+                         'Mark it built, or the check is passing over a real implementation.'
+                         % (target, spec['path']))
+            continue
         if txt is None:
-            rows.append('  --   %-4s no face at %s, skipping' % (target, FACES[target]))
+            rows.append('  --   %-4s no face at %s, not built' % (target, spec['path']))
             continue
         present.append(target)
         face = EXTRACT[target](txt)
@@ -200,13 +224,22 @@ def main():
                 fails.append('%s: declares `%s`, which was REMOVED from the contract. %s'
                              % (target, sp, g[':why'].split('.')[0]))
 
-        # 3. the status numbers. Names may differ per host; values may not.
+        # 3. THE STATUS NUMBERS, and only the numbers.
+        #
+        # The CLR spells them `enum Status { Done, Threw, NeedsHost }` and the JVM
+        # spells them `static final int DONE, THREW, NEEDS_HOST`. That is NOT a
+        # divergence: an enum is how .NET spells three named constants, and forcing
+        # either language into the other's spelling would be the mistake. So the
+        # contract records the per-target spelling descriptively and this asserts
+        # the SET OF VALUES, which is what the ABI actually is.
         looked += len(want_status)
         if not face['status']:
             fails.append('%s: declares no status values at all' % target)
-        elif face['status'] != want_status:
-            fails.append('%s: status values are %r, the contract says %r'
-                         % (target, face['status'], want_status))
+        elif sorted(face['status'].keys()) != sorted(want_status.keys()):
+            fails.append('%s: status NUMBERS are %r, the contract says %r (names may differ '
+                         'per host; the numbers are the ABI)'
+                         % (target, sorted(face['status'].keys()),
+                            sorted(want_status.keys())))
 
         # 4. the rules, as evidence in the source.
         for r in rules:
@@ -225,7 +258,7 @@ def main():
                 fails.append('%s: %s -- %s matches %r, which it must not'
                              % (target, r[':rule'], ev[':file'], ev[':must-not-match']))
 
-        rows.append('  ok   %-4s %d operations, %d refused, %d status values, %d rules'
+        rows.append('  ok   %-4s %d operations, %d refused, %d status numbers, %d rules'
                     % (target, len(ops), len(gone), len(want_status),
                        sum(1 for r in rules if spelling(r[':evidence'], target))))
 

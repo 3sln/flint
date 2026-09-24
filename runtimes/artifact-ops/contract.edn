@@ -28,15 +28,28 @@
  :operations
  [{:op "boot"
    :takes "the bridge, which becomes this sandbox's system port"
-   :returns "nothing"
+   ;; A FACTORY. What comes back IS the sandbox, which is what lets a host hold
+   ;; more than one; see `loop` below for what the static version cost.
+   :returns "the sandbox, on any target that can pass an object"
    :must "fail when a native the image imports cannot be supplied, naming it"
    :spelling {:clr "Boot" :jvm "boot" :wasm "flint_boot"}}
   {:op "loop"
    :takes "nothing"
    :returns "a status; see :status below"
+   ;; AN INSTANCE METHOD on the CLR and the JVM: `boot` answers a sandbox and
+   ;; `loop` is that sandbox's. A static `loop` means ONE SANDBOX PER LOAD
+   ;; CONTEXT, silently -- a second sandbox's pump would drive the first one's
+   ;; scheduler with no error anywhere. Both object targets reached this
+   ;; independently, which is better evidence than either arguing for it.
+   :on "the sandbox boot answers, not the artifact's own type"
    :spelling {:clr "Loop" :jvm "loop" :wasm "flint_loop"}}
   {:op "link"
-   :takes "a name and a function, overriding the native called that"
+   :takes "the bridge, a name and a function, overriding the native called that.
+           THE BRIDGE, because link must precede boot and the image loads inside
+           boot -- so there is no sandbox to hang it on yet, and the bridge is the
+           sandbox's identity before the sandbox exists. Hooks are keyed per
+           bridge, so two sandboxes can override the same native differently,
+           which process-global registration could not do at all."
    :returns "nothing"
    :must "refuse after boot, because natives resolve exactly once at load"
    :spelling {:clr "Link" :jvm "link" :wasm "flint_link"}}]
@@ -54,11 +67,22 @@
          with balanced-delimiter counting. Written, measured, reverted."
    :forbidden-spelling {:clr "Prop" :jvm "prop" :wasm "flint_prop"}}]
 
- ;; THESE NUMBERS ARE THE ABI. They are `flint_resume`'s and `rt.status`'s,
- ;; unchanged, and this project treats them as the contract itself rather than an
- ;; implementation detail to be renamed per host. A face may give them names --
- ;; the CLR's is an enum -- but not different values.
+ ;; THE NUMBERS ARE THE ABI, AND ONLY THE NUMBERS ARE ASSERTED. They are
+ ;; `flint_resume`'s and `rt.status`'s, unchanged, and this project treats them as
+ ;; the contract itself rather than an implementation detail to be renamed per
+ ;; host.
+ ;;
+ ;; The names below are the LOGICAL ones and the gate does not compare them. The
+ ;; CLR spells them `enum Status { Done, Threw, NeedsHost }` and the JVM spells
+ ;; them `static final int DONE, THREW, NEEDS_HOST`; an enum is how .NET spells
+ ;; three named constants, and making either language write the other's spelling
+ ;; would be forcing a divergence rather than fixing one. `:spellings` records what
+ ;; each face actually writes, descriptively, so a reader can find it.
  :status {0 "Done" 1 "Threw" 2 "NeedsHost"}
+ :status-spellings
+ {:clr "enum Status { Done = 0, Threw = 1, NeedsHost = 2 }"
+  :jvm "static final int DONE = 0, THREW = 1, NEEDS_HOST = 2"
+  :wasm "the bare integers, as flint_resume already returned them"}
 
  ;; ---------------------------------------------------------------- metadata
  ;;
