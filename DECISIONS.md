@@ -12583,6 +12583,40 @@ no progress" -- a magic number standing in for a signal the ABI never carried --
 and a proposed fourth `Stuck` status. A host that owns the registry already
 knows whether anything it holds can unblock anyone.
 
+### MEASURED 2026-09-24: the deadlock report is unreachable where it matters
+
+The question below was left open. Probing it found something worse than an
+ambiguous status -- a four-way divergence in the most user-visible message a
+runtime produces, asserted by NOTHING. A program that parks a thread on a
+channel nobody writes reports:
+
+    native, `flint run`     the host pump made no progress
+    wasm, the node host     flint: the host pump made no progress
+    jvm                     deadlock: 1 green thread(s) are parked and nothing
+                            can wake them / thread 0 waiting on port 1
+    clr                     identical to the jvm
+
+**The two ports give the real diagnostic and the other two give a message about
+a "host pump".** Native HAS `report_deadlock` -- it is right there in
+`conc.rs` -- and its output never reaches a user, because the HOST PUMP'S GUARD
+FIRES FIRST. `sdks/esm/src/guest.js`'s `1e6` counter gives up while the
+scheduler is still answering `NeedsHost`, so the branch that would conclude
+"nothing can help" and name the stuck threads is never reached. The ports'
+drivers drive the scheduler directly and do reach it.
+
+So the magic number is not merely standing in for a signal the ABI never
+carried. It is ACTIVELY MASKING the signal that already exists on the runtime
+side. That is the strongest argument yet for the host-side waiter registry: a
+host that knows which ports have waiters does not need a counter, and the
+runtime's own diagnostic stops being unreachable.
+
+**Nothing tests any of this.** The message is written three times -- `conc.rs`,
+`Conc.java`, `Conc.cs` -- and grepping the tree for it finds no test, no
+conformance row, and no assertion of any `loop` status VALUE. `kin/threadjoin.kin`
+even quotes the expected output ("thread 0 waiting on thread 0") in a comment
+that nothing checks. So a change to the status numbers would have broken no
+test, which is not the same as being safe.
+
 **One thing does NOT move out.** `runtime/src/conc.rs:1361`'s `report_deadlock`
 detects threads waiting on EACH OTHER rather than on ports, and no host-side
 port registry can see that. Today the scheduler returns status 0 for both a
