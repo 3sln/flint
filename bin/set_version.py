@@ -45,9 +45,19 @@ CARGO = [
 NPM = ["package.json", "deck/package.json", "sdks/cli/package.json",
        "sdks/esm/package.json"]
 # The value that actually reaches a compiled artifact, via `modmeta`. A literal
-# rather than a read of `VERSION`, because `bin/flint` has to work from a
+# rather than a read of `meta.edn`, because `bin/flint` has to work from a
 # distribution that carries no repo.
 FLINT = "bin/flint"
+# AND THE LOCKFILE, which states a version for every workspace member and was
+# the hole in the first version of this gate: `bin/check-version` went green
+# while `Cargo.lock` still pinned `flint-cli` and `flint-native-abi` at 0.0.1.
+# A subagent found it by running `bin/build-units`, which reconciles the lockfile
+# and so showed the drift as an unexplained diff. Cargo rewrites these itself,
+# but only when it happens to run -- so the gate has to say so, and `--check`
+# must not be the only thing that would have noticed.
+LOCK = "Cargo.lock"
+LOCK_MEMBERS = ["flint-cli", "flint-native-abi", "flint-rt", "flint-sdk",
+                "flint-c-sdk", "flint-conc", "flint-snap"]
 
 def semver_ok(v):
     return re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?", v)
@@ -101,6 +111,21 @@ def main():
             bad.append(f"{rel}: {got}")
             if not check:
                 p.write_text(npm_set(t, WANT))
+    lock = ROOT / LOCK
+    if lock.is_file():
+        lt = lock.read_text()
+        for name in LOCK_MEMBERS:
+            m = re.search(r'(?m)^name = "' + re.escape(name) + r'"\nversion = "([^"]*)"', lt)
+            if not m:
+                continue                      # not a member here; not an error
+            n += 1
+            if m.group(1) != WANT:
+                bad.append(f"{LOCK} [{name}]: {m.group(1)}")
+                if not check:
+                    lt = (lt[:m.start(1)] + WANT + lt[m.end(1):])
+        if not check:
+            lock.write_text(lt)
+
     p = ROOT / FLINT
     t = p.read_text(); got = flint_get(t); n += 1
     if got is None:

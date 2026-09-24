@@ -247,7 +247,7 @@ dependencies = [
 
 [[package]]
 name = "flint-cli"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "flate2",
@@ -307,7 +307,7 @@ dependencies = [
 
 [[package]]
 name = "flint-native-abi"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "flint-conc",
  "flint-rt",

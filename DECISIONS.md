@@ -12414,3 +12414,97 @@ NESTED interpreter loop rather than driving it on the frame stack it is already
 standing on. Bounding it means making forcing iterative, and that is separate
 work; `doc/goals/kin-port.md` has the trace and the two shapes a fix could
 take.
+
+## four-operations
+
+**What every flint artifact exposes, on every target**
+**Ratified:** ☐ not signed off
+**Status: BEING BUILT, 2026-09-24. The CLR face is written and runs (`src/flint/clr.cljc`, `runtimes/clr/src/rt/Artifact.cs`); the JVM and wasm/native faces are not.** This record exists FIRST and deliberately: four
+implementations designed in parallel is how this project produced sixteen
+version declarations, four compile-spec front ends and a `:checks` axis on one
+CLI and not the other. The contract is written down before the last three are
+built so they mirror it rather than each other.
+
+An artifact IS the compiled output -- a wasm module, a JVM class, a CLR
+assembly, LLVM IR. **There is no separate "image" artifact.** The bytecode is an
+implementation detail carried inside it, as constant data on the class, and
+never a published format.
+
+**The artifact carries the program, NOT the runtime.** Bytecode plus AOT'd code
+plus these four operations. The interpreter, the collector and the builtins come
+from the host. So "self-contained" means *contains all of the program's code*,
+and NOT *runs standalone* -- it requires a host carrying flint's runtime. That
+distinction was stated backwards for most of a day and misled two agents; it is
+the first thing to get right in any prose about an artifact.
+
+### The four
+
+    boot(bridge)        the bridge becomes this sandbox's SYSTEM PORT, and
+                        everything is driven through it. A sandbox is ONE
+                        program for its whole life (`construe-integration-bar`).
+    loop()   -> Status  pump. 0 Done, 1 Threw, 2 NeedsHost -- THE EXISTING ABI
+                        NUMBERS, which this project treats as the ABI itself.
+    link(name, fn)      override the native called `name`.
+    prop(name, buf)     a metadata property; answers the byte count, or -1.
+
+**`loop()` returning `NeedsHost` is the RESTING state, not an error.** The
+control plane is a green thread parked on the system port, so a healthy idle
+sandbox reports it. A pump drains, drives, then drains AGAIN: the scheduler
+reports `NeedsHost` while it holds undrained events, so a pump that skipped the
+trailing drain would report work it was itself holding.
+
+**`link` is an OVERRIDE mechanism and not a wiring one, and the reason is load
+bearing.** `runtime/src/image.rs` and `Img.cs:138` leave a missing builtin NULL
+rather than refusing: an image imports every builtin its namespaces MENTION, and
+a program that never calls the missing one runs fine. A trivial program declares
+**88** natives -- `clojure.core`'s reach, not the program's -- against 223 the
+runtime carries. So the host makes ZERO `link` calls in the normal case, and a
+bulk or resolver API that required all 88 would be actively WRONG: it would
+reject programs that run. `link` MUST precede `boot` and refuse afterwards,
+because natives resolve exactly once when the image loads.
+
+**`prop` reports facts and decides nothing.** No `compatible?`. Which semver
+relation counts as compatible is unsettled, and pre-1.0 makes the usual "same
+major" rule say every release breaks everything. `prop` answers `version` from
+`meta.edn` (see `bin/check-version`), `compat-key`, `runtime`, and
+`natives`/`natives-unresolved` -- those last two being the only ones that need
+`boot`, because they describe what linking against THIS host produced rather
+than the inert artifact.
+
+### Where the targets may differ, and where they may not
+
+The SEMANTICS above are identical everywhere. The spelling is not, and forcing
+it to be would be the mistake:
+
+* the JVM and CLR pass a real bridge OBJECT. The CLR's is five methods --
+  `TryTake`, `Put`, `Open`, `Answer`, `Closed` -- against wasm's fourteen
+  exports, because most of those exist only to move bytes across a boundary
+  that cannot pass an array or a callback;
+* wasm cannot pass either. Its bridge is the host satisfying IMPORTS, and its
+  `link` names a function-table slot rather than a closure -- a wasm module's
+  imports are fixed at instantiation, so `link` can rebind an existing runtime
+  slot and can NEVER introduce new host code;
+* a class file has no data section, so the bytecode goes in the constant pool
+  as modified-UTF-8 `CONSTANT_Utf8` entries, capped at 65 535 bytes each. A CLR
+  assembly has `FieldRva` and takes the bytes raw at any size.
+
+**THE `FieldRva` CHOICE PAID FOR ITSELF IN A WAY NOBODY PREDICTED.** With the
+image in `.text` it contributes to no heap, so `HeapSizes` stays 0 and every
+metadata heap index stays 2 bytes at ANY program size -- checked at 251 KB and
+20 MB. Had it gone in `#Blob` it would cross 64 KB on any real program and widen
+every blob index in every table to 4. Doing it properly came out cheaper than
+the shortcut.
+
+### What this cost, measured rather than estimated
+
+A from-scratch ECMA-335 writer in cljc is **371 lines** (516 with comments) for
+one type, one `FieldRva` array and three methods -- against a first estimate of
+3 000-6 000, which was wrong by 3-6x. The artifact is **28 160 bytes for
+`(ns t) (defn main [args] "x")`, 94% of it the bytecode**, against 494 302 for
+the same program as wasm. Verified by the runtime loading it AND by Roslyn
+compiling against it as a reference, Roslyn being the stricter reader.
+
+The remaining cost is not the container. It is an IL assembler -- opcode table,
+label fixups with short/long selection, computed `maxstack` -- at ~200-250
+lines, which is the same problem `src/flint/aot.cljc` already solves in 713 for
+wasm.
