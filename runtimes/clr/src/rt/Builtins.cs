@@ -40,6 +40,17 @@ public static class Builtins {
     public static Fn ByName(string n) => Table.TryGetValue(n, out var f) ? f : null;
     static void Def(string n, Fn f) => Table[n] = f;
 
+    /// Register a native under `n`, replacing any builtin of that name. This is
+    /// the whole of `Artifact.Link`: `Img.Load` resolves every native BY NAME
+    /// (`Img.cs:147`), so a host-supplied hook needs no new mechanism, only a
+    /// door onto the table `ByName` already reads.
+    ///
+    /// ORDERING IS LOAD-BEARING and not checkable from here: the resolution
+    /// happens once, inside `Img.Load`, so a hook registered after the image is
+    /// loaded is never seen. `Artifact.Link` refuses after `Boot` for that
+    /// reason.
+    public static void Register(string n, Fn f) => Table[n] = f;
+
 
     static Builtins() {
         // Arithmetic goes through `Num`, which owns the PROMOTION RULE:
