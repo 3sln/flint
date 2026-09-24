@@ -5,4 +5,65 @@
 ;; vocabulary naming this runtime's `Rt`, its heap slots, its type tags and
 ;; its rooting, plus the sources written in them.
 {:paths ["kin/src"]
- :deps {io.github.3sln/kin {:local/root "../kin"}}}
+ :deps {io.github.3sln/kin {:local/root "../kin"}}
+
+ ;; ---------------------------------------------------------------------------
+ ;; THE CATALOGUE. `bb tasks` lists what this repo can do; `ls bin/` was
+ ;; standing in for that, and it lists 52 files in five languages -- 22 `sh`,
+ ;; 14 `python3`, 6 `bb`, 5 `bash`, 2 `node` -- with no way to tell an entry
+ ;; point from something another script calls.
+ ;;
+ ;; EVERY TASK DELEGATES. Not one of them reimplements a script, and that is
+ ;; the whole discipline here: this repo's recurring defect is one fact stated
+ ;; in several front ends that then drift (`bin/flint`, `project.cljc`,
+ ;; `cli/src/main.rs` and `flint.js` each built a compile spec alone; sixteen
+ ;; manifests each stated a version). A task that duplicated a script's logic
+ ;; would be the same mistake with a nicer front door.
+ ;;
+ ;; WHY NOT PORT THE SCRIPTS TO bb NOW. Startup is not the objection -- measured
+ ;; at 23 ms against `sh`'s 7 ms, about a second across a whole build, against a
+ ;; gate that takes three hours. The objection is the 2 718 lines of `python3`,
+ ;; which is where the hard-won knowledge lives: `port_survey.py`'s docstrings
+ ;; record SIX constructs its classifier missed before the current rules, and
+ ;; two more were fixed in it on 2026-09-23. Rewriting that wholesale is the
+ ;; "a method in prose gets reimplemented" trap -- the rewrite reintroduces the
+ ;; warned-about bugs plus new ones. So: new utility scripts in bb, existing
+ ;; ones ported when they are being changed anyway, and `port_survey.py` last.
+ ;;
+ ;; The `sh` scripts are a weaker case for porting than they look: most of their
+ ;; 4 037 lines drive `cargo`, `javac` and `dotnet` and check exit codes, which
+ ;; is what `sh` is for.
+ :tasks
+ {;; -- gates ----------------------------------------------------------------
+  check          {:doc "The fast tier (~30 s, longer when kin is touched)."
+                  :task (shell "./bin/check")}
+  check-kin      {:doc "Every kin source against all three targets (~10 min)."
+                  :task (shell "./bin/check-kin")}
+  check-version  {:doc "Every manifest states meta.edn's :version."
+                  :task (shell "./bin/check-version")}
+  test           {:doc "THE full gate. 62 sections, about three hours here."
+                  :task (shell "./bin/test")}
+  conform-hosts  {:doc "One program on native, the jvm and the clr, diffed."
+                  :task (shell "./bin/conform-hosts")}
+
+  ;; -- building -------------------------------------------------------------
+  build-units    {:doc "Compile each namespace unit and emit its manifest."
+                  :task (shell "./bin/build-units")}
+  build-dist     {:doc "The distributable compiler and loader."
+                  :task (shell "./bin/build-dist")}
+  set-version    {:doc "Write meta.edn's :version into all 16 manifests."
+                  :task (shell "./bin/set-version")}
+
+  ;; -- measuring ------------------------------------------------------------
+  bench          {:doc "The benchmark suite."
+                  :task (shell "./bin/bench")}
+  port-survey    {:doc "Where the portable lines are, and whether the three drifted."
+                  :task (shell "./bin/port-survey")}
+
+  ;; -- the compiler itself --------------------------------------------------
+  ;;
+  ;; NOT A WRAPPER WORTH HAVING for the 61 places inside `bin/` that invoke it:
+  ;; those call `./bin/flint` directly and should keep doing so. This is here so
+  ;; `bb tasks` does not omit the most-used entry point in the repo.
+  flint          {:doc "The compiler front end. `bb flint :src ... :fn ... :out ...`"
+                  :task (apply shell "./bin/flint" *command-line-args*)}}}
