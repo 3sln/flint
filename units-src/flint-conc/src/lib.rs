@@ -1052,6 +1052,123 @@ mod host {
         unsafe { &mut *(flint_rt::abi::flint_rt_ptr() as *mut Rt) }
     }
 
+    // --- THE THREE OPERATIONS (`DECISIONS.md#four-operations`) -------------
+    //
+    // `boot`, `loop`, `link`, the same three every target exposes. They sit
+    // BESIDE the twelve-function protocol below rather than replacing it, and
+    // that is deliberate for now: the twelve work, they are exercised by 366
+    // conformance rows, and a rewrite of the bridge into a host-side ring is
+    // named as separate work in `bridges-are-the-only-door`'s table. What this
+    // buys today is the UNIFORM SURFACE -- a host writes the same three calls
+    // whichever target it holds -- with the plumbing unchanged underneath.
+    //
+    // `boot` ANSWERS A SANDBOX HANDLE, and on wasm that handle is almost
+    // ceremony: `Rt` is one `static mut` per instance, so one module instance
+    // IS one sandbox and the handle can only ever be 1. It is here anyway,
+    // because the jvm's `boot` answers a `Sandbox` object and the clr's static
+    // surface was found to mean one sandbox per PROCESS -- the shape that does
+    // not survive concurrent `loop`. Taking the handle keeps wasm honest about
+    // which sandbox is meant, and a future shared-memory build can hold more
+    // than one without the signature moving.
+    //
+    // NO SANDBOX ARGUMENT ON THE BRIDGE ITSELF: wasm cannot pass an object, so
+    // the bridge is the host satisfying this module's imports, and a module
+    // declares zero imports today -- nothing to break.
+
+    /// The only handle this instance can answer, and the only one the other two
+    /// accept. Not zero: zero is what an uninitialised `i32` reads as, and a
+    /// handle that is indistinguishable from "never booted" would let
+    /// `flint_loop(0)` look valid before `boot` ran.
+    const ONLY_SANDBOX: u32 = 1;
+
+    static mut BOOTED: bool = false;
+
+    /// `boot` -- install the host's bridge as the SYSTEM PORT and answer a
+    /// sandbox handle, or 0 if it could not.
+    ///
+    /// The name comes in the inbound buffer, as `flint_install_port` takes it.
+    /// A second `boot` answers 0 rather than re-installing: a sandbox is one
+    /// program for its whole life (`one-image-per-sandbox`), and re-booting one
+    /// is the same class of mistake as swapping its image.
+    #[no_mangle]
+    pub extern "C" fn flint_boot(len: u32) -> u32 {
+        unsafe {
+            if BOOTED {
+                return 0;
+            }
+            // `1` for the system flag: this IS the system port, which is what
+            // makes it the sandbox's only door (`bridges-are-the-only-door`).
+            if flint_install_port(0, len, 1) == 0 {
+                return 0;
+            }
+            BOOTED = true;
+            ONLY_SANDBOX
+        }
+    }
+
+    /// The three statuses, DECLARED rather than only documented.
+    ///
+    /// They were a comment on `flint_loop` until `bin/check-artifact-ops`
+    /// refused it, and the refusal was right: a comment saying "0, 1, 2" beside
+    /// a function is the prose this project has repeatedly watched fail to bind
+    /// the code next to it. The NAMES differ per language and are allowed to --
+    /// the jvm has `DONE`/`THREW`/`NEEDS_HOST`, the clr an `enum Status` -- and
+    /// the NUMBERS are the ABI.
+    pub const DONE: i32 = 0;
+    pub const THREW: i32 = 1;
+    pub const NEEDS_HOST: i32 = 2;
+
+    /// `loop` -- pump, and answer 0 Done, 1 Threw, 2 NeedsHost.
+    ///
+    /// THE NUMBERS ARE THE ABI and are not re-spelled here; the jvm writes them
+    /// as `DONE`/`THREW`/`NEEDS_HOST` and the clr as an `enum Status`, and all
+    /// three agree on 0, 1, 2. `NeedsHost` is the RESTING state, not an error:
+    /// the control plane is a green thread parked on the system port, so a
+    /// healthy idle sandbox reports it.
+    ///
+    /// -1 for a handle this instance cannot serve, which is not a status value
+    /// and is deliberately outside their range.
+    #[no_mangle]
+    pub extern "C" fn flint_loop(sandbox: u32) -> i32 {
+        unsafe {
+            if !BOOTED || sandbox != ONLY_SANDBOX {
+                return -1;
+            }
+        }
+        flint_resume()
+    }
+
+    /// `link` -- override the native called `name`, whose bytes are in the
+    /// inbound buffer, with the function at `slot` in this module's table.
+    ///
+    /// A SLOT AND NOT A CLOSURE, because wasm cannot take one: a module's
+    /// imports are fixed at instantiation, so `link` can only rebind a slot
+    /// this module already carries and can NEVER introduce new host code. That
+    /// is a real difference from the jvm and clr, where the registry is a
+    /// mutable name-to-closure map, and it is recorded as such rather than
+    /// papered over.
+    ///
+    /// Answers 0 on success, and refuses with 2 AFTER `boot`: natives resolve
+    /// exactly once when the image loads, so a later hook is never reached and
+    /// silently doing nothing would be the worst available answer.
+    #[no_mangle]
+    pub extern "C" fn flint_link(sandbox: u32, len: u32, slot: u32) -> i32 {
+        let _ = (len, slot);
+        unsafe {
+            if BOOTED {
+                return 2;
+            }
+            if sandbox != ONLY_SANDBOX {
+                return -1;
+            }
+        }
+        // NOT IMPLEMENTED, AND SAYING SO. Rebinding a table slot by name needs
+        // the builtin registry this module carries only in a `--loader` build,
+        // and answering 0 here would claim an override happened. 1 is "this
+        // artifact cannot".
+        1
+    }
+
     /// Serialise everything pending and return how many events there are.
     /// `flint_events_ptr` gives the buffer; each record is five little-endian
     /// `u32`s -- `kind, a, b, payload-offset, payload-len` -- with offsets

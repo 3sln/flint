@@ -52,7 +52,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FACES = {
     'clr':  ('runtimes/clr/src/rt/Artifact.cs',            True),
     'jvm':  ('runtimes/jvm/src/com/flint/rt/Sandbox.java', True),
-    'wasm': ('runtime/src/fourops.rs',                     False),
+    # THE CONC UNIT, not the runtime crate. `runtime/src/fourops.rs` was the
+    # third guessed path in this table and it was wrong for the same reason the
+    # jvm's was: the bridge machinery -- the system port, resume, drain -- lives
+    # in the unit, so the face that adapts it does too. The unit is on every
+    # link line unconditionally (`calls-are-ports`), so nothing is optional here.
+    'wasm': ('units-src/flint-conc/src/lib.rs',            True),
 }
 
 
@@ -155,18 +160,35 @@ def clr_face(txt):
 
 
 def java_face(txt):
-    ops = set(re.findall(r'public\s+static\s+[\w\.<>\[\]]+\s+(\w+)\s*\(', txt))
+    # `static` IS OPTIONAL, and requiring it read `loop` as absent. `boot` is a
+    # factory and answers a `Sandbox`, so `loop` and `link` are that object's --
+    # INSTANCE methods. That shape is the one `four-operations` settled on,
+    # because a static surface means one sandbox per process and cannot carry
+    # concurrent `loop`. A gate that demanded `static` was demanding the shape
+    # that was rejected.
+    ops = set(re.findall(r'public\s+(?:static\s+)?[\w\.<>\[\]]+\s+(\w+)\s*\(', txt))
     status = {}
-    for m in re.finditer(r'(?:public\s+)?static\s+final\s+int\s+(\w+)\s*=\s*(\d+)', txt):
-        status[int(m.group(2))] = m.group(1)
+    # ONE DECLARATION, SEVERAL NAMES: `static final int DONE = 0, THREW = 1,
+    # NEEDS_HOST = 2;` is legal Java and common, and anchoring on `static final
+    # int` per name found only the first. Split the declaration, then read each
+    # `NAME = digits` out of it.
+    for decl in re.finditer(r'static\s+final\s+int\s+([^;]+);', txt):
+        for m in re.finditer(r'(\w+)\s*=\s*(\d+)', decl.group(1)):
+            status[int(m.group(2))] = m.group(1)
     return {'ops': ops, 'status': status}
 
 
 def rust_face(txt):
     ops = set(re.findall(r'pub\s+(?:extern\s+"C"\s+)?fn\s+(\w+)', txt))
     status = {}
-    for m in re.finditer(r'(\w+)\s*=\s*(\d+)\s*,', txt):
+    # BOTH SHAPES. This read only `NAME = n,` -- an enum variant, with the comma
+    # required -- so `pub const DONE: i32 = 0;` was invisible and the wasm face
+    # was reported as declaring no statuses while declaring all three. Rust
+    # spells a small closed set either way and neither is wrong.
+    for m in re.finditer(r'(?:pub\s+)?const\s+(\w+)\s*:\s*\w+\s*=\s*(\d+)\s*;', txt):
         status[int(m.group(2))] = m.group(1)
+    for m in re.finditer(r'(\w+)\s*=\s*(\d+)\s*,', txt):
+        status.setdefault(int(m.group(2)), m.group(1))
     return {'ops': ops, 'status': status}
 
 
@@ -224,11 +246,23 @@ def main():
 
         # 3. the status numbers. Names may differ per host; values may not.
         looked += len(want_status)
+        # THE NUMBERS ARE THE ABI, NOT THE SPELLING. This compared the whole
+        # name-to-number map and so demanded that every language spell the
+        # statuses the way one of them does: the jvm writes `DONE`/`THREW`/
+        # `NEEDS_HOST`, the clr an `enum Status { Done, Threw, NeedsHost }`, and
+        # both are idiomatic where they live. `four-operations` says the numbers
+        # are what this project treats as the ABI, so those are what must agree.
+        #
+        # A face is still required to DECLARE them rather than only document
+        # them: a comment saying "0, 1, 2" beside a function is exactly the prose
+        # this project has watched fail to bind the code next to it.
         if not face['status']:
-            fails.append('%s: declares no status values at all' % target)
-        elif face['status'] != want_status:
-            fails.append('%s: status values are %r, the contract says %r'
-                         % (target, face['status'], want_status))
+            fails.append('%s: declares no status values at all -- the numbers must be '
+                         'in the source, not only in a comment' % target)
+        elif set(face['status']) != set(want_status):
+            fails.append('%s: status NUMBERS are %r, the contract says %r (the names '
+                         'may differ per language; the numbers may not)'
+                         % (target, sorted(face['status']), sorted(want_status)))
 
         # 4. the rules, as evidence in the source.
         for r in rules:
