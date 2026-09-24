@@ -454,8 +454,7 @@ public static class Conc {
     /// `DECISIONS.md#opaque-values` and `ports-are-the-hosts` both exist to prevent. There is no
     /// builtin that answers it; only the runtime looks it up.
     public static long SystemPort(Rt rt) {
-        long s = Sched(rt);
-        return Val.IsNil(s) ? Val.Nil : rt.Slot(s, SC_SYSTEM);
+        return global::_3sln.Flint.Kgen.Rt.Portinstall.ConcSystemPort(rt);
     }
 
 

@@ -72,6 +72,14 @@ fn fresh() -> Rt {
     rt.sched_v = rt.obj(vec![brs, NIL]);
     rt
 }
+// A SANDBOX WITH NO SCHEDULER AT ALL, which `fresh` is not: that one builds
+// one whose `SC_SYSTEM` merely holds nil, so reading the slot answers nil
+// whether or not the guard is there. Here `sched` IS nil, and the slot read
+// the guard prevents would index `objs` by 0xFFFF000000000000.
+fn schedless() -> Rt {
+    Rt { objs: vec![], roots: vec![], sched_v: NIL, ports: vec![],
+         events: vec![], sched_calls: 0 }
+}
 fn shown(rt: &Rt, p: Value, label: Value) -> String {
     let s = rt.sched_v;
     let brs = rt.slot(s, conc::SC_BRIDGES);
@@ -119,8 +127,12 @@ fn main() {
     let mut d = fresh();
     let ld = d.obj(vec![]);
     let sp = d.install_system_at(9, ld);
-    let r5 = format!("{} {} {}",
-        if d.slot(d.sched_v, conc::SC_SYSTEM) == sp { 1 } else { 0 },
+    // READ BACK THROUGH `system_port`, not off the slot: the install and the
+    // reader are a pair, and a direct slot read tests only half of it.
+    let e = schedless();
+    let r5 = format!("{} {} {} {}",
+        if d.conc_system_port() == sp { 1 } else { 0 },
+        if e.conc_system_port() == NIL { 1 } else { 0 },
         d.events.len(),
         d.sched_calls);
 
@@ -191,6 +203,8 @@ fn main() {
         rt.schedV = rt.obj(new long[]{brs, NIL});
         return rt;
     }
+    // NO SCHEDULER AT ALL -- see the rust note.
+    static Rt schedless() { Rt rt = new Rt(); rt.schedV = NIL; return rt; }
     static String shown(Rt rt, long p, long label) {
         long brs = rt.slot(rt.schedV, Conc.SC_BRIDGES);
         StringBuilder ev = new StringBuilder();
@@ -230,7 +244,9 @@ fn main() {
         Rt d = fresh();
         long ld = d.obj(new long[0]);
         long sp = installSystemAt(d, 9, ld);
-        String r5 = (d.slot(d.schedV, Conc.SC_SYSTEM) == sp ? 1 : 0)
+        Rt e = schedless();
+        String r5 = (concSystemPort(d) == sp ? 1 : 0)
+                  + " " + (concSystemPort(e) == NIL ? 1 : 0)
                   + " " + d.evKind.size() + " " + d.schedCalls;
 
         System.out.println(r1 + " | " + r2 + " | " + r3 + " | " + r4 + " | " + r5);
@@ -300,6 +316,8 @@ fn main() {
         rt.SchedV = rt.MakeObj(new long[]{ brs, NIL });
         return rt;
     }
+    // NO SCHEDULER AT ALL -- see the rust note.
+    static Rt Schedless() { var rt = new Rt(); rt.SchedV = NIL; return rt; }
     static string Shown(Rt rt, long p, long label) {
         long brs = rt.Slot(rt.SchedV, Conc.SC_BRIDGES);
         var ev = new System.Collections.Generic.List<string>();
@@ -336,13 +354,15 @@ fn main() {
         var d = Fresh();
         long ld = d.MakeObj(new long[0]);
         long sp = InstallSystemAt(d, 9, ld);
-        string r5 = (d.Slot(d.SchedV, Conc.SC_SYSTEM) == sp ? 1 : 0)
+        var e = Schedless();
+        string r5 = (ConcSystemPort(d) == sp ? 1 : 0)
+                  + " " + (ConcSystemPort(e) == NIL ? 1 : 0)
                   + " " + d.EvKind.Count + " " + d.SchedCalls;
 
         System.Console.WriteLine(r1 + " | " + r2 + " | " + r3 + " | " + r4 + " | " + r5);
     }
 --expect
-1 0 0 | 1 1 7 1 1 4:7 | 1 1 1 1 | 1 0 | 1 0 1
+1 0 0 | 1 1 7 1 1 4:7 | 1 1 1 1 | 1 0 | 1 1 0 1
 --expect-why
 DERIVED FROM WHAT INSTALLING A HOST PORT PROMISES.
 
@@ -397,3 +417,16 @@ DERIVED FROM WHAT INSTALLING A HOST PORT PROMISES.
             with no scheduler to record it in. The order itself is guarded by
             the GC-stress row in `bin/conform-hosts`, which is where the bug
             this file was written for is actually caught.
+
+THE SECOND FIELD OF ROW 5 IS `system-port` WITH NO SCHEDULER, and getting it
+to test anything took two goes. Row 5 used to read the slot directly --
+`d.slot(d.schedV, SC_SYSTEM) == sp` -- which proves the install wrote it and
+says nothing about the reader; it now goes through `system-port` so the pair is
+tested as a pair.
+
+The nil case was first written against `fresh()`, and `fresh()` BUILDS a
+scheduler whose `SC_SYSTEM` merely holds nil. Deleting the guard from the
+source and re-verifying passed -- the field read slot 1 of a live object and
+answered nil either way. So the toys gained `schedless`, where `sched` really
+is nil, and the read the guard prevents would index the object table by
+0xFFFF000000000000. Confirmed by deleting the guard again.

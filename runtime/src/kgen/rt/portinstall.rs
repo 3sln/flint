@@ -90,4 +90,28 @@ impl Rt {
         self.pop_to(base);
         return out;
     }
+    /// THE SYSTEM PORT, or nil when this sandbox has no scheduler yet.
+    /// 
+    /// NAMED WITH THE AREA PREFIX the other generated readers use, because a
+    /// `^:method` lands in `impl Rt` and native already has an inherent
+    /// `system_port` there -- two definitions of one name on one type, which
+    /// rustc refuses. The ports have no such clash and would have taken the
+    /// short name, so the collision is native-only and the prefix is what
+    /// keeps one source serving all three.
+    /// 
+    /// The counterpart of `install-system-at`: that one records the port in
+    /// `SC_SYSTEM` and this one reads it back. Kept beside it so the slot is
+    /// named in one file rather than two.
+    /// 
+    /// THE NIL CHECK IS NOT DEFENSIVE. `sched` answers nil before anything has
+    /// forced a scheduler into existence, and reading a slot off nil is the
+    /// kind of fault that shows up as a wrong VALUE rather than a crash -- so
+    /// the early return is the function, not a guard around it.
+    pub fn conc_system_port(&self) -> Value {
+        let s: Value = self.sched();
+        if s.is_nil() {
+            return NIL;
+        }
+        return self.slot(s, crate::conc::SC_SYSTEM);
+    }
 }

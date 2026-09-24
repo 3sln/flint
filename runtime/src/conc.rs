@@ -782,11 +782,7 @@ impl Rt {
     /// thunk that fetches the port rather than closing over it, which is why
     /// the guest can reach this at all (`DECISIONS.md#bridges-are-the-only-door`).
     pub fn system_port(&mut self) -> Value {
-        let s = self.sched();
-        if s.is_nil() {
-            return NIL;
-        }
-        self.slot(s, SC_SYSTEM)
+        self.conc_system_port()
     }
 
     /// A coupled pair. What goes into one comes out of the other, both ways.

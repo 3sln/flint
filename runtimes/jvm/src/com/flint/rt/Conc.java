@@ -486,8 +486,7 @@ public final class Conc {
     /// `DECISIONS.md#opaque-values` and `ports-are-the-hosts` both exist to prevent. There is no
     /// builtin that answers it; only the runtime looks it up.
     public static long systemPort(Rt rt) {
-        long s = sched(rt);
-        return Val.isNil(s) ? Val.NIL : rt.slot(s, SC_SYSTEM);
+        return com._3sln.flint.kgen.rt.Portinstall.concSystemPort(rt);
     }
 
 
