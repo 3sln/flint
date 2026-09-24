@@ -41,8 +41,8 @@
                   :task (shell "./bin/check-kin")}
   check-version  {:doc "Every manifest states meta.edn's :version."
                   :task (shell "./bin/check-version")}
-  check-four-ops {:doc "boot/loop/link/prop agree on every target that has a face."
-                  :task (shell "./bin/check-four-ops")}
+  check-artifact-ops {:doc "boot/loop/link agree on every target that has a face."
+                  :task (shell "./bin/check-artifact-ops")}
   test           {:doc "THE full gate. 62 sections, about three hours here."
                   :task (shell "./bin/test")}
   conform-hosts  {:doc "One program on native, the jvm and the clr, diffed."

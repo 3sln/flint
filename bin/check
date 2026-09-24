@@ -37,7 +37,7 @@ fi
 t0=$(date +%s)
 
 for c in check-version check-decisions check-flattens check-builtins check-sys-catalogue check-lib-grants \
-         check-snapshot-layout check-aotstat-layout check-port-consts check-four-ops \
+         check-snapshot-layout check-aotstat-layout check-port-consts check-artifact-ops \
          check-generated-reached check-vocab-used dead-runtime-fns; do
   ./bin/$c || fail "bin/$c"
 done

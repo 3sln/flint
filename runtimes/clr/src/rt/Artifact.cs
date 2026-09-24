@@ -5,8 +5,12 @@ using System.IO;
 using System.Reflection;
 using System.Text;
 
-/// THE FOUR OPERATIONS, on the CLR. A SPIKE -- see `doc/goals/clr-target.md`
-/// for what is and is not done.
+/// THE THREE OPERATIONS, on the CLR: `Boot`, `Loop`, `Link`
+/// (`DECISIONS.md#four-operations`, whose slug outlived the fourth).
+///
+/// `Prop` was the fourth and is gone. Metadata is not an operation on any
+/// target -- it lives in the container, where a reader gets at it without
+/// executing anything. On the CLR that is `_3sln.Flint.MetaAttribute`.
 ///
 /// ## How the image reaches this class
 ///
@@ -117,10 +121,8 @@ public static class Artifact {
     static Img.Loaded loaded;
     static byte[] metaBytes = Array.Empty<byte>();
     static bool booted;
-    static string[] unresolved = Array.Empty<string>();
-    static int importedNatives;
 
-    /// The live runtime, for a host that wants more than these four operations.
+    /// The live runtime, for a host that wants more than these three operations.
     /// Null before `Boot`.
     public static Rt Runtime => rt;
 
@@ -162,24 +164,40 @@ public static class Artifact {
                 "runtime does not read (this runtime reads version " + Img.Version + ")");
         }
 
-        // WHICH NATIVES DID NOT RESOLVE -- recorded, NOT refused. `Img.Load`
-        // leaves a missing builtin null on purpose, and the reason is in its own
-        // comment: an image imports every builtin its NAMESPACES mention, so a
-        // trivial program imports 88 of them by reaching `clojure.core`, and
-        // almost none are called. Refusing at load would reject programs that
-        // run perfectly.
+        // A MISSING NATIVE FAILS THE BOOT. This is a DELIBERATE DEPARTURE from
+        // `Img.Load`, which leaves an unresolved builtin null on purpose and says
+        // why in its own comment: an image imports every builtin its NAMESPACES
+        // mention -- 88 for a trivial program, by reaching `clojure.core` -- and
+        // a program that never calls the missing one runs fine.
         //
-        // But a host that supplies the natives itself cannot otherwise SEE that
-        // it missed one until a program reaches it, so the list is kept and
-        // `Prop("natives-unresolved")` hands it over. A fact to query, not a
-        // verdict at the door.
+        // `four-operations` overrides that here, and names the trade rather than
+        // hiding it: the VERSION says what must be linked, so a missing native
+        // means a version mismatch. A version-matched host carries all 223 and
+        // nothing changes; a host that deliberately TRIMMED its builtin set now
+        // fails to boot a program it could have run. That is the cost, chosen.
+        //
+        // The alternative was a tally the host could query, and it was dropped
+        // because nobody reads a tally -- a gap would still be discovered when a
+        // program reached it, only later and with a number to ignore first.
+        //
+        // The message NAMES the natives. "A builtin is missing" sends a reader to
+        // the wrong place; `flint/fabs` sends them to the right one.
         var missing = new System.Collections.Generic.List<string>();
         for (int i = 0; i < loaded.nativeNames.Length; i++) {
             if (rt.natives[i] == null) missing.Add(loaded.nativeNames[i]);
         }
-        missing.Sort();
-        unresolved = missing.ToArray();
-        importedNatives = loaded.nativeNames.Length;
+        if (missing.Count > 0) {
+            missing.Sort();
+            const int show = 12;
+            string names = string.Join(", ", missing.GetRange(0, Math.Min(show, missing.Count)));
+            if (missing.Count > show) names += ", and " + (missing.Count - show) + " more";
+            throw new InvalidOperationException(
+                "flint: this host cannot supply " + missing.Count + " of the " +
+                loaded.nativeNames.Length + " natives this artifact imports: " + names + ".\n" +
+                "The artifact's version says what has to be linked, so this is a version\n" +
+                "mismatch or a trimmed runtime. `link` a replacement for each before `Boot`,\n" +
+                "or run it on a host built from the same version.");
+        }
 
         Artifact.bridge = bridge;
         // BEFORE ANYTHING RUNS. `InstallSystemPort` is what makes
@@ -334,93 +352,32 @@ public static class Artifact {
             (fn?.GetType().ToString() ?? "null") + ".");
     }
 
-    // --- prop ---------------------------------------------------------------
-
-    /// Read a metadata property of this artifact into `buf`. Returns the number
-    /// of bytes the value needs -- so a caller passing a null or short buffer is
-    /// told the size rather than failing -- or -1 if there is no such property.
-    ///
-    /// NO EDN PARSER. The metadata travels as `pr-str` of the map
-    /// `src/flint/modmeta.cljc` builds, and this scans it for the one key it was
-    /// asked for, exactly as `host/run.mjs:parseFeatures` does and for the same
-    /// reason: a runner needs three or four facts and pulling a reader in to get
-    /// them is the wrong trade. `prop("meta", buf)` hands over the whole map for
-    /// a caller that does want to parse it.
-    ///
-    /// READABLE WITHOUT BOOTING. This does not touch `rt` and does not need
-    /// `Boot` -- which is the point of `module-metadata-and-shards`: a runner
-    /// decides WHETHER to instantiate, and that decision cannot depend on
-    /// having already done it.
-    ///
-    /// IT REPORTS FACTS AND DECIDES NOTHING. There is deliberately no
-    /// `Compatible(...)` here and no comparison of any kind. WHICH SEMVER
-    /// RELATION COUNTS AS COMPATIBLE IS NOT SETTLED -- flint is pre-1.0, where
-    /// the usual "same major" rule says every release breaks everything, and
-    /// `module-metadata-and-shards` deliberately carries BOTH a version and a
-    /// hash precisely because neither alone is the answer. Baking a rule in here
-    /// would take that decision on the caller's behalf and hide it in a runtime.
-    /// So `version` and `compat-key` are exposed and the caller decides.
-    public static int Prop(string name, byte[] buf) {
-        byte[] meta = metaBytes.Length > 0 ? metaBytes : (ReadTrailer()?.Meta ?? Array.Empty<byte>());
-        byte[] v;
-        switch (name) {
-            case "meta": v = meta; break;
-            case "version": v = Scan(meta, ":version"); break;
-            case "abi": v = Scan(meta, ":abi"); break;
-            case "compat-key": v = Scan(meta, ":key"); break;
-            case "runtime": v = Encoding.UTF8.GetBytes("clr"); break;
-            case "image-version": v = Encoding.UTF8.GetBytes(Img.Version.ToString()); break;
-            // THESE TWO NEED `Boot`, and the rest do not. The asymmetry is real
-            // and worth stating rather than smoothing over: the others describe
-            // the artifact, which is inert and knowable; these describe what
-            // linking that artifact against THIS host actually produced, and
-            // there is no answer before it happens.
-            case "natives":
-                v = Encoding.UTF8.GetBytes(booted
-                    ? (importedNatives - unresolved.Length) + "/" + importedNatives + " resolved"
-                    : "unknown until boot");
-                break;
-            case "natives-unresolved":
-                v = Encoding.UTF8.GetBytes(string.Join(",", unresolved));
-                break;
-            // The image's FNV-1a, as `Img.Load` computed it. Also needs `Boot`.
-            //
-            // A CROSS-CHECK, not a feature. `flint.clr` emits IL that computes
-            // this same hash over the same `FieldRva` bytes, so three
-            // independent implementations -- the compiler's cljc, the CIL it
-            // emitted, and this C# -- have to agree on one number. A
-            // `FieldRva` array at the wrong offset returns a plausible wrong
-            // hash rather than failing, and this is what makes that visible.
-            case "fingerprint":
-                v = Encoding.UTF8.GetBytes(booted ? rt.fingerprint.ToString()
-                                                  : "unknown until boot");
-                break;
-            default: return -1;
-        }
-        if (v == null) return -1;
-        if (buf != null && buf.Length >= v.Length) Array.Copy(v, buf, v.Length);
-        return v.Length;
-    }
-
-    /// The string value following `key` in a `pr-str`'d map. Narrow on purpose,
-    /// and narrow in the way its one precedent is: only a quoted string value is
-    /// found, so `:compat` (a map) is not, and `prop("meta", ...)` is the answer
-    /// for anything structured.
-    static byte[] Scan(byte[] meta, string key) {
-        string s = Encoding.UTF8.GetString(meta);
-        int i = s.IndexOf(key + " ", StringComparison.Ordinal);
-        if (i < 0) return null;
-        int j = i + key.Length + 1;
-        if (j >= s.Length) return null;
-        if (s[j] == '"') {
-            int e = s.IndexOf('"', j + 1);
-            if (e < 0) return null;
-            return Encoding.UTF8.GetBytes(s.Substring(j + 1, e - j - 1));
-        }
-        int k = j;
-        while (k < s.Length && s[k] != ' ' && s[k] != ',' && s[k] != '}' && s[k] != ']') k++;
-        return Encoding.UTF8.GetBytes(s.Substring(j, k - j));
-    }
+    // --- metadata is NOT an operation ---------------------------------------
+    //
+    // `prop(name, buf)` WAS the fourth operation and is GONE (`four-operations`,
+    // 2026-09-24). It answered a metadata property by scanning `pr-str` output
+    // for a key, and everything about it was the wrong shape:
+    //
+    //   * metadata must be readable WITHOUT EXECUTING the artifact, and a call
+    //     is execution by definition;
+    //   * all three container formats already carry namespaced metadata a reader
+    //     gets at from outside -- a wasm custom section, a JVM class attribute,
+    //     and on the CLR a `CustomAttribute` row;
+    //   * the wasm face proved the cost. A module cannot read its own custom
+    //     sections, so `prop` there needed a SECOND copy of the metadata spliced
+    //     into linear memory, a descriptor to find it, and ~100 lines of Rust
+    //     scanning EDN with balanced-delimiter counting -- plus a gate asserting
+    //     the two copies agreed. Written, measured, reverted the same day.
+    //
+    // So the CLR answer is `MetaAttribute` below, and a reader does
+    //
+    //     var m = asm.GetCustomAttribute<_3sln.Flint.MetaAttribute>().Edn;
+    //
+    // with no metadata reader, no EDN scanner here, and nothing booted.
+    //
+    // `prop("natives")` and `prop("natives-unresolved")` went with it. The
+    // version says what has to be linked, so `Boot` FAILS on a missing native
+    // rather than handing back a tally -- see `Boot`.
 
     // --- the trailer --------------------------------------------------------
 

@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""The four operations exist, and mean the same thing, on every target.
+"""The artifact operations exist, and mean the same thing, on every target.
 
-`runtimes/four-ops/contract.edn` is the contract as data and
-`DECISIONS.md#four-operations` is the prose. This checks each target face
-against the data.
+`runtimes/artifact-ops/contract.edn` is the contract as data and
+`DECISIONS.md#four-operations` is the prose -- a slug that outlived the fourth
+operation, `prop`, which was removed on 2026-09-24. This checks each target face
+against the data, including that the removed one has not come back.
+
+NOTHING HERE IS NAMED FOR THE COUNT. It was `check-four-ops` for a day and then
+`prop` went and every name had to change. The number of operations lives in the
+contract, where changing it is an edit to data.
 
 WHY A GATE WITH ONE TARGET IN IT. Only the CLR face exists today. An assertion
 that covers one target is still worth writing, and is in fact the cheapest
@@ -117,11 +122,12 @@ class Edn:
         return tok  # keywords stay as their literal text, ':version' and so on
 
 
+
 # ------------------------------------------------------------------- extractors
 #
-# One per target face. Each answers the same three questions -- which operations
-# are declared, which status values, which prop keys -- so the checks below are
-# written once and not per target.
+# One per target face. Each answers the same questions -- which operations are
+# declared, which status values -- so the checks below are written once and not
+# per target.
 
 def clr_face(txt):
     ops = set()
@@ -132,13 +138,7 @@ def clr_face(txt):
     if body:
         for m in re.finditer(r'(\w+)\s*=\s*(\d+)', body.group(1)):
             status[int(m.group(2))] = m.group(1)
-    # The keys `Prop`'s switch handles. Anchored on the switch so an unrelated
-    # `case "x":` elsewhere in the file is not counted as a property.
-    props = set()
-    sw = re.search(r'int\s+Prop\s*\([^)]*\)\s*\{(.*?)\n    \}', txt, re.S)
-    if sw:
-        props = set(re.findall(r'case\s+"([^"]+)"\s*:', sw.group(1)))
-    return {'ops': ops, 'status': status, 'props': props}
+    return {'ops': ops, 'status': status}
 
 
 def java_face(txt):
@@ -146,8 +146,7 @@ def java_face(txt):
     status = {}
     for m in re.finditer(r'(?:public\s+)?static\s+final\s+int\s+(\w+)\s*=\s*(\d+)', txt):
         status[int(m.group(2))] = m.group(1)
-    props = set(re.findall(r'case\s+"([^"]+)"\s*(?:->|:)', txt))
-    return {'ops': ops, 'status': status, 'props': props}
+    return {'ops': ops, 'status': status}
 
 
 def rust_face(txt):
@@ -155,57 +154,63 @@ def rust_face(txt):
     status = {}
     for m in re.finditer(r'(\w+)\s*=\s*(\d+)\s*,', txt):
         status[int(m.group(2))] = m.group(1)
-    props = set(re.findall(r'"([^"]+)"\s*=>', txt))
-    return {'ops': ops, 'status': status, 'props': props}
+    return {'ops': ops, 'status': status}
 
 
 EXTRACT = {'clr': clr_face, 'jvm': java_face, 'wasm': rust_face}
 
 
+def spelling(d, target):
+    """A per-target value out of a contract map, accepting either key form."""
+    return d.get(':' + target, d.get(target))
+
+
 def main():
-    contract = Edn(read('runtimes/four-ops/contract.edn')).read()
+    contract = Edn(read('runtimes/artifact-ops/contract.edn')).read()
     ops = contract[':operations']
+    gone = contract[':removed-operations']
     want_status = {int(k): v for k, v in contract[':status'].items()}
-    props = contract[':props']
     rules = contract[':rules']
+    metadata = contract[':metadata']
 
     fails, rows, looked = [], [], 0
+    present = []
 
     for target in sorted(FACES):
         txt = read(FACES[target])
         if txt is None:
             rows.append('  --   %-4s no face at %s, skipping' % (target, FACES[target]))
             continue
+        present.append(target)
         face = EXTRACT[target](txt)
 
-        # 1. all four operations, by this target's own spelling.
+        # 1. every operation, by this target's own spelling.
         missing = [o[':op'] for o in ops
-                   if o[':spelling'].get(':' + target, o[':spelling'].get(target)) not in face['ops']]
+                   if spelling(o[':spelling'], target) not in face['ops']]
         looked += len(ops)
         if missing:
             fails.append('%s: does not declare %s' % (target, ', '.join(missing)))
 
-        # 2. the status numbers. Names may differ per host; values may not.
+        # 2. and NONE of the removed ones. A face that grows `prop` back would
+        #    otherwise read as an addition rather than the regression it is.
+        looked += len(gone)
+        for g in gone:
+            sp = spelling(g[':forbidden-spelling'], target)
+            if sp and sp in face['ops']:
+                fails.append('%s: declares `%s`, which was REMOVED from the contract. %s'
+                             % (target, sp, g[':why'].split('.')[0]))
+
+        # 3. the status numbers. Names may differ per host; values may not.
         looked += len(want_status)
-        if face['status'] and face['status'] != want_status:
+        if not face['status']:
+            fails.append('%s: declares no status values at all' % target)
+        elif face['status'] != want_status:
             fails.append('%s: status values are %r, the contract says %r'
                          % (target, face['status'], want_status))
-        elif not face['status']:
-            fails.append('%s: declares no status values at all' % target)
-
-        # 3. prop keys, BOTH DIRECTIONS. A key in the contract that no face
-        #    answers is a hole; a key a face answers that the contract does not
-        #    list is drift, and the second is the one a one-way check misses.
-        want_keys = {p[':key'] for p in props}
-        looked += len(want_keys) + len(face['props'])
-        for k in sorted(want_keys - face['props']):
-            fails.append('%s: prop "%s" is in the contract and not handled' % (target, k))
-        for k in sorted(face['props'] - want_keys):
-            fails.append('%s: prop "%s" is handled and not in the contract' % (target, k))
 
         # 4. the rules, as evidence in the source.
         for r in rules:
-            ev = r[':evidence'].get(':' + target)
+            ev = spelling(r[':evidence'], target)
             if not ev:
                 continue
             looked += 1
@@ -220,29 +225,41 @@ def main():
                 fails.append('%s: %s -- %s matches %r, which it must not'
                              % (target, r[':rule'], ev[':file'], ev[':must-not-match']))
 
-        rows.append('  ok   %-4s four operations, %d status values, %d props, %d rules'
-                    % (target, len(want_status), len(face['props']),
-                       sum(1 for r in rules if (':' + target) in r[':evidence'])))
+        rows.append('  ok   %-4s %d operations, %d refused, %d status values, %d rules'
+                    % (target, len(ops), len(gone), len(want_status),
+                       sum(1 for r in rules if spelling(r[':evidence'], target))))
 
-    # The two facts the contract shares with gates that already exist. Checked
-    # here so the contract cannot drift from them silently.
+    # ---- metadata carriers. NOT an operation, and the namespacing is the part
+    # that goes wrong quietly: all three are flat namespaces, and on the JVM an
+    # unrecognised attribute is silently ignored by specification.
+    dot = metadata[':names-must-contain']
+    for target, carrier in sorted(metadata[':carriers'].items()):
+        t = target.lstrip(':')
+        looked += 1
+        if dot not in carrier[':name']:
+            fails.append('metadata: the %s carrier is named %r, which has no %r in it -- '
+                         'these are flat namespaces and a bare name is one anyone could pick'
+                         % (t, carrier[':name'], dot))
+        ev = carrier.get(':evidence')
+        if ev:
+            looked += 1
+            src = read(ev[':file'])
+            if src is None:
+                fails.append('metadata: %s carrier evidence file missing: %s' % (t, ev[':file']))
+            elif ev[':must-contain'] not in src:
+                fails.append('metadata: %s -- %s does not say %r'
+                             % (t, ev[':file'], ev[':must-contain']))
+
+    # The fact this contract shares with a gate that already exists, checked here
+    # so the two cannot drift silently.
     meta = read('meta.edn')
     ver = re.search(r':version\s+"([^"]+)"', meta).group(1)
-    looked += 1
-    vprop = next(p for p in props if p[':key'] == 'version')
-    if vprop[':expect'].get(':from') != 'meta.edn':
-        fails.append('contract: prop "version" must come from meta.edn')
-    img = read('runtimes/clr/src/rt/Img.cs')
-    looked += 1
-    if img and not re.search(r'public\s+const\s+int\s+Version\s*=', img):
-        fails.append('contract: Img.cs no longer declares `Version`, which prop '
-                     '"image-version" is specified against')
 
     for r in rows:
         print(r)
-    print('check-four-ops: %d assertions over %d target faces (%s), version %s'
-          % (looked, sum(1 for t in FACES if read(FACES[t]) is not None),
-             ', '.join(sorted(t for t in FACES if read(FACES[t]) is not None)), ver))
+    print('check-artifact-ops: %d assertions, %d metadata carriers, %d target faces (%s), version %s'
+          % (looked, len(metadata[':carriers']),
+             len(present), ', '.join(present) or 'none', ver))
     if fails:
         for f in fails:
             print('  FAIL ' + f)

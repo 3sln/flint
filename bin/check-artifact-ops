@@ -1,15 +1,15 @@
 #!/bin/sh
-# The four operations exist, and mean the same thing, on every target that has a
-# face. `runtimes/four-ops/contract.edn` is the contract as data;
+# The artifact operations exist, and mean the same thing, on every target that has a
+# face. `runtimes/artifact-ops/contract.edn` is the contract as data;
 # `DECISIONS.md#four-operations` is the prose.
 #
 # Only the CLR face exists today, and that is exactly why this is worth having
 # now: the JVM and wasm faces are checked against the contract the instant they
-# appear, rather than against the CLR face by whoever remembers to look. Four
+# appear, rather than against the CLR face by whoever remembers to look. Several
 # faces designed in parallel is how this project got sixteen version
 # declarations and four compile-spec front ends.
 #
 # A missing face is a SKIPPED row; a face that exists and disagrees is a
 # failure. Those must not look alike -- a CLR build once routed silently to
 # "skipped" for long enough that zero CLR rows ran and nobody noticed.
-exec python3 "$(dirname "$0")/check_four_ops.py" "$@"
+exec python3 "$(dirname "$0")/check_artifact_ops.py" "$@"

@@ -1,0 +1,121 @@
+;; WHAT EVERY FLINT ARTIFACT EXPOSES, AS DATA. `DECISIONS.md#four-operations` is
+;; the prose -- a slug that outlived the fourth operation -- and
+;; `bin/check-artifact-ops` is the script that checks each face against this.
+;;
+;; WHY THIS FILE EXISTS AT ALL. Faces designed in parallel is how this project
+;; produced sixteen version declarations and four compile-spec front ends. The
+;; CLR face is the only one that exists today, so an assertion written now covers
+;; one target -- and that is the point: the second face is checked the moment it
+;; appears, against this, rather than against the first face by whoever remembers
+;; to look.
+;;
+;; It lives under `runtimes/` rather than beside any one port because it belongs
+;; to none of them. `runtimes/clr`, `runtimes/jvm` and the wasm target all answer
+;; to it.
+;;
+;; THE FILE IS COUNT-NEUTRAL ON PURPOSE. It was `four-ops` for a day; `prop` was
+;; then removed and everything named for the number had to be renamed. The count
+;; lives in the data now, not in a filename.
+
+{:format 2
+
+ ;; ---------------------------------------------------------------- the three
+ ;;
+ ;; `:spelling` is per target and deliberately NOT forced to match. Wasm cannot
+ ;; pass an object or a callback, so its bridge is the host satisfying imports; a
+ ;; CLR or JVM host hands over a real object. Forcing one spelling on all three
+ ;; would be the mistake. The SEMANTICS are not negotiable.
+ :operations
+ [{:op "boot"
+   :takes "the bridge, which becomes this sandbox's system port"
+   :returns "nothing"
+   :must "fail when a native the image imports cannot be supplied, naming it"
+   :spelling {:clr "Boot" :jvm "boot" :wasm "flint_boot"}}
+  {:op "loop"
+   :takes "nothing"
+   :returns "a status; see :status below"
+   :spelling {:clr "Loop" :jvm "loop" :wasm "flint_loop"}}
+  {:op "link"
+   :takes "a name and a function, overriding the native called that"
+   :returns "nothing"
+   :must "refuse after boot, because natives resolve exactly once at load"
+   :spelling {:clr "Link" :jvm "link" :wasm "flint_link"}}]
+
+ ;; `prop(name, buf)` WAS the fourth and is GONE (2026-09-24). Recorded here and
+ ;; not merely deleted, because a face that grows it back would otherwise look
+ ;; like an addition rather than a regression. The gate REFUSES it by name.
+ :removed-operations
+ [{:op "prop"
+   :why "metadata must be readable WITHOUT executing the artifact, and a call is
+         execution. All three containers already carry it; see :metadata below.
+         The wasm face settled it: a module cannot read its own custom sections,
+         so prop there needed a second copy of the metadata spliced into linear
+         memory, a descriptor to find it, and ~100 lines of Rust scanning EDN
+         with balanced-delimiter counting. Written, measured, reverted."
+   :forbidden-spelling {:clr "Prop" :jvm "prop" :wasm "flint_prop"}}]
+
+ ;; THESE NUMBERS ARE THE ABI. They are `flint_resume`'s and `rt.status`'s,
+ ;; unchanged, and this project treats them as the contract itself rather than an
+ ;; implementation detail to be renamed per host. A face may give them names --
+ ;; the CLR's is an enum -- but not different values.
+ :status {0 "Done" 1 "Threw" 2 "NeedsHost"}
+
+ ;; ---------------------------------------------------------------- metadata
+ ;;
+ ;; Not an operation. Each container has a path the platform already understands,
+ ;; and a reader gets at it without executing anything.
+ :metadata
+ {:value "pr-str of the map src/flint/modmeta.cljc builds -- ONE producer, one
+          string, three containers, so the three cannot drift into different
+          shapes"
+  :carriers
+  {:wasm {:kind "custom section" :name "com.3sln.flint.meta"
+          :reader "host/modmeta.mjs"}
+   :jvm {:kind "class attribute" :name "com._3sln.flint.Meta"
+         :hazard "JVMS 4.7 REQUIRES an unrecognised attribute to be silently
+                  ignored, so a collision here is QUIET"}
+   :clr {:kind "CustomAttribute row" :name "_3sln.Flint.MetaAttribute"
+         :reader "asm.GetCustomAttribute<_3sln.Flint.MetaAttribute>()"
+         :evidence {:file "runtimes/clr/src/rt/MetaAttribute.cs"
+                    :must-contain "namespace _3sln.Flint;"}}}
+  ;; REVERSE DNS, EVERY ONE. All three are flat namespaces shared with everything
+  ;; else in the process or toolchain. The wasm section was the bare word `flint`
+  ;; until 2026-09-24. The gate asserts a dot in each name rather than trusting
+  ;; that whoever adds the next one remembers.
+  :names-must-contain "."}
+
+ ;; ------------------------------------------------------------------- rules
+ ;;
+ ;; Each is a sentence from the record that a face can get wrong silently, paired
+ ;; with what the gate looks for.
+ :rules
+ [{:rule "link must precede boot, and refuse afterwards"
+   :because "natives resolve exactly once, while the image loads, so a hook
+             registered later is never reached and doing nothing quietly is the
+             worst available answer"
+   :evidence {:clr {:file "runtimes/clr/src/rt/Artifact.cs"
+                    :must-contain "`Link` must be called before `Boot`"}}}
+  {:rule "loop drains, drives, then drains again"
+   :because "the scheduler reports NeedsHost while it holds undrained events, so
+             a pump that skipped the trailing drain would report work it was
+             itself holding"
+   :evidence {:clr {:file "runtimes/clr/src/rt/Artifact.cs"
+                    :must-contain "DRAIN, THEN RUN, THEN DRAIN"}}}
+  {:rule "boot fails on a missing native, and names it"
+   :because "the VERSION says what has to be linked, so a missing native is a
+             version mismatch. This DEPARTS from Img.cs:138's deliberate
+             null-tolerance and the trade is chosen: a version-matched host
+             carries all 223 and nothing changes, a trimmed one now fails to boot
+             a program it could have run"
+   :evidence {:clr {:file "runtimes/clr/src/rt/Artifact.cs"
+                    :must-contain "cannot supply"}}}
+  {:rule "nothing decides what compatible means"
+   :because "which semver relation counts is unsettled, and pre-1.0 makes the
+             usual same-major rule say every release breaks everything"
+   :evidence {:clr {:file "runtimes/clr/src/rt/Artifact.cs"
+                    :must-not-match "(?i)\\bbool\\s+(is)?compatible"}}}
+  {:rule "metadata is not reachable only by calling"
+   :because "a runner decides WHETHER to load an artifact, and that decision
+             cannot depend on having loaded it"
+   :evidence {:clr {:file "runtimes/clr/src/rt/Artifact.cs"
+                    :must-not-match "int\\s+Prop\\s*\\("}}}]}

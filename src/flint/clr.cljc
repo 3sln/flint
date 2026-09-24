@@ -149,7 +149,17 @@
   "Tag values per coded-index kind, by table index. ECMA-335 II.24.2.6."
   {:type-def-or-ref   {:bits 2 :tags {0x02 0, 0x01 1, 0x1b 2}}
    :resolution-scope  {:bits 2 :tags {0x00 0, 0x1a 1, 0x23 2, 0x01 3}}
-   :member-ref-parent {:bits 3 :tags {0x02 0, 0x01 1, 0x1a 2, 0x06 3, 0x1b 4}}})
+   :member-ref-parent {:bits 3 :tags {0x02 0, 0x01 1, 0x1a 2, 0x06 3, 0x1b 4}}
+   ;; The widest one in the format: 22 tables, so 5 tag bits and only 11 left for
+   ;; the row id at two bytes. Nothing here comes close, but this is the coded
+   ;; index whose width flips FIRST on a big assembly, so `coded-width` earning
+   ;; its keep is not hypothetical.
+   :has-custom-attribute
+   {:bits 5 :tags {0x06 0, 0x04 1, 0x01 2, 0x02 3, 0x08 4, 0x09 5, 0x0a 6,
+                   0x00 7, 0x0e 8, 0x17 9, 0x14 10, 0x11 11, 0x1a 12, 0x1b 13,
+                   0x20 14, 0x23 15, 0x26 16, 0x27 17, 0x28 18, 0x2a 19,
+                   0x2c 20, 0x2b 21}}
+   :custom-attribute-type {:bits 3 :tags {0x06 2, 0x0a 3}}})
 
 (defn- coded
   "Encode row `rid` of table `table` as a coded index of `kind`."
@@ -618,6 +628,23 @@
   [elem]
   (cons 0x1d (if (sequential? elem) elem [elem])))
 
+(defn- ser-string
+  "A string inside a `CustomAttribute` value blob: compressed length then UTF-8.
+  NOT the same encoding as a `#Strings` entry, which is null-terminated and has
+  no length -- the two live a few bytes apart in the same file and are not
+  interchangeable."
+  [s]
+  (let [b (flint.rt/str->b s)]
+    (concat (cint (flint.rt/b-count b)) (flint.rt/b->vec b))))
+
+(defn- attr-value
+  "A `CustomAttribute` value blob for a constructor taking one string: the 0x0001
+  prolog, the argument, then a zero count of named arguments. The trailing count
+  is NOT optional -- a blob that stops after the fixed arguments is rejected when
+  the attribute is read, not when it is written."
+  [s]
+  (concat [0x01 0x00] (ser-string s) [0x00 0x00]))
+
 (defn- method-sig
   "A `MethodDefSig`/`MemberRefSig`: default calling convention, parameter count,
   return type, parameters."
@@ -686,8 +713,13 @@
   shape and it was two sources of truth for the same thing -- exactly the
   \"one fact, four front doors\" failure this project keeps finding. A `MaxStack`
   reported by code other than the code that emitted it is not evidence."
-  [{:keys [name image]}]
+  [{:keys [name image meta tfm]}]
   (let [img-len (flint.rt/b-count image)
+        ;; The metadata map as EDN, byte for byte the same string every other
+        ;; target carries. ONE PRODUCER (`flint.modmeta/describe`), one string,
+        ;; three containers -- so the three cannot drift into different shapes.
+        meta-edn (or meta "{}")
+        tfm-str (or tfm ".NETCoreApp,Version=v10.0")
         fld-tok 0x04000001                                ; Field table, row 1
 
         ;; ---- type and member references.
@@ -714,30 +746,55 @@
                    :scope [0x23 FRAMEWORK]}
                   {:ns "Flint.Rt" :name "Artifact" :scope [0x23 FLINT]}
                   {:ns "" :name "IBridge" :scope [0x01 7]}
-                  {:ns "System" :name "Byte" :scope [0x23 FRAMEWORK]}]
+                  {:ns "System" :name "Byte" :scope [0x23 FRAMEWORK]}
+                  ;; NAMESPACED, and not as a nicety. A custom attribute type is
+                  ;; a name in one flat space shared with everything else in the
+                  ;; process, so it is reverse-DNS to match `@3sln/flint` and
+                  ;; `com._3sln.flint`. On the JVM the same collision would be
+                  ;; SILENT -- JVMS 4.7 requires an unrecognised attribute to be
+                  ;; ignored -- so the hazard shape is assumed here too.
+                  {:ns "_3sln.Flint" :name "MetaAttribute" :scope [0x23 FLINT]}
+                  {:ns "System.Runtime.Versioning" :name "TargetFrameworkAttribute"
+                   :scope [0x23 FRAMEWORK]}
+                  ;; `Loop` returns the ENUM, and a signature matches on the
+                  ;; exact type rather than on the underlying one. Writing `I4`
+                  ;; here because an enum is an int produced an assembly that
+                  ;; loaded, verified and then threw
+                  ;; `MissingMethodException: Method not found: 'Int32
+                  ;; Flint.Rt.Artifact.Loop()'` at the first call -- nothing
+                  ;; earlier than the call could have caught it.
+                  {:ns "" :name "Status" :scope [0x01 7]}]
         T-MATH 3, T-ARRAY 4, T-FIELDHANDLE 5, T-HELPERS 6, T-ARTIFACT 7,
-        T-BRIDGE 8, T-BYTE 9
+        T-BRIDGE 8, T-BYTE 9, T-META 10, T-TFM 11, T-STATUS 12
 
         sig-bytes (e-array E-U1)
         memberrefs
-        [{:parent [0x01 T-MATH] :name "Max" :sig (method-sig E-I8 [E-I8 E-I8])}
-         {:parent [0x01 T-HELPERS] :name "InitializeArray"
+        ;; `:key` and not `:name`, because two of these are called `.ctor` and a
+        ;; lookup by name would silently pick the first.
+        [{:key :max :parent [0x01 T-MATH] :name "Max" :sig (method-sig E-I8 [E-I8 E-I8])}
+         {:key :init-array :parent [0x01 T-HELPERS] :name "InitializeArray"
           :sig (method-sig E-VOID [(e-class T-ARRAY) (e-valuetype T-FIELDHANDLE)])}
-         {:parent [0x01 T-ARTIFACT] :name "Boot"
+         {:key :boot :parent [0x01 T-ARTIFACT] :name "Boot"
           :sig (method-sig E-VOID [(e-class T-BRIDGE) sig-bytes])}
-         {:parent [0x01 T-ARTIFACT] :name "Loop" :sig (method-sig E-I4 [])}
+         {:key :loop :parent [0x01 T-ARTIFACT] :name "Loop"
+          :sig (method-sig (e-valuetype T-STATUS) [])}
          ;; `object`, NOT `Func<byte[],byte[]>`. A generic instantiation needs a
          ;; `TypeSpec` row and a `GENERICINST` signature, which this writer does
          ;; not emit yet; `Artifact.Link(string, object)` exists so the forwarder
          ;; can be spelled without one. The cast happens one frame in, and the
          ;; refusal names both shapes it accepts.
-         {:parent [0x01 T-ARTIFACT] :name "Link"
+         {:key :link :parent [0x01 T-ARTIFACT] :name "Link"
           :sig (method-sig E-VOID [E-STRING E-OBJECT])}
-         {:parent [0x01 T-ARTIFACT] :name "Prop"
-          :sig (method-sig E-I4 [E-STRING sig-bytes])}]
-        mref (fn [nm] (+ 0x0a000000
-                         (inc (first (keep-indexed (fn [i m] (when (= nm (:name m)) i))
-                                                  memberrefs)))))
+         ;; The two attribute constructors. `0x20` is HASTHIS: an instance
+         ;; method, which a `.ctor` is, and the one bit that distinguishes this
+         ;; signature from the static ones above.
+         {:key :meta-ctor :parent [0x01 T-META] :name ".ctor"
+          :sig (concat [0x20 0x01] [E-VOID] [E-STRING])}
+         {:key :tfm-ctor :parent [0x01 T-TFM] :name ".ctor"
+          :sig (concat [0x20 0x01] [E-VOID] [E-STRING])}]
+        mref (fn [k] (+ 0x0a000000
+                        (inc (first (keep-indexed (fn [i m] (when (= k (:key m)) i))
+                                                 memberrefs)))))
 
         ;; ---- local variable signatures, one StandAloneSig row each.
         locals [[E-I4 E-I4]                               ; Sum:   sum, i
@@ -752,7 +809,7 @@
         ;; are listed first and the rid is the position. A forward reference in
         ;; metadata is ordinary -- a token is just a table row number -- but it
         ;; does mean the order here is load-bearing.
-        method-names ["Image" "Boot" "Loop" "Link" "Prop"
+        method-names ["Image" "Boot" "Loop" "Link"
                       "Length" "At" "Sum" "Fnv1a" "LongBranch" "MaxOf"]
         mdef (fn [nm] (+ 0x06000000
                          (inc (first (keep-indexed (fn [i n] (when (= nm n) i))
@@ -767,17 +824,21 @@
                [:newarr (+ 0x01000000 T-BYTE)]            ; TypeRef System.Byte
                [:dup]
                [:ldtoken fld-tok]
-               [:call (mref "InitializeArray") 2 0]
+               [:call (mref :init-array) 2 0]
                [:ret]]}
-         ;; ---- the four operations, forwarded to the runtime the host carries.
+         ;; ---- THE THREE OPERATIONS, forwarded to the runtime the host carries.
+         ;; There is no fourth: metadata is a `CustomAttribute` row, readable
+         ;; without calling anything, which is the whole reason `prop` went.
          {:name "Boot" :sig (method-sig E-VOID [(e-class T-BRIDGE)]) :locals 0
-          :il [[:ldarg 0] [:call (mdef "Image") 0 1] [:call (mref "Boot") 2 0] [:ret]]}
-         {:name "Loop" :sig (method-sig E-I4 []) :locals 0
-          :il [[:call (mref "Loop") 0 1] [:ret]]}
+          :il [[:ldarg 0] [:call (mdef "Image") 0 1] [:call (mref :boot) 2 0] [:ret]]}
+         ;; Returns the enum, matching the runtime it forwards to. The ABI
+         ;; NUMBERS are what the contract fixes -- 0 Done, 1 Threw, 2 NeedsHost --
+         ;; and an enum carrying them is the .NET spelling of those numbers, not
+         ;; a different thing.
+         {:name "Loop" :sig (method-sig (e-valuetype T-STATUS) []) :locals 0
+          :il [[:call (mref :loop) 0 1] [:ret]]}
          {:name "Link" :sig (method-sig E-VOID [E-STRING E-OBJECT]) :locals 0
-          :il [[:ldarg 0] [:ldarg 1] [:call (mref "Link") 2 0] [:ret]]}
-         {:name "Prop" :sig (method-sig E-I4 [E-STRING sig-bytes]) :locals 0
-          :il [[:ldarg 0] [:ldarg 1] [:call (mref "Prop") 2 1] [:ret]]}
+          :il [[:ldarg 0] [:ldarg 1] [:call (mref :link) 2 0] [:ret]]}
          ;; ---- the assembler's own witnesses. Not part of the contract; they
          ;; exist so a wrong `FieldRva` offset or a mis-sized branch is visible.
          {:name "Length" :sig (method-sig E-I4 []) :locals 0
@@ -795,7 +856,7 @@
          {:name "MaxOf" :sig (method-sig E-I8 [E-I8 E-I8]) :locals 0
           ;; THE CALL DECLARES ITS OWN ARITY. `CIL` cannot know it: the effect is
           ;; in the callee's signature, which lives in a blob.
-          :il [[:ldarg 0] [:ldarg 1] [:call (mref "Max") 2 1] [:ret]]}]
+          :il [[:ldarg 0] [:ldarg 1] [:call (mref :max) 2 1] [:ret]]}]
 
         ;; Assemble bodies and place them. A fat header must be 4-byte aligned,
         ;; so each body is padded to a 4-byte boundary before the next starts --
@@ -816,7 +877,8 @@
 
         ;; ---- heaps
         arr-type (str "$ArrayType$" img-len)
-        strs (concat [(str name ".dll") "<Module>" "Program" arr-type "IMAGE" name]
+        strs (concat [(str name ".dll") "<Module>" "Program" arr-type "IMAGE" name
+                      ".ctor"]
                      (map :name assemblyrefs)
                      (map :ns typerefs) (map :name typerefs)
                      (map :name memberrefs)
@@ -825,17 +887,20 @@
 
         sig-field [0x06 0x11 (first (cint (coded :type-def-or-ref 0x02 3)))]
         ecma-token [0xb0 0x3f 0x5f 0x7f 0x11 0xd5 0x0a 0x3a]
+        attrs [{:ctor :meta-ctor :value (attr-value meta-edn)}
+               {:ctor :tfm-ctor :value (attr-value tfm-str)}]
         bh (blob-heap (concat [sig-field ecma-token]
                              (map :sig specs)
                              (map :sig memberrefs)
-                             (map locals-sig locals)))
+                             (map locals-sig locals)
+                             (map :value attrs)))
 
         S (fn [s] (get (:index sh) s))
         B (fn [b] (get (:index bh) (vec b)))
 
         ;; ---- row counts, hence index widths. The size-first pass.
         rows {0x00 1 0x01 (count typerefs) 0x02 3 0x04 1
-              0x06 (count specs) 0x0a (count memberrefs)
+              0x06 (count specs) 0x0a (count memberrefs) 0x0c (count attrs)
               0x0f 1 0x11 (count locals) 0x1d 1 0x20 1
               0x23 (count assemblyrefs)}
         heap-sizes (bit-or (if (>= (:size sh) 0x10000) 1 0)
@@ -848,6 +913,8 @@
         wtdr (coded-width :type-def-or-ref rows)
         wrs (coded-width :resolution-scope rows)
         wmrp (coded-width :member-ref-parent rows)
+        whca (coded-width :has-custom-attribute rows)
+        wcat (coded-width :custom-attribute-type rows)
 
         row-bytes
         {0x00 [(u16 0) (ix ws (S (str name ".dll"))) (ix wg 1) (ix wg 0) (ix wg 0)]
@@ -880,6 +947,16 @@
                 (let [[tbl rid] (:parent m)]
                   [(ix wmrp (coded :member-ref-parent tbl rid))
                    (ix ws (S (:name m))) (ix wb (B (:sig m)))]))
+         ;; CustomAttribute. Both hang off the ASSEMBLY (tag 14), which is what
+         ;; makes `asm.GetCustomAttribute<MetaAttribute>()` find them without
+         ;; naming a type inside. This table is one of the SORTED ones -- by
+         ;; parent -- and both rows share a parent, so the order between them is
+         ;; free.
+         0x0c (for [a attrs]
+                [(ix whca (coded :has-custom-attribute 0x20 1))
+                 (ix wcat (coded :custom-attribute-type 0x0a
+                                 (- (mref (:ctor a)) 0x0a000000)))
+                 (ix wb (B (:value a)))])
          0x0f [(u16 1) (u32 img-len) (ix (wt 0x02) 3)]
          0x11 (for [l locals] [(ix wb (B (locals-sig l)))])
          0x1d [(u32 rva-image) (ix (wt 0x04) 1)]
