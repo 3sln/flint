@@ -12419,7 +12419,7 @@ take.
 
 **What every flint artifact exposes, on every target**
 **Ratified:** ☐ not signed off
-**Status: BEING BUILT, 2026-09-24. The CLR face is written and runs (`src/flint/clr.cljc`, `runtimes/clr/src/rt/Artifact.cs`); the JVM and wasm/native faces are not.** This record exists FIRST and deliberately: four
+**Status: BEING BUILT, 2026-09-24. The CLR and JVM faces are written and run in SUBAGENT WORKTREES and are not merged; the wasm/native face is not written. Nothing named here is in the tree yet, and this line said otherwise for an afternoon -- see the note at the end.** This record exists FIRST and deliberately: four
 implementations designed in parallel is how this project produced sixteen
 version declarations, four compile-spec front ends and a `:checks` axis on one
 CLI and not the other. The contract is written down before the last three are
@@ -12628,3 +12628,209 @@ The remaining cost is not the container. It is an IL assembler -- opcode table,
 label fixups with short/long selection, computed `maxstack` -- at ~200-250
 lines, which is the same problem `src/flint/aot.cljc` already solves in 713 for
 wasm.
+
+### A status line that named files nobody could open
+
+This record shipped saying the CLR face "is written and runs" and naming two
+paths. Neither was in the tree: both were in a subagent's worktree, unmerged.
+**The other subagent caught it, and `bin/check-decisions` did not** -- it
+validated decision slugs and `sym (path:line)` pairs and never asked whether a
+bare path in a STATUS line resolved.
+
+The cost was not the wrong sentence. The JVM agent, told to mirror a working
+design, read the record, could not find the files, and **mirrored the prose
+instead of a working implementation** -- which is the exact failure this record
+was created to prevent, arriving through the record itself.
+
+`bin/check-decisions` now refuses a status line naming a file that is not in the
+tree, scoped to the status line on purpose: a decision's BODY cites paths that
+have moved or been deleted, and requiring those to resolve would make the record
+unwritable. A status is a claim about now. Verified by putting the old sentence
+back and watching it fail.
+
+*The general lesson, which this project keeps relearning:* a claim that a file
+exists is exactly the kind a script can settle, so it should never be a claim a
+reader has to take on trust.
+
+## emitters-are-cljc
+
+**Every target's emitter is one cljc implementation**
+**Ratified:** ☐ not signed off
+**Status: settled 2026-09-24. `src/flint/wasm.cljc` and `src/flint/llvm.cljc` already work this way; the CLR and JVM writers exist in subagent worktrees, unmerged.**
+
+An emitter is written ONCE, in cljc, in the compiler. Not in kin, and not by
+calling the platform's own bytecode API.
+
+**Not the platform's API, because the compiler does not run on the platform.**
+flint's CLI is babashka or native. It cannot call `java.lang.classfile`, and it
+cannot call `System.Reflection.Metadata` or `PersistedAssemblyBuilder` -- which
+was verified as PRESENT on .NET 10 before being ruled out as unreachable. Both
+remain legitimate as a FAST PATH for an SDK running on that platform, and if one
+is ever added it needs a byte-identity gate against the cljc path from the first
+commit. `bin/check-llvm` is the shape: two arms differing only in compilation,
+with the equivalence asserted rather than assumed.
+
+**Not kin, and this is the part worth arguing.** kin exists because the same
+LOGIC must exist in three HOST LANGUAGES -- the runtimes have to behave
+identically, so `portring.kin` becomes three copies that cannot drift. An emitter
+has no such requirement: **a JVM class file is the same bytes whoever wrote
+them.** There is one output, so one implementation suffices, and kin's whole
+value buys nothing. Two further costs if it went there anyway:
+
+* a LAYERING INVERSION -- the emitter would live in the runtime, so every
+  shipped artifact would carry a class-file writer it will never use, which is
+  the kind of weight `two-builds` and `calls-are-ports` both measured;
+* "built-ins when available" would mean two implementations obliged to produce
+  byte-identical output, which is this project's signature defect (sixteen
+  version declarations, four compile-spec front ends, a `:checks` axis on one
+  CLI and not the other).
+
+**The precedent was already here.** `src/flint/wasm.cljc` is 460 lines and writes
+WASM MODULES; `src/flint/image.cljc` is 277 and writes the bytecode format. A
+class file is a simpler container than either.
+
+### What it cost, measured rather than estimated
+
+A first estimate of 3 000-6 000 lines for ECMA-335 was wrong by 3-6x:
+
+    clr, from scratch, cljc     371 lines (516 with comments)
+    jvm, from scratch, cljc     198 lines (288 with comments)
+    for comparison, wasm.cljc   460
+    for comparison, image.cljc  277
+
+The CLR writer was verified by the runtime loading it AND by Roslyn compiling
+against it as a reference, Roslyn being the stricter reader. The JVM class needs
+**no `StackMapTable` at all** -- frames are required only at branch targets, and
+a delegating shim with a branch-free `anewarray`/`dup`/`ldc_w`/`aastore` run has
+none. Avoiding a `<clinit>` loop is what avoids the hardest part of a class-file
+writer.
+
+**AOT is the separate and larger half**, and it is where frames become
+unavoidable: ~450-550 lines on the JVM (dataflow for `maxstack` and frames, plus
+label fixups with short/long selection), ~200-250 for an IL assembler on the CLR.
+Both are the same problem `src/flint/aot.cljc` already solves in 713 lines for
+wasm.
+
+### What each container does with the bytecode
+
+Constant data ON the class, never a side file and never a jar resource:
+
+    clr    a `FieldRva` row pointing at raw bytes in `.text`. No encoding, no
+           chunking, any size -- 20 MB loaded and read correctly.
+    jvm    `CONSTANT_Utf8` entries in the constant pool, because a class file has
+           NO data section. Modified UTF-8, capped at 65 535 bytes per entry.
+
+**The `FieldRva` choice paid for itself twice.** Measured expansion on real flint
+images is 1.417x for a small one and 1.323x for the compiler's -- not the 1.5x a
+uniform byte distribution predicts, because an image is 32.7% zero bytes (two
+each) and only 9.1% at or above 0x80. The CLR pays none of that. And on the CLR,
+keeping the image OUT of `#Blob` keeps `HeapSizes` at 0, so every metadata heap
+index stays 2 bytes at any program size -- in `#Blob` it would cross 64 KB on any
+real program and widen every blob index in every table.
+
+**A chunk boundary is counted in ENCODED bytes.** Cutting on source bytes
+overflows the `u2` length on zero-heavy data and the class is rejected for a
+wrapped length field -- found by forcing the cap to 997 and getting 39 correct
+chunks.
+
+## one-image-per-sandbox
+
+**A sandbox holds one image for its whole life**
+**Ratified:** ☐ not signed off
+**Status: BUILT 2026-09-24, in `runtime/src/abi.rs` and `test/loader.clj`.**
+
+A second `flint_load_image` answers 3 and says to create another sandbox. A host
+running many programs creates many sandboxes; booting one is not expensive
+enough for sharing to buy anything, and a sandbox that can be re-imaged has a
+lifetime nobody can reason about.
+
+What went with the rule: a block clearing `frames`, `handlers`, the started flag,
+`stack_top` and `thrown` so a swap would not inherit the last image's state. It
+carried its own bug history -- a swapped image found the started flag already
+set, never bound its vars, and answered "`two/main` is not a function" -- which
+is the defect shape a re-imageable sandbox keeps producing.
+
+**The test that claimed to cover this never did.** `test/loader.clj` asserted "a
+second image replaces it cleanly ... in either order, any number of times", and
+its driver takes a FRESH INSTANCE PER IMAGE -- its own comment says why. So those
+rows were evidence that one module serves many sandboxes, which is the intended
+model, and never that replacement worked. The missing case is now there: two
+loads into ONE instance, wanting 0 then 3, the message naming the rule, and the
+first image still running afterwards.
+
+**`:to :native` is not being built.** A user compiles native from the LLVM IR
+`:to :llvm` already emits. An attempt at a `:native` target was written and
+reverted the same day: it needs `libflintnative.a`, which nothing ships, and its
+entry point is `flint_native_main(image, len, argc, argv)` -- a command line and
+an exit code, which is not `four-operations` and would have had to be redone.
+
+## version-is-semver
+
+**One semver string, in `meta.edn`, written out and gated**
+**Ratified:** ☐ not signed off
+**Status: BUILT 2026-09-24. `meta.edn` holds it, `bin/set-version` writes it, `bin/check-version` gates it, and `bin/check` runs that first.**
+
+Sixteen places stated a version and they disagreed EIGHT TO EIGHT -- `0.0.1` in
+the CLI, both SDK crates and every `package.json`; `0.1.0` in the runtime, the
+six units, and `bin/flint`'s fallback, which is the one that actually reaches an
+artifact through `modmeta`. Nothing compared them. 0.1.0 was chosen because it is
+the value already embedded, so nothing a host can read changed.
+
+**A COMPATIBILITY DATE WAS TRIED FIRST AND CANNOT BE SPELLED.** Tested against
+cargo and npm's own semver rather than assumed:
+
+    2026-09-24      cargo REJECTS, npm semver INVALID (a hyphen opens a prerelease)
+    2026.09.24      cargo REJECTS, npm semver INVALID (leading zeros)
+    2026.9.24       legal in both
+    20260924.1.0    legal in both, and `^` then means "same date, any same-day build"
+
+So a date IS expressible, as `YYYYMMDD.SEQ.PATCH`, and it was still declined:
+date-as-major makes every release a breaking change unless the RUNTIME separately
+promises a floor, which is the actual commitment and is not what a version
+number says.
+
+**The gate had a hole for an hour and a subagent found it.** `Cargo.lock` states
+a version per workspace member, `check-version` did not look at lockfiles, and it
+went green while the lockfile still said `0.0.1`. 16 manifests checked became 21.
+Both probes are run rather than reasoned: bumping `meta.edn` alone reports all 21
+as drifted, and a non-semver value is refused BEFORE propagation.
+
+## what-a-thread-can-wait-on
+
+**Three wake keys, and nothing else**
+**Ratified:** ☐ not signed off
+**Status: describes the tree as it is, 2026-09-24. Nothing to build; recorded because the waiter registry in `four-operations` depends on it.**
+
+Every park goes through one primitive, `park(rt, on)` in `kin/sched.kin`, and
+`on` is only ever one of three things:
+
+    a PORT            via `park-on-port` -- woken by whoever writes it, a bridge
+                      (the host) or a channel (the guest)
+    a THREAD OBJECT   via `kin/threadjoin.kin` -- woken by that thread's `settle`
+    PARK_YIELD        a yield; nothing wakes it and it is immediately re-runnable
+
+**There is no mutex, no condition variable, no sleep and no arbitrary wait**, and
+the runtime is `#![no_std]` so there could not be: `par.rs` says atomics are in
+`core` and blocking primitives are not.
+
+**Join is not a second wait primitive**, which is the part worth keeping.
+`threadjoin.kin`: "A thread is a wake key like any port; that is why `wake-on`
+takes a value rather than a port, and why joining needs no machinery of its own."
+One primitive with a different key, rather than a second mechanism to keep in
+step across four runtimes.
+
+### So threads CAN wait on each other, in exactly two shapes
+
+* **transitively through channel ports** -- each is parked on a PORT and the
+  cycle is emergent, never expressed;
+* **directly through join**, where the wake key genuinely is the other thread.
+  Self-join is refused BY NAME at the call, because "left to run, it becomes a
+  deadlock report one scheduler turn later, naming the symptom rather than the
+  mistake".
+
+**This is what makes the host-side waiter registry clean rather than partial.**
+Every wait is "parked on a key", so a registry keyed by value covers bridge ports
+natively, and the two cases it cannot see are both entirely internal to the
+sandbox. The split has no overlap: the HOST knows what it can unblock; the
+RUNTIME owns channel cycles and join cycles, which `report_deadlock` already
+finds by walking `TH_PARK_ON` for every thread.

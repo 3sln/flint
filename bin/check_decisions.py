@@ -93,6 +93,25 @@ def main():
         if not re.search(r'^\*\*Ratified:', body, re.M):
             not_decisions.append(name)
             continue
+        # A STATUS LINE THAT NAMES A FILE IS CLAIMING IT EXISTS, and that is
+        # the one claim here a script can settle. This was added 2026-09-24
+        # because `four-operations` shipped saying the CLR face "is written and
+        # runs (`src/flint/clr.cljc`, `runtimes/clr/src/rt/Artifact.cs`)" when
+        # neither file was in the tree -- both were in a subagent's worktree. A
+        # SUBAGENT CAUGHT IT, not this gate, and it mirrored the prose rather
+        # than a working file as a result.
+        #
+        # Scoped to the status line ON PURPOSE. The body of a decision cites
+        # paths that have moved, been deleted, or belong to history, and
+        # requiring those to resolve would make the record unwritable. A status
+        # is a claim about NOW.
+        for m in re.finditer(r'^\*\*Status[^\n]*', body, re.M):
+            for path in re.findall(r'`([A-Za-z0-9_./-]+\.(?:cljc|clj|rs|java|cs|mjs|js|py|edn|md))`',
+                                   m.group(0)):
+                if not os.path.exists(os.path.join(ROOT, path)):
+                    errs.append(f"{name!r}'s status names `{path}`, which is not in the "
+                                f"tree -- a status is a claim about NOW, so either the "
+                                f"file lands or the status says where it actually is")
         n = len(re.findall(r'^\*\*Status', body, re.M))
         if n == 0:
             errs.append(f"{name!r} has no status line -- a decision with no claim "
