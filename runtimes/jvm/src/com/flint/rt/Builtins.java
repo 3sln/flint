@@ -159,16 +159,46 @@ public final class Builtins {
         });
         def("/", (rt, at, n) -> byName("flint/div").apply(rt, at, n));
 
-        def("bit-and", (rt, at, n) -> Val.fixnum(Val.asFixnum(rt.vat(at)) & Val.asFixnum(rt.vat(at + 1))));
-        def("bit-or", (rt, at, n) -> Val.fixnum(Val.asFixnum(rt.vat(at)) | Val.asFixnum(rt.vat(at + 1))));
-        def("bit-xor", (rt, at, n) -> Val.fixnum(Val.asFixnum(rt.vat(at)) ^ Val.asFixnum(rt.vat(at + 1))));
-        def("bit-not", (rt, at, n) -> Val.fixnum(~Val.asFixnum(rt.vat(at))));
-        def("bit-shift-left", (rt, at, n) -> Val.fixnum(Val.asFixnum(rt.vat(at)) << Val.asFixnum(rt.vat(at + 1))));
-        def("bit-shift-right", (rt, at, n) -> Val.fixnum(Val.asFixnum(rt.vat(at)) >> Val.asFixnum(rt.vat(at + 1))));
-        def("unsigned-bit-shift-right", (rt, at, n) ->
-            Val.fixnum(Val.asFixnum(rt.vat(at)) >>> Val.asFixnum(rt.vat(at + 1))));
-        def("bit-test", (rt, at, n) ->
-            Val.bool(((Val.asFixnum(rt.vat(at)) >> Val.asFixnum(rt.vat(at + 1))) & 1) != 0));
+        // THE BITWISE OPERATIONS GO THROUGH `Num`, for the same reason the
+        // arithmetic above does. They read `Val.asFixnum` and answered
+        // `Val.fixnum`, which is `bitop`/`shiftop` in `runtime/src/builtins.rs`
+        // written with the two wrong helpers, and it was wrong three ways:
+        //
+        //   * A BOXED INTEGER'S HEAP ADDRESS WAS THE OPERAND. A fixnum's payload
+        //     is 48 bits signed (`Val.FIXNUM_MAX`), so past 2^47-1 a value is a
+        //     BIGINT on the heap -- and `asFixnum` reads the tagged payload of
+        //     whatever it is handed, which for a bigint is the address. So the
+        //     answer depended on where the collector had put it and CHANGED
+        //     BETWEEN TWO CALLS IN ONE RUN. `flint.modmeta/fnv1a` is exactly
+        //     this: it multiplies to ~7.2e16 before masking, so every module's
+        //     compatibility key was garbage on both ports -- measured,
+        //     `(bit-and (* 2166136261 16777619) 0xffffffff)` answered 121168
+        //     against native's 84696351, and 75856 for the same value written as
+        //     a literal.
+        //   * A RESULT PAST THE RANGE WAS TRUNCATED, where `rt.integer` boxes.
+        //   * `(bit-and a b c)` IGNORED `c`. Native folds over `n` arguments.
+        //
+        // `Num.asI64` is `rt.as_i64`: the integer, or null for anything that is
+        // not one, which native REFUSES rather than computing on. Nothing caught
+        // any of it because no conformance case does a bitwise operation on a
+        // value past 2^47, and `pr-str` of a wrong integer looks like an integer.
+        def("bit-and", (rt, at, n) -> bitop(rt, at, n, 0));
+        def("bit-or", (rt, at, n) -> bitop(rt, at, n, 1));
+        def("bit-xor", (rt, at, n) -> bitop(rt, at, n, 2));
+        def("bit-not", (rt, at, n) -> {
+            Long x = Num.asI64(rt, rt.vat(at));
+            return x == null ? notANumber(rt, rt.vat(at)) : Num.integer(rt, ~x);
+        });
+        def("bit-shift-left", (rt, at, n) -> shiftop(rt, at, 0));
+        def("bit-shift-right", (rt, at, n) -> shiftop(rt, at, 1));
+        def("unsigned-bit-shift-right", (rt, at, n) -> shiftop(rt, at, 2));
+        def("bit-test", (rt, at, n) -> {
+            Long x = Num.asI64(rt, rt.vat(at));
+            Long k = Num.asI64(rt, rt.vat(at + 1));
+            if (x == null) return notANumber(rt, rt.vat(at));
+            if (k == null) return notANumber(rt, rt.vat(at + 1));
+            return Val.bool(((x >> (int) (k & 63)) & 1) != 0);
+        });
 
         def("name", (rt, at, n) -> {
             long v = rt.vat(at);
@@ -1454,6 +1484,40 @@ public final class Builtins {
     /// Every unary math builtin has the same shape: refuse a non-number by
     /// NAME, else compute in double. Written once so a new one cannot get the
     /// refusal wrong.
+    /// What native's `throw_not_a_number` says, for the bitwise operations.
+    static long notANumber(Rt rt, long v) {
+        return rt.throwStr("IllegalArgumentException", "not a number: " + rt.describe(v));
+    }
+
+    /// `bit-and`/`bit-or`/`bit-xor`, ported from `bitop` in
+    /// `runtime/src/builtins.rs`. VARIADIC, folding left over every argument --
+    /// the two-argument version silently dropped the third.
+    static long bitop(Rt rt, int at, int n, int which) {
+        Long a0 = Num.asI64(rt, rt.vat(at));
+        if (a0 == null) return notANumber(rt, rt.vat(at));
+        long acc = a0;
+        for (int i = 1; i < n; i++) {
+            Long x = Num.asI64(rt, rt.vat(at + i));
+            if (x == null) return notANumber(rt, rt.vat(at + i));
+            acc = which == 0 ? acc & x : which == 1 ? acc | x : acc ^ x;
+        }
+        return Num.integer(rt, acc);
+    }
+
+    /// The shifts, ported from `shiftop`. The count is masked to 6 bits BY HAND
+    /// rather than left to the host: Java and C# both mask a `long` shift that
+    /// way and Rust does not, so native writes `k & 63` and a port that leans on
+    /// its host agrees by luck rather than by construction.
+    static long shiftop(Rt rt, int at, int which) {
+        Long x = Num.asI64(rt, rt.vat(at));
+        Long k = Num.asI64(rt, rt.vat(at + 1));
+        if (x == null) return notANumber(rt, rt.vat(at));
+        if (k == null) return notANumber(rt, rt.vat(at + 1));
+        int s = (int) (k & 63);
+        long r = which == 0 ? x << s : which == 1 ? x >> s : x >>> s;
+        return Num.integer(rt, r);
+    }
+
     static long mathOne(Rt rt, long v, D1 f) {
         if (!Num.isNumber(rt, v)) {
             return rt.throwStr("IllegalArgumentException",

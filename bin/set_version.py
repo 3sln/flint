@@ -56,8 +56,6 @@ FLINT = "bin/flint"
 # but only when it happens to run -- so the gate has to say so, and `--check`
 # must not be the only thing that would have noticed.
 LOCK = "Cargo.lock"
-LOCK_MEMBERS = ["flint-cli", "flint-native-abi", "flint-rt", "flint-sdk",
-                "flint-c-sdk", "flint-conc", "flint-snap"]
 
 def semver_ok(v):
     return re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?", v)
@@ -114,15 +112,26 @@ def main():
     lock = ROOT / LOCK
     if lock.is_file():
         lt = lock.read_text()
-        for name in LOCK_MEMBERS:
-            m = re.search(r'(?m)^name = "' + re.escape(name) + r'"\nversion = "([^"]*)"', lt)
-            if not m:
-                continue                      # not a member here; not an error
+        # DERIVED, NOT LISTED. The first version of this checked a hardcoded
+        # list of member names and missed one called plain `flint` -- so the
+        # gate went green while cargo was quietly rewriting that line. A
+        # WORKSPACE MEMBER is a `[[package]]` with no `source = ` field;
+        # everything from a registry has one. That rule needs no maintenance
+        # when a crate is added, which is the whole reason the list was wrong.
+        for blk in re.finditer(r'(?ms)^\[\[package\]\]\n(.*?)(?=^\[\[package\]\]|\Z)', lt):
+            body = blk.group(1)
+            if re.search(r'(?m)^source = ', body):
+                continue
+            nm = re.search(r'(?m)^name = "([^"]*)"', body)
+            vm = re.search(r'(?m)^version = "([^"]*)"', body)
+            if not (nm and vm):
+                continue
             n += 1
-            if m.group(1) != WANT:
-                bad.append(f"{LOCK} [{name}]: {m.group(1)}")
+            if vm.group(1) != WANT:
+                bad.append(f"{LOCK} [{nm.group(1)}]: {vm.group(1)}")
                 if not check:
-                    lt = (lt[:m.start(1)] + WANT + lt[m.end(1):])
+                    at = blk.start(1) + vm.start(1)
+                    lt = lt[:at] + WANT + lt[at + len(vm.group(1)):]
         if not check:
             lock.write_text(lt)
 

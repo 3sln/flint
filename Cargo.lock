@@ -232,7 +232,7 @@ dependencies = [
 
 [[package]]
 name = "flint"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "flint-conc",
  "flint-rt",
@@ -240,7 +240,7 @@ dependencies = [
 
 [[package]]
 name = "flint-c"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "flint",
 ]

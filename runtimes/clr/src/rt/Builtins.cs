@@ -130,18 +130,32 @@ public static class Builtins {
         });
         Def("/", (rt, at, n) => ByName("flint/div")(rt, at, n));
 
-        Def("bit-and", (rt, at, n) => Val.Fixnum(Val.AsFixnum(rt.VAt(at)) & Val.AsFixnum(rt.VAt(at + 1))));
-        Def("bit-or", (rt, at, n) => Val.Fixnum(Val.AsFixnum(rt.VAt(at)) | Val.AsFixnum(rt.VAt(at + 1))));
-        Def("bit-xor", (rt, at, n) => Val.Fixnum(Val.AsFixnum(rt.VAt(at)) ^ Val.AsFixnum(rt.VAt(at + 1))));
-        Def("bit-not", (rt, at, n) => Val.Fixnum(~Val.AsFixnum(rt.VAt(at))));
-        Def("bit-shift-left", (rt, at, n) =>
-            Val.Fixnum(Val.AsFixnum(rt.VAt(at)) << (int) Val.AsFixnum(rt.VAt(at + 1))));
-        Def("bit-shift-right", (rt, at, n) =>
-            Val.Fixnum(Val.AsFixnum(rt.VAt(at)) >> (int) Val.AsFixnum(rt.VAt(at + 1))));
-        Def("unsigned-bit-shift-right", (rt, at, n) =>
-            Val.Fixnum((long)((ulong) Val.AsFixnum(rt.VAt(at)) >> (int) Val.AsFixnum(rt.VAt(at + 1)))));
-        Def("bit-test", (rt, at, n) =>
-            Val.Bool(((Val.AsFixnum(rt.VAt(at)) >> (int) Val.AsFixnum(rt.VAt(at + 1))) & 1) != 0));
+        // THE BITWISE OPERATIONS GO THROUGH `Num`, for the reason
+        // `runtimes/jvm/src/com/flint/rt/Builtins.java` gives at the same place.
+        // These read `Val.AsFixnum` and answered `Val.Fixnum`, which is
+        // `bitop`/`shiftop` in `runtime/src/builtins.rs` written with the two
+        // wrong helpers: past `Val.FIXNUM_MAX` a value is a BIGINT and
+        // `AsFixnum` read its HEAP ADDRESS as the operand, so the answer moved
+        // when the collector did; a result past the range was truncated rather
+        // than boxed; `(bit-and a b c)` dropped `c`; and a non-number was
+        // computed on instead of refused.
+        Def("bit-and", (rt, at, n) => BitOp(rt, at, n, 0));
+        Def("bit-or", (rt, at, n) => BitOp(rt, at, n, 1));
+        Def("bit-xor", (rt, at, n) => BitOp(rt, at, n, 2));
+        Def("bit-not", (rt, at, n) => {
+            var x = Num.AsI64(rt, rt.VAt(at));
+            return x == null ? NotANumber(rt, rt.VAt(at)) : Num.Integer(rt, ~x.Value);
+        });
+        Def("bit-shift-left", (rt, at, n) => ShiftOp(rt, at, 0));
+        Def("bit-shift-right", (rt, at, n) => ShiftOp(rt, at, 1));
+        Def("unsigned-bit-shift-right", (rt, at, n) => ShiftOp(rt, at, 2));
+        Def("bit-test", (rt, at, n) => {
+            var x = Num.AsI64(rt, rt.VAt(at));
+            var k = Num.AsI64(rt, rt.VAt(at + 1));
+            if (x == null) return NotANumber(rt, rt.VAt(at));
+            if (k == null) return NotANumber(rt, rt.VAt(at + 1));
+            return Val.Bool(((x.Value >> (int)(k.Value & 63)) & 1) != 0);
+        });
 
         Def("name", (rt, at, n) => {
             long v = rt.VAt(at);
@@ -1343,6 +1357,40 @@ public static class Builtins {
     /// Every unary math builtin has the same shape: refuse a non-number by
     /// NAME, else compute in double. Written once so a new one cannot get the
     /// refusal wrong.
+    /// What native's `throw_not_a_number` says, for the bitwise operations.
+    static long NotANumber(Rt rt, long v) =>
+        rt.ThrowStr("IllegalArgumentException", "not a number: " + rt.Describe(v));
+
+    /// `bit-and`/`bit-or`/`bit-xor`, ported from `bitop` in
+    /// `runtime/src/builtins.rs`. VARIADIC, folding left over every argument.
+    static long BitOp(Rt rt, int at, int n, int which) {
+        var a0 = Num.AsI64(rt, rt.VAt(at));
+        if (a0 == null) return NotANumber(rt, rt.VAt(at));
+        long acc = a0.Value;
+        for (int i = 1; i < n; i++) {
+            var x = Num.AsI64(rt, rt.VAt(at + i));
+            if (x == null) return NotANumber(rt, rt.VAt(at + i));
+            acc = which == 0 ? acc & x.Value : which == 1 ? acc | x.Value : acc ^ x.Value;
+        }
+        return Num.Integer(rt, acc);
+    }
+
+    /// The shifts, ported from `shiftop`. The count is masked to 6 bits BY HAND
+    /// rather than left to the host: C# and Java both mask a 64-bit shift that
+    /// way and Rust does not, so native writes `k & 63` and a port that leans on
+    /// its host agrees by luck rather than by construction.
+    static long ShiftOp(Rt rt, int at, int which) {
+        var x = Num.AsI64(rt, rt.VAt(at));
+        var k = Num.AsI64(rt, rt.VAt(at + 1));
+        if (x == null) return NotANumber(rt, rt.VAt(at));
+        if (k == null) return NotANumber(rt, rt.VAt(at + 1));
+        int s = (int)(k.Value & 63);
+        long r = which == 0 ? x.Value << s
+               : which == 1 ? x.Value >> s
+               : (long)((ulong) x.Value >> s);
+        return Num.Integer(rt, r);
+    }
+
     static long MathOne(Rt rt, long v, System.Func<double, double> f) {
         if (!Num.IsNumber(rt, v))
             return rt.ThrowStr("IllegalArgumentException", "not a number: " + rt.Describe(v));

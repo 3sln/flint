@@ -279,7 +279,27 @@ cat > out/rt-probe/probe.cljc <<'PROBE'
 ;; snapshot checks below stop this program MID-flight and require frames to
 ;; still be live when they do. The corpus alone finishes too soon to be
 ;; caught in the middle.
-(defn main [_] (+ (fold) (run 1000)))
+(defn- wide []
+  ;; PAST THE FIXNUM BOUNDARY, which nothing above reaches. `mix` uses
+  ;; `bit-xor`, so the corpus LOOKED like it covered the bitwise family -- but
+  ;; `hash` times 40 stays inside 48 bits, so every operand was a fixnum and
+  ;; `Val.asFixnum` read it correctly. Both ports answered a BIGINT's HEAP
+  ;; ADDRESS for anything wider: 75696 against native's 281474976710657.
+  ;;
+  ;; 281474976710657 is 2^48+1 -- one past the signed 48-bit fixnum payload --
+  ;; so every operand here is a heap value on all four runtimes, and the shift
+  ;; produces one rather than being handed one.
+  (+ (bit-and 281474976710657 -1)
+     (bit-or 281474976710657 0)
+     (bit-xor 281474976710657 0)
+     (bit-shift-left 1 50)
+     (bit-shift-right 281474976710657 1)
+     (bit-not 281474976710656)
+     (if (bit-test 281474976710657 48) 1 0)
+     ;; THREE ARGUMENTS, because the ports folded only the first two and
+     ;; silently dropped the rest.
+     (bit-and 281474976710657 -1 -1)))
+(defn main [_] (+ (fold) (run 1000) (wide)))
 PROBE
 ./bin/flint :src out/rt-probe :fn probe/main --emit-image \
   :out out/rt-probe/probe.img >/dev/null 2>&1
