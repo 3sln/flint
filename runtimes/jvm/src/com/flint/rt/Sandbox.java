@@ -194,7 +194,11 @@ public final class Sandbox {
         // and a failure that says "8 natives are missing" sends someone reading the
         // wrong file.
         if (!missing.isEmpty()) {
-            current = null;
+            // `current` STAYS UNSET, so a host can `link` what it was missing and
+            // try again -- which is what `FourOps` does to prove this path. It is
+            // unset rather than cleared: the guard at the top already refused a
+            // second boot, so nothing has been assigned yet, and a `current = null`
+            // here would read as cleanup that does nothing.
             int shown = Math.min(missing.size(), 8);
             throw new IllegalStateException(
                 "this runtime does not carry " + missing.size() + " of the "
