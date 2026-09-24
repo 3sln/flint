@@ -316,6 +316,24 @@ public static class Artifact {
         Builtins.Register(name, fn);
     }
 
+    /// The same, taking `object`, for a caller that cannot name either delegate
+    /// type in a signature.
+    ///
+    /// THIS EXISTS FOR A WRITER, NOT FOR A HOST. A generated artifact's `link`
+    /// forwards to this because `Func<byte[],byte[]>` is a GENERIC
+    /// INSTANTIATION, and spelling one in metadata needs a `TypeSpec` row and a
+    /// `GENERICINST` signature that `flint.clr` does not emit yet. `object`
+    /// needs neither. When the writer grows `TypeSpec` this can go, and until
+    /// then the cast is one frame in and the refusal names both shapes.
+    public static void Link(string name, object fn) {
+        if (fn is Func<byte[], byte[]> wire) { Link(name, wire); return; }
+        if (fn is Builtins.Fn raw) { LinkRaw(name, raw); return; }
+        throw new ArgumentException(
+            "flint: `link` takes a Func<byte[],byte[]> (wire bytes in, wire bytes out) or a\n" +
+            "Flint.Rt.Builtins.Fn (the interpreter's own convention). Got " +
+            (fn?.GetType().ToString() ?? "null") + ".");
+    }
+
     // --- prop ---------------------------------------------------------------
 
     /// Read a metadata property of this artifact into `buf`. Returns the number

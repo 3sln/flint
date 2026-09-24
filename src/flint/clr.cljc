@@ -251,6 +251,11 @@
    :newarr    {:code [0x8d] :operand :tok :pop 1 :push 1}
    :ldlen     {:code [0x8e] :operand :none :pop 1 :push 1}
    :box       {:code [0x8c] :operand :tok :pop 1 :push 1}
+   ;; `ldtoken` on a `FieldRva` field, then `RuntimeHelpers.InitializeArray`, is
+   ;; how a C# array initialiser copies `.text` bytes into a managed array. It
+   ;; is the ONE mechanism that turns the embedded image into a `byte[]` the
+   ;; runtime can be handed, so the whole artifact turns on this opcode.
+   :ldtoken   {:code [0xd0] :operand :tok :pop 0 :push 1}
    :throw     {:code [0x7a] :operand :none :pop 1 :push 0 :terminal true}
    ;; `call` and friends CANNOT have a static effect here: it is the callee's
    ;; signature, which this table cannot see. So they demand their own, and a
@@ -582,14 +587,44 @@
 ;; wrong number rather than failing, so the caller compares them against values
 ;; computed outside the assembly.
 
+;; ---- signature element types (ECMA-335 II.23.1.16)
+;;
+;; The subset this needs. A general encoder would also cover generic
+;; instantiations (`GENERICINST`, which needs a `TypeSpec` row), byrefs and
+;; custom modifiers; none of those appear here, and `Link` is deliberately
+;; spelled to avoid the first -- see its comment.
+
+(def ^:private E-VOID 0x01)
+(def ^:private E-U1 0x05)
 (def ^:private E-I4 0x08)
 (def ^:private E-I8 0x0a)
+(def ^:private E-STRING 0x0e)
+(def ^:private E-OBJECT 0x1c)
+
+(defn- e-class
+  "A reference type, by `TypeRef` row."
+  [rid]
+  (cons 0x12 (cint (coded :type-def-or-ref 0x01 rid))))
+
+(defn- e-valuetype
+  "A value type, by `TypeRef` row. `VALUETYPE` and `CLASS` are different tags and
+  getting them the wrong way round is accepted by the writer and rejected by the
+  loader."
+  [rid]
+  (cons 0x11 (cint (coded :type-def-or-ref 0x01 rid))))
+
+(defn- e-array
+  "A single-dimension zero-based array of `elem`."
+  [elem]
+  (cons 0x1d (if (sequential? elem) elem [elem])))
 
 (defn- method-sig
   "A `MethodDefSig`/`MemberRefSig`: default calling convention, parameter count,
   return type, parameters."
   [ret params]
-  (concat [0x00 (count params) ret] params))
+  (concat [0x00 (count params)]
+          (if (sequential? ret) ret [ret])
+          (mapcat (fn [p] (if (sequential? p) p [p])) params)))
 
 (defn- locals-sig
   "A `LocalVarSig`. `0x07` is the one thing that distinguishes it from a method
@@ -643,18 +678,66 @@
 (defn assemble
   "Emit a loadable .NET assembly carrying `image` as a static byte array.
 
-  `{:name \"T\" :image <byte-string>}` -> byte string."
+  `{:name \"T\" :image <byte-string>}` ->
+  `{:bytes <byte-string> :methods [{:name :form :code-len :max-stack} ...]}`.
+
+  THE FACTS COME BACK WITH THE BYTES, rather than from a second function that
+  rebuilds the same method list. A `describe` beside this one was the obvious
+  shape and it was two sources of truth for the same thing -- exactly the
+  \"one fact, four front doors\" failure this project keeps finding. A `MaxStack`
+  reported by code other than the code that emitted it is not evidence."
   [{:keys [name image]}]
   (let [img-len (flint.rt/b-count image)
         fld-tok 0x04000001                                ; Field table, row 1
 
-        ;; ---- type and member references. TypeRef rows, in order, then the
-        ;; MemberRefs that hang off them.
-        typerefs [["System" "Object"] ["System" "ValueType"] ["System" "Math"]]
-        sig-max (method-sig E-I8 [E-I8 E-I8])
-        memberrefs [{:parent-table 0x01 :parent-rid 3 :name "Max" :sig sig-max}]
-        ;; MemberRef tokens are table 0x0a.
-        max-tok 0x0a000001
+        ;; ---- type and member references.
+        ;;
+        ;; TWO ASSEMBLY REFERENCES: the framework, and flint's runtime. The
+        ;; second is the whole of `four-operations`' "the artifact carries the
+        ;; program, NOT the runtime" -- the interpreter, the collector and the
+        ;; builtins are a dependency this assembly NAMES and does not contain.
+        ;; So the artifact is self-contained in the sense of holding all of the
+        ;; program's code, and it does not run standalone.
+        assemblyrefs [{:name "System.Runtime" :major 10}
+                      {:name "Flint" :major 1}]
+        FRAMEWORK 1
+        FLINT 2
+        ;; TypeRef rows, in order. `IBridge` is NESTED in `Artifact`, so its
+        ;; resolution scope is the TypeRef for `Artifact` and not an assembly --
+        ;; the one place the scope is not simply "which assembly".
+        typerefs [{:ns "System" :name "Object" :scope [0x23 FRAMEWORK]}
+                  {:ns "System" :name "ValueType" :scope [0x23 FRAMEWORK]}
+                  {:ns "System" :name "Math" :scope [0x23 FRAMEWORK]}
+                  {:ns "System" :name "Array" :scope [0x23 FRAMEWORK]}
+                  {:ns "System" :name "RuntimeFieldHandle" :scope [0x23 FRAMEWORK]}
+                  {:ns "System.Runtime.CompilerServices" :name "RuntimeHelpers"
+                   :scope [0x23 FRAMEWORK]}
+                  {:ns "Flint.Rt" :name "Artifact" :scope [0x23 FLINT]}
+                  {:ns "" :name "IBridge" :scope [0x01 7]}
+                  {:ns "System" :name "Byte" :scope [0x23 FRAMEWORK]}]
+        T-MATH 3, T-ARRAY 4, T-FIELDHANDLE 5, T-HELPERS 6, T-ARTIFACT 7,
+        T-BRIDGE 8, T-BYTE 9
+
+        sig-bytes (e-array E-U1)
+        memberrefs
+        [{:parent [0x01 T-MATH] :name "Max" :sig (method-sig E-I8 [E-I8 E-I8])}
+         {:parent [0x01 T-HELPERS] :name "InitializeArray"
+          :sig (method-sig E-VOID [(e-class T-ARRAY) (e-valuetype T-FIELDHANDLE)])}
+         {:parent [0x01 T-ARTIFACT] :name "Boot"
+          :sig (method-sig E-VOID [(e-class T-BRIDGE) sig-bytes])}
+         {:parent [0x01 T-ARTIFACT] :name "Loop" :sig (method-sig E-I4 [])}
+         ;; `object`, NOT `Func<byte[],byte[]>`. A generic instantiation needs a
+         ;; `TypeSpec` row and a `GENERICINST` signature, which this writer does
+         ;; not emit yet; `Artifact.Link(string, object)` exists so the forwarder
+         ;; can be spelled without one. The cast happens one frame in, and the
+         ;; refusal names both shapes it accepts.
+         {:parent [0x01 T-ARTIFACT] :name "Link"
+          :sig (method-sig E-VOID [E-STRING E-OBJECT])}
+         {:parent [0x01 T-ARTIFACT] :name "Prop"
+          :sig (method-sig E-I4 [E-STRING sig-bytes])}]
+        mref (fn [nm] (+ 0x0a000000
+                         (inc (first (keep-indexed (fn [i m] (when (= nm (:name m)) i))
+                                                  memberrefs)))))
 
         ;; ---- local variable signatures, one StandAloneSig row each.
         locals [[E-I4 E-I4]                               ; Sum:   sum, i
@@ -665,26 +748,54 @@
         ;; laid out in order; a method's RVA is not knowable until the ones
         ;; before it have been assembled, which is why this is a reduction and
         ;; not a map.
-        specs [{:name "Length" :sig (method-sig E-I4 [])
-                :locals 0
-                :il [[:ldc.i4 img-len] [:ret]]}
-               {:name "At" :sig (method-sig E-I4 [E-I4])
-                :locals 0
-                :il [[:ldsflda fld-tok] [:ldarg 0] [:add] [:ldind.u1] [:ret]]}
-               {:name "Sum" :sig (method-sig E-I4 [])
-                :locals 2 :local-sig (sig-tok 1)
-                :il (sum-il fld-tok img-len)}
-               {:name "Fnv1a" :sig (method-sig E-I8 [])
-                :locals 2 :local-sig (sig-tok 2)
-                :il (fnv-il fld-tok img-len)}
-               {:name "LongBranch" :sig (method-sig E-I4 [])
-                :locals 0
-                :il (long-branch-il 200)}
-               {:name "MaxOf" :sig (method-sig E-I8 [E-I8 E-I8])
-                :locals 0
-                ;; THE CALL DECLARES ITS OWN ARITY. `CIL` cannot know it: the
-                ;; effect is in the callee's signature, which lives in a blob.
-                :il [[:ldarg 0] [:ldarg 1] [:call max-tok 2 1] [:ret]]}]
+        ;; Method tokens are needed BEFORE the IL that calls them, so the names
+        ;; are listed first and the rid is the position. A forward reference in
+        ;; metadata is ordinary -- a token is just a table row number -- but it
+        ;; does mean the order here is load-bearing.
+        method-names ["Image" "Boot" "Loop" "Link" "Prop"
+                      "Length" "At" "Sum" "Fnv1a" "LongBranch" "MaxOf"]
+        mdef (fn [nm] (+ 0x06000000
+                         (inc (first (keep-indexed (fn [i n] (when (= nm n) i))
+                                                  method-names)))))
+        specs
+        [;; THE IMAGE, AS A MANAGED ARRAY. `ldtoken` on the `FieldRva` field and
+         ;; `InitializeArray` is exactly what a C# array initialiser compiles
+         ;; to: the bytes are copied out of `.text` on demand rather than living
+         ;; twice. This is what makes the embedded image reachable at all.
+         {:name "Image" :sig (method-sig sig-bytes []) :locals 0
+          :il [[:ldc.i4 img-len]
+               [:newarr (+ 0x01000000 T-BYTE)]            ; TypeRef System.Byte
+               [:dup]
+               [:ldtoken fld-tok]
+               [:call (mref "InitializeArray") 2 0]
+               [:ret]]}
+         ;; ---- the four operations, forwarded to the runtime the host carries.
+         {:name "Boot" :sig (method-sig E-VOID [(e-class T-BRIDGE)]) :locals 0
+          :il [[:ldarg 0] [:call (mdef "Image") 0 1] [:call (mref "Boot") 2 0] [:ret]]}
+         {:name "Loop" :sig (method-sig E-I4 []) :locals 0
+          :il [[:call (mref "Loop") 0 1] [:ret]]}
+         {:name "Link" :sig (method-sig E-VOID [E-STRING E-OBJECT]) :locals 0
+          :il [[:ldarg 0] [:ldarg 1] [:call (mref "Link") 2 0] [:ret]]}
+         {:name "Prop" :sig (method-sig E-I4 [E-STRING sig-bytes]) :locals 0
+          :il [[:ldarg 0] [:ldarg 1] [:call (mref "Prop") 2 1] [:ret]]}
+         ;; ---- the assembler's own witnesses. Not part of the contract; they
+         ;; exist so a wrong `FieldRva` offset or a mis-sized branch is visible.
+         {:name "Length" :sig (method-sig E-I4 []) :locals 0
+          :il [[:ldc.i4 img-len] [:ret]]}
+         {:name "At" :sig (method-sig E-I4 [E-I4]) :locals 0
+          :il [[:ldsflda fld-tok] [:ldarg 0] [:add] [:ldind.u1] [:ret]]}
+         {:name "Sum" :sig (method-sig E-I4 [])
+          :locals 2 :local-sig (sig-tok 1)
+          :il (sum-il fld-tok img-len)}
+         {:name "Fnv1a" :sig (method-sig E-I8 [])
+          :locals 2 :local-sig (sig-tok 2)
+          :il (fnv-il fld-tok img-len)}
+         {:name "LongBranch" :sig (method-sig E-I4 []) :locals 0
+          :il (long-branch-il 200)}
+         {:name "MaxOf" :sig (method-sig E-I8 [E-I8 E-I8]) :locals 0
+          ;; THE CALL DECLARES ITS OWN ARITY. `CIL` cannot know it: the effect is
+          ;; in the callee's signature, which lives in a blob.
+          :il [[:ldarg 0] [:ldarg 1] [:call (mref "Max") 2 1] [:ret]]}]
 
         ;; Assemble bodies and place them. A fat header must be 4-byte aligned,
         ;; so each body is padded to a 4-byte boundary before the next starts --
@@ -705,9 +816,9 @@
 
         ;; ---- heaps
         arr-type (str "$ArrayType$" img-len)
-        strs (concat [(str name ".dll") "<Module>" "Program" arr-type "IMAGE"
-                      name "System.Runtime"]
-                     (map first typerefs) (map second typerefs)
+        strs (concat [(str name ".dll") "<Module>" "Program" arr-type "IMAGE" name]
+                     (map :name assemblyrefs)
+                     (map :ns typerefs) (map :name typerefs)
                      (map :name memberrefs)
                      (map :name specs))
         sh (strings-heap strs)
@@ -725,7 +836,8 @@
         ;; ---- row counts, hence index widths. The size-first pass.
         rows {0x00 1 0x01 (count typerefs) 0x02 3 0x04 1
               0x06 (count specs) 0x0a (count memberrefs)
-              0x0f 1 0x11 (count locals) 0x1d 1 0x20 1 0x23 1}
+              0x0f 1 0x11 (count locals) 0x1d 1 0x20 1
+              0x23 (count assemblyrefs)}
         heap-sizes (bit-or (if (>= (:size sh) 0x10000) 1 0)
                            (if (>= 16 0x10000) 2 0)
                            (if (>= (:size bh) 0x10000) 4 0))
@@ -739,9 +851,10 @@
 
         row-bytes
         {0x00 [(u16 0) (ix ws (S (str name ".dll"))) (ix wg 1) (ix wg 0) (ix wg 0)]
-         0x01 (for [[ns' n'] typerefs]
-                [(ix wrs (coded :resolution-scope 0x23 1))
-                 (ix ws (S n')) (ix ws (S ns'))])
+         0x01 (for [t typerefs]
+                (let [[tbl rid] (:scope t)]
+                  [(ix wrs (coded :resolution-scope tbl rid))
+                   (ix ws (S (:name t))) (ix ws (S (:ns t)))]))
          ;; TypeDef. FieldList/MethodList are RANGE STARTS: a row owns from its
          ;; own start up to the next row's, which is why `<Module>` and `Program`
          ;; both say 1 and `<Module>` therefore owns nothing. The third row must
@@ -764,15 +877,21 @@
                    (ix ws (S (:name s))) (ix wb (B (:sig s))) (ix (wt 0x08) 1)])
                 specs)
          0x0a (for [m memberrefs]
-                [(ix wmrp (coded :member-ref-parent (:parent-table m) (:parent-rid m)))
-                 (ix ws (S (:name m))) (ix wb (B (:sig m)))])
+                (let [[tbl rid] (:parent m)]
+                  [(ix wmrp (coded :member-ref-parent tbl rid))
+                   (ix ws (S (:name m))) (ix wb (B (:sig m)))]))
          0x0f [(u16 1) (u32 img-len) (ix (wt 0x02) 3)]
          0x11 (for [l locals] [(ix wb (B (locals-sig l)))])
          0x1d [(u32 rva-image) (ix (wt 0x04) 1)]
          0x20 [(u32 0) (u16 0) (u16 0) (u16 0) (u16 0) (u32 0)
                (ix wb 0) (ix ws (S name)) (ix ws 0)]
-         0x23 [(u16 10) (u16 0) (u16 0) (u16 0) (u32 0)
-               (ix wb (B ecma-token)) (ix ws (S "System.Runtime")) (ix ws 0) (ix wb 0)]}
+         ;; AssemblyRef. The framework rows carry the ECMA public key TOKEN --
+         ;; `Flags` bit 0 stays clear to say it is a token and not a key -- and
+         ;; flint's own runtime is unsigned, so it carries nothing.
+         0x23 (for [a assemblyrefs]
+                [(u16 (:major a)) (u16 0) (u16 0) (u16 0) (u32 0)
+                 (ix wb (if (= "Flint" (:name a)) 0 (B ecma-token)))
+                 (ix ws (S (:name a))) (ix ws 0) (ix wb 0)])}
 
         md (metadata {:rows rows :row-bytes row-bytes :heap-sizes heap-sizes
                       :strings sh :blobs bh
@@ -795,7 +914,13 @@
         text-len (flint.rt/b-count text)
         text-raw (align text-len 0x200)
         size-of-image (align (+ text-rva text-len) 0x2000)]
-    (->bytes
+    {:methods (for [m (:out placed)]
+                {:name (:name (:spec m))
+                 :form (if (:tiny? m) :tiny :fat)
+                 :code-len (:code-len m)
+                 :max-stack (:max-stack m)})
+     :bytes
+     (->bytes
       [;; ---- DOS header. 128 bytes, and the only part that matters is the
        ;; `e_lfanew` at 0x3c saying where the PE header starts.
        [0x4d 0x5a 0x90 0x00 0x03 0x00 0x00 0x00 0x04 0x00 0x00 0x00 0xff 0xff 0x00 0x00
@@ -849,22 +974,4 @@
        (zeros (- text-file-off headers-size))
 
        ;; ---- the section itself
-       text (zeros (- text-raw text-len))])))
-
-(defn describe
-  "What `assemble` would emit, without emitting it: the per-method assembly
-  facts. For the gate and for a human checking that the fixup pass did what it
-  claims -- a `MaxStack` nobody looks at is a number nobody has checked."
-  [{:keys [image]}]
-  (let [n (flint.rt/b-count image)
-        fld 0x04000001]
-    (for [[nm il nlocals]
-          [["Length" [[:ldc.i4 n] [:ret]] 0]
-           ["At" [[:ldsflda fld] [:ldarg 0] [:add] [:ldind.u1] [:ret]] 0]
-           ["Sum" (sum-il fld n) 2]
-           ["Fnv1a" (fnv-il fld n) 2]
-           ["LongBranch" (long-branch-il 200) 0]
-           ["MaxOf" [[:ldarg 0] [:ldarg 1] [:call 0x0a000001 2 1] [:ret]] 0]]]
-      (let [b (body il nlocals (if (pos? nlocals) 0x11000001 0))]
-        {:name nm :max-stack (:max-stack b) :code-len (:code-len b)
-         :form (if (:tiny? b) :tiny :fat)}))))
+       text (zeros (- text-raw text-len))])}))
