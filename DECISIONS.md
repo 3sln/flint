@@ -13042,6 +13042,33 @@ by itself, checked by removing the arm.
   target, so it belongs in the file that emits that target -- which is also why
   `jvm/describe` could carry the "not wasm's key" reasoning in one comment instead
   of in every caller.
+
+  **WASM CONVERGED TOO, 2026-09-25, and it was the caller that proved the rule.**
+  `flint.wasm/describe` owns `:memory :unshared` -- a COMPATIBILITY KEY input,
+  stated twice until now -- the identical `:imports` derivation, and the five
+  feature probes. `link.cljc` and `bundle.cljc` pass only what each alone knows: a
+  linked module takes `:abi` and `:units` from the units it linked, a bundled one
+  has a single known runtime, and that difference is real rather than duplication.
+
+  **The two had already diverged on a probe name.** `link.cljc` tested
+  `flint_snapshot_capture`; `bundle.cljc` tested `snapshot_export`. Exports keep
+  their Rust symbol names -- `collect_now` is declared unprefixed in
+  `runtime/src/abi.rs` and probed unprefixed in both -- and the snapshot unit
+  declares `flint_snapshot_capture` and `flint_snapshot_export`, nothing named
+  `snapshot_export`. So the bundler's `:snapshots` could never be true whatever the
+  module carried. Not a live failure, because the snapshot unit is not in the
+  default build and `false` was right by accident; wrong by construction, which is
+  the kind a count finds and a reading does not.
+
+  *I nearly reported the opposite.* A built module contains the bare string
+  `snapshot_export` and NOT `flint_snapshot_export`, which reads as the linker
+  stripping the prefix and the bundler being right. The module's own `:exports` list
+  settled it -- no snapshot export at all, so the string was a name-section
+  artefact -- and `collect_now` being unprefixed in Rust is what proves no stripping
+  happens.
+
+  Verified behaviour-preserving on the link path: the features map is byte-identical
+  and the compatibility key unchanged at `6cebaa00`.
 * The two doors do not produce IDENTICAL images. Same length, same string set,
   54 bytes of 26 715 differing -- a constant-pool ORDERING difference between
   babashka's Clojure and the self-hosted runtime. It shows on `:to :clr` too, so
