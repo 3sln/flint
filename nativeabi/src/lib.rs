@@ -111,3 +111,182 @@ pub unsafe extern "C" fn flint_native_main(
     }
     out.code
 }
+
+// --- THE THREE OPERATIONS (`DECISIONS.md#four-operations`) ------------------
+//
+// `boot`, `loop`, `link`, the same three every other target exposes, and the
+// fourth manifestation getting them is what makes the surface uniform: a host
+// writes the same three calls whether it holds a wasm module, a JVM class, a CLR
+// assembly or this archive. `:to :llvm` used to emit a module whose only entry
+// was `main`, so its artifact ran to completion and a host could not drive it at
+// all.
+//
+// `flint_native_main` STAYS. It is not one of the three and does not compete with
+// them: it is the convenience entry for `clang prog.ll libflintnative.a -o prog`,
+// and a program that wants to be run rather than driven is the common case.
+//
+// THE NAMES ARE `flint_native_*` AND THE ARTIFACT'S ARE `flint_*`. The emitted
+// module defines the short names as three-line wrappers that pass `@flint_image`,
+// exactly as its `main` already wraps `flint_native_main` -- so the image stays a
+// detail of the artifact and this archive never has to know where it lives.
+
+use flint_rt::vm::NativeFn;
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+/// Hooks recorded by `link` and consumed by the next `boot` of the SAME BRIDGE.
+///
+/// KEYED BY BRIDGE NAME, which is what the contract asks for and what a
+/// process-global registry could not do: two sandboxes can override the same
+/// native differently. The bridge is the sandbox's identity before the sandbox
+/// exists, and here the bridge IS its name -- there is no object to hold in a C
+/// ABI, and `boot` takes that name for the same reason.
+static PENDING: Mutex<Option<HashMap<String, Vec<(String, NativeFn)>>>> = Mutex::new(None);
+
+/// Bridges that have already booted, so `link` can refuse rather than record
+/// something nothing will ever read. Natives resolve EXACTLY ONCE, inside
+/// `load_with`, so a hook arriving afterwards is never reached and answering 0
+/// would claim an override happened.
+static BOOTED: Mutex<Option<Vec<String>>> = Mutex::new(None);
+
+unsafe fn cstr(p: *const c_char) -> Option<String> {
+    if p.is_null() {
+        return None;
+    }
+    unsafe { CStr::from_ptr(p) }.to_str().ok().map(String::from)
+}
+
+/// `link` -- override the native called `name` for the bridge called `bridge`,
+/// with the function at `f`. MUST PRECEDE `boot`.
+///
+/// 0 recorded, 1 on an argument this cannot read, 2 when that bridge has already
+/// booted.
+///
+/// A REAL FUNCTION POINTER, which is the one place this target can do what wasm
+/// cannot: a wasm module's imports are fixed at instantiation, so its `link` can
+/// only rebind a slot the module already carries and answers 1, "this artifact
+/// cannot". Here `NativeFn` is already `extern "C" fn(*mut Rt, u32, u32) -> u64`
+/// -- flat and C-callable by construction, because the wasm table entry needed it
+/// to be -- so a caller in any language can pass one.
+///
+/// # Safety
+/// `bridge` and `name` must be NUL-terminated, and `f` must have `NativeFn`'s
+/// signature and outlive every sandbox booted on that bridge.
+#[no_mangle]
+pub unsafe extern "C" fn flint_native_link(
+    bridge: *const c_char,
+    name: *const c_char,
+    f: Option<NativeFn>,
+) -> i32 {
+    // THE BRIDGE FIRST, THEN "HAS IT BOOTED", THEN THE REST. Validating every
+    // argument up front reads better and gets the precedence wrong: a `link` after
+    // `boot` with any other argument also bad answered 1, "cannot read that",
+    // where the contract's answer is 2, "too late". The wasm face refuses after
+    // boot before looking at anything else, and this now matches it.
+    let Some(b) = (unsafe { cstr(bridge) }) else { return 1 };
+    if BOOTED.lock().map(|g| g.as_ref().is_some_and(|v| v.contains(&b))).unwrap_or(true) {
+        return 2;
+    }
+    let (Some(n), Some(f)) = (unsafe { cstr(name) }, f) else {
+        return 1;
+    };
+    let Ok(mut g) = PENDING.lock() else { return 1 };
+    g.get_or_insert_with(HashMap::new).entry(b).or_default().push((n, f));
+    0
+}
+
+/// `boot` -- load `image`, install `bridge` as the SYSTEM PORT, and answer a
+/// sandbox handle. 0 if it could not.
+///
+/// A REAL HANDLE, not ceremony. On wasm `Rt` is one `static mut` per instance so
+/// the handle can only ever be 1; here a host can hold as many sandboxes as it
+/// likes in one process, which is what `one-image-per-sandbox` asks for -- many
+/// programs means many sandboxes, not one sandbox reloaded.
+///
+/// The handle is a leaked `Box<Program>`. It is never freed, and that is the same
+/// answer `flint_native_main` gives by exiting: a sandbox is one program for its
+/// whole life, and a `flint_native_free` would be the first thing able to
+/// invalidate a handle another thread is inside.
+///
+/// # Safety
+/// `image` must point at `len` readable bytes and `bridge` must be
+/// NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn flint_native_boot(
+    image: *const u8,
+    len: usize,
+    bridge: *const c_char,
+) -> u64 {
+    let Some(name) = (unsafe { cstr(bridge) }) else { return 0 };
+    let bytes = unsafe { std::slice::from_raw_parts(image, len) };
+    // The hooks for THIS bridge, merged over the catalogue by name: a hook
+    // replaces the entry it names and a new name goes on the end. Relying on
+    // `load_with` to prefer a later duplicate would be relying on something it
+    // does not promise.
+    let hooks: Vec<(String, NativeFn)> = PENDING
+        .lock()
+        .ok()
+        .and_then(|mut g| g.as_mut().and_then(|m| m.remove(&name)))
+        .unwrap_or_default();
+    let mut table: Vec<(&str, NativeFn)> = flint_conc::HOST_CATALOGUE.to_vec();
+    for (n, f) in &hooks {
+        match table.iter_mut().find(|(k, _)| *k == n.as_str()) {
+            Some(slot) => slot.1 = *f,
+            None => table.push((n.as_str(), *f)),
+        }
+    }
+    let mut p = match Program::load_with(bytes, HEAP, &table) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("flint: {e}");
+            return 0;
+        }
+    };
+    // `true` for the system flag: this IS the system port, which is what makes it
+    // the sandbox's only door (`DECISIONS.md#bridges-are-the-only-door`).
+    if !p.install_port(0, &name, true) {
+        return 0;
+    }
+    if let Ok(mut g) = BOOTED.lock() {
+        g.get_or_insert_with(Vec::new).push(name);
+    }
+    Box::into_raw(Box::new(p)) as u64
+}
+
+/// The three statuses, DECLARED rather than only documented, because a comment
+/// saying "0, 1, 2" beside a function is the prose this project has repeatedly
+/// watched fail to bind the code next to it. The NAMES differ per language and
+/// are allowed to; the NUMBERS are the ABI.
+pub const FLINT_DONE: i32 = 0;
+pub const FLINT_THREW: i32 = 1;
+pub const FLINT_NEEDS_HOST: i32 = 2;
+
+/// `loop` -- pump, and answer 0 Done, 1 Threw, 2 NeedsHost.
+///
+/// `NeedsHost` is the RESTING state and not an error: the control plane is a green
+/// thread parked on the system port, so a healthy idle sandbox reports it.
+///
+/// -1 for a handle this cannot serve, which is deliberately outside the status
+/// range rather than folded into `Threw`.
+///
+/// THE OUTPUT IS PRINTED, as `flint_native_main` prints it. A sandbox driven
+/// through `loop` has no other way to say anything until its host reads events,
+/// and a `loop` that silently dropped what a program wrote would differ from
+/// `main` on the one thing both are for.
+///
+/// # Safety
+/// `h` must be a handle `flint_native_boot` answered and not yet used from
+/// another thread concurrently -- one `Program` is not `Sync`.
+#[no_mangle]
+pub unsafe extern "C" fn flint_native_loop(h: u64) -> i32 {
+    if h == 0 {
+        return -1;
+    }
+    let p = unsafe { &mut *(h as *mut Program) };
+    let out = p.resume();
+    if !out.out.is_empty() {
+        print!("{}", out.out);
+        let _ = std::io::stdout().flush();
+    }
+    out.code
+}

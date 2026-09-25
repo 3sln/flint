@@ -56,18 +56,18 @@ FACES = {
     'clr':  {'path': 'runtimes/clr/src/rt/Artifact.cs',            'built': True},
     'jvm':  {'path': 'runtimes/jvm/src/com/flint/rt/Sandbox.java', 'built': True},
     'wasm': {'path': 'units-src/flint-conc/src/lib.rs',            'built': True},
-    # THE FOURTH TARGET, and it is here PRECISELY BECAUSE IT HAS NO FACE. A table
-    # listing the three that do is indistinguishable from a complete one: it
-    # printed "3 faces" and a reader concluded the surface was uniform across the
-    # targets, which it is not. `:to :llvm` emits a module whose only entry is
-    # `main`, so its artifact runs to completion and a host cannot drive it.
+    # THE FOURTH TARGET. It was added to this table while it still had NO face,
+    # because a table listing only the three that did was indistinguishable from a
+    # complete one -- it printed "3 faces" and a reader concluded the surface was
+    # uniform, which it was not. It is built now, and the row it printed in the
+    # meantime is what named the gap.
     #
-    # The path is the EMITTER, not the runtime archive. The llvm artifact's face
-    # is text this file writes into the `.ll`, the way `main` already is; the
-    # runtime half would go in `nativeabi/src/lib.rs` beside `flint_native_main`,
-    # but what a host CALLS is what the artifact declares, so that is what gets
-    # checked.
-    'llvm': {'path': 'src/flint/llvm.cljc',                        'built': False},
+    # The path is the EMITTER, not the runtime archive. The llvm artifact's face is
+    # text this file writes into the `.ll`, the way its `main` already is; the
+    # runtime halves are `flint_native_boot`/`_loop`/`_link` in
+    # `nativeabi/src/lib.rs`, but what a host CALLS is what the artifact declares,
+    # so that is what gets checked.
+    'llvm': {'path': 'src/flint/llvm.cljc',                        'built': True},
 }
 
 
@@ -213,10 +213,23 @@ def llvm_face(txt):
     `define`s it emits and the statuses are the numbers they answer -- read from
     the strings, which is the only place they can be.
     """
-    ops = set(re.findall(r'define\s+\w+\s+@(\w+)\s*\(', txt))
+    # `(?:\w+\s+)*` FOR THE MODIFIERS. `define i64 @flint_boot(` and
+    # `define weak i32 @main(` are both definitions, and a pattern with exactly one
+    # word between `define` and `@` reads the first and silently misses the second.
+    ops = set(re.findall(r'define\s+(?:\w+\s+)*@(\w+)\s*\(', txt))
     status = {}
-    for m in re.finditer(r'FLINT_(DONE|THREW|NEEDS_HOST)\s*=\s*(\d+)', txt):
+    # LLVM spells a constant `@FLINT_DONE = constant i32 0`, so the type sits
+    # between the `=` and the number.
+    for m in re.finditer(r'FLINT_(DONE|THREW|NEEDS_HOST)\s*=\s*'
+                         r'(?:constant\s+i32\s+)?(\d+)', txt):
         status[int(m.group(2))] = m.group(1)
+    # AND THE `def` FORM, which is where they actually live. The emitter builds
+    # the IR text as `(str "@FLINT_DONE = constant i32 " DONE)`, so the literal
+    # number is in a Clojure `def` and never appears beside the name -- reading
+    # only the emitted spelling found nothing and reported that the face declares
+    # no statuses, which was true of the text and false of the source.
+    for m in re.finditer(r'\(def\s+(?:\^:private\s+)?(DONE|THREW|NEEDS-HOST)\s+(\d+)\)', txt):
+        status.setdefault(int(m.group(2)), m.group(1).replace('-', '_'))
     return {'ops': ops, 'status': status}
 
 
@@ -335,8 +348,17 @@ def main():
                 fails.append('%s: %s -- %s matches %r, which it must not'
                              % (target, r[':rule'], ev[':file'], ev[':must-not-match']))
 
-        rows.append('  ok   %-4s %d operations, %d refused, %d status numbers, %d rules'
-                    % (target, len(ops), len(gone), len(want_status),
+        # WHAT THIS FACE DECLARED, not what the contract wants. This printed
+        # `len(want_status)` -- the same 3 for every target, whatever the face
+        # had -- so a face declaring none still showed `3 status numbers`, and the
+        # `ok` was hard-coded besides: `llvm` printed
+        # `ok llvm 3 operations, 1 refused, 3 status numbers` on the same run as
+        # `FAIL llvm: declares no status values at all`. A row that contradicts the
+        # verdict beside it is worse than no row.
+        bad = [x for x in fails if x.startswith(target + ':')]
+        rows.append('  %s %-4s %d operations, %d refused, %d status numbers, %d rules'
+                    % ('FAIL' if bad else 'ok  ', target, len(ops), len(gone),
+                       len(face['status']),
                        sum(1 for r in rules if spelling(r[':evidence'], target))))
 
     # ---- metadata carriers. NOT an operation, and the namespacing is the part

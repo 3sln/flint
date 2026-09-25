@@ -957,6 +957,22 @@
 (let [{:keys [src fn out stats keep-names explain disasm const self exclude exports wasm-path aot optimize loader emit-image emit-spec features to]}
       (parse-args (if test-mode? (rest *command-line-args*) *command-line-args*))
       fn (if test-mode? 'flint.check.registry/run fn)]
+  ;; AN UNRECOGNISED `:to` IS REFUSED, and this file used to fall through to the
+  ;; wasm path with it. `bin/flint ... :to :llvm` therefore wrote a 494 KB WASM
+  ;; MODULE into `p.ll` and said "wrote p.ll" -- no error, the wrong artifact,
+  ;; and the only tell was `\0asm` where `; flint program, as LLVM IR` should
+  ;; have been. A typo did the same: `:to :wsam` compiled and shipped wasm.
+  ;;
+  ;; `:llvm` is NOT in this list because this door does not emit IR: the native
+  ;; CLI does (`cli/src/main.rs`, `compile_llvm`), and saying so is the whole
+  ;; point of refusing here rather than silently doing something else.
+  (when (and to (not (contains? #{"wasm" "clr" "jvm"} to)))
+    (binding [*out* *err*]
+      (println (str "no such target `:to :" to "` on this door. `bin/flint` emits"
+                    " :wasm (the default), :clr and :jvm."))
+      (println (str "  `:to :llvm` is the native CLI's: "
+                    "`flint compile :path <dir> :fn <ns/fn> :to :llvm`.")))
+    (System/exit 1))
   (when-not fn
     (println "usage: flint :src <dir> :fn <ns/fn> [:out <file.wasm>]")
     (println "       flint test :src <dir>        run every ^:flint.check/test var")

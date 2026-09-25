@@ -192,3 +192,90 @@ for n in $PROGS; do
     || fail "$n: compiled arities charged $gp gas against the interpreter's $gs"
   echo "    $n: $want  (gas $gp, ll $big/$small)"
 done
+
+# --- THE THREE OPERATIONS, DRIVEN (`DECISIONS.md#four-operations`) ------------
+#
+# Every other target's face is checked by loading the artifact and calling the
+# three; this one had no face at all until the `.ll` grew one, and the only way to
+# call it is to LINK the module and drive it from C. Which is also the test that
+# the `main` above is WEAK: a strong one made an embedder's own `main` a duplicate
+# symbol, so the artifact could be run and could not be driven -- exactly the gap
+# these three exist to close, reintroduced by the convenience entry.
+#
+# Both link modes are checked, because each breaks the other: `weak` is what lets
+# the driver win, and dropping `main` entirely would break the documented
+# one-liner.
+echo "  .. the three operations, linked and driven from C"
+#  AND NOT A NAME OF MY OWN. This said `n=one`, and no such program
+# exists -- `PROGS` above names the seven that do. clang was handed a path that
+# was never written and the row failed on the missing file rather than on the
+# face, which is the least informative way for a new check to break.
+n=arith
+cat > "$D/drive.c" <<'DRIVE'
+#include <stdio.h>
+#include <stdint.h>
+extern uint64_t flint_boot(const char *bridge);
+extern int32_t  flint_loop(uint64_t h);
+extern int32_t  flint_link(const char *bridge, const char *name, void *fn);
+/* A REAL `NativeFn`: `extern "C" fn(*mut Rt, u32, u32) -> u64`, the shape every
+   builtin has. Never called -- what is under test is that `link` ACCEPTS one and
+   refuses at the right moments. */
+static uint64_t my_native(void *rt, uint32_t base, uint32_t argc) {
+  (void)rt; (void)base; (void)argc; return 0;
+}
+int main(void) {
+  printf("link-before-boot %d\n", flint_link("host", "flint/b-count", (void *)my_native));
+  printf("link-bad-arg %d\n", flint_link("host", "flint/x", (void *)0));
+  uint64_t h = flint_boot("host");
+  printf("boot %d\n", h != 0);
+  uint64_t h2 = flint_boot("second");
+  printf("two-sandboxes %d\n", (h2 != 0) && (h != h2));
+  printf("loop %d\n", flint_loop(h));
+  printf("loop-bad-handle %d\n", flint_loop(0));
+  printf("link-after-boot %d\n", flint_link("host", "flint/b-count", (void *)my_native));
+  return 0;
+}
+DRIVE
+clang "$D/$n.size.ll" "$D/drive.c" target/release/libflintnative.a -o "$D/drive"   > "$D/drive.link" 2>&1 || { tail -20 "$D/drive.link"; fail "clang the C driver against $n.size.ll"; }
+got="$("$D/drive")" || { echo "    $got"; fail "the C driver did not run"; }
+# EVERY LINE IS DERIVED FROM THE CONTRACT, not recorded from a run:
+#   link before boot   0  recorded
+#   link, null fn      1  an argument it cannot read
+#   boot               1  a handle came back
+#   two sandboxes      1  DISTINCT handles -- what wasm cannot do, since its `Rt`
+#                         is one `static mut` per instance
+#   loop               2  NeedsHost, the RESTING state: the control plane is a
+#                         green thread parked on the system port
+#   loop, bad handle  -1  outside the status range on purpose
+#   link after boot    2  natives resolve exactly once, inside boot
+want='link-before-boot 0
+link-bad-arg 1
+boot 1
+two-sandboxes 1
+loop 2
+loop-bad-handle -1
+link-after-boot 2'
+[ "$got" = "$want" ] || {
+  echo "    want: $want"
+  echo "    got : $got"
+  fail "the three operations answered differently from the contract"
+}
+echo "    boot/loop/link: 7 rows, two sandboxes in one process"
+
+# AND THE ARTIFACT STILL RUNS ITSELF. `weak` must not have cost the documented
+# `clang prog.ll libflintnative.a -o prog`, which is the whole reason `main` is
+# emitted at all.
+clang "$D/$n.size.ll" target/release/libflintnative.a -o "$D/alone" \
+  > "$D/alone.link" 2>&1 || { tail -20 "$D/alone.link"; fail "clang $n.size.ll alone"; }
+alone="$("$D/alone")" || fail "the artifact's own main did not run"
+# AGAINST `flint run`, not against nothing. The first version of this compared to
+# an unset `$want_one` and `|| true`'d the result -- a guard that could only pass,
+# in a file whose own comments are about that failure mode twice over.
+want_alone="$(./target/release/flint run :path "$D" :fn "$n/main")" \
+  || fail "flint run $n (for the weak-main comparison)"
+[ "$alone" = "$want_alone" ] || {
+  echo "    want: $want_alone"
+  echo "    got : $alone"
+  fail "the artifact's own weak main answered differently from flint run"
+}
+echo "    and its own weak main still runs it: $alone"

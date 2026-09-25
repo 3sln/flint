@@ -620,6 +620,14 @@
                      out (flint.rt/b-conj! out (nth HEX (bit-shift-right c 4)))]
                  (flint.rt/b-conj! out (nth HEX (bit-and c 15)))))))))))))
 
+;; THE STATUS NUMBERS ARE THE ABI, and they are named here rather than written
+;; into the emitted text so that the one place they appear is a definition. Every
+;; target agrees on 0, 1, 2 and each spells the names its own way
+;; (`DECISIONS.md#four-operations`).
+(def ^:private DONE 0)
+(def ^:private THREW 1)
+(def ^:private NEEDS-HOST 2)
+
 (def ^:private DECLS
   ["; The runtime this links against. Every one of them is `#[no_mangle]` in"
    "; `runtime/src/aot.rs`, and `flint_native_main` is `nativeabi/src/lib.rs`."
@@ -631,7 +639,11 @@
    "declare void @aot_bail(ptr, i32, i32, i32, i32, i32)"
    "declare i32 @aot_tick(ptr, i32, i32, i32, i32)"
    "declare void @flint_aot_register(ptr, i64)"
-   "declare i32 @flint_native_main(ptr, i64, i32, ptr)"])
+   "declare i32 @flint_native_main(ptr, i64, i32, ptr)"
+   "; The three operations' runtime halves, also `nativeabi/src/lib.rs`."
+   "declare i64 @flint_native_boot(ptr, i64, ptr)"
+   "declare i32 @flint_native_loop(i64)"
+   "declare i32 @flint_native_link(ptr, ptr, ptr)"])
 
 (defn emit-module
   "The finished `.ll`: the program image, its compiled arities, the table that
@@ -665,11 +677,60 @@
       [""
        ir
        ""
-       "define i32 @main(i32 %argc, ptr %argv) {"
+       ;; `weak`, AND THAT IS WHAT MAKES THE ARTIFACT DRIVABLE. This module is
+       ;; the only one of the four targets that defines a `main` -- a wasm module,
+       ;; a JVM class and a CLR assembly all have none -- and a strong one made an
+       ;; embedder's own `main` a DUPLICATE SYMBOL at link time. So the artifact
+       ;; could be run and could not be driven, which is the gap `boot`/`loop`
+       ;; below exist to close, reintroduced by the convenience entry.
+       ;;
+       ;; Weak keeps both: `clang prog.ll libflintnative.a -o prog` still links
+       ;; and runs, and a host that brings its own `main` silently overrides this
+       ;; one and drives the three operations instead. Verified both ways.
+       "define weak i32 @main(i32 %argc, ptr %argv) {"
        "start:"
        (str "  call void @flint_aot_register(ptr @flint_aot_table, i64 " n ")")
        (str "  %r = call i32 @flint_native_main(ptr @flint_image, i64 " len
             ", i32 %argc, ptr %argv)")
+       "  ret i32 %r"
+       "}"
+       ""
+       ;; --- THE THREE OPERATIONS (`DECISIONS.md#four-operations`) -----------
+       ;;
+       ;; `boot`, `loop`, `link`, so a host can DRIVE this artifact instead of
+       ;; only running it. Before these, `:to :llvm` emitted a module whose one
+       ;; entry was `main`: it ran to completion and there was no way in, which
+       ;; made the fourth target the only one with no face.
+       ;;
+       ;; THREE-LINE WRAPPERS, exactly as `main` above wraps
+       ;; `flint_native_main`. The runtime halves are in the archive and know
+       ;; nothing about where an image lives; these pass `@flint_image` and its
+       ;; length, so the image stays a detail of the artifact.
+       "; --- the three operations. `boot` registers the AOT table first, for"
+       "; `main`'s reason: a host that drives this artifact never calls `main`,"
+       "; so the table would otherwise be registered by nothing and every"
+       "; compiled arity would be missing at the moment it was first wanted."
+       (str "@FLINT_DONE = constant i32 " DONE)
+       (str "@FLINT_THREW = constant i32 " THREW)
+       (str "@FLINT_NEEDS_HOST = constant i32 " NEEDS-HOST)
+       ""
+       "define i64 @flint_boot(ptr %bridge) {"
+       "start:"
+       (str "  call void @flint_aot_register(ptr @flint_aot_table, i64 " n ")")
+       (str "  %h = call i64 @flint_native_boot(ptr @flint_image, i64 " len
+            ", ptr %bridge)")
+       "  ret i64 %h"
+       "}"
+       ""
+       "define i32 @flint_loop(i64 %sandbox) {"
+       "start:"
+       "  %r = call i32 @flint_native_loop(i64 %sandbox)"
+       "  ret i32 %r"
+       "}"
+       ""
+       "define i32 @flint_link(ptr %bridge, ptr %name, ptr %fn) {"
+       "start:"
+       "  %r = call i32 @flint_native_link(ptr %bridge, ptr %name, ptr %fn)"
        "  ret i32 %r"
        "}"
        ""]))))

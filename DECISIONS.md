@@ -12419,7 +12419,7 @@ take.
 
 **What every flint artifact exposes, on every target**
 **Ratified:** ☐ not signed off
-**Status: THREE FACES IN THE TREE, 2026-09-24 -- `runtimes/clr/src/rt/Artifact.cs`, `runtimes/jvm/src/com/flint/rt/Sandbox.java` and the `host` module of `units-src/flint-conc/src/lib.rs`. Gated by `bin/check-artifact-ops` (faces against the contract, 3 of 4 targets) and `bin/check-four-ops` (behaviour, jvm only so far). **`:to :llvm` HAS NO FACE, and the gate now says so by name rather than by omission** -- its table listed the three targets that have one, which printed as `3 target faces` and read as complete. It is `3 of 4 ... NO FACE: llvm` now, with a row naming `src/flint/llvm.cljc`. The status line here used to say "Native has no face", which named a target that no longer exists: `:native` was dropped (`llvm-ir-target`), so the fourth manifestation is the `.ll`, whose only entry is `main` -- it runs to completion and a host cannot drive it. The CLR's static surface became an instance one on 2026-09-24 -- `sealed class Artifact`, `static Artifact Boot(...)`, `Status Loop()` -- and `runtimes/clr/artifact/Check.cs` now asserts what the static version made impossible: two sandboxes booting in one load context and holding different runtimes.** This record exists FIRST and deliberately: four
+**Status: THREE FACES IN THE TREE, 2026-09-24 -- `runtimes/clr/src/rt/Artifact.cs`, `runtimes/jvm/src/com/flint/rt/Sandbox.java` and the `host` module of `units-src/flint-conc/src/lib.rs`. **ALL FOUR TARGETS HAVE THE FACE as of 2026-09-24.** Gated by `bin/check-artifact-ops` (faces against the contract, `4 of 4`) and `bin/check-four-ops` (behaviour, jvm) and `bin/check-llvm` (behaviour, llvm, linked and driven from C). The `.ll` grew `flint_boot`/`flint_loop`/`flint_link` as three-line wrappers over `flint_native_boot`/`_loop`/`_link` in `nativeabi/src/lib.rs`, the way its `main` already wraps `flint_native_main`. The CLR's static surface became an instance one on 2026-09-24 -- `sealed class Artifact`, `static Artifact Boot(...)`, `Status Loop()` -- and `runtimes/clr/artifact/Check.cs` now asserts what the static version made impossible: two sandboxes booting in one load context and holding different runtimes.** This record exists FIRST and deliberately: four
 implementations designed in parallel is how this project produced sixteen
 version declarations, four compile-spec front ends and a `:checks` axis on one
 CLI and not the other. The contract is written down before the last three are
@@ -12706,6 +12706,52 @@ The remaining cost is not the container. It is an IL assembler -- opcode table,
 label fixups with short/long selection, computed `maxstack` -- at ~200-250
 lines, which is the same problem `src/flint/aot.cljc` already solves in 713 for
 wasm.
+
+### The fourth target got the face, and `main` was in the way
+
+`:to :llvm` emitted a module whose only entry was `main`: it ran to completion and
+a host could not drive it. It has the three operations now, and native turned out
+to be the only target that can implement `link` PROPERLY.
+
+**`link` TAKES A REAL FUNCTION POINTER here.** `NativeFn` is already
+`extern "C" fn(*mut Rt, u32, u32) -> u64` -- flat and C-callable by construction,
+because the wasm table entry needed it to be -- and `Program::load_with` takes an
+`extra` slice of `(name, fn)` resolved at load. Since `link` must precede `boot`
+and natives resolve exactly once inside it, hooks recorded by `link` are simply
+that slice. So wasm answers 1, "this artifact cannot", and this one answers 0.
+Hooks are keyed BY BRIDGE NAME, which is what the contract asks for and what a
+process-global registry could not do.
+
+**`boot` answers a REAL handle**, not ceremony: a leaked `Box<Program>`. Two
+sandboxes in one process, with distinct handles, is checked -- and is the thing
+wasm cannot do at all, since its `Rt` is one `static mut` per instance.
+
+**AND `main` HAD TO BECOME `weak`.** This is the only one of the four artifacts
+that defines a `main` -- a wasm module, a JVM class and a CLR assembly have none --
+and a strong one made an embedder's own `main` a DUPLICATE SYMBOL at link time. So
+the artifact could be run and could not be driven: the convenience entry
+reintroduced exactly the gap the three operations were added to close. `weak`
+keeps both, and `bin/check-llvm` links it both ways -- with a C driver, which
+wins, and alone, which must still answer what `flint run` answers.
+
+`link`'s checks also had to be REORDERED. Validating every argument up front reads
+better and gets the precedence wrong: a `link` after `boot` whose other arguments
+were also bad answered 1, "cannot read that", where the contract's answer is 2,
+"too late". The wasm face refuses after boot before looking at anything else.
+
+### `bin/flint` was silently emitting wasm for a target it does not have
+
+`bin/flint ... :to :llvm` wrote a 494 KB WASM MODULE into `p.ll` and said
+`wrote p.ll`. No error, the wrong artifact, and the only tell was `\0asm` where
+`; flint program, as LLVM IR` should have been. A typo did the same: `:to :wsam`
+compiled and shipped wasm. It refuses an unrecognised `:to` now, naming what this
+door emits and saying that `:llvm` is the native CLI's.
+
+Found while testing the llvm face, and it is the THIRD instance of the front-door
+shape in two days -- after `:to :clr` never working through the native CLI and
+`:checks` existing on one CLI and not the other. The pattern is not "the doors
+disagree", it is that **a door that silently does something else reads as a door
+that works.**
 
 ### `:to :jvm` is wired, and `:to :clr` had never worked
 
