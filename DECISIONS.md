@@ -13139,7 +13139,7 @@ reader has to take on trust.
 
 **Both ports mis-resolve `apply`'s callee above ~8 200 arguments**
 **Ratified:** ☐ not signed off
-**Status: FOUND AND BISECTED 2026-09-24, NOT FIXED. Reproduced against `runtimes/jvm/src/com/flint/rt/Builtins.java` and `runtimes/clr/src/rt/Builtins.cs`; native is correct.**
+**Status: FIXED IN ALL FOUR RUNTIMES 2026-09-25. It was a STALE CALLEE across a collection, not an arity check and not a builtin -- `runtime/src/vm.rs`, `runtimes/jvm/src/com/flint/rt/Rt.java` and `runtimes/clr/src/rt/Rt.cs`. Gated by a `bin/conform-hosts` row at 60 000 elements, past every threshold. NATIVE WAS NOT CORRECT: it panicked at 50 000, and this record said otherwise on the strength of smaller counts.**
 
     (defn main [_] (str (count (apply str (repeat K "x")))))
 
@@ -13167,11 +13167,34 @@ pass, including the crossing of 8 192. `Roots.vpush` grows the array itself and
 unchecked push nor an unscanned root explains it either: both were checked and both
 are sound.
 
-So the remaining suspects are what SCALES WITH THE COUNT other than the stack --
-the nursery filling during the spread (each `Seqwalk.next` on a `repeat` allocates)
-and whatever `callValue` does with an argument count that large. The arithmetic in
-the `APPLY` handler was hand-checked against the native path and lands exactly on
-the copied callee, so the index is right and something moves under it.
+"Something moves under it" was the right instinct and literally true.
+
+**THE CALLEE WAS TAKEN FROM A LOCAL READ BEFORE THE SPREAD LOOP.** The loop
+allocates one seq cell per element, so a collection lands in the middle of it and
+MOVES the closure; the collector updates the stack SLOT, and a Java/C#/Rust local
+keeps the old address. Traced at the moment of the call, on both sides of the
+threshold: the slot held `fff9000000210030` and the local `fff9000000014770`. Above
+the threshold the stale address stopped resolving, so `slot(closure, 0)` read
+garbage, `fns[fnIdx]` was the wrong function, and the arity check refused. The name
+came out as `fn` for the same reason -- the `FnDef` was not the one being called, so
+its `name` const index was meaningless.
+
+The fix is one expression in each runtime: pass `stack[at]` -- the slot the
+collector maintains -- instead of the local.
+
+**AND NATIVE HAD IT TOO, at 50 000 rather than 8 804.** `index out of bounds: the
+len is 306 but the index is 1099511627896`: the fn table's length against a tagged
+value read as an index, which is the same failure the ports had with a different
+reporter. This record said "native is correct" and "native takes all of it" because
+every count it had been tried at was under ITS threshold -- a bigger nursery moves
+where the collection lands, it does not remove the bug. Verified after the fix at
+50 000, 200 000 and 800 000.
+
+*The earlier reasoning that ruled GC out was wrong, and the way it was wrong is
+worth keeping: the threshold did not move when the element string went from 1 byte
+to 8, which looked like "not allocation pressure". But `repeat` of a constant
+allocates a cons cell per element whatever the element is, so the allocation COUNT
+was identical in both arms -- the experiment held the wrong variable fixed.*
 
 **THIS INVALIDATED ANOTHER FINDING OF MINE, which is why it is recorded
 separately.** `index-past-the-fixnum` below originally reported that the jvm

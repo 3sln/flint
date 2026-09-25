@@ -1585,7 +1585,20 @@ impl Rt {
                         self.pop_to(si);
                         let total = argc - 1 + spread;
                         let at = self.roots.stack_top - total - 1;
-                        if !self.enter(apply_callee, at, total) {
+                        // THE CALLEE IS RE-READ FROM THE STACK, not taken from
+                        // `apply_callee` above. The spread loop ALLOCATES -- one
+                        // `seq_next` per element -- so a collection can move the
+                        // closure, and the collector updates the stack SLOT while a
+                        // local keeps the old address.
+                        //
+                        // NATIVE IS NOT IMMUNE, it is just later: the jvm and clr
+                        // failed above ~8 800 elements and this panicked at 50 000
+                        // with `index out of bounds: the len is 306 but the index is
+                        // 1099511627896` -- the fn table's length against a tagged
+                        // value read as an index. The record said native "takes all
+                        // of it" on the strength of the smaller counts; a bigger
+                        // nursery moves the threshold, it does not remove the bug.
+                        if !self.enter(self.vat(at), at, total) {
                             if !self.unwind() {
                                 return NIL;
                             }

@@ -444,7 +444,25 @@ cat > out/rt-probe/probe.cljc <<'PROBE'
                             (try (flint.rt/subs flat 5 1)
                                  (catch IndexOutOfBoundsException e "general")
                                  (catch Throwable e "fell-through"))))))
-(defn main [_] (str (+ (fold) (run 1000) (wide)) " " (past-the-payload)))
+(defn- apply-past-a-collection []
+  ;; A LARGE `apply` INTO A CLOSURE, which is a rooting test and not an arity one.
+  ;;
+  ;; The spread loop allocates one seq cell per element, so a collection lands in
+  ;; the middle of it and moves the callee. All three runtimes took the callee from
+  ;; a LOCAL read before the loop, so they used a stale address afterwards: the jvm
+  ;; and clr refused with `wrong number of arguments (N) to fn` above ~8 800 -- a
+  ;; name that comes out as `fn` because the FnDef was not the one being called --
+  ;; and native panicked at 50 000 with `the len is 306 but the index is
+  ;; 1099511627896`, the fn table's length against a tagged value read as an index.
+  ;;
+  ;; 60 000 IS PAST ALL THREE THRESHOLDS, which is the point: 8 803 passed on the
+  ;; ports and 8 804 did not, and native needed a bigger count only because its
+  ;; nursery is bigger. A fixture under either threshold cannot tell the fix from
+  ;; the bug.
+  (+ (count (apply str (repeat 60000 "x")))
+     (count (apply vector (repeat 60000 1)))))
+(defn main [_] (str (+ (fold) (run 1000) (wide) (apply-past-a-collection))
+                    " " (past-the-payload)))
 PROBE
 ./bin/flint :src out/rt-probe :fn probe/main --emit-image \
   :out out/rt-probe/probe.img >/dev/null 2>&1

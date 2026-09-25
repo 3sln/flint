@@ -1153,7 +1153,21 @@ public final class Rt {
                         popTo(si);
                         int total = argc - 1 + spread;
                         int at = roots.stackTop - total - 1;
-                        if (!enter(applyCallee, at, total)) {
+                        // THE CALLEE IS RE-READ FROM THE STACK, not taken from the
+                        // local above. The spread loop ALLOCATES -- one `Seqwalk.next`
+                        // per element -- so a collection can move the closure, and
+                        // `Roots.forEach` updates the stack SLOT while a Java local
+                        // keeps the old address. Above about 8 800 elements that
+                        // stale address stopped resolving: `slot(closure, 0)` read
+                        // garbage, `fns[fnIdx]` was the wrong function, and the arity
+                        // check refused with `wrong number of arguments (9000) to fn`
+                        // -- a name that comes out as `fn` precisely because the
+                        // FnDef was not the one being called.
+                        //
+                        // Measured: at the moment of the call the slot held
+                        // fff9000000210030 and the local fff9000000014770, on both
+                        // sides of the threshold. The slot is the scanned one.
+                        if (!enter(roots.stack[at], at, total)) {
                             if (!unwind()) return Val.NIL;
                         }
                         continue;
@@ -1180,6 +1194,15 @@ public final class Rt {
                     }
                     popTo(si);
                     int total = argc - 1 + spread;
+                    if (System.getenv("FLINT_TRACE_APPLY") != null) {
+                        int at2 = roots.stackTop - total - 1;
+                        System.err.println("[apply] operandsAt=" + operandsAt
+                            + " stackTop=" + roots.stackTop + " spread=" + spread
+                            + " total=" + total + " at=" + at2
+                            + " cap=" + roots.stack.length
+                            + " callee@at=" + Long.toHexString(roots.stack[at2])
+                            + " expected=" + Long.toHexString(applyCallee));
+                    }
                     long cv = callValue(roots.stackTop - total - 1, total);
                     if (parked()) {
                         thrown = Val.NIL;

@@ -1006,7 +1006,17 @@ public sealed class Rt : System.IDisposable {
                         PopTo(csi);
                         int ctotal = argc - 1 + cspread;
                         int cat = roots.StackTop - ctotal - 1;
-                        if (!Enter(applyCallee, cat, ctotal)) {
+                        // THE CALLEE IS RE-READ FROM THE STACK, not taken from the
+                        // local above. The spread loop ALLOCATES -- one `Seqwalk.Next`
+                        // per element -- so a collection can move the closure, and
+                        // `Roots.ForEach` updates the stack SLOT while a local keeps
+                        // the old address. Above about 8 800 elements that stale
+                        // address stopped resolving: the fn index read as garbage, the
+                        // wrong `FnDef` was selected, and the arity check refused with
+                        // `wrong number of arguments (9000) to fn` -- the name coming
+                        // out as `fn` because the FnDef was not the one being called.
+                        // See the jvm's copy for the measurement.
+                        if (!Enter(roots.Stack[cat], cat, ctotal)) {
                             if (!Unwind()) return Val.Nil;
                         }
                         continue;
