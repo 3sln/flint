@@ -12767,6 +12767,43 @@ back and watching it fail.
 exists is exactly the kind a script can settle, so it should never be a claim a
 reader has to take on trust.
 
+## apply-loses-its-callee
+
+**Both ports mis-resolve `apply`'s callee above ~8 200 arguments**
+**Ratified:** ☐ not signed off
+**Status: FOUND AND BISECTED 2026-09-24, NOT FIXED. Reproduced against `runtimes/jvm/src/com/flint/rt/Builtins.java` and `runtimes/clr/src/rt/Builtins.cs`; native is correct.**
+
+    (defn main [_] (str (count (apply str (repeat K "x")))))
+
+    K = 8193   native 8193, jvm agrees
+    K = 9000   native 9000, jvm: ArityException: wrong number of arguments (9000) to fn
+    K = 12500  native 12500, jvm: ArityException ... (12500) to not
+    K = 12500 with 8-char strings, jvm: ArrayIndexOutOfBoundsException:
+              Index 352321536 out of bounds for length 308
+
+**THE CALLEE IS WRONG, AND DIFFERENTLY EACH TIME** -- `fn` at 9 000, `not` at
+12 500, and an out-of-bounds read of an array of about 308 entries, which is the
+size of this image's function table. So a large `apply` is writing past
+something and a later read takes a clobbered value as a function index. That is
+a state-corruption shape, not an arity check doing its job: the count in the
+message is correct and the FUNCTION is not.
+
+Both ports; native takes all of it. The threshold is between 8 194 and 9 000
+arguments, unbisected further because the shape is already clear.
+
+**THIS INVALIDATED ANOTHER FINDING OF MINE, which is why it is recorded
+separately.** `index-past-the-fixnum` below originally reported that the jvm
+answered an `ArrayIndexOutOfBoundsException` for `(b-at bs BIG)`. That probe
+built its 100 000-byte string with `(apply str (repeat 12500 "abcdefgh"))` --
+above this threshold -- so the crash was THIS bug and says nothing about `b-at`.
+The native half of that record stands, because native has no such bug. The jvm
+half is withdrawn and needs re-probing with a fixture built some other way.
+
+*A probe's SCAFFOLDING can be the thing that fails.* The construction used to
+reach the interesting case was itself broken on two of the four runtimes, and it
+failed in a way that looked exactly like the bug being hunted -- an
+out-of-bounds index on a small internal array.
+
 ## index-past-the-fixnum
 
 **An index that does not fit a fixnum is wrong on all four runtimes, differently**
@@ -12777,9 +12814,18 @@ reader has to take on trust.
 payload, so a BIGINT -- on a 100 000-byte string:
 
     native   returns the byte at index 1. Wrong DATA, silently.
-    jvm      ArrayIndexOutOfBoundsException: Index 100663296 out of bounds for
-             length 313 -- a RAW HOST EXCEPTION, not a flint error.
+    jvm      WITHDRAWN -- see `apply-loses-its-callee`. The probe's fixture was
+             built with `(apply str (repeat 12500 ...))`, which corrupts both
+             ports above ~8 200 arguments, so the `ArrayIndexOutOfBoundsException`
+             it produced was the SCAFFOLDING failing and not `b-at`.
     correct  a flint IndexOutOfBoundsException.
+
+**Three more native sites do the same thing**, measured with the same BIG:
+
+    (b/slice bs BIG 10)          size 9   -- `from` truncated to 1, returns [1,10)
+    (b/slice bs 0 BIG)           size 1   -- `to` truncated to 1, returns [0,1)
+    (code-point-at s BIG)        98       -- index truncated to 1, returns `b`
+    (from-code-point BIG)        THREW    -- the only one that refuses correctly
 
 **Native is not the reference here, which is the part that matters.** For the
 bitwise family it was -- `bitop` uses `as_i64` end to end and never narrows. Here
