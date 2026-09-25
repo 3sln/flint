@@ -410,12 +410,22 @@
                                        :meta (pr-str meta-map)}))})))))
 
 (defn compile-to-jvm
-  "Compile a program to a self-contained, runnable JAR (`:to :jvm`).
+  "Compile a program to ONE CLASS FILE, or to a jar carrying a runtime beside it.
 
-  `spec` is `compile-project`'s. `base-b64` is `dist/flint-rt.jar`, the prebuilt
-  interpreter, and it arrives as its own ARGUMENT for exactly the reason
-  `compile-to-wasm`'s module does: half a megabyte of base64 inside an EDN string
-  is half a megabyte for flint's reader to scan a character at a time.
+  THE ARTIFACT IS THE CLASS, and `base-b64` being EMPTY is how a caller asks for
+  it. That is what makes this reachable from a host that has no jar to hand: the
+  class references the runtime and the host supplies it through `link`, exactly as
+  `:to :clr`'s assembly references `Flint.dll`
+  (`DECISIONS.md#one-image-per-sandbox`). `flint compile :to :jvm` takes this
+  path, which is why the native CLI does not have to embed `dist/flint-rt.jar` --
+  a cost that was named as the blocker for wiring this target and is not one.
+
+  `base-b64` NON-EMPTY is `dist/flint-rt.jar`, and then the answer is that jar
+  with the class appended: a convenience for a consumer with an empty classpath,
+  the way a distribution ships a JRE beside an application. It arrives as its own
+  ARGUMENT rather than inside the spec for the reason `compile-to-wasm`'s module
+  does: half a megabyte of base64 inside an EDN string is half a megabyte for
+  flint's reader to scan a character at a time.
 
   EMPTY SLOTS, like the LLVM target and unlike wasm. This port resolves every
   native BY NAME when it loads the image (`Img.java`), so a table index would
@@ -432,11 +442,24 @@
       (if (:refused built)
         {:refused (:refused built)}
         (let [builder (:builder built)
-              image (img/emit builder {})]
-          {:module (base64 (jvm/pack (base64-decode base-b64) image
-                                     {:version (:version spec)
-                                      :meta (:meta spec)
-                                      :builtins (count (img/natives builder))}))})))))
+              ;; `vec->b`, WHICH `compile-to-clr` DOES TOO. `img/emit` answers a
+              ;; VECTOR of byte values and `jvm/emit` measures its argument with
+              ;; `flint.rt/b-count`, so handing the vector over produced a class
+              ;; with correct METADATA and no bytecode in it -- 894 bytes that
+              ;; loaded, reported `:builtins 88`, and threw at boot. The
+              ;; babashka door passes `byte-array` for the same reason.
+              image (flint.rt/vec->b (vec (img/emit builder {})))
+              opts {:version (:version spec)
+                    :meta (:meta spec)
+                    :builtins (count (img/natives builder))}]
+          ;; ONE DOOR FOR THE CLASS. `jvm/pack` calls `jvm/emit` itself, so both
+          ;; arms go through the same emitter and the class cannot pick up a
+          ;; property on one path and lose it on the other -- which is the exact
+          ;; defect `bin/build-jvm-artifact` records having had when it called
+          ;; `artifact-class` directly.
+          {:module (base64 (if (or (nil? base-b64) (= "" base-b64))
+                             (jvm/emit image opts)
+                             (jvm/pack (base64-decode base-b64) image opts)))})))))
 
 (defn main [args]
   ;; Two entries, chosen by the first argument. `spec` is the original: the
@@ -449,15 +472,22 @@
         ;; argument as the spec when it does not recognise it, so a target added
         ;; to the `cond` and forgotten here compiles the word "clr" as a program
         ;; and reports something about the reader. The two lists must move
-        ;; together, and `test/selfhost-targets.clj` asserts they do.
+        ;; together, and `test/selfhost-targets.clj` asserts they do -- a file
+        ;; this comment cited for some time before it existed, which is its own
+        ;; lesson. It checks THREE lists and not two: this one, the dispatch
+        ;; `cond` below, and the OUTPUT `cond` that turns each result map back
+        ;; into a string. The third is the one that was wrong -- `:clr` had no arm
+        ;; there, so the target was listed in both lists above and still could not
+        ;; work from the native CLI.
         known? (or (= mode "project") (= mode "wasm") (= mode "llvm")
                    (= mode "clr") (= mode "jvm"))
         [mode spec-edn] (if known? [mode (second args)] ["spec" mode])
         r (cond
             (= mode "wasm") (compile-to-wasm spec-edn (nth args 2 ""))
-            ;; A JAR comes back the way a wasm module does -- base64, under
-            ;; `:module` -- because it is the same thing: a finished artifact with
-            ;; the program spliced in, and nothing for the host to link.
+            ;; The CLASS, or a jar when a third argument carries one -- base64
+            ;; under `:module` either way, the way a wasm module comes back,
+            ;; because it is the same thing: a finished artifact with the program
+            ;; in it and nothing for the host to link.
             (= mode "jvm") (compile-to-jvm spec-edn (nth args 2 ""))
             (= mode "clr") (compile-to-clr spec-edn)
             (= mode "llvm") (compile-to-llvm spec-edn)
@@ -485,6 +515,18 @@
       ;; A module comes back alone: its native slots are already in it, so
       ;; there is no import order for the host to apply.
       (:module r) (:module r)
+      ;; `:clr` -- AND THIS ARM WAS MISSING, so `:to :clr` through the
+      ;; SELF-HOSTED compiler had never once worked. `compile-to-clr` answers
+      ;; `{:clr bytes}` and its own docstring says "Bytes out, so the caller
+      ;; base64s them"; with no arm for it the `cond` fell through to `:else`,
+      ;; which reads `(:image r)` -- nil -- and every `flint compile :to :clr`
+      ;; on the native CLI died with `ClassCastException: str-join wants
+      ;; strings`, four frames from anything named `clr`.
+      ;;
+      ;; `bin/flint :to :clr` works and always did, which is exactly why this
+      ;; survived: it calls `clr/assemble` itself and never comes through here,
+      ;; so the target looked wired from the door most likely to be tried.
+      (:clr r) (base64 (:clr r))
       ;; LLVM IR is TEXT and leaves as text -- no base64 on the way out, which
       ;; is the one visible difference from every other target here.
       (:ll r) (:ll r)

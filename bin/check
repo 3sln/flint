@@ -76,6 +76,19 @@ for s in reader_test cycles; do
   echo "  ok   test/$s.clj"
 done
 
+# EVERY TARGET THE SELF-HOSTED COMPILER CLAIMS, actually produced. 16 s, and it
+# earns them: `:to :clr` had NEVER worked through the native CLI -- the output
+# `cond` in `selfhost.cljc` had no arm for what `compile-to-clr` returns, so it
+# fell through and died with `str-join wants strings`. The only test that
+# mentioned the target asserted the UNKNOWN-TARGET MESSAGE mentions it.
+#
+# Its source half needs no build and fires on the forgotten arm on its own; the
+# end-to-end half skips itself when `target/release/flint` is absent.
+bb test/selfhost-targets.clj > /tmp/flint-check.out 2>&1 \
+  || { cat /tmp/flint-check.out; fail "test/selfhost-targets.clj"; }
+grep -cE "^  ok" /tmp/flint-check.out | sed 's/^/  ok   test\/selfhost-targets.clj: /;s/$/ targets and lists/'
+
+
 # `check-kin` is 74 s -- too slow for every change, and it has a PRECISE input
 # set, so it runs only when that input moved. This is the changed-files idea
 # applied where it actually works: a check whose inputs are a known list of

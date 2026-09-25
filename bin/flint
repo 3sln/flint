@@ -18,7 +18,9 @@
          '[flint.wasm :as w] '[flint.modmeta :as modmeta]
          ;; The CLR writer, for `:to :clr`. Portable cljc, so babashka and the
          ;; self-hosted compiler load the same emitter.
-         '[flint.clr :as clr] '[flint.rt])
+         '[flint.clr :as clr]
+         ;; The JVM writer, for `:to :jvm`, and portable cljc for the same reason.
+         '[flint.jvm :as jvm] '[flint.rt])
 
 (defn clr-name
   "An assembly name from the output path: the basename, minus its extension, with
@@ -1169,6 +1171,65 @@
               (with-open [o (java.io.FileOutputStream. (str out))]
                 (.write o (byte-array (map unchecked-byte bytes))))
               (println "wrote" out (str "(" (count bytes) " bytes, image only)"))
+              (System/exit 0)))
+        ;; `:to :jvm` -- HERE FOR `:to :clr`'s REASONS, and the artifact is ONE
+        ;; CLASS FILE. Not a jar: the class carries the program and references the
+        ;; runtime, which the host supplies through `link`, exactly as the CLR
+        ;; assembly references `Flint.dll`. A jar that also carried the
+        ;; interpreter would be the one thing `one-image-per-sandbox` says an
+        ;; artifact is not.
+        ;;
+        ;; `bin/build-jvm-artifact` is the spike this replaces and says so in its
+        ;; own header. It stays: it can write the convenience jar and report the
+        ;; expansion factor, neither of which belongs on this path.
+        _ (when (= to "jvm")
+            (let [image (if self (:image selfres) (img/emit builder {}))
+                  ;; NO `modmeta/describe` HERE, and that is NOT what the `:to :clr`
+                  ;; branch below does. The two emitters own their metadata at
+                  ;; OPPOSITE ends: `clr/assemble` takes the describe map verbatim
+                  ;; from its caller ("ONE PRODUCER", its comment says), while
+                  ;; `jvm/emit` calls its own `jvm/describe` -- which exists
+                  ;; because the JVM's `:abi` is a version map and not wasm's
+                  ;; linear-memory key, and the two must not collide.
+                  ;;
+                  ;; Mirroring the clr branch literally therefore DOUBLE-DESCRIBED
+                  ;; it: the class came out with a `:compat {:abi {:image 3 ..}}`
+                  ;; wrapping a whole second describe map as a STRING under
+                  ;; `:meta`, each with a different `:features` key meaning
+                  ;; something different. `:meta` here is the user payload, which
+                  ;; is what `bin/build-jvm-artifact` already passes.
+                  klass (jvm/emit (byte-array (map unchecked-byte image))
+                                  {:version (or (System/getenv "FLINT_VERSION") "0.1.0")
+                                   :meta {}
+                                   :builtins (count needed)})
+                  ;; `:out` IS A CLASSPATH ROOT, not the file. The class declares
+                  ;; itself `flint.Artifact` and that name is a CONTRACT -- both
+                  ;; `runtimes/jvm/src/com/flint/Main.java` and `FourOps.java`
+                  ;; reach it by `Class.forName("flint.Artifact")` -- and a JVM
+                  ;; will not load a class from a file whose path disagrees with
+                  ;; its name. Writing 39 KB to `:out T.class` produces a file
+                  ;; nothing can load, which is worse than refusing, so this
+                  ;; resolves the real path and prints it.
+                  ;;
+                  ;; An `:out` that already ends in `flint/Artifact.class` is
+                  ;; honoured as given: somebody who wrote the full path meant it.
+                  target (if (str/ends-with? (str out) (str jvm/ARTIFACT-CLASS ".class"))
+                           (str out)
+                           (if (str/ends-with? (str out) ".class")
+                             (do (binding [*out* *err*]
+                                   (println (str "refusing to write " out
+                                                 ": the class declares itself `flint.Artifact`"
+                                                 " and a JVM loads it only from a path ending"
+                                                 " `flint/Artifact.class`. Pass `:out` as a"
+                                                 " CLASSPATH ROOT -- a directory -- and this"
+                                                 " writes the rest.")))
+                                 (System/exit 1))
+                             (str out "/" jvm/ARTIFACT-CLASS ".class")))
+                  _ (.mkdirs (.getParentFile (java.io.File. ^String target)))]
+              (with-open [o (java.io.FileOutputStream. ^String target)]
+                (.write o ^bytes klass))
+              (println "wrote" target (str "(" (alength ^bytes klass) " bytes, "
+                                           (count image) " of it bytecode)"))
               (System/exit 0)))
         ;; `:to :clr` -- BESIDE `--emit-image` and before `link/compose`, because
         ;; a CLR assembly is not a link. The bytecode goes in as a `FieldRva`

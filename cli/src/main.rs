@@ -731,6 +731,73 @@ fn compile_clr(srcs: &[PathBuf], entry: &str, out_path: &Path,
     Ok(())
 }
 
+/// `:to :jvm`: the program as ONE CLASS FILE, and no JDK anywhere.
+///
+/// `out_path` IS A CLASSPATH ROOT and not the file, which is true of no other
+/// target. The class declares itself `flint.Artifact` -- a name the runtime
+/// reaches by `Class.forName`, in both `com.flint.Main` and `com.flint.FourOps` --
+/// and a JVM will not load a class from a path that disagrees with its name. So
+/// writing the bytes where `:out` pointed would produce a file nothing can load,
+/// and this resolves `<root>/flint/Artifact.class` instead and prints what it
+/// wrote. A path that already ends that way is honoured as given.
+///
+/// NO `dist/flint-rt.jar` IS EMBEDDED, and that was named as the blocker for
+/// wiring this target. It is not one: the jar is only needed to build the
+/// CONVENIENCE jar that carries an interpreter beside the class, and the artifact
+/// does not contain the runtime -- the host supplies it through `link`, exactly as
+/// the CLR assembly references `Flint.dll`. `compile-to-jvm` takes an empty third
+/// argument to mean "the class alone", so there is nothing to carry.
+///
+/// `SLOTS`, not `SLOTS_AOT`, and no shaking -- for `compile_clr`'s reasons.
+fn compile_jvm(srcs: &[PathBuf], entry: &str, out_path: &Path,
+               optimize: &[String], checks: Option<bool>, quiet: bool,
+               features: Option<&[String]>) -> Result<()> {
+    let aot = wants_aot(optimize);
+    let strip_checks = strip_checks(optimize, checks);
+    let slots = parse_slots(SLOTS)?;
+    let spec = build_spec(srcs, entry, &slots, aot, false, &[], None, strip_checks, features)?;
+    let mut p = load_compiler()?;
+    // NO THIRD ARGUMENT: that is how `compile-to-jvm` is asked for the class
+    // rather than the jar.
+    let r = p.run(&["jvm", &spec]);
+    if r.code != 0 {
+        bail!("{}", r.out.trim());
+    }
+    if let Some(rest) = r.out.strip_prefix("!missing") {
+        bail!("{}", missing_message(rest, features));
+    }
+    if let Some(rest) = r.out.strip_prefix("!refused") {
+        bail!("{}", rest.trim());
+    }
+    let klass = base64_decode(r.out.trim())?;
+    // A SNIFF TEST, for `compile_clr`'s reason: the guest answers with a string
+    // either way, and a compiler that wrote a diagnostic into an artifact would be
+    // found out by whoever loaded it. `CAFEBABE` opens every class file.
+    if klass.len() < 4 || klass[0] != 0xca || klass[1] != 0xfe
+        || klass[2] != 0xba || klass[3] != 0xbe {
+        bail!("the compiler did not answer with a class file (no `CAFEBABE`):\n{}",
+              r.out.chars().take(400).collect::<String>().trim());
+    }
+    const CLASS_PATH: &str = "flint/Artifact.class";
+    let target = if out_path.to_string_lossy().replace('\\', "/").ends_with(CLASS_PATH) {
+        out_path.to_path_buf()
+    } else if out_path.extension().map(|e| e == "class").unwrap_or(false) {
+        bail!("refusing to write {}: the class declares itself `flint.Artifact` and a JVM\n\
+               loads it only from a path ending `{}`. Pass `:out` as a CLASSPATH ROOT --\n\
+               a directory -- and this writes the rest.",
+              out_path.display(), CLASS_PATH);
+    } else {
+        out_path.join(CLASS_PATH)
+    };
+    if let Some(dir) = target.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    fs::write(&target, &klass)?;
+    if !quiet { eprintln!("wrote {} ({} bytes{})", target.display(), klass.len(),
+              if aot { ", compiled arities" } else { "" }); }
+    Ok(())
+}
+
 /// `:to :llvm`: the program as one LLVM IR module, and no linker anywhere.
 ///
 /// What comes back is TEXT, which is the whole difference from the wasm path:
@@ -811,13 +878,18 @@ pub(crate) fn compile_q(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize
         // A THIRD ARM, not a second target on the LLVM one. IR is text and an
         // assembly is bytes; the record above is about exactly this mistake.
         "clr" => return compile_clr(srcs, entry, out_path, optimize, checks, quiet, features),
+        // A FOURTH ARM, for the third arm's reason: a class file is bytes like an
+        // assembly, but where it may be WRITTEN is fixed by its own name, which is
+        // true of no other target.
+        "jvm" => return compile_jvm(srcs, entry, out_path, optimize, checks, quiet, features),
         "native" => bail!(
             "`:to :native` is not built: an executable is a LINK, and this binary carries\n\
              no linker. `:to :llvm` emits the LLVM IR for the same program and needs none;\n\
              linking it is then your own `clang` (see `nativeabi/`). To just run the\n\
              program, `flint run` executes it natively here."
         ),
-        other => bail!("no such target `{other}` (`:to :wasm`, `:to :llvm`, `:to :clr`)"),
+        other => bail!("no such target `{other}` \
+                        (`:to :wasm`, `:to :llvm`, `:to :clr`, `:to :jvm`)"),
     }
     let aot = wants_aot(optimize);
     let slots = parse_slots(if aot { SLOTS_AOT } else { SLOTS })?;
@@ -1424,6 +1496,7 @@ fn usage() -> ! {
           clang prog.ll target/release/libflintnative.a -o prog
 
   flint compile :path <dir> :fn <ns/fn> :to :clr [:out <file.dll>]
+  flint compile :path <dir> :fn <ns/fn> :to :jvm [:out <classpath-dir>]
                 [:optimize [perf]] [:meta k=v]
       Compile to one .NET assembly, for any host with a CLR. The bytecode
       rides in `.text` as a static byte array and the assembly exposes

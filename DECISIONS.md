@@ -12707,6 +12707,69 @@ label fixups with short/long selection, computed `maxstack` -- at ~200-250
 lines, which is the same problem `src/flint/aot.cljc` already solves in 713 for
 wasm.
 
+### `:to :jvm` is wired, and `:to :clr` had never worked
+
+Both CLIs take `:to :jvm` now -- `bin/flint` and `cli/src/main.rs` -- and the two
+produce an artifact of the same size that runs on `com.flint.Main`: boot ok, link
+refused after boot, `loop` answering 2.
+
+**THE BLOCKER WAS PRICED AND WAS NOT ONE.** `bin/build-jvm-artifact`'s own header
+says the front door "means the Rust CLI embedding `dist/flint-rt.jar` the way it
+already embeds `dist/flint-runtime.wasm`". That is half a megabyte in the binary,
+and it is unnecessary: the jar is only needed for the CONVENIENCE wrapper that
+carries an interpreter beside the class, and the artifact does not contain the
+runtime -- the host supplies it through `link`. So `compile-to-jvm` takes an EMPTY
+third argument to mean "the class alone", and the CLI embeds nothing.
+
+**`:out` IS A CLASSPATH ROOT for this target and a file for every other one.**
+The class declares itself `flint.Artifact`, and that name is a contract: both
+`com.flint.Main` and `com.flint.FourOps` reach it by `Class.forName`. A JVM will
+not load a class from a path disagreeing with its name, so honouring `:out
+T.class` would write 39 KB that nothing can load. Both doors resolve
+`<root>/flint/Artifact.class`, print what they wrote, and refuse a `.class` path
+that is not already that -- with a message saying why, since the refusal is the
+only place a caller learns the contract.
+
+**`:to :clr` HAD NEVER WORKED THROUGH THE NATIVE CLI.** `compile-to-clr` answers
+`{:clr bytes}` and the output `cond` in `selfhost.cljc` had no arm for it, so
+every `flint compile :to :clr` fell through to `:else`, read `(:image r)` as nil
+and died with `ClassCastException: str-join wants strings` -- four frames from
+anything named `clr`. Found only because wiring `:to :jvm` beside it ran the same
+door.
+
+It survived because **`bin/flint :to :clr` works and always did**: that door calls
+`clr/assemble` itself and never enters `selfhost`, so the target was sound from
+the door a person tries first and broken from the one the CLI uses. And the only
+test naming it asserted that the UNKNOWN-TARGET MESSAGE lists `:to :clr` -- the
+help text, not the target. A three-line status saying "`:to :clr` IS wired" was
+true of one door out of two.
+
+`test/selfhost-targets.clj` now drives every artifact target end to end and
+asserts the ARTIFACT'S MAGIC rather than an exit code. `selfhost.cljc` had cited
+that filename for some time before the file existed, which is the smaller lesson
+here: a comment naming a test is not a test. It checks THREE lists -- `known?`,
+the dispatch `cond`, and the output `cond` -- because the third is the one that
+was wrong, and a target can be in the first two and still not work. In
+`bin/check` at 16 s; the source half needs no build and fires on the missing arm
+by itself, checked by removing the arm.
+
+**Two further things measured on the way, neither fixed here:**
+
+* The two emitters own their metadata at OPPOSITE ends. `clr/assemble` takes the
+  describe map verbatim from its caller ("ONE PRODUCER", its comment says);
+  `jvm/emit` calls its own `jvm/describe`, which exists because the JVM's `:abi`
+  is a version map rather than wasm's linear-memory key and the two keys must not
+  collide. Mirroring the clr branch literally therefore DOUBLE-DESCRIBED the
+  class: a `:compat` wrapping a second whole describe map as a string under
+  `:meta`, each with a `:features` key meaning something different. Both
+  contracts are documented and defensible; which emitter should own `describe` is
+  a design call, not a bug to fix mid-change.
+* The two doors do not produce IDENTICAL images. Same length, same string set,
+  54 bytes of 26 715 differing -- a constant-pool ORDERING difference between
+  babashka's Clojure and the self-hosted runtime. It shows on `:to :clr` too, so
+  it predates this and is not JVM-specific. Artifacts are not reproducible across
+  doors; nothing depends on that yet.
+
 ### The 33 KB the compiler image grew, and why it does not bite
 
 Requiring `flint.clr`, `flint.jvm` and `flint.modmeta` into `flint.selfhost` --
