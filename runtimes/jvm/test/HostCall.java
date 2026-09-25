@@ -85,7 +85,20 @@ public final class HostCall {
         .kw("tx").num(1)
         .kw("op").kw("call")
         .kw("fn").str(fn)
-        .kw("args").vec(args.length);
+        // ONE ARGUMENT, WHICH IS A VECTOR OF THE ARGS. flint's convention is
+        // `(defn main [args] ..)` -- one parameter -- and this used to spread the
+        // strings as N arguments instead. With one arg string it happened to work,
+        // because `main` then received that string AS `args`; with none it threw
+        // `wrong number of arguments (0) to main`, and with two it could not work
+        // at all.
+        //
+        // IT ALSO MADE THE GAS COMPARISON INCOMPARABLE, which is how it was found.
+        // `sdks/esm/src/guest.js` builds `[codec.vec(args)]`, so the wasm side
+        // allocated one `TY_VEC` and one `TY_NODE` this side never did -- a FLAT
+        // 86 steps on every program, whatever it did. `bin/conform-hosts` compares
+        // a DIFFERENCE of two workloads, and a difference cancels exactly that.
+        .kw("args").vec(1);
+    w.vec(args.length);
     for (String a : args) w.str(a);
     Conc.hostDeliver(rt, CALLS, w.done());
 

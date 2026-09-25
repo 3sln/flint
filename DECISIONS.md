@@ -12803,6 +12803,43 @@ Both proven sensitive by removing the call: ":optimize [perf] compiled no aritie
 *The CLR half was smaller than the JVM's, which I got wrong first: the CLR already
 keeps its `Loaded` in a field, so only the flag needed consulting.*
 
+### The 86 steps were the harness, and they were hiding 3 that were not
+
+Every program billed 86 steps more on the Rust runtime than on either port, flat,
+whatever it did -- 15 861 against 15 775 for a program that returns `""`. Split by
+attribution it was 76 instructions and 10 allocation gas, and the allocation
+histogram named the types: exactly one extra `TY_VEC` (62 against 61) and one extra
+`TY_NODE` (66 against 65).
+
+**One vector, with its backing node: the ARGUMENT LIST.** `sdks/esm/src/guest.js`
+calls the program with ONE argument that is a vector of the args -- flint's
+`(defn main [args] ..)` convention -- and the two gas harnesses,
+`runtimes/jvm/test/HostCall.java` and `runtimes/clr/conform/Program.cs`, spread the
+strings as N arguments instead. With one arg string that happened to work, because
+`main` then received the string AS `args`; with none it threw `wrong number of
+arguments (0) to main`, and with two it could not work at all. Fixed on both: all
+three runtimes now bill 15 861 for that program, exactly.
+
+`RtImage`, the CORRECTNESS harness, was already right -- which is why answers
+agreed everywhere while totals differed by a constant, and why this hid so long.
+
+**AND THE 86 WAS MASKING A RESIDUAL 3.** With it gone the gasmeter programs sit at
+71 996 against 71 993 and 215 031 against 215 028 -- off by three, on both, so a
+constant per call rather than per unit of work. Localised: `instrs` and `allocgas`
+are IDENTICAL, `tick` and `checked` are identical, and the whole of it is
+`charge_bytes`. The per-call formula is the same on both sides (`(n / 8) + 1`), so
+it is the COUNT of calls, inside REGEX PATTERN COMPILATION: 6 per `re/pattern` and
+3 per `str/split`. Every other string builtin was probed individually -- `subs` on
+both arms, `str-index-of` found and absent, `str`, `pr-str` of a vector and of a
+map, `str-bytes`, a table with a string column, a schema at init -- and all agree.
+
+**THE ROW REPORTS THE ABSOLUTES AND DOES NOT YET ASSERT THEM.** It compares
+`big - small`, and a difference cancels exactly the kind of constant that was
+there: both sides' differences matched the whole time. The numbers are printed now,
+with a ceiling at the known 3 so a NEW offset fails, and the equality becomes an
+assertion the moment the regex residual is zero. A `within 3` with no explanation
+is the slack this file already records being read as agreement once.
+
 ### Two implementations of one access check, disagreeing
 
 `cli/src/sys.rs`'s `under()` and `sdks/cli/src/sys.mjs`'s are the fs capability's

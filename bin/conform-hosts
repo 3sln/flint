@@ -535,9 +535,17 @@ for (const k of ['small', 'big']) {
   i.run(`gasmeter/${k}`, ['']);
   o[k] = Number(i.exports.stat_steps());
 }
-console.log(o.big - o.small);
+// BOTH TOTALS, not only their difference. A difference cancels any constant the
+// two sides disagree by, and one was hiding in here: the gas harnesses called
+// `main` with different ARGUMENT SHAPES -- `guest.js` sends one argument that is
+// a vector of the args, the ports spread them -- so the wasm side allocated one
+// `TY_VEC` and one `TY_NODE` more, a flat 86 steps on every program. The
+// difference below was identical the whole time.
+console.log(o.small + " " + o.big);
 GMJS
-  nd="$(node out/gm-run.mjs)"
+  nd_raw="$(node out/gm-run.mjs)"
+  na="${nd_raw%% *}"; nb="${nd_raw##* }"
+  nd=$((nb - na))
   # NAMED, and called OVER A BRIDGE, which is how the wasm line above enters
   # the program too. Both sides now take the same door.
   # `RtSteps` PRINTS TWO NUMBERS NOW -- steps and preemptions -- because a
@@ -554,6 +562,30 @@ GMJS
   jd=$((jb - ja))
   jpd=$((jb_pre - ja_pre))
   gap=$(( nd > jd ? nd - jd : jd - nd ))
+  # THE ABSOLUTE TOTALS, REPORTED. The difference above cannot see a constant
+  # offset and there was an 86-step one for most of this file's life: the gas
+  # harnesses called `main` with different ARGUMENT SHAPES, so the wasm side
+  # allocated one `TY_VEC` and one `TY_NODE` the ports never did. Fixed
+  # 2026-09-25 in `HostCall.java` and `runtimes/clr/conform/Program.cs`.
+  #
+  # NOT YET AN ASSERTION, and deliberately not a tolerance either. Removing the 86
+  # exposed a REAL residual of 3, which is `charge_bytes` called fewer times on
+  # the ports inside REGEX PATTERN COMPILATION -- 6 per `re/pattern`, 3 per
+  # `str/split` (`DECISIONS.md#resource-limits`). Every other string builtin was
+  # probed and agrees. A `within 3` here would be the slack this file already
+  # records being read as agreement once; the numbers are PRINTED so the residual
+  # is visible and any change to it is, and the equality becomes an assertion the
+  # moment it is zero.
+  off_a=$(( na > ja ? na - ja : ja - na ))
+  off_b=$(( nb > jb ? nb - jb : jb - nb ))
+  echo "  ..     absolute totals: small wasm $na / jvm $ja (off by $off_a), big wasm $nb / jvm $jb (off by $off_b)"
+  [ "$off_a" -le 3 ] && [ "$off_b" -le 3 ] \
+    || { echo "  FAIL the absolute gas offset GREW beyond the known regex residual of 3:"
+         echo "       small: wasm $na, jvm $ja"
+         echo "       big:   wasm $nb, jvm $jb"
+         echo "       The known residual is regex pattern compilation charging fewer"
+         echo "       \`charge_bytes\` calls on the ports. Anything larger is new."
+         exit 1; }
   # EXACT. This was 1% of the native figure -- about 1 090 steps of slack --
   # for as long as the ports' map allocated more per entry than the Rust CHAMP
   # did. The kin CHAMP closed that, and the row then sat at `within 1` and was

@@ -610,7 +610,14 @@ public static class Program {
             .Kw("tx").Num(1)
             .Kw("op").Kw("call")
             .Kw("fn").Str(fn)
-            .Kw("args").Vec(args.Length);
+            // ONE ARGUMENT, WHICH IS A VECTOR OF THE ARGS -- flint's
+            // `(defn main [args] ..)` convention, and what
+            // `sdks/esm/src/guest.js` sends. Spreading them as N arguments made
+            // this side allocate one `TY_VEC` and one `TY_NODE` fewer than the
+            // wasm side, a FLAT 86 steps on every program; see the jvm's copy in
+            // `runtimes/jvm/test/HostCall.java` for the whole account.
+            .Kw("args").Vec(1);
+        w.Vec(args.Length);
         foreach (var a in args) w.Str(a);
         Flint.Rt.Conc.HostDeliver(rt, CALLS, w.Done());
 
