@@ -12707,6 +12707,43 @@ label fixups with short/long selection, computed `maxstack` -- at ~200-250
 lines, which is the same problem `src/flint/aot.cljc` already solves in 713 for
 wasm.
 
+### The 33 KB the compiler image grew, and why it does not bite
+
+Requiring `flint.clr`, `flint.jvm` and `flint.modmeta` into `flint.selfhost` --
+which is what `:to :clr` and `:to :jvm` through the SELF-HOSTED compiler cost --
+takes `dist/flintc.bytecode` from **206 407 to 239 955 bytes**, +33 548.
+
+A subagent measured the smaller half of that (+21 682, clr alone) and reported
+that it BREAKS `sdks/cli`'s selftest: `flint.ception`'s "a sandbox lent a
+capability can use it" failing with `wire-str: this writer has already been
+finished`. It bisected three full build cycles, so the report was careful. And
+`lib/flint/system.cljc:129` describes exactly that failure mode as a known
+ceiling -- "a reply within a few kilobytes of the encoder's ceiling crossed it
+and a passing compile started failing ... since fixed, a 2 MB reply crosses now".
+
+**It does not reproduce on the merged tree at the LARGER size.** Both arms in,
+239 955 bytes, the named case passes and the selftest is clean. So whatever the
+subagent hit was not the ceiling as a function of image size -- the merge is
+bigger and fine.
+
+*It took two stale artifacts to find that out, both mine, and they are worth
+writing down because each read as the opposite of the truth.*
+
+* `FLINT_DIST_FRESH=1 ./sdks/cli/build` reported "all good" against a compiler
+  image **22 hours old**. The flag means "the caller JUST built them" and so
+  SKIPS the rebuild -- `bin/test` sets it because it builds them first. Copied
+  from there without reading the line above it, it turns the gate into a test of
+  yesterday's artifact that cannot fail on today's change.
+* With a fresh image, five "byte-identical to the native CLI" rows failed --
+  because `build-dist` does not rebuild `target/release/flint`, so the npm CLI
+  was new and the native one old. The comparison was right and both inputs were
+  not.
+
+Neither failure was in the tree. The lesson is the one already written down as
+"a flint size or result read without rebuilding first is a stale artefact", and
+it now has a second instance: a FRESHNESS FLAG can make a gate skip the very
+build it is supposed to be checking.
+
 ### A status line that named files nobody could open
 
 This record shipped saying the CLR face "is written and runs" and naming two
