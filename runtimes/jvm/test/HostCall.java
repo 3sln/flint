@@ -104,13 +104,39 @@ public final class HostCall {
 
     // PUMPED UNTIL THE ANSWER, not until the sandbox is idle: the control plane
     // is parked on the system port, so "needs the host" is where it RESTS.
-    long code = Conc.drive(rt);
-    for (int guard = 0; guard < 1000; guard++) {
-      if (answered(rt)) break;
-      if (code != 2) break;
-      code = Conc.drive(rt);
+    // `rt.status`, NOT `drive`'s RETURN VALUE. `Conc.drive` answers a flint VALUE
+    // -- NIL, or the settled answer -- and this compared it against the status
+    // constant 2. A tagged value is never 2, so `code != 2` was true on the first
+    // iteration every time and the loop BROKE IMMEDIATELY: the pump drove exactly
+    // once, not up to a thousand times, and `call` returned `0xFFF9...` from a
+    // method whose own docstring says it "returns the status `drive` last
+    // reported". Simple programs answer in one drive, which is why it worked.
+    Conc.drive(rt);
+    boolean got = answered(rt);
+    int guard = 0;
+    while (!got && rt.status == 2 && guard < 1000) {
+      guard++;
+      Conc.drive(rt);
+      got = answered(rt);
     }
-    return code;
+    // GIVING UP IS NOT RESTING. This loop returned the last code -- 2, "needs the
+    // host" -- when the guard ran out without an answer, so a program that never
+    // completes was indistinguishable from a healthy idle one. `RtSteps` then
+    // printed a step count and exited 0: measured 14599 steps for a program parked
+    // on a channel nobody writes, against 15861 for one that finished, and the gas
+    // row in `bin/conform-hosts` compares those numbers for equality.
+    //
+    // A measurement harness that reports a number for work that did not happen is
+    // the vacuous pass this repo keeps finding. Refuse instead, and name which of
+    // the two it was.
+    if (!got && rt.status == 2) {
+      throw new IllegalStateException(
+          "the host pump made no progress: " + guard + " drives without an answer on"
+          + " the call port, and the sandbox still reports 2 (NeedsHost). Either the"
+          + " program is wedged -- every remaining thread waiting on another -- or it"
+          + " is waiting for something this harness does not serve.");
+    }
+    return rt.status;
   }
 
   /// Has an answer come back on the call port?

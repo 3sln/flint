@@ -624,13 +624,34 @@ public static class Program {
         // PUMPED UNTIL THE ANSWER, not until the sandbox is idle: the control
         // plane is parked on the system port, so "needs the host" is where it
         // RESTS.
-        long code = Flint.Rt.Conc.Drive(rt);
-        for (int guard = 0; guard < 1000; guard++) {
-            if (HostAnswered(rt)) break;
-            if (code != 2) break;
-            code = Flint.Rt.Conc.Drive(rt);
+        // `rt.status`, NOT `Drive`'s RETURN VALUE. `Conc.Drive` answers a flint
+        // VALUE -- NIL, or the settled answer -- and this compared it against the
+        // status constant 2. A tagged value is never 2, so `code != 2` was true on
+        // the first iteration every time and the loop BROKE IMMEDIATELY: the pump
+        // drove exactly once, not up to a thousand times, from a method whose own
+        // comment says it pumps "until the answer". Simple programs answer in one
+        // drive, which is why it worked. Same defect as the jvm's `HostCall`.
+        Flint.Rt.Conc.Drive(rt);
+        bool got = HostAnswered(rt);
+        int guard = 0;
+        while (!got && rt.status == 2 && guard < 1000) {
+            guard++;
+            Flint.Rt.Conc.Drive(rt);
+            got = HostAnswered(rt);
         }
-        return code;
+        // GIVING UP IS NOT RESTING. Returning the last code -- 2, "needs the host"
+        // -- made a program that never completes indistinguishable from a healthy
+        // idle one, so a measurement harness reported a step count for work that
+        // did not happen.
+        if (!got && rt.status == 2) {
+            throw new InvalidOperationException(
+                "the host pump made no progress: " + guard + " drives without an" +
+                " answer on the call port, and the sandbox still reports 2" +
+                " (NeedsHost). Either the program is wedged -- every remaining" +
+                " thread waiting on another -- or it is waiting for something this" +
+                " harness does not serve.");
+        }
+        return rt.status;
     }
 
     /// Has an answer come back on the call port? The records are five

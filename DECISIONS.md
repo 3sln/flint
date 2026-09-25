@@ -12803,6 +12803,39 @@ Both proven sensitive by removing the call: ":optimize [perf] compiled no aritie
 *The CLR half was smaller than the JVM's, which I got wrong first: the CLR already
 keeps its `Loaded` in a field, so only the flag needed consulting.*
 
+### The gas harnesses' pump drove once, and said "resting" when it gave up
+
+Two defects in the same six lines of `runtimes/jvm/test/HostCall.java` and
+`runtimes/clr/conform/Program.cs`, found while looking into why the four runtimes
+report a wedged sandbox four different ways.
+
+**IT COMPARED A VALUE AGAINST A STATUS.** `Conc.drive` answers a flint VALUE -- NIL,
+or the settled answer -- and the pump tested `code != 2` against the status constant.
+A tagged value is never 2 (it reads `0xFFF9000000000000`), so that broke on the
+first iteration EVERY time: the pump drove exactly once, not up to a thousand times,
+from a method whose own comment says it pumps "until the answer" and whose docstring
+says it "returns the status `drive` last reported". Simple programs answer in one
+drive, which is why nothing noticed.
+
+**AND GIVING UP WAS REPORTED AS RESTING.** It returned the last code -- 2,
+NeedsHost, which is the healthy idle state -- when the guard ran out without an
+answer. So `RtSteps` printed a step count and exited 0 for a program parked on a
+channel nobody writes: 14 599 steps against 15 861 for one that finished. A
+MEASUREMENT harness reporting a number for work that did not happen, and it is the
+harness `bin/conform-hosts` uses for the gas row that now asserts absolute equality.
+It refuses now, naming both possibilities -- wedged, or waiting for something this
+harness does not serve.
+
+**The gate's numbers did not move**, which is what makes the fix safe to take:
+71 993 and 215 028 on both ports, the same as before, with `restores` going 0 to 12
+and 0 to 40 -- the drives that were always meant to happen. conform-hosts: 367 ok,
+17 phases, the absolute-total row and the preemption row both still green.
+
+*This is the third harness defect in this area and they rhyme: the ARGUMENT SHAPE
+one (86 steps), the ARITY one, and this. All three were in per-runtime hand-written
+test code, and all three were invisible because the thing they got wrong only shows
+on an input the fixtures never had.*
+
 ### `loop` had three statuses written down and four in the runtime
 
 `loop` answered 0 for BOTH "every thread settled" and "every thread is waiting on
