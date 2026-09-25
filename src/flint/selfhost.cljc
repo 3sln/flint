@@ -385,29 +385,22 @@
       {:missing (:missing built)}
       (if (:refused built)
         {:refused (:refused built)}
-        (let [image (img/emit (:builder built) {})
-              ;; THE SAME BUILDER EVERY TARGET USES. The compatibility key is
-              ;; computed once, here, and not re-derived per target -- which is
-              ;; the whole reason `flint.modmeta` exists rather than each
-              ;; emitter writing its own map.
-              meta-map (modmeta/describe
-                         {:abi :clr
-                          :memory :unshared
-                          :gas-in-aot false
-                          :version (:version spec)
-                          ;; The artifact's ABI SURFACE, which is the three
-                          ;; operations. Not the flint functions a host may name.
-                          :exports ["boot" "loop" "link"]
-                          :builtins (count (:builtins spec))
-                          :imports []
-                          :units []
-                          :features (:features spec)
-                          :meta (:meta spec)})]
+        ;; NO `modmeta/describe` HERE ANY MORE: `clr/assemble` builds it from the
+        ;; inputs below. `:abi :clr` and the three exports are properties of the
+        ;; TARGET, and this was one of the two places restating them
+        ;; (`DECISIONS.md#four-operations`, "the emitter owns describe"). The
+        ;; compatibility key is still computed by `flint.modmeta` exactly once --
+        ;; that has not changed, only WHO calls it.
+        (let [image (img/emit (:builder built) {})]
           ;; `:bytes` out of the map `assemble` answers -- it also carries the
           ;; per-method assembly facts, which nothing here wants.
           {:clr (:bytes (clr/assemble {:name (or (:name spec) "Program")
                                        :image image
-                                       :meta (pr-str meta-map)}))})))))
+                                       :describe true
+                                       :version (:version spec)
+                                       :builtins (count (:builtins spec))
+                                       :features (:features spec)
+                                       :meta-map (:meta spec)}))})))))
 
 (defn compile-to-jvm
   "Compile a program to ONE CLASS FILE, or to a jar carrying a runtime beside it.

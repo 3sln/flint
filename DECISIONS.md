@@ -12938,9 +12938,21 @@ by itself, checked by removing the arm.
   is a version map rather than wasm's linear-memory key and the two keys must not
   collide. Mirroring the clr branch literally therefore DOUBLE-DESCRIBED the
   class: a `:compat` wrapping a second whole describe map as a string under
-  `:meta`, each with a `:features` key meaning something different. Both
-  contracts are documented and defensible; which emitter should own `describe` is
-  a design call, not a bug to fix mid-change.
+  `:meta`, each with a `:features` key meaning something different.
+
+  **SETTLED 2026-09-25: THE EMITTER OWNS `describe`.** The argument is not taste,
+  it is a count. Caller-describes has four call sites -- `link.cljc:481` and
+  `bundle.cljc:155` for wasm, `selfhost.cljc:393` and `bin/flint` for clr -- and
+  the two wasm ones ALREADY DIVERGE: `link.cljc` derives `:abi` from the linked
+  units and `:units` from the artifact, `bundle.cljc` hardcodes both
+  `{:runtime 1 :value 1 :image 1}` and `[{:name "flint.rt" ..}]`. Emitter-describes
+  has one call site and has diverged nowhere.
+
+  That is this project's own rule applied to itself: put a mandatory fact where it
+  is RESOLVED, not in each front end. A target's `:abi` shape is a property of the
+  target, so it belongs in the file that emits that target -- which is also why
+  `jvm/describe` could carry the "not wasm's key" reasoning in one comment instead
+  of in every caller.
 * The two doors do not produce IDENTICAL images. Same length, same string set,
   54 bytes of 26 715 differing -- a constant-pool ORDERING difference between
   babashka's Clojure and the self-hosted runtime. It shows on `:to :clr` too, so
@@ -13028,8 +13040,22 @@ something and a later read takes a clobbered value as a function index. That is
 a state-corruption shape, not an arity check doing its job: the count in the
 message is correct and the FUNCTION is not.
 
-Both ports; native takes all of it. The threshold is between 8 194 and 9 000
-arguments, unbisected further because the shape is already clear.
+Both ports; native takes all of it. **BISECTED 2026-09-25: the last good count is
+8 803 and the first bad one is 8 804.**
+
+That number is the useful part, because it rules out the obvious cause. The value
+stack starts at 1 024 and DOUBLES (`Roots.stack`), so every candidate boundary is a
+power of two, and 8 804 is not one and is not near one -- 8 193 through 8 803 all
+pass, including the crossing of 8 192. `Roots.vpush` grows the array itself and
+`Roots.forEach` walks `0..stackTop` writing forwarded values back, so neither an
+unchecked push nor an unscanned root explains it either: both were checked and both
+are sound.
+
+So the remaining suspects are what SCALES WITH THE COUNT other than the stack --
+the nursery filling during the spread (each `Seqwalk.next` on a `repeat` allocates)
+and whatever `callValue` does with an argument count that large. The arithmetic in
+the `APPLY` handler was hand-checked against the native path and lands exactly on
+the copied callee, so the index is right and something moves under it.
 
 **THIS INVALIDATED ANOTHER FINDING OF MINE, which is why it is recorded
 separately.** `index-past-the-fixnum` below originally reported that the jvm

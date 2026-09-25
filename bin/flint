@@ -1254,16 +1254,18 @@
         ;; nobody asked for.
         _ (when (= to "clr")
             (let [image (if self (:image selfres) (img/emit builder {}))
-                  meta-map (modmeta/describe
-                             {:abi :clr :memory :unshared :gas-in-aot false
-                              :version (or (System/getenv "FLINT_VERSION") "0.1.0")
-                              :exports ["boot" "loop" "link"]
-                              :builtins (count needed)
-                              :imports [] :units []
-                              :features (or features {})
-                              :meta {}})
-                  dll (clr/assemble {:name (clr-name out) :image (flint.rt/vec->b (vec image))
-                                     :meta (pr-str meta-map)})
+                  ;; NO `modmeta/describe` HERE ANY MORE. `clr/assemble` builds it
+                  ;; from these inputs, because `:abi :clr` and the three exports
+                  ;; are properties of the TARGET and this door was one of two
+                  ;; places restating them (`DECISIONS.md#four-operations`, "the
+                  ;; emitter owns describe"). What stays here is what only this
+                  ;; door knows: the version, the builtin count and the features.
+                  dll (clr/assemble {:name (clr-name out)
+                                     :image (flint.rt/vec->b (vec image))
+                                     :describe true
+                                     :version (or (System/getenv "FLINT_VERSION") "0.1.0")
+                                     :builtins (count needed)
+                                     :features (or features {})})
                   ;; `:bytes`, NOT `dll`. `assemble` answers a map -- the bytes
                   ;; and the per-method assembly facts -- and both new callers
                   ;; of it assumed the byte string it used to return. The symptom

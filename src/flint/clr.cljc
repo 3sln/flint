@@ -44,7 +44,10 @@
   `link` forwards `object` rather than `Func<byte[],byte[]>`), an entry point for
   the exe variant, and the bytecode-to-CIL translation itself -- which is
   `flint.aot`'s job for wasm and has no CLR counterpart yet."
-  (:require [flint.rt]))
+  ;; `flint.modmeta` because THE EMITTER DESCRIBES now: the target's `:abi` shape
+  ;; is a property of the target, so it is built here and not in each caller
+  ;; (`DECISIONS.md#four-operations`).
+  (:require [flint.rt] [flint.modmeta :as modmeta]))
 
 ;; ---------------------------------------------------------------- byte output
 ;;
@@ -702,6 +705,35 @@
           (repeat pad [:nop])
           [[:label :over] [:ldc.i4 1] [:ret]]))
 
+(defn describe
+  "What a `:to :clr` assembly says about itself.
+
+  HERE RATHER THAN IN EVERY CALLER. `:abi :clr` and the three exports are
+  properties of this TARGET, and a caller that has to restate them is a caller that
+  can get them wrong -- which is what happened to wasm, whose two callers derive
+  `:abi` and `:units` differently. The variable half stays the caller's: the
+  version it was built at, how many builtins the image imports, the feature set,
+  and whatever the program's own `:meta` is.
+
+  `:gas-in-aot` is false and stays false however `:optimize` was set, for
+  `flint.jvm/describe`'s reason: this port compiles arities at LOAD time from the
+  same bytecode, so the artifact is identical either way and the preference travels
+  inside the image's flags."
+  [opts]
+  (modmeta/describe
+   {:abi :clr
+    :memory :unshared
+    :gas-in-aot false
+    :version (or (:version opts) "0.1.0")
+    ;; The artifact's ABI SURFACE, which is the three operations -- not the flint
+    ;; functions a host may name.
+    :exports ["boot" "loop" "link"]
+    :imports []
+    :units []
+    :builtins (:builtins opts 0)
+    :features (or (:features opts) {})
+    :meta (or (:meta-map opts) {})}))
+
 (defn assemble
   "Emit a loadable .NET assembly carrying `image` as a static byte array.
 
@@ -713,12 +745,22 @@
   shape and it was two sources of truth for the same thing -- exactly the
   \"one fact, four front doors\" failure this project keeps finding. A `MaxStack`
   reported by code other than the code that emitted it is not evidence."
-  [{:keys [name image meta tfm]}]
+  [{:keys [name image meta tfm] :as opts}]
   (let [img-len (flint.rt/b-count image)
-        ;; The metadata map as EDN, byte for byte the same string every other
-        ;; target carries. ONE PRODUCER (`flint.modmeta/describe`), one string,
-        ;; three containers -- so the three cannot drift into different shapes.
-        meta-edn (or meta "{}")
+        ;; THE EMITTER DESCRIBES, and it did not used to. Every caller built the
+        ;; map itself and passed EDN, which is "ONE PRODUCER" only if there is one
+        ;; caller: there were two for this target and two for wasm, and the wasm
+        ;; pair had already drifted -- `link.cljc` derives `:abi` and `:units` from
+        ;; the linked artifact where `bundle.cljc` hardcodes both. A target's
+        ;; `:abi` SHAPE is a property of the target, so it belongs in the file that
+        ;; emits the target (`DECISIONS.md#four-operations`, "the emitter owns
+        ;; describe").
+        ;;
+        ;; `:meta` STILL ACCEPTED AS A STRING, for one reason: `flint.selfhost`
+        ;; runs inside a sandbox with no `pr-str` of its own to spare and already
+        ;; has the canonical text. A caller with the inputs passes `:describe`
+        ;; instead and this builds it.
+        meta-edn (or meta (when (:describe opts) (pr-str (describe opts))) "{}")
         tfm-str (or tfm ".NETCoreApp,Version=v10.0")
         fld-tok 0x04000001                                ; Field table, row 1
 
