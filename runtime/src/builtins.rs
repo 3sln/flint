@@ -233,8 +233,16 @@ builtins! {
     "flint/b-slice", flint_b_bslice, b_bslice, |rt, a, n| {
         let _ = n;
         let (v, f, t) = (arg(rt, a, 0), arg(rt, a, 1), arg(rt, a, 2));
+        // BOUNDED BEFORE THE NARROWING, as `b-at` is. `f as u32` truncates, so
+        // `(b-slice bs 281474976710657 10)` narrowed the start to 1 and answered
+        // NINE BYTES of `[1,10)`; `(b-slice bs 0 281474976710657)` narrowed the
+        // end to 1 and answered one. Both ports already refuse here, so for this
+        // builtin native was the only one wrong -- which is why each site in
+        // `DECISIONS.md#index-past-the-fixnum` needs measuring rather than
+        // assuming the ports are the broken half.
+        let fits = |x: i64| (0..=u32::MAX as i64).contains(&x);
         match (rt.as_i64(f), rt.as_i64(t)) {
-            (Some(f), Some(t)) if f >= 0 && t >= 0 => rt.b_slice(v, f as u32, t as u32),
+            (Some(f), Some(t)) if fits(f) && fits(t) => rt.b_slice(v, f as u32, t as u32),
             _ => rt.throw_str("IllegalArgumentException", "b-slice wants two integers"),
         }
     };

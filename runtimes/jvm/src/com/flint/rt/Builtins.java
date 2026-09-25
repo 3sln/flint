@@ -655,7 +655,15 @@ public final class Builtins {
         // gas charge moved into the generated body with the rest of it.
         def("flint/lower-case", (rt, at, n) -> com._3sln.flint.kgen.rt.Casechange.changeCase(rt, rt.vat(at), false));
         def("flint/code-point-at", (rt, at, n) -> {
-            int i = (int) Val.asFixnum(rt.vat(at + 1));
+            // `Num.asI64` AND a bound, as `b-at` has. `asFixnum` read a BIGINT
+            // index as its heap ADDRESS and this answered the code point there
+            // -- 97 against native's 98, and neither was the refusal that
+            // belongs (`DECISIONS.md#index-past-the-fixnum`).
+            Long iv = Num.asI64(rt, rt.vat(at + 1));
+            if (iv == null || iv < 0 || iv > Integer.MAX_VALUE) {
+                return rt.throwStr("IndexOutOfBoundsException", "bad index");
+            }
+            int i = (int) (long) iv;
             int c = Str.codePointAt(rt, rt.vat(at), i);
             if (c < 0) {
                 return rt.throwStr("IndexOutOfBoundsException", "index " + i + " out of range");

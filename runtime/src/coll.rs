@@ -193,8 +193,12 @@ impl Rt {
     }
 
     pub fn code_point_at(&mut self, s: Value, i: Value) -> Value {
+        // BOUNDED BEFORE THE NARROWING. `cp_bytes_at` takes a `u32`, and
+        // `idx as u32` below truncates -- so `(code-point-at s 281474976810657)`
+        // narrowed to 1 and answered the code point at index 1 rather than
+        // refusing. A guard that only checks the SIGN is not a bound.
         let idx = match self.as_i64(i) {
-            Some(n) if n >= 0 => n as usize,
+            Some(n) if (0..=u32::MAX as i64).contains(&n) => n as usize,
             _ => return self.throw_str("IndexOutOfBoundsException", "bad index"),
         };
         let mut out = [0u8; 4];

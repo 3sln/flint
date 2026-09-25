@@ -358,7 +358,15 @@ cat > out/rt-probe/probe.cljc <<'PROBE'
         bs (flint.rt/str->b s)]
     (+ (flint.rt/b-count bs)
        (flint.rt/b-at bs 1)
-       (try (do (flint.rt/b-at bs big) 0) (catch Throwable e 7)))))
+       ;; FOUR SITES, each worth 7 when it refuses. They did not all fail the
+       ;; same way, which is why each is here rather than one standing in for
+       ;; the family: `b-at` was wrong on all three runtimes, `b-slice` was wrong
+       ;; on NATIVE ONLY -- both ports already refused -- and `code-point-at` was
+       ;; wrong on all three with two different wrong answers.
+       (try (do (flint.rt/b-at bs big) 0) (catch Throwable e 7))
+       (try (do (flint.rt/b-slice bs big 10) 0) (catch Throwable e 7))
+       (try (do (flint.rt/b-slice bs 0 big) 0) (catch Throwable e 7))
+       (try (do (flint.rt/code-point-at s big) 0) (catch Throwable e 7)))))
 (defn main [_] (+ (fold) (run 1000) (wide) (past-the-payload)))
 PROBE
 ./bin/flint :src out/rt-probe :fn probe/main --emit-image \

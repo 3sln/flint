@@ -570,7 +570,11 @@ public static class Builtins {
         // GENERATED, from `kin/casemap.kin` -- see the Java copy.
         Def("flint/lower-case", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Casechange.ChangeCase(rt, rt.VAt(at), false));
         Def("flint/code-point-at", (rt, at, n) => {
-            int i = (int) Val.AsFixnum(rt.VAt(at + 1));
+            // `Num.AsI64` and a bound before the cast -- see the Java copy.
+            long? iv = Num.AsI64(rt, rt.VAt(at + 1));
+            if (iv == null || iv < 0 || iv > int.MaxValue)
+                return rt.ThrowStr("IndexOutOfBoundsException", "bad index");
+            int i = (int) iv.Value;
             int c = Str.CodePointAt(rt, rt.VAt(at), i);
             if (c < 0)
                 return rt.ThrowStr("IndexOutOfBoundsException", "index " + i + " out of range");

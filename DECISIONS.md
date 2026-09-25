@@ -13075,12 +13075,24 @@ The conformance row uses the DOUBLING fixture and asserts by arithmetic: a
 refusal contributes 7 to the sum, so reverting the jvm half alone takes
 2110963933961807 to 2110963933961800. Checked by reverting it.
 
-STILL OPEN, all measured on native and unfixed:
+**THREE MORE FIXED 2026-09-24, and the fix was NOT the same shape at each**,
+which is the finding worth keeping:
 
-    (b/slice bs BIG 10)     size 9   `from` truncated to 1, returns [1,10)
-    (b/slice bs 0 BIG)      size 1   `to`   truncated to 1, returns [0,1)
-    (code-point-at s BIG)   98       index truncated to 1, returns `b`
+    b-at             wrong on ALL THREE.  native 98, ports 97.
+    b-slice from/to  wrong on NATIVE ONLY. native 9 and 1; both ports already
+                     refused, correctly.
+    code-point-at    wrong on ALL THREE.  native 98, ports 97.
 
-and unprobed: `table-slice`, `b-conj`, `re-run`, `re-find-all`. Each is the same
-shape and wants the same two-part fix, but each needs its own measurement first
--- this one was misread twice before it was right.
+So "the ports read with `asFixnum` and native is right" is false as a general
+rule. For `b-slice` native was the only broken runtime, and a fix applied by
+assuming otherwise would have changed two correct implementations. Each site was
+measured on all three before being touched.
+
+All four are now in one `bin/conform-hosts` row, each contributing 7 when it
+refuses: reverting native's `code-point-at` bound alone takes 2110963933961828 to
+2110963933961821, and reverting the jvm's `b-at` half takes it to
+2110963933961800. Both checked by reverting.
+
+STILL UNPROBED: `table-slice`, `b-conj`, `re-run`, `re-find-all`. Same shape,
+same two-part fix, and each needs its own measurement -- the assumption that the
+ports are the broken half has now been wrong once.
