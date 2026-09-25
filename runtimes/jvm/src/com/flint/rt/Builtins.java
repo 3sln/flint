@@ -1183,7 +1183,18 @@ public final class Builtins {
         // no way for two hosts to disagree about what a pattern means.
         def("flint/re-compile", (rt, at, n) -> Pike.compile(rt, rt.vat(at), rt.vat(at + 1)));
         def("flint/re-run", (rt, at, n) -> {
-            long from = n > 2 ? Val.asFixnum(rt.vat(at + 2)) : 0;
+            // `Num.asI64` and a bound. `asFixnum` read a BIGINT start as its heap
+            // ADDRESS and matched there: this answered [81808 81809] where native
+            // answered [8 9], and a refusal was right on both
+            // (`DECISIONS.md#index-past-the-fixnum`).
+            long from = 0;
+            if (n > 2) {
+                Long fv = Num.asI64(rt, rt.vat(at + 2));
+                if (fv == null || fv < 0 || fv > Integer.MAX_VALUE) {
+                    return rt.throwStr("IndexOutOfBoundsException", "re-run: bad start index");
+                }
+                from = fv;
+            }
             // 0 searches from `from`; 3 matches exactly at it. Both are entry
             // points into ONE program, so there is no second program to keep in
             // step with the first.

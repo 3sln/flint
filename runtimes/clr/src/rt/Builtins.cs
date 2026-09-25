@@ -1047,7 +1047,14 @@ public static class Builtins {
         // no way for two hosts to disagree about what a pattern means.
         Def("flint/re-compile", (rt, at, n) => Pike.Compile(rt, rt.VAt(at), rt.VAt(at + 1)));
         Def("flint/re-run", (rt, at, n) => {
-            long from = n > 2 ? Val.AsFixnum(rt.VAt(at + 2)) : 0;
+            // `Num.AsI64` and a bound -- see the Java copy.
+            long from = 0;
+            if (n > 2) {
+                long? fv = Num.AsI64(rt, rt.VAt(at + 2));
+                if (fv == null || fv < 0 || fv > int.MaxValue)
+                    return rt.ThrowStr("IndexOutOfBoundsException", "re-run: bad start index");
+                from = fv.Value;
+            }
             // 0 searches from `from`; 3 matches exactly at it. Both are entry
             // points into ONE program, so there is no second program to keep in
             // step with the first.

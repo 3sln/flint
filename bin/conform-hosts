@@ -287,7 +287,7 @@ fi
 # three must agree on, and no standard library is reachable from inside it.
 mkdir -p out/rt-probe
 cat > out/rt-probe/probe.cljc <<'PROBE'
-(ns probe)
+(ns probe (:require [flint.regex]))
 (defn- add [a b] (+ a b))
 (defn- run [n] (loop [i 0 acc 0] (if (< i n) (recur (inc i) (add acc i)) acc)))
 (defn- mix [acc i h] (bit-xor acc (* (inc i) h)))
@@ -366,7 +366,13 @@ cat > out/rt-probe/probe.cljc <<'PROBE'
        (try (do (flint.rt/b-at bs big) 0) (catch Throwable e 7))
        (try (do (flint.rt/b-slice bs big 10) 0) (catch Throwable e 7))
        (try (do (flint.rt/b-slice bs 0 big) 0) (catch Throwable e 7))
-       (try (do (flint.rt/code-point-at s big) 0) (catch Throwable e 7)))))
+       (try (do (flint.rt/code-point-at s big) 0) (catch Throwable e 7))
+       ;; `re-run`'s START index, the fifth site. It answered [8 9] on native and
+       ;; [81808 81809] on both ports for the same call -- `pike_run` takes a
+       ;; `usize`, which is 32 bits on wasm and 64 natively, so an unbounded
+       ;; start narrows differently per TARGET and not merely per port.
+       (try (do (flint.rt/re-run (:re (flint.regex/pattern "a")) s big 0) 0)
+            (catch Throwable e 7)))))
 (defn main [_] (+ (fold) (run 1000) (wide) (past-the-payload)))
 PROBE
 ./bin/flint :src out/rt-probe :fn probe/main --emit-image \

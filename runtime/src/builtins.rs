@@ -601,7 +601,19 @@ builtins! {
     "flint/re-run", flint_b_rerun, b_rerun, |rt, a, n| {
         let re = arg(rt, a, 0);
         let s = arg(rt, a, 1);
-        let from = if n > 2 { rt.as_i64(arg(rt, a, 2)).unwrap_or(0) } else { 0 };
+        // BOUNDED, like the other index sites. `pike_run` takes a `usize`, which is
+        // 32 bits on wasm and 64 natively, so an unbounded `from` narrows
+        // DIFFERENTLY per target -- measured as native `[8 9]` against both ports'
+        // `[81808 81809]` for the same call, neither of them a refusal
+        // (`DECISIONS.md#index-past-the-fixnum`).
+        let from = if n > 2 {
+            match rt.as_i64(arg(rt, a, 2)) {
+                Some(f) if (0..=u32::MAX as i64).contains(&f) => f,
+                _ => return rt.throw_str("IndexOutOfBoundsException", "re-run: bad start index"),
+            }
+        } else {
+            0
+        };
         // 0 searches from `from`; 3 matches exactly at it. Both are entry points
         // into ONE program (`flint.nfa`), so there is no second program to keep
         // in step with the first.
