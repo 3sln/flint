@@ -152,22 +152,22 @@
         all-exported (vec (keys (w/exports m)))
         builtin? (fn [n] (str/starts-with? n "flint_b_"))
         exported (vec (remove builtin? all-exported))
-        meta (modmeta/describe
-              {:abi {:runtime 1 :value 1 :image 1}
-               :memory :unshared
-               :gas-in-aot (boolean (:aot? opts))
-               :version (or (:version opts) "0.1.0")
-               :exports exported
-               :imports (vec (sort (map (fn [i] (str (:module i) "/" (:name i)))
-                                        (w/imports m))))
+        ;; `w/describe`, NOT a map built here -- and this caller is why the rule
+        ;; exists: its `:snapshots` probe was `snapshot_export`, a name nothing
+        ;; exports, so the flag could never be true whatever the module carried.
+        ;; The emitter owns the probes now (`DECISIONS.md#four-operations`).
+        meta (w/describe
+              {:module m
+               ;; A SINGLE KNOWN RUNTIME, which is the real difference from the
+               ;; linker: it takes these from the units it linked and there are
+               ;; none here.
+               :abi {:runtime 1 :value 1 :image 1}
                :units [{:name "flint.rt" :abi {:runtime 1 :value 1 :image 1}}]
+               :version (:version opts)
+               :aot? (:aot? opts)
+               :exported exported
                :builtins (count (filter builtin? all-exported))
-               :meta (or (:meta opts) {})
-               :features {:diagnostics (contains? (set exported) "collect_now")
-                          :snapshots (contains? (set exported) "snapshot_export")
-                          :capabilities (contains? (set exported) "flint_opaque_host_id")
-                          :loader (contains? (set exported) "flint_load_image")
-                          :aot (boolean (:aot? opts))}})
+               :meta (:meta opts)})
         ;; Written last so it describes the module as it actually is, and
         ;; stripped first so a re-splice does not leave two.
         m (w/strip-custom m #{modmeta/section-name})

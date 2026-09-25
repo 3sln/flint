@@ -12,6 +12,10 @@
   do not touch -- which is what keeps this small and robust against new wasm
   features appearing in the linker's output."
   (:require [clojure.string :as str]
+            ;; `flint.modmeta` because THE EMITTER DESCRIBES: what is true of the
+            ;; TARGET belongs in the file that emits the target, not restated in
+            ;; each caller (`DECISIONS.md#four-operations`).
+            [flint.modmeta :as modmeta]
             [flint.rt]))
 
 ;; ------------------------------------------------------------------- bytes
@@ -458,3 +462,58 @@
                                       (for [b bodies]
                                         [(uleb (blen b)) b])]))]
     [m first-idx]))
+
+
+;; ----------------------------------------------------------------- metadata
+;;
+;; THE EMITTER DESCRIBES, and this had two callers doing it instead:
+;; `flint.link/link` and `flint.bundle`. They restated `:memory :unshared` -- an
+;; input to the COMPATIBILITY KEY -- the identical `:imports` derivation, and the
+;; five feature probes, and they had already DIVERGED on one of the probe names.
+;;
+;; `link.cljc` tested `flint_snapshot_capture` and `bundle.cljc` tested
+;; `snapshot_export`. Exports keep their Rust symbol names -- `collect_now` is
+;; declared unprefixed in `runtime/src/abi.rs` and probed unprefixed here -- and the
+;; snapshot unit declares `flint_snapshot_capture` and `flint_snapshot_export`, with
+;; nothing called `snapshot_export`. So the bundler's `:snapshots` could never be
+;; true, whatever the module carried. One place cannot disagree with itself.
+
+(defn- features
+  "The five feature flags, DERIVED FROM THE ARTIFACT's exports.
+
+  From what ARRIVED, not from what was asked for: a descriptor that reports the
+  build flags rather than the module is the kind that goes quietly wrong, which is
+  why these are export probes and not options."
+  [exported aot?]
+  (let [has? (set exported)]
+    {:diagnostics (contains? has? "collect_now")
+     ;; `flint_snapshot_capture`, the name the unit actually exports.
+     :snapshots (contains? has? "flint_snapshot_capture")
+     :loader (contains? has? "flint_load_image")
+     :capabilities (contains? has? "flint_opaque_host_id")
+     :aot (boolean aot?)}))
+
+(defn describe
+  "What a wasm module says about itself, canonical.
+
+  `:memory`, the feature probes and the `:imports` derivation are the TARGET's and
+  live here. Everything else is the artifact's and comes from the caller: a linked
+  module takes its `:abi` and `:units` from the units it linked, and a bundled one
+  has a single known runtime -- a real difference, which is why those stay
+  arguments rather than being guessed here."
+  [{:keys [module exported abi units version aot? builtins meta]}]
+  (modmeta/describe
+   {:abi abi
+    ;; UNSHARED IS A COMPATIBILITY KEY INPUT, not a note: a module built for a
+    ;; shared memory is not loadable by a host expecting this one, and the key is
+    ;; what says so. Stated once, here.
+    :memory :unshared
+    :gas-in-aot (boolean aot?)
+    :version (or version "0.1.0")
+    :exports exported
+    :imports (vec (sort (map (fn [i] (str (:module i) "/" (:name i)))
+                             (imports module))))
+    :units units
+    :builtins builtins
+    :meta (or meta {})
+    :features (features exported aot?)}))

@@ -478,24 +478,22 @@
         all-exported (vec (keys (w/exports m)))
         builtin? (fn [n] (str/starts-with? n "flint_b_"))
         exported (vec (remove builtin? all-exported))
-        meta (modmeta/describe
-              {:abi (:abi (first (vals units)) {:runtime 1 :value 1 :image 1})
-               :memory :unshared
-               :gas-in-aot (boolean aot?)
-               :version flint-version
-               :exports exported
-               :imports (vec (sort (map (fn [i] (str (:module i) "/" (:name i)))
-                                        (w/imports m))))
+        ;; `w/describe`, NOT a map built here. `:memory`, the `:imports` derivation
+        ;; and the five feature probes are the TARGET's and live in the emitter;
+        ;; what this door alone knows is the linked units' `:abi`, the unit list and
+        ;; the builtin count. The bundler restated all of it and had already
+        ;; diverged on a probe name (`DECISIONS.md#four-operations`).
+        meta (w/describe
+              {:module m
+               :abi (:abi (first (vals units)) {:runtime 1 :value 1 :image 1})
                :units (mapv (fn [u] {:name (str (:name u)) :abi (:abi u)}) (:units p))
+               :version flint-version
+               :aot? aot?
+               :exported exported
                ;; Derived from the ARTIFACT, not from the build flags: a
                ;; descriptor that says what was asked for rather than what
                ;; arrived is the kind that goes quietly wrong.
-               :builtins (count (filter builtin? all-exported))
-               :features {:diagnostics (contains? (set exported) "collect_now")
-                          :snapshots (contains? (set exported) "flint_snapshot_capture")
-                          :loader (contains? (set exported) "flint_load_image")
-                          :capabilities (contains? (set exported) "flint_opaque_host_id")
-                          :aot (boolean aot?)}})
+               :builtins (count (filter builtin? all-exported))})
         m (w/add-custom m modmeta/section-name (w/utf8-bytes (pr-str meta)))
         bytes (w/emit m)]
     (io/copy bytes (io/file out))
