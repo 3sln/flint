@@ -287,7 +287,7 @@ fi
 # three must agree on, and no standard library is reachable from inside it.
 mkdir -p out/rt-probe
 cat > out/rt-probe/probe.cljc <<'PROBE'
-(ns probe (:require [flint.regex]))
+(ns probe (:require [flint.regex] [flint.table :as tb]))
 (defn- add [a b] (+ a b))
 (defn- run [n] (loop [i 0 acc 0] (if (< i n) (recur (inc i) (add acc i)) acc)))
 (defn- mix [acc i h] (bit-xor acc (* (inc i) h)))
@@ -338,6 +338,17 @@ cat > out/rt-probe/probe.cljc <<'PROBE'
      ;; THREE ARGUMENTS, because the ports folded only the first two and
      ;; silently dropped the rest.
      (bit-and 281474976710657 -1 -1)))
+(defn- refusal [f]
+  ;; THE MESSAGE, not merely "it threw". This row used to score 7 per refusal,
+  ;; and that is why it could not see the `table-slice` bug: all three runtimes
+  ;; REFUSED, and the two ports refused with the wrong number in the message --
+  ;; `slice [79416 2)` against native's `slice [281474976710657 2)`, 79416 being
+  ;; the bigint's heap ADDRESS. Refused-or-not is one bit and the divergence was
+  ;; not in it. Each site now reports its text, and the three runtimes are
+  ;; compared on that; `=` prefixes an answer so a site that stops refusing is
+  ;; loud rather than scoring the same as one that never did.
+  (try (str "=" (f)) (catch Throwable e (str "!" (ex-message e)))))
+
 (defn- past-the-payload []
   ;; AN INDEX THAT DOES NOT FIT A FIXNUM must be refused, not narrowed.
   ;; `(b-at bs 2^48+1)` used to answer the byte at index 1 on native -- `i as u32`
@@ -353,27 +364,34 @@ cat > out/rt-probe/probe.cljc <<'PROBE'
   ;; AND IT HAS TO BE LONG. At 131 072 bytes a truncated index is still IN RANGE,
   ;; so "returned the wrong byte" and "refused" are different observations. A
   ;; short fixture passes either way, which is why 366 rows missed this.
+  ;; EIGHT SITES. They did not all fail the same way, which is why each is here
+  ;; rather than one standing in for the family: `b-at` was wrong on all three
+  ;; runtimes with two different wrong answers, `b-slice` was wrong on NATIVE
+  ;; ONLY -- both ports already refused -- `re-run` was wrong on all three, and
+  ;; `b-conj`/`re-find-all` were already right and needed no change.
   (let [big 281474976710657
         s (loop [x "abcdefgh" i 0] (if (< i 14) (recur (str x x) (inc i)) x))
-        bs (flint.rt/str->b s)]
-    (+ (flint.rt/b-count bs)
-       (flint.rt/b-at bs 1)
-       ;; FOUR SITES, each worth 7 when it refuses. They did not all fail the
-       ;; same way, which is why each is here rather than one standing in for
-       ;; the family: `b-at` was wrong on all three runtimes, `b-slice` was wrong
-       ;; on NATIVE ONLY -- both ports already refused -- and `code-point-at` was
-       ;; wrong on all three with two different wrong answers.
-       (try (do (flint.rt/b-at bs big) 0) (catch Throwable e 7))
-       (try (do (flint.rt/b-slice bs big 10) 0) (catch Throwable e 7))
-       (try (do (flint.rt/b-slice bs 0 big) 0) (catch Throwable e 7))
-       (try (do (flint.rt/code-point-at s big) 0) (catch Throwable e 7))
-       ;; `re-run`'s START index, the fifth site. It answered [8 9] on native and
-       ;; [81808 81809] on both ports for the same call -- `pike_run` takes a
-       ;; `usize`, which is 32 bits on wasm and 64 natively, so an unbounded
-       ;; start narrows differently per TARGET and not merely per port.
-       (try (do (flint.rt/re-run (:re (flint.regex/pattern "a")) s big 0) 0)
-            (catch Throwable e 7)))))
-(defn main [_] (+ (fold) (run 1000) (wide) (past-the-payload)))
+        bs (flint.rt/str->b s)
+        t (tb/table (tb/schema [[:k :int]]) [{:k 1} {:k 2} {:k 3} {:k 4} {:k 5}])]
+    (str (flint.rt/b-count bs) "/" (flint.rt/b-at bs 1)
+         " b-at" (refusal (fn [] (flint.rt/b-at bs big)))
+         " b-slice-from" (refusal (fn [] (flint.rt/b-count (flint.rt/b-slice bs big 10))))
+         " b-slice-to" (refusal (fn [] (flint.rt/b-count (flint.rt/b-slice bs 0 big))))
+         " cp-at" (refusal (fn [] (flint.rt/code-point-at s big)))
+         ;; `re-run`'s START index. It answered [8 9] on native and [81808 81809]
+         ;; on both ports for the same call -- `pike_run` takes a `usize`, which
+         ;; is 32 bits on wasm and 64 natively, so an unbounded start narrows
+         ;; differently per TARGET and not merely per port.
+         " re-run" (refusal (fn [] (flint.rt/re-run (:re (flint.regex/pattern "a")) s big 0)))
+         ;; `table-slice` takes an `I64` on every target, so unlike the five
+         ;; above there is no narrowing to bound -- only the DECODE was wrong.
+         ;; The third case is a non-integer rather than a huge one: native reads
+         ;; `as_i64(..).unwrap_or(-1)` and refuses, where `asFixnum` read a
+         ;; string's bits as 1099511627896.
+         " tb-from" (refusal (fn [] (count (tb/rows (tb/slice t big 2)))))
+         " tb-to" (refusal (fn [] (count (tb/rows (tb/slice t 0 big)))))
+         " tb-nonint" (refusal (fn [] (count (tb/rows (tb/slice t "x" 2))))))))
+(defn main [_] (str (+ (fold) (run 1000) (wide)) " " (past-the-payload)))
 PROBE
 ./bin/flint :src out/rt-probe :fn probe/main --emit-image \
   :out out/rt-probe/probe.img >/dev/null 2>&1

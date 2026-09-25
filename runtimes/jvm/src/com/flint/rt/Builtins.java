@@ -270,7 +270,14 @@ public final class Builtins {
             long t = rt.vat(at);
             if (!Table.isTable(rt, t))
                 return rt.throwStr("IllegalArgumentException", "slice wants a table");
-            return Table.tableSlice(rt, t, Val.asFixnum(rt.vat(at + 1)), Val.asFixnum(rt.vat(at + 2)));
+            // `Num.asI64`, NOT `Val.asFixnum`: a bound past a fixnum arrives as a
+            // BIGINT, and `asFixnum` would read its heap ADDRESS. It answered
+            // `slice [79416 2)` where native answered `slice [281474976710657 2)`.
+            // `-1` for a non-integer mirrors native's `as_i64(..).unwrap_or(-1)`,
+            // which the `< 0` check in `table-slice` then refuses.
+            Long fv = Num.asI64(rt, rt.vat(at + 1));
+            Long ev = Num.asI64(rt, rt.vat(at + 2));
+            return Table.tableSlice(rt, t, fv == null ? -1L : fv, ev == null ? -1L : ev);
         });
         def("flint/table-column", (rt, at, n) -> {
             long t = rt.vat(at);

@@ -25,6 +25,12 @@
  ;; pass an object or a callback, so its bridge is the host satisfying imports; a
  ;; CLR or JVM host hands over a real object. Forcing one spelling on all three
  ;; would be the mistake. The SEMANTICS are not negotiable.
+ ;;
+ ;; `:llvm` SPELLS THEM AS WASM DOES, and that is not laziness: both are flat C
+ ;; symbol tables with no way to pass an object, so the same constraint produces
+ ;; the same shape. It has NO FACE YET -- `:to :llvm` emits a module whose only
+ ;; entry is `main` -- and the spelling is recorded now so the gate can name what
+ ;; is missing rather than omit the target from its table.
  :operations
  [{:op "boot"
    :takes "the bridge, which becomes this sandbox's system port"
@@ -32,7 +38,7 @@
    ;; more than one; see `loop` below for what the static version cost.
    :returns "the sandbox, on any target that can pass an object"
    :must "fail when a native the image imports cannot be supplied, naming it"
-   :spelling {:clr "Boot" :jvm "boot" :wasm "flint_boot"}}
+   :spelling {:clr "Boot" :jvm "boot" :wasm "flint_boot" :llvm "flint_boot"}}
   {:op "loop"
    :takes "nothing"
    :returns "a status; see :status below"
@@ -42,7 +48,7 @@
    ;; scheduler with no error anywhere. Both object targets reached this
    ;; independently, which is better evidence than either arguing for it.
    :on "the sandbox boot answers, not the artifact's own type"
-   :spelling {:clr "Loop" :jvm "loop" :wasm "flint_loop"}}
+   :spelling {:clr "Loop" :jvm "loop" :wasm "flint_loop" :llvm "flint_loop"}}
   {:op "link"
    :takes "the bridge, a name and a function, overriding the native called that.
            THE BRIDGE, because link must precede boot and the image loads inside
@@ -52,7 +58,7 @@
            which process-global registration could not do at all."
    :returns "nothing"
    :must "refuse after boot, because natives resolve exactly once at load"
-   :spelling {:clr "Link" :jvm "link" :wasm "flint_link"}}]
+   :spelling {:clr "Link" :jvm "link" :wasm "flint_link" :llvm "flint_link"}}]
 
  ;; `prop(name, buf)` WAS the fourth and is GONE (2026-09-24). Recorded here and
  ;; not merely deleted, because a face that grows it back would otherwise look

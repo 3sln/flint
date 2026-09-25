@@ -56,6 +56,18 @@ FACES = {
     'clr':  {'path': 'runtimes/clr/src/rt/Artifact.cs',            'built': True},
     'jvm':  {'path': 'runtimes/jvm/src/com/flint/rt/Sandbox.java', 'built': True},
     'wasm': {'path': 'units-src/flint-conc/src/lib.rs',            'built': True},
+    # THE FOURTH TARGET, and it is here PRECISELY BECAUSE IT HAS NO FACE. A table
+    # listing the three that do is indistinguishable from a complete one: it
+    # printed "3 faces" and a reader concluded the surface was uniform across the
+    # targets, which it is not. `:to :llvm` emits a module whose only entry is
+    # `main`, so its artifact runs to completion and a host cannot drive it.
+    #
+    # The path is the EMITTER, not the runtime archive. The llvm artifact's face
+    # is text this file writes into the `.ll`, the way `main` already is; the
+    # runtime half would go in `nativeabi/src/lib.rs` beside `flint_native_main`,
+    # but what a host CALLS is what the artifact declares, so that is what gets
+    # checked.
+    'llvm': {'path': 'src/flint/llvm.cljc',                        'built': False},
 }
 
 
@@ -193,7 +205,22 @@ def rust_face(txt):
     return {'ops': ops, 'status': status}
 
 
-EXTRACT = {'clr': clr_face, 'jvm': java_face, 'wasm': rust_face}
+def llvm_face(txt):
+    """The face the emitted `.ll` declares, read out of the emitter's own text.
+
+    `:to :llvm` has no source file of its own to read: the artifact is generated,
+    so its face is whatever this emitter writes. So the operations are the
+    `define`s it emits and the statuses are the numbers they answer -- read from
+    the strings, which is the only place they can be.
+    """
+    ops = set(re.findall(r'define\s+\w+\s+@(\w+)\s*\(', txt))
+    status = {}
+    for m in re.finditer(r'FLINT_(DONE|THREW|NEEDS_HOST)\s*=\s*(\d+)', txt):
+        status[int(m.group(2))] = m.group(1)
+    return {'ops': ops, 'status': status}
+
+
+EXTRACT = {'clr': clr_face, 'jvm': java_face, 'wasm': rust_face, 'llvm': llvm_face}
 
 
 def spelling(d, target):
@@ -215,21 +242,37 @@ def main():
     for target in sorted(FACES):
         spec = FACES[target]
         txt = read(spec['path'])
-        # The two-way rule. Neither of these may look like the other.
-        if txt is None and spec['built']:
-            fails.append('%s: the table says this face is BUILT and %s does not exist. '
-                         'Either the path is wrong or the flag is.' % (target, spec['path']))
-            continue
-        if txt is not None and not spec['built']:
-            fails.append('%s: %s exists but this table says the face is not built. '
-                         'Mark it built, or the check is passing over a real implementation.'
-                         % (target, spec['path']))
-            continue
         if txt is None:
-            rows.append('  --   %-4s no face at %s, not built' % (target, spec['path']))
+            fails.append('%s: %s does not exist. Either the path is wrong or the '
+                         'face moved.' % (target, spec['path']))
+            continue
+        face = EXTRACT[target](txt)
+
+        # THE TWO-WAY RULE, AGAINST THE FACE AND NOT THE FILE. This asked whether
+        # the PATH EXISTED, which worked only while every face had a file of its
+        # own. The llvm face is emitted from `src/flint/llvm.cljc`, a file that
+        # exists to emit a `main` -- so its existence says nothing about whether
+        # the three operations are there, and a `built: False` row would have been
+        # reported as a contradiction instead of as the gap it records.
+        declared = [o[':op'] for o in ops
+                    if spelling(o[':spelling'], target) in face['ops']]
+        if declared and not spec['built']:
+            fails.append('%s: %s declares %s, and this table says the face is not '
+                         'built. Mark it built, or the check is passing over a real '
+                         'implementation.'
+                         % (target, spec['path'], ', '.join(declared)))
+            continue
+        if not declared:
+            if spec['built']:
+                fails.append('%s: the table says this face is BUILT and %s declares '
+                             'none of the operations. Either the path is wrong or the '
+                             'flag is.' % (target, spec['path']))
+                continue
+            rows.append('  --   %-4s NO FACE in %s -- declares none of the three, so a '
+                        'host cannot drive this target\'s artifact'
+                        % (target, spec['path']))
             continue
         present.append(target)
-        face = EXTRACT[target](txt)
 
         # 1. every operation, by this target's own spelling.
         missing = [o[':op'] for o in ops
@@ -324,9 +367,15 @@ def main():
 
     for r in rows:
         print(r)
-    print('check-artifact-ops: %d assertions, %d metadata carriers, %d target faces (%s), version %s'
+    # `%d OF %d` rather than a bare count. A summary reading "3 target faces" is
+    # true and reads as complete; the denominator is what makes a missing target
+    # visible to somebody who only reads the last line.
+    absent = [t for t in sorted(FACES) if t not in present]
+    print('check-artifact-ops: %d assertions, %d metadata carriers, '
+          '%d of %d target faces (%s%s), version %s'
           % (looked, len(metadata[':carriers']),
-             len(present), ', '.join(present) or 'none', ver))
+             len(present), len(FACES), ', '.join(present) or 'none',
+             '; NO FACE: ' + ', '.join(absent) if absent else '', ver))
     if fails:
         for f in fails:
             print('  FAIL ' + f)

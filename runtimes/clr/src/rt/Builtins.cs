@@ -242,7 +242,14 @@ public static class Builtins {
             long t = rt.VAt(at);
             if (!Flint.Rt.Table.isTable(rt, t))
                 return rt.ThrowStr("IllegalArgumentException", "slice wants a table");
-            return Flint.Rt.Table.tableSlice(rt, t, Val.AsFixnum(rt.VAt(at + 1)), Val.AsFixnum(rt.VAt(at + 2)));
+            // `Num.AsI64`, NOT `Val.AsFixnum`: a bound past a fixnum arrives as a
+            // BIGINT, and `AsFixnum` would read its heap ADDRESS. It answered
+            // `slice [79416 2)` where native answered `slice [281474976710657 2)`.
+            // `-1` for a non-integer mirrors native's `as_i64(..).unwrap_or(-1)`,
+            // which the `< 0` check in `table-slice` then refuses.
+            long? fv = Num.AsI64(rt, rt.VAt(at + 1));
+            long? ev = Num.AsI64(rt, rt.VAt(at + 2));
+            return Flint.Rt.Table.tableSlice(rt, t, fv ?? -1L, ev ?? -1L);
         });
         Def("flint/table-column", (rt, at, n) => {
             long t = rt.VAt(at);

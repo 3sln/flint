@@ -12419,7 +12419,7 @@ take.
 
 **What every flint artifact exposes, on every target**
 **Ratified:** ☐ not signed off
-**Status: THREE FACES IN THE TREE, 2026-09-24 -- `runtimes/clr/src/rt/Artifact.cs`, `runtimes/jvm/src/com/flint/rt/Sandbox.java` and the `host` module of `units-src/flint-conc/src/lib.rs`. Gated by `bin/check-artifact-ops` (faces against the contract, all three) and `bin/check-four-ops` (behaviour, jvm only so far). Native has no face. The CLR's static surface became an instance one on 2026-09-24 -- `sealed class Artifact`, `static Artifact Boot(...)`, `Status Loop()` -- and `runtimes/clr/artifact/Check.cs` now asserts what the static version made impossible: two sandboxes booting in one load context and holding different runtimes.** This record exists FIRST and deliberately: four
+**Status: THREE FACES IN THE TREE, 2026-09-24 -- `runtimes/clr/src/rt/Artifact.cs`, `runtimes/jvm/src/com/flint/rt/Sandbox.java` and the `host` module of `units-src/flint-conc/src/lib.rs`. Gated by `bin/check-artifact-ops` (faces against the contract, 3 of 4 targets) and `bin/check-four-ops` (behaviour, jvm only so far). **`:to :llvm` HAS NO FACE, and the gate now says so by name rather than by omission** -- its table listed the three targets that have one, which printed as `3 target faces` and read as complete. It is `3 of 4 ... NO FACE: llvm` now, with a row naming `src/flint/llvm.cljc`. The status line here used to say "Native has no face", which named a target that no longer exists: `:native` was dropped (`llvm-ir-target`), so the fourth manifestation is the `.ll`, whose only entry is `main` -- it runs to completion and a host cannot drive it. The CLR's static surface became an instance one on 2026-09-24 -- `sealed class Artifact`, `static Artifact Boot(...)`, `Status Loop()` -- and `runtimes/clr/artifact/Check.cs` now asserts what the static version made impossible: two sandboxes booting in one load context and holding different runtimes.** This record exists FIRST and deliberately: four
 implementations designed in parallel is how this project produced sixteen
 version declarations, four compile-spec front ends and a `:checks` axis on one
 CLI and not the other. The contract is written down before the last three are
@@ -13071,9 +13071,11 @@ bigint-aware read on each side -- `as_i64` was already right on native, the port
 moved from `Val.asFixnum` to `Num.asI64`, which is nullable exactly as native's
 answers `None`. All three now throw `IndexOutOfBoundsException`.
 
-The conformance row uses the DOUBLING fixture and asserts by arithmetic: a
-refusal contributes 7 to the sum, so reverting the jvm half alone takes
-2110963933961807 to 2110963933961800. Checked by reverting it.
+The conformance row uses the DOUBLING fixture. It asserted by arithmetic at
+first -- a refusal contributed 7 to the sum -- and that scoring was REPLACED once
+it turned out to be blind to `table-slice`; see "the row had to change shape"
+below. The doubling fixture stayed, because a short one leaves a truncated index
+in range and so passes either way.
 
 **THREE MORE FIXED 2026-09-24, and the fix was NOT the same shape at each**,
 which is the finding worth keeping:
@@ -13088,11 +13090,44 @@ rule. For `b-slice` native was the only broken runtime, and a fix applied by
 assuming otherwise would have changed two correct implementations. Each site was
 measured on all three before being touched.
 
-All four are now in one `bin/conform-hosts` row, each contributing 7 when it
-refuses: reverting native's `code-point-at` bound alone takes 2110963933961828 to
-2110963933961821, and reverting the jvm's `b-at` half takes it to
-2110963933961800. Both checked by reverting.
+**THE SWEEP IS COMPLETE 2026-09-24.** Every site in the family has now been
+measured on all three runtimes, and the per-site asymmetry held up to the end:
 
-STILL UNPROBED: `table-slice`, `b-conj`, `re-run`, `re-find-all`. Same shape,
-same two-part fix, and each needs its own measurement -- the assumption that the
-ports are the broken half has now been wrong once.
+    b-at             wrong on ALL THREE.  native 98, ports 97.
+    b-slice from/to  wrong on NATIVE ONLY. both ports already refused.
+    code-point-at    wrong on ALL THREE.  native 98, ports 97.
+    re-run  (start)  wrong on ALL THREE.  native [8 9], ports [81808 81809].
+    table-slice      wrong on THE TWO PORTS. native was right.
+    b-conj           ALREADY RIGHT on all three. Not touched.
+    re-find-all      ALREADY RIGHT on all three. Not touched.
+    subs, str-index-of   ALREADY RIGHT on all three. Not touched.
+
+Five fixed, four found correct. **Two of the nine needed no change at all**,
+which is the argument for measuring each rather than applying the family's fix
+across the family: a bound added to `str-index-of` on one runtime would have
+CREATED a divergence where all three already agreed. That nearly happened -- see
+below.
+
+`re-run` is the one whose narrowing is per-TARGET rather than per-port:
+`pike_run` takes a `usize`, 32 bits on wasm and 64 natively, so the same native
+source truncates differently depending on what it is compiled for.
+
+`table-slice` is the one that is NOT the family's shape. It takes an `I64` on
+every target, so there is no narrowing to bound -- only the decode was wrong, and
+the two ports were the wrong half. Its third case is a non-integer rather than a
+huge one: native reads `as_i64(..).unwrap_or(-1)` and refuses, where `asFixnum`
+read a string's bits as 1099511627896 and sliced from there.
+
+### The row had to change shape to see the last one
+
+The row scored 7 per refusal, and THAT IS WHY IT COULD NOT HAVE CAUGHT
+`table-slice`. All three runtimes refused; the two ports refused with the wrong
+number in the message -- `slice [79416 2)` against native's
+`slice [281474976710657 2)`, 79416 being the bigint's heap address. Refused-or-not
+is one bit, and the divergence was not in it.
+
+So each of the eight sites now reports its refusal TEXT and the three runtimes
+are compared on that, with `=` prefixing an answer so a site that stops refusing
+is louder than one that never did. Verified sensitive by injection: dropping the
+jvm's `b-at` upper bound turns `b-at!byte index out of range` into `b-at=98` and
+the row fails. An arithmetic score could not have expressed this check at all.
