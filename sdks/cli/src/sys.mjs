@@ -36,9 +36,16 @@ import { instantiate } from '../dist/guest.js';
 /// REFUSED rather than clamped.
 ///
 /// Silently rewriting `../../etc/passwd` into something inside the root answers
-/// a question nobody asked. This is the check `cli/src/sys.rs`'s `under()` is,
-/// component for component, and it is the one part of the old `host/fs.mjs`
-/// that was never in the wrong place.
+/// a question nobody asked. It is the one part of the old `host/fs.mjs` that was
+/// never in the wrong place.
+///
+/// THIS COMMENT USED TO SAY "component for component" of `cli/src/sys.rs`'s
+/// `under()`, AND THAT WAS NOT TRUE. On unix the Rust one admitted `..\..\etc`
+/// and `C:\windows` as ordinary filenames while this one refused them, so the
+/// same program got a file from the native CLI and a refusal from this one. A
+/// comment asserting two implementations agree is worth nothing; the two now read
+/// ONE table, `cli/containment-cases.txt`, through `bin/check-containment` here
+/// and `include_str!` there.
 ///
 /// The check is on the path AS WRITTEN and does not touch the filesystem, so it
 /// is the same answer whether or not the file exists -- a probe that behaved

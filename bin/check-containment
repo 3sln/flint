@@ -1,0 +1,73 @@
+#!/usr/bin/env node
+// THE CONTAINMENT RULE, on the node CLI's implementation of it.
+//
+// `cli/src/sys.rs` and `sdks/cli/src/sys.mjs` are the same access check in two
+// languages. They DIVERGED, and the comment beside the JS one claimed they agreed
+// "component for component": on unix the Rust one admitted `..\..\etc` and
+// `C:\windows` as ordinary filenames and the node one refused both, so the same
+// program got a file from one CLI and a refusal from the other.
+//
+// ONE TABLE, READ BY BOTH. `cli/containment-cases.txt` is what this runs and what
+// `cli/src/sys.rs`'s test reads through `include_str!`. Restating the cases in two
+// suites is how six cases on one side ended up facing thirteen on the other.
+// `sdks/cli/src/catalogue.mjs` makes the same argument about the var lists:
+// "AGENTS.md section 1 says to make one list read the other rather than restate
+// it", and `bin/check-sys-catalogue` is the gate that does it for those.
+//
+// IT IS IN THE FAST TIER because it needs NO BUILD -- `under` is a plain export,
+// so this is milliseconds. An access check FAILS OPEN: a broken one gives no
+// error, no warning and a passing suite. Its only thorough test used to be inside
+// the 1.6-hour gate, which is the wrong tier for the one check whose failure is
+// silent and remote.
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const { under } = await import(join(root, 'sdks/cli/src/sys.mjs'));
+
+let failures = 0;
+let n = 0;
+for (const line of readFileSync(join(root, 'cli/containment-cases.txt'), 'utf8').split('\n')) {
+  if (line === '' || line.startsWith('#')) continue;
+  const sp = line.indexOf(' ');
+  if (sp < 0) {
+    console.error(`  FAIL containment-cases.txt: no verb in ${JSON.stringify(line)}`);
+    failures++;
+    continue;
+  }
+  const verb = line.slice(0, sp);
+  // `""` is how the table spells the EMPTY path -- the root itself, which cannot
+  // be written as a bare trailing space.
+  const p = line.slice(sp + 1) === '""' ? '' : line.slice(sp + 1);
+  if (verb !== 'admit' && verb !== 'refuse') {
+    console.error(`  FAIL containment-cases.txt: bad verb ${JSON.stringify(verb)}`);
+    failures++;
+    continue;
+  }
+  n++;
+  let admitted;
+  try { under('/root', p); admitted = true; } catch { admitted = false; }
+  if ((verb === 'admit') !== admitted) {
+    console.error(`  FAIL under() should ${verb} ${JSON.stringify(p)}`);
+    failures++;
+  }
+}
+
+// A TABLE THAT PARSED TO NOTHING would pass every case above. `cli/src/sys.rs`
+// asserts the same count, so a case added to the file fails BOTH sides until both
+// are looked at -- which is the point of one table.
+if (n !== 13) {
+  console.error(`  FAIL the shared table parsed ${n} cases, expected 13`);
+  failures++;
+}
+// The refusals are the reason this exists, so say how many ran rather than just
+// "ok": a count that drops is the shape of a silently narrowed check.
+const refused = readFileSync(join(root, 'cli/containment-cases.txt'), 'utf8')
+  .split('\n').filter((l) => l.startsWith('refuse ')).length;
+if (failures) {
+  console.error(`\n  ${failures} failed. \`under()\` is an access check: it fails OPEN, so a`);
+  console.error('  broken one looks exactly like a working one from the outside.');
+  process.exit(1);
+}
+console.log(`check-containment: ${n} cases on the node CLI's under(), ${refused} of them refusals`);

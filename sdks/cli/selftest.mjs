@@ -18,7 +18,6 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { under } from './src/sys.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, '..', '..');
@@ -58,19 +57,21 @@ function flint(args, opts = {}) {
 // passing suite -- the same output as a working one. So the refusals are
 // asserted by name, each beside a control that differs in exactly one thing.
 
-console.log('== flint.sys.fs path containment ==');
-const ok = (p) => { try { under('/root', p); return true; } catch { return false; } };
-for (const p of ['a/b', './a', 'a/./b', '', 'a//b']) {
-  check(`under() admits ${JSON.stringify(p)}`, ok(p));
-}
-for (const p of ['../etc/passwd', 'a/../../etc', '/etc/passwd', 'a/../..',
-                 'a/../b', '..\\..\\etc', 'C:\\windows', '/']) {
-  check(`under() refuses ${JSON.stringify(p)}`, !ok(p));
-}
-// `a/../b` normalises to somewhere INSIDE the root and is still refused.
-// Popping `..` would make `a/../../x` depend on how deep `a` was, which is
-// exactly the arithmetic an attacker gets to do.
-check('under() puts a plain path under the root', under('/root', 'a/b') === '/root/a/b');
+// THE CONTAINMENT ROWS MOVED OUT, to `bin/check-containment` and
+// `cli/containment-cases.txt`. Not deleted -- relocated to the FAST tier, which is
+// the point: `under` is a plain export needing no build, and an access check that
+// FAILS OPEN was reachable only through this 1.6-hour gate.
+//
+// The table is now read by both implementations of the rule, this one and
+// `cli/src/sys.rs`'s, because restating it in two suites is exactly how they
+// drifted -- six cases here faced thirteen there, and neither noticed that the
+// Rust side admitted `..\..\etc` while this one refused it.
+//
+// AND THE `under` IMPORT WENT WITH THEM. It was the only use in this file, and a
+// comment here first claimed the rows below still needed it -- they do not. The
+// end-to-end rows exercise `flint.sys.fs` through a compiled program, which is a
+// different thing from calling the rule directly.
+console.log('== flint.sys.fs path containment: bin/check-containment, from cli/containment-cases.txt ==');
 
 // --- end to end -------------------------------------------------------------
 

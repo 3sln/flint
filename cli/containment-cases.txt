@@ -1,0 +1,42 @@
+# THE CONTAINMENT TABLE, read by BOTH implementations of the rule.
+#
+# `cli/src/sys.rs`'s `under()` and `sdks/cli/src/sys.mjs`'s `under()` are the same
+# access check in two languages, and `sys.mjs` used to CLAIM they agreed
+# "component for component" while they did not: on unix the Rust one admitted
+# `..\..\etc` and `C:\windows` as ordinary filenames and the node one refused
+# both, so the same program got a file from one CLI and a refusal from the other.
+#
+# AGENTS.md section 1 says to make one list read the other rather than restate it.
+# A table restated in two test suites drifts exactly the way the rule did; this
+# file is read by `cli/src/sys.rs`'s tests through `include_str!` and by
+# `bin/check-containment` through `readFileSync`, so neither can be edited alone.
+#
+# An access check FAILS OPEN: a broken one gives no error, no warning and a
+# passing suite. So every refusal is NAMED, each beside a control differing in
+# exactly one thing.
+#
+# One case per line: `admit <path>` or `refuse <path>`. The path is the rest of
+# the line verbatim, so it may contain spaces and backslashes; `#` starts a
+# comment only at the beginning of a line. An EMPTY path is written `""`.
+admit a/b
+admit ./a
+admit a/./b
+admit ""
+admit a//b
+# the obvious traversal, and one that has to get out of `a` first
+refuse ../etc/passwd
+refuse a/../../etc
+# absolute: not relative to the root at all
+refuse /etc/passwd
+# lands exactly ON the root's parent
+refuse a/../..
+# INSIDE the root once normalised, and still refused: popping `..` would make
+# `a/../../x` depend on how deep `a` was, which is arithmetic an attacker does
+refuse a/../b
+# BOTH SEPARATORS. A backslash traverses on Windows and is a filename character
+# on unix; treating it as a filename where it traverses is how this fails open,
+# and answering differently per host is how the two CLIs disagreed
+refuse ..\..\etc
+refuse C:\windows
+# the root itself, written absolutely
+refuse /

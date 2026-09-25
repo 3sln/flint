@@ -12707,6 +12707,41 @@ label fixups with short/long selection, computed `maxstack` -- at ~200-250
 lines, which is the same problem `src/flint/aot.cljc` already solves in 713 for
 wasm.
 
+### Two implementations of one access check, disagreeing
+
+`cli/src/sys.rs`'s `under()` and `sdks/cli/src/sys.mjs`'s are the fs capability's
+containment rule in two languages, and the comment beside the JS one said it was
+"the check `cli/src/sys.rs`'s `under()` is, COMPONENT FOR COMPONENT". Measured on
+unix, it was not:
+
+    "..\..\etc"   native CLI: OK -> /root/..\..\etc     node CLI: REFUSED
+    "C:\windows"   native CLI: OK -> /root/C:\windows     node CLI: REFUSED
+
+Neither answer is unsafe where it runs -- on unix a backslash IS a filename
+character, and on Windows Rust's `Path` parses it as a separator and refuses. What
+is not acceptable is the same program getting a file from one CLI and a refusal
+from the other, so the stricter rule wins and the answer stops depending on the
+platform. The cost is filenames containing a backslash, which the node door has
+never accepted anyway.
+
+**The two test suites are why it survived: SIX cases here against THIRTEEN there.**
+Restating a table is how it drifts, and this repo already says so -- 
+`sdks/cli/src/catalogue.mjs`: "AGENTS.md section 1 says to make one list read the
+other rather than restate it", with `bin/check-sys-catalogue` doing exactly that
+for the var lists. So `cli/containment-cases.txt` is now read by BOTH: by
+`cli/src/sys.rs`'s test through `include_str!`, and by `bin/check-containment`
+against the node CLI's `under`. A case added to the file fails both sides until
+both are looked at.
+
+**It moved to the FAST tier, which matters more than the fix.** An access check
+FAILS OPEN -- a broken one gives no error, no warning and a passing suite -- and
+its only thorough test was inside the 1.6-hour gate. `under` is a plain export
+needing no build, so the rows run in milliseconds and `bin/check` carries them
+now. Both sides also assert the case COUNT, because a table that parsed to nothing
+would satisfy every case in it.
+
+Proven by removing the guard: `"..\..\etc" should be refused`, 1 passed 1 failed.
+
 ### The fourth target got the face, and `main` was in the way
 
 `:to :llvm` emitted a module whose only entry was `main`: it ran to completion and

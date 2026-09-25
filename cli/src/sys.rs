@@ -67,6 +67,23 @@ pub trait Service {
 /// is the same answer whether or not the file exists -- a probe that behaved
 /// differently for a missing file would leak whether it was there.
 pub fn under(root: &Path, p: &str) -> Result<PathBuf, String> {
+    // A BACKSLASH IS A SEPARATOR HERE TOO, whatever this platform thinks.
+    //
+    // This is where the two implementations of this rule DIVERGED, and the
+    // comment beside the other one claimed they agreed "component for component".
+    // On Windows `Path` already treats `\` as a separator and refuses the
+    // traversal; on unix it is an ordinary filename character, so
+    // `(read-file "..\..\etc")` got a FILE from this CLI and a refusal from the
+    // node one, which splits on both separators on purpose. Measured, both ways.
+    //
+    // Neither answer is unsafe where it runs. What is not acceptable is the same
+    // program behaving differently per host, so this takes the stricter rule and
+    // the answer stops depending on the platform. The cost is filenames
+    // containing a backslash, which the other door has never accepted anyway.
+    if p.contains('\\') {
+        return Err(format!("{p:?} contains a backslash, which is a separator on \
+                            some hosts; paths are `/`-separated everywhere"));
+    }
     let mut out = PathBuf::from(root);
     for c in Path::new(p).components() {
         match c {
@@ -353,22 +370,49 @@ fn put(w: &mut Wire, v: &Val) {
 mod tests {
     use super::*;
 
+    /// THE TABLE IS READ, NOT RESTATED. `../containment-cases.txt` is the same
+    /// file `bin/check-containment` runs against the node CLI's `under`, which is
+    /// the other implementation of this rule -- and restating the cases in two
+    /// suites is how the two drifted in the first place. `sdks/cli/src/catalogue.mjs`
+    /// makes the same argument about the var lists: "AGENTS.md section 1 says to
+    /// make one list read the other rather than restate it."
+    ///
+    /// These used to be two tests over six cases against the node side's
+    /// thirteen, which is why nothing noticed that this one admitted
+    /// `..\..\etc` and `C:\windows` while the other refused them.
+    const CASES: &str = include_str!("../containment-cases.txt");
+
     #[test]
-    fn a_path_may_not_leave_the_root() {
+    fn every_case_in_the_shared_table() {
         let root = Path::new("/tmp/x");
-        assert!(under(root, "a/b").is_ok());
-        assert!(under(root, "./a").is_ok());
-        for bad in ["../etc/passwd", "a/../../etc", "/etc/passwd", "a/../.."] {
-            assert!(under(root, bad).is_err(), "{bad} should be refused");
+        let mut n = 0;
+        for line in CASES.lines() {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let (verb, rest) = line
+                .split_once(' ')
+                .unwrap_or_else(|| panic!("every case is `verb path`, got {line:?}"));
+            // `""` is how the table spells the EMPTY path, which is the root
+            // itself and cannot be written as a bare trailing space.
+            let p = if rest == "\"\"" { "" } else { rest };
+            n += 1;
+            let admitted = under(root, p).is_ok();
+            match verb {
+                "admit" => assert!(admitted, "{p:?} should be admitted"),
+                "refuse" => assert!(!admitted, "{p:?} should be refused"),
+                other => panic!("bad verb {} in {}", other, line),
+            }
         }
+        // A TABLE THAT PARSED TO NOTHING would pass every assertion above. This
+        // is the count the file actually holds; bump it when a case is added.
+        assert_eq!(n, 13, "the shared table should hold 13 cases");
     }
 
     #[test]
-    fn dotdot_is_refused_and_not_popped() {
-        // `a/../b` is INSIDE the root once normalised, and is still refused.
-        // Popping would make the answer depend on how deep the path had got,
-        // which is arithmetic an attacker gets to do.
-        assert!(under(Path::new("/tmp/x"), "a/../b").is_err());
+    fn a_plain_path_lands_under_the_root() {
+        assert_eq!(under(Path::new("/tmp/x"), "a/b").unwrap(), Path::new("/tmp/x/a/b"));
+        assert_eq!(under(Path::new("/tmp/x"), "").unwrap(), Path::new("/tmp/x"));
     }
 }
 
