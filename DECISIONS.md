@@ -12738,7 +12738,21 @@ printing a pass. A gate placed to fail fast is worth nothing if the placement is
 what makes it skip.
 
 Checked by running it: the banner, then `check-containment`, `check-port-consts`
-and `check-four-ops` streaming inside `bin/test`, `bin/check: green in 68s`.
+and `check-four-ops` streaming inside `bin/test`, `bin/check: green in 68s`. Then
+the whole file, green: 63 of 63 sections, 0 failures, 5 433 s -- so the twelve
+also disturb nothing downstream of them.
+
+**The `Test` workflow runs ON PULL REQUESTS ONLY and has never run.** It is absent
+from the last forty workflow runs, because this work has gone to `main` directly.
+So the twelve are CI-REACHABLE rather than CI-EXERCISED, and they become the latter
+on the next proposal -- which is where `test.yml`'s own comment says the gate
+belongs.
+
+*The banner was written `== the fast gate ...` at first, which is what `sec` prints.
+It impersonated a section without being counted as one, so the log showed
+sixty-four `==` banners against a summary saying sixty-three -- the exact
+discrepancy the section counter at the top of that file exists to catch, planted by
+hand in the same file. It opens with `--` now.*
 
 ### AOT was written, tested, and called by nothing
 

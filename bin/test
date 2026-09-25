@@ -161,7 +161,13 @@ echo "  ok"
 # It is not a section: `bin/check` prints its own verdict and counts its own
 # rows, and wrapping it in `sec` would make one section of twenty-one checks and
 # report the count wrong.
-echo "== the fast gate, in full (bin/check) -- this file is a superset of it"
+#
+# AND IT DOES NOT OPEN WITH `==`, which is what `sec` prints. Written that way it
+# impersonated a section without being counted as one, so the log showed
+# sixty-four `==` banners against a summary saying sixty-three -- the exact
+# discrepancy the section counter at the top of this file exists to catch, planted
+# by hand in the same file.
+echo "-- the fast gate, in full (bin/check) -- this file is a superset of it"
 ./bin/check || fail "bin/check"
 echo
 
