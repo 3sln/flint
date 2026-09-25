@@ -12707,6 +12707,39 @@ label fixups with short/long selection, computed `maxstack` -- at ~200-250
 lines, which is the same problem `src/flint/aot.cljc` already solves in 713 for
 wasm.
 
+### Twelve checks ran nowhere in CI
+
+CI runs `./bin/test` and nothing else (`.github/workflows/test.yml:87`,
+`publish.yml:76`), and `bin/test` never ran `bin/check`. The two gates shared five
+`check-*` scripts out of twenty-one, so TWELVE ran only in the fast tier -- which
+is to say, only when somebody ran it by hand:
+
+    check-aotstat-layout  check-api-review     check-artifact-ops
+    check-containment     check-contracts      check-four-ops
+    check-generated-reached check-lib-grants   check-port-consts
+    check-snapshot-layout check-version        check-vocab-used
+
+Among them `check-port-consts`, which compares 336 constant declarations across
+the three runtimes; `check-lib-grants`, which exists because the paragraph asking
+for that agreement did not produce any; `check-version`, which holds 27 manifests
+to one number; and the four artifact/ABI contracts. A proposal could break any of
+them and go green.
+
+**`bin/test` runs `bin/check` now, so the slow tier is a SUPERSET.** In `bin/test`
+rather than in the workflows, because that fixes every caller at once -- CI, the
+publish job, and anybody running it locally -- and cannot be forgotten by the next
+workflow. 70 s against 95 minutes.
+
+**AFTER THE CLI BUILD, and not at the top, which is where it went first.**
+`test/selfhost-targets.clj` skips its end-to-end rows when `target/release/flint`
+is absent, which it is on a fresh checkout -- so the fail-fast placement would have
+silently dropped the rows that drive every compile target, in CI only, while
+printing a pass. A gate placed to fail fast is worth nothing if the placement is
+what makes it skip.
+
+Checked by running it: the banner, then `check-containment`, `check-port-consts`
+and `check-four-ops` streaming inside `bin/test`, `bin/check: green in 68s`.
+
 ### AOT was written, tested, and called by nothing
 
 The standing note said "AOT on neither new target ... JVM: ~450-550 lines, and

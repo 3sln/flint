@@ -138,6 +138,33 @@ cargo build --release -p flint-cli > /tmp/flint-cli-build.log 2>&1 \
   || { tail -20 /tmp/flint-cli-build.log; fail "cargo build --release -p flint-cli"; }
 echo "  ok"
 
+# THE FAST GATE IN FULL, so this file is a SUPERSET of it.
+#
+# It was not, and CI runs only this file (`.github/workflows/test.yml`,
+# `publish.yml`). The two gates shared just five `check-*` scripts out of
+# twenty-one, so TWELVE ran nowhere in CI -- among them `check-port-consts`,
+# which compares 336 constant declarations across the three runtimes,
+# `check-lib-grants`, `check-version`, and the four artifact/ABI contracts. A
+# proposal could break any of them and go green.
+#
+# EARLY, because it is 70 s against this file's 95 minutes: a version that does
+# not propagate or a face that stopped declaring `boot` should fail before the
+# hour, not after it.
+#
+# BUT AFTER THE CLI IS BUILT, and not at the very top, which is where this went
+# first. `test/selfhost-targets.clj` SKIPS its end-to-end rows when
+# `target/release/flint` is absent -- which it is on a fresh checkout, so running
+# this before the build would have quietly dropped the rows that drive every
+# compile target, in CI only, while printing a pass. A gate placed to fail fast is
+# worth nothing if the placement is what makes it skip.
+#
+# It is not a section: `bin/check` prints its own verdict and counts its own
+# rows, and wrapping it in `sec` would make one section of twenty-one checks and
+# report the count wrong.
+echo "== the fast gate, in full (bin/check) -- this file is a superset of it"
+./bin/check || fail "bin/check"
+echo
+
 echo
 sec "units: the PRODUCTION build (no diagnostic machinery -- 0016)"
 ./bin/build-units >/dev/null 2>&1 || fail "build-units"
