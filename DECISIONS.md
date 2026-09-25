@@ -12808,7 +12808,7 @@ out-of-bounds index on a small internal array.
 
 **An index that does not fit a fixnum is wrong on all four runtimes, differently**
 **Ratified:** ☐ not signed off
-**Status: FOUND AND MEASURED 2026-09-24, NOT FIXED. Reproduced against `runtime/src/builtins.rs` and `runtimes/jvm/src/com/flint/rt/Builtins.java`; the other six sites named below are unprobed.**
+**Status: `b-at` FIXED on all three runtimes 2026-09-24 and gated by a `bin/conform-hosts` row; the other sites below are measured-and-open. `runtime/src/builtins.rs`, `runtimes/jvm/src/com/flint/rt/Builtins.java` and `runtimes/clr/src/rt/Builtins.cs` now bound the index BEFORE narrowing it, and all three refuse.**
 
 `(b-at bs 281474976710657)` -- 2^48+1, one past the signed 48-bit fixnum
 payload, so a BIGINT -- on a 100 000-byte string:
@@ -13063,3 +13063,24 @@ natively, and the two cases it cannot see are both entirely internal to the
 sandbox. The split has no overlap: the HOST knows what it can unblock; the
 RUNTIME owns channel cycles and join cycles, which `report_deadlock` already
 finds by walking `TH_PARK_ON` for every thread.
+
+### What the fix was, and what is still open
+
+`b-at`, on all three: bound the index before narrowing it, using the
+bigint-aware read on each side -- `as_i64` was already right on native, the ports
+moved from `Val.asFixnum` to `Num.asI64`, which is nullable exactly as native's
+answers `None`. All three now throw `IndexOutOfBoundsException`.
+
+The conformance row uses the DOUBLING fixture and asserts by arithmetic: a
+refusal contributes 7 to the sum, so reverting the jvm half alone takes
+2110963933961807 to 2110963933961800. Checked by reverting it.
+
+STILL OPEN, all measured on native and unfixed:
+
+    (b/slice bs BIG 10)     size 9   `from` truncated to 1, returns [1,10)
+    (b/slice bs 0 BIG)      size 1   `to`   truncated to 1, returns [0,1)
+    (code-point-at s BIG)   98       index truncated to 1, returns `b`
+
+and unprobed: `table-slice`, `b-conj`, `re-run`, `re-find-all`. Each is the same
+shape and wants the same two-part fix, but each needs its own measurement first
+-- this one was misread twice before it was right.

@@ -835,9 +835,17 @@ public final class Builtins {
             // and `int` here, where -1 sails past a `>=` test and indexes
             // backwards out of the leaf. Rust's builtin has always screened it;
             // this one used to lean on `Bytes.at` doing it instead.
-            long idx = Val.asFixnum(rt.vat(at + 1));
-            long b = idx < 0 ? Val.NOT_FOUND
-                             : Bytes.at(rt, rt.vat(at), (int) idx, Val.NOT_FOUND);
+            // `Num.asI64` AND A BOUND, not `Val.asFixnum`. Two separate defects
+            // lived on this line. `asFixnum` reads the low 48 bits of the value
+            // WORD, so a BIGINT index arrived as its heap ADDRESS -- 97 came back
+            // from a 131 072-byte string where native answered 98 and a refusal
+            // was correct. And the `(int)` cast truncates, so a bound after it
+            // would be checking a different number than the caller passed.
+            // `asI64` is nullable exactly as native's `as_i64` answers `None`.
+            Long iv = Num.asI64(rt, rt.vat(at + 1));
+            long b = (iv == null || iv < 0 || iv > Integer.MAX_VALUE)
+                     ? Val.NOT_FOUND
+                     : Bytes.at(rt, rt.vat(at), (int) (long) iv, Val.NOT_FOUND);
             return b == Val.NOT_FOUND
                 ? rt.throwStr("IndexOutOfBoundsException", "byte index out of range")
                 : b;

@@ -720,9 +720,11 @@ public static class Builtins {
         Def("flint/b-at", (rt, at, n) => {
             // REFUSED past either end -- see the Java copy.
             // Negative is the caller's to reject -- see the Java copy.
-            long idx = Val.AsFixnum(rt.VAt(at + 1));
-            long b = idx < 0 ? Val.NotFound
-                             : Bytes.At(rt, rt.VAt(at), (int) idx, Val.NotFound);
+            // `Num.AsI64` and a bound before the `(int)` cast -- see the Java copy.
+            long? iv = Num.AsI64(rt, rt.VAt(at + 1));
+            long b = (iv == null || iv < 0 || iv > int.MaxValue)
+                     ? Val.NotFound
+                     : Bytes.At(rt, rt.VAt(at), (int) iv.Value, Val.NotFound);
             return b == Val.NotFound
                 ? rt.ThrowStr("IndexOutOfBoundsException", "byte index out of range")
                 : b;

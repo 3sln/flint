@@ -206,8 +206,17 @@ builtins! {
         let (v, i) = (arg(rt, a, 0), arg(rt, a, 1));
         // `NOT_FOUND` as the default, because NIL is a value a caller could
         // legitimately want back and this one needs to tell absent from nil.
+        // BOUNDED BEFORE THE NARROWING, and that is the whole fix. `i as u32`
+        // truncates, and `b_at` range-checks what it was HANDED -- so
+        // `(b-at bs 281474976710657)` narrowed 2^48+1 to 1, the check passed,
+        // and the byte at index 1 came back instead of a refusal. A guard after
+        // a narrowing is not a guard. Measured on a 131 072-byte string: native
+        // answered 98 and both ports 97, three answers and not one of them an
+        // error (`DECISIONS.md#index-past-the-fixnum`).
         let b = match rt.as_i64(i) {
-            Some(i) if i >= 0 => rt.b_at(v, i as u32, crate::value::NOT_FOUND),
+            Some(i) if (0..=u32::MAX as i64).contains(&i) => {
+                rt.b_at(v, i as u32, crate::value::NOT_FOUND)
+            }
             _ => crate::value::NOT_FOUND,
         };
         if b == crate::value::NOT_FOUND {

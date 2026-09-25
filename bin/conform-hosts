@@ -338,7 +338,28 @@ cat > out/rt-probe/probe.cljc <<'PROBE'
      ;; THREE ARGUMENTS, because the ports folded only the first two and
      ;; silently dropped the rest.
      (bit-and 281474976710657 -1 -1)))
-(defn main [_] (+ (fold) (run 1000) (wide)))
+(defn- past-the-payload []
+  ;; AN INDEX THAT DOES NOT FIT A FIXNUM must be refused, not narrowed.
+  ;; `(b-at bs 2^48+1)` used to answer the byte at index 1 on native -- `i as u32`
+  ;; truncated 2^48+1 to 1 and `b_at` range-checked what it was HANDED -- and the
+  ;; byte at 97 on both ports, which read the heap ADDRESS with `asFixnum`. Three
+  ;; answers, not one of them an error.
+  ;;
+  ;; THE STRING IS BUILT BY DOUBLING, deliberately. The first probe of this used
+  ;; `(apply str (repeat 12500 "abcdefgh"))`, and that corrupts both ports above
+  ;; ~8 200 arguments -- it answered with an out-of-bounds index on an internal
+  ;; array, which looked exactly like the bug being hunted. Binary `str` only.
+  ;;
+  ;; AND IT HAS TO BE LONG. At 131 072 bytes a truncated index is still IN RANGE,
+  ;; so "returned the wrong byte" and "refused" are different observations. A
+  ;; short fixture passes either way, which is why 366 rows missed this.
+  (let [big 281474976710657
+        s (loop [x "abcdefgh" i 0] (if (< i 14) (recur (str x x) (inc i)) x))
+        bs (flint.rt/str->b s)]
+    (+ (flint.rt/b-count bs)
+       (flint.rt/b-at bs 1)
+       (try (do (flint.rt/b-at bs big) 0) (catch Throwable e 7)))))
+(defn main [_] (+ (fold) (run 1000) (wide) (past-the-payload)))
 PROBE
 ./bin/flint :src out/rt-probe :fn probe/main --emit-image \
   :out out/rt-probe/probe.img >/dev/null 2>&1
