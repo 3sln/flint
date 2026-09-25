@@ -12814,11 +12814,23 @@ out-of-bounds index on a small internal array.
 payload, so a BIGINT -- on a 100 000-byte string:
 
     native   returns the byte at index 1. Wrong DATA, silently.
-    jvm      WITHDRAWN -- see `apply-loses-its-callee`. The probe's fixture was
-             built with `(apply str (repeat 12500 ...))`, which corrupts both
-             ports above ~8 200 arguments, so the `ArrayIndexOutOfBoundsException`
-             it produced was the SCAFFOLDING failing and not `b-at`.
+    jvm/clr  returns the byte at index 97. Wrong DATA, silently, and the two
+             ports AGREE with each other.
     correct  a flint IndexOutOfBoundsException.
+
+**RE-PROBED 2026-09-24 with a fixture that does not use `apply`**, after the
+first one was withdrawn: it built its string with `(apply str (repeat 12500 ...))`
+and that corrupts both ports above ~8 200 arguments
+(`apply-loses-its-callee`), producing an `ArrayIndexOutOfBoundsException` that
+looked exactly like the bug being hunted. The replacement DOUBLES -- `(loop [s
+"abcdefgh" i 0] (if (< i 14) (recur (str s s) (inc i)) s))` -- 131 072 bytes with
+no arity above two:
+
+    native   len=131072 at1=98 atBIG=98
+    jvm/clr  len=131072 at1=98 atBIG=97
+
+Three answers, none of them a refusal. The doubling fixture is also the right
+test article for a conformance row, because it cannot trip the `apply` bug.
 
 **Three more native sites do the same thing**, measured with the same BIG:
 
