@@ -1194,15 +1194,9 @@ public final class Rt {
                     }
                     popTo(si);
                     int total = argc - 1 + spread;
-                    if (System.getenv("FLINT_TRACE_APPLY") != null) {
-                        int at2 = roots.stackTop - total - 1;
-                        System.err.println("[apply] operandsAt=" + operandsAt
-                            + " stackTop=" + roots.stackTop + " spread=" + spread
-                            + " total=" + total + " at=" + at2
-                            + " cap=" + roots.stack.length
-                            + " callee@at=" + Long.toHexString(roots.stack[at2])
-                            + " expected=" + Long.toHexString(applyCallee));
-                    }
+                    // `callValue` READS THE CALLEE FROM THE STACK, which is why this
+                    // path never had the stale-pointer bug the closure path above
+                    // did: the slot is what the collector maintains.
                     long cv = callValue(roots.stackTop - total - 1, total);
                     if (parked()) {
                         thrown = Val.NIL;
