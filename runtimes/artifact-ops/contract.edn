@@ -84,11 +84,32 @@
  ;; three named constants, and making either language write the other's spelling
  ;; would be forcing a divergence rather than fixing one. `:spellings` records what
  ;; each face actually writes, descriptively, so a reader can find it.
- :status {0 "Done" 1 "Threw" 2 "NeedsHost"}
+ ;; FIVE, NOT THREE. This listed 0, 1 and 2 until 2026-09-25 while the runtime
+ ;; already returned 3: `runtime/src/snap.rs`'s `STATUS_SHELVED`, whose own comment
+ ;; says it "takes the next free code rather than overloading either". So the
+ ;; contract and all four faces agreed on three numbers and the runtime had four --
+ ;; a closed loop with a hole in it, which `bin/check-artifact-ops` could not see
+ ;; because it checks the faces AGAINST THIS.
+ ;;
+ ;; 4 IS NEW. The scheduler's deadlock branch set 0, the same number a clean finish
+ ;; answers, so `loop` reported "every thread settled" and "every thread is waiting
+ ;; on another" identically and a host could only tell them apart by reading a
+ ;; diagnostic string. Measured before changing: `flint_resume` on a program parked
+ ;; on a channel nobody writes answered 0, exactly as a program that returns a
+ ;; value does.
+ ;;
+ ;; WEDGED IS REACHABLE ONLY WITHOUT A SYSTEM PORT, and that is a property rather
+ ;; than a gap: `sched-needs-host` is true whenever a thread is parked on a bridge,
+ ;; and the control plane always is once a system port exists -- so a sandbox with a
+ ;; door answers 2 and lets the HOST decide it has nothing left to send. A sandbox
+ ;; given no bridge runs logic and can ask for nothing, and that is the one that can
+ ;; be wedged.
+ :status {0 "Done" 1 "Threw" 2 "NeedsHost" 3 "Shelved" 4 "Wedged"}
  :status-spellings
- {:clr "enum Status { Done = 0, Threw = 1, NeedsHost = 2 }"
-  :jvm "static final int DONE = 0, THREW = 1, NEEDS_HOST = 2"
-  :wasm "the bare integers, as flint_resume already returned them"}
+ {:clr "enum Status { Done = 0, Threw = 1, NeedsHost = 2, Shelved = 3, Wedged = 4 }"
+  :jvm "static final int DONE = 0, THREW = 1, NEEDS_HOST = 2, SHELVED = 3, WEDGED = 4"
+  :wasm "the bare integers, as flint_resume already returned them"
+  :llvm "@FLINT_DONE .. @FLINT_WEDGED, constants in the emitted module"}
 
  ;; ---------------------------------------------------------------- metadata
  ;;

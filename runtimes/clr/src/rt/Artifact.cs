@@ -110,6 +110,24 @@ public sealed class Artifact {
         /// port, so a live sandbox with nothing to do reports this. The host
         /// writes to the bridge and calls `Loop` again.
         NeedsHost = 2,
+        /// Shelved: the sandbox exported itself and stopped. ALREADY RETURNED by
+        /// the runtime (`snap.rs`'s `STATUS_SHELVED`) and declared by no face until
+        /// 2026-09-25, so every face agreed on three numbers while the runtime had
+        /// four -- and the contract they were all checked against agreed too.
+        Shelved = 3,
+        /// Wedged: nothing runnable and nothing a host can supply, because the
+        /// threads that remain are waiting on each other.
+        ///
+        /// NOT `Done`, which is what the scheduler answered until 2026-09-25 -- so
+        /// "every thread settled" and "every thread is waiting on another" were the
+        /// same number and a host could only tell them apart by reading a
+        /// diagnostic string.
+        ///
+        /// REACHABLE ONLY WITHOUT A SYSTEM PORT: a sandbox with a door answers
+        /// `NeedsHost` and lets the host decide it has nothing left to send, which
+        /// is correct. A sandbox given no bridge runs logic and can ask for nothing,
+        /// and that is the one that can be wedged.
+        Wedged = 4,
     }
 
     /// The host port id of the system bridge. The host picks ids for every other

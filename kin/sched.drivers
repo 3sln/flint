@@ -1247,7 +1247,7 @@ fn main() {
         System.Console.WriteLine(outp.ToString());
     }
 --expect
--1 1 1 2 0 1 1 0 -1 0 0 1 1 0 200 011 01 01 20 0 0 1 0 0 0 1 1000 0 0 BSREL BSTVL BSTUVL BSTUL - 1,-1,0,2,0 21 1,2,65537,2 1,1,1,1,1,1,-1 0111 011 20 3,-1,1,1,0,3,1
+-1 1 1 2 0 1 1 0 -1 0 0 1 1 0 200 011 01 41 20 0 0 1 0 0 0 1 1000 0 0 BSREL BSTVL BSTUVL BSTUL - 1,-1,0,2,0 21 1,2,65537,2 1,1,1,1,1,1,-1 0111 011 20 3,-1,1,1,0,3,1
 --expect-why
 DERIVED FROM WHAT THE SCHEDULER PROMISES, field by field.
 
@@ -1273,6 +1273,14 @@ DERIVED FROM WHAT THE SCHEDULER PROMISES, field by field.
                  so no host can help and the program is deadlocked rather than
                  waiting. Getting this wrong hangs a sandbox that should be
                  reported.
+  drive     `41` CASE 10, `{status}{deadlocked}`. STATUS 4 IS "WEDGED" and this
+                 field read `01` until 2026-09-25 -- status 0, the same number a
+                 clean finish answers, so `loop` could not tell "every thread
+                 settled" from "every thread is waiting on another". DERIVED from
+                 `runtimes/artifact-ops/contract.edn`'s `:status`, where 4 is
+                 Wedged and 3 was already taken by `snap.rs`'s `STATUS_SHELVED`;
+                 the trailing `1` is the deadlocked flag, which was already set
+                 here and is what the report is keyed on.
   pending   `1`  Two events with a head of 0.
   needsHost `1`  ... and an undrained event needs the host even with nothing
                  parked on a bridge at all.

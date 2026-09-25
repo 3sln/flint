@@ -220,7 +220,7 @@ def llvm_face(txt):
     status = {}
     # LLVM spells a constant `@FLINT_DONE = constant i32 0`, so the type sits
     # between the `=` and the number.
-    for m in re.finditer(r'FLINT_(DONE|THREW|NEEDS_HOST)\s*=\s*'
+    for m in re.finditer(r'FLINT_(DONE|THREW|NEEDS_HOST|SHELVED|WEDGED)\s*=\s*'
                          r'(?:constant\s+i32\s+)?(\d+)', txt):
         status[int(m.group(2))] = m.group(1)
     # AND THE `def` FORM, which is where they actually live. The emitter builds
@@ -228,7 +228,7 @@ def llvm_face(txt):
     # number is in a Clojure `def` and never appears beside the name -- reading
     # only the emitted spelling found nothing and reported that the face declares
     # no statuses, which was true of the text and false of the source.
-    for m in re.finditer(r'\(def\s+(?:\^:private\s+)?(DONE|THREW|NEEDS-HOST)\s+(\d+)\)', txt):
+    for m in re.finditer(r'\(def\s+(?:\^:private\s+)?(DONE|THREW|NEEDS-HOST|SHELVED|WEDGED)\s+(\d+)\)', txt):
         status.setdefault(int(m.group(2)), m.group(1).replace('-', '_'))
     return {'ops': ops, 'status': status}
 

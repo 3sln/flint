@@ -113,7 +113,14 @@ public final class Sandbox {
     /// `NEEDS_HOST` IS THE RESTING STATE, not an error. The control plane is a
     /// green thread parked on the system port, so a healthy idle sandbox reports
     /// it.
-    public static final int DONE = 0, THREW = 1, NEEDS_HOST = 2;
+    /// `SHELVED` and `WEDGED` added 2026-09-25. 3 was already returned by the
+    /// runtime (`snap.rs`'s `STATUS_SHELVED`) and declared by no face; 4 is new,
+    /// because the scheduler's deadlock branch answered 0 -- the same number a clean
+    /// finish answers -- so a host could not tell a settled sandbox from a wedged
+    /// one. WEDGED is reachable only for a sandbox with NO system port: one with a
+    /// door answers NEEDS_HOST and lets the host decide it has nothing left to send.
+    public static final int DONE = 0, THREW = 1, NEEDS_HOST = 2,
+                           SHELVED = 3, WEDGED = 4;
 
     // --- state -------------------------------------------------------------
 

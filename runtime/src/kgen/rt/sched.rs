@@ -263,7 +263,27 @@ impl Rt {
             }
             // Nothing runnable, nothing the host can help with: the threads
             // that remain are waiting on each other. NAMED rather than hung.
-            self.status = (0 as i32);
+            // 
+            // STATUS 4, NOT 0. This said 0 -- the same number a clean finish
+            // answers -- so `loop` reported 'every thread settled' and 'every
+            // thread is wedged' identically and a host could only tell them
+            // apart by reading a diagnostic string. Measured before changing:
+            // `flint_resume` on a program parked on a channel nobody writes
+            // answered 0, exactly as one that returned a value does.
+            // 
+            // 4 because 3 IS TAKEN: `snap.rs`'s `STATUS_SHELVED`, whose own
+            // comment says it 'takes the next free code rather than overloading
+            // either'. Both are now in `runtimes/artifact-ops/contract.edn`,
+            // which listed only 0, 1 and 2 while the runtime already returned 3.
+            // 
+            // REACHABLE ONLY WITHOUT A SYSTEM PORT, and that is not a caveat
+            // this hides: `sched-needs-host` is true whenever a thread is parked
+            // on a bridge, and the control plane always is once a system port
+            // exists -- so a sandbox with a door correctly answers 2 and lets the
+            // HOST decide it has nothing more to send. A sandbox given no bridge
+            // runs logic and can ask for nothing, which is a coherent thing to
+            // be, and it is the one that can be wedged.
+            self.status = (4 as i32);
             crate::conc::report_deadlock(self);
             return NIL;
         }

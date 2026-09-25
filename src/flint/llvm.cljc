@@ -624,9 +624,14 @@
 ;; into the emitted text so that the one place they appear is a definition. Every
 ;; target agrees on 0, 1, 2 and each spells the names its own way
 ;; (`DECISIONS.md#four-operations`).
+;; `SHELVED` and `WEDGED` added 2026-09-25: 3 was already returned by the runtime
+;; and declared by no face, and 4 is new because the scheduler's deadlock branch
+;; answered 0, the same number a clean finish answers.
 (def ^:private DONE 0)
 (def ^:private THREW 1)
 (def ^:private NEEDS-HOST 2)
+(def ^:private SHELVED 3)
+(def ^:private WEDGED 4)
 
 (def ^:private DECLS
   ["; The runtime this links against. Every one of them is `#[no_mangle]` in"
@@ -713,6 +718,8 @@
        (str "@FLINT_DONE = constant i32 " DONE)
        (str "@FLINT_THREW = constant i32 " THREW)
        (str "@FLINT_NEEDS_HOST = constant i32 " NEEDS-HOST)
+       (str "@FLINT_SHELVED = constant i32 " SHELVED)
+       (str "@FLINT_WEDGED = constant i32 " WEDGED)
        ""
        "define i64 @flint_boot(ptr %bridge) {"
        "start:"

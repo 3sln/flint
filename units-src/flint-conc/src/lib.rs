@@ -1117,6 +1117,13 @@ mod host {
     pub const DONE: i32 = 0;
     pub const THREW: i32 = 1;
     pub const NEEDS_HOST: i32 = 2;
+    /// SHELVED and WEDGED were added 2026-09-25. 3 was already returned by
+    /// `snap.rs` and declared by nobody; 4 is new, because the scheduler's deadlock
+    /// branch used to answer 0 and a host could not tell a settled sandbox from a
+    /// wedged one. Wedged is reachable only for a sandbox with NO system port -- one
+    /// with a door answers 2 and lets the host decide it has nothing left to send.
+    pub const SHELVED: i32 = 3;
+    pub const WEDGED: i32 = 4;
 
     /// `loop` -- pump, and answer 0 Done, 1 Threw, 2 NeedsHost.
     ///

@@ -75,7 +75,21 @@
   1 "Threw"
   2 "NeedsHost -- THE RESTING STATE. The control plane is a green thread parked on
      the system port, so a healthy idle sandbox reports it, and a harness that
-     treats 2 as failure fails on every working program."}
+     treats 2 as failure fails on every working program."
+  3 "Shelved -- the sandbox exported itself and stopped. ALREADY RETURNED by the
+     runtime before it was written down anywhere: `runtime/src/snap.rs` sets it and
+     no face declared it, so both contracts and all four faces agreed on three
+     numbers while the runtime had four."
+  4 "Wedged -- nothing runnable and nothing a host can supply, because the threads
+     that remain are waiting on each other. NOT `Done`, which is what the scheduler
+     answered until 2026-09-25.
+
+     REACHABLE ONLY WITHOUT A SYSTEM PORT, and no current entry point is: starting
+     a program goes through the control plane, which parks on that port and makes
+     `sched-needs-host` true, so a sandbox with a door answers 2 and lets the host
+     decide it has nothing left to send. `kin/sched.drivers` case 10 exercises the
+     branch directly on all three runtimes; nothing exercises it end to end, and
+     that is a property of how a program is started rather than of this number."}
  ;; What a sandbox answers with nothing queued, and again after a call has been
  ;; served. Both 2: serving a call does not finish the program.
  :loop {:at-rest 2 :after-call 2}

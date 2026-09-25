@@ -12419,7 +12419,7 @@ take.
 
 **What every flint artifact exposes, on every target**
 **Ratified:** ☐ not signed off
-**Status: THREE FACES IN THE TREE, 2026-09-24 -- `runtimes/clr/src/rt/Artifact.cs`, `runtimes/jvm/src/com/flint/rt/Sandbox.java` and the `host` module of `units-src/flint-conc/src/lib.rs`. **ALL FOUR TARGETS HAVE THE FACE as of 2026-09-24.** Gated by `bin/check-artifact-ops` (faces against the contract, `4 of 4`) and `bin/check-four-ops` (behaviour, jvm, including compiled arities in both directions), `bin/check-clr` (behaviour, clr, same) and `bin/check-llvm` (behaviour, llvm, linked and driven from C). The `.ll` grew `flint_boot`/`flint_loop`/`flint_link` as three-line wrappers over `flint_native_boot`/`_loop`/`_link` in `nativeabi/src/lib.rs`, the way its `main` already wraps `flint_native_main`. The CLR's static surface became an instance one on 2026-09-24 -- `sealed class Artifact`, `static Artifact Boot(...)`, `Status Loop()` -- and `runtimes/clr/artifact/Check.cs` now asserts what the static version made impossible: two sandboxes booting in one load context and holding different runtimes.** This record exists FIRST and deliberately: four
+**Status: THREE FACES IN THE TREE, 2026-09-24 -- `runtimes/clr/src/rt/Artifact.cs`, `runtimes/jvm/src/com/flint/rt/Sandbox.java` and the `host` module of `units-src/flint-conc/src/lib.rs`. **FIVE STATUSES as of 2026-09-25** -- `3 Shelved` was returned by the runtime and declared by nobody, `4 Wedged` is new; see "loop had three statuses written down and four in the runtime". **ALL FOUR TARGETS HAVE THE FACE as of 2026-09-24.** Gated by `bin/check-artifact-ops` (faces against the contract, `4 of 4`) and `bin/check-four-ops` (behaviour, jvm, including compiled arities in both directions), `bin/check-clr` (behaviour, clr, same) and `bin/check-llvm` (behaviour, llvm, linked and driven from C). The `.ll` grew `flint_boot`/`flint_loop`/`flint_link` as three-line wrappers over `flint_native_boot`/`_loop`/`_link` in `nativeabi/src/lib.rs`, the way its `main` already wraps `flint_native_main`. The CLR's static surface became an instance one on 2026-09-24 -- `sealed class Artifact`, `static Artifact Boot(...)`, `Status Loop()` -- and `runtimes/clr/artifact/Check.cs` now asserts what the static version made impossible: two sandboxes booting in one load context and holding different runtimes.** This record exists FIRST and deliberately: four
 implementations designed in parallel is how this project produced sixteen
 version declarations, four compile-spec front ends and a `:checks` axis on one
 CLI and not the other. The contract is written down before the last three are
@@ -12802,6 +12802,40 @@ Both proven sensitive by removing the call: ":optimize [perf] compiled no aritie
 
 *The CLR half was smaller than the JVM's, which I got wrong first: the CLR already
 keeps its `Loaded` in a field, so only the flag needed consulting.*
+
+### `loop` had three statuses written down and four in the runtime
+
+`loop` answered 0 for BOTH "every thread settled" and "every thread is waiting on
+another", so a host could only tell a finished sandbox from a wedged one by reading
+a diagnostic string. Measured before changing: `flint_resume` on a program parked on
+a channel nobody writes answered 0, exactly as one that returns a value does.
+
+**AND THE CONTRACT WAS ALREADY WRONG BY ONE.** Both contract files and all four
+faces said `{0 Done, 1 Threw, 2 NeedsHost}` while `runtime/src/snap.rs` set
+`STATUS_SHELVED = 3` and `loop` returned it. That constant's own comment says it
+"takes the next free code rather than overloading either" -- it was reasoned about
+carefully and then written down nowhere a face could see, and
+`bin/check-artifact-ops` could not catch it because it checks the faces AGAINST the
+contract. A closed loop with a hole in it.
+
+So the status set is five now -- `3 Shelved`, `4 Wedged` -- in both contracts and in
+all four faces, with `kin/sched.kin`'s deadlock branch setting 4.
+
+**WHAT I COULD NOT DEMONSTRATE, and why it is a property rather than a gap.** No
+current entry point reaches status 4. Starting a program goes through the control
+plane, which parks on the system port, which makes `sched-needs-host` true -- so a
+sandbox with a door correctly answers 2 and lets the HOST decide it has nothing
+left to send. I tried three ways in: `flint_resume` with no prior `boot` (nothing
+ever starts, so every thread is trivially settled -- 0), a top-level park in the
+initialisers (same), and the whole export list, which carries only `flint_boot` and
+`flint_resume`. A sandbox given no bridge "runs logic and can ask for nothing,
+which is a coherent thing to be" and is the one that can be wedged; nothing can
+currently put a program into it.
+
+`kin/sched.drivers` case 10 exercises the branch DIRECTLY on all three runtimes --
+its field went `01` to `41`, status and deadlock flag -- so the behaviour is tested
+even though no end-to-end path reaches it. The expectation was derived from the
+contract, not recorded from the run.
 
 ### The 86 steps were the harness, and they were hiding 3 that were not
 
