@@ -34,30 +34,28 @@ import os, re, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Where each target's face lives, AND WHETHER IT IS SUPPOSED TO EXIST YET.
+# Where each target's face lives, and whether it is BUILT.
 #
-# The second half was missing and it made this gate vacuous for any target it
-# could not find. It looked for the jvm face at `.../rt/Artifact.java`, the real
-# one is `.../rt/Sandbox.java`, and it printed "no face ..., skipping" and exited
-# 0 -- so the jvm face landed and was never checked. A guessed filename plus a
-# silent skip is the same failure `bin/conform-hosts` had: a gate that passes by
-# doing nothing.
+# BOTH DIRECTIONS FAIL, and that rule is why this table has a flag rather than
+# just a path. `built: False` with a file that exists means a face landed and this
+# gate passed over it; `built: True` with no file means the table claims something
+# that is not there.
 #
-# So each row now DECLARES, and both directions fail:
+# THE FIRST OF THOSE ACTUALLY HAPPENED HERE. This guessed the JVM face was
+# `rt/Artifact.java`; the real one is `rt/Sandbox.java`. The gate printed
+# `no face ..., skipping` and exited 0 while a whole JVM face went unchecked. A
+# GUESSED PATH IS THE HAZARD, not a missing one -- absence and wrongness look
+# identical from here, and the flag is the only thing that separates them.
 #
-#   built True  and the face is missing  -> FAIL (it regressed, or moved again)
-#   built False and the face EXISTS      -> FAIL (a real implementation is being
-#                                          passed over, which is how the first
-#                                          one of these was caught)
+# IT HAPPENED A THIRD TIME with wasm, whose path was `runtime/src/fourops.rs`.
+# The bridge machinery -- the system port, resume, drain -- lives in the CONC
+# UNIT, so the face adapting it does too, and the unit is on every link line
+# unconditionally (`calls-are-ports`). Three guessed paths in one small table is
+# the argument for the flag rather than against the table.
 FACES = {
-    'clr':  ('runtimes/clr/src/rt/Artifact.cs',            True),
-    'jvm':  ('runtimes/jvm/src/com/flint/rt/Sandbox.java', True),
-    # THE CONC UNIT, not the runtime crate. `runtime/src/fourops.rs` was the
-    # third guessed path in this table and it was wrong for the same reason the
-    # jvm's was: the bridge machinery -- the system port, resume, drain -- lives
-    # in the unit, so the face that adapts it does too. The unit is on every
-    # link line unconditionally (`calls-are-ports`), so nothing is optional here.
-    'wasm': ('units-src/flint-conc/src/lib.rs',            True),
+    'clr':  {'path': 'runtimes/clr/src/rt/Artifact.cs',            'built': True},
+    'jvm':  {'path': 'runtimes/jvm/src/com/flint/rt/Sandbox.java', 'built': True},
+    'wasm': {'path': 'units-src/flint-conc/src/lib.rs',            'built': True},
 }
 
 
@@ -148,8 +146,11 @@ class Edn:
 # per target.
 
 def clr_face(txt):
+    # STATIC AND INSTANCE BOTH. `Loop` is an instance method now -- `Boot` answers
+    # a sandbox and `Loop` is its, because a static `Loop` means one sandbox per
+    # load context. A pattern matching only `public static` stopped finding it.
     ops = set()
-    for m in re.finditer(r'public\s+static\s+[\w\.<>\[\]?]+\s+(\w+)\s*\(', txt):
+    for m in re.finditer(r'public\s+(?:static\s+)?[\w\.<>\[\]?]+\s+(\w+)\s*\(', txt):
         ops.add(m.group(1))
     status = {}
     body = re.search(r'enum\s+Status\s*\{(.*?)\}', txt, re.S)
@@ -212,18 +213,20 @@ def main():
     present = []
 
     for target in sorted(FACES):
-        rel, built = FACES[target]
-        txt = read(rel)
-        if txt is None and built:
-            fails.append('%s is declared BUILT and has no face at %s -- it moved or '
-                        'regressed. A missing face is not a skip.' % (target, rel))
+        spec = FACES[target]
+        txt = read(spec['path'])
+        # The two-way rule. Neither of these may look like the other.
+        if txt is None and spec['built']:
+            fails.append('%s: the table says this face is BUILT and %s does not exist. '
+                         'Either the path is wrong or the flag is.' % (target, spec['path']))
             continue
-        if txt is not None and not built:
-            fails.append('%s is declared NOT built and yet %s exists -- this gate would '
-                        'pass over a real implementation. Flip the row.' % (target, rel))
+        if txt is not None and not spec['built']:
+            fails.append('%s: %s exists but this table says the face is not built. '
+                         'Mark it built, or the check is passing over a real implementation.'
+                         % (target, spec['path']))
             continue
         if txt is None:
-            rows.append('  --   %-4s not built yet (%s)' % (target, rel))
+            rows.append('  --   %-4s no face at %s, not built' % (target, spec['path']))
             continue
         present.append(target)
         face = EXTRACT[target](txt)
@@ -244,7 +247,14 @@ def main():
                 fails.append('%s: declares `%s`, which was REMOVED from the contract. %s'
                              % (target, sp, g[':why'].split('.')[0]))
 
-        # 3. the status numbers. Names may differ per host; values may not.
+        # 3. THE STATUS NUMBERS, and only the numbers.
+        #
+        # The CLR spells them `enum Status { Done, Threw, NeedsHost }` and the JVM
+        # spells them `static final int DONE, THREW, NEEDS_HOST`. That is NOT a
+        # divergence: an enum is how .NET spells three named constants, and forcing
+        # either language into the other's spelling would be the mistake. So the
+        # contract records the per-target spelling descriptively and this asserts
+        # the SET OF VALUES, which is what the ABI actually is.
         looked += len(want_status)
         # THE NUMBERS ARE THE ABI, NOT THE SPELLING. This compared the whole
         # name-to-number map and so demanded that every language spell the
@@ -258,11 +268,12 @@ def main():
         # this project has watched fail to bind the code next to it.
         if not face['status']:
             fails.append('%s: declares no status values at all -- the numbers must be '
-                         'in the source, not only in a comment' % target)
-        elif set(face['status']) != set(want_status):
-            fails.append('%s: status NUMBERS are %r, the contract says %r (the names '
-                         'may differ per language; the numbers may not)'
-                         % (target, sorted(face['status']), sorted(want_status)))
+                         'in the SOURCE, not only in a comment' % target)
+        elif sorted(face['status'].keys()) != sorted(want_status.keys()):
+            fails.append('%s: status NUMBERS are %r, the contract says %r (names may differ '
+                         'per host; the numbers are the ABI)'
+                         % (target, sorted(face['status'].keys()),
+                            sorted(want_status.keys())))
 
         # 4. the rules, as evidence in the source.
         for r in rules:
@@ -281,7 +292,7 @@ def main():
                 fails.append('%s: %s -- %s matches %r, which it must not'
                              % (target, r[':rule'], ev[':file'], ev[':must-not-match']))
 
-        rows.append('  ok   %-4s %d operations, %d refused, %d status values, %d rules'
+        rows.append('  ok   %-4s %d operations, %d refused, %d status numbers, %d rules'
                     % (target, len(ops), len(gone), len(want_status),
                        sum(1 for r in rules if spelling(r[':evidence'], target))))
 

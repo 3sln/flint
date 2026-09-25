@@ -1,0 +1,71 @@
+#!/bin/sh
+# The CLR face, REPORTING rather than judging. For `bin/check-four-ops`.
+#
+# usage: report-clr [src-dir ns/fn]
+#
+# Prints `key<TAB>arg<TAB>value` rows on stdout and nothing else. One judge, N
+# reporters: this says what it observed and the gate decides whether every
+# target agrees with the contract. A target that judged itself would turn "the
+# three operations mean the same thing everywhere" into "each target's own
+# opinion", which is the one question a single target cannot answer.
+#
+# WHY A SCRIPT AND NOT A `run-clr` FUNCTION IN THE GATE. Every target's build
+# steps are its own -- this one needs `dotnet`, a runtime assembly and a
+# `:to :clr` compile -- and putting three targets' build recipes inside one gate
+# makes the gate the place that has to know all three. The gate calls this; this
+# knows about the CLR.
+#
+# THROUGH THE COMMITTED TOOLS. The compile is `bin/flint :to :clr`, not an
+# inline call to the emitter, so what is reported is what a user gets. And the
+# artefact is REBUILT every run: reusing one left on disk is how a gate ends up
+# reporting on an artefact built from source that no longer exists.
+set -e
+cd "$(dirname "$0")/.."
+
+if ! command -v dotnet > /dev/null 2>&1; then
+  echo "skip	reason	no dotnet on this machine"
+  exit 0
+fi
+export DOTNET_ROOT="${DOTNET_ROOT:-/opt/homebrew/opt/dotnet/libexec}"
+
+SRC="${1:-}"
+FN="${2:-prog/main}"
+OUT=out/report-clr
+rm -rf "$OUT"
+mkdir -p "$OUT"
+
+if [ -z "$SRC" ]; then
+  SRC="$OUT/src"
+  mkdir -p "$SRC"
+  FN=prog/main
+  cat > "$SRC/prog.cljc" <<'EOF'
+(ns prog)
+
+(defn sum-to [n]
+  (loop [i 0 acc 0]
+    (if (< i n) (recur (inc i) (+ acc i)) acc)))
+
+(defn main [args]
+  (str "sum=" (sum-to 100)))
+EOF
+fi
+
+# Rebuilt every run, both of them.
+./bin/flint :src "$SRC" :fn "$FN" --emit-image :out "$OUT/prog.img" > "$OUT/img.log" 2>&1 \
+  || { sed 's/^/error	emit-image	/' "$OUT/img.log"; exit 1; }
+./bin/flint :src "$SRC" :fn "$FN" :to :clr :out "$OUT/Prog.dll" > "$OUT/asm.log" 2>&1 \
+  || { sed 's/^/error	to-clr	/' "$OUT/asm.log"; exit 1; }
+
+# `nnatives` OUT OF THE IMAGE, not out of the artefact. Asking the artefact how
+# many natives it imports lets a wrong answer agree with itself; the image is
+# the independent source. Header is `"FLINTIMG" u32 version u32 nnatives`, so
+# the count is a little-endian u32 at offset 12.
+nnat=$(od -An -tu4 -j12 -N4 "$OUT/prog.img" | tr -d ' \n')
+echo "image	nnatives	$nnat"
+
+(cd runtimes/clr/src && dotnet build -v q --nologo -c Release) > "$OUT/rt.log" 2>&1 \
+  || { sed 's/^/error	runtime-build	/' "$OUT/rt.log"; exit 1; }
+
+(cd runtimes/clr/artifact && dotnet run -v q -c Release -- \
+   --report "../../../$OUT/Prog.dll" "$FN") 2> "$OUT/run.log" \
+  || { sed 's/^/error	report	/' "$OUT/run.log"; exit 1; }
