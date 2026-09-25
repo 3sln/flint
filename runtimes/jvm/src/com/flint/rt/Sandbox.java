@@ -151,7 +151,11 @@ public final class Sandbox {
         Rt rt = new Rt(NURSERY, HEAP);
         Sandbox box = new Sandbox(rt, system);
         byte[] image = decode(imageChunks);
-        if (Img.load(rt, image) == null) throw new IllegalStateException(
+        // THE `Loaded` IS KEPT NOW. It carries the image's `flags` word, and this
+        // line discarded it -- so `FLAG_PERF` was parsed at `Img.java:140`, stored
+        // in a field, and read by nobody. See the `compileArities` call below.
+        Img.Loaded loaded = Img.load(rt, image);
+        if (loaded == null) throw new IllegalStateException(
             "the artifact's image is not a flint image, or is a version this runtime does not"
             + " speak (this runtime reads version " + Img.VERSION + ", got " + image.length
             + " bytes in " + imageChunks.length + " chunk(s))");
@@ -209,6 +213,31 @@ public final class Sandbox {
                 + " version mismatch between it and this host -- read"
                 + " com.3sln.flint.meta on the artifact's class for the version it"
                 + " was built against.");
+        }
+
+        // COMPILED ARITIES, when the image asks for them. `:optimize [perf]` sets
+        // `FLAG_PERF` in the image (`src/flint/image.cljc`), and until now nothing
+        // on this port acted on it: `AotEmit` is 408 lines that ran only from
+        // `runtimes/jvm/test/RtAot.java`, so every artifact was interpreted however
+        // it was compiled. The producer's own comment says the case was built for
+        // this -- "an image for a PORT has the bit and an empty table, which is
+        // exactly the case that could not be expressed before".
+        //
+        // HERE, because natives are resolved above and nothing has executed yet:
+        // `RtAot.java` establishes the order as load, compile, then initialisers,
+        // and the initialisers do not run until the first `loop`.
+        //
+        // `false` for `chunkAll`: it makes EVERY instruction a chunk boundary and
+        // is "a bisection handle, not a mode" in `AotPlan`'s own words. The
+        // reference producer agrees -- `src/flint/aot.cljc`'s four-argument
+        // `compile-arity` delegates with `false`, and `src/flint/bundle.cljc` calls
+        // that form.
+        //
+        // AN ARITY THAT CANNOT BE COMPILED STAYS INTERPRETED, so this cannot fail a
+        // boot that would otherwise have worked: `AotEmit.compile` answers null for
+        // an opcode it does not know and `compileArities` skips it.
+        if ((loaded.flags & Img.FLAG_PERF) != 0) {
+            rt.compileArities(false);
         }
 
         Conc.installSystemPort(rt, system.systemPort, Str.of(rt, system.label));

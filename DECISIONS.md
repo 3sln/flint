@@ -12419,7 +12419,7 @@ take.
 
 **What every flint artifact exposes, on every target**
 **Ratified:** ☐ not signed off
-**Status: THREE FACES IN THE TREE, 2026-09-24 -- `runtimes/clr/src/rt/Artifact.cs`, `runtimes/jvm/src/com/flint/rt/Sandbox.java` and the `host` module of `units-src/flint-conc/src/lib.rs`. **ALL FOUR TARGETS HAVE THE FACE as of 2026-09-24.** Gated by `bin/check-artifact-ops` (faces against the contract, `4 of 4`) and `bin/check-four-ops` (behaviour, jvm) and `bin/check-llvm` (behaviour, llvm, linked and driven from C). The `.ll` grew `flint_boot`/`flint_loop`/`flint_link` as three-line wrappers over `flint_native_boot`/`_loop`/`_link` in `nativeabi/src/lib.rs`, the way its `main` already wraps `flint_native_main`. The CLR's static surface became an instance one on 2026-09-24 -- `sealed class Artifact`, `static Artifact Boot(...)`, `Status Loop()` -- and `runtimes/clr/artifact/Check.cs` now asserts what the static version made impossible: two sandboxes booting in one load context and holding different runtimes.** This record exists FIRST and deliberately: four
+**Status: THREE FACES IN THE TREE, 2026-09-24 -- `runtimes/clr/src/rt/Artifact.cs`, `runtimes/jvm/src/com/flint/rt/Sandbox.java` and the `host` module of `units-src/flint-conc/src/lib.rs`. **ALL FOUR TARGETS HAVE THE FACE as of 2026-09-24.** Gated by `bin/check-artifact-ops` (faces against the contract, `4 of 4`) and `bin/check-four-ops` (behaviour, jvm, including compiled arities in both directions), `bin/check-clr` (behaviour, clr, same) and `bin/check-llvm` (behaviour, llvm, linked and driven from C). The `.ll` grew `flint_boot`/`flint_loop`/`flint_link` as three-line wrappers over `flint_native_boot`/`_loop`/`_link` in `nativeabi/src/lib.rs`, the way its `main` already wraps `flint_native_main`. The CLR's static surface became an instance one on 2026-09-24 -- `sealed class Artifact`, `static Artifact Boot(...)`, `Status Loop()` -- and `runtimes/clr/artifact/Check.cs` now asserts what the static version made impossible: two sandboxes booting in one load context and holding different runtimes.** This record exists FIRST and deliberately: four
 implementations designed in parallel is how this project produced sixteen
 version declarations, four compile-spec front ends and a `:checks` axis on one
 CLI and not the other. The contract is written down before the last three are
@@ -12706,6 +12706,55 @@ The remaining cost is not the container. It is an IL assembler -- opcode table,
 label fixups with short/long selection, computed `maxstack` -- at ~200-250
 lines, which is the same problem `src/flint/aot.cljc` already solves in 713 for
 wasm.
+
+### AOT was written, tested, and called by nothing
+
+The standing note said "AOT on neither new target ... JVM: ~450-550 lines, and
+StackMapTable becomes unavoidable". Measured, that was wrong by two orders of
+magnitude. `runtimes/jvm/src/com/flint/rt/AotEmit.java` is 408 lines and
+`runtimes/clr/src/rt/AotEmit.cs` is 498, both complete, and StackMapTable is not a
+cost at all -- `java.lang.classfile` computes it, which is why `bin/conform-hosts`
+requires JDK 24+.
+
+**What was missing was ONE CALL in each port.** `compileArities` /
+`CompileArities` existed and were reached only from `runtimes/jvm/test/RtAot.java`
+and `runtimes/clr/conform/Program.cs`. The rest of the chain was already there and
+every link was traceable:
+
+* the producer sets the bit -- `src/flint/image.cljc:246` -- and its comment says
+  the case exists for exactly this: "an image for a PORT has the bit and an empty
+  table, which is exactly the case that could not be expressed before";
+* both ports DECLARE the constant (`Img.java:28`, `Img.cs:24`) and neither read it;
+* both loaders PARSE it into a field (`Img.java:140`, `Img.cs:135`) that nothing
+  outside the loader reads;
+* and `Sandbox.boot` DISCARDED the `Loaded` carrying it --
+  `if (Img.load(rt, image) == null) throw ...` -- at the exact point AOT would be
+  decided.
+
+So an artifact compiled `:optimize [perf]` was interpreted exactly like one that
+was not, on both ports, and no gate said so.
+
+**`false` for `chunkAll`**, and not a judgement call: `AotPlan`'s own comment calls
+it "a bisection handle, not a mode", and the reference producer agrees --
+`src/flint/aot.cljc`'s four-argument `compile-arity` delegates with `false`.
+
+Measured after wiring, by ENTRIES into compiled code rather than by a compiled
+count, because emitting a method proves less than entering one:
+
+    jvm   plain 0 entries -> perf 961      clr   plain 0 -> perf 1997
+
+**THE CONTROL IS THE POINT, and both gates assert it.** `entries > 0` alone would
+also hold for a port that compiled unconditionally -- a different bug wearing the
+same tick -- so the no-flag build must report ZERO. `bin/check-four-ops` runs the
+JVM artifact twice and `bin/check-clr` builds a second assembly, and both also
+require the same ANSWER: compiled arities that answered differently would be worse
+than not compiling.
+
+Both proven sensitive by removing the call: ":optimize [perf] compiled no arities
+-- boot did not act on the image's perf bit".
+
+*The CLR half was smaller than the JVM's, which I got wrong first: the CLR already
+keeps its `Loaded` in a field, so only the flag needed consulting.*
 
 ### Two implementations of one access check, disagreeing
 

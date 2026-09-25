@@ -258,6 +258,29 @@ public sealed class Artifact {
                 "or run it on a host built from the same version.");
         }
 
+        // COMPILED ARITIES, when the image asks for them. `:optimize [perf]` sets
+        // `FlagPerf` in the image (`src/flint/image.cljc`), and until now nothing on
+        // this port acted on it: `AotEmit.cs` is 498 lines that ran only from
+        // `runtimes/clr/conform/Program.cs`, so every artifact was interpreted
+        // however it was compiled. The producer's own comment says the case exists
+        // for this -- "an image for a PORT has the bit and an empty table, which is
+        // exactly the case that could not be expressed before".
+        //
+        // BEFORE `EnsureStarted` BELOW, which runs the initialisers.
+        // `runtimes/jvm/test/RtAot.java` establishes the order as load, compile,
+        // then initialisers, and this is the last point before they run.
+        //
+        // `false` for `chunkAll`: it makes EVERY instruction a chunk boundary and is
+        // "a bisection handle, not a mode" in `AotPlan`'s own words. The reference
+        // producer agrees -- `src/flint/aot.cljc`'s four-argument `compile-arity`
+        // delegates with `false`.
+        //
+        // AN ARITY THAT CANNOT BE COMPILED STAYS INTERPRETED, so this cannot fail a
+        // boot that would otherwise have worked.
+        if ((loaded.flags & Img.FlagPerf) != 0) {
+            rt.CompileArities(false);
+        }
+
         var a = new Artifact(rt, bridge, loaded);
         // BEFORE ANYTHING RUNS. `InstallSystemPort` is what makes
         // `BootSystemThreadOnce` spawn the control plane, and a sandbox given its

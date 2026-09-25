@@ -45,11 +45,15 @@
 (defn run-jvm
   "Compile the case program, emit the artifact, and run the JVM harness.
 
+  `perf?` compiles the image with `:optimize [perf]`, which is how the AOT rows
+  below get an artifact that should compile arities and one that should not.
+
   Returns the harness's lines as `{[key arg] value}` plus `:image-natives`, which
   this reads out of the IMAGE rather than asking the artifact: the natives a program
   declares are a property of the bytecode, and the `prop(\"natives\")` that used to
   answer it is gone along with `prop`."
-  [case-map]
+  ([case-map] (run-jvm case-map false))
+  ([case-map perf?]
   (when-let [jdk (jdk)]
     (let [work (str root "/out/four-ops/jvm")
           src (str work "/src")
@@ -62,8 +66,13 @@
       (sh! "sh" (str root "/bin/build-jvm-runtime"))
       ;; THROUGH THE COMMITTED TOOLS, not inline: a hand-configured one-off encodes
       ;; decisions the real path lacks.
-      (sh! "bb" (str root "/bin/flint") ":src" src ":fn" (:entry case-map)
-           "--emit-image" ":out" (str work "/t.image"))
+      (apply sh! (concat ["bb" (str root "/bin/flint") ":src" src ":fn" (:entry case-map)
+                          "--emit-image" ":out" (str work "/t.image")]
+                         ;; `:optimize [perf]` SETS THE IMAGE'S PERF BIT, which is
+                         ;; the only thing that makes `boot` compile arities. Passed
+                         ;; here rather than to `build-jvm-artifact`, because it is a
+                         ;; property of the IMAGE and not of the packaging.
+                         (when perf? [":optimize" "[perf]"])))
       (sh! "bb" (str root "/bin/build-jvm-artifact") ":fn" (:entry case-map)
            ":image" (str work "/t.image") ":class" work)
       (let [r (apply sh! (concat [(str jdk "/bin/java") "-cp" (str rt-jar ":" work)
@@ -78,7 +87,7 @@
         (assoc (->> (str/split-lines (:out r))
                     (keep (fn [l] (let [[k a v] (str/split l #"\t" 3)] (when v [[k a] v]))))
                     (into {}))
-               :image-natives nnat)))))
+               :image-natives nnat))))))
 
 (def targets
   ;; ONE ROW, because one target has a harness. `clr`, `wasm` and `native` faces
@@ -201,6 +210,50 @@
       (fail! t (str "the call's answer was " (pr-str a) ", want a :return carrying "
                     (pr-str (:expect-answer case-map)))))))
 
+(defn check-aot! [t got run]
+  "Compiled arities, BOTH DIRECTIONS.
+
+  `AotEmit.java` is 408 lines that ran only from `runtimes/jvm/test/RtAot.java`
+  until `Sandbox.boot` learned to read the image's `FLAG_PERF`: an artifact compiled
+  with `:optimize [perf]` was interpreted exactly like one that was not, and no gate
+  anywhere said so.
+
+  THE CONTROL IS THE POINT. `entries > 0` on its own would also be true of a port
+  that compiled unconditionally, which is a different bug wearing the same tick --
+  so the default build must report ZERO and the perf build more than zero.
+
+  ENTRIES rather than a compiled count: emitting a method proves less than entering
+  one, and a flag read but never acted on leaves the emitted count non-zero while
+  nothing runs."
+  (let [plain (get got ["aot" "entries"])]
+    (if-not plain
+      (fail! t "the harness reported no `aot entries` row at all")
+      (when-not (= "0" plain)
+        (fail! t (str "a build with no :optimize entered compiled code " plain
+                      " times; nothing asked it to")))))
+  ;; The second artifact, compiled for performance. A SECOND FULL RUN, which costs a
+  ;; few seconds and is the only way to see the flag being acted on.
+  (let [perf (run case-map true)
+        n (get perf ["aot" "entries"])]
+    (cond
+      (nil? n) (fail! t "the perf build reported no `aot entries` row")
+      (not (re-matches #"\d+" n)) (fail! t (str "`aot entries` was " (pr-str n)))
+      (zero? (parse-long n))
+      (fail! t (str ":optimize [perf] compiled no arities -- boot did not act on the"
+                    " image's perf bit"))
+      ;; AND THE SAME ANSWER. Compiled arities that answered differently would be a
+      ;; worse outcome than not compiling at all.
+      :else
+      (let [a (get perf ["answer" "printable"])]
+        (if (and a (str/includes? a (:expect-answer case-map)))
+          ;; ITS OWN LINE, because a check whose result never appears cannot be told
+          ;; from one that did not run. The two numbers ARE the check: 0 without the
+          ;; flag, n with it.
+          (println (str "  ok   " t ": no compiled arities without the flag, "
+                        n " entries with it, same answer"))
+          (fail! t (str "the perf build answered " (pr-str a) ", want "
+                        (pr-str (:expect-answer case-map)))))))))
+
 ;; ---------------------------------------------------------------- run
 
 (let [ran (atom 0) skipped (atom [])]
@@ -235,6 +288,7 @@
                   (check-link! name got)
                   (check-boot! name got)
                   (check-loop! name got)
+                  (check-aot! name got run)
                   (println (if (= before (count @fails))
                              (str "  ok   " name ": three operations, "
                                   (:image-natives got) " natives declared, metadata in "

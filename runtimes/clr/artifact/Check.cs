@@ -342,6 +342,18 @@ public static class Check {
                  (found == expected ? "" : $" -- got {Render(bridge.In)}"));
         }
 
+        // COMPILED ARITIES: did `Boot` act on the image's perf bit? REPORTED rather
+        // than asserted, because whether there should be any depends on how the
+        // artifact under test was compiled, and this harness is handed a path. The
+        // number is what makes the answer checkable from outside: `bin/check-clr`
+        // builds without `:optimize [perf]` and so requires NONE here, and asserts
+        // the other direction on a perf build of its own.
+        //
+        // ENTRIES, not "compiled n": emitting a method proves less than entering
+        // one, and `AotEmit.cs` was 498 lines entered by nothing outside
+        // `runtimes/clr/conform` until `Boot` learned to consult `FlagPerf`.
+        Console.WriteLine($"aot  entries {Rt.aotEntries}");
+
         Console.WriteLine(fails == 0
             ? $"clr artifact: every check passed ({imageLen} bytes of bytecode in .text)"
             : $"clr artifact: {fails} FAILED");

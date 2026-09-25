@@ -119,5 +119,40 @@ if ! (cd runtimes/clr/artifact && dotnet run -v q -c Release -- \
 fi
 sed 's/^/  /' "$OUT/check.out"
 
+# NO COMPILED ARITIES WITHOUT THE FLAG. The build above passes no `:optimize`, so
+# the image carries no perf bit and `Boot` must not have compiled anything. This is
+# the control for the row below: without it, "entries > 0" could be true because
+# the port compiles unconditionally, which is a different bug wearing the same
+# green tick.
+plain_aot=$(sed -n 's/^aot  entries //p' "$OUT/check.out")
+[ "$plain_aot" = 0 ]   || fail "a build with no :optimize entered compiled code $plain_aot times"
+echo "  ok   and compiles no arities when the image does not ask (entries 0)"
+
+# --- AND IT DOES COMPILE THEM WHEN THE IMAGE ASKS -----------------------------
+#
+# `:optimize [perf]` sets `FLAG-PERF` in the image, and `Artifact.Boot` consults it
+# (`DECISIONS.md#four-operations`). Until it did, `AotEmit.cs` was 498 lines
+# entered by nothing outside `runtimes/clr/conform`: an artifact compiled for
+# performance was interpreted exactly like one that was not, and no row anywhere
+# said so.
+#
+# ENTRIES, NOT "compiled n". Emitting a method proves less than entering one, and
+# the failure this catches -- a flag read but never acted on -- leaves the emitted
+# count non-zero while nothing runs.
+./bin/flint :src "$OUT/src" :fn prog/main :to :clr :out "$OUT/Perf.dll"     :optimize "[perf]" > "$OUT/emit-perf.out" 2>&1   || { cat "$OUT/emit-perf.out"; fail "\`:to :clr :optimize [perf]\` did not emit"; }
+if ! (cd runtimes/clr/artifact && dotnet run -v q -c Release --         "../../../$OUT/Perf.dll" prog/main "$want") > "$OUT/check-perf.out" 2>&1; then
+  cat "$OUT/check-perf.out"
+  fail "the :optimize [perf] assembly did not check out"
+fi
+perf_aot=$(sed -n 's/^aot  entries //p' "$OUT/check-perf.out")
+case "$perf_aot" in
+  ''|*[!0-9]*) fail "no aot entry count came back from the perf assembly" ;;
+esac
+[ "$perf_aot" -gt 0 ]   || fail ":optimize [perf] compiled no arities -- Boot did not act on the image's perf bit"
+# THE SAME ANSWER, which is the part that matters: compiled arities that answered
+# differently would be a worse outcome than not compiling at all.
+grep -q "every check passed" "$OUT/check-perf.out"   || { sed 's/^/    /' "$OUT/check-perf.out"; fail "the perf assembly failed a check"; }
+echo "  ok   and DOES compile them when it asks: $perf_aot entries, same answer"
+
 echo
 echo "  ok   \`:to :clr\` emits an assembly that loads, verifies and runs"

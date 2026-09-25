@@ -130,6 +130,11 @@ public final class FourOps {
     try { link.invoke(null, "flint/str2", com.flint.rt.Builtins.byName("flint/str2")); }
     catch (Exception e) { say("link", "restore", cause(e)); }
     Host host = new Host();
+    // ZEROED BEFORE THE REAL BOOT, so the `aot entries` row below counts only what
+    // this sandbox ran. The failed boot above shares the process, and a count taken
+    // without this would be the process total -- which reads as success whatever
+    // `boot` did.
+    com.flint.rt.Rt.aotEntries = 0;
     try {
       boot.invoke(null, host);
       say("boot", "ok", "booted");
@@ -148,6 +153,17 @@ public final class FourOps {
     // The resting state, BEFORE any work is queued: a sandbox whose control plane is
     // parked on its system port answers NeedsHost and nothing else.
     say("loop", "at-rest", String.valueOf((Integer) loop.invoke(null)));
+
+    // COMPILED ARITIES: did `boot` act on the image's perf bit? REPORTED rather
+    // than asserted, because whether there should be any depends on how the
+    // artifact under test was compiled and this harness is handed one.
+    //
+    // ENTRIES, not "compiled n": emitting a method proves less than entering one,
+    // and `AotEmit.java` was 408 lines entered by nothing outside
+    // `runtimes/jvm/test/RtAot.java` until `Sandbox.boot` learned to read
+    // `FLAG_PERF`. The counter is zeroed in `boot`'s row above rather than here so
+    // that nothing this harness did before it can be counted.
+    say("aot", "entries", String.valueOf(com.flint.rt.Rt.aotEntries));
 
     host.queue(1, new Main.W().map(2).kw("op").kw("bind").kw("port").port(2).done());
     Main.W w = new Main.W().map(4).kw("tx").num(1).kw("op").kw("call").kw("fn").str(entry)
