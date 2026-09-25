@@ -1,0 +1,24 @@
+#!/bin/sh
+# The two artifact contracts agree where they OVERLAP.
+#
+# There are two, and they are complementary rather than duplicated:
+#
+#   runtimes/artifact-ops/contract.edn  STRUCTURAL -- what a source face must
+#                                       declare, and must not. Read by
+#                                       `bin/check-artifact-ops`.
+#   test/four-ops/contract.edn          BEHAVIOURAL -- what a RUNNING artifact
+#                                       must answer. Read by `bin/check-four-ops`
+#                                       and `runtimes/jvm/.../FourOps.java`.
+#
+# But they overlap on the CONTRACT CORE: the operation names and the status
+# numbers. One fact in two files is the defect this project has most of, and the
+# two were written by different agents who could not see each other's file -- so
+# they agree today by luck rather than by construction.
+#
+# Merging them was the alternative and it is worse: one gate is python and one is
+# babashka, the structural one must run before anything is built, and a single
+# file read by three readers in two languages couples them all to one shape.
+# Asserting the overlap is the cheaper half of the same guarantee.
+set -e
+cd "$(dirname "$0")/.."
+exec python3 bin/check_contracts.py
