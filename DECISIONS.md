@@ -12419,7 +12419,7 @@ take.
 
 **What every flint artifact exposes, on every target**
 **Ratified:** ☐ not signed off
-**Status: THREE FACES IN THE TREE, 2026-09-24 -- `runtimes/clr/src/rt/Artifact.cs`, `runtimes/jvm/src/com/flint/rt/Sandbox.java` and the `host` module of `units-src/flint-conc/src/lib.rs`. Gated by `bin/check-artifact-ops` (faces against the contract, all three) and `bin/check-four-ops` (behaviour, jvm only so far). Native has no face; the CLR's is still a static surface and must become an instance one.** This record exists FIRST and deliberately: four
+**Status: THREE FACES IN THE TREE, 2026-09-24 -- `runtimes/clr/src/rt/Artifact.cs`, `runtimes/jvm/src/com/flint/rt/Sandbox.java` and the `host` module of `units-src/flint-conc/src/lib.rs`. Gated by `bin/check-artifact-ops` (faces against the contract, all three) and `bin/check-four-ops` (behaviour, jvm only so far). Native has no face. The CLR's static surface became an instance one on 2026-09-24 -- `sealed class Artifact`, `static Artifact Boot(...)`, `Status Loop()` -- and `runtimes/clr/artifact/Check.cs` now asserts what the static version made impossible: two sandboxes booting in one load context and holding different runtimes.** This record exists FIRST and deliberately: four
 implementations designed in parallel is how this project produced sixteen
 version declarations, four compile-spec front ends and a `:checks` axis on one
 CLI and not the other. The contract is written down before the last three are
