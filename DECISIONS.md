@@ -12767,6 +12767,62 @@ back and watching it fail.
 exists is exactly the kind a script can settle, so it should never be a claim a
 reader has to take on trust.
 
+## index-past-the-fixnum
+
+**An index that does not fit a fixnum is wrong on all four runtimes, differently**
+**Ratified:** ☐ not signed off
+**Status: FOUND AND MEASURED 2026-09-24, NOT FIXED. Reproduced against `runtime/src/builtins.rs` and `runtimes/jvm/src/com/flint/rt/Builtins.java`; the other six sites named below are unprobed.**
+
+`(b-at bs 281474976710657)` -- 2^48+1, one past the signed 48-bit fixnum
+payload, so a BIGINT -- on a 100 000-byte string:
+
+    native   returns the byte at index 1. Wrong DATA, silently.
+    jvm      ArrayIndexOutOfBoundsException: Index 100663296 out of bounds for
+             length 313 -- a RAW HOST EXCEPTION, not a flint error.
+    correct  a flint IndexOutOfBoundsException.
+
+**Native is not the reference here, which is the part that matters.** For the
+bitwise family it was -- `bitop` uses `as_i64` end to end and never narrows. Here
+`builtins.rs` reads the index correctly with `as_i64`, checks `i >= 0`, and then
+hands `i as u32` to `b_at`, which range-checks the TRUNCATED value. 2^48+1 as a
+`u32` is 1, and 1 is in range, so the check passes and the wrong byte comes back.
+A guard after a narrowing is not a guard.
+
+**The jvm's failure is the worse kind.** `Val.asFixnum` reads a heap value's
+ADDRESS -- 100663296 here -- and the resulting index escapes as a Java
+`ArrayIndexOutOfBoundsException` from inside an internal array. That is a host
+exception crossing the guest boundary, so a flint `catch` cannot see it and the
+message names flint's internals rather than the program's mistake.
+
+### Sixteen sites, one shape
+
+Sixteen per port read a user argument with `Val.asFixnum`/`Val.AsFixnum` where
+native uses `as_i64`, across nine builtins: `table-slice`, `subs`,
+`str-index-of`, `code-point-at`, `from-code-point`, `b-at`, `b-slice`, `b-conj`,
+`re-run`, `re-find-all`. Three were probed and agree -- `subs` twice and
+`index-of` -- because their bounds reject an address-scale number for a short
+string. **They agree by accident of size, not by construction.**
+
+`Builtins.java:779` already describes this exact hazard for a DIFFERENT family
+-- "`asFixnum` IS NOT `asI64` ... for a BIGINT it sign-extends the heap address
+and does arithmetic on a pointer", recording `unchecked-add` answering 70969
+against native's -9223372036854775808. That family was fixed; the index family
+was not, and the warning sits 600 lines from the code it describes.
+
+### What a fix has to do, and why it is not an accessor swap
+
+* **bound BEFORE narrowing, on every runtime.** Native's `as_i64` is already
+  right; what is missing is refusing an index that does not fit the width
+  `b_at` takes. Swapping the ports to `Num.asI64` alone would make them agree
+  with native's WRONG answer.
+* **refuse as flint, not as the host.** The jvm must answer a flint
+  `IndexOutOfBoundsException` rather than let an `ArrayIndexOutOfBounds` escape.
+* **and the conformance row has to use a LONG input.** The probe only
+  distinguishes the three outcomes because the string is 100 000 bytes: at
+  75 696 the answer is `a` and at 1 it is `b`, so "wrong byte" and "refused" are
+  different observations. A short fixture passes either way, which is why 366
+  rows missed this.
+
 ## emitters-are-cljc
 
 **Every target's emitter is one cljc implementation**
