@@ -364,7 +364,7 @@ cat > out/rt-probe/probe.cljc <<'PROBE'
   ;; AND IT HAS TO BE LONG. At 131 072 bytes a truncated index is still IN RANGE,
   ;; so "returned the wrong byte" and "refused" are different observations. A
   ;; short fixture passes either way, which is why 366 rows missed this.
-  ;; EIGHT SITES. They did not all fail the same way, which is why each is here
+  ;; SIXTEEN SITES. They did not all fail the same way, which is why each is here
   ;; rather than one standing in for the family: `b-at` was wrong on all three
   ;; runtimes with two different wrong answers, `b-slice` was wrong on NATIVE
   ;; ONLY -- both ports already refused -- `re-run` was wrong on all three, and
@@ -372,6 +372,8 @@ cat > out/rt-probe/probe.cljc <<'PROBE'
   (let [big 281474976710657
         s (loop [x "abcdefgh" i 0] (if (< i 14) (recur (str x x) (inc i)) x))
         bs (flint.rt/str->b s)
+        flat "abcdefghij"
+        rope (loop [x "abcdefgh" i 0] (if (< i 4) (recur (str x x) (inc i)) x))
         t (tb/table (tb/schema [[:k :int]]) [{:k 1} {:k 2} {:k 3} {:k 4} {:k 5}])]
     (str (flint.rt/b-count bs) "/" (flint.rt/b-at bs 1)
          " b-at" (refusal (fn [] (flint.rt/b-at bs big)))
@@ -390,7 +392,58 @@ cat > out/rt-probe/probe.cljc <<'PROBE'
          ;; string's bits as 1099511627896.
          " tb-from" (refusal (fn [] (count (tb/rows (tb/slice t big 2)))))
          " tb-to" (refusal (fn [] (count (tb/rows (tb/slice t 0 big)))))
-         " tb-nonint" (refusal (fn [] (count (tb/rows (tb/slice t "x" 2))))))))
+         " tb-nonint" (refusal (fn [] (count (tb/rows (tb/slice t "x" 2)))))
+         ;; `from-code-point` WAS THE WORST OF THE FAMILY, and the only one where
+         ;; the ports ANSWERED instead of refusing. `asFixnum` handed it the
+         ;; bigint's heap ADDRESS, and a heap address is ordinarily below
+         ;; 0x10FFFF -- so the code-point bound PASSED and both ports answered a
+         ;; cuneiform sign built out of the heap layout where native refused.
+         ;; `neg` and `nonint` are here because the MESSAGE diverged too, with no
+         ;; bigint involved at all: native named no value and the ports named one.
+         " fcp-big" (refusal (fn [] (flint.rt/from-code-point big)))
+         " fcp-neg" (refusal (fn [] (flint.rt/from-code-point -1)))
+         " fcp-nonint" (refusal (fn [] (flint.rt/from-code-point "x")))
+         ;; `subs`, ON BOTH OF ITS ARMS. A rope slices by descent and a flat
+         ;; string by offset, so they read their bounds on separate lines and a
+         ;; fixture of one kind of string leaves the other unmeasured -- which is
+         ;; how this was missed when `subs` was first called agreeing.
+         " subs-flat-st" (refusal (fn [] (flint.rt/subs flat big 2)))
+         " subs-flat-en" (refusal (fn [] (flint.rt/subs flat 0 big)))
+         " subs-rope-st" (refusal (fn [] (flint.rt/subs rope big 2)))
+         " subs-rope-en" (refusal (fn [] (flint.rt/subs rope 0 big)))
+         ;; THE EXCEPTION CLASS, caught rather than printed. flint matches a
+         ;; `catch` by EXACT NAME with no hierarchy, so the ports throwing
+         ;; `IndexOutOfBoundsException` where native throws the String one was
+         ;; CONTROL FLOW: the same program caught on one runtime and fell through
+         ;; on the other two, in both directions. A message comparison cannot see
+         ;; this, because the class is not in the message.
+         ;; A NON-INTEGER BOUND IS A DEFAULT AND NOT AN ERROR, which is the
+         ;; divergence I INTRODUCED while fixing the one above: native reads
+         ;; `as_i64(..).unwrap_or(0)` for the start and `None` for the end, so
+         ;; these four answer values rather than refusing. Bounding the argument
+         ;; by REFUSING a non-integer is the obvious reading of the fix and makes
+         ;; all three disagree the other way, on an input with no bigint in it.
+         " subs-st-str" (refusal (fn [] (flint.rt/subs flat "x" 2)))
+         " subs-en-str" (refusal (fn [] (flint.rt/subs flat 0 "x")))
+         " subs-rope-st-str" (refusal (fn [] (flint.rt/b-count (flint.rt/str->b (flint.rt/subs rope "x" 2)))))
+         " subs-rope-en-str" (refusal (fn [] (flint.rt/b-count (flint.rt/str->b (flint.rt/subs rope 0 "x")))))
+         ;; `re-run`'s ENTRY, which is a PROGRAM COUNTER and was unchecked on
+         ;; every runtime. `add-thread` indexes its `seen` flags by it, so an
+         ;; entry past the program read off the end: both ports raised a HOST
+         ;; exception out of `addThread` -- not a flint throw, so nothing in the
+         ;; sandbox could catch it -- and native escaped only because `as u32`
+         ;; truncated this particular bigint to 1, which is in range for any
+         ;; program of two or more instructions. Guarded in `kin/pike.kin`, so
+         ;; one guard covers all three and they cannot drift.
+         " rr-entry" (refusal (fn [] (flint.rt/re-run (:re (flint.regex/pattern "a")) flat 0 big)))
+         " rr-full" (refusal (fn [] (flint.rt/re-run (:re (flint.regex/pattern "a")) flat 0 0 big)))
+         " subs-catch" (str (try (flint.rt/subs flat 5 1)
+                                 (catch StringIndexOutOfBoundsException e "specific")
+                                 (catch Throwable e "fell-through"))
+                            "/"
+                            (try (flint.rt/subs flat 5 1)
+                                 (catch IndexOutOfBoundsException e "general")
+                                 (catch Throwable e "fell-through"))))))
 (defn main [_] (str (+ (fold) (run 1000) (wide)) " " (past-the-payload)))
 PROBE
 ./bin/flint :src out/rt-probe :fn probe/main --emit-image \

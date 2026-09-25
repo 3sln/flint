@@ -13090,19 +13090,93 @@ rule. For `b-slice` native was the only broken runtime, and a fix applied by
 assuming otherwise would have changed two correct implementations. Each site was
 measured on all three before being touched.
 
-**THE SWEEP IS COMPLETE 2026-09-24.** Every site in the family has now been
-measured on all three runtimes, and the per-site asymmetry held up to the end:
+**THE SWEEP WAS DECLARED COMPLETE AND WAS NOT.** That claim is left standing
+here because the way it was wrong is the useful part: I enumerated the family as
+NINE BUILTINS, checked them off, and missed `from-code-point` entirely -- and the
+unit was wrong as well as the list. A builtin is not a site; an ARGUMENT POSITION
+is. `subs` reads two of them on each of TWO ARMS, `re-run` reads three, and
+"`subs` agrees" was recorded from a fixture that exercised one arm.
 
-    b-at             wrong on ALL THREE.  native 98, ports 97.
-    b-slice from/to  wrong on NATIVE ONLY. both ports already refused.
-    code-point-at    wrong on ALL THREE.  native 98, ports 97.
-    re-run  (start)  wrong on ALL THREE.  native [8 9], ports [81808 81809].
-    table-slice      wrong on THE TWO PORTS. native was right.
-    b-conj           ALREADY RIGHT on all three. Not touched.
-    re-find-all      ALREADY RIGHT on all three. Not touched.
-    subs, str-index-of   ALREADY RIGHT on all three. Not touched.
+Enumerating what the code actually does, rather than working from the list, found
+four more defects after the "complete" claim. The table below is by argument
+position.
 
-Five fixed, four found correct. **Two of the nine needed no change at all**,
+**The measured state, 2026-09-24:**
+
+    b-at              wrong on ALL THREE.  native 98, ports 97.
+    b-slice from/to   wrong on NATIVE ONLY. both ports already refused.
+    code-point-at     wrong on ALL THREE.  native 98, ports 97.
+    re-run  (start)   wrong on ALL THREE.  native [8 9], ports [81808 81809].
+    table-slice       wrong on THE TWO PORTS. native was right.
+    from-code-point   wrong on THE TWO PORTS, and the WORST of the family.
+    subs (rope st/en) wrong on THE TWO PORTS, value AND exception class.
+    subs (flat st/en) the same defect again, on the other arm.
+    re-run  (entry)   wrong on ALL THREE, and a HOST crash on the ports.
+    b-conj            ALREADY RIGHT on all three. Not touched.
+    re-find-all       ALREADY RIGHT on all three. Not touched.
+    str-index-of      ALREADY RIGHT on all three. Not touched.
+
+**`from-code-point` is the only site where the ports ANSWERED.** Every other one
+refused or returned a wrong number; this one succeeded. `asFixnum` handed it the
+bigint's heap ADDRESS, and a heap address is ordinarily BELOW 0x10FFFF -- so the
+code-point bound underneath it PASSED, and both ports answered the cuneiform sign
+U+12778 where native refused. The heap layout became program-visible data. A
+bound that the wrong value happens to satisfy is worse than no bound, because it
+reads as a check.
+
+**`subs` diverged in its exception CLASS, which is control flow and not wording.**
+flint matches a `catch` by EXACT NAME with no hierarchy -- measured: on native,
+`catch StringIndexOutOfBoundsException` caught and `catch IndexOutOfBoundsException`
+fell through. Both ports were the exact inverse, because they threw the general
+name. So the same program's error handling ran on one runtime and not the other
+two, in both directions, with no bigint involved. A row comparing MESSAGES cannot
+see this, since the class is not in the message; the row now catches both names
+and prints which one fired.
+
+Converging it took the better half from each side: the ports adopted native's
+more precise class, and native adopted the ports' informative message, which is
+now `subs 5..1 of 3` on all three instead of `bad substring range`.
+
+**The charge had to be left alone while the value was fixed.** Native charges
+`(e - start).max(0) as u32` BEFORE the bounds check, so a REFUSED `subs` is still
+billed, and that `as u32` truncates. Computing the ports' charge from a value
+already clamped into range -- the obvious way to write the fix -- silently moves
+the bill on the refusal path, and gas is program-visible through a step limit. So
+both ports mask to 32 bits explicitly. Verified at two workload sizes: the slope
+is 1250 steps on all three and the residual is a flat 86, which is present in a
+program containing no `subs` at all and so predates this.
+
+**THE FIX FOR `subs` INTRODUCED A DIVERGENCE OF ITS OWN, in the other
+direction.** Bounding the argument by REFUSING a non-integer is the obvious
+reading of "bound it", and it is wrong: native reads
+`as_i64(..).unwrap_or(0)` for the start and `None` for the end, so
+`(subs s "x" 2)` answers `"ab"` and `(subs s 0 "x")` answers the whole string.
+For half an hour both ports threw where native answered -- on an input with no
+bigint anywhere in it, which is a wider blast radius than the bug being fixed.
+Caught by testing the arm I had just written rather than only the one that was
+broken. Four cases for it are in the row now.
+
+It also decides which branch the CHARGE takes: native bills by whether it HAS an
+end, so a non-integer end takes the same branch as no end argument at all, and
+the ports test `endv != null` rather than `n > 2` for that reason.
+
+**`re-run`'s `entry` is a PROGRAM COUNTER and nothing checked it.** `add-thread`
+indexes its `seen` flags by it, so an entry past the program read off the end:
+both ports raised a HOST exception out of `addThread` -- a Java
+`ArrayIndexOutOfBoundsException`, not a flint throw, so nothing inside the sandbox
+could catch it -- and native escaped only because `as u32` truncated that
+particular bigint to 1, which is in range for any program of two or more
+instructions. A different bigint would have panicked there too.
+
+That guard went into `kin/pike.kin`, not into the three builtins: one guard in the
+shared source cannot disagree across runtimes and three copies would. It is
+`(>= entry ninstrs)` and was first written `(or (< entry 0) (> entry (- ninstrs 1)))`,
+which does not compile -- kin's `I32` is UNSIGNED in Rust, so `< 0` is never true
+there, and `(- ninstrs 1)` underflows to a huge value for an empty program. That
+spelling would have let everything through on the one input it most needed to
+stop.
+
+Nine positions fixed, three found correct. **Three needed no change at all**,
 which is the argument for measuring each rather than applying the family's fix
 across the family: a bound added to `str-index-of` on one runtime would have
 CREATED a divergence where all three already agreed. That nearly happened -- see

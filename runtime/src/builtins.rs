@@ -577,8 +577,21 @@ builtins! {
     "flint/from-code-point", flint_b_fromcp, b_fromcp, |rt, a, n| {
         let _ = n;
         let c = arg(rt, a, 0);
-        match rt.as_i64(c).and_then(|c| u32::try_from(c).ok()).and_then(char::from_u32) {
-            Some(ch) => Value::char_value(ch),
+        // THE CODE POINT IS NAMED IN THE MESSAGE, and that was a divergence
+        // rather than a nicety: both ports appended it and this did not, so
+        // `(from-code-point -1)` refused with two different texts across the
+        // three runtimes with no bigint anywhere near it.
+        match rt.as_i64(c) {
+            Some(cp) => match u32::try_from(cp).ok().and_then(char::from_u32) {
+                Some(ch) => Value::char_value(ch),
+                None => {
+                    let msg = alloc::format!("not a code point: {cp}");
+                    rt.throw_str("IllegalArgumentException", &msg)
+                }
+            },
+            // NOT AN INTEGER AT ALL, so there is no number to name. The ports
+            // answer this case identically, which is what makes the two arms a
+            // contract rather than two spellings.
             None => rt.throw_str("IllegalArgumentException", "not a code point"),
         }
     };

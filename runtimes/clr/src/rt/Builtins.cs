@@ -504,11 +504,29 @@ public static class Builtins {
             // shape, on the operation that most wants sharing.
             if (Str.IsRope(rt, v0)) {
                 int cps = Str.SCount(rt, v0);
-                int st = (int) Val.AsFixnum(rt.VAt(at + 1));
-                int en = n > 2 ? (int) Val.AsFixnum(rt.VAt(at + 2)) : cps;
-                if (st < 0 || en > cps || st > en)
-                    return rt.ThrowStr("IndexOutOfBoundsException",
-                        "subs " + st + ".." + en + " of " + cps);
+                // `Num.AsI64` AND A BOUND BEFORE THE `(int)` CAST, not
+                // `Val.AsFixnum`. A bound past a fixnum arrived as the bigint's
+                // heap ADDRESS: `(subs s 281474976710657 2)` refused with
+                // `subs 83520..2 of 10`, putting the heap layout into a message
+                // a program can read. Native takes an `i64` here and was right.
+                //
+                // AND THE CLASS IS `StringIndexOutOfBoundsException`. flint
+                // matches a `catch` by EXACT NAME with no hierarchy, so this
+                // port throwing the more general name meant a program catching
+                // native's specific one fell through here and vice versa --
+                // control flow, not wording.
+                // A NON-INTEGER IS A DEFAULT HERE, NOT AN ERROR: native reads
+                // `as_i64(..).unwrap_or(0)` for the start and `None` for the end,
+                // so `(subs s "x" 2)` answers "ab". See the jvm's copy.
+                long? stv = Num.AsI64(rt, rt.VAt(at + 1));
+                long? env = n > 2 ? Num.AsI64(rt, rt.VAt(at + 2)) : null;
+                long sv0 = stv == null ? 0 : stv.Value;
+                long ev0 = env == null ? cps : env.Value;
+                if (sv0 < 0 || ev0 > cps || sv0 > ev0)
+                    return rt.ThrowStr("StringIndexOutOfBoundsException",
+                        "subs " + sv0 + ".." + ev0 + " of " + cps);
+                int st = (int) sv0;
+                int en = (int) ev0;
                 bool ascii = Str.SAscii(rt, v0);
                 // THE SLICE HAS A PRICE, and this port charged nothing for it.
                 // Native bounds the non-ASCII descent before it starts, and a
@@ -523,24 +541,43 @@ public static class Builtins {
                 // ABSENT IS `nb` NOW, not -1: a real offset is 0..nb-1, so
                 // the byte length is free to mean "no such code point".
                 if (from >= nb)
-                    return rt.ThrowStr("IndexOutOfBoundsException",
+                    return rt.ThrowStr("StringIndexOutOfBoundsException",
                         "subs " + st + ".." + en + " of " + cps);
                 return Str.RopeSlice(rt, v0, from, to);
             }
             string s = Str.Text(rt, v0);
             var si = new System.Globalization.StringInfo(s);
             int len = CodePointCount(s);
-            int start = (int) Val.AsFixnum(rt.VAt(at + 1));
-            int end = n > 2 ? (int) Val.AsFixnum(rt.VAt(at + 2)) : len;
+            // Same two-part fix as the rope arm above, and it needed making
+            // TWICE: `subs` has two paths and a fixture of flat strings exercises
+            // only this one.
+            // A NON-INTEGER IS A DEFAULT, not an error; see the rope arm above.
+            long? startv = Num.AsI64(rt, rt.VAt(at + 1));
+            long? endv = n > 2 ? Num.AsI64(rt, rt.VAt(at + 2)) : null;
+            long sv = startv == null ? 0 : startv.Value;
+            long ev = endv == null ? len : endv.Value;
             // THE SLICE, NOT THE SOURCE, and before the bounds check, which is
             // where native charges it. Charging the whole string per call makes
             // the counter quadratic for splitting even when the copying is not.
+            //
+            // THE CHARGE IS COMPUTED FROM THE TRUE VALUES, MASKED TO 32 BITS,
+            // because native's is: it charges `(e - start).max(0) as u32` BEFORE
+            // the bounds check, so a refused `subs` is still billed, and the
+            // `as u32` truncates. Computing it from a value already clamped into
+            // range -- the obvious way to write the fix above -- silently changes
+            // the bill on the refusal path, and gas is program-visible through a
+            // step limit.
             int nbf = Str.SBytes(rt, v0);
-            int took = n > 2 ? System.Math.Max(end - start, 0)
-                             : System.Math.Max(nbf - System.Math.Max(start, 0), 0);
-            rt.ChargeBytes(System.Math.Min(took, nbf));
-            if (start < 0 || end > len || start > end)
-                return rt.ThrowStr("IndexOutOfBoundsException", "subs " + start + ".." + end + " of " + len);
+            // `endv != null` AND NOT `n > 2` picks the branch: native charges by
+            // whether it HAS an end, and a non-integer end gives it `None`.
+            long took = endv != null ? (System.Math.Max(ev - sv, 0) & 0xFFFFFFFFL)
+                                     : System.Math.Max(nbf - (System.Math.Max(sv, 0) & 0xFFFFFFFFL), 0);
+            rt.ChargeBytes((int) System.Math.Min(took, nbf));
+            int start = (int) sv;
+            int end = (int) ev;
+            if (sv < 0 || ev > len || sv > ev)
+                return rt.ThrowStr("StringIndexOutOfBoundsException",
+                    "subs " + sv + ".." + ev + " of " + len);
             // By CODE POINT, not by char: a .NET `string` is UTF-16, so slicing
             // it by index would cut a surrogate pair in half.
             int bs = OffsetByCodePoints(s, start), be = OffsetByCodePoints(s, end);
@@ -588,7 +625,16 @@ public static class Builtins {
             return Val.Fixnum(c);
         });
         Def("flint/from-code-point", (rt, at, n) => {
-            long c = Val.AsFixnum(rt.VAt(at));
+            // `Num.AsI64` AND NOT `Val.AsFixnum`, and this was the WORST site in
+            // the family. `AsFixnum` reads the low 48 bits of the value WORD, so
+            // a bigint arrived as its heap ADDRESS -- and a heap address is
+            // ordinarily BELOW 0x10FFFF, so the bound underneath PASSED and this
+            // answered a character built out of the heap layout rather than
+            // refusing. See the jvm's copy for the measurement.
+            long? cv = Num.AsI64(rt, rt.VAt(at));
+            if (cv == null)
+                return rt.ThrowStr("IllegalArgumentException", "not a code point");
+            long c = cv.Value;
             if (c < 0 || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF))
                 return rt.ThrowStr("IllegalArgumentException", "not a code point: " + c);
             return Str.Of(rt, char.ConvertFromUtf32((int) c));

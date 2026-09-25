@@ -221,7 +221,9 @@ impl Rt {
         let n = self.s_count(s) as i64;
         let e = end.unwrap_or(n);
         if start < 0 || e > n || start > e {
-            return self.throw_str("StringIndexOutOfBoundsException", "bad substring range");
+            // THE RANGE IS NAMED; see the identical note on the rope path.
+            let msg = alloc::format!("subs {start}..{e} of {n}");
+            return self.throw_str("StringIndexOutOfBoundsException", &msg);
         }
         if !self.charge_checked(((e - start) as u64 / 8) + 1, "subs") {
             return crate::value::NIL;
@@ -229,10 +231,16 @@ impl Rt {
         if start == e {
             return self.string("");
         }
+        // `cps` CAPTURED BEFORE `n` IS SHADOWED. The refusal below names the
+        // same range as the one above, and the ports' equivalent prints the
+        // CODE POINT count -- which the rebinding to `s_bytes` on the next line
+        // puts out of reach.
+        let cps = n;
         let n = self.s_bytes(s);
         let from = self.rope_byte_of_cp(s, start as u32);
         if from >= n {
-            return self.throw_str("StringIndexOutOfBoundsException", "bad substring range");
+            let msg = alloc::format!("subs {start}..{e} of {cps}");
+            return self.throw_str("StringIndexOutOfBoundsException", &msg);
         }
         // The END offset is the start of code point `e`, or the whole byte
         // length when `e` is the count -- there is no code point AT the end.
@@ -264,7 +272,13 @@ impl Rt {
             let n = self.s_count(s) as i64;
             let e = end.unwrap_or(n);
             if start < 0 || e > n || start > e {
-                return self.throw_str("StringIndexOutOfBoundsException", "bad substring range");
+                // THE RANGE IS NAMED. This said only "bad substring range" while
+                // both ports said `subs 5..1 of 3`, so the three runtimes refused
+                // the same call with different text. The ports' form is the more
+                // useful of the two and native's exception CLASS is the more
+                // precise, so each side took the other's better half.
+                let msg = alloc::format!("subs {start}..{e} of {n}");
+                return self.throw_str("StringIndexOutOfBoundsException", &msg);
             }
             return self.rope_slice(s, start as u32, e as u32);
         }
@@ -283,7 +297,13 @@ impl Rt {
             let n = self.s_bytes(s) as i64;
             let e = end.unwrap_or(n);
             if start < 0 || e > n || start > e {
-                return self.throw_str("StringIndexOutOfBoundsException", "bad substring range");
+                // THE RANGE IS NAMED. This said only "bad substring range" while
+                // both ports said `subs 5..1 of 3`, so the three runtimes refused
+                // the same call with different text. The ports' form is the more
+                // useful of the two and native's exception CLASS is the more
+                // precise, so each side took the other's better half.
+                let msg = alloc::format!("subs {start}..{e} of {n}");
+                return self.throw_str("StringIndexOutOfBoundsException", &msg);
             }
             let owned: alloc::string::String = {
                 let mut t = crate::rt::sbuf();
@@ -309,7 +329,13 @@ impl Rt {
             let n = t.chars().count() as i64;
             let e = end.unwrap_or(n);
             if start < 0 || e > n || start > e {
-                return self.throw_str("StringIndexOutOfBoundsException", "bad substring range");
+                // THE RANGE IS NAMED. This said only "bad substring range" while
+                // both ports said `subs 5..1 of 3`, so the three runtimes refused
+                // the same call with different text. The ports' form is the more
+                // useful of the two and native's exception CLASS is the more
+                // precise, so each side took the other's better half.
+                let msg = alloc::format!("subs {start}..{e} of {n}");
+                return self.throw_str("StringIndexOutOfBoundsException", &msg);
             }
             let out: alloc::string::String =
                 t.chars().skip(start as usize).take((e - start) as usize).collect();

@@ -569,12 +569,28 @@ public final class Builtins {
             // (`DECISIONS.md#strings-and-matching`).
             if (Str.isRope(rt, v0)) {
                 int cps = Str.sCount(rt, v0);
-                int st = (int) Val.asFixnum(rt.vat(at + 1));
-                int en = n > 2 ? (int) Val.asFixnum(rt.vat(at + 2)) : cps;
-                if (st < 0 || en > cps || st > en) {
-                    return rt.throwStr("IndexOutOfBoundsException",
-                            "subs " + st + ".." + en + " of " + cps);
+                // `Num.asI64` AND A BOUND BEFORE THE `(int)` CAST, not
+                // `Val.asFixnum`. A bound past a fixnum arrived as the bigint's
+                // heap ADDRESS: `(subs s 281474976710657 2)` refused with
+                // `subs 83520..2 of 10`, putting the heap layout into a message
+                // a program can read. Native takes an `i64` here and was right.
+                // A NON-INTEGER IS A DEFAULT HERE, NOT AN ERROR, which is what
+                // native does and what I got wrong first: it reads
+                // `as_i64(..).unwrap_or(0)` for the start and `None` for the end,
+                // so `(subs s "x" 2)` answers "ab" and `(subs s 0 "x")` answers
+                // the whole string. Refusing instead -- the obvious reading of
+                // "bound the argument" -- made all three disagree in the other
+                // direction on an input that never touches a bigint.
+                Long stv = Num.asI64(rt, rt.vat(at + 1));
+                Long env = n > 2 ? Num.asI64(rt, rt.vat(at + 2)) : null;
+                long sv = stv == null ? 0 : stv;
+                long ev = env == null ? cps : env;
+                if (sv < 0 || ev > cps || sv > ev) {
+                    return rt.throwStr("StringIndexOutOfBoundsException",
+                            "subs " + sv + ".." + ev + " of " + cps);
                 }
+                int st = (int) sv;
+                int en = (int) ev;
                 boolean ascii = Str.sAscii(rt, v0);
                 // THE SLICE HAS A PRICE, and this port charged nothing for it.
                 // Native bounds the non-ASCII descent before it starts, and a
@@ -591,24 +607,44 @@ public final class Builtins {
                 // ABSENT IS `nb` NOW, not -1: a real offset is 0..nb-1, so the
                 // byte length is free to mean "no such code point".
                 if (from >= nb) {
-                    return rt.throwStr("IndexOutOfBoundsException",
+                    return rt.throwStr("StringIndexOutOfBoundsException",
                             "subs " + st + ".." + en + " of " + cps);
                 }
                 return Str.ropeSlice(rt, v0, from, to);
             }
             String s = Str.text(rt, v0);
             int len = s.codePointCount(0, s.length());
-            int start = (int) Val.asFixnum(rt.vat(at + 1));
-            int end = n > 2 ? (int) Val.asFixnum(rt.vat(at + 2)) : len;
+            // Same two-part fix as the rope arm above, and it needed making
+            // TWICE: `subs` has two paths and a fixture of flat strings exercises
+            // only this one.
+            // A NON-INTEGER IS A DEFAULT, not an error; see the rope arm above.
+            Long startv = Num.asI64(rt, rt.vat(at + 1));
+            Long endv = n > 2 ? Num.asI64(rt, rt.vat(at + 2)) : null;
+            long sv = startv == null ? 0 : startv;
+            long ev = endv == null ? len : endv;
             // THE SLICE, NOT THE SOURCE, and before the bounds check, which is
             // where native charges it. Charging the whole string per call makes
             // the counter quadratic for splitting even when the copying is not.
+            //
+            // THE CHARGE IS COMPUTED FROM THE TRUE VALUES, MASKED TO 32 BITS,
+            // because native's is: it charges `(e - start).max(0) as u32` BEFORE
+            // this bounds check, so a refused `subs` is still billed, and the
+            // `as u32` truncates. Computing this from a value already clamped
+            // into range -- which is the obvious way to write the fix above --
+            // silently changes the bill on the refusal path, and gas is
+            // program-visible through a step limit.
             int nbf = Str.sBytes(rt, v0);
-            int took = n > 2 ? Math.max(end - start, 0) : Math.max(nbf - Math.max(start, 0), 0);
-            rt.chargeBytes(Math.min(took, nbf));
-            if (start < 0 || end > len || start > end) {
-                return rt.throwStr("IndexOutOfBoundsException",
-"subs " + start + ".." + end + " of " + len);
+            // `endv == null` AND NOT `n <= 2` picks the branch: native charges by
+            // whether it HAS an end, and a non-integer end gives it `None` -- the
+            // same branch as no end argument at all.
+            long took = endv != null ? (Math.max(ev - sv, 0) & 0xFFFFFFFFL)
+                                     : (Math.max(nbf - (Math.max(sv, 0) & 0xFFFFFFFFL), 0));
+            rt.chargeBytes((int) Math.min(took, nbf));
+            int start = (int) sv;
+            int end = (int) ev;
+            if (sv < 0 || ev > len || sv > ev) {
+                return rt.throwStr("StringIndexOutOfBoundsException",
+"subs " + sv + ".." + ev + " of " + len);
             }
             // By CODE POINT, not by char: a Java `String` is UTF-16, so slicing
             // it by index would cut a surrogate pair in half.
@@ -678,7 +714,19 @@ public final class Builtins {
             return Val.fixnum(c);
         });
         def("flint/from-code-point", (rt, at, n) -> {
-            long c = Val.asFixnum(rt.vat(at));
+            // `Num.asI64` AND NOT `Val.asFixnum`, and this was the WORST site in
+            // the family. `asFixnum` reads the low 48 bits of the value WORD, so
+            // a bigint arrived as its heap ADDRESS -- and a heap address is
+            // ordinarily BELOW 0x10FFFF, so the bound underneath PASSED and this
+            // answered a character built out of the heap layout. Every other
+            // site in the sweep at least refused or returned a wrong number;
+            // this one manufactured a plausible value and leaked where the
+            // object sat. `(from-code-point (+ 281474976710656 1))` answered a
+            // cuneiform sign where native refused.
+            Long cv = Num.asI64(rt, rt.vat(at));
+            if (cv == null)
+                return rt.throwStr("IllegalArgumentException", "not a code point");
+            long c = cv;
             if (c < 0 || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) {
                 return rt.throwStr("IllegalArgumentException",
 "not a code point: " + c);

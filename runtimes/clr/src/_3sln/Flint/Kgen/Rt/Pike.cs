@@ -254,6 +254,27 @@ public static class Pike {
         if (from > cpsLen) {
             return false;
         }
+        // ENTRY IS A PROGRAM COUNTER AND WAS UNCHECKED. `add-thread` indexes
+        // `seen` by it, so an entry past the program read off the end of the
+        // flags: both ports crashed the HOST -- a Java
+        // ArrayIndexOutOfBoundsException out of `addThread`, not a flint throw
+        // a program could catch -- and native only escaped because its
+        // `as u32` happened to truncate 2^48+1 to 1, which is in range for any
+        // program with two instructions. The same call with a different bigint
+        // would have panicked there too.
+        // 
+        // FALSE IS `no match`, which is what the `from` guard above answers and
+        // what native already effectively produced. Refusing here rather than in
+        // each builtin is the point: one guard in the shared source cannot
+        // disagree across the three runtimes, and three copies would.
+        // `>=` AND NOT `(or (< entry 0) (> entry (- ninstrs 1)))`, which is how
+        // this was written first and did not compile: kin's `I32` is UNSIGNED
+        // in Rust, so `< 0` is never true there, and `(- ninstrs 1)` underflows
+        // to a huge value for an empty program -- a guard that would have let
+        // everything through on the one input it most needed to stop.
+        if (entry >= ninstrs) {
+            return false;
+        }
         int codeBase = 3;
         int classBase = 3 + (ninstrs * 3);
         int width = nslots + 1;
