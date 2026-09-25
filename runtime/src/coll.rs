@@ -166,8 +166,25 @@ impl Rt {
         }
         let w = self.utf8_width(b[at as usize] as u32);
         out[..w as usize].copy_from_slice(&b[at as usize..at as usize + w as usize]);
-        // After the borrow of `b` ends: charged for what was walked.
-        self.charge_bytes(scanned);
+        // After the borrow of `b` ends: charged for what was walked -- AND ONLY IF
+        // SOMETHING WAS.
+        //
+        // This called `charge_bytes` unconditionally, and `scanned` is 0 on the
+        // indexable path, so an O(1) index into an ASCII string billed
+        // `(0 / 8) + 1` = ONE GAS for walking nothing. The port charges inside the
+        // non-ASCII branch only, so it billed zero -- a flat +1 per call on native,
+        // which is what the 3-step residual in `bin/conform-hosts`' gas row was:
+        // 6 per `re/pattern` and 3 per `str/split`, once the 86-step harness offset
+        // was out of the way.
+        //
+        // NATIVE IS THE ONE THAT MOVED, because the principle is stated next door
+        // in `rope.rs`: "Charged where the bytes actually move. A tree join moves
+        // none, which is what makes repeated concatenation linear in gas as well as
+        // in time." A floor per call is a different pricing rule, and this comment
+        // already claimed the other one.
+        if scanned > 0 {
+            self.charge_bytes(scanned);
+        }
         Some(w)
     }
 

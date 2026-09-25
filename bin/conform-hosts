@@ -568,24 +568,21 @@ GMJS
   # allocated one `TY_VEC` and one `TY_NODE` the ports never did. Fixed
   # 2026-09-25 in `HostCall.java` and `runtimes/clr/conform/Program.cs`.
   #
-  # NOT YET AN ASSERTION, and deliberately not a tolerance either. Removing the 86
-  # exposed a REAL residual of 3, which is `charge_bytes` called fewer times on
-  # the ports inside REGEX PATTERN COMPILATION -- 6 per `re/pattern`, 3 per
-  # `str/split` (`DECISIONS.md#resource-limits`). Every other string builtin was
-  # probed and agrees. A `within 3` here would be the slack this file already
-  # records being read as agreement once; the numbers are PRINTED so the residual
-  # is visible and any change to it is, and the equality becomes an assertion the
-  # moment it is zero.
-  off_a=$(( na > ja ? na - ja : ja - na ))
-  off_b=$(( nb > jb ? nb - jb : jb - nb ))
-  echo "  ..     absolute totals: small wasm $na / jvm $ja (off by $off_a), big wasm $nb / jvm $jb (off by $off_b)"
-  [ "$off_a" -le 3 ] && [ "$off_b" -le 3 ] \
-    || { echo "  FAIL the absolute gas offset GREW beyond the known regex residual of 3:"
+  # EXACT, as of 2026-09-25. It was a ceiling of 3 for one commit, because removing
+  # the 86 exposed a real residual: `coll.rs` called `charge_bytes` unconditionally
+  # where the port calls it only on the non-ASCII branch, so an O(1) index into an
+  # ASCII string billed `(0 / 8) + 1` = one gas for walking nothing -- a flat +1 per
+  # call, 6 per `re/pattern` and 3 per `str/split`. Native was the one that moved,
+  # because `rope.rs` states the rule: charged where the bytes actually move.
+  [ "$na" = "$ja" ] && [ "$nb" = "$jb" ] \
+    || { echo "  FAIL the same program bills a different TOTAL, not just a different gap:"
          echo "       small: wasm $na, jvm $ja"
          echo "       big:   wasm $nb, jvm $jb"
-         echo "       The known residual is regex pattern compilation charging fewer"
-         echo "       \`charge_bytes\` calls on the ports. Anything larger is new."
+         echo "       A difference-only comparison cannot see a constant offset, and"
+         echo "       two of them hid here: an 86-step harness offset and a +1-per-call"
+         echo "       charge on an ASCII index (\`DECISIONS.md#resource-limits\`)."
          exit 1; }
+  echo "  ok     and the same ABSOLUTE total, not merely the same gap ($na and $nb)"
   # EXACT. This was 1% of the native figure -- about 1 090 steps of slack --
   # for as long as the ports' map allocated more per entry than the Rust CHAMP
   # did. The kin CHAMP closed that, and the row then sat at `within 1` and was

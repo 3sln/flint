@@ -12867,7 +12867,25 @@ it is the COUNT of calls, inside REGEX PATTERN COMPILATION: 6 per `re/pattern` a
 both arms, `str-index-of` found and absent, `str`, `pr-str` of a vector and of a
 map, `str-bytes`, a table with a string column, a schema at init -- and all agree.
 
-**THE ROW REPORTS THE ABSOLUTES AND DOES NOT YET ASSERT THEM.** It compares
+**AND THE RESIDUAL 3 IS FIXED, 2026-09-25.** It was `charge_bytes` called
+UNCONDITIONALLY in `runtime/src/coll.rs`'s code-point index: `scanned` is 0 on the
+indexable path, so an O(1) index into an ASCII string billed `(0 / 8) + 1` = ONE GAS
+for walking nothing. The port calls it inside the non-ASCII branch only and billed
+zero. A flat +1 per call -- which is why it was 6 per `re/pattern` and 3 per
+`str/split` and constant in a workload of any size.
+
+**NATIVE IS THE ONE THAT MOVED**, and not because native is usually wrong: the rule
+is stated next door in `rope.rs`, "Charged where the bytes actually move. A tree join
+moves none, which is what makes repeated concatenation linear in gas as well as in
+time." A floor per call is a different pricing rule, and the comment on the very line
+already claimed the other one -- "charged for what was walked". Verified in both
+directions: two `code-point-at` on ASCII went 3/1 to 1/1, and a non-ASCII index still
+bills 3 on both, so no charge was lost.
+
+The row asserts EXACT absolute equality now -- 71 993 and 215 028 on both -- rather
+than the ceiling of 3 it carried for one commit.
+
+**THE ROW REPORTED THE ABSOLUTES BEFORE IT ASSERTED THEM.** It compares
 `big - small`, and a difference cancels exactly the kind of constant that was
 there: both sides' differences matched the whole time. The numbers are printed now,
 with a ceiling at the known 3 so a NEW offset fails, and the equality becomes an
