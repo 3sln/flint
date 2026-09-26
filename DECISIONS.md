@@ -7120,16 +7120,36 @@ survives the next edit.
 
 What it did find is **five drivers whose comments describe behaviour the probe
 does not exercise**, each recorded in the `--expect-why` beside it rather than
-silently fixed. **One of the five, `mapread`, was fixed on 2026-09-26 and its
-entry says what that took; the other four stand.** Recording them turned out to
-be worth more than it looked: the record said `mapread` had one unreachable
-branch and it had three, which only became visible when somebody went to close
-the one.
+silently fixed. **Two of the five, `mapread` and `valcmp`, were fixed on
+2026-09-26 and their entries say what that took; the other three stand.**
+Recording them turned out to be worth more than it looked, in two different
+ways. The record said `mapread` had one unreachable branch and it had three,
+which only became visible when somebody went to close the one. And `valcmp`'s
+entry closed with a reason not to bother -- the shim "cannot express" a prefix
+-- which was a claim about the SHIM, not about the language; changing the shim
+took a dozen lines. A recorded blocker is a description until somebody prices
+it.
 
 * `valcmp` — `short=` and `long=` are labelled as testing "the SHORTER one
   first when one runs out", and do not: the fixture derives each element from
   the length, so the FIRST elements already differ and the element comparison
   decides. Neither run-out branch of `cmp-sequential` is reached by any field.
+  **FIXED 2026-09-26.** The entry said fixing it "means a fixture where a short
+  vector is a PREFIX of a long one, which this `seq` shim cannot express" --
+  which was a claim about the shim, and the shim changed. The cursor is now
+  `0xC000 + (n << 4) + i`, carrying limit and position in one Value, so a
+  length-n vector walks 1..n ascending and length 2 is a prefix of length 3.
+  Two new fields, `shortw=3` and `longw=3`, make the coverage VISIBLE rather
+  than only provable: three loop passes says the run-out branch answered, where
+  1 would say an element comparison did. **The signs did not change** --
+  `short=-1 long=1` is right either way, which is why the gap was invisible --
+  so the fixture change would have been unobservable without them.
+  **Proved both ways:** with the new fixture, `(set out -1)` → `(set out 0)`
+  turns `short` into 0 and the mirror turns `long` into 0, each moving exactly
+  one field; WITH THE OLD FIXTURE BOTH MUTATIONS PASS. That second half is the
+  evidence, and it is the check the three remaining entries need: a fixture
+  change that cannot be shown to catch something it did not catch before has
+  not been shown to close anything.
 * `valhash` — the last two fields are labelled "an ASCII rope must take
   `rope-hash` (0x54xx) and a non-ASCII one `java-string-hash` (0x77xx)". Both
   are 0x54xx. `valhash.kin` routes `TY_ROPE` unconditionally; `s-ascii` is

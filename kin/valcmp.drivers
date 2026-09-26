@@ -76,13 +76,21 @@ impl Rt {
     }
     // Two seqs of settable length whose elements are NUMBERS, so a walk that
     // stops at the wrong place shows up as the wrong sign.
+    //
+    // A CURSOR CARRYING BOTH LIMIT AND POSITION, `0xC000 + (n << 4) + i`, so a
+    // length-n vector yields 1, 2, .. n ASCENDING and a SHORT VECTOR IS A
+    // PREFIX OF A LONG ONE. It used to be `0xC000 + remaining`, yielding
+    // n, n-1 .. 1 -- under which length 2 and length 3 differ at their FIRST
+    // element and the element comparison decides every case, leaving both
+    // run-out branches of `cmp-sequential` unreached. See `--expect-why`.
     fn seq(&mut self, c: Value) -> Value {
-        let n = self.slot_(c, 0).0 as u32;
-        if n == 0 { NIL } else { Value(0xC000 + n as u64) }
+        let n = self.slot_(c, 0).0;
+        if n == 0 { NIL } else { Value(0xC000 + (n << 4) + 1) }
     }
-    fn first(&mut self, s: Value) -> Value { num((s.0 - 0xC000) as i64) }
+    fn first(&mut self, s: Value) -> Value { num(((s.0 - 0xC000) & 15) as i64) }
     fn next(&mut self, s: Value) -> Value {
-        if s.0 == 0xC001 { NIL } else { Value(s.0 - 1) }
+        let d = s.0 - 0xC000;
+        if (d & 15) >= (d >> 4) { NIL } else { Value(s.0 + 1) }
     }
 }
 impl Rt {
@@ -144,10 +152,15 @@ fn main() {
     rt.slots[sa.0 as usize][0] = 3; rt.slots[sb.0 as usize][0] = 3;
     rt.work = 0;
     o.push_str(&format!("seq={} work={} ", sgn(rt.val_cmp(sa, sb)), rt.work));
+    // THE WORK COUNT IS THE COVERAGE. Both of these walk to the END of the
+    // shorter side -- 3 passes, not 1 -- so the field says the run-out branch
+    // decided rather than an element comparison.
     rt.slots[sa.0 as usize][0] = 2; rt.slots[sb.0 as usize][0] = 3;
-    o.push_str(&format!("short={} ", sgn(rt.val_cmp(sa, sb))));
+    rt.work = 0;
+    o.push_str(&format!("short={} shortw={} ", sgn(rt.val_cmp(sa, sb)), rt.work));
     rt.slots[sa.0 as usize][0] = 3; rt.slots[sb.0 as usize][0] = 2;
-    o.push_str(&format!("long={} ", sgn(rt.val_cmp(sa, sb))));
+    rt.work = 0;
+    o.push_str(&format!("long={} longw={} ", sgn(rt.val_cmp(sa, sb)), rt.work));
     rt.slots[sa.0 as usize][0] = 0; rt.slots[sb.0 as usize][0] = 0;
     o.push_str(&format!("empty={} ", sgn(rt.val_cmp(sa, sb))));
 
@@ -226,12 +239,16 @@ fn main() {
         }
         return CAT_SCALAR;
     }
+    // The prefix cursor: see the rust arm.
     static long seq(Rt rt, long c) {
-        int n = (int) rt.slot_(c, 0);
-        return n == 0 ? NIL : 0xC000L + n;
+        long n = rt.slot_(c, 0);
+        return n == 0 ? NIL : 0xC000L + (n << 4) + 1;
     }
-    static long first(Rt rt, long s) { return num(s - 0xC000L); }
-    static long next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
+    static long first(Rt rt, long s) { return num((s - 0xC000L) & 15); }
+    static long next(Rt rt, long s) {
+        long d = s - 0xC000L;
+        return (d & 15) >= (d >> 4) ? NIL : s + 1;
+    }
     static boolean isKeyword(Rt rt, long v) { return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_KW; }
     static boolean isString(Rt rt, long v) { return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR; }
     static boolean isNumber(Rt rt, long v) { return (v >>> 32) == 1 || Val.isDouble(v); }
@@ -279,9 +296,13 @@ fn main() {
         o.append("seq=").append(sgn(valCmp(rt, sa, sb)))
          .append(" work=").append(rt.work).append(' ');
         rt.slots[(int) sa][0] = 2; rt.slots[(int) sb][0] = 3;
-        o.append("short=").append(sgn(valCmp(rt, sa, sb))).append(' ');
+        rt.work = 0;
+        o.append("short=").append(sgn(valCmp(rt, sa, sb)))
+         .append(" shortw=").append(rt.work).append(' ');
         rt.slots[(int) sa][0] = 3; rt.slots[(int) sb][0] = 2;
-        o.append("long=").append(sgn(valCmp(rt, sa, sb))).append(' ');
+        rt.work = 0;
+        o.append("long=").append(sgn(valCmp(rt, sa, sb)))
+         .append(" longw=").append(rt.work).append(' ');
         rt.slots[(int) sa][0] = 0; rt.slots[(int) sb][0] = 0;
         o.append("empty=").append(sgn(valCmp(rt, sa, sb))).append(' ');
 
@@ -366,12 +387,16 @@ namespace Flint.Rt {
         }
         return CAT_SCALAR;
     }
+    // The prefix cursor: see the rust arm.
     internal static long Seq(Rt rt, long c) {
-        int n = (int) rt.Slot_(c, 0);
-        return n == 0 ? NIL : 0xC000L + n;
+        long n = rt.Slot_(c, 0);
+        return n == 0 ? NIL : 0xC000L + (n << 4) + 1;
     }
-    internal static long First(Rt rt, long s) { return Num_(s - 0xC000L); }
-    internal static long Next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
+    internal static long First(Rt rt, long s) { return Num_((s - 0xC000L) & 15); }
+    internal static long Next(Rt rt, long s) {
+        long d = s - 0xC000L;
+        return (d & 15) >= (d >> 4) ? NIL : s + 1;
+    }
     internal static bool IsKeyword(Rt rt, long v) { return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyKw; }
     internal static bool IsString(Rt rt, long v) { return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr; }
     internal static bool IsNumber(Rt rt, long v) { return (v >> 32) == 1 || Val.IsDouble(v); }
@@ -419,9 +444,13 @@ namespace Flint.Rt {
         o.Append("seq=").Append(Sgn(ValCmp(rt, sa, sb)))
          .Append(" work=").Append(rt.work).Append(' ');
         rt.slots[(int) sa, 0] = 2; rt.slots[(int) sb, 0] = 3;
-        o.Append("short=").Append(Sgn(ValCmp(rt, sa, sb))).Append(' ');
+        rt.work = 0;
+        o.Append("short=").Append(Sgn(ValCmp(rt, sa, sb)))
+         .Append(" shortw=").Append(rt.work).Append(' ');
         rt.slots[(int) sa, 0] = 3; rt.slots[(int) sb, 0] = 2;
-        o.Append("long=").Append(Sgn(ValCmp(rt, sa, sb))).Append(' ');
+        rt.work = 0;
+        o.Append("long=").Append(Sgn(ValCmp(rt, sa, sb)))
+         .Append(" longw=").Append(rt.work).Append(' ');
         rt.slots[(int) sa, 0] = 0; rt.slots[(int) sb, 0] = 0;
         o.Append("empty=").Append(Sgn(ValCmp(rt, sa, sb))).Append(' ');
 
@@ -433,7 +462,7 @@ namespace Flint.Rt {
         System.Console.WriteLine(o.ToString());
     }
 --expect
-id=00 nil=-110 num=-110 bool=-1100 str=-110 kw=-11-1-10 sym=-1 seq=0 work=4 short=-1 long=1 empty=0 bad=0|ClassCastException/cannot compare a #11 with a #15|
+id=00 nil=-110 num=-110 bool=-1100 str=-110 kw=-11-1-10 sym=-1 seq=0 work=4 short=-1 shortw=3 long=1 longw=3 empty=0 bad=0|ClassCastException/cannot compare a #11 with a #15|
 --expect-why
 DERIVED FROM CLOJURE'S ORDER and from the fixture's shims, field by field.
 Every field is a SIGN (`sgn` collapses to -1/0/1), so a wrong answer here is
@@ -469,8 +498,11 @@ NAMED THINGS. ns is slot 0, name is slot 1, each a string ordered by ITS slot
 `qual vs qual2` is the discriminating pair: the two share a NAME and differ
 only in NAMESPACE, so a `cmp-named` that compared names first would answer 0.
 
-SEQUENTIALS. The fixture's `seq` turns a length n into the descending run
-n, n-1, ... 1: length 3 walks 3,2,1.
+SEQUENTIALS. The fixture's `seq` turns a length n into the ASCENDING run
+1, 2, ... n: length 3 walks 1,2,3 and length 2 walks 1,2, SO A SHORT VECTOR IS
+A PREFIX OF A LONG ONE. The cursor is `0xC000 + (n << 4) + i`, carrying the
+limit and the position in one Value because the shim has nowhere else to put
+them.
 
   seq=0     two length-3 vectors walk the same three numbers -> 0
   work=4    CHARGED PER ELEMENT, once per loop pass: three passes that
@@ -478,20 +510,35 @@ n, n-1, ... 1: length 3 walks 3,2,1.
             and breaks. Not 3, and not 1 -- `compare` on two big vectors is
             one bytecode instruction and O(n) work, so the count is the
             thing that keeps it metered.
-  short=-1  length 2 against length 3
-  long=1    length 3 against length 2
+  short=-1  length 2 against length 3: 1 = 1, 2 = 2, then A RUNS OUT and B
+            does not, so `(set out -1)` decides it.
+  shortw=3  THE WORK COUNT IS THE COVERAGE. Three passes -- two that compare
+            an element and a third that finds `a` dry -- says the run-out
+            branch is what answered. A 1 here would mean the first elements
+            differed and the element comparison decided, which is what this
+            driver did until 2026-09-26.
+  long=1    length 3 against length 2, the mirror: `(set out 1)`.
+  longw=3   the same three passes on the other side.
   empty=0   both empty: `seq` gives nil on both sides, first pass breaks
 
-A GAP IN THIS DRIVER, recorded rather than papered over. `short` and `long`
-are labelled as "the SHORTER one first when one runs out", and they do NOT
-test that rule. The fixture derives each element from the length, so a
-length-2 vector walks 2,1 and a length-3 walks 3,2,1 -- the FIRST elements
-already differ (2 vs 3), the element comparison decides it, and the walk never
-runs out. The answers coincide with what the length rule would give, which is
-exactly why the coincidence is invisible. Neither `set out -1` nor `set out 1`
-in `cmp-sequential`'s run-out branches is reached by any field here; the
-`seq=0` case reaches the both-dry exit only. Fixing it means a fixture where a
-short vector is a PREFIX of a long one, which this `seq` shim cannot express.
+THE GAP THIS CLOSED, kept because the shape of it recurs. `short` and `long`
+were labelled as "the SHORTER one first when one runs out" and did NOT test
+that rule. The old shim derived each element from the length DESCENDING, so a
+length-2 vector walked 2,1 and a length-3 walked 3,2,1 -- the FIRST elements
+already differed (2 vs 3), the element comparison decided it, and the walk
+never ran out. The answers coincided with what the length rule would give,
+which is exactly why the coincidence was invisible: `short=-1 long=1` is
+right either way. Neither `set out -1` nor `set out 1` was reached by any
+field.
+
+PROVED BOTH WAYS. With this fixture, replacing `(set out -1)` with
+`(set out 0)` in `cmp-sequential` turns `short` into 0, and the same to
+`(set out 1)` turns `long` into 0 -- each mutation moving exactly one field.
+WITH THE OLD FIXTURE BOTH MUTATIONS PASS, which is the evidence that the gap
+was real rather than a reading of the source. That is the check to run on the
+four remaining entries in `DECISIONS.md#kin-probes-assert-a-value`: a fixture
+change that cannot be shown to catch something it did not catch before has not
+been shown to close anything.
 
   bad=0|...|  ACROSS TYPES IT REFUSES. A keyword against TY_OTHER (15) shares
             no arm, so it names both sides -- TY_KW is 11 -- and answers 0,
