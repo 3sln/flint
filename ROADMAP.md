@@ -586,22 +586,46 @@ binary reimplements a subset in Rust instead of compiling the same source. That
 is the duplication, and the LLVM backend is the way out of it rather than a
 second hand-written implementation.
 
-**PREREQUISITE, AND IT IS NOT BUILT.** `:to :llvm` bails today —
-*"emitting a native artifact needs a linker, and this binary carries none"*
+**THE PREREQUISITE HAS LANDED. This paragraph said it had not, and cited a
+sentence that was never about it.** It read: "`:to :llvm` bails today —
+*emitting a native artifact needs a linker, and this binary carries none*
 (`cli/src/main.rs`) — and `bin/test` asserts it keeps saying so rather than
-quietly emitting wasm. The native RUNTIME exists and is what `flint run` uses;
-what is missing is emitting a linkable artifact. So the mirror is downstream of
-the LLVM backend, and no part of it can start before that lands.
+quietly emitting wasm ... no part of it can start before that lands."
+
+`cli/src/main.rs:869` now records why that was the wrong reading, in its own
+words: "They shared an arm and a sentence ... that was true of the second and
+never of the first: what actually blocked `:to :llvm` was that no IR emitter
+existed." `:to :llvm` and `:to :native` are two targets. The first emits text
+and needs no linker; only the second is a link.
+
+**Measured 2026-09-26 at `5317a517`,** by running the gate rather than reading
+it — `./bin/check-llvm`, 59 s wall, green:
+
+    seven programs emitted as IR, linked with `clang` against
+    `libflintnative.a`, and RUN: arith, colls, hof, strs, handler, deep, park.
+    Each answers what `flint run` answers, and charges the SAME gas with
+    compiled arities as without. Then boot/loop/link driven from C, 7 rows,
+    two sandboxes in one process, and the module's own weak `main`.
+
+Nothing in `test/` or `bin/` asserts the refusal any more (`git grep` for both
+phrasings finds only prose about the old bug). So the mirror below is NO LONGER
+BLOCKED — it is unblocked and unstarted, which are different states and the
+roadmap is the file that has to tell them apart.
 
 This also dissolves the audit question below it. Two front ends that COMPILE
 THE SAME SOURCE cannot drift in the way spec construction, workspace resolution
 and source collection have been drifting; there is nothing to keep in step.
 
-- [ ] **First:** `:to :llvm` — emit a linkable native artifact. Blocks
-      everything below it
+- [x] **First:** `:to :llvm` — emit a linkable native artifact. **Done**; the
+      linking is the caller's `clang`, which is what the mirror needs, since the
+      glue is linked in flint's OWN build and not in a user's `flint compile`
 - [ ] Then compile `lib/flint/cli.cljc` and its glue, link into the native
       binary, and retire the Rust reimplementations of `build`, `check`,
-      `fetch`, `inspect`, `paths`, `targets`, `task`, `tasks`
+      `fetch`, `inspect`, `paths`, `targets`, `task`, `tasks`. **Unblocked and
+      not started.** It retires eight commands, so it is a decision rather than
+      a chore — `DECISIONS.md#one-dependency-walk` is the argument for
+      doing it: every front door builds its own compile spec, and that hazard is
+      what compiling one source removes
 - [ ] Until then, state which parts of `deps.edn` the native CLI reads.
       **Measured 2026-09-12, on one project file:**
 
@@ -1314,6 +1338,19 @@ All of them are reached from `cli/src/deps.rs` and nowhere else, except
 And `deps.rs` plus `depscmd.rs` is 1 226 lines of a 3 491-line CLI — **35% of
 the source, and effectively all of the third-party surface, for one feature.**
 The binary is 4.5 MB.
+
+**RE-MEASURED 2026-09-26 at `5317a517`, and the 35% is now 21%** —
+`wc -l cli/src/deps.rs cli/src/depscmd.rs` is 668 + 595 = 1 263, against
+`wc -l cli/src/*.rs` at 5 982; the binary is 4.9 MB
+(`ls -l target/release/flint`, 5 140 224 bytes, on a build with nothing in
+`src/` or `lib/` newer than it). **The direction is the point: deps grew by 37
+lines and the rest of the CLI grew by 2 400.** So the share fell without the
+feature shrinking, and the sentence that read as "a third of the CLI is one
+feature" no longer does. The argument below survives at 21% — a TLS stack
+shipped to everyone is the cost whatever the ratio — but the ratio was doing
+rhetorical work it can no longer do, which is why it is corrected rather than
+deleted. "Effectively all of the third-party surface" was NOT re-checked; that
+is a claim about `Cargo.toml`, not about line counts.
 
 So moving the drivers out is not only about openness, it is the difference
 between shipping a TLS stack to everyone and shipping it to people who fetch
