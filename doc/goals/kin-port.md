@@ -1955,9 +1955,11 @@ distinction this file drew about hole 5.
 
 ## OPEN ITEMS
 
-The single list FOR THIS PORT. Project-wide work lives in
-`doc/decisions/README.md` under "Open, in the order the last measurement left
-them" -- this file is item 0a there, and anything that is not about generating
+The single list FOR THIS PORT. Project-wide work lives in `ROADMAP.md` -- it
+was `doc/decisions/README.md` under "Open, in the order the last measurement
+left them" until `8cee498d` folded the decision directory into `DECISIONS.md`
+on 2026-09-11, and this sentence went on naming the deleted file until
+2026-09-26. This file was item 0a there, and anything that is not about generating
 a runtime's shared logic belongs in that list rather than this one. Two lists
 that overlap is how one of them goes stale.
 

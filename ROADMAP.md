@@ -2,9 +2,13 @@
 
 This is a single organised view over `DECISIONS.md` (39 numbered decision
 records), `doc/goals/README.md` (the live investigation log), `doc/ports.md`,
-`doc/jank.md`, `doc/unit-format.md`, `doc/kin-specialisation-cases.md`, the root
-`BRIEF.md`/`PLAN.md`/`CHANGELOG.md`, and `git log`. It does not replace any of
-those — it points at them. **Every decision number below (`strings-and-matching`, `tables`, …)
+`doc/jank.md`, `doc/unit-format.md`, `doc/kin-specialisation-cases.md`, and
+`git log`. It does not replace any of those — it points at them. **It used to
+name the root `BRIEF.md`/`PLAN.md`/`CHANGELOG.md` here too; all three were
+deleted in `8cee498d` on 2026-09-11** and this sentence went on pointing at them
+until 2026-09-26, while `README.md` said the opposite in the same breath — that
+this file REPLACES them. Two documents disagreeing about a file that does not
+exist. **Every decision number below (`strings-and-matching`, `tables`, …)
 is a live link to `DECISIONS.md#<slug>`; read the source for the reasoning.**
 
 Status values used throughout:
@@ -55,7 +59,7 @@ by-area view on top of it.
 | `letfn*` (mutual recursion in `let`) | decided, not started | [`doc/jank.md`](doc/jank.md) — the one clean gap in the jank-suite comparison, 14 tests, one missing special form |
 | `recur` refused at top level (currently loops forever instead) | open question, deliberately deferred | [`doc/jank.md`](doc/jank.md) — "one test is a poor reason to add a special case" |
 | jank suite, the rest of the 104 failures: 38 are flint's analyser being *more permissive* than jank's (accepts a program jank rejects — duplicate `case` keys, two variadic arities on one `fn`, etc.), 12 fail with no message, 7 are C++ interop tests that leaked into language-test directories and were counted anyway rather than quietly excluded | open question, unranked | [`doc/jank.md`](doc/jank.md) — the 38 are explicitly not "fixed": "a compiler that refuses more is better, but 'refuses more' is a long tail of individually small rules," so each is reported rather than patched. The suite's 514 C++-interop tests (`test/jank/cpp`) are excluded outright as out of scope by design — flint has no host classes at all, so there is nothing to be "close to" there. |
-| Numeric tower (bigint/ratio), sorted collections, transducers, `eval` at runtime, records/types (`deftype`/`defrecord`/`reify`), hierarchies (`derive`/`isa?`), var objects/`with-redefs`, host threads/agents/refs, metadata on fns/numbers/short strings | decided, not started (by design) | `README.md` §Limits, `CHANGELOG.md` Known Limits, `doc/coverage.md` |
+| Numeric tower (bigint/ratio), sorted collections, transducers, `eval` at runtime, records/types (`deftype`/`defrecord`/`reify`), hierarchies (`derive`/`isa?`), var objects/`with-redefs`, host threads/agents/refs, metadata on fns/numbers/short strings | decided, not started (by design) | `README.md` §Limits, `doc/coverage.md` (`CHANGELOG.md` was cited here and is deleted; its "Known limits" was itself only a pointer to `README.md#limits`, so nothing is lost) |
 | Regex engine speed: 12× slower than babashka's, 275× slower than cherry-compiled JS on the construe workload | in progress, named fix not started | `README.md` §Limits — the fix (`modularity`) is a Rust regex unit, gated by the existing tree-shaking mechanism so a program without regex literals pays nothing for it; two other options were tried first per the brief, this is next |
 | Non-ASCII string indexing O(n) (ASCII strings get an O(1) fast path via a stored flag; any multi-byte character walks) | decided, not started | `README.md` §Limits — before the ASCII flag existed, splitting a string was quadratic and the word-frequency benchmark took 762ms instead of 62ms |
 | Function values as map keys degrade to linear probing (no stored identity hash under a moving collector; flint returns a correct-but-constant per-type hash instead) | decided, not started | `README.md` §Limits |
@@ -94,7 +98,7 @@ are separate, further-along efforts — see §4.
 
 | item | status | decision |
 |---|---|---|
-| Green threads, ports, protocols, dynamic vars (per green thread) | done | [`threads-and-ports`](DECISIONS.md#threads-and-ports) — `../HANDOFF.md` is the post-mortem of the bug that shipped alongside this |
+| Green threads, ports, protocols, dynamic vars (per green thread) | done | [`threads-and-ports`](DECISIONS.md#threads-and-ports) — `doc/HANDOFF.md` is the post-mortem of the bug that shipped alongside this |
 | Host ABI: continuation tokens, one event queue, two lifetimes | done, then largely superseded | [`host-abi`](DECISIONS.md#host-abi) — mechanically replaced by `structured-ports`/`ports-are-the-hosts`'s system-port model; the *concepts* (token → `tx`, event queue → system port) carried forward |
 | Ports belong to the **host**, not a sandbox (enables inter-sandbox messaging) | done, all four runtimes, with two named gaps | [`ports-are-the-hosts`](DECISIONS.md#ports-are-the-hosts) — weak-table fixup through a nursery copy, and codec back-references, are not built. *(This file's banner said "QUEUED — nothing exists" for a long period after half of it shipped and went unreachable — the worked example the decision index (now folded into `DECISIONS.md`) uses for "check the banner against the code".)* |
 | A wire codec + structured ports (one codec for everything crossing the boundary, `Sandbox`/`Image` nouns, ports can carry ports) | **doc says "NOT BUILT — a proposal"; substantial parts have actually shipped** — see note | [`structured-ports`](DECISIONS.md#structured-ports) |
@@ -1532,6 +1536,16 @@ planning material. Recorded here as a **proposal only** — nothing has been
 deleted or moved as part of producing this roadmap, and the user is making the
 deletion calls once this and the `deck/` work both land.
 
+> **RESOLVED 2026-09-11, recorded 2026-09-26.** The calls were made in
+> `8cee498d` and this section went on reading as pending for a fortnight. Of the
+> ten files below, THREE were deleted — `BRIEF.md`, `PLAN.md` and `CHANGELOG.md`
+> — and the other seven are still here. **The `CHANGELOG.md` recommendation was
+> OVERRULED**: this table says "Keep — it's the right artifact", and the commit
+> deleted it, giving its own reason ("had drifted to citing decisions only
+> through `0031`, missing twelve"). The table is left as it was written, because
+> a recommendation is a record of what was advised and not of what was decided;
+> what was missing was any line saying which way it went.
+
 | file | what it is | recommendation | why |
 |---|---|---|---|
 | `BRIEF.md` | The original from-nothing project brief ("You are building this from nothing, autonomously"). Says outright: "When you finish, `README.md` replaces this file." | **Delete, or keep — but not silently either way.** If deleting: `README.md`'s own Decisions section currently says, present tense, "`BRIEF.md` is kept for provenance" and links to it — that line has to be removed in the *same* change, or it becomes a dead citation exactly like an orphaned decision number. | It says its own successor exists and has existed for a long time. Nothing in it is a live decision — it's fully absorbed into `dispatch`–`kin` and the README. But `README.md` currently treats it as a deliberately-retained record, not scratch, so "delete" is a two-file change (this file *and* the README line citing it), not a one-file cleanup. |
@@ -1543,8 +1557,8 @@ deletion calls once this and the `deck/` work both land.
 | `doc/coverage.md` | Generated by `bin/readme-tables` from `doc/manifest.edn`. | **Leave alone — do not touch, generated.** | ~~Already covered by the hard constraint on `doc/manifest.edn`/README tables~~ — **it was NOT, 2026-09-26.** `bin/readme-tables` wrote this file only in its `else` branch, when README had no `<!-- BEGIN GENERATED COVERAGE -->` markers. README grew them, so from that day nothing regenerated this file and `test/manifest.clj` compared only README. It had drifted badly: `clojure.core` read 334/43/314/24 against the true 321/45/376/0 — "missing vs Clojure" understated by 62 and "flint-only" overstated by 24 — `clojure.string` read 22/1 against 23/2, and seven namespaces were absent entirely (`clojure.core.protocols`, `clojure.data`, `clojure.datafy`, `clojure.zip`, `flint.core`, `flint.data.transit`, `flint.doc`). Line 58 of this file cites it as a reference for what flint does not have. FIXED: the generator now writes both unconditionally, and `test/manifest.clj` compares this file the way it compares README — proved by reverting one row and watching it fail. The verdict stands, and now means what it says. |
 | `doc/unit-format.md` | Hand-written reference for the `.unit.edn` format, cites `namespace-units` and stays current with what's built. | **Keep as a living reference doc.** | Genuinely a spec, not a decision-in-progress — decisions cite it rather than restate it. |
 | `doc/kin-specialisation-cases.md` | An evidence file for a not-yet-designed kin macro system — five real duplication cases gathered from generated code. | **Keep, next to `kin` and `doc/goals/kin-port.md`.** | Explicitly framed as "input for designing that system... not a request for a particular design" — it's doing its job as raw material for an open question (§5 above), not as a finished decision. |
-| `doc/benchmarks.txt`, `doc/construe-benchmarks.txt` | Raw captured benchmark output. | **Keep as historical/reference record.** | Not generated by any `bin/` script (committed run output, not a build artifact), and actually linked from `README.md` (lines 1427, 1582) as the full-detail backing for its summary tables — checked directly. `deck/benchmarks.md` (the concurrent slide-deck effort) already links `benchmarks.txt` too. Deleting either would break a live link. |
-| `doc/benchmarks-vs-clojure.txt` | Raw benchmark output comparing flint to canonical Clojure across all three AOT targets, plus process-startup cost. | **Orphaned — needs an explicit decision, unlike its two siblings above.** | Checked directly: `README.md` links `benchmarks.txt` and `construe-benchmarks.txt` but **not this file**, and nothing under `deck/` links it either as of this pass. The content (flint vs. real Clojure, per-target AOT numbers) reads like strong deck material that nobody has drawn on yet. Either link it from somewhere (or fold its numbers into `deck/benchmarks.md`), or delete it once satisfied its numbers are reproduced/superseded elsewhere — right now it's the one benchmark file nothing points at. |
+| `doc/benchmarks.txt`, `doc/construe-benchmarks.txt` | Raw captured benchmark output. | **Keep as historical/reference record.** | Not generated by any `bin/` script (committed run output, not a build artifact), and actually linked from `README.md` (lines 1427, 1582) as the full-detail backing for its summary tables — checked directly. `deck/cards/benchmarks.md` (the concurrent slide-deck effort) already links `doc/benchmarks.txt` too -- checked 2026-09-26; the path was written `deck/benchmarks.md`, which does not exist, while the card does and the link is real. Deleting either would break a live link. |
+| `doc/benchmarks-vs-clojure.txt` | Raw benchmark output comparing flint to canonical Clojure across all three AOT targets, plus process-startup cost. | **Orphaned — needs an explicit decision, unlike its two siblings above.** | Checked directly: `README.md` links `benchmarks.txt` and `construe-benchmarks.txt` but **not this file**, and nothing under `deck/` links it either as of this pass. The content (flint vs. real Clojure, per-target AOT numbers) reads like strong deck material that nobody has drawn on yet. Either link it from somewhere (or fold its numbers into `deck/cards/benchmarks.md`), or delete it once satisfied its numbers are reproduced/superseded elsewhere — right now it's the one benchmark file nothing points at. |
 
 **Not proposed for any action:** `DECISIONS.md`, `doc/manifest.edn`,
 `README.md`'s generated coverage tables, anything under `src/`, `lib/`,
