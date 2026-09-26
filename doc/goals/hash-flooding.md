@@ -6,6 +6,20 @@
 than the patch: the hole was invisible to every gate in the tree, and the
 reasoning that nearly skipped it is recorded in full below.
 
+**RE-VERIFIED 2026-09-26 at `9cc88e01`** by running the named test rather than
+by reading it — `bb test/gas.clj`, exit 0, units in `production` mode and
+nothing in `src/` or `lib/` newer than `target/release/flint`:
+
+    a flooded lookup is billed              211       1611      7.6
+    and a normal lookup is still O(1)        11         11      1.0
+
+GAS, not time: the two columns are the charge at the small and large n, and the
+ratio. The control is the half that matters — a runtime billing by map SIZE
+rather than by work scanned would pass the first row and still be wrong, so 1.0
+on the second is what makes 7.6 on the first mean anything. Naming a test is
+what this status line should do; running it is what makes the naming worth
+something, since a test can stop covering its subject without ever failing.
+
 ## The hole
 
 A map lookup on keys that share a hash scans the whole collision node and is

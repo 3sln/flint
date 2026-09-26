@@ -2,15 +2,44 @@
 
 ## Status
 
-DESIGN, not shipped. Nothing here exists in the tree: there is no `Equiv`, no
-`Hash`, no header bit, and no node propagation. `flint.protocols` holds
-`Printable` and nothing else, and `=` and `hash` are still one line each into
-the runtime's closed switch:
+DESIGN, not shipped. **Re-checked 2026-09-26 at `9cc88e01`**, and the part that
+matters holds while two details had decayed.
+
+Still true: there is no `Equiv`, no `Hash`, no header bit and no node
+propagation — `git grep -lnE '\bEquiv\b|\bHash__impls\b' -- lib runtime/src`
+returns nothing.
+
+**`flint.protocols` no longer holds `Printable` and nothing else.** It holds
+FOUR: `Printable`, `Meta`, `WithMeta` and `WireMeta`, counted by the
+`(def X__impls ...)` atoms each one is paired with in `lib/flint/protocols.cljc`
+(`lib/flint/protocols/io.cljc` declares none). That does not weaken the argument
+below — none of the four is dispatched from inside the runtime's recursion,
+which is the whole problem §1 states — but "nothing else" was the sentence a
+reader would have taken for a survey.
+
+**And `=` is not one line.** `hash` is; `=` has three arities and the variadic
+one loops. What is true, and is what §1 rests on, is that EVERY arity goes
+straight into the runtime with no protocol dispatch anywhere
+(`lib/clojure/core.cljc:29` and `:46`):
 
 ```clojure
-(defn = ([a b] (flint.rt/= a b)))
+(defn =
+  ([a] true)
+  ([a b] (flint.rt/= a b))
+  ([a b & more] (if (flint.rt/= a b)
+                  (loop [prev b s (flint.rt/seq more)]
+                    (if s
+                      (if (flint.rt/= prev (flint.rt/first s))
+                        (recur (flint.rt/first s) (flint.rt/next s))
+                        false)
+                      true))
+                  false)))
 (defn hash [x] (flint.rt/hash x))
 ```
+
+The abbreviation was not wrong about the conclusion and was wrong about the
+code, which is the shape this file's own next paragraph is about: a design draft
+reasoning confidently from a document instead of the source.
 
 **This document exists because the design was settled in conversation and
 written nowhere**, while `doc/goals/extern-refs.md` part two argued the
