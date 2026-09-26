@@ -6,9 +6,20 @@ struct Rt { cps: Vec<Vec<u32>>, sinks: Vec<Vec<u32>>, subject: Vec<u32>,
             up: Vec<i32>, lo: Vec<i32>, steps: u64 }
 // SIZE FIXED BY THE REAL TABLE: `case-full-n` inlines as a literal, so the
 // generated code carries the real length and a shorter array would be indexed
-// past. Zeros -- what this probe checks is that three targets generated the
-// same walk, not that the mapping is right; that is the language suite's job.
-static CASE_FULL: [i32; 515] = [0; 515];
+// past.
+// TWO REAL ROWS, the rest zeros. Stride 5, `[cp, count, out0, out1, out2]`,
+// copied from `casetable.kin`'s own `:data`: row 0 is sharp s -> "SS" (count 2)
+// and row 3 is U+0390 -> 921 776 769 (count 3). Both counts are here on
+// purpose: a source that read the count from the wrong field, or indexed the
+// outputs at `k + 1` instead of `k + 2`, would move one and not the other.
+// Everything else stays zero -- what this probe checks is that three targets
+// generated the same walk, not that the mapping is right.
+static CASE_FULL: [i32; 515] = {
+    let mut a = [0i32; 515];
+    a[0] = 223; a[1] = 2; a[2] = 83; a[3] = 83;
+    a[15] = 912; a[16] = 3; a[17] = 921; a[18] = 776; a[19] = 769;
+    a
+};
 const CASE_FULL_UPPER_LEN: u32 = 102;
 impl Rt {
     fn cps_open(&mut self) -> u32 { self.cps.push(Vec::new()); (self.cps.len() - 1) as u32 }
@@ -39,7 +50,13 @@ impl Rt {
         let t = if u { &self.up } else { &self.lo };
         t[(i * 4 + f) as usize]
     }
-    fn full_index(&self, _cp: u32, _up: bool) -> i32 { -1 }
+    // UPCASING ONLY, which is what the real table is: the full list runs to
+    // `CASE_FULL_UPPER_LEN`. So the DOWN arm below still walks `case-map` for
+    // every code point, and the two arms differ in which path they take.
+    fn full_index(&self, cp: u32, up: bool) -> i32 {
+        if !up { return -1; }
+        if cp == 223 { 0 } else if cp == 912 { 3 } else { -1 }
+    }
     fn case_map(&self, cp: u32, up: bool) -> u32 {
         let c = cp as i32;
         let n = self.case_n(up);
@@ -59,7 +76,7 @@ impl Rt {
 fn main() {
     // "aß" upcased: 'a' by delta, sharp s by a FULL mapping to two code points.
     let mut rt = Rt { cps: Vec::new(), sinks: Vec::new(),
-                      subject: vec![97, 223, 233],
+                      subject: vec![97, 223, 233, 912],
                       up: vec![97, 122, -32, 1, 224, 246, -32, 1],
                       lo: vec![65, 90, 32, 1],
                       steps: 0 };
@@ -70,7 +87,19 @@ fn main() {
 --java-head
     static final long NIL = 0xFFFF;
     static final class Val { static final long NIL = 0xFFFF; }
+// TWO REAL ROWS, the rest zeros. Stride 5, `[cp, count, out0, out1, out2]`,
+    // copied from `casetable.kin`'s own `:data`: row 0 is sharp s -> "SS" (count 2)
+    // and row 3 is U+0390 -> 921 776 769 (count 3). Both counts are here on
+    // purpose: a source that read the count from the wrong field, or indexed the
+    // outputs at `k + 1` instead of `k + 2`, would move one and not the other.
+    // Everything else stays zero -- what this probe checks is that three targets
+    // generated the same walk, not that the mapping is right.
     static final int[] CASE_FULL = new int[515];
+    static {
+        CASE_FULL[0] = 223; CASE_FULL[1] = 2; CASE_FULL[2] = 83; CASE_FULL[3] = 83;
+        CASE_FULL[15] = 912; CASE_FULL[16] = 3;
+        CASE_FULL[17] = 921; CASE_FULL[18] = 776; CASE_FULL[19] = 769;
+    }
     static final int CASE_FULL_UPPER_LEN = 102;
     static final class Rt {
         java.util.ArrayList<java.util.ArrayList<Integer>> cps = new java.util.ArrayList<>();
@@ -95,7 +124,11 @@ fn main() {
         return c;
     }
     static boolean isString(Rt rt, long v) { return true; }
-    static int fullIndex(Rt rt, int cp, boolean up) { return -1; }
+    // Upcasing only: see the rust arm.
+    static int fullIndex(Rt rt, int cp, boolean up) {
+        if (!up) return -1;
+        return cp == 223 ? 0 : cp == 912 ? 3 : -1;
+    }
     static int caseMap(Rt rt, int cp, boolean up) {
         int lo2 = 0, hi = rt.caseN(up) - 1;
         while (lo2 <= hi) {
@@ -111,7 +144,7 @@ fn main() {
 --java
     public static void main(String[] args) {
         Rt rt = new Rt();
-        rt.subject = new int[]{97, 223, 233};
+        rt.subject = new int[]{97, 223, 233, 912};
         rt.up = new int[]{97, 122, -32, 1, 224, 246, -32, 1};
         rt.lo = new int[]{65, 90, 32, 1};
         long a = changeCase(rt, 1L, true);
@@ -121,7 +154,14 @@ fn main() {
 --csharp-head
     const long NIL = 0xFFFF;
     static class Val { internal const long Nil = 0xFFFF; }
-    static readonly int[] CaseFull = new int[515];
+    static readonly int[] CaseFull = MakeCaseFull();
+    // Two real rows: see the rust arm.
+    static int[] MakeCaseFull() {
+        var a = new int[515];
+        a[0] = 223; a[1] = 2; a[2] = 83; a[3] = 83;
+        a[15] = 912; a[16] = 3; a[17] = 921; a[18] = 776; a[19] = 769;
+        return a;
+    }
     const int CaseFullUpperLen = 102;
     internal sealed class Rt {
         internal System.Collections.Generic.List<System.Collections.Generic.List<int>> cps = new();
@@ -146,7 +186,11 @@ fn main() {
         return c;
     }
     static bool IsString(Rt rt, long v) { return true; }
-    static int FullIndex(Rt rt, int cp, bool up) { return -1; }
+    // Upcasing only: see the rust arm.
+    static int FullIndex(Rt rt, int cp, bool up) {
+        if (!up) return -1;
+        return cp == 223 ? 0 : cp == 912 ? 3 : -1;
+    }
     static int CaseMap(Rt rt, int cp, bool up) {
         int lo2 = 0, hi = rt.CaseN(up) - 1;
         while (lo2 <= hi) {
@@ -162,7 +206,7 @@ fn main() {
 --csharp
     static void Main() {
         var rt = new Rt();
-        rt.subject = new int[]{97, 223, 233};
+        rt.subject = new int[]{97, 223, 233, 912};
         rt.up = new int[]{97, 122, -32, 1, 224, 246, -32, 1};
         rt.lo = new int[]{65, 90, 32, 1};
         long a = ChangeCase(rt, 1L, true);
@@ -170,30 +214,43 @@ fn main() {
         System.Console.WriteLine(a + " " + b + " " + rt.steps);
     }
 --expect
-65997091 95549795 8
+55546609842069635 91823359525 10
 --expect-why
-DERIVED BY WALKING THE FIXTURE BY HAND. subject = [97, 223, 233] = 'a',
-sharp-s, 'e-acute'. The probe's `case_map` is a binary search over the runs
-the fixture supplies, and `sink_string` folds the BYTES the walk emitted with
-`h = h*31 + b` from 0.
+DERIVED BY WALKING THE FIXTURE BY HAND. subject = [97, 223, 233, 912] = 'a',
+sharp-s, 'e-acute', and U+0390. The probe's `case_map` is a binary search over
+the runs the fixture supplies, `full_index` answers a row for sharp s and
+U+0390 WHEN UPCASING ONLY, and `sink_string` folds the BYTES the walk emitted
+with `h = h*31 + b` from 0.
 
-UPCASING. up = [[97 122 -32 1] [224 246 -32 1]].
+UPCASING. up = [[97 122 -32 1] [224 246 -32 1]], and CASE_FULL rows 0 and 3.
 
-  97   in run 0, stride 1        -> 97 - 32  =  65   'A'
-  223  past run 0, before run 1  -> unmapped =  223  (sharp s)
-  233  in run 1, stride 1        -> 233 - 32 =  201
+  97   full_index -1, in run 0, stride 1  -> 97 - 32  =  65   'A'
+  223  full_index 0   -> count 2, out 83 83            ("SS")
+  233  full_index -1, in run 1, stride 1  -> 233 - 32 =  201
+  912  full_index 3   -> count 3, out 921 776 769
 
-  put-utf8: 65 is one byte; 223 and 201 are both under 0x800, so two:
-    223 -> 0xC0|(223>>6)=0xC3=195, 0x80|(223&0x3F)=0x9F=159
-    201 -> 0xC0|(201>>6)=0xC3=195, 0x80|(201&0x3F)=0x89=137
-  bytes 65 195 159 195 137, folded:
-    65 -> 2210 -> 68669 -> 2128934 -> 65997091
+  put-utf8: 65, 83 and 83 are one byte each; the rest are under 0x800, so two:
+    201 -> 0xC3=195, 0x89=137
+    921 -> 0xCE=206, 0x99=153
+    776 -> 0xCC=204, 0x88=136
+    769 -> 0xCC=204, 0x81=129
+  bytes 65 83 83 195 137 206 153 204 136 204 129, folded to
+    55546609842069635
 
-DOWNCASING. lo = [[65 90 32 1]] -- an ASCII-only table, so nothing in the
-subject is in range and all three code points pass through unchanged.
+DOWNCASING. lo = [[65 90 32 1]] -- an ASCII-only table -- and `full_index`
+answers -1 for every code point, so all four pass through unchanged and this
+arm walks `case-map` only.
 
-  bytes 97 195 159 195 169   (233 -> 0xC3 0xA9)
-  folded: 97 -> 3202 -> 99421 -> 3082246 -> 95549795
+  bytes 97 195 159 195 169 206 144   (223 -> 0xC3 0x9F, 233 -> 0xC3 0xA9,
+                                      912 -> 0xCE 0x90)
+  folded: 97 -> 3202 -> 99421 -> 3082246 -> 95549795 -> 2962043851 ->
+          91823359525
+
+THE DERIVATION WAS CHECKED AGAINST THE PREVIOUS ONE. The model above was
+written as a script, run against the OLD fixture first, and reproduced
+`65997091 95549795 8` exactly before it was trusted for the new numbers. A
+derivation that has never produced a known answer is a guess with arithmetic
+in it.
 
 THE TWO ANSWERS MUST DIFFER, and they differ in the FIRST byte and the last:
 that is what makes this pair a check rather than a coincidence. A
@@ -202,17 +259,39 @@ The subject deliberately holds two code points that are above 127 -- the Rust
 this replaced answered `nil` for any such string, "which is not a terse answer
 but a wrong one".
 
-steps=8. `charge-checked` is called ONCE per conversion with `n + 1` where n
-is the code-point count: 3 + 1 = 4, twice. Not 3, not 6, and not per byte --
-the point recorded in the source is that charging per iteration billed 48097
-steps past an exhausted budget, because billing is not bounding. A source that
-moved the charge inside the loop would print 6 here.
+steps=10. `charge-checked` is called ONCE per conversion with `n + 1` where n
+is the CODE-POINT count: 4 + 1 = 5, twice. Not per byte and not per output --
+the upcased arm emits eleven bytes from four code points, so a charge that
+followed the output would print something larger here. The point recorded in
+the source is that charging per iteration billed 48097 steps past an exhausted
+budget, because billing is not bounding. A source that moved the charge inside
+the loop would print 8.
 
-A GAP IN THIS DRIVER, recorded rather than papered over. The `--rust` section
-is headed "'a-sharp-s' upcased: 'a' by delta, sharp s by a FULL mapping to two
-code points", and NO FULL MAPPING HAPPENS: the fixture's `full_index` returns
--1 unconditionally, so `fx < 0` on every code point and the whole
-`case-full-at` branch -- the inner loop, the `cp-unsigned` conversions, the
-one-to-many expansion -- is never entered. Sharp s comes out unchanged at 223
-above, which is what the numbers show. Exercising it needs a fixture whose
-`full_index` answers a real row, and CASE_FULL here is 515 zeros.
+THE GAP THIS CLOSED. The `--rust` section was headed "'a-sharp-s' upcased: 'a'
+by delta, sharp s by a FULL mapping to two code points" and NO FULL MAPPING
+HAPPENED: `full_index` returned -1 unconditionally, so `fx < 0` on every code
+point and the whole `case-full-at` branch -- the inner loop, the `cp-unsigned`
+conversions, the one-to-many expansion -- was never entered. Sharp s came out
+unchanged at 223, which the old numbers showed to anyone who checked them
+against the heading.
+
+Two real rows now sit in CASE_FULL, copied from `casetable.kin`'s own `:data`:
+row 0, sharp s -> 83 83 with count 2, and row 3, U+0390 -> 921 776 769 with
+count 3. BOTH COUNTS ARE THERE ON PURPOSE. A single count could not distinguish
+a source that read the count from the wrong field from one that read it right,
+and an expansion of exactly two cannot tell `k + 2` from anything that happens
+to coincide at two.
+
+PROVED BOTH WAYS:
+
+  new fixture, (+ k 2) -> (+ k 1)                  fold changes, caught
+  new fixture, count field 1 -> field 0            CRASHES, caught -- field 0
+                                                   is the code point 223, so
+                                                   the inner loop runs 223
+                                                   times and indexes past the
+                                                   515-long array
+  OLD fixture, EITHER mutation                     PASSES
+
+The old fixture catching neither is the evidence that the gap was real rather
+than a reading of the source, and it is the bar the remaining entries in
+`DECISIONS.md#kin-probes-assert-a-value` have to clear.

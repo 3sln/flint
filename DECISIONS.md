@@ -7120,8 +7120,9 @@ survives the next edit.
 
 What it did find is **five drivers whose comments describe behaviour the probe
 does not exercise**, each recorded in the `--expect-why` beside it rather than
-silently fixed. **Two of the five, `mapread` and `valcmp`, were fixed on
-2026-09-26 and their entries say what that took; the other three stand.**
+silently fixed. **Three of the five -- `mapread`, `valcmp` and `casechange` --
+were fixed on 2026-09-26 and their entries say what that took; `valhash` and
+`byteconcat` stand.**
 Recording them turned out to be worth more than it looked, in two different
 ways. The record said `mapread` had one unreachable branch and it had three,
 which only became visible when somebody went to close the one. And `valcmp`'s
@@ -7157,7 +7158,24 @@ it.
   source's own "ONE WALK FOR EVERY TIER" block says was removed.
 * `casechange` — headed as upcasing sharp s "by a FULL mapping to two code
   points". The fixture's `full_index` returns -1 unconditionally, so the entire
-  `case-full-at` branch is never entered.
+  `case-full-at` branch is never entered. **FIXED 2026-09-26.** Two real rows
+  out of `casetable.kin`'s own `:data` now sit in the fixture's `CASE_FULL` --
+  row 0, sharp s to 83 83 with count 2, and row 3, U+0390 to 921 776 769 with
+  count 3 -- and `full_index` answers them WHEN UPCASING ONLY, which is what the
+  real table is, so the down arm still walks `case-map` for every code point and
+  the two arms differ in which path they take. **Both counts are there because
+  one cannot distinguish a count read from the wrong field**, and an expansion
+  of exactly two cannot tell `k + 2` from something that coincides at two.
+  **Proved both ways:** with the new fixture `(+ k 2)` -> `(+ k 1)` changes the
+  fold, and reading the count from field 0 instead of field 1 CRASHES (field 0
+  is the code point 223, so the inner loop runs 223 times and indexes past the
+  515-long array); WITH THE OLD FIXTURE BOTH MUTATIONS PASS.
+  The derivation was scripted and **run against the old fixture first**,
+  reproducing `65997091 95549795 8` exactly before it was trusted for the new
+  numbers -- a derivation that has never produced a known answer is a guess with
+  arithmetic in it, and this one caught a real slip on the way (an upcased 233
+  encoded as itself rather than as 201, visible only because the old expect
+  disagreed by 32).
 * `byteconcat` — the `t3` comment promises a merge into the rightmost leaf with
   the depth unchanged. With the fixture's `FLAT_MAX` of 8 no piece can both
   pass the gate and fit, so tier 3 is unreachable from this fixture.
