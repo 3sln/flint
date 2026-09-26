@@ -56,6 +56,11 @@
 
 (println "flint benchmarks")
 (println "machine:" (machine))
+;; WHICH TREE. See `bin/bench-vs-clojure`: the captured output named machine and
+;; method and not WHEN, so the committed `.txt` could be dated only from git.
+(println "tree:   "
+         (str (str/trim (:out (sh "git" "rev-parse" "--short" "HEAD")))
+              " on " (str/trim (:out (sh "date" "+%F")))))
 (println "method:  best of 5 runs per measurement, one node process per program.")
 (println "         `cold` is compile + instantiate + first main(); `warm` is a")
 (println "         second main() on the same instance.")

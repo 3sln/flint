@@ -34,6 +34,11 @@ PROGS="tight maps concat"
 
 echo "flint against canonical Clojure"
 echo "machine: $(sysctl -n machdep.cpu.brand_string), $(uname -sr)"
+# WHICH TREE. The captured output said machine and method and not WHEN, so
+# `doc/benchmarks-vs-clojure.txt` could be dated only from git -- and a number
+# whose subject is unnamed is the folklore AGENTS.md section 2 is about. A
+# benchmark is a claim about a commit, so the commit is printed with it.
+echo "tree:    $(git rev-parse --short HEAD 2>/dev/null || echo 'not a git tree') on $(date +%F)"
 echo "method:  same source, main with no arguments, best of 9 warm runs."
 echo "         Startup excluded here and measured separately below."
 echo
