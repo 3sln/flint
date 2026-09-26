@@ -619,7 +619,21 @@ need not match.
 
 **Reviewed:** ☐ not signed off
 
-`flint deps` — served by the native CLI and the npm CLI.
+`flint deps` — **dispatched by both CLIs; implemented only by the native one.**
+`bin/check-api-review` asserts the two dispatch the same command SET, which this
+satisfies without the command working, so "served by both" was the wrong summary.
+
+Measured 2026-09-26 at `86b0ae65`: `flint deps` on the npm CLI prints "`flint
+deps` is not implemented in @3sln/flint-cli yet", names the namespaces it WOULD
+resolve through (`flint.deps.npm`, `.mvn`, `.git`) as served there anyway, points
+at the native CLI for `add|tree|why|pin|bump|agree`, and **exits 1**. `deps add`
+refuses the same way. The native CLI with no subcommand prints its usage and
+exits 2.
+
+That is a stated boundary rather than a gap — ROADMAP.md's npm-CLI row says
+`flint deps` and pods are deliberately not packaged — so it is recorded here and
+not raised as a request. What a reviewer should weigh is whether a command that
+exists only to refuse should be in the dispatch table at all.
 
 **Change requests:** _none recorded_
 
@@ -627,7 +641,10 @@ need not match.
 
 **Reviewed:** ☐ not signed off
 
-`flint help` — served by the native CLI and the npm CLI.
+`flint help` — served by both, and they DIFFER in one line by design: the native
+banner reads "the compiler, as one binary" and the npm one "the compiler, on
+node". Measured 2026-09-26. The bodies differ further because the target lists
+do (see `cli:compile`), which is correct and is the thing to keep correct.
 
 **Change requests:** _none recorded_
 
@@ -635,7 +652,8 @@ need not match.
 
 **Reviewed:** ☐ not signed off
 
-`flint run` — served by the native CLI and the npm CLI.
+`flint run` — served by both, identically. Measured 2026-09-26 at `86b0ae65`:
+the same one-line program answers `fine` through each.
 
 **Change requests:** _none recorded_
 
@@ -643,7 +661,8 @@ need not match.
 
 **Reviewed:** ☐ not signed off
 
-`flint test` — served by the native CLI and the npm CLI.
+`flint test` — served by both, identically. Measured 2026-09-26 at `86b0ae65`:
+one `^:flint.check/test` var, and both print `1/1 checks passed`.
 
 **Change requests:** _none recorded_
 
@@ -651,7 +670,11 @@ need not match.
 
 **Reviewed:** ☐ not signed off
 
-`flint version` — served by the native CLI and the npm CLI.
+`flint version` — served by both, identically: `flint 0.1.0` from each, measured
+2026-09-26. `bin/check-version` is adjacent but is not quite that gate: it
+asserts "27 manifests all state 0.1.0", which keeps the SOURCE both doors read
+in agreement rather than comparing what they print. Nothing compares the two
+strings.
 
 **Change requests:** _none recorded_
 
@@ -659,7 +682,13 @@ need not match.
 
 **Reviewed:** ☐ not signed off
 
-`flint wasm` — served by the native CLI and the npm CLI.
+`flint wasm` — served by both, and they ANSWER DIFFERENT THINGS by design, which
+the identical wording above used to hide. Measured 2026-09-26 at `86b0ae65`:
+`wasm show` reports `jsc` and the JavaScriptCore path on the native CLI, and
+`node` with its own path on the npm CLI. The native binary carries no engine and
+has to go looking, which is what the command is for; node IS one, so there is
+nothing to pin. `show` was the only subcommand exercised — `reset` and `use`
+change the caller's stored setting, so they are not run from a survey.
 
 **Change requests:** _none recorded_
 
