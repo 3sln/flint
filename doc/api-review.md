@@ -559,12 +559,30 @@ Aliases (`-h`, `--help`, `-v`, `--version`) fold into the command they spell.
 
 **Reviewed:** ☐ not signed off
 
-`flint compile` — served by the native CLI and the npm CLI.
+`flint compile` — served by THREE doors, not two: the native CLI
+(`target/release/flint`), `bin/flint` (babashka), and the npm CLI (`sdks/cli`).
+`bin/check-api-review` compares which COMMANDS exist and not what they accept, so
+a target added to this option is invisible to it — which is why they are written
+down here.
 
-Targets, as of 2026-09-25: `:to :wasm` (the default), `:to :clr`, `:to :jvm`,
-`:to :llvm`. `bin/check-api-review` compares which COMMANDS exist and not what they
-accept, so a target added to this option is invisible to it — which is why they are
-written down here.
+**MEASURED 2026-09-26 at `04c20e03`** by compiling the same program through each
+door, rather than by reading the dispatch. Output sizes in bytes:
+
+    target    native CLI       bin/flint        npm CLI
+    wasm      662 240          494 598          662 240
+    clr        29 184           29 184           29 184
+    jvm        38 779           38 779           refused, "no such target"
+    llvm       68 826           refused          refused
+    native     refused          not in its set   refused
+
+The refusals each name the door that does have it, and each door's own error
+message lists its own set correctly — the drift was in THIS document, not in the
+code.
+
+`bin/flint`'s wasm is smaller than the other two for the same program. That is
+expected rather than a finding: the maintainer's instruction is that the
+artefacts produced by the clj implementation and the built-in platform emitters
+need not match.
 
 **Change requests:**
 
@@ -581,9 +599,21 @@ written down here.
    are a separate option for the root, or emitting the class under whatever name the
    output path implies and giving up the `Class.forName` contract.
 
-2. **`:to :llvm` is the native CLI's only.** `bin/flint` refuses it and names the
-   other door; the other three work from both. Worth confirming that asymmetry is
-   intended rather than a gap.
+2. **TWO targets are asymmetric across the doors, not one.** This request said
+   only `:to :llvm` was, and "the other three work from both", which the matrix
+   above disproves:
+
+   * `:to :llvm` is the NATIVE CLI's alone. Both other doors refuse it and name
+     it, which is deliberate — `bin/flint` records that it used to fall through
+     to the wasm path and write a 494 KB wasm module into a `.ll`.
+   * **`:to :jvm` is missing from the npm CLI**, which was not recorded anywhere.
+     It works from the native CLI and from `bin/flint`, byte for byte (38 779
+     each). `sdks/cli/src/cli.mjs` handles `wasm` and `clr` and falls to "no such
+     target" for `jvm` — so this is an omission rather than a stated boundary,
+     and it is the one that looks most like a gap.
+
+   Worth confirming which asymmetries are intended. `:to :llvm`'s has a reason in
+   the code; `:to :jvm`'s has none written down.
 
 ## cli:deps
 

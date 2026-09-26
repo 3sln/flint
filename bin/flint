@@ -974,7 +974,12 @@
                     "`flint compile :path <dir> :fn <ns/fn> :to :llvm`.")))
     (System/exit 1))
   (when-not fn
-    (println "usage: flint :src <dir> :fn <ns/fn> [:out <file.wasm>]")
+    ;; `:to` BELONGS IN THE USAGE. This door emits three targets and the help
+    ;; named none of them, while an unrecognised `:to` above prints the set --
+    ;; so the only way to learn the option existed was to guess it wrong.
+    (println "usage: flint :src <dir> :fn <ns/fn> [:out <file>]")
+    (println "                 [:to wasm|clr|jvm]   default wasm; `:to llvm` is")
+    (println "                                      the native CLI's")
     (println "       flint test :src <dir>        run every ^:flint.check/test var")
     (println "                 [:exclude [ns ...]]   assert these are unreachable")
     (println "                 [:wasm-path <dir> ...] search path for precompiled units")
