@@ -8478,13 +8478,22 @@ times." The section closes by guessing "the scheduler is probably portable too
 three lines above it did not survive.
 
 **Re-counted 2026-09-21, and the correction had gone stale too.** The note
-below this one said 97 sources and three concurrency files; it is now 109
-sources and FIFTEEN of them are ports and scheduling outright -- `sched`,
+below this one said 97 sources and three concurrency files; it was 109 sources
+and FIFTEEN of them ports and scheduling outright when this was written, and
+**RE-COUNTED 2026-09-26 at `a42d82cb` the total is 121 and the fifteen are still
+exactly fifteen** -- `sched`,
 `schedlists`, `schedmake`, `settle`, `portring`, `portdrain`, `portmake`,
 `portbytes`, `portinstall`, `porthost`, `portrecv`, `portpark`, `reapports`,
 `threadjoin` and `mainanswer`. `Conc` across the three runtimes has gone from
 6 743 lines to 5 540, and 44 of its 88 functions are now one-line delegations
 to generated code -- exactly half.
+
+**Re-measured the same day, 2026-09-26:** 5 469 lines, by
+`wc -l runtime/src/conc.rs runtimes/jvm/src/com/flint/rt/Conc.java
+runtimes/clr/src/rt/Conc.cs` -- 2 324 + 1 615 + 1 530. The 44-of-88 half was NOT
+re-counted and is left as it stood; counting it needs a definition of "one-line
+delegation" that a script can apply, which is the difference between this figure
+and that one.
 
 *A correction decays at the same rate as what it corrected.* This is the
 second time this sentence has been rewritten and the first rewrite lasted two

@@ -1,18 +1,24 @@
 # Goal — port the runtimes' shared logic to kin
 
-**Status:** 119 kin sources, verified green at `94029e34` — *"119 kin sources
-agree, all 119 against a written-down expected answer, every generated module
+**Status:** 121 kin sources, verified green at `a42d82cb` — *"121 kin sources
+agree, all 121 against a written-down expected answer, every generated module
 matches, and every one is DECLARED where Rust would otherwise not build it"*
-(`bin/check-kin`). 117 of them generate a module into each of the three
-non-wasm runtimes, and Rust, Java and C# carry exactly 117 apiece (counted, not
-inferred). TWO ship nowhere by design, existing only to pin what a form MEANS
+(`bin/check-kin`, run on a clean tree at that commit). 119 of them generate a
+module into each of the three non-wasm runtimes, and Rust, Java and C# carry
+exactly 119 apiece — counted, not inferred: `ls runtime/src/kgen/rt/*.rs` less
+`mod.rs`, `ls runtimes/jvm/src/com/_3sln/flint/kgen/rt/*.java`, and
+`ls runtimes/clr/src/_3sln/Flint/Kgen/Rt/*.cs`, which agree with each other and
+with 121 − 2. TWO ship nowhere by design, existing only to pin what a form MEANS
 in three languages: `unsigned.kin` for the unsigned comparison family and
-`vocabedge.kin` for the shifts and the narrowing conversion.
+`vocabedge.kin` for the shifts and the narrowing conversion. **Those are still
+the same two**, found by asking which sources have no `runtime/src/kgen/rt/<n>.rs`
+rather than by rereading this sentence.
 
-*This line read "112 ... at `14bd8f30`" until 2026-09-23, by which point that
-commit was 75 behind and the gate's own closing phrase had changed too. It is
-the first thing a session reads, so it is the worst place in the tree to carry
-a stale number.*
+*This line read "112 ... at `14bd8f30`" until 2026-09-23, and "119 ... at
+`94029e34`" until 2026-09-26. It is the first thing a session reads, so it is
+the worst place in the tree to carry a stale number — and it has now gone stale
+twice, which says the number wants re-deriving on every visit rather than
+trusting.*
 
 `Conc` is finished, and **so is the three-way work**. `bin/port-survey --calls`
 reports 14 lines, and every one was checked against a real native definition
