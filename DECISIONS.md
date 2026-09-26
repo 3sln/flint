@@ -7120,7 +7120,11 @@ survives the next edit.
 
 What it did find is **five drivers whose comments describe behaviour the probe
 does not exercise**, each recorded in the `--expect-why` beside it rather than
-silently fixed:
+silently fixed. **One of the five, `mapread`, was fixed on 2026-09-26 and its
+entry says what that took; the other four stand.** Recording them turned out to
+be worth more than it looked: the record said `mapread` had one unreachable
+branch and it had three, which only became visible when somebody went to close
+the one.
 
 * `valcmp` — `short=` and `long=` are labelled as testing "the SHORTER one
   first when one runs out", and do not: the fixture derives each element from
@@ -7140,6 +7144,22 @@ silently fixed:
 * `mapread` — a comment computes a key's hash as `0x900` where the key is
   decimal `900`, and the consequence is that `node_find`'s success value is
   unreachable: the compound hash-map HIT is untested and only the miss runs.
+  **FIXED 2026-09-26, and reading it closely found two more unreachable arms
+  in the same function.** Not one gap but three: `map-get`'s compound
+  hash-map success `(set out got)`, its compound array-map success
+  `(set out (am-val ...))`, and `am-index-of`'s rooted-scan `(set out i)` with
+  its `(break)`. Every compound lookup in the fixture MISSED, so a source that
+  dropped all three found values and always answered the default passed.
+  Three calls cover them: key 1041 (1041 * 7 & 0xff = 0x77, so the stub finds
+  it) in the hash map at 200, the same key in a new array map at 320, and
+  `am-index-of` on that map directly. **The 320 map carries the same key
+  twice** -- (1041 -> 0xAA) then (1041 -> 0xBB) -- which `assoc` makes
+  impossible in a real map and is the only way `break` is OBSERVABLE: a single
+  matching entry answers the same with it and without it. Each of the three
+  was verified by MUTATING `mapread.kin` and watching the field move: the two
+  successes became `7`, and deleting `(break)` turned 170 into 187 and the
+  `am-index-of` field from 0 into 1. The source was restored with `diff -q`,
+  not `git checkout`. Four of the five below remain.
 
 Also noted: `numarith`'s `mul-overflows` docstring illustrates `MIN * -1` with
 the operands the other way round from the code (`I64_MAX / -1` where the code

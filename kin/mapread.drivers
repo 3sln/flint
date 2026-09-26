@@ -53,6 +53,13 @@ fn main() {
     rt.gc.sp[220] = TY_HASHMAP; rt.h[221] = 0xFFFF;
     // A row ref at 300.
     rt.gc.sp[300] = TY_TABLEREF;
+    // An array map at 320 with TWO entries under THE SAME COMPOUND KEY 1041,
+    // (1041 -> 0xAA) then (1041 -> 0xBB). A duplicate key cannot occur in a
+    // real map -- `assoc` keeps them unique -- and it is here for one reason:
+    // it is the only way `break` in `am-index-of`'s rooted scan is OBSERVABLE.
+    // Without it `out` is set once and a missing `break` answers the same.
+    rt.gc.sp[320] = TY_ARRAYMAP; rt.counts[320] = 2;
+    rt.h[322] = 1041; rt.h[323] = 0xAA; rt.h[324] = 1041; rt.h[325] = 0xBB;
     let mut o = String::new();
     // An immediate is not a map: the default comes straight back.
     o.push_str(&format!("{} ", rt.map_get(Value(5), Value(0x31), Value(7)).0));
@@ -65,15 +72,24 @@ fn main() {
     let hkey = Value(0x11);           // hash 0x77 -> the stub finds it
     o.push_str(&format!("{} {} ", rt.map_get(Value(200), hkey, Value(7)).0,
                                   rt.map_get(Value(220), hkey, Value(7)).0));
-    // COMPOUND keys take the rooted path. 0x900 hashes to 0x77 * 7 & 0xff.
+    // COMPOUND keys take the rooted path: `eq_may_alloc` is `>= 900`. 900 * 7
+    // is 6300 and 6300 & 0xff is 156, NOT 0x77, so these two MISS -- which is
+    // the point of the pair below them.
     let ck = Value(900);
     o.push_str(&format!("| {} ", rt.map_get(Value(100), ck, Value(7)).0));
     o.push_str(&format!("{} ", rt.map_get(Value(200), ck, Value(7)).0));
+    // COMPOUND HITS. 1041 * 7 = 7287, and 7287 & 0xff = 0x77, so the hash-map
+    // stub finds it and `node-find`'s success value is reached. Then the same
+    // key in the array map at 320, which reaches the rooted scan's success.
+    let hit = Value(1041);
+    o.push_str(&format!("{} ", rt.map_get(Value(200), hit, Value(7)).0));
+    o.push_str(&format!("{} ", rt.map_get(Value(320), hit, Value(7)).0));
     // am_index_of directly: present, absent (answers n), and compound.
     o.push_str(&format!("| {} {} {} ",
         rt.am_index_of(Value(100), Value(0x41)),
         rt.am_index_of(Value(100), Value(0x99)),
         rt.am_index_of(Value(100), Value(900))));
+    o.push_str(&format!("{} ", rt.am_index_of(Value(320), hit)));
     // Membership, and that the root stack is balanced after all of it.
     o.push_str(&format!("| {}{} roots={} max={}",
         rt.map_contains(Value(100), Value(0x31)) as u32,
@@ -151,6 +167,9 @@ fn main() {
         rt.gc.sp[200] = TY_HASHMAP; rt.h[201] = 210;
         rt.gc.sp[220] = TY_HASHMAP; rt.h[221] = 0xFFFFL;
         rt.gc.sp[300] = TY_TABLEREF;
+        // The duplicate-key array map: see the rust arm for why it is duplicated.
+        rt.gc.sp[320] = TY_ARRAYMAP; rt.counts[320] = 2;
+        rt.h[322] = 1041; rt.h[323] = 0xAA; rt.h[324] = 1041; rt.h[325] = 0xBB;
         StringBuilder o = new StringBuilder();
         o.append(mapGet(rt, 5, 0x31, 7)).append(' ');
         o.append(mapGet(rt, 300, 0x31, 7)).append(' ');
@@ -158,9 +177,12 @@ fn main() {
         o.append(mapGet(rt, 200, 0x11, 7)).append(' ').append(mapGet(rt, 220, 0x11, 7)).append(' ');
         o.append("| ").append(mapGet(rt, 100, 900, 7)).append(' ');
         o.append(mapGet(rt, 200, 900, 7)).append(' ');
+        o.append(mapGet(rt, 200, 1041, 7)).append(' ');
+        o.append(mapGet(rt, 320, 1041, 7)).append(' ');
         o.append("| ").append(amIndexOf(rt, 100, 0x41)).append(' ')
          .append(amIndexOf(rt, 100, 0x99)).append(' ')
-         .append(amIndexOf(rt, 100, 900)).append(' ');
+         .append(amIndexOf(rt, 100, 900)).append(' ')
+         .append(amIndexOf(rt, 320, 1041)).append(' ');
         o.append("| ").append(mapContains(rt, 100, 0x31) ? 1 : 0)
          .append(mapContains(rt, 100, 0x99) ? 1 : 0)
          .append(" roots=").append(rt.roots.size()).append(" max=").append(rt.maxroots);
@@ -239,6 +261,9 @@ namespace Flint.Rt {
         rt.gc.sp[200] = Obj.TyHashmap; rt.h[201] = 210;
         rt.gc.sp[220] = Obj.TyHashmap; rt.h[221] = 0xFFFFL;
         rt.gc.sp[300] = Obj.TyTableref;
+        // The duplicate-key array map: see the rust arm for why it is duplicated.
+        rt.gc.sp[320] = Obj.TyArraymap; rt.counts[320] = 2;
+        rt.h[322] = 1041; rt.h[323] = 0xAA; rt.h[324] = 1041; rt.h[325] = 0xBB;
         var o = new StringBuilder();
         o.Append(MapGet(rt, 5, 0x31, 7)).Append(' ');
         o.Append(MapGet(rt, 300, 0x31, 7)).Append(' ');
@@ -246,16 +271,19 @@ namespace Flint.Rt {
         o.Append(MapGet(rt, 200, 0x11, 7)).Append(' ').Append(MapGet(rt, 220, 0x11, 7)).Append(' ');
         o.Append("| ").Append(MapGet(rt, 100, 900, 7)).Append(' ');
         o.Append(MapGet(rt, 200, 900, 7)).Append(' ');
+        o.Append(MapGet(rt, 200, 1041, 7)).Append(' ');
+        o.Append(MapGet(rt, 320, 1041, 7)).Append(' ');
         o.Append("| ").Append(AmIndexOf(rt, 100, 0x41)).Append(' ')
          .Append(AmIndexOf(rt, 100, 0x99)).Append(' ')
-         .Append(AmIndexOf(rt, 100, 900)).Append(' ');
+         .Append(AmIndexOf(rt, 100, 900)).Append(' ')
+         .Append(AmIndexOf(rt, 320, 1041)).Append(' ');
         o.Append("| ").Append(MapContains(rt, 100, 0x31) ? 1 : 0)
          .Append(MapContains(rt, 100, 0x99) ? 1 : 0)
          .Append(" roots=").Append(rt.roots.Count).Append(" max=").Append(rt.maxroots);
         Console.WriteLine(o.ToString());
     }
 --expect
-7 48879 66 7 23713 7 | 7 7 | 1 2 2 | 10 roots=0 max=6
+7 48879 66 7 23713 7 | 7 7 49374 170 | 1 2 2 0 | 10 roots=0 max=6
 --expect-why
 DERIVED from `mapread.kin` against the driver's stubs. The fixture's hex
 constants in decimal: 0xBEEF = 48879, 0x42 = 66, 0x5CA1 = 23713, 0xC0DE =
@@ -299,13 +327,24 @@ THE SEVEN `map-get` ANSWERS, each taking a different arm:
            calls.
   7        a compound key in the HASH map. 900 * 7 = 6300, and 6300 & 0xff =
            156, which is NOT 0x77 -- so the stub answers NOT_FOUND and the
-           default comes back. NOTE: the driver's comment above this call
-           ("0x900 hashes to 0x77 * 7 & 0xff") is wrong; the key is decimal
-           900, not 0x900, and nothing in this fixture makes a compound
-           hash-map lookup SUCCEED. `node-find`'s 0xC0DE is unreachable here,
-           so the compound hash-map hit is untested. A key of 1041 would take
-           it (1041 = 17 mod 256). Recorded rather than fixed, since this
-           section may not change the driver.
+           default comes back. This is the compound MISS; the two fields after
+           it are the compound HITS, and until 2026-09-26 neither existed.
+  49374    a compound key that IS found in a HASH map. 1041 * 7 = 7287 and
+           7287 & 0xff = 0x77, so the stub answers 0xC0DE -- which is
+           `node-find`'s success value and NOT `node-find-scalar`'s 0x5CA1, so
+           this field says the rooted walk was the one called. `(set out got)`
+           in the compound hash-map arm was unreachable from this fixture
+           before: every compound lookup missed, so a source that dropped the
+           found value and always answered the default passed.
+  170      a compound key found in an ARRAY map -- 0xAA, the value at index 0
+           of the map at 320. Two arms were unreachable behind this one call:
+           `map-get`'s `(set out (am-val ...))` in the compound array arm, and
+           `am-index-of`'s `(set out i)` plus `(break)` in the rooted scan.
+           THE 320 MAP HAS THE SAME KEY TWICE, (1041 -> 0xAA) then
+           (1041 -> 0xBB), which `assoc` makes impossible in a real map. It is
+           the only way `break` is OBSERVABLE: with it `out` stays 0 and the
+           answer is 0xAA, without it the scan runs on, `out` becomes 1 and the
+           answer is 0xBB. A single matching entry cannot tell the two apart.
 
   | 1 2 2  `am-index-of` called directly.
            1  key 0x41 is at index 1.
@@ -316,18 +355,25 @@ THE SEVEN `map-get` ANSWERS, each taking a different arm:
               answer the same sentinel; the scalar one returns `sn` and the
               rooted one returns `out` initialised to `n`, which are two
               separate lines of source that have to agree.
+           0  PRESENCE through the compound path, on the 320 map. The three
+              fields before it are all absences or scalar hits, so this is the
+              only one that reads the rooted scan's `out` after it was assigned
+              rather than after it was initialised.
 
   | 10     membership: 0x31 is in the map, 0x99 is not. `map-contains` is
            `map-get` against NOT_FOUND, so the `0` also says NOT_FOUND is
            never a legitimate answer leaking out of a lookup.
 
-  roots=0  after all thirteen calls the root stack is empty. Every rooted path
+  roots=0  after all sixteen calls the root stack is empty. Every rooted path
            -- `map-get`'s compound arm, `am-index-of`'s compound arm, and the
            per-comparison push inside it -- pops what it pushed, on the found
            path and the absent path alike.
 
   max=6    the DEEPEST the stack ever got, and it is derivable exactly. The
-           worst case is the compound array-map lookup: `map-get` pushes map,
+           three calls added in 2026-09-26 do not raise it: a compound hash-map
+           lookup pushes only map, key and default (3), and the compound
+           array-map lookup on the 320 map reaches the same 6 by the same
+           route. The worst case is the compound array-map lookup: `map-get` pushes map,
            key and default (3), then `am-index-of` pushes map and key again
            (5), then pushes the key being compared (6) and pops it before the
            next comparison. 6 and not 7 says the per-comparison push does not
