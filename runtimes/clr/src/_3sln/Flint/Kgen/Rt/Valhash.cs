@@ -17,7 +17,6 @@ using static global::_3sln.Flint.Kgen.Rt.Hash;
 using static global::_3sln.Flint.Kgen.Rt.Hashtext;
 using static global::_3sln.Flint.Kgen.Rt.Names;
 using static global::_3sln.Flint.Kgen.Rt.Ropeflat;
-using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 using static global::_3sln.Flint.Kgen.Rt.Seqwalk;
 using static global::_3sln.Flint.Kgen.Rt.Tablemeta;
 using static global::_3sln.Flint.Kgen.Rt.Tableref;

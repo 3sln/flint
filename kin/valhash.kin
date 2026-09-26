@@ -38,7 +38,6 @@
             [flint.rt.names :refer [symbol-hash]]
             [flint.rt.bytehash :refer [b-hash]]
             [flint.rt.ropeflat :refer [rope-hash]]
-            [flint.rt.ropemeas :refer [s-ascii]]
             [flint.rt.seqwalk :refer [seq first next]]
             [flint.rt.vecread :refer [vec-nth vec-count]]))
 

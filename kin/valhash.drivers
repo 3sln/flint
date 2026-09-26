@@ -20,7 +20,7 @@ struct Gc { sp: Space }
 // the half both ports were missing for a vector: they charged nothing there.
 struct Rt { gc: Gc, bump: u64, roots: Vec<Value>, slots: Vec<[u64; 2]>,
             budget: i32, ticks: u32, seqn: u32, doubles: Vec<f64>,
-            asc: Vec<u8>, jsh: u32 }
+            bigh: Vec<u8>, jsh: u32 }
 fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
 impl Value {
     fn is_heap(self) -> bool { self.0 >= 100 && self.0 < 0x1000_0000 && self.0 != NIL.0 }
@@ -44,7 +44,6 @@ impl Rt {
     // A NON-ASCII TREE takes the UTF-16 walk; the probe answers both by
     // inspection so the ROUTING is what is under test, not the arithmetic
     // (which `kin/strhash.drivers` pins against canonical Clojure).
-    fn s_ascii(&self, v: Value) -> bool { self.asc[v.0 as usize] != 0 }
     fn java_string_hash(&mut self, v: Value) -> u32 { 0x7700 | (v.0 as u32 & 0xFF) }
     fn mark(&self) -> usize { self.roots.len() }
     fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
@@ -72,7 +71,14 @@ impl Rt {
     fn string_hash(&mut self, v: Value) -> u32 { 0x5100 | (v.0 & 0xFF) as u32 }
     fn keyword_hash(&mut self, v: Value) -> u32 { 0x5200 | (v.0 & 0xFF) as u32 }
     fn symbol_hash(&mut self, v: Value) -> u32 { 0x5300 | (v.0 & 0xFF) as u32 }
-    fn rope_hash(&mut self, v: Value) -> u32 { 0x5400 | (v.0 & 0xFF) as u32 }
+    // A RAW HASH WIDER THAN 16 BITS for a rope the fixture marks, so the
+    // `hash-int` finaliser on the TY_ROPE arm has something to fold. Every
+    // other stub answers under 0x10000, where `h ^ (h >> 16)` is the identity
+    // and the finaliser is invisible.
+    fn rope_hash(&mut self, v: Value) -> u32 {
+        if self.bigh[v.0 as usize] != 0 { 0x5400_0000 | (v.0 & 0xFF) as u32 }
+        else { 0x5400 | (v.0 & 0xFF) as u32 }
+    }
     fn b_hash(&mut self, v: Value) -> u32 { 0x5500 | (v.0 & 0xFF) as u32 }
     fn hash_map(&mut self, v: Value) -> u32 { 0x5600 | (v.0 & 0xFF) as u32 }
     fn hash_set(&mut self, v: Value) -> u32 { 0x5700 | (v.0 & 0xFF) as u32 }
@@ -114,7 +120,7 @@ fn main() {
     let mut rt = Rt { gc: Gc { sp: Space { m: vec![0u8; 400] } }, bump: 100,
                       roots: Vec::new(), slots: vec![[0u64; 2]; 400],
                       budget: 1000, ticks: 0, seqn: 3,
-                      doubles: vec![1.5, f64::NAN, 0.0] , asc: vec![0; 400], jsh: 0 };
+                      doubles: vec![1.5, f64::NAN, 0.0] , bigh: vec![0; 400], jsh: 0 };
     let mut o = String::new();
 
     // A VECTOR IS WALKED, CHARGED and CACHED. The charge is the half both
@@ -190,15 +196,28 @@ fn main() {
     }
     o.push_str(&format!("tags={} ", tags));
 
-    // BOTH ROPE BRANCHES. The loop above leaves `asc` at zero, so it exercises
-    // the non-ASCII walk only -- and a regression that dropped the `s-ascii`
-    // test entirely would still pass it. An ASCII rope must take `rope-hash`
-    // (0x54xx) and a non-ASCII one `java-string-hash` (0x77xx).
+    // EVERY ROPE TAKES `rope-hash`, AND THAT IS THE WHOLE CLAIM. These two
+    // fields were labelled "an ASCII rope must take `rope-hash` (0x54xx) and a
+    // non-ASCII one `java-string-hash` (0x77xx)", which described a two-walk
+    // arrangement the source's own "ONE WALK FOR EVERY TIER" block says was
+    // REMOVED -- so both printed 0x54xx and the pair tested nothing about
+    // routing. `s-ascii` was imported by `valhash.kin` and never called; the
+    // import is gone now, so routing cannot come back without the ns changing.
+    // Two ropes remain because 0x77xx appearing in either would still be the
+    // signal, and they differ only by address.
     let ar = rt.obj(TY_ROPE);
-    rt.asc[ar.0 as usize] = 1;
     let nr = rt.obj(TY_ROPE);
-    o.push_str(&format!("ropeascii={:x} ropewide={:x} ",
+    o.push_str(&format!("ropea={:x} ropeb={:x} ",
                         rt.hash_value(ar), rt.hash_value(nr)));
+    // THE FINALISER ON THE ROPE ARM. `(hash-int (to-i32 (to-i64 (rope-hash ..))))`
+    // -- and every other stub in this probe answers under 0x10000, where
+    // `h ^ (h >> 16)` is the IDENTITY. So no field could tell the finaliser from
+    // its absence, and the source says that is the one thing on this arm that
+    // must not be dropped: without it a rope and an equal flat string hash
+    // differently, which breaks the rule that two `=` values hash alike.
+    let fr = rt.obj(TY_ROPE);
+    rt.bigh[fr.0 as usize] = 1;
+    o.push_str(&format!("ropefold={:x} ", rt.hash_value(fr)));
 
     // EVERY SEQUENTIAL TAG goes to the ordered walk, which is the agreement
     // `val-eq` needs: `=` treats them as one category, so `hash` must too.
@@ -269,7 +288,7 @@ fn main() {
         GcT gc = new GcT();
         long bump = 100;
         long[][] slots = new long[400][2];
-        int[] asc = new int[400];
+        int[] bigh = new int[400];
         int budget = 1000, ticks = 0, seqn = 3;
         double[] doubles = { 1.5, Double.NaN, 0.0 };
         java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
@@ -304,11 +323,14 @@ fn main() {
         static int keywordHash(Rt rt, long v) { return 0x5200 | (int) (v & 0xFF); }
     }
     static int symbolHash(Rt rt, long v) { return 0x5300 | (int) (v & 0xFF); }
-    static int ropeHash(Rt rt, long v) { return 0x5400 | (int) (v & 0xFF); }
+    // A raw hash wider than 16 bits for a marked rope: see the rust arm.
+    static int ropeHash(Rt rt, long v) {
+        return rt.bigh[(int) v] != 0 ? (0x54000000 | (int) (v & 0xFF))
+                                     : (0x5400 | (int) (v & 0xFF));
+    }
     // The ROUTING is what this file tests; `kin/strhash.drivers` pins the
     // arithmetic against canonical Clojure. Distinct constants so the two
     // branches are told apart in the output.
-    static boolean sAscii(Rt rt, long v) { return rt.asc[(int) v] != 0; }
     static int javaStringHash(Rt rt, long v) { return 0x7700 | (int) (v & 0xFF); }
     static int bHash(Rt rt, long v) { return 0x5500 | (int) (v & 0xFF); }
     static final class Maps { static int hash(Rt rt, long v) { return 0x5600 | (int) (v & 0xFF); } }
@@ -412,11 +434,14 @@ fn main() {
         StringBuilder tags = new StringBuilder();
         for (int t : htags) tags.append(Integer.toHexString(hashValue(rt, rt.obj(t)))).append(',');
         o.append("tags=").append(tags).append(' ');
+        // Every rope takes rope-hash, and the finaliser: see the rust arm.
         long ar = rt.obj(TY_ROPE);
-        rt.asc[(int) ar] = 1;
         long nr = rt.obj(TY_ROPE);
-        o.append("ropeascii=").append(Integer.toHexString(hashValue(rt, ar)))
-         .append(" ropewide=").append(Integer.toHexString(hashValue(rt, nr))).append(' ');
+        o.append("ropea=").append(Integer.toHexString(hashValue(rt, ar)))
+         .append(" ropeb=").append(Integer.toHexString(hashValue(rt, nr))).append(' ');
+        long fr = rt.obj(TY_ROPE);
+        rt.bigh[(int) fr] = 1;
+        o.append("ropefold=").append(Integer.toHexString(hashValue(rt, fr))).append(' ');
 
         int[] stags = { TY_VEC, TY_MAPENTRY, TY_CONS, TY_EMPTY_LIST, TY_LAZYSEQ,
                         TY_VECSEQ, TY_STRSEQ, TY_RANGE };
@@ -501,7 +526,7 @@ namespace Flint.Rt {
         internal GcT gc = new GcT();
         internal long bump = 100;
         internal long[,] slots = new long[400, 2];
-        internal int[] asc = new int[400];
+        internal int[] bigh = new int[400];
         internal int budget = 1000, ticks = 0, seqn = 3;
         internal double[] doubles = { 1.5, double.NaN, 0.0 };
         internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
@@ -533,8 +558,11 @@ namespace Flint.Rt {
         internal static int KeywordHash(Rt rt, long v) { return 0x5200 | (int) (v & 0xFF); }
     }
     internal static int SymbolHash(Rt rt, long v) { return 0x5300 | (int) (v & 0xFF); }
-    internal static int RopeHash(Rt rt, long v) { return 0x5400 | (int) (v & 0xFF); }
-    internal static bool SAscii(Rt rt, long v) { return rt.asc[(int) v] != 0; }
+    // A raw hash wider than 16 bits for a marked rope: see the rust arm.
+    internal static int RopeHash(Rt rt, long v) {
+        return rt.bigh[(int) v] != 0 ? (0x54000000 | (int) (v & 0xFF))
+                                     : (0x5400 | (int) (v & 0xFF));
+    }
     internal static int JavaStringHash(Rt rt, long v) { return 0x7700 | (int) (v & 0xFF); }
     internal static int BHash(Rt rt, long v) { return 0x5500 | (int) (v & 0xFF); }
     internal static class Maps { internal static int Hash(Rt rt, long v) { return 0x5600 | (int) (v & 0xFF); } }
@@ -633,11 +661,14 @@ namespace Flint.Rt {
         var tags = new System.Text.StringBuilder();
         foreach (int t in htags) tags.Append(HEX(HashValue(rt, rt.Obj_(t)))).Append(',');
         o.Append("tags=").Append(tags).Append(' ');
+        // Every rope takes rope-hash, and the finaliser: see the rust arm.
         long ar = rt.Obj_(Obj.TyRope);
-        rt.asc[(int) ar] = 1;
         long nr = rt.Obj_(Obj.TyRope);
-        o.Append("ropeascii=").Append(HashValue(rt, ar).ToString("x"))
-         .Append(" ropewide=").Append(HashValue(rt, nr).ToString("x")).Append(' ');
+        o.Append("ropea=").Append(HashValue(rt, ar).ToString("x"))
+         .Append(" ropeb=").Append(HashValue(rt, nr).ToString("x")).Append(' ');
+        long fr = rt.Obj_(Obj.TyRope);
+        rt.bigh[(int) fr] = 1;
+        o.Append("ropefold=").Append(HashValue(rt, fr).ToString("x")).Append(' ');
 
         int[] stags = { Obj.TyVec, Obj.TyMapentry, Obj.TyCons, Obj.TyEmptyList, Obj.TyLazyseq,
                         Obj.TyVecseq, Obj.TyStrseq, Obj.TyRange };
@@ -673,7 +704,7 @@ namespace Flint.Rt {
         System.Console.WriteLine(o.ToString());
     }
 --expect
-v=daa612ca ticks=3 again=daa612ca ticks=0 cached=1 c=daa612ca ticks=3 cagain=daa612ca ticks=3 nocache=0 e=1 ticks=0 starve=0 ticks=3 uncached=0 nil=1 hi=ffffffff d=1/7 n=0 t=4cf f=4d5 fx=7 is=5141 ik=5242 other=0 tags=5169,546a,556b,556c,526d,536e,6f,5670,5671,5772,51ed51e1, ropeascii=5474 ropewide=5475 seqs=3c6ef772,daa612ca,daa612ca,daa612ca,daa612ca,daa612ca,daa612ca,daa612ca, op=63/0 tb=1040/1cc0 rf=5687 tg=61
+v=daa612ca ticks=3 again=daa612ca ticks=0 cached=1 c=daa612ca ticks=3 cagain=daa612ca ticks=3 nocache=0 e=1 ticks=0 starve=0 ticks=3 uncached=0 nil=1 hi=ffffffff d=1/7 n=0 t=4cf f=4d5 fx=7 is=5141 ik=5242 other=0 tags=5169,546a,556b,556c,526d,536e,6f,5670,5671,5772,51ed51e1, ropea=5474 ropeb=5475 ropefold=54005476 seqs=3c6ef772,daa612ca,daa612ca,daa612ca,daa612ca,daa612ca,daa612ca,daa612ca, op=63/0 tb=1040/1cc0 rf=5688 tg=61
 --expect-why
 DERIVED BY TRANSCRIBING `valhash.kin` INTO PYTHON and running it against this
 file's fixture -- a FOURTH implementation, in a language none of the three
@@ -743,8 +774,12 @@ EVERY ARM OF `hash-value`, each stub naming itself in its high bits:
   tb=1040/1cc0 a table is COLUMNAR: rows 100,101 fold to 4162, xor 2 = 4160;
                rows 200,201 fold to 7362, xor 2 = 7360. Two tables differing
                only in content must differ here.
-  rf=5687      a REF hashes AS THE MAP IT IS -- 0x56xx, the arraymap stub --
-               or a map keyed by a row would not find it.
+  rf=5688      a REF hashes AS THE MAP IT IS -- 0x56xx, the arraymap stub --
+               or a map keyed by a row would not find it. The low byte is the
+               REF's ADDRESS: it was 0x87 and became 0x88 when `ropefold` added
+               one allocation above it. Every 0x..xx field here carries an
+               address in its low byte, so inserting a row shifts the ones after
+               it -- derivable, but worth knowing before reading a diff.
   tg=61        a tagged literal hashes BOTH HALVES through the final mix:
                hash-int(3*31 + 4) = 97. That mix is the one both ports
                dropped, which made a tagged literal hash differently on wasm
@@ -752,12 +787,27 @@ EVERY ARM OF `hash-value`, each stub naming itself in its high bits:
                so what the field really pins is 3*31+4 and not 4*31+3 or
                3+4.
 
-A STALE CLAIM IN THIS DRIVER, recorded rather than acted on. The `--rust`
-section says of the last two rope fields: "An ASCII rope must take `rope-hash`
-(0x54xx) and a non-ASCII one `java-string-hash` (0x77xx)." BOTH ARE 0x54xx.
-`valhash.kin` routes `TY_ROPE` to `rope-hash` unconditionally -- there is no
-`s-ascii` test in the function, and `s-ascii` is imported at line 40 and never
-called. The comment describes the two-walk arrangement that the source's own
-"ONE WALK FOR EVERY TIER" block says was REMOVED, and the driver was not
-updated with it. `ropeascii` and `ropewide` differ here only by address
-(0x5474 vs 0x5475), so as written the pair tests nothing about routing.
+  ropea=5474 ropeb=5475
+               TWO ROPES, BOTH THROUGH `rope-hash`, which is the whole claim.
+               These were `ropeascii` and `ropewide`, labelled "an ASCII rope
+               must take `rope-hash` (0x54xx) and a non-ASCII one
+               `java-string-hash` (0x77xx)" -- a two-walk arrangement the
+               source's own "ONE WALK FOR EVERY TIER" block says was REMOVED.
+               Both printed 0x54xx, and the pair tested nothing about routing:
+               `valhash.kin` routes TY_ROPE unconditionally, and `s-ascii` was
+               imported and never called. THE IMPORT IS GONE as of 2026-09-26,
+               so routing cannot come back without the ns changing, and the
+               names no longer claim a distinction the code does not make. The
+               two differ only by address; 0x77xx in either is still the signal.
+  ropefold=54005476
+               THE FINALISER ON THE ROPE ARM, which no field could see. The
+               source is `(hash-int (to-i32 (to-i64 (rope-hash rt v))))` and
+               `hash-int` is `h ^ (h >> 16)` -- the IDENTITY for anything under
+               0x10000, which is every other stub in this probe. So dropping
+               `hash-int` here changed nothing observable, on the one arm whose
+               own comment says it must not be dropped: without it a rope and an
+               equal flat string hash differently, and two values that are `=`
+               must hash alike or a map keyed by one is not found by the other.
+               `rope-hash` now answers 0x54000000 | addr for a rope the fixture
+               marks in `bigh`, so the fold is visible: 0x54000076 ^ 0x00005400
+               = 0x54005476. Without the finaliser the field reads 54000076.

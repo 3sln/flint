@@ -7120,9 +7120,16 @@ survives the next edit.
 
 What it did find is **five drivers whose comments describe behaviour the probe
 does not exercise**, each recorded in the `--expect-why` beside it rather than
-silently fixed. **Four of the five -- `mapread`, `valcmp`, `casechange` and
-`byteconcat` -- were fixed on 2026-09-26 and their entries say what that took;
-`valhash` stands.**
+silently fixed. **ALL FIVE were fixed on 2026-09-26 and each entry says what
+that took.** Recording them turned out to be worth more than it looked, in
+three different ways. `mapread` was recorded as one unreachable branch and had
+three. `valcmp`'s entry closed with a reason not to bother -- the shim "cannot
+express" a prefix -- which was a claim about the SHIM, and changing it took a
+dozen lines. And `valhash` was not a coverage gap at all, but a stale comment
+whose reading turned up a finaliser that no field could see. **The check each
+one had to clear was the same: a fixture change that cannot be shown to catch
+something it did not catch before has not been shown to close anything.** Every
+entry below names the mutation and records that the OLD fixture passes it.
 Recording them turned out to be worth more than it looked, in two different
 ways. The record said `mapread` had one unreachable branch and it had three,
 which only became visible when somebody went to close the one. And `valcmp`'s
@@ -7156,6 +7163,32 @@ it.
   are 0x54xx. `valhash.kin` routes `TY_ROPE` unconditionally; `s-ascii` is
   imported and never called. The comment describes the two-walk arrangement the
   source's own "ONE WALK FOR EVERY TIER" block says was removed.
+  **FIXED 2026-09-26, and this one was NOT a coverage gap in the fixture.** It
+  was a stale comment, a dead import, and -- found while reading it -- an
+  assertion nothing could make. Three separate things:
+  **The dead import is gone.** `[flint.rt.ropemeas :refer [s-ascii]]` left
+  `valhash.kin`, which dropped exactly one `use`/`import static`/`using static`
+  line from each of the three generated modules and nothing else. Routing
+  cannot come back now without the ns changing. `s-ascii` itself stays: `ropecp`,
+  `ropefind` and `ropemeas` call it.
+  **The fields are renamed to what they assert.** `ropeascii`/`ropewide` became
+  `ropea`/`ropeb`: two ropes, both through `rope-hash`, differing only by
+  address. That is a real if narrow claim -- 0x77xx in either is still the
+  signal -- and the old names claimed a distinction the code does not make.
+  **AND THE FINALISER ON THAT ARM WAS ASSERTED BY NOTHING.** The source is
+  `(hash-int (to-i32 (to-i64 (rope-hash rt v))))`, `hash-int` is
+  `h ^ (h >> 16)`, and every stub in the probe answered under 0x10000 -- where
+  that is the IDENTITY. So dropping `hash-int` changed no field, on the one arm
+  whose own comment says it must not be dropped: without it a rope and an equal
+  flat string hash differently, and two `=` values must hash alike or a map
+  keyed by one is not found by the other. `rope-hash` now answers
+  `0x54000000 | addr` for a rope the fixture marks, and `ropefold=54005476`
+  shows the fold.
+  **Proved both ways:** dropping `hash-int` from the rope arm turns `ropefold`
+  into `54000076`; WITH THE OLD FIXTURE THE SAME DELETION PASSES.
+  A field whose stub answers only small numbers cannot see a finaliser -- worth
+  carrying forward, because it is invisible in exactly the way the other four
+  entries were.
 * `casechange` — headed as upcasing sharp s "by a FULL mapping to two code
   points". The fixture's `full_index` returns -1 unconditionally, so the entire
   `case-full-at` branch is never entered. **FIXED 2026-09-26.** Two real rows

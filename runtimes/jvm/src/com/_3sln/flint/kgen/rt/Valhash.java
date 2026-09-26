@@ -15,7 +15,6 @@ import static com._3sln.flint.kgen.rt.Hash.*;
 import static com._3sln.flint.kgen.rt.Hashtext.*;
 import static com._3sln.flint.kgen.rt.Names.*;
 import static com._3sln.flint.kgen.rt.Ropeflat.*;
-import static com._3sln.flint.kgen.rt.Ropemeas.*;
 import static com._3sln.flint.kgen.rt.Seqwalk.*;
 import static com._3sln.flint.kgen.rt.Tablemeta.*;
 import static com._3sln.flint.kgen.rt.Tableref.*;

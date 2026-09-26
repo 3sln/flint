@@ -21,7 +21,6 @@ use crate::kgen::rt::hash::*;
 use crate::kgen::rt::hashtext::*;
 use crate::kgen::rt::names::*;
 use crate::kgen::rt::ropeflat::*;
-use crate::kgen::rt::ropemeas::*;
 use crate::kgen::rt::seqwalk::*;
 use crate::kgen::rt::tablemeta::*;
 use crate::kgen::rt::tableref::*;
