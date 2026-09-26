@@ -7120,9 +7120,9 @@ survives the next edit.
 
 What it did find is **five drivers whose comments describe behaviour the probe
 does not exercise**, each recorded in the `--expect-why` beside it rather than
-silently fixed. **Three of the five -- `mapread`, `valcmp` and `casechange` --
-were fixed on 2026-09-26 and their entries say what that took; `valhash` and
-`byteconcat` stand.**
+silently fixed. **Four of the five -- `mapread`, `valcmp`, `casechange` and
+`byteconcat` -- were fixed on 2026-09-26 and their entries say what that took;
+`valhash` stands.**
 Recording them turned out to be worth more than it looked, in two different
 ways. The record said `mapread` had one unreachable branch and it had three,
 which only became visible when somebody went to close the one. And `valcmp`'s
@@ -7179,6 +7179,28 @@ it.
 * `byteconcat` — the `t3` comment promises a merge into the rightmost leaf with
   the depth unchanged. With the fixture's `FLAT_MAX` of 8 no piece can both
   pass the gate and fit, so tier 3 is unreachable from this fixture.
+  **FIXED 2026-09-26, and the first fix for it was a field that asserted
+  nothing.** A SECOND tree is built by the same eight joins with a 3-byte last
+  piece, which tier 4 absorbs as the ninth child: the result is full at every
+  node of its right spine AND has a 3-byte rightmost leaf, so a 3-byte `b`
+  passes both `<= FLAT_MAX/2` and `olen a + b-count b <= FLAT_MAX`. New fields
+  `full=51,2` and `merge=54,1`. The original `t3=57,0` row is kept exactly as
+  derived, because the decline is worth asserting too -- it says tier 5 adds one
+  level and no more.
+  **THE NEAR MISS IS THE REASON THIS ENTRY IS LONG.** The obvious fix was one
+  line: the tree tier 5 makes has the 3-byte `l3` as its rightmost leaf, so
+  joining another `l3` to it reaches tier 3 and prints `60,1`. That verified
+  green on all three targets and asserted NOTHING -- with `b-merge-right`'s
+  leaf guard mutated to always decline it still printed `60,1` and still
+  passed, because the wrapper node tier 5 made has room, so tier 4 absorbs into
+  it and also leaves the depth unchanged. **It was caught by running the
+  mutation, not by reasoning about the shape**, and it is the same failure as
+  the five entries here: a row that reads identically whether the thing under
+  test works. The tree has to be FULL so a broken tier 3 falls through to tier 5
+  and the depth moves. The `decl=11` row cannot see it either -- asking for a
+  3 + 8 merge is a refusal, and a refusal row does not test the acceptance.
+  **Proved both ways:** breaking either gate turns `merge` into `54,0`, and the
+  fixture before this row passes with either broken.
 * `mapread` — a comment computes a key's hash as `0x900` where the key is
   decimal `900`, and the consequence is that `node_find`'s success value is
   unreachable: the compound hash-map HIT is untested and only the miss runs.

@@ -130,6 +130,34 @@ fn main() {
     let d0 = rt.b_depth(acc);
     let m = rt.b_concat(acc, l3);
     o.push_str(&format!("t3={},{} ", rt.b_count(m), (rt.b_depth(m) == d0) as u32));
+    // A SECOND TREE, BUILT TO REACH TIER 3. The tree above cannot: every leaf
+    // in it is 6 bytes and `b-merge-right`'s guard is `olen a + b-count b <=
+    // FLAT_MAX`, so no `b` small enough to pass tier 3's own `<= FLAT_MAX/2`
+    // gate also fits beside a 6-byte leaf. This one takes the SAME eight joins
+    // with a 3-BYTE last piece, which tier 4 absorbs as the ninth child -- so
+    // the tree is FULL at every node of its right spine and its rightmost leaf
+    // has room.
+    //
+    // FULL MATTERS AS MUCH AS SMALL. With room anywhere on the right spine,
+    // tier 4 would answer with the depth unchanged too, and the field could not
+    // tell a working tier 3 from a broken one falling through to tier 4.
+    let mut acc2 = leaf(&mut rt, 6);
+    for i in 0..8 {
+        let piece = leaf(&mut rt, if i == 7 { 3 } else { 6 });
+        let base = rt.mark();
+        rt.push(acc2); rt.push(piece);
+        let out = rt.b_concat(rt.r(base), rt.r(base + 1));
+        rt.pop_to(base);
+        acc2 = out;
+    }
+    let df = rt.b_depth(acc2);
+    o.push_str(&format!("full={},{} ", rt.b_count(acc2), df));
+    // TIER 3, REACHED: the rightmost leaf is 3 bytes and `b` is 3, so
+    // 3 + 3 <= FLAT_MAX and the merge happens IN the leaf. The count grows and
+    // the DEPTH DOES NOT, which is what `t3=`'s label promises and what no
+    // field showed until 2026-09-26.
+    let f = rt.b_concat(acc2, l3);
+    o.push_str(&format!("merge={},{} ", rt.b_count(f), (rt.b_depth(f) == df) as u32));
     // TIER 4/5: a big `b` cannot merge. Depth grows by at most one.
     let big = leaf(&mut rt, 8);
     let g = rt.b_concat(acc, big);
@@ -251,6 +279,21 @@ fn main() {
         long m = bConcat(rt, acc, l3);
         o.append("t3=").append(bCount(rt, m)).append(',')
          .append(bDepth(rt, m) == d0 ? 1 : 0).append(' ');
+        // The full tree with a small rightmost leaf: see the rust arm.
+        long acc2 = Val.heap(rt.alloc(TY_BYTES, 6));
+        for (int i = 0; i < 8; i++) {
+            long piece = Val.heap(rt.alloc(TY_BYTES, i == 7 ? 3 : 6));
+            int b2 = rt.mark();
+            rt.push(acc2); rt.push(piece);
+            long out = bConcat(rt, rt.r(b2), rt.r(b2 + 1));
+            rt.popTo(b2);
+            acc2 = out;
+        }
+        int df = bDepth(rt, acc2);
+        o.append("full=").append(bCount(rt, acc2)).append(',').append(df).append(' ');
+        long f = bConcat(rt, acc2, l3);
+        o.append("merge=").append(bCount(rt, f)).append(',')
+         .append(bDepth(rt, f) == df ? 1 : 0).append(' ');
         long big = Val.heap(rt.alloc(TY_BYTES, 8));
         long g = bConcat(rt, acc, big);
         o.append("t45=").append(bCount(rt, g)).append(',')
@@ -372,6 +415,21 @@ namespace Flint.Rt {
         long m = BConcat(rt, acc, l3);
         o.Append("t3=").Append(BCount(rt, m)).Append(',')
          .Append(BDepth(rt, m) == d0 ? 1 : 0).Append(' ');
+        // The full tree with a small rightmost leaf: see the rust arm.
+        long acc2 = Val.Heap(rt.Alloc(Obj.TyBytes, 6));
+        for (int i = 0; i < 8; i++) {
+            long piece = Val.Heap(rt.Alloc(Obj.TyBytes, i == 7 ? 3 : 6));
+            int b2 = rt.Mark();
+            rt.Push(acc2); rt.Push(piece);
+            long outv = BConcat(rt, rt.R(b2), rt.R(b2 + 1));
+            rt.PopTo(b2);
+            acc2 = outv;
+        }
+        int df = BDepth(rt, acc2);
+        o.Append("full=").Append(BCount(rt, acc2)).Append(',').Append(df).Append(' ');
+        long f = BConcat(rt, acc2, l3);
+        o.Append("merge=").Append(BCount(rt, f)).Append(',')
+         .Append(BDepth(rt, f) == df ? 1 : 0).Append(' ');
         long big = Val.Heap(rt.Alloc(Obj.TyBytes, 8));
         long g = BConcat(rt, acc, big);
         o.Append("t45=").Append(BCount(rt, g)).Append(',')
@@ -381,7 +439,7 @@ namespace Flint.Rt {
         System.Console.WriteLine(o.ToString());
     }
 --expect
-t1=11 t2=44,6 built=45,54,2 t3=57,0 t45=62,1 decl=11
+t1=11 t2=44,6 built=45,54,2 t3=57,0 full=51,2 merge=54,1 t45=62,1 decl=11
 --expect-why
 DERIVED BY HAND by walking `b-concat`'s five tiers over this fixture's
 constants -- FLAT_MAX = 8 and FANOUT = 3, which the `-head` sections set small
@@ -433,12 +491,51 @@ source it must print 0, and the code is right and the comment is wrong:
   giving count 54 + 3 = 57 at depth 3.
 
 So 57 (the count is right either way) and 0 (the depth GREW, by exactly the one
-level tier 5 adds). Tier 3 is unreachable from this fixture: every leaf it
-builds is 6 bytes and FLAT_MAX is 8, so no `b` that passes the `<= FLAT_MAX/2`
-gate can also fit beside a 6-byte leaf. The probe's label `t3=` names the tier
-it ATTEMPTS, not one it reaches. Left as derived rather than relabelled,
-because only the `.drivers` file may be edited here -- but the comment above
-the probe is misleading and should be fixed.
+level tier 5 adds). Tier 3 is unreachable FROM THIS TREE: every leaf it builds
+is 6 bytes and FLAT_MAX is 8, so no `b` that passes the `<= FLAT_MAX/2` gate
+can also fit beside a 6-byte leaf. The label `t3=` names the tier this call
+ATTEMPTS, not one it reaches, and the row is kept exactly as derived because
+the decline is worth asserting too: it says tier 5 adds ONE level and no more.
+
+`full=51,2` and `merge=54,1` -- A SECOND TREE, BUILT SO TIER 3 CAN BE REACHED,
+added 2026-09-26. Same eight joins, with a 3-BYTE last piece:
+
+  1..7  as above                        -> [[L,L,L],[L,L,L],[L,L]]   48, d2
+  8.    b is 3, so tier 3 is tried: the rightmost leaf is 6 and
+        6 + 3 > 8, so it declines. Tier 4 descends to the last child
+        [L,L], which has n=2 < FANOUT, and adds the 3-byte piece
+                                              -> [[L,L,L],[L,L,L],[L,L,l3]]
+                                                                     51, d2
+
+so `full=51,2`. That tree is FULL at every node of its right spine -- top n=3,
+last child n=3 -- AND its rightmost leaf is 3 bytes. Then `b-concat acc2 l3`:
+54 > 8 so not tier 2; `b-count l3` is 3 <= 4 so tier 3 is tried; the rightmost
+leaf is 3 and 3 + 3 <= 8, so `b-merge-right` MERGES IN THE LEAF. Count 51 + 3 =
+54 and the depth is still 2, which is what `t3=`'s label has always promised and
+what no field showed before.
+
+FULL MATTERS AS MUCH AS SMALL, AND THAT WAS MEASURED RATHER THAN REASONED.
+The first attempt at this row was one line: `m`'s rightmost leaf is the 3-byte
+`l3` tier 5 had just wrapped, so joining another `l3` to `m` reaches tier 3 and
+prints `60,1`. It verified green on all three targets AND IT ASSERTED NOTHING --
+with `b-merge-right`'s leaf guard mutated to always decline, that fixture still
+printed `60,1` and still passed, because the wrapper node tier 5 made has room,
+so tier 4 absorbs into it and ALSO leaves the depth unchanged. A field that
+reads the same whether the tier under test works is the failure this whole
+section is about; it was caught by running the mutation, not by thinking about
+it. The tree has to be full so that a broken tier 3 falls through to tier 5 and
+the depth moves.
+
+PROVED BOTH WAYS. With this fixture, breaking either gate turns `merge` into
+`54,0`:
+
+  (<= (+ (olen rt a) (b-count rt b)) FLAT_MAX)  -> always false   54,0
+  (<= (b-count rt b) (quot FLAT_MAX 2))         -> always false   54,0
+  the fixture before this row                   -> EITHER PASSES
+
+`decl=11` cannot see either one: it asks `b-merge-right` to merge 3 + 8 = 11
+bytes, which a guard that always declines also refuses. A refusal row does not
+test the acceptance.
 
 `t45=62,1`. `b-count big` is 8 > 4, so tier 3 is not even tried; the tree is
 still full so tier 4 declines; tier 5 wraps `big` to depth 2 and pairs it,
