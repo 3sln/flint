@@ -102,6 +102,30 @@ def readme_rows():
     return set(re.findall(r'^\|\s*`([a-z][\w.]*)`', rd[rd.index(a):rd.index(b)], re.M))
 
 
+PUBLIC_EV = re.compile(
+    r'\*\*Is this public\?\*\* Required by (\d+) compiled test program(?:\(s\)|s)?, '
+    r'(\d+) other `lib` namespace(?:\(s\)|s)?, named (\d+) times?(?:\(s\))? in README\.')
+
+
+def lib_requirers(ns):
+    """`lib/` namespaces that `:require` `ns`, not counting its own file.
+
+    The delimiter after the name is what keeps `flint.deps` from counting
+    `[flint.deps.resolve ...]`: a prefix is not a requirer.
+    """
+    n = 0
+    for base, _, files in os.walk(os.path.join(ROOT, 'lib')):
+        for f in files:
+            if not f.endswith('.cljc'):
+                continue
+            txt = read(os.path.relpath(os.path.join(base, f), ROOT))
+            if re.match(r'\(ns\s+' + re.escape(ns) + r'[\s)]', txt):
+                continue
+            if re.search(r'\[' + re.escape(ns) + r'[\s:\]]', txt):
+                n += 1
+    return n
+
+
 def sdks():
     d = os.path.join(ROOT, 'sdks')
     return {f'sdks/{n}' for n in os.listdir(d) if os.path.isdir(os.path.join(d, n))}
@@ -226,6 +250,38 @@ def main():
             elif int(m.group(1)) != n:
                 errs.append(f'`{ns}` is reviewed as {m.group(1)} public vars and '
                             f'doc/manifest.edn counts {n}')
+
+    # THE "Is this public?" EVIDENCE, for the two numbers that have a definition.
+    # A wrong one is worse than a missing one: `flint.deps` read "1 other" and
+    # concluded "required only by other `flint.deps.*` namespaces", when
+    # `lib/flint/cli.cljc` requires it too -- so the row answered its own
+    # question the wrong way. The TEST-PROGRAM count is left alone: nothing in
+    # the tree defines what a "compiled test program" is countably, so checking
+    # it would only pin whatever this script decided it meant.
+    readme = read('README.md')
+    found = 0
+    for p in re.split(r'^## ', doc, flags=re.M)[1:]:
+        ns = p.split('\n', 1)[0].strip()
+        m = PUBLIC_EV.search(p)
+        if not m:
+            continue
+        found += 1
+        _, said_lib, said_rm = (int(g) for g in m.groups())
+        real_lib = lib_requirers(ns)
+        if said_lib != real_lib:
+            errs.append(f'`{ns}` is recorded as required by {said_lib} other lib '
+                        f'namespace(s) and {real_lib} require it')
+        real_rm = len(re.findall(re.escape(ns), readme))
+        if said_rm != real_rm:
+            errs.append(f'`{ns}` is recorded as named {said_rm} time(s) in README '
+                        f'and is named {real_rm}')
+    # COVERAGE, not just findings: every evidence line must have been READ. A
+    # third wording would otherwise be skipped in silence -- there are already
+    # two, `program(s)` and `program`.
+    present = doc.count('**Is this public?** Required by')
+    if found != present:
+        errs.append(f'{present} "Is this public?" lines are in doc/api-review.md and '
+                    f'{found} were parsed -- one is worded in a way this check does not read')
 
     if errs:
         for e in errs:

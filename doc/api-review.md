@@ -145,7 +145,7 @@ These are ours to design. Nothing constrains the names but us.
 
 29 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. `deps.edn`, the parts of it flint can honour (`DECISIONS.md#cli`).
 
-**Is this public?** Required by 0 compiled test program(s), 1 other `lib` namespace(s), named 0 time(s) in README. Required only by other `flint.deps.*` namespaces. Tooling for reading `deps.edn`.
+**Is this public?** Required by 0 compiled test program(s), 2 other `lib` namespace(s), named 0 time(s) in README. **This row read "1 other" and "Required only by other `flint.deps.*` namespaces" until 2026-09-26, and both were wrong.** The two requirers are `lib/flint/deps/resolve.cljc` — which is the `flint.deps.*` family — and `lib/flint/cli.cljc`, which is not: the project surface `bin/flint` is thin over depends on this namespace. "Used only within its own family" reads as internal and was the conclusion a reviewer would have acted on; "the CLI's own surface requires it" is a different answer to the same question. Tooling for reading `deps.edn`.
 
 **Change requests:** _none recorded_
 
