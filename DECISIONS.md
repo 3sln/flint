@@ -12596,6 +12596,32 @@ channel nobody writes reports:
                             can wake them / thread 0 waiting on port 1
     clr                     identical to the jvm
 
+**RE-MEASURED 2026-09-25, and the table above was comparing the wrong things.**
+Two of those four rows are what a USER sees and two are what a TEST HARNESS
+prints, and they are not the same question:
+
+    USER-FACING
+      native, `flint run`     the host pump made no progress
+      wasm, the node host     flint: the host pump made no progress
+    HARNESSES
+      jvm RtImage             deadlock: 1 green thread(s) are parked ..
+      clr conform             identical to RtImage
+      jvm RtSteps/HostCall    the host pump made no progress: 1000 drives
+                              without an answer on the call port ..
+
+So the user-facing pair agree apart from a `flint: ` prefix, and the spread is
+among harnesses. THE FIFTH LINE IS NEW AND IS MINE: `HostCall` used to print
+NOTHING for a wedged program -- it returned 2, "resting", and `RtSteps` reported a
+step count and exited 0. Adding a message where there was silence is worth a fifth
+variant; it deliberately opens with native's phrase so the family reads as one.
+
+**What this leaves open is smaller than the table suggested.** The runtime's own
+`report_deadlock` is the most informative thing anyone produces -- it names the
+thread and the port -- and no USER-FACING path ever shows it, because the host
+pump's guard fires first. Whether a wedged sandbox should surface that, or keep
+answering 2 and let the host decide, is the throw-versus-status question, and it is
+the maintainer's.
+
 **AND THE FIRST READING OF THIS WAS WRONG, which is worth keeping because the
 wrong reading is the obvious one.** It looked like the host pump's guard was
 MASKING a diagnostic the runtime had already produced. It is not. The runtime is
