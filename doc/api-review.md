@@ -561,7 +561,29 @@ Aliases (`-h`, `--help`, `-v`, `--version`) fold into the command they spell.
 
 `flint compile` — served by the native CLI and the npm CLI.
 
-**Change requests:** _none recorded_
+Targets, as of 2026-09-25: `:to :wasm` (the default), `:to :clr`, `:to :jvm`,
+`:to :llvm`. `bin/check-api-review` compares which COMMANDS exist and not what they
+accept, so a target added to this option is invisible to it — which is why they are
+written down here.
+
+**Change requests:**
+
+1. **`:to :jvm` takes `:out` as a CLASSPATH ROOT; every other target takes a file.**
+   `flint compile … :to :jvm :out build/` writes `build/flint/Artifact.class`, and a
+   path ending in anything else `.class` is refused. The reason is real rather than
+   an oversight: the class declares itself `flint.Artifact`, both
+   `com.flint.Main` and `com.flint.FourOps` reach it by `Class.forName`, and a JVM
+   will not load a class from a path that disagrees with its name — so honouring
+   `:out prog.class` would write 39 KB that nothing can load.
+
+   It is still one option meaning two things depending on the target, which is a
+   BOUNDARY question rather than a bug, and so is the reviewer's. The alternatives
+   are a separate option for the root, or emitting the class under whatever name the
+   output path implies and giving up the `Class.forName` contract.
+
+2. **`:to :llvm` is the native CLI's only.** `bin/flint` refuses it and names the
+   other door; the other three work from both. Worth confirming that asymmetry is
+   intended rather than a gap.
 
 ## cli:deps
 
