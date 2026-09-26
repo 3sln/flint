@@ -1,0 +1,64 @@
+#!/usr/bin/env node
+// THE ESM SDK RUNS ON ANY ENGINE, and nothing was checking it.
+//
+// `doc/api-review.md`'s `sdks/esm` section says "No `node:` import and no
+// filesystem, which is what lets it run on any engine". That was true when
+// written and gated by NOTHING: a `node:fs` import would keep working on node,
+// pass every suite in the tree, and break the SDK on a browser, a Worker,
+// JavaScriptCore, bun's web target, or anything else -- which is the whole
+// audience the package exists for.
+//
+// It is the failure shape AGENTS.md section 5 is about, one step over from access:
+// the broken version and the working one produce the same output HERE, and the
+// difference only shows somewhere nobody is testing.
+//
+// SO THE RULE IS CHECKED WHERE IT IS CHEAPEST. Milliseconds, no build, three
+// source files and one bundle. `sdks/cli` is deliberately NOT covered: it is a
+// node CLI, it is supposed to read the filesystem, and `sdks/esm` is the portable
+// half. That split is the reason the two packages exist separately at all.
+//
+// The whole corpus was surveyed before the rule was set strict: at `44402457`
+// there were ZERO violations, so no exception carries itself and any hit is new.
+import { readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const esm = join(root, 'sdks/esm');
+
+// A HOST MODULE IS ANY OF THESE, spelled either way. `node:fs` is the modern
+// form and bare `fs` the old one; both resolve only on node.
+const BARE = ['fs', 'path', 'url', 'os', 'child_process', 'worker_threads',
+              'crypto', 'http', 'https', 'net', 'stream', 'zlib', 'process'];
+
+const files = [
+  ...readdirSync(join(esm, 'src')).filter(f => f.endsWith('.js')).map(f => join('src', f)),
+  ...readdirSync(join(esm, 'dist')).filter(f => f.endsWith('.js')).map(f => join('dist', f)),
+];
+
+let failures = 0;
+for (const rel of files) {
+  const text = readFileSync(join(esm, rel), 'utf8');
+  const lines = text.split('\n');
+  lines.forEach((line, i) => {
+    const where = `sdks/esm/${rel}:${i + 1}`;
+    if (/(?:from|import|require)\s*\(?\s*['"]node:/.test(line)) {
+      console.error(`  FAIL ${where} imports a \`node:\` module -- the ESM SDK must run off node`);
+      failures++;
+      return;
+    }
+    // A BARE SPECIFIER, and only in an import position: the word `path` appears
+    // in ordinary code all over, so matching it anywhere would report prose.
+    const m = line.match(/(?:from|import|require)\s*\(?\s*['"]([^'"]+)['"]/);
+    if (m && BARE.includes(m[1])) {
+      console.error(`  FAIL ${where} imports \`${m[1]}\` -- a node builtin, so the SDK stops being portable`);
+      failures++;
+    }
+  });
+}
+
+if (failures) {
+  console.error(`check-esm-portable: ${failures} failure(s)`);
+  process.exit(1);
+}
+console.log(`  ok   check-esm-portable: ${files.length} files, no node builtin reachable from the ESM SDK`);

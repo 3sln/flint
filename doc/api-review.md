@@ -517,7 +517,10 @@ against, so a change here is a change to somebody else's build.
 
 **Reviewed:** ☐ not signed off
 
-The C embedding API: `flint.h`, and the `.c`/`.cpp` selftests that pin it. What a C or C++ host sees.
+The C embedding API: `include/flint.h`, and `selftest.c` / `selftest.cpp`, which
+pin it from both languages. What a C or C++ host sees. All three files confirmed
+present 2026-09-26; the header's path is `sdks/c/include/flint.h` rather than the
+package root, which is what a consumer's `-I` has to name.
 
 **Change requests:** _none recorded_
 
@@ -525,7 +528,14 @@ The C embedding API: `flint.h`, and the `.c`/`.cpp` selftests that pin it. What 
 
 **Reviewed:** ☐ not signed off
 
-The Rust embedding API: `Compiler`, `Compile`, `Image`, `Sandbox`, `Pending`, `Driver`. The reference shape the other SDKs and `flint.ception` mirror.
+The Rust embedding API. The six named here — `Compiler`, `Compile`, `Image`,
+`Sandbox`, `Pending`, `Driver` — are the reference shape the other SDKs and
+`flint.ception` mirror, and all six exist (checked 2026-09-26 at `44402457`).
+**They are six of fifteen public items**, the rest being `Inline`, `ThreadPool`,
+`Core`, `Error`, `Optimize`, `Value`, `FlintTag`, `FlintCompileOpts` and
+`FlintDriver` — named here so a reviewer sees the whole surface rather than the
+shape. Whether the `Flint*`-prefixed three belong to this SDK or to `sdks/c`'s
+ABI is a boundary question and so the reviewer's.
 
 **Change requests:** _none recorded_
 
@@ -533,15 +543,53 @@ The Rust embedding API: `Compiler`, `Compile`, `Image`, `Sandbox`, `Pending`, `D
 
 **Reviewed:** ☐ not signed off
 
-The portable ESM SDK: `instantiate`, the guest driver and the wire codec. No `node:` import and no filesystem, which is what lets it run on any engine.
+The portable ESM SDK, published as `@3sln/flint`. `package.json` exports ONE
+entry, `./dist/flint.js`, so the surface is exactly what that bundle re-exports.
 
-**Change requests:** _none recorded_
+**ENUMERATED 2026-09-26 at `44402457`** from the bundle's own export statement,
+fourteen names:
+
+    Compiler  Driver  Image  Inline  Sandbox  ThreadPool
+    aotRuntimeSlots  artifacts  capabilities  codec  evaluate
+    loaderBuiltins  runtimeSlots  standardLibrary
+
+**`instantiate` IS NOT ONE OF THEM**, and this section named it first. It is
+exported from `src/guest.js`, which `package.json` does not expose, and used
+internally by `Image` and `Sandbox`. A consumer cannot reach it. `Val` is in the
+same position. So the headline described the SDK's internals rather than its
+surface — on the one kind of section where that matters most, since an SDK is
+somebody else's build.
+
+"No `node:` import and no filesystem" still holds, **and is now gated**:
+`bin/check-esm-portable`, in `bin/check`, refuses a `node:` specifier or a bare
+node builtin in `src/` or `dist/`. It was ungated until 2026-09-26, which made it
+the portability twin of an access check — a `node:fs` import would keep working
+here, pass every suite, and break the package on a browser, a Worker,
+JavaScriptCore or bun's web target. Both forms were induced to confirm the gate
+fires. `sdks/cli` is deliberately outside it: a node CLI is supposed to read the
+filesystem, and that split is why the two packages are separate.
+
+**Change requests:**
+
+1. **`instantiate` was documented as the SDK's headline and is not exported.**
+   Either expose it — the section claimed it for a reason, and a caller wanting
+   to instantiate a module by hand has no other route, which `src/flint.js:62`
+   itself anticipates ("for a caller that wants to splice or instantiate by
+   hand") — or settle that `Image`/`Sandbox` are the only intended doors. The
+   reviewer's call; what is not tenable is the current state, where the document
+   answers one way and `package.json` the other.
 
 ## sdks/cli
 
 **Reviewed:** ☐ not signed off
 
-The npm CLI package: the command surface, plus the artifacts it carries in `dist/`. Byte-identical output to the native CLI is asserted by its selftest.
+The npm CLI package: the command surface, plus the artifacts it carries in
+`dist/`. Byte-identical output to the native CLI is asserted by its selftest —
+**verified by running it, 2026-09-26 at `44402457`**: `node
+sdks/cli/selftest.mjs`, 80 s, exit 0, with five byte-identical rows (plain,
+`:optimize [perf]`, `:checks false`, `:optimize [perf] :checks true`, and a
+script). Its command surface is the seven `cli:` sections below, where `flint
+deps` is dispatched but not implemented here.
 
 **Change requests:** _none recorded_
 
