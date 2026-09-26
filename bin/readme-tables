@@ -79,11 +79,17 @@
 (def marker-end "<!-- END GENERATED COVERAGE -->")
 (def block (str marker-start "\n" (str out) marker-end))
 
+;; BOTH, ALWAYS. `doc/coverage.md` used to be written ONLY when README had no
+;; markers -- so the moment README grew them, nothing regenerated it and nothing
+;; gated it, while ROADMAP.md went on describing it as generated and cited it as
+;; a reference. It drifted: `clojure.string` read 22 vars and 1 flint-only
+;; against the manifest's 23 and 2. A file described as generated has to be
+;; generated, and `test/manifest.clj` now compares this one too.
+(spit (io/file root "doc/coverage.md") block)
 (if (and (.exists path) (str/includes? (slurp path) marker-start))
   (let [src (slurp path)
         before (subs src 0 (str/index-of src marker-start))
         after (subs src (+ (str/index-of src marker-end) (count marker-end)))]
     (spit path (str before block after))
-    (println "updated README.md coverage tables"))
-  (do (spit (io/file root "doc/coverage.md") block)
-      (println "README has no markers yet; wrote doc/coverage.md")))
+    (println "updated README.md coverage tables and doc/coverage.md"))
+  (println "README has no markers yet; wrote doc/coverage.md only"))

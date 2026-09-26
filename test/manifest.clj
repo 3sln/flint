@@ -26,9 +26,15 @@
 ;; The README's coverage tables are generated from the same manifest, so they
 ;; cannot drift either.
 (def readme-before (slurp "README.md"))
+;; `doc/coverage.md` IS GENERATED TOO, and was not compared -- which is how it
+;; came to be a stale snapshot nothing wrote and nothing checked while ROADMAP.md
+;; called it generated.
+(def coverage-before (slurp "doc/coverage.md"))
 (let [p (.start (ProcessBuilder. (into-array String ["./bin/readme-tables"])))]
   (slurp (.getInputStream p)) (slurp (.getErrorStream p)) (.waitFor p))
 (check "README coverage tables are up to date" (= readme-before (slurp "README.md"))
+       "run bin/readme-tables and commit the result")
+(check "doc/coverage.md is up to date" (= coverage-before (slurp "doc/coverage.md"))
        "run bin/readme-tables and commit the result")
 
 ;; --- every claimed var is really there --------------------------------------
