@@ -88,6 +88,15 @@ bb test/selfhost-targets.clj > /tmp/flint-check.out 2>&1 \
   || { cat /tmp/flint-check.out; fail "test/selfhost-targets.clj"; }
 grep -cE "^  ok" /tmp/flint-check.out | sed 's/^/  ok   test\/selfhost-targets.clj: /;s/$/ targets and lists/'
 
+# WHAT A USER SEES WHEN A PROGRAM WEDGES. 9.6 s, and it is in this tier for the
+# reason `check-four-ops` above is: the failure is two hosts reporting a hang
+# differently and both passing, which no suite looks for. It was asserted by
+# NOTHING until 2026-09-26 -- `DECISIONS.md#four-operations` records the gap in
+# its own words -- so the status numbers could have been renumbered with a green
+# gate. It skips itself without `target/release/flint`, and its node arm without
+# node.
+./bin/check-wedged || fail "bin/check-wedged"
+
 
 # `check-kin` is 74 s -- too slow for every change, and it has a PRECISE input
 # set, so it runs only when that input moved. This is the changed-files idea

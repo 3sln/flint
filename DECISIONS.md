@@ -12646,12 +12646,40 @@ the runtime.** Whether anything more is coming is a fact only the HOST holds, an
 host-side waiter registry stated exactly: the runtime cannot know, the host can,
 and a counter is what stands in for the answer until the host is asked.
 
-**Nothing tests any of this.** The message is written three times -- `conc.rs`,
-`Conc.java`, `Conc.cs` -- and grepping the tree for it finds no test, no
-conformance row, and no assertion of any `loop` status VALUE. `kin/threadjoin.kin`
-even quotes the expected output ("thread 0 waiting on thread 0") in a comment
-that nothing checks. So a change to the status numbers would have broken no
-test, which is not the same as being safe.
+**Nothing tested any of this until 2026-09-26.** The message is written three
+times -- `conc.rs`, `Conc.java`, `Conc.cs` -- and grepping the tree for it found
+no test, no conformance row, and no assertion of any `loop` status VALUE.
+`kin/threadjoin.kin` even quotes the expected output ("thread 0 waiting on thread
+0") in a comment that nothing checks. So a change to the status numbers would
+have broken no test, which is not the same as being safe.
+
+**THE USER-FACING PAIR IS NOW ASSERTED.** `bin/check-wedged`, in `bin/check`,
+compiles a program that parks on a channel nobody writes and runs it on both
+hosts a user reaches, requiring:
+
+    native, ./target/release/flint run      exit 1, stdout `the host pump made no progress`
+    wasm,   node sdks/cli/bin/flint.mjs     exit 1, stdout `flint: the host pump made no progress`
+
+It spells ONE literal and derives the wasm expectation by prepending `flint: `,
+because the claim is the RELATIONSHIP between the two and writing both out is how
+two strings drift into a passing check. Each arm carries a control that differs
+in exactly one thing -- a thread that writes the channel -- and answers 7, so a
+compile error or a renamed builtin cannot read as the wedge assertion working.
+Both failure modes were induced before the check was believed: a wrong literal
+fails naming what was actually said, and a control with its `send` removed fails
+the control row rather than passing. 9.6 s wall on an M-series mac, `time
+./bin/check-wedged`.
+
+**What it deliberately does NOT assert** is the jvm and clr messages, because
+those come from their test harnesses rather than from any path a user reaches --
+which is the correction made to the table at the top of this entry. Nor does it
+assert a `loop` status VALUE end to end; `kin/sched.drivers` pins `4 Wedged` in
+the generated scheduler across all three kin targets, and the host faces are
+checked against the contract by `bin/check-artifact-ops`, but no test drives a
+booted sandbox to a wedge and reads what `loop()` returns. **It is a
+CHARACTERISATION check and does not prejudge the throw-versus-status question
+above.** If the answer is "surface `report_deadlock`", this check fails and names
+the line to change, which is the point of having it.
 
 **One thing does NOT move out.** `runtime/src/conc.rs:1361`'s `report_deadlock`
 detects threads waiting on EACH OTHER rather than on ports, and no host-side

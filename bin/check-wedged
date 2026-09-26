@@ -1,0 +1,104 @@
+#!/bin/sh
+# WHAT A USER SEES WHEN A PROGRAM WEDGES, on both hosts that show them anything.
+#
+# A program that parks on a channel nobody writes is the one failure whose report
+# was written three times and asserted NOWHERE. `DECISIONS.md#four-operations`
+# says so in as many words -- "Nothing tests any of this. The message is written
+# three times ... and grepping the tree for it finds no test, no conformance row,
+# and no assertion of any `loop` status VALUE. So a change to the status numbers
+# would have broken no test, which is not the same as being safe."
+#
+# This is that assertion. It is a CHARACTERISATION check: it pins what the hosts
+# do today so that changing it is a decision somebody makes on purpose. The
+# throw-versus-status question recorded beside it is still open, and this script
+# does not prejudge it -- if the answer is "surface the runtime's own
+# report_deadlock", this check fails and names the line to update.
+#
+# ONE LITERAL, NOT TWO. The wasm expectation is DERIVED from native's by
+# prepending `flint: `, because the claim is that the two agree apart from that
+# prefix. Writing both out would let the two drift into a passing check: the
+# thing being asserted is the relationship, so the relationship is what the
+# script spells.
+#
+# NATIVE AND WASM ONLY, deliberately. The jvm and clr messages come from their
+# TEST HARNESSES, not from a path a user reaches -- the four-way table in
+# `DECISIONS.md#four-operations` was corrected on 2026-09-25 for exactly that
+# reason, having compared two user-facing rows against two harness rows as
+# though they answered one question. Adding those here would restate the
+# mistake.
+#
+# A CONTROL RUNS ON EACH ARM, differing in ONE thing: whether anything writes the
+# channel. Without it a compile error, a missing engine or a renamed builtin
+# reads as the wedge check working -- the failure mode AGENTS.md section 5 is
+# about, where the broken check and the working one print the same thing.
+#
+# 9.6 s wall on an M-series mac, 2026-09-26, `time ./bin/check-wedged`: four
+# compile-and-run cycles, two per arm. The controls are half of that and they
+# are not optional -- see above.
+set -e
+cd "$(dirname "$0")/.."
+fail() { echo "FAILED: $1"; exit 1; }
+
+# THE ONE LITERAL. Native's `cli/src/serve.rs` prints this; `sdks/esm/src/guest.js`
+# prints it behind a `flint: ` prefix.
+EXPECT='the host pump made no progress'
+
+if [ ! -x target/release/flint ]; then
+  echo "  --   check-wedged: no target/release/flint; skipping (cargo build --release -p flint-cli)"
+  exit 0
+fi
+
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+mkdir -p "$d/wedge" "$d/ctl"
+
+# MAIN PARKS AND NOBODY WRITES. No spawn: the wedge has to be terminal, and a
+# second thread would only add a way for the program to finish by accident.
+cat > "$d/wedge/wedge.cljc" <<'EOF'
+(ns wedge (:require [flint.port :as p]))
+(defn main [_]
+  (let [[a b] (p/channel 1 "nobody-writes")]
+    (str (p/receive b))))
+EOF
+
+# THE CONTROL, one difference: a thread writes the channel.
+cat > "$d/ctl/ctl.cljc" <<'EOF'
+(ns ctl (:require [flint.port :as p] [flint.thread :as t]))
+(defn main [_]
+  (let [[a b] (p/channel 1 "someone-writes")
+        w (t/spawn (fn [] (p/send a 7) :sent))]
+    (str (p/receive b))))
+EOF
+
+# `$?` AFTER A PIPELINE IS THE LAST COMMAND'S, so nothing here is piped: each run
+# writes a file and the status is read on its own line.
+arm() { # arm <label> <expected-text> <runner...>
+  label=$1; want=$2; shift 2
+  code=0
+  "$@" > "$d/out" 2>"$d/err" || code=$?
+  got=$(cat "$d/out")
+  [ "$code" != 0 ] || fail "$label wedged and exited 0 -- a wedge must not read as success"
+  [ "$got" = "$want" ] \
+    || fail "$label said $(printf '%s' "$got" | sed 's/^/>/') and not >$want"
+  echo "  ok   $label: exit $code, \"$got\""
+}
+
+ctlarm() { # ctlarm <label> <runner...>
+  label=$1; shift
+  code=0
+  "$@" > "$d/out" 2>"$d/err" || code=$?
+  got=$(cat "$d/out")
+  [ "$code" = 0 ] || fail "$label CONTROL exited $code -- the wedge row above proves nothing until this passes (said >$got, stderr >$(cat "$d/err"))"
+  [ "$got" = "7" ] || fail "$label CONTROL answered >$got and not >7"
+  echo "  ok   $label control: a channel that IS written answers 7"
+}
+
+ctlarm native ./target/release/flint run :path "$d/ctl" :fn ctl/main
+arm    native "$EXPECT" ./target/release/flint run :path "$d/wedge" :fn wedge/main
+
+if command -v node > /dev/null 2>&1; then
+  ctlarm wasm node sdks/cli/bin/flint.mjs run :path "$d/ctl" :fn ctl/main
+  arm    wasm "flint: $EXPECT" node sdks/cli/bin/flint.mjs run :path "$d/wedge" :fn wedge/main
+else
+  echo "  --   check-wedged: no node; the wasm arm is skipped"
+fi
