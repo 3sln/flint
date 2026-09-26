@@ -324,7 +324,8 @@ This is also what makes **local pods** work, which is the case that prompted
 the rule: a pod under development is a directory, not a registry entry, and
 `:pod/path` says both where it is and what to read.
 
-**`:local/root` and `:pod/path` are BUILT** (2026-09-11). A pod is an ordinary
+**`:local/root` and `:pod/path` are BUILT** (2026-09-11), covered by
+`test/cli.clj` and `test/sysns.clj`. A pod is an ordinary
 `:deps` entry, `:pod/path` names a directory holding `manifest.edn`, and the
 manifest selects a per-platform `:artifact/executable`. `:npm/path` and
 `:mvn/path` remain new coordinates. **`:pod/version` resolves from a registry
@@ -1235,7 +1236,9 @@ Recorded 2026-09-11. This is the piece that makes "the drivers are pods" work
 without depending on anybody else's infrastructure.
 
 **BUILT 2026-09-11**: `registry/pods.edn`, and the resolution that reads it
-([`pods-are-a-resolvable-dependency`](DECISIONS.md#pods-are-a-resolvable-dependency)).
+([`pods-are-a-resolvable-dependency`](DECISIONS.md#pods-are-a-resolvable-dependency)),
+covered by `test/cli.clj` and `test/sysns.clj` — the note under "A REGISTRY POD
+IS BUILT TOO" below lists the exact assertions and when they were last run.
 It ships EMPTY, and that is the honest state: nothing has moved out of the
 binary yet, so an entry here would name a pod that does not exist. What exists
 is the format and the reader.
@@ -1371,7 +1374,8 @@ makes the dependency drivers THEMSELVES pods.
 `Pod::boot(ns, program, args)` starts one with `BABASHKA_POD=true`, so a pod
 that is already on disk works. `flint deps add` accepts `pod` as a kind.
 
-**A LOCAL POD IS BUILT** (2026-09-11). `:pod/path` is an ordinary `:deps`
+**A LOCAL POD IS BUILT** (2026-09-11), covered by `test/sysns.clj`.
+`:pod/path` is an ordinary `:deps`
 coordinate naming a directory that holds `manifest.edn`; the manifest selects a
 per-platform `:artifact/executable`; the CLI reads it and boots the pod before
 compiling, since only a running pod can say what it holds. The old
@@ -1380,7 +1384,8 @@ executable directly and so with nowhere to express per-platform artifacts — is
 gone.
 
 **A REGISTRY POD IS BUILT TOO** (2026-09-11), see
-[`pods-are-a-resolvable-dependency`](DECISIONS.md#pods-are-a-resolvable-dependency).
+[`pods-are-a-resolvable-dependency`](DECISIONS.md#pods-are-a-resolvable-dependency),
+covered by `test/cli.clj` and `test/sysns.clj`.
 `:pod/version` resolves against the registries a project names, the artifact
 for this platform is chosen once in the plan, and what lands in the cache is an
 ordinary pod directory with an ordinary manifest — so a fetched pod and a local
@@ -1388,6 +1393,34 @@ one are the same thing to everything that boots one. `registry/pods.edn` is
 flint's own, for tooling pods, and ships empty because nothing has moved out of
 the binary yet. The community registry is not serving, so a `:pod/version`
 needs `:flint/pod-registries` naming a registry that is.
+
+**Named 2026-09-26, and both suites RUN at `d4926d86` rather than read.** A row
+that says BUILT and names no test is a claim nobody can recheck, so here is what
+carries the four pod rows above:
+
+    test/cli.clj   39 s, green -- a :local/root builds; a :local/root that is
+                   not there is named; a transitive :local/root resolves
+                   against the deps.edn that declared it; a project resolves
+                   pods against the community registry by default; flint's own
+                   tooling registry is NOT in that list; a project may name
+                   registries, flint's included; a :pod/version is fetched
+                   through the registry; what lands is an ordinary pod
+                   directory with a manifest; a pod is not a source root; a pod
+                   already on disk is not resolved again; a pod version the
+                   registry does not hold is refused by name; both pod forms
+                   are pods
+    test/sysns.clj 189 s, green -- a pod is booted, described and invoked; an
+                   unfetched :pod/version says the fetch is what is missing;
+                   `flint fetch` resolves a :pod/version against the registry;
+                   a pod is found when deps.edn is a directory ABOVE the source
+                   root
+
+Both use a `file://` registry, so neither needs the network -- which is why they
+can be believed on a machine with no connection and why they say nothing about
+the community registry actually serving. `registry/pods.edn` is read only when a
+project NAMES it: `tooling-registry` is deliberately absent from
+`default-registries`, and `test/cli.clj` asserts BOTH halves, which is the
+difference between "the resolution exists" and "it runs by default".
 
 **What does not:** the FETCH is `bin/flint`'s. The shipped binary reads the pod
 cache and boots what it finds, and says `flint fetch` when it finds nothing —
