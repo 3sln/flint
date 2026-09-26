@@ -7130,6 +7130,16 @@ whose reading turned up a finaliser that no field could see. **The check each
 one had to clear was the same: a fixture change that cannot be shown to catch
 something it did not catch before has not been shown to close anything.** Every
 entry below names the mutation and records that the OLD fixture passes it.
+
+**A SIXTH of the same kind was found afterwards and is not in the list**, because
+the survey did not turn it up -- the driver's own author did, and recorded it in
+`kin/exinfo.drivers`: "`cause` is written and not read back; nothing here would
+catch a wrong EX_CAUSE offset, which is a gap in the fixture rather than in the
+source." Closed 2026-09-26 with a `cause=203` field reading EX_CAUSE off the
+object, there being no `ex-cause` accessor to call. The count of five is a fact
+about that survey and not about the tree, and this is what that distinction
+costs: a gap recorded in the right place still needs somebody to go and close
+it.
 Recording them turned out to be worth more than it looked, in two different
 ways. The record said `mapread` had one unreachable branch and it had three,
 which only became visible when somebody went to close the one. And `valcmp`'s

@@ -55,6 +55,12 @@ fn main() {
     o.push_str(&alloc::format!(" kind={}", show(&rt, rt.ex_kind(e))));
     o.push_str(&alloc::format!(" msg={}", show(&rt, rt.ex_message(e))));
     o.push_str(&alloc::format!(" data={}", show(&rt, rt.ex_data(e))));
+    // THE FOURTH SLOT, READ OFF THE OBJECT. `ex-info` writes `cause` and no
+    // accessor in this ns reads it, so the setter's fourth `set-slot` was
+    // written by nothing: a build that never wrote it, or wrote it somewhere
+    // else, printed the same four numbers. There is no `ex-cause`, so the probe
+    // reads EX_CAUSE directly.
+    o.push_str(&alloc::format!(" cause={}", show(&rt, rt.slot(e, err::EX_CAUSE))));
     // THE ROOT STACK MUST BE BACK WHERE IT STARTED. A push that is not popped
     // is a leak the answer never shows.
     o.push_str(&alloc::format!(" roots={}", rt.roots.len()));
@@ -117,6 +123,8 @@ fn main() {
         o.append(" kind=").append(show(exKind(rt, e)));
         o.append(" msg=").append(show(exMessage(rt, e)));
         o.append(" data=").append(show(exData(rt, e)));
+        // The fourth slot, read off the object: see the rust arm.
+        o.append(" cause=").append(show(rt.slot(e, Rt.EX_CAUSE)));
         o.append(" roots=").append(rt.roots.size());
         long notex = 300;
         rt.gc.sp.m[300] = 9;
@@ -182,6 +190,8 @@ namespace Flint.Rt {
         o.Append(" kind=").Append(Show(ExKind(rt, e)));
         o.Append(" msg=").Append(Show(ExMessage(rt, e)));
         o.Append(" data=").Append(Show(ExData(rt, e)));
+        // The fourth slot, read off the object: see the rust arm.
+        o.Append(" cause=").Append(Show(rt.Slot(e, global::Flint.Rt.Rt.ExCauseSlot)));
         o.Append(" roots=").Append(rt.roots.Count);
         long notex = 300;
         rt.gc.sp.m[300] = 9;
@@ -194,7 +204,7 @@ namespace Flint.Rt {
         System.Console.WriteLine(o.ToString().Trim());
     }
 --expect
-made=100 isex=true kind=200 msg=201 data=202 roots=0 other-isex=false other-kind=nil nil-msg=nil starved=nil starved-roots=0
+made=100 isex=true kind=200 msg=201 data=202 cause=203 roots=0 other-isex=false other-kind=nil nil-msg=nil starved=nil starved-roots=0
 --expect-why
 DERIVED from `exinfo.kin` against the driver's bump allocator. The address is
 derivable here rather than opaque: the fixture's `bump` starts at 100 and
@@ -215,9 +225,25 @@ correct build gives slot i the value 200+i and the three readbacks print
 The arguments are consecutive and distinct precisely so a transposition shows.
 Swap `EX_MSG` and `EX_DATA` in either the setter or the getter and the line
 reads `msg=202 data=201` -- still four plausible numbers, which is why the
-values are not all the same and why all three are printed. `cause` is written
-and not read back; nothing here would catch a wrong EX_CAUSE offset, which is
-a gap in the fixture rather than in the source.
+values are not all the same and why all three are printed.
+
+  cause=203    THE FOURTH SLOT, added 2026-09-26. `ex-info` writes `cause` and
+               this ns has no `ex-cause`, so the setter's fourth `set-slot` was
+               read back by nothing: a build that never wrote it, or wrote the
+               wrong argument, printed the same four numbers. There being no
+               accessor, the probe reads EX_CAUSE off the object -- which is why
+               the constant is spelled `err::EX_CAUSE`, `Rt.EX_CAUSE` and
+               `global::Flint.Rt.Rt.ExCauseSlot`: a bare name resolves to the
+               probe's own shim class in two of the three.
+
+               This field catches what the other three cannot. A DATA/CAUSE
+               transposition already showed up in `data=`, but `cause` being
+               written from the wrong argument, or not written at all, moved
+               nothing. Both were induced: `(r rt c)` -> `(r rt d)` prints
+               `cause=202`, and deleting the `set-slot` line prints `cause=nil`,
+               each moving this field and no other. WITH THE FIXTURE BEFORE THIS
+               ROW BOTH MUTATIONS PASS, which is the evidence the gap was real
+               rather than a reading of the source.
 
 roots=0 IS THE HEADER'S CLAIM MADE OBSERVABLE. `ex-info` marks, pushes four,
 allocates, and pops to the mark. The stack begins empty, so it must end empty:
