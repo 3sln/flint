@@ -62,6 +62,46 @@ def catalogue_vars():
     return out
 
 
+def manifest_counts():
+    """`:count` per namespace, out of `doc/manifest.edn`.
+
+    THE ONLY COUNT WITH A PROOF BEHIND IT: `test/manifest.clj` compiles a program
+    referencing every var each entry claims present, so `:count` is the number a
+    program can actually name. The review restated it by hand and nine of the
+    twenty-two disagreed -- in BOTH directions, so it was not one stale edit.
+
+    A `defprotocol` is why several were low: it names the protocol AND its method
+    vars, and a reader counting top-level forms sees one. `clojure.core.protocols`
+    was written down as 0 and holds 4.
+
+    THE PARSER IS BOUNDED PER ENTRY. A first attempt anchored the count to the
+    entry's closing brace --
+    only entries whose count is the LAST key -- and silently walked into the next
+    namespace for the rest, reporting `clojure.edn` as 14 when it is 2. The
+    coverage assertion below is what catches that: the entries parsed must be
+    exactly the namespaces the README's generated table rows name.
+    """
+    text = read('doc', 'manifest.edn')
+    starts = [(m.start(), m.group(1))
+              for m in re.finditer(r'^[ {]([a-z][\w.]*)\n \{', text, re.M)]
+    out = {}
+    for i, (pos, ns) in enumerate(starts):
+        end = starts[i + 1][0] if i + 1 < len(starts) else len(text)
+        c = re.search(r':count (\d+)', text[pos:end])
+        if c:
+            out[ns] = int(c.group(1))
+    return out
+
+
+def readme_rows():
+    """The namespaces the README's generated coverage table names."""
+    rd = read('README.md')
+    a, b = '<!-- BEGIN GENERATED COVERAGE -->', '<!-- END GENERATED COVERAGE -->'
+    if a not in rd or b not in rd:
+        return None
+    return set(re.findall(r'^\|\s*`([a-z][\w.]*)`', rd[rd.index(a):rd.index(b)], re.M))
+
+
 def sdks():
     d = os.path.join(ROOT, 'sdks')
     return {f'sdks/{n}' for n in os.listdir(d) if os.path.isdir(os.path.join(d, n))}
@@ -168,6 +208,24 @@ def main():
         elif said_n != len(names):
             errs.append(f'`{ns}` is reviewed as {said_n} public vars and the catalogue '
                         f'holds {len(names)}')
+
+    # EVERY MANIFESTED NAMESPACE'S COUNT, against `doc/manifest.edn`.
+    counts = manifest_counts()
+    rows = readme_rows()
+    if rows is None or set(counts) != rows:
+        errs.append('the manifest parser and the README coverage table disagree about '
+                    'which namespaces are manifested -- one of their shapes changed, so '
+                    'this check cannot speak for the counts')
+    else:
+        for ns, n in sorted(counts.items()):
+            m = re.search(r'^## ' + re.escape(ns) + r'\n\n\*\*Reviewed:.*?\n\n(\d+) public vars\.',
+                          doc, re.M | re.S)
+            if not m:
+                errs.append(f'`{ns}` is in doc/manifest.edn and has no "N public vars" '
+                            f'line in doc/api-review.md')
+            elif int(m.group(1)) != n:
+                errs.append(f'`{ns}` is reviewed as {m.group(1)} public vars and '
+                            f'doc/manifest.edn counts {n}')
 
     if errs:
         for e in errs:

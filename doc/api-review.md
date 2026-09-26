@@ -231,7 +231,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-12 public vars. Ports: an endpoint you send to and receive from. A port is the unit of impurity. flint is a pure logic executor; a port is how a host *lends* it a capability, and how two green threads talk.
+13 public vars. Ports: an endpoint you send to and receive from. A port is the unit of impurity. flint is a pure logic executor; a port is how a host *lends* it a capability, and how two green threads talk.
 
 **Change requests:** _none recorded_
 
@@ -239,7 +239,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-8 public vars. The protocols flint defines for itself, rather than inherits from Clojure.
+13 public vars. The protocols flint defines for itself, rather than inherits from Clojure.
 
 **Change requests:** _none recorded_
 
@@ -247,7 +247,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-9 public vars. Reading and writing as PROTOCOLS, not as capabilities. A program that needs to read something does not thereby need a filesystem.
+17 public vars. Reading and writing as PROTOCOLS, not as capabilities. A program that needs to read something does not thereby need a filesystem.
 
 **Change requests:** _none recorded_
 
@@ -255,7 +255,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-13 public vars. Regular expressions: a shared NFA compiler and a Pike VM (`DECISIONS.md#matching-over-ropes`).
+11 public vars. Regular expressions: a shared NFA compiler and a Pike VM (`DECISIONS.md#matching-over-ropes`).
 
 **Change requests:** _none recorded_
 
@@ -451,7 +451,7 @@ namespace.
 
 **Reviewed:** ☐ not signed off
 
-317 public vars. flint's clojure.core. Written in cljc on top of the Rust primitives, for the reason in DECISIONS.md#modularity: a cljc function tree-shakes per var, so a program that never calls `partition-by`...
+321 public vars. flint's clojure.core. Written in cljc on top of the Rust primitives, for the reason in DECISIONS.md#modularity: a cljc function tree-shakes per var, so a program that never calls `partition-by`...
 
 **Change requests:** _none recorded_
 
@@ -459,7 +459,7 @@ namespace.
 
 **Reviewed:** ☐ not signed off
 
-0 public vars. The two protocols `clojure.datafy` dispatches on. They live in their own namespace, as they do in Clojure, because the metadata key a value attaches an implementation under is qualified by the...
+4 public vars. The two protocols `clojure.datafy` dispatches on, and the two method vars they define (`datafy`, `nav`) -- a `defprotocol` names more than itself, which is why the count is four and not two. They live in their own namespace, as they do in Clojure, because the metadata key a value attaches an implementation under is qualified by the...
 
 **Change requests:** _none recorded_
 
@@ -467,7 +467,7 @@ namespace.
 
 **Reviewed:** ☐ not signed off
 
-1 public vars. Non-core data functions: `diff`, which reports what two values have to themselves and what they share.
+5 public vars. Non-core data functions: `diff`, which reports what two values have to themselves and what they share.
 
 **Change requests:** _none recorded_
 
@@ -483,7 +483,7 @@ namespace.
 
 **Reviewed:** ☐ not signed off
 
-5 public vars. An EDN reader with reader-tag support. Written fresh rather than reusing the compiler's reader: this one has no syntax quote, no reader conditionals and no anonymous-fn literals, so a program that...
+2 public vars. An EDN reader with reader-tag support. Written fresh rather than reusing the compiler's reader: this one has no syntax quote, no reader conditionals and no anonymous-fn literals, so a program that...
 
 **Change requests:** _none recorded_
 
@@ -507,7 +507,7 @@ namespace.
 
 **Reviewed:** ☐ not signed off
 
-24 public vars. clojure.string, in cljc. Indices are **code points**, not UTF-16 code units, which is the same divergence as `count` on a string.
+23 public vars. clojure.string, in cljc. Indices are **code points**, not UTF-16 code units, which is the same divergence as `count` on a string.
 
 **Change requests:** _none recorded_
 
@@ -623,6 +623,27 @@ What a USER types. Both CLIs must dispatch the same set --
 `flint wasm` was caught existing on one front end and not the other.
 
 Aliases (`-h`, `--help`, `-v`, `--version`) fold into the command they spell.
+
+## What "N public vars" means, and what it does not
+
+A section's count is `doc/manifest.edn`'s `:count` for that namespace, and for
+the eight served ones it is the catalogue's var list. Both are checked by
+`bin/check-api-review`, so neither can drift again.
+
+**`:count` is the only one of these numbers with a proof behind it.**
+`test/manifest.clj` compiles a program referencing every var an entry claims
+present, so it is what a program can actually NAME -- not what a reader counting
+top-level forms sees. The two differ: a `defprotocol` names the protocol and its
+method vars, so `clojure.core.protocols` reads as two forms and holds four vars.
+Nine of the twenty-two manifested sections disagreed with it on 2026-09-26, in
+BOTH directions, and were corrected to it.
+
+**TWENTY-THREE SECTIONS HAVE NO SUCH NUMBER TO CHECK AGAINST**, because their
+namespace is not in `doc/manifest.edn` -- each says **UNMANIFESTED** where it
+says so. Their counts are hand-written and ungated, and should be read that way.
+Whether those namespaces belong in the manifest is a boundary question and the
+reviewer's; it is the same question their "Is this public?" line asks.
+
 
 ## cli:compile
 
