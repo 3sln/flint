@@ -410,11 +410,32 @@ Gated by `:with [deps]`, sharing the same allowlist as the other two resolvers.
 
 **Reviewed:** ☐ not signed off
 
-6 public vars. `compile run sandbox call close version`
+8 public vars. `compile run sandbox caller call close-caller close version`
 
 NOT GATED (`DECISIONS.md#flint-ception`): it takes source text and hands back bytes, so it reaches nothing a program could not already reach. Off under a gas limit, and removable at compile time by omitting `:flint/nested` from `:features`. `run` may lend only capabilities the caller already holds.
 
-**Change requests:** _none recorded_
+**THIS SECTION SAID SIX UNTIL 2026-09-26** and the catalogue held eight.
+`caller` and `close-caller` were never reviewed. They are not incidental:
+`caller` binds a port on a sandbox and returns the handle that `call` takes, so
+`call` is unusable without it, and a reviewer reading the old list would have
+taken `call` for something a sandbox handle is passed to. `close-caller`
+unbinds that port and ends the thread serving it while LEAVING THE SANDBOX
+OPEN, which is the reason the two are separate handles at all
+(`cli/src/sys.rs:1086`).
+
+`bin/check-api-review` now reads `sdks/cli/src/catalogue.mjs` and compares every
+served namespace's var list against its section, so this cannot drift again —
+the other seven were already correct, and this was found by running the
+comparison rather than by reading.
+
+**Change requests:**
+
+1. **Two vars reached the served surface without a review entry, on the one
+   served namespace that is NOT capability-gated.** The drift is now gated, but
+   the boundary question stands and is the reviewer's: `caller`/`close-caller`
+   hand out and revoke a second kind of handle, and whether that pair belongs on
+   `flint.ception` or behind `sandbox` returning something callable is a shape
+   decision nobody has recorded making.
 
 ---
 

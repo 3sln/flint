@@ -47,6 +47,21 @@ def served():
     return set(re.findall(r"^  \['([a-z][a-z.]*)'", read('sdks', 'cli', 'src', 'catalogue.mjs'), re.M))
 
 
+def catalogue_vars():
+    """Each served namespace's var names, in order, out of the catalogue itself.
+
+    THE DOC RESTATED THIS AND DRIFTED. `flint.ception` was written down as "6
+    public vars" and holds 8 -- `caller` and `close-caller` were never reviewed,
+    on the one served namespace that is NOT capability-gated. AGENTS.md section 1
+    says to make one list read the other, so this reads the list.
+    """
+    text = read('sdks', 'cli', 'src', 'catalogue.mjs')
+    out = {}
+    for ns, body in re.findall(r"\['([a-z][a-z.]*)',\s*\[(.*?)\n  \]\]", text, re.S):
+        out[ns] = re.findall(r"\['([^']+)',", body)
+    return out
+
+
 def sdks():
     d = os.path.join(ROOT, 'sdks')
     return {f'sdks/{n}' for n in os.listdir(d) if os.path.isdir(os.path.join(d, n))}
@@ -130,6 +145,29 @@ def main():
     for name in sorted(have):
         if name not in wanted:
             errs.append(f'doc/api-review.md has a section for `{name}`, which no longer exists')
+
+    # EVERY SERVED SECTION'S VAR LIST, AGAINST THE CATALOGUE. A var added to one
+    # of these is a new way to reach the filesystem, the network or the
+    # environment, and it used to be able to arrive with the review still
+    # reading as complete.
+    cat = catalogue_vars()
+    if set(cat) != served():
+        errs.append('the catalogue parser and `served()` disagree about which '
+                    'namespaces are in sdks/cli/src/catalogue.mjs -- its shape '
+                    'changed, so this check cannot speak for it')
+    for ns, names in sorted(cat.items()):
+        m = re.search(r'^## ' + re.escape(ns) + r'\n\n\*\*Reviewed:.*?\n\n(\d+) public vars\. `([^`]*)`',
+                      doc, re.M | re.S)
+        if not m:
+            errs.append(f'`{ns}` has no "N public vars. `...`" line in doc/api-review.md')
+            continue
+        said_n, said = int(m.group(1)), m.group(2).split()
+        if said != names:
+            errs.append(f'`{ns}` is reviewed as `{" ".join(said)}` and the catalogue '
+                        f'holds `{" ".join(names)}`')
+        elif said_n != len(names):
+            errs.append(f'`{ns}` is reviewed as {said_n} public vars and the catalogue '
+                        f'holds {len(names)}')
 
     if errs:
         for e in errs:
