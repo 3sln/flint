@@ -426,8 +426,15 @@
 
   Nothing is linked and no JDK is involved. `javac` ran once, when flint was
   built; appending one class to a finished jar is byte manipulation
-  (`DECISIONS.md#no-runtime-linking`)."
-  [spec-edn base-b64]
+  (`DECISIONS.md#no-runtime-linking`).
+
+  `class-name` NAMES THE CLASS, or is empty for the default `flint/Artifact`. A
+  JVM loads a class only from a path matching its own name, so a caller writing
+  one FILE rather than a classpath root has to be able to say what that file is
+  called -- which is what made `:to :jvm`'s `:out` a directory while every other
+  target took a file. It is a fourth ARGUMENT and not a new mode, so the three
+  lists `main` warns about are untouched."
+  [spec-edn base-b64 class-name]
   (let [spec (reader/read-one spec-edn)
         built (build-image spec (set (keys (:slots spec))))]
     (if (:missing built)
@@ -442,9 +449,12 @@
               ;; loaded, reported `:builtins 88`, and threw at boot. The
               ;; babashka door passes `byte-array` for the same reason.
               image (flint.rt/vec->b (vec (img/emit builder {})))
-              opts {:version (:version spec)
-                    :meta (:meta spec)
-                    :builtins (count (img/natives builder))}]
+              opts (let [base {:version (:version spec)
+                               :meta (:meta spec)
+                               :builtins (count (img/natives builder))}]
+                     (if (or (nil? class-name) (= "" class-name))
+                       base
+                       (assoc base :class class-name)))]
           ;; ONE DOOR FOR THE CLASS. `jvm/pack` calls `jvm/emit` itself, so both
           ;; arms go through the same emitter and the class cannot pick up a
           ;; property on one path and lose it on the other -- which is the exact
@@ -481,7 +491,7 @@
             ;; under `:module` either way, the way a wasm module comes back,
             ;; because it is the same thing: a finished artifact with the program
             ;; in it and nothing for the host to link.
-            (= mode "jvm") (compile-to-jvm spec-edn (nth args 2 ""))
+            (= mode "jvm") (compile-to-jvm spec-edn (nth args 2 "") (nth args 3 ""))
             (= mode "clr") (compile-to-clr spec-edn)
             (= mode "llvm") (compile-to-llvm spec-edn)
             (= mode "project") (compile-project spec-edn)

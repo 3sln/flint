@@ -749,6 +749,19 @@ fn compile_clr(srcs: &[PathBuf], entry: &str, out_path: &Path,
 /// argument to mean "the class alone", so there is nothing to carry.
 ///
 /// `SLOTS`, not `SLOTS_AOT`, and no shaking -- for `compile_clr`'s reasons.
+/// A CLASS NAME, by the Java language's rules rather than the class file's.
+///
+/// The JVM itself will load `my-prog`; a Java declaration cannot name it. The
+/// stricter rule is the useful one, because the artifact exists to be called.
+fn is_java_identifier(s: &str) -> bool {
+    let mut cs = s.chars();
+    match cs.next() {
+        None => false,
+        Some(c) if !(c.is_alphabetic() || c == '_' || c == '$') => false,
+        Some(_) => cs.all(|c| c.is_alphanumeric() || c == '_' || c == '$'),
+    }
+}
+
 fn compile_jvm(srcs: &[PathBuf], entry: &str, out_path: &Path,
                optimize: &[String], checks: Option<bool>, quiet: bool,
                features: Option<&[String]>) -> Result<()> {
@@ -757,9 +770,37 @@ fn compile_jvm(srcs: &[PathBuf], entry: &str, out_path: &Path,
     let slots = parse_slots(SLOTS)?;
     let spec = build_spec(srcs, entry, &slots, aot, false, &[], None, strip_checks, features)?;
     let mut p = load_compiler()?;
-    // NO THIRD ARGUMENT: that is how `compile-to-jvm` is asked for the class
-    // rather than the jar.
-    let r = p.run(&["jvm", &spec]);
+    // `:out …/Prog.class` NAMES THE CLASS `Prog`, so the path and the class's own
+    // name agree and a JVM will load it. A directory keeps writing
+    // `<root>/flint/Artifact.class`, which is what every existing consumer
+    // expects. The empty THIRD argument is how `compile-to-jvm` is asked for the
+    // class rather than the convenience jar; the FOURTH carries the name.
+    let dotclass = out_path.extension().map(|e| e == "class").unwrap_or(false);
+    let ends_default = out_path.to_string_lossy().replace('\\', "/")
+        .ends_with("flint/Artifact.class");
+    let cname: String = if dotclass && !ends_default {
+        let stem = out_path.file_stem().map(|b| b.to_string_lossy().to_string())
+            .unwrap_or_default();
+        // A FILENAME IS NOT A CLASS NAME. `:out my-prog.class` would emit a class
+        // called `my-prog`, which a JVM accepts -- class-file naming is laxer than
+        // the Java language's -- and which NO JAVA SOURCE CAN REFERENCE: it loads
+        // by `Class.forName("my-prog")` and cannot be named in a declaration. That
+        // is worse than refusing, because the artifact looks fine until somebody
+        // writes code against it. Found by naming a test file `bf-Prog.class` and
+        // reading what `javap` said.
+        if !is_java_identifier(&stem) {
+            bail!("`{}` is not a usable class name: `{}` would emit a class a JVM loads\n\
+                   but no Java source can name. A class name starts with a letter, `_`\n\
+                   or `$` and continues with those or digits -- `{}` does not. Rename the\n\
+                   file, or pass `:out` as a CLASSPATH ROOT (a directory) for the default\n\
+                   `flint.Artifact`.",
+                  out_path.display(), stem, stem);
+        }
+        stem
+    } else {
+        String::new()
+    };
+    let r = p.run(&["jvm", &spec, "", &cname]);
     if r.code != 0 {
         bail!("{}", r.out.trim());
     }
@@ -779,13 +820,13 @@ fn compile_jvm(srcs: &[PathBuf], entry: &str, out_path: &Path,
               r.out.chars().take(400).collect::<String>().trim());
     }
     const CLASS_PATH: &str = "flint/Artifact.class";
-    let target = if out_path.to_string_lossy().replace('\\', "/").ends_with(CLASS_PATH) {
+    // A `.class` PATH IS HONOURED NOW, because the class was named after it above.
+    // This used to refuse one: the name was the constant `flint.Artifact`, so the
+    // only loadable path was `<root>/flint/Artifact.class` and `:out` had to be
+    // that root. `bin/flint` takes the same two shapes -- one door cannot accept a
+    // spelling the other refuses (AGENTS.md section 1).
+    let target = if dotclass {
         out_path.to_path_buf()
-    } else if out_path.extension().map(|e| e == "class").unwrap_or(false) {
-        bail!("refusing to write {}: the class declares itself `flint.Artifact` and a JVM\n\
-               loads it only from a path ending `{}`. Pass `:out` as a CLASSPATH ROOT --\n\
-               a directory -- and this writes the rest.",
-              out_path.display(), CLASS_PATH);
     } else {
         out_path.join(CLASS_PATH)
     };
@@ -1496,7 +1537,7 @@ fn usage() -> ! {
           clang prog.ll target/release/libflintnative.a -o prog
 
   flint compile :path <dir> :fn <ns/fn> :to :clr [:out <file.dll>]
-  flint compile :path <dir> :fn <ns/fn> :to :jvm [:out <classpath-dir>]
+  flint compile :path <dir> :fn <ns/fn> :to :jvm [:out <file.class>|<dir>]
                 [:optimize [perf]] [:meta k=v]
       Compile to one .NET assembly, for any host with a CLR. The bytecode
       rides in `.text` as a static byte array and the assembly exposes

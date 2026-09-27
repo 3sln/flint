@@ -1235,9 +1235,31 @@
                   dotclass? (str/ends-with? (str out) ".class")
                   ;; The internal name is the basename without `.class`, in the
                   ;; DEFAULT package: one file, one name, no directory implied.
+                  ;; A FILENAME IS NOT A CLASS NAME. `:out my-prog.class` would
+                  ;; emit a class called `my-prog`, which a JVM accepts -- class
+                  ;; file naming is laxer than the Java language's -- and which NO
+                  ;; JAVA SOURCE CAN REFERENCE. Refused rather than written,
+                  ;; because the artifact looks fine until somebody writes code
+                  ;; against it. The native door refuses the same spelling.
                   cname (if dotclass?
-                          (let [b (.getName (java.io.File. ^String (str out)))]
-                            (subs b 0 (- (count b) 6)))
+                          (let [b (.getName (java.io.File. ^String (str out)))
+                                nm (subs b 0 (- (count b) 6))]
+                            (when-not (and (seq nm)
+                                           (or (Character/isLetter (first nm))
+                                               (#{\_ \$} (first nm)))
+                                           (every? #(or (Character/isLetterOrDigit %)
+                                                        (#{\_ \$} %))
+                                                   (rest nm)))
+                              (binding [*out* *err*]
+                                (println (str "`" out "` is not a usable class name: `" nm
+                                              "` would emit a class a JVM loads but no Java"
+                                              " source can name. A class name starts with a"
+                                              " letter, `_` or `$` and continues with those or"
+                                              " digits. Rename the file, or pass `:out` as a"
+                                              " CLASSPATH ROOT (a directory) for the default"
+                                              " `flint.Artifact`.")))
+                              (System/exit 1))
+                            nm)
                           jvm/ARTIFACT-CLASS)
                   klass (jvm/emit (byte-array (map unchecked-byte image))
                                   {:version (or (System/getenv "FLINT_VERSION") "0.1.0")

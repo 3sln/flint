@@ -47,10 +47,23 @@ for a consumer who put the class on a classpath, and the emitter's class name is
 parameter now (`flint.jvm/artifact-class-name`), defaulting to `flint/Artifact` so
 existing output is byte-identical.
 
+**`:out` TAKES A FILE ON BOTH DOORS as of 2026-09-26.** `:out Prog.class` emits a
+class calling itself `Prog`, and a directory still writes
+`<root>/flint/Artifact.class` byte-identically to before. The two doors agree byte
+for byte on the same basename, which is the standard AGENTS.md section 1 asks of
+them.
+
+A FILENAME IS NOT A CLASS NAME, and both doors refuse one that is not. `:out
+my-prog.class` would emit a class called `my-prog`: a JVM loads it — class-file
+naming is laxer than the Java language's — and no Java source can reference it,
+which is worse than a refusal because the artifact looks fine until somebody
+writes code against it. Found by naming a test file `bf-Prog.class` and reading
+what `javap` said about it.
+
 **NOT FINISHED: the SDKs do not mirror each other yet.** There is no JVM
-`Image`/`Sandbox` pair shaped like the ESM SDK's, and the native CLI's `:to :jvm`
-still resolves `:out` to a classpath root — `bin/flint` takes `:out Prog.class`
-and the native door does not. Both are wiring on top of this, not redesign.
+`Image`/`Sandbox` pair shaped like the ESM SDK's `new Image(bytes)` →
+`new Sandbox(module)`. `Artifact.define` is the loading half of it; the shape
+around it is not there.
 
 **Each of those is a named gate, added 2026-09-26** -- the claims were true and
 unattributed, and a claim with no gate beside it cannot be rechecked:
