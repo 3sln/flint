@@ -81,69 +81,13 @@ public final class Main {
     protected void closed(int port) { System.out.println("port " + port + " closed"); }
   }
 
-  /// THE GENERATED FACE, reached reflectively.
-  ///
-  /// `flint.Artifact` is emitted by `src/flint/jvm.cljc` at compile time, so this
-  /// file cannot name it -- it is not on the classpath when this file is compiled,
-  /// which is exactly the relationship a runtime has to a program. A consumer who
-  /// knows the artifact's name writes `flint.Artifact.boot(port)` and needs none of
-  /// this.
-  static final class Face {
-    final java.lang.reflect.Method boot, loop, link;
-    final Class<?> clazz;
-    Face(Class<?> k) throws Exception {
-      clazz = k;
-      boot = k.getMethod("boot", Sandbox.Bridge.class);            // -> Sandbox
-      loop = k.getMethod("loop");                                  // -> int status
-      link = k.getMethod("link", String.class, com.flint.rt.Builtins.Fn.class);
-    }
-    /// NO FALLBACK. The bytecode is constant data on that class, so a classpath
-    /// without it is the runtime and no program.
-    /// FROM BYTES, which is what every other runtime does. `Artifact.define`
-    /// defines the class in memory -- no classpath, no filename, no name to
-    /// agree with a path -- and this is the mirror of the ESM SDK's
-    /// `new Image(wasmBytes)` and the CLR's `Img.Load(rt, bytes)`.
-    static Face of(byte[] classBytes) throws Exception {
-      return new Face(com.flint.rt.Artifact.define(classBytes));
-    }
-    /// The CLASSPATH route, kept for a consumer who put the class on one. The
-    /// name is only a default here rather than a contract: a class loaded by
-    /// `of` above may call itself anything.
-    static Face find() {
-      try { return new Face(Class.forName("flint.Artifact")); }
-      catch (ClassNotFoundException e) {
-        throw new IllegalStateException(
-          "no flint.Artifact on the classpath: that class IS the compiled program, and"
-          + " `:to :jvm` emits it. What is here is the flint runtime."
-          + " (A class loaded from BYTES needs no classpath: see"
-          + " com.flint.rt.Artifact.define.)");
-      }
-      catch (Exception e) { throw new IllegalStateException(e); }
-    }
-  }
-
-  /// The artifact's metadata, out of the class ATTRIBUTE rather than a call.
-  ///
-  /// `prop` is gone (`DECISIONS.md#four-operations`) and this is what replaced it:
-  /// the attribute is read from the class file's BYTES, so a reader needs no JVM, no
-  /// class loading and nothing of flint's on its path. This host has the class
-  /// loaded anyway, so it takes the bytes back off the class loader -- a build tool
-  /// or `flint inspect` would read the file directly and get the same string.
-  ///
-  /// Walking to the class-level attributes means stepping over the constant pool,
-  /// and that is the whole reason this is twenty lines rather than one: an
-  /// annotation would be `clazz.getAnnotation(...)`. It would also need the
-  /// annotation type on the classpath and the class loaded, which is the thing the
-  /// record moved metadata AWAY from.
-  static String metaAttribute(Face f) throws Exception {
-    String path = f.clazz.getName().replace('.', '/') + ".class";
-    byte[] b;
-    try (java.io.InputStream in = f.clazz.getClassLoader().getResourceAsStream(path)) {
-      if (in == null) return null;
-      b = in.readAllBytes();
-    }
-    return ClassAttr.read(b, "com.3sln.flint.meta");
-  }
+  // THE FACE AND THE METADATA READER USED TO LIVE HERE, privately, and
+  // `FourOps` had its own copy of the first. Both are `com.flint.Image` now --
+  // the JVM's mirror of the ESM SDK's `Image` -- so this harness drives the same
+  // API a consumer does. It also fixes what the private reader could not: it
+  // recovered the class bytes through `getResourceAsStream`, which returns NULL
+  // for a class defined from bytes, so a byte-loaded artifact had metadata that
+  // was in the file and unreachable. `Image` keeps the bytes.
 
   static com.flint.rt.Builtins.Fn constant(String s) {
     return (rt, at, argc) -> com.flint.rt.Str.of(rt, s);
@@ -155,29 +99,29 @@ public final class Main {
     System.arraycopy(a, 1, args, 0, args.length);
     String hook = System.getenv("FLINT_LINK");
 
-    Face face = Face.find();
+    com.flint.Image face = com.flint.Image.onClasspath();
 
     // --- The metadata, from the container and not from a call. Read BEFORE
     //     anything runs, which is the point: a runner decides whether to load at
     //     all from this, and a method could not have answered it.
-    System.out.println("meta: " + metaAttribute(face));
+    System.out.println("meta: " + face.metadata());
 
     // --- link, BEFORE boot, because natives resolve exactly once at load. ZERO
     //     calls is the normal case; this runs only when asked for one.
     if (hook != null) {
-      face.link.invoke(null, hook, constant("LINKED"));
+      face.link(hook, constant("LINKED"));
       System.out.println("link " + hook + " registered before boot");
     }
 
     // --- boot: ONE bridge, which becomes the system port.
     Host host = new Host();
-    face.boot.invoke(null, host);
+    face.boot(host);
     System.out.println("boot: ok");
 
     // --- link AFTER boot must be refused. Shown rather than asserted in a comment:
     //     an override registered now would silently never apply.
     try {
-      face.link.invoke(null, "flint/add", constant("TOO LATE"));
+      face.link("flint/add", constant("TOO LATE"));
       System.out.println("link after boot: ACCEPTED -- the contract says it must not be");
     } catch (java.lang.reflect.InvocationTargetException e) {
       System.out.println("link after boot: refused (" + e.getCause().getClass().getSimpleName() + ")");
@@ -193,7 +137,7 @@ public final class Main {
 
     int code = Sandbox.NEEDS_HOST;
     for (int turn = 0; turn < 64 && host.answer == null; turn++) {
-      code = (Integer) face.loop.invoke(null);
+      code = face.loop();
       if (code != Sandbox.NEEDS_HOST) break;
     }
     System.out.println("loop -> " + code + " ("

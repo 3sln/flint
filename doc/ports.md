@@ -60,10 +60,40 @@ which is worse than a refusal because the artifact looks fine until somebody
 writes code against it. Found by naming a test file `bf-Prog.class` and reading
 what `javap` said about it.
 
-**NOT FINISHED: the SDKs do not mirror each other yet.** There is no JVM
-`Image`/`Sandbox` pair shaped like the ESM SDK's `new Image(bytes)` →
-`new Sandbox(module)`. `Artifact.define` is the loading half of it; the shape
-around it is not there.
+### `com.flint.Image`, the mirror of the other SDKs' Image
+
+Each SDK takes an artifact as bytes and hands back something bootable — ESM's
+`new Image(wasmBytes)` with `.metadata` and `.sandbox()`, the CLR's
+`Img.Load(rt, bytes)`. The JVM had no such type: a host reached the artifact by
+`Class.forName` and re-derived the three methods reflectively, which
+`com.flint.Main` and `com.flint.FourOps` each did PRIVATELY, in two copies.
+
+    Image.of(byte[])          defines the class in memory; no classpath, no file
+    Image.onClasspath([name]) for an artifact already on one
+    .metadata()               the attribute, as the EDN string it is
+    .bytes() .clazz()
+    .boot(Bridge) .loop() .link(name, fn)
+
+**It holds the bytes, and that is the point rather than an implementation
+detail.** The metadata is a class ATTRIBUTE, read from the file rather than by
+calling the artifact. Recovering those bytes through
+`getClassLoader().getResourceAsStream(...)` works for a classpath class and
+returns NULL for one defined from bytes — so a byte-loaded artifact had metadata
+that was present in the file and unreadable through the API. Measured before the
+change: `resource for a byte-defined class: NULL`, with the attribute sitting in
+the same bytes. Holding them makes `metadata()` work either way and needs no
+class loader at all, which is what the metadata decision wanted.
+
+Verified: both routes read the metadata and **agree on it**, `of(bytes)` on a
+class called `Prog` and `onClasspath()` on `flint.Artifact`.
+
+`Main` and `FourOps` drive this now instead of their own copies, so the harnesses
+exercise the API a consumer uses. `metadata()` is NOT parsed into a map: the ESM
+SDK returns an object because JSON is its native shape, EDN is not the JVM's, and
+an EDN reader in the runtime would be a parser nobody asked for.
+
+**Still missing:** a `Compiler` — ESM has one, so source-to-Image on the JVM is
+not yet a single call.
 
 **Each of those is a named gate, added 2026-09-26** -- the claims were true and
 unattributed, and a claim with no gate beside it cannot be rechecked:

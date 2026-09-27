@@ -36,6 +36,7 @@ import com.flint.rt.Sandbox;
 /// restriction is the test: this file is one package outside the runtime, so `javac`
 /// refuses anything the contract does not offer.
 public final class FourOps {
+  static com.flint.Image img;
   static Class<?> k;
   static java.lang.reflect.Method boot, loop, link;
 
@@ -71,7 +72,10 @@ public final class FourOps {
     String[] callArgs = new String[Math.max(0, a.length - 1)];
     System.arraycopy(a, 1, callArgs, 0, callArgs.length);
 
-    k = Class.forName("flint.Artifact");
+    // THROUGH `com.flint.Image`, the same door a consumer uses, rather than a
+    // second private copy of the reflection. `Main` had the other one.
+    img = com.flint.Image.onClasspath();
+    k = img.clazz();
     boot = k.getMethod("boot", Sandbox.Bridge.class);
     loop = k.getMethod("loop");
     link = k.getMethod("link", String.class, com.flint.rt.Builtins.Fn.class);
