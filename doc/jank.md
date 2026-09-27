@@ -11,6 +11,15 @@ Run them with `bin/jank-suite <jank-checkout> [native|jvm|clr]`. The numbers
 below are jank `cd394c63e15d1af5f88bcfbec74fba7873e4b57d` (2026-08-29); a
 different revision is a different suite, so quote the one you ran.
 
+**AND THE SAME IS TRUE OF THE OTHER SIDE, which this file did not say.** A score
+here is a claim about two trees and it named only jank's. The flint commit these
+numbers came from is not recorded and cannot be recovered from the file; the
+last change to it is `8cee498d`, 2026-09-11, so they are no newer than that and
+predate the kin port's later work. As of 2026-09-26 `bin/jank-suite` prints both
+-- `flint <sha> on <date>` and `jank <sha>` -- so a future capture carries its
+own subject as well as its input. The numbers below are left as they are rather
+than re-run: re-running needs a jank checkout, which is not in this tree.
+
 ## The numbers
 
     native                     port (jvm)

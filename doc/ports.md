@@ -80,6 +80,23 @@ interpreter agrees with itself. `entries=0` is a failure.
     maps      interpreted  3.44 ms   compiled  2.68 ms   1.28x
     regex     interpreted  4.16 ms   compiled  6.07 ms   0.68x
 
+> **WHAT THIS TABLE DOES NOT SAY, noted 2026-09-26 rather than quietly trusted.**
+> No machine, no run count, no date, no flint commit, and no command that
+> reproduces it -- and a search of `bin/` for a script printing these four
+> program names beside interpreted/compiled columns found none, so it appears to
+> be a one-off. Every other measurement in this repository names at least its
+> machine and method; `doc/benchmarks.txt`, `doc/benchmarks-vs-clojure.txt` and
+> `doc/jank.md` all do. AGENTS.md section 2 is about exactly this shape: "a
+> benchmark ratio with no host, machine, or method -- unreproducible, so it can
+> only be believed or ignored, and it gets believed."
+>
+> It is kept because the RATIOS still carry the argument the section makes, and
+> the `regex` row being BELOW 1.00 is the part worth having: a compiled arity
+> dominated by natives removes no dispatch and adds a crossing, which is a claim
+> the direction of the number supports whatever the machine was. What should not
+> be quoted elsewhere is the absolute milliseconds. Re-measuring is a real
+> benchmarking job, not a doc fix, and is left as such.
+
 Regex is SLOWER, and that is not a defect to hide: it is dominated by natives,
 where compiled code removes no dispatch and adds a crossing. `DECISIONS.md#emit-wasm-instead-of-dispatch`
 predicts exactly that.

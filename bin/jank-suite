@@ -136,6 +136,12 @@ done
 total=$((pass_ok+pass_no+fail_ok+fail_no))
 echo
 echo "  jank dialect suite on the $RUNTIME runtime (cpp/ excluded: flint has no host classes)"
+# BOTH SIDES OF THE COMPARISON, NAMED. `doc/jank.md` quoted the jank revision and
+# its date -- "a different revision is a different suite, so quote the one you
+# ran" -- and said nothing about which FLINT the numbers came from. A score is a
+# claim about both trees, and the one under test was the unnamed one.
+echo "  flint $(git -C "$(dirname "$0")/.." rev-parse --short HEAD 2>/dev/null || echo '?') on $(date +%F)"
+echo "  jank  $(git -C "$JANK" rev-parse --short HEAD 2>/dev/null || echo 'not a git checkout')"
 echo "  ---------------------------------------------------------------------------"
 printf "  pass-* accepted and ran   %4d / %4d\n" "$pass_ok" "$((pass_ok+pass_no))"
 printf "  fail-* correctly refused  %4d / %4d\n" "$fail_ok" "$((fail_ok+fail_no))"
