@@ -16,6 +16,27 @@ It runs every conformance program and agrees with the native runtime character
 for character, snapshots in both formats, and **self-hosts**: the flint compiler
 runs on it and emits byte for byte what the wasm compiler emits.
 
+**Each of those is a named gate, added 2026-09-26** -- the claims were true and
+unattributed, and a claim with no gate beside it cannot be rechecked:
+
+| claim | what asserts it |
+|---|---|
+| agrees character for character | `bin/conform-hosts`, phases "every conformance program, 3 runtimes" and "the language suite, every runtime" |
+| snapshots in both formats | `bin/conform-hosts`, phases "snapshots, both formats", "a live snapshot across runtimes" and "native reads what the ports wrote" |
+| self-hosts, byte for byte | `FLINT_SELFHOST=1 ./bin/conform-hosts`, phase "self-hosting, both ports" -- run by `bin/release-gate`, **skipped by `bin/test`** |
+| parallel executors, K host threads | `bin/conform-hosts`, phase "parallel executors, K host threads" |
+
+The self-hosting row is the one worth knowing about: it is opt-in, so no ordinary
+gate run checks it. Its own comment used to give the reason as "179 s on the JVM
+and 704 s on the CLR" while contradicting itself three lines later with "SIX
+SECONDS ... wrong by a factor of 150". **Re-measured 2026-09-26 at `7b73c0cb`
+(Apple M1 Pro, each step timed alone): 1.02 s to emit the spec, 2.45 s for the
+wasm reference, 3.35 s on the JVM and 2.03 s on the CLR -- 8.85 s in total, all
+three assertions passing on both ports.** So the cost that justifies its being
+opt-in is not there. Whether to move it into `bin/test` is a change to
+`AGENTS.md` section 4's tier split rather than to any script, and so the
+maintainer's.
+
 It also carries the two things this file used to say only the boxed port had:
 
 * **Parallel executors** (`DECISIONS.md#drivers`) — K REAL host threads driving one

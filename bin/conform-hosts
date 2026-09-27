@@ -1784,15 +1784,36 @@ done
 # `seq?` answered `seqable?`, and `str-bytes` answered a count -- all three were
 # found by running this.
 #
-# OFF by default because of what it costs, measured: 179 s on the JVM and 704 s
-# on the CLR, against about a minute for everything above. Turn it on with
-# FLINT_SELFHOST=1, and CI should.
+# THIS BLOCK CONTRADICTED ITSELF, and the wrong half was the one giving the
+# reason. It said "OFF by default because of what it costs, measured: 179 s on
+# the JVM and 704 s on the CLR" three lines above a comment saying SIX SECONDS
+# and "wrong by a factor of 150". A section that disagrees with itself was
+# spliced rather than reasoned about, so it was measured again.
+#
+# RE-MEASURED 2026-09-26 at `7b73c0cb`, Apple M1 Pro / Darwin 23.6.0, each step
+# timed on its own with `time`:
+#
+#     emit the spec   `bin/flint --emit-spec`              1.02 s
+#     wasm reference  `node host/flint-file.mjs`           2.45 s
+#     jvm self-host   `RtSelfHost`                         3.35 s
+#     clr self-host   `Conform --rt-selfhost`              2.03 s
+#                                                         -------
+#                                                          8.85 s
+#
+# All three assertions passed on both ports, including "byte for byte what the
+# wasm compiler emits". So 179/704 is wrong by about 50x and 350x, and SIX
+# SECONDS was right in magnitude.
+#
+# THE STATED REASON FOR OPT-IN NO LONGER EXISTS. Nine seconds does not justify
+# leaving a headline capability of both ports unchecked by every ordinary run,
+# and both halves of the old comment already said CI should run it. The default
+# is left alone anyway, because `AGENTS.md` section 4 documents the tier split --
+# "bin/release-gate adds self-hosting on both ports, which bin/test skips" --
+# and moving this is a one-line change to the maintainer's own process doc
+# rather than to this script.
+#
+# Turn it on with FLINT_SELFHOST=1.
 if [ "${FLINT_SELFHOST:-0}" = "1" ]; then
-  # SIX SECONDS, measured 2026-09-12. This step announced "about 15 minutes"
-  # for as long as it has existed, and that number is why it is opt-in: it is
-  # the only reason a headline capability of both ports goes unchecked by every
-  # ordinary gate run. It is wrong by a factor of 150.
-  #
   # The step sat outside every phase marker too, so a run including it reported
   # a total that excluded it -- which is how the estimate survived: nothing
   # measured it, and nothing contradicted it.
