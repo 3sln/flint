@@ -95,12 +95,16 @@ public sealed class Compiler {
     /// `:to :clr` REFUSES one that does not rather than emitting an assembly
     /// nothing can load. That restriction is this target's, not the mechanism's:
     /// the JVM takes a resolved spec and is verified byte-identical to the wasm
-    /// compiler on one. Measured, and the reason it is a refusal now: a resolved
-    /// spec produced a 29 184-byte assembly -- the same length as the good one,
-    /// 83 bytes different, `.text` 36 bytes larger -- that `Assembly.Load`
-    /// rejected with `BadImageFormatException: Bad IL format`. The wasm compiler
-    /// produced THE SAME BYTES, so the two runtimes agreed and the input was what
-    /// was wrong.
+    /// compiler on one. Measured: a resolved spec produced a 29 184-byte assembly
+    /// -- the same length as the good one, 83 bytes different, `.text` 36 bytes
+    /// larger -- that `Assembly.Load` rejected with `BadImageFormatException: Bad
+    /// IL format`.
+    ///
+    /// THE CAUSE IS NOT ESTABLISHED; `src/flint/selfhost.cljc`'s `compile-to-clr`
+    /// lists what has been ruled out. Not a port divergence (the wasm compiler
+    /// produced the same bytes), not the builtin set (the same 226 names, quoted
+    /// differently), and not checks (`:checks true` and `false` give identical
+    /// assemblies). The refusal is right whatever the cause.
     public Image CompileClr(string specEdn) {
         string outv = Run("clr", specEdn);
         if (outv.StartsWith("!missing") || outv.StartsWith("!refused")) {

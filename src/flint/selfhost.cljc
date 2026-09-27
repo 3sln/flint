@@ -414,14 +414,34 @@
   Bytes out, so the caller base64s them -- the opposite of `:ll`, which is text.
 
   A SPEC MUST CARRY `:slots` HERE, and that is the one place this target differs
-  from `:to :jvm`. Both resolve their natives by name at load, but the CLR
-  emitter's structure depends on the builtin SET: given an already-resolved spec,
-  whose `:builtins` is a different set and whose `:slots` is absent, it emitted a
-  29 184-byte assembly -- the same length as the good one, differing in 83 bytes,
-  with `.text` 36 bytes larger -- that `Assembly.Load` refused with
-  `BadImageFormatException: Bad IL format`. The two compilers AGREED on those
-  bytes, so this is not a port divergence; the input was wrong and both were
-  faithful to it.
+  from `:to :jvm`. Given an already-resolved spec -- which has none -- it emitted a
+  29 184-byte assembly, the same length as the good one, differing in 83 bytes with
+  `.text` 36 bytes larger, that `Assembly.Load` refused with
+  `BadImageFormatException: Bad IL format`.
+
+  THE CAUSE IS NOT ESTABLISHED, and an earlier version of this comment claimed one
+  it could not support -- that the builtin SET differed. It does not. What has been
+  ruled out, each by measurement:
+
+    * NOT A PORT DIVERGENCE. The wasm compiler produced THE SAME BYTES from the
+      same spec, so both runtimes were faithful to whatever the input was.
+    * NOT THE BUILTIN SET. The resolved spec's `:builtins` and `dist/slots.json`'s
+      keys are the same 226 names; the spec writes them as STRINGS, which is what
+      the analyzer compares as text, and unquoting makes the sets equal exactly.
+    * NOT CHECKS OR FEATURES. `:checks true` and `:checks false` through the CLI
+      produce BYTE-IDENTICAL assemblies, so the `:flint/check` feature the resolved
+      spec carries cannot be it either.
+
+  What remains unexamined is `:order`, which the two paths compute separately, and
+  the `:exclude`/`:excluded-builtins` keys a resolved spec carries and a CLI spec
+  does not. Recorded as open rather than guessed at a fourth time.
+
+  THE REFUSAL IS RIGHT WHATEVER THE CAUSE. An artifact that loads nowhere is worse
+  than an error, and this project has the lesson already: `bin/flint` once fell
+  through to the wasm path for an unknown `:to` and wrote a 494 KB wasm module into
+  a `.ll`. `:to :jvm` takes a resolved spec and is verified byte-identical to the
+  wasm compiler on one AND loadable, so the restriction is this target's and not
+  the mechanism's.
 
   REFUSED RATHER THAN EMITTED. An artifact that loads nowhere is worse than an
   error, and this project has the lesson already: `bin/flint` once fell through to

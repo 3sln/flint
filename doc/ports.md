@@ -94,24 +94,31 @@ the mirror of `com.flint.Compiler` and the ESM SDK's. Promoted from
 lessons the JVM's did: the var table rather than `img.entry`, initialisers first,
 rooting across allocations, and the spec as an argv.
 
-**`:to :clr` REFUSES AN ALREADY-RESOLVED SPEC, and that restriction was measured
-rather than assumed.** Given one — no `:slots`, and a `:builtins` set that is not
-the slots-derived one — the CLR emitter produced a 29 184-byte assembly: the same
-LENGTH as the good artifact, 83 bytes different, `.text` 36 bytes larger, which
-`Assembly.Load` rejected with `BadImageFormatException: Bad IL format`.
+**`:to :clr` REFUSES AN ALREADY-RESOLVED SPEC.** Given one the CLR emitter
+produced a 29 184-byte assembly: the same LENGTH as the good artifact, 83 bytes
+different, `.text` 36 bytes larger, which `Assembly.Load` rejected with
+`BadImageFormatException: Bad IL format`.
 
-Three things that measurement settled, in order:
+**THE CAUSE IS NOT ESTABLISHED**, and the first version of this section claimed
+one it could not support — that the builtin set differed. Three candidates have
+been ruled out by measurement, each after being believed:
 
-* **it is not a port divergence.** The wasm compiler produced THE SAME BYTES from
-  the same spec. Both runtimes were faithful to a wrong input.
-* **it is not the mechanism.** `:to :jvm` takes a resolved spec and its artifact
-  is byte-identical to the wasm compiler's AND loadable — because JVM natives
-  resolve by name at load, while the CLR emitter's structure depends on the
-  builtin set.
-* **so it is this target's restriction**, and a refusal is the right answer. An
-  artifact that loads nowhere is worse than an error, and `bin/flint` has the
-  lesson already: it once fell through to the wasm path for an unknown `:to` and
-  wrote a 494 KB wasm module into a `.ll`.
+| ruled out | how |
+|---|---|
+| a port divergence | the wasm compiler produced THE SAME BYTES from the same spec |
+| the builtin set | the resolved spec's `:builtins` and `dist/slots.json`'s keys are the same 226 names — the spec writes them as STRINGS, which is what the analyzer compares as text, and unquoting makes the sets equal exactly |
+| checks or features | `:checks true` and `:checks false` through the CLI give BYTE-IDENTICAL assemblies, so the `:flint/check` feature a resolved spec carries cannot be it |
+
+Unexamined: `:order`, which the two paths compute separately, and the
+`:exclude`/`:excluded-builtins` keys a resolved spec carries and a CLI spec does
+not.
+
+**The refusal is right whatever the cause**, and it is this target's restriction
+rather than the mechanism's: `:to :jvm` takes a resolved spec and its artifact is
+byte-identical to the wasm compiler's AND loadable. An artifact that loads nowhere
+is worse than an error, and `bin/flint` has the lesson already — it once fell
+through to the wasm path for an unknown `:to` and wrote a 494 KB wasm module into
+a `.ll`.
 
 `bin/check-sdk` asserts both arms — the JVM compiling source to a loadable
 in-memory `Image` byte-identical to the wasm compiler, and the CLR running the
