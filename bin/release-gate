@@ -9,8 +9,10 @@
 # plus the self-hosting step: line 28 runs `./bin/test` and line 32 runs
 # `FLINT_SELFHOST=1 ./bin/conform-hosts` from the top. The self-hosting STEP is
 # 8.85 s (measured 2026-09-26, `7b73c0cb`); the second conform-hosts run around
-# it is the real addition and has NOT been measured, so no total is stated here
-# rather than a guessed one. `~25 min` stood here and was below `bin/test`'s own
+# it is the real addition, and it is 220 s (measured 2026-09-26, `be0aee8c`, exit
+# 0 on a quiet machine). So this file is about 2 139 + 220 + 9 = 2 368 s, ~39.5
+# min -- DERIVED from three separate measurements rather than timed end to end,
+# which is why the table above says `> bin/test`. `~25 min` stood here and was below `bin/test`'s own
 # figure, which cannot be right for a superset.
 #
 # What this adds over `bin/test` is SELF-HOSTING ON THE PORTS, which is

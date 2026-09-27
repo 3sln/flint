@@ -146,6 +146,16 @@ standalone because it needs build state the full gate happens to produce.
 section), so running both is running the four-runtime matrix twice — about 3½
 minutes of pure duplication.
 
+*CHECKED 2026-09-26 at `be0aee8c`, and this one was right: `bin/conform-hosts`
+alone is 220 s (3.67 min), exit 0, load average 1.71, nothing else in flight —
+which matters because it writes fixed `/tmp` names and two runs would produce
+evidence belonging to neither. The estimate I came to this measurement carrying
+was about 11 minutes, from a remembered phase count rather than a clock, and it
+was the wrong number. So `bin/release-gate` is `bin/test` (2 139 s) plus a second
+full conform-hosts with self-hosting (220 s + 8.85 s) ≈ **39.5 min** — DERIVED
+from three measurements, not timed end to end, which is why the table says
+`> bin/test` rather than this figure.*
+
 It prints its own itemisation at the end,
 slowest section first. Use that before optimising anything: the first
 measurement put 71% of the time in 12 of 60 sections, and the largest was a
