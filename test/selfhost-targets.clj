@@ -15,6 +15,22 @@
 ;; It survived because `bin/flint :to :clr` works and always did: that door calls
 ;; `clr/assemble` itself and never enters `selfhost`. So the target was reachable
 ;; from the door a person would try first, and broken from the one the CLI uses.
+;;
+;; AND IT IS BROKEN AGAIN, DIFFERENTLY, AS OF 2026-09-26. This file asserts an
+;; artifact is PRODUCED -- magic bytes -- and nothing asserts one LOADS from the
+;; native door. It does not:
+;;
+;;     same program, same 29 184 bytes, differing from byte 385
+;;       bin/flint   :to :clr  ->  loads; runtimes/clr/artifact/Check.cs proceeds
+;;       native CLI  :to :clr  ->  BadImageFormatException: Invalid COR20 header
+;;                                 signature
+;;
+;; `bin/check-clr` builds its artifact with `bin/flint` at lines 91 and 142, so the
+;; native door's assembly is emitted by the CLI, checked for magic bytes here, and
+;; loaded by nothing. That is the same gap in the same place as the failure above,
+;; which is why it is recorded here rather than somewhere new: the lesson did not
+;; take the first time, because the TEST that was added checks production and not
+;; loading.
 ;; The only test that mentioned it asserted the UNKNOWN-TARGET MESSAGE lists
 ;; `:to :clr` (`bin/test:643`) -- the help text, not the target.
 ;;

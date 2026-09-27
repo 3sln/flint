@@ -477,7 +477,24 @@
                                        :describe true
                                        :version (:version spec)
                                        :builtins (count (:builtins spec))
-                                       :features (:features spec)
+                                       ;; NO `:features` HERE, AND THAT IS THE FIX FOR A
+                                       ;; NAME COLLISION. `describe`'s `:features` is the
+                                       ;; BUILD feature map a wasm module carries --
+                                       ;; `{:aot true :capabilities true ..}`. `(:features
+                                       ;; spec)` is the READER feature SET,
+                                       ;; `#{:flint :flint/nested :flint/check}`. Passing
+                                       ;; one as the other put a set in a map's slot.
+                                       ;;
+                                       ;; It was INERT for as long as no spec carried
+                                       ;; `:features`: a CLI spec has none, `(:features
+                                       ;; spec)` was nil, and describe recorded `{}`. An
+                                       ;; already-resolved spec DOES carry them -- that is
+                                       ;; what `bin/flint --emit-spec` writes -- and then
+                                       ;; the artifact's metadata read
+                                       ;; `:features #{:flint :flint/nested :flint/check}`
+                                       ;; where every other artifact reads a map. One slot,
+                                       ;; two meanings; the reader set has no business in
+                                       ;; an artifact's build description.
                                        :meta-map (:meta spec)}))})))))
 
 (defn compile-to-jvm
