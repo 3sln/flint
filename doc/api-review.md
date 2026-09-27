@@ -707,8 +707,17 @@ door, rather than by reading the dispatch. Output sizes in bytes:
     wasm      662 240          494 598          662 240
     clr        29 184           29 184           29 184
     jvm        38 779           38 779           refused, "no such target"
-    llvm       68 826           refused          refused
+    llvm       68 826           refused          68 826   (wired 2026-09-26)
     native     refused          not in its set   refused
+
+**`:to :llvm` NOW WORKS FROM THE NPM CLI, byte for byte.** It was refused there
+because nothing dispatched it, not because anything was missing:
+`src/flint/llvm.cljc` is portable cljc with ZERO reader conditionals, and
+`src/flint/selfhost.cljc` already accepted `"llvm"` as a mode -- inside
+`dist/flintc.wasm`, which is the compiler the npm CLI runs. Verified 68 826 bytes
+identical to the native CLI's, 2 106 568 identical with `:optimize [perf]`, and
+the IR the npm CLI emitted LINKS with `clang` against `libflintnative.a` into an
+executable that prints the program's answer.
 
 The refusals each name the door that does have it, and each door's own error
 message lists its own set correctly — the drift was in THIS document, not in the
@@ -738,14 +747,18 @@ need not match.
    only `:to :llvm` was, and "the other three work from both", which the matrix
    above disproves:
 
-   * `:to :llvm` is the NATIVE CLI's alone. Both other doors refuse it and name
-     it, which is deliberate — `bin/flint` records that it used to fall through
-     to the wasm path and write a 494 KB wasm module into a `.ll`.
+   * ~~`:to :llvm` is the NATIVE CLI's alone.~~ **Resolved 2026-09-26: it is the
+     npm CLI's too.** The asymmetry was unwired dispatch. `bin/flint` still
+     refuses it and that one IS deliberate — it records falling through to the
+     wasm path once and writing a 494 KB wasm module into a `.ll` — but that is a
+     babashka-door decision rather than a property of the target.
    * **`:to :jvm` is missing from the npm CLI**, which was not recorded anywhere.
      It works from the native CLI and from `bin/flint`, byte for byte (38 779
      each). `sdks/cli/src/cli.mjs` handles `wasm` and `clr` and falls to "no such
      target" for `jvm` — so this is an omission rather than a stated boundary,
-     and it is the one that looks most like a gap.
+     and it is the one that looks most like a gap. **And it is the same shape as
+     `:to :llvm` was**: `selfhost.cljc` accepts `"jvm"` as a mode, so the npm CLI
+     carries a compiler that can do it and does not call it.
 
    Worth confirming which asymmetries are intended. `:to :llvm`'s has a reason in
    the code; `:to :jvm`'s has none written down.

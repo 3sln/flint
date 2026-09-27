@@ -114,6 +114,39 @@ export function compileBytes(srcs, entry, optimize, to, meta,
   return b64decode(runCompiler(['wasm', spec, b64encode(aot ? runtimeAotWasm() : runtimeWasm())]).trim());
 }
 
+/// `:to :llvm`: LLVM IR, TEXT out.
+///
+/// THIS PACKAGE REFUSED IT UNTIL 2026-09-26 AND CARRIED THE EMITTER ALL ALONG.
+/// `src/flint/llvm.cljc` is portable cljc with no reader conditionals, and
+/// `src/flint/selfhost.cljc` already accepts `"llvm"` as a mode and calls
+/// `compile-to-llvm` -- inside `dist/flintc.wasm`, which is what `runCompiler`
+/// below runs. So the refusal was unwired dispatch and not a missing capability,
+/// and the comment that said "`:to :llvm` is not available from this package"
+/// was about the dispatch rather than the compiler.
+///
+/// SLOTS and no SHAKE, matching `cli/src/main.rs`'s `compile_llvm`: shaking cuts
+/// a finished module down to what a program reaches, and there is no module here
+/// to cut. The equivalent for a natively linked artifact is the linker's own
+/// `--gc-sections`.
+function compileLlvmText(srcs, entry, optimize,
+                         { checks = null, exports = [], features = null } = {}) {
+  const aot = wantsAot(optimize);
+  const spec = buildSpec({
+    srcs, entry, slots: slots(), aot, shake: false, meta: [], roots: null,
+    stdlib: stdlib(), stdlibDeps: stdlibDeps(),
+    stripChecks: stripChecks(optimize, checks), exports, features,
+  });
+  const out = runCompiler(['llvm', spec]);
+  // A `.ll` THAT IS NOT IR is the failure to refuse rather than write, for the
+  // reason the native CLI gives: the guest answers with a string either way, and
+  // a diagnostic written into an artifact is found out by the linker three
+  // commands later with no idea which step lied.
+  if (!out.startsWith('; flint program, as LLVM IR.')) {
+    throw new Error(`the compiler did not answer with LLVM IR:\n${out.trim()}`);
+  }
+  return out;
+}
+
 /// `:to :clr`: one .NET assembly, bytes out.
 ///
 /// No `shake` and `SLOTS`, not `SLOTS_AOT`, matching the native CLI's
@@ -144,11 +177,19 @@ export function compile(srcs, entry, outPath, optimize, to, meta,
   // `bin/check-llvm` gates it). This used to say it was not built anywhere,
   // which was drift: the refusal belongs to THIS PACKAGE lacking the emitter,
   // not to the target lacking an implementation.
-  if (target === 'llvm' || target === 'native') {
+  // `:to :native` IS A LINK and no CLI carries a linker; `:to :llvm` is text and
+  // this package emits it now (`compileLlvmText`).
+  if (target === 'native') {
     throw new Error(
-      `\`:to :${target}\` is not available from this package. It emits wasm and clr;\n` +
-      '`:to :llvm` is built in the native CLI (`flint compile ... :to :llvm`), and\n' +
-      '`:to :native` is a LINK that neither carries.');
+      '`:to :native` is a LINK and this package carries no linker. `:to :llvm`\n' +
+      'emits the IR for the same program; linking it is then your own `clang`\n' +
+      '(see `nativeabi/`).');
+  }
+  if (target === 'llvm') {
+    const ir = compileLlvmText(srcs, entry, optimize, { checks, features });
+    writeFileSync(outPath, ir);
+    if (!quiet) process.stderr.write(`wrote ${outPath} (${ir.length} bytes)\n`);
+    return;
   }
   if (target === 'clr') {
     const asm = compileClrBytes(srcs, entry, optimize, meta, { checks, features });
@@ -157,7 +198,7 @@ export function compile(srcs, entry, outPath, optimize, to, meta,
     return;
   }
   if (target !== 'wasm') {
-    throw new Error(`no such target \`${target}\` (\`:to :wasm\`, \`:to :clr\`)`);
+    throw new Error(`no such target \`${target}\` (\`:to :wasm\`, \`:to :clr\`, \`:to :llvm\`)`);
   }
   const aot = wantsAot(optimize);
   const table = aot ? slotsAot() : slots();
@@ -397,6 +438,15 @@ export function usage() {
       \`boot\`/\`loop\`/\`link\`; its metadata is a \`CustomAttribute\`. It carries the
       PROGRAM and names flint's runtime as a reference, so \`Flint.dll\` goes
       beside it.
+
+  flint compile :path <dir> :fn <ns/fn> :to :llvm [:out <file>]
+                [:optimize [perf]] [:checks true|false]
+      Compile to LLVM IR: one \`.ll\` carrying the program, its compiled arities
+      and a \`main\`. No linker runs here and none is needed -- turning it into
+      an executable is your own:
+
+          cargo build --release -p flint-native-abi
+          clang prog.ll target/release/libflintnative.a -o prog
 
   flint test :path <dir>
       Run every var marked \`^:flint.check/test\` under \`:path\`, and report.
