@@ -92,8 +92,40 @@ exercise the API a consumer uses. `metadata()` is NOT parsed into a map: the ESM
 SDK returns an object because JSON is its native shape, EDN is not the JVM's, and
 an EDN reader in the runtime would be a parser nobody asked for.
 
-**Still missing:** a `Compiler` — ESM has one, so source-to-Image on the JVM is
-not yet a single call.
+### `com.flint.Compiler`, and the half of it that cannot exist yet
+
+`Compiler.of(dist/flintc.bytecode).run(argv)` runs the flint compiler ON this
+runtime — the ESM SDK's `new Compiler(module)` over `dist/flintc.wasm`, with the
+same compiler, which is a flint program. Verified: 36 864 chars, **byte for byte
+what the wasm compiler emits**, which is the assertion
+`runtimes/jvm/test/RtSelfHost.java` makes and where this was promoted from.
+
+Four things a second implementation gets wrong now live in one place, each learnt
+the hard way by that harness: `flint.selfhost/main` is a VAR found through the
+image's var table and not `img.entry`; the initialisers must run first or it is
+unbound; everything is rooted across allocations because the nursery copies; and
+the spec goes in a LIST, because `main` takes an argv and dispatches on its first
+element.
+
+**There is deliberately no `compileJvm(spec) -> Image`.** It was written, found
+unreachable, and removed rather than shipped. THERE ARE TWO SPEC SHAPES:
+
+    self.spec  mode spec -> an image, 36 864 chars
+    self.spec  mode jvm  -> !missing clojure.core hello flint.system ...
+    jvm.spec   mode spec -> an image
+    jvm.spec   mode jvm  -> !missing clojure.core ok flint.system ...
+
+The MODE decides, not the spec. `compile-to-base64` takes a RESOLVED spec,
+`{:sources {ns {:src ..}} :order [..]}` — what `bin/flint --emit-spec` writes.
+Every artifact target goes through `build-image`, which takes an UNRESOLVED
+`{:files .. :entry ..}` and resolves it itself. Each CLI builds that second shape
+internally and exposes it to nobody, so a JVM host can obtain the first and no
+artifact target accepts it.
+
+Closing that is the same change as sharing spec construction
+(`DECISIONS.md#one-dependency-walk`, and `ROADMAP.md`'s item after `:to :llvm`),
+not a method on a class. So the mirror is half complete on purpose, and this is
+the measured reason rather than an estimate of one.
 
 **Each of those is a named gate, added 2026-09-26** -- the claims were true and
 unattributed, and a claim with no gate beside it cannot be rechecked:
