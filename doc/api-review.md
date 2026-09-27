@@ -42,8 +42,8 @@ What the counts say, as a starting point rather than an answer:
 | `flint.check` | 14 programs require it | public, never manifested |
 | `flint.bytes` | 5 programs, and `flint.protocols.io` | public, never manifested |
 | `flint.table` | 2 programs, has its own decision | public, never manifested |
-| `flint.host` | 0 programs, 2 README mentions | genuinely unclear |
-| `flint.snapshot` | nothing requires it at all | genuinely unclear |
+| `flint.host` | 0 programs, 2 README mentions | ~~genuinely unclear~~ — **capability-guarded**, see below |
+| `flint.snapshot` | nothing requires it at all | ~~genuinely unclear~~ — **not public, by design**, see below |
 | `flint.fs` | nothing requires it; `flint.sys.fs` is what programs use | may have no job left |
 | the rest | required only by tooling or by each other | internal |
 
@@ -62,6 +62,51 @@ Every var reachable, nothing absent, nothing extra. So the gap is missing
 COVERAGE and not a hidden defect — publishing them costs nothing and buys the
 assertion. The probe was reverted, because whether they are published is a
 boundary decision and this file is where it gets made, not a script.
+
+## ALL FOURTEEN, measured 2026-09-26 at `f3ec8560`
+
+The probe above covered three. Run for all fourteen at once — added to
+`bin/manifest`'s `shipped` map, `./bin/manifest`, `bb test/manifest.clj`, then
+every touched file restored from a saved copy and `git status` confirmed clean:
+
+    PASS  flint.bytes  flint.check  flint.cli  flint.deps  flint.deps.manifest
+          flint.deps.registry  flint.fs  flint.nfa  flint.pike  flint.table
+          flint.virtual                                            -- 11 of 14
+    FAIL  flint.snapshot       no such builtin: flint.rt/snapshot
+          flint.host           flint.host/ask is guarded with #{:host}
+          flint.deps.resolve   cannot find source for flint.deps.npm
+
+**ELEVEN WOULD PASS TODAY**, so for those the question is purely whether to
+publish; there is no defect behind any of them. The three that fail each fail
+for a reason worth reading, and **two of the three answer a row the table above
+calls "genuinely unclear"**:
+
+* **`flint.snapshot` is NOT public, deliberately, and this is now settled.** The
+  snapshot unit is a DIAGNOSTICS build only (`DECISIONS.md#two-builds`); a
+  release CLI does not link it, and `(:require [flint.snapshot])` failing closed
+  with "no such builtin" IS the guarantee. `bin/check-builtins` carries the
+  carve-out and asserts it has not gone stale: "A port carrying it would widen
+  the production surface, not close a gap -- absent is the guarantee." Its three
+  builtins are provided by `units-src/flint-snap`, not by the core 226 in
+  `dist/builtins.json`, which is why a search of the latter finds nothing.
+  **Nearly recorded here as a published-but-broken namespace.** The compile error
+  is real and reproducible on a production units build — `units/.build-mode` says
+  `production` — and reads exactly like breakage. What settled it was grepping
+  for what PROVIDES the builtin rather than what calls it. Its UNMANIFESTED
+  marker is correct and should stay.
+* **`flint.host` is capability-guarded**, not unclear: `flint.host/ask` is
+  guarded with `#{:host}` and the manifest probe grants nothing. Manifesting it
+  would need the probe to hold `:host`, which is a decision about the probe.
+* **`flint.deps.resolve` requires `flint.deps.npm`**, a virtual namespace the CLI
+  SERVES rather than a file on the source path. It is not compilable standalone
+  by construction, which is a fact about where it belongs rather than a defect.
+
+AND THE COUNTS FOR THESE FOURTEEN NOW COME FROM THE GENERATOR TOO. The run
+produced `bin/manifest`'s own figure for each, and five were wrong here:
+`flint.check` 5→7, `flint.cli` 7→6, `flint.deps.manifest` 7→6, `flint.nfa`
+21→25, `flint.virtual` 5→4. `bin/check-api-review` cannot gate these — they have
+no manifest entry to read — so they remain hand-written, and that is the argument
+for manifesting the eleven rather than against it.
 
 ---
 
@@ -83,7 +128,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-5 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Checks that cost nothing in a release build. Two things at once, and they are the same thing seen from two sides: * **Inline checks** against bad usage, so a library says what went wrong where it...
+7 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Checks that cost nothing in a release build. Two things at once, and they are the same thing seen from two sides: * **Inline checks** against bad usage, so a library says what went wrong where it...
 
 **Is this public?** Required by 14 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. 14 compiled test programs require it -- more than any other namespace here. Reads as public API that was never manifested.
 
@@ -93,7 +138,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-7 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. The command surface, as a flint program (`DECISIONS.md#cli`).
+6 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. The command surface, as a flint program (`DECISIONS.md#cli`).
 
 **Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. Nothing requires it. It is the CLI's own logic, driven by `bin/flint`; a program requiring it would be odd.
 
@@ -153,7 +198,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-7 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Manifest SCANNERS: what a package that is already on disk says it depends on (`DECISIONS.md#one-dependency-walk`).
+6 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Manifest SCANNERS: what a package that is already on disk says it depends on (`DECISIONS.md#one-dependency-walk`).
 
 **Is this public?** Required by 0 compiled test program(s), 2 other `lib` namespace(s), named 0 time(s) in README. Required only within `flint.deps.*`. Tooling.
 
@@ -211,7 +256,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-21 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Regex AST to a Thompson NFA program (`DECISIONS.md#matching-over-ropes`).
+25 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Regex AST to a Thompson NFA program (`DECISIONS.md#matching-over-ropes`).
 
 **Is this public?** Required by 0 compiled test program(s), 2 other `lib` namespace(s), named 0 time(s) in README. Required by `flint.regex` and one other; the regex engine's insides.
 
@@ -309,7 +354,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-5 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Namespaces with no source, spoken to over a port (`DECISIONS.md#workspace-capabilities` step 4, `system-namespaces-and-deps`).
+4 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Namespaces with no source, spoken to over a port (`DECISIONS.md#workspace-capabilities` step 4, `system-namespaces-and-deps`).
 
 **Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. Compiler machinery: the target `:require` of a virtual namespace compiles INTO. A program naming it directly would be a mistake.
 
