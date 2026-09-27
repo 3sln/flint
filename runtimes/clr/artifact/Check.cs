@@ -263,6 +263,30 @@ public static class Check {
         var asm = Assembly.LoadFrom(path);
         Ok($"the CLR loads it: {asm.GetName().Name}");
 
+        // --- FROM BYTES, WITH NO FILE, which is how every other SDK loads one and
+        // how this one could not until `Flint.Rt.Image` existed. The two routes have
+        // to agree: a byte-loaded artifact that reported different metadata, or a
+        // different bytecode length, would be a second artifact wearing the name.
+        var fromBytes = Flint.Rt.Image.Of(File.ReadAllBytes(path));
+        var fromPath = Flint.Rt.Image.OnPath(path);
+        Want(fromBytes.Type_() != null, "Image.Of(bytes) loads it with no file");
+        Want(fromBytes.Metadata() != null,
+             "and its metadata is readable -- reflection, so bytes need not be kept");
+        Want(fromBytes.Metadata() == fromPath.Metadata(),
+             "the bytes route and the path route agree about the metadata");
+        Want(fromBytes.Bytecode().Length == fromPath.Bytecode().Length,
+             $"and about the bytecode ({fromBytes.Bytecode().Length} bytes)");
+        // `Bytes()` is null for the path route ON PURPOSE: it is uniformity with
+        // the JVM's `Image`, not a requirement, because CLR metadata needs no bytes.
+        Want(fromBytes.Bytes() != null && fromPath.Bytes() == null,
+             "Of keeps the bytes; OnPath has none to keep");
+        try {
+            Flint.Rt.Image.Of(new byte[]{ 1, 2, 3, 4 });
+            Want(false, "a non-PE is refused by name");
+        } catch (ArgumentException) {
+            Ok("a non-PE is refused by name, not deep inside the loader");
+        }
+
         // --- METADATA WITHOUT EXECUTING ANYTHING. Not a call, not a boot; this is
         // what replaced the `prop` operation, and the whole point is that it works
         // before deciding whether to load the program at all.

@@ -60,6 +60,32 @@ which is worse than a refusal because the artifact looks fine until somebody
 writes code against it. Found by naming a test file `bf-Prog.class` and reading
 what `javap` said about it.
 
+### `Flint.Rt.Image`, the CLR's half of the same mirror
+
+`Assembly.LoadFrom(path)` was how a CLR host reached an artifact --
+`runtimes/clr/artifact/Check.cs` did it twice and resolved `Program`, `Boot`,
+`Link` and the metadata attribute inline each time. `Assembly.Load(byte[])` is the
+CLR's `defineClass`, so an artifact never had to be a file here either.
+
+    Image.Of(byte[])     loads the assembly from bytes; no file, no path
+    Image.OnPath(path)   for one on disk
+    .Metadata() .Bytes() .Type_() .Assembly_() .Bytecode()
+    .Boot(IBridge) .Link(bridge, name, fn)
+
+**IT DIFFERS FROM THE JVM'S IN ONE WAY, AND THAT IS NOT AN OVERSIGHT.** The JVM's
+`Image` MUST hold the class bytes, because its metadata is a raw class-file
+attribute read by hand and recovering the bytes from a byte-defined class returns
+null. The CLR's metadata is a real `_3sln.Flint.MetaAttribute` read by REFLECTION,
+which works for a byte-loaded assembly exactly as for a file — so `Metadata()`
+here needs nothing kept. The bytes are kept anyway, for `Bytes()`, and that is
+uniformity rather than necessity. Saying which is which is the point: flattening
+the two would hide that the JVM had a defect the CLR never had.
+
+`Check.cs` now asserts both routes agree about the metadata and the bytecode
+length, that `Of` keeps bytes while `OnPath` has none to keep, and that a non-PE
+is refused by name rather than deep inside the loader. The agreement row was proved
+able to fail by making `Metadata()` bytes-dependent.
+
 ### `com.flint.Image`, the mirror of the other SDKs' Image
 
 Each SDK takes an artifact as bytes and hands back something bootable — ESM's
