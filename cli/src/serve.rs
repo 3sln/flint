@@ -21,6 +21,14 @@ use flint_rt::codec::{self, Val, Wire};
 use flint_rt::native::{Event, Outcome, Program};
 use std::collections::HashMap;
 
+/// WHAT A WEDGED SANDBOX SAYS, once, so the two give-up sites cannot drift.
+///
+/// It names the STATUS as well as the symptom: the number is what a caller acts
+/// on and the sentence is what a person reads, and the sentence used to be all
+/// there was.
+const WEDGED_MSG: &str =
+    "wedged (status 4): the host pump made no progress";
+
 // The event kinds, from `runtime/src/conc.rs`. Named here rather than matched
 // as bare integers: `if ev.kind == 1` is unreadable and, worse, unsearchable.
 const EV_OPEN: u32 = 1;
@@ -294,7 +302,7 @@ impl Host {
         loop {
             guard += 1;
             if guard > 1_000_000 {
-                return Err(String::from("the host pump made no progress"));
+                return Err(String::from(WEDGED_MSG));
             }
             for ev in p.drain_events() {
                 // OUR ANSWER, or somebody else's request. A `:return` on the
@@ -333,9 +341,16 @@ impl Host {
         while out.code == 2 {
             guard += 1;
             if guard > 1_000_000 {
+                // STATUS 4, NOT 1. A wedged sandbox was reported as `1 Threw`
+                // with this sentence as the thrown value -- so "the program threw"
+                // and "the program cannot proceed" were the same number, and a
+                // caller could not tell a guest exception from a host that gave
+                // up. `4 Wedged` has been in the contract since the statuses grew
+                // from three to five and no path returned it
+                // (`DECISIONS.md#four-operations`).
                 return Outcome {
-                    code: 1,
-                    out: "the host pump made no progress".into(),
+                    code: 4,
+                    out: WEDGED_MSG.into(),
                 };
             }
             let events = p.drain_events();

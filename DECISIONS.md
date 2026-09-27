@@ -12754,6 +12754,33 @@ pump's guard fires first. Whether a wedged sandbox should surface that, or keep
 answering 2 and let the host decide, is the throw-versus-status question, and it is
 the maintainer's.
 
+> **ANSWERED 2026-09-26 by the maintainer: "For a wedged loop, it should probably
+> be a status like the others."** It now is, on both user-facing hosts.
+>
+> The defect the question was hiding: a wedge was reported as **`1 Threw`** with
+> the sentence as the thrown value. So "the guest threw an exception" and "the
+> host gave up pumping" were THE SAME NUMBER to a caller, while `4 Wedged` sat in
+> the contract returned by nothing at all. Both hosts answer 4 now, with one
+> wording read from one constant per side -- `WEDGED_MSG` in `cli/src/serve.rs`
+> and `WEDGED` in `sdks/esm/src/guest.js`:
+>
+>     native   exit 1, "wedged (status 4): the host pump made no progress"
+>     wasm     exit 1, "flint: wedged (status 4): ..."
+>
+> `pump` on the JS side RETURNS `{code: 4, out}` rather than throwing, which is
+> the same shape as the native `Outcome`. `pumpFor` still throws, and that
+> difference is deliberate: it owes its caller an answer to a specific
+> transaction and has none to return, so the status rides on the error as
+> `err.status = 4` and a caller acts on the number rather than matching the
+> sentence. `bin/check-wedged` pins both arms.
+>
+> **The runtime's side of the question is untouched**, and the paragraphs below
+> are why: `sched-needs-host` is true forever once a system port exists, so the
+> runtime cannot call a sandbox wedged without lying -- the host could send at
+> any moment. It is the HOST that knows, and the host is where the status now
+> comes from. `report_deadlock` remains unreachable on a user-facing path, which
+> is correct rather than a gap.
+
 **AND THE FIRST READING OF THIS WAS WRONG, which is worth keeping because the
 wrong reading is the obvious one.** It looked like the host pump's guard was
 MASKING a diagnostic the runtime had already produced. It is not. The runtime is

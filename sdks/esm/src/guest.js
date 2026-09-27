@@ -17,6 +17,10 @@
 
 import { codec, Val } from './codec.js';
 
+/// WHAT A WEDGED SANDBOX SAYS, once, so the two give-up sites cannot drift and so
+/// the wording matches the native host's `WEDGED_MSG` in `cli/src/serve.rs`.
+const WEDGED = 'wedged (status 4): the host pump made no progress';
+
 export function instantiate(module, { stepLimit = 0 } = {}) {
   const instance = new WebAssembly.Instance(module, {});
   const e = instance.exports;
@@ -65,7 +69,12 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
   function pump(code) {
     let guard = 0;
     while (code === 2) {
-      if (++guard > 1e6) throw new Error('flint: the host pump made no progress');
+      // STATUS 4, NOT A THROW. `pump` answers `{code, out}` -- the same shape as
+      // the native host's `Outcome` -- so a wedge is a STATUS here exactly as it
+      // is there. It used to throw, which made "the program threw" and "the host
+      // gave up" indistinguishable to a caller and left `4 Wedged` returned by
+      // nothing (`DECISIONS.md#four-operations`).
+      if (++guard > 1e6) return { code: 4, out: WEDGED };
       for (const ev of drain()) handle(ev);
       // Anything the guest refused for want of buffer space, and anything a
       // capability still has to say. A server answering in waves offers the
@@ -443,7 +452,15 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     let guard = 0;
     let code = e.flint_resume();
     while (answer === undefined) {
-      if (++guard > 1e6) throw new Error('flint: the host pump made no progress');
+      // THIS ONE STILL THROWS, and the difference is real: `pumpFor` owes its
+      // caller an ANSWER to a specific transaction, and there is no answer to
+      // return. The status rides on the error so a caller can act on it as a
+      // status rather than by matching the sentence.
+      if (++guard > 1e6) {
+        const err = new Error(`flint: ${WEDGED}`);
+        err.status = 4;
+        throw err;
+      }
       for (const ev of drain()) handle(ev);
       flush();
       if (answer !== undefined) break;

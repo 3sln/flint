@@ -40,8 +40,16 @@ cd "$(dirname "$0")/.."
 fail() { echo "FAILED: $1"; exit 1; }
 
 # THE ONE LITERAL. Native's `cli/src/serve.rs` prints this; `sdks/esm/src/guest.js`
-# prints it behind a `flint: ` prefix.
-EXPECT='the host pump made no progress'
+# prints it behind a `flint: ` prefix. Both read it from a single constant on their
+# own side -- `WEDGED_MSG` and `WEDGED` -- so a change has to be made twice on
+# purpose rather than once by accident.
+#
+# IT NAMES THE STATUS as of 2026-09-26. A wedge used to be reported as `1 Threw`
+# with the sentence as the thrown value, so "the program threw" and "the host gave
+# up" were the same number to a caller while `4 Wedged` sat in the contract
+# returned by nothing. The number is what a caller acts on; the sentence is what a
+# person reads.
+EXPECT='wedged (status 4): the host pump made no progress'
 
 if [ ! -x target/release/flint ]; then
   echo "  --   check-wedged: no target/release/flint; skipping (cargo build --release -p flint-cli)"
