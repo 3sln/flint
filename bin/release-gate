@@ -1,9 +1,17 @@
 #!/bin/sh
 # THE RELEASE TIER: everything, including what the ordinary gate skips.
 #
-#   bin/check          ~5 s      every change
-#   bin/test           ~20 min   before pushing, and on a PR
-#   bin/release-gate   ~25 min   before a versioned release
+#   bin/check          ~27 s     every change
+#   bin/test           ~36 min   before pushing, and on a PR
+#   bin/release-gate   > bin/test                before a versioned release
+#
+# WHAT THIS COSTS IS bin/test PLUS A SECOND FULL conform-hosts RUN, not bin/test
+# plus the self-hosting step: line 28 runs `./bin/test` and line 32 runs
+# `FLINT_SELFHOST=1 ./bin/conform-hosts` from the top. The self-hosting STEP is
+# 8.85 s (measured 2026-09-26, `7b73c0cb`); the second conform-hosts run around
+# it is the real addition and has NOT been measured, so no total is stated here
+# rather than a guessed one. `~25 min` stood here and was below `bin/test`'s own
+# figure, which cannot be right for a superset.
 #
 # What this adds over `bin/test` is SELF-HOSTING ON THE PORTS, which is
 # otherwise checked by nothing anyone runs. Both ports compiling the compiler

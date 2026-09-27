@@ -113,15 +113,30 @@ things being compared.
 
 ## 4. The gate is the last check, not the first
 
-**THE GATE IS TIERED. Do not run the twenty-minute one on every change.**
+**THE GATE IS TIERED. Do not run the half-hour one on every change.**
 
-    bin/check          ~5 s      every change
-    bin/test           ~20 min   before pushing a branch, and on a PR
-    bin/release-gate   ~25 min   before a versioned release
+    bin/check          ~27 s     every change
+    bin/test           ~36 min   before pushing a branch, and on a PR
+    bin/release-gate   > bin/test  before a versioned release
 
-`bin/check` is the four sub-second static checks plus two suites that are 1 s
-and 3 s, and it runs `check-kin` (74 s) only when kin sources or the generated
-trees actually moved. Its contents were chosen by measuring: two suites that
+*Re-measured 2026-09-26 at `5742ecde`, load average 2.21: `bin/check` is 26.8 s
+by `time ./bin/check`, and was 26–30 s on every one of a dozen runs that day.
+`bin/test` was 2 139 s (35.6 min) on its last full green run this session. THE
+TABLE SAID `~5 s` AND THE PARAGRAPH BELOW SAID 23 MINUTES WHERE THE TABLE SAID
+20 — two numbers for one gate, fifteen lines apart, which is the shape that says
+a section was spliced rather than reasoned about. `bin/release-gate` said `~25 min`, BELOW `bin/test`'s own
+figure, which cannot be right for a superset: it runs `./bin/test` and then
+`FLINT_SELFHOST=1 ./bin/conform-hosts` from the top, so it is `bin/test` plus a
+SECOND full conform-hosts run — not plus the 8.85 s self-hosting step, which was
+this correction's own first mistake. That second run is unmeasured, so the table
+says `> bin/test` rather than a number nobody produced.*
+
+`bin/check` is SIXTEEN static checks plus four heavier items, and it runs
+`check-kin` (74 s) only when kin sources or the generated trees actually moved.
+Measured 2026-09-26, the heavy four are where the time is: `check-wedged` 9.4 s,
+`check-four-ops` 6.0 s, `test/selfhost-targets.clj` 4.7 s, `check-api-review`
+0.05 s — 20.1 s of the 26.8 s. It read "the four sub-second static checks plus
+two suites that are 1 s and 3 s", which was true of a smaller gate. Its contents were chosen by measuring: two suites that
 looked like candidates are not — one is 15 s, and the other is 16 s AND fails
 standalone because it needs build state the full gate happens to produce.
 
@@ -131,7 +146,7 @@ standalone because it needs build state the full gate happens to produce.
 section), so running both is running the four-runtime matrix twice — about 3½
 minutes of pure duplication.
 
-It takes about **23 minutes** and prints its own itemisation at the end,
+It prints its own itemisation at the end,
 slowest section first. Use that before optimising anything: the first
 measurement put 71% of the time in 12 of 60 sections, and the largest was a
 CHECK rather than a suite.
