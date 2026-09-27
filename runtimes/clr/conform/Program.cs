@@ -15,6 +15,7 @@ public static class Program {
         if (args.Length >= 1 && args[0] == "--rt-stale") return RtStale();
         if (args.Length >= 3 && args[0] == "--rt-shelve") return RtShelve(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "--rt-selfhost") return RtSelfHost(args[1], args[2]);
+        if (args.Length >= 3 && args[0] == "--rt-sdk") return RtSdk(args[1], args[2]);
         if (args.Length >= 2 && args[0] == "--rt-aot") return RtAot(args[1]);
         if (args.Length >= 2 && args[0] == "--rt-flags") return RtFlags(args[1]);
         if (args.Length >= 2 && args[0] == "--rt-hostports") return RtHostPorts(args[1]);
@@ -1193,6 +1194,51 @@ public static class Program {
     /// Checked against the wasm compiler's OUTPUT, byte for byte. "It ran"
     /// would have passed with every map literal empty, which is one of the four
     /// bugs this found.
+    /// THE SDK PATH on this runtime: `Flint.Rt.Compiler` and `Flint.Rt.Image`,
+    /// the mirrors of the ESM SDK's `Compiler` and `Image`.
+    ///
+    /// It asserts the compiler RUNS here and that `:to :clr` REFUSES a spec it
+    /// cannot compile correctly. The second half is the finding: given an
+    /// already-resolved spec -- no `:slots` -- the CLR emitter produced a
+    /// 29 184-byte assembly, the same length as the good one and 83 bytes
+    /// different, that `Assembly.Load` rejected as `Bad IL format`. The WASM
+    /// compiler produced the same bytes, so the two runtimes agreed and the input
+    /// was wrong. A refusal is the correct answer; an artifact that loads nowhere
+    /// is worse than an error.
+    private static int RtSdk(string specPath, string refPath) {
+        int fails = 0;
+        void Row(string what, bool cond, string saw) {
+            if (cond) Console.WriteLine("  ok   " + what);
+            else { Console.WriteLine("  FAIL " + what + " :: " + saw); fails++; }
+        }
+
+        var c = Flint.Rt.Compiler.Of(File.ReadAllBytes("dist/flintc.bytecode"));
+        string spec = File.ReadAllText(specPath);
+
+        // THE COMPILER RUNS HERE. Mode `spec` answers a flint image, which is what
+        // `--rt-selfhost` compares byte for byte against the wasm compiler.
+        string image = c.Run(spec);
+        Row("the compiler runs on this runtime", image.StartsWith("RkxJTlRJTUc"),
+            image.Length > 24 ? image.Substring(0, 24) : image);
+
+        // AND `:to :clr` REFUSES A SPEC WITHOUT `:slots`, by name.
+        string refused = c.Run("clr", spec);
+        Row("`:to :clr` refuses a resolved spec rather than emitting bad IL",
+            refused.StartsWith("!refused") && refused.Contains(":slots"),
+            refused.Length > 90 ? refused.Substring(0, 90) : refused);
+
+        // AND THE REFUSAL REACHES A CALLER as an exception, not as bytes.
+        try {
+            c.CompileClr(spec);
+            Row("CompileClr surfaces the refusal", false, "it returned an Image");
+        } catch (InvalidOperationException e) {
+            Row("CompileClr surfaces the refusal", e.Message.Contains(":slots"), e.Message);
+        }
+
+        if (fails > 0) { Console.WriteLine("RtSdk: " + fails + " FAILURES"); return 1; }
+        return 0;
+    }
+
     private static int RtSelfHost(string specPath, string refPath) {
         var rt = new Flint.Rt.Rt(64L * 1024 * 1024, 2048L * 1024 * 1024);
         var img = Flint.Rt.Img.Load(rt, File.ReadAllBytes("dist/flintc.bytecode"));

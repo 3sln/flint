@@ -79,7 +79,6 @@ public sealed class Image {
     /// The artifact bytes, or null for an image loaded from a path.
     public byte[] Bytes() { return bytes; }
 
-    public Assembly Assembly_() { return asm; }
     public Type Type_() { return ty; }
 
     /// The flint IMAGE the artifact carries -- its bytecode, as constant data on

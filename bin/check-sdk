@@ -1,6 +1,6 @@
 #!/bin/sh
-# THE JVM SDK, END TO END: source -> spec -> artifact -> loaded class, on this
-# runtime, with no file written for the artifact.
+# THE JVM AND CLR SDKs, END TO END: source -> spec -> artifact -> loaded type, on
+# each runtime, with no file written for the artifact.
 #
 # `com.flint.Compiler` and `com.flint.Image` are the JVM's mirrors of the ESM
 # SDK's `Compiler` and `Image` (`doc/ports.md`). This is what asserts they work,
@@ -67,3 +67,18 @@ base64 -d < "$W/ref.b64" > "$W/ref.class" 2>/dev/null \
 "$JDK/bin/java" -Xss1g -cp "runtimes/jvm/classes:$W/classes" RtCompiler \
   dist/flintc.bytecode "$W/p.spec" "$W/ref.class" \
   || fail "RtCompiler"
+
+# --- THE CLR ARM. `Flint.Rt.Compiler` and `Flint.Rt.Image` are the same pair, and
+# what it asserts differs for a measured reason: `:to :clr` REFUSES an
+# already-resolved spec instead of emitting an assembly nothing can load. Given
+# one it produced 29 184 bytes -- the same length as the good artifact, 83 bytes
+# different, `.text` 36 bytes larger -- that `Assembly.Load` rejected as
+# `Bad IL format`, and the WASM compiler produced the same bytes, so the two
+# runtimes agreed and the input was wrong.
+CLR=runtimes/clr/conform/bin/Release/net10.0/Conform
+if [ -x "$CLR" ] && command -v dotnet > /dev/null 2>&1; then
+  DOTNET_ROOT="${DOTNET_ROOT:-/opt/homebrew/opt/dotnet/libexec}" \
+    "$CLR" --rt-sdk "$W/p.spec" "$W/ref.class" || fail "Conform --rt-sdk"
+else
+  echo "  --   check-sdk: no CLR conform binary or no dotnet; the clr arm is skipped"
+fi

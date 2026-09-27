@@ -102,12 +102,12 @@ grep -cE "^  ok" /tmp/flint-check.out | sed 's/^/  ok   test\/selfhost-targets.c
 # node.
 ./bin/check-wedged || fail "bin/check-wedged"
 
-# THE JVM SDK, end to end: source -> spec -> artifact -> loaded class, with the
+# THE JVM AND CLR SDKs, end to end: source -> spec -> artifact -> loaded class, with the
 # artifact never written to a file. It is here rather than in `bin/test` for
 # `check-four-ops`'s reason -- and because it is the only caller of
 # `com.flint.Compiler.compileJvm`, which `bin/dead-runtime-fns` correctly flagged
 # as referenced by nothing. About 12 s; skips itself without a JDK.
-./bin/check-jvm-sdk || fail "bin/check-jvm-sdk"
+./bin/check-sdk || fail "bin/check-sdk"
 
 
 # `check-kin` is 74 s -- too slow for every change, and it has a PRECISE input

@@ -86,6 +86,38 @@ length, that `Of` keeps bytes while `OnPath` has none to keep, and that a non-PE
 is refused by name rather than deep inside the loader. The agreement row was proved
 able to fail by making `Metadata()` bytes-dependent.
 
+### `Flint.Rt.Compiler`, and the one target that refuses a resolved spec
+
+`Compiler.Of(dist/flintc.bytecode).Run(argv)` runs the compiler on this runtime,
+the mirror of `com.flint.Compiler` and the ESM SDK's. Promoted from
+`--rt-selfhost` in `runtimes/clr/conform/Program.cs`, which carries the same four
+lessons the JVM's did: the var table rather than `img.entry`, initialisers first,
+rooting across allocations, and the spec as an argv.
+
+**`:to :clr` REFUSES AN ALREADY-RESOLVED SPEC, and that restriction was measured
+rather than assumed.** Given one — no `:slots`, and a `:builtins` set that is not
+the slots-derived one — the CLR emitter produced a 29 184-byte assembly: the same
+LENGTH as the good artifact, 83 bytes different, `.text` 36 bytes larger, which
+`Assembly.Load` rejected with `BadImageFormatException: Bad IL format`.
+
+Three things that measurement settled, in order:
+
+* **it is not a port divergence.** The wasm compiler produced THE SAME BYTES from
+  the same spec. Both runtimes were faithful to a wrong input.
+* **it is not the mechanism.** `:to :jvm` takes a resolved spec and its artifact
+  is byte-identical to the wasm compiler's AND loadable — because JVM natives
+  resolve by name at load, while the CLR emitter's structure depends on the
+  builtin set.
+* **so it is this target's restriction**, and a refusal is the right answer. An
+  artifact that loads nowhere is worse than an error, and `bin/flint` has the
+  lesson already: it once fell through to the wasm path for an unknown `:to` and
+  wrote a 494 KB wasm module into a `.ll`.
+
+`bin/check-sdk` asserts both arms — the JVM compiling source to a loadable
+in-memory `Image` byte-identical to the wasm compiler, and the CLR running the
+compiler and refusing the spec it cannot compile correctly, with the refusal
+reaching a caller as an exception rather than as bytes.
+
 ### `com.flint.Image`, the mirror of the other SDKs' Image
 
 Each SDK takes an artifact as bytes and hands back something bootable — ESM's

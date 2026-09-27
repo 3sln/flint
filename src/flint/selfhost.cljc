@@ -411,10 +411,34 @@
   call, which is why there is no `prop` here or anywhere: a reader decides
   WHETHER to load an artifact, and that cannot depend on having loaded it.
 
-  Bytes out, so the caller base64s them -- the opposite of `:ll`, which is text."
+  Bytes out, so the caller base64s them -- the opposite of `:ll`, which is text.
+
+  A SPEC MUST CARRY `:slots` HERE, and that is the one place this target differs
+  from `:to :jvm`. Both resolve their natives by name at load, but the CLR
+  emitter's structure depends on the builtin SET: given an already-resolved spec,
+  whose `:builtins` is a different set and whose `:slots` is absent, it emitted a
+  29 184-byte assembly -- the same length as the good one, differing in 83 bytes,
+  with `.text` 36 bytes larger -- that `Assembly.Load` refused with
+  `BadImageFormatException: Bad IL format`. The two compilers AGREED on those
+  bytes, so this is not a port divergence; the input was wrong and both were
+  faithful to it.
+
+  REFUSED RATHER THAN EMITTED. An artifact that loads nowhere is worse than an
+  error, and this project has the lesson already: `bin/flint` once fell through to
+  the wasm path for an unknown `:to` and wrote a 494 KB wasm module into a `.ll`.
+  `:to :jvm` takes a resolved spec and is verified byte-identical to the wasm
+  compiler on one, so the restriction is this target's and not the mechanism's."
   [spec-edn]
-  (let [spec (reader/read-one spec-edn)
-        built (build-image spec (spec-builtins spec))]
+  (let [spec (reader/read-one spec-edn)]
+    (if-not (:slots spec)
+      {:refused [{:from "the spec" :to ":to :clr"
+                  :to-workspace "this target"
+                  :needs "a :slots map"
+                  :from-workspace "an already-resolved spec"}]}
+      (compile-to-clr* spec)))) 
+
+(defn- compile-to-clr* [spec]
+  (let [built (build-image spec (spec-builtins spec))]
     (if (:missing built)
       {:missing (:missing built)}
       (if (:refused built)
