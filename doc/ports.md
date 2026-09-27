@@ -16,6 +16,42 @@ It runs every conformance program and agrees with the native runtime character
 for character, snapshots in both formats, and **self-hosts**: the flint compiler
 runs on it and emits byte for byte what the wasm compiler emits.
 
+## Loading an artifact: the JVM was the odd one out
+
+Every other runtime takes an artifact as BYTES. The ESM SDK is
+`new Image(wasmBytes)` and then `new Sandbox(module)` — a module OBJECT, never a
+path. The CLR is `Img.Load(rt, bytes)`. The JVM was `Class.forName("flint.Artifact")`:
+a NAME, resolved through the classpath, which drags the filesystem into the
+loading mechanism.
+
+**That is where `:to :jvm :out <directory>` came from.** A JVM loads a class only
+from a path matching the class's own name, so a fixed `flint.Artifact` forced
+`:out` to be the classpath ROOT that `flint/Artifact.class` hangs off, while every
+other target takes a file. The name was never the requirement — an artifact that
+only exists as a FILE was.
+
+`com.flint.rt.Artifact.define(byte[])` (2026-09-26) is the mirror of the other
+two, and it invents nothing: `AotEmit` already defined classes in memory this way
+for compiled arities, and `Img.load` already read an image from bytes. Verified:
+
+    loaded from bytes: Prog          no classpath, no filename
+    second, separate: true           two artifacts of the SAME NAME in one
+      same name: true                process, as distinct classes -- which a
+                                     shared loader cannot do, and is the JVM's
+                                     answer to instantiating a module twice
+    refuses non-class                0xCAFEBABE checked, so a wrong artifact is
+                                     named rather than failing inside the JVM
+
+A loader per artifact is what makes the second row true. `Class.forName` is kept
+for a consumer who put the class on a classpath, and the emitter's class name is a
+parameter now (`flint.jvm/artifact-class-name`), defaulting to `flint/Artifact` so
+existing output is byte-identical.
+
+**NOT FINISHED: the SDKs do not mirror each other yet.** There is no JVM
+`Image`/`Sandbox` pair shaped like the ESM SDK's, and the native CLI's `:to :jvm`
+still resolves `:out` to a classpath root — `bin/flint` takes `:out Prog.class`
+and the native door does not. Both are wiring on top of this, not redesign.
+
 **Each of those is a named gate, added 2026-09-26** -- the claims were true and
 unattributed, and a claim with no gate beside it cannot be rechecked:
 

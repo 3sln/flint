@@ -59,7 +59,18 @@
 ;; detail. Every body is one delegation, which is why this needs no dataflow
 ;; pass -- see `flint.classfile`.
 
+;; THE DEFAULT NAME, not the only one. It was a bare constant, and because a JVM
+;; loads a class only from a path matching its own name, that constant is what made
+;; `:to :jvm`'s `:out` a classpath ROOT rather than a file -- `<root>/flint/Artifact.class`
+;; is the only place the class could go. Threaded through `opts` as `:class` now, so
+;; `:out prog.class` can ask for `prog`, and every caller that passes no `:class`
+;; still gets this.
 (def ARTIFACT-CLASS "flint/Artifact")
+
+(defn artifact-class-name
+  "The artifact's INTERNAL name (slash-separated), from `opts` or the default."
+  [opts]
+  (or (:class opts) ARTIFACT-CLASS))
 
 (def ^:private SANDBOX "com/flint/rt/Sandbox")
 (def ^:private BRIDGE "com/flint/rt/Sandbox$Bridge")
@@ -140,10 +151,10 @@
   sandbox it pumps lives in a static field, which is where a wasm module
   instance's memory lives. A host wanting two sandboxes takes a second class
   loader, the JVM's answer to instantiating a module twice."
-  [image meta-text]
+  [image meta-text klass]
   (let [cuts (chunks image)
         p (cf/pool)
-        [p box] (cf/field-ref p ARTIFACT-CLASS "BOX" D-SANDBOX)
+        [p box] (cf/field-ref p klass "BOX" D-SANDBOX)
         [p mboot] (cf/method-ref p SANDBOX "boot"
                                  (str "(" D-BRIDGE "[" D-STRING ")" D-SANDBOX))
         [p mloop] (cf/method-ref p SANDBOX "loop" "()I")
@@ -191,7 +202,7 @@
     ;; no constructor is legal; `javac` writes one only because a source class
     ;; without one is a source class with a default one.
     (cf/class-file p (+ cf/ACC-PUBLIC cf/ACC-FINAL cf/ACC-SUPER)
-                   ARTIFACT-CLASS "java/lang/Object"
+                   klass "java/lang/Object"
                    [f] [m1 m2 m3] [attr])))
 
 ;; ----------------------------------------------------------------- metadata
@@ -266,7 +277,7 @@
   one of them BY NAME through the resolver `boot` is handed, so a slot written
   here would be a number meaningful nowhere."
   [image opts]
-  (artifact-class image (metadata image opts)))
+  (artifact-class image (metadata image opts) (artifact-class-name opts)))
 
 (defn pack
   "The same class, in a jar with the HOST's runtime, so `java -jar` works.
@@ -278,4 +289,5 @@
   rather than rebuilt -- `flint.jar/append` never inflates anything."
   [runtime-jar image opts]
   (jar/append runtime-jar
-              [{:name (str ARTIFACT-CLASS ".class") :bytes (emit image opts)}]))
+              [{:name (str (artifact-class-name opts) ".class")
+                :bytes (emit image opts)}]))

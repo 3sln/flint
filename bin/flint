@@ -1219,33 +1219,32 @@
                   ;; `:meta`, each with a different `:features` key meaning
                   ;; something different. `:meta` here is the user payload, which
                   ;; is what `bin/build-jvm-artifact` already passes.
+                  ;; `:out` MAY BE A FILE NOW, and that is the ordinary case:
+                  ;; `:out build/Prog.class` emits a class that CALLS ITSELF
+                  ;; `Prog`, so the path and the name agree by construction and a
+                  ;; JVM will load it. It used to refuse this, because the name was
+                  ;; the constant `flint.Artifact` and a JVM loads a class only
+                  ;; from a path matching its own name -- so `:out` had to be the
+                  ;; classpath ROOT that `flint/Artifact.class` hangs off. The name
+                  ;; is a parameter now (`jvm/artifact-class-name`).
+                  ;;
+                  ;; A DIRECTORY STILL WORKS and still writes
+                  ;; `<root>/flint/Artifact.class`, because that is what every
+                  ;; existing consumer expects -- `Main.java` and `FourOps.java`
+                  ;; look up `flint.Artifact` unless told another name.
+                  dotclass? (str/ends-with? (str out) ".class")
+                  ;; The internal name is the basename without `.class`, in the
+                  ;; DEFAULT package: one file, one name, no directory implied.
+                  cname (if dotclass?
+                          (let [b (.getName (java.io.File. ^String (str out)))]
+                            (subs b 0 (- (count b) 6)))
+                          jvm/ARTIFACT-CLASS)
                   klass (jvm/emit (byte-array (map unchecked-byte image))
                                   {:version (or (System/getenv "FLINT_VERSION") "0.1.0")
                                    :meta {}
-                                   :builtins (count needed)})
-                  ;; `:out` IS A CLASSPATH ROOT, not the file. The class declares
-                  ;; itself `flint.Artifact` and that name is a CONTRACT -- both
-                  ;; `runtimes/jvm/src/com/flint/Main.java` and `FourOps.java`
-                  ;; reach it by `Class.forName("flint.Artifact")` -- and a JVM
-                  ;; will not load a class from a file whose path disagrees with
-                  ;; its name. Writing 39 KB to `:out T.class` produces a file
-                  ;; nothing can load, which is worse than refusing, so this
-                  ;; resolves the real path and prints it.
-                  ;;
-                  ;; An `:out` that already ends in `flint/Artifact.class` is
-                  ;; honoured as given: somebody who wrote the full path meant it.
-                  target (if (str/ends-with? (str out) (str jvm/ARTIFACT-CLASS ".class"))
-                           (str out)
-                           (if (str/ends-with? (str out) ".class")
-                             (do (binding [*out* *err*]
-                                   (println (str "refusing to write " out
-                                                 ": the class declares itself `flint.Artifact`"
-                                                 " and a JVM loads it only from a path ending"
-                                                 " `flint/Artifact.class`. Pass `:out` as a"
-                                                 " CLASSPATH ROOT -- a directory -- and this"
-                                                 " writes the rest.")))
-                                 (System/exit 1))
-                             (str out "/" jvm/ARTIFACT-CLASS ".class")))
+                                   :builtins (count needed)
+                                   :class cname})
+                  target (if dotclass? (str out) (str out "/" jvm/ARTIFACT-CLASS ".class"))
                   _ (.mkdirs (.getParentFile (java.io.File. ^String target)))]
               (with-open [o (java.io.FileOutputStream. ^String target)]
                 (.write o ^bytes klass))

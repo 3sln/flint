@@ -99,12 +99,24 @@ public final class Main {
     }
     /// NO FALLBACK. The bytecode is constant data on that class, so a classpath
     /// without it is the runtime and no program.
+    /// FROM BYTES, which is what every other runtime does. `Artifact.define`
+    /// defines the class in memory -- no classpath, no filename, no name to
+    /// agree with a path -- and this is the mirror of the ESM SDK's
+    /// `new Image(wasmBytes)` and the CLR's `Img.Load(rt, bytes)`.
+    static Face of(byte[] classBytes) throws Exception {
+      return new Face(com.flint.rt.Artifact.define(classBytes));
+    }
+    /// The CLASSPATH route, kept for a consumer who put the class on one. The
+    /// name is only a default here rather than a contract: a class loaded by
+    /// `of` above may call itself anything.
     static Face find() {
       try { return new Face(Class.forName("flint.Artifact")); }
       catch (ClassNotFoundException e) {
         throw new IllegalStateException(
           "no flint.Artifact on the classpath: that class IS the compiled program, and"
-          + " `:to :jvm` emits it. What is here is the flint runtime.");
+          + " `:to :jvm` emits it. What is here is the flint runtime."
+          + " (A class loaded from BYTES needs no classpath: see"
+          + " com.flint.rt.Artifact.define.)");
       }
       catch (Exception e) { throw new IllegalStateException(e); }
     }
