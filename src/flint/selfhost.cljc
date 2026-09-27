@@ -107,6 +107,24 @@
               out (if p3 out (flint.rt/b-conj! out (bit-and t 255)))]
           (recur (+ i 4) out))))))
 
+(defn- spec-builtins
+  "What the compiler may call, for a target with no slot map of its own.
+
+  SLOTS WHEN THERE ARE SLOTS, which is every existing caller and is unchanged.
+  `:builtins` only when there are none -- an already-resolved spec, the shape
+  `bin/flint --emit-spec` writes, carries `:builtins` and no `:slots`, and three
+  artifact targets derived their set from `(keys (:slots spec))` and so got the
+  empty set. The symptom was not `!missing` but a builtin reported as not
+  available, one step further in.
+
+  `compile-project` set this precedent already: its docstring says it takes
+  `:builtins` because its caller has no slot map to take it from. This is the
+  same case, and the order matters -- `build-image`'s own docstring warns against
+  deriving either from the other, because the two being equal in practice is a
+  coincidence and not a rule."
+  [spec]
+  (if (:slots spec) (set (keys (:slots spec))) (or (:builtins spec) #{})))
+
 (defn- build-image
   "Resolve every namespace a program requires, and compile them to an image
   builder.
@@ -138,8 +156,24 @@
         ;; `:roots` is how `flint test` compiles: its entry is generated and
         ;; is on no source path, so resolving from it would report the entry
         ;; itself missing. Absent, the entry is the root as always.
+        ;; A SPEC MAY ARRIVE ALREADY RESOLVED, and then resolution is skipped
+        ;; rather than redone. `bin/flint --emit-spec` writes `{:sources .. :order ..}`
+        ;; -- the shape `compile-to-base64` takes -- and every ARTIFACT target went
+        ;; through the resolver below, which wants `{:files ..}`. So an emitted spec
+        ;; compiled in mode `spec` and answered `!missing` in mode `jvm`, `clr` or
+        ;; `llvm`, naming the program's own namespaces: the mode decided, not the
+        ;; spec. Each CLI builds the unresolved shape internally and exposes it to
+        ;; nobody, so a HOST could obtain one shape and no artifact target accepted
+        ;; it.
+        ;;
+        ;; Everything AFTER this line is unchanged and still applies -- the
+        ;; field-by-field rebuild, `flint.system/boot` as an export, the builtins
+        ;; parameter -- so a resolved spec gets exactly the treatment a resolved one
+        ;; always got. This skips a step; it does not take a different path.
         {:keys [sources order missing refused]}
-        (project/resolve-project resolve-ns entry-ns features (:roots spec))]
+        (if (and (:sources spec) (:order spec))
+          {:sources (:sources spec) :order (:order spec)}
+          (project/resolve-project resolve-ns entry-ns features (:roots spec)))]
     (if (seq missing)
       {:missing (vec missing)}
       (if (seq refused)
@@ -341,7 +375,7 @@
   `:to :llvm`'s absence, and the actual reason was that no emitter existed."
   [spec-edn]
   (let [spec (reader/read-one spec-edn)
-        built (build-image spec (set (keys (:slots spec))))]
+        built (build-image spec (spec-builtins spec))]
     (if (:missing built)
       {:missing (:missing built)}
       (if (:refused built)
@@ -380,7 +414,7 @@
   Bytes out, so the caller base64s them -- the opposite of `:ll`, which is text."
   [spec-edn]
   (let [spec (reader/read-one spec-edn)
-        built (build-image spec (set (keys (:slots spec))))]
+        built (build-image spec (spec-builtins spec))]
     (if (:missing built)
       {:missing (:missing built)}
       (if (:refused built)
@@ -436,7 +470,7 @@
   lists `main` warns about are untouched."
   [spec-edn base-b64 class-name]
   (let [spec (reader/read-one spec-edn)
-        built (build-image spec (set (keys (:slots spec))))]
+        built (build-image spec (spec-builtins spec))]
     (if (:missing built)
       {:missing (:missing built)}
       (if (:refused built)

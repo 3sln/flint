@@ -107,8 +107,9 @@ unbound; everything is rooted across allocations because the nursery copies; and
 the spec goes in a LIST, because `main` takes an argv and dispatches on its first
 element.
 
-**There is deliberately no `compileJvm(spec) -> Image`.** It was written, found
-unreachable, and removed rather than shipped. THERE ARE TWO SPEC SHAPES:
+**`compileJvm(spec) -> Image` works as of 2026-09-26, after the cause was fixed at
+the source.** It was written, found unreachable, removed, and restored. THERE WERE
+TWO SPEC SHAPES:
 
     self.spec  mode spec -> an image, 36 864 chars
     self.spec  mode jvm  -> !missing clojure.core hello flint.system ...
@@ -122,10 +123,29 @@ Every artifact target goes through `build-image`, which takes an UNRESOLVED
 internally and exposes it to nobody, so a JVM host can obtain the first and no
 artifact target accepts it.
 
-Closing that is the same change as sharing spec construction
-(`DECISIONS.md#one-dependency-walk`, and `ROADMAP.md`'s item after `:to :llvm`),
-not a method on a class. So the mirror is half complete on purpose, and this is
-the measured reason rather than an estimate of one.
+**CLOSED IN `build-image`, which now skips resolution for a spec that already
+carries `:sources` and `:order`**, plus `spec-builtins` taking the builtin set
+from `:builtins` when there is no slot map — the precedent `compile-project`
+already set for the same reason. Everything after the resolve step is untouched,
+so all four targets still emit byte-identical artifacts from the CLIs' own
+unresolved specs; `cmp`-checked on wasm, clr, jvm and llvm.
+
+What this needed was narrower than the roadmap item: not one spec BUILDER, but one
+spec SHAPE every target accepts. Sharing construction is still its own change
+(`DECISIONS.md#one-dependency-walk`).
+
+So source-to-artifact on the JVM is one call now, in memory, and
+`bin/check-jvm-sdk` gates it. THE REFERENCE IS THE WASM COMPILER ON THE SAME
+SPEC, which took two attempts to get right: compared against the native CLI's own
+artifact it reported 38 777 bytes against 38 777 — same length, different bytes —
+which reads exactly like a port divergence and was not one. The CLI builds its own
+spec, so the two compilers were handed different inputs. `host/flint-argv.mjs`
+exists to drive the wasm compiler with a full argv, because `host/flint-file.mjs`
+passes only a spec and so can only reach mode `spec` — which is why wasm-against-a-port
+comparisons had never covered an artifact target at all.
+
+The byte-for-byte row was proved able to fail by flipping one byte of the
+artifact.
 
 **Each of those is a named gate, added 2026-09-26** -- the claims were true and
 unattributed, and a claim with no gate beside it cannot be rechecked:

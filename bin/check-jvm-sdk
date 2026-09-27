@@ -1,0 +1,69 @@
+#!/bin/sh
+# THE JVM SDK, END TO END: source -> spec -> artifact -> loaded class, on this
+# runtime, with no file written for the artifact.
+#
+# `com.flint.Compiler` and `com.flint.Image` are the JVM's mirrors of the ESM
+# SDK's `Compiler` and `Image` (`doc/ports.md`). This is what asserts they work,
+# and it exists because `bin/dead-runtime-fns` found `compileJvm` with no caller
+# at all -- a published method nothing exercised, which is an untested claim
+# rather than dead code.
+#
+# WHAT IT PINS, and each row earns its place:
+#
+#   * the compiler RUNS on the JVM runtime over a resolved spec. Until 2026-09-26
+#     `build-image` re-resolved every spec, so an `--emit-spec` spec answered
+#     `!missing` on every artifact target while working in mode `spec`;
+#   * the artifact is BYTE FOR BYTE what the native CLI writes for the same spec.
+#     Two compilers -- one running as wasm, one on this runtime -- have to agree
+#     about what a program compiles to, and "it compiled" does not check that;
+#   * the class is defined IN MEMORY. No `:out`, no classpath, no filename.
+#
+# About 12 s, and it needs a JDK. It skips itself without one rather than failing,
+# the way the rest of the jvm checks do.
+set -e
+cd "$(dirname "$0")/.."
+fail() { echo "FAILED: $1"; exit 1; }
+
+JDK="${FLINT_JDK:-${JAVA_HOME:-/opt/homebrew/opt/openjdk}}"
+if [ ! -x "$JDK/bin/java" ]; then
+  echo "  --   check-jvm-sdk: no JDK at $JDK; skipping (set FLINT_JDK or JAVA_HOME)"
+  exit 0
+fi
+[ -f dist/flintc.bytecode ] || fail "no dist/flintc.bytecode -- run bin/build-dist"
+[ -x target/release/flint ] || {
+  echo "  --   check-jvm-sdk: no target/release/flint; skipping"
+  exit 0
+}
+
+W=$(mktemp -d)
+trap 'rm -rf "$W"' EXIT
+mkdir -p "$W/src" "$W/out" "$W/classes"
+cat > "$W/src/p.cljc" <<'EOF'
+(ns p)
+(defn main [_] "sdk")
+EOF
+
+# THROUGH THE COMMITTED TOOLS, not inline: a hand-configured one-off encodes
+# decisions the real path lacks.
+bb ./bin/flint :src "$W/src" :fn p/main --emit-spec :out "$W/p.spec" > /dev/null 2>&1 \
+  || fail "bin/flint --emit-spec"
+# THE REFERENCE IS THE WASM COMPILER ON THE SAME SPEC, not the native CLI on the
+# same SOURCES. The CLI builds its own spec, so comparing against its artifact
+# compares two inputs: it reported 38 777 bytes against 38 777, same length and
+# different bytes, which reads exactly like a port divergence and was not one.
+node host/flint-argv.mjs dist/flintc.wasm "$W/p.spec" jvm "" "" > "$W/ref.b64" 2>&1 \
+  || fail "the wasm compiler could not compile the reference artifact"
+case "$(head -c 6 "$W/ref.b64")" in
+  yv66vg) ;;
+  *) fail "the wasm compiler did not answer with a class file: $(head -c 120 "$W/ref.b64")" ;;
+esac
+# base64 -d is `-D` on macOS and `-d` elsewhere; try both rather than assume.
+base64 -d < "$W/ref.b64" > "$W/ref.class" 2>/dev/null \
+  || base64 -D < "$W/ref.b64" > "$W/ref.class"
+
+"$JDK/bin/javac" -cp runtimes/jvm/classes -d "$W/classes" \
+  runtimes/jvm/test/RtCompiler.java > /dev/null 2>&1 || fail "javac RtCompiler"
+
+"$JDK/bin/java" -Xss1g -cp "runtimes/jvm/classes:$W/classes" RtCompiler \
+  dist/flintc.bytecode "$W/p.spec" "$W/ref.class" \
+  || fail "RtCompiler"

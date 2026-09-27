@@ -98,11 +98,35 @@ public final class Compiler {
         return s;
     }
 
-    /// ## Why there is no `compileJvm(spec) -> Image`
+    /// Compile a spec to a JVM artifact and hand back an `Image` -- IN MEMORY,
+    /// never a file. The mirror of the ESM SDK's compiler answering an `Image`.
     ///
-    /// It was written and removed rather than shipped unreachable, because
-    /// THERE ARE TWO SPEC SHAPES and no public route produces the one the
-    /// artifact targets need.
+    /// The spec may be already resolved -- `{:sources .. :order ..}`, which
+    /// `bin/flint --emit-spec` writes -- because `build-image` skips resolution
+    /// for one as of 2026-09-26. Before that no public route produced a spec any
+    /// artifact target accepted, and this method could not exist; see below.
+    public Image compileJvm(String specEdn) throws Exception {
+        String out = run("jvm", specEdn, "", "");
+        if (out.startsWith("!missing") || out.startsWith("!refused")) {
+            throw new IllegalStateException(out.trim());
+        }
+        byte[] klass = java.util.Base64.getDecoder().decode(out.trim());
+        // `CAFEBABE` OPENS EVERY CLASS FILE, and the compiler answers with a
+        // string either way -- so a diagnostic decoded as bytes would be found out
+        // by whoever loaded it, with no idea which step lied.
+        if (klass.length < 4 || (klass[0] & 0xFF) != 0xCA || (klass[1] & 0xFF) != 0xFE
+            || (klass[2] & 0xFF) != 0xBA || (klass[3] & 0xFF) != 0xBE) {
+            throw new IllegalStateException(
+                "the compiler did not answer with a class file (no `CAFEBABE`)");
+        }
+        return Image.of(klass);
+    }
+
+    /// ## What this method could not do until 2026-09-26
+    ///
+    /// It was written, removed as unreachable, and restored once the cause was
+    /// fixed at the source. THERE WERE TWO SPEC SHAPES and no public route
+    /// produced the one the artifact targets took.
     ///
     /// Measured 2026-09-26, same `Compiler`, two specs, two modes:
     ///
@@ -119,7 +143,16 @@ public final class Compiler {
     /// shape internally and exposes it to nobody.
     ///
     /// So a JVM host can obtain the first shape and no artifact target accepts it.
-    /// Closing that is the same change as sharing spec construction --
-    /// `DECISIONS.md#one-dependency-walk`, and `ROADMAP.md`'s item after
-    /// `:to :llvm` -- and not a method on this class.
+    /// CLOSED IN `build-image`, not here: it now SKIPS resolution for a spec that
+    /// already carries `:sources` and `:order`, and `spec-builtins` takes the
+    /// builtin set from `:builtins` when there is no slot map to take it from --
+    /// which `compile-project` already did for the same reason. Everything after
+    /// the resolve step is unchanged, so all four targets still emit byte-identical
+    /// artifacts from the CLIs' own unresolved specs; checked with `cmp` on wasm,
+    /// clr, jvm and llvm.
+    ///
+    /// Sharing spec CONSTRUCTION is still its own change
+    /// (`DECISIONS.md#one-dependency-walk`, `ROADMAP.md`'s item after `:to :llvm`).
+    /// What this needed was narrower: not one spec builder, but one spec SHAPE
+    /// every target accepts.
 }
