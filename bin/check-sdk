@@ -107,6 +107,17 @@ echo "  ok   the native CLI's class boots and answers the program's value"
 # refusing resolved specs fixed nothing and `vec->b` did.
 CLR=runtimes/clr/conform/bin/Release/net10.0/Conform
 if [ -x "$CLR" ] && command -v dotnet > /dev/null 2>&1; then
+  # TWO DIFFERENT PROGRAMS, for the load-identity row inside `--rt-sdk`. It pins a
+  # fact that contradicts `clr-name`'s docstring: `Assembly.Load(byte[])` gives each
+  # byte array its own identity, so two artifacts BOTH named `Program` -- which is
+  # what the native CLI emits -- still load as themselves.
+  mkdir -p "$W/a" "$W/b"
+  printf '(ns pa)\n(defn main [_] "AAA")\n' > "$W/a/pa.cljc"
+  printf '(ns pb)\n(defn main [_] "BBB")\n' > "$W/b/pb.cljc"
+  ./target/release/flint compile :path "$W/a" :fn pa/main :to :clr \
+    :out "$W/ref.class.alpha" > /dev/null 2>&1 || fail "the clr alpha artifact"
+  ./target/release/flint compile :path "$W/b" :fn pb/main :to :clr \
+    :out "$W/ref.class.beta" > /dev/null 2>&1 || fail "the clr beta artifact"
   DOTNET_ROOT="${DOTNET_ROOT:-/opt/homebrew/opt/dotnet/libexec}" \
     "$CLR" --rt-sdk "$W/p.spec" "$W/ref.class" || fail "Conform --rt-sdk"
 else

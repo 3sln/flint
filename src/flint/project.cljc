@@ -333,7 +333,28 @@
                                (and (not= n 'flint.virtual)
                                     (some virtuals reqs))
                                (conj 'flint.virtual))])))]
-    (loop [done [] seen #{} pending (vec (keys deps))]
+    ;; SORTED, BECAUSE A MAP'S ITERATION ORDER IS NOT PART OF ITS VALUE
+    ;; (`DECISIONS.md#compiles-are-byte-reproducible`).
+    ;;
+    ;; `pending` used to be `(vec (keys deps))`, and `deps` is a hash map -- so
+    ;; the order of namespaces that are ready in the same wave was whatever the
+    ;; HOST's hashing produced. Clojure on babashka and flint on itself hash
+    ;; differently, so the same program compiled to a different image depending
+    ;; on which compiler ran, and whether it differed depended on the namespace
+    ;; NAMES: `(ns prog)` agreed and `(ns t)` did not.
+    ;;
+    ;; MEASURED 2026-09-28, `(ns t) (defn main [_] "ok")` to `:to :clr`, both
+    ;; doors writing the same basename so the assembly name could not be the
+    ;; cause: 51 bytes of the embedded image differed. One spec through both
+    ;; compilers isolated it -- the babashka compiler and `dist/flintc.wasm`
+    ;; answered the same bytes for a RESOLVED spec, which skips this function,
+    ;; and different bytes for an unresolved one, which does not.
+    ;;
+    ;; Sorting the seed is enough: `ready` is a `filterv` of `pending` and the
+    ;; remainder keeps its order, so every wave stays sorted. Ordering is by the
+    ;; PRINTED name rather than by `compare` on symbols, because that is one
+    ;; rule rather than two hosts' idea of how symbols compare.
+    (loop [done [] seen #{} pending (vec (sort-by str (keys deps)))]
       (if (empty? pending)
         done
         (let [ready (filterv (fn [n] (every? (fn [d] (or (contains? seen d)

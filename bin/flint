@@ -23,18 +23,20 @@
          '[flint.jvm :as jvm] '[flint.rt])
 
 (defn clr-name
-  "An assembly name from the output path: the basename, minus its extension, with
-  anything not legal in an identifier replaced.
+  "An assembly name from the output path -- READ from `flint.clr/assembly-name`
+  rather than restated here.
 
-  THE NAME IS NOT COSMETIC. An assembly's identity is this string, and the CLR
-  resolves references by it -- two artifacts sharing one name cannot be loaded
-  into the same context. Deriving it from the path is what makes
-  `:out app.dll` and `:out other.dll` distinct rather than both `Program`."
+  This door had its own copy of the rule, and the native CLI and `sdks/cli` each
+  wanted one too. Three copies of a sanitiser agree on `app.dll` and part ways on
+  `a.b.dll`, which is the drift `AGENTS.md` sec. 1 names; the shared one is in the
+  emitter both this door and `flint.selfhost` already call.
+
+  Deriving it from the path is what makes `:out app.dll` and `:out other.dll`
+  distinct rather than both `Program`. It is also what makes the two doors'
+  assemblies byte-identical, since the name sits in the `#Strings` heap and moves
+  every offset after it."
   [out]
-  (let [base (last (str/split (str out) #"/"))
-        stem (str/replace base #"\.[^.]*$" "")
-        safe (str/replace stem #"[^A-Za-z0-9_]" "_")]
-    (if (re-find #"^[A-Za-z_]" safe) safe (str "_" safe))))
+  (clr/assembly-name (str out)))
 
 (defn script-ns
   "What a file's `ns` form says, for the two things a script CLI needs: the
@@ -386,7 +388,13 @@
                                  nsform (first (filter #(and (seq? %) (= 'ns (first %))) forms))]
                              (into (set (when nsform (compiler/ns-requires nsform)))
                                    (implied-requires n forms)))]))]
-    (loop [done [] seen #{} pending (vec (keys deps))]
+    ;; SORTED (`DECISIONS.md#compiles-are-byte-reproducible`), for the reason
+    ;; `flint.project/topo-order` gives at length: the
+    ;; seed was a hash map's key order, so the order of a wave of independent
+    ;; namespaces was the HOST's hashing, and this door and the self-hosted
+    ;; compiler laid the same program out differently. Kept identical to that
+    ;; function -- the two are duplicated deliberately (AGENTS.md sec. 1).
+    (loop [done [] seen #{} pending (vec (sort-by str (keys deps)))]
       (if (empty? pending)
         done
         (let [ready (filter #(every? (fn [d] (or (seen d) (not (contains? deps d)))) (deps %)) pending)
@@ -1291,7 +1299,24 @@
                                      :describe true
                                      :version (or (System/getenv "FLINT_VERSION") "0.1.0")
                                      :builtins (count needed)
-                                     :features (or features {})})
+                                     ;; NO `:features`. `describe`'s `:features` is
+                                     ;; the five BUILD flags, derived from what the
+                                     ;; artifact exports -- `{:aot .. :snapshots ..}`
+                                     ;; -- and `features` here is the READER feature
+                                     ;; SET from `:features` on the command line,
+                                     ;; `#{:flint :flint/check :flint/nested}`. One
+                                     ;; slot, two meanings: this door put a set of
+                                     ;; reader keywords where a map of export probes
+                                     ;; belongs, and `wasm.cljc` says why that is the
+                                     ;; wrong direction -- "a descriptor that reports
+                                     ;; the build flags rather than the module is the
+                                     ;; kind that goes quietly wrong".
+                                     ;;
+                                     ;; The native CLI had the same bug through
+                                     ;; `selfhost`, fixed 2026-09-26; this is the
+                                     ;; other door, and it is the one whose artifacts
+                                     ;; load, which is why nobody read the field.
+                                     })
                   ;; `:bytes`, NOT `dll`. `assemble` answers a map -- the bytes
                   ;; and the per-method assembly facts -- and both new callers
                   ;; of it assumed the byte string it used to return. The symptom

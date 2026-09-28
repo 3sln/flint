@@ -1237,6 +1237,39 @@ public static class Program {
         Row("and its metadata is readable", img.Metadata() != null,
             img.Metadata() ?? "null");
 
+        // TWO ARTIFACTS IN ONE PROCESS, AND A SHARED NAME DOES NOT STOP IT. This
+        // row was added expecting to FAIL: the native CLI names every assembly
+        // `Program`, `bin/flint` derives the name from `:out`, and `clr-name`'s
+        // docstring says "two artifacts sharing one name cannot be loaded into the
+        // same context". It passed immediately.
+        //
+        // `Assembly.Load(byte[])` gives each byte array its OWN identity -- that
+        // warning is about resolving a reference BY name, or `LoadFrom` on two
+        // files, not about loading bytes. So the row stays to pin the fact rather
+        // than the fear: two flint programs load as themselves here, and anyone
+        // reasoning from the docstring would conclude otherwise.
+        //
+        // The paths come from the caller so this exercises the REAL doors rather
+        // than a spec built here.
+        if (refPath.Length > 0 && File.Exists(refPath + ".alpha")
+                               && File.Exists(refPath + ".beta")) {
+            var abytes = File.ReadAllBytes(refPath + ".alpha");
+            var bbytes = File.ReadAllBytes(refPath + ".beta");
+            var a = Flint.Rt.Image.Of(abytes);
+            var bb = Flint.Rt.Image.Of(bbytes);
+            // NO NAME IS READ, on purpose: the question is whether each image is
+            // ITSELF. If the loader hands back the first assembly for the second
+            // request -- which is what one identity for two programs means -- the
+            // types are reference-equal and the bytecode matches, while the FILES
+            // differ. That is the failure, and it is silent.
+            Row("two artifacts load as DIFFERENT assemblies in one process",
+                !ReferenceEquals(a.Type_(), bb.Type_())
+                && !a.Bytecode().AsSpan().SequenceEqual(bb.Bytecode()),
+                ReferenceEquals(a.Type_(), bb.Type_())
+                  ? "the second load answered the first assembly"
+                  : "bytecode " + a.Bytecode().Length + " vs " + bb.Bytecode().Length);
+        }
+
         if (fails > 0) { Console.WriteLine("RtSdk: " + fails + " FAILURES"); return 1; }
         return 0;
     }

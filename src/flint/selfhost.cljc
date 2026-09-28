@@ -395,6 +395,14 @@
            :compiled (when res (:compiled res))
            :arities (when res (:total res))})))))
 
+;; FORWARD-DECLARED, because `compile-to-clr` reads the docstring's worth of
+;; explanation and its helper follows it. flint's own analyzer accepts the forward
+;; reference and sci does not, so loading this namespace with `bb --classpath src`
+;; -- which is how one spec gets driven through BOTH compilers to tell a door bug
+;; from a self-hosting divergence -- failed at analysis with "Could not resolve
+;; symbol: compile-to-clr*".
+(declare compile-to-clr*)
+
 (defn compile-to-clr
   "Compile a program to ONE .NET assembly (`DECISIONS.md#four-operations`).
 
@@ -427,11 +435,23 @@
   why refusing resolved ones fixed nothing.
 
   With `vec->b` in place a resolved spec compiles to an assembly that loads and
-  passes all 39 rows of `runtimes/clr/artifact/Check.cs`, with or without `:slots`."
-  [spec-edn]
-  (compile-to-clr* (reader/read-one spec-edn)))
+  passes all 39 rows of `runtimes/clr/artifact/Check.cs`, with or without `:slots`.
 
-(defn- compile-to-clr* [spec]
+  `name` is the output file's BASENAME, or empty when there is no output file --
+  `flint.clr/assembly-name` turns it into the assembly name and is the only place
+  that rule lives. `bin/flint` derived the name from `:out` and this door could
+  not, so the two produced artifacts differing by 56 bytes of string-heap offsets
+  -- the only thing left between them once the describe was canonical. Byte
+  agreement between the doors is the standard `sdks/cli/selftest.mjs` already holds
+  `:to :wasm` to, and `test/selfhost-targets.clj` now holds `:to :clr` to it.
+
+  A RAW BASENAME AND NOT A SANITISED NAME, so that each door passes something it
+  cannot get wrong. Three doors sanitising separately agree on `app.dll` and part
+  ways on `a.b.dll`, where one strips an extension the others already stripped."
+  [spec-edn name]
+  (compile-to-clr* (reader/read-one spec-edn) name))
+
+(defn- compile-to-clr* [spec name]
   (let [built (build-image spec (spec-builtins spec))]
     (if (:missing built)
       {:missing (:missing built)}
@@ -460,11 +480,25 @@
         (let [image (flint.rt/vec->b (vec (img/emit (:builder built) {})))]
           ;; `:bytes` out of the map `assemble` answers -- it also carries the
           ;; per-method assembly facts, which nothing here wants.
-          {:clr (:bytes (clr/assemble {:name (or (:name spec) "Program")
+          {:clr (:bytes (clr/assemble {:name (if (or (nil? name) (= "" name))
+                                               (clr/assembly-name (:name spec))
+                                               (clr/assembly-name name))
                                        :image image
                                        :describe true
                                        :version (:version spec)
-                                       :builtins (count (:builtins spec))
+                                       ;; WHAT ARRIVED, not what was offered.
+                                       ;; `(:builtins spec)` is every builtin the
+                                       ;; runtime provides -- 226 -- and this field
+                                       ;; described the artifact as needing all of
+                                       ;; them, where `bin/flint` and
+                                       ;; `compile-to-jvm` both report the ones it
+                                       ;; actually uses (88). `describe`'s
+                                       ;; neighbouring `:features` states the rule:
+                                       ;; "From what ARRIVED, not from what was
+                                       ;; asked for: a descriptor that reports the
+                                       ;; build flags rather than the module is the
+                                       ;; kind that goes quietly wrong."
+                                       :builtins (count (img/natives (:builder built)))
                                        ;; NO `:features` HERE, AND THAT IS THE FIX FOR A
                                        ;; NAME COLLISION. `describe`'s `:features` is the
                                        ;; BUILD feature map a wasm module carries --
@@ -575,7 +609,7 @@
             ;; because it is the same thing: a finished artifact with the program
             ;; in it and nothing for the host to link.
             (= mode "jvm") (compile-to-jvm spec-edn (nth args 2 "") (nth args 3 ""))
-            (= mode "clr") (compile-to-clr spec-edn)
+            (= mode "clr") (compile-to-clr spec-edn (nth args 2 ""))
             (= mode "llvm") (compile-to-llvm spec-edn)
             (= mode "project") (compile-project spec-edn)
             :else (compile-to-base64 spec-edn))]

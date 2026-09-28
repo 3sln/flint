@@ -13856,3 +13856,74 @@ are compared on that, with `=` prefixing an answer so a site that stops refusing
 is louder than one that never did. Verified sensitive by injection: dropping the
 jvm's `b-at` upper bound turns `b-at!byte index out of range` into `b-at=98` and
 the row fails. An arithmetic score could not have expressed this check at all.
+
+---
+
+## compiles-are-byte-reproducible
+
+**The same program compiles to the same bytes, whichever door and whichever
+runtime**
+
+**Ratified:** ☐ not signed off
+
+**Status: one cause found and fixed 2026-09-28; asserted by
+`bb test/selfhost-targets.clj` (three `:to :clr` rows plus a control) and by
+`node sdks/cli/selftest.mjs` (`:to :clr`, beside the five `:to :wasm` rows it
+already had).** The rows were written failing and pass after the fix; the
+control asserts the comparison can tell two inputs apart, because agreement
+between two arms that both ignore an input reads exactly like agreement.
+
+### What the property is for
+
+`other-hosts` already flagged this as not cosmetic, one level down: "hash and
+map-iteration order differing between hosts would make `pr-str` of a map differ
+per host, which would break content-addressed artifacts hashing identically
+across deployments." That sentence was about a MAP being printed. The same
+hazard applies to the compiler's own output, and there it is worse, because
+nothing prints and nothing throws: two doors quietly disagree about an artifact
+and both artifacts load and run.
+
+flint has three front doors that reach the compiler (`bin/flint` on babashka,
+`cli/src/main.rs` running `dist/flintc.bytecode`, `sdks/cli` running
+`dist/flintc.wasm`) and the compiler itself runs on three different runtimes
+across them. Byte agreement is the only check that covers all of it at once.
+
+### The cause that was found
+
+`flint.project/topo-order` seeded its worklist with `(vec (keys deps))`, and
+`deps` is a hash map. Namespaces that are ready in the same wave therefore came
+out in the HOST's hash order, so the same program produced a different image
+depending on which runtime compiled it. `bin/flint`'s duplicate of that function
+had the same line.
+
+MEASURED: `(ns t) (defn main [_] "ok")` to `:to :clr`, both doors writing the
+same basename so the assembly name could not be the cause -- 51 bytes of the
+embedded image differed. Whether it differed at all depended on the namespace
+NAME: `t`, `abc` and `abcde` diverged; `ab`, `abcd`, `prog` and `progx` agreed.
+That is the signature of a hash-order dependency, and the reason it survived: the
+names in the test suite happened to agree.
+
+Driving ONE spec through both compilers is what turned it from a door bug into a
+runtime one. A resolved spec -- `bin/flint --emit-spec`'s shape -- skips
+`resolve-project` entirely, and on that input babashka and `dist/flintc.wasm`
+answered identical bytes; on an unresolved spec, which the native and npm doors
+build, they did not. The difference was the code path, not the door.
+
+The fix is `(vec (sort-by str (keys deps)))` in both walks. Sorting the seed is
+enough: `ready` is a `filterv` of `pending`, so every later wave stays sorted.
+By printed name rather than by `compare` on symbols, so the rule is one thing
+rather than two hosts' idea of how symbols order.
+
+### What is not claimed
+
+**One cause was found, not all of them.** This says nothing about the other
+places a hash-ordered collection could reach an artifact; `compiler.cljc`
+already sorts its var slots, which is the same rule applied by hand in one
+place. A sweep for the rest is not done, and the honest form of that is a
+roadmap item rather than a status line here.
+
+The assembly NAME is a separate input, settled in the same change:
+`flint.clr/assembly-name` is the only copy of the rule that turns an output
+basename into an assembly name, and every door passes the raw basename to it.
+Three doors sanitising separately agreed on `app.dll` and parted ways on
+`a.b.dll` -- strip one extension and it is `a_b`, strip greedily and it is `a`.

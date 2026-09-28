@@ -73,8 +73,8 @@ does not announce itself; it presents as a real finding.
 
 | What you changed | What must be rebuilt, in order |
 |---|---|
-| `src/` — the COMPILER | `bin/build-dist`, then `cargo build --release -p flint-cli` |
-| `lib/` — the stdlib | `cargo build --release -p flint-cli` |
+| `src/` — the COMPILER | `bin/build-dist`, then `cargo build --release -p flint-cli`, then `sdks/cli/build` |
+| `lib/` — the stdlib | `cargo build --release -p flint-cli`, then `sdks/cli/build` |
 | unit modules | `bin/build-units` |
 
 The two halves are embedded by different routes, and that is the trap.
@@ -86,6 +86,15 @@ compiler while reporting success.
 
 `bin/build-dist` does **not** rebuild `target/release/flint`, and
 `cargo build` does **not** rebuild `dist/`. Neither step implies the other.
+
+**THERE IS A THIRD DOOR AND IT HAS ITS OWN COPY.** `sdks/cli/dist/` holds the
+npm CLI's `flintc.wasm`, the runtimes and the stdlib, copied there by
+`sdks/cli/build`. Nothing in `bin/build-dist` or `cargo build` touches it, so
+after a `src/` change the npm CLI keeps running the previous compiler — and it
+reports success, because a stale compiler is a working one. It presents as a
+DISAGREEMENT between the npm door and the other two: measured 2026-09-28, the
+npm door's `:to :clr` assembly differed from the other two doors' for five
+basenames out of five, which reads exactly like the bug being chased.
 
 Two symptoms that mean *check freshness* before believing a result: the two arms
 agree **exactly** — a measurement that cannot tell its arms apart is not

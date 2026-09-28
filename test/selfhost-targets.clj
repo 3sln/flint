@@ -115,6 +115,47 @@
       (check-that "flint compile :to :clr exits 0" (zero? (:code r)))
       (check-that "flint compile :to :clr writes a PE (MZ)"
                   (= [0x4d 0x5a] (magic out 2))))
+    ;; --- AND THE TWO DOORS AGREE, BYTE FOR BYTE -------------------------
+    ;;
+    ;; `sdks/cli/selftest.mjs` has held `:to :wasm` to this since before `:to
+    ;; :clr` existed, and `:to :clr` was not held to anything: the two doors
+    ;; differed by 56 bytes of `#Strings` offsets, because `bin/flint` derived
+    ;; the assembly name from `:out` and the native door named everything
+    ;; `Program`. Nothing failed -- both assemblies load -- which is why it took
+    ;; a comparison to see.
+    ;;
+    ;; `DECISIONS.md#compiles-are-byte-reproducible` records the property and the
+    ;; one cause that was found.
+    ;;
+    ;; THE BASENAMES ARE THE INTERESTING INPUT. The name comes from it, so the
+    ;; rows below include `a.b.dll`, which is where three separately written
+    ;; sanitisers part ways: strip one extension and it is `a_b`, strip
+    ;; greedily and it is `a`. `flint.clr/assembly-name` is now the only copy
+    ;; and each door passes the raw basename.
+    (when (fs/exists? (str root "/bin/flint"))
+      (let [emit (fn [door base]
+                   (let [out (str work "/" door "/" base)]
+                     (fs/create-dirs (str work "/" door))
+                     (if (= door "bb")
+                       (sh (str root "/bin/flint") ":src" src ":fn" "t/main"
+                           ":to" ":clr" ":out" out)
+                       (sh cli "compile" ":path" src ":fn" "t/main"
+                           ":to" ":clr" ":out" out))
+                     out))
+            same? (fn [a b] (and (fs/exists? a) (fs/exists? b)
+                                 (= (vec (fs/read-all-bytes a))
+                                    (vec (fs/read-all-bytes b)))))]
+        (doseq [base ["app.dll" "a.b.dll" "9odd-name.v2.dll"]]
+          (check-that (str "`:to :clr :out " base
+                           "`: bin/flint and the native CLI agree byte for byte")
+                      (same? (emit "bb" base) (emit "nat" base))))
+        ;; THE CONTROL. Two doors that both ignored the name would report every
+        ;; row above as agreement, so one pair is emitted to DIFFERENT basenames
+        ;; on purpose. If this passes and the rows above pass, the name is in
+        ;; the artifact and the comparison can see it.
+        (check-that "the comparison can tell two assembly names apart"
+                    (not (same? (str work "/bb/app.dll")
+                                (str work "/bb/a.b.dll"))))))
     ;; `:to :jvm` -- a class opens `CAFEBABE`, and `:out` is a CLASSPATH ROOT:
     ;; the class declares itself `flint.Artifact` and a JVM loads it only from a
     ;; path matching that name.

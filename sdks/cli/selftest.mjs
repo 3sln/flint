@@ -14,7 +14,7 @@
 // passes when it ran nothing is worse than no check.
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -261,6 +261,36 @@ try {
       check('a script: byte-identical to the native CLI',
             Buffer.compare(readFileSync(a), readFileSync(b)) === 0,
             `native ${readFileSync(a).length} bytes, node ${readFileSync(b).length} bytes`);
+    }
+    // `:to :clr` THROUGH BOTH DOORS, on the same basename.
+    //
+    // The four rows above are `:to :wasm`, and `:to :clr` was held to nothing:
+    // this package sent the compiler no assembly NAME at all, so every artifact
+    // it wrote was called `Program` while the other two doors derived the name
+    // from `:out`. The name lands in the `#Strings` heap and moves every offset
+    // after it, so the bytes could not agree and nothing said so.
+    //
+    // THE BASENAME IS PART OF THE INPUT, which is why both arms write to the
+    // same one. Two doors writing `native.dll` and `node.dll` differ for that
+    // reason alone, and the comparison would then be measuring the filenames.
+    {
+      const ca = join(tmp, 'agree.dll');
+      const cb = join(tmp, 'sub', 'agree.dll');
+      mkdirSync(join(tmp, 'sub'), { recursive: true });
+      execFileSync(NATIVE, ['compile', ':path', FIXTURE, ':fn', 'demo.main/main',
+                            ':to', ':clr', ':out', ca],
+                   { stdio: ['ignore', 'ignore', 'ignore'] });
+      flint(['compile', ':path', FIXTURE, ':fn', 'demo.main/main', ':to', ':clr', ':out', cb]);
+      check(':to :clr: byte-identical to the native CLI',
+            Buffer.compare(readFileSync(ca), readFileSync(cb)) === 0,
+            `native ${readFileSync(ca).length} bytes, node ${readFileSync(cb).length} bytes`);
+      // AND THE NAME IS REALLY IN THERE. Two doors that both ignored it would
+      // report the row above as agreement, so one artifact is written to a
+      // different basename on purpose.
+      const cc = join(tmp, 'differs.dll');
+      flint(['compile', ':path', FIXTURE, ':fn', 'demo.main/main', ':to', ':clr', ':out', cc]);
+      check('and a different basename is a different assembly',
+            Buffer.compare(readFileSync(cb), readFileSync(cc)) !== 0);
     }
     execFileSync(NATIVE, ['compile', ':path', FIXTURE, ':fn', 'demo.main/main', ':out', a],
                  { stdio: ['ignore', 'ignore', 'ignore'] });

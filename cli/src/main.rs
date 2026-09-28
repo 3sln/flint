@@ -499,6 +499,15 @@ fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
             eprintln!("[spec] {}", &out[i..(i + 400).min(out.len())]);
         }
     }
+    // THE WHOLE SPEC, TO A FILE. `bin/flint --emit-spec` has always been able to
+    // write its own, and this door could not -- so when the two doors produced
+    // different `:to :clr` assemblies for the same program there was no way to ask
+    // which of the two SPECS was different, only which artifact was. Driving one
+    // spec through both compilers showed they agree byte for byte, which is what
+    // makes the spec the thing to look at.
+    if let Ok(path) = std::env::var("FLINT_SPEC_OUT") {
+        std::fs::write(&path, &out)?;
+    }
     Ok(out)
 }
 
@@ -706,7 +715,23 @@ fn compile_clr(srcs: &[PathBuf], entry: &str, out_path: &Path,
     let slots = parse_slots(SLOTS)?;
     let spec = build_spec(srcs, entry, &slots, aot, false, &[], None, strip_checks, features)?;
     let mut p = load_compiler()?;
-    let r = p.run(&["clr", &spec]);
+    // THE ASSEMBLY NAME, FROM `:out`. It was `Program` for every artifact this door
+    // emitted, while `bin/flint` derived it from the path -- so the two doors' bytes
+    // differed by 56 string-heap offsets once everything else agreed, and byte
+    // agreement between the doors is the standard `sdks/cli/selftest.mjs` already
+    // holds `:to :wasm` to.
+    //
+    // THE RAW BASENAME, not a name this door derives. `flint.clr/assembly-name`
+    // interprets it, and it is the only copy of that rule -- three doors
+    // sanitising separately agree on `app.dll` and part ways on `a.b.dll`.
+    //
+    // `bin/flint`'s old docstring also warned that two artifacts sharing a name
+    // "cannot be loaded into the same context" -- MEASURED 2026-09-28 and that is not
+    // true of `Assembly.Load(byte[])`, which gives each byte array its own identity;
+    // `--rt-sdk` pins it. The reason to derive the name is door agreement, not that.
+    let base = out_path.file_name().map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let r = p.run(&["clr", &spec, &base]);
     if r.code != 0 {
         bail!("{}", r.out.trim());
     }

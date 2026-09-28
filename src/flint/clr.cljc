@@ -47,7 +47,7 @@
   ;; `flint.modmeta` because THE EMITTER DESCRIBES now: the target's `:abi` shape
   ;; is a property of the target, so it is built here and not in each caller
   ;; (`DECISIONS.md#four-operations`).
-  (:require [flint.rt] [flint.modmeta :as modmeta]))
+  (:require [clojure.string :as str] [flint.rt] [flint.modmeta :as modmeta]))
 
 ;; ---------------------------------------------------------------- byte output
 ;;
@@ -734,6 +734,39 @@
     :features (or (:features opts) {})
     :meta (or (:meta-map opts) {})}))
 
+(defn assembly-name
+  "An assembly name from an output file's BASENAME: the stem, minus its final
+  extension, with anything not legal in an identifier replaced by `_`, and `_`
+  prefixed if it would otherwise begin with a digit.
+
+  ONE COPY, BECAUSE FOUR DOORS NEED IT
+  (`DECISIONS.md#compiles-are-byte-reproducible`). `bin/flint` calls `clr/assemble` from
+  babashka, `cli/src/main.rs` and `sdks/cli` reach it through
+  `flint.selfhost/compile-to-clr`, and each of the three derived this string
+  itself. That is the shape `AGENTS.md` sec. 1 is about -- three tables agreeing on
+  the common cases and not on `a.b.dll`, where stripping one extension twice
+  gives `a` and stripping it once gives `a_b`. The doors now pass the raw
+  basename and this is the only place that interprets it.
+
+  IT IS NOT COSMETIC: the name lands in the `#Strings` heap and in the
+  `Assembly` row, so it moves the heap offsets of everything after it. Two doors
+  compiling one program to one basename produce byte-identical assemblies, which
+  `test/selfhost-targets.clj` asserts, and derived names are what made that
+  true -- the difference was 56 bytes of string-heap offsets for `Bb` against
+  `Program`.
+
+  An empty or missing basename answers `\"Program\"`, which is what a caller with
+  no output path gets: `compile-bytes` hands an artifact back rather than writing
+  one, so there is no path to derive from."
+  [basename]
+  (let [base (last (str/split (str (or basename "")) #"/"))
+        stem (str/replace (str base) #"\.[^.]*$" "")
+        safe (str/replace stem #"[^A-Za-z0-9_]" "_")]
+    (cond
+      (= "" safe) "Program"
+      (re-find #"^[A-Za-z_]" safe) safe
+      :else (str "_" safe))))
+
 (defn assemble
   "Emit a loadable .NET assembly carrying `image` as a static byte array.
 
@@ -760,7 +793,17 @@
         ;; runs inside a sandbox with no `pr-str` of its own to spare and already
         ;; has the canonical text. A caller with the inputs passes `:describe`
         ;; instead and this builds it.
-        meta-edn (or meta (when (:describe opts) (pr-str (describe opts))) "{}")
+        ;; `modmeta/canonical` AND NOT `pr-str`, which is the bug `jvm.cljc` already
+        ;; fixed and documented: "A map's iteration order is not part of its value,
+        ;; and flint's maps are a CHAMP iterating in hash order while the JVM port's
+        ;; iterate in insertion order -- so `pr-str` produced a DIFFERENT artifact on
+        ;; flint and on babashka, same length and different bytes."
+        ;;
+        ;; This emitter had it too. Measured 2026-09-28 on one program: 206 describe
+        ;; chars from both doors, the same keys with the same values, in different
+        ;; ORDER -- `bin/flint` prints from a JVM map and the native CLI from flint's
+        ;; own, so the two never agreed byte for byte. `canonical` sorts keys.
+        meta-edn (or meta (when (:describe opts) (modmeta/canonical (describe opts))) "{}")
         tfm-str (or tfm ".NETCoreApp,Version=v10.0")
         fld-tok 0x04000001                                ; Field table, row 1
 

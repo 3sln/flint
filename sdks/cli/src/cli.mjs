@@ -12,6 +12,7 @@
 // differ, they differ on purpose and it is written down here.
 
 import { writeFileSync, statSync } from 'node:fs';
+import { basename } from 'node:path';
 
 /// Is this a file we can read? A bare word that names one is a SCRIPT; a bare
 /// word that names nothing is a mistake, and saying so is `parse`'s job.
@@ -152,15 +153,23 @@ function compileLlvmText(srcs, entry, optimize,
 /// No `shake` and `SLOTS`, not `SLOTS_AOT`, matching the native CLI's
 /// `compile_clr`: the assembly's natives resolve BY NAME against whatever table
 /// the host carries, and there is no prebuilt module here to cut down.
+/// `name` is the output file's BASENAME, or `''` when there is no output file.
+/// `flint.clr/assembly-name` inside the compiler interprets it -- this door passes
+/// it raw so there is no sanitiser here to drift from the other two.
+///
+/// THIS DOOR SENT NO NAME AT ALL until 2026-09-28, so every assembly it wrote was
+/// `Program` while the other two derived the name from `:out`. That is not
+/// cosmetic: the name sits in the `#Strings` heap and moves every offset after
+/// it, so the three doors' bytes could not agree.
 function compileClrBytes(srcs, entry, optimize, meta,
-                         { checks = null, exports = [], features = null } = {}) {
+                         { checks = null, exports = [], features = null, name = '' } = {}) {
   const aot = wantsAot(optimize);
   const spec = buildSpec({
     srcs, entry, slots: slots(), aot, shake: false, meta, roots: null,
     stdlib: stdlib(), stdlibDeps: stdlibDeps(),
     stripChecks: stripChecks(optimize, checks), exports, features,
   });
-  const asm = b64decode(runCompiler(['clr', spec]).trim());
+  const asm = b64decode(runCompiler(['clr', spec, String(name ?? '')]).trim());
   // A SNIFF TEST, for the reason the native CLI gives: the guest answers with a
   // string either way, so a diagnostic written into an artifact would be found
   // out by whoever loaded it with no idea which step lied. `MZ` starts every PE.
@@ -192,7 +201,8 @@ export function compile(srcs, entry, outPath, optimize, to, meta,
     return;
   }
   if (target === 'clr') {
-    const asm = compileClrBytes(srcs, entry, optimize, meta, { checks, features });
+    const asm = compileClrBytes(srcs, entry, optimize, meta,
+                                { checks, features, name: basename(outPath) });
     writeFileSync(outPath, asm);
     if (!quiet) process.stderr.write(`wrote ${outPath} (${asm.length} bytes)\n`);
     return;

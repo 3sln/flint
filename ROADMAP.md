@@ -1506,6 +1506,9 @@ only, while user dependencies resolve against the community registry.
 | jank dialect-suite harness (`bin/jank-suite`) | done | [`doc/jank.md`](doc/jank.md) |
 | "Reached is not exercised" — coverage gates that see a builtin ran but not which branch | open, ongoing methodology fix | `doc/goals/README.md` — `dissoc`/`conj` were both "reached" and silently wrong on two runtimes for a case nobody tried; fix is building probes the other way round (every case that *should* refuse, listed, and the refusal asserted as the answer) |
 | Registering a new `lib/` namespace requires three separate registration points (manifest, ESM stdlib bundle, native runtime rebuild) | known friction, not yet a single mechanism | `doc/goals/README.md` |
+| Byte-identical compiles across the three doors: `:to :wasm` (5 rows) and `:to :clr` (4 rows + 2 controls) | done for those two targets | [`compiles-are-byte-reproducible`](DECISIONS.md#compiles-are-byte-reproducible) — `bb test/selfhost-targets.clj` and `node sdks/cli/selftest.mjs` |
+| `:to :jvm` and `:to :llvm` held to the same byte agreement | open — neither is compared across doors, and `:to :clr` was not either until a one-character namespace made the two doors disagree | `compiles-are-byte-reproducible` |
+| A sweep for the OTHER hash-ordered collections that can reach an artifact | open — one was found (`topo-order`'s worklist seed) and fixed, and `compiler.cljc` sorts its var slots by hand, so the rule is applied in two places and enforced in none | `compiles-are-byte-reproducible`, "What is not claimed" |
 
 **A recurring lesson worth surfacing rather than burying in a table:** several
 of the sharpest bugs found in the last two months were *gates that could not
