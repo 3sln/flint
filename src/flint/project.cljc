@@ -327,8 +327,33 @@
         ;; `flint.virtual` behind them. Using that set for this trigger would
         ;; add an edge for every `(:require [flint.rt])` and be wrong.
         virtuals (set (for [[n e] sources :when (:virtual e)] n))
-        deps (into {} (for [[n {:keys [forms]}] sources]
-                        (let [reqs (set (compiler/ns-requires (or (ns-form forms) '(ns x))))]
+        ;; A PRELUDE ENTRY IS AN EDGE HERE TOO, and it was only an edge in
+        ;; `collect`. That pulled the namespace INTO the program and said nothing
+        ;; about where it landed, so a prelude's position was whatever this
+        ;; function's worklist happened to visit first -- which was a hash map's
+        ;; key order, and came out right often enough to look deliberate.
+        ;; Sorting that seed (`DECISIONS.md#compiles-are-byte-reproducible`) moved
+        ;; one prelude AFTER the namespace using its names, and four rows of
+        ;; `bb test/sysns.clj` failed with "unable to resolve symbol: shout".
+        ;; `collect`'s own comment already claimed this: "An edge rather than a
+        ;; pin, so `topo-order` also puts the prelude BEFORE the code using it."
+        ;; It was an edge in one of the two functions that sentence spans.
+        ;; EVERY PRELUDE PROVIDER IS EXCLUDED, not just self. `collect` removes
+        ;; only `n`, which is enough to pull sources in; here it is not. A
+        ;; workspace offering TWO prelude entries attaches the same list to both
+        ;; of those namespaces, so each would be given an edge to the other and
+        ;; the graph would carry a cycle that is not in anybody's `:require`:
+        ;; `other.prelude -> mylib.prelude -> other.prelude`, which is what two
+        ;; rows of `bb test/sysns.clj` reported after the first version of this
+        ;; edge. A prelude namespace OFFERS names rather than consuming them, so
+        ;; it takes no prelude edges; everything else in the workspace takes them
+        ;; all.
+        pre-of (fn [n prelude]
+                 (let [ps (set (map :ns prelude))]
+                   (if (contains? ps n) #{} ps)))
+        deps (into {} (for [[n {:keys [forms prelude]}] sources]
+                        (let [reqs (into (set (compiler/ns-requires (or (ns-form forms) '(ns x))))
+                                         (pre-of n prelude))]
                           [n (cond-> (into reqs (implied-requires n forms))
                                (and (not= n 'flint.virtual)
                                     (some virtuals reqs))

@@ -382,11 +382,22 @@
 
 (defn topo-order [sources features]
   ;; Dependencies before dependents; clojure.core always first.
-  (let [deps (into {} (for [[n {:keys [src file tags]}] sources]
+  ;; THE PRELUDE EDGE, for the reason `flint.project/topo-order` gives: it was an
+  ;; edge in `collect`, which decides what is IN the program, and not here, which
+  ;; decides what comes FIRST. Kept identical to that function.
+  (let [pre-of (fn [n prelude]
+                 ;; Every prelude provider excluded and not just self, for the
+                 ;; reason `flint.project/topo-order` gives: a workspace with two
+                 ;; prelude entries would otherwise carry a cycle between them
+                 ;; that nobody wrote.
+                 (let [ps (set (map :ns prelude))]
+                   (if (contains? ps n) #{} ps)))
+        deps (into {} (for [[n {:keys [src file tags prelude]}] sources]
                         [n (let [forms (reader/read-all src {:file file :features features
                                                              :tags tags})
                                  nsform (first (filter #(and (seq? %) (= 'ns (first %))) forms))]
-                             (into (set (when nsform (compiler/ns-requires nsform)))
+                             (into (into (set (when nsform (compiler/ns-requires nsform)))
+                                         (pre-of n prelude))
                                    (implied-requires n forms)))]))]
     ;; SORTED (`DECISIONS.md#compiles-are-byte-reproducible`), for the reason
     ;; `flint.project/topo-order` gives at length: the

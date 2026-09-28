@@ -13914,6 +13914,30 @@ enough: `ready` is a `filterv` of `pending`, so every later wave stays sorted.
 By printed name rather than by `compare` on symbols, so the rule is one thing
 rather than two hosts' idea of how symbols order.
 
+### What the sort found in passing, which is the better argument for it
+
+Making the order deterministic broke four rows of `bb test/sysns.clj` with
+"unable to resolve symbol: shout". A `:flint/prelude` entry offers names with no
+`:require`, so the namespace providing them has to be COMPILED FIRST, and that
+edge existed in `collect` -- which decides what is in the program -- and not in
+`topo-order`, which decides what comes first. `collect`'s comment already claimed
+both: "An edge rather than a pin, so `topo-order` also puts the prelude BEFORE
+the code using it." It was an edge in one of the two functions that sentence
+spans, and preludes were ordered correctly by the hash order they happened to
+get.
+
+So the sort did not introduce that bug; it made an existing one reproducible. A
+build whose correctness depends on hash order is not usually wrong, which is the
+worst version of it: the failure arrives on an unrelated change, in a program
+nobody was editing.
+
+The first version of the edge then produced a cycle that nobody wrote --
+`other.prelude -> mylib.prelude -> other.prelude` -- because a workspace with two
+prelude entries attaches the same list to both of those namespaces. A prelude
+namespace OFFERS names rather than consuming them, so it takes no prelude edges;
+everything else in the workspace takes them all. `collect` excludes only self,
+which is enough to pull sources in and not enough to order them.
+
 ### What is not claimed
 
 **One cause was found, not all of them.** This says nothing about the other
