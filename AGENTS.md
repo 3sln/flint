@@ -125,7 +125,7 @@ things being compared.
 **THE GATE IS TIERED. Do not run the half-hour one on every change.**
 
     bin/check          ~51 s     every change
-    bin/test           ~40 min   before pushing a branch, and on a PR
+    bin/test           39–50 min before pushing a branch, and on a PR
     bin/release-gate   > bin/test  before a versioned release
 
 *Re-measured 2026-09-28 at `c17c0f1e`, load averages 2.64/3.07/4.80: `bin/check`
@@ -136,8 +136,17 @@ CLR loads), `bin/check-wedged` and `check-four-ops` are unchanged, and
 `test/selfhost-targets.clj` went from 4.7 s to 11.5 s. A door-agreement matrix
 took that suite to 40.8 s, which is why it moved out to `test/door-agreement.clj`
 and `bin/test` — the fast gate keeps one row of it. `bin/test` was 2 319 s
-(38.6 min) on its last full green run, and gains ~67 s for that suite, so the
-table says ~40 min.*
+(38.6 min) and then 3 008 s (50.1 min) on two full green runs hours apart, which
+is why the table gives a RANGE and not a number.
+
+The 689 s between them is machine load, not the 74 s this session added: the
+spread is in sections nothing here touched — `units: the DIAGNOSTICS build`
+262→415 s, `rust: runtime unit tests` 151→282 s, `rust: green threads` 94→208 s,
+`kin` 101→155 s — while the new `doors` section cost 74 s, close to the 67 s
+measured standalone. So a single figure for this gate is folklore whatever care
+goes into producing it; what it is good for is "did my change add a section's
+worth", and the per-section itemisation it prints answers that and a total does
+not.*
 
 *The figures this replaces were right when written: 26.8 s, and 2 139 s for
 `bin/test`. THE
