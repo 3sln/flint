@@ -13938,6 +13938,30 @@ namespace OFFERS names rather than consuming them, so it takes no prelude edges;
 everything else in the workspace takes them all. `collect` excludes only self,
 which is enough to pull sources in and not enough to order them.
 
+### The second defect the byte comparison found
+
+`:optimize [perf]` was resolved, accepted, used to pick the AOT runtime for wasm
+-- and silently dropped for the port targets. `flint.selfhost` never wrote the
+image's `FLAG-PERF`, which is how an artifact ASKS ITS PORT to compile arities at
+load, so every `:to :clr` and `:to :jvm` artifact the native and npm doors emitted
+under `:optimize [perf]` asked for nothing.
+
+MEASURED 2026-09-28, one source to `:to :clr :optimize [perf]`, read off
+`runtimes/clr/artifact/Check.cs`: 1987 arities compiled through `bin/flint`, 0
+through the native CLI. Both assemblies reported "every check passed", because
+`bin/check-clr` asserted the count on `bin/flint`'s artifact -- the right
+assertion on the door that already worked -- and Check.cs prints it as
+information. The same shape as `:to :clr` shipping unloadable assemblies while a
+suite confirmed their magic bytes. It now asserts the native door's count too,
+with the plain arm as the control, and fails when the fix is removed (checked by
+injection).
+
+The lesson is about what a byte comparison is FOR. Neither of these was found by
+someone suspecting it; both fell out of asking two doors to produce the same
+bytes. A flag that is read, resolved and then not written is invisible to every
+test that asks whether an artifact works, because the artifact does work -- just
+more slowly, or without a thing that was asked for.
+
 ### What is not claimed
 
 **One cause was found, not all of them.** This says nothing about the other

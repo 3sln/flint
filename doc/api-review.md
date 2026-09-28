@@ -700,33 +700,41 @@ reviewer's; it is the same question their "Is this public?" line asks.
 a target added to this option is invisible to it — which is why they are written
 down here.
 
-**MEASURED 2026-09-26 at `04c20e03`** by compiling the same program through each
-door, rather than by reading the dispatch. Output sizes in bytes:
+**RE-MEASURED 2026-09-28 at `e2710045`** by compiling one program
+(`(ns t) (defn main [_] "ok")`) through each door to the SAME output basename,
+rather than by reading the dispatch. The basename matters: `:to :clr` writes it
+into the assembly name, so two doors given different filenames differ for that
+reason alone. Sizes in bytes, and whether the bytes agree:
 
-    target    native CLI       bin/flint        npm CLI
-    wasm      662 240          494 598          662 240
-    clr        29 184           29 184           29 184
-    jvm        38 779           38 779           refused, "no such target"
-    llvm       68 826           refused          68 826   (wired 2026-09-26)
-    native     refused          not in its set   refused
+    target    native CLI   bin/flint    npm CLI    agree?
+    wasm      662 237      494 595      662 237    npm = native
+    clr        29 184       29 184       29 184    all three
+    jvm        38 766       38 766       38 766    all three
+    llvm       68 823       68 823       68 823    all three
+    native    refused      not in set   refused    --
 
-**`:to :llvm` NOW WORKS FROM THE NPM CLI, byte for byte.** It was refused there
-because nothing dispatched it, not because anything was missing:
-`src/flint/llvm.cljc` is portable cljc with ZERO reader conditionals, and
-`src/flint/selfhost.cljc` already accepted `"llvm"` as a mode -- inside
-`dist/flintc.wasm`, which is the compiler the npm CLI runs. Verified 68 826 bytes
-identical to the native CLI's, 2 106 568 identical with `:optimize [perf]`, and
-the IR the npm CLI emitted LINKS with `clang` against `libflintnative.a` into an
-executable that prints the program's answer.
+**EVERY TARGET NOW WORKS FROM EVERY DOOR, byte for byte.** The two gaps this
+table recorded were both unwired dispatch rather than anything missing:
+`bin/flint` refused `:to :llvm` and the npm CLI refused `:to :jvm`, while
+`src/flint/llvm.cljc` is portable cljc and `src/flint/selfhost.cljc` accepts both
+`"llvm"` and `"jvm"` as modes -- inside the compiler both doors already run. Held
+to it by `bb test/selfhost-targets.clj` (four rows plus a harness control) and
+`node sdks/cli/selftest.mjs` (`:to :clr`, `:to :jvm`, both `:out` spellings, and
+the refusal), and recorded in
+[`compiles-are-byte-reproducible`](DECISIONS.md#compiles-are-byte-reproducible).
 
-The refusals each name the door that does have it, and each door's own error
-message lists its own set correctly — the drift was in THIS document, not in the
-code.
+**`:optimize [perf]` was the arm that mattered.** Comparing the plain arms alone
+would not have caught it: `flint.selfhost` never wrote the image's `FLAG-PERF`, so
+every artifact the native and npm doors emitted under `:optimize [perf]` asked its
+port to compile nothing -- 1987 arities through `bin/flint` and 0 through the
+native CLI, from one source, both reporting "every check passed" because the count
+was printed and not asserted. `bin/check-clr` now asserts it on the native door
+too, with the plain arm as the control.
 
-`bin/flint`'s wasm is smaller than the other two for the same program. That is
-expected rather than a finding: the maintainer's instruction is that the
-artefacts produced by the clj implementation and the built-in platform emitters
-need not match.
+`bin/flint`'s wasm is still smaller than the other two for the same program, and
+that is the one difference expected to stay: the maintainer's instruction is that
+the artefacts produced by the clj implementation and the built-in platform
+emitters need not match. It composes a module; the other two shake a prebuilt one.
 
 **Change requests:**
 
@@ -743,25 +751,24 @@ need not match.
    are a separate option for the root, or emitting the class under whatever name the
    output path implies and giving up the `Class.forName` contract.
 
-2. **TWO targets are asymmetric across the doors, not one.** This request said
-   only `:to :llvm` was, and "the other three work from both", which the matrix
-   above disproves:
+2. ~~**TWO targets are asymmetric across the doors, not one.**~~ **Resolved
+   2026-09-28: none are.** Both remaining asymmetries were unwired dispatch, and
+   both are now wired and gated:
 
-   * ~~`:to :llvm` is the NATIVE CLI's alone.~~ **Resolved 2026-09-26: it is the
-     npm CLI's too.** The asymmetry was unwired dispatch. `bin/flint` still
-     refuses it and that one IS deliberate — it records falling through to the
-     wasm path once and writing a 494 KB wasm module into a `.ll` — but that is a
-     babashka-door decision rather than a property of the target.
-   * **`:to :jvm` is missing from the npm CLI**, which was not recorded anywhere.
-     It works from the native CLI and from `bin/flint`, byte for byte (38 779
-     each). `sdks/cli/src/cli.mjs` handles `wasm` and `clr` and falls to "no such
-     target" for `jvm` — so this is an omission rather than a stated boundary,
-     and it is the one that looks most like a gap. **And it is the same shape as
-     `:to :llvm` was**: `selfhost.cljc` accepts `"jvm"` as a mode, so the npm CLI
-     carries a compiler that can do it and does not call it.
+   * ~~`:to :llvm` is the NATIVE CLI's alone.~~ npm CLI 2026-09-26, `bin/flint`
+     2026-09-28. The refusal on `bin/flint` was reasoned about as deliberate here
+     — it records falling through to the wasm path once and writing a 494 KB wasm
+     module into a `.ll` — but that argues for REFUSING AN UNKNOWN `:to`, which
+     the door does, and not for refusing this one. The emitter is portable cljc and
+     this door runs the compiler's own source.
+   * ~~**`:to :jvm` is missing from the npm CLI.**~~ Wired 2026-09-28, byte-identical
+     to both other doors, and the class it writes boots through `com.flint.Main`
+     and answers the program's value — a size check would not have said so.
 
-   Worth confirming which asymmetries are intended. `:to :llvm`'s has a reason in
-   the code; `:to :jvm`'s has none written down.
+   What is left is a question rather than a request: whether every door SHOULD
+   carry every target, or whether some door is meant to be the narrow one. Four
+   targets × three doors is now the state, so the answer is currently "yes" by
+   construction rather than by decision.
 
 ## cli:deps
 

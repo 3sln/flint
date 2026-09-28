@@ -155,7 +155,44 @@
         ;; the artifact and the comparison can see it.
         (check-that "the comparison can tell two assembly names apart"
                     (not (same? (str work "/bb/app.dll")
-                                (str work "/bb/a.b.dll"))))))
+                                (str work "/bb/a.b.dll"))))
+        ;; --- AND THE OTHER TWO TARGETS, in both `:optimize` modes -----------
+        ;;
+        ;; `:to :clr` was the only one held to byte agreement, and the roadmap
+        ;; said so. `:optimize [perf]` is in here because the plain arm could
+        ;; not have caught what these rows caught first: `flint.selfhost` never
+        ;; wrote `FLAG-PERF` into the image, so every artifact the native and npm
+        ;; doors emitted under `:optimize [perf]` asked its port to compile
+        ;; nothing -- 1987 arities through `bin/flint` and 0 through the native
+        ;; CLI, from one source, both "passing every check".
+        ;;
+        ;; `:to :llvm` ALSO WORKS FROM THIS DOOR NOW. `bin/flint` refused it and
+        ;; the refusal named the native CLI, which described the dispatch and read
+        ;; as a property of the door -- the same shape the npm CLI's refusal had.
+        (let [emit2 (fn [door base extra]
+                      (let [out (str work "/" door "/" base)]
+                        (fs/create-dirs (str work "/" door))
+                        (apply sh (if (= door "bb")
+                                    (concat [(str root "/bin/flint") ":src" src
+                                             ":fn" "t/main"] extra [":out" out])
+                                    (concat [cli "compile" ":path" src
+                                             ":fn" "t/main"] extra [":out" out])))
+                        out))]
+          (doseq [[target base] [["llvm" "p.ll"] ["jvm" "Prog.class"]]
+                  [label extra] [["plain" []] [":optimize [perf]" [":optimize" "[perf]"]]]]
+            (let [flags (concat [":to" (str ":" target)] extra)]
+              (check-that (str "`:to :" target "` " label
+                               ": bin/flint and the native CLI agree byte for byte")
+                          (same? (emit2 "bb" base flags) (emit2 "nat" base flags)))))
+          ;; THE CONTROL FOR THOSE FOUR ROWS, and it is about the HARNESS rather
+          ;; than the doors: if `emit2` dropped its extra flags, every arm would
+          ;; compile the same way and all four rows would agree for a reason that
+          ;; has nothing to do with the doors. `:optimize [perf]` must produce a
+          ;; different artifact from plain through the SAME door.
+          (check-that "the comparison can tell :optimize [perf] from plain"
+                      (not (same? (emit2 "bb" "ctl-a.ll" [":to" ":llvm"])
+                                  (emit2 "bb" "ctl-b.ll" [":to" ":llvm"
+                                                          ":optimize" "[perf]"])))))))
     ;; `:to :jvm` -- a class opens `CAFEBABE`, and `:out` is a CLASSPATH ROOT:
     ;; the class declares itself `flint.Artifact` and a JVM loads it only from a
     ;; path matching that name.

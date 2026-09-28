@@ -109,6 +109,37 @@ if [ -x target/release/flint ]; then
     fail "the NATIVE CLI's assembly did not check out (bin/flint's is checked below)"
   fi
   echo "  ok   the native CLI's assembly loads and checks out too"
+
+  # AND ITS `:optimize [perf]` ARTIFACT ACTUALLY ASKS FOR ARITIES. The perf arm
+  # below builds with `bin/flint` and asserts the entry count, which is the right
+  # assertion on the wrong door: `flint.selfhost` never wrote `FLAG-PERF` into the
+  # image at all, so every artifact the NATIVE and npm doors emitted under
+  # `:optimize [perf]` asked its port to compile nothing.
+  #
+  # MEASURED 2026-09-28 before the fix, one source, both doors: 1987 entries
+  # through `bin/flint` and 0 through the native CLI. Both assemblies reported
+  # "every check passed", because the count was printed as information and
+  # asserted only for the door that already worked.
+  ./target/release/flint compile :path "$OUT/src" :fn prog/main :to :clr \
+    :optimize "[perf]" :out "$OUT/NativePerf.dll" > "$OUT/emit-native-perf.out" 2>&1 \
+    || { cat "$OUT/emit-native-perf.out"; fail "the native CLI's \`:to :clr :optimize [perf]\` did not emit"; }
+  if ! (cd runtimes/clr/artifact && dotnet run -v q -c Release -- \
+          "../../../$OUT/NativePerf.dll" prog/main "$want") > "$OUT/check-native-perf.out" 2>&1; then
+    cat "$OUT/check-native-perf.out"
+    fail "the NATIVE CLI's :optimize [perf] assembly did not check out"
+  fi
+  nat_perf_aot=$(sed -n 's/^aot  entries //p' "$OUT/check-native-perf.out")
+  case "$nat_perf_aot" in
+    ''|*[!0-9]*) fail "no aot entry count came back from the native door's perf assembly" ;;
+  esac
+  [ "$nat_perf_aot" -gt 0 ] \
+    || fail "the native door's :optimize [perf] compiled no arities -- the image carries no perf bit"
+  # THE CONTROL, so the row above cannot pass for a reason other than the flag:
+  # the same door without `:optimize` must compile NONE.
+  nat_plain_aot=$(sed -n 's/^aot  entries //p' "$OUT/check-native.out")
+  [ "$nat_plain_aot" = "0" ] \
+    || fail "the native door compiled $nat_plain_aot arities with no :optimize, so the perf row proves nothing"
+  echo "  ok   the native door's :optimize [perf] asks for arities ($nat_perf_aot entries; 0 without it)"
 else
   echo "  --   no target/release/flint; the native door's assembly is not checked"
 fi

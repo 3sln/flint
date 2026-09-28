@@ -11,8 +11,8 @@
 // that the two front doors compile a project into the SAME BYTES. Where they
 // differ, they differ on purpose and it is written down here.
 
-import { writeFileSync, statSync } from 'node:fs';
-import { basename } from 'node:path';
+import { writeFileSync, mkdirSync, statSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 
 /// Is this a file we can read? A bare word that names one is a SCRIPT; a bare
 /// word that names nothing is a mistake, and saying so is `parse`'s job.
@@ -179,6 +179,47 @@ function compileClrBytes(srcs, entry, optimize, meta,
   return asm;
 }
 
+/// `:to :jvm`: ONE class file, bytes out.
+///
+/// SAME SHAPE AS `compileClrBytes`, and for the same reasons: no `shake` and
+/// SLOTS rather than SLOTS_AOT, because the natives resolve BY NAME against
+/// whatever table the host carries and there is no prebuilt module to cut down.
+///
+/// THIS PACKAGE REFUSED `:to :jvm` UNTIL 2026-09-28 AND CARRIED THE EMITTER ALL
+/// ALONG -- the same story `compileLlvmText` tells above. `selfhost.cljc` accepts
+/// `"jvm"` as a mode, inside the `dist/flintc.wasm` that `runCompiler` runs, so
+/// the refusal was unwired dispatch. `doc/api-review.md` recorded it as the
+/// asymmetry that "looks most like a gap", with nothing written down for it.
+///
+/// `name` is the class's own name, or `''` for the default `flint.Artifact`. The
+/// THIRD argv element is the jar base, which this door never wants: it asks for
+/// the class.
+function compileJvmBytes(srcs, entry, optimize, meta, name,
+                         { checks = null, exports = [], features = null } = {}) {
+  const aot = wantsAot(optimize);
+  const spec = buildSpec({
+    srcs, entry, slots: slots(), aot, shake: false, meta, roots: null,
+    stdlib: stdlib(), stdlibDeps: stdlibDeps(),
+    stripChecks: stripChecks(optimize, checks), exports, features,
+  });
+  const klass = b64decode(runCompiler(['jvm', spec, '', String(name ?? '')]).trim());
+  // A SNIFF TEST, for `compileClrBytes`'s reason. `CAFEBABE` opens every class file.
+  if (klass.length < 4 || klass[0] !== 0xca || klass[1] !== 0xfe
+      || klass[2] !== 0xba || klass[3] !== 0xbe) {
+    throw new Error('the compiler did not answer with a class file (no `CAFEBABE`)');
+  }
+  return klass;
+}
+
+/// Is this a legal Java class name? A FILENAME IS NOT A CLASS NAME: `:out
+/// my-prog.class` would emit a class a JVM loads -- class-file naming is laxer
+/// than the Java language's -- and that NO JAVA SOURCE CAN REFERENCE. Refused
+/// rather than written, because the artifact looks fine until somebody writes
+/// code against it. Both other doors refuse the same spelling.
+function isJavaIdentifier(s) {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(s);
+}
+
 export function compile(srcs, entry, outPath, optimize, to, meta,
                         { quiet = false, checks = null, features = null } = {}) {
   const target = String(to).replace(/^:/, '');
@@ -207,8 +248,35 @@ export function compile(srcs, entry, outPath, optimize, to, meta,
     if (!quiet) process.stderr.write(`wrote ${outPath} (${asm.length} bytes)\n`);
     return;
   }
+  if (target === 'jvm') {
+    // TWO SPELLINGS OF `:out`, because the other two doors take both and one door
+    // cannot accept a spelling the others refuse (AGENTS.md section 1):
+    // `…/Prog.class` names the class `Prog`, and a DIRECTORY writes
+    // `<root>/flint/Artifact.class`, which is what `com.flint.Main` and
+    // `com.flint.FourOps` reach by name.
+    const out = String(outPath).replace(/\\/g, '/');
+    const dotclass = out.endsWith('.class');
+    const endsDefault = out.endsWith('flint/Artifact.class');
+    let name = '';
+    if (dotclass && !endsDefault) {
+      name = basename(out).slice(0, -'.class'.length);
+      if (!isJavaIdentifier(name)) {
+        throw new Error(
+          `\`${outPath}\` is not a usable class name: \`${name}\` would emit a class a JVM\n` +
+          'loads but no Java source can name. A class name starts with a letter, `_` or\n' +
+          '`$` and continues with those or digits. Rename the file, or pass `:out` as a\n' +
+          'CLASSPATH ROOT (a directory) for the default `flint.Artifact`.');
+      }
+    }
+    const klass = compileJvmBytes(srcs, entry, optimize, meta, name, { checks, features });
+    const target2 = dotclass ? outPath : join(outPath, 'flint', 'Artifact.class');
+    mkdirSync(dirname(target2), { recursive: true });
+    writeFileSync(target2, klass);
+    if (!quiet) process.stderr.write(`wrote ${target2} (${klass.length} bytes)\n`);
+    return;
+  }
   if (target !== 'wasm') {
-    throw new Error(`no such target \`${target}\` (\`:to :wasm\`, \`:to :clr\`, \`:to :llvm\`)`);
+    throw new Error(`no such target \`${target}\` (\`:to :wasm\`, \`:to :clr\`, \`:to :jvm\`, \`:to :llvm\`)`);
   }
   const aot = wantsAot(optimize);
   const table = aot ? slotsAot() : slots();

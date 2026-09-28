@@ -292,6 +292,45 @@ try {
       check('and a different basename is a different assembly',
             Buffer.compare(readFileSync(cb), readFileSync(cc)) !== 0);
     }
+    // `:to :jvm` THROUGH BOTH DOORS, and this package refused the target until
+    // 2026-09-28. `doc/api-review.md` recorded it as the asymmetry that "looks
+    // most like a gap", with nothing written down for it -- `selfhost.cljc`
+    // accepts `"jvm"` as a mode, so the compiler this package runs could always
+    // do it and nothing called it.
+    //
+    // A CLASS FILE, NOT A CLASSPATH ROOT, so the two arms can be compared as
+    // files. `:out <dir>` is the other spelling both doors take and it writes
+    // `<root>/flint/Artifact.class`; the row after this one covers it.
+    {
+      const ja = join(tmp, 'native', 'Prog.class');
+      const jb = join(tmp, 'node', 'Prog.class');
+      mkdirSync(join(tmp, 'native'), { recursive: true });
+      mkdirSync(join(tmp, 'node'), { recursive: true });
+      execFileSync(NATIVE, ['compile', ':path', FIXTURE, ':fn', 'demo.main/main',
+                            ':to', ':jvm', ':out', ja],
+                   { stdio: ['ignore', 'ignore', 'ignore'] });
+      flint(['compile', ':path', FIXTURE, ':fn', 'demo.main/main', ':to', ':jvm', ':out', jb]);
+      check(':to :jvm: byte-identical to the native CLI',
+            existsSync(jb) && Buffer.compare(readFileSync(ja), readFileSync(jb)) === 0,
+            existsSync(jb) ? `native ${readFileSync(ja).length}, node ${readFileSync(jb).length}`
+                           : 'the node CLI wrote no class file');
+      // THE CLASSPATH-ROOT SPELLING, which is the one every existing consumer
+      // uses: `com.flint.Main` and `com.flint.FourOps` reach `flint.Artifact` by
+      // name. A door that took only one of the two spellings would be a door
+      // somebody's build cannot switch to.
+      const root = join(tmp, 'cp');
+      flint(['compile', ':path', FIXTURE, ':fn', 'demo.main/main', ':to', ':jvm', ':out', root]);
+      check('and `:out <dir>` writes <root>/flint/Artifact.class',
+            existsSync(join(root, 'flint', 'Artifact.class')));
+      // AND A FILENAME THAT IS NOT A CLASS NAME IS REFUSED, writing nothing --
+      // the artifact would load and no Java source could name it. Both other
+      // doors refuse the same spelling.
+      const bad = join(tmp, 'my-prog.class');
+      const r2 = flint(['compile', ':path', FIXTURE, ':fn', 'demo.main/main',
+                        ':to', ':jvm', ':out', bad]);
+      check('and `my-prog.class` is refused, not written',
+            r2.code !== 0 && !existsSync(bad), r2.out);
+    }
     execFileSync(NATIVE, ['compile', ':path', FIXTURE, ':fn', 'demo.main/main', ':out', a],
                  { stdio: ['ignore', 'ignore', 'ignore'] });
     flint(['compile', ':path', FIXTURE, ':fn', 'demo.main/main', ':optimize', '[perf]', ':out', b]);

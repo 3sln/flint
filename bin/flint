@@ -982,23 +982,24 @@
   ;; and the only tell was `\0asm` where `; flint program, as LLVM IR` should
   ;; have been. A typo did the same: `:to :wsam` compiled and shipped wasm.
   ;;
-  ;; `:llvm` is NOT in this list because this door does not emit IR: the native
-  ;; CLI does (`cli/src/main.rs`, `compile_llvm`), and saying so is the whole
-  ;; point of refusing here rather than silently doing something else.
-  (when (and to (not (contains? #{"wasm" "clr" "jvm"} to)))
+  ;; `:llvm` IS IN THIS LIST NOW. It was not, and the comment here said "this
+  ;; door does not emit IR: the native CLI does" -- which described the DISPATCH
+  ;; and read as a property of the door. `src/flint/llvm.cljc` is portable cljc
+  ;; and this file runs the compiler's own source, so the emitter was always in
+  ;; reach; the npm CLI had the same refusal for the same non-reason and was
+  ;; wired up on 2026-09-26. Three doors, one emitter, byte-identical output
+  ;; (`DECISIONS.md#compiles-are-byte-reproducible`).
+  (when (and to (not (contains? #{"wasm" "clr" "jvm" "llvm"} to)))
     (binding [*out* *err*]
       (println (str "no such target `:to :" to "` on this door. `bin/flint` emits"
-                    " :wasm (the default), :clr and :jvm."))
-      (println (str "  `:to :llvm` is the native CLI's: "
-                    "`flint compile :path <dir> :fn <ns/fn> :to :llvm`.")))
+                    " :wasm (the default), :clr, :jvm and :llvm.")))
     (System/exit 1))
   (when-not fn
-    ;; `:to` BELONGS IN THE USAGE. This door emits three targets and the help
+    ;; `:to` BELONGS IN THE USAGE. This door emits four targets and the help
     ;; named none of them, while an unrecognised `:to` above prints the set --
     ;; so the only way to learn the option existed was to guess it wrong.
     (println "usage: flint :src <dir> :fn <ns/fn> [:out <file>]")
-    (println "                 [:to wasm|clr|jvm]   default wasm; `:to llvm` is")
-    (println "                                      the native CLI's")
+    (println "                 [:to wasm|clr|jvm|llvm]   default wasm")
     (println "       flint test :src <dir>        run every ^:flint.check/test var")
     (println "                 [:exclude [ns ...]]   assert these are unreachable")
     (println "                 [:wasm-path <dir> ...] search path for precompiled units")
@@ -1291,6 +1292,30 @@
                 (.write o ^bytes klass))
               (println "wrote" target (str "(" (alength ^bytes klass) " bytes, "
                                            (count image) " of it bytecode)"))
+              (System/exit 0)))
+        ;; `:to :llvm` -- BESIDE `:to :jvm` and `:to :clr` for their reason: IR is
+        ;; not a link either. `llvm/emit-module` takes the image, the compiled
+        ;; arities' IR and their names, and answers TEXT -- the one target here
+        ;; that is not bytes.
+        ;;
+        ;; ARITIES BEFORE THE IMAGE, which is not an ordering this door gets to
+        ;; choose: `llvm/compile-arities` writes each arity's slot INTO the
+        ;; builder, so an image emitted first carries none of them.
+        ;; `flint.selfhost/compile-to-llvm` says the same thing at the same place,
+        ;; and the two are meant to stay identical (AGENTS.md sec. 1) -- verified
+        ;; byte-for-byte against the native CLI and the npm CLI by
+        ;; `bb test/selfhost-targets.clj`.
+        _ (when (= to "llvm")
+            (require '[flint.llvm :as llvm])
+            (let [res (when perf? ((resolve 'flint.llvm/compile-arities) builder))
+                  image (if self (:image selfres) (img/emit builder {}))
+                  ir ((resolve 'flint.llvm/emit-module)
+                      image (or (:ir res) "") (or (:names res) []))]
+              (spit (str out) ir)
+              (println "wrote" out (str "(" (count ir) " bytes"
+                                        (when res (str ", " (:compiled res) " of "
+                                                       (:total res) " arities compiled"))
+                                        ")"))
               (System/exit 0)))
         ;; `:to :clr` -- BESIDE `--emit-image` and before `link/compose`, because
         ;; a CLR assembly is not a link. The bytecode goes in as a `FieldRva`

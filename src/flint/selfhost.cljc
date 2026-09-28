@@ -227,6 +227,28 @@
                                                      'flint.system/boot)))
                        :builtins builtins
                        :features features})]
+          ;; THE PERF DECISION GOES IN THE IMAGE, and this path never wrote it.
+          ;;
+          ;; `FLAG-PERF` is how an artifact ASKS ITS PORT to compile arities at
+          ;; load: `image.cljc` says "an image for a PORT has the bit and an empty
+          ;; table, which is exactly the case that could not be expressed before".
+          ;; `bin/flint` sets it for every target before dispatching; nothing here
+          ;; did, so `:optimize [perf]` was accepted, resolved, used to pick the AOT
+          ;; runtime for wasm -- and silently dropped for the port targets.
+          ;;
+          ;; MEASURED 2026-09-28, `(ns t) (defn main [_] "ok")` to
+          ;; `:to :clr :optimize [perf]`, read off `runtimes/clr/artifact/Check.cs`:
+          ;; 1987 arities compiled through `bin/flint` and 0 through the native CLI,
+          ;; from one source. Both artifacts "passed every check", because the check
+          ;; prints the count as information and asserts nothing about it -- the
+          ;; same shape as `:to :clr` shipping unloadable assemblies while a suite
+          ;; confirmed the magic bytes (`test/selfhost-targets.clj`).
+          ;;
+          ;; `(:aot spec)` and not `:optimize`: the CLIs resolve the preference list
+          ;; to a decision before building the spec, which is the same split
+          ;; `set-perf!`'s docstring names -- "the image carries the DECISION, not
+          ;; the preference list".
+          (img/set-perf! (:builder result) (boolean (:aot spec)))
           {:builder (:builder result) :stats (:stats result)})))))
 
 (defn compile-project
