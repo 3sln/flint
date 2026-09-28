@@ -68,6 +68,32 @@ base64 -d < "$W/ref.b64" > "$W/ref.class" 2>/dev/null \
   dist/flintc.bytecode "$W/p.spec" "$W/ref.class" \
   || fail "RtCompiler"
 
+# --- THE NATIVE CLI'S CLASS, LOADED. The `:to :clr` bug fixed on 2026-09-28 was a
+# length confusion no magic-byte check could see: the COR20 header's metadata RVA
+# was computed without the bytecode's size, and the only reason it shipped is that
+# nothing LOADED the native door's artifact. `:to :jvm` had the same hole --
+# `test/selfhost-targets.clj` checks CAFEBABE and the bytecode's presence, and
+# `bin/check-four-ops` builds with `bin/flint` -- and the jvm path has had exactly
+# this class of bug once already, an 894-byte class that loaded and threw at boot.
+#
+# SO THIS BOOTS IT, and `javap` is NOT enough -- that was tried and it passed with
+# the bug injected. The recorded shape is exact: "a class that loads, reports its
+# metadata correctly and throws at boot". `javap` reads the method table, which
+# survives; the bytecode is what goes missing. Only running the program looks at
+# the part that was empty.
+./target/release/flint compile :path "$W/src" :fn p/main :to :jvm :out "$W/cp" \
+  > /dev/null 2>&1 || fail "the native CLI's \`:to :jvm\` did not emit"
+if ! "$JDK/bin/java" -cp "runtimes/jvm/classes:$W/cp" com.flint.Main p/main x \
+     > "$W/jvm-run.out" 2>&1; then
+  head -8 "$W/jvm-run.out"
+  fail "the native CLI's class did not run through com.flint.Main"
+fi
+grep -q 'sdk' "$W/jvm-run.out" || {
+  head -8 "$W/jvm-run.out"
+  fail "the native CLI's class ran and did not answer the program's value"
+}
+echo "  ok   the native CLI's class boots and answers the program's value"
+
 # --- THE CLR ARM. `Flint.Rt.Compiler` and `Flint.Rt.Image` are the same pair, and
 # it asserts the same thing: a resolved spec compiles to an assembly that LOADS,
 # in memory.
