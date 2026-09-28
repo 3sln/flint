@@ -1221,19 +1221,21 @@ public static class Program {
         Row("the compiler runs on this runtime", image.StartsWith("RkxJTlRJTUc"),
             image.Length > 24 ? image.Substring(0, 24) : image);
 
-        // AND `:to :clr` REFUSES A SPEC WITHOUT `:slots`, by name.
-        string refused = c.Run("clr", spec);
-        Row("`:to :clr` refuses a resolved spec rather than emitting bad IL",
-            refused.StartsWith("!refused") && refused.Contains(":slots"),
-            refused.Length > 90 ? refused.Substring(0, 90) : refused);
-
-        // AND THE REFUSAL REACHES A CALLER as an exception, not as bytes.
-        try {
-            c.CompileClr(spec);
-            Row("CompileClr surfaces the refusal", false, "it returned an Image");
-        } catch (InvalidOperationException e) {
-            Row("CompileClr surfaces the refusal", e.Message.Contains(":slots"), e.Message);
-        }
+        // AND SOURCE TO AN ARTIFACT, IN MEMORY. This asserted a REFUSAL until
+        // 2026-09-28: a resolved spec produced an assembly .NET would not load, and
+        // the restriction was recorded as this target's. The cause was
+        // `compile-to-clr` handing `clr/assemble` a VECTOR where it measures a byte
+        // string with `b-count`, so the COR20 header's metadata RVA was computed
+        // without the bytecode's size. Every spec hit it, so refusing resolved ones
+        // fixed nothing; `vec->b` did.
+        var img = c.CompileClr(spec);
+        Row("a resolved spec compiles to an assembly, in memory",
+            img.Bytes() != null && img.Bytes().Length > 0,
+            (img.Bytes() == null ? -1 : img.Bytes().Length).ToString());
+        Row("the assembly loads from those bytes", img.Type_() != null,
+            img.Type_()?.ToString() ?? "null");
+        Row("and its metadata is readable", img.Metadata() != null,
+            img.Metadata() ?? "null");
 
         if (fails > 0) { Console.WriteLine("RtSdk: " + fails + " FAILURES"); return 1; }
         return 0;

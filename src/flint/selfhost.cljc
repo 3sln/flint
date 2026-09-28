@@ -413,49 +413,23 @@
 
   Bytes out, so the caller base64s them -- the opposite of `:ll`, which is text.
 
-  A SPEC MUST CARRY `:slots` HERE, and that is the one place this target differs
-  from `:to :jvm`. Given an already-resolved spec -- which has none -- it emitted a
-  29 184-byte assembly, the same length as the good one, differing in 83 bytes with
-  `.text` 36 bytes larger, that `Assembly.Load` refused with
-  `BadImageFormatException: Bad IL format`.
+  A RESOLVED SPEC WORKS HERE, and a restriction that said otherwise was removed
+  along with the bug that motivated it. It required a spec to carry `:slots`,
+  because an already-resolved spec produced an assembly `Assembly.Load` refused
+  with `BadImageFormatException: Invalid COR20 header signature`.
 
-  THE CAUSE IS NOT ESTABLISHED, and an earlier version of this comment claimed one
-  it could not support -- that the builtin SET differed. It does not. What has been
-  ruled out, each by measurement:
+  THE CAUSE WAS NOT THE SPEC. `compile-to-clr*` handed `clr/assemble` the VECTOR
+  `img/emit` answers, and `clr/assemble` measures its image with
+  `flint.rt/b-count`, which does not measure a vector -- so the length came out
+  wrong, the COR20 header's metadata RVA was computed WITHOUT the bytecode's size,
+  and it pointed 26 719 bytes early, into the embedded image itself. .NET read
+  `FLIN` where `BSJB` belongs. Every spec hit it, including the CLI's own, which is
+  why refusing resolved ones fixed nothing.
 
-    * NOT A PORT DIVERGENCE. The wasm compiler produced THE SAME BYTES from the
-      same spec, so both runtimes were faithful to whatever the input was.
-    * NOT THE BUILTIN SET. The resolved spec's `:builtins` and `dist/slots.json`'s
-      keys are the same 226 names; the spec writes them as STRINGS, which is what
-      the analyzer compares as text, and unquoting makes the sets equal exactly.
-    * NOT CHECKS OR FEATURES. `:checks true` and `:checks false` through the CLI
-      produce BYTE-IDENTICAL assemblies, so the `:flint/check` feature the resolved
-      spec carries cannot be it either.
-
-  What remains unexamined is `:order`, which the two paths compute separately, and
-  the `:exclude`/`:excluded-builtins` keys a resolved spec carries and a CLI spec
-  does not. Recorded as open rather than guessed at a fourth time.
-
-  THE REFUSAL IS RIGHT WHATEVER THE CAUSE. An artifact that loads nowhere is worse
-  than an error, and this project has the lesson already: `bin/flint` once fell
-  through to the wasm path for an unknown `:to` and wrote a 494 KB wasm module into
-  a `.ll`. `:to :jvm` takes a resolved spec and is verified byte-identical to the
-  wasm compiler on one AND loadable, so the restriction is this target's and not
-  the mechanism's.
-
-  REFUSED RATHER THAN EMITTED. An artifact that loads nowhere is worse than an
-  error, and this project has the lesson already: `bin/flint` once fell through to
-  the wasm path for an unknown `:to` and wrote a 494 KB wasm module into a `.ll`.
-  `:to :jvm` takes a resolved spec and is verified byte-identical to the wasm
-  compiler on one, so the restriction is this target's and not the mechanism's."
+  With `vec->b` in place a resolved spec compiles to an assembly that loads and
+  passes all 39 rows of `runtimes/clr/artifact/Check.cs`, with or without `:slots`."
   [spec-edn]
-  (let [spec (reader/read-one spec-edn)]
-    (if-not (:slots spec)
-      {:refused [{:from "the spec" :to ":to :clr"
-                  :to-workspace "this target"
-                  :needs "a :slots map"
-                  :from-workspace "an already-resolved spec"}]}
-      (compile-to-clr* spec)))) 
+  (compile-to-clr* (reader/read-one spec-edn)))
 
 (defn- compile-to-clr* [spec]
   (let [built (build-image spec (spec-builtins spec))]
@@ -469,7 +443,21 @@
         ;; (`DECISIONS.md#four-operations`, "the emitter owns describe"). The
         ;; compatibility key is still computed by `flint.modmeta` exactly once --
         ;; that has not changed, only WHO calls it.
-        (let [image (img/emit (:builder built) {})]
+        ;; `vec->b`, AND `compile-to-jvm`'S COMMENT ALREADY CLAIMED THIS PATH DID IT.
+        ;; `img/emit` answers a VECTOR of byte values; `clr/assemble` measures its
+        ;; image with `flint.rt/b-count`, which does not measure a vector. So the
+        ;; length came out wrong, the COR20 header's metadata RVA was computed
+        ;; WITHOUT the bytecode's size, and the header pointed 26 719 bytes early --
+        ;; into the embedded image itself. `.NET` then read `FLIN` where `BSJB`
+        ;; belongs and refused the assembly with `BadImageFormatException: Invalid
+        ;; COR20 header signature`.
+        ;;
+        ;; It is the same defect `compile-to-jvm` records having had -- "handing the
+        ;; vector over produced a class with correct METADATA and no bytecode in it"
+        ;; -- and its comment says "`vec->b`, WHICH `compile-to-clr` DOES TOO". That
+        ;; sentence was false, and a comment asserting a sibling is correct is how
+        ;; the sibling stays wrong.
+        (let [image (flint.rt/vec->b (vec (img/emit (:builder built) {})))]
           ;; `:bytes` out of the map `assemble` answers -- it also carries the
           ;; per-method assembly facts, which nothing here wants.
           {:clr (:bytes (clr/assemble {:name (or (:name spec) "Program")

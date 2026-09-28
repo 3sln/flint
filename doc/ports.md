@@ -94,36 +94,40 @@ the mirror of `com.flint.Compiler` and the ESM SDK's. Promoted from
 lessons the JVM's did: the var table rather than `img.entry`, initialisers first,
 rooting across allocations, and the spec as an argv.
 
-**`:to :clr` REFUSES AN ALREADY-RESOLVED SPEC.** Given one the CLR emitter
-produced a 29 184-byte assembly: the same LENGTH as the good artifact, 83 bytes
-different, `.text` 36 bytes larger, which `Assembly.Load` rejected with
-`BadImageFormatException: Bad IL format`.
+**A RESOLVED SPEC COMPILES HERE TOO**, so source-to-artifact-in-memory works on
+both ports. It did not until 2026-09-28, and this section recorded the cause
+wrongly twice before measuring it.
 
-**THE CAUSE IS NOT ESTABLISHED**, and the first version of this section claimed
-one it could not support — that the builtin set differed. Three candidates have
-been ruled out by measurement, each after being believed:
+The symptom: a resolved spec produced an assembly `Assembly.Load` refused with
+`BadImageFormatException: Invalid COR20 header signature`.
 
-| ruled out | how |
-|---|---|
-| a port divergence | the wasm compiler produced THE SAME BYTES from the same spec |
-| the builtin set | the resolved spec's `:builtins` and `dist/slots.json`'s keys are the same 226 names — the spec writes them as STRINGS, which is what the analyzer compares as text, and unquoting makes the sets equal exactly |
-| checks or features | `:checks true` and `:checks false` through the CLI give BYTE-IDENTICAL assemblies, so the `:flint/check` feature a resolved spec carries cannot be it |
+**THE CAUSE.** `compile-to-clr` handed `clr/assemble` the VECTOR `img/emit`
+answers. `clr/assemble` measures its image with `flint.rt/b-count`, which does not
+measure a vector — so the length came out wrong, the COR20 header's metadata RVA
+was computed WITHOUT the bytecode's size, and it pointed 26 719 bytes early, into
+the embedded image. .NET read `FLIN` where `BSJB` belongs:
 
-Unexamined: `:order`, which the two paths compute separately, and the
-`:exclude`/`:excluded-builtins` keys a resolved spec carries and a CLI spec does
-not.
+    bin/flint's assembly   metadata rva=0x8a48 -> sig BSJB   loads
+    the CLI's assembly     metadata rva=0x21d8 -> sig FLIN   refused
+    0x8a48 - 0x21d8 = 26 736, against an image of 26 719 bytes
 
-**The refusal is right whatever the cause**, and it is this target's restriction
-rather than the mechanism's: `:to :jvm` takes a resolved spec and its artifact is
-byte-identical to the wasm compiler's AND loadable. An artifact that loads nowhere
-is worse than an error, and `bin/flint` has the lesson already — it once fell
-through to the wasm path for an unknown `:to` and wrote a 494 KB wasm module into
-a `.ll`.
+**EVERY SPEC HIT IT, the CLI's own included** — which is why a restriction on
+resolved specs fixed nothing, and why the earlier explanations here were wrong.
+Three candidates were ruled out by measurement first (a port divergence, the
+builtin set, checks), and two wrong causes were published before the right one:
+the `:features` map/set collision, and the spec shape.
 
-`bin/check-sdk` asserts both arms — the JVM compiling source to a loadable
-in-memory `Image` byte-identical to the wasm compiler, and the CLR running the
-compiler and refusing the spec it cannot compile correctly, with the refusal
-reaching a caller as an exception rather than as bytes.
+`compile-to-jvm` had recorded this exact defect — "handing the vector over
+produced a class with correct METADATA and no bytecode in it" — and its comment
+said *"`vec->b`, WHICH `compile-to-clr` DOES TOO"*. That sentence was false, and a
+comment asserting a sibling is correct is how the sibling stays wrong.
+
+**`bin/check-clr` now loads the NATIVE door's assembly**, before the babashka
+one. That check's absence is what let this ship: it built with `bin/flint`, whose
+door was always fine, while `test/selfhost-targets.clj` checked the native door's
+artifact for magic bytes and nothing loaded it. Proved able to fail by
+reintroducing the vector and watching it report the same `Invalid COR20 header
+signature`.
 
 ### `com.flint.Image`, the mirror of the other SDKs' Image
 

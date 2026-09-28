@@ -88,6 +88,31 @@ else
   want=""
 fi
 
+# THE NATIVE CLI'S ARTIFACT, LOADED. Everything below builds with `bin/flint`, and
+# that is how a shipped path went unchecked: the native CLI's `:to :clr` emitted an
+# assembly whose COR20 header pointed 26 719 bytes early -- into the embedded flint
+# image -- so .NET read `FLIN` where `BSJB` belongs and refused it with
+# `BadImageFormatException: Invalid COR20 header signature`. `bin/flint`'s door was
+# always fine, `test/selfhost-targets.clj` checks the native door's artifact for
+# MAGIC BYTES, and nothing loaded it. Same gap, same file, twice -- the first time
+# `:to :clr` "had never once worked through that door".
+#
+# So this loads the NATIVE door's artifact through the same harness, before the
+# babashka one below. It is the whole check: an artifact a loader accepts.
+if [ -x target/release/flint ]; then
+  ./target/release/flint compile :path "$OUT/src" :fn prog/main :to :clr \
+    :out "$OUT/Native.dll" > "$OUT/emit-native.out" 2>&1 \
+    || { cat "$OUT/emit-native.out"; fail "the native CLI's \`:to :clr\` did not emit"; }
+  if ! (cd runtimes/clr/artifact && dotnet run -v q -c Release -- \
+          "../../../$OUT/Native.dll" prog/main "$want") > "$OUT/check-native.out" 2>&1; then
+    cat "$OUT/check-native.out"
+    fail "the NATIVE CLI's assembly did not check out (bin/flint's is checked below)"
+  fi
+  echo "  ok   the native CLI's assembly loads and checks out too"
+else
+  echo "  --   no target/release/flint; the native door's assembly is not checked"
+fi
+
 ./bin/flint :src "$OUT/src" :fn prog/main :to :clr :out "$OUT/Prog.dll" > "$OUT/emit.out" 2>&1 \
   || { cat "$OUT/emit.out"; fail "\`:to :clr\` did not emit"; }
 sed 's/^/       /' "$OUT/emit.out"

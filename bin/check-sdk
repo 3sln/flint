@@ -69,12 +69,16 @@ base64 -d < "$W/ref.b64" > "$W/ref.class" 2>/dev/null \
   || fail "RtCompiler"
 
 # --- THE CLR ARM. `Flint.Rt.Compiler` and `Flint.Rt.Image` are the same pair, and
-# what it asserts differs for a measured reason: `:to :clr` REFUSES an
-# already-resolved spec instead of emitting an assembly nothing can load. Given
-# one it produced 29 184 bytes -- the same length as the good artifact, 83 bytes
-# different, `.text` 36 bytes larger -- that `Assembly.Load` rejected as
-# `Bad IL format`, and the WASM compiler produced the same bytes, so the two
-# runtimes agreed and the input was wrong.
+# it asserts the same thing: a resolved spec compiles to an assembly that LOADS,
+# in memory.
+#
+# It asserted a REFUSAL until 2026-09-28, because a resolved spec produced an
+# assembly .NET would not load and the restriction was recorded as this target's.
+# It was not: `compile-to-clr` handed `clr/assemble` the VECTOR `img/emit` answers
+# where it measures a byte string with `b-count`, so the COR20 header's metadata
+# RVA was computed without the bytecode's size and pointed 26 719 bytes early, into
+# the embedded image. EVERY spec hit it, the CLI's own included -- which is why
+# refusing resolved specs fixed nothing and `vec->b` did.
 CLR=runtimes/clr/conform/bin/Release/net10.0/Conform
 if [ -x "$CLR" ] && command -v dotnet > /dev/null 2>&1; then
   DOTNET_ROOT="${DOTNET_ROOT:-/opt/homebrew/opt/dotnet/libexec}" \

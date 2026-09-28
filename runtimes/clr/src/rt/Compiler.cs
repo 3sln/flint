@@ -91,20 +91,17 @@ public sealed class Compiler {
     /// Compile a spec to a CLR artifact and hand back an `Image` -- IN MEMORY,
     /// never a file. The mirror of `compileJvm` on the JVM.
     ///
-    /// THE SPEC MUST CARRY `:slots`, which an already-resolved spec does not, and
-    /// `:to :clr` REFUSES one that does not rather than emitting an assembly
-    /// nothing can load. That restriction is this target's, not the mechanism's:
-    /// the JVM takes a resolved spec and is verified byte-identical to the wasm
-    /// compiler on one. Measured: a resolved spec produced a 29 184-byte assembly
-    /// -- the same length as the good one, 83 bytes different, `.text` 36 bytes
-    /// larger -- that `Assembly.Load` rejected with `BadImageFormatException: Bad
-    /// IL format`.
+    /// A RESOLVED SPEC WORKS -- `{:sources .. :order ..}`, what
+    /// `bin/flint --emit-spec` writes -- with or without `:slots`.
     ///
-    /// THE CAUSE IS NOT ESTABLISHED; `src/flint/selfhost.cljc`'s `compile-to-clr`
-    /// lists what has been ruled out. Not a port divergence (the wasm compiler
-    /// produced the same bytes), not the builtin set (the same 226 names, quoted
-    /// differently), and not checks (`:checks true` and `false` give identical
-    /// assemblies). The refusal is right whatever the cause.
+    /// It did not until 2026-09-28, and the reason was not the spec.
+    /// `compile-to-clr` handed `clr/assemble` the VECTOR `img/emit` answers, and
+    /// `clr/assemble` measures its image with `flint.rt/b-count`, which does not
+    /// measure a vector. The COR20 header's metadata RVA was therefore computed
+    /// without the bytecode's size and pointed 26 719 bytes early, into the
+    /// embedded image; .NET read `FLIN` where `BSJB` belongs and refused the
+    /// assembly. EVERY spec hit it, the CLI's own included, so a restriction on
+    /// resolved specs -- which this class used to document -- fixed nothing.
     public Image CompileClr(string specEdn) {
         string outv = Run("clr", specEdn);
         if (outv.StartsWith("!missing") || outv.StartsWith("!refused")) {
