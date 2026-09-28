@@ -16,6 +16,29 @@
 ;; `clr/assemble` itself and never enters `selfhost`. So the target was reachable
 ;; from the door a person would try first, and broken from the one the CLI uses.
 ;;
+;; WHAT ASSERTS EACH TARGET ACTUALLY WORKS, as of 2026-09-28. This file checks
+;; that an artifact is PRODUCED -- magic bytes and a size -- which is necessary and
+;; was twice mistaken for sufficient. The rest of the matrix:
+;;
+;;   :to :wasm   `sdks/cli/selftest.mjs` instantiates and RUNS the npm CLI's
+;;               module ("a `compile` that emits something no engine will take is
+;;               the failure a size check cannot see"), and asserts the native
+;;               CLI's output is BYTE-IDENTICAL to it. One side run plus
+;;               byte-identity covers both doors.
+;;   :to :llvm   `bin/check-llvm` emits from the NATIVE CLI, links it with
+;;               `clang`, runs it, and requires the same answer and the same gas
+;;               as `flint run`.
+;;   :to :clr    `bin/check-clr` loads the NATIVE door's assembly through
+;;               `runtimes/clr/artifact/Check.cs`, added 2026-09-28 after that
+;;               door shipped unloadable assemblies.
+;;   :to :jvm    `bin/check-sdk` BOOTS the native door's class through
+;;               `com.flint.Main` and requires the program's value. `javap` was
+;;               tried and is not enough: it reads the method table, which
+;;               survives the bug that empties the bytecode.
+;;
+;; The pattern both failures shared is one door checked and another shipped. It is
+;; closed for all four targets; a new target is not covered by appearing here.
+;;
 ;; AND IT IS BROKEN AGAIN, DIFFERENTLY, AS OF 2026-09-26. This file asserts an
 ;; artifact is PRODUCED -- magic bytes -- and nothing asserts one LOADS from the
 ;; native door. It does not:
