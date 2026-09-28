@@ -1804,6 +1804,13 @@ done
 # wasm compiler emits". So 179/704 is wrong by about 50x and 350x, and SIX
 # SECONDS was right in magnitude.
 #
+# 25 s AS OF 2026-09-28, read off this script's own phase itemisation, because the
+# phase does the whole thing TWICE: once with a resolved spec and once with an
+# unresolved one, which is a different half of the compiler (see the second block
+# below). The 439 KB unresolved spec is the larger input and the resolver is the
+# extra work. Still not a reason for opt-in; it is recorded so the next person
+# does not read 8.85 s and wonder where the rest went.
+#
 # THE STATED REASON FOR OPT-IN NO LONGER EXISTS. Nine seconds does not justify
 # leaving a headline capability of both ports unchecked by every ordinary run,
 # and both halves of the old comment already said CI should run it. The default
@@ -1837,6 +1844,53 @@ if [ "${FLINT_SELFHOST:-0}" = "1" ]; then
   if [ -n "$CLR" ]; then
     if ! "$CLR" --rt-selfhost out/conform/self.spec out/conform/self.ref; then
       echo "  FAIL clr self-host"
+      exit 1
+    fi
+  fi
+
+  # AND AGAIN WITH AN UNRESOLVED SPEC, WHICH IS A DIFFERENT HALF OF THE COMPILER.
+  #
+  # Everything above passes `--emit-spec`'s output: `{:sources .. :order ..}`,
+  # already resolved. `flint.selfhost/build-image` SKIPS
+  # `flint.project/resolve-project` for such a spec, so the resolver, the
+  # dependency walk, the workspace lookup and the topological order never ran on
+  # either port -- and that is where a real divergence lived. A hash-ordered
+  # worklist seed made two hosts disagree about `(ns t)` on 2026-09-28
+  # (`DECISIONS.md#compiles-are-byte-reproducible`), and this check could not have
+  # seen it: the input avoided the code path.
+  #
+  # `FLINT_SPEC_OUT` is how the unresolved shape is obtained. Only `bin/flint
+  # --emit-spec` could write a spec before, and it writes the RESOLVED one, so
+  # there was no way to hand a port the other shape.
+  #
+  # FOUR HOSTS ON ONE INPUT: the reference is the compiler as wasm, and the jvm
+  # and clr are compared to it byte for byte. The native runtime produced the
+  # spec. 930 initialisers, 36 864 chars of image, identical on all of them.
+  FLINT_SPEC_OUT=out/conform/self-unresolved.spec \
+    ./target/release/flint compile :path bench/progs :fn hello/main \
+      :out out/conform/self-unresolved.wasm >/dev/null 2>&1
+  if [ ! -s out/conform/self-unresolved.spec ]; then
+    echo "  FAIL no unresolved spec came out of FLINT_SPEC_OUT"
+    exit 1
+  fi
+  node host/flint-argv.mjs dist/flintc.wasm out/conform/self-unresolved.spec project \
+    > out/conform/self-unresolved.ref 2>/dev/null
+  if [ ! -s out/conform/self-unresolved.ref ]; then
+    echo "  FAIL the wasm compiler produced no reference for mode project"
+    exit 1
+  fi
+  # THE MODE IS ITS OWN CONTROL. A harness that ignored the third argument would
+  # read the unresolved spec AS a spec, answer `!missing`, and fail against this
+  # reference -- so these rows passing is also evidence the argument arrives.
+  if ! "$JDK/bin/java" -Xss1g -cp runtimes/jvm/classes RtSelfHost \
+       out/conform/self-unresolved.spec out/conform/self-unresolved.ref project; then
+    echo "  FAIL jvm self-host, unresolved spec (mode project)"
+    exit 1
+  fi
+  if [ -n "$CLR" ]; then
+    if ! "$CLR" --rt-selfhost out/conform/self-unresolved.spec \
+         out/conform/self-unresolved.ref project; then
+      echo "  FAIL clr self-host, unresolved spec (mode project)"
       exit 1
     fi
   fi

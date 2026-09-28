@@ -14,7 +14,10 @@ public static class Program {
         if (args.Length >= 1 && args[0] == "--rt-parallel") return RtParallel();
         if (args.Length >= 1 && args[0] == "--rt-stale") return RtStale();
         if (args.Length >= 3 && args[0] == "--rt-shelve") return RtShelve(args[1], args[2]);
-        if (args.Length >= 3 && args[0] == "--rt-selfhost") return RtSelfHost(args[1], args[2]);
+        // A FOURTH ARGUMENT IS A MODE, mirroring `RtSelfHost.java`: without one this
+        // could only reach mode `spec`, and a resolved spec skips the resolver.
+        if (args.Length >= 3 && args[0] == "--rt-selfhost")
+            return RtSelfHost(args[1], args[2], args.Length > 3 ? args[3] : null);
         if (args.Length >= 3 && args[0] == "--rt-sdk") return RtSdk(args[1], args[2]);
         if (args.Length >= 2 && args[0] == "--rt-aot") return RtAot(args[1]);
         if (args.Length >= 2 && args[0] == "--rt-flags") return RtFlags(args[1]);
@@ -1274,7 +1277,7 @@ public static class Program {
         return 0;
     }
 
-    private static int RtSelfHost(string specPath, string refPath) {
+    private static int RtSelfHost(string specPath, string refPath, string mode = null) {
         var rt = new Flint.Rt.Rt(64L * 1024 * 1024, 2048L * 1024 * 1024);
         var img = Flint.Rt.Img.Load(rt, File.ReadAllBytes("dist/flintc.bytecode"));
         if (img == null) { Console.WriteLine("  FAIL not an image"); return 1; }
@@ -1304,11 +1307,16 @@ public static class Program {
         }
         Console.WriteLine("  ok   flint.selfhost/main is bound: " + rt.Describe(compiler));
 
-        // ROOTED, and passed as an ARGV: `main` dispatches on the FIRST element.
+        // ROOTED, and passed as an ARGV: `main` dispatches on the FIRST element --
+        // so an optional MODE is pushed first. See `RtSelfHost.java` for why that
+        // is worth having: without it only mode `spec` was reachable, and a
+        // resolved spec skips `flint.project/resolve-project` entirely.
         int bas = rt.Mark();
         int ci = rt.Push(compiler);
+        int mi = mode != null ? rt.Push(Flint.Rt.Str.Of(rt, mode)) : -1;
         int si = rt.Push(Flint.Rt.Str.Of(rt, File.ReadAllText(specPath)));
-        int li = rt.Push(Flint.Rt.Seqs.FromRoots(rt, si, 1));
+        int li = rt.Push(mi >= 0 ? Flint.Rt.Seqs.FromRoots(rt, mi, 2)
+                                 : Flint.Rt.Seqs.FromRoots(rt, si, 1));
         long outv = rt.RunProgram(rt.R(ci), new long[]{ rt.R(li) });
         string s = Flint.Rt.Str.IsString(rt, outv) ? Flint.Rt.Str.Text(rt, outv)
                  : "NOT A STRING: " + rt.Describe(outv);

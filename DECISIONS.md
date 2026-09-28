@@ -13978,6 +13978,24 @@ sites cannot: they iterate for a lookup, or over a vector. An annotation gate ov
 64 sites was judged the wrong strictness for that reason — the survey came before
 the rule, and the rule it suggested was not worth its noise.
 
+**FOUR HOSTS, NOT TWO, ON THE PATH THE BUG LIVED ON.**
+`FLINT_SELFHOST=1 ./bin/conform-hosts` already ran the compiler on the JVM and CLR
+ports and compared the output against the wasm compiler's byte for byte -- and it
+could not have caught this. It drove `bin/flint --emit-spec`'s output, which is
+RESOLVED, and `build-image` skips `resolve-project` for such a spec. The resolver,
+the dependency walk, the workspace lookup and the topological order never ran on
+either port. The check existed; its input avoided the code path.
+
+It now runs the phase twice, the second time with an UNRESOLVED spec obtained from
+the native CLI's `FLINT_SPEC_OUT` -- which had to be added, because only
+`--emit-spec` could write a spec and it writes the other shape. One input, four
+hosts: the native runtime produces the spec, the wasm compiler is the reference,
+and the JVM and CLR are compared to it. 930 initialisers, 36 864 characters of
+image, identical on all of them. The mode argument is its own control, since a
+harness ignoring it would read the unresolved spec AS a spec and answer
+`!missing`; sensitivity checked besides by flipping one character of the reference,
+which fails the row at equal length.
+
 **What stands in for it is empirical, and its limit is stated.**
 `bb test/door-agreement.clj` compiles the WHOLE COMPILER -- about a hundred
 namespaces -- through two doors that hash differently, and requires identical

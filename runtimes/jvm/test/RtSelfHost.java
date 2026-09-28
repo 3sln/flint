@@ -71,6 +71,17 @@ public class RtSelfHost {
     // the address it had before the collector moved it. `DECISIONS.md#a-vec-of-values-is-not-a-root`.
     int sbase = rt.mark();
     int ci = rt.push(compiler);
+    // AN OPTIONAL MODE, as `a[2]`, PUSHED FIRST so it is the argv's head.
+    //
+    // Without it this harness could only reach mode `spec`, because
+    // `flint.selfhost/main` reads an unrecognised first element AS the spec. That
+    // is not a small restriction: a resolved spec SKIPS
+    // `flint.project/resolve-project`, so the resolver -- where a hash-order bug
+    // made two hosts disagree about `(ns t)` on 2026-09-28
+    // (`DECISIONS.md#compiles-are-byte-reproducible`) -- never ran on this
+    // runtime at all, and a check that compares the compiler's output byte for
+    // byte was comparing a path the bug could not reach.
+    int mi = a.length > 2 ? rt.push(Str.of(rt, a[2])) : -1;
     int si = rt.push(Str.of(rt, new String(Files.readAllBytes(Path.of(a[0])),
                                            java.nio.charset.StandardCharsets.UTF_8)));
     // A LIST CONTAINING the spec, not the spec. `selfhost/main` takes an
@@ -78,7 +89,7 @@ public class RtSelfHost {
     // made `(first spec)` the one-character string `{` -- and the reader then
     // failed at column 2 of a one-character input, which read exactly like a
     // reader bug on a 97 KB file.
-    int li = rt.push(Seqs.fromRoots(rt, si, 1));
+    int li = rt.push(mi >= 0 ? Seqs.fromRoots(rt, mi, 2) : Seqs.fromRoots(rt, si, 1));
     long out = rt.runProgram(rt.r(ci), new long[]{ rt.r(li) });
     rt.popTo(sbase);
     String s = Str.isString(rt, out) ? Str.text(rt, out) : "NOT A STRING: " + rt.describe(out);
