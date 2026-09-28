@@ -493,6 +493,23 @@
      :capabilities (contains? has? "flint_opaque_host_id")
      :aot (boolean aot?)}))
 
+(def current-abi
+  "What this build of flint can link. A unit declaring anything else is refused
+  by name and version rather than linked and left to crash at run time.
+
+  :runtime  the builtin calling convention (extern C, (rt, base, argc) -> u64)
+  :value    the NaN-boxing layout
+  :image    the program image format
+
+  HERE, BESIDE `describe`, BECAUSE THREE NAMESPACES NEED IT AND ONE OF THEM IS
+  HOST-ONLY. It was `flint.link/current-abi`, and `flint.link` requires
+  `clojure.java.io` to shell out to a linker -- so `flint.bundle`, which is
+  compiled into the compiler, could not read it and carried its own copy of the
+  literal instead. Two copies plus a fallback made four, forty lines and one file
+  apart from the definition (AGENTS.md sec. 1). `describe` is what consumes it,
+  and both callers already require this namespace."
+  {:runtime 1 :value 1 :image 1})
+
 (defn describe
   "What a wasm module says about itself, canonical.
 

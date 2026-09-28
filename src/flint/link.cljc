@@ -37,14 +37,12 @@
                       {:code code :err err :out out})))
     {:out out :err err}))
 
-(def current-abi
-  "What this build of flint can link. A unit declaring anything else is refused
-  by name and version rather than linked and left to crash at run time.
-
-  :runtime  the builtin calling convention (extern C, (rt, base, argc) -> u64)
-  :value    the NaN-boxing layout
-  :image    the program image format"
-  {:runtime 1 :value 1 :image 1})
+;; `current-abi` MOVED TO `flint.wasm`, which owns `describe` -- the function that
+;; consumes it -- and which every caller already requires. It was defined here and
+;; `flint.bundle` could not read it: this namespace requires `clojure.java.io` to
+;; shell out to a linker, so it is host-only, and `flint.bundle` is compiled into
+;; the compiler. That is how the same three-key map came to be written out four
+;; times (AGENTS.md sec. 1).
 
 (defn abi-problem
   "Why `u` cannot be linked, or nil."
@@ -53,7 +51,7 @@
     (not= 1 (:flint/unit u))
     (str "unit format version " (pr-str (:flint/unit u)) ", expected 1")
     :else
-    (let [bad (for [[k want] current-abi
+    (let [bad (for [[k want] w/current-abi
                     :let [got (get (:abi u) k)]
                     :when (not= got want)]
                 (str (name k) " " (pr-str got) " (need " want ")"))]
@@ -259,7 +257,19 @@
                      (map #(str "--export=" %) abi-exports)
                      (map #(str "--export=" %) (if (:loader? p) loader-exports []))
                      (map #(str "--export=" %) (unit-exports units))
-                     (map #(str "--export=" %) (vals exports))
+                     ;; SORTED, because `exports` is a hash map and this is a
+                     ;; linker COMMAND LINE: the flag order decides the export
+                     ;; section's order, so the module's bytes depended on the
+                     ;; host's hashing. `plan` sorts `closure` two hundred lines
+                     ;; above for the same reason and this was missed
+                     ;; (`DECISIONS.md#compiles-are-byte-reproducible`).
+                     ;;
+                     ;; Only this door builds wasm this way, and its output is
+                     ;; not compared byte for byte with the other two -- so
+                     ;; nothing would have caught it. What it buys is that
+                     ;; `dist/flintc.wasm` is reproducible across babashka and
+                     ;; Clojure versions rather than only within one.
+                     (map #(str "--export=" %) (sort (vals exports)))
                      (when keep-names ["--strip-debug"])
                      (when-not keep-names ["--strip-all"])
                      ["-o" out-path]
@@ -485,7 +495,20 @@
         ;; diverged on a probe name (`DECISIONS.md#four-operations`).
         meta (w/describe
               {:module m
-               :abi (:abi (first (vals units)) {:runtime 1 :value 1 :image 1})
+               ;; `current-abi`, NOT an arbitrary unit's. This read
+               ;; `(:abi (first (vals units)) {:runtime 1 :value 1 :image 1})` --
+               ;; a hash map's first value, so WHICH unit described the module was
+               ;; the host's hashing. It happens not to matter: `abi-problem`
+               ;; refuses any unit whose `:abi` differs from `current-abi` on all
+               ;; three keys, and every unit in `units/` declares exactly those
+               ;; three -- so the pick was arbitrary among identical values, which
+               ;; is why nothing ever saw it. A unit carrying a FOURTH key would
+               ;; have made it visible, in one build out of however many.
+               ;;
+               ;; It also removes the third copy of that literal (AGENTS.md sec. 1):
+               ;; the fallback restated what `current-abi` already says, forty
+               ;; lines from the definition.
+               :abi w/current-abi
                :units (mapv (fn [u] {:name (str (:name u)) :abi (:abi u)}) (:units p))
                :version flint-version
                :aot? aot?

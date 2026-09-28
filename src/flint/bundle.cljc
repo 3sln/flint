@@ -161,8 +161,21 @@
                ;; A SINGLE KNOWN RUNTIME, which is the real difference from the
                ;; linker: it takes these from the units it linked and there are
                ;; none here.
-               :abi {:runtime 1 :value 1 :image 1}
-               :units [{:name "flint.rt" :abi {:runtime 1 :value 1 :image 1}}]
+               ;;
+               ;; `w/current-abi` AND NOT THE LITERAL, twice. The same map was
+               ;; written out in four places -- once as its definition and three
+               ;; times as a literal -- and a bumped ABI would have moved one of
+               ;; them (AGENTS.md sec. 1).
+               ;;
+               ;; IT LIVES IN `flint.wasm` AND NOT IN `flint.link`, which is where
+               ;; it was and where it reads more naturally. `flint.link` requires
+               ;; `clojure.java.io` because it shells out to a linker, so it is a
+               ;; HOST-ONLY namespace -- and this one is compiled INTO the
+               ;; compiler. Requiring it from here died as "cannot find source for
+               ;; namespace clojure.java.io", which names the transitive
+               ;; dependency and not the boundary that was crossed.
+               :abi w/current-abi
+               :units [{:name "flint.rt" :abi w/current-abi}]
                :version (:version opts)
                :aot? (:aot? opts)
                :exported exported

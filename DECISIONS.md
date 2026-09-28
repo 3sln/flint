@@ -13969,14 +13969,47 @@ places a hash-ordered collection could reach an artifact; `compiler.cljc`
 already sorts its var slots, which is the same rule applied by hand in one
 place.
 
-A STATIC sweep is still open. Counted 2026-09-28 by pattern
-(`(keys|vals|seq)`, `(for [[`, `(doseq [[`, `(map(v) (fn [[`) across the nine
-pipeline files: 64 candidate sites — `analyzer` 20, `link` 17, `compiler` 10,
-`project` 10, `llvm` 4, `clr` 2, `image` 1, `jvm` 0, `wasm` 0. That is a count of
-what the pattern understood, not of what reaches an artifact, and most of those
-sites cannot: they iterate for a lookup, or over a vector. An annotation gate over
-64 sites was judged the wrong strictness for that reason — the survey came before
-the rule, and the rule it suggested was not worth its noise.
+**THE STATIC SWEEP IS DONE, and it found two more.** 64 candidate sites were
+counted 2026-09-28 by pattern (`(keys|vals|seq)`, `(for [[`, `(doseq [[`,
+`(map(v) (fn [[`) across the nine pipeline files — `analyzer` 20, `link` 17,
+`compiler` 10, `project` 10, `llvm` 4, `clr` 2, `image` 1, `jvm` 0, `wasm` 0 — and
+then read. The question asked of each was not "is this a map?" but "does this
+iteration's ORDER reach the artifact?", which is why the pattern count is a list of
+candidates and not of defects:
+
+* **`flint.link/link-objects`, the linker command line.** `(vals exports)` set the
+  order of the `--export=` flags, so the linked module's export section order — and
+  its bytes — depended on the host's hashing. `plan` sorts `closure` two hundred
+  lines above for exactly this reason and this was missed. Now sorted.
+* **`flint.link/compose`, the module descriptor.** `(:abi (first (vals units)) ..)`
+  took a hash map's FIRST value, so which unit described the module was the host's
+  hashing. It happens not to matter — `abi-problem` refuses any unit whose `:abi`
+  differs from `current-abi` on all three keys, and every unit in `units/` declares
+  exactly those three — so the pick was arbitrary among identical values, which is
+  why nothing saw it. A unit carrying a fourth key would have made it visible in
+  one build out of however many. Now reads `current-abi`.
+
+Both are in `flint.link`, which only `bin/flint` uses, and that door's wasm is the
+one output NOT held to byte equality with the others — so no comparison could have
+caught either. What the fixes buy is that `dist/flintc.wasm` is reproducible across
+babashka and Clojure versions rather than only within one. Neither is provable on a
+single host: the change removes a dependency on iteration order, and there is no
+way here to vary that order and watch it not matter.
+
+The other 62 are safe, by kind rather than by inspection of each: iteration whose
+result is a MAP or a SET (`compiler.cljc:728`, `project.cljc:329`), iteration over
+a VECTOR that only looks like a map destructure (`llvm.cljc:564`,
+`image.cljc:241`'s `:points`, the `mapv (fn [[..]])` over catch clauses and arity
+lists in `analyzer.cljc`), iteration already sorted (`clr.cljc:535`,
+`link.cljc:100`, `link.cljc:457`, and `compiler.cljc`'s var slots), `(seq x)` as an
+emptiness test, and iteration feeding a membership test or a fixpoint whose answer
+is a set (`ast-defs` into `:defines`, used only by `some`/`contains?` and as a
+reachability seed).
+
+**An annotation gate over the 64 was still judged the wrong strictness.** Two
+defects in 64 candidates is a poor ratio to make every future site justify itself
+against, and the two that mattered were both found by ASKING WHERE THE BYTES COME
+FROM rather than by pattern-matching on collections.
 
 **FOUR HOSTS, NOT TWO, ON THE PATH THE BUG LIVED ON.**
 `FLINT_SELFHOST=1 ./bin/conform-hosts` already ran the compiler on the JVM and CLR
