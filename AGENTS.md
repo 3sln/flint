@@ -175,6 +175,14 @@ CHECK rather than a suite.
   `bin/check-kin`, `bin/check-flattens`, `bin/check-builtins`.
 - **Read the output already on your screen.** A failure count a command just
   printed is the answer; do not spend forty minutes asking again.
+- **`bin/test` STOPS AT THE FIRST RED SECTION, so its tail is not a verdict.**
+  Measured 2026-09-28: it failed at section 36 of 63, and the last twenty lines
+  of the log were `ok` rows from the section before the red — 27 sections never
+  ran. It says so itself ("A green-looking tail is absent, not passing"), three
+  lines after a `grep FAIL` over the whole log had already returned 0, because
+  the failure was still ahead of where the log ended. `FLINT_TEST_KEEP_GOING=1`
+  runs the rest and lists every red at the end; use it whenever a change could
+  plausibly break more than one thing.
 - **Never edit the tree while a gate is running.** `bin/test` builds from the
   working tree, so an edit mid-run makes the result a mixture of two states —
   meaningless whether it passes or fails. Kill the run, or wait.
