@@ -13967,8 +13967,24 @@ more slowly, or without a thing that was asked for.
 **One cause was found, not all of them.** This says nothing about the other
 places a hash-ordered collection could reach an artifact; `compiler.cljc`
 already sorts its var slots, which is the same rule applied by hand in one
-place. A sweep for the rest is not done, and the honest form of that is a
-roadmap item rather than a status line here.
+place.
+
+A STATIC sweep is still open. Counted 2026-09-28 by pattern
+(`(keys|vals|seq)`, `(for [[`, `(doseq [[`, `(map(v) (fn [[`) across the nine
+pipeline files: 64 candidate sites — `analyzer` 20, `link` 17, `compiler` 10,
+`project` 10, `llvm` 4, `clr` 2, `image` 1, `jvm` 0, `wasm` 0. That is a count of
+what the pattern understood, not of what reaches an artifact, and most of those
+sites cannot: they iterate for a lookup, or over a vector. An annotation gate over
+64 sites was judged the wrong strictness for that reason — the survey came before
+the rule, and the rule it suggested was not worth its noise.
+
+**What stands in for it is empirical, and its limit is stated.**
+`bb test/door-agreement.clj` compiles the WHOLE COMPILER -- about a hundred
+namespaces -- through two doors that hash differently, and requires identical
+bytes. That is a hundred namespaces' worth of chances for a remaining hash-ordered
+collection to show itself, and it is why the row exists at all. It is EVIDENCE,
+not a proof of invariance: two hosts agreeing cannot establish that no such
+collection is there, only that none of them affected this program.
 
 The assembly NAME is a separate input, settled in the same change:
 `flint.clr/assembly-name` is the only copy of the rule that turns an output

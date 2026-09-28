@@ -15,7 +15,7 @@
 # WHAT IS IN HERE WAS CHOSEN BY MEASURING, not by guessing. RE-MEASURED
 # 2026-09-26 at `5742ecde`: sixteen static checks, most sub-second, and four
 # heavier items -- `check-wedged` 9.4 s, `check-four-ops` 6.0 s,
-# `test/selfhost-targets.clj` 4.7 s, `check-api-review` 0.05 s -- which are 20.1 s
+# `test/selfhost-targets.clj` 11.5 s, `check-api-review` 0.05 s (re-measured 2026-09-28)
 # of a 26.8 s whole. This said "the four static checks are sub-second each;
 # `reader_test` is 1 s and `cycles` is 3 s", true of a smaller gate. Two
 # suites that looked like candidates are not: `requires` is 15 s and `options`

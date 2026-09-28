@@ -117,21 +117,13 @@
                   (= [0x4d 0x5a] (magic out 2))))
     ;; --- AND THE TWO DOORS AGREE, BYTE FOR BYTE -------------------------
     ;;
-    ;; `sdks/cli/selftest.mjs` has held `:to :wasm` to this since before `:to
-    ;; :clr` existed, and `:to :clr` was not held to anything: the two doors
-    ;; differed by 56 bytes of `#Strings` offsets, because `bin/flint` derived
-    ;; the assembly name from `:out` and the native door named everything
-    ;; `Program`. Nothing failed -- both assemblies load -- which is why it took
-    ;; a comparison to see.
-    ;;
-    ;; `DECISIONS.md#compiles-are-byte-reproducible` records the property and the
-    ;; one cause that was found.
-    ;;
-    ;; THE BASENAMES ARE THE INTERESTING INPUT. The name comes from it, so the
-    ;; rows below include `a.b.dll`, which is where three separately written
-    ;; sanitisers part ways: strip one extension and it is `a_b`, strip
-    ;; greedily and it is `a`. `flint.clr/assembly-name` is now the only copy
-    ;; and each door passes the raw basename.
+    ;; ONE ROW HERE AND THE MATRIX IN `test/door-agreement.clj`, split by
+    ;; measurement rather than by taste: every row is a pair of COMPILES at about
+    ;; 1.5-1.9 s each (process start and reading `src/` and `lib/` dominate a
+    ;; two-line program), so the full matrix took this suite from 4.7 s to 40.8 s
+    ;; -- too much for `bin/check`, which runs on every change. This keeps the
+    ;; cheapest row that can still catch a door divergence; `bin/test` runs the
+    ;; rest (`DECISIONS.md#compiles-are-byte-reproducible`).
     (when (fs/exists? (str root "/bin/flint"))
       (let [emit (fn [door base]
                    (let [out (str work "/" door "/" base)]
@@ -145,54 +137,14 @@
             same? (fn [a b] (and (fs/exists? a) (fs/exists? b)
                                  (= (vec (fs/read-all-bytes a))
                                     (vec (fs/read-all-bytes b)))))]
-        (doseq [base ["app.dll" "a.b.dll" "9odd-name.v2.dll"]]
-          (check-that (str "`:to :clr :out " base
-                           "`: bin/flint and the native CLI agree byte for byte")
-                      (same? (emit "bb" base) (emit "nat" base))))
-        ;; THE CONTROL. Two doors that both ignored the name would report every
-        ;; row above as agreement, so one pair is emitted to DIFFERENT basenames
-        ;; on purpose. If this passes and the rows above pass, the name is in
-        ;; the artifact and the comparison can see it.
+        (check-that "`:to :clr`: bin/flint and the native CLI agree byte for byte"
+                    (same? (emit "bb" "app.dll") (emit "nat" "app.dll")))
+        ;; THE CONTROL. The output BASENAME is an input -- `:to :clr` writes it
+        ;; into the assembly name -- so two doors that both ignored it would
+        ;; report the row above as agreement. One artifact is emitted to a
+        ;; different basename on purpose.
         (check-that "the comparison can tell two assembly names apart"
-                    (not (same? (str work "/bb/app.dll")
-                                (str work "/bb/a.b.dll"))))
-        ;; --- AND THE OTHER TWO TARGETS, in both `:optimize` modes -----------
-        ;;
-        ;; `:to :clr` was the only one held to byte agreement, and the roadmap
-        ;; said so. `:optimize [perf]` is in here because the plain arm could
-        ;; not have caught what these rows caught first: `flint.selfhost` never
-        ;; wrote `FLAG-PERF` into the image, so every artifact the native and npm
-        ;; doors emitted under `:optimize [perf]` asked its port to compile
-        ;; nothing -- 1987 arities through `bin/flint` and 0 through the native
-        ;; CLI, from one source, both "passing every check".
-        ;;
-        ;; `:to :llvm` ALSO WORKS FROM THIS DOOR NOW. `bin/flint` refused it and
-        ;; the refusal named the native CLI, which described the dispatch and read
-        ;; as a property of the door -- the same shape the npm CLI's refusal had.
-        (let [emit2 (fn [door base extra]
-                      (let [out (str work "/" door "/" base)]
-                        (fs/create-dirs (str work "/" door))
-                        (apply sh (if (= door "bb")
-                                    (concat [(str root "/bin/flint") ":src" src
-                                             ":fn" "t/main"] extra [":out" out])
-                                    (concat [cli "compile" ":path" src
-                                             ":fn" "t/main"] extra [":out" out])))
-                        out))]
-          (doseq [[target base] [["llvm" "p.ll"] ["jvm" "Prog.class"]]
-                  [label extra] [["plain" []] [":optimize [perf]" [":optimize" "[perf]"]]]]
-            (let [flags (concat [":to" (str ":" target)] extra)]
-              (check-that (str "`:to :" target "` " label
-                               ": bin/flint and the native CLI agree byte for byte")
-                          (same? (emit2 "bb" base flags) (emit2 "nat" base flags)))))
-          ;; THE CONTROL FOR THOSE FOUR ROWS, and it is about the HARNESS rather
-          ;; than the doors: if `emit2` dropped its extra flags, every arm would
-          ;; compile the same way and all four rows would agree for a reason that
-          ;; has nothing to do with the doors. `:optimize [perf]` must produce a
-          ;; different artifact from plain through the SAME door.
-          (check-that "the comparison can tell :optimize [perf] from plain"
-                      (not (same? (emit2 "bb" "ctl-a.ll" [":to" ":llvm"])
-                                  (emit2 "bb" "ctl-b.ll" [":to" ":llvm"
-                                                          ":optimize" "[perf]"])))))))
+                    (not (same? (emit "bb" "app.dll") (emit "bb" "other.dll"))))))
     ;; `:to :jvm` -- a class opens `CAFEBABE`, and `:out` is a CLASSPATH ROOT:
     ;; the class declares itself `flint.Artifact` and a JVM loads it only from a
     ;; path matching that name.

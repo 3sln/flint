@@ -124,13 +124,23 @@ things being compared.
 
 **THE GATE IS TIERED. Do not run the half-hour one on every change.**
 
-    bin/check          ~27 s     every change
-    bin/test           ~36 min   before pushing a branch, and on a PR
+    bin/check          ~51 s     every change
+    bin/test           ~40 min   before pushing a branch, and on a PR
     bin/release-gate   > bin/test  before a versioned release
 
-*Re-measured 2026-09-26 at `5742ecde`, load average 2.21: `bin/check` is 26.8 s
-by `time ./bin/check`, and was 26–30 s on every one of a dozen runs that day.
-`bin/test` was 2 139 s (35.6 min) on its last full green run this session. THE
+*Re-measured 2026-09-28 at `c17c0f1e`, load averages 2.64/3.07/4.80: `bin/check`
+is 52.3 s, 48.6 s and 53.4 s by `time -p ./bin/check` on three consecutive runs —
+call it ~51 s, up from 26.8 s two days earlier. The increase is checks ADDED, not
+a slowdown: `bin/check-clr` gained a native-door `:optimize [perf]` arm (two more
+CLR loads), `bin/check-wedged` and `check-four-ops` are unchanged, and
+`test/selfhost-targets.clj` went from 4.7 s to 11.5 s. A door-agreement matrix
+took that suite to 40.8 s, which is why it moved out to `test/door-agreement.clj`
+and `bin/test` — the fast gate keeps one row of it. `bin/test` was 2 319 s
+(38.6 min) on its last full green run, and gains ~67 s for that suite, so the
+table says ~40 min.*
+
+*The figures this replaces were right when written: 26.8 s, and 2 139 s for
+`bin/test`. THE
 TABLE SAID `~5 s` AND THE PARAGRAPH BELOW SAID 23 MINUTES WHERE THE TABLE SAID
 20 — two numbers for one gate, fifteen lines apart, which is the shape that says
 a section was spliced rather than reasoned about. `bin/release-gate` said `~25 min`, BELOW `bin/test`'s own
@@ -142,9 +152,9 @@ says `> bin/test` rather than a number nobody produced.*
 
 `bin/check` is SIXTEEN static checks plus four heavier items, and it runs
 `check-kin` (74 s) only when kin sources or the generated trees actually moved.
-Measured 2026-09-26, the heavy four are where the time is: `check-wedged` 9.4 s,
-`check-four-ops` 6.0 s, `test/selfhost-targets.clj` 4.7 s, `check-api-review`
-0.05 s — 20.1 s of the 26.8 s. It read "the four sub-second static checks plus
+Measured 2026-09-28, the heavy four are still where the time is: `check-clr`
+(which grew a native-door perf arm), `test/selfhost-targets.clj` 11.5 s,
+`check-wedged` 9.4 s, `check-four-ops` 6.0 s, `check-api-review` 0.05 s. It read "the four sub-second static checks plus
 two suites that are 1 s and 3 s", which was true of a smaller gate. Its contents were chosen by measuring: two suites that
 looked like candidates are not — one is 15 s, and the other is 16 s AND fails
 standalone because it needs build state the full gate happens to produce.

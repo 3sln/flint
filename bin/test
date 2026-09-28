@@ -172,6 +172,17 @@ echo "-- the fast gate, in full (bin/check) -- this file is a superset of it"
 echo
 
 echo
+# HERE, RIGHT AFTER `bin/check`, FOR ITS REASON: the rows need
+# `target/release/flint`, built above, and a door divergence should fail before
+# the half hour rather than after it. 67 s measured 2026-09-28.
+#
+# `bin/check` runs ONE row of this (in `test/selfhost-targets.clj`) and this is
+# the matrix. The split is by measurement: a row is a pair of COMPILES at about
+# 1.5-1.9 s each, and the full matrix took the fast suite from 4.7 s to 40.8 s.
+sec "doors: three front doors, one program, the same bytes"
+bb test/door-agreement.clj || fail "test/door-agreement.clj"
+
+echo
 sec "units: the PRODUCTION build (no diagnostic machinery -- 0016)"
 ./bin/build-units >/dev/null 2>&1 || fail "build-units"
 echo "  ok"
