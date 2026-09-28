@@ -148,6 +148,14 @@ goes into producing it; what it is good for is "did my change add a section's
 worth", and the per-section itemisation it prints answers that and a total does
 not.*
 
+**CHECK `uptime` BEFORE TREATING ANY OF THESE AS A MEASUREMENT.** A third green run
+the same afternoon took 4 134 s (69 min), which is outside the range above — at
+load averages 6.50/9.88/14.10, with an unrelated process from another project
+pinning a core for three hours. The shape gives it away: `hosts` 184→678 s and
+`kin` 136→527 s, sections the change did not touch, while the section it DID add
+stayed at 80 s. That run is a valid PASS and not a valid timing, and the two are
+worth keeping apart — a contended machine does not make a green gate less green.*
+
 *The figures this replaces were right when written: 26.8 s, and 2 139 s for
 `bin/test`. THE
 TABLE SAID `~5 s` AND THE PARAGRAPH BELOW SAID 23 MINUTES WHERE THE TABLE SAID
