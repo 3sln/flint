@@ -151,6 +151,20 @@
    (c "when-let" [(when-let [x 5] (inc x)) (when-let [x nil] :y)] [6 nil])
    (c "case" [(case 2 1 :one 2 :two :other) (case 9 1 :one :other)] [:two :other])
    (c "case with keywords" (case :b :a 1 :b 2 3) 2)
+   ;; WHICH TEST SHAPES MEAN "ALTERNATIVES", which is one rule and was written
+   ;; as three. `cond-chain` expanded a vector or a set into a chain of
+   ;; alternatives as well as a list, so a composite constant never matched
+   ;; itself and a scalar matched a composite it was merely a member of. Both
+   ;; directions, and silently: `case` answers its default rather than failing.
+   ;; Two of jank's tests caught it (`form/case/pass-vector`, `pass-set`); these
+   ;; six rows pin every shape, and being in THIS file means babashka answers
+   ;; them too, so the rule is checked against Clojure and not against memory.
+   (c "case: a list test is alternatives" (case 2 (1 2) :alts :default) :alts)
+   (c "case: a vector test is one constant" (case [1 2] [1 2] :vec :default) :vec)
+   (c "case: and does not match a member" (case 2 [1 2] :vec :default) :default)
+   (c "case: a set test is one constant" (case #{1 2} #{1 2} :set :default) :set)
+   (c "case: and does not match a member" (case 2 #{1 2} :set :default) :default)
+   (c "case: a map test is one constant" (case {:a 1} {:a 1} :map :default) :map)
    (c "case with a list of keys" (case 3 (1 2) :low (3 4) :high :other) :high)
    (c "threading ->" (-> 5 inc (* 2)) 12)
    (c "threading ->>" (->> [1 2 3] (map inc) (reduce +)) 9)

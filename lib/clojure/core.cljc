@@ -818,7 +818,26 @@
       acc
       (let [[test result] (first ps)
             t (if (and (seq? test) (= 'quote (first test))) (second test) test)
-            cnd (if (or (vector? t) (seq? t) (set? t))
+                ;; A LIST IS ALTERNATIVES; A VECTOR, SET OR MAP IS ONE CONSTANT.
+            ;; This read `(or (vector? t) (seq? t) (set? t))`, so a vector or a
+            ;; set test was expanded into a chain of alternatives -- wrong in
+            ;; BOTH directions, and silently, because `case` answers its default
+            ;; rather than failing.
+            ;;
+            ;; MEASURED against babashka 2026-09-29, one expression per shape:
+            ;;
+            ;;   (case 2      (1 2)  ..)  -> matches      both
+            ;;   (case [1 2]  [1 2]  ..)  -> matches      Clojure; flint MISSED
+            ;;   (case 2      [1 2]  ..)  -> no match     Clojure; flint MATCHED
+            ;;   (case #{1 2} #{1 2} ..)  -> matches      Clojure; flint MISSED
+            ;;   (case 2      #{1 2} ..)  -> no match     Clojure; flint MATCHED
+            ;;   (case {:a 1} {:a 1} ..)  -> matches      both (maps were never
+            ;;                                            in the alternatives test)
+            ;;
+            ;; It cost two of jank's tests -- `form/case/pass-vector` and
+            ;; `pass-set` -- and they are the kind worth having: the program ran
+            ;; and computed a different answer.
+            cnd (if (seq? t)
                   (cons 'clojure.core/or (map2 (fn [k] (list 'clojure.core/= g (list 'quote k))) t))
                   (list 'clojure.core/= g (list 'quote t)))]
         (recur (next ps) (list 'if cnd result acc))))))
