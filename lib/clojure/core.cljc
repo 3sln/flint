@@ -649,13 +649,71 @@
                 (recur (list 'if (list 'clojure.core/nil? acc) nil step) (next fs)))
               acc)))))
 
-(defmacro letfn
-  "Mutually recursive local functions. flint closures capture by value, so each
-  name is bound to a stub that dispatches through a volatile; the real functions
-  are installed afterwards. That indirection is the price of by-value capture,
-  and by-value capture is what keeps dead closure slots from retaining objects."
-  [fnspecs & body]
-  (let [names (map first fnspecs)
+(defmacro letfn*
+  "Mutually recursive local functions, over FLAT `name value` pairs.
+
+  This is the special form Clojure's `letfn` expands into, and code written
+  against it directly -- macro output, and jank's dialect suite, whose
+  `form/letfn` tests are all `(letfn* [a (fn* a ..)] ..)` -- reaches it without
+  going through `letfn`. It used to be refused by the analyzer with \"letfn* is
+  not implemented\", which cost 14 of that suite's 64 `pass-*` failures while the
+  mechanism to serve them was already here under the other name.
+
+  flint closures capture by value, so each name is bound to a stub that
+  dispatches through a volatile; the real functions are installed afterwards.
+  That indirection is the price of by-value capture, and by-value capture is
+  what keeps dead closure slots from retaining objects.
+
+  WHAT THIS IS NOT: bindings that genuinely exist before their initialisers run,
+  which is what `ROADMAP.md` records as the remaining work. The stub is variadic,
+  so a wrong-arity call inside the body is caught by the real function rather than
+  at the call site, and the error names the real one. Behaviour is right; the
+  diagnosis is one frame further in."
+  [bindings & body]
+  ;; THE BINDINGS ARE CHECKED, and leaving them unchecked cost four tests going
+  ;; the other way. While the analyzer refused `letfn*` outright, jank's four
+  ;; `fail-*` cases -- `(letfn* 1)`, an odd-length vector, a qualified name, and a
+  ;; vector holding a bare `fn*` -- were "correctly refused" for a reason that had
+  ;; nothing to do with them. Implementing the form turned all four into programs
+  ;; flint accepted, so the score rose by 13 and fell by 4 in the same run.
+  ;;
+  ;; A macro that takes an odd-length vector produces a `nil` function body and
+  ;; fails somewhere else entirely, which is the shape worth refusing here.
+  ;; NO `flint.rt/kind` IN THE MESSAGE. A macro body runs in the COMPILE-TIME
+  ;; evaluator, which serves a subset of the builtins: naming the kind here read
+  ;; better and answered "builtin `flint/kind` is not available at compile time",
+  ;; so the refusal was about the compiler instead of about the program.
+  (when-not (vector? bindings)
+    (throw (ex-info (str "letfn* wants a vector of name/fn pairs, got `"
+                         (str bindings) "`")
+                    {:form bindings})))
+  (when-not (even? (count bindings))
+    (throw (ex-info (str "letfn* wants an even number of binding forms, got "
+                         (count bindings))
+                    {:form bindings})))
+  (let [pairs (partition 2 bindings)
+        names (map first pairs)
+        fns (map second pairs)
+        ;; A `loop`, NOT `doseq`/`remove`. This is `clojure.core` and a macro body
+        ;; runs at expansion time, so it may use only what is already defined ABOVE
+        ;; it: `doseq` is a macro in this very namespace and the compiler says so --
+        ;; "clojure.core/doseq is a macro, and clojure.core is compiled before the
+        ;; namespace that defines it" -- and `filter`/`remove` are 250 lines further
+        ;; down. `loop` is a special form and `first`/`next`/`seq` are at the top.
+        ;;
+        ;; A ONE-VECTOR rather than the offender itself, because `nil` is a name
+        ;; somebody can write: `some`-style truthiness would walk past
+        ;; `(letfn* [nil (fn* ..)] ..)` and report nothing.
+        bad (loop [xs (seq names)]
+              (if (flint.rt/nil? xs)
+                nil
+                (if (simple-symbol? (first xs))
+                  (recur (next xs))
+                  [(first xs)])))
+        _ (when-not (flint.rt/nil? bad)
+            (throw (ex-info (str "letfn* binds simple symbols; `" (first bad)
+                                 "` is not one")
+                            {:form (first bad)})))
         boxes (map (fn [n] (gensym (str (name n) "-box"))) names)
         argsym (gensym "letfn-args")
         box-binds (mapcat (fn [b] [b (list 'clojure.core/volatile! nil)]) boxes)
@@ -663,11 +721,24 @@
                              [n (list 'clojure.core/fn ['& argsym]
                                       (list 'clojure.core/apply (list 'clojure.core/deref b) argsym))])
                            names boxes)
-        sets (map (fn [spec b]
-                    (list 'clojure.core/vreset! b (cons 'clojure.core/fn (rest spec))))
-                  fnspecs boxes)]
+        sets (map (fn [f b] (list 'clojure.core/vreset! b f)) fns boxes)]
     (list 'clojure.core/let (vec (concat box-binds stub-binds))
           (cons 'do (concat sets body)))))
+
+(defmacro letfn
+  "Mutually recursive local functions, over `(name [args] body)` specs.
+
+  ONE MECHANISM, TWO SPELLINGS: this rewrites its specs into flat pairs and hands
+  them to `letfn*`, which is where the volatile-stub trick lives. It used to carry
+  its own copy, and then `letfn*` was refused outright -- two spellings of one
+  feature with the implementation in the one nobody writes by hand (AGENTS.md
+  sec. 1). Clojure's `letfn` expands to `letfn*` for the same reason."
+  [fnspecs & body]
+  (cons 'clojure.core/letfn*
+        (cons (vec (mapcat (fn [spec]
+                             [(first spec) (cons 'clojure.core/fn (rest spec))])
+                           fnspecs))
+              body)))
 
 (defmacro some-> [expr & forms]
   (let [g (gensym "some")]

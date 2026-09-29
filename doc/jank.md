@@ -19,7 +19,8 @@ predate the kin port's later work. As of 2026-09-26 `bin/jank-suite` prints both
 -- `flint <sha> on <date>` and `jank <sha>` -- so a future capture carries its
 own subject as well as its input.
 
-**RE-RUN 2026-09-28**, against a sparse checkout of jank at `0169e88`
+**RE-RUN 2026-09-29 AFTER `letfn*` LANDED**, and again against a sparse checkout of
+jank at `0169e88`
 (`git clone --depth 1 --filter=blob:none --sparse` and
 `git sparse-checkout set compiler+runtime/test/jank` -- 4 MB, tests only, which is
 all `bin/jank-suite` reads). The figures this replaces stand recorded below,
@@ -29,21 +30,42 @@ never comparable to the new one by subtraction.
 
 ## The numbers
 
-    flint 753b5baf, jank 0169e88, 2026-09-28
+    flint 10cc7241, jank 0169e88, 2026-09-29
 
-    native                     port (jvm)          (was, undated)
-    pass-*   131 / 195         131 / 195           130 / 195 both
-    fail-*    62 / 100          64 / 100            60 / 99, 64 / 99
+    native                     port (jvm)
+    pass-*   144 / 195         144 / 195
+    fail-*    62 / 100          64 / 100
     ---------------------------------------
-    TOTAL    193 / 295 (65%)   195 / 295 (66%)     190 / 294, 194 / 294
+    TOTAL    206 / 295 (69%)   208 / 295 (70%)
+
+    the two runs before it, for comparison:
+
+    flint 753b5baf, 2026-09-28 (before `letfn*`)
+    pass-*   131 / 195         131 / 195
+    fail-*    62 / 100          64 / 100
+    TOTAL    193 / 295 (65%)   195 / 295 (66%)
+
+    undated, before this file recorded its own subject
+    TOTAL    190 / 294 (64%)   194 / 294 (65%)
+
+**+13 IS `letfn*`, AND IT COST 4 BEFORE IT PAID 13.** Implementing the form turned
+thirteen `pass-*` failures into passes -- the fourteenth, `pass-destructure`, fails
+on "unsupported binding form", which is fn-parameter destructuring and a different
+gap. It also turned FOUR `fail-*` tests from refused into accepted: `(letfn* 1)`, an
+odd-length binding vector, a qualified name, and a vector holding a bare `fn*` had
+all been "correctly refused" by the blanket "letfn* is not implemented", for a
+reason that had nothing to do with them. `clojure.core/letfn*` validates its
+bindings now, and the `fail-*` column is back where it was -- by checking rather
+than by accident.
 
 **The `pass-*` halves are identical, test for test.** Not the same COUNT --
 the same SET: `comm` over the two failure lists is empty in both directions, so
-the native runtime and the port fail the same 64 and pass the same 131. Checked
-again on the re-run, and it is the claim worth re-checking rather than the score:
-two runtimes can post 131 apiece while disagreeing about twenty tests each way.
-`SHOW_FAILURES=1` lists the `pass-*` failures only -- 64 lines, 0 `FAIL-EXPECTED`
--- so that is the half the set comparison covers.
+the native runtime and the port fail the same 51 and pass the same 144. Checked on
+both re-runs, and it is the claim worth re-checking rather than the score: two
+runtimes can post 144 apiece while disagreeing about twenty tests each way.
+`SHOW_FAILURES=1` lists the `pass-*` failures only -- 51 lines now, 64 before
+`letfn*`, and 0 `FAIL-EXPECTED` either time -- so that is the half the set
+comparison covers.
 
 Equal counts would not have been that claim. Two runtimes can score 130 apiece
 while disagreeing about twenty tests in each direction, and that is exactly

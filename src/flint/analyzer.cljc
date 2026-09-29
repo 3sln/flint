@@ -20,7 +20,7 @@
 
 (def specials
   '#{def if do let* loop* recur fn* quote var throw try catch finally binding
-     new set! . monitor-enter monitor-exit deftype* reify* case* letfn* ns})
+     new set! . monitor-enter monitor-exit deftype* reify* case* ns})
 
 (defn- err [msg data]
   (throw (ex-info (str "compile error: " msg) (assoc data :type :compile))))
@@ -1243,7 +1243,12 @@
 
     ns (analyze-ns env form)
 
-    letfn* (err "letfn* is not implemented; use let with fns that do not refer to each other, or top-level defs" {:form form})
+;; `letfn*` IS NO LONGER A SPECIAL FORM HERE. It was in the set above and errored
+    ;; with "letfn* is not implemented", which put a refusal in the analyzer for a
+    ;; feature `clojure.core/letfn` already implemented -- so the spelling decided
+    ;; whether mutual recursion worked. It is a macro now
+    ;; (`lib/clojure/core.cljc`), and `letfn` expands into it rather than carrying
+    ;; a second copy of the volatile-stub trick.
 
     (new set! . monitor-enter monitor-exit deftype* reify* case*)
     (err (str head " is host interop or unsupported in flint") {:form form})
