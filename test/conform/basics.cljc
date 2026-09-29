@@ -165,6 +165,26 @@
    (c "case: a set test is one constant" (case #{1 2} #{1 2} :set :default) :set)
    (c "case: and does not match a member" (case 2 #{1 2} :set :default) :default)
    (c "case: a map test is one constant" (case {:a 1} {:a 1} :map :default) :map)
+   ;; READER METADATA ON A LITERAL reaches run time. It did not: the reader
+   ;; attached it and `with-meta` applied it, and the analyser dropped it in
+   ;; between, where a literal becomes a node. Every shape `flint.reader`'s
+   ;; `meta-able?` admits is here, because the fix had to be made TWICE -- the
+   ;; four below came right and the quoted symbol did not, since a quoted value
+   ;; lands straight in a constant from the `quote` arm.
+   (c "meta on a vector literal" (:foo (meta ^:foo [1 2])) true)
+   (c "meta on a map literal" (:foo (meta ^:foo {1 2})) true)
+   (c "meta on a set literal" (:foo (meta ^:foo #{1 2})) true)
+   (c "meta on a quoted symbol" (:foo (meta '^:foo meow)) true)
+   (c "meta on a quoted list" (:foo (meta '^:foo (1 2))) true)
+   (c "a map's worth of it, not just a flag" (:a (meta ^{:a 1} [1])) 1)
+   ;; AND A PLAIN LITERAL STAYS CLEAN, which is the half that could have gone
+   ;; wrong quietly: the reader labels every meta-able form with `:line`,
+   ;; `:column`, `:file` and `:child-pos`, so carrying the map through
+   ;; unfiltered would answer a position map where Clojure answers nil -- and
+   ;; put four keys of metadata on every literal in every program.
+   (c "a plain literal carries no metadata" (meta [1 2]) nil)
+   (c "nor a plain map" (meta {1 2}) nil)
+   (c "nor a quoted symbol" (meta 'meow) nil)
    (c "case with a list of keys" (case 3 (1 2) :low (3 4) :high :other) :high)
    (c "threading ->" (-> 5 inc (* 2)) 12)
    (c "threading ->>" (->> [1 2 3] (map inc) (reduce +)) 9)

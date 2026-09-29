@@ -287,9 +287,34 @@
 
 ;; ------------------------------------------------------------------ analysis
 
-(declare analyze analyze* analyze-untagged analyze-body analyze-fn analyze-special analyze-ns)
+(declare analyze analyze* analyze-untagged analyze-untagged-with-meta
+         analyze-body analyze-fn analyze-special analyze-ns)
 
 (defn- const-node [v] {:op :const :val v})
+
+(def ^:private reader-meta-keys
+  "What the READER attaches to every form it can, which is bookkeeping rather
+  than the program's metadata: `:line`, `:column` and `:file` on anything
+  meta-able, and `:child-pos` on a sequence (`flint.reader`, `read-form*`)."
+  #{:line :column :file :child-pos})
+
+(defn- author-meta
+  "The metadata an AUTHOR wrote on `form`, or nil.
+
+  A literal carrying `^:foo` has to reach run time carrying it: `(meta ^:foo
+  [1 2])` is `{:foo true}` in Clojure and was nil here, for maps, vectors, sets
+  and quoted symbols alike. Both ends already worked -- the reader attaches it and
+  `with-meta` applies it at run time -- so the loss was here, where a literal
+  becomes a node and the metadata was simply not carried over.
+
+  THE READER'S OWN KEYS COME OFF FIRST, and that is the whole difficulty: the
+  reader labels every meta-able form with its position, so carrying the map
+  through unfiltered would make `(meta [1 2])` answer a position map where Clojure
+  answers nil -- a worse divergence than the one being fixed, and one that would
+  put four keys of metadata on every literal in every program."
+  [form]
+  (let [m (apply dissoc (meta form) reader-meta-keys)]
+    (when (seq m) m)))
 
 (def builtin-guards
   "Capabilities a BUILTIN demands of the workspace naming it.
@@ -921,7 +946,7 @@
   (let [want (form-tag form)
         where (if (symbol? form) form "a value")
         form (if want (vary-meta form dissoc :tag) form)
-        node (analyze-untagged env form)
+        node (analyze-untagged-with-meta env form)
         ;; STAMP what is known onto the node. `node-tag` computes it from the
         ;; node's shape, and stamping makes that computation O(1) for every
         ;; node above -- but the reason to do it is that the emitter and every
@@ -954,6 +979,24 @@
     (map? form) {:op :map :pairs (mapv (fn [e] [(analyze env (key e)) (analyze env (val e))]) form)}
     (set? form) {:op :set :items (mapv #(analyze env %) (canon/sorted-elements form))}
     :else (const-node form)))
+
+(defn- analyze-untagged-with-meta
+  "`analyze-untagged`, carrying an author's metadata onto the value.
+
+  A `with-meta` CALL rather than a node property, because that is where flint
+  already keeps metadata: `with-meta` works at run time and this is the only stage
+  that was dropping it. The rewrite is done on the form stripped of its metadata,
+  or this would recur forever.
+
+  NOT EVERY PATH COMES THROUGH HERE. A quoted value lands straight in
+  `const-node` from the `quote` arm of `analyze-special`, so that arm carries the
+  metadata itself. This comment used to claim the case was covered here, which was
+  written before it was tested: vector, map and set answered `true` and the quoted
+  symbol answered nil."
+  [env form]
+  (if-let [m (author-meta form)]
+    (analyze env (list 'clojure.core/with-meta (with-meta form nil) m))
+    (analyze-untagged env form)))
 
 (defn analyze-body [env forms]
   (case (count forms)
@@ -1025,7 +1068,16 @@
 
 (defn analyze-special [env head form]
   (case head
-    quote (const-node (second form))
+    ;; A QUOTED VALUE KEEPS ITS AUTHOR'S METADATA. `(meta '^:foo meow)` is
+    ;; `{:foo true}` in Clojure, and a quoted symbol never passes through
+    ;; `analyze*`'s wrapper -- it lands straight in a constant. I wrote a comment
+    ;; on `analyze-untagged-with-meta` claiming this case was already covered by
+    ;; being handled there; it was not, and the probe said so: vector, map and set
+    ;; answered `true` while the quoted symbol answered nil.
+    quote (let [q (second form)]
+            (if-let [m (author-meta q)]
+              (analyze env (list 'clojure.core/with-meta (list 'quote (with-meta q nil)) m))
+              (const-node q)))
 
     ;; Occurrence narrowing. `(if (int? x) A B)` compiles A knowing `x` is an
     ;; int, because that is what the test having succeeded MEANS. Nobody has to
