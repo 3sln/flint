@@ -93,6 +93,25 @@
 
 (declare read-form read-form*)
 
+(def bookkeeping-meta
+  "Metadata keys the READER writes, which are not the program's.
+
+  Every meta-able form gets `:line`, `:column` and `:file`; a sequence also gets
+  `:child-pos`; and a reader-tag expansion gets the three `:flint/read-*` keys
+  that say what was written, what it resolved to, and the form it produced.
+
+  PUBLISHED, BECAUSE THE ANALYSER HAS TO SUBTRACT IT. `flint.analyzer` carries an
+  author's metadata onto a literal, and anything left in this map would ride along
+  -- so the two must agree about what is bookkeeping. They did not: the analyser
+  knew the four position keys and not the three `:flint/read-*` ones, so every
+  reader-tag expansion was wrapped in a `with-meta` whose map held the tag SYMBOL,
+  which then resolved as a var. `#x \"one\"` answered \"unable to resolve symbol:
+  x\", and four suites failed on it -- `test/tags.clj`, `test/sysns.clj`,
+  `test/tables.clj` (`#flint/table` is a reader tag too) and `sdks/esm/build`.
+  One list, read by both (AGENTS.md sec. 1)."
+  #{:line :column :file :child-pos
+    :flint/read-form :flint/read-tag :flint/read-var})
+
 (defn meta-able?
   "Which values can carry metadata. Numbers, strings and keywords cannot, here
   or in Clojure."

@@ -16,6 +16,10 @@
   (:require [clojure.string :as str]
             [flint.canon :as canon]
             [flint.macros :as macros]
+            ;; For `bookkeeping-meta` alone: what the reader attaches is the
+            ;; reader's to say, and `author-meta` subtracts it rather than
+            ;; keeping a second copy that can fall behind -- which it did.
+            [flint.reader :as reader]
             [flint.types :as ty]))
 
 (def specials
@@ -292,12 +296,6 @@
 
 (defn- const-node [v] {:op :const :val v})
 
-(def ^:private reader-meta-keys
-  "What the READER attaches to every form it can, which is bookkeeping rather
-  than the program's metadata: `:line`, `:column` and `:file` on anything
-  meta-able, and `:child-pos` on a sequence (`flint.reader`, `read-form*`)."
-  #{:line :column :file :child-pos})
-
 (defn- author-meta
   "The metadata an AUTHOR wrote on `form`, or nil.
 
@@ -313,7 +311,7 @@
   answers nil -- a worse divergence than the one being fixed, and one that would
   put four keys of metadata on every literal in every program."
   [form]
-  (let [m (apply dissoc (meta form) reader-meta-keys)]
+  (let [m (apply dissoc (meta form) reader/bookkeeping-meta)]
     (when (seq m) m)))
 
 (def builtin-guards
