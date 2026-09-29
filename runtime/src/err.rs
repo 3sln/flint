@@ -15,6 +15,52 @@ use crate::obj::*;
 use crate::rt::Rt;
 use crate::value::{Value, NIL};
 
+/// A thrown value as `Kind: message`, for a host that has to print it.
+///
+/// ONE COPY, BECAUSE THERE WERE FOUR. These rules -- kind or `"Error"`, message
+/// or nothing, joined by `": "` -- were written out in `abi::finish_run`,
+/// `native::rendered`, `native`'s `call_named` arm, and once more in
+/// `lib/flint/system.cljc` for the control plane. The comment on `status_of`
+/// says "on the same rules as `abi::finish_run`", which is how four copies stay
+/// in step until one of them is fixed alone: on 2026-09-29 I fixed `abi.rs`
+/// first and the behaviour did not move, because nothing in `runtime/src` or
+/// `cli/src` calls it -- it is the wasm ABI's renderer (AGENTS.md sec. 1).
+///
+/// A THROWN VALUE THAT IS NOT AN EXCEPTION IS NAMED BY KIND. flint lets a
+/// program throw anything, so `ex_message` of a keyword is not a string, and
+/// every one of those copies rendered `(throw :boom)` as exactly "Error: " --
+/// a failure that said nothing about itself. MEASURED against jank's suite,
+/// where it is 12 of the `pass-*` failures: `form/try/*` throws a keyword past
+/// a `catch` naming a jank host type flint cannot resolve.
+///
+/// The KIND and not the value, for `flint.system`'s reason: printing the value
+/// needs the whole printer, and on that path it cost +9 175 bytes of wasm in
+/// every program. `kind_of` is a primitive.
+pub fn render_thrown(rt: &mut Rt, e: Value) -> alloc::string::String {
+    let mut b = crate::rt::sbuf();
+    let kind: alloc::string::String = {
+        let k = rt.ex_kind(e);
+        rt.as_str(k, &mut b).unwrap_or("Error").into()
+    };
+    let mut b2 = crate::rt::sbuf();
+    let msg: alloc::string::String = {
+        let m = rt.ex_message(e);
+        rt.as_str(m, &mut b2).unwrap_or("").into()
+    };
+    let msg = if msg.is_empty() {
+        let kv = rt.kind_of(e);
+        let nm = rt.name_of(kv);
+        let mut b3 = crate::rt::sbuf();
+        match rt.as_str(nm, &mut b3) {
+            Some(w) => alloc::format!("a {w} was thrown, with no message"),
+            None => alloc::string::String::from("a value was thrown, with no message"),
+        }
+    } else {
+        msg
+    };
+    alloc::format!("{kind}: {msg}")
+}
+
 // `ex_info`, `is_exception`, `ex_message`, `ex_data` and `ex_kind` are
 // GENERATED, from `kin/exinfo.kin`. They were the same algorithm in all three
 // runtimes -- mark, push four, allocate, check for a failed allocation, fill

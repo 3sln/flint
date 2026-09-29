@@ -199,15 +199,9 @@ pub fn finish_run(rt: &mut Rt, result: Value) -> i32 {
         }
         if rt.failed() {
             let e = rt.clear_error();
-            let mut b = crate::rt::sbuf();
-            let kind = rt.ex_kind(e);
-            let k: alloc::string::String = rt.as_str(kind, &mut b).unwrap_or("Error").into();
-            let msg = rt.ex_message(e);
-            let mut b2 = crate::rt::sbuf();
-            let m: alloc::string::String = rt.as_str(msg, &mut b2).unwrap_or("").into();
-            out.extend_from_slice(k.as_bytes());
-            out.extend_from_slice(b": ");
-            out.extend_from_slice(m.as_bytes());
+            // `render_thrown`, not a copy of these rules (see its docstring).
+            let text = crate::err::render_thrown(rt, e);
+            out.extend_from_slice(text.as_bytes());
             return 1;
         }
         // FLATTENED FIRST. `as_str` borrows, so it cannot flatten, and a rope

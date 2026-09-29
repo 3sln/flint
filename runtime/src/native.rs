@@ -693,17 +693,8 @@ pub fn call_on(rt: &mut Rt, encoded_call: &[u8]) -> Result<Vec<u8>, String> {
         let v = out?;
         if rt.failed() {
             let e = rt.clear_error();
-            let mut b1 = crate::rt::sbuf();
-            let kind: String = {
-                let k = rt.ex_kind(e);
-                rt.as_str(k, &mut b1).unwrap_or("Error").into()
-            };
-            let mut b2 = crate::rt::sbuf();
-            let msg: String = {
-                let m = rt.ex_message(e);
-                rt.as_str(m, &mut b2).unwrap_or("").into()
-            };
-            return Err(alloc::format!("{kind}: {msg}"));
+            // `render_thrown`, not a fourth copy of these rules (see its docstring).
+            return Err(crate::err::render_thrown(rt, e));
         }
         rt.encode(v)
     }
@@ -751,19 +742,12 @@ fn rendered(rt: &mut Rt, result: Value) -> String {
     }
     if rt.failed() {
         let e = rt.clear_error();
-        let mut b = crate::rt::sbuf();
-        let kind: String = {
-            let k = rt.ex_kind(e);
-            rt.as_str(k, &mut b).unwrap_or("Error").into()
-        };
-        let mut b2 = crate::rt::sbuf();
-        let msg: String = {
-            let m = rt.ex_message(e);
-            rt.as_str(m, &mut b2).unwrap_or("").into()
-        };
-        return alloc::format!("{kind}: {msg}");
+        // `render_thrown`, not a second copy (see its docstring). This function's
+        // neighbour says "on the same rules as `abi::finish_run`"; now it IS the
+        // same rules rather than a copy of them.
+        return crate::err::render_thrown(rt, e);
     }
-    let result = rt.string_arg(result);
+let result = rt.string_arg(result);
     let mut b = crate::rt::sbuf();
     match rt.as_str(result, &mut b) {
         Some(s) => s.into(),
