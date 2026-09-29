@@ -1003,6 +1003,27 @@ fn run_source(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
     run_source_q(srcs, entry, args, caps, roots, false)
 }
 
+/// `flint run`, with the half of `:optimize` that a run CAN honour.
+///
+/// `:optimize [perf]` means two things on `compile`: compile every arity, and
+/// strip `#?(:flint/check ..)`. A run produces no module, so the first is not
+/// available -- but the SECOND always was, and `run` ignored it. The same flag on
+/// the same program therefore kept its checks when run and dropped them when
+/// compiled, which is the kind of difference that makes a measurement taken one
+/// way not transfer to the other.
+///
+/// There is no native AOT to wire up instead, and that is worth writing here
+/// rather than leaving as a surprise: `runtime/src/aot.rs` opens "the runtime half
+/// of ... what compiled WASM calls back into", and a compiled arity IS a wasm
+/// function. Compiled arities on a port are emitted at load time by the port; the
+/// native interpreter has no in-process backend, so `:optimize [perf]` cannot mean
+/// compiled code here until one exists (`DECISIONS.md#emit-wasm-instead-of-dispatch`,
+/// "Revisit when dispatch is the top item in a profile").
+fn run_source_opt(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
+                  roots: Option<&[String]>, strip: bool) -> Result<(i32, String)> {
+    run_source_qs(srcs, entry, args, caps, roots, false, strip)
+}
+
 /// The same, with the program's own output SUPPRESSED.
 ///
 /// `deps add` runs `flint.deps.resolve` as a program to get an answer, and the
@@ -1010,6 +1031,14 @@ fn run_source(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
 /// put a raw EDN map above the human line that follows it.
 pub(crate) fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
                 roots: Option<&[String]>, quiet: bool) -> Result<(i32, String)> {
+    // CHECKS KEPT, which is what every caller but `flint run` wants: `deps add`
+    // and `flint test` run a program to get an answer, not to measure it.
+    run_source_qs(srcs, entry, args, caps, roots, quiet, false)
+}
+
+pub(crate) fn run_source_qs(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
+                roots: Option<&[String]>, quiet: bool, strip_checks: bool)
+                -> Result<(i32, String)> {
     // PODS ARE BOOTED FIRST, because their surface is what the compiler needs
     // and only a running pod can say what it is (`DECISIONS.md#system-namespaces-and-deps`). A build
     // with no `:flint/pods` boots nothing and this costs a map lookup.
@@ -1027,7 +1056,7 @@ pub(crate) fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps:
         })
         .collect();
     let spec = build_spec_with(srcs, entry, &parse_slots(SLOTS)?, false, false, &[], roots,
-                               &pod_vars, false, None)?;
+                               &pod_vars, strip_checks, None)?;
     let mut c = load_compiler()?;
     let r = c.run(&["project", &spec]);
     if r.code != 0 {
@@ -1542,8 +1571,13 @@ fn usage() -> ! {
         "flint {VERSION} -- the compiler, as one binary
 
   flint run :path <dir> :fn <ns/fn> [:with [cap...]] [:args [arg...]]
+                [:optimize [perf|size]] [:checks true|false]
       Compile and run, here. Nothing is written: flint's runtime is compiled
       into this binary, so a program can be run without producing an artifact.
+      `:optimize [perf]` strips `#?(:flint/check ..)` -- 5.9x fewer instructions
+      on a check-heavy loop, measured. It compiles no ARITIES: a compiled arity
+      is a wasm function, and a run produces no module, so it says so and
+      interprets.
 
   flint compile :path <dir> :fn <ns/fn> :to :wasm [:out <file>]
                 [:with [cap...]] [:optimize [perf]] [:meta k=v]
@@ -2098,16 +2132,28 @@ fn main() -> Result<()> {
             // give is not an error: compiled arities are a property of a
             // module and `run` produces none, so it interprets and says so
             // once, rather than refusing to do the thing that was asked.
+            //
+            // BUT IT SAYS WHAT IT DID, TOO. `:optimize [perf]` means two things on
+            // `compile` -- compile every arity AND strip `#?(:flint/check ..)` --
+            // and `run` was honouring neither while reporting only the first. So
+            // the same flag on the same program kept its checks when run and
+            // dropped them when compiled, and a measurement taken one way did not
+            // transfer to the other. The second half is available here and is
+            // honoured now; `:checks false` reaches it as well.
+            let strip = strip_checks(&a.optimize, a.checks);
             if wants_aot(&a.optimize) {
                 eprintln!("flint: `run` produces no module, so there are no arities to \
-                           compile; interpreting.");
+                           compile; interpreting{}.",
+                          if strip { " with checks stripped" } else { "" });
+            } else if strip {
+                eprintln!("flint: checks stripped.");
             }
             // `:args` is the CLI's convention for what the entry is called
             // with; anything after `--` is the same thing, spelled the way a
             // shell spells it.
             let mut argv = a.args.clone();
             argv.extend(a.rest.iter().cloned());
-            std::process::exit(run_source(&a.srcs, &entry, &argv, &a.grants, None)?.0);
+            std::process::exit(run_source_opt(&a.srcs, &entry, &argv, &a.grants, None, strip)?.0);
         }
         // A STANDALONE SCRIPT, which is what `#!/usr/bin/env flint` produces:
         // the kernel invokes `flint <the file> <the user's args>`, so the first

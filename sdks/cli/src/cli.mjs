@@ -310,10 +310,18 @@ export function compile(srcs, entry, outPath, optimize, to, meta,
 /// this pays module emission where the native CLI pays none. It is the honest
 /// version of the difference rather than a second compilation path that might
 /// disagree with `compile`.
-export function runSource(srcs, entry, args, caps, roots, { quiet = false } = {}) {
+export function runSource(srcs, entry, args, caps, roots,
+                          { quiet = false, stripChecks: strip = false } = {}) {
   const spec = buildSpec({
     srcs, entry, slots: slots(), aot: false, shake: true, meta: [], roots,
     stdlib: stdlib(), stdlibDeps: stdlibDeps(),
+    // THE HALF OF `:optimize` A RUN CAN HONOUR. `:optimize [perf]` means two
+    // things on `compile` -- compile every arity, and strip
+    // `#?(:flint/check ..)` -- and `run` was honouring neither while reporting
+    // only the first, on BOTH CLIs. `doc/api-review.md` records `flint run` as
+    // "served by both, identically", which is a claim that only stays true if
+    // the option lands here at the same time.
+    stripChecks: strip,
   });
   const out = runCompiler(['wasm', spec, b64encode(runtimeWasm())]);
   const module = new WebAssembly.Module(b64decode(out.trim()));
@@ -633,12 +641,17 @@ export async function main(argv) {
     // `:optimize` is a PREFERENCE, so asking `run` for one it cannot give is
     // not an error: compiled arities are a property of a module `run` does not
     // keep, so it interprets and says so once.
+    const strip = stripChecks(a.optimize, a.checks);
     if (wantsAot(a.optimize)) {
       process.stderr.write(
-        'flint: `run` keeps no module, so there are no arities to compile; interpreting.\n');
+        'flint: `run` keeps no module, so there are no arities to compile; interpreting'
+        + (strip ? ' with checks stripped' : '') + '.\n');
+    } else if (strip) {
+      process.stderr.write('flint: checks stripped.\n');
     }
     const args = [...a.args, ...a.rest];
-    return (await runSource(a.srcs, a.entry, args, a.grants, null)).code;
+    return (await runSource(a.srcs, a.entry, args, a.grants, null,
+                            { stripChecks: strip })).code;
   }
   if (cmd === 'deps') {
     // NAMED rather than silently missing. `flint deps` on the native CLI runs

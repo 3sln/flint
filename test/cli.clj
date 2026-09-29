@@ -868,5 +868,66 @@
                 (str/includes? (with (str "{:paths [\".\"] :deps {other/y {:local/root \"" r "/lib2\"}}}"))
                                "lib2"))))
 
+;; --- `run` honours the half of `:optimize` a run CAN honour ---------------
+;;
+;; `:optimize [perf]` means two things on `compile`: compile every arity, and
+;; strip `#?(:flint/check ..)`. A run produces no module, so the first is not
+;; available -- and `run` was honouring NEITHER while reporting only the first.
+;; The same flag on the same program therefore kept its checks when run and
+;; dropped them when compiled, so a measurement taken one way did not transfer.
+;;
+;; IN INSTRUCTIONS, NOT SECONDS. The count is deterministic; a wall clock on a
+;; loaded machine is not -- the same work timed 6.5 s to 11.0 s while this number
+;; does not move. MEASURED 2026-09-29 by bisecting `FLINT_STEP_LIMIT` over 1000
+;; iterations of a two-check function: 168 670 instructions with checks, 28 584
+;; without, 5.90x.
+;;
+;; A THRESHOLD RATHER THAN THE BISECTION THAT FOUND IT. Bisecting three times
+;; costs about seventy compiles; one limit between the two counts separates them
+;; in three. 60 000 sits 2.8x under the checked figure and 2.1x over the stripped
+;; one, so ordinary drift in the stdlib moves neither across it -- and if one day
+;; it does, this fails loudly rather than quietly measuring nothing.
+(let [w (str (fs/create-temp-dir))
+      src (str w "/src")
+      _ (fs/create-dirs src)
+      _ (spit (str src "/ck.cljc")
+              (str "(ns ^:script ck (:require [flint.check :refer [expect]]))\n"
+                   "(defn add [a b]\n"
+                   "  #?(:flint/check (expect int? a))\n"
+                   "  #?(:flint/check (expect int? b))\n"
+                   "  (+ a b))\n"
+                   "(defn main [_]\n"
+                   "  (str (loop [i 0 acc 0]"
+                   " (if (< i 1000) (recur (inc i) (add acc i)) acc))))\n"))
+      ;; `FLINT_STEP_LIMIT` is environment, not argv, so the probe sets it on the
+      ;; child rather than passing a flag.
+      under (fn [n & flags]
+              (let [pb (ProcessBuilder.
+                        (into-array String (concat ["./target/release/flint" "run"
+                                                    ":path" src ":fn" "ck/main"]
+                                                   flags)))]
+                (.put (.environment pb) "FLINT_STEP_LIMIT" (str n))
+                (.redirectErrorStream pb true)
+                (let [pr (.start pb) out (slurp (.getInputStream pr))]
+                  {:exit (.waitFor pr) :out out})))
+      limit 60000]
+  (check-that "run with checks needs more than 60 000 instructions"
+              (not (zero? (:exit (under limit)))))
+  (check-that "  ... and run :optimize [perf] fits under it, so checks were stripped"
+              (zero? (:exit (under limit ":optimize" "[perf]"))))
+  ;; THE CONTROL. Without it the row above would pass just as well if `run`
+  ;; ignored `:checks` entirely and `:optimize [perf]` were doing the stripping
+  ;; unconditionally.
+  (check-that "  ... and :checks true keeps them under :optimize [perf]"
+              (not (zero? (:exit (under limit ":optimize" "[perf]" ":checks" "true")))))
+  (check "  ... and the answer does not change"
+         (str/trim (:out (sh "./target/release/flint" "run" ":path" src ":fn" "ck/main"
+                             ":optimize" "[perf]")))
+         "499500")
+  (check-that "  ... and it says what it did"
+              (str/includes? (:all (sh "./target/release/flint" "run" ":path" src ":fn" "ck/main"
+                                       ":optimize" "[perf]"))
+                             "checks stripped")))
+
 (println (if (zero? @fails) "cli: ok" (str "cli: " @fails " FAILURES")))
 (System/exit (if (zero? @fails) 0 1))
