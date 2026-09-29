@@ -30,12 +30,27 @@ never comparable to the new one by subtraction.
 
 ## The numbers
 
-    flint 10cc7241, jank 0169e88, 2026-09-29
+    flint dcf8b860, jank 0169e88, 2026-09-29
 
     native                     port (jvm)
-    pass-*   144 / 195         144 / 195
+    pass-*   146 / 195         146 / 195
     fail-*    62 / 100          64 / 100
     ---------------------------------------
+    TOTAL    208 / 295 (70%)   210 / 295 (71%)
+
+    +2 is `case`: a vector or set test constant was expanded into a chain of
+    ALTERNATIVES, where Clojure gives that meaning to a list alone. See
+    `test/conform/basics.cljc`, which pins all six shapes against babashka.
+
+    A later commit (`c756151f`) does NOT move this and was checked rather than
+    assumed: it makes a thrown non-exception name its kind, so 13 failures that
+    reported nothing now report "a keyword was thrown, with no message". The
+    `catch` clauses in those tests name a jank host type, so they still fail --
+    legibly instead of silently.
+
+    flint 10cc7241 (before the `case` fix)
+    pass-*   144 / 195         144 / 195
+    fail-*    62 / 100          64 / 100
     TOTAL    206 / 295 (69%)   208 / 295 (70%)
 
     the two runs before it, for comparison:
@@ -144,7 +159,7 @@ plus 64 `pass-*` failures.
 |---:|---|---|
 | 38 | flint **accepts** a form jank rejects | `fail-*` |
 | 14 | `letfn*` is not implemented | `pass-*` |
-| 12 | failed with no message | `pass-*` |
+| 13 | **a value was thrown with no message** — `form/try` 11, `form/if` 1, `syntax-quote` 1. These read as "failed with no message" until `c756151f`, which was flint's own words: a thrown keyword rendered as exactly `Error: `. They throw a keyword past a `catch` naming a jank host type, so the throw escapes | `pass-*` |
 | 10 | an unresolved symbol -- **8 of them `rand`**, plus `ns-unalias` and `create-ns` | `pass-*` |
 |  7 | ran, but an assertion did not hold | `pass-*` |
 |  7 | C++ interop leaking into a language test (`cpp/raw` inside `form/`) | `pass-*` |
