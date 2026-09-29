@@ -1,15 +1,29 @@
 # flint roadmap
 
-This is a single organised view over `DECISIONS.md` (39 numbered decision
-records), `doc/goals/README.md` (the live investigation log), `doc/ports.md`,
+> **A row saying "not started" needs checking as much as one saying "built."**
+> Four were found stale on 2026-09-28 — `:to :jvm` ("decided, not started" and
+> shipped), the `subs` gas divergence ("explained but not fixed" and fixed, with
+> the row it claimed to block already in the fixture), `flint.deps.mvn` ("UNWIRED"
+> and wired, with a passing test), and the decision count (39 against the 63
+> `./bin/check-decisions` prints). All four decayed in the SAME direction: work
+> recorded as open that had been done. That is the opposite of what `AGENTS.md`
+> section 2 warns about, and it costs the same thing — the next person plans around
+> it. Each corrected row now names the test that proves it and the date the old
+> claim stopped being true.
+
+
+This is a single organised view over `DECISIONS.md` (63 decision records, as
+`./bin/check-decisions` counts them on 2026-09-28 — this said 39, and said
+"numbered", which `AGENTS.md` section 2 rules out: slugs, never numbers), `doc/goals/README.md` (the live investigation log), `doc/ports.md`,
 `doc/jank.md`, `doc/unit-format.md`, `doc/kin-specialisation-cases.md`, and
 `git log`. It does not replace any of those — it points at them. **It used to
 name the root `BRIEF.md`/`PLAN.md`/`CHANGELOG.md` here too; all three were
 deleted in `8cee498d` on 2026-09-11** and this sentence went on pointing at them
 until 2026-09-26, while `README.md` said the opposite in the same breath — that
 this file REPLACES them. Two documents disagreeing about a file that does not
-exist. **Every decision number below (`strings-and-matching`, `tables`, …)
-is a live link to `DECISIONS.md#<slug>`; read the source for the reasoning.**
+exist. **Every decision SLUG below (`strings-and-matching`, `tables`, …)
+is a live link to `DECISIONS.md#<slug>`; read the source for the reasoning.** The
+sentence said "decision number" while giving two slugs as its examples.
 
 Status values used throughout:
 
@@ -201,7 +215,7 @@ doc describing it has not been updated to say so.
 | `codec.kin`/`reader.kin` — the wire codec's primitive readers/writers | **abandoned, generated but refused** | `doc/goals/kin-port.md` — generated, and verified byte-identical across all three targets, then explicitly refused: measured at 3× more instructions than the hand-written version, plus two integer-overflow slice-panic safety holes the hand-written version didn't have. Proved the generator works end to end; shipped nowhere. Worth keeping precisely because it's a case where "the generator worked" and "ship it" were different questions. |
 | Converging `first`'s map-entry-vecseq shape onto native's shape | **abandoned, then redone once the real cause was found** | `doc/goals/kin-port.md`, the decision index (now folded into `DECISIONS.md`) item `0m` — first attempt broke one conformance row (`build-eq`) nondeterministically and was reverted; the cause turned out to be three *unrelated* pre-existing rooting bugs in `Eq` that the change had only perturbed the timing of (item `0n`, fixed independently). Once those were fixed, the identical convergence landed clean: 13.9% fewer steps on a 200-entry walk, one allocation removed per map-entry seq'd. |
 | Two GC remset-audit checks, ported from native's `check_remset` to the JVM/CLR | **abandoned** | `doc/goals/kin-port.md` — written, measured, and thrown away: they surfaced a real, still-unexplained divergence (the JVM holds old-space garbage the native runtime doesn't) but the checks themselves were unsound at every placement tried. Recorded as a live open question (why does the JVM hold that garbage?) rather than a closed one. |
-| `subs` charges gas on native and charges **nothing** on either port for the same operation | open question, explained but not fixed | the decision index (now folded into `DECISIONS.md`) item `0v` — measured at roughly one gas-step-per-call worth; blocks adding a regex row to `runtimes/conform/gasmeter.cljc` until the ports' hand-written string builtins are priced the same way the generated code already is |
+| ~~`subs` charges gas on native and **nothing** on either port~~ | **fixed, and the row it was blocking is in place.** Both ports now price all three of native's cases: a flat string by `charge_bytes(took.min(n))`, a non-ASCII rope by `(end - start) / 8 + 1` (`Builtins.java:601`, `Builtins.cs:537`, guarded by `!ascii` exactly as `coll.rs` guards it), and an ASCII rope by nothing — native returns before its own `charge_bytes` there, so "no charge" is the agreeing answer rather than a missing one. It needed making TWICE per port, because `subs` has two paths and a fixture of flat strings exercises only one. **Proved by:** `runtimes/conform/gasmeter.cljc` now calls `subs` on both paths AND `str/split` with a pattern — the regex row this said was blocked — and `bin/conform-hosts` holds the four runtimes to "the same gas, to the instruction: 143 035", the same ABSOLUTE totals (71 993 and 215 028), and the same line-by-line attribution with nothing unattributed. The price the old line described as "roughly one gas-step-per-call" was 56 steps over the meter's two arms, recorded at `Builtins.java:595`. This row read "open question, explained but not fixed" until 2026-09-28 | `resource-limits` |
 
 Several real bugs were found *by* the kin port rather than merely worked
 around by it — worth keeping as evidence the effort is paying for itself, not
@@ -248,7 +262,7 @@ shipping nowhere by design.
 | Host-facing token half (acquired-once, never the same value as a compile-time slot sentinel) | decided, not started | `workspace-capabilities` step 10 |
 | `flint.sys.*` (`fs`, `env`, `slurp` done; `net`/`proc`/`clock` not) served by the CLI over RPC | in progress | [`system-namespaces-and-deps`](DECISIONS.md#system-namespaces-and-deps) |
 | `flint.deps.*` (npm, mvn, git — real registries, real fetches) | in progress | `system-namespaces-and-deps` — `flint deps add` built; `bump`/`pin`/`tree`/`why` not |
-| **`flint.deps.mvn` is served but UNWIRED** | partial, untracked until now | The CLI serves `versions`, `pom` and `fetch` as a working Rust service with real fetches and caching (`cli/src/deps.rs`). **No `.cljc` calls any of it** — `lib/flint/deps/resolve.cljc` dispatches npm and git only, with no maven clause. Maven resolution today runs through the deprecated babashka shell-out that `system-namespaces-and-deps` says to delete. Either wire it or drop the service; leaving a fetcher nothing calls is the worst of the three |
+| ~~**`flint.deps.mvn` is served but UNWIRED**~~ | **wired.** `lib/flint/deps/resolve.cljc` requires `flint.deps.mvn` (line 36) and its `:mvn` clause calls `mvn/pom` (line 246); the comment there records the state this row described — "with no clause and no comment, while `flint.deps.mvn/pom` sat there". **Proved by:** `bb test/cli.clj` — "a maven jar is fetched and unpacked on the way to a build" and "a maven dependency's own POM is read, and its deps fetched", against local fixtures rather than the network. What is still not read is the parts of maven that are maven — a parent POM, a profile, a version range — and `flint deps` says so itself, which that suite also asserts. This row said UNWIRED until 2026-09-28 | [`one-dependency-walk`](DECISIONS.md#one-dependency-walk) |
 | **`(snap "name")` — named snapshots from inside a program** | not built, and was RECORDED as built | A per-name ring buffer keeping the latest hit with a count, compiling to nothing in a production build. Two commits (`1c7a061`, `426af38`) whose subjects read as shipping it changed only documentation — zero lines of code. Removed from `DECISIONS.md`; kept here because the idea may still be worth building |
 | Capability delegation on a dependency entry (grants narrow as they descend, never widen) | done | `system-namespaces-and-deps` — "you cannot lend what you do not hold" |
 | Per-workspace policy enforcement bound to the *port*, not a wrapped closure | done | `system-namespaces-and-deps` — the wrapper approach was tried and rejected (crashes through `apply`) |
@@ -287,7 +301,7 @@ same problem.
 | `:to :native` (an executable, which is a link) | decided, not started — refuses with its own reason now, rather than borrowing `:to :llvm`'s | `llvm-ir-target` |
 | A host for a program linked from `:to :llvm` (`fs`, `env`, ports) | not started — the archive runs and computes; a program that opens a port parks for ever | `llvm-ir-target` |
 | `:to :clr` | **shipped** — a from-scratch ECMA-335 writer in cljc (`src/flint/clr.cljc`), bytecode as a `FieldRva` array in `.text`, `boot`/`loop`/`link`, metadata as a namespaced `CustomAttribute`. Gated end to end by `bin/check-clr`: the loader, Roslyn as a reference reader, and the same answer the interpreter gives. No AOT yet — every arity is interpreted. | `four-operations`, `cli` |
-| `:to :jvm` | decided, not started — the runtime exists and the contract is written (`four-operations`); a class file has no data section, so the bytecode goes in the constant pool as `CONSTANT_Utf8` entries capped at 65 535 bytes each, which is the one part that is not a port of the CLR writer | `four-operations`, `other-hosts` |
+| `:to :jvm` | **shipped** — a class-file writer in cljc (`src/flint/jvm.cljc` over `src/flint/classfile.cljc`), `boot`/`loop`/`link`, metadata under `com.3sln.flint.meta`. The bytecode goes in the constant pool as `CONSTANT_Utf8` chunks capped at 65 535 bytes, exactly as planned here — 26 715 bytes is one chunk and the compiler's 206 383 is five, cut on ENCODED length. Emitted by all three doors, byte-identical, plain and `:optimize [perf]`. **Proved by:** `bb test/selfhost-targets.clj` (CAFEBABE, and that the class carries the program rather than just its metadata), `bb test/door-agreement.clj` (the three doors agree), `bin/check-sdk` (the native door's class BOOTS through `com.flint.Main` and answers the program's value — `javap` was tried and passes with the bytecode emptied), `node sdks/cli/selftest.mjs` (both `:out` spellings and the bad-class-name refusal). This row said "decided, not started" until 2026-09-28, describing the plan the code had already followed | `four-operations`, `other-hosts` |
 | nREPL | decided, not started — overlaps `debug-runner`'s debug runner design, "these should be one implementation" | `cli` §nREPL |
 | `{:args :capabilities}` entry map (vs. today's bare `:args` vector) | decided, not started — explicitly the breaking change to make exactly once, before anything is published | `cli`, `structured-ports` |
 
@@ -1532,7 +1546,7 @@ nothing should fail by default, not report a comfortable zero.
 | 39 numbered decision records (`DECISIONS.md`) | live, actively maintained, and self-indexing (the decision index (now folded into `DECISIONS.md`)) |
 | Goals directory (`doc/goals/`) as the live investigation log | live; all six files (`README.md` plus `data-structures.md`, `kin-port.md`, `equiv-hash.md`, `extern-refs.md`, `hash-flooding.md`) read in full for this pass. `README.md` is where the `extend-method` saga, the `implied-requires` fix (§1), and the "reached is not exercised" bug family (§9) came from; `kin-port.md` (2,800 lines) fed §5's abandoned-work items and its own stale status line noted there; `equiv-hash.md` and `extern-refs.md` fed the `TY_TAGGED`/collection-node-morph cross-reference in §1; `data-structures.md` is mostly a reference doc (existing layouts, measured against Clojure) rather than a plan, with one real backlog worth naming: **chunked seqs** — `TY_CHUNKSEQ` exists in the type table and nothing constructs one, the largest measured lazy-seq cost (a `map` stage roughly triples a `reduce`'s time vs. Clojure's 32-per-chunk amortization) |
 | This reorganisation (`ROADMAP.md`) | done, this document |
-| Folding the 39 decisions into a smaller number of living reference docs | open question, explicitly deferred by the task that produced this roadmap — "the roadmap points AT the decisions; it does not replace them yet" |
+| Folding the **63** decisions into a smaller number of living reference docs | open question, explicitly deferred by the task that produced this roadmap — "the roadmap points AT the decisions; it does not replace them yet". The count said 39; `./bin/check-decisions` printed 63 on 2026-09-28, which is the number to quote because it is the one a script produces and re-checks. If the argument for folding was the size of the pile, the pile is 62% larger than the row claimed |
 | A `deck/` slide presentation | in progress, by a separate concurrent effort — out of scope here entirely |
 
 ---
