@@ -1,12 +1,13 @@
 # flint roadmap
 
 > **A row saying "not started" needs checking as much as one saying "built."**
-> Four were found stale on 2026-09-28 — `:to :jvm` ("decided, not started" and
+> Five were found stale on 2026-09-28 — `:to :jvm` ("decided, not started" and
 > shipped), the `subs` gas divergence ("explained but not fixed" and fixed, with
 > the row it claimed to block already in the fixture), `flint.deps.mvn` ("UNWIRED"
-> and wired, with a passing test), and the decision count (39 against the 63
-> `./bin/check-decisions` prints). All four decayed in the SAME direction: work
-> recorded as open that had been done. That is the opposite of what `AGENTS.md`
+> and wired, with a passing test), `letfn` ("mutual recursion in `let`" recorded as
+> not started, working as a macro for five weeks), and the decision count (39
+> against the 63 `./bin/check-decisions` prints). All five decayed in the SAME
+> direction: work recorded as open that had been done. That is the opposite of what `AGENTS.md`
 > section 2 warns about, and it costs the same thing — the next person plans around
 > it. Each corrected row now names the test that proves it and the date the old
 > claim stopped being true.
@@ -70,7 +71,7 @@ by-area view on top of it.
 | String hash unified to one byte-walk across all three tiers (was silently 3 different bases) | done | `doc/goals/README.md` §1 |
 | `clojure.zip`, `clojure.data`, `clojure.datafy` shipped | done | the decision index (now folded into `DECISIONS.md`) item `0p` |
 | Regex delegation to host engines (JS/JVM/CLR `RegExp`/`Pattern`/`Regex`) | abandoned | [`strings-and-matching`](DECISIONS.md#strings-and-matching) §5, explicitly superseded by [`matching-over-ropes`](DECISIONS.md#matching-over-ropes) — stock engines can't consume a rope |
-| `letfn*` (mutual recursion in `let`) | decided, not started | [`doc/jank.md`](doc/jank.md) — the one clean gap in the jank-suite comparison, 14 tests, one missing special form |
+| `letfn*`, the SPECIAL FORM | not implemented, and it refuses by name — but **mutual recursion in `let` works**, which is what this row used to claim was missing. `letfn` is a macro in `lib/clojure/core.cljc` (since `b7e3d247`, 2026-08-22): each name binds to a stub dispatching through a volatile, and the real functions are installed afterwards, which is the price of by-value capture. MEASURED 2026-09-28 — mutually recursive `even2?`/`odd2?` answers, and so does a multi-arity spec calling its sibling (`(f 3)` → 4). `letfn*` written directly still errors. **The 14 jank tests attributed to this need a re-run and did not get one**: no jank checkout on this machine, and `doc/jank.md`'s failure table predates the macro while the file was edited a month after it | [`doc/jank.md`](doc/jank.md) |
 | `recur` refused at top level (currently loops forever instead) | open question, deliberately deferred | [`doc/jank.md`](doc/jank.md) — "one test is a poor reason to add a special case" |
 | jank suite, the rest of the 104 failures: 38 are flint's analyser being *more permissive* than jank's (accepts a program jank rejects — duplicate `case` keys, two variadic arities on one `fn`, etc.), 12 fail with no message, 7 are C++ interop tests that leaked into language-test directories and were counted anyway rather than quietly excluded | open question, unranked | [`doc/jank.md`](doc/jank.md) — the 38 are explicitly not "fixed": "a compiler that refuses more is better, but 'refuses more' is a long tail of individually small rules," so each is reported rather than patched. The suite's 514 C++-interop tests (`test/jank/cpp`) are excluded outright as out of scope by design — flint has no host classes at all, so there is nothing to be "close to" there. |
 | Numeric tower (bigint/ratio), sorted collections, transducers, `eval` at runtime, records/types (`deftype`/`defrecord`/`reify`), hierarchies (`derive`/`isa?`), var objects/`with-redefs`, host threads/agents/refs, metadata on fns/numbers/short strings | decided, not started (by design) | `README.md` §Limits, `doc/coverage.md` (`CHANGELOG.md` was cited here and is deleted; its "Known limits" was itself only a pointer to `README.md#limits`, so nothing is lost) |

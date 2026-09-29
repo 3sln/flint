@@ -129,6 +129,24 @@ not refer to each other"*. Mutual recursion in a `let` needs the bindings to
 exist before their initialisers run, which is a real feature and not an
 oversight.
 
+> **THOSE FOURTEEN NEED A RE-RUN, and this note is not one.** `letfn` WORKS as a
+> macro in `lib/clojure/core.cljc` and has since `b7e3d247` (2026-08-22) -- a
+> month before this file was last edited. Measured 2026-09-28 through
+> `target/release/flint run`: mutually recursive `even2?`/`odd2?` answers, and so
+> does a multi-arity spec whose first arity calls its sibling. Only `letfn*`
+> written DIRECTLY still refuses, with the message quoted above.
+>
+> This paragraph also says, twenty lines up, that some of the 38 permissive
+> failures are "`letfn` with a malformed binding vector" -- so the suite's tests
+> write `letfn`, not `letfn*`, and a test writing `letfn` cannot reach that
+> message now. Either the table predates the macro, or these fourteen fail for a
+> reason nobody has looked at since.
+>
+> It is left UNCORRECTED rather than guessed at: settling it needs a jank checkout
+> and `bin/jank-suite <checkout>`, and there is none on this machine. A number
+> nobody re-measured is the thing this file exists to avoid, and replacing it with
+> a number nobody measured either would be worse.
+
 Seven failures are C++ interop that leaked out of `cpp/` into the language
 directories -- a `form/loop` test whose subject is `cpp/raw`. Those are not
 about `loop` at all, and excluding them would be defensible; they are counted
