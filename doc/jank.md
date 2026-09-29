@@ -161,7 +161,7 @@ plus 64 `pass-*` failures.
 | 14 | `letfn*` is not implemented | `pass-*` |
 | 13 | **a value was thrown with no message** — `form/try` 11, `form/if` 1, `syntax-quote` 1. These read as "failed with no message" until `c756151f`, which was flint's own words: a thrown keyword rendered as exactly `Error: `. They throw a keyword past a `catch` naming a jank host type, so the throw escapes | `pass-*` |
 | 10 | an unresolved symbol -- **8 of them `rand`**, plus `ns-unalias` and `create-ns` | `pass-*` |
-|  7 | ran, but an assertion did not hold | `pass-*` |
+|  5 | ran, but an assertion did not hold — and all five have a NAMED cause, measured 2026-09-29 rather than left as a bucket: **2 are var metadata** (`form/def/pass-docstring`, `pass-meta` want `(:doc (meta #'one))`; flint's `(var one)` answers the SYMBOL and `(meta (var one))` is nil, which is the "var objects" absence `ROADMAP.md` already lists), **2 are reader metadata on literals** (`metadata/pass-hint`, `pass-meta`: `(meta ^:foo [1 2])` is nil here and `{:foo true}` in Clojure — `with-meta` works, so the value model is fine and the READER is what drops it), and **1 is syntax-quote resolution** (`` `meow `` gives `t/meow` under the test's own ns where Clojure gives `user/meow`; the test asserts the literal `user/` prefix, so this one is about the harness's namespace, not about flint) | `pass-*` |
 |  7 | C++ interop leaking into a language test (`cpp/raw` inside `form/`) | `pass-*` |
 |  3 | Ratio literals -- flint has no Ratio, deliberately | `pass-*` |
 |  3 | `recur` across a `try` boundary | `pass-*` |
