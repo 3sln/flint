@@ -107,24 +107,44 @@ if let letfn loop map nil set throw try vector`), the reader, syntax quote,
 vars and metadata. Language is exactly what should port, and it is where a
 divergence would be a real one.
 
-## What the 104 failures are
+## What the 102 failures are
 
 Categorised by CAUSE rather than by directory, because the directories are an
-accident of jank's layout and the causes are the answer:
+accident of jank's layout and the causes are the answer.
 
-| n | cause |
-|---:|---|
-| 38 | flint **accepts** a form jank rejects |
-| 14 | `letfn*` is not implemented |
-| 12 | failed with no message |
-| 12 | an unresolved symbol in the test's own preamble |
-|  7 | ran, but an assertion did not hold |
-|  7 | C++ interop leaking into a language test (`cpp/raw` inside `form/`) |
-|  3 | Ratio literals -- flint has no Ratio, deliberately |
-|  3 | `recur` across a `try` boundary |
-|  1 | an integer literal larger than 64 bits |
-|  1 | did not terminate |
-|  5 | one-off, listed by `SHOW_FAILURES=1` |
+**RE-DERIVED 2026-09-28** from `SHOW_FAILURES=1` on the native arm, which lists
+the `pass-*` failures by name with the message each gave. The two halves are
+counted separately now, because they are different kinds of finding and the old
+single table mixed them: 38 `fail-*` misses (flint accepting what jank rejects)
+plus 64 `pass-*` failures.
+
+| n | cause | half |
+|---:|---|---|
+| 38 | flint **accepts** a form jank rejects | `fail-*` |
+| 14 | `letfn*` is not implemented | `pass-*` |
+| 12 | failed with no message | `pass-*` |
+| 10 | an unresolved symbol -- **8 of them `rand`**, plus `ns-unalias` and `create-ns` | `pass-*` |
+|  7 | ran, but an assertion did not hold | `pass-*` |
+|  7 | C++ interop leaking into a language test (`cpp/raw` inside `form/`) | `pass-*` |
+|  3 | Ratio literals -- flint has no Ratio, deliberately | `pass-*` |
+|  3 | `recur` across a `try` boundary | `pass-*` |
+|  3 | threw at run time (`ClassCastException`, `ArityException`, one `ExceptionInfo`) | `pass-*` |
+|  2 | a reader tag flint does not bind (`#uuid`) | `pass-*` |
+|  3 | other, and one that did not terminate inside 20 s | `pass-*` |
+
+**`rand` IS THE SECOND-LARGEST FIXABLE CLUSTER and it is not a language gap.**
+Eight tests fail on `unable to resolve symbol: rand`. `doc/manifest.edn` lists
+`rand`, `rand-int`, `rand-nth`, `random-sample` and `random-uuid` under `:absent`,
+so the absence is tracked -- but nothing in `DECISIONS.md` records WHY, and the
+reason is not obvious: flint bills deterministic gas and has no entropy
+capability, so a PRNG is a design question (seeded from where, and does a sandbox
+get to observe it?) rather than a missing function. Worth an answer either way,
+because eight tests is the price of not having one written down.
+
+The old table's numbers are kept here for comparison: 38 / 14 / 12 / 12 / 7 / 7 /
+3 / 3 / 1 / 1 / 5. The `letfn*`, no-message, assertion, C++, Ratio and `recur`
+rows are unchanged; the unresolved-symbol row was 12 and is 10; and the reader-tag
+pair was inside "one-off" before.
 
 **The largest group is not a bug in what flint computes.** Thirty-eight tests
 are `fail-*` cases that flint runs happily: duplicate keys in a `case`, two
