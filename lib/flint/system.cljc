@@ -125,9 +125,14 @@
          ;; value would, and it says it truthfully: "a keyword was thrown, with no
          ;; message" is checkable, where "a non-exception value was thrown" would
          ;; be a guess this code cannot make.
+         ;; AN EXCEPTION WITH NO MESSAGE IS JUST ITS KIND, which `:kind` above
+         ;; already carries. Saying so again read "ExceptionInfo: a exception was
+         ;; thrown, with no message" -- the kind twice, and the wrong article.
+         ;; `err::render_thrown` makes the same distinction on the Rust side.
          :message (or (ex-message e)
-                      (str "a " (name (flint.rt/kind e))
-                           " was thrown, with no message"))}))))
+                      (when (flint.rt/nil? (flint.rt/ex-kind e))
+                        (str "a " (name (flint.rt/kind e))
+                             " was thrown, with no message")))}))))
 
 (defn- serve-calls
   "Serve one bound port until it closes.

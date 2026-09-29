@@ -63,7 +63,14 @@ fn reply_for(tx: i64, payload: &[u8]) -> Option<Result<Vec<u8>, String>> {
         Some("throw") => {
             let kind = v.get("kind").and_then(|k| k.as_str()).unwrap_or("Error");
             let msg = v.get("message").and_then(|m| m.as_str()).unwrap_or("");
-            Some(Err(format!("{kind}: {msg}")))
+            // NO TRAILING ": " WHEN THERE IS NOTHING AFTER IT. An exception with
+            // no message is just its kind, which `flint.system/serve` now leaves
+            // the message empty for rather than repeating the kind in words --
+            // and this printed "ExceptionInfo: " with the colon dangling.
+            // `err::render_thrown` makes the same call on the runtime side, so
+            // the two paths agree on what an unnamed failure looks like.
+            Some(Err(if msg.is_empty() { kind.to_string() }
+                     else { format!("{kind}: {msg}") }))
         }
         _ => None,
     }

@@ -38,27 +38,37 @@ use crate::value::{Value, NIL};
 /// every program. `kind_of` is a primitive.
 pub fn render_thrown(rt: &mut Rt, e: Value) -> alloc::string::String {
     let mut b = crate::rt::sbuf();
-    let kind: alloc::string::String = {
-        let k = rt.ex_kind(e);
-        rt.as_str(k, &mut b).unwrap_or("Error").into()
-    };
+    // NAMED ITSELF, or not. A real exception carries a kind string; anything
+    // else answers nothing here and the kind defaults to "Error". Which of the
+    // two it was decides what a missing message should say, so it is kept.
+    let named = rt.as_str(rt.ex_kind(e), &mut b).map(alloc::string::String::from);
+    let kind: alloc::string::String =
+        named.clone().unwrap_or_else(|| alloc::string::String::from("Error"));
     let mut b2 = crate::rt::sbuf();
     let msg: alloc::string::String = {
         let m = rt.ex_message(e);
         rt.as_str(m, &mut b2).unwrap_or("").into()
     };
-    let msg = if msg.is_empty() {
-        let kv = rt.kind_of(e);
-        let nm = rt.name_of(kv);
-        let mut b3 = crate::rt::sbuf();
-        match rt.as_str(nm, &mut b3) {
-            Some(w) => alloc::format!("a {w} was thrown, with no message"),
-            None => alloc::string::String::from("a value was thrown, with no message"),
-        }
-    } else {
-        msg
-    };
-    alloc::format!("{kind}: {msg}")
+    if !msg.is_empty() {
+        return alloc::format!("{kind}: {msg}");
+    }
+    // AN EXCEPTION WITH NO MESSAGE IS JUST ITS KIND. Saying "ExceptionInfo: a
+    // exception was thrown, with no message" repeated the kind and got the
+    // article wrong; jank's `syntax-quote/pass-minimal` printed exactly that.
+    if named.is_some() {
+        return kind;
+    }
+    // ANYTHING ELSE IS NAMED BY KIND, because that is the only thing the reader
+    // does not already have. `kind_of` is a primitive; printing the value needs
+    // the whole printer, which cost +9 175 bytes of wasm in every program when
+    // the `flint.system` twin of this was measured that way.
+    let kv = rt.kind_of(e);
+    let nm = rt.name_of(kv);
+    let mut b3 = crate::rt::sbuf();
+    match rt.as_str(nm, &mut b3) {
+        Some(w) => alloc::format!("{kind}: a {w} was thrown, with no message"),
+        None => alloc::format!("{kind}: a value was thrown, with no message"),
+    }
 }
 
 // `ex_info`, `is_exception`, `ex_message`, `ex_data` and `ex_kind` are
