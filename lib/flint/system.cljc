@@ -94,7 +94,40 @@
          ;; `DECISIONS.md#bridges-are-the-only-door` says failure is data. A
          ;; kind every failure shares is not data a host can act on.
          :kind (or (some-> e ex-data :kind) (flint.rt/ex-kind e) "Error")
-         :message (or (ex-message e) "the call failed")}))))
+         ;; NAME THE THROWN VALUE when there is no message, rather than saying
+         ;; nothing. flint lets a program throw ANY value -- `(throw :kw)` is
+         ;; caught by `(catch Exception e ..)` and `e` is the keyword -- and
+         ;; `ex-message` of a keyword is nil, so an uncaught one arrived at a host
+         ;; as kind "Error", message "the call failed". Both slots dropped the
+         ;; value: nothing in the output said what was thrown, or even that the
+         ;; thing thrown was not an exception.
+         ;;
+         ;; MEASURED 2026-09-28 against jank's suite, where it is 12 of the 64
+         ;; `pass-*` failures -- `form/try/*` throws a keyword and catches on a
+         ;; jank host type flint cannot resolve, so the keyword propagates. The
+         ;; harness recorded all twelve as "failed with no message", which was
+         ;; flint's own words rather than the harness losing them. An exception
+         ;; propagating the same way reports fine ("ExceptionInfo: boom"), which is
+         ;; what made it look like a harness fault.
+         ;;
+         ;; THE KIND, NOT THE VALUE, and that is a PRICE rather than a
+         ;; preference. Printing it read better -- "thrown: :kw" -- and `pr-str`
+         ;; is the whole printer, reachable from a function every program exports.
+         ;; MEASURED both ways on `(ns t) (defn main [_] "ok")`: the printing
+         ;; version cost +1 536 bytes of CLR assembly (29 184 to 30 720) and
+         ;; +9 175 bytes of wasm (662 237 to 671 412) in EVERY program, and broke
+         ;; `bin/check-four-ops` by moving the natives count 88 to 89 -- a count
+         ;; that is a property of the image, so every target must agree on it. Nine
+         ;; kilobytes on every artifact is too much for a message on a path that
+         ;; only runs when a program has already failed.
+         ;;
+         ;; `flint.rt/kind` is a primitive and adds nothing. It says less than the
+         ;; value would, and it says it truthfully: "a keyword was thrown, with no
+         ;; message" is checkable, where "a non-exception value was thrown" would
+         ;; be a guess this code cannot make.
+         :message (or (ex-message e)
+                      (str "a " (name (flint.rt/kind e))
+                           " was thrown, with no message"))}))))
 
 (defn- serve-calls
   "Serve one bound port until it closes.

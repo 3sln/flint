@@ -74,12 +74,20 @@ does not announce itself; it presents as a real finding.
 | What you changed | What must be rebuilt, in order |
 |---|---|
 | `src/` — the COMPILER | `bin/build-dist`, then `cargo build --release -p flint-cli`, then `sdks/cli/build` |
-| `lib/` — the stdlib | `cargo build --release -p flint-cli`, then `sdks/cli/build` |
+| `lib/` — the stdlib | `bin/build-dist`, then `cargo build --release -p flint-cli`, then `sdks/cli/build` |
 | unit modules | `bin/build-units` |
 
 The two halves are embedded by different routes, and that is the trap.
 `cli/build.rs` reads `lib/` from source at build time, so a stdlib change needs
-only the cargo build. The compiler is embedded as `dist/flintc.bytecode`, which
+the cargo build — **and `bin/build-dist` BEFORE it, which this table denied until
+2026-09-28.** `cli/src/main.rs` does `include_str!("../../dist/slots.json")`, and
+`bin/build-dist` is what writes that file. A stdlib edit that changes which
+builtins are REACHABLE moves the slot table, so building the CLI first embeds the
+old one: measured, a one-line change to `lib/flint/system.cljc` made the native and
+npm doors disagree on `:to :wasm` by 1 166 bytes and failed all five byte-identity
+rows of `sdks/cli/selftest.mjs`. Doing it in the stated order fixed all five with
+no source change. "A stdlib change needs only the cargo build" was true of a
+stdlib change that adds no builtin call, which is most of them and not all. The compiler is embedded as `dist/flintc.bytecode`, which
 cargo copies but does not produce — so a `src/` change that skips
 `bin/build-dist` gets re-embedded unchanged, and the binary runs the old
 compiler while reporting success.
