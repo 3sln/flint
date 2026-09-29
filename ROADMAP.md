@@ -11,6 +11,19 @@
 > section 2 warns about, and it costs the same thing — the next person plans around
 > it. Each corrected row now names the test that proves it and the date the old
 > claim stopped being true.
+>
+> **WHAT WAS CHECKED, so the next reader does not repeat it.** Twelve rows, chosen
+> for being cheap to falsify rather than for looking suspect. Five were wrong (the
+> ones above). Seven were TRUE and are recorded here so they are not re-probed:
+> `(recur)` at top level still loops for ever and needs a kill; `:to :native` still
+> refuses, with its own reason; there is no nREPL in either CLI; there is no
+> `Equiv`/`Hash` protocol; there is no transient rope for text; `flint run` still
+> has no AOT (`run_source` takes no `optimize` and mentions neither `aot` nor
+> `perf`); and `:args` still takes a bare vector, so `{:capabilities [..]}` arrives
+> as the one-element list `["{:capabilities [:fs]}"]`.
+>
+> The other rows are UNCHECKED. A five-in-twelve rate is a reason to check the one
+> you are about to plan around, not a reason to believe the file is mostly wrong.
 
 
 This is a single organised view over `DECISIONS.md` (63 decision records, as
