@@ -22,11 +22,17 @@
 > `perf`); and `:args` still takes a bare vector, so `{:capabilities [..]}` arrives
 > as the one-element list `["{:capabilities [:fs]}"]`.
 >
-> **Two rows marked DONE were spot-checked too, which is the direction `AGENTS.md`
-> section 2 actually warns about.** `clojure.zip`/`clojure.data`/`clojure.datafy`
-> are really there (`z/node`, a three-way `d/diff`, `df/datafy` all answer). The
-> dispatch row was quoting a bare "6.2 ns/instr" that its own source contradicts —
-> corrected to the range and its two payloads.
+> **Rows marked DONE were spot-checked too, which is the direction `AGENTS.md`
+> section 2 actually warns about.** Four held: `clojure.zip`/`clojure.data`/
+> `clojure.datafy` are really there (`z/node`, a three-way `d/diff`, `df/datafy` all
+> answer); the six Clojure divergences — `pop nil`, `subvec` bounds, `peek` on a
+> map, `nth` on a map, `contains?` on a list, map-entry-is-a-vector — were run
+> through flint AND through babashka side by side and agree in all seven
+> expressions, including that `(pop nil)` answers nil on both rather than throwing;
+> and one string hash really does span all three tiers (same text inline, flat and
+> as a rope: equal hashes, equal strings). The dispatch row was the one that had
+> decayed — a bare "6.2 ns/instr" its own source contradicts, corrected to the range
+> and its two payloads.
 >
 > The other rows are UNCHECKED. A five-in-twelve rate is a reason to check the one
 > you are about to plan around, not a reason to believe the file is mostly wrong.
