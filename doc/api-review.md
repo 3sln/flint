@@ -496,7 +496,7 @@ namespace.
 
 **Reviewed:** ☐ not signed off
 
-321 public vars. flint's clojure.core. Written in cljc on top of the Rust primitives, for the reason in DECISIONS.md#modularity: a cljc function tree-shakes per var, so a program that never calls `partition-by`...
+322 public vars. flint's clojure.core. Written in cljc on top of the Rust primitives, for the reason in DECISIONS.md#modularity: a cljc function tree-shakes per var, so a program that never calls `partition-by`...
 
 **Change requests:** _none recorded_
 
