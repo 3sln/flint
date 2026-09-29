@@ -230,6 +230,37 @@
                                   (mapv (fn [x] (str "  " (:dep x) "  -- " (:reason x)))
                                         (deps/lending-errors d (or (:deps d) {}))))))
 
+          ;; RULE 2 -- a dependency declaring a guard must be granted it -- and
+          ;; the three-argument `lending-errors` that implements it, which had
+          ;; never been called: the line above passes two, so `guards` was
+          ;; always `{}` and the rule contributed nothing.
+          ;;
+          ;; NOT A HOLE, and that was established by compiling the bypass rather
+          ;; than read off the code: the REQUIRE-level guard already refused a
+          ;; build that used the guarded namespace, naming the namespace and two
+          ;; absolute paths. What this adds is the refusal at the COORDINATE --
+          ;; the dependency's name, and the exact key to add to `deps.edn` --
+          ;; and one real tightening: a guarded library listed directly and
+          ;; never required used to build, and now does not.
+          ;;
+          ;; SEPARATE FROM RULE 1, because it cannot run where rule 1 does. Rule 1
+          ;; reads only this `deps.edn` and refuses before anything is fetched; a
+          ;; guard lives in the DEPENDENCY's `deps.edn`, so it is known only once
+          ;; that has been read. `fetch` is therefore not in this list -- fetching
+          ;; is how a remote guard becomes visible -- and a dependency whose
+          ;; manifest is unread is judged on the next pass rather than waved
+          ;; through as unguarded (`deps/plan-guards`).
+          (and (some #(= 2 (:rule %))
+                     (deps/lending-errors d (or (:deps d) {}) (deps/plan-guards plan)))
+               (contains? #{"build" "task" "paths"} cmd))
+          (oops (str/join "\n"
+                          (concat ["a dependency is guarded and this deps.edn does not grant it:"]
+                                  (mapv (fn [x] (str "  " (:dep x) "  -- " (:reason x)))
+                                        (filterv #(= 2 (:rule %))
+                                                 (deps/lending-errors
+                                                  d (or (:deps d) {})
+                                                  (deps/plan-guards plan)))))))
+
           ;; A dependency flint would fetch but cannot as written stops the
           ;; build HERE, naming itself. Letting it through produced `cannot find
           ;; source for namespace greeter.core`, which is true and names the

@@ -840,6 +840,64 @@
                                  ":deps {some/dep {:local/root \".\" :flint/capabilities-grant [:host]}}}"))
                       "lends a capability it does not hold")))))
 
+;; --- rule 2: a dependency declaring a guard must be granted it ------------
+;;
+;; Implemented in `lending-errors`' three-argument form and CALLED BY NOTHING:
+;; the one caller passed two arguments, so `guards` was always `{}`. Wiring it
+;; up was not enough. The guard travelled from the dependency's `deps.edn`
+;; through the plan correctly and the rule STILL never fired, because
+;; `deps.edn` keys its entries with symbols and the plan records `:dep` as a
+;; string, so the lookup missed for every dependency. Found by tracing each
+;; stage after the probe still built; the rows below are that probe.
+;;
+;; NOT AN AUTHORITY HOLE, established by compiling it: the require-level guard
+;; already refused a build that used the guarded namespace. What rule 2 adds is
+;; the refusal at the coordinate, naming the dependency and the key to add.
+(let [root (str (fs/create-temp-dir))
+      proj (str root "/proj")
+      lib (str root "/guarded")]
+  (fs/create-dirs (str proj "/src/app"))
+  (fs/create-dirs (str lib "/src/guarded"))
+  (spit (str lib "/deps.edn") "{:paths [\"src\"] :flint/capabilities-guard [:fs]}\n")
+  (spit (str lib "/src/guarded/core.cljc") "(ns guarded.core)\n(defn hello [] \"hi\")\n")
+  (spit (str proj "/src/app/main.cljc")
+        "(ns app.main (:require [guarded.core :as g]))\n(defn main [_] (g/hello))\n")
+  (let [with (fn [cmd deps-edn]
+               (spit (str proj "/deps.edn") deps-edn)
+               (:out (flint-in* proj cmd)))
+        dep "{:local/root \"../guarded\""]
+    (check-that "a guarded dependency granted nothing is REFUSED at the coordinate"
+                (str/includes? (with "paths" (str "{:paths [\"src\"] :deps {org/guarded " dep "}}}"))
+                               "a dependency is guarded and this deps.edn does not grant it"))
+    (check-that "  ... naming the dependency and the exact key to add"
+                (let [o (with "paths" (str "{:paths [\"src\"] :deps {org/guarded " dep "}}}"))]
+                  (and (str/includes? o "org/guarded")
+                       (str/includes? o ":flint/capabilities-grant [:fs]"))))
+    ;; Granting SOMETHING is not granting the guard.
+    (check-that "  ... and granting the WRONG capability is refused too"
+                (str/includes? (with "paths"
+                                     (str "{:paths [\"src\"] :flint/capabilities-grant [:env] "
+                                          ":deps {org/guarded " dep " :flint/capabilities-grant [:env]}}}"))
+                               "does not grant it"))
+    ;; THE CONTROL: without it every row above would pass if the rule refused
+    ;; every guarded dependency whatever was granted.
+    (check-that "  ... but a project that holds :fs and lends it resolves"
+                (str/includes? (with "paths"
+                                     (str "{:paths [\"src\"] :flint/capabilities-grant [:fs] "
+                                          ":deps {org/guarded " dep " :flint/capabilities-grant [:fs]}}}"))
+                               "guarded/src"))
+    ;; RULE 1 STILL COMES FIRST. Lending :fs without holding it is minting, and
+    ;; that is the refusal a reader must see, not rule 2's.
+    (check-that "  ... and lending :fs without holding it is rule 1's refusal, not rule 2's"
+                (str/includes? (with "paths"
+                                     (str "{:paths [\"src\"] :deps {org/guarded " dep
+                                          " :flint/capabilities-grant [:fs]}}}"))
+                               "lends a capability it does not hold"))
+    ;; `fetch` is how a REMOTE guard becomes visible, so rule 2 does not stop it.
+    (check-that "  ... and fetch is not refused"
+                (not (str/includes? (with "fetch" (str "{:paths [\"src\"] :deps {org/guarded " dep "}}}"))
+                                    "is guarded")))))
+
 
 ;; --- a transitive's relative path is relative to what DECLARED it ---------
 ;;

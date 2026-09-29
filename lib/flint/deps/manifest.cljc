@@ -160,7 +160,14 @@
   (let [d (edn/read-string text)]
     {:format :deps-edn
      :deps (or (:deps d) {})
-     :paths (vec (:paths d))}))
+     :paths (vec (:paths d))
+     ;; WHAT A REQUIRER MUST HOLD, which only this format can say: npm and
+     ;; maven have no notion of it. Carried so the dependency walk can hand it
+     ;; to `lending-errors`, whose rule 2 -- a dependency declaring a guard must
+     ;; be granted it -- was written, correct, and unable to fire, because
+     ;; nothing read the guard out of a fetched dependency
+     ;; (`DECISIONS.md#system-namespaces-and-deps`).
+     :guard (:flint/capabilities-guard d)}))
 
 (defn package-json
   "`package.json`. `dependencies` only -- `devDependencies` are the package's

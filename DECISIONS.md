@@ -4016,8 +4016,8 @@ Requiring `flint.sys.net`, `flint.sys.proc` or `flint.sys.clock` answers
 `git`, `curl` and `unzip` at lines 648-714, so the babashka path is still there.
 
 *The delegation correction, which is a capability claim and therefore was
-probed rather than read.* **Rule 1 was inert and is now live; rules 2 and 3
-still are not.** As first written this paragraph said all three of
+probed rather than read.* **Rules 1 and 2 are live; rule 3 is not.** Rule 2
+went live 2026-09-29 (see its bullet). As first written this paragraph said all three of
 `system-namespaces-and-deps`' delegation rules were inert in the shipped
 binary, and that `lending-errors` had no caller anywhere in the tree. That was
 true when it was written and `25c50dc6` fixed the first of the three; the
@@ -4025,7 +4025,7 @@ paragraph was not updated with it, so it went on citing a file the function had
 by then left. What holds today, re-probed:
 
 * **Rule 1 — you cannot lend what you do not hold — is enforced.**
-  `lending-errors` (`lib/flint/deps.cljc:707`) moved out of
+  `lending-errors` (`lib/flint/deps.cljc:724`) moved out of
   `flint.deps.resolve`, which `flint.cli` can never require: that namespace
   pulls in `flint.deps.npm` and `flint.deps.git`, which are VIRTUAL and served
   by the CLI, so the rule was structurally unreachable from the only place a
@@ -4034,12 +4034,38 @@ by then left. What holds today, re-probed:
   `fetch`. `bb test/cli.clj` passes today, including the refusal and both
   controls — a project that HOLDS the capability may lend it, and a project
   with no grants is untouched.
-* **Rule 2 — a dependency declaring a guard must be granted it — is written but
-  cannot fire.** `lending-errors` implements it, but only in its 3-arity, from
-  a `guards` map of each dependency's own demands. The one caller uses the
-  2-arity, so `guards` is always `{}` and the rule contributes nothing. It
-  needs the fetch plan to supply each fetched dependency's guards, which it
-  does not yet.
+* **Rule 2 — a dependency declaring a guard must be granted it — is enforced,
+  as of 2026-09-29.** It was written and could not fire: `lending-errors`
+  implements it only in its 3-arity, from a `guards` map of each dependency's
+  own demands, and the one caller used the 2-arity, so `guards` was always `{}`.
+  Now the `deps.edn` scanner carries `:flint/capabilities-guard`, the plan keeps
+  it per entry (`:guard`), `flint.deps/plan-guards` builds the map, and
+  `flint.cli` calls the 3-arity for `build`, `task` and `paths` -- NOT `fetch`,
+  because a remote guard is only visible once its `deps.edn` has been read, so
+  an unread dependency is judged on the pass after its fetch rather than waved
+  through as unguarded.
+
+  **Wiring it was not enough, and the probe is what said so.** The guard reached
+  the plan and the rule still never fired: `deps.edn` keys entries with SYMBOLS
+  and the plan records `:dep` as a STRING, so the lookup missed for every
+  dependency. Reading `fetch-plan` had suggested the two were one type; tracing
+  each stage showed `:guard [:fs]` on the entry, `{"org/guarded" [:fs]}` from
+  `plan-guards`, and a symbol as the lookup key. The lookup is `(str nm)` now
+  and the docstring states the key type.
+
+  **Not an authority hole, measured by compiling the bypass before fixing it.**
+  The require-level guard (`workspace-capabilities` level one) already refused
+  a build that used the guarded namespace, naming the namespace and two
+  absolute paths. What rule 2 adds is the refusal at the COORDINATE -- the
+  dependency's name and the exact `:flint/capabilities-grant` to add -- and one
+  real tightening: a guarded library listed directly and never required used
+  to build, and is now refused, which is what the rule says.
+
+  Six rows in `bb test/cli.clj`: the refusal, that it names the dependency and
+  the key, that granting the WRONG capability is refused, the CONTROL that a
+  project holding and lending the guard resolves, that lending without holding
+  is still rule 1's refusal rather than rule 2's, and that `fetch` is not
+  stopped.
 * **Rule 3 — `flint deps add` writing the grant it found — is still absent.**
   `cli/src/depscmd.rs` neither asks for nor writes a grant.
 

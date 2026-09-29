@@ -666,6 +666,12 @@
                           ;; side only ever runs what the manifest names.
                           :exec (:artifact/executable a)
                           :fetched? (boolean fetched?)
+                          ;; The dependency's OWN guard, from its own
+                          ;; `deps.edn` -- nil until it has been read, which for
+                          ;; a remote coordinate means until it is fetched.
+                          ;; Rule 2 judges only what it can see, so an unfetched
+                          ;; dependency is judged on the pass after its fetch.
+                          :guard (:guard m)
                           :paths (when fetched?
                                    (if (seq (:paths m))
                                      (mapv (fn [p] (str root "/" p)) (:paths m))
@@ -673,6 +679,17 @@
                (recur (vec (concat (rest todo) (rebase-relative (kids-of kind m) root)))
                       (conj seen nm)
                       (conj out entry))))))))))
+
+(defn plan-guards
+  "`{dep-name #{capability ..}}` for every dependency whose own guard has been
+  read -- the third argument `lending-errors` needs and never got.
+
+  Keyed by the SAME name `deps.edn` uses for the entry, because rule 2 looks the
+  guard up by the entry's key. A dependency whose manifest has not been read yet
+  is absent rather than empty: \"no guard\" and \"not read yet\" are different
+  facts, and only the first one lets the build through."
+  [plan]
+  (into {} (for [e plan :when (seq (:guard e))] [(:dep e) (:guard e)])))
 
 (defn dep-paths
   "Every fetched dependency's source roots, in the order they were resolved."
@@ -722,9 +739,12 @@
      with the dependency's name in front of them rather than a namespace three
      levels down.
 
-  `guards` is `{dep-name #{capability ..}}` -- what each dependency's own
+  `guards` is `{\"dep-name\" #{capability ..}}` -- what each dependency's own
   project file demands -- because that is read from the fetched dependency and
-  is not in this file's input.
+  is not in this file's input. KEYED BY STRING, because that is what the plan
+  records and `plan-guards` builds; the entry's symbol key is looked up as
+  `(str nm)`. The type was left unsaid here once, and the lookup missed
+  silently for every dependency.
 
   Returns `[{:dep :missing :reason}]`, empty when all is well. REPORTED rather
   than thrown for the same reason `plan` reports: whether it is fatal is the
@@ -739,7 +759,7 @@
                  :let [lent (names-of (:flint/capabilities-grant coord))
                        over (into #{} (remove held lent))]
                  :when (seq over)]
-             {:dep nm :missing over
+             {:dep nm :missing over :rule 1
               :reason (str "this project lends " (pr-str over) " to " nm
                            " and was never granted it"
                            (if (seq held)
@@ -747,11 +767,20 @@
                              " -- it holds nothing"))})
            ;; 2. a guard that was not granted
            (for [[nm coord] deps
-                 :let [needs (names-of (get guards nm))
+                 ;; BY THE NAME AS A STRING, on both sides. `deps.edn` keys its
+                 ;; entries with SYMBOLS and the plan records `:dep` as a STRING,
+                 ;; so looking a symbol up in a map the plan built answered nil
+                 ;; for every dependency -- and rule 2, wired up at last, still
+                 ;; could not fire. Found by tracing each stage of the probe
+                 ;; after the probe still built: the entry carried `:guard [:fs]`,
+                 ;; `plan-guards` held `{"org/guarded" [:fs]}`, and the lookup
+                 ;; key was the symbol `org/guarded`. Reading the code had said
+                 ;; the two were the same type.
+                 :let [needs (names-of (get guards (str nm)))
                        lent (names-of (:flint/capabilities-grant coord))
                        short (into #{} (remove lent needs))]
                  :when (seq short)]
-             {:dep nm :missing short
+             {:dep nm :missing short :rule 2
               :reason (str nm " requires " (pr-str short)
                            " and this deps.edn does not grant it -- add "
                            ":flint/capabilities-grant " (pr-str (vec (sort short)))
