@@ -1217,7 +1217,7 @@ claim fails the build.
 <!-- BEGIN GENERATED COVERAGE -->
 | namespace | vars | macros | missing vs Clojure | flint-only |
 |---|---:|---:|---:|---:|
-| `clojure.core` | 321 | 45 | 376 | 0 |
+| `clojure.core` | 322 | 46 | 376 | 0 |
 | `clojure.core.protocols` | 4 | 0 | n/a | n/a |
 | `clojure.data` | 5 | 0 | n/a | n/a |
 | `clojure.datafy` | 2 | 0 | n/a | n/a |

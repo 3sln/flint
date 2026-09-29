@@ -165,6 +165,7 @@
     lazy-seq
     let
     letfn
+    letfn*
     list
     list*
     list?
@@ -361,6 +362,7 @@
     lazy-seq
     let
     letfn
+    letfn*
     loop
     or
     some->
@@ -372,7 +374,7 @@
     when-not
     when-some
     while},
-  :count 321,
+  :count 322,
   :absent
   #{*'
     *1

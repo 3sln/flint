@@ -134,12 +134,29 @@
     stream-transduce! struct struct-map unquote-splicing update-proxy
     vector-of volatile? with-loading-context})
 
+(def clojure-special-forms
+  "Names Clojure HAS that no `ns-publics` anywhere will show, because they are
+  SPECIAL FORMS rather than vars.
+
+  flint implements some of them as macros -- `letfn*` is one, and
+  `clojure.core/letfn` expands into it exactly as Clojure's does -- which makes
+  them vars HERE. A comparison against a var list then reports them as names flint
+  invented, and `:extra`'s docstring above already records that failure mode for
+  three names babashka cannot see. Same error, different cause: there the baseline
+  was incomplete, here the baseline is the wrong KIND of list.
+
+  Only `letfn*` is here because only it is affected: every other special form
+  (`fn*`, `let*`, `try`, `new`, `case*`, `deftype*` ..) is a special form in
+  flint's analyzer too, so none of them is a var in `clojure.core` and none has
+  ever appeared in `:extra` -- which was `#{}` until `letfn*` landed."
+  '#{letfn*})
+
 (defn clojure-publics [ns-sym]
   (try
     (require ns-sym)
     (let [theirs (set (map (comp symbol name) (keys (ns-publics (find-ns ns-sym)))))]
       (if (= ns-sym 'clojure.core)
-        (into theirs babashka-blind-spot)
+        (into (into theirs babashka-blind-spot) clojure-special-forms)
         theirs))
     (catch Throwable _ nil)))
 

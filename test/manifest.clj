@@ -117,6 +117,11 @@
     lazy-seq (lazy-seq [1])
     lazy-cat (lazy-cat [1] [2])
     letfn (letfn [(f [] 1)] (f))
+    ;; The SPECIAL-FORM spelling, with the flat `name value` pairs it takes.
+    ;; `letfn` expands into this one, so a use of `letfn` alone leaves the
+    ;; macro every other Clojure writes -- and every one of jank's tests --
+    ;; exercised by nothing.
+    letfn* (letfn* [f (fn [] 1)] (f))
     delay (delay 1)
     declare (declare probe-decl)
     fn (fn [] 1)
