@@ -17,20 +17,33 @@ numbers came from is not recorded and cannot be recovered from the file; the
 last change to it is `8cee498d`, 2026-09-11, so they are no newer than that and
 predate the kin port's later work. As of 2026-09-26 `bin/jank-suite` prints both
 -- `flint <sha> on <date>` and `jank <sha>` -- so a future capture carries its
-own subject as well as its input. The numbers below are left as they are rather
-than re-run: re-running needs a jank checkout, which is not in this tree.
+own subject as well as its input.
+
+**RE-RUN 2026-09-28**, against a sparse checkout of jank at `0169e88`
+(`git clone --depth 1 --filter=blob:none --sparse` and
+`git sparse-checkout set compiler+runtime/test/jank` -- 4 MB, tests only, which is
+all `bin/jank-suite` reads). The figures this replaces stand recorded below,
+because both moved and so did the DENOMINATOR: jank has added a `fail-*` test
+since, so 294 and 295 are scores over two different suites and the old total was
+never comparable to the new one by subtraction.
 
 ## The numbers
 
-    native                     port (jvm)
-    pass-*   130 / 195         130 / 195
-    fail-*    60 /  99          64 /  99
+    flint 753b5baf, jank 0169e88, 2026-09-28
+
+    native                     port (jvm)          (was, undated)
+    pass-*   131 / 195         131 / 195           130 / 195 both
+    fail-*    62 / 100          64 / 100            60 / 99, 64 / 99
     ---------------------------------------
-    TOTAL    190 / 294 (64%)   194 / 294 (65%)
+    TOTAL    193 / 295 (65%)   195 / 295 (66%)     190 / 294, 194 / 294
 
 **The `pass-*` halves are identical, test for test.** Not the same COUNT --
 the same SET: `comm` over the two failure lists is empty in both directions, so
-the native runtime and the port fail the same 65 and pass the same 130.
+the native runtime and the port fail the same 64 and pass the same 131. Checked
+again on the re-run, and it is the claim worth re-checking rather than the score:
+two runtimes can post 131 apiece while disagreeing about twenty tests each way.
+`SHOW_FAILURES=1` lists the `pass-*` failures only -- 64 lines, 0 `FAIL-EXPECTED`
+-- so that is the half the set comparison covers.
 
 Equal counts would not have been that claim. Two runtimes can score 130 apiece
 while disagreeing about twenty tests in each direction, and that is exactly
@@ -129,23 +142,31 @@ not refer to each other"*. Mutual recursion in a `let` needs the bindings to
 exist before their initialisers run, which is a real feature and not an
 oversight.
 
-> **THOSE FOURTEEN NEED A RE-RUN, and this note is not one.** `letfn` WORKS as a
-> macro in `lib/clojure/core.cljc` and has since `b7e3d247` (2026-08-22) -- a
-> month before this file was last edited. Measured 2026-09-28 through
-> `target/release/flint run`: mutually recursive `even2?`/`odd2?` answers, and so
-> does a multi-arity spec whose first arity calls its sibling. Only `letfn*`
-> written DIRECTLY still refuses, with the message quoted above.
+> **THE FOURTEEN ARE EXACT, and the re-run names them.** `SHOW_FAILURES=1` lists
+> fourteen `PASS-EXPECTED` entries under `form/letfn`, all "compile failed", on both
+> runtimes: `pass-destructure`, `pass-empty`, `pass-empty-body-with-bindings`,
+> `pass-empty-body-within-let`, `pass-multi-arity`, `pass-munged-name`,
+> `pass-practical`, `pass-varargs`, and six more under `binding/`.
 >
-> This paragraph also says, twenty lines up, that some of the 38 permissive
-> failures are "`letfn` with a malformed binding vector" -- so the suite's tests
-> write `letfn`, not `letfn*`, and a test writing `letfn` cannot reach that
-> message now. Either the table predates the macro, or these fourteen fail for a
-> reason nobody has looked at since.
+> **BECAUSE JANK'S TESTS WRITE THE SPECIAL FORM.** `pass-multi-arity.jank` is
+> `(letfn* [a (fn* a ([v] (a v :something)) ([v & args] v))] (a :success))` -- not
+> `letfn`, not `fn`. Twenty of the twenty-one tests under `form/letfn` write
+> `letfn*`, so flint's `letfn` MACRO (`lib/clojure/core.cljc`, since `b7e3d247` on
+> 2026-08-22) cannot help them: it is a different name.
 >
-> It is left UNCORRECTED rather than guessed at: settling it needs a jank checkout
-> and `bin/jank-suite <checkout>`, and there is none on this machine. A number
-> nobody re-measured is the thing this file exists to avoid, and replacing it with
-> a number nobody measured either would be worse.
+> The one test that writes plain `letfn` is `binding/pass-shadow-outer-scope.jank`,
+> and it is absent from the failure list -- it passes. That single test IS the
+> `pass-*` count moving 130 to 131. The macro earns exactly one test and the special
+> form still owes fourteen.
+>
+> **I GOT THIS WRONG FIRST, and the wrong version is worth keeping.** This note
+> previously reasoned that since the paragraph above lists "`letfn` with a malformed
+> binding vector" among the permissive failures, the suite must write `letfn` rather
+> than `letfn*` -- so the fourteen either predated the macro or failed for some
+> unexamined reason. The directory is named `letfn`; the test bodies say `letfn*`. A
+> directory name is not a form, and the inference was drawn from this file's prose
+> instead of from the tests. What saved it was flagging the number as needing a
+> re-run rather than "correcting" it to zero.
 
 Seven failures are C++ interop that leaked out of `cpp/` into the language
 directories -- a `form/loop` test whose subject is `cpp/raw`. Those are not
