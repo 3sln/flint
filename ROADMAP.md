@@ -22,6 +22,12 @@
 > `perf`); and `:args` still takes a bare vector, so `{:capabilities [..]}` arrives
 > as the one-element list `["{:capabilities [:fs]}"]`.
 >
+> **Two rows marked DONE were spot-checked too, which is the direction `AGENTS.md`
+> section 2 actually warns about.** `clojure.zip`/`clojure.data`/`clojure.datafy`
+> are really there (`z/node`, a three-way `d/diff`, `df/datafy` all answer). The
+> dispatch row was quoting a bare "6.2 ns/instr" that its own source contradicts —
+> corrected to the range and its two payloads.
+>
 > The other rows are UNCHECKED. A five-in-twelve rate is a reason to check the one
 > you are about to plan around, not a reason to believe the file is mostly wrong.
 
@@ -68,7 +74,7 @@ by-area view on top of it.
 
 | item | status | decision |
 |---|---|---|
-| Stack-machine interpreter, dispatch measured at 6.2 ns/instr | done | [`dispatch`](DECISIONS.md#dispatch) |
+| Stack-machine interpreter; dispatch is **4.78–6.69 ns/instruction depending on the payload**, not one number | done | [`dispatch`](DECISIONS.md#dispatch) — this row said a bare "6.2 ns/instr", which its own source contradicts twice over: the decision's re-measurement gives 4.78 ns/instr on a 3 000 000-iteration `loop` (39 000 824 steps, 186.2 ms) and 6.69 ns/instr on a `str/split` + `frequencies` payload (7 839 964 steps, 52.5 ms), best of three fresh node instances on a wasm build. A single figure here cannot say which payload it is from, and `AGENTS.md` section 3 names this exact unit as right for throughput and wrong for latency |
 | Ropes for strings (3 tiers: inline/flat/rope, balanced B-tree) | done | [`strings-and-matching`](DECISIONS.md#strings-and-matching) §1–2 |
 | Pike VM / Thompson-NFA regex over a rope cursor, no backtracking | done | [`matching-over-ropes`](DECISIONS.md#matching-over-ropes) |
 | Byte strings + their transient (rope treatment for bytes) | done | [`no-runtime-linking`](DECISIONS.md#no-runtime-linking) |
