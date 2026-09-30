@@ -1,41 +1,75 @@
-name: Publish to npm
+name: Publish
 
-# Publishing a release (draft or otherwise) creates its tag and publishes the
-# package. The suite runs first, so a red build cannot reach the registry.
+# A version bump in a package's `package.json` publishes that package.
 #
-# Requires an `NPM_TOKEN` repository secret — an npm automation token with
+# `bin/release-plan` is the one list of what this repository publishes, and it
+# decides by asking the REGISTRY whether each package's version is already
+# there -- not by diffing against the parent commit. So a first release, a run
+# that failed half way (one package out, the other not) and a bump that landed
+# while this workflow was broken are all caught the same way: the next run
+# publishes whatever the registry does not have yet, and nothing else.
+#
+# `bin/set-version` writes `meta.edn`'s version into every manifest at once and
+# `bin/check-version` gates that they agree, so in practice a bump names both
+# packages and one tag, `v<version>`.
+#
+# Requires an `NPM_TOKEN` repository secret: an npm automation token with
 # publish rights on the @3sln scope.
 
 on:
-  release:
-    types:
-      - published
+  push:
+    branches:
+      - main
+    paths:
+      - sdks/esm/package.json
+      - sdks/cli/package.json
+      - bin/release-plan
+      - .github/workflows/publish.yml
+  # Publishes whatever the registry lacks. Safe to run at any time: a version
+  # that is already published is skipped, not republished.
+  workflow_dispatch:
 
 permissions:
-  # `contents: write` so the built artifacts can be attached to the release
-  # being published.
   contents: write
-  # Required for npm provenance. Drop this, and the --provenance flag below,
+  # Required for npm provenance. Drop this, and the --provenance flags below,
   # if the repository is ever made private: provenance only works for packages
   # published from a public repository.
   id-token: write
 
 concurrency:
-  group: publish-${{ github.event.release.tag_name }}
+  group: publish
   cancel-in-progress: false
 
 jobs:
-  publish:
+  plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    outputs:
+      packages: ${{ steps.plan.outputs.packages }}
+      any: ${{ steps.plan.outputs.any }}
+      tag: ${{ steps.plan.outputs.tag }}
     steps:
-      - name: Checkout the released tag
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: What does the registry not have yet?
+        id: plan
+        run: |
+          set -euo pipefail
+          ./bin/release-plan
+          ./bin/release-plan --json > /dev/null   # writes `packages` and `any`
+          echo "tag=v$(node -p "require('./sdks/esm/package.json').version")" >> "$GITHUB_OUTPUT"
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
+  publish:
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
@@ -45,112 +79,79 @@ jobs:
           rustup toolchain install nightly --profile minimal
           rustup target add wasm32-unknown-unknown --toolchain nightly
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           key: wasm32-nightly
 
-      - name: Set up babashka
-        uses: DeLaGuardo/setup-clojure@13
+      - uses: DeLaGuardo/setup-clojure@13
         with:
           bb: latest
 
-      - name: Check the tag matches package.json
-        env:
-          TAG: ${{ github.event.release.tag_name }}
-        run: |
-          set -euo pipefail
-          version="$(node -p "require('./sdks/esm/package.json').version")"
-          if [ "$TAG" != "v$version" ]; then
-            echo "::error::Release tag $TAG does not match sdks/esm/package.json version $version."
-            echo 'Publishing would ship something other than what the release names.'
-            exit 1
-          fi
-          echo "$TAG matches package.json."
-
-      # The suite leaves the tree in the PRODUCTION configuration on its way
-      # out (DECISIONS.md#two-builds), which is the one that must ship. Running it
-      # here is both the gate and the build: `units/` is generated, not
-      # tracked, and the published tarball needs it.
-      - name: Test, and build the units that ship
+      # The whole gate, from the commit being published. It also leaves the
+      # tree in the PRODUCTION configuration (DECISIONS.md#two-builds), which is
+      # the one that must ship.
+      - name: Test
         run: ./bin/test
 
       - name: Check the production units are present and diagnostics-free
         run: |
           set -euo pipefail
           test -f units/flint/rt.unit.edn || { echo '::error::units/ was not built'; exit 1; }
-          # bin/diag-exports.py appends the diagnostic edge to the runtime
-          # manifest, and ONLY the --diagnostics build runs it. Verified both
-          # ways: present in that build, absent in this one.
           if grep -q 'stat_bytes_allocated' units/flint/rt.unit.edn; then
             echo '::error::units/ carries the diagnostics build; publish must ship the stripped one.'
             exit 1
           fi
-          echo "units/ is the production build."
 
-      # The wasm distributable: the compiler and the loader, built from the
-      # tag being published. These are what let a consumer compile and run
-      # Clojure with no babashka, no JVM, no Rust and no linker, so they have
-      # to be built here rather than committed -- a tracked binary is a binary
-      # nobody checks against the source beside it.
       - name: Build the wasm distributable
         run: ./bin/build-dist
 
-      - name: Check the distributable is what it claims
+      # Each package the plan named: its own build, its own self-test against
+      # what was just built, a dry run that shows the tarball, then the publish.
+      # FLINT_DIST_FRESH: the distributable was built one step up, and the
+      # package builds would otherwise rebuild it.
+      - name: Build, test and publish each package
+        env:
+          PACKAGES: ${{ needs.plan.outputs.packages }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          FLINT_DIST_FRESH: '1'
         run: |
           set -euo pipefail
-          for f in dist/flintc.wasm dist/flint-loader.wasm dist/flint-runtime.wasm \
-                   dist/flint-runtime-aot.wasm dist/builtins.json dist/slots.json \
-                   dist/slots-aot.json; do
-            test -s "$f" || { echo "::error::$f is missing or empty"; exit 1; }
+          echo "$PACKAGES" | node -e '
+            let s = ""; process.stdin.on("data", (d) => s += d).on("end", () => {
+              for (const p of JSON.parse(s)) console.log([p.dir, p.name, p.version, p.build, p.test].join("\t"));
+            });' |
+          while IFS="$(printf '\t')" read -r dir name version build test; do
+            echo "::group::$name@$version"
+            sh -c "$build"
+            sh -c "$test"
+            (cd "$dir" && npm pack --dry-run)
+            (cd "$dir" && npm publish --access public --provenance)
+            echo "Published \`$name@$version\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "::endgroup::"
           done
-          # `bin/build-dist` ends by running the SDK self-test against dist/
-          # and nothing else, so reaching here means it passed. Say what it is.
-          {
-            echo "### Distributable"
-            echo
-            echo '| artifact | bytes |'
-            echo '| --- | ---: |'
-            for f in dist/flintc.wasm dist/flint-runtime.wasm dist/flint-runtime-aot.wasm; do
-              echo "| \`$f\` | $(wc -c < "$f" | tr -d ' ') |"
-            done
-          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Attach the distributable to the release
+      - name: Tag and release, with the distributable attached
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ needs.plan.outputs.tag }}
         run: |
           set -euo pipefail
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --generate-notes --target "$GITHUB_SHA"
+          fi
           gh release upload "$TAG" \
             dist/flintc.wasm dist/flint-loader.wasm \
             dist/flint-runtime.wasm dist/flint-runtime-aot.wasm \
             dist/builtins.json dist/slots.json dist/slots-aot.json \
             --clobber
 
-      # The SDK is its own package with its own build (`sdks/`), and what is
-      # published is the DISTRIBUTABLE: one portable ESM with the compiler, the
-      # runtimes and the standard library inside it. No `node:` import, no
-      # filesystem, no fetch -- so it works the same in a browser, in node, in
-      # a Worker and in Deno.
-      - name: Build the JavaScript SDK
-        run: ./sdks/esm/build
-
-      - name: Test it, as the thing that ships
-        run: cd sdks/esm && node selftest.mjs
-
-      - name: Show what will be published
-        run: cd sdks/esm && npm pack --dry-run
-
-      - name: Publish
-        run: cd sdks/esm && npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Summarise
-        env:
-          TAG: ${{ github.event.release.tag_name }}
-        run: |
-          version="$(node -p "require('./sdks/esm/package.json').version")"
-          version="$(node -p "require('./sdks/esm/package.json').version")"
-          echo "Published @3sln/flint@$version from $TAG." >> "$GITHUB_STEP_SUMMARY"
+  # CALLED, not triggered: a release created with the workflow's own token does
+  # not fire `release: published` for other workflows, so waiting for that
+  # event would mean the binaries never build.
+  binaries:
+    needs: [plan, publish]
+    uses: ./.github/workflows/binaries.yml
+    with:
+      tag: ${{ needs.plan.outputs.tag }}
+    permissions:
+      contents: write

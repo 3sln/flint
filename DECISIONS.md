@@ -63,7 +63,8 @@ material that predates that rewrite.
 [drivers](#drivers) ·
 [thread-pool](#thread-pool) ·
 [bridges-are-the-only-door](#bridges-are-the-only-door) ·
-[the-codec-is-guest-code](#the-codec-is-guest-code)
+[the-codec-is-guest-code](#the-codec-is-guest-code) ·
+[ports-speak-protocols](#ports-speak-protocols)
 
 *V. Capabilities, the CLI, and dependencies*
 [cli](#cli) ·
@@ -14093,3 +14094,77 @@ The assembly NAME is a separate input, settled in the same change:
 basename into an assembly name, and every door passes the raw basename to it.
 Three doors sanitising separately agreed on `app.dll` and parted ways on
 `a.b.dll` -- strip one extension and it is `a_b`, strip greedily and it is `a`.
+
+---
+
+## ports-speak-protocols
+
+**A port's metadata says what the other end speaks, and `flint.sys` mints such
+ports**
+
+**Ratified:** ☐ not signed off
+
+**Status: decided 2026-09-30, NOT BUILT.** Written down before any of it
+exists, because an earlier version of the idea was decided on 2026-09-14 and
+then lost: it was never recorded here, the work that followed built `WireMeta`
+and stopped, and comments in `lib/flint/protocols.cljc`,
+`runtime/src/codec.rs` and `sdks/esm/src/codec.js` went on saying "a port
+answers with its protocol list" about code that does not do it. Checked
+2026-09-30 by running a program: `(with-meta port {...})` returns the port
+with `meta` nil (`TY_PORT` is not in `kin/meta.kin`'s `has-meta`), and a
+protocol call on a port answers "no implementation ... for a value of kind
+`:port`".
+
+### What was decided
+
+**1. What a port speaks is METADATA, and it is extensible.** The 2026-09-14
+version made the protocol set a fixed property of the port, set at
+construction. Reversed by the maintainer on 2026-09-30: all the set says is
+"whatever is at the other end of this speaks these protocols", and a holder
+that learns more should be able to say so. So it is an ordinary metadata key
+(`:flint/protocols`, a set of protocol symbols), added to with `vary-meta` like
+any other.
+
+**2. Metadata lives on the HANDLE, not on the port.** A port is a shared
+reference: a queue with CAS cursors (`PT_READ`/`PT_WRITE`) that several
+holders use at once. Metadata written into that object would change under every
+holder, and copying the object would copy a queue. So `with-meta` on a port
+returns a new handle to the same underlying port -- the handle/core split the
+2026-09-14 discussion identified -- and two holders can describe one port
+differently without affecting each other. `=` and `hash` compare the port, not
+the handle.
+
+**3. `WireMeta` decides what crosses, and the wire carries it as it does any
+metadata.** The codec already writes metadata beside a value (`K_WITH_META`,
+`WireMeta` selecting it in the guest). A port's `WireMeta` answers its
+`:flint/protocols` and its label; there is no dedicated protocol slot in the
+wire format or in the port object (the maintainer, 2026-09-30). The LABEL moves
+into metadata as well (`:flint/label`), so `PT_LABEL` goes.
+
+**4. Protocols dispatch through it.** A protocol can have an implementation FOR
+PORTS THAT SPEAK IT: written once in flint, turning each method into a request
+on the port. A port whose `:flint/protocols` names the protocol dispatches to
+that implementation; one that does not is a protocol miss, as now. This is what
+makes an external resource pluggable -- a program holds a value satisfying
+`Clock`, and whether that is a port to the host, a port to another sandbox or an
+in-memory clock is not its business.
+
+### What this is for: `flint.sys` mints instances
+
+External resources are PROTOCOLS, each defined purely in `flint.protocols.*`
+with an in-memory implementation for tests and confined sandboxes:
+
+* `Clock` -- wall-clock now, a monotonic reading, sleep.
+* `Files` -- file CONTENT: read and write, text and bytes.
+* `Directories` -- STRUCTURE: list, exists?, dir?, mkdir, delete. Separate from
+  `Files` (the maintainer's call) so a program can be given one without the
+  other.
+* `Processes` -- run to completion (`{:exit :out :err}`) and a streaming
+  `spawn` whose stdin and stdout are `flint.protocols.io` sources and sinks.
+* `Env` -- variables, arguments, working directory.
+
+`flint.sys` constructs host-backed instances: ports opened behind a capability
+check, carrying the protocol they speak. The function-style `flint.sys.fs`,
+`flint.sys.env` and `flint.sys.slurp` go: their operations become the requests
+a port implementation sends, which the host serves. Nothing is published yet,
+so this breaks no user (the maintainer, 2026-09-30).

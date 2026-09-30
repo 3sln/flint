@@ -1,0 +1,62 @@
+#!/usr/bin/env node
+// Which npm packages have a version the registry does not have yet.
+//
+//   bin/release-plan            a table, for a person
+//   bin/release-plan --json     one JSON array, for a script
+//
+// THE ONE LIST of what this repository publishes to npm. `.github/workflows/
+// publish.yml` reads it rather than naming packages itself, so adding a package
+// is one line here and not a workflow edit that has to agree with it.
+//
+// A VERSION IS PUBLISHED WHEN THE REGISTRY SAYS SO, not when a commit says it
+// changed. Comparing against the parent commit misses a first release, a run
+// that failed half way (one package out, the other not), and a bump that landed
+// while the workflow was broken; asking the registry answers all three the same
+// way. Under GitHub Actions it also writes `packages` (the JSON array of what to
+// publish) and `any` to `$GITHUB_OUTPUT`.
+//
+// A registry that cannot be asked is a FAILURE, never "unpublished": reading an
+// outage as "go ahead" would publish on every run until it answered.
+//
+// An ES module because the root `package.json` says `"type": "module"`, which
+// is what decides it for a file with no extension. A first version written as
+// CommonJS passed when tried from a scratch directory with no `package.json`
+// above it, and failed here with `require is not defined`.
+import { readFileSync, appendFileSync } from 'fs';
+import { spawnSync } from 'child_process';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+const PACKAGES = [
+  { dir: 'sdks/esm', build: './sdks/esm/build', test: 'cd sdks/esm && node selftest.mjs' },
+  { dir: 'sdks/cli', build: './sdks/cli/build', test: 'cd sdks/cli && node selftest.mjs' },
+];
+
+function published(name, version) {
+  const r = spawnSync('npm', ['view', `${name}@${version}`, 'version', '--json'],
+                      { encoding: 'utf8' });
+  if (r.status === 0) return r.stdout.trim() !== '';
+  if (/E404|404 Not Found/.test(r.stderr + r.stdout)) return false;
+  throw new Error(`could not ask the registry about ${name}@${version}:\n${r.stderr}`);
+}
+
+const plan = PACKAGES.map((p) => {
+  const pkg = JSON.parse(readFileSync(join(root, p.dir, 'package.json'), 'utf8'));
+  return { ...p, name: pkg.name, version: pkg.version,
+           published: published(pkg.name, pkg.version) };
+});
+const todo = plan.filter((p) => !p.published);
+
+if (process.argv.includes('--json')) {
+  console.log(JSON.stringify(todo));
+} else {
+  for (const p of plan) {
+    console.log(`  ${p.published ? 'published  ' : 'TO PUBLISH '} ${p.name}@${p.version}  (${p.dir})`);
+  }
+}
+if (process.env.GITHUB_OUTPUT) {
+  appendFileSync(process.env.GITHUB_OUTPUT,
+                 `packages=${JSON.stringify(todo)}\nany=${todo.length > 0}\n`);
+}

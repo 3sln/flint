@@ -11,17 +11,30 @@ name: Binaries
 # The wasm artifacts it embeds are GENERATED, not tracked, so every job builds
 # them first with `bin/build-dist`.
 
+# CALLED by `publish.yml` with the tag it just released. Not triggered by the
+# release event: a release created with the workflow's own token does not fire
+# `release: published` for other workflows, so waiting for it would mean the
+# binaries never build. By hand, with no tag, it builds and uploads artifacts
+# to the run and attaches nothing.
 on:
-  release:
-    types:
-      - published
+  workflow_call:
+    inputs:
+      tag:
+        description: The release tag to build from and attach the binaries to.
+        type: string
+        required: true
   workflow_dispatch:
+    inputs:
+      tag:
+        description: A release tag to build from and attach to (empty for the current ref, attaching nothing).
+        type: string
+        required: false
 
 permissions:
   contents: write
 
 concurrency:
-  group: binaries-${{ github.event.release.tag_name || github.ref }}
+  group: binaries-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -50,7 +63,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name || github.ref }}
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up Rust nightly with the wasm32 target
         shell: bash
@@ -93,8 +106,8 @@ jobs:
           mkdir -p /tmp/smoke
           printf '(ns smoke)\n(defn main [args] (str "ok " (reduce + 0 (range 10))))\n' > /tmp/smoke/smoke.cljc
           "$bin" version
-          "$bin" compile /tmp/smoke --entry smoke/main -o /tmp/smoke/out.wasm
-          got="$("$bin" run /tmp/smoke/out.wasm)"
+          "$bin" compile :path /tmp/smoke :fn smoke/main :to :wasm :out /tmp/smoke/out.wasm
+          got="$("$bin" run :path /tmp/smoke :fn smoke/main)"
           echo "got: $got"
           [ "$got" = "ok 45" ] || { echo "::error::the binary produced '$got', not 'ok 45'"; exit 1; }
 
@@ -112,9 +125,9 @@ jobs:
           path: ${{ matrix.name }}
 
       - name: Attach it to the release
-        if: github.event_name == 'release'
+        if: inputs.tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ inputs.tag }}
         shell: bash
         run: gh release upload "$TAG" "${{ matrix.name }}" --clobber
