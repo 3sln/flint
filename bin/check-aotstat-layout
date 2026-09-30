@@ -30,7 +30,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / 'runtime' / 'src' / 'aotstat.rs'
 
-READERS = ['test/narrow.mjs', 'bench/aot-construe.mjs', 'bench/annotated.mjs',
+READERS = ['test/narrow.mjs', 'bench/aot-construe.mjs',
            'bench/specialise.mjs', 'bench/where.mjs', 'bench/regions.mjs']
 
 

@@ -5,7 +5,7 @@
 // module is built `:fn <ns>/main` and written to a path that carries the `<ns>`,
 // so the name is derivable rather than something each script has to repeat.
 //
-// `bin/bench` writes `out/bench-<ns>.wasm`; the rest name themselves.
+// `out/bench-<ns>.wasm` is the older spelling; the rest name themselves.
 export function fnOf(path) {
   const p = String(path);
   const m = /out\/bench-([a-z0-9-]+)\.wasm$/.exec(p)

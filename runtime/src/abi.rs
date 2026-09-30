@@ -283,7 +283,7 @@ pub extern "C" fn set_step_limit(want: u64) {
         //
         // `u64::MAX` is the sentinel for "no checkpoint", so asking for the
         // largest possible limit switched counting OFF -- which is what
-        // `bench/wasm.mjs` did, and it then reported a tight loop as dispatching
+        // `bench/wasm.mjs` (since deleted) did, and it then reported a tight loop as dispatching
         // zero instructions. An explicit limit now always counts.
         rt.set_gas_limit(if want == u64::MAX { u64::MAX - 1 } else { want });
         rt.steps = 0;

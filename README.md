@@ -1426,7 +1426,11 @@ Apple M1 Pro, Darwin 23.6.0, node v24.6.0. Method: best of 5 runs per
 measurement, one node process per program; `cold` is `WebAssembly.compile` plus
 instantiate plus the first `main()`, `warm` is a second `main()` on the same
 instance. Full output, including the native runs, in
-[`doc/benchmarks.txt`](doc/benchmarks.txt); reproduce with `./bin/bench`.
+[`doc/benchmarks.txt`](doc/benchmarks.txt), produced by `bin/bench` -- deleted
+2026-09-30, when its timer still called a `main` the host had stopped returning,
+so it could not produce a row. The current harness is `./bin/bench-corpus`
+([`corpus/README.md`](corpus/README.md)), which times the corpus on JVM Clojure,
+babashka and flint.
 
 ### Module size and cold start
 
@@ -1868,7 +1872,7 @@ $ ./bin/test            # everything: rust tests, reader, conformance both ways,
                         # end-to-end linking, gc stress, modularity, :exclude
                         # and :wasm-path, threads and ports, the host ABI,
                         # manifest, self-hosting
-$ ./bin/bench           # the benchmark tables above
+$ ./bin/bench-corpus    # the corpus, timed on JVM Clojure, babashka and flint
 $ ./bin/bench-construe  # the decision benchmark, against cherry and a V8 isolate
 $ ./bin/manifest        # regenerate doc/manifest.edn
 $ ./bin/build-test-unit # the toy unit test/options.clj puts on the :wasm-path path

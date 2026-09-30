@@ -57,8 +57,8 @@
                   :task (shell "./bin/set-version")}
 
   ;; -- measuring ------------------------------------------------------------
-  bench          {:doc "The benchmark suite."
-                  :task (shell "./bin/bench")}
+  bench          {:doc "The corpus, timed on JVM Clojure, babashka and flint."
+                  :task (shell "./bin/bench-corpus")}
   port-survey    {:doc "Where the portable lines are, and whether the three drifted."
                   :task (shell "./bin/port-survey")}
 

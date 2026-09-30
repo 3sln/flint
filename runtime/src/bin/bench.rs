@@ -3,8 +3,8 @@
 //! transients.
 //!
 //! Native, not wasm, on purpose: this measures the data structures themselves,
-//! with no interpreter dispatch in the way. `bench/wasm.mjs` measures the other
-//! half. Every number is the best of several runs, and the harness prints the
+//! with no interpreter dispatch in the way. `bench/corpus.mjs` measures the other
+//! half, through `bin/bench-corpus`. Every number is the best of several runs, and the harness prints the
 //! machine and the method so the table can be reproduced.
 
 use std::time::Instant;

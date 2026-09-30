@@ -23,7 +23,7 @@
   ],
   "scripts": {
     "test": "./bin/test",
-    "bench": "./bin/bench",
+    "bench": "./bin/bench-corpus",
     "build:dist": "./bin/build-dist",
     "build:sdk": "./sdks/esm/build",
     "build:cli": "./sdks/cli/build"
