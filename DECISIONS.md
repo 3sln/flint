@@ -14164,8 +14164,15 @@ with an in-memory implementation for tests and confined sandboxes:
   PUT writes, DELETE removes), `data:` is pure, and a host or program may add
   its own. The response is HTTP-shaped for EVERY scheme -- `file://` answers
   200, 404 or 403 -- so code written against one works on another (the
-  maintainer's call). Granted per scheme and prefix, `https://api.x/*` or
-  `file:///project/*`, which generalises `flint.sys.slurp`'s URL allowlist. Its
+  maintainer's call). **Granted as URI pattern × METHODS** (the maintainer,
+  2026-09-30): `{:uri "file:///project/**" :methods #{:get :propfind}}`, which
+  generalises `flint.sys.slurp`'s URL allowlist and is how "read files" and
+  "see the tree" stay separable -- a program granted `GET` and not `PROPFIND`
+  reads what it is told about and lists nothing. Two routes need an adversarial
+  probe when built, since an access check fails open: `COPY` and `MOVE` name a
+  SECOND URI, and the grant must cover the `Destination` or a read grant plus
+  `MOVE` writes anywhere; and `PROPFIND` at `Depth: infinity` walks a whole
+  tree, which RFC 4918 lets a server refuse with 403 and a grant must be able to. Its
   in-memory implementation is a table from URI to response, which is also how a
   test fakes the network. It REPLACES a `Files` protocol for content (the
   maintainer's call): reading or writing anything addressable is one operation.
@@ -14180,15 +14187,44 @@ with an in-memory implementation for tests and confined sandboxes:
   **JSON Patch** (RFC 6902), which edits a parsed DOCUMENT rather than bytes and
   so belongs to data resources -- on a file it would mean parse, apply,
   re-print, losing the file's own formatting. Both are pure algorithms, so they
-  are written once in kin. OPEN: whether a PATCH with no `If-Match` is refused
-  (428), which is recommended because an offset-based patch applied to a file
-  that changed since it was computed corrupts it silently; and how the npm CLI,
-  whose host is JavaScript and which kin does not emit, reaches the kin code --
-  recommended through an export of the runtime wasm it already ships rather
-  than a JavaScript target for kin.
-* `Directories` -- STRUCTURE: list, exists?, dir?, mkdir, delete. Separate from
-  content (the maintainer's call) so a program can be given one without the
-  other.
+  are written once in kin. The formats are extensible; these two are where it
+  starts (the maintainer, 2026-09-30).
+
+  **WIRE FORMATS ARE STANDARD; the client does the conversion.** A remote
+  resource must not need an EDN parser to be patched, so nothing flint-specific
+  goes on the wire. Where a caller hands the client CLOJURE VALUES in place of a
+  string or byte source, the client serialises them for the resource's content
+  type (`application/json`, `application/edn`, ...), and for a PATCH it prints
+  the old and new values and sends the VCDIFF between them -- it already holds
+  the old bytes, from the GET that supplied the ETag. JSON Patch is NOT a
+  structural patch for EDN: JSON Pointer addresses only string keys and array
+  indices, so keyword keys (which collide with string ones), composite keys and
+  set members are unaddressable, and its values cannot carry keywords, sets,
+  lists or tagged literals. No standard structural diff for EDN exists (the
+  nearest is the `editscript` library's format). The cost of patching the
+  serialisation is that two edits to different keys conflict (412) rather than
+  merge; a structural format waits until something needs merging.
+
+  **Where the kin code runs.** Rust, Java and C# hosts use kin's output
+  natively. kin does not emit JavaScript, so for the npm CLI and the ESM SDK
+  the diff code is compiled into ITS OWN small wasm module rather than reached
+  through the full runtime (the maintainer, 2026-09-30); the JavaScript host
+  passes it a table of file-handle functions so a patch applies without the
+  whole file crossing into wasm memory where that can be avoided.
+
+  **A PATCH WITHOUT `If-Match` IS ACCEPTED** (the maintainer, 2026-09-30), as
+  in HTTP: the guard is the caller's to use. What that leaves to the caller is
+  worth stating once: an offset-based patch applied to bytes that changed since
+  it was computed does not fail, it applies to the wrong place. A caller that
+  can race another writer sends the ETag.
+* `Resources` covers STRUCTURE too, the way WebDAV (RFC 4918) does (the
+  maintainer, 2026-09-30), so there is no separate `Directories` protocol:
+  `PROPFIND` lists (`Depth: 0`, `1` or `infinity`, answering a standard
+  `207 Multi-Status` body the client turns into Clojure data with
+  `flint.data.xml`), `MKCOL` makes a collection, `DELETE` on one is recursive,
+  and `COPY`/`MOVE` take `Destination` and `Overwrite`. Not emulated: `LOCK`/
+  `UNLOCK`, which ETag guards make unnecessary, and `PROPPATCH`. A remote WebDAV
+  server therefore works unchanged, which is the point of standard formats.
 * `Processes` -- run to completion (`{:exit :out :err}`) and a streaming
   `spawn` whose stdin and stdout are `flint.protocols.io` sources and sinks.
 * `Env` -- variables, arguments, working directory.
