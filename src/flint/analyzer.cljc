@@ -695,6 +695,14 @@
              env
              narrowed))
 
+;; Core vars whose variadic arity is exactly a left fold of their two-argument
+;; one: `([a b & more] (reduce f (f a b) more))` in lib/clojure/core.cljc. A
+;; call with three or more arguments is analyzed as the nested two-argument
+;; calls it is equal to. A LIST, and short, because each entry is a claim about
+;; a definition elsewhere; `min`/`max` are not here because nothing about their
+;; typing needs it, and `/` is not because it has no typed result to reach.
+(def ^:private left-folds '#{clojure.core/+ clojure.core/- clojure.core/*})
+
 (defn- analyze-seq [env form]
   (let [head (first form)
         ;; The expansion counters measure a CHAIN: macro expands to macro
@@ -791,8 +799,21 @@
         (analyze (assoc env :macro-depth d) expanded))
 
       :else
-      (let [f (analyze env head)
-            args (mapv #(analyze env %) (rest form))]
+      (let [f (analyze env head)]
+        (if (and (= :var (:op f))
+                 (contains? left-folds (:sym f))
+                 (> (count form) 3)
+                 (= [[:arg 0] [:arg 1]] (get-in @(:cc env) [:native-alias (:sym f) 2 :tmpl])))
+          ;; `(* 2.0 zr zi)` as `(* (* 2.0 zr) zi)`. The variadic arity of
+          ;; `+`, `-` and `*` IS that left fold (`(reduce add (add a b) more)`
+          ;; in lib/clojure/core.cljc), so the value, the evaluation order and
+          ;; any overflow are the same -- but the nested form reaches the
+          ;; two-argument builtin, which has a result type, where the variadic
+          ;; call through `reduce` had none. That one missing tag was enough to
+          ;; stop mandelbrot's `zi` being proved a float.
+          (let [[_ a b & more] form]
+            (analyze env (reduce (fn [acc x] (list head acc x)) (list head a b) more)))
+        (let [args (mapv #(analyze env %) (rest form))]
         (if-let [nat (and (= :var (:op f))
                           (get-in @(:cc env) [:native-alias (:sym f) (count args)]))]
           ;; A core var ARITY whose whole body is one native call: go straight to
@@ -831,7 +852,7 @@
                               (seq (projects a false)) (assoc true (projects a false))
                               (seq (projects a true)) (assoc false (projects a true)))]
                 (cond-> node (seq flipped) (assoc :projects flipped)))
-              node)))))))
+              node)))))))))
 
 ;; ------------------------------------------------------- type annotations
 ;;
@@ -1032,18 +1053,21 @@
 
   `infer?` lets a `loop` binding take its initialiser's tag ANYWAY, as a
   hypothesis. That is only sound if it is then verified -- see `loop*`, which
-  assumes, analyzes, and throws the hypothesis away unless every `recur` proved
-  it. Without that verification an inferred loop tag is a claim about the first
-  iteration presented as a claim about all of them."
+  assumes, analyzes, and throws away every hypothesis a `recur` did not prove.
+  Without that verification an inferred loop tag is a claim about the first
+  iteration presented as a claim about all of them. It is a boolean, or the SET
+  of binding positions that may infer, which is how `loop*` withdraws one
+  slot's hypothesis without withdrawing its neighbours'."
   [env pairs rebound? infer?]
   (reduce (fn [[e acc] [sym init]]
             (when-not (symbol? sym) (err "binding name must be a symbol" {:sym sym}))
             (let [want (ty/known sym)
                   init-ast (checked e (analyze e init) want sym)
                   idx (alloc-local! (:scope e))
+                  infer-here? (if (set? infer?) (contains? infer? (count acc)) infer?)
                   ;; What every later READ of this local reports. Sound because
                   ;; the barrier above is the only way into the slot.
-                  tag (if (and rebound? (not infer?)) want (or want (node-tag init-ast)))]
+                  tag (if (and rebound? (not infer-here?)) want (or want (node-tag init-ast)))]
               [(assoc-in e [:locals sym]
                          (cond-> {:kind :local :idx idx}
                            tag (assoc :tag tag)
@@ -1126,28 +1150,35 @@
                 pairs (partition 2 bindings)
                 n0 (:nlocals @(:scope env))
                 analyze-with
-                (fn [infer?]
-                  (let [[env' bs] (bind-locals env pairs true infer?)
+                (fn [infer]
+                  (let [[env' bs] (bind-locals env pairs true infer)
                         loop-id (gensym "loop")
                         env' (assoc env' :loop
                                     {:id loop-id :slots (mapv :idx bs) :n (count bs)
                                      :tags (mapv :tag bs) :names (mapv :name bs)})]
                     [bs loop-id (analyze-body env' body)]))
-                [bs loop-id body-ast] (analyze-with true)
-                ;; Which slots were hypothesised -- a WRITTEN tag is checked at
-                ;; each recur on purpose and is not up for revision.
-                guessed (set (keep-indexed (fn [i [sym _]]
-                                             (when (and (:tag (nth bs i))
-                                                        (not (ty/known sym)))
-                                               i))
-                                           pairs))
-                held? (or (empty? guessed)
-                          (every? (fn [pv] (every? #(nth pv % true) guessed))
-                                  (recur-proofs body-ast loop-id)))
-                [bs loop-id body-ast] (if held?
-                                        [bs loop-id body-ast]
-                                        (do (release-locals! (:scope env) n0)
-                                            (analyze-with false)))]
+                ;; PER SLOT, to a fixpoint. A slot whose hypothesis some `recur`
+                ;; did not prove is withdrawn and the loop analyzed again; the
+                ;; others are re-verified under that, since a neighbour's tag
+                ;; may have been what proved them. It used to be all or nothing:
+                ;; a float slot that failed took the int counter beside it down
+                ;; too, so `(loop [z 0.0 i 0] ..)` lost `i` -- which is
+                ;; mandelbrot's inner loop. The set only shrinks, so this ends.
+                [bs loop-id body-ast]
+                (loop [allowed (set (range (count pairs)))]
+                  (let [[bs loop-id body-ast :as r] (analyze-with allowed)
+                        ;; Which slots were hypothesised -- a WRITTEN tag is
+                        ;; checked at each recur on purpose and is not up for
+                        ;; revision.
+                        guessed (filter (fn [i] (and (:tag (nth bs i))
+                                                     (not (ty/known (first (nth pairs i))))))
+                                        allowed)
+                        proofs (recur-proofs body-ast loop-id)
+                        failed (set (remove (fn [i] (every? #(nth % i true) proofs)) guessed))]
+                    (if (empty? failed)
+                      r
+                      (do (release-locals! (:scope env) n0)
+                          (recur (reduce disj allowed failed))))))]
             (release-locals! (:scope env) n0)
             {:op :loop :id loop-id :bindings bs :body body-ast})
 

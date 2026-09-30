@@ -123,6 +123,16 @@
       (when (and (contains? arithmetic name) (seq arg-tags))
         (cond
           (every? #(= :int %) arg-tags) :int
+          ;; A float anywhere among ints and floats makes the result a float,
+          ;; as in Clojure -- EXCEPT for `min` and `max`, which return one of
+          ;; their arguments unchanged: `(max 3 2.0)` is the int 3. Without
+          ;; this, `(* z z)` on a float was a `:number`, and a loop slot that
+          ;; started at `0.0` could never be proved to stay a float.
+          (and (every? #(contains? #{:int :float} %) arg-tags)
+               (some #(= :float %) arg-tags)
+               (or (every? #(= :float %) arg-tags)
+                   (not (contains? #{"min" "max"} name))))
+          :float
           (every? #(contains? #{:int :float :number} %) arg-tags) :number
           :else nil))))
 

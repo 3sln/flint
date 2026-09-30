@@ -325,6 +325,12 @@ sec "aot: the emitter, validated one arity at a time (0013)"
 bb test/aot_emit.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/aot_emit.clj"; }
 tail -3 /tmp/flint-test.out
 
+sec "loop types: per-slot hypotheses, float results, typed variadic arithmetic"
+# What the emitter SPECIALISES, which no answer can show: a missed
+# specialisation computes the same number. 3.7 s, measured 2026-09-30.
+bb test/loop_types.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/loop_types.clj"; }
+tail -1 /tmp/flint-test.out
+
 sec "aot: the same answer AND the same instruction count as the interpreter"
 # Its own build, like diagnostics: a production runtime cannot run compiled
 # arities and does not carry the machinery that would (DECISIONS.md#emit-wasm-instead-of-dispatch, 0016).
