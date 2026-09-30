@@ -1,4 +1,6 @@
-(ns words
+(ns ^{:corpus/kind :strings
+      :corpus/source "word frequency over repeated text (was bench/progs)"}
+  words
   "A realistic mixed workload: split text, normalise, count, sort. Strings,
   maps, sequences and sorting, which is what most real programs actually do."
   (:require [clojure.string :as str]))

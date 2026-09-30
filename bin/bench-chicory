@@ -46,7 +46,7 @@ echo "chicory $CHICORY_VERSION on $("$JAVA" -version 2>&1 | head -1)"
 echo
 printf '%-14s %-6s %14s %14s\n' mode n parse+compile 'best run'
 for n in 0 25 50; do
-  ./bin/flint :src bench/xrt :src bench/construe/gen \
+  ./bin/flint :src bench/xrt :src corpus \
     :fn "construe.bench.xrt$n/main" :out "out/xrt-$n.wasm" >/dev/null
   printf '%-14s %-6s ' interpreted "$n"
   "$JAVA" -cp "$CP$LIB" FlintOnChicory "out/xrt-$n.wasm" 3

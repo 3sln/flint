@@ -12,11 +12,11 @@ set -e
 cd "$(dirname "$0")/.."
 echo "building the module family (one per iteration count)"
 for N in 0 25 50 100 200; do
-  ./bin/flint :src bench/xrt :src bench/construe/gen \
+  ./bin/flint :src bench/xrt :src corpus \
     :fn "construe.bench.xrt$N/main" :out "out/xrt-$N.wasm" >/dev/null
 done
 node bench/xruntime.mjs "$@"
 echo
-./bin/flint :src bench/xrt :src bench/construe/gen \
+./bin/flint :src bench/xrt :src corpus \
   :fn construe.bench.xrt0/main :out out/triv.wasm >/dev/null
 exec node bench/xmem.mjs

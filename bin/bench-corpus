@@ -1,0 +1,134 @@
+#!/usr/bin/env bb
+;; The corpus, timed on JVM Clojure, babashka and flint.
+;;
+;;   bin/bench-corpus                 every program flint runs
+;;   bin/bench-corpus nbody life      just these
+;;   REPS=20 bin/bench-corpus         more timed calls per program (default 10)
+;;   E2E=0 bin/bench-corpus           skip the per-process table
+;;
+;; TWO QUESTIONS, TWO TABLES, because they have different answers:
+;;
+;; * STEADY STATE -- one warm call of `main`, in-process. Every arm runs the
+;;   same policy: call until 300 ms AND three calls have passed, then time REPS
+;;   calls and report the best (the median is in the raw lines). JVM Clojure
+;;   and babashka run the SAME file, `bench/corpus_time.clj`; flint runs
+;;   `bench/corpus.mjs` on a compiled module in node, once as built and once
+;;   `:optimize [perf]` (compiled arities, checks stripped).
+;; * END TO END -- what someone waits for at a terminal: one process per run,
+;;   start to exit, best of 3. `clojure -M -e`, `bb -e` and `flint run`. This
+;;   includes JVM start and, for flint, COMPILING the program, since `flint run`
+;;   compiles from source every time.
+;;
+;; A TIMING WITH A WRONG ANSWER IS NOT PRINTED. Each arm's answer is compared
+;; with JVM Clojure's, and a mismatch prints `wrong` in place of a number:
+;; `bin/corpus` is the agreement check and this is not a second one, but a fast
+;; wrong answer must never reach a table. Programs that declare a flint
+;; divergence are skipped, since there is no flint number to compare.
+(require '[babashka.fs :as fs]
+         '[babashka.process :as p]
+         '[cheshire.core :as json]
+         '[clojure.edn :as edn]
+         '[clojure.string :as str])
+
+(load-file (str (fs/parent (fs/real-path *file*)) "/corpus"))
+
+(def reps (or (some-> (System/getenv "REPS") parse-long) 10))
+(def e2e? (not= "0" (System/getenv "E2E")))
+(def out-dir (str root "/out/corpus"))
+
+(defn sh-out [& cmd] (str/trim (:out (run* (vec cmd)))))
+
+(defn edn-lines [s] (keep #(when-not (str/blank? %) (edn/read-string %)) (str/split-lines s)))
+
+(defn in-process [cmd names]
+  (let [r (run* (into cmd (cons (str reps) names)))]
+    (when-not (zero? (:exit r)) (println "timer failed:" (:err r)) (System/exit 1))
+    (into {} (map (juxt :name identity)) (edn-lines (:out r)))))
+
+(defn build! [n perf?]
+  (let [out (str out-dir "/" n (when perf? "-perf") ".wasm")
+        r (run* (cond-> [flint "compile" ":path" "corpus" ":fn" (str n "/main") ":to" ":wasm" ":out" out]
+                  perf? (into [":optimize" "[perf]"])))]
+    (when-not (zero? (:exit r)) (println "build failed:" n (:err r) (:out r)) (System/exit 1))
+    out))
+
+(defn on-node [pairs]
+  (let [r (run* (into ["node" "bench/corpus.mjs" (str reps)]
+                      (map (fn [[n f]] (str n "=" f)) pairs)))]
+    (when-not (zero? (:exit r)) (println "node timer failed:" (:err r)) (System/exit 1))
+    (into {} (map (fn [l] (let [m (json/parse-string l true)] [(:name m) m])))
+          (remove str/blank? (str/split-lines (:out r))))))
+
+(defn wall-ms [cmd]
+  (apply min (for [_ (range 3)]
+               (let [t (System/nanoTime) r (run* cmd)]
+                 (when (zero? (:exit r)) (/ (- (System/nanoTime) t) 1e6))))))
+
+(defn cell [m ref]
+  (cond (nil? m) "-"
+        (:error m) "error"
+        (not= ref (:out m)) "wrong"
+        :else (format "%.2f" (double (:best m)))))
+
+(defn ratio [a b]
+  (if (and (number? a) (number? b) (pos? b)) (format "%.1fx" (/ (double a) b)) "-"))
+
+(let [want (set *command-line-args*)
+      all (cond->> (programs) (seq want) (filter #(want (:name %))))
+      skipped (filter #(get-in % [:meta :corpus/diverges :flint]) all)
+      ps (remove #(get-in % [:meta :corpus/diverges :flint]) all)
+      names (mapv :name ps)]
+  (when (empty? ps) (println "no corpus programs to time") (System/exit 1))
+  (fs/create-dirs out-dir)
+  (println "corpus benchmarks: JVM Clojure, babashka, flint")
+  (println "machine:" (sh-out "sysctl" "-n" "machdep.cpu.brand_string") "," (sh-out "uname" "-sr"))
+  (println "tree:   " (sh-out "git" "rev-parse" "--short" "HEAD")
+           (if (str/blank? (sh-out "git" "status" "--porcelain" "--" "src" "lib" "corpus" "cli" "runtime"))
+             "" "(DIRTY: uncommitted changes under src lib corpus cli runtime)")
+           "on" (sh-out "date" "+%F"))
+  (println "clojure:" (sh-out "clojure" "--version") "| bb:" (sh-out "bb" "--version")
+           "| node:" (sh-out "node" "--version") "| flint:" (sh-out "git" "log" "-1" "--format=%h" "--" "src" "lib"))
+  (println "load:   " (sh-out "sysctl" "-n" "vm.loadavg"))
+  (println (str "method:  steady state = best of " reps " warm in-process calls of main, after 300 ms"))
+  (println "         and >= 3 untimed calls; end to end = best of 3 whole processes.")
+  (println "         flint plain/perf are compiled wasm modules run in node, built by")
+  (println "         target/release/flint; `perf` is `:optimize [perf]`.")
+  (println)
+  (let [clj (in-process ["clojure" "-Sdeps" (pr-str {:paths ["corpus"]}) "-M" "bench/corpus_time.clj"] names)
+        bb (in-process ["bb" "--classpath" "corpus" "bench/corpus_time.clj"] names)
+        plain (on-node (map (fn [n] [n (build! n false)]) names))
+        perf (on-node (map (fn [n] [n (build! n true)]) names))]
+    (println "steady state, ms per call of main (lower is better)")
+    (println (format "%-24s %-5s %9s %9s %9s %9s %9s %9s"
+                     "program" "typed" "clojure" "bb" "flint" "perf" "flint/clj" "flint/bb"))
+    (doseq [{:keys [name meta]} ps]
+      (let [ref (get-in clj [name :out])
+            f (get plain name)
+            fbest (when (and f (= ref (:out f))) (:best f))]
+        (println (format "%-24s %-5s %9s %9s %9s %9s %9s %9s" name
+                         (if (:corpus/annotated meta) "yes" "")
+                         (cell (clj name) ref) (cell (bb name) ref)
+                         (cell f ref) (cell (perf name) ref)
+                         (ratio fbest (get-in clj [name :best]))
+                         (ratio fbest (when (= ref (get-in bb [name :out])) (get-in bb [name :best])))))))
+    (println)
+    (println "flint module cost, ms: host compile of the .wasm, then instantiate + first call")
+    (println (format "%-24s %9s %9s %9s %9s" "program" "compile" "cold" "perf comp" "perf cold"))
+    (doseq [n names]
+      (let [a (plain n) b (perf n) f #(if (number? %) (format "%.2f" (double %)) "-")]
+        (println (format "%-24s %9s %9s %9s %9s" n (f (:compile a)) (f (:cold a))
+                         (f (:compile b)) (f (:cold b))))))
+    (when e2e?
+      (println)
+      (println "end to end, ms per process, best of 3 (includes start; flint run compiles)")
+      (println (format "%-24s %9s %9s %9s" "program" "clojure" "bb" "flint run"))
+      (doseq [n names]
+        (let [expr (str "(require '" n ") (print ((resolve '" n "/main) []))")
+              f #(if (number? %) (format "%.0f" (double %)) "error")]
+          (println (format "%-24s %9s %9s %9s" n
+                           (f (wall-ms ["clojure" "-Sdeps" (pr-str {:paths ["corpus"]}) "-M" "-e" expr]))
+                           (f (wall-ms ["bb" "--classpath" "corpus" "-e" expr]))
+                           (f (wall-ms [flint "run" ":path" "corpus" ":fn" (str n "/main")]))))))))
+  (when (seq skipped)
+    (println)
+    (println "not timed, flint diverges as declared:" (str/join ", " (map :name skipped)))))

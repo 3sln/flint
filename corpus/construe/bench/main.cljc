@@ -8,7 +8,7 @@
 
 (defn main [args]
   (let [what (or (first args) "parse")
-        n (if (second args) (flint.rt/str->num (second args)) 1)]
+        n (if (second args) (parse-long (second args)) 1)]
     (cond
       (= what "parse") (str (p/run n))
       (= what "suggest") (str (sug/run 4000 n))

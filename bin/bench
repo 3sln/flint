@@ -22,13 +22,13 @@
    {:ns "tight" :args ["1000000"] :label "tight loop, 1e6 iterations"}
    {:ns "maps"  :args ["100000"]  :label "transient map, 1e5 inserts"}
    {:ns "wordsstr" :args ["200"] :label "word frequency (string split)"}
-   {:ns "words" :args ["200"]     :label "word frequency (regex split)"}
+   {:ns "words" :args ["200"]     :label "word frequency (regex split)" :dir "corpus"}
    {:ns "json"  :args ["2000"]    :label "JSON round trip, 2000 records"}
    {:ns "concat" :args ["4000"]   :label "repeated concatenation, 4000 x 16B"}])
 
 (defn build! [p]
   (let [out (str "out/bench-" (:ns p) ".wasm")
-        r (sh "./bin/flint" ":src" "bench/progs" ":fn" (str (:ns p) "/main") ":out" out)]
+        r (sh "./bin/flint" ":src" (:dir p "bench/progs") ":fn" (str (:ns p) "/main") ":out" out)]
     (when-not (zero? (:code r))
       (println "build failed for" (:ns p) "\n" (:out r) (:err r)) (System/exit 1))
     (assoc p :wasm out :bytes (fs/size out))))
@@ -42,7 +42,7 @@
 (defn bb-time [p]
   ;; The same source under babashka. Loads the file, calls main, times only the call.
   (let [f (str "/tmp/bb-bench-" (:ns p) ".clj")
-        _ (spit f (str "(load-file \"bench/progs/" (:ns p) ".cljc\")\n"
+        _ (spit f (str "(load-file \"" (:dir p "bench/progs") "/" (:ns p) ".cljc\")\n"
                        "(in-ns '" (:ns p) ")\n"
                        "(clojure.core/refer 'clojure.core)\n"
                        "(let [args [" (str/join " " (map pr-str (:args p))) "]]\n"

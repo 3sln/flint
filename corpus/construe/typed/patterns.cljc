@@ -1,4 +1,4 @@
-(ns construe.bench.patterns
+(ns construe.typed.patterns
   "The construe workload as separable parts, so a total can be explained.
 
   These are the operations the seed interpreter and the annotator actually do:

@@ -1,4 +1,4 @@
-(ns construe.bench.suggest
+(ns construe.typed.suggest
   "A prefix scan over a lexicon.
 
   §10.0 of construe's spec calls this \"the most expensive unmeasured number\":
@@ -15,8 +15,8 @@
 (defn lexicon
   "`n` terms with realistic shape: a stem, a separator and a qualifier, so
   prefixes collide the way real vocabulary does."
-  [^int n]
-  (mapv (fn [^int i]
+  [^long n]
+  (mapv (fn [^long i]
           (let [a (nth alphabet (mod i 26))
                 b (nth alphabet (mod (quot i 26) 26))
                 c (nth alphabet (mod (quot i 676) 26))]
@@ -31,11 +31,11 @@
   sort."
   [lex prefix]
   (let [hits (filterv (fn [e] (str/starts-with? (:term e) prefix)) lex)]
-    (vec (sort-by (fn [e] ^int (count (:term e))) hits))))
+    (vec (sort-by (fn [e] ^long (count (:term e))) hits))))
 
-(defn run [^int n ^int reps]
+(defn run [^long n ^long reps]
   (let [lex (lexicon n)]
-    (loop [^int i 0 ^int acc 0]
+    (loop [i 0 acc 0]
       (if (< i reps)
         (recur (inc i)
                (+ acc (count (scan lex (nth alphabet (mod i 26))))))

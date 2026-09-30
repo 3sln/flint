@@ -159,7 +159,7 @@
 (defn upper-case [s]
   ;; One pass over the bytes when the string is ASCII, which is nearly always.
   ;; The loop below is the Unicode case, and it used to be the ONLY case: at
-  ;; 346 ns per character it was 21% of `bench/progs/words.cljc`, more than the
+  ;; 346 ns per character it was 21% of `corpus/words.cljc`, more than the
   ;; regex engine that benchmark was being used to indict.
   (or (flint.rt/upper-case s)
       (flint.rt/str-join

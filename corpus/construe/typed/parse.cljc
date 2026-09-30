@@ -1,4 +1,4 @@
-(ns construe.bench.parse)
+(ns construe.typed.parse)
 
 
 ;; The four real annotated contexts from bench/construe/contexts.json,
@@ -153,8 +153,8 @@
 (defn step [fields by-unit nodes state entry]
   (let [i (first entry)
         node (second entry)
-        ^int start (:start node)
-        ^int covered (:covered state)]
+        ^long start (:start node)
+        ^long covered (:covered state)]
     (if (< start covered)
       ;; AN OVERLAPPED NODE IS ALREADY SPOKEN FOR. Under all-match "peanut
       ;; butter" arrives as three nodes -- the pair and each half -- so taking
@@ -271,14 +271,14 @@
 ;; and returns a checksum, so neither compiler can optimise the work away and
 ;; both sides can be checked to have computed the same thing.
 (defn checksum [out]
-  (reduce (fn [^int acc e]
+  (reduce (fn [^long acc e]
             (+ acc (count (str (key e)))
-               (reduce (fn [^int a v] (+ a (count (str v)))) 0 (vals (val e)))))
+               (reduce (fn [^long a v] (+ a (count (str v)))) 0 (vals (val e)))))
           0
           out))
 
-(defn run [^int n]
-  (loop [^int i 0 ^int acc 0]
+(defn run [^long n]
+  (loop [i 0 acc 0]
     (if (< i n)
       (recur (inc i)
              (reduce (fn [a c] (+ a (checksum (interpret c)))) 0 contexts))

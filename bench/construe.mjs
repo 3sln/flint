@@ -14,7 +14,7 @@ import { execFileSync } from 'child_process';
 import { load, instantiate } from '../host/flint.mjs';
 
 const CONSTRUE = '/Users/raystubbs/Projects/@3sln/construe/node_modules';
-const SRC = 'bench/construe/gen/construe/bench';
+const SRC = 'corpus/construe/bench';
 const cwd = process.cwd();
 
 const best = (n, f) => {
@@ -73,13 +73,13 @@ const cherryCompileMs = await bestAsync(5, async () => { cherryJs = await compil
 console.log(row(['cherry -> JS', ms(cherryCompileMs) + ' ms', cherryJs.length + ' B']));
 
 const flintCompileMs = best(3, () =>
-  execFileSync('./bin/flint', [':src', 'bench/construe/gen', ':fn',
+  execFileSync('./bin/flint', [':src', 'corpus', ':fn',
     'construe.bench.main/main', ':out', 'out/cb.wasm'], { stdio: 'ignore' }));
 const flintSize = statSync('out/cb.wasm').size;
 console.log(row(['flint -> wasm (whole module)', ms(flintCompileMs) + ' ms', flintSize + ' B']));
 
 const flintSelfMs = best(3, () =>
-  execFileSync('./bin/flint', [':src', 'bench/construe/gen', ':fn',
+  execFileSync('./bin/flint', [':src', 'corpus', ':fn',
     'construe.bench.main/main', ':out', 'out/cb-self.wasm', '--self'], { stdio: 'ignore' }));
 console.log(row(['flint -> wasm, compiled BY flint', ms(flintSelfMs) + ' ms',
                  statSync('out/cb-self.wasm').size + ' B']));

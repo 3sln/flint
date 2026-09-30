@@ -1,0 +1,95 @@
+#!/usr/bin/env bb
+;; Every corpus program, on JVM Clojure, babashka and flint, answers compared.
+;;
+;;   bin/corpus              all of them
+;;   bin/corpus nbody life   just these
+;;
+;; JVM CLOJURE IS THE REFERENCE. flint agreeing with babashka and not with
+;; Clojure is a disagreement, and babashka is here as the second opinion that
+;; tells "flint is wrong" apart from "the program is not portable".
+;;
+;; BYTES, THROUGH FILES. Answers are compared with `=` on the text each runtime
+;; wrote, never via a shell `echo`: zsh's echo reads `\a`, `\b` and `\c` in an
+;; answer as escapes, and `\c` stops output -- which is how the first probe for
+;; this corpus showed three runtimes "disagreeing" about a string none of them
+;; had printed that way.
+(require '[babashka.fs :as fs]
+         '[babashka.process :as p]
+         '[clojure.string :as str]
+         '[clojure.edn :as edn])
+
+(def root (str (fs/parent (fs/parent (fs/real-path *file*)))))
+(def corpus-dir (str root "/corpus"))
+(def flint (str root "/target/release/flint"))
+
+(defn program-ns
+  "The `ns` form of a corpus file, read as data -- the name and the `:corpus/*`
+  metadata both come from here, so there is no second list of programs."
+  [f]
+  (let [form (edn/read-string {:readers {} :default (fn [_ v] v)} (slurp f))]
+    {:name (str (second form)) :meta (or (meta (second form)) {})}))
+
+(defn programs []
+  (->> (fs/list-dir corpus-dir)
+       (filter #(str/ends-with? (str %) ".cljc"))
+       (map str) sort
+       (map (fn [f] (assoc (program-ns f) :file f)))))
+
+(defn run* [cmd]
+  (let [r @(p/process cmd {:out :string :err :string :dir root})]
+    {:exit (:exit r) :out (:out r) :err (:err r)}))
+
+(defn on-clj [n]
+  (run* ["clojure" "-Sdeps" (pr-str {:paths ["corpus"]}) "-M" "-e"
+         (str "(require '" n ") (print ((resolve '" n "/main) []))")]))
+
+(defn on-bb [n]
+  (run* ["bb" "--classpath" "corpus" "-e"
+         (str "(require '" n ") (print ((resolve '" n "/main) []))")]))
+
+(defn on-flint [n]
+  (run* [flint "run" ":path" "corpus" ":fn" (str n "/main")]))
+
+(defn short [s] (let [s (str/trim (str s))] (if (> (count s) 70) (str (subs s 0 70) "...") s)))
+
+;; Run only as a script: `bin/bench-corpus` loads this file for `programs`,
+;; so the list of programs and how their metadata is read exist once.
+(when (= *file* (System/getProperty "babashka.file"))
+(let [want (set *command-line-args*)
+      ps (cond->> (programs) (seq want) (filter #(want (:name %))))
+      fails (atom 0)]
+  (when (empty? ps) (println "no corpus programs matched") (System/exit 1))
+  (doseq [{:keys [name meta]} ps]
+    (let [c (on-clj name) b (on-bb name) f (on-flint name)
+          ref (:out c)
+          div (get-in meta [:corpus/diverges :flint])]
+      (cond
+        (not (zero? (:exit c)))
+        (do (swap! fails inc)
+            (println (format "  FAIL %-16s JVM Clojure itself failed: %s" name (short (:err c)))))
+
+        (not= ref (:out b))
+        (do (swap! fails inc)
+            (println (format "  FAIL %-16s not portable: babashka answers %s, Clojure %s"
+                             name (short (:out b)) (short ref))))
+
+        (and (= ref (:out f)) (zero? (:exit f)))
+        (if div
+          ;; A DECLARED divergence that is not there any more is worth saying:
+          ;; the declaration has gone stale and should be removed.
+          (println (format "  ok   %-16s agrees -- and declares a divergence it no longer has" name))
+          (println (format "  ok   %-16s %s" name (short ref))))
+
+        div
+        (println (format "  --   %-16s diverges, as declared: %s" name div))
+
+        :else
+        (do (swap! fails inc)
+            (println (format "  FAIL %-16s flint %s\n       %-16s clojure %s" name
+                             (short (if (zero? (:exit f)) (:out f) (str "ERROR " (:out f) (:err f))))
+                             "" (short ref)))))))
+  (println)
+  (println (if (zero? @fails)
+             (str "corpus: " (count ps) " programs, all agree or declare why not")
+             (str "corpus: " @fails " of " (count ps) " FAILED")))
+  (System/exit (if (zero? @fails) 0 1))))

@@ -11,11 +11,11 @@
 set -e
 cd "$(dirname "$0")/.."
 echo "building the loader and two images"
-./bin/flint :src bench/xrt :src bench/construe/gen \
+./bin/flint :src bench/xrt :src corpus \
   :fn construe.bench.xrt25/main :out out/xrt-loader.wasm --loader >/dev/null
-./bin/flint :src bench/xrt :src bench/construe/gen \
+./bin/flint :src bench/xrt :src corpus \
   :fn construe.bench.xrt25/main :out out/xrt.image --emit-image >/dev/null
-./bin/flint :src bench/xrt :src bench/construe/gen \
+./bin/flint :src bench/xrt :src corpus \
   :fn construe.bench.xrt0/main :out out/xrt0.image --emit-image >/dev/null
 cp out/xrt-loader.wasm out/xrt.image out/xrt0.image bench/workerd/
 node bench/ximage.mjs "$@"

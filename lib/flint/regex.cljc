@@ -161,7 +161,7 @@
 ;; it a one-character string that it immediately converted back. The scan in
 ;; `find-from` does that once per position of the subject, which on a 32 799
 ;; character corpus was 36.65 ms -- 64% of the whole regex cost of
-;; `bench/progs/words.cljc`, and more than the rest of the engine put together.
+;; `corpus/words.cljc`, and more than the rest of the engine put together.
 (defn- pred-match-cp? [kind v]
   (cond
     (= kind "d") (and (>= v 48) (<= v 57))
