@@ -14155,9 +14155,39 @@ External resources are PROTOCOLS, each defined purely in `flint.protocols.*`
 with an in-memory implementation for tests and confined sandboxes:
 
 * `Clock` -- wall-clock now, a monotonic reading, sleep.
-* `Files` -- file CONTENT: read and write, text and bytes.
+* `Resources` -- anything ADDRESSED BY URI, as request and response:
+  `(request r {:method :get :uri .. :headers .. :body ..})` answering
+  `{:status :headers :body}`, the body a value or a `flint.protocols.io` source
+  or sink for streaming. An abstraction over the IDEA of http rather than over
+  http (the maintainer, 2026-09-30): a scheme is an implementation, not a
+  protocol, so `https://` is the network, `file://` the filesystem (GET reads,
+  PUT writes, DELETE removes), `data:` is pure, and a host or program may add
+  its own. The response is HTTP-shaped for EVERY scheme -- `file://` answers
+  200, 404 or 403 -- so code written against one works on another (the
+  maintainer's call). Granted per scheme and prefix, `https://api.x/*` or
+  `file:///project/*`, which generalises `flint.sys.slurp`'s URL allowlist. Its
+  in-memory implementation is a table from URI to response, which is also how a
+  test fakes the network. It REPLACES a `Files` protocol for content (the
+  maintainer's call): reading or writing anything addressable is one operation.
+
+  **Updating without resending, and without racing** (the maintainer,
+  2026-09-30). `file://` responses carry an `:etag` from a hash of the CONTENT,
+  not the modification time, so it agrees across the four runtimes and moves
+  only when the bytes do. Requests honour `If-Match` and `If-None-Match: *`, and
+  a failed guard answers 412. PATCH sends only a patch, its format named by the
+  body's content type. Two formats, both the maintainer's choice: **VCDIFF**
+  (RFC 3284), the byte-level delta that covers text and binary alike, and
+  **JSON Patch** (RFC 6902), which edits a parsed DOCUMENT rather than bytes and
+  so belongs to data resources -- on a file it would mean parse, apply,
+  re-print, losing the file's own formatting. Both are pure algorithms, so they
+  are written once in kin. OPEN: whether a PATCH with no `If-Match` is refused
+  (428), which is recommended because an offset-based patch applied to a file
+  that changed since it was computed corrupts it silently; and how the npm CLI,
+  whose host is JavaScript and which kin does not emit, reaches the kin code --
+  recommended through an export of the runtime wasm it already ships rather
+  than a JavaScript target for kin.
 * `Directories` -- STRUCTURE: list, exists?, dir?, mkdir, delete. Separate from
-  `Files` (the maintainer's call) so a program can be given one without the
+  content (the maintainer's call) so a program can be given one without the
   other.
 * `Processes` -- run to completion (`{:exit :out :err}`) and a streaming
   `spawn` whose stdin and stdout are `flint.protocols.io` sources and sinks.
@@ -14166,5 +14196,6 @@ with an in-memory implementation for tests and confined sandboxes:
 `flint.sys` constructs host-backed instances: ports opened behind a capability
 check, carrying the protocol they speak. The function-style `flint.sys.fs`,
 `flint.sys.env` and `flint.sys.slurp` go: their operations become the requests
-a port implementation sends, which the host serves. Nothing is published yet,
+a port implementation sends, which the host serves. `slurp` is a GET, so it
+becomes a use of `Resources` rather than a namespace of its own. Nothing is published yet,
 so this breaks no user (the maintainer, 2026-09-30).
