@@ -4016,8 +4016,9 @@ Requiring `flint.sys.net`, `flint.sys.proc` or `flint.sys.clock` answers
 `git`, `curl` and `unzip` at lines 648-714, so the babashka path is still there.
 
 *The delegation correction, which is a capability claim and therefore was
-probed rather than read.* **Rules 1 and 2 are live; rule 3 is not.** Rule 2
-went live 2026-09-29 (see its bullet). As first written this paragraph said all three of
+probed rather than read.* **Rules 1 and 2 are live; rule 3 is SATISFIED BY
+RULE 2 rather than built** -- the maintainer's call on 2026-09-29, recorded in
+rule 3's bullet. Rule 2 went live the same day (see its bullet). As first written this paragraph said all three of
 `system-namespaces-and-deps`' delegation rules were inert in the shipped
 binary, and that `lending-errors` had no caller anywhere in the tree. That was
 true when it was written and `25c50dc6` fixed the first of the three; the
@@ -4066,8 +4067,32 @@ by then left. What holds today, re-probed:
   project holding and lending the guard resolves, that lending without holding
   is still rule 1's refusal rather than rule 2's, and that `fetch` is not
   stopped.
-* **Rule 3 — `flint deps add` writing the grant it found — is still absent.**
-  `cli/src/depscmd.rs` neither asks for nor writes a grant.
+* **Rule 3 — `flint deps add` writing the grant it found — is SATISFIED BY RULE
+  2, and deliberately not built.** Decided by the maintainer 2026-09-29, when
+  building it turned out to conflict with another recorded rule.
+
+  **The conflict.** A dependency's guard lives in its OWN `deps.edn`, readable
+  only once the package is downloaded: npm's packument and Maven's POM carry no
+  flint guard, and git needs a checkout. `deps add` resolves through
+  `flint.deps.resolve`, which says outright that "a function that quietly
+  downloads is one nobody can reason about, so nothing here fetches:
+  `npm/manifest` and `mvn/pom` are metadata reads." Rule 3 as written therefore
+  required `deps add` to download, which the resolver's design had deliberately
+  kept out of resolution.
+
+  **Why rule 2 answers it.** Rule 3's stated reason is that granting a capability
+  "should be made visible in a diff rather than happening implicitly somewhere
+  else." With rule 2 live it is: the first `build`, `task` or `paths` refuses,
+  names the dependency, and prints the literal `:flint/capabilities-grant [...]`
+  to add -- so the grant is written by a person, lands in a diff, and never
+  happens implicitly. The only thing rule 3 would have added is the TIMING --
+  asking at `add` rather than refusing at `build` -- and that was not worth a
+  download inside resolution.
+
+  **Revisit if** `deps add` ever fetches for its own reasons, at which point the
+  guard is free to read and asking then costs nothing extra. The consent
+  convention to reuse is `cli/src/script.rs`'s `consent`: prompt on stderr,
+  default No, and with no terminal never assume yes.
 
 The original probe, kept because it is what the refusal now prevents: a project
 holding nothing and writing `:flint/capabilities-grant [:host]` on a dependency
