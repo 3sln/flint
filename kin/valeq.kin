@@ -26,7 +26,7 @@
                                    Bool Cat RootIx F64 NIL INTERN_MAX
                                    CAT_SEQUENTIAL CAT_MAP CAT_SET TY_VEC
                                    TY_STR TY_ROPE TY_SYM TY_BYTES TY_BROPE
-                                   TY_TABLE TY_TAGGED TB_SCHEMA declarefn]]
+                                   TY_TABLE TY_TAGGED TY_PORTREF TB_SCHEMA declarefn]]
             [flint.rt.mapeq :refer [map-eq]]
             [flint.rt.tableref :refer [table-ref]]
             [flint.rt.setcore :refer [set-eq]]
@@ -168,6 +168,22 @@
                  (== (i64-of rt a) (i64-of rt b)))))
   (if (or (not (is-heap a)) (not (is-heap b)))
     (return false))
+  (comment "A PORT HANDLE IS THE PORT IT HOLDS (`ports-speak-protocols`):"
+           "metadata never enters `=`, and a handle's metadata is all that sets"
+           "it apart. So both sides are read through `port-of`, and two handles"
+           "on one port are equal, as are a handle and its bare port.")
+  (if (or (== (ty rt (as-heap a)) TY_PORTREF) (== (ty rt (as-heap b)) TY_PORTREF))
+    (do (comment "Slot 0 IS the port, read here rather than through"
+                 "`flint.rt.meta`'s `port-of` so equality needs no new module.")
+        (local ^:mut ^Value pa)
+        (local ^:mut ^Value pb)
+        (set pa a)
+        (set pb b)
+        (if (== (ty rt (as-heap a)) TY_PORTREF)
+          (set pa (slot rt a 0)))
+        (if (== (ty rt (as-heap b)) TY_PORTREF)
+          (set pb (slot rt b 0)))
+        (return (== pa pb))))
   (comment "A ROW REF IS COMPARED AS THE MAP IT IS, and BOTH operands are"
            "rooted before either is materialised. `ref-to-map` allocates a map"
            "and assocs every column into it, so it collects -- and `a-vec-of-values-is-not-a-root` is"

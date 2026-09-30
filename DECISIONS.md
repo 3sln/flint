@@ -14104,8 +14104,18 @@ ports**
 
 **Ratified:** ☐ not signed off
 
-**Status: decided 2026-09-30, NOT BUILT.** Written down before any of it
-exists, because an earlier version of the idea was decided on 2026-09-14 and
+**Status: part 2 BUILT 2026-09-30 -- metadata on a port HANDLE, on all four
+runtimes; parts 1, 3 and 4 and `flint.sys` NOT BUILT.** `with-meta` on a port
+answers a `TY_PORTREF` `[port, meta]` (`kin/meta.kin`); every port operation
+reads through `port-of`; a handle is `=` to, hashes as, and has the kind of its
+port. Proved by `test/common/lang/meta.cljc`'s `a-port-handle-is-the-port-it-holds`
+and `a-protocol-dispatches-on-a-port-handle`, which `bin/conform-hosts` runs on
+native, wasm, JVM and CLR with one report, and by the kin drivers for
+`meta`/`valeq`/`valhash`/`tablekind`. Not yet: `:flint/protocols` driving
+dispatch (part 4), a port's `WireMeta` selecting it and the label (part 3 --
+today a port's metadata does not cross at all, which is the safe default), the
+label moving out of `PT_LABEL`, and the protocols. Originally written down before any of it
+existed, because an earlier version of the idea was decided on 2026-09-14 and
 then lost: it was never recorded here, the work that followed built `WireMeta`
 and stopped, and comments in `lib/flint/protocols.cljc`,
 `runtime/src/codec.rs` and `sdks/esm/src/codec.js` went on saying "a port

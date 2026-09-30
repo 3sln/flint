@@ -267,6 +267,15 @@ public sealed class Rt : System.IDisposable {
     /// The conform host also runs them explicitly, which this makes harmless
     /// rather than double: the flag is what makes it idempotent.
     public bool started;
+    /// TRUE WHILE THE INITIALISERS RUN, so that a scheduler made by one of them
+    /// does not arm a slice. `EnsureStarted` disarms preemption for the whole
+    /// loop -- a yield there has nowhere to come back to -- and `EnsureSched`
+    /// arming a fresh slice undid that from the inside: the first top-level
+    /// form to make a CHANNEL left every later one preemptible, and a slice
+    /// boundary in one surfaced as the PARK sentinel thrown out of the program.
+    /// Native never saw it, because it runs initialisers with Rust frames
+    /// underneath, where a slice boundary defers rather than yields.
+    public bool initialising;
 
     /// True once this sandbox has more than one executor. Read once per
     /// instruction, so it is a plain field rather than a call.
@@ -1892,6 +1901,7 @@ public sealed class Rt : System.IDisposable {
         started = true;
         long slice = sliceEnd;
         SetSliceEnd(0);
+        initialising = true;
         foreach (int fn in init) {
             Call(MakeClosure(fn, new long[0]), new long[0]);
             // A TOP-LEVEL FORM THAT ASKED THE HOST. It comes back with
@@ -1919,8 +1929,9 @@ public sealed class Rt : System.IDisposable {
                          + "initialising, and cannot wait for the answer there. Move the "
                          + "call into a function the entry reaches.");
             }
-            if (Failed()) { SetSliceEnd(slice); return false; }
+            if (Failed()) { initialising = false; SetSliceEnd(slice); return false; }
         }
+        initialising = false;
         SetSliceEnd(slice);
         return true;
     }

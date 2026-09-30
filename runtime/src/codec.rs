@@ -371,6 +371,12 @@ impl Rt {
             return Err(alloc::format!("this value cannot cross a boundary: {:?}", v));
         }
         match ty(&self.gc.sp, v.as_heap()) {
+            // A PORT HANDLE whose metadata is already written (above) or was
+            // not selected: what remains to encode is the port it holds.
+            crate::obj::TY_PORTREF => {
+                let port = self.slot(v, 0);
+                self.encode_into(port, out, depth + 1)
+            }
             TY_PORT => {
                 out.push(K_PORT);
                 put_u32(out, self.slot(v, crate::conc::PT_ID).as_fixnum() as u32);

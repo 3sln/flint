@@ -25,6 +25,7 @@ export const TY = {
   38: 'TYPE', 39: 'THREAD', 40: 'PORT', 41: 'SCHED', 42: 'ROPE', 43: 'OPAQUE',
   44: 'BYTES', 45: 'BROPE', 46: 'TBYTES', 47: 'TAGGED', 48: 'SCHEMA',
   49: 'TABLE', 50: 'TABLEREF', 51: 'TTABLE', 52: 'WRITER', 53: 'READER',
+  54: 'PORTREF',
 };
 const TY_FREE = 0, TY_FWD = 1, TY_STR = 2, TY_BIGINT = 3, TY_RAW = 35;
 const TAG_HEAP = 0xfff9;

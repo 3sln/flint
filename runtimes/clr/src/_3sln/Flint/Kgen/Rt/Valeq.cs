@@ -162,6 +162,25 @@ public static class Valeq {
         if (!Val.IsHeap(a) || !Val.IsHeap(b)) {
             return false;
         }
+        // A PORT HANDLE IS THE PORT IT HOLDS (`ports-speak-protocols`):
+        // metadata never enters `=`, and a handle's metadata is all that sets
+        // it apart. So both sides are read through `port-of`, and two handles
+        // on one port are equal, as are a handle and its bare port.
+        if ((Obj.Ty(rt.gc.sp, Val.AsHeap(a)) == Obj.TyPortref) || (Obj.Ty(rt.gc.sp, Val.AsHeap(b)) == Obj.TyPortref)) {
+            // Slot 0 IS the port, read here rather than through
+            // `flint.rt.meta`'s `port-of` so equality needs no new module.
+            long pa;
+            long pb;
+            pa = a;
+            pb = b;
+            if (Obj.Ty(rt.gc.sp, Val.AsHeap(a)) == Obj.TyPortref) {
+                pa = rt.Slot(a, 0);
+            }
+            if (Obj.Ty(rt.gc.sp, Val.AsHeap(b)) == Obj.TyPortref) {
+                pb = rt.Slot(b, 0);
+            }
+            return pa == pb;
+        }
         // A ROW REF IS COMPARED AS THE MAP IT IS, and BOTH operands are
         // rooted before either is materialised. `ref-to-map` allocates a map
         // and assocs every column into it, so it collects -- and `a-vec-of-values-is-not-a-root` is

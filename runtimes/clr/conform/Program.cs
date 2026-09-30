@@ -254,12 +254,10 @@ public static class Program {
         // THESE ARE THE INITIALISERS, so say so: `EnsureStarted` is the
         // runtime's own one-shot runner, and a control plane spawned later
         // would otherwise run them a second time.
-        rt.started = true;
-        foreach (int fn in img.init) {
-            rt.Call(rt.MakeClosure(fn, System.Array.Empty<long>()), System.Array.Empty<long>());
-            if (!Flint.Rt.Val.IsNil(rt.thrown))
-                return new AotRun(AotWhy(rt), rt.steps, n, Flint.Rt.Rt.aotEntries);
-        }
+        // THROUGH `EnsureStarted`, not a copy of it -- see the JVM's `RtImage`
+        // for the image this loop's copy threw the PARK sentinel on.
+        if (!rt.EnsureStarted())
+            return new AotRun(AotWhy(rt), rt.steps, n, Flint.Rt.Rt.aotEntries);
         long v = rt.RunProgram(rt.MakeClosure(img.entry, System.Array.Empty<long>()),
                                new long[]{ Flint.Rt.Val.Nil });
         if (!Flint.Rt.Val.IsNil(rt.thrown))
@@ -882,8 +880,8 @@ public static class Program {
         // GENEROUS, not absent: a limit of 0 means "not counting", and an
         // unbudgeted sandbox deliberately maintains no counter.
         rt.SetGasLimit(0x7ffffff0L);
-        rt.started = true;
-        foreach (int fn in img.init) rt.Call(rt.MakeClosure(fn, new long[0]), new long[0]);
+        // The runtime's own runner, not a copy of it (see the JVM's `RtImage`).
+        rt.EnsureStarted();
         rt.RunProgram(rt.MakeClosure(img.entry, new long[0]), new long[]{ Flint.Rt.Val.Nil });
         bool threw = !Flint.Rt.Val.IsNil(rt.thrown);
         Ok("with no budget the program runs to its answer", !threw,
@@ -929,11 +927,8 @@ public static class Program {
         // `thrown` and unwinds to the top, where `Call` returns nil -- so
         // ignoring it means a program whose top-level `assert` FAILED runs on
         // to `main` and reports whatever `main` says.
-        rt.started = true;
-        foreach (int fn in img.init) {
-            rt.Call(rt.MakeClosure(fn, Array.Empty<long>()), Array.Empty<long>());
-            if (!Flint.Rt.Val.IsNil(rt.thrown)) { Console.WriteLine("  FAIL " + Why(rt)); return 1; }
-        }
+        // The runtime's own runner, not a copy of it (see the JVM's `RtImage`).
+        if (!rt.EnsureStarted()) { Console.WriteLine("  FAIL " + Why(rt)); return 1; }
         long f = rt.MakeClosure(img.entry, Array.Empty<long>());
         try {
             long v = rt.RunProgram(f, new long[]{ Flint.Rt.Val.Nil });
@@ -1114,9 +1109,8 @@ public static class Program {
 
     /// Run until the step budget trips, leaving the runtime mid-program.
     static bool RunUntilPaused(Flint.Rt.Rt rt, Flint.Rt.Img.Loaded img, long budget) {
-        rt.started = true;
-        foreach (int fn in img.init)
-            rt.Call(rt.MakeClosure(fn, Array.Empty<long>()), Array.Empty<long>());
+        // The runtime's own runner, not a copy of it (see the JVM's `RtImage`).
+        rt.EnsureStarted();
         long f = rt.MakeClosure(img.entry, Array.Empty<long>());
         rt.SetSliceEnd(budget);
         rt.Call(f, new long[]{ Flint.Rt.Val.Nil });
@@ -1289,9 +1283,8 @@ public static class Program {
             if (rt.natives[i] == null) { missing++; if (missing <= 60) names.Append(" ").Append(img.nativeNames[i]); }
         }
         Console.WriteLine("  builtins it wants that this runtime lacks: " + missing + names);
-        rt.started = true;
-        foreach (int fn in img.init)
-            rt.Call(rt.MakeClosure(fn, Array.Empty<long>()), Array.Empty<long>());
+        // The runtime's own runner, not a copy of it (see the JVM's `RtImage`).
+        rt.EnsureStarted();
         Console.WriteLine("  ok   " + img.init.Length + " initialisers ran");
 
         // `flint.selfhost/main` is a VAR, not a named entry in the function

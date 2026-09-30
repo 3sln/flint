@@ -152,6 +152,11 @@ public static class Codec {
         }
         if (!Val.IsHeap(v)) throw new Refused("this value cannot cross a boundary");
         switch (Obj.Ty(rt.gc.sp, Val.AsHeap(v))) {
+            // A PORT HANDLE: its metadata is written above or was not selected,
+            // so what remains is the port it holds.
+            case Obj.TyPortref:
+                EncodeInto(rt, rt.Slot(v, 0), outs, depth + 1);
+                return;
             case Obj.TyPort:
                 outs.WriteByte(K_PORT);
                 U32(outs, (int) Val.AsFixnum(rt.Slot(v, Conc.PT_ID)));

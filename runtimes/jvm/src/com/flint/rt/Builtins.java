@@ -805,21 +805,14 @@ public final class Builtins {
         def("compare", (rt, at, n) -> Val.fixnum(com._3sln.flint.kgen.rt.Valcmp.valCmp(rt, rt.vat(at), rt.vat(at + 1))));
 
         // --- metadata ---------------------------------------------------------
-        def("with-meta", (rt, at, n) -> {
-            long v = rt.vat(at);
-            int idx = rt.metaSlot(v);
-            if (idx < 0) return v;   // nothing carries metadata: hand it back
-            int base = rt.mark();
-            int vi = rt.push(v), mi = rt.push(rt.vat(at + 1));
-            int t = ty(rt.gc.sp, Val.asHeap(rt.r(vi)));
-            int ln = len(rt.gc.sp, Val.asHeap(rt.r(vi)));
-            long a = rt.alloc(t, ln);
-            if (a == 0) { rt.popTo(base); return Val.NIL; }
-            for (int i = 0; i < ln; i++) rt.setSlot(a, i, rt.slot(rt.r(vi), i));
-            rt.setSlot(a, idx, rt.r(mi));
-            rt.popTo(base);
-            return Val.heap(a);
-        });
+        // GENERATED, from `kin/meta.kin`, as the Rust builtin already was. This
+        // was a hand-written copy of the same logic, and a copy does not learn:
+        // when a PORT learned to take metadata on a handle
+        // (`DECISIONS.md#ports-speak-protocols`), the Rust answered a handle and
+        // this answered the port back unchanged, so `(meta (with-meta p m))` was
+        // nil on the JVM alone.
+        def("with-meta", (rt, at, n) ->
+            com._3sln.flint.kgen.rt.Meta.withMeta(rt, rt.vat(at), rt.vat(at + 1)));
 
         // --- delays -----------------------------------------------------------
         def("flint/delay", (rt, at, n) -> newCell(rt, TY_DELAY, rt.vat(at)));
@@ -1195,7 +1188,7 @@ public final class Builtins {
         def("flint/wire-port", (rt, at, n) -> {
             long w = wcheck(rt, rt.vat(at), "wire-port");
             if (Val.isNil(w)) return Val.NIL;
-            long p = rt.vat(at + 1);
+            long p = com._3sln.flint.kgen.rt.Meta.portOf(rt, rt.vat(at + 1));
             if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "wire-port wants a port");
             // A CHANNEL END IS NOT WRITABLE. `checkSendable` runs on a VALUE and
             // never sees an encoding, so the rule has to be restated where the
@@ -1358,16 +1351,16 @@ public final class Builtins {
         def("flint/port-send", (rt, at, n) -> Conc.send(rt, rt.vat(at), rt.vat(at + 1)));
         def("flint/port-receive", (rt, at, n) -> Conc.receive(rt, rt.vat(at)));
         def("flint/port-receive-reader", (rt, at, n) -> {
-            long p = rt.vat(at);
+            long p = com._3sln.flint.kgen.rt.Meta.portOf(rt, rt.vat(at));
             if (!Conc.isPort(rt, p)) {
                 return rt.throwStr("ClassCastException", "port-receive-reader wants a port");
             }
             return Conc.receiveReader(rt, p);
         });
         def("flint/port-close", (rt, at, n) -> Conc.close(rt, rt.vat(at)));
-        def("flint/port?", (rt, at, n) -> Val.bool(Conc.isPort(rt, rt.vat(at))));
+        def("flint/port?", (rt, at, n) -> Val.bool(Conc.isPort(rt, com._3sln.flint.kgen.rt.Meta.portOf(rt, rt.vat(at)))));
         def("flint/port-id", (rt, at, n) -> {
-            long p = rt.vat(at);
+            long p = com._3sln.flint.kgen.rt.Meta.portOf(rt, rt.vat(at));
             if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-id wants a port");
             return rt.slot(p, Conc.PT_ID);
         });
@@ -1383,7 +1376,7 @@ public final class Builtins {
         /// silently never start (`DECISIONS.md#bridges-are-the-only-door`).
         def("flint/system-port", (rt, at, n) -> Conc.systemPort(rt));
         def("flint/port-label", (rt, at, n) -> {
-            long p = rt.vat(at);
+            long p = com._3sln.flint.kgen.rt.Meta.portOf(rt, rt.vat(at));
             if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-label wants a port");
             return rt.slot(p, Conc.PT_LABEL);
         });
@@ -1391,12 +1384,12 @@ public final class Builtins {
         /// channel does not, and that is the only distinction a guest can see
         /// -- it cannot see the encoding, because the runtime owns it.
         def("flint/port-bridge?", (rt, at, n) -> {
-            long p = rt.vat(at);
+            long p = com._3sln.flint.kgen.rt.Meta.portOf(rt, rt.vat(at));
             if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-bridge? wants a port");
             return Val.bool(Conc.crossesAHeap(Val.asFixnum(rt.slot(p, Conc.PT_KIND))));
         });
         def("flint/port-state", (rt, at, n) -> {
-            long p = rt.vat(at);
+            long p = com._3sln.flint.kgen.rt.Meta.portOf(rt, rt.vat(at));
             if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-state wants a port");
             // THE QUERY IS THE TRUTH (`DECISIONS.md#host-abi`), so it resolves the
             // peer rather than reporting a state that reaping has not caught up

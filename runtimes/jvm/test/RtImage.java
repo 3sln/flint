@@ -37,11 +37,14 @@ public class RtImage {
     // THESE ARE THE INITIALISERS, so say so: `ensureStarted` is the runtime's
     // own one-shot runner, and a control plane spawned later would otherwise
     // run them a second time.
-    rt.started = true;
-    for (int fn : img.init) {
-      rt.call(rt.makeClosure(fn, new long[0]), new long[0]);
-      if (!Val.isNil(rt.thrown)) { System.out.println("  FAIL " + why(rt)); System.exit(1); }
-    }
+    //
+    // THROUGH `ensureStarted`, not a copy of it. This loop was a copy, and it
+    // missed the part that mattered: the runtime's runner disarms preemption
+    // around the initialisers and this did not, so an image whose top-level
+    // forms made a channel threw the PARK sentinel here and ran on the native
+    // runtime. A harness that re-implements the thing it tests is testing
+    // itself.
+    if (!rt.ensureStarted()) { System.out.println("  FAIL " + why(rt)); System.exit(1); }
     long f = rt.makeClosure(img.entry, new long[0]);
     try {
       long v = rt.runProgram(f, new long[]{ Val.NIL });

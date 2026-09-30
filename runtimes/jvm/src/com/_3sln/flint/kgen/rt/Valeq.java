@@ -160,6 +160,25 @@ public final class Valeq {
         if (!Val.isHeap(a) || !Val.isHeap(b)) {
             return false;
         }
+        // A PORT HANDLE IS THE PORT IT HOLDS (`ports-speak-protocols`):
+        // metadata never enters `=`, and a handle's metadata is all that sets
+        // it apart. So both sides are read through `port-of`, and two handles
+        // on one port are equal, as are a handle and its bare port.
+        if ((ty(rt.gc.sp, Val.asHeap(a)) == TY_PORTREF) || (ty(rt.gc.sp, Val.asHeap(b)) == TY_PORTREF)) {
+            // Slot 0 IS the port, read here rather than through
+            // `flint.rt.meta`'s `port-of` so equality needs no new module.
+            long pa;
+            long pb;
+            pa = a;
+            pb = b;
+            if (ty(rt.gc.sp, Val.asHeap(a)) == TY_PORTREF) {
+                pa = rt.slot(a, 0);
+            }
+            if (ty(rt.gc.sp, Val.asHeap(b)) == TY_PORTREF) {
+                pb = rt.slot(b, 0);
+            }
+            return pa == pb;
+        }
         // A ROW REF IS COMPARED AS THE MAP IT IS, and BOTH operands are
         // rooted before either is materialised. `ref-to-map` allocates a map
         // and assocs every column into it, so it collects -- and `a-vec-of-values-is-not-a-root` is

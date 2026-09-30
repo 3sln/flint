@@ -341,6 +341,15 @@ public final class Rt {
     /// The conform host also runs them explicitly, which this makes harmless
     /// rather than double: the flag is what makes it idempotent.
     public boolean started;
+    /// TRUE WHILE THE INITIALISERS RUN, so that a scheduler made by one of them
+    /// does not arm a slice. `ensureStarted` disarms preemption for the whole
+    /// loop -- a yield there has nowhere to come back to -- and `ensureSched`
+    /// arming a fresh slice undid that from the inside: the first top-level
+    /// form to make a CHANNEL left every later one preemptible, and a slice
+    /// boundary in one surfaced as the PARK sentinel thrown out of the program.
+    /// Native never saw it, because it runs initialisers with Rust frames
+    /// underneath, where a slice boundary defers rather than yields.
+    public boolean initialising;
 
     public void setSliceEnd(long at) {
         com._3sln.flint.kgen.rt.Rtgas.rtSetSliceEnd(this, at);
@@ -2109,6 +2118,7 @@ public final class Rt {
         started = true;
         long slice = sliceEnd;
         setSliceEnd(0);
+        initialising = true;
         for (int fn : init) {
             call(makeClosure(fn, new long[0]), new long[0]);
             // A TOP-LEVEL FORM THAT ASKED THE HOST, which is the one thing it
@@ -2141,8 +2151,9 @@ public final class Rt {
                          + "initialising, and cannot wait for the answer there. Move the "
                          + "call into a function the entry reaches.");
             }
-            if (failed()) { setSliceEnd(slice); return false; }
+            if (failed()) { initialising = false; setSliceEnd(slice); return false; }
         }
+        initialising = false;
         setSliceEnd(slice);
         return true;
     }

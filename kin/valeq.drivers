@@ -9,7 +9,7 @@ const TY_VEC: u8 = 10; const TY_STR: u8 = 11; const TY_ROPE: u8 = 12;
 const TY_SYM: u8 = 13; const TY_BYTES: u8 = 14; const TY_BROPE: u8 = 15;
 const TY_TABLE: u8 = 16; const TY_TAGGED: u8 = 17; const TY_TABLEREF: u8 = 18;
 const TY_MAP: u8 = 19; const TY_SET: u8 = 20; const TY_CONS: u8 = 21;
-const TY_OTHER: u8 = 22;
+const TY_OTHER: u8 = 22; const TY_PORTREF: u8 = 23;
 pub mod strs { pub const INTERN_MAX: u32 = 32; }
 pub mod table { pub const TB_SCHEMA: u32 = 0; }
 struct Space { m: Vec<u8> }
@@ -242,6 +242,19 @@ fn main() {
     let z2 = rt.obj(TY_OTHER);
     o.push_str(&format!("y={}{}{}", rt.val_eq(y1, y2) as u32,
                         rt.val_eq(y1, y3) as u32, rt.val_eq(z1, z2) as u32));
+    // PORT HANDLES are the port they hold: `TY_OTHER` objects stand in for two
+    // ports, and each handle's metadata differs so that reading it would show.
+    let pp = rt.obj(TY_OTHER);
+    let pq = rt.obj(TY_OTHER);
+    let h1 = rt.obj(TY_PORTREF);
+    rt.set_slot_(h1, 0, pp); rt.set_slot_(h1, 1, int(1));
+    let h2 = rt.obj(TY_PORTREF);
+    rt.set_slot_(h2, 0, pp); rt.set_slot_(h2, 1, int(2));
+    let hq = rt.obj(TY_PORTREF);
+    rt.set_slot_(hq, 0, pq); rt.set_slot_(hq, 1, int(1));
+    o.push_str(&format!(" pr={}{}{}{}{}", rt.val_eq(h1, pp) as u32, rt.val_eq(pp, h1) as u32,
+                        rt.val_eq(h1, h2) as u32, rt.val_eq(h1, hq) as u32,
+                        rt.val_eq(h1, pq) as u32));
     println!("{}", o);
 }
 --java-head
@@ -249,7 +262,7 @@ fn main() {
     static final int CAT_SCALAR = 0, CAT_SEQUENTIAL = 1, CAT_MAP = 2, CAT_SET = 3;
     static final int TY_VEC = 10, TY_STR = 11, TY_ROPE = 12;
     static final int TY_SYM = 13, TY_BYTES = 14, TY_BROPE = 15;
-    static final int TY_TABLE = 16, TY_TAGGED = 17, TY_TABLEREF = 18;
+    static final int TY_TABLE = 16, TY_TAGGED = 17, TY_TABLEREF = 18, TY_PORTREF = 23;
     static final int TY_MAP = 19, TY_SET = 20, TY_CONS = 21, TY_OTHER = 22;
     static final class Val {
         static final long NIL = Probe.NIL;
@@ -447,6 +460,17 @@ fn main() {
         long z2 = rt.obj(TY_OTHER);
         o.append("y=").append(valEq(rt, y1, y2) ? 1 : 0).append(valEq(rt, y1, y3) ? 1 : 0)
          .append(valEq(rt, z1, z2) ? 1 : 0);
+        long pp = rt.obj(TY_OTHER);
+        long pq = rt.obj(TY_OTHER);
+        long h1 = rt.obj(TY_PORTREF);
+        rt.setSlot_(h1, 0, pp); rt.setSlot_(h1, 1, anInt(1));
+        long h2 = rt.obj(TY_PORTREF);
+        rt.setSlot_(h2, 0, pp); rt.setSlot_(h2, 1, anInt(2));
+        long hq = rt.obj(TY_PORTREF);
+        rt.setSlot_(hq, 0, pq); rt.setSlot_(hq, 1, anInt(1));
+        o.append(" pr=").append(valEq(rt, h1, pp) ? 1 : 0).append(valEq(rt, pp, h1) ? 1 : 0)
+         .append(valEq(rt, h1, h2) ? 1 : 0).append(valEq(rt, h1, hq) ? 1 : 0)
+         .append(valEq(rt, h1, pq) ? 1 : 0);
         System.out.println(o.toString());
     }
 --csharp-pre
@@ -470,7 +494,7 @@ namespace Flint.Rt {
     internal static class Obj {
         internal const int TyVec = 10, TyStr = 11, TyRope = 12;
         internal const int TySym = 13, TyBytes = 14, TyBrope = 15;
-        internal const int TyTable = 16, TyTagged = 17, TyTableref = 18;
+        internal const int TyTable = 16, TyTagged = 17, TyTableref = 18, TyPortref = 23;
         internal const int TyMap = 19, TySet = 20, TyCons = 21, TyOther = 22;
         internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
     }
@@ -660,10 +684,21 @@ namespace Flint.Rt {
         long z2 = rt.Obj_(Obj.TyOther);
         o.Append("y=").Append(ValEq(rt, y1, y2) ? 1 : 0).Append(ValEq(rt, y1, y3) ? 1 : 0)
          .Append(ValEq(rt, z1, z2) ? 1 : 0);
+        long pp = rt.Obj_(Obj.TyOther);
+        long pq = rt.Obj_(Obj.TyOther);
+        long h1 = rt.Obj_(Obj.TyPortref);
+        rt.SetSlot_(h1, 0, pp); rt.SetSlot_(h1, 1, AnInt(1));
+        long h2 = rt.Obj_(Obj.TyPortref);
+        rt.SetSlot_(h2, 0, pp); rt.SetSlot_(h2, 1, AnInt(2));
+        long hq = rt.Obj_(Obj.TyPortref);
+        rt.SetSlot_(hq, 0, pq); rt.SetSlot_(hq, 1, AnInt(1));
+        o.Append(" pr=").Append(ValEq(rt, h1, pp) ? 1 : 0).Append(ValEq(rt, pp, h1) ? 1 : 0)
+         .Append(ValEq(rt, h1, h2) ? 1 : 0).Append(ValEq(rt, h1, hq) ? 1 : 0)
+         .Append(ValEq(rt, h1, pq) ? 1 : 0);
         System.Console.WriteLine(o.ToString());
     }
 --expect
-d=01100 i=100 im=10 ref=111 ref0=00 cat=000 seq=10 work=4 cons=1 work=4 mix=1 del=10 s=00111 s0=000 b=1 b0=0 t=10 tsch=0 tv=00 g=100 y=100
+d=01100 i=100 im=10 ref=111 ref0=00 cat=000 seq=10 work=4 cons=1 work=4 mix=1 del=10 s=00111 s0=000 b=1 b0=0 t=10 tsch=0 tv=00 g=100 y=100 pr=11100
 --expect-why
 DERIVED ARM BY ARM from `valeq.kin` against the fixture. `=` is the hottest
 function in the runtime and the one where a disagreement does the most

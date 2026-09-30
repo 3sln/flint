@@ -61,6 +61,12 @@ impl Rt {
         if t == TY_TAGGED {
             return true;
         }
+        // A PORT HANDLE, and not a bare port: a port has no slot for
+        // metadata and never will, because it is shared by every holder.
+        // `with-meta` below gives a bare port a handle.
+        if t == TY_PORTREF {
+            return true;
+        }
         return false;
     }
     /// WHICH slot holds `v`'s metadata. Ask `has-meta` first.
@@ -103,6 +109,9 @@ impl Rt {
         if t == TY_TAGGED {
             return 2;
         }
+        if t == TY_PORTREF {
+            return 1;
+        }
         return 0;
     }
     /// The metadata, or nil when the value cannot carry any.
@@ -122,6 +131,28 @@ impl Rt {
     /// only in their metadata are still `=`, but they are not the same object,
     /// and changing one must not change the other.
     pub fn with_meta(&mut self, v: Value, m: Value) -> Value {
+        // A BARE PORT GETS A HANDLE (`ports-speak-protocols`): `[port, meta]`,
+        // the port untouched and still shared. A handle already has a slot,
+        // so it takes the copying path below like any other value -- which
+        // copies the PORT REFERENCE, so every handle names the same port.
+        // The locals are named apart from the copying path's below: C#
+        // refuses a name in a nested scope that an enclosing one declares.
+        if v.is_heap() {
+            if ty(&self.gc.sp, v.as_heap()) == TY_PORT {
+                let hbase: usize = self.mark();
+                let hvi: usize = self.push(v);
+                let hmi: usize = self.push(m);
+                let handle: Value = self.new_obj(TY_PORTREF, 2);
+                if handle.is_nil() {
+                    self.pop_to(hbase);
+                    return NIL;
+                }
+                self.set(handle, 0, self.r(hvi));
+                self.set(handle, 1, self.r(hmi));
+                self.pop_to(hbase);
+                return handle;
+            }
+        }
         if !self.has_meta(v) {
             return v;
         }
@@ -144,5 +175,20 @@ impl Rt {
         self.set(out, idx, self.r(mi));
         self.pop_to(base);
         return out;
+    }
+    /// The PORT `v` is, whether `v` is the port itself or a handle to it.
+    /// 
+    /// Every operation on a port reads through this, so a handle carrying
+    /// metadata sends, receives, closes and answers `port?` exactly as the port
+    /// does. Anything that is neither comes back unchanged, and the caller's
+    /// own type check refuses it as before.
+    pub fn port_of(&mut self, v: Value) -> Value {
+        if !v.is_heap() {
+            return v;
+        }
+        if ty(&self.gc.sp, v.as_heap()) == TY_PORTREF {
+            return self.slot(v, 0);
+        }
+        return v;
     }
 }

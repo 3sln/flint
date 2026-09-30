@@ -27,7 +27,7 @@
                                    TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ
                                    TY_STRSEQ TY_RANGE TY_ARRAYMAP TY_HASHMAP
                                    TY_SET TY_BYTES TY_BROPE TY_OPAQUE TY_TABLE
-                                   TY_TABLEREF TY_TAGGED V_HASH declarefn]]
+                                   TY_TABLEREF TY_TAGGED TY_PORTREF V_HASH declarefn]]
             [flint.rt.tableref :refer [table-ref]]
             [flint.rt.tablemeta :refer [table-count]]
             [flint.rt.collhash :refer [hash-map hash-set]]
@@ -289,6 +289,11 @@
              "two equal ones land in the same bucket. The final `hash-int` is"
              "the mix both ports dropped, which made a tagged literal hash"
              "differently on wasm than on the JVM and the CLR.")
+    (comment "A PORT HANDLE HASHES AS ITS PORT, since the two are `=`."
+             "Read through the slot rather than `port-of`: this file does not"
+             "otherwise need `flint.rt.meta`, and slot 0 IS the port.")
+    (if (== t TY_PORTREF)
+      (return (hash-value rt (slot rt v 0))))
     (if (== t TY_TAGGED)
       (let [^RootIx base (mark rt)
             ^RootIx vi (push rt v)

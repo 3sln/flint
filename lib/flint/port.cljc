@@ -228,7 +228,17 @@
                                                    (for-the-wire (val e))]) v))
                    (list? v) (apply list (map for-the-wire v))
                    :else v)]
-      (if (nil? m) walked (with-meta walked m)))))
+      ;; NIL MEANS NONE, and has to be applied, not assumed. The branches above
+      ;; rebuild a collection and so drop its metadata on the way; anything
+      ;; else comes back as the object it was, metadata and all. So a symbol
+      ;; with `{:a 1}` crossed carrying it, measured 2026-09-30 through
+      ;; `flint.ception` against a vector that arrived bare -- and a port
+      ;; handle, whose metadata is the point of it (`ports-speak-protocols`),
+      ;; would have sent all of it.
+      (cond
+        (some? m) (with-meta walked m)
+        (some? (meta walked)) (with-meta walked nil)
+        :else walked))))
 
 (defn send
   "Put `v` into the other end. Parks if that end's buffer is full.

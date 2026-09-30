@@ -216,6 +216,8 @@ builtin!(flint_b_port_receive, b_port_receive, |rt, a, n| {
 builtin!(flint_b_port_receive_reader, b_port_receive_reader, |rt, a, n| {
     let _ = n;
     let p = arg(rt, a, 0);
+    // A PORT HANDLE (`ports-speak-protocols`) is read as the port it holds.
+    let p = rt.port_of(p);
     if !rt.is_port(p) {
         return rt.throw_str("ClassCastException", "port-receive-reader wants a port");
     }
@@ -229,12 +231,16 @@ builtin!(flint_b_port_close, b_port_close, |rt, a, n| {
 
 builtin!(flint_b_port_p, b_port_p, |rt, a, n| {
     let _ = n;
-    Value::boolean(rt.is_port(arg(rt, a, 0)))
+    let p = arg(rt, a, 0);
+    let p = rt.port_of(p);
+    Value::boolean(rt.is_port(p))
 });
 
 builtin!(flint_b_port_state, b_port_state, |rt, a, n| {
     let _ = n;
     let p = arg(rt, a, 0);
+    // A PORT HANDLE (`ports-speak-protocols`) is read as the port it holds.
+    let p = rt.port_of(p);
     if !rt.is_port(p) {
         return rt.throw_str("ClassCastException", "port-state wants a port");
     }
@@ -255,6 +261,8 @@ builtin!(flint_b_port_state, b_port_state, |rt, a, n| {
 builtin!(flint_b_port_label, b_port_label, |rt, a, n| {
     let _ = n;
     let p = arg(rt, a, 0);
+    // A PORT HANDLE (`ports-speak-protocols`) is read as the port it holds.
+    let p = rt.port_of(p);
     if !rt.is_port(p) {
         return rt.throw_str("ClassCastException", "port-label wants a port");
     }
@@ -283,6 +291,8 @@ builtin!(flint_b_system_port, b_system_port, |rt, a, n| {
 builtin!(flint_b_port_bridge_p, b_port_bridge_p, |rt, a, n| {
     let _ = n;
     let p = arg(rt, a, 0);
+    // A PORT HANDLE (`ports-speak-protocols`) is read as the port it holds.
+    let p = rt.port_of(p);
     if !rt.is_port(p) {
         return rt.throw_str("ClassCastException", "port-bridge? wants a port");
     }
@@ -295,6 +305,8 @@ builtin!(flint_b_port_bridge_p, b_port_bridge_p, |rt, a, n| {
 builtin!(flint_b_port_id, b_port_id, |rt, a, n| {
     let _ = n;
     let p = arg(rt, a, 0);
+    // A PORT HANDLE (`ports-speak-protocols`) is read as the port it holds.
+    let p = rt.port_of(p);
     if !rt.is_port(p) {
         return rt.throw_str("ClassCastException", "port-id wants a port");
     }
@@ -686,6 +698,8 @@ builtin!(flint_b_wire_port, b_wire_port, |rt, a, n| {
     let _ = n;
     let Some(w) = writer_arg(rt, a, "wire-port") else { return NIL };
     let p = arg(rt, a, 1);
+    // A PORT HANDLE (`ports-speak-protocols`) is read as the port it holds.
+    let p = rt.port_of(p);
     if !rt.is_port(p) {
         return rt.throw_str("ClassCastException", "wire-port wants a port");
     }

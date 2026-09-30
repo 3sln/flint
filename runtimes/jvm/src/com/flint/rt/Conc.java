@@ -202,7 +202,8 @@ public final class Conc {
         long out = com._3sln.flint.kgen.rt.Schedmake.newSchedAt(rt);
         if (Val.isNil(out)) return Val.NIL;
         rt.schedInstalled = true;
-        rt.setSliceEnd(rt.steps + SLICE);
+        // NOT WHILE INITIALISING -- see `Rt.initialising`.
+        if (!rt.initialising) rt.setSliceEnd(rt.steps + SLICE);
         return out;
     }
 
@@ -638,6 +639,8 @@ public final class Conc {
         if (depth > 64) return "value nested too deeply to send";
         if (!Val.isHeap(v)) return null;
         int t = ty(rt.gc.sp, Val.asHeap(v));
+        // A PORT HANDLE crosses exactly when its port does -- see the Rust.
+        if (t == Obj.TY_PORTREF) return checkSendableAt(rt, rt.slot(v, 0), depth + 1, carry);
         switch (t) {
             case TY_CLOSURE: case TY_NATIVEFN: case TY_MULTIFN:
                 return "a port carries data only; " + describeFn(rt, v)
@@ -737,6 +740,8 @@ public final class Conc {
     }
 
     public static long send(Rt rt, long p, long v) {
+        // A PORT HANDLE (`ports-speak-protocols`) is read as the port it holds.
+        p = com._3sln.flint.kgen.rt.Meta.portOf(rt, p);
         if (!needPort(rt, p, "send")) return Val.NIL;
         // Never park against a peer that is gone: a script blocking for ever on
         // a host that has hung up is the same failure as a host leaking a
@@ -881,6 +886,7 @@ public final class Conc {
     /// which is also where they belong in the order: nothing is rooted yet
     /// when that test runs.
     public static long receive(Rt rt, long p) {
+        p = com._3sln.flint.kgen.rt.Meta.portOf(rt, p);
         if (!needPort(rt, p, "receive")) return Val.NIL;
         return com._3sln.flint.kgen.rt.Portrecv.receiveAt(rt, p);
     }
@@ -889,6 +895,7 @@ public final class Conc {
     /// check and its message are a host string and stay here, which is also
     /// where they belong in the order: nothing is rooted yet when it runs.
     public static long close(Rt rt, long p) {
+        p = com._3sln.flint.kgen.rt.Meta.portOf(rt, p);
         if (!needPort(rt, p, "close")) return Val.NIL;
         return com._3sln.flint.kgen.rt.Portpark.closeAt(rt, p);
     }

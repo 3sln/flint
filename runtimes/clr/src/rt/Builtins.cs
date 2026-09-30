@@ -707,21 +707,10 @@ public static class Builtins {
             Val.Fixnum(global::_3sln.Flint.Kgen.Rt.Valcmp.ValCmp(rt, rt.VAt(at), rt.VAt(at + 1))));
 
         // --- metadata ---------------------------------------------------------
-        Def("with-meta", (rt, at, n) => {
-            long v = rt.VAt(at);
-            int idx = rt.MetaSlot(v);
-            if (idx < 0) return v;   // nothing carries metadata: hand it back
-            int bas = rt.Mark();
-            int vi = rt.Push(v), mi = rt.Push(rt.VAt(at + 1));
-            int t = Obj.Ty(rt.gc.sp, Val.AsHeap(rt.R(vi)));
-            int ln = Obj.Len(rt.gc.sp, Val.AsHeap(rt.R(vi)));
-            long a = rt.Alloc(t, ln);
-            if (a == 0) { rt.PopTo(bas); return Val.Nil; }
-            for (int i = 0; i < ln; i++) rt.SetSlot(a, i, rt.Slot(rt.R(vi), i));
-            rt.SetSlot(a, idx, rt.R(mi));
-            rt.PopTo(bas);
-            return Val.Heap(a);
-        });
+        // GENERATED, from `kin/meta.kin` -- see the JVM's for why it is no
+        // longer a hand-written copy.
+        Def("with-meta", (rt, at, n) =>
+            global::_3sln.Flint.Kgen.Rt.Meta.WithMeta(rt, rt.VAt(at), rt.VAt(at + 1)));
 
         // --- delays -----------------------------------------------------------
         Def("flint/delay", (rt, at, n) => NewCell(rt, Obj.TyDelay, rt.VAt(at)));
@@ -1057,7 +1046,7 @@ public static class Builtins {
         Def("flint/wire-port", (rt, at, n) => {
             long w = WCheck(rt, rt.VAt(at), "wire-port");
             if (Val.IsNil(w)) return Val.Nil;
-            long p = rt.VAt(at + 1);
+            long p = global::_3sln.Flint.Kgen.Rt.Meta.PortOf(rt, rt.VAt(at + 1));
             if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "wire-port wants a port");
             // A CHANNEL END IS NOT WRITABLE. `CheckSendable` runs on a VALUE and
             // never sees an encoding, so the rule has to be restated where the
@@ -1205,16 +1194,16 @@ public static class Builtins {
         Def("flint/port-send", (rt, at, n) => Conc.Send(rt, rt.VAt(at), rt.VAt(at + 1)));
         Def("flint/port-receive", (rt, at, n) => Conc.Receive(rt, rt.VAt(at)));
         Def("flint/port-receive-reader", (rt, at, n) => {
-            long p = rt.VAt(at);
+            long p = global::_3sln.Flint.Kgen.Rt.Meta.PortOf(rt, rt.VAt(at));
             if (!Conc.IsPort(rt, p)) {
                 return rt.ThrowStr("ClassCastException", "port-receive-reader wants a port");
             }
             return Conc.ReceiveReader(rt, p);
         });
         Def("flint/port-close", (rt, at, n) => Conc.Close(rt, rt.VAt(at)));
-        Def("flint/port?", (rt, at, n) => Val.Bool(Conc.IsPort(rt, rt.VAt(at))));
+        Def("flint/port?", (rt, at, n) => Val.Bool(Conc.IsPort(rt, global::_3sln.Flint.Kgen.Rt.Meta.PortOf(rt, rt.VAt(at)))));
         Def("flint/port-id", (rt, at, n) => {
-            long p = rt.VAt(at);
+            long p = global::_3sln.Flint.Kgen.Rt.Meta.PortOf(rt, rt.VAt(at));
             if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-id wants a port");
             return rt.Slot(p, Conc.PT_ID);
         });
@@ -1230,7 +1219,7 @@ public static class Builtins {
         /// silently never start (`DECISIONS.md#bridges-are-the-only-door`).
         Def("flint/system-port", (rt, at, n) => Conc.SystemPort(rt));
         Def("flint/port-label", (rt, at, n) => {
-            long p = rt.VAt(at);
+            long p = global::_3sln.Flint.Kgen.Rt.Meta.PortOf(rt, rt.VAt(at));
             if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-label wants a port");
             return rt.Slot(p, Conc.PT_LABEL);
         });
@@ -1238,12 +1227,12 @@ public static class Builtins {
         /// channel does not, and that is the only distinction a guest can see
         /// -- it cannot see the encoding, because the runtime owns it.
         Def("flint/port-bridge?", (rt, at, n) => {
-            long p = rt.VAt(at);
+            long p = global::_3sln.Flint.Kgen.Rt.Meta.PortOf(rt, rt.VAt(at));
             if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-bridge? wants a port");
             return Val.Bool(Conc.CrossesAHeap(Val.AsFixnum(rt.Slot(p, Conc.PT_KIND))));
         });
         Def("flint/port-state", (rt, at, n) => {
-            long p = rt.VAt(at);
+            long p = global::_3sln.Flint.Kgen.Rt.Meta.PortOf(rt, rt.VAt(at));
             if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-state wants a port");
             // THE QUERY IS THE TRUTH (`DECISIONS.md#host-abi`), so it resolves the
             // peer rather than reporting a state that reaping has not caught up

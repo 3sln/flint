@@ -193,7 +193,8 @@ public static class Conc {
         long outv = global::_3sln.Flint.Kgen.Rt.Schedmake.NewSchedAt(rt);
         if (Val.IsNil(outv)) return Val.Nil;
         rt.schedInstalled = true;
-        rt.SetSliceEnd(rt.steps + SLICE);
+        // NOT WHILE INITIALISING -- see `Rt.initialising`.
+        if (!rt.initialising) rt.SetSliceEnd(rt.steps + SLICE);
         return outv;
     }
 
@@ -597,6 +598,8 @@ public static class Conc {
         if (depth > 64) return "value nested too deeply to send";
         if (!Val.IsHeap(v)) return null;
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
+        // A PORT HANDLE crosses exactly when its port does -- see the Rust.
+        if (t == Obj.TyPortref) return CheckSendableAt(rt, rt.Slot(v, 0), depth + 1, carry);
         switch (t) {
             case Obj.TyClosure: case Obj.TyNativefn: case Obj.TyMultifn:
                 return "a port carries data only; " + DescribeFn(rt, v)
@@ -696,6 +699,8 @@ public static class Conc {
     }
 
     public static long Send(Rt rt, long p, long v) {
+        // A PORT HANDLE (`ports-speak-protocols`) is read as the port it holds.
+        p = global::_3sln.Flint.Kgen.Rt.Meta.PortOf(rt, p);
         if (!NeedPort(rt, p, "send")) return Val.Nil;
         // Never park against a peer that is gone: a script blocking for ever on
         // a host that has hung up is the same failure as a host leaking a
@@ -832,6 +837,7 @@ public static class Conc {
     /// which is also where they belong in the order: nothing is rooted yet
     /// when that test runs.
     public static long Receive(Rt rt, long p) {
+        p = global::_3sln.Flint.Kgen.Rt.Meta.PortOf(rt, p);
         if (!NeedPort(rt, p, "receive")) return Val.Nil;
         return global::_3sln.Flint.Kgen.Rt.Portrecv.ReceiveAt(rt, p);
     }
@@ -840,6 +846,7 @@ public static class Conc {
     /// check and its message are a host string and stay here, which is also
     /// where they belong in the order: nothing is rooted yet when it runs.
     public static long Close(Rt rt, long p) {
+        p = global::_3sln.Flint.Kgen.Rt.Meta.PortOf(rt, p);
         if (!NeedPort(rt, p, "close")) return Val.Nil;
         return global::_3sln.Flint.Kgen.Rt.Portpark.CloseAt(rt, p);
     }

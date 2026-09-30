@@ -57,6 +57,12 @@ public static class Meta {
         if (t == Obj.TyTagged) {
             return true;
         }
+        // A PORT HANDLE, and not a bare port: a port has no slot for
+        // metadata and never will, because it is shared by every holder.
+        // `with-meta` below gives a bare port a handle.
+        if (t == Obj.TyPortref) {
+            return true;
+        }
         return false;
     }
     /// WHICH slot holds `v`'s metadata. Ask `has-meta` first.
@@ -99,6 +105,9 @@ public static class Meta {
         if (t == Obj.TyTagged) {
             return 2;
         }
+        if (t == Obj.TyPortref) {
+            return 1;
+        }
         return 0;
     }
     /// The metadata, or nil when the value cannot carry any.
@@ -118,6 +127,28 @@ public static class Meta {
     /// only in their metadata are still `=`, but they are not the same object,
     /// and changing one must not change the other.
     public static long WithMeta(Rt rt, long v, long m) {
+        // A BARE PORT GETS A HANDLE (`ports-speak-protocols`): `[port, meta]`,
+        // the port untouched and still shared. A handle already has a slot,
+        // so it takes the copying path below like any other value -- which
+        // copies the PORT REFERENCE, so every handle names the same port.
+        // The locals are named apart from the copying path's below: C#
+        // refuses a name in a nested scope that an enclosing one declares.
+        if (Val.IsHeap(v)) {
+            if (Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyPort) {
+                int hbase = rt.Mark();
+                int hvi = rt.Push(v);
+                int hmi = rt.Push(m);
+                long handle = Conc.NewObj(rt, Obj.TyPortref, 2);
+                if (Val.IsNil(handle)) {
+                    rt.PopTo(hbase);
+                    return Val.Nil;
+                }
+                rt.SetSlot(Val.AsHeap(handle), 0, rt.R(hvi));
+                rt.SetSlot(Val.AsHeap(handle), 1, rt.R(hmi));
+                rt.PopTo(hbase);
+                return handle;
+            }
+        }
         if (!HasMeta(rt, v)) {
             return v;
         }
@@ -140,5 +171,20 @@ public static class Meta {
         rt.SetSlot(Val.AsHeap(@out), idx, rt.R(mi));
         rt.PopTo(@base);
         return @out;
+    }
+    /// The PORT `v` is, whether `v` is the port itself or a handle to it.
+    /// 
+    /// Every operation on a port reads through this, so a handle carrying
+    /// metadata sends, receives, closes and answers `port?` exactly as the port
+    /// does. Anything that is neither comes back unchanged, and the caller's
+    /// own type check refuses it as before.
+    public static long PortOf(Rt rt, long v) {
+        if (!Val.IsHeap(v)) {
+            return v;
+        }
+        if (Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyPortref) {
+            return rt.Slot(v, 0);
+        }
+        return v;
     }
 }

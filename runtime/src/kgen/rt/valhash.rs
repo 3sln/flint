@@ -305,6 +305,12 @@ impl Rt {
         // two equal ones land in the same bucket. The final `hash-int` is
         // the mix both ports dropped, which made a tagged literal hash
         // differently on wasm than on the JVM and the CLR.
+        // A PORT HANDLE HASHES AS ITS PORT, since the two are `=`.
+        // Read through the slot rather than `port-of`: this file does not
+        // otherwise need `flint.rt.meta`, and slot 0 IS the port.
+        if t == TY_PORTREF {
+            return self.hash_value(self.slot(v, 0));
+        }
         if t == TY_TAGGED {
             let base: usize = self.mark();
             let vi: usize = self.push(v);

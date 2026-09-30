@@ -10,7 +10,7 @@ const TY_EMPTY_LIST: u8 = 19; const TY_LAZYSEQ: u8 = 20; const TY_VECSEQ: u8 = 2
 const TY_STRSEQ: u8 = 22; const TY_RANGE: u8 = 23; const TY_ARRAYMAP: u8 = 24;
 const TY_HASHMAP: u8 = 25; const TY_SET: u8 = 26; const TY_BYTES: u8 = 27;
 const TY_BROPE: u8 = 28; const TY_OPAQUE: u8 = 29; const TY_TABLE: u8 = 30;
-const TY_TABLEREF: u8 = 31; const TY_TAGGED: u8 = 32;
+const TY_TABLEREF: u8 = 31; const TY_TAGGED: u8 = 32; const TY_PORTREF: u8 = 33;
 const TRUE: Value = Value(0x2001); const FALSE: Value = Value(0x2002);
 const HASH_TRUE: u32 = 1231; const HASH_FALSE: u32 = 1237;
 const V_HASH: u32 = 0;
@@ -255,6 +255,14 @@ fn main() {
     rt.slots[tg.0 as usize][0] = Value::fixnum(3).0;
     rt.slots[tg.0 as usize][1] = Value::fixnum(4).0;
     o.push_str(&format!("tg={:x}", rt.hash_value(tg)));
+    // A PORT HANDLE hashes as the port in its slot 0, whatever its metadata --
+    // `TY_OTHER` stands in for the port, and the metadata is a fixnum that
+    // would change the answer if it were hashed.
+    let pp = rt.obj(TY_OTHER);
+    let pr = rt.obj(TY_PORTREF);
+    rt.slots[pr.0 as usize][0] = pp.0;
+    rt.slots[pr.0 as usize][1] = Value::fixnum(9).0;
+    o.push_str(&format!(" pr={}", (rt.hash_value(pr) == rt.hash_value(pp)) as u32));
     println!("{}", o);
 }
 --java-head
@@ -266,7 +274,7 @@ fn main() {
     static final int TY_RANGE = 23, TY_ARRAYMAP = 24, TY_HASHMAP = 25;
     static final int TY_SET = 26, TY_BYTES = 27, TY_BROPE = 28;
     static final int TY_OPAQUE = 29, TY_TABLE = 30, TY_TABLEREF = 31;
-    static final int TY_TAGGED = 32;
+    static final int TY_TAGGED = 32, TY_PORTREF = 33;
     static final int HASH_TRUE = 1231, HASH_FALSE = 1237;
     static final int V_HASH = 0;
     static final class Val {
@@ -474,6 +482,11 @@ fn main() {
         rt.slots[(int) tg][0] = Val.fixnum(3);
         rt.slots[(int) tg][1] = Val.fixnum(4);
         o.append("tg=").append(Integer.toHexString(hashValue(rt, tg)));
+        long pp = rt.obj(TY_OTHER);
+        long pr = rt.obj(TY_PORTREF);
+        rt.slots[(int) pr][0] = pp;
+        rt.slots[(int) pr][1] = Val.fixnum(9);
+        o.append(" pr=").append(hashValue(rt, pr) == hashValue(rt, pp) ? 1 : 0);
         System.out.println(o.toString());
     }
 --csharp-pre
@@ -503,7 +516,7 @@ namespace Flint.Rt {
         internal const int TyRange = 23, TyArraymap = 24, TyHashmap = 25;
         internal const int TySet = 26, TyBytes = 27, TyBrope = 28;
         internal const int TyOpaque = 29, TyTable = 30, TyTableref = 31;
-        internal const int TyTagged = 32;
+        internal const int TyTagged = 32, TyPortref = 33;
         internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
     }
     internal const int V_HASH = 0;
@@ -701,10 +714,15 @@ namespace Flint.Rt {
         rt.slots[(int) tg, 0] = Val.Fixnum(3);
         rt.slots[(int) tg, 1] = Val.Fixnum(4);
         o.Append("tg=").Append(HEX(HashValue(rt, tg)));
+        long pp = rt.Obj_(Obj.TyOther);
+        long pr = rt.Obj_(Obj.TyPortref);
+        rt.slots[(int) pr, 0] = pp;
+        rt.slots[(int) pr, 1] = Val.Fixnum(9);
+        o.Append(" pr=").Append(HashValue(rt, pr) == HashValue(rt, pp) ? 1 : 0);
         System.Console.WriteLine(o.ToString());
     }
 --expect
-v=daa612ca ticks=3 again=daa612ca ticks=0 cached=1 c=daa612ca ticks=3 cagain=daa612ca ticks=3 nocache=0 e=1 ticks=0 starve=0 ticks=3 uncached=0 nil=1 hi=ffffffff d=1/7 n=0 t=4cf f=4d5 fx=7 is=5141 ik=5242 other=0 tags=5169,546a,556b,556c,526d,536e,6f,5670,5671,5772,51ed51e1, ropea=5474 ropeb=5475 ropefold=54005476 seqs=3c6ef772,daa612ca,daa612ca,daa612ca,daa612ca,daa612ca,daa612ca,daa612ca, op=63/0 tb=1040/1cc0 rf=5688 tg=61
+v=daa612ca ticks=3 again=daa612ca ticks=0 cached=1 c=daa612ca ticks=3 cagain=daa612ca ticks=3 nocache=0 e=1 ticks=0 starve=0 ticks=3 uncached=0 nil=1 hi=ffffffff d=1/7 n=0 t=4cf f=4d5 fx=7 is=5141 ik=5242 other=0 tags=5169,546a,556b,556c,526d,536e,6f,5670,5671,5772,51ed51e1, ropea=5474 ropeb=5475 ropefold=54005476 seqs=3c6ef772,daa612ca,daa612ca,daa612ca,daa612ca,daa612ca,daa612ca,daa612ca, op=63/0 tb=1040/1cc0 rf=5688 tg=61 pr=1
 --expect-why
 DERIVED BY TRANSCRIBING `valhash.kin` INTO PYTHON and running it against this
 file's fixture -- a FOURTH implementation, in a language none of the three

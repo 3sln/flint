@@ -253,11 +253,13 @@
   [protocol kind mname f]
   (extend protocol kind (hash-map (method-key protocol mname) f)))
 
-;; EVERY meta-capable kind, extended to both. The list is the runtime's own:
+;; EVERY meta-capable kind, extended to both. `:port` carries it on a HANDLE,
+;; never on the shared port (`DECISIONS.md#ports-speak-protocols`): `with-meta`
+;; on a port answers a new handle to the same port. The list is the runtime's own:
 ;; `kin/meta.kin`'s `has-meta` is what decides whether `with-meta` does anything,
 ;; so these two have to agree or `satisfies?` lies in one direction or the other.
 ;; `test/common/lang/meta.cljc` asserts they do, kind by kind.
-(doseq [k [:symbol :vector :map :set :list :fn :atom :tagged]]
+(doseq [k [:symbol :vector :map :set :list :fn :atom :tagged :port]]
   (extend-method Meta k "-meta" (fn [x] (flint.rt/meta x)))
   (extend-method WithMeta k "-with-meta" (fn [x m] (flint.rt/with-meta x m))))
 
@@ -265,5 +267,5 @@
 ;; that has not asked for metadata on the wire gets exactly what it got before
 ;; this existed. Opting in is per value (metadata beats kind) or per type (a
 ;; library extending `WireMeta` for its own).
-(doseq [k [:symbol :vector :map :set :list :fn :atom :tagged]]
+(doseq [k [:symbol :vector :map :set :list :fn :atom :tagged :port]]
   (extend-method WireMeta k "-wire-meta" (fn [_] nil)))

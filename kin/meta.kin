@@ -18,7 +18,7 @@
                                    Rt Value I32 Bool RootIx Ty NIL
                                    TY_SYM TY_VEC TY_ARRAYMAP TY_HASHMAP TY_SET
                                    TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_ATOM
-                                   TY_CLOSURE TY_TAGGED
+                                   TY_CLOSURE TY_TAGGED TY_PORT TY_PORTREF
                                    V_META AM_META HM_META S_META C_META]]))
 
 (doc "Can `v` carry metadata at all?"
@@ -41,7 +41,11 @@
     (if (== t TY_LAZYSEQ) (return true))
     (if (== t TY_ATOM) (return true))
     (if (== t TY_CLOSURE) (return true))
-    (if (== t TY_TAGGED) (return true)))
+    (if (== t TY_TAGGED) (return true))
+    (comment "A PORT HANDLE, and not a bare port: a port has no slot for"
+             "metadata and never will, because it is shared by every holder."
+             "`with-meta` below gives a bare port a handle.")
+    (if (== t TY_PORTREF) (return true)))
   (return false))
 
 (doc "WHICH slot holds `v`'s metadata. Ask `has-meta` first.")
@@ -61,7 +65,8 @@
     (comment "A TAGGED FORM keeps the tag at 0 and the form at 1, so metadata"
              "goes after them. A raw 2, like `TY_SYM` and `TY_LAZYSEQ` above:"
              "this function is where the slot numbers live.")
-    (if (== t TY_TAGGED) (return 2)))
+    (if (== t TY_TAGGED) (return 2))
+    (if (== t TY_PORTREF) (return 1)))
   (return 0))
 
 (doc "The metadata, or nil when the value cannot carry any.")
@@ -80,6 +85,25 @@
      "only in their metadata are still `=`, but they are not the same object,"
      "and changing one must not change the other.")
 (defn ^:pub ^:method ^Value with-meta [^:mut ^Rt rt ^Value v ^Value m]
+  (comment "A BARE PORT GETS A HANDLE (`ports-speak-protocols`): `[port, meta]`,"
+           "the port untouched and still shared. A handle already has a slot,"
+           "so it takes the copying path below like any other value -- which"
+           "copies the PORT REFERENCE, so every handle names the same port.")
+  (comment "The locals are named apart from the copying path's below: C#"
+           "refuses a name in a nested scope that an enclosing one declares.")
+  (if (is-heap v)
+    (if (== (ty rt (as-heap v)) TY_PORT)
+      (let [^RootIx hbase (mark rt)
+            ^RootIx hvi (push rt v)
+            ^RootIx hmi (push rt m)
+            ^Value handle (new-obj rt TY_PORTREF 2)]
+        (if (nil? rt handle)
+          (do (pop-to rt hbase)
+              (return NIL)))
+        (set-slot rt handle 0 (r rt hvi))
+        (set-slot rt handle 1 (r rt hmi))
+        (pop-to rt hbase)
+        (return handle))))
   (if (not (has-meta rt v))
     (return v))
   (let [^I32 idx (meta-slot rt v)
@@ -99,3 +123,16 @@
     (set-slot rt out idx (r rt mi))
     (pop-to rt base)
     (return out)))
+
+(doc "The PORT `v` is, whether `v` is the port itself or a handle to it."
+     ""
+     "Every operation on a port reads through this, so a handle carrying"
+     "metadata sends, receives, closes and answers `port?` exactly as the port"
+     "does. Anything that is neither comes back unchanged, and the caller's"
+     "own type check refuses it as before.")
+(defn ^:pub ^:method ^Value port-of [^:mut ^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return v))
+  (if (== (ty rt (as-heap v)) TY_PORTREF)
+    (return (slot rt v 0)))
+  (return v))

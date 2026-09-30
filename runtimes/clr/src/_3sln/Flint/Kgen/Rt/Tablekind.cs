@@ -79,7 +79,9 @@ public static class Tablekind {
         if ((t == Obj.TyClosure) || (t == Obj.TyNativefn) || (t == Obj.TyMultifn)) {
             return Str.Keyword(rt, null, "fn");
         }
-        if (t == Obj.TyPort) {
+        // A PORT HANDLE is a port with metadata, and its kind is the
+        // port's: a protocol extended to `:port` must reach it too.
+        if ((t == Obj.TyPort) || (t == Obj.TyPortref)) {
             return Str.Keyword(rt, null, "port");
         }
         if (t == Obj.TyThread) {

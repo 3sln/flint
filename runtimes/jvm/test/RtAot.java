@@ -25,11 +25,8 @@ public class RtAot {
     // THESE ARE THE INITIALISERS, so say so: `ensureStarted` is the runtime's
     // own one-shot runner, and a control plane spawned later would otherwise
     // run them a second time.
-    rt.started = true;
-    for (int fn : img.init) {
-      rt.call(rt.makeClosure(fn, new long[0]), new long[0]);
-      if (!Val.isNil(rt.thrown)) return new Run(why(rt), rt.steps, n, Rt.aotEntries);
-    }
+    // The runtime's own runner, not a copy of it (see `RtImage`).
+    if (!rt.ensureStarted()) return new Run(why(rt), rt.steps, n, Rt.aotEntries);
     long v = rt.runProgram(rt.makeClosure(img.entry, new long[0]), new long[]{ Val.NIL });
     if (!Val.isNil(rt.thrown)) return new Run(why(rt), rt.steps, n, Rt.aotEntries);
     return new Run(Str.isString(rt, v) ? Str.text(rt, v) : rt.describe(v), rt.steps, n, Rt.aotEntries);

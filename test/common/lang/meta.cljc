@@ -14,7 +14,8 @@
   false for a kind that does carry metadata reads exactly like a kind that does
   not."
   (:require [flint.check :refer [expect]]
-            [flint.protocols :as p]))
+            [flint.protocols :as p]
+            [flint.port :as port]))
 
 ;; Every meta-capable kind, as a value of that kind. `with-meta` on a value that
 ;; CANNOT carry metadata answers the value unchanged rather than throwing, so
@@ -27,7 +28,10 @@
    ['list (list 1 2)]
    ['fn (fn [] nil)]
    ['atom (atom 1)]
-   ['tagged (tagged-literal 'a/b [1])]])
+   ['tagged (tagged-literal 'a/b [1])]
+   ;; A PORT carries metadata on a HANDLE (`DECISIONS.md#ports-speak-protocols`):
+   ;; a channel end is made in this heap, so no host is involved.
+   ['port (first (port/channel))]])
 
 (defn ^:flint.check/test every-carrier-satisfies-both []
   (doseq [[what x] carriers]
@@ -58,3 +62,49 @@
 (defn ^:flint.check/test metadata-still-beats-kind []
   (let [v (with-meta [1] {'flint.protocols/-meta (fn [_] :mine)})]
     (expect = :mine (p/-meta v))))
+
+;; A PORT'S METADATA IS ON A HANDLE, NEVER ON THE PORT (`ports-speak-protocols`).
+;; A port is shared by every holder, so `with-meta` answers a second handle to
+;; the same port -- and that handle has to BE the port in every other respect,
+;; or annotating one would quietly break the code that uses it.
+(defn ^:flint.check/test a-port-handle-is-the-port-it-holds []
+  (let [[a b] (port/channel "handles")
+        m {:flint/protocols #{'x/Speaks}}
+        h (with-meta a m)]
+    ;; The shared port is untouched; the handle carries the metadata.
+    (expect nil? (meta a))
+    (expect = m (meta h))
+    ;; It is a port, of kind `:port`, and it is `=` to and hashes as its port.
+    (expect true? (port/port? h))
+    (expect = :port (flint.rt/kind h))
+    (expect = a h)
+    (expect = h a)
+    (expect = (hash a) (hash h))
+    (expect = :found (get {a :found} h))
+    ;; It is not some OTHER port, however similar.
+    (expect not= b h)
+    ;; Every operation reads through it: send and receive both ways.
+    (port/send h 42)
+    (expect = 42 (port/receive b))
+    (port/send b 7)
+    (expect = 7 (port/receive h))
+    (expect = (port/label a) (port/label h))
+    (expect = (port/state a) (port/state h))
+    ;; Metadata EXTENDS without touching an earlier handle.
+    (let [h2 (vary-meta h assoc :more 1)]
+      (expect = 1 (:more (meta h2)))
+      (expect nil? (:more (meta h)))
+      (expect = h h2))
+    ;; And closing through a handle closes the port itself.
+    (port/close h)
+    (expect true? (port/closed? a))))
+
+;; PROTOCOLS DISPATCH ON A HANDLE'S METADATA, as on any value's: the rule the
+;; whole of `ports-speak-protocols` is built on, exercised on a port.
+(defprotocol Speaks (speak [x]))
+
+(defn ^:flint.check/test a-protocol-dispatches-on-a-port-handle []
+  (let [[a _] (port/channel)
+        h (with-meta a {`speak (fn [_] :from-the-handle)})]
+    (expect = :from-the-handle (speak h))
+    (expect false? (satisfies? Speaks a))))

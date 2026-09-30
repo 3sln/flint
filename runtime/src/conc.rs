@@ -1144,6 +1144,12 @@ impl Rt {
             return Ok(());
         }
         let t = ty(&self.gc.sp, v.as_heap());
+        // A PORT HANDLE crosses exactly when its port does: the rules below are
+        // about the PORT, and the handle's metadata is not what they guard.
+        if t == crate::obj::TY_PORTREF {
+            let p = self.slot(v, 0);
+            return self.check_sendable_at(p, depth + 1, carry);
+        }
         match t {
             TY_CLOSURE | TY_NATIVEFN | TY_MULTIFN => {
                 let n = self.describe_fn(v);
@@ -1479,6 +1485,8 @@ impl Rt {
     }
 
     pub fn port_send(&mut self, p: Value, v: Value) -> Value {
+        // A PORT HANDLE (`ports-speak-protocols`) is read as the port it holds.
+        let p = self.port_of(p);
         if !self.need_port(p, "send") {
             return NIL;
         }
@@ -1676,6 +1684,8 @@ impl Rt {
     /// which is also where they belong in the order: nothing is rooted yet
     /// when that test runs.
     pub fn port_receive(&mut self, p: Value) -> Value {
+        // A PORT HANDLE (`ports-speak-protocols`) is read as the port it holds.
+        let p = self.port_of(p);
         if !self.need_port(p, "receive") {
             return NIL;
         }
@@ -2002,6 +2012,8 @@ impl Rt {
     /// check and its message are a host string and stay here, which is also
     /// where they belong in the order: nothing is rooted yet when it runs.
     pub fn port_close(&mut self, p: Value) -> Value {
+        // A PORT HANDLE (`ports-speak-protocols`) is read as the port it holds.
+        let p = self.port_of(p);
         if !self.need_port(p, "close") {
             return NIL;
         }

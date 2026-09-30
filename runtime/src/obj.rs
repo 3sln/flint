@@ -167,7 +167,17 @@ pub const TY_WRITER: u8 = 52;
 /// reader, set in one place.
 pub const TY_READER: u8 = 53;
 
-pub const TY_MAX: u8 = 54;
+/// A PORT HANDLE WITH METADATA: `[port, meta]` (`DECISIONS.md#ports-speak-protocols`).
+///
+/// What `with-meta` makes of a port. The port itself is a SHARED reference -- a
+/// queue with CAS cursors that every holder uses -- so metadata written into it
+/// would change under every holder at once, and copying it would copy a queue.
+/// This is a second handle to the same port, so two holders can describe one
+/// port differently. Every port operation reads through it (`port-of`), and it
+/// is `=` to, and hashes as, the port it holds.
+pub const TY_PORTREF: u8 = 54;
+
+pub const TY_MAX: u8 = 55;
 
 /// Every type tag must be distinct. This list exists because they were not:
 /// `TY_THREAD`/`TY_PORT`/`TY_SCHED` were first numbered 33..35, which silently
@@ -184,6 +194,7 @@ const _: () = {
         TY_VOLATILE, TY_RAW, TY_ITERSEQ, TY_CHUNKSEQ, TY_TYPE, TY_THREAD, TY_PORT,
         TY_SCHED, TY_ROPE, TY_OPAQUE, TY_BYTES, TY_BROPE, TY_TBYTES, TY_TAGGED,
         TY_SCHEMA, TY_TABLE, TY_TABLEREF, TY_TTABLE, TY_WRITER, TY_READER,
+        TY_PORTREF,
     ];
     let mut i = 0;
     while i < tags.len() {

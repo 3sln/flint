@@ -173,6 +173,11 @@ public final class Codec {
         if (!Val.isHeap(v)) throw new Refused("this value cannot cross a boundary");
         int t = Obj.ty(rt.gc.sp, Val.asHeap(v));
         switch (t) {
+            // A PORT HANDLE: its metadata is written above or was not selected,
+            // so what remains is the port it holds.
+            case Obj.TY_PORTREF:
+                encodeInto(rt, rt.slot(v, 0), out, depth + 1);
+                return;
             case Obj.TY_PORT:
                 out.write(K_PORT);
                 u32(out, (int) Val.asFixnum(rt.slot(v, Conc.PT_ID)));

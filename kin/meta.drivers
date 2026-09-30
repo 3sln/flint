@@ -10,6 +10,7 @@ const TY_SYM: u8 = 8; const TY_VEC: u8 = 9; const TY_ARRAYMAP: u8 = 16;
 const TY_HASHMAP: u8 = 17; const TY_SET: u8 = 18; const TY_CONS: u8 = 6;
 const TY_EMPTY_LIST: u8 = 7; const TY_LAZYSEQ: u8 = 3; const TY_ATOM: u8 = 32;
 const TY_CLOSURE: u8 = 27; const TY_STR: u8 = 2; const TY_TAGGED: u8 = 47;
+const TY_PORT: u8 = 40; const TY_PORTREF: u8 = 54;
 const V_META: u32 = 3; const AM_META: u32 = 1; const HM_META: u32 = 2;
 const C_META: u32 = 2;
 pub mod set { pub const S_META: u32 = 1; }
@@ -100,6 +101,21 @@ fn main() {
         if i != V_META && rt.slot(v, i).0 != rt.slot(v2, i).0 { same = false; }
     }
     o.push_str(&format!("carried={} ", same as u32));
+    // A PORT: no metadata of its own, and `with-meta` makes a HANDLE to it.
+    let p = mk(&mut rt, TY_PORT, 2, 0);
+    rt.set(p, 0, Value(0x900));
+    let bare = format!("{}{}", rt.has_meta(p) as u32, rt.meta_of(p).is_nil() as u32);
+    let h = rt.with_meta(p, m);
+    let hty = ty(&rt.gc.sp, h.as_heap());
+    let handle = format!("{}{}{}{}{}", (h.0 != p.0) as u32, (hty == TY_PORTREF) as u32,
+                         (rt.port_of(h).0 == p.0) as u32, (rt.meta_of(h).0 == m.0) as u32,
+                         (rt.slot(p, 0).0 == 0x900 && rt.slot(p, 1).0 == 0x901) as u32);
+    let h2 = rt.with_meta(h, m2);
+    let rehandle = format!("{}{}{}", (rt.port_of(h2).0 == p.0) as u32,
+                           (rt.meta_of(h2).0 == m2.0) as u32, (rt.meta_of(h).0 == m.0) as u32);
+    let portof = format!("{}{}{}", (rt.port_of(p).0 == p.0) as u32,
+                         (rt.port_of(v).0 == v.0) as u32, rt.port_of(NIL).is_nil() as u32);
+    o.push_str(&format!("port={}/{}/{}/{} ", bare, handle, rehandle, portof));
     // WHEN THE HEAP REFUSES, nil rather than a half-copy.
     rt.starve = true;
     o.push_str(&format!("starved={}", rt.with_meta(v, m2).is_nil() as u32));
@@ -109,7 +125,8 @@ fn main() {
     static final long NIL = 0xFFFFL;
     static final int TY_SYM = 8, TY_VEC = 9, TY_ARRAYMAP = 16, TY_HASHMAP = 17,
                      TY_SET = 18, TY_CONS = 6, TY_EMPTY_LIST = 7, TY_LAZYSEQ = 3,
-                     TY_ATOM = 32, TY_CLOSURE = 27, TY_STR = 2, TY_TAGGED = 47;
+                     TY_ATOM = 32, TY_CLOSURE = 27, TY_STR = 2, TY_TAGGED = 47,
+                     TY_PORT = 40, TY_PORTREF = 54;
     static final int V_META = 3, AM_META = 1, HM_META = 2, C_META = 2;
     static final class Sets { static final int S_META = 1; }
     static final int S_META = Sets.S_META;
@@ -186,6 +203,20 @@ fn main() {
         for (int i = 0; i < olen(rt, v); i++)
             if (i != V_META && rt.slot(v, i) != rt.slot(v2, i)) same = false;
         o.append("carried=").append(same ? 1 : 0).append(' ');
+        long p = mk(rt, TY_PORT, 2, 0);
+        rt.setSlot(p, 0, 0x900);
+        String bare = "" + (hasMeta(rt, p) ? 1 : 0) + (Val.isNil(metaOf(rt, p)) ? 1 : 0);
+        long h = withMeta(rt, p, META);
+        String handle = "" + (h != p ? 1 : 0) + (ty(rt.gc.sp, Val.asHeap(h)) == TY_PORTREF ? 1 : 0)
+            + (portOf(rt, h) == p ? 1 : 0) + (metaOf(rt, h) == META ? 1 : 0)
+            + (rt.slot(p, 0) == 0x900 && rt.slot(p, 1) == 0x901 ? 1 : 0);
+        long h2 = withMeta(rt, h, m2);
+        String rehandle = "" + (portOf(rt, h2) == p ? 1 : 0) + (metaOf(rt, h2) == m2 ? 1 : 0)
+            + (metaOf(rt, h) == META ? 1 : 0);
+        String portof = "" + (portOf(rt, p) == p ? 1 : 0) + (portOf(rt, v) == v ? 1 : 0)
+            + (Val.isNil(portOf(rt, NIL)) ? 1 : 0);
+        o.append("port=").append(bare).append('/').append(handle).append('/')
+         .append(rehandle).append('/').append(portof).append(' ');
         rt.starve = true;
         o.append("starved=").append(Val.isNil(withMeta(rt, v, m2)) ? 1 : 0);
         System.out.println(o.toString());
@@ -199,7 +230,8 @@ namespace Flint.Rt {
     internal static class Obj {
         internal const int TySym = 8, TyVec = 9, TyArraymap = 16, TyHashmap = 17,
                            TySet = 18, TyCons = 6, TyEmptyList = 7, TyLazyseq = 3,
-                           TyAtom = 32, TyClosure = 27, TyStr = 2, TyTagged = 47;
+                           TyAtom = 32, TyClosure = 27, TyStr = 2, TyTagged = 47,
+                           TyPort = 40, TyPortref = 54;
         internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
     }
     internal const int V_META = 3, AM_META = 1, HM_META = 2, C_META = 2;
@@ -277,12 +309,26 @@ namespace Flint.Rt {
         for (int i = 0; i < Olen(rt, v); i++)
             if (i != V_META && rt.Slot(v, i) != rt.Slot(v2, i)) same = false;
         o.Append("carried=").Append(same ? 1 : 0).Append(' ');
+        long p = Mk(rt, Obj.TyPort, 2, 0);
+        rt.SetSlot(p, 0, 0x900);
+        string bare = "" + (HasMeta(rt, p) ? 1 : 0) + (Val.IsNil(MetaOf(rt, p)) ? 1 : 0);
+        long h = WithMeta(rt, p, META);
+        string handle = "" + (h != p ? 1 : 0) + (Obj.Ty(rt.gc.sp, Val.AsHeap(h)) == Obj.TyPortref ? 1 : 0)
+            + (PortOf(rt, h) == p ? 1 : 0) + (MetaOf(rt, h) == META ? 1 : 0)
+            + (rt.Slot(p, 0) == 0x900 && rt.Slot(p, 1) == 0x901 ? 1 : 0);
+        long h2 = WithMeta(rt, h, m2);
+        string rehandle = "" + (PortOf(rt, h2) == p ? 1 : 0) + (MetaOf(rt, h2) == m2 ? 1 : 0)
+            + (MetaOf(rt, h) == META ? 1 : 0);
+        string portof = "" + (PortOf(rt, p) == p ? 1 : 0) + (PortOf(rt, v) == v ? 1 : 0)
+            + (Val.IsNil(PortOf(rt, Val.Nil)) ? 1 : 0);
+        o.Append("port=").Append(bare).Append('/').Append(handle).Append('/')
+         .Append(rehandle).Append('/').Append(portof).Append(' ');
         rt.starve = true;
         o.Append("starved=").Append(Val.IsNil(WithMeta(rt, v, m2)) ? 1 : 0);
         System.Console.WriteLine(o.ToString());
     }
 --expect
-meta=11111111111 closure=1/7 none=01/1 nonheap=01 copy=1/1/1 carried=1 starved=1
+meta=11111111111 closure=1/7 none=01/1 nonheap=01 copy=1/1/1 carried=1 port=01/11111/111/111 starved=1
 --expect-why
 DERIVED from `meta.kin`'s `meta-slot` table read against the driver's `cases`
 table, which is the same eleven types with the slot each one is BUILT with.
@@ -339,6 +385,19 @@ and `none=0...` below is the other half of the same argument.
                 comparison: `with-meta` copies the whole object and then
                 overwrites one slot, so a loop that stopped short, or started
                 at 1, moves one of those numbers and this goes to 0.
+
+  port=01/11111/111/111
+                A PORT, which keeps no metadata of its own
+                (`ports-speak-protocols`: it is shared by every holder).
+                01     a bare port has none and reads nil.
+                11111  `with-meta` answers a DIFFERENT object, of type
+                       TY_PORTREF, whose `port-of` is the port, whose metadata
+                       is 0x55, and the port's own slots are untouched -- the
+                       fifth digit is what writing into the port would break.
+                111    `with-meta` on a HANDLE gives another handle to the SAME
+                       port with the new metadata, and the first handle keeps
+                       its own. Copying the port instead would fail the first.
+                111    `port-of` answers a port, a non-port and nil unchanged.
 
   starved=1     when `new-obj` refuses, the answer is NIL rather than a
                 half-copy. Note this is a DIFFERENT answer from `none=.../1`

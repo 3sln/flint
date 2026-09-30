@@ -434,6 +434,8 @@
     ;; is opaque to a guest and a reader is not, and the asymmetry is the whole
     ;; safety rule -- see `kin/wire.kin`.
     TY_WRITER TY_READER
+    ;; A port handle with metadata (`DECISIONS.md#ports-speak-protocols`).
+    TY_PORTREF
     ;; What a closure is. `kind-of` never needed it -- a guest sees a function
     ;; and not its representation -- but `make-closure` BUILDS one.
     TY_CLOSURE])

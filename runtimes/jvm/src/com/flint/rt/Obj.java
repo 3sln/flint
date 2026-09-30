@@ -116,7 +116,9 @@ public final class Obj {
     /// bytes that arrived on a bridge. The rule `decode_guest` enforced by
     /// refusing tags is now a flag, set in one place.
     public static final int TY_READER = 53;
-    public static final int TY_MAX = 54;
+    /// A port handle with metadata, `[port, meta]` -- see `obj.rs`.
+    public static final int TY_PORTREF = 54;
+    public static final int TY_MAX = 55;
 
     public static final int VALS = 0, STR = 1, RAW = 2;
 

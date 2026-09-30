@@ -58,7 +58,9 @@ public static class Obj {
                      // bridge: the rule `decode_guest` enforced by refusing
                      // tags, as a flag set in one place.
                      TyReader = 53,
-                     TyMax = 54;
+                     // A port handle with metadata, `[port, meta]` -- see `obj.rs`.
+                     TyPortref = 54,
+                     TyMax = 55;
 
     /// The three layout classes. Prefixed `L` where the JVM writes `VALS`,
     /// `STR`, `RAW`: C#'s PascalCase would make the layout constant `Str`

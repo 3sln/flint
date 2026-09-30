@@ -877,12 +877,13 @@
              "        b (sdk/sandbox img)\n"
              "        c (sdk/caller b)\n"
              "        plain (sdk/call c \"g/saw\" [(with-meta [1 2] {:a 1})])\n"
+             "        sym (sdk/call c \"g/saw\" [(with-meta (quote s) {:a 1})])\n"
              "        opted (sdk/call c \"g/saw\"\n"
              "                        [(with-meta [3 4]\n"
              "                           {:a 1 :keep :yes\n"
              "                            (quote flint.protocols/-wire-meta)\n"
              "                            (fn [x] {:keep (:keep (meta x))})})])]\n"
-             "    (str \"plain=\" plain \" opted=\" opted)))\n"
+             "    (str \"plain=\" plain \" sym=\" sym \" opted=\" opted)))\n"
              "(defn refused [_]\n"
              "  (let [img (sdk/compile {:sources {\"g\" src} :fn \"g/main\" :exports [\"g/saw\"]})\n"
              "        b (sdk/sandbox img)\n"
@@ -899,6 +900,11 @@
            (str/includes? (:out r) "plain=nil") (:out r))
     ;; AND THE SELECTED SUBSET, not the whole map: `:a` was on the value and
     ;; stayed behind, and so did the implementation itself.
+    ;; A VALUE `for-the-wire` DOES NOT REBUILD, which is where the default was
+    ;; broken: a vector loses its metadata by being rebuilt, and a symbol kept
+    ;; all of it until nil was applied as "none" (measured 2026-09-30).
+    (check "  ... including on a value that is not rebuilt (a symbol)"
+           (str/includes? (:out r) "sym=nil") (:out r))
     (check "  ... and then exactly the subset it selected"
            (str/includes? (:out r) "opted={:keep :yes}") (:out r)))
   ;; WHAT IT YIELDS MUST BE SENDABLE. The selected metadata goes through the

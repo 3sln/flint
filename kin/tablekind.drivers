@@ -21,7 +21,7 @@ const TY_VAR: u8 = 33; const TY_REGEX: u8 = 34; const TY_EXINFO: u8 = 35;
 const TY_TAGGED: u8 = 36; const TY_OPAQUE: u8 = 37; const TY_BYTES: u8 = 44;
 const TY_BROPE: u8 = 45; const TY_TBYTES: u8 = 46; const TY_DELAY: u8 = 38;
 const TY_VOLATILE: u8 = 39; const TY_SCHEMA: u8 = 48; const TY_TABLE: u8 = 49;
-const TY_TABLEREF: u8 = 50; const TY_UNKNOWN: u8 = 99;
+const TY_TABLEREF: u8 = 50; const TY_PORTREF: u8 = 54; const TY_UNKNOWN: u8 = 99;
 impl Value {
     fn is_heap(self) -> bool {
         self.0 >= 100 && (self.0 >> 60) == 0
@@ -84,7 +84,7 @@ fn main() {
         TY_LAZYSEQ, TY_VECSEQ, TY_STRSEQ, TY_RANGE, TY_ITERSEQ, TY_CHUNKSEQ,
         TY_CLOSURE, TY_NATIVEFN, TY_MULTIFN, TY_PORT, TY_THREAD, TY_ATOM,
         TY_VAR, TY_REGEX, TY_EXINFO, TY_TAGGED, TY_OPAQUE, TY_BYTES, TY_BROPE,
-        TY_TBYTES, TY_DELAY, TY_VOLATILE, TY_SCHEMA, TY_TABLE];
+        TY_TBYTES, TY_DELAY, TY_VOLATILE, TY_SCHEMA, TY_TABLE, TY_PORTREF];
     let mut words = alloc::vec::Vec::new();
     for t in &tags {
         let v = rt.obj(*t);
@@ -146,7 +146,7 @@ fn main() {
             TY_VAR = 33, TY_REGEX = 34, TY_EXINFO = 35, TY_TAGGED = 36,
             TY_OPAQUE = 37, TY_BYTES = 44, TY_BROPE = 45, TY_TBYTES = 46,
             TY_DELAY = 38, TY_VOLATILE = 39, TY_SCHEMA = 48, TY_TABLE = 49,
-            TY_TABLEREF = 50;
+            TY_TABLEREF = 50, TY_PORTREF = 54;
         static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
     }
     static final int TY_STR = Obj.TY_STR, TY_ROPE = Obj.TY_ROPE, TY_KW = Obj.TY_KW,
@@ -162,7 +162,8 @@ fn main() {
         TY_EXINFO = Obj.TY_EXINFO, TY_TAGGED = Obj.TY_TAGGED, TY_OPAQUE = Obj.TY_OPAQUE,
         TY_BYTES = Obj.TY_BYTES, TY_BROPE = Obj.TY_BROPE, TY_TBYTES = Obj.TY_TBYTES,
         TY_DELAY = Obj.TY_DELAY, TY_VOLATILE = Obj.TY_VOLATILE,
-        TY_SCHEMA = Obj.TY_SCHEMA, TY_TABLE = Obj.TY_TABLE, TY_TABLEREF = Obj.TY_TABLEREF;
+        TY_SCHEMA = Obj.TY_SCHEMA, TY_TABLE = Obj.TY_TABLE, TY_TABLEREF = Obj.TY_TABLEREF,
+        TY_PORTREF = Obj.TY_PORTREF;
     static final class Val {
         static boolean isHeap(long v) {
             return v >= 100 && (v >>> 60) == 0 && v != NIL && v != TRUE && v != FALSE;
@@ -219,7 +220,7 @@ fn main() {
             TY_LAZYSEQ, TY_VECSEQ, TY_STRSEQ, TY_RANGE, TY_ITERSEQ, TY_CHUNKSEQ,
             TY_CLOSURE, TY_NATIVEFN, TY_MULTIFN, TY_PORT, TY_THREAD, TY_ATOM,
             TY_VAR, TY_REGEX, TY_EXINFO, TY_TAGGED, TY_OPAQUE, TY_BYTES, TY_BROPE,
-            TY_TBYTES, TY_DELAY, TY_VOLATILE, TY_SCHEMA, TY_TABLE };
+            TY_TBYTES, TY_DELAY, TY_VOLATILE, TY_SCHEMA, TY_TABLE, TY_PORTREF };
         java.util.ArrayList<String> words = new java.util.ArrayList<>();
         for (int t : tags) words.add(kwText(rt, kindOf(rt, obj(rt, t))));
         o.append("heap=").append(String.join(".", words)).append(' ');
@@ -262,7 +263,7 @@ fn main() {
             TyVar = 33, TyRegex = 34, TyExinfo = 35, TyTagged = 36,
             TyOpaque = 37, TyBytes = 44, TyBrope = 45, TyTbytes = 46,
             TyDelay = 38, TyVolatile = 39, TySchema = 48, TyTable = 49,
-            TyTableref = 50;
+            TyTableref = 50, TyPortref = 54;
         internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
     }
     internal static class Val {
@@ -323,7 +324,7 @@ fn main() {
             Obj.TyNativefn, Obj.TyMultifn, Obj.TyPort, Obj.TyThread, Obj.TyAtom,
             Obj.TyVar, Obj.TyRegex, Obj.TyExinfo, Obj.TyTagged, Obj.TyOpaque,
             Obj.TyBytes, Obj.TyBrope, Obj.TyTbytes, Obj.TyDelay, Obj.TyVolatile,
-            Obj.TySchema, Obj.TyTable };
+            Obj.TySchema, Obj.TyTable, Obj.TyPortref };
         var words = new System.Collections.Generic.List<string>();
         foreach (int t in tags) words.Add(KwText(rt, KindOf(rt, Obj2(rt, t))));
         o.Append("heap=").Append(string.Join(".", words)).Append(' ');
@@ -354,7 +355,7 @@ fn main() {
         System.Console.WriteLine(o.ToString());
     }
 --expect
-heap=string.string.keyword.symbol.number.vector.vector.map.map.map.set.list.list.list.list.list.list.list.list.fn.fn.fn.port.thread.atom.var.regex.exception.tagged.opaque.bytes.bytes.bytes.delay.volatile.schema.table flat=nil.boolean.boolean.number.number.string.keyword.other others=1 known=1111110 ok=11111111.11000000.00100000.00011000.00000100.00000010
+heap=string.string.keyword.symbol.number.vector.vector.map.map.map.set.list.list.list.list.list.list.list.list.fn.fn.fn.port.thread.atom.var.regex.exception.tagged.opaque.bytes.bytes.bytes.delay.volatile.schema.table.port flat=nil.boolean.boolean.number.number.string.keyword.other others=1 known=1111110 ok=11111111.11000000.00100000.00011000.00000100.00000010
 --expect-why
 DERIVED BY READING THE ARMS of `kind-of`, `known-type` and `type-ok` against
 the fixture's tag list, in the fixture's order. Nothing here was pasted from a
@@ -383,6 +384,10 @@ HEAP, the 37 tags the driver builds one object of each for, in ITS order:
   TY_BYTES, TY_BROPE, TY_TBYTES -> bytes
   TY_DELAY -> delay    TY_VOLATILE -> volatile
   TY_SCHEMA -> schema  TY_TABLE -> table
+  TY_PORTREF -> port    -- a port HANDLE (`ports-speak-protocols`) is a port
+                          with metadata, and a protocol extended to `:port`
+                          must reach it; appended last, so every earlier word
+                          keeps its place
 
 FLAT, the non-heap tiers, tested BEFORE the type tag and in this order in the
 source: nil, bool, double, fixnum, inline string, inline keyword. So

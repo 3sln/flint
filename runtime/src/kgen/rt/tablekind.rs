@@ -83,7 +83,9 @@ impl Rt {
         if (t == TY_CLOSURE) || (t == TY_NATIVEFN) || (t == TY_MULTIFN) {
             return self.keyword(None, "fn");
         }
-        if t == TY_PORT {
+        // A PORT HANDLE is a port with metadata, and its kind is the
+        // port's: a protocol extended to `:port` must reach it too.
+        if (t == TY_PORT) || (t == TY_PORTREF) {
             return self.keyword(None, "port");
         }
         if t == TY_THREAD {

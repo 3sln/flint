@@ -55,6 +55,12 @@ public final class Meta {
         if (t == TY_TAGGED) {
             return true;
         }
+        // A PORT HANDLE, and not a bare port: a port has no slot for
+        // metadata and never will, because it is shared by every holder.
+        // `with-meta` below gives a bare port a handle.
+        if (t == TY_PORTREF) {
+            return true;
+        }
         return false;
     }
     /// WHICH slot holds `v`'s metadata. Ask `has-meta` first.
@@ -97,6 +103,9 @@ public final class Meta {
         if (t == TY_TAGGED) {
             return 2;
         }
+        if (t == TY_PORTREF) {
+            return 1;
+        }
         return 0;
     }
     /// The metadata, or nil when the value cannot carry any.
@@ -116,6 +125,28 @@ public final class Meta {
     /// only in their metadata are still `=`, but they are not the same object,
     /// and changing one must not change the other.
     public static long withMeta(Rt rt, long v, long m) {
+        // A BARE PORT GETS A HANDLE (`ports-speak-protocols`): `[port, meta]`,
+        // the port untouched and still shared. A handle already has a slot,
+        // so it takes the copying path below like any other value -- which
+        // copies the PORT REFERENCE, so every handle names the same port.
+        // The locals are named apart from the copying path's below: C#
+        // refuses a name in a nested scope that an enclosing one declares.
+        if (Val.isHeap(v)) {
+            if (ty(rt.gc.sp, Val.asHeap(v)) == TY_PORT) {
+                int hbase = rt.mark();
+                int hvi = rt.push(v);
+                int hmi = rt.push(m);
+                long handle = Conc.newObj(rt, TY_PORTREF, 2);
+                if (Val.isNil(handle)) {
+                    rt.popTo(hbase);
+                    return Val.NIL;
+                }
+                rt.setSlot(Val.asHeap(handle), 0, rt.r(hvi));
+                rt.setSlot(Val.asHeap(handle), 1, rt.r(hmi));
+                rt.popTo(hbase);
+                return handle;
+            }
+        }
         if (!hasMeta(rt, v)) {
             return v;
         }
@@ -138,5 +169,20 @@ public final class Meta {
         rt.setSlot(Val.asHeap(out), idx, rt.r(mi));
         rt.popTo(base);
         return out;
+    }
+    /// The PORT `v` is, whether `v` is the port itself or a handle to it.
+    /// 
+    /// Every operation on a port reads through this, so a handle carrying
+    /// metadata sends, receives, closes and answers `port?` exactly as the port
+    /// does. Anything that is neither comes back unchanged, and the caller's
+    /// own type check refuses it as before.
+    public static long portOf(Rt rt, long v) {
+        if (!Val.isHeap(v)) {
+            return v;
+        }
+        if (ty(rt.gc.sp, Val.asHeap(v)) == TY_PORTREF) {
+            return rt.slot(v, 0);
+        }
+        return v;
     }
 }
