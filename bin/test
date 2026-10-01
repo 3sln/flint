@@ -694,6 +694,18 @@ fi
   || fail "the unknown-target message does not list :to :clr"
 [ ! -f /tmp/flint-smoke/no2.out ] || fail ":to :dotnet wrote a file anyway"
 
+echo
+sec "resources: a tripwire, not a benchmark (17adfa37)"
+# `flint run` of a hello-world used to zero its whole 3 GB heap reservation by
+# hand and peak at ~5.0 GB resident (17adfa37, `runtime/src/mem.rs`); nothing
+# in this file would have failed on that. `bin/check-resources` is the
+# tripwire: wide budgets (test/resource-budgets.edn) so a loaded machine never
+# trips it, but a 10x+ blow-up in memory or CPU does. Takes the binary this
+# section just built, through $FLINT_BIN.
+FLINT_BIN=./target/release/flint ./bin/check-resources > /tmp/flint-test.out 2>&1 \
+  || { cat /tmp/flint-test.out; fail "check-resources"; }
+sed 's/^/  /' /tmp/flint-test.out
+
 # `:to :llvm` IS built, and the guarantee the old assertion was really making --
 # that it does not quietly emit wasm -- is now made by checking the artifact
 # rather than by refusing to produce one. `bin/check-llvm` emits IR for seven
