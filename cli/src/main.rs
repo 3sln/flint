@@ -282,12 +282,84 @@ fn workspace_entry(prefix: &str, w: &Workspace, fallback_name: &str) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Compile through the compiler's `project-split` entry: the spec envelope as
+/// EDN, and the file bodies as an ENCODED map, so the runtime decodes them
+/// natively instead of the compiler reading them as EDN string literals
+/// (`build_spec_split` says what that cost). The answer is what `project`
+/// answers -- the same string `main` renders -- so callers do not change.
+fn project_split(c: &mut Program, envelope: &str, files: &BTreeMap<String, String>)
+                 -> flint_rt::native::Outcome {
+    use flint_rt::codec::{Val, Wire};
+    let call = Val::Vector(vec![
+        Val::Str("flint.selfhost/main".into()),
+        Val::Vector(vec![
+            Val::Str("project-split".into()),
+            Val::Str(envelope.into()),
+            Val::Map(files.iter().map(|(k, v)| (Val::Str(k.clone()), Val::Str(v.clone()))).collect()),
+        ]),
+    ]);
+    let mut w = Wire::new();
+    call.write(&mut w);
+    let fail = |out: String| flint_rt::native::Outcome { code: 1, out };
+    match c.call(&w.done()) {
+        Err(e) => fail(e),
+        Ok(bytes) => match flint_rt::codec::parse(&bytes) {
+            Err(e) => fail(e),
+            Ok(Val::Str(s)) => flint_rt::native::Outcome { code: 0, out: s },
+            // A failure is DATA on this path, `{:error kind :message text}`;
+            // rendered the way `run` renders a throw, `Kind: message`.
+            Ok(v) => match (v.get("error").and_then(|k| match k {
+                                Val::Keyword(_, n) | Val::Symbol(_, n) => Some(n.clone()),
+                                Val::Str(s) => Some(s.clone()),
+                                _ => None }),
+                            v.get("message").and_then(|m| m.as_str())) {
+                (Some(kind), Some(msg)) => fail(format!("{kind}: {msg}")),
+                _ => fail(format!("the compiler answered something that is not a string: {v:?}")),
+            },
+        },
+    }
+}
+
 fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
                    aot: bool, shake: bool, meta: &[(String, String)],
                    roots: Option<&[String]>,
                    pods: &[(String, Vec<String>)],
                    strip_checks: bool,
                    features: Option<&[String]>) -> Result<String> {
+    Ok(build_spec_impl(srcs, entry, slots, aot, shake, meta, roots, pods, strip_checks,
+                       features, false)?.0)
+}
+
+/// The same spec with its FILE BODIES held apart: an envelope whose `:files`
+/// is empty, and the bodies as a map the caller hands over ENCODED rather than
+/// as EDN. Parsing the spec was 57% of a trivial compile's instructions --
+/// 10.9 M of 19.1 M, measured 2026-10-01 -- because the bodies are almost all
+/// of its 425 KB and the compiler's reader is interpreted. An encoded string
+/// is decoded by the runtime, natively, and never read at all.
+fn build_spec_split(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
+                    aot: bool, shake: bool, meta: &[(String, String)],
+                    roots: Option<&[String]>,
+                    pods: &[(String, Vec<String>)],
+                    strip_checks: bool,
+                    features: Option<&[String]>)
+                    -> Result<(String, BTreeMap<String, String>)> {
+    if std::env::var("FLINT_SPEC_OUT").is_ok() {
+        // Writes the full spec for the comparison; the split one is what runs.
+        build_spec_with(srcs, entry, slots, aot, shake, meta, roots, pods, strip_checks,
+                        features)?;
+    }
+    build_spec_impl(srcs, entry, slots, aot, shake, meta, roots, pods, strip_checks,
+                    features, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_spec_impl(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
+                   aot: bool, shake: bool, meta: &[(String, String)],
+                   roots: Option<&[String]>,
+                   pods: &[(String, Vec<String>)],
+                   strip_checks: bool,
+                   features: Option<&[String]>,
+                   split: bool) -> Result<(String, BTreeMap<String, String>)> {
     // `:flint/nested` decides whether `flint.ception` is offered at all. Absent
     // from an explicit set, the namespace is not emitted and a program naming
     // it does not compile (`DECISIONS.md#flint-ception`). Default is ON, so a build
@@ -326,11 +398,13 @@ fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
         files.extend(mine);
     }
     let mut out = String::from("{:files {");
-    for (k, v) in &files {
-        out.push_str(&edn_string(k));
-        out.push(' ');
-        out.push_str(&edn_string(v));
-        out.push(' ');
+    if !split {
+        for (k, v) in &files {
+            out.push_str(&edn_string(k));
+            out.push(' ');
+            out.push_str(&edn_string(v));
+            out.push(' ');
+        }
     }
     out.push_str("} :entry ");
     out.push_str(entry);
@@ -505,10 +579,14 @@ fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
     // which of the two SPECS was different, only which artifact was. Driving one
     // spec through both compilers showed they agree byte for byte, which is what
     // makes the spec the thing to look at.
-    if let Ok(path) = std::env::var("FLINT_SPEC_OUT") {
-        std::fs::write(&path, &out)?;
+    // THE FULL SPEC is what gets dumped, split or not: the comparison this
+    // feeds is between doors, and the other doors hand over one EDN string.
+    if !split {
+        if let Ok(path) = std::env::var("FLINT_SPEC_OUT") {
+            std::fs::write(&path, &out)?;
+        }
     }
-    Ok(out)
+    Ok((out, files))
 }
 
 /// What to optimise for. An ORDERED PREFERENCE, not a switch.
@@ -1055,10 +1133,24 @@ pub(crate) fn run_source_qs(srcs: &[PathBuf], entry: &str, args: &[String], caps
             (p.name().to_string(), p.var_names().to_vec())
         })
         .collect();
-    let spec = build_spec_with(srcs, entry, &parse_slots(SLOTS)?, false, false, &[], roots,
-                               &pod_vars, strip_checks, None)?;
+    let (envelope, files) = build_spec_split(srcs, entry, &parse_slots(SLOTS)?, false, false,
+                                             &[], roots, &pod_vars, strip_checks, None)?;
     let mut c = load_compiler()?;
-    let r = c.run(&["project", &spec]);
+    let s0 = c.steps();
+    let r = project_split(&mut c, &envelope, &files);
+    if std::env::var("FLINT_CHECK_SPLIT").is_ok() {
+        // A TEST HOOK (`test/cli.clj`): compile the same program the old way,
+        // as one EDN spec, and say whether the bytes agree. A split path that
+        // drifted from the EDN one would still run every program, so nothing
+        // but a byte comparison can notice.
+        let full = build_spec_with(srcs, entry, &parse_slots(SLOTS)?, false, false, &[], roots,
+                                   &pod_vars, strip_checks, None)?;
+        let mut d = load_compiler()?;
+        let d0 = d.steps();
+        let r0 = d.run(&["project", &full]);
+        eprintln!("CHECK-SPLIT identical={} split-steps={} edn-steps={}", r.out == r0.out,
+                  c.steps() - s0, d.steps() - d0);
+    }
     if r.code != 0 {
         bail!("{}", r.out.trim());
     }

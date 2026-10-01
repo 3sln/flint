@@ -987,5 +987,25 @@
                                        ":optimize" "[perf]"))
                              "checks stripped")))
 
+;; --- the spec's FILE BODIES travel encoded, and change nothing ----------------
+;;
+;; `flint run` hands the compiler the spec envelope as EDN and the bodies as an
+;; encoded map the runtime decodes natively: parsing them as EDN string
+;; literals was 57% of a trivial compile's instructions (10.9 M of 19.1 M,
+;; measured 2026-10-01). `FLINT_CHECK_SPLIT` compiles the same program the old
+;; way too and says whether the image bytes agree -- the only thing that could
+;; notice the two drifting, since both would still run the program. With and
+;; without `:optimize [perf]`, because stripping checks changes the spec.
+(doseq [flags [[] [":optimize" "[perf]"]]]
+  (let [pb (ProcessBuilder.
+            (into-array String (concat ["./target/release/flint" "run" ":path" "corpus"
+                                        ":fn" "words/main"] flags)))]
+    (.put (.environment pb) "FLINT_CHECK_SPLIT" "1")
+    (.redirectErrorStream pb true)
+    (let [pr (.start pb) out (slurp (.getInputStream pr))]
+      (.waitFor pr)
+      (check-that (str "an encoded spec compiles the same bytes as an EDN one " (pr-str flags))
+                  (str/includes? out "CHECK-SPLIT identical=true")))))
+
 (println (if (zero? @fails) "cli: ok" (str "cli: " @fails " FAILURES")))
 (System/exit (if (zero? @fails) 0 1))

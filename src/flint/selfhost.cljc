@@ -251,6 +251,8 @@
           (img/set-perf! (:builder result) (boolean (:aot spec)))
           {:builder (:builder result) :stats (:stats result)})))))
 
+(declare compile-project-spec)
+
 (defn compile-project
   "Compile from an ENTRY and a map of source files, resolving `:require`s here.
 
@@ -278,8 +280,18 @@
   A namespace with no source is named, all of them at once. Reporting the first
   and stopping makes fixing a dependency list an n-round conversation."
   [spec-edn]
-  (let [spec (reader/read-one spec-edn)
-        built (build-image spec (or (:builtins spec) #{}))]
+  (compile-project-spec (reader/read-one spec-edn)))
+
+(defn compile-project-spec
+  "`compile-project` on a spec that is already a value.
+
+  The native CLI hands the FILE BODIES over this way: an envelope read as EDN,
+  whose `:files` is empty, and the bodies as an encoded map the runtime decoded
+  natively. Reading the spec had been 57% of a trivial compile's instructions
+  (10.9 M of 19.1 M, measured 2026-10-01), almost all of it the reader walking
+  the bodies of string literals it was only going to hand back."
+  [spec]
+  (let [built (build-image spec (or (:builtins spec) #{}))]
     (if (:missing built)
       {:missing (:missing built)}
       (if (:refused built)
@@ -621,7 +633,7 @@
         ;; into a string. The third is the one that was wrong -- `:clr` had no arm
         ;; there, so the target was listed in both lists above and still could not
         ;; work from the native CLI.
-        known? (or (= mode "project") (= mode "wasm") (= mode "llvm")
+        known? (or (= mode "project") (= mode "project-split") (= mode "wasm") (= mode "llvm")
                    (= mode "clr") (= mode "jvm"))
         [mode spec-edn] (if known? [mode (second args)] ["spec" mode])
         r (cond
@@ -634,6 +646,11 @@
             (= mode "clr") (compile-to-clr spec-edn (nth args 2 ""))
             (= mode "llvm") (compile-to-llvm spec-edn)
             (= mode "project") (compile-project spec-edn)
+            ;; The envelope as EDN, the bodies as an encoded map in the third
+            ;; argument -- only a caller using `call` can pass one, and the
+            ;; native CLI does (`build_spec_split`).
+            (= mode "project-split")
+            (compile-project-spec (update (reader/read-one spec-edn) :files merge (nth args 2)))
             :else (compile-to-base64 spec-edn))]
     (cond
       (:missing r)
