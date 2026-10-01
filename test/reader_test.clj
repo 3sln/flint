@@ -94,6 +94,31 @@
          (r/read-form st)
          '(clojure.core/seq (clojure.core/concat (clojure.core/list 1) (clojure.core/list :a) (clojure.core/list "s")))))
 
+(println "reader: quote resolves syntax-quoted markers nested in quoted data")
+;; `'`x` is QUOTED, so it is never analysed as code -- the reader leaves the
+;; marker `(flint.reader/syntax-quoted x)` exactly as `` `x `` alone would, and
+;; `flint.analyzer/resolve-quoted-syntax-quotes` (private, reached below via
+;; `resolve`) is what turns it into `(quote my.ns/x)` wherever it sits inside
+;; the quoted structure. It already walked into lists and vectors; these check
+;; map keys, map values, sets, and a map nested inside a vector, which it did
+;; not.
+(require '[flint.analyzer])
+(def resolve-quoted (deref (resolve 'flint.analyzer/resolve-quoted-syntax-quotes)))
+(def rq-env {:ns 'my.ns :cc (atom {:namespaces {'my.ns {:aliases {}}} :declared {}})})
+(defn rq [src]
+  (let [st (r/reader src {:ns 'my.ns})
+        form (r/read-form st)] ; (quote <data>)
+    (resolve-quoted rq-env (second form))))
+;; already working (list / vector), pinned alongside the new cases
+(check "quote resolves a marker inside a quoted list" (rq "'(`x)") '((quote my.ns/x)))
+(check "quote resolves a marker inside a quoted vector" (rq "'[`x]") '[(quote my.ns/x)])
+;; the new cases
+(check "quote resolves a marker as a quoted map VALUE" (rq "'{:a `x}") '{:a (quote my.ns/x)})
+(check "quote resolves a marker as a quoted map KEY" (rq "'{`x :a}") '{(quote my.ns/x) :a})
+(check "quote resolves a marker inside a quoted set" (rq "'#{`x}") '#{(quote my.ns/x)})
+(check "quote resolves a marker in a map nested inside a quoted vector"
+       (rq "'[{:a `x}]") '[{:a (quote my.ns/x)}])
+
 (println "reader: reader conditionals")
 (check "flint branch" (r/read-all "#?(:clj 1 :flint 2)" {:features #{:flint}}) [2])
 (check "clj branch" (r/read-all "#?(:clj 1 :cljs 2)" {:features #{:clj}}) [1])

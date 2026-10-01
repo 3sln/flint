@@ -739,7 +739,12 @@
   "`form` with every `flint.reader/syntax-quoted` in it resolved, for a syntax
   quote that is itself QUOTED -- `'`x` -- and so is never analysed as code.
   It read as `(quote my.ns/x)` when the reader resolved it, and still does.
-  Returns `form` itself, metadata and all, when there is nothing to resolve."
+  Returns `form` itself, metadata and all, when there is nothing to resolve.
+
+  Walks into map KEYS and VALUES and into set members too -- `'{:a `x}` and
+  `'#{`x}` are quoted data exactly as `'[`x]` is, and a marker left unresolved
+  there used to leak into a running program as a bare
+  `(flint.reader/syntax-quoted x)` form instead of the symbol it names."
   [env form]
   (cond
     (reader/syntax-quoted? form)
@@ -750,6 +755,23 @@
       (if (every? true? (map identical? xs form))
         form
         (with-meta (if (vector? form) xs (apply list xs)) (meta form))))
+
+    (map? form)
+    (let [ks (keys form)
+          vs (vals form)
+          ks* (mapv (fn [k] (resolve-quoted-syntax-quotes env k)) ks)
+          vs* (mapv (fn [v] (resolve-quoted-syntax-quotes env v)) vs)]
+      (if (and (every? true? (map identical? ks* ks))
+               (every? true? (map identical? vs* vs)))
+        form
+        (with-meta (zipmap ks* vs*) (meta form))))
+
+    (set? form)
+    (let [xs (vec form)
+          xs* (mapv (fn [x] (resolve-quoted-syntax-quotes env x)) xs)]
+      (if (every? true? (map identical? xs* xs))
+        form
+        (with-meta (set xs*) (meta form))))
 
     :else form))
 
