@@ -44,6 +44,11 @@ public final class Space implements AutoCloseable {
     public long reserved;
 
     public Space(long bytes) {
+        // LITTLE-ENDIAN, PINNED -- see the Rust runtime's `lib.rs`. The heap
+        // is native order and a live set copies raw bodies verbatim, so a
+        // big-endian JVM would read every other runtime's export wrong.
+        if (java.nio.ByteOrder.nativeOrder() != java.nio.ByteOrder.LITTLE_ENDIAN)
+            throw new IllegalStateException("flint's heap and live-set format are little-endian; this JVM is not");
         this.arena = Arena.ofShared();
         this.mem = arena.allocate(bytes, 8);
         this.reserved = bytes;

@@ -37,7 +37,8 @@ public static class Snap {
     /// "FLSX". A different magic from `Magic`, deliberately: the two are not
     /// interchangeable and a reader should not have to guess.
     public const int MagicLive = 0x464C_5358;
-    public const int VersionLive = 1;
+    /// 2: whether the program had STARTED rides after the fingerprint -- see the Rust.
+    public const int VersionLive = 2;
 
     /// How a value is written when it may point at the heap. One byte, so the
     /// encoding is unambiguous rather than clever: a NaN-boxed value uses the
@@ -457,6 +458,9 @@ public static class Snap {
     public static byte[] ExportLive(Rt rt) {
         // The collector decides what is live. Everything below only enumerates.
         rt.gc.Major(rt.roots);
+        // AND THEN A MINOR, so the nursery holds only what is live -- see the
+        // Rust's `export_live` for the young object only a dead old one kept.
+        rt.gc.Minor(rt.roots);
 
         long[] ix = LiveObjects(rt);
         Space sp = rt.gc.sp;
@@ -464,6 +468,7 @@ public static class Snap {
         w.U32(MagicLive);
         w.U32(VersionLive);
         w.U64(rt.fingerprint);
+        w.U32(rt.started ? 1 : 0);
 
         bool ok = true;
         w.U32(ix.Length);
@@ -515,6 +520,7 @@ public static class Snap {
         R r = new R(bytes, 0);
         if (r.U32() != MagicLive || r.U32() != VersionLive) { Refused = RefuseLayout; return false; }
         if (r.U64() != rt.fingerprint) { Refused = RefuseImage; return false; }
+        rt.started = r.U32() != 0;
 
         // Nothing of the old state may be reachable while the new objects are
         // being built, or a collection in the middle would try to keep both.

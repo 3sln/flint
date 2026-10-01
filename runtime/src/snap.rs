@@ -1,3 +1,4 @@
+#![cfg_attr(not(feature = "diagnostics"), allow(dead_code, unused_imports))]
 //! VM snapshots: capture, export, import (`DECISIONS.md#snapshots`).
 //!
 //! **Capture is a memcpy, not a traversal.** A capture that walked the object
@@ -134,6 +135,7 @@ fn memory_bytes() -> u64 {
 /// capture perturbs the very timing a collector bug depends on, and the run you
 /// snapshot stops being the run you wanted to look at. Warm the buffer once and
 /// later captures cost nothing.
+#[cfg(feature = "diagnostics")]
 pub fn capture_into(rt: &Rt, out: &mut Vec<u8>) {
     out.clear();
     let mut w = W { b: core::mem::take(out) };
@@ -260,6 +262,7 @@ pub fn capture_into(rt: &Rt, out: &mut Vec<u8>) {
 }
 
 /// The whole VM state as bytes.
+#[cfg(feature = "diagnostics")]
 pub fn capture(rt: &Rt) -> Vec<u8> {
     let mut out = Vec::new();
     capture_into(rt, &mut out);
@@ -332,6 +335,7 @@ fn count_host_opaques(rt: &mut Rt) -> u32 {
     n
 }
 
+#[cfg(feature = "diagnostics")]
 pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
     // RESET FIRST. This used to sit below the short-buffer check, so a short
     // buffer was refused while `REFUSED` still held the PREVIOUS call's
@@ -576,7 +580,12 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
 /// "FLSX". A different format from `MAGIC`, deliberately: the two are not
 /// interchangeable and a reader should not have to guess.
 pub const MAGIC_LIVE: u32 = 0x464C_5358;
-pub const VERSION_LIVE: u32 = 1;
+// VERSION 2 ADDS WHETHER THE PROGRAM HAD STARTED, right after the fingerprint.
+// A live set is the state of a program, and whether its initialisers have run
+// is part of that state: without it an import came back not-started, and the
+// first call ran every top-level form again over the restored heap --
+// resetting each `(def x (atom ..))` it had just brought back.
+pub const VERSION_LIVE: u32 = 2;
 
 /// How a `Value` is written when it may point at the heap. One byte, so the
 /// encoding is unambiguous rather than clever: a NaN-boxed value uses the bits
@@ -660,6 +669,14 @@ fn write_value(w: &mut W, v: Value, ix: &Index) -> bool {
 pub fn export_live(rt: &mut Rt, out: &mut Vec<u8>) -> bool {
     // The collector decides what is live. Everything below only enumerates.
     rt.gc.major(&mut rt.roots);
+    // AND THEN A MINOR, so the nursery holds only what is live. `major` opens
+    // with a minor that keeps a young object alive for any old object pointing
+    // at it, dead or not; the major then sweeps that old object and anything
+    // only the young one reached. A second minor, against the remembered set the
+    // major just pruned, drops the young object too. Without it the walk below
+    // met a reference into swept memory and refused
+    // (`tests::a_young_object_only_a_dead_old_one_kept_alive_is_not_exported`).
+    rt.gc.minor(&mut rt.roots);
 
     let addrs = live_objects(rt);
     let ix = Index { addrs };
@@ -668,6 +685,7 @@ pub fn export_live(rt: &mut Rt, out: &mut Vec<u8>) -> bool {
     w.u32(MAGIC_LIVE);
     w.u32(VERSION_LIVE);
     w.u64(rt.image.fingerprint);
+    w.u32(rt.started() as u32);
 
     // --- objects: type, len, then the body.
     w.usz(ix.addrs.len());
@@ -812,6 +830,8 @@ pub fn import_live(rt: &mut Rt, bytes: &[u8]) -> bool {
         unsafe { REFUSED = REFUSE_IMAGE };
         return false;
     }
+    let started = r.u32() != 0;
+    rt.set_started(started);
 
     // Nothing of the old state may be reachable while the new objects are
     // being built, or a collection in the middle would try to keep both.
@@ -1066,6 +1086,63 @@ pub fn halt(rt: &mut Rt) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// WHETHER THE PROGRAM HAD STARTED TRAVELS WITH ITS LIVE SET.
+    ///
+    /// An import that came back not-started ran every initialiser again on the
+    /// first call, over the heap it had just restored -- found when a primed
+    /// compiler's `(def primed (atom ..))` came back empty
+    /// (`spike/precompiled-stdlib`). Both directions, so a format that always
+    /// wrote 1 would fail the second half.
+    #[test]
+    fn a_live_set_says_whether_the_program_had_started() {
+        for want in [true, false] {
+            let mut src = Rt::new();
+            src.set_started(want);
+            let mut out = Vec::new();
+            assert!(export_live(&mut src, &mut out));
+            let mut dst = Rt::new();
+            dst.set_started(!want);
+            assert!(import_live(&mut dst, &out), "import refused");
+            assert_eq!(dst.started(), want, "the started flag did not travel");
+        }
+    }
+
+    /// A YOUNG OBJECT THAT ONLY A DEAD OLD ONE KEPT ALIVE IS NOT LIVE.
+    ///
+    /// A minor collection keeps a young object alive if an old object points at
+    /// it -- that is what the remembered set is for -- without asking whether
+    /// the old object is itself alive. `major` starts with such a minor, so the
+    /// nursery can come out of it holding objects the major then finds
+    /// unreachable, whose OLD children it sweeps. `live_objects` used to list
+    /// the whole nursery as live, met a reference into swept memory, and
+    /// `export_live` refused. Found priming a compiler for a snapshot
+    /// (`spike/precompiled-stdlib`), where it refused every time.
+    ///
+    /// O is old and garbage, Y is young and only O points at it, Z is old and
+    /// only Y points at it. Nothing is rooted.
+    #[test]
+    fn a_young_object_only_a_dead_old_one_kept_alive_is_not_exported() {
+        let mut rt = Rt::new();
+        let base = rt.mark();
+        let z = rt.new_obj(crate::obj::TY_ATOM, 2);
+        let zi = rt.push(z);
+        let o = rt.new_obj(crate::obj::TY_ATOM, 2);
+        let oi = rt.push(o);
+        for _ in 0..=crate::gc::PROMOTE_AGE + 1 {
+            rt.gc.minor(&mut rt.roots);
+        }
+        assert!(!rt.gc.is_young(rt.r(zi).as_heap()), "Z was not promoted");
+        assert!(!rt.gc.is_young(rt.r(oi).as_heap()), "O was not promoted");
+        let y = rt.new_obj(crate::obj::TY_ATOM, 2);
+        assert!(rt.gc.is_young(y.as_heap()), "Y is not young");
+        rt.set_slot(y.as_heap(), 0, rt.r(zi));
+        rt.set_slot(rt.r(oi).as_heap(), 0, y);
+        rt.pop_to(base);
+        let mut out = Vec::new();
+        assert!(export_live(&mut rt, &mut out),
+                "export refused: a nursery object only a dead old one kept alive was treated as live");
+    }
 
     /// A NURSERY OBJECT OF SIZE ZERO MUST NOT HANG THE WALK.
     ///

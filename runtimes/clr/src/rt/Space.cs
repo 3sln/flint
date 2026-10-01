@@ -27,7 +27,10 @@ public sealed unsafe class Space : System.IDisposable {
     public long InUse;
     public long Reserved;
 
+    // LITTLE-ENDIAN, PINNED -- see the Rust runtime's `lib.rs`.
     public Space(long bytes) {
+        if (!System.BitConverter.IsLittleEndian)
+            throw new System.InvalidOperationException("flint's heap and live-set format are little-endian; this runtime is not");
         _base = (byte*) NativeMemory.AllocZeroed((nuint) bytes);
         if (_base == null) throw new System.OutOfMemoryException("flint: could not reserve the heap");
         Reserved = bytes;

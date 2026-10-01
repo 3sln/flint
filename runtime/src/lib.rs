@@ -7,6 +7,7 @@
 
 #![no_std]
 #![allow(clippy::missing_safety_doc)]
+
 // `unused_comparisons` IS AN ERROR IN THIS CRATE, and it is here rather than
 // only on `kgen` because the trap is not confined to generated code. kin's
 // `I32` is `u32` in Rust and `int` in both ports, so a guard written `x < 0`
@@ -19,6 +20,17 @@
 // of them errors -- rustc had been reporting each one as one warning among
 // forty since the moment it appeared. Warnings nobody reads are not a gate.
 #![deny(unused_comparisons)]
+
+// LITTLE-ENDIAN, PINNED. The heap is read and written in the machine's own
+// byte order (`read_unaligned` on `u32`/`u64`), and a live-set export copies a
+// raw object's body -- a string's byte and code-point counts, a bigint's limbs
+// -- verbatim. Both are portable exactly when every runtime is little-endian,
+// which wasm is by specification and every host flint runs on is in practice.
+// Refusing a big-endian target here makes that a property of the build rather
+// than an assumption nobody wrote down; the JVM and CLR heaps check it when
+// they are made.
+#[cfg(target_endian = "big")]
+compile_error!("flint's heap and its live-set format are little-endian; this target is not");
 
 extern crate alloc;
 
@@ -60,7 +72,9 @@ pub mod seqs;
 pub mod set;
 // Snapshots are diagnostic machinery (DECISIONS.md#two-builds): absent from a
 // production build, not merely disabled.
-#[cfg(feature = "diagnostics")]
+// The GRAPH-WALKING live set (`export_live`/`import_live`) is what shelving a
+// sandbox needs, so it ships in every build. Only the verbatim heap capture
+// inside this module is a troubleshooting tool, and that half is gated there.
 pub mod snap;
 /// The region histogram `DECISIONS.md#emit-wasm-instead-of-dispatch` is gated on. Diagnostic by the same
 /// rule: it exists to decide whether to build the AOT compiler, not to run.

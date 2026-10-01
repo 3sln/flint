@@ -179,6 +179,39 @@ public class RtSnapshot {
     ok("and says the sandbox was shelved rather than answered",
        d.status == Snap.STATUS_SHELVED);
 
+    // --- a young object only a DEAD old one kept alive is not live. O is old
+    // and unrooted, Y is young and only O points at it, Z is old and only Y
+    // points at it. The major's opening minor keeps Y for O's sake, the major
+    // sweeps O and Z, and an export that listed the whole nursery met Y's
+    // reference into swept memory and refused. See the Rust's snap tests.
+    Rt g = new Rt(1024 * 1024, 64L * 1024 * 1024);
+    g.fingerprint = 0x1L;
+    int gb = g.mark();
+    int zi = g.push(Conc.newObj(g, Obj.TY_ATOM, 2));
+    int oi = g.push(Conc.newObj(g, Obj.TY_ATOM, 2));
+    for (int i = 0; i < 4; i++) g.gc.minor(g.roots);
+    ok("the old objects were promoted",
+       !g.gc.isYoung(Val.asHeap(g.r(zi))) && !g.gc.isYoung(Val.asHeap(g.r(oi))));
+    long y = Conc.newObj(g, Obj.TY_ATOM, 2);
+    g.setSlot(Val.asHeap(y), 0, g.r(zi));
+    g.setSlot(Val.asHeap(g.r(oi)), 0, y);
+    g.popTo(gb);
+    ok("a young object only a dead old one kept alive is not exported as live",
+       Snap.exportLive(g) != null);
+
+    // --- whether the program had STARTED travels with the live set, both
+    // ways -- see the Rust's snap tests.
+    for (boolean want : new boolean[]{true, false}) {
+      Rt s = new Rt(1024 * 1024, 64L * 1024 * 1024);
+      s.fingerprint = 0x2L;
+      s.started = want;
+      byte[] bytes = Snap.exportLive(s);
+      Rt t = new Rt(1024 * 1024, 64L * 1024 * 1024);
+      t.fingerprint = 0x2L;
+      t.started = !want;
+      ok("the started flag travels (" + want + ")", bytes != null && Snap.importLive(t, bytes) && t.started == want);
+    }
+
     if (fails > 0) { System.out.println("  " + fails + " failed"); System.exit(1); }
   }
 }

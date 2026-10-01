@@ -1128,7 +1128,25 @@ scheduler's whole value.
 **Ratified:** ☐ not signed off
 
 **Status: shipped — verified 2026-09-12 by capturing one and reading it.**
-Capture, export/import, and an inspector, all opt-in
+**REVISED 2026-10-01: the two formats are no longer gated alike.** The
+graph-walking LIVE SET (`export_live`/`import_live`) is what shelving a sandbox
+needs, so it ships in every build on all four runtimes (the JVM and CLR always
+had it; in Rust the whole `snap` module was behind `diagnostics`); only the
+verbatim memcpy capture, a troubleshooting tool, stays diagnostics-only (the
+maintainer's call). The live format is VERSION 2: it records whether the program
+had STARTED, so an import no longer re-runs every initialiser over the heap it
+restored. And an export runs a MINOR after its major, so a nursery object only a
+dead old one kept alive is not listed as live -- before that, any program in
+that state refused to export. Both found by priming a compiler for a snapshot
+(`spike/precompiled-stdlib`), and both are tests on all three hand-written
+runtimes (`snap::tests`, `RtSnapshot.java`, the CLR's `--rt-snapshot`). The heap
+and the live format are LITTLE-ENDIAN, pinned: a big-endian Rust target does not
+compile and the JVM and CLR heaps refuse to construct. NOT YET BUILT, decided by
+the maintainer: a live set is requested by the HOST, through the system port,
+naming a destination port it is STREAMED to in chunks -- guest code cannot
+trigger one.
+
+As first written: capture, export/import, and an inspector, all opt-in
 under `two-builds` (present only in a diagnostics build). Driven under node
 against the diagnostics module `out/sn-work.wasm`: `flint_snapshot_capture`
 returned a **5 276 704-byte** memcpy image, which `host/snapshot.mjs` parsed

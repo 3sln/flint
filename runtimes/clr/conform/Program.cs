@@ -215,6 +215,36 @@ public static class Program {
         SnapOk("and says the sandbox was shelved rather than answered",
                d.status == Flint.Rt.Snap.StatusShelved);
 
+        // --- a young object only a DEAD old one kept alive is not live -- see
+        // the JVM's RtSnapshot and the Rust's snap tests.
+        var g = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
+        g.fingerprint = 0x1L;
+        int gb = g.Mark();
+        int zi = g.Push(Flint.Rt.Conc.NewObj(g, Flint.Rt.Obj.TyAtom, 2));
+        int oi = g.Push(Flint.Rt.Conc.NewObj(g, Flint.Rt.Obj.TyAtom, 2));
+        for (int i = 0; i < 4; i++) g.gc.Minor(g.roots);
+        SnapOk("the old objects were promoted",
+               !g.gc.IsYoung(Flint.Rt.Val.AsHeap(g.R(zi))) && !g.gc.IsYoung(Flint.Rt.Val.AsHeap(g.R(oi))));
+        long y = Flint.Rt.Conc.NewObj(g, Flint.Rt.Obj.TyAtom, 2);
+        g.SetSlot(Flint.Rt.Val.AsHeap(y), 0, g.R(zi));
+        g.SetSlot(Flint.Rt.Val.AsHeap(g.R(oi)), 0, y);
+        g.PopTo(gb);
+        SnapOk("a young object only a dead old one kept alive is not exported as live",
+               Flint.Rt.Snap.ExportLive(g) != null);
+
+        // --- whether the program had STARTED travels, both ways.
+        foreach (bool want in new[]{ true, false }) {
+            var s = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
+            s.fingerprint = 0x2L;
+            s.started = want;
+            byte[] bytes = Flint.Rt.Snap.ExportLive(s);
+            var t = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
+            t.fingerprint = 0x2L;
+            t.started = !want;
+            SnapOk("the started flag travels (" + want + ")",
+                   bytes != null && Flint.Rt.Snap.ImportLive(t, bytes) && t.started == want);
+        }
+
         if (snapFails > 0) { Console.WriteLine("  " + snapFails + " failed"); return 1; }
         return 0;
     }
