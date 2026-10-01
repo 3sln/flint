@@ -219,6 +219,10 @@ pub struct Space {
     /// wasm: the arena is global, so nothing here is owned.
     #[allow(dead_code)]
     owned_len: usize,
+    /// What the allocator returned, which `base` is aligned up from. Null on
+    /// wasm, where nothing is owned.
+    #[allow(dead_code)]
+    raw: *mut u8,
     pub(crate) free_runs: Vec<Region>,
     pub reserved: Addr,
     pub in_use: Addr,
@@ -241,6 +245,7 @@ impl Space {
             Space {
                 base: core::ptr::null_mut(),
                 owned_len: 0,
+                raw: core::ptr::null_mut(),
                 free_runs: Vec::new(),
                 reserved: u32::MAX as Addr,
                 in_use: 0,
@@ -250,13 +255,25 @@ impl Space {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
+            // LAZILY ZERO, which `alloc_zeroed` at PAGE alignment was not.
+            // An alignment above the allocator's own makes Rust's system
+            // allocator take an aligned allocation and then ZERO IT BY HAND --
+            // every byte of the reservation, so a `flint run` of a program
+            // answering "hi" peaked at 5.0 GB resident and spent ~0.5 s of CPU
+            // per sandbox in `__bzero` (measured 2026-10-01, `sample`). At the
+            // allocator's ordinary alignment the same call is `calloc`, whose
+            // large blocks are fresh mapped pages the OS zeroes on first touch.
+            // So over-allocate by one PAGE and align the base by hand.
             let len = align_up(reserve as Addr, PAGE as Addr) as usize;
-            let layout = core::alloc::Layout::from_size_align(len, PAGE as usize).unwrap();
-            let p = unsafe { alloc::alloc::alloc_zeroed(layout) };
-            assert!(!p.is_null(), "flint: could not reserve {len} bytes");
+            let total = len + PAGE as usize;
+            let layout = core::alloc::Layout::from_size_align(total, 16).unwrap();
+            let raw = unsafe { alloc::alloc::alloc_zeroed(layout) };
+            assert!(!raw.is_null(), "flint: could not reserve {len} bytes");
+            let p = align_up(raw as usize as Addr, PAGE as Addr) as usize as *mut u8;
             Space {
                 base: p,
-                owned_len: len,
+                raw,
+                owned_len: total,
                 free_runs: Vec::new(),
                 reserved: len as Addr,
                 in_use: PAGE as Addr, // address 0 is never a valid object
@@ -410,10 +427,9 @@ impl Space {
 #[cfg(not(target_arch = "wasm32"))]
 impl Drop for Space {
     fn drop(&mut self) {
-        if !self.base.is_null() {
-            let layout =
-                core::alloc::Layout::from_size_align(self.owned_len, PAGE as usize).unwrap();
-            unsafe { alloc::alloc::dealloc(self.base, layout) }
+        if !self.raw.is_null() {
+            let layout = core::alloc::Layout::from_size_align(self.owned_len, 16).unwrap();
+            unsafe { alloc::alloc::dealloc(self.raw, layout) }
         }
     }
 }

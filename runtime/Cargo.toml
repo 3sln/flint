@@ -71,3 +71,8 @@ required-features = ["diagnostics"]
 [[example]]
 name = "iterbench"
 required-features = ["bench"]
+
+# `tests/reservation.rs` reads the process's peak resident set, which only
+# `getrusage` reports.
+[dev-dependencies]
+libc = "0.2"
