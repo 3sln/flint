@@ -34,14 +34,6 @@
                :let [t (if (symbol? spec) spec (first spec))]]
            t))))
 
-(defn ns-aliases [form]
-  (into {} (for [c (drop 2 form)
-                 :when (and (seq? c) (ana/require-clauses (first c)))
-                 spec (rest c)
-                 :when (vector? spec)
-                 :let [opts (apply hash-map (rest spec))]
-                 :when (:as opts)]
-             [(:as opts) (first spec)])))
 
 (defn- def-form-names
   "Top-level names a form defines, following the bootstrap macros far enough to
@@ -418,72 +410,66 @@
     (sequential? node) (mapcat ast-defs node)
     :else nil))
 
-(defn read-namespace!
-  "Read one namespace and register every name it defines, so that forward
-  references -- within a namespace and between namespaces -- resolve without
-  `declare`. Clojure needs `declare` for the intra-namespace case; reading
-  everything before analysing anything makes it unnecessary."
+(defn read-source
+  "Every form in one namespace's source. A function of the TEXT and how to read
+  it -- features, tags, dialect -- and of nothing the compiler has learned, so
+  `flint.project/collect`'s read, which finds the requires, is this read, and
+  `compile-image` takes those forms rather than reading the file again
+  (`flint.reader/syntax-quoted` says why it used to have to)."
   [cc nsname src file tags]
-  (let [spec {:features (:features @cc)}
-        resolve-hook
-        (fn [sym]
-          (let [nsdef (get-in @cc [:namespaces nsname])
-                n (name sym)]
-            (or (get (:refers nsdef) sym)
-                (when (get-in @cc [:declared (symbol (str nsname) n)])
-                  (symbol (str nsname) n))
-                (when (get-in @cc [:declared (symbol "clojure.core" n)])
-                  (symbol "clojure.core" n))
-                (when (contains? macros/bootstrap (symbol n))
-                  (symbol "clojure.core" n)))))
-        ;; Not #{:clj}: flint is not the JVM, and a :clj branch here would be
-        ;; host interop we cannot compile. Ported code needs a :flint or
-        ;; :default branch -- said plainly in the README.
-        ;;
-        ;; It is overridable because third-party `.cljc` written before flint
-        ;; existed offers neither. Such a library's `#?(:clj .. :cljs ..)`
-        ;; selects NOTHING here, and inside a map literal that leaves an odd
-        ;; number of forms -- so the file does not even READ. Which set actually
-        ;; helps is a measurement, not a preference; see `flint build :features`.
-        ;; `:tags` travels with the source, per SOURCE ROOT. It cannot be
-        ;; defaulted here for the same reason `:features` cannot -- and for the
-        ;; reason `default-features` records: this file is read THREE times, by
-        ;; `collect`, by `topo-order` and by here, and a value only one of them
-        ;; knows about is a value the other two get wrong (`DECISIONS.md#reader-tags`).
-        ;; THE DIALECT is read off the context rather than passed in, because
-        ;; `compile-image` already lifted it there from the sources and a
-        ;; second channel for one fact is a second thing to get out of step.
-        ;; A synthetic namespace -- the check registry, the entry shim -- has
-        ;; no entry there and so reads as `:flint`, which is what it is: the
-        ;; compiler wrote it and no other platform will ever read it.
-        st (reader/reader src {:file file
-                               :features (or (:features spec) reader/default-features)
-                               :tags tags
-                               :dialect (get-in @cc [:workspaces nsname :dialect])
-                               :resolve resolve-hook})
-        _ (vswap! cc assoc-in [:namespaces nsname] (get-in @cc [:namespaces nsname] {}))
-        forms (loop [acc []]
-                (let [f (reader/read-form st)]
-                  (if (reader/eof? f)
-                    acc
-                    (do (when (ns-form? f)
-                          (reader/set-ns! st (second f) (ns-aliases f)))
-                        (recur (conj acc f))))))]
-    (let [forms (flatten-top-level forms)]
-      (doseq [f forms, [n vis] (def-form-entries f)]
-        (let [q (symbol (str nsname) (name n))]
-          (vswap! cc assoc-in [:declared q] vis)
-          ;; `:dynamic` HERE TOO, for the reason the visibility marks moved
-          ;; here. The analyser records it when the `def` is ANALYSED, and a
-          ;; reference reads it to decide between a thread-binding read and a
-          ;; plain one. A namespace analysed BEFORE the definer therefore read
-          ;; an empty table and compiled `*x*` as an ordinary var -- silently
-          ;; ignoring every `binding` around it -- while `binding` on the same
-          ;; var reported that it "is not dynamic, so it cannot be rebound".
-          ;; Both from a var that is plainly dynamic in the source.
-          (when (:dynamic vis)
-            (vswap! cc assoc-in [:dynamic q] true))))
-      forms)))
+  ;; Not #{:clj}: flint is not the JVM, and a :clj branch here would be
+  ;; host interop we cannot compile. Ported code needs a :flint or
+  ;; :default branch -- said plainly in the README.
+  ;;
+  ;; It is overridable because third-party `.cljc` written before flint
+  ;; existed offers neither. Such a library's `#?(:clj .. :cljs ..)`
+  ;; selects NOTHING here, and inside a map literal that leaves an odd
+  ;; number of forms -- so the file does not even READ. Which set actually
+  ;; helps is a measurement, not a preference; see `flint build :features`.
+  ;; `:tags` travels with the source, per SOURCE ROOT. It cannot be
+  ;; defaulted here for the same reason `:features` cannot -- and for the
+  ;; reason `default-features` records: a file read in more than one place
+  ;; must be read the same way in each, and a value only one of them knows
+  ;; about is a value the others get wrong (`DECISIONS.md#reader-tags`).
+  ;; THE DIALECT is read off the context rather than passed in, because
+  ;; `compile-image` already lifted it there from the sources and a
+  ;; second channel for one fact is a second thing to get out of step.
+  ;; A synthetic namespace -- the check registry, the entry shim -- has
+  ;; no entry there and so reads as `:flint`, which is what it is: the
+  ;; compiler wrote it and no other platform will ever read it.
+  (reader/read-all src {:file file
+                        :features (or (:features @cc) reader/default-features)
+                        :tags tags
+                        :dialect (get-in @cc [:workspaces nsname :dialect])}))
+
+(defn declare-namespace!
+  "Register every name one namespace's `forms` define, so that forward
+  references -- within a namespace and between namespaces -- resolve without
+  `declare`. Clojure needs `declare` for the intra-namespace case; declaring
+  everything before analysing anything makes it unnecessary. Returns the forms,
+  top-level `do`s flattened."
+  [cc nsname forms]
+  (vswap! cc assoc-in [:namespaces nsname] (get-in @cc [:namespaces nsname] {}))
+  (let [forms (flatten-top-level forms)]
+    (doseq [f forms, [n vis] (def-form-entries f)]
+      (let [q (symbol (str nsname) (name n))]
+        (vswap! cc assoc-in [:declared q] vis)
+        ;; `:dynamic` HERE TOO, for the reason the visibility marks moved
+        ;; here. The analyser records it when the `def` is ANALYSED, and a
+        ;; reference reads it to decide between a thread-binding read and a
+        ;; plain one. A namespace analysed BEFORE the definer therefore read
+        ;; an empty table and compiled `*x*` as an ordinary var -- silently
+        ;; ignoring every `binding` around it -- while `binding` on the same
+        ;; var reported that it "is not dynamic, so it cannot be rebound".
+        ;; Both from a var that is plainly dynamic in the source.
+        (when (:dynamic vis)
+          (vswap! cc assoc-in [:dynamic q] true))))
+    forms))
+
+(defn read-namespace!
+  "Read one namespace and declare what it defines (`declare-namespace!`)."
+  [cc nsname src file tags]
+  (declare-namespace! cc nsname (read-source cc nsname src file tags)))
 
 (defn analyze-namespace!
   "Analyze one namespace's already-read forms, appending to `:items` in order."
@@ -731,9 +717,16 @@
                            :checked? (boolean (seq (:vars info)))}])))
     (let [read-forms (into {} (for [nsname order
                                     :when (not (:virtual (get sources nsname)))]
-                                (let [{:keys [src file tags]} (get sources nsname)]
-                                  (when-not src (err (str "no source for namespace " nsname) {:ns nsname}))
-                                  [nsname (read-namespace! cc nsname src file tags)])))]
+                                (let [{:keys [src file tags forms]} (get sources nsname)]
+                                  (when-not (or forms src)
+                                    (err (str "no source for namespace " nsname) {:ns nsname}))
+                                  ;; THE RESOLVER'S FORMS when it kept them, which
+                                  ;; every front door's does: the reader is
+                                  ;; context-free, so a second read would produce
+                                  ;; the same forms at the cost of the read.
+                                  [nsname (declare-namespace!
+                                           cc nsname
+                                           (or forms (read-source cc nsname src file tags)))])))]
       (doseq [nsname order
               :when (not (:virtual (get sources nsname)))]
         (analyze-namespace! cc nsname (get read-forms nsname))))

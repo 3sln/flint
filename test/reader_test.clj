@@ -61,10 +61,24 @@
 
 (println "reader: syntax quote")
 (let [st (r/reader "`(a ~b ~@c)" {:ns 'my.ns})]
+  ;; A symbol is LEFT for the analyzer to resolve (`flint.reader/syntax-quoted`):
+  ;; what `a` names is compile state, and the reader does not depend on it.
   (check "syntax quote" (r/read-form st)
-         '(clojure.core/seq (clojure.core/concat (clojure.core/list (quote my.ns/a))
+         '(clojure.core/seq (clojure.core/concat (clojure.core/list (flint.reader/syntax-quoted a))
                                                  (clojure.core/list b)
                                                  c))))
+(check "  ... and reads the same whatever namespace the reader was given"
+       (r/read-form (r/reader "`(a x/b)" {:ns 'my.ns :aliases {'x 'other.ns}}))
+       (r/read-one "`(a x/b)"))
+(check "  ... while what needs no context is decided here"
+       (r/read-one "`(if .m &)")
+       '(clojure.core/seq (clojure.core/concat (clojure.core/list (quote if))
+                                               (clojure.core/list (quote .m))
+                                               (clojure.core/list (quote &)))))
+(check "  ... and a nested syntax quote's symbol is quoted data to the outer one"
+       (r/read-one "``a")
+       '(clojure.core/seq (clojure.core/concat (clojure.core/list (quote quote))
+                                               (clojure.core/list (flint.reader/syntax-quoted a)))))
 (let [st (r/reader "`x#" {:ns 'my.ns})
       f (r/read-form st)]
   (check "gensym form" (and (seq? f) (= 'quote (first f)) (str/starts-with? (name (second f)) "x__")) true))
@@ -110,6 +124,12 @@
   (check "::foo" (r/read-form st) :my.ns/foo))
 (let [st (r/reader "::str/x" {:ns 'my.ns :aliases {'str 'clojure.string}})]
   (check "::alias/foo" (r/read-form st) :clojure.string/x))
+;; The FILE's `ns` form sets them, inside the reader: the compiler used to, so
+;; the read that finds requires saw `:user/foo` where the compile saw the right
+;; one, and the two reads could not be one.
+(check "::foo after an ns form, with no caller's help"
+       (r/read-all "(ns my.ns (:require [clojure.string :as str])) ::foo ::str/x #::{:a 1}")
+       ['(ns my.ns (:require [clojure.string :as str])) :my.ns/foo :clojure.string/x {:my.ns/a 1}])
 
 (println "reader: errors are located")
 (check "unterminated string throws"

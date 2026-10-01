@@ -147,10 +147,13 @@
                   forms (reader/read-all (:src s) {:file (:file s)
                                                    :features features
                                                    :tags (:tags s)
-                                                   ;; THE FIRST OF THREE READS, and the
-                                                   ;; dialect has to be on every one: a
-                                                   ;; value only one reader knows about is
-                                                   ;; one the other two get wrong
+                                                   ;; THE ONLY READ: `:forms` below is what
+                                                   ;; the compiler analyses, because the
+                                                   ;; reader depends on nothing it learns
+                                                   ;; (`DECISIONS.md#context-free-reader`).
+                                                   ;; Every option a read takes is here, and
+                                                   ;; a caller that compiles from `:src`
+                                                   ;; instead must pass the same ones
                                                    ;; (`DECISIONS.md#reader-tags`).
                                                    :dialect dialect})
                   reqs (compiler/ns-requires (or (ns-form forms) '(ns x)))

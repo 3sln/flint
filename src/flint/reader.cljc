@@ -326,24 +326,41 @@
   '#{if do let* loop* recur fn* quote var throw try catch finally def
      new set! . & monitor-enter monitor-exit deftype* reify* case* letfn* ns})
 
-(defn- resolve-sym
-  "Resolve a symbol for syntax quote. An alias expands to the namespace it
-  names; an unqualified name goes through the caller's `:resolve` hook, which is
-  how `` `(fn [] x) `` becomes `clojure.core/fn` rather than `this.ns/fn`.
-  Without that hook a macro defined outside clojure.core would emit calls to
-  vars in its own namespace that do not exist -- the failure is confusing and
-  arrives late, so the hook is not optional."
-  [st sym]
-  (let [{:keys [ns aliases resolve]} @st
-        n (name sym)]
-    (cond
-      (str/ends-with? n "#") sym                             ; handled by gensym
-      (namespace sym) (let [a (symbol (namespace sym))]
-                        (symbol (str (get aliases a (namespace sym))) n))
-      (str/starts-with? n ".") sym
-      (contains? special-forms sym) sym
-      resolve (or (resolve sym) (symbol (str (or ns "user")) n))
-      :else (symbol (str (or ns "user")) n))))
+(def syntax-quoted
+  "The head of the form syntax quote leaves where a symbol needs RESOLVING:
+  `` `(f x) `` reads as `(clojure.core/seq (clojure.core/concat
+  (clojure.core/list (flint.reader/syntax-quoted f)) ..))`, and the ANALYZER
+  turns `(flint.reader/syntax-quoted f)` into the quoted symbol `f` names in
+  the namespace being compiled.
+
+  NOT HERE, because what `f` names is compile state -- the namespace's
+  aliases, what `clojure.core` declares -- and a reader that consults it reads
+  the same file differently depending on when it is asked. That is what made
+  every file get read TWICE in a compile: once context-free to find its
+  requires, and again with the compiler's state to hand, which was 3.9 M of a
+  trivial `flint run`'s 8.2 M instructions. The reader is now a function of
+  the text and the file's own `ns` form, so the first read is the only one
+  (`DECISIONS.md#context-free-reader`).
+
+  What does not depend on context is still decided here: a gensym (`x#`, one
+  name per syntax-quote form), a `.method`, and a special form, all of which
+  read as `(quote sym)` exactly as before."
+  'flint.reader/syntax-quoted)
+
+(defn syntax-quoted?
+  "Is `f` a symbol syntax quote left for the analyzer to resolve?"
+  [f]
+  (and (seq? f) (= syntax-quoted (first f))))
+
+(defn- sq-symbol
+  "A symbol inside syntax quote: decided here when it can be decided without
+  compile state, and otherwise left for the analyzer (see `syntax-quoted`)."
+  [sym]
+  (let [n (name sym)]
+    (if (or (and (nil? (namespace sym)) (str/starts-with? n "."))
+            (contains? special-forms sym))
+      (list 'quote sym)
+      (list syntax-quoted sym))))
 
 (declare sq-form sq-expand-seq)
 
@@ -364,7 +381,15 @@
     (symbol? form)
     (if (str/ends-with? (name form) "#")
       (sq-gensym st form)
-      (list 'quote (resolve-sym st form)))
+      (sq-symbol form))
+
+    ;; A NESTED syntax quote has already been read into this, and its symbols
+    ;; are still waiting to be resolved. Each one is quoted data to THIS
+    ;; syntax quote -- it read as `(quote my.ns/f)` when the reader resolved
+    ;; it -- so it is treated as that list, and its symbol is resolved in the
+    ;; same namespace it always was.
+    (syntax-quoted? form)
+    (sq-form st (list 'quote (second form)))
 
     (seq? form)
     (if (empty? form)
@@ -767,16 +792,47 @@
           (with-pos st line col v (:child-pos (when (seq? v) @st)))
           v)))))
 
+(def require-clauses
+  "The `ns` clauses that NAME NAMESPACES.
+
+  One set, read by everything that needs the answer: the analyzer binds their
+  aliases and refers, `flint.compiler/ns-requires` builds the load-order graph
+  from the same heads, and `ns-aliases` below gives `::alias/kw` its namespace.
+  Two spellings of \"which clause names a namespace\" is a graph that disagrees
+  with the bindings. It lives HERE because the reader is the one of those that
+  cannot require the others."
+  #{:require :use})
+
+(defn ns-aliases
+  "`{alias target}` for every `:as` in an `ns` form's require clauses."
+  [form]
+  (into {} (for [c (drop 2 form)
+                 :when (and (seq? c) (require-clauses (first c)))
+                 spec (rest c)
+                 :when (vector? spec)
+                 :let [opts (apply hash-map (rest spec))]
+                 :when (:as opts)]
+             [(:as opts) (first spec)])))
+
 (defn read-form
   "Read one form, or the `EOF` sentinel. Use `eof?` to test the result: the
-  sentinel is deliberately not a value any source text can produce."
+  sentinel is deliberately not a value any source text can produce.
+
+  A top-level `(ns ...)` sets the namespace and aliases that `::kw` and
+  `#::{}` resolve against for the rest of the read. That is the FILE's own
+  context, not the compiler's, so it belongs to the reader: it used to be the
+  compiler's to set, which meant the read that finds a file's requires and the
+  read that compiles it disagreed about every `::kw` -- and could not be the
+  same read."
   [st]
   (loop []
     (let [v (read-form* st)]
       (cond
         (eof? v) (if (nil? (peek-ch st)) EOF (recur))
         (spliced? v) (err st "#?@ outside a collection")
-        :else v))))
+        :else (do (when (and (seq? v) (= 'ns (first v)) (symbol? (second v)))
+                    (vswap! st assoc :ns (second v) :aliases (ns-aliases v)))
+                  v)))))
 
 (def default-features
   "Which reader-conditional branches are selected, unless a caller says
@@ -818,7 +874,7 @@
   ([src] (reader src {}))
   ([src opts]
    (let [st (make-state src (:file opts "<string>"))]
-     (vswap! st merge (select-keys opts [:ns :aliases :features :resolve :tags]))
+     (vswap! st merge (select-keys opts [:ns :aliases :features :tags]))
      (vswap! st assoc :features (or (:features opts) default-features))
      (vswap! st assoc :dialect (or (:dialect opts) :flint))
      ;; PER PROJECT, merged over the built-ins. A dependency is read with its
@@ -833,9 +889,6 @@
   `{:file :line :offered}`."
   [st]
   (:elided @st []))
-
-(defn set-ns! [st ns aliases]
-  (vswap! st assoc :ns ns :aliases aliases))
 
 (defn read-all
   "Read every form in `src`."
