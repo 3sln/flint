@@ -61,12 +61,29 @@
                                             61))]
             (recur (+ i 3) out))))))))
 
+(def ^:private pending-files
+  "File bodies handed over ENCODED by a `split` call, merged into the next spec
+  read. The native CLI sends them this way rather than inside the EDN: reading
+  them as string literals was 57% of a trivial compile's instructions (10.9 M of
+  19.1 M, measured 2026-10-01), and an encoded string is decoded natively."
+  (atom nil))
+
+(defn- read-spec
+  "The spec, read from EDN, with any encoded file bodies merged into `:files`.
+  EVERY mode reads its spec through here, so the split path is one mechanism
+  and not one variant per target."
+  [spec-edn]
+  (let [spec (reader/read-one spec-edn)
+        files @pending-files]
+    (reset! pending-files nil)
+    (if files (update spec :files merge files) spec)))
+
 (defn compile-to-base64
   "`spec` is EDN: {:sources {ns {:src .. :file ..}} :order [..] :entry ns/fn
   :builtins #{..}}. Returns the base64 image, with native slots left at zero for
   the host to patch (`flint.image/patch-native-slots`)."
   [spec-edn]
-  (let [spec (reader/read-one spec-edn)
+  (let [spec (read-spec spec-edn)
         result (compiler/compile-image spec)
         builder (:builder result)
         bytes (img/emit builder {})]
@@ -280,7 +297,7 @@
   A namespace with no source is named, all of them at once. Reporting the first
   and stopping makes fixing a dependency list an n-round conversation."
   [spec-edn]
-  (compile-project-spec (reader/read-one spec-edn)))
+  (compile-project-spec (read-spec spec-edn)))
 
 (defn compile-project-spec
   "`compile-project` on a spec that is already a value.
@@ -326,7 +343,7 @@
   segment, pointing the descriptor at it, appending compiled arities -- is byte
   manipulation on a finished module."
   [spec-edn base-b64]
-  (let [spec (reader/read-one spec-edn)
+  (let [spec (read-spec spec-edn)
         entry (:entry spec)
         slots (:slots spec)
         built (build-image spec (set (keys slots)))]
@@ -408,7 +425,7 @@
   refusal this replaces: it gave `:to :native`'s reason -- a linker -- for
   `:to :llvm`'s absence, and the actual reason was that no emitter existed."
   [spec-edn]
-  (let [spec (reader/read-one spec-edn)
+  (let [spec (read-spec spec-edn)
         built (build-image spec (spec-builtins spec))]
     (if (:missing built)
       {:missing (:missing built)}
@@ -483,7 +500,7 @@
   cannot get wrong. Three doors sanitising separately agree on `app.dll` and part
   ways on `a.b.dll`, where one strips an extension the others already stripped."
   [spec-edn name]
-  (compile-to-clr* (reader/read-one spec-edn) name))
+  (compile-to-clr* (read-spec spec-edn) name))
 
 (defn- compile-to-clr* [spec name]
   (let [built (build-image spec (spec-builtins spec))]
@@ -586,7 +603,7 @@
   target took a file. It is a fourth ARGUMENT and not a new mode, so the three
   lists `main` warns about are untouched."
   [spec-edn base-b64 class-name]
-  (let [spec (reader/read-one spec-edn)
+  (let [spec (read-spec spec-edn)
         built (build-image spec (spec-builtins spec))]
     (if (:missing built)
       {:missing (:missing built)}
@@ -615,7 +632,21 @@
                              (jvm/emit image opts)
                              (jvm/pack (base64-decode base-b64) image opts)))})))))
 
-(defn main [args]
+(declare main*)
+
+(defn main
+  "The compiler's entry. `[\"split\" files mode & args]` is `[mode & args]` with
+  the spec's file bodies handed over ENCODED -- only a caller using `call` can
+  pass a map, and the native CLI does (`build_spec_split`). Every mode reads its
+  spec through `read-spec`, which merges them."
+  [args]
+  (if (= (first args) "split")
+    (do (reset! pending-files (second args))
+        (try (main* (vec (drop 2 args)))
+             (finally (reset! pending-files nil))))
+    (main* args)))
+
+(defn- main* [args]
   ;; Two entries, chosen by the first argument. `spec` is the original: the
   ;; caller resolved every namespace and handed over a finished map, which is
   ;; what the bootstrap does because babashka is already reading files.
@@ -633,7 +664,7 @@
         ;; into a string. The third is the one that was wrong -- `:clr` had no arm
         ;; there, so the target was listed in both lists above and still could not
         ;; work from the native CLI.
-        known? (or (= mode "project") (= mode "project-split") (= mode "wasm") (= mode "llvm")
+        known? (or (= mode "project") (= mode "wasm") (= mode "llvm")
                    (= mode "clr") (= mode "jvm"))
         [mode spec-edn] (if known? [mode (second args)] ["spec" mode])
         r (cond
@@ -646,11 +677,7 @@
             (= mode "clr") (compile-to-clr spec-edn (nth args 2 ""))
             (= mode "llvm") (compile-to-llvm spec-edn)
             (= mode "project") (compile-project spec-edn)
-            ;; The envelope as EDN, the bodies as an encoded map in the third
-            ;; argument -- only a caller using `call` can pass one, and the
-            ;; native CLI does (`build_spec_split`).
-            (= mode "project-split")
-            (compile-project-spec (update (reader/read-one spec-edn) :files merge (nth args 2)))
+
             :else (compile-to-base64 spec-edn))]
     (cond
       (:missing r)

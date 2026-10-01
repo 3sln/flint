@@ -178,13 +178,6 @@ fn source_ext(name: &str) -> &'static str {
 
 /// The EDN the compiler takes: the sources, the entry, and what the runtime
 /// carries. Shared by `compile` and `run` so the two cannot drift.
-fn build_spec(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
-              aot: bool, shake: bool, meta: &[(String, String)],
-              roots: Option<&[String]>, strip_checks: bool,
-              features: Option<&[String]>) -> Result<String> {
-    build_spec_with(srcs, entry, slots, aot, shake, meta, roots, &[], strip_checks, features)
-}
-
 /// The same, plus the pod namespaces this build booted.
 #[allow(clippy::too_many_arguments)]
 /// The `deps.edn` governing a source root: beside it, or one directory up.
@@ -282,22 +275,21 @@ fn workspace_entry(prefix: &str, w: &Workspace, fallback_name: &str) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-/// Compile through the compiler's `project-split` entry: the spec envelope as
-/// EDN, and the file bodies as an ENCODED map, so the runtime decodes them
-/// natively instead of the compiler reading them as EDN string literals
-/// (`build_spec_split` says what that cost). The answer is what `project`
+/// Run the compiler's `main` on `args` -- a mode and its arguments, the spec
+/// envelope among them -- with the file bodies handed over as an ENCODED map
+/// (`["split" files mode & args]`), so the runtime decodes them natively
+/// instead of the compiler reading them as EDN string literals
+/// (`build_spec_split` says what that cost). The answer is what the mode
 /// answers -- the same string `main` renders -- so callers do not change.
-fn project_split(c: &mut Program, envelope: &str, files: &BTreeMap<String, String>)
+fn compile_split(c: &mut Program, args: &[&str], files: &BTreeMap<String, String>)
                  -> flint_rt::native::Outcome {
     use flint_rt::codec::{Val, Wire};
-    let call = Val::Vector(vec![
-        Val::Str("flint.selfhost/main".into()),
-        Val::Vector(vec![
-            Val::Str("project-split".into()),
-            Val::Str(envelope.into()),
-            Val::Map(files.iter().map(|(k, v)| (Val::Str(k.clone()), Val::Str(v.clone()))).collect()),
-        ]),
-    ]);
+    let mut inner = vec![
+        Val::Str("split".into()),
+        Val::Map(files.iter().map(|(k, v)| (Val::Str(k.clone()), Val::Str(v.clone()))).collect()),
+    ];
+    inner.extend(args.iter().map(|a| Val::Str((*a).into())));
+    let call = Val::Vector(vec![Val::Str("flint.selfhost/main".into()), Val::Vector(inner)]);
     let mut w = Wire::new();
     call.write(&mut w);
     let fail = |out: String| flint_rt::native::Outcome { code: 1, out };
@@ -656,9 +648,9 @@ pub(crate) fn sdk_compile(sources: &[(String, String)], entry: &str, exports: &[
     }
     let slots = parse_slots(SLOTS)?;
     let strip = strip_checks(optimize, checks);
-    let spec = build_spec_with(&[dir.clone()], entry, &slots, false, shake, meta, None, &[], strip,
-                               None);
-    let spec = match spec {
+    let spec = build_spec_split(&[dir.clone()], entry, &slots, false, shake, meta, None, &[], strip,
+                                None);
+    let (spec, files) = match spec {
         Ok(s) => s,
         Err(e) => { let _ = fs::remove_dir_all(&dir); return Err(e); }
     };
@@ -685,7 +677,7 @@ pub(crate) fn sdk_compile(sources: &[(String, String)], entry: &str, exports: &[
     };
     let out = (|| -> Result<Vec<u8>> {
         let mut c = load_compiler()?;
-        let r = c.run(&["project", &spec]);
+        let r = compile_split(&mut c, &["project", &spec], &files);
         if r.code != 0 {
             bail!("{}", r.out.trim());
         }
@@ -791,7 +783,8 @@ fn compile_clr(srcs: &[PathBuf], entry: &str, out_path: &Path,
     let aot = wants_aot(optimize);
     let strip_checks = strip_checks(optimize, checks);
     let slots = parse_slots(SLOTS)?;
-    let spec = build_spec(srcs, entry, &slots, aot, false, &[], None, strip_checks, features)?;
+    let (spec, files) = build_spec_split(srcs, entry, &slots, aot, false, &[], None, &[],
+                                         strip_checks, features)?;
     let mut p = load_compiler()?;
     // THE ASSEMBLY NAME, FROM `:out`. It was `Program` for every artifact this door
     // emitted, while `bin/flint` derived it from the path -- so the two doors' bytes
@@ -809,7 +802,7 @@ fn compile_clr(srcs: &[PathBuf], entry: &str, out_path: &Path,
     // `--rt-sdk` pins it. The reason to derive the name is door agreement, not that.
     let base = out_path.file_name().map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
-    let r = p.run(&["clr", &spec, &base]);
+    let r = compile_split(&mut p, &["clr", &spec, &base], &files);
     if r.code != 0 {
         bail!("{}", r.out.trim());
     }
@@ -871,7 +864,8 @@ fn compile_jvm(srcs: &[PathBuf], entry: &str, out_path: &Path,
     let aot = wants_aot(optimize);
     let strip_checks = strip_checks(optimize, checks);
     let slots = parse_slots(SLOTS)?;
-    let spec = build_spec(srcs, entry, &slots, aot, false, &[], None, strip_checks, features)?;
+    let (spec, files) = build_spec_split(srcs, entry, &slots, aot, false, &[], None, &[],
+                                         strip_checks, features)?;
     let mut p = load_compiler()?;
     // `:out …/Prog.class` NAMES THE CLASS `Prog`, so the path and the class's own
     // name agree and a JVM will load it. A directory keeps writing
@@ -903,7 +897,7 @@ fn compile_jvm(srcs: &[PathBuf], entry: &str, out_path: &Path,
     } else {
         String::new()
     };
-    let r = p.run(&["jvm", &spec, "", &cname]);
+    let r = compile_split(&mut p, &["jvm", &spec, "", &cname], &files);
     if r.code != 0 {
         bail!("{}", r.out.trim());
     }
@@ -969,9 +963,10 @@ fn compile_llvm(srcs: &[PathBuf], entry: &str, out_path: &Path,
     // No shaking: shaking cuts a finished module down to what a program
     // reaches, and there is no module here to cut. The equivalent for a
     // natively linked artifact is the linker's own `--gc-sections`.
-    let spec = build_spec(srcs, entry, &slots, aot, false, &[], None, strip_checks, features)?;
+    let (spec, files) = build_spec_split(srcs, entry, &slots, aot, false, &[], None, &[],
+                                         strip_checks, features)?;
     let mut p = load_compiler()?;
-    let r = p.run(&["llvm", &spec]);
+    let r = compile_split(&mut p, &["llvm", &spec], &files);
     if r.code != 0 {
         bail!("{}", r.out.trim());
     }
@@ -1038,14 +1033,15 @@ pub(crate) fn compile_q(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize
     let aot = wants_aot(optimize);
     let slots = parse_slots(if aot { SLOTS_AOT } else { SLOTS })?;
     let base = if aot { RUNTIME_AOT } else { RUNTIME };
-    let spec = build_spec(srcs, entry, &slots, aot, true, meta, None, strip_checks, features)?;
+    let (spec, files) = build_spec_split(srcs, entry, &slots, aot, true, meta, None, &[],
+                                         strip_checks, features)?;
 
     let mut p = load_compiler()?;
     // The runtime module goes as its own ARGUMENT, never inside the spec: it is
     // three-quarters of a megabyte of base64, and inside an EDN string it is
     // three-quarters of a megabyte for flint's reader to scan a character at a
     // time -- 198 seconds against 10.
-    let r = p.run(&["wasm", &spec, &base64(base)]);
+    let r = compile_split(&mut p, &["wasm", &spec, &base64(base)], &files);
     if r.code != 0 {
         bail!("{}", r.out.trim());
     }
@@ -1137,7 +1133,7 @@ pub(crate) fn run_source_qs(srcs: &[PathBuf], entry: &str, args: &[String], caps
                                              &[], roots, &pod_vars, strip_checks, None)?;
     let mut c = load_compiler()?;
     let s0 = c.steps();
-    let r = project_split(&mut c, &envelope, &files);
+    let r = compile_split(&mut c, &["project", &envelope], &files);
     if std::env::var("FLINT_CHECK_SPLIT").is_ok() {
         // A TEST HOOK (`test/cli.clj`): compile the same program the old way,
         // as one EDN spec, and say whether the bytes agree. A split path that
