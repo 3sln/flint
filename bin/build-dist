@@ -32,6 +32,14 @@ indent() {
 cd "$(dirname "$0")/.."
 mkdir -p dist/src
 
+# THE SOURCES THE COMPILER IS BUILT FROM, digested BEFORE it is built so an edit
+# landing mid-build is not stamped as included, and the old stamp removed first
+# so a build that dies leaves none. `bin/check-dist` compares it with the tree:
+# a `flintc.bytecode` from an older `src/` passes every slot check and presents
+# as the change under test being broken (`bin/check-dist` says what that cost).
+sources_digest=$(./bin/check-dist --digest)
+rm -f dist/flintc.sources
+
 echo "==> production units"
 ./bin/build-units > /dev/null
 
@@ -110,6 +118,8 @@ echo "==> the compiler, as a module and as bytecode"
 indent ./bin/flint :src src :fn flint.selfhost/main :out dist/flintc.bytecode --emit-image
 
 indent ./bin/flint :src src :fn flint.selfhost/main :out dist/flintc.wasm
+# Both forms of the compiler are built, so the stamp is true of both.
+printf '%s\n' "$sources_digest" > dist/flintc.sources
 
 # The SDK is a separate package with its own build (`sdks/`), and it is what
 # exercises these artifacts end to end. This produces them; `sdks/esm/build`

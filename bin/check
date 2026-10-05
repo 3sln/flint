@@ -38,6 +38,19 @@ if [ "$(cat units/.build-mode 2>/dev/null)" = diagnostics ]; then
   echo "            ./bin/build-units"
   exit 1
 fi
+# THE COMPILER THE CLI EMBEDS MUST BE THIS TREE'S. `dist/flintc.bytecode` is
+# not rebuilt by cargo, and `target/release/flint` is not rebuilt by
+# `bin/build-dist`; a stale one of either runs the old compiler and reports
+# success, which below reads as the change being broken (`bin/check-dist`).
+./bin/check-dist > /tmp/flint-check.out 2>&1 || { cat /tmp/flint-check.out; fail "bin/check-dist"; }
+bb test/check-dist.clj > /tmp/flint-check.out 2>&1 || { cat /tmp/flint-check.out; fail "test/check-dist.clj"; }
+if [ target/release/flint -ot dist/flintc.bytecode ]; then
+  echo "FAILED: target/release/flint is older than dist/flintc.bytecode, so it"
+  echo "        embeds the previous compiler. Rebuild it with:"
+  echo
+  echo "            cargo build --release -p flint-cli"
+  exit 1
+fi
 t0=$(date +%s)
 
 for c in check-version check-contracts check-decisions check-flattens check-builtins check-sys-catalogue check-containment check-lib-grants \

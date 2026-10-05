@@ -241,7 +241,9 @@ public static class Program {
             var t = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
             t.fingerprint = 0x2L;
             t.started = !want;
-            SnapOk("the started flag travels (" + want + ")",
+            // `want ? "true" : "false"` and not `+ want`: C# renders a bool `True`,
+            // and this line is diffed against the JVM's, which says `true`.
+            SnapOk("the started flag travels (" + (want ? "true" : "false") + ")",
                    bytes != null && Flint.Rt.Snap.ImportLive(t, bytes) && t.started == want);
         }
 

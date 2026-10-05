@@ -30,10 +30,65 @@
             false)
         (do (println (str "  ok   " path " covers all " (count catalogue) " builtins")) true)))))
 
+;; WHICH SOURCES THE EMBEDDED COMPILER WAS BUILT FROM. The slot check above
+;; cannot see a stale COMPILER: `dist/flintc.bytecode` built from an older
+;; `src/` carries the same slot table and passes it. Measured 2026-10-01 at
+;; `246ac6c1`: a gate run whose first CLI build embedded a `dist/` that predated
+;; the `split` entry went red in four suites -- `:to :clr`/`:to :jvm` writing
+;; nothing, `run` answering "", "unable to resolve symbol: nth" -- every one of
+;; them reading as a defect in the change, and all of them went green when the
+;; same gate rebuilt `dist/` halfway through. Swapping a pre-`split`
+;; `flintc.bytecode` into a fresh tree reproduces all four exactly.
+;;
+;; So `bin/build-dist` stamps the digest of `src/` and `lib/` it compiled, and
+;; this compares it with the tree. ONE DIGEST FUNCTION, here; `build-dist`
+;; calls `--digest` rather than restating it. Every file under both roots counts,
+;; tracked or not, because the build reads the directory and not git.
+(def stamp
+  "Overridable so `test/check-dist.clj` can hand it a wrong stamp without
+  touching `dist/`."
+  (or (System/getenv "FLINT_DIST_STAMP") "dist/flintc.sources"))
+
+(defn digest []
+  (let [md (java.security.MessageDigest/getInstance "SHA-256")
+        files (->> ["src" "lib"]
+                   (mapcat #(fs/glob % "**"))
+                   (filter fs/regular-file?)
+                   (map str)
+                   sort)]
+    (doseq [f files]
+      (.update md (.getBytes (str f "\u0000") "UTF-8"))
+      (.update md (fs/read-all-bytes f))
+      (.update md (byte-array [0])))
+    (apply str (map #(format "%02x" (bit-and % 0xff)) (.digest md)))))
+
+(when (= "--digest" (first *command-line-args*))
+  (println (digest))
+  (System/exit 0))
+
+(defn check-sources []
+  (let [want (digest)
+        have (when (fs/exists? stamp) (str/trim (slurp stamp)))]
+    (cond
+      (nil? have)
+      (do (println (str "  " stamp " is missing; run bin/build-dist")) false)
+      (not= have want)
+      (do (println (str "  dist/flintc.bytecode was built from a different src/ and lib/"))
+          (println (str "    stamped " (subs have 0 (min 16 (count have)))
+                        ", tree " (subs want 0 16)))
+          false)
+      :else
+      (do (println "  ok   dist/flintc.bytecode was built from this src/ and lib/") true))))
+
 (println "dist: built from this source tree?")
-(let [ok (doall (map check ["dist/slots.json" "dist/slots-aot.json"]))]
+(let [ok (doall (map check ["dist/slots.json" "dist/slots-aot.json"]))
+      src-ok (check-sources)]
   (when-not (every? true? ok)
     (println "\n  dist/ is STALE against runtime/src/builtins.rs.")
     (println "  Rebuild it with `bin/build-dist`. A stale slot table does not")
-    (println "  fail here -- it segfaults somewhere else, later.")
+    (println "  fail here -- it segfaults somewhere else, later."))
+  (when-not src-ok
+    (println "\n  dist/ is STALE against src/ or lib/. Rebuild in the order AGENTS.md")
+    (println "  gives: `bin/build-dist`, then `cargo build --release -p flint-cli`."))
+  (when-not (and (every? true? ok) src-ok)
     (System/exit 1)))

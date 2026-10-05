@@ -133,7 +133,19 @@ echo
 # `./target/release/flint`, and nothing here built it -- so a change to the
 # runtime that was never compiled was tested as if it had been. That reads as
 # a PASS, and against `bin/conform-hosts` it reads as the PORT disagreeing.
+#
+# AND `dist/` BEFORE IT, because the CLI embeds `dist/flintc.bytecode` and
+# cargo copies that file without producing it. Nothing rebuilt it until the
+# size-budget section, about thirty sections in, so everything before that ran
+# the compiler from whatever tree last ran `bin/build-dist`. Measured
+# 2026-10-01 at `246ac6c1`: `bin/check`, `doors`, `cli` and `loop types` went
+# red against a `dist/` predating the change's `split` entry, and the same
+# compiles passed after this file's own rebuild further down -- four red
+# sections reading as a defect in the change, none of them one.
 sec "rust: the native CLI, which everything below runs"
+./bin/build-dist > /tmp/flint-cli-build.log 2>&1 \
+  || { tail -20 /tmp/flint-cli-build.log; fail "bin/build-dist (before the first CLI build)"; }
+./bin/check-dist || fail "check-dist (before the first CLI build)"
 cargo build --release -p flint-cli > /tmp/flint-cli-build.log 2>&1 \
   || { tail -20 /tmp/flint-cli-build.log; fail "cargo build --release -p flint-cli"; }
 echo "  ok"
