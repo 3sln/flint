@@ -119,6 +119,61 @@
 (check "quote resolves a marker in a map nested inside a quoted vector"
        (rq "'[{:a `x}]") '[{:a (quote my.ns/x)}])
 
+(println "reader: syntax quote resolves symbols the way Clojure does (DECISIONS.md#context-free-reader)")
+;; `flint.analyzer/resolve-syntax-quoted` (private, reached via `resolve`) is
+;; what `(flint.reader/syntax-quoted sym)` resolves to once the namespace it
+;; sits in is being ANALYSED -- the reader cannot answer this (it is
+;; context-free), so it leaves the marker for here. `sq` below builds the
+;; `cc` state Clojure's own namespace mapping would have, and calls the
+;; function directly rather than through a whole compile.
+(def resolve-sq (deref (resolve 'flint.analyzer/resolve-syntax-quoted)))
+(defn sq
+  "`` `sym `` resolved in namespace `my.ns`, given `:vars`, `:declared`,
+  `:aliases` and `:refers` -- each defaulting to empty, as a fresh namespace's
+  would be."
+  [sym {:keys [vars declared aliases refers]}]
+  (resolve-sq {:ns 'my.ns
+               :cc (atom {:namespaces {'my.ns {:aliases (or aliases {}) :refers (or refers {})}}
+                          :vars (or vars {})
+                          :declared (or declared {})})}
+              sym))
+(check "an unknown name resolves to the current namespace"
+       (sq 'frobnicate {}) 'my.ns/frobnicate)
+(check "a core name not shadowed resolves to clojure.core"
+       (sq 'map {:vars {'clojure.core/map true}}) 'clojure.core/map)
+(check "a bootstrap macro -- no :vars/:declared entry of its own -- is still clojure.core's"
+       (sq 'fn {}) 'clojure.core/fn)
+(check "an alias-qualified symbol expands to the alias's full namespace"
+       (sq 'str/join {:aliases {'str 'clojure.string}})
+       'clojure.string/join)
+(check "  ... and a namespace part that names no alias is unchanged"
+       (sq 'other.ns/x {}) 'other.ns/x)
+;; THE TWO ARMS THE OLD READER HOOK COULD NEVER REACH, because it ran before
+;; any namespace was analysed (`DECISIONS.md#context-free-reader`'s "Open, for
+;; the maintainer"). Both are Clojure's behaviour, and both FAIL against the
+;; rule this change replaces -- confirmed by stashing just the
+;; `resolve-syntax-quoted` edit (keeping this file) and running it against the
+;; PRE-change `(map? (get-in cc [:declared core]))`-or-bootstrap-else-current-ns
+;; rule: it answered `my.ns/map` for a REFERRED name, because that rule never
+;; looks at `:refers` at all, and `clojure.core/map` for a name that SHADOWS a
+;; core one, because that rule only ever asks whether `clojure.core` declares
+;; the name -- it has no arm for "or did this namespace define its own". Both
+;; are wrong beside Clojure, and both are exactly backwards from what they are
+;; below.
+(check "a REFERRED name keeps its source namespace, not this one"
+       (sq 'map {:refers {'map 'clojure.set/map-invert}})
+       'clojure.set/map-invert)
+(check "a local def SHADOWING a core name resolves to this namespace"
+       ;; `:vars` carries the shadowing OWN def; `:declared` carries
+       ;; `clojure.core/map` as the OLD rule's `map?` check wants it, so a
+       ;; revert of just the resolution logic reproduces the pre-fix failure
+       ;; exactly against this same fixture.
+       (sq 'map {:vars {'my.ns/map true} :declared {'clojure.core/map {}}})
+       'my.ns/map)
+(check "  ... and an own name nothing has compiled yet still resolves to this namespace"
+       (sq 'helper {:declared {'my.ns/helper true}})
+       'my.ns/helper)
+
 (println "reader: reader conditionals")
 (check "flint branch" (r/read-all "#?(:clj 1 :flint 2)" {:features #{:flint}}) [2])
 (check "clj branch" (r/read-all "#?(:clj 1 :cljs 2)" {:features #{:clj}}) [1])

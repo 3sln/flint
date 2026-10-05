@@ -14317,6 +14317,59 @@ namespace defines over a `clojure.core` one would resolve to the namespace's
 own. Turning them on changes what existing macros expand to, so it was not
 done as part of a refactor.
 
+### Decided (2026-10-05): do what Clojure does
+
+The two dead arms are turned on. `resolve-syntax-quoted` (`src/flint/analyzer.cljc`)
+now resolves an unqualified name through `unqualified-ref` — the SAME lookup
+`qualify` makes for an ordinary unqualified reference (`:refers`, then this
+namespace's own compiled `:vars`, then the prelude, then the pre-pass
+`:declared` map for a name not yet analysed), extracted so the two do not
+restate one another (`AGENTS.md` #1). A name `macros/bootstrap` maps (`let`,
+`fn`, `defn`, ... — read from that one table, not restated as a second list)
+still falls back to `clojure.core`, since it has no `:vars`/`:declared` entry
+of its own to be found by, but that fallback is now asked LAST, after
+`unqualified-ref` — so a namespace that defines its own `fn` shadows it
+exactly as a local def shadows any other `clojure.core` name. The qualified
+case (`alias/x`) is unchanged: the alias's full namespace, never checked
+against what that namespace holds, which already matched
+`Compiler.resolveSymbol`.
+
+This changes what existing macros expand to, which is why it was recorded as
+open rather than folded into the refactor that made the reader context-free.
+`test/reader_test.clj` adds a section with adversarial cases for the two newly
+turned-on arms; run against the PRE-change `resolve-syntax-quoted`, the refer
+case answered `my.ns/map` (the old rule never looked at `:refers`) and the
+shadow case answered `clojure.core/map` (the old rule only ever asked whether
+`clojure.core` declared the name, with no arm for "or did this namespace
+define its own") — both wrong beside Clojure and exactly backwards from what
+they are now. All green after the change, run with `bb --classpath src
+test/reader_test.clj`.
+
+Checked for lib breakage: `bin/check` (green, 219s under a loaded machine —
+see section 4 on why that number is not a timing claim), and `bb test/cli.clj`,
+`bb test/selfhost-targets.clj`, `bb test/door-agreement.clj`, `bb
+test/selfhost.clj`, `bb test/requires.clj`, `bb test/inline.clj` all pass
+(exit 0, no FAIL lines) against a tree rebuilt in the documented order
+(`bin/build-dist`, `cargo build --release -p flint-cli`, `FLINT_DIST_FRESH=1
+sdks/cli/build`). `test/selfhost.clj` in particular has the compiler compile
+itself through two generations and compares the images byte for byte, so a
+syntax-quoted macro inside the compiler's own source expanding differently
+would show there; it passed, images identical. `test/inline.clj`'s "syntax
+quote in an `:inline` body" and `test/requires.clj`'s "a macro in a
+never-required namespace expands" and "`:refer-clojure` is still accepted"
+cases — the ones most likely to exercise a referred or shadowed name inside a
+syntax quote — also passed. No lib source needed changing: grepping `lib/`
+and `src/` for a macro that both `:refer`s a name used inside a syntax quote
+it, or that locally `def`/`defn`s over a `clojure.core` name and then
+syntax-quotes it, found none. That is evidence from the suites run, not a
+claim that no `.cljc` anywhere could expand differently — a macro nobody's
+test calls would not show up.
+
+No twin: grepped `bin/flint` and `src/flint/selfhost.cljc` for
+`syntax-quoted`, `resolve-syntax-quoted`, `bootstrap-key`, `prelude-resolve`
+and `unqualified` and found no match in either, so this logic has one copy,
+in `src/flint/analyzer.cljc`.
+
 ### Visible differences
 
 * A macro inspecting an ARGUMENT that is a syntax quote sees

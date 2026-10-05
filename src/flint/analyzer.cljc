@@ -133,6 +133,33 @@
                           {:sym sym :ns nsname :from (vec hits)}))
       :else (first hits))))
 
+(defn- unqualified-ref
+  "The qualified symbol an UNQUALIFIED `sym` maps to as a var in `nsname`, or
+  nil if nothing here claims it.
+
+  Four arms, the ones Clojure's own namespace mapping would answer from: an
+  explicit refer (`:require [.. :refer [sym]]`, which keeps `sym`'s SOURCE
+  namespace); this namespace's own already-compiled vars; the prelude --
+  `clojure.core`, referred everywhere as in Clojure, or a workspace's ordered
+  list; and the pre-pass `:declared` map, for a name this namespace defines
+  later in the same file (`:declared` is filled before any analysis, `:vars`
+  only as each `def` is analysed -- see `qualify`'s own comment on why
+  `:declared` has to be read too).
+
+  ONE LIST: shared by `qualify`, which treats nil as unresolvable and may
+  error, and by `resolve-syntax-quoted`, which never errors -- an unclaimed
+  name in a syntax quote is simply this namespace's, exactly as an unqualified
+  symbol resolves at Clojure's top level."
+  [cc nsname sym]
+  (let [nsdef (get-in cc [:namespaces nsname])
+        n (name sym)]
+    (or (get (:refers nsdef) sym)
+        (when (get-in cc [:vars (symbol (str nsname) n)])
+          (symbol (str nsname) n))
+        (prelude-resolve cc nsname sym)
+        (when (get-in cc [:declared (symbol (str nsname) n)])
+          (symbol (str nsname) n)))))
+
 (defn qualify
   "The fully qualified symbol a name refers to in `env`, or nil."
   [env sym]
@@ -177,15 +204,7 @@
                {:sym sym :ns nsname})
 
           :else q))
-      (or (get (:refers nsdef) sym)
-          (when (get-in cc [:vars (symbol (str nsname) (name sym))])
-            (symbol (str nsname) (name sym)))
-          ;; THE PRELUDE: names that resolve without a `:require`. Defaults to
-          ;; `clojure.core`, which is referred everywhere as in Clojure, and is
-          ;; a workspace's ordered list when it declares one.
-          (prelude-resolve cc nsname sym)
-          (when (get-in cc [:declared (symbol (str nsname) (name sym))])
-            (symbol (str nsname) (name sym)))))))
+      (unqualified-ref cc nsname sym))))
 
 (defn native-name
   "If `sym` names a Rust builtin via the `flint.rt` namespace, the catalogue
@@ -704,36 +723,49 @@
 (def ^:private left-folds '#{clojure.core/+ clojure.core/- clojure.core/*})
 
 (defn- resolve-syntax-quoted
-  "The symbol `` `sym `` names in the namespace being compiled.
+  "The symbol `` `sym `` names in the namespace being compiled, by Clojure's
+  own rule for syntax-quote symbol resolution (`LispReader.syntaxQuote` /
+  `Compiler.resolveSymbol`; `DECISIONS.md#context-free-reader`):
 
-  An alias expands to the namespace it names. An unqualified name is
-  `clojure.core`'s when `clojure.core` declares it or it is a bootstrap macro,
-  which is how `` `(fn [] x) `` becomes `clojure.core/fn` rather than
-  `this.ns/fn`, and is otherwise this namespace's.
+    * already qualified (`alias/x`) -- the alias's full namespace, or the
+      literal namespace part unchanged when it names no alias. Never checked
+      against what that namespace holds: a syntax quote REWRITES a symbol, it
+      does not resolve a var, so `` `other/undefined `` is `other/undefined`
+      whether or not `other` defines it.
+    * unqualified `x` -- this namespace's, UNLESS `x` maps to a var here:
+      its own def or forward declaration, an explicit refer (which keeps the
+      REFERRED name's source namespace), or a name the prelude offers
+      (`clojure.core`, referred everywhere as in Clojure, or a workspace's own
+      list) -- in which case that var's namespace. A name `macros/bootstrap`
+      maps -- the same table `analyze-seq`'s `bootstrap-key` branch reads, not
+      restated here -- counts as `clojure.core`'s too, though it has no
+      `:vars`/`:declared` entry of its own: it is how `` `(fn [] x) `` becomes
+      `clojure.core/fn` and keeps working once a macro expansion qualifies it.
+      A namespace that defines its OWN `fn` still shadows it, because
+      `unqualified-ref` is asked first.
 
-  THIS IS THE RULE THE READER APPLIED, moved and not changed. The reader asked
-  a hook that also consulted the namespace's `:refers` and its own
-  declarations, BEFORE `clojure.core` -- but it ran while every namespace was
-  being read and none had been analysed, so `:refers` was always empty and the
-  namespace's own names were not declared yet. Those two arms never answered.
-  Here they would, which would change what a macro expands to: a referred name
-  would stop resolving to this namespace, and a name this namespace defines
-  over a `clojure.core` one would stop resolving to `clojure.core`. Clojure
-  does both; whether flint should is a decision, not a refactor. So this
-  answers what the reader did, and `clojure.core`'s names are the ones its
-  READ PASS declared (a map), not those its analysis added (`true`) -- the
-  reader could only ever have seen the first."
+  `unqualified-ref` is `qualify`'s own lookup, reused rather than restated
+  (`AGENTS.md` #1): this is the same mapping Clojure's namespace-local symbol
+  table would answer, the only difference being what happens when nothing
+  claims the name -- `qualify` may error, a syntax quote never does.
+
+  SUPERSEDES THE READER'S OLD RULE, which was `clojure.core` if `clojure.core`
+  declared the name (by its own read pass, before any namespace was analysed)
+  or it was a bootstrap macro, else the current namespace -- `:refers` and a
+  namespace's own declarations were consulted by the reader's hook too, but it
+  ran before any namespace was analysed, so they were always empty and never
+  answered. Here they can, which is Clojure's actual behaviour and is why a
+  referred name now keeps its source namespace and a local def now shadows a
+  `clojure.core` name of the same name (`DECISIONS.md#context-free-reader`)."
   [env sym]
   (let [cc @(:cc env)
         nsname (current-ns env)
         n (name sym)]
     (if-let [a (namespace sym)]
       (symbol (str (get (get-in cc [:namespaces nsname :aliases]) (symbol a) a)) n)
-      (let [core (symbol "clojure.core" n)]
-        (if (or (map? (get-in cc [:declared core]))
-                (contains? macros/bootstrap (symbol n)))
-          core
-          (symbol (str (or nsname "user")) n))))))
+      (or (unqualified-ref cc nsname sym)
+          (when (contains? macros/bootstrap (symbol n)) (symbol "clojure.core" n))
+          (symbol (str (or nsname "user")) n)))))
 
 (defn- resolve-quoted-syntax-quotes
   "`form` with every `flint.reader/syntax-quoted` in it resolved, for a syntax
