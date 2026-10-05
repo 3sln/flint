@@ -33,12 +33,39 @@ cd "$(dirname "$0")/.."
 mkdir -p dist/src
 
 # THE SOURCES THE COMPILER IS BUILT FROM, digested BEFORE it is built so an edit
-# landing mid-build is not stamped as included, and the old stamp removed first
-# so a build that dies leaves none. `bin/check-dist` compares it with the tree:
-# a `flintc.bytecode` from an older `src/` passes every slot check and presents
-# as the change under test being broken (`bin/check-dist` says what that cost).
+# landing mid-build is not stamped as included. `bin/check-dist` compares it
+# with the tree: a `flintc.bytecode` from an older `src/` passes every slot
+# check and presents as the change under test being broken (`bin/check-dist`
+# says what that cost).
+#
+# The stamp is written to a TEMP file and moved over the real one only at the
+# very end, after both compiler artefacts have themselves been frozen (see
+# `freshen` below) -- never removed up front. A build that dies before that
+# final move leaves the OLD stamp in place, which is still the right answer: if
+# `src/`/`lib/` changed, the old digest now disagrees with the tree and
+# `bin/check-dist` correctly reports stale; if they did not change, nothing
+# needed to change and the old stamp was already correct.
 sources_digest=$(./bin/check-dist --digest)
-rm -f dist/flintc.sources
+
+# Move TMP over FINAL only when the bytes differ, so an artefact that comes out
+# byte-identical to what is already there keeps its OLD mtime rather than a
+# fresh one. `bin/check` fails when `target/release/flint` is older than
+# `dist/flintc.bytecode` -- and the documented rebuild order
+# (`bin/build-dist`, `cargo build`, `sdks/cli/build`) runs `bin/build-dist`
+# *again* inside `sdks/cli/build` (it reruns it unconditionally unless
+# `FLINT_DIST_FRESH=1`, and so does `bin/test`), which recompiles an UNCHANGED
+# compiler and used to restamp it with a newer mtime than the cargo build that
+# just ran before it. The check then reads a real freshness check as a false
+# positive on a pipeline that is actually fresh. `cmp -s` is the only thing
+# that tells "rebuilt" apart from "rewritten".
+freshen() {
+  tmp="$1"; final="$2"
+  if [ -f "$final" ] && cmp -s "$tmp" "$final"; then
+    rm -f "$tmp"
+  else
+    mv -f "$tmp" "$final"
+  fi
+}
 
 echo "==> production units"
 ./bin/build-units > /dev/null
@@ -115,11 +142,17 @@ echo "==> the compiler, as a module and as bytecode"
 # so the CLI can embed it and run the compiler as native code, which is 2.7 s
 # against 15.6 s through a wasm engine. It is not published and not attached to
 # a release.
-indent ./bin/flint :src src :fn flint.selfhost/main :out dist/flintc.bytecode --emit-image
+indent ./bin/flint :src src :fn flint.selfhost/main :out dist/flintc.bytecode.tmp --emit-image
+freshen dist/flintc.bytecode.tmp dist/flintc.bytecode
 
-indent ./bin/flint :src src :fn flint.selfhost/main :out dist/flintc.wasm
-# Both forms of the compiler are built, so the stamp is true of both.
-printf '%s\n' "$sources_digest" > dist/flintc.sources
+indent ./bin/flint :src src :fn flint.selfhost/main :out dist/flintc.wasm.tmp
+freshen dist/flintc.wasm.tmp dist/flintc.wasm
+
+# Both forms of the compiler are built, so the stamp is true of both -- and it
+# is written and frozen last, after both, so a stamp that made it to `dist/`
+# never outruns the artefacts it describes.
+printf '%s\n' "$sources_digest" > dist/flintc.sources.tmp
+freshen dist/flintc.sources.tmp dist/flintc.sources
 
 # The SDK is a separate package with its own build (`sdks/`), and it is what
 # exercises these artifacts end to end. This produces them; `sdks/esm/build`
