@@ -637,6 +637,32 @@
                              (jvm/emit image opts)
                              (jvm/pack (base64-decode base-b64) image opts)))})))))
 
+(defn preread
+  "Every file in the spec READ, as `{path {:opts .. :forms ..}}` -- what the
+  native CLI embeds for the standard library so that a compile does not read
+  it again (`DECISIONS.md#stdlib-preread`).
+
+  Each file is asked exactly the question a compile asks of it:
+  `flint.project/file-answer` over the spec's `:files` and `:workspaces`, read
+  by `read-entry` under the spec's `:features`, the compiler's default when
+  absent. `:opts` is the key a compile checks before using the forms, so a
+  spec whose options differ from the ones these were read under reads the text
+  instead of getting the wrong forms.
+
+  The answer is a VALUE, not a string: it leaves through the host codec, which
+  carries every form's metadata -- the line, column, file and child positions
+  the analyzer's diagnostics read."
+  [spec-edn]
+  (let [spec (read-spec spec-edn)
+        features (or (:features spec) flint.reader/default-features)
+        files (:files spec)]
+    {:preread
+     (into {} (map (fn [path]
+                     (let [s (project/file-answer files (:workspaces spec) path)]
+                       [path {:opts (project/read-options s features)
+                              :forms (project/read-entry s features)}]))
+                   (keys files)))}))
+
 (declare main*)
 
 (defn main
@@ -670,7 +696,7 @@
         ;; there, so the target was listed in both lists above and still could not
         ;; work from the native CLI.
         known? (or (= mode "project") (= mode "wasm") (= mode "llvm")
-                   (= mode "clr") (= mode "jvm"))
+                   (= mode "clr") (= mode "jvm") (= mode "preread"))
         [mode spec-edn] (if known? [mode (second args)] ["spec" mode])
         r (cond
             (= mode "wasm") (compile-to-wasm spec-edn (nth args 2 ""))
@@ -682,6 +708,9 @@
             (= mode "clr") (compile-to-clr spec-edn (nth args 2 ""))
             (= mode "llvm") (compile-to-llvm spec-edn)
             (= mode "project") (compile-project spec-edn)
+            ;; Not a target: the standard library read, for the native CLI's
+            ;; build to embed (`DECISIONS.md#stdlib-preread`).
+            (= mode "preread") (preread spec-edn)
 
             :else (compile-to-base64 spec-edn))]
     (cond
@@ -706,6 +735,9 @@
       ;; A module comes back alone: its native slots are already in it, so
       ;; there is no import order for the host to apply.
       (:module r) (:module r)
+      ;; THE ONE ANSWER THAT IS NOT A STRING: a map of forms, encoded by the
+      ;; host with all their metadata (`preread`).
+      (:preread r) (:preread r)
       ;; `:clr` -- AND THIS ARM WAS MISSING, so `:to :clr` through the
       ;; SELF-HOSTED compiler had never once worked. `compile-to-clr` answers
       ;; `{:clr bytes}` and its own docstring says "Bytes out, so the caller

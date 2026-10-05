@@ -1007,5 +1007,35 @@
       (check-that (str "an encoded spec compiles the same bytes as an EDN one " (pr-str flags))
                   (str/includes? out "CHECK-SPLIT identical=true")))))
 
+;; --- the standard library arrives PRE-READ, and changes nothing --------------
+;;
+;; The native CLI embeds `lib/` already read by the compiler it ships
+;; (`DECISIONS.md#stdlib-preread`), and the guest uses those forms only when
+;; they were read under the options it would read with. The block above already
+;; holds the BYTES: its EDN arm carries every stdlib file as text, so
+;; `identical=true` is pre-read against read. What it cannot see is the cache
+;; silently MISSING -- a compile that reads the text after all is correct and
+;; merely slow, so it passes everything. This is the control: the same compile
+;; with `FLINT_PREREAD=0` must cost several times the instructions, with and
+;; without `:optimize [perf]` (each mode has its own pre-read blob). Measured
+;; 2026-10-05: words 4.39 M without, 0.52 M with.
+(defn split-steps [flags env]
+  (let [pb (ProcessBuilder.
+            (into-array String (concat ["./target/release/flint" "run" ":path" "corpus"
+                                        ":fn" "words/main"] flags)))]
+    (.put (.environment pb) "FLINT_CHECK_SPLIT" "1")
+    (doseq [[k v] env] (.put (.environment pb) k v))
+    (.redirectErrorStream pb true)
+    (let [pr (.start pb) out (slurp (.getInputStream pr))]
+      (.waitFor pr)
+      (some-> (re-find #"split-steps=(\d+)" out) second parse-long))))
+
+(doseq [flags [[] [":optimize" "[perf]"]]]
+  (let [with (split-steps flags {})
+        without (split-steps flags {"FLINT_PREREAD" "0"})]
+    (check-that (str "the pre-read stdlib is used, not re-read " (pr-str flags)
+                     " (" with " vs " without " steps)")
+                (and with without (< (* 4 with) without)))))
+
 (println (if (zero? @fails) "cli: ok" (str "cli: " @fails " FAILURES")))
 (System/exit (if (zero? @fails) 0 1))
