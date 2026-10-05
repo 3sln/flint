@@ -542,6 +542,36 @@ impl Program {
         self.rt.decode(bytes)
     }
 
+    /// TAKE A SHELVED SANDBOX BACK: import a live set -- the concatenated
+    /// chunks a `{:op :snapshot :port p}` on the system port streamed
+    /// (`DECISIONS.md#snapshots`) -- into this program, which must have loaded
+    /// the same image. Answers 0 accepted, 1 another layout version, 2 another
+    /// program; the wasm export `flint_live_import` answers the same.
+    ///
+    /// Then `resume`: the copy's control plane carries on parked on the system
+    /// port it had, under the host id it had, so a host routes to the same ids.
+    pub fn import_live(&mut self, bytes: &[u8]) -> u32 {
+        if crate::snap::import_live(&mut self.rt, bytes) {
+            0
+        } else {
+            let why = unsafe { crate::snap::REFUSED };
+            if why == 0 { 1 } else { why }
+        }
+    }
+
+    /// The ONE-SHOT export, synchronously, from the host side.
+    ///
+    /// Not a second door for shelving -- that is the `:snapshot` request -- but
+    /// the reference it is checked against: the streamed bytes must be these
+    /// bytes. The JVM's `Snap.exportLive` and the CLR's `Snap.ExportLive` are
+    /// the same function and already public. Guest code cannot reach a
+    /// `Program`. `None` if the walk and the collector disagreed.
+    #[doc(hidden)]
+    pub fn export_live(&mut self) -> Option<Vec<u8>> {
+        let mut out = Vec::new();
+        if crate::snap::export_live(&mut self.rt, &mut out) { Some(out) } else { None }
+    }
+
     /// Push a message into a bridge. False means the guest's buffer is full and
     /// the host must offer this again after the next pump.
     pub fn host_deliver(&mut self, port_id: u32, bytes: &[u8]) -> bool {

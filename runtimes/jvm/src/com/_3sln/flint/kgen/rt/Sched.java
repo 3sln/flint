@@ -234,6 +234,12 @@ public final class Sched {
             long i = schedPick(rt);
             if (i >= 0) {
                 Conc.runOne(rt, (int) i);
+                // A HOST-REQUESTED SNAPSHOT IS TAKEN HERE, BETWEEN TURNS
+                // (`DECISIONS.md#snapshots`): the system thread parked to
+                // ask, so its turn has just ended and every thread's state
+                // is in its thread object. Inside a turn the export would
+                // copy a thread half-way through a builtin.
+                Conc.serveSnapshot(rt);
                 continue;
             }
             // THE HOST FIRST. There is no entry function whose return means

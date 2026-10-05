@@ -240,6 +240,12 @@ impl Rt {
             let i: i64 = self.sched_pick();
             if i >= 0 {
                 crate::conc::run_one(self, i as u32);
+                // A HOST-REQUESTED SNAPSHOT IS TAKEN HERE, BETWEEN TURNS
+                // (`DECISIONS.md#snapshots`): the system thread parked to
+                // ask, so its turn has just ended and every thread's state
+                // is in its thread object. Inside a turn the export would
+                // copy a thread half-way through a builtin.
+                crate::conc::serve_snapshot(self);
                 continue;
             }
             // THE HOST FIRST. There is no entry function whose return means

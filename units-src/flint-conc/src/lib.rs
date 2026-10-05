@@ -271,6 +271,12 @@ builtin!(flint_b_port_label, b_port_label, |rt, a, n| {
 
 // THE SYSTEM PORT, for the control plane and nothing else.
 //
+// THE CLAIM BELOW IS NOT TRUE OF AN ANONYMOUS PROGRAM. `flint/system-port` is
+// not in `flint.analyzer/builtin-guards`, and a program that names no
+// workspaces is checked nowhere: `(flint.rt/system-port)` compiled and ran
+// under `flint run`, checked 2026-10-05 (`DECISIONS.md#snapshots`). What
+// `test/globalport.clj` pins is that `flint.port/system` does not resolve.
+//
 // Guarded `:host` (`DECISIONS.md#bridges-are-the-only-door`): it IS the host
 // transport, the same thing `flint.host/request` reaches, so it takes the same
 // grant. Guest code still cannot name it -- a program holds `:host` only if an
@@ -286,6 +292,25 @@ builtin!(flint_b_port_label, b_port_label, |rt, a, n| {
 builtin!(flint_b_system_port, b_system_port, |rt, a, n| {
     let _ = (a, n);
     rt.system_port()
+});
+
+// A HOST-REQUESTED SNAPSHOT (`DECISIONS.md#snapshots`), for `flint.system`'s
+// `:snapshot` op and nothing else. Both refuse unless the caller is the system
+// thread -- the guard lives in `flint_rt::snap`, at run time, because any
+// source can NAME these through `flint.rt/<x>`.
+builtin!(flint_b_snapshot_export, b_snapshot_export, |rt, a, n| {
+    let _ = (a, n);
+    flint_rt::snap::request_export(rt)
+});
+
+builtin!(flint_b_snapshot_chunk, b_snapshot_chunk, |rt, a, n| {
+    let _ = n;
+    let off = arg(rt, a, 0);
+    let len = arg(rt, a, 1);
+    if !off.is_fixnum() || !len.is_fixnum() {
+        return rt.throw_str("ClassCastException", "snapshot-chunk wants two integers");
+    }
+    flint_rt::snap::chunk(rt, off.as_fixnum(), len.as_fixnum())
 });
 
 builtin!(flint_b_port_bridge_p, b_port_bridge_p, |rt, a, n| {
@@ -350,6 +375,8 @@ pub const HOST_CATALOGUE: &[(&str, flint_rt::vm::NativeFn)] = &[
     ("flint/port-label", flint_b_port_label),
     ("flint/port-bridge?", flint_b_port_bridge_p),
     ("flint/system-port", flint_b_system_port),
+    ("flint/snapshot-export", flint_b_snapshot_export),
+    ("flint/snapshot-chunk", flint_b_snapshot_chunk),
     ("flint/port-id", flint_b_port_id),
     ("flint/wire-writer", flint_b_wire_writer),
     ("flint/wire-writer?", flint_b_wire_writerp),
@@ -1005,6 +1032,8 @@ pub const CATALOGUE: &[(&str, &str)] = &[
     ("flint/port-receive-reader", "flint_b_port_receive_reader"),
     ("flint/port-close", "flint_b_port_close"),
     ("flint/system-port", "flint_b_system_port"),
+    ("flint/snapshot-export", "flint_b_snapshot_export"),
+    ("flint/snapshot-chunk", "flint_b_snapshot_chunk"),
     ("flint/port?", "flint_b_port_p"),
     ("flint/port-state", "flint_b_port_state"),
     ("flint/port-label", "flint_b_port_label"),
@@ -1322,6 +1351,30 @@ mod host {
             b.clear();
             b.resize(len as usize, 0);
             b.as_ptr() as u32
+        }
+    }
+
+    /// IMPORT A LIVE SET the host holds, written into the inbound buffer with
+    /// `flint_in_alloc` -- the concatenated chunks a `:snapshot` request
+    /// streamed (`DECISIONS.md#snapshots`). Answers why it was refused: 0
+    /// accepted, 1 another layout version, 2 another program.
+    ///
+    /// Here rather than in the snapshot unit because that unit is a
+    /// DIAGNOSTICS build and shelving is not: a production module has to be
+    /// able to take a sandbox back. Exporting has no ABI at all -- the host
+    /// asks on the system port and the bytes arrive as messages.
+    #[no_mangle]
+    pub extern "C" fn flint_live_import(len: u32) -> u32 {
+        let rt = rt();
+        let bytes: alloc::vec::Vec<u8> = unsafe {
+            let b = &*core::ptr::addr_of!(IN);
+            b[..len as usize].to_vec()
+        };
+        if flint_rt::snap::import_live(rt, &bytes) {
+            0
+        } else {
+            let why = unsafe { flint_rt::snap::REFUSED };
+            if why == 0 { 1 } else { why }
         }
     }
 

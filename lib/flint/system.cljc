@@ -19,6 +19,7 @@
       {:op :bind   :port p}   run calls arriving on `p`
       {:op :unbind :port p}   stop
       {:op :close}            this sandbox is done
+      {:op :snapshot :port p} stream this sandbox's live set to `p`
 
   Calls never come here. They go on a bound port, and answers go back on it:
 
@@ -36,6 +37,29 @@
 
   Guest code never runs here, so guest code cannot kill this. That is the
   difference between a guarantee and a discipline.
+
+  ## Snapshots are the host's to ask for
+
+  `:snapshot` streams the sandbox's LIVE SET (`DECISIONS.md#snapshots`) to the
+  port the host names, in order:
+
+      #bytes ...             chunks of at most `snapshot-chunk-bytes`, whose
+                             concatenation is the one-shot export
+      {:op :end :size n}     n bytes were sent; or, instead,
+      {:op :error :message \"..\"}
+      -- and then the port is closed.
+
+  It is served on THIS thread because this is the one thread the runtime
+  honours the request from: `flint.rt/snapshot-export` refuses any other, so a
+  guest cannot take one -- not by naming the builtin, and not by sending
+  `:snapshot` anywhere, since a send on the system port goes OUT to the host.
+  Control messages wait behind a snapshot in flight; a host that wants the
+  sandbox back sooner drains the port faster.
+
+  The export itself happens between turns, not here: the call PARKS and the
+  scheduler exports once this thread is off the CPU. In the restored copy the
+  same call answers `nil`, so the copy does not stream itself to a port that
+  belonged to the instance it was copied from.
 
   ## One bound port is a queue
 
@@ -212,6 +236,49 @@
         (when-not (port/closed? p)
           (recur))))))
 
+;; ------------------------------------------------------------- snapshot
+
+;; The largest chunk a `:snapshot` sends. 64 KiB: large enough that the
+;; per-message cost is noise, small enough that the transient copy in this
+;; sandbox's heap is too.
+(def ^:private snapshot-chunk-bytes 65536)
+
+(defn- send-chunks!
+  "Every chunk of the export, in order. Its own function because a `recur`
+  cannot cross the `try` that `snapshot!` wraps it in."
+  [p]
+  (loop [off 0]
+    (let [c (flint.rt/snapshot-chunk off snapshot-chunk-bytes)]
+      (when c
+        (port/send p c)
+        (recur (+ off snapshot-chunk-bytes))))))
+
+(defn- snapshot!
+  "Stream the live set to `p` (see the namespace docstring). Never throws:
+  `serve` calls it inside `control`, which catches, but a failure here owes the
+  host an `:error` and a closed port rather than silence."
+  [p]
+  (when (port/port? p)
+    (let [n (try (flint.rt/snapshot-export)
+                 (catch Throwable e {:op :error :message (ex-message e)}))]
+      (cond
+        ;; The RESTORED copy: the request that made this snapshot was answered
+        ;; by the instance it was taken from. `p` is that instance's port.
+        (nil? n) nil
+        (map? n) (do (try (port/send p n) (catch Throwable _ nil))
+                     (port/close p))
+        :else
+        (let [sent (try
+                     (send-chunks! p)
+                     {:op :end :size n}
+                     (catch Throwable e
+                       ;; Past the end FREES the buffer: the host stopped
+                       ;; reading, and the copy must not outlive the request.
+                       (flint.rt/snapshot-chunk n 0)
+                       {:op :error :message (ex-message e)}))]
+          (try (port/send p sent) (catch Throwable _ nil))
+          (port/close p))))))
+
 ;; -------------------------------------------------------------- control
 
 (defn- control
@@ -235,6 +302,8 @@
               [true (filterv (fn [x] (not (identical? x p))) bound)])
     :close (do (doseq [p bound] (port/close p))
                [false []])
+    :snapshot (do (snapshot! (:port m))
+                  [true bound])
     ;; UNKNOWN OPS ARE IGNORED, not fatal. A newer host talking to an older
     ;; sandbox is the case this protects, and dying on an op we do not know
     ;; would make every addition a breaking change.

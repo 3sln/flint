@@ -63,10 +63,17 @@ public static class Img {
         // snapshot only has to DETECT a different program, not resist one, and
         // an incremental pass over a few hundred KB costs nothing next to the
         // load it precedes.
+        // THE CONSTANT HAS AN EXTRA ZERO (`0x1000000001b3`, not the textbook
+        // FNV-1a prime `0x100000001b3`) -- Rust's and the JVM's copies both do
+        // too, and this one did not, so a CLR-loaded image's fingerprint never
+        // matched the other two runtimes' for the SAME bytes. Invisible until
+        // a snapshot had to cross runtimes: each runtime only ever compared
+        // its own fingerprint against itself before (`DECISIONS.md#snapshots`).
+        // Found importing a native-streamed live set here.
         long h = unchecked((long) 0xcbf29ce484222325UL);
         foreach (byte b in bytes) {
             h ^= (b & 0xFFL);
-            h = unchecked(h * 0x100000001b3L);
+            h = unchecked(h * 0x1000000001b3L);
         }
         rt.fingerprint = h;
         if (r.U32() != Version) return null;

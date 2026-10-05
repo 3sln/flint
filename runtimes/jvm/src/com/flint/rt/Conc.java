@@ -1564,9 +1564,40 @@ public final class Conc {
             if (!Str.text(rt, rt.consts[rt.varNames[i]]).equals("flint.system/boot")) continue;
             long f = rt.roots.shared.globals[i];
             if (Val.isNil(f) || !rt.isHeapTy(f, TY_CLOSURE)) return;
-            spawn(rt, f);
+            long th = spawn(rt, f);
+            // REMEMBERED BY ID, because this is the one thread a snapshot
+            // request is honoured from (`DECISIONS.md#snapshots`): guest code
+            // never runs on it, so "the caller is the system thread" is a
+            // grant the runtime conferred rather than a claim the caller
+            // made. An id rather than the value so it survives a collection,
+            // and so a live set can carry it.
+            if (isThread(rt, th)) rt.snapServe.systemThread = fx(rt.slot(th, TH_ID));
             return;
         }
+    }
+
+    /// A host-requested snapshot, served between turns (`Snap.Serve`).
+    public static void serveSnapshot(Rt rt) {
+        Snap.serveSnapshot(rt);
+    }
+
+    /// Re-attach the state `ensureSched` sets for a scheduler that came back
+    /// in a live set rather than being made here: the bridge-decoder hook,
+    /// and this runtime's own "a scheduler exists" flag.
+    ///
+    /// Neither one travels in the bytes -- they are Java state on this `Rt`,
+    /// not heap objects -- and `ensureSched` does not set them for a
+    /// scheduler that already exists. Without the hook a restored sandbox ran
+    /// calls and could not take a PORT in a message: the decoder found no
+    /// route to mint one and refused the delivery. Without the flag,
+    /// `Rt.resume`/`Rt.runProgram` never call `drive` at all -- they gate on
+    /// `schedInstalled`, where the native runtime gates the same decision on
+    /// `sched_hook.is_some()`; `rehookSched` is this runtime's side of
+    /// `rehook_sched` in `runtime/src/conc.rs`.
+    public static void rehookSched(Rt rt) {
+        if (Val.isNil(sched(rt))) return;
+        rt.bridgeHook = Conc::installBridgePort2;
+        rt.schedInstalled = true;
     }
 
     /// THE ANSWER A SETTLED PROGRAM LEFT.

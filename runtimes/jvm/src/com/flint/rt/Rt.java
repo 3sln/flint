@@ -327,6 +327,11 @@ public final class Rt {
     /// question is asked before that is known.
     public boolean systemBooted;
 
+    /// Serving a HOST-REQUESTED SNAPSHOT, between the request and the last
+    /// chunk (`DECISIONS.md#snapshots`). Ported verbatim from
+    /// `runtime/src/snap.rs`'s `Serve`, which this field mirrors by name.
+    public Snap.Serve snapServe = new Snap.Serve();
+
     /// This image's initialisers, in order: a program's top-level forms.
     public int[] init = new int[0];
 

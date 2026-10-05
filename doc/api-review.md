@@ -326,11 +326,19 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-1 public var (`serve`). A sandbox's control plane, as flint code rather than runtime code (`DECISIONS.md#bridges-are-the-only-door`). Bootstrap mints a closure over `serve` and spawns it on the system port; `bind`/`unbind`/`close` are the whole protocol, and calls run on bound ports rather than here.
+1 public var (`serve`). A sandbox's control plane, as flint code rather than runtime code (`DECISIONS.md#bridges-are-the-only-door`). Bootstrap mints a closure over `serve` and spawns it on the system port; `bind`/`unbind`/`close`/`snapshot` are the whole protocol, and calls run on bound ports rather than here.
 
 **Is this public?** Required by 1 compiled test program, 0 other `lib` namespaces, named 0 times in README. Guest programs have no reason to name it — bootstrap does — so the boundary question is whether `serve` should be public at all or reachable only from the runtime that spawns it.
 
-**Change requests:** _none recorded_
+**ADDED 2026-10-05, not reviewed: the `:snapshot` op** (`DECISIONS.md#snapshots`). A HOST-facing addition to this protocol — `{:op :snapshot :port p}` streams the live set to `p` as bytes chunks, then `{:op :end :size n}` or `{:op :error :message ..}`, then closes `p` — with three surfaces beside it, all new and all unreviewed:
+
+* two builtins, `flint.rt/snapshot-export` and `flint.rt/snapshot-chunk`. Any source can NAME them (`flint.rt/<x>` reaches the whole catalogue); both refuse at run time unless called on the system thread. Whether they belong in the guest-nameable catalogue at all, rather than somewhere only the control plane links, is a boundary question;
+* the wasm export `flint_live_import(len)` in `flint.conc` (0 accepted, 1 layout, 2 another program), the production way back in;
+* `flint_rt::native::Program::import_live` (same answers), and a `#[doc(hidden)]` `Program::export_live` kept as the one-shot reference the streamed bytes are tested against.
+
+**Change requests:**
+
+1. **A program can replace this namespace.** The compiler takes a program's own `flint/system.cljc` in place of this one (`test/snapstream-shadow/`), so the thread the runtime trusts runs the program's code — measured 2026-10-05, it took a snapshot of itself. Either a program may not define `flint.system` (and `flint.port`, `flint.wire`, which this thread calls), or the guard needs a different basis. The reviewer's call; recorded in `DECISIONS.md#snapshots`.
 
 ## flint.table
 

@@ -21,6 +21,7 @@ mod conc {
     }
     pub fn settled_answer(rt: &mut super::Rt) -> super::Value { super::Value(999) }
     pub fn report_deadlock(rt: &mut super::Rt) { rt.deadlocked = true; }
+    pub fn serve_snapshot(_rt: &mut super::Rt) {}
     pub const SC_THREADS: u32 = 0;
     pub const SC_CURRENT: u32 = 1;
     pub const SC_EVENTS: u32 = 2;
@@ -557,6 +558,7 @@ fn main() {
         }
         static long settledAnswer(Rt rt) { return 999; }
         static void reportDeadlock(Rt rt) { rt.deadlocked = true; }
+        static void serveSnapshot(Rt rt) {}
         static long sched(Rt rt) { return rt.schedId < 0 ? NIL : rt.schedId; }
         static boolean isPort(Rt rt, long v) {
             return v != NIL && v >= 0 && v < rt.ports.size() && rt.ports.get((int) v);
@@ -927,6 +929,7 @@ fn main() {
         }
         internal static long SettledAnswer(Rt rt) => 999;
         internal static void ReportDeadlock(Rt rt) { rt.Deadlocked = true; }
+        internal static void ServeSnapshot(Rt rt) {}
         internal static long Sched(Rt rt) => rt.SchedId < 0 ? NIL : rt.SchedId;
         internal static bool IsPort(Rt rt, long v) =>
             v != NIL && v >= 0 && v < rt.Ports.Count && rt.Ports[(int) v];

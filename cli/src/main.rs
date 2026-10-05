@@ -21,6 +21,8 @@ mod policy;
 mod script;
 mod serve;
 mod sys;
+#[cfg(test)]
+mod snapstream_test;
 
 use anyhow::{bail, Context, Result};
 use flint_rt::native::Program;

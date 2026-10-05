@@ -18,7 +18,9 @@
 {;; --------------------------------------------------------------- the program
  ;;
  ;; The smallest thing that still pulls in `clojure.core`, which is what makes the
- ;; native count interesting: 88 is `clojure.core`'s reach and not this program's.
+ ;; native count interesting: 91 is `clojure.core`'s reach and not this program's
+ ;; (88 until `flint.system`, linked into every image, gained `:snapshot` on
+ ;; 2026-10-05: the two snapshot builtins and one more its handler reaches, by count).
  :program "(ns t)\n(defn main [args] \"x\")\n"
  :entry "t/main"
  :call-args ["hello"]
@@ -102,21 +104,21 @@
   :why "Natives resolve exactly once when the image loads, so an override
         registered after boot would silently never apply. Refusing is the contract:
         a host must not be left holding a hook it believes in. And the normal case
-        is ZERO calls -- a bulk or resolver API requiring all 88 would reject
+        is ZERO calls -- a bulk or resolver API requiring all 91 would reject
         programs that run."}
 
  ;; --------------------------------------------------------------- boot
  :boot
- {:declared-natives 88
+ {:declared-natives 91
   :on-missing-native :fail
   :message-names-it true
   :why "SHARED ACROSS TARGETS, and the strongest number in the file: the natives a
         program declares are a property of the IMAGE, so every target compiling
-        this program must find the same 88. A target seeing 87 or 89 has a
+        this program must find the same 91. A target seeing 90 or 92 has a
         different image or a different clojure.core.
 
         Failing on a missing one is a deliberate change away from the null-tolerance
         in `runtime/src/image.rs` and `Img.java`: the VERSION says what has to be
         linked, so a gap is a version mismatch. A version-matched host carries all
-        88 and nothing changes; a deliberately trimmed runtime now fails to boot a
+        91 and nothing changes; a deliberately trimmed runtime now fails to boot a
         program it could have run, and that trade is chosen."}}

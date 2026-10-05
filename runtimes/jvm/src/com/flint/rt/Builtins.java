@@ -1375,6 +1375,19 @@ public final class Builtins {
         /// runtime, and the nested scheduler is what made the first version
         /// silently never start (`DECISIONS.md#bridges-are-the-only-door`).
         def("flint/system-port", (rt, at, n) -> Conc.systemPort(rt));
+        // A HOST-REQUESTED SNAPSHOT (`DECISIONS.md#snapshots`), for
+        // `flint.system`'s `:snapshot` op and nothing else. Both refuse
+        // unless the caller is the system thread -- the guard lives in
+        // `Snap`, at run time, because any source can NAME these through
+        // `flint.rt/<x>`.
+        def("flint/snapshot-export", (rt, at, n) -> Snap.requestExport(rt));
+        def("flint/snapshot-chunk", (rt, at, n) -> {
+            long off = rt.vat(at), len = rt.vat(at + 1);
+            if (!Val.isFixnum(off) || !Val.isFixnum(len)) {
+                return rt.throwStr("ClassCastException", "snapshot-chunk wants two integers");
+            }
+            return Snap.chunk(rt, Val.asFixnum(off), Val.asFixnum(len));
+        });
         def("flint/port-label", (rt, at, n) -> {
             long p = com._3sln.flint.kgen.rt.Meta.portOf(rt, rt.vat(at));
             if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-label wants a port");

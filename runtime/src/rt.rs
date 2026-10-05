@@ -64,6 +64,10 @@ pub struct Rt {
     /// because a sandbox with no system port has no scheduler either and the
     /// question is asked before that is known.
     pub system_booted: bool,
+    /// A host-requested live-set export in progress (`DECISIONS.md#snapshots`).
+    /// Runtime state, not heap state: the bytes it holds are the snapshot, so
+    /// they cannot also be in it.
+    pub snap_serve: crate::snap::Serve,
     /// The heap, when this `Rt` is the one that made it.
     ///
     /// A sandbox has ONE heap and may have several executors on it
@@ -333,6 +337,7 @@ impl Rt {
         }));
         Rt {
             system_booted: false,
+            snap_serve: crate::snap::Serve::new(),
             bridge_hook: None,
             owned_heap,
             image,

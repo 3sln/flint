@@ -121,6 +121,8 @@
   "flint/signum",
   "flint/sin",
   "flint/sinh",
+  "flint/snapshot-chunk",
+  "flint/snapshot-export",
   "flint/spawn",
   "flint/sqrt",
   "flint/str->b",
