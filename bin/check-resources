@@ -1,0 +1,177 @@
+#!/usr/bin/env bb
+;; A TRIPWIRE, NOT A BENCHMARK. `bin/bench-corpus` answers "how fast"; this
+;; answers "did something just get 10x worse", against budgets wide enough
+;; that a loaded machine never trips it. See `test/resource-budgets.edn` for
+;; the baselines, their method, and why RSS and instructions-retired are the
+;; load-insensitive signals used here instead of wall time (AGENTS.md#3, #4).
+;;
+;; THE MOTIVATING BUG (17adfa37, `runtime/src/mem.rs`): every sandbox
+;; `alloc_zeroed`'d its whole 3 GB heap ceiling by hand, so `flint run` of a
+;; "hi" program peaked at ~5.0 GB resident instead of ~28 MB. Nothing in
+;; `bin/test` would have failed on that. This check, run against the binary
+;; built from the commit before that fix (380737cf), fails on memory; run
+;; against this branch, it passes. (Proved by hand -- a script cannot commit
+;; a second binary to compare against every time, so this is not a
+;; self-test; see the commit message for the two runs.)
+;;
+;; TAKES THE BINARY AS A PARAMETER: the first CLI arg, else $FLINT_BIN, else
+;; `target/release/flint` next to this repo. That is what let the same script
+;; run unmodified against a binary built from an old commit in a separate
+;; worktree.
+;;
+;; SKIPS CLEANLY, AND SAYS WHY, rather than silently: no binary built, no
+;; `/usr/bin/time` (CI's `ubuntu-latest` image carries the `time` package;
+;; checked against `.github/workflows/test.yml`'s runner, not assumed), or an
+;; OS this script does not know how to parse `time`'s output on. A check that
+;; can quietly run zero subjects and still exit 0 is the failure mode
+;; AGENTS.md#5 describes for guards, and the same shape applies here: a
+;; missing subject must be LOUD, not a silent pass.
+(require '[babashka.fs :as fs]
+         '[babashka.process :as p]
+         '[clojure.edn :as edn]
+         '[clojure.string :as str])
+
+(def root (str (fs/parent (fs/parent (fs/real-path *file*)))))
+
+(defn skip [msg] (println (str "  --   check-resources: " msg)) (System/exit 0))
+
+;; ABSOLUTIZED AGAINST THE CALLER'S CWD, not root: `p/process` below runs each
+;; subject with `:dir root`, and a relative `$FLINT_BIN` would then resolve
+;; against ROOT rather than wherever `bin/test` (or a person) actually was
+;; when they set it -- a quiet wrong-binary bug that would still print a
+;; result.
+(def bin
+  (let [given (or (first *command-line-args*)
+                  (System/getenv "FLINT_BIN")
+                  (str root "/target/release/flint"))]
+    (str (fs/absolutize given))))
+
+(when-not (fs/executable? bin)
+  (skip (str "no executable at " bin "; build it first (cargo build --release -p flint-cli)")))
+
+(def os-name (str/lower-case (System/getProperty "os.name" "")))
+(def mac? (str/includes? os-name "mac"))
+(def linux? (str/includes? os-name "linux"))
+
+(def timer "/usr/bin/time")
+
+(when-not (and (fs/exists? timer) (fs/executable? timer))
+  (skip (str timer " is not present; install the `time` package (Linux) or skip -- "
+             "this check measures nothing without it, on purpose, rather than falling "
+             "back to a wall-clock timing this file argues against")))
+
+(when-not (or mac? linux?)
+  (skip (str "unrecognised OS " (pr-str os-name) "; this script only knows macOS's "
+             "`time -l` and Linux's `time -v` output")))
+
+(def budgets (edn/read-string (slurp (str root "/test/resource-budgets.edn"))))
+
+;; ---------------------------------------------------------------- measuring
+
+(defn parse-mac
+  "macOS `/usr/bin/time -l`'s report, all on stderr. `real ... user ... sys`
+  is the first line; RSS and instructions are two of the rows below it."
+  [text]
+  (let [times (re-find #"([\d.]+)\s+real\s+([\d.]+)\s+user\s+([\d.]+)\s+sys" text)
+        rss (re-find #"(\d+)\s+maximum resident set size" text)
+        ins (re-find #"(\d+)\s+instructions retired" text)]
+    (when-not times (throw (ex-info (str "no real/user/sys line in `time -l` output:\n" text) {})))
+    (when-not rss (throw (ex-info (str "no `maximum resident set size` in `time -l` output:\n" text) {})))
+    {:cpu-s (+ (parse-double (nth times 2)) (parse-double (nth times 3)))
+     :rss-mb (/ (parse-long (nth rss 1)) 1024.0 1024.0)
+     :instructions (when ins (parse-long (nth ins 1)))}))
+
+(defn parse-linux
+  "GNU `/usr/bin/time -v`'s report. No instruction counter exists here, so
+  that column is left nil and the budget check for it is skipped -- a
+  ceiling with nothing to compare against must never read as a pass OR a
+  fail, it has to be absent from the row."
+  [text]
+  (let [user (re-find #"User time \(seconds\):\s*([\d.]+)" text)
+        sys (re-find #"System time \(seconds\):\s*([\d.]+)" text)
+        rss (re-find #"Maximum resident set size \(kbytes\):\s*(\d+)" text)]
+    (when-not (and user sys rss)
+      (throw (ex-info (str "could not find user/system time and max RSS in `time -v` output:\n" text) {})))
+    {:cpu-s (+ (parse-double (nth user 1)) (parse-double (nth sys 1)))
+     :rss-mb (/ (parse-long (nth rss 1)) 1024.0)
+     :instructions nil}))
+
+(def parse (if mac? parse-mac parse-linux))
+(def timer-flag (if mac? "-l" "-v"))
+
+(defn cmd-for
+  "The command this subject runs, UNDER `/usr/bin/time`. `:compile` gets a
+  fresh output path per run, in its own temp dir, so two subjects never race
+  on the same file."
+  [{:keys [kind dir fn to] :as s}]
+  (let [d (str root "/" dir)]
+    (case kind
+      :run [bin "run" ":path" d ":fn" fn]
+      :compile [bin "compile" ":path" d ":fn" fn ":to" to ":out"
+                (str (fs/create-temp-dir) "/" (:name s) ".wasm")])))
+
+(defn measure!
+  "Runs the subject once under the timer. The child's own stdout and the
+  timer's report are two different streams -- `p/process` keeps them apart --
+  so a program that prints nothing (or a lot) never confuses the parser."
+  [cmd]
+  (let [full (into [timer timer-flag] cmd)
+        res @(p/process full {:out :string :err :string :dir root})]
+    (when-not (zero? (:exit res))
+      (throw (ex-info (str "exited " (:exit res) ": " (str/join " " cmd) "\n" (:err res)) {})))
+    (parse (:err res))))
+
+;; ---------------------------------------------------------------- reporting
+
+(defn fmt-n [n] (if n (str n) "-"))
+
+(defn row [subject metric baseline ceiling actual over?]
+  (printf "  %-20s %-13s %15s %15s %15s  %s%n"
+          subject metric (fmt-n baseline) (fmt-n ceiling) (fmt-n actual)
+          (if over? "OVER" "ok")))
+
+(def fails (atom []))
+(defn fail! [name msg] (swap! fails conj (str "  FAIL " name ": " msg)))
+
+(println (format "  %-20s %-13s %15s %15s %15s  %s"
+                  "subject" "metric" "baseline" "ceiling" "actual" "verdict"))
+
+(def ran (atom 0))
+(doseq [s (:subjects budgets)]
+  (try
+    (let [cmd (cmd-for s)
+          {:keys [rss-mb cpu-s instructions]} (measure! cmd)
+          rss-mb-r (Math/round (double rss-mb))
+          cpu-s-r (/ (Math/round (* cpu-s 100.0)) 100.0)
+          {bcl :ceiling bbl :baseline} s
+          rss-over? (> rss-mb (:rss-mb bcl))
+          cpu-over? (> cpu-s (:cpu-s bcl))
+          ins-over? (and instructions (:instructions bcl) (> instructions (:instructions bcl)))]
+      (swap! ran inc)
+      (row (:name s) "rss-mb" (:rss-mb bbl) (:rss-mb bcl) rss-mb-r rss-over?)
+      (row "" "cpu-s" (:cpu-s bbl) (:cpu-s bcl) cpu-s-r cpu-over?)
+      (when (:instructions bcl)
+        (row "" "instructions" (:instructions bbl) (:instructions bcl)
+             instructions ins-over?))
+      (when rss-over?
+        (fail! (:name s) (format "RSS %d MB over the %d MB ceiling (baseline %d MB) -- this is the signature of the 17adfa37 heap-zeroing regression"
+                                  rss-mb-r (:rss-mb bcl) (:rss-mb bbl))))
+      (when cpu-over?
+        (fail! (:name s) (format "CPU (user+sys) %.2f s over the %.2f s ceiling (baseline %.2f s)"
+                                  cpu-s-r (:cpu-s bcl) (:cpu-s bbl))))
+      (when ins-over?
+        (fail! (:name s) (format "%d instructions retired over the %d ceiling (baseline %d)"
+                                  instructions (:instructions bcl) (:instructions bbl)))))
+    (catch Exception e
+      (fail! (:name s) (ex-message e))
+      (println (format "  FAIL %-20s %s" (:name s) (ex-message e))))))
+
+(println)
+(println (format "check-resources: %d of %d subject(s) measured against test/resource-budgets.edn"
+                  @ran (count (:subjects budgets))))
+(doseq [f @fails] (println f))
+
+(when (zero? @ran)
+  (println "  FAIL nothing was measured, so this run asserts nothing")
+  (System/exit 1))
+(when (seq @fails) (System/exit 1))

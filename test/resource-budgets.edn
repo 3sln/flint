@@ -1,0 +1,108 @@
+;; Resource-consumption tripwires for `bin/check-resources`, wired into
+;; `bin/test` as the "resources: ..." section.
+;;
+;; WHAT THIS IS FOR. A guard against EXPLOSIVE regressions in host memory or
+;; CPU -- not a benchmark, and not a precision budget. The motivating bug
+;; (17adfa37, `runtime/src/mem.rs`): `Space::new` handed the CLI's 3 GB heap
+;; ceiling to `alloc_zeroed` at an alignment above the system allocator's own,
+;; so Rust's allocator zeroed the whole reservation by hand. `flint run` of a
+;; program answering "hi" peaked at ~5.0 GB resident and spent ~0.74 s of
+;; system CPU per sandbox in `__bzero`; after the fix, ~28 MB and ~0.03 s sys.
+;; Nothing in the gate would have caught that -- this is the thing that would.
+;;
+;; This is NOT `DECISIONS.md#resource-limits`, which is a CATCHABLE per-sandbox
+;; cap a *guest program* can be given and can hit. This is the HOST's own
+;; resource use running an ordinary, well-behaved program, which nothing
+;; asserted before.
+;;
+;; METHOD, per AGENTS.md#2 ("a number carries its method or it is folklore").
+;; Baselines below were measured 2026-10-01 on macOS (Darwin 23.6.0, arm64,
+;; M-series), load averages 14-26 (other work in flight on the same machine --
+;; see note on CEILINGS), at commit 246ac6c1 on branch `resource-guards`
+;; (`./bin/build-dist && cargo build --release -p flint-cli`, run three times
+;; each, numbers stable to within ~0.1%). Command shape:
+;;   /usr/bin/time -l ./target/release/flint run :path <dir> :fn <ns>/main
+;; (`:to wasm :out <f>` in place of `run` for the :compile subject). RSS is
+;; "maximum resident set size" and instructions is "instructions retired",
+;; both from `/usr/bin/time -l`'s own report, not derived.
+;;
+;; WHY RSS AND INSTRUCTIONS, NOT WALL TIME (AGENTS.md#3, #4: the machine here
+;; runs at load averages of 10-80 from unrelated work). Re-running `run-hello`
+;; twice back to back at load 26.46/18.63/14.71 swung wall time 11.65 s to
+;; 12.87 s while RSS held at 26.54-26.56 MB and instructions at
+;; 17 354 752 718-17 359 155 735 (both within 0.03%). Wall time is not used
+;; anywhere in this file for that reason -- a loaded machine must not be able
+;; to turn a tripwire red, and a loaded machine cannot turn these two numbers
+;; red either way.
+;;
+;; CEILINGS are wide on purpose: ~5x baseline for CPU and instructions (the
+;; weaker, secondary signals -- see below), and a flat 200 MB for memory, which
+;; is already >4x every baseline here (26-40 MB) and nearly two orders of
+;; magnitude under the 5 GB the regression produced. A 10x+ blow-up trips it; a
+;; contended CPU does not.
+;;
+;; CPU (user+sys) IS A LOOSE SECONDARY BOUND, not the primary signal, and here
+;; is why: the regression's own CPU cost was almost entirely SYSTEM time
+;; (0.74 s sys vs 0.03 s), while USER time -- compiling the stdlib from source
+;; on every `flint run`, see `DECISIONS.md#namespace-units` and the
+;; `flint-run-floor` row in ROADMAP.md -- dominates the total at ~3.3-4.4 s and
+;; does not move with this bug. So total user+sys for a hello-world rises only
+;; from ~3.30 s to an estimated ~4.0 s with the bug present (measured against
+;; the pre-fix binary built from 380737cf; see the commit this file's check
+;; was proved against) -- nowhere near a 5x ceiling on its own. CPU is kept as
+;; a secondary check anyway, because a *different* regression (an accidental
+;; O(n^2) pass, a busy-wait) would show up here and not necessarily in RSS.
+;; MEMORY IS THE CHECK THAT CATCHES THE MOTIVATING BUG; CPU is a second net
+;; that catches a different shape of problem, loosely.
+;;
+;; INSTRUCTIONS RETIRED (macOS only -- `/usr/bin/time -v` on Linux has no
+;; equivalent counter) is also secondary and also did not move for this
+;; specific bug: `alloc_zeroed`'s manual zeroing of an over-aligned block
+;; showed up as system time (the kernel zeroing pages under `__bzero`'s
+;; syscalls), not as additional retired instructions in this process. It is
+;; still measured and bounded because it is otherwise the single most
+;; load-insensitive number this gate has access to (AGENTS.md#3's
+;; "RE-MEASURED ... IN INSTRUCTIONS, because wall time ... was useless"), and
+;; a regression that burns CPU in-process (not via the kernel) would move it.
+{:measured
+ {:date "2026-10-01"
+  :host "macOS (Darwin 23.6.0, arm64, M-series), load averages ~14-26"
+  :commit "246ac6c1 (branch resource-guards)"
+  :method "/usr/bin/time -l ./target/release/flint run :path <dir> :fn <ns>/main"}
+
+ :subjects
+ [{:name "run-hello"
+   :kind :run
+   :dir "test/resource-fixtures"
+   :fn "hello/main"
+   :baseline {:rss-mb 27 :cpu-s 3.30 :instructions 17356000000}
+   :ceiling  {:rss-mb 200 :cpu-s 17 :instructions 87000000000}}
+
+  {:name "run-life"
+   :kind :run
+   :dir "corpus"
+   :fn "life/main"
+   :baseline {:rss-mb 32 :cpu-s 3.49 :instructions 18968000000}
+   :ceiling  {:rss-mb 200 :cpu-s 18 :instructions 95000000000}}
+
+  {:name "run-nqueens"
+   :kind :run
+   :dir "corpus"
+   :fn "nqueens/main"
+   :baseline {:rss-mb 31 :cpu-s 3.42 :instructions 18524000000}
+   :ceiling  {:rss-mb 200 :cpu-s 18 :instructions 93000000000}}
+
+  {:name "run-words"
+   :kind :run
+   :dir "corpus"
+   :fn "words/main"
+   :baseline {:rss-mb 32 :cpu-s 3.43 :instructions 18266000000}
+   :ceiling  {:rss-mb 200 :cpu-s 18 :instructions 92000000000}}
+
+  {:name "compile-wasm-hello"
+   :kind :compile
+   :dir "test/resource-fixtures"
+   :fn "hello/main"
+   :to "wasm"
+   :baseline {:rss-mb 40 :cpu-s 4.39 :instructions 23776000000}
+   :ceiling  {:rss-mb 200 :cpu-s 22 :instructions 119000000000}}]}
