@@ -36,7 +36,8 @@ material that predates that rewrite.
 [debug-runner](#debug-runner) ·
 [snapshots](#snapshots) ·
 [profiler](#profiler) ·
-[a-vec-of-values-is-not-a-root](#a-vec-of-values-is-not-a-root)
+[a-vec-of-values-is-not-a-root](#a-vec-of-values-is-not-a-root) ·
+[growable-heap](#growable-heap)
 
 *II. Modularity and the build*
 [modularity](#modularity) ·
@@ -14326,3 +14327,127 @@ done as part of a refactor.
   inside lists and vectors — not inside a quoted map or set literal, which
   nothing in the tree writes.
 * Gensym numbering follows one read instead of two.
+
+## growable-heap
+
+**A heap starts small and grows to its ceiling**
+
+**Ratified:** ☐ not signed off
+
+**Status: built 2026-10-05.** Proved by `cargo test -p flint-rt --lib mem::`
+(`a_large_ceiling_starts_small_and_grows`, `growth_stops_at_the_ceiling`),
+`runtime/tests/growable.rs`, and the matching section of the JVM's
+`RtFoundation` and the CLR's `--rt-foundation` (`heapGrows` / `HeapGrows`).
+The growth test was made to fail on purpose first: with `take`'s commit
+removed it dies of `SIGBUS` on the first write past 8 MiB.
+
+### What was decided
+
+A sandbox's heap size -- the `max_heap` every `Space` is made with, 3 GB for
+the CLI and 2 GB for the JVM-hosted compiler -- is a CEILING, and no runtime
+backs it with memory up front. A `Space` starts with `space-initial` bytes
+(8 MiB, or the ceiling if smaller) and `take` grows it by `space-grow-to`
+(double, or straight to the need, never past the ceiling) when a run would
+pass what is backed. Both functions are `kin/heapgrow.kin`, the only copy of
+the policy; native, the JVM and the CLR each call the generated one.
+
+The ceiling's meaning does not move, and that is by construction rather than
+by testing: `take` refuses a run past the ceiling BEFORE it asks whether to
+grow, exactly where it refused one before, and the collector's own check
+against `max_heap` (`add_chunk`, which is where the catchable memory limit of
+`resource-limits` actually fires) is untouched. The test of it is a fill:
+rooted 1 MiB nodes into a 64 MiB heap until allocation fails. 4192d734, which
+backed the whole ceiling at birth, answered 56; native, the JVM and the CLR
+all answer 56 with growth, and native's 56th failure is still `OOM`.
+
+### How, per runtime -- one policy, three mechanisms
+
+* **Native: reserve, then commit.** The ceiling is `mmap(PROT_NONE,
+  MAP_NORESERVE)` on unix and `VirtualAlloc(MEM_RESERVE)` on Windows --
+  address space, neither memory nor commit charge -- and growing is
+  `mprotect` / `MEM_COMMIT` of the next stretch. The base NEVER MOVES. That
+  was the deciding property: `aot.rs` caches the base in its sync block once
+  per `Rt` (`SYNC_FIXED`), compiled `:to :llvm` code reads it from there, and
+  runtime code holds raw `ptr()`s. A moving base would have meant auditing
+  every one of those; a fixed one needs none of them audited. Before this,
+  `Space::new` was `alloc_zeroed` of the ceiling, lazy only because macOS's
+  and glibc's `calloc` happen to hand large blocks back as fresh pages -- a
+  property of the allocator underneath, promised by none, and a 3 GB commit
+  charge under strict overcommit or on Windows. `libc` became a unix-only
+  dependency for the three calls; Windows declares its two itself.
+* **JVM and CLR: grow by copy.** The JVM has no reserve-without-commit short
+  of a `mmap` downcall, which is a RESTRICTED method (a warning on every run
+  unless the launcher passes `--enable-native-access`), and
+  `Arena.allocate` zero-fills eagerly -- 2 GB took 2 240 ms and 2.19 GB
+  resident on OpenJDK 25 (`/usr/bin/time -l`, a five-line probe). So the JVM
+  allocates a bigger segment from a fresh shared arena, copies the used
+  prefix, and closes the old arena; the CLR `Realloc`s and clears the new
+  tail. Zero-filling a new segment is no longer the ceiling's cost but the
+  committed size's.
+* **wasm: unchanged, because it already worked this way.** Linear memory
+  starts at what `wasm-ld` declares and `arena::sbrk` grows it with
+  `memory.grow`; `Space::new` ignores its argument there and the collector's
+  `max_heap` is the only ceiling. The arena's own step (half again, in pages)
+  was NOT moved onto `space-grow-to`: the arena backs Rust's allocator as
+  well as the heap, it has a fallback to the exact need when the engine
+  refuses the larger grow, and a field or branch on that path costs every
+  module bytes. What converges is the observable behaviour -- the same
+  results and the same limit -- not the step size.
+
+### Why moving the ports' memory is safe
+
+Heap addresses are offsets from the base on all four runtimes (`Addr`, never
+a machine pointer), and on both ports the base is a PRIVATE field read on
+every access -- `Space.mem`, `Space._base` -- so a moved segment is seen by
+the next access. The one way to see the old one would be another executor
+inside the heap during the copy. `take` is reached only from a collection or
+from an allocation of at least `LARGE_OBJECT` bytes, and `gc-would-collect`
+(`kin/objsize.kin`) answers true for exactly those, so under several
+executors (`drivers`) every growth happens inside the same staged
+stop-the-world that already lets a collection MOVE objects. Growth adds no
+condition a moving collector did not already need.
+
+### Snapshots
+
+A live-set import allocates every object through `Rt::alloc`, so it grows
+the space as it goes and needed no change. The diagnostics memcpy `restore`
+writes regions at their recorded addresses, so it now calls `Space::ensure`
+for each region before writing -- which on native also closes a hole: its
+bound there was `memory_bytes() == u64::MAX`, so a region past the
+reservation was written regardless. The two ports' `restore` replaced their
+`> reserved` check with the same `ensure`.
+
+### What it cost, measured
+
+Both A/Bs ran 2026-10-05 on macOS (Darwin 23.6.0, arm64) at load averages
+24-42 from unrelated work, so CPU and wall figures are pairs to compare, not
+numbers to quote; peak RSS and instructions retired are the load-insensitive
+ones. The BASE arm is 4192d734 built in a detached worktree with the same
+`dist/`; the arms ran alternately.
+
+* **JVM-hosted compile** -- `java -Xss1g RtSelfHost` (64 MiB nursery, 2 GiB
+  ceiling) compiling `bench/progs` `hello`, three runs per arm, `/usr/bin/time
+  -l`. Peak resident **2.60 / 2.70 / 2.72 GB -> 0.86 / 0.96 / 0.97 GB**; user
+  CPU 25.4 / 24.9 / 22.4 s -> 23.4 / 22.4 / 21.8 s; system CPU 0.92 / 0.88 /
+  0.84 s -> 0.57 / 0.55 / 0.55 s. Every run's output was byte for byte what
+  `dist/flintc.wasm` answers for the same spec.
+* **Native CLI** -- `bin/check-resources <binary>`, its five subjects, two
+  runs per arm. **No change**: peak RSS 22 / 27 / 26 / 28 / 35-36 MB on both,
+  instructions retired within 0.05%. Expected: on macOS `calloc` was already
+  lazy, so what native gains is the guarantee, not a number this machine can
+  show. `test/resource-budgets.edn` is unchanged for that reason.
+
+### What was not done
+
+* **The ports raise no catchable memory-limit error.** Native's
+  `oom_unwind` turns an allocation answering 0 into `ResourceExhausted:
+  memory limit exceeded`; neither port has an equivalent, so the fill above
+  checks only the POINT at which they refuse. Older than this change, and
+  recorded in `ROADMAP.md`.
+* **The JVM's `Space.mem` is no longer `final`**, and a tight loop over the
+  space measured slower for it: `RtFoundation`'s 3 000 000-iteration
+  read-modify-write loop, base and grown classes run alternately, 9.0 vs
+  17.5, 30.7 vs 44.8 and 18.4 vs 34.6 ns per iteration (load averages 32-41,
+  so only the pairing means anything). C2 may hoist a `final` field's load out
+  of a loop and must reload a plain one. The whole JVM-hosted compile did not
+  show it (below), so it is recorded, not acted on.

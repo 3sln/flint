@@ -785,6 +785,37 @@ fn a_snapshot_round_trips_byte_for_byte() {
     assert!(first == second, "snapshot bytes changed across a round trip");
 }
 
+/// A snapshot of a heap that GREW restores into one that has not
+/// (`DECISIONS.md#growable-heap`). `restore` writes regions at their recorded
+/// addresses, so it has to commit up to them first; without that the first
+/// region past 8 MiB faults rather than failing an assertion.
+#[cfg(feature = "diagnostics")]
+#[test]
+fn a_grown_heap_restores_into_a_fresh_one() {
+    let mut w = ImageWriter::new();
+    let body = {
+        let mut a = Asm::new();
+        a.op(op::RETURN);
+        a.done()
+    };
+    let n = w.k_string("main");
+    w.entry = w.add_fn(n, 1, false, 2, &body);
+    let (mut rt, _v) = run(&mut w, vec!["x"]);
+    for _ in 0..24 {
+        let a = rt.alloc(flint_rt::obj::TY_NODE, 131_071);
+        assert_ne!(a, 0);
+        rt.push(flint_rt::value::Value::heap(a));
+    }
+    assert!(rt.gc.sp.committed > 16 << 20, "the source heap did not grow");
+    let first = flint_rt::snap::capture(&rt);
+
+    let (mut fresh, _v) = run(&mut w, vec!["x"]);
+    assert_eq!(fresh.gc.sp.committed, 8 << 20, "a fresh heap should not have grown");
+    assert!(flint_rt::snap::restore(&mut fresh, &first), "restore refused a grown heap");
+    assert!(fresh.gc.sp.committed >= rt.gc.sp.in_use);
+    assert!(flint_rt::snap::capture(&fresh) == first, "the grown heap did not round trip");
+}
+
 /// An imported snapshot brings its IDENTITIES back intact.
 ///
 /// This test used to assert the opposite -- that the host id was zeroed, so

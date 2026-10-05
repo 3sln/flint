@@ -52,9 +52,15 @@ name = "bench"
 required-features = ["host-tools"]
 
 [dependencies]
-# Pure-Rust no_std libm. The only dependency: it is what makes clojure.math
+# Pure-Rust no_std libm. The only dependency on EVERY target: it is what makes clojure.math
 # possible in a bare wasm build (no libc, no JVM Math).
 libm = { version = "0.2", default-features = false }
+
+# A host heap RESERVES its ceiling as address space and commits a prefix
+# (`DECISIONS.md#growable-heap`), which is `mmap` and `mprotect` -- three calls
+# std does not expose. Windows declares its two `kernel32` calls in `mem.rs`.
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", default-features = false }
 
 # The opcode-coverage instrument reads the diagnostics census, so it only
 # exists in that build. Declared rather than `#[cfg]`-ed out, so

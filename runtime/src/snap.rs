@@ -486,7 +486,7 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
     // a field on `Space` costs 1 412 bytes on every module -- `take` is on the
     // allocation path and the extra branch is not free.
     for (addr, len, _) in &plan {
-        if (*addr as u64) + (*len as u64) > memory_bytes() {
+        if (*addr as u64) + (*len as u64) > memory_bytes() || !rt.gc.sp.ensure(*addr + *len) {
             unsafe { REFUSED = REFUSE_LAYOUT };
             return false;
         }

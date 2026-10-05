@@ -21,6 +21,21 @@ import java.lang.foreign.ValueLayout;
 /// differs from the Rust in more than syntax, because it is the only one that
 /// touches the platform.
 ///
+/// ## It starts small and grows (`DECISIONS.md#growable-heap`)
+///
+/// `Arena.allocate` ZERO-FILLS EAGERLY on OpenJDK 25: backing a 2 GB ceiling
+/// up front took 2 240 ms and 2.19 GB resident before the first instruction
+/// (measured 2026-10-05, `/usr/bin/time -l` over a five-line probe). So the
+/// segment covers only `committed` bytes, sized by the shared policy in
+/// `kin/heapgrow.kin`, and `take` grows it -- a bigger segment, the used
+/// prefix copied, the old arena closed. The CEILING is still `reserved` and
+/// `take` still refuses past it first, so the catchable limit is unchanged.
+///
+/// Moving the segment is safe for the reason a moving collection is: `mem` is
+/// private, every access goes through it, and `take` only runs inside a
+/// collection or a large allocation -- the two that `gcWouldCollect` stages
+/// with every other executor stopped.
+///
 /// ## Lifetime is ours
 ///
 /// An `Arena` owns the mapping, and closing it frees the heap immediately
@@ -35,13 +50,15 @@ public final class Space implements AutoCloseable {
 
     public static final long PAGE = 65536;
 
-    private final Arena arena;
-    private final MemorySegment mem;
+    private Arena arena;
+    private MemorySegment mem;
 
-    /// How much of the space has been handed out, and how much there is.
-    /// `Addr`-wide, because a space can exceed 4 GB now.
+    /// How much of the space has been handed out, and the ceiling it may
+    /// never pass. `Addr`-wide, because a space can exceed 4 GB now.
     public long inUse;
     public long reserved;
+    /// How much of `reserved` the segment actually covers.
+    public long committed;
 
     public Space(long bytes) {
         // LITTLE-ENDIAN, PINNED -- see the Rust runtime's `lib.rs`. The heap
@@ -49,9 +66,10 @@ public final class Space implements AutoCloseable {
         // big-endian JVM would read every other runtime's export wrong.
         if (java.nio.ByteOrder.nativeOrder() != java.nio.ByteOrder.LITTLE_ENDIAN)
             throw new IllegalStateException("flint's heap and live-set format are little-endian; this JVM is not");
-        this.arena = Arena.ofShared();
-        this.mem = arena.allocate(bytes, 8);
         this.reserved = bytes;
+        this.committed = com._3sln.flint.kgen.rt.Heapgrow.spaceInitial(bytes);
+        this.arena = Arena.ofShared();
+        this.mem = arena.allocate(committed, 8);
         // Address 0 is never a valid object, so nothing is handed out from it.
         this.inUse = PAGE;
     }
@@ -66,9 +84,35 @@ public final class Space implements AutoCloseable {
     public long take(long len) {
         len = alignUp(len, PAGE);
         if (inUse + len > reserved) return 0;
+        if (!ensure(inUse + len)) return 0;
         long a = inUse;
         inUse += len;
         return a;
+    }
+
+    /// Back every byte below `end`. False past the ceiling, or when the host
+    /// cannot find the bytes -- which the caller reports as the same
+    /// catchable limit a full space always was.
+    public boolean ensure(long end) {
+        if (end > reserved) return false;
+        if (end <= committed) return true;
+        long want = com._3sln.flint.kgen.rt.Heapgrow.spaceGrowTo(committed, end, reserved);
+        Arena next = Arena.ofShared();
+        MemorySegment grown;
+        try {
+            grown = next.allocate(want, 8);
+        } catch (OutOfMemoryError e) {
+            next.close();
+            return false;
+        }
+        // The USED prefix, not the whole old segment: above `inUse` nothing
+        // has been handed out, and the new segment is already zero there.
+        MemorySegment.copy(mem, 0, grown, 0, Math.min(inUse, committed));
+        arena.close();
+        arena = next;
+        mem = grown;
+        committed = want;
+        return true;
     }
 
     public int readU32(long addr) { return mem.get(I32, addr); }

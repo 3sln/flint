@@ -1509,6 +1509,58 @@ public static class Program {
         return 0;
     }
 
+    /// A large ceiling starts small and grows, keeping what was written, and the
+    /// ceiling is still where `Take` says no (`DECISIONS.md#growable-heap`).
+    /// Mirrors `mem.rs` and the JVM's `heapGrows`.
+    static bool HeapGrows() {
+        const long M = 1L << 20;
+        using (var s = new Flint.Rt.Space(1L << 30)) {
+            if (s.Committed != 8 * M) { Console.WriteLine($"  FAIL a 1 GB ceiling backed {s.Committed} at birth"); return false; }
+            long a = s.Take(4 * M);
+            s.WriteU64(a, 0x12345678L);
+            var runs = new long[20];
+            for (int i = 0; i < 20; i++) {
+                runs[i] = s.Take(4 * M);
+                if (runs[i] == 0) { Console.WriteLine("  FAIL take failed below the ceiling"); return false; }
+                s.WriteU8(runs[i] + 4 * M - 1, 0xab);
+            }
+            if (s.Committed != 128 * M) { Console.WriteLine($"  FAIL committed {s.Committed}, expected 128 MiB"); return false; }
+            if (s.ReadU64(a) != 0x12345678L) { Console.WriteLine("  FAIL growth lost a write"); return false; }
+            foreach (long r in runs)
+                if (s.ReadU8(r + 4 * M - 1) != 0xab) { Console.WriteLine("  FAIL growth lost a run"); return false; }
+            long z = s.Take(Flint.Rt.Space.Page);
+            if (s.ReadU64(z) != 0) { Console.WriteLine("  FAIL a fresh run is not zero"); return false; }
+        }
+        using (var s = new Flint.Rt.Space(24 * M)) {
+            if (s.Take(10 * M) == 0) { Console.WriteLine("  FAIL 10 MiB of 24 refused"); return false; }
+            if (s.Committed != 16 * M) { Console.WriteLine($"  FAIL 8 MiB should double to 16, not {s.Committed}"); return false; }
+            if (s.Take(12 * M) == 0) { Console.WriteLine("  FAIL 22 MiB of 24 refused"); return false; }
+            if (s.Committed != 24 * M) { Console.WriteLine($"  FAIL growth passed the ceiling: {s.Committed}"); return false; }
+            if (s.Take(2 * M) != 0) { Console.WriteLine("  FAIL a run past the ceiling was handed out"); return false; }
+            if (s.Take(2 * M - Flint.Rt.Space.Page) == 0) { Console.WriteLine("  FAIL the last run below the ceiling was refused"); return false; }
+            if (s.Ensure(s.Reserved + 1)) { Console.WriteLine("  FAIL Ensure passed the ceiling"); return false; }
+        }
+        Console.WriteLine("  ok   a 1 GB space starts at 8 MiB, grows to 128 MiB keeping its bytes, stops at the ceiling");
+
+        // THE CEILING, end to end -- see the JVM's `heapGrows`.
+        var rt = new Flint.Rt.Rt(2L * 1024 * 1024, 64L * 1024 * 1024);
+        int mark = rt.Mark();
+        int n = 0;
+        while (true) {
+            long a = rt.Alloc(Flint.Rt.Obj.TyNode, 131_071);
+            if (a == 0) break;
+            rt.Push(Flint.Rt.Val.Heap(a));
+            n++;
+        }
+        long grown = rt.gc.sp.Committed;
+        rt.PopTo(mark);
+        if (n != 56 || grown <= 8 * M || grown > 64 * M) {
+            Console.WriteLine($"  FAIL fill: {n} nodes, committed {grown}"); return false;
+        }
+        Console.WriteLine("  ok   a 64 MiB heap holds 56 1 MiB nodes and then refuses, as before it could grow");
+        return true;
+    }
+
     private static int RtFoundation() {
         foreach (long off in new long[]{8, 16, 0x1000, 0xFFFF_FFFFL, 0x1_0000_0000L,
                                         0x0000_FFFF_FFFF_FFF8L}) {
@@ -1546,6 +1598,7 @@ public static class Program {
             Console.WriteLine("  FAIL a 48-bit forward did not survive the header"); return 1;
         }
         Console.WriteLine("  ok   objects, mark bits and 48-bit forwarding");
+        if (!HeapGrows()) return 1;
 
         GcStress();
         Interpreter();

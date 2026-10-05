@@ -54,10 +54,10 @@ previous JVM port used `Object` for every value, measured 85 ns per iteration
 on a counting loop, and concluded *"Boxing is not a detail here; it was the
 ceiling."* A value is now a NaN-boxed `long`; the heap is a `MemorySegment`
 from a shared `Arena`, off-heap and invisible to the host collector
-(`Space.java:7-29`); and the collector is flint's own, ported verbatim from
+(`Space.java:7-22`); and the collector is flint's own, ported verbatim from
 `runtime/src/gc.rs`, generational, copying in the nursery, with forwarding
 pointers and a shadow stack (`Gc.java:7-14`, `Roots.java:5-28`). The CLR is the
-same over `NativeMemory.AllocZeroed` and a raw `byte*` (`Space.cs:20-36`,
+same over `NativeMemory.AllocZeroed` and a raw `byte*` (`Space.cs:28-50`,
 `Gc.cs:7-15`).
 
 > **A stale claim to fix while doing this.** `other-hosts`'s tier-2 paragraph says a
