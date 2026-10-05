@@ -14326,3 +14326,98 @@ done as part of a refactor.
   inside lists and vectors — not inside a quoted map or set literal, which
   nothing in the tree writes.
 * Gensym numbering follows one read instead of two.
+
+## stdlib-preread
+
+**The native CLI ships the standard library already read, as forms the compiler checks before it trusts**
+
+**Ratified:** ☐ not signed off
+
+**Status (2026-10-05): built, native CLI only.** `cli/build.rs` loads
+`dist/flintc.bytecode` -- the compiler the binary embeds -- and calls its new
+`preread` mode over every `lib/` file, once under the default feature set and
+once under `:optimize [perf]`'s `#{:flint :flint/nested}`. The answer is
+`{path {:opts .. :forms ..}}`, encoded by the host codec, which writes every
+form's metadata; each file's entry is stored as its own byte range of one blob
+per feature set, embedded with `include_bytes!`. A compile hands a stdlib file
+over as `{:src text :preread <those bytes spliced in>}` and
+`flint.project/read-entry` uses the forms only when their `:opts` equal the
+`read-options` this compile would read with -- `:file`, `:features`, `:tags`,
+`:dialect` -- and reads the text otherwise. Held by `bb test/cli.clj`: the
+`FLINT_CHECK_SPLIT` rows compare the pre-read compile's image with one whose
+spec carries every file as text (`identical=true`, with and without
+`:optimize [perf]`), and a control row asserts the pre-read is actually USED
+(words: 0.52 M split-steps against 4.39 M with `FLINT_PREREAD=0`).
+
+Measured 2026-10-05, branch `stdlib-preread` off `4192d734`, load averages
+20-45, the binary from `4192d734` against this one, same harness:
+`FLINT_CHECK_SPLIT`'s `split-steps` (flint instructions, one run, deterministic)
+hello 4.35 M -> 0.49 M, life 4.36 M -> 0.49 M, words 4.39 M -> 0.52 M; the
+whole `flint run` process, `/usr/bin/time -l` "instructions retired", three
+runs each, hello 11.66 G -> 6.52 G, life 13.25 G -> 8.15 G, words
+12.56 G -> 7.44 G. Images: `flint compile :to :llvm` of every `corpus/*.cljc`,
+with and without `:optimize [perf]`, both binaries -- 42 of 42 `.ll` files
+byte-identical; `caesar` and `dijkstra` fail with byte-identical messages on
+both. `bb test/door-agreement.clj` green: the npm CLI and `bin/flint` still read
+text and still produce the same bytes.
+
+### Why the compiler pre-reads, at cargo time
+
+One reader. `bin/flint` (babashka) running the reader's source would be the
+same source on a different host, and the doors are held byte-identical, so a
+bb-hosted read that differed in any detail -- number types, map construction,
+gensym naming -- would split the native door from the other two. The build
+script runs the bytecode that ships, so the forms are the ones that compiler
+would read at run time; the only thing between them is the codec round trip,
+which the image comparison above covers.
+
+At CARGO time rather than as a `dist/` artefact, because then there is nothing
+new to go stale: cargo already reruns `build.rs` when `dist/` or `lib/` moves,
+and `bin/check-dist`'s stamp already says whether `dist/flintc.bytecode`
+matches `src/` and `lib/`. A `dist/stdlib.forms` would have needed its own
+stamp. The price is `flint-rt` and `flint-conc` compiled a second time as
+build-dependencies (`flint-conc` because the compiler image names
+`flint/spawn` and does not LOAD without it; the first build attempt failed
+exactly so).
+
+### Why the forms carry their read options, and the guest decides
+
+The read depends on more than the text: `#?(:flint/check ...)` appears 25
+times in `lib/`, so the default and `:optimize [perf]` read different forms,
+and a workspace's `:tags` and a file's dialect also feed the reader. The
+CLI's choice of blob is only an optimisation (`preread_for` in
+`cli/src/main.rs`: an explicit `:features` gets none); the guest compares the
+whole option map and falls back to the text, which always travels beside the
+forms. So a wrong blob, a stdlib workspace that later binds tags, or a
+project file that shadows a stdlib path (`SplitFiles::preread_of` also
+checks the body is the stdlib's own text) costs speed and never correctness.
+A cache that misses is still invisible to every suite, which is why
+`test/cli.clj` asserts the instruction drop rather than the bytes alone.
+
+### What it costs
+
+* Binary: 5.78 MB -> 13.74 MB. Each blob is about 4.2 MB (default
+  4 245 200 bytes, perf 4 234 670), against 403 KB of source: the codec has
+  no sharing, so every form repeats `:line`/`:column`/`:file` keys and its
+  file name.
+* Memory: every compile decodes all 38 files' forms, reachable or not.
+  Peak RSS for `run-hello` 22.1 MB -> 33.1 MB (same new binary with
+  `FLINT_PREREAD=0` against without), which is why
+  `test/resource-budgets.edn` lowered its CPU and instruction baselines and
+  not its RSS ones.
+
+### Open, for the maintainer
+
+* Size: a pooled codec variant (`runtime/src/codec.rs` already names one as a
+  later optimisation), or deflate (`flate2` is already a dependency) at the
+  price of inflating per run, or sharing the blob between the two feature
+  sets for the files that contain no reader conditional.
+* Decoding everything per compile: handing over only what the program
+  reaches needs the resolver to ask the host for a file, which today it
+  cannot do without a new host native the other doors would not carry.
+* The npm CLI and `bin/flint` still read text. They could take the same
+  forms -- the npm door runs the same compiler -- but neither is the door
+  this was measured on, and their images already agree.
+* `preread` is a mode of `flint.selfhost/main` and so reachable through
+  `flintc.wasm` by any host; whether that makes it a published surface for
+  `doc/api-review.md` is undecided.

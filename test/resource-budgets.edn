@@ -64,6 +64,19 @@
 ;; load-insensitive number this gate has access to (AGENTS.md#3's
 ;; "RE-MEASURED ... IN INSTRUCTIONS, because wall time ... was useless"), and
 ;; a regression that burns CPU in-process (not via the kernel) would move it.
+;; RE-MEASURED 2026-10-05 for `cpu-s` and `instructions` ONLY, at branch
+;; `stdlib-preread`, because both DROPPED when the
+;; native CLI began shipping `lib/` pre-read (`DECISIONS.md#stdlib-preread`):
+;; same command shape, `bin/check-resources` run three times, load averages
+;; 20-45, instructions stable to ~0.3%. Ceilings re-derived at ~5x the new
+;; baselines, as above. RSS was NOT lowered, because it ROSE: 22 -> 32 MB for
+;; run-hello, 26-28 -> 36-39 MB for the corpus rows, 37 -> 48 MB for
+;; compile-wasm-hello (the binary from 4192d734 against this branch's, same
+;; tool). The cause is the decode, not the larger binary: the same new binary
+;; with `FLINT_PREREAD=0` peaks at 22.1 MB on run-hello against 33.1 MB without
+;; it -- all 38 pre-read files are decoded into the compiler's heap on every
+;; compile, reachable or not. The old RSS baselines stand; the flat 200 MB ceiling
+;; still holds with room.
 {:measured
  {:date "2026-10-01"
   :host "macOS (Darwin 23.6.0, arm64, M-series), load averages ~14-26"
@@ -75,34 +88,34 @@
    :kind :run
    :dir "test/resource-fixtures"
    :fn "hello/main"
-   :baseline {:rss-mb 27 :cpu-s 3.30 :instructions 17356000000}
-   :ceiling  {:rss-mb 200 :cpu-s 17 :instructions 87000000000}}
+   :baseline {:rss-mb 27 :cpu-s 1.40 :instructions 6552000000}
+   :ceiling  {:rss-mb 200 :cpu-s 7 :instructions 33000000000}}
 
   {:name "run-life"
    :kind :run
    :dir "corpus"
    :fn "life/main"
-   :baseline {:rss-mb 32 :cpu-s 3.49 :instructions 18968000000}
-   :ceiling  {:rss-mb 200 :cpu-s 18 :instructions 95000000000}}
+   :baseline {:rss-mb 32 :cpu-s 1.65 :instructions 8140000000}
+   :ceiling  {:rss-mb 200 :cpu-s 9 :instructions 41000000000}}
 
   {:name "run-nqueens"
    :kind :run
    :dir "corpus"
    :fn "nqueens/main"
-   :baseline {:rss-mb 31 :cpu-s 3.42 :instructions 18524000000}
-   :ceiling  {:rss-mb 200 :cpu-s 18 :instructions 93000000000}}
+   :baseline {:rss-mb 31 :cpu-s 1.62 :instructions 7716000000}
+   :ceiling  {:rss-mb 200 :cpu-s 9 :instructions 39000000000}}
 
   {:name "run-words"
    :kind :run
    :dir "corpus"
    :fn "words/main"
-   :baseline {:rss-mb 32 :cpu-s 3.43 :instructions 18266000000}
-   :ceiling  {:rss-mb 200 :cpu-s 18 :instructions 92000000000}}
+   :baseline {:rss-mb 32 :cpu-s 1.57 :instructions 7445000000}
+   :ceiling  {:rss-mb 200 :cpu-s 8 :instructions 37000000000}}
 
   {:name "compile-wasm-hello"
    :kind :compile
    :dir "test/resource-fixtures"
    :fn "hello/main"
    :to "wasm"
-   :baseline {:rss-mb 40 :cpu-s 4.39 :instructions 23776000000}
-   :ceiling  {:rss-mb 200 :cpu-s 22 :instructions 119000000000}}]}
+   :baseline {:rss-mb 40 :cpu-s 2.50 :instructions 12966000000}
+   :ceiling  {:rss-mb 200 :cpu-s 13 :instructions 65000000000}}]}

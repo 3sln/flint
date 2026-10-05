@@ -51,6 +51,15 @@ serde_json = "1.0.151"
 rmp-serde = "1.3.1"
 serde = "1.0.229"
 
+[build-dependencies]
+# The runtime AGAIN, for the build script: it runs the compiler in `dist/` over
+# `lib/` so the binary ships the standard library already read
+# (`DECISIONS.md#stdlib-preread`).
+flint-rt = { path = "../runtime" }
+# The compiler image names green-thread builtins (`flint/spawn`), so it does not
+# LOAD without the unit that carries them, whether or not reading calls one.
+flint-conc = { path = "../units-src/flint-conc" }
+
 [profile.release]
 opt-level = "z"
 lto = true

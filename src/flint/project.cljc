@@ -89,6 +89,42 @@
               {:ns (:ns m) :include (vec (:include m)) :exclude (vec (:exclude m))})))
         (or entries [])))
 
+(defn read-options
+  "Every option the read of a resolver answer `s` takes, as one map.
+
+  THE ONLY READ: the forms are what the compiler analyses, because the reader
+  depends on nothing it learns (`DECISIONS.md#context-free-reader`). Every
+  option a read takes is here, and a caller that compiles from `:src` instead
+  must pass the same ones (`DECISIONS.md#reader-tags`).
+
+  It is a VALUE because it is also the KEY a pre-read file is checked against
+  (`DECISIONS.md#stdlib-preread`): forms read ahead of time stand in for this
+  read only when they were read under exactly these options. `:tags` is
+  normalised to nil when empty because the reader merges it over the built-in
+  tags, so `{}` and nil read the same text identically and must not miss."
+  [s features]
+  {:file (:file s)
+   :features features
+   :tags (not-empty (:tags s))
+   :dialect (or (:dialect s) (dialect-of (:file s)))})
+
+(defn read-entry
+  "The forms of resolver answer `s`, read under `features`.
+
+  A PRE-READ answer (`:preread {:opts .. :forms ..}`, `DECISIONS.md#stdlib-preread`)
+  is used INSTEAD of reading only when its `:opts` equal `read-options` for this
+  read; anything else -- another feature set, another workspace's tags -- reads
+  the text, which is always there beside it. So a pre-read entry can make a
+  compile faster and never different: the check is the whole read's input
+  apart from the text, and the text is the one it was read from because they
+  arrive as one entry."
+  [s features]
+  (let [opts (read-options s features)
+        pre (:preread s)]
+    (if (and pre (= (:opts pre) opts))
+      (:forms pre)
+      (reader/read-all (:src s) opts))))
+
 (defn collect
   "Read from `roots` outwards. `resolve-ns` takes a namespace symbol and returns
   nil, or what that namespace IS:
@@ -144,18 +180,7 @@
                      (conj order n)
                      missing)
             (let [dialect (or (:dialect s) (dialect-of (:file s)))
-                  forms (reader/read-all (:src s) {:file (:file s)
-                                                   :features features
-                                                   :tags (:tags s)
-                                                   ;; THE ONLY READ: `:forms` below is what
-                                                   ;; the compiler analyses, because the
-                                                   ;; reader depends on nothing it learns
-                                                   ;; (`DECISIONS.md#context-free-reader`).
-                                                   ;; Every option a read takes is here, and
-                                                   ;; a caller that compiles from `:src`
-                                                   ;; instead must pass the same ones
-                                                   ;; (`DECISIONS.md#reader-tags`).
-                                                   :dialect dialect})
+                  forms (read-entry s features)
                   reqs (compiler/ns-requires (or (ns-form forms) '(ns x)))
                   ;; A PRELUDE ENTRY IS AN IMPLICIT REQUIRE, and has to create
                   ;; the same edge. Its names resolve without a `:require`, so
@@ -183,6 +208,29 @@
                      missing)))
             (recur (vec (rest todo)) sources order (conj missing n)))))
       {:sources sources :order order :missing missing})))
+
+(defn file-answer
+  "What `files-resolver` answers for the SOURCE FILE at `path`, which must be
+  in `files`. Apart from the resolver so the pre-read step
+  (`flint.selfhost/preread`) asks exactly the question a compile asks of each
+  file, and so cannot read it under options the compile would not use."
+  [files workspaces path]
+  (let [w (first (filter (fn [w] (let [pre (:prefix w)]
+                                   (or (nil? pre) (= "" pre)
+                                       (str/starts-with? (str path) (str pre)))))
+                         (or workspaces [])))
+        ;; A BODY IS TEXT, OR TEXT WITH ITS FORMS ALREADY READ:
+        ;; `{:src text :preread {:opts .. :forms ..}}`, which is how the
+        ;; native CLI hands over the standard library
+        ;; (`DECISIONS.md#stdlib-preread`). `read-entry` decides whether
+        ;; the forms apply; this only passes them on.
+        body (get files path)
+        pre? (map? body)]
+    {:src (if pre? (:src body) body) :preread (when pre? (:preread body))
+     :file path :dialect (dialect-of path)
+     :workspace (:name w) :tags (:tags w)
+     :prelude (normalise-prelude (:prelude w))
+     :grants (set (:grants w)) :guard (set (:guard w))}))
 
 (defn files-resolver
   "A namespace resolver over a flat map of `path -> source`, which is what a
@@ -231,14 +279,7 @@
           :grants (set (:grants virt)) :guard (set (:guard virt))}
        (when-let [path (first (filter (fn [p] (contains? files p))
                                       (mapv (fn [e] (str base e)) source-extensions)))]
-         (let [w (first (filter (fn [w] (let [pre (:prefix w)]
-                                          (or (nil? pre) (= "" pre)
-                                              (str/starts-with? (str path) (str pre)))))
-                                (or workspaces [])))]
-           {:src (get files path) :file path :dialect (dialect-of path)
-            :workspace (:name w) :tags (:tags w)
-            :prelude (normalise-prelude (:prelude w))
-            :grants (set (:grants w)) :guard (set (:guard w))})))))))
+         (file-answer files workspaces path)))))))
 
 (defn- a-cycle
   "One concrete loop among `pending`, as `[a b .. a]`.

@@ -281,17 +281,29 @@ fn workspace_entry(prefix: &str, w: &Workspace, fallback_name: &str) -> String {
 /// instead of the compiler reading them as EDN string literals
 /// (`build_spec_split` says what that cost). The answer is what the mode
 /// answers -- the same string `main` renders -- so callers do not change.
-fn compile_split(c: &mut Program, args: &[&str], files: &BTreeMap<String, String>)
+fn compile_split(c: &mut Program, args: &[&str], files: &SplitFiles)
                  -> flint_rt::native::Outcome {
     use flint_rt::codec::{Val, Wire};
-    let mut inner = vec![
-        Val::Str("split".into()),
-        Val::Map(files.iter().map(|(k, v)| (Val::Str(k.clone()), Val::Str(v.clone()))).collect()),
-    ];
-    inner.extend(args.iter().map(|a| Val::Str((*a).into())));
-    let call = Val::Vector(vec![Val::Str("flint.selfhost/main".into()), Val::Vector(inner)]);
+    // WRITTEN BY HAND rather than built as a `Val` tree, so a pre-read file's
+    // forms are SPLICED in as the bytes `build.rs` encoded -- never parsed into
+    // a tree here only to be written straight back out.
     let mut w = Wire::new();
-    call.write(&mut w);
+    w.vector(2).string("flint.selfhost/main").vector(2 + args.len() as u32).string("split");
+    w.map(files.bodies.len() as u32);
+    for (k, v) in &files.bodies {
+        w.string(k);
+        match files.preread_of(k, v) {
+            // `{:src text :preread {:opts .. :forms ..}}`, which
+            // `flint.project/file-answer` takes apart (`DECISIONS.md#stdlib-preread`).
+            Some(forms) => {
+                w.map(2).keyword(None, "src").string(v).keyword(None, "preread").raw(forms);
+            }
+            None => { w.string(v); }
+        }
+    }
+    for a in args {
+        w.string(a);
+    }
     let fail = |out: String| flint_rt::native::Outcome { code: 1, out };
     match c.call(&w.done()) {
         Err(e) => fail(e),
@@ -310,6 +322,49 @@ fn compile_split(c: &mut Program, args: &[&str], files: &BTreeMap<String, String
             },
         },
     }
+}
+
+/// The file bodies a split compile hands over, and which pre-read standard
+/// library goes with them (`DECISIONS.md#stdlib-preread`).
+pub(crate) struct SplitFiles {
+    bodies: BTreeMap<String, String>,
+    /// The embedded blob and its index for the FEATURE SET this compile reads
+    /// under, or `None` when it reads under one nothing was pre-read for.
+    preread: Option<(&'static [u8], &'static [(&'static str, usize, usize)])>,
+}
+
+impl SplitFiles {
+    /// The encoded `{:opts .. :forms ..}` for `path`, when there is one AND the
+    /// body being sent is the standard library's own text. A project file can
+    /// sit at a stdlib path and replace it (`files.extend(mine)`), and its text
+    /// must then be read, not paired with forms read from somebody else's.
+    fn preread_of(&self, path: &str, body: &str) -> Option<&'static [u8]> {
+        let (blob, index) = self.preread?;
+        let i = index.binary_search_by(|e| e.0.cmp(path)).ok()?;
+        let lib = STDLIB.iter().find(|e| e.0 == path)?.1;
+        (lib == body).then(|| &blob[index[i].1..index[i].2])
+    }
+}
+
+/// Which pre-read blob a compile under `features`/`strip_checks` can use.
+///
+/// THE SAME TWO CASES `build_spec_impl` writes `:features` for, and no more: an
+/// explicit set gets none, because the guest would refuse a mismatch anyway
+/// and sending forms only to have them refused is decoding for nothing. The
+/// guest's check is what makes this SAFE; this only makes it cheap. Off with
+/// `FLINT_PREREAD=0`, which is how the saving is measured and how a suspected
+/// pre-read defect is ruled in or out.
+fn preread_for(features: Option<&[String]>, strip_checks: bool)
+               -> Option<(&'static [u8], &'static [(&'static str, usize, usize)])> {
+    if std::env::var("FLINT_PREREAD").is_ok_and(|v| v == "0") {
+        return None;
+    }
+    let want = match (features, strip_checks) {
+        (Some(_), _) => return None,
+        (None, true) => "strip",
+        (None, false) => "default",
+    };
+    STDLIB_PREREAD.iter().find(|v| v.0 == want).map(|v| (v.1, v.2))
 }
 
 fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
@@ -334,14 +389,15 @@ fn build_spec_split(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>
                     pods: &[(String, Vec<String>)],
                     strip_checks: bool,
                     features: Option<&[String]>)
-                    -> Result<(String, BTreeMap<String, String>)> {
+                    -> Result<(String, SplitFiles)> {
     if std::env::var("FLINT_SPEC_OUT").is_ok() {
         // Writes the full spec for the comparison; the split one is what runs.
         build_spec_with(srcs, entry, slots, aot, shake, meta, roots, pods, strip_checks,
                         features)?;
     }
-    build_spec_impl(srcs, entry, slots, aot, shake, meta, roots, pods, strip_checks,
-                    features, true)
+    let (spec, bodies) = build_spec_impl(srcs, entry, slots, aot, shake, meta, roots, pods,
+                                         strip_checks, features, true)?;
+    Ok((spec, SplitFiles { bodies, preread: preread_for(features, strip_checks) }))
 }
 
 #[allow(clippy::too_many_arguments)]
