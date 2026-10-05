@@ -6301,7 +6301,9 @@ An extension makes the claim explicit, and a resolver tag makes it checkable.
   the reason `default-features` records: a value only one reader knows about is
   a value the other two get wrong. `read-namespace!` takes it off the compile
   context rather than as a sixth argument, because `compile-image` has already
-  lifted it there.
+  lifted it there. *(2026-10-01: there is now ONE read in a compile —
+  `compiler/read-source` runs only when the resolver kept no forms, and
+  `bin/flint` reuses `collect`'s — see `DECISIONS.md#context-free-reader`.)*
 * **What a `.fln` that requires a portable namespace means for the OTHER
   platform** is still unanswered, and is deliberately not the reader's
   question. This check is about one file's own surface. A `.cljc` that requires
@@ -14263,3 +14265,64 @@ check, carrying the protocol they speak. The function-style `flint.sys.fs`,
 a port implementation sends, which the host serves. `slurp` is a GET, so it
 becomes a use of `Resources` rather than a namespace of its own. Nothing is published yet,
 so this breaks no user (the maintainer, 2026-09-30).
+
+## context-free-reader
+
+**The reader is a function of the text; syntax quote resolves its symbols at analysis**
+
+**Ratified:** ☐ not signed off
+
+**Status (2026-10-01): built.** `flint.reader` no longer takes a `:resolve`
+hook. Syntax quote reads a symbol whose meaning is compile state as
+`(flint.reader/syntax-quoted sym)`, and `flint.analyzer/resolve-syntax-quoted`
+turns it into `(quote <resolved>)` when the form is analysed, in the namespace
+being compiled. Gensyms, `.method` and special forms need no context and are
+still `(quote sym)` from the reader. A top-level `(ns ...)` sets the namespace
+and aliases `::kw` resolves against inside the reader itself. `compile-image`
+takes each source's `:forms` from the resolver (`flint.project/collect`, and
+`bin/flint`'s `collect`) and reads only when a caller supplied none. The check
+is `bb --classpath src test/reader_test.clj` for the reader shape. Images
+were compared against a build of `246ac6c1` in a second worktree, by
+`flint compile :to llvm` (the IR embeds the image and, unlike `:to wasm`, no
+runtime build paths): byte-identical for all 21 corpus programs that compile,
+with and without `:optimize [perf]`; `caesar` and `dijkstra` fail to compile
+identically on both. Compile cost of `flint run`, `FLINT_CHECK_SPLIT`'s
+`split-steps`: hello 8.21 M -> 4.35 M, words 8.25 M -> 4.39 M, life
+8.22 M -> 4.36 M flint instructions; the whole process, `/usr/bin/time -l`
+"instructions retired", three runs each: hello 17.35 G -> 11.66 G.
+
+### What was decided
+
+The reader asked the compiler, mid-read, what an unqualified symbol inside
+`` ` `` named. So a file's forms depended on WHEN it was read, and the read
+that finds a file's requires could not be the read that compiles it: every
+file was read twice per compile, and the second read was 3.9 M of a trivial
+`flint run`'s 8.2 M instructions. A marker form costs the analyzer one case.
+
+### The rule is the one the reader applied, not Clojure's
+
+The hook consulted, in order, the namespace's `:refers`, its own declared
+names, `clojure.core`'s, and the bootstrap macros. It ran while every
+namespace was being READ and none ANALYSED, so `:refers` was always empty and
+the namespace's own names were not declared yet: those two arms never
+answered. The effective rule was `clojure.core` if its read pass declared the
+name or it is a bootstrap macro, else the current namespace — and that is
+what analysis applies, so expansions are unchanged.
+
+**Open, for the maintainer:** at analysis both dead arms COULD answer, which
+is Clojure's behaviour — a referred name in a syntax quote would resolve to
+its source namespace (today it becomes `this.ns/name`, an error at the use
+site unless `clojure.core` happens to declare the name), and a name the
+namespace defines over a `clojure.core` one would resolve to the namespace's
+own. Turning them on changes what existing macros expand to, so it was not
+done as part of a refactor.
+
+### Visible differences
+
+* A macro inspecting an ARGUMENT that is a syntax quote sees
+  `(flint.reader/syntax-quoted x)` where it saw `(quote ns/x)`; passed through
+  into the expansion, the two evaluate to the same value. A syntax quote that
+  is itself quoted (`'`x`) is resolved by the `quote` arm and reads as before,
+  inside lists and vectors — not inside a quoted map or set literal, which
+  nothing in the tree writes.
+* Gensym numbering follows one read instead of two.

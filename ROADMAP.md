@@ -1178,8 +1178,9 @@ Recorded 2026-09-11. Full spec at `DECISIONS.md#dialects-and-preludes`.
       `:tags`, `:grants`, `:guard`, `:virtual`
 - [x] Enforcement at the READER, not the graph — **built 2026-09-11.** A
       flint-only reader tag in a `.cljc` is refused, naming `.fln`. The
-      `:dialect` rides all THREE reads of a source (`collect`, `bin/flint`,
-      `compiler/read-namespace!`). What is flint-only is
+      `:dialect` rides every read of a source — since 2026-10-01 one per
+      compile, `collect`'s, reused by the compiler
+      (`DECISIONS.md#context-free-reader`). What is flint-only is
       `flint.reader/portable-tags` — an empty LIST of the names every
       Clojure-family reader binds, rather than a hardcoded "all of them".
       The unbound-tag error still comes first. There is NO edge rule on

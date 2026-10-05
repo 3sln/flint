@@ -198,14 +198,19 @@
         (let [result (compiler/compile-image
                       ;; `:tags` and `:workspace` travel WITH the source. This
                       ;; used to hand on `:src` and `:file` only, and the compiler
-                      ;; reads each file again -- so a tag the resolver bound was
+                      ;; read each file again -- so a tag the resolver bound was
                       ;; known to `collect` and unknown here, and `#x` read as an
                       ;; unbound tag however carefully the workspace declared it.
-                      ;; `compiler.cljc` says a file is read three times and a
-                      ;; value only one reader knows is one the others get wrong;
-                      ;; this was that, and the SDK having no tags at all is why
+                      ;; A value only one reader knows is one the others get
+                      ;; wrong; this was that, and the SDK having no tags at all is why
                       ;; nothing caught it (`DECISIONS.md#reader-tags`, `workspace-capabilities`).
                       {:sources (into {} (map (fn [e] [(key e) {:src (:src (val e))
+                                                                ;; THE FORMS the resolver
+                                                                ;; already read, so the
+                                                                ;; compiler does not read
+                                                                ;; the file a second time
+                                                                ;; (`flint.compiler/read-source`).
+                                                                :forms (:forms (val e))
                                                                 :file (:file (val e))
                                                                 :tags (:tags (val e))
                                                                 :workspace (:workspace (val e))

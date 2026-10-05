@@ -61,10 +61,24 @@
 
 (println "reader: syntax quote")
 (let [st (r/reader "`(a ~b ~@c)" {:ns 'my.ns})]
+  ;; A symbol is LEFT for the analyzer to resolve (`flint.reader/syntax-quoted`):
+  ;; what `a` names is compile state, and the reader does not depend on it.
   (check "syntax quote" (r/read-form st)
-         '(clojure.core/seq (clojure.core/concat (clojure.core/list (quote my.ns/a))
+         '(clojure.core/seq (clojure.core/concat (clojure.core/list (flint.reader/syntax-quoted a))
                                                  (clojure.core/list b)
                                                  c))))
+(check "  ... and reads the same whatever namespace the reader was given"
+       (r/read-form (r/reader "`(a x/b)" {:ns 'my.ns :aliases {'x 'other.ns}}))
+       (r/read-one "`(a x/b)"))
+(check "  ... while what needs no context is decided here"
+       (r/read-one "`(if .m &)")
+       '(clojure.core/seq (clojure.core/concat (clojure.core/list (quote if))
+                                               (clojure.core/list (quote .m))
+                                               (clojure.core/list (quote &)))))
+(check "  ... and a nested syntax quote's symbol is quoted data to the outer one"
+       (r/read-one "``a")
+       '(clojure.core/seq (clojure.core/concat (clojure.core/list (quote quote))
+                                               (clojure.core/list (flint.reader/syntax-quoted a)))))
 (let [st (r/reader "`x#" {:ns 'my.ns})
       f (r/read-form st)]
   (check "gensym form" (and (seq? f) (= 'quote (first f)) (str/starts-with? (name (second f)) "x__")) true))
@@ -79,6 +93,31 @@
   (check "literals inside syntax quote"
          (r/read-form st)
          '(clojure.core/seq (clojure.core/concat (clojure.core/list 1) (clojure.core/list :a) (clojure.core/list "s")))))
+
+(println "reader: quote resolves syntax-quoted markers nested in quoted data")
+;; `'`x` is QUOTED, so it is never analysed as code -- the reader leaves the
+;; marker `(flint.reader/syntax-quoted x)` exactly as `` `x `` alone would, and
+;; `flint.analyzer/resolve-quoted-syntax-quotes` (private, reached below via
+;; `resolve`) is what turns it into `(quote my.ns/x)` wherever it sits inside
+;; the quoted structure. It already walked into lists and vectors; these check
+;; map keys, map values, sets, and a map nested inside a vector, which it did
+;; not.
+(require '[flint.analyzer])
+(def resolve-quoted (deref (resolve 'flint.analyzer/resolve-quoted-syntax-quotes)))
+(def rq-env {:ns 'my.ns :cc (atom {:namespaces {'my.ns {:aliases {}}} :declared {}})})
+(defn rq [src]
+  (let [st (r/reader src {:ns 'my.ns})
+        form (r/read-form st)] ; (quote <data>)
+    (resolve-quoted rq-env (second form))))
+;; already working (list / vector), pinned alongside the new cases
+(check "quote resolves a marker inside a quoted list" (rq "'(`x)") '((quote my.ns/x)))
+(check "quote resolves a marker inside a quoted vector" (rq "'[`x]") '[(quote my.ns/x)])
+;; the new cases
+(check "quote resolves a marker as a quoted map VALUE" (rq "'{:a `x}") '{:a (quote my.ns/x)})
+(check "quote resolves a marker as a quoted map KEY" (rq "'{`x :a}") '{(quote my.ns/x) :a})
+(check "quote resolves a marker inside a quoted set" (rq "'#{`x}") '#{(quote my.ns/x)})
+(check "quote resolves a marker in a map nested inside a quoted vector"
+       (rq "'[{:a `x}]") '[{:a (quote my.ns/x)}])
 
 (println "reader: reader conditionals")
 (check "flint branch" (r/read-all "#?(:clj 1 :flint 2)" {:features #{:flint}}) [2])
@@ -110,6 +149,12 @@
   (check "::foo" (r/read-form st) :my.ns/foo))
 (let [st (r/reader "::str/x" {:ns 'my.ns :aliases {'str 'clojure.string}})]
   (check "::alias/foo" (r/read-form st) :clojure.string/x))
+;; The FILE's `ns` form sets them, inside the reader: the compiler used to, so
+;; the read that finds requires saw `:user/foo` where the compile saw the right
+;; one, and the two reads could not be one.
+(check "::foo after an ns form, with no caller's help"
+       (r/read-all "(ns my.ns (:require [clojure.string :as str])) ::foo ::str/x #::{:a 1}")
+       ['(ns my.ns (:require [clojure.string :as str])) :my.ns/foo :clojure.string/x {:my.ns/a 1}])
 
 (println "reader: errors are located")
 (check "unterminated string throws"

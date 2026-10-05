@@ -703,6 +703,78 @@
 ;; typing needs it, and `/` is not because it has no typed result to reach.
 (def ^:private left-folds '#{clojure.core/+ clojure.core/- clojure.core/*})
 
+(defn- resolve-syntax-quoted
+  "The symbol `` `sym `` names in the namespace being compiled.
+
+  An alias expands to the namespace it names. An unqualified name is
+  `clojure.core`'s when `clojure.core` declares it or it is a bootstrap macro,
+  which is how `` `(fn [] x) `` becomes `clojure.core/fn` rather than
+  `this.ns/fn`, and is otherwise this namespace's.
+
+  THIS IS THE RULE THE READER APPLIED, moved and not changed. The reader asked
+  a hook that also consulted the namespace's `:refers` and its own
+  declarations, BEFORE `clojure.core` -- but it ran while every namespace was
+  being read and none had been analysed, so `:refers` was always empty and the
+  namespace's own names were not declared yet. Those two arms never answered.
+  Here they would, which would change what a macro expands to: a referred name
+  would stop resolving to this namespace, and a name this namespace defines
+  over a `clojure.core` one would stop resolving to `clojure.core`. Clojure
+  does both; whether flint should is a decision, not a refactor. So this
+  answers what the reader did, and `clojure.core`'s names are the ones its
+  READ PASS declared (a map), not those its analysis added (`true`) -- the
+  reader could only ever have seen the first."
+  [env sym]
+  (let [cc @(:cc env)
+        nsname (current-ns env)
+        n (name sym)]
+    (if-let [a (namespace sym)]
+      (symbol (str (get (get-in cc [:namespaces nsname :aliases]) (symbol a) a)) n)
+      (let [core (symbol "clojure.core" n)]
+        (if (or (map? (get-in cc [:declared core]))
+                (contains? macros/bootstrap (symbol n)))
+          core
+          (symbol (str (or nsname "user")) n))))))
+
+(defn- resolve-quoted-syntax-quotes
+  "`form` with every `flint.reader/syntax-quoted` in it resolved, for a syntax
+  quote that is itself QUOTED -- `'`x` -- and so is never analysed as code.
+  It read as `(quote my.ns/x)` when the reader resolved it, and still does.
+  Returns `form` itself, metadata and all, when there is nothing to resolve.
+
+  Walks into map KEYS and VALUES and into set members too -- `'{:a `x}` and
+  `'#{`x}` are quoted data exactly as `'[`x]` is, and a marker left unresolved
+  there used to leak into a running program as a bare
+  `(flint.reader/syntax-quoted x)` form instead of the symbol it names."
+  [env form]
+  (cond
+    (reader/syntax-quoted? form)
+    (list 'quote (resolve-syntax-quoted env (second form)))
+
+    (or (seq? form) (vector? form))
+    (let [xs (mapv (fn [x] (resolve-quoted-syntax-quotes env x)) form)]
+      (if (every? true? (map identical? xs form))
+        form
+        (with-meta (if (vector? form) xs (apply list xs)) (meta form))))
+
+    (map? form)
+    (let [ks (keys form)
+          vs (vals form)
+          ks* (mapv (fn [k] (resolve-quoted-syntax-quotes env k)) ks)
+          vs* (mapv (fn [v] (resolve-quoted-syntax-quotes env v)) vs)]
+      (if (and (every? true? (map identical? ks* ks))
+               (every? true? (map identical? vs* vs)))
+        form
+        (with-meta (zipmap ks* vs*) (meta form))))
+
+    (set? form)
+    (let [xs (vec form)
+          xs* (mapv (fn [x] (resolve-quoted-syntax-quotes env x)) xs)]
+      (if (every? true? (map identical? xs* xs))
+        form
+        (with-meta (set xs*) (meta form))))
+
+    :else form))
+
 (defn- analyze-seq [env form]
   (let [head (first form)
         ;; The expansion counters measure a CHAIN: macro expands to macro
@@ -720,6 +792,12 @@
     (cond
       (and (symbol? head) (contains? specials head))
       (analyze-special env head form)
+
+      ;; A symbol syntax quote left unresolved (`flint.reader/syntax-quoted`).
+      ;; Exactly `(quote <resolved>)`, so the AST -- and the image -- is what
+      ;; it was when the reader resolved it.
+      (reader/syntax-quoted? form)
+      (analyze env (list 'quote (resolve-syntax-quoted env (second form))))
 
       ;; A direct builtin call. This is the ONLY way native code is reached, and
       ;; it is why an unused builtin can be dropped by the linker.
@@ -1096,7 +1174,7 @@
     ;; on `analyze-untagged-with-meta` claiming this case was already covered by
     ;; being handled there; it was not, and the probe said so: vector, map and set
     ;; answered `true` while the quoted symbol answered nil.
-    quote (let [q (second form)]
+    quote (let [q (resolve-quoted-syntax-quotes env (second form))]
             (if-let [m (author-meta q)]
               (analyze env (list 'clojure.core/with-meta (list 'quote (with-meta q nil)) m))
               (const-node q)))
@@ -1412,13 +1490,10 @@
 ;; ------------------------------------------------------------------- ns
 
 (def require-clauses
-  "The `ns` clauses that NAME NAMESPACES.
-
-  One set, read by everything that needs the answer: this file binds their
-  aliases and refers, and `flint.compiler/ns-requires` and `ns-aliases` build
-  the load-order graph from the same heads. Two spellings of \"which clause
-  names a namespace\" is a graph that disagrees with the bindings."
-  #{:require :use})
+  "The `ns` clauses that NAME NAMESPACES -- `flint.reader/require-clauses`,
+  which is the one set; it lives in the reader because `::alias/kw` needs it
+  and the reader cannot require this file."
+  reader/require-clauses)
 
 (def known-ns-clauses
   "Every clause head an `ns` form may carry.

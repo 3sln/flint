@@ -320,6 +320,11 @@
                    ;; read this same file again, and a tag map only this loop
                    ;; knew about is a tag map they would get wrong.
                    (assoc sources n (assoc s :tags tags
+                                           ;; THE FORMS, kept as `flint.project/collect`
+                                           ;; keeps them: the reader is context-free, so
+                                           ;; ordering and compiling use this read rather
+                                           ;; than reading the file again.
+                                           :forms forms
                                            :workspace (:name proj)
                                            ;; The DIALECT and the PRELUDE with them --
                                            ;; this map is assembled field by field, so
@@ -392,10 +397,8 @@
                  ;; that nobody wrote.
                  (let [ps (set (map :ns prelude))]
                    (if (contains? ps n) #{} ps)))
-        deps (into {} (for [[n {:keys [src file tags prelude]}] sources]
-                        [n (let [forms (reader/read-all src {:file file :features features
-                                                             :tags tags})
-                                 nsform (first (filter #(and (seq? %) (= 'ns (first %))) forms))]
+        deps (into {} (for [[n {:keys [forms prelude]}] sources]
+                        [n (let [nsform (first (filter #(and (seq? %) (= 'ns (first %))) forms))]
                              (into (into (set (when nsform (compiler/ns-requires nsform)))
                                          (pre-of n prelude))
                                    (implied-requires n forms)))]))]
@@ -438,9 +441,7 @@
   is checked within one workspace."
   [sources features]
   (let [bad (for [[n info] sources
-                  :let [forms (reader/read-all (:src info) {:file (:file info)
-                                                            :features features
-                                                            :tags (:tags info)})
+                  :let [forms (:forms info)
                         nsform (first (filter #(and (seq? %) (= 'ns (first %))) forms))]
                   r (if nsform (compiler/ns-requires nsform) [])
                   :let [to (get sources r)]
@@ -1141,7 +1142,12 @@
         ;; `extra-roots` is compared against `entry-var` -- a string silently
         ;; matches nothing, which is how the first attempt compiled fine and
         ;; shook `serve` out anyway.
-        spec {:sources sources :order order :entry fn
+        ;; THE SPEC CARRIES NO FORMS. It is printed for `--emit-spec` and sent
+        ;; to the self-hosted compiler as EDN, which are comparisons between
+        ;; doors that send source text; only this process's own compile below
+        ;; is handed the forms `collect` read.
+        spec {:sources (into {} (map (clojure.core/fn [[n s]] [n (dissoc s :forms)]) sources))
+              :order order :entry fn
               :exports (vec (distinct (conj (vec exports) 'flint.system/boot)))
               :features features
               :exclude exclude
@@ -1152,7 +1158,7 @@
             (println "wrote" out (str "(" (count (pr-str spec)) " bytes, spec only)"))
             (System/exit 0))
         selfres (when self (compile-with-flint spec))
-        compiled (when-not self (compiler/compile-image spec))
+        compiled (when-not self (compiler/compile-image (assoc spec :sources sources)))
         _ (when (and explain (not self))
             (println "explain" explain)
             (println "  in roots:" (contains? (:roots compiled) explain))
