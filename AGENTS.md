@@ -269,6 +269,7 @@ gitignored, and `cli/build.rs` panics naming the first. So:
 ```
 export JAVA_HOME=/opt/homebrew/opt/openjdk        # see below
 cd ../flint-<topic> && ./bin/build-dist && cargo build --release -p flint-cli
+./sdks/esm/build && ./bin/check-ports
 ```
 
 **`JAVA_HOME` is not optional in a fresh worktree.** `bin/build-dist` runs
@@ -277,6 +278,17 @@ shells out to a JVM — and `/usr/bin/java` on macOS is a stub that reports no
 runtime. Without it the build dies at `builtins.json` with "Unable to locate a
 Java Runtime", which names neither babashka nor the cause. Two agents hit this
 independently before it was written down.
+
+**The last two commands are not optional either, because two more directories
+are gitignored and `bin/check` reads them.** `sdks/esm/dist/flint.js` does not
+exist until `./sdks/esm/build` runs, and `bin/check-esm-portable` (inside
+`bin/check`) does an un-caught `readdirSync` of `sdks/esm/dist` — confirmed:
+`ENOENT`, not a check result. `runtimes/jvm/classes` does not exist until
+`./bin/check-ports` runs it through `javac`, and `bin/check-sdk` compiles
+`runtimes/jvm/test/RtCompiler.java` against that classpath — confirmed: without
+it, `javac` fails with "package com.flint does not exist" rather than anything
+naming the missing build step. Two agents found this the same way as
+`JAVA_HOME` above: by hitting it.
 
 Each worktree carries its own `target/` and its own build time. Use one when
 work genuinely needs isolation — a long refactor, a risky experiment, doc

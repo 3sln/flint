@@ -579,6 +579,56 @@ namespace.
 What an EMBEDDER calls. These are versioned surfaces other people build
 against, so a change here is a change to somebody else's build.
 
+### flint.selfhost/main
+
+*Not gated by `bin/check-api-review`* -- its `wanted` set is closed over
+`lib/` namespaces, `sdks/*` directories and the two CLIs' dispatched commands
+(`bin/check_api_review.py`'s own docstring), and this surface is none of
+those, so a `##` section here would be flagged as one that "no longer
+exists". Recorded as `###` instead so the review still has a place to live.
+
+**Reviewed:** ☐ not signed off
+
+The compiler's one entry point, called as `inst.run("flint.selfhost/main", args)`
+-- what `flintc.wasm` and `flintc.bytecode` hand to any host, and what every SDK
+here and every CLI door eventually calls through. `args` is `[mode & rest]`, or
+`["split" files mode & rest]` when the caller hands file bodies over already
+encoded rather than as EDN text (the native CLI's `compile_split`); either way
+`main*` dispatches on `mode`. Five modes compile something (`project` `wasm`
+`llvm` `clr` `jvm`) and are reached by a user through the `cli:compile` sections
+above.
+
+**The sixth, `preread`, is new** (`1c9bff0b`, `DECISIONS.md#stdlib-preread`):
+`["preread" spec-edn]`, answering `{path {:opts .. :forms ..}}` -- every file
+named in the spec's `:files`, read once under the spec's `:features` (the
+compiler's default when absent). It produces no artifact; it is the standard
+library READ, as forms a later compile can trust in place of reading text
+again, keyed by the read options (`:file` `:features` `:tags` `:dialect`) that
+would have to match for a compile to reuse them.
+
+**Its only caller is `cli/build.rs`** (`fn preread`), which runs it twice
+against `dist/flintc.bytecode` at cargo-build time -- once per feature set the
+native CLI can embed a blob for (default, and `:optimize [perf]`'s) -- over
+every `lib/` file, and bakes the answer into the binary with
+`include_bytes!`. Nothing calls it through `flintc.wasm` at run time: it is
+"reachable through `flintc.wasm` by any host" only in the sense that it is a
+mode of the same `main` the wasm build exposes, not because any host exercises
+that path today.
+
+**Change requests:**
+
+1. **Whether a build-time-only mode counts as a published surface at all is
+   the question `DECISIONS.md#stdlib-preread` leaves open, and this section
+   does not resolve it.** `preread` fits none of AGENTS.md §9's three kinds
+   cleanly -- not a guest namespace, not quite an SDK method since no SDK
+   calls it, not a CLI command -- but it is reachable the same way the real
+   SDK calls are, through the same `main`, so it is recorded here rather than
+   left undocumented. It also answers a map of forms rather than an artifact
+   or a string, unlike every other mode `main` has. The reviewer's call is
+   whether that makes it this surface's business, a CLI-only concern, or its
+   own thing, and whether `bin/check-api-review` should grow a fourth kind to
+   gate it.
+
 ## sdks/c
 
 **Reviewed:** ☐ not signed off
