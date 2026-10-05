@@ -1,18 +1,35 @@
 name: Test
 
-# Runs the full suite on pull requests only.
-#
-# Deliberately not on every push to main: `bin/test` builds both configurations
-# of the runtime (DECISIONS.md#two-builds), compiles the units with rustc, and runs
-# the self-hosting fixpoint — several minutes of work. The gate belongs on the
-# proposal, not on every commit that lands after it has already passed.
+# Manual only -- there is no pull_request or push trigger. `bin/test` builds
+# both configurations of the runtime (DECISIONS.md#two-builds), compiles the
+# units with rustc, and runs the self-hosting fixpoint on request: 39-50 min
+# quiet, longer loaded (AGENTS.md#4), and unmeasured on this runner's 4 cores.
+# Dispatch it by hand before a release, or whenever a change needs the full
+# four-runtime gate rather than the fast local tier.
 #
 # This is the same `./bin/test` as locally. It fails loudly and skips nothing.
 
 on:
-  pull_request:
-  # For running the suite against main by hand, e.g. before cutting a release.
   workflow_dispatch:
+    inputs:
+      keep_going:
+        description: >-
+          Run every section and list all red at the end, instead of stopping
+          at the first failure (FLINT_TEST_KEEP_GOING).
+        type: boolean
+        default: true
+      selfhost:
+        description: >-
+          Also self-host on the JVM and CLR ports (FLINT_SELFHOST) -- about
+          15 more minutes.
+        type: boolean
+        default: false
+      kin_ref:
+        description: >-
+          Ref of the public 3sln/kin repo to check out as the ../kin sibling
+          bb.edn's :local/root expects.
+        type: string
+        default: main
 
 permissions:
   contents: read
@@ -25,12 +42,31 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # 45 for the ordinary pull-request run; the by-hand release run also does
-    # self-hosting on both ports, which is about 15 minutes more.
-    timeout-minutes: 90
+    # bin/test is 39-50 min on a quiet Mac (AGENTS.md#4); unmeasured here, and
+    # workflow_dispatch can also ask for self-hosting on top. Generous rather
+    # than guessed.
+    timeout-minutes: 240
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # kin is the separate public repo 3sln/kin: the source-to-source
+      # generator itself (the LANGUAGE -- defn, let, if, case, the operators),
+      # kept out of this tree so it can't drift from its own three-target
+      # output by hand. bb.edn resolves it via `:deps {io.github.3sln/kin
+      # {:local/root "../kin"}}` -- a sibling of this checkout, one directory
+      # above $GITHUB_WORKSPACE. actions/checkout can only write inside the
+      # workspace, so it is checked out to a subdirectory here and then moved
+      # out to the sibling position the dependency expects.
+      - name: Check out 3sln/kin
+        uses: actions/checkout@v4
+        with:
+          repository: 3sln/kin
+          ref: ${{ inputs.kin_ref }}
+          path: kin-sibling-checkout
+
+      - name: Place 3sln/kin at ../kin
+        run: mv kin-sibling-checkout ../kin
 
       # Nightly, because the unit objects are emitted by rustc directly against
       # the wasm32 sysroot rather than through cargo (see bin/build-units).
@@ -79,9 +115,10 @@ jobs:
           # would prove nothing about either port. With it, a missing toolchain
           # is a failure that says which one.
           FLINT_REQUIRE_HOSTS: '1'
+          # bin/test stops at the first red section by default; keep_going
+          # runs the rest and lists every red at the end (AGENTS.md#4).
+          FLINT_TEST_KEEP_GOING: ${{ inputs.keep_going && '1' || '0' }}
           # Self-hosting on the ports is 179 s on the JVM and 704 s on the CLR
-          # against about a minute for everything else, so it is not a
-          # per-proposal gate. `workflow_dispatch` is the release check, and
-          # that is what the run-by-hand trigger at the top exists for.
-          FLINT_SELFHOST: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+          # against about a minute for everything else, so it defaults off.
+          FLINT_SELFHOST: ${{ inputs.selfhost && '1' || '0' }}
         run: ./bin/test
