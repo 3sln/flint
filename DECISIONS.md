@@ -6811,7 +6811,13 @@ of work and was never what this needed.
 **`:to :llvm` emits one self-contained `.ll` and runs no linker.** It carries
 the program image as a constant, every arity the emitter can take as an LLVM
 function, a table naming them, and a `main`. Turning that into an executable is
-`clang prog.ll libflintnative.a -o prog` — the user's linker, the user's step.
+`clang prog.ll libflintnative.a -lm -o prog` — the user's linker, the user's
+step. `-lm` is needed on Linux: `libflintnative.a` calls libm directly (`tan`,
+`pow`, `hypot`, ...), and glibc keeps those symbols out of the default link set
+where macOS's libSystem folds them in, so the two-word form linked on macOS and
+failed on Linux with ten undefined references (measured 2026-10-06,
+`bin/check-llvm` on `ubuntu-latest`, CI run 37513019183) before
+`bin/check-llvm` started passing `-lm` itself.
 
 **`:to :native` stays unbuilt and now refuses for its own reason**: an
 executable IS a link, this binary carries no linker, and the message points at

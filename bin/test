@@ -787,10 +787,27 @@ sec "hosts: every builtin is carried by every port"
 # NOT `check-builtins | sed`: a pipeline's status is the LAST command's, so
 # `|| fail` would read sed's success and a real miss would pass silently. The
 # same swallow hid a broken SDK selftest earlier in this project.
-if ./bin/check-builtins > "$TMPDIR/flint-builtins.out" 2>&1; then
-  sed 's/^/  /' "$TMPDIR/flint-builtins.out"
+#
+# `${TMPDIR:-/tmp}`, NOT bare `$TMPDIR`: macOS always has `$TMPDIR` set (it is
+# per-session, from launchd), so this read as portable here and was never
+# tried anywhere else -- `bin/ab-bench`, `bin/conform-hosts` and
+# `bin/check-kin` all already write `${TMPDIR:-/tmp}/...`. Linux generally
+# leaves `$TMPDIR` unset, so the bare form expanded to "/flint-builtins.out"
+# -- the filesystem root -- and writing there is a permission error, not a
+# missing-directory one. Measured 2026-10-06, `ubuntu-latest`, CI run
+# 37513019183: "cannot create /flint-builtins.out: Permission denied", and
+# the `sed` below it then failed to find a file that redirection never made.
+# THAT SECOND FAILURE is why this killed the whole run rather than reporting
+# one red section: `sed ...; fail "..."` is two bare commands under `set -e`,
+# so when `sed` fails on the missing file, the shell exits right there with
+# `sed`'s status and `fail` -- and the end-of-run summary -- never runs. `||
+# true` on the display line keeps that line from being able to abort the
+# script at all, so a failure already on its way to `fail` always reaches it.
+tmpdir="${TMPDIR:-/tmp}"
+if ./bin/check-builtins > "$tmpdir/flint-builtins.out" 2>&1; then
+  sed 's/^/  /' "$tmpdir/flint-builtins.out"
 else
-  sed 's/^/  /' "$TMPDIR/flint-builtins.out"; fail "check-builtins"
+  sed 's/^/  /' "$tmpdir/flint-builtins.out" || true; fail "check-builtins"
 fi
 
 # AND THE OTHER HALF OF THE QUESTION: `check-builtins` asks whether every port
@@ -800,10 +817,10 @@ fi
 # address on both ports without a single test noticing.
 #
 # Same pipeline trap as above, so same shape: redirect, then branch on status.
-if ./bin/check-builtin-coverage > "$TMPDIR/flint-bcov.out" 2>&1; then
-  sed 's/^/  /' "$TMPDIR/flint-bcov.out"
+if ./bin/check-builtin-coverage > "$tmpdir/flint-bcov.out" 2>&1; then
+  sed 's/^/  /' "$tmpdir/flint-bcov.out"
 else
-  sed 's/^/  /' "$TMPDIR/flint-bcov.out"; fail "check-builtin-coverage"
+  sed 's/^/  /' "$tmpdir/flint-bcov.out" || true; fail "check-builtin-coverage"
 fi
 
 echo
@@ -860,13 +877,17 @@ sec "kin: the sources agree, and the committed output matches them"
 # in the tree (checked 2026-09-22). Nothing
 # checked that until now: a `fixnum` fix left two files stale, and the only
 # thing that would have re-emitted them was somebody remembering to.
-./bin/check-kin > "$TMPDIR/flint-kin.out" 2>&1 || {
-  sed 's/^/  /' "$TMPDIR/flint-kin.out"; fail "bin/check-kin"; }
+# `$tmpdir`, set above to `${TMPDIR:-/tmp}`: bare `$TMPDIR` is unset on
+# Linux, and this and the two "hosts" checks above were the only three
+# spots in this file that had not already picked up that idiom from
+# `bin/ab-bench`/`bin/conform-hosts`/`bin/check-kin` itself.
+./bin/check-kin > "$tmpdir/flint-kin.out" 2>&1 || {
+  sed 's/^/  /' "$tmpdir/flint-kin.out" || true; fail "bin/check-kin"; }
 # THE WHOLE SUMMARY, not `tail -1`. The banner is more than one line -- it
 # was two and is now three -- so a fixed tail showed a trailing fragment with
 # the counts cut off. Print from the `check-kin:` line to the end and the
 # display stops depending on how long the summary happens to be.
-sed -n '/^check-kin:/,$p' "$TMPDIR/flint-kin.out" | sed 's/^/  /'
+sed -n '/^check-kin:/,$p' "$tmpdir/flint-kin.out" | sed 's/^/  /'
 
 echo
 sec "decisions: the index agrees with what is in the tree"

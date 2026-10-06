@@ -156,7 +156,16 @@ for n in $PROGS; do
     head -1 "$D/$n.$k.ll" | grep -q '^; flint program, as LLVM IR' \
       || { head -3 "$D/$n.$k.ll"; fail "$n.$k.ll does not look like flint's LLVM IR"; }
 
-    clang "$D/$n.$k.ll" target/release/libflintnative.a -o "$D/$n.$k" \
+    # `-lm`: `libflintnative.a` calls `tan`, `pow`, `hypot` and the rest of
+    # `flint_b_m_*` straight into libm. macOS's libSystem re-exports libm's
+    # symbols into the default link set, so this linked with no `-lm` on every
+    # macOS box it was ever run on; glibc keeps libm separate, so the same
+    # command on Linux leaves `tan`/`asin`/`acos`/`atan`/`sinh`/`cosh`/`tanh`/
+    # `pow`/`atan2`/`hypot` undefined and `clang` fails at the link step.
+    # `-lm` after the archive costs nothing on macOS (libm is already folded
+    # in) and supplies the symbols on Linux, so it is unconditional rather than
+    # OS-conditional.
+    clang "$D/$n.$k.ll" target/release/libflintnative.a -lm -o "$D/$n.$k" \
       > "$D/$n.$k.link" 2>&1 || { tail -20 "$D/$n.$k.link"; fail "clang $n.$k.ll"; }
   done
 
@@ -236,7 +245,7 @@ int main(void) {
   return 0;
 }
 DRIVE
-clang "$D/$n.size.ll" "$D/drive.c" target/release/libflintnative.a -o "$D/drive"   > "$D/drive.link" 2>&1 || { tail -20 "$D/drive.link"; fail "clang the C driver against $n.size.ll"; }
+clang "$D/$n.size.ll" "$D/drive.c" target/release/libflintnative.a -lm -o "$D/drive"   > "$D/drive.link" 2>&1 || { tail -20 "$D/drive.link"; fail "clang the C driver against $n.size.ll"; }
 got="$("$D/drive")" || { echo "    $got"; fail "the C driver did not run"; }
 # EVERY LINE IS DERIVED FROM THE CONTRACT, not recorded from a run:
 #   link before boot   0  recorded
@@ -263,9 +272,9 @@ link-after-boot 2'
 echo "    boot/loop/link: 7 rows, two sandboxes in one process"
 
 # AND THE ARTIFACT STILL RUNS ITSELF. `weak` must not have cost the documented
-# `clang prog.ll libflintnative.a -o prog`, which is the whole reason `main` is
-# emitted at all.
-clang "$D/$n.size.ll" target/release/libflintnative.a -o "$D/alone" \
+# `clang prog.ll libflintnative.a -lm -o prog` (DECISIONS.md#llvm-ir-target),
+# which is the whole reason `main` is emitted at all.
+clang "$D/$n.size.ll" target/release/libflintnative.a -lm -o "$D/alone" \
   > "$D/alone.link" 2>&1 || { tail -20 "$D/alone.link"; fail "clang $n.size.ll alone"; }
 alone="$("$D/alone")" || fail "the artifact's own main did not run"
 # AGAINST `flint run`, not against nothing. The first version of this compared to

@@ -44,7 +44,14 @@ cargo build --release --quiet
 cp target/release/flint "$work/a"
 
 echo "building arm B ($expr)..."
-sed -i '' "$expr" "$file"
+# NOT `sed -i '' "$expr" "$file"`: that is BSD sed's spelling of "no backup
+# suffix", and GNU sed (Linux) reads `''` as its OWN first non-option
+# argument -- the SCRIPT, not a suffix -- so `$expr` and `$file` are then
+# both read as files to edit with an empty (no-op) script. Writing to a
+# scratch file and moving it over the original has the same in-place effect
+# on both seds and needs no suffix argument either one disagrees about.
+sed "$expr" "$file" > "$work/edited"
+mv "$work/edited" "$file"
 if cmp -s "$file" "$work/orig"; then
   echo "ab-bench: the sed expression changed nothing -- arm B is arm A" >&2
   exit 1
