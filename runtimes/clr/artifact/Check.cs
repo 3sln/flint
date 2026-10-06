@@ -315,20 +315,24 @@ public static class Check {
         Want((int) ty.GetMethod("Sum").Invoke(null, null) == sum,
              $"Sum() agrees with a sum computed outside the assembly ({sum})");
 
-        // READ FROM `Img`, not restated: this used to hardcode the textbook
-        // FNV-1a prime `1099511628211L` (`0x100000001b3`) while the runtime
-        // moved to a prime with an extra zero (`Img.FnvPrime`,
-        // `0x1000000001b3`) to agree with Rust and the JVM -- so this
-        // independent check had quietly drifted onto the OLD value and could
-        // no longer have caught the runtime disagreeing with the other two,
-        // because by then it disagreed with all three the same way
-        // (AGENTS.md#1).
-        long want;
-        unchecked {
-            long h = Img.FnvOffset;
-            foreach (var b in image) h = (h ^ (b & 0xff)) * Img.FnvPrime;
-            want = h;
-        }
+        // KNOWN-ANSWER, against the published FNV-1a 64 test vectors
+        // (http://www.isthe.com/chongo/src/fnv/test_fnv.c), not derived from
+        // `Img` itself. `Img.FnvPrime` used to carry an extra zero
+        // (`0x1000000001b3`, not the textbook `0x100000001b3`), copied from
+        // `runtime/src/image.rs` where the typo started and hand-ported into
+        // the JVM and here -- so this check and the runtime agreed with each
+        // other and with no real FNV-1a implementation (`DECISIONS.md#snapshots`,
+        // AGENTS.md#1).
+        Want(Img.Fnv1aOf(new byte[0]) == unchecked((long) 0xcbf29ce484222325UL),
+             "Img.Fnv1aOf(\"\") == textbook offset basis");
+        Want(Img.Fnv1aOf(Encoding.ASCII.GetBytes("a")) == unchecked((long) 0xaf63dc4c8601ec8cUL),
+             "Img.Fnv1aOf(\"a\") == textbook FNV-1a64(\"a\")");
+
+        // READ FROM `Img`, not restated: a second computation of the same
+        // fingerprint over the real image bytes, so a `FieldRva` array at the
+        // wrong offset still answers a plausible wrong number rather than
+        // passing by agreeing with itself.
+        long want = Img.Fnv1aOf(image);
         Want((long) ty.GetMethod("Fnv1a").Invoke(null, null) == want,
              $"Fnv1a() -- emitted IL -- agrees with this C# ({want})");
         Want((int) ty.GetMethod("LongBranch").Invoke(null, null) == 1,

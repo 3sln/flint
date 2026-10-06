@@ -261,6 +261,16 @@ public class RtSnapStream {
   }
 
   public static void main(String[] a) throws Exception {
+    // --- known-answer FNV-1a 64, before anything else: the textbook test
+    // vectors (http://www.isthe.com/chongo/src/fnv/test_fnv.c), not derived
+    // from `Img.fnv1a` itself. Fails against the extra-zero prime
+    // (`0x1000000001b3`) this file used to carry, copied from
+    // `runtime/src/image.rs` (`DECISIONS.md#snapshots`).
+    ok("fnv1a(\"\") == textbook offset basis",
+       Img.fnv1a(new byte[0]) == 0xcbf29ce484222325L);
+    ok("fnv1a(\"a\") == textbook FNV-1a64(\"a\")",
+       Img.fnv1a("a".getBytes(StandardCharsets.UTF_8)) == 0xaf63dc4c8601ec8cL);
+
     byte[] img = Files.readAllBytes(Path.of(a[0]));
 
     // --- the main round trip ----------------------------------------------

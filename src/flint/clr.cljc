@@ -665,15 +665,16 @@
 
 (defn- fnv-il
   "FNV-1a over the whole array, as CIL. The constants are `Img.cs`'s
-  (`Img.FnvOffset`, `Img.FnvPrime`), and the basis is written in decimal
-  because `0xcbf29ce484222325` has its high bit set and is not a readable long
-  literal. THE PRIME HAS AN EXTRA ZERO (`0x1000000001b3`, not the textbook
-  FNV-1a prime `0x100000001b3`) -- `Img.Load` on every one of the four
-  runtimes was corrected to it (`DECISIONS.md#snapshots`) and this emitter was
-  not, so a compiled program's own `Fnv1a()` witness disagreed with the
-  runtime's `fingerprint` for the SAME bytes. Invisible until `Check.cs`'s
-  independent cross-check stopped restating the same stale prime
-  (AGENTS.md#1)."
+  (`Img.FnvOffset`, `Img.FnvPrime`) -- the textbook FNV-1a 64 offset basis and
+  prime -- and both are written in decimal because `0xcbf29ce484222325` has
+  its high bit set and is not a readable long literal, and writing one
+  constant in decimal and the other in hex invited exactly the mistake this
+  is correcting: `Img.Load` on every one of the four runtimes carried a prime
+  with an extra zero (`0x1000000001b3`, decimal 17592186044851, not the
+  textbook `0x100000001b3` = 1099511628211) because the typo started in
+  `runtime/src/image.rs` and this emitter, and the JVM's and CLR's loaders,
+  were hand-ported FROM it, extra zero included (`DECISIONS.md#snapshots`,
+  AGENTS.md#1)."
   [fld n]
   [[:ldc.i8 -3750763034362895579]  ; 0xcbf29ce484222325
    [:stloc 0]
@@ -683,7 +684,7 @@
    [:ldloc 0]
    [:ldsflda fld] [:ldloc 1] [:add] [:ldind.u1] [:conv.i8]
    [:xor]
-   [:ldc.i8 17592186044851]          ; 0x1000000001b3
+   [:ldc.i8 1099511628211]          ; 0x100000001b3
    [:mul]
    [:stloc 0]
    [:ldloc 1] [:ldc.i4 1] [:add] [:stloc 1]

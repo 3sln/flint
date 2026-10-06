@@ -75,6 +75,31 @@ pub const K_TAGGED: u8 = 17;
 
 pub const NO_CONST: u32 = 0xFFFF_FFFF;
 
+/// FNV-1a 64-bit, textbook constants (`DECISIONS.md#snapshots`). THE SINGLE
+/// DEFINITION: `runtimes/jvm/src/com/flint/rt/Img.java` and
+/// `runtimes/clr/src/rt/Img.cs` each carry their own copy of this function
+/// because the loader itself is hand-ported per runtime, not kin-generated,
+/// but the two constants below are the ones every copy -- including
+/// `src/flint/clr.cljc`'s emitted `Fnv1a()` IL -- must restate exactly. They
+/// used to carry an extra zero (`0xcbf29ce484222325` was right, but the prime
+/// was `0x1000000001b3`, not `0x100000001b3`) in every one of the four
+/// runtimes, because the typo started here and the other three were hand-
+/// ported FROM this file, extra zero included. See `DECISIONS.md#snapshots`.
+pub const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+pub const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// FNV-1a over `bytes`. Used for the image fingerprint, but kept general
+/// (and tested against the textbook known answers for `b""` and `b"a"`) so a
+/// future caller can use it as a hash rather than restate the loop.
+pub fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut h = FNV_OFFSET_BASIS;
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(FNV_PRIME);
+    }
+    h
+}
+
 struct Rd<'a> {
     b: &'a [u8],
     i: usize,
@@ -189,14 +214,7 @@ impl Rt {
         // snapshot only has to detect a different program, not resist one, and
         // an incremental pass over a few hundred KB costs nothing next to the
         // load it precedes.
-        let fingerprint = {
-            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-            for b in bytes {
-                h ^= *b as u64;
-                h = h.wrapping_mul(0x1000_0000_01b3);
-            }
-            h
-        };
+        let fingerprint = fnv1a64(bytes);
         let mut r = Rd { b: bytes, i: 8 };
         if r.u32() != VERSION {
             return false;
@@ -592,5 +610,23 @@ impl ImageWriter {
         // ... and no flags, for the same reason.
         o.extend_from_slice(&0u32.to_le_bytes());
         o
+    }
+}
+
+#[cfg(test)]
+mod fnv_tests {
+    use super::*;
+
+    /// Known answers from the FNV reference implementation's published test
+    /// vectors (http://www.isthe.com/chongo/src/fnv/test_fnv.c), not derived
+    /// from this code. FAILS against the extra-zero prime
+    /// (`0x1000000001b3`) that every one of the four runtimes carried before
+    /// this fix: that prime answers `0xaf63dc4c8601ec8c` for `b""` (the
+    /// offset basis unchanged, since the loop never runs) but a different,
+    /// non-textbook value for `b"a"`.
+    #[test]
+    fn matches_textbook_fnv1a64() {
+        assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
     }
 }

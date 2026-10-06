@@ -38,15 +38,27 @@ public static class Img {
     /// named, so a second computation of the same fingerprint -- `Check.cs`
     /// cross-validates the emitted `Fnv1a()` IL and the runtime's own
     /// `fingerprint` field against an independent one -- reads these constants
-    /// rather than restating them (AGENTS.md#1). Restated is exactly how this
-    /// drifted once already: `FnvPrime` carries an EXTRA ZERO
-    /// (`0x1000000001b3`, not the textbook FNV-1a prime `0x100000001b3`) to
-    /// match `runtime/src/image.rs` and the JVM's `Img.java`, and `Check.cs`
-    /// had hardcoded the textbook prime -- so the test that was supposed to
-    /// catch this runtime disagreeing with the other two could not, because it
-    /// disagreed with them the same way.
+    /// rather than restating them (AGENTS.md#1). These are the textbook
+    /// FNV-1a 64 constants. They used to carry an EXTRA ZERO in the prime
+    /// (`0x1000000001b3`, not `0x100000001b3`), to match a typo that started
+    /// in `runtime/src/image.rs` and was hand-copied into the JVM's
+    /// `Img.java` and here -- so all four runtimes agreed with each other and
+    /// with no published FNV-1a implementation. `Check.cs` reads `FnvOffset`/
+    /// `FnvPrime` from here rather than restating them, which is why fixing
+    /// them here is enough to fix its cross-check too.
     public const long FnvOffset = unchecked((long) 0xcbf29ce484222325UL);
-    public const long FnvPrime = 0x1000000001b3L;
+    public const long FnvPrime = 0x100000001b3L;
+
+    /// FNV-1a over `bytes`. Known-answer tested in `Check.cs` against the
+    /// textbook vectors for `""` and `"a"`.
+    public static long Fnv1aOf(byte[] bytes) {
+        long h = FnvOffset;
+        foreach (byte b in bytes) {
+            h ^= (b & 0xFFL);
+            h = unchecked(h * FnvPrime);
+        }
+        return h;
+    }
 
     const int KNil = 0, KTrue = 1, KFalse = 2, KInt = 3, KDouble = 4,
         KString = 5, KKeyword = 6, KSymbol = 7, KVector = 8, KList = 9,
@@ -91,20 +103,9 @@ public static class Img {
         // Over the WHOLE image, before anything is interpreted. FNV-1a: a
         // snapshot only has to DETECT a different program, not resist one, and
         // an incremental pass over a few hundred KB costs nothing next to the
-        // load it precedes.
-        // THE CONSTANT HAS AN EXTRA ZERO (`0x1000000001b3`, not the textbook
-        // FNV-1a prime `0x100000001b3`) -- Rust's and the JVM's copies both do
-        // too, and this one did not, so a CLR-loaded image's fingerprint never
-        // matched the other two runtimes' for the SAME bytes. Invisible until
-        // a snapshot had to cross runtimes: each runtime only ever compared
-        // its own fingerprint against itself before (`DECISIONS.md#snapshots`).
-        // Found importing a native-streamed live set here.
-        long h = FnvOffset;
-        foreach (byte b in bytes) {
-            h ^= (b & 0xFFL);
-            h = unchecked(h * FnvPrime);
-        }
-        rt.fingerprint = h;
+        // load it precedes. `Fnv1aOf` above, not restated here
+        // (`DECISIONS.md#snapshots`, AGENTS.md#1).
+        rt.fingerprint = Fnv1aOf(bytes);
         if (r.U32() != Version) return null;
 
         Loaded outl = new Loaded();

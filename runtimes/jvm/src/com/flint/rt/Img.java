@@ -44,6 +44,28 @@ public final class Img {
         K_TAGGED = 17;
     static final long NO_CONST = 0xFFFF_FFFFL;
 
+    /// FNV-1a 64-bit, textbook constants (`DECISIONS.md#snapshots`). The
+    /// loader is hand-ported per runtime, not kin-generated, so these are
+    /// restated rather than shared across languages -- but this is now the
+    /// ONE place this file states them, and `fnv1a` below is the one place it
+    /// loops. They used to carry an extra zero in the prime
+    /// (`0x1000000001b3`, not the textbook `0x100000001b3`), copied from
+    /// `runtime/src/image.rs` where the typo started.
+    public static final long FNV_OFFSET = 0xcbf29ce484222325L;
+    public static final long FNV_PRIME = 0x100000001b3L;
+
+    /// FNV-1a over `bytes`. Known-answer tested in `RtSnapStream` against the
+    /// textbook vectors for `""` and `"a"`, which fails on the extra-zero
+    /// prime this used to carry.
+    public static long fnv1a(byte[] bytes) {
+        long h = FNV_OFFSET;
+        for (byte b : bytes) {
+            h ^= (b & 0xFFL);
+            h *= FNV_PRIME;
+        }
+        return h;
+    }
+
     public static final class Loaded {
         public String[] nativeNames;
         public int entry;
@@ -74,22 +96,9 @@ public final class Img {
         // Over the WHOLE image, before anything is interpreted. FNV-1a: a
         // snapshot only has to DETECT a different program, not resist one, and
         // an incremental pass over a few hundred KB costs nothing next to the
-        // load it precedes.
-        //
-        // THE CONSTANT HAS AN EXTRA ZERO (`0x1000000001b3`, not the textbook
-        // FNV-1a prime `0x100000001b3`) -- `runtime/src/image.rs` and the CLR's
-        // `Img.cs` both do too, and this file did not, so a JVM-loaded image's
-        // fingerprint never agreed with the other two runtimes' for the SAME
-        // image and a cross-runtime `importLive` was refused by `REFUSE_IMAGE`
-        // for every program, not just mismatched ones. There is nothing to
-        // test it against here: an image always agrees with its own
-        // fingerprint before (`DECISIONS.md#snapshots`).
-        long h = 0xcbf29ce484222325L;
-        for (byte b : bytes) {
-            h ^= (b & 0xFFL);
-            h *= 0x1000000001b3L;
-        }
-        rt.fingerprint = h;
+        // load it precedes. `fnv1a` above, not restated here
+        // (`DECISIONS.md#snapshots`, AGENTS.md#1).
+        rt.fingerprint = fnv1a(bytes);
         if (r.u32() != VERSION) return null;
 
         Loaded out = new Loaded();
