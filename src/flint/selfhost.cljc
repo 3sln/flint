@@ -638,29 +638,23 @@
                              (jvm/pack (base64-decode base-b64) image opts)))})))))
 
 (defn preread
-  "Every file in the spec READ, as `{path {:opts .. :forms ..}}` -- what the
-  native CLI embeds for the standard library so that a compile does not read
-  it again (`DECISIONS.md#stdlib-preread`).
+  "Every file in the spec READ AHEAD OF ITS FEATURES, as `{path bytes}` -- what
+  the native CLI embeds for the standard library so that a compile does not
+  read it again (`DECISIONS.md#stdlib-preread`).
 
-  Each file is asked exactly the question a compile asks of it:
-  `flint.project/file-answer` over the spec's `:files` and `:workspaces`, read
-  by `read-entry` under the spec's `:features`, the compiler's default when
-  absent. `:opts` is the key a compile checks before using the forms, so a
-  spec whose options differ from the ones these were read under reads the text
-  instead of getting the wrong forms.
-
-  The answer is a VALUE, not a string: it leaves through the host codec, which
-  carries every form's metadata -- the line, column, file and child positions
-  the analyzer's diagnostics read."
+  Each file is asked exactly the question a compile asks of it,
+  `flint.project/file-answer` over the spec's `:files` and `:workspaces`, and
+  read by `flint.reader/read-deferred`, which keeps reader conditionals as
+  data: one read serves the default build, `:optimize [perf]` and any explicit
+  `:features`. The bytes are `flint.forms`'s, which carry every form's
+  position metadata and the options the read was made under, which a compile
+  checks before it uses them."
   [spec-edn]
   (let [spec (read-spec spec-edn)
-        features (or (:features spec) flint.reader/default-features)
         files (:files spec)]
     {:preread
      (into {} (map (fn [path]
-                     (let [s (project/file-answer files (:workspaces spec) path)]
-                       [path {:opts (project/read-options s features)
-                              :forms (project/read-entry s features)}]))
+                     [path (project/preread (project/file-answer files (:workspaces spec) path))])
                    (keys files)))}))
 
 (declare main*)
@@ -735,8 +729,8 @@
       ;; A module comes back alone: its native slots are already in it, so
       ;; there is no import order for the host to apply.
       (:module r) (:module r)
-      ;; THE ONE ANSWER THAT IS NOT A STRING: a map of forms, encoded by the
-      ;; host with all their metadata (`preread`).
+      ;; THE ONE ANSWER THAT IS NOT A STRING: `{path bytes}`, each file's
+      ;; forms in `flint.forms`'s encoding (`preread`).
       (:preread r) (:preread r)
       ;; `:clr` -- AND THIS ARM WAS MISSING, so `:to :clr` through the
       ;; SELF-HOSTED compiler had never once worked. `compile-to-clr` answers

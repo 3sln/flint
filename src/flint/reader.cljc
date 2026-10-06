@@ -46,6 +46,10 @@
 (defn- make-state [s file]
   (volatile! {:s s :i (shebang-end s) :n (count s) :line 1 :col 1 :file file
               :gensyms nil :features #{:flint} :ns nil :aliases {} :elided []
+              ;; A DEFERRED read (`read-deferred`) keeps every reader
+              ;; conditional as a node and counts them, so the contexts that
+              ;; cannot hold one can tell that one was read inside them.
+              :defer? false :conds 0 :aliases-partial false
               ;; `:flint` unless a caller says otherwise. A PORTABLE file is
               ;; refused flint-only reader tags (`DECISIONS.md#dialects-and-preludes`),
               ;; and nothing else in this reader is dialect-sensitive -- so the
@@ -91,7 +95,7 @@
                       (recur))
         :else nil))))
 
-(declare read-form read-form*)
+(declare read-form read-form* stamp)
 
 (def bookkeeping-meta
   "Metadata keys the READER writes, which are not the program's.
@@ -140,6 +144,82 @@
 (defn- splice [v] [SPLICE-TAG v])
 (defn- spliced? [x]
   (and (vector? x) (= 2 (count x)) (identical? (nth x 0) SPLICE-TAG)))
+
+;; A READER CONDITIONAL KEPT AS DATA, for a read that does not yet know its
+;; features (`read-deferred`, `DECISIONS.md#stdlib-preread`). A tagged literal
+;; whose tag is a symbol NO SOURCE CAN SPELL -- `#` cannot begin a symbol token
+;; -- so, like the two markers above, it is a value only this reader makes; and
+;; unlike them it must survive the host codec, which a volatile cannot.
+;;
+;; Its form is `[kind line col child-pos items]`: `kind` is `:one` (`#?`),
+;; `:splice` (`#?@`), or `:map` / `:set` for a map or set literal that holds a
+;; conditional where resolving it can change the literal's SIZE -- a key, or a
+;; splice -- and so cannot be built until it is resolved. `line`/`col` are
+;; where the `#` (or `{`) was, `child-pos` the clause list's own positions,
+;; and `items` the clauses (or the literal's elements) as read.
+(def conditional-tag (symbol "flint.reader" "#?"))
+(defn conditional?
+  "Is `x` a reader conditional a deferred read left unresolved?"
+  [x]
+  (and (flint.rt/tagged-literal? x) (= conditional-tag (:tag x))))
+(defn- conditional [st kind line col child-pos items]
+  (vswap! st update :conds inc)
+  (flint.rt/tagged-literal conditional-tag [kind line col child-pos items]))
+
+(defn- choose
+  "The branch of `clauses` that `features` selects: the value, a `splice` of
+  it, or a marker for \"matched nothing\" -- `SPLICE-NONE` for a splice and
+  `EOF` otherwise. ONE RULE for both the reader, which chooses as it reads
+  when it knows the features, and `resolve-conditionals`, which chooses later
+  when it did not."
+  [clauses features splicing?]
+  (loop [[k v & more] clauses]
+    (cond
+      (nil? k) (if splicing? SPLICE-NONE EOF)
+      (or (features k) (= k :default)) (if splicing? (splice v) v)
+      :else (recur more))))
+
+(defn- deferred-guard
+  "Refuse a conditional read inside a context that consumes its contents AT
+  READ TIME -- syntax quote, `#()`, a reader tag's argument -- when the read
+  does not know its features. `n0` is the conditional count when the context
+  began. Such a context would otherwise act on the node rather than on the
+  branch, which is a silently different program; refusing is loud, and it
+  happens where `read-deferred` runs, at the native CLI's build."
+  [st n0 what]
+  (when (and (:defer? @st) (not= n0 (:conds @st)))
+    (err st (str "a reader conditional inside " what " cannot be read before its"
+                 " features are known (DECISIONS.md#stdlib-preread)"))))
+
+(defn- size-conditional?
+  "Does resolving a conditional among a map literal's forms `kvs` change how
+  many forms there are, or which are keys? A splice does; so does one in a KEY
+  position, and so does any at all when the count is odd -- an unmatched one
+  is what would make it even."
+  [kvs]
+  (let [n (count kvs)]
+    (loop [i 0]
+      (cond
+        (= i n) false
+        (let [x (nth kvs i)]
+          (and (conditional? x)
+               (or (even? i) (odd? n) (= :splice (first (:form x))))))
+        true
+        :else (recur (inc i))))))
+
+(defn- alias-ns
+  "The namespace `::a/kw` names: `a`'s alias from the file's `ns` form, or `a`
+  itself. A DEFERRED read of a file whose `ns` form holds a reader conditional
+  cannot know which aliases it declares, so there an unknown alias is refused
+  rather than guessed."
+  [st a]
+  (let [m @st]
+    (or (get (:aliases m) (symbol a))
+        (if (:aliases-partial m)
+          (err st (str "::" a "/ in a file whose ns form holds a reader conditional"
+                       " cannot be read before its features are known"
+                       " (DECISIONS.md#stdlib-preread)"))
+          a))))
 
 (defn peek-ch* [st] (peek-ch st))
 
@@ -427,6 +507,9 @@
   (next-ch! st)                                              ; ^
   (skip-ws! st)
   (let [m (read-form* st)
+        _ (when (conditional? m)
+            (err st (str "metadata that is itself a reader conditional cannot be read"
+                         " before its features are known (DECISIONS.md#stdlib-preread)")))
         m (cond
             (keyword? m) {m true}
             (symbol? m) {:tag m}
@@ -435,6 +518,9 @@
             :else (err st "metadata must be a symbol, keyword, string or map"))
         _ (skip-ws! st)
         target (read-form* st)]
+    (when (conditional? target)
+      (err st (str "metadata on a reader conditional cannot be read before its"
+                   " features are known (DECISIONS.md#stdlib-preread)")))
     (if (meta-able? target) (with-meta target (merge (meta target) m)) target)))
 
 (defn- read-regex [st]
@@ -459,7 +545,9 @@
   "#(...) -- rewritten to (fn* [p1 p2 ...] body) with the arity implied by the
   highest %n used."
   [st]
-  (let [body (read-delimited st ")")
+  (let [n0 (:conds @st)
+        body (read-delimited st ")")
+        _ (deferred-guard st n0 "#()")
         maxn (volatile! 0)
         rest? (volatile! false)
         walk (fn walk [f]
@@ -500,24 +588,22 @@
   cut this way -- so `it compiled` and `flint compiled that library` were not
   the same claim. Whoever reads this list decides; the reader's job is to stop
   it being invisible."
-  [st splicing?]
-  (let [line (:line @st)]
-    (next-ch! st)                                            ; ?
-    (when splicing? (next-ch! st))                           ; @
-    (skip-ws! st)
-    (when-not (= "(" (peek-ch st)) (err st "reader conditional wants a list"))
-    (let [clauses (read-delimited st ")")
-          features (:features @st)]
-      (loop [[k v & more] clauses]
-        (cond
-          (nil? k)
-          (do (vswap! st update :elided (fnil conj [])
-                      {:file (:file @st) :line line
-                       :offered (vec (take-nth 2 clauses))})
-              (if splicing? SPLICE-NONE EOF))
-          (or (features k) (= k :default))
-          (if splicing? (splice v) v)
-          :else (recur more))))))
+  [st splicing? line col]
+  (next-ch! st)                                              ; ?
+  (when splicing? (next-ch! st))                             ; @
+  (skip-ws! st)
+  (when-not (= "(" (peek-ch st)) (err st "reader conditional wants a list"))
+  (let [clauses (read-delimited st ")")]
+    (if (:defer? @st)
+      ;; KEPT AS DATA: which branch is taken is decided by
+      ;; `resolve-conditionals`, once per feature set, from this one read.
+      (conditional st (if splicing? :splice :one) line col (:child-pos @st) clauses)
+      (let [v (choose clauses (:features @st) splicing?)]
+        (when (or (eof? v) (identical? v SPLICE-NONE))
+          (vswap! st update :elided (fnil conj [])
+                  {:file (:file @st) :line line
+                   :offered (vec (take-nth 2 clauses))}))
+        v))))
 
 (defn- qualify-keys
   "Give every unqualified keyword or symbol key the map's namespace, which is
@@ -547,12 +633,15 @@
              (let [a (subs tok 2)]
                (if (= a "")
                  (str (or (:ns @st) "user"))
-                 (str (get (:aliases @st) (symbol a) a))))
+                 (str (alias-ns st a))))
              (str/starts-with? tok ":") (subs tok 1)
              :else "")
         _ (skip-ws! st)
         m (read-form* st)]
     (cond
+      (conditional? m)
+      (err st (str "#: over a map whose keys hold a reader conditional cannot be read"
+                   " before its features are known (DECISIONS.md#stdlib-preread)"))
       (= ns "") (err st "#: wants a namespace")
       (not (map? m)) (err st "#: wants a map")
       :else (qualify-keys ns m))))
@@ -607,16 +696,22 @@
          " call (tagged-literal '" tag " form); to read one from data, use"
          " clojure.edn/read-string with :readers or :default.")))
 
-(defn- read-dispatch [st]
+(defn- read-dispatch [st line col]
   (next-ch! st)                                              ; #
   (let [c (peek-ch st)]
     (cond
-      (= c "{") (set (read-delimited st "}"))
+      (= c "{") (let [xs (read-delimited st "}")]
+                  ;; A conditional in a set can change what the set HOLDS,
+                  ;; and two unresolved ones can be equal, so a deferred read
+                  ;; builds the set only once they are resolved.
+                  (if (and (:defer? @st) (some conditional? xs))
+                    (conditional st :set line col nil xs)
+                    (set xs)))
       (= c "(") (read-arg-fn st)
       (= c "\"") (read-regex st)
       (= c "'") (do (next-ch! st) (list 'var (read-form* st)))
       (= c "_") (do (next-ch! st) (read-form* st) EOF)
-      (= c "?") (read-cond st (= "@" (peek2 st)))
+      (= c "?") (read-cond st (= "@" (peek2 st)) line col)
       (= c "#") (do (next-ch! st)
                     (let [t (read-token st)]
                       (cond (= t "Inf") ##Inf
@@ -628,7 +723,9 @@
       :else
       (let [tag (read-form* st)
             _ (skip-ws! st)
+            n0 (:conds @st)
             v (read-form* st)]
+        (deferred-guard st n0 "a reader tag's argument")
         (when-not (symbol? tag)
           (err st "reader tag must be a symbol"))
         ;; AN UNKNOWN TAG IS AN ERROR, as it is in Clojure. It used to build a
@@ -694,7 +791,7 @@
                 (let [t (subs t 1)]
                   (if (str/includes? t "/")
                     (let [[a n] (str/split t #"/" 2)
-                          al (get (:aliases @st) (symbol a) a)]
+                          al (alias-ns st a)]
                       (keyword (str al) n))
                     (keyword (str (or (:ns @st) "user")) t)))
                 (if (str/includes? t "/")
@@ -719,7 +816,26 @@
   carry metadata -- here or in Clojure -- so the only place their position can
   live is the collection they are in."
   ([st line col v] (with-pos st line col v nil))
-  ([st line col v children]
+  ([st line col v children] (stamp (:file @st) line col v children)))
+
+(defn position-meta
+  "The metadata `stamp` gives a form at `line`/`col` in `file` with `children`
+  positions, over the `existing` metadata it already had.
+
+  PUBLIC because `flint.forms` rebuilds read forms' metadata, and has to build
+  it THE SAME WAY: `merge` goes through a transient, so the key order of the
+  answer is the host's -- insertion order on one, hash order on another -- and
+  only the same construction is sure to give the same map."
+  [file line col children existing]
+  (merge {:line line :column col :file file}
+         (when (seq children) {:child-pos children})
+         existing))
+
+(defn- stamp
+  "`with-pos` with the file named rather than read off the reader state, so
+  `resolve-conditionals` stamps a chosen branch exactly as the reader would
+  have when it chose as it read."
+  [file line col v children]
    (if (meta-able? v)
      ;; A POSITION ALREADY THERE WINS.
      ;;
@@ -732,10 +848,8 @@
      ;; The rule is simply that a form which already knows where it is does not
      ;; get relabelled by whatever it came out of. It was invisible while only
      ;; sequences carried a position and nothing read `:child-pos`.
-     (with-meta v (merge {:line line :column col :file (:file @st)}
-                         (when (seq children) {:child-pos children})
-                         (meta v)))
-     v)))
+     (with-meta v (position-meta file line col children (meta v)))
+     v))
 
 (defn- read-form* [st]
   (skip-ws! st)
@@ -752,9 +866,16 @@
                 ;; effects in their values (each one analyses a sub-form), so
                 ;; source order has to survive the reader on every host.
                 (= c "{") (let [kvs (read-delimited st "}")]
-                            (when (odd? (count kvs))
-                              (err st "map literal needs an even number of forms"))
-                            (flint.rt/array-map kvs))
+                            (if (and (:defer? @st) (size-conditional? kvs))
+                              ;; Resolving a KEY or a SPLICE can change how many
+                              ;; forms the literal has, so it is built when that
+                              ;; is known. A conditional VALUE stays in the map
+                              ;; and resolves to exactly one form, or fails as
+                              ;; the odd count it would have read as.
+                              (conditional st :map line col nil kvs)
+                              (do (when (odd? (count kvs))
+                                    (err st "map literal needs an even number of forms"))
+                                  (flint.rt/array-map kvs))))
                 (= c ")") (err st "unexpected )")
                 (= c "]") (err st "unexpected ]")
                 (= c "}") (err st "unexpected }")
@@ -765,7 +886,9 @@
                 (= c "^") (read-meta st)
                 (= c "`") (do (next-ch! st)
                               (vswap! st assoc :gensyms (volatile! {}))
-                              (let [f (read-form* st)
+                              (let [n0 (:conds @st)
+                                    f (read-form* st)
+                                    _ (deferred-guard st n0 "syntax quote")
                                     r (syntax-quote st f)]
                                 (vswap! st assoc :gensyms nil)
                                 r))
@@ -774,7 +897,7 @@
                                 (do (next-ch! st)
                                     (list 'clojure.core/unquote-splicing (read-form* st)))
                                 (list 'clojure.core/unquote (read-form* st))))
-                (= c "#") (read-dispatch st)
+                (= c "#") (read-dispatch st line col)
                 :else (read-symbolic st))]
         ;; EVERY meta-able form, not just sequences.
         ;;
@@ -826,12 +949,23 @@
   same read."
   [st]
   (loop []
-    (let [v (read-form* st)]
+    (let [n0 (:conds @st)
+          v (read-form* st)]
       (cond
         (eof? v) (if (nil? (peek-ch st)) EOF (recur))
         (spliced? v) (err st "#?@ outside a collection")
         :else (do (when (and (seq? v) (= 'ns (first v)) (symbol? (second v)))
-                    (vswap! st assoc :ns (second v) :aliases (ns-aliases v)))
+                    (vswap! st assoc :ns (second v) :aliases (ns-aliases v)
+                            ;; A conditional in the `ns` form may or may not
+                            ;; declare an alias, which a deferred read cannot
+                            ;; know (`alias-ns`).
+                            :aliases-partial (not= n0 (:conds @st))))
+                  (when (and (conditional? v)
+                             (some (fn [c] (and (seq? c) (= 'ns (first c))))
+                                   (nth (:form v) 4)))
+                    (err st (str "an ns form inside a reader conditional cannot be read"
+                                 " before its features are known"
+                                 " (DECISIONS.md#stdlib-preread)")))
                   v)))))
 
 (def default-features
@@ -874,7 +1008,7 @@
   ([src] (reader src {}))
   ([src opts]
    (let [st (make-state src (:file opts "<string>"))]
-     (vswap! st merge (select-keys opts [:ns :aliases :features :tags]))
+     (vswap! st merge (select-keys opts [:ns :aliases :features :tags :defer?]))
      (vswap! st assoc :features (or (:features opts) default-features))
      (vswap! st assoc :dialect (or (:dialect opts) :flint))
      ;; PER PROJECT, merged over the built-ins. A dependency is read with its
@@ -900,3 +1034,190 @@
          (if (eof? v) acc (recur (conj acc v))))))))
 
 (defn read-one [src] (first (read-all src)))
+
+;; ------------------------------------------------- reading ahead of features
+;;
+;; `DECISIONS.md#stdlib-preread`. A read whose reader conditionals are kept as
+;; data, so ONE read of a file serves every feature set: the native CLI embeds
+;; the standard library read this way, and `resolve-conditionals` chooses the
+;; branches per compile. It is the same move `syntax-quoted` made for symbol
+;; resolution -- out of the reader, into a step after it -- and for the same
+;; reason: what the read depended on was not the text.
+;;
+;; THE CHOICE IS `choose`, shared with the reader's own read-and-choose, and
+;; the chosen form is `stamp`ed as `read-form*` would have stamped it. Held by
+;; `test/reader_test.clj`, which reads every file in `lib/` and `src/` both
+;; ways under several feature sets and compares the forms WITH their metadata.
+
+(defn read-deferred
+  "Every form in `src`, read WITHOUT choosing reader-conditional branches:
+  `{:forms [...] :conds [i ...]}`, where `:conds` lists the top-level forms
+  that hold an unresolved conditional -- the only ones `resolve-conditionals`
+  has to walk. `opts` as `reader`, minus `:features`, which this read does
+  not take.
+
+  A conditional inside a context that consumes its contents as it reads --
+  syntax quote, `#()`, a reader tag's argument, metadata that is itself
+  conditional, an `ns` form chosen by one -- is REFUSED, because acting on the
+  node instead of the branch would be a different program."
+  [src opts]
+  (let [st (reader src (assoc (dissoc opts :features) :defer? true))]
+    (loop [acc [] at []]
+      (let [n0 (:conds @st)
+            v (read-form st)]
+        (if (eof? v)
+          {:forms acc :conds at}
+          (recur (conj acc v) (if (= n0 (:conds @st)) at (conj at (count acc)))))))))
+
+(declare resolve-form resolve-node)
+
+(defn- resolve-err [file line col msg]
+  (throw (ex-info (str "read error: " msg " (" file ":" line ":" col ")")
+                  {:type :reader :line line :column col :file file})))
+
+(defn- resolve-items
+  "A delimited collection's elements, resolved -- a conditional replaced by its
+  branch, spliced, or dropped, exactly as `read-delimited` does when it
+  chooses as it reads -- with its flat `poss` rebuilt to match. Answers
+  `[items poss changed?]`; `poss` is nil when the input's was not one pair per
+  element (a `'x` carries a stale one), in which case it is left alone."
+  [items poss features file]
+  (let [n (count items)
+        paired? (= (count poss) (* 2 n))]
+    (loop [i 0 acc [] ps [] changed? false]
+      (if (= i n)
+        [acc (when paired? ps) changed?]
+        (let [x (nth items i)
+              l (when paired? (nth poss (* 2 i)))
+              c (when paired? (nth poss (inc (* 2 i))))]
+          (if (conditional? x)
+            (let [r (resolve-node x features file)]
+              (cond
+                (eof? r) (recur (inc i) acc ps true)
+                (identical? r SPLICE-NONE) (recur (inc i) acc ps true)
+                (spliced? r) (let [xs (nth r 1)]
+                               (recur (inc i) (into acc xs)
+                                      (into ps (mapcat (fn [_] [l c]) xs)) true))
+                :else (recur (inc i) (conj acc r) (conj ps l c) true)))
+            (let [y (resolve-form x features file)]
+              (recur (inc i) (conj acc y) (conj ps l c)
+                     (or changed? (not (identical? x y)))))))))))
+
+(defn- resolve-one
+  "A conditional in a position that holds exactly ONE form -- a map value, a
+  metadata value -- resolved, or refused as the odd count it would have read
+  as."
+  [x features file]
+  (if (conditional? x)
+    (let [r (resolve-node x features file)
+          [_ line col] (:form x)]
+      (if (or (eof? r) (identical? r SPLICE-NONE) (spliced? r))
+        (resolve-err file line col "map literal needs an even number of forms")
+        r))
+    (resolve-form x features file)))
+
+(defn- resolve-meta
+  "Metadata with any conditional in it resolved. Only an author's `^{..}` can
+  hold one; the reader's own keys never do, and are skipped."
+  [m features file]
+  (reduce (fn [acc e]
+            (let [k (key e) v (val e)]
+              (if (contains? bookkeeping-meta k)
+                acc
+                (let [v2 (resolve-one v features file)]
+                  (if (identical? v v2) acc (assoc acc k v2))))))
+          m m))
+
+(defn- resolve-node
+  "One conditional node: `EOF` or `SPLICE-NONE` when it matched nothing, a
+  `splice` when a `#?@` matched, and otherwise the form -- stamped as
+  `read-form*` stamps what a `#?` reads as."
+  [x features file]
+  (let [[kind line col cpos items] (:form x)]
+    (cond
+      (= kind :map)
+      (let [[kvs] (resolve-items items nil features file)]
+        (when (odd? (count kvs))
+          (resolve-err file line col "map literal needs an even number of forms"))
+        (stamp file line col (flint.rt/array-map kvs) nil))
+
+      (= kind :set)
+      (let [[xs] (resolve-items items nil features file)]
+        (stamp file line col (set xs) nil))
+
+      :else
+      (let [[clauses cps] (resolve-items items cpos features file)
+            v (choose clauses features (= kind :splice))]
+        (if (or (eof? v) (identical? v SPLICE-NONE) (spliced? v))
+          v
+          (stamp file line col v (when (seq? v) (or cps cpos))))))))
+
+(defn- resolve-form
+  "`f` with every conditional inside it resolved; `f` itself, metadata and
+  all, when it holds none."
+  [f features file]
+  (let [m (meta f)
+        m2 (if m (resolve-meta m features file) m)
+        rebuilt
+        (cond
+          (or (seq? f) (vector? f))
+          (let [[xs ps changed?] (resolve-items (vec f) (:child-pos m) features file)]
+            (when changed?
+              [(if (seq? f) (apply list xs) xs)
+               ;; THE POSITIONS FOLLOW THE ELEMENTS, and an empty list has
+               ;; none -- `with-pos` writes `:child-pos` only when there are
+               ;; children.
+               (if (and ps (contains? m2 :child-pos))
+                 (if (seq ps) (assoc m2 :child-pos ps) (dissoc m2 :child-pos))
+                 m2)]))
+
+          (map? f)
+          (let [kvs (vec (mapcat (fn [e] [(key e) (val e)]) f))
+                n (count kvs)
+                out (loop [i 0 acc [] changed? false]
+                      (if (= i n)
+                        (when changed? acc)
+                        (let [x (nth kvs i)
+                              y (if (even? i)
+                                  (resolve-form x features file)
+                                  (resolve-one x features file))]
+                          (recur (inc i) (conj acc y)
+                                 (or changed? (not (identical? x y)))))))]
+            (when out [(flint.rt/array-map out) m2]))
+
+          (set? f)
+          (let [xs (vec f)
+                ys (mapv (fn [x] (resolve-form x features file)) xs)]
+            (when (some true? (map (fn [x y] (not (identical? x y))) xs ys))
+              [(set ys) m2]))
+
+          :else nil)]
+    (cond
+      rebuilt (let [[v vm] rebuilt] (if vm (with-meta v vm) v))
+      (identical? m m2) f
+      :else (with-meta f m2))))
+
+(defn resolve-conditionals
+  "The forms of a `read-deferred` answer under `features`: what `read-all`
+  with those features would have read from the same text, metadata included.
+  Only the top-level forms `:conds` names are walked. `file` is the read's
+  `:file`, which positions are stamped with."
+  [{:keys [forms conds]} features file]
+  (if (empty? conds)
+    forms
+    (let [at (set conds)
+          n (count forms)]
+      (loop [i 0 acc []]
+        (if (= i n)
+          acc
+          (let [f (nth forms i)]
+            (if (contains? at i)
+              (if (conditional? f)
+                (let [r (resolve-node f features file)
+                      [_ line col] (:form f)]
+                  (cond
+                    (or (eof? r) (identical? r SPLICE-NONE)) (recur (inc i) acc)
+                    (spliced? r) (resolve-err file line col "#?@ outside a collection")
+                    :else (recur (inc i) (conj acc r))))
+                (recur (inc i) (conj acc (resolve-form f features file))))
+              (recur (inc i) (conj acc f)))))))))

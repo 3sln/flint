@@ -1012,13 +1012,15 @@
 ;; The native CLI embeds `lib/` already read by the compiler it ships
 ;; (`DECISIONS.md#stdlib-preread`), and the guest uses those forms only when
 ;; they were read under the options it would read with. The block above already
-;; holds the BYTES: its EDN arm carries every stdlib file as text, so
-;; `identical=true` is pre-read against read. What it cannot see is the cache
-;; silently MISSING -- a compile that reads the text after all is correct and
-;; merely slow, so it passes everything. This is the control: the same compile
+;; holds the BYTES: its EDN arm carries every stdlib file as text -- read from
+;; the source tree, since the binary carries none -- so `identical=true` is
+;; pre-read against read. What it cannot see is the pre-read not being USED --
+;; a compile that read text after all would be correct and merely slow, so it
+;; would pass everything. This is the control: the same compile
 ;; with `FLINT_PREREAD=0` must cost several times the instructions, with and
-;; without `:optimize [perf]` (each mode has its own pre-read blob). Measured
-;; 2026-10-05: words 4.39 M without, 0.52 M with.
+;; without `:optimize [perf]` (one feature-independent read serves both, and
+;; each resolves its own conditionals). Measured 2026-10-05: words 4.39 M
+;; without, 0.55 M with (0.52 M when the host decoded every file).
 (defn split-steps [flags env]
   (let [pb (ProcessBuilder.
             (into-array String (concat ["./target/release/flint" "run" ":path" "corpus"

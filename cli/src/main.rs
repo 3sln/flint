@@ -286,21 +286,19 @@ fn workspace_entry(prefix: &str, w: &Workspace, fallback_name: &str) -> String {
 fn compile_split(c: &mut Program, args: &[&str], files: &SplitFiles)
                  -> flint_rt::native::Outcome {
     use flint_rt::codec::{Val, Wire};
-    // WRITTEN BY HAND rather than built as a `Val` tree, so a pre-read file's
-    // forms are SPLICED in as the bytes `build.rs` encoded -- never parsed into
-    // a tree here only to be written straight back out.
+    // WRITTEN BY HAND rather than built as a `Val` tree: a pre-read file goes
+    // over as the bytes `build.rs` embedded, borrowed, and the guest decodes
+    // them only if the compile reaches that namespace.
     let mut w = Wire::new();
     w.vector(2).string("flint.selfhost/main").vector(2 + args.len() as u32).string("split");
     w.map(files.bodies.len() as u32);
     for (k, v) in &files.bodies {
         w.string(k);
-        match files.preread_of(k, v) {
-            // `{:src text :preread {:opts .. :forms ..}}`, which
-            // `flint.project/file-answer` takes apart (`DECISIONS.md#stdlib-preread`).
-            Some(forms) => {
-                w.map(2).keyword(None, "src").string(v).keyword(None, "preread").raw(forms);
-            }
-            None => { w.string(v); }
+        match v {
+            Body::Text(t) => { w.string(t); }
+            // `{:preread bytes}`, which `flint.project/file-answer` takes apart
+            // (`DECISIONS.md#stdlib-preread`).
+            Body::Forms(b) => { w.map(1).keyword(None, "preread").bytes(b); }
         }
     }
     for a in args {
@@ -326,47 +324,32 @@ fn compile_split(c: &mut Program, args: &[&str], files: &SplitFiles)
     }
 }
 
-/// The file bodies a split compile hands over, and which pre-read standard
-/// library goes with them (`DECISIONS.md#stdlib-preread`).
+/// The file bodies a split compile hands over (`DECISIONS.md#stdlib-preread`).
 pub(crate) struct SplitFiles {
-    bodies: BTreeMap<String, String>,
-    /// The embedded blob and its index for the FEATURE SET this compile reads
-    /// under, or `None` when it reads under one nothing was pre-read for.
-    preread: Option<(&'static [u8], &'static [(&'static str, usize, usize)])>,
+    bodies: BTreeMap<String, Body>,
 }
 
-impl SplitFiles {
-    /// The encoded `{:opts .. :forms ..}` for `path`, when there is one AND the
-    /// body being sent is the standard library's own text. A project file can
-    /// sit at a stdlib path and replace it (`files.extend(mine)`), and its text
-    /// must then be read, not paired with forms read from somebody else's.
-    fn preread_of(&self, path: &str, body: &str) -> Option<&'static [u8]> {
-        let (blob, index) = self.preread?;
-        let i = index.binary_search_by(|e| e.0.cmp(path)).ok()?;
-        let lib = STDLIB.iter().find(|e| e.0 == path)?.1;
-        (lib == body).then(|| &blob[index[i].1..index[i].2])
-    }
+/// One file as the compile receives it: a project's TEXT, or a standard
+/// library file already READ -- its `flint.forms` bytes, borrowed from the
+/// binary. Which one a path holds is decided where the map is built, so a
+/// project file at a stdlib path replaces the forms rather than being paired
+/// with them.
+pub(crate) enum Body {
+    Text(String),
+    Forms(&'static [u8]),
 }
 
-/// Which pre-read blob a compile under `features`/`strip_checks` can use.
-///
-/// THE SAME TWO CASES `build_spec_impl` writes `:features` for, and no more: an
-/// explicit set gets none, because the guest would refuse a mismatch anyway
-/// and sending forms only to have them refused is decoding for nothing. The
-/// guest's check is what makes this SAFE; this only makes it cheap. Off with
-/// `FLINT_PREREAD=0`, which is how the saving is measured and how a suspected
-/// pre-read defect is ruled in or out.
-fn preread_for(features: Option<&[String]>, strip_checks: bool)
-               -> Option<(&'static [u8], &'static [(&'static str, usize, usize)])> {
-    if std::env::var("FLINT_PREREAD").is_ok_and(|v| v == "0") {
-        return None;
-    }
-    let want = match (features, strip_checks) {
-        (Some(_), _) => return None,
-        (None, true) => "strip",
-        (None, false) => "default",
-    };
-    STDLIB_PREREAD.iter().find(|v| v.0 == want).map(|v| (v.1, v.2))
+/// The text of standard-library file `path`, FROM THE SOURCE TREE this binary
+/// was built from -- the binary carries the library's forms and not its text
+/// (`DECISIONS.md#stdlib-preread`). Only the test hooks ask: `FLINT_PREREAD=0`,
+/// which reads the library from text to measure what the forms save, and the
+/// EDN spec `FLINT_SPEC_OUT` and `FLINT_CHECK_SPLIT` compare against.
+fn stdlib_text(path: &str) -> Result<String> {
+    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("lib").join(path);
+    fs::read_to_string(&p).map_err(|e| anyhow::anyhow!(
+        "this binary carries the standard library READ, not as text; reading it as text \
+         (FLINT_PREREAD=0, FLINT_SPEC_OUT, FLINT_CHECK_SPLIT) needs the source tree it was \
+         built from, and {} is not there: {e}", p.display()))
 }
 
 fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
@@ -399,7 +382,7 @@ fn build_spec_split(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>
     }
     let (spec, bodies) = build_spec_impl(srcs, entry, slots, aot, shake, meta, roots, pods,
                                          strip_checks, features, true)?;
-    Ok((spec, SplitFiles { bodies, preread: preread_for(features, strip_checks) }))
+    Ok((spec, SplitFiles { bodies }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -409,15 +392,22 @@ fn build_spec_impl(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
                    pods: &[(String, Vec<String>)],
                    strip_checks: bool,
                    features: Option<&[String]>,
-                   split: bool) -> Result<(String, BTreeMap<String, String>)> {
+                   split: bool) -> Result<(String, BTreeMap<String, Body>)> {
     // `:flint/nested` decides whether `flint.ception` is offered at all. Absent
     // from an explicit set, the namespace is not emitted and a program naming
     // it does not compile (`DECISIONS.md#flint-ception`). Default is ON, so a build
     // that says nothing about features keeps it.
     let nested = features.map_or(true, |f| f.iter().any(|x| x == ":flint/nested"));
-    let mut files: BTreeMap<String, String> = BTreeMap::new();
-    for (p, body) in STDLIB {
-        files.insert((*p).to_string(), (*body).to_string());
+    // THE STANDARD LIBRARY AS FORMS, one read for every feature set
+    // (`DECISIONS.md#stdlib-preread`). As text only for the test hooks:
+    // `FLINT_PREREAD=0` is how the saving is measured and a suspected
+    // pre-read defect ruled in or out, and the EDN spec has nowhere to put
+    // bytes.
+    let as_text = !split || std::env::var("FLINT_PREREAD").is_ok_and(|v| v == "0");
+    let mut files: BTreeMap<String, Body> = BTreeMap::new();
+    for (p, a, b) in STDLIB_INDEX {
+        let body = if as_text { Body::Text(stdlib_text(p)?) } else { Body::Forms(&STDLIB_FORMS[*a..*b]) };
+        files.insert((*p).to_string(), body);
     }
     // PER ROOT, so each file can be attributed to the workspace that owns it.
     // Reading them all into one map loses which root a file came from, and the
@@ -445,11 +435,14 @@ fn build_spec_impl(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
             mine.insert(key, body);
         }
         owned.push((s.clone(), mine.keys().cloned().collect()));
-        files.extend(mine);
+        // A project file at a standard-library path REPLACES it, text for
+        // forms, so the two can never be paired.
+        files.extend(mine.into_iter().map(|(k, v)| (k, Body::Text(v))));
     }
     let mut out = String::from("{:files {");
     if !split {
         for (k, v) in &files {
+            let Body::Text(v) = v else { unreachable!("an EDN spec is built from text") };
             out.push_str(&edn_string(k));
             out.push(' ');
             out.push_str(&edn_string(v));
