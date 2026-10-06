@@ -116,6 +116,20 @@ public class RtFoundation {
         // answering 0 is where native raises its catchable memory-limit error,
         // and the ports raise none -- a gap older than growth, in `ROADMAP.md`.
         Rt rt = new Rt(2L * 1024 * 1024, 64L * 1024 * 1024);
+        // UNDER `-Dflint.gcstress=1` the count is 55, not 56, and that is not
+        // a packing bug: the flag is read once per `Gc`, so it is already on
+        // for `initSingletons()`, which forces a minor collection on each of
+        // its four small allocations and promotes them to old space early.
+        // That fragments the first old chunk by a few hundred bytes, which is
+        // enough to turn the LAST ~1 MiB node away before the ceiling.
+        // Verified against native: `Rt::with_heap` normally sets `stress`
+        // AFTER singleton init runs, so a bare `cargo test --features
+        // diagnostics` never sees this; constructing the heap with `stress`
+        // already true (matching what the JVM's process-wide system property
+        // does) reproduces the same 55 there too (checked 2026-10-06,
+        // scratch probe in `runtime/src/rt.rs`, removed after). So 55 under
+        // stress is the three-runtime answer, not a JVM defect.
+        int want = rt.gc.stress ? 55 : 56;
         int base = rt.mark();
         int n = 0;
         while (true) {
@@ -126,9 +140,9 @@ public class RtFoundation {
         }
         long grown = rt.gc.sp.committed;
         rt.popTo(base);
-        if (n != 56 || grown <= 8 * M || grown > 64 * M)
+        if (n != want || grown <= 8 * M || grown > 64 * M)
             throw new AssertionError("fill: " + n + " nodes, committed " + grown);
-        System.out.println("  ok   a 64 MiB heap holds 56 1 MiB nodes and then refuses, as before it could grow");
+        System.out.println("  ok   a 64 MiB heap holds " + want + " 1 MiB nodes and then refuses, as before it could grow");
     }
 
     /// The interpreter, on hand-assembled bytecode.
