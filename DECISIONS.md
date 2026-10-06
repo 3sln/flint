@@ -14923,9 +14923,13 @@ this -- not resolved here, since this section is unbuilt and the amendment
 only had to fix what ships.
 
 *Amended 2026-10-06 with the maintainer's decisions:* the standard library
-is answered by an ordinary resolver, an optional building block never applied
-around a host's resolver, and the compiler never distinguishes its namespaces
-(§4); the control plane depends on no resolved namespace (§1, "Roots"); the
+splits into a required **stdcore** and an optional **stdextra** (the
+maintainer's naming) -- stdcore is answered before the host's resolver runs
+at all, and stdextra is an ordinary, optional building block, `stdextra()`,
+the host may or may not compose around (§4, which supersedes the earlier
+"`stdlib()` is an ordinary optional resolver" framing); the compiler never
+distinguishes namespaces WITHIN a layer, only which layer a name belongs to;
+the control plane depends on no resolved namespace (§1, "Roots"); the
 path-prefix grant hole is a known issue this redesign removes, with no interim
 fix (an earlier draft's step 0 was dropped because the redesign would tear it
 out). The open questions were narrowed to the ones the maintainer left open.
@@ -14958,10 +14962,18 @@ out). The open questions were narrowed to the ones the maintainer left open.
 * **The answer is PRE-READ BYTES** in `flint.forms`'s encoding, the format the
   native CLI already embeds the standard library in. So **a reader exists on
   the host side, outside the compiler sandbox.**
-* **Security belongs to whoever implements the resolver**, through its
-  contract: strict lookup priority (the standard library first, user code
-  second) or segregation (`flint.*` only from the standard library). The
-  default SDK and CLI resolvers do this.
+* **The standard library is two layers, stdcore and stdextra** (§4, amended
+  2026-10-06). stdcore -- the namespaces every image needs regardless of what
+  resolver a host supplies -- is answered by the compiler's own embedded copy
+  before the host's resolver is ever asked; stdextra is everything else,
+  offered only as the `stdextra()` resolver building block a host may
+  compose in, omit, or (in JS) let a bundler tree-shake away.
+* **Security belongs to whoever implements the resolver, for stdextra and
+  user names**, through its contract: strict lookup priority (stdextra
+  first, user code second) or segregation (`flint.*`/`clojure.*` only from
+  stdextra). The default SDK and CLI resolvers do this. stdcore is outside
+  the resolver's contract entirely -- there is no priority question for
+  those names, because nothing a resolver answers for them is ever used.
 
 What follows is how. Where the design had a real choice, the options are
 priced and one is recommended; the questions that need the maintainer are
@@ -15289,9 +15301,10 @@ compares failures too.
 
 The build-time preread (`cli/build.rs` calling mode `preread`) becomes
 `flint.selfhost/read` with `:features :any` over each `lib/` file. Step 4 has
-`bin/build-dist` produce `dist/stdlib.forms` ONCE, keyed by namespace, so
-that every door embeds the same blob. The ESM SDK embeds `stdlib.json` text
-today.
+`bin/build-dist` produce `dist/stdcore.forms` and `dist/stdextra.forms` ONCE
+each, keyed by namespace, so that every door embeds the same two blobs (§4
+amends this from the single `dist/stdlib.forms` first proposed here). The ESM
+SDK embeds `stdlib.json` text today, for what becomes both.
 
 ### 3. Sync or async
 
@@ -15319,31 +15332,196 @@ block. The npm CLI's filesystem resolver is synchronous and can use either.
 ### 4. The resolver contract, and the defaults
 
 What an implementer must guarantee. It goes in each SDK's documentation and in
-`doc/api-review.md` for each surface it changes:
+`doc/api-review.md` for each surface it changes.
+
+**0. stdcore and stdextra, precisely.** *Amended 2026-10-06, replacing the
+earlier "`stdlib()` is an ordinary optional resolver" framing with the
+maintainer's two-layer naming.* The standard library is not one optional
+resolver building block; it is two layers with different relationships to
+the host's resolver:
+
+* **stdcore** -- every namespace an image needs whether or not the host
+  supplies anything, plugged in ON TOP of whatever resolver the host passes
+  and answered from the compiler/SDK's own embedded copy, unconditionally,
+  BEFORE the host's resolver is asked anything. A host's resolver is never
+  consulted for a stdcore name -- not "ignored" (the hook is not called and
+  its answer discarded) and not "refused" (there is no error): there is
+  exactly one path to an answer for a stdcore name, the same way
+  `flint.rt/var-named` has exactly one caller to trust
+  (`DECISIONS.md#the-control-plane-is-the-runtimes`). A host with no stdlib
+  at all still compiles ordinary programs, because stdcore needs nothing
+  from the host to be there.
+* **stdextra** -- everything else, offered only as the `stdextra()` resolver
+  building block a host may compose into the resolver it passes, or omit
+  (giving a program with no `clojure.set`, no `flint.fs`, and so on, but
+  never no `clojure.core`), or, in JS, never import at all so a bundler
+  tree-shakes the whole blob out.
+
+**Which namespaces are in stdcore, and why, from the survey behind this
+amendment (method: followed each `lib/` file's own `:require` clause to a
+fixed point from the two roots `flint.project/project-roots` already
+hardcodes, `clojure.core` and the call loop's `flint.port`/`flint.wire`;
+sizes by `wc -l`, counted 2026-10-06 at this tree):**
+
+| namespace | lines | why it is in the closure |
+|---|---|---|
+| `clojure.core` | 1 937 | hardcoded root (`project-roots`); see below |
+| `flint.port` | 325 | hardcoded root: the call loop names `flint.port/send` by var (`flint.callentry/allowed-vars`) |
+| `flint.wire` | 225 | hardcoded root: the call loop names `flint.wire/read-from` by var |
+| `flint.protocols` | 271 | `flint.port` and `flint.wire` both `:require` it (`WireMeta`); `clojure.core` also requires it |
+| `flint.core` | 107 | `flint.protocols` requires it (`:refer [kind]`); `clojure.core` requires it too |
+| `flint.regex` | 477 | `clojure.core` requires it directly, for `re-pattern`/`re-find`/`re-matches`/`re-seq` (`lib/clojure/core.cljc:1607-1612`) |
+| `clojure.string` | 202 | `flint.regex` requires it |
+| `flint.nfa` | 185 | `flint.regex` requires it (the shared NFA compiler `flint.pike` also uses, but `flint.pike` itself is not in the closure) |
+
+Total: **8 of the 36 `lib/` namespaces, 3 729 of 8 909 lines (42%)**. The
+other 28 -- `clojure.data`, `clojure.edn`, `clojure.set`, `clojure.walk`,
+`clojure.zip`, `clojure.datafy`, `clojure.core.protocols`, `flint.check`,
+`flint.cli`, `flint.deps` and its three siblings, `flint.doc`, `flint.fs`,
+`flint.host`, `flint.pike`, `flint.protocols.io`, `flint.rpc`,
+`flint.snapshot`, `flint.table`, `flint.thread`, `flint.virtual`,
+`flint.bytes`, and the four `flint.data.*` formats -- stay stdextra.
+`flint.check` stays stdextra too, despite being on by default in a
+development build: `project-roots` only adds it as a root when the
+`:flint/check` feature is set, which is a build-time choice the SAME
+`stdextra()`-shaped mechanism can express, not an unconditional need.
+
+**`clojure.core`'s verdict, with the evidence asked for.** It is NOT reached
+by any `:require` edge from the call loop or from `flint.port`/`flint.wire`
+themselves -- none of those three names it. It is a root purely because
+`project-roots` hardcodes it, and the comment there states why: "every
+namespace refers it implicitly and almost none of them `:require` it, so
+starting only from the entry collects a program whose `str` resolves to
+nothing." Omitting it does not fail loudly; it fails by every ordinary name
+-- `=`, `str`, `+`, `let`, most of a program's own text -- resolving to
+nothing, because the implicit refer that makes those names available carries
+no `:require` edge for a graph walk to follow. A program restricted to
+`flint.rt` builtins, special forms and nothing else (what the call loop
+itself is held to) would not need it, but that is not what "a program" means
+to anyone writing one. **Verdict: required**, and required for a reason
+distinct from the other seven -- it is pulled in by fiat, not by a reachable
+edge, because the edge that would otherwise justify it (the implicit refer)
+is exactly the one the graph cannot see.
+
+**"Required to resolve" is not "required to link."** `clojure.core`'s own
+`:require` of `flint.regex` means the WAVE WALK must find source for
+`flint.regex` (and transitively `clojure.string`, `flint.nfa`) for every
+compile, because resolution runs over `:require` edges regardless of whether
+anything calls through them. Whether those bytes end up IN an image is a
+separate, per-var question the shaker answers (`DECISIONS.md#modularity`): a
+`hello world` that never matches a pattern still has `flint.regex` and
+`flint.nfa` resolved at compile time, and the shaker is what keeps them out
+of the emitted image. stdcore is sized by the first question, not the
+second -- it is the set the RESOLVER must always be able to answer, which is
+a superset of what any one image actually links.
+
+**Versioning: stdcore is pinned to the compiler build, not supplied at the
+call.** Because the call loop's correctness depends on `flint.port/send` and
+`flint.wire/read-from` behaving exactly as the compiler that emitted the loop
+expects, stdcore cannot be a value a host passes in -- a host-supplied
+`flint.port` of a different version would desync from the call loop the
+SAME compiler build already baked into every image. So there is one
+`dist/stdcore.forms`, produced by `bin/build-dist` exactly as
+`dist/stdlib.forms` is today and rebuilt whenever the compiler is
+(`AGENTS.md §3`'s build-dist-then-cargo order already enforces this order);
+there is no separate stdcore version number to go stale, because there is no
+route for a second copy to exist. A stdcore/compiler mismatch is the same
+class of bug as embedding a stale `dist/`, not a new one.
+
+**Where the copy lives, per door:**
+
+* *native CLI and npm CLI:* `dist/stdlib.forms` splits into
+  `dist/stdcore.forms` (embedded unconditionally) and `dist/stdextra.forms`
+  (embedded too, since a monolithic binary gains nothing from omitting it,
+  but logically the data behind the `stdextra()` building block, which a
+  host composes in or segregates away like any other resolver).
+* *ESM SDK:* stdcore's forms are inlined into the SDK's core module, not
+  behind any call, so there is nothing to tree-shake and nothing for a host
+  to omit. stdextra's forms stay behind `stdextra()` in its own module,
+  exactly where `stdlib()`'s are today, so an unused import still drops the
+  whole blob.
+* *Rust SDK, C API, JVM, CLR:* stdcore embedded in the SDK's own
+  binary/jar, consulted first by the SDK's `compile` and never exposed as a
+  resolver a host could override; `stdextra()` offered the same way
+  `stdlib()` is today.
+* *bin/flint:* reads stdcore straight off the checked-out `lib/` tree,
+  in-process, like the rest of the bootstrap -- fixed to the same commit as
+  the compiler source it bootstraps, so skew is impossible by construction,
+  not by a version check.
+
+**Grants and workspace are unchanged by the split.** A stdcore answer still
+carries `lib/deps.edn`'s workspace (`flint/flint`, its grants), exactly as a
+`stdlib()`/`stdextra()` answer does today, under rule 2 below. What changed
+is only which code path produces the answer, never the rule that governs
+what the answer means once it exists.
+
+**How `lib/` is physically separated (design only -- no files moved by this
+survey).** The 36 namespaces already cluster into the required eight and 28
+others by nothing but their `:require` edges, which means the split can be
+a fact a directory listing shows rather than one restated in a second file
+(`AGENTS.md §1`: "if two lists must exist, make one read the other").
+**Recommended: two directory roots, `lib/stdcore/` and `lib/stdextra/`,
+mirroring the namespace path under each** -- `lib/stdcore/clojure/core.cljc`,
+`lib/stdcore/flint/port.cljc`, `lib/stdcore/flint/wire.cljc`,
+`lib/stdcore/flint/protocols.cljc`, `lib/stdcore/flint/core.cljc`,
+`lib/stdcore/flint/regex.cljc`, `lib/stdcore/clojure/string.cljc`,
+`lib/stdcore/flint/nfa.cljc`, and the other 28 under `lib/stdextra/` in the
+same shape. Namespace NAMES do not change (`clojure.core` stays
+`clojure.core`); only where its source sits moves, so only the default
+filesystem resolver building block and the handful of build sites that
+currently say `lib/` -- `bin/build-dist`, `cli/build.rs` (`root.join("lib")`,
+`build.rs:28`), `sdks/cli/build` (`path.join(root, "lib")`, `build:45`), and
+`bin/flint` -- need to learn two roots instead of one.
+
+The alternative -- one `lib/` tree with a membership list, e.g. a `:tier` key
+per namespace added to `doc/manifest.edn` -- moves no files and costs less
+migration, but is exactly the second list AGENTS.md §1 warns about: every
+site above that currently just walks `lib/` would instead have to read the
+manifest and partition by it, and a ninth namespace added to the closure
+later (or one of the 28 wrongly assumed stable, which `bin/check-kin`-style
+drift already shows happens) is a line someone has to remember to change in a
+file that is not where the namespace's source lives, rather than a `git mv`
+visible in the same diff as the code it moves. The directory split also
+makes the embedding boundary literal at every door in one step -- "walk
+`lib/stdcore/` always, `lib/stdextra/` only when the door composes
+`stdextra()`" needs no manifest lookup anywhere. Its cost is `git mv` on
+eight files (one large, `clojure/core.cljc` at 1 937 lines; the rest under
+500) and updating the four path constants named above. **Recommendation:
+the directory split**, for the same reason AGENTS.md §1 gives for every
+other enumerated concept in this tree: a fact in the filesystem cannot drift
+from itself.
 
 1. **An answer is a function of the namespace name alone, within one
    compile.** No "who is asking" is passed, deliberately. A name that
    resolves differently depending on the requirer cannot be cached and is not
-   deterministic, and the compiler asks each name at most once anyway.
+   deterministic, and the compiler asks each name at most once anyway. This
+   governs stdextra and user names; a stdcore name is never asked of the
+   host's resolver at all (see 0, above).
 2. **Grants, guard and workspace come from WHERE the answer was found**,
    never from the name and never from a path prefix. Every resolver answers
-   with its own workspace: the `stdlib()` building block happens to answer
-   with `lib/deps.edn`'s (`flint/flint`, `:host`, `:vars`), and a directory or
-   bundle resolver with the workspace of the root or bundle that supplied the
-   file. The compiler never distinguishes a stdlib namespace from any other;
-   it sees answers and their workspaces. That is a grant conferred from outside, in AGENTS.md §5's sense,
-   because the embedder confers it.
-3. **Nothing is applied around the host's resolver (decided).** The
-   compiler and the SDK call exactly the resolver the host passed. `stdlib()`
-   is a resolver like any other, which the host MAY include, so whether a
-   program may replace one of its namespaces -- or omit it -- is purely the
-   host's resolver's choice, and a host that does supplies its own workspace
-   for what it answers. Rule 2 is what makes that safe: an answer carries the
-   workspace of wherever it was found, so the `flint.evil` probe fails under
-   any composition. Ordering and segregation (`chain`, `segregate`) are
-   generic combinators a host may apply to any resolvers and any prefixes.
-   **Omitting `stdlib()` means no `clojure.core` either**: the program is
-   compiled against `flint.rt` and special forms alone.
+   with its own workspace: stdcore and the `stdextra()` building block both
+   happen to answer with `lib/deps.edn`'s (`flint/flint`, `:host`, `:vars`),
+   and a directory or bundle resolver with the workspace of the root or
+   bundle that supplied the file. The compiler distinguishes a stdcore name
+   only to decide WHO answers (itself, never the host); once an answer
+   exists, stdcore's and everyone else's are treated alike by this rule.
+   That is a grant conferred from outside, in AGENTS.md §5's sense, because
+   the embedder confers it.
+3. **Nothing is applied around the host's resolver for stdextra or user
+   names (decided).** The compiler and the SDK call exactly the resolver the
+   host passed. `stdextra()` is a resolver like any other, which the host MAY
+   include, so whether a program may replace one of ITS optional namespaces
+   -- or omit it -- is purely the host's resolver's choice, and a host that
+   does supplies its own workspace for what it answers. Rule 2 is what makes
+   that safe: an answer carries the workspace of wherever it was found, so
+   the `flint.evil` probe fails under any composition. Ordering and
+   segregation (`chain`, `segregate`) are generic combinators a host may
+   apply to any stdextra/user resolvers and any prefixes. **stdcore is the
+   one deliberate exception to this rule**: those eight names are answered
+   before the host's resolver runs at all (0, above), so no composition of
+   `chain`/`segregate` lets a program replace `clojure.core` or
+   `flint.port`, and **omitting `stdextra()` means no `clojure.set`, no
+   `flint.fs`, and so on -- never no `clojure.core`.**
 4. **Untrusted text is never handed to the compiler.** The host reads it
    (§2). A hook may return text, which the SDK reads with the answer's tag map
    and the compile's features, or forms bytes it read itself. The compiler
@@ -15353,32 +15531,44 @@ What an implementer must guarantee. It goes in each SDK's documentation and in
    A file can write any metadata it likes, and the bytes faithfully carry it.
 
 **The building blocks, and the defaults.** Every SDK offers small
-composable resolvers rather than one policy: `stdlib()` (the embedded,
-pre-read standard library, answering with its own workspace and grants),
-`fromMap(...)` (namespace-derived path to text or forms), `dir(...)` where
-there is a filesystem, `virtual(...)` for served namespaces, `chain(...)`,
-which asks each in turn and takes the first non-nil answer, and
-`segregate(prefixes, resolver)`, which answers not-found for the prefixes it
-names unless that resolver has them, rather than letting them fall through. **In JS the stdlib's forms live only
-behind `stdlib()`**, in its own module, so a host that never calls it lets a
-bundler tree-shake the whole blob out; the SDK's core must not import it. The
-CLIs are hosts like any other and compose these explicitly:
+composable resolvers for stdextra, user and virtual sources -- nothing
+composes stdcore, which is simply there before any of this runs:
+`stdextra()` (the embedded, pre-read optional half of the standard library,
+answering with its own workspace and grants), `fromMap(...)`
+(namespace-derived path to text or forms), `dir(...)` where there is a
+filesystem, `virtual(...)` for served namespaces, `chain(...)`, which asks
+each in turn and takes the first non-nil answer, and `segregate(prefixes,
+resolver)`, which answers not-found for the prefixes it names unless that
+resolver has them, rather than letting them fall through. **In JS stdextra's
+forms live only behind `stdextra()`**, in its own module, so a host that
+never calls it lets a bundler tree-shake the whole blob out; the SDK's core
+must not import it -- stdcore's forms ARE in that core, unconditionally,
+because there is no scenario where omitting them is legitimate. The CLIs are
+hosts like any other and compose these explicitly, for stdextra, pods and
+user sources -- stdcore is answered before any of it runs:
 
 * *CLI, native and npm:* the CLI is a host making its own choice, here
-  `chain(segregate(["clojure." "flint."], stdlib() + the host catalogue),
-  pods, dir(roots..))` -- the embedded stdlib forms keyed by namespace, then
-  the host catalogue's virtual namespaces and declared pods, then the source
-  roots in the order given, with `flint.project/source-extensions`' order
-  within a root. Each user answer carries the workspace read from that root's
-  `deps.edn`. Today's `read_workspace` scan stays, but it fills an answer
-  rather than a prefix entry. A file passed as a source (a script) has no
-  workspace (`DECISIONS.md#standalone-scripts`), as now.
-* *ESM SDK:* `compile({resolve})` takes ONE resolver, the host's, and adds
-  nothing around it. A resolver is
+  `chain(segregate(["clojure." "flint."], stdextra() + the host catalogue),
+  pods, dir(roots..))` -- the embedded stdextra forms keyed by namespace,
+  then the host catalogue's virtual namespaces and declared pods, then the
+  source roots in the order given, with `flint.project/source-extensions`'
+  order within a root. Each user answer carries the workspace read from that
+  root's `deps.edn`. Today's `read_workspace` scan stays, but it fills an
+  answer rather than a prefix entry. A file passed as a source (a script) has
+  no workspace (`DECISIONS.md#standalone-scripts`), as now. The
+  `clojure./flint.` segregation now guards stdextra's remaining prefixed
+  names (`clojure.set`, `flint.fs`, ...); stdcore's eight names need no
+  guarding here because no resolver in this chain is ever asked for them.
+* *ESM SDK:* `compile({resolve})` takes ONE resolver, the host's, for
+  stdextra and user names, and adds nothing around it -- stdcore is answered
+  before `resolve` is ever called. A resolver is
   `(ns) => null | string | {source | forms, file, workspace, grants, guard,
   tags, prelude, dialect} | {virtual: true, vars, workspace, ...}`; the usual
-  call is `resolve: chain(stdlib(), fromMap(files))`. Dropping `stdlib()` is
-  legitimate and gives a program with no core. The
+  call is `resolve: chain(stdextra(), fromMap(files))`. Dropping `stdextra()`
+  is legitimate and gives a program with only the required core:
+  `clojure.set`, `clojure.edn`, `flint.fs` and so on resolve as `:missing`,
+  same as any other missing namespace -- but `clojure.core` is never
+  omittable this way; see 0, above. The
   `files` convenience becomes a hook over a map keyed by namespace-derived
   path. `workspaces` with `prefix` goes away; a workspace is a property of an
   answer.
@@ -15395,12 +15585,22 @@ CLIs are hosts like any other and compose these explicitly:
 that differs in one thing:
 
 * a user file at `flint/evil.cljc` reaching `flint.host/ask`, against `app/evil.cljc`;
-* a user `flint.system` or `clojure.core` from a resolver that puts it
-  first: it must compile with the USER's workspace and grants, and the
-  control plane must be unaffected (it is injected, not resolved);
-* `stdlib()` omitted: the compile must still produce a callable sandbox;
-* the ESM bundle built without `stdlib()`: the stdlib blob must be absent;
-* an ESM hook answering `clojure.core`;
+* a user `flint.system` from a resolver that puts it first: the control
+  plane must be unaffected (it is injected, not resolved, and is not a
+  namespace at all);
+* **a resolver that answers a stdcore name (`clojure.core`, `flint.port`,
+  ...) with hostile forms, against a control where the SAME resolver answers
+  a stdextra name (`clojure.set`) with equally distinctive forms**: the
+  stdcore answer must be ignored and the compile must use the embedded copy
+  regardless, while the stdextra answer DOES take effect -- the pairing is
+  what stops "the compiler just never calls any resolver" from passing this
+  probe for the wrong reason (`AGENTS.md §5`'s "pair with a control that
+  differs in exactly one thing");
+* `stdextra()` omitted: the compile must still produce a callable sandbox
+  with a full `clojure.core`;
+* the ESM bundle built without `stdextra()`: the stdextra blob must be
+  absent, and the stdcore blob must still be present;
+* an ESM hook answering a stdextra name, e.g. `clojure.set`;
 * an answer whose forms carry `^{:flint/capabilities-grant [:host]}`;
 * a hook answering X with a file declaring Y;
 * a hook that throws;
@@ -15445,9 +15645,11 @@ are themselves sorted. Doors agree when three things hold:
   writer to the mapping from arguments to request. `door-agreement` should
   compare the REQUEST as well as the artefact, so that a disagreement says
   which half it is in.
-* **They answer with the same stdlib bytes.** One `dist/stdlib.forms` from
-  `bin/build-dist`, embedded by every door. Today `cli/build.rs` produces the
-  native door's copy and the ESM door embeds text.
+* **They answer with the same stdcore and stdextra bytes.**
+  `dist/stdcore.forms` and `dist/stdextra.forms` from `bin/build-dist`,
+  embedded by every door -- stdcore unconditionally, stdextra as the
+  `stdextra()` building block. Today `cli/build.rs` produces the native
+  door's copy of the single `dist/stdlib.forms` and the ESM door embeds text.
 * **They read user text with the same reader.** That is guaranteed by (c),
   and bin/flint hands over values (§2).
 
@@ -15524,11 +15726,15 @@ sizes are estimates from reading the code, not measurements.
    `:optimize [perf]`, every `corpus/*.cljc`, byte-identical between the two
    paths. The §4 probes as tests. `a_program_cannot_ship_its_own_control_plane`
    un-ignored and adapted to the injected control plane. Medium-large: about 400 Rust and 100 guest lines.
-4. **npm CLI and ESM SDK.** `dist/stdlib.forms` from `bin/build-dist`, async
-   `compile` (no `compileSync`, decided), and the default and hook resolvers. Delete
-   `collectSources`, the regex and the prefix grants. *Gate:*
+4. **npm CLI and ESM SDK.** `dist/stdcore.forms` and `dist/stdextra.forms`
+   from `bin/build-dist` (replacing the single `dist/stdlib.forms` first
+   proposed above), async `compile` (no `compileSync`, decided) answering
+   stdcore itself before calling the host's resolver, and the default and
+   hook resolvers for stdextra and user sources. Delete `collectSources`, the
+   regex and the prefix grants. *Gate:*
    `node sdks/cli/selftest.mjs` byte-identity rows,
-   `FLINT_DIST_FRESH=1 sdks/cli/build` first, and `bb test/door-agreement.clj`.
+   `FLINT_DIST_FRESH=1 sdks/cli/build` first, `bb test/door-agreement.clj`,
+   and the §4 stdcore-override probe.
    Medium-large: about 300 JS lines.
 5. **Rust SDK, C API, JVM and CLR `Compiler`.** These carry the new resolver
    signatures, and the C ABI changes. Update `doc/api-review.md` for each
@@ -15567,12 +15773,14 @@ drift fail in a test rather than relying on care.
 
 ### Open, for the maintainer
 
-Decided and folded in above: `stdlib()` is an ordinary, optional resolver,
-nothing is applied around a host's resolver, and the compiler never
-distinguishes stdlib namespaces (§4 rules 2 and 3); the control plane resolves
-nothing (§1); batched per-level requests stay as recommended (§1); the
-path-prefix hole is a known issue the redesign removes, with no interim fix.
-Still open:
+Decided and folded in above: the standard library splits into stdcore
+(required, answered before the host's resolver runs at all) and stdextra
+(an ordinary, optional resolver building block, `stdextra()`); nothing is
+applied around a host's resolver for anything but stdcore; and the compiler
+never distinguishes namespaces WITHIN a layer (§4, "0" and rules 2 and 3);
+the control plane resolves nothing (§1); batched per-level requests stay as
+recommended (§1); the path-prefix hole is a known issue the redesign
+removes, with no interim fix. Still open:
 
 1. ~~ESM `compile` becomes async, with `compileSync` beside it.~~ *Decided
    2026-10-06:* async, and no `compileSync`.
