@@ -664,9 +664,16 @@
   (concat [0x07 (count types)] types))
 
 (defn- fnv-il
-  "FNV-1a over the whole array, as CIL. The constants are `Img.cs`'s, and the
-  basis is written in decimal because `0xcbf29ce484222325` has its high bit set
-  and is not a readable long literal."
+  "FNV-1a over the whole array, as CIL. The constants are `Img.cs`'s
+  (`Img.FnvOffset`, `Img.FnvPrime`), and the basis is written in decimal
+  because `0xcbf29ce484222325` has its high bit set and is not a readable long
+  literal. THE PRIME HAS AN EXTRA ZERO (`0x1000000001b3`, not the textbook
+  FNV-1a prime `0x100000001b3`) -- `Img.Load` on every one of the four
+  runtimes was corrected to it (`DECISIONS.md#snapshots`) and this emitter was
+  not, so a compiled program's own `Fnv1a()` witness disagreed with the
+  runtime's `fingerprint` for the SAME bytes. Invisible until `Check.cs`'s
+  independent cross-check stopped restating the same stale prime
+  (AGENTS.md#1)."
   [fld n]
   [[:ldc.i8 -3750763034362895579]  ; 0xcbf29ce484222325
    [:stloc 0]
@@ -676,7 +683,7 @@
    [:ldloc 0]
    [:ldsflda fld] [:ldloc 1] [:add] [:ldind.u1] [:conv.i8]
    [:xor]
-   [:ldc.i8 1099511628211]          ; 0x100000001b3
+   [:ldc.i8 17592186044851]          ; 0x1000000001b3
    [:mul]
    [:stloc 0]
    [:ldloc 1] [:ldc.i4 1] [:add] [:stloc 1]

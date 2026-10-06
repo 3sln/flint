@@ -34,6 +34,20 @@ public static class Img {
     /// `-1` there.
     public const long NoServe = 0xFFFF_FFFFL;
 
+    /// FNV-1a over the whole image (`DECISIONS.md#snapshots`). PUBLIC, and
+    /// named, so a second computation of the same fingerprint -- `Check.cs`
+    /// cross-validates the emitted `Fnv1a()` IL and the runtime's own
+    /// `fingerprint` field against an independent one -- reads these constants
+    /// rather than restating them (AGENTS.md#1). Restated is exactly how this
+    /// drifted once already: `FnvPrime` carries an EXTRA ZERO
+    /// (`0x1000000001b3`, not the textbook FNV-1a prime `0x100000001b3`) to
+    /// match `runtime/src/image.rs` and the JVM's `Img.java`, and `Check.cs`
+    /// had hardcoded the textbook prime -- so the test that was supposed to
+    /// catch this runtime disagreeing with the other two could not, because it
+    /// disagreed with them the same way.
+    public const long FnvOffset = unchecked((long) 0xcbf29ce484222325UL);
+    public const long FnvPrime = 0x1000000001b3L;
+
     const int KNil = 0, KTrue = 1, KFalse = 2, KInt = 3, KDouble = 4,
         KString = 5, KKeyword = 6, KSymbol = 7, KVector = 8, KList = 9,
         KMap = 10, KSet = 11, KFn = 12, KNative = 13,
@@ -85,10 +99,10 @@ public static class Img {
         // a snapshot had to cross runtimes: each runtime only ever compared
         // its own fingerprint against itself before (`DECISIONS.md#snapshots`).
         // Found importing a native-streamed live set here.
-        long h = unchecked((long) 0xcbf29ce484222325UL);
+        long h = FnvOffset;
         foreach (byte b in bytes) {
             h ^= (b & 0xFFL);
-            h = unchecked(h * 0x1000000001b3L);
+            h = unchecked(h * FnvPrime);
         }
         rt.fingerprint = h;
         if (r.U32() != Version) return null;
