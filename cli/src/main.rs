@@ -2358,3 +2358,83 @@ mod pod_scan_tests {
         );
     }
 }
+
+/// The catchable memory-limit error (`DECISIONS.md#resource-limits`), on the
+/// NATIVE runtime, called over the bridge exactly as the JVM's `RtOom` and
+/// the CLR's `--rt-oom` call it: `oom/main` directly, not through
+/// `flint.main/-main`, with a 2 MiB nursery (`Program::load_with` hardcodes
+/// it) and a 6 MiB ceiling.
+///
+/// Builds its own fixture from the TRACKED source,
+/// `runtimes/conform/oom.cljc` -- the same one the JVM's `RtOom.java` and
+/// the CLR's `Conform --rt-oom` are told to compile -- rather than depending
+/// on a pre-built image under the gitignored `out/`, which a fresh checkout
+/// does not have.
+///
+/// `bin/check`/`bin/test` do not run this: it is a standalone cross-runtime
+/// probe, run directly against the JVM's and the CLR's own copies, not
+/// through `bin/conform-hosts`.
+#[cfg(test)]
+mod oom_tests {
+    use super::*;
+    use flint_rt::codec::{self, Val};
+
+    /// `cargo test`'s cwd is this CRATE's directory, not the workspace root
+    /// `./bin/flint` has to run from (`:src runtimes/conform` is relative to
+    /// it).
+    fn repo_root() -> std::path::PathBuf {
+        std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
+    }
+
+    fn build_oom_image() -> Vec<u8> {
+        let root = repo_root();
+        let rel = "out/conform/oom.img";
+        let status = std::process::Command::new("./bin/flint")
+            .args([":src", "runtimes/conform", ":fn", "oom/main", "--emit-image", ":out", rel])
+            .current_dir(&root)
+            .status()
+            .expect("failed to run ./bin/flint -- is babashka installed?");
+        assert!(status.success(), "./bin/flint did not compile runtimes/conform/oom.cljc");
+        std::fs::read(root.join(rel)).expect("the image was not written")
+    }
+
+    fn run_oom(arg: &str) -> String {
+        let bytes = build_oom_image();
+        let mut natives: Vec<(&str, flint_rt::vm::NativeFn)> = Vec::new();
+        natives.extend_from_slice(flint_conc::HOST_CATALOGUE);
+        let mut p = Program::load_with(&bytes, 6 * 1024 * 1024, &natives)
+            .expect("the compiled program did not load");
+        let mut host = host_for(&[], &[], 0);
+        let caller = host.caller(&mut p).expect("bind a caller");
+        let out = host
+            .call(&mut p, &caller, "oom/main", &[Val::Vector(vec![Val::Str(arg.to_string())])])
+            .expect("the call answered");
+        match codec::parse(&out).expect("a valid wire value") {
+            Val::Str(s) => s,
+            other => panic!("expected a string, got {other:?}"),
+        }
+    }
+
+    /// Filling a 6 MiB heap and catching the result: a flint `try`/`catch`
+    /// around `oom/eat`, not host code reading `rt.thrown` directly -- the
+    /// thing `ROADMAP.md` recorded missing on the ports 2026-10-05.
+    #[test]
+    fn filling_the_heap_raises_a_catchable_resource_exhausted() {
+        // THE EXACT STRING, not just the shape: this is the number that
+        // proved native, the JVM and the CLR agree -- measured identical on
+        // all three (`RtOom.java`, the CLR's `--rt-oom`) before this
+        // assertion was tightened from a shape check to an exact one.
+        assert_eq!(
+            run_oom("eat"),
+            "memory limit exceeded: 5242880 bytes of 6291456 in use after a collection \
+             {:used 5242880, :limit 6291456}"
+        );
+    }
+
+    /// The control: staying under the cap answers normally, not an error --
+    /// `(reduce + (range 1000))`.
+    #[test]
+    fn staying_under_the_limit_answers_normally() {
+        assert_eq!(run_oom("work"), "499500");
+    }
+}

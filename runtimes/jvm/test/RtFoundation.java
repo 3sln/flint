@@ -46,6 +46,7 @@ public class RtFoundation {
             if (Obj.forwardTarget(sp, addr) != far)
                 throw new AssertionError("a 48-bit forward did not survive the header");
             System.out.println("  ok   objects, mark bits and 48-bit forwarding");
+            heapGrows();
 
             // 3. THE MEASUREMENT: a counting loop whose accumulator lives in
             // the space, so every iteration is a real read-modify-write of a
@@ -70,6 +71,64 @@ public class RtFoundation {
             System.out.printf("    3,000,000 iterations, best of 7: %.2f ns/iteration%n", ns);
             System.out.printf("    against 85 ns boxed on the current port -- %.0fx%n", 85.0 / ns);
         }
+    }
+
+    /// A large ceiling starts small and grows, keeping what was written, and
+    /// the ceiling is still where `take` says no (`DECISIONS.md#growable-heap`).
+    /// Mirrors `mem.rs`'s `a_large_ceiling_starts_small_and_grows` and
+    /// `growth_stops_at_the_ceiling`, and the CLR's `HeapGrows`.
+    static void heapGrows() {
+        final long M = 1L << 20;
+        try (Space s = new Space(1L << 30)) {
+            if (s.committed != 8 * M)
+                throw new AssertionError("a 1 GB ceiling backed " + s.committed + " at birth, not 8 MiB");
+            long a = s.take(4 * M);
+            s.writeU64(a, 0x12345678L);
+            long[] runs = new long[20];
+            for (int i = 0; i < 20; i++) {
+                runs[i] = s.take(4 * M);
+                if (runs[i] == 0) throw new AssertionError("take failed below the ceiling");
+                s.writeU8(runs[i] + 4 * M - 1, 0xab);
+            }
+            if (s.committed != 128 * M)
+                throw new AssertionError("committed " + s.committed + ", expected 128 MiB");
+            if (s.readU64(a) != 0x12345678L) throw new AssertionError("growth lost a write");
+            for (long r : runs)
+                if (s.readU8(r + 4 * M - 1) != 0xab) throw new AssertionError("growth lost a run");
+            long z = s.take(Space.PAGE);
+            if (s.readU64(z) != 0) throw new AssertionError("a fresh run is not zero");
+        }
+        try (Space s = new Space(24 * M)) {
+            if (s.take(10 * M) == 0) throw new AssertionError("10 MiB of 24 refused");
+            if (s.committed != 16 * M) throw new AssertionError("8 MiB should double to 16, not " + s.committed);
+            if (s.take(12 * M) == 0) throw new AssertionError("22 MiB of 24 refused");
+            if (s.committed != 24 * M) throw new AssertionError("growth passed the ceiling: " + s.committed);
+            if (s.take(2 * M) != 0) throw new AssertionError("a run past the ceiling was handed out");
+            if (s.take(2 * M - Space.PAGE) == 0) throw new AssertionError("the last run below the ceiling was refused");
+            if (s.ensure(s.reserved + 1)) throw new AssertionError("ensure passed the ceiling");
+        }
+        System.out.println("  ok   a 1 GB space starts at 8 MiB, grows to 128 MiB keeping its bytes, stops at the ceiling");
+
+        // THE CEILING, end to end: rooted ~1 MiB nodes into a 64 MiB heap
+        // until allocation fails. 56 is what native answered at 4192d734,
+        // before any runtime could grow (`runtime/tests/growable.rs`), so this
+        // is the limit firing at the same point. Only the POINT: an allocation
+        // answering 0 is where native raises its catchable memory-limit error,
+        // and the ports raise none -- a gap older than growth, in `ROADMAP.md`.
+        Rt rt = new Rt(2L * 1024 * 1024, 64L * 1024 * 1024);
+        int base = rt.mark();
+        int n = 0;
+        while (true) {
+            long a = rt.alloc(Obj.TY_NODE, 131_071);
+            if (a == 0) break;
+            rt.push(Val.heap(a));
+            n++;
+        }
+        long grown = rt.gc.sp.committed;
+        rt.popTo(base);
+        if (n != 56 || grown <= 8 * M || grown > 64 * M)
+            throw new AssertionError("fill: " + n + " nodes, committed " + grown);
+        System.out.println("  ok   a 64 MiB heap holds 56 1 MiB nodes and then refuses, as before it could grow");
     }
 
     /// The interpreter, on hand-assembled bytecode.

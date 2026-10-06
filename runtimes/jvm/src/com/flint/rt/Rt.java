@@ -435,6 +435,38 @@ public final class Rt {
         return e;
     }
 
+    /// The heap cap was reached, and a collection has already been tried. A
+    /// CATCHABLE error carrying what was held against what was allowed, not a
+    /// crash: a host has to be able to tell "the program is wrong" from "the
+    /// limit was too small" (`DECISIONS.md#resource-limits`). Mirrors
+    /// native's `oom_unwind` (`runtime/src/vm.rs`) -- same kind, same message
+    /// shape, same one-off megabyte of grace so the error describing the
+    /// exhaustion can itself be built.
+    void oomUnwind() {
+        long limit = gc.heapLimit();
+        if (memTrips == 0) {
+            memTrips = 1;
+            gc.setHeapLimit(limit + 1024 * 1024);
+        }
+        long used = gc.heapFootprint();
+        String msg = "memory limit exceeded: " + used + " bytes of " + limit
+                + " in use after a collection";
+        int base = mark();
+        int ki = push(Str.of(this, "ResourceExhausted"));
+        int mi = push(Str.of(this, msg));
+        int di = push(Maps.empty(this));
+        long[] vals = { used, limit };
+        String[] keys = { "used", "limit" };
+        for (int i = 0; i < keys.length; i++) {
+            int kwi = push(Str.keyword(this, null, keys[i]));
+            setR(di, Mapwrite.mapAssoc(this, r(di), r(kwi), Val.fixnum(vals[i])));
+            popTo(kwi);
+        }
+        long e = exInfo(this, r(ki), r(mi), r(di), Val.NIL);
+        popTo(base);
+        if (e != Val.NIL) thrown = e;
+    }
+
     /// The rest of the interpreter's state, all of it snapshot-visible.
     ///
     /// These are here rather than spread across the classes that use them for
@@ -684,37 +716,45 @@ public final class Rt {
                 + " holds a heap value -- it is not a root");
         }
         Parallel par = roots.shared.par;
-        if (par.executors() <= 1) return gc.alloc(roots, ty, len);
-
-        par.lockAlloc();
-        boolean staged = gc.wouldCollect(ty, len);
-        if (staged) {
-            // `running` is not a detail. The target is "every running executor
-            // EXCEPT ME", and an allocation can happen outside guest code --
-            // loading an image, running initialisers, a host call -- where this
-            // thread is not one of them. Getting it wrong either waits for a
-            // thread that will never park, or starts collecting with a peer
-            // still executing.
-            par.stageStop(running);
-            // Every other executor is stopped NOW, so their roots can be given
-            // to the collector. Built here and dropped after, because a list
-            // that outlived the stop would be pointers into threads that have
-            // started running again.
-            roots.shared.others.clear();
-            synchronized (roots.shared) {
-                for (Roots r : roots.shared.all) if (r != roots) roots.shared.others.add(r);
-            }
-        }
         long a;
-        try {
+        if (par.executors() <= 1) {
             a = gc.alloc(roots, ty, len);
-        } finally {
+        } else {
+            par.lockAlloc();
+            boolean staged = gc.wouldCollect(ty, len);
             if (staged) {
+                // `running` is not a detail. The target is "every running executor
+                // EXCEPT ME", and an allocation can happen outside guest code --
+                // loading an image, running initialisers, a host call -- where this
+                // thread is not one of them. Getting it wrong either waits for a
+                // thread that will never park, or starts collecting with a peer
+                // still executing.
+                par.stageStop(running);
+                // Every other executor is stopped NOW, so their roots can be given
+                // to the collector. Built here and dropped after, because a list
+                // that outlived the stop would be pointers into threads that have
+                // started running again.
                 roots.shared.others.clear();
-                par.releaseStop();
+                synchronized (roots.shared) {
+                    for (Roots r : roots.shared.all) if (r != roots) roots.shared.others.add(r);
+                }
             }
-            par.unlockAlloc();
+            try {
+                a = gc.alloc(roots, ty, len);
+            } finally {
+                if (staged) {
+                    roots.shared.others.clear();
+                    par.releaseStop();
+                }
+                par.unlockAlloc();
+            }
         }
+        // A failed allocation must not read as `nil` to the program -- it
+        // used to, and a capped run then carried on and reported a WRONG
+        // ANSWER rather than an error (`DECISIONS.md#resource-limits`), the
+        // bug native's own comment here warns about and this port had not
+        // yet closed. `unwind` turns the sentinel into the catchable error.
+        if (a == 0 && Val.isNil(thrown)) thrown = Val.OOM;
         return a;
     }
 
@@ -2056,6 +2096,13 @@ public final class Rt {
         // Unconditional here where the Rust has it under `feature = "aot"`:
         // the ports have no such switch and the counter is a long add.
         unwinds++;
+        // Every failure comes through here, so this is the one place that has
+        // to turn the allocator's cheap sentinel into an error somebody can
+        // read, mirroring native's `unwind` (`runtime/src/vm.rs`).
+        if (thrown == Val.OOM) {
+            thrown = Val.NIL;
+            oomUnwind();
+        }
         while (!handlers.isEmpty()) {
             // A HANDLER BELOW THIS `run` IS NOT THIS `run`'S TO JUMP TO.
             // Unwinding past a native frame truncates the shadow stack under

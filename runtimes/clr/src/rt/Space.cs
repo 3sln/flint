@@ -17,6 +17,14 @@ namespace Flint.Rt;
 /// exact analogue of wasm's linear memory, which is the point -- it is the only
 /// file in the port that differs from the Rust in more than syntax, because it
 /// is the only one that touches the platform.
+/// ## It starts small and grows (`DECISIONS.md#growable-heap`)
+///
+/// This `calloc`ed the whole ceiling. Now `_base` covers only `Committed`
+/// bytes, sized by the shared policy in `kin/heapgrow.kin`, and `Take` grows
+/// it with `Realloc` and zeroes the new tail. The CEILING is still `Reserved`
+/// and `Take` refuses past it first, so the catchable limit is unchanged.
+/// Moving `_base` is safe for the reason a moving collection is: it is
+/// private, and `Take` only runs inside a collection or a large allocation.
 public sealed unsafe class Space : System.IDisposable {
     public const long Page = 65536;
 
@@ -26,14 +34,17 @@ public sealed unsafe class Space : System.IDisposable {
     /// because a space can exceed 4 GB.
     public long InUse;
     public long Reserved;
+    /// How much of `Reserved` `_base` actually covers.
+    public long Committed;
 
     // LITTLE-ENDIAN, PINNED -- see the Rust runtime's `lib.rs`.
     public Space(long bytes) {
         if (!System.BitConverter.IsLittleEndian)
             throw new System.InvalidOperationException("flint's heap and live-set format are little-endian; this runtime is not");
-        _base = (byte*) NativeMemory.AllocZeroed((nuint) bytes);
-        if (_base == null) throw new System.OutOfMemoryException("flint: could not reserve the heap");
         Reserved = bytes;
+        Committed = global::_3sln.Flint.Kgen.Rt.Heapgrow.SpaceInitial(bytes);
+        _base = (byte*) NativeMemory.AllocZeroed((nuint) Committed);
+        if (_base == null) throw new System.OutOfMemoryException("flint: could not reserve the heap");
         // Address 0 is never a valid object.
         InUse = Page;
     }
@@ -49,9 +60,32 @@ public sealed unsafe class Space : System.IDisposable {
     public long Take(long len) {
         len = AlignUp(len, Page);
         if (InUse + len > Reserved) return 0;
+        if (!Ensure(InUse + len)) return 0;
         long a = InUse;
         InUse += len;
         return a;
+    }
+
+    /// Back every byte below `end`. False past the ceiling or when the host
+    /// cannot find the bytes, which the caller reports as the same catchable
+    /// limit a full space always was.
+    public bool Ensure(long end) {
+        if (end > Reserved) return false;
+        if (end <= Committed) return true;
+        long want = global::_3sln.Flint.Kgen.Rt.Heapgrow.SpaceGrowTo(Committed, end, Reserved);
+        byte* grown;
+        try {
+            grown = (byte*) NativeMemory.Realloc(_base, (nuint) want);
+        } catch (System.OutOfMemoryException) {
+            return false;
+        }
+        if (grown == null) return false;
+        // `Realloc` keeps the old bytes and leaves the tail undefined; a fresh
+        // run has always read as zero, so the tail is cleared here.
+        NativeMemory.Clear(grown + Committed, (nuint) (want - Committed));
+        _base = grown;
+        Committed = want;
+        return true;
     }
 
     public int ReadU32(long addr) => *(int*)(_base + addr);

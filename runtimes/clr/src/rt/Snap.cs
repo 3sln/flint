@@ -370,7 +370,7 @@ public static class Snap {
         // Refuse rather than write garbage: if this runtime's space does not
         // already cover a region, its addresses mean something else here.
         foreach (long[] p in plan) {
-            if (p[0] + p[1] > g.sp.Reserved) { Refused = RefuseLayout; return false; }
+            if (!g.sp.Ensure(p[0] + p[1])) { Refused = RefuseLayout; return false; }
         }
         g.sp.InUse = inUse;
         foreach (long[] p in plan) {

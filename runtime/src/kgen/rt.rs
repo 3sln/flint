@@ -62,6 +62,7 @@ pub mod objhdr;
 pub mod gcclass;
 pub mod rtgas;
 pub mod gcspace;
+pub mod heapgrow;
 pub mod numkind;
 pub mod valeq;
 pub mod valhash;

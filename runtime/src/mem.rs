@@ -182,6 +182,62 @@ mod global_alloc {
 }
 
 // ---------------------------------------------------------------------------
+// Host: reserve address space, commit it on demand (`DECISIONS.md#growable-heap`).
+// Three calls, so the platform is three functions and nothing else touches it.
+// ---------------------------------------------------------------------------
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+mod os {
+    /// Address space only: `PROT_NONE` pages are neither memory nor commit
+    /// charge, and touching one faults rather than reading a zero.
+    pub unsafe fn reserve(len: usize) -> *mut u8 {
+        let p = libc::mmap(
+            core::ptr::null_mut(),
+            len,
+            libc::PROT_NONE,
+            libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_NORESERVE,
+            -1,
+            0,
+        );
+        if p == libc::MAP_FAILED { core::ptr::null_mut() } else { p as *mut u8 }
+    }
+    /// Make `[p, p + len)` readable and writable. Never-touched anonymous
+    /// pages read as zero, which is what a fresh run promises.
+    pub unsafe fn commit(p: *mut u8, len: usize) -> bool {
+        len == 0 || libc::mprotect(p as *mut libc::c_void, len,
+                                   libc::PROT_READ | libc::PROT_WRITE) == 0
+    }
+    pub unsafe fn release(p: *mut u8, len: usize) {
+        libc::munmap(p as *mut libc::c_void, len);
+    }
+}
+
+#[cfg(windows)]
+mod os {
+    use core::ffi::c_void;
+    const MEM_COMMIT: u32 = 0x1000;
+    const MEM_RESERVE: u32 = 0x2000;
+    const MEM_RELEASE: u32 = 0x8000;
+    const PAGE_NOACCESS: u32 = 0x01;
+    const PAGE_READWRITE: u32 = 0x04;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn VirtualAlloc(addr: *mut c_void, size: usize, ty: u32, protect: u32) -> *mut c_void;
+        fn VirtualFree(addr: *mut c_void, size: usize, ty: u32) -> i32;
+    }
+    pub unsafe fn reserve(len: usize) -> *mut u8 {
+        VirtualAlloc(core::ptr::null_mut(), len, MEM_RESERVE, PAGE_NOACCESS) as *mut u8
+    }
+    /// Committed pages are zero-filled by the OS.
+    pub unsafe fn commit(p: *mut u8, len: usize) -> bool {
+        len == 0 || !VirtualAlloc(p as *mut c_void, len, MEM_COMMIT, PAGE_READWRITE).is_null()
+    }
+    pub unsafe fn release(p: *mut u8, _len: usize) {
+        VirtualFree(p as *mut c_void, 0, MEM_RELEASE);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The address space handed to the GC.
 // ---------------------------------------------------------------------------
 
@@ -224,8 +280,16 @@ pub struct Space {
     #[allow(dead_code)]
     raw: *mut u8,
     pub(crate) free_runs: Vec<Region>,
+    /// The CEILING: the most this space will ever hand out. `take` refuses a
+    /// run past it, which is where the catchable memory limit starts.
     pub reserved: Addr,
     pub in_use: Addr,
+    /// How much of `reserved` is BACKED -- readable and writable. Grows in
+    /// `take` by `kgen::rt::heapgrow::space_grow_to` (`DECISIONS.md#growable-heap`).
+    /// Host only: on wasm the arena's `memory.grow` is the commitment, and a
+    /// field here costs every module bytes on the allocation path.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub committed: Addr,
     #[cfg(debug_assertions)]
     /// True while a collection is running over this space. The collector reads
     /// forwarded pointers as a matter of course -- that is how it updates them
@@ -236,8 +300,9 @@ pub struct Space {
 }
 
 impl Space {
-    /// `reserve` is the largest number of bytes the GC may ever hand out.
-    /// On a host it is committed lazily by the OS (zero pages).
+    /// `reserve` is the largest number of bytes the GC may ever hand out --
+    /// the ceiling. On a host it is reserved as address space and committed
+    /// in a growing prefix (`ensure`); on wasm linear memory grows instead.
     pub fn new(reserve: u32) -> Space {
         #[cfg(target_arch = "wasm32")]
         {
@@ -255,21 +320,29 @@ impl Space {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            // LAZILY ZERO, which `alloc_zeroed` at PAGE alignment was not.
-            // An alignment above the allocator's own makes Rust's system
-            // allocator take an aligned allocation and then ZERO IT BY HAND --
-            // every byte of the reservation, so a `flint run` of a program
-            // answering "hi" peaked at 5.0 GB resident and spent ~0.5 s of CPU
-            // per sandbox in `__bzero` (measured 2026-10-01, `sample`). At the
-            // allocator's ordinary alignment the same call is `calloc`, whose
-            // large blocks are fresh mapped pages the OS zeroes on first touch.
-            // So over-allocate by one PAGE and align the base by hand.
+            // RESERVE THE CEILING, COMMIT A PREFIX (`DECISIONS.md#growable-heap`).
+            //
+            // This was `alloc_zeroed` of the whole ceiling, at align 16 so the
+            // system allocator would take its `calloc` path and hand back pages
+            // the OS zeroes on first touch (at PAGE alignment it zeroed all 3 GB
+            // by hand: 5.0 GB resident for a program answering "hi", measured
+            // 2026-10-01). That made the footprint a property of whichever
+            // allocator was underneath -- lazy on the two it was measured
+            // against, promised by none, and a 3 GB commit charge under strict
+            // overcommit or on Windows. Now the ceiling is ADDRESS SPACE
+            // (`PROT_NONE` / `MEM_RESERVE`), and only `committed` bytes of it
+            // are memory. The base never moves, so nothing that cached it --
+            // the AOT sync block, a raw `ptr()` -- can go stale.
+            //
+            // Over-reserved by one PAGE so the base can be aligned to it.
             let len = align_up(reserve as Addr, PAGE as Addr) as usize;
             let total = len + PAGE as usize;
-            let layout = core::alloc::Layout::from_size_align(total, 16).unwrap();
-            let raw = unsafe { alloc::alloc::alloc_zeroed(layout) };
-            assert!(!raw.is_null(), "flint: could not reserve {len} bytes");
+            let raw = unsafe { os::reserve(total) };
+            assert!(!raw.is_null(), "flint: could not reserve {len} bytes of address space");
             let p = align_up(raw as usize as Addr, PAGE as Addr) as usize as *mut u8;
+            let committed = crate::kgen::rt::heapgrow::space_initial(len as Addr);
+            assert!(unsafe { os::commit(p, committed as usize) },
+                    "flint: could not commit {committed} bytes");
             Space {
                 base: p,
                 raw,
@@ -277,10 +350,40 @@ impl Space {
                 free_runs: Vec::new(),
                 reserved: len as Addr,
                 in_use: PAGE as Addr, // address 0 is never a valid object
+                committed,
                 #[cfg(debug_assertions)]
                 in_gc: core::cell::Cell::new(false),
             }
         }
+    }
+
+    /// Back every byte below `end`, growing `committed` by the shared policy.
+    /// False when `end` is past the ceiling or the OS refuses -- the caller
+    /// turns that into the same catchable limit a full space always was.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn ensure(&mut self, end: Addr) -> bool {
+        if end > self.reserved {
+            return false;
+        }
+        if end <= self.committed {
+            return true;
+        }
+        let want = crate::kgen::rt::heapgrow::space_grow_to(self.committed, end, self.reserved);
+        let ok = unsafe {
+            os::commit(self.ptr(self.committed), (want - self.committed) as usize)
+        };
+        if ok {
+            self.committed = want;
+        }
+        ok
+    }
+
+    /// On wasm linear memory is the commitment, and `arena::sbrk` grows it.
+    /// What is below `memory.size` is backed; the caller bounds by that.
+    #[cfg(target_arch = "wasm32")]
+    #[inline(always)]
+    pub fn ensure(&mut self, _end: Addr) -> bool {
+        true
     }
 
     #[inline(always)]
@@ -322,7 +425,11 @@ impl Space {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if self.in_use.checked_add(len).map_or(true, |e| e > self.reserved) {
+            let end = match self.in_use.checked_add(len) {
+                Some(e) if e <= self.reserved => e,
+                _ => return 0,
+            };
+            if !self.ensure(end) {
                 return 0;
             }
             let a = self.in_use;
@@ -428,8 +535,7 @@ impl Space {
 impl Drop for Space {
     fn drop(&mut self) {
         if !self.raw.is_null() {
-            let layout = core::alloc::Layout::from_size_align(self.owned_len, 16).unwrap();
-            unsafe { alloc::alloc::dealloc(self.raw, layout) }
+            unsafe { os::release(self.raw, self.owned_len) }
         }
     }
 }
@@ -466,6 +572,52 @@ mod tests {
         let mut s = Space::new(2 * PAGE);
         assert_ne!(s.take(PAGE as Addr), 0);
         assert_eq!(s.take(64 * (PAGE as Addr)), 0);
+    }
+
+    /// A big ceiling starts small, grows as runs are taken, and the bytes
+    /// already written survive the growth. Writing the LAST byte of each run
+    /// is the probe: an uncommitted page faults, so this crashes rather than
+    /// passes if `take` hands out a run it did not back.
+    #[test]
+    fn a_large_ceiling_starts_small_and_grows() {
+        const M: Addr = 1 << 20;
+        let mut s = Space::new(1 << 30);
+        assert_eq!(s.reserved, 1 << 30);
+        assert_eq!(s.committed, 8 * M, "a 1 GB ceiling should back 8 MiB at birth");
+        let a = s.take(4 * M);
+        s.write_u64(a, 0x1234_5678);
+        let mut runs = Vec::new();
+        for _ in 0..20 {
+            let r = s.take(4 * M);
+            assert_ne!(r, 0);
+            s.write_u8(r + 4 * M - 1, 0xab);
+            runs.push(r);
+        }
+        assert!(s.committed >= s.in_use && s.committed < 1 << 30,
+                "committed {} for in_use {}", s.committed, s.in_use);
+        assert_eq!(s.committed, 128 * M, "8 doubles to 128 MiB to cover ~84 MiB");
+        assert_eq!(s.read_u64(a), 0x1234_5678, "growth lost a write");
+        for r in runs {
+            assert_eq!(s.read_u8(r + 4 * M - 1), 0xab);
+        }
+        // Fresh committed bytes read as zero, as a fresh run always did.
+        let z = s.take(PAGE as Addr);
+        assert_eq!(s.read_u64(z), 0);
+    }
+
+    /// The ceiling is still where `take` says no, and growth does not move it.
+    #[test]
+    fn growth_stops_at_the_ceiling() {
+        const M: Addr = 1 << 20;
+        let mut s = Space::new(24 * M as u32);
+        assert_ne!(s.take(10 * M), 0);
+        assert_eq!(s.committed, 16 * M, "8 MiB doubles to 16");
+        assert_ne!(s.take(12 * M), 0);
+        assert_eq!(s.committed, 24 * M, "doubling 16 would pass the ceiling of 24");
+        assert_eq!(s.take(2 * M), 0, "in_use + 2 MiB is one PAGE past the ceiling");
+        assert_ne!(s.take(2 * M - PAGE as Addr), 0);
+        assert_eq!(s.committed, s.reserved);
+        assert!(!s.ensure(s.reserved + 1));
     }
 
     #[test]

@@ -30,6 +30,7 @@ public static class Program {
         // (`DECISIONS.md#structured-ports`). Deriving the name from the path is
         // one rename away from measuring nothing and still printing a number.
         if (args.Length >= 3 && args[0] == "--rt-steps") return RtSteps(args[1], args[2]);
+        if (args.Length >= 3 && args[0] == "--rt-oom") return RtOom(args[1], args[2]);
         if (args.Length >= 2 && args[0] == "--rt-image")
             return RtImage(args[1], args.Length > 2 ? args[2] : null);
         // No bare-argument form any more. It ran an image on the BOXED port,
@@ -891,6 +892,11 @@ public static class Program {
         return rt.status;
     }
 
+    /// The last answer's bytes, rendered printable -- the same crude decode
+    /// `HostCall.java`'s `lastAnswer` uses: not a real codec reader, just
+    /// enough to SEE what came back.
+    private static string lastAnswer = "(none)";
+
     /// Has an answer come back on the call port? The records are five
     /// little-endian `u32`s -- `kind, a, b, off, len` -- which is the layout
     /// every host reads (`DECISIONS.md#host-abi`). Kind 2 is a message and `a`
@@ -899,6 +905,14 @@ public static class Program {
         var evs = Flint.Rt.Conc.DrainEvents(rt);
         for (int i = 0; i < evs.Count; i++) {
             if (HostWord(evs.Bytes, i * 20) == 2 && HostWord(evs.Bytes, i * 20 + 4) == CALLS) {
+                int off = (int) HostWord(evs.Bytes, i * 20 + 12);
+                int len = (int) HostWord(evs.Bytes, i * 20 + 16);
+                var sb = new System.Text.StringBuilder();
+                for (int k = off; k < off + len && k < evs.Bytes.Length; k++) {
+                    int c = evs.Bytes[k] & 0xff;
+                    sb.Append(c >= 32 && c < 127 ? (char) c : '.');
+                }
+                lastAnswer = sb.ToString();
                 return true;
             }
         }
@@ -1100,6 +1114,31 @@ public static class Program {
                               + " unattributed=" + (rt.steps - rt.instrs - rt.gWork
                                                     - rt.gTick - rt.gChecked));
         }
+        return 0;
+    }
+
+    /// The catchable memory-limit error (`DECISIONS.md#resource-limits`), on
+    /// a REAL compiled image -- `runtimes/conform/oom.cljc` -- called over
+    /// the SAME bridge `RtSteps` uses: `oom/main` directly, not the
+    /// compiler's CLI shim, with a 2 MiB nursery and a 6 MiB ceiling,
+    /// matching the JVM's `RtOom` (`Rt::new` plus `set_memory_limit(6 MiB)`,
+    /// which is the same thing since nothing has allocated yet).
+    ///
+    /// Proves the gap `ROADMAP.md` recorded 2026-10-05 is closed on the CLR:
+    /// before `Rt.OomUnwind` existed, `oom/main ["eat"]` here answered a bare
+    /// `Nil` instead of raising. Run directly -- `bin/conform-hosts` is not
+    /// touched by this file. The JVM's sibling is `RtOom.java`, and native's
+    /// is `cli/src/main.rs`'s `oom_tests`.
+    ///
+    ///     ./bin/flint :src runtimes/conform :fn oom/main --emit-image \
+    ///       :out out/conform/oom.img
+    ///     Conform --rt-oom out/conform/oom.img eat
+    private static int RtOom(string path, string arg) {
+        var rt = new Flint.Rt.Rt(2L * 1024 * 1024, 6L * 1024 * 1024);
+        var img = Flint.Rt.Img.Load(rt, File.ReadAllBytes(path));
+        if (img == null) { Console.WriteLine("FAIL not a flint image"); return 1; }
+        HostCallRun(rt, "oom/main", new string[]{ arg });
+        Console.WriteLine(lastAnswer);
         return 0;
     }
 
@@ -1712,6 +1751,58 @@ public static class Program {
         return 0;
     }
 
+    /// A large ceiling starts small and grows, keeping what was written, and the
+    /// ceiling is still where `Take` says no (`DECISIONS.md#growable-heap`).
+    /// Mirrors `mem.rs` and the JVM's `heapGrows`.
+    static bool HeapGrows() {
+        const long M = 1L << 20;
+        using (var s = new Flint.Rt.Space(1L << 30)) {
+            if (s.Committed != 8 * M) { Console.WriteLine($"  FAIL a 1 GB ceiling backed {s.Committed} at birth"); return false; }
+            long a = s.Take(4 * M);
+            s.WriteU64(a, 0x12345678L);
+            var runs = new long[20];
+            for (int i = 0; i < 20; i++) {
+                runs[i] = s.Take(4 * M);
+                if (runs[i] == 0) { Console.WriteLine("  FAIL take failed below the ceiling"); return false; }
+                s.WriteU8(runs[i] + 4 * M - 1, 0xab);
+            }
+            if (s.Committed != 128 * M) { Console.WriteLine($"  FAIL committed {s.Committed}, expected 128 MiB"); return false; }
+            if (s.ReadU64(a) != 0x12345678L) { Console.WriteLine("  FAIL growth lost a write"); return false; }
+            foreach (long r in runs)
+                if (s.ReadU8(r + 4 * M - 1) != 0xab) { Console.WriteLine("  FAIL growth lost a run"); return false; }
+            long z = s.Take(Flint.Rt.Space.Page);
+            if (s.ReadU64(z) != 0) { Console.WriteLine("  FAIL a fresh run is not zero"); return false; }
+        }
+        using (var s = new Flint.Rt.Space(24 * M)) {
+            if (s.Take(10 * M) == 0) { Console.WriteLine("  FAIL 10 MiB of 24 refused"); return false; }
+            if (s.Committed != 16 * M) { Console.WriteLine($"  FAIL 8 MiB should double to 16, not {s.Committed}"); return false; }
+            if (s.Take(12 * M) == 0) { Console.WriteLine("  FAIL 22 MiB of 24 refused"); return false; }
+            if (s.Committed != 24 * M) { Console.WriteLine($"  FAIL growth passed the ceiling: {s.Committed}"); return false; }
+            if (s.Take(2 * M) != 0) { Console.WriteLine("  FAIL a run past the ceiling was handed out"); return false; }
+            if (s.Take(2 * M - Flint.Rt.Space.Page) == 0) { Console.WriteLine("  FAIL the last run below the ceiling was refused"); return false; }
+            if (s.Ensure(s.Reserved + 1)) { Console.WriteLine("  FAIL Ensure passed the ceiling"); return false; }
+        }
+        Console.WriteLine("  ok   a 1 GB space starts at 8 MiB, grows to 128 MiB keeping its bytes, stops at the ceiling");
+
+        // THE CEILING, end to end -- see the JVM's `heapGrows`.
+        var rt = new Flint.Rt.Rt(2L * 1024 * 1024, 64L * 1024 * 1024);
+        int mark = rt.Mark();
+        int n = 0;
+        while (true) {
+            long a = rt.Alloc(Flint.Rt.Obj.TyNode, 131_071);
+            if (a == 0) break;
+            rt.Push(Flint.Rt.Val.Heap(a));
+            n++;
+        }
+        long grown = rt.gc.sp.Committed;
+        rt.PopTo(mark);
+        if (n != 56 || grown <= 8 * M || grown > 64 * M) {
+            Console.WriteLine($"  FAIL fill: {n} nodes, committed {grown}"); return false;
+        }
+        Console.WriteLine("  ok   a 64 MiB heap holds 56 1 MiB nodes and then refuses, as before it could grow");
+        return true;
+    }
+
     private static int RtFoundation() {
         foreach (long off in new long[]{8, 16, 0x1000, 0xFFFF_FFFFL, 0x1_0000_0000L,
                                         0x0000_FFFF_FFFF_FFF8L}) {
@@ -1749,6 +1840,7 @@ public static class Program {
             Console.WriteLine("  FAIL a 48-bit forward did not survive the header"); return 1;
         }
         Console.WriteLine("  ok   objects, mark bits and 48-bit forwarding");
+        if (!HeapGrows()) return 1;
 
         GcStress();
         Interpreter();

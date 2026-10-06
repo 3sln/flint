@@ -1,0 +1,47 @@
+;; HOW MUCH OF THE HEAP'S CEILING IS BACKED BY MEMORY, and how that grows.
+;;
+;; A `Space` used to back its whole ceiling at birth: the JVM's
+;; `Arena.allocate` zero-fills eagerly (2 GB took 2 240 ms and 2.19 GB
+;; resident, measured 2026-10-05 on OpenJDK 25), the CLR `calloc`ed it, and
+;; native leaned on `calloc` handing back lazily-zeroed pages -- true of the
+;; allocators it was measured against and of nothing that promises it. Now a
+;; space COMMITS a prefix and grows it when `take` would run past it
+;; (`DECISIONS.md#growable-heap`). These two functions are that policy, and
+;; the only copy of it: native commits pages, both ports reallocate and copy,
+;; and all three ask here how far.
+;;
+;; THE CEILING IS NOT DECIDED HERE. `take` refuses a run past the ceiling
+;; before it asks how far to grow, exactly as it refused one before growth
+;; existed -- which is what keeps the catchable memory limit
+;; (`DECISIONS.md#resource-limits`) byte-for-byte where it was. So
+;; `space-grow-to` may assume `need <= ceiling`.
+;;
+;; DOUBLING, so the copy the ports pay is amortised: the bytes ever copied
+;; are less than twice the final size, the same bound a growable array gives.
+;; Comparisons are `ult64` because an `Addr` is 64 bits and kin's `<` is not.
+(ns flint.rt.heapgrow
+  (:require [flint.impl.rt :refer [defn return doc if let * ult64 Addr]]))
+
+(doc "How much of a `ceiling`-byte space to back at birth."
+     ""
+     "8 MiB, or the whole ceiling when that is smaller. Large enough that"
+     "making a collector -- a 2 MiB nursery's two halves, the first 1 MiB"
+     "old chunk and the never-used page at address zero -- does not grow it.")
+(defn ^:pub ^Addr space-initial [^Addr ceiling]
+  (if (ult64 8388608 ceiling)
+    (return 8388608))
+  (return ceiling))
+
+(doc "How much to back once something needs bytes up to `need`."
+     ""
+     "`committed` when it already covers `need`; otherwise double it, or"
+     "`need` itself if doubling is not enough, and never past `ceiling`.")
+(defn ^:pub ^Addr space-grow-to [^Addr committed ^Addr need ^Addr ceiling]
+  (if (ult64 committed need)
+    (let [^Addr doubled (* committed 2)]
+      (if (ult64 doubled need)
+        (return need))
+      (if (ult64 ceiling doubled)
+        (return ceiling))
+      (return doubled)))
+  (return committed))

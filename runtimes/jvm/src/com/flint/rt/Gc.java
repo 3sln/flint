@@ -101,6 +101,16 @@ public final class Gc {
     /// different numbers; the generated one carries this meaning.
     public long heapUsed() { return com._3sln.flint.kgen.rt.Gcspace.gcHeapUsed(this); }
 
+    /// Bytes of heap this program is permitted, and how much backing it holds
+    /// now -- mirroring native's hand-written `Gc::heap_limit` /
+    /// `Gc::set_heap_limit` / `Gc::heap_used` (the FOOTPRINT one, not
+    /// `heapUsed()` above, which is live bytes). `Rt.oomUnwind` is the only
+    /// caller: it reports what was held against what was allowed
+    /// (`DECISIONS.md#resource-limits`).
+    public long heapLimit() { return maxHeap; }
+    public void setHeapLimit(long bytes) { maxHeap = bytes; }
+    public long heapFootprint() { return oldCapacity + half * 2; }
+
     // --- old space ---------------------------------------------------------
 
     boolean addChunk(long want) {

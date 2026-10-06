@@ -1,0 +1,58 @@
+--rust-head
+type Addr = u64;
+--rust
+fn main() {
+    let m: u64 = 1 << 20;
+    let mut o = String::new();
+    for c in [m, 8 * m, 3_000_000_000u64] {
+        o.push_str(&format!("{} ", space_initial(c)));
+    }
+    o.push('|');
+    for (c, n, x) in [(8 * m, 8 * m, 64 * m), (8 * m, 9 * m, 64 * m),
+                      (8 * m, 40 * m, 64 * m), (32 * m, 33 * m, 40 * m),
+                      (0, 3 * m, 64 * m)] {
+        o.push_str(&format!(" {}", space_grow_to(c, n, x) / m));
+    }
+    println!("{}", o);
+}
+--java-head
+--java
+    public static void main(String[] args) {
+        long m = 1L << 20;
+        StringBuilder o = new StringBuilder();
+        for (long c : new long[]{ m, 8 * m, 3_000_000_000L }) o.append(spaceInitial(c)).append(' ');
+        o.append('|');
+        long[][] rows = { {8 * m, 8 * m, 64 * m}, {8 * m, 9 * m, 64 * m},
+                          {8 * m, 40 * m, 64 * m}, {32 * m, 33 * m, 40 * m},
+                          {0, 3 * m, 64 * m} };
+        for (long[] r : rows) o.append(' ').append(spaceGrowTo(r[0], r[1], r[2]) / m);
+        System.out.println(o.toString());
+    }
+--csharp-head
+--csharp
+    public static void Main() {
+        long m = 1L << 20;
+        var o = new System.Text.StringBuilder();
+        foreach (long c in new long[]{ m, 8 * m, 3_000_000_000L }) o.Append(SpaceInitial(c)).Append(' ');
+        o.Append('|');
+        long[][] rows = { new[]{8 * m, 8 * m, 64 * m}, new[]{8 * m, 9 * m, 64 * m},
+                          new[]{8 * m, 40 * m, 64 * m}, new[]{32 * m, 33 * m, 40 * m},
+                          new[]{0L, 3 * m, 64 * m} };
+        foreach (var r in rows) o.Append(' ').Append(SpaceGrowTo(r[0], r[1], r[2]) / m);
+        System.Console.WriteLine(o.ToString());
+    }
+--expect
+1048576 8388608 8388608 | 8 16 40 40 3
+--expect-why
+DERIVED from "back 8 MiB or the ceiling; double, or jump to the need, capped
+at the ceiling", not recorded from a run.
+
+`space-initial`: a 1 MiB ceiling is backed whole; 8 MiB is the boundary and
+answers itself; 3 000 000 000 -- the CLI's ceiling, above 2^31 so a signed
+32-bit comparison anywhere would misread it -- answers 8 MiB.
+
+`space-grow-to`, in MiB: 8 covering 8 does not grow (`need` EQUAL to
+`committed` is the off-by-one a `<=` misreading gets wrong, answering 16);
+9 doubles to 16; 40 is past a doubling and answers itself; 33 from 32 would
+double to 64 but the ceiling is 40; and a zero commitment jumps to the need
+rather than doubling zero forever.

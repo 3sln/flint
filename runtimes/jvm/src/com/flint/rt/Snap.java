@@ -343,7 +343,7 @@ public final class Snap {
         // Refuse rather than write garbage: if this runtime's space does not
         // already cover a region, its addresses mean something else here.
         for (long[] p : plan) {
-            if (p[0] + p[1] > g.sp.reserved) { refused = REFUSE_LAYOUT; return false; }
+            if (!g.sp.ensure(p[0] + p[1])) { refused = REFUSE_LAYOUT; return false; }
         }
         g.sp.inUse = inUse;
         for (long[] p : plan) {
