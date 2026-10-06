@@ -16278,3 +16278,43 @@ rather than decide:
 `flint.cli` -- the CLI's published surface -- requires it directly, so marking
 it internal would need `flint.cli` to be considered inside the same boundary,
 which is a judgment call rather than a count.
+
+## flint-fs-is-gone
+
+**The `flint.fs` namespace is deleted.**
+
+**Ratified:** ☐ not signed off
+
+**Status: shipped — verified 2026-10-06 by `bb test/cli.clj` passing unchanged
+(`cli: ok`) after inlining its one real caller.**
+
+The candidate list above (`doc/api-review.md`) said "0 compiled test
+program(s)" for `flint.fs`, and read that as nothing left to require it. That
+count was wrong, not merely stale: `test/cli.clj` builds an `entry.cljc`
+whose `:require` is assembled with `(str "(ns entry (:require ... [flint.fs
+:as fs]))\n" ...)` rather than written as a literal form, which is exactly
+the shape `AGENTS.md` §1 warns about -- "a count produced by a grep counts
+what the pattern understood, not what was asked." Whatever produced "0" did
+not read that file's generated source, only (at a guess) a literal `:require`
+pattern over `test/*.clj`.
+
+Found by checking the ONE claimed user before deleting, per this task's own
+instruction, rather than trusting the count. `grep -rn "flint\.fs\b"` over
+`lib/ src/ test/ sdks/ cli/ doc/ README.md doc/manifest.edn bin/manifest`
+turned up exactly one real site: `test/cli.clj:61`, building that generated
+namespace.
+
+What it needed was never `flint.fs` as a published convenience -- it was the
+capability transport underneath it, to prove the project CLI's `slurp*`
+reads through a granted `:fs` port the same way under a compiled module as
+`bin/flint` reads it under babashka. `flint.fs` itself was three functions
+over `flint.rpc`/`flint.port` (`open`, `exists?`, `read-file`) plus `list-dir`/
+`write-file`/`root`/`walk`, none of which any other site in the tree named.
+`test/cli.clj` now opens the `"fs"` port and calls `rpc/call` directly,
+inlining exactly the two ops it used; `bb test/cli.clj` passes unchanged
+after the edit (same 406-line suite, same final `cli: ok`).
+
+`flint.sys.fs` -- the VIRTUAL, served filesystem a real flint program
+requires -- is a different namespace entirely (`DECISIONS.md#system-namespaces-and-deps`)
+and is untouched by this. Nothing else in `lib/`, `src/`, `sdks/`, `cli/`,
+`doc/manifest.edn`, `bin/manifest` or `README.md` named `flint.fs`.

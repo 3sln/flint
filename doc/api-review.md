@@ -44,8 +44,17 @@ What the counts say, as a starting point rather than an answer:
 | `flint.table` | 2 programs, has its own decision | public, never manifested |
 | `flint.host` | 0 programs, 2 README mentions | ~~genuinely unclear~~ — **capability-guarded**, see below |
 | `flint.snapshot` | nothing requires it at all | ~~genuinely unclear~~ — **not public, by design**, see below |
-| `flint.fs` | nothing requires it; `flint.sys.fs` is what programs use | may have no job left |
 | the rest | required only by tooling or by each other | internal |
+
+**`flint.fs` is gone.** It read "nothing requires it; `flint.sys.fs` is what
+programs use", and that held once the ONE real user was checked rather than
+grepped for: `test/cli.clj`'s compiled `entry.cljc` required it, in a form
+(`(str "...flint.fs...")`) a plain `grep -rn "flint\.fs"` over `test/` would
+have caught, but the count behind this row was never that -- it was "0
+compiled test programs", counted some other way, and it was wrong. What
+`entry.cljc` needed was the three-line `flint.rpc`/`flint.port` wrapper, not
+the namespace itself, so the test now writes those three lines inline and
+`lib/flint/fs.cljc` is deleted (`DECISIONS.md#flint-fs-is-gone`).
 
 The three "public, never manifested" ones are the concrete finding: adding a
 namespace to `bin/manifest` makes `test/manifest.clj` assert every var in it is
@@ -75,6 +84,12 @@ every touched file restored from a saved copy and `git status` confirmed clean:
     FAIL  flint.snapshot       no such builtin: flint.rt/snapshot
           flint.host           flint.host/ask is guarded with #{:host}
           flint.deps.resolve   cannot find source for flint.deps.npm
+
+**2026-10-06: `flint.fs` is no longer one of the eleven.** It is deleted
+(`DECISIONS.md#flint-fs-is-gone`), so this row of the historical measurement
+above now names a namespace that does not exist; the other ten are
+unaffected. Re-running `bin/manifest`/`test/manifest.clj` today would find
+ten, not eleven.
 
 **ELEVEN WOULD PASS TODAY**, so for those the question is purely whether to
 publish; there is no defect behind any of them. The three that fail each fail
@@ -232,15 +247,18 @@ These are ours to design. Nothing constrains the names but us.
 
 **Change requests:** _none recorded_
 
-## flint.fs
+## Removed 2026-10-06: `flint.fs`
 
-**Reviewed:** ☐ not signed off
-
-7 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. The filesystem, as a capability (`DECISIONS.md#cli`). Nothing here is privileged.
-
-**Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. Nothing requires it, and `flint.sys.fs` is the served filesystem a program actually uses. Worth checking whether this one still has a job.
-
-**Change requests:** _none recorded_
+Not a surface any more, so no box. The evidence line above it read "0
+compiled test program(s)", and that was wrong rather than stale: `test/cli.clj`
+built an `entry.cljc` that required it, assembled through `str` rather than
+written as a literal `:require`, which is why a grep for the pattern this
+checker's own evidence line is built from never found it
+(`DECISIONS.md#flint-fs-is-gone`). Checked for real before deleting: that one
+caller needed three lines over `flint.rpc`/`flint.port` (`open`, `exists?`,
+`read-file`), which are now inlined in the test and do not need a wrapper
+namespace. `flint.sys.fs` -- the served, virtual filesystem a real program
+uses -- is untouched.
 
 ## flint.host
 

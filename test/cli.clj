@@ -58,9 +58,16 @@
       ;; The entry namespace is the only place the `:fs` capability appears:
       ;; it turns "read a project file" into an fs read. `cli/run` never sees a
       ;; handle, which is what lets `bin/flint` run the same code under bb.
-      (str "(ns entry (:require [flint.cli :as cli] [flint.fs :as fs]))\n"
-           "(defn- slurp* [p]\n"
-           "  (let [h (fs/open)] (when (fs/exists? h p) (fs/read-file h p))))\n"
+      ;;
+      ;; `flint.fs` used to be the wrapper that opened this handle. It is
+      ;; gone (`doc/api-review.md`, nothing else required it) and what it did
+      ;; was three lines over `flint.rpc`/`flint.port`, inlined here rather
+      ;; than kept alive just for this test.
+      (str "(ns entry (:require [flint.cli :as cli] [flint.rpc :as rpc] [flint.port :as p]))\n"
+           "(defn- slurp* [path]\n"
+           "  (let [c (rpc/client (p/open \"fs\"))]\n"
+           "    (when (rpc/call c {:op :exists :path path})\n"
+           "      (rpc/call c {:op :read :path path}))))\n"
            "(defn main [args]\n"
            "  (let [r (cli/run (vec args) slurp*)]\n"
            "    (if (:exec r) (pr-str (:exec r)) (:out r))))\n"))
