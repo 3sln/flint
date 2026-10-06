@@ -14782,3 +14782,59 @@ ones. The BASE arm is 4192d734 built in a detached worktree with the same
   so only the pairing means anything). C2 may hoist a `final` field's load out
   of a loop and must reload a plain one. The whole JVM-hosted compile did not
   show it (below), so it is recorded, not acted on.
+
+---
+
+## a-source-defines-only-its-own-namespace
+
+**Ratified:** ☐ not signed off
+
+**Status: BUILT 2026-10-06, in the compiler, so every door has it** (`bin/flint`
+loads `src/` and the self-hosted compiler is built from it). Probed as programs
+through `bin/flint`, each beside a control differing only in the name:
+
+    route                                        before      after
+    ns form naming another ns (file evil.cljc)   compiled    refused
+    (def flint.system/boot ..)                   compiled*   refused
+    (defn flint.system/boot ..)                  compiled*   refused
+    def into another ns via a macro              compiled*   refused
+    def into another ns via #?(:flint ..)        compiled*   refused
+    (ns flint.port ..) nested inside a defn      compiled    refused
+    (ns flint.system) via a macro / via #?       compiled    refused
+    (in-ns 'x), in-ns in value position          unresolved  refused, named
+    (intern 'x 'y v)                             unresolved  refused, named
+    controls: (def app/boot ..), own ns, the
+      same macro and #? defining `boot`          compiled    compiled
+
+\* compiled, and defined `app/boot` -- the qualifier was silently DROPPED,
+which is a different program from the one written.
+
+### What was decided
+
+**A source resolved as namespace X may declare and define only X.** Its `ns`
+form must name X; a `def` (and so `defn`, `defmacro`, anything expanding to
+one) with a qualified symbol must qualify it with X; `in-ns` and `intern` are
+not supported at all and say so rather than "unable to resolve". Checked in
+`flint.analyzer/analyze-ns` and the `def` special form, so macro expansion,
+reader conditionals and nesting all arrive at the check -- `ns` is a special
+form and was honoured anywhere, a defn body included.
+
+No exceptions, the standard library included (the maintainer's call). A survey
+of every tracked `.clj`/`.cljc`/`.fln` outside `bin/` (255 files, 205 with an
+`ns` form; a regex over the first `ns` form and over `(def* ns/x` -- it reports
+what it matched, not what it missed) found no qualified def into another
+namespace and no `in-ns`/`intern` in flint source (`test/conform_vs_clojure.clj`
+is JVM Clojure). Three files declare a namespace other than their path:
+`bench/progs/concat.cljc` said `(ns cc)` and compiled as `concat` only because
+the name was ignored -- renamed to `(ns concat)`, with `bench/clj/run.clj`'s
+special case removed; `bench/construe/interpret.cljc` and an `(ns p)` inside a
+string in `test/loop_types.clj` are never resolved as namespaces.
+
+### Why
+
+The `ns` form's clauses filed their aliases, refers and requires under the name
+THE FORM gave, while the source's defs went to the name it was RESOLVED as. So
+a file resolved as `app.evil` that said `(ns flint.port (:require [x :as
+wire]))` rewrote what `wire/` meant inside `flint.port`. Which source backs a
+namespace is the resolver's answer -- the host's -- and that answer has to be
+the whole of what decides what a namespace contains.

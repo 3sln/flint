@@ -1,4 +1,4 @@
-(ns cc
+(ns concat
   "Repeated concatenation -- the case DECISIONS.md#strings-and-matching names as O(n^2) with
   flat strings, and the reason `str` should be a tree join.")
 (defn build [n]
