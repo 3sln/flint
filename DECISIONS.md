@@ -14825,11 +14825,13 @@ It supersedes, once built, the "namespace resolver" passages of
 "resolver-based compiler API" that `structured-ports` lists as unbuilt. Each of
 those carries a pointer here; none was deleted.
 
-*Amended 2026-10-06 with the maintainer's decisions:* the stdlib resolver is
-an optional building block, never applied around a host's resolver (§4); the
-control plane no longer depends on any stdlib namespace (§1, "Roots"); a
-migration step 0 closes the path-prefix hole now (§8). The open questions were
-narrowed to the ones the maintainer left open.
+*Amended 2026-10-06 with the maintainer's decisions:* the standard library
+is answered by an ordinary resolver, an optional building block never applied
+around a host's resolver, and the compiler never distinguishes its namespaces
+(§4); the control plane depends on no resolved namespace (§1, "Roots"); the
+path-prefix grant hole is a known issue this redesign removes, with no interim
+fix (an earlier draft's step 0 was dropped because the redesign would tear it
+out). The open questions were narrowed to the ones the maintainer left open.
 
 ### What is decided (by the maintainer, and fixed)
 
@@ -14898,6 +14900,12 @@ Each of these was read in the tree at `6d8ea376` unless a line says otherwise.
   plane (`cli/src/snapstream_test.rs`,
   `a_program_cannot_ship_its_own_control_plane`, `#[ignore]` and failing,
   which the `snapshots` record left as the maintainer's question).
+
+  **Recorded as a known issue, not scheduled separately** (maintainer,
+  2026-10-06): an interim exact-path fix was considered and dropped, because
+  the redesign tears the workspace table out. The redesign removes the hole by
+  §4 rule 2 -- grants come from where an answer was found -- and step 3 makes
+  this probe a test.
 * **The compiler is one-shot:** spec in, image out. Resolution
   (`flint.project/files-resolver`) runs inside the compiler, over a map the
   host has to fill completely before the compile starts. It cannot fill the
@@ -15001,9 +15009,9 @@ not compiles, so the host needs `:id` to pick the right resolver.
 **What the compiler checks on arrival.** First, the `:opts` inside the forms
 bytes must equal `(read-options answer features)` (read eagerly with this
 compile's features) or `(preread-options answer)` (read deferred, as the
-embedded stdlib is). This is `flint.project/read-entry`'s existing check,
+a build-time pre-read is). This is `flint.project/read-entry`'s existing check,
 minus its text fallback. It catches a host that read with the wrong tag map or
-features, for example a stale embedded stdlib. Second, the namespace the forms
+features, for example a stale embedded pre-read blob. Second, the namespace the forms
 declare must be the one asked for: `flint-seal`'s rule, applied at the answer.
 
 The compiler workspace has to hold `:host` to call `flint.host/request`. `src/`
@@ -15104,25 +15112,24 @@ What an implementer must guarantee. It goes in each SDK's documentation and in
    resolves differently depending on the requirer cannot be cached and is not
    deterministic, and the compiler asks each name at most once anyway.
 2. **Grants, guard and workspace come from WHERE the answer was found**,
-   never from the name and never from a path prefix. The standard library's
-   answers carry `lib/deps.edn`'s workspace (`flint/flint`, `:host`, `:vars`).
-   A user's answer carries the workspace of the root or bundle that supplied
-   it. That is a grant conferred from outside, in AGENTS.md §5's sense,
+   never from the name and never from a path prefix. Every resolver answers
+   with its own workspace: the `stdlib()` building block happens to answer
+   with `lib/deps.edn`'s (`flint/flint`, `:host`, `:vars`), and a directory or
+   bundle resolver with the workspace of the root or bundle that supplied the
+   file. The compiler never distinguishes a stdlib namespace from any other;
+   it sees answers and their workspaces. That is a grant conferred from outside, in AGENTS.md §5's sense,
    because the embedder confers it.
 3. **Nothing is applied around the host's resolver (decided).** The
-   compiler and the SDK call exactly the resolver the host passed. The
-   standard library is a resolver the host MAY include, not a layer the SDK
-   wraps around it, so whether a program may replace a stdlib namespace is
-   purely that resolver's choice. Rule 2 is what makes that safe: a
-   replacement carries the workspace of wherever it was found, never the
-   stdlib's grants, so the `flint.evil` probe fails under any composition.
-   The recommended composition for a host that wants the stdlib is stdlib
-   FIRST with the reserved prefixes (`clojure.*`, `flint.*`) SEGREGATED -- a
-   reserved name the stdlib lacks is not found rather than falling through --
-   because otherwise a user can claim a name a later stdlib defines and a
-   program means different things on two flint versions. **No stdlib resolver
-   means no `clojure.core` either**: the program is compiled against
-   `flint.rt` and special forms alone.
+   compiler and the SDK call exactly the resolver the host passed. `stdlib()`
+   is a resolver like any other, which the host MAY include, so whether a
+   program may replace one of its namespaces -- or omit it -- is purely the
+   host's resolver's choice, and a host that does supplies its own workspace
+   for what it answers. Rule 2 is what makes that safe: an answer carries the
+   workspace of wherever it was found, so the `flint.evil` probe fails under
+   any composition. Ordering and segregation (`chain`, `segregate`) are
+   generic combinators a host may apply to any resolvers and any prefixes.
+   **Omitting `stdlib()` means no `clojure.core` either**: the program is
+   compiled against `flint.rt` and special forms alone.
 4. **Untrusted text is never handed to the compiler.** The host reads it
    (§2). A hook may return text, which the SDK reads with the answer's tag map
    and the compile's features, or forms bytes it read itself. The compiler
@@ -15137,15 +15144,15 @@ pre-read standard library, answering with its own workspace and grants),
 `fromMap(...)` (namespace-derived path to text or forms), `dir(...)` where
 there is a filesystem, `virtual(...)` for served namespaces, `chain(...)`,
 which asks each in turn and takes the first non-nil answer, and
-`segregate(prefixes, resolver)`, which answers not-found for a reserved prefix
-rather than letting it fall through. **In JS the stdlib's forms live only
+`segregate(prefixes, resolver)`, which answers not-found for the prefixes it
+names unless that resolver has them, rather than letting them fall through. **In JS the stdlib's forms live only
 behind `stdlib()`**, in its own module, so a host that never calls it lets a
 bundler tree-shake the whole blob out; the SDK's core must not import it. The
 CLIs are hosts like any other and compose these explicitly:
 
-* *CLI, native and npm:* `chain(segregate(["clojure." "flint."], stdlib() +
-  the host catalogue), pods, dir(roots..))` -- the embedded stdlib forms
-  keyed by namespace, then
+* *CLI, native and npm:* the CLI is a host making its own choice, here
+  `chain(segregate(["clojure." "flint."], stdlib() + the host catalogue),
+  pods, dir(roots..))` -- the embedded stdlib forms keyed by namespace, then
   the host catalogue's virtual namespaces and declared pods, then the source
   roots in the order given, with `flint.project/source-extensions`' order
   within a root. Each user answer carries the workspace read from that root's
@@ -15236,14 +15243,16 @@ that the walk is deterministic, and not only the bytes.
 
 ### 7. The planned compiler-snapshot cache
 
-Today the reached stdlib set is computed inside the compiler and is
-invisible. Under this design it is the sequence of `flint/namespaces`
-requests, which the host sees, and `:reached` returns it. A cache key is then
-`(compiler build, features, slots table, stdlib blob hash, reached stdlib set,
-stdlib workspace grants)`. Every input is the host's own.
+Today the reached set is computed inside the compiler and is invisible.
+Under this design it is the sequence of `flint/namespaces` requests, which
+the host sees, and `:reached` returns it. A cache key is then `(compiler
+build, features, slots table, the primed namespaces and the hashes and
+workspaces of their answers)`. Every input is the host's own; which resolver
+answered is the host's knowledge, never the compiler's.
 
 **Recommended shape:** priming happens BETWEEN CALLS, not mid-compile. A
-`flint.selfhost/prime` call analyses a given stdlib set under given features
+`flint.selfhost/prime` call analyses a given set of namespaces (resolved
+through the same requests) under given features
 and keeps the analysed namespaces in the sandbox's state. The host snapshots
 the sandbox after it returns, which needs nothing beyond `flint-seal`'s host
 snapshot. A later compile on a restored sandbox reuses the analysed entries
@@ -15254,9 +15263,10 @@ inside the protocol and buys nothing over priming.
 
 **The open part is ANALYSIS ORDER.** `topo-order` interleaves a user
 namespace that requires nothing with `clojure.string` in the same wave, by
-name. The primed stdlib analysis is only a valid prefix if every stdlib
-namespace is analysed before every user namespace. Changing the rule to
-"stdlib workspace first, each part topologically" is a one-time change to
+name. A primed analysis is only a valid prefix if every primed namespace is
+analysed before every other one. Changing the rule to "the namespaces named
+in the `prime` call first, each part topologically" -- a rule about what the
+host primed, not about any stdlib -- is a one-time change to
 every image's bytes, all doors together, so agreement survives. But it is a
 decision about the image and not about resolution, so it is listed below.
 
@@ -15265,18 +15275,6 @@ decision about the image and not about resolution, so it is listed below.
 Each step leaves the tree green under `bin/check`, plus the suites named. The
 sizes are estimates from reading the code, not measurements.
 
-0. **Close the path-prefix hole now, before any of this.** Today's
-   workspace table gives the stdlib's grants only to files actually supplied
-   AS the standard library -- an exact-path entry per embedded stdlib file
-   (the CLI's `STDLIB_INDEX`, the ESM SDK's `standardLibrary()` keys) instead
-   of the `clojure/` and `flint/` prefixes (`main.rs:519–522`,
-   `flint.js:302–305`, `sdks/cli/src/spec.mjs:162`). A user file at a stdlib
-   path, or anywhere under `flint/`, then falls to its own root's workspace.
-   *Gate:* the `flint/evil.cljc` probe refused with its `app/evil.cljc`
-   control unchanged, on the native and npm doors and the ESM SDK;
-   `bb test/door-agreement.clj`. Small: about 30 lines across three doors.
-   Images of programs without such files are unchanged, because their files'
-   workspaces are.
 1. **`flint.selfhost/read`** (text and opts in; forms bytes or a positioned
    error out). `cli/build.rs` switches from mode `preread` to it. *Gate:* the
    embedded blob is byte-identical before and after (`cmp` of
@@ -15319,7 +15317,7 @@ sizes are estimates from reading the code, not measurements.
 **Kin or per-runtime.** Nothing here is kin. The compiler side is guest code
 (`src/`), which is already one copy for every runtime. The host side is
 request plumbing that every host already has, plus a default resolver whose
-policy (name to path, extension order, reserved prefixes, `deps.edn` facts)
+policy (name to path, extension order, segregation, `deps.edn` facts)
 must exist in Rust, JS and Clojure. Kin emits no JS, so kin would cover one
 of the three. Instead, a shared fixture tree (resolver inputs and the answers
 expected for them) that every door's default resolver must reproduce makes
@@ -15338,17 +15336,19 @@ drift fail in a test rather than relying on care.
 
 ### Open, for the maintainer
 
-Decided and folded in above: the stdlib resolver is optional and nothing is
-applied around a host's resolver (§4 rule 3); the control plane resolves
+Decided and folded in above: `stdlib()` is an ordinary, optional resolver,
+nothing is applied around a host's resolver, and the compiler never
+distinguishes stdlib namespaces (§4 rules 2 and 3); the control plane resolves
 nothing (§1); batched per-level requests stay as recommended (§1); the
-path-prefix hole is closed first (§8 step 0). Still open:
+path-prefix hole is a known issue the redesign removes, with no interim fix.
+Still open:
 
 1. **ESM `compile` becomes async**, with `compileSync` beside it. Is the
    break acceptable now?
 2. **The host reader: (c), a second compiler sandbox, or (b), a dedicated
    reader image** with its own copy per door. Recommended: (c) first, and
    measure its instantiation cost on the wasm doors before deciding on (b).
-3. **Analysis order "stdlib first"** (§7), needed for the snapshot cache and
+3. **Analysis order "primed namespaces first"** (§7), needed for the snapshot cache and
    changing every image once. To be decided at step 8, with numbers.
 4. **`src/deps.edn` granting the compiler `:host`.** The compiler would hold
    a capability for the first time.
