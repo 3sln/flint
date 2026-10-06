@@ -1374,7 +1374,23 @@ same bytes.
 CLR's image fingerprint multiplied by the textbook FNV prime `0x100000001b3`
 where native uses `0x1000000001b3`, so neither port could import ANY native
 live set (refused as another program); nothing had compared fingerprints across
-runtimes before. And both ports wrote the intern tables as a stub `0`, so an
+runtimes before. **That 2026-10-05 fix made the wrong arm agree with native,
+not the other way round.** `0x1000000001b3` carries an extra zero that is not
+the textbook FNV-1a 64 prime; it originated as a typo in
+`runtime/src/image.rs`, and the JVM's `Img.java`, the CLR's `Img.cs` and the
+CLR's own emitted `Fnv1a()` witness (`src/flint/clr.cljc`'s `fnv-il`) were
+each hand-ported FROM that file, extra zero included. Making the JVM and CLR
+"agree" by copying the typo closed the cross-runtime import hole but left all
+four runtimes computing a hash that is not FNV-1a 64 against any published
+implementation -- invisible because nothing checked a known answer, only
+that the runtimes agreed with each other. Corrected 2026-10-06 to the real
+prime `0x100000001b3` (1099511628211) in all four places, with a
+known-answer test added to each (FNV-1a64("") = `0xcbf29ce484222325`,
+FNV-1a64("a") = `0xaf63dc4c8601ec8c`): `runtime/src/image.rs`'s `fnv1a64`
+(`cargo test -p flint-rt --lib fnv_tests`), the JVM's `Img.fnv1a` (asserted at
+the top of `RtSnapStream`), and the CLR's `Img.Fnv1aOf` together with the
+emitted `Fnv1a()` witness (asserted in `Check.cs`, run by `bin/check-clr`).
+And both ports wrote the intern tables as a stub `0`, so an
 imported copy had no port table: its first `reap_ports` closed every bridge it
 held. Both now carry the tables as native does, and their two live dumps are
 still byte-identical to each other (`RtSnapshot`, both ports, checked by hand).
