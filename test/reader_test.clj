@@ -459,6 +459,50 @@
        (deferred "(ns a (:require [b.c :as b] #?(:clj [x]))) ::b/x" #{:flint})
        ['(ns a (:require [b.c :as b])) :b.c/x])
 
+;; --- read forms, encoded (`flint.forms`, `DECISIONS.md#stdlib-preread`) -------
+;;
+;; The native CLI ships the standard library as `flint.forms` bytes, and the
+;; contract is EXACTNESS: decoding gives back the forms `read-deferred` read,
+;; metadata and all, key order included. Every file in `lib/`, compared with
+;; `*print-meta*` on, which prints key order as well as content.
+(require '[flint.forms :as ff])
+(println "reader: flint.forms decodes what it encoded, metadata and all")
+(let [lib (->> (file-seq (clojure.java.io/file "lib"))
+               (filter #(.isFile %))
+               (filter #(re-find #"\.(cljc|fln)$" (.getName %))))
+      opts (fn [path] {:file path :features :any :tags nil :dialect :portable})
+      sizes (atom [0 0])
+      bad (vec (for [f lib
+                     :let [path (.getPath f)
+                           src (slurp f)
+                           d (assoc (r/read-deferred src {:file path}) :opts (opts path))
+                           b (ff/encode d)
+                           back (ff/decode b)
+                           _ (swap! sizes (fn [[x y]] [(+ x (count src)) (+ y (count b))]))]
+                     :when (not= (pm [(:opts d) (:conds d) (:forms d)])
+                                 (pm [(:opts back) (:conds back) (:forms back)]))]
+                 path))]
+  (check (str "  every file in lib/ round-trips (" (count lib) " files)") bad [])
+  ;; Measured here on babashka, whose maps keep insertion order; the guest's
+  ;; size is what `cli/build.rs` prints.
+  (check (str "  ... and the encoding is smaller than the text (" (second @sizes) " < "
+              (first @sizes) " bytes)")
+         (< (second @sizes) (first @sizes)) true))
+(check "  ... and a value the compact form cannot say exactly still round-trips"
+       (let [x (with-meta '(a b) {:line 1 :column 1 :file "elsewhere.cljc" :z 1})
+             back (:forms (ff/decode (ff/encode {:opts {:file "t.cljc"} :conds [] :forms [x ##NaN ##-Inf -5 (Math/pow 2 50) 1.5]})))]
+         [(pm (first back)) (Double/isNaN (second back)) (drop 2 back)])
+       [(pm (with-meta '(a b) {:line 1 :column 1 :file "elsewhere.cljc" :z 1})) true
+        [##-Inf -5 (Math/pow 2 50) 1.5]])
+(check "  ... and a corrupted encoding does not decode to the same forms"
+       (let [src "(defn f [x] (inc x))"
+             b (ff/encode (assoc (r/read-deferred src {:file "t.cljc"}) :opts {:file "t.cljc"}))
+             i (- (count b) 3)
+             b2 (doto (aclone b) (aset-byte i (byte (bit-xor (aget b i) 1))))]
+         (= (pm (:forms (ff/decode b)))
+            (pm (try (:forms (ff/decode b2)) (catch Exception _ :refused)))))
+       false)
+
 (if (zero? @fails)
   (println "reader: ok")
   (do (println "reader:" @fails "FAILURES") (System/exit 1)))

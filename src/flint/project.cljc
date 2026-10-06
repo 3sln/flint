@@ -22,6 +22,7 @@
 
   One function, two producers, and nothing here knows which it got."
   (:require [flint.reader :as reader]
+            [flint.forms :as forms]
             [clojure.string :as str]
             [flint.compiler :as compiler]))
 
@@ -108,22 +109,47 @@
    :tags (not-empty (:tags s))
    :dialect (or (:dialect s) (dialect-of (:file s)))})
 
+(defn preread-options
+  "The options a PRE-READ of resolver answer `s` is made under: `read-options`
+  with `:features :any`, because `flint.reader/read-deferred` keeps reader
+  conditionals as data and one read serves every feature set
+  (`DECISIONS.md#stdlib-preread`). The rest -- file, tags, dialect -- still
+  decides what the text reads as, so it is still the key."
+  [s]
+  (read-options s :any))
+
+(defn preread
+  "Resolver answer `s`'s source read ahead of its features, as `flint.forms`
+  bytes: what the native CLI embeds for each standard-library file."
+  [s]
+  (let [opts (preread-options s)]
+    (forms/encode (assoc (reader/read-deferred (:src s) (dissoc opts :features)) :opts opts))))
+
 (defn read-entry
   "The forms of resolver answer `s`, read under `features`.
 
-  A PRE-READ answer (`:preread {:opts .. :forms ..}`, `DECISIONS.md#stdlib-preread`)
-  is used INSTEAD of reading only when its `:opts` equal `read-options` for this
-  read; anything else -- another feature set, another workspace's tags -- reads
-  the text, which is always there beside it. So a pre-read entry can make a
-  compile faster and never different: the check is the whole read's input
-  apart from the text, and the text is the one it was read from because they
-  arrive as one entry."
+  A PRE-READ answer (`:preread` bytes, `DECISIONS.md#stdlib-preread`) is
+  decoded HERE, when the namespace is reached and not before, and its
+  conditionals resolved for `features` -- once its `:opts` are the ones this
+  read would take apart from features. Pre-read forms read under other options
+  -- another workspace's tags -- are refused, or read from `:src` when the
+  answer has it too: forms read under the wrong options are a different
+  program, never a faster one."
   [s features]
-  (let [opts (read-options s features)
-        pre (:preread s)]
-    (if (and pre (= (:opts pre) opts))
-      (:forms pre)
-      (reader/read-all (:src s) opts))))
+  (if-let [pre (:preread s)]
+    (let [d (forms/decode pre)]
+      (cond
+        (= (:opts d) (preread-options s))
+        (reader/resolve-conditionals d features (:file s))
+
+        (:src s) (reader/read-all (:src s) (read-options s features))
+
+        :else
+        (throw (ex-info (str (:file s) " arrived pre-read under " (pr-str (:opts d))
+                             ", and this compile reads it under " (pr-str (preread-options s))
+                             " (DECISIONS.md#stdlib-preread)")
+                        {:file (:file s)}))))
+    (reader/read-all (:src s) (read-options s features))))
 
 (defn collect
   "Read from `roots` outwards. `resolve-ns` takes a namespace symbol and returns
@@ -219,11 +245,11 @@
                                    (or (nil? pre) (= "" pre)
                                        (str/starts-with? (str path) (str pre)))))
                          (or workspaces [])))
-        ;; A BODY IS TEXT, OR TEXT WITH ITS FORMS ALREADY READ:
-        ;; `{:src text :preread {:opts .. :forms ..}}`, which is how the
-        ;; native CLI hands over the standard library
-        ;; (`DECISIONS.md#stdlib-preread`). `read-entry` decides whether
-        ;; the forms apply; this only passes them on.
+        ;; A BODY IS TEXT, OR A FILE ALREADY READ: `{:preread bytes}`, the
+        ;; `flint.forms` encoding, which is how the native CLI hands over the
+        ;; standard library (`DECISIONS.md#stdlib-preread`) -- with no text
+        ;; beside it. `read-entry` decodes it if the namespace is reached;
+        ;; this only passes it on.
         body (get files path)
         pre? (map? body)]
     {:src (if pre? (:src body) body) :preread (when pre? (:preread body))

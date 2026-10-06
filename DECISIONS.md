@@ -14382,95 +14382,170 @@ in `src/flint/analyzer.cljc`.
 
 ## stdlib-preread
 
-**The native CLI ships the standard library already read, as forms the compiler checks before it trusts**
+**The native CLI ships the standard library already read -- once, for every feature set, compactly, and decoded only where a compile reaches it**
 
 **Ratified:** ☐ not signed off
 
-**Status (2026-10-05): built, native CLI only.** `cli/build.rs` loads
-`dist/flintc.bytecode` -- the compiler the binary embeds -- and calls its new
-`preread` mode over every `lib/` file, once under the default feature set and
-once under `:optimize [perf]`'s `#{:flint :flint/nested}`. The answer is
-`{path {:opts .. :forms ..}}`, encoded by the host codec, which writes every
-form's metadata; each file's entry is stored as its own byte range of one blob
-per feature set, embedded with `include_bytes!`. A compile hands a stdlib file
-over as `{:src text :preread <those bytes spliced in>}` and
-`flint.project/read-entry` uses the forms only when their `:opts` equal the
-`read-options` this compile would read with -- `:file`, `:features`, `:tags`,
-`:dialect` -- and reads the text otherwise. Held by `bb test/cli.clj`: the
-`FLINT_CHECK_SPLIT` rows compare the pre-read compile's image with one whose
-spec carries every file as text (`identical=true`, with and without
-`:optimize [perf]`), and a control row asserts the pre-read is actually USED
-(words: 0.52 M split-steps against 4.39 M with `FLINT_PREREAD=0`).
+**Status (2026-10-05, second version): built, native CLI only.** `cli/build.rs`
+loads `dist/flintc.bytecode` -- the compiler the binary embeds -- and calls its
+`preread` mode over every `lib/` file. Each file is read by
+`flint.reader/read-deferred`, which keeps reader conditionals AS DATA, and
+written by `flint.forms/encode`; the binary embeds those bytes (one blob,
+indexed by path) and NOT the text. A compile hands each stdlib file over as
+`{:preread bytes}`; `flint.project/read-entry` decodes it only when the
+resolver reaches that namespace, checks its `:opts` (`preread-options`: file,
+tags, dialect, `:features :any`) against the read it stands in for, and
+resolves the conditionals for this compile's features with
+`flint.reader/resolve-conditionals`. One copy serves the default build,
+`:optimize [perf]` and any explicit `:features`.
 
-Measured 2026-10-05, branch `stdlib-preread` off `4192d734`, load averages
-20-45, the binary from `4192d734` against this one, same harness:
-`FLINT_CHECK_SPLIT`'s `split-steps` (flint instructions, one run, deterministic)
-hello 4.35 M -> 0.49 M, life 4.36 M -> 0.49 M, words 4.39 M -> 0.52 M; the
-whole `flint run` process, `/usr/bin/time -l` "instructions retired", three
-runs each, hello 11.66 G -> 6.52 G, life 13.25 G -> 8.15 G, words
-12.56 G -> 7.44 G. Images: `flint compile :to :llvm` of every `corpus/*.cljc`,
-with and without `:optimize [perf]`, both binaries -- 42 of 42 `.ll` files
-byte-identical; `caesar` and `dijkstra` fail with byte-identical messages on
-both. `bb test/door-agreement.clj` green: the npm CLI and `bin/flint` still read
-text and still produce the same bytes.
+Held by: `bb test/reader_test.clj` (a deferred read resolves to exactly what
+the reader chooses as it reads, forms and metadata compared with
+`*print-meta*`, for twelve shapes under three feature sets and for every file
+in `lib/` and `src/` holding a conditional under both CLI feature sets; the
+refused contexts; `flint.forms` round-trips every `lib/` file exactly);
+`bb test/cli.clj` (the `FLINT_CHECK_SPLIT` rows compare the pre-read compile's
+image with one built from text, `identical=true` with and without
+`:optimize [perf]`, and the control row asserts the forms are USED: words
+0.55 M split-steps against 4.39 M with `FLINT_PREREAD=0`).
 
-### Why the compiler pre-reads, at cargo time
+**Measured 2026-10-05**, this branch (`read-forms`) against the binary built
+from `c0eb81cb` (the first version), both `bin/build-dist && cargo build
+--release -p flint-cli` in the same worktree, load averages 12-43:
 
-One reader. `bin/flint` (babashka) running the reader's source would be the
-same source on a different host, and the doors are held byte-identical, so a
-bb-hosted read that differed in any detail -- number types, map construction,
-gensym naming -- would split the native door from the other two. The build
-script runs the bytecode that ships, so the forms are the ones that compiler
-would read at run time; the only thing between them is the codec round trip,
-which the image comparison above covers.
+| | c0eb81cb | this | method |
+|---|---|---|---|
+| binary | 13 743 072 B | 5 173 344 B | `stat` of `target/release/flint` (stripped) |
+| embedded stdlib | 403 007 B text + 4 245 200 + 4 234 670 B forms | 355 095 B forms, no text | `cli/build.rs`'s own line; gzip -9 of the forms 151 858 B, of the text 126 150 B |
+| peak RSS, hello / life / words | 32.6 / 37.4 / 39.3 MB | 19.5 / 25.0 / 26.5 MB | `/usr/bin/time -l` max resident, three runs each, highest shown |
+| instructions, hello / life / words | 6.67 / 8.25 / 7.55 G | 6.77 / 8.38 / 7.64 G | `/usr/bin/time -l` instructions retired, three runs, mean; spread under 0.6% |
+| split-steps, hello / life / words | 485 651 / 494 851 / 524 365 | 510 939 / 520 139 / 549 653 | `FLINT_CHECK_SPLIT=1`, one run, deterministic |
 
-At CARGO time rather than as a `dist/` artefact, because then there is nothing
-new to go stale: cargo already reruns `build.rs` when `dist/` or `lib/` moves,
-and `bin/check-dist`'s stamp already says whether `dist/flintc.bytecode`
-matches `src/` and `lib/`. A `dist/stdlib.forms` would have needed its own
-stamp. The price is `flint-rt` and `flint-conc` compiled a second time as
-build-dependencies (`flint-conc` because the compiler image names
-`flint/spawn` and does not LOAD without it; the first build attempt failed
-exactly so).
+So the binary is smaller than before pre-reading existed (5.78 MB at
+`4192d734`) and peak RSS is back under the 22 MB that preceded it, for about
+1.5% more instructions. Images: `flint compile :to :llvm` of every
+`corpus/*.cljc`, plain and `:optimize [perf]`, both binaries -- 42 of 42 `.ll`
+files byte-identical, and `caesar` and `dijkstra` fail with identical messages
+on both. `bb test/door-agreement.clj` green after `FLINT_DIST_FRESH=1
+sdks/cli/build`.
 
-### Why the forms carry their read options, and the guest decides
+### Where a trivial compile's instructions go
 
-The read depends on more than the text: `#?(:flint/check ...)` appears 25
-times in `lib/`, so the default and `:optimize [perf]` read different forms,
-and a workspace's `:tags` and a file's dialect also feed the reader. The
-CLI's choice of blob is only an optimisation (`preread_for` in
-`cli/src/main.rs`: an explicit `:features` gets none); the guest compares the
-whole option map and falls back to the text, which always travels beside the
-forms. So a wrong blob, a stdlib workspace that later binds tags, or a
-project file that shadows a stdlib path (`SplitFiles::preread_of` also
-checks the body is the stdlib's own text) costs speed and never correctness.
-A cache that misses is still invisible to every suite, which is why
-`test/cli.clj` asserts the instruction drop rather than the bytes alone.
+Measured 2026-10-05 with an UNCOMMITTED instrument -- `proc_pid_rusage`'s
+`ri_instructions` read at phase boundaries in `cli/src/main.rs` and in
+`native::call_on`, and inside the guest through a temporary hook on a math
+builtin called with a sentinel argument from `flint.selfhost` and
+`flint.compiler/compile-image` -- on `flint run` of `test/resource-fixtures`
+`hello`, two runs agreeing within 1%. Sampling with `xctrace` (Time Profiler)
+on an unstripped build agreed on the coarse split: 92% of samples under the
+guest call.
 
-### What it costs
+* `c0eb81cb`, 6.65 G in all: host decode of the call, i.e. every pre-read
+  form of all 38 files, 0.42 G (6.3%); the guest compile 6.19 G (93%);
+  process start, spec building, loading the compiler image and the program,
+  and running it, about 0.05 G together.
+* This branch, 6.73 G: everything in the guest before resolution begins --
+  chiefly reading the EDN spec envelope, not split further -- 0.23 G (3.5%); resolving
+  the project -- decoding the 12 reached files of 38, resolving conditionals,
+  reading `ns` forms -- 0.67 G (10%); ANALYSIS of every reached namespace
+  5.05 G (75%); reachability 0.08 G; emitting the kept functions 0.38 G
+  (5.6%); finishing and encoding the image 0.26 G (3.9%); everything on the
+  host about 0.05 G.
 
-* Binary: 5.78 MB -> 13.74 MB. Each blob is about 4.2 MB (default
-  4 245 200 bytes, perf 4 234 670), against 403 KB of source: the codec has
-  no sharing, so every form repeats `:line`/`:column`/`:file` keys and its
-  file name.
-* Memory: every compile decodes all 38 files' forms, reachable or not.
-  Peak RSS for `run-hello` 22.1 MB -> 33.1 MB (same new binary with
-  `FLINT_PREREAD=0` against without), which is why
-  `test/resource-budgets.edn` lowered its CPU and instruction baselines and
-  not its RSS ones.
+`split-steps` is not a proxy for any of this: 0.49 M "steps" against 6.2 G
+host instructions is ~12 600 instructions a step, which is not an
+interpreter's cost per instruction. Measured on a loop in a `flint run`
+program (100 000 iterations against none, so roughly: run-to-run noise was
+~400 an iteration), one iteration of `(recur (inc i) (+ a i))` is ~800 host
+instructions and a three-key map literal ~1 650 more; host instructions
+retired is the measure.
+
+### Why the reader keeps conditionals as data
+
+The first version embedded the forms twice, because 25 `#?(:flint/check ..)`
+blocks read differently under the default and under `:optimize [perf]`, and
+any other `:features` fell back to text that therefore had to travel too.
+Which branch a conditional takes is not a property of the text -- the same
+move `syntax-quoted` made for symbol resolution (`DECISIONS.md#context-free-reader`).
+So `read-deferred` leaves each `#?`/`#?@` as a tagged literal whose tag is a
+symbol no source can spell (`flint.reader/#?`), and `resolve-conditionals`
+chooses later with the SAME `choose` the reader uses when it chooses as it
+reads, stamping the chosen form as `read-form*` would have. A user's file is
+still read and chosen in one pass, unchanged.
+
+What cannot be kept as data is REFUSED in a deferred read, loudly, at the
+CLI's build: a conditional inside syntax quote, `#()` or a reader tag's
+argument (each consumes its contents as it reads), metadata that is itself a
+conditional, an `ns` form chosen by one, and `::alias/kw` in a file whose `ns`
+form has a conditional that might declare the alias. None occurs in `lib/`
+(`clojure.core`'s 18 top-level forms with conditionals put them in `defn`
+bodies and in `^{:flint/value-meta ..}` values; `flint.deps.manifest` in its
+`:require`). A map literal whose conditional is a key, a splice, or could
+change its count, and a set holding one, are kept as nodes too and built when
+resolved. One divergence is deliberate: an UNMATCHED conditional under a
+quote reads as `(quote <EOF sentinel>)` when the reader chooses -- the
+sentinel leaks -- and as `(quote)` when resolved; neither is a program, and
+the eager one is the bug.
+
+Only the top-level forms that hold a conditional are walked per compile
+(`read-deferred` lists them), so `clojure.core`'s 18 cost a walk and its other
+forms nothing.
+
+### Why a separate forms codec, not a mode of the wire codec
+
+The wire codec (`flint.wire`, `runtime/src/codec.rs`, the dead-but-kept JVM
+and CLR copies, `kin/wirecore.kin`) carries ANY value across a boundary and
+every runtime and port speaks it; a pooled mode there is a format change in
+all of them for the sake of one caller. This encoding carries one shape --
+forms with the reader's position metadata -- between two halves of the
+compiler, and both halves are `src/flint/forms.cljc`: guest code, so no
+runtime, port or door has anything new to carry, and a door that wants
+pre-read files (the npm CLI runs the same compiler) can take them as they
+are. What makes it small is that shape: a per-file table of strings and
+names referred to by index, positions as a line DELTA and a column with the
+file implied, a collection's `:child-pos` derived from its children's own
+positions with only the literals' written, varints throughout.
+
+Exactness is checked, not assumed: the decoder rebuilds position metadata
+with the reader's own `position-meta` construction (or a literal the encoder
+first confirms equal to it), and the ENCODER builds what the decoder would and
+compares, key order included, writing the map as an ordinary value when they
+differ. That check mattered on the first build: the guest's `merge` answers
+`:child-pos` before `:file` where babashka's answers it after, every
+collection failed the then order-hardcoded check, and the blob came out at
+694 714 bytes instead of 355 095.
+
+### Why decode lazily, in the guest
+
+Decoding all 38 files on every compile is what put peak RSS from 22 to 33 MB
+in the first version. A compile of `hello` reaches 12 of them (187 KB of the
+403 KB of text, counted with `flint.project/resolve-project` over `lib/`
+under babashka), so the guest decodes in `read-entry`, when the resolver
+reaches a namespace, and needs no host callback the other doors lack. The
+price is speed: the decoder is interpreted, ~31 M instructions for
+`clojure.string` (7.7 KB of forms) measured in a `flint run` harness, where the
+host decoded the wire format natively. Two rounds of tuning took it from
+78 M (a closure per value, a `merge` per form's metadata) to there; reading
+the bytes by hand rather than through the varint function changed nothing
+measurable, and a map literal was the cheapest of the three constructions
+tried (an `assoc` onto a per-file base and `array-map` each cost roughly 3-4x
+it, same harness).
+Net, the compile is ~1.5% more instructions than the first version.
 
 ### Open, for the maintainer
 
-* Size: a pooled codec variant (`runtime/src/codec.rs` already names one as a
-  later optimisation), or deflate (`flate2` is already a dependency) at the
-  price of inflating per run, or sharing the blob between the two feature
-  sets for the files that contain no reader conditional.
-* Decoding everything per compile: handing over only what the program
-  reaches needs the resolver to ask the host for a file, which today it
-  cannot do without a new host native the other doors would not carry.
-* The npm CLI and `bin/flint` still read text. They could take the same
-  forms -- the npm door runs the same compiler -- but neither is the door
-  this was measured on, and their images already agree.
-* `preread` is a mode of `flint.selfhost/main` and so reachable through
-  `flintc.wasm` by any host; whether that makes it a published surface for
-  `doc/api-review.md` is undecided.
+* The pre-analysed layer. Analysis is 75% of a trivial compile's
+  instructions and is the same stdlib analysed every time; reading is now
+  10% and decoding a part of that. A cache of analysed (or emitted)
+  stdlib items would be the next order-of-magnitude step, and is a far
+  larger design question than this one: the analysis depends on the feature
+  set and on workspace grants, and items are kept by reachability per program.
+* A native decoder would give back the 1.5%: a builtin in every runtime
+  (through `kin/`), which is a surface of its own.
+* The npm CLI and `bin/flint` still read text. The npm door could take the
+  same bytes; `bin/flint` is babashka and gains nothing from them.
+* `preread` is a mode of `flint.selfhost/main` (`doc/api-review.md`); whether
+  a build-time-only mode is a published surface is still undecided.
+* The spec ENVELOPE is still EDN read by the guest's reader, inside the
+  0.23 G before resolution; it carries the `:builtins` and `:slots` tables,
+  and how much of that 0.23 G they are was not measured.
