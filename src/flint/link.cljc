@@ -18,11 +18,45 @@
             [flint.modmeta :as modmeta]
             [flint.aot :as aot]))
 
-(def ^:private toolchain
-  (str (System/getProperty "user.home") "/.rustup/toolchains/nightly-aarch64-apple-darwin"))
+(defn- run-out
+  "Run a command and return its trimmed stdout. Throws with stderr attached on
+  a non-zero exit, same shape as `sh!` below."
+  [& args]
+  (let [p (.exec (Runtime/getRuntime) (into-array String (map str args)))
+        out (slurp (.getInputStream p))
+        err (slurp (.getErrorStream p))
+        code (.waitFor p)]
+    (when-not (zero? code)
+      (throw (ex-info (str "command failed: " (str/join " " args) "\n" err out)
+                      {:code code :err err :out out})))
+    (str/trim out)))
 
+;; PINNED, read from the same file `bin/build-units` resolves its own nightly
+;; from (DECISIONS.md#pin-the-nightly-toolchain), so the two cannot drift
+;; (AGENTS.md#1). This used to hardcode
+;; `~/.rustup/toolchains/nightly-aarch64-apple-darwin` -- which happens to be
+;; every developer's own default nightly on a macOS/aarch64 box, and is never
+;; a real toolchain directory on Linux, whose "nightly" is
+;; `nightly-x86_64-unknown-linux-gnu`. Resolved through `rustup which` instead
+;; of naming a host triple, the same reason `bin/build-units` gives for doing
+;; the same thing.
+;;
+;; The toolchain must also be the SAME ONE that compiled the unit objects
+;; being linked: `rust-lld` from an older LLVM reading a newer LLVM's bitcode
+;; fails with "Unknown attribute kind", not a version-mismatch message that
+;; names the cause.
 (defn lld-path []
-  (str toolchain "/lib/rustlib/aarch64-apple-darwin/bin/rust-lld"))
+  (let [nightly (str/trim (slurp "bin/nightly-toolchain"))
+        rustc (run-out "rustup" "which" "--toolchain" nightly "rustc")
+        tc (.. (io/file rustc) getParentFile getParentFile)
+        rustlib (io/file tc "lib" "rustlib")
+        hit (->> (or (.listFiles rustlib) (make-array java.io.File 0))
+                 (keep #(let [f (io/file % "bin" "rust-lld")] (when (.exists f) f)))
+                 first)]
+    (if hit
+      (str hit)
+      (throw (ex-info (str "no rust-lld under " rustlib " (toolchain " nightly ")")
+                      {:toolchain nightly :rustlib (str rustlib)})))))
 
 (defn- sh! [args]
   (let [p (.exec (Runtime/getRuntime) (into-array String (map str args)))

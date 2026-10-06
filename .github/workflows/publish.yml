@@ -74,10 +74,13 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
+      # PINNED to bin/nightly-toolchain, not the rolling `nightly` alias
+      # (DECISIONS.md#pin-the-nightly-toolchain).
       - name: Set up Rust nightly with the wasm32 target
         run: |
-          rustup toolchain install nightly --profile minimal
-          rustup target add wasm32-unknown-unknown --toolchain nightly
+          NIGHTLY="$(cat bin/nightly-toolchain)"
+          rustup toolchain install "$NIGHTLY" --profile minimal
+          rustup target add wasm32-unknown-unknown --toolchain "$NIGHTLY"
 
       - uses: Swatinem/rust-cache@v2
         with:

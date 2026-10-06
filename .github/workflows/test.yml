@@ -70,10 +70,16 @@ jobs:
 
       # Nightly, because the unit objects are emitted by rustc directly against
       # the wasm32 sysroot rather than through cargo (see bin/build-units).
+      # PINNED to bin/nightly-toolchain, not the rolling `nightly` alias
+      # (DECISIONS.md#pin-the-nightly-toolchain): an unpinned nightly fetched
+      # the day this runs can change where cargo places a build-script
+      # dependency's rlib under cross-compilation, which bin/build-units'
+      # `rlib()` does not expect.
       - name: Set up Rust nightly with the wasm32 target
         run: |
-          rustup toolchain install nightly --profile minimal
-          rustup target add wasm32-unknown-unknown --toolchain nightly
+          NIGHTLY="$(cat bin/nightly-toolchain)"
+          rustup toolchain install "$NIGHTLY" --profile minimal
+          rustup target add wasm32-unknown-unknown --toolchain "$NIGHTLY"
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2

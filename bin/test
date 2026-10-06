@@ -60,6 +60,25 @@ fail() {
   exit 1
 }
 
+# THE `error[...]` LINE, not just the tail. A build log's last 20 or 30 lines
+# are whatever happened to be printing when the process exited -- often a
+# cascade of warnings from a file compiled AFTER the one that actually failed
+# -- and a plain `tail` can scroll the real error off before it is ever shown.
+# Measured 2026-10-06: `bin/build-dist`'s `tail -20` showed 52 unused-`mut`
+# warnings from unrelated files and the summary line
+# "error: aborting due to 1 previous error", with the one line that named the
+# error -- "extern location for libm does not exist" -- never printed at all.
+# `grep -A12 '^error'` finds every `error:`/`error[...]:` block (with its
+# following context) wherever it sits, THEN the tail for the rest.
+show_build_log() {
+  if grep -q '^error' "$1"; then
+    echo "  -- error(s) found in $1:"
+    grep -A12 '^error' "$1" | head -60
+    echo "  -- tail of $1:"
+  fi
+  tail -20 "$1"
+}
+
 # SECTION TIMING, because the 26 minutes this takes has never had an
 # itemisation and the remedy depends entirely on the shape of it: a handful of
 # slow sections and a uniform cost want completely different answers.
@@ -144,10 +163,10 @@ echo
 # sections reading as a defect in the change, none of them one.
 sec "rust: the native CLI, which everything below runs"
 ./bin/build-dist > /tmp/flint-cli-build.log 2>&1 \
-  || { tail -20 /tmp/flint-cli-build.log; fail "bin/build-dist (before the first CLI build)"; }
+  || { show_build_log /tmp/flint-cli-build.log; fail "bin/build-dist (before the first CLI build)"; }
 ./bin/check-dist || fail "check-dist (before the first CLI build)"
 cargo build --release -p flint-cli > /tmp/flint-cli-build.log 2>&1 \
-  || { tail -20 /tmp/flint-cli-build.log; fail "cargo build --release -p flint-cli"; }
+  || { show_build_log /tmp/flint-cli-build.log; fail "cargo build --release -p flint-cli"; }
 echo "  ok"
 
 # THE FAST GATE IN FULL, so this file is a SUPERSET of it.
@@ -551,7 +570,7 @@ sec "distributable: the compiler and loader, driven by the SDK alone"
 # and reports a DIVERGENCE BETWEEN FRONT ENDS that does not exist. Measured: a
 # constant 893 bytes on every arm, which is exactly the shape of a real one.
 cargo build --release -p flint-cli > /tmp/flint-test.out 2>&1 \
-  || { tail -20 /tmp/flint-test.out; fail "cargo build --release -p flint-cli (after build-dist)"; }
+  || { show_build_log /tmp/flint-test.out; fail "cargo build --release -p flint-cli (after build-dist)"; }
 # The SDK is a separate package with its own build (`sdks/`), and what is
 # tested is the DISTRIBUTABLE: one portable ESM with the artifacts inside it.
 ./sdks/esm/build > /tmp/flint-test.out 2>&1 || { tail -25 /tmp/flint-test.out; fail "sdks/esm/build"; }
@@ -627,7 +646,7 @@ sec "binary: the single-file CLI, compiling and running with nothing installed"
 # release artifact, so what is asserted is what a user does with it: compile a
 # program and run the result.
 cargo build -p flint-cli --release > /tmp/flint-test.out 2>&1 \
-  || { tail -20 /tmp/flint-test.out; fail "cargo build -p flint-cli"; }
+  || { show_build_log /tmp/flint-test.out; fail "cargo build -p flint-cli"; }
 rm -rf /tmp/flint-smoke && mkdir -p /tmp/flint-smoke
 printf '(ns smoke (:require [clojure.string :as s]))\n(defn main [args] (s/upper-case (str "ok " (reduce + 0 (range 10)))))\n' \
   > /tmp/flint-smoke/smoke.cljc
@@ -808,7 +827,7 @@ cargo test -p flint --release --test sdk -- --nocapture > /tmp/flint-test.out 2>
   || { tail -25 /tmp/flint-test.out; fail "the Rust SDK"; }
 grep -E "^test result" /tmp/flint-test.out | sed 's/^/    rust:  /'
 grep -E "dispatches ran on a secondary executor" /tmp/flint-test.out | sed 's/^ */    /'
-./sdks/c/build > /tmp/flint-test.out 2>&1 || { tail -30 /tmp/flint-test.out; fail "the C SDK"; }
+./sdks/c/build > /tmp/flint-test.out 2>&1 || { show_build_log /tmp/flint-test.out; fail "the C SDK"; }
 grep -c "  ok  " /tmp/flint-test.out | awk '{printf "    c/c++: %d checks passed\n", $1}'
 
 echo

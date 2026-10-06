@@ -65,13 +65,16 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
 
+      # PINNED to bin/nightly-toolchain, not the rolling `nightly` alias
+      # (DECISIONS.md#pin-the-nightly-toolchain).
       - name: Set up Rust nightly with the wasm32 target
         shell: bash
         run: |
-          rustup toolchain install nightly --profile minimal
-          rustup target add wasm32-unknown-unknown --toolchain nightly
-          rustup target add ${{ matrix.target }} --toolchain nightly
-          rustup component add rust-src --toolchain nightly
+          NIGHTLY="$(cat bin/nightly-toolchain)"
+          rustup toolchain install "$NIGHTLY" --profile minimal
+          rustup target add wasm32-unknown-unknown --toolchain "$NIGHTLY"
+          rustup target add ${{ matrix.target }} --toolchain "$NIGHTLY"
+          rustup component add rust-src --toolchain "$NIGHTLY"
 
       - uses: Swatinem/rust-cache@v2
         with:

@@ -1,10 +1,14 @@
 #!/bin/sh
 # rustup's nightly has the wasm32 target; a system rustc (often first on PATH)
 # does not. Resolve the toolchain rather than naming a host triple.
+#
+# PINNED (DECISIONS.md#pin-the-nightly-toolchain), same reason and same value
+# as bin/build-units.
 set -e
-RUSTC="$(rustup which --toolchain nightly rustc 2>/dev/null)" || RUSTC=""
+NIGHTLY="$(cat "$(dirname "$0")/nightly-toolchain")"
+RUSTC="$(rustup which --toolchain "$NIGHTLY" rustc 2>/dev/null)" || RUSTC=""
 if [ -z "$RUSTC" ]; then
-  echo "no nightly rustc: rustup toolchain install nightly" >&2
+  echo "no $NIGHTLY rustc: rustup toolchain install $NIGHTLY --profile minimal" >&2
   exit 1
 fi
 export PATH="$(dirname "$RUSTC"):$PATH"

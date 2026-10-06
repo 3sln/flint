@@ -15352,3 +15352,121 @@ Still open:
    changing every image once. To be decided at step 8, with numbers.
 4. **`src/deps.edn` granting the compiler `:host`.** The compiler would hold
    a capability for the first time.
+
+## pin-the-nightly-toolchain
+
+**Ratified:** ☐ not signed off
+
+**Status: built 2026-10-06.** `bin/build-units`, `bin/build-test-unit` and
+`bin/cargo-wasm` resolve the nightly toolchain via `bin/nightly-toolchain`
+(currently `nightly-2024-10-12`) instead of the rolling `nightly` alias, and
+`.github/workflows/test.yml`, `publish.yml` and `binaries.yml` install that
+same pinned toolchain rather than `rustup toolchain install nightly`.
+`src/flint/link.cljc`'s `lld-path` reads the same file (it used to hardcode
+`~/.rustup/toolchains/nightly-aarch64-apple-darwin`, below).
+
+### What was decided
+
+The rolling `nightly` alias is not safe to build against unattended: CI's GH
+Actions run 37478331002 (`bin/test`, ubuntu-latest, 2026-10-06) failed in the
+first section, `rust: the native CLI, which everything below runs`, with
+`bin/test` showing only the `tail -20` of `bin/build-dist`'s combined log --
+52 warnings (`kgen/rt/vectwrite.rs` and others, unrelated) followed by `error:
+aborting due to 1 previous error; 52 warnings emitted`, with the actual
+`error[...]` line scrolled off.
+
+**Reproduced** in a fresh `rust:latest` Linux/amd64 container (Docker,
+`--platform linux/amd64`, no bind-mounted `target/` carried over from a prior
+run) by running `./bin/build-units` after `rustup toolchain install nightly`
+-- the exact sequence `bin/build-dist` and CI both run. The real error, found
+by *not* truncating the log:
+
+```
+error: extern location for libm does not exist:
+  --> runtime/src/fmath.rs:11:50
+```
+
+(or, with a `target/` directory that mixed two nightly dates,
+`error[E0514]: found crate 'libm' compiled by an incompatible version of
+rustc` at the same site -- two symptoms of the same cause.)
+
+**Cause.** `bin/build-units` builds the workspace's dependency rlibs for
+`wasm32-unknown-unknown` with `cargo build --workspace --exclude ...`, then
+reads `libm`'s rlib back out by hand with `rlib() { ls
+target/wasm32-unknown-unknown/release/deps/lib$1-*.rlib; }` so the later
+direct `rustc --extern libm=...` call (`flint.rt`, no cargo on that path by
+design) can link against it. Bisected across dated nightlies in the same
+container (`nightly-2024-10-12` through `nightly-2026-09-01`, each a fresh
+`rm -rf target` + full `cargo build --workspace --exclude ...` for
+`wasm32-unknown-unknown`):
+
+* `nightly-2024-10-12`, `nightly-2026-06-01`: `libm`'s rlib lands in
+  `target/wasm32-unknown-unknown/release/deps/`, where `rlib()` looks. Build
+  succeeds end to end.
+* `nightly-2026-09-01` and the auto-installed nightly this CI run used
+  (`nightly-2026-10-06`, rustc `1.101.0-nightly (ea137335b 2026-10-05)`):
+  `libm` (which carries a build script) has its own compiled rlib placed
+  under its build script's `build/libm/<hash>/out/` instead --
+  `target/wasm32-unknown-unknown/release/deps/` is not created at all for
+  this invocation. `rlib()` finds nothing, `--extern libm=` resolves to an
+  empty path, and the direct `rustc` call for `flint.rt` fails.
+
+**Why `nightly-2024-10-12` and not `nightly-2026-06-01`.** Both pass the
+`deps/` check above, but fixing `lld-path` (below) to use the SAME pinned
+toolchain for linking surfaced a second difference between them: linking the
+units built by `nightly-2026-06-01` fails --
+
+```
+rust-lld: error: units/flint/conc.o: undefined symbol: __rustc::__rust_no_alloc_shim_is_unstable_v2
+```
+
+-- on a from-scratch `units/` (so not a stale object), self-consistent
+toolchain throughout (same nightly compiled and linked). `nightly-2026-06-01`
+expects an allocator-shim trip wire this `no_std` + custom
+`#[global_allocator]` runtime (`runtime/src/mem.rs`) does not define; whether
+to add it is undecided and out of scope here. `nightly-2024-10-12` has no
+such expectation and is what every past merge's "`bin/check` green" claim was
+actually built and linked with, since `lld-path`'s old hardcoded path always
+resolved to a developer's own macOS default nightly -- which was always this
+one, give or take. Pinning to it changes nothing about what has shipped so
+far; pinning to a newer one would.
+
+This is a change in a recent nightly's own build-artifact layout for
+build-script-bearing dependencies under cross-compilation -- found
+unconditionally (also reproduces on `3d740cf3`, the commit before
+snap-stream/jvm-grow/read-forms merged), **not** a regression in flint's own
+`src/`, `lib/`, `runtime/` or `units-src/`, and not platform-specific in the
+sense suspected (the macOS-only mmap/libc code in `runtime/src/mem.rs` is
+`cfg(all(unix, not(wasm32)))` and is never compiled for the `wasm32` target
+this step builds).
+
+**A second, independent bug, found only because fixing the first one let the
+build get further.** `src/flint/link.cljc`'s `lld-path` hardcoded
+`~/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/rust-lld`
+-- a real path only on a macOS/aarch64 box whose default `nightly` happens to
+be that exact toolchain (true of every developer machine this has been built
+on so far). On Linux the installed toolchain directory is
+`nightly-x86_64-unknown-linux-gnu`, so this path never existed there; every
+Linux build of `dist/flint-loader.wasm` and `dist/flintc.wasm` would have
+failed at the link step with "command failed" naming a nonexistent binary,
+*after* the `libm` bug above is fixed, since linking is a later step than
+`bin/build-units`. `test.yml` is `workflow_dispatch`-only (manual, "before a
+release"), which is almost certainly why this had not yet been hit and
+reported on its own. Now resolved the same way `bin/build-units` resolves
+`rustc`: `rustup which --toolchain <pinned> rustc`, then the self-contained
+`rust-lld` under that toolchain's own `lib/rustlib/<host-triple>/bin/`,
+whatever the host triple is.
+
+**Risk left open:** `rlib()`'s `deps/`-only lookup is still exactly as
+fragile against a *future* nightly changing this layout again. Pinning stops
+the toolchain from moving out from under the build unannounced; it does not
+make `rlib()` itself robust to where cargo decides to put an artifact. That
+is a second, separable fix (e.g. `find target/wasm32-unknown-unknown/release
+-name "lib$1-*.rlib"` instead of a flat `ls` in a hardcoded `deps/`),
+recorded here as a change request rather than done, since this decision did
+not touch `bin/build-units`'s lookup logic itself.
+
+**How to re-pin.** Bump `bin/nightly-toolchain` only after confirming
+`./bin/build-dist` still produces `target/wasm32-unknown-unknown/release/deps/lib*.rlib`
+for every workspace dependency with the candidate date, the same way this one
+was found.
