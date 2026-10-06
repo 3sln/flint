@@ -14881,6 +14881,13 @@ modes of `main` still serve every door. What proves it, and how:
   protocol over `lib/` and `corpus/`, and `compile-with` produces `nbody`'s IR
   byte-identical to `flint compile :to :llvm` (9 s); plus the `:missing`
   probe and control.
+* *Re-checked 2026-10-06 after rebasing onto `9d58543d`*
+  (`DECISIONS.md#the-control-plane-is-the-runtimes` merged, `flint.system`
+  gone): the corpus sweep again 42 byte-identical and 4 refused alike (683 s);
+  all 42 `.ll` identical to `9d58543d`'s own binary, built in a detached
+  worktree; `nbody` now reaches 9 namespaces in 3 waves, the control plane's
+  four fewer. The port adapter uses only `flint.port/send`/`receive`, nothing
+  the call loop's `var-named` restriction touches.
 Step 1 (one reader) and steps 3 to 8 are not built. The rest of this section was
 written against `6d8ea376` and assumes the `flint-seal` work
 has landed first: the system thread gets the system port as `boot`'s argument,

@@ -355,8 +355,13 @@ mod tests {
         assert_eq!(v.get("file").and_then(Val::as_str), Some("clojure/core.cljc"));
         assert!(v.get("forms").is_some());
         assert_eq!(v.get("workspace"), Some(&Val::Symbol(Some("flint".into()), "flint".into())));
-        assert_eq!(v.get("grants"), Some(&Val::Vector(vec![
-            Val::Keyword(None, "host".into()), Val::Keyword(None, "vars".into())])));
+        // WHAT `lib/deps.edn` GRANTS, read from it rather than restated: this
+        // said `[:host :vars]` and went stale the day the control plane moved
+        // into the runtime and the library stopped holding `:vars`.
+        let declared = crate::edn_block(crate::STDLIB_DEPS, ":flint/capabilities-grant", '[', ']');
+        let want = parse_keywords(&declared, "flint/flint", "grants").unwrap();
+        assert!(!want.is_empty());
+        assert_eq!(v.get("grants"), Some(&Val::Vector(want)));
         let _ = fs::remove_dir_all(&dir);
     }
 

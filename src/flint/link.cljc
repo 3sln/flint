@@ -45,8 +45,18 @@
 ;; being linked: `rust-lld` from an older LLVM reading a newer LLVM's bitcode
 ;; fails with "Unknown attribute kind", not a version-mismatch message that
 ;; names the cause.
+(def ^:private nightly-file
+  "`bin/nightly-toolchain`, found from THIS FILE rather than the working
+  directory. It was `(slurp \"bin/nightly-toolchain\")`, which works only when
+  the process runs from the repository root -- and `flint task`, `flint build`
+  and every test that runs `bin/flint` from a project directory do not, so they
+  failed with `FileNotFoundException: bin/nightly-toolchain` (eight rows of
+  `test/cli.clj`, found 2026-10-06)."
+  (str (io/file (.. (io/file *file*) getAbsoluteFile getParentFile getParentFile getParentFile)
+                "bin" "nightly-toolchain")))
+
 (defn lld-path []
-  (let [nightly (str/trim (slurp "bin/nightly-toolchain"))
+  (let [nightly (str/trim (slurp nightly-file))
         rustc (run-out "rustup" "which" "--toolchain" nightly "rustc")
         tc (.. (io/file rustc) getParentFile getParentFile)
         rustlib (io/file tc "lib" "rustlib")
