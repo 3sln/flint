@@ -598,6 +598,27 @@ determinism is what makes every cross-engine number in
 `cross-runtime-benchmarks` comparable, and it is one of the most heavily
 relied-on properties in the codebase.
 
+**The catchable memory cap now converges on all four runtimes, not just
+wasm.** `ROADMAP.md` recorded 2026-10-05 that `Rt.java` and `Rt.cs` had no
+equivalent of `oom_unwind`: a failed allocation read back as `Nil`/`Val.NIL`
+on both ports, so a guest program that filled its heap got a WRONG ANSWER
+rather than the catchable error this section claims. Fixed by giving each
+port its own `oomUnwind`/`OomUnwind` (same kind, message and `{:used
+:limit}` data as native's) and making `alloc`/`AllocUnbilled` set the `OOM`
+sentinel on a failed allocation, which neither did. **Verified 2026-10-05**
+by running `runtimes/conform/oom.cljc`'s `eat` (fills a 2 MiB nursery / 6 MiB
+ceiling sandbox) and `work` (a control that stays under it) directly against
+native (`cli/src/main.rs`'s `oom_tests`), the JVM (`runtimes/jvm/test/RtOom.java`)
+and the CLR (`Conform --rt-oom`): all three answer the byte-identical
+`memory limit exceeded: 5242880 bytes of 6291456 in use after a collection
+{:used 5242880, :limit 6291456}` for `eat` and `499500` for `work`. Checked
+that this fails without the fix, not just that it passes with it: the
+pre-fix code, rebuilt standalone for both ports from the commit before this
+one, answers `4000` for `eat` on both -- the loop reporting it ran to
+completion, which is exactly the silently-wrong answer this section warns
+against. None of this went through `bin/conform-hosts`, which the fix was
+not wired into.
+
 ### What was decided
 
 flint bounds a program's execution by an exact, deterministic **instruction

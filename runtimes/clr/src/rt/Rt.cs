@@ -342,6 +342,38 @@ public sealed class Rt : System.IDisposable {
         return e;
     }
 
+    /// The heap cap was reached, and a collection has already been tried. A
+    /// CATCHABLE error carrying what was held against what was allowed, not a
+    /// crash: a host has to be able to tell "the program is wrong" from "the
+    /// limit was too small" (`DECISIONS.md#resource-limits`). Mirrors
+    /// native's `oom_unwind` (`runtime/src/vm.rs`) and the JVM's
+    /// `oomUnwind` -- same kind, same message shape, same one-off megabyte of
+    /// grace so the error describing the exhaustion can itself be built.
+    void OomUnwind() {
+        long limit = gc.HeapLimit();
+        if (memTrips == 0) {
+            memTrips = 1;
+            gc.SetHeapLimit(limit + 1024 * 1024);
+        }
+        long used = gc.HeapFootprint();
+        string msg = "memory limit exceeded: " + used + " bytes of " + limit
+            + " in use after a collection";
+        int b = Mark();
+        int ki = Push(Str.Of(this, "ResourceExhausted"));
+        int mi = Push(Str.Of(this, msg));
+        int di = Push(Maps.Empty(this));
+        long[] vals = { used, limit };
+        string[] keys = { "used", "limit" };
+        for (int i = 0; i < keys.Length; i++) {
+            int kwi = Push(Str.Keyword(this, null, keys[i]));
+            SetR(di, Mapwrite.MapAssoc(this, R(di), R(kwi), Val.Fixnum(vals[i])));
+            PopTo(kwi);
+        }
+        long e = ExInfo(this, R(ki), R(mi), R(di), Val.Nil);
+        PopTo(b);
+        if (e != Val.Nil) thrown = e;
+    }
+
     /// The builtins this image imports, resolved BY NAME. The slots in an image
     /// belong to the module it was linked against and mean nothing here, which
     /// is what makes an image portable between hosts at all.
@@ -504,35 +536,42 @@ public sealed class Rt : System.IDisposable {
                 + " holds a heap value -- it is not a root");
         }
         Parallel par = roots.shared.par;
-        if (par.Executors() <= 1) return gc.Alloc(roots, ty, len);
-
-        par.LockAlloc();
-        bool staged = gc.WouldCollect(ty, len);
-        if (staged) {
-            // `running` is not a detail. The target is "every running executor
-            // EXCEPT ME", and an allocation can happen outside guest code --
-            // loading an image, running initialisers, a host call -- where this
-            // thread is not one of them.
-            par.StageStop(running);
-            // Every other executor is stopped NOW. Built here and dropped
-            // after, because a list that outlived the stop would be pointers
-            // into threads that have started running again.
-            roots.shared.others.Clear();
-            lock (roots.shared) {
-                foreach (Roots r in roots.shared.all)
-                    if (!ReferenceEquals(r, roots)) roots.shared.others.Add(r);
-            }
-        }
         long a;
-        try {
+        if (par.Executors() <= 1) {
             a = gc.Alloc(roots, ty, len);
-        } finally {
+        } else {
+            par.LockAlloc();
+            bool staged = gc.WouldCollect(ty, len);
             if (staged) {
+                // `running` is not a detail. The target is "every running executor
+                // EXCEPT ME", and an allocation can happen outside guest code --
+                // loading an image, running initialisers, a host call -- where this
+                // thread is not one of them.
+                par.StageStop(running);
+                // Every other executor is stopped NOW. Built here and dropped
+                // after, because a list that outlived the stop would be pointers
+                // into threads that have started running again.
                 roots.shared.others.Clear();
-                par.ReleaseStop();
+                lock (roots.shared) {
+                    foreach (Roots r in roots.shared.all)
+                        if (!ReferenceEquals(r, roots)) roots.shared.others.Add(r);
+                }
             }
-            par.UnlockAlloc();
+            try {
+                a = gc.Alloc(roots, ty, len);
+            } finally {
+                if (staged) {
+                    roots.shared.others.Clear();
+                    par.ReleaseStop();
+                }
+                par.UnlockAlloc();
+            }
         }
+        // A failed allocation must not read as `Nil` to the program -- it
+        // used to, and a capped run then carried on and reported a WRONG
+        // ANSWER rather than an error (`DECISIONS.md#resource-limits`).
+        // `Unwind` turns the sentinel into the catchable error.
+        if (a == 0 && Val.IsNil(thrown)) thrown = Val.Oom;
         return a;
     }
 
@@ -1434,6 +1473,13 @@ public sealed class Rt : System.IDisposable {
         // started, and compiled code was told to carry on past the handler with
         // an unwound stack. See `runtimes/conform/aot_try.cljc`.
         unwinds++;
+        // Every failure comes through here, so this is the one place that has
+        // to turn the allocator's cheap sentinel into an error somebody can
+        // read, mirroring native's `unwind` (`runtime/src/vm.rs`).
+        if (thrown == Val.Oom) {
+            thrown = Val.Nil;
+            OomUnwind();
+        }
         while (handlers.Count != 0) {
             // A HANDLER BELOW THIS `Run` IS NOT THIS `Run`'S TO JUMP TO.
             // Unwinding past a native frame truncates the shadow stack under

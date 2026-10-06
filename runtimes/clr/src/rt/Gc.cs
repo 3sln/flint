@@ -78,6 +78,16 @@ public sealed class Gc : System.IDisposable {
     /// FOOTPRINT. This is LIVE BYTES; native spells it inline in `note_peak`.
     public long HeapUsed() => global::_3sln.Flint.Kgen.Rt.Gcspace.GcHeapUsed(this);
 
+    /// Bytes of heap this program is permitted, and how much backing it holds
+    /// now -- mirroring native's hand-written `Gc::heap_limit` /
+    /// `Gc::set_heap_limit` / `Gc::heap_used` (the FOOTPRINT one, not
+    /// `HeapUsed()` above, which is live bytes). `Rt.OomUnwind` is the only
+    /// caller: it reports what was held against what was allowed
+    /// (`DECISIONS.md#resource-limits`).
+    public long HeapLimit() => maxHeap;
+    public void SetHeapLimit(long bytes) { maxHeap = bytes; }
+    public long HeapFootprint() => oldCapacity + half * 2;
+
     // --- old space ---------------------------------------------------------
 
     bool AddChunk(long want) {

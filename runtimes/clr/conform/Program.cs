@@ -28,6 +28,7 @@ public static class Program {
         // (`DECISIONS.md#structured-ports`). Deriving the name from the path is
         // one rename away from measuring nothing and still printing a number.
         if (args.Length >= 3 && args[0] == "--rt-steps") return RtSteps(args[1], args[2]);
+        if (args.Length >= 3 && args[0] == "--rt-oom") return RtOom(args[1], args[2]);
         if (args.Length >= 2 && args[0] == "--rt-image")
             return RtImage(args[1], args.Length > 2 ? args[2] : null);
         // No bare-argument form any more. It ran an image on the BOXED port,
@@ -688,6 +689,11 @@ public static class Program {
         return rt.status;
     }
 
+    /// The last answer's bytes, rendered printable -- the same crude decode
+    /// `HostCall.java`'s `lastAnswer` uses: not a real codec reader, just
+    /// enough to SEE what came back.
+    private static string lastAnswer = "(none)";
+
     /// Has an answer come back on the call port? The records are five
     /// little-endian `u32`s -- `kind, a, b, off, len` -- which is the layout
     /// every host reads (`DECISIONS.md#host-abi`). Kind 2 is a message and `a`
@@ -696,6 +702,14 @@ public static class Program {
         var evs = Flint.Rt.Conc.DrainEvents(rt);
         for (int i = 0; i < evs.Count; i++) {
             if (HostWord(evs.Bytes, i * 20) == 2 && HostWord(evs.Bytes, i * 20 + 4) == CALLS) {
+                int off = (int) HostWord(evs.Bytes, i * 20 + 12);
+                int len = (int) HostWord(evs.Bytes, i * 20 + 16);
+                var sb = new System.Text.StringBuilder();
+                for (int k = off; k < off + len && k < evs.Bytes.Length; k++) {
+                    int c = evs.Bytes[k] & 0xff;
+                    sb.Append(c >= 32 && c < 127 ? (char) c : '.');
+                }
+                lastAnswer = sb.ToString();
                 return true;
             }
         }
@@ -897,6 +911,31 @@ public static class Program {
                               + " unattributed=" + (rt.steps - rt.instrs - rt.gWork
                                                     - rt.gTick - rt.gChecked));
         }
+        return 0;
+    }
+
+    /// The catchable memory-limit error (`DECISIONS.md#resource-limits`), on
+    /// a REAL compiled image -- `runtimes/conform/oom.cljc` -- called over
+    /// the SAME bridge `RtSteps` uses: `oom/main` directly, not the
+    /// compiler's CLI shim, with a 2 MiB nursery and a 6 MiB ceiling,
+    /// matching the JVM's `RtOom` (`Rt::new` plus `set_memory_limit(6 MiB)`,
+    /// which is the same thing since nothing has allocated yet).
+    ///
+    /// Proves the gap `ROADMAP.md` recorded 2026-10-05 is closed on the CLR:
+    /// before `Rt.OomUnwind` existed, `oom/main ["eat"]` here answered a bare
+    /// `Nil` instead of raising. Run directly -- `bin/conform-hosts` is not
+    /// touched by this file. The JVM's sibling is `RtOom.java`, and native's
+    /// is `cli/src/main.rs`'s `oom_tests`.
+    ///
+    ///     ./bin/flint :src runtimes/conform :fn oom/main --emit-image \
+    ///       :out out/conform/oom.img
+    ///     Conform --rt-oom out/conform/oom.img eat
+    private static int RtOom(string path, string arg) {
+        var rt = new Flint.Rt.Rt(2L * 1024 * 1024, 6L * 1024 * 1024);
+        var img = Flint.Rt.Img.Load(rt, File.ReadAllBytes(path));
+        if (img == null) { Console.WriteLine("FAIL not a flint image"); return 1; }
+        HostCallRun(rt, "oom/main", new string[]{ arg });
+        Console.WriteLine(lastAnswer);
         return 0;
     }
 
