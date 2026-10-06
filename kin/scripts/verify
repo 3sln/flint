@@ -180,14 +180,53 @@ for t in $present; do
       rustc -O -A warnings -o "$work/probe.rust" "$work/gen.rs" 2>&1 | head -20
       echo "rust $("$work/probe.rust")" >> "$work/answers" ;;
     java)
-      JDK=/opt/homebrew/opt/openjdk
-      [ -x "$JDK/bin/javac" ] || JDK=$(/usr/libexec/java_home 2>/dev/null)
+      # $JAVA_HOME FIRST. It is what `actions/setup-java` exports on CI and
+      # what AGENTS.md tells a person to export locally, so it is the one
+      # path that is actually SET everywhere this runs.
+      #
+      # `/usr/libexec/java_home` does not exist on Linux at all -- it is a
+      # macOS-only utility -- and this used to ask for it unconditionally as
+      # the sole fallback: `[ -x "$JDK/bin/javac" ] || JDK=$(/usr/libexec/java_home
+      # 2>/dev/null)`. On Linux neither that NOR the hardcoded Homebrew path
+      # exists, so the assignment's own command substitution failed (127, not
+      # found) with its stderr sent to /dev/null -- and because this line is
+      # a bare `||`, not wrapped in `if`, that failure was this SCRIPT's exit
+      # status under its own `set -e`. The script died right there, on every
+      # kin source (java is in every `$present`), with NOTHING printed: no
+      # FAIL line, no "produced no output", not even the next `comparing:`.
+      # That is indistinguishable in a log from a source never reached, and
+      # it is what the 2026-10-06 Linux gate's 122 textless failures were.
+      JDK=${JAVA_HOME:-/opt/homebrew/opt/openjdk}
+      if [ ! -x "$JDK/bin/javac" ] && [ -x /usr/libexec/java_home ]; then
+        JDK=$(/usr/libexec/java_home 2>/dev/null) || true
+      fi
+      if [ ! -x "$JDK/bin/javac" ]; then
+        jc=$(command -v javac 2>/dev/null) || true
+        [ -n "$jc" ] && JDK=$(cd "$(dirname "$jc")/.." && pwd)
+      fi
+      if [ ! -x "$JDK/bin/javac" ]; then
+        echo "  FAIL no javac found (checked \$JAVA_HOME, Homebrew, java_home, PATH)"
+      fi
       "$JDK/bin/javac" -d "$work" ${pre_java:+"$pre_java"} "$work/Probe.java" 2>&1 | head -20
       echo "java $("$JDK/bin/java" -cp "$work" Probe)" >> "$work/answers" ;;
     csharp)
-      mkdir -p "$work/cs" && (cd "$work/cs" && dotnet new console -o . --force >/dev/null 2>&1)
+      # CAPTURED, NOT DISCARDED, and the `||` is deliberate. This used to be
+      # `mkdir -p "$work/cs" && (cd "$work/cs" && dotnet new console -o .
+      # --force >/dev/null 2>&1)` -- a top-level `&&` chain under this
+      # script's own `set -e`, with BOTH streams sent to `/dev/null`. Any
+      # failure here (a corrupt first-run template cache under concurrent
+      # `check-kin`, a missing template, anything) killed the script on the
+      # spot with NOTHING printed: no FAIL line, no "produced no output", not
+      # even the "comparing:" line's neighbours -- a source failed and the
+      # log looked exactly like one that was never reached. `head -20` matches
+      # the rust and java legs above.
+      mkdir -p "$work/cs"
+      if ! dn_out=$(cd "$work/cs" && dotnet new console -o . --force 2>&1); then
+        echo "  FAIL dotnet new console (templates):"
+        echo "$dn_out" | head -20 | sed 's/^/       /'
+      fi
       cp "$work/Program.cs" "$work/cs/Program.cs"
-      echo "csharp $(cd "$work/cs" && dotnet run 2>/dev/null | tail -1)" >> "$work/answers" ;;
+      echo "csharp $(cd "$work/cs" && dotnet run 2>&1 | tail -1)" >> "$work/answers" ;;
   esac
 done
 
