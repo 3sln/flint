@@ -282,6 +282,36 @@ impl Host {
     /// request, and no driver thread is held waiting on a driver thread.
     pub fn call(&mut self, p: &mut Program, caller: &Caller, name: &str, args: &[Val])
                 -> Result<Vec<u8>, String> {
+        self.call_serving(p, caller, name, args, &mut |_, _| None)
+    }
+
+    /// A port id this host owns, for passing INTO a call as an argument
+    /// (`Val::Port`). Nothing is installed and nothing is routed: the runtime
+    /// mints the port when the call carrying it is delivered, exactly as the
+    /// bind in `caller` carries its port, and `call_serving`'s `serve` is what
+    /// answers what arrives on it.
+    ///
+    /// This is CAPABILITY PASSING: the callee may talk to this port because it
+    /// was handed it, and holds no grant to ask the host for anything else
+    /// (`DECISIONS.md#namespaces-over-the-system-port`, the resolver port).
+    pub fn mint_port(&mut self) -> u32 {
+        let id = self.next_port;
+        self.next_port += 1;
+        id
+    }
+
+    /// `call`, with `serve` offered every MESSAGE the sandbox sends while the
+    /// call is outstanding, before the host's own routing sees it. `serve`
+    /// answers `Some(bytes)` to reply on that same port, or `None` to leave the
+    /// message to `handle` as before.
+    ///
+    /// It is how a port passed in as an argument gets answered: the compiler's
+    /// namespace requests arrive on the resolver port the host minted
+    /// (`mint_port`), and the host answers each one while the compile is
+    /// parked on it.
+    pub fn call_serving(&mut self, p: &mut Program, caller: &Caller, name: &str, args: &[Val],
+                        serve: &mut dyn FnMut(u32, &[u8]) -> Option<Vec<u8>>)
+                        -> Result<Vec<u8>, String> {
         let calls = caller.port;
         self.next_tx += 1;
         let tx = self.next_tx;
@@ -320,6 +350,20 @@ impl Host {
                 if ev.kind == EV_MESSAGE && ev.a == calls {
                     if let Some(r) = reply_for(tx, &ev.payload) {
                         return r;
+                    }
+                }
+                if ev.kind == EV_MESSAGE && ev.a != calls {
+                    if let Some(reply) = serve(ev.a, &ev.payload) {
+                        // Back-pressure as `handle` treats it: one retry after
+                        // a resume. An empty queue always accepts, so a port
+                        // with one outstanding request cannot refuse twice.
+                        if !p.host_deliver(ev.a, &reply) {
+                            let _ = p.resume();
+                            if !p.host_deliver(ev.a, &reply) {
+                                return Err(format!("port {} would not take the answer", ev.a));
+                            }
+                        }
+                        continue;
                     }
                 }
                 self.handle(p, ev);

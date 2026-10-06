@@ -214,6 +214,20 @@ sec "doors: three front doors, one program, the same bytes"
 bb test/door-agreement.clj || fail "test/door-agreement.clj"
 
 echo
+# THE COMPILE AS A CALL (`DECISIONS.md#namespaces-over-the-system-port`, step 2):
+# the compiler asked for namespaces over a port the host passed in, every corpus
+# program byte-identical to the EDN path, plus the shaped-virtual and missing
+# probes; then the same compiler source driven by babashka through the resolver
+# protocol. The cargo half is about four compiles per corpus program.
+sec "compile call: namespaces over a resolver port, and the resolver protocol"
+if ! cargo test --release -p flint-cli compile_call > /tmp/flint-compile-call.out 2>&1; then
+  grep -E "^(error|test result|thread .* panicked|failures:)" /tmp/flint-compile-call.out | head -20
+  fail "cargo test -p flint-cli compile_call"
+fi
+grep -E "^test result|corpus compiles" /tmp/flint-compile-call.out
+bb test/resolver-protocol.clj || fail "test/resolver-protocol.clj"
+
+echo
 sec "units: the PRODUCTION build (no diagnostic machinery -- 0016)"
 ./bin/build-units >/dev/null 2>&1 || fail "build-units"
 echo "  ok"

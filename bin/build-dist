@@ -147,10 +147,15 @@ echo "==> the compiler, as a module and as bytecode"
 # so the CLI can embed it and run the compiler as native code, which is 2.7 s
 # against 15.6 s through a wasm engine. It is not published and not attached to
 # a release.
-indent ./bin/flint :src src :fn flint.selfhost/main :out dist/flintc.bytecode.tmp --emit-image
+#
+# `:exports flint.selfhost/compile`: the compile as an ordinary CALL
+# (`DECISIONS.md#namespaces-over-the-system-port`), which nothing inside the
+# compiler references, so the shake would drop it and a host asking for it by
+# name would be told this image has no such function.
+indent ./bin/flint :src src :fn flint.selfhost/main :exports flint.selfhost/compile :out dist/flintc.bytecode.tmp --emit-image
 freshen dist/flintc.bytecode.tmp dist/flintc.bytecode
 
-indent ./bin/flint :src src :fn flint.selfhost/main :out dist/flintc.wasm.tmp
+indent ./bin/flint :src src :fn flint.selfhost/main :exports flint.selfhost/compile :out dist/flintc.wasm.tmp
 freshen dist/flintc.wasm.tmp dist/flintc.wasm
 
 # Both forms of the compiler are built, so the stamp is true of both -- and it

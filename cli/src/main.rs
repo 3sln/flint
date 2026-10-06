@@ -18,6 +18,7 @@ mod deps;
 mod depscmd;
 mod pod;
 mod policy;
+mod resolve;
 mod script;
 mod serve;
 mod sys;
@@ -25,6 +26,8 @@ mod sys;
 mod snapstream_test;
 #[cfg(test)]
 mod control_test;
+#[cfg(test)]
+mod compile_call_test;
 
 use anyhow::{bail, Context, Result};
 use flint_rt::native::Program;
@@ -221,8 +224,12 @@ fn project_deps_edn(dir: &Path) -> (String, PathBuf) {
 /// Read with a SCAN rather than an EDN parser, as everywhere else on this side
 /// -- the guest owns the format and a second reader of it is a second thing to
 /// keep true.
-#[derive(Default)]
-struct Workspace {
+/// `Clone` because one workspace is spliced into several entries -- the
+/// stdlib's `Workspace` is read once and entered under both `clojure/` and
+/// `flint/`, and a project's under every file its root owns
+/// (`resolve::Answers` reads the same fields back out of `WsEntry::Source`).
+#[derive(Default, Clone)]
+pub(crate) struct Workspace {
     name: String,
     tags: String,
     prelude: String,
@@ -266,16 +273,209 @@ fn read_workspace(text: &str) -> Workspace {
     }
 }
 
-/// A workspace entry for the spec, or empty when there is nothing to say.
-fn workspace_entry(prefix: &str, w: &Workspace, fallback_name: &str) -> String {
-    let name = if w.name.is_empty() { fallback_name } else { &w.name };
+/// One `:workspaces` entry of the spec -- either a VIRTUAL namespace this
+/// binary serves itself (a pod, or one of `crate::sys::catalogue`), or a
+/// SOURCE workspace read from a `deps.edn` (the stdlib's own, or a project's).
+///
+/// Built once, by `spec_inputs`, and read twice: `build_spec_impl` renders it
+/// as the EDN text the embedded compiler takes, and `resolve::Answers`
+/// answers the same question a namespace at a time, over the host-driven
+/// compile path (`DECISIONS.md#namespaces-over-the-system-port`). Two
+/// renderers of one list, rather than two lists that enumerate the same
+/// workspaces and can drift (AGENTS.md "One list, not two").
+pub(crate) enum WsEntry {
+    Virtual { prefix: String, name: String, vars: Vec<(String, Option<Vec<u32>>)> },
+    Source { prefix: String, name: String, ws: Workspace },
+}
+
+/// What a compile needs to resolve every namespace it might reach: the file
+/// bodies (stdlib and project), and the workspaces that say who owns what.
+///
+/// Split out of `build_spec_impl` so the EDN spec text and the per-namespace
+/// host answer (`resolve::Answers`) are two RENDERINGS of this, not two
+/// builders that happen to agree today.
+pub(crate) struct SpecInputs {
+    pub(crate) files: BTreeMap<String, Body>,
+    pub(crate) workspaces: Vec<WsEntry>,
+}
+
+/// A workspace entry for the spec, or `None` when there is nothing to say --
+/// the same test `workspace_entry` always made, now deciding whether to KEEP
+/// an entry rather than whether to render one.
+fn workspace_entry(prefix: &str, w: &Workspace, fallback_name: &str) -> Option<WsEntry> {
+    let name = if w.name.is_empty() { fallback_name.to_string() } else { w.name.clone() };
     if name.is_empty() && w.tags.is_empty() && w.prelude.is_empty()
         && w.grants.is_empty() && w.guard.is_empty() {
-        return String::new();
+        return None;
     }
-    format!(
-        "{{:prefix {} :name {} :tags {{{}}} :prelude [{}] :grants [{}] :guard [{}]}} ",
-        edn_string(prefix), name, w.tags, w.prelude, w.grants, w.guard)
+    Some(WsEntry::Source { prefix: prefix.to_string(), name, ws: w.clone() })
+}
+
+/// Renders one `WsEntry` exactly as the spec has always written it --
+/// `{:prefix .. :name .. :tags {..} :prelude [..] :grants [..] :guard [..]}`
+/// for a source workspace, `{:prefix .. :name .. :virtual true :vars [..]}`
+/// for a virtual one, `:arities` present on a var only when it is known.
+fn render_ws_entry(e: &WsEntry, out: &mut String) {
+    match e {
+        WsEntry::Source { prefix, name, ws } => {
+            out.push_str(&format!(
+                "{{:prefix {} :name {} :tags {{{}}} :prelude [{}] :grants [{}] :guard [{}]}} ",
+                edn_string(prefix), name, ws.tags, ws.prelude, ws.grants, ws.guard));
+        }
+        WsEntry::Virtual { prefix, name, vars } => {
+            out.push_str("{:prefix ");
+            out.push_str(&edn_string(prefix));
+            out.push_str(&format!(" :name {name} :virtual true :vars ["));
+            for (vname, arities) in vars {
+                match arities {
+                    // NO ARITIES. A pod's `describe` gives names and metadata, and
+                    // arities are not always in it -- so this says "unchecked" by
+                    // omitting the field rather than claiming `[]`, which would read as
+                    // "takes no arguments" and refuse every real call.
+                    None => out.push_str(&format!("{{:name {vname}}} ")),
+                    Some(a) => {
+                        out.push_str(&format!("{{:name {vname} :arities ["));
+                        for x in a {
+                            out.push_str(&format!("{x} "));
+                        }
+                        out.push_str("]} ");
+                    }
+                }
+            }
+            out.push_str("]} ");
+        }
+    }
+}
+
+/// Every `WsEntry`, rendered in order.
+fn render_workspaces(workspaces: &[WsEntry], out: &mut String) {
+    for e in workspaces {
+        render_ws_entry(e, out);
+    }
+}
+
+/// The files and workspaces a compile of `srcs` needs, before anything
+/// renders them. `nested` and `as_text` are decided by the caller
+/// (`build_spec_impl` for the EDN-spec path, `resolve::Answers::new` for the
+/// host-driven one) because both read `:flint/nested` and `FLINT_PREREAD`
+/// the same way and neither should decide it twice.
+pub(crate) fn spec_inputs(srcs: &[PathBuf], pods: &[(String, Vec<String>)], nested: bool, as_text: bool)
+               -> Result<SpecInputs> {
+    // THE STANDARD LIBRARY AS FORMS, one read for every feature set
+    // (`DECISIONS.md#stdlib-preread`). As text only for the test hooks:
+    // `FLINT_PREREAD=0` is how the saving is measured and a suspected
+    // pre-read defect ruled in or out, and the EDN spec has nowhere to put
+    // bytes.
+    let mut files: BTreeMap<String, Body> = BTreeMap::new();
+    for (p, a, b) in STDLIB_INDEX {
+        let body = if as_text { Body::Text(stdlib_text(p)?) } else { Body::Forms(&STDLIB_FORMS[*a..*b]) };
+        files.insert((*p).to_string(), body);
+    }
+    // PER ROOT, so each file can be attributed to the workspace that owns it.
+    // Reading them all into one map loses which root a file came from, and the
+    // paths here are namespace-derived (`acme/thing.cljc`) with no marker to
+    // recover it -- which is why the first version of this could express only
+    // one project workspace and a guard BETWEEN two of them never fired.
+    let mut owned: Vec<(PathBuf, Vec<String>)> = Vec::new();
+    for s in srcs {
+        let mut mine: BTreeMap<String, String> = BTreeMap::new();
+        if s.is_dir() {
+            read_sources(s, "", &mut mine)?;
+        } else {
+            // A FILE IS KEYED BY THE NAMESPACE IT DECLARES, not by what it is
+            // called on disk. The compiler finds a namespace at `ns->path`, so
+            // `flint ~/bin/greet` -- and every other single-file source --
+            // would otherwise hand over a file the resolver never looks for
+            // and report the namespace missing. A file with no readable `ns`
+            // keeps its own name, which is what this always did.
+            let body = fs::read_to_string(s)?;
+            let name = s.file_name().unwrap().to_string_lossy().to_string();
+            let key = match script::read_ns(&body) {
+                Some(n) => script::ns_key(&n.ns, source_ext(&name)),
+                None => name,
+            };
+            mine.insert(key, body);
+        }
+        owned.push((s.clone(), mine.keys().cloned().collect()));
+        // A project file at a standard-library path REPLACES it, text for
+        // forms, so the two can never be paired.
+        files.extend(mine.into_iter().map(|(k, v)| (k, Body::Text(v))));
+    }
+    let mut workspaces: Vec<WsEntry> = Vec::new();
+    // POD namespaces, if any were declared. A pod's surface is discovered by
+    // BOOTING it, so this is the one virtual namespace whose var list costs a
+    // process -- which is why `workspace-capabilities` made the list optional and why a build
+    // that boots is a choice made in the open rather than a default.
+    for (ns, vars) in pods {
+        workspaces.push(WsEntry::Virtual {
+            prefix: format!("{}/", ns.replace('.', "/")),
+            name: "pod/pod".to_string(),
+            // NO ARITIES -- see `render_ws_entry`.
+            vars: vars.iter().map(|v| (v.clone(), None)).collect(),
+        });
+    }
+    for (ns, vars) in crate::sys::catalogue() {
+        // NOT NAMEABLE without the feature. Omitting the workspace is what
+        // makes `(:require [flint.ception])` a compile error rather than a run-time
+        // refusal -- an artifact built without it cannot reach the SDK however
+        // it is later run.
+        if ns == "flint.ception" && !nested {
+            continue;
+        }
+        workspaces.push(WsEntry::Virtual {
+            prefix: format!("{}/", ns.replace('.', "/")),
+            name: "flint/sys".to_string(),
+            vars: vars.into_iter().map(|(name, arities)| (name.to_string(), Some(arities.to_vec()))).collect(),
+        });
+    }
+    // THE SOURCE WORKSPACES, after the virtual ones because the first matching
+    // prefix wins and `flint/` would otherwise swallow `flint/sys/fs/`.
+    //
+    // Until this existed the native CLI emitted virtual workspaces ONLY, so
+    // every compiled file belonged to the anonymous workspace -- and since the
+    // capability guard skips references within one workspace, it never fired.
+    // `bin/flint` read `deps.edn` and refused the same program. The binary
+    // users run was the one nothing tested, because every test for the guard
+    // and for `:flint/tag-readers` drives `bin/flint`.
+    let stdlib = read_workspace(STDLIB_DEPS);
+    for pre in ["clojure/", "flint/"] {
+        if let Some(e) = workspace_entry(pre, &stdlib, "") {
+            workspaces.push(e);
+        }
+    }
+    // The PROJECT's own, from `deps.edn` beside a source root or one directory
+    // up -- the rule `bin/flint` states and follows. A catch-all prefix,
+    // because this side keys files by their namespace-derived path with no
+    // marker for which root they came from; a project whose roots carry
+    // DIFFERENT `deps.edn` files therefore gets the first one found, which is
+    // narrower than `bin/flint` and is recorded rather than hidden.
+    for (sdir, paths) in &owned {
+        // A SOURCE THAT IS A FILE INHERITS NOTHING FROM THE DIRECTORY IT SITS
+        // IN. This used to take the `deps.edn` beside it, which for a
+        // standalone script is the whole hazard the feature exists to avoid:
+        // dropping `greet` into a working tree would have silently handed it
+        // that project's reader tags, its prelude and -- worse -- its
+        // capability grants, none of which the script's author wrote or saw
+        // (`DECISIONS.md#standalone-scripts`). A file names its own workspace
+        // or has none.
+        if !sdir.is_dir() {
+            continue;
+        }
+        let dir = sdir.clone();
+        let (text, _) = project_deps_edn(&dir);
+        if text.trim().is_empty() { continue }
+        let w = read_workspace(&text);
+        // ONE ENTRY PER FILE, with the file's own path as the prefix. Prefix
+        // matching is `starts-with?`, so a full path matches exactly that file
+        // -- which is how a root whose files interleave with another root's in
+        // one flat namespace-derived space still gets its own workspace.
+        for path in paths {
+            if let Some(e) = workspace_entry(path, &w, &edn_string(&dir.display().to_string())) {
+                workspaces.push(e);
+            }
+        }
+    }
+    Ok(SpecInputs { files, workspaces })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -406,41 +606,10 @@ fn build_spec_impl(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
     // pre-read defect ruled in or out, and the EDN spec has nowhere to put
     // bytes.
     let as_text = !split || std::env::var("FLINT_PREREAD").is_ok_and(|v| v == "0");
-    let mut files: BTreeMap<String, Body> = BTreeMap::new();
-    for (p, a, b) in STDLIB_INDEX {
-        let body = if as_text { Body::Text(stdlib_text(p)?) } else { Body::Forms(&STDLIB_FORMS[*a..*b]) };
-        files.insert((*p).to_string(), body);
-    }
-    // PER ROOT, so each file can be attributed to the workspace that owns it.
-    // Reading them all into one map loses which root a file came from, and the
-    // paths here are namespace-derived (`acme/thing.cljc`) with no marker to
-    // recover it -- which is why the first version of this could express only
-    // one project workspace and a guard BETWEEN two of them never fired.
-    let mut owned: Vec<(PathBuf, Vec<String>)> = Vec::new();
-    for s in srcs {
-        let mut mine: BTreeMap<String, String> = BTreeMap::new();
-        if s.is_dir() {
-            read_sources(s, "", &mut mine)?;
-        } else {
-            // A FILE IS KEYED BY THE NAMESPACE IT DECLARES, not by what it is
-            // called on disk. The compiler finds a namespace at `ns->path`, so
-            // `flint ~/bin/greet` -- and every other single-file source --
-            // would otherwise hand over a file the resolver never looks for
-            // and report the namespace missing. A file with no readable `ns`
-            // keeps its own name, which is what this always did.
-            let body = fs::read_to_string(s)?;
-            let name = s.file_name().unwrap().to_string_lossy().to_string();
-            let key = match script::read_ns(&body) {
-                Some(n) => script::ns_key(&n.ns, source_ext(&name)),
-                None => name,
-            };
-            mine.insert(key, body);
-        }
-        owned.push((s.clone(), mine.keys().cloned().collect()));
-        // A project file at a standard-library path REPLACES it, text for
-        // forms, so the two can never be paired.
-        files.extend(mine.into_iter().map(|(k, v)| (k, Body::Text(v))));
-    }
+    // THE FILES AND WORKSPACES, built once (`spec_inputs`) and rendered below
+    // -- the EDN text here, a namespace at a time in `resolve::Answers`.
+    let inputs = spec_inputs(srcs, pods, nested, as_text)?;
+    let files = inputs.files;
     let mut out = String::from("{:files {");
     if !split {
         for (k, v) in &files {
@@ -466,93 +635,21 @@ fn build_spec_impl(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
         out.push(']');
     }
     // The VIRTUAL namespaces this binary serves (`DECISIONS.md#workspace-capabilities` step 4,
-    // `system-namespaces-and-deps`). They have no source, so the resolver has to be told they exist
-    // or a `:require` of one is reported missing -- and it has to be told what
-    // they HOLD, so an unknown var is a compile error rather than a run-time
-    // one. The CLI knows its own surface, so taking it on trust would be
-    // choosing the worse of two available answers.
-    out.push_str(" :workspaces [");
-    // POD namespaces, if any were declared. A pod's surface is discovered by
-    // BOOTING it, so this is the one virtual namespace whose var list costs a
-    // process -- which is why `workspace-capabilities` made the list optional and why a build
-    // that boots is a choice made in the open rather than a default.
-    for (ns, vars) in pods {
-        out.push_str("{:prefix ");
-        out.push_str(&edn_string(&format!("{}/", ns.replace('.', "/"))));
-        out.push_str(&format!(" :name {} :virtual true :vars [", "pod/pod"));
-        for v in vars {
-            // NO ARITIES. A pod's `describe` gives names and metadata, and
-            // arities are not always in it -- so this says "unchecked" by
-            // omitting the field rather than claiming `[]`, which would read as
-            // "takes no arguments" and refuse every real call.
-            out.push_str(&format!("{{:name {v}}} "));
-        }
-        out.push_str("]} ");
-    }
-    for (ns, vars) in crate::sys::catalogue() {
-        // NOT NAMEABLE without the feature. Omitting the workspace is what
-        // makes `(:require [flint.ception])` a compile error rather than a run-time
-        // refusal -- an artifact built without it cannot reach the SDK however
-        // it is later run.
-        if ns == "flint.ception" && !nested {
-            continue;
-        }
-        out.push_str("{:prefix ");
-        out.push_str(&edn_string(&format!("{}/", ns.replace('.', "/"))));
-        out.push_str(" :name flint/sys :virtual true :vars [");
-        for (name, arities) in vars {
-            out.push_str(&format!("{{:name {name} :arities ["));
-            for a in arities {
-                out.push_str(&format!("{a} "));
-            }
-            out.push_str("]} ");
-        }
-        out.push_str("]} ");
-    }
-    // THE SOURCE WORKSPACES, after the virtual ones because the first matching
-    // prefix wins and `flint/` would otherwise swallow `flint/sys/fs/`.
+    // `system-namespaces-and-deps`), then THE SOURCE WORKSPACES -- stdlib
+    // first, then the project's own -- after the virtual ones because the
+    // first matching prefix wins and `flint/` would otherwise swallow
+    // `flint/sys/fs/`. `spec_inputs` built this list in that order already;
+    // `render_workspaces` is only the EDN rendering of it.
     //
-    // Until this existed the native CLI emitted virtual workspaces ONLY, so
-    // every compiled file belonged to the anonymous workspace -- and since the
-    // capability guard skips references within one workspace, it never fired.
-    // `bin/flint` read `deps.edn` and refused the same program. The binary
-    // users run was the one nothing tested, because every test for the guard
-    // and for `:flint/tag-readers` drives `bin/flint`.
-    let stdlib = read_workspace(STDLIB_DEPS);
-    for pre in ["clojure/", "flint/"] {
-        out.push_str(&workspace_entry(pre, &stdlib, ""));
-    }
-    // The PROJECT's own, from `deps.edn` beside a source root or one directory
-    // up -- the rule `bin/flint` states and follows. A catch-all prefix,
-    // because this side keys files by their namespace-derived path with no
-    // marker for which root they came from; a project whose roots carry
-    // DIFFERENT `deps.edn` files therefore gets the first one found, which is
-    // narrower than `bin/flint` and is recorded rather than hidden.
-    for (sdir, paths) in &owned {
-        // A SOURCE THAT IS A FILE INHERITS NOTHING FROM THE DIRECTORY IT SITS
-        // IN. This used to take the `deps.edn` beside it, which for a
-        // standalone script is the whole hazard the feature exists to avoid:
-        // dropping `greet` into a working tree would have silently handed it
-        // that project's reader tags, its prelude and -- worse -- its
-        // capability grants, none of which the script's author wrote or saw
-        // (`DECISIONS.md#standalone-scripts`). A file names its own workspace
-        // or has none.
-        if !sdir.is_dir() {
-            continue;
-        }
-        let dir = sdir.clone();
-        let (text, _) = project_deps_edn(&dir);
-        if text.trim().is_empty() { continue }
-        let w = read_workspace(&text);
-        // ONE ENTRY PER FILE, with the file's own path as the prefix. Prefix
-        // matching is `starts-with?`, so a full path matches exactly that file
-        // -- which is how a root whose files interleave with another root's in
-        // one flat namespace-derived space still gets its own workspace.
-        for path in paths {
-            let entry = workspace_entry(path, &w, &edn_string(&dir.display().to_string()));
-            if !entry.is_empty() { out.push_str(&entry) }
-        }
-    }
+    // Until a source workspace existed here the native CLI emitted virtual
+    // workspaces ONLY, so every compiled file belonged to the anonymous
+    // workspace -- and since the capability guard skips references within one
+    // workspace, it never fired. `bin/flint` read `deps.edn` and refused the
+    // same program. The binary users run was the one nothing tested, because
+    // every test for the guard and for `:flint/tag-readers` drives
+    // `bin/flint`.
+    out.push_str(" :workspaces [");
+    render_workspaces(&inputs.workspaces, &mut out);
     out.push_str("]");
     // THE READER'S FEATURE SET, said rather than defaulted.
     //

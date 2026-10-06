@@ -27,13 +27,36 @@
 
 (defn ns-form? [f] (and (seq? f) (= 'ns (first f))))
 
-(defn ns-requires [form]
-  (let [[_ _ & clauses] form]
+(defn ns-require-positions
+  "Every namespace an `ns` form names in a require clause, IN ORDER, each with
+  where it is named: `[[sym {:line l :column c}] ..]`.
+
+  The position is the libspec's own when it is a vector or list (those carry
+  metadata), else the clause's `:child-pos` entry for it (a bare symbol cannot
+  carry one), else the `ns` form's. It is what a not-found namespace is
+  reported at (`DECISIONS.md#namespaces-over-the-system-port`, the `:missing`
+  error), so the person reading it is sent to the line that asked.
+
+  `ns-requires` READS THIS rather than walking the clauses itself, so the two
+  cannot disagree about which names a form requires (AGENTS.md section 1)."
+  [form]
+  (let [[_ _ & clauses] form
+        here (meta form)]
     (vec (for [c clauses
                :when (and (seq? c) (ana/require-clauses (first c)))
-               spec (rest c)
-               :let [t (if (symbol? spec) spec (first spec))]]
-           t))))
+               :let [cp (:child-pos (meta c))
+                     specs (vec (rest c))]
+               i (range (count specs))
+               :let [spec (nth specs i)
+                     t (if (symbol? spec) spec (first spec))
+                     m (meta spec)
+                     at (* 2 (inc i))]]
+           [t (cond (:line m) {:line (:line m) :column (:column m)}
+                    (> (count cp) (inc at)) {:line (nth cp at) :column (nth cp (inc at))}
+                    :else {:line (:line here) :column (:column here)})]))))
+
+(defn ns-requires [form]
+  (mapv first (ns-require-positions form)))
 
 
 (defn- def-form-names
@@ -414,7 +437,7 @@
 (defn read-source
   "Every form in one namespace's source. A function of the TEXT and how to read
   it -- features, tags, dialect -- and of nothing the compiler has learned, so
-  `flint.project/collect`'s read, which finds the requires, is this read, and
+  `flint.project/collect-waves`'s read, which finds the requires, is this read, and
   `compile-image` takes those forms rather than reading the file again
   (`flint.reader/syntax-quoted` says why it used to have to)."
   [cc nsname src file tags]

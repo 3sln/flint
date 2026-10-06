@@ -247,8 +247,12 @@
   a reference to one compiles to a call over a port. Resolving it is the same
   `qualify` every other reference goes through -- aliases included, so
   `(:require [flint.sys.fs :as fs])` and `fs/list-dir` work exactly as they
-  read."
-  [env sym]
+  read.
+
+  `at` is the form to position an error at when `sym` carries no position of
+  its own -- the call, for a virtual var in head position."
+  ([env sym] (virtual-var env sym sym))
+  ([env sym at]
   (when (and (symbol? sym) (namespace sym) (not (resolve-local env sym)))
     (let [cc @(:cc env)
           nsdef (get-in cc [:namespaces (current-ns env)])
@@ -264,8 +268,45 @@
           (err (str "unable to resolve " sym " -- " target
                     " is a virtual namespace and does not hold " (name sym))
                {:sym sym :ns (current-ns env) :virtual target
-                :line (:line (meta sym)) :column (:column (meta sym))}))
-        (symbol (str target) (name sym))))))
+                :line (or (:line (meta sym)) (:line (meta at)))
+                :column (or (:column (meta sym)) (:column (meta at)))}))
+        (symbol (str target) (name sym)))))))
+
+(defn- check-virtual-call!
+  "A call to virtual var `q` with `argc` arguments, against the SHAPE its
+  namespace was answered with (`DECISIONS.md#namespaces-over-the-system-port`,
+  \"shaped virtual namespaces\"). Only what the shape DECLARES is checked: a
+  var entry with no `:arities` is unchecked, as an unshaped namespace is
+  unchecked altogether, so a resolver that knows less is never refused for
+  it.
+
+      {:name f :arities [1 2]}          exactly one or two arguments
+      {:name f :arities [1] :variadic 2} one, or two or more
+      {:name m :macro true}             refused: there is no source to expand
+
+  Positioned at the call, which is where the mistake is."
+  [env q argc form]
+  (let [v (get (:virtual @(:cc env)) (symbol (namespace q)))
+        shape (get (:vars v) (symbol (name q)))
+        pos {:sym q :ns (current-ns env)
+             :line (:line (meta form)) :column (:column (meta form))}]
+    (when shape
+      (when (:macro shape)
+        (err (str q " is declared a macro, and a virtual namespace has no source "
+                  "to expand it from")
+             pos))
+      (let [ar (:arities shape)
+            va (:variadic shape)]
+        (when (and (some? ar)
+                   (not (some (fn [n] (= n argc)) ar))
+                   (not (and (some? va) (>= argc va))))
+          (err (str q " is called with " argc " argument" (if (= argc 1) "" "s")
+                    ", and its namespace declares "
+                    (if (and (empty? ar) (nil? va))
+                      "no arities for it"
+                      (str "arities " (pr-str (vec ar))
+                           (if (some? va) (str " and " va " or more") ""))))
+               pos))))))
 
 (defn- macro-fn [env sym]
   (when-let [q (qualify env sym)]
@@ -885,10 +926,12 @@
       ;;
       ;; Checked BEFORE inlines and macros because a virtual namespace has
       ;; neither: there is no source to have defined one in.
-      (virtual-var env head)
-      (analyze env (list* 'flint.virtual/call
-                          (list 'quote (virtual-var env head))
-                          (rest form)))
+      (virtual-var env head form)
+      (let [q (virtual-var env head form)]
+        (check-virtual-call! env q (count (rest form)) form)
+        (analyze env (list* 'flint.virtual/call
+                            (list 'quote q)
+                            (rest form))))
 
       ;; inline, while an inline that re-emits its own name must stop.
       (and (symbol? head) (not (resolve-local env head))
