@@ -198,7 +198,16 @@
   (check "defprotocol still expands and compiles"
          (some? r) "a protocol emits a call into the caller's namespace"))
 
-(when (pos? @fails) (println "  " @fails "FAILURES") (System/exit 1))
+;; NOT AN EXIT CHECK HERE. One used to sit at exactly this point, and every
+;; row below it -- the capability guard section, the macro/dynamic
+;; order-dependence rows, the `:inline`/alias/value-position probes, all of
+;; them -- printed `FAIL` on a real failure and exited 0 anyway, because
+;; `(System/exit 1)` only runs once and this file has one `@fails` counter
+;; checked only here. `bin/test` gates on THIS PROCESS'S exit code
+;; (`bb test/visibility.clj ... || fail ...`), so a regression in anything
+;; below this line was invisible to it -- reproduced: appending a single
+;; `(check "x" false "x")` after the old position printed `FAIL` and still
+;; exited 0. The real check moved to the end of the file, after every row.
 
 ;; ---------------------------------------------------------------------------
 ;; AND THE CAPABILITY GUARD, which is the same KIND of mark and had no test.
@@ -521,3 +530,122 @@
        (= :refused (route {"libx/i9.cljc" "(ns libx.i9)\n(defn ^{:inline (fn [] '(flint.rt/request \"config\"))} go [] (flint.rt/request \"config\"))"
                            "app/main.cljc" "(ns app.main (:require [libx.i9])) (defn main [_] (libx.i9/go))"}))
        "an inline is an expansion too, and reaches the caller the same way")
+
+;; ---------------------------------------------------------------------------
+;; THE NAMESPACE ITSELF CAN CARRY A MARK, and until now it was read by
+;; nobody: `(ns ^:internal x ..)` and `(ns ^:private x ..)` are metadata on
+;; the `ns` form's own name symbol, and `privacy-check!` read only VAR
+;; metadata (`:var-meta`/`:declared`). So the mark silently did nothing --
+;; FAILED OPEN, not refused -- for every var in such a namespace, whatever
+;; was named. Measured below, before the fix: a bare cross-workspace
+;; reference to a var with NO mark of its own, in a namespace marked
+;; `^:internal`, produced the exact same `unable to resolve symbol: nth`
+;; this synthetic harness always ends on (no `clojure.core` here), identical
+;; whether the reference crossed the workspace boundary or stayed inside it
+;; -- the two arms AGREEING EXACTLY is itself the symptom (AGENTS.md section
+;; 3): a check that is actually running tells those two cases apart.
+;;
+;; `^:internal` and `^:private` ON THE `ns` FORM MEAN THE SAME THING: the
+;; namespace is WORKSPACE-LOCAL, every var in it nameable only from the same
+;; workspace -- unlike the two marks on a VAR, which stay two different
+;; boundaries (`DECISIONS.md#namespace-is-workspace-local`).
+(def ns-internal-lib "(ns ^:internal libx.inner)\n(defn helper [x] x)")
+(def ns-private-lib "(ns ^:private libx.inner2)\n(defn helper [x] x)")
+
+(defn ns-mark-app [l-ns alias]
+  (str "(ns app.main (:require [" l-ns " :as " alias "])) (defn main [_] (" alias "/helper 1))"))
+
+(check "a namespace marked `^:internal` refuses a plain var, cross-workspace"
+       (= :refused (outcome {"libx/inner.cljc" ns-internal-lib
+                             "app/main.cljc" (ns-mark-app "libx.inner" "l")}
+                            two))
+       "the mark on the `ns` form must be read, not only marks on vars")
+
+(check "and allowed from inside its own workspace"
+       (not= :refused (outcome {"libx/inner.cljc" ns-internal-lib
+                                "app/main.cljc" (ns-mark-app "libx.inner" "l")}
+                               one))
+       "workspace-local must not become namespace-local")
+
+(check "`(ns ^:private x ..)` means the SAME thing as `^:internal` on an ns form"
+       (= :refused (outcome {"libx/inner2.cljc" ns-private-lib
+                             "app/main.cljc" (ns-mark-app "libx.inner2" "l")}
+                            two))
+       "both spellings on a namespace are workspace-local, not namespace-local")
+
+;; EVERY ROUTE A VAR REFERENCE CAN TAKE, the same list `guard-check!`'s rows
+;; above already walk -- a check that caught the plain call and missed the
+;; rest would be a check in name.
+(check "refused in VALUE POSITION, not called"
+       (= :refused (outcome {"libx/inner.cljc" ns-internal-lib
+                             "app/main.cljc" "(ns app.main (:require [libx.inner :as l])) (defn main [_] (let [f l/helper] (f 1)))"}
+                            two))
+       "value position must be refused too")
+
+(check "refused through `:refer`"
+       (= :refused (outcome {"libx/inner.cljc" ns-internal-lib
+                             "app/main.cljc" "(ns app.main (:require [libx.inner :refer [helper]])) (defn main [_] (helper 1))"}
+                            two))
+       "refer is still a reference to the qualified var")
+
+(check "and `:refer` from the same workspace is still allowed (the control)"
+       (not= :refused (outcome {"libx/inner.cljc" ns-internal-lib
+                                "app/main.cljc" "(ns app.main (:require [libx.inner :refer [helper]])) (defn main [_] (helper 1))"}
+                               one))
+       "without this row the refusal above could be unconditional and look right")
+
+(check "refused through a MACRO EXPANSION that emits the var into the caller"
+       (= :refused (outcome {"libx/inner.cljc" "(ns ^:internal libx.inner)\n(defn helper [x] x)\n(defmacro mk [] '(libx.inner/helper 1))"
+                             "app/main.cljc" "(ns app.main (:require [libx.inner])) (defn main [_] (libx.inner/mk))"}
+                            two))
+       "the expansion lands in the caller's namespace, which is the point")
+
+(check "refused through an `:inline` body"
+       (= :refused (outcome {"libx/inner.cljc" "(ns ^:internal libx.inner)\n(defn helper [x] x)\n(defn ^{:inline (fn [] '(libx.inner/helper 1))} go [] (libx.inner/helper 1))"
+                             "app/main.cljc" "(ns app.main (:require [libx.inner])) (defn main [_] (libx.inner/go))"}
+                            two))
+       "an inline expander is an expansion too")
+
+;; THE ORDER-DEPENDENCE CLASS, same shape as the `^:private`/`^:internal`
+;; var-level bug earlier in this file: the mark has to be visible from the
+;; PRE-PASS (`declare-namespace!`/`ns-mark`), not only after `analyze-ns`
+;; runs on the marked namespace itself, or a reference from a namespace
+;; analysed FIRST meets no check. `libx.inner3` requires `other.back3`, so
+;; `other.back3` is analysed BEFORE `libx.inner3`'s own `ns` form is -- the
+;; reverse of the edge the app namespace walks.
+(def owner-ns-mark "(ns ^:internal libx.inner3 (:require [other.back3]))
+(defn helper [x] x)
+(defn go [x] (other.back3/reach x))")
+
+(def back-ns-mark "(ns other.back3)
+(defn reach [x] (libx.inner3/helper x))")
+
+(def three [{:prefix "libx/" :name 'libx} {:prefix "other/" :name 'other} {:prefix "app/" :name 'app}])
+
+(check "refused across the reverse edge, where the MARKED namespace is analysed second"
+       (= :refused (outcome {"libx/inner3.cljc" owner-ns-mark "other/back3.cljc" back-ns-mark
+                             "app/main.cljc" "(ns app.main (:require [libx.inner3 :as o])) (defn main [_] (o/go 1))"}
+                            three))
+       "the mark must come from the pre-pass, not from analysing the marked ns first")
+
+;; A VAR'S OWN `^:private` STAYS NAMESPACE-LOCAL even inside a namespace
+;; marked `^:internal` -- the var mark is the stricter of the two and wins.
+(check "a var's own `^:private` is still refused from INSIDE the marked namespace's workspace"
+       (= :refused (outcome {"libx/inner.cljc" "(ns ^:internal libx.inner)\n(defn- secret [x] x)\n(defn helper [x] x)"
+                             "libx/peer.cljc" "(ns libx.peer (:require [libx.inner])) (defn go [] libx.inner/secret)"
+                             "app/main.cljc" "(ns app.main (:require [libx.peer])) (defn main [_] (libx.peer/go))"}
+                            [{:prefix "libx/" :name 'libx} {:prefix "app/" :name 'app}]))
+       "private is a namespace boundary even when the namespace is also workspace-local")
+
+;; THE ANONYMOUS WORKSPACE: a program that declares NO workspaces anywhere is
+;; checked nowhere, exactly as a var-level `^:internal` already is -- `nil`
+;; compares equal to `nil` below, so a namespace mark in such a program is
+;; unenforceable by design, not a hole in this fix
+;; (`DECISIONS.md#namespace-is-workspace-local`).
+(check "a namespace mark is unenforceable in a program with no workspaces at all"
+       (not= :refused (outcome {"libx/inner.cljc" ns-internal-lib
+                                "app/main.cljc" (ns-mark-app "libx.inner" "l")}
+                               []))
+       "declaring no workspaces means nothing here is checked, same as `^:internal` always was")
+
+(when (pos? @fails) (println "  " @fails "FAILURES") (System/exit 1))

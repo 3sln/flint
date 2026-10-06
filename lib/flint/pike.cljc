@@ -1,5 +1,9 @@
-(ns flint.pike
+(ns ^:internal flint.pike
   "The reference Pike VM (`DECISIONS.md#matching-over-ropes`), in cljc.
+
+  WORKSPACE-LOCAL (`DECISIONS.md#namespace-is-workspace-local`): the regex
+  engine's insides, read only by `flint.regex` and by `flint.nfa`. Nothing
+  outside the stdlib workspace is meant to name a var here directly.
 
   Not for speed. It is the conformance oracle the native simulator is checked
   against, it lets the shared compiler be tested before any native exists, and it

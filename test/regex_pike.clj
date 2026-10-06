@@ -32,6 +32,22 @@
 
 (def d (str (fs/create-temp-dir)))
 
+;; `refsim` BELOW REACHES INTO `flint.nfa`/`flint.pike` DIRECTLY, bypassing
+;; `flint.regex`'s own `find-from` -- that is the whole point of a reference
+;; simulator built from the shared AST compiler and the shared VM rather than
+;; through the native-facing entry point. Both namespaces are marked
+;; `^:internal` (`DECISIONS.md#namespace-is-workspace-local`): WORKSPACE-LOCAL,
+;; readable only from `flint/flint`, the name `lib/deps.edn` gives the stdlib.
+;; A root with no `deps.edn` of its own gets a workspace named after its own
+;; path instead, which is a DIFFERENT workspace from the stdlib's -- so without
+;; this file this probe would be refused the moment the marks went in, not
+;; because it is the wrong thing to do, but because this harness never said
+;; which workspace it is part of. It is the stdlib's own conformance oracle,
+;; so it claims the stdlib's own name, the same move `test/visibility.clj`
+;; documents for the guard above (flint builds itself holding nothing it was
+;; not granted; this is the same position for `^:internal`).
+(spit (str d "/deps.edn") "{:flint/workspace flint/flint}\n")
+
 ;; One battery, run three ways. The alternation and quantifier cases are the ones
 ;; where engines classically differ, which is why they are here rather than a
 ;; handful of literals.
