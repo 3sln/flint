@@ -89,19 +89,24 @@
 ;; keeps this row meaningful rather than a tautology -- it would pass trivially
 ;; if it only asserted what is present.
 (def pure-bytes (String. (fs/read-all-bytes (wasm-of pure-wasm)) "ISO-8859-1"))
-;; THE CONTROL PLANE IS FLINT CODE AND IT USES THREADS AND PORTS
-;; (`DECISIONS.md#bridges-are-the-only-door`), so `spawn` and `port-send` are in
-;; every module now: `flint.system/serve` parks on the system port and spawns a
-;; call thread per bind. There is no "pure module" in the old sense any more --
-;; a module with no door is a module nothing can reach.
+;; THE CONTROL PLANE IS RUNTIME CODE NOW, NOT FLINT
+;; (`DECISIONS.md#the-control-plane-is-the-runtimes`), so `port-send` is in
+;; every module: the call loop calls `flint.port/send` by var, same as any
+;; other guest code on a port. There is no "pure module" in the old sense any
+;; more -- a module with no door is a module nothing can reach.
 (doseq [sym ["flint_install_port" "flint_system_port" "flint_in_alloc"
-             "flint_b_spawn" "flint_b_port_send"]]
+             "flint_b_port_send"]]
   (check (str "every module carries " sym) (str/includes? pure-bytes sym) true))
 ;; What a module still does NOT carry is what only a PROGRAM uses. `channel` is
 ;; a local channel between two green threads, which the control plane never
-;; makes -- it is handed its ports. This row is what keeps the one above from
-;; being a tautology: if everything were present it would pass trivially.
-(doseq [sym ["flint_b_channel"]]
+;; makes -- it is handed its ports. `spawn` moved to this row 2026-10-06: a
+;; bound port's call thread used to start because `flint.system/serve` called
+;; the `flint/spawn` builtin, so every module carried it; `:bind` now starts it
+;; with a direct Rust call (`conc::spawn_call`, `kin/control.kin`), and a
+;; program that spawns none of its own has no `flint_b_spawn` at all. This row
+;; is what keeps the one above from being a tautology: if everything were
+;; present it would pass trivially.
+(doseq [sym ["flint_b_channel" "flint_b_spawn"]]
   (check (str "a program that makes none still has no " sym) (str/includes? pure-bytes sym) false))
 ;; The floor moved in 0009, deliberately and by a known amount: the interpreter
 ;; loop is instantiated twice so that a run with no budget has no counter in it,
@@ -539,7 +544,45 @@
             ;; 444 053 now. +64%. That is the whole bill for "a bridge port is
             ;; the only way to talk to a sandbox", and it is one number rather
             ;; than two because the two halves are the same decision.
-            (< pure-size 500000))
+            ;;
+            ;; EIGHTH RAISE, from 500 000 to 545 000. MEASURED: host macOS
+            ;; 14.6.1 (arm64), rustc 1.92.0 (homebrew), commit `1483a511`,
+            ;; command `bb test/threads.clj` -- pure-size (shipped) 534 937
+            ;; against the last-recorded 490 471 (`DECISIONS.md#snapshots`'s
+            ;; own history), so +44 466 bytes, over three merged commits:
+            ;; `d3c476da` (streamed snapshots), `87b31363` (the control plane
+            ;; moves into runtime code) and `1483a511`'s `call-loop-codec`
+            ;; (the call loop speaks the normal wire codec).
+            ;;
+            ;; NOT A LEAK: the maintainer's decision
+            ;; (`DECISIONS.md#the-control-plane-is-the-runtimes`,
+            ;; `DECISIONS.md#snapshots`) is that BOTH serving a call AND
+            ;; shelving a sandbox (the live-set export the host can ask for on
+            ;; the system port, and the import that resumes one) are
+            ;; unconditional, in every module, with no opt-out -- a host may
+            ;; ask any sandbox to export regardless of what the guest
+            ;; required, so reachability from the guest's own code is the
+            ;; wrong signal to gate it on. Only the diagnostics-only verbatim
+            ;; memcpy capture (`flint.snapshot`, `flint_b_snapshot`) stays a
+            ;; reachability-shaken unit (`test/snapshot.clj`).
+            ;;
+            ;; Decomposed, approximately rather than exactly (the two
+            ;; measurements are not from the same build): ~41 KB is the
+            ;; live-set surface itself (`export_live`/`import_live`,
+            ;; `runtime/src/snap.rs`), the same bytes `test/snapshot.clj`
+            ;; measured as the opt-in delta before this session
+            ;; (41 431 against 19 586 before the live-set format landed); the
+            ;; remainder is the call loop's wire codec. Of that remainder,
+            ;; +5 683 bytes (529 254 -> 534 937) is `flint.port` and
+            ;; `flint.wire` becoming permanent roots so the loop can call
+            ;; `send`/`read-from` by var instead of re-implementing the codec
+            ;; in builtins -- measured directly in this session, same host and
+            ;; build, isolating only that one change.
+            ;;
+            ;; 545 000 leaves about 1.9% headroom over 534 937, matching past
+            ;; practice (500 000 over ~490 471-493 021) rather than being
+            ;; generous.
+            (< pure-size 545000))
 
 ;; RE-BASELINED AGAIN, and this one is a decision rather than a drift:
 ;; 300 281 against 280 781, and 18 917 of it is ONE ARM IN THE WIRE CODEC.
