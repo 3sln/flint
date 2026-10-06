@@ -139,7 +139,14 @@
   (if-let [pre (:preread s)]
     (let [d (forms/decode pre)]
       (cond
-        (= (:opts d) (preread-options s))
+        ;; Read DEFERRED (the embedded standard library), or read EAGERLY
+        ;; under exactly this compile's features -- which is what a host reads
+        ;; user text as before answering a namespace request
+        ;; (`DECISIONS.md#namespaces-over-the-system-port`, "what the compiler
+        ;; checks on arrival"). An eager read keeps no conditionals, so its
+        ;; `:conds` is empty and `resolve-conditionals` hands the forms back.
+        (or (= (:opts d) (preread-options s))
+            (= (:opts d) (read-options s features)))
         (reader/resolve-conditionals d features (:file s))
 
         (:src s) (reader/read-all (:src s) (read-options s features))
@@ -150,90 +157,6 @@
                              " (DECISIONS.md#stdlib-preread)")
                         {:file (:file s)}))))
     (reader/read-all (:src s) (read-options s features))))
-
-(defn collect
-  "Read from `roots` outwards. `resolve-ns` takes a namespace symbol and returns
-  nil, or what that namespace IS:
-
-      {:src       the source text
-       :file      what to name it in a diagnostic
-       :workspace who owns it -- a symbol, nil for the anonymous one
-       :tags      the reader tags its workspace binds (`DECISIONS.md#reader-tags`)
-       :grants    what its workspace HOLDS -- a set of capability keywords
-       :guard     what a workspace must hold to require it (`DECISIONS.md#workspace-capabilities`)
-       :virtual   true when the namespace has NO SOURCE and is spoken to over a
-                  port (`DECISIONS.md#workspace-capabilities` step 4, `system-namespaces-and-deps`)
-       :vars      what a virtual namespace holds, OPTIONALLY:
-                  [{:name f :arities [..]} ..]. Present, an unknown var is a
-                  compile error; absent, it is a run-time one}
-
-  Only `:src` is required. A resolver that answers just `{:src :file}` is the
-  old `find-source` and still works; it simply reports every namespace as
-  belonging to the anonymous workspace, which is the right answer for a caller
-  that has no notion of projects.
-
-  Returns `{:sources {ns {:src :file :forms :workspace :tags}} :order [..]
-  :missing [..]}`. A namespace with no source is REPORTED rather than thrown
-  on, because the caller knows better than this does whether that is fatal --
-  a front end says so and stops, a tool listing dependencies keeps going.
-
-  The tags travel WITH the source, and that is not bookkeeping: whoever reads
-  this file again -- `topo-order` here, the compiler later -- must read it
-  under the same tags, and a tag map only this loop knew about is a tag map
-  they would get wrong."
-  [resolve-ns roots features]
-  (loop [todo (vec roots) sources {} order [] missing []]
-    (if (seq todo)
-      (let [n (first todo)]
-        (cond
-          (or (contains? sources n) (contains? virtual-namespaces n))
-          (recur (vec (rest todo)) sources order missing)
-
-          :else
-          (if-let [s (resolve-ns n)]
-            ;; A VIRTUAL namespace has no source to read and no requires to
-            ;; follow (`DECISIONS.md#workspace-capabilities` step 4). It is recorded rather than
-            ;; skipped, because the compiler has to know a name is virtual --
-            ;; that is what decides whether a reference to it compiles to a var
-            ;; or to a call over a port -- and because it is not missing, which
-            ;; is what an unrecorded require would look like.
-            (if (:virtual s)
-              (recur (vec (rest todo))
-                     (assoc sources n {:virtual true :vars (:vars s)
-                                       :file (or (:file s) (str n))
-                                       :workspace (:workspace s)
-                                       :grants (:grants s) :guard (:guard s)})
-                     (conj order n)
-                     missing)
-            (let [dialect (or (:dialect s) (dialect-of (:file s)))
-                  forms (read-entry s features)
-                  reqs (compiler/ns-requires (or (ns-form forms) '(ns x)))
-                  ;; A PRELUDE ENTRY IS AN IMPLICIT REQUIRE, and has to create
-                  ;; the same edge. Its names resolve without a `:require`, so
-                  ;; nothing else would ever pull the namespace in -- it would
-                  ;; be absent from the program and every prelude name would
-                  ;; fail to resolve, which is what `clojure.core` being a ROOT
-                  ;; has always been working around.
-                  ;;
-                  ;; An edge rather than a pin, so `topo-order` also puts the
-                  ;; prelude BEFORE the code using it. SELF IS EXCLUDED: a
-                  ;; workspace's prelude covers its own namespaces too, and one
-                  ;; of them would otherwise be asked to precede itself.
-                  pre (remove (fn [x] (= x n)) (map :ns (:prelude s)))]
-              (recur (into (into (vec (rest todo)) reqs) pre)
-                     (assoc sources n {:src (:src s) :file (:file s) :forms forms
-                                       ;; A resolver that answers only `{:src :file}` is
-                                       ;; still valid (see this fn's docstring), so the
-                                       ;; dialect is derived from the file it named rather
-                                       ;; than demanded of it.
-                                       :dialect dialect
-                                       :workspace (:workspace s) :tags (:tags s)
-                                       :prelude (:prelude s)
-                                       :grants (:grants s) :guard (:guard s)})
-                     (conj order n)
-                     missing)))
-            (recur (vec (rest todo)) sources order (conj missing n)))))
-      {:sources sources :order order :missing missing})))
 
 (defn file-answer
   "What `files-resolver` answers for the SOURCE FILE at `path`, which must be
@@ -398,17 +321,17 @@
         ;; add an edge for every `(:require [flint.rt])` and be wrong.
         virtuals (set (for [[n e] sources :when (:virtual e)] n))
         ;; A PRELUDE ENTRY IS AN EDGE HERE TOO, and it was only an edge in
-        ;; `collect`. That pulled the namespace INTO the program and said nothing
+        ;; `collect-waves`. That pulled the namespace INTO the program and said nothing
         ;; about where it landed, so a prelude's position was whatever this
         ;; function's worklist happened to visit first -- which was a hash map's
         ;; key order, and came out right often enough to look deliberate.
         ;; Sorting that seed (`DECISIONS.md#compiles-are-byte-reproducible`) moved
         ;; one prelude AFTER the namespace using its names, and four rows of
         ;; `bb test/sysns.clj` failed with "unable to resolve symbol: shout".
-        ;; `collect`'s own comment already claimed this: "An edge rather than a
+        ;; `collect-waves`'s own comment already claimed this: "An edge rather than a
         ;; pin, so `topo-order` also puts the prelude BEFORE the code using it."
         ;; It was an edge in one of the two functions that sentence spans.
-        ;; EVERY PRELUDE PROVIDER IS EXCLUDED, not just self. `collect` removes
+        ;; EVERY PRELUDE PROVIDER IS EXCLUDED, not just self. `collect-waves` removes
         ;; only `n`, which is enough to pull sources in; here it is not. A
         ;; workspace offering TWO prelude entries attaches the same list to both
         ;; of those namespaces, so each would be given an edge to the other and
@@ -560,60 +483,261 @@
     (concat (filter (set order) pinned)
             (remove pin? order))))
 
-(defn resolve-project
-  "Everything a compile needs, from an entry and a namespace resolver.
-  Returns `{:sources .. :order .. :workspaces .. :refused .. :missing ..}` with
-  the order already topological and core-first. `:refused` is REPORTED for the
-  same reason `:missing` is: whether a refused require stops the build is the
-  front end's call, and a tool listing dependencies wants to see them all.
+(defn project-roots
+  "Where a compile starts reading: `roots*` or the entry with `clojure.core`,
+  plus, when checks are on, `flint.check`. One function
+  for every walk, so no two can start from different places."
+  [entry-ns features roots*]
+  ;; `clojure.core` is a root, not something the graph reaches: every namespace
+  ;; refers it implicitly and almost none of them `:require` it, so starting
+  ;; only from the entry collects a program whose `str` resolves to nothing.
+  ;;
+  ;; `flint.check` is a root for the same reason and only when checks are on
+  ;; (`DECISIONS.md#checks`). A module writes `#?(:flint/check (expect ...))`
+  ;; without requiring anything, because the branch does not exist in a build
+  ;; where the namespace does not either -- so there is nothing to require and
+  ;; nothing left behind. Under `:optimize [perf]` this root is simply not
+  ;; added, and `flint.check` is not in the program at all.
+  ;; `flint.system` IS NOT A ROOT ANY MORE. It was the control plane, added
+  ;; here and in every other door because nothing referenced it; the control
+  ;; plane is the RUNTIME's now, and the call loop is compiled from
+  ;; `flint.callentry` into every image by the compiler itself
+  ;; (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+  (let [given (vec (or roots* ['clojure.core entry-ns]))]
+    (cond-> given
+      (contains? features :flint/check) (conj 'flint.check))))
 
-  `roots` overrides the entry as the starting point, and `flint test` is why:
-  its entry is `flint.check.registry`, which the COMPILER generates and no
-  source path contains, so resolving from it reports the entry itself missing.
-  Every namespace under the source path becomes a root instead -- which is also
-  the right answer for a test run, because a test that nothing requires is
-  still a test and collecting from one entry outwards would silently run a
-  subset."
+(defn- finish-project
+  "What both walks answer once every namespace is collected: the order already
+  topological and core-first, each namespace's workspace, and the refusals."
+  [sources missing]
+  {:sources sources
+   :order (vec (core-first (topo-order sources)))
+   :workspaces (into {} (map (fn [e] [(key e) (:workspace (val e))]) sources))
+   :refused (refused-requires sources)
+   :missing missing})
+
+;; ------------------------------------------------- namespaces asked for in waves
+;;
+;; `DECISIONS.md#namespaces-over-the-system-port`. The compiler is handed a
+;; RESOLVER it can only ASK, and asks it for a whole LEVEL of the require graph
+;; at once: the roots, then every name the answers mention that has not been
+;; asked yet, sorted by printed name. The number of round trips is the depth of
+;; the graph rather than its size, an asynchronous host gets a batch it can
+;; fetch in parallel, and the sequence of requests is a function of the answers
+;; alone.
+
+(defprotocol Resolver
+  "Where a compile's namespaces come from: ANY value implementing this can run
+  the compiler (`DECISIONS.md#namespaces-over-the-system-port`, \"the resolver
+  protocol\").
+
+  It speaks FORMS, not text and not bytes. Whoever implements it has already
+  read each file -- babashka with `flint.reader` over a directory, the sandboxed
+  compiler's adapter by decoding the `flint.forms` bytes its host sent
+  (`flint.selfhost/port-resolver`) -- so nothing below this line reads source.
+
+  An ordinary BLOCKING call: a file read in babashka, a park on a port in the
+  sandbox. Implemented by METADATA in flint, which has no `reify`; the
+  protocol is declared `:extend-via-metadata` on the JVM side so the same
+  implementation works under Clojure and babashka. flint's `defprotocol`
+  always dispatches on metadata first and takes no options, hence the splice."
+  #?@(:flint [] :default [:extend-via-metadata true])
+  (resolve-wave [r names]
+    "Answer `names` -- a vector of namespace symbols, sorted by printed name,
+    none asked before in this compile -- with a vector parallel to it. Each
+    element is one of:
+
+        nil                                     not found
+        {:forms [form ..] :file \"app/main.cljc\" :dialect :flint | :portable
+         :workspace w :grants #{..} :guard #{..} :prelude [..] :tags {..}}
+        {:virtual true :vars [..]? :workspace w :grants #{..} :guard #{..}}
+        {:error {:message .. :file .. :line .. :column ..}}
+
+    `:forms` are READ under this compile's features. Every identity field is
+    optional; absent, the namespace belongs to the anonymous workspace."))
+
+(defn- answer-entry
+  "One resolver answer, normalised exactly as `file-answer` normalises a
+  workspace entry -- a set for each capability list, a read prelude -- because
+  the two walks must hand the compiler EQUAL values or their images differ."
+  [n a]
+  (if (:virtual a)
+    {:virtual true :vars (:vars a) :file (or (:file a) (str n))
+     :workspace (:workspace a)
+     :grants (set (:grants a)) :guard (set (:guard a))}
+    {:forms (:forms a)
+     ;; The TEXT too, when the resolver had it: a caller that rebuilds the
+     ;; sources field by field from `:src` (`test/shake.clj` does) compiles
+     ;; from it. Unused when `:forms` is present (`flint.compiler/read-source`).
+     :src (:src a)
+     :file (:file a) :dialect (or (:dialect a) (dialect-of (:file a)))
+     :workspace (:workspace a) :tags (:tags a)
+     :prelude (normalise-prelude (:prelude a))
+     :grants (set (:grants a)) :guard (set (:guard a))}))
+
+(defn- take-answer
+  "Fold one answer `a` for namespace `n` into the walk's state `st`."
+  [st n a]
+  (cond
+    (nil? a) (update st :missing conj n)
+
+    ;; The host's own failure for this namespace: an unreadable file carries a
+    ;; position and is a `:read` error, a hook that threw is a `:resolver` one.
+    (:error a)
+    (let [e (:error a)]
+      (update st :errors conj
+              (cond-> {:kind (if (:line e) :read :resolver) :ns n
+                       :message (or (:message e) "the resolver failed")}
+                (:file e) (assoc :file (:file e))
+                (:line e) (assoc :line (:line e))
+                (:column e) (assoc :column (:column e)))))
+
+    (:virtual a)
+    (-> st
+        (update :sources assoc n (answer-entry n a))
+        (update :order conj n))
+
+    :else
+    (let [s (answer-entry n a)
+          forms (:forms s)
+          nsf (ns-form forms)
+          declared (when nsf (second nsf))]
+      (if (and declared (not= declared n))
+        ;; ANSWERED X WITH A FILE DECLARING Y. Compiling it under the name
+        ;; asked for would put Y's definitions where X's requirers look.
+        (update st :errors conj
+                {:kind :resolver :ns n :file (:file s)
+                 :message (str "asked for " n ", answered with a file declaring " declared)})
+        (let [reqs (compiler/ns-require-positions (or nsf '(ns x)))
+              ;; A PRELUDE ENTRY IS AN IMPLICIT REQUIRE, and has to create
+              ;; the same edge. Its names resolve without a `:require`, so
+              ;; nothing else would ever pull the namespace in -- it would be
+              ;; absent from the program and every prelude name would fail to
+              ;; resolve. An edge rather than a pin, so `topo-order` also puts
+              ;; the prelude BEFORE the code using it. SELF IS EXCLUDED: a
+              ;; workspace's prelude covers its own namespaces too, and one of
+              ;; them would otherwise be asked to precede itself.
+              pre (remove (fn [x] (= x n)) (map :ns (:prelude s)))
+              by (reduce (fn [m [r pos]]
+                           (update m r (fnil conj [])
+                                   (assoc pos :ns n :file (:file s))))
+                         (:by st)
+                         (concat reqs (map (fn [x] [x {}]) pre)))]
+          (-> st
+              (update :sources assoc n s)
+              (update :order conj n)
+              (assoc :by by)
+              (update :named into (concat (map first reqs) pre))))))))
+
+(defn collect-waves
+  "Read from `roots` outwards, asking `resolver` (a `Resolver`) for a WHOLE
+  LEVEL of the graph per call -- the one walk every door goes through. Each name is asked AT MOST ONCE per walk, missing ones included,
+  and every request is sorted by printed name, so the requests are a function
+  of the answers alone.
+
+  The `:sources` map is what the depth-first walk this replaced built for the
+  same answers -- the same entries, built from the same fields -- which is
+  what kept every image byte-identical across the change. The ORDER the
+  namespaces arrive in differs, and nothing downstream reads it: `topo-order`
+  sorts.
+
+  Answers `{:sources .. :order .. :missing .. :errors .. :waves .. :by ..}`:
+  `:order` is the namespaces answered, in request order; `:waves` every request
+  made; `:by` each required name's requirers, with where each named it."
+  [resolver roots]
+  (loop [want (vec (sort-by str (distinct (remove virtual-namespaces roots))))
+         st {:asked #{} :sources {} :order [] :missing [] :errors [] :waves []
+             :by {} :named []}]
+    (if (empty? want)
+      (dissoc st :named :asked)
+      ;; BOUND, NOT AN ARGUMENT: `resolve-wave` may park on a port, and a
+      ;; parking call in an argument position is re-entered with a partly built
+      ;; frame under it (`flint.host/request` says so at more length).
+      (let [answers (resolve-wave resolver want)
+            st (reduce (fn [st i] (take-answer st (nth want i) (nth answers i)))
+                       (-> st (update :asked into want) (update :waves conj want) (assoc :named []))
+                       (range (count want)))
+            asked (:asked st)
+            fresh (vec (sort-by str (distinct (remove (fn [x] (or (contains? asked x)
+                                                                  (contains? virtual-namespaces x)))
+                                                      (:named st)))))
+            ;; `flint.virtual`, when a virtual namespace arrived and nothing
+            ;; asked for it -- `resolve-project` says why.
+            fresh (if (and (empty? fresh)
+                           (some (fn [e] (:virtual (val e))) (:sources st))
+                           (not (contains? asked 'flint.virtual)))
+                    ['flint.virtual]
+                    fresh)]
+        (recur fresh st)))))
+
+(defn resolve-project-waves
+  "`resolve-project` over a `Resolver` (`collect-waves`), answering its map
+  plus `:errors`, `:reached` and `:waves`.
+
+  `:errors` is every failure to RESOLVE, as data
+  (`DECISIONS.md#namespaces-over-the-system-port`): `{:kind :missing :ns n
+  :required-by [m ..] :file :line :column}` positioned at the first requirer's
+  naming of it, `:read` and `:resolver` from the answers, and `:refused` for a
+  guarded require. All of them at once: reporting the first and stopping makes
+  fixing a dependency list an n-round conversation."
+  [resolver entry-ns features roots*]
+  (let [roots (project-roots entry-ns features roots*)
+        w (collect-waves resolver roots)
+        by (:by w)
+        missing (vec (distinct (:missing w)))
+        r (finish-project (:sources w) missing)
+        missing-errors (mapv (fn [n]
+                               (let [rs (get by n)
+                                     at (first rs)]
+                                 (cond-> {:kind :missing :ns n
+                                          :required-by (vec (distinct (map :ns rs)))}
+                                   (:file at) (assoc :file (:file at))
+                                   (:line at) (assoc :line (:line at))
+                                   (:column at) (assoc :column (:column at)))))
+                             missing)
+        answer-errors (mapv (fn [e] (assoc e :required-by (vec (distinct (map :ns (get by (:ns e)))))))
+                            (:errors w))
+        refused (mapv (fn [x] (assoc x :kind :refused)) (:refused r))]
+    (assoc r
+           :errors (vec (concat missing-errors answer-errors refused))
+           :reached (mapv (fn [n] {:ns n :workspace (:workspace (get (:sources w) n))})
+                          (:order w))
+           :waves (:waves w))))
+
+(defn fn-resolver
+  "A `Resolver` over a FUNCTION resolver `resolve-ns` (symbol -> nil, a virtual
+  answer, or `{:src | :preread :file :workspace :tags ..}` as `files-resolver`
+  answers), reading each file with `read-entry` under `features`. How every
+  caller that still holds a function -- the EDN-spec doors, the tests -- walks
+  through the ONE wave walk rather than a second copy of it. A read that fails
+  THROWS here, as it always has for these callers."
+  [resolve-ns features]
+  (with-meta {}
+    {'flint.project/resolve-wave
+     (fn [_ names]
+       (mapv (fn [n]
+               (let [s (resolve-ns n)]
+                 (if (or (nil? s) (:virtual s))
+                   s
+                   (assoc (dissoc s :preread) :forms (read-entry s features)))))
+             names))}))
+
+(defn resolve-project
+  "Everything a compile needs, from an entry and a namespace resolver
+  FUNCTION (`fn-resolver`). Returns `{:sources .. :order .. :workspaces ..
+  :refused .. :missing ..}` with the order already topological and core-first.
+  `:refused` is REPORTED for the same reason `:missing` is: whether a refused
+  require stops the build is the front end's call, and a tool listing
+  dependencies wants to see them all.
+
+  `roots` overrides the entry as the starting point (`project-roots`).
+
+  THROUGH THE WAVE WALK since `DECISIONS.md#namespaces-over-the-system-port`
+  step 2. There used to be a second walk here, depth-first and one namespace at
+  a time; it built the same `:sources` map, and `:missing` now comes out in
+  request order (sorted per wave) rather than in the order it was met."
   ([resolve-ns entry-ns features] (resolve-project resolve-ns entry-ns features nil))
   ([resolve-ns entry-ns features roots*]
-    ;; `clojure.core` is a root, not something the graph reaches: every namespace
-    ;; refers it implicitly and almost none of them `:require` it, so starting
-    ;; only from the entry collects a program whose `str` resolves to nothing.
-    ;;
-    ;; `flint.check` is a root for the same reason and only when checks are on
-    ;; (`DECISIONS.md#checks`). A module writes `#?(:flint/check (expect ...))`
-    ;; without requiring anything, because the branch does not exist in a build
-    ;; where the namespace does not either -- so there is nothing to require and
-    ;; nothing left behind. Under `:optimize [perf]` this root is simply not
-    ;; added, and `flint.check` is not in the program at all.
-    ;; `flint.system` IS NOT A ROOT ANY MORE. It was the control plane, added
-    ;; here and in every other door because nothing referenced it; the control
-    ;; plane is the RUNTIME's now, and the call loop is compiled from
-    ;; `flint.callentry` into every image by the compiler itself
-    ;; (`DECISIONS.md#the-control-plane-is-the-runtimes`).
-    (let [given (vec (or roots* ['clojure.core entry-ns]))
-          roots (cond-> given
-                  (contains? features :flint/check) (conj 'flint.check))
-          {:keys [sources order missing] :as r0}
-          (collect resolve-ns roots features)
-          ;; A virtual namespace compiles to CALLS on `flint.virtual`, so that
-          ;; namespace has to be in the program -- and nothing `:require`s it,
-          ;; because the requires were written against `flint.sys.fs` and the
-          ;; rewrite happens later, in the analyzer (`DECISIONS.md#workspace-capabilities` step
-          ;; 4). So the graph has no edge to it and this supplies one, the same
-          ;; way `core-first` supplies one for `flint.check`.
-          ;;
-          ;; Only when one was actually found. Adding it unconditionally would
-          ;; put an RPC client and a port in every program that has no virtual
-          ;; namespace at all, which is the cost `namespace-units` exists to avoid.
-          virtual? (some (fn [e] (:virtual (val e))) sources)
-          {:keys [sources order missing]}
-          (if (and virtual? (not (contains? sources 'flint.virtual)))
-            (collect resolve-ns (conj (vec roots) 'flint.virtual) features)
-            r0)
-          _ order]
-      {:sources sources
-       :order (vec (core-first (topo-order sources)))
-       :workspaces (into {} (map (fn [e] [(key e) (:workspace (val e))]) sources))
-       :refused (refused-requires sources)
-       :missing missing})))
+   (select-keys (resolve-project-waves (fn-resolver resolve-ns features) entry-ns features roots*)
+                [:sources :order :workspaces :refused :missing])))

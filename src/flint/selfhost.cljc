@@ -21,6 +21,9 @@
             [flint.modmeta :as modmeta]
             [flint.wasmshake :as wshake]
 
+            ;; The resolver PORT is flint's alone: babashka drives
+            ;; `compile-with` with a resolver of its own and never loads this.
+            #?@(:flint [[flint.port :as port]])
             [clojure.string :as str]
             [flint.rt]))
 
@@ -307,6 +310,10 @@
           {:image (base64 (img/emit builder {}))
            :natives (img/natives builder)})))))
 
+;; FORWARD-DECLARED for sci's sake (see `compile-to-clr*` below): each EDN
+;; door is followed by the value-taking function `compile` shares with it.
+(declare wasm-artifact llvm-artifact jvm-artifact)
+
 (defn compile-to-wasm
   "Compile a program and splice it into a PREBUILT runtime module, producing a
   standalone `.wasm`.
@@ -333,8 +340,18 @@
   segment, pointing the descriptor at it, appending compiled arities -- is byte
   manipulation on a finished module."
   [spec-edn base-b64]
-  (let [spec (read-spec spec-edn)
-        entry (:entry spec)
+  (let [r (wasm-artifact (read-spec spec-edn) (base64-decode base-b64))]
+    (if (:bytes r)
+      (-> r (dissoc :bytes) (assoc :module (base64 (:bytes r))))
+      r)))
+
+(defn- wasm-artifact
+  "`compile-to-wasm` on a spec that is already a VALUE and a runtime module that
+  is already BYTES, answering the module as bytes under `:bytes`. The EDN door
+  above and `compile` below both come through here, so the two cannot build
+  different modules."
+  [spec base]
+  (let [entry (:entry spec)
         slots (:slots spec)
         built (build-image spec (set (keys slots)))]
     (if (:missing built)
@@ -342,7 +359,7 @@
       (if (:refused built)
         {:refused (:refused built)}
       (let [builder (:builder built)
-            m (w/parse (base64-decode base-b64))
+            m (w/parse base)
             aot? (boolean (:aot spec))
             ;; BEFORE the image is emitted: `compile-arities` writes each
             ;; compiled arity's table slot into the builder, so an image
@@ -393,9 +410,9 @@
                        (wshake/stub-dead m roots)))
             m (if shaken (first shaken) m)
             image (img/emit builder slots)]
-        {:module (base64 (bundle/into-module (w/emit m) image
-                                             {:entry entry :aot? aot? :slots slots
-                                              :meta (:meta spec)}))
+        {:bytes (bundle/into-module (w/emit m) image
+                                    {:entry entry :aot? aot? :slots slots
+                                     :meta (:meta spec)})
          :compiled (when res (:compiled res))
          :arities (when res (:total res))
          :shaken (when shaken (second shaken))})))))
@@ -415,8 +432,13 @@
   refusal this replaces: it gave `:to :native`'s reason -- a linker -- for
   `:to :llvm`'s absence, and the actual reason was that no emitter existed."
   [spec-edn]
-  (let [spec (read-spec spec-edn)
-        built (build-image spec (spec-builtins spec))]
+  (llvm-artifact (read-spec spec-edn)))
+
+(defn- llvm-artifact
+  "`compile-to-llvm` on a spec that is already a value: the door `compile`
+  shares with the EDN one."
+  [spec]
+  (let [built (build-image spec (spec-builtins spec))]
     (if (:missing built)
       {:missing (:missing built)}
       (if (:refused built)
@@ -593,8 +615,16 @@
   target took a file. It is a fourth ARGUMENT and not a new mode, so the three
   lists `main` warns about are untouched."
   [spec-edn base-b64 class-name]
-  (let [spec (read-spec spec-edn)
-        built (build-image spec (spec-builtins spec))]
+  (let [r (jvm-artifact (read-spec spec-edn)
+                        (when-not (or (nil? base-b64) (= "" base-b64)) (base64-decode base-b64))
+                        class-name)]
+    (if (:bytes r) {:module (base64 (:bytes r))} r)))
+
+(defn- jvm-artifact
+  "`compile-to-jvm` on a spec that is already a value and a base jar that is
+  already bytes (nil for the class alone), answering `:bytes`."
+  [spec base class-name]
+  (let [built (build-image spec (spec-builtins spec))]
     (if (:missing built)
       {:missing (:missing built)}
       (if (:refused built)
@@ -618,9 +648,9 @@
           ;; property on one path and lose it on the other -- which is the exact
           ;; defect `bin/build-jvm-artifact` records having had when it called
           ;; `artifact-class` directly.
-          {:module (base64 (if (or (nil? base-b64) (= "" base-b64))
-                             (jvm/emit image opts)
-                             (jvm/pack (base64-decode base-b64) image opts)))})))))
+          {:bytes (if (nil? base)
+                    (jvm/emit image opts)
+                    (jvm/pack base image opts))})))))
 
 (defn preread
   "Every file in the spec READ AHEAD OF ITS FEATURES, as `{path bytes}` -- what
@@ -641,6 +671,185 @@
      (into {} (map (fn [path]
                      [path (project/preread (project/file-answer files (:workspaces spec) path))])
                    (keys files)))}))
+
+(defn- image-artifact
+  "The bare bytecode image -- `:target :image`, what `flint run` loads -- with
+  the native import order beside it, as `compile-project-spec` answers it."
+  [spec]
+  (let [built (build-image spec (spec-builtins spec))]
+    (if (or (:missing built) (:refused built))
+      built
+      (let [builder (:builder built)]
+        {:bytes (flint.rt/vec->b (vec (img/emit builder {})))
+         :natives (img/natives builder)
+         :stats (:stats built)}))))
+
+(defn- answer-forms
+  "One element of the host's answer with its file READ: `:forms` bytes (the
+  `flint.forms` encoding, checked against the options this compile reads
+  under, `flint.project/read-entry`) or, until hosts read user text
+  themselves, `:source` text -- either way `:forms` comes out as forms, which
+  is all `flint.project/Resolver` speaks. A read that fails is the element's
+  `{:error ..}`, positioned, rather than a throw that would lose the others."
+  [a features]
+  (if (or (nil? a) (:virtual a) (:error a))
+    a
+    (try
+      (assoc (dissoc a :source)
+             :forms (project/read-entry (assoc a :src (:source a) :preread (:forms a)) features))
+      (catch Throwable e
+        (let [d (ex-data e)]
+          {:error (cond-> {:message (ex-message e)}
+                    (:file d) (assoc :file (:file d))
+                    (:line d) (assoc :line (:line d))
+                    (:column d) (assoc :column (:column d)))})))))
+
+(defn- error-of
+  "A thrown value as one `:errors` entry."
+  [e]
+  (let [d (ex-data e)]
+    (cond-> {:kind (cond (:flint/resolver d) :resolver
+                         (= :reader (:type d)) :read
+                         :else :compile)
+             :message (or (ex-message e)
+                          (str "a " #?(:flint (name (flint.rt/kind e)) :default (str (type e)))
+                               " was thrown, with no message"))}
+      (:file d) (assoc :file (:file d))
+      (:line d) (assoc :line (:line d))
+      (:column d) (assoc :column (:column d)))))
+
+(defn- artifact
+  "The artifact for `spec`'s `:target`, as `{:artifact bytes ..}`, through the
+  same per-target functions the EDN doors use."
+  [spec]
+  (let [target (or (:target spec) :image)
+        r (case target
+            :image (image-artifact spec)
+            :wasm (wasm-artifact spec (:base spec))
+            :llvm (let [r (llvm-artifact spec)]
+                    (if (:ll r) (-> r (dissoc :ll) (assoc :bytes (flint.rt/str->b (:ll r)))) r))
+            :clr (let [r (compile-to-clr* spec (:name spec))]
+                   (if (:clr r) {:bytes (:clr r)} r))
+            :jvm (jvm-artifact spec (:base spec) (:class spec))
+            {:unknown target})]
+    (cond
+      (:unknown r) {:errors [{:kind :request
+                              :message (str "unknown :target " (pr-str (:unknown r))
+                                            "; one of :image :wasm :llvm :clr :jvm")}]}
+      ;; Resolution already succeeded, so these cannot happen through `compile`;
+      ;; kept so a change upstream reports rather than answers nil.
+      (:missing r) {:errors (mapv (fn [n] {:kind :missing :ns n}) (:missing r))}
+      (:refused r) {:errors (mapv (fn [x] (assoc x :kind :refused)) (:refused r))}
+      :else (-> r (dissoc :bytes) (assoc :artifact (:bytes r))))))
+
+(defn compile-with
+  "Compile a program, asking `resolver` -- any `flint.project/Resolver` -- for
+  each namespace it reaches (`DECISIONS.md#namespaces-over-the-system-port`,
+  migration step 2). The entry for anything that can implement the protocol:
+  babashka over a directory, or `compile` below over a host's port.
+
+  `request` is a DATA map, not EDN text:
+
+      {:id       any value, echoed in every namespace request
+       :entry    my.app/main
+       :roots    [ns ..]          optional; replaces the entry as the start
+       :exports  [sym ..]
+       :features #{:flint ..}     the read features; default flint.reader/default-features
+       :target   :image | :wasm | :llvm | :clr | :jvm     (default :image)
+       :aot bool :shake bool :meta {..}
+       :slots    {\"name\" n}     or :builtins #{..}
+       :base     #bytes           the runtime module (:wasm) or jar (:jvm)
+       :class    \"Name\"         :jvm only
+       :name     \"out.dll\"      :clr only: the output's basename}
+
+  `resolver` is asked in sorted waves, each namespace once
+  (`flint.project/resolve-wave` says what it answers).
+
+  Answers `{:artifact bytes :reached [{:ns :workspace} ..] ..}` -- `:natives`
+  and `:stats` for `:image`, `:compiled`/`:arities` where the target compiles
+  arities -- or `{:errors [{:kind .. :ns .. :message .. :file .. :line ..
+  :column ..} ..]}`, every resolution error at once. A failure is DATA; this
+  never throws to the host.
+
+  The EDN modes of `main` stay beside this until every door has moved
+  (migration steps 3 to 7); both reach the same per-target functions, so they
+  cannot build different artifacts from the same answers."
+  [request resolver]
+  (try
+    (let [features (or (:features request) reader/default-features)
+          entry (:entry request)
+          r (project/resolve-project-waves resolver (symbol (namespace entry)) features
+                                           (:roots request))]
+      (if (seq (:errors r))
+        {:errors (:errors r) :reached (:reached r)}
+        (let [out (artifact (assoc request :features features
+                                   :sources (:sources r) :order (:order r)))]
+          (assoc out :reached (:reached r)))))
+    (catch Throwable e
+      {:errors [(error-of e)]})))
+
+#?(:flint
+   (do
+     (defn port-resolver
+       "A `flint.project/Resolver` over the resolver PORT a host passed into
+       `compile`: one request per wave, `{:id id :want [ns ..]}`, parked until the
+       host answers a vector parallel to `:want`
+       (`DECISIONS.md#namespaces-over-the-system-port`).
+
+       HOLDING THE PORT IS THE CAPABILITY. The compiler asks on what it was handed,
+       so it holds no `:host` grant and calls no `flint.host/request`; a host that
+       passes no port has given it nothing to ask.
+
+       The bootstrap ADAPTER between the wire and the protocol: the wire carries
+       bytes, the protocol speaks forms, and this is where one becomes the other
+       (`answer-forms`). A port that ends unanswered, or an answer of the wrong
+       shape, throws a `:flint/resolver` error that `compile` reports as
+       `:resolver` -- never a hang or a misread program.
+
+       Implemented by METADATA, which is how a flint value implements a protocol
+       (flint has no `reify`)."
+       [id p features]
+       (with-meta {}
+         {'flint.project/resolve-wave
+          (fn [_ want]
+            (when-not (port/port? p)
+              (throw (ex-info "this host does not serve namespaces: the compile was given no resolver port"
+                              {:flint/resolver true})))
+            (port/send p {:id id :want want})
+            ;; BOUND, then read: `receive` parks (see `flint.host/request`).
+            (let [a (port/receive p)]
+              (cond
+                (and (vector? a) (= (count a) (count want)))
+                (mapv (fn [x] (answer-forms x features)) a)
+
+                (and (nil? a) (port/closed? p))
+                (throw (ex-info "this host does not serve namespaces: the resolver port closed unanswered"
+                                {:flint/resolver true}))
+
+                :else
+                (throw (ex-info (str "the resolver answered a request for " (count want)
+                                     " namespaces with " (if (vector? a)
+                                                           (str "a vector of " (count a))
+                                                           (name (flint.rt/kind a))))
+                                {:flint/resolver true})))))}))
+
+     (defn compile
+       "`compile-with`, asking for namespaces on `resolver`: a PORT the host
+       opened and passed in (`DECISIONS.md#namespaces-over-the-system-port`).
+       An ORDINARY CALL on a bound port, `{:op :call :fn
+       \"flint.selfhost/compile\" :args [request resolver]}`.
+
+       On the port the compiler sends `{:id (:id request) :want [ns ..]}` and
+       the host answers a vector parallel to `:want` whose elements are nil (not
+       found), `{:forms bytes | :source text :file .. :dialect .. :workspace ..
+       :grants .. :guard .. :prelude .. :tags ..}`, `{:virtual true :vars ..
+       :workspace ..}`, or `{:error {:message .. :file .. :line .. :column
+       ..}}` -- the protocol's answer with the forms still ENCODED, which
+       `port-resolver` decodes."
+       [request resolver]
+       (compile-with request
+                     (port-resolver (:id request) resolver
+                                    (or (:features request) reader/default-features))))))
 
 (declare main*)
 
