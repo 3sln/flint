@@ -373,6 +373,92 @@
                                  :no-reader (ex-message e))))
        :no-reader)
 
+;; --- reader conditionals kept as data (`DECISIONS.md#stdlib-preread`) --------
+;;
+;; `read-deferred` reads without choosing a branch and `resolve-conditionals`
+;; chooses later, so one read serves every feature set. The claim is EQUALITY
+;; WITH THE READER'S OWN CHOICE -- forms and metadata, child positions
+;; included -- so every check below compares the two with `*print-meta*` on.
+;; Before the split there was no deferred read at all: run against c0eb81cb's
+;; reader, this section does not even load ("Could not resolve symbol:
+;; r/resolve-conditionals"), so the suite is red rather than quietly green.
+(defn pm [x] (binding [*print-meta* true] (pr-str x)))
+(defn deferred [src features]
+  (try (r/resolve-conditionals (r/read-deferred src {:file "t.cljc"}) features "t.cljc")
+       (catch clojure.lang.ExceptionInfo e [:refused (ex-message e)])
+       (catch Exception e [:failed (ex-message e)])))
+;; A read that FAILS agrees with one that fails: the two report the position
+;; they know -- the reader where it stopped, the resolver the conditional --
+;; so the comparison is of the outcome, not of the message.
+(defn agrees? [src features]
+  (let [e (try (r/read-all src {:file "t.cljc" :features features})
+               (catch clojure.lang.ExceptionInfo _ :read-error))
+        d (deferred src features)]
+    (= (pm e) (pm (if (and (vector? d) (= :refused (first d))
+                           (str/starts-with? (second d) "read error: map literal"))
+                    :read-error d)))))
+(println "reader: a deferred read resolves to what the reader would have chosen")
+(doseq [[label src] [["a plain conditional, matched and not" "(f #?(:clj 1 :flint 2) #?(:clj 5) x)"]
+                     ["a splice, matched and not" "[a #?@(:flint [b c] :clj [d]) #?@(:clj [e]) f]"]
+                     [":default" "(g #?(:cljs 1 :default 9))"]
+                     ["nested conditionals" "(h #?(:flint #?(:flint/check (expect a) :default b)) z)"]
+                     ["a conditional key in a map" "{#?(:flint :a :clj :b) 1 :c 2}"]
+                     ["a splice in a map" "{:a 1 #?@(:flint [:b 2])}"]
+                     ["an unmatched value in a map, which reads as an odd count"
+                      "{:a #?(:clj 1) :b}"]
+                     ["a conditional value in metadata"
+                      "(defn ^{:m #?(:flint/check {:x 1} :default nil)} f [x] x)"]
+                     ["a conditional in a set" "#{1 #?(:flint 2 :clj 3)}"]
+                     ;; With a :default: an UNMATCHED one under a quote reads as `(quote <EOF>)`
+                     ;; when the reader chooses -- the sentinel leaks -- and as `(quote)` when
+                     ;; it is resolved, and neither is a program anyone means.
+                     ["a quoted conditional" "'#?(:flint (a b) :default c)"]
+                     ["an empty list chosen" "(k #?(:flint ()))"]
+                     ["top level, matched, unmatched and spliced"
+                      "#?(:flint (def a 1)) #?(:clj (def b 2)) (def c 3)"]]
+        features [#{:flint :flint/check} #{:flint} #{:clj}]]
+  (check (str "  " label " " (pr-str features)) (agrees? src features) true))
+(check "  ... and the whole of lib/ and src/ that holds a conditional, both feature sets"
+       (vec (for [f (->> (concat (file-seq (clojure.java.io/file "lib"))
+                                 (file-seq (clojure.java.io/file "src")))
+                         (filter #(.isFile %))
+                         (filter #(re-find #"\.(cljc|fln)$" (.getName %)))
+                         (filter #(str/includes? (slurp %) "#?")))
+                  features [r/default-features #{:flint :flint/nested}]
+                  :let [src (slurp f) path (.getPath f)]
+                  :when (not= (pm (r/read-all src {:file path :features features}))
+                              (pm (try (r/resolve-conditionals
+                                        (r/read-deferred src {:file path}) features path)
+                                       (catch Exception e (ex-message e)))))]
+              [path features]))
+       [])
+;; The comparison can see a difference: drop the metadata resolution and the
+;; `:flint/value-meta` conditionals in `clojure.core` stop agreeing.
+(check "  ... and the comparison is not blind"
+       (agrees? "(defn ^{:m #?(:flint {:x 1} :default nil)} f [x] x)" #{:clj :flint})
+       true)
+(check "  ... (one read, two answers)"
+       (let [d (r/read-deferred "(f #?(:flint/check (chk x)) x)" {:file "t.cljc"})]
+         [(r/resolve-conditionals d #{:flint :flint/check} "t.cljc")
+          (r/resolve-conditionals d #{:flint} "t.cljc")])
+       ['((f (chk x) x)) '((f x))])
+(println "reader: a deferred read refuses what it cannot keep as data")
+(doseq [[label src] [["syntax quote" "`(a #?(:flint b))"]
+                     ["#()" "#(f #?(:flint %))"]
+                     ["a reader tag's argument" "#flint/table #?(:flint [])"]
+                     ["metadata that is a conditional" "^#?(:flint {:a 1}) x"]
+                     ["an ns form chosen by a conditional" "#?(:flint (ns a)) ::x"]
+                     ["an alias an ns conditional may declare"
+                      "(ns a (:require #?(:flint [b.c :as b]))) ::b/x"]]]
+  (check (str "  " label)
+         (let [r (deferred src #{:flint})]
+           (and (vector? r) (= :refused (first r))
+                (str/includes? (second r) "features are known")))
+         true))
+(check "  ... while an alias declared outside the conditional still resolves"
+       (deferred "(ns a (:require [b.c :as b] #?(:clj [x]))) ::b/x" #{:flint})
+       ['(ns a (:require [b.c :as b])) :b.c/x])
+
 (if (zero? @fails)
   (println "reader: ok")
   (do (println "reader:" @fails "FAILURES") (System/exit 1)))
