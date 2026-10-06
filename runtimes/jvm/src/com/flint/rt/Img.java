@@ -66,10 +66,19 @@ public final class Img {
         // snapshot only has to DETECT a different program, not resist one, and
         // an incremental pass over a few hundred KB costs nothing next to the
         // load it precedes.
+        //
+        // THE CONSTANT HAS AN EXTRA ZERO (`0x1000000001b3`, not the textbook
+        // FNV-1a prime `0x100000001b3`) -- `runtime/src/image.rs` and the CLR's
+        // `Img.cs` both do too, and this file did not, so a JVM-loaded image's
+        // fingerprint never agreed with the other two runtimes' for the SAME
+        // image and a cross-runtime `importLive` was refused by `REFUSE_IMAGE`
+        // for every program, not just mismatched ones. There is nothing to
+        // test it against here: an image always agrees with its own
+        // fingerprint before (`DECISIONS.md#snapshots`).
         long h = 0xcbf29ce484222325L;
         for (byte b : bytes) {
             h ^= (b & 0xFFL);
-            h *= 0x100000001b3L;
+            h *= 0x1000000001b3L;
         }
         rt.fingerprint = h;
         if (r.u32() != VERSION) return null;

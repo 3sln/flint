@@ -1141,10 +1141,11 @@ that state refused to export. Both found by priming a compiler for a snapshot
 (`spike/precompiled-stdlib`), and both are tests on all three hand-written
 runtimes (`snap::tests`, `RtSnapshot.java`, the CLR's `--rt-snapshot`). The heap
 and the live format are LITTLE-ENDIAN, pinned: a big-endian Rust target does not
-compile and the JVM and CLR heaps refuse to construct. NOT YET BUILT, decided by
-the maintainer: a live set is requested by the HOST, through the system port,
-naming a destination port it is STREAMED to in chunks -- guest code cannot
-trigger one.
+compile and the JVM and CLR heaps refuse to construct. **BUILT 2026-10-05,
+decided by the maintainer:** a live set is requested by the HOST, through the
+system port, naming a destination port it is STREAMED to in chunks -- guest
+code cannot trigger one. See "Host-requested, streamed" below for the protocol,
+what proves it on each runtime, and the one route the guard does NOT close.
 
 As first written: capture, export/import, and an inspector, all opt-in
 under `two-builds` (present only in a diagnostics build). Driven under node
@@ -1254,6 +1255,92 @@ shelving a running sandbox actually requires — at the cost of being unable to
 capture a heap whose pointers are already known-corrupt, which is precisely
 the situation the memcpy format was built for. Both are kept: **traverse to
 move a sandbox, memcpy to debug one.**
+
+### Host-requested, streamed (built 2026-10-05)
+
+**The request.** The host sends `{:op :snapshot :port P}` on the system port,
+P being a bridge it holds (the same delegation `:bind` uses). The control plane
+(`lib/flint/system.cljc`, `snapshot!`) answers on P, in order:
+
+    #bytes ...               chunks of at most 64 KiB (`snapshot-chunk-bytes`)
+    {:op :end :size n}       or {:op :error :message ".."}
+    -- then P is closed.
+
+The concatenated chunks are exactly the one-shot `export_live` bytes, and
+`import_live` takes them. Back-pressure is the bridge's ordinary byte budget: a
+host that stops draining P parks the control plane on the next send, and
+control messages queue behind a snapshot in flight. Importing is
+`Program::import_live` natively, `flint_live_import(len)` on wasm (from the
+inbound buffer; a production export of `flint.conc`, not the diagnostics
+snapshot unit), and the existing `Snap.importLive`/`Snap.ImportLive` on the
+ports -- each answers 0 accepted, 1 another layout, 2 another program.
+
+**When it is taken: between turns, not inside one.** `flint/snapshot-export`
+PARKS the system thread; `drive` calls `serve_snapshot` after every turn
+(`kin/sched.kin`, one place for three runtimes), which makes that thread
+runnable and THEN exports. So every thread's state is in its thread object,
+none is half-way through a builtin, and the running program is not stopped --
+it carries on. The parked call is re-executed: in the instance asked, it answers
+the length; in a restored copy it answers `nil`, because the format records
+that it was taken for a request. That is `fork`, and it is why the copy does not
+stream itself to a port that belonged to the instance it was copied from. The
+copy still HOLDS that port (a local of the parked call), so its rehydration
+announces it with `EV_RETAIN` like any bridge; a host that did not carry it
+across ignores it.
+
+**Format: live VERSION 3.** After `started`: the system thread's id (i64, -1
+when none was booted) and the "taken for a request" flag (u32). The id is what
+the guard reads; it also fixes an import that left `system_booted` false and so
+booted a SECOND control plane on the restored system port. Measured on the way:
+an import also dropped the scheduler's two Rust function hooks, so a restored
+copy ran calls and refused any message carrying a port (`rehook_sched`). And the
+status a drive had left behind differed by door -- native's and wasm's streams
+of one image and one host script differed in exactly that byte of 347 087 --
+so it is written as 2 ("waiting for its host") and they are now identical
+(`test/snapstream.mjs` asserts it).
+
+**The guard.** `flint/snapshot-export` and `flint/snapshot-chunk` refuse unless
+the CURRENT thread is the system thread, by the id the runtime recorded when IT
+spawned `flint.system/boot` -- a grant conferred by the runtime, not a claim
+the caller makes. It is a run-time check on purpose: `flint.rt/<x>` names any
+builtin from any source, and a program with no workspaces is checked nowhere at
+compile time. Probed as programs (`test/snapstream/snap.cljc`): the builtin
+named directly, in value position, from a thread the guest spawned, and the
+chunk reader -- all refused with SecurityException; a `:snapshot` the guest
+sends on the system port (which it CAN obtain: `(flint.rt/system-port)`
+compiles in an anonymous program, checked 2026-10-05, contrary to a comment in
+`units-src/flint-conc`) leaves for the host, since a send on a bridge goes out.
+The control, on the same sandbox: the host's request is served. With the guard
+removed, the native probe fails (done once, by hand, 2026-10-05).
+
+**THE ROUTE IT DOES NOT CLOSE.** The guard trusts the system thread because the
+stdlib's `flint.system` runs no guest code there. But a program's sources may
+DEFINE `flint.system` and the compiler takes theirs instead
+(`test/snapstream-shadow/`): measured 2026-10-05, that program's own `boot`
+took a 53 554-byte export. The same holds for `flint.port` and `flint.wire`,
+which the system thread calls. Whether a program may replace a stdlib namespace
+is a question about the whole trusted base, not about snapshots, and is OPEN
+for the maintainer; `cli/src/snapstream_test.rs`'s ignored
+`a_program_cannot_ship_its_own_control_plane` asserts the refusal and fails
+today.
+
+**Two port defects the crossing found, both fixed 2026-10-05.** The JVM's and
+CLR's image fingerprint multiplied by the textbook FNV prime `0x100000001b3`
+where native uses `0x1000000001b3`, so neither port could import ANY native
+live set (refused as another program); nothing had compared fingerprints across
+runtimes before. And both ports wrote the intern tables as a stub `0`, so an
+imported copy had no port table: its first `reap_ports` closed every bridge it
+held. Both now carry the tables as native does, and their two live dumps are
+still byte-identical to each other (`RtSnapshot`, both ports, checked by hand).
+The ports' streams of the fixture are the same LENGTH as native's (347 087
+bytes) and differ near the tail, unexamined; nothing asserts port-to-native
+byte identity, only that each imports the other's.
+
+**What proves it, per runtime:** native, `cargo test -p flint-cli snapstream`;
+wasm, `node test/snapstream.mjs` -- both driven by `bb test/snapstream.clj`
+(`bin/test`), with native's stream imported on wasm; JVM, `RtSnapStream`; CLR,
+`Conform --rt-snap-stream` -- both in `bin/conform-hosts`, each importing
+native's stream of the same image.
 
 ---
 
@@ -2721,7 +2808,7 @@ checked: the token really is an index with a generation — `new_waiter` /
 16 bits, bump the generation on free, and reject a mismatch — and there is one
 queue, `SC_EVENTS`, written only by `push_event` (`conc.rs:1486`) and read only
 by `drain_events` (`conc.rs:2969`), carrying all six event kinds. Two
-lifetimes: `reap_ports` (`conc.rs:2288`) treats a flint end the collector lost
+lifetimes: `reap_ports` (`conc.rs:2330`) treats a flint end the collector lost
 as a `close`, pushing `EV_CLOSED` and `EV_RELEASE`, while the host end is held
 by a holder count. Exercised end to end: `target/release/flint run :with [env]`
 (the shipped binary, not `bin/flint`) on a program
@@ -3008,7 +3095,7 @@ see "A banner that lied," below, which the project's own closing
 documentation held up as its worked example of why a banner must be checked
 against the code rather than trusted. How this was checked, taking the two
 exceptions rather than the headline: the weak-table fixup is indeed still the
-simpler sweep — `reap_ports` (`runtime/src/conc.rs:2288`) walks `SC_BRIDGES`
+simpler sweep — `reap_ports` (`runtime/src/conc.rs:2330`) walks `SC_BRIDGES`
 after a collection and pushes `EV_CLOSED`/`EV_RELEASE` for any id whose
 `port_by_id` lookup now misses, with no fixup-on-forward anywhere; and codec
 back-references are still not built — `runtime/src/codec.rs`'s own header says
@@ -8529,7 +8616,7 @@ down because it reads like one.* `src/flint/link.cljc:464` already settles it:
 they are "internal linkage detail, hundreds of them, and nothing a runner can
 do with the names", `--export`ed only so the registry table survives
 `--gc-sections`, and the module's own `:exports` metadata COUNTS them rather
-than listing them. The declared ABI is the 25.
+than listing them. The declared ABI is the 25 -- one more since `flint_live_import` (2026-10-05, `DECISIONS.md#snapshots`), added to `flint.conc`'s manifest and not recounted here.
 
 **Do not read the edge off `out/a.wasm`.** It is stale in the direction that
 misleads: it still exports `main` and has no `flint_system_port`, so it

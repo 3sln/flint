@@ -236,6 +236,12 @@ public static class Sched {
             long i = SchedPick(rt);
             if (i >= 0) {
                 Conc.RunOne(rt, (int) i);
+                // A HOST-REQUESTED SNAPSHOT IS TAKEN HERE, BETWEEN TURNS
+                // (`DECISIONS.md#snapshots`): the system thread parked to
+                // ask, so its turn has just ended and every thread's state
+                // is in its thread object. Inside a turn the export would
+                // copy a thread half-way through a builtin.
+                Conc.ServeSnapshot(rt);
                 continue;
             }
             // THE HOST FIRST. There is no entry function whose return means

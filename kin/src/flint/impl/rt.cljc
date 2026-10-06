@@ -2167,6 +2167,11 @@
     (core/call {:rust "{0}.fail_waiters_on({1}, \"the other end of this port is unreachable, so this can never complete\")"
                 :java "Conc.failWaitersOn({0}, {1}, \"the other end of this port is unreachable, so this can never complete\")"
                 :csharp "Conc.FailWaitersOn({0}, {1}, \"the other end of this port is unreachable, so this can never complete\")"})
+    ;; A host-requested live-set export, between turns (`DECISIONS.md#snapshots`).
+    ;; One line per target: the export is the runtime's own `snap` code.
+    'serve-snapshot (core/call {:rust "crate::conc::serve_snapshot({0})"
+                                :java "Conc.serveSnapshot({0})"
+                                :csharp "Conc.ServeSnapshot({0})"})
     'run-one (core/call {:rust "crate::conc::run_one({0}, {1})"
                          :java "Conc.runOne({0}, {1})"
                          :csharp "Conc.RunOne({0}, {1})"})

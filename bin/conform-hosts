@@ -1439,6 +1439,30 @@ if [ -n "$CLR" ]; then
   fi
 fi
 
+phase "a host-requested snapshot, streamed"
+# A HOST-REQUESTED, STREAMED SNAPSHOT (`DECISIONS.md#snapshots`) on the two
+# ports, against the fixture native and wasm run in `test/snapstream.clj`. ONE
+# image for all three, so a stream native wrote is one each port must import:
+# that is the crossing, and it is what found the CLR's fingerprint constant
+# disagreeing with native's for the same bytes.
+mkdir -p out/snapstream
+./bin/flint :src test/snapstream :fn snap/main --emit-image :out out/snapstream/snap.img \
+  > "$FLINT_SCRATCH"/flint-snapstream-build.out 2>&1 \
+  || { cat "$FLINT_SCRATCH"/flint-snapstream-build.out; echo "  FAIL the snapstream fixture does not compile"; exit 1; }
+FLINT_SNAPSTREAM_IMG="$PWD/out/snapstream/snap.img" FLINT_SNAPSTREAM_OUT="$PWD/out/snapstream/native-img.stream" \
+  cargo test --release -q -p flint-cli snapstream > "$FLINT_SCRATCH"/flint-snapstream-native.out 2>&1 \
+  || { tail -20 "$FLINT_SCRATCH"/flint-snapstream-native.out; echo "  FAIL native could not stream the fixture"; exit 1; }
+"$JDK/bin/java" -cp runtimes/jvm/classes RtSnapStream out/snapstream/snap.img out/snapstream/native-img.stream \
+  > "$FLINT_SCRATCH"/flint-snapstream-jvm.out 2>&1 \
+  || { cat "$FLINT_SCRATCH"/flint-snapstream-jvm.out; echo "  FAIL a streamed snapshot [jvm]"; exit 1; }
+sed 's/$/ [jvm]/' "$FLINT_SCRATCH"/flint-snapstream-jvm.out
+if [ -n "$CLR" ]; then
+  "$CLR" --rt-snap-stream out/snapstream/snap.img out/snapstream/native-img.stream \
+    > "$FLINT_SCRATCH"/flint-snapstream-clr.out 2>&1 \
+    || { cat "$FLINT_SCRATCH"/flint-snapstream-clr.out; echo "  FAIL a streamed snapshot [clr]"; exit 1; }
+  sed 's/$/ [clr]/' "$FLINT_SCRATCH"/flint-snapstream-clr.out
+fi
+
 phase "native reads what the ports wrote"
 # AND NATIVE READS WHAT THE PORTS WROTE. The ports check the other direction
 # themselves, above, under `FLINT_LIVEIMPORT`.

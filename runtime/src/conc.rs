@@ -367,6 +367,23 @@ impl Rt {
     /// without checking. What stays here is what kin has no answer for: two
     /// function references, and this runtime's own notion of "a scheduler now
     /// exists".
+    /// Re-attach the two function references `ensure_sched` sets, for a
+    /// scheduler that came back in a live set rather than being made here.
+    ///
+    /// They are Rust state, so an import cannot carry them, and `ensure_sched`
+    /// does not set them for a scheduler that already exists. Without this a
+    /// restored sandbox ran calls and could not take a PORT in a message:
+    /// `scan_ports` found no route to mint one and refused the delivery.
+    /// Found by asking a restored copy for a snapshot of its own
+    /// (`cli/src/snapstream_test.rs`).
+    pub fn rehook_sched(&mut self) {
+        if self.sched().is_nil() {
+            return;
+        }
+        self.bridge_hook = Some(|rt, id| rt.install_bridge_port(id, NIL, true));
+        self.sched_hook = Some(scheduler);
+    }
+
     pub fn ensure_sched(&mut self) -> Value {
         let s = self.sched();
         if !s.is_nil() {
@@ -963,7 +980,15 @@ impl Rt {
         if f.is_nil() || !self.is_callable(f) {
             return;
         }
-        self.spawn_thread(f);
+        let th = self.spawn_thread(f);
+        // REMEMBERED BY ID, because this is the one thread a snapshot request
+        // is honoured from (`DECISIONS.md#snapshots`): guest code never runs
+        // on it, so "the caller is the system thread" is a grant the runtime
+        // conferred rather than a claim the caller made. An id rather than the
+        // value so it survives a collection, and so a live set can carry it.
+        if self.is_thread(th) {
+            self.snap_serve.system_thread = fx(self.slot(th, TH_ID));
+        }
     }
 
     // `abandon_current_thread` IS GENERATED, from `kin/sched.kin`, and lands
@@ -1310,6 +1335,11 @@ pub fn settle(rt: &mut Rt, result: Value) {
 /// all, which is how it was noticed.
 pub fn run_entry(rt: &mut Rt, f: Value) -> Value {
     rt.run_thread_entry(f, NIL)
+}
+
+/// A host-requested snapshot, served between turns (`crate::snap::Serve`).
+pub fn serve_snapshot(rt: &mut Rt) {
+    crate::snap::serve_snapshot(rt);
 }
 
 pub fn run_one(rt: &mut Rt, i: u32) {

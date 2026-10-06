@@ -1218,6 +1218,20 @@ public static class Builtins {
         /// runtime, and the nested scheduler is what made the first version
         /// silently never start (`DECISIONS.md#bridges-are-the-only-door`).
         Def("flint/system-port", (rt, at, n) => Conc.SystemPort(rt));
+        /// A HOST-REQUESTED SNAPSHOT (`DECISIONS.md#snapshots`), for
+        /// `flint.system`'s `:snapshot` op and nothing else. Both refuse
+        /// unless the caller is the system thread -- the guard lives in
+        /// `Snap`, at run time, because any source can NAME these through
+        /// `flint.rt/<x>`.
+        Def("flint/snapshot-export", (rt, at, n) => Snap.RequestExport(rt));
+        Def("flint/snapshot-chunk", (rt, at, n) => {
+            long off = rt.VAt(at);
+            long len = rt.VAt(at + 1);
+            if (!Val.IsFixnum(off) || !Val.IsFixnum(len)) {
+                return rt.ThrowStr("ClassCastException", "snapshot-chunk wants two integers");
+            }
+            return Snap.Chunk(rt, Val.AsFixnum(off), Val.AsFixnum(len));
+        });
         Def("flint/port-label", (rt, at, n) => {
             long p = global::_3sln.Flint.Kgen.Rt.Meta.PortOf(rt, rt.VAt(at));
             if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-label wants a port");

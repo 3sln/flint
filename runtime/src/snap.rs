@@ -585,7 +585,180 @@ pub const MAGIC_LIVE: u32 = 0x464C_5358;
 // is part of that state: without it an import came back not-started, and the
 // first call ran every top-level form again over the restored heap --
 // resetting each `(def x (atom ..))` it had just brought back.
-pub const VERSION_LIVE: u32 = 2;
+//
+// VERSION 3 ADDS THE CONTROL PLANE, right after `started`: the system thread's
+// id (`-1` when none was booted) and whether this export answers a HOST
+// REQUEST that its own system thread is waiting on (`DECISIONS.md#snapshots`).
+// The first is the same reason as `started`: an import that forgot the control
+// plane had booted spawned a SECOND one on the first drive, two threads
+// receiving from one system port. The second is what lets the restored copy's
+// system thread tell "I was copied" from "I am asking" -- see `Serve`.
+pub const VERSION_LIVE: u32 = 3;
+
+/// A host-requested export, between the request and the last chunk
+/// (`DECISIONS.md#snapshots`).
+///
+/// THE REQUEST IS SERVED BETWEEN TURNS, NOT INSIDE ONE. `flint.system` asks
+/// with `flint/snapshot-export`, which PARKS the system thread; the scheduler
+/// exports after that turn ends (`serve_snapshot`, called from `drive`), when
+/// every thread's state is in its thread object and none is half-run. The
+/// thread is made runnable FIRST, so the copy holds it runnable and about to
+/// re-execute the same call -- which then answers the length here, and `nil`
+/// in the copy, because the copy was imported with `restored` set. That is
+/// `fork`, and it is why the restored copy does not stream the snapshot to a
+/// port that belonged to the instance it was copied from.
+pub struct Serve {
+    /// `TH_ID` of the thread `flint.system/boot` runs on, or -1.
+    pub system_thread: i64,
+    /// Asked for, not yet exported.
+    pub pending: bool,
+    /// Set only while `export_live` runs for a request.
+    pub exporting: bool,
+    /// Exported: the length, until the system thread collects it.
+    pub ready: i64,
+    /// The walk and the collector disagreed. Answered as a throw.
+    pub failed: bool,
+    /// This runtime was imported from an export that answered a request.
+    pub restored: bool,
+    /// The bytes being streamed. Freed when a chunk is asked for past the end.
+    pub buf: Vec<u8>,
+}
+
+impl Serve {
+    pub const fn new() -> Serve {
+        Serve {
+            system_thread: -1,
+            pending: false,
+            exporting: false,
+            ready: -1,
+            failed: false,
+            restored: false,
+            buf: Vec::new(),
+        }
+    }
+}
+
+/// Is the running thread the control plane?
+///
+/// The whole of the guard that keeps a GUEST from taking a snapshot. Not a
+/// compile-time check: `flint.rt/<x>` reaches any builtin from any source, and
+/// a program with no workspaces is checked nowhere at compile time
+/// (`flint.analyzer/guard-check!`). The thread identity is conferred by the
+/// runtime at boot, and no guest code runs on that thread.
+fn on_system_thread(rt: &mut Rt) -> bool {
+    let id = rt.snap_serve.system_thread;
+    if id < 0 {
+        return false;
+    }
+    let th = rt.current_thread();
+    if !rt.is_thread(th) {
+        return false;
+    }
+    rt.slot(th, crate::conc::TH_ID).as_fixnum() == id
+}
+
+fn refuse_guest(rt: &mut Rt) -> Value {
+    rt.throw_str(
+        "SecurityException",
+        "a snapshot is taken only when the HOST asks for one on the system port; \
+         guest code cannot take one",
+    )
+}
+
+/// `flint/snapshot-export`: the system thread asks; see `Serve`.
+///
+/// Answers the byte length once the export exists, `nil` in a restored copy,
+/// and otherwise PARKS -- deciding to park before changing anything a re-run
+/// would read, as every parking builtin must.
+pub fn request_export(rt: &mut Rt) -> Value {
+    if !on_system_thread(rt) {
+        return refuse_guest(rt);
+    }
+    let s = &mut rt.snap_serve;
+    if s.restored {
+        s.restored = false;
+        return NIL;
+    }
+    if s.failed {
+        s.failed = false;
+        return rt.throw_str(
+            "IllegalStateException",
+            "snapshot: the live-set walk and the collector disagreed",
+        );
+    }
+    if s.ready >= 0 {
+        let n = s.ready;
+        s.ready = -1;
+        return Value::fixnum(n);
+    }
+    s.pending = true;
+    // On the SYSTEM PORT, with no waiter: nothing wakes this but
+    // `serve_snapshot`, and a deadlock report naming the port says where it is.
+    let on = rt.system_port();
+    rt.park(on)
+}
+
+/// `flint/snapshot-chunk`: `len` bytes of the export from `off`, or `nil` past
+/// the end -- which also FREES the buffer, so asking past the end is how the
+/// system thread lets go of it on success and on failure alike.
+pub fn chunk(rt: &mut Rt, off: i64, len: i64) -> Value {
+    if !on_system_thread(rt) {
+        return refuse_guest(rt);
+    }
+    let n = rt.snap_serve.buf.len() as i64;
+    if off < 0 || len <= 0 || off >= n {
+        rt.snap_serve.buf = Vec::new();
+        return NIL;
+    }
+    let end = core::cmp::min(n, off + len) as usize;
+    let buf = core::mem::take(&mut rt.snap_serve.buf);
+    let v = rt.new_bytes(&buf[off as usize..end]);
+    rt.snap_serve.buf = buf;
+    v
+}
+
+/// Serve a pending request. Called by `drive` after every turn.
+///
+/// The system thread is parked on the request. It is made RUNNABLE before the
+/// export, so the copy holds it runnable too -- otherwise the copy's control
+/// plane would sleep for ever on a request nobody will answer there.
+pub fn serve_snapshot(rt: &mut Rt) {
+    if !rt.snap_serve.pending {
+        return;
+    }
+    rt.snap_serve.pending = false;
+    let id = rt.snap_serve.system_thread;
+    let s = rt.sched();
+    let ts = rt.slot(s, crate::conc::SC_THREADS);
+    let n = rt.vec_count(ts);
+    for i in 0..n {
+        let th = rt.vec_nth(ts, i, NIL);
+        if rt.is_thread(th) && rt.slot(th, crate::conc::TH_ID).as_fixnum() == id {
+            rt.set(th, crate::conc::TH_STATUS, Value::fixnum(crate::conc::ST_RUNNABLE));
+            rt.set(th, crate::conc::TH_PARK_ON, NIL);
+        }
+    }
+    // THE STATUS IS MID-DRIVE HERE, so it is whatever the LAST drive left --
+    // and the doors leave different things: native's `resume` does not reset
+    // it and wasm's does, so the same program and the same host script
+    // streamed bytes that differed in exactly this field (measured 2026-10-05,
+    // one byte of 347 087). The copy is a sandbox waiting for its host to drive
+    // it, which is what 2 says, so that is what is written; the live field is
+    // put back, and `drive` sets it before it returns anyway.
+    let status = rt.status;
+    rt.status = 2;
+    let mut buf = core::mem::take(&mut rt.snap_serve.buf);
+    rt.snap_serve.exporting = true;
+    let ok = export_live(rt, &mut buf);
+    rt.snap_serve.exporting = false;
+    rt.status = status;
+    if ok {
+        rt.snap_serve.ready = buf.len() as i64;
+        rt.snap_serve.buf = buf;
+    } else {
+        rt.snap_serve.failed = true;
+    }
+}
 
 /// How a `Value` is written when it may point at the heap. One byte, so the
 /// encoding is unambiguous rather than clever: a NaN-boxed value uses the bits
@@ -686,6 +859,10 @@ pub fn export_live(rt: &mut Rt, out: &mut Vec<u8>) -> bool {
     w.u32(VERSION_LIVE);
     w.u64(rt.image.fingerprint);
     w.u32(rt.started() as u32);
+    w.u64(rt.snap_serve.system_thread as u64);
+    // `restored` too: an export of a copy that has not yet run its control
+    // plane is that same copy, and must answer `nil` there as well.
+    w.u32((rt.snap_serve.exporting || rt.snap_serve.restored) as u32);
 
     // --- objects: type, len, then the body.
     w.usz(ix.addrs.len());
@@ -832,6 +1009,14 @@ pub fn import_live(rt: &mut Rt, bytes: &[u8]) -> bool {
     }
     let started = r.u32() != 0;
     rt.set_started(started);
+    let system_thread = r.u64() as i64;
+    let answering = r.u32() != 0;
+    rt.snap_serve = Serve::new();
+    rt.snap_serve.system_thread = system_thread;
+    rt.snap_serve.restored = answering;
+    // Booted iff the copied runtime had booted: a second `flint.system/boot`
+    // over the restored one would split the system port's messages in two.
+    rt.system_booted = system_thread >= 0;
 
     // Nothing of the old state may be reachable while the new objects are
     // being built, or a collection in the middle would try to keep both.
@@ -1052,6 +1237,7 @@ pub fn import_live(rt: &mut Rt, bytes: &[u8]) -> bool {
     rt.mem_trips = mem_trips;
     rt.status = status as i32;
     rt.champ_added = champ_added;
+    rt.rehook_sched();
     // LAST, and for the same reason as `restore`: the identities come back
     // intact so a host can rehydrate against them.
     rt.restored_host_opaques = count_host_opaques(rt);

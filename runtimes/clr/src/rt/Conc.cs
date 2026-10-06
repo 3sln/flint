@@ -198,6 +198,21 @@ public static class Conc {
         return outv;
     }
 
+    /// Re-attach the two pieces of HOST state `EnsureSched` sets outside the
+    /// heap -- `bridgeHook` and `schedInstalled` -- for a scheduler that came
+    /// back in a live set rather than being made here.
+    ///
+    /// They are host state, so an import cannot carry them, and `EnsureSched`
+    /// does not set them for a scheduler that already exists. Without this a
+    /// restored sandbox ran calls and could not take a PORT in a message: the
+    /// decoder found no route to mint one and refused the delivery. See the
+    /// Rust's `rehook_sched`.
+    public static void RehookSched(Rt rt) {
+        if (Val.IsNil(Sched(rt))) return;
+        rt.bridgeHook = (r, id) => InstallBridgePort(r, id, Val.Nil, true);
+        rt.schedInstalled = true;
+    }
+
     public static long CurrentThread(Rt rt) {
         long s = Sched(rt);
         if (Val.IsNil(s)) return Val.Nil;
@@ -1482,7 +1497,14 @@ public static class Conc {
             if (Str.Text(rt, rt.consts[rt.varNames[i]]) != "flint.system/boot") continue;
             long f = rt.roots.shared.Globals[i];
             if (Val.IsNil(f) || !rt.IsHeapTy(f, Obj.TyClosure)) return;
-            Spawn(rt, f);
+            long th = Spawn(rt, f);
+            // REMEMBERED BY ID, because this is the one thread a snapshot
+            // request is honoured from (`DECISIONS.md#snapshots`): guest code
+            // never runs on it, so "the caller is the system thread" is a
+            // grant the runtime conferred rather than a claim the caller
+            // made. An id rather than the value so it survives a collection,
+            // and so a live set can carry it.
+            if (IsThread(rt, th)) rt.snapServe.systemThread = Fx(rt.Slot(th, TH_ID));
             return;
         }
     }
@@ -1534,4 +1556,9 @@ public static class Conc {
 
     public static long Drive(Rt rt) =>
         global::_3sln.Flint.Kgen.Rt.Sched.SchedDrive(rt);
+
+    /// A thin wrapper, as the Rust's `conc::serve_snapshot` is over
+    /// `snap::serve_snapshot` -- so GENERATED code (`kin/sched.kin`'s
+    /// `Sched.cs`) can call it BY NAME without naming `Snap` directly.
+    public static void ServeSnapshot(Rt rt) => Snap.ServeSnapshot(rt);
 }

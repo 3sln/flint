@@ -14,7 +14,7 @@ fn main() {
         " :exports [\"flint_drain\" \"flint_events_ptr\" \"flint_continue\" \
 \"flint_in_alloc\" \"flint_deliver\" \"flint_close\" \"flint_install_port\" \
 \"flint_grant\" \"flint_answer\" \"flint_system_port\" \"flint_port_state\" \
-\"flint_resume\" \
+\"flint_resume\" \"flint_live_import\" \
 \"flint_boot\" \"flint_loop\" \"flint_link\"]"
     );
     println!(" :provides {{");

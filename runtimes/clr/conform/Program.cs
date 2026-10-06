@@ -10,6 +10,8 @@ public static class Program {
     public static int Main(string[] args) {
         if (args.Length >= 1 && args[0] == "--rt-foundation") return RtFoundation();
         if (args.Length >= 1 && args[0] == "--rt-snapshot") return RtSnapshot();
+        if (args.Length >= 2 && args[0] == "--rt-snap-stream")
+            return RtSnapStream(args[1], args.Length > 2 ? args[2] : null);
         if (args.Length >= 1 && args[0] == "--rt-maps") return RtMaps();
         if (args.Length >= 1 && args[0] == "--rt-parallel") return RtParallel();
         if (args.Length >= 1 && args[0] == "--rt-stale") return RtStale();
@@ -251,6 +253,207 @@ public static class Program {
         return 0;
     }
 
+    // ------------------------------------------------------------------
+    // A HOST-REQUESTED, STREAMED SNAPSHOT (`DECISIONS.md#snapshots`), end to
+    // end through a compiled image: `test/snapstream/snap.cljc`, the same
+    // fixture and the same script as `cli/src/snapstream_test.rs` (native) and
+    // the JVM's `RtSnapStream.java`. Driven by hand at the port level, not
+    // through a host helper, because what is asserted is the protocol itself.
+
+    private const int SS_SYS = 1000, SS_CALLS = 1001, SS_DEST = 1002;
+    private static int ssFails;
+
+    private static void SsOk(string what, bool cond) {
+        Console.WriteLine((cond ? "  ok   " : "  FAIL ") + what);
+        if (!cond) ssFails++;
+    }
+
+    private static Flint.Rt.Rt SsLoad(byte[] img) {
+        var rt = new Flint.Rt.Rt(4L * 1024 * 1024, 512L * 1024 * 1024);
+        if (Flint.Rt.Img.Load(rt, img) == null) throw new InvalidOperationException("not a flint image");
+        return rt;
+    }
+
+    /// Pump until nothing more happens, collecting every event.
+    private static List<Ev> SsPump(Flint.Rt.Rt rt) {
+        var all = new List<Ev>();
+        for (int i = 0; i < 1000; i++) {
+            Flint.Rt.Conc.Drive(rt);
+            var evs = Drain(rt);
+            if (evs.Length == 0) break;
+            all.AddRange(evs);
+        }
+        return all;
+    }
+
+    private static Flint.Rt.Rt SsBooted(byte[] img) {
+        var rt = SsLoad(img);
+        Flint.Rt.Conc.InstallSystemPort(rt, SS_SYS, Flint.Rt.Str.Of(rt, "system"));
+        Flint.Rt.Conc.HostDeliver(rt, SS_SYS,
+            new W().Map(2).Kw("op").Kw("bind").Kw("port").Port(SS_CALLS).Done());
+        SsPump(rt);
+        return rt;
+    }
+
+    /// Call `snap/<f>` on the bound call port, answering its `:value`.
+    private static long SsCall(Flint.Rt.Rt rt, long tx, string f) {
+        var w = new W().Map(4).Kw("tx").Num(tx).Kw("op").Kw("call")
+                        .Kw("fn").Str("snap/" + f).Kw("args").Vec(0);
+        if (!Flint.Rt.Conc.HostDeliver(rt, SS_CALLS, w.Done()))
+            throw new InvalidOperationException("the call port would not take the call");
+        foreach (var e in SsPump(rt)) {
+            if (e.Kind != Flint.Rt.Conc.EV_MESSAGE || e.A != SS_CALLS) continue;
+            long v = Flint.Rt.Codec.Decode(rt, e.Payload);
+            long txv = global::_3sln.Flint.Kgen.Rt.Mapread.MapGet(rt, v, Flint.Rt.Str.Keyword(rt, null, "tx"), Flint.Rt.Val.Nil);
+            if (!Flint.Rt.Val.IsFixnum(txv) || Flint.Rt.Val.AsFixnum(txv) != tx) continue;
+            long val = global::_3sln.Flint.Kgen.Rt.Mapread.MapGet(rt, v, Flint.Rt.Str.Keyword(rt, null, "value"), Flint.Rt.Val.NotFound);
+            if (val == Flint.Rt.Val.NotFound) throw new InvalidOperationException("threw: " + rt.Describe(v));
+            return val;
+        }
+        throw new InvalidOperationException("no answer to " + f);
+    }
+
+    /// Ask for a snapshot on the system port; answer the chunks, the
+    /// terminator, and whether the destination was closed after it.
+    private static (List<byte[]> chunks, long end, bool closed) SsRequest(Flint.Rt.Rt rt) {
+        Flint.Rt.Conc.HostDeliver(rt, SS_SYS,
+            new W().Map(2).Kw("op").Kw("snapshot").Kw("port").Port(SS_DEST).Done());
+        var chunks = new List<byte[]>();
+        long end = Flint.Rt.Val.Nil;
+        bool closed = false;
+        foreach (var e in SsPump(rt)) {
+            if (e.A != SS_DEST) continue;
+            if (e.Kind == Flint.Rt.Conc.EV_CLOSED) {
+                closed = true;
+            } else if (e.Kind == Flint.Rt.Conc.EV_MESSAGE) {
+                if (closed) throw new InvalidOperationException("a message arrived after the close");
+                long v = Flint.Rt.Codec.Decode(rt, e.Payload);
+                if (Flint.Rt.Bytes.IsBytes(rt, v)) {
+                    if (!Flint.Rt.Val.IsNil(end)) throw new InvalidOperationException("a chunk arrived after the terminator");
+                    chunks.Add(Flint.Rt.Bytes.ToArray(rt, v));
+                } else {
+                    end = v;
+                }
+            }
+        }
+        return (chunks, end, closed);
+    }
+
+    private static bool SsIsBytesPayload(Flint.Rt.Rt rt, byte[] payload) {
+        if (payload.Length == 0) return false;
+        return Flint.Rt.Bytes.IsBytes(rt, Flint.Rt.Codec.Decode(rt, payload));
+    }
+
+    private static int RtSnapStream(string imgPath, string nativePath) {
+        ssFails = 0;
+        byte[] img = File.ReadAllBytes(imgPath);
+
+        var a = SsBooted(img);
+        long bump1 = SsCall(a, 1, "bump");
+        SsOk("bump -> 1", Flint.Rt.Val.IsFixnum(bump1) && Flint.Rt.Val.AsFixnum(bump1) == 1);
+
+        var (chunks, end, closed) = SsRequest(a);
+        byte[] stream;
+        using (var ms = new MemoryStream()) {
+            foreach (var c in chunks) ms.Write(c, 0, c.Length);
+            stream = ms.ToArray();
+        }
+        SsOk("the ballast needs several chunks, got " + chunks.Count, chunks.Count >= 2);
+        bool allFull = true;
+        for (int i = 0; i < chunks.Count - 1; i++) if (chunks[i].Length != 65536) allFull = false;
+        SsOk("every chunk but the last is exactly 65536 bytes", allFull);
+        long endOp = global::_3sln.Flint.Kgen.Rt.Mapread.MapGet(a, end, Flint.Rt.Str.Keyword(a, null, "op"), Flint.Rt.Val.Nil);
+        SsOk("terminator op is :end", endOp == Flint.Rt.Str.Keyword(a, null, "end"));
+        long endSize = global::_3sln.Flint.Kgen.Rt.Mapread.MapGet(a, end, Flint.Rt.Str.Keyword(a, null, "size"), Flint.Rt.Val.Nil);
+        SsOk("the terminator names the byte count (" + stream.Length + ")",
+             Flint.Rt.Val.IsFixnum(endSize) && Flint.Rt.Val.AsFixnum(endSize) == stream.Length);
+        SsOk("the destination is closed after the terminator", closed);
+
+        // THE INSTANCE ASKED carries on: the request did not stop it.
+        long bump2 = SsCall(a, 2, "bump");
+        SsOk("the instance asked carries on: bump -> 2",
+             Flint.Rt.Val.IsFixnum(bump2) && Flint.Rt.Val.AsFixnum(bump2) == 2);
+
+        // THE STREAM IS THE ONE-SHOT EXPORT. A fresh instance takes the
+        // concatenation, and the one-shot export of what it took is the same
+        // bytes.
+        var c2 = SsLoad(img);
+        bool cImported = Flint.Rt.Snap.ImportLive(c2, stream);
+        SsOk("a fresh runtime imports the concatenated stream", cImported);
+        byte[] oneShot = cImported ? Flint.Rt.Snap.ExportLive(c2) : null;
+        SsOk("the one-shot export of what it took is the same bytes streamed ("
+             + (oneShot?.Length ?? -1) + " vs " + stream.Length + ")",
+             oneShot != null && oneShot.AsSpan().SequenceEqual(stream));
+
+        // THE COPY CARRIES ON FROM THE SNAPSHOT and does NOT stream itself
+        // again to a port that belonged to `a`.
+        var b = SsLoad(img);
+        SsOk("another fresh runtime imports it too", Flint.Rt.Snap.ImportLive(b, stream));
+        var evs = SsPump(b);
+        bool streamedAgain = evs.Any(e => e.A == SS_DEST
+            && (e.Kind == Flint.Rt.Conc.EV_MESSAGE || e.Kind == Flint.Rt.Conc.EV_CLOSED));
+        SsOk("the copy did not stream itself again on the destination port "
+             + "(an EV_RETAIN for it is expected and fine)", !streamedAgain);
+        long bump3 = SsCall(b, 3, "bump");
+        SsOk("the copy's counter is the snapshot's: bump -> 2",
+             Flint.Rt.Val.IsFixnum(bump3) && Flint.Rt.Val.AsFixnum(bump3) == 2);
+        long sizes4 = SsCall(b, 4, "sizes");
+        SsOk("sizes -> 30000", Flint.Rt.Val.IsFixnum(sizes4) && Flint.Rt.Val.AsFixnum(sizes4) == 30000);
+
+        var (chunks2, _, closed2) = SsRequest(b);
+        SsOk("the copy answers a snapshot request of its own", chunks2.Count > 0 && closed2);
+
+        // Another layout and another program are refused by name.
+        var trunc = SsLoad(img);
+        byte[] short8 = new byte[8];
+        System.Array.Copy(stream, short8, 8);
+        SsOk("a truncated stream (8 bytes) is refused", !Flint.Rt.Snap.ImportLive(trunc, short8));
+
+        // --- guest-side probe: the same builtin, reached by every route a
+        // guest has, must refuse every time.
+        var g = SsBooted(img);
+        string[] stealFns = { "steal", "steal-chunk", "steal-by-value", "steal-on-a-thread" };
+        for (int i = 0; i < stealFns.Length; i++) {
+            long v = SsCall(g, 10 + i, stealFns[i]);
+            bool isStr = Flint.Rt.Str.IsString(g, v);
+            string msg = isStr ? Flint.Rt.Str.Text(g, v) : "NOT A STRING: " + g.Describe(v);
+            SsOk(stealFns[i] + " is refused: " + STrim(msg),
+                 isStr && msg.Contains("guest code cannot take one"));
+        }
+        // A `:snapshot` the GUEST sends on the system port goes OUT, to the
+        // host: it is an ordinary message there, and nothing is exported.
+        var askMsg = new W().Map(4).Kw("tx").Num(20).Kw("op").Kw("call")
+                             .Kw("fn").Str("snap/ask-on-the-system-port").Kw("args").Vec(0);
+        Flint.Rt.Conc.HostDeliver(g, SS_CALLS, askMsg.Done());
+        var evs2 = SsPump(g);
+        SsOk("the guest's message left on the system port",
+             evs2.Any(e => e.Kind == Flint.Rt.Conc.EV_MESSAGE && e.A == SS_SYS));
+        SsOk("no chunk was sent for a guest's request",
+             !evs2.Any(e => e.Kind == Flint.Rt.Conc.EV_MESSAGE && SsIsBytesPayload(g, e.Payload)));
+        // THE CONTROL: the same builtin, asked for by the HOST, does run.
+        var (chunks3, _, closed3) = SsRequest(g);
+        SsOk("the host's own request on the same sandbox still works", chunks3.Count > 0 && closed3);
+
+        // --- cross-runtime: a fresh CLR runtime imports native's stream.
+        if (nativePath != null) {
+            byte[] native = File.ReadAllBytes(nativePath);
+            var e2 = SsLoad(img);
+            bool crossImported = Flint.Rt.Snap.ImportLive(e2, native);
+            SsOk("a fresh CLR runtime imports native's stream", crossImported);
+            if (crossImported) {
+                long bump5 = SsCall(e2, 30, "bump");
+                SsOk("and the import answers bump -> 2",
+                     Flint.Rt.Val.IsFixnum(bump5) && Flint.Rt.Val.AsFixnum(bump5) == 2);
+            }
+            bool sameBytes = stream.Length == native.Length && stream.AsSpan().SequenceEqual(native);
+            Console.WriteLine("  -- informational, not asserted: the CLR's own stream ("
+                + stream.Length + " bytes) is " + (sameBytes ? "EQUAL to" : "DIFFERENT from")
+                + " native's (" + native.Length + " bytes); they may differ in intern tables");
+        }
+
+        if (ssFails > 0) { Console.WriteLine("  " + ssFails + " failed"); return 1; }
+        return 0;
+    }
 
     /// The ported runtime, on a REAL compiled image. A mirror of the JVM's
     /// `RtImage.java`, printing the same lines so the gate can compare them.

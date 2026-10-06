@@ -26,6 +26,7 @@
                                    W_KIND W_LEN
                                    boot-system-thread-once reap-ports run-one
                                    close-all-bridges set-status settled-answer
+                                   serve-snapshot
                                    report-deadlock gate-escaped? TH_RESULT
                                    slot sched is-port crosses-a-heap
                                    mark push r pop-to fixnum
@@ -243,6 +244,12 @@
     (let [^I64 i (sched-pick rt)]
       (if (>= i 0)
         (do (run-one rt (to-i32 i))
+            (comment "A HOST-REQUESTED SNAPSHOT IS TAKEN HERE, BETWEEN TURNS"
+                     "(`DECISIONS.md#snapshots`): the system thread parked to"
+                     "ask, so its turn has just ended and every thread's state"
+                     "is in its thread object. Inside a turn the export would"
+                     "copy a thread half-way through a builtin.")
+            (serve-snapshot rt)
             (continue)))
       (comment "THE HOST FIRST. There is no entry function whose return means"
                "the program is over, so the only reason to stop is that"

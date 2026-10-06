@@ -253,6 +253,11 @@ public sealed class Rt : System.IDisposable {
     /// question is asked before that is known.
     public bool systemBooted;
 
+    /// The in-flight state of a host-requested live-set export
+    /// (`DECISIONS.md#snapshots`), mirroring the Rust's `Serve`. Ported in
+    /// `Snap.cs`, which is where every member is documented.
+    public Snap.SnapServe snapServe = new Snap.SnapServe();
+
     /// This image's initialisers, in order: a program's top-level forms.
     public int[] init = new int[0];
 
