@@ -17,14 +17,17 @@ name: Publish
 # publish rights on the @3sln scope.
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - sdks/esm/package.json
-      - sdks/cli/package.json
-      - bin/release-plan
-      - .github/workflows/publish.yml
+  # AUTOMATIC PUBLISHING IS OFF until the packages are ready for a first
+  # release: only a manual dispatch publishes. To turn it back on, uncomment
+  # the block below. It fires only on a change to a package MANIFEST -- a
+  # version bump is the only thing that can produce something to publish, so
+  # a change to this workflow or to bin/release-plan must not trigger it.
+  # push:
+  #   branches:
+  #     - main
+  #   paths:
+  #     - sdks/esm/package.json
+  #     - sdks/cli/package.json
   # Publishes whatever the registry lacks. Safe to run at any time: a version
   # that is already published is skipped, not republished.
   workflow_dispatch:
