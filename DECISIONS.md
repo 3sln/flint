@@ -1388,6 +1388,22 @@ wasm, `node test/snapstream.mjs` -- both driven by `bb test/snapstream.clj`
 `Conform --rt-snap-stream` -- both in `bin/conform-hosts`, each importing
 native's stream of the same image.
 
+**RATIFIED BY THE MAINTAINER, 2026-10-06: no opt-out, and this is not a
+reachability leak.** The first Linux gate read `flint_b_snapshot` linked into
+a pure module and `test/threads.clj`/`test/twobuilds.clj` over their 500 000-
+byte budget (524 651, informally) and the initial read called it a
+shake-reachability bug to fix. It is not: `export_live`/`import_live` serving
+a host-requested snapshot is exactly as unconditional as `flint_live_import`
+already was (this section, "a production export of `flint.conc`, not the
+diagnostics snapshot unit") -- a host may ask ANY sandbox to export regardless
+of what the guest required, so gating that machinery on the guest's own
+reachability was always the wrong signal. (`flint_b_snapshot` itself turned
+out to still be correctly unit-gated; see `DECISIONS.md#the-control-plane-is-the-runtimes`'s
+matching note and `test/snapshot.clj`.) Only the verbatim memcpy capture stays
+diagnostics-only, as decided 2026-10-01 above. The pure-module budget was
+raised instead, from 500 000 to 545 000, measured and recorded in
+`test/threads.clj`'s EIGHTH RAISE and mirrored in `test/twobuilds.clj`.
+
 ---
 
 ## profiler
@@ -16056,6 +16072,28 @@ namespace went: it still trusted a var named `flint.system/boot`.
   between.
 * **The live format's system-thread field is RESERVED** (written -1, ignored on
   import): there is no control-plane thread. Its state is in the heap now.
+
+**RATIFIED BY THE MAINTAINER, 2026-10-06: serving AND shelving are both
+unconditional, with no opt-out -- that is the pure-module floor now, not a
+leak.** `serve_control_at` (`kin/control.kin`, called by `drive` every
+iteration, in every image) calls `crate::snap::begin`/`idle` on `:snapshot`
+exactly as unconditionally as it calls `bind_port`/`unbind_port`/`close_bound`
+on the other three ops -- there is no per-program signal to gate the fourth op
+on that the other three do not also need, since a host may ask any sandbox to
+export regardless of what the guest required. The first read of the Linux
+gate's reds called the `export_live` reachability a bug; it is this decision,
+pre-dating today (`DECISIONS.md#snapshots`, "ships in every build on all four
+runtimes", 2026-10-01), continuing to hold now that serving is runtime code
+too. The pure-module byte budget is raised to match, not the reachability:
+`test/threads.clj`'s EIGHTH RAISE, 500 000 to 545 000, measured 534 937 on
+commit `1483a511` (host macOS 14.6.1 arm64, rustc 1.92.0), decomposed there as
+~41 KB for the live-set surface and the rest for `flint.port`/`flint.wire`
+becoming permanent roots. `test/twobuilds.clj` mirrors it. Only the
+diagnostics-only verbatim memcpy capture (`flint.snapshot`, `flint_b_snapshot`)
+remains a reachability-shaken unit, confirmed unaffected by this change
+(`test/snapshot.clj`, still green, delta down from 41 431 to 18 837 bytes now
+that `pure` already carries the live-set half the diagnostics unit used to pay
+for alone).
 
 ---
 

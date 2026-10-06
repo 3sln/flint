@@ -162,7 +162,20 @@
 ;; the same decision (`DECISIONS.md#bridges-are-the-only-door`) and are worth
 ;; reading together rather than one at a time, which is what the comment above
 ;; the other floor asks for.
-(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 500000))
+;;
+;; RAISED AGAIN, from 500 000 to 545 000, same number and same reason as
+;; `test/threads.clj`'s matching floor -- read the comment there for the full
+;; decomposition. MEASURED on this module too, same host/commit/command:
+;; `bb test/twobuilds.clj` reports 534 937 bytes shipped (identical to
+;; `test/threads.clj`'s `pure`, as it should be: both fixtures are
+;; `(ns x) (defn main [_] "nothing")`), against the last-recorded 490 471.
+;; NOT A LEAK: the maintainer's decision
+;; (`DECISIONS.md#the-control-plane-is-the-runtimes`, `DECISIONS.md#snapshots`)
+;; is that serving a call and shelving a sandbox are both unconditional in
+;; every module, with no opt-out; only the diagnostics-only verbatim memcpy
+;; capture stays a reachability-shaken unit, and this file's own symbol checks
+;; below still confirm that half.
+(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 545000))
 
 ;; --- absent, by name -------------------------------------------------------
 (doseq [sym ["flint_snapshot_capture" "flint_snapshot_restore" "flint_snapshot_ptr"

@@ -55,8 +55,21 @@
 
 ;; ------------------------------------------------------------- module size
 ;;
-;; `threads-and-ports`'s rule: none of this may grow a pure module. The snapshot surface is a
-;; unit like any other, so a program that never asks for one does not carry it.
+;; `threads-and-ports`'s rule covers ONLY the DIAGNOSTICS-ONLY VERBATIM MEMCPY
+;; CAPTURE below (`flint.snapshot`, `flint_b_snapshot`): that surface is still
+;; a unit like any other, so a program that never `:require`s it does not
+;; carry it, and that is what the symbol checks right below settle.
+;;
+;; It does NOT cover the LIVE-SET export/import that backs a host-requested
+;; snapshot (`DECISIONS.md#snapshots`) or the control plane that serves it
+;; (`DECISIONS.md#the-control-plane-is-the-runtimes`). The maintainer decided
+;; both serving a call and shelving a sandbox are unconditional, in every
+;; module, with no opt-out -- a host may ask any sandbox to export regardless
+;; of what the guest required, so reachability from the guest's own code was
+;; the wrong signal to gate that machinery on. `test/threads.clj` and
+;; `test/twobuilds.clj` carry that cost in the pure-module floor (raised
+;; 2026-10-06, see the comment there for the measurement); this file only
+;; measures the half that is still opt-in.
 (src! "pure" "(ns pure)\n(defn main [_] \"nothing\")")
 (src! "snapped"
       (str "(ns snapped (:require [flint.snapshot :as snap]))\n"
@@ -73,12 +86,24 @@
 ;; runs against a DIAGNOSTICS build, where the module carries every instrument
 ;; in the runtime and its size measures how much instrumentation exists rather
 ;; than what 0005 claims. What is measurable here is the claim itself -- that
-;; asking for snapshots is what costs, and not asking costs nothing -- which the
-;; symbol checks above settle exactly, and the delta below bounds.
-;; The bound moved from 25 000 to 45 000 when the LIVE-SET format landed, and
-;; the delta is the whole of what that format is: a serialiser and a
-;; deserialiser, against a `memcpy` and a `memcpy` back. Measured at 41 431
-;; bytes against 19 586 before.
+;; asking for the DIAGNOSTICS-ONLY capture is what costs, and not asking costs
+;; nothing for THAT half -- which the symbol checks above settle exactly, and
+;; the delta below bounds.
+;;
+;; The bound was 45 000 when the delta was the whole live-set serialiser
+;; against a bare `memcpy` (41 431 bytes measured, back when `pure` carried
+;; neither). It does not mean that any more: since the maintainer's decision
+;; that serving and shelving are unconditional
+;; (`DECISIONS.md#the-control-plane-is-the-runtimes`, `DECISIONS.md#snapshots`,
+;; `test/threads.clj`'s EIGHTH RAISE), `pure` already carries `export_live`/
+;; `import_live`, so the delta here is only the diagnostics unit's thin
+;; wrapper -- `flint_b_snapshot`, `flint_snapshot_capture`/`restore`/`alloc`/
+;; `ptr` and friends, plus `capture_into`'s own verbatim-memcpy path, which
+;; `export_live` does not share. MEASURED 2026-10-06, host macOS 14.6.1
+;; (arm64), commit `1483a511`, command `bb test/snapshot.clj`: pure 611 067
+;; bytes, snapped 629 904, so +18 837 -- well under 45 000, and the bound is
+;; left as-is rather than tightened, since this file does not otherwise pin
+;; the diagnostics module's absolute size.
 ;;
 ;; Worth it, and the number that says so is on the other side: the same program's
 ;; state exports at 38 524 bytes as a live set against 5 275 808 verbatim. The
