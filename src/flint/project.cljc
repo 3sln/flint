@@ -503,8 +503,15 @@
   ;; plane is the RUNTIME's now, and the call loop is compiled from
   ;; `flint.callentry` into every image by the compiler itself
   ;; (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+  ;;
+  ;; `flint.port` AND `flint.wire` ARE ROOTS, unconditionally: the call loop is
+  ;; in every image and references `flint.port/send`/`flint.wire/read-from` by
+  ;; var (`src/flint/callentry.cljc`), which no `:require` in the program names.
+  ;; Call serving is always on (the maintainer's decision), so this is the
+  ;; ordinary require graph, not an injection -- a resolver that cannot answer
+  ;; `flint.port` reports it missing like any other unresolved require.
   (let [given (vec (or roots* ['clojure.core entry-ns]))]
-    (cond-> given
+    (cond-> (into given '[flint.port flint.wire])
       (contains? features :flint/check) (conj 'flint.check))))
 
 (defn- finish-project

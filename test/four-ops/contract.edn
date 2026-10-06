@@ -18,12 +18,19 @@
 {;; --------------------------------------------------------------- the program
  ;;
  ;; The smallest thing that still pulls in `clojure.core`, which is what makes the
- ;; native count interesting: 81 is `clojure.core`'s reach plus the call loop's,
+ ;; native count interesting: 85 is `clojure.core`'s reach plus the call loop's,
  ;; and not this program's. 91 until 2026-10-06, when `flint.system` -- linked
  ;; into every image with `flint.port`, `flint.wire` and `flint.thread` behind it
- ;; -- became runtime code and a self-contained call loop
- ;; (`DECISIONS.md#the-control-plane-is-the-runtimes`); 81 measured by reading
- ;; `nnatives` out of `./bin/flint ... --emit-image` for this program.
+ ;; -- became runtime code and a call loop with no namespace of its own
+ ;; (`DECISIONS.md#the-control-plane-is-the-runtimes`); that dropped it to 81,
+ ;; briefly, while the call loop re-implemented the wire codec in builtins
+ ;; instead of calling `flint.port`/`flint.wire`. It is 85 now that the loop
+ ;; calls them -- `flint.port` and `flint.wire` are ROOTS in every compile
+ ;; again, same day, because the loop references them by var
+ ;; (`flint.project/resolve-project`) -- still well under 91, because the rest
+ ;; of what `flint.system` dragged in (the control plane itself, `flint.thread`)
+ ;; stayed out. 85 measured by reading `nnatives` out of
+ ;; `./bin/flint ... --emit-image` for this program, 2026-10-06.
  :program "(ns t)\n(defn main [args] \"x\")\n"
  :entry "t/main"
  :call-args ["hello"]
@@ -107,21 +114,21 @@
   :why "Natives resolve exactly once when the image loads, so an override
         registered after boot would silently never apply. Refusing is the contract:
         a host must not be left holding a hook it believes in. And the normal case
-        is ZERO calls -- a bulk or resolver API requiring all 81 would reject
+        is ZERO calls -- a bulk or resolver API requiring all 85 would reject
         programs that run."}
 
  ;; --------------------------------------------------------------- boot
  :boot
- {:declared-natives 81
+ {:declared-natives 85
   :on-missing-native :fail
   :message-names-it true
   :why "SHARED ACROSS TARGETS, and the strongest number in the file: the natives a
         program declares are a property of the IMAGE, so every target compiling
-        this program must find the same 81. A target seeing 80 or 82 has a
+        this program must find the same 85. A target seeing 84 or 86 has a
         different image or a different clojure.core.
 
         Failing on a missing one is a deliberate change away from the null-tolerance
         in `runtime/src/image.rs` and `Img.java`: the VERSION says what has to be
         linked, so a gap is a version mismatch. A version-matched host carries all
-        81 and nothing changes; a deliberately trimmed runtime now fails to boot a
+        85 and nothing changes; a deliberately trimmed runtime now fails to boot a
         program it could have run, and that trade is chosen."}}
