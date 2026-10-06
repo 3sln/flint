@@ -71,7 +71,8 @@ material that predates that rewrite.
 [cli](#cli) ·
 [opaque-values](#opaque-values) ·
 [workspace-capabilities](#workspace-capabilities) ·
-[system-namespaces-and-deps](#system-namespaces-and-deps)
+[system-namespaces-and-deps](#system-namespaces-and-deps) ·
+[namespaces-over-the-system-port](#namespaces-over-the-system-port)
 
 *VI. Other runtimes*
 [other-hosts](#other-hosts) ·
@@ -2460,6 +2461,10 @@ tag — see `reader-tags`, immediately below, for why and what changed.
 
 **Ratified:** ☐ not signed off
 
+> **Superseded, pending (2026-10-06):** the namespace resolver "both front doors build" is to be replaced by
+> `DECISIONS.md#namespaces-over-the-system-port`, which is a design and not yet
+> built. Until it lands, this section still describes the tree.
+
 **Status (checked 2026-09-12 on BOTH front ends; holds): partly built.** An unknown reader tag in source is an error, as in
 canonical Clojure. Tags are bound per project in `deps.edn` under
 `:flint/tag-readers`, mapping a short tag name to a fully-qualified var, and
@@ -2964,6 +2969,10 @@ survive into that redesign essentially unchanged.
 *(formerly `structured-ports`)*
 
 **Ratified:** ☐ not signed off
+
+> **Superseded, pending (2026-10-06):** the resolver-based compiler API this section lists as unbuilt is to be replaced by
+> `DECISIONS.md#namespaces-over-the-system-port`, which is a design and not yet
+> built. Until it lands, this section still describes the tree.
 
 **Status: BUILT. The "NOT BUILT — a proposal" banner it carried was wrong,
 and was wrong for most of this record's life.** Confirmed 2026-09-11 against
@@ -3936,6 +3945,10 @@ by import.
 *(formerly `workspace-capabilities`)*
 
 **Ratified:** ☐ not signed off
+
+> **Superseded, pending (2026-10-06):** the namespace resolver both front doors produce, and its path-prefix workspaces is to be replaced by
+> `DECISIONS.md#namespaces-over-the-system-port`, which is a design and not yet
+> built. Until it lands, this section still describes the tree.
 
 **Status: partly built — and two items this line called "not built" have shipped. Verified 2026-09-12 at 639430e.**
 The namespace resolver, grants, workspace guards, var guards, the request
@@ -6632,6 +6645,10 @@ Found by reading all three, not by a failing test — no gate compares them.
 **`@3sln/flint-cli`: the CLI as an npm package, node hosting the wasm compiler**
 
 **Ratified:** ☐ not signed off
+
+> **Superseded, pending (2026-10-06):** reading a directory into a spec is to be replaced by
+> `DECISIONS.md#namespaces-over-the-system-port`, which is a design and not yet
+> built. Until it lands, this section still describes the tree.
 
 **Status: BUILT.** Recorded 2026-09-11. `sdks/cli/` is the package;
 `sdks/cli/selftest.mjs` is what checks it.
@@ -14495,6 +14512,10 @@ in `src/flint/analyzer.cljc`.
 
 **Ratified:** ☐ not signed off
 
+> **Superseded, pending (2026-10-06):** the spec plumbing here (`{:preread bytes}` in `:files`, `split`, the `preread` mode) is to be replaced by
+> `DECISIONS.md#namespaces-over-the-system-port`, which is a design and not yet
+> built. Until it lands, this section still describes the tree.
+
 **Status (2026-10-05, second version): built, native CLI only.** `cli/build.rs`
 loads `dist/flintc.bytecode` -- the compiler the binary embeds -- and calls its
 `preread` mode over every `lib/` file. Each file is read by
@@ -14782,3 +14803,497 @@ ones. The BASE arm is 4192d734 built in a detached worktree with the same
   so only the pairing means anything). C2 may hoist a `final` field's load out
   of a loop and must reload a plain one. The whole JVM-hosted compile did not
   show it (below), so it is recorded, not acted on.
+
+## namespaces-over-the-system-port
+
+**The compiler asks its host for each namespace on the system port, and gets it back already read**
+
+**Ratified:** ☐ not signed off
+
+**Status (2026-10-06): a design, not built.** Nothing in this section exists in
+the tree. It is written against `6d8ea376` and assumes the `flint-seal` work
+has landed first: the system thread gets the system port as `boot`'s argument,
+`flint.rt/system-port` is gone, the runtime answers the host's snapshot
+requests itself, and the compiler refuses a source resolved as namespace X that
+declares or defines into anything but X (`in-ns` and foreign defs unsupported).
+That branch was not merged when this was written, so wherever this design leans
+on it, it is leaning on a description and not on code.
+
+It supersedes, once built, the "namespace resolver" passages of
+`workspace-capabilities` and `reader-tags`, the spec plumbing of
+`stdlib-preread`, the spec-building half of `npm-cli`, and the never-shipped
+"resolver-based compiler API" that `structured-ports` lists as unbuilt. Each of
+those carries a pointer here; none was deleted.
+
+### What is decided (by the maintainer, and fixed)
+
+* **The resolver is an SDK hook on the host side**, not a function inside the
+  compiler.
+* **Namespace requests come over the system port.** The compiler, running as a
+  flint program in a sandbox, asks the host for namespace X when it first needs
+  it and parks; the host answers.
+* **The answer is PRE-READ BYTES** in `flint.forms`'s encoding, the format the
+  native CLI already embeds the standard library in. So **a reader exists on
+  the host side, outside the compiler sandbox.**
+* **Security belongs to whoever implements the resolver**, through its
+  contract: strict lookup priority (the standard library first, user code
+  second) or segregation (`flint.*` only from the standard library). The
+  default SDK and CLI resolvers do this.
+
+What follows is how. Where the design had a real choice, the options are
+priced and one is recommended; the questions that need the maintainer are
+listed at the end.
+
+### Why: what the current vertical does, checked
+
+Each of these was read in the tree at `6d8ea376` unless a line says otherwise.
+
+* **Every door builds a compile spec on its own.** `cli/src/main.rs`
+  `build_spec_impl` (389–652), `sdks/cli/src/spec.mjs` `buildSpec` (from line
+  89; its header calls itself "a transliteration of `build_spec_with`"),
+  `sdks/esm/src/flint.js` `compile` (156–211) with `collectSources` (220–311)
+  and `ednWorkspaces` (315–340), `sdks/rust/src/lib.rs` `compile` (165–215) with
+  `build_spec` (290–340), and `bin/flint`, which has its own `collect`,
+  `topo-order`, `refuse-guarded-requires!` and `core-first` (277–511),
+  duplicating `flint.project`. That is "one fact, four front doors" in its
+  plainest form. Each door's spec has to come out byte-identical, and the
+  only thing holding that is a selftest.
+* **The ESM and Rust SDKs walk requires with a pattern, not a reader.**
+  `flint.js:247` is `matchAll(/\[([a-zA-Z0-9._-]+)\s/g)` over the source text.
+  `lib.rs:194` splits on `[` and keeps a dotted word. Both find
+  `[clojure.string :as str]`. Both also find anything else in brackets that
+  contains a dot, and both miss a require inside a reader conditional that is
+  spelled differently. Then they ask the user's resolver EAGERLY, before the
+  compiler has seen anything.
+* **Answers are flattened into a `path -> text` map over the standard
+  library.** `flint.js:236` `Object.assign(all, files)` and the CLI's
+  `files.extend` (`main.rs:436`, "a project file at a standard-library path
+  REPLACES it") both let a user file silently replace a stdlib file.
+* **Grants follow path prefixes.** Both the CLI (`main.rs:519–522`) and the ESM
+  SDK (`flint.js:303–304`) put `{:prefix "flint/" :grants [:host :vars]}`
+  first in the workspace vector, and `flint.project/files-resolver` takes the
+  first match. A user's file whose PATH starts with `flint/` therefore gets the
+  standard library's grants.
+
+  *Measured 2026-10-06, by compiling the bypass.* I could not build the binary
+  for `6d8ea376` in this worktree because its `dist/` is not built. I used the
+  held binary
+  `target.hold-1791300410/release/flint`, built from `c0eb81cb`, whose
+  prefix ordering is the same code. A project with one file,
+  `src/flint/evil.cljc`:
+  `(ns flint.evil (:require [flint.host :as h])) (defn main [_] (h/ask "x"))`.
+  `flint run :path a/src :fn flint.evil/main` **compiled and ran**: it wedged
+  at run time on the unanswered request, which means it got past the guard.
+  The control differs only in the name, `src/app/evil.cljc` and `app.evil`.
+  It was refused: `compile error: flint.host/ask is guarded with #{:host} by
+  flint/flint; this program does not hold #{:host}`. Any project can therefore
+  hold `:host` and `:vars` by putting a file under `flint/`. The same shape
+  is how `test/snapstream-shadow/flint/system.cljc` ships its own control
+  plane (`cli/src/snapstream_test.rs`,
+  `a_program_cannot_ship_its_own_control_plane`, `#[ignore]` and failing,
+  which the `snapshots` record left as the maintainer's question).
+* **The compiler is one-shot:** spec in, image out. Resolution
+  (`flint.project/files-resolver`) runs inside the compiler, over a map the
+  host has to fill completely before the compile starts. It cannot fill the
+  map lazily because it does not know what the compiler will reach. So the
+  ESM SDK guesses with the pattern above, and the CLI sends everything.
+* **The compile request is EDN text read by the guest's reader.** `stdlib-preread`
+  measured "everything in the guest before resolution begins -- chiefly
+  reading the EDN spec envelope" at 0.23 G of 6.73 G instructions for `hello`.
+  The `split` mode (`selfhost.cljc:64–79`, `662–672`) exists only to keep the
+  file bodies out of that EDN.
+
+### 1. The wire protocol
+
+The protocol uses two mechanisms that already exist and adds no runtime verb.
+
+**The compile is an ordinary call** on a bound port
+(`DECISIONS.md#calls-are-ports`): `{:tx n :op :call :fn
+"flint.selfhost/compile" :args [request]}`, answered `{:tx n :op :return
+:value result}`. The request is a **wire value, not EDN text**:
+
+    {:id       <any value>      ; chosen by the host, echoed in every namespace
+                                ; request below; routes concurrent compiles
+     :entry    my.app/main
+     :roots    [ns ..]          ; optional: `flint test` starts from every ns on the path
+     :exports  [sym ..]
+     :features #{:flint ..}     ; the read features; the host reads user text with them
+     :target   :image | :wasm | :llvm | :clr | :jvm
+     :aot      bool   :shake bool   :meta {..}
+     :slots    {"name" n}       ; or :builtins #{..}
+     :base     #bytes           ; runtime module or jar, when the target splices
+     :class    "Name"}          ; :jvm only
+
+and the result is data:
+
+    {:artifact #bytes :natives [..] :stats {..}
+     :reached  [{:ns n :workspace w} ..]}    ; every namespace answered, in request order
+
+    {:errors [{:kind :missing  :ns n :required-by [m ..]}
+              {:kind :refused  :from n :to m :from-workspace .. :to-workspace .. :needs #{..}}
+              {:kind :read     :ns n :file f :line l :column c :message ..}
+              {:kind :resolver :ns n :message ..}       ; the host's hook threw
+              {:kind :compile  :ns n :file f :line l :column c :message ..}]}
+
+The `!missing` / `!refused` text protocol (`selfhost.cljc:714–760`) and every
+door's parser of it go away. Errors are reported all together, as `:missing`
+already is ("all of them at once", `compile-project`'s docstring).
+
+**A namespace request is `flint.host/request`** (`DECISIONS.md#workspace-capabilities`
+step 7), i.e. `flint.rt/request` on the system port, which every host already
+decodes as a `request` event with a token and answers by token (`guest.js`
+`answer`/`flint_continue`, `native.rs` `host_answer`). Its name is
+`"flint/namespaces"` and its argument is
+
+    {:id <the compile's :id>  :want [ns ..]}
+
+The answer is a vector parallel to `:want`. Each element is one of:
+
+    {:forms #bytes                   ; flint.forms bytes, :opts inside
+     :file "src/app/main.cljc"       ; for diagnostics only
+     :dialect :flint | :portable
+     :workspace app  :grants #{..}  :guard #{..}  :prelude [..]  :tags {..}}
+    {:virtual true :vars [..]? :workspace w :grants #{..} :guard #{..}}
+    nil                                                  ; not found
+    {:error {:message .. :file .. :line .. :column ..}}  ; unreadable, or the hook threw
+
+A host that refuses the request outright, by answering nothing, makes the
+compile fail with one `:resolver` error ("this host does not serve
+namespaces"). It does not hang.
+
+**Ordering: one outstanding request per compile, one WAVE per request.** The
+compiler asks for the roots first. Each answer's `ns` form and prelude name
+more namespaces, and the next request is every name not yet asked, sorted by
+printed name. The compiler never asks for a name twice in one compile. That
+makes the number of round trips the depth of the require graph rather than its
+size. It also gives an asynchronous host a batch it can fetch in parallel, and
+the sequence of requests is a function of the answers alone. One namespace per
+request was the alternative. It is simpler, but it costs a park-and-answer per
+namespace (12 for `hello`, `stdlib-preread`'s count), and an async host could
+not overlap fetches. Waves cost nothing extra at the hook: the SDK calls the
+user's hook once per element.
+
+**Several compiles may share one compiler sandbox**, one per bound port. That
+is why the request carries the compile's `:id`: tokens identify parked threads,
+not compiles, so the host needs `:id` to pick the right resolver.
+
+**What the compiler checks on arrival.** First, the `:opts` inside the forms
+bytes must equal `(read-options answer features)` (read eagerly with this
+compile's features) or `(preread-options answer)` (read deferred, as the
+embedded stdlib is). This is `flint.project/read-entry`'s existing check,
+minus its text fallback. It catches a host that read with the wrong tag map or
+features, for example a stale embedded stdlib. Second, the namespace the forms
+declare must be the one asked for: `flint-seal`'s rule, applied at the answer.
+
+The compiler workspace has to hold `:host` to call `flint.host/request`. `src/`
+has no `deps.edn` today, so the compiler is anonymous and holds nothing. Step 3
+adds `src/deps.edn` naming it `flint/compiler` with
+`:flint/capabilities-grant [:host]`.
+
+### 2. The host-side reader
+
+**What a reader still depends on.** At `6d8ea376`: the text, the file name
+(diagnostics), the dialect (from the extension, which the resolver knows), the
+feature set, and the workspace's tag map. It does not depend on compile state:
+syntax quote is context-free (`DECISIONS.md#context-free-reader`), `::kw` and
+`::alias/kw` resolve against the file's own `ns` form inside the reader, and
+conditionals can be kept as data (`DECISIONS.md#stdlib-preread`).
+
+**Tag readers do not run at read time anywhere.** `#x form` is rewritten to
+`(the-bound-var form)` with `:flint/read-form` metadata (`reader.cljc`
+`read-dispatch`, around line 741; `DECISIONS.md#reader-tags`). The bound var
+is expanded or called by the compiler, in the compiler sandbox, under the
+compiler's ordinary guards. So the host reader needs only the tag MAP, which is
+data on the answer. No user code runs on the host to read a file.
+
+**User text is read EAGERLY, with the compile's features.** A deferred read
+refuses a conditional inside syntax quote, `#()`, a tag argument and so on
+(`read-deferred`'s docstring). That is fine for `lib/`, where it was checked,
+and wrong for arbitrary user code. The host knows the features because it
+wrote the compile request. The stdlib stays read deferred, once, at build time.
+
+**The options, priced:**
+
+| | reader source | hosts covered | new artefact | skew risk | cost per compile |
+|---|---|---|---|---|---|
+| (a) kin-generated reader | a second reader, in `.kin` | Rust, Java, C#; **not** JS (kin emits no JS), not babashka | none | high: a second reader of the language, which is exactly what every "the guest owns the format" comment here refuses | native speed |
+| (b) dedicated reader image (`flint.selfhost/read` and below, built alone) | `src/flint/reader.cljc` | all six, each in the runtime it already has; wasm doors splice it into the embedded `flint-runtime.wasm` | `dist/flint-reader.bytecode`, a FOURTH copy to keep fresh in every door (AGENTS.md §3) | the forms format (`FLF1`) and opts must match the compiler's; a stale reader looks like a working one | one small instantiation |
+| (c) a second sandbox of the COMPILER image, called at `flint.selfhost/read` | the same | all six | none | none: reader and compiler are one artefact | one compiler instantiation; `stdlib-preread` put process start plus loading the compiler and the program at ~0.05 G of 6.7 G on native |
+| (d) the compiler sandbox reads on a second bound port while the compile is parked | the same | all six | none | none | none |
+
+(d) is the cheapest, and it is ruled out by the direction: the text would be
+parsed in the compiler's heap. (a) is ruled out by JS and by the second
+reader. **Recommended: (c) for the first build, with (b) as a measured
+follow-on.** The main trade-off is memory and start-up against skew. (c)
+instantiates a whole compiler image to read a few files, and that cost is
+unmeasured on the wasm doors, where it means a second instantiation of
+`flintc.wasm`: the module is already compiled, and the growable heap starts at
+8 MiB. In return (c) makes reader/compiler skew impossible by construction and
+adds no artefact to the three doors that already embed their own copies. (b)
+becomes worth it if (c)'s instantiation is measured as material against a
+trivial compile.
+
+`bin/flint` is the exception and needs neither. It runs the compiler's
+Clojure source in-process, so its resolver hands over **forms values**, not
+bytes. It must not encode them: `stdlib-preread` records that babashka's
+`merge` orders `:child-pos` differently from the guest's, so encoding under
+babashka produces different BYTES for equal values. The seam therefore
+accepts either `:forms` bytes, which go through the wire, or decoded forms,
+which only an in-process host can supply.
+
+**Reader errors** come back from `flint.selfhost/read` as `{:error {:message
+:file :line :column}}` (the reader's `ex-info` already carries all four). The
+host forwards that as the namespace's answer, and the compiler reports it as a
+`:read` error naming who required the namespace. One channel means every door
+renders a read error identically. That matters because `door-agreement`
+compares failures too.
+
+The build-time preread (`cli/build.rs` calling mode `preread`) becomes
+`flint.selfhost/read` with `:features :any` over each `lib/` file. Step 4 has
+`bin/build-dist` produce `dist/stdlib.forms` ONCE, keyed by namespace, so
+that every door embeds the same blob. The ESM SDK embeds `stdlib.json` text
+today.
+
+### 3. Sync or async
+
+A synchronous resolver can be answered inside the host's drive loop, where
+`guest.js` already calls a `requests` handler synchronously. An asynchronous
+one needs the drive loop to return with the compile thread parked, await the
+promise, then `flint_answer` and resume. That works because a parked
+sandbox's state outlives the drive.
+
+**Recommended: the ESM SDK's `compile` becomes asynchronous**
+(`Promise<Image>`) and accepts a hook returning a value or a promise. A
+`compileSync` refuses a hook that returns a thenable, saying so. That is
+`DECISIONS.md#drivers`' rule: "a synchronous API cannot be made asynchronous
+later without breaking every caller". A browser resolver that fetches over the
+network or reads IndexedDB is async, and that is the embedder this hook exists
+for. `evaluate` is already async. **It breaks `compile`'s current callers**,
+which is a question for the maintainer below. The Rust SDK, the C API and the
+JVM and CLR hosts keep synchronous callbacks, because their embedders can
+block. The npm CLI's filesystem resolver is synchronous and can use either.
+
+### 4. The resolver contract, and the defaults
+
+What an implementer must guarantee. It goes in each SDK's documentation and in
+`doc/api-review.md` for each surface it changes:
+
+1. **An answer is a function of the namespace name alone, within one
+   compile.** No "who is asking" is passed, deliberately. A name that
+   resolves differently depending on the requirer cannot be cached and is not
+   deterministic, and the compiler asks each name at most once anyway.
+2. **Grants, guard and workspace come from WHERE the answer was found**,
+   never from the name and never from a path prefix. The standard library's
+   answers carry `lib/deps.edn`'s workspace (`flint/flint`, `:host`, `:vars`).
+   A user's answer carries the workspace of the root or bundle that supplied
+   it. That is a grant conferred from outside, in AGENTS.md §5's sense,
+   because the embedder confers it.
+3. **The standard library is consulted first, and the reserved names never
+   fall through.** `clojure.*` and `flint.*` are answered from the embedded
+   stdlib, and the host's own virtual namespaces (`flint.sys.*`, `flint.deps.*`,
+   `flint.ception`) from its catalogue. A reserved name the stdlib does not
+   have is NOT FOUND. It never goes to the user's hook. Priority alone (stdlib
+   first) closes the shadowing probe. Rule 2 alone closes the `flint.evil`
+   probe, because the file would carry the user's workspace. **Segregation is
+   recommended anyway:** without it a user can claim a name a later stdlib
+   will define, and a program then means different things on two flint
+   versions.
+4. **Untrusted text is never handed to the compiler.** The host reads it
+   (§2). A hook may return text, which the SDK reads with the answer's tag map
+   and the compile's features, or forms bytes it read itself. The compiler
+   checks the bytes' `:opts` as described in §1.
+5. **Form metadata is never authority.** The compiler takes workspace and
+   grants only from the answer envelope, never from anything inside the forms.
+   A file can write any metadata it likes, and the bytes faithfully carry it.
+
+**Default resolvers.**
+
+* *CLI, native and npm:* the embedded stdlib forms keyed by namespace, then
+  the host catalogue's virtual namespaces and declared pods, then the source
+  roots in the order given, with `flint.project/source-extensions`' order
+  within a root. Each user answer carries the workspace read from that root's
+  `deps.edn`. Today's `read_workspace` scan stays, but it fills an answer
+  rather than a prefix entry. A file passed as a source (a script) has no
+  workspace (`DECISIONS.md#standalone-scripts`), as now.
+* *ESM SDK:* the bundled stdlib forms, then the user's hook
+  `(ns) => null | string | {source | forms, file, workspace, grants, guard,
+  tags, prelude, dialect} | {virtual: true, vars, workspace, ...}`. The
+  `files` convenience becomes a hook over a map keyed by namespace-derived
+  path. `workspaces` with `prefix` goes away; a workspace is a property of an
+  answer.
+* *Rust SDK and C API:* the same shape. `FlintResolver` returns a struct
+  instead of a `const char *` source (`sdks/c/include`, line 49).
+* *JVM and CLR `Compiler`:* `compile(request, resolver)` replaces the
+  `run(mode, specEdn, ..)` entry points.
+* *bin/flint:* a filesystem resolver function over its `:src` dirs, with
+  `project-of` as it is now, returning forms in-process. Its copies of
+  `collect`, `topo-order`, `refuse-guarded-requires!` and `core-first` are
+  deleted in favour of `flint.project`'s.
+
+**Probes the implementation must carry** (AGENTS.md §5), each with a control
+that differs in one thing:
+
+* a user file at `flint/evil.cljc` reaching `flint.host/ask`, against `app/evil.cljc`;
+* `test/snapstream-shadow`, with the ignored test un-ignored;
+* an ESM hook answering `clojure.core`;
+* an answer whose forms carry `^{:flint/capabilities-grant [:host]}`;
+* a hook answering X with a file declaring Y;
+* a hook that throws;
+* a hook that answers with a promise, on `compileSync`.
+
+### 5. What gets deleted
+
+All line numbers are at `6d8ea376`.
+
+| what | where |
+|---|---|
+| the spec's `:files` and its merge | `src/flint/selfhost.cljc` `pending-files` 64–69, `read-spec` 71–79 |
+| `split` mode | `selfhost.cljc` `main` 662–672; `cli/src/main.rs` `compile_split` 286–325, `SplitFiles`/`Body` 328–342 |
+| the EDN-spec compile entries | `selfhost.cljc` `compile-project` 278–305, `compile-project-spec` 307–323, `main*`'s mode table and `!missing`/`!refused` rendering 674–760, the already-resolved-spec branch of `build-image` 177–193 |
+| preread mode | `selfhost.cljc` `preread` 640–660, replaced by `flint.selfhost/read` |
+| path-prefix workspaces | `src/flint/project.cljc` `file-answer` 238–259, `files-resolver` 261–308; `read-entry`'s text fallback 145–152 |
+| per-door spec assembly | `cli/src/main.rs` `build_spec_with`/`_split`/`_impl` 355–652, `workspace_entry` 268–279, `sdk_compile` 686–746, `stdlib_text` 347–353; `sdks/cli/src/spec.mjs` `buildSpec` (from 89), `workspaceEntry` 58–63; `sdks/esm/src/flint.js` spec text 162–182, `collectSources` 220–311, `ednWorkspaces` 315–340; `sdks/rust/src/lib.rs` 179–215 and `build_spec` 290–340; `host/flint-file.mjs`, which runs a spec file |
+| the require regexes | `flint.js:247`, `lib.rs:194–201` |
+| path-prefix grants | `main.rs:519–522`, `flint.js:302–305` |
+| measurement hooks for the split | `FLINT_CHECK_SPLIT` (`main.rs:1188–1200`), `FLINT_PREREAD=0` (`main.rs:406`), `FLINT_SPEC_OUT` |
+| bin/flint's duplicate resolution | `bin/flint` `collect` 277–342, `topo-order` 388–424, `refuse-guarded-requires!` 425–459, `core-first` 460–511 |
+
+What survives, moved: `read_sources`/`readSources`, which become the default
+filesystem resolvers; `read_workspace`; `flint.project/collect`, `topo-order`,
+`refused-requires` and `core-first`, which are unchanged apart from where
+`resolve-ns` comes from; `read-options` and `preread-options`, which are now
+only the check on arrival; and `bin/flint --emit-spec`. That flag becomes a
+recording of the request and of every namespace answer, replayable by any
+door. That replay is a strictly better artefact for the cross-door
+comparisons that motivated `FLINT_SPEC_OUT`.
+
+### 6. Determinism and door agreement
+
+The image is a function of the compile request and the ANSWER SET. The order
+in which answers arrive does not enter it. `collect` builds a map,
+`topo-order` sorts each wave by printed name
+(`DECISIONS.md#compiles-are-byte-reproducible`), and the waves of requests
+are themselves sorted. Doors agree when three things hold:
+
+* **They build the same request.** It is now a small map built from CLI
+  arguments. The "one fact, four doors" surface shrinks from a 260-line EDN
+  writer to the mapping from arguments to request. `door-agreement` should
+  compare the REQUEST as well as the artefact, so that a disagreement says
+  which half it is in.
+* **They answer with the same stdlib bytes.** One `dist/stdlib.forms` from
+  `bin/build-dist`, embedded by every door. Today `cli/build.rs` produces the
+  native door's copy and the ESM door embeds text.
+* **They read user text with the same reader.** That is guaranteed by (c),
+  and bin/flint hands over values (§2).
+
+`:reached` in the result lists the answers in request order, so a test can
+assert the request sequence is identical across doors. It is cheap evidence
+that the walk is deterministic, and not only the bytes.
+
+### 7. The planned compiler-snapshot cache
+
+Today the reached stdlib set is computed inside the compiler and is
+invisible. Under this design it is the sequence of `flint/namespaces`
+requests, which the host sees, and `:reached` returns it. A cache key is then
+`(compiler build, features, slots table, stdlib blob hash, reached stdlib set,
+stdlib workspace grants)`. Every input is the host's own.
+
+**Recommended shape:** priming happens BETWEEN CALLS, not mid-compile. A
+`flint.selfhost/prime` call analyses a given stdlib set under given features
+and keeps the analysed namespaces in the sandbox's state. The host snapshots
+the sandbox after it returns, which needs nothing beyond `flint-seal`'s host
+snapshot. A later compile on a restored sandbox reuses the analysed entries
+whose key matches. Snapshotting mid-compile, while parked on a request, is
+possible: the restored copy would resume inside the old compile. But it would
+need the answer to carry the next compile's identity. That is a protocol
+inside the protocol and buys nothing over priming.
+
+**The open part is ANALYSIS ORDER.** `topo-order` interleaves a user
+namespace that requires nothing with `clojure.string` in the same wave, by
+name. The primed stdlib analysis is only a valid prefix if every stdlib
+namespace is analysed before every user namespace. Changing the rule to
+"stdlib workspace first, each part topologically" is a one-time change to
+every image's bytes, all doors together, so agreement survives. But it is a
+decision about the image and not about resolution, so it is listed below.
+
+### 8. Migration
+
+Each step leaves the tree green under `bin/check`, plus the suites named. The
+sizes are estimates from reading the code, not measurements.
+
+1. **`flint.selfhost/read`** (text and opts in; forms bytes or a positioned
+   error out). `cli/build.rs` switches from mode `preread` to it. *Gate:* the
+   embedded blob is byte-identical before and after (`cmp` of
+   `OUT_DIR/stdlib.forms`), and `bb test/reader_test.clj`. Guest code only. Small: about
+   80 lines.
+2. **`flint.selfhost/compile`**, taking the request map and answering data
+   (§1). The old `main` modes become thin wrappers that build the same map,
+   so no door changes. *Gate:* `bb test/door-agreement.clj`,
+   `bb test/selfhost-targets.clj`, and corpus images byte-identical against
+   the parent commit. Medium: about 200 lines, mostly moving code.
+3. **Namespaces over the system port, native CLI first.** `resolve-ns`
+   becomes a `flint/namespaces` request when the request says `:resolve
+   :host`. Add `src/deps.edn` granting the compiler `:host`. The CLI gets its
+   default resolver (§4) and drives the compiler through `serve::Host`, whose
+   request handling `Program::call` lacks. A second compiler sandbox serves as
+   the reader. The old split path stays behind an environment flag for one
+   A/B. *Gate:* `:to` each of `llvm`, `wasm`, `clr` and `jvm`, plain and
+   `:optimize [perf]`, every `corpus/*.cljc`, byte-identical between the two
+   paths. The §4 probes as tests. `a_program_cannot_ship_its_own_control_plane`
+   un-ignored and passing. Medium-large: about 400 Rust and 100 guest lines.
+4. **npm CLI and ESM SDK.** `dist/stdlib.forms` from `bin/build-dist`, async
+   `compile` plus `compileSync`, and the default and hook resolvers. Delete
+   `collectSources`, the regex and the prefix grants. *Gate:*
+   `node sdks/cli/selftest.mjs` byte-identity rows,
+   `FLINT_DIST_FRESH=1 sdks/cli/build` first, and `bb test/door-agreement.clj`.
+   Medium-large: about 300 JS lines.
+5. **Rust SDK, C API, JVM and CLR `Compiler`.** These carry the new resolver
+   signatures, and the C ABI changes. Update `doc/api-review.md` for each
+   surface (AGENTS.md §9). *Gate:* `sdks/c/selftest`, the Rust SDK tests,
+   `bin/conform-hosts`. Medium: about 300 lines across four languages.
+6. **bin/flint** drops its duplicate walk and uses `flint.project` with a
+   filesystem resolver function. *Gate:* `bb test/door-agreement.clj`.
+   Medium: mostly deletion.
+7. **Delete** everything in §5 that is still standing, and correct the
+   statuses of the sections this one supersedes. *Gate:* `bin/test` in full.
+   Mostly deletion.
+8. **The snapshot cache**, as its own decision once §7's ordering question is
+   answered.
+
+**Kin or per-runtime.** Nothing here is kin. The compiler side is guest code
+(`src/`), which is already one copy for every runtime. The host side is
+request plumbing that every host already has, plus a default resolver whose
+policy (name to path, extension order, reserved prefixes, `deps.edn` facts)
+must exist in Rust, JS and Clojure. Kin emits no JS, so kin would cover one
+of the three. Instead, a shared fixture tree (resolver inputs and the answers
+expected for them) that every door's default resolver must reproduce makes
+drift fail in a test rather than relying on care.
+
+**Risks.**
+
+* Step 3's "one more sandbox" may cost more on the wasm doors than on native.
+  It has not been measured.
+* An async ESM `compile` breaks callers.
+* The answer-set determinism argument assumes no code path reads `collect`'s
+  arrival order. `resolve-project`'s `_ order` binding suggests nothing does,
+  and the A/B in step 3 is what checks it.
+* `flint-seal` changes the control plane underneath steps 3 to 5, so they
+  should not start until it is merged.
+
+### Open, for the maintainer
+
+1. **May a program replace a stdlib namespace at all?** Recommended: no
+   (segregation, §4 rule 3), which makes the `snapshots` record's ignored test
+   pass. If yes, it has to be an explicit opt-in, and the replacement carries
+   the user's workspace and not the stdlib's grants. Under that rule
+   `test/snapstream-shadow` no longer compiles, because its `flint.system`
+   lacks `:vars`.
+2. **ESM `compile` becomes async**, with `compileSync` beside it. Is the
+   break acceptable now?
+3. **The host reader: (c), a second compiler sandbox**, recommended, or (b),
+   a dedicated reader image with its own copy per door?
+4. **Analysis order "stdlib first"** (§7). It is needed for the snapshot
+   cache and changes every image once.
+5. **Waves** (recommended) **or one namespace per request.**
+6. **`src/deps.edn` granting the compiler `:host`.** The compiler would hold
+   a capability for the first time.
