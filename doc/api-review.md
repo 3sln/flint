@@ -43,7 +43,6 @@ What the counts say, as a starting point rather than an answer:
 | `flint.bytes` | 5 programs, and `flint.protocols.io` | public, never manifested |
 | `flint.table` | 2 programs, has its own decision | public, never manifested |
 | `flint.host` | 0 programs, 2 README mentions | ~~genuinely unclear~~ — **capability-guarded**, see below |
-| `flint.snapshot` | nothing requires it at all | ~~genuinely unclear~~ — **not public, by design**, see below |
 | the rest | required only by tooling or by each other | internal |
 
 **`flint.fs` is gone.** It read "nothing requires it; `flint.sys.fs` is what
@@ -109,6 +108,15 @@ calls "genuinely unclear"**:
   `production` — and reads exactly like breakage. What settled it was grepping
   for what PROVIDES the builtin rather than what calls it. Its UNMANIFESTED
   marker is correct and should stay.
+
+  **2026-10-06: the namespace itself is now gone.** "Not public, by design"
+  was settled; "worth keeping as dead weight" was not asked until this
+  namespace's own ONLY callers were its three vars' doc comments and
+  `test/snapshot.clj`. It is shelved, not merely unmanifested
+  (`DECISIONS.md#flint-snapshot-is-shelved`) — the three builtins, the unit
+  that provides them, and the Rust capture/restore underneath are untouched,
+  because the control plane's host-requested live-set export
+  (`DECISIONS.md#snapshots`) still calls into the same `runtime/src/snap.rs`.
 * **`flint.host` is capability-guarded**, not unclear: `flint.host/ask` is
   guarded with `#{:host}` and the manifest probe grants nothing. Manifesting it
   would need the probe to hold `:host`, which is a decision about the probe.
@@ -334,15 +342,17 @@ uses -- is untouched.
 
 **Change requests:** _none recorded_
 
-## flint.snapshot
+## Removed 2026-10-06: `flint.snapshot`
 
-**Reviewed:** ☐ not signed off
-
-3 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Capture the whole VM state, and put it back (`DECISIONS.md#snapshots`).
-
-**Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. Nothing requires it and no program names it, but capturing VM state is the kind of thing a host wants. Unclear which side of the line it is on.
-
-**Change requests:** _none recorded_
+Not a surface any more, so no box. Shelved rather than fixed
+(`DECISIONS.md#flint-snapshot-is-shelved`): it had no caller but
+`test/snapshot.clj`, which tested the namespace itself, and its three vars
+were already unreachable outside a DIAGNOSTICS build. The builtins it
+wrapped (`flint.rt/snapshot`, `-size`, `-restore`), the `units-src/flint-snap`
+unit that provides them, and the Rust capture/restore in `runtime/src/snap.rs`
+are untouched -- the host-requested live-set export the control plane uses
+for shelving a sandbox (`DECISIONS.md#snapshots`) calls into the same file
+and is unaffected.
 
 ## Removed 2026-10-06: `flint.system`, and what replaced it
 

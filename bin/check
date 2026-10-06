@@ -7,7 +7,7 @@
 #
 #   bin/check            ~27 s     every change
 #   bin/test             ~36 min   before pushing, and on a PR
-#   bin/test-diagnostics ~10 min   the five suites inside `bin/test` that need
+#   bin/test-diagnostics ~10 min   the four suites inside `bin/test` that need
 #                                  a DIAGNOSTICS units build, with the
 #                                  production build put back afterwards
 #   bin/release-gate     ~25 min   before a versioned release

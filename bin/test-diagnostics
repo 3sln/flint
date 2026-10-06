@@ -1,20 +1,24 @@
 #!/bin/sh
-# THE FIVE SUITES THAT NEED A DIAGNOSTICS BUILD OF THE UNITS, run correctly.
+# THE FOUR SUITES THAT NEED A DIAGNOSTICS BUILD OF THE UNITS, run correctly.
 #
 # `bin/test` builds them at its "units: the DIAGNOSTICS build" section and puts
 # the production build back at its last one. Anything run BETWEEN those two
 # points cannot be run on its own without repeating both halves -- and the
 # failures you get if you forget do not say "wrong build", they say:
 #
-#   no such builtin: flint.rt/snapshot
 #   TypeError: i.exports.stat_bytes_allocated is not a function
 #   TypeError: inst.exports.set_gc_verify_remset is not a function
 #   TypeError: inst.exports.stat_heap_used is not a function
 #
-# Four of the five read as ordinary reds. Only `test/document.clj` names the
-# cause, and it names it because someone hit this before. Five suites reported
-# RED against a tree where all five passed -- which is the expensive direction
-# for a check to be wrong in.
+# Two of the three read as ordinary reds. Only `test/document.clj` names the
+# cause, and it names it because someone hit this before. Suites have
+# reported RED against a tree where they passed -- which is the expensive
+# direction for a check to be wrong in.
+#
+# A fifth suite used to belong here: `test/snapshot.clj`, whose own version of
+# this failure was `no such builtin: flint.rt/snapshot` against a production
+# build. It is gone with `flint.snapshot`, the namespace it tested
+# (`DECISIONS.md#flint-snapshot-is-shelved`).
 #
 # WHY THIS EXISTS AS A SCRIPT rather than a note. `bin/test` is ~35 minutes and
 # does not always get to finish; verifying HEAD then means running pieces of
@@ -34,7 +38,7 @@
 set -e
 cd "$(dirname "$0")/.."
 
-SUITES="gc_stress limits snapshot tables document"
+SUITES="gc_stress limits tables document"
 status=0
 
 echo "== building the diagnostics units"

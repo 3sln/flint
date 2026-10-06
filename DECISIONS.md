@@ -1247,6 +1247,12 @@ equality rather than a hope.
 > work that did not happen, written in a voice that reads as though it had.
 > The idea may still be worth building; it is tracked in `ROADMAP.md` as an
 > unbuilt item rather than recorded here as a settled one.
+>
+> **2026-10-06: `lib/flint/snapshot.cljc` is also gone**, and with it
+> `flint.snapshot/snapshot!` (`DECISIONS.md#flint-snapshot-is-shelved`). "The
+> real API is `flint.snapshot/snapshot!`" above was true when written and is
+> not any more; the three builtins it wrapped are still there, nameless to
+> any wrapper now.
 
 **And it is not only for debugging.** Snapshot-restore doubles as the fix for
 flint's per-invocation cold-start cost: snapshot after top-level
@@ -16279,6 +16285,14 @@ rather than decide:
 it internal would need `flint.cli` to be considered inside the same boundary,
 which is a judgment call rather than a count.
 
+**2026-10-06: two of the above are resolved, not merely listed.** `flint.fs`
+and `flint.snapshot` are deleted rather than marked -- `^:internal` would have
+been the wrong tool for "nothing left to require it" (`flint-fs-is-gone`
+below) and redundant with an already-absent builtin
+(`flint-snapshot-is-shelved` below). `flint.virtual`, `flint.deps.manifest`/
+`flint.deps.registry`/`flint.deps.resolve` and `flint.cli` are still exactly
+where this list left them.
+
 ## flint-fs-is-gone
 
 **The `flint.fs` namespace is deleted.**
@@ -16318,3 +16332,54 @@ after the edit (same 406-line suite, same final `cli: ok`).
 requires -- is a different namespace entirely (`DECISIONS.md#system-namespaces-and-deps`)
 and is untouched by this. Nothing else in `lib/`, `src/`, `sdks/`, `cli/`,
 `doc/manifest.edn`, `bin/manifest` or `README.md` named `flint.fs`.
+
+## flint-snapshot-is-shelved
+
+**`lib/flint/snapshot.cljc` is deleted; the mechanism underneath it is not.**
+
+**Ratified:** ☐ not signed off
+
+**Status: shipped — verified 2026-10-06 by `python3 bin/check_api_review.py`
+passing with the namespace's section removed, and `./bin/check-decisions`
+passing with this citation added.**
+
+This was already the closest thing to a settled answer on the "genuinely
+unclear" row of `doc/api-review.md`'s own table: `flint.snapshot` is a
+DIAGNOSTICS-build-only wrapper around three builtins
+(`flint.rt/snapshot`, `-size`, `-restore`) that a release CLI cannot even
+compile a reference to -- `(:require [flint.snapshot])` fails closed with
+"no such builtin" by construction (`DECISIONS.md#two-builds`). What was not
+yet settled was whether to keep the wrapper around that absence. Its only
+caller in the whole tree was `test/snapshot.clj`, a suite that exists to test
+the wrapper itself; nothing in `lib/`, `src/`, `sdks/`, `cli/`, or any other
+test required it.
+
+**What is removed:** `lib/flint/snapshot.cljc`, `test/snapshot.clj`, its
+section in `bin/test`, and its entry in `bin/test-diagnostics`'s `SUITES`
+(now four suites, not five).
+
+**What is NOT removed, and why it is not dead.** `AGENTS.md`'s instruction for
+this change was explicit: leave `runtime/src/snap.rs`'s diagnostics-only
+memcpy capture/restore alone unless it becomes entirely dead, and report
+rather than delete if it does. It has not: `runtime/src/native.rs`,
+`runtime/src/rt.rs` and `runtime/src/kgen/rt/control.rs` all call into
+`snap.rs` independently of the three builtins `flint.snapshot.cljc` wrapped --
+`kgen/rt/control.rs` is the CONTROL PLANE's host-requested, streamed live-set
+export (`DECISIONS.md#snapshots`, "Host-requested, streamed"), which every
+build ships and which guest code cannot trigger. That mechanism is a
+different FORMAT (the live set, version 2) serving a different caller (the
+host, over the system port) than the verbatim memcpy capture `flint.snapshot`
+exposed to a guest program directly, and it is explicitly out of scope here
+("Shelving/live-set snapshots are untouched"). `units-src/flint-snap` (the
+unit providing the three builtins) and `host/snapshot.mjs`/`bin/check-snapshot-layout`
+(the diagnostic heap inspector and its layout check) are also left in place:
+none of them name `flint.snapshot`, and the builtins remain reachable by a
+guest naming `flint.rt/snapshot` directly -- there was never a compiler rule
+requiring the wrapper to reach a builtin, only convenience.
+
+**One residual, reported rather than fixed.** `test/snapshot.mjs` had exactly
+one caller, `test/snapshot.clj`, which is now gone; it is an orphan with
+nothing left to invoke it. It was left alone rather than deleted because it
+does not name `flint.snapshot` and was not explicitly in scope, but it is
+worth the maintainer's attention: either it gets a new caller, or it is the
+next thing to remove.

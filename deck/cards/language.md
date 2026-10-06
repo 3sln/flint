@@ -189,15 +189,11 @@ each with its own docstring explaining what it's for:
 - **`flint.regex` / `flint.nfa` / `flint.pike`** — the shared regex engine (an
   NFA compiler and a Pike VM), so matching behaves identically on every
   runtime rather than delegating to each host's own regex dialect.
-- **`flint.snapshot`** — whole-VM-state capture and restore, as bytes.
 - **`flint.check`** — the `expect`/`^:flint.check/test` machinery behind
   `flint test` (see [The CLI](cli.md)); stripped entirely by
   `:optimize [perf]`, so it costs nothing in a production build.
 - **`flint.doc`** — document resources, structured eagerly with content
   fetched on demand.
-- **`flint.fs`** — the language-level filesystem namespace (distinct from the
-  CLI-served `flint.sys.fs` — see [Capabilities and the
-  sandbox](capabilities-and-the-sandbox.md)).
 
 ## Where flint differs from Clojure
 

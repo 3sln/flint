@@ -59,10 +59,12 @@ BUILT_ENTRY = re.compile(r'"(flint/[a-z0-9?!*+/<>=-]+)"')
 HOST_PROVIDED = {'flint/json-parse', 'flint/xml-parse', 'flint/html-parse'}
 
 # NOT PART OF THE SHIPPED SURFACE AT ALL. The snapshot unit is a DIAGNOSTICS
-# build only (`DECISIONS.md#two-builds`): a release CLI does not link it and
-# `(:require [flint.snapshot])` fails closed at compile time with "no such
-# builtin: flint.rt/snapshot". A port carrying it would widen the production
-# surface, not close a gap -- absent is the guarantee.
+# build only (`DECISIONS.md#two-builds`): a release CLI does not link it, so
+# naming `flint.rt/snapshot` directly -- there is no `flint.snapshot`
+# convenience wrapper any more, `DECISIONS.md#flint-snapshot-is-shelved` --
+# fails closed at compile time with "no such builtin: flint.rt/snapshot". A
+# port carrying it would widen the production surface, not close a gap --
+# absent is the guarantee.
 #
 # The ports do have the machinery (`Snap.cs`, capture and restore); what they
 # do not have is a way for a GUEST to name it, which is the point.
