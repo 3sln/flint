@@ -4,9 +4,15 @@ struct Value(u64);
 const NIL: Value = Value(0xFFFF);
 struct Rt { cps: Vec<Vec<u32>>, sinks: Vec<Vec<u32>>, subject: Vec<u32>,
             up: Vec<i32>, lo: Vec<i32>, steps: u64 }
-// SIZE FIXED BY THE REAL TABLE: `case-full-n` inlines as a literal, so the
-// generated code carries the real length and a shorter array would be indexed
-// past.
+// 515 IS A LOCAL FIXTURE CHOICE, NOT THE REAL TABLE'S SIZE -- unlike
+// `kin/casemap.drivers`'s stub, which must track `case-full-n`'s inlined
+// literal because `case-map`/`full-index` there run the REAL binary search.
+// This file's `full_index` below is a two-case lookup table (223 -> row 0,
+// 912 -> row 3, everything else a miss) that never reads `CASE_FULL_UPPER_LEN`
+// or any inlined count at all; `change-case` only ever indexes `CASE_FULL`
+// at the specific rows `full_index` just named. 515 only has to be bigger
+// than the highest index actually touched (19), which it is by a wide
+// margin -- it does not need to grow when the real table does.
 // TWO REAL ROWS, the rest zeros. Stride 5, `[cp, count, out0, out1, out2]`,
 // copied from `casetable.kin`'s own `:data`: row 0 is sharp s -> "SS" (count 2)
 // and row 3 is U+0390 -> 921 776 769 (count 3). Both counts are here on

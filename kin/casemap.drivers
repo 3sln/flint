@@ -1,11 +1,30 @@
 --rust-head
 struct Rt;
 // the tables the generated code indexes. THE SIZE IS NOT FREE TO CHOOSE:
-// `case-ranges-n` is a count accessor and inlines as a LITERAL, so the
-// generated search carries the real table's length and a probe that supplied
-// a shorter array would index past it.
-static CASE_RANGES: [i32; 1528] = [0; 1528];
-static CASE_FULL: [i32; 515] = [0; 515];
+// `case-ranges-n`/`case-full-n` are count accessors and inline as LITERALS
+// -- the real table's CURRENT row count, read from `kin/casetable.kin` at
+// kin-generation time, not from anything this fixture declares -- so the
+// generated search carries whatever that table says today, and a probe
+// whose array is shorter indexes past it.
+//
+// THIS USED TO BE AN EXACT COPY of casetable's row count (1528 = 382 * 4,
+// 515 = 103 * 5) -- a SECOND place that number lived, with nothing making
+// the two agree. Pinning the Unicode version (`bin/casetable`'s own header)
+// stopped the table moving on every host's JDK, but the table still grows
+// when the PINNED version is deliberately bumped, so a copied exact size
+// is still the wrong shape of fix. `kin/AGENTS.md` SS1: if two lists must
+// exist, make one read the other -- here, instead, make the one list no
+// longer need to be exact. 8192/2560 is headroom (5x the 1632/520 ints the
+// real table needs at Unicode 18.0.0), not a tracked count: Unicode's entire
+// cased-character budget would have to grow five-fold before this needs
+// revisiting, which is a person's decision to make THEN, not a number to
+// maintain NOW. CASE_UPPER_LEN/CASE_FULL_UPPER_LEN stay small, fixed,
+// LOCAL fixture constants -- unlike the array sizes, kin does not inline
+// `defconst`s, so these never see the real table's value at all, and the
+// `--expect` answers below depend on exactly these two, not on the array
+// capacity.
+static CASE_RANGES: [i32; 8192] = [0; 8192];
+static CASE_FULL: [i32; 2560] = [0; 2560];
 const CASE_UPPER_LEN: u32 = 200;
 const CASE_FULL_UPPER_LEN: u32 = 102;
 impl Rt {
@@ -29,8 +48,10 @@ fn main() {
 }
 --java-head
     static final class Rt {}
-    static final int[] CASE_RANGES = new int[1528];
-    static final int[] CASE_FULL = new int[515];
+    // Sized the same way, and for the same reason, as the rust-head above:
+    // headroom over the real table's current need, not a copy of its count.
+    static final int[] CASE_RANGES = new int[8192];
+    static final int[] CASE_FULL = new int[2560];
     static final int CASE_UPPER_LEN = 200, CASE_FULL_UPPER_LEN = 102;
 --java
     public static void main(String[] args) {
@@ -44,8 +65,10 @@ fn main() {
     }
 --csharp-head
     internal sealed class Rt {}
-    static readonly int[] CaseRanges = new int[1528];
-    static readonly int[] CaseFull = new int[515];
+    // Sized the same way, and for the same reason, as the rust-head above:
+    // headroom over the real table's current need, not a copy of its count.
+    static readonly int[] CaseRanges = new int[8192];
+    static readonly int[] CaseFull = new int[2560];
     const int CaseUpperLen = 200, CaseFullUpperLen = 102;
 --csharp
     static void Main() {
@@ -67,12 +90,18 @@ mapping is right -- the real table is checked against Clojure by the language
 suite. So every number below comes from running the two searches on paper
 against zeros, and NONE of them is a Unicode fact.
 
-THE LENGTHS ARE REAL even though the contents are not, and they have to be:
-`case-ranges-n` and `case-full-n` are count accessors that inline as literals,
-so the generated search carries the shipped table's row counts.
+THE ROW COUNTS ARE REAL even though the contents are not, and they have to
+be: `case-ranges-n` and `case-full-n` are count accessors that inline as
+literals, so the generated search carries the SHIPPED table's row counts --
+currently 408 and 104 (Unicode 18.0.0; `bin/casetable`'s own header) -- no
+matter what this fixture's own array capacity is. `CASE_UPPER_LEN` and
+`CASE_FULL_UPPER_LEN`, below and in the search math that follows, are NOT
+that: they are this fixture's own local constants (200, 102), fixed on
+purpose, and everything after this paragraph is about THOSE two, not about
+the row counts above.
 
-  case-ranges: 1528 ints at stride 4 = 382 rows; CASE_UPPER_LEN = 200
-  case-full:    515 ints at stride 5 = 103 rows; CASE_FULL_UPPER_LEN = 102
+  case-ranges-n inlines 408 (real row count); CASE_UPPER_LEN = 200 (fixture)
+  case-full-n inlines 104 (real row count); CASE_FULL_UPPER_LEN = 102 (fixture)
 
 `case-map` OVER ZEROS -- every code point maps to ITSELF, for two different
 reasons, and the split is at zero.
@@ -100,9 +129,15 @@ zeros are what make them identities here.
     up:   base2 = 0, lo = 0, hi = CASE_FULL_UPPER_LEN - 1 = 101.
           mid = lo + (hi - lo)/2 = 0 + 101/2 = 50. Row 50's first field is 0,
           equal to c, so it returns base2 + mid = 50 on the FIRST probe.
-    down: base2 = CASE_FULL_UPPER_LEN = 102, and hi = (103 - 102) - 1 = 0 --
-          a section of exactly ONE row, which is right: the source's doc says
-          "102 of them upward and exactly one downward". mid = 0, hit,
+    down: base2 = CASE_FULL_UPPER_LEN = 102 (fixture), hi = (104 - 102) - 1 = 1,
+          where 104 is `case-full-n`'s REAL inlined count -- a section of TWO
+          rows in THIS fixture's search, not the real table's actual one-row
+          lowercase section (`casemap.kin`'s own doc now says "103 of them
+          upward... exactly one downward", about the real 104-row table; this
+          fixture's CASE_FULL_UPPER_LEN is a fixed local constant and is not
+          meant to track that any more, which is the whole point of pinning
+          the array capacity separately from it). mid = 0 + (1 - 0)/2 = 0 --
+          still the FIRST probed index regardless of hi being 0 or 1 -- hit,
           returns 102 + 0 = 102.
   `50` therefore pins the midpoint formula: `lo + (hi - lo)/2` on [0,101] with
   integer division truncating toward zero. `102` pins the other thing the doc

@@ -15,7 +15,7 @@
 ;;
 ;; STRIDE is why the table is small. Latin Extended alternates case in pairs,
 ;; so a run of "every other code point maps by -1" would otherwise be one range
-;; per code point: 1352 ranges and 16 KB, against 382 ranges and about 4.6 KB.
+;; per code point: 1352 ranges and 16 KB, against 408 ranges and about 4.6 KB.
 ;; No compressor, and so no decompressor.
 (ns flint.rt.casemap
   (:require [flint.impl.rt :refer [defn return if let do local set forever break
@@ -82,7 +82,7 @@
 
 (doc "The index of `cp`'s FULL mapping, or -1."
      ""
-     "One code point to as many as three, which a delta cannot say. 102 of"
+     "One code point to as many as three, which a delta cannot say. 103 of"
      "them upward -- sharp s to SS is the one everybody meets -- and exactly"
      "one downward. Clojure gives the full mapping because Java's"
      "`String.toUpperCase` does, so without this `(upper-case \"stra\u00dfe\")`"

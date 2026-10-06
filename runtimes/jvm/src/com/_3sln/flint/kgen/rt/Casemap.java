@@ -35,7 +35,7 @@ public final class Casemap {
         n = upperN;
         if (!up) {
             base = upperN;
-            n = 382 - upperN;
+            n = 408 - upperN;
         }
         // BINARY SEARCH over runs sorted by start. `lo` and `hi` bracket
         // the candidate; the run that can contain `c` is the last one
@@ -74,7 +74,7 @@ public final class Casemap {
     }
     /// The index of `cp`'s FULL mapping, or -1.
     /// 
-    /// One code point to as many as three, which a delta cannot say. 102 of
+    /// One code point to as many as three, which a delta cannot say. 103 of
     /// them upward -- sharp s to SS is the one everybody meets -- and exactly
     /// one downward. Clojure gives the full mapping because Java's
     /// `String.toUpperCase` does, so without this `(upper-case "straße")`
@@ -89,7 +89,7 @@ public final class Casemap {
         hi = CASE_FULL_UPPER_LEN - 1;
         if (!up) {
             base2 = CASE_FULL_UPPER_LEN;
-            hi = (103 - CASE_FULL_UPPER_LEN) - 1;
+            hi = (104 - CASE_FULL_UPPER_LEN) - 1;
         }
         for (;;) {
             if (lo > hi) {

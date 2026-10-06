@@ -41,7 +41,7 @@ impl Rt {
         n = upper_n;
         if !up {
             base = upper_n;
-            n = (382 as i32) - upper_n;
+            n = (408 as i32) - upper_n;
         }
         // BINARY SEARCH over runs sorted by start. `lo` and `hi` bracket
         // the candidate; the run that can contain `c` is the last one
@@ -80,7 +80,7 @@ impl Rt {
     }
     /// The index of `cp`'s FULL mapping, or -1.
     /// 
-    /// One code point to as many as three, which a delta cannot say. 102 of
+    /// One code point to as many as three, which a delta cannot say. 103 of
     /// them upward -- sharp s to SS is the one everybody meets -- and exactly
     /// one downward. Clojure gives the full mapping because Java's
     /// `String.toUpperCase` does, so without this `(upper-case "straße")`
@@ -95,7 +95,7 @@ impl Rt {
         hi = (CASE_FULL_UPPER_LEN as i32) - 1;
         if !up {
             base2 = CASE_FULL_UPPER_LEN as i32;
-            hi = ((103 as i32) - (CASE_FULL_UPPER_LEN as i32)) - 1;
+            hi = ((104 as i32) - (CASE_FULL_UPPER_LEN as i32)) - 1;
         }
         loop {
             if lo > hi {
