@@ -26,11 +26,22 @@
     (println "  ok  " label)
     (do (swap! fails inc) (println "  FAIL" label detail))))
 
+;; THE CALL LOOP NEEDS `flint.port`/`flint.wire` IN EVERY COMPILE NOW
+;; (`DECISIONS.md#the-control-plane-is-the-runtimes`; `flint.project/resolve-project`
+;; adds them as unconditional roots because `src/flint/callentry.cljc`
+;; references them by var). This file's `files` maps are minimal and hand-written
+;; -- unlike `test/shake.clj`'s, which merges the real `lib/` -- so every helper
+;; below merges in two trivial stand-ins rather than making a privacy or guard
+;; check also a referendum on whether the call loop itself resolves.
+(def callentry-stub
+  {"flint/port.cljc" "(ns flint.port)\n(defn send [p v] v)\n"
+   "flint/wire.cljc" "(ns flint.wire)\n(defn read-from [r] r)\n"})
+
 (defn outcome
   "`:refused` when visibility stopped it, `:other` for any other error,
   `:compiled` when it went through."
   [files ws]
-  (let [r (project/resolve-project (project/files-resolver files ws) 'app.main #{:flint})]
+  (let [r (project/resolve-project (project/files-resolver (merge callentry-stub files) ws) 'app.main #{:flint})]
     (try
       (compiler/compile-image {:sources (:sources r) :order (:order r)
                                :entry 'app.main/main})
@@ -213,7 +224,7 @@
   first run of the rows below did exactly that and had to be redone."
   ([files ws] (guard-outcome files ws #{}))
   ([files ws builtins]
-  (let [r (project/resolve-project (project/files-resolver files ws) 'app.main #{:flint})]
+  (let [r (project/resolve-project (project/files-resolver (merge callentry-stub files) ws) 'app.main #{:flint})]
     (try
       (compiler/compile-image {:sources (:sources r) :order (:order r)
                                :builtins builtins
@@ -345,7 +356,7 @@
 ;; -- so `*x*` compiled to an ordinary var read that ignores every `binding`
 ;; around it, and `binding` itself refused the var for not being dynamic.
 (defn dyn-outcome [files]
-  (let [r (project/resolve-project (project/files-resolver files []) 'app.main #{:flint})]
+  (let [r (project/resolve-project (project/files-resolver (merge callentry-stub files) []) 'app.main #{:flint})]
     (try
       (compiler/compile-image {:sources (:sources r) :order (:order r)
                                :entry 'app.main/main})
@@ -378,7 +389,7 @@
 ;; it did not, resolving it is the first thing that happens. That difference is
 ;; the whole test, and no other error can imitate it.
 (defn mac-outcome [files]
-  (let [r (project/resolve-project (project/files-resolver files []) 'app.main #{:flint})]
+  (let [r (project/resolve-project (project/files-resolver (merge callentry-stub files) []) 'app.main #{:flint})]
     (try
       (compiler/compile-image {:sources (:sources r) :order (:order r)
                                :entry 'app.main/main})

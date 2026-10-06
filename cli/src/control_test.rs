@@ -158,3 +158,45 @@ fn the_initialisers_run_before_the_first_call() {
     // No pump between the bind and the call: deliberate, as `Host::caller` does.
     assert_eq!(call(&mut p, 1, "tally").get("value"), Some(&Val::Int(7)));
 }
+
+/// A CALL'S REPLY CARRIES WIREMETA METADATA (`DECISIONS.md#the-control-plane-is-the-runtimes`
+/// amendment, `DECISIONS.md#the-codec-is-guest-code`). `ctl/tagged` answers a
+/// value whose metadata opts in through `flint.protocols/-wire-meta`; the call
+/// loop must ask that protocol through `flint.port/send`, the same as any
+/// other guest code sending on a port, rather than encoding the reply with its
+/// own builtin re-implementation of the wire codec -- which never asked, so a
+/// reply crossed with no metadata regardless of what the value opted in to.
+///
+/// FAILS before the fix: the hand-written `emit` in `src/flint/callentry.cljc`
+/// had no `K_WITH_META` case at all, so `tagged`'s reply decoded as a bare
+/// `{:a 1}`, indistinguishable from `untagged`'s. PASSES after: the loop calls
+/// `flint.port/send`, which asks `WireMeta` and wraps the value in `K_WITH_META`
+/// before encoding it, same as `lib/flint/port.cljc`'s own `send` would.
+#[test]
+fn call_reply_carries_wire_meta() {
+    let img = image();
+    let mut p = load(&img);
+    assert!(p.install_port(SYS, "system", true));
+    assert!(p.host_deliver(SYS, &op_msg("bind", Some(CALLS))));
+    let _ = pump(&mut p);
+
+    let tagged = call(&mut p, 1, "tagged");
+    let value = tagged.get("value").unwrap_or_else(|| panic!("no :value in {tagged:?}"));
+    match value {
+        Val::Meta(m, v) => {
+            assert_eq!(m.get("origin"), Some(&Val::Str("ctl".into())), "metadata: {m:?}");
+            assert_eq!(v.get("a"), Some(&Val::Int(1)), "value: {v:?}");
+        }
+        other => panic!("tagged's reply carries no metadata: {other:?}"),
+    }
+
+    // THE CONTROL: the same shape, with no metadata, crosses as a bare map --
+    // proving the test tells the two apart rather than `Val::Meta` always
+    // matching.
+    let untagged = call(&mut p, 2, "untagged");
+    let value = untagged.get("value").unwrap_or_else(|| panic!("no :value in {untagged:?}"));
+    match value {
+        Val::Map(_) => assert_eq!(value.get("a"), Some(&Val::Int(1)), "value: {value:?}"),
+        other => panic!("untagged's reply should be a bare map, got: {other:?}"),
+    }
+}

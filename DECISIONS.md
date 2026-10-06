@@ -14862,6 +14862,19 @@ It supersedes, once built, the "namespace resolver" passages of
 "resolver-based compiler API" that `structured-ports` lists as unbuilt. Each of
 those carries a pointer here; none was deleted.
 
+**One premise below is already stale, same day.** §1 ("Roots") says "the
+control plane depends on no resolved namespace" and "resolution depends on no
+stdlib namespace being present" -- true when written, of the call loop
+`flint-seal` had just made self-contained. `DECISIONS.md#the-control-plane-is-the-runtimes`
+was amended hours later: the loop calls `flint.port/send` and
+`flint.wire/read-from` instead of re-implementing their codec, so `flint.port`
+and `flint.wire` are ROOTS again in `flint.project/resolve-project`, the same
+way `clojure.core` is. Whether a resolver-over-the-port design like this one
+should keep that true, or accept that the call loop now needs two stdlib
+namespaces resolved like any other reference, is OPEN for whoever builds
+this -- not resolved here, since this section is unbuilt and the amendment
+only had to fix what ships.
+
 *Amended 2026-10-06 with the maintainer's decisions:* the standard library
 is answered by an ordinary resolver, an optional building block never applied
 around a host's resolver, and the compiler never distinguishes its namespaces
@@ -15522,6 +15535,28 @@ The JVM and CLR ports are recorded in the commit that lands them.** Supersedes
 the part of `DECISIONS.md#bridges-are-the-only-door` that made the control plane
 flint code (`lib/flint/system.cljc`), and the guard in `DECISIONS.md#snapshots`.
 
+**AMENDED 2026-10-06, same day.** The "SELF-CONTAINED" restriction below --
+special forms, locals and `flint.rt` builtins ONLY -- was carried over from the
+control plane this section just finished removing, and it does not fit what
+is left. A CALL THREAD IS NOT A TRUST BOUNDARY: it exists to run a guest
+function the loop looks up by name and applies, inside a `try` that already
+catches whatever that function does, so refusing the loop its OWN reference to
+`flint.port/send` and `flint.wire/read-from` protected nothing -- it only forced
+`src/flint/callentry.cljc` to re-implement their wire codec in ~30
+`flint.rt/wire-*` builtins, a second copy of `lib/flint/wire.cljc` that had
+already drifted from it: the re-implementation never asked `WireMeta`, so a
+call's reply crossed with no metadata REGARDLESS of what the value opted in
+to, which the paragraph below recorded as an open question rather than the bug
+it was. The loop now calls `flint.port/send` and `flint.wire/read-from`
+directly -- the same two calls any other guest code on a port makes -- and
+`flint.callentry/allowed-vars` names exactly those two as the loop's one
+carved-out exception to being otherwise self-contained. What is UNCHANGED:
+the loop still has no namespace and no var, is still spawned by fn INDEX, and
+`flint.rt/var-named` is still callable from nowhere else -- none of that was
+about trust between the loop and the guest function it runs; it is about
+nothing being able to declare, shadow or call the loop ITSELF by name. See
+`src/flint/callentry.cljc`'s own docstring for the fuller account.
+
 ### What was decided
 
 **There is no `flint.system`.** A sandbox's control plane -- `:bind`, `:unbind`,
@@ -15540,14 +15575,20 @@ ends before it -- every image written before this). On `:bind p` the runtime
 closes that function over `p` as its one upvalue and spawns it
 (`spawn_call`). By index, never by name.
 
-**The loop is SELF-CONTAINED**: special forms, its own locals and `flint.rt`
-builtins, nothing else. `check-self-contained!` refuses any other symbol before
+**The loop is SELF-CONTAINED but for two vars** (corrected by the amendment
+above): special forms, its own locals, `flint.rt` builtins, and
+`flint.callentry/allowed-vars` -- `flint.port/send` and `flint.wire/read-from`,
+the normal wire codec. `check-self-contained!` refuses any other symbol before
 analysis -- so no macro and no prelude name can expand into it -- and
-`emit-call-entry!` refuses an analysed tree that references any var. It is
-analysed in a namespace no source can be (a symbol with a space in it), so no
-alias, refer or var can redirect a `flint.rt/x` it names. The wire codec it
-needs is re-expressed there from `flint.wire`, same tags, same order, same
-refusal messages.
+`emit-call-entry!` refuses an analysed tree that references any var outside
+that set. It is analysed in a namespace no source can be (a symbol with a
+space in it), so no alias, refer or var can redirect a `flint.rt/x` it names;
+`flint.port`/`flint.wire` resolve by their real, fully-qualified names, exactly
+as any other reference would. Those two namespaces are ROOTS in
+`flint.project/resolve-project` and `bin/flint`'s own copy, alongside
+`clojure.core` -- the ordinary require graph, not an injection, so a resolver
+that cannot answer `flint.port` fails the compile the same way it would for a
+program naming it directly.
 
 **`flint.rt/var-named` is callable from nowhere else.** `flint.analyzer/
 native-name` refuses it unless the env is the injected loop's
@@ -15585,16 +15626,30 @@ namespace went: it still trusted a var named `flint.system/boot`.
 
 ### What it costs, and what changed for a host
 
-* **Every image is smaller**: `(ns t) (defn main [args] "x")` went from 27 810
-  to 20 277 image bytes and from 91 to 81 declared natives (`./bin/flint ...
-  --emit-image`, read off the image; `test/four-ops/contract.edn` pins the 81).
-  `flint.port`, `flint.wire`, `flint.thread` and their reach are no longer
-  linked into a program that does not require them.
-* **A reply crosses with NO metadata.** `flint.port/send` asked
-  `flint.protocols/WireMeta` which metadata should cross; that is a protocol in
-  resolver-supplied code, so the call loop does not ask. Built-in kinds answer
-  nil there anyway; only a value that opted in loses metadata on a call's reply.
-  OPEN for the maintainer if a host relies on it.
+* **Every image is smaller, but less than first measured.** `(ns t) (defn main
+  [args] "x")` went from 27 810 to 20 277 image bytes and from 91 to 81
+  declared natives when this was first measured. **CORRECTED by the amendment
+  above, same day**: now that the call loop calls `flint.port/send` and
+  `flint.wire/read-from` instead of re-implementing their codec, those two
+  namespaces are ROOTS again (`flint.project/resolve-project`) and so are
+  linked into every image whether a program requires them or not. Re-measured
+  2026-10-06, same method (`./bin/flint ... --emit-image`, read off the
+  image): 24 888 bytes and 85 declared natives -- smaller and fewer than
+  `flint.system`'s 91, because `flint.thread` and the control plane itself
+  stayed out, but NOT as small as 81. `test/four-ops/contract.edn` pins 85, not
+  81, and says why in its own comment next to `:declared-natives`.
+* **A reply crosses WITH metadata, same as before `flint.system` was removed.**
+  This was briefly otherwise, the same day: `flint.port/send` asks
+  `flint.protocols/WireMeta` which metadata should cross, and while the call
+  loop re-implemented that codec in builtins instead of calling `flint.port/
+  send`, it never asked -- so a call's reply crossed with NO metadata
+  regardless of what the value opted in to. **Corrected by the amendment
+  above**, proved by `cli/src/control_test.rs`'s `call_reply_carries_wire_meta`
+  (FAILS before the fix, PASSES after) alongside a control with no metadata.
+* **A program can no longer `:exclude 'flint.port` or `'flint.wire`.** They are
+  unconditional roots now, so `check-exclusions!` reports them reachable (via
+  the call loop) in every compile -- new, and nothing in the tree currently
+  asserts the opposite.
 * **The control plane is FREE**: serving a control message charges no gas,
   where the green thread that did it ran flint code charged to the program.
 * **Messages are served as a batch per drive**, not one per turn. A host sees

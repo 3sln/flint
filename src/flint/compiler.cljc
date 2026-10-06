@@ -717,17 +717,20 @@
   loop -- a function of NO arguments whose ONE upvalue is the bound port
   (`DECISIONS.md#the-control-plane-is-the-runtimes`).
 
-  Twice refused if it is not self-contained: by `check-self-contained!` on the
+  Twice refused if it names anything else: by `check-self-contained!` on the
   forms, before any macro could expand, and here on the analysed tree, which
-  must reference no var at all. `:trusted-entry` is what lets it name
+  must reference no var outside `flint.callentry/allowed-vars` -- the normal
+  `flint.port`/`flint.wire` codec, resolved exactly as any other reference
+  would be (`qualify`), not injected. `:trusted-entry` is what lets it name
   `flint.rt/var-named`, which nothing else may (`flint.analyzer/native-name`)."
   [cc ctx]
   (let [form (callentry/bare (callentry/check-self-contained! callentry/forms))
         env (assoc (base-env cc call-entry-ns) :trusted-entry true)
         ast (ana/analyze env form)
-        vars (distinct (var-refs ast))
+        vars (remove callentry/allowed-vars (distinct (var-refs ast)))
         _ (when (seq vars)
-            (err (str "the call loop must reference no var, and references "
+            (err (str "the call loop may reference only " (str/join ", " (sort callentry/allowed-vars))
+                      ", and references "
                       (str/join ", " (map str vars))
                       " (DECISIONS.md#the-control-plane-is-the-runtimes)")
                  {:vars (vec vars)}))
@@ -869,7 +872,17 @@
           ;; the control plane is the RUNTIME's now and the call loop is
           ;; compiled from `flint.callentry` below, by index and not by var
           ;; (`DECISIONS.md#the-control-plane-is-the-runtimes`).
-          extra-roots (vec exports)
+          ;;
+          ;; `flint.callentry/allowed-vars` ARE ROOTS TOO, for the same reason
+          ;; `exports` is: the call loop references `flint.port/send` and
+          ;; `flint.wire/read-from` by var, but it is emitted by
+          ;; `emit-call-entry!` AFTER `kept`/`var-slots` below are built from
+          ;; this fixpoint, over `ctx` it does not get to extend. Leaving them
+          ;; out here is not a smaller image, it is a missing slot: the shake
+          ;; would drop both unless something else in the program happens to
+          ;; call them, and `emit/emit-fn-object` throws "no slot for var ..
+          ;; it was reached but not emitted" building the loop itself.
+          extra-roots (into (vec exports) (sort callentry/allowed-vars))
           items (:items @cc)
           ;; Reachability is a fixpoint, not one pass. Two things make it so:
           ;; including a namespace brings in its bare top-level expressions, and

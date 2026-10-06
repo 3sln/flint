@@ -680,11 +680,11 @@ ABI is a boundary question and so the reviewer's.
 
 **CHANGED 2026-10-06, not reviewed** (`DECISIONS.md#the-control-plane-is-the-runtimes`):
 the control protocol an embedder drives over the system port is served by the
-RUNTIME now, not by `flint.system`, with the same messages and replies -- except
-that **a call's reply crosses with no metadata**. `flint.port/send` asked
-`flint.protocols/WireMeta` which metadata should cross; the call loop is
-self-contained and does not. Built-in kinds answered nil there, so only a value
-that opted in is affected. Whether that is acceptable is the reviewer's call.
+RUNTIME now, not by `flint.system`, with the same messages and replies. **A
+call's reply DOES still cross with metadata**: that was briefly otherwise, the
+same day, while the call loop re-implemented the wire codec in builtins
+instead of calling `flint.port/send`/`flint.wire/read-from` -- corrected before
+this review, so there is nothing left for the reviewer to weigh here.
 
 **Change requests:** _none recorded_
 
@@ -720,11 +720,11 @@ filesystem, and that split is why the two packages are separate.
 
 **CHANGED 2026-10-06, not reviewed** (`DECISIONS.md#the-control-plane-is-the-runtimes`):
 the control protocol an embedder drives over the system port is served by the
-RUNTIME now, not by `flint.system`, with the same messages and replies -- except
-that **a call's reply crosses with no metadata**. `flint.port/send` asked
-`flint.protocols/WireMeta` which metadata should cross; the call loop is
-self-contained and does not. Built-in kinds answered nil there, so only a value
-that opted in is affected. Whether that is acceptable is the reviewer's call.
+RUNTIME now, not by `flint.system`, with the same messages and replies. **A
+call's reply DOES still cross with metadata**: that was briefly otherwise, the
+same day, while the call loop re-implemented the wire codec in builtins
+instead of calling `flint.port/send`/`flint.wire/read-from` -- corrected before
+this review, so there is nothing left for the reviewer to weigh here.
 
 **Change requests:**
 
@@ -750,11 +750,11 @@ deps` is dispatched but not implemented here.
 
 **CHANGED 2026-10-06, not reviewed** (`DECISIONS.md#the-control-plane-is-the-runtimes`):
 the control protocol an embedder drives over the system port is served by the
-RUNTIME now, not by `flint.system`, with the same messages and replies -- except
-that **a call's reply crosses with no metadata**. `flint.port/send` asked
-`flint.protocols/WireMeta` which metadata should cross; the call loop is
-self-contained and does not. Built-in kinds answered nil there, so only a value
-that opted in is affected. Whether that is acceptable is the reviewer's call.
+RUNTIME now, not by `flint.system`, with the same messages and replies. **A
+call's reply DOES still cross with metadata**: that was briefly otherwise, the
+same day, while the call loop re-implemented the wire codec in builtins
+instead of calling `flint.port/send`/`flint.wire/read-from` -- corrected before
+this review, so there is nothing left for the reviewer to weigh here.
 
 **Change requests:** _none recorded_
 

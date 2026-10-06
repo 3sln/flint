@@ -591,9 +591,20 @@
     ;; plane is the RUNTIME's now, and the call loop is compiled from
     ;; `flint.callentry` into every image by the compiler itself
     ;; (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+    ;;
+    ;; `flint.port` AND `flint.wire` ARE ROOTS, unconditionally, for the reason
+    ;; `flint.check` is one only sometimes: the call loop is in every image and
+    ;; references `flint.port/send`/`flint.wire/read-from` by var now
+    ;; (`src/flint/callentry.cljc`), which no `:require` in the program names.
+    ;; This is the ordinary require graph, not an injection into the program's
+    ;; own sources -- a resolver that cannot answer `flint.port` reports it
+    ;; `:missing`, the same as any other unresolved require, and the front
+    ;; door's existing handling of `:missing` is what turns that into a build
+    ;; error naming it.
     (let [given (vec (or roots* ['clojure.core entry-ns]))
-          roots (cond-> given
-                  (contains? features :flint/check) (conj 'flint.check))
+          roots (-> given
+                    (into '[flint.port flint.wire])
+                    (cond-> (contains? features :flint/check) (conj 'flint.check)))
           {:keys [sources order missing] :as r0}
           (collect resolve-ns roots features)
           ;; A virtual namespace compiles to CALLS on `flint.virtual`, so that

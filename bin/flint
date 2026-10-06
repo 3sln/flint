@@ -1057,9 +1057,18 @@
         ;; the control plane is the runtime's, and the call loop is compiled
         ;; into every image by the compiler (`flint.callentry`,
         ;; `DECISIONS.md#the-control-plane-is-the-runtimes`).
-        roots (cond-> (if test-mode?
-                        (cons 'clojure.core src-nses)
-                        (cons entry-ns ['clojure.core]))
+        ;;
+        ;; `flint.port` AND `flint.wire` ARE ROOTS, unconditionally, and this
+        ;; is `flint.project/resolve-project`'s own copy of that same addition
+        ;; (AGENTS.md#1, "one list, not two"): the call loop references
+        ;; `flint.port/send`/`flint.wire/read-from` by var in every image now
+        ;; (`src/flint/callentry.cljc`), and no `:require` in the program names
+        ;; them. A resolver that cannot answer `flint.port` reports it missing,
+        ;; the ordinary way any unresolved require is reported.
+        roots (cond-> (into (vec (if test-mode?
+                                   (cons 'clojure.core src-nses)
+                                   (cons entry-ns ['clojure.core])))
+                            '[flint.port flint.wire])
                 (contains? features :flint/check) (concat ['flint.check]))
         [sources order] (collect dirs roots features)
         ;; BEFORE ordering and before compiling: a refused require is an answer
