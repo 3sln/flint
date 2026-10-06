@@ -7332,10 +7332,12 @@ named per source in `--expect-why`. Four kinds were used:
   python and run against the driver's own fixture — a language none of the
   three targets is, so an error shared by all three generated copies has
   nowhere to hide. Both matched character for character.
-* **A second reader of the data.** `casetable`'s 1528 integers were parsed out
-  of the `.kin` source by script and folded independently, and its two section
-  boundaries were checked against where the data actually stops ascending
-  rather than restated from the `defconst`s.
+* **A second reader of the data.** `casetable`'s integers (1528 at the time;
+  1632 after the table moved to a pinned Unicode version instead of the host
+  JVM's, `` `DECISIONS.md#unicode-pin` ``) were parsed out of the `.kin`
+  source by script and folded independently, and its two section boundaries
+  were checked against where the data actually stops ascending rather than
+  restated from the `defconst`s.
 
 ### What it found
 
@@ -16111,3 +16113,122 @@ a file resolved as `app.evil` that said `(ns flint.port (:require [x :as
 wire]))` rewrote what `wire/` meant inside `flint.port`. Which source backs a
 namespace is the resolver's answer -- the host's -- and that answer has to be
 the whole of what decides what a namespace contains.
+
+---
+
+## unicode-pin
+
+**The Unicode case table is pinned to a committed version, not the host JVM's**
+
+**Ratified:** ☐ not signed off
+
+**Status: built 2026-10-06.** `bin/casetable` now derives `kin/casetable.kin`
+by parsing three committed files -- `data/unicode/18.0.0/{UnicodeData,
+CaseFolding,SpecialCasing}.txt`, fetched from unicode.org -- instead of
+calling `java.lang.Character` through whatever JDK babashka happens to embed.
+
+### What was decided
+
+`bin/casetable --derive` reads `data/unicode/<ucd-version>/UnicodeData.txt`
+(simple case mappings) and `SpecialCasing.txt` (full mappings, UNCONDITIONAL
+lines only -- a locale- or context-dependent entry like `tr`, `lt`,
+`Final_Sigma` is excluded, which is what `.toUpperCase(Locale/ROOT)` meant
+under the version this replaces and still means here) and writes
+`kin/casetable.kin` from them. `ucd-version` (currently `"18.0.0"`) is a
+constant in the script, bumped by a person. `CaseFolding.txt` is fetched and
+committed alongside the other two for when something needs case-FOLD rather
+than case-MAP semantics; nothing reads it yet. `--check` parses the same
+pinned files and compares, byte for byte, writing nothing.
+
+### Why: this was found by chasing a Linux-only panic back to its actual cause
+
+`kin-panic` (`5c968093`) fixed `bin/casetable --check` calling the same
+`derive!` as `--derive` -- so it silently overwrote the committed
+`kin/casetable.kin` with whatever the RUNNING HOST'S Unicode data said --
+which turned a host-dependent table into a loud, honest failure instead of a
+silent rewrite. That stopped the immediate panic, but `check-kin` was still
+red on Linux CI: the committed table (derived under some local JDK) disagreed
+with what CI's fresh `bb` (its own embedded JDK) derives, and the ONLY fix a
+`--check` that merely compares can offer is "someone re-run `--derive` on the
+right machine" -- which is not a fix, it is the same bug wearing a manual
+step, because "the right machine" is whichever one last happened to run it.
+
+**The actual defect was one level up: the table's CONTENT depended on WHERE it
+was derived, which is exactly the class of bug this table exists to remove.**
+`upper-case`/`lower-case` used to be three different functions for exactly
+this reason (Rust answered `nil` for non-ASCII, the JVM used the default
+locale, the CLR the invariant culture) -- "depends on where it ran" is the
+disease, not a property to tolerate one layer down in the derivation. Pinning
+the source files removes the host's JDK from the question entirely: `--check`
+now asks the same thing on every machine, forever, not just until the next
+`bb` upgrade.
+
+### Which Unicode version, and why 18.0.0
+
+**Nothing else in this codebase assumes a Unicode version, so there was no
+existing constraint to match.** Checked before picking: `lib/flint/regex.cljc`
+implements `\w`/`\d`/`\s` as hand-coded ASCII ranges (`word-cp?`, `space-cp?`),
+not Unicode property classes, and inline flags / `(?i)` / locale-aware
+matching are refused outright by the parser ("only `(?: )` groups are
+supported: no lookaround, flags or named groups"). So the regex engine has no
+opinion on Unicode version, and neither does anything else that was searched
+(`grep -rn Unicode` over `lib/`, `src/`, `runtime/src/*.rs`, `DECISIONS.md`).
+With nothing to match, latest was the only non-arbitrary choice: 18.0.0, the
+newest published Unicode Standard as of this writing (2026-09-16).
+
+### What moved
+
+The committed table went from 382 case-ranges rows / 103 full-mapping rows
+(whichever JDK last ran `--derive`) to 408 / 104 (Unicode 18.0.0, fixed).
+`CASE_UPPER_LEN` moved 200 → 213, `CASE_FULL_UPPER_LEN` 102 → 103.
+`kin/casetable.drivers`'s `--expect` (a second reader's independent fold of
+the `:data` literals, per `strings-and-matching`'s oracle discipline) was
+recomputed the same way, by a Python script reading `kin/casetable.kin`
+directly rather than via `bin/casetable`'s own code.
+
+### The other half: `kin/casemap.drivers`'s stub array stopped being a second copy of the row count
+
+`casemap.kin` calls `case-ranges-n`/`case-full-n`, which kin inlines as
+LITERALS -- the real table's CURRENT row count, read at kin-generation time --
+so the probe's own stub arrays (`CASE_RANGES`, `CASE_FULL` in all three
+language sections) must be at least that large, and used to be an EXACT copy
+of the same number casetable.kin carried (1528 = 382 * 4, 515 = 103 * 5) --
+a second list that nothing made agree with the first, which is exactly what
+let the original panic happen. Pinning the Unicode version stops the table
+moving on every host's JDK, but a deliberate version bump still grows it, so
+an exact copy would still have been the wrong shape of fix. The stub arrays
+are now headroom (8192 / 2560 ints -- 5x the 1632 / 520 the real table needs
+today) rather than a tracked count: Unicode's entire cased-character budget
+would need to grow five-fold before this needs revisiting, which is a
+person's decision to make then, not a number to maintain now.
+`CASE_UPPER_LEN`/`CASE_FULL_UPPER_LEN` in that same fixture stayed the small,
+fixed, local constants they already were (200 / 102) -- kin does not inline
+`defconst`s the way it inlines count accessors, so these were never a second
+copy of the real table's values and the `--expect` answers that depend on
+them did not need to change.
+
+### Risk left open
+
+**The headroom is a judgment call, not a proof.** If a future Unicode version
+ever pushes the real case-ranges table past 2048 rows (8192 ints) or the
+full-mapping table past 512 rows (2560 ints), `kin/casemap.drivers`'s stub
+arrays need to grow again by hand -- the same class of fix as this one, just
+with much more room before it is due. `bin/check-kin`'s drift check does not
+and cannot catch this in advance; it would surface as the same kind of
+out-of-bounds panic this decision was written to explain, and the fix is to
+re-read this section.
+
+**`CaseFolding.txt` is fetched and committed but unread.** If case-FOLD
+semantics (as opposed to case-MAP) are ever needed -- `clojure.string` has no
+such function today -- the file is already pinned at the same version; only
+the parser is missing.
+
+### How to re-pin
+
+Fetch the three files for the new version to a new `data/unicode/<version>/`,
+point `ucd-version` in `bin/casetable` at it, run `--derive`, and the diff on
+`kin/casetable.kin` is the review -- the same discipline `pin-the-nightly-
+toolchain` uses for the Rust toolchain. Recompute `kin/casetable.drivers`'s
+`--expect` the same independent way (a script that reads `kin/casetable.kin`
+directly, not through `bin/casetable`), and check `kin/casemap.drivers`'s
+stub array sizes are still comfortably ahead of the new row counts.

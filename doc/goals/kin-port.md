@@ -985,22 +985,30 @@ anything non-ASCII, the JVM used the DEFAULT LOCALE -- `(upper-case "i")` was
 `İ` on a Turkish machine -- and the CLR the invariant culture. All three now
 answer what Clojure answers, checked against it.
 
-**The table is one committed artifact**, `data/casetable.edn`, and the three
-runtimes' tables are EMITTED from it by `bin/casetable`. Deriving it reads the
-host JDK's Unicode data and is a separate, deliberate step: its answer depends
-on which Unicode version that JDK carries, and that is a decision to record in
-a diff rather than to inherit from whoever ran the gate. `--check` never
-derives; it compares the emissions against the file, which is the same
-question on every machine, and that is what `bin/test` runs.
+**The table is derived from three committed, PINNED files** --
+`data/unicode/18.0.0/{UnicodeData,CaseFolding,SpecialCasing}.txt`, fetched
+from unicode.org -- and `kin/casetable.kin` is EMITTED from them by
+`bin/casetable`. This used to read the HOST JDK's Unicode data directly
+(`java.lang.Character`), with the derivation's answer depending on which
+Unicode version that JDK happened to carry; `DECISIONS.md#unicode-pin` records
+why that was wrong and not merely risky -- it silently panicked
+`kin/casemap.kin`'s generated probe on Linux CI's fresher `bb`, because
+`--check` called the same writing function as `--derive` and overwrote the
+committed table with whatever the running host derived. `--check` now parses
+the same pinned files and only ever compares, writing nothing, which asks the
+same question on every machine, and that is what `bin/test` runs.
 
-The derivation pins `Locale/ROOT` explicitly. `.toUpperCase()` with no locale
-uses the default one -- the exact defect being removed, and it was in the
-generator until someone asked how `ß` becomes `SS`.
+The derivation keeps only UNCONDITIONAL full mappings from `SpecialCasing.txt`
+-- a locale- or context-dependent entry (`tr`, `lt`, `Final_Sigma`, ...) is
+excluded, which is what pinning `Locale/ROOT` meant before and still means
+now: `.toUpperCase()` with no locale uses the default one, the exact defect
+being removed, and it was in the generator until someone asked how `ß`
+becomes `SS`.
 
 STRIDE keeps it small: Latin Extended alternates case in pairs, so a naive
-encoding is one range per code point -- 1352 ranges, 16 KB -- against 382 and
+encoding is one range per code point -- 1352 ranges, 16 KB -- against 408 and
 about 4.6 KB. A better encoding beat a compressor, and cost no decompressor.
-The 102 full mappings (one code point to as many as three) are the other 2 KB,
+The 104 full mappings (one code point to as many as three) are the other 2 KB,
 and they are what makes `(upper-case "straße")` answer `STRASSE` here as it
 does in Clojure rather than `STRAßE`.
 
