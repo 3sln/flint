@@ -169,6 +169,22 @@ cargo build --release -p flint-cli > /tmp/flint-cli-build.log 2>&1 \
   || { show_build_log /tmp/flint-cli-build.log; fail "cargo build --release -p flint-cli"; }
 echo "  ok"
 
+# THE NPM DOOR, BUILT HERE TOO, for the same reason the native CLI just was:
+# `bin/check` (`check-containment`) and `test/door-agreement.clj` below both
+# run the npm CLI, and `sdks/cli/src/sys.mjs` has a static `import` of
+# `../dist/guest.js` -- a file `sdks/cli/build` writes and nothing else does.
+# `sdks/cli/dist/` is gitignored, so on a fresh checkout (every CI run) that
+# import fails before either check gets to assert anything, and on a dev box
+# that already has a `dist/` from a previous run, both ran against whatever
+# the npm CLI last happened to be -- silently stale, since a stale compiler is
+# a working one. Moved from 400-odd lines below, where it ran after both doors
+# had long since been exercised. `FLINT_DIST_FRESH=1` because `bin/build-dist`
+# three lines up just produced these artifacts.
+sec "the npm CLI, built from the same dist/ the native CLI just embedded"
+FLINT_DIST_FRESH=1 ./sdks/cli/build > /tmp/flint-cli-build.log 2>&1 \
+  || { show_build_log /tmp/flint-cli-build.log; fail "sdks/cli/build (before bin/check and door-agreement)"; }
+echo "  ok"
+
 # THE FAST GATE IN FULL, so this file is a SUPERSET of it.
 #
 # It was not, and CI runs only this file (`.github/workflows/test.yml`,
@@ -597,13 +613,18 @@ cargo build --release -p flint-cli > /tmp/flint-test.out 2>&1 \
 # exists to make visible.
 grep -E "^ *(ok|FAIL|dist/|no node)" /tmp/flint-test.out | sed 's/^      /  /'
 
-# THE ONLY THING THAT COMPARES THE TWO FRONT ENDS' OUTPUT, and nothing ran it
-# until now. The npm CLI had no `:checks` axis at all, so every module it
-# produced under `:optimize [perf]` shipped the check code the native CLI
-# strips -- a semantics difference, invisible without this comparison, and it
-# went unnoticed because this file and `bin/check` both skipped the selftest
-# (`DECISIONS.md#aot-diverges-between-hosts`). It is here rather than in
-# `bin/check` because it needs both CLIs built and takes 30 s.
+# REBUILT HERE AGAIN, not just at the top of this file: this section rebuilt
+# `dist/`, the native CLI and the ESM SDK above (`bin/build-dist`, `cargo
+# build`, `./sdks/esm/build`), so the npm CLI built at the very start of this
+# file now embeds artifacts one generation stale. `sdks/cli/build`'s own
+# selftest is THE ONLY THING THAT COMPARES THE TWO FRONT ENDS' OUTPUT, and it
+# has to run against artifacts that match -- the npm CLI had no `:checks` axis
+# at all, so every module it produced under `:optimize [perf]` shipped the
+# check code the native CLI strips, a semantics difference invisible without
+# this comparison, and it went unnoticed because this file and `bin/check`
+# both skipped the selftest (`DECISIONS.md#aot-diverges-between-hosts`). It is
+# here rather than only at the top because it needs both CLIs built fresh off
+# the SAME tree and takes 30 s.
 FLINT_DIST_FRESH=1 ./sdks/cli/build > /tmp/flint-test.out 2>&1 || { tail -25 /tmp/flint-test.out; fail "sdks/cli/build"; }
 grep -E "^ *(ok|FAIL)" /tmp/flint-test.out | sed 's/^      /  /;s/^    /  /'
 

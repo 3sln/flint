@@ -315,10 +315,18 @@ public static class Check {
         Want((int) ty.GetMethod("Sum").Invoke(null, null) == sum,
              $"Sum() agrees with a sum computed outside the assembly ({sum})");
 
+        // READ FROM `Img`, not restated: this used to hardcode the textbook
+        // FNV-1a prime `1099511628211L` (`0x100000001b3`) while the runtime
+        // moved to a prime with an extra zero (`Img.FnvPrime`,
+        // `0x1000000001b3`) to agree with Rust and the JVM -- so this
+        // independent check had quietly drifted onto the OLD value and could
+        // no longer have caught the runtime disagreeing with the other two,
+        // because by then it disagreed with all three the same way
+        // (AGENTS.md#1).
         long want;
         unchecked {
-            long h = -3750763034362895579L;                       // 0xcbf29ce484222325
-            foreach (var b in image) h = (h ^ (b & 0xff)) * 1099511628211L;
+            long h = Img.FnvOffset;
+            foreach (var b in image) h = (h ^ (b & 0xff)) * Img.FnvPrime;
             want = h;
         }
         Want((long) ty.GetMethod("Fnv1a").Invoke(null, null) == want,
