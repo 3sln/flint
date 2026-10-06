@@ -18,7 +18,8 @@
             [flint.eval :as ev]
             [flint.types :as ty]
             [flint.image :as img]
-            [flint.macros :as macros]))
+            [flint.macros :as macros]
+            [flint.callentry :as callentry]))
 
 (defn- err [msg data] (throw (ex-info msg (assoc data :type :compile))))
 
@@ -686,6 +687,56 @@
               others (remove #(or (= % (:sym best)) (synthetic? %)) hits)]
           (err (exclusion-error ns-sym best others) {:excluded ns-sym}))))))
 
+(def ^:private call-entry-ns
+  "The namespace the call loop is analysed IN, which no source can be: a
+  symbol with a space in it cannot be read, so no resolver answer is keyed by
+  it and no `ns` form names it -- and so nothing can give it an alias, a refer
+  or a var for `flint.rt/x` to resolve through."
+  (symbol "flint call loop"))
+
+(defn- var-refs
+  "Every var an analysed node references or defines."
+  [node]
+  (cond
+    (map? node) (concat (when (contains? #{:var :def} (:op node)) [(:sym node)])
+                        (mapcat var-refs (vals node)))
+    (sequential? node) (mapcat var-refs node)
+    :else nil))
+
+(defn- first-fn
+  "The first `:fn` node under `node`, depth first."
+  [node]
+  (cond
+    (and (map? node) (= :fn (:op node))) node
+    (map? node) (some first-fn (vals node))
+    (sequential? node) (some first-fn node)
+    :else nil))
+
+(defn emit-call-entry!
+  "Analyse and emit `flint.callentry/forms`, answering the fn index of the call
+  loop -- a function of NO arguments whose ONE upvalue is the bound port
+  (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+
+  Twice refused if it is not self-contained: by `check-self-contained!` on the
+  forms, before any macro could expand, and here on the analysed tree, which
+  must reference no var at all. `:trusted-entry` is what lets it name
+  `flint.rt/var-named`, which nothing else may (`flint.analyzer/native-name`)."
+  [cc ctx]
+  (let [form (callentry/bare (callentry/check-self-contained! callentry/forms))
+        env (assoc (base-env cc call-entry-ns) :trusted-entry true)
+        ast (ana/analyze env form)
+        vars (distinct (var-refs ast))
+        _ (when (seq vars)
+            (err (str "the call loop must reference no var, and references "
+                      (str/join ", " (map str vars))
+                      " (DECISIONS.md#the-control-plane-is-the-runtimes)")
+                 {:vars (vec vars)}))
+        outer (first-fn ast)
+        inner (first-fn (:arities outer))]
+    (when-not (and inner (= 1 (count (:upvals inner))))
+      (err "the call loop must be a function closing over exactly the port" {}))
+    (:fn-index (emit/emit-fn-object ctx inner))))
+
 (defn compile-image
   "Compile `sources` ({ns-symbol {:src s :file f :tags t :workspace w :grants g}})
   with entry var `entry-sym`.
@@ -813,23 +864,12 @@
           ;; Reachability from a single entry is right for the second and wrong
           ;; for the first: a function nobody calls from `main` is exactly the
           ;; one a host wants to call, and it was being dropped as unreachable.
-          ;; THE CONTROL PLANE IS ALWAYS ONE, whether or not a caller asked.
-          ;; `flint.system/boot` is spawned by bootstrap and referenced by
-          ;; nothing (`DECISIONS.md#bridges-are-the-only-door`), so reachability
-          ;; drops it and the image loses the only door into itself. The symptom
-          ;; is never a compile error: the bind is delivered, nothing is there to
-          ;; serve it, every thread settles, and the module closes its own ports
-          ;; -- "the call to <entry> was never answered".
-          ;;
-          ;; HERE rather than in each caller. `src/flint/selfhost.cljc` and
-          ;; `bin/flint` both add it to `:exports` and both were right; the
-          ;; third caller, `test/shake.clj`, built an image straight through
-          ;; this function and got a module nothing could call. A fact every
-          ;; caller must state is a fact this function should state once.
-          extra-roots (let [v (vec exports)]
-                        (if (some #{'flint.system/boot} v)
-                          v
-                          (conj v 'flint.system/boot)))
+          ;; NO CONTROL PLANE IS ADDED HERE ANY MORE. `flint.system/boot` was,
+          ;; because bootstrap spawned it by name and nothing referenced it;
+          ;; the control plane is the RUNTIME's now and the call loop is
+          ;; compiled from `flint.callentry` below, by index and not by var
+          ;; (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+          extra-roots (vec exports)
           items (:items @cc)
           ;; Reachability is a fixpoint, not one pass. Two things make it so:
           ;; including a namespace brings in its bare top-level expressions, and
@@ -883,6 +923,8 @@
       (doseq [it kept]
         (let [{:keys [fn-index]} (emit/emit-fn-object ctx (:ast it))]
           (img/add-init! b fn-index)))
+      ;; THE CALL LOOP (`flint.callentry`), in every image, by index.
+      (img/set-serve! b (emit-call-entry! cc ctx))
       ;; The entry itself: a 1-arg closure over the shim var.
       (let [main-idx (get var-slots entry-var)]
         (when-not main-idx

@@ -269,49 +269,15 @@ builtin!(flint_b_port_label, b_port_label, |rt, a, n| {
     rt.slot(p, conc::PT_LABEL)
 });
 
-// THE SYSTEM PORT, for the control plane and nothing else.
-//
-// THE CLAIM BELOW IS NOT TRUE OF AN ANONYMOUS PROGRAM. `flint/system-port` is
-// not in `flint.analyzer/builtin-guards`, and a program that names no
-// workspaces is checked nowhere: `(flint.rt/system-port)` compiled and ran
-// under `flint run`, checked 2026-10-05 (`DECISIONS.md#snapshots`). What
-// `test/globalport.clj` pins is that `flint.port/system` does not resolve.
-//
-// Guarded `:host` (`DECISIONS.md#bridges-are-the-only-door`): it IS the host
-// transport, the same thing `flint.host/request` reaches, so it takes the same
-// grant. Guest code still cannot name it -- a program holds `:host` only if an
-// embedder grants it, and `test/globalport.clj` pins that a guest naming it
-// does not compile.
-//
-// It exists because the control plane has to be a THUNK. Bootstrap spawns
-// `flint.system/boot` by taking its var's value and spawning it, and a green
-// thread takes no arguments -- so the port cannot be passed in and has to be
-// fetched. The alternative was Rust calling a flint function to build a
-// closure, which re-enters `drive` from inside `drive`: measured, and the
-// nested scheduler is what made the first version silently never start.
-builtin!(flint_b_system_port, b_system_port, |rt, a, n| {
-    let _ = (a, n);
-    rt.system_port()
-});
-
-// A HOST-REQUESTED SNAPSHOT (`DECISIONS.md#snapshots`), for `flint.system`'s
-// `:snapshot` op and nothing else. Both refuse unless the caller is the system
-// thread -- the guard lives in `flint_rt::snap`, at run time, because any
-// source can NAME these through `flint.rt/<x>`.
-builtin!(flint_b_snapshot_export, b_snapshot_export, |rt, a, n| {
-    let _ = (a, n);
-    flint_rt::snap::request_export(rt)
-});
-
-builtin!(flint_b_snapshot_chunk, b_snapshot_chunk, |rt, a, n| {
-    let _ = n;
-    let off = arg(rt, a, 0);
-    let len = arg(rt, a, 1);
-    if !off.is_fixnum() || !len.is_fixnum() {
-        return rt.throw_str("ClassCastException", "snapshot-chunk wants two integers");
-    }
-    flint_rt::snap::chunk(rt, off.as_fixnum(), len.as_fixnum())
-});
+// `flint/system-port`, `flint/snapshot-export` AND `flint/snapshot-chunk` WERE
+// HERE, and are gone (`DECISIONS.md#snapshots`,
+// `DECISIONS.md#bridges-are-the-only-door`). The first answered the system port
+// to any source that named it -- `(flint.rt/system-port)` compiled and ran in
+// an anonymous program, checked 2026-10-05 -- because `flint.system/boot` was a
+// thunk that had to fetch it; the runtime now hands the port to `boot` as its
+// argument. The other two let `flint.system` take a snapshot, guarded by
+// "the caller is the system thread", which trusted whatever code ran there; the
+// runtime now serves a host's request itself, and no builtin takes one.
 
 builtin!(flint_b_port_bridge_p, b_port_bridge_p, |rt, a, n| {
     let _ = n;
@@ -374,9 +340,6 @@ pub const HOST_CATALOGUE: &[(&str, flint_rt::vm::NativeFn)] = &[
     ("flint/port-state", flint_b_port_state),
     ("flint/port-label", flint_b_port_label),
     ("flint/port-bridge?", flint_b_port_bridge_p),
-    ("flint/system-port", flint_b_system_port),
-    ("flint/snapshot-export", flint_b_snapshot_export),
-    ("flint/snapshot-chunk", flint_b_snapshot_chunk),
     ("flint/port-id", flint_b_port_id),
     ("flint/wire-writer", flint_b_wire_writer),
     ("flint/wire-writer?", flint_b_wire_writerp),
@@ -1031,9 +994,6 @@ pub const CATALOGUE: &[(&str, &str)] = &[
     ("flint/port-receive", "flint_b_port_receive"),
     ("flint/port-receive-reader", "flint_b_port_receive_reader"),
     ("flint/port-close", "flint_b_port_close"),
-    ("flint/system-port", "flint_b_system_port"),
-    ("flint/snapshot-export", "flint_b_snapshot_export"),
-    ("flint/snapshot-chunk", "flint_b_snapshot_chunk"),
     ("flint/port?", "flint_b_port_p"),
     ("flint/port-state", "flint_b_port_state"),
     ("flint/port-label", "flint_b_port_label"),

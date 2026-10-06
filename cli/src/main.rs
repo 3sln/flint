@@ -23,6 +23,8 @@ mod serve;
 mod sys;
 #[cfg(test)]
 mod snapstream_test;
+#[cfg(test)]
+mod control_test;
 
 use anyhow::{bail, Context, Result};
 use flint_rt::native::Program;
@@ -786,12 +788,12 @@ fn ns_to_path(ns: &str) -> String {
 
 /// The embedded compiler, loaded with every unit this binary carries.
 ///
-/// `Program::load` is not enough any more. The compiler image now contains
-/// `flint.system` -- the control plane is a root in every program
-/// (`DECISIONS.md#bridges-are-the-only-door`), and the compiler is a program --
-/// so the image needs `flint/spawn` and the rest of the concurrency unit. A
-/// plain load answered "this runtime does not carry the builtin `flint/spawn`,
-/// which the image needs", which is the loader being right.
+/// `Program::load` is not enough. Every image carries the call loop
+/// (`DECISIONS.md#the-control-plane-is-the-runtimes`) -- the compiler's too,
+/// since the compiler is a program -- and it needs the concurrency unit's
+/// port builtins. (It was `flint.system`, a root in every program, whose
+/// `flint/spawn` a plain load refused: "this runtime does not carry the
+/// builtin `flint/spawn`, which the image needs" -- the loader being right.)
 fn load_compiler() -> Result<Program> {
     load_sandbox(COMPILER).map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e:#}"))
 }

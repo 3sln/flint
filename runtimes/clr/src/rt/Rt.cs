@@ -245,13 +245,11 @@ public sealed class Rt : System.IDisposable {
     /// a program that never spawns runs a loop with no counter in it at all.
     public bool schedInstalled;
 
-    /// Whether the control plane has been spawned on the system port.
-    ///
-    /// One-shot, checked on every `Drive`
-    /// (`DECISIONS.md#bridges-are-the-only-door`). Not a slot on the scheduler,
-    /// because a sandbox with no system port has no scheduler either and the
-    /// question is asked before that is known.
-    public bool systemBooted;
+    // `systemBooted` WAS HERE, and spawned `flint.system/boot` -- looked up BY
+    // NAME -- as the control-plane thread, once a system port existed. The
+    // control plane is runtime code now (`kin/control.kin`,
+    // `DECISIONS.md#the-control-plane-is-the-runtimes`): no thread serves the
+    // system port, and no var's value is trusted with it.
 
     /// The in-flight state of a host-requested live-set export
     /// (`DECISIONS.md#snapshots`), mirroring the Rust's `Serve`. Ported in
@@ -260,6 +258,12 @@ public sealed class Rt : System.IDisposable {
 
     /// This image's initialisers, in order: a program's top-level forms.
     public int[] init = new int[0];
+
+    /// The CALL LOOP's fn index, or `Img.NoServe`
+    /// (`DECISIONS.md#the-control-plane-is-the-runtimes`): what `Conc.SpawnCall`
+    /// closes over a bound port and spawns. By index because it has no var and
+    /// no name -- the compiler emits it from `flint.callentry`.
+    public long serve = Img.NoServe;
 
     /// Whether this image's initialisers have run.
     ///

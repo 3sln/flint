@@ -16,8 +16,8 @@ import java.nio.file.*;
 ///
 /// It also means the INITIALISERS are not run here. They were, by hand, with
 /// `rt.started = true` to stop the control plane running them twice -- which
-/// is the runtime's own job (`ensureStarted`) and is what `bootSystemThread`
-/// calls before it spawns anything.
+/// is the runtime's own job (`ensureStarted`) and is what `Conc.spawnCall`
+/// calls before it spawns the call loop.
 public class RtSteps {
   public static void main(String[] a) throws Exception {
     Rt rt = new Rt(1024 * 1024, 64L * 1024 * 1024);

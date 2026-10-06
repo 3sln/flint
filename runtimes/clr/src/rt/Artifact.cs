@@ -300,9 +300,10 @@ public sealed class Artifact {
         }
 
         var a = new Artifact(rt, bridge, loaded);
-        // BEFORE ANYTHING RUNS. `InstallSystemPort` is what makes
-        // `BootSystemThreadOnce` spawn the control plane, and a sandbox given its
-        // door late has already decided it has none.
+        // BEFORE ANYTHING RUNS. `InstallSystemPort` is what the control
+        // plane -- served at the top of every `Drive` (`Control.ServeControlAt`,
+        // `DECISIONS.md#the-control-plane-is-the-runtimes`) -- reads from; a
+        // sandbox given its door late has already decided it has none.
         Conc.InstallSystemPort(rt, SystemPort, Str.Of(rt, "system"));
         rt.EnsureStarted();
         booted[bridge] = a;

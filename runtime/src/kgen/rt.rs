@@ -115,6 +115,7 @@ pub mod mainanswer;
 pub mod portrecv;
 pub mod portpark;
 pub mod closure;
+pub mod control;
 pub mod mapwalk;
 pub mod objsize;
 pub mod portinstall;

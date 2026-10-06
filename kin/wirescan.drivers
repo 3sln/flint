@@ -83,6 +83,28 @@ fn main() {
         }
         out.push(' ');
     }
+    // THE CONTROL PLANE'S OWN READ, on hand-built messages -- see
+    // `--expect-why`. Each is `op + 8 * (port-id + 1)`, derived from
+    // `wire-control-op`'s doc, not from running it.
+    out.push_str("|");
+    let ctrl_cases: Vec<(&str, Vec<u8>)> = vec![
+        ("bind", vec![10,2,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,4,0,0,0,98,105,110,100,6,255,255,255,255,4,0,0,0,112,111,114,116,15,7,0,0,0]),
+        ("bind-reorder", vec![10,2,0,0,0,6,255,255,255,255,4,0,0,0,112,111,114,116,15,7,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,4,0,0,0,98,105,110,100]),
+        ("close", vec![10,1,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,5,0,0,0,99,108,111,115,101]),
+        ("snapshot", vec![10,2,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,8,0,0,0,115,110,97,112,115,104,111,116,6,255,255,255,255,4,0,0,0,112,111,114,116,15,2,0,0,0]),
+        ("unbind", vec![10,2,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,6,0,0,0,117,110,98,105,110,100,6,255,255,255,255,4,0,0,0,112,111,114,116,15,0,0,0,0]),
+        ("qualified-op", vec![10,2,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,1,0,0,0,120,8,0,0,0,115,110,97,112,115,104,111,116,6,255,255,255,255,4,0,0,0,112,111,114,116,15,2,0,0,0]),
+        ("snapshot-extra", vec![10,3,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,8,0,0,0,115,110,97,112,115,104,111,116,6,255,255,255,255,4,0,0,0,112,111,114,116,15,2,0,0,0,6,255,255,255,255,5,0,0,0,101,120,116,114,97,8,2,0,0,0,3,1,0,0,0,0,0,0,0,3,2,0,0,0,0,0,0,0]),
+        ("vector", vec![8,1,0,0,0,3,1,0,0,0,0,0,0,0]),
+        ("string-op", vec![10,2,0,0,0,6,255,255,255,255,2,0,0,0,111,112,5,4,0,0,0,98,105,110,100,6,255,255,255,255,4,0,0,0,112,111,114,116,15,7,0,0,0]),
+    ];
+    for (_name, bytes) in ctrl_cases {
+        let mut rt = Rt { b: bytes, pos: 0, roots: Vec::new(), vecs: Vec::new(), minted: Vec::new() };
+        let acc = rt.new_vec();
+        let ai = rt.push(acc);
+        let code = rt.wire_control_op(NIL, ai);
+        out.push_str(&format!(" {code}"));
+    }
     println!("{}", out.trim_end());
 }
 --java-head
@@ -159,6 +181,28 @@ fn main() {
                 out.append(rt.minted.get(i));
             }
             out.append(" ");
+        }
+        // THE CONTROL PLANE'S OWN READ -- see the Rust driver.
+        out.append("|");
+        int[][] ctrlCases = {
+            {10,2,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,4,0,0,0,98,105,110,100,6,255,255,255,255,4,0,0,0,112,111,114,116,15,7,0,0,0},
+            {10,2,0,0,0,6,255,255,255,255,4,0,0,0,112,111,114,116,15,7,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,4,0,0,0,98,105,110,100},
+            {10,1,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,5,0,0,0,99,108,111,115,101},
+            {10,2,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,8,0,0,0,115,110,97,112,115,104,111,116,6,255,255,255,255,4,0,0,0,112,111,114,116,15,2,0,0,0},
+            {10,2,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,6,0,0,0,117,110,98,105,110,100,6,255,255,255,255,4,0,0,0,112,111,114,116,15,0,0,0,0},
+            {10,2,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,1,0,0,0,120,8,0,0,0,115,110,97,112,115,104,111,116,6,255,255,255,255,4,0,0,0,112,111,114,116,15,2,0,0,0},
+            {10,3,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,8,0,0,0,115,110,97,112,115,104,111,116,6,255,255,255,255,4,0,0,0,112,111,114,116,15,2,0,0,0,6,255,255,255,255,5,0,0,0,101,120,116,114,97,8,2,0,0,0,3,1,0,0,0,0,0,0,0,3,2,0,0,0,0,0,0,0},
+            {8,1,0,0,0,3,1,0,0,0,0,0,0,0},
+            {10,2,0,0,0,6,255,255,255,255,2,0,0,0,111,112,5,4,0,0,0,98,105,110,100,6,255,255,255,255,4,0,0,0,112,111,114,116,15,7,0,0,0},
+        };
+        for (int[] c : ctrlCases) {
+            Rt rt = new Rt();
+            rt.b = new byte[c.length];
+            for (int i = 0; i < c.length; i++) rt.b[i] = (byte) c[i];
+            rt.pos = 0;
+            int ai = rt.push(rt.newVec());
+            long code = wireControlOp(rt, NIL, ai);
+            out.append(" ").append(code);
         }
         System.out.println(out.toString().trim());
     }
@@ -238,10 +282,32 @@ fn main() {
             }
             outp.Append(" ");
         }
+        // THE CONTROL PLANE'S OWN READ -- see the Rust driver.
+        outp.Append("|");
+        int[][] ctrlCases = {
+            new[] {10,2,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,4,0,0,0,98,105,110,100,6,255,255,255,255,4,0,0,0,112,111,114,116,15,7,0,0,0},
+            new[] {10,2,0,0,0,6,255,255,255,255,4,0,0,0,112,111,114,116,15,7,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,4,0,0,0,98,105,110,100},
+            new[] {10,1,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,5,0,0,0,99,108,111,115,101},
+            new[] {10,2,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,8,0,0,0,115,110,97,112,115,104,111,116,6,255,255,255,255,4,0,0,0,112,111,114,116,15,2,0,0,0},
+            new[] {10,2,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,6,0,0,0,117,110,98,105,110,100,6,255,255,255,255,4,0,0,0,112,111,114,116,15,0,0,0,0},
+            new[] {10,2,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,1,0,0,0,120,8,0,0,0,115,110,97,112,115,104,111,116,6,255,255,255,255,4,0,0,0,112,111,114,116,15,2,0,0,0},
+            new[] {10,3,0,0,0,6,255,255,255,255,2,0,0,0,111,112,6,255,255,255,255,8,0,0,0,115,110,97,112,115,104,111,116,6,255,255,255,255,4,0,0,0,112,111,114,116,15,2,0,0,0,6,255,255,255,255,5,0,0,0,101,120,116,114,97,8,2,0,0,0,3,1,0,0,0,0,0,0,0,3,2,0,0,0,0,0,0,0},
+            new[] {8,1,0,0,0,3,1,0,0,0,0,0,0,0},
+            new[] {10,2,0,0,0,6,255,255,255,255,2,0,0,0,111,112,5,4,0,0,0,98,105,110,100,6,255,255,255,255,4,0,0,0,112,111,114,116,15,7,0,0,0},
+        };
+        foreach (var c in ctrlCases) {
+            var rt = new Rt();
+            rt.B = new byte[c.Length];
+            for (int i = 0; i < c.Length; i++) rt.B[i] = (byte) c[i];
+            rt.Pos = 0;
+            int ai = rt.Push(rt.NewVec());
+            long code = WireControlOp(rt, NIL, ai);
+            outp.Append(" ").Append(code);
+        }
         System.Console.WriteLine(outp.ToString().Trim());
     }
 --expect
-10:7 10:3,4 02: 00: 10: 10:9
+10:7 10:3,4 02: 00: 10: 10:9 | 65 65 3 28 10 24 28 0 64
 --expect-why
 DERIVED FROM THE FORMAT. Each field is `<ok><bytes-left>:<ports minted>`, so a
 walk that stopped early is visible as leftover bytes rather than only as a
@@ -276,3 +342,61 @@ check that looked at `ok` alone.
                      table's parts in the wrong order lands on the wrong byte
                      and either refuses or mints nothing -- and a port inside a
                      table is exactly the case that would otherwise be missed.
+
+AND AFTER THE `|`, `wire-control-op` ON HAND-BUILT MESSAGES, each byte array
+built from the documented wire format (little-endian; `K_MAP` 10 is a u32
+entry count then key,value pairs; `K_KEYWORD` 6 is a u32 ns-len, or
+`ffffffff` for none, then a u32 name-len and the name's bytes; `K_PORT` 15 is
+a u32 id; `K_STRING` 5 is a u32 len and the bytes; `K_VECTOR` 8 is a u32 count
+and the values; `K_INT` 3 is eight bytes). Every expected number is
+`op + 8 * (port-id + 1)` from the doc on `wire-control-op` itself, derived
+before running anything -- `port-id + 1` is 0 when the message has no port,
+and `op` is 0 for anything `wire-control-op` does not recognise as `:bind`,
+`:unbind`, `:close` or `:snapshot`.
+
+  bind            `65`  `{:op :bind :port 7}`: op 1, port 7 -> `1 + 8*8 = 65`.
+  bind (reorder)  `65`  THE SAME MESSAGE with `:port` written before `:op` in
+                        the map's entries. Same answer, because a map's `:op`
+                        and `:port` are found by NAME, not by position --
+                        getting this wrong would make the parser's output
+                        depend on an encoder's key order, which nothing in
+                        the format promises.
+  close           `3`   `{:op :close}`: op 3, no port -> `3 + 8*0 = 3`. The
+                        ONLY case here with no `:port` key at all, which is
+                        what pins `port-id + 1 = 0` as the no-port answer
+                        rather than some other sentinel.
+  snapshot        `28`  `{:op :snapshot :port 2}`: op 4, port 2 ->
+                        `4 + 8*3 = 28`.
+  unbind          `10`  `{:op :unbind :port 0}`: op 2, port 0 (the id itself
+                        is zero, not absent) -> `2 + 8*1 = 10`. Without the
+                        `+1` a present port 0 would read identically to no
+                        port at all, which is exactly the off-by-one the
+                        encoding exists to avoid.
+  qualified op    `24`  `{:op :x/snapshot :port 2}`: `:op`'s value carries a
+                        NAMESPACE, so `wire-plain-kw-len` -- which only
+                        matches a keyword with NO namespace -- answers -1 for
+                        it, `op` stays 0 (unrecognised), and the port is
+                        still read: `0 + 8*3 = 24`. The pair with `string-op`
+                        below is what shows `:port` is read independently of
+                        whether `:op` was understood.
+  snapshot+extra  `28`  `{:op :snapshot :port 2 :extra [1 2]}`: the SAME
+                        answer as plain `snapshot`, because an unrecognised
+                        key's value is skipped by `wire-scan-at` (here a
+                        vector of two ints) rather than changing the result
+                        -- `wire-control-op` reads `:op` and `:port` and
+                        nothing else, exactly as the flint code it replaces
+                        read `(:op m)` and `(:port m)` off a map and ignored
+                        the rest.
+  vector          `0`   `[1]`: not a map at all, so the tag check at the top
+                        of `wire-control-op` takes the "not K_MAP" branch,
+                        skips the whole value with `wire-scan-tagged`, and
+                        answers the "nothing understood" code -- `op` 0, no
+                        port, `0 + 8*0 = 0`.
+  string op       `64`  `{:op "bind" :port 7}`: `:op`'s value is a STRING, so
+                        `wire-plain-kw-len` -- which only matches a KEYWORD --
+                        refuses it the same way the qualified keyword above
+                        was refused; `op` stays 0 and the port is still read:
+                        `0 + 8*8 = 64`. Paired with the qualified-op case to
+                        show the same guard firing for two different reasons
+                        a value can fail to be "a plain keyword": the wrong
+                        TAG here, a namespace there.

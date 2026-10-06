@@ -322,23 +322,32 @@ These are ours to design. Nothing constrains the names but us.
 
 **Change requests:** _none recorded_
 
-## flint.system
+## Removed 2026-10-06: `flint.system`, and what replaced it
 
-**Reviewed:** ☐ not signed off
+Not a surface any more, so no box: recorded here because a reviewer of the
+sections below should know what left (`DECISIONS.md#the-control-plane-is-the-runtimes`).
 
-1 public var (`serve`). A sandbox's control plane, as flint code rather than runtime code (`DECISIONS.md#bridges-are-the-only-door`). Bootstrap mints a closure over `serve` and spawns it on the system port; `bind`/`unbind`/`close`/`snapshot` are the whole protocol, and calls run on bound ports rather than here.
+* **`flint.system` is deleted.** Its one public var, `serve`, and the namespace
+  with it. Its change request -- "a program can replace this namespace", a
+  program's own `flint/system.cljc` having taken a snapshot of itself -- is
+  answered by there being nothing to replace: the control plane is runtime code
+  (`kin/control.kin`) and the call loop is compiled into every image by the
+  compiler and named by index (`src/flint/callentry.cljc`).
+* **Three builtins left the guest-nameable catalogue**: `flint.rt/system-port`,
+  `flint.rt/snapshot-export`, `flint.rt/snapshot-chunk`. Naming one is a
+  compile error (`no such builtin`).
+* **`flint.rt/var-named` stays in the catalogue and is callable from no
+  source**: the compiler refuses it outside the call loop it injects. The
+  stdlib's `:vars` grant went with it (`lib/deps.edn`, `sdks/esm`).
+* **The compiler refuses a source that declares or defines into a namespace
+  other than the one it was resolved as** (`DECISIONS.md#a-source-defines-only-its-own-namespace`):
+  an `ns` form naming another namespace, a qualified `def` into one, `in-ns`,
+  `intern`. That is the language a guest writes, and it is not a namespace's
+  surface, so it is recorded here rather than under one.
 
-**Is this public?** Required by 1 compiled test program, 0 other `lib` namespaces, named 0 times in README. Guest programs have no reason to name it — bootstrap does — so the boundary question is whether `serve` should be public at all or reachable only from the runtime that spawns it.
-
-**ADDED 2026-10-05, not reviewed: the `:snapshot` op** (`DECISIONS.md#snapshots`). A HOST-facing addition to this protocol — `{:op :snapshot :port p}` streams the live set to `p` as bytes chunks, then `{:op :end :size n}` or `{:op :error :message ..}`, then closes `p` — with three surfaces beside it, all new and all unreviewed:
-
-* two builtins, `flint.rt/snapshot-export` and `flint.rt/snapshot-chunk`. Any source can NAME them (`flint.rt/<x>` reaches the whole catalogue); both refuse at run time unless called on the system thread. Whether they belong in the guest-nameable catalogue at all, rather than somewhere only the control plane links, is a boundary question;
-* the wasm export `flint_live_import(len)` in `flint.conc` (0 accepted, 1 layout, 2 another program), the production way back in;
-* `flint_rt::native::Program::import_live` (same answers), and a `#[doc(hidden)]` `Program::export_live` kept as the one-shot reference the streamed bytes are tested against.
-
-**Change requests:**
-
-1. **A program can replace this namespace.** The compiler takes a program's own `flint/system.cljc` in place of this one (`test/snapstream-shadow/`), so the thread the runtime trusts runs the program's code — measured 2026-10-05, it took a snapshot of itself. Either a program may not define `flint.system` (and `flint.port`, `flint.wire`, which this thread calls), or the guard needs a different basis. The reviewer's call; recorded in `DECISIONS.md#snapshots`.
+What a HOST sees on the system port is unchanged -- `:bind`, `:unbind`,
+`:close`, `:snapshot` and their replies, byte for byte -- except one thing,
+recorded under the SDKs below.
 
 ## flint.table
 
@@ -669,6 +678,14 @@ The Rust embedding API. The six named here — `Compiler`, `Compile`, `Image`,
 shape. Whether the `Flint*`-prefixed three belong to this SDK or to `sdks/c`'s
 ABI is a boundary question and so the reviewer's.
 
+**CHANGED 2026-10-06, not reviewed** (`DECISIONS.md#the-control-plane-is-the-runtimes`):
+the control protocol an embedder drives over the system port is served by the
+RUNTIME now, not by `flint.system`, with the same messages and replies -- except
+that **a call's reply crosses with no metadata**. `flint.port/send` asked
+`flint.protocols/WireMeta` which metadata should cross; the call loop is
+self-contained and does not. Built-in kinds answered nil there, so only a value
+that opted in is affected. Whether that is acceptable is the reviewer's call.
+
 **Change requests:** _none recorded_
 
 ## sdks/esm
@@ -701,6 +718,14 @@ JavaScriptCore or bun's web target. Both forms were induced to confirm the gate
 fires. `sdks/cli` is deliberately outside it: a node CLI is supposed to read the
 filesystem, and that split is why the two packages are separate.
 
+**CHANGED 2026-10-06, not reviewed** (`DECISIONS.md#the-control-plane-is-the-runtimes`):
+the control protocol an embedder drives over the system port is served by the
+RUNTIME now, not by `flint.system`, with the same messages and replies -- except
+that **a call's reply crosses with no metadata**. `flint.port/send` asked
+`flint.protocols/WireMeta` which metadata should cross; the call loop is
+self-contained and does not. Built-in kinds answered nil there, so only a value
+that opted in is affected. Whether that is acceptable is the reviewer's call.
+
 **Change requests:**
 
 1. **`instantiate` was documented as the SDK's headline and is not exported.**
@@ -722,6 +747,14 @@ sdks/cli/selftest.mjs`, 80 s, exit 0, with five byte-identical rows (plain,
 `:optimize [perf]`, `:checks false`, `:optimize [perf] :checks true`, and a
 script). Its command surface is the seven `cli:` sections below, where `flint
 deps` is dispatched but not implemented here.
+
+**CHANGED 2026-10-06, not reviewed** (`DECISIONS.md#the-control-plane-is-the-runtimes`):
+the control protocol an embedder drives over the system port is served by the
+RUNTIME now, not by `flint.system`, with the same messages and replies -- except
+that **a call's reply crosses with no metadata**. `flint.port/send` asked
+`flint.protocols/WireMeta` which metadata should cross; the call loop is
+self-contained and does not. Built-in kinds answered nil there, so only a value
+that opted in is affected. Whether that is acceptable is the reviewer's call.
 
 **Change requests:** _none recorded_
 

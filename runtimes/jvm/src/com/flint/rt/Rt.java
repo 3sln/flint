@@ -319,13 +319,11 @@ public final class Rt {
     /// is counting, so a program that never spawns never reaches it.
     public boolean schedInstalled;
 
-    /// Whether the control plane has been spawned on the system port.
-    ///
-    /// One-shot, checked on every `drive`
-    /// (`DECISIONS.md#bridges-are-the-only-door`). Not a slot on the scheduler,
-    /// because a sandbox with no system port has no scheduler either and the
-    /// question is asked before that is known.
-    public boolean systemBooted;
+    // `systemBooted` WAS HERE, and tracked whether the control plane had been
+    // spawned on the system port -- looked up BY NAME as `flint.system/boot`.
+    // The control plane is runtime code now (`kin/control.kin`,
+    // `DECISIONS.md#the-control-plane-is-the-runtimes`): no thread serves the
+    // system port, and no var's value is trusted with it.
 
     /// Serving a HOST-REQUESTED SNAPSHOT, between the request and the last
     /// chunk (`DECISIONS.md#snapshots`). Ported verbatim from
@@ -334,6 +332,12 @@ public final class Rt {
 
     /// This image's initialisers, in order: a program's top-level forms.
     public int[] init = new int[0];
+
+    /// The CALL LOOP's fn index, or `Img.NO_SERVE`
+    /// (`DECISIONS.md#the-control-plane-is-the-runtimes`): what the runtime
+    /// closes over a bound port and spawns. By index because it has no var
+    /// and no name -- the compiler emits it from `flint.callentry`.
+    public long serve = Img.NO_SERVE;
 
     /// Whether this image's initialisers have run.
     ///

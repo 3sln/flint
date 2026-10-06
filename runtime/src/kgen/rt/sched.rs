@@ -15,6 +15,7 @@ use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
+use crate::kgen::rt::control::*;
 use crate::kgen::rt::vecread::*;
 use crate::kgen::rt::vecwrite::*;
 
@@ -88,6 +89,13 @@ impl Rt {
     /// the host might still act on it.
     pub fn sched_needs_host(&mut self) -> bool {
         if self.sched_pending_events() {
+            return true;
+        }
+        // A CONTROL PLANE STILL WAITING IS THE HOST'S TO FEED. It was a green
+        // thread parked on the system port, which the loop below found; it is
+        // runtime code now, and nothing is parked there to find
+        // (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+        if self.control_waiting() {
             return true;
         }
         let s: Value = self.sched();
@@ -200,7 +208,10 @@ impl Rt {
     /// target, and `report-deadlock` builds a host string naming the stuck
     /// threads, which is a diagnostic rather than a decision.
     pub fn sched_drive(&mut self) -> Value {
-        self.boot_system_thread_once();
+        // NO CONTROL-PLANE THREAD IS BOOTED HERE ANY MORE. `flint.system/boot`
+        // was, by name, on the first drive that found a system port; the
+        // control plane is `serve-control` below now, and runtime code
+        // (`DECISIONS.md#the-control-plane-is-the-runtimes`).
         loop {
             // What the collector left behind IS the lifetime rule: a flint end
             // nothing refers to any more has been closed, whether or not
@@ -237,15 +248,21 @@ impl Rt {
                 self.status = (0 as i32);
                 return self.gate_answer();
             }
+            // THE CONTROL PLANE IS SERVED HERE, BETWEEN TURNS
+            // (`DECISIONS.md#the-control-plane-is-the-runtimes`): `:bind`,
+            // `:unbind`, `:close` and `:snapshot`, by the RUNTIME, so no flint
+            // code is trusted with the system port. Between turns because every
+            // thread's state is then in its thread object -- inside a turn a
+            // snapshot would copy a thread half-way through a builtin.
+            // 
+            // AT THE TOP OF THE LOOP, not after a turn, because nothing has to
+            // run for a control message to be served, and because a snapshot
+            // stream the host has not drained yet continues on the next drive
+            // whether or not any thread is runnable then.
+            self.serve_control_at();
             let i: i64 = self.sched_pick();
             if i >= 0 {
                 crate::conc::run_one(self, i as u32);
-                // A HOST-REQUESTED SNAPSHOT IS TAKEN HERE, BETWEEN TURNS
-                // (`DECISIONS.md#snapshots`): the system thread parked to
-                // ask, so its turn has just ended and every thread's state
-                // is in its thread object. Inside a turn the export would
-                // copy a thread half-way through a builtin.
-                crate::conc::serve_snapshot(self);
                 continue;
             }
             // THE HOST FIRST. There is no entry function whose return means

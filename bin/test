@@ -576,11 +576,13 @@ grep -E "^ *(ok|FAIL)" /tmp/flint-test.out | sed 's/^      /  /;s/^    /  /'
 
 echo
 sec "system: bind, call, unbind, close -- the only door into a sandbox"
-# The control plane (`DECISIONS.md#bridges-are-the-only-door`) as flint code,
-# driven over a LOCAL channel: what is under test is the protocol, and a bridge
-# would add a host and an executor to a failure that should be unambiguous.
-bb test/system.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/system.clj"; }
-grep -cE "^ *ok" /tmp/flint-test.out | sed 's/^/    /;s/$/ checks/'
+# The control plane is the RUNTIME's now and the call loop is compiled into
+# every image (`DECISIONS.md#the-control-plane-is-the-runtimes`), so the
+# protocol is asked at the host's boundary rather than of `flint.system` over a
+# local channel: `cli/src/control_test.rs`, which was `test/system.clj`'s rows.
+cargo test --release -q -p flint-cli control_test > /tmp/flint-test.out 2>&1 \
+  || { cat /tmp/flint-test.out; fail "cli/src/control_test.rs"; }
+grep -E "^test result" /tmp/flint-test.out | sed 's/^/    /'
 
 echo
 sec "io: sources and sinks, as protocols rather than capabilities"

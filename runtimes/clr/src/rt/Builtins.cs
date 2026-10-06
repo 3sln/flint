@@ -1207,31 +1207,17 @@ public static class Builtins {
             if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-id wants a port");
             return rt.Slot(p, Conc.PT_ID);
         });
-        /// This sandbox's system port, or nil if it was given none.
-        ///
-        /// It exists because the control plane has to be a THUNK. Bootstrap
-        /// spawns `flint.system/boot` by taking its var's value and spawning
-        /// it, and a green thread takes no arguments -- so the port cannot be
-        /// passed in and has to be fetched. The alternative was the runtime
-        /// calling a flint function to build a closure over the port, which
-        /// re-enters `drive` from inside `drive`: measured on the native
-        /// runtime, and the nested scheduler is what made the first version
-        /// silently never start (`DECISIONS.md#bridges-are-the-only-door`).
-        Def("flint/system-port", (rt, at, n) => Conc.SystemPort(rt));
-        /// A HOST-REQUESTED SNAPSHOT (`DECISIONS.md#snapshots`), for
-        /// `flint.system`'s `:snapshot` op and nothing else. Both refuse
-        /// unless the caller is the system thread -- the guard lives in
-        /// `Snap`, at run time, because any source can NAME these through
-        /// `flint.rt/<x>`.
-        Def("flint/snapshot-export", (rt, at, n) => Snap.RequestExport(rt));
-        Def("flint/snapshot-chunk", (rt, at, n) => {
-            long off = rt.VAt(at);
-            long len = rt.VAt(at + 1);
-            if (!Val.IsFixnum(off) || !Val.IsFixnum(len)) {
-                return rt.ThrowStr("ClassCastException", "snapshot-chunk wants two integers");
-            }
-            return Snap.Chunk(rt, Val.AsFixnum(off), Val.AsFixnum(len));
-        });
+        // `flint/system-port`, `flint/snapshot-export` AND `flint/snapshot-chunk`
+        // WERE HERE, and are gone (`DECISIONS.md#snapshots`,
+        // `DECISIONS.md#the-control-plane-is-the-runtimes`). The first
+        // answered the system port to any source that named it, because
+        // `flint.system/boot` was a thunk that had to fetch it; the control
+        // plane is runtime code now (`kin/control.kin`) and hands the bound
+        // port to the call loop as its one upvalue (`Conc.SpawnCall`). The
+        // other two let `flint.system` take a snapshot, guarded by "the
+        // caller is the system thread", which trusted whatever code ran
+        // there; the runtime now serves a host's request itself
+        // (`Snap.Begin`/`Snap.Idle`), and no builtin takes one.
         Def("flint/port-label", (rt, at, n) => {
             long p = global::_3sln.Flint.Kgen.Rt.Meta.PortOf(rt, rt.VAt(at));
             if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-label wants a port");

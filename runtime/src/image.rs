@@ -13,6 +13,10 @@
 //!   u32 codelen    ; bytecode
 //!   u32 entry      ; fn index called with the argument vector
 //!   u32 ninit      ; fn indices to run first, in order
+//!   u32 naot       ; compiled arities
+//!   u32 flags      ; what the compiler decided
+//!   u32 serve      ; the call loop's fn index, or NO_SERVE -- OPTIONAL: an
+//!                  ; image that ends after `flags` has none
 //! ```
 //!
 //! Constants may reference earlier constants by index, so the writer emits them
@@ -37,6 +41,13 @@ pub const VERSION: u32 = 3;
 /// an image for a port carries the preference and an empty table -- the case
 /// that could not be expressed before.
 pub const FLAG_PERF: u32 = 1;
+
+/// The `serve` field of an image with no call loop
+/// (`DECISIONS.md#the-control-plane-is-the-runtimes`). Also what an image that
+/// ENDS after its flags means, which is every image written before the field
+/// existed: such a sandbox has no way to serve a call, as one with no
+/// `flint.system` had none.
+pub const NO_SERVE: u32 = 0xFFFF_FFFF;
 
 pub const K_NIL: u8 = 0;
 pub const K_TRUE: u8 = 1;
@@ -394,6 +405,8 @@ impl Rt {
         // writes at offsets derived from a fixed 12, which is why this is at the
         // end rather than beside the version.
         let flags = r.u32();
+        // OPTIONAL, and after the flags so every offset above stays put.
+        let serve = if r.i + 4 <= r.b.len() { r.u32() } else { NO_SERVE };
 
         *self.image = Image {
             code,
@@ -404,6 +417,7 @@ impl Rt {
             entry,
             init,
             flags,
+            serve,
             fingerprint,
             #[cfg(feature = "aot")]
             aot,

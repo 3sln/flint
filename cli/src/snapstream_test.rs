@@ -170,10 +170,11 @@ fn a_host_requested_snapshot_streams_the_one_shot_export_and_the_copy_carries_on
     let mut b = load(&img);
     assert_eq!(b.import_live(&stream), 0);
     let evs = pump(&mut b);
-    // It still HOLDS the destination -- `p` is a local of the parked call --
-    // so the rehydration announces it (`EV_RETAIN`) like any bridge a copy
-    // holds, and a host that did not carry that port across ignores it. What
-    // it must not do is send on it or close it.
+    // It still HOLDS the destination when it arrives -- the request was in
+    // `SC_SNAP` when the export was taken -- so the rehydration announces it
+    // (`EV_RETAIN`) like any bridge a copy holds, and a host that did not carry
+    // that port across ignores it. Its first drive drops every request it
+    // inherited. What it must not do is send on the destination or close it.
     assert!(evs.iter().all(|e| !(e.a == DEST && (e.kind == EV_MESSAGE || e.kind == EV_CLOSED))),
             "the copy streamed again: {evs:?}");
     assert_eq!(call(&mut b, 3, "bump"), Val::Int(2), "the copy's counter is the snapshot's");
@@ -187,70 +188,116 @@ fn a_host_requested_snapshot_streams_the_one_shot_export_and_the_copy_carries_on
     assert_eq!(load(&img).import_live(&stream[..8]), 1);
 }
 
-#[test]
-fn guest_code_cannot_take_a_snapshot() {
-    let img = image();
-    let mut a = booted(&img);
-    let refusal = |v: Val| match v {
-        Val::Str(s) => s,
-        other => panic!("guest code TOOK a snapshot: {other:?}"),
-    };
-    for (tx, f) in [(1, "steal"), (2, "steal-chunk"), (3, "steal-by-value"),
-                    (4, "steal-on-a-thread")] {
-        let msg = refusal(call(&mut a, tx, f));
-        assert!(msg.contains("guest code cannot take one"), "{f}: {msg}");
-    }
-    // A `:snapshot` the GUEST sends on the system port goes OUT, to the host:
-    // it is an ordinary message there, and nothing is exported.
-    let m = kw_map(&[("tx", Val::Int(5)), ("op", Val::Keyword(None, "call".into())),
-                     ("fn", Val::Str("snap/ask-on-the-system-port".into())),
-                     ("args", Val::Vector(vec![]))]);
-    assert!(a.host_deliver(CALLS, &m));
-    let evs = pump(&mut a);
-    assert!(evs.iter().any(|e| e.kind == EV_MESSAGE && e.a == SYS),
-            "the guest's message should have left on the system port");
-    assert!(evs.iter().all(|e| !(e.kind == EV_MESSAGE
-                                 && matches!(codec::parse(&e.payload), Ok(Val::Bytes(_))))),
-            "a chunk was sent for a guest's request");
-
-    // THE CONTROL: the same builtin, asked for by the HOST, does run.
-    let (chunks, _, closed) = request(&mut a);
-    assert!(!chunks.is_empty() && closed, "the host's request was refused too");
+/// Compile `src` as `probe.cljc` with entry `probe/main`, answering the
+/// compiler's exit code and output.
+fn compile_probe(tag: &str, src: &str) -> (i32, String) {
+    let dir = std::env::temp_dir().join(format!("flint-snapstream-{}-{tag}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("probe.cljc"), src).unwrap();
+    let (envelope, files) = build_spec_split(&[dir.clone()], "probe/main",
+                                             &parse_slots(SLOTS).unwrap(), false, false, &[],
+                                             None, &[], false, None).unwrap();
+    let mut c = load_compiler().unwrap();
+    let r = compile_split(&mut c, &["project", &envelope], &files);
+    let _ = std::fs::remove_dir_all(&dir);
+    (r.code, r.out)
 }
 
-/// THE HOLE THIS GUARD DOES NOT CLOSE, kept as a test that fails today.
-///
-/// The guard trusts the system thread because the stdlib's `flint.system`
-/// runs no guest code on it. But a program's sources may DEFINE `flint.system`
-/// and the compiler takes theirs in place of the stdlib's
-/// (`test/snapstream-shadow/flint/system.cljc`) -- so the thread the runtime
-/// trusts runs the program's own code, and its request is honoured. Measured
-/// 2026-10-05: a 53 554-byte export, answered to the program. The same is true
-/// of `flint.port` and `flint.wire`, which that thread calls.
-///
-/// Ignored, not deleted: run with `--ignored` to see it. Whether a program may
-/// replace a stdlib namespace is a question about the whole trusted base, not
-/// about snapshots, and it is the maintainer's (`DECISIONS.md#snapshots`).
+/// NO SOURCE CAN NAME A WAY IN. The three builtins a guest once reached --
+/// the two that took a snapshot and the one that answered the system port --
+/// are gone, so every route to them is a compile error rather than a run-time
+/// refusal: by name, in value position, and from a thread the program spawns.
+/// The control differs in exactly the builtin named.
 #[test]
-#[ignore]
+fn no_source_can_name_a_snapshot_builtin_or_the_system_port() {
+    let routes = [
+        ("export", "(flint.rt/snapshot-export)"),
+        ("chunk", "(flint.rt/snapshot-chunk 0 16)"),
+        ("by-value", "(let [f flint.rt/snapshot-export] (f))"),
+        ("on-a-thread", "(flint.thread/join (flint.thread/spawn (fn [] (flint.rt/snapshot-export))))"),
+        ("system-port", "(flint.rt/system-port)"),
+        ("system-port-by-value", "(let [f flint.rt/system-port] (f))"),
+    ];
+    for (tag, body) in routes {
+        let src = format!("(ns probe (:require [flint.thread])) (defn main [_] (str {body}))");
+        let (code, out) = compile_probe(tag, &src);
+        assert_ne!(code, 0, "{tag}: a program naming a removed builtin COMPILED");
+        assert!(out.contains("no such builtin"), "{tag}: refused for another reason: {out}");
+    }
+    // THE CONTROL: the same shape, naming a builtin that exists.
+    let (code, out) = compile_probe("control",
+        "(ns probe (:require [flint.thread])) (defn main [_] (str (flint.rt/port? 1)))");
+    assert_eq!(code, 0, "the control did not compile: {out}");
+}
+
+/// THE RUNTIME TAKES ONLY THE HOST'S REQUEST, ON THE SYSTEM PORT.
+/// The same message on a bound call port is an ordinary message there -- a
+/// call with no `:fn` -- and an op in a namespace is not the op. The control, on the same sandbox: the exact request
+/// on the system port is served.
+#[test]
+fn only_the_hosts_request_on_the_system_port_is_served() {
+    let img = image();
+    let mut a = booted(&img);
+    let chunk_sent = |evs: &[flint_rt::native::Event]| evs.iter().any(|e| {
+        e.kind == EV_MESSAGE && matches!(codec::parse(&e.payload), Ok(Val::Bytes(_)))
+    });
+    // ON A CALL PORT: delivered to the call thread, which answers it as a call.
+    assert!(a.host_deliver(CALLS, &port_msg("snapshot", DEST)));
+    let evs = pump(&mut a);
+    assert!(!chunk_sent(&evs), "a request on a CALL port was served");
+    // AN OP IN A NAMESPACE, on the system port: `:x/snapshot` is not
+    // `:snapshot`, as `(case (:op m) :snapshot ..)` said.
+    let mut w = Wire::new();
+    w.map(2);
+    w.keyword(None, "op");
+    w.keyword(Some("x"), "snapshot");
+    w.keyword(None, "port");
+    w.port(DEST);
+    assert!(a.host_deliver(SYS, &w.done()));
+    let evs = pump(&mut a);
+    assert!(!chunk_sent(&evs), "a request for `:x/snapshot` was served as `:snapshot`");
+    // THE CONTROL.
+    let (chunks, end, closed) = request(&mut a);
+    assert!(!chunks.is_empty() && closed, "the host's own request was not served: {end:?}");
+    // And the sandbox still serves calls after all three.
+    assert_eq!(call(&mut a, 1, "bump"), Val::Int(1));
+}
+
+/// A PROGRAM'S OWN `flint.system` IS NOT A CONTROL PLANE.
+///
+/// It was: the runtime looked `flint.system/boot` up by name and trusted the
+/// thread it ran on, and which source backs a namespace is the resolver's --
+/// the host's -- answer. Measured 2026-10-05: a program supplying
+/// `test/snapstream-shadow/flint/system.cljc` took a 53 554-byte export through
+/// it. The control plane is runtime code now and the call loop is compiled into
+/// every image and named by index
+/// (`DECISIONS.md#the-control-plane-is-the-runtimes`), so the program's
+/// `flint.system/boot` -- kept in the image, and handed nothing -- never runs.
+/// The controls, on the same sandbox: a call is served, and the host's own
+/// snapshot request is.
+#[test]
 fn a_program_cannot_ship_its_own_control_plane() {
     let dir = src_dir().join("../snapstream-shadow");
     let (envelope, files) = build_spec_split(&[dir], "probe/main", &parse_slots(SLOTS).unwrap(),
                                              false, false, &[], None, &[], false, None).unwrap();
     let mut c = load_compiler().unwrap();
     let r = compile_split(&mut c, &["project", &envelope], &files);
-    if r.code != 0 {
-        return; // refused at compile time: the outcome wanted
-    }
+    assert_eq!(r.code, 0, "the program compiles -- its file is the resolver's answer: {}", r.out);
     let img = base64_decode(r.out.split('\n').next().unwrap()).unwrap();
     let mut p = load(&img);
     assert!(p.install_port(SYS, "system", true));
-    let _ = p.run(&[]);
-    for e in pump(&mut p) {
-        if e.kind == EV_MESSAGE && e.a == SYS {
-            let v = codec::parse(&e.payload).unwrap();
-            assert!(!matches!(v.get("stolen"), Some(Val::Int(_))),
-                    "a program's own control plane took a snapshot: {v:?}");
-        }
-    }
+    assert!(p.host_deliver(SYS, &port_msg("bind", CALLS)));
+    let mut evs = pump(&mut p);
+    let m = kw_map(&[("tx", Val::Int(1)), ("op", Val::Keyword(None, "call".into())),
+                     ("fn", Val::Str("probe/hi".into())), ("args", Val::Vector(vec![]))]);
+    assert!(p.host_deliver(CALLS, &m));
+    evs.extend(pump(&mut p));
+    let answered = evs.iter().any(|e| e.kind == EV_MESSAGE && e.a == CALLS
+        && codec::parse(&e.payload).ok().and_then(|v| v.get("value").cloned())
+            == Some(Val::Str("hi".into())));
+    assert!(answered, "THE CONTROL: the call was not served: {evs:?}");
+    assert!(evs.iter().all(|e| !(e.kind == EV_MESSAGE && e.a == SYS)),
+            "something sent on the system port -- the program's `boot` ran: {evs:?}");
+    let (chunks, end, closed) = request(&mut p);
+    assert!(!chunks.is_empty() && closed, "the host's request was not served: {end:?}");
 }

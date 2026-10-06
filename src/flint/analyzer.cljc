@@ -218,6 +218,21 @@
       (when (= 'flint.rt target)
         (let [n (name sym)
               bs (:builtins cc)]
+          ;; `var-named` IS THE CALL LOOP'S AND NOBODY ELSE'S
+          ;; (`DECISIONS.md#the-control-plane-is-the-runtimes`). It resolves a
+          ;; var from a STRING at run time, which no compile-time check ever
+          ;; sees -- private vars and guarded ones included -- so it was
+          ;; guarded `:vars`, and the guard is checked nowhere in a program
+          ;; that declares no workspaces: such a program could call it. The
+          ;; loop the compiler injects (`flint.callentry`) is the one caller
+          ;; that needs it, and it is analysed with `:trusted-entry`. Every
+          ;; other route -- by name, in value position, through an alias, a
+          ;; macro or an `:inline` -- arrives here and is refused.
+          (when (and (= "var-named" n) (not (:trusted-entry env)))
+            (err (str "flint.rt/var-named is not callable from a source: it resolves a var"
+                      " from a string at run time, and only the call loop the compiler"
+                      " injects may do that (DECISIONS.md#the-control-plane-is-the-runtimes)")
+                 {:sym sym}))
           (cond
             (contains? bs n) n
             (contains? bs (str "flint/" n)) (str "flint/" n)
@@ -361,12 +376,11 @@
   the port surface should demand something is a real design question and is
   not answered here."
   {"flint/request" #{:host}
-   ;; `var-named` is NOT derived from a wrapper the way `request` is -- it is
-   ;; guarded in its own right (`DECISIONS.md#vars-is-its-own-grant`), because
-   ;; what it confers is an escape from THIS CHECK: a name resolved at run time
-   ;; was never seen by the compile-time guard that decides which workspace may
-   ;; name which var. Ungated, every guard above becomes advisory.
-   "flint/var-named" #{:vars}})
+   ;; `var-named` WAS HERE, guarded `:vars` (`DECISIONS.md#vars-is-its-own-grant`).
+   ;; It is not callable from any source now -- `native-name` refuses it outside
+   ;; the call loop the compiler injects -- so there is nothing left to guard
+   ;; (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+   })
 
 (defn- guard-check!
   "Refuse a reference to a var its workspace guards (`DECISIONS.md#workspace-capabilities`).

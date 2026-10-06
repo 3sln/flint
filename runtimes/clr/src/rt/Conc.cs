@@ -146,7 +146,22 @@ public static class Conc {
         /// Host ids of every BRIDGE this sandbox holds a handle for -- ids, not
         /// references, so the list pins nothing. This is the walk that turns a
         /// collection into a release (`DECISIONS.md#ports-are-the-hosts`).
-        SC_BRIDGES = 10, SC_LEN = 11;
+        SC_BRIDGES = 10,
+        /// The destination of the host-requested snapshot being streamed, or
+        /// NIL (`DECISIONS.md#snapshots`). Here so it is ROOTED while the
+        /// runtime streams to it -- a bridge handle nothing refers to is
+        /// released by `ReapPorts`, which would tell the host this sandbox let
+        /// go of the port it is being sent the snapshot on.
+        SC_SNAP = 11,
+        /// The ports the host has `:bind`-ed, so `:close` can close them all;
+        /// NIL until the first (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+        /// It was a local of `flint.system/serve`'s loop.
+        SC_BOUND = 12,
+        /// TRUE once the control plane is over -- `:close` served, or the
+        /// system port ended -- and NIL until then. It was
+        /// `flint.system/serve` having returned.
+        SC_CTRL = 13,
+        SC_LEN = 14;
 
     /// Instructions a thread runs before the scheduler takes the slice back.
     /// Preemptive, so a thread with no `yield` in it cannot starve the others.
@@ -1165,6 +1180,12 @@ public static class Conc {
         }
         int pri = rt.Push(ports);
         int vi = rt.Push(Bytes.Of(rt, bytes));
+        // THE SYSTEM PORT IS NOT SPECIAL HERE ANY MORE. It used to be routed
+        // out at this point into a runtime-side snapshot request, taken off
+        // before the control plane could see it; the control plane is RUNTIME
+        // code now (`kin/control.kin`), and it reads the system port's queue
+        // at the top of `Drive` -- so a control message, `:snapshot` included,
+        // is delivered like any other (`DECISIONS.md#the-control-plane-is-the-runtimes`).
         // `[len bytes ports]`. `len` because the refund has to be the number
         // that was CHARGED; `ports` because THE BRIDGE OWNS THE REFERENCE while
         // the message is in flight, and the intern table is weak on purpose.
@@ -1462,51 +1483,48 @@ public static class Conc {
         return Drive(rt);
     }
 
-    /// Spawn the control plane on the system port, once.
-    ///
-    /// Asked on EVERY drive rather than at install, because a host may install
-    /// a system port after the first run -- and because the first native
-    /// version did it at install time, inside an ABI call, where the
-    /// initialisers ran in a context that could not report failure and it
-    /// returned false in silence.
-    public static void BootSystemThreadOnce(Rt rt) {
-        if (rt.systemBooted) return;
-        if (Val.IsNil(SystemPort(rt))) return;      // no door yet; asked again next drive
-        rt.systemBooted = true;
-        BootSystemThread(rt);
+    // `BootSystemThreadOnce` WAS HERE, and spawned `flint.system/boot` --
+    // looked up BY NAME -- as the control-plane thread, once a system port
+    // existed. The control plane is runtime code now (`kin/control.kin`,
+    // `DECISIONS.md#the-control-plane-is-the-runtimes`): no thread serves the
+    // system port, and no var's value is trusted with it.
+
+    /// Does this image have a call loop to serve a bound port with? False for
+    /// an image built before `flint.callentry` existed -- `rt.serve` stays
+    /// `Img.NoServe` -- which is what lets `Control.ControlWaiting` answer
+    /// "settled" for a hand-built image that has a system port but nothing a
+    /// `:bind` could ever start, rather than reporting "the host is needed"
+    /// forever. Mirrors native's `has_call_loop` (`runtime/src/conc.rs`).
+    public static bool HasCallLoop(Rt rt) {
+        return rt.serve != Img.NoServe;
     }
 
-    /// **No guest code runs here.** `flint.system/boot` is a thunk, so this
-    /// takes its var's value and spawns it -- nothing is called. The native
-    /// runtime's first version called a flint function to build a closure over
-    /// the port, and that re-entered `Drive` from inside `Drive`: the nested
-    /// scheduler ran, found the boot flag already set, and the outer call came
-    /// back with nothing callable. The sandbox then tore itself down with no
-    /// message ever served, and the only visible symptom was "the call was
-    /// never answered".
+    /// Start the CALL LOOP on bound port `p` (`DECISIONS.md#the-control-plane-is-the-runtimes`):
+    /// the image's `serve` function -- emitted by the compiler from
+    /// `flint.callentry`, named by INDEX and by nothing else -- closed over
+    /// `p` as its one upvalue, and spawned. False when the image has no call
+    /// loop, which an image built before there was one does not.
     ///
-    /// **Initialisers must have run**, because a var is nil until they have.
+    /// THE PORT IS AN UPVALUE, NOT AN ARGUMENT, because a thread's entry takes
+    /// none and a slot on every thread to carry one is gas on every spawn.
     ///
-    /// Absent `flint.system` is NOT an error. A module built before this
-    /// existed has no control plane, and a sandbox nothing can call is a
-    /// coherent thing to be; failing here would make every old artifact
-    /// unloadable.
-    static void BootSystemThread(Rt rt) {
-        if (!rt.EnsureStarted()) return;
-        for (int i = 0; i < rt.varNames.Length; i++) {
-            if (Str.Text(rt, rt.consts[rt.varNames[i]]) != "flint.system/boot") continue;
-            long f = rt.roots.shared.Globals[i];
-            if (Val.IsNil(f) || !rt.IsHeapTy(f, Obj.TyClosure)) return;
-            long th = Spawn(rt, f);
-            // REMEMBERED BY ID, because this is the one thread a snapshot
-            // request is honoured from (`DECISIONS.md#snapshots`): guest code
-            // never runs on it, so "the caller is the system thread" is a
-            // grant the runtime conferred rather than a claim the caller
-            // made. An id rather than the value so it survives a collection,
-            // and so a live set can carry it.
-            if (IsThread(rt, th)) rt.snapServe.systemThread = Fx(rt.Slot(th, TH_ID));
-            return;
-        }
+    /// INITIALISERS FIRST. The loop resolves a call's `:fn` to a var's value,
+    /// and a var is nil until its namespace's top-level forms have run --
+    /// which is what booting `flint.system` used to ensure, on the first drive.
+    public static bool SpawnCall(Rt rt, long p) {
+        long idx = rt.serve;
+        if (idx == Img.NoServe) return false;
+        int bas = rt.Mark();
+        int pi = rt.Push(p);
+        if (!rt.EnsureStarted()) { rt.PopTo(bas); return false; }
+        long pv = rt.R(pi);
+        long c = rt.MakeClosure((int) idx, new long[]{ pv });
+        if (Val.IsNil(c)) { rt.PopTo(bas); return false; }
+        int ci = rt.Push(c);
+        long cv = rt.R(ci);
+        long th = Spawn(rt, cv);
+        rt.PopTo(bas);
+        return IsThread(rt, th);
     }
 
     /// THE ANSWER A SETTLED PROGRAM LEFT -- named to match native's
@@ -1557,8 +1575,18 @@ public static class Conc {
     public static long Drive(Rt rt) =>
         global::_3sln.Flint.Kgen.Rt.Sched.SchedDrive(rt);
 
-    /// A thin wrapper, as the Rust's `conc::serve_snapshot` is over
-    /// `snap::serve_snapshot` -- so GENERATED code (`kin/sched.kin`'s
-    /// `Sched.cs`) can call it BY NAME without naming `Snap` directly.
-    public static void ServeSnapshot(Rt rt) => Snap.ServeSnapshot(rt);
+    // `ServeSnapshot` WAS HERE, a thin wrapper over `Snap.ServeSnapshot` for
+    // GENERATED code (`kin/sched.kin`'s `Sched.cs`) to call by name. The
+    // control plane serves a snapshot now (`kin/control.kin`'s
+    // `serve-control-at`, generated into `Control.ServeControlAt`), which
+    // calls `Snap.Begin`/`Snap.Idle` directly.
+
+    /// THE CONTROL PLANE, between turns (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+    /// One-line delegations to the generated `kin/control.kin`, which is what
+    /// the vocabulary's `serve-control` and `control-waiting` name.
+    public static long ServeControl(Rt rt) =>
+        global::_3sln.Flint.Kgen.Rt.Control.ServeControlAt(rt);
+
+    public static bool ControlWaiting(Rt rt) =>
+        global::_3sln.Flint.Kgen.Rt.Control.ControlWaiting(rt);
 }

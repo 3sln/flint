@@ -16,12 +16,23 @@ using _3sln.Flint.Kgen.Rt;
 ///   u32 ninit      ; fn indices to run first, in order
 ///   u32 naot       ; compiled arities (skipped here)
 ///   u32 flags      ; what the compiler decided
+///   u32 serve      ; the call loop's fn index, or `NoServe` -- OPTIONAL: an
+///                  ; image that ends after `flags` has none
 ///
 /// Constants may reference EARLIER constants by index, which is why the writer
 /// emits them in dependency order and this builds them in one pass.
 public static class Img {
     public const int Version = 3;
     public const int FlagPerf = 1;
+
+    /// The `serve` field of an image with no call loop
+    /// (`DECISIONS.md#the-control-plane-is-the-runtimes`). Also what an image
+    /// that ENDS after its flags means, which is every image written before
+    /// the field existed: such a sandbox has no way to serve a call, as one
+    /// with no `flint.system` had none. `-1`, not `0xFFFFFFFF`: the field is
+    /// read as a signed `int` (see `entry`), and the all-ones bit pattern IS
+    /// `-1` there.
+    public const long NoServe = 0xFFFF_FFFFL;
 
     const int KNil = 0, KTrue = 1, KFalse = 2, KInt = 3, KDouble = 4,
         KString = 5, KKeyword = 6, KSymbol = 7, KVector = 8, KList = 9,
@@ -37,12 +48,16 @@ public static class Img {
         public int[] init;
         public int[] varNames;
         public int flags;
+        public long serve;
     }
 
     sealed class R {
         readonly byte[] b;
         public int i;
         public R(byte[] b, int i) { this.b = b; this.i = i; }
+        /// The image's total length, so a reader can tell whether a trailing,
+        /// optional field is there at all (`serve`) without throwing.
+        public int Len => b.Length;
         public int U8() => b[i++] & 0xFF;
         public int U16() { int lo = U8(); return lo | (U8() << 8); }
         public long U32() { long lo = U16(); return lo | ((long) U16() << 16); }
@@ -140,6 +155,14 @@ public static class Img {
             for (long j = 0; j < np; j++) { r.U32(); r.U32(); }
         }
         outl.flags = (int) r.U32();
+        // OPTIONAL, and after the flags so every offset above stays put. An
+        // image written before this field existed ends exactly here, and
+        // reads as `NoServe` (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+        outl.serve = r.i + 4 <= r.Len ? r.U32() : NoServe;
+        // ON THE RUNTIME TOO, alongside `init`: `Conc.SpawnCall` reads it when
+        // the host binds a port, and the host is not there to hand it over at
+        // that point.
+        rt.serve = outl.serve;
 
         // Resolved BY NAME. A slot in an image belongs to the module it was
         // linked against; re-resolving here is what makes an image portable.

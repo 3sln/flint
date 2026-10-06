@@ -150,7 +150,22 @@ public final class Conc {
         /// Host ids of every BRIDGE this sandbox holds a handle for -- ids, not
         /// references, so the list pins nothing. This is the walk that turns a
         /// collection into a release (`DECISIONS.md#ports-are-the-hosts`).
-        SC_BRIDGES = 10, SC_LEN = 11;
+        SC_BRIDGES = 10,
+        /// The destination of the host-requested snapshot being streamed, or
+        /// NIL (`DECISIONS.md#snapshots`). Here so it is ROOTED while the
+        /// runtime streams to it -- a bridge handle nothing refers to is
+        /// released by `reapPorts`, which would tell the host this sandbox
+        /// let go of the port it is being sent the snapshot on.
+        SC_SNAP = 11,
+        /// The ports the host has `:bind`-ed, so `:close` can close them all;
+        /// NIL until the first (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+        /// It was a local of `flint.system/serve`'s loop.
+        SC_BOUND = 12,
+        /// TRUE once the control plane is over -- `:close` served, or the
+        /// system port ended -- and NIL until then. It was
+        /// `flint.system/serve` having returned.
+        SC_CTRL = 13,
+        SC_LEN = 14;
 
     /// Instructions a thread runs before the scheduler takes the slice back.
     /// Preemptive, so a thread with no `yield` in it cannot starve the others.
@@ -484,8 +499,13 @@ public final class Conc {
     /// sandbox is driven over: calls in arrive on it, and requests out -- for a
     /// capability, for another port -- leave on it. Handing it to guest code
     /// would make it ambient authority inside the sandbox, which is the thing
-    /// `DECISIONS.md#opaque-values` and `ports-are-the-hosts` both exist to prevent. There is no
-    /// builtin that answers it; only the runtime looks it up.
+    /// `DECISIONS.md#opaque-values` and `ports-are-the-hosts` both exist to prevent.
+    ///
+    /// NOT A BUILTIN ANY MORE. `flint/system-port` answered this to any
+    /// source that named it, because `flint.system/boot` was a thunk that
+    /// fetched the port; the control plane is runtime code now
+    /// (`DECISIONS.md#the-control-plane-is-the-runtimes`), and nothing a guest
+    /// can call reaches this.
     public static long systemPort(Rt rt) {
         return com._3sln.flint.kgen.rt.Portinstall.concSystemPort(rt);
     }
@@ -1196,8 +1216,14 @@ public final class Conc {
         // SCANNED, NOT DECODED (`DECISIONS.md#the-codec-is-guest-code`). The
         // bytes go into the queue as bytes and the GUEST decodes them; what
         // must still happen here is the MINTING, because a port has to exist
-        // before anything can be delivered on it -- a host binds a port and
-        // calls on it without pumping in between, deliberately.
+        // before anything can be delivered on it.
+        //
+        // THE SYSTEM PORT IS NOT SPECIAL HERE ANY MORE. It used to be routed
+        // out at this point into a runtime-side snapshot interception; the
+        // control plane is runtime code now (`kin/control.kin`,
+        // `DECISIONS.md#the-control-plane-is-the-runtimes`), and it reads the
+        // system port's queue at the top of `drive`; delivery is the same for
+        // every port.
         long ports = scanPorts(rt, bytes);
         if (Val.isNil(ports)) {
             // Refused rather than delivered as anything else: a message the
@@ -1529,56 +1555,51 @@ public final class Conc {
         return drive(rt);
     }
 
-    /// Spawn the control plane on the system port, once.
-    ///
-    /// Asked on EVERY drive rather than at install, because a host may install
-    /// a system port after the first run -- and because the first native
-    /// version did it at install time, inside an ABI call, where the
-    /// initialisers ran in a context that could not report failure and it
-    /// returned false in silence.
-    public static void bootSystemThreadOnce(Rt rt) {
-        if (rt.systemBooted) return;
-        if (Val.isNil(systemPort(rt))) return;      // no door yet; asked again next drive
-        rt.systemBooted = true;
-        bootSystemThread(rt);
+    // `bootSystemThreadOnce`/`bootSystemThread` WERE HERE, and spawned
+    // `flint.system/boot` -- looked up BY NAME -- as the control-plane
+    // thread, once a system port existed. The control plane is runtime code
+    // now (`kin/control.kin`, `DECISIONS.md#the-control-plane-is-the-runtimes`):
+    // no thread serves the system port, and no var's value is trusted with
+    // it.
+
+    /// Does this image have a call loop at all? `serve == NO_SERVE` means an
+    /// image built before `flint.callentry` existed -- which has nothing
+    /// `:bind` could ever start, so a hand-built image with a system port
+    /// and no call loop must still be able to SETTLE once its program ends,
+    /// rather than read forever as "the control plane is still waiting".
+    public static boolean hasCallLoop(Rt rt) {
+        return rt.serve != Img.NO_SERVE;
     }
 
-    /// **No guest code runs here.** `flint.system/boot` is a thunk, so this
-    /// takes its var's value and spawns it -- nothing is called. The native
-    /// runtime's first version called a flint function to build a closure over
-    /// the port, and that re-entered `drive` from inside `drive`: the nested
-    /// scheduler ran, found the boot flag already set, and the outer call came
-    /// back with nothing callable. The sandbox then tore itself down with no
-    /// message ever served, and the only visible symptom was "the call was
-    /// never answered".
+    /// Start the CALL LOOP on bound port `p`
+    /// (`DECISIONS.md#the-control-plane-is-the-runtimes`): the image's
+    /// `serve` function -- emitted by the compiler from `flint.callentry`,
+    /// named by INDEX and by nothing else -- closed over `p` as its one
+    /// upvalue, and spawned. False when the image has no call loop, which an
+    /// image built before there was one does not.
     ///
-    /// **Initialisers must have run**, because a var is nil until they have.
+    /// THE PORT IS AN UPVALUE, NOT AN ARGUMENT, because a thread's entry
+    /// takes none and a slot on every thread to carry one is gas on every
+    /// spawn.
     ///
-    /// Absent `flint.system` is NOT an error. A module built before this
-    /// existed has no control plane, and a sandbox nothing can call is a
-    /// coherent thing to be; failing here would make every old artifact
-    /// unloadable.
-    static void bootSystemThread(Rt rt) {
-        if (!rt.ensureStarted()) return;
-        for (int i = 0; i < rt.varNames.length; i++) {
-            if (!Str.text(rt, rt.consts[rt.varNames[i]]).equals("flint.system/boot")) continue;
-            long f = rt.roots.shared.globals[i];
-            if (Val.isNil(f) || !rt.isHeapTy(f, TY_CLOSURE)) return;
-            long th = spawn(rt, f);
-            // REMEMBERED BY ID, because this is the one thread a snapshot
-            // request is honoured from (`DECISIONS.md#snapshots`): guest code
-            // never runs on it, so "the caller is the system thread" is a
-            // grant the runtime conferred rather than a claim the caller
-            // made. An id rather than the value so it survives a collection,
-            // and so a live set can carry it.
-            if (isThread(rt, th)) rt.snapServe.systemThread = fx(rt.slot(th, TH_ID));
-            return;
-        }
-    }
-
-    /// A host-requested snapshot, served between turns (`Snap.Serve`).
-    public static void serveSnapshot(Rt rt) {
-        Snap.serveSnapshot(rt);
+    /// INITIALISERS FIRST. The loop resolves a call's `:fn` to a var's value,
+    /// and a var is nil until its namespace's top-level forms have run --
+    /// which is what booting `flint.system` used to ensure, on the first
+    /// drive.
+    public static boolean spawnCall(Rt rt, long p) {
+        long idx = rt.serve;
+        if (idx == Img.NO_SERVE) return false;
+        int base = rt.mark();
+        int pi = rt.push(p);
+        if (!rt.ensureStarted()) { rt.popTo(base); return false; }
+        long pv = rt.r(pi);
+        long c = rt.makeClosure((int) idx, new long[]{ pv });
+        if (Val.isNil(c)) { rt.popTo(base); return false; }
+        int ci = rt.push(c);
+        long cv = rt.r(ci);
+        long th = spawn(rt, cv);
+        rt.popTo(base);
+        return isThread(rt, th);
     }
 
     /// Re-attach the state `ensureSched` sets for a scheduler that came back
@@ -1650,5 +1671,16 @@ public final class Conc {
 
     public static long drive(Rt rt) {
         return com._3sln.flint.kgen.rt.Sched.schedDrive(rt);
+    }
+
+    /// THE CONTROL PLANE, between turns (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+    /// One-line delegations to the generated `kin/control.kin`, which is what
+    /// the vocabulary's `serve-control` and `control-waiting` name.
+    public static long serveControl(Rt rt) {
+        return com._3sln.flint.kgen.rt.Control.serveControlAt(rt);
+    }
+
+    public static boolean controlWaiting(Rt rt) {
+        return com._3sln.flint.kgen.rt.Control.controlWaiting(rt);
     }
 }

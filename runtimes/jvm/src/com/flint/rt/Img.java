@@ -17,6 +17,8 @@ import static com.flint.rt.Obj.*;
 ///   u32 ninit      ; fn indices to run first, in order
 ///   u32 naot       ; compiled arities (skipped here)
 ///   u32 flags      ; what the compiler decided
+///   u32 serve      ; the call loop's fn index, or NO_SERVE -- OPTIONAL: an
+///                  ; image that ends after `flags` has none
 /// </pre>
 ///
 /// Constants may reference EARLIER constants by index, which is why the writer
@@ -26,6 +28,13 @@ public final class Img {
 
     public static final int VERSION = 3;
     public static final int FLAG_PERF = 1;
+
+    /// The `serve` field of an image with no call loop
+    /// (`DECISIONS.md#the-control-plane-is-the-runtimes`). Also what an image
+    /// that ENDS after its flags means, which is every image written before
+    /// the field existed: such a sandbox has no way to serve a call, as one
+    /// with no `flint.system` had none.
+    public static final long NO_SERVE = 0xFFFF_FFFFL;
 
     static final int K_NIL = 0, K_TRUE = 1, K_FALSE = 2, K_INT = 3, K_DOUBLE = 4,
         K_STRING = 5, K_KEYWORD = 6, K_SYMBOL = 7, K_VECTOR = 8, K_LIST = 9,
@@ -147,6 +156,11 @@ public final class Img {
             for (long j = 0; j < np; j++) { r.u32(); r.u32(); }
         }
         out.flags = (int) r.u32();
+        // OPTIONAL, and after the flags so every offset above stays put.
+        long serve = (r.i + 4 <= r.b.length) ? r.u32() : NO_SERVE;
+        // ON THE RUNTIME, alongside `init`: `Conc.spawnCall` reads it long
+        // after this call has returned.
+        rt.serve = serve;
 
         // Resolved BY NAME. A slot in an image belongs to the module it was
         // linked against; re-resolving here is what makes an image portable.

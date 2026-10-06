@@ -1,0 +1,205 @@
+;; THE CONTROL PLANE, AS RUNTIME CODE (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+;;
+;; A sandbox is driven over its SYSTEM PORT, and what arrives there is control:
+;;
+;;     {:op :bind   :port p}   serve calls arriving on `p`
+;;     {:op :unbind :port p}   stop
+;;     {:op :close}            this sandbox is done
+;;     {:op :snapshot :port p} stream this sandbox's live set to `p`
+;;
+;; It was a flint namespace, `flint.system`, run on a green thread the runtime
+;; spawned by NAME. Which source backs a namespace is the resolver's answer --
+;; the host's -- so the code the runtime trusted with the system port was
+;; whatever a resolver supplied: a program's own `flint/system.cljc` took a
+;; 53 554-byte snapshot through it (measured 2026-10-05). None of the four ops
+;; needs flint: each is bookkeeping or a runtime call, and none of them parks.
+;; So they are served here, between turns, and nothing in any image is trusted
+;; with the system port.
+;;
+;; WHAT IS LEFT TO FLINT is serving the calls on a bound port, which runs guest
+;; functions and may park. `spawn-call` starts that loop on a green thread: it
+;; is a function the COMPILER emits into every image (`flint.callentry`) and the
+;; image names by index, so no source can supply or replace it.
+(ns flint.rt.control
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != < > >= not and + - local set while forever
+                                   nil? fixnum as-fixnum mark push r set-r pop-to
+                                   slot set-slot sched empty-vec is-port wake-on
+                                   port-by-id spawn-call snapshot-idle snapshot-begin ensure-started
+                                   has-call-loop
+                                   crosses-a-heap quot rem
+                                   Rt Value I64 I32 Bool RootIx NIL TRUE
+                                   PT_BYTES PT_KIND SC_BOUND SC_CTRL]]
+            [flint.rt.portinstall :refer [conc-system-port]]
+            [flint.rt.portring :refer [ring-inbox-count ring-dequeue]]
+            [flint.rt.portdrain :refer [receive-drained]]
+            [flint.rt.portpark :refer [close-at]]
+            [flint.rt.vecread :refer [vec-count vec-nth]]
+            [flint.rt.vecwrite :refer [vec-conj]]
+            [flint.rt.wirecore :refer [wire-reader]]
+            [flint.rt.wirescan :refer [wire-control-op]]))
+
+(doc "Is the control plane still WAITING ON THE HOST?"
+     ""
+     "True while the image has a call loop, there is a system port, and no"
+     "`:close` has been served, nor the port ended. `sched-needs-host` asks this, because nothing is parked"
+     "on the system port any more: the green thread that used to be -- which"
+     "is what made a sandbox with a door answer 2, \"the host is needed\" --"
+     "does not exist. Without this a sandbox with nothing bound would read as"
+     "settled and close its own system port before the host had said a word.")
+(defn ^:pub ^:method ^Bool control-waiting [^:mut ^Rt rt]
+  (comment "NO CALL LOOP, NO CONTROL PLANE. An image built before the compiler"
+           "put one in every image has none, as one built before `flint.system`"
+           "existed had no control plane: it is a sandbox nothing can call, a"
+           "coherent thing to be, and it must SETTLE when its program is done"
+           "rather than wait on a host for messages it cannot serve.")
+  (if (not (has-call-loop rt))
+    (return false))
+  (let [^Value sp (conc-system-port rt)]
+    (if (nil? rt sp)
+      (return false))
+    (let [^Value s (sched rt)]
+      (if (nil? rt s)
+        (return false))
+      (return (not (== (slot rt s SC_CTRL) TRUE))))))
+
+(doc "Close every bound port and forget them. What `:close` does, and what"
+     "the end of the system port does: a call thread parked on a port nobody"
+     "can reach any more would be a thread nothing can ever wake.")
+(defn ^:pub ^:method ^Value close-bound [^:mut ^Rt rt]
+  (let [^RootIx base (mark rt)
+        ^Value s0 (sched rt)
+        ^RootIx si (push rt s0)
+        ^Value b0 (slot rt (r rt si) SC_BOUND)
+        ^RootIx bi (push rt b0)]
+    (if (not (nil? rt (r rt bi)))
+      (let [^I32 n (vec-count rt (r rt bi))]
+        (local ^:mut ^I32 i)
+        (set i 0)
+        (while (< i n)
+          (let [^Value p (vec-nth rt (r rt bi) i NIL)]
+            (if (is-port rt p)
+              (close-at rt p)))
+          (set i (+ i 1)))))
+    (set-slot rt (r rt si) SC_BOUND NIL)
+    (pop-to rt base)
+    (return NIL)))
+
+(doc "`:unbind p`: close it -- the call thread's receive then answers"
+     "end-of-stream and its loop ends -- and drop it from the bound list,"
+     "by identity.")
+(defn ^:pub ^:method ^Value unbind-port [^:mut ^Rt rt ^Value p]
+  (let [^RootIx base (mark rt)
+        ^RootIx pi (push rt p)
+        ^RootIx si (push rt (sched rt))]
+    (close-at rt (r rt pi))
+    (let [^RootIx bi (push rt (slot rt (r rt si) SC_BOUND))
+          ^RootIx oi (push rt (empty-vec rt))]
+      (if (not (nil? rt (r rt bi)))
+        (let [^I32 n (vec-count rt (r rt bi))]
+          (local ^:mut ^I32 i)
+          (set i 0)
+          (while (< i n)
+            (let [^Value q (vec-nth rt (r rt bi) i NIL)]
+              (if (!= q (r rt pi))
+                (let [^Value grown (vec-conj rt (r rt oi) q)]
+                  (set-r rt oi grown))))
+            (set i (+ i 1)))))
+      (set-slot rt (r rt si) SC_BOUND (r rt oi)))
+    (pop-to rt base)
+    (return NIL)))
+
+(doc "`:bind p`: start the call loop on `p` and remember `p`, so `:close`"
+     "can stop it. Nothing is remembered when there is no call loop to start"
+     "-- an image built before there was one.")
+(defn ^:pub ^:method ^Value bind-port [^:mut ^Rt rt ^Value p]
+  (let [^RootIx base (mark rt)
+        ^RootIx pi (push rt p)]
+    (if (spawn-call rt (r rt pi))
+      (let [^RootIx si (push rt (sched rt))
+            ^RootIx bi (push rt (slot rt (r rt si) SC_BOUND))]
+        (if (nil? rt (r rt bi))
+          (set-r rt bi (empty-vec rt)))
+        (let [^Value grown (vec-conj rt (r rt bi) (r rt pi))]
+          (set-slot rt (r rt si) SC_BOUND grown))))
+    (pop-to rt base)
+    (return NIL)))
+
+(doc "Serve the system port: every control message waiting, in order."
+     ""
+     "CALLED BY `drive` AT THE TOP OF EVERY ITERATION, between turns. Nothing"
+     "here runs flint code and nothing parks, so a whole queue is served in one"
+     "go -- where a control plane on a green thread took one message per turn."
+     ""
+     "A SNAPSHOT IN FLIGHT COMES FIRST, and control waits behind it, as it did"
+     "when the control plane streamed it itself: `snapshot-idle` pumps what the"
+     "destination has room for and says whether the stream is done."
+     ""
+     "THE BYTE REFUND is `receive-at`'s: a bridge queues `[len bytes ports]` and"
+     "`len` is what the deliver CHARGED. The message stays rooted until it has"
+     "been served, because its `ports` are what hold the port it names -- the"
+     "intern table is weak."
+     ""
+     "THE END OF THE SYSTEM PORT is the end of the control plane: once it is"
+     "closed and drained, every bound port is closed, as `flint.system/serve`"
+     "did when its receive answered nil.")
+(defn ^:pub ^:method ^Value serve-control-at [^:mut ^Rt rt]
+  (if (not (snapshot-idle rt))
+    (return NIL))
+  (let [^Value sp0 (conc-system-port rt)]
+    (if (nil? rt sp0)
+      (return NIL))
+    (if (not (control-waiting rt))
+      (return NIL))
+    (comment "THE PROGRAM'S INITIALISERS RUN BEFORE ANY CONTROL MESSAGE is"
+             "served, on the first drive that finds a system port -- which is"
+             "when booting `flint.system` ran them. A call resolves its `:fn` to"
+             "a var's value, and a var is nil until they have.")
+    (if (not (ensure-started rt))
+      (return NIL))
+    (let [^RootIx base (mark rt)
+          ^RootIx spi (push rt sp0)]
+      (forever
+        (if (== (ring-inbox-count rt (r rt spi)) 0)
+          (do (if (!= (receive-drained rt (r rt spi)) 0)
+                (do (close-bound rt)
+                    (set-slot rt (sched rt) SC_CTRL TRUE)))
+              (pop-to rt base)
+              (return NIL)))
+        (let [^Value got (ring-dequeue rt (r rt spi))
+              ^RootIx ii (push rt got)]
+          (if (crosses-a-heap rt (as-fixnum (slot rt (r rt spi) PT_KIND)))
+            (let [^I64 n (as-fixnum (vec-nth rt (r rt ii) 0 NIL))
+                  ^I64 queued (as-fixnum (slot rt (r rt spi) PT_BYTES))]
+              (if (> queued n)
+                (set-slot rt (r rt spi) PT_BYTES (fixnum (- queued n))))
+              (if (not (> queued n))
+                (set-slot rt (r rt spi) PT_BYTES (fixnum 0)))))
+          (wake-on rt (r rt spi))
+          (let [^Value e (empty-vec rt)
+                ^RootIx ai (push rt e)
+                ^Value body (vec-nth rt (r rt ii) 1 NIL)
+                ^Value rd (wire-reader rt body false)
+                ^RootIx rdi (push rt rd)
+                ^I64 code (wire-control-op rt (r rt rdi) ai)
+                ^I64 op (rem code 8)
+                ^I64 id (- (quot code 8) 1)]
+            (local ^:mut ^Value p)
+            (set p NIL)
+            (if (and (>= code 0) (>= id 0))
+              (set p (port-by-id rt id)))
+            (if (and (== op 1) (is-port rt p))
+              (bind-port rt p))
+            (if (and (== op 2) (is-port rt p))
+              (unbind-port rt p))
+            (if (== op 3)
+              (do (close-bound rt)
+                  (set-slot rt (sched rt) SC_CTRL TRUE)
+                  (pop-to rt base)
+                  (return NIL)))
+            (if (and (== op 4) (is-port rt p))
+              (do (snapshot-begin rt p)
+                  (if (not (snapshot-idle rt))
+                    (do (pop-to rt base)
+                        (return NIL))))))
+          (pop-to rt ii))))))
