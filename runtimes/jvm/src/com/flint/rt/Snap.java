@@ -56,8 +56,19 @@ public final class Snap {
     /// (`DECISIONS.md#snapshots`). The first is the same reason as `started`:
     /// an import that forgot the control plane had booted spawned a SECOND
     /// one on the first drive, two threads receiving from one system port.
-    /// The second is what lets the restored copy's system thread tell "I was
-    /// copied" from "I am asking" -- see `Serve`.
+    /// The second let the restored copy's system thread tell "I was copied"
+    /// from "I am asking", when flint code asked.
+    ///
+    /// NEITHER DECIDES ANYTHING NOW (`DECISIONS.md#the-control-plane-is-the-runtimes`,
+    /// 2026-10-06). There is no control-plane thread -- the control plane is
+    /// runtime code, and its state is in the heap (`SC_BOUND`, `SC_CTRL`) --
+    /// so the id is written as -1 and ignored on import. And the runtime
+    /// serves requests: an import drops the destination it inherited
+    /// whatever the flag says (`Serve.inherited`). The flag is still written
+    /// -- and an un-driven copy writes back what it read -- because it is a
+    /// true statement about the export, and because a stream re-exported
+    /// from a copy that has not run must stay the same bytes
+    /// (`cli/src/snapstream_test.rs` asserts it).
     public static final int VERSION_LIVE = 3;
 
     /// How a value is written when it may point at the heap. One byte, so the
@@ -409,145 +420,240 @@ public final class Snap {
     // -----------------------------------------------------------------------
     // The live-set format: relocatable, and no dead objects in it.
 
-    /// A host-requested export, between the request and the last chunk
+    /// A host-requested export, from the request to the last chunk
     /// (`DECISIONS.md#snapshots`). Ported verbatim from
     /// `runtime/src/snap.rs::Serve`.
     ///
-    /// THE REQUEST IS SERVED BETWEEN TURNS, NOT INSIDE ONE. `flint.system`
-    /// asks with `flint/snapshot-export`, which PARKS the system thread; the
-    /// scheduler exports after that turn ends (`serveSnapshot`, called from
-    /// `schedDrive`), when every thread's state is in its thread object and
-    /// none is half-run. The thread is made runnable FIRST, so the copy holds
-    /// it runnable and about to re-execute the same call -- which then
-    /// answers the length here, and `nil` in the copy, because the copy was
-    /// imported with `restored` set. That is `fork`, and it is why the
-    /// restored copy does not stream the snapshot to a port that belonged to
-    /// the instance it was copied from.
+    /// THE RUNTIME SERVES IT, NOT FLINT CODE. The host sends `{:op :snapshot
+    /// :port P}` on the system port, and the control plane -- runtime code,
+    /// `kin/control.kin`, `DECISIONS.md#the-control-plane-is-the-runtimes` --
+    /// reads it there between turns and calls `begin`, which exports and
+    /// makes `P` the scheduler's `SC_SNAP`. `idle`, called before every later
+    /// control message, streams what `P` has room for, then the terminator,
+    /// then closes it.
+    ///
+    /// It used to be flint: `flint.system` asked with `flint/snapshot-export`
+    /// and read the bytes back with `flint/snapshot-chunk`, two builtins any
+    /// source could name and that refused unless the running thread was the
+    /// one the runtime had spawned `boot` on. That guard trusted whatever
+    /// code ran there, and a program's own `flint.system` ran there. Now
+    /// there is no builtin to call and no thread to trust: only the host can
+    /// put a message on the system port's queue, because a guest's send on a
+    /// bridge goes OUT.
+    ///
+    /// THE COPY DOES NOT STREAM ITSELF. The destination is in the heap when
+    /// the export is taken (`SC_SNAP` roots it), so the copy holds it; an
+    /// import drops it on the copy's first drive (`inherited`), because the
+    /// request was made of the instance the copy was taken from.
     public static final class Serve {
-        /// `TH_ID` of the thread `flint.system/boot` runs on, or -1.
+        /// RESERVED, and always -1 now. It was the `TH_ID` of the thread
+        /// `flint.system/boot` ran on; the format still carries the field
+        /// (`VERSION_LIVE`).
         public long systemThread = -1;
-        /// Asked for, not yet exported.
-        public boolean pending = false;
-        /// Set only while `exportLive` runs for a request.
+        /// Set only while `exportLive` runs for a request: the request flag
+        /// it writes.
         public boolean exporting = false;
-        /// Exported: the length, until the system thread collects it.
-        public long ready = -1;
-        /// The walk and the collector disagreed. Answered as a throw.
-        public boolean failed = false;
-        /// This runtime was imported from an export that answered a request.
+        /// This runtime was imported from an export that answered a
+        /// request, and has not driven since. Written back as the flag by
+        /// an export of it.
         public boolean restored = false;
-        /// The bytes being streamed. Freed when a chunk is asked for past the
-        /// end.
+        /// This runtime was imported and has not driven since: the
+        /// destination in its `SC_SNAP` belongs to the instance it was
+        /// copied from.
+        public boolean inherited = false;
+        /// A stream is in flight to `SC_SNAP`.
+        public boolean active = false;
+        /// The next byte of `buf` to send; one past its end once the
+        /// terminator has been.
+        public int off = 0;
+        /// The bytes being streamed. Freed when the stream ends, either way.
         public byte[] buf = new byte[0];
     }
 
-    /// Is the running thread the control plane?
-    ///
-    /// The whole of the guard that keeps a GUEST from taking a snapshot. Not a
-    /// compile-time check: `flint.rt/<x>` reaches any builtin from any source,
-    /// and a program with no workspaces is checked nowhere at compile time.
-    /// The thread identity is conferred by the runtime at boot, and no guest
-    /// code runs on that thread.
-    static boolean onSystemThread(Rt rt) {
-        long id = rt.snapServe.systemThread;
-        if (id < 0) return false;
-        long th = Conc.currentThread(rt);
-        if (!Conc.isThread(rt, th)) return false;
-        return Val.asFixnum(rt.slot(th, Conc.TH_ID)) == id;
+    /// The largest chunk a stream sends. 64 KiB: large enough that the
+    /// per-message cost is noise, small enough that the transient copy in
+    /// the heap is too. It was `flint.system/snapshot-chunk-bytes`.
+    public static final int CHUNK_BYTES = 65536;
+
+    /// The destination of the stream in flight, or NIL. Read afresh after
+    /// anything that allocates: an export runs a major collection.
+    static long dest(Rt rt) {
+        long s = Conc.sched(rt);
+        if (Val.isNil(s)) return Val.NIL;
+        return rt.slot(s, Conc.SC_SNAP);
     }
 
-    static long refuseGuest(Rt rt) {
-        return rt.throwStr("SecurityException",
-            "a snapshot is taken only when the HOST asks for one on the system port; "
-            + "guest code cannot take one");
+    /// What a send to the destination came to.
+    private enum Sent {
+        YES,
+        /// Over the byte budget: the host has not drained. Offered again
+        /// next drive.
+        FULL,
+        /// The destination is not open any more: the host let go of it.
+        GONE
     }
 
-    /// `flint/snapshot-export`: the system thread asks; see `Serve`.
-    ///
-    /// Answers the byte length once the export exists, `nil` in a restored
-    /// copy, and otherwise PARKS -- deciding to park before changing anything
-    /// a re-run would read, as every parking builtin must.
-    public static long requestExport(Rt rt) {
-        if (!onSystemThread(rt)) return refuseGuest(rt);
-        Serve s = rt.snapServe;
-        if (s.restored) {
-            s.restored = false;
-            return Val.NIL;
-        }
-        if (s.failed) {
-            s.failed = false;
-            return rt.throwStr("IllegalStateException",
-                "snapshot: the live-set walk and the collector disagreed");
-        }
-        if (s.ready >= 0) {
-            long n = s.ready;
-            s.ready = -1;
-            return Val.fixnum(n);
-        }
-        s.pending = true;
-        // On the SYSTEM PORT, with no waiter: nothing wakes this but
-        // `serveSnapshot`, and a deadlock report naming the port says where
-        // it is.
-        long on = Conc.systemPort(rt);
-        return Conc.park(rt, on);
+    /// One encoded message onto the destination, by the rule `Conc.send`
+    /// uses -- `fitsInBudget` and an `EV_MESSAGE` -- but with no thread to
+    /// park: the runtime is the sender, so a full bridge answers `FULL` and
+    /// the stream resumes on a later drive.
+    private static Sent send(Rt rt, byte[] bytes) {
+        long p = dest(rt);
+        if (Val.isNil(p) || !Conc.isPort(rt, p)) return Sent.GONE;
+        if (Val.asFixnum(rt.slot(p, Conc.PT_STATE)) != Conc.P_OPEN) return Sent.GONE;
+        long len = bytes.length;
+        long cap = Val.asFixnum(rt.slot(p, Conc.PT_CAP));
+        long queued = Val.asFixnum(rt.slot(p, Conc.PT_BYTES));
+        if (!com._3sln.flint.kgen.rt.Portbytes.fitsInBudget(rt, queued, len, cap)) return Sent.FULL;
+        long v = Bytes.of(rt, bytes);
+        int base = rt.mark();
+        int vi = rt.push(v);
+        p = dest(rt);
+        rt.setSlot(Val.asHeap(p), Conc.PT_BYTES, Val.fixnum(queued + len));
+        long id = Val.asFixnum(rt.slot(p, Conc.PT_ID));
+        long payload = rt.r(vi);
+        Conc.pushEvent(rt, Conc.EV_MESSAGE, id, len, payload);
+        rt.popTo(base);
+        return Sent.YES;
     }
 
-    /// `flint/snapshot-chunk`: `len` bytes of the export from `off`, or `nil`
-    /// past the end -- which also FREES the buffer, so asking past the end is
-    /// how the system thread lets go of it on success and on failure alike.
-    public static long chunk(Rt rt, long off, long len) {
-        if (!onSystemThread(rt)) return refuseGuest(rt);
-        byte[] buf = rt.snapServe.buf;
-        long n = buf.length;
-        if (off < 0 || len <= 0 || off >= n) {
-            rt.snapServe.buf = new byte[0];
-            return Val.NIL;
-        }
-        int end = (int) Math.min(n, off + len);
-        return Bytes.of(rt, Arrays.copyOfRange(buf, (int) off, end));
+    /// An unqualified keyword, as the wire writes one.
+    private static void putKw(W out, String name) {
+        out.u8(Codec.K_KEYWORD);
+        out.u32(Codec.NO_NS);
+        byte[] nb = name.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        out.u32(nb.length);
+        out.raw(nb);
     }
 
-    /// Serve a pending request. Called by `schedDrive` after every turn.
-    ///
-    /// The system thread is parked on the request. It is made RUNNABLE before
-    /// the export, so the copy holds it runnable too -- otherwise the copy's
-    /// control plane would sleep for ever on a request nobody will answer
-    /// there.
-    public static void serveSnapshot(Rt rt) {
-        if (!rt.snapServe.pending) return;
-        rt.snapServe.pending = false;
-        long id = rt.snapServe.systemThread;
-        long ts = rt.slot(Conc.sched(rt), Conc.SC_THREADS);
-        int n = Vec.count(rt, ts);
-        for (int i = 0; i < n; i++) {
-            long th = Vec.nth(rt, ts, i, Val.NIL);
-            if (Conc.isThread(rt, th) && Val.asFixnum(rt.slot(th, Conc.TH_ID)) == id) {
-                rt.setSlot(Val.asHeap(th), Conc.TH_STATUS, Val.fixnum(Conc.ST_RUNNABLE));
-                rt.setSlot(Val.asHeap(th), Conc.TH_PARK_ON, Val.NIL);
-            }
+    /// `{:op :end :size n}`, byte for byte what `flint.wire` wrote for it.
+    public static byte[] endMessage(long n) {
+        W out = new W();
+        out.u8(Codec.K_MAP);
+        out.u32(2);
+        putKw(out, "op");
+        putKw(out, "end");
+        putKw(out, "size");
+        out.u8(Codec.K_INT);
+        out.u64(n);
+        return out.done();
+    }
+
+    /// `{:op :error :message m}`.
+    public static byte[] errorMessage(String m) {
+        W out = new W();
+        out.u8(Codec.K_MAP);
+        out.u32(2);
+        putKw(out, "op");
+        putKw(out, "error");
+        putKw(out, "message");
+        out.u8(Codec.K_STRING);
+        byte[] mb = m.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        out.u32(mb.length);
+        out.raw(mb);
+        return out.done();
+    }
+
+    /// Close the destination if it is still open, let go of it, and free the
+    /// stream.
+    private static void finish(Rt rt) {
+        long p = dest(rt);
+        if (!Val.isNil(p) && Conc.isPort(rt, p)
+            && Val.asFixnum(rt.slot(p, Conc.PT_STATE)) == Conc.P_OPEN) {
+            Conc.close(rt, p);
+        }
+        long s = Conc.sched(rt);
+        if (!Val.isNil(s)) rt.setSlot(Val.asHeap(s), Conc.SC_SNAP, Val.NIL);
+        rt.snapServe.active = false;
+        rt.snapServe.off = 0;
+        rt.snapServe.buf = new byte[0];
+    }
+
+    /// A request whose destination is `p`: export now, between turns, and
+    /// start the stream. `idle` sends it. A port that is no longer open is
+    /// let go of unserved -- nobody is reading.
+    public static void begin(Rt rt, long p) {
+        long s = Conc.ensureSched(rt);
+        rt.setSlot(Val.asHeap(s), Conc.SC_SNAP, p);
+        if (!Conc.isPort(rt, p) || Val.asFixnum(rt.slot(p, Conc.PT_STATE)) != Conc.P_OPEN) {
+            finish(rt);
+            return;
         }
         // THE STATUS IS MID-DRIVE HERE, so it is whatever the LAST drive left
-        // -- and the doors leave different things: native's `resume` does not
-        // reset it and wasm's does, so the same program and the same host
-        // script streamed bytes that differed in exactly this field (see the
-        // matching note in `runtime/src/snap.rs::serve_snapshot`, measured
-        // 2026-10-05, one byte of 347 087). The copy is a sandbox waiting for
-        // its host to drive it, which is what 2 says, so that is what is
-        // written; the live field is put back, and `drive` sets it before it
-        // returns anyway.
+        // -- and the doors leave different things: native's `resume` does
+        // not reset it and wasm's does, so the same program and the same
+        // host script streamed bytes that differed in exactly this field
+        // (see the matching note in `runtime/src/snap.rs::begin`, measured
+        // 2026-10-05, one byte of 347 087). The copy is a sandbox waiting
+        // for its host to drive it, which is what 2 says, so that is what is
+        // written; the live field is put back.
         int status = rt.status;
         rt.status = 2;
-        rt.snapServe.buf = new byte[0];
         rt.snapServe.exporting = true;
         byte[] out = exportLive(rt);
         rt.snapServe.exporting = false;
         rt.status = status;
-        if (out != null) {
-            rt.snapServe.ready = out.length;
-            rt.snapServe.buf = out;
-        } else {
-            rt.snapServe.failed = true;
+        if (out == null) {
+            // AN EMPTY QUEUE ALWAYS FITS, so the error is sent now: nothing
+            // else is in flight to this destination.
+            byte[] m = errorMessage("snapshot: the live-set walk and the collector disagreed");
+            send(rt, m);
+            finish(rt);
+            return;
         }
+        rt.snapServe.buf = out;
+        rt.snapServe.off = 0;
+        rt.snapServe.active = true;
+    }
+
+    /// Stream what the destination has room for; true when nothing is in
+    /// flight afterwards. The control plane asks before every control
+    /// message, so the messages behind a snapshot wait for it, as they did
+    /// when the control plane streamed it itself.
+    public static boolean idle(Rt rt) {
+        if (rt.snapServe.inherited) {
+            // THE FIRST DRIVE OF AN IMPORTED COPY. A destination in its
+            // `SC_SNAP` was asked for by the instance it was copied from --
+            // it is the request this copy IS the answer to -- so it is not
+            // served here.
+            rt.snapServe.inherited = false;
+            rt.snapServe.restored = false;
+            long s = Conc.sched(rt);
+            if (!Val.isNil(s)) rt.setSlot(Val.asHeap(s), Conc.SC_SNAP, Val.NIL);
+        }
+        if (!rt.snapServe.active) return true;
+        // CHUNKS, then the terminator, each only when it fits.
+        for (;;) {
+            int n = rt.snapServe.buf.length;
+            int off = rt.snapServe.off;
+            if (off > n) break;
+            byte[] msg;
+            if (off == n) {
+                msg = endMessage(n);
+            } else {
+                int end = Math.min(n, off + CHUNK_BYTES);
+                int clen = end - off;
+                byte[] m = new byte[5 + clen];
+                m[0] = (byte) Codec.K_BYTES;
+                m[1] = (byte) clen; m[2] = (byte) (clen >>> 8);
+                m[3] = (byte) (clen >>> 16); m[4] = (byte) (clen >>> 24);
+                System.arraycopy(rt.snapServe.buf, off, m, 5, clen);
+                msg = m;
+            }
+            Sent sent = send(rt, msg);
+            if (sent == Sent.YES) {
+                rt.snapServe.off = (off == n) ? n + 1 : Math.min(n, off + CHUNK_BYTES);
+            } else if (sent == Sent.FULL) {
+                return false;
+            } else {
+                // The host let go of the destination mid-stream: stop, and
+                // free the copy rather than keep it for a reader that is
+                // gone.
+                break;
+            }
+        }
+        finish(rt);
+        return true;
     }
 
     /// Every live object, in ADDRESS order after a collection.
@@ -627,10 +733,11 @@ public final class Snap {
         w.u32(VERSION_LIVE);
         w.u64(rt.fingerprint);
         w.u32(rt.started ? 1 : 0);
-        w.u64(rt.snapServe.systemThread);
-        // `restored` too: an export of a copy that has not yet run its
-        // control plane is that same copy, and must answer `nil` there as
-        // well.
+        // RESERVED: -1, since there is no control-plane thread to name
+        // (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+        w.u64(-1L);
+        // `restored` too: an export of a copy that has not driven yet is
+        // that same copy, and says what it said (see `VERSION_LIVE`).
         w.u32((rt.snapServe.exporting || rt.snapServe.restored) ? 1 : 0);
 
         boolean ok = true;
@@ -728,15 +835,16 @@ public final class Snap {
         if (r.u32() != MAGIC_LIVE || r.u32() != VERSION_LIVE) { refused = REFUSE_LAYOUT; return false; }
         if (r.u64() != rt.fingerprint) { refused = REFUSE_IMAGE; return false; }
         rt.started = r.u32() != 0;
-        long systemThread = r.u64();
+        // RESERVED (see `exportLive`); an older export's thread id is
+        // ignored -- the control plane's state is in the heap now
+        // (`SC_BOUND`, `SC_CTRL`).
+        long _systemThread = r.u64();
         boolean answering = r.u32() != 0;
         rt.snapServe = new Serve();
-        rt.snapServe.systemThread = systemThread;
         rt.snapServe.restored = answering;
-        // Booted iff the copied runtime had booted: a second
-        // `flint.system/boot` over the restored one would split the system
-        // port's messages in two.
-        rt.systemBooted = systemThread >= 0;
+        // EVERY import, whatever the flag says: a request still queued in
+        // the copied heap was made of the instance this was copied from.
+        rt.snapServe.inherited = true;
 
         // Nothing of the old state may be reachable while the new objects are
         // being built, or a collection in the middle would try to keep both.

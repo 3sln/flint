@@ -24,9 +24,9 @@
                                    new-obj current-thread RootIx TY_NODE
                                    set-park-on set-thrown PARK
                                    W_KIND W_LEN
-                                   boot-system-thread-once reap-ports run-one
+                                   reap-ports run-one
                                    close-all-bridges set-status settled-answer
-                                   serve-snapshot
+                                   serve-control control-waiting
                                    report-deadlock gate-escaped? TH_RESULT
                                    slot sched is-port crosses-a-heap
                                    mark push r pop-to fixnum
@@ -108,6 +108,12 @@
      "the host might still act on it.")
 (defn ^:pub ^:method ^Bool sched-needs-host [^:mut ^Rt rt]
   (if (sched-pending-events rt)
+    (return true))
+  (comment "A CONTROL PLANE STILL WAITING IS THE HOST'S TO FEED. It was a green"
+           "thread parked on the system port, which the loop below found; it is"
+           "runtime code now, and nothing is parked there to find"
+           "(`DECISIONS.md#the-control-plane-is-the-runtimes`).")
+  (if (control-waiting rt)
     (return true))
   (let [^Value s (sched rt)]
     (if (nil? rt s)
@@ -206,7 +212,10 @@
      "target, and `report-deadlock` builds a host string naming the stuck"
      "threads, which is a diagnostic rather than a decision.")
 (defn ^:pub ^:method ^Value sched-drive [^:mut ^Rt rt]
-  (boot-system-thread-once rt)
+  (comment "NO CONTROL-PLANE THREAD IS BOOTED HERE ANY MORE. `flint.system/boot`"
+           "was, by name, on the first drive that found a system port; the"
+           "control plane is `serve-control` below now, and runtime code"
+           "(`DECISIONS.md#the-control-plane-is-the-runtimes`).")
   (forever
     (comment "What the collector left behind IS the lifetime rule: a flint end"
              "nothing refers to any more has been closed, whether or not"
@@ -241,15 +250,21 @@
                 (return NIL)))
           (set-status rt 0)
           (return (gate-answer rt))))
+    (comment "THE CONTROL PLANE IS SERVED HERE, BETWEEN TURNS"
+             "(`DECISIONS.md#the-control-plane-is-the-runtimes`): `:bind`,"
+             "`:unbind`, `:close` and `:snapshot`, by the RUNTIME, so no flint"
+             "code is trusted with the system port. Between turns because every"
+             "thread's state is then in its thread object -- inside a turn a"
+             "snapshot would copy a thread half-way through a builtin."
+             ""
+             "AT THE TOP OF THE LOOP, not after a turn, because nothing has to"
+             "run for a control message to be served, and because a snapshot"
+             "stream the host has not drained yet continues on the next drive"
+             "whether or not any thread is runnable then.")
+    (serve-control rt)
     (let [^I64 i (sched-pick rt)]
       (if (>= i 0)
         (do (run-one rt (to-i32 i))
-            (comment "A HOST-REQUESTED SNAPSHOT IS TAKEN HERE, BETWEEN TURNS"
-                     "(`DECISIONS.md#snapshots`): the system thread parked to"
-                     "ask, so its turn has just ended and every thread's state"
-                     "is in its thread object. Inside a turn the export would"
-                     "copy a thread half-way through a builtin.")
-            (serve-snapshot rt)
             (continue)))
       (comment "THE HOST FIRST. There is no entry function whose return means"
                "the program is over, so the only reason to stop is that"

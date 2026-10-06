@@ -290,18 +290,13 @@ function collectSources({ resolve, files, workspaces, target, withLib }) {
   // workspace two ways is the defect this mechanism exists to stop, and a
   // grant on one and not the other is exactly that.
   //
-  // AND `:vars`, for the same reason and on the same terms: the system loop
-  // that drives a sandbox (`DECISIONS.md#bridges-are-the-only-door`) is flint
-  // code in this library and resolves `{:op :call :fn "ns/f"}` -- a function
-  // named as TEXT -- through the `:vars`-guarded `flint/var-named`.
-  //
-  // This is the drift the paragraph above warns about, caught being made:
-  // `lib/deps.edn` gained `:vars` and this did not, so every program the SDK
-  // compiled was refused at `flint.system/answer` while the CLI compiled the
-  // same source. Two front doors, one workspace, one sentence -- in two files.
+  // NOT `:vars` ANY MORE, and `lib/deps.edn` says the same: the call loop
+  // that resolved a call's `:fn` through `flint/var-named` is the compiler's
+  // own now, and no source may name that builtin
+  // (`DECISIONS.md#the-control-plane-is-the-runtimes`).
   if (withLib) {
-    spaces.push({ prefix: 'clojure/', name: 'flint/flint', grants: ['host', 'vars'] });
-    spaces.push({ prefix: 'flint/', name: 'flint/flint', grants: ['host', 'vars'] });
+    spaces.push({ prefix: 'clojure/', name: 'flint/flint', grants: ['host'] });
+    spaces.push({ prefix: 'flint/', name: 'flint/flint', grants: ['host'] });
   }
   for (const w of workspaces ?? []) spaces.push(w);
   return { files: all, workspaces: spaces };

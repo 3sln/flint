@@ -151,25 +151,22 @@ if (nativeStream) {
      `${stream.length} vs ${nat.length}`);
 }
 
-// THE GUEST CANNOT: every route to the builtin is refused, and a `:snapshot`
-// the guest sends on the system port goes OUT to the host.
+// THE RUNTIME TAKES ONLY THE HOST'S EXACT REQUEST, ON THE SYSTEM PORT. No
+// guest route is left to probe here: the builtins that took a snapshot and
+// answered the system port are gone, so naming one is a compile error
+// (`cli/src/snapstream_test.rs`, which compiles each route). What remains is
+// the boundary the runtime draws: the same message on a call port is a call
+// with no `:fn`, and an op in a namespace is not the op.
 const g = sandbox().boot();
-let tx = 10;
-for (const f of ['steal', 'steal-chunk', 'steal-by-value', 'steal-on-a-thread']) {
-  const v = g.call(tx++, f);
-  ok(`guest code cannot take a snapshot: ${f}`,
-     typeof v === 'string' && v.includes('guest code cannot take one'), JSON.stringify(v));
-}
-g.deliver(CALLS, codec.map([[kw('tx'), codec.int(tx++)], [kw('op'), kw('call')],
-                            [kw('fn'), codec.str('snap/ask-on-the-system-port')],
-                            [kw('args'), codec.vec([])]]));
-const gevs = g.pump();
-ok("a guest's :snapshot on the system port leaves for the host",
-   gevs.some((ev) => ev.kind === EV_MESSAGE && ev.a === SYS));
-ok('  ... and nothing is exported for it',
-   gevs.every((ev) => !(ev.kind === EV_MESSAGE && codec.decode(ev.data) instanceof Uint8Array)));
+const chunkSent = (evs) => evs.some((ev) => ev.kind === EV_MESSAGE
+                                    && codec.decode(ev.data) instanceof Uint8Array);
+g.deliver(CALLS, codec.map([[kw('op'), kw('snapshot')], [kw('port'), codec.port(DEST)]]));
+ok('a request on a CALL port is not served', !chunkSent(g.pump()));
+g.deliver(SYS, codec.map([[kw('op'), codec.kw('x', 'snapshot')], [kw('port'), codec.port(DEST)]]));
+ok('a request for :x/snapshot is not served as :snapshot', !chunkSent(g.pump()));
 const control = g.request();
 ok("THE CONTROL: the host's own request on that sandbox is served",
    control.chunks.length > 0 && control.closed);
+ok('  ... and the sandbox still serves calls', g.call(20, 'bump') === 1);
 
 if (fails) { console.log(`${fails} failed`); process.exit(1); }

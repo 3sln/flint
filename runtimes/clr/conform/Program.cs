@@ -410,30 +410,31 @@ public static class Program {
         System.Array.Copy(stream, short8, 8);
         SsOk("a truncated stream (8 bytes) is refused", !Flint.Rt.Snap.ImportLive(trunc, short8));
 
-        // --- guest-side probe: the same builtin, reached by every route a
-        // guest has, must refuse every time.
+        // --- THE RUNTIME TAKES ONLY THE HOST'S REQUEST, ON THE SYSTEM PORT.
+        // The guest-bypass builtins (`steal`, `steal-chunk`, `steal-by-value`,
+        // `steal-on-a-thread`) and `ask-on-the-system-port` are gone from the
+        // fixture -- every route to them is a compile error now
+        // (`cli/src/snapstream_test.rs` compiles each one as its own
+        // program). What remains to probe here is the boundary the runtime
+        // draws: the same message on a bound call port is an ordinary
+        // message there -- a call with no `:fn` -- and an op in a namespace
+        // is not the op (`DECISIONS.md#the-control-plane-is-the-runtimes`).
         var g = SsBooted(img);
-        string[] stealFns = { "steal", "steal-chunk", "steal-by-value", "steal-on-a-thread" };
-        for (int i = 0; i < stealFns.Length; i++) {
-            long v = SsCall(g, 10 + i, stealFns[i]);
-            bool isStr = Flint.Rt.Str.IsString(g, v);
-            string msg = isStr ? Flint.Rt.Str.Text(g, v) : "NOT A STRING: " + g.Describe(v);
-            SsOk(stealFns[i] + " is refused: " + STrim(msg),
-                 isStr && msg.Contains("guest code cannot take one"));
-        }
-        // A `:snapshot` the GUEST sends on the system port goes OUT, to the
-        // host: it is an ordinary message there, and nothing is exported.
-        var askMsg = new W().Map(4).Kw("tx").Num(20).Kw("op").Kw("call")
-                             .Kw("fn").Str("snap/ask-on-the-system-port").Kw("args").Vec(0);
-        Flint.Rt.Conc.HostDeliver(g, SS_CALLS, askMsg.Done());
-        var evs2 = SsPump(g);
-        SsOk("the guest's message left on the system port",
-             evs2.Any(e => e.Kind == Flint.Rt.Conc.EV_MESSAGE && e.A == SS_SYS));
-        SsOk("no chunk was sent for a guest's request",
-             !evs2.Any(e => e.Kind == Flint.Rt.Conc.EV_MESSAGE && SsIsBytesPayload(g, e.Payload)));
-        // THE CONTROL: the same builtin, asked for by the HOST, does run.
+        bool ChunkSent(List<Ev> evs) => evs.Any(e => e.Kind == Flint.Rt.Conc.EV_MESSAGE
+                                                   && SsIsBytesPayload(g, e.Payload));
+        Flint.Rt.Conc.HostDeliver(g, SS_CALLS,
+            new W().Map(2).Kw("op").Kw("snapshot").Kw("port").Port(SS_DEST).Done());
+        SsOk("a request on a CALL port is not served", !ChunkSent(SsPump(g)));
+        Flint.Rt.Conc.HostDeliver(g, SS_SYS,
+            new W().Map(2).Kw("op").Kw("x", "snapshot").Kw("port").Port(SS_DEST).Done());
+        SsOk("a request for :x/snapshot is not served as :snapshot", !ChunkSent(SsPump(g)));
+        // THE CONTROL: the host's own request, on the same sandbox, is served.
         var (chunks3, _, closed3) = SsRequest(g);
-        SsOk("the host's own request on the same sandbox still works", chunks3.Count > 0 && closed3);
+        SsOk("THE CONTROL: the host's own request on that sandbox is served",
+             chunks3.Count > 0 && closed3);
+        long bump20 = SsCall(g, 20, "bump");
+        SsOk("  ... and the sandbox still serves calls: bump -> 1",
+             Flint.Rt.Val.IsFixnum(bump20) && Flint.Rt.Val.AsFixnum(bump20) == 1);
 
         // --- cross-runtime: a fresh CLR runtime imports native's stream.
         if (nativePath != null) {
@@ -821,6 +822,10 @@ public static class Program {
         }
         /// An unqualified keyword: absent namespace, then the name.
         public W Kw(string n) { return Tag(Flint.Rt.Codec.K_KEYWORD).U32(0xffffffffL).Text(n); }
+        /// A QUALIFIED keyword: a namespace, then the name -- each a
+        /// length-prefixed run, exactly as `Text` writes one, so `:x/snapshot`
+        /// is not `:snapshot` (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+        public W Kw(string ns, string n) { return Tag(Flint.Rt.Codec.K_KEYWORD).Text(ns).Text(n); }
         public W Str(string s) { return Tag(Flint.Rt.Codec.K_STRING).Text(s); }
         public W Num(long n) { return Tag(Flint.Rt.Codec.K_INT).I64(n); }
         public W Port(int id) { return Tag(Flint.Rt.Codec.K_PORT).U32(id); }

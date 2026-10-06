@@ -1,0 +1,820 @@
+--rust-head
+// THE CONTROL PLANE'S OWN TOY SANDBOX.
+//
+// A scheduler row (`SC_BOUND`, `SC_CTRL`), a registry of ports the host has
+// already minted -- as `kin/wirescan.kin`'s own walk would have, which this
+// file does not re-test -- and a system port modelled as an inbox of
+// `(byte-len, code)` pairs. `wire-control-op` is stubbed to answer the CODE
+// directly, stored on the queued message, so what is under test is
+// `serve-control-at`'s DISPATCH on that code, not the wire format
+// `kin/wirescan.drivers` already has its own verify of.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_0000_0000_0000);
+const TRUE: Value = Value(0xFFFF_0000_0000_0001);
+impl Value {
+    fn is_nil(self) -> bool { self == NIL }
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+}
+mod conc {
+    pub const PT_KIND: u32 = 0;
+    pub const PT_BYTES: u32 = 1;
+    pub const SC_BOUND: u32 = 0;
+    pub const SC_CTRL: u32 = 1;
+    // A BRIDGE crosses a heap; NOTHING does here -- every system port this
+    // file builds carries `PT_KIND = 0`, so the byte-refund branch in
+    // `serve-control-at` never fires. That branch is accounting
+    // `reap-ports` shares, not part of the DISPATCH this file exists to
+    // test, so leaving it untaken is the simpler fixture rather than a gap.
+    pub fn crosses_a_heap(kind: i64) -> bool { kind == 1 }
+    pub fn has_call_loop(rt: &mut super::Rt) -> bool { rt.has_loop }
+    pub fn spawn_call(rt: &mut super::Rt, p: super::Value) -> bool {
+        if !rt.spawn_ok { return false; }
+        if let Some(id) = rt.port_id_of(p) { rt.spawn_calls.push(id); }
+        true
+    }
+}
+mod snap {
+    // `idle` ANSWERS BUSY ONCE `begin` HAS RUN, which is what lets one row
+    // show `serve-control-at` stopping mid-queue rather than draining it --
+    // exactly as a real export in flight would.
+    pub fn idle(rt: &mut super::Rt) -> bool { rt.idle }
+    pub fn begin(rt: &mut super::Rt, p: super::Value) {
+        if let Some(id) = rt.port_id_of(p) { rt.snap_calls.push(id); }
+        rt.idle = false;
+    }
+}
+struct Rt {
+    objs: Vec<Vec<Value>>,
+    roots: Vec<Value>,
+    sched_v: Value,
+    empty: Value,
+    port_ids: Vec<i64>,
+    port_vals: Vec<Value>,
+    closed: Vec<i64>,
+    spawn_calls: Vec<i64>,
+    spawn_ok: bool,
+    wake_calls: u32,
+    system_port: Value,
+    // THE SYSTEM PORT'S INBOX: `(byte-len, code)`, dequeued front first.
+    inbox: Vec<(i64, i64)>,
+    drained: bool,
+    idle: bool,
+    snap_calls: Vec<i64>,
+    ensure_ok: bool,
+    has_loop: bool,
+}
+impl Rt {
+    fn obj(&mut self, slots: Vec<Value>) -> Value {
+        self.objs.push(slots);
+        Value((self.objs.len() - 1) as u64)
+    }
+    fn slot(&self, v: Value, i: u32) -> Value { self.objs[v.0 as usize][i as usize] }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.objs[v.0 as usize][i as usize] = x; }
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn pop_to(&mut self, i: usize) { self.roots.truncate(i); }
+    fn sched(&self) -> Value { self.sched_v }
+    fn empty_vec(&self) -> Value { self.empty }
+    // A VECTOR is an object whose slot 0 is its count; the items follow --
+    // the same convention `kin/sched.drivers` and `kin/wirescan.drivers` use.
+    fn vec_count(&self, v: Value) -> u32 {
+        if v.is_nil() { return 0; }
+        self.objs[v.0 as usize][0].as_fixnum() as u32
+    }
+    fn vec_nth(&self, v: Value, i: u32, d: Value) -> Value {
+        let n = self.vec_count(v);
+        if i >= n { return d; }
+        self.objs[v.0 as usize][(i + 1) as usize]
+    }
+    fn vec_conj(&mut self, v: Value, x: Value) -> Value {
+        let n = self.vec_count(v);
+        let cur = if v.is_nil() { vec![Value::fixnum(0)] } else { self.objs[v.0 as usize].clone() };
+        let mut next = cur;
+        next.truncate((n + 1) as usize);
+        next.push(x);
+        next[0] = Value::fixnum((n + 1) as i64);
+        self.obj(next)
+    }
+    fn is_port(&self, v: Value) -> bool {
+        !v.is_nil() && self.port_vals.contains(&v)
+    }
+    fn port_by_id(&mut self, id: i64) -> Value {
+        for (k, v) in self.port_ids.iter().zip(self.port_vals.iter()) {
+            if *k == id { return *v; }
+        }
+        NIL
+    }
+    fn wake_on(&mut self, _p: Value) { self.wake_calls += 1; }
+    fn conc_system_port(&mut self) -> Value { self.system_port }
+    fn ring_inbox_count(&mut self, _p: Value) -> u32 { self.inbox.len() as u32 }
+    fn ring_dequeue(&mut self, _p: Value) -> Value {
+        let (n, code) = self.inbox.remove(0);
+        self.obj(vec![Value::fixnum(2), Value::fixnum(n), Value::fixnum(code)])
+    }
+    fn receive_drained(&mut self, _p: Value) -> i64 { if self.drained { 1 } else { 0 } }
+    fn close_at(&mut self, p: Value) {
+        if let Some(id) = self.port_id_of(p) { self.closed.push(id); }
+    }
+    fn wire_reader(&mut self, body: Value, _streaming: bool) -> Value { body }
+    // THE STUB THE TASK ASKS FOR: the code is the message, not read from
+    // bytes -- this file tests `serve-control-at`'s dispatch on a code,
+    // which is what `kin/wirescan.drivers` already derives from real wire
+    // bytes on its own.
+    fn wire_control_op(&mut self, rd: Value, _acc: usize) -> i64 { rd.as_fixnum() }
+    fn ensure_started(&mut self) -> bool { self.ensure_ok }
+    // A HARNESS HELPER, not a kin word: the reverse of `port_by_id`, used
+    // only to turn a port back into the id the expected answers are
+    // written against.
+    fn port_id_of(&self, v: Value) -> Option<i64> {
+        for (k, val) in self.port_ids.iter().zip(self.port_vals.iter()) {
+            if *val == v { return Some(*k); }
+        }
+        None
+    }
+--rust
+}
+fn fresh() -> Rt {
+    let mut rt = Rt { objs: Vec::new(), roots: Vec::new(), sched_v: NIL, empty: NIL,
+                      port_ids: Vec::new(), port_vals: Vec::new(), closed: Vec::new(),
+                      spawn_calls: Vec::new(), spawn_ok: true, wake_calls: 0,
+                      system_port: NIL, inbox: Vec::new(), drained: false, idle: true,
+                      snap_calls: Vec::new(), ensure_ok: true, has_loop: true };
+    let e = rt.obj(vec![Value::fixnum(0)]);
+    rt.empty = e;
+    // SC_BOUND = NIL, SC_CTRL = NIL -- "NIL until the first", per the source.
+    let s = rt.obj(vec![NIL, NIL]);
+    rt.sched_v = s;
+    rt
+}
+fn mk_port(rt: &mut Rt, id: i64) -> Value {
+    let p = rt.obj(vec![Value::fixnum(id)]);
+    rt.port_ids.push(id);
+    rt.port_vals.push(p);
+    p
+}
+// PT_KIND = 0 (never crosses a heap here), PT_BYTES = 0 (unused).
+fn mk_system_port(rt: &mut Rt) -> Value {
+    rt.obj(vec![Value::fixnum(0), Value::fixnum(0)])
+}
+fn bound_ids(rt: &Rt) -> String {
+    let b = rt.slot(rt.sched_v, conc::SC_BOUND);
+    let n = rt.vec_count(b);
+    let mut ids = Vec::new();
+    for i in 0..n {
+        let v = rt.vec_nth(b, i, NIL);
+        ids.push(rt.port_id_of(v).unwrap_or(-1).to_string());
+    }
+    if ids.is_empty() { "-".to_string() } else { ids.join(",") }
+}
+fn ctrl(rt: &Rt) -> u32 { if rt.slot(rt.sched_v, conc::SC_CTRL) == TRUE { 1 } else { 0 } }
+fn joined(v: &[i64]) -> String {
+    if v.is_empty() { "-".to_string() } else { v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",") }
+}
+fn main() {
+    let mut out = String::new();
+
+    // 1-4. CONTROL-WAITING.
+    let mut a = fresh();
+    out.push_str(&format!("{}", a.control_waiting() as u32));
+    out.push(' ');
+    let mut b = fresh();
+    let bp = mk_system_port(&mut b);
+    b.system_port = bp;
+    out.push_str(&format!("{}", b.control_waiting() as u32));
+    out.push(' ');
+    b.set(b.sched_v, conc::SC_CTRL, TRUE);
+    out.push_str(&format!("{}", b.control_waiting() as u32));
+    out.push(' ');
+    let mut c = fresh();
+    let cp = mk_system_port(&mut c);
+    c.system_port = cp;
+    c.has_loop = false;
+    out.push_str(&format!("{}", c.control_waiting() as u32));
+    out.push_str(" | ");
+
+    // 5. SERVE-CONTROL-AT: a queued BIND.
+    let mut d = fresh();
+    let dp = mk_system_port(&mut d);
+    d.system_port = dp;
+    mk_port(&mut d, 5);
+    d.inbox.push((0, 49)); // op 1 (bind), port id 5: 1 + 8*(5+1) = 49
+    d.serve_control_at();
+    out.push_str(&format!("spawn={} bound={} ctrl={} left={}",
+        joined(&d.spawn_calls), bound_ids(&d), ctrl(&d), d.inbox.len()));
+    out.push_str(" | ");
+
+    // 6. An UNBIND of an already-bound port.
+    let mut e = fresh();
+    let ep = mk_system_port(&mut e);
+    e.system_port = ep;
+    let up = mk_port(&mut e, 7);
+    let b0 = e.vec_conj(e.empty, up);
+    e.set(e.sched_v, conc::SC_BOUND, b0);
+    e.inbox.push((0, 66)); // op 2 (unbind), port id 7: 2 + 8*(7+1) = 66
+    e.serve_control_at();
+    out.push_str(&format!("closed={} bound={} ctrl={}",
+        joined(&e.closed), bound_ids(&e), ctrl(&e)));
+    out.push_str(" | ");
+
+    // 7. A CLOSE, with two ports already bound, and a message left queued
+    //    behind it.
+    let mut f = fresh();
+    let fp = mk_system_port(&mut f);
+    f.system_port = fp;
+    let p3 = mk_port(&mut f, 3);
+    let p4 = mk_port(&mut f, 4);
+    let fb0 = f.vec_conj(f.empty, p3);
+    let fb1 = f.vec_conj(fb0, p4);
+    f.set(f.sched_v, conc::SC_BOUND, fb1);
+    f.inbox.push((0, 3));   // op 3 (close), no port: 3 + 8*0 = 3
+    f.inbox.push((0, 999)); // left queued -- `:close` returns without it
+    f.serve_control_at();
+    out.push_str(&format!("closed={} bound={} ctrl={} left={}",
+        joined(&f.closed), bound_ids(&f), ctrl(&f), f.inbox.len()));
+    out.push_str(" | ");
+
+    // 8. A SNAPSHOT, with a message left queued behind it because
+    //    `snapshot-idle` goes false once `snapshot-begin` has run.
+    let mut g = fresh();
+    let gp = mk_system_port(&mut g);
+    g.system_port = gp;
+    mk_port(&mut g, 2);
+    g.inbox.push((0, 28));  // op 4 (snapshot), port id 2: 4 + 8*(2+1) = 28
+    g.inbox.push((0, 999)); // left queued -- serving STOPS
+    g.serve_control_at();
+    out.push_str(&format!("snap={} ctrl={} left={}",
+        joined(&g.snap_calls), ctrl(&g), g.inbox.len()));
+    out.push_str(" | ");
+
+    // 9. THE SYSTEM PORT DRAINED AND CLOSED: no message waiting, and the
+    //    host end is gone.
+    let mut h = fresh();
+    let hp = mk_system_port(&mut h);
+    h.system_port = hp;
+    let p9 = mk_port(&mut h, 9);
+    let p10 = mk_port(&mut h, 10);
+    let hb0 = h.vec_conj(h.empty, p9);
+    let hb1 = h.vec_conj(hb0, p10);
+    h.set(h.sched_v, conc::SC_BOUND, hb1);
+    h.drained = true;
+    h.serve_control_at();
+    out.push_str(&format!("closed={} bound={} ctrl={}",
+        joined(&h.closed), bound_ids(&h), ctrl(&h)));
+
+    println!("{out}");
+}
+--java-head
+    static final long NIL = 0xFFFF000000000000L;
+    static final long TRUE = 0xFFFF000000000001L;
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static final long TRUE = Probe.TRUE;
+        static boolean isNil(long v) { return v == Probe.NIL; }
+        static long asFixnum(long v) { return v; }
+        static long fixnum(long n) { return n; }
+        static long asHeap(long v) { return v; }
+    }
+    static final class Conc {
+        static final int PT_KIND = 0, PT_BYTES = 1, SC_BOUND = 0, SC_CTRL = 1;
+        static long sched(Rt rt) { return rt.schedV; }
+        static boolean isPort(Rt rt, long v) { return !Val.isNil(v) && rt.portVals.contains(v); }
+        static boolean crossesAHeap(long kind) { return kind == 1; }
+        static void wakeOn(Rt rt, long p) { rt.wakeCalls++; }
+        static long portById(Rt rt, long id) {
+            for (int i = 0; i < rt.portIds.size(); i++)
+                if (rt.portIds.get(i) == id) return rt.portVals.get(i);
+            return NIL;
+        }
+        static boolean hasCallLoop(Rt rt) { return rt.hasLoop; }
+        static boolean spawnCall(Rt rt, long p) {
+            if (!rt.spawnOk) return false;
+            Long id = rt.portIdOf(p);
+            if (id != null) rt.spawnCalls.add(id);
+            return true;
+        }
+    }
+    static final class Snap {
+        static boolean idle(Rt rt) { return rt.idle; }
+        static void begin(Rt rt, long p) {
+            Long id = rt.portIdOf(p);
+            if (id != null) rt.snapCalls.add(id);
+            rt.idle = false;
+        }
+    }
+    static final class Vec { static long empty(Rt rt) { return rt.emptyVec; } }
+    // BARE, not on a class: `kin/scripts/gen` strips the imports, so a call
+    // into another kin namespace lands unqualified in the probe.
+    static long concSystemPort(Rt rt) { return rt.systemPort; }
+    static int ringInboxCount(Rt rt, long p) { return rt.inboxLen.size(); }
+    static long ringDequeue(Rt rt, long p) {
+        long n = rt.inboxLen.remove(0);
+        long code = rt.inboxCode.remove(0);
+        return rt.obj(new long[]{2, n, code});
+    }
+    static long receiveDrained(Rt rt, long p) { return rt.drained ? 1 : 0; }
+    static void closeAt(Rt rt, long p) {
+        Long id = rt.portIdOf(p);
+        if (id != null) rt.closedIds.add(id);
+    }
+    static long wireReader(Rt rt, long body, boolean streaming) { return body; }
+    static long wireControlOp(Rt rt, long rd, long acc) { return Val.asFixnum(rd); }
+    static int vecCount(Rt rt, long v) {
+        if (Val.isNil(v)) return 0;
+        return (int) rt.objs.get((int) v)[0];
+    }
+    static long vecNth(Rt rt, long v, int i, long d) {
+        int n = vecCount(rt, v);
+        return i >= n ? d : rt.objs.get((int) v)[i + 1];
+    }
+    static long vecConj(Rt rt, long v, long x) {
+        int n = vecCount(rt, v);
+        long[] cur = Val.isNil(v) ? new long[]{0} : rt.objs.get((int) v);
+        long[] next = new long[n + 2];
+        next[0] = n + 1;
+        for (int k = 0; k < n; k++) next[k + 1] = cur[k + 1];
+        next[n + 1] = x;
+        return rt.obj(next);
+    }
+    static final class Rt {
+        java.util.List<long[]> objs = new java.util.ArrayList<>();
+        java.util.List<Long> roots = new java.util.ArrayList<>();
+        long schedV = NIL;
+        long emptyVec;
+        java.util.List<Long> portIds = new java.util.ArrayList<>();
+        java.util.List<Long> portVals = new java.util.ArrayList<>();
+        java.util.List<Long> closedIds = new java.util.ArrayList<>();
+        java.util.List<Long> spawnCalls = new java.util.ArrayList<>();
+        boolean spawnOk = true;
+        int wakeCalls = 0;
+        long systemPort = NIL;
+        java.util.List<Long> inboxLen = new java.util.ArrayList<>();
+        java.util.List<Long> inboxCode = new java.util.ArrayList<>();
+        boolean drained = false;
+        boolean idle = true;
+        java.util.List<Long> snapCalls = new java.util.ArrayList<>();
+        boolean ensureOk = true;
+        boolean hasLoop = true;
+        long obj(long[] slots) { objs.add(slots); return objs.size() - 1; }
+        long slot(long v, int i) { return objs.get((int) v)[i]; }
+        void setSlot(long v, int i, long x) { objs.get((int) v)[i] = x; }
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void setR(int i, long v) { roots.set(i, v); }
+        void popTo(int i) { while (roots.size() > i) roots.remove(roots.size() - 1); }
+        boolean ensureStarted() { return ensureOk; }
+        Long portIdOf(long v) {
+            for (int i = 0; i < portIds.size(); i++)
+                if (portVals.get(i) == v) return portIds.get(i);
+            return null;
+        }
+    }
+--java
+    static Rt fresh() {
+        Rt rt = new Rt();
+        long e = rt.obj(new long[]{0});
+        rt.emptyVec = e;
+        long s = rt.obj(new long[]{NIL, NIL});
+        rt.schedV = s;
+        return rt;
+    }
+    static long mkPort(Rt rt, long id) {
+        long p = rt.obj(new long[]{id});
+        rt.portIds.add(id);
+        rt.portVals.add(p);
+        return p;
+    }
+    static long mkSystemPort(Rt rt) { return rt.obj(new long[]{0, 0}); }
+    static String boundIds(Rt rt) {
+        long b = rt.slot(rt.schedV, Conc.SC_BOUND);
+        int n = vecCount(rt, b);
+        java.util.List<String> ids = new java.util.ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            long v = vecNth(rt, b, i, NIL);
+            Long id = rt.portIdOf(v);
+            ids.add(String.valueOf(id == null ? -1 : id));
+        }
+        return ids.isEmpty() ? "-" : String.join(",", ids);
+    }
+    static int ctrl(Rt rt) { return rt.slot(rt.schedV, Conc.SC_CTRL) == TRUE ? 1 : 0; }
+    static String joined(java.util.List<Long> v) {
+        if (v.isEmpty()) return "-";
+        java.util.List<String> s = new java.util.ArrayList<>();
+        for (long x : v) s.add(String.valueOf(x));
+        return String.join(",", s);
+    }
+    public static void main(String[] args) {
+        StringBuilder out = new StringBuilder();
+
+        Rt a = fresh();
+        out.append(controlWaiting(a) ? 1 : 0);
+        out.append(' ');
+        Rt b = fresh();
+        long bp = mkSystemPort(b);
+        b.systemPort = bp;
+        out.append(controlWaiting(b) ? 1 : 0);
+        out.append(' ');
+        b.setSlot(b.schedV, Conc.SC_CTRL, TRUE);
+        out.append(controlWaiting(b) ? 1 : 0);
+        out.append(' ');
+        Rt c = fresh();
+        long cp = mkSystemPort(c);
+        c.systemPort = cp;
+        c.hasLoop = false;
+        out.append(controlWaiting(c) ? 1 : 0);
+        out.append(" | ");
+
+        Rt d = fresh();
+        long dp = mkSystemPort(d);
+        d.systemPort = dp;
+        mkPort(d, 5);
+        d.inboxLen.add(0L); d.inboxCode.add(49L);
+        serveControlAt(d);
+        out.append("spawn=").append(joined(d.spawnCalls))
+           .append(" bound=").append(boundIds(d))
+           .append(" ctrl=").append(ctrl(d))
+           .append(" left=").append(d.inboxLen.size());
+        out.append(" | ");
+
+        Rt e = fresh();
+        long ep = mkSystemPort(e);
+        e.systemPort = ep;
+        long up = mkPort(e, 7);
+        long b0 = vecConj(e, e.emptyVec, up);
+        e.setSlot(e.schedV, Conc.SC_BOUND, b0);
+        e.inboxLen.add(0L); e.inboxCode.add(66L);
+        serveControlAt(e);
+        out.append("closed=").append(joined(e.closedIds))
+           .append(" bound=").append(boundIds(e))
+           .append(" ctrl=").append(ctrl(e));
+        out.append(" | ");
+
+        Rt f = fresh();
+        long fp = mkSystemPort(f);
+        f.systemPort = fp;
+        long p3 = mkPort(f, 3);
+        long p4 = mkPort(f, 4);
+        long fb0 = vecConj(f, f.emptyVec, p3);
+        long fb1 = vecConj(f, fb0, p4);
+        f.setSlot(f.schedV, Conc.SC_BOUND, fb1);
+        f.inboxLen.add(0L); f.inboxCode.add(3L);
+        f.inboxLen.add(0L); f.inboxCode.add(999L);
+        serveControlAt(f);
+        out.append("closed=").append(joined(f.closedIds))
+           .append(" bound=").append(boundIds(f))
+           .append(" ctrl=").append(ctrl(f))
+           .append(" left=").append(f.inboxLen.size());
+        out.append(" | ");
+
+        Rt g = fresh();
+        long gp = mkSystemPort(g);
+        g.systemPort = gp;
+        mkPort(g, 2);
+        g.inboxLen.add(0L); g.inboxCode.add(28L);
+        g.inboxLen.add(0L); g.inboxCode.add(999L);
+        serveControlAt(g);
+        out.append("snap=").append(joined(g.snapCalls))
+           .append(" ctrl=").append(ctrl(g))
+           .append(" left=").append(g.inboxLen.size());
+        out.append(" | ");
+
+        Rt h = fresh();
+        long hp = mkSystemPort(h);
+        h.systemPort = hp;
+        long p9 = mkPort(h, 9);
+        long p10 = mkPort(h, 10);
+        long hb0 = vecConj(h, h.emptyVec, p9);
+        long hb1 = vecConj(h, hb0, p10);
+        h.setSlot(h.schedV, Conc.SC_BOUND, hb1);
+        h.drained = true;
+        serveControlAt(h);
+        out.append("closed=").append(joined(h.closedIds))
+           .append(" bound=").append(boundIds(h))
+           .append(" ctrl=").append(ctrl(h));
+
+        System.out.println(out.toString());
+    }
+--csharp-head
+    internal const long NIL = unchecked((long) 0xFFFF000000000000UL);
+    internal const long TRUE = unchecked((long) 0xFFFF000000000001UL);
+    internal static class Val {
+        internal const long Nil = unchecked((long) 0xFFFF000000000000UL);
+        internal const long True = unchecked((long) 0xFFFF000000000001UL);
+        internal static bool IsNil(long v) => v == NIL;
+        internal static long AsFixnum(long v) => v;
+        internal static long Fixnum(long n) => n;
+        internal static long AsHeap(long v) => v;
+    }
+    internal static class Conc {
+        internal const int PT_KIND = 0, PT_BYTES = 1, SC_BOUND = 0, SC_CTRL = 1;
+        internal static long Sched(Rt rt) => rt.SchedV;
+        internal static bool IsPort(Rt rt, long v) => !Val.IsNil(v) && rt.PortVals.Contains(v);
+        internal static bool CrossesAHeap(long kind) => kind == 1;
+        internal static void WakeOn(Rt rt, long p) { rt.WakeCalls++; }
+        internal static long PortById(Rt rt, long id) {
+            for (int i = 0; i < rt.PortIds.Count; i++)
+                if (rt.PortIds[i] == id) return rt.PortVals[i];
+            return NIL;
+        }
+        internal static bool HasCallLoop(Rt rt) => rt.HasLoop;
+        internal static bool SpawnCall(Rt rt, long p) {
+            if (!rt.SpawnOk) return false;
+            long? id = rt.PortIdOf(p);
+            if (id != null) rt.SpawnCalls.Add(id.Value);
+            return true;
+        }
+    }
+    internal static class Snap {
+        internal static bool Idle(Rt rt) => rt.Idle;
+        internal static void Begin(Rt rt, long p) {
+            long? id = rt.PortIdOf(p);
+            if (id != null) rt.SnapCalls.Add(id.Value);
+            rt.Idle = false;
+        }
+    }
+    internal static class Vec { internal static long Empty(Rt rt) => rt.EmptyVec; }
+    // BARE, not on a class -- see the Java head.
+    static long ConcSystemPort(Rt rt) => rt.SystemPort;
+    static int RingInboxCount(Rt rt, long p) => rt.InboxLen.Count;
+    static long RingDequeue(Rt rt, long p) {
+        long n = rt.InboxLen[0]; rt.InboxLen.RemoveAt(0);
+        long code = rt.InboxCode[0]; rt.InboxCode.RemoveAt(0);
+        return rt.MakeObj(new long[]{2, n, code});
+    }
+    static long ReceiveDrained(Rt rt, long p) => rt.Drained ? 1 : 0;
+    static void CloseAt(Rt rt, long p) {
+        long? id = rt.PortIdOf(p);
+        if (id != null) rt.ClosedIds.Add(id.Value);
+    }
+    static long WireReader(Rt rt, long body, bool streaming) => body;
+    static long WireControlOp(Rt rt, long rd, long acc) => Val.AsFixnum(rd);
+    static int VecCount(Rt rt, long v) {
+        if (Val.IsNil(v)) return 0;
+        return (int) rt.Objs[(int) v][0];
+    }
+    static long VecNth(Rt rt, long v, int i, long d) {
+        int n = VecCount(rt, v);
+        return i >= n ? d : rt.Objs[(int) v][i + 1];
+    }
+    static long VecConj(Rt rt, long v, long x) {
+        int n = VecCount(rt, v);
+        var cur = Val.IsNil(v) ? new long[]{0} : rt.Objs[(int) v];
+        var next = new long[n + 2];
+        next[0] = n + 1;
+        for (int k = 0; k < n; k++) next[k + 1] = cur[k + 1];
+        next[n + 1] = x;
+        return rt.MakeObj(next);
+    }
+    internal sealed class Rt {
+        internal System.Collections.Generic.List<long[]> Objs = new();
+        internal System.Collections.Generic.List<long> Roots = new();
+        internal long SchedV = NIL;
+        internal long EmptyVec;
+        internal System.Collections.Generic.List<long> PortIds = new();
+        internal System.Collections.Generic.List<long> PortVals = new();
+        internal System.Collections.Generic.List<long> ClosedIds = new();
+        internal System.Collections.Generic.List<long> SpawnCalls = new();
+        internal bool SpawnOk = true;
+        internal int WakeCalls = 0;
+        internal long SystemPort = NIL;
+        internal System.Collections.Generic.List<long> InboxLen = new();
+        internal System.Collections.Generic.List<long> InboxCode = new();
+        internal bool Drained = false;
+        internal bool Idle = true;
+        internal System.Collections.Generic.List<long> SnapCalls = new();
+        internal bool EnsureOk = true;
+        internal bool HasLoop = true;
+        internal long MakeObj(long[] slots) { Objs.Add(slots); return Objs.Count - 1; }
+        internal long Slot(long v, int i) => Objs[(int) v][i];
+        internal void SetSlot(long v, int i, long x) { Objs[(int) v][i] = x; }
+        internal int Mark() => Roots.Count;
+        internal int Push(long v) { Roots.Add(v); return Roots.Count - 1; }
+        internal long R(int i) => Roots[i];
+        internal void SetR(int i, long v) { Roots[i] = v; }
+        internal void PopTo(int i) { while (Roots.Count > i) Roots.RemoveAt(Roots.Count - 1); }
+        internal bool EnsureStarted() => EnsureOk;
+        internal long? PortIdOf(long v) {
+            for (int i = 0; i < PortIds.Count; i++)
+                if (PortVals[i] == v) return PortIds[i];
+            return null;
+        }
+    }
+--csharp
+    static Rt Fresh() {
+        var rt = new Rt();
+        long e = rt.MakeObj(new long[]{0});
+        rt.EmptyVec = e;
+        long s = rt.MakeObj(new long[]{NIL, NIL});
+        rt.SchedV = s;
+        return rt;
+    }
+    static long MkPort(Rt rt, long id) {
+        long p = rt.MakeObj(new long[]{id});
+        rt.PortIds.Add(id);
+        rt.PortVals.Add(p);
+        return p;
+    }
+    static long MkSystemPort(Rt rt) => rt.MakeObj(new long[]{0, 0});
+    static string BoundIds(Rt rt) {
+        long b = rt.Slot(rt.SchedV, Conc.SC_BOUND);
+        int n = VecCount(rt, b);
+        var ids = new System.Collections.Generic.List<string>();
+        for (int i = 0; i < n; i++) {
+            long v = VecNth(rt, b, i, NIL);
+            long? id = rt.PortIdOf(v);
+            ids.Add((id ?? -1).ToString());
+        }
+        return ids.Count == 0 ? "-" : string.Join(",", ids);
+    }
+    static int Ctrl(Rt rt) => rt.Slot(rt.SchedV, Conc.SC_CTRL) == TRUE ? 1 : 0;
+    static string Joined(System.Collections.Generic.List<long> v) {
+        if (v.Count == 0) return "-";
+        var s = new System.Collections.Generic.List<string>();
+        foreach (var x in v) s.Add(x.ToString());
+        return string.Join(",", s);
+    }
+    static void Main() {
+        var outp = new System.Text.StringBuilder();
+
+        var a = Fresh();
+        outp.Append(ControlWaiting(a) ? 1 : 0);
+        outp.Append(' ');
+        var b = Fresh();
+        long bp = MkSystemPort(b);
+        b.SystemPort = bp;
+        outp.Append(ControlWaiting(b) ? 1 : 0);
+        outp.Append(' ');
+        b.SetSlot(b.SchedV, Conc.SC_CTRL, TRUE);
+        outp.Append(ControlWaiting(b) ? 1 : 0);
+        outp.Append(' ');
+        var c = Fresh();
+        long cp = MkSystemPort(c);
+        c.SystemPort = cp;
+        c.HasLoop = false;
+        outp.Append(ControlWaiting(c) ? 1 : 0);
+        outp.Append(" | ");
+
+        var d = Fresh();
+        long dp = MkSystemPort(d);
+        d.SystemPort = dp;
+        MkPort(d, 5);
+        d.InboxLen.Add(0); d.InboxCode.Add(49);
+        ServeControlAt(d);
+        outp.Append("spawn=").Append(Joined(d.SpawnCalls))
+            .Append(" bound=").Append(BoundIds(d))
+            .Append(" ctrl=").Append(Ctrl(d))
+            .Append(" left=").Append(d.InboxLen.Count);
+        outp.Append(" | ");
+
+        var e = Fresh();
+        long ep = MkSystemPort(e);
+        e.SystemPort = ep;
+        long up = MkPort(e, 7);
+        long b0 = VecConj(e, e.EmptyVec, up);
+        e.SetSlot(e.SchedV, Conc.SC_BOUND, b0);
+        e.InboxLen.Add(0); e.InboxCode.Add(66);
+        ServeControlAt(e);
+        outp.Append("closed=").Append(Joined(e.ClosedIds))
+            .Append(" bound=").Append(BoundIds(e))
+            .Append(" ctrl=").Append(Ctrl(e));
+        outp.Append(" | ");
+
+        var f = Fresh();
+        long fp = MkSystemPort(f);
+        f.SystemPort = fp;
+        long p3 = MkPort(f, 3);
+        long p4 = MkPort(f, 4);
+        long fb0 = VecConj(f, f.EmptyVec, p3);
+        long fb1 = VecConj(f, fb0, p4);
+        f.SetSlot(f.SchedV, Conc.SC_BOUND, fb1);
+        f.InboxLen.Add(0); f.InboxCode.Add(3);
+        f.InboxLen.Add(0); f.InboxCode.Add(999);
+        ServeControlAt(f);
+        outp.Append("closed=").Append(Joined(f.ClosedIds))
+            .Append(" bound=").Append(BoundIds(f))
+            .Append(" ctrl=").Append(Ctrl(f))
+            .Append(" left=").Append(f.InboxLen.Count);
+        outp.Append(" | ");
+
+        var g = Fresh();
+        long gp = MkSystemPort(g);
+        g.SystemPort = gp;
+        MkPort(g, 2);
+        g.InboxLen.Add(0); g.InboxCode.Add(28);
+        g.InboxLen.Add(0); g.InboxCode.Add(999);
+        ServeControlAt(g);
+        outp.Append("snap=").Append(Joined(g.SnapCalls))
+            .Append(" ctrl=").Append(Ctrl(g))
+            .Append(" left=").Append(g.InboxLen.Count);
+        outp.Append(" | ");
+
+        var h = Fresh();
+        long hp = MkSystemPort(h);
+        h.SystemPort = hp;
+        long p9 = MkPort(h, 9);
+        long p10 = MkPort(h, 10);
+        long hb0 = VecConj(h, h.EmptyVec, p9);
+        long hb1 = VecConj(h, hb0, p10);
+        h.SetSlot(h.SchedV, Conc.SC_BOUND, hb1);
+        h.Drained = true;
+        ServeControlAt(h);
+        outp.Append("closed=").Append(Joined(h.ClosedIds))
+            .Append(" bound=").Append(BoundIds(h))
+            .Append(" ctrl=").Append(Ctrl(h));
+
+        System.Console.WriteLine(outp.ToString());
+    }
+--expect
+0 1 0 0 | spawn=5 bound=5 ctrl=0 left=0 | closed=7 bound=- ctrl=0 | closed=3,4 bound=- ctrl=1 left=1 | snap=2 ctrl=0 left=1 | closed=9,10 bound=- ctrl=1
+--expect-why
+DERIVED FROM THE SOURCE in `kin/control.kin`, read line by line, not from a
+run. `wire-control-op` is stubbed to answer a code this file chose, so every
+code below is `op + 8 * (port-id + 1)` by construction, not by parsing.
+
+  --- CONTROL-WAITING, read off its four guards in order:
+      no call loop -> false; no system port -> false; no scheduler -> false;
+      else `not (SC_CTRL == TRUE)` ---
+
+  `0`  NO SYSTEM PORT. `conc-system-port` answers NIL and the second guard
+       takes it, before SC_CTRL is ever read.
+  `1`  A SYSTEM PORT, `SC_CTRL` still NIL (the "NIL until the first" state
+       every scheduler starts in). `not (NIL == TRUE)` is true.
+  `0`  THE SAME SCHEDULER with `SC_CTRL` set to TRUE: `not (TRUE == TRUE)`
+       is false.
+  `0`  NO CALL LOOP, with a system port present and `SC_CTRL` NIL -- the
+       state that answered `1` two fields back. The FIRST guard now fires
+       before the system port or `SC_CTRL` are read at all, which is the
+       only field here that isolates it: every other field already passes
+       with `has-call-loop` left at its default `true`.
+
+  --- SERVE-CONTROL-AT, one call each, from a scheduler with nothing bound
+      unless a case says otherwise ---
+
+  BIND (code 65 would be `:bind :port 7`; this case uses port id 5, so
+  `1 + 8*(5+1) = 49`):
+    `spawn=5`   `spawn-call` was invoked with the port whose id is 5 --
+                `bind-port`'s own call, unconditional once the op and the
+                port agree.
+    `bound=5`   and `SC_BOUND` now holds that same port: the vector built
+                from `empty-vec` (SC_BOUND started NIL) by one `vec-conj`.
+    `ctrl=0`    unchanged -- `:bind` never touches `SC_CTRL`.
+    `left=0`    the one queued message is gone: `ring-dequeue` took it and
+                nothing else was queued.
+
+  UNBIND (id 7: `2 + 8*(7+1) = 66`), starting with port 7 already in
+  `SC_BOUND`:
+    `closed=7`  `close-at` is unconditional in `unbind-port`, before the
+                bound list is even rebuilt.
+    `bound=-`   port 7 was the ONLY entry, so the rebuilt list (every
+                element that is NOT port 7, by identity) is empty --
+                `vec-count` of it is 0, read here as "-".
+    `ctrl=0`    unchanged, same reason as BIND.
+
+  CLOSE (`3 + 8*0 = 3`, no port), starting with TWO ports bound (3, 4), and
+  a SECOND message queued behind the close:
+    `closed=3,4`  `close-bound` walks `SC_BOUND` front to back, closing
+                  every element that `is-port` -- both of them, in the
+                  order they were added.
+    `bound=-`     `close-bound` sets `SC_BOUND` to NIL explicitly, which is
+                  why this reads "-" and not merely "empty": a vector that
+                  happened to end up with zero live entries would print
+                  the same, but only this case proves the SLOT itself was
+                  cleared.
+    `ctrl=1`      `SC_CTRL` is set TRUE on `:close`, unconditionally.
+    `left=1`      **THE FIELD THAT PROVES THE EARLY RETURN.** `:close`
+                  returns from `serve-control-at` immediately after acting,
+                  without looping back to look at the ring again -- so the
+                  message queued behind it is never dequeued. A version
+                  that fell through to the loop's top would read `left=0`
+                  here and still pass every field above.
+
+  SNAPSHOT (id 2: `4 + 8*(2+1) = 28`), with a second message queued behind
+  it:
+    `snap=2`      `snapshot-begin` was called with the port whose id is 2.
+    `ctrl=0`      `:snapshot` never touches `SC_CTRL`.
+    `left=1`      **THE FIELD THAT PROVES SERVING STOPS.** This harness's
+                  `snapshot-begin` stub sets `snapshot-idle` false once run
+                  -- exactly what a real export in flight does -- so the
+                  `(if (not (snapshot-idle rt)) (return ...))` right after
+                  `snapshot-begin` in the source fires, and the loop never
+                  reaches the second message. A version that kept looping
+                  regardless would read `left=0` and still pass `snap=2`.
+
+  THE DRAINED SYSTEM PORT (no message queued at all, and `receive-drained`
+  answers non-zero), with TWO ports bound (9, 10):
+    `closed=9,10` the `ring-inbox-count == 0` branch takes the DRAINED arm
+                  rather than returning quietly, and closes every bound
+                  port exactly as `:close` does -- the same `close-bound`.
+    `bound=-`     `SC_BOUND` cleared, same as the CLOSE case.
+    `ctrl=1`      `SC_CTRL` set TRUE here too: the end of the system port
+                  is the end of the control plane, same as `:close`.
+
+EVERY BYTE COUNT QUEUED IS 0 AND EVERY SYSTEM PORT HAS `PT_KIND = 0` ON
+PURPOSE: the byte-refund arithmetic inside the cross-a-heap branch is
+`reap-ports`'s own bookkeeping, not part of the dispatch on `:bind`,
+`:unbind`, `:close` and `:snapshot` this file exists to pin, so every case
+here is built never to take that branch at all.

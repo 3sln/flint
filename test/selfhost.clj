@@ -59,20 +59,11 @@
 
 (def dirs ["src" "lib"])
 (def entry 'flint.selfhost/main)
-;; `flint.system` IS A ROOT, and this file is the FOURTH place that has had to
-;; say so. It is the sandbox's control plane
-;; (`DECISIONS.md#bridges-are-the-only-door`): bootstrap spawns it by NAME, so
-;; nothing requires it, so a `collect` that follows requires never reaches it --
-;; and a module without it settles on its first drive and answers nothing.
-;;
-;; Missing here, the fixpoint failed as `flint: the call to flint.selfhost/main
-;; was never answered`, which names neither the cause nor the layer. What it
-;; costs to find: `boot_system_thread_once` gets as far as `var_named
-;; "flint.system/boot"` and that answers nil, because the var has no slot,
-;; because the namespace was never compiled. `extra-roots` in `compile-image`
-;; roots the SYMBOL and cannot conjure the source -- so it protects callers who
-;; already have the namespace and nobody else.
-(def sources (collect dirs [(symbol (namespace entry)) 'clojure.core 'flint.system]))
+;; `flint.system` WAS A ROOT here, the fourth place that had to say so, because
+;; bootstrap spawned it by NAME. The control plane is the runtime's now and the
+;; call loop is compiled into every image (`DECISIONS.md#the-control-plane-is-the-runtimes`),
+;; so there is nothing for a `collect` to miss.
+(def sources (collect dirs [(symbol (namespace entry)) 'clojure.core]))
 (def order (topo sources))
 (def spec {:sources sources :order order :entry entry :builtins (builtin-names)})
 
@@ -192,7 +183,7 @@
   ;; that one. It is an honest error rather than corruption, but it is the
   ;; HOST's limit, so a number that trips it would be measuring node.
   (let [n 500
-        small (collect dirs ['clojure.core 'flint.system])
+        small (collect dirs ['clojure.core])
         ;; V IS DEAD ON PURPOSE, and the threshold does not care: measured,
         ;; a literal reachable from `main` and one the shake drops break at the
         ;; same size, because the cost is in ANALYSING it and analysis happens

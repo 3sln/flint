@@ -91,6 +91,9 @@ struct Rt {
     status: i32,
     closed: bool,
     deadlocked: bool,
+    // `control-waiting`'s stub answer, set directly by the one row that
+    // needs it true.
+    control_waiting_flag: bool,
 }
 impl Rt {
     fn obj(&mut self, slots: Vec<Value>, is_port: bool) -> Value {
@@ -111,9 +114,18 @@ impl Rt {
     // WHETHER A HANDLER CAUGHT IT is the harness's to choose, so both arms of
     // the failure path can be driven.
     fn unwind_from_resume(&mut self) -> bool { self.trace.push('U'); self.catches }
-    fn boot_system_thread_once(&mut self) {}
     fn reap_ports(&mut self) {}
     fn close_all_bridges(&mut self) { self.closed = true; }
+    // THE CONTROL PLANE, STUBBED. Both are behind `flint.impl.rt`'s vocabulary
+    // (`DECISIONS.md#the-control-plane-is-the-runtimes`) precisely so this
+    // file can stand in for `kin/control.kin` without compiling it --
+    // `control.drivers` tests that namespace's own dispatch. `serve_control_at`
+    // is a no-op: nothing here exercises what it would do, only that
+    // `sched-drive` calls it. `control_waiting` answers a flag the harness
+    // sets directly, for the one row that needs it true with nothing else
+    // asking for the host.
+    fn serve_control_at(&mut self) {}
+    fn control_waiting(&mut self) -> bool { self.control_waiting_flag }
     // `&self`, NOT `&mut self`, and that matters: the real `Rt::slot` and
     // `Rt::sched` are both `&self`, so a harness that demands `&mut` is
     // STRICTER THAN THE RUNTIME -- it rejects `self.set(w, i, self.slot(..))`,
@@ -173,7 +185,8 @@ fn main() {
     let mut rt = Rt { objs: Vec::new(), ports: Vec::new(), sched_id: None,
                       roots: Vec::new(), trace: String::new(), park_on: NIL,
                       thrown: NIL, catches: true, gas_trips: 0,
-                      status: 0, closed: false, deadlocked: false };
+                      status: 0, closed: false, deadlocked: false,
+                      control_waiting_flag: false };
     let bridge = rt.obj(vec![fx(1)], true);
     let channel = rt.obj(vec![fx(0)], true);
     let t_run = rt.obj(vec![fx(conc::ST_RUNNABLE), NIL], false);
@@ -505,6 +518,19 @@ fn main() {
         rt.abandon_current_thread();
         out.push_str(",1");
     }
+    out.push(' ');
+    // 20. CONTROL-WAITING ALONE NEEDS THE HOST, and NOTHING ELSE HERE WOULD:
+    //     an otherwise-idle scheduler -- no thread, no undrained event -- so
+    //     this row is the only one that finds `control-waiting` rather than
+    //     passing against a `sched-needs-host` that never asks it.
+    {
+        let ts_cw = rt.obj(vec![fx(0)], false);
+        let s_cw = rt.obj(vec![ts_cw, fx(0), evs, fx(0), NIL, fx(-1)], false);
+        rt.sched_id = Some(s_cw.0 as usize);
+        rt.control_waiting_flag = true;
+        out.push_str(&format!("{}", rt.sched_needs_host() as u32));
+        rt.control_waiting_flag = false;
+    }
     println!("{out}");
 }
 --java-head
@@ -548,7 +574,6 @@ fn main() {
         static final int W_GEN = 0, W_THREAD = 1, W_PORT = 2, W_NEXT = 3;
         // WHAT `drive` CALLS. `runOne` marks the thread DONE, which is what
         // makes the loop terminate with no interpreter under it.
-        static void bootSystemThreadOnce(Rt rt) {}
         static void reapPorts(Rt rt) {}
         static void closeAllBridges(Rt rt) { rt.closed = true; }
         static void runOne(Rt rt, int i) {
@@ -563,6 +588,11 @@ fn main() {
         static boolean isPort(Rt rt, long v) {
             return v != NIL && v >= 0 && v < rt.ports.size() && rt.ports.get((int) v);
         }
+        // THE CONTROL PLANE, STUBBED -- see the note beside `Conc` in the Rust
+        // head. `serveControl` is a no-op; `controlWaiting` answers a flag the
+        // harness sets directly, for the one row that needs it true.
+        static void serveControl(Rt rt) {}
+        static boolean controlWaiting(Rt rt) { return rt.controlWaitingFlag; }
     }
     static final class Val {
         static final long NIL = Probe.NIL;
@@ -607,6 +637,9 @@ fn main() {
         boolean catches = true;
         // HOW MANY TIMES THE BUDGET BLEW; `> 1` is the gate having escaped.
         int gasTrips = 0;
+        // `control-waiting`'s stub answer, set directly by the one row that
+        // needs it true.
+        boolean controlWaitingFlag = false;
         int mark() { return roots.size(); }
         int push(long v) { roots.add(v); return roots.size() - 1; }
         long r(int i) { return roots.get(i); }
@@ -880,6 +913,16 @@ fn main() {
             abandonCurrentThread(rt);
             out.append(",1");
         }
+        out.append(' ');
+        // 20. CONTROL-WAITING ALONE NEEDS THE HOST -- see the Rust driver.
+        {
+            long tsCw = rt.obj(new long[]{ 0 }, false);
+            long sCw = rt.obj(new long[]{ tsCw, 0, evs, 0, NIL, -1 }, false);
+            rt.schedId = (int) sCw;
+            rt.controlWaitingFlag = true;
+            out.append(schedNeedsHost(rt) ? 1 : 0);
+            rt.controlWaitingFlag = false;
+        }
         System.out.println(out.toString());
     }
 --csharp-head
@@ -919,7 +962,6 @@ fn main() {
         internal const int SC_WAITERS = 4, SC_WFREE = 5;
         internal const int W_GEN = 0, W_THREAD = 1, W_PORT = 2, W_NEXT = 3;
         // WHAT `Drive` CALLS -- see the note in the Java head.
-        internal static void BootSystemThreadOnce(Rt rt) {}
         internal static void ReapPorts(Rt rt) {}
         internal static void CloseAllBridges(Rt rt) { rt.Closed = true; }
         internal static void RunOne(Rt rt, int i) {
@@ -933,6 +975,11 @@ fn main() {
         internal static long Sched(Rt rt) => rt.SchedId < 0 ? NIL : rt.SchedId;
         internal static bool IsPort(Rt rt, long v) =>
             v != NIL && v >= 0 && v < rt.Ports.Count && rt.Ports[(int) v];
+        // THE CONTROL PLANE, STUBBED -- see the note beside `Conc` in the Rust
+        // head. `ServeControl` is a no-op; `ControlWaiting` answers a flag the
+        // harness sets directly, for the one row that needs it true.
+        internal static void ServeControl(Rt rt) {}
+        internal static bool ControlWaiting(Rt rt) => rt.ControlWaitingFlag;
     }
     internal static class Val {
         internal const long Nil = NIL;
@@ -975,6 +1022,9 @@ fn main() {
         internal bool catches = true;
         // HOW MANY TIMES THE BUDGET BLEW; `> 1` is the gate having escaped.
         internal int gasTrips = 0;
+        // `control-waiting`'s stub answer, set directly by the one row that
+        // needs it true.
+        internal bool ControlWaitingFlag = false;
         internal int Mark() => Roots.Count;
         internal int Push(long v) { Roots.Add(v); return Roots.Count - 1; }
         internal long R(int i) => Roots[i];
@@ -1247,10 +1297,20 @@ fn main() {
             AbandonCurrentThread(rt);
             outp.Append(",1");
         }
+        outp.Append(' ');
+        // 20. CONTROL-WAITING ALONE NEEDS THE HOST -- see the Rust driver.
+        {
+            long tsCw = rt.MakeObj(new long[]{ 0 }, false);
+            long sCw = rt.MakeObj(new long[]{ tsCw, 0, evs, 0, NIL, -1 }, false);
+            rt.SchedId = (int) sCw;
+            rt.ControlWaitingFlag = true;
+            outp.Append(SchedNeedsHost(rt) ? 1 : 0);
+            rt.ControlWaitingFlag = false;
+        }
         System.Console.WriteLine(outp.ToString());
     }
 --expect
--1 1 1 2 0 1 1 0 -1 0 0 1 1 0 200 011 01 41 20 0 0 1 0 0 0 1 1000 0 0 BSREL BSTVL BSTUVL BSTUL - 1,-1,0,2,0 21 1,2,65537,2 1,1,1,1,1,1,-1 0111 011 20 3,-1,1,1,0,3,1
+-1 1 1 2 0 1 1 0 -1 0 0 1 1 0 200 011 01 41 20 0 0 1 0 0 0 1 1000 0 0 BSREL BSTVL BSTUVL BSTUL - 1,-1,0,2,0 21 1,2,65537,2 1,1,1,1,1,1,-1 0111 011 20 3,-1,1,1,0,3,1 1
 --expect-why
 DERIVED FROM WHAT THE SCHEDULER PROMISES, field by field.
 
@@ -1536,4 +1596,21 @@ DERIVED FROM WHAT THE SCHEDULER PROMISES, field by field.
   abandon `1`   A NIL SCHEDULER IS NOT AN ERROR. The runtime can park during
                 startup before a scheduler exists. Reaching this line IS the
                 assertion: a target that indexed into nil would not print it.
+
+  --- and CONTROL-WAITING, read straight from `sched-needs-host`'s source:
+      `(if (sched-pending-events rt) (return true)) (if (control-waiting rt)
+      (return true)) ...` ---
+
+  needsHost `1`  AN OTHERWISE-IDLE SCHEDULER -- an empty thread vector, no
+                 undrained event -- with `control-waiting` answering true.
+                 Nothing else in this row asks for the host: `pending-events`
+                 is false (the event vector is empty) and there is no thread
+                 to be parked on a bridge, so the only way this field reads
+                 `1` is if the SECOND `if` in the source is reached and taken.
+                 DERIVED from the source quoted above, not from a run: the
+                 flag stubs `control-waiting` (behind a word for the reason
+                 given where `serve-control` and `control-waiting` are
+                 required, `DECISIONS.md#the-control-plane-is-the-runtimes`),
+                 and `sched-needs-host` must answer true on it alone or this
+                 passes against a function that never calls it.
 

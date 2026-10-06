@@ -1364,30 +1364,15 @@ public final class Builtins {
             if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-id wants a port");
             return rt.slot(p, Conc.PT_ID);
         });
-        /// This sandbox's system port, or nil if it was given none.
-        ///
-        /// It exists because the control plane has to be a THUNK. Bootstrap
-        /// spawns `flint.system/boot` by taking its var's value and spawning
-        /// it, and a green thread takes no arguments -- so the port cannot be
-        /// passed in and has to be fetched. The alternative was the runtime
-        /// calling a flint function to build a closure over the port, which
-        /// re-enters `drive` from inside `drive`: measured on the native
-        /// runtime, and the nested scheduler is what made the first version
-        /// silently never start (`DECISIONS.md#bridges-are-the-only-door`).
-        def("flint/system-port", (rt, at, n) -> Conc.systemPort(rt));
-        // A HOST-REQUESTED SNAPSHOT (`DECISIONS.md#snapshots`), for
-        // `flint.system`'s `:snapshot` op and nothing else. Both refuse
-        // unless the caller is the system thread -- the guard lives in
-        // `Snap`, at run time, because any source can NAME these through
-        // `flint.rt/<x>`.
-        def("flint/snapshot-export", (rt, at, n) -> Snap.requestExport(rt));
-        def("flint/snapshot-chunk", (rt, at, n) -> {
-            long off = rt.vat(at), len = rt.vat(at + 1);
-            if (!Val.isFixnum(off) || !Val.isFixnum(len)) {
-                return rt.throwStr("ClassCastException", "snapshot-chunk wants two integers");
-            }
-            return Snap.chunk(rt, Val.asFixnum(off), Val.asFixnum(len));
-        });
+        // `flint/system-port`, `flint/snapshot-export` AND `flint/snapshot-chunk`
+        // WERE HERE, and are gone (`DECISIONS.md#snapshots`,
+        // `DECISIONS.md#bridges-are-the-only-door`). The first answered the
+        // system port to any source that named it, because `flint.system/boot`
+        // was a thunk that had to fetch it; the runtime now hands the port to
+        // `boot` as its argument. The other two let `flint.system` take a
+        // snapshot, guarded by "the caller is the system thread", which trusted
+        // whatever code ran there; the runtime now serves a host's request
+        // itself, and no builtin takes one.
         def("flint/port-label", (rt, at, n) -> {
             long p = com._3sln.flint.kgen.rt.Meta.portOf(rt, rt.vat(at));
             if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-label wants a port");

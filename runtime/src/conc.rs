@@ -291,7 +291,20 @@ pub const SC_SYSTEM: u32 = 9;
 /// sandbox letting go. Walking a list of ports held is proportional to a
 /// handful, not to the heap.
 pub const SC_BRIDGES: u32 = 10;
-pub const SC_LEN: u32 = 11;
+/// The destination of the host-requested snapshot being streamed, or NIL
+/// (`DECISIONS.md#snapshots`). Here so it is ROOTED while the runtime streams
+/// to it -- a bridge handle nothing refers to is released by `reap_ports`,
+/// which would tell the host this sandbox let go of the port it is being sent
+/// the snapshot on.
+pub const SC_SNAP: u32 = 11;
+/// The ports the host has `:bind`-ed, so `:close` can close them all; NIL
+/// until the first (`DECISIONS.md#the-control-plane-is-the-runtimes`). It was
+/// a local of `flint.system/serve`'s loop.
+pub const SC_BOUND: u32 = 12;
+/// TRUE once the control plane is over -- `:close` served, or the system port
+/// ended -- and NIL until then. It was `flint.system/serve` having returned.
+pub const SC_CTRL: u32 = 13;
+pub const SC_LEN: u32 = 14;
 
 /// The one outbound queue. One export, one call per pump, one ordering rule.
 pub const EV_OPEN: i64 = 1;
@@ -318,7 +331,7 @@ pub const EV_REQUEST: i64 = 6;
 pub const SLICE: u64 = 4096;
 
 
-fn fx(v: Value) -> i64 {
+pub(crate) fn fx(v: Value) -> i64 {
     v.as_fixnum()
 }
 
@@ -794,10 +807,11 @@ impl Rt {
         }
     }
 
-    /// `pub`, not `pub(crate)`: `flint/system-port` is a BUILTIN, and the
-    /// builtin lives in the `flint-conc` unit crate. `flint.system/boot` is a
-    /// thunk that fetches the port rather than closing over it, which is why
-    /// the guest can reach this at all (`DECISIONS.md#bridges-are-the-only-door`).
+    /// NOT A BUILTIN ANY MORE. `flint/system-port` answered this to any
+    /// source that named it, because `flint.system/boot` was a thunk that
+    /// fetched the port; the control plane is runtime code now
+    /// (`DECISIONS.md#the-control-plane-is-the-runtimes`), and nothing a guest
+    /// can call reaches this.
     pub fn system_port(&mut self) -> Value {
         self.conc_system_port()
     }
@@ -933,63 +947,11 @@ impl Rt {
     // zero-meaning-absent, and a host ABI whose zero value means something is
     // a trap waiting for an uninitialised variable.
 
-    /// Spawn the control plane, ONCE, and only when there is a door.
-    ///
-    /// `drive` asks every iteration because the system port may not exist yet
-    /// when the loop first runs -- a host installs it, and until it has there
-    /// is nothing for the control plane to serve. Answering "not yet" is
-    /// therefore normal rather than an error.
-    ///
-    /// **No guest code runs here.** `flint.system/boot` is a THUNK, so this
-    /// takes its var's value and spawns it -- nothing is called. The first
-    /// version called a flint function to build a closure over the port, and
-    /// that re-entered `drive` from inside `drive`: the nested scheduler ran,
-    /// found the boot flag already set, and the outer call came back with
-    /// nothing callable. The sandbox then tore itself down with no message
-    /// ever served, and the only visible symptom was "the call was never
-    /// answered" (`DECISIONS.md#bridges-are-the-only-door`).
-    ///
-    /// **Initialisers must have run**, because a var is nil until they have --
-    /// which is what `ensure_started` is for.
-    ///
-    /// ABSENT `flint.system` IS NOT AN ERROR. A module built before this
-    /// existed has no control plane, and a sandbox nothing can call is a
-    /// coherent thing to be; failing here would make every old artefact
-    /// unloadable.
-    pub fn boot_system_thread_once(&mut self) {
-        if self.system_booted {
-            return;
-        }
-        if self.system_port().is_nil() {
-            return;
-        }
-        self.system_booted = true;
-        if !self.ensure_started() {
-            return;
-        }
-        let idx = match self.var_named("flint.system/boot") {
-            Some(i) => i,
-            None => return,
-        };
-        let f = self
-            .roots
-            .shared
-            .globals
-            .get(idx as usize)
-            .map_or(NIL, |g| g.get());
-        if f.is_nil() || !self.is_callable(f) {
-            return;
-        }
-        let th = self.spawn_thread(f);
-        // REMEMBERED BY ID, because this is the one thread a snapshot request
-        // is honoured from (`DECISIONS.md#snapshots`): guest code never runs
-        // on it, so "the caller is the system thread" is a grant the runtime
-        // conferred rather than a claim the caller made. An id rather than the
-        // value so it survives a collection, and so a live set can carry it.
-        if self.is_thread(th) {
-            self.snap_serve.system_thread = fx(self.slot(th, TH_ID));
-        }
-    }
+    // `boot_system_thread_once` WAS HERE, and spawned `flint.system/boot` --
+    // looked up BY NAME -- as the control-plane thread, once a system port
+    // existed. The control plane is runtime code now (`kin/control.kin`,
+    // `DECISIONS.md#the-control-plane-is-the-runtimes`): no thread serves the
+    // system port, and no var's value is trusted with it.
 
     // `abandon_current_thread` IS GENERATED, from `kin/sched.kin`, and lands
     // on `Rt` in `crate::kgen::rt::sched` -- so callers here reach it by name
@@ -1337,9 +1299,48 @@ pub fn run_entry(rt: &mut Rt, f: Value) -> Value {
     rt.run_thread_entry(f, NIL)
 }
 
-/// A host-requested snapshot, served between turns (`crate::snap::Serve`).
-pub fn serve_snapshot(rt: &mut Rt) {
-    crate::snap::serve_snapshot(rt);
+/// Start the CALL LOOP on bound port `p` (`DECISIONS.md#the-control-plane-is-the-runtimes`):
+/// the image's `serve` function -- emitted by the compiler from
+/// `flint.callentry`, named by INDEX and by nothing else -- closed over `p`
+/// as its one upvalue, and spawned. False when the image has no call loop,
+/// which an image built before there was one does not.
+///
+/// THE PORT IS AN UPVALUE, NOT AN ARGUMENT, because a thread's entry takes
+/// none and a slot on every thread to carry one is gas on every spawn (the
+/// note where `TH_ARGS` was, above).
+///
+/// INITIALISERS FIRST. The loop resolves a call's `:fn` to a var's value, and
+/// a var is nil until its namespace's top-level forms have run -- which is
+/// what booting `flint.system` used to ensure, on the first drive.
+/// Does this image carry a call loop? An image built before the compiler put
+/// one in every image does not, and has no control plane at all
+/// (`kin/control.kin`'s `control-waiting`).
+pub fn has_call_loop(rt: &Rt) -> bool {
+    rt.image.serve != crate::image::NO_SERVE
+}
+
+pub fn spawn_call(rt: &mut Rt, p: Value) -> bool {
+    let idx = rt.image.serve;
+    if idx == crate::image::NO_SERVE {
+        return false;
+    }
+    let base = rt.mark();
+    let pi = rt.push(p);
+    if !rt.ensure_started() {
+        rt.pop_to(base);
+        return false;
+    }
+    let pv = rt.r(pi);
+    let c = rt.make_closure(idx, &[pv]);
+    if c.is_nil() {
+        rt.pop_to(base);
+        return false;
+    }
+    let ci = rt.push(c);
+    let cv = rt.r(ci);
+    let th = rt.spawn_thread(cv);
+    rt.pop_to(base);
+    rt.is_thread(th)
 }
 
 pub fn run_one(rt: &mut Rt, i: u32) {
@@ -2156,8 +2157,9 @@ impl Rt {
         // THE SYSTEM PORT IS NOT SPECIAL HERE ANY MORE. It used to be routed
         // out at this point into a runtime-side `system_message`; the control
         // plane is flint code now (`DECISIONS.md#bridges-are-the-only-door`),
-        // so a control message is delivered like any other and `flint.system/serve`
-        // is what reads it.
+        // so a control message is delivered like any other. The control plane is RUNTIME code now
+        // (`kin/control.kin`), and it reads the system port's queue at the
+        // top of `drive`; delivery is still the same for every port.
         let ports = self.scan_ports(bytes);
         if ports.is_nil() {
             // Refused rather than delivered as anything else: a message the

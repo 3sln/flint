@@ -184,8 +184,7 @@
         ;; it.
         ;;
         ;; Everything AFTER this line is unchanged and still applies -- the
-        ;; field-by-field rebuild, `flint.system/boot` as an export, the builtins
-        ;; parameter -- so a resolved spec gets exactly the treatment a resolved one
+        ;; field-by-field rebuild, the builtins parameter -- so a resolved spec gets exactly the treatment a resolved one
         ;; always got. This skips a step; it does not take a different path.
         {:keys [sources order missing refused]}
         (if (and (:sources spec) (:order spec))
@@ -232,21 +231,7 @@
                                               sources))
                        :order (vec (filter (fn [n] (contains? sources n)) order))
                        :entry entry
-                       ;; `flint.system/serve` IS ALWAYS AN EXPORT. It is the
-                       ;; sandbox's control plane
-                       ;; (`DECISIONS.md#bridges-are-the-only-door`), spawned by
-                       ;; bootstrap rather than called from the program -- so
-                       ;; nothing in the program references it and the shake
-                       ;; would drop the only door into the module. Added here
-                       ;; rather than asked for, because a caller cannot be
-                       ;; expected to know the runtime needs it.
-                       ;; A SYMBOL, not a string: `extra-roots` feeds
-                       ;; reachability beside `entry-var`, which is a symbol,
-                       ;; and a string silently matches nothing -- the module
-                       ;; compiled, the namespace was in the program, and
-                       ;; `serve` was shaken anyway.
-                       :exports (vec (distinct (conj (or (:exports spec) [])
-                                                     'flint.system/boot)))
+                       :exports (vec (distinct (or (:exports spec) [])))
                        :builtins builtins
                        :features features})]
           ;; THE PERF DECISION GOES IN THE IMAGE, and this path never wrote it.

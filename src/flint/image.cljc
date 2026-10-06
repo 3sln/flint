@@ -41,6 +41,10 @@
 
 (def NO-CONST 0xFFFFFFFF)
 
+(def NO-SERVE
+  "The `serve` field of an image with no call loop."
+  0xFFFFFFFF)
+
 (defn u32 [n]
   (let [n (bit-and (long n) 0xFFFFFFFF)]
     [(bit-and n 0xff) (bit-and (bit-shift-right n 8) 0xff)
@@ -70,7 +74,8 @@
 
 (defn new-builder []
   (volatile! {:consts [] :index {} :fns [] :vars [] :var-index {}
-              :natives [] :native-index {} :code [] :entry 0 :init [] :aot []}))
+              :natives [] :native-index {} :code [] :entry 0 :init [] :aot []
+              :serve nil}))
 
 (declare const)
 
@@ -215,7 +220,7 @@
   "Serialise the image. `native-slots` maps builtin name -> wasm table slot;
   unresolved names get slot 0, which traps if ever called."
   [b native-slots]
-  (let [{:keys [consts fns vars natives code entry init aot perf?]} @b
+  (let [{:keys [consts fns vars natives code entry init aot perf? serve]} @b
         aot (or aot [])]
     (flatten-bytes
      [MAGIC (u32 VERSION)
@@ -243,7 +248,15 @@
       ;; arities has both this bit and a non-empty table; an image for a PORT
       ;; has the bit and an empty table, which is exactly the case that could
       ;; not be expressed before.
-      (u32 (if perf? FLAG-PERF 0))])))
+      (u32 (if perf? FLAG-PERF 0))
+      ;; THE CALL LOOP, by fn index, or `NO-SERVE` when this image has none
+      ;; (`DECISIONS.md#the-control-plane-is-the-runtimes`). The runtime closes
+      ;; that function over a port when the host binds one, and spawns it --
+      ;; by INDEX, because it has no var and no name (`flint.callentry`).
+      ;; After the flags, so every offset above is unchanged; a reader that
+      ;; finds the image ending here instead treats it as `NO-SERVE`, which is
+      ;; what an image built before this was.
+      (u32 (if serve serve NO-SERVE))])))
 
 (def NATIVES-OFFSET
   "Byte offset of the natives count: magic(8) + version(4)."
@@ -271,6 +284,9 @@
   (vswap! b assoc :perf? (boolean on?)))
 
 (defn set-entry! [b i] (vswap! b assoc :entry i))
+(defn set-serve!
+  "Record the call loop's fn index (`flint.callentry`)."
+  [b i] (vswap! b assoc :serve i))
 (defn add-init! [b i] (vswap! b update :init conj i))
 (defn natives
   "The builtin names this image imports, in native-index order."

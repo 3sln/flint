@@ -1053,21 +1053,13 @@
                         (map (clojure.core/fn [pth] (ns-of (slurp (str pth)))))
                         (remove nil?)
                         vec))
-        ;; `flint.system` IS A ROOT HERE TOO, and the duplication is the point
-        ;; worth noticing: this file has its own `collect` and never calls
-        ;; `flint.project/resolve-project`, so a root added there reached the
-        ;; native CLI and not this front end. Caught by the tiny module growing
-        ;; 51 799 bytes under `flint compile` while `bin/flint` produced exactly
-        ;; the same bytes as before.
-        ;;
-        ;; It is the sandbox's control plane
-        ;; (`DECISIONS.md#bridges-are-the-only-door`): spawned by bootstrap,
-        ;; referenced by nothing, so the graph never reaches it and the shake
-        ;; would drop the only door into the module.
+        ;; `flint.system` IS NOT A ROOT, here or in `flint.project/resolve-project`:
+        ;; the control plane is the runtime's, and the call loop is compiled
+        ;; into every image by the compiler (`flint.callentry`,
+        ;; `DECISIONS.md#the-control-plane-is-the-runtimes`).
         roots (cond-> (if test-mode?
                         (cons 'clojure.core src-nses)
                         (cons entry-ns ['clojure.core]))
-                true (concat ['flint.system])
                 (contains? features :flint/check) (concat ['flint.check]))
         [sources order] (collect dirs roots features)
         ;; BEFORE ordering and before compiling: a refused require is an answer
@@ -1136,19 +1128,13 @@
         ;; what came back was `rust-lld: cannot open output file`, which names
         ;; the linker for something that is not the linker's doing.
         _ (when-let [d (fs/parent (fs/absolutize out))] (fs/create-dirs d))
-        ;; `flint.system/serve` is ALWAYS exported, for the same reason it is
-        ;; always a root: bootstrap spawns it and nothing references it, so
-        ;; reachability drops it and the module has no door. A SYMBOL, because
-        ;; `extra-roots` is compared against `entry-var` -- a string silently
-        ;; matches nothing, which is how the first attempt compiled fine and
-        ;; shook `serve` out anyway.
         ;; THE SPEC CARRIES NO FORMS. It is printed for `--emit-spec` and sent
         ;; to the self-hosted compiler as EDN, which are comparisons between
         ;; doors that send source text; only this process's own compile below
         ;; is handed the forms `collect` read.
         spec {:sources (into {} (map (clojure.core/fn [[n s]] [n (dissoc s :forms)]) sources))
               :order order :entry fn
-              :exports (vec (distinct (conj (vec exports) 'flint.system/boot)))
+              :exports (vec (distinct exports))
               :features features
               :exclude exclude
               :excluded-builtins (select-keys (builtins-by-unit unit-path) (vec (or exclude [])))

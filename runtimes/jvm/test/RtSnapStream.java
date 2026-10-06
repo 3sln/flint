@@ -44,6 +44,7 @@ public class RtSnapStream {
       u32(u.length); b.write(u, 0, u.length); return this;
     }
     W kw(String n) { return tag(K_KEYWORD).u32(NO_NS).text(n); }
+    W kw(String ns, String n) { return tag(K_KEYWORD).text(ns).text(n); }
     W str(String s) { return tag(K_STRING).text(s); }
     W num(long n) { return tag(K_INT).i64(n); }
     W port(int id) { return tag(K_PORT).u32(id); }
@@ -125,6 +126,16 @@ public class RtSnapStream {
   }
 
   static Object decode(byte[] b) { return new Dec(b).val(); }
+
+  /// Was a snapshot CHUNK (a bytes value) sent among these events, on any
+  /// port? Used to tell "served" from "not served" without caring which
+  /// destination it went to.
+  static boolean chunkSent(List<Ev> evs) {
+    for (Ev ev : evs) {
+      if (ev.kind() == Conc.EV_MESSAGE && decode(ev.payload()) instanceof byte[]) return true;
+    }
+    return false;
+  }
 
   @SuppressWarnings("unchecked")
   static Object mget(Object m, String k) {
@@ -312,32 +323,35 @@ public class RtSnapStream {
     ok("a truncated stream is refused",
        !Snap.importLive(d, Arrays.copyOfRange(stream, 0, 8)));
 
-    // --- the guest-bypass probe --------------------------------------------
-    Rt e = booted(img);
-    String[] stealFns = {"steal", "steal-chunk", "steal-by-value", "steal-on-a-thread"};
-    for (int k = 0; k < stealFns.length; k++) {
-      Object v = call(e, k + 1, stealFns[k]);
-      ok(stealFns[k] + ": refused (" + v + ")",
-         v instanceof String s && s.contains("guest code cannot take one"));
+    // --- only the host's exact request on the system port is served -------
+    //
+    // THE RUNTIME TAKES ONLY THE HOST'S REQUEST, ON THE SYSTEM PORT, EXACTLY.
+    // There is no guest route left to probe: the builtins that took a
+    // snapshot and answered the system port are gone, so naming one is a
+    // compile error (`cli/src/snapstream_test.rs`, which compiles each
+    // route). What remains is the boundary the runtime draws: the same
+    // message on a call port is a call with no `:fn`, and an op in a
+    // namespace is not the op -- the control plane reads `:op` and `:port`
+    // and ignores everything else, as `flint.system` did.
+    Rt g = booted(img);
+    // ON A CALL PORT: delivered to the call thread, which answers it as a
+    // call -- not served.
+    if (!Conc.hostDeliver(g, CALLS, portMsg("snapshot", DEST))) {
+      throw new RuntimeException("the call port would not take the snapshot message");
     }
-    // A `:snapshot` the GUEST sends on the system port goes OUT, to the host:
-    // it is an ordinary message there, and nothing is exported.
-    if (!Conc.hostDeliver(e, CALLS, callMsg(5, "ask-on-the-system-port"))) {
-      throw new RuntimeException("the call port would not take ask-on-the-system-port");
+    ok("a request on a CALL port is not served", !chunkSent(pump(g)));
+    // AN OP IN A NAMESPACE, on the system port: `:x/snapshot` is not
+    // `:snapshot`.
+    byte[] nsOpMsg = new W().map(2).kw("op").kw("x", "snapshot").kw("port").port(DEST).done();
+    if (!Conc.hostDeliver(g, SYS, nsOpMsg)) {
+      throw new RuntimeException("the system port would not take the namespaced-op message");
     }
-    List<Ev> evs2 = pump(e);
-    boolean leftOnSys = false, bytesAnywhere = false;
-    for (Ev ev2 : evs2) {
-      if (ev2.kind() == Conc.EV_MESSAGE && ev2.a() == SYS) leftOnSys = true;
-      if (ev2.kind() == Conc.EV_MESSAGE && decode(ev2.payload()) instanceof byte[]) bytesAnywhere = true;
-    }
-    ok("the guest's message should have left on the system port", leftOnSys);
-    ok("a chunk was NOT sent for a guest's request", !bytesAnywhere);
-
-    // THE CONTROL: the same builtin, asked for by the HOST, does run.
-    Request req3 = request(e);
-    ok("the host's request was not refused too: " + req3.end(),
-       !req3.chunks().isEmpty() && req3.closed());
+    ok("a request for :x/snapshot is not served as :snapshot", !chunkSent(pump(g)));
+    // THE CONTROL: the host's exact request, on the same sandbox, is served.
+    Request control = request(g);
+    ok("THE CONTROL: the host's own request on that sandbox is served: " + control.end(),
+       !control.chunks().isEmpty() && control.closed());
+    ok("the sandbox still serves calls", asLong(call(g, 20, "bump")) == 1);
 
     // --- cross-runtime: a JVM Rt imports what NATIVE streamed --------------
     if (a.length > 1) {

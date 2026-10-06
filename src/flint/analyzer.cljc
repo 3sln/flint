@@ -218,6 +218,21 @@
       (when (= 'flint.rt target)
         (let [n (name sym)
               bs (:builtins cc)]
+          ;; `var-named` IS THE CALL LOOP'S AND NOBODY ELSE'S
+          ;; (`DECISIONS.md#the-control-plane-is-the-runtimes`). It resolves a
+          ;; var from a STRING at run time, which no compile-time check ever
+          ;; sees -- private vars and guarded ones included -- so it was
+          ;; guarded `:vars`, and the guard is checked nowhere in a program
+          ;; that declares no workspaces: such a program could call it. The
+          ;; loop the compiler injects (`flint.callentry`) is the one caller
+          ;; that needs it, and it is analysed with `:trusted-entry`. Every
+          ;; other route -- by name, in value position, through an alias, a
+          ;; macro or an `:inline` -- arrives here and is refused.
+          (when (and (= "var-named" n) (not (:trusted-entry env)))
+            (err (str "flint.rt/var-named is not callable from a source: it resolves a var"
+                      " from a string at run time, and only the call loop the compiler"
+                      " injects may do that (DECISIONS.md#the-control-plane-is-the-runtimes)")
+                 {:sym sym}))
           (cond
             (contains? bs n) n
             (contains? bs (str "flint/" n)) (str "flint/" n)
@@ -361,12 +376,11 @@
   the port surface should demand something is a real design question and is
   not answered here."
   {"flint/request" #{:host}
-   ;; `var-named` is NOT derived from a wrapper the way `request` is -- it is
-   ;; guarded in its own right (`DECISIONS.md#vars-is-its-own-grant`), because
-   ;; what it confers is an escape from THIS CHECK: a name resolved at run time
-   ;; was never seen by the compile-time guard that decides which workspace may
-   ;; name which var. Ungated, every guard above becomes advisory.
-   "flint/var-named" #{:vars}})
+   ;; `var-named` WAS HERE, guarded `:vars` (`DECISIONS.md#vars-is-its-own-grant`).
+   ;; It is not callable from any source now -- `native-name` refuses it outside
+   ;; the call loop the compiler injects -- so there is nothing left to guard
+   ;; (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+   })
 
 (defn- guard-check!
   "Refuse a reference to a var its workspace guards (`DECISIONS.md#workspace-capabilities`).
@@ -600,7 +614,15 @@
                 {:op :native :name "flint/dyn-get"
                  :args [(const-node q) {:op :var :sym q}]})
             {:op :var :sym q}))
-      (err (str "unable to resolve symbol: " sym)
+      (err (if (contains? '#{in-ns intern clojure.core/in-ns clojure.core/intern} sym)
+             ;; NOT SUPPORTED, and said so rather than "unable to resolve": a
+             ;; source resolved as X defines into X and nowhere else
+             ;; (`DECISIONS.md#a-source-defines-only-its-own-namespace`), so
+             ;; there is no namespace to switch to and none to intern into.
+             (str sym " is not supported: a source may declare and define only"
+                  " the namespace it was resolved as"
+                  " (DECISIONS.md#a-source-defines-only-its-own-namespace)")
+             (str "unable to resolve symbol: " sym))
            ;; The SYMBOL's own position, which it has carried since the reader
            ;; started giving one to every meta-able form rather than only to
            ;; sequences. Before that this key was written and always nil, so the
@@ -1328,6 +1350,17 @@
               _ (when-not (symbol? nm) (err "def needs a symbol" {:form form}))
               n (count form)
               _ (when (> n 4) (err "too many arguments to def" {:form form}))
+              ;; A QUALIFIED NAME MUST NAME THIS NAMESPACE
+              ;; (`DECISIONS.md#a-source-defines-only-its-own-namespace`). The
+              ;; qualifier used to be DROPPED -- `(def other.ns/x 1)` quietly
+              ;; defined `this.ns/x` -- which is a different program from the
+              ;; one written, in either direction it is read.
+              _ (when (and (namespace nm) (not= (namespace nm) (str (current-ns env))))
+                  (err (str "(def " nm " ..) defines into namespace " (namespace nm)
+                            " from " (current-ns env)
+                            " -- a source may define only into the namespace it was"
+                            " resolved as (DECISIONS.md#a-source-defines-only-its-own-namespace)")
+                       {:form form :ns (current-ns env) :sym nm}))
               q (symbol (str (current-ns env)) (clojure.core/name nm))
               init-form (when (>= n 3) (nth (vec form) (dec n)))
               doc (when (= n 4) (nth (vec form) 2))]
@@ -1608,6 +1641,20 @@
 (defn analyze-ns [env form]
   (let [[_ nsname & clauses] form
         cc (:cc env)]
+    ;; A SOURCE RESOLVED AS NAMESPACE X DECLARES X AND NOTHING ELSE
+    ;; (`DECISIONS.md#a-source-defines-only-its-own-namespace`). The clauses
+    ;; below file their aliases, refers and requires under the name THIS FORM
+    ;; gives -- so a file resolved as `app.evil` that said `(ns flint.port
+    ;; (:require [app.evil :as wire]))` rewrote what `wire/` means inside
+    ;; `flint.port`, while its defs still landed in `app.evil`. Checked here
+    ;; rather than where top-level forms are walked because `ns` is a special
+    ;; form: a macro can expand to it, and so can a nested expression.
+    (when-not (and (symbol? nsname) (= (str nsname) (str (current-ns env))))
+      (err (str "this source was resolved as namespace " (current-ns env)
+                " and its ns form names " (pr-str nsname)
+                " -- a source may declare only the namespace it was resolved as"
+                " (DECISIONS.md#a-source-defines-only-its-own-namespace)")
+           {:ns (current-ns env) :declared nsname :form form}))
     (doseq [c clauses]
       (when (seq? c)
         (case (first c)

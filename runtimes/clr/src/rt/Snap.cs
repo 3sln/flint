@@ -44,39 +44,64 @@ public static class Snap {
     /// (`DECISIONS.md#snapshots`). The first is the same reason as `started`:
     /// an import that forgot the control plane had booted would spawn a SECOND
     /// one on the first drive, two threads receiving from one system port. The
-    /// second is what lets the restored copy's system thread tell "I was
-    /// copied" from "I am asking" -- see `SnapServe`.
+    /// second let the restored copy's system thread tell "I was copied" from
+    /// "I am asking", when flint code asked.
+    ///
+    /// THE SECOND NOW DECIDES NOTHING (`DECISIONS.md#snapshots`, 2026-10-06):
+    /// the runtime serves requests, and an import drops every request it
+    /// inherited whatever this says (`SnapServe.inherited`). It is still
+    /// written -- and an un-driven copy writes back what it read -- because it
+    /// is a true statement about the export, and because a stream re-exported
+    /// from a copy that has not run must stay the same bytes
+    /// (`cli/src/snapstream_test.rs` asserts it).
     public const int VersionLive = 3;
 
-    /// The in-flight state of a host-requested live-set export, between the
-    /// request and the last chunk (`DECISIONS.md#snapshots`). A verbatim mirror
-    /// of the Rust's `Serve`.
+    /// A host-requested export, from the request to the last chunk
+    /// (`DECISIONS.md#snapshots`). A verbatim mirror of the Rust's `Serve`.
     ///
-    /// THE REQUEST IS SERVED BETWEEN TURNS, NOT INSIDE ONE. `flint.system` asks
-    /// with `flint/snapshot-export`, which PARKS the system thread; the
-    /// scheduler exports after that turn ends (`ServeSnapshot`, called from
-    /// `SchedDrive`), when every thread's state is in its thread object and
-    /// none is half-run. The thread is made runnable FIRST, so the copy holds
-    /// it runnable and about to re-execute the same call -- which then answers
-    /// the length here, and nil in the copy, because the copy was imported with
-    /// `restored` set. That is `fork`, and it is why the restored copy does not
-    /// stream the snapshot to a port that belonged to the instance it was
-    /// copied from.
+    /// THE RUNTIME SERVES IT, NOT FLINT CODE. The host sends `{:op :snapshot
+    /// :port P}` on the system port, and the control plane -- runtime code,
+    /// `kin/control.kin`, `DECISIONS.md#the-control-plane-is-the-runtimes` --
+    /// reads it there between turns and calls `Begin`, which exports and makes
+    /// `P` the scheduler's `SC_SNAP`. `Idle`, called before every later
+    /// control message, streams what `P` has room for, then the terminator,
+    /// then closes it.
+    ///
+    /// It used to be flint: `flint.system` asked with `flint/snapshot-export`
+    /// and read the bytes back with `flint/snapshot-chunk`, two builtins any
+    /// source could name and that refused unless the running thread was the
+    /// one the runtime had spawned `boot` on. That guard trusted whatever code
+    /// ran there, and a program's own `flint.system` ran there (measured on
+    /// native 2026-10-05: a 53 554-byte export taken by the program). Now there
+    /// is no builtin to call and no thread to trust: only the host can put a
+    /// message on the system port's queue, because a guest's send on a bridge
+    /// goes OUT.
+    ///
+    /// THE COPY DOES NOT STREAM ITSELF. The destination is in the heap when
+    /// the export is taken (`SC_SNAP` roots it), so the copy holds it; an
+    /// import drops it on the copy's first drive (`inherited`), because the
+    /// request was made of the instance the copy was taken from.
     public sealed class SnapServe {
-        /// `TH_ID` of the thread `flint.system/boot` runs on, or -1.
+        /// RESERVED, and always -1 now. It was the `TH_ID` of the thread
+        /// `flint.system/boot` ran on; the format still carries the field
+        /// (`VersionLive`).
         public long systemThread = -1;
-        /// Asked for, not yet exported.
-        public bool pending;
-        /// Set only while `ExportLive` runs for a request.
+        /// Set only while `ExportLive` runs for a request: the request flag it
+        /// writes.
         public bool exporting;
-        /// Exported: the length, until the system thread collects it.
-        public long ready = -1;
-        /// The walk and the collector disagreed. Answered as a throw.
-        public bool failed;
-        /// This runtime was imported from an export that answered a request.
+        /// This runtime was imported from an export that answered a request,
+        /// and has not driven since. Written back as the flag by an export of
+        /// it.
         public bool restored;
-        /// The bytes being streamed. Freed when a chunk is asked for past the
-        /// end.
+        /// This runtime was imported and has not driven since: the destination
+        /// in its `SC_SNAP` belongs to the instance it was copied from.
+        public bool inherited;
+        /// A stream is in flight to `SC_SNAP`.
+        public bool active;
+        /// The next byte of `buf` to send; one past its end once the
+        /// terminator has been.
+        public int off;
+        /// The bytes being streamed. Freed when the stream ends, either way.
         public byte[] buf = System.Array.Empty<byte>();
     }
 
@@ -509,10 +534,11 @@ public static class Snap {
         w.U32(VersionLive);
         w.U64(rt.fingerprint);
         w.U32(rt.started ? 1 : 0);
-        w.U64(rt.snapServe.systemThread);
-        // `restored` too: an export of a copy that has not yet run its control
-        // plane is that same copy, and must answer nil there as well -- see
-        // the Rust's `export_live`.
+        // RESERVED: -1, since there is no control-plane thread to name
+        // (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+        w.U64(-1L);
+        // `restored` too: an export of a copy that has not driven yet is that
+        // same copy, and says what it said (see `VersionLive`).
         w.U32((rt.snapServe.exporting || rt.snapServe.restored) ? 1 : 0);
 
         bool ok = true;
@@ -605,15 +631,16 @@ public static class Snap {
         if (r.U32() != MagicLive || r.U32() != VersionLive) { Refused = RefuseLayout; return false; }
         if (r.U64() != rt.fingerprint) { Refused = RefuseImage; return false; }
         rt.started = r.U32() != 0;
-        long systemThread = r.U64();
+        // RESERVED (see `ExportLive`); an older export's thread id is
+        // ignored -- the control plane's state is in the heap now (`SC_BOUND`,
+        // `SC_CTRL`).
+        r.U64();
         bool answering = r.U32() != 0;
         rt.snapServe = new SnapServe();
-        rt.snapServe.systemThread = systemThread;
         rt.snapServe.restored = answering;
-        // Booted iff the copied runtime had booted: a second
-        // `flint.system/boot` over the restored one would split the system
-        // port's messages in two.
-        rt.systemBooted = systemThread >= 0;
+        // EVERY import, whatever the flag says: a request still queued in the
+        // copied heap was made of the instance this was copied from.
+        rt.snapServe.inherited = true;
 
         // Nothing of the old state may be reachable while the new objects are
         // being built, or a collection in the middle would try to keep both.
@@ -769,95 +796,116 @@ public static class Snap {
 
     // -----------------------------------------------------------------------
     // A HOST-REQUESTED, STREAMED SNAPSHOT (`DECISIONS.md#snapshots`). A
-    // verbatim mirror of the Rust's `on_system_thread`, `refuse_guest`,
-    // `request_export`, `chunk` and `serve_snapshot`.
+    // verbatim mirror of the Rust's new single-destination `dest`, `Sent`,
+    // `send`, `put_kw`, `end_message`, `error_message`, `finish`, `begin` and
+    // `idle` (`DECISIONS.md#the-control-plane-is-the-runtimes`).
 
-    /// Is the running thread the control plane?
-    ///
-    /// The whole of the guard that keeps a GUEST from taking a snapshot. Not a
-    /// compile-time check: `flint.rt/<x>` reaches any builtin from any source,
-    /// and a program with no workspaces is checked nowhere at compile time.
-    /// The thread identity is conferred by the runtime at boot, and no guest
-    /// code runs on that thread.
-    static bool OnSystemThread(Rt rt) {
-        long id = rt.snapServe.systemThread;
-        if (id < 0) return false;
-        long th = Conc.CurrentThread(rt);
-        if (!Conc.IsThread(rt, th)) return false;
-        return Val.AsFixnum(rt.Slot(th, Conc.TH_ID)) == id;
-    }
+    /// The largest chunk a stream sends. 64 KiB: large enough that the
+    /// per-message cost is noise, small enough that the transient copy in the
+    /// heap is too. It was `flint.system/snapshot-chunk-bytes`.
+    public const int ChunkBytes = 65536;
 
-    static long RefuseGuest(Rt rt) {
-        return rt.ThrowStr("SecurityException",
-            "a snapshot is taken only when the HOST asks for one on the system port; "
-            + "guest code cannot take one");
-    }
-
-    /// `flint/snapshot-export`: the system thread asks; see `SnapServe`.
-    ///
-    /// Answers the byte length once the export exists, nil in a restored copy,
-    /// and otherwise PARKS -- deciding to park before changing anything a
-    /// re-run would read, as every parking builtin must.
-    public static long RequestExport(Rt rt) {
-        if (!OnSystemThread(rt)) return RefuseGuest(rt);
-        SnapServe s = rt.snapServe;
-        if (s.restored) {
-            s.restored = false;
-            return Val.Nil;
-        }
-        if (s.failed) {
-            s.failed = false;
-            return rt.ThrowStr("IllegalStateException",
-                "snapshot: the live-set walk and the collector disagreed");
-        }
-        if (s.ready >= 0) {
-            long n = s.ready;
-            s.ready = -1;
-            return Val.Fixnum(n);
-        }
-        s.pending = true;
-        // On the SYSTEM PORT, with no waiter: nothing wakes this but
-        // `ServeSnapshot`, and a deadlock report naming the port says where it
-        // is.
-        long on = Conc.SystemPort(rt);
-        return Conc.Park(rt, on);
-    }
-
-    /// `flint/snapshot-chunk`: `len` bytes of the export from `off`, or nil
-    /// past the end -- which also FREES the buffer, so asking past the end is
-    /// how the system thread lets go of it on success and on failure alike.
-    public static long Chunk(Rt rt, long off, long len) {
-        if (!OnSystemThread(rt)) return RefuseGuest(rt);
-        long n = rt.snapServe.buf.Length;
-        if (off < 0 || len <= 0 || off >= n) {
-            rt.snapServe.buf = System.Array.Empty<byte>();
-            return Val.Nil;
-        }
-        long end = System.Math.Min(n, off + len);
-        byte[] piece = new byte[end - off];
-        System.Array.Copy(rt.snapServe.buf, off, piece, 0, end - off);
-        return Bytes.Of(rt, piece);
-    }
-
-    /// Serve a pending request. Called by `SchedDrive` after every turn.
-    ///
-    /// The system thread is parked on the request. It is made RUNNABLE before
-    /// the export, so the copy holds it runnable too -- otherwise the copy's
-    /// control plane would sleep for ever on a request nobody will answer
-    /// there.
-    public static void ServeSnapshot(Rt rt) {
-        if (!rt.snapServe.pending) return;
-        rt.snapServe.pending = false;
-        long id = rt.snapServe.systemThread;
+    /// The destination of the stream in flight, or nil. Read afresh after
+    /// anything that allocates: an export runs a major collection.
+    static long Dest(Rt rt) {
         long s = Conc.Sched(rt);
-        long ts = rt.Slot(s, Conc.SC_THREADS);
-        int n = Vec.Count(rt, ts);
-        for (int i = 0; i < n; i++) {
-            long th = Vec.Nth(rt, ts, i, Val.Nil);
-            if (Conc.IsThread(rt, th) && Val.AsFixnum(rt.Slot(th, Conc.TH_ID)) == id) {
-                rt.SetSlot(Val.AsHeap(th), Conc.TH_STATUS, Val.Fixnum(Conc.ST_RUNNABLE));
-                rt.SetSlot(Val.AsHeap(th), Conc.TH_PARK_ON, Val.Nil);
-            }
+        if (Val.IsNil(s)) return Val.Nil;
+        return rt.Slot(s, Conc.SC_SNAP);
+    }
+
+    /// What a send to the destination came to.
+    enum Sent {
+        Yes,
+        /// Over the byte budget: the host has not drained. Offered again next drive.
+        Full,
+        /// The destination is not open any more: the host let go of it.
+        Gone,
+    }
+
+    /// One encoded message onto the destination, by the rule `PortSend` uses
+    /// -- `FitsInBudget` and an `EV_MESSAGE` -- but with no thread to park:
+    /// the runtime is the sender, so a full bridge answers `Full` and the
+    /// stream resumes on a later drive.
+    static Sent Send(Rt rt, byte[] bytes) {
+        long p = Dest(rt);
+        if (Val.IsNil(p) || !Conc.IsPort(rt, p)) return Sent.Gone;
+        if (Val.AsFixnum(rt.Slot(p, Conc.PT_STATE)) != Conc.P_OPEN) return Sent.Gone;
+        long len = bytes.Length;
+        long cap = Val.AsFixnum(rt.Slot(p, Conc.PT_CAP));
+        long queued = Val.AsFixnum(rt.Slot(p, Conc.PT_BYTES));
+        // THE SAME PREDICATE THE HOST PATH USES -- see `Conc`'s port send.
+        if (!global::_3sln.Flint.Kgen.Rt.Portbytes.FitsInBudget(rt, queued, len, cap)) return Sent.Full;
+        long v = Bytes.Of(rt, bytes);
+        int bas = rt.Mark();
+        int vi = rt.Push(v);
+        p = Dest(rt);
+        rt.SetSlot(Val.AsHeap(p), Conc.PT_BYTES, Val.Fixnum(queued + len));
+        long id = Val.AsFixnum(rt.Slot(p, Conc.PT_ID));
+        long payload = rt.R(vi);
+        Conc.PushEvent(rt, Conc.EV_MESSAGE, id, len, payload);
+        rt.PopTo(bas);
+        return Sent.Yes;
+    }
+
+    /// An unqualified keyword, as the wire writes one.
+    static void PutKw(W w, string name) {
+        byte[] nb = System.Text.Encoding.UTF8.GetBytes(name);
+        w.U8(Codec.K_KEYWORD);
+        w.U32(Codec.NO_NS);
+        w.U32(nb.Length);
+        w.Raw(nb);
+    }
+
+    /// `{:op :end :size n}`, byte for byte what `flint.wire` wrote for it.
+    public static byte[] EndMessage(long n) {
+        W w = new W();
+        w.U8(Codec.K_MAP);
+        w.U32(2);
+        PutKw(w, "op"); PutKw(w, "end"); PutKw(w, "size");
+        w.U8(Codec.K_INT);
+        w.U64(n);
+        return w.Done();
+    }
+
+    /// `{:op :error :message m}`.
+    public static byte[] ErrorMessage(string m) {
+        W w = new W();
+        w.U8(Codec.K_MAP);
+        w.U32(2);
+        PutKw(w, "op"); PutKw(w, "error"); PutKw(w, "message");
+        w.U8(Codec.K_STRING);
+        byte[] mb = System.Text.Encoding.UTF8.GetBytes(m);
+        w.U32(mb.Length);
+        w.Raw(mb);
+        return w.Done();
+    }
+
+    /// Close the destination if it is still open, let go of it, and free the
+    /// stream.
+    static void Finish(Rt rt) {
+        long p = Dest(rt);
+        if (!Val.IsNil(p) && Conc.IsPort(rt, p)
+            && Val.AsFixnum(rt.Slot(p, Conc.PT_STATE)) == Conc.P_OPEN) {
+            Conc.Close(rt, p);
+        }
+        long s = Conc.Sched(rt);
+        if (!Val.IsNil(s)) {
+            rt.SetSlot(Val.AsHeap(s), Conc.SC_SNAP, Val.Nil);
+        }
+        rt.snapServe.active = false;
+        rt.snapServe.off = 0;
+        rt.snapServe.buf = System.Array.Empty<byte>();
+    }
+
+    /// A request whose destination is `p`: export now, between turns, and
+    /// start the stream. `Idle` sends it. A port that is no longer open is
+    /// let go of unserved -- nobody is reading.
+    public static void Begin(Rt rt, long p) {
+        long s = Conc.EnsureSched(rt);
+        rt.SetSlot(Val.AsHeap(s), Conc.SC_SNAP, p);
+        if (!Conc.IsPort(rt, p) || Val.AsFixnum(rt.Slot(p, Conc.PT_STATE)) != Conc.P_OPEN) {
+            Finish(rt);
+            return;
         }
         // THE STATUS IS MID-DRIVE HERE, so it is whatever the LAST drive left
         // -- and the doors leave different things: native's `resume` does not
@@ -865,19 +913,75 @@ public static class Snap {
         // script streamed bytes that differed in exactly this field (measured
         // on native 2026-10-05, one byte of 347 087). The copy is a sandbox
         // waiting for its host to drive it, which is what 2 says, so that is
-        // what is written; the live field is put back, and `SchedDrive` sets
-        // it before it returns anyway.
+        // what is written; the live field is put back.
         int status = rt.status;
         rt.status = 2;
         rt.snapServe.exporting = true;
         byte[] buf = ExportLive(rt);
         rt.snapServe.exporting = false;
         rt.status = status;
-        if (buf != null) {
-            rt.snapServe.ready = buf.Length;
-            rt.snapServe.buf = buf;
-        } else {
-            rt.snapServe.failed = true;
+        if (buf == null) {
+            // AN EMPTY QUEUE ALWAYS FITS, so the error is sent now: nothing
+            // else is in flight to this destination.
+            byte[] m = ErrorMessage("snapshot: the live-set walk and the collector disagreed");
+            Send(rt, m);
+            Finish(rt);
+            return;
         }
+        rt.snapServe.buf = buf;
+        rt.snapServe.off = 0;
+        rt.snapServe.active = true;
+    }
+
+    /// Stream what the destination has room for; true when nothing is in
+    /// flight afterwards. The control plane asks before every control
+    /// message, so the messages behind a snapshot wait for it, as they did
+    /// when the control plane streamed it itself.
+    public static bool Idle(Rt rt) {
+        if (rt.snapServe.inherited) {
+            // THE FIRST DRIVE OF AN IMPORTED COPY. A destination in its
+            // `SC_SNAP` was asked for by the instance it was copied from --
+            // it is the request this copy IS the answer to -- so it is not
+            // served here.
+            rt.snapServe.inherited = false;
+            rt.snapServe.restored = false;
+            long s = Conc.Sched(rt);
+            if (!Val.IsNil(s)) {
+                rt.SetSlot(Val.AsHeap(s), Conc.SC_SNAP, Val.Nil);
+            }
+        }
+        if (!rt.snapServe.active) return true;
+        // CHUNKS, then the terminator, each only when it fits.
+        while (true) {
+            int n = rt.snapServe.buf.Length;
+            int off = rt.snapServe.off;
+            if (off > n) break;
+            byte[] msg;
+            if (off == n) {
+                msg = EndMessage(n);
+            } else {
+                int end = System.Math.Min(n, off + ChunkBytes);
+                int clen = end - off;
+                W cw = new W();
+                cw.U8(Codec.K_BYTES);
+                cw.U32(clen);
+                byte[] chunk = new byte[clen];
+                System.Array.Copy(rt.snapServe.buf, off, chunk, 0, clen);
+                cw.Raw(chunk);
+                msg = cw.Done();
+            }
+            Sent sent = Send(rt, msg);
+            if (sent == Sent.Yes) {
+                rt.snapServe.off = off == n ? n + 1 : System.Math.Min(n, off + ChunkBytes);
+            } else if (sent == Sent.Full) {
+                return false;
+            } else {
+                // The host let go of the destination mid-stream: stop, and
+                // free the copy rather than keep it for a reader that is gone.
+                break;
+            }
+        }
+        Finish(rt);
+        return true;
     }
 }

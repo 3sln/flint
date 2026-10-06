@@ -25,12 +25,14 @@
   (:require [flint.impl.rt :refer [defn return if let do comment doc
                                    == != < > >= <= not and or
                                    + - * local set while mark push r set-r
-                                   pop-to nil? to-i32 to-i64 u<
-                                   Rt Value RootIx I32 I64 Bool NIL NO_NS
+                                   pop-to nil? to-i32 to-i64 u< rem ushr64 bit-and
+                                   Rt Value RootIx I32 I64 Bool NIL NO_NS declarefn
                                    mint-bridge-port]]
             [flint.rt.vecwrite :refer [vec-conj]]
             [flint.rt.wirecore :refer [wire-left wire-skip wire-take-u8
                                        wire-take-u32]]))
+
+(declarefn ^:pub wire-scan-tagged)
 
 (doc "Skip a length-prefixed run of bytes: a string, a blob, or a name."
      ""
@@ -57,6 +59,14 @@
   (if (< (wire-left rt rd) 1)
     (return false))
   (let [^I32 tag (wire-take-u8 rt rd 255)]
+    (return (wire-scan-tagged rt rd tag acc depth))))
+
+(doc "The rest of a value whose TAG has already been read -- `wire-scan-at`"
+     "after its first byte. Apart so a reader that had to look at the tag to"
+     "decide what it was reading (`wire-control-op`) can still skip the value"
+     "it decided not to read.")
+(defn ^:pub ^:method ^Bool wire-scan-tagged [^:mut ^Rt rt ^Value rd ^I32 tag ^RootIx acc ^I32 depth]
+  (do
     (comment "NIL, TRUE and FALSE are the tag and nothing else.")
     (if (<= tag 2)
       (return true))
@@ -159,3 +169,145 @@
     (comment "AN UNKNOWN TAG is refused rather than skipped: there is no length"
              "to skip by, so the walk cannot go on and must not pretend to.")
     (return false)))
+
+;; ------------------------------------------------- the control plane
+
+(doc "Do the next `n` bytes spell the name packed into `packed`?"
+     ""
+     "PACKED LITTLE-ENDIAN, one byte per eight bits, because kin has no string"
+     "literal: `op` is 28783. Eight bytes at most. The bytes are CONSUMED"
+     "either way.")
+(defn ^:pub ^:method ^Bool wire-name-is [^:mut ^Rt rt ^Value rd ^I32 n ^I64 packed]
+  (if (u< (wire-left rt rd) n)
+    (return false))
+  (local ^:mut ^I64 p)
+  (set p packed)
+  (local ^:mut ^Bool same)
+  (set same true)
+  (local ^:mut ^I32 i)
+  (set i 0)
+  (while (u< i n)
+    (if (!= (to-i64 (wire-take-u8 rt rd 256)) (rem p 256))
+      (set same false))
+    (set p (ushr64 p 8))
+    (set i (+ i 1)))
+  (return same))
+
+(doc "A PLAIN KEYWORD's name length, with the tag, namespace and length"
+     "consumed and the name left to read; -1 when the value is not a keyword"
+     "with no namespace, and then the WHOLE value has been skipped, minting"
+     "into `acc` as `wire-scan-at` does; -2 when it could not even be skipped.")
+(defn ^:pub ^:method ^I64 wire-plain-kw-len [^:mut ^Rt rt ^Value rd ^RootIx acc ^I32 depth]
+  (if (u< (wire-left rt rd) 1)
+    (return -2))
+  (let [^I32 tag (wire-take-u8 rt rd 255)]
+    (if (!= tag 6)
+      (if (wire-scan-tagged rt rd tag acc depth)
+        (return -1)
+        (return -2)))
+    (if (u< (wire-left rt rd) 4)
+      (return -2))
+    (let [^I32 ns (wire-take-u32 rt rd 0)]
+      (if (!= ns NO_NS)
+        (do (if (not (wire-skip rt rd ns))
+              (return -2))
+            (if (not (wire-skip-run rt rd false))
+              (return -2))
+            (return -1)))
+      (if (u< (wire-left rt rd) 4)
+        (return -2))
+      (comment "ZERO-EXTENDED. `to-i64` of a u32 is `(long) x` on the ports,"
+               "which sign-extends: a length or an id past 2^31 would come back"
+               "negative there and positive on native.")
+      (return (bit-and (to-i64 (wire-take-u32 rt rd 0)) 4294967295)))))
+
+(doc "WHAT A CONTROL MESSAGE ASKS, read the way `flint.system` read it."
+     ""
+     "THE RUNTIME'S CONTROL PLANE (`DECISIONS.md#the-control-plane-is-the-runtimes`)."
+     "A message on the system port is a MAP; its `:op` is a plain keyword and"
+     "its `:port`, if it has one, a port. Answered as one number,"
+     "`op + 8 * (port-id + 1)`, `port-id + 1` being 0 when there is no port:"
+     ""
+     "    op 1 :bind   2 :unbind   3 :close   4 :snapshot   0 anything else"
+     ""
+     "AS FORGIVING AS THE FLINT IT REPLACES, and no more. That read the message"
+     "into a map and asked `(:op m)` and `(:port m)`, so other keys were"
+     "ignored, a later duplicate key won, an op it did not know was ignored,"
+     "and a message that was not a map had no op. All of that is kept. A"
+     "`:port` that is not a port answers no port, which the caller treats as"
+     "nothing to do; the flint version handed it on and failed later, inside"
+     "a thread or a catch."
+     ""
+     "-1 ONLY FOR BYTES THAT CANNOT BE READ, which `host-deliver`'s scan has"
+     "already refused, so it should not happen. Ports are minted into `acc` as"
+     "`wire-scan-at` mints them -- they were minted when the message arrived,"
+     "and the message is still held, so this finds the same handles.")
+(defn ^:pub ^:method ^I64 wire-control-op [^:mut ^Rt rt ^Value rd ^RootIx acc]
+  (if (u< (wire-left rt rd) 1)
+    (return -1))
+  (let [^I32 tag (wire-take-u8 rt rd 255)]
+    (if (!= tag 10)
+      (if (wire-scan-tagged rt rd tag acc 0)
+        (return 0)
+        (return -1)))
+    (if (u< (wire-left rt rd) 4)
+      (return -1))
+    (let [^I32 n (wire-take-u32 rt rd 0)]
+      (local ^:mut ^I64 op)
+      (set op 0)
+      (local ^:mut ^I64 port)
+      (set port -1)
+      (local ^:mut ^I32 k)
+      (set k 0)
+      (while (u< k n)
+        (let [^I64 klen (wire-plain-kw-len rt rd acc 1)]
+          (if (== klen -2)
+            (return -1))
+          (local ^:mut ^I32 which)
+          (set which 0)
+          (if (>= klen 0)
+            (do (if (== klen 2)
+                  (if (wire-name-is rt rd 2 28783)
+                    (set which 1))
+                  (if (== klen 4)
+                    (if (wire-name-is rt rd 4 1953656688)
+                      (set which 2))
+                    (if (not (wire-skip rt rd (to-i32 klen)))
+                      (return -1))))))
+          (comment "THE VALUE. `:op` wants a plain keyword; `:port` a port;"
+                   "anything else is skipped.")
+          (if (== which 1)
+            (let [^I64 vlen (wire-plain-kw-len rt rd acc 1)]
+              (if (== vlen -2)
+                (return -1))
+              (set op 0)
+              (if (>= vlen 0)
+                (if (== vlen 4)
+                  (if (wire-name-is rt rd 4 1684957538)
+                    (set op 1))
+                  (if (== vlen 6)
+                    (if (wire-name-is rt rd 6 110425377238645)
+                      (set op 2))
+                    (if (== vlen 5)
+                      (if (wire-name-is rt rd 5 435728378979)
+                        (set op 3))
+                      (if (== vlen 8)
+                        (if (wire-name-is rt rd 8 8390039475830484595)
+                          (set op 4))
+                        (if (not (wire-skip rt rd (to-i32 vlen)))
+                          (return -1))))))))
+            (if (== which 2)
+              (do (if (u< (wire-left rt rd) 1)
+                    (return -1))
+                  (let [^I32 vt (wire-take-u8 rt rd 255)]
+                    (if (== vt 15)
+                      (do (if (u< (wire-left rt rd) 4)
+                            (return -1))
+                          (set port (bit-and (to-i64 (wire-take-u32 rt rd 0)) 4294967295)))
+                      (do (set port -1)
+                          (if (not (wire-scan-tagged rt rd vt acc 1))
+                            (return -1))))))
+              (if (not (wire-scan-at rt rd acc 1))
+                (return -1)))))
+        (set k (+ k 1)))
+      (return (+ op (* 8 (+ port 1)))))))

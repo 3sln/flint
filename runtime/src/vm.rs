@@ -183,6 +183,11 @@ pub struct Image {
     /// reads this and does, which is how one config means the same thing on
     /// three runtimes that cannot carry it the same way.
     pub flags: u32,
+    /// The CALL LOOP's fn index, or `image::NO_SERVE`
+    /// (`DECISIONS.md#the-control-plane-is-the-runtimes`): what the runtime
+    /// closes over a bound port and spawns. By index because it has no var and
+    /// no name -- the compiler emits it from `flint.callentry`.
+    pub serve: u32,
     /// One entry per compiled arity (`DECISIONS.md#emit-wasm-instead-of-dispatch`). Empty in a module
     /// built without AOT, which is what lets the interpreter's own loop be
     /// monomorphised free of the re-entry check.

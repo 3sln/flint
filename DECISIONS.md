@@ -1298,10 +1298,11 @@ inbound buffer; a production export of `flint.conc`, not the diagnostics
 snapshot unit), and the existing `Snap.importLive`/`Snap.ImportLive` on the
 ports -- each answers 0 accepted, 1 another layout, 2 another program.
 
-**When it is taken: between turns, not inside one.** `flint/snapshot-export`
-PARKS the system thread; `drive` calls `serve_snapshot` after every turn
-(`kin/sched.kin`, one place for three runtimes), which makes that thread
-runnable and THEN exports. So every thread's state is in its thread object,
+**When it is taken: between turns, not inside one.** *(As built 2026-10-05;
+the mechanism below was replaced on 2026-10-06 -- see "REVISED" further down.)*
+`flint/snapshot-export` PARKS the system thread; `drive` calls `serve_snapshot`
+after every turn (`kin/sched.kin`, one place for three runtimes), which makes
+that thread runnable and THEN exports. So every thread's state is in its thread object,
 none is half-way through a builtin, and the running program is not stopped --
 it carries on. The parked call is re-executed: in the instance asked, it answers
 the length; in a restored copy it answers `nil`, because the format records
@@ -1322,30 +1323,51 @@ of one image and one host script differed in exactly that byte of 347 087 --
 so it is written as 2 ("waiting for its host") and they are now identical
 (`test/snapstream.mjs` asserts it).
 
-**The guard.** `flint/snapshot-export` and `flint/snapshot-chunk` refuse unless
-the CURRENT thread is the system thread, by the id the runtime recorded when IT
-spawned `flint.system/boot` -- a grant conferred by the runtime, not a claim
-the caller makes. It is a run-time check on purpose: `flint.rt/<x>` names any
-builtin from any source, and a program with no workspaces is checked nowhere at
-compile time. Probed as programs (`test/snapstream/snap.cljc`): the builtin
-named directly, in value position, from a thread the guest spawned, and the
-chunk reader -- all refused with SecurityException; a `:snapshot` the guest
-sends on the system port (which it CAN obtain: `(flint.rt/system-port)`
-compiles in an anonymous program, checked 2026-10-05, contrary to a comment in
-`units-src/flint-conc`) leaves for the host, since a send on a bridge goes out.
-The control, on the same sandbox: the host's request is served. With the guard
-removed, the native probe fails (done once, by hand, 2026-10-05).
+**REVISED 2026-10-06: the RUNTIME serves the request, and there is no guard
+to hold** (`DECISIONS.md#the-control-plane-is-the-runtimes`). The control plane
+is runtime code (`kin/control.kin`) that reads the system port's queue between
+turns; on `{:op :snapshot :port P}` it calls `snap::begin`, which exports and
+makes `P` the scheduler's `SC_SNAP`, and `snap::idle` streams what `P` has room
+for, then the terminator, then closes it. The bytes a host sees are unchanged:
+`cli/src/snapstream_test.rs`, `test/snapstream.mjs`, `RtSnapStream` and the
+CLR's `--rt-snap-stream` assert the same chunks, terminator, close and
+one-shot equality, and wasm streams exactly native's bytes (341 096 of them for
+the fixture now, measured by that test; 347 087 before the stdlib's control
+plane left every image).
 
-**THE ROUTE IT DOES NOT CLOSE.** The guard trusts the system thread because the
-stdlib's `flint.system` runs no guest code there. But a program's sources may
-DEFINE `flint.system` and the compiler takes theirs instead
-(`test/snapstream-shadow/`): measured 2026-10-05, that program's own `boot`
-took a 53 554-byte export. The same holds for `flint.port` and `flint.wire`,
-which the system thread calls. Whether a program may replace a stdlib namespace
-is a question about the whole trusted base, not about snapshots, and is OPEN
-for the maintainer; `cli/src/snapstream_test.rs`'s ignored
-`a_program_cannot_ship_its_own_control_plane` asserts the refusal and fails
-today.
+What it replaced, and why it was not enough: `flint/snapshot-export` and
+`flint/snapshot-chunk` refused unless the current thread was the one the
+runtime had spawned `flint.system/boot` on -- a grant the runtime conferred, but
+on a thread that ran whatever source a resolver supplied for `flint.system`.
+Measured 2026-10-05: a program's own `flint/system.cljc` took a 53 554-byte
+export. Both builtins are gone, and so is `flint.rt/system-port`, so every
+route the guard was probed against -- by name, in value position, from a
+spawned thread, and a request sent on the system port -- is now a compile
+error (`no_source_can_name_a_snapshot_builtin_or_the_system_port`, beside a
+control naming a builtin that exists). What the runtime serves is a message
+the HOST delivered on the system port; a guest's send on a bridge goes out.
+Probed at that boundary (`only_the_hosts_request_on_the_system_port_is_served`
+and the same rows on wasm): the request delivered on a CALL port is a call with
+no `:fn`, and `:x/snapshot` is not `:snapshot`; the control, on the same
+sandbox, is served. Made to fail on purpose once, by hand, 2026-10-06: with
+`wire-plain-kw-len` reading a namespaced keyword as a plain one (an edit to the
+generated `wirescan.rs`, reverted), the `:x/snapshot` row failed -- "a request
+for `:x/snapshot` was served as `:snapshot`". An earlier attempt at the same
+mutation left the namespace's bytes unread, so the message failed to parse and
+the row passed for the wrong reason; a mutation is only evidence once it is
+checked to be the change it names.
+
+`a_program_cannot_ship_its_own_control_plane` is no longer ignored: a program
+supplying `flint/system.cljc` compiles -- its file is the resolver's answer --
+and its `boot`, kept in the image, never runs; a call and the host's own
+request are served on the same sandbox.
+
+**A copy does not stream itself.** The destination is in the heap when the
+export is taken, so the copy holds it; an import drops it on the copy's first
+drive (`Serve::inherited`), whatever the format's request flag says. The flag
+and the system-thread field stay in live VERSION 3 as written-but-unread (the
+second as -1), so a stream re-exported from an un-driven copy is still the
+same bytes.
 
 **Two port defects the crossing found, both fixed 2026-10-05.** The JVM's and
 CLR's image fingerprint multiplied by the textbook FNV prime `0x100000001b3`
@@ -8561,6 +8583,14 @@ natively embedded sandbox.
 
 **Ratified:** ☐ not signed off
 
+**SUPERSEDED IN PART, 2026-10-06** (`DECISIONS.md#the-control-plane-is-the-runtimes`):
+the control plane is no longer flint code. `lib/flint/system.cljc`,
+`boot_system_thread_once` and its two ports' counterparts are gone; `:bind`,
+`:unbind`, `:close` and `:snapshot` are served by runtime code generated from
+`kin/control.kin`, and calls by a loop the compiler puts in every image by
+index. "Bridges are the only door" stands; what sits behind the door changed.
+The status below is the record as it was.
+
 **Status: BUILT on the three runtimes checked -- verified 2026-09-19.** The
 one-shot boot exists under its own name in each: `boot_system_thread_once`
 (`runtime/src/conc.rs`), `bootSystemThreadOnce` (`Conc.java`),
@@ -8926,6 +8956,13 @@ calls the same way, because every runtime then pays the same scheduler.
 ## vars-is-its-own-grant
 
 **Ratified:** ☐ not signed off
+
+**SUPERSEDED, 2026-10-06** (`DECISIONS.md#the-control-plane-is-the-runtimes`):
+`flint.rt/var-named` is no longer callable from any source -- the compiler
+refuses it outside the call loop it injects -- so the `:vars` guard and the
+stdlib's `:vars` grant are removed. Probed as programs through `bin/flint`
+(direct, value position, alias, macro, `:inline`), all refused, beside a control
+naming `flint.rt/port?`. The record below is as it was.
 
 **Status: BUILT, and the guard is ENFORCED rather than only documented --
 verified 2026-09-19.** `src/flint/analyzer.cljc:326` carries the table
@@ -15470,3 +15507,164 @@ not touch `bin/build-units`'s lookup logic itself.
 `./bin/build-dist` still produces `target/wasm32-unknown-unknown/release/deps/lib*.rlib`
 for every workspace dependency with the candidate date, the same way this one
 was found.
+
+---
+
+## the-control-plane-is-the-runtimes
+
+**Ratified:** ☐ not signed off
+
+**Status: BUILT on native and wasm, 2026-10-06 -- `cargo test -p flint-cli
+control_test` (bind, call, a throw survived, an absent name, an unknown op
+ignored, a nil message not a goodbye, unbind, close) and `bb
+test/snapstream.clj` (native and wasm, wasm streaming exactly native's bytes).
+The JVM and CLR ports are recorded in the commit that lands them.** Supersedes
+the part of `DECISIONS.md#bridges-are-the-only-door` that made the control plane
+flint code (`lib/flint/system.cljc`), and the guard in `DECISIONS.md#snapshots`.
+
+### What was decided
+
+**There is no `flint.system`.** A sandbox's control plane -- `:bind`, `:unbind`,
+`:close` and `:snapshot` on the system port -- is RUNTIME code, generated from
+`kin/control.kin` for all three runtime families and called by `drive` at the
+top of every iteration, between turns. None of the four ops parks, and none of
+them needs flint: each is bookkeeping (`SC_BOUND`, `SC_CTRL`, `SC_SNAP` on the
+scheduler) or a runtime call.
+
+**What stays flint is serving CALLS on a bound port**, because a call runs a
+guest function and may park. That loop has NO namespace and NO var: the
+compiler carries its forms itself (`src/flint/callentry.cljc`), analyses and
+emits them into every image, and records the function's index in a trailing
+image field, `serve` (`NO_SERVE` = `0xFFFFFFFF` when absent, and when the image
+ends before it -- every image written before this). On `:bind p` the runtime
+closes that function over `p` as its one upvalue and spawns it
+(`spawn_call`). By index, never by name.
+
+**The loop is SELF-CONTAINED**: special forms, its own locals and `flint.rt`
+builtins, nothing else. `check-self-contained!` refuses any other symbol before
+analysis -- so no macro and no prelude name can expand into it -- and
+`emit-call-entry!` refuses an analysed tree that references any var. It is
+analysed in a namespace no source can be (a symbol with a space in it), so no
+alias, refer or var can redirect a `flint.rt/x` it names. The wire codec it
+needs is re-expressed there from `flint.wire`, same tags, same order, same
+refusal messages.
+
+**`flint.rt/var-named` is callable from nowhere else.** `flint.analyzer/
+native-name` refuses it unless the env is the injected loop's
+(`:trusted-entry`), so every route -- by name, value position, alias, macro,
+`:inline` -- is refused at compile time. The `:vars` guard and grant it needed
+(`DECISIONS.md#vars-is-its-own-grant`) are gone with it: there is nothing left
+to guard. Before, the guard held in doors that name a workspace and was checked
+nowhere in a compile that names none (`guard-check!`'s "escape for a program
+with no workspaces at all").
+
+**`flint.rt/system-port`, `flint.rt/snapshot-export` and
+`flint.rt/snapshot-chunk` are removed** from every runtime's catalogue. Nothing
+needs the system port in flint any more, and the snapshot is the runtime's
+(`DECISIONS.md#snapshots`).
+
+### Why
+
+Which source backs a namespace is the RESOLVER's answer, and the resolver is
+the host's; the standard library is becoming one more thing a resolver
+supplies. The runtime looked `flint.system/boot` up BY NAME and trusted the
+thread it ran on with the system port -- so it trusted whatever source a
+resolver supplied for that name. Measured 2026-10-05: a program shipping its own
+`flint/system.cljc` took a 53 554-byte snapshot through it, and
+`(flint.rt/system-port)` compiled and ran in an anonymous program. Code a
+resolver supplies must never run on a trusted path; the only way to make that
+true for the control plane was for it not to be a namespace.
+
+**First approaches, both overtaken the same day.** (1) A `^:flint/sealed`
+marker on the `ns` form plus door-level refusals of program files at stdlib
+paths. Dropped: a resolver answers each namespace once, so there is never a
+second declaration for a seal to reject, and precedence between the stdlib and
+a host's sources is the host's to decide. (2) `boot` taking the system port as
+its argument, built into the first frame by the runtime. Dropped when the whole
+namespace went: it still trusted a var named `flint.system/boot`.
+
+### What it costs, and what changed for a host
+
+* **Every image is smaller**: `(ns t) (defn main [args] "x")` went from 27 810
+  to 20 277 image bytes and from 91 to 81 declared natives (`./bin/flint ...
+  --emit-image`, read off the image; `test/four-ops/contract.edn` pins the 81).
+  `flint.port`, `flint.wire`, `flint.thread` and their reach are no longer
+  linked into a program that does not require them.
+* **A reply crosses with NO metadata.** `flint.port/send` asked
+  `flint.protocols/WireMeta` which metadata should cross; that is a protocol in
+  resolver-supplied code, so the call loop does not ask. Built-in kinds answer
+  nil there anyway; only a value that opted in loses metadata on a call's reply.
+  OPEN for the maintainer if a host relies on it.
+* **The control plane is FREE**: serving a control message charges no gas,
+  where the green thread that did it ran flint code charged to the program.
+* **Messages are served as a batch per drive**, not one per turn. A host sees
+  the same events in the same order; what moved is when.
+* **`control-waiting`**: with no thread parked on the system port,
+  `sched-needs-host` asks the control plane directly whether it is still
+  waiting -- true while the image has a call loop, a system port exists and no
+  `:close` has been served nor the port ended. An image with no call loop (a
+  hand-built one, `units-src/flint-conc/tests/hostports.rs`) still settles
+  when its program ends: without that gate three of those nine tests failed.
+* **Initialisers run before the first control message is served**
+  (`ensure-started` in `serve-control-at`), which is when booting
+  `flint.system` ran them. `control_test`'s
+  `the_initialisers_run_before_the_first_call` binds and calls with no pump in
+  between.
+* **The live format's system-thread field is RESERVED** (written -1, ignored on
+  import): there is no control-plane thread. Its state is in the heap now.
+
+---
+
+## a-source-defines-only-its-own-namespace
+
+**Ratified:** ☐ not signed off
+
+**Status: BUILT 2026-10-06, in the compiler, so every door has it** (`bin/flint`
+loads `src/` and the self-hosted compiler is built from it). Probed as programs
+through `bin/flint`, each beside a control differing only in the name:
+
+    route                                        before      after
+    ns form naming another ns (file evil.cljc)   compiled    refused
+    (def flint.system/boot ..)                   compiled*   refused
+    (defn flint.system/boot ..)                  compiled*   refused
+    def into another ns via a macro              compiled*   refused
+    def into another ns via #?(:flint ..)        compiled*   refused
+    (ns flint.port ..) nested inside a defn      compiled    refused
+    (ns flint.system) via a macro / via #?       compiled    refused
+    (in-ns 'x), in-ns in value position          unresolved  refused, named
+    (intern 'x 'y v)                             unresolved  refused, named
+    controls: (def app/boot ..), own ns, the
+      same macro and #? defining `boot`          compiled    compiled
+
+\* compiled, and defined `app/boot` -- the qualifier was silently DROPPED,
+which is a different program from the one written.
+
+### What was decided
+
+**A source resolved as namespace X may declare and define only X.** Its `ns`
+form must name X; a `def` (and so `defn`, `defmacro`, anything expanding to
+one) with a qualified symbol must qualify it with X; `in-ns` and `intern` are
+not supported at all and say so rather than "unable to resolve". Checked in
+`flint.analyzer/analyze-ns` and the `def` special form, so macro expansion,
+reader conditionals and nesting all arrive at the check -- `ns` is a special
+form and was honoured anywhere, a defn body included.
+
+No exceptions, the standard library included (the maintainer's call). A survey
+of every tracked `.clj`/`.cljc`/`.fln` outside `bin/` (255 files, 205 with an
+`ns` form; a regex over the first `ns` form and over `(def* ns/x` -- it reports
+what it matched, not what it missed) found no qualified def into another
+namespace and no `in-ns`/`intern` in flint source (`test/conform_vs_clojure.clj`
+is JVM Clojure). Three files declare a namespace other than their path:
+`bench/progs/concat.cljc` said `(ns cc)` and compiled as `concat` only because
+the name was ignored -- renamed to `(ns concat)`, with `bench/clj/run.clj`'s
+special case removed; `bench/construe/interpret.cljc` and an `(ns p)` inside a
+string in `test/loop_types.clj` are never resolved as namespaces.
+
+### Why
+
+The `ns` form's clauses filed their aliases, refers and requires under the name
+THE FORM gave, while the source's defs went to the name it was RESOLVED as. So
+a file resolved as `app.evil` that said `(ns flint.port (:require [x :as
+wire]))` rewrote what `wire/` meant inside `flint.port`. Which source backs a
+namespace is the resolver's answer -- the host's -- and that answer has to be
+the whole of what decides what a namespace contains.

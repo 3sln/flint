@@ -19,7 +19,11 @@
 (let [progs (str/split (first *command-line-args*) #",")]
   (doseq [p progs]
     (load-file (str "bench/progs/" p ".cljc"))
-    (let [ns-sym (if (= p "concat") 'cc (symbol p))
+    ;; THE FILE'S NAME IS ITS NAMESPACE. `concat.cljc` used to say `(ns cc)`,
+    ;; which needed a special case here and compiled under flint only because
+    ;; the compiler ignored the ns form's name; it no longer does
+    ;; (`DECISIONS.md#a-source-defines-only-its-own-namespace`).
+    (let [ns-sym (symbol p)
           main (ns-resolve (the-ns ns-sym) 'main)
           answer (main [])
           ms (best-ms #(main []) 9)]

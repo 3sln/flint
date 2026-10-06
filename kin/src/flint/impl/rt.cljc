@@ -673,6 +673,19 @@
    ;; search, because the control plane is found on every `drive`.
    'SC_SYSTEM {:rust "crate::conc::SC_SYSTEM"
               :java "Conc.SC_SYSTEM" :csharp "Conc.SC_SYSTEM"}
+   ;; The destination of the snapshot being streamed, or NIL
+   ;; (`DECISIONS.md#snapshots`). In the scheduler so it is ROOTED while the
+   ;; stream is in flight.
+   'SC_SNAP {:rust "crate::conc::SC_SNAP"
+            :java "Conc.SC_SNAP" :csharp "Conc.SC_SNAP"}
+   ;; The ports the host has bound, so `:close` can close them all
+   ;; (`DECISIONS.md#the-control-plane-is-the-runtimes`). NIL until the first.
+   'SC_BOUND {:rust "crate::conc::SC_BOUND"
+             :java "Conc.SC_BOUND" :csharp "Conc.SC_BOUND"}
+   ;; TRUE once the control plane is over -- `:close` served, or the system
+   ;; port ended. NIL until then.
+   'SC_CTRL {:rust "crate::conc::SC_CTRL"
+            :java "Conc.SC_CTRL" :csharp "Conc.SC_CTRL"}
    ;; HOW MANY SLOTS A SCHEDULER HAS. NOT `SC_LEN`, which is the table
    ;; module's and is 5 -- see the note there.
    'SCHED_LEN {:rust "crate::conc::SC_LEN"
@@ -2120,9 +2133,6 @@
     ;; `report-deadlock` stays three implementations on purpose -- it builds a
     ;; host string naming each stuck thread, and a diagnostic message is the
     ;; wrong thing to force through a generator.
-    'boot-system-thread-once (core/call {:rust "{0}.boot_system_thread_once()"
-                                         :java "Conc.bootSystemThreadOnce({0})"
-                                         :csharp "Conc.BootSystemThreadOnce({0})"})
     'reap-ports (core/call {:rust "{0}.reap_ports()"
                             :java "Conc.reapPorts({0})"
                             :csharp "Conc.ReapPorts({0})"})
@@ -2167,11 +2177,49 @@
     (core/call {:rust "{0}.fail_waiters_on({1}, \"the other end of this port is unreachable, so this can never complete\")"
                 :java "Conc.failWaitersOn({0}, {1}, \"the other end of this port is unreachable, so this can never complete\")"
                 :csharp "Conc.FailWaitersOn({0}, {1}, \"the other end of this port is unreachable, so this can never complete\")"})
-    ;; A host-requested live-set export, between turns (`DECISIONS.md#snapshots`).
-    ;; One line per target: the export is the runtime's own `snap` code.
-    'serve-snapshot (core/call {:rust "crate::conc::serve_snapshot({0})"
-                                :java "Conc.serveSnapshot({0})"
-                                :csharp "Conc.ServeSnapshot({0})"})
+    ;; THE CONTROL PLANE, between turns (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+    ;; `serve-control` is `kin/control.kin`'s `serve-control-at`, behind a word
+    ;; so `sched-drive`'s drivers can stub it -- and, on the ports, behind a
+    ;; one-line `Conc` delegation, as `reap-ports` is, so the template names a
+    ;; hand-written method `kin/scripts/check-names` can find.
+    'serve-control (core/call {:rust "{0}.serve_control_at()"
+                               :java "Conc.serveControl({0})"
+                               :csharp "Conc.ServeControl({0})"})
+    ;; START THE CALL LOOP ON `p`: the image's `serve` function closed over the
+    ;; port, spawned. False when the image has no call loop.
+    ;; RUN THE PROGRAM'S INITIALISERS if they have not run: a var is nil until
+    ;; they have. What booting `flint.system` used to do on the first drive.
+    'ensure-started (core/call {:rust "{0}.ensure_started()"
+                                :java "{0}.ensureStarted()"
+                                :csharp "{0}.EnsureStarted()"}
+                               {:tag Bool})
+    ;; DOES THIS IMAGE HAVE A CALL LOOP -- a `serve` field other than NO_SERVE?
+    'has-call-loop (core/call {:rust "crate::conc::has_call_loop({0})"
+                               :java "Conc.hasCallLoop({0})"
+                               :csharp "Conc.HasCallLoop({0})"}
+                              {:tag Bool})
+    'spawn-call (core/call {:rust "crate::conc::spawn_call({0}, {1})"
+                            :java "Conc.spawnCall({0}, {1})"
+                            :csharp "Conc.SpawnCall({0}, {1})"}
+                           {:tag Bool})
+    ;; A HOST-REQUESTED SNAPSHOT (`DECISIONS.md#snapshots`). The export and the
+    ;; stream are each runtime's own `snap` code, because the bytes live outside
+    ;; the heap in a per-runtime buffer. `snapshot-begin` exports for a request
+    ;; whose destination is `p`; `snapshot-idle` streams what the destination
+    ;; has room for and answers whether nothing is in flight.
+    'snapshot-begin (core/call {:rust "crate::snap::begin({0}, {1})"
+                                :java "Snap.begin({0}, {1})"
+                                :csharp "Snap.Begin({0}, {1})"})
+    'snapshot-idle (core/call {:rust "crate::snap::idle({0})"
+                               :java "Snap.idle({0})"
+                               :csharp "Snap.Idle({0})"}
+                              {:tag Bool})
+    ;; Is the control plane still waiting on the host -- `kin/control.kin`'s
+    ;; `control-waiting`, behind a word for the reason `serve-control` is.
+    'control-waiting (core/call {:rust "{0}.control_waiting()"
+                                 :java "Conc.controlWaiting({0})"
+                                 :csharp "Conc.ControlWaiting({0})"}
+                                {:tag Bool})
     'run-one (core/call {:rust "crate::conc::run_one({0}, {1})"
                          :java "Conc.runOne({0}, {1})"
                          :csharp "Conc.RunOne({0}, {1})"})

@@ -9,6 +9,7 @@ import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
+import static com._3sln.flint.kgen.rt.Control.*;
 import static com._3sln.flint.kgen.rt.Vecread.*;
 import static com._3sln.flint.kgen.rt.Vecwrite.*;
 
@@ -82,6 +83,13 @@ public final class Sched {
     /// the host might still act on it.
     public static boolean schedNeedsHost(Rt rt) {
         if (schedPendingEvents(rt)) {
+            return true;
+        }
+        // A CONTROL PLANE STILL WAITING IS THE HOST'S TO FEED. It was a green
+        // thread parked on the system port, which the loop below found; it is
+        // runtime code now, and nothing is parked there to find
+        // (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+        if (Conc.controlWaiting(rt)) {
             return true;
         }
         long s = Conc.sched(rt);
@@ -194,7 +202,10 @@ public final class Sched {
     /// target, and `report-deadlock` builds a host string naming the stuck
     /// threads, which is a diagnostic rather than a decision.
     public static long schedDrive(Rt rt) {
-        Conc.bootSystemThreadOnce(rt);
+        // NO CONTROL-PLANE THREAD IS BOOTED HERE ANY MORE. `flint.system/boot`
+        // was, by name, on the first drive that found a system port; the
+        // control plane is `serve-control` below now, and runtime code
+        // (`DECISIONS.md#the-control-plane-is-the-runtimes`).
         for (;;) {
             // What the collector left behind IS the lifetime rule: a flint end
             // nothing refers to any more has been closed, whether or not
@@ -231,15 +242,21 @@ public final class Sched {
                 rt.status = (int) 0;
                 return gateAnswer(rt);
             }
+            // THE CONTROL PLANE IS SERVED HERE, BETWEEN TURNS
+            // (`DECISIONS.md#the-control-plane-is-the-runtimes`): `:bind`,
+            // `:unbind`, `:close` and `:snapshot`, by the RUNTIME, so no flint
+            // code is trusted with the system port. Between turns because every
+            // thread's state is then in its thread object -- inside a turn a
+            // snapshot would copy a thread half-way through a builtin.
+            // 
+            // AT THE TOP OF THE LOOP, not after a turn, because nothing has to
+            // run for a control message to be served, and because a snapshot
+            // stream the host has not drained yet continues on the next drive
+            // whether or not any thread is runnable then.
+            Conc.serveControl(rt);
             long i = schedPick(rt);
             if (i >= 0) {
                 Conc.runOne(rt, (int) i);
-                // A HOST-REQUESTED SNAPSHOT IS TAKEN HERE, BETWEEN TURNS
-                // (`DECISIONS.md#snapshots`): the system thread parked to
-                // ask, so its turn has just ended and every thread's state
-                // is in its thread object. Inside a turn the export would
-                // copy a thread half-way through a builtin.
-                Conc.serveSnapshot(rt);
                 continue;
             }
             // THE HOST FIRST. There is no entry function whose return means

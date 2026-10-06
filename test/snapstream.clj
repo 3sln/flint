@@ -5,8 +5,9 @@
 ;; fingerprint and a stream one writes is a stream the other must take:
 ;;
 ;;   1. `cargo test -p flint-cli snapstream` -- native: the stream is the one-shot
-;;      export, the copy carries on and does not stream again, and every guest
-;;      route to the builtin is refused while the host's request is served;
+;;      export, the copy carries on and does not stream again, no source can
+;;      name a builtin that takes one, and the runtime serves only the host's
+;;      exact request on the system port;
 ;;   2. `node test/snapstream.mjs` -- the same on wasm, through the production
 ;;      ABI (`flint_live_import`), and native's stream imported there.
 ;;
@@ -45,8 +46,8 @@
                         "FLINT_SNAPSTREAM_OUT" (str (fs/absolutize (str out "/native.stream")))}
               "cargo" "test" "--release" "-q" "-p" "flint-cli" "snapstream")
       line (some #(when (str/starts-with? % "test result") %) (str/split-lines (:out r)))]
-  ;; "2 passed" and not merely "ok": a filter that matched nothing passes too.
-  (if (and line (str/includes? line "2 passed"))
+  ;; "4 passed" and not merely "ok": a filter that matched nothing passes too.
+  (if (and line (str/includes? line "4 passed"))
     (println "  ok   native:" line)
     (do (println (:out r)) (println "  FAIL native ran" (pr-str line)) (System/exit 1))))
 

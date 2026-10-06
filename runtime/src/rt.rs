@@ -57,13 +57,6 @@ impl StrCursor {
 }
 
 pub struct Rt {
-    /// Whether the control plane has been spawned on the system port.
-    ///
-    /// One-shot, checked on every `drive`
-    /// (`DECISIONS.md#bridges-are-the-only-door`). Not a slot on the scheduler,
-    /// because a sandbox with no system port has no scheduler either and the
-    /// question is asked before that is known.
-    pub system_booted: bool,
     /// A host-requested live-set export in progress (`DECISIONS.md#snapshots`).
     /// Runtime state, not heap state: the bytes it holds are the snapshot, so
     /// they cannot also be in it.
@@ -336,7 +329,6 @@ impl Rt {
             &mut (*heap.as_ptr()).host_natives
         }));
         Rt {
-            system_booted: false,
             snap_serve: crate::snap::Serve::new(),
             bridge_hook: None,
             owned_heap,

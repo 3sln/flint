@@ -42,6 +42,13 @@ public final class Wirescan {
             return false;
         }
         int tag = wireTakeU8(rt, rd, 255);
+        return wireScanTagged(rt, rd, tag, acc, depth);
+    }
+    /// The rest of a value whose TAG has already been read -- `wire-scan-at`
+    /// after its first byte. Apart so a reader that had to look at the tag to
+    /// decide what it was reading (`wire-control-op`) can still skip the value
+    /// it decided not to read.
+    public static boolean wireScanTagged(Rt rt, long rd, int tag, int acc, int depth) {
         // NIL, TRUE and FALSE are the tag and nothing else.
         if (tag <= 2) {
             return true;
@@ -174,5 +181,181 @@ public final class Wirescan {
         // AN UNKNOWN TAG is refused rather than skipped: there is no length
         // to skip by, so the walk cannot go on and must not pretend to.
         return false;
+    }
+    /// Do the next `n` bytes spell the name packed into `packed`?
+    /// 
+    /// PACKED LITTLE-ENDIAN, one byte per eight bits, because kin has no string
+    /// literal: `op` is 28783. Eight bytes at most. The bytes are CONSUMED
+    /// either way.
+    public static boolean wireNameIs(Rt rt, long rd, int n, long packed) {
+        if (Integer.compareUnsigned(wireLeft(rt, rd), n) < 0) {
+            return false;
+        }
+        long p;
+        p = packed;
+        boolean same;
+        same = true;
+        int i;
+        i = 0;
+        while (Integer.compareUnsigned(i, n) < 0) {
+            if (((long) wireTakeU8(rt, rd, 256)) != (p % 256)) {
+                same = false;
+            }
+            p = p >>> 8;
+            i += 1;
+        }
+        return same;
+    }
+    /// A PLAIN KEYWORD's name length, with the tag, namespace and length
+    /// consumed and the name left to read; -1 when the value is not a keyword
+    /// with no namespace, and then the WHOLE value has been skipped, minting
+    /// into `acc` as `wire-scan-at` does; -2 when it could not even be skipped.
+    public static long wirePlainKwLen(Rt rt, long rd, int acc, int depth) {
+        if (Integer.compareUnsigned(wireLeft(rt, rd), 1) < 0) {
+            return -2;
+        }
+        int tag = wireTakeU8(rt, rd, 255);
+        if (tag != 6) {
+            if (wireScanTagged(rt, rd, tag, acc, depth)) {
+                return -1;
+            } else {
+                return -2;
+            }
+        }
+        if (Integer.compareUnsigned(wireLeft(rt, rd), 4) < 0) {
+            return -2;
+        }
+        int ns = wireTakeU32(rt, rd, 0);
+        if (ns != Codec.NO_NS) {
+            if (!wireSkip(rt, rd, ns)) {
+                return -2;
+            }
+            if (!wireSkipRun(rt, rd, false)) {
+                return -2;
+            }
+            return -1;
+        }
+        if (Integer.compareUnsigned(wireLeft(rt, rd), 4) < 0) {
+            return -2;
+        }
+        // ZERO-EXTENDED. `to-i64` of a u32 is `(long) x` on the ports,
+        // which sign-extends: a length or an id past 2^31 would come back
+        // negative there and positive on native.
+        return ((long) wireTakeU32(rt, rd, 0)) & 4294967295L;
+    }
+    /// WHAT A CONTROL MESSAGE ASKS, read the way `flint.system` read it.
+    /// 
+    /// THE RUNTIME'S CONTROL PLANE (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+    /// A message on the system port is a MAP; its `:op` is a plain keyword and
+    /// its `:port`, if it has one, a port. Answered as one number,
+    /// `op + 8 * (port-id + 1)`, `port-id + 1` being 0 when there is no port:
+    /// 
+    ///     op 1 :bind   2 :unbind   3 :close   4 :snapshot   0 anything else
+    /// 
+    /// AS FORGIVING AS THE FLINT IT REPLACES, and no more. That read the message
+    /// into a map and asked `(:op m)` and `(:port m)`, so other keys were
+    /// ignored, a later duplicate key won, an op it did not know was ignored,
+    /// and a message that was not a map had no op. All of that is kept. A
+    /// `:port` that is not a port answers no port, which the caller treats as
+    /// nothing to do; the flint version handed it on and failed later, inside
+    /// a thread or a catch.
+    /// 
+    /// -1 ONLY FOR BYTES THAT CANNOT BE READ, which `host-deliver`'s scan has
+    /// already refused, so it should not happen. Ports are minted into `acc` as
+    /// `wire-scan-at` mints them -- they were minted when the message arrived,
+    /// and the message is still held, so this finds the same handles.
+    public static long wireControlOp(Rt rt, long rd, int acc) {
+        if (Integer.compareUnsigned(wireLeft(rt, rd), 1) < 0) {
+            return -1;
+        }
+        int tag = wireTakeU8(rt, rd, 255);
+        if (tag != 10) {
+            if (wireScanTagged(rt, rd, tag, acc, 0)) {
+                return 0;
+            } else {
+                return -1;
+            }
+        }
+        if (Integer.compareUnsigned(wireLeft(rt, rd), 4) < 0) {
+            return -1;
+        }
+        int n = wireTakeU32(rt, rd, 0);
+        long op;
+        op = 0;
+        long port;
+        port = -1;
+        int k;
+        k = 0;
+        while (Integer.compareUnsigned(k, n) < 0) {
+            long klen = wirePlainKwLen(rt, rd, acc, 1);
+            if (klen == -2) {
+                return -1;
+            }
+            int which;
+            which = 0;
+            if (klen >= 0) {
+                if (klen == 2) {
+                    if (wireNameIs(rt, rd, 2, 28783)) {
+                        which = 1;
+                    }
+                } else if (klen == 4) {
+                    if (wireNameIs(rt, rd, 4, 1953656688)) {
+                        which = 2;
+                    }
+                } else if (!wireSkip(rt, rd, (int) klen)) {
+                    return -1;
+                }
+            }
+            // THE VALUE. `:op` wants a plain keyword; `:port` a port;
+            // anything else is skipped.
+            if (which == 1) {
+                long vlen = wirePlainKwLen(rt, rd, acc, 1);
+                if (vlen == -2) {
+                    return -1;
+                }
+                op = 0;
+                if (vlen >= 0) {
+                    if (vlen == 4) {
+                        if (wireNameIs(rt, rd, 4, 1684957538)) {
+                            op = 1;
+                        }
+                    } else if (vlen == 6) {
+                        if (wireNameIs(rt, rd, 6, 110425377238645L)) {
+                            op = 2;
+                        }
+                    } else if (vlen == 5) {
+                        if (wireNameIs(rt, rd, 5, 435728378979L)) {
+                            op = 3;
+                        }
+                    } else if (vlen == 8) {
+                        if (wireNameIs(rt, rd, 8, 8390039475830484595L)) {
+                            op = 4;
+                        }
+                    } else if (!wireSkip(rt, rd, (int) vlen)) {
+                        return -1;
+                    }
+                }
+            } else if (which == 2) {
+                if (Integer.compareUnsigned(wireLeft(rt, rd), 1) < 0) {
+                    return -1;
+                }
+                int vt = wireTakeU8(rt, rd, 255);
+                if (vt == 15) {
+                    if (Integer.compareUnsigned(wireLeft(rt, rd), 4) < 0) {
+                        return -1;
+                    }
+                    port = ((long) wireTakeU32(rt, rd, 0)) & 4294967295L;
+                } else {
+                    port = -1;
+                    if (!wireScanTagged(rt, rd, vt, acc, 1)) {
+                        return -1;
+                    }
+                }
+            } else if (!wireScanAt(rt, rd, acc, 1)) {
+                return -1;
+            }
+            k += 1;
+        }
+        return op + (8 * (port + 1));
     }
 }

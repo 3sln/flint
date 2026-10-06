@@ -11,6 +11,7 @@ using static global::Flint.Rt.Eq;
 using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
+using static global::_3sln.Flint.Kgen.Rt.Control;
 using static global::_3sln.Flint.Kgen.Rt.Vecread;
 using static global::_3sln.Flint.Kgen.Rt.Vecwrite;
 
@@ -84,6 +85,13 @@ public static class Sched {
     /// the host might still act on it.
     public static bool SchedNeedsHost(Rt rt) {
         if (SchedPendingEvents(rt)) {
+            return true;
+        }
+        // A CONTROL PLANE STILL WAITING IS THE HOST'S TO FEED. It was a green
+        // thread parked on the system port, which the loop below found; it is
+        // runtime code now, and nothing is parked there to find
+        // (`DECISIONS.md#the-control-plane-is-the-runtimes`).
+        if (Conc.ControlWaiting(rt)) {
             return true;
         }
         long s = Conc.Sched(rt);
@@ -196,7 +204,10 @@ public static class Sched {
     /// target, and `report-deadlock` builds a host string naming the stuck
     /// threads, which is a diagnostic rather than a decision.
     public static long SchedDrive(Rt rt) {
-        Conc.BootSystemThreadOnce(rt);
+        // NO CONTROL-PLANE THREAD IS BOOTED HERE ANY MORE. `flint.system/boot`
+        // was, by name, on the first drive that found a system port; the
+        // control plane is `serve-control` below now, and runtime code
+        // (`DECISIONS.md#the-control-plane-is-the-runtimes`).
         for (;;) {
             // What the collector left behind IS the lifetime rule: a flint end
             // nothing refers to any more has been closed, whether or not
@@ -233,15 +244,21 @@ public static class Sched {
                 rt.status = (int) 0;
                 return GateAnswer(rt);
             }
+            // THE CONTROL PLANE IS SERVED HERE, BETWEEN TURNS
+            // (`DECISIONS.md#the-control-plane-is-the-runtimes`): `:bind`,
+            // `:unbind`, `:close` and `:snapshot`, by the RUNTIME, so no flint
+            // code is trusted with the system port. Between turns because every
+            // thread's state is then in its thread object -- inside a turn a
+            // snapshot would copy a thread half-way through a builtin.
+            // 
+            // AT THE TOP OF THE LOOP, not after a turn, because nothing has to
+            // run for a control message to be served, and because a snapshot
+            // stream the host has not drained yet continues on the next drive
+            // whether or not any thread is runnable then.
+            Conc.ServeControl(rt);
             long i = SchedPick(rt);
             if (i >= 0) {
                 Conc.RunOne(rt, (int) i);
-                // A HOST-REQUESTED SNAPSHOT IS TAKEN HERE, BETWEEN TURNS
-                // (`DECISIONS.md#snapshots`): the system thread parked to
-                // ask, so its turn has just ended and every thread's state
-                // is in its thread object. Inside a turn the export would
-                // copy a thread half-way through a builtin.
-                Conc.ServeSnapshot(rt);
                 continue;
             }
             // THE HOST FIRST. There is no entry function whose return means
