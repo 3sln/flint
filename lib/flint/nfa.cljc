@@ -1,5 +1,10 @@
-(ns flint.nfa
+(ns ^:internal flint.nfa
   "Regex AST to a Thompson NFA program (`DECISIONS.md#matching-over-ropes`).
+
+  WORKSPACE-LOCAL (`DECISIONS.md#namespace-is-workspace-local`): the regex
+  engine's insides, read only by `flint.regex` and by `flint.pike`, its own
+  conformance oracle. Nothing outside the stdlib workspace is meant to name a
+  var here directly.
 
   This is the SHARED half, and being shared is the point: every host executes
   the same compiled program, so there is no per-host pattern parser to disagree

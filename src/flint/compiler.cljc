@@ -466,14 +466,46 @@
                         :tags tags
                         :dialect (get-in @cc [:workspaces nsname :dialect])}))
 
+(defn- ns-mark
+  "Which mark, if any, this namespace's `ns` form carries on its own NAME --
+  `(ns ^:internal x ..)` or `(ns ^:private x ..)`. The reader attaches
+  metadata to the name symbol the same way it does for a `def`'s name, which
+  is what `vis-of` reads for a var; this is the same read one level up.
+
+  `^:internal` and `^:private` ON A NAMESPACE MEAN THE SAME THING --
+  WORKSPACE-LOCAL, not namespace-local -- because a namespace is too small a
+  unit to build a library's insides out of
+  (`DECISIONS.md#namespace-is-workspace-local`). The spelling the author wrote
+  is kept rather than collapsed to one, so a refusal can name it.
+
+  Called from the PRE-PASS (`declare-namespace!`), before any namespace is
+  analysed, for the reason `vis-of`'s own docstring gives for var marks: a
+  check that reads this only after `analyze-ns` runs would be ORDER-DEPENDENT
+  -- refused when the referencing namespace is analysed second and silently
+  allowed when it is analysed first. `:namespaces` is filled for every source
+  namespace by this pre-pass before `analyze-namespace!` touches any of them,
+  so a reference sees the same answer regardless of which file the compiler
+  reached first."
+  [forms]
+  (when-let [f (first (filter ns-form? forms))]
+    (let [m (meta (second f))]
+      (cond (:internal m) :internal
+            (:private m) :private))))
+
 (defn declare-namespace!
   "Register every name one namespace's `forms` define, so that forward
   references -- within a namespace and between namespaces -- resolve without
   `declare`. Clojure needs `declare` for the intra-namespace case; declaring
   everything before analysing anything makes it unnecessary. Returns the forms,
-  top-level `do`s flattened."
+  top-level `do`s flattened.
+
+  Also records the namespace's OWN mark (`ns-mark`), if it has one, into
+  `:namespaces` -- in this same pre-pass, before any analysis, for the reason
+  `ns-mark` documents."
   [cc nsname forms]
   (vswap! cc assoc-in [:namespaces nsname] (get-in @cc [:namespaces nsname] {}))
+  (when-let [mark (ns-mark forms)]
+    (vswap! cc assoc-in [:namespaces nsname :ws-mark] mark))
   (let [forms (flatten-top-level forms)]
     (doseq [f forms, [n vis] (def-form-entries f)]
       (let [q (symbol (str nsname) (name n))]

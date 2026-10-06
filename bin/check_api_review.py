@@ -29,6 +29,20 @@ def read(*parts):
         return ''
 
 
+# `^:internal`/`^:private` ON THE `ns` FORM ITSELF
+# (`DECISIONS.md#namespace-is-workspace-local`) sits between `(ns ` and the
+# name, and this file's "first line" regexes anchored straight on
+# `[a-z]` after the whitespace -- so `(ns ^:internal flint.nfa` matched
+# nothing. Measured: marking `flint.nfa`/`flint.pike` that way made
+# `namespaces()` stop finding them at all, and the checker reported their
+# EXISTING `doc/api-review.md` sections as "no longer exists" -- the
+# opposite of a false pass, but still wrong, and the two patterns below
+# (`NS_HEAD` and its one other use in `lib_requirers`) are the only two
+# places in this file that read a `ns` form's head rather than its require
+# clauses.
+NS_HEAD = r'\(ns\s+(?:\^\S+\s+)*'
+
+
 def namespaces():
     """Every `lib/` namespace, by the name its own `ns` form gives."""
     out = set()
@@ -36,7 +50,7 @@ def namespaces():
         for f in files:
             if f.endswith('.cljc'):
                 first = read(os.path.relpath(os.path.join(base, f), ROOT)).split('\n', 1)[0]
-                m = re.match(r'\(ns\s+([a-z][\w.-]*)', first)
+                m = re.match(NS_HEAD + r'([a-z][\w.-]*)', first)
                 if m:
                     out.add(m.group(1))
     return out
@@ -119,7 +133,7 @@ def lib_requirers(ns):
             if not f.endswith('.cljc'):
                 continue
             txt = read(os.path.relpath(os.path.join(base, f), ROOT))
-            if re.match(r'\(ns\s+' + re.escape(ns) + r'[\s)]', txt):
+            if re.match(NS_HEAD + re.escape(ns) + r'[\s)]', txt):
                 continue
             if re.search(r'\[' + re.escape(ns) + r'[\s:\]]', txt):
                 n += 1

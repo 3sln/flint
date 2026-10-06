@@ -256,9 +256,11 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-25 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Regex AST to a Thompson NFA program (`DECISIONS.md#matching-over-ropes`).
+**MARKED `^:internal` 2026-10-06** (`DECISIONS.md#namespace-is-workspace-local`): WORKSPACE-LOCAL now, not just unmanifested. Every var here is refused to a reference from outside the `flint/flint` workspace, enforced at compile time.
 
-**Is this public?** Required by 0 compiled test program(s), 2 other `lib` namespace(s), named 0 time(s) in README. Required by `flint.regex` and one other; the regex engine's insides.
+25 public vars. Regex AST to a Thompson NFA program (`DECISIONS.md#matching-over-ropes`).
+
+**Is this public?** Required by 0 compiled test program(s), 2 other `lib` namespace(s), named 0 time(s) in README. Required by `flint.regex` and `flint.pike`, both in the same workspace; the regex engine's insides. The one direct outside user found was `test/regex_pike.clj`'s `refsim` probe, which reaches into both namespaces on purpose as the conformance oracle and now claims the stdlib's own workspace name in its own `deps.edn` to do so (same shape `test/visibility.clj` already documents for the capability guard: "this is the stdlib's own position, and flint builds itself from it").
 
 **Change requests:** _none recorded_
 
@@ -266,9 +268,11 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-1 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. The reference Pike VM (`DECISIONS.md#matching-over-ropes`), in cljc.
+**MARKED `^:internal` 2026-10-06** (`DECISIONS.md#namespace-is-workspace-local`): WORKSPACE-LOCAL now, not just unmanifested. Every var here is refused to a reference from outside the `flint/flint` workspace, enforced at compile time.
 
-**Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. Required by nothing directly; the reference Pike VM behind `flint.regex`.
+1 public vars. The reference Pike VM (`DECISIONS.md#matching-over-ropes`), in cljc.
+
+**Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. Required by nothing in `lib` directly; the reference Pike VM behind `flint.regex`, which reaches it through `flint.nfa`'s program rather than requiring it itself. Same outside user as `flint.nfa`: `test/regex_pike.clj`'s `refsim`.
 
 **Change requests:** _none recorded_
 

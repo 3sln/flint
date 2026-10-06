@@ -568,13 +568,28 @@
   namespaces has helpers that all six need and nobody outside should touch,
   and before this the only way to say that was to make them public and hope.
 
+  A NAMESPACE CAN CARRY A MARK TOO: `(ns ^:internal x ..)` or
+  `(ns ^:private x ..)` -- both spellings mean the same thing on an `ns` form,
+  WORKSPACE-LOCAL, whichever a var inside it carries. A var's OWN mark still
+  wins where it is stricter: `^:private` on the var keeps meaning
+  namespace-local even inside a namespace marked `^:internal`, and an
+  unmarked var inside a marked namespace is checked as if it carried
+  `^:internal` itself (`DECISIONS.md#namespace-is-workspace-local`). Read from
+  `ns-mark`'s pre-pass table (`:namespaces ns :ws-mark`), so this does not
+  reopen the order-dependence the comment below is about: the mark is there
+  whichever namespace the compiler analyses first.
+
   A workspace is the same boundary `workspace-capabilities` guards capabilities across, and the
   two questions compose without interfering: `^:internal` asks WHO MAY NAME
   THIS, a guard asks WHAT MAY THIS CODE DO. A var can be both.
 
   Namespaces with no workspace are all the anonymous one, so a program that
   declares none is checked only for `:private` -- which is what it should be,
-  since a workspace boundary nobody drew cannot be crossed.
+  since a workspace boundary nobody drew cannot be crossed. A namespace mark
+  changes nothing here: comparing `nil` to `nil` below still says \"same
+  workspace\", so `^:internal`/`^:private` on an `ns` form in a program that
+  names no workspaces anywhere is unenforceable, same as the var-level mark
+  always was.
 
   On macros: a macro body calling a private helper is safe, because that call
   happens while the macro RUNS, in its own namespace, at expansion time. What
@@ -601,7 +616,12 @@
                 (let [d (get (:declared c) q)]
                   (when (map? d) d)))
           here (current-ns env)
-          there (symbol (namespace q))]
+          there (symbol (namespace q))
+          ;; `:namespaces .. :ws-mark` is filled by `declare-namespace!`'s
+          ;; pre-pass, for EVERY source namespace, before any is analysed --
+          ;; the same reason `:declared` exists rather than reading
+          ;; `:var-meta` alone.
+          ns-mark (get-in c [:namespaces there :ws-mark])]
       (when (not= here there)
         (cond
           (:private m)
@@ -609,16 +629,19 @@
                     "; " here " may not name it")
                {:var q :from here :defined-in there :visibility :private})
 
-          (:internal m)
+          (or (:internal m) ns-mark)
           (let [ws (:workspaces c)
                 w-here (get-in ws [here :workspace])
                 w-there (get-in ws [there :workspace])]
             (when (not= w-here w-there)
               (err (str q " is internal to " (or w-there "its workspace")
+                        (when-not (:internal m)
+                          (str " (its namespace, " there ", is marked ^" (name ns-mark) ")"))
                         "; " (or w-here "this program") " is outside it")
                    {:var q :from here :defined-in there
                     :from-workspace w-here :to-workspace w-there
-                    :visibility :internal}))))))))
+                    :visibility :internal
+                    :namespace-mark (when-not (:internal m) ns-mark)}))))))))
 
 (defn- record-dep! [env q]
   (privacy-check! env q)

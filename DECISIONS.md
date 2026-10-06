@@ -72,7 +72,8 @@ material that predates that rewrite.
 [opaque-values](#opaque-values) ·
 [workspace-capabilities](#workspace-capabilities) ·
 [system-namespaces-and-deps](#system-namespaces-and-deps) ·
-[namespaces-over-the-system-port](#namespaces-over-the-system-port)
+[namespaces-over-the-system-port](#namespaces-over-the-system-port) ·
+[namespace-is-workspace-local](#namespace-is-workspace-local)
 
 *VI. Other runtimes*
 [other-hosts](#other-hosts) ·
@@ -16111,3 +16112,169 @@ a file resolved as `app.evil` that said `(ns flint.port (:require [x :as
 wire]))` rewrote what `wire/` meant inside `flint.port`. Which source backs a
 namespace is the resolver's answer -- the host's -- and that answer has to be
 the whole of what decides what a namespace contains.
+
+---
+
+## namespace-is-workspace-local
+
+**A namespace can be marked `^:internal`/`^:private`, and both spellings mean WORKSPACE-LOCAL**
+
+**Ratified:** ☐ not signed off
+
+**Status: BUILT 2026-10-06**, in `flint.compiler/ns-mark` and
+`flint.analyzer/privacy-check!`. `bin/flint` needs no twin: it `require`s
+`flint.compiler`/`flint.analyzer` from `src/` directly rather than
+reimplementing the check, so there is one place this logic lives, not two.
+
+*How this was checked -- as a program, before touching the check, because an
+access check fails open and the sensible-reading version is the one that gets
+written (AGENTS.md §5).* Before the fix, through `test/visibility.clj`'s own
+harness (`project/resolve-project` + `compiler/compile-image`, a synthetic
+two-workspace project): a namespace written `(ns ^:internal libx.inner) (defn
+helper [x] x)`, named from another workspace, compiled to the same
+`unable to resolve symbol: nth` this harness always ends on -- IDENTICAL
+whether the reference crossed the workspace boundary or stayed inside it. Two
+arms agreeing exactly is itself the symptom (AGENTS.md §3): the mark was read
+by nobody. After the fix, every route probed refuses the cross-workspace
+reference and allows the same-workspace one: plain call, value position
+(bound to a local, never called), a collection literal, `:refer`, a macro
+expansion that emits the var into the caller, an `:inline` body, and the
+REVERSE EDGE -- the marked namespace's own `ns` form analysed AFTER the
+referencing namespace, which is the shape that broke `^:private`/`^:internal`
+on a *var* before this file's existing fix to `vis-of`/`declare-namespace!`.
+All of these are now rows in `test/visibility.clj`.
+
+### What was decided
+
+**On an `ns` form, `^:internal` and `^:private` mean the SAME thing: the
+namespace is WORKSPACE-LOCAL.** Every var it defines may be named only from a
+namespace in the same workspace (`workspace-capabilities`'s existing grain),
+whatever that var's own mark says -- UNLESS the var's own mark is the
+stricter one:
+
+    (ns ^:internal x ..)     every var in x: workspace-local, unless the var
+    (ns ^:private x ..)      says otherwise below
+      (defn- y [])             y: NAMESPACE-local (the var's own mark wins --
+                                   stricter than the namespace's)
+      (defn ^:internal z [])   z: workspace-local (redundant with the ns mark,
+                                   not a conflict)
+      (defn w [])               w: workspace-local, INHERITED from the ns mark
+                                   it would otherwise be fully public
+
+This is new only for the unmarked case (`w` above). A var's own `^:private`
+or `^:internal` already meant exactly what it meant before this; the ns-level
+mark only reaches the vars that carried NO mark of their own, which is most of
+them -- the reason to mark the namespace rather than every var in it one at a
+time.
+
+**Why one mark and not two meanings on the `ns` form.** A var distinguishes
+`^:private` (namespace-local) from `^:internal` (workspace-local) because a
+single namespace sometimes needs both grains. A namespace marking ITSELF has
+no narrower grain available than "this whole namespace" -- there is no unit
+between a namespace and the vars inside it -- so a namespace-local reading of
+`^:private` on an `ns` form would collapse to "no other namespace, including
+siblings in the same library, may use this at all," which is not a boundary
+anyone asked for and not how `^:private` reads on a var. Workspace-local is
+the only grain that makes an `ns`-level mark useful, so both spellings resolve
+to it rather than inventing a second meaning for the second spelling.
+
+**The anonymous workspace is unaffected, by the existing rule and not a new
+one.** `privacy-check!` already treated two namespaces with no declared
+workspace as the same (anonymous) workspace, so that a program declaring no
+workspaces anywhere is checked nowhere for `^:internal`. A namespace mark
+reuses that exact comparison (`nil` workspace equals `nil` workspace), so
+`^:internal`/`^:private` on an `ns` form in a program with no workspaces
+anywhere is unenforceable -- not a hole this decision opens, the same
+position `^:internal` on a var has always held, and the position this
+project's own build relies on: `lib/`'s workspace (`flint/flint`) is named,
+but nothing stops an EMBEDDER from leaving its own application files unnamed.
+
+### Why the fix has to live in the pre-pass
+
+The same order-dependence this file already records for var-level
+`^:private`/`^:internal` applies one level up. `privacy-check!` reads
+`:var-meta`, filled in only when a namespace is ANALYSED, with `:declared` as
+a pre-pass fallback so a reference from a namespace analysed first still
+sees the mark. A namespace-level mark needed the identical shape: `ns-mark`
+reads the `ns` form's own name symbol for `^:internal`/`^:private` and
+`declare-namespace!` records it into `:namespaces <ns> :ws-mark` in the SAME
+pre-pass that fills `:declared` -- before any namespace, including the
+marked one itself, has been analysed. Reading the mark only after
+`analyze-ns` ran (the first version tried here) reproduced the exact bug
+`vis-of`'s docstring describes for vars: refused when the marked namespace
+happens to be analysed first, silently allowed when the referencing
+namespace is analysed first -- confirmed with the reverse-edge row in
+`test/visibility.clj` before moving the read into the pre-pass fixed it.
+
+### flint.nfa and flint.pike are marked
+
+The regex engine's shared insides -- `flint.nfa` (the Thompson NFA compiler)
+and `flint.pike` (the reference Pike VM, `DECISIONS.md#matching-over-ropes`)
+-- are marked `^:internal`. Both are read only by `flint.regex` and by each
+other, all three in the stdlib's own workspace (`flint/flint`, named by
+`lib/deps.edn`). `doc/api-review.md`'s own evidence lines already said so
+("the regex engine's insides" / "the reference Pike VM behind `flint.regex`")
+before there was a mechanism to enforce it.
+
+**The one outside user found by grepping `lib/`, `test/` and every tracked
+`.md` for `flint\.nfa`/`flint\.pike`**: `test/regex_pike.clj`'s `refsim`
+probe, which builds a cljc reference simulator calling `flint.nfa/compile-ast`
+and `flint.pike/run` directly -- by design, since it exists to test the
+shared compiler and the shared VM independently of `flint.regex`'s own
+`find-from`. Its source root had no `deps.edn`, so it resolved to its own
+anonymous, path-named workspace -- a DIFFERENT workspace from `flint/flint` --
+and the mark would have refused it. Fixed by giving that temp root a
+`deps.edn` naming it `{:flint/workspace flint/flint}`, the same position
+`test/visibility.clj` already documents for the capability guard: "this is
+the stdlib's own position, and flint builds itself from it." No lib, README,
+or deck prose reference found reaching either namespace from outside the
+stdlib (`deck/cards/language.md` and `doc/goals/README.md` only name them in
+prose, `doc/goals/kin-port.md` in a reachability table, `DECISIONS.md` in its
+own shaker measurements -- none of those compile).
+
+### A measurement tool found broken in the course of this, and fixed
+
+`bin/check_api_review.py`'s `namespaces()` reads each `lib/*.cljc` file's
+FIRST LINE with `re.match(r'\(ns\s+([a-z][\w.-]*)', first)` to find which
+namespaces exist. `(ns ^:internal flint.nfa` does not match that pattern --
+the character after the whitespace is `^`, not `[a-z]` -- so marking
+`flint.nfa`/`flint.pike` made `namespaces()` stop finding them. Measured
+directly: `python3 bin/check_api_review.py` before the fix reported
+`doc/api-review.md has a section for \`flint.nfa\`, which no longer exists`
+and the same for `flint.pike` -- exit 1, on namespaces that plainly still
+exist, because the question the regex could answer ("does this line look like
+`(ns name`") was narrower than the question being asked ("does this namespace
+exist"). Fixed by factoring the shared `(ns `-plus-optional-marks prefix into
+one pattern (`NS_HEAD`), used by both `namespaces()` and `lib_requirers()`'s
+self-reference exclusion, which read the same prefix the same wrong way.
+Control: the same command passed cleanly, `57 surfaces ... 0 signed off`,
+after the fix and with the marks still in place.
+
+### Other namespaces that read as candidates, not marked here
+
+Listed for the maintainer from `doc/api-review.md`'s own evidence lines
+(`Required by N compiled test program(s), M other lib namespace(s), named K
+time(s) in README`), not marked, because step 4 of this change asked to list
+rather than decide:
+
+* **`flint.virtual`** -- 0 programs, 0 lib namespaces, 0 README mentions; the
+  doc's own words are "a program naming it directly would be a mistake."
+* **`flint.deps.manifest`**, **`flint.deps.registry`** -- 0 programs, required
+  only by other `flint.deps.*` namespaces.
+* **`flint.deps.resolve`** -- 0 programs, 0 lib namespaces; reached only by the
+  CLI, and cannot compile standalone (it requires the virtual
+  `flint.deps.npm`).
+* **`flint.cli`** -- 0 programs, 0 lib namespaces, 0 README mentions; driven
+  by `bin/flint` rather than required by anything, per the doc's own line.
+* **`flint.fs`** -- 0 programs, 0 lib namespaces, 0 README mentions, and the
+  doc already asks whether it has a job left now that `flint.sys.fs` is what
+  programs use; marking it internal would not answer that question.
+* **`flint.snapshot`** -- 0 programs reach it at all, and it is already
+  unreachable in a release build by a different mechanism (no builtin outside
+  a DIAGNOSTICS build, `DECISIONS.md#two-builds`); an `^:internal` mark would
+  be redundant with that, not a new boundary.
+
+`flint.deps` is NOT on this list: the doc's own correction records that
+`flint.cli` -- the CLI's published surface -- requires it directly, so marking
+it internal would need `flint.cli` to be considered inside the same boundary,
+which is a judgment call rather than a count.
