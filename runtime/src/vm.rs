@@ -1908,6 +1908,44 @@ impl Rt {
         // wrong argument. See `doc/HANDOFF.md`.
         let base = self.mark();
         let ai = self.push(args);
+        // THREAD 0, IF ADOPTED EARLY, IS CORRECTED HERE -- BY DESIGN, not by
+        // an incidental checkpoint trip.
+        //
+        // `new_sched_at` marks thread 0 `ST_DONE` when nothing is running at
+        // scheduler-creation time, which is exactly what a host that installs
+        // a port before the entry runs produces. The entry (and the
+        // initialisers below) are about to run AS thread 0 via a direct
+        // `invoke`, not through `sched_run_one`'s `ST_NEW` -> `ST_RUNNABLE`
+        // transition, which only ever sees a SPAWNED thread. Left uncorrected,
+        // `(th/self)` joining itself reads its OWN status as DONE and answers
+        // its (empty) result instead of refusing.
+        //
+        // This USED TO be fixed only by accident: a checkpoint trip during a
+        // big enough initialiser settles a courtesy yield, and settling is
+        // what moves a parked-or-yielded thread 0 to `ST_RUNNABLE`. Billing
+        // initialisers as guest code (`DECISIONS.md#resource-limits`) makes that trip
+        // likely for any program that requires `flint.thread` -- its own
+        // baseline is tens of thousands of steps against a 4096 slice -- but
+        // "likely, given today's library size and today's slice constant" is
+        // not a guarantee: a smaller mandatory init, or a larger slice, would
+        // have silently brought the accident back. The fix below does not
+        // depend on that margin; `runtimes/conform-host/selfjoin-min.cljc`
+        // (the smallest program that can name `th/self`) is kept as the
+        // regression for the accident this replaces, not for this fix.
+        let s = self.sched();
+        if !s.is_nil() {
+            let cur = self.current_thread();
+            // `is_thread` is the SAME validity check `join_at` uses before
+            // trusting its own argument -- `current_thread` is documented
+            // to answer nil when `SC_CURRENT` does not resolve, but the jvm's
+            // and the clr's answer `Val.NOT_FOUND` there instead (a
+            // cross-runtime divergence this did not go looking for and is
+            // not the one it fixes), and checking the type rather than only
+            // `is_nil` is what makes this port of the fix safe regardless.
+            if self.is_thread(cur) && self.slot(cur, crate::conc::TH_STATUS).as_fixnum() == crate::conc::ST_DONE {
+                self.set(cur, crate::conc::TH_STATUS, Value::fixnum(crate::conc::ST_RUNNABLE));
+            }
+        }
         // INITIALISERS RUN WITHOUT PREEMPTION.
         //
         // A slice is armed the moment a scheduler exists, and a scheduler can
@@ -2062,8 +2100,32 @@ impl Rt {
         // It matters more here than there. A CALL runs the initialisers on
         // first use (`DECISIONS.md#structured-ports` step 5), so this now happens with a
         // scheduler already built and a slice already counting down.
+        //
+        // NOT PREEMPTIBLE, BUT STILL BILLED -- `run_program`'s own loop
+        // learned this (`u64::MAX - 1`, not `0`) and this one had not: `0`
+        // stops preemption AND counting, because `refresh_checkpoint` then
+        // leaves `checkpoint` at the sentinel and `run` dispatches to
+        // `NoBudget`. Initialisers reached THROUGH THIS PATH -- a CALL
+        // running them on first use, not the entry -- were therefore free
+        // here while `run_program`'s were billed, which is a cross-path
+        // disagreement on the same standing decision
+        // (`DECISIONS.md#resource-limits`: all guest code is charged).
+        //
+        // This billing is now independent of thread 0's STATUS, which
+        // `run_program` corrects directly (see its comment, and
+        // `fix_adopted_thread_zero` on the jvm and the clr): a checkpoint
+        // trip settling a courtesy yield used to be the ONLY thing that ever
+        // moved an early-adopted thread 0 from `ST_DONE` to `ST_RUNNABLE`,
+        // so a self-join refusal depended on an initialiser being big enough
+        // to trip one -- true of every program that can even name
+        // `(th/self)`, since `flint.thread`'s own baseline is tens of
+        // thousands of steps against a 4096 slice, but "true today" is not
+        // "true by design". `runtimes/conform-host/selfjoin-min.cljc` is
+        // sized to need as little of that margin as this vocabulary allows,
+        // and is kept as the regression for the accident rather than the
+        // bug it used to stand in for.
         let slice = self.slice_end;
-        self.set_slice_end(0);
+        self.set_slice_end(u64::MAX - 1);
         for i in 0..self.image.init.len() {
             let f = self.image.init[i];
             let c = self.make_closure(f, &[]);

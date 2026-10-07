@@ -2188,11 +2188,32 @@ public final class Rt {
     /// runnable until the program is initialised. It matters here more than at
     /// load: a CALL runs these on first use, so this now happens with a
     /// scheduler already built and a slice already counting down.
+    ///
+    /// NOT PREEMPTIBLE, BUT STILL BILLED -- `Long.MAX_VALUE - 1`, not `0`.
+    /// `0` stops preemption AND counting (`checkpoint` sits at the sentinel,
+    /// so the per-instruction gate in `runLoop` never counts), and these
+    /// initialisers are guest code like any other
+    /// (`DECISIONS.md#resource-limits`: all guest code is charged) -- the same reasoning
+    /// `run_program`'s own loop already carries.
+    ///
+    /// NO `fixAdoptedThreadZero` HERE, ON PURPOSE -- this is reached two
+    /// ways, and only one of them means thread 0 is about to run. `runProgram`
+    /// calling this directly is the first; the second is a bound CALL
+    /// reaching it on first use, where the thread about to run is the one
+    /// `Conc.spawnCall` just gave its own `ST_NEW` -> `ST_RUNNABLE`
+    /// transition, not thread 0, which correctly has nothing to contribute
+    /// yet. Fixing thread 0 here anyway corrupts that: `schedPick` then
+    /// finds it `ST_RUNNABLE` with no saved `TH_STACK`, picks it, and
+    /// `restoreState` hands the interpreter an empty continuation --
+    /// `ArrayIndexOutOfBoundsException` out of `vpop`, exactly the crash
+    /// `kin/schedmake.kin`'s own comment names. Measured running
+    /// `test/snapstream.clj`'s fixture, which reaches `ensureStarted` this
+    /// way and never calls `runProgram` at all.
     public boolean ensureStarted() {
         if (started) return true;
         started = true;
         long slice = sliceEnd;
-        setSliceEnd(0);
+        setSliceEnd(Long.MAX_VALUE - 1);
         initialising = true;
         for (int fn : init) {
             call(makeClosure(fn, new long[0]), new long[0]);
@@ -2263,11 +2284,60 @@ public final class Rt {
     /// what runs. A program with no concurrency in it never reaches the second
     /// branch at all.
     public long runProgram(long closure, long[] args) {
+        fixAdoptedThreadZero();
         long v = call(closure, args);
         if (!parked() && !schedInstalled) return v;
         thrown = Val.NIL;
         if (!schedInstalled) return v;
         return Conc.scheduler(this, v);
+    }
+
+    /// THREAD 0, IF ADOPTED EARLY, IS CORRECTED HERE -- BY DESIGN, not by an
+    /// incidental checkpoint trip.
+    ///
+    /// `newSchedAt` marks thread 0 `ST_DONE` when nothing is running at
+    /// scheduler-creation time, which is exactly what a host that installs a
+    /// port before the entry runs produces. The entry is about to run AS
+    /// thread 0 via a direct `call`, not through `schedRunOne`'s `ST_NEW` ->
+    /// `ST_RUNNABLE` transition, which only ever sees a SPAWNED thread
+    /// (`Conc.spawnCall` gives every bound call its own). Left uncorrected,
+    /// `(th/self)` joining itself reads its OWN status as DONE and answers
+    /// its (empty) result instead of refusing.
+    ///
+    /// This USED TO be fixed only by accident: a checkpoint trip during a big
+    /// enough initialiser settles a courtesy yield, and settling is what
+    /// moves a parked-or-yielded thread 0 to `ST_RUNNABLE`. Billing
+    /// initialisers as guest code (`DECISIONS.md#resource-limits`) makes that trip likely
+    /// for any program that requires `flint.thread` -- its own baseline is
+    /// tens of thousands of steps against a 4096 slice -- but "likely, given
+    /// today's library size and today's slice constant" is not a guarantee.
+    ///
+    /// CALLED ONLY FROM `runProgram`, not from `ensureStarted` -- see the
+    /// comment there for why the same correction is wrong on that path: a
+    /// bound CALL reaching `ensureStarted` on first use means thread 0 has
+    /// nothing to contribute, correctly, and promoting it anyway hands
+    /// `schedPick` a thread with no saved stack to restore.
+    private void fixAdoptedThreadZero() {
+        long s = Conc.sched(this);
+        if (Val.isNil(s)) return;
+        long cur = Conc.currentThread(this);
+        // `Conc.isThread` ALSO EXCLUDES `Val.NOT_FOUND` -- `currentThread`
+        // answers that, not `Val.NIL`, when `SC_CURRENT` does not resolve to
+        // an entry in `SC_THREADS`, and `isThread`'s own `Val.isHeap` check
+        // is what makes that safe to call here without decoding the index
+        // itself.
+        if (!Conc.isThread(this, cur)) return;
+        if (Val.asFixnum(slot(cur, Conc.TH_STATUS)) == Conc.ST_DONE) {
+            // `setSlot`, UNLIKE `slot`, TAKES A DECODED ADDRESS -- it hands
+            // `obj` straight to `Gc.setSlot` with no `Val.asHeap` of its own
+            // (see `Settle.settleThread`'s own calls for the pattern). Passing
+            // the boxed `cur` here wrote through its tag bits as if they were
+            // an offset: an access thousands of terabytes past the heap,
+            // caught by the JVM's bounds check and not by anything in this
+            // runtime. Found running EVERY `hqf` fixture, not just the
+            // self-join ones -- this runs on every `runProgram`.
+            setSlot(Val.asHeap(cur), Conc.TH_STATUS, Val.fixnum(Conc.ST_RUNNABLE));
+        }
     }
 
     /// Call `closure` with `args` from outside the interpreter.

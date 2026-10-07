@@ -1975,11 +1975,32 @@ public sealed class Rt : System.IDisposable {
     /// runnable until the program is initialised. It matters here more than at
     /// load: a CALL runs these on first use, so this now happens with a
     /// scheduler already built and a slice already counting down.
+    ///
+    /// NOT PREEMPTIBLE, BUT STILL BILLED -- `long.MaxValue - 1`, not `0`.
+    /// `0` stops preemption AND counting (`checkpoint` sits at the sentinel,
+    /// so the per-instruction gate in `RunLoop` never counts), and these
+    /// initialisers are guest code like any other
+    /// (`DECISIONS.md#resource-limits`: all guest code is charged) -- the same reasoning
+    /// `run_program`'s own loop already carries.
+    ///
+    /// NO `FixAdoptedThreadZero` HERE, ON PURPOSE -- this is reached two
+    /// ways, and only one of them means thread 0 is about to run. `RunProgram`
+    /// calling this directly is the first; the second is a bound CALL
+    /// reaching it on first use, where the thread about to run is the one
+    /// `Conc.SpawnCall` just gave its own `ST_NEW` -> `ST_RUNNABLE`
+    /// transition, not thread 0, which correctly has nothing to contribute
+    /// yet. Fixing thread 0 here anyway corrupts that: `SchedPick` then
+    /// finds it `ST_RUNNABLE` with no saved `TH_STACK`, picks it, and
+    /// `RestoreState` hands the interpreter an empty continuation --
+    /// a crash out of `VPop`, exactly the one `kin/schedmake.kin`'s own
+    /// comment names. Measured running `test/snapstream.clj`'s fixture,
+    /// which reaches `EnsureStarted` this way and never calls `RunProgram`
+    /// at all.
     public bool EnsureStarted() {
         if (started) return true;
         started = true;
         long slice = sliceEnd;
-        SetSliceEnd(0);
+        SetSliceEnd(long.MaxValue - 1);
         initialising = true;
         foreach (int fn in init) {
             Call(MakeClosure(fn, new long[0]), new long[0]);
@@ -2016,11 +2037,58 @@ public sealed class Rt : System.IDisposable {
     }
 
     public long RunProgram(long closure, long[] args) {
+        FixAdoptedThreadZero();
         long v = Call(closure, args);
         if (!Parked() && !schedInstalled) return v;
         thrown = Val.Nil;
         if (!schedInstalled) return v;
         return Conc.Scheduler(this, v);
+    }
+
+    /// THREAD 0, IF ADOPTED EARLY, IS CORRECTED HERE -- BY DESIGN, not by an
+    /// incidental checkpoint trip.
+    ///
+    /// `NewSchedAt` marks thread 0 `ST_DONE` when nothing is running at
+    /// scheduler-creation time, which is exactly what a host that installs a
+    /// port before the entry runs produces. The entry is about to run AS
+    /// thread 0 via a direct `Call`, not through `SchedRunOne`'s `ST_NEW` ->
+    /// `ST_RUNNABLE` transition, which only ever sees a SPAWNED thread
+    /// (`Conc.SpawnCall` gives every bound call its own). Left uncorrected,
+    /// `(th/self)` joining itself reads its OWN status as DONE and answers
+    /// its (empty) result instead of refusing.
+    ///
+    /// This USED TO be fixed only by accident: a checkpoint trip during a big
+    /// enough initialiser settles a courtesy yield, and settling is what
+    /// moves a parked-or-yielded thread 0 to `ST_RUNNABLE`. Billing
+    /// initialisers as guest code (`DECISIONS.md#resource-limits`) makes that trip likely
+    /// for any program that requires `flint.thread` -- its own baseline is
+    /// tens of thousands of steps against a 4096 slice -- but "likely, given
+    /// today's library size and today's slice constant" is not a guarantee.
+    ///
+    /// CALLED ONLY FROM `RunProgram`, not from `EnsureStarted` -- see the
+    /// comment there for why the same correction is wrong on that path: a
+    /// bound CALL reaching `EnsureStarted` on first use means thread 0 has
+    /// nothing to contribute, correctly, and promoting it anyway hands
+    /// `SchedPick` a thread with no saved stack to restore.
+    private void FixAdoptedThreadZero() {
+        long s = Conc.Sched(this);
+        if (Val.IsNil(s)) return;
+        long cur = Conc.CurrentThread(this);
+        // `Conc.IsThread` ALSO EXCLUDES `Val.NotFound` -- `CurrentThread`
+        // answers that, not `Val.Nil`, when `SC_CURRENT` does not resolve to
+        // an entry in `SC_THREADS`, and `IsThread`'s own `Val.IsHeap` check
+        // is what makes that safe to call here without decoding the index
+        // itself.
+        if (!Conc.IsThread(this, cur)) return;
+        if (Val.AsFixnum(Slot(cur, Conc.TH_STATUS)) == Conc.ST_DONE) {
+            // `SetSlot`, UNLIKE `Slot`, TAKES A DECODED ADDRESS -- it hands
+            // `obj` straight to `Gc.SetSlot` with no `Val.AsHeap` of its own
+            // (see `Settle.SettleThread`'s own calls for the pattern).
+            // Passing the boxed `cur` here wrote through its tag bits as if
+            // they were an offset -- found running EVERY `hqf` fixture, not
+            // just the self-join ones, the same way on the jvm.
+            SetSlot(Val.AsHeap(cur), Conc.TH_STATUS, Val.Fixnum(Conc.ST_RUNNABLE));
+        }
     }
 
     /// Call `closure` with `args` from outside the interpreter.

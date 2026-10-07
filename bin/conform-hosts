@@ -1274,11 +1274,25 @@ phase "host requests"
 # It is a pair on purpose -- what separates the two fixtures is not the call
 # but WHERE it is, and only running both keeps the refusal from being mistaken
 # for the call simply not working.
+#
+# `selfjoin-min` is `selfjoin` with nothing else in `main`'s body: no `str`,
+# no `pr-str`, just `(th/join (th/self))`. Found 2026-10-07: the fix for
+# `selfjoin` first restored billing for initialisers reached via
+# `ensureStarted` (`DECISIONS.md#resource-limits`), which incidentally tripped a
+# checkpoint whose settle moved an early-adopted thread 0 from `ST_DONE` to
+# `ST_RUNNABLE` -- but only incidentally, since nothing made that trip a
+# GUARANTEE rather than a side effect of `flint.thread`'s own baseline
+# initialiser cost being tens of thousands of steps against a 4096 slice.
+# `fix_adopted_thread_zero`/`fixAdoptedThreadZero`/`FixAdoptedThreadZero`
+# corrects the status directly now; this fixture is the regression for the
+# accident it replaced, kept as small as this vocabulary allows so a future
+# change that shrinks the baseline or grows the slice cannot silently bring
+# it back.
 cargo build --release -p flint-conc --bin hostreq --features host-tools \
   > "$FLINT_SCRATCH"/flint-hq-build.log 2>&1 \
   || { tail -20 "$FLINT_SCRATCH"/flint-hq-build.log; \
        echo "  FAIL the native host-request driver does not build"; exit 1; }
-for hqf in hostreq initpark selfjoin plainthrow kwrow; do
+for hqf in hostreq initpark selfjoin selfjoin-min plainthrow kwrow; do
   ./bin/flint :src runtimes/conform-host :fn "$hqf/main" --emit-image \
        :out "out/conform/$hqf.img" >/dev/null 2>&1 \
     || { echo "  FAIL the $hqf fixture does not compile"; exit 1; }
@@ -1297,10 +1311,10 @@ for hqf in hostreq initpark selfjoin plainthrow kwrow; do
   # because `mainResult` returned a failed thread's error as its VALUE. Two
   # runtimes agreeing on "status 0, an ex-info" is identical too, so the
   # sentence AND the status are named here rather than only compared.
-  if [ "$hqf" = selfjoin ]; then
+  if [ "$hqf" = selfjoin ] || [ "$hqf" = selfjoin-min ]; then
     grep -q 'cannot join itself' "$FLINT_SCRATCH"/flint-hq-native.out \
       || { cat "$FLINT_SCRATCH"/flint-hq-native.out; \
-           echo "  FAIL a self-join is not refused by name [native]"; exit 1; }
+           echo "  FAIL a self-join is not refused by name [native, $hqf]"; exit 1; }
   fi
   # A ROW REF READS AS THE MAP IT IS, which `lib/flint/table.cljc` promises in
   # as many words -- "`count`, `get`, `(:col row)`, `keys`, `vals` and `=`
