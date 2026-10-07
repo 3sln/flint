@@ -16194,6 +16194,53 @@ wire]))` rewrote what `wire/` meant inside `flint.port`. Which source backs a
 namespace is the resolver's answer -- the host's -- and that answer has to be
 the whole of what decides what a namespace contains.
 
+### A path is not a namespace spelled differently
+
+**Found in CI 2026-10-06** (the Linux gate, run 37572627764): `bin/conform-hosts`
+refused its own fixture, `runtimes/conform/aot_try.cljc` -- "this source was
+resolved as namespace aot_try and its ns form names aot-try." The fixture is
+right: it is `(ns aot-try ..)` at `aot_try.cljc`, the ordinary Clojure
+convention (`ns a-b.c` <-> path `a_b/c`, `flint.project/ns->path`). The bug was
+in the script. Its `conform_progs` list is a set of PATH segments -- it also
+names `out/conform/$prog.img` and the rest -- and the loop passed `$prog`
+straight to `:fn` as if a path segment were a namespace, asking the resolver
+for `aot_try` rather than `aot-try`. Nothing else in the tree does this:
+`bin/flint`'s own directory scan for test mode reads each file's actual `ns`
+form (`ns-of`, not a path guess), and every `:fn`/`:entry` argument on every
+door is a namespace symbol the caller already has right. Fixed by reading the
+fixture's declared namespace off its first line rather than assuming the path
+is it, in `bin/conform-hosts`.
+
+**Decided: `ns->path`'s munging is not reversed, anywhere, because it cannot
+be.** `-` and a literal `_` in a namespace segment munge to the same path
+character, so `aot-try` and a namespace literally named `aot_try` are two
+different, equally legal names that WANT the same file -- only one of them can
+be the one a given file answers for, and which one is simply whichever name
+that file's `ns` form declares. A resolver is never asked to go
+path-to-namespace: every resolution starts from a namespace symbol someone
+already wrote by hand -- an `ns` form, a `:require`, a `:fn` argument -- and
+`ns->path` is applied to it to find the file, never the other way around. A
+namespace resolved as `aot_try` (the literal name, not a demunged `aot-try`)
+is answered correctly by a file that says `(ns aot_try ..)`; one that says
+`(ns aot-try ..)` is, correctly, still refused for it -- same file, two
+candidate names, one real answer. Tests for exactly this shape (the munged
+pair, the literal-underscore control, and a genuinely foreign name) are in
+`test/resolver-protocol.clj`.
+
+**Noticed while testing, not fixed, because it costs nothing today:**
+`flint.project/collect-waves` refuses a declared/requested mismatch at the
+WALK, before the analyzer ever runs, as a `:resolver` error ("asked for X,
+answered with a file declaring Y") -- this is the "second" check the
+`namespaces-over-the-system-port` entry above calls "built... in the walk."
+`bin/flint`'s own walk (its `collect`, which AGENTS.md sec. 1 says must stay
+in step with the function it duplicates) has no matching pre-check -- its
+comment still names `flint.project/collect`, which this file's `collect-waves`
+replaced, and the two never grew the same guard. The mismatch still gets
+refused on both doors (the analyzer's `analyze-ns` is the backstop that caught
+`aot_try` in CI), so there is no case this lets through -- only a difference
+in which error a mismatch gets and how early. Left as found, since closing a
+reporting gap was not what broke CI.
+
 ---
 
 ## namespace-is-workspace-local

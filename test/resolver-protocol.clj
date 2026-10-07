@@ -116,6 +116,58 @@
                 (and (empty? (:errors r)) (some? (:artifact r)))))
   (fs/delete-tree work))
 
+;; THE SOURCE RESOLVED AS A NAMESPACE must declare exactly that namespace
+;; (`DECISIONS.md#a-source-defines-only-its-own-namespace`), and `ns->path`
+;; munges `-` to `_` -- so a namespace with a DASH and one with the SAME NAME
+;; but a literal UNDERSCORE in that position resolve to the same file. This is
+;; the shape behind the `bin/conform-hosts` fixture `aot_try.cljc`, which says
+;; `(ns aot-try ..)`: the ordinary Clojure convention, `ns a-b.c` <-> path
+;; `a_b/c`. The bug `bin/conform-hosts` had was asking the resolver for
+;; namespace `aot_try` (the PATH, read as if it were the name) rather than
+;; `aot-try` (the name the file declares) -- a caller deriving a namespace
+;; from a path without un-munging it, exactly what `analyze-ns` now refuses.
+(let [work (str (fs/create-temp-dir))
+      ;; `ab_cd.cljc` on disk, `(ns ab-cd ..)` inside -- the convention, and
+      ;; the shape `aot_try.cljc`/`(ns aot-try ..)` actually has.
+      _ (spit (str work "/ab_cd.cljc") "(ns ab-cd)\n(defn main [_] \"ok\")\n")
+      ;; A literal underscore IN THE NAMESPACE, not produced by munging a
+      ;; dash: `(ns under_score ..)` at `under_score.cljc`. `ns->path` leaves
+      ;; an underscore alone, so this resolves to its own path and is not the
+      ;; munging of anything else.
+      _ (spit (str work "/under_score.cljc") "(ns under_score)\n(defn main [_] \"ok\")\n")
+      ;; A GENUINELY different name -- no munging makes these the same path
+      ;; mean two things; `wrongname.cljc` simply declares the wrong one.
+      _ (spit (str work "/wrongname.cljc") "(ns something-else)\n(defn main [_] \"ok\")\n")
+      asked (atom [])
+      compile1 (fn [entry]
+                 (selfhost/compile-with {:entry entry :target :image :builtins (set (keys slots))}
+                                        (dir-resolver [stdlib-dir work] reader/default-features asked)))
+      ok (compile1 'ab-cd/main)
+      bug (compile1 'ab_cd/main)
+      lit (compile1 'under_score/main)
+      wrong (compile1 'wrongname/main)]
+  (check-that "resolved as ab-cd, declared ab-cd: compiles (the fixed convention)"
+              (and (empty? (:errors ok)) (some? (:artifact ok))))
+  ;; This walk (`flint.project/collect-waves`) catches a mismatch EARLY, as a
+  ;; `:resolver` error naming both sides -- before the analyzer would ever see
+  ;; the form. `bin/flint`'s own walk has no such pre-check (it duplicates
+  ;; `flint.project/collect`, a function this one replaced), so the SAME
+  ;; mismatch reaches `bin/flint` as the analyzer's `:compile`-kind "resolved
+  ;; as namespace .. and its ns form names .." error instead -- which is what
+  ;; `runtimes/conform/aot_try.cljc` actually showed in CI. Both doors still
+  ;; refuse the program; they differ only in where.
+  (check-that "resolved as ab_cd (the path, read as a name), declared ab-cd: refused"
+              (and (= 1 (count (:errors bug)))
+                   (= :resolver (:kind (first (:errors bug))))
+                   (str/includes? (:message (first (:errors bug))) "asked for ab_cd")
+                   (str/includes? (:message (first (:errors bug))) "ab-cd")))
+  (check-that "resolved as under_score, declared under_score (a literal underscore, not a munged dash): compiles"
+              (and (empty? (:errors lit)) (some? (:artifact lit))))
+  (check-that "resolved as wrongname, declared something-else: still refused, no exception for a path-shaped name"
+              (and (= 1 (count (:errors wrong)))
+                   (= :resolver (:kind (first (:errors wrong))))))
+  (fs/delete-tree work))
+
 (when (pos? @fails)
   (println (format "resolver-protocol: %d FAILED" @fails))
   (System/exit 1))

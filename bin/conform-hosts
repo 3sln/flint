@@ -1594,17 +1594,30 @@ printf '%s\n' $conform_progs | xargs -P "$conform_jobs" -n1 sh -c '
   # nothing, and the marker file is what the check after the loop reads.
   fail() { echo "$1" >> "$out"; : > "$CONFORM_W/$prog.fail"; exit 0; }
 
-  ./bin/flint :src runtimes/conform :fn "$prog/main" --emit-image \
+  # THE NAMESPACE, READ FROM THE FILE -- not guessed from `$prog` by
+  # un-munging. `$prog` is a PATH segment (it names
+  # `runtimes/conform/$prog.cljc` and the `out/conform/$prog.*` artefacts),
+  # and a path is not always its namespace spelled differently: `aot_try.cljc`
+  # says `(ns aot-try ..)`, the ordinary Clojure convention (`ns a-b.c` <->
+  # path `a_b/c`). `:fn` resolves by NAMESPACE
+  # (`DECISIONS.md#a-source-defines-only-its-own-namespace` -- asking for
+  # `aot_try` would resolve a different, nonexistent namespace, and the file
+  # would be refused for declaring the wrong one). Reading the first line is
+  # enough: every conform fixture opens with `(ns name ..)`.
+  ns="$(sed -n "1s/^(ns \\([^ )\"]*\\).*/\\1/p" "runtimes/conform/$prog.cljc")"
+  [ -n "$ns" ] || fail "  FAIL could not read the (ns ..) form of $prog"
+
+  ./bin/flint :src runtimes/conform :fn "$ns/main" --emit-image \
     :out "out/conform/$prog.img" > "$CONFORM_W/$prog.build" 2>&1 || {
       tail -5 "$CONFORM_W/$prog.build" >> "$out"
       fail "  FAIL the conform fixture $prog does not compile"; }
-  want="$(./target/release/flint run :path runtimes/conform :fn "$prog/main" 2>&1 || true)"
+  want="$(./target/release/flint run :path runtimes/conform :fn "$ns/main" 2>&1 || true)"
 
-  ./bin/flint :src runtimes/conform :fn "$prog/main" :out "out/conform/$prog.wasm" \
+  ./bin/flint :src runtimes/conform :fn "$ns/main" :out "out/conform/$prog.wasm" \
     > "$CONFORM_W/$prog.wasmbuild" 2>&1 || {
       tail -5 "$CONFORM_W/$prog.wasmbuild" >> "$out"
       fail "  FAIL the conform fixture $prog does not compile to wasm"; }
-  got="$(node host/flint.mjs "out/conform/$prog.wasm" "$prog/main" 2>&1 || true)"
+  got="$(node host/flint.mjs "out/conform/$prog.wasm" "$ns/main" 2>&1 || true)"
   if [ "$got" = "$want" ]; then
     echo "  ok   $prog agrees between the native and wasm builds" >> "$out"
   else

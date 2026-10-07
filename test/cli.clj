@@ -158,6 +158,27 @@
   (.waitFor pr)
   (check "flint run executes a bytecode IMAGE, with no linker" (str/trim out) "hi there"))
 
+;; A FILE'S PATH IS NOT ITS NAMESPACE SPELLED DIFFERENTLY
+;; (`DECISIONS.md#a-source-defines-only-its-own-namespace`, "a path is not a
+;; namespace spelled differently"). `ab-cd.cljc`'s dash munges to an
+;; underscore on disk -- `ab_cd.cljc` -- the ordinary Clojure convention (`ns
+;; a-b.c` <-> path `a_b/c`) and the exact shape `runtimes/conform/aot_try.cljc`
+;; has (`(ns aot-try ..)`). `bin/conform-hosts` asked `bin/flint` for the PATH
+;; (`aot_try/main`) instead of the NAMESPACE (`aot-try/main`), which this CLI
+;; resolves as a different, nonexistent namespace and correctly refuses --
+;; CI's actual failure. The control shows the convention compiling; the two
+;; rows after it show the refusal is not weakened by a path-shaped name.
+(spit (str d "/ab_cd.cljc")
+      "(ns ab-cd)\n(defn main [_] \"ok\")\n")
+(let [ok (sh "./bin/flint" ":src" d ":fn" "ab-cd/main" ":out" "out/cli-nsmunge.wasm")
+      bug (sh "./bin/flint" ":src" d ":fn" "ab_cd/main" ":out" "out/cli-nsmunge.wasm")]
+  (check-that "ab_cd.cljc declaring (ns ab-cd): resolving the real namespace compiles"
+              (zero? (:exit ok)))
+  (check-that "the same file resolved as ab_cd (the path, read as a name): refused, naming both"
+              (and (not (zero? (:exit bug)))
+                   (str/includes? (:all bug) "resolved as namespace ab_cd")
+                   (str/includes? (:all bug) "ab-cd"))))
+
 ;; And end to end, through `bin/flint`: a task that PRINTS, a task that returns
 ;; a value, and a task with a `:requires`. flint has no ambient stdout -- a
 ;; program granted nothing runs pure -- so `println` cannot exist in core. The
