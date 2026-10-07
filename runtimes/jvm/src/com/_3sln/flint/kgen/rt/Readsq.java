@@ -365,6 +365,14 @@ public final class Readsq {
         long k = rdInt(rt, sti, RDS_GENSYM_N);
         msgInt(rt, sk, k);
         rdSetInt(rt, sti, RDS_GENSYM_N, k + 1);
+        rt.sinkPut(sk, 95);
+        rt.sinkPut(sk, 95);
+        rt.sinkPut(sk, 97);
+        rt.sinkPut(sk, 117);
+        rt.sinkPut(sk, 116);
+        rt.sinkPut(sk, 111);
+        rt.sinkPut(sk, 95);
+        rt.sinkPut(sk, 95);
         long text = rt.sinkString(sk);
         rt.sinkClose(sk);
         long s = com.flint.rt.Str.symbolOf(rt, Val.NIL, text);

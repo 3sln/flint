@@ -371,6 +371,14 @@ impl Rt {
         let k: i64 = self.rd_int(sti, RDS_GENSYM_N);
         self.msg_int(sk, k);
         self.rd_set_int(sti, RDS_GENSYM_N, k + 1);
+        self.sink_put(sk, 95);
+        self.sink_put(sk, 95);
+        self.sink_put(sk, 97);
+        self.sink_put(sk, 117);
+        self.sink_put(sk, 116);
+        self.sink_put(sk, 111);
+        self.sink_put(sk, 95);
+        self.sink_put(sk, 95);
         let text: Value = self.sink_string(sk);
         self.sink_close(sk);
         let s: Value = self.symbol_from_values(NIL, text);

@@ -367,6 +367,14 @@ public static class Readsq {
         long k = RdInt(rt, sti, RdsGensymN);
         MsgInt(rt, sk, k);
         RdSetInt(rt, sti, RdsGensymN, k + 1);
+        rt.SinkPut(sk, 95);
+        rt.SinkPut(sk, 95);
+        rt.SinkPut(sk, 97);
+        rt.SinkPut(sk, 117);
+        rt.SinkPut(sk, 116);
+        rt.SinkPut(sk, 111);
+        rt.SinkPut(sk, 95);
+        rt.SinkPut(sk, 95);
         long text = rt.SinkString(sk);
         rt.SinkClose(sk);
         long s = global::Flint.Rt.Str.SymbolOf(rt, Val.Nil, text);

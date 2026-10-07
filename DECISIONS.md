@@ -16179,16 +16179,32 @@ sizes are estimates from reading the code, not measurements.
    claimed by construction only. `test/reader_test.clj` still runs on
    `reader.cljc` (it is babashka, which cannot call a generated reader).
 
-   *Open, found building it:* an AUTO-GENSYM (`x#`) is not a function of the
-   text. The guest's reader called `gensym`, whose counter belongs to the
-   process, so a file's `x__N` depended on whatever ran first; the kin reader
-   numbers from the `gensym0` it is given. Measured: identical when the guest's
-   counter is fresh (a one-file read gives `x__1` both ways), different in a
-   batch. Numbering per read makes two files' templates able to share a name
-   (`a__1`), which is a hygiene hazard when one macro's expansion is passed into
-   another's. No file in the sweep has an auto-gensym, so no image changes
-   today; the choice of a hygienic per-read scheme (a file-unique suffix, or a
-   marker the analyzer numbers as it does `syntax-quoted`) is the maintainer's.
+   **Resolved 2026-10-07: canonical Clojure's own behaviour, no better option
+   found.** Real Clojure shares ONE counter (`clojure.lang.RT/nextID`) across
+   every read in a process and spells an auto-gensym `name__N__auto__`; this
+   tree's guest reader (`src/flint/reader.cljc`) already had the shared
+   counter half right (`gensym` is a process-wide, never-reset counter on both
+   dialects -- `clojure.lang.RT/nextID` under `:default`,
+   `clojure/core.cljc`'s own `gensym-counter` atom under `:flint`) and was only
+   missing the `__auto__` suffix, fixed there in one line
+   (`(symbol (str (gensym (str base "__")) "__auto__"))`). The kin reader
+   (`kin/readsq.kin`'s `sq-gensym`) gained the same suffix, regenerated into
+   all three targets (`bin/check-kin` green). Its numbering was already an
+   ARGUMENT (`gensym0`, "the first number to use this read") rather than an
+   owned counter, so making it process-wide and never-reset is the HOST's
+   job: the JVM driver (`flint.driver.host-reader`, step 1.2 below) keeps one
+   atom, seeded past the highest `__auto__` number any read in the process has
+   used so far (scanning the decoded forms after each read -- `readForms`
+   reports bytes or an error, not a count, so this is how the driver learns
+   what it spent). No better option was found: a file-unique suffix or an
+   analyzer-numbered marker (the alternatives this entry used to list) would
+   make the kin reader's output depend on something OTHER than canonical
+   Clojure's own rule, which is the one thing every other dialect decision in
+   this file tries not to do. No file in `lib/`, `src/`, `corpus/` or the test
+   fixtures uses an auto-gensym (re-checked 2026-10-07, same grep as when this
+   was first written), so no shipped image's bytes change; `bin/check-reader`'s
+   489-read sweep is unaffected for the same reason, and is not itself a test
+   of this fix -- nothing in it exercises `x#`.
 2. **`flint.selfhost/compile`**, taking the request map and answering data
    (§1). The old `main` modes become thin wrappers that build the same map,
    so no door changes. *Gate:* `bb test/door-agreement.clj`,
