@@ -1,0 +1,11 @@
+;; The flint compiler's own Clojure namespaces, plus the JVM bootstrap driver
+;; `bin/flint` runs (`DECISIONS.md#namespaces-over-the-system-port`, migration
+;; step 1.2). `src/` has no external deps (grepped: only `clojure.*`
+;; namespaces); `lib/flint/deps/manifest.cljc`'s `:clj` branch does, one --
+;; `cheshire.core`, which babashka ships built in and plain Clojure does not.
+;; Declaring it here is the one new dependency this migration adds
+;; (`DECISIONS.md#namespaces-over-the-system-port`, "babashka support for the
+;; compiler is dropped").
+{:paths ["src" "driver" "lib"]
+ :deps {cheshire/cheshire {:mvn/version "5.13.0"}
+        org.clojure/data.xml {:mvn/version "0.2.0-alpha9"}}}

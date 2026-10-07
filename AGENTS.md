@@ -20,9 +20,17 @@ it is invisible for as long as nothing unusual is asked.
 - Before adding a kind, capability, builtin or opcode, grep for the existing
   members by name and fix every list you find, in one change.
 - If two lists must exist, make one *read* the other rather than restate it.
-- `bin/flint` is babashka running the compiler's Clojure source and
-  deliberately duplicates logic from `src/`. Change one, change the other; they
-  are meant to stay identical.
+- `bin/flint` is a thin `sh` wrapper over a JVM Clojure driver
+  (`driver/flint/driver/main.clj`, `DECISIONS.md#namespaces-over-the-system-port`
+  migration step 1.2) that requires the compiler's own `src/` namespaces
+  directly -- it is **not** babashka and does **not** duplicate `flint.project`
+  any more (`collect`, `topo-order`, `refuse-guarded-requires!`, `core-first`
+  were deleted from it in favour of `flint.project/resolve-project-waves`,
+  the same wave walk every door goes through). What it still owns, because no
+  other door can, is finding files on a search path and reading `deps.edn` for
+  a workspace's grants and tags, and reading SOURCE TEXT itself through the
+  kin-generated Java reader (`flint.driver.host-reader`) rather than
+  `flint.reader`.
 
 ## 2. Recording decisions
 
@@ -278,6 +286,17 @@ shells out to a JVM — and `/usr/bin/java` on macOS is a stub that reports no
 runtime. Without it the build dies at `builtins.json` with "Unable to locate a
 Java Runtime", which names neither babashka nor the cause. Two agents hit this
 independently before it was written down.
+
+**The `clojure` CLI is required too, as of
+`DECISIONS.md#namespaces-over-the-system-port` migration step 1.2.**
+`bin/build-dist` calls `bin/flint` for every artifact it builds, and
+`bin/flint` is now a wrapper over `clojure -M -m flint.driver.main` rather
+than babashka — install it from clojure.org/guides/install_clojure. The first
+call in a fresh worktree writes `.cpcache/` (gitignored) and compiles the kin
+Java reader into `target/kin-reader-classes/`; later calls are faster. JVM
+start-up cost is accepted (the maintainer's decision): `clojure -M -e
+'(require (quote flint.compiler))'` alone is ~16 s wall from a warm
+`.cpcache`, measured 2026-10-07 on the machine this file was written on.
 
 **The last two commands are not optional either, because two more directories
 are gitignored and `bin/check` reads them.** `sdks/esm/dist/flint.js` does not
