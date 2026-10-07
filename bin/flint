@@ -37,4 +37,48 @@ if ! command -v clojure > /dev/null 2>&1; then
   exit 1
 fi
 
-exec clojure -M -m flint.driver.main "$@"
+# NO deps.edn FILE AT THE REPO ROOT, DELIBERATELY. `flint.cli`/`flint.deps`
+# (lib/flint/cli.cljc, lib/flint/deps.cljc) read a "deps.edn" in the CURRENT
+# DIRECTORY as a flint PROJECT's own manifest -- `:paths`/`:deps` are the
+# same keys Clojure's own tool uses, on purpose, for a familiar shape. A
+# tracked root `deps.edn` giving the JVM its classpath is therefore also a
+# flint project manifest declaring Maven dependencies this repo does not
+# otherwise have, and `bin/flint task`/`build`/`deps`, run from the repo root
+# (as several `test/cli.clj` scenarios do), read it as exactly that: found
+# when `cheshire`/`org.clojure/data.xml` -- below, needed only so THIS JVM can
+# load `lib/flint/deps/manifest.cljc`'s `:clj` branch -- turned up as flint
+# dependencies to fetch, one of them pulling in a transitive
+# `com.fasterxml.jackson.core/jackson-databind` with no pinned version, and
+# "flint cannot fetch everything this project reaches" where a clean build
+# was expected. `-Sdeps` hands tools.deps the same EDN on the command line
+# instead, so there is no file for `flint.cli` to misread as its own.
+#
+# STDERR IS FILTERED, not piped straight through (and not `exec`ed, for the
+# same reason): loading `flint.rt`, `flint.reader`, `flint.macros` and
+# `flint.clr` under PLAIN Clojure prints fifteen `WARNING: x already refers
+# to ...` lines -- each one a local `def` shadowing something `clojure.core`
+# already refers in, which babashka never warned about and the JVM compiler
+# always does. The shadowing is deliberate and unconditional (AGENTS.md sec. 1
+# duplication it is not -- these are two-sided ports of ONE name, host and
+# guest), so the fix is not in `src/`: EVERY `flint.rt` function that the
+# warned-about names shadow is called by the lines right after its own
+# `(defn ...)`, so this is cosmetic on every path that matters. A test that
+# captures stdout AND stderr together (several `test/cli.clj` scenarios do,
+# to check a task's own output is clean) saw fifteen `WARNING:` lines ahead of
+# its answer and failed on that noise, not on anything the task did.
+#
+# Buffered rather than streamed: `grep` has to see the whole thing to tell a
+# `WARNING:` line from a wrapped stack trace line that happens to start the
+# same way, and a filter that could emit a real error out of order is worse
+# than one that is merely synchronous. `$?` is the DRIVER's exit code, not
+# `grep`'s -- captured before the filter runs, and returned after it.
+set +e
+tmperr=$(mktemp "${TMPDIR:-/tmp}/flint-stderr.XXXXXX")
+clojure -Sdeps '{:paths ["src" "driver" "lib"]
+                 :deps {cheshire/cheshire {:mvn/version "5.13.0"}
+                        org.clojure/data.xml {:mvn/version "0.2.0-alpha9"}}}' \
+        -M -m flint.driver.main "$@" 2>"$tmperr"
+status=$?
+grep -v '^WARNING: ' "$tmperr" >&2
+rm -f "$tmperr"
+exit $status
