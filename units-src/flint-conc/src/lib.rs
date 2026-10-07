@@ -458,7 +458,7 @@ macro_rules! wire_tag {
             let opens = if $tag == flint_rt::codec::K_WITH_META
                         || $tag == flint_rt::codec::K_TAGGED { 2 } else { 0 };
             if !expect(rt, w, opens, $name) { return NIL }
-            let ok = rt.wire_piece(w, $tag, &[]);
+            let ok = rt.wire_piece(arg(rt, a, 0), $tag, &[]);
             let e = wrote(rt, ok, $name);
             if !ok { return e }
             arg(rt, a, 0)   // RE-READ: see `writer_arg`
@@ -483,7 +483,7 @@ builtin!(flint_b_wire_bool, b_wire_bool, |rt, a, n| {
         flint_rt::codec::K_TRUE
     };
     if !expect(rt, w, 0, "wire-bool") { return NIL }
-    let ok = rt.wire_piece(w, tag, &[]);
+    let ok = rt.wire_piece(arg(rt, a, 0), tag, &[]);
     if !ok { return wrote(rt, ok, "wire-bool") }
     arg(rt, a, 0)   // RE-READ: see `writer_arg`
 });
@@ -496,7 +496,7 @@ builtin!(flint_b_wire_int, b_wire_int, |rt, a, n| {
         return rt.throw_str("ClassCastException", "wire-int wants an integer")
     };
     if !expect(rt, w, 0, "wire-int") { return NIL }
-    let ok = rt.wire_piece(w, flint_rt::codec::K_INT, &(i as u64).to_le_bytes());
+    let ok = rt.wire_piece(arg(rt, a, 0), flint_rt::codec::K_INT, &(i as u64).to_le_bytes());
     if !ok { return wrote(rt, ok, "wire-int") }
     arg(rt, a, 0)   // RE-READ: see `writer_arg`
 });
@@ -510,7 +510,7 @@ builtin!(flint_b_wire_double, b_wire_double, |rt, a, n| {
     }
     let bits = rt.num_f64(v).to_bits();
     if !expect(rt, w, 0, "wire-double") { return NIL }
-    let ok = rt.wire_piece(w, flint_rt::codec::K_DOUBLE, &bits.to_le_bytes());
+    let ok = rt.wire_piece(arg(rt, a, 0), flint_rt::codec::K_DOUBLE, &bits.to_le_bytes());
     if !ok { return wrote(rt, ok, "wire-double") }
     arg(rt, a, 0)   // RE-READ: see `writer_arg`
 });
@@ -529,7 +529,7 @@ builtin!(flint_b_wire_str, b_wire_str, |rt, a, n| {
     pay.extend_from_slice(&(owned.len() as u32).to_le_bytes());
     pay.extend_from_slice(&owned);
     if !expect(rt, w, 0, "wire-str") { return NIL }
-    let ok = rt.wire_piece(w, flint_rt::codec::K_STRING, &pay);
+    let ok = rt.wire_piece(arg(rt, a, 0), flint_rt::codec::K_STRING, &pay);
     if !ok { return wrote(rt, ok, "wire-str") }
     arg(rt, a, 0)   // RE-READ: see `writer_arg`
 });
@@ -546,7 +546,7 @@ builtin!(flint_b_wire_bytes, b_wire_bytes, |rt, a, n| {
     pay.extend_from_slice(&(owned.len() as u32).to_le_bytes());
     pay.extend_from_slice(&owned);
     if !expect(rt, w, 0, "wire-bytes") { return NIL }
-    let ok = rt.wire_piece(w, flint_rt::codec::K_BYTES, &pay);
+    let ok = rt.wire_piece(arg(rt, a, 0), flint_rt::codec::K_BYTES, &pay);
     if !ok { return wrote(rt, ok, "wire-bytes") }
     arg(rt, a, 0)   // RE-READ: see `writer_arg`
 });
@@ -577,7 +577,7 @@ fn wire_named(rt: &mut Rt, a: usize, tag: u8, what: &str) -> Value {
     pay.extend_from_slice(&(nm.len() as u32).to_le_bytes());
     pay.extend_from_slice(&nm);
     if !expect(rt, w, 0, what) { return NIL }
-    let ok = rt.wire_piece(w, tag, &pay);
+    let ok = rt.wire_piece(arg(rt, a, 0), tag, &pay);
     if !ok { return wrote(rt, ok, what) }
     arg(rt, a, 0)   // RE-READ: see `writer_arg`
 }
@@ -640,7 +640,7 @@ fn wire_counted(rt: &mut Rt, a: usize, tag: u8, what: &str) -> Value {
     // counted them as `n` would call the message complete half way through.
     let opens = if tag == flint_rt::codec::K_MAP { c * 2 } else { c };
     if !expect(rt, w, opens, what) { return NIL }
-    let ok = rt.wire_piece(w, tag, &(c as u32).to_le_bytes());
+    let ok = rt.wire_piece(arg(rt, a, 0), tag, &(c as u32).to_le_bytes());
     if !ok { return wrote(rt, ok, what) }
     arg(rt, a, 0)   // RE-READ: see `writer_arg`
 }
@@ -720,7 +720,7 @@ builtin!(flint_b_wire_port, b_wire_port, |rt, a, n| {
     }
     let id = rt.as_i64(rt.slot(p, conc::PT_ID)).unwrap_or(0) as u32;
     if !expect(rt, w, 0, "wire-port") { return NIL }
-    let ok = rt.wire_piece(w, flint_rt::codec::K_PORT, &id.to_le_bytes());
+    let ok = rt.wire_piece(arg(rt, a, 0), flint_rt::codec::K_PORT, &id.to_le_bytes());
     if !ok { return wrote(rt, ok, "wire-port") }
     arg(rt, a, 0)   // RE-READ: see `writer_arg`
 });
@@ -740,7 +740,7 @@ builtin!(flint_b_wire_opaque, b_wire_opaque, |rt, a, n| {
     pay.extend_from_slice(&(lb.len() as u32).to_le_bytes());
     pay.extend_from_slice(&lb);
     if !expect(rt, w, 0, "wire-opaque") { return NIL }
-    let ok = rt.wire_piece(w, flint_rt::codec::K_SENTINEL, &pay);
+    let ok = rt.wire_piece(arg(rt, a, 0), flint_rt::codec::K_SENTINEL, &pay);
     if !ok { return wrote(rt, ok, "wire-opaque") }
     arg(rt, a, 0)   // RE-READ: see `writer_arg`
 });
@@ -950,7 +950,7 @@ builtin!(flint_b_wire_table, b_wire_table, |rt, a, n| {
              count was expected",
         );
     }
-    let ok = rt.wire_piece(w, flint_rt::codec::K_TABLE, &(c as u32).to_le_bytes());
+    let ok = rt.wire_piece(arg(rt, a, 0), flint_rt::codec::K_TABLE, &(c as u32).to_le_bytes());
     if !ok { return wrote(rt, ok, "wire-table") }
     arg(rt, a, 0)   // RE-READ: see `writer_arg`
 });
@@ -971,7 +971,7 @@ builtin!(flint_b_wire_table_rows, b_wire_table_rows, |rt, a, n| {
              and typed first",
         );
     }
-    let ok = rt.wire_raw(w, &(c as u32).to_le_bytes());
+    let ok = rt.wire_raw(arg(rt, a, 0), &(c as u32).to_le_bytes());
     if !ok { return wrote(rt, ok, "wire-table-rows") }
     arg(rt, a, 0)   // RE-READ: see `writer_arg`
 });

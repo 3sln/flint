@@ -846,16 +846,16 @@ public static class Builtins {
         // and has no kind. But `port/send` has to tell a finished encoding from
         // a value to be encoded, and asking is not a capability.
         Def("flint/wire-writer?", (rt, at, n) => Val.Bool(Wire.IsWriter(rt, rt.VAt(at))));
-        Def("flint/wire-nil", (rt, at, n) => WPut(rt, rt.VAt(at), Codec.K_NIL, "wire-nil"));
+        Def("flint/wire-nil", (rt, at, n) => WPut(rt, at, Codec.K_NIL, "wire-nil"));
         Def("flint/wire-bool", (rt, at, n) => {
             long v = rt.VAt(at + 1);
-            return WPut(rt, rt.VAt(at),
+            return WPut(rt, at,
                         (v == Val.False || Val.IsNil(v)) ? Codec.K_FALSE : Codec.K_TRUE, "wire-bool");
         });
-        Def("flint/wire-meta", (rt, at, n) => WPut(rt, rt.VAt(at), Codec.K_WITH_META, "wire-meta"));
+        Def("flint/wire-meta", (rt, at, n) => WPut(rt, at, Codec.K_WITH_META, "wire-meta"));
         // A TAGGED LITERAL: the tag byte, then the tag symbol and the form as
         // ordinary values. Bare like `wire-meta` -- both are wrappers.
-        Def("flint/wire-tagged", (rt, at, n) => WPut(rt, rt.VAt(at), Codec.K_TAGGED, "wire-tagged"));
+        Def("flint/wire-tagged", (rt, at, n) => WPut(rt, at, Codec.K_TAGGED, "wire-tagged"));
         // A TABLE: the column count, a name and a type per column, then the ROW
         // count, then the cells. The count sits AFTER values, which is why the
         // table needed the writer to track structure first -- four raw bytes
@@ -875,7 +875,11 @@ public static class Builtins {
                     "wire-table: no value is due here -- the message is already complete, "
                     + "or a count was expected");
             }
-            return WDone(rt, w, Wire.Put(rt, w, Codec.K_TABLE) && Wire.U32(rt, w, c), "wire-table");
+            // RE-READ: `Wire.OpenTable` allocated; see the wire-writer-helpers
+            // section comment above `WExpect`.
+            bool ok = Wire.Put(rt, rt.VAt(at), Codec.K_TABLE);
+            if (ok) ok = Wire.U32(rt, rt.VAt(at), c);
+            return WDone(rt, rt.VAt(at), ok, "wire-table");
         });
         Def("flint/wire-table-rows", (rt, at, n) => {
             long w = WCheck(rt, rt.VAt(at), "wire-table-rows");
@@ -891,7 +895,10 @@ public static class Builtins {
                     "wire-table-rows: no row count is due here -- a table's columns are "
                     + "named and typed first");
             }
-            return WDone(rt, w, Wire.U32(rt, w, c), "wire-table-rows");
+            // RE-READ: `Wire.ExpectRowcount` allocated; see the comment above
+            // `WExpect`.
+            bool ok = Wire.U32(rt, rt.VAt(at), c);
+            return WDone(rt, rt.VAt(at), ok, "wire-table-rows");
         });
 
         // --- the wire reader -------------------------------------------------
@@ -1002,8 +1009,14 @@ public static class Builtins {
             if (Val.IsNil(w)) return Val.Nil;
             long v = rt.VAt(at + 1);
             if (!Num.IsInt(rt, v)) return rt.ThrowStr("ClassCastException", "wire-int wants an integer");
+            // THE INTEGER BEFORE THE ALLOCATION: a big one is a heap box, and
+            // `v` is a host local like the writer.
+            long iv = Num.AsI64(rt, v).Value;
             if (!WExpect(rt, w, 0, "wire-int")) return Val.Nil;
-            return WDone(rt, w, Wire.Put(rt, w, Codec.K_INT) && Wire.U64(rt, w, Num.AsI64(rt, v).Value), "wire-int");
+            // RE-READ: `WExpect` allocated; see the comment above it.
+            bool ok = Wire.Put(rt, rt.VAt(at), Codec.K_INT);
+            if (ok) ok = Wire.U64(rt, rt.VAt(at), iv);
+            return WDone(rt, rt.VAt(at), ok, "wire-int");
         });
         Def("flint/wire-double", (rt, at, n) => {
             long w = WCheck(rt, rt.VAt(at), "wire-double");
@@ -1012,15 +1025,22 @@ public static class Builtins {
             if (!Num.IsNumber(rt, v)) return rt.ThrowStr("ClassCastException", "wire-double wants a number");
             long bits = System.BitConverter.DoubleToInt64Bits(Num.F64(rt, v));
             if (!WExpect(rt, w, 0, "wire-double")) return Val.Nil;
-            return WDone(rt, w, Wire.Put(rt, w, Codec.K_DOUBLE) && Wire.U64(rt, w, bits), "wire-double");
+            // RE-READ: `WExpect` allocated; see the comment above it.
+            bool ok = Wire.Put(rt, rt.VAt(at), Codec.K_DOUBLE);
+            if (ok) ok = Wire.U64(rt, rt.VAt(at), bits);
+            return WDone(rt, rt.VAt(at), ok, "wire-double");
         });
         Def("flint/wire-str", (rt, at, n) => {
             long w = WCheck(rt, rt.VAt(at), "wire-str");
             if (Val.IsNil(w)) return Val.Nil;
             long v = rt.VAt(at + 1);
             if (!Str.IsString(rt, v)) return rt.ThrowStr("ClassCastException", "wire-str wants a string");
+            string s = Str.Text(rt, v);
             if (!WExpect(rt, w, 0, "wire-str")) return Val.Nil;
-            return WDone(rt, w, Wire.Put(rt, w, Codec.K_STRING) && Wire.Text(rt, w, Str.Text(rt, v)), "wire-str");
+            // RE-READ: `WExpect` allocated; see the comment above it.
+            bool ok = Wire.Put(rt, rt.VAt(at), Codec.K_STRING);
+            if (ok) ok = Wire.Text(rt, rt.VAt(at), s);
+            return WDone(rt, rt.VAt(at), ok, "wire-str");
         });
         Def("flint/wire-bytes", (rt, at, n) => {
             long w = WCheck(rt, rt.VAt(at), "wire-bytes");
@@ -1029,8 +1049,12 @@ public static class Builtins {
             if (!Bytes.IsBytes(rt, v)) return rt.ThrowStr("ClassCastException", "wire-bytes wants a byte string");
             byte[] b = Bytes.ToArray(rt, v);
             if (!WExpect(rt, w, 0, "wire-bytes")) return Val.Nil;
-            return WDone(rt, w, Wire.Put(rt, w, Codec.K_BYTES) && Wire.U32(rt, w, b.Length)
-                                && Wire.Raw(rt, w, b), "wire-bytes");
+            // RE-READ: `WExpect` allocated, and each append below does too;
+            // see the comment above `WExpect`.
+            bool ok = Wire.Put(rt, rt.VAt(at), Codec.K_BYTES);
+            if (ok) ok = Wire.U32(rt, rt.VAt(at), b.Length);
+            if (ok) ok = Wire.Raw(rt, rt.VAt(at), b);
+            return WDone(rt, rt.VAt(at), ok, "wire-bytes");
         });
         Def("flint/wire-kw", (rt, at, n) => WNamed(rt, at, Codec.K_KEYWORD, "wire-kw"));
         Def("flint/wire-sym", (rt, at, n) => WNamed(rt, at, Codec.K_SYMBOL, "wire-sym"));
@@ -1064,7 +1088,10 @@ public static class Builtins {
             }
             long id = Val.AsFixnum(rt.Slot(p, Conc.PT_ID));
             if (!WExpect(rt, w, 0, "wire-port")) return Val.Nil;
-            return WDone(rt, w, Wire.Put(rt, w, Codec.K_PORT) && Wire.U32(rt, w, id), "wire-port");
+            // RE-READ: `WExpect` allocated; see the comment above it.
+            bool ok = Wire.Put(rt, rt.VAt(at), Codec.K_PORT);
+            if (ok) ok = Wire.U32(rt, rt.VAt(at), id);
+            return WDone(rt, rt.VAt(at), ok, "wire-port");
         });
         Def("flint/wire-opaque", (rt, at, n) => {
             long w = WCheck(rt, rt.VAt(at), "wire-opaque");
@@ -1077,8 +1104,12 @@ public static class Builtins {
             long lv = global::_3sln.Flint.Kgen.Rt.Opaque.OpaqueLabel(rt, o);
             string label = Str.IsString(rt, lv) ? Str.Text(rt, lv) : "";
             if (!WExpect(rt, w, 0, "wire-opaque")) return Val.Nil;
-            return WDone(rt, w, Wire.Put(rt, w, Codec.K_SENTINEL) && Wire.U64(rt, w, id)
-                                && Wire.Text(rt, w, label), "wire-opaque");
+            // RE-READ: `WExpect` allocated, and each append below does too;
+            // see the comment above `WExpect`.
+            bool ok = Wire.Put(rt, rt.VAt(at), Codec.K_SENTINEL);
+            if (ok) ok = Wire.U64(rt, rt.VAt(at), id);
+            if (ok) ok = Wire.Text(rt, rt.VAt(at), label);
+            return WDone(rt, rt.VAt(at), ok, "wire-opaque");
         });
 
         // --- regex ------------------------------------------------------------
@@ -1520,6 +1551,37 @@ public static class Builtins {
     }
 
     // --- wire writer helpers ------------------------------------------------
+    //
+    // A WRITER VALUE HELD IN A HOST LOCAL DOES NOT SURVIVE AN ALLOCATION.
+    // `WExpect` (`Wire.ExpectValue`) allocates -- it pushes frames on the
+    // writer's own persistent stack -- and every `Wire.Put`/`Raw`/`U32`/`U64`/
+    // `Text` append allocates too, growing the transient byte buffer. The
+    // collector moves objects, so a `long w` read before one of those calls
+    // can name the wrong thing after it returns: `Wire.Put`/`Raw` would then
+    // see a writer that is not "this writer, not yet finished" but "not a
+    // writer at all", and report the wrong reason
+    // (`DECISIONS.md#a-vec-of-values-is-not-a-root` is the general rule this
+    // is an instance of). Measured on native as a compile result that could
+    // not be sent back: `wire-str` on a large enough string threw "this
+    // writer has already been finished" about a writer that was perfectly
+    // live.
+    //
+    // The fix: never use a writer value obtained before an allocating call in
+    // one made after it. `rt.VAt(at)` re-reads the argument off the rooted
+    // argument slots, so every use after the first allocating call re-reads
+    // instead of reusing. Below, `WPut`/`WNamed`/`WCounted` take `at` (the
+    // argument base) rather than an already-read writer, so they can do that
+    // re-reading themselves; `WExpect`/`WCheck`/`WDone` still take a `long
+    // w`, because each performs exactly one operation with it and the caller
+    // is the one re-reading before passing it in.
+    //
+    // C# EVALUATES A CALL'S ARGUMENTS LEFT TO RIGHT, so
+    // `WDone(rt, w, Wire.Put(rt, w, t) && Wire.U32(rt, w, c), what)` reads
+    // the `w` for `WDone`'s OWN argument before `Wire.Put` ever runs -- stale
+    // by the time `WDone` executes, even though the `w` inside `Put` and
+    // `U32` is freshly read each time. So the boolean is always computed into
+    // a local first, in its own statement(s), and `WDone(rt, rt.VAt(at), ok,
+    // what)` is a separate statement after it.
 
     /// The writer, or nil after throwing. One shape for sixteen refusals.
     /// Refuse a value the format does not allow here.
@@ -1538,18 +1600,21 @@ public static class Builtins {
     }
 
     /// Answer the writer, or throw when it was already finished: appending
-    /// after that would grow bytes somebody has sent.
+    /// after that would grow bytes somebody has sent. Callers pass a freshly
+    /// re-read `w` -- see the section comment above.
     static long WDone(Rt rt, long w, bool ok, string what) {
         if (ok) return w;
         return rt.ThrowStr("IllegalStateException", what + ": this writer has already been finished");
     }
 
-    static long WPut(Rt rt, long w, int tag, string what) {
-        long c = WCheck(rt, w, what);
-        if (Val.IsNil(c)) return Val.Nil;
+    static long WPut(Rt rt, int at, int tag, string what) {
+        long w = WCheck(rt, rt.VAt(at), what);
+        if (Val.IsNil(w)) return Val.Nil;
         long opens = (tag == Codec.K_WITH_META || tag == Codec.K_TAGGED) ? 2 : 0;
-        if (!WExpect(rt, c, opens, what)) return Val.Nil;
-        return WDone(rt, c, Wire.Put(rt, c, tag), what);
+        if (!WExpect(rt, w, opens, what)) return Val.Nil;
+        // RE-READ: `WExpect` allocated; see the section comment above.
+        bool ok = Wire.Put(rt, rt.VAt(at), tag);
+        return WDone(rt, rt.VAt(at), ok, what);
     }
 
     /// A keyword or symbol: the namespace (ABSENT is not empty -- that is what
@@ -1562,17 +1627,19 @@ public static class Builtins {
             return rt.ThrowStr("ClassCastException", what + " wants a name string");
         }
         if (!WExpect(rt, w, 0, what)) return Val.Nil;
-        bool ok = Wire.Put(rt, w, tag);
+        // RE-READ: `WExpect` allocated, and so does each append below; see
+        // the section comment above.
+        bool ok = Wire.Put(rt, rt.VAt(at), tag);
         if (Val.IsNil(ns)) {
-            ok = ok && Wire.U32(rt, w, Codec.NO_NS);
+            if (ok) ok = Wire.U32(rt, rt.VAt(at), Codec.NO_NS);
         } else {
             if (!Str.IsString(rt, ns)) {
                 return rt.ThrowStr("ClassCastException", what + " wants a namespace string or nil");
             }
-            ok = ok && Wire.Text(rt, w, Str.Text(rt, ns));
+            if (ok) ok = Wire.Text(rt, rt.VAt(at), Str.Text(rt, ns));
         }
-        ok = ok && Wire.Text(rt, w, Str.Text(rt, name));
-        return WDone(rt, w, ok, what);
+        if (ok) ok = Wire.Text(rt, rt.VAt(at), Str.Text(rt, name));
+        return WDone(rt, rt.VAt(at), ok, what);
     }
 
     /// A counted opening: the tag, then how many values follow. COUNTS, NOT
@@ -1610,7 +1677,11 @@ public static class Builtins {
         // A MAP OPENS TWICE ITS COUNT: `n` pairs are `2n` values.
         long opens = (tag == Codec.K_MAP) ? c * 2 : c;
         if (!WExpect(rt, w, opens, what)) return Val.Nil;
-        return WDone(rt, w, Wire.Put(rt, w, tag) && Wire.U32(rt, w, c), what);
+        // RE-READ: `WExpect` allocated, and `Wire.Put` allocates too; see the
+        // section comment above.
+        bool ok = Wire.Put(rt, rt.VAt(at), tag);
+        if (ok) ok = Wire.U32(rt, rt.VAt(at), c);
+        return WDone(rt, rt.VAt(at), ok, what);
     }
 
     // --- wire reader helpers ------------------------------------------------

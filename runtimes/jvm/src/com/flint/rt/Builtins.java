@@ -985,17 +985,17 @@ public final class Builtins {
         // and has no kind. But `port/send` has to tell a finished encoding from
         // a value to be encoded, and asking is not a capability.
         def("flint/wire-writer?", (rt, at, n) -> Val.bool(Wire.isWriter(rt, rt.vat(at))));
-        def("flint/wire-nil", (rt, at, n) -> wput(rt, rt.vat(at), Codec.K_NIL, "wire-nil"));
+        def("flint/wire-nil", (rt, at, n) -> wput(rt, at, Codec.K_NIL, "wire-nil"));
         def("flint/wire-bool", (rt, at, n) -> {
             long v = rt.vat(at + 1);
-            return wput(rt, rt.vat(at),
+            return wput(rt, at,
                         (v == Val.FALSE || Val.isNil(v)) ? Codec.K_FALSE : Codec.K_TRUE,
                         "wire-bool");
         });
-        def("flint/wire-meta", (rt, at, n) -> wput(rt, rt.vat(at), Codec.K_WITH_META, "wire-meta"));
+        def("flint/wire-meta", (rt, at, n) -> wput(rt, at, Codec.K_WITH_META, "wire-meta"));
         // A TAGGED LITERAL: the tag byte, then the tag symbol and the form as
         // ordinary values. Bare like `wire-meta` -- both are wrappers.
-        def("flint/wire-tagged", (rt, at, n) -> wput(rt, rt.vat(at), Codec.K_TAGGED, "wire-tagged"));
+        def("flint/wire-tagged", (rt, at, n) -> wput(rt, at, Codec.K_TAGGED, "wire-tagged"));
         // A TABLE: the column count, a name and a type per column, then the ROW
         // count, then the cells. The count sits AFTER values, which is why the
         // table needed the writer to track structure first -- a primitive that
@@ -1015,7 +1015,11 @@ public final class Builtins {
                     "wire-table: no value is due here -- the message is already complete, "
                     + "or a count was expected");
             }
-            return wdone(rt, w, Wire.put(rt, w, Codec.K_TABLE) && Wire.u32(rt, w, c), "wire-table");
+            // RE-READ: `Wire.openTable` allocated; see the wire-writer-helpers
+            // section comment above `wexpect`.
+            boolean ok = Wire.put(rt, rt.vat(at), Codec.K_TABLE);
+            if (ok) ok = Wire.u32(rt, rt.vat(at), c);
+            return wdone(rt, rt.vat(at), ok, "wire-table");
         });
         def("flint/wire-table-rows", (rt, at, n) -> {
             long w = wcheck(rt, rt.vat(at), "wire-table-rows");
@@ -1024,13 +1028,17 @@ public final class Builtins {
             if (!Num.isInt(rt, v)) {
                 return rt.throwStr("ClassCastException", "wire-table-rows wants a row count");
             }
-            if (!countOk(rt, Num.asI64(rt, v), "wire-table-rows")) return Val.NIL;
-            if (!Wire.expectRowcount(rt, w, Num.asI64(rt, v))) {
+            long rows = Num.asI64(rt, v);
+            if (!countOk(rt, rows, "wire-table-rows")) return Val.NIL;
+            if (!Wire.expectRowcount(rt, w, rows)) {
                 return rt.throwStr("IllegalStateException",
                     "wire-table-rows: no row count is due here -- a table's columns are "
                     + "named and typed first");
             }
-            return wdone(rt, w, Wire.u32(rt, w, Num.asI64(rt, v)), "wire-table-rows");
+            // RE-READ: `Wire.expectRowcount` allocated; see the comment above
+            // `wexpect`.
+            boolean ok = Wire.u32(rt, rt.vat(at), rows);
+            return wdone(rt, rt.vat(at), ok, "wire-table-rows");
         });
 
         // --- the wire reader -------------------------------------------------
@@ -1144,8 +1152,14 @@ public final class Builtins {
             if (Val.isNil(w)) return Val.NIL;
             long v = rt.vat(at + 1);
             if (!Num.isInt(rt, v)) return rt.throwStr("ClassCastException", "wire-int wants an integer");
+            // THE INTEGER BEFORE THE ALLOCATION: a big one is a heap box, and
+            // `v` is a host local like the writer.
+            long iv = Num.asI64(rt, v);
             if (!wexpect(rt, w, 0, "wire-int")) return Val.NIL;
-            return wdone(rt, w, Wire.put(rt, w, Codec.K_INT) && Wire.u64(rt, w, Num.asI64(rt, v)), "wire-int");
+            // RE-READ: `wexpect` allocated; see the comment above it.
+            boolean ok = Wire.put(rt, rt.vat(at), Codec.K_INT);
+            if (ok) ok = Wire.u64(rt, rt.vat(at), iv);
+            return wdone(rt, rt.vat(at), ok, "wire-int");
         });
         def("flint/wire-double", (rt, at, n) -> {
             long w = wcheck(rt, rt.vat(at), "wire-double");
@@ -1154,15 +1168,22 @@ public final class Builtins {
             if (!Num.isNumber(rt, v)) return rt.throwStr("ClassCastException", "wire-double wants a number");
             long bits = Double.doubleToRawLongBits(Num.f64(rt, v));
             if (!wexpect(rt, w, 0, "wire-double")) return Val.NIL;
-            return wdone(rt, w, Wire.put(rt, w, Codec.K_DOUBLE) && Wire.u64(rt, w, bits), "wire-double");
+            // RE-READ: `wexpect` allocated; see the comment above it.
+            boolean ok = Wire.put(rt, rt.vat(at), Codec.K_DOUBLE);
+            if (ok) ok = Wire.u64(rt, rt.vat(at), bits);
+            return wdone(rt, rt.vat(at), ok, "wire-double");
         });
         def("flint/wire-str", (rt, at, n) -> {
             long w = wcheck(rt, rt.vat(at), "wire-str");
             if (Val.isNil(w)) return Val.NIL;
             long v = rt.vat(at + 1);
             if (!Str.isString(rt, v)) return rt.throwStr("ClassCastException", "wire-str wants a string");
+            String s = Str.text(rt, v);
             if (!wexpect(rt, w, 0, "wire-str")) return Val.NIL;
-            return wdone(rt, w, Wire.put(rt, w, Codec.K_STRING) && Wire.text(rt, w, Str.text(rt, v)), "wire-str");
+            // RE-READ: `wexpect` allocated; see the comment above it.
+            boolean ok = Wire.put(rt, rt.vat(at), Codec.K_STRING);
+            if (ok) ok = Wire.text(rt, rt.vat(at), s);
+            return wdone(rt, rt.vat(at), ok, "wire-str");
         });
         def("flint/wire-bytes", (rt, at, n) -> {
             long w = wcheck(rt, rt.vat(at), "wire-bytes");
@@ -1171,8 +1192,12 @@ public final class Builtins {
             if (!Bytes.isBytes(rt, v)) return rt.throwStr("ClassCastException", "wire-bytes wants a byte string");
             byte[] b = Bytes.toArray(rt, v);
             if (!wexpect(rt, w, 0, "wire-bytes")) return Val.NIL;
-            return wdone(rt, w, Wire.put(rt, w, Codec.K_BYTES) && Wire.u32(rt, w, b.length)
-                                && Wire.raw(rt, w, b), "wire-bytes");
+            // RE-READ: `wexpect` allocated, and each append below does too;
+            // see the comment above `wexpect`.
+            boolean ok = Wire.put(rt, rt.vat(at), Codec.K_BYTES);
+            if (ok) ok = Wire.u32(rt, rt.vat(at), b.length);
+            if (ok) ok = Wire.raw(rt, rt.vat(at), b);
+            return wdone(rt, rt.vat(at), ok, "wire-bytes");
         });
         def("flint/wire-kw", (rt, at, n) -> wnamed(rt, at, Codec.K_KEYWORD, "wire-kw"));
         def("flint/wire-sym", (rt, at, n) -> wnamed(rt, at, Codec.K_SYMBOL, "wire-sym"));
@@ -1206,7 +1231,10 @@ public final class Builtins {
             }
             long id = Val.asFixnum(rt.slot(p, Conc.PT_ID));
             if (!wexpect(rt, w, 0, "wire-port")) return Val.NIL;
-            return wdone(rt, w, Wire.put(rt, w, Codec.K_PORT) && Wire.u32(rt, w, id), "wire-port");
+            // RE-READ: `wexpect` allocated; see the comment above it.
+            boolean ok = Wire.put(rt, rt.vat(at), Codec.K_PORT);
+            if (ok) ok = Wire.u32(rt, rt.vat(at), id);
+            return wdone(rt, rt.vat(at), ok, "wire-port");
         });
         def("flint/wire-opaque", (rt, at, n) -> {
             long w = wcheck(rt, rt.vat(at), "wire-opaque");
@@ -1219,8 +1247,12 @@ public final class Builtins {
             long lv = com._3sln.flint.kgen.rt.Opaque.opaqueLabel(rt, o);
             String label = Str.isString(rt, lv) ? Str.text(rt, lv) : "";
             if (!wexpect(rt, w, 0, "wire-opaque")) return Val.NIL;
-            return wdone(rt, w, Wire.put(rt, w, Codec.K_SENTINEL) && Wire.u64(rt, w, id)
-                                && Wire.text(rt, w, label), "wire-opaque");
+            // RE-READ: `wexpect` allocated, and each append below does too;
+            // see the comment above `wexpect`.
+            boolean ok = Wire.put(rt, rt.vat(at), Codec.K_SENTINEL);
+            if (ok) ok = Wire.u64(rt, rt.vat(at), id);
+            if (ok) ok = Wire.text(rt, rt.vat(at), label);
+            return wdone(rt, rt.vat(at), ok, "wire-opaque");
         });
 
         // --- regex ------------------------------------------------------------
@@ -1658,6 +1690,36 @@ public final class Builtins {
     }
 
     // --- wire writer helpers ------------------------------------------------
+    //
+    // A WRITER VALUE HELD IN A HOST LOCAL DOES NOT SURVIVE AN ALLOCATION.
+    // `wexpect` (`Wire.expectValue`) allocates -- it pushes frames on the
+    // writer's own persistent stack -- and every `Wire.put`/`raw`/`u32`/`u64`/
+    // `text` append allocates too, growing the transient byte buffer. The
+    // collector moves objects, so a `long w` read before one of those calls
+    // can name the wrong thing after it returns: `Wire.put`/`raw` would then
+    // see a writer that is not "this writer, not yet finished" but "not a
+    // writer at all", and report the wrong reason (`DECISIONS.md#a-vec-of-values-is-not-a-root`
+    // is the general rule this is an instance of). Measured on native as a
+    // compile result that could not be sent back: `wire-str` on a large
+    // enough string threw "this writer has already been finished" about a
+    // writer that was perfectly live.
+    //
+    // The fix: never use a writer value obtained before an allocating call in
+    // one made after it. `rt.vat(at)` re-reads the argument off the rooted
+    // argument slots, so every use after the first allocating call re-reads
+    // instead of reusing. Below, `wput`/`wnamed`/`wcounted` take `at` (the
+    // argument base) rather than an already-read writer, so they can do that
+    // re-reading themselves; `wexpect`/`wcheck`/`wdone` still take a `long w`,
+    // because each performs exactly one operation with it and the caller is
+    // the one re-reading before passing it in.
+    //
+    // JAVA EVALUATES A CALL'S ARGUMENTS LEFT TO RIGHT, so
+    // `wdone(rt, w, Wire.put(rt, w, t) && Wire.u32(rt, w, c), what)` reads the
+    // `w` for `wdone`'s OWN first argument before `Wire.put` ever runs --
+    // stale by the time `wdone` executes, even though the `w` inside `put`
+    // and `u32` is freshly read each time. So the boolean is always computed
+    // into a local first, in its own statement(s), and `wdone(rt,
+    // rt.vat(at), ok, what)` is a separate statement after it.
 
     /// The writer, or nil after throwing. One shape for sixteen refusals.
     /// Refuse a value the format does not allow here. The writer knows where it
@@ -1677,18 +1739,21 @@ public final class Builtins {
     }
 
     /// Answer the writer, or throw when it was already finished: appending
-    /// after that would grow bytes somebody has sent.
+    /// after that would grow bytes somebody has sent. Callers pass a freshly
+    /// re-read `w` -- see the section comment above.
     static long wdone(Rt rt, long w, boolean ok, String what) {
         if (ok) return w;
         return rt.throwStr("IllegalStateException", what + ": this writer has already been finished");
     }
 
-    static long wput(Rt rt, long w, int tag, String what) {
-        long c = wcheck(rt, w, what);
-        if (Val.isNil(c)) return Val.NIL;
+    static long wput(Rt rt, int at, int tag, String what) {
+        long w = wcheck(rt, rt.vat(at), what);
+        if (Val.isNil(w)) return Val.NIL;
         long opens = (tag == Codec.K_WITH_META || tag == Codec.K_TAGGED) ? 2 : 0;
-        if (!wexpect(rt, c, opens, what)) return Val.NIL;
-        return wdone(rt, c, Wire.put(rt, c, tag), what);
+        if (!wexpect(rt, w, opens, what)) return Val.NIL;
+        // RE-READ: `wexpect` allocated; see the section comment above.
+        boolean ok = Wire.put(rt, rt.vat(at), tag);
+        return wdone(rt, rt.vat(at), ok, what);
     }
 
     /// A keyword or symbol: the namespace (ABSENT is not empty -- that is what
@@ -1701,17 +1766,19 @@ public final class Builtins {
             return rt.throwStr("ClassCastException", what + " wants a name string");
         }
         if (!wexpect(rt, w, 0, what)) return Val.NIL;
-        boolean ok = Wire.put(rt, w, tag);
+        // RE-READ: `wexpect` allocated, and so does each append below; see
+        // the section comment above.
+        boolean ok = Wire.put(rt, rt.vat(at), tag);
         if (Val.isNil(ns)) {
-            ok = ok && Wire.u32(rt, w, Codec.NO_NS);
+            if (ok) ok = Wire.u32(rt, rt.vat(at), Codec.NO_NS);
         } else {
             if (!Str.isString(rt, ns)) {
                 return rt.throwStr("ClassCastException", what + " wants a namespace string or nil");
             }
-            ok = ok && Wire.text(rt, w, Str.text(rt, ns));
+            if (ok) ok = Wire.text(rt, rt.vat(at), Str.text(rt, ns));
         }
-        ok = ok && Wire.text(rt, w, Str.text(rt, name));
-        return wdone(rt, w, ok, what);
+        if (ok) ok = Wire.text(rt, rt.vat(at), Str.text(rt, name));
+        return wdone(rt, rt.vat(at), ok, what);
     }
 
     /// A counted opening: the tag, then how many values follow. COUNTS, NOT
@@ -1753,7 +1820,11 @@ public final class Builtins {
         // them as `n` would call the message complete half way through.
         long opens = (tag == Codec.K_MAP) ? c * 2 : c;
         if (!wexpect(rt, w, opens, what)) return Val.NIL;
-        return wdone(rt, w, Wire.put(rt, w, tag) && Wire.u32(rt, w, c), what);
+        // RE-READ: `wexpect` allocated, and `Wire.put` allocates too; see the
+        // section comment above.
+        boolean ok = Wire.put(rt, rt.vat(at), tag);
+        if (ok) ok = Wire.u32(rt, rt.vat(at), c);
+        return wdone(rt, rt.vat(at), ok, what);
     }
 
     // --- wire reader helpers ------------------------------------------------
