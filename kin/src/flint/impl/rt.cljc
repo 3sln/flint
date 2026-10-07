@@ -2140,6 +2140,15 @@
     'port-by-id (core/call {:rust "{0}.port_by_id({1})"
                             :java "Conc.portById({0}, {1})"
                             :csharp "Conc.PortById({0}, {1})"})
+    ;; A LOCAL id -- a channel end's `SC_NEXTID`, never a host-assigned one.
+    ;; `port-by-id` answers by hash alone (any port, host or local, that
+    ;; happens to share the number), and nothing coordinates the two
+    ;; counters -- a sandbox's first channel and its system port both mint
+    ;; `1`. This filters the same table by kind so a channel's peer search
+    ;; can never be masked by a bridge (`DECISIONS.md#host-abi`).
+    'local-port-by-id (core/call {:rust "{0}.local_port_by_id({1})"
+                                  :java "Conc.localPortById({0}, {1})"
+                                  :csharp "Conc.LocalPortById({0}, {1})"})
     'push-event (core/call {:rust "{0}.push_event({1}, {2}, {3}, {4})"
                             :java "Conc.pushEvent({0}, {1}, {2}, {3}, {4})"
                             :csharp "Conc.PushEvent({0}, {1}, {2}, {3}, {4})"})

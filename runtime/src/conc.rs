@@ -710,6 +710,44 @@ impl Rt {
         }
     }
 
+    /// Look a LOCAL peer up by id -- a channel end's own counter
+    /// (`SC_NEXTID`), never a host-assigned one.
+    ///
+    /// **Why not `port_by_id`.** Every port in a sandbox -- a bridge keyed by
+    /// the HOST's id, and a channel end keyed by this sandbox's own
+    /// `SC_NEXTID` -- shares one weak table, `INTERN_PORT`, because
+    /// `intern_into`'s own doc says ports are "keyed by their own id, where
+    /// 'someone else already made this' cannot happen." That is false between
+    /// the two counters: nothing coordinates them, so the sandbox's first
+    /// locally-minted id (1) is also the system port's host id (1), and
+    /// `port_by_id(1)` -- open addressing, no identity check beyond "is a
+    /// port" -- answers with whichever of the two was interned FIRST, which a
+    /// bound call always is. A channel end's peer lookup then finds the
+    /// system port, immortal, and a collected peer never reads as collected
+    /// (measured: `test/threads.clj`'s orphan rows).
+    ///
+    /// The fix is not a new table -- `INTERN_PORT`'s open addressing already
+    /// walks past a non-matching entry to the next slot in the same probe
+    /// chain, so filtering the SAME lookup by kind is enough: a bridge can
+    /// never answer here, so a channel's peer search cannot be masked by one,
+    /// whatever the two counters' ids happen to share. Used wherever a port
+    /// resolves its own `PT_PEER` -- `peer_of`, and `reap_channels`'s
+    /// dead-peer lookup -- never for a host-supplied id.
+    pub fn local_port_by_id(&mut self, id: i64) -> Value {
+        if id < 0 {
+            return NIL;
+        }
+        let sp = &self.gc.sp;
+        match self.roots.shared.interns[INTERN_PORT].lookup(id as u32, |v| {
+            v.is_heap()
+                && ty(sp, v.as_heap()) == TY_PORT
+                && !crosses_a_heap(fx(slot(sp, v.as_heap(), PT_KIND)))
+        }) {
+            Ok(v) => v,
+            Err(_) => NIL,
+        }
+    }
+
     pub(crate) fn register_port(&mut self, p: Value) {
         let id = fx(self.slot(p, PT_ID)) as u32;
         self.intern_into(INTERN_PORT, id, p);
@@ -823,9 +861,14 @@ impl Rt {
         self.channel_at(cap, label)
     }
 
+    /// `PT_PEER` is always a LOCAL id -- a bridge's peer slot stays `-1`
+    /// (`ports-are-the-hosts`: a bridge's far end is the host's own registry,
+    /// not an object in this heap) -- so this resolves through
+    /// `local_port_by_id`, never `port_by_id`, and cannot be masked by a
+    /// host-assigned id that happens to share the same number.
     pub(crate) fn peer_of(&mut self, p: Value) -> Value {
         let id = fx(self.slot(p, PT_PEER));
-        self.port_by_id(id)
+        self.local_port_by_id(id)
     }
 
     /// How many messages are readable right now.

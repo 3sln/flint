@@ -52,6 +52,12 @@ impl Rt {
         for (k, v) in &self.ports { if *k == id { return *v; } }
         NIL
     }
+    // The toy has no bridge/channel distinction to filter on, so this is
+    // `port_by_id` again -- the kind-filtering the real version adds is not
+    // something a single-kind toy heap can exercise.
+    fn local_port_by_id(&mut self, id: i64) -> Value {
+        self.port_by_id(id)
+    }
     fn waiter_at(&mut self, token: i64) -> Value {
         for (k, v) in &self.waiters { if *k == token { return *v; } }
         NIL
@@ -196,6 +202,10 @@ fn main() {
                 if (rt.portIds.get(i) == id) return rt.portVals.get(i);
             return NIL;
         }
+        // The toy has no bridge/channel distinction to filter on, so this is
+        // `portById` again -- the kind-filtering the real version adds is
+        // not something a single-kind toy heap can exercise.
+        static long localPortById(Rt rt, long id) { return portById(rt, id); }
         static long wakeOn(Rt rt, long p) { rt.wokePorts++; return NIL; }
     }
     // BARE, not on a class: cross-namespace kin calls land unqualified.
@@ -339,6 +349,10 @@ fn main() {
                 if (rt.PortIds[i] == id) return rt.PortVals[i];
             return Val.Nil;
         }
+        // The toy has no bridge/channel distinction to filter on, so this is
+        // `PortById` again -- the kind-filtering the real version adds is
+        // not something a single-kind toy heap can exercise.
+        public static long LocalPortById(Rt rt, long id) { return PortById(rt, id); }
         public static long WakeOn(Rt rt, long p) { rt.WokePorts++; return Val.Nil; }
     }
     // BARE -- see the Java head.

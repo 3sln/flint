@@ -80,8 +80,12 @@ impl Rt {
             }
             // This end has been collected. Tell whoever is affected --
             // and the object is gone, so the pairing is looked up by id.
+            // LOCAL, not `port-by-id`: the peer is another channel end,
+            // never a bridge, and a bridge happening to share the
+            // number must not be woken for a channel it has nothing to
+            // do with (`DECISIONS.md#host-abi`).
             let pid: i64 = self.peer_id_of_dead(id);
-            let peer: Value = self.port_by_id(pid);
+            let peer: Value = self.local_port_by_id(pid);
             if peer.is_nil() {
                 continue;
             }

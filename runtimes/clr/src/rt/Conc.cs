@@ -531,12 +531,51 @@ public static class Conc {
         }
     }
 
+    /// Look a LOCAL peer up by id -- a channel end's own counter
+    /// (`SC_NEXTID`), never a host-assigned one.
+    ///
+    /// Every port in a sandbox shares one weak table, `Interns.PORT`, keyed
+    /// by id -- a bridge by the HOST's id, a channel end by this sandbox's
+    /// own `SC_NEXTID`. Nothing coordinates the two counters, so a sandbox's
+    /// first locally-minted id (1) is also the system port's host id (1),
+    /// and `PortById(1)` -- its `PT_ID == id` check only rules out a true
+    /// hash collision, not two ports that genuinely share a number -- answers
+    /// with whichever was interned FIRST, which a bound call always is. A
+    /// channel end's peer lookup then finds the system port, immortal, and a
+    /// collected peer never reads as collected (measured: `test/threads.clj`'s
+    /// orphan rows, `DECISIONS.md#host-abi`).
+    ///
+    /// Filtering by kind is enough: a bridge can never answer here, so a
+    /// channel's peer search cannot be masked by one, whatever the two
+    /// counters' ids happen to share. Used wherever a port resolves its own
+    /// `PT_PEER` -- `PeerOf`, and `ReapChannels`'s dead-peer lookup -- never
+    /// for a host-supplied id.
+    public static long LocalPortById(Rt rt, long id) {
+        if (id < 0) return Val.Nil;
+        Interns t = rt.roots.shared.interns[Interns.PORT];
+        rt.roots.shared.par.LockIntern(Interns.PORT);
+        try {
+            long v = t.Lookup((int) id, x => Val.IsHeap(x)
+                && Obj.Ty(rt.gc.sp, Val.AsHeap(x)) == Obj.TyPort
+                && Fx(rt.Slot(x, PT_ID)) == id
+                && !CrossesAHeap(Fx(rt.Slot(x, PT_KIND))));
+            return v == Val.NotFound ? Val.Nil : v;
+        } finally {
+            rt.roots.shared.par.UnlockIntern(Interns.PORT);
+        }
+    }
+
     /// A HOST end must outlive every flint reference to it, so it goes in
     /// Link two ends. IDS ONLY, and the pairing is recorded in the scheduler as
     /// well, because when one end is collected its object is gone and the other
     /// end still has to be able to find out what happened to it.
-    /// The peer of a port that may itself be gone.
-    public static long PeerOf(Rt rt, long p) { return PortById(rt, Fx(rt.Slot(p, PT_PEER))); }
+    /// The peer of a port that may itself be gone. `PT_PEER` is always a
+    /// LOCAL id -- a bridge's peer slot stays `-1` (`ports-are-the-hosts`: a
+    /// bridge's far end is the host's own registry, not an object in this
+    /// heap) -- so this resolves through `LocalPortById`, never `PortById`,
+    /// and cannot be masked by a host-assigned id that happens to share the
+    /// same number.
+    public static long PeerOf(Rt rt, long p) { return LocalPortById(rt, Fx(rt.Slot(p, PT_PEER))); }
 
     /// The peer of an id whose OBJECT has been collected. Read from the
     /// scheduler's pair list, which is the only place that survives it.

@@ -136,6 +136,13 @@ public final class Porthost {
     /// host's registry and is in no heap, so there is no object to look for --
     /// and looking would find nothing and orphan a perfectly live port, which is
     /// the same mistake `receive-drained` makes a case out of.
+    /// 
+    /// LOCAL, not `port-by-id`: a channel's peer is always another channel
+    /// end, minted from this sandbox's own counter, never a host-assigned id.
+    /// Nothing coordinates the two counters, so a sandbox's first channel and
+    /// its system port can mint the same number -- `port-by-id` would then
+    /// answer with the (immortal) bridge and a collected peer would never read
+    /// as collected (`DECISIONS.md#host-abi`).
     public static long portStateNowAt(Rt rt, long p) {
         long st = Val.asFixnum(rt.slot(p, Conc.PT_STATE));
         if (st != Conc.P_OPEN) {
@@ -145,7 +152,7 @@ public final class Porthost {
         if (peerId < 0) {
             return st;
         }
-        if (Val.isNil(Conc.portById(rt, peerId))) {
+        if (Val.isNil(Conc.localPortById(rt, peerId))) {
             rt.setSlot(Val.asHeap(p), Conc.PT_STATE, Val.fixnum(Conc.P_ORPHANED));
             return Conc.P_ORPHANED;
         }
