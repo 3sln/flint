@@ -254,6 +254,34 @@ public final class Sched {
             // stream the host has not drained yet continues on the next drive
             // whether or not any thread is runnable then.
             Conc.serveControl(rt);
+            // A CONTROL MESSAGE CAN FAIL THE PROGRAM, not just serve it.
+            // 
+            // `:bind` (`kin/control.kin`) runs `spawn-call`, which calls
+            // `ensure-started` to run this image's top-level initialisers
+            // before the first call can be served. A virtual call at load
+            // time (`DECISIONS.md#system-namespaces-and-deps`) throws there
+            // rather than parking, and `ensure-started` returns false for
+            // that exactly as it does for an image with NO call loop at all
+            // (`image.serve == NO_SERVE`) -- `bind-port` cannot tell those
+            // apart and silently does nothing either way, so the bind looks
+            // like it worked, the `:call` that follows sits on a port
+            // nobody is serving, and this loop found nothing to pick,
+            // nothing settled and nothing the host could unstick -- the
+            // deadlock branch below, reported as `wedged (status 4)`, for a
+            // program that had in fact already thrown.
+            // 
+            // Measured: `test/sysns.clj`'s "a virtual reference AT LOAD
+            // TIME reaches the machinery" row. `is-thrown` is also true
+            // for a PARK (`thrown = PARK` is how a park travels), so that
+            // is excluded explicitly: a normal park belongs to ONE thread's
+            // own turn and never touches this GLOBAL field, so the only way
+            // `is-thrown` can be true here, between turns, is a
+            // control-plane call -- `ensure-started` -- that failed outside
+            // any thread's turn.
+            if (!Val.isNil(rt.thrown) && (rt.thrown != Val.PARK)) {
+                rt.status = (int) 0;
+                return Val.NIL;
+            }
             long i = schedPick(rt);
             if (i >= 0) {
                 Conc.runOne(rt, (int) i);
