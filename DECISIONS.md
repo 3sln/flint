@@ -16383,3 +16383,74 @@ nothing left to invoke it. It was left alone rather than deleted because it
 does not name `flint.snapshot` and was not explicitly in scope, but it is
 worth the maintainer's attention: either it gets a new caller, or it is the
 next thing to remove.
+
+## flint-virtual-stays-public
+
+**`flint.virtual` is NOT marked `^:internal`. It was tried, and it breaks
+every virtual-namespace program.**
+
+**Ratified:** ☐ not signed off
+
+**Status: shipped (as "stays public") — verified 2026-10-06 by marking it,
+rebuilding, and watching the breakage; reverted and rebuilt again before this
+was written.**
+
+`doc/api-review.md`'s own evidence line for `flint.virtual` reads "0 compiled
+test program(s), 0 other `lib` namespace(s), 0 README mentions", and its own
+words are "a program naming it directly would be a mistake" -- a description
+that, read quickly, sounds exactly like a candidate for
+`DECISIONS.md#namespace-is-workspace-local`'s `^:internal` mark. The task
+that asked for this decision flagged the risk by name: the compiler REWRITES
+a reference to a virtual namespace, and the rewritten call might land in the
+caller's own namespace rather than in `flint.virtual`'s, which would make an
+`^:internal` mark on `flint.virtual` refuse the caller rather than protect
+anything.
+
+**It does land in the caller's namespace, confirmed by reading
+`src/flint/analyzer.cljc` and then by compiling something.** A `:require` of
+`flint.sys.fs` resolves `fs/list-dir` to a virtual var
+(`virtual-var`/`check-virtual-call!`, `src/flint/analyzer.cljc` ~line 950),
+and the call site is rewritten to `(flint.virtual/call 'flint.sys.fs/list-dir
+...)` and re-analysed through the ORDINARY call path -- the same one that
+calls `record-dep!`/`privacy-check!` on `flint.virtual/call` as a plain
+qualified reference, with `(current-ns env)` at that point being whatever
+namespace wrote the original `(:require [flint.sys.fs ...])`. `privacy-check!`
+compares THAT namespace's workspace against `flint.virtual`'s
+(`flint/flint`), not against anything belonging to `flint.virtual` itself.
+
+**Probed rather than trusted.** `(ns ^:internal flint.virtual ...)`,
+`bin/build-dist`, `cargo build --release -p flint-cli` (`AGENTS.md` §3's
+order, both steps), then two checks:
+
+1. A fresh program, `(ns probe (:require [flint.sys.fs :as fs])) (defn main
+   [_] (str (fs/exists? "x")))`, with no `deps.edn` (the anonymous
+   workspace -- the ordinary case for a standalone script). Before the mark:
+   `target/release/flint run :path . :fn probe/main :with [fs]` -> `false`.
+   After: `Error: ExceptionInfo: compile error: flint.virtual/call is
+   internal to flint/flint (its namespace, flint.virtual, is marked
+   ^internal); . is outside it`.
+2. `bb test/sysns.clj` (the existing virtual-namespace suite, run against
+   `target/release/flint`) went from 3 pre-existing failures (a "wedged
+   (status 4): the host pump made no progress" timeout on three load-time
+   checks, unrelated to this and not investigated here -- machine load
+   average was 15-24 at the time) to **37 failures**, because nearly every
+   check in that suite drives some `flint.sys.*`/pod/sandbox call and every
+   one of those compiles through `flint.virtual/call`.
+
+Reverted (`git checkout -- lib/flint/virtual.cljc`), `bin/build-dist` and
+`cargo build` run again, both checks re-run clean.
+
+**What this does NOT settle.** "A program naming `flint.virtual` directly
+would be a mistake" is still true and is a narrower claim than "only
+`flint.virtual`'s own workspace may reach it through the compiler" -- the
+first is about a human writing `(flint.virtual/call ...)` by hand in their
+own source, which nothing stops today and which `^:internal` would not
+specially catch either (the refusal would name whichever namespace wrote
+it, caller or not). If THAT is worth closing, the options are: (a) exempt
+compiler-EMITTED references from the workspace check, keyed on provenance
+rather than on the var, so only a hand-written reference is caught; or (b)
+leave `flint.virtual` public and say so in its docstring, which is what this
+decision does for now, because (a) is a compiler change to the analyzer's
+notion of where a form "is", untested here and bigger than this task's
+scope. `flint.virtual`'s docstring already explains it is machinery with no
+job for user source; that remains the only guard.

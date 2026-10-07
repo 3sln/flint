@@ -407,7 +407,7 @@ recorded under the SDKs below.
 
 **Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. Compiler machinery: the target `:require` of a virtual namespace compiles INTO. A program naming it directly would be a mistake.
 
-**Change requests:** _none recorded_
+**Change requests:** **Stays public, deliberately — marking it `^:internal` was tried and breaks every virtual-namespace program.** The compiler rewrites `(:require [flint.sys.fs ...]) (fs/list-dir ...)` into `(flint.virtual/call 'flint.sys.fs/list-dir ...)`, and that emitted reference lands in the CALLING program's own namespace — not in `flint.virtual`'s — so the workspace check at `flint.virtual/call` compares the caller's workspace against `flint.virtual`'s (`flint/flint`). Proved rather than reasoned about (`DECISIONS.md#flint-virtual-stays-public`): marking it `^:internal` and rebuilding turned a working probe program into `flint.virtual/call is internal to flint/flint ...; . is outside it`, and the same build turned `test/sysns.clj` from 3 pre-existing failures into 37. "A program naming it directly would be a mistake" is still true and is a different claim from "nobody but its own workspace may reach it through the compiler" — only the second is what `^:internal` enforces, and it is the wrong tool here.
 
 ---
 
