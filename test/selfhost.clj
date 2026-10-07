@@ -62,8 +62,24 @@
 ;; `flint.system` WAS A ROOT here, the fourth place that had to say so, because
 ;; bootstrap spawned it by NAME. The control plane is the runtime's now and the
 ;; call loop is compiled into every image (`DECISIONS.md#the-control-plane-is-the-runtimes`),
-;; so there is nothing for a `collect` to miss.
-(def sources (collect dirs [(symbol (namespace entry)) 'clojure.core]))
+;; so `flint.system` is nothing for a `collect` to miss any more.
+;;
+;; BUT `flint.port` AND `flint.wire` ARE, and this comment's claim that there
+;; was "nothing for a `collect` to miss" was wrong the moment `bc6ddd42` made
+;; them -- not `flint.system` -- the call loop's roots: `flint.callentry` now
+;; calls `flint.port/send` and `flint.wire/read-from` directly, so
+;; `flint.project/project-roots` adds both unconditionally for every real
+;; compile. This file builds its OWN spec with `collect` instead of going
+;; through `project-roots`, which is why `bin/flint` and `test/visibility.clj`
+;; were updated in that commit and this file, building the exact same shape of
+;; spec, was not: `collect dirs [(symbol (namespace entry)) 'clojure.core]`
+;; happened to still work here because `flint.selfhost`'s own transitive
+;; requires already reach `flint.port`, but the minimal spec below (`small`)
+;; has no such luck and failed with "unable to resolve flint.port/send -- is
+;; flint.port required?" -- the exact message `project.cljc` predicts for a
+;; resolver that cannot answer it. Added explicitly here so this does not rely
+;; on a transitive require nobody is promising.
+(def sources (collect dirs [(symbol (namespace entry)) 'clojure.core 'flint.port 'flint.wire]))
 (def order (topo sources))
 (def spec {:sources sources :order order :entry entry :builtins (builtin-names)})
 
@@ -183,7 +199,12 @@
   ;; that one. It is an honest error rather than corruption, but it is the
   ;; HOST's limit, so a number that trips it would be measuring node.
   (let [n 500
-        small (collect dirs ['clojure.core])
+        ;; `flint.port`/`flint.wire`, same as the `sources` root list above: the
+        ;; call loop every image carries calls them unconditionally, so a spec
+        ;; built by hand (rather than through `flint.project/project-roots`,
+        ;; which adds both for exactly this reason) must add them itself or
+        ;; gen0 refuses the compile with "is flint.port required?".
+        small (collect dirs ['clojure.core 'flint.port 'flint.wire])
         ;; V IS DEAD ON PURPOSE, and the threshold does not care: measured,
         ;; a literal reachable from `main` and one the shake drops break at the
         ;; same size, because the cost is in ANALYSING it and analysis happens
