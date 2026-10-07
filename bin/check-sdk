@@ -18,8 +18,9 @@
 #     about what a program compiles to, and "it compiled" does not check that;
 #   * the class is defined IN MEMORY. No `:out`, no classpath, no filename.
 #
-# About 12 s, and it needs a JDK. It skips itself without one rather than failing,
-# the way the rest of the jvm checks do.
+# About 20 s -- it now rebuilds its own `runtimes/jvm/classes` prerequisite,
+# ~8 s of the total -- and it needs a JDK. It skips itself without one rather
+# than failing, the way the rest of the jvm checks do.
 set -e
 cd "$(dirname "$0")/.."
 fail() { echo "FAILED: $1"; exit 1; }
@@ -34,6 +35,27 @@ fi
   echo "  --   check-jvm-sdk: no target/release/flint; skipping"
   exit 0
 }
+
+# `runtimes/jvm/classes` IS THIS CHECK'S OWN PREREQUISITE, not something it
+# assumes another step already left behind. It used to -- and on a fresh CI
+# checkout, where `bin/test` runs `bin/check` long before `bin/check-ports` or
+# `bin/conform-hosts` ever compile the port, that assumption failed with a bare
+# "javac RtCompiler" naming neither the missing directory nor the fix. Locally
+# it read as "run bin/check-ports first", which only an agent who had already
+# hit this once knew to do.
+#
+# So it is rebuilt here, every time, the same way `bin/check-ports` and
+# `bin/conform-hosts` do it (stale classes removed first: a compile that fails
+# must not leave a runnable tree behind). The three scripts each inline this
+# javac invocation rather than sharing it -- pre-existing duplication this fix
+# does not clean up, since the three callers want different things alongside
+# it (check-ports also compiles `test/*.java`, conform-hosts also detects a
+# too-old JDK). ~8 s on this machine.
+rm -rf runtimes/jvm/classes
+"$JDK/bin/javac" -d runtimes/jvm/classes \
+  runtimes/jvm/src/com/flint/*.java runtimes/jvm/src/com/flint/rt/*.java runtimes/jvm/src/com/_3sln/flint/kgen/rt/*.java \
+  > /tmp/flint-sdk-jvm-build.out 2>&1 \
+  || { cat /tmp/flint-sdk-jvm-build.out; fail "javac runtimes/jvm/src (building check-sdk's own runtimes/jvm/classes prerequisite)"; }
 
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
