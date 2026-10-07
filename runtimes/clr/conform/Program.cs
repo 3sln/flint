@@ -1791,6 +1791,19 @@ public static class Program {
 
         // THE CEILING, end to end -- see the JVM's `heapGrows`.
         var rt = new Flint.Rt.Rt(2L * 1024 * 1024, 64L * 1024 * 1024);
+        // UNDER `FLINT_GCSTRESS=1` the count is 55, not 56, and that is not a
+        // packing bug: `gc.stress` is seeded once, at `Gc` construction, so it
+        // is already on for `InitSingletons()`, which forces a minor
+        // collection on each of its few small allocations and promotes them to
+        // old space early. That fragments the first old chunk by a few hundred
+        // bytes, which is enough to turn the LAST ~1 MiB node away before the
+        // ceiling. Matches the JVM's `heapGrows` (`rt.gc.stress ? 55 : 56`) and
+        // native under a scratch probe that forced `stress` before singleton
+        // init (checked 2026-10-06); verified again here directly, with
+        // `FLINT_GCSTRESS=1 runtimes/clr/conform/bin/Release/net10.0/Conform
+        // --rt-foundation` on macOS arm64, which gave 55 before this fix made
+        // the expectation follow the mode rather than hardcoding 56.
+        int want = rt.gc.stress ? 55 : 56;
         int mark = rt.Mark();
         int n = 0;
         while (true) {
@@ -1801,10 +1814,10 @@ public static class Program {
         }
         long grown = rt.gc.sp.Committed;
         rt.PopTo(mark);
-        if (n != 56 || grown <= 8 * M || grown > 64 * M) {
+        if (n != want || grown <= 8 * M || grown > 64 * M) {
             Console.WriteLine($"  FAIL fill: {n} nodes, committed {grown}"); return false;
         }
-        Console.WriteLine("  ok   a 64 MiB heap holds 56 1 MiB nodes and then refuses, as before it could grow");
+        Console.WriteLine($"  ok   a 64 MiB heap holds {want} 1 MiB nodes and then refuses, as before it could grow");
         return true;
     }
 

@@ -48,7 +48,17 @@ public sealed class Gc : System.IDisposable {
     public bool collecting, oom;
     /// Force a collection at every allocation. What turns a timing-dependent
     /// fault into a deterministic one.
-    public bool stress;
+    ///
+    /// SET FROM `Stress` AT BIRTH, matching the JVM's `Gc` field, which is
+    /// initialized straight from `System.getProperty("flint.gcstress")`. It
+    /// used to be the opposite: this field defaulted false and stayed false
+    /// except across a snapshot round trip, while `FLINT_GCSTRESS` drove only
+    /// the separate static below -- so the live `Gc` had no instance-readable
+    /// answer to "is THIS process stressed", and `RtFoundation.HeapGrows`
+    /// (`runtimes/clr/conform/Program.cs`) hardcoded 56 with no way to ask.
+    /// `Snap.cs` still overwrites this after construction, so a restored
+    /// snapshot keeps carrying its OWN stress state, unchanged.
+    public bool stress = Stress;
 
     public Gc(long nurseryBytes, long maxHeap) {
         this.half = Space.AlignUp(System.Math.Max(nurseryBytes, 64 * 1024), Space.Page);
@@ -190,7 +200,6 @@ public sealed class Gc : System.IDisposable {
             }
             return big;
         }
-        if (stress) Minor(roots);
         // COLLECT AT EVERY ALLOCATION, the JVM's `-Dflint.gcstress=1`. The
         // native runtime has had this since rooting bugs were first hunted and
         // the JVM gained it later; this port had neither the field nor the
@@ -199,7 +208,13 @@ public sealed class Gc : System.IDisposable {
         // It turns a timing-dependent rooting bug into a deterministic one. It
         // found a `a-vec-of-values-is-not-a-root` violation in `RtSnapshot`'s own builder the first time
         // it was pointed at the JVM's suites.
-        if (Stress) Minor(roots);
+        //
+        // ONE CHECK, not two: `stress` (instance) is seeded from `Stress`
+        // (the `FLINT_GCSTRESS` read) at birth, so checking both here used to
+        // run `Minor` twice per allocation under the env var -- harmless to
+        // correctness but not what the JVM's single check does, and not what
+        // `HeapGrows`'s 55-vs-56 count was measured against.
+        if (stress) Minor(roots);
         if (bump + size > fromEnd) {
             CollectCycle(roots);
             if (bump + size > fromEnd) {

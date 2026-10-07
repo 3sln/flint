@@ -539,7 +539,12 @@ public sealed class Rt : System.IDisposable {
     public long AllocUnbilled(int ty, int len) {
         // NOTHING MAY ALLOCATE WHILE `thrown` OR `parkOn` HOLDS A HEAP VALUE --
         // see the Rust copy. Under the stress flag only.
-        if (Gc.Stress && (Val.IsHeap(thrown) || Val.IsHeap(parkOn))) {
+        //
+        // `gc.stress` (the instance this `Rt` actually owns), not the static
+        // `Gc.Stress`: a restored snapshot can carry a stress state that
+        // disagrees with THIS process's `FLINT_GCSTRESS`, and the static would
+        // answer for the wrong process.
+        if (gc.stress && (Val.IsHeap(thrown) || Val.IsHeap(parkOn))) {
             throw new System.InvalidOperationException(
                 "flint: allocating while " + (Val.IsHeap(thrown) ? "`thrown`" : "`parkOn`")
                 + " holds a heap value -- it is not a root");
