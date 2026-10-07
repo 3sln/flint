@@ -15824,6 +15824,34 @@ sizes are estimates from reading the code, not measurements.
    `:optimize [perf]`, every `corpus/*.cljc`, byte-identical between the two
    paths. The §4 probes as tests. `a_program_cannot_ship_its_own_control_plane`
    un-ignored and adapted to the injected control plane. Medium-large: about 400 Rust and 100 guest lines.
+   *The reading half BUILT 2026-10-07* (branch `kin-reader`), ahead of the
+   rest of this step: the native CLI reads every PROJECT file itself with the
+   kin reader (`cli/src/read.rs`, called from `spec_inputs`) under the
+   compile's features and its workspace's tags, and hands it over as
+   `{:preread bytes :dialect d}` on the split path and `{:forms bytes
+   :dialect d}` in a resolver answer; `file-answer` now takes a host's
+   `:dialect` over the extension. A file the host cannot read, or whose tag
+   map is not plain symbol pairs, still goes as text, so the compiler reports
+   it exactly as before. `FLINT_HOST_READ=0` sends text throughout, and
+   `FLINT_HOST_READ=report` prints how many files were read. *Measured*: every
+   top-level `corpus/*.cljc`, `:to :llvm` plain and `:optimize [perf]`, host
+   read (31 of 31 project files read, for `nbody`) against `FLINT_HOST_READ=0`
+   in the same binary: 42 `.ll` identical, the same 4 refused with the same
+   output; `bb test/door-agreement.clj` green (bb, native, npm byte-identical
+   on every target); `cargo test compile_call` green with each feature set's
+   answers read under that set. The npm CLI and ESM SDK still send text: they
+   compile through an EDN spec, which has nowhere to put bytes, and reading
+   there needs the wasm runtime to export the reader.
+
+   *Found doing it:* the compile call for `construe-parse-typed :optimize
+   [perf]` failed to send its answer -- "wire-kw: this writer has already been
+   finished" -- only when the project arrived pre-read. Not the reader: the
+   native wire builtins (`units-src/flint-conc`) held the WRITER in a host
+   local across `wire-expect-value`, which allocates, so a collection at that
+   moment left a moved writer behind and the append refused it. Pre-read
+   input changed the heap enough to move a collection there. Fixed by
+   re-reading the writer from its rooted argument slot; the ports carried the
+   same pattern and get the same fix.
 4. **npm CLI and ESM SDK.** `dist/stdcore.forms` and `dist/stdextra.forms`
    from `bin/build-dist` (replacing the single `dist/stdlib.forms` first
    proposed above), async `compile` (no `compileSync`, decided) answering

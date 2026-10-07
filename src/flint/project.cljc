@@ -185,7 +185,8 @@
         body (get files path)
         pre? (map? body)]
     {:src (if pre? (:src body) body) :preread (when pre? (:preread body))
-     :file path :dialect (dialect-of path)
+     ;; THE DIALECT A HOST READ IT UNDER, when it says; the extension otherwise.
+     :file path :dialect (or (when pre? (:dialect body)) (dialect-of path))
      :workspace (:name w) :tags (:tags w)
      :prelude (normalise-prelude (:prelude w))
      :grants (set (:grants w)) :guard (set (:guard w))}))
