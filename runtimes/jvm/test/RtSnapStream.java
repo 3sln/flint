@@ -369,10 +369,15 @@ public class RtSnapStream {
       Rt f = freshRt(img);
       ok("a fresh JVM runtime imports native's stream", Snap.importLive(f, nativeStream));
       ok("the copy from native's stream answers bump -> 2", asLong(call(f, 1, "bump")) == 2);
-      System.out.println("  info JVM's own stream == native's stream byte for byte: "
-                          + Arrays.equals(stream, nativeStream)
-                          + " (jvm " + stream.length + " bytes, native " + nativeStream.length
-                          + " bytes -- they may differ in intern tables)");
+      // ASSERTED, not informational: `steps`/`sliceEnd`/`checkpoint` are the
+      // only fields a single-executor, gas-unlimited sandbox could disagree
+      // on (`Rt.alloc`'s billing is unconditional, matching native), and the
+      // interpreter loop now gates `steps++` on the same "counting, or a
+      // peer to poll for" test `run` picks its budget policy with
+      // (`DECISIONS.md#resource-limits`), so a divergence here is real.
+      ok("the jvm's own stream (" + stream.length + " bytes) is byte-identical to"
+         + " native's (" + nativeStream.length + " bytes)",
+         Arrays.equals(stream, nativeStream));
     }
 
     if (fails > 0) { System.out.println("  " + fails + " failed"); System.exit(1); }

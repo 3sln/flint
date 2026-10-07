@@ -1052,7 +1052,26 @@ public final class Rt {
 
             int opcode = u8(ip);
             ip += 1;
-            steps++;
+            // GATED, not unconditional -- this was the one line in the loop
+            // that was not. A single-executor, gas-unlimited sandbox never
+            // trips the comparison above, but `steps` kept counting anyway,
+            // so a program that spends most of its life in that state (the
+            // top-level initialisers, before any host message arms a slice)
+            // billed every one of those instructions here and zero of them on
+            // native, whose `NoBudget` policy -- chosen once per `run`, not
+            // per instruction -- compiles the increment away entirely
+            // (`DECISIONS.md#resource-limits`). Found as a 272x gap between
+            // native's and this port's `steps` in a host-requested snapshot
+            // of `test/snapstream/snap.cljc`: native 3 020, this port
+            // 821 794, for the SAME compiled image (`cli/src/snapstream_test.rs`
+            // vs `RtSnapStream.java`) -- same length stream, different bytes,
+            // isolated to the `steps`/`sliceEnd`/`checkpoint` tail fields and
+            // nothing else. Gating on the same condition `run` tests at entry
+            // on native -- counting, or another executor to poll for --
+            // makes the two agree, because whenever either is true the ports
+            // already charged every instruction identically (`instrs` is the
+            // unconditional count and is untouched).
+            if (checkpoint != Long.MAX_VALUE || safepoints) steps++;
             instrs++;
 
             switch (opcode) {

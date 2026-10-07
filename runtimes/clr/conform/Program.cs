@@ -296,31 +296,110 @@ public static class Program {
         return rt;
     }
 
+    /// Enough of the wire format to read what this protocol sends back,
+    /// HOST SIDE -- not `Flint.Rt.Codec.Decode`, which allocates onto the
+    /// SANDBOX'S OWN HEAP and bills it gas as a side effect of the test
+    /// looking at its mail. That is backwards for a test asserting this
+    /// sandbox's snapshot BYTES: decoding a reply with the real decoder, on
+    /// this port and not on native (`codec::parse`, no `rt`) or the jvm
+    /// (`RtSnapStream.java`'s own `Dec`), was the one place the three
+    /// harnesses were not mirrors. Measured: 3 extra `TY_ARRAYMAP`
+    /// allocations and 21 extra `steps` per decoded reply, which is exactly
+    /// the one byte `--rt-snap-stream` printed as DIFFERENT from native's for
+    /// the same program (`steps` is 8 bytes; only the low ones moved).
+    /// `Codec.Decode`'s own doc says it "has no caller anywhere" -- this was
+    /// the uncounted one. Mirrors `RtSnapStream.java`'s `Dec` move for move.
+    private sealed record SsKw(string Ns, string Name) {
+        public override string ToString() => (Ns != null ? Ns + "/" : "") + Name;
+    }
+    /// `nil`, distinguished from C#'s own `null` -- which here means "no such
+    /// key", exactly as `RtSnapStream.java`'s reader distinguishes them.
+    private static readonly object SsNil = new();
+    private sealed class SsDec {
+        private readonly byte[] b;
+        private int i;
+        public SsDec(byte[] b) { this.b = b; }
+        int U8() => b[i++] & 0xff;
+        int U32() {
+            int v = (b[i] & 0xff) | ((b[i + 1] & 0xff) << 8)
+                  | ((b[i + 2] & 0xff) << 16) | ((b[i + 3] & 0xff) << 24);
+            i += 4;
+            return v;
+        }
+        long U64() { long lo = U32() & 0xffffffffL, hi = U32() & 0xffffffffL; return lo | (hi << 32); }
+        string Str() {
+            int n = U32();
+            if (n == -1) return null;         // NO_NS as a signed int
+            string s = System.Text.Encoding.UTF8.GetString(b, i, n);
+            i += n;
+            return s;
+        }
+        byte[] Raw(int n) { var o = new byte[n]; System.Array.Copy(b, i, o, 0, n); i += n; return o; }
+
+        public object Val() {
+            int t = U8();
+            switch (t) {
+                case 0: return SsNil;
+                case 1: return true;
+                case 2: return false;
+                case 3: return U64();
+                case 4: return BitConverter.Int64BitsToDouble(U64());
+                case 5: return Str();
+                case 6: case 7: { string ns = Str(); string name = Str(); return new SsKw(ns, name); }
+                case 8: case 9: case 11: {
+                    int n = U32();
+                    var l = new List<object>();
+                    for (int k = 0; k < n; k++) l.Add(Val());
+                    return l;
+                }
+                case 10: {
+                    int n = U32();
+                    var m = new Dictionary<object, object>();
+                    for (int k = 0; k < n; k++) { object key = Val(); object v = Val(); m[key] = v; }
+                    return m;
+                }
+                case 14: { int n = U32(); return Raw(n); }
+                case 15: return (long) U32();   // a port id: not inspected further here
+                default: throw new InvalidOperationException(
+                    "the snapstream reader does not handle wire tag " + t);
+            }
+        }
+    }
+    private static object SsVal(byte[] b) => new SsDec(b).Val();
+    private static object SsMget(object m, string k) {
+        if (m is not Dictionary<object, object> d) throw new InvalidOperationException("not a map: " + m);
+        return d.TryGetValue(new SsKw(null, k), out var v) ? v : null;
+    }
+    private static bool SsHasKey(object m, string k) {
+        if (m is not Dictionary<object, object> d) throw new InvalidOperationException("not a map: " + m);
+        return d.ContainsKey(new SsKw(null, k));
+    }
+    private static bool SsIsKw(object v, string name) => v is SsKw kw && kw.Ns == null && kw.Name == name;
+    private static bool SsIsLong(object v, long want) => v is long l && l == want;
+
     /// Call `snap/<f>` on the bound call port, answering its `:value`.
-    private static long SsCall(Flint.Rt.Rt rt, long tx, string f) {
+    private static object SsCall(Flint.Rt.Rt rt, long tx, string f) {
         var w = new W().Map(4).Kw("tx").Num(tx).Kw("op").Kw("call")
                         .Kw("fn").Str("snap/" + f).Kw("args").Vec(0);
         if (!Flint.Rt.Conc.HostDeliver(rt, SS_CALLS, w.Done()))
             throw new InvalidOperationException("the call port would not take the call");
         foreach (var e in SsPump(rt)) {
             if (e.Kind != Flint.Rt.Conc.EV_MESSAGE || e.A != SS_CALLS) continue;
-            long v = Flint.Rt.Codec.Decode(rt, e.Payload);
-            long txv = global::_3sln.Flint.Kgen.Rt.Mapread.MapGet(rt, v, Flint.Rt.Str.Keyword(rt, null, "tx"), Flint.Rt.Val.Nil);
-            if (!Flint.Rt.Val.IsFixnum(txv) || Flint.Rt.Val.AsFixnum(txv) != tx) continue;
-            long val = global::_3sln.Flint.Kgen.Rt.Mapread.MapGet(rt, v, Flint.Rt.Str.Keyword(rt, null, "value"), Flint.Rt.Val.NotFound);
-            if (val == Flint.Rt.Val.NotFound) throw new InvalidOperationException("threw: " + rt.Describe(v));
-            return val;
+            object v = SsVal(e.Payload);
+            if (!SsIsLong(SsMget(v, "tx"), tx)) continue;
+            if (!SsHasKey(v, "value")) throw new InvalidOperationException("threw: " + v);
+            return SsMget(v, "value");
         }
         throw new InvalidOperationException("no answer to " + f);
     }
 
     /// Ask for a snapshot on the system port; answer the chunks, the
     /// terminator, and whether the destination was closed after it.
-    private static (List<byte[]> chunks, long end, bool closed) SsRequest(Flint.Rt.Rt rt) {
+    private static (List<byte[]> chunks, object end, bool closed) SsRequest(Flint.Rt.Rt rt) {
         Flint.Rt.Conc.HostDeliver(rt, SS_SYS,
             new W().Map(2).Kw("op").Kw("snapshot").Kw("port").Port(SS_DEST).Done());
         var chunks = new List<byte[]>();
-        long end = Flint.Rt.Val.Nil;
+        object end = null;
         bool closed = false;
         foreach (var e in SsPump(rt)) {
             if (e.A != SS_DEST) continue;
@@ -328,10 +407,10 @@ public static class Program {
                 closed = true;
             } else if (e.Kind == Flint.Rt.Conc.EV_MESSAGE) {
                 if (closed) throw new InvalidOperationException("a message arrived after the close");
-                long v = Flint.Rt.Codec.Decode(rt, e.Payload);
-                if (Flint.Rt.Bytes.IsBytes(rt, v)) {
-                    if (!Flint.Rt.Val.IsNil(end)) throw new InvalidOperationException("a chunk arrived after the terminator");
-                    chunks.Add(Flint.Rt.Bytes.ToArray(rt, v));
+                object v = SsVal(e.Payload);
+                if (v is byte[] bytes) {
+                    if (end != null) throw new InvalidOperationException("a chunk arrived after the terminator");
+                    chunks.Add(bytes);
                 } else {
                     end = v;
                 }
@@ -340,9 +419,9 @@ public static class Program {
         return (chunks, end, closed);
     }
 
-    private static bool SsIsBytesPayload(Flint.Rt.Rt rt, byte[] payload) {
+    private static bool SsIsBytesPayload(byte[] payload) {
         if (payload.Length == 0) return false;
-        return Flint.Rt.Bytes.IsBytes(rt, Flint.Rt.Codec.Decode(rt, payload));
+        return SsVal(payload) is byte[];
     }
 
     private static int RtSnapStream(string imgPath, string nativePath) {
@@ -350,8 +429,8 @@ public static class Program {
         byte[] img = File.ReadAllBytes(imgPath);
 
         var a = SsBooted(img);
-        long bump1 = SsCall(a, 1, "bump");
-        SsOk("bump -> 1", Flint.Rt.Val.IsFixnum(bump1) && Flint.Rt.Val.AsFixnum(bump1) == 1);
+        object bump1 = SsCall(a, 1, "bump");
+        SsOk("bump -> 1", SsIsLong(bump1, 1));
 
         var (chunks, end, closed) = SsRequest(a);
         byte[] stream;
@@ -359,21 +438,24 @@ public static class Program {
             foreach (var c in chunks) ms.Write(c, 0, c.Length);
             stream = ms.ToArray();
         }
+        {
+            string ssOut = System.Environment.GetEnvironmentVariable("FLINT_SNAPSTREAM_OUT");
+            if (ssOut != null) File.WriteAllBytes(ssOut, stream);
+        }
         SsOk("the ballast needs several chunks, got " + chunks.Count, chunks.Count >= 2);
         bool allFull = true;
         for (int i = 0; i < chunks.Count - 1; i++) if (chunks[i].Length != 65536) allFull = false;
         SsOk("every chunk but the last is exactly 65536 bytes", allFull);
-        long endOp = global::_3sln.Flint.Kgen.Rt.Mapread.MapGet(a, end, Flint.Rt.Str.Keyword(a, null, "op"), Flint.Rt.Val.Nil);
-        SsOk("terminator op is :end", endOp == Flint.Rt.Str.Keyword(a, null, "end"));
-        long endSize = global::_3sln.Flint.Kgen.Rt.Mapread.MapGet(a, end, Flint.Rt.Str.Keyword(a, null, "size"), Flint.Rt.Val.Nil);
+        object endOp = SsMget(end, "op");
+        SsOk("terminator op is :end", SsIsKw(endOp, "end"));
+        object endSize = SsMget(end, "size");
         SsOk("the terminator names the byte count (" + stream.Length + ")",
-             Flint.Rt.Val.IsFixnum(endSize) && Flint.Rt.Val.AsFixnum(endSize) == stream.Length);
+             SsIsLong(endSize, stream.Length));
         SsOk("the destination is closed after the terminator", closed);
 
         // THE INSTANCE ASKED carries on: the request did not stop it.
-        long bump2 = SsCall(a, 2, "bump");
-        SsOk("the instance asked carries on: bump -> 2",
-             Flint.Rt.Val.IsFixnum(bump2) && Flint.Rt.Val.AsFixnum(bump2) == 2);
+        object bump2 = SsCall(a, 2, "bump");
+        SsOk("the instance asked carries on: bump -> 2", SsIsLong(bump2, 2));
 
         // THE STREAM IS THE ONE-SHOT EXPORT. A fresh instance takes the
         // concatenation, and the one-shot export of what it took is the same
@@ -395,11 +477,10 @@ public static class Program {
             && (e.Kind == Flint.Rt.Conc.EV_MESSAGE || e.Kind == Flint.Rt.Conc.EV_CLOSED));
         SsOk("the copy did not stream itself again on the destination port "
              + "(an EV_RETAIN for it is expected and fine)", !streamedAgain);
-        long bump3 = SsCall(b, 3, "bump");
-        SsOk("the copy's counter is the snapshot's: bump -> 2",
-             Flint.Rt.Val.IsFixnum(bump3) && Flint.Rt.Val.AsFixnum(bump3) == 2);
-        long sizes4 = SsCall(b, 4, "sizes");
-        SsOk("sizes -> 30000", Flint.Rt.Val.IsFixnum(sizes4) && Flint.Rt.Val.AsFixnum(sizes4) == 30000);
+        object bump3 = SsCall(b, 3, "bump");
+        SsOk("the copy's counter is the snapshot's: bump -> 2", SsIsLong(bump3, 2));
+        object sizes4 = SsCall(b, 4, "sizes");
+        SsOk("sizes -> 30000", SsIsLong(sizes4, 30000));
 
         var (chunks2, _, closed2) = SsRequest(b);
         SsOk("the copy answers a snapshot request of its own", chunks2.Count > 0 && closed2);
@@ -421,7 +502,7 @@ public static class Program {
         // is not the op (`DECISIONS.md#the-control-plane-is-the-runtimes`).
         var g = SsBooted(img);
         bool ChunkSent(List<Ev> evs) => evs.Any(e => e.Kind == Flint.Rt.Conc.EV_MESSAGE
-                                                   && SsIsBytesPayload(g, e.Payload));
+                                                   && SsIsBytesPayload(e.Payload));
         Flint.Rt.Conc.HostDeliver(g, SS_CALLS,
             new W().Map(2).Kw("op").Kw("snapshot").Kw("port").Port(SS_DEST).Done());
         SsOk("a request on a CALL port is not served", !ChunkSent(SsPump(g)));
@@ -432,9 +513,8 @@ public static class Program {
         var (chunks3, _, closed3) = SsRequest(g);
         SsOk("THE CONTROL: the host's own request on that sandbox is served",
              chunks3.Count > 0 && closed3);
-        long bump20 = SsCall(g, 20, "bump");
-        SsOk("  ... and the sandbox still serves calls: bump -> 1",
-             Flint.Rt.Val.IsFixnum(bump20) && Flint.Rt.Val.AsFixnum(bump20) == 1);
+        object bump20 = SsCall(g, 20, "bump");
+        SsOk("  ... and the sandbox still serves calls: bump -> 1", SsIsLong(bump20, 1));
 
         // --- cross-runtime: a fresh CLR runtime imports native's stream.
         if (nativePath != null) {
@@ -443,14 +523,16 @@ public static class Program {
             bool crossImported = Flint.Rt.Snap.ImportLive(e2, native);
             SsOk("a fresh CLR runtime imports native's stream", crossImported);
             if (crossImported) {
-                long bump5 = SsCall(e2, 30, "bump");
-                SsOk("and the import answers bump -> 2",
-                     Flint.Rt.Val.IsFixnum(bump5) && Flint.Rt.Val.AsFixnum(bump5) == 2);
+                object bump5 = SsCall(e2, 30, "bump");
+                SsOk("and the import answers bump -> 2", SsIsLong(bump5, 2));
             }
-            bool sameBytes = stream.Length == native.Length && stream.AsSpan().SequenceEqual(native);
-            Console.WriteLine("  -- informational, not asserted: the CLR's own stream ("
-                + stream.Length + " bytes) is " + (sameBytes ? "EQUAL to" : "DIFFERENT from")
-                + " native's (" + native.Length + " bytes); they may differ in intern tables");
+            // ASSERTED, not informational: the three harnesses are mirrors of
+            // one another now (see `SsVal` above), so a byte-length match
+            // that disagrees in content is a real divergence, not a reader
+            // artefact of this test looking at its own sandbox's mail.
+            SsOk("the CLR's own stream (" + stream.Length + " bytes) is byte-identical to"
+                + " native's (" + native.Length + " bytes)",
+                stream.Length == native.Length && stream.AsSpan().SequenceEqual(native));
         }
 
         if (ssFails > 0) { Console.WriteLine("  " + ssFails + " failed"); return 1; }
