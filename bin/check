@@ -55,7 +55,7 @@ t0=$(date +%s)
 
 for c in check-version check-contracts check-decisions check-flattens check-builtins check-sys-catalogue check-containment check-lib-grants \
          check-snapshot-layout check-aotstat-layout check-port-consts check-artifact-ops \
-         check-generated-reached check-vocab-used check-esm-portable dead-runtime-fns; do
+         check-generated-reached check-vocab-used check-esm-portable dead-runtime-fns check-toc-current; do
   ./bin/$c || fail "bin/$c"
 done
 

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# DECISIONS.md's generated table of contents, current with its headings.
+#
+# No second script re-deriving the TOC to diff against the real one --
+# `bin/gen-decisions-toc --check` computes the same block the write path
+# would and fails if the tree disagrees, which is the generator reading
+# itself rather than a copy of it.
+exec "$(dirname "$0")/gen-decisions-toc" --check
