@@ -25,7 +25,7 @@
                                    Rt Value I32 I64 Bool NIL RootIx
                                    SC_BRIDGES SC_PORTS PT_STATE
                                    P_CLOSED P_ORPHANED EV_CLOSED EV_RELEASE
-                                   port-by-id push-event wake-on
+                                   port-by-id local-port-by-id push-event wake-on
                                    crosses-a-heap close-side-effects PT_KIND
                                    peer-of forget-bridge PT_ID P_OPEN P_HALF
                                    peer-id-of-dead fail-waiters-unreachable]]
@@ -84,9 +84,13 @@
                   (set-r rt li nl))
                 (continue)))
           (comment "This end has been collected. Tell whoever is affected --"
-                   "and the object is gone, so the pairing is looked up by id.")
+                   "and the object is gone, so the pairing is looked up by id."
+                   "LOCAL, not `port-by-id`: the peer is another channel end,"
+                   "never a bridge, and a bridge happening to share the"
+                   "number must not be woken for a channel it has nothing to"
+                   "do with (`DECISIONS.md#host-abi`).")
           (let [^I64 pid (peer-id-of-dead rt id)
-                ^Value peer (port-by-id rt pid)]
+                ^Value peer (local-port-by-id rt pid)]
             (if (nil? rt peer)
               (continue))
             (let [^RootIx pi (push rt peer)

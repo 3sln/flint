@@ -2896,7 +2896,7 @@ checked: the token really is an index with a generation — `new_waiter` /
 16 bits, bump the generation on free, and reject a mismatch — and there is one
 queue, `SC_EVENTS`, written only by `push_event` (`conc.rs:1486`) and read only
 by `drain_events` (`conc.rs:2969`), carrying all six event kinds. Two
-lifetimes: `reap_ports` (`conc.rs:2330`) treats a flint end the collector lost
+lifetimes: `reap_ports` (`conc.rs:2375`) treats a flint end the collector lost
 as a `close`, pushing `EV_CLOSED` and `EV_RELEASE`, while the host end is held
 by a holder count. Exercised end to end: `target/release/flint run :with [env]`
 (the shipped binary, not `bin/flint`) on a program
@@ -3187,7 +3187,7 @@ see "A banner that lied," below, which the project's own closing
 documentation held up as its worked example of why a banner must be checked
 against the code rather than trusted. How this was checked, taking the two
 exceptions rather than the headline: the weak-table fixup is indeed still the
-simpler sweep — `reap_ports` (`runtime/src/conc.rs:2330`) walks `SC_BRIDGES`
+simpler sweep — `reap_ports` (`runtime/src/conc.rs:2375`) walks `SC_BRIDGES`
 after a collection and pushes `EV_CLOSED`/`EV_RELEASE` for any id whose
 `port_by_id` lookup now misses, with no fixup-on-forward anywhere; and codec
 back-references are still not built — `runtime/src/codec.rs`'s own header says

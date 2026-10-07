@@ -76,8 +76,12 @@ public static class Reapports {
             }
             // This end has been collected. Tell whoever is affected --
             // and the object is gone, so the pairing is looked up by id.
+            // LOCAL, not `port-by-id`: the peer is another channel end,
+            // never a bridge, and a bridge happening to share the
+            // number must not be woken for a channel it has nothing to
+            // do with (`DECISIONS.md#host-abi`).
             long pid = Conc.PeerIdOfDead(rt, id);
-            long peer = Conc.PortById(rt, pid);
+            long peer = Conc.LocalPortById(rt, pid);
             if (Val.IsNil(peer)) {
                 continue;
             }

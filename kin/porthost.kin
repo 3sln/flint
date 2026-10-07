@@ -14,7 +14,7 @@
                                    == != < >= not and or nil?
                                    as-fixnum fixnum64 local set
                                    mark push r pop-to slot set-slot
-                                   port-by-id wake-on
+                                   port-by-id local-port-by-id wake-on
                                    Rt Value I64 Bool NIL RootIx
                                    W_PORT W_THREAD TH_PENDING PT_LABEL
                                    PT_STATE PT_PEER P_OPEN P_HALF P_ORPHANED]]
@@ -136,7 +136,14 @@
      "A NEGATIVE PEER ID IS A BRIDGE, and is left alone. Its far end is the"
      "host's registry and is in no heap, so there is no object to look for --"
      "and looking would find nothing and orphan a perfectly live port, which is"
-     "the same mistake `receive-drained` makes a case out of.")
+     "the same mistake `receive-drained` makes a case out of."
+     ""
+     "LOCAL, not `port-by-id`: a channel's peer is always another channel"
+     "end, minted from this sandbox's own counter, never a host-assigned id."
+     "Nothing coordinates the two counters, so a sandbox's first channel and"
+     "its system port can mint the same number -- `port-by-id` would then"
+     "answer with the (immortal) bridge and a collected peer would never read"
+     "as collected (`DECISIONS.md#host-abi`).")
 (defn ^:pub ^:method ^I64 port-state-now-at [^:mut ^Rt rt ^Value p]
   (let [^I64 st (as-fixnum (slot rt p PT_STATE))]
     (if (!= st P_OPEN)
@@ -144,7 +151,7 @@
     (let [^I64 peer-id (as-fixnum (slot rt p PT_PEER))]
       (if (< peer-id 0)
         (return st))
-      (if (nil? rt (port-by-id rt peer-id))
+      (if (nil? rt (local-port-by-id rt peer-id))
         (do
           (set-slot rt p PT_STATE (fixnum64 P_ORPHANED))
           (return P_ORPHANED)))
