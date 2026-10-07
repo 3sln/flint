@@ -18,6 +18,21 @@ public class RtAot {
 
   static Run go(String path, boolean aot, boolean chunkAll) throws Exception {
     Rt rt = new Rt(4L * 1024 * 1024, 512L * 1024 * 1024);
+    // A LIMIT, so `steps` IS MAINTAINED AT ALL. With no gas limit and no
+    // peer thread, `run`'s dispatch is the free `NoBudget` loop
+    // (`DECISIONS.md#resource-limits`), and the per-instruction gate it compiles away
+    // does not increment `steps` for ANYTHING this program's own entry
+    // dispatches -- while AOT-compiled code still bills every chunk
+    // unconditionally (`Aot.java`'s `rt.steps += gas`, mirroring
+    // `runtime/src/aot.rs`, which has no free-loop counterpart at all). The
+    // comparison below would then be "a real number against a near-zero
+    // one" rather than "the same instruction count", and it would have
+    // looked like a chunking bug. `test/aot.clj` hit exactly this and
+    // fixed it the same way, for the same reason, on native and wasm: set
+    // a limit high enough never to trip before comparing.
+    // `0x7ffffff000000000` is that file's own constant, used here unchanged
+    // so the two suites agree on what "high enough" means.
+    rt.setGasLimit(0x7ffffff000000000L);
     Img.Loaded img = Img.load(rt, Files.readAllBytes(Path.of(path)));
     if (img == null) return new Run("FAIL not a flint image", 0, 0, 0);
     int n = aot ? rt.compileArities(chunkAll) : 0;

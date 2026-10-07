@@ -566,6 +566,21 @@ public static class Program {
 
     private static AotRun AotGo(string path, bool aot, bool chunkAll) {
         var rt = new Flint.Rt.Rt(4L * 1024 * 1024, 512L * 1024 * 1024);
+        // A LIMIT, so `steps` IS MAINTAINED AT ALL. With no gas limit and no
+        // peer thread, `Run`'s dispatch is the free `NoBudget` loop
+        // (`DECISIONS.md#resource-limits`), and the per-instruction gate it compiles away
+        // does not increment `steps` for ANYTHING this program's own entry
+        // dispatches -- while AOT-compiled code still bills every chunk
+        // unconditionally (`Aot.cs`'s `rt.steps += gas`, mirroring
+        // `runtime/src/aot.rs`, which has no free-loop counterpart at all).
+        // The comparison below would then be "a real number against a
+        // near-zero one" rather than "the same instruction count", and it
+        // would have looked like a chunking bug. `test/aot.clj` hit exactly
+        // this and fixed it the same way, for the same reason, on native
+        // and wasm: set a limit high enough never to trip before comparing.
+        // 0x7ffffff000000000 is that file's own constant, used here
+        // unchanged so the two suites agree on what "high enough" means.
+        rt.SetGasLimit(0x7ffffff000000000L);
         var img = Flint.Rt.Img.Load(rt, File.ReadAllBytes(path));
         if (img == null) return new AotRun("FAIL not a flint image", 0, 0, 0);
         int n = aot ? rt.CompileArities(chunkAll) : 0;

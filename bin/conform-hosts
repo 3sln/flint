@@ -192,6 +192,26 @@ run_bounded() {
     waited=$((waited + 1))
   done
   wait "$pid"; rc=$?
+  # A FAILURE THAT PRINTS NOTHING IS STILL A FAILURE WORTH NAMING. A process
+  # that exits nonzero with an empty "$out" -- OOM-killed, a native crash
+  # before anything could be flushed, a launcher that never found the
+  # classpath -- used to hand the caller an empty string and nothing else,
+  # and every caller's own `|| { echo "$out"; echo "FAIL ... did not run"; }`
+  # printed two lines that, between them, said nothing a reader could act
+  # on. Measured: `aot aot_try [jvm]` failed exactly this way on a gate run
+  # (`37603692201`), and the log held no clue why. Appending the exit code
+  # -- and naming an empty capture explicitly, since "nothing printed" and
+  # "this specific nothing" are different facts -- means the caller's own
+  # `echo "$out"` always carries the one thing this function knows and the
+  # caller does not: what the process's exit status actually was.
+  if [ "$rc" -ne 0 ]; then
+    if [ ! -s "$out" ]; then
+      echo "  ($1 exited $rc with NO output at all on stdout or stderr --" \
+           "consistent with a signal, an OOM kill, or a launcher failure)" >> "$out"
+    else
+      echo "  ($1 exited $rc)" >> "$out"
+    fi
+  fi
   cat "$out"
   rm -f "$out"
   return $rc
