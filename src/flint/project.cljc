@@ -125,6 +125,15 @@
   (let [opts (preread-options s)]
     (forms/encode (assoc (reader/read-deferred (:src s) (dissoc opts :features)) :opts opts))))
 
+(defn read-eager
+  "Resolver answer `s`'s source read EAGERLY under `features`, as `flint.forms`
+  bytes: what a host hands the compiler for user text it has read itself
+  (`DECISIONS.md#namespaces-over-the-system-port`). Its `:opts` are
+  `read-options` and its `:conds` empty, so `read-entry` takes it as read."
+  [s features]
+  (let [opts (read-options s features)]
+    (forms/encode {:opts opts :forms (reader/read-all (:src s) opts) :conds []})))
+
 (defn read-entry
   "The forms of resolver answer `s`, read under `features`.
 

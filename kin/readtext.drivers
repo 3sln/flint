@@ -1,0 +1,906 @@
+--rust-head
+// A TOY READER STATE WITH A MOVING CURSOR, unlike `readnum.drivers`'s: every
+// public function here walks the text with `rd-next`/`rd-peek` rather than
+// only random-accessing it, so the mock has to track position for real.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_FFFF_FFFF_FFFF);
+// NAN-BOXED, the same scheme `strnum.drivers` and `readnum.drivers` use.
+// Tag 1 int, 3 string, 4 keyword, 5 vector, 6 "map" (an alias of its
+// backing vector's slot -- this toy never needs CHAMP fidelity, only that
+// the KEY COMES FIRST and the VALUE second, which is what `readtext.kin`'s
+// own header calls out).
+const BOX: u64 = 0xFFF8_0000_0000_0000;
+const RS_OK: u32 = 0;
+const RS_NONE: u32 = 2;
+const RS_ERR: u32 = 4;
+const NO_CP: u32 = 1114112;
+struct Reader { cps: Vec<u32>, i: u32, errmsg: Value }
+struct Rt {
+    ints: Vec<i64>, strs: Vec<String>, roots: Vec<Value>,
+    readers: Vec<Reader>, sinks: Vec<Vec<u32>>, vecs: Vec<Vec<Value>>,
+}
+impl Value {
+    fn boxed(self) -> bool { (self.0 & BOX) == BOX }
+    fn tag(self) -> u64 { if self.boxed() { (self.0 >> 32) & 0xFF } else { 9 } }
+    fn idx(self) -> usize { (self.0 & 0xFFFF_FFFF) as usize }
+}
+fn is_ws(c: u32) -> bool {
+    (c == 32) || (c == 9) || (c == 10) || (c == 13) || (c == 12) || (c == 44)
+}
+fn is_term(c: u32) -> bool {
+    (c == 34) || (c == 59) || (c == 64) || (c == 94) || (c == 96) || (c == 126)
+        || (c == 40) || (c == 41) || (c == 91) || (c == 93) || (c == 123) || (c == 125) || (c == 92)
+}
+fn is_scalar(n: i64) -> bool { (n >= 0) && (n <= 1114111) && ((n < 55296) || (n > 57343)) }
+fn is_digit(c: u32) -> bool { (c >= 48) && (c <= 57) }
+fn hex_digit(c: u32) -> u32 {
+    if (c >= 48) && (c <= 57) { return c - 48; }
+    if (c >= 97) && (c <= 102) { return c - 87; }
+    if (c >= 65) && (c <= 70) { return c - 55; }
+    16
+}
+impl Rt {
+    fn mk(&mut self, text: &str) -> usize {
+        self.readers.push(Reader { cps: text.chars().map(|c| c as u32).collect(), i: 0, errmsg: NIL });
+        self.readers.len() - 1
+    }
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn string(&mut self, s: &str) -> Value { self.strs.push(String::from(s)); Value(BOX | (3u64 << 32) | (self.strs.len() - 1) as u64) }
+    fn integer(&mut self, n: i64) -> Value { self.ints.push(n); Value(BOX | (1u64 << 32) | (self.ints.len() - 1) as u64) }
+    fn integer_value(&self, v: Value) -> i64 { self.ints[v.idx()] }
+    fn rd_at(&self, sti: usize, i: u32) -> u32 { self.readers[sti].cps[i as usize] }
+    fn rd_pos(&self, sti: usize) -> u32 { self.readers[sti].i }
+    fn rd_peek(&self, sti: usize) -> u32 {
+        let rd = &self.readers[sti];
+        if (rd.i as usize) >= rd.cps.len() { NO_CP } else { rd.cps[rd.i as usize] }
+    }
+    fn rd_next(&mut self, sti: usize) -> u32 {
+        let c = self.rd_peek(sti);
+        if c != NO_CP { self.readers[sti].i += 1; }
+        c
+    }
+    fn rd_token(&mut self, sti: usize) -> u32 {
+        let from = self.rd_pos(sti);
+        loop {
+            let c = self.rd_peek(sti);
+            if (c == NO_CP) || is_ws(c) || is_term(c) { break; }
+            self.rd_next(sti);
+        }
+        from
+    }
+    fn rd_string(&mut self, sti: usize, from: u32, to: u32) -> Value {
+        let s: String = (from..to).map(|i| char::from_u32(self.rd_at(sti, i)).unwrap()).collect();
+        self.string(&s)
+    }
+    fn rd_range_is(&mut self, sti: usize, from: u32, to: u32, v: Value) -> bool {
+        let s: String = (from..to).map(|i| char::from_u32(self.rd_at(sti, i)).unwrap()).collect();
+        s == self.strs[v.idx()]
+    }
+    fn rd_fail_lit(&mut self, sti: usize, t: &str) -> u32 {
+        let m = self.string(t);
+        self.readers[sti].errmsg = m;
+        RS_ERR
+    }
+    fn rd_fail_sink(&mut self, sti: usize, sk: u32) -> u32 {
+        let m = self.sink_string(sk);
+        self.sink_close(sk);
+        self.readers[sti].errmsg = m;
+        RS_ERR
+    }
+    fn rd_fail_cp(&mut self, sti: usize, ok: bool, n: i64) -> u32 {
+        let mut msg = String::from("not a code point");
+        if ok {
+            msg.push_str(": ");
+            msg.push_str(&n.to_string());
+        }
+        let m = self.string(&msg);
+        self.readers[sti].errmsg = m;
+        RS_ERR
+    }
+    fn msg_lit(&mut self, sk: u32, t: &str) {
+        for c in t.chars() { self.sinks[sk as usize].push(c as u32); }
+    }
+    fn msg_cp(&mut self, sk: u32, c: u32) {
+        if c != NO_CP { self.sinks[sk as usize].push(c); }
+    }
+    fn sink_open(&mut self) -> u32 { self.sinks.push(Vec::new()); (self.sinks.len() - 1) as u32 }
+    fn sink_put(&mut self, sk: u32, c: u32) { self.sinks[sk as usize].push(c); }
+    fn sink_put_cp(&mut self, sk: u32, c: u32) { self.sinks[sk as usize].push(c); }
+    fn sink_string(&mut self, sk: u32) -> Value {
+        let s: String = self.sinks[sk as usize].iter().map(|&c| char::from_u32(c).unwrap()).collect();
+        self.string(&s)
+    }
+    fn sink_close(&mut self, sk: u32) { self.sinks.truncate(sk as usize); }
+    fn lit_keyword(&mut self, ns: &str, nm: &str) -> Value {
+        self.strs.push(format!("{}/{}", ns, nm));
+        Value(BOX | (4u64 << 32) | (self.strs.len() - 1) as u64)
+    }
+    fn vec_from_roots(&mut self, base: usize, n: u32) -> Value {
+        let v: Vec<Value> = (0..n as usize).map(|i| self.r(base + i)).collect();
+        self.vecs.push(v);
+        Value(BOX | (5u64 << 32) | (self.vecs.len() - 1) as u64)
+    }
+    fn ordered_map(&mut self, kv: Value) -> Value { Value(BOX | (6u64 << 32) | kv.idx() as u64) }
+    // EXTERNAL, from `readnum.kin` -- a faithful copy of its own logic
+    // (`readnum.drivers` is where ITS overflow and sign behaviour are
+    // actually probed; here it only needs to be RIGHT, since `put-code`
+    // leans on it for every `\u` and `\o` escape).
+    fn parse_int_radix(&mut self, sti: usize, from: u32, to: u32, radix: i64, neg: bool) -> u32 {
+        if from >= to { return RS_NONE; }
+        let mut acc: i64 = 0;
+        let mut i = from;
+        while i < to {
+            let d = hex_digit(self.rd_at(sti, i)) as i64;
+            if d >= radix { return RS_NONE; }
+            if neg {
+                if acc < (i64::MIN + d) / radix {
+                    let m = self.string("integer overflow");
+                    self.readers[sti].errmsg = m;
+                    return RS_ERR;
+                }
+                acc = (acc * radix) - d;
+            } else {
+                if acc > (i64::MAX - d) / radix {
+                    let m = self.string("integer overflow");
+                    self.readers[sti].errmsg = m;
+                    return RS_ERR;
+                }
+                acc = (acc * radix) + d;
+            }
+            i += 1;
+        }
+        let n = self.integer(acc);
+        self.push(n);
+        RS_OK
+    }
+}
+// DISPLAY WITH NO AMBIGUITY: a real control character prints as a tag like
+// `<TAB>`, and a LITERAL backslash character prints as `<BS>` -- distinct
+// tags, so a decoder that left an escape UNDECODED (raw backslash + letter)
+// prints visibly differently from one that decoded it to the real
+// character. Folding both to the same two-character spelling (`\t` for
+// either) is exactly the trap this function avoids: it would make a broken
+// `read-escape` and a correct one print identically.
+fn disp(s: &str) -> String {
+    let mut o = String::new();
+    for c in s.chars() {
+        match c as u32 {
+            32 => o.push_str("<SP>"),
+            9 => o.push_str("<TAB>"),
+            10 => o.push_str("<LF>"),
+            13 => o.push_str("<CR>"),
+            12 => o.push_str("<FF>"),
+            8 => o.push_str("<BKSP>"),
+            92 => o.push_str("<BS>"),
+            _ => o.push(c),
+        }
+    }
+    o
+}
+// Error text keeps its ordinary spaces (it is prose, not decoded content) --
+// only the literal backslash is retagged, which is all `/bin/sh`'s `echo`
+// needs defused. See the long note in `--expect-why` for why this exists.
+fn disp_err(s: &str) -> String {
+    let mut o = String::new();
+    for c in s.chars() {
+        if (c as u32) == 92 { o.push_str("<BS>"); } else { o.push(c); }
+    }
+    o
+}
+// Error text goes through `disp` too, same as decoded string content --
+// NOT because the message itself needs escaping (it is exactly the
+// guest's own wording), but because `kin/scripts/verify` builds its
+// `answers` file with a plain `echo`, and this machine's `/bin/sh` `echo`
+// is XSI-flavoured: it decodes backslash sequences IN THE CAPTURED OUTPUT
+// before this probe's answer is ever compared. "unknown character
+// literal \foo" has `\f`, which such an `echo` quietly turns into a raw
+// form-feed BYTE, consuming both the backslash and the `f` -- so the
+// three targets can agree perfectly and still have their real answer
+// (correct) replaced by a mangled one before the comparison ever runs,
+// which is indistinguishable from a real three-way disagreement until
+// traced to the shell. Routing error text through the same no-raw-
+// backslash `disp` this file already needed for decoded escapes sidesteps
+// the harness's own quoting hazard rather than fighting it.
+fn show(rt: &Rt, sti: usize, st: u32) -> String {
+    if st == RS_OK {
+        let v = rt.roots[rt.roots.len() - 1];
+        if v.tag() == 3 {
+            format!("ok:{}", disp(&rt.strs[v.idx()]))
+        } else if v.tag() == 6 {
+            let pair = &rt.vecs[v.idx()];
+            format!("ok:map({}={})", rt.strs[pair[0].idx()], disp(&rt.strs[pair[1].idx()]))
+        } else {
+            format!("ok:?tag{}", v.tag())
+        }
+    } else if st == RS_NONE {
+        String::from("none")
+    } else {
+        format!("err:{}", disp_err(&rt.strs[rt.readers[sti].errmsg.idx()]))
+    }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { ints: Vec::new(), strs: Vec::new(), roots: Vec::new(),
+                      readers: Vec::new(), sinks: Vec::new(), vecs: Vec::new() };
+    let mut o = String::new();
+
+    // STRING LITERALS: plain text, both two-letter escapes (`\t` `\n`), a
+    // direct UTF-8 passthrough character, a bare-digit OCTAL escape, an
+    // unsupported escape, an unterminated string, a HEX escape that lands
+    // on an ordinary character, one that lands in the surrogate hole (an
+    // error WITH the offending number), and one whose digits are not hex
+    // at all (the same error WITHOUT a number).
+    let strs_in = [
+        "\"hello\"",
+        "\"a\\tb\\nc\"",
+        "\"café\"",
+        "\"\\101\"",
+        "\"\\q\"",
+        "\"abc",
+        "\"\\u00e9\"",
+        "\"\\ud800\"",
+        "\"\\uZZZZ\"",
+    ];
+    for (n, t) in strs_in.iter().enumerate() {
+        let sti = rt.mk(t);
+        let st = rt.read_string_lit(sti);
+        o.push_str(&format!("S{}={} ", n + 1, show(&rt, sti, st)));
+    }
+
+    // CHARACTER LITERALS: a plain one, a direct UTF-8 one, all six NAMED
+    // characters, an `o`-prefixed octal escape, a `u`-prefixed hex escape,
+    // an unknown name, and an unterminated one (just the backslash, EOF
+    // right after it).
+    let chars_in = [
+        "\\a", "\\é", "\\newline", "\\space", "\\tab", "\\return",
+        "\\formfeed", "\\backspace", "\\o101", "\\u0041", "\\foo", "\\",
+    ];
+    for (n, t) in chars_in.iter().enumerate() {
+        let sti = rt.mk(t);
+        let st = rt.read_char_lit(sti);
+        o.push_str(&format!("C{}={} ", n + 1, show(&rt, sti, st)));
+    }
+
+    // REGEX LITERALS: plain text, a literal backslash kept VERBATIM (not
+    // interpreted, per the file's own header), unterminated with ordinary
+    // characters at the end, and unterminated with a lone trailing
+    // backslash (the one case that could run the cursor past the end if
+    // `rd-next`'s own `NO_CP` guard were wrong).
+    let regex_in = ["\"a.b\"", "\"a\\.b\"", "\"abc", "\"ab\\"];
+    for (n, t) in regex_in.iter().enumerate() {
+        let sti = rt.mk(t);
+        let st = rt.read_regex_lit(sti);
+        o.push_str(&format!("R{}={}", n + 1, show(&rt, sti, st)));
+        if n + 1 != regex_in.len() { o.push(' '); }
+    }
+
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFFFFFFFFFFFFFL;
+    static final long BOX = 0xFFF8000000000000L;
+    static final int RS_OK = 0;
+    static final int RS_NONE = 2;
+    static final int RS_ERR = 4;
+    static final int NO_CP = 1114112;
+    static final class Reader { int[] cps; int i; long errmsg = NIL; }
+    static final class Rt {
+        java.util.ArrayList<Long> ints = new java.util.ArrayList<>();
+        java.util.ArrayList<String> strs = new java.util.ArrayList<>();
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        java.util.ArrayList<Reader> readers = new java.util.ArrayList<>();
+        java.util.ArrayList<java.util.ArrayList<Integer>> sinks = new java.util.ArrayList<>();
+        java.util.ArrayList<java.util.ArrayList<Long>> vecs = new java.util.ArrayList<>();
+        int mk(String text) {
+            Reader rd = new Reader();
+            rd.cps = text.codePoints().toArray();
+            rd.i = 0;
+            rd.errmsg = NIL;
+            readers.add(rd);
+            return readers.size() - 1;
+        }
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        int sinkOpen() { sinks.add(new java.util.ArrayList<>()); return sinks.size() - 1; }
+        void sinkPut(int sk, int c) { sinks.get(sk).add(c); }
+        void sinkClose(int sk) { while (sinks.size() > sk) sinks.remove(sinks.size() - 1); }
+        long sinkString(int sk) {
+            StringBuilder b = new StringBuilder();
+            for (int c : sinks.get(sk)) b.appendCodePoint(c);
+            return Str.of(this, b.toString());
+        }
+    }
+    static boolean boxed(long v) { return (v & BOX) == BOX; }
+    static int tag(long v) { return boxed(v) ? (int) ((v >>> 32) & 0xFF) : 9; }
+    static int idx(long v) { return (int) (v & 0xFFFFFFFFL); }
+    static boolean isWs(int c) {
+        return (c == 32) || (c == 9) || (c == 10) || (c == 13) || (c == 12) || (c == 44);
+    }
+    static boolean isTerm(int c) {
+        return (c == 34) || (c == 59) || (c == 64) || (c == 94) || (c == 96) || (c == 126)
+            || (c == 40) || (c == 41) || (c == 91) || (c == 93) || (c == 123) || (c == 125) || (c == 92);
+    }
+    static boolean isScalar(long n) { return (n >= 0) && (n <= 1114111) && ((n < 55296) || (n > 57343)); }
+    static boolean isDigit(int c) { return (c >= 48) && (c <= 57); }
+    static int hexDigit(int c) {
+        if ((c >= 48) && (c <= 57)) return c - 48;
+        if ((c >= 97) && (c <= 102)) return c - 87;
+        if ((c >= 65) && (c <= 70)) return c - 55;
+        return 16;
+    }
+    static final class Str {
+        static long of(Rt rt, String s) { rt.strs.add(s); return BOX | (3L << 32) | (rt.strs.size() - 1); }
+    }
+    static long integer(Rt rt, long n) { rt.ints.add(n); return BOX | (1L << 32) | (rt.ints.size() - 1); }
+    static long integerValue(Rt rt, long v) { return rt.ints.get(idx(v)); }
+    static int rdAt(Rt rt, int sti, int i) { return rt.readers.get(sti).cps[i]; }
+    static int rdPos(Rt rt, int sti) { return rt.readers.get(sti).i; }
+    static int rdPeek(Rt rt, int sti) {
+        Reader rd = rt.readers.get(sti);
+        return rd.i >= rd.cps.length ? NO_CP : rd.cps[rd.i];
+    }
+    static int rdNext(Rt rt, int sti) {
+        int c = rdPeek(rt, sti);
+        if (c != NO_CP) rt.readers.get(sti).i += 1;
+        return c;
+    }
+    static int rdToken(Rt rt, int sti) {
+        int from = rdPos(rt, sti);
+        for (;;) {
+            int c = rdPeek(rt, sti);
+            if ((c == NO_CP) || isWs(c) || isTerm(c)) break;
+            rdNext(rt, sti);
+        }
+        return from;
+    }
+    static long rdString(Rt rt, int sti, int from, int to) {
+        StringBuilder b = new StringBuilder();
+        for (int i = from; i < to; i++) b.appendCodePoint(rdAt(rt, sti, i));
+        return Str.of(rt, b.toString());
+    }
+    static boolean rdRangeIs(Rt rt, int sti, int from, int to, long v) {
+        StringBuilder b = new StringBuilder();
+        for (int i = from; i < to; i++) b.appendCodePoint(rdAt(rt, sti, i));
+        return b.toString().equals(rt.strs.get(idx(v)));
+    }
+    static int rdFailLit(Rt rt, int sti, String t) {
+        long m = Str.of(rt, t);
+        rt.readers.get(sti).errmsg = m;
+        return RS_ERR;
+    }
+    static int rdFailSink(Rt rt, int sti, int sk) {
+        long m = rt.sinkString(sk);
+        rt.sinkClose(sk);
+        rt.readers.get(sti).errmsg = m;
+        return RS_ERR;
+    }
+    static int rdFailCp(Rt rt, int sti, boolean ok, long n) {
+        String msg = "not a code point";
+        if (ok) msg = msg + ": " + n;
+        long m = Str.of(rt, msg);
+        rt.readers.get(sti).errmsg = m;
+        return RS_ERR;
+    }
+    static void msgLit(Rt rt, int sk, String t) {
+        for (int c : t.codePoints().toArray()) rt.sinks.get(sk).add(c);
+    }
+    static void msgCp(Rt rt, int sk, int c) {
+        if (c != NO_CP) rt.sinks.get(sk).add(c);
+    }
+    static void sinkPutCp(Rt rt, int sk, int c) { rt.sinks.get(sk).add(c); }
+    static long litKeyword(Rt rt, String ns, String nm) {
+        rt.strs.add(ns + "/" + nm);
+        return BOX | (4L << 32) | (rt.strs.size() - 1);
+    }
+    static long vecFromRoots(Rt rt, int base, int n) {
+        java.util.ArrayList<Long> v = new java.util.ArrayList<>();
+        for (int i = 0; i < n; i++) v.add(rt.r(base + i));
+        rt.vecs.add(v);
+        return BOX | (5L << 32) | (rt.vecs.size() - 1);
+    }
+    static long orderedMap(Rt rt, long kv) { return BOX | (6L << 32) | idx(kv); }
+    // EXTERNAL, from `readnum.kin` -- see the Rust head for why this is a
+    // faithful copy rather than a stub.
+    static int parseIntRadix(Rt rt, int sti, int from, int to, long radix, boolean neg) {
+        if (from >= to) return RS_NONE;
+        long acc = 0;
+        int i = from;
+        while (i < to) {
+            long d = hexDigit(rdAt(rt, sti, i));
+            if (d >= radix) return RS_NONE;
+            if (neg) {
+                if (acc < (Long.MIN_VALUE + d) / radix) {
+                    long m = Str.of(rt, "integer overflow");
+                    rt.readers.get(sti).errmsg = m;
+                    return RS_ERR;
+                }
+                acc = (acc * radix) - d;
+            } else {
+                if (acc > (Long.MAX_VALUE - d) / radix) {
+                    long m = Str.of(rt, "integer overflow");
+                    rt.readers.get(sti).errmsg = m;
+                    return RS_ERR;
+                }
+                acc = (acc * radix) + d;
+            }
+            i += 1;
+        }
+        long n = integer(rt, acc);
+        rt.push(n);
+        return RS_OK;
+    }
+    // Same DISTINCT tagging as the Rust head: a decoded control character
+    // and an undecoded literal backslash must never print the same way.
+    static String disp(String s) {
+        StringBuilder o = new StringBuilder();
+        for (int c : s.codePoints().toArray()) {
+            switch (c) {
+                case 32: o.append("<SP>"); break;
+                case 9: o.append("<TAB>"); break;
+                case 10: o.append("<LF>"); break;
+                case 13: o.append("<CR>"); break;
+                case 12: o.append("<FF>"); break;
+                case 8: o.append("<BKSP>"); break;
+                case 92: o.append("<BS>"); break;
+                default: o.appendCodePoint(c);
+            }
+        }
+        return o.toString();
+    }
+    static String dispErr(String s) {
+        StringBuilder o = new StringBuilder();
+        for (int c : s.codePoints().toArray()) {
+            if (c == 92) o.append("<BS>"); else o.appendCodePoint(c);
+        }
+        return o.toString();
+    }
+    static String show(Rt rt, int sti, int st) {
+        if (st == RS_OK) {
+            long v = rt.roots.get(rt.roots.size() - 1);
+            if (tag(v) == 3) return "ok:" + disp(rt.strs.get(idx(v)));
+            if (tag(v) == 6) {
+                java.util.ArrayList<Long> pair = rt.vecs.get(idx(v));
+                return "ok:map(" + rt.strs.get(idx(pair.get(0))) + "=" + disp(rt.strs.get(idx(pair.get(1)))) + ")";
+            }
+            return "ok:?tag" + tag(v);
+        }
+        if (st == RS_NONE) return "none";
+        return "err:" + dispErr(rt.strs.get(idx(rt.readers.get(sti).errmsg)));
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+
+        String[] strsIn = {
+            "\"hello\"", "\"a\\tb\\nc\"", "\"café\"", "\"\\101\"", "\"\\q\"",
+            "\"abc", "\"\\u00e9\"", "\"\\ud800\"", "\"\\uZZZZ\"",
+        };
+        for (int n = 0; n < strsIn.length; n++) {
+            int sti = rt.mk(strsIn[n]);
+            int st = readStringLit(rt, sti);
+            o.append("S").append(n + 1).append('=').append(show(rt, sti, st)).append(' ');
+        }
+
+        String[] charsIn = {
+            "\\a", "\\é", "\\newline", "\\space", "\\tab", "\\return",
+            "\\formfeed", "\\backspace", "\\o101", "\\u0041", "\\foo", "\\",
+        };
+        for (int n = 0; n < charsIn.length; n++) {
+            int sti = rt.mk(charsIn[n]);
+            int st = readCharLit(rt, sti);
+            o.append("C").append(n + 1).append('=').append(show(rt, sti, st)).append(' ');
+        }
+
+        String[] regexIn = { "\"a.b\"", "\"a\\.b\"", "\"abc", "\"ab\\" };
+        for (int n = 0; n < regexIn.length; n++) {
+            int sti = rt.mk(regexIn[n]);
+            int st = readRegexLit(rt, sti);
+            o.append("R").append(n + 1).append('=').append(show(rt, sti, st));
+            if (n + 1 != regexIn.length) o.append(' ');
+        }
+
+        System.out.println(o.toString());
+    }
+--csharp-head
+    internal const long Nil = unchecked((long) 0xFFFFFFFFFFFFFFFFUL);
+    internal const long Box = unchecked((long) 0xFFF8000000000000UL);
+    internal const int RsOk = 0;
+    internal const int RsNone = 2;
+    internal const int RsErr = 4;
+    internal const int NoCp = 1114112;
+    internal sealed class Reader { internal int[] Cps; internal int I; internal long Errmsg = Nil; }
+    internal sealed class Rt {
+        internal System.Collections.Generic.List<long> Ints = new System.Collections.Generic.List<long>();
+        internal System.Collections.Generic.List<string> Strs = new System.Collections.Generic.List<string>();
+        internal System.Collections.Generic.List<long> Roots = new System.Collections.Generic.List<long>();
+        internal System.Collections.Generic.List<Reader> Readers = new System.Collections.Generic.List<Reader>();
+        internal System.Collections.Generic.List<System.Collections.Generic.List<int>> Sinks
+            = new System.Collections.Generic.List<System.Collections.Generic.List<int>>();
+        internal System.Collections.Generic.List<System.Collections.Generic.List<long>> Vecs
+            = new System.Collections.Generic.List<System.Collections.Generic.List<long>>();
+        internal int Mk(string text) {
+            var rd = new Reader();
+            var cps = new System.Collections.Generic.List<int>();
+            int i = 0;
+            while (i < text.Length) {
+                int cp = char.ConvertToUtf32(text, i);
+                cps.Add(cp);
+                i += char.IsSurrogatePair(text, i) ? 2 : 1;
+            }
+            rd.Cps = cps.ToArray();
+            rd.I = 0;
+            rd.Errmsg = Nil;
+            Readers.Add(rd);
+            return Readers.Count - 1;
+        }
+        internal int Mark() { return Roots.Count; }
+        internal int Push(long v) { Roots.Add(v); return Roots.Count - 1; }
+        internal long R(int i) { return Roots[i]; }
+        internal void PopTo(int n) { while (Roots.Count > n) Roots.RemoveAt(Roots.Count - 1); }
+        internal int SinkOpen() { Sinks.Add(new System.Collections.Generic.List<int>()); return Sinks.Count - 1; }
+        internal void SinkPut(int sk, int c) { Sinks[sk].Add(c); }
+        internal void SinkClose(int sk) { while (Sinks.Count > sk) Sinks.RemoveAt(Sinks.Count - 1); }
+        internal long SinkString(int sk) {
+            var b = new System.Text.StringBuilder();
+            foreach (int c in Sinks[sk]) b.Append(char.ConvertFromUtf32(c));
+            return Str.Of(this, b.ToString());
+        }
+    }
+    internal static bool Boxed(long v) { return (v & Box) == Box; }
+    internal static int Tag(long v) { return Boxed(v) ? (int) (((ulong) v >> 32) & 0xFF) : 9; }
+    internal static int Idx(long v) { return (int) (v & 0xFFFFFFFFL); }
+    internal static bool IsWs(int c) {
+        return (c == 32) || (c == 9) || (c == 10) || (c == 13) || (c == 12) || (c == 44);
+    }
+    internal static bool IsTerm(int c) {
+        return (c == 34) || (c == 59) || (c == 64) || (c == 94) || (c == 96) || (c == 126)
+            || (c == 40) || (c == 41) || (c == 91) || (c == 93) || (c == 123) || (c == 125) || (c == 92);
+    }
+    internal static bool IsScalar(long n) { return (n >= 0) && (n <= 1114111) && ((n < 55296) || (n > 57343)); }
+    internal static bool IsDigit(int c) { return (c >= 48) && (c <= 57); }
+    internal static int HexDigit(int c) {
+        if ((c >= 48) && (c <= 57)) return c - 48;
+        if ((c >= 97) && (c <= 102)) return c - 87;
+        if ((c >= 65) && (c <= 70)) return c - 55;
+        return 16;
+    }
+    internal static class Str {
+        internal static long Of(Rt rt, string s) { rt.Strs.Add(s); return Box | (3L << 32) | (rt.Strs.Count - 1); }
+    }
+    internal static long Integer(Rt rt, long n) { rt.Ints.Add(n); return Box | (1L << 32) | (rt.Ints.Count - 1); }
+    internal static long IntegerValue(Rt rt, long v) { return rt.Ints[Idx(v)]; }
+    internal static int RdAt(Rt rt, int sti, int i) { return rt.Readers[sti].Cps[i]; }
+    internal static int RdPos(Rt rt, int sti) { return rt.Readers[sti].I; }
+    internal static int RdPeek(Rt rt, int sti) {
+        Reader rd = rt.Readers[sti];
+        return rd.I >= rd.Cps.Length ? NoCp : rd.Cps[rd.I];
+    }
+    internal static int RdNext(Rt rt, int sti) {
+        int c = RdPeek(rt, sti);
+        if (c != NoCp) rt.Readers[sti].I += 1;
+        return c;
+    }
+    internal static int RdToken(Rt rt, int sti) {
+        int from = RdPos(rt, sti);
+        for (;;) {
+            int c = RdPeek(rt, sti);
+            if ((c == NoCp) || IsWs(c) || IsTerm(c)) break;
+            RdNext(rt, sti);
+        }
+        return from;
+    }
+    internal static long RdString(Rt rt, int sti, int from, int to) {
+        var b = new System.Text.StringBuilder();
+        for (int i = from; i < to; i++) b.Append(char.ConvertFromUtf32(RdAt(rt, sti, i)));
+        return Str.Of(rt, b.ToString());
+    }
+    internal static bool RdRangeIs(Rt rt, int sti, int from, int to, long v) {
+        var b = new System.Text.StringBuilder();
+        for (int i = from; i < to; i++) b.Append(char.ConvertFromUtf32(RdAt(rt, sti, i)));
+        return b.ToString() == rt.Strs[Idx(v)];
+    }
+    internal static int RdFailLit(Rt rt, int sti, string t) {
+        long m = Str.Of(rt, t);
+        rt.Readers[sti].Errmsg = m;
+        return RsErr;
+    }
+    internal static int RdFailSink(Rt rt, int sti, int sk) {
+        long m = rt.SinkString(sk);
+        rt.SinkClose(sk);
+        rt.Readers[sti].Errmsg = m;
+        return RsErr;
+    }
+    internal static int RdFailCp(Rt rt, int sti, bool ok, long n) {
+        string msg = "not a code point";
+        if (ok) msg = msg + ": " + n;
+        long m = Str.Of(rt, msg);
+        rt.Readers[sti].Errmsg = m;
+        return RsErr;
+    }
+    internal static void MsgLit(Rt rt, int sk, string t) {
+        var cps = new System.Collections.Generic.List<int>();
+        int i = 0;
+        while (i < t.Length) {
+            int cp = char.ConvertToUtf32(t, i);
+            cps.Add(cp);
+            i += char.IsSurrogatePair(t, i) ? 2 : 1;
+        }
+        foreach (int c in cps) rt.Sinks[sk].Add(c);
+    }
+    internal static void MsgCp(Rt rt, int sk, int c) {
+        if (c != NoCp) rt.Sinks[sk].Add(c);
+    }
+    internal static void SinkPutCp(Rt rt, int sk, int c) { rt.Sinks[sk].Add(c); }
+    internal static long LitKeyword(Rt rt, string ns, string nm) {
+        rt.Strs.Add(ns + "/" + nm);
+        return Box | (4L << 32) | (rt.Strs.Count - 1);
+    }
+    internal static long VecFromRoots(Rt rt, int @base, int n) {
+        var v = new System.Collections.Generic.List<long>();
+        for (int i = 0; i < n; i++) v.Add(rt.R(@base + i));
+        rt.Vecs.Add(v);
+        return Box | (5L << 32) | (rt.Vecs.Count - 1);
+    }
+    internal static long OrderedMap(Rt rt, long kv) { return Box | (6L << 32) | (long) Idx(kv); }
+    // EXTERNAL, from `readnum.kin` -- see the Rust head for why this is a
+    // faithful copy rather than a stub.
+    internal static int ParseIntRadix(Rt rt, int sti, int from, int to, long radix, bool neg) {
+        if (from >= to) return RsNone;
+        long acc = 0;
+        int i = from;
+        while (i < to) {
+            long d = HexDigit(RdAt(rt, sti, i));
+            if (d >= radix) return RsNone;
+            if (neg) {
+                if (acc < (long.MinValue + d) / radix) {
+                    long m = Str.Of(rt, "integer overflow");
+                    rt.Readers[sti].Errmsg = m;
+                    return RsErr;
+                }
+                acc = (acc * radix) - d;
+            } else {
+                if (acc > (long.MaxValue - d) / radix) {
+                    long m = Str.Of(rt, "integer overflow");
+                    rt.Readers[sti].Errmsg = m;
+                    return RsErr;
+                }
+                acc = (acc * radix) + d;
+            }
+            i += 1;
+        }
+        long n = Integer(rt, acc);
+        rt.Push(n);
+        return RsOk;
+    }
+    // Same DISTINCT tagging as the Rust head.
+    internal static string Disp(string s) {
+        var o = new System.Text.StringBuilder();
+        var cps = new System.Collections.Generic.List<int>();
+        int i = 0;
+        while (i < s.Length) {
+            int cp = char.ConvertToUtf32(s, i);
+            cps.Add(cp);
+            i += char.IsSurrogatePair(s, i) ? 2 : 1;
+        }
+        foreach (int c in cps) {
+            switch (c) {
+                case 32: o.Append("<SP>"); break;
+                case 9: o.Append("<TAB>"); break;
+                case 10: o.Append("<LF>"); break;
+                case 13: o.Append("<CR>"); break;
+                case 12: o.Append("<FF>"); break;
+                case 8: o.Append("<BKSP>"); break;
+                case 92: o.Append("<BS>"); break;
+                default: o.Append(char.ConvertFromUtf32(c)); break;
+            }
+        }
+        return o.ToString();
+    }
+    internal static string DispErr(string s) {
+        var o = new System.Text.StringBuilder();
+        var cps = new System.Collections.Generic.List<int>();
+        int i = 0;
+        while (i < s.Length) {
+            int cp = char.ConvertToUtf32(s, i);
+            cps.Add(cp);
+            i += char.IsSurrogatePair(s, i) ? 2 : 1;
+        }
+        foreach (int c in cps) {
+            if (c == 92) o.Append("<BS>"); else o.Append(char.ConvertFromUtf32(c));
+        }
+        return o.ToString();
+    }
+    internal static string Show(Rt rt, int sti, int st) {
+        if (st == RsOk) {
+            long v = rt.Roots[rt.Roots.Count - 1];
+            if (Tag(v) == 3) return "ok:" + Disp(rt.Strs[Idx(v)]);
+            if (Tag(v) == 6) {
+                var pair = rt.Vecs[Idx(v)];
+                return "ok:map(" + rt.Strs[Idx(pair[0])] + "=" + Disp(rt.Strs[Idx(pair[1])]) + ")";
+            }
+            return "ok:?tag" + Tag(v);
+        }
+        if (st == RsNone) return "none";
+        return "err:" + DispErr(rt.Strs[Idx(rt.Readers[sti].Errmsg)]);
+    }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        var o = new System.Text.StringBuilder();
+
+        string[] strsIn = {
+            "\"hello\"", "\"a\\tb\\nc\"", "\"café\"", "\"\\101\"", "\"\\q\"",
+            "\"abc", "\"\\u00e9\"", "\"\\ud800\"", "\"\\uZZZZ\"",
+        };
+        for (int n = 0; n < strsIn.Length; n++) {
+            int sti = rt.Mk(strsIn[n]);
+            int st = ReadStringLit(rt, sti);
+            o.Append("S").Append(n + 1).Append('=').Append(Show(rt, sti, st)).Append(' ');
+        }
+
+        string[] charsIn = {
+            "\\a", "\\é", "\\newline", "\\space", "\\tab", "\\return",
+            "\\formfeed", "\\backspace", "\\o101", "\\u0041", "\\foo", "\\",
+        };
+        for (int n = 0; n < charsIn.Length; n++) {
+            int sti = rt.Mk(charsIn[n]);
+            int st = ReadCharLit(rt, sti);
+            o.Append("C").Append(n + 1).Append('=').Append(Show(rt, sti, st)).Append(' ');
+        }
+
+        string[] regexIn = { "\"a.b\"", "\"a\\.b\"", "\"abc", "\"ab\\" };
+        for (int n = 0; n < regexIn.Length; n++) {
+            int sti = rt.Mk(regexIn[n]);
+            int st = ReadRegexLit(rt, sti);
+            o.Append("R").Append(n + 1).Append('=').Append(Show(rt, sti, st));
+            if (n + 1 != regexIn.Length) o.Append(' ');
+        }
+
+        System.Console.WriteLine(o.ToString());
+    }
+--expect
+S1=ok:hello S2=ok:a<TAB>b<LF>c S3=ok:café S4=ok:A S5=err:unsupported escape <BS>q S6=err:unterminated string S7=ok:é S8=err:not a code point: 55296 S9=err:not a code point C1=ok:a C2=ok:é C3=ok:<LF> C4=ok:<SP> C5=ok:<TAB> C6=ok:<CR> C7=ok:<FF> C8=ok:<BKSP> C9=ok:A C10=ok:A C11=err:unknown character literal <BS>foo C12=err:unterminated character R1=ok:map(flint/regex=a.b) R2=ok:map(flint/regex=a<BS>.b) R3=err:unterminated regex R4=err:unterminated regex
+--expect-why
+DERIVED BY TRACING `readtext.kin`'s OWN TEXT against each probe input, not
+pasted from a run. `disp` is the reason this is trustworthy as a check and
+not just an agreement: a DECODED control character prints as a tag like
+`<TAB>`, and an UNDECODED literal backslash prints as `<BS>` -- two different
+spellings for two different things. A `read-escape` that left `\t` alone
+(bug: treat the backslash as ordinary) would put the RAW characters
+backslash, 't' into the string, and `disp` would print that as `<BS>t` --
+visibly different from the correctly-decoded `<TAB>`. Printing both as the
+two-character `\t` (the obvious choice) would have made a broken decoder and
+a correct one agree, which is exactly the trap `AGENTS.md`'s "make the toy
+hostile" note is about.
+
+ERROR TEXT goes through its own `disp-err` -- the same backslash-only tag as
+`disp`, but leaving ordinary spaces alone, since the message is prose and not
+decoded content and a blanket `disp` would turn every space into `<SP>` --
+not because the message needs escaping (it is the GUEST's exact wording,
+`\q` and `\foo` included), but because measured here: `kin/scripts/verify`
+records each target's stdout with a plain `echo`,
+and on this machine `/bin/sh`'s `echo` is XSI-flavoured and DECODES
+backslash sequences IN THE CAPTURED TEXT before anything is compared. The
+error text "unknown character literal \foo" has `\f`, which such an `echo`
+turns into a raw form-feed byte, eating the backslash and the `f` together,
+so three CORRECT and agreeing answers get silently rewritten to the same
+WRONG one, which reads exactly like a real three-way disagreement until
+traced through to the shell that built the answers file. Confirmed by
+running the compiled probe binary directly (prints "...literal \foo"
+every time) against the byte capture `kin/scripts/verify` itself produced
+for the same binary (prints "...literal oo", a lone form-feed before
+"oo"). Rather than fight the harness's own quoting, this file's `disp`
+already had the right shape for the job and now covers both cases.
+
+STRING LITERALS (`read-string-lit`, `read-escape`, `put-code`):
+
+  S1 "hello"            no escapes at all.                        ok:hello
+  S2 "a\tb\nc"           TWO-LETTER escapes, `t` and `n`, decoded
+                         to the real TAB and LINE FEED characters,
+                         each shown as its own tag.                ok:a<TAB>b<LF>c
+  S3 "café"              a direct UTF-8 code point with no
+                         backslash anywhere -- passes through
+                         untouched.                                 ok:café
+  S4 "\101"              a BARE-DIGIT escape (no prefix letter) is
+                         OCTAL in a string: 1*64 + 0*8 + 1 = 65 = 'A'.
+                         Up to three digits are taken; here all
+                         three are present and the token ends
+                         exactly there.                             ok:A
+  S5 "\q"                'q' matches none of `read-escape`'s
+                         branches (t r n \ " b f u 0-7), so it is
+                         the GUEST's own error text, verbatim,
+                         backslash included (shown as `<BS>`, this
+                         file's tag for a literal backslash byte,
+                         for the shell-quoting reason above).         err:unsupported escape <BS>q
+  S6 "abc                no closing quote -- `rd-next` answers
+                         `NO_CP` and the loop fails rather than
+                         reading past the end.                      err:unterminated string
+  S7 "\u00e9"            a HEX escape, `u`-prefixed, exactly four
+                         digits: 0x00e9 = 233 = 'é'.                 ok:é
+  S8 "\ud800"            same shape, but 0xd800 = 55296 is the
+                         FIRST code point of the surrogate hole
+                         (`is-scalar` false) -- the error names the
+                         number, because `rd-fail-cp` was called
+                         with `ok = true`.                           err:not a code point: 55296
+  S9 "\uZZZZ"            'Z' is not a hex digit at all, so
+                         `parse-int-radix` answers `RS_NONE` before
+                         any integer exists -- the SAME error text,
+                         but with no number, because `rd-fail-cp`
+                         was called with `ok = false`. S8 and S9
+                         together are the field that shows the
+                         `ok` flag is wired to the right branch.     err:not a code point
+
+CHARACTER LITERALS (`read-char-lit`, `named-char`, `put-code`):
+
+  C1 \a                  a single ordinary character.               ok:a
+  C2 \é                  a single UTF-8 character -- `to - from == 1`
+                         counts CODE POINTS, not bytes, so this
+                         does not fall through to the multi-
+                         character cases.                           ok:é
+  C3 \newline  C4 \space  C5 \tab  C6 \return  C7 \formfeed
+  C8 \backspace          all SIX names `named-char` recognises,
+                         each landing on its own control character,
+                         each printed as its own tag -- this is
+                         the field that would catch two names
+                         swapped (`\tab` landing on code 13
+                         instead of 9, say).
+                         ok:<LF> ok:<SP> ok:<TAB> ok:<CR> ok:<FF> ok:<BKSP>
+  C9 \o101               `o`-PREFIXED octal: digits start at
+                         `from + 1` (skipping the `o`), "101" base
+                         8 = 65 = 'A'. Confirms string escapes and
+                         char literals spell octal two DIFFERENT
+                         ways (bare digits vs. `o`-prefixed) and
+                         both land on the same number here.          ok:A
+  C10 \u0041             `u`-PREFIXED hex, four digits, 0x41 = 65 =
+                         'A' -- the same answer as C9 by a
+                         different radix and a different prefix.     ok:A
+  C11 \foo               not a name, not `u`- or `o`-prefixed,
+                         more than one character -- the GUEST's
+                         "unknown character literal" text, with
+                         every character of the token appended; the
+                         backslash again shown as `<BS>`.             err:unknown character literal <BS>foo
+  C12 \                  the backslash and then `NO_CP` immediately
+                         -- `rd-next` has nothing left to give, and
+                         the function fails rather than reading
+                         off the end.                                err:unterminated character
+
+REGEX LITERALS (`read-regex-lit`):
+
+  R1 "a.b"               plain text, built into `{:flint/regex
+                         "a.b"}` -- printed here as `map(key=val)`
+                         with the key FIRST, matching the header's
+                         own claim about push order.                 ok:map(flint/regex=a.b)
+  R2 "a\.b"              a backslash is COPIED VERBATIM along with
+                         whatever follows it, never interpreted --
+                         the stored text still has a literal
+                         backslash in it, which `disp` shows as
+                         `<BS>` (not `<TAB>`-style sugar, because it
+                         really is the raw byte, not an escape).     ok:map(flint/regex=a<BS>.b)
+  R3 "abc                unterminated with ordinary trailing
+                         characters.                                 err:unterminated regex
+  R4 "ab\                unterminated with a LONE trailing
+                         backslash: the function stores the
+                         backslash itself, then asks for one more
+                         character, gets `NO_CP`, and must not read
+                         past that -- the one shape here that could
+                         walk off the end of the buffer if `rd-next`
+                         were not guarded.                            err:unterminated regex
+
+NOT COVERED HERE, and why: `parse-int-radix`'s own overflow guard (a REAL
+dependency of `put-code`, faithfully re-implemented in this file's head) is
+unreachable from `readtext.kin`'s own call sites -- at most four hex digits
+(max 0xFFFF) or three octal digits (max 511), neither anywhere near 64-bit
+overflow. `readnum.drivers` is where that guard is actually exercised,
+directly, against both signs.
+
+Put in the exact order and with the exact separators the probe builds them,
+the result is the line in `--expect`.

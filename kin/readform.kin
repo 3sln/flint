@@ -1,0 +1,1276 @@
+;; THE READER PROPER: forms, collections, metadata, dispatch, reader
+;; conditionals, and the whole-file read -- `flint.reader/read-one` and what
+;; it calls, rule for rule.
+;;
+;; POSITIONS ARE THE GUEST'S CONSTRUCTION, merge and all. Every meta-able form
+;; gets `{:line :column :file}`, a sequence or vector `:child-pos` too, and
+;; they are built the way `flint.reader/position-meta` builds them: a map
+;; literal, merged through a TRANSIENT with the children and the form's
+;; existing metadata. The merge is not incidental -- a transient promotes, so
+;; the result is a CHAMP and its keys come out in the trie's order, which is
+;; what `flint.forms` checks before it writes a position compactly. A
+;; different construction with the same entries would encode differently.
+;;
+;; THE CHILD-POSITION STASH IS A SLOT THAT IS NEVER CLEARED, as the guest's
+;; `:child-pos` was. A `'x` stamps its `(quote x)` with whatever the last
+;; delimited read left there -- a stale stash, which `resolve-conditionals`
+;; already knows to expect ("a `'x` carries a stale one"). Clearing it here
+;; would be tidier and would change the bytes.
+;;
+;; A DEFERRED READ (`DECISIONS.md#stdlib-preread`) keeps every reader
+;; conditional as a tagged literal `#flint.reader/#? [kind line col child-pos
+;; items]`, and refuses one where acting on the node would differ from acting
+;; on the branch: inside syntax quote, `#()`, a tag's argument, metadata, or an
+;; `ns` form chosen by one.
+(ns flint.rt.readform
+  (:require [flint.impl.rt :refer [defn declarefn defconst return if let do
+                                   local set while for forever break continue
+                                   comment doc not and or == != < <= > >= + -
+                                   * quot rem mark push r set-r pop-to nil? slot
+                                   fixnum fixnum64 as-fixnum to-i32 to-i64 as-idx
+                                   of-double empty-map empty-set empty-vec
+                                   sink-open sink-put sink-close sink-string
+                                   str-const symbol-of keyword-of cps-len cps-at
+                                   cps-close
+                                   Rt Value RootIx I32 I64 Bool Sink Cps StaticText
+                                   NIL TRUE FALSE NOT_FOUND F64_INF F64_NAN]]
+            [flint.rt.seqcore :refer [is-seq list-from-roots]]
+            [flint.rt.seqwalk :refer [first next seq]]
+            [flint.rt.vecroots :refer [vec-from-roots]]
+            [flint.rt.vecread :refer [is-vector-like vec-count vec-nth]]
+            [flint.rt.vecwrite :refer [vec-conj]]
+            [flint.rt.vecassoc :refer [vec-assoc]]
+            [flint.rt.mapcore :refer [is-map map-count]]
+            [flint.rt.mapread :refer [map-get]]
+            [flint.rt.mapwrite :refer [map-assoc]]
+            [flint.rt.mapmake :refer [ordered-map]]
+            [flint.rt.setcore :refer [is-set set-contains]]
+            [flint.rt.collvec :refer [map-entry-vector set-element-vector]]
+            [flint.rt.transients :refer [to-transient to-persistent
+                                         transient-conj transient-assoc]]
+            [flint.rt.meta :refer [meta-of with-meta]]
+            [flint.rt.opaque :refer [new-tagged is-tagged]]
+            [flint.rt.names :refer [is-symbol is-keyword name-of ns-of]]
+            [flint.rt.ropemeas :refer [is-string]]
+            [flint.rt.ropecmp :refer [str-cmp]]
+            [flint.rt.valeq :refer [val-eq]]
+            [flint.rt.codepoints :refer [code-points]]
+            [flint.rt.readcore :refer [rd-get rd-put rd-int rd-set-int rd-flag rd-peek rd-peek2 rd-next rd-skip-ws rd-token rd-pos rd-at rd-string rd-range-is rd-fail rd-fail-lit rd-fail-sink lit-symbol lit-symbol1 lit-keyword lit-keyword1 is-sym1 is-sym2 msg-lit msg-val msg-cp msg-int sink-put-cp]]
+            [flint.rt.readnum :refer [parse-number]]
+            [flint.rt.readtext :refer [read-string-lit read-char-lit
+                                       read-regex-lit]]
+            [flint.rt.readsq :refer [sq-form collapse-list sort-roots]]
+            [flint.rt.readconst :refer [RDS_LINE RDS_COL RDS_FILE RDS_GENSYMS RDS_FEATURES RDS_NS RDS_ALIASES RDS_DEFER RDS_CONDS RDS_APARTIAL RDS_PORTABLE RDS_TAGS RDS_CHILDPOS RS_OK RS_EOF RS_NONE RS_SPLICE RS_ERR NO_CP is-ws is-digit]]))
+
+(declarefn read-one)
+(declarefn read-syntax-quote)
+
+;; --- small builders ---------------------------------------------------------
+
+(doc "Is `v` something metadata can sit on -- a symbol or a collection?")
+(defn ^:pub ^:method ^Bool meta-able [^:mut ^Rt rt ^Value v]
+  (return (or (is-symbol rt v) (or (is-vector-like rt v)
+          (or (is-map rt v) (or (is-set rt v) (is-seq rt v)))))))
+
+(doc "Replace the value rooted at `vi` with `(list head v)`.")
+(defn ^:method wrap-root [^:mut ^Rt rt ^RootIx vi ^Value head]
+  (let [^RootIx hi (push rt head)]
+    (push rt (r rt hi))
+    (push rt (r rt vi))
+    (let [^Value l (list-from-roots rt (+ hi 1) 2)]
+      (pop-to rt hi)
+      (set-r rt vi l))))
+
+(doc "`(merge a b c)` as the guest's `merge` does it: the nils dropped, the"
+     "first made TRANSIENT -- which promotes it to a CHAMP -- and every later"
+     "map's entries `assoc!`ed in the order that map visits them. The three"
+     "are rooted at `ai`, `bi`, `ci`; the answer is pushed.")
+(defn ^:pub ^:method merge3 [^:mut ^Rt rt ^RootIx ai ^RootIx bi ^RootIx ci]
+  (let [^RootIx base (mark rt)]
+    (local ^:mut ^RootIx firsti)
+    (set firsti ai)
+    (local ^:mut ^I32 skip)
+    (set skip 0)
+    (if (nil? rt (r rt ai))
+      (if (nil? rt (r rt bi))
+        (do (set firsti ci) (set skip 2))
+        (do (set firsti bi) (set skip 1))))
+    (if (nil? rt (r rt firsti))
+      (do (push rt NIL)
+          (return)))
+    (let [^Value t0 (to-transient rt (r rt firsti))
+          ^RootIx ti (push rt t0)]
+      (for [^I32 w 0 3]
+        (if (> w skip)
+          (do (local ^:mut ^RootIx mi)
+              (set mi ai)
+              (if (== w 1) (set mi bi))
+              (if (== w 2) (set mi ci))
+              (if (not (nil? rt (r rt mi)))
+                (let [^Value ev (map-entry-vector rt (r rt mi))
+                      ^RootIx evi (push rt ev)
+                      ^I32 n (vec-count rt (r rt evi))]
+                  (for [^I32 i 0 n]
+                    (let [^Value e (vec-nth rt (r rt evi) i NIL)
+                          ^RootIx ei (push rt e)
+                          ^Value t2 (transient-assoc rt (r rt ti) (slot rt (r rt ei) 0)
+                                                     (slot rt (r rt ei) 1))]
+                      (set-r rt ti t2)
+                      (pop-to rt ei)))
+                  (pop-to rt evi))))))
+      (let [^Value out (to-persistent rt (r rt ti))]
+        (pop-to rt base)
+        (push rt out)))))
+
+(doc "Push `{:line l :column c :file f}` built as a map LITERAL is: assoc"
+     "after assoc onto the empty map, which stays an array map in that order.")
+(defn ^:pub ^:method push-pos-literal [^:mut ^Rt rt ^RootIx sti ^I64 line ^I64 col]
+  (let [^RootIx base (mark rt)
+        ^Value e (empty-map rt)
+        ^RootIx mi (push rt e)
+        ^Value kl (lit-keyword1 rt "line")
+        ^Value m1 (map-assoc rt (r rt mi) kl (fixnum64 line))]
+    (set-r rt mi m1)
+    (let [^Value kc (lit-keyword1 rt "column")
+          ^Value m2 (map-assoc rt (r rt mi) kc (fixnum64 col))]
+      (set-r rt mi m2))
+    (let [^Value kf (lit-keyword1 rt "file")
+          ^Value m3 (map-assoc rt (r rt mi) kf (rd-get rt sti RDS_FILE))]
+      (set-r rt mi m3))
+    (let [^Value out (r rt mi)]
+      (pop-to rt base)
+      (push rt out))))
+
+(doc "`flint.reader/position-meta`: the metadata a form at `line`/`col` gets,"
+     "with the children's positions `cp` (rooted at `cpi`, nil or a vector) and"
+     "the form's existing metadata (rooted at `xi`). Pushed.")
+(defn ^:pub ^:method push-position-meta [^:mut ^Rt rt ^RootIx sti ^I64 line ^I64 col
+                                         ^RootIx cpi ^RootIx xi]
+  (let [^RootIx base (mark rt)]
+    (push-pos-literal rt sti line col)
+    (comment "`(when (seq children) {:child-pos children})`.")
+    (local ^:mut ^Bool has-cp)
+    (set has-cp false)
+    (if (not (nil? rt (r rt cpi)))
+      (if (> (vec-count rt (r rt cpi)) 0)
+        (set has-cp true)))
+    (if has-cp
+      (let [^Value e (empty-map rt)
+            ^RootIx ci (push rt e)
+            ^Value k (lit-keyword1 rt "child-pos")
+            ^Value m (map-assoc rt (r rt ci) k (r rt cpi))]
+        (set-r rt ci m))
+      (push rt NIL))
+    (merge3 rt base (+ base 1) xi)
+    (let [^Value out (r rt (+ base 2))]
+      (pop-to rt base)
+      (push rt out))))
+
+(doc "`stamp`: the value rooted at `vi`, if it can carry metadata, gets its"
+     "position over whatever it already has -- A POSITION ALREADY THERE WINS,"
+     "because the existing map is merged last. `cp` is rooted at `cpi`.")
+(defn ^:pub ^:method stamp-root [^:mut ^Rt rt ^RootIx sti ^RootIx vi ^I64 line ^I64 col
+                                 ^RootIx cpi]
+  (if (not (meta-able rt (r rt vi)))
+    (return))
+  (let [^RootIx base (mark rt)
+        ^Value ex (meta-of rt (r rt vi))
+        ^RootIx xi (push rt ex)]
+    (push-position-meta rt sti line col cpi xi)
+    (let [^Value out (with-meta rt (r rt vi) (r rt (+ base 1)))]
+      (pop-to rt base)
+      (set-r rt vi out))))
+
+(doc "Stamp the value rooted at `vi` with the child positions in the stash"
+     "when `with-cp`, or none.")
+(defn ^:method stamp-stash [^:mut ^Rt rt ^RootIx sti ^RootIx vi ^I64 line ^I64 col
+                            ^Bool with-cp]
+  (let [^RootIx base (mark rt)]
+    (if with-cp
+      (push rt (rd-get rt sti RDS_CHILDPOS))
+      (push rt NIL))
+    (stamp-root rt sti vi line col base)
+    (pop-to rt base)))
+
+;; --- reader conditionals ----------------------------------------------------
+
+(doc "Is `x` a reader conditional a deferred read left as data?")
+(defn ^:pub ^:method ^Bool is-conditional [^:mut ^Rt rt ^Value x]
+  (if (not (is-tagged rt x))
+    (return false))
+  (return (is-sym2 rt (slot rt x 0) "flint.reader" "#?")))
+
+(doc "Push the conditional node `#flint.reader/#? [kind line col cp items]`,"
+     "counting it. `cpi` and `itemsi` are rooted; `kind` is the keyword's name.")
+(defn ^:method push-conditional [^:mut ^Rt rt ^RootIx sti ^StaticText kind ^I64 line
+                                 ^I64 col ^RootIx cpi ^RootIx itemsi]
+  (let [^I64 nc (+ (rd-int rt sti RDS_CONDS) 1)]
+    (rd-set-int rt sti RDS_CONDS nc))
+  (let [^RootIx base (mark rt)
+        ^Value k (lit-keyword1 rt kind)]
+    (push rt k)
+    (push rt (fixnum64 line))
+    (push rt (fixnum64 col))
+    (push rt (r rt cpi))
+    (push rt (r rt itemsi))
+    (let [^Value form (vec-from-roots rt base 5)
+          ^RootIx fi (push rt form)
+          ^Value tag (lit-symbol rt "flint.reader" "#?")
+          ^Value node (new-tagged rt tag (r rt fi))]
+      (pop-to rt base)
+      (push rt node))))
+
+(doc "Refuse a conditional read inside a context that consumes its contents"
+     "as it reads, when the features are not known. `n0` is the count when"
+     "the context began.")
+(defn ^:method ^I32 deferred-guard [^:mut ^Rt rt ^RootIx sti ^I64 n0 ^StaticText what]
+  (if (and (rd-flag rt sti RDS_DEFER) (!= n0 (rd-int rt sti RDS_CONDS)))
+    (let [^Sink sk (sink-open rt)]
+      (msg-lit rt sk "a reader conditional inside ")
+      (msg-lit rt sk what)
+      (msg-lit rt sk " cannot be read before its features are known (DECISIONS.md#stdlib-preread)")
+      (return (rd-fail-sink rt sti sk))))
+  (return RS_OK))
+
+;; --- delimited collections --------------------------------------------------
+
+(doc "The elements up to `closer`, at the opening character."
+     ""
+     "On `RS_OK` this has pushed ONE MORE value than there are elements: a"
+     "placeholder, then the elements, so they are `(base + 1, n)` for the"
+     "caller's `base` -- and it has written the elements' positions, as a flat"
+     "`[line col ..]`, to the stash. A splice's elements each get the SPLICE's"
+     "position: they were all written at `#?@`.")
+(defn ^:pub ^:method ^I32 read-delimited [^:mut ^Rt rt ^RootIx sti ^I32 closer]
+  (rd-next rt sti)
+  (let [^RootIx base (mark rt)
+        ^Value e (empty-vec rt)
+        ^RootIx pi (push rt e)]
+    (forever
+      (rd-skip-ws rt sti)
+      (let [^I32 c (rd-peek rt sti)
+            ^I64 cl (rd-int rt sti RDS_LINE)
+            ^I64 cc (rd-int rt sti RDS_COL)]
+        (if (== c NO_CP)
+          (let [^Sink sk (sink-open rt)]
+            (msg-lit rt sk "unterminated, expecting ")
+            (sink-put-cp rt sk closer)
+            (pop-to rt base)
+            (return (rd-fail-sink rt sti sk))))
+        (if (== c closer)
+          (do (rd-next rt sti)
+              (rd-put rt sti RDS_CHILDPOS (r rt pi))
+              (return RS_OK)))
+        (let [^RootIx at (mark rt)
+              ^I32 st (read-one rt sti)]
+          (if (== st RS_ERR)
+            (do (pop-to rt base)
+                (return RS_ERR)))
+          (if (== st RS_OK)
+            (let [^Value p1 (vec-conj rt (r rt pi) (fixnum64 cl))
+                  ^RootIx p1i (push rt p1)
+                  ^Value p2 (vec-conj rt (r rt p1i) (fixnum64 cc))]
+              (set-r rt pi p2)
+              (pop-to rt p1i)))
+          (comment "A SPLICE: the spliced collection is on top, walked into"
+                   "roots above it, then moved down over it.")
+          (if (== st RS_SPLICE)
+            (let [^Value s0 (seq rt (r rt at))
+                  ^RootIx si (push rt s0)
+                  ^RootIx xs (mark rt)]
+              (local ^:mut ^I32 n)
+              (set n 0)
+              (forever
+                (if (nil? rt (r rt si))
+                  (break))
+                (let [^Value x (first rt (r rt si))]
+                  (push rt x))
+                (set n (+ n 1))
+                (let [^Value nx (next rt (r rt si))]
+                  (set-r rt si nx)))
+              (for [^I32 k 0 n]
+                (set-r rt (+ at (as-idx k)) (r rt (+ xs (as-idx k))))
+                (let [^Value q1 (vec-conj rt (r rt pi) (fixnum64 cl))
+                      ^RootIx q1i (push rt q1)
+                      ^Value q2 (vec-conj rt (r rt q1i) (fixnum64 cc))]
+                  (set-r rt pi q2)
+                  (pop-to rt q1i)))
+              (pop-to rt (+ at (as-idx n))))))))))
+
+(doc "How many elements `read-delimited` left above `base`.")
+(defn ^:method ^I32 delimited-count [^:mut ^Rt rt ^RootIx base]
+  (return (to-i32 (- (- (mark rt) base) 1))))
+
+;; --- metadata ---------------------------------------------------------------
+
+(doc "`^meta form`, at the caret.")
+(defn ^:method ^I32 read-meta [^:mut ^Rt rt ^RootIx sti]
+  (rd-next rt sti)
+  (rd-skip-ws rt sti)
+  (let [^RootIx base (mark rt)
+        ^I32 st (read-one rt sti)]
+    (if (== st RS_ERR)
+      (return RS_ERR))
+    (if (!= st RS_OK)
+      (do (pop-to rt base)
+          (return (rd-fail-lit rt sti "metadata must be a symbol, keyword, string or map"))))
+    (if (is-conditional rt (r rt base))
+      (do (pop-to rt base)
+          (return (rd-fail-lit rt sti "metadata that is itself a reader conditional cannot be read before its features are known (DECISIONS.md#stdlib-preread)"))))
+    (comment "THE METADATA AS A MAP: `{m true}` for a keyword, `{:tag m}` for"
+             "a symbol or string, a map as it is.")
+    (if (is-keyword rt (r rt base))
+      (let [^Value e (empty-map rt)
+            ^Value m (map-assoc rt e (r rt base) TRUE)]
+        (set-r rt base m))
+      (if (or (is-symbol rt (r rt base)) (is-string rt (r rt base)))
+        (let [^Value e2 (empty-map rt)
+              ^RootIx e2i (push rt e2)
+              ^Value kt (lit-keyword1 rt "tag")
+              ^Value m2 (map-assoc rt (r rt e2i) kt (r rt base))]
+          (pop-to rt e2i)
+          (set-r rt base m2))
+        (if (not (is-map rt (r rt base)))
+          (do (pop-to rt base)
+              (return (rd-fail-lit rt sti "metadata must be a symbol, keyword, string or map"))))))
+    (rd-skip-ws rt sti)
+    (let [^RootIx ti (mark rt)
+          ^I32 tst (read-one rt sti)]
+      (if (== tst RS_ERR)
+        (do (pop-to rt base)
+            (return RS_ERR)))
+      (if (or (== tst RS_EOF) (== tst RS_NONE))
+        (do (pop-to rt base)
+            (return tst)))
+      (if (is-conditional rt (r rt ti))
+        (do (pop-to rt base)
+            (return (rd-fail-lit rt sti "metadata on a reader conditional cannot be read before its features are known (DECISIONS.md#stdlib-preread)"))))
+      (if (and (== tst RS_OK) (meta-able rt (r rt ti)))
+        (let [^Value ex (meta-of rt (r rt ti))
+              ^RootIx xi (push rt ex)
+              ^RootIx ni (push rt NIL)]
+          (merge3 rt xi ni base)
+          (let [^Value out (with-meta rt (r rt ti) (r rt (+ ni 1)))]
+            (pop-to rt base)
+            (push rt out)
+            (return RS_OK))))
+      (let [^Value same (r rt ti)]
+        (pop-to rt base)
+        (push rt same)
+        (return tst)))))
+
+;; --- #( ) -------------------------------------------------------------------
+
+(doc "The symbol `p<k>__flint#`.")
+(defn ^:method ^Value arg-symbol [^:mut ^Rt rt ^I64 k]
+  (let [^Sink sk (sink-open rt)]
+    (sink-put rt sk 112)
+    (msg-int rt sk k)
+    (msg-lit rt sk "__flint#")
+    (let [^Value text (sink-string rt sk)]
+      (sink-close rt sk)
+      (return (symbol-of rt NIL text)))))
+
+(doc "`#()`'s walk of the value rooted at `fi`, pushed. `ri` roots a"
+     "two-slot vector `[maxn rest?]` the walk updates. A collection is REBUILT"
+     "and loses its metadata, as the guest's walk rebuilt it; a symbol that is"
+     "not an argument keeps its own.")
+(defn ^:method walk-arg [^:mut ^Rt rt ^RootIx fi ^RootIx ri]
+  (let [^RootIx base (mark rt)]
+    (if (is-symbol rt (r rt fi))
+      (let [^Value nm (name-of rt (r rt fi))
+            ^RootIx nmi (push rt nm)
+            ^Value pct (str-const rt "%")]
+        (if (val-eq rt (r rt nmi) pct)
+          (let [^I64 mx (as-fixnum (vec-nth rt (r rt ri) 0 NIL))]
+            (if (< mx 1)
+              (let [^Value r1 (vec-assoc rt (r rt ri) 0 (fixnum64 1))]
+                (set-r rt ri r1)))
+            (let [^Value p1 (arg-symbol rt 1)]
+              (pop-to rt base)
+              (push rt p1)
+              (return))))
+        (let [^Value amp (str-const rt "%&")]
+          (if (val-eq rt (r rt nmi) amp)
+            (let [^Value r2 (vec-assoc rt (r rt ri) 1 TRUE)
+                  ^RootIx r2i (push rt r2)]
+              (set-r rt ri (r rt r2i))
+              (let [^Value ps (lit-symbol1 rt "prest__flint#")]
+                (pop-to rt base)
+                (push rt ps)
+                (return)))))
+        (comment "`%N`: a percent and then digits, at least one.")
+        (let [^Cps c (code-points rt (r rt nmi))
+              ^I32 n (cps-len rt c)]
+          (local ^:mut ^Bool digits)
+          (set digits (and (> n 1) (== (cps-at rt c 0) 37)))
+          (local ^:mut ^I64 k)
+          (set k 0)
+          (for [^I32 i 1 n]
+            (let [^I32 d (cps-at rt c i)]
+              (if (not (is-digit d))
+                (set digits false))
+              (if digits
+                (set k (+ (* k 10) (to-i64 (- d 48)))))))
+          (cps-close rt c)
+          (if digits
+            (let [^I64 mx2 (as-fixnum (vec-nth rt (r rt ri) 0 NIL))]
+              (if (< mx2 k)
+                (let [^Value r3 (vec-assoc rt (r rt ri) 0 (fixnum64 k))]
+                  (set-r rt ri r3)))
+              (let [^Value pk (arg-symbol rt k)]
+                (pop-to rt base)
+                (push rt pk)
+                (return)))))
+        (pop-to rt base)
+        (push rt (r rt fi))
+        (return)))
+    (if (or (is-seq rt (r rt fi)) (is-vector-like rt (r rt fi)))
+      (let [^Bool as-list (is-seq rt (r rt fi))
+            ^Value s0 (seq rt (r rt fi))
+            ^RootIx si (push rt s0)
+            ^RootIx xs (mark rt)]
+        (local ^:mut ^I32 cnt)
+        (set cnt 0)
+        (forever
+          (if (nil? rt (r rt si))
+            (break))
+          (let [^Value x (first rt (r rt si))
+                ^RootIx xi (push rt x)]
+            (walk-arg rt xi ri)
+            (comment "The walked value sits above the original: move it down.")
+            (set-r rt xi (r rt (+ xi 1)))
+            (pop-to rt (+ xi 1)))
+          (set cnt (+ cnt 1))
+          (let [^Value nx (next rt (r rt si))]
+            (set-r rt si nx)))
+        (local ^:mut ^Value built)
+        (if as-list
+          (set built (list-from-roots rt xs cnt))
+          (set built (vec-from-roots rt xs cnt)))
+        (pop-to rt base)
+        (push rt built)
+        (return)))
+    (if (is-set rt (r rt fi))
+      (let [^Value ev (set-element-vector rt (r rt fi))
+            ^RootIx evi (push rt ev)
+            ^Value es (empty-set rt)
+            ^Value t0 (to-transient rt es)
+            ^RootIx ti (push rt t0)
+            ^I32 sn (vec-count rt (r rt evi))]
+        (for [^I32 j 0 sn]
+          (let [^Value y (vec-nth rt (r rt evi) j NIL)
+                ^RootIx yi (push rt y)]
+            (walk-arg rt yi ri)
+            (let [^Value t2 (transient-conj rt (r rt ti) (r rt (+ yi 1)))]
+              (set-r rt ti t2))
+            (pop-to rt yi)))
+        (let [^Value sv (to-persistent rt (r rt ti))]
+          (pop-to rt base)
+          (push rt sv)
+          (return))))
+    (if (is-map rt (r rt fi))
+      (let [^Value mv (map-entry-vector rt (r rt fi))
+            ^RootIx mvi (push rt mv)
+            ^I32 mn (vec-count rt (r rt mvi))
+            ^RootIx kvs (mark rt)]
+        (for [^I32 q 0 mn]
+          (let [^Value en (vec-nth rt (r rt mvi) q NIL)
+                ^RootIx eni (push rt en)
+                ^Value kk (slot rt (r rt eni) 0)
+                ^RootIx kki (push rt kk)]
+            (walk-arg rt kki ri)
+            (let [^Value vv (slot rt (r rt eni) 1)
+                  ^RootIx vvi (push rt vv)]
+              (walk-arg rt vvi ri)
+              (comment "Leave exactly the walked key and value at `eni`.")
+              (set-r rt eni (r rt (+ kki 1)))
+              (set-r rt kki (r rt (+ vvi 1)))
+              (pop-to rt (+ kki 1)))))
+        (let [^Value flat (vec-from-roots rt kvs (* 2 mn))
+              ^Value om (ordered-map rt flat)]
+          (pop-to rt base)
+          (push rt om)
+          (return))))
+    (push rt (r rt fi))))
+
+(doc "`#(...)`, at the `(` after the `#`: `(fn* [p1__flint# ..] body)`, its"
+     "arity the highest `%n` used and `& prest__flint#` for `%&`.")
+(defn ^:method ^I32 read-arg-fn [^:mut ^Rt rt ^RootIx sti]
+  (let [^I64 n0 (rd-int rt sti RDS_CONDS)
+        ^RootIx base (mark rt)
+        ^I32 st (read-delimited rt sti 41)]
+    (if (!= st RS_OK)
+      (return st))
+    (let [^I32 g (deferred-guard rt sti n0 "#()")]
+      (if (!= g RS_OK)
+        (do (pop-to rt base)
+            (return g))))
+    (let [^I32 n (delimited-count rt base)
+          ^Value body0 (list-from-roots rt (+ base 1) n)]
+      (pop-to rt base)
+      (let [^RootIx bi (push rt body0)]
+        (push rt (fixnum 0))
+        (push rt FALSE)
+        (let [^Value state (vec-from-roots rt (+ bi 1) 2)]
+          (pop-to rt (+ bi 1))
+          (let [^RootIx ri (push rt state)]
+            (walk-arg rt bi ri)
+            (let [^RootIx walked (+ ri 1)
+                  ^I64 maxn (as-fixnum (vec-nth rt (r rt ri) 0 NIL))
+                  ^Bool rest (== (vec-nth rt (r rt ri) 1 NIL) TRUE)
+                  ^RootIx ps (mark rt)]
+              (local ^:mut ^I64 k)
+              (set k 1)
+              (while (<= k maxn)
+                (do (let [^Value pk (arg-symbol rt k)]
+                      (push rt pk))
+                    (set k (+ k 1))))
+              (if rest
+                (do (let [^Value amp (lit-symbol1 rt "&")]
+                      (push rt amp))
+                    (let [^Value pr (lit-symbol1 rt "prest__flint#")]
+                      (push rt pr))))
+              (let [^Value params (vec-from-roots rt ps (to-i32 (- (mark rt) ps)))]
+                (pop-to rt ps)
+                (let [^RootIx pai (push rt params)
+                      ^RootIx three (mark rt)
+                      ^Value fnsym (lit-symbol1 rt "fn*")]
+                  (push rt fnsym)
+                  (push rt (r rt pai))
+                  (push rt (r rt walked))
+                  (collapse-list rt three 3)
+                  (let [^Value out (r rt three)]
+                    (pop-to rt base)
+                    (push rt out)
+                    (return RS_OK)))))))))))
+
+;; --- #? ---------------------------------------------------------------------
+
+(doc "`#?(..)` and `#?@(..)`, at the `?`. A deferred read keeps it as a node;"
+     "an eager one chooses: the first clause whose key is a feature or"
+     "`:default`. Unmatched is `RS_EOF` -- the form vanishes -- or `RS_NONE`"
+     "for a splice; a matched splice is `RS_SPLICE` with its collection pushed.")
+(defn ^:method ^I32 read-cond [^:mut ^Rt rt ^RootIx sti ^Bool splicing ^I64 line ^I64 col]
+  (rd-next rt sti)
+  (if splicing
+    (rd-next rt sti))
+  (rd-skip-ws rt sti)
+  (if (!= (rd-peek rt sti) 40)
+    (return (rd-fail-lit rt sti "reader conditional wants a list")))
+  (let [^RootIx base (mark rt)
+        ^I32 st (read-delimited rt sti 41)]
+    (if (!= st RS_OK)
+      (return st))
+    (let [^I32 n (delimited-count rt base)]
+      (if (rd-flag rt sti RDS_DEFER)
+        (let [^Value items (vec-from-roots rt (+ base 1) n)]
+          (pop-to rt base)
+          (let [^RootIx ii (push rt items)
+                ^Value cp (rd-get rt sti RDS_CHILDPOS)
+                ^RootIx cpi (push rt cp)]
+            (if splicing
+              (push-conditional rt sti "splice" line col cpi ii)
+              (push-conditional rt sti "one" line col cpi ii))
+            (let [^Value node (r rt (+ cpi 1))]
+              (pop-to rt base)
+              (push rt node)
+              (return RS_OK)))))
+      (comment "CHOOSE. A nil key ends the clauses, as the guest's"
+               "destructuring loop ends on one.")
+      (let [^Value dk (lit-keyword1 rt "default")
+            ^RootIx dki (push rt dk)]
+        (local ^:mut ^I32 i)
+        (set i 0)
+        (while (< i n)
+          (let [^RootIx ki (+ base (as-idx (+ i 1)))]
+            (if (nil? rt (r rt ki))
+              (break))
+            (if (or (set-contains rt (rd-get rt sti RDS_FEATURES) (r rt ki))
+                    (val-eq rt (r rt ki) (r rt dki)))
+              (do (local ^:mut ^Value chosen)
+                  (set chosen NIL)
+                  (if (< (+ i 1) n)
+                    (set chosen (r rt (+ ki 1))))
+                  (pop-to rt base)
+                  (push rt chosen)
+                  (if splicing
+                    (return RS_SPLICE))
+                  (return RS_OK)))
+            (set i (+ i 2))))
+        (pop-to rt base)
+        (if splicing
+          (return RS_NONE))
+        (return RS_EOF)))))
+
+(doc "Does resolving a conditional among the map literal's forms (rooted at"
+     "`at`, `n` of them) change how many forms there are, or which are keys?")
+(defn ^:method ^Bool size-conditional [^:mut ^Rt rt ^RootIx at ^I32 n]
+  (for [^I32 i 0 n]
+    (let [^Value x (r rt (+ at (as-idx i)))]
+      (if (is-conditional rt x)
+        (do (if (or (== (rem i 2) 0) (!= (rem n 2) 0))
+              (return true))
+            (let [^Value kind (vec-nth rt (slot rt (r rt (+ at (as-idx i))) 1) 0 NIL)
+                  ^RootIx kbase (mark rt)
+                  ^RootIx kindi (push rt kind)
+                  ^Value sp (lit-keyword1 rt "splice")
+                  ^Bool hit (val-eq rt (r rt kindi) sp)]
+              (pop-to rt kbase)
+              (if hit
+                (return true)))))))
+  (return false))
+
+;; --- #:ns{} -----------------------------------------------------------------
+
+(doc "The namespace `::a/kw` names, pushed: `a`'s alias from the file's `ns`"
+     "form, or `a` itself as a string. Refused when the `ns` form held a"
+     "reader conditional and the read is deferred, because then which aliases"
+     "it declares is not known. `a` is the code points `from`..`to`.")
+(defn ^:method ^I32 alias-ns [^:mut ^Rt rt ^RootIx sti ^I32 from ^I32 to]
+  (let [^RootIx base (mark rt)
+        ^Value a (rd-string rt sti from to)
+        ^RootIx ai (push rt a)
+        ^Value as (symbol-of rt NIL (r rt ai))
+        ^Value hit (map-get rt (rd-get rt sti RDS_ALIASES) as NOT_FOUND)]
+    (if (and (!= hit NOT_FOUND) (not (nil? rt hit)))
+      (do (pop-to rt base)
+          (push rt hit)
+          (return RS_OK)))
+    (if (rd-flag rt sti RDS_APARTIAL)
+      (let [^Sink sk (sink-open rt)]
+        (msg-lit rt sk "::")
+        (msg-val rt sk (r rt ai))
+        (msg-lit rt sk "/ in a file whose ns form holds a reader conditional cannot be read before its features are known (DECISIONS.md#stdlib-preread)")
+        (pop-to rt base)
+        (return (rd-fail-sink rt sti sk))))
+    (return RS_OK)))
+
+(doc "Push `(str x)` of the value on top -- a symbol's full name, or the"
+     "string itself -- replacing it.")
+(defn ^:method top-as-string [^:mut ^Rt rt ^RootIx at]
+  (let [^Sink sk (sink-open rt)]
+    (msg-val rt sk (r rt at))
+    (let [^Value s (sink-string rt sk)]
+      (sink-close rt sk)
+      (set-r rt at s))))
+
+(doc "Push the current namespace's name as a string, or \"user\".")
+(defn ^:method push-current-ns [^:mut ^Rt rt ^RootIx sti]
+  (let [^Value nsv (rd-get rt sti RDS_NS)]
+    (if (nil? rt nsv)
+      (let [^Value u (str-const rt "user")]
+        (push rt u)
+        (return)))
+    (let [^RootIx at (push rt nsv)]
+      (top-as-string rt at))))
+
+(doc "`#:ns{..}`, `#::{..}`, `#::alias{..}`, at the colon: the map with every"
+     "unqualified keyword or symbol key given the namespace -- a NEW map,"
+     "assoc'd in the map's order.")
+(defn ^:method ^I32 read-ns-map [^:mut ^Rt rt ^RootIx sti]
+  (let [^I32 from (rd-token rt sti)
+        ^I32 to (rd-pos rt sti)
+        ^RootIx base (mark rt)]
+    (comment "THE NAMESPACE, as a string; empty when there is none.")
+    (if (and (>= (- to from) 2) (and (== (rd-at rt sti from) 58) (== (rd-at rt sti (+ from 1)) 58)))
+      (if (== (- to from) 2)
+        (push-current-ns rt sti)
+        (let [^I32 ast (alias-ns rt sti (+ from 2) to)]
+          (if (!= ast RS_OK)
+            (return ast))
+          (top-as-string rt base)))
+      (if (and (>= (- to from) 1) (== (rd-at rt sti from) 58))
+        (let [^Value s1 (rd-string rt sti (+ from 1) to)]
+          (push rt s1))
+        (let [^Value s2 (str-const rt "")]
+          (push rt s2))))
+    (rd-skip-ws rt sti)
+    (let [^RootIx mi (mark rt)
+          ^I32 st (read-one rt sti)]
+      (if (== st RS_ERR)
+        (do (pop-to rt base)
+            (return RS_ERR)))
+      (if (!= st RS_OK)
+        (push rt NIL))
+      (if (is-conditional rt (r rt mi))
+        (do (pop-to rt base)
+            (return (rd-fail-lit rt sti "#: over a map whose keys hold a reader conditional cannot be read before its features are known (DECISIONS.md#stdlib-preread)"))))
+      (let [^Value empty (str-const rt "")]
+        (if (val-eq rt (r rt base) empty)
+          (do (pop-to rt base)
+              (return (rd-fail-lit rt sti "#: wants a namespace")))))
+      (if (not (is-map rt (r rt mi)))
+        (do (pop-to rt base)
+            (return (rd-fail-lit rt sti "#: wants a map"))))
+      (let [^Value ev (map-entry-vector rt (r rt mi))
+            ^RootIx evi (push rt ev)
+            ^Value e0 (empty-map rt)
+            ^RootIx acci (push rt e0)
+            ^I32 n (vec-count rt (r rt evi))]
+        (for [^I32 i 0 n]
+          (let [^Value en (vec-nth rt (r rt evi) i NIL)
+                ^RootIx eni (push rt en)
+                ^Value k (slot rt (r rt eni) 0)
+                ^RootIx kki (push rt k)]
+            (if (and (or (is-keyword rt (r rt kki)) (is-symbol rt (r rt kki)))
+                     (nil? rt (ns-of rt (r rt kki))))
+              (let [^Value nm (name-of rt (r rt kki))]
+                (if (is-keyword rt (r rt kki))
+                  (let [^Value qk (keyword-of rt (r rt base) nm)]
+                    (set-r rt kki qk))
+                  (let [^Value qs (symbol-of rt (r rt base) nm)]
+                    (set-r rt kki qs)))))
+            (let [^Value m2 (map-assoc rt (r rt acci) (r rt kki) (slot rt (r rt eni) 1))]
+              (set-r rt acci m2))
+            (pop-to rt eni)))
+        (let [^Value out (r rt acci)]
+          (pop-to rt base)
+          (push rt out)
+          (return RS_OK))))))
+
+;; --- reader tags ------------------------------------------------------------
+
+(doc "`no reader for the tag #x; this project can read #a, #b. ..` -- the"
+     "names this project binds, sorted.")
+(defn ^:method ^I32 tag-error [^:mut ^Rt rt ^RootIx sti ^RootIx tagi]
+  (let [^RootIx base (mark rt)
+        ^Value tm (rd-get rt sti RDS_TAGS)
+        ^Value ev (map-entry-vector rt tm)
+        ^RootIx evi (push rt ev)
+        ^I32 n (vec-count rt (r rt evi))
+        ^RootIx names (mark rt)]
+    (for [^I32 i 0 n]
+      (let [^Sink nk (sink-open rt)]
+        (msg-val rt nk (slot rt (vec-nth rt (r rt evi) i NIL) 0))
+        (let [^Value one (sink-string rt nk)]
+          (sink-close rt nk)
+          (push rt one))))
+    (sort-roots rt names n)
+    (let [^Sink sk (sink-open rt)]
+      (msg-lit rt sk "no reader for the tag #")
+      (msg-val rt sk (r rt tagi))
+      (if (> n 0)
+        (do (msg-lit rt sk "; this project can read ")
+            (for [^I32 j 0 n]
+              (if (> j 0)
+                (msg-lit rt sk ", "))
+              (sink-put rt sk 35)
+              (msg-val rt sk (r rt (+ names (as-idx j))))))
+        (msg-lit rt sk "; this project has no reader tags"))
+      (msg-lit rt sk ". A tag is bound per PROJECT, not per namespace: add it under :flint/tag-readers in deps.edn, mapping the tag NAME to the VAR that reads it -- {")
+      (msg-val rt sk (r rt tagi))
+      (msg-lit rt sk " my.ns/read-it}. Using another project's tag is opt-in, which is why yours are not in scope here by default (DECISIONS.md#reader-tags). To make a tagged literal as a VALUE instead, call (tagged-literal '")
+      (msg-val rt sk (r rt tagi))
+      (msg-lit rt sk " form); to read one from data, use clojure.edn/read-string with :readers or :default.")
+      (pop-to rt base)
+      (return (rd-fail-sink rt sti sk)))))
+
+(doc "A flint-only tag in a PORTABLE file.")
+(defn ^:method ^I32 portability-error [^:mut ^Rt rt ^RootIx sti ^RootIx tagi]
+  (let [^Sink sk (sink-open rt)]
+    (sink-put rt sk 35)
+    (msg-val rt sk (r rt tagi))
+    (msg-lit rt sk " is a flint-only reader tag, and ")
+    (msg-val rt sk (rd-get rt sti RDS_FILE))
+    (msg-lit rt sk " is a PORTABLE file. Nothing outside flint can read it: a tag is bound by flint's workspace (:flint/tag-readers) or by flint's reader itself, and another platform's reader knows neither (DECISIONS.md#dialects-and-preludes). Rename the file to .fln -- a .fln and a .cljc are the same namespace, and flint prefers its own -- or write the value without the tag.")
+    (return (rd-fail-sink rt sti sk))))
+
+(doc "`#tag form`, the tag not yet read: REWRITTEN to `(the-var form)` with"
+     "what was written on its metadata -- the reader evaluates nothing"
+     "(`DECISIONS.md#reader-tags`). The position is where the reader stands"
+     "AFTER the form, as the guest's took it.")
+(defn ^:method ^I32 read-tagged [^:mut ^Rt rt ^RootIx sti]
+  (let [^RootIx base (mark rt)
+        ^I32 tst (read-one rt sti)]
+    (if (== tst RS_ERR)
+      (return RS_ERR))
+    (if (!= tst RS_OK)
+      (do (pop-to rt base)
+          (push rt NIL)))
+    (rd-skip-ws rt sti)
+    (let [^I64 n0 (rd-int rt sti RDS_CONDS)
+          ^RootIx vi (mark rt)
+          ^I32 vst (read-one rt sti)]
+      (if (== vst RS_ERR)
+        (do (pop-to rt base)
+            (return RS_ERR)))
+      (if (!= vst RS_OK)
+        (do (pop-to rt vi)
+            (push rt NIL)))
+      (let [^I32 g (deferred-guard rt sti n0 "a reader tag's argument")]
+        (if (!= g RS_OK)
+          (do (pop-to rt base)
+              (return g))))
+      (if (not (is-symbol rt (r rt base)))
+        (do (pop-to rt base)
+            (return (rd-fail-lit rt sti "reader tag must be a symbol"))))
+      (let [^Value target (map-get rt (rd-get rt sti RDS_TAGS) (r rt base) NIL)]
+        (if (nil? rt target)
+          (let [^I32 te (tag-error rt sti base)]
+            (pop-to rt base)
+            (return te)))
+        (let [^RootIx tgi (push rt target)]
+          (if (rd-flag rt sti RDS_PORTABLE)
+            (let [^I32 pe (portability-error rt sti base)]
+              (pop-to rt base)
+              (return pe)))
+          (comment "THE METADATA, a map literal in this order.")
+          (let [^Value e (empty-map rt)
+                ^RootIx mi (push rt e)
+                ^Value tl (new-tagged rt (r rt base) (r rt vi))
+                ^RootIx tli (push rt tl)
+                ^Value k1 (lit-keyword rt "flint" "read-form")
+                ^Value m1 (map-assoc rt (r rt mi) k1 (r rt tli))]
+            (set-r rt mi m1)
+            (let [^Value k2 (lit-keyword rt "flint" "read-tag")
+                  ^Value m2 (map-assoc rt (r rt mi) k2 (r rt base))]
+              (set-r rt mi m2))
+            (let [^Value k3 (lit-keyword rt "flint" "read-var")
+                  ^Value m3 (map-assoc rt (r rt mi) k3 (r rt tgi))]
+              (set-r rt mi m3))
+            (let [^Value k4 (lit-keyword1 rt "line")
+                  ^Value m4 (map-assoc rt (r rt mi) k4 (rd-get rt sti RDS_LINE))]
+              (set-r rt mi m4))
+            (let [^Value k5 (lit-keyword1 rt "column")
+                  ^Value m5 (map-assoc rt (r rt mi) k5 (rd-get rt sti RDS_COL))]
+              (set-r rt mi m5))
+            (let [^Value k6 (lit-keyword1 rt "file")
+                  ^Value m6 (map-assoc rt (r rt mi) k6 (rd-get rt sti RDS_FILE))]
+              (set-r rt mi m6))
+            (let [^RootIx two (mark rt)]
+              (push rt (r rt tgi))
+              (push rt (r rt vi))
+              (collapse-list rt two 2)
+              (let [^Value out (with-meta rt (r rt two) (r rt mi))]
+                (pop-to rt base)
+                (push rt out)
+                (return RS_OK)))))))))
+
+;; --- # ----------------------------------------------------------------------
+
+(doc "Everything after `#`: sets, `#()`, regexes, `#'`, `#_`, `#?`, `##`,"
+     "`#:`, and tags.")
+(defn ^:method ^I32 read-dispatch [^:mut ^Rt rt ^RootIx sti ^I64 line ^I64 col]
+  (rd-next rt sti)
+  (let [^I32 c (rd-peek rt sti)]
+    (if (== c 123)
+      (let [^RootIx base (mark rt)
+            ^I32 st (read-delimited rt sti 125)]
+        (if (!= st RS_OK)
+          (return st))
+        (let [^I32 n (delimited-count rt base)]
+          (local ^:mut ^Bool any)
+          (set any false)
+          (if (rd-flag rt sti RDS_DEFER)
+            (for [^I32 i 0 n]
+              (if (is-conditional rt (r rt (+ base (as-idx (+ i 1)))))
+                (set any true))))
+          (if any
+            (let [^Value items (vec-from-roots rt (+ base 1) n)]
+              (pop-to rt base)
+              (let [^RootIx ii (push rt items)
+                    ^RootIx cpi (push rt NIL)]
+                (push-conditional rt sti "set" line col cpi ii)
+                (let [^Value node (r rt (+ cpi 1))]
+                  (pop-to rt base)
+                  (push rt node)
+                  (return RS_OK)))))
+          (comment "`(set xs)`: `into #{}`, through a transient.")
+          (let [^Value es (empty-set rt)
+                ^Value t0 (to-transient rt es)
+                ^RootIx ti (push rt t0)]
+            (for [^I32 j 0 n]
+              (let [^Value t1 (transient-conj rt (r rt ti) (r rt (+ base (as-idx (+ j 1)))))]
+                (set-r rt ti t1)))
+            (let [^Value sv (to-persistent rt (r rt ti))]
+              (pop-to rt base)
+              (push rt sv)
+              (return RS_OK))))))
+    (if (== c 40)
+      (return (read-arg-fn rt sti)))
+    (if (== c 34)
+      (return (read-regex-lit rt sti)))
+    (if (== c 39)
+      (do (rd-next rt sti)
+          (let [^RootIx vb (mark rt)
+                ^I32 vst (read-one rt sti)]
+            (if (== vst RS_ERR)
+              (return RS_ERR))
+            (if (!= vst RS_OK)
+              (push rt NIL))
+            (let [^Value vs (lit-symbol1 rt "var")]
+              (wrap-root rt vb vs))
+            (return RS_OK))))
+    (if (== c 95)
+      (do (rd-next rt sti)
+          (let [^RootIx db (mark rt)
+                ^I32 dst (read-one rt sti)]
+            (pop-to rt db)
+            (if (== dst RS_ERR)
+              (return RS_ERR))
+            (return RS_EOF))))
+    (if (== c 63)
+      (return (read-cond rt sti (== (rd-peek2 rt sti) 64) line col)))
+    (if (== c 35)
+      (do (rd-next rt sti)
+          (let [^I32 from (rd-token rt sti)
+                ^I32 to (rd-pos rt sti)
+                ^Value inf (str-const rt "Inf")]
+            (if (rd-range-is rt sti from to inf)
+              (do (push rt (of-double F64_INF))
+                  (return RS_OK)))
+            (let [^Value ninf (str-const rt "-Inf")]
+              (if (rd-range-is rt sti from to ninf)
+                (do (push rt (of-double (* -1.0 F64_INF)))
+                    (return RS_OK))))
+            (let [^Value nan (str-const rt "NaN")]
+              (if (rd-range-is rt sti from to nan)
+                (do (push rt (of-double F64_NAN))
+                    (return RS_OK))))
+            (let [^Sink sk (sink-open rt)]
+              (msg-lit rt sk "unknown ## literal: ")
+              (local ^:mut ^I32 i)
+              (set i from)
+              (while (< i to)
+                (do (msg-cp rt sk (rd-at rt sti i))
+                    (set i (+ i 1))))
+              (return (rd-fail-sink rt sti sk))))))
+    (if (== c 58)
+      (return (read-ns-map rt sti)))
+    (if (or (== c NO_CP) (is-ws c))
+      (return (rd-fail-lit rt sti "unexpected #")))
+    (return (read-tagged rt sti))))
+
+;; --- symbols, keywords, nil, true, false, numbers ---------------------------
+
+(doc "The index of the first `/` in `from`..`to`, or `to`.")
+(defn ^:method ^I32 slash-at [^Rt rt ^RootIx sti ^I32 from ^I32 to]
+  (local ^:mut ^I32 i)
+  (set i from)
+  (while (< i to)
+    (do (if (== (rd-at rt sti i) 47)
+          (return i))
+        (set i (+ i 1))))
+  (return to))
+
+(doc "A token that is not a delimiter: nil, true, false, `/`, a number, a"
+     "keyword or a symbol.")
+(defn ^:method ^I32 read-symbolic [^:mut ^Rt rt ^RootIx sti]
+  (let [^I32 from (rd-token rt sti)
+        ^I32 to (rd-pos rt sti)]
+    (if (== from to)
+      (return (rd-fail-lit rt sti "empty token")))
+    (let [^Value tn (str-const rt "nil")]
+      (if (rd-range-is rt sti from to tn)
+        (do (push rt NIL) (return RS_OK))))
+    (let [^Value tt (str-const rt "true")]
+      (if (rd-range-is rt sti from to tt)
+        (do (push rt TRUE) (return RS_OK))))
+    (let [^Value tf (str-const rt "false")]
+      (if (rd-range-is rt sti from to tf)
+        (do (push rt FALSE) (return RS_OK))))
+    (if (and (== (- to from) 1) (== (rd-at rt sti from) 47))
+      (let [^Value sl (lit-symbol1 rt "/")]
+        (push rt sl)
+        (return RS_OK)))
+    (let [^I32 nst (parse-number rt sti from to)]
+      (if (!= nst RS_NONE)
+        (return nst)))
+    (comment "`::kw` against this file's `ns`, `::a/kw` against its alias `a`.")
+    (if (== (rd-at rt sti from) 58)
+      (do (if (and (> (- to from) 1) (== (rd-at rt sti (+ from 1)) 58))
+            (let [^I32 t2 (+ from 2)
+                  ^I32 sl (slash-at rt sti t2 to)]
+              (if (< sl to)
+                (let [^RootIx base (mark rt)
+                      ^I32 ast (alias-ns rt sti t2 sl)]
+                  (if (!= ast RS_OK)
+                    (return ast))
+                  (top-as-string rt base)
+                  (let [^Value nm (rd-string rt sti (+ sl 1) to)
+                        ^Value kw (keyword-of rt (r rt base) nm)]
+                    (pop-to rt base)
+                    (push rt kw)
+                    (return RS_OK))))
+              (let [^RootIx base2 (mark rt)]
+                (push-current-ns rt sti)
+                (let [^Value nm2 (rd-string rt sti t2 to)
+                      ^Value kw2 (keyword-of rt (r rt base2) nm2)]
+                  (pop-to rt base2)
+                  (push rt kw2)
+                  (return RS_OK)))))
+          (let [^I32 t1 (+ from 1)
+                ^I32 sl1 (slash-at rt sti t1 to)]
+            (if (or (== sl1 to) (== sl1 t1))
+              (let [^Value whole (rd-string rt sti t1 to)
+                    ^Value kw3 (keyword-of rt NIL whole)]
+                (push rt kw3)
+                (return RS_OK)))
+            (let [^RootIx base3 (mark rt)
+                  ^Value kns (rd-string rt sti t1 sl1)
+                  ^RootIx knsi (push rt kns)
+                  ^Value knm (rd-string rt sti (+ sl1 1) to)
+                  ^Value kw4 (keyword-of rt (r rt knsi) knm)]
+              (pop-to rt base3)
+              (push rt kw4)
+              (return RS_OK)))))
+    (let [^I32 sl2 (slash-at rt sti from to)]
+      (if (or (== sl2 to) (or (== sl2 from) (== sl2 (- to 1))))
+        (let [^Value sn (rd-string rt sti from to)
+              ^Value sym (symbol-of rt NIL sn)]
+          (push rt sym)
+          (return RS_OK)))
+      (let [^RootIx base4 (mark rt)
+            ^Value sns (rd-string rt sti from sl2)
+            ^RootIx snsi (push rt sns)
+            ^Value snm (rd-string rt sti (+ sl2 1) to)
+            ^Value sym2 (symbol-of rt (r rt snsi) snm)]
+        (pop-to rt base4)
+        (push rt sym2)
+        (return RS_OK)))))
+
+;; --- one form ---------------------------------------------------------------
+
+(doc "Read `(head <form>)` for a reader macro whose character was just taken.")
+(defn ^:method ^I32 read-wrapped [^:mut ^Rt rt ^RootIx sti ^Value head]
+  (let [^RootIx base (mark rt)
+        ^RootIx hi (push rt head)
+        ^RootIx vi (mark rt)
+        ^I32 st (read-one rt sti)]
+    (if (== st RS_ERR)
+      (do (pop-to rt base)
+          (return RS_ERR)))
+    (if (!= st RS_OK)
+      (do (pop-to rt vi)
+          (push rt NIL)))
+    (wrap-root rt vi (r rt hi))
+    (set-r rt base (r rt vi))
+    (pop-to rt (+ base 1))
+    (return RS_OK)))
+
+(doc "One form at the cursor, pushed -- or `RS_EOF` at the end of the text."
+     "Every meta-able result is stamped with where it began, and a SEQUENCE"
+     "with the stash's child positions.")
+(defn ^:pub ^:method ^I32 read-one [^:mut ^Rt rt ^RootIx sti]
+  (rd-skip-ws rt sti)
+  (let [^I64 line (rd-int rt sti RDS_LINE)
+        ^I64 col (rd-int rt sti RDS_COL)
+        ^I32 c (rd-peek rt sti)
+        ^RootIx base (mark rt)]
+    (if (== c NO_CP)
+      (return RS_EOF))
+    (local ^:mut ^I32 st)
+    (set st RS_OK)
+    (local ^:mut ^I32 closer)
+    (set closer 93)
+    (if (== c 40)
+      (set closer 41))
+    (if (or (== c 40) (== c 91))
+      (do (set st (read-delimited rt sti closer))
+          (if (!= st RS_OK)
+            (return st))
+          (let [^I32 n (delimited-count rt base)]
+            (local ^:mut ^Value coll)
+            (if (== c 40)
+              (set coll (list-from-roots rt (+ base 1) n))
+              (set coll (vec-from-roots rt (+ base 1) n)))
+            (pop-to rt base)
+            (push rt coll)
+            (stamp-stash rt sti base line col true)))
+      (if (== c 123)
+        (do (set st (read-delimited rt sti 125))
+            (if (!= st RS_OK)
+              (return st))
+            (let [^I32 mn (delimited-count rt base)]
+              (if (and (rd-flag rt sti RDS_DEFER) (size-conditional rt (+ base 1) mn))
+                (let [^Value kvs (vec-from-roots rt (+ base 1) mn)]
+                  (pop-to rt base)
+                  (let [^RootIx kvi (push rt kvs)
+                        ^RootIx ncp (push rt NIL)]
+                    (push-conditional rt sti "map" line col ncp kvi)
+                    (let [^Value node (r rt (+ ncp 1))]
+                      (pop-to rt base)
+                      (push rt node))))
+                (do (if (!= (rem mn 2) 0)
+                      (do (pop-to rt base)
+                          (return (rd-fail-lit rt sti "map literal needs an even number of forms"))))
+                    (let [^Value flat (vec-from-roots rt (+ base 1) mn)
+                          ^Value om (ordered-map rt flat)]
+                      (pop-to rt base)
+                      (push rt om))))))
+        (if (== c 41)
+          (return (rd-fail-lit rt sti "unexpected )"))
+          (if (== c 93)
+            (return (rd-fail-lit rt sti "unexpected ]"))
+            (if (== c 125)
+              (return (rd-fail-lit rt sti "unexpected }"))
+              (if (== c 34)
+                (set st (read-string-lit rt sti))
+                (if (== c 92)
+                  (set st (read-char-lit rt sti))
+                  (if (== c 39)
+                    (do (rd-next rt sti)
+                        (let [^Value q (lit-symbol1 rt "quote")]
+                          (set st (read-wrapped rt sti q))))
+                    (if (== c 64)
+                      (do (rd-next rt sti)
+                          (let [^Value dr (lit-symbol rt "clojure.core" "deref")]
+                            (set st (read-wrapped rt sti dr))))
+                      (if (== c 94)
+                        (set st (read-meta rt sti))
+                        (if (== c 96)
+                          (set st (read-syntax-quote rt sti))
+                          (if (== c 126)
+                            (do (rd-next rt sti)
+                                (if (== (rd-peek rt sti) 64)
+                                  (do (rd-next rt sti)
+                                      (let [^Value us (lit-symbol rt "clojure.core" "unquote-splicing")]
+                                        (set st (read-wrapped rt sti us))))
+                                  (let [^Value uq (lit-symbol rt "clojure.core" "unquote")]
+                                    (set st (read-wrapped rt sti uq)))))
+                            (if (== c 35)
+                              (set st (read-dispatch rt sti line col))
+                              (set st (read-symbolic rt sti)))))))))))))))
+    (if (!= st RS_OK)
+      (return st))
+    (comment "EVERY meta-able form, and the stash's positions on a sequence.")
+    (stamp-stash rt sti base line col (is-seq rt (r rt base)))
+    (return RS_OK)))
+
+(doc "`` `form ``, at the backquote: the form read with a fresh gensym table,"
+     "then expanded.")
+(defn ^:method ^I32 read-syntax-quote [^:mut ^Rt rt ^RootIx sti]
+  (rd-next rt sti)
+  (let [^Value gm (empty-map rt)]
+    (rd-put rt sti RDS_GENSYMS gm))
+  (let [^I64 n0 (rd-int rt sti RDS_CONDS)
+        ^RootIx base (mark rt)
+        ^I32 st (read-one rt sti)]
+    (if (== st RS_ERR)
+      (return RS_ERR))
+    (if (!= st RS_OK)
+      (push rt NIL))
+    (let [^I32 g (deferred-guard rt sti n0 "syntax quote")]
+      (if (!= g RS_OK)
+        (do (pop-to rt base)
+            (return g))))
+    (let [^I32 sst (sq-form rt sti base)]
+      (rd-put rt sti RDS_GENSYMS NIL)
+      (if (!= sst RS_OK)
+        (do (pop-to rt base)
+            (return sst)))
+      (set-r rt base (r rt (+ base 1)))
+      (pop-to rt (+ base 1))
+      (return RS_OK))))
+
+;; --- the whole file ---------------------------------------------------------
+
+(doc "`{alias target}` for every `:as` in the `ns` form rooted at `fi`'s"
+     "require clauses, as the map the reader resolves `::a/kw` against.")
+(defn ^:method ns-aliases [^:mut ^Rt rt ^RootIx sti ^RootIx fi]
+  (let [^RootIx base (mark rt)
+        ^Value e (empty-map rt)
+        ^RootIx acci (push rt e)
+        ^Value kreq (lit-keyword1 rt "require")
+        ^RootIx kreqi (push rt kreq)
+        ^Value kuse (lit-keyword1 rt "use")
+        ^RootIx kusei (push rt kuse)
+        ^Value kas (lit-keyword1 rt "as")
+        ^RootIx kasi (push rt kas)
+        ^Value s0 (seq rt (r rt fi))
+        ^RootIx ci (push rt s0)]
+    (comment "`(drop 2 form)`.")
+    (let [^Value d1 (next rt (r rt ci))]
+      (set-r rt ci d1))
+    (let [^Value d2 (next rt (r rt ci))]
+      (set-r rt ci d2))
+    (forever
+      (if (nil? rt (r rt ci))
+        (break))
+      (let [^Value clause (first rt (r rt ci))
+            ^RootIx cli (push rt clause)]
+        (if (is-seq rt (r rt cli))
+          (let [^Value head (first rt (r rt cli))]
+            (if (or (val-eq rt head (r rt kreqi)) (val-eq rt head (r rt kusei)))
+              (let [^Value sp0 (next rt (r rt cli))
+                    ^RootIx spi (push rt sp0)]
+                (forever
+                  (if (nil? rt (r rt spi))
+                    (break))
+                  (let [^Value spec (first rt (r rt spi))
+                        ^RootIx speci (push rt spec)]
+                    (comment "`(apply hash-map (rest spec))` and its `:as`: the"
+                             "LAST `:as` wins, and an odd count leaves the final"
+                             "key's value nil.")
+                    (if (is-vector-like rt (r rt speci))
+                      (let [^I32 sn (vec-count rt (r rt speci))]
+                        (local ^:mut ^Value alias)
+                        (set alias NIL)
+                        (local ^:mut ^I32 j)
+                        (set j 1)
+                        (while (< j sn)
+                          (do (if (val-eq rt (vec-nth rt (r rt speci) j NIL) (r rt kasi))
+                                (set alias (vec-nth rt (r rt speci) (+ j 1) NIL)))
+                              (set j (+ j 2))))
+                        (if (and (not (nil? rt alias)) (!= alias FALSE))
+                          (let [^RootIx ali (push rt alias)
+                                ^Value m2 (map-assoc rt (r rt acci) (r rt ali)
+                                                     (vec-nth rt (r rt speci) 0 NIL))]
+                            (set-r rt acci m2)))))
+                    (pop-to rt speci))
+                  (let [^Value sn2 (next rt (r rt spi))]
+                    (set-r rt spi sn2)))))))
+        (pop-to rt cli))
+      (let [^Value cn (next rt (r rt ci))]
+        (set-r rt ci cn)))
+    (rd-put rt sti RDS_ALIASES (r rt acci))
+    (pop-to rt base)))
+
+(doc "One top-level form, pushed, or `RS_EOF`. A top-level `(ns ..)` sets the"
+     "namespace and aliases `::kw` and `#::{}` resolve against for the rest"
+     "of the read -- the FILE's own context, not the compiler's.")
+(defn ^:pub ^:method ^I32 read-top [^:mut ^Rt rt ^RootIx sti]
+  (forever
+    (let [^I64 n0 (rd-int rt sti RDS_CONDS)
+          ^RootIx base (mark rt)
+          ^I32 st (read-one rt sti)]
+      (if (== st RS_ERR)
+        (return RS_ERR))
+      (if (== st RS_EOF)
+        (do (if (== (rd-peek rt sti) NO_CP)
+              (return RS_EOF))
+            (continue)))
+      (if (== st RS_SPLICE)
+        (do (pop-to rt base)
+            (return (rd-fail-lit rt sti "#?@ outside a collection"))))
+      (comment "An unmatched `#?@` at the top: the guest's reader handed its"
+               "marker on as a form, which nothing can encode. Nothing is read"
+               "here instead.")
+      (if (== st RS_NONE)
+        (continue))
+      (let [^RootIx vi base]
+        (if (is-seq rt (r rt vi))
+          (let [^Value h (first rt (r rt vi))]
+            (if (is-sym1 rt h "ns")
+              (let [^Value nx (next rt (r rt vi))
+                    ^Value nm (first rt nx)]
+                (if (is-symbol rt nm)
+                  (do (rd-put rt sti RDS_NS nm)
+                      (ns-aliases rt sti vi)
+                      (if (!= n0 (rd-int rt sti RDS_CONDS))
+                        (rd-put rt sti RDS_APARTIAL TRUE)
+                        (rd-put rt sti RDS_APARTIAL FALSE))))))))
+        (if (is-conditional rt (r rt vi))
+          (let [^Value items (vec-nth rt (slot rt (r rt vi) 1) 4 NIL)
+                ^RootIx ii (push rt items)
+                ^I32 n (vec-count rt (r rt ii))]
+            (for [^I32 i 0 n]
+              (let [^Value x (vec-nth rt (r rt ii) i NIL)]
+                (if (is-seq rt x)
+                  (let [^Value xh (first rt x)]
+                    (if (is-sym1 rt xh "ns")
+                      (do (pop-to rt base)
+                          (return (rd-fail-lit rt sti "an ns form inside a reader conditional cannot be read before its features are known (DECISIONS.md#stdlib-preread)"))))))))
+            (pop-to rt ii)))
+        (return RS_OK)))))

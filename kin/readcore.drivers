@@ -1,0 +1,1016 @@
+--rust-head
+use std::collections::HashMap;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF_0000_0000_0000);
+const TRUE: Value = Value(0xFFFF_0000_0000_0001);
+const FALSE: Value = Value(0xFFFF_0000_0000_0002);
+const NOT_FOUND: Value = Value(0xFFFF_0000_0000_0003);
+
+const TY_STR: u8 = 1;
+const TY_SYM: u8 = 2;
+const TY_KW: u8 = 3;
+const TY_MAP: u8 = 6;
+const TY_NODE: u8 = 9;
+
+// readconst.kin's constants, copied by hand -- this driver does not compile
+// that module, so every RDS_/RS_ name and NO_CP is a literal duplicate of
+// `kin/readconst.kin`, not a reference to it.
+const RDS_CPS: u32 = 0; const RDS_I: u32 = 1; const RDS_N: u32 = 2;
+const RDS_LINE: u32 = 3; const RDS_COL: u32 = 4; const RDS_FILE: u32 = 5;
+const RDS_GENSYMS: u32 = 6; const RDS_FEATURES: u32 = 7; const RDS_NS: u32 = 8;
+const RDS_ALIASES: u32 = 9; const RDS_DEFER: u32 = 10; const RDS_CONDS: u32 = 11;
+const RDS_APARTIAL: u32 = 12; const RDS_PORTABLE: u32 = 13; const RDS_TAGS: u32 = 14;
+const RDS_CHILDPOS: u32 = 15; const RDS_GENSYM_N: u32 = 16; const RDS_ERRMSG: u32 = 17;
+const RDS_ERRLINE: u32 = 18; const RDS_ERRCOL: u32 = 19; const RDS_ERRPLAIN: u32 = 20;
+const RDS_LEN: u32 = 21;
+const RS_OK: u32 = 0; const RS_ERR: u32 = 4;
+const NO_CP: u32 = 1114112;
+
+impl Value {
+    fn is_nil(self) -> bool { self == NIL }
+    fn fixnum(n: i64) -> Value { Value((0xDu64 << 60) | ((n as u64) & 0x0000_FFFF_FFFF_FFFF)) }
+    fn as_fixnum(self) -> i64 { ((self.0 << 16) as i64) >> 16 }
+    fn heap(a: usize) -> Value { Value(a as u64) }
+    fn as_heap(self) -> usize { self.0 as usize }
+}
+
+// `is-ws`/`is-term`, copied from `kin/readconst.kin` by hand for the same
+// reason the RDS_/RS_ constants are: this driver never compiles that module.
+fn is_ws(c: u32) -> bool {
+    c == 32 || c == 9 || c == 10 || c == 13 || c == 12 || c == 44
+}
+fn is_term(c: u32) -> bool {
+    matches!(c, 34 | 59 | 64 | 94 | 96 | 126 | 40 | 41 | 91 | 93 | 123 | 125 | 92)
+}
+
+struct Obj { ty: u8, slots: Vec<Value> }
+
+struct Rt {
+    objs: Vec<Obj>,
+    roots: Vec<Value>,
+    cps: Vec<Vec<u32>>,
+    sinks: Vec<Vec<u32>>,
+    syms: HashMap<(String, String), Value>,
+    kws: HashMap<(String, String), Value>,
+    refuse: bool,
+}
+
+impl Rt {
+    fn new() -> Rt {
+        Rt { objs: Vec::new(), roots: Vec::new(), cps: Vec::new(), sinks: Vec::new(),
+             syms: HashMap::new(), kws: HashMap::new(), refuse: false }
+    }
+    fn obj(&mut self, ty: u8, slots: Vec<Value>) -> Value {
+        self.objs.push(Obj { ty, slots });
+        Value::heap(self.objs.len() - 1)
+    }
+    fn is_heap_ty(&self, v: Value, t: u8) -> bool {
+        let a = v.as_heap();
+        a < self.objs.len() && self.objs[a].ty == t
+            && v != NIL && v != TRUE && v != FALSE && v != NOT_FOUND
+            && (v.0 >> 60) != 0xD
+    }
+    // --- the shadow stack --------------------------------------------------
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn slot(&self, v: Value, i: u32) -> Value { self.objs[v.as_heap()].slots[i as usize] }
+
+    // --- the sink ------------------------------------------------------------
+    fn sink_open(&mut self) -> u32 { self.sinks.push(Vec::new()); (self.sinks.len() - 1) as u32 }
+    fn sink_put(&mut self, sk: u32, b: u32) { self.sinks[sk as usize].push(b); }
+    fn sink_close(&mut self, _sk: u32) {}
+    // ASCII-ONLY: every call this driver makes to `sink-string` holds bytes
+    // `sink-put-cp` would also write as single bytes (<128), so treating a
+    // raw byte as a code point is exact for everything this fixture reads
+    // back through it. The 4-byte case is read straight off the sink's bytes
+    // instead (`h_sink_bytes`), which is what actually exercises the encoder.
+    fn sink_string(&mut self, sk: u32) -> Value {
+        let bytes = self.sinks[sk as usize].clone();
+        let slots: Vec<Value> = bytes.iter().map(|&b| Value::fixnum(b as i64)).collect();
+        self.obj(TY_STR, slots)
+    }
+    fn h_sink_bytes(&self, sk: u32) -> Vec<u32> { self.sinks[sk as usize].clone() }
+
+    // --- the code-point buffer ------------------------------------------------
+    fn cps_open(&mut self) -> u32 { self.cps.push(Vec::new()); (self.cps.len() - 1) as u32 }
+    fn cps_put(&mut self, c: u32, v: u32) { self.cps[c as usize].push(v); }
+    fn cps_at(&self, c: u32, i: u32) -> u32 { self.cps[c as usize][i as usize] }
+    fn cps_len(&self, c: u32) -> u32 { self.cps[c as usize].len() as u32 }
+    fn cps_close(&mut self, _c: u32) {}
+    // CROSS-MODULE (`flint.rt.codepoints`), mocked: our strings already hold
+    // code points rather than UTF-8 bytes, so "decoding" is a copy.
+    fn code_points(&mut self, s: Value) -> u32 {
+        let c = self.cps_open();
+        let n = self.objs[s.as_heap()].slots.len();
+        for i in 0..n {
+            let cp = self.objs[s.as_heap()].slots[i].as_fixnum() as u32;
+            self.cps_put(c, cp);
+        }
+        c
+    }
+
+    // --- strings, symbols, keywords -------------------------------------------
+    fn h_text(&self, v: Value) -> String {
+        self.objs[v.as_heap()].slots.iter().map(|s| char::from_u32(s.as_fixnum() as u32).unwrap()).collect()
+    }
+    fn h_mkstr(&mut self, t: &str) -> Value {
+        let slots: Vec<Value> = t.chars().map(|c| Value::fixnum(c as i64)).collect();
+        self.obj(TY_STR, slots)
+    }
+    // `str-const`: a string from a HOST LITERAL.
+    fn string(&mut self, t: &'static str) -> Value { self.h_mkstr(t) }
+    // `symbol-of`/`keyword-of`: INTERNED by content, which is what makes
+    // `val-eq` a plain `==` safe for every symbol and keyword this fixture
+    // builds -- two calls with the same ns/name text answer the identical
+    // object. `ns` nil means no namespace.
+    fn h_nstext(&self, ns: Value) -> String { if ns.is_nil() { String::new() } else { self.h_text(ns) } }
+    fn symbol_from_values(&mut self, ns: Value, nm: Value) -> Value {
+        let key = (self.h_nstext(ns), self.h_text(nm));
+        if let Some(v) = self.syms.get(&key) { return *v; }
+        let nsv = if key.0.is_empty() { NIL } else { self.h_mkstr(&key.0) };
+        let nmv = self.h_mkstr(&key.1);
+        let v = self.obj(TY_SYM, vec![nsv, nmv]);
+        self.syms.insert(key, v);
+        v
+    }
+    fn keyword_from_values(&mut self, ns: Value, nm: Value) -> Value {
+        let key = (self.h_nstext(ns), self.h_text(nm));
+        if let Some(v) = self.kws.get(&key) { return *v; }
+        let nsv = if key.0.is_empty() { NIL } else { self.h_mkstr(&key.0) };
+        let nmv = self.h_mkstr(&key.1);
+        let v = self.obj(TY_KW, vec![nsv, nmv]);
+        self.kws.insert(key, v);
+        v
+    }
+    fn is_symbol(&mut self, v: Value) -> bool { self.is_heap_ty(v, TY_SYM) }
+    // CROSS-MODULE (`flint.rt.names`), mocked.
+    fn name_of(&mut self, v: Value) -> Value {
+        if self.is_heap_ty(v, TY_SYM) || self.is_heap_ty(v, TY_KW) { self.slot(v, 1) } else { v }
+    }
+    fn ns_of(&mut self, v: Value) -> Value {
+        if self.is_heap_ty(v, TY_SYM) || self.is_heap_ty(v, TY_KW) { self.slot(v, 0) } else { NIL }
+    }
+    // CROSS-MODULE (`flint.rt.ropeflat`), mocked: appends a string's code
+    // points through `sink-put-cp`, which this driver exists to check.
+    fn s_append(&mut self, v: Value, sk: u32) {
+        let n = self.objs[v.as_heap()].slots.len();
+        for i in 0..n {
+            let cp = self.objs[v.as_heap()].slots[i].as_fixnum() as u32;
+            self.sink_put_cp(sk, cp);
+        }
+    }
+    // CROSS-MODULE (`flint.rt.valeq`), mocked as raw equality -- sound here
+    // because every symbol/keyword this fixture compares is interned above.
+    fn val_eq(&mut self, a: Value, b: Value) -> bool { a == b }
+
+    // --- maps (CROSS-MODULE: `flint.rt.mapread`/`mapwrite`), mocked as a
+    // flat, order-preserving association list, the same order `mapmake.kin`
+    // documents for an array map. --------------------------------------------
+    fn empty_map(&mut self) -> Value { self.obj(TY_MAP, Vec::new()) }
+    fn map_contains(&mut self, m: Value, k: Value) -> bool {
+        let s = &self.objs[m.as_heap()].slots;
+        let mut i = 0;
+        while i < s.len() { if s[i] == k { return true; } i += 2; }
+        false
+    }
+    fn map_get(&mut self, m: Value, k: Value, default: Value) -> Value {
+        let s = &self.objs[m.as_heap()].slots;
+        let mut i = 0;
+        while i < s.len() { if s[i] == k { return s[i + 1]; } i += 2; }
+        default
+    }
+    fn map_assoc(&mut self, m: Value, k: Value, v: Value) -> Value {
+        let mut s = self.objs[m.as_heap()].slots.clone();
+        let mut i = 0;
+        let mut found = false;
+        while i < s.len() { if s[i] == k { s[i + 1] = v; found = true; break; } i += 2; }
+        if !found { s.push(k); s.push(v); }
+        self.obj(TY_MAP, s)
+    }
+
+    // --- the reader's state node (CROSS-MODULE: `flint.rt.vecnode`), mocked.
+    // `refuse` is the allocation-failure switch `exinfo.drivers`/
+    // `mapmake.drivers` use the same way. ------------------------------------
+    fn new_node(&mut self, len: u32, default: Value) -> Value {
+        if self.refuse { return NIL; }
+        self.obj(TY_NODE, vec![default; len as usize])
+    }
+    fn node_get(&self, node: Value, s: u32) -> Value { self.slot(node, s) }
+    fn node_set(&mut self, node: Value, s: u32, v: Value) {
+        let a = node.as_heap();
+        self.objs[a].slots[s as usize] = v;
+    }
+}
+impl Rt {
+--rust
+}
+fn b(x: bool) -> u32 { if x { 1 } else { 0 } }
+fn bytes_str(v: &[u32]) -> String {
+    v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")
+}
+fn main() {
+    let mut rt = Rt::new();
+    let mut o = String::new();
+
+    // THE TEXT, laid out by hand so every index below is checkable:
+    //   0:'#' 1:'!' 2:'x' 3:'\n'                     (shebang line, skipped)
+    //   4:'a' 5:'b' 6:',' 7:',' 8:';' 9:' ' 10:'h' 11:'i' 12:'\n'  (commas + a comment)
+    //   13:'c' 14:'d' 15:'e' 16:' ' 17:'f' 18:'g' 19:'h' 20:'\n'
+    let src = rt.h_mkstr("#!x\nab,,; hi\ncde fgh\n");
+    let srci = rt.push(src);
+    let node = rt.rd_new(rt.r(srci), NIL, NIL, NIL, false, 0);
+    let sti = rt.push(node);
+
+    o.push_str(&format!("init=L{}C{}P{} ", rt.rd_int(sti, RDS_LINE), rt.rd_int(sti, RDS_COL), rt.rd_pos(sti)));
+    o.push_str(&format!("defer0={} portable0={} ", b(rt.rd_flag(sti, RDS_DEFER)), b(rt.rd_flag(sti, RDS_PORTABLE))));
+    {
+        let tags = rt.rd_get(sti, RDS_TAGS);
+        let tk = rt.lit_symbol("flint", "table");
+        let has = rt.map_contains(tags, tk);
+        let v = rt.map_get(tags, tk, NOT_FOUND);
+        let matches = rt.is_sym2(v, "flint.table", "read-table");
+        o.push_str(&format!("tags1={}{} ", b(has), b(matches)));
+    }
+
+    rt.rd_skip_ws(sti);
+    o.push_str(&format!("skip1=L{}C{}P{} ", rt.rd_int(sti, RDS_LINE), rt.rd_int(sti, RDS_COL), rt.rd_pos(sti)));
+
+    let from1 = rt.rd_token(sti);
+    let to1 = rt.rd_pos(sti);
+    let t1 = rt.rd_string(sti, from1, to1);
+    o.push_str(&format!("tok1={}@P{}C{} ", rt.h_text(t1), to1, rt.rd_int(sti, RDS_COL)));
+
+    rt.rd_skip_ws(sti);
+    o.push_str(&format!("skip2=L{}C{}P{} ", rt.rd_int(sti, RDS_LINE), rt.rd_int(sti, RDS_COL), rt.rd_pos(sti)));
+
+    let from2 = rt.rd_token(sti);
+    let to2 = rt.rd_pos(sti);
+    let t2 = rt.rd_string(sti, from2, to2);
+    o.push_str(&format!("tok2={}@P{}C{} ", rt.h_text(t2), to2, rt.rd_int(sti, RDS_COL)));
+
+    rt.rd_skip_ws(sti);
+    o.push_str(&format!("skip3=L{}C{}P{} ", rt.rd_int(sti, RDS_LINE), rt.rd_int(sti, RDS_COL), rt.rd_pos(sti)));
+
+    let from3 = rt.rd_token(sti);
+    let to3 = rt.rd_pos(sti);
+    let t3 = rt.rd_string(sti, from3, to3);
+    o.push_str(&format!("tok3={}@P{}C{} ", rt.h_text(t3), to3, rt.rd_int(sti, RDS_COL)));
+
+    rt.rd_skip_ws(sti);
+    let eof = rt.rd_peek(sti) == NO_CP;
+    o.push_str(&format!("skip4=L{}C{}P{}EOF{} ", rt.rd_int(sti, RDS_LINE), rt.rd_int(sti, RDS_COL), rt.rd_pos(sti), b(eof)));
+
+    let st = rt.rd_fail_lit(sti, "unexpected eof");
+    let msg = rt.rd_get(sti, RDS_ERRMSG);
+    o.push_str(&format!("fail=st{}|{}|L{}C{}|plain{} ",
+                        st, rt.h_text(msg), rt.rd_int(sti, RDS_ERRLINE), rt.rd_int(sti, RDS_ERRCOL),
+                        b(rt.rd_flag(sti, RDS_ERRPLAIN))));
+
+    // sink-put-cp over all four UTF-8 tiers.
+    let sk1 = rt.sink_open(); rt.sink_put_cp(sk1, 65);
+    let sk2 = rt.sink_open(); rt.sink_put_cp(sk2, 233);
+    let sk3 = rt.sink_open(); rt.sink_put_cp(sk3, 8364);
+    let sk4 = rt.sink_open(); rt.sink_put_cp(sk4, 0x10000);
+    o.push_str(&format!("utf8=[{}][{}][{}][{}] ",
+                        bytes_str(&rt.h_sink_bytes(sk1)), bytes_str(&rt.h_sink_bytes(sk2)),
+                        bytes_str(&rt.h_sink_bytes(sk3)), bytes_str(&rt.h_sink_bytes(sk4))));
+
+    // A SECOND READER: the tag map ALREADY binds `flint/table`, so `rd-new`
+    // must leave it alone; `portable`, `gensym0` and a non-nil `features`
+    // thread through too.
+    let src2 = rt.h_mkstr("z");
+    let src2i = rt.push(src2);
+    let tk = rt.lit_symbol("flint", "table");
+    let tki = rt.push(tk);
+    let customv = rt.lit_keyword("custom", "foo");
+    let cvi = rt.push(customv);
+    let em = rt.empty_map();
+    let emi = rt.push(em);
+    let tags0 = rt.map_assoc(rt.r(emi), rt.r(tki), rt.r(cvi));
+    let tags0i = rt.push(tags0);
+    let feat2 = Value::fixnum(1);
+    let node2 = rt.rd_new(rt.r(src2i), NIL, feat2, rt.r(tags0i), true, 5);
+    let sti2 = rt.push(node2);
+    let tags2 = rt.rd_get(sti2, RDS_TAGS);
+    let v2 = rt.map_get(tags2, rt.r(tki), NOT_FOUND);
+    o.push_str(&format!("rd2=defer{}portable{}gensym{}same{}notdefault{} ",
+                        b(rt.rd_flag(sti2, RDS_DEFER)), b(rt.rd_flag(sti2, RDS_PORTABLE)),
+                        rt.rd_int(sti2, RDS_GENSYM_N), b(rt.val_eq(v2, rt.r(cvi))),
+                        b(!rt.is_sym2(v2, "flint.table", "read-table"))));
+
+    // A REFUSED ALLOCATION: `rd-new` must answer nil and leave the root
+    // stack exactly where it found it.
+    let mb = rt.mark();
+    rt.refuse = true;
+    let node3 = rt.rd_new(rt.r(src2i), NIL, NIL, NIL, false, 0);
+    let ma = rt.mark();
+    rt.refuse = false;
+    o.push_str(&format!("refuse=nil{}roots{}", b(node3.is_nil()), b(ma == mb)));
+
+    println!("{}", o.trim());
+}
+--java-head
+    static final long NIL = 0xFFFF_0000_0000_0000L;
+    static final long TRUE = 0xFFFF_0000_0000_0001L;
+    static final long FALSE = 0xFFFF_0000_0000_0002L;
+    static final long NOT_FOUND = 0xFFFF_0000_0000_0003L;
+    static final int TY_STR = 1, TY_SYM = 2, TY_KW = 3, TY_MAP = 6, TY_NODE = 9;
+
+    // readconst.kin's constants, copied by hand -- this driver does not
+    // compile that module.
+    static final int RDS_CPS = 0, RDS_I = 1, RDS_N = 2, RDS_LINE = 3, RDS_COL = 4,
+                     RDS_FILE = 5, RDS_GENSYMS = 6, RDS_FEATURES = 7, RDS_NS = 8,
+                     RDS_ALIASES = 9, RDS_DEFER = 10, RDS_CONDS = 11, RDS_APARTIAL = 12,
+                     RDS_PORTABLE = 13, RDS_TAGS = 14, RDS_CHILDPOS = 15,
+                     RDS_GENSYM_N = 16, RDS_ERRMSG = 17, RDS_ERRLINE = 18,
+                     RDS_ERRCOL = 19, RDS_ERRPLAIN = 20, RDS_LEN = 21;
+    static final int RS_OK = 0, RS_ERR = 4;
+    static final int NO_CP = 1114112;
+
+    static final class Val {
+        static final long NIL = Probe.NIL, TRUE = Probe.TRUE, FALSE = Probe.FALSE,
+                         NOT_FOUND = Probe.NOT_FOUND;
+        static boolean isNil(long v) { return v == NIL; }
+        static long fixnum(long n) { return (0xDL << 60) | (n & 0x0000FFFFFFFFFFFFL); }
+        static long asFixnum(long v) { return (v << 16) >> 16; }
+        static long heap(long a) { return a; }
+    }
+
+    // `is-ws`/`is-term`, copied from `kin/readconst.kin` by hand for the same
+    // reason the RDS_/RS_ constants are.
+    static boolean isWs(int c) {
+        return c == 32 || c == 9 || c == 10 || c == 13 || c == 12 || c == 44;
+    }
+    static boolean isTerm(int c) {
+        switch (c) {
+            case 34: case 59: case 64: case 94: case 96: case 126: case 40:
+            case 41: case 91: case 93: case 123: case 125: case 92: return true;
+            default: return false;
+        }
+    }
+
+    static final class Obj { int ty; long[] slots; }
+
+    static final class Rt {
+        java.util.ArrayList<Obj> objs = new java.util.ArrayList<>();
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        java.util.ArrayList<int[]> cps = new java.util.ArrayList<>();
+        java.util.ArrayList<java.util.ArrayList<Integer>> sinks = new java.util.ArrayList<>();
+        java.util.HashMap<String, Long> syms = new java.util.HashMap<>();
+        java.util.HashMap<String, Long> kws = new java.util.HashMap<>();
+        boolean refuse = false;
+
+        long obj(int ty, long[] slots) {
+            Obj o = new Obj(); o.ty = ty; o.slots = slots; objs.add(o);
+            return objs.size() - 1;
+        }
+        boolean isHeapTy(long v, int t) {
+            if (v == NIL || v == TRUE || v == FALSE || v == NOT_FOUND) return false;
+            if ((v >>> 60) == 0xDL) return false;
+            return v >= 0 && v < objs.size() && objs.get((int) v).ty == t;
+        }
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void setR(int i, long v) { roots.set(i, v); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long slot(long v, int i) { return objs.get((int) v).slots[i]; }
+
+        int sinkOpen() { sinks.add(new java.util.ArrayList<>()); return sinks.size() - 1; }
+        void sinkPut(int sk, int b) { sinks.get(sk).add(b); }
+        void sinkClose(int sk) {}
+        // ASCII-ONLY: see the Rust driver for why this is exact for every
+        // call this fixture makes to it.
+        long sinkString(int sk) {
+            java.util.ArrayList<Integer> bytes = sinks.get(sk);
+            long[] slots = new long[bytes.size()];
+            for (int i = 0; i < bytes.size(); i++) slots[i] = Val.fixnum(bytes.get(i));
+            return obj(TY_STR, slots);
+        }
+        int[] sinkBytes(int sk) {
+            java.util.ArrayList<Integer> bytes = sinks.get(sk);
+            int[] out = new int[bytes.size()];
+            for (int i = 0; i < bytes.size(); i++) out[i] = bytes.get(i);
+            return out;
+        }
+
+        int cpsOpen() { cps.add(new int[0]); return cps.size() - 1; }
+        void cpsPut(int c, int v) {
+            int[] a = cps.get(c); int[] b = new int[a.length + 1];
+            System.arraycopy(a, 0, b, 0, a.length); b[a.length] = v;
+            cps.set(c, b);
+        }
+        int cpsAt(int c, int i) { return cps.get(c)[i]; }
+        int cpsLen(int c) { return cps.get(c).length; }
+        void cpsClose(int c) {}
+
+        String text(long v) {
+            long[] s = objs.get((int) v).slots;
+            StringBuilder sb = new StringBuilder();
+            for (long cp : s) sb.appendCodePoint((int) Val.asFixnum(cp));
+            return sb.toString();
+        }
+        long mkstr(String t) {
+            int[] cps = t.codePoints().toArray();
+            long[] slots = new long[cps.length];
+            for (int i = 0; i < cps.length; i++) slots[i] = Val.fixnum(cps[i]);
+            return obj(TY_STR, slots);
+        }
+        String nsText(long ns) { return Val.isNil(ns) ? "" : text(ns); }
+        long internSym(long ns, long nm) {
+            String key = nsText(ns) + "\u0000" + text(nm);
+            Long v = syms.get(key);
+            if (v != null) return v;
+            long nsv = nsText(ns).isEmpty() ? NIL : mkstr(nsText(ns));
+            long nmv = mkstr(text(nm));
+            long out = obj(TY_SYM, new long[]{nsv, nmv});
+            syms.put(key, out);
+            return out;
+        }
+        long internKw(long ns, long nm) {
+            String key = nsText(ns) + "\u0000" + text(nm);
+            Long v = kws.get(key);
+            if (v != null) return v;
+            long nsv = nsText(ns).isEmpty() ? NIL : mkstr(nsText(ns));
+            long nmv = mkstr(text(nm));
+            long out = obj(TY_KW, new long[]{nsv, nmv});
+            kws.put(key, out);
+            return out;
+        }
+
+        long emptyMapObj() { return obj(TY_MAP, new long[0]); }
+        boolean mapContains(long m, long k) {
+            long[] s = objs.get((int) m).slots;
+            for (int i = 0; i < s.length; i += 2) if (s[i] == k) return true;
+            return false;
+        }
+        long mapGetImpl(long m, long k, long dflt) {
+            long[] s = objs.get((int) m).slots;
+            for (int i = 0; i < s.length; i += 2) if (s[i] == k) return s[i + 1];
+            return dflt;
+        }
+        long mapAssocImpl(long m, long k, long v) {
+            long[] s = objs.get((int) m).slots;
+            long[] out = s.clone();
+            for (int i = 0; i < out.length; i += 2) {
+                if (out[i] == k) { out[i + 1] = v; return obj(TY_MAP, out); }
+            }
+            long[] grown = new long[out.length + 2];
+            System.arraycopy(out, 0, grown, 0, out.length);
+            grown[out.length] = k; grown[out.length + 1] = v;
+            return obj(TY_MAP, grown);
+        }
+
+        long newNodeImpl(int len, long dflt) {
+            if (refuse) return NIL;
+            long[] slots = new long[len];
+            java.util.Arrays.fill(slots, dflt);
+            return obj(TY_NODE, slots);
+        }
+    }
+
+    // CROSS-MODULE (`flint.rt.codepoints`), mocked: a string already holds
+    // code points, so "decoding" is a copy.
+    static int codePoints(Rt rt, long s) {
+        int c = rt.cpsOpen();
+        long[] slots = rt.objs.get((int) s).slots;
+        for (long cp : slots) rt.cpsPut(c, (int) Val.asFixnum(cp));
+        return c;
+    }
+    static long nodeGet(Rt rt, long node, int s) { return rt.slot(node, s); }
+    static void nodeSet(Rt rt, long node, int s, long v) { rt.objs.get((int) node).slots[s] = v; }
+    static long newNode(Rt rt, int len, long dflt) { return rt.newNodeImpl(len, dflt); }
+    static boolean isSymbol(Rt rt, long v) { return rt.isHeapTy(v, TY_SYM); }
+    static long nameOf(Rt rt, long v) {
+        return (rt.isHeapTy(v, TY_SYM) || rt.isHeapTy(v, TY_KW)) ? rt.slot(v, 1) : v;
+    }
+    static long nsOf(Rt rt, long v) {
+        return (rt.isHeapTy(v, TY_SYM) || rt.isHeapTy(v, TY_KW)) ? rt.slot(v, 0) : NIL;
+    }
+    // CROSS-MODULE (`flint.rt.ropeflat`), mocked.
+    static void sAppend(Rt rt, long v, int sk) {
+        long[] slots = rt.objs.get((int) v).slots;
+        for (long cp : slots) sinkPutCp(rt, sk, (int) Val.asFixnum(cp));
+    }
+    // CROSS-MODULE (`flint.rt.valeq`), mocked as raw equality -- sound
+    // because every symbol/keyword this fixture compares is interned.
+    static boolean valEq(Rt rt, long a, long b) { return a == b; }
+    static boolean mapContains(Rt rt, long m, long k) { return rt.mapContains(m, k); }
+    static long mapGet(Rt rt, long m, long k, long dflt) { return rt.mapGetImpl(m, k, dflt); }
+    static long mapAssoc(Rt rt, long m, long k, long v) { return rt.mapAssocImpl(m, k, v); }
+
+    // `str-const`, bare.
+    static final class Str {
+        static long of(Rt rt, String t) { return rt.mkstr(t); }
+    }
+    // `symbol-of`/`keyword-of`/`empty-map` spelled FULLY QUALIFIED by the
+    // vocabulary -- nested classes resolve the same dotted name the real
+    // package would, the trick `tablecell.drivers` already uses for `Maps`.
+    static final class com { static final class flint { static final class rt {
+    static final class Str {
+        static long symbolOf(Rt rt, long ns, long nm) { return rt.internSym(ns, nm); }
+        static long keywordOf(Rt rt, long ns, long nm) { return rt.internKw(ns, nm); }
+    }
+    static final class Maps {
+        static long empty(Rt rt) { return rt.emptyMapObj(); }
+    }
+    } } }
+--java
+    static int b(boolean x) { return x ? 1 : 0; }
+    static String bytesStr(int[] v) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < v.length; i++) { if (i > 0) sb.append(','); sb.append(v[i]); }
+        return sb.toString();
+    }
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+
+        // THE TEXT -- see the Rust driver for the index-by-index layout.
+        long src = rt.mkstr("#!x\nab,,; hi\ncde fgh\n");
+        int srci = rt.push(src);
+        long node = rdNew(rt, rt.r(srci), NIL, NIL, NIL, false, 0);
+        int sti = rt.push(node);
+
+        o.append("init=L").append(rdInt(rt, sti, RDS_LINE)).append('C').append(rdInt(rt, sti, RDS_COL))
+         .append('P').append(rdPos(rt, sti)).append(' ');
+        o.append("defer0=").append(b(rdFlag(rt, sti, RDS_DEFER))).append(" portable0=")
+         .append(b(rdFlag(rt, sti, RDS_PORTABLE))).append(' ');
+        {
+            long tags = rdGet(rt, sti, RDS_TAGS);
+            long tk = litSymbol(rt, "flint", "table");
+            boolean has = mapContains(rt, tags, tk);
+            long v = mapGet(rt, tags, tk, NOT_FOUND);
+            boolean matches = isSym2(rt, v, "flint.table", "read-table");
+            o.append("tags1=").append(b(has)).append(b(matches)).append(' ');
+        }
+
+        rdSkipWs(rt, sti);
+        o.append("skip1=L").append(rdInt(rt, sti, RDS_LINE)).append('C').append(rdInt(rt, sti, RDS_COL))
+         .append('P').append(rdPos(rt, sti)).append(' ');
+
+        int from1 = rdToken(rt, sti);
+        int to1 = rdPos(rt, sti);
+        long t1 = rdString(rt, sti, from1, to1);
+        o.append("tok1=").append(rt.text(t1)).append('@').append('P').append(to1).append('C')
+         .append(rdInt(rt, sti, RDS_COL)).append(' ');
+
+        rdSkipWs(rt, sti);
+        o.append("skip2=L").append(rdInt(rt, sti, RDS_LINE)).append('C').append(rdInt(rt, sti, RDS_COL))
+         .append('P').append(rdPos(rt, sti)).append(' ');
+
+        int from2 = rdToken(rt, sti);
+        int to2 = rdPos(rt, sti);
+        long t2 = rdString(rt, sti, from2, to2);
+        o.append("tok2=").append(rt.text(t2)).append('@').append('P').append(to2).append('C')
+         .append(rdInt(rt, sti, RDS_COL)).append(' ');
+
+        rdSkipWs(rt, sti);
+        o.append("skip3=L").append(rdInt(rt, sti, RDS_LINE)).append('C').append(rdInt(rt, sti, RDS_COL))
+         .append('P').append(rdPos(rt, sti)).append(' ');
+
+        int from3 = rdToken(rt, sti);
+        int to3 = rdPos(rt, sti);
+        long t3 = rdString(rt, sti, from3, to3);
+        o.append("tok3=").append(rt.text(t3)).append('@').append('P').append(to3).append('C')
+         .append(rdInt(rt, sti, RDS_COL)).append(' ');
+
+        rdSkipWs(rt, sti);
+        boolean eof = rdPeek(rt, sti) == NO_CP;
+        o.append("skip4=L").append(rdInt(rt, sti, RDS_LINE)).append('C').append(rdInt(rt, sti, RDS_COL))
+         .append('P').append(rdPos(rt, sti)).append("EOF").append(b(eof)).append(' ');
+
+        int st = rdFailLit(rt, sti, "unexpected eof");
+        long msg = rdGet(rt, sti, RDS_ERRMSG);
+        o.append("fail=st").append(st).append('|').append(rt.text(msg)).append('|')
+         .append('L').append(rdInt(rt, sti, RDS_ERRLINE)).append('C').append(rdInt(rt, sti, RDS_ERRCOL))
+         .append("|plain").append(b(rdFlag(rt, sti, RDS_ERRPLAIN))).append(' ');
+
+        int sk1 = rt.sinkOpen(); sinkPutCp(rt, sk1, 65);
+        int sk2 = rt.sinkOpen(); sinkPutCp(rt, sk2, 233);
+        int sk3 = rt.sinkOpen(); sinkPutCp(rt, sk3, 8364);
+        int sk4 = rt.sinkOpen(); sinkPutCp(rt, sk4, 0x10000);
+        o.append("utf8=[").append(bytesStr(rt.sinkBytes(sk1))).append("][")
+         .append(bytesStr(rt.sinkBytes(sk2))).append("][").append(bytesStr(rt.sinkBytes(sk3)))
+         .append("][").append(bytesStr(rt.sinkBytes(sk4))).append("] ");
+
+        long src2 = rt.mkstr("z");
+        int src2i = rt.push(src2);
+        long tk = litSymbol(rt, "flint", "table");
+        int tki = rt.push(tk);
+        long customv = litKeyword(rt, "custom", "foo");
+        int cvi = rt.push(customv);
+        long em = com.flint.rt.Maps.empty(rt);
+        int emi = rt.push(em);
+        long tags0 = mapAssoc(rt, rt.r(emi), rt.r(tki), rt.r(cvi));
+        int tags0i = rt.push(tags0);
+        long feat2 = Val.fixnum(1);
+        long node2 = rdNew(rt, rt.r(src2i), NIL, feat2, rt.r(tags0i), true, 5);
+        int sti2 = rt.push(node2);
+        long tags2 = rdGet(rt, sti2, RDS_TAGS);
+        long v2 = mapGet(rt, tags2, rt.r(tki), NOT_FOUND);
+        o.append("rd2=defer").append(b(rdFlag(rt, sti2, RDS_DEFER))).append("portable")
+         .append(b(rdFlag(rt, sti2, RDS_PORTABLE))).append("gensym").append(rdInt(rt, sti2, RDS_GENSYM_N))
+         .append("same").append(b(valEq(rt, v2, rt.r(cvi)))).append("notdefault")
+         .append(b(!isSym2(rt, v2, "flint.table", "read-table"))).append(' ');
+
+        int mb = rt.mark();
+        rt.refuse = true;
+        long node3 = rdNew(rt, rt.r(src2i), NIL, NIL, NIL, false, 0);
+        int ma = rt.mark();
+        rt.refuse = false;
+        o.append("refuse=nil").append(b(Val.isNil(node3))).append("roots").append(b(ma == mb));
+
+        System.out.println(o.toString().trim());
+    }
+--csharp-pre
+namespace Flint.Rt {
+    // `symbol-of`/`keyword-of`/`empty-map` reach here as `global::Flint.Rt.X`,
+    // which needs a genuine top-level namespace -- a nested shim in `class
+    // Probe` is not one. See `exinfo.drivers`/`mapmake.drivers` for the same
+    // trick on other vocabulary words.
+    internal static class Str {
+        internal static long SymbolOf(Probe.Rt rt, long ns, long nm) { return rt.InternSym(ns, nm); }
+        internal static long KeywordOf(Probe.Rt rt, long ns, long nm) { return rt.InternKw(ns, nm); }
+    }
+    internal static class Maps {
+        internal static long Empty(Probe.Rt rt) { return rt.EmptyMapObj(); }
+    }
+}
+--csharp-head
+    internal const long Nil = unchecked((long) 0xFFFF000000000000UL);
+    internal const long True = unchecked((long) 0xFFFF000000000001UL);
+    internal const long False = unchecked((long) 0xFFFF000000000002UL);
+    internal const long NotFound = unchecked((long) 0xFFFF000000000003UL);
+    internal const int TyStr = 1, TySym = 2, TyKw = 3, TyMap = 6, TyNode = 9;
+
+    internal const int RdsCps = 0, RdsI = 1, RdsN = 2, RdsLine = 3, RdsCol = 4,
+                       RdsFile = 5, RdsGensyms = 6, RdsFeatures = 7, RdsNs = 8,
+                       RdsAliases = 9, RdsDefer = 10, RdsConds = 11, RdsApartial = 12,
+                       RdsPortable = 13, RdsTags = 14, RdsChildpos = 15,
+                       RdsGensymN = 16, RdsErrmsg = 17, RdsErrline = 18,
+                       RdsErrcol = 19, RdsErrplain = 20, RdsLen = 21;
+    internal const int RsOk = 0, RsErr = 4;
+    internal const int NoCp = 1114112;
+
+    internal static class Val {
+        internal const long Nil = Probe.Nil, True = Probe.True, False = Probe.False,
+                           NotFound = Probe.NotFound;
+        internal static bool IsNil(long v) { return v == Nil; }
+        internal static long Fixnum(long n) { return unchecked((long) ((0xDUL << 60) | ((ulong) n & 0x0000FFFFFFFFFFFFUL))); }
+        internal static long AsFixnum(long v) { return (v << 16) >> 16; }
+        internal static long Heap(long a) { return a; }
+    }
+
+    internal static bool IsWs(int c) {
+        return c == 32 || c == 9 || c == 10 || c == 13 || c == 12 || c == 44;
+    }
+    internal static bool IsTerm(int c) {
+        switch (c) {
+            case 34: case 59: case 64: case 94: case 96: case 126: case 40:
+            case 41: case 91: case 93: case 123: case 125: case 92: return true;
+            default: return false;
+        }
+    }
+
+    internal sealed class Obj { internal int Ty; internal long[] Slots; }
+
+    internal sealed class Rt {
+        internal System.Collections.Generic.List<Obj> Objs = new();
+        internal System.Collections.Generic.List<long> Roots = new();
+        internal System.Collections.Generic.List<int[]> Cps = new();
+        internal System.Collections.Generic.List<System.Collections.Generic.List<int>> Sinks = new();
+        internal System.Collections.Generic.Dictionary<string, long> Syms = new();
+        internal System.Collections.Generic.Dictionary<string, long> Kws = new();
+        internal bool Refuse = false;
+
+        internal long MakeObj(int ty, long[] slots) {
+            Objs.Add(new Obj { Ty = ty, Slots = slots });
+            return Objs.Count - 1;
+        }
+        internal bool IsHeapTy(long v, int t) {
+            if (v == Nil || v == True || v == False || v == NotFound) return false;
+            if ((ulong) v >> 60 == 0xD) return false;
+            return v >= 0 && v < Objs.Count && Objs[(int) v].Ty == t;
+        }
+        internal int Mark() { return Roots.Count; }
+        internal int Push(long v) { Roots.Add(v); return Roots.Count - 1; }
+        internal long R(int i) { return Roots[i]; }
+        internal void SetR(int i, long v) { Roots[i] = v; }
+        internal void PopTo(int n) { Roots.RemoveRange(n, Roots.Count - n); }
+        internal long Slot(long v, int i) { return Objs[(int) v].Slots[i]; }
+
+        internal int SinkOpen() { Sinks.Add(new System.Collections.Generic.List<int>()); return Sinks.Count - 1; }
+        internal void SinkPut(int sk, int b) { Sinks[sk].Add(b); }
+        internal void SinkClose(int sk) {}
+        internal long SinkString(int sk) {
+            var bytes = Sinks[sk];
+            var slots = new long[bytes.Count];
+            for (int i = 0; i < bytes.Count; i++) slots[i] = Val.Fixnum(bytes[i]);
+            return MakeObj(TyStr, slots);
+        }
+        internal int[] SinkBytes(int sk) { return Sinks[sk].ToArray(); }
+
+        internal int CpsOpen() { Cps.Add(new int[0]); return Cps.Count - 1; }
+        internal void CpsPut(int c, int v) {
+            var a = Cps[c]; var b = new int[a.Length + 1];
+            System.Array.Copy(a, b, a.Length); b[a.Length] = v;
+            Cps[c] = b;
+        }
+        internal int CpsAt(int c, int i) { return Cps[c][i]; }
+        internal int CpsLen(int c) { return Cps[c].Length; }
+        internal void CpsClose(int c) {}
+
+        internal string Text(long v) {
+            var s = Objs[(int) v].Slots;
+            var sb = new System.Text.StringBuilder();
+            foreach (var cp in s) sb.Append(char.ConvertFromUtf32((int) Val.AsFixnum(cp)));
+            return sb.ToString();
+        }
+        internal long Mkstr(string t) {
+            var cps = new System.Collections.Generic.List<int>();
+            for (int i = 0; i < t.Length; i++) {
+                int cp = char.ConvertToUtf32(t, i);
+                cps.Add(cp);
+                if (char.IsHighSurrogate(t[i])) i++;
+            }
+            var slots = new long[cps.Count];
+            for (int i = 0; i < cps.Count; i++) slots[i] = Val.Fixnum(cps[i]);
+            return MakeObj(TyStr, slots);
+        }
+        internal string NsText(long ns) { return Val.IsNil(ns) ? "" : Text(ns); }
+        internal long InternSym(long ns, long nm) {
+            string key = NsText(ns) + "\u0000" + Text(nm);
+            if (Syms.TryGetValue(key, out long v)) return v;
+            long nsv = NsText(ns).Length == 0 ? Nil : Mkstr(NsText(ns));
+            long nmv = Mkstr(Text(nm));
+            long outv = MakeObj(TySym, new long[]{nsv, nmv});
+            Syms[key] = outv;
+            return outv;
+        }
+        internal long InternKw(long ns, long nm) {
+            string key = NsText(ns) + "\u0000" + Text(nm);
+            if (Kws.TryGetValue(key, out long v)) return v;
+            long nsv = NsText(ns).Length == 0 ? Nil : Mkstr(NsText(ns));
+            long nmv = Mkstr(Text(nm));
+            long outv = MakeObj(TyKw, new long[]{nsv, nmv});
+            Kws[key] = outv;
+            return outv;
+        }
+
+        internal long EmptyMapObj() { return MakeObj(TyMap, new long[0]); }
+        internal bool MapContainsImpl(long m, long k) {
+            var s = Objs[(int) m].Slots;
+            for (int i = 0; i < s.Length; i += 2) if (s[i] == k) return true;
+            return false;
+        }
+        internal long MapGetImpl(long m, long k, long dflt) {
+            var s = Objs[(int) m].Slots;
+            for (int i = 0; i < s.Length; i += 2) if (s[i] == k) return s[i + 1];
+            return dflt;
+        }
+        internal long MapAssocImpl(long m, long k, long v) {
+            var s = Objs[(int) m].Slots;
+            var outv = (long[]) s.Clone();
+            for (int i = 0; i < outv.Length; i += 2) {
+                if (outv[i] == k) { outv[i + 1] = v; return MakeObj(TyMap, outv); }
+            }
+            var grown = new long[outv.Length + 2];
+            System.Array.Copy(outv, grown, outv.Length);
+            grown[outv.Length] = k; grown[outv.Length + 1] = v;
+            return MakeObj(TyMap, grown);
+        }
+        internal long NewNodeImpl(int len, long dflt) {
+            if (Refuse) return Nil;
+            var slots = new long[len];
+            for (int i = 0; i < len; i++) slots[i] = dflt;
+            return MakeObj(TyNode, slots);
+        }
+    }
+
+    internal static int CodePoints(Rt rt, long s) {
+        int c = rt.CpsOpen();
+        var slots = rt.Objs[(int) s].Slots;
+        foreach (var cp in slots) rt.CpsPut(c, (int) Val.AsFixnum(cp));
+        return c;
+    }
+    internal static long NodeGet(Rt rt, long node, int s) { return rt.Slot(node, s); }
+    internal static void NodeSet(Rt rt, long node, int s, long v) { rt.Objs[(int) node].Slots[s] = v; }
+    internal static long NewNode(Rt rt, int len, long dflt) { return rt.NewNodeImpl(len, dflt); }
+    internal static bool IsSymbol(Rt rt, long v) { return rt.IsHeapTy(v, TySym); }
+    internal static long NameOf(Rt rt, long v) {
+        return (rt.IsHeapTy(v, TySym) || rt.IsHeapTy(v, TyKw)) ? rt.Slot(v, 1) : v;
+    }
+    internal static long NsOf(Rt rt, long v) {
+        return (rt.IsHeapTy(v, TySym) || rt.IsHeapTy(v, TyKw)) ? rt.Slot(v, 0) : Nil;
+    }
+    internal static void SAppend(Rt rt, long v, int sk) {
+        var slots = rt.Objs[(int) v].Slots;
+        foreach (var cp in slots) SinkPutCp(rt, sk, (int) Val.AsFixnum(cp));
+    }
+    internal static bool ValEq(Rt rt, long a, long b) { return a == b; }
+    internal static bool MapContains(Rt rt, long m, long k) { return rt.MapContainsImpl(m, k); }
+    internal static long MapGet(Rt rt, long m, long k, long dflt) { return rt.MapGetImpl(m, k, dflt); }
+    internal static long MapAssoc(Rt rt, long m, long k, long v) { return rt.MapAssocImpl(m, k, v); }
+
+    internal static class Str {
+        internal static long Of(Rt rt, string t) { return rt.Mkstr(t); }
+    }
+--csharp
+    static int B(bool x) { return x ? 1 : 0; }
+    static string BytesStr(int[] v) {
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < v.Length; i++) { if (i > 0) sb.Append(','); sb.Append(v[i]); }
+        return sb.ToString();
+    }
+    static void Main() {
+        var rt = new Rt();
+        var o = new System.Text.StringBuilder();
+
+        long src = rt.Mkstr("#!x\nab,,; hi\ncde fgh\n");
+        int srci = rt.Push(src);
+        long node = RdNew(rt, rt.R(srci), Nil, Nil, Nil, false, 0);
+        int sti = rt.Push(node);
+
+        o.Append("init=L").Append(RdInt(rt, sti, RdsLine)).Append('C').Append(RdInt(rt, sti, RdsCol))
+         .Append('P').Append(RdPos(rt, sti)).Append(' ');
+        o.Append("defer0=").Append(B(RdFlag(rt, sti, RdsDefer))).Append(" portable0=")
+         .Append(B(RdFlag(rt, sti, RdsPortable))).Append(' ');
+        {
+            long tags = RdGet(rt, sti, RdsTags);
+            long tk = LitSymbol(rt, "flint", "table");
+            bool has = MapContains(rt, tags, tk);
+            long v = MapGet(rt, tags, tk, NotFound);
+            bool matches = IsSym2(rt, v, "flint.table", "read-table");
+            o.Append("tags1=").Append(B(has)).Append(B(matches)).Append(' ');
+        }
+
+        RdSkipWs(rt, sti);
+        o.Append("skip1=L").Append(RdInt(rt, sti, RdsLine)).Append('C').Append(RdInt(rt, sti, RdsCol))
+         .Append('P').Append(RdPos(rt, sti)).Append(' ');
+
+        int from1 = RdToken(rt, sti);
+        int to1 = RdPos(rt, sti);
+        long t1 = RdString(rt, sti, from1, to1);
+        o.Append("tok1=").Append(rt.Text(t1)).Append('@').Append('P').Append(to1).Append('C')
+         .Append(RdInt(rt, sti, RdsCol)).Append(' ');
+
+        RdSkipWs(rt, sti);
+        o.Append("skip2=L").Append(RdInt(rt, sti, RdsLine)).Append('C').Append(RdInt(rt, sti, RdsCol))
+         .Append('P').Append(RdPos(rt, sti)).Append(' ');
+
+        int from2 = RdToken(rt, sti);
+        int to2 = RdPos(rt, sti);
+        long t2 = RdString(rt, sti, from2, to2);
+        o.Append("tok2=").Append(rt.Text(t2)).Append('@').Append('P').Append(to2).Append('C')
+         .Append(RdInt(rt, sti, RdsCol)).Append(' ');
+
+        RdSkipWs(rt, sti);
+        o.Append("skip3=L").Append(RdInt(rt, sti, RdsLine)).Append('C').Append(RdInt(rt, sti, RdsCol))
+         .Append('P').Append(RdPos(rt, sti)).Append(' ');
+
+        int from3 = RdToken(rt, sti);
+        int to3 = RdPos(rt, sti);
+        long t3 = RdString(rt, sti, from3, to3);
+        o.Append("tok3=").Append(rt.Text(t3)).Append('@').Append('P').Append(to3).Append('C')
+         .Append(RdInt(rt, sti, RdsCol)).Append(' ');
+
+        RdSkipWs(rt, sti);
+        bool eof = RdPeek(rt, sti) == NoCp;
+        o.Append("skip4=L").Append(RdInt(rt, sti, RdsLine)).Append('C').Append(RdInt(rt, sti, RdsCol))
+         .Append('P').Append(RdPos(rt, sti)).Append("EOF").Append(B(eof)).Append(' ');
+
+        int st = RdFailLit(rt, sti, "unexpected eof");
+        long msg = RdGet(rt, sti, RdsErrmsg);
+        o.Append("fail=st").Append(st).Append('|').Append(rt.Text(msg)).Append('|')
+         .Append('L').Append(RdInt(rt, sti, RdsErrline)).Append('C').Append(RdInt(rt, sti, RdsErrcol))
+         .Append("|plain").Append(B(RdFlag(rt, sti, RdsErrplain))).Append(' ');
+
+        int sk1 = rt.SinkOpen(); SinkPutCp(rt, sk1, 65);
+        int sk2 = rt.SinkOpen(); SinkPutCp(rt, sk2, 233);
+        int sk3 = rt.SinkOpen(); SinkPutCp(rt, sk3, 8364);
+        int sk4 = rt.SinkOpen(); SinkPutCp(rt, sk4, 0x10000);
+        o.Append("utf8=[").Append(BytesStr(rt.SinkBytes(sk1))).Append("][")
+         .Append(BytesStr(rt.SinkBytes(sk2))).Append("][").Append(BytesStr(rt.SinkBytes(sk3)))
+         .Append("][").Append(BytesStr(rt.SinkBytes(sk4))).Append("] ");
+
+        long src2 = rt.Mkstr("z");
+        int src2i = rt.Push(src2);
+        long tk2 = LitSymbol(rt, "flint", "table");
+        int tki = rt.Push(tk2);
+        long customv = LitKeyword(rt, "custom", "foo");
+        int cvi = rt.Push(customv);
+        long em = global::Flint.Rt.Maps.Empty(rt);
+        int emi = rt.Push(em);
+        long tags0 = MapAssoc(rt, rt.R(emi), rt.R(tki), rt.R(cvi));
+        int tags0i = rt.Push(tags0);
+        long feat2 = Val.Fixnum(1);
+        long node2 = RdNew(rt, rt.R(src2i), Nil, feat2, rt.R(tags0i), true, 5);
+        int sti2 = rt.Push(node2);
+        long tags2 = RdGet(rt, sti2, RdsTags);
+        long v2 = MapGet(rt, tags2, rt.R(tki), NotFound);
+        o.Append("rd2=defer").Append(B(RdFlag(rt, sti2, RdsDefer))).Append("portable")
+         .Append(B(RdFlag(rt, sti2, RdsPortable))).Append("gensym").Append(RdInt(rt, sti2, RdsGensymN))
+         .Append("same").Append(B(ValEq(rt, v2, rt.R(cvi)))).Append("notdefault")
+         .Append(B(!IsSym2(rt, v2, "flint.table", "read-table"))).Append(' ');
+
+        int mb = rt.Mark();
+        rt.Refuse = true;
+        long node3 = RdNew(rt, rt.R(src2i), Nil, Nil, Nil, false, 0);
+        int ma = rt.Mark();
+        rt.Refuse = false;
+        o.Append("refuse=nil").Append(B(Val.IsNil(node3))).Append("roots").Append(B(ma == mb));
+
+        System.Console.WriteLine(o.ToString().Trim());
+    }
+--expect
+init=L1C1P3 defer0=1 portable0=0 tags1=11 skip1=L2C1P4 tok1=ab@P6C3 skip2=L3C1P13 tok2=cde@P16C4 skip3=L3C5P17 tok3=fgh@P20C8 skip4=L4C1P21EOF1 fail=st4|unexpected eof|L4C1|plain0 utf8=[65][195,169][226,130,172][240,144,128,128] rd2=defer0portable1gensym5same1notdefault1 refuse=nil1roots1
+--expect-why
+DERIVED BY HAND from `readcore.kin` against the fixture's text, laid out so
+every index is checkable:
+
+  0:'#' 1:'!' 2:'x' 3:'\n'                                  (a shebang line)
+  4:'a' 5:'b' 6:',' 7:',' 8:';' 9:' ' 10:'h' 11:'i' 12:'\n'  (commas, a comment)
+  13:'c' 14:'d' 15:'e' 16:' ' 17:'f' 18:'g' 19:'h' 20:'\n'
+
+init=L1C1P3   `rd-new` sees `#!` at 0,1 and skips to the first `\n`, which is
+              LEFT rather than consumed (`AGENTS.md`'s header: "every line
+              number is the one an editor shows"): `start` stops AT index 3,
+              not past it. Line/col are still 1,1 -- nothing has been read.
+
+defer0=1 portable0=0   `features` is nil (a DEFERRED read) and `portable` is
+              `false`, both threaded straight into their slots.
+
+tags1=11      `flint/table` is absent from a nil tags map, so `rd-new` builds
+              one, checks `map-contains` (0 -> the first digit would be 0),
+              finds it missing, and `map-assoc`s `flint.table/read-table`
+              under it (the second digit: `map-get` now answers that exact
+              symbol). Both digits 1 is the only way the "unless the
+              workspace binds it itself" default fires correctly.
+
+skip1=L2C1P4  The first `rd-next` consumes the shebang's leftover `\n`: line
+              2, column reset to 1, position 4 (`a`). This is the one call
+              that proves the newline was left rather than eaten by `rd-new`
+              itself -- if `rd-new` had already consumed it, this skip would
+              stop at `L1C1P3` (nothing to skip) instead of moving at all.
+
+tok1=ab@P6C3  `rd-token` runs `a`,`b` and stops at the first comma (`is-ws`
+              includes 44, the comma) -- "ab", pos 6, col 3 (two `rd-next`s
+              from col 1).
+
+skip2=L3C1P13 Two commas (whitespace), then `;` opens a comment that "runs
+              THROUGH its newline" -- the inner loop's own `rd-next` counts
+              that `\n` (line 3, col 1) before the outer loop re-peeks and
+              finds `c`, pos 13.
+
+tok2=cde@P16C4   "cde", stopping at the space, pos 16, col 4.
+
+skip3=L3C5P17    A single space, col 5, pos 17.
+
+tok3=fgh@P20C8   "fgh", stopping at the trailing `\n` (`is-ws`, so the token
+              loop breaks on it too without reading it) -- pos 20, col 8.
+
+skip4=L4C1P21EOF1   This `\n` IS now consumed by `rd-skip-ws` (whitespace),
+              landing on line 4, col 1, pos 21 = the text's length; the next
+              `rd-peek` answers `NO_CP`, so EOF=1.
+
+fail=st4|unexpected eof|L4C1|plain0   `rd-fail-lit` returns `RS_ERR` (4,
+              `readconst.kin`), stores the literal message verbatim, and
+              stamps the CURRENT line/col (4,1 -- exactly where `skip4` left
+              the cursor) rather than some earlier position. `plain0`: this
+              is the reader's OWN error, not `rd-fail-plain`'s unprefixed one.
+
+utf8=[65][195,169][226,130,172][240,144,128,128]   `sink-put-cp` over one
+              code point from each of its four branches:
+                65     (<128)    ASCII, one byte:            65
+                233 'é' (<2048)  two bytes:   192|(233>>6)=195, 128|(233&63)=169
+                8364 '€' (<65536) three bytes: 224|2=226, 128|2=130, 128|44=172
+                65536 (>=65536)  four bytes:  240|0=240, 128|16=144, 128|0=128, 128|0=128
+              Each is the standard UTF-8 encoding of that code point (é is
+              C3 A9, € is E2 82 AC, U+10000 is F0 90 80 80) -- this is the
+              field a 16-bit truncation or an off-by-one in the shift amounts
+              would move, and the four tiers are separate fields so a bug in
+              one cannot hide behind the other three agreeing.
+
+rd2=defer0portable1gensym5same1notdefault1   A second reader, over a
+              one-character text, whose TAGS MAP ALREADY BINDS `flint/table`
+              (to a keyword, `:custom/foo`) before the call: `defer0` (a
+              non-nil `features`), `portable1` (`portable` true), `gensym5`
+              (the `RDS_GENSYM_N` slot holds the given `gensym0` untouched),
+              `same1` (the pre-existing binding under `flint/table` SURVIVES
+              -- `map-contains` was true, so the default `assoc` never runs),
+              `notdefault1` (and it is specifically NOT the
+              `flint.table/read-table` default, so `same1` is not a vacuous
+              pass against a value that happens to match both).
+
+refuse=nil1roots1   A THIRD call, with the allocator switched to refuse:
+              `rd-new` must answer nil (the node allocation failed) and leave
+              the shadow stack exactly as it found it (`roots1` compares the
+              mark before and after, not an absolute number) -- `rd-new`'s
+              `(if (nil? rt node) (do (cps-close rt c) (pop-to rt base)
+              (return NIL)))` arm, taken.

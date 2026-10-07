@@ -1,0 +1,2076 @@
+--rust-head
+// ===== VALUE: an immediate tag+payload, or a heap index =====
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const MASK56: u64 = 0x00FF_FFFF_FFFF_FFFF;
+const TAG_HEAP: u64 = 0;
+const TAG_FIX: u64 = 1;
+const TAG_DBL: u64 = 2;
+const TAG_SENT: u64 = 3;
+fn mk(tag: u64, payload: u64) -> Value { Value((tag << 56) | (payload & MASK56)) }
+const NIL: Value = Value((TAG_SENT << 56) | 0);
+const TRUE: Value = Value((TAG_SENT << 56) | 1);
+const FALSE: Value = Value((TAG_SENT << 56) | 2);
+const NOT_FOUND: Value = Value((TAG_SENT << 56) | 3);
+impl Value {
+    fn tag(self) -> u64 { self.0 >> 56 }
+    fn pay(self) -> u64 { self.0 & MASK56 }
+    fn is_nil(self) -> bool { self == NIL }
+    fn as_fixnum(self) -> i64 { ((self.pay() << 8) as i64) >> 8 }
+    fn fixnum(n: i64) -> Value { mk(TAG_FIX, n as u64) }
+    // Only ever called with +Inf, -Inf or the canonical NaN bits in this
+    // source, so the mock only needs to tell those three apart.
+    fn from_f64(d: f64) -> Value {
+        if d.is_nan() { mk(TAG_DBL, 2) }
+        else if d == f64::INFINITY { mk(TAG_DBL, 0) }
+        else if d == f64::NEG_INFINITY { mk(TAG_DBL, 1) }
+        else { mk(TAG_DBL, 3) }
+    }
+}
+mod value { pub const CANONICAL_NAN: u64 = 0x7FF8_0000_0000_0000; }
+
+// ===== HEAP OBJECTS =====
+#[derive(Clone)]
+enum Obj {
+    Str(Vec<u32>),
+    Sym(Value, Value, Value),       // ns, name, meta
+    Kw(Value, Value),               // ns, name
+    List(Vec<Value>, Value),        // items, meta
+    Vec(Vec<Value>, Value),
+    Map(Vec<(Value, Value)>, Value),
+    Set(Vec<Value>, Value),
+    Tagged(Value, Value),           // tag, form
+    Entry(Value, Value),            // map-entry: key, val
+    State(St),
+}
+#[derive(Clone)]
+struct St {
+    file: Value, ns: Value, aliases: Value, features: Value, tags: Value,
+    childpos: Value, gensyms: Value,
+    defer: bool, apartial: bool, portable: bool, conds: i64,
+    text: Vec<u32>, i: i64, n: i64, line: i64, col: i64,
+}
+
+const RS_OK: u32 = 0; const RS_EOF: u32 = 1; const RS_NONE: u32 = 2;
+const RS_SPLICE: u32 = 3; const RS_ERR: u32 = 4; const NO_CP: u32 = 1114112;
+const RDS_LINE: u32 = 3; const RDS_COL: u32 = 4; const RDS_FILE: u32 = 5;
+const RDS_GENSYMS: u32 = 6; const RDS_FEATURES: u32 = 7; const RDS_NS: u32 = 8;
+const RDS_ALIASES: u32 = 9; const RDS_DEFER: u32 = 10; const RDS_CONDS: u32 = 11;
+const RDS_APARTIAL: u32 = 12; const RDS_PORTABLE: u32 = 13; const RDS_TAGS: u32 = 14;
+const RDS_CHILDPOS: u32 = 15;
+
+fn is_ws(c: u32) -> bool { c == 32 || c == 9 || c == 10 || c == 13 || c == 12 || c == 44 }
+fn is_term(c: u32) -> bool {
+    matches!(c, 34 | 59 | 64 | 94 | 96 | 126 | 40 | 41 | 91 | 93 | 123 | 125 | 92)
+}
+fn is_digit(c: u32) -> bool { c >= 48 && c <= 57 }
+
+struct Rt {
+    objs: Vec<Obj>,
+    sinks: Vec<Vec<u32>>,
+    cps: Vec<Vec<u32>>,
+    roots: Vec<Value>,
+}
+impl Rt {
+    fn obj(&mut self, o: Obj) -> Value { self.objs.push(o); mk(TAG_HEAP, (self.objs.len() - 1) as u64) }
+    fn at(&self, v: Value) -> &Obj { &self.objs[v.pay() as usize] }
+
+    // --- root stack ---
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn pop_to(&mut self, i: usize) { self.roots.truncate(i); }
+
+    // --- builders ---
+    fn empty_map(&mut self) -> Value { self.obj(Obj::Map(Vec::new(), NIL)) }
+    fn empty_set(&mut self) -> Value { self.obj(Obj::Set(Vec::new(), NIL)) }
+    fn empty_vec(&mut self) -> Value { self.obj(Obj::Vec(Vec::new(), NIL)) }
+    fn string(&mut self, s: &str) -> Value { self.obj(Obj::Str(s.chars().map(|c| c as u32).collect())) }
+    fn str_of_cps(&mut self, cps: Vec<u32>) -> Value { self.obj(Obj::Str(cps)) }
+    fn symbol_from_values(&mut self, ns: Value, name: Value) -> Value { self.obj(Obj::Sym(ns, name, NIL)) }
+    fn keyword_from_values(&mut self, ns: Value, name: Value) -> Value { self.obj(Obj::Kw(ns, name)) }
+    fn lit_symbol(&mut self, ns: &str, nm: &str) -> Value {
+        let nsv = self.string(ns); let nmv = self.string(nm); self.symbol_from_values(nsv, nmv)
+    }
+    fn lit_symbol1(&mut self, nm: &str) -> Value { let nmv = self.string(nm); self.symbol_from_values(NIL, nmv) }
+    fn lit_keyword(&mut self, ns: &str, nm: &str) -> Value {
+        let nsv = self.string(ns); let nmv = self.string(nm); self.keyword_from_values(nsv, nmv)
+    }
+    fn lit_keyword1(&mut self, nm: &str) -> Value { let nmv = self.string(nm); self.keyword_from_values(NIL, nmv) }
+    fn list_from_roots(&mut self, base: usize, n: u32) -> Value {
+        let items: Vec<Value> = (0..n as usize).map(|i| self.r(base + i)).collect();
+        self.obj(Obj::List(items, NIL))
+    }
+    fn vec_from_roots(&mut self, base: usize, n: u32) -> Value {
+        let items: Vec<Value> = (0..n as usize).map(|i| self.r(base + i)).collect();
+        self.obj(Obj::Vec(items, NIL))
+    }
+    fn items_of(&self, v: Value) -> Vec<Value> {
+        if v.tag() != TAG_HEAP { return Vec::new(); }
+        match self.at(v) { Obj::List(i, _) | Obj::Vec(i, _) => i.clone(), _ => Vec::new() }
+    }
+    // A "seq" is just another list, reused as the walk's cursor: `first`
+    // reads its head, `next` peels it. Nil (not an empty list) ends a walk.
+    fn seq(&mut self, v: Value) -> Value {
+        let items = self.items_of(v);
+        if items.is_empty() { NIL } else { self.obj(Obj::List(items, NIL)) }
+    }
+    fn first(&self, v: Value) -> Value {
+        match self.at(v) { Obj::List(items, _) => *items.first().unwrap_or(&NIL), _ => NIL }
+    }
+    fn next(&mut self, v: Value) -> Value {
+        let items = self.items_of(v);
+        if items.len() <= 1 { NIL } else { self.obj(Obj::List(items[1..].to_vec(), NIL)) }
+    }
+
+    // --- predicates / accessors ---
+    fn is_symbol(&self, v: Value) -> bool { v.tag() == TAG_HEAP && matches!(self.at(v), Obj::Sym(..)) }
+    fn is_keyword(&self, v: Value) -> bool { v.tag() == TAG_HEAP && matches!(self.at(v), Obj::Kw(..)) }
+    fn is_map(&self, v: Value) -> bool { v.tag() == TAG_HEAP && matches!(self.at(v), Obj::Map(..)) }
+    fn is_set(&self, v: Value) -> bool { v.tag() == TAG_HEAP && matches!(self.at(v), Obj::Set(..)) }
+    fn is_seq(&self, v: Value) -> bool { v.tag() == TAG_HEAP && matches!(self.at(v), Obj::List(..)) }
+    fn is_vector_like(&self, v: Value) -> bool { v.tag() == TAG_HEAP && matches!(self.at(v), Obj::Vec(..)) }
+    fn is_string(&self, v: Value) -> bool { v.tag() == TAG_HEAP && matches!(self.at(v), Obj::Str(..)) }
+    fn is_tagged(&self, v: Value) -> bool { v.tag() == TAG_HEAP && matches!(self.at(v), Obj::Tagged(..)) }
+    fn slot(&self, v: Value, i: u32) -> Value {
+        match self.at(v) {
+            Obj::Tagged(a, b) | Obj::Entry(a, b) => if i == 0 { *a } else { *b },
+            _ => NIL,
+        }
+    }
+    fn name_of(&self, v: Value) -> Value {
+        match self.at(v) { Obj::Sym(_, nm, _) | Obj::Kw(_, nm) => *nm, _ => v }
+    }
+    fn ns_of(&self, v: Value) -> Value {
+        if v.tag() != TAG_HEAP { return NIL; }
+        match self.at(v) { Obj::Sym(ns, ..) | Obj::Kw(ns, ..) => *ns, _ => NIL }
+    }
+    fn str_text(&self, v: Value) -> Vec<u32> {
+        match self.at(v) { Obj::Str(cps) => cps.clone(), _ => Vec::new() }
+    }
+    fn val_eq(&self, a: Value, b: Value) -> bool {
+        if a == b { return true; }
+        if a.tag() != TAG_HEAP || b.tag() != TAG_HEAP { return false; }
+        match (self.at(a), self.at(b)) {
+            (Obj::Str(x), Obj::Str(y)) => x == y,
+            (Obj::Sym(ans, anm, _), Obj::Sym(bns, bnm, _)) | (Obj::Kw(ans, anm), Obj::Kw(bns, bnm)) => {
+                self.val_eq_opt(*ans, *bns) && self.val_eq(*anm, *bnm)
+            }
+            _ => false,
+        }
+    }
+    fn val_eq_opt(&self, a: Value, b: Value) -> bool {
+        if a.is_nil() && b.is_nil() { return true; }
+        if a.is_nil() || b.is_nil() { return false; }
+        self.val_eq(a, b)
+    }
+    fn is_sym1(&mut self, v: Value, nm: &str) -> bool {
+        if !self.is_symbol(v) { return false; }
+        let base = self.mark(); let vi = self.push(v);
+        let probe = self.lit_symbol1(nm);
+        let same = self.val_eq(self.r(vi), probe);
+        self.pop_to(base); same
+    }
+    fn is_sym2(&mut self, v: Value, ns: &str, nm: &str) -> bool {
+        if !self.is_symbol(v) { return false; }
+        let base = self.mark(); let vi = self.push(v);
+        let probe = self.lit_symbol(ns, nm);
+        let same = self.val_eq(self.r(vi), probe);
+        self.pop_to(base); same
+    }
+
+    // --- collections ---
+    fn vec_count(&self, v: Value) -> u32 {
+        match self.at(v) { Obj::Vec(items, _) => items.len() as u32, _ => 0 }
+    }
+    fn vec_nth(&self, v: Value, i: u32, d: Value) -> Value {
+        match self.at(v) { Obj::Vec(items, _) => *items.get(i as usize).unwrap_or(&d), _ => d }
+    }
+    fn vec_conj(&mut self, v: Value, x: Value) -> Value {
+        let (mut items, meta) = match self.at(v) { Obj::Vec(items, meta) => (items.clone(), *meta), _ => (Vec::new(), NIL) };
+        items.push(x);
+        self.obj(Obj::Vec(items, meta))
+    }
+    fn vec_assoc(&mut self, v: Value, i: u32, x: Value) -> Value {
+        let (mut items, meta) = match self.at(v) { Obj::Vec(items, meta) => (items.clone(), *meta), _ => (Vec::new(), NIL) };
+        while (i as usize) >= items.len() { items.push(NIL); }
+        items[i as usize] = x;
+        self.obj(Obj::Vec(items, meta))
+    }
+    fn assoc_entries(entries: &[(Value, Value)], k: Value, v: Value, rt: &Rt) -> Vec<(Value, Value)> {
+        let mut out = entries.to_vec();
+        for e in out.iter_mut() {
+            if rt.val_eq(e.0, k) { e.1 = v; return out; }
+        }
+        out.push((k, v));
+        out
+    }
+    fn map_assoc(&mut self, m: Value, k: Value, v: Value) -> Value {
+        let (entries, meta) = match self.at(m) { Obj::Map(e, me) => (e.clone(), *me), _ => (Vec::new(), NIL) };
+        let out = Rt::assoc_entries(&entries, k, v, self);
+        self.obj(Obj::Map(out, meta))
+    }
+    fn map_get(&self, m: Value, k: Value, d: Value) -> Value {
+        if let Obj::Map(entries, _) = self.at(m) {
+            for (ek, ev) in entries.clone() { if self.val_eq(ek, k) { return ev; } }
+        }
+        d
+    }
+    fn map_entry_vector(&mut self, m: Value) -> Value {
+        let entries = match self.at(m) { Obj::Map(e, _) => e.clone(), _ => Vec::new() };
+        let items: Vec<Value> = entries.into_iter().map(|(k, v)| self.obj(Obj::Entry(k, v))).collect();
+        self.obj(Obj::Vec(items, NIL))
+    }
+    fn set_element_vector(&mut self, s: Value) -> Value {
+        let items = match self.at(s) { Obj::Set(items, _) => items.clone(), _ => Vec::new() };
+        self.obj(Obj::Vec(items, NIL))
+    }
+    fn set_contains(&self, s: Value, x: Value) -> bool {
+        match self.at(s) { Obj::Set(items, _) => items.iter().any(|y| self.val_eq(*y, x)), _ => false }
+    }
+    fn ordered_map(&mut self, flat: Value) -> Value {
+        let items = match self.at(flat) { Obj::Vec(items, _) => items.clone(), _ => Vec::new() };
+        let mut entries: Vec<(Value, Value)> = Vec::new();
+        let mut i = 0;
+        while i + 1 < items.len() + 1 && i + 1 <= items.len() {
+            if i + 1 >= items.len() { break; }
+            entries = Rt::assoc_entries(&entries, items[i], items[i + 1], self);
+            i += 2;
+        }
+        self.obj(Obj::Map(entries, NIL))
+    }
+
+    // --- transients: for this mock, in-place-enough (always a fresh clone on write) ---
+    fn to_transient(&mut self, v: Value) -> Value { v }
+    fn to_persistent(&mut self, v: Value) -> Value { v }
+    fn transient_conj(&mut self, s: Value, x: Value) -> Value {
+        let items = match self.at(s) { Obj::Set(items, _) => items.clone(), Obj::Vec(items,_) => items.clone(), _ => Vec::new() };
+        let mut out = items; out.push(x);
+        self.obj(Obj::Set(out, NIL))
+    }
+    fn transient_assoc(&mut self, m: Value, k: Value, v: Value) -> Value { self.map_assoc(m, k, v) }
+
+    // --- meta ---
+    fn meta_of(&self, v: Value) -> Value {
+        if v.tag() != TAG_HEAP { return NIL; }
+        match self.at(v) {
+            Obj::Sym(_, _, m) => *m,
+            Obj::List(_, m) | Obj::Vec(_, m) | Obj::Map(_, m) | Obj::Set(_, m) => *m,
+            _ => NIL,
+        }
+    }
+    fn with_meta(&mut self, v: Value, m: Value) -> Value {
+        if v.tag() != TAG_HEAP { return v; }
+        let cloned = self.at(v).clone();
+        let o = match cloned {
+            Obj::Sym(ns, nm, _) => Obj::Sym(ns, nm, m),
+            Obj::List(items, _) => Obj::List(items, m),
+            Obj::Vec(items, _) => Obj::Vec(items, m),
+            Obj::Map(e, _) => Obj::Map(e, m),
+            Obj::Set(items, _) => Obj::Set(items, m),
+            other => other,
+        };
+        self.obj(o)
+    }
+    fn new_tagged(&mut self, tag: Value, form: Value) -> Value { self.obj(Obj::Tagged(tag, form)) }
+
+    // --- code points over a string's own text (used by #() arg parsing) ---
+    fn code_points(&mut self, v: Value) -> u32 {
+        let cps = self.str_text(v);
+        self.cps.push(cps);
+        (self.cps.len() - 1) as u32
+    }
+    fn cps_len(&self, c: u32) -> u32 { self.cps[c as usize].len() as u32 }
+    fn cps_at(&self, c: u32, i: u32) -> u32 { self.cps[c as usize][i as usize] }
+    fn cps_close(&mut self, _c: u32) {}
+
+    // --- sinks ---
+    fn sink_open(&mut self) -> u32 { self.sinks.push(Vec::new()); (self.sinks.len() - 1) as u32 }
+    fn sink_put(&mut self, sk: u32, b: u32) { self.sinks[sk as usize].push(b); }
+    fn sink_put_cp(&mut self, sk: u32, c: u32) { self.sink_put(sk, c); }
+    fn sink_close(&mut self, _sk: u32) {}
+    fn sink_string(&mut self, sk: u32) -> Value { let cps = self.sinks[sk as usize].clone(); self.str_of_cps(cps) }
+
+    // --- messages (built into a sink) ---
+    fn msg_lit(&mut self, sk: u32, t: &str) { for c in t.chars() { self.sink_put_cp(sk, c as u32); } }
+    fn msg_val(&mut self, sk: u32, v: Value) {
+        if self.is_symbol(v) {
+            let ns = self.ns_of(v);
+            if !ns.is_nil() {
+                let t = self.str_text(ns);
+                for c in t { self.sink_put_cp(sk, c); }
+                self.sink_put(sk, 47);
+            }
+            let nm = self.name_of(v);
+            let t = self.str_text(nm);
+            for c in t { self.sink_put_cp(sk, c); }
+            return;
+        }
+        let t = self.str_text(v);
+        for c in t { self.sink_put_cp(sk, c); }
+    }
+    fn msg_cp(&mut self, sk: u32, c: u32) { if c != NO_CP { self.sink_put_cp(sk, c); } }
+    fn msg_int(&mut self, sk: u32, n: i64) {
+        if n >= 10 { self.msg_int(sk, n / 10); }
+        self.sink_put(sk, 48 + (n % 10) as u32);
+    }
+
+    // --- sorting roots (lexicographic by string content) ---
+    fn sort_roots(&mut self, base: usize, n: u32) {
+        let n = n as usize;
+        if n == 0 { return; }
+        for i in 0..n {
+            for j in 0..(n - 1 - i) {
+                let a = self.r(base + j); let b = self.r(base + j + 1);
+                if self.str_text(a) > self.str_text(b) {
+                    self.set_r(base + j, b); self.set_r(base + j + 1, a);
+                }
+            }
+        }
+    }
+    fn collapse_list(&mut self, base: usize, n: u32) {
+        let v = self.list_from_roots(base, n);
+        self.pop_to(base);
+        self.push(v);
+    }
+
+    // --- the reader state ("node"), itself a heap object rooted like any other ---
+    fn new_state(&mut self, text: &str, file: &str, features: Value, defer: bool, portable: bool) -> Value {
+        let cps: Vec<u32> = text.chars().map(|c| c as u32).collect();
+        let n = cps.len() as i64;
+        let fv = self.string(file);
+        let tm = self.empty_map();
+        let st = St {
+            file: fv, ns: NIL, aliases: NIL, features, tags: tm, childpos: NIL, gensyms: NIL,
+            defer, apartial: false, portable, conds: 0, text: cps, i: 0, n, line: 1, col: 1,
+        };
+        self.obj(Obj::State(st))
+    }
+    fn stm(&self, sti: usize) -> &St { match self.at(self.r(sti)) { Obj::State(s) => s, _ => unreachable!() } }
+    fn stm_mut(&mut self, sti: usize) -> &mut St {
+        let v = self.r(sti);
+        match &mut self.objs[v.pay() as usize] { Obj::State(s) => s, _ => unreachable!() }
+    }
+
+    fn rd_get(&self, sti: usize, s: u32) -> Value {
+        let st = self.stm(sti);
+        match s {
+            RDS_FILE => st.file, RDS_GENSYMS => st.gensyms, RDS_FEATURES => st.features,
+            RDS_NS => st.ns, RDS_ALIASES => st.aliases, RDS_TAGS => st.tags,
+            RDS_CHILDPOS => st.childpos,
+            _ => NIL,
+        }
+    }
+    fn rd_put(&mut self, sti: usize, s: u32, v: Value) {
+        let st = self.stm_mut(sti);
+        match s {
+            RDS_FILE => st.file = v, RDS_GENSYMS => st.gensyms = v, RDS_FEATURES => st.features = v,
+            RDS_NS => st.ns = v, RDS_ALIASES => st.aliases = v, RDS_TAGS => st.tags = v,
+            RDS_CHILDPOS => st.childpos = v,
+            RDS_APARTIAL => st.apartial = v == TRUE,
+            RDS_DEFER => st.defer = v == TRUE,
+            _ => {}
+        }
+    }
+    fn rd_int(&self, sti: usize, s: u32) -> i64 {
+        let st = self.stm(sti);
+        match s { RDS_LINE => st.line, RDS_COL => st.col, RDS_CONDS => st.conds, _ => 0 }
+    }
+    fn rd_set_int(&mut self, sti: usize, s: u32, v: i64) {
+        let st = self.stm_mut(sti);
+        match s { RDS_LINE => st.line = v, RDS_COL => st.col = v, RDS_CONDS => st.conds = v, _ => {} }
+    }
+    fn rd_flag(&self, sti: usize, s: u32) -> bool {
+        let st = self.stm(sti);
+        match s { RDS_DEFER => st.defer, RDS_APARTIAL => st.apartial, RDS_PORTABLE => st.portable, _ => false }
+    }
+    fn rd_peek(&self, sti: usize) -> u32 {
+        let st = self.stm(sti);
+        if st.i >= st.n { NO_CP } else { st.text[st.i as usize] }
+    }
+    fn rd_peek2(&self, sti: usize) -> u32 {
+        let st = self.stm(sti);
+        let j = st.i + 1;
+        if j >= st.n { NO_CP } else { st.text[j as usize] }
+    }
+    fn rd_next(&mut self, sti: usize) -> u32 {
+        let c = self.rd_peek(sti);
+        if c == NO_CP { return NO_CP; }
+        let st = self.stm_mut(sti);
+        st.i += 1;
+        if c == 10 { st.line += 1; st.col = 1; } else { st.col += 1; }
+        c
+    }
+    fn rd_skip_ws(&mut self, sti: usize) {
+        loop {
+            let c = self.rd_peek(sti);
+            if c == NO_CP { return; }
+            if is_ws(c) { self.rd_next(sti); continue; }
+            if c != 59 { return; }
+            loop {
+                let d = self.rd_next(sti);
+                if d == NO_CP || d == 10 { break; }
+            }
+        }
+    }
+    fn rd_token(&mut self, sti: usize) -> u32 {
+        let from = self.stm(sti).i as u32;
+        loop {
+            let c = self.rd_peek(sti);
+            if c == NO_CP || is_ws(c) || is_term(c) { break; }
+            self.rd_next(sti);
+        }
+        from
+    }
+    fn rd_pos(&self, sti: usize) -> u32 { self.stm(sti).i as u32 }
+    fn rd_at(&self, sti: usize, i: u32) -> u32 { self.stm(sti).text[i as usize] }
+    fn rd_string(&mut self, sti: usize, from: u32, to: u32) -> Value {
+        let cps: Vec<u32> = self.stm(sti).text[from as usize..to as usize].to_vec();
+        self.str_of_cps(cps)
+    }
+    fn rd_range_is(&mut self, sti: usize, from: u32, to: u32, v: Value) -> bool {
+        let cps: Vec<u32> = self.stm(sti).text[from as usize..to as usize].to_vec();
+        cps == self.str_text(v)
+    }
+    fn rd_fail_lit(&mut self, _sti: usize, _t: &str) -> u32 { RS_ERR }
+    fn rd_fail_sink(&mut self, _sti: usize, sk: u32) -> u32 { self.sink_close(sk); RS_ERR }
+
+    // --- readnum / readtext / readsq: minimal stand-ins ---
+    // An integer-only parser: optional '-' then all digits. Anything else is
+    // RS_NONE ("not a number"), which is how real `parse-number` hands the
+    // token back to `read-symbolic` for a keyword or symbol.
+    fn parse_number(&mut self, sti: usize, from: u32, to: u32) -> u32 {
+        let cps: Vec<u32> = self.stm(sti).text[from as usize..to as usize].to_vec();
+        if cps.is_empty() { return RS_NONE; }
+        let mut i = 0usize;
+        let neg = cps[0] == 45;
+        if neg { i = 1; }
+        if i >= cps.len() { return RS_NONE; }
+        for &c in &cps[i..] { if !is_digit(c) { return RS_NONE; } }
+        let mut n: i64 = 0;
+        for &c in &cps[i..] { n = n * 10 + (c - 48) as i64; }
+        if neg { n = -n; }
+        self.push(Value::fixnum(n));
+        RS_OK
+    }
+    fn read_string_lit(&mut self, sti: usize) -> u32 {
+        self.rd_next(sti); // opening quote
+        let from = self.rd_pos(sti);
+        loop {
+            let c = self.rd_peek(sti);
+            if c == NO_CP { return self.rd_fail_lit(sti, "unterminated string"); }
+            if c == 34 { break; }
+            self.rd_next(sti);
+        }
+        let to = self.rd_pos(sti);
+        let s = self.rd_string(sti, from, to);
+        self.rd_next(sti); // closing quote
+        self.push(s);
+        RS_OK
+    }
+    fn read_char_lit(&mut self, sti: usize) -> u32 {
+        self.rd_next(sti); // backslash
+        let c = self.rd_next(sti);
+        self.push(Value::fixnum(c as i64));
+        RS_OK
+    }
+    fn read_regex_lit(&mut self, sti: usize) -> u32 { self.read_string_lit(sti) }
+    // Syntax-quote: a fixed wrapper around whatever was read, enough to prove
+    // `read-one` dispatched to it and got a stable, printable answer back --
+    // the expansion rules themselves belong to `readsq.drivers`.
+    fn sq_form(&mut self, sti: usize, base: usize) -> u32 {
+        let _ = sti;
+        let inner = self.r(base);
+        let tag = self.lit_symbol1("mock-sq");
+        let out = self.new_tagged(tag, inner);
+        self.push(out);
+        RS_OK
+    }
+--rust
+}
+fn show_text(cps: &[u32]) -> String { cps.iter().map(|&c| char::from_u32(c as u32).unwrap()).collect() }
+fn render(rt: &mut Rt, v: Value) -> String {
+    if v.is_nil() { return "nil".to_string(); }
+    if v == TRUE { return "true".to_string(); }
+    if v == FALSE { return "false".to_string(); }
+    if v == NOT_FOUND { return "NOT_FOUND".to_string(); }
+    if v.tag() == TAG_FIX { return v.as_fixnum().to_string(); }
+    if v.tag() == TAG_DBL {
+        return match v.pay() { 0 => "##Inf".to_string(), 1 => "##-Inf".to_string(), _ => "##NaN".to_string() };
+    }
+    match rt.at(v).clone() {
+        Obj::Str(cps) => format!("\"{}\"", show_text(&cps)),
+        Obj::Sym(ns, nm, _) => {
+            if ns.is_nil() { show_text(&rt.str_text(nm)) }
+            else { format!("{}/{}", show_text(&rt.str_text(ns)), show_text(&rt.str_text(nm))) }
+        }
+        Obj::Kw(ns, nm) => {
+            if ns.is_nil() { format!(":{}", show_text(&rt.str_text(nm))) }
+            else { format!(":{}/{}", show_text(&rt.str_text(ns)), show_text(&rt.str_text(nm))) }
+        }
+        Obj::List(items, _) => {
+            let parts: Vec<String> = items.iter().map(|&x| render(rt, x)).collect();
+            format!("({})", parts.join(" "))
+        }
+        Obj::Vec(items, _) => {
+            let parts: Vec<String> = items.iter().map(|&x| render(rt, x)).collect();
+            format!("[{}]", parts.join(" "))
+        }
+        Obj::Map(entries, _) => {
+            let parts: Vec<String> = entries.iter().map(|&(k, val)| format!("{} {}", render(rt, k), render(rt, val))).collect();
+            format!("{{{}}}", parts.join(", "))
+        }
+        Obj::Set(items, _) => {
+            let parts: Vec<String> = items.iter().map(|&x| render(rt, x)).collect();
+            format!("#{{{}}}", parts.join(" "))
+        }
+        Obj::Tagged(tag, form) => format!("#tagged<{} {}>", render(rt, tag), render(rt, form)),
+        Obj::Entry(k, val) => format!("<{} {}>", render(rt, k), render(rt, val)),
+        Obj::State(_) => "<state>".to_string(),
+    }
+}
+// `{:line l :column c :file f ...}` on a meta-able value, or "nometa" / "-"
+// when there is none to show (the thing cannot carry it, or carries none).
+fn render_meta(rt: &mut Rt, v: Value) -> String {
+    if !(rt.is_symbol(v) || rt.is_vector_like(v) || rt.is_map(v) || rt.is_set(v) || rt.is_seq(v)) {
+        return "-".to_string();
+    }
+    let m = rt.meta_of(v);
+    if m.is_nil() { return "nometa".to_string(); }
+    render(rt, m)
+}
+fn read_all(rt: &mut Rt, sti: usize, out: &mut String) {
+    loop {
+        let base = rt.mark();
+        let st = rt.read_top(sti);
+        if st == RS_ERR { out.push_str("ERR "); return; }
+        if st == RS_EOF { return; }
+        let v = rt.r(base);
+        out.push_str(&format!("{}<{}> ", render(rt, v), render_meta(rt, v)));
+        rt.pop_to(base);
+    }
+}
+fn main() {
+    let mut out = String::new();
+
+    // 1. LISTS, VECTORS, MAPS -- read as three top-level forms from one
+    //    text, each stamped with its own line/column and (for the two
+    //    sequences) its children's flat position list.
+    {
+        let mut rt = Rt { objs: Vec::new(), sinks: Vec::new(), cps: Vec::new(), roots: Vec::new() };
+        let sv = rt.new_state("(1 2 3)\n[4 5]\n{:a 1 :b 2}", "t.fln", NIL, false, false);
+        let sti = rt.push(sv);
+        read_all(&mut rt, sti, &mut out);
+    }
+    out.push('|');
+
+    // 2. `#_` DISCARD, then the NEXT real form.
+    {
+        let mut rt = Rt { objs: Vec::new(), sinks: Vec::new(), cps: Vec::new(), roots: Vec::new() };
+        let sv = rt.new_state("#_42 7", "t.fln", NIL, false, false);
+        let sti = rt.push(sv);
+        read_all(&mut rt, sti, &mut out);
+    }
+    out.push('|');
+
+    // 3. `'x`, a two-element list `(quote x)`.
+    {
+        let mut rt = Rt { objs: Vec::new(), sinks: Vec::new(), cps: Vec::new(), roots: Vec::new() };
+        let sv = rt.new_state("'x", "t.fln", NIL, false, false);
+        let sti = rt.push(sv);
+        read_all(&mut rt, sti, &mut out);
+    }
+    out.push('|');
+
+    // 4. `^:k x` -- the keyword shorthand merged onto the symbol's metadata.
+    {
+        let mut rt = Rt { objs: Vec::new(), sinks: Vec::new(), cps: Vec::new(), roots: Vec::new() };
+        let sv = rt.new_state("^:k x", "t.fln", NIL, false, false);
+        let sti = rt.push(sv);
+        read_all(&mut rt, sti, &mut out);
+    }
+    out.push('|');
+
+    // 5. `#{1 2 3}`.
+    {
+        let mut rt = Rt { objs: Vec::new(), sinks: Vec::new(), cps: Vec::new(), roots: Vec::new() };
+        let sv = rt.new_state("#{1 2 3}", "t.fln", NIL, false, false);
+        let sti = rt.push(sv);
+        read_all(&mut rt, sti, &mut out);
+    }
+    out.push('|');
+
+    // 6. `#?(:a 1 :b 2)` EAGER, matched on `:a`, and `#?@` spliced into a
+    //    vector -- both under features `#{:a}`.
+    {
+        let mut rt = Rt { objs: Vec::new(), sinks: Vec::new(), cps: Vec::new(), roots: Vec::new() };
+        let a = rt.lit_keyword1("a");
+        let feats = rt.obj(Obj::Set(vec![a], NIL));
+        let sv = rt.new_state("#?(:a 1 :b 2)\n[1 #?@(:a [2 3]) 4]\n#?(:z 9)", "t.fln", feats, false, false);
+        let sti = rt.push(sv);
+        read_all(&mut rt, sti, &mut out);
+    }
+    out.push('|');
+
+    // 7. THE SAME `#?` TEXT, DEFERRED: a reader-conditional node as data.
+    {
+        let mut rt = Rt { objs: Vec::new(), sinks: Vec::new(), cps: Vec::new(), roots: Vec::new() };
+        let sv = rt.new_state("#?(:a 1 :b 2)", "t.fln", NIL, true, false);
+        let sti = rt.push(sv);
+        read_all(&mut rt, sti, &mut out);
+    }
+    out.push('|');
+
+    // 8. `#(+ % %2)`.
+    {
+        let mut rt = Rt { objs: Vec::new(), sinks: Vec::new(), cps: Vec::new(), roots: Vec::new() };
+        let sv = rt.new_state("#(+ % %2)", "t.fln", NIL, false, false);
+        let sti = rt.push(sv);
+        read_all(&mut rt, sti, &mut out);
+    }
+    out.push('|');
+
+    // 9. `#:p{:a 1}`.
+    {
+        let mut rt = Rt { objs: Vec::new(), sinks: Vec::new(), cps: Vec::new(), roots: Vec::new() };
+        let sv = rt.new_state("#:p{:a 1}", "t.fln", NIL, false, false);
+        let sti = rt.push(sv);
+        read_all(&mut rt, sti, &mut out);
+    }
+    out.push('|');
+
+    // 10. `::kw` AGAINST AN ALIAS the file's own `ns` form declares.
+    {
+        let mut rt = Rt { objs: Vec::new(), sinks: Vec::new(), cps: Vec::new(), roots: Vec::new() };
+        let sv = rt.new_state("(ns x (:require [y :as z]))\n::z/kw", "t.fln", NIL, false, false);
+        let sti = rt.push(sv);
+        read_all(&mut rt, sti, &mut out);
+    }
+    out.push('|');
+
+    // 11. ERRORS: an unterminated list, a stray `)`, an odd-length map.
+    for text in ["(a", ")", "{:a}"] {
+        let mut rt = Rt { objs: Vec::new(), sinks: Vec::new(), cps: Vec::new(), roots: Vec::new() };
+        let sv = rt.new_state(text, "t.fln", NIL, false, false);
+        let sti = rt.push(sv);
+        read_all(&mut rt, sti, &mut out);
+    }
+
+    println!("{}", out.trim_end());
+}
+--java-head
+// ===== Value: a long, tagged by RANGE rather than by bits -- simpler to
+// keep identical across three languages than a bit-packed scheme. Fixnums
+// and doubles are the only immediates (`Val.fixnum`/`Val.ofDouble` take no
+// `Rt`, so they cannot allocate); everything else, symbols and keywords
+// included, is a real heap object -- see `Obj` below.
+static final class Val {
+    static final long NIL = -1, TRUE = -2, FALSE = -3, NOT_FOUND = -4;
+    static final long OFF_FIX = 1_000_000_000_000L;
+    static final long OFF_DBL = 2_000_000_000_000L;
+    static final long CANONICAL_NAN = 0x7FF8000000000000L;
+    static boolean isNil(long v) { return v == NIL; }
+    static long zigzag(long n) { return n >= 0 ? (n << 1) : (((-n) << 1) - 1); }
+    static long unzigzag(long z) { return (z % 2 == 0) ? (z >> 1) : -((z + 1) >> 1); }
+    static long fixnum(long n) { return OFF_FIX + zigzag(n); }
+    static long asFixnum(long v) { return unzigzag(v - OFF_FIX); }
+    static double doubleValue(long v) {
+        long k = v - OFF_DBL;
+        if (k == 0) return Double.POSITIVE_INFINITY;
+        if (k == 1) return Double.NEGATIVE_INFINITY;
+        if (k == 2) return Double.NaN;
+        return 0.0;
+    }
+    static long ofDouble(double d) {
+        if (Double.isNaN(d)) return OFF_DBL + 2;
+        if (d == Double.POSITIVE_INFINITY) return OFF_DBL + 0;
+        if (d == Double.NEGATIVE_INFINITY) return OFF_DBL + 1;
+        return OFF_DBL + 3;
+    }
+}
+
+// A single flexible heap object. `kind`: 0 str, 1 list, 2 vec, 3 map, 4 set,
+// 5 tagged, 6 map-entry, 7 state, 8 symbol, 9 keyword.
+static final class Obj {
+    int kind;
+    java.util.List<Integer> cps;                 // kind 0 (Str)
+    java.util.List<Long> items;                   // kind 1,2,4 (List/Vec/Set)
+    java.util.List<long[]> entries;                // kind 3 (Map): {k, v}
+    long meta = Val.NIL;                           // kind 1,2,3,4,8
+    long a, b;                                     // kind 5,6,8,9 (Tagged: tag,form; Entry: key,val; Sym/Kw: ns,name)
+    St st;                                         // kind 7
+}
+static final class St {
+    long file = Val.NIL, ns = Val.NIL, aliases = Val.NIL, features = Val.NIL, tags = Val.NIL,
+         childpos = Val.NIL, gensyms = Val.NIL;
+    boolean defer, apartial, portable;
+    long conds;
+    int[] text;
+    long i, n, line, col;
+}
+
+static final int RS_OK = 0, RS_EOF = 1, RS_NONE = 2, RS_SPLICE = 3, RS_ERR = 4;
+static final int NO_CP = 1114112;
+static final int RDS_LINE = 3, RDS_COL = 4, RDS_FILE = 5, RDS_GENSYMS = 6, RDS_FEATURES = 7,
+                  RDS_NS = 8, RDS_ALIASES = 9, RDS_DEFER = 10, RDS_CONDS = 11, RDS_APARTIAL = 12,
+                  RDS_PORTABLE = 13, RDS_TAGS = 14, RDS_CHILDPOS = 15;
+
+static boolean isWs(int c) { return c == 32 || c == 9 || c == 10 || c == 13 || c == 12 || c == 44; }
+static boolean isTerm(int c) {
+    switch (c) {
+        case 34: case 59: case 64: case 94: case 96: case 126:
+        case 40: case 41: case 91: case 93: case 123: case 125: case 92: return true;
+        default: return false;
+    }
+}
+static boolean isDigit(int c) { return c >= 48 && c <= 57; }
+
+static final class Rt {
+    java.util.List<Obj> objs = new java.util.ArrayList<>();
+    java.util.List<java.util.List<Integer>> sinks = new java.util.ArrayList<>();
+    java.util.List<int[]> cpsTab = new java.util.ArrayList<>();
+    java.util.List<Long> roots = new java.util.ArrayList<>();
+
+    long obj(Obj o) { objs.add(o); return objs.size() - 1; }
+    Obj at(long v) { return objs.get((int) v); }
+
+    int mark() { return roots.size(); }
+    int push(long v) { roots.add(v); return roots.size() - 1; }
+    long r(int i) { return roots.get(i); }
+    void setR(int i, long v) { roots.set(i, v); }
+    void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+    long slot(long v, int i) {
+        if (v < 0 || v >= Val.OFF_FIX) return Val.NIL;
+        Obj o = at(v);
+        if (o.kind == 5 || o.kind == 6) return i == 0 ? o.a : o.b;
+        return Val.NIL;
+    }
+    int cpsOpen(int[] cps) { cpsTab.add(cps); return cpsTab.size() - 1; }
+    int cpsLen(int c) { return cpsTab.get(c).length; }
+    int cpsAt(int c, int i) { return cpsTab.get(c)[i]; }
+    void cpsClose(int c) {}
+    int sinkOpen() { sinks.add(new java.util.ArrayList<>()); return sinks.size() - 1; }
+    void sinkPut(int sk, int b) { sinks.get(sk).add(b); }
+    void sinkClose(int sk) {}
+    long sinkString(int sk) {
+        Obj o = new Obj(); o.kind = 0; o.cps = new java.util.ArrayList<>(sinks.get(sk));
+        return obj(o);
+    }
+
+    // --- the reader state, itself a plain heap object rooted like any other ---
+    long newState(String text, String file, long features, boolean defer, boolean portable) {
+        int[] cps = new int[text.length()];
+        for (int i = 0; i < text.length(); i++) cps[i] = text.charAt(i);
+        Obj so = new Obj(); so.kind = 0; so.cps = new java.util.ArrayList<>();
+        for (int c : cps) {}
+        Obj fo = new Obj(); fo.kind = 0; fo.cps = new java.util.ArrayList<>();
+        for (int i = 0; i < file.length(); i++) fo.cps.add((int) file.charAt(i));
+        long fv = obj(fo);
+        Obj tmo = new Obj(); tmo.kind = 3; tmo.entries = new java.util.ArrayList<>();
+        long tm = obj(tmo);
+        St st = new St();
+        st.file = fv; st.features = features; st.tags = tm; st.defer = defer; st.portable = portable;
+        st.text = cps; st.i = 0; st.n = cps.length; st.line = 1; st.col = 1;
+        Obj o = new Obj(); o.kind = 7; o.st = st;
+        return obj(o);
+    }
+    St stm(int sti) { return at(r(sti)).st; }
+}
+
+// bare `Str.of` -- the hand-written runtime's own STRING constructor, which
+// (unlike `symbolOf`/`keywordOf`/`empty-map`) is reached unqualified in the
+// generated code, so a nested class of this name answers it directly.
+static final class Str {
+    static long of(Rt rt, String s) {
+        Obj o = new Obj(); o.kind = 0; o.cps = new java.util.ArrayList<>();
+        for (int i = 0; i < s.length(); i++) o.cps.add((int) s.charAt(i));
+        return rt.obj(o);
+    }
+}
+// `empty-vec`/`empty-set` are ALSO bare, each its own nested class.
+static final class Vec {
+    static long empty(Rt rt) { Obj o = new Obj(); o.kind = 2; o.items = new java.util.ArrayList<>(); return rt.obj(o); }
+}
+static final class Sets {
+    static long empty(Rt rt) { Obj o = new Obj(); o.kind = 4; o.items = new java.util.ArrayList<>(); return rt.obj(o); }
+}
+// `symbol-of`/`keyword-of`/`empty-map` are spelled FULLY QUALIFIED by the
+// vocabulary (a generated module reaches the hand-written runtime from a
+// different package there) -- nested classes resolve the same dotted name a
+// real package would, straight off `Rt`, which this file's own default
+// package lets them see directly. The trick `tablecell.drivers` and
+// `readcore.drivers` already use.
+static final class com { static final class flint { static final class rt {
+static final class Str {
+    static long symbolOf(Rt rt, long ns, long nm) {
+        Obj o = new Obj(); o.kind = 8; o.a = ns; o.b = nm; o.meta = Val.NIL; return rt.obj(o);
+    }
+    static long keywordOf(Rt rt, long ns, long nm) {
+        Obj o = new Obj(); o.kind = 9; o.a = ns; o.b = nm; return rt.obj(o);
+    }
+}
+static final class Maps {
+    static long empty(Rt rt) { Obj o = new Obj(); o.kind = 3; o.entries = new java.util.ArrayList<>(); return rt.obj(o); }
+}
+} } }
+
+static java.util.List<Long> itemsOf(Rt rt, long v) {
+    if (v < 0 || v >= Val.OFF_FIX) return new java.util.ArrayList<>();
+    Obj o = rt.at(v);
+    if (o.kind == 1 || o.kind == 2 || o.kind == 4) return o.items;
+    return new java.util.ArrayList<>();
+}
+static boolean kindIs(Rt rt, long v, int kind) { return v >= 0 && v < Val.OFF_FIX && rt.at(v).kind == kind; }
+static boolean isSymbol(Rt rt, long v) { return kindIs(rt, v, 8); }
+static boolean isKeyword(Rt rt, long v) { return kindIs(rt, v, 9); }
+static boolean isMap(Rt rt, long v) { return kindIs(rt, v, 3); }
+static boolean isSet(Rt rt, long v) { return kindIs(rt, v, 4); }
+static boolean isSeq(Rt rt, long v) { return kindIs(rt, v, 1); }
+static boolean isVectorLike(Rt rt, long v) { return kindIs(rt, v, 2); }
+static boolean isString(Rt rt, long v) { return kindIs(rt, v, 0); }
+static boolean isTagged(Rt rt, long v) { return kindIs(rt, v, 5); }
+static long nameOf(Rt rt, long v) { return (isSymbol(rt, v) || isKeyword(rt, v)) ? rt.at(v).b : v; }
+static long nsOf(Rt rt, long v) { return (isSymbol(rt, v) || isKeyword(rt, v)) ? rt.at(v).a : Val.NIL; }
+static java.util.List<Integer> strText(Rt rt, long v) {
+    if (v < 0 || v >= Val.OFF_FIX || rt.at(v).kind != 0) return new java.util.ArrayList<>();
+    return rt.at(v).cps;
+}
+static boolean valEq(Rt rt, long a, long b) {
+    if (a == b) return true;
+    if (a < 0 || a >= Val.OFF_FIX || b < 0 || b >= Val.OFF_FIX) return false;
+    Obj oa = rt.at(a), ob = rt.at(b);
+    if (oa.kind == 0 && ob.kind == 0) return oa.cps.equals(ob.cps);
+    if ((oa.kind == 8 && ob.kind == 8) || (oa.kind == 9 && ob.kind == 9)) {
+        boolean an = Val.isNil(oa.a), bn = Val.isNil(ob.a);
+        boolean nsEq = (an && bn) || (!an && !bn && valEq(rt, oa.a, ob.a));
+        return nsEq && valEq(rt, oa.b, ob.b);
+    }
+    return false;
+}
+static long litSymbol(Rt rt, String ns, String nm) {
+    return com.flint.rt.Str.symbolOf(rt, Str.of(rt, ns), Str.of(rt, nm));
+}
+static long litSymbol1(Rt rt, String nm) { return com.flint.rt.Str.symbolOf(rt, Val.NIL, Str.of(rt, nm)); }
+static long litKeyword(Rt rt, String ns, String nm) {
+    return com.flint.rt.Str.keywordOf(rt, Str.of(rt, ns), Str.of(rt, nm));
+}
+static long litKeyword1(Rt rt, String nm) { return com.flint.rt.Str.keywordOf(rt, Val.NIL, Str.of(rt, nm)); }
+static boolean isSym1(Rt rt, long v, String nm) {
+    if (!isSymbol(rt, v)) return false;
+    return valEq(rt, v, litSymbol1(rt, nm));
+}
+static boolean isSym2(Rt rt, long v, String ns, String nm) {
+    if (!isSymbol(rt, v)) return false;
+    return valEq(rt, v, litSymbol(rt, ns, nm));
+}
+
+static long listFromRoots(Rt rt, int base, int n) {
+    Obj o = new Obj(); o.kind = 1; o.items = new java.util.ArrayList<>();
+    for (int i = 0; i < n; i++) o.items.add(rt.r(base + i));
+    return rt.obj(o);
+}
+static long vecFromRoots(Rt rt, int base, int n) {
+    Obj o = new Obj(); o.kind = 2; o.items = new java.util.ArrayList<>();
+    for (int i = 0; i < n; i++) o.items.add(rt.r(base + i));
+    return rt.obj(o);
+}
+
+static int vecCount(Rt rt, long v) { return itemsOf(rt, v).size(); }
+static long vecNth(Rt rt, long v, int i, long d) {
+    java.util.List<Long> items = itemsOf(rt, v);
+    return (i >= 0 && i < items.size()) ? items.get(i) : d;
+}
+static long vecConj(Rt rt, long v, long x) {
+    Obj o = new Obj(); o.kind = 2; o.items = new java.util.ArrayList<>(itemsOf(rt, v)); o.items.add(x);
+    return rt.obj(o);
+}
+static long vecAssoc(Rt rt, long v, int i, long x) {
+    Obj o = new Obj(); o.kind = 2; o.items = new java.util.ArrayList<>(itemsOf(rt, v));
+    while (o.items.size() <= i) o.items.add(Val.NIL);
+    o.items.set(i, x);
+    return rt.obj(o);
+}
+static java.util.List<long[]> assocEntries(Rt rt, java.util.List<long[]> entries, long k, long v) {
+    java.util.List<long[]> out = new java.util.ArrayList<>(entries);
+    for (long[] e : out) { if (valEq(rt, e[0], k)) { e[1] = v; return out; } }
+    out.add(new long[]{k, v});
+    return out;
+}
+static java.util.List<long[]> mapEntriesOf(Rt rt, long m) {
+    if (m >= 0 && m < Val.OFF_FIX && rt.at(m).kind == 3) return rt.at(m).entries;
+    return new java.util.ArrayList<>();
+}
+static long mapAssoc(Rt rt, long m, long k, long v) {
+    Obj o = new Obj(); o.kind = 3; o.entries = assocEntries(rt, mapEntriesOf(rt, m), k, v);
+    return rt.obj(o);
+}
+static long mapGet(Rt rt, long m, long k, long d) {
+    for (long[] e : mapEntriesOf(rt, m)) { if (valEq(rt, e[0], k)) return e[1]; }
+    return d;
+}
+static long mapEntryVector(Rt rt, long m) {
+    Obj o = new Obj(); o.kind = 2; o.items = new java.util.ArrayList<>();
+    for (long[] e : mapEntriesOf(rt, m)) { Obj en = new Obj(); en.kind = 6; en.a = e[0]; en.b = e[1]; o.items.add(rt.obj(en)); }
+    return rt.obj(o);
+}
+static long setElementVector(Rt rt, long s) {
+    Obj o = new Obj(); o.kind = 2; o.items = new java.util.ArrayList<>(itemsOf(rt, s));
+    return rt.obj(o);
+}
+static boolean setContains(Rt rt, long s, long x) {
+    for (long y : itemsOf(rt, s)) { if (valEq(rt, y, x)) return true; }
+    return false;
+}
+static long orderedMap(Rt rt, long flat) {
+    java.util.List<Long> items = itemsOf(rt, flat);
+    java.util.List<long[]> entries = new java.util.ArrayList<>();
+    int i = 0;
+    while (i + 1 < items.size()) { entries = assocEntries(rt, entries, items.get(i), items.get(i + 1)); i += 2; }
+    Obj o = new Obj(); o.kind = 3; o.entries = entries;
+    return rt.obj(o);
+}
+static long toTransient(Rt rt, long v) { return v; }
+static long toPersistent(Rt rt, long v) { return v; }
+static long transientConj(Rt rt, long s, long x) {
+    Obj o = new Obj(); o.kind = 4; o.items = new java.util.ArrayList<>(itemsOf(rt, s)); o.items.add(x);
+    return rt.obj(o);
+}
+static long transientAssoc(Rt rt, long m, long k, long v) { return mapAssoc(rt, m, k, v); }
+
+static long metaOf(Rt rt, long v) {
+    if (v < 0 || v >= Val.OFF_FIX) return Val.NIL;
+    int k = rt.at(v).kind;
+    if (k == 1 || k == 2 || k == 3 || k == 4 || k == 8) return rt.at(v).meta;
+    return Val.NIL;
+}
+static long withMeta(Rt rt, long v, long m) {
+    if (v < 0 || v >= Val.OFF_FIX) return v;
+    Obj src = rt.at(v);
+    Obj o = new Obj(); o.kind = src.kind; o.items = src.items; o.entries = src.entries;
+    o.cps = src.cps; o.a = src.a; o.b = src.b; o.st = src.st; o.meta = m;
+    return rt.obj(o);
+}
+static long newTagged(Rt rt, long tag, long form) {
+    Obj o = new Obj(); o.kind = 5; o.a = tag; o.b = form;
+    return rt.obj(o);
+}
+
+static int codePoints(Rt rt, long v) {
+    java.util.List<Integer> t = strText(rt, v);
+    int[] a = new int[t.size()];
+    for (int i = 0; i < a.length; i++) a[i] = t.get(i);
+    return rt.cpsOpen(a);
+}
+
+static void msgLit(Rt rt, int sk, String t) { for (int i = 0; i < t.length(); i++) rt.sinkPut(sk, t.charAt(i)); }
+static void msgVal(Rt rt, int sk, long v) {
+    if (isSymbol(rt, v)) {
+        long ns = nsOf(rt, v);
+        if (!Val.isNil(ns)) { for (int c : strText(rt, ns)) rt.sinkPut(sk, c); rt.sinkPut(sk, 47); }
+        for (int c : strText(rt, nameOf(rt, v))) rt.sinkPut(sk, c);
+        return;
+    }
+    for (int c : strText(rt, v)) rt.sinkPut(sk, c);
+}
+static void msgCp(Rt rt, int sk, int c) { if (c != NO_CP) sinkPutCp(rt, sk, c); }
+static void msgInt(Rt rt, int sk, long n) {
+    if (n >= 10) msgInt(rt, sk, n / 10);
+    rt.sinkPut(sk, (int) (48 + (n % 10)));
+}
+static void sinkPutCp(Rt rt, int sk, int c) { rt.sinkPut(sk, c); }
+
+static void sortRoots(Rt rt, int base, int n) {
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n - 1 - i; j++) {
+            java.util.List<Integer> a = strText(rt, rt.r(base + j)), b = strText(rt, rt.r(base + j + 1));
+            if (cmpCps(a, b) > 0) { long t = rt.r(base + j); rt.setR(base + j, rt.r(base + j + 1)); rt.setR(base + j + 1, t); }
+        }
+    }
+}
+static int cmpCps(java.util.List<Integer> a, java.util.List<Integer> b) {
+    int n = Math.min(a.size(), b.size());
+    for (int i = 0; i < n; i++) { int c = Integer.compare(a.get(i), b.get(i)); if (c != 0) return c; }
+    return Integer.compare(a.size(), b.size());
+}
+static void collapseList(Rt rt, int base, int n) {
+    long v = listFromRoots(rt, base, n);
+    rt.popTo(base);
+    rt.push(v);
+}
+
+static int rdGetI(St st, int s) { return 0; }
+static long rdGet(Rt rt, int sti, int s) {
+    St st = rt.stm(sti);
+    switch (s) {
+        case RDS_FILE: return st.file; case RDS_GENSYMS: return st.gensyms;
+        case RDS_FEATURES: return st.features; case RDS_NS: return st.ns;
+        case RDS_ALIASES: return st.aliases; case RDS_TAGS: return st.tags;
+        case RDS_CHILDPOS: return st.childpos;
+        default: return Val.NIL;
+    }
+}
+static void rdPut(Rt rt, int sti, int s, long v) {
+    St st = rt.stm(sti);
+    switch (s) {
+        case RDS_FILE: st.file = v; break; case RDS_GENSYMS: st.gensyms = v; break;
+        case RDS_FEATURES: st.features = v; break; case RDS_NS: st.ns = v; break;
+        case RDS_ALIASES: st.aliases = v; break; case RDS_TAGS: st.tags = v; break;
+        case RDS_CHILDPOS: st.childpos = v; break;
+        case RDS_APARTIAL: st.apartial = (v == Val.TRUE); break;
+        case RDS_DEFER: st.defer = (v == Val.TRUE); break;
+        default: break;
+    }
+}
+static long rdInt(Rt rt, int sti, int s) {
+    St st = rt.stm(sti);
+    switch (s) { case RDS_LINE: return st.line; case RDS_COL: return st.col; case RDS_CONDS: return st.conds; default: return 0; }
+}
+static void rdSetInt(Rt rt, int sti, int s, long v) {
+    St st = rt.stm(sti);
+    switch (s) { case RDS_LINE: st.line = v; break; case RDS_COL: st.col = v; break; case RDS_CONDS: st.conds = v; break; default: break; }
+}
+static boolean rdFlag(Rt rt, int sti, int s) {
+    St st = rt.stm(sti);
+    switch (s) { case RDS_DEFER: return st.defer; case RDS_APARTIAL: return st.apartial; case RDS_PORTABLE: return st.portable; default: return false; }
+}
+static int rdPeek(Rt rt, int sti) {
+    St st = rt.stm(sti);
+    return (st.i >= st.n) ? NO_CP : st.text[(int) st.i];
+}
+static int rdPeek2(Rt rt, int sti) {
+    St st = rt.stm(sti);
+    long j = st.i + 1;
+    return (j >= st.n) ? NO_CP : st.text[(int) j];
+}
+static int rdNext(Rt rt, int sti) {
+    int c = rdPeek(rt, sti);
+    if (c == NO_CP) return NO_CP;
+    St st = rt.stm(sti);
+    st.i += 1;
+    if (c == 10) { st.line += 1; st.col = 1; } else { st.col += 1; }
+    return c;
+}
+static void rdSkipWs(Rt rt, int sti) {
+    while (true) {
+        int c = rdPeek(rt, sti);
+        if (c == NO_CP) return;
+        if (isWs(c)) { rdNext(rt, sti); continue; }
+        if (c != 59) return;
+        while (true) { int d = rdNext(rt, sti); if (d == NO_CP || d == 10) break; }
+    }
+}
+static int rdToken(Rt rt, int sti) {
+    int from = (int) rt.stm(sti).i;
+    while (true) {
+        int c = rdPeek(rt, sti);
+        if (c == NO_CP || isWs(c) || isTerm(c)) break;
+        rdNext(rt, sti);
+    }
+    return from;
+}
+static int rdPos(Rt rt, int sti) { return (int) rt.stm(sti).i; }
+static int rdAt(Rt rt, int sti, int i) { return rt.stm(sti).text[i]; }
+static long rdString(Rt rt, int sti, int from, int to) {
+    Obj o = new Obj(); o.kind = 0; o.cps = new java.util.ArrayList<>();
+    int[] text = rt.stm(sti).text;
+    for (int i = from; i < to; i++) o.cps.add(text[i]);
+    return rt.obj(o);
+}
+static boolean rdRangeIs(Rt rt, int sti, int from, int to, long v) {
+    int[] text = rt.stm(sti).text;
+    java.util.List<Integer> probe = new java.util.ArrayList<>();
+    for (int i = from; i < to; i++) probe.add(text[i]);
+    return probe.equals(strText(rt, v));
+}
+static int rdFailLit(Rt rt, int sti, String t) { return RS_ERR; }
+static int rdFailSink(Rt rt, int sti, int sk) { rt.sinkClose(sk); return RS_ERR; }
+
+// --- readnum / readtext / readsq: minimal stand-ins ---
+static int parseNumber(Rt rt, int sti, int from, int to) {
+    int[] text = rt.stm(sti).text;
+    if (from >= to) return RS_NONE;
+    int i = from; boolean neg = text[from] == 45;
+    if (neg) i = from + 1;
+    if (i >= to) return RS_NONE;
+    for (int k = i; k < to; k++) { if (!isDigit(text[k])) return RS_NONE; }
+    long n = 0;
+    for (int k = i; k < to; k++) n = n * 10 + (text[k] - 48);
+    if (neg) n = -n;
+    rt.push(Val.fixnum(n));
+    return RS_OK;
+}
+static int readStringLit(Rt rt, int sti) {
+    rdNext(rt, sti); // opening quote
+    int from = rdPos(rt, sti);
+    while (true) {
+        int c = rdPeek(rt, sti);
+        if (c == NO_CP) return rdFailLit(rt, sti, "unterminated string");
+        if (c == 34) break;
+        rdNext(rt, sti);
+    }
+    int to = rdPos(rt, sti);
+    long s = rdString(rt, sti, from, to);
+    rdNext(rt, sti); // closing quote
+    rt.push(s);
+    return RS_OK;
+}
+static int readCharLit(Rt rt, int sti) {
+    rdNext(rt, sti); // backslash
+    int c = rdNext(rt, sti);
+    rt.push(Val.fixnum(c));
+    return RS_OK;
+}
+static int readRegexLit(Rt rt, int sti) { return readStringLit(rt, sti); }
+// Syntax-quote: a fixed wrapper, enough to prove `read-one` dispatched here
+// and got a stable, printable answer -- expansion itself is `readsq.drivers`'s.
+static int sqForm(Rt rt, int sti, int base) {
+    long inner = rt.r(base);
+    long tag = litSymbol1(rt, "mock-sq");
+    long out = newTagged(rt, tag, inner);
+    rt.push(out);
+    return RS_OK;
+}
+static long seq(Rt rt, long v) {
+    java.util.List<Long> items = itemsOf(rt, v);
+    if (items.isEmpty()) return Val.NIL;
+    Obj o = new Obj(); o.kind = 1; o.items = new java.util.ArrayList<>(items);
+    return rt.obj(o);
+}
+static long first(Rt rt, long v) {
+    java.util.List<Long> items = itemsOf(rt, v);
+    return items.isEmpty() ? Val.NIL : items.get(0);
+}
+static long next(Rt rt, long v) {
+    java.util.List<Long> items = itemsOf(rt, v);
+    if (items.size() <= 1) return Val.NIL;
+    Obj o = new Obj(); o.kind = 1; o.items = new java.util.ArrayList<>(items.subList(1, items.size()));
+    return rt.obj(o);
+}
+--java
+static String showText(java.util.List<Integer> cps) {
+    StringBuilder b = new StringBuilder();
+    for (int c : cps) b.append((char) c);
+    return b.toString();
+}
+static String render(Rt rt, long v) {
+    if (Val.isNil(v)) return "nil";
+    if (v == Val.TRUE) return "true";
+    if (v == Val.FALSE) return "false";
+    if (v == Val.NOT_FOUND) return "NOT_FOUND";
+    if (v >= Val.OFF_FIX && v < Val.OFF_DBL) return Long.toString(Val.asFixnum(v));
+    if (v >= Val.OFF_DBL) {
+        long k = v - Val.OFF_DBL;
+        return k == 0 ? "##Inf" : k == 1 ? "##-Inf" : "##NaN";
+    }
+    Obj o = rt.at(v);
+    switch (o.kind) {
+        case 0: return "\"" + showText(o.cps) + "\"";
+        case 8: case 9: {
+            long ns = nsOf(rt, v), nm = nameOf(rt, v);
+            String base = Val.isNil(ns) ? showText(strText(rt, nm)) : showText(strText(rt, ns)) + "/" + showText(strText(rt, nm));
+            return o.kind == 9 ? ":" + base : base;
+        }
+        case 1: {
+            StringBuilder b = new StringBuilder("(");
+            for (int i = 0; i < o.items.size(); i++) { if (i > 0) b.append(' '); b.append(render(rt, o.items.get(i))); }
+            return b.append(')').toString();
+        }
+        case 2: {
+            StringBuilder b = new StringBuilder("[");
+            for (int i = 0; i < o.items.size(); i++) { if (i > 0) b.append(' '); b.append(render(rt, o.items.get(i))); }
+            return b.append(']').toString();
+        }
+        case 3: {
+            StringBuilder b = new StringBuilder("{");
+            for (int i = 0; i < o.entries.size(); i++) {
+                if (i > 0) b.append(", ");
+                long[] e = o.entries.get(i);
+                b.append(render(rt, e[0])).append(' ').append(render(rt, e[1]));
+            }
+            return b.append('}').toString();
+        }
+        case 4: {
+            StringBuilder b = new StringBuilder("#{");
+            for (int i = 0; i < o.items.size(); i++) { if (i > 0) b.append(' '); b.append(render(rt, o.items.get(i))); }
+            return b.append('}').toString();
+        }
+        case 5: return "#tagged<" + render(rt, o.a) + " " + render(rt, o.b) + ">";
+        case 6: return "<" + render(rt, o.a) + " " + render(rt, o.b) + ">";
+        default: return "<state>";
+    }
+}
+static String renderMeta(Rt rt, long v) {
+    if (!(isSymbol(rt, v) || isVectorLike(rt, v) || isMap(rt, v) || isSet(rt, v) || isSeq(rt, v))) return "-";
+    long m = metaOf(rt, v);
+    if (Val.isNil(m)) return "nometa";
+    return render(rt, m);
+}
+static void readAll(Rt rt, int sti, StringBuilder out) {
+    while (true) {
+        int base = rt.mark();
+        int st = readTop(rt, sti);
+        if (st == RS_ERR) { out.append("ERR "); return; }
+        if (st == RS_EOF) return;
+        long v = rt.r(base);
+        out.append(render(rt, v)).append('<').append(renderMeta(rt, v)).append("> ");
+        rt.popTo(base);
+    }
+}
+public static void main(String[] args) {
+    StringBuilder out = new StringBuilder();
+
+    // 1. LISTS, VECTORS, MAPS.
+    {
+        Rt rt = new Rt();
+        int sti = rt.push(rt.newState("(1 2 3)\n[4 5]\n{:a 1 :b 2}", "t.fln", Val.NIL, false, false));
+        readAll(rt, sti, out);
+    }
+    out.append('|');
+
+    // 2. `#_` DISCARD, then the NEXT real form.
+    {
+        Rt rt = new Rt();
+        int sti = rt.push(rt.newState("#_42 7", "t.fln", Val.NIL, false, false));
+        readAll(rt, sti, out);
+    }
+    out.append('|');
+
+    // 3. `'x`.
+    {
+        Rt rt = new Rt();
+        int sti = rt.push(rt.newState("'x", "t.fln", Val.NIL, false, false));
+        readAll(rt, sti, out);
+    }
+    out.append('|');
+
+    // 4. `^:k x`.
+    {
+        Rt rt = new Rt();
+        int sti = rt.push(rt.newState("^:k x", "t.fln", Val.NIL, false, false));
+        readAll(rt, sti, out);
+    }
+    out.append('|');
+
+    // 5. `#{1 2 3}`.
+    {
+        Rt rt = new Rt();
+        int sti = rt.push(rt.newState("#{1 2 3}", "t.fln", Val.NIL, false, false));
+        readAll(rt, sti, out);
+    }
+    out.append('|');
+
+    // 6. `#?` EAGER: matched, splice, unmatched.
+    {
+        Rt rt = new Rt();
+        long a = litKeyword1(rt, "a");
+        Obj so = new Obj(); so.kind = 4; so.items = new java.util.ArrayList<>(); so.items.add(a);
+        long feats = rt.obj(so);
+        int sti = rt.push(rt.newState("#?(:a 1 :b 2)\n[1 #?@(:a [2 3]) 4]\n#?(:z 9)", "t.fln", feats, false, false));
+        readAll(rt, sti, out);
+    }
+    out.append('|');
+
+    // 7. THE SAME `#?` TEXT, DEFERRED.
+    {
+        Rt rt = new Rt();
+        int sti = rt.push(rt.newState("#?(:a 1 :b 2)", "t.fln", Val.NIL, true, false));
+        readAll(rt, sti, out);
+    }
+    out.append('|');
+
+    // 8. `#(+ % %2)`.
+    {
+        Rt rt = new Rt();
+        int sti = rt.push(rt.newState("#(+ % %2)", "t.fln", Val.NIL, false, false));
+        readAll(rt, sti, out);
+    }
+    out.append('|');
+
+    // 9. `#:p{:a 1}`.
+    {
+        Rt rt = new Rt();
+        int sti = rt.push(rt.newState("#:p{:a 1}", "t.fln", Val.NIL, false, false));
+        readAll(rt, sti, out);
+    }
+    out.append('|');
+
+    // 10. `::kw` against an alias from the file's own `ns` form.
+    {
+        Rt rt = new Rt();
+        int sti = rt.push(rt.newState("(ns x (:require [y :as z]))\n::z/kw", "t.fln", Val.NIL, false, false));
+        readAll(rt, sti, out);
+    }
+    out.append('|');
+
+    // 11. ERRORS.
+    for (String text : new String[]{"(a", ")", "{:a}"}) {
+        Rt rt = new Rt();
+        int sti = rt.push(rt.newState(text, "t.fln", Val.NIL, false, false));
+        readAll(rt, sti, out);
+    }
+
+    String s = out.toString();
+    while (s.endsWith(" ")) s = s.substring(0, s.length() - 1);
+    System.out.println(s);
+}
+--csharp-pre
+namespace Flint.Rt {
+    // `symbol-of`/`keyword-of`/`empty-map`/`empty-set` reach here as
+    // `global::Flint.Rt.X`, which needs a genuine top-level namespace -- a
+    // nested shim in `class Probe` is not one. See `readcore.drivers` for the
+    // same trick on the same words.
+    internal static class Str {
+        internal static long SymbolOf(Probe.Rt rt, long ns, long nm) {
+            var o = new Probe.Obj(); o.Kind = 8; o.A = ns; o.B = nm; o.Meta = Probe.Val.Nil;
+            return rt.Obj(o);
+        }
+        internal static long KeywordOf(Probe.Rt rt, long ns, long nm) {
+            var o = new Probe.Obj(); o.Kind = 9; o.A = ns; o.B = nm;
+            return rt.Obj(o);
+        }
+    }
+    internal static class Maps {
+        internal static long Empty(Probe.Rt rt) {
+            var o = new Probe.Obj(); o.Kind = 3; o.Entries = new System.Collections.Generic.List<long[]>();
+            return rt.Obj(o);
+        }
+    }
+    internal static class Sets {
+        internal static long Empty(Probe.Rt rt) {
+            var o = new Probe.Obj(); o.Kind = 4; o.Items = new System.Collections.Generic.List<long>();
+            return rt.Obj(o);
+        }
+    }
+}
+--csharp-head
+// ===== Value: a long, tagged by RANGE rather than by bits. Fixnums and
+// doubles are the only immediates (`Val.Fixnum`/`Val.OfDouble` take no `Rt`,
+// so they cannot allocate); everything else, symbols and keywords included,
+// is a real heap object -- see `Obj` below. `internal`, not private: the
+// `Flint.Rt` namespace in `--csharp-pre` (same assembly) reaches straight
+// into these, the trick `readcore.drivers` already uses.
+internal static class Val {
+    internal const long Nil = -1, True = -2, False = -3, NotFound = -4;
+    internal const long OffFix = 1_000_000_000_000L;
+    internal const long OffDbl = 2_000_000_000_000L;
+    internal const long CanonicalNan = 0x7FF8000000000000L;
+    internal static bool IsNil(long v) { return v == Nil; }
+    internal static long ZigZag(long n) { return n >= 0 ? (n << 1) : (((-n) << 1) - 1); }
+    internal static long UnZigZag(long z) { return (z % 2 == 0) ? (z >> 1) : -((z + 1) >> 1); }
+    internal static long Fixnum(long n) { return OffFix + ZigZag(n); }
+    internal static long AsFixnum(long v) { return UnZigZag(v - OffFix); }
+    internal static long OfDouble(double d) {
+        if (double.IsNaN(d)) return OffDbl + 2;
+        if (d == double.PositiveInfinity) return OffDbl + 0;
+        if (d == double.NegativeInfinity) return OffDbl + 1;
+        return OffDbl + 3;
+    }
+}
+
+// `Kind`: 0 str, 1 list, 2 vec, 3 map, 4 set, 5 tagged, 6 map-entry, 7 state,
+// 8 symbol, 9 keyword.
+internal sealed class Obj {
+    internal int Kind;
+    internal System.Collections.Generic.List<int> Cps;             // kind 0
+    internal System.Collections.Generic.List<long> Items;          // kind 1,2,4
+    internal System.Collections.Generic.List<long[]> Entries;       // kind 3: {k, v}
+    internal long Meta = Val.Nil;                                  // kind 1,2,3,4,8
+    internal long A, B;                                            // kind 5,6,8,9
+    internal St St;                                                // kind 7
+}
+internal sealed class St {
+    internal long File = Val.Nil, Ns = Val.Nil, Aliases = Val.Nil, Features = Val.Nil,
+                 Tags = Val.Nil, Childpos = Val.Nil, Gensyms = Val.Nil;
+    internal bool Defer, Apartial, Portable;
+    internal long Conds;
+    internal int[] Text;
+    internal long I, N, Line, Col;
+}
+
+internal const int RsOk = 0, RsEof = 1, RsNone = 2, RsSplice = 3, RsErr = 4;
+internal const int NoCp = 1114112;
+internal const int RdsLine = 3, RdsCol = 4, RdsFile = 5, RdsGensyms = 6, RdsFeatures = 7,
+                   RdsNs = 8, RdsAliases = 9, RdsDefer = 10, RdsConds = 11, RdsApartial = 12,
+                   RdsPortable = 13, RdsTags = 14, RdsChildpos = 15;
+internal static bool IsWs(int c) { return c == 32 || c == 9 || c == 10 || c == 13 || c == 12 || c == 44; }
+internal static bool IsTerm(int c) {
+    switch (c) {
+        case 34: case 59: case 64: case 94: case 96: case 126:
+        case 40: case 41: case 91: case 93: case 123: case 125: case 92: return true;
+        default: return false;
+    }
+}
+internal static bool IsDigit(int c) { return c >= 48 && c <= 57; }
+
+internal sealed class Rt {
+    internal System.Collections.Generic.List<Obj> Objs = new System.Collections.Generic.List<Obj>();
+    internal System.Collections.Generic.List<System.Collections.Generic.List<int>> Sinks = new System.Collections.Generic.List<System.Collections.Generic.List<int>>();
+    internal System.Collections.Generic.List<int[]> CpsTab = new System.Collections.Generic.List<int[]>();
+    internal System.Collections.Generic.List<long> Roots = new System.Collections.Generic.List<long>();
+
+    internal long Obj(Obj o) { Objs.Add(o); return Objs.Count - 1; }
+    internal Obj At(long v) { return Objs[(int) v]; }
+
+    internal int Mark() { return Roots.Count; }
+    internal int Push(long v) { Roots.Add(v); return Roots.Count - 1; }
+    internal long R(int i) { return Roots[i]; }
+    internal void SetR(int i, long v) { Roots[i] = v; }
+    internal void PopTo(int n) { Roots.RemoveRange(n, Roots.Count - n); }
+    internal long Slot(long v, int i) {
+        if (v < 0 || v >= Val.OffFix) return Val.Nil;
+        Obj o = At(v);
+        if (o.Kind == 5 || o.Kind == 6) return i == 0 ? o.A : o.B;
+        return Val.Nil;
+    }
+    internal int CpsOpen(int[] cps) { CpsTab.Add(cps); return CpsTab.Count - 1; }
+    internal int CpsLen(int c) { return CpsTab[c].Length; }
+    internal int CpsAt(int c, int i) { return CpsTab[c][i]; }
+    internal void CpsClose(int c) {}
+    internal int SinkOpen() { Sinks.Add(new System.Collections.Generic.List<int>()); return Sinks.Count - 1; }
+    internal void SinkPut(int sk, int b) { Sinks[sk].Add(b); }
+    internal void SinkClose(int sk) {}
+    internal long SinkString(int sk) {
+        var o = new Obj(); o.Kind = 0; o.Cps = new System.Collections.Generic.List<int>(Sinks[sk]);
+        return Obj(o);
+    }
+
+    internal long NewState(string text, string file, long features, bool defer, bool portable) {
+        int[] cps = new int[text.Length];
+        for (int i = 0; i < text.Length; i++) cps[i] = text[i];
+        var fo = new Obj(); fo.Kind = 0; fo.Cps = new System.Collections.Generic.List<int>();
+        for (int i = 0; i < file.Length; i++) fo.Cps.Add(file[i]);
+        long fv = Obj(fo);
+        var tmo = new Obj(); tmo.Kind = 3; tmo.Entries = new System.Collections.Generic.List<long[]>();
+        long tm = Obj(tmo);
+        var st = new St();
+        st.File = fv; st.Features = features; st.Tags = tm; st.Defer = defer; st.Portable = portable;
+        st.Text = cps; st.I = 0; st.N = cps.Length; st.Line = 1; st.Col = 1;
+        var o = new Obj(); o.Kind = 7; o.St = st;
+        return Obj(o);
+    }
+    internal St Stm(int sti) { return At(R(sti)).St; }
+}
+
+// bare `Str.Of` -- the hand-written runtime's own STRING constructor, which
+// (unlike `SymbolOf`/`KeywordOf`/`empty-map`/`empty-set`) is reached
+// unqualified in the generated code.
+internal static class Str {
+    internal static long Of(Rt rt, string s) {
+        var o = new Obj(); o.Kind = 0; o.Cps = new System.Collections.Generic.List<int>();
+        for (int i = 0; i < s.Length; i++) o.Cps.Add(s[i]);
+        return rt.Obj(o);
+    }
+}
+// `empty-vec` is ALSO bare.
+internal static class Vec {
+    internal static long Empty(Rt rt) { var o = new Obj(); o.Kind = 2; o.Items = new System.Collections.Generic.List<long>(); return rt.Obj(o); }
+}
+
+internal static System.Collections.Generic.List<long> ItemsOf(Rt rt, long v) {
+    if (v < 0 || v >= Val.OffFix) return new System.Collections.Generic.List<long>();
+    Obj o = rt.At(v);
+    if (o.Kind == 1 || o.Kind == 2 || o.Kind == 4) return o.Items;
+    return new System.Collections.Generic.List<long>();
+}
+internal static bool KindIs(Rt rt, long v, int kind) { return v >= 0 && v < Val.OffFix && rt.At(v).Kind == kind; }
+internal static bool IsSymbol(Rt rt, long v) { return KindIs(rt, v, 8); }
+internal static bool IsKeyword(Rt rt, long v) { return KindIs(rt, v, 9); }
+internal static bool IsMap(Rt rt, long v) { return KindIs(rt, v, 3); }
+internal static bool IsSet(Rt rt, long v) { return KindIs(rt, v, 4); }
+internal static bool IsSeq(Rt rt, long v) { return KindIs(rt, v, 1); }
+internal static bool IsVectorLike(Rt rt, long v) { return KindIs(rt, v, 2); }
+internal static bool IsString(Rt rt, long v) { return KindIs(rt, v, 0); }
+internal static bool IsTagged(Rt rt, long v) { return KindIs(rt, v, 5); }
+internal static long NameOf(Rt rt, long v) { return (IsSymbol(rt, v) || IsKeyword(rt, v)) ? rt.At(v).B : v; }
+internal static long NsOf(Rt rt, long v) { return (IsSymbol(rt, v) || IsKeyword(rt, v)) ? rt.At(v).A : Val.Nil; }
+internal static System.Collections.Generic.List<int> StrText(Rt rt, long v) {
+    if (v < 0 || v >= Val.OffFix || rt.At(v).Kind != 0) return new System.Collections.Generic.List<int>();
+    return rt.At(v).Cps;
+}
+internal static bool ValEq(Rt rt, long a, long b) {
+    if (a == b) return true;
+    if (a < 0 || a >= Val.OffFix || b < 0 || b >= Val.OffFix) return false;
+    Obj oa = rt.At(a), ob = rt.At(b);
+    if (oa.Kind == 0 && ob.Kind == 0) {
+        if (oa.Cps.Count != ob.Cps.Count) return false;
+        for (int i = 0; i < oa.Cps.Count; i++) { if (oa.Cps[i] != ob.Cps[i]) return false; }
+        return true;
+    }
+    if ((oa.Kind == 8 && ob.Kind == 8) || (oa.Kind == 9 && ob.Kind == 9)) {
+        bool an = Val.IsNil(oa.A), bn = Val.IsNil(ob.A);
+        bool nsEq = (an && bn) || (!an && !bn && ValEq(rt, oa.A, ob.A));
+        return nsEq && ValEq(rt, oa.B, ob.B);
+    }
+    return false;
+}
+internal static long LitSymbol(Rt rt, string ns, string nm) {
+    return global::Flint.Rt.Str.SymbolOf(rt, Str.Of(rt, ns), Str.Of(rt, nm));
+}
+internal static long LitSymbol1(Rt rt, string nm) { return global::Flint.Rt.Str.SymbolOf(rt, Val.Nil, Str.Of(rt, nm)); }
+internal static long LitKeyword(Rt rt, string ns, string nm) {
+    return global::Flint.Rt.Str.KeywordOf(rt, Str.Of(rt, ns), Str.Of(rt, nm));
+}
+internal static long LitKeyword1(Rt rt, string nm) { return global::Flint.Rt.Str.KeywordOf(rt, Val.Nil, Str.Of(rt, nm)); }
+internal static bool IsSym1(Rt rt, long v, string nm) {
+    if (!IsSymbol(rt, v)) return false;
+    return ValEq(rt, v, LitSymbol1(rt, nm));
+}
+internal static bool IsSym2(Rt rt, long v, string ns, string nm) {
+    if (!IsSymbol(rt, v)) return false;
+    return ValEq(rt, v, LitSymbol(rt, ns, nm));
+}
+
+internal static long ListFromRoots(Rt rt, int baseIdx, int n) {
+    var o = new Obj(); o.Kind = 1; o.Items = new System.Collections.Generic.List<long>();
+    for (int i = 0; i < n; i++) o.Items.Add(rt.R(baseIdx + i));
+    return rt.Obj(o);
+}
+internal static long VecFromRoots(Rt rt, int baseIdx, int n) {
+    var o = new Obj(); o.Kind = 2; o.Items = new System.Collections.Generic.List<long>();
+    for (int i = 0; i < n; i++) o.Items.Add(rt.R(baseIdx + i));
+    return rt.Obj(o);
+}
+
+internal static int VecCount(Rt rt, long v) { return ItemsOf(rt, v).Count; }
+internal static long VecNth(Rt rt, long v, int i, long d) {
+    var items = ItemsOf(rt, v);
+    return (i >= 0 && i < items.Count) ? items[i] : d;
+}
+internal static long VecConj(Rt rt, long v, long x) {
+    var o = new Obj(); o.Kind = 2; o.Items = new System.Collections.Generic.List<long>(ItemsOf(rt, v)); o.Items.Add(x);
+    return rt.Obj(o);
+}
+internal static long VecAssoc(Rt rt, long v, int i, long x) {
+    var o = new Obj(); o.Kind = 2; o.Items = new System.Collections.Generic.List<long>(ItemsOf(rt, v));
+    while (o.Items.Count <= i) o.Items.Add(Val.Nil);
+    o.Items[i] = x;
+    return rt.Obj(o);
+}
+internal static System.Collections.Generic.List<long[]> AssocEntries(Rt rt, System.Collections.Generic.List<long[]> entries, long k, long v) {
+    var outp = new System.Collections.Generic.List<long[]>(entries);
+    foreach (var e in outp) { if (ValEq(rt, e[0], k)) { e[1] = v; return outp; } }
+    outp.Add(new long[]{k, v});
+    return outp;
+}
+internal static System.Collections.Generic.List<long[]> MapEntriesOf(Rt rt, long m) {
+    if (m >= 0 && m < Val.OffFix && rt.At(m).Kind == 3) return rt.At(m).Entries;
+    return new System.Collections.Generic.List<long[]>();
+}
+internal static long MapAssoc(Rt rt, long m, long k, long v) {
+    var o = new Obj(); o.Kind = 3; o.Entries = AssocEntries(rt, MapEntriesOf(rt, m), k, v);
+    return rt.Obj(o);
+}
+internal static long MapGet(Rt rt, long m, long k, long d) {
+    foreach (var e in MapEntriesOf(rt, m)) { if (ValEq(rt, e[0], k)) return e[1]; }
+    return d;
+}
+internal static long MapEntryVector(Rt rt, long m) {
+    var o = new Obj(); o.Kind = 2; o.Items = new System.Collections.Generic.List<long>();
+    foreach (var e in MapEntriesOf(rt, m)) { var en = new Obj(); en.Kind = 6; en.A = e[0]; en.B = e[1]; o.Items.Add(rt.Obj(en)); }
+    return rt.Obj(o);
+}
+internal static long SetElementVector(Rt rt, long s) {
+    var o = new Obj(); o.Kind = 2; o.Items = new System.Collections.Generic.List<long>(ItemsOf(rt, s));
+    return rt.Obj(o);
+}
+internal static bool SetContains(Rt rt, long s, long x) {
+    foreach (var y in ItemsOf(rt, s)) { if (ValEq(rt, y, x)) return true; }
+    return false;
+}
+internal static long OrderedMap(Rt rt, long flat) {
+    var items = ItemsOf(rt, flat);
+    var entries = new System.Collections.Generic.List<long[]>();
+    int i = 0;
+    while (i + 1 < items.Count) { entries = AssocEntries(rt, entries, items[i], items[i + 1]); i += 2; }
+    var o = new Obj(); o.Kind = 3; o.Entries = entries;
+    return rt.Obj(o);
+}
+internal static long ToTransient(Rt rt, long v) { return v; }
+internal static long ToPersistent(Rt rt, long v) { return v; }
+internal static long TransientConj(Rt rt, long s, long x) {
+    var o = new Obj(); o.Kind = 4; o.Items = new System.Collections.Generic.List<long>(ItemsOf(rt, s)); o.Items.Add(x);
+    return rt.Obj(o);
+}
+internal static long TransientAssoc(Rt rt, long m, long k, long v) { return MapAssoc(rt, m, k, v); }
+
+internal static long MetaOf(Rt rt, long v) {
+    if (v < 0 || v >= Val.OffFix) return Val.Nil;
+    int k = rt.At(v).Kind;
+    if (k == 1 || k == 2 || k == 3 || k == 4 || k == 8) return rt.At(v).Meta;
+    return Val.Nil;
+}
+internal static long WithMeta(Rt rt, long v, long m) {
+    if (v < 0 || v >= Val.OffFix) return v;
+    Obj src = rt.At(v);
+    var o = new Obj(); o.Kind = src.Kind; o.Items = src.Items; o.Entries = src.Entries;
+    o.Cps = src.Cps; o.A = src.A; o.B = src.B; o.St = src.St; o.Meta = m;
+    return rt.Obj(o);
+}
+internal static long NewTagged(Rt rt, long tag, long form) {
+    var o = new Obj(); o.Kind = 5; o.A = tag; o.B = form;
+    return rt.Obj(o);
+}
+
+internal static int CodePoints(Rt rt, long v) {
+    var t = StrText(rt, v);
+    int[] a = new int[t.Count];
+    for (int i = 0; i < a.Length; i++) a[i] = t[i];
+    return rt.CpsOpen(a);
+}
+
+internal static void MsgLit(Rt rt, int sk, string t) { for (int i = 0; i < t.Length; i++) rt.SinkPut(sk, t[i]); }
+internal static void MsgVal(Rt rt, int sk, long v) {
+    if (IsSymbol(rt, v)) {
+        long ns = NsOf(rt, v);
+        if (!Val.IsNil(ns)) { foreach (var c in StrText(rt, ns)) rt.SinkPut(sk, c); rt.SinkPut(sk, 47); }
+        foreach (var c in StrText(rt, NameOf(rt, v))) rt.SinkPut(sk, c);
+        return;
+    }
+    foreach (var c in StrText(rt, v)) rt.SinkPut(sk, c);
+}
+internal static void MsgCp(Rt rt, int sk, int c) { if (c != NoCp) SinkPutCp(rt, sk, c); }
+internal static void MsgInt(Rt rt, int sk, long n) {
+    if (n >= 10) MsgInt(rt, sk, n / 10);
+    rt.SinkPut(sk, (int) (48 + (n % 10)));
+}
+internal static void SinkPutCp(Rt rt, int sk, int c) { rt.SinkPut(sk, c); }
+
+internal static void SortRoots(Rt rt, int baseIdx, int n) {
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n - 1 - i; j++) {
+            var a = StrText(rt, rt.R(baseIdx + j)); var b = StrText(rt, rt.R(baseIdx + j + 1));
+            if (CmpCps(a, b) > 0) { long t = rt.R(baseIdx + j); rt.SetR(baseIdx + j, rt.R(baseIdx + j + 1)); rt.SetR(baseIdx + j + 1, t); }
+        }
+    }
+}
+internal static int CmpCps(System.Collections.Generic.List<int> a, System.Collections.Generic.List<int> b) {
+    int n = System.Math.Min(a.Count, b.Count);
+    for (int i = 0; i < n; i++) { int c = a[i].CompareTo(b[i]); if (c != 0) return c; }
+    return a.Count.CompareTo(b.Count);
+}
+internal static void CollapseList(Rt rt, int baseIdx, int n) {
+    long v = ListFromRoots(rt, baseIdx, n);
+    rt.PopTo(baseIdx);
+    rt.Push(v);
+}
+
+internal static long RdGet(Rt rt, int sti, int s) {
+    St st = rt.Stm(sti);
+    switch (s) {
+        case RdsFile: return st.File; case RdsGensyms: return st.Gensyms;
+        case RdsFeatures: return st.Features; case RdsNs: return st.Ns;
+        case RdsAliases: return st.Aliases; case RdsTags: return st.Tags;
+        case RdsChildpos: return st.Childpos;
+        default: return Val.Nil;
+    }
+}
+internal static void RdPut(Rt rt, int sti, int s, long v) {
+    St st = rt.Stm(sti);
+    switch (s) {
+        case RdsFile: st.File = v; break; case RdsGensyms: st.Gensyms = v; break;
+        case RdsFeatures: st.Features = v; break; case RdsNs: st.Ns = v; break;
+        case RdsAliases: st.Aliases = v; break; case RdsTags: st.Tags = v; break;
+        case RdsChildpos: st.Childpos = v; break;
+        case RdsApartial: st.Apartial = (v == Val.True); break;
+        case RdsDefer: st.Defer = (v == Val.True); break;
+        default: break;
+    }
+}
+internal static long RdInt(Rt rt, int sti, int s) {
+    St st = rt.Stm(sti);
+    switch (s) { case RdsLine: return st.Line; case RdsCol: return st.Col; case RdsConds: return st.Conds; default: return 0; }
+}
+internal static void RdSetInt(Rt rt, int sti, int s, long v) {
+    St st = rt.Stm(sti);
+    switch (s) { case RdsLine: st.Line = v; break; case RdsCol: st.Col = v; break; case RdsConds: st.Conds = v; break; default: break; }
+}
+internal static bool RdFlag(Rt rt, int sti, int s) {
+    St st = rt.Stm(sti);
+    switch (s) { case RdsDefer: return st.Defer; case RdsApartial: return st.Apartial; case RdsPortable: return st.Portable; default: return false; }
+}
+internal static int RdPeek(Rt rt, int sti) {
+    St st = rt.Stm(sti);
+    return (st.I >= st.N) ? NoCp : st.Text[(int) st.I];
+}
+internal static int RdPeek2(Rt rt, int sti) {
+    St st = rt.Stm(sti);
+    long j = st.I + 1;
+    return (j >= st.N) ? NoCp : st.Text[(int) j];
+}
+internal static int RdNext(Rt rt, int sti) {
+    int c = RdPeek(rt, sti);
+    if (c == NoCp) return NoCp;
+    St st = rt.Stm(sti);
+    st.I += 1;
+    if (c == 10) { st.Line += 1; st.Col = 1; } else { st.Col += 1; }
+    return c;
+}
+internal static void RdSkipWs(Rt rt, int sti) {
+    while (true) {
+        int c = RdPeek(rt, sti);
+        if (c == NoCp) return;
+        if (IsWs(c)) { RdNext(rt, sti); continue; }
+        if (c != 59) return;
+        while (true) { int d = RdNext(rt, sti); if (d == NoCp || d == 10) break; }
+    }
+}
+internal static int RdToken(Rt rt, int sti) {
+    int from = (int) rt.Stm(sti).I;
+    while (true) {
+        int c = RdPeek(rt, sti);
+        if (c == NoCp || IsWs(c) || IsTerm(c)) break;
+        RdNext(rt, sti);
+    }
+    return from;
+}
+internal static int RdPos(Rt rt, int sti) { return (int) rt.Stm(sti).I; }
+internal static int RdAt(Rt rt, int sti, int i) { return rt.Stm(sti).Text[i]; }
+internal static long RdString(Rt rt, int sti, int from, int to) {
+    var o = new Obj(); o.Kind = 0; o.Cps = new System.Collections.Generic.List<int>();
+    int[] text = rt.Stm(sti).Text;
+    for (int i = from; i < to; i++) o.Cps.Add(text[i]);
+    return rt.Obj(o);
+}
+internal static bool RdRangeIs(Rt rt, int sti, int from, int to, long v) {
+    int[] text = rt.Stm(sti).Text;
+    var probe = new System.Collections.Generic.List<int>();
+    for (int i = from; i < to; i++) probe.Add(text[i]);
+    var want = StrText(rt, v);
+    if (probe.Count != want.Count) return false;
+    for (int i = 0; i < probe.Count; i++) { if (probe[i] != want[i]) return false; }
+    return true;
+}
+internal static int RdFailLit(Rt rt, int sti, string t) { return RsErr; }
+internal static int RdFailSink(Rt rt, int sti, int sk) { rt.SinkClose(sk); return RsErr; }
+
+// --- readnum / readtext / readsq: minimal stand-ins ---
+internal static int ParseNumber(Rt rt, int sti, int from, int to) {
+    int[] text = rt.Stm(sti).Text;
+    if (from >= to) return RsNone;
+    int i = from; bool neg = text[from] == 45;
+    if (neg) i = from + 1;
+    if (i >= to) return RsNone;
+    for (int k = i; k < to; k++) { if (!IsDigit(text[k])) return RsNone; }
+    long n = 0;
+    for (int k = i; k < to; k++) n = n * 10 + (text[k] - 48);
+    if (neg) n = -n;
+    rt.Push(Val.Fixnum(n));
+    return RsOk;
+}
+internal static int ReadStringLit(Rt rt, int sti) {
+    RdNext(rt, sti);
+    int from = RdPos(rt, sti);
+    while (true) {
+        int c = RdPeek(rt, sti);
+        if (c == NoCp) return RdFailLit(rt, sti, "unterminated string");
+        if (c == 34) break;
+        RdNext(rt, sti);
+    }
+    int to = RdPos(rt, sti);
+    long s = RdString(rt, sti, from, to);
+    RdNext(rt, sti);
+    rt.Push(s);
+    return RsOk;
+}
+internal static int ReadCharLit(Rt rt, int sti) {
+    RdNext(rt, sti);
+    int c = RdNext(rt, sti);
+    rt.Push(Val.Fixnum(c));
+    return RsOk;
+}
+internal static int ReadRegexLit(Rt rt, int sti) { return ReadStringLit(rt, sti); }
+internal static int SqForm(Rt rt, int sti, int baseIdx) {
+    long inner = rt.R(baseIdx);
+    long tag = LitSymbol1(rt, "mock-sq");
+    long outv = NewTagged(rt, tag, inner);
+    rt.Push(outv);
+    return RsOk;
+}
+internal static long Seq(Rt rt, long v) {
+    var items = ItemsOf(rt, v);
+    if (items.Count == 0) return Val.Nil;
+    var o = new Obj(); o.Kind = 1; o.Items = new System.Collections.Generic.List<long>(items);
+    return rt.Obj(o);
+}
+internal static long First(Rt rt, long v) {
+    var items = ItemsOf(rt, v);
+    return items.Count == 0 ? Val.Nil : items[0];
+}
+internal static long Next(Rt rt, long v) {
+    var items = ItemsOf(rt, v);
+    if (items.Count <= 1) return Val.Nil;
+    var o = new Obj(); o.Kind = 1; o.Items = new System.Collections.Generic.List<long>(items.GetRange(1, items.Count - 1));
+    return rt.Obj(o);
+}
+--csharp
+internal static string ShowText(System.Collections.Generic.List<int> cps) {
+    var b = new System.Text.StringBuilder();
+    foreach (var c in cps) b.Append((char) c);
+    return b.ToString();
+}
+internal static string Render(Rt rt, long v) {
+    if (Val.IsNil(v)) return "nil";
+    if (v == Val.True) return "true";
+    if (v == Val.False) return "false";
+    if (v == Val.NotFound) return "NOT_FOUND";
+    if (v >= Val.OffFix && v < Val.OffDbl) return Val.AsFixnum(v).ToString();
+    if (v >= Val.OffDbl) {
+        long k = v - Val.OffDbl;
+        return k == 0 ? "##Inf" : k == 1 ? "##-Inf" : "##NaN";
+    }
+    Obj o = rt.At(v);
+    switch (o.Kind) {
+        case 0: return "\"" + ShowText(o.Cps) + "\"";
+        case 8: case 9: {
+            long ns = NsOf(rt, v), nm = NameOf(rt, v);
+            string bas = Val.IsNil(ns) ? ShowText(StrText(rt, nm)) : ShowText(StrText(rt, ns)) + "/" + ShowText(StrText(rt, nm));
+            return o.Kind == 9 ? ":" + bas : bas;
+        }
+        case 1: {
+            var b = new System.Text.StringBuilder("(");
+            for (int i = 0; i < o.Items.Count; i++) { if (i > 0) b.Append(' '); b.Append(Render(rt, o.Items[i])); }
+            return b.Append(')').ToString();
+        }
+        case 2: {
+            var b = new System.Text.StringBuilder("[");
+            for (int i = 0; i < o.Items.Count; i++) { if (i > 0) b.Append(' '); b.Append(Render(rt, o.Items[i])); }
+            return b.Append(']').ToString();
+        }
+        case 3: {
+            var b = new System.Text.StringBuilder("{");
+            for (int i = 0; i < o.Entries.Count; i++) {
+                if (i > 0) b.Append(", ");
+                var e = o.Entries[i];
+                b.Append(Render(rt, e[0])).Append(' ').Append(Render(rt, e[1]));
+            }
+            return b.Append('}').ToString();
+        }
+        case 4: {
+            var b = new System.Text.StringBuilder("#{");
+            for (int i = 0; i < o.Items.Count; i++) { if (i > 0) b.Append(' '); b.Append(Render(rt, o.Items[i])); }
+            return b.Append('}').ToString();
+        }
+        case 5: return "#tagged<" + Render(rt, o.A) + " " + Render(rt, o.B) + ">";
+        case 6: return "<" + Render(rt, o.A) + " " + Render(rt, o.B) + ">";
+        default: return "<state>";
+    }
+}
+internal static string RenderMeta(Rt rt, long v) {
+    if (!(IsSymbol(rt, v) || IsVectorLike(rt, v) || IsMap(rt, v) || IsSet(rt, v) || IsSeq(rt, v))) return "-";
+    long m = MetaOf(rt, v);
+    if (Val.IsNil(m)) return "nometa";
+    return Render(rt, m);
+}
+internal static void ReadAll(Rt rt, int sti, System.Text.StringBuilder outp) {
+    while (true) {
+        int baseIdx = rt.Mark();
+        int st = ReadTop(rt, sti);
+        if (st == RsErr) { outp.Append("ERR "); return; }
+        if (st == RsEof) return;
+        long v = rt.R(baseIdx);
+        outp.Append(Render(rt, v)).Append('<').Append(RenderMeta(rt, v)).Append("> ");
+        rt.PopTo(baseIdx);
+    }
+}
+internal static void Main() {
+    var outp = new System.Text.StringBuilder();
+
+    {
+        var rt = new Rt();
+        int sti = rt.Push(rt.NewState("(1 2 3)\n[4 5]\n{:a 1 :b 2}", "t.fln", Val.Nil, false, false));
+        ReadAll(rt, sti, outp);
+    }
+    outp.Append('|');
+
+    {
+        var rt = new Rt();
+        int sti = rt.Push(rt.NewState("#_42 7", "t.fln", Val.Nil, false, false));
+        ReadAll(rt, sti, outp);
+    }
+    outp.Append('|');
+
+    {
+        var rt = new Rt();
+        int sti = rt.Push(rt.NewState("'x", "t.fln", Val.Nil, false, false));
+        ReadAll(rt, sti, outp);
+    }
+    outp.Append('|');
+
+    {
+        var rt = new Rt();
+        int sti = rt.Push(rt.NewState("^:k x", "t.fln", Val.Nil, false, false));
+        ReadAll(rt, sti, outp);
+    }
+    outp.Append('|');
+
+    {
+        var rt = new Rt();
+        int sti = rt.Push(rt.NewState("#{1 2 3}", "t.fln", Val.Nil, false, false));
+        ReadAll(rt, sti, outp);
+    }
+    outp.Append('|');
+
+    {
+        var rt = new Rt();
+        long a = LitKeyword1(rt, "a");
+        var so = new Obj(); so.Kind = 4; so.Items = new System.Collections.Generic.List<long>(); so.Items.Add(a);
+        long feats = rt.Obj(so);
+        int sti = rt.Push(rt.NewState("#?(:a 1 :b 2)\n[1 #?@(:a [2 3]) 4]\n#?(:z 9)", "t.fln", feats, false, false));
+        ReadAll(rt, sti, outp);
+    }
+    outp.Append('|');
+
+    {
+        var rt = new Rt();
+        int sti = rt.Push(rt.NewState("#?(:a 1 :b 2)", "t.fln", Val.Nil, true, false));
+        ReadAll(rt, sti, outp);
+    }
+    outp.Append('|');
+
+    {
+        var rt = new Rt();
+        int sti = rt.Push(rt.NewState("#(+ % %2)", "t.fln", Val.Nil, false, false));
+        ReadAll(rt, sti, outp);
+    }
+    outp.Append('|');
+
+    {
+        var rt = new Rt();
+        int sti = rt.Push(rt.NewState("#:p{:a 1}", "t.fln", Val.Nil, false, false));
+        ReadAll(rt, sti, outp);
+    }
+    outp.Append('|');
+
+    {
+        var rt = new Rt();
+        int sti = rt.Push(rt.NewState("(ns x (:require [y :as z]))\n::z/kw", "t.fln", Val.Nil, false, false));
+        ReadAll(rt, sti, outp);
+    }
+    outp.Append('|');
+
+    foreach (var text in new string[]{"(a", ")", "{:a}"}) {
+        var rt = new Rt();
+        int sti = rt.Push(rt.NewState(text, "t.fln", Val.Nil, false, false));
+        ReadAll(rt, sti, outp);
+    }
+
+    string s = outp.ToString();
+    while (s.EndsWith(" ")) s = s.Substring(0, s.Length - 1);
+    System.Console.WriteLine(s);
+}
+--expect
+(1 2 3)<{:line 1, :column 1, :file "t.fln", :child-pos [1 2 1 4 1 6]}> [4 5]<{:line 2, :column 1, :file "t.fln", :child-pos [2 2 2 4]}> {:a 1, :b 2}<{:line 3, :column 1, :file "t.fln"}> |7<-> |(quote x)<{:line 1, :column 1, :file "t.fln"}> |x<{:line 1, :column 5, :file "t.fln", :k true}> |#{1 2 3}<{:line 1, :column 1, :file "t.fln"}> |1<-> [1 2 3 4]<{:line 2, :column 1, :file "t.fln", :child-pos [2 2 2 4 2 4 2 18]}> |#tagged<flint.reader/#? [:one 1 1 [1 4 1 7 1 9 1 12] [:a 1 :b 2]]><-> |(fn* [p1__flint# p2__flint#] (+ p1__flint# p2__flint#))<{:line 1, :column 1, :file "t.fln", :child-pos [1 3 1 5 1 7]}> |{:p/a 1}<{:line 1, :column 1, :file "t.fln"}> |(ns x (:require [y :as z]))<{:line 1, :column 1, :file "t.fln", :child-pos [1 2 1 5 1 7]}> :y/kw<-> |ERR ERR ERR
+--expect-why
+DERIVED BY HAND against `src/flint/reader.cljc` and against this drivers
+file's own mock semantics (the toy `Rt`'s heap, cursor and sink are defined
+above, not borrowed from a run) -- not pasted from a passing `verify`. The
+three targets agreeing is the OTHER half of the check; this is the half that
+says the agreed answer is the right one. Eleven probes, each its own fresh
+toy state, joined by `|`; within a probe, forms are read with repeated
+`read-top` calls and printed as `<rendering><metadata>`, metadata `-` when
+the value cannot carry it (`meta-able` is false) and `nometa` when it could
+but has none.
+
+1. `(1 2 3)\n[4 5]\n{:a 1 :b 2}` -- three top-level forms.
+   `(1 2 3)` at line 1 col 1: `read-one`'s list/vector branch stamps BOTH
+   the position and the stash's flat child positions (`[line1 col1 ...]` for
+   each of the three elements: `1`@col2, `2`@col4, `3`@col6) --
+   `child-pos [1 2 1 4 1 6]`.
+   `[4 5]` at line 2 (the newline advanced it), col 1, children `4`@col2,
+   `5`@col4 -- `child-pos [2 2 2 4]`.
+   `{:a 1 :b 2}` at line 3: map literals do NOT get a child-pos stash (only
+   `read-one`'s `(== c 40)`/`(== c 91)` branch writes one) -- no `:child-pos`
+   key, and no reader conditional among the forms so it builds the ordered
+   map directly, in literal order `{:a 1, :b 2}`.
+
+2. `#_42 7` -- `read-dispatch`'s `#_` branch reads and discards `42`,
+   returning `RS_EOF` regardless of what it discarded; `read-top` treats
+   `RS_EOF` short of true end-of-text as "nothing read here", so it loops
+   and reads the next real form, `7`. A fixnum is not meta-able: `7<->`.
+
+3. `'x` -- the bare `'` branch of `read-one` (not `#'`) wraps the next form
+   in `(quote x)` via `read-wrapped`/`wrap-root`, then falls through to the
+   COMMON tail stamp: `is-seq` of a freshly built list is true, so it is
+   stamped WITH the child-pos stash -- but nothing delimited has run yet in
+   this fresh state, so the stash is still nil and no `:child-pos` key is
+   added. Position is where `'` began: line 1, col 1.
+
+4. `^:k x` -- `read-meta` turns the keyword `:k` into `{:k true}`, reads
+   `x`, and merges: `merge3(ex=nil, pos-map, {:k true})` with the LAST map
+   winning duplicate keys -- `:k` is not `:line`/`:column`, so both survive.
+   `x` itself began after `^:k ` -- line 1, column 5 (`^`=1,`:`=2,`k`=3,
+   ` `=4, `x`=5). No child-pos (`x` is not a sequence).
+
+5. `#{1 2 3}` -- `read-dispatch`'s `{` branch with no reader conditional
+   among the elements (eager, non-deferred) builds `(into #{} ...)` through
+   a transient, in literal order -- `#{1 2 3}`. Position line 1 col 1 (sets
+   are not sequences, no child-pos).
+
+6. `#?(:a 1 :b 2)\n[1 #?@(:a [2 3]) 4]\n#?(:z 9)` under features `#{:a}`,
+   eager (not deferred):
+     - `#?(:a 1 :b 2)` -- `read-cond` walks the clauses, `:a` is in the
+       feature set, so it chooses `1` and returns it directly: `1<->`.
+     - `[1 #?@(:a [2 3]) 4]` on line 2 -- inside `read-delimited`, the
+       `#?@` splice matches `:a` and returns `RS_SPLICE` with `[2 3]`
+       pushed; `read-delimited`'s splice branch walks that vector's two
+       elements into the accumulator in place of the one slot, so the
+       vector becomes `[1 2 3 4]`. Every spliced element gets the SPLICE's
+       OWN position (where `#?@` stands, col 4) rather than its own:
+       `child-pos [2 2 2 4 2 4 2 18]` -- `1`@col2, then TWO entries at
+       col 4 (the splice site) for the two spliced values, then `4`@col18.
+     - `#?(:z 9)` on line 3 -- `:z` matches no feature and there is no
+       `:default`, so `read-cond` returns `RS_EOF`; `read-top` discards it
+       silently (same rule as `#_`). Nothing printed for it.
+
+7. `#?(:a 1 :b 2)` DEFERRED (features nil) -- `read-cond` keeps the whole
+   form as data: `push-conditional` builds
+   `#flint.reader/#? [kind line col child-pos items]` with `kind=:one`
+   (not splicing), `line=1 col=1` (where `?` stood after `rd-next` past
+   `#`), the stash from `read-delimited` over `(:a 1 :b 2)` -- four
+   elements at cols 4, 7, 9, 12 -- and `items=[:a 1 :b 2]` as read. Printed
+   as `#tagged<flint.reader/#? [...]>` by this driver's own tagged-value
+   renderer. Not meta-able (`is-tagged`, not seq/vec/map/set/symbol): `<->`.
+
+8. `#(+ % %2)` -- `walk-arg` renames `%`->`p1__flint#` and `%2`->
+   `p2__flint#`, tracks `maxn=2`, and `read-arg-fn` builds
+   `(fn* [p1__flint# p2__flint#] (+ p1__flint# p2__flint#))`. This list is
+   fresh (not read through `read-delimited`'s own stash-writing branch) but
+   IS a seq, so the common tail's `stamp-stash` with `with-cp = is-seq` DOES
+   apply here, using whatever the stash held at that point -- the state is
+   fresh for this probe, but `read-delimited` ran AT LEAST once already
+   (for the `#(...)` form's own parens via `read-arg-fn` -> `read-delimited`
+   with closer `)`), leaving a 3-element stash (one entry per top-level
+   symbol inside: `+`, `%`, `%2`) at cols 3, 5, 7 of the ORIGINAL text --
+   `child-pos [1 3 1 5 1 7]`. Outer position line 1 col 1 (`#` is where the
+   form began).
+
+9. `#:p{:a 1}` -- `read-ns-map` qualifies the unqualified keyword key `:a`
+   with namespace `"p"`, in the map's own order: `{:p/a 1}`. Position line
+   1 col 1, no child-pos (a map).
+
+10. `(ns x (:require [y :as z]))\n::z/kw` -- the first `read-top` call
+    reads the `ns` form, sees its head is the symbol `ns`, and calls
+    `ns-aliases`, which walks the require clause `[y :as z]` and records
+    `{z -> "y"}` (the ALIAS SYMBOL maps to the namespace as a STRING, built
+    by `(str y)`) into `RDS_ALIASES`; `RDS_APARTIAL` is set false since no
+    conditional was seen. The SECOND `read-top` call reads `::z/kw` on line
+    2: `read-symbolic` sees `::`, splits at `/`, resolves alias `z` via
+    `alias-ns` (a hit in `RDS_ALIASES`, so no reader-conditional refusal),
+    and builds `keyword-of("y", "kw")` -- printed `:y/kw`. Not meta-able:
+    `<->`. The `ns` form itself is a seq, line 1 col 1, with a child-pos
+    for its three top-level children (`ns`@col2, `x`@col5,
+    `(:require...)`@col7) -- but THIS output is discarded by the probe
+    (only the second read-top's VALUE is printed) and so does not appear.
+
+11. Three fresh states, one text each, first read-top only:
+    `(a` -- `read-delimited` hits `NO_CP` before the closing `)`:
+    `rd-fail-lit "unterminated, expecting )"`, `RS_ERR`.
+    `)` -- `read-one` peeks `)` directly (not inside a delimited read):
+    `rd-fail-lit "unexpected )"`, `RS_ERR`.
+    `{:a}` -- `read-dispatch`... no, `{` is `read-one`'s OWN map branch, not
+    `read-dispatch`'s set branch (`#{`): one key with no value is an ODD
+    element count, `rd-fail-lit "map literal needs an even number of forms"`,
+    `RS_ERR`. All three print `ERR` and nothing else, joined with no `|`
+    between them (this probe's loop does not append one), hence the
+    trailing `ERR ERR ERR` with single spaces.

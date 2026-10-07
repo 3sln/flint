@@ -1473,7 +1473,7 @@ public static class Builtins {
     /// The NAME of a string, keyword or symbol, as a host string. `keyword`
     /// and `symbol` accept any of the three, which is what lets
     /// `(keyword (name x))` round-trip.
-    static string NameOf(Rt rt, long v) {
+    internal static string NameOf(Rt rt, long v) {
         if (Val.IsInlineKw(v)) return System.Text.Encoding.UTF8.GetString(Val.InlineBytes(v));
         if (rt.IsHeapTy(v, Obj.TyKw) || rt.IsHeapTy(v, Obj.TySym)) return Str.Text(rt, rt.Slot(v, 1));
         return Str.Text(rt, v);

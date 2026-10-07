@@ -1,0 +1,205 @@
+;; STRING, CHARACTER AND REGEX LITERALS, as `flint.reader` reads them.
+;;
+;; flint has no character type: `\a` is the one-character string "a", which
+;; is what lets the reader read itself. A regex literal is the map
+;; `{:flint/regex "..."}`, built here and compiled by the analyzer, with its
+;; backslashes kept as written.
+;;
+;; THE ERRORS ARE THE GUEST'S, word for word, because `door-agreement`
+;; compares failures as well as successes: "unterminated string", "unsupported
+;; escape \\q", "unknown character literal \\xyz". A `\u` that names no code
+;; point is the error `from-code-point` raises, which the guest's reader
+;; reached by calling it.
+(ns flint.rt.readtext
+  (:require [flint.impl.rt :refer [defn return if let do local set while
+                                   forever break comment doc not and or == !=
+                                   < <= > >= + - * to-i64 mark push r pop-to
+                                   sink-open sink-put sink-close sink-string
+                                   str-const nil? to-i32
+                                   Rt Value RootIx I32 I64 Bool Sink NIL]]
+            [flint.rt.numint :refer [integer-value]]
+            [flint.rt.readnum :refer [parse-int-radix]]
+            [flint.rt.vecroots :refer [vec-from-roots]]
+            [flint.rt.mapmake :refer [ordered-map]]
+            [flint.rt.readcore :refer [rd-next rd-peek rd-token rd-pos rd-at rd-string rd-range-is rd-fail-lit rd-fail-sink rd-fail-cp sink-put-cp msg-lit msg-cp lit-keyword]]
+            [flint.rt.readconst :refer [RS_OK RS_NONE NO_CP is-ws is-term is-scalar]]))
+
+(doc "The digits `from`..`to` in `radix` as a code point, put into `sk`:"
+     "`RS_OK`, or the error `from-code-point` gives -- \"not a code point\""
+     "when the digits are no integer, \"not a code point: n\" when the"
+     "integer is no scalar value -- or \"integer overflow\" from the"
+     "arithmetic before either, as the guest's reader met them.")
+(defn ^:method ^I32 put-code [^:mut ^Rt rt ^RootIx sti ^Sink sk ^I32 from ^I32 to ^I64 radix]
+  (let [^RootIx base (mark rt)
+        ^I32 st (parse-int-radix rt sti from to radix false)]
+    (if (== st RS_NONE)
+      (return (rd-fail-cp rt sti false 0)))
+    (if (!= st RS_OK)
+      (return st))
+    (let [^I64 n (integer-value rt (r rt base))]
+      (pop-to rt base)
+      (if (not (is-scalar n))
+        (return (rd-fail-cp rt sti true n)))
+      (sink-put-cp rt sk (to-i32 n))
+      (return RS_OK))))
+
+(doc "One escape, after its backslash, into `sk`.")
+(defn ^:method ^I32 read-escape [^:mut ^Rt rt ^RootIx sti ^Sink sk]
+  (let [^I32 c (rd-next rt sti)]
+    (if (== c 116) (do (sink-put rt sk 9) (return RS_OK)))
+    (if (== c 114) (do (sink-put rt sk 13) (return RS_OK)))
+    (if (== c 110) (do (sink-put rt sk 10) (return RS_OK)))
+    (if (== c 92) (do (sink-put rt sk 92) (return RS_OK)))
+    (if (== c 34) (do (sink-put rt sk 34) (return RS_OK)))
+    (if (== c 98) (do (sink-put rt sk 8) (return RS_OK)))
+    (if (== c 102) (do (sink-put rt sk 12) (return RS_OK)))
+    (if (== c 117)
+      (do (comment "FOUR MORE CHARACTERS, or as many as the text has left.")
+          (let [^I32 from (rd-pos rt sti)]
+            (local ^:mut ^I32 k)
+            (set k 0)
+            (while (and (< k 4) (!= (rd-next rt sti) NO_CP))
+              (set k (+ k 1)))
+            (return (put-code rt sti sk from (+ from k) 16)))))
+    (if (and (>= c 48) (<= c 55))
+      (let [^I32 ofrom (- (rd-pos rt sti) 1)]
+        (local ^:mut ^I32 n)
+        (set n 1)
+        (forever
+          (let [^I32 p (rd-peek rt sti)]
+            (if (or (>= n 3) (or (< p 48) (> p 55)))
+              (break))
+            (rd-next rt sti)
+            (set n (+ n 1))))
+        (return (put-code rt sti sk ofrom (+ ofrom n) 8))))
+    (let [^Sink ek (sink-open rt)]
+      (msg-lit rt ek "unsupported escape \\")
+      (msg-cp rt ek c)
+      (return (rd-fail-sink rt sti ek)))))
+
+(doc "A string literal, at its opening quote, pushed.")
+(defn ^:pub ^:method ^I32 read-string-lit [^:mut ^Rt rt ^RootIx sti]
+  (rd-next rt sti)
+  (let [^Sink sk (sink-open rt)]
+    (forever
+      (let [^I32 c (rd-next rt sti)]
+        (if (== c NO_CP)
+          (do (sink-close rt sk)
+              (return (rd-fail-lit rt sti "unterminated string"))))
+        (if (== c 34)
+          (break))
+        (if (== c 92)
+          (let [^I32 st (read-escape rt sti sk)]
+            (if (!= st RS_OK)
+              (do (sink-close rt sk)
+                  (return st))))
+          (sink-put-cp rt sk c))))
+    (let [^Value out (sink-string rt sk)]
+      (sink-close rt sk)
+      (push rt out)
+      (return RS_OK))))
+
+(doc "Push the string `name` names as a character, and answer true; false"
+     "when it names none. `from`..`to` is the token.")
+(defn ^:method ^Bool named-char [^:mut ^Rt rt ^RootIx sti ^I32 from ^I32 to]
+  (local ^:mut ^I32 code)
+  (set code 0)
+  (let [^Value nl (str-const rt "newline")]
+    (if (rd-range-is rt sti from to nl) (set code 10)))
+  (let [^Value sp (str-const rt "space")]
+    (if (rd-range-is rt sti from to sp) (set code 32)))
+  (let [^Value tb (str-const rt "tab")]
+    (if (rd-range-is rt sti from to tb) (set code 9)))
+  (let [^Value rn (str-const rt "return")]
+    (if (rd-range-is rt sti from to rn) (set code 13)))
+  (let [^Value ff (str-const rt "formfeed")]
+    (if (rd-range-is rt sti from to ff) (set code 12)))
+  (let [^Value bs (str-const rt "backspace")]
+    (if (rd-range-is rt sti from to bs) (set code 8)))
+  (if (== code 0)
+    (return false))
+  (let [^Sink sk (sink-open rt)]
+    (sink-put rt sk code)
+    (let [^Value out (sink-string rt sk)]
+      (sink-close rt sk)
+      (push rt out)
+      (return true))))
+
+(doc "A character literal, at its backslash, pushed as a one-character string.")
+(defn ^:pub ^:method ^I32 read-char-lit [^:mut ^Rt rt ^RootIx sti]
+  (rd-next rt sti)
+  (let [^I32 from (rd-pos rt sti)
+        ^I32 c (rd-next rt sti)]
+    (if (== c NO_CP)
+      (return (rd-fail-lit rt sti "unterminated character")))
+    (if (not (or (is-ws c) (is-term c)))
+      (rd-token rt sti))
+    (let [^I32 to (rd-pos rt sti)]
+      (if (== (- to from) 1)
+        (let [^Value one (rd-string rt sti from to)]
+          (push rt one)
+          (return RS_OK)))
+      (if (named-char rt sti from to)
+        (return RS_OK))
+      (if (== c 117)
+        (let [^Sink sk (sink-open rt)
+              ^I32 st (put-code rt sti sk (+ from 1) to 16)]
+          (if (!= st RS_OK)
+            (do (sink-close rt sk)
+                (return st)))
+          (let [^Value out (sink-string rt sk)]
+            (sink-close rt sk)
+            (push rt out)
+            (return RS_OK))))
+      (if (== c 111)
+        (let [^Sink ok (sink-open rt)
+              ^I32 ost (put-code rt sti ok (+ from 1) to 8)]
+          (if (!= ost RS_OK)
+            (do (sink-close rt ok)
+                (return ost)))
+          (let [^Value oout (sink-string rt ok)]
+            (sink-close rt ok)
+            (push rt oout)
+            (return RS_OK))))
+      (let [^Sink ek (sink-open rt)]
+        (msg-lit rt ek "unknown character literal \\")
+        (local ^:mut ^I32 i)
+        (set i from)
+        (while (< i to)
+          (do (msg-cp rt ek (rd-at rt sti i))
+              (set i (+ i 1))))
+        (return (rd-fail-sink rt sti ek))))))
+
+(doc "A regex literal, at its opening quote (the `#` already taken), pushed"
+     "as `{:flint/regex \"...\"}` -- an ARRAY MAP built by call, because a"
+     "map literal here would be one the analyzer rewrites. A backslash and"
+     "whatever follows it are kept as written.")
+(defn ^:pub ^:method ^I32 read-regex-lit [^:mut ^Rt rt ^RootIx sti]
+  (rd-next rt sti)
+  (let [^Sink sk (sink-open rt)]
+    (forever
+      (let [^I32 c (rd-next rt sti)]
+        (if (== c NO_CP)
+          (do (sink-close rt sk)
+              (return (rd-fail-lit rt sti "unterminated regex"))))
+        (if (== c 34)
+          (break))
+        (sink-put-cp rt sk c)
+        (if (== c 92)
+          (let [^I32 d (rd-next rt sti)]
+            (if (!= d NO_CP)
+              (sink-put-cp rt sk d))))))
+    (let [^Value text (sink-string rt sk)]
+      (sink-close rt sk)
+      (let [^RootIx base (mark rt)
+            ^RootIx ti (push rt text)
+            ^Value k (lit-keyword rt "flint" "regex")]
+        (comment "The key and the value, rooted IN ORDER, are the vector's"
+                 "elements: `(base + 1, 2)`.")
+        (push rt k)
+        (push rt (r rt ti))
+        (let [^Value kv (vec-from-roots rt (+ base 1) 2)
+              ^Value m (ordered-map rt kv)]
+          (pop-to rt base)
+          (push rt m)
+          (return RS_OK))))))

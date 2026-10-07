@@ -663,13 +663,28 @@
   data: one read serves the default build, `:optimize [perf]` and any explicit
   `:features`. The bytes are `flint.forms`'s, which carry every form's
   position metadata and the options the read was made under, which a compile
-  checks before it uses them."
+  checks before it uses them.
+
+  A spec with `:features` reads EAGERLY under that set instead
+  (`flint.project/read-eager`) -- the bytes a host-side reader must reproduce,
+  which is what the kin reader's conformity guard compares against
+  (`cli/src/kin_reader_test.rs`). With `:guard` a file that does not read
+  answers `{:error message}` in place of its bytes, so one bad fixture does
+  not hide the rest; the build's own pre-read keeps throwing."
   [spec-edn]
   (let [spec (read-spec spec-edn)
-        files (:files spec)]
+        files (:files spec)
+        features (:features spec)
+        guard? (contains? spec :guard)]
     {:preread
      (into {} (map (fn [path]
-                     [path (project/preread (project/file-answer files (:workspaces spec) path))])
+                     (let [a (project/file-answer files (:workspaces spec) path)
+                           read (fn [] (if features
+                                         (project/read-eager a (set features))
+                                         (project/preread a)))]
+                       [path (if guard?
+                               (try (read) (catch Throwable e {:error (ex-message e)}))
+                               (read))]))
                    (keys files)))}))
 
 (defn- image-artifact

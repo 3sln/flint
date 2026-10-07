@@ -1,0 +1,120 @@
+;; A TOKEN AS A NUMBER, the way `flint.reader/parse-number` reads one.
+;;
+;; Not `strnum.kin`, although it ends there: what the READER counts as a
+;; number is narrower and differently shaped than what `str->num` accepts. A
+;; token must start with a digit after its sign; `N` and then `M` are dropped
+;; from the end; an all-digit body is an integer, read here; `0x` is hex WITH
+;; a sign, which `str->num` refuses; and only what is left goes to `str->num`,
+;; whose answer is made a double. A token that is none of these is not an
+;; error -- it is a symbol, `1x` and `0xZZ` included.
+;;
+;; THE INTEGER ARM ACCUMULATES ON THE SIDE WITH ROOM, for the reason
+;; `numdiv.kin` exists: the most negative integer has no positive counterpart.
+;; Past the range it is the guest arithmetic's own error, "integer overflow",
+;; which is what the guest's reader raised from inside its `*` and `+`.
+(ns flint.rt.readnum
+  (:require [flint.impl.rt :refer [defn return if let do local set while
+                                   comment doc not and or == != < <= > >= + -
+                                   * quot to-i64 sink-open sink-put sink-close
+                                   sink-string push of-double to-f64 str-const
+                                   Rt Value RootIx I32 I64 Bool Sink NIL
+                                   I64_MIN I64_MAX]]
+            [flint.rt.num :refer [integer]]
+            [flint.rt.numkind :refer [is-int is-number]]
+            [flint.rt.numint :refer [integer-value]]
+            [flint.rt.strnum :refer [str-to-num]]
+            [flint.rt.readcore :refer [rd-at rd-fail-plain sink-put-cp]]
+            [flint.rt.readconst :refer [RS_OK RS_NONE RS_ERR is-digit hex-digit]]))
+
+(doc "The code points `from`..`to` as an integer in `radix`, pushed: `RS_OK`."
+     "`RS_NONE` when they are empty or hold a character that is no digit of"
+     "`radix`, and `RS_ERR` when the value leaves the 64-bit range."
+     ""
+     "Built DOWNWARD when `neg`, so the most negative integer is a literal"
+     "like any other.")
+(defn ^:pub ^:method ^I32 parse-int-radix [^:mut ^Rt rt ^RootIx sti ^I32 from ^I32 to
+                                           ^I64 radix ^Bool neg]
+  (if (>= from to)
+    (return RS_NONE))
+  (local ^:mut ^I64 acc)
+  (set acc 0)
+  (local ^:mut ^I32 i)
+  (set i from)
+  (while (< i to)
+    (let [^I64 d (to-i64 (hex-digit (rd-at rt sti i)))]
+      (if (>= d radix)
+        (return RS_NONE))
+      (if neg
+        (do (if (< acc (quot (+ I64_MIN d) radix))
+              (let [^Value m (str-const rt "integer overflow")]
+                (return (rd-fail-plain rt sti m))))
+            (set acc (- (* acc radix) d)))
+        (do (if (> acc (quot (- I64_MAX d) radix))
+              (let [^Value m (str-const rt "integer overflow")]
+                (return (rd-fail-plain rt sti m))))
+            (set acc (+ (* acc radix) d))))
+      (set i (+ i 1))))
+  (let [^Value n (integer rt acc)]
+    (push rt n)
+    (return RS_OK)))
+
+(doc "The token `from`..`to` as a number, pushed: `RS_OK`. `RS_NONE` when it"
+     "is not a number -- it is then a symbol -- and `RS_ERR` for an integer"
+     "out of range.")
+(defn ^:pub ^:method ^I32 parse-number [^:mut ^Rt rt ^RootIx sti ^I32 from ^I32 to]
+  (if (>= from to)
+    (return RS_NONE))
+  (let [^I32 c0 (rd-at rt sti from)
+        ^Bool signed (or (== c0 45) (== c0 43))
+        ^Bool neg (== c0 45)]
+    (local ^:mut ^I32 b)
+    (set b from)
+    (if signed
+      (set b (+ from 1)))
+    (if (>= b to)
+      (return RS_NONE))
+    (if (not (is-digit (rd-at rt sti b)))
+      (return RS_NONE))
+    (comment "HEX, signed or not, when there is something after the `0x`.")
+    (if (and (> (- to b) 2)
+             (and (== (rd-at rt sti b) 48)
+                  (or (== (rd-at rt sti (+ b 1)) 120) (== (rd-at rt sti (+ b 1)) 88))))
+      (return (parse-int-radix rt sti (+ b 2) to 16 neg)))
+    (comment "`N` and then `M` come off the end, each at most once.")
+    (local ^:mut ^I32 e)
+    (set e to)
+    (if (== (rd-at rt sti (- e 1)) 78)
+      (set e (- e 1)))
+    (if (and (> e b) (== (rd-at rt sti (- e 1)) 77))
+      (set e (- e 1)))
+    (local ^:mut ^Bool all)
+    (set all true)
+    (local ^:mut ^I32 k)
+    (set k b)
+    (while (< k e)
+      (do (if (not (is-digit (rd-at rt sti k)))
+            (set all false))
+          (set k (+ k 1))))
+    (if all
+      (return (parse-int-radix rt sti b e 10 neg)))
+    (comment "THE REST GOES TO `str->num`, sign and all, and a number that"
+             "comes back is made a double by multiplying -- which keeps `-0.0`.")
+    (let [^Sink sk (sink-open rt)]
+      (if neg
+        (sink-put rt sk 45))
+      (local ^:mut ^I32 j)
+      (set j b)
+      (while (< j e)
+        (do (sink-put-cp rt sk (rd-at rt sti j))
+            (set j (+ j 1))))
+      (let [^Value text (sink-string rt sk)]
+        (sink-close rt sk)
+        (let [^Value v (str-to-num rt text)]
+          (if (not (is-number rt v))
+            (return RS_NONE))
+          (if (is-int rt v)
+            (let [^Value dv (of-double (to-f64 (integer-value rt v)))]
+              (push rt dv)
+              (return RS_OK)))
+          (push rt v)
+          (return RS_OK))))))

@@ -1,0 +1,418 @@
+;; THE SOURCE READER'S STATE AND ITS CURSOR (`DECISIONS.md#namespaces-over-the-system-port`).
+;;
+;; ONE READER, generated into every runtime, is the decision this file starts.
+;; The host reads a namespace's text itself and hands the compiler `flint.forms`
+;; bytes, so the reader has to exist OUTSIDE the compiler sandbox -- in the
+;; native CLI, the JVM driver, the CLR -- and three hand-written readers of one
+;; language is exactly the drift kin exists to prevent. `src/flint/reader.cljc`
+;; is the specification: every rule here is a rule there, and the conformity
+;; guard (`cli/src/kin_reader_test.rs`) compares the BYTES the two produce over
+;; every file in `lib/`, `src/`, the corpus and the fixtures.
+;;
+;; THE READER BUILDS HEAP VALUES, the way the guest's reader does, and the
+;; encoder (`kin/formsenc.kin`) walks them. Writing bytes straight from the
+;; text would have been less code and a second implementation of something
+;; subtler than reading: a set literal, an author's metadata and a merged
+;; position map all come out of the encoder in the order the runtime's CHAMP
+;; visits them, and the only exact way to get that order is to build the same
+;; values with the same operations.
+;;
+;; THE STATE IS A NODE, and every function here takes its ROOT INDEX rather
+;; than the value: the state lives across thousands of allocations, and a
+;; value held anywhere but the shadow stack does not survive one
+;; (`DECISIONS.md#a-vec-of-values-is-not-a-root`). The cursor -- index, line,
+;; column -- lives in the node as fixnums.
+;;
+;; A READ ANSWERS A STATUS AND PUSHES ITS RESULT. `RS_OK` pushes exactly one
+;; value, `RS_SPLICE` one vector of values to splice, and the rest push
+;; nothing. The guest's reader returned three sentinel VALUES for the same
+;; three cases (`EOF`, `SPLICE-NONE`, a spliced marker) and had to argue each
+;; one unforgeable; a status cannot be spelled by source at all.
+(ns flint.rt.readcore
+  (:require [flint.impl.rt :refer [defn defconst return if let do local set
+                                   forever break continue while comment doc not
+                                   and or == != < <= > >= + - * quot rem shl
+                                   ushr bit-and bit-or mark push r set-r pop-to
+                                   fixnum fixnum64 as-fixnum to-i32 to-i64 nil?
+                                   cps-at cps-len cps-close sink-open sink-put
+                                   sink-string sink-close str-const symbol-of
+                                   keyword-of empty-map
+                                   Rt Value RootIx I32 I64 Bool Cps Sink
+                                   StaticText NIL TRUE FALSE]]
+            [flint.rt.vecnode :refer [new-node node-get node-set]]
+            [flint.rt.codepoints :refer [code-points]]
+            [flint.rt.ropeflat :refer [s-append]]
+            [flint.rt.names :refer [name-of ns-of is-symbol]]
+            [flint.rt.mapread :refer [map-get map-contains]]
+            [flint.rt.mapwrite :refer [map-assoc]]
+            [flint.rt.valeq :refer [val-eq]]
+            [flint.rt.readconst :refer [RDS_CPS RDS_I RDS_N RDS_LINE RDS_COL RDS_FILE RDS_FEATURES RDS_ALIASES RDS_DEFER RDS_CONDS RDS_APARTIAL RDS_PORTABLE RDS_TAGS RDS_GENSYM_N RDS_ERRMSG RDS_ERRLINE RDS_ERRCOL RDS_ERRPLAIN RDS_LEN RS_ERR NO_CP is-ws is-term]]))
+
+;; --- the state's slots ------------------------------------------------------
+
+
+;; --- what a read answers ----------------------------------------------------
+
+
+
+;; --- slots ------------------------------------------------------------------
+
+(doc "Slot `s` of the state.")
+(defn ^:pub ^:method ^Value rd-get [^Rt rt ^RootIx sti ^I32 s]
+  (return (node-get rt (r rt sti) s)))
+
+(doc "Write slot `s`. `v` is stored at once, so it needs no root of its own.")
+(defn ^:pub ^:method rd-put [^:mut ^Rt rt ^RootIx sti ^I32 s ^Value v]
+  (node-set rt (r rt sti) s v))
+
+(doc "Slot `s` as an integer: the cursor, the counters.")
+(defn ^:pub ^:method ^I64 rd-int [^Rt rt ^RootIx sti ^I32 s]
+  (return (as-fixnum (node-get rt (r rt sti) s))))
+
+(doc "Write an integer slot.")
+(defn ^:pub ^:method rd-set-int [^:mut ^Rt rt ^RootIx sti ^I32 s ^I64 v]
+  (node-set rt (r rt sti) s (fixnum64 v)))
+
+(doc "Is the boolean slot `s` true?")
+(defn ^:pub ^:method ^Bool rd-flag [^Rt rt ^RootIx sti ^I32 s]
+  (return (== (node-get rt (r rt sti) s) TRUE)))
+
+(doc "The code-point buffer the text was decoded into.")
+(defn ^:pub ^:method ^Cps rd-cps [^Rt rt ^RootIx sti]
+  (return (to-i32 (rd-int rt sti RDS_CPS))))
+
+(doc "The cursor, as a code-point index.")
+(defn ^:pub ^:method ^I32 rd-pos [^Rt rt ^RootIx sti]
+  (return (to-i32 (rd-int rt sti RDS_I))))
+
+(doc "The code point at index `i`, which the caller has bounded.")
+(defn ^:pub ^:method ^I32 rd-at [^Rt rt ^RootIx sti ^I32 i]
+  (return (cps-at rt (rd-cps rt sti) i)))
+
+;; --- characters -------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+;; --- the cursor -------------------------------------------------------------
+
+(doc "The next code point, or `NO_CP` at the end. Does not move.")
+(defn ^:pub ^:method ^I32 rd-peek [^Rt rt ^RootIx sti]
+  (let [^I64 i (rd-int rt sti RDS_I)]
+    (if (>= i (rd-int rt sti RDS_N))
+      (return NO_CP))
+    (return (rd-at rt sti (to-i32 i)))))
+
+(doc "The code point after the next one, or `NO_CP`.")
+(defn ^:pub ^:method ^I32 rd-peek2 [^Rt rt ^RootIx sti]
+  (let [^I64 j (+ (rd-int rt sti RDS_I) 1)]
+    (if (>= j (rd-int rt sti RDS_N))
+      (return NO_CP))
+    (return (rd-at rt sti (to-i32 j)))))
+
+(doc "Take the next code point, counting lines and columns. `NO_CP` at the"
+     "end, and then the cursor does not move.")
+(defn ^:pub ^:method ^I32 rd-next [^:mut ^Rt rt ^RootIx sti]
+  (let [^I32 c (rd-peek rt sti)]
+    (if (== c NO_CP)
+      (return NO_CP))
+    (let [^I64 ni (+ (rd-int rt sti RDS_I) 1)]
+      (rd-set-int rt sti RDS_I ni))
+    (if (== c 10)
+      (do (let [^I64 nl (+ (rd-int rt sti RDS_LINE) 1)]
+            (rd-set-int rt sti RDS_LINE nl))
+          (rd-set-int rt sti RDS_COL 1))
+      (let [^I64 nc (+ (rd-int rt sti RDS_COL) 1)]
+        (rd-set-int rt sti RDS_COL nc)))
+    (return c)))
+
+(doc "Past whitespace and `;` comments. A comment runs THROUGH its newline.")
+(defn ^:pub ^:method rd-skip-ws [^:mut ^Rt rt ^RootIx sti]
+  (forever
+    (let [^I32 c (rd-peek rt sti)]
+      (if (== c NO_CP)
+        (return))
+      (if (is-ws c)
+        (do (rd-next rt sti)
+            (continue)))
+      (if (!= c 59)
+        (return))
+      (forever
+        (let [^I32 d (rd-next rt sti)]
+          (if (or (== d NO_CP) (== d 10))
+            (break)))))))
+
+(doc "Past a TOKEN, answering where it began: everything up to the end, a"
+     "whitespace or a terminating character. The token is the code points"
+     "from the answer to the cursor.")
+(defn ^:pub ^:method ^I32 rd-token [^:mut ^Rt rt ^RootIx sti]
+  (let [^I32 from (rd-pos rt sti)]
+    (forever
+      (let [^I32 c (rd-peek rt sti)]
+        (if (or (== c NO_CP) (or (is-ws c) (is-term c)))
+          (break))
+        (rd-next rt sti)))
+    (return from)))
+
+;; --- text -------------------------------------------------------------------
+
+(doc "Append `c` to `sk` as UTF-8.")
+(defn ^:pub ^:method sink-put-cp [^:mut ^Rt rt ^Sink sk ^I32 c]
+  (if (< c 128)
+    (do (sink-put rt sk c)
+        (return)))
+  (if (< c 2048)
+    (do (sink-put rt sk (bit-or 192 (ushr c 6)))
+        (sink-put rt sk (bit-or 128 (bit-and c 63)))
+        (return)))
+  (if (< c 65536)
+    (do (sink-put rt sk (bit-or 224 (ushr c 12)))
+        (sink-put rt sk (bit-or 128 (bit-and (ushr c 6) 63)))
+        (sink-put rt sk (bit-or 128 (bit-and c 63)))
+        (return)))
+  (sink-put rt sk (bit-or 240 (ushr c 18)))
+  (sink-put rt sk (bit-or 128 (bit-and (ushr c 12) 63)))
+  (sink-put rt sk (bit-or 128 (bit-and (ushr c 6) 63)))
+  (sink-put rt sk (bit-or 128 (bit-and c 63))))
+
+(doc "The code points `from`..`to` of the text, as a fresh string.")
+(defn ^:pub ^:method ^Value rd-string [^:mut ^Rt rt ^RootIx sti ^I32 from ^I32 to]
+  (let [^Sink sk (sink-open rt)]
+    (local ^:mut ^I32 i)
+    (set i from)
+    (while (< i to)
+      (do (sink-put-cp rt sk (rd-at rt sti i))
+          (set i (+ i 1))))
+    (let [^Value out (sink-string rt sk)]
+      (sink-close rt sk)
+      (return out))))
+
+(doc "Do the code points `from`..`to` spell the string `v`? `v` is ASCII by"
+     "construction -- a name this reader knows -- so its bytes are its code"
+     "points.")
+(defn ^:pub ^:method ^Bool rd-range-is [^:mut ^Rt rt ^RootIx sti ^I32 from ^I32 to ^Value v]
+  (let [^Sink sk (sink-open rt)]
+    (s-append rt v sk)
+    (let [^Value probe (rd-string rt sti from to)
+          ^RootIx base (mark rt)
+          ^RootIx pi (push rt probe)
+          ^Value lit (sink-string rt sk)
+          ^Bool same (val-eq rt (r rt pi) lit)]
+      (pop-to rt base)
+      (sink-close rt sk)
+      (return same))))
+
+(doc "A symbol from two strings; `ns` may be nil.")
+(defn ^:pub ^:method ^Value lit-symbol [^:mut ^Rt rt ^StaticText ns ^StaticText nm]
+  (let [^RootIx base (mark rt)
+        ^Value nsv (str-const rt ns)
+        ^RootIx ni (push rt nsv)
+        ^Value nmv (str-const rt nm)
+        ^Value out (symbol-of rt (r rt ni) nmv)]
+    (pop-to rt base)
+    (return out)))
+
+(doc "A symbol with no namespace.")
+(defn ^:pub ^:method ^Value lit-symbol1 [^:mut ^Rt rt ^StaticText nm]
+  (let [^Value nmv (str-const rt nm)]
+    (return (symbol-of rt NIL nmv))))
+
+(doc "A keyword from two strings.")
+(defn ^:pub ^:method ^Value lit-keyword [^:mut ^Rt rt ^StaticText ns ^StaticText nm]
+  (let [^RootIx base (mark rt)
+        ^Value nsv (str-const rt ns)
+        ^RootIx ni (push rt nsv)
+        ^Value nmv (str-const rt nm)
+        ^Value out (keyword-of rt (r rt ni) nmv)]
+    (pop-to rt base)
+    (return out)))
+
+(doc "A keyword with no namespace.")
+(defn ^:pub ^:method ^Value lit-keyword1 [^:mut ^Rt rt ^StaticText nm]
+  (let [^Value nmv (str-const rt nm)]
+    (return (keyword-of rt NIL nmv))))
+
+(doc "Is `v` the symbol `nm` with no namespace?")
+(defn ^:pub ^:method ^Bool is-sym1 [^:mut ^Rt rt ^Value v ^StaticText nm]
+  (if (not (is-symbol rt v))
+    (return false))
+  (let [^RootIx base (mark rt)
+        ^RootIx vi (push rt v)
+        ^Value probe (lit-symbol1 rt nm)
+        ^Bool same (val-eq rt (r rt vi) probe)]
+    (pop-to rt base)
+    (return same)))
+
+(doc "Is `v` the symbol `ns`/`nm`?")
+(defn ^:pub ^:method ^Bool is-sym2 [^:mut ^Rt rt ^Value v ^StaticText ns ^StaticText nm]
+  (if (not (is-symbol rt v))
+    (return false))
+  (let [^RootIx base (mark rt)
+        ^RootIx vi (push rt v)
+        ^Value probe (lit-symbol rt ns nm)
+        ^Bool same (val-eq rt (r rt vi) probe)]
+    (pop-to rt base)
+    (return same)))
+
+;; --- error messages ---------------------------------------------------------
+
+(doc "Append a literal to a message.")
+(defn ^:pub ^:method msg-lit [^:mut ^Rt rt ^Sink sk ^StaticText t]
+  (let [^Value v (str-const rt t)]
+    (s-append rt v sk)))
+
+(doc "Append what `(str v)` prints for a string or a symbol: the string, or"
+     "the symbol's namespace and name. Anything else appends nothing.")
+(defn ^:pub ^:method msg-val [^:mut ^Rt rt ^Sink sk ^Value v]
+  (if (is-symbol rt v)
+    (let [^RootIx base (mark rt)
+          ^RootIx vi (push rt v)
+          ^Value nsv (ns-of rt (r rt vi))]
+      (if (not (nil? rt nsv))
+        (do (s-append rt nsv sk)
+            (sink-put rt sk 47)))
+      (let [^Value nmv (name-of rt (r rt vi))]
+        (s-append rt nmv sk))
+      (pop-to rt base)
+      (return)))
+  (s-append rt v sk))
+
+(doc "Append a code point, unless it is `NO_CP` -- `(str nil)` is empty.")
+(defn ^:pub ^:method msg-cp [^:mut ^Rt rt ^Sink sk ^I32 c]
+  (if (!= c NO_CP)
+    (sink-put-cp rt sk c)))
+
+(doc "Append a non-negative integer in decimal.")
+(defn ^:pub ^:method msg-int [^:mut ^Rt rt ^Sink sk ^I64 n]
+  (if (>= n 10)
+    (msg-int rt sk (quot n 10)))
+  (sink-put rt sk (to-i32 (+ 48 (rem n 10)))))
+
+(doc "Record a READ error at the cursor: `msg` is what follows `read error: `,"
+     "and the position is where the reader stood when it gave up, as the"
+     "guest's `err` takes it.")
+(defn ^:pub ^:method ^I32 rd-fail [^:mut ^Rt rt ^RootIx sti ^Value msg]
+  (rd-put rt sti RDS_ERRMSG msg)
+  (rd-put rt sti RDS_ERRLINE (rd-get rt sti RDS_LINE))
+  (rd-put rt sti RDS_ERRCOL (rd-get rt sti RDS_COL))
+  (rd-put rt sti RDS_ERRPLAIN FALSE)
+  (return RS_ERR))
+
+(doc "Record an error that is not the reader's own -- an integer that"
+     "overflows, a code point that is not one -- which the guest's reader"
+     "raised from the arithmetic or the constructor underneath it, unprefixed.")
+(defn ^:pub ^:method ^I32 rd-fail-plain [^:mut ^Rt rt ^RootIx sti ^Value msg]
+  (rd-fail rt sti msg)
+  (rd-put rt sti RDS_ERRPLAIN TRUE)
+  (return RS_ERR))
+
+(doc "`rd-fail` with a literal message.")
+(defn ^:pub ^:method ^I32 rd-fail-lit [^:mut ^Rt rt ^RootIx sti ^StaticText t]
+  (let [^Value m (str-const rt t)]
+    (return (rd-fail rt sti m))))
+
+(doc "`rd-fail` with the message in `sk`, which this closes.")
+(defn ^:pub ^:method ^I32 rd-fail-sink [^:mut ^Rt rt ^RootIx sti ^Sink sk]
+  (let [^Value m (sink-string rt sk)]
+    (sink-close rt sk)
+    (return (rd-fail rt sti m))))
+
+(doc "`rd-fail-plain` with the message in `sk`, which this closes.")
+(defn ^:pub ^:method ^I32 rd-fail-plain-sink [^:mut ^Rt rt ^RootIx sti ^Sink sk]
+  (let [^Value m (sink-string rt sk)]
+    (sink-close rt sk)
+    (return (rd-fail-plain rt sti m))))
+
+(doc "The error from `from-code-point` for `n`: \"not a code point: n\", or"
+     "\"not a code point\" when the digits did not read as an integer at all"
+     "(`ok` false).")
+(defn ^:pub ^:method ^I32 rd-fail-cp [^:mut ^Rt rt ^RootIx sti ^Bool ok ^I64 n]
+  (let [^Sink sk (sink-open rt)]
+    (msg-lit rt sk "not a code point")
+    (if ok
+      (do (msg-lit rt sk ": ")
+          (if (< n 0)
+            (do (sink-put rt sk 45)
+                (msg-int rt sk (- 0 n)))
+            (msg-int rt sk n))))
+    (return (rd-fail-plain-sink rt sti sk))))
+
+
+
+;; --- the state --------------------------------------------------------------
+
+(doc "A reader over the string `src`, read as `file`."
+     ""
+     "`features` is the feature SET an eager read chooses with, or nil for a"
+     "DEFERRED read, which keeps every reader conditional as data"
+     "(`DECISIONS.md#stdlib-preread`). `tags` is the workspace's tag map, or"
+     "nil; `#flint/table` is bound under it unless it binds that name itself,"
+     "which is `(merge builtin-tags tags)`. `portable` is the dialect, from the"
+     "file's extension. `gensym0` is the first auto-gensym's number."
+     ""
+     "A `#!` FIRST LINE is skipped, and only on the first line: the newline is"
+     "left, so every line number is the one an editor shows.")
+(defn ^:pub ^:method ^Value rd-new [^:mut ^Rt rt ^Value src ^Value file ^Value features
+                                    ^Value tags ^Bool portable ^I64 gensym0]
+  (let [^RootIx base (mark rt)
+        ^RootIx fi (push rt file)
+        ^RootIx ffi (push rt features)
+        ^RootIx ti (push rt tags)
+        ^Cps c (code-points rt src)
+        ^Value node (new-node rt RDS_LEN NIL)]
+    (if (nil? rt node)
+      (do (cps-close rt c)
+          (pop-to rt base)
+          (return NIL)))
+    (let [^RootIx sti (push rt node)
+          ^I32 n (cps-len rt c)]
+      (local ^:mut ^I32 start)
+      (set start 0)
+      (if (and (>= n 2) (and (== (cps-at rt c 0) 35) (== (cps-at rt c 1) 33)))
+        (do (set start 2)
+            (while (and (< start n) (!= (cps-at rt c start) 10))
+              (set start (+ start 1)))))
+      (rd-set-int rt sti RDS_CPS (to-i64 c))
+      (rd-set-int rt sti RDS_I (to-i64 start))
+      (rd-set-int rt sti RDS_N (to-i64 n))
+      (rd-set-int rt sti RDS_LINE 1)
+      (rd-set-int rt sti RDS_COL 1)
+      (rd-put rt sti RDS_FILE (r rt fi))
+      (rd-put rt sti RDS_FEATURES (r rt ffi))
+      (if (nil? rt (r rt ffi))
+        (rd-put rt sti RDS_DEFER TRUE)
+        (rd-put rt sti RDS_DEFER FALSE))
+      (rd-set-int rt sti RDS_CONDS 0)
+      (rd-put rt sti RDS_APARTIAL FALSE)
+      (if portable
+        (rd-put rt sti RDS_PORTABLE TRUE)
+        (rd-put rt sti RDS_PORTABLE FALSE))
+      (rd-set-int rt sti RDS_GENSYM_N gensym0)
+      (let [^Value em (empty-map rt)]
+        (rd-put rt sti RDS_ALIASES em))
+      (comment "THE TAGS: the workspace's, and `#flint/table` unless the"
+               "workspace binds that name itself.")
+      (local ^:mut ^Value tm)
+      (set tm (r rt ti))
+      (if (nil? rt tm)
+        (set tm (empty-map rt)))
+      (let [^RootIx tmi (push rt tm)
+            ^Value tk (lit-symbol rt "flint" "table")
+            ^RootIx tki (push rt tk)]
+        (if (not (map-contains rt (r rt tmi) (r rt tki)))
+          (let [^Value tv (lit-symbol rt "flint.table" "read-table")
+                ^Value tm2 (map-assoc rt (r rt tmi) (r rt tki) tv)]
+            (set-r rt tmi tm2)))
+        (rd-put rt sti RDS_TAGS (r rt tmi)))
+      (let [^Value out (r rt sti)]
+        (pop-to rt base)
+        (return out)))))
+
+(doc "Release what `rd-new` took from the host: the code-point buffer.")
+(defn ^:pub ^:method rd-close [^:mut ^Rt rt ^RootIx sti]
+  (cps-close rt (rd-cps rt sti)))

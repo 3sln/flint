@@ -1,0 +1,141 @@
+--rust
+fn main() {
+    let mut o = String::new();
+    // is-ws: the six bytes the doc names, and one ordinary letter that is not.
+    for c in [32u32, 9, 10, 13, 12, 44, 65] {
+        o.push_str(&format!("{}", is_ws(c) as i32));
+    }
+    o.push(' ');
+    // is-term: every byte in the list, then three Clojure leaves OUT on
+    // purpose -- '#' (35), '\'' (39) and '%' (37) -- so `acc'`, `x#` and `%1`
+    // stay single tokens. If any of those three ever answered true this
+    // field would show it.
+    for c in [34u32, 59, 64, 94, 96, 126, 40, 41, 91, 93, 123, 125, 92, 35, 39, 37, 97] {
+        o.push_str(&format!("{}", is_term(c) as i32));
+    }
+    o.push(' ');
+    // is-digit at both edges: '/' (47) and ':' (58) are one past either side.
+    for c in [47u32, 48, 57, 58] {
+        o.push_str(&format!("{}", is_digit(c) as i32));
+    }
+    o.push(' ');
+    // (hex-digit, is-scalar and zigzag follow, each pushing its own
+    // trailing separator so the fields below need none of their own.)
+    // hex-digit over every accepted byte plus three that are not: '/' (47,
+    // one below '0'), 'g' (103, one past 'f') and 'G' (71, one past 'F').
+    for c in [48u32, 57, 97, 102, 65, 70, 47, 103, 71] {
+        o.push_str(&format!("{} ", hex_digit(c)));
+    }
+    // is-scalar across the surrogate hole and the two outer bounds.
+    for n in [-1i64, 0, 55295, 55296, 57343, 57344, 1114111, 1114112] {
+        o.push_str(&format!("{}", is_scalar(n) as i32));
+    }
+    o.push(' ');
+    // zigzag: 0 -1 1 -2 2, then a value whose magnitude would overflow an
+    // i32 so a truncating port shows up here.
+    for n in [0i64, -1, 1, -2, 2, 3000000000i64, -3000000000i64] {
+        o.push_str(&format!("{} ", zigzag(n)));
+    }
+    println!("{}", o);
+}
+--java
+    public static void main(String[] args) {
+        StringBuilder o = new StringBuilder();
+        for (int c : new int[]{32, 9, 10, 13, 12, 44, 65}) {
+            o.append(isWs(c) ? 1 : 0);
+        }
+        o.append(' ');
+        for (int c : new int[]{34, 59, 64, 94, 96, 126, 40, 41, 91, 93, 123, 125, 92, 35, 39, 37, 97}) {
+            o.append(isTerm(c) ? 1 : 0);
+        }
+        o.append(' ');
+        for (int c : new int[]{47, 48, 57, 58}) {
+            o.append(isDigit(c) ? 1 : 0);
+        }
+        o.append(' ');
+        for (int c : new int[]{48, 57, 97, 102, 65, 70, 47, 103, 71}) {
+            o.append(hexDigit(c)).append(' ');
+        }
+        for (long n : new long[]{-1, 0, 55295, 55296, 57343, 57344, 1114111, 1114112}) {
+            o.append(isScalar(n) ? 1 : 0);
+        }
+        o.append(' ');
+        for (long n : new long[]{0, -1, 1, -2, 2, 3000000000L, -3000000000L}) {
+            o.append(zigzag(n)).append(' ');
+        }
+        System.out.println(o.toString());
+    }
+--csharp
+    static void Main() {
+        var o = new System.Text.StringBuilder();
+        foreach (int c in new int[]{32, 9, 10, 13, 12, 44, 65}) {
+            o.Append(IsWs(c) ? 1 : 0);
+        }
+        o.Append(' ');
+        foreach (int c in new int[]{34, 59, 64, 94, 96, 126, 40, 41, 91, 93, 123, 125, 92, 35, 39, 37, 97}) {
+            o.Append(IsTerm(c) ? 1 : 0);
+        }
+        o.Append(' ');
+        foreach (int c in new int[]{47, 48, 57, 58}) {
+            o.Append(IsDigit(c) ? 1 : 0);
+        }
+        o.Append(' ');
+        foreach (int c in new int[]{48, 57, 97, 102, 65, 70, 47, 103, 71}) {
+            o.Append(HexDigit(c)).Append(' ');
+        }
+        foreach (long n in new long[]{-1, 0, 55295, 55296, 57343, 57344, 1114111, 1114112}) {
+            o.Append(IsScalar(n) ? 1 : 0);
+        }
+        o.Append(' ');
+        foreach (long n in new long[]{0, -1, 1, -2, 2, 3000000000L, -3000000000L}) {
+            o.Append(Zigzag(n)).Append(' ');
+        }
+        System.Console.WriteLine(o.ToString());
+    }
+--expect
+1111110 11111111111110000 0110 0 9 10 15 10 15 16 16 16 01100110 0 1 2 3 4 6000000000 5999999999
+--expect-why
+COMPUTED BY A SECOND READER: a short Python script re-implementing each
+function from `readconst.kin`'s own text (not derived from, or run against,
+any of the three generated targets) and fed the probe's exact inputs in the
+exact order the probe concatenates them.
+
+FIELD 1 (is-ws), one bit per [32 9 10 13 12 44 65]: the doc names space, tab,
+newline, return, form feed and the comma as whitespace -- the first six are
+1 -- and the ordinary letter 'A' (65) is not, so the field is "1111110".
+
+FIELD 2 (is-term), one bit per
+[34 59 64 94 96 126 40 41 91 93 123 125 92 35 39 37 97]: the thirteen listed
+bytes are all 1; '#' (35), '\'' (39) and '%' (37) are the three bytes the doc
+says Clojure's `isTerminatingMacro` leaves OUT, and 'a' (97) is an ordinary
+letter -- four 0s. "1111111111111" + "0000".
+
+FIELD 3 (is-digit) for [47 48 57 58]: '/' (47) and ':' (58) are one byte
+outside '0'..'9' on either side -- "0110".
+
+FIELD 4 (hex-digit) for [48 57 97 102 65 70 47 103 71]: '0'->0, '9'->9,
+'a'->10, 'f'->15, 'A'->10, 'F'->15, and three non-hex bytes ('/' one below
+'0', 'g' one past 'f', 'G' one past 'F') all answer the sentinel 16 --
+"0 9 10 15 10 15 16 16 16 " (each with its own trailing space, which is also
+what separates this field from the next without an extra space in the
+source).
+
+FIELD 5 (is-scalar) for [-1 0 55295 55296 57343 57344 1114111 1114112]:
+-1 is out of range (0); 0 and 55295 are in range and below the surrogate hole
+(1 each); 55296 and 57343 are the two ends of the surrogate hole D800..DFFF,
+both INCLUSIVE (0 each -- the guard is `n < 55296 or n > 57343`, so neither
+boundary itself is a scalar); 57344 and 1114111 are back in range above the
+hole (1 each); 1114112 is one past the top of Unicode (0). "01100110".
+
+FIELD 6 (zigzag) for [0 -1 1 -2 2 3000000000 -3000000000]: 0->0 (2*0),
+-1->1 (-2*-1-1 = 2-1), 1->2 (2*1), -2->3 (-2*-2-1 = 4-1), 2->4 (2*2),
+3000000000->6000000000 (2*3000000000, past the range of a 32-bit int -- a
+port that narrowed the multiply to 32 bits would print a wrapped or negative
+value here instead), -3000000000->5999999999 (-2*-3000000000-1 =
+6000000000-1). "0 1 2 3 4 6000000000 5999999999 ".
+
+Concatenated in the order the probe builds them, with the separators the
+probe itself inserts (a single explicit space between fields 1-2, 2-3 and
+3-4; no explicit space between 4 and 5, because field 4's own per-element
+format already ends in a space; one explicit space between 5 and 6), the
+result is exactly the line in `--expect`.

@@ -18,6 +18,7 @@ mod deps;
 mod depscmd;
 mod pod;
 mod policy;
+mod read;
 mod resolve;
 mod script;
 mod serve;
@@ -28,6 +29,8 @@ mod snapstream_test;
 mod control_test;
 #[cfg(test)]
 mod compile_call_test;
+#[cfg(test)]
+mod kin_reader_test;
 
 use anyhow::{bail, Context, Result};
 use flint_rt::native::Program;

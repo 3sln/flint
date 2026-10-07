@@ -14935,7 +14935,8 @@ modes of `main` still serve every door. What proves it, and how:
   worktree; `nbody` now reaches 9 namespaces in 3 waves, the control plane's
   four fewer. The port adapter uses only `flint.port/send`/`receive`, nothing
   the call loop's `var-named` restriction touches.
-Step 1 (one reader) and steps 3 to 8 are not built. The rest of this section was
+Step 1's first sub-step (the kin reader and encoder) is built -- see §8
+step 1 for what proves it; the rest of step 1 and steps 3 to 8 are not. The rest of this section was
 written against `6d8ea376` and assumes the `flint-seal` work
 has landed first: the system thread gets the system port as `boot`'s argument,
 `flint.rt/system-port` is gone, the runtime answers the host's snapshot
@@ -15764,6 +15765,43 @@ sizes are estimates from reading the code, not measurements.
    3. the test suites' babashka arms moved to clj;
    4. `src/flint/reader.cljc` and babashka support for the compiler deleted.
    In step 2 `bin/flint`'s babashka resolver may keep using `reader.cljc`.
+
+   **Sub-step 1 BUILT 2026-10-07** (branch `kin-reader`): `kin/readconst.kin`,
+   `readcore`, `readnum`, `readtext`, `readsq`, `readform` and `formsenc`,
+   generated into all three runtimes; the entry is `read-forms` (`Rt::read_forms`,
+   `Formsenc.readForms`, `Formsenc.ReadForms`): text, file, features (nil for
+   a deferred read), tags, dialect and the first gensym number in; `flint.forms`
+   bytes with `:opts {:file :features :tags :dialect}` out, or `[message line
+   column plain]`. The DIALECT is an argument and travels in the bytes; the
+   reader never derives it from a path. The reader builds heap values with the
+   runtime's own operations and the encoder walks them, because a set literal,
+   an author's metadata and every merged position map encode in CHAMP order,
+   and building the same values the same way is the only exact route to that
+   order. *What proves it:* `bin/check-reader` (a `bin/test` section), measured
+   2026-10-07: 163 files (`lib/`, `src/`, `corpus/`, `test/**.cljc|.fln`,
+   including the new `test/reader/` fixtures -- one `.fln`, a `#!` line, every
+   literal kind, and 21 error files) x 3 option sets (deferred, default
+   features, `[perf]` features) = 489 reads, every one byte-identical to the
+   guest's `flint.reader` + `flint.forms/encode` (run in the embedded compiler
+   through `preread` mode, which gained `:features` and `:guard`), and the 59
+   that fail fail with the same message -- on native, on the JVM and on the
+   CLR. The guard was made to fail on purpose: one tag byte changed in the
+   generated Rust encoder turned all three reads of `test/reader/tricky.cljc`
+   red. NOT yet shown on wasm: the wasm runtime compiles the same Rust, but no
+   export reaches `read_forms` until the ESM door reads (step 2), so wasm is
+   claimed by construction only. `test/reader_test.clj` still runs on
+   `reader.cljc` (it is babashka, which cannot call a generated reader).
+
+   *Open, found building it:* an AUTO-GENSYM (`x#`) is not a function of the
+   text. The guest's reader called `gensym`, whose counter belongs to the
+   process, so a file's `x__N` depended on whatever ran first; the kin reader
+   numbers from the `gensym0` it is given. Measured: identical when the guest's
+   counter is fresh (a one-file read gives `x__1` both ways), different in a
+   batch. Numbering per read makes two files' templates able to share a name
+   (`a__1`), which is a hygiene hazard when one macro's expansion is passed into
+   another's. No file in the sweep has an auto-gensym, so no image changes
+   today; the choice of a hygienic per-read scheme (a file-unique suffix, or a
+   marker the analyzer numbers as it does `syntax-quoted`) is the maintainer's.
 2. **`flint.selfhost/compile`**, taking the request map and answering data
    (§1). The old `main` modes become thin wrappers that build the same map,
    so no door changes. *Gate:* `bb test/door-agreement.clj`,

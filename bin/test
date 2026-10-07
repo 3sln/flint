@@ -260,6 +260,12 @@ fi
 grep -E "^test result|corpus compiles" /tmp/flint-compile-call.out
 bb test/resolver-protocol.clj || fail "test/resolver-protocol.clj"
 
+# THE ONE READER (`DECISIONS.md#namespaces-over-the-system-port`, step 1): the
+# kin-generated reader and `flint.forms` encoder, on native, the JVM and the
+# CLR, byte-identical to the guest's over every source under three option sets.
+sec "the kin reader: byte-identical to the guest's on three runtimes"
+./bin/check-reader || fail "bin/check-reader"
+
 echo
 sec "units: the PRODUCTION build (no diagnostic machinery -- 0016)"
 ./bin/build-units >/dev/null 2>&1 || fail "build-units"
