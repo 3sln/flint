@@ -15393,6 +15393,25 @@ development build: `project-roots` only adds it as a root when the
 `:flint/check` feature is set, which is a build-time choice the SAME
 `stdextra()`-shaped mechanism can express, not an unconditional need.
 
+**2026-10-06: this list and its "8 of 36 / 28 of 36" count are stale, same
+day.** `flint.fs` and `flint.snapshot`, two of the 28 named above, are
+deleted (`DECISIONS.md#flint-fs-is-gone`, `DECISIONS.md#flint-snapshot-is-shelved`);
+the closure was not re-run, so the count here should read 26 of 34, not 28 of
+36, until someone does. Separately (`DECISIONS.md#flint-deps-is-its-own-workspace`),
+`flint.deps` and its three siblings move to their own workspace, which this
+section does not mention and is a DIFFERENT axis from the one it measures.
+`flint.deps`/`flint.deps.manifest`/`flint.deps.registry` fit "stdextra"
+exactly as described -- pure, portable, composable by any host that wants
+them. `flint.deps.resolve` nominally fits the same slot but its only real
+caller is `flint.deps.npm`/`-git`/`-mvn`, virtual namespaces that ONLY the
+native and npm CLIs serve (`DECISIONS.md#flint-deps-is-its-own-workspace`'s
+portability survey) -- a JVM or CLR host, or any host composing a plain
+`stdextra()`, could link it and would fail the moment it actually called out.
+stdcore/stdextra asks "required or optional"; whether a namespace can
+SUCCEED on a given target is the separate question the portability survey
+below answers, and "fits stdextra, portable only through the CLIs" is
+`flint.deps.resolve`'s honest position in both schemes at once.
+
 **`clojure.core`'s verdict, with the evidence asked for.** It is NOT reached
 by any `:require` edge from the call loop or from `flint.port`/`flint.wire`
 themselves -- none of those three names it. It is a root purely because
@@ -16454,3 +16473,150 @@ decision does for now, because (a) is a compiler change to the analyzer's
 notion of where a form "is", untested here and bigger than this task's
 scope. `flint.virtual`'s docstring already explains it is machinery with no
 job for user source; that remains the only guard.
+
+## flint-deps-is-its-own-workspace
+
+**`flint.deps`, `flint.deps.manifest`, `flint.deps.registry` and
+`flint.deps.resolve` move from the stdlib's blanket `flint/flint` workspace to
+their own, `flint/deps`, with no grant. `flint.deps.manifest` and
+`flint.deps.registry` are also marked `^:internal`; `flint.deps` and
+`flint.deps.resolve` stay public.**
+
+**Ratified:** ☐ not signed off
+
+**Status: shipped — verified 2026-10-06 on the native CLI by two adversarial
+probes (below) against a binary built from this change.**
+
+**Why a separate workspace at all.** Every `lib/` file inherits
+`flint/flint`'s grant, `[:host]`, by nothing more than living under `lib/`
+(`lib/deps.edn`). Surveyed what the four `flint.deps*` files actually call:
+`flint.deps`, `flint.deps.manifest` and `flint.deps.registry` require only
+`clojure.edn`/`clojure.string` -- no `flint.host`, no `flint.rt/request`, no
+virtual namespace. `flint.deps.resolve` additionally requires the virtual
+`flint.deps.npm`/`-git`/`-mvn`, but reaching a virtual namespace is gated by
+a RUNTIME `:with` grant the host checks when the port opens
+(`doc/api-review.md`'s "Served, not linked" section: "Gated by `:with
+[deps]`"), not by this compile-time workspace mechanism. So none of the four
+needs `:host`, and `flint/deps`'s `deps.edn` (`lib/flint/deps/deps.edn`)
+grants nothing -- the four files stop inheriting a capability they never
+asked for and never used.
+
+**Visibility, probed rather than assumed from the doc's evidence lines.**
+`doc/api-review.md`'s own counts say `flint.deps.manifest` and
+`flint.deps.registry` are "required only within `flint.deps.*`" and
+`flint.deps.resolve` is "required by nothing in `lib`; reached by the CLI" --
+reading the last one as a reason to mark it `^:internal` was the candidate
+`DECISIONS.md#namespace-is-workspace-local` left unmarked. Checked how the
+CLI actually reaches it: `cli/src/depscmd.rs` compiles small glue programs
+(`depsadd`, `depsview`, `depsbump`, `depsagree`) that `(:require
+[flint.deps.resolve :as r])` from THEIR OWN namespace, each in its own temp
+directory with no `deps.edn` of its own -- the anonymous workspace, not
+`flint/deps`. Marking `flint.deps.resolve` `^:internal` would refuse `flint
+deps add`/`view`/`bump`/`agree` at compile time: the exact shape
+`DECISIONS.md#flint-virtual-stays-public` found and proved for
+`flint.virtual`, found here by reading `cli/src/depscmd.rs` first instead of
+rebuilding to find out the hard way. `flint.deps.manifest` and
+`flint.deps.registry` have no such caller -- grepped `cli/src/*.rs` and
+`sdks/cli/src/*.mjs` for both names, found only `flint.deps.resolve` named
+directly by glue code -- so those two are marked `^:internal` and
+`flint.deps`/`flint.deps.resolve` stay public.
+
+**Probed on the native CLI, both directions, after `bin/build-dist` then
+`cargo build --release -p flint-cli` (`AGENTS.md` §3's order):**
+
+    $ flint run :path <plain project, no deps.edn> :fn entry/main   # entry requires flint.cli
+    ok                                                              # flint.cli -> flint.deps: public, cross-workspace, works
+
+    $ flint run :path <plain project, no deps.edn> :fn entry/main   # entry requires flint.deps.manifest directly
+    Error: ... flint.deps.manifest/package-json is internal to flint/deps
+    (its namespace, flint.deps.manifest, is marked ^internal); this program
+    is outside it
+
+**Four doors, each with its own copy, same shape `AGENTS.md` names for the
+stdlib's own `deps.edn`:**
+
+* `lib/flint/deps/deps.edn` is the one new fact (`{:flint/workspace
+  flint/deps}`), governing all FOUR files by NAMESPACE PREFIX
+  (`"flint/deps"`, no trailing slash) rather than by directory containment --
+  `flint.deps` itself is `lib/flint/deps.cljc`, a file beside this directory,
+  not inside it, so a slash-terminated prefix would miss it.
+* **Native CLI**: `cli/build.rs` embeds it as `DEPS_WORKSPACE_DEPS`
+  (alongside the existing `STDLIB_DEPS`); `cli/src/main.rs` pushes a
+  `WsEntry` for prefix `"flint/deps"` before the existing `["clojure/",
+  "flint/"]` loop (first matching prefix wins).
+* **npm/wasm SDK** (`sdks/esm/src/flint.js`): `collectSources` pushes `{
+  prefix: 'flint/deps', name: 'flint/deps' }` before the existing
+  `clojure/`/`flint/` pushes. This door never reads `deps.edn` files at
+  all -- it hardcodes the same facts `lib/deps.edn` states, by convention
+  ("KEEP THIS THE SAME SENTENCE AS `lib/deps.edn`") -- so the new entry is a
+  literal here too, not a file read.
+* **THE THIRD DOOR, found while implementing this and not in the task's own
+  list of places to check: `sdks/cli`, the npm CLI's OWN spec builder**
+  (`sdks/cli/src/spec.mjs`), independent of `sdks/esm/src/flint.js`'s
+  `collectSources` despite both existing to answer the same question. It
+  reads `dist/lib-deps.edn`, copied from `lib/deps.edn` by `sdks/cli/build` --
+  exactly the copy `AGENTS.md` §3 already warns is its own door, untouched by
+  `bin/build-dist` or `cargo build`. Missing this one would have left the npm
+  CLI compiling `flint.deps.*` into the blanket workspace while the native
+  CLI and the ESM SDK agreed on the new one -- a door disagreement
+  indistinguishable from a bug, the exact failure mode `AGENTS.md` §1
+  describes. Fixed the same way: `sdks/cli/build` now also copies
+  `lib/flint/deps/deps.edn` to `dist/flint-deps-deps.edn`;
+  `artifacts.mjs` reads it as `depsWorkspaceDeps()`; `spec.mjs`'s
+  `buildSpec` takes a `depsWorkspaceDeps` param and pushes the `flint/deps`
+  entry before `clojure/`/`flint/`, same as the other two; `cli.mjs`'s six
+  call sites pass it through.
+* **`bin/flint`** cannot do this by directory root the way its own
+  `project-of`/`root-of` otherwise works, because `flint.deps` is a FILE
+  (`lib/flint/deps.cljc`) beside the directory (`lib/flint/deps/`) its
+  siblings live in -- the two cannot share a directory-based root without
+  ALSO pulling in every other unrelated file in `lib/flint/`. Fixed in
+  `root-of` itself: when the matched root is the plain `lib` root and the
+  file's path contains `/lib/flint/deps.cljc` or `/lib/flint/deps/`, the
+  returned root is one path segment deeper (`lib/flint/deps`), so
+  `project-of` reads `lib/flint/deps/deps.edn` instead of `lib/deps.edn` for
+  exactly those four files and nothing else in `lib/flint/`.
+* **JVM and CLR have no fifth door to patch**: `runtimes/jvm` and
+  `runtimes/clr` name `flint.deps` nowhere (`grep -rln "flint.deps"
+  runtimes/` is empty) -- they never compile these namespaces at all, so
+  there is no workspace table for them to disagree about.
+
+**Where this sits in `stdcore`/`stdextra`** (`DECISIONS.md#namespaces-over-the-system-port`):
+recorded there rather than repeated here, because that is where the
+survey and its own stale count live. Short version: `flint.deps`,
+`flint.deps.manifest` and `flint.deps.registry` fit `stdextra` exactly as
+defined -- pure, portable, optional. `flint.deps.resolve` fits the same slot
+by the same test but only SUCCEEDS on a host that serves
+`flint.deps.npm`/`-git`/`-mvn`, which today is only the native and npm CLIs --
+a different axis (can it run here) from stdcore/stdextra's (is it required),
+and the one the portability item below answers in full.
+
+**A flaky run, not a regression -- kept here rather than deleted because the
+distinction is the point of this section's own advice.** `bb test/cli.clj`
+showed 9 failures on one run, all transitive-fetch checks (maven/npm/local-root
+builds) failing with `ENOENT: ... out/app.wasm`, i.e. a build that never
+wrote its output. The machine was at load average 50-83 throughout (many
+unrelated agents on unrelated worktrees). A direct, unhurried reproduction of
+the `:local/root` case outside the test harness built clean, and a second
+full `bb test/cli.clj` run immediately after, no code changed, came back
+`cli: ok` -- zero failures, same binary, same tree. Treated as contention
+(a `ProcessBuilder`-spawned `bin/flint` losing a race for a file descriptor
+or a process slot under that load, not a logic error), consistent with
+`AGENTS.md` §3's "a test that fails on a port but passes on native right
+after a native change" being one of the two shapes that mean check freshness
+first -- the general shape, load rather than staleness, applies the same
+test.
+
+**A REAL door disagreement, caught by the right test and fixed by the right
+build.** `bb test/door-agreement.clj` failed for real: `:to :llvm` plain and
+`:optimize [perf]` disagreed, naming `npm`. Cause was exactly `AGENTS.md`'s
+own warning about the THIRD DOOR -- `sdks/cli/build` had not been run since
+`sdks/cli/src/spec.mjs`/`artifacts.mjs`/`cli.mjs` changed, so `sdks/cli/dist/`
+was still carrying the stdlib's OLD workspace table and `sdks/cli/bin/flint.mjs`
+was compiling `flint.deps.*` into `flint/flint` while the native CLI and `bb`
+had already moved it to `flint/deps` -- a door disagreement that reads
+exactly like the bug being chased, because it is the shape this file's own
+`AGENTS.md` citation predicts. Ran `./sdks/cli/build` (which also runs
+`sdks/cli/selftest.mjs`, itself green: "byte-identical to the native CLI"
+across plain, `[perf]`, `:checks`, a script, `:to :clr`, `:to :jvm`) and
+reran `bb test/door-agreement.clj`: clean.

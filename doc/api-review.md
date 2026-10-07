@@ -215,7 +215,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Is this public?** Required by 0 compiled test program(s), 2 other `lib` namespace(s), named 0 time(s) in README. **This row read "1 other" and "Required only by other `flint.deps.*` namespaces" until 2026-09-26, and both were wrong.** The two requirers are `lib/flint/deps/resolve.cljc` — which is the `flint.deps.*` family — and `lib/flint/cli.cljc`, which is not: the project surface `bin/flint` is thin over depends on this namespace. "Used only within its own family" reads as internal and was the conclusion a reviewer would have acted on; "the CLI's own surface requires it" is a different answer to the same question. Tooling for reading `deps.edn`.
 
-**Change requests:** _none recorded_
+**Change requests:** **Stays public.** `flint.cli` requires it directly from a different workspace (`flint/flint`, below), which is exactly the case `DECISIONS.md#namespace-is-workspace-local`'s candidate list already excluded it from marking `^:internal` for. 2026-10-06: it (and its three siblings) now have their OWN workspace, `flint/deps`, separate from the stdlib's blanket `flint/flint` (`DECISIONS.md#flint-deps-is-its-own-workspace`) — a different mechanism from `^:internal`, and one that does not restrict who may call a PUBLIC var in it.
 
 ## flint.deps.manifest
 
@@ -225,7 +225,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Is this public?** Required by 0 compiled test program(s), 2 other `lib` namespace(s), named 0 time(s) in README. Required only within `flint.deps.*`. Tooling.
 
-**Change requests:** _none recorded_
+**Change requests:** **Marked `^:internal` 2026-10-06** (`DECISIONS.md#flint-deps-is-its-own-workspace`): checked for an external caller beyond the two `lib` namespaces this row already counts (the `flint.deps.resolve` CLI glue in `cli/src/depscmd.rs` requires `flint.deps.resolve` directly but never `flint.deps.manifest`), found none, and it is now workspace-local to `flint/deps`.
 
 ## flint.deps.registry
 
@@ -235,7 +235,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Is this public?** Required by 0 compiled test program(s), 1 other `lib` namespace(s), named 0 time(s) in README. Required only within `flint.deps.*`. Tooling.
 
-**Change requests:** _none recorded_
+**Change requests:** **Marked `^:internal` 2026-10-06**, same evidence and same workspace as `flint.deps.manifest` above (`DECISIONS.md#flint-deps-is-its-own-workspace`).
 
 ## flint.deps.resolve
 
@@ -245,7 +245,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. Required by nothing in `lib`; reached by the CLI. Tooling.
 
-**Change requests:** _none recorded_
+**Change requests:** **Stays public — checked, not assumed.** "Reached by the CLI" undersells how: `cli/src/depscmd.rs` compiles small glue programs (`depsadd`, `depsview`, `depsbump`, `depsagree`) that `:require [flint.deps.resolve :as r]` from THEIR OWN namespace, each in its own temp directory with no `deps.edn` — the anonymous workspace, not `flint/deps`. Marking `flint.deps.resolve` `^:internal` would refuse `flint deps add`/`view`/`bump`/`agree` at compile time, the same shape `DECISIONS.md#flint-virtual-stays-public` found for `flint.virtual`. It is in the new `flint/deps` workspace (`DECISIONS.md#flint-deps-is-its-own-workspace`) but left public.
 
 ## flint.doc
 

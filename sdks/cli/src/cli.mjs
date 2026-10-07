@@ -22,6 +22,7 @@ function isFile(p) {
 import { instantiate } from '../dist/guest.js';
 import {
   compilerWasm, runtimeWasm, runtimeAotWasm, slots, slotsAot, stdlib, stdlibDeps,
+  depsWorkspaceDeps,
 } from './artifacts.mjs';
 import { buildSpec, testRoots, scriptSpec } from './spec.mjs';
 import { Policy } from './policy.mjs';
@@ -109,7 +110,7 @@ export function compileBytes(srcs, entry, optimize, to, meta,
   const aot = wantsAot(optimize);
   const spec = buildSpec({
     srcs, entry, slots: aot ? slotsAot() : slots(), aot, shake: true, meta, roots: null,
-    stdlib: stdlib(), stdlibDeps: stdlibDeps(),
+    stdlib: stdlib(), stdlibDeps: stdlibDeps(), depsWorkspaceDeps: depsWorkspaceDeps(),
     stripChecks: stripChecks(optimize, checks), exports, features,
   });
   return b64decode(runCompiler(['wasm', spec, b64encode(aot ? runtimeAotWasm() : runtimeWasm())]).trim());
@@ -134,7 +135,7 @@ function compileLlvmText(srcs, entry, optimize,
   const aot = wantsAot(optimize);
   const spec = buildSpec({
     srcs, entry, slots: slots(), aot, shake: false, meta: [], roots: null,
-    stdlib: stdlib(), stdlibDeps: stdlibDeps(),
+    stdlib: stdlib(), stdlibDeps: stdlibDeps(), depsWorkspaceDeps: depsWorkspaceDeps(),
     stripChecks: stripChecks(optimize, checks), exports, features,
   });
   const out = runCompiler(['llvm', spec]);
@@ -166,7 +167,7 @@ function compileClrBytes(srcs, entry, optimize, meta,
   const aot = wantsAot(optimize);
   const spec = buildSpec({
     srcs, entry, slots: slots(), aot, shake: false, meta, roots: null,
-    stdlib: stdlib(), stdlibDeps: stdlibDeps(),
+    stdlib: stdlib(), stdlibDeps: stdlibDeps(), depsWorkspaceDeps: depsWorkspaceDeps(),
     stripChecks: stripChecks(optimize, checks), exports, features,
   });
   const asm = b64decode(runCompiler(['clr', spec, String(name ?? '')]).trim());
@@ -199,7 +200,7 @@ function compileJvmBytes(srcs, entry, optimize, meta, name,
   const aot = wantsAot(optimize);
   const spec = buildSpec({
     srcs, entry, slots: slots(), aot, shake: false, meta, roots: null,
-    stdlib: stdlib(), stdlibDeps: stdlibDeps(),
+    stdlib: stdlib(), stdlibDeps: stdlibDeps(), depsWorkspaceDeps: depsWorkspaceDeps(),
     stripChecks: stripChecks(optimize, checks), exports, features,
   });
   const klass = b64decode(runCompiler(['jvm', spec, '', String(name ?? '')]).trim());
@@ -283,7 +284,7 @@ export function compile(srcs, entry, outPath, optimize, to, meta,
   const base = aot ? runtimeAotWasm() : runtimeWasm();
   const spec = buildSpec({
     srcs, entry, slots: table, aot, shake: true, meta, roots: null,
-    stdlib: stdlib(), stdlibDeps: stdlibDeps(),
+    stdlib: stdlib(), stdlibDeps: stdlibDeps(), depsWorkspaceDeps: depsWorkspaceDeps(),
     stripChecks: stripChecks(optimize, checks), features,
   });
   const out = runCompiler(['wasm', spec, b64encode(base)]);
@@ -314,7 +315,7 @@ export function runSource(srcs, entry, args, caps, roots,
                           { quiet = false, stripChecks: strip = false } = {}) {
   const spec = buildSpec({
     srcs, entry, slots: slots(), aot: false, shake: true, meta: [], roots,
-    stdlib: stdlib(), stdlibDeps: stdlibDeps(),
+    stdlib: stdlib(), stdlibDeps: stdlibDeps(), depsWorkspaceDeps: depsWorkspaceDeps(),
     // THE HALF OF `:optimize` A RUN CAN HONOUR. `:optimize [perf]` means two
     // things on `compile` -- compile every arity, and strip
     // `#?(:flint/check ..)` -- and `run` was honouring neither while reporting

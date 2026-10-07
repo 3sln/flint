@@ -1,4 +1,4 @@
-(ns flint.deps.manifest
+(ns ^:internal flint.deps.manifest
   "Manifest SCANNERS: what a package that is already on disk says it depends on
   (`DECISIONS.md#one-dependency-walk`).
 

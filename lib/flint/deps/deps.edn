@@ -1,0 +1,26 @@
+;; flint.deps's own workspace, separate from the stdlib's blanket flint/flint
+;; (`DECISIONS.md#flint-deps-is-its-own-workspace`).
+;;
+;; GOVERNS FOUR FILES BY NAMESPACE PREFIX ("flint/deps"), not by directory
+;; containment: `flint.deps` itself is `lib/flint/deps.cljc`, a SIBLING of
+;; this directory, not a file inside it. Every door that builds a compile
+;; spec has to read this one file and apply that prefix itself --
+;; `cli/build.rs` + `cli/src/main.rs` (native), `sdks/esm/src/flint.js`
+;; (npm/wasm), and `bin/flint` (bb) -- because workspace identity is assigned
+;; per source ROOT in two of those and per namespace PREFIX in the other two;
+;; see `DECISIONS.md#flint-deps-is-its-own-workspace` for how each applies it
+;; and `AGENTS.md` "one fact, four front doors" for why each needed its own
+;; patch rather than one shared one.
+;;
+;; NO GRANT. `flint.deps`/`flint.deps.manifest`/`flint.deps.registry` are pure
+;; data manipulation (`clojure.edn`/`clojure.string` over `deps.edn`,
+;; `package.json`, `pom.xml`, a registry document) -- no `:host`-guarded
+;; builtin, no virtual namespace require. `flint.deps.resolve` requires the
+;; virtual `flint.deps.npm`/`-git`/`-mvn`, but reaching a virtual namespace is
+;; gated by a RUNTIME `:with` grant the host checks when the port is opened
+;; (`doc/api-review.md`'s "Served, not linked" section), not by this
+;; compile-time workspace mechanism -- so this workspace needs nothing from
+;; `:flint/capabilities-grant` either. Inheriting `flint/flint`'s `[:host]`
+;; for free, as these four files did before this file existed, would have
+;; been a grant none of them asked for.
+{:flint/workspace flint/deps}

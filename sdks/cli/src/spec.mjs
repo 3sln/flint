@@ -88,7 +88,8 @@ function readIfAny(p) {
 /// | `pods` | `[[namespace, [varName, ..]], ..]` for pods this build booted |
 export function buildSpec({
   srcs, entry, slots, aot = false, shake = false, meta = [], roots = null,
-  pods = [], stdlib, stdlibDeps, stripChecks = false, exports = [], features = null,
+  pods = [], stdlib, stdlibDeps, depsWorkspaceDeps, stripChecks = false, exports = [],
+  features = null,
 }) {
   // `:flint/nested` decides whether `flint.ception` is offered at all. Absent from
   // an explicit set, the namespace is not emitted and a program naming it does
@@ -155,6 +156,14 @@ export function buildSpec({
       out += ']} ';
     }
     out += ']} ';
+  }
+  // `flint.deps`'s own workspace, BEFORE the blanket `flint/` entry below
+  // (first match wins). No trailing slash on the prefix: it has to match
+  // both `flint/deps.cljc` (the namespace `flint.deps` itself, a file beside
+  // `flint/deps/`, not in it) and `flint/deps/manifest.cljc` and its
+  // siblings (`DECISIONS.md#flint-deps-is-its-own-workspace`).
+  if (depsWorkspaceDeps) {
+    out += workspaceEntry('flint/deps', readWorkspace(depsWorkspaceDeps), '');
   }
   // THE SOURCE WORKSPACES, after the virtual ones because the first matching
   // prefix wins and `flint/` would otherwise swallow `flint/sys/fs/`.

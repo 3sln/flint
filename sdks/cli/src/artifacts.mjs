@@ -48,3 +48,9 @@ export const stdlib = () =>
 /// what it holds. Without it the package has the library's code and no idea
 /// whose it is -- and a guard that cannot name a workspace never fires.
 export const stdlibDeps = () => once('lib-deps', () => read('lib-deps.edn').toString('utf8'));
+
+/// `flint.deps`'s OWN `deps.edn`, naming ITS workspace
+/// (`DECISIONS.md#flint-deps-is-its-own-workspace`) -- separate from the
+/// blanket one above.
+export const depsWorkspaceDeps = () =>
+  once('flint-deps-deps', () => read('flint-deps-deps.edn').toString('utf8'));
