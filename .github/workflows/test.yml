@@ -94,10 +94,22 @@ jobs:
       # flint is written in portable cljc and bootstraps on babashka; the
       # compiler, the test harness and the differential Clojure check all run
       # under `bb`.
+      #
+      # PINNED to bin/bb-version, not the rolling `latest` alias
+      # (DECISIONS.md#pin-the-babashka-version): `bin/manifest`'s comparison
+      # against `clojure.core` reads the EXECUTING babashka's own published
+      # vars, and a newer babashka changes which internal names it publishes
+      # there. `latest` made `doc/manifest.edn`/README.md/`doc/coverage.md`
+      # regenerate different on Linux CI than on the macOS box that last
+      # generated them, with no source change.
+      - name: Read the pinned babashka version
+        id: bb-version
+        run: echo "version=$(cat bin/bb-version)" >> "$GITHUB_OUTPUT"
+
       - name: Set up babashka
         uses: DeLaGuardo/setup-clojure@13
         with:
-          bb: latest
+          bb: ${{ steps.bb-version.outputs.version }}
 
       # The JVM port. 25 rather than the minimum 24, because `java.lang.classfile`
       # is what the AOT emitter uses and 24 is where it was finalised -- pinning

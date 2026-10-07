@@ -16793,3 +16793,98 @@ exactly like the bug being chased, because it is the shape this file's own
 `sdks/cli/selftest.mjs`, itself green: "byte-identical to the native CLI"
 across plain, `[perf]`, `:checks`, a script, `:to :clr`, `:to :jvm`) and
 reran `bb test/door-agreement.clj`: clean.
+
+## pin-the-babashka-version
+
+**Ratified:** ☐ not signed off
+
+**Status: built 2026-10-07.** `bin/bb-version` (currently `1.3.190`) is read
+by `.github/workflows/test.yml`, `binaries.yml` and `publish.yml` to pin
+`DeLaGuardo/setup-clojure@13`'s `bb:` input, instead of the rolling `latest`
+alias.
+
+### What was decided
+
+Linux gate run 37565583961 (commit `6029082b`) failed `test/manifest.clj`'s
+three generated-file checks -- `doc/manifest.edn is up to date`, `README
+coverage tables are up to date`, `doc/coverage.md is up to date` -- the same
+way across three separate CI runs, while regenerating the same files on a
+macOS box, same tree, produced a byte-for-byte ZERO diff against what is
+committed.
+
+**Reproduced** in a Linux/arm64 Docker container (`--platform linux/arm64`,
+runs natively on Apple Silicon) with babashka installed via the project's
+own `./install` script -- the same mechanism `bb: latest` resolves in CI --
+and Temurin JDK 25, mirroring `test.yml`. The container's babashka installed
+as `v1.13.225`; the macOS box this was compared against runs `v1.3.190`.
+Running `./bin/manifest` and `./bin/readme-tables` against an otherwise
+identical `git archive HEAD` checkout produced a four-symbol diff, entirely
+inside `clojure.core`'s `:absent` list in `doc/manifest.edn` (and so in the
+README table and `doc/coverage.md` derived from it):
+
+```
+425a426
+>     -locking-impl
+474d474
+<     binding-conveyor-fn
+668a669
+>     req!
+692a694
+>     some-vals
+```
+
+**Cause.** `bin/manifest`'s `clojure-publics` function, for `'clojure.core`,
+calls `(require 'clojure.core)` and reads `(ns-publics (find-ns 'clojure.core))`
+-- and because the script runs ON babashka, this inspects babashka's OWN
+bundled `clojure.core` (its sci implementation), not a fixed reference. That is
+already the subject of this script's `babashka-blind-spot` comment ("THE
+BASELINE IS NOT CLOJURE"), but that comment addresses only babashka being
+*incomplete* relative to real Clojure; it does not address babashka's bundled
+`clojure.core` *changing* between babashka releases -- gaining `-locking-impl`,
+`req!` and `some-vals`, losing `binding-conveyor-fn`, between `v1.3.190` and
+`v1.13.225`. None of those four is a name real Clojure 1.12.1 publishes or
+flint defines; they are babashka's own internal-helper churn, leaking into a
+list compared byte-for-byte against a committed file.
+
+This was NOT a sort or locale bug: every manifest value here is already a
+`sorted-map`/`sorted-set` (Java `String/compareTo`, not locale-collated), and
+the diff is four single-line insertions/deletions at the correct alphabetical
+position, not a reordering. `AGENTS.md`'s own suspect list ("directory
+listing order ... locale-dependent sort ... path separators ... tool version")
+named the right category (tool version) under the wrong mechanism (the
+instructions guessed unsorted directory iteration); this correction records
+that the guessed mechanism did not hold so the next reader does not re-chase
+it.
+
+**Fix.** The same shape `DECISIONS.md#pin-the-nightly-toolchain` already
+fixed for the Rust nightly toolchain: pin the moving dependency instead of
+tracking its `latest`, in one file (`bin/bb-version`) that both CI and a
+human regenerating locally can read. `v1.3.190` is the version this was
+verified against -- zero diff on `doc/manifest.edn`, `README.md` and
+`doc/coverage.md` together, both from a direct local macOS run and from a
+fresh Linux/arm64 container with `v1.3.190` installed the same way CI's
+pinned `bb:` input resolves it. A full fix would stop `bin/manifest` from
+depending on the EXECUTING interpreter's own `clojure.core` at all -- the
+four names above are exactly the kind of leak `babashka-blind-spot` was
+already patching around -- but that is a larger change to a script whose
+docstrings show its history of being tuned entry by entry, and out of scope
+for closing this gate's red.
+
+**A test-methodology trap found while verifying, recorded so it is not
+repeated.** An early re-run of this same probe, with babashka pinned to
+`v1.3.190` on Linux, appeared to show the OPPOSITE four-symbol diff --
+`binding-conveyor-fn` gained, the other three lost -- which briefly read as
+"pinning the version doesn't fix it, so the cause is platform, not version."
+It did not hold up: that run reused a Docker bind mount (`-v
+"$PWD/src":/work`) a PRIOR run (with unpinned `latest`) had already written
+`doc/manifest.edn` into, so the "before" copy taken for the second run was
+already the first run's regenerated-with-`latest` output, not the
+git-committed file. Comparing against a fresh `git archive HEAD` extraction
+for every run -- never reusing a mount a prior `./bin/manifest` had already
+written into -- gave the zero-diff result above, reproducibly.
+
+**Risk left open:** the same one `pin-the-nightly-toolchain` names for Rust --
+pinning stops the version from moving unannounced, it does not make the
+generator version-independent. Bumping `bin/bb-version` in the future needs
+`bb test/manifest.clj` run on the bumped version before the bump lands, the
+same discipline a nightly bump already needs.

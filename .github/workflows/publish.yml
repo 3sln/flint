@@ -89,9 +89,15 @@ jobs:
         with:
           key: wasm32-nightly
 
+      # PINNED to bin/bb-version, not the rolling `latest` alias
+      # (DECISIONS.md#pin-the-babashka-version).
+      - name: Read the pinned babashka version
+        id: bb-version
+        run: echo "version=$(cat bin/bb-version)" >> "$GITHUB_OUTPUT"
+
       - uses: DeLaGuardo/setup-clojure@13
         with:
-          bb: latest
+          bb: ${{ steps.bb-version.outputs.version }}
 
       # The whole gate, from the commit being published. It also leaves the
       # tree in the PRODUCTION configuration (DECISIONS.md#two-builds), which is
