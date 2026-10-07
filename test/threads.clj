@@ -563,8 +563,10 @@
             ;; ask any sandbox to export regardless of what the guest
             ;; required, so reachability from the guest's own code is the
             ;; wrong signal to gate it on. Only the diagnostics-only verbatim
-            ;; memcpy capture (`flint.snapshot`, `flint_b_snapshot`) stays a
-            ;; reachability-shaken unit (`test/snapshot.clj`).
+            ;; memcpy capture (`flint.rt/snapshot`, `flint_b_snapshot`) stays a
+            ;; reachability-shaken unit; the `flint.snapshot` wrapper around it
+            ;; and the suite that tested it, `test/snapshot.clj`, are both gone
+            ;; (`DECISIONS.md#flint-snapshot-is-shelved`).
             ;;
             ;; Decomposed, approximately rather than exactly (the two
             ;; measurements are not from the same build): ~41 KB is the
