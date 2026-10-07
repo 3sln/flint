@@ -1958,8 +1958,30 @@ impl Rt {
             // `ports-are-the-hosts` says a sandbox that cannot ask is TOLD so rather than
             // parked. This is the same sentence one phase earlier: it cannot
             // ask HERE, so say that, at the form that asked.
-            if !self.park_on.is_nil() && !self.failed() {
+            //
+            // NOT GUARDED ON `!failed()`. A park travels as `thrown == PARK`
+            // (since `eee5170e` taught `park` to set it, so counting would see
+            // the initialiser as charged rather than free), so `failed()` is
+            // ALREADY true for a genuine park -- the guard this carried before
+            // that commit made this branch dead on exactly the case it exists
+            // for, and the loop fell through to the `self.failed()` return
+            // below with `self.thrown` still `PARK`: the caller read that as
+            // `status == 2` (needs host) rather than a thrown exception, and a
+            // host pump with nobody left to answer it read as wedged. The JVM
+            // and CLR copies (`ensureStarted`/`EnsureStarted`) were written
+            // without this guard from the start and do not have the bug; both
+            // carry a comment saying so. Both halves of the park state are
+            // cleared explicitly here, same as `abandon_current_thread`'s
+            // sibling call below -- the waiter `park_on_port` registered is
+            // the half that actually bites, since the next host answer would
+            // otherwise find it and put this thread back to RUNNABLE on a
+            // stack that is about to be cut back.
+            if !self.park_on.is_nil() {
                 self.park_on = NIL;
+                if self.thrown == crate::value::PARK {
+                    self.thrown = NIL;
+                }
+                self.abandon_current_thread();
                 self.throw_str(
                     "IllegalStateException",
                     "a top-level form asked the host while the program was still \
