@@ -6451,6 +6451,13 @@ An extension makes the claim explicit, and a resolver tag makes it checkable.
   presumptively portable; the rest are `flint.*` and a mix. Which are genuinely
   flint-only is an audit, not a guess.
 
+**2026-10-07:** the audit above is settled for `lib/` as a whole, not
+namespace by namespace -- the maintainer decided the stdlib moves to `.fln`
+in its entirety, and that `defalias` (a new flint-only special form) is
+restricted to `.fln` for the same reason this section restricts any
+flint-only surface; see `DECISIONS.md#namespaces-over-the-system-port`'s
+stdcore/stdextra part.
+
 ### Open, and needing sign-off
 
 * ~~**Ordering.**~~ **Settled 2026-09-22 -- and it was settled in this
@@ -15679,6 +15686,66 @@ moves a file -- surveyed against this tree at `7577a7ce`.
   which was correct for the tree it was written against and is the claim
   this amendment supersedes, not merely restates.
 
+* **2026-10-07 (addendum, and this supersedes the bullet just above, not
+  merely restates it): `clojure.core` is not a root at all -- not even an
+  optional one. It is a library surface, pulled in exactly the way any other
+  namespace is.** The bullet above still special-cases the name inside
+  `project-roots`/`collect-waves` -- a softer root, but still a root. The
+  maintainer's correction: **model the implicit `clojure.core` refer as an
+  implicit REQUIRE EDGE each namespace contributes through its own prelude**,
+  not as anything `project-roots` names ahead of the walk. `prelude-of`
+  (`src/flint/analyzer.cljc` ~95-106) already says what a namespace's prelude
+  is -- `clojure.core`, unconditionally, for a portable `.cljc`; a
+  workspace's own `:flint/prelude` list for a `.fln`
+  (`DECISIONS.md#dialects-and-preludes`) -- so the edge the wave walk follows
+  is exactly that list, read once per namespace alongside its `:require`
+  clauses, rather than a name wired into `project-roots` before the walk
+  starts.
+  * **A namespace that opts out contributes no edge.** `(:refer-clojure
+    :only [])` on a `.cljc`, or a `.fln` workspace prelude that omits
+    `clojure.core`, leaves that namespace's prelude list empty (or without
+    `clojure.core` in it), so nothing asks the resolver for it on that
+    namespace's behalf. **stdcore's four namespaces** (`flint.port`,
+    `flint.wire`, `flint.protocols`, `flint.core`) **need not pull
+    `clojure.core` at all** under this model -- not "optional but still
+    requested" (the bullet above's framing), but genuinely unasked unless
+    some namespace's prelude says to ask.
+  * **`project-roots` keeps only the entry, and the call loop's
+    `flint.port`/`flint.wire`** (unconditional, named by var from
+    `src/flint/callentry.cljc`), **plus `flint.check` when checks are on** --
+    the three cases its own comment already justifies by "the graph does not
+    reach them" (lines ~486-505 above), none of which is `clojure.core`.
+    `clojure.core` is reached, when it is, by the ordinary edge its
+    referrer's prelude contributes -- the same mechanism that already reaches
+    `flint.regex`/`flint.nfa`/`clojure.string` transitively through
+    `clojure.core`'s own `:require`s.
+  * **A program whose namespaces all refer `clojure.core`, against a
+    resolver that cannot answer it, gets the ordinary positioned `:missing`
+    error at the namespace that needed it** -- `app.cljc:3:13`, its prelude
+    edge, like any other unanswered require -- not a special
+    "clojure.core absent" message and not the blanket compile-wide failure
+    every hard root gets today. The position names the REFERRER, because the
+    edge belongs to the referrer, not to a hardcoded list.
+  * **What exists today, and the gap.** `:refer-clojure` is parsed
+    (`src/flint/analyzer.cljc`'s `known-ns-clauses` and `analyze-ns`'s
+    `case`) but its `:exclude`/`:only` list is a no-op today -- the clause's
+    whole arm is `:refer-clojure nil` (`analyze-ns`, ~1737), kept only so a
+    `.cljc` ported from Clojure is not refused for writing a clause flint
+    recognizes; `test/requires.clj`'s own check is titled "`:refer-clojure`
+    is still accepted", not "is honoured". `prelude-of`/`prelude-resolve`
+    (same file, ~95-134) already compute a per-namespace prelude list and are
+    the mechanism this model would read an edge from -- but today that list
+    only gates NAME RESOLUTION inside the analyzer, after `clojure.core` has
+    already been unconditionally resolved and loaded by `project-roots`;
+    nothing today makes the wave walk consult it, and nothing today lets
+    `:refer-clojure :exclude`/`:only` shrink or empty that list -- it is
+    parsed and discarded. Building this model needs two changes, neither
+    built: (a) make `:refer-clojure :only []`/`:exclude [...]`-shaped clauses
+    actually narrow or empty a `.cljc` namespace's prelude entry (today's
+    no-op becomes load-bearing), and (b) teach `collect-waves` to read
+    `prelude-of` per namespace as an additional require-edge source,
+    alongside `:requires`, in place of `project-roots`' hardcoded name.
+
 **"Required to resolve" is not "required to link."** `clojure.core`'s own
 `:require` of `flint.regex` means the WAVE WALK must find source for
 `flint.regex` (and transitively `clojure.string`, `flint.nfa`) for every
@@ -15766,6 +15833,83 @@ eight files (one large, `clojure/core.cljc` at 1 937 lines; the rest under
 the directory split**, for the same reason AGENTS.md §1 gives for every
 other enumerated concept in this tree: a fact in the filesystem cannot drift
 from itself.
+
+**2026-10-07: the maintainer rules on `defalias`'s dialect, and extends
+`DECISIONS.md#dialects-and-preludes` to the stdlib itself.**
+
+* **`defalias` is allowed only in `.fln` namespaces, never in portable
+  `.cljc`.** It has no Clojure meaning -- nothing in Clojure copies
+  `:inlines`/macro-ness/var metadata from one var to another by special
+  form, which is the entire point of the form sketched above -- so a `.cljc`
+  file using it would not mean the same thing read by Clojure's own reader
+  and analyzer. That is exactly the shape `DECISIONS.md#dialects-and-preludes`
+  already draws the dialect line around -- a flint-only reader tag, a symbol
+  only a custom prelude supplies -- so `defalias` joins that list as a third
+  case, checked at the same enforcement point (the reader/resolver, by the
+  file's dialect, not the graph). **The compiler refuses `defalias` outside
+  a `.fln` file with a clear error**, the same posture as the other two.
+* **The stdlib therefore moves to `.fln`.** `clojure.core` needs `defalias`
+  to alias `flint.core.impl`'s vars back out under their public names (the
+  survey above), so `clojure/core.cljc` cannot stay `.cljc` once it uses it.
+  The question is whether only the namespaces that need an alias move, or
+  all of `lib/`. **Recommended: ALL of `lib/` moves to `.fln`** -- one
+  consistent rule rather than a per-file judgement call that the next added
+  namespace has to remember to make correctly (`AGENTS.md §1`'s "one list,
+  not two" problem, here a two-extension split playing the role of the
+  second list). It is also the honest label: flint's `clojure.core` is
+  flint's OWN implementation of the name, not portable Clojure -- it already
+  shadows `when`/`comment` with the bootstrap table (found dead in the
+  survey above) and now also carries alias plumbing Clojure has no concept
+  of -- and nothing else under `lib/` is written to be read by another
+  platform's reader either. `.fln` says what has always been true; `.cljc`
+  said so only by omission.
+
+  **Interplay with the rest of this section and with
+  `#dialects-and-preludes`, recorded for whoever sequences the migration:**
+
+  1. **One churn, not two.** The `lib/stdcore/` + `lib/stdextra/` directory
+     split (just above) and the `.cljc` -> `.fln` rename happen in the SAME
+     move. Both are `git mv`-only changes to the same 36 files; doing them as
+     two separate changes would touch every file's path twice and leave an
+     intermediate tree in neither the old shape nor the new one.
+  2. **The move changes every stdlib file's `:file` metadata, so it needs a
+     deliberate rebaseline, not a comparison against the old tree.** A
+     namespace's `:file` is stamped from the path its reader read, so
+     renaming `lib/clojure/core.cljc` to `lib/stdcore/clojure/core.fln`
+     changes that metadata for all 36 namespaces at once, which changes the
+     embedded stdlib forms and any image whose metadata is compared
+     byte-for-byte alongside its code -- the same class of trap
+     `AGENTS.md §3` names for a stale `dist/`. **Sequence the move after
+     resolver-migration step 1 (the kin reader, §8 below) lands**: step 1 is
+     itself changing how source is read, and stacking a path rename
+     underneath it would conflate two sources of diff in one gate run.
+     Whatever byte-identity harness exists at that point (the corpus sweep,
+     `sdks/cli/selftest.mjs`, or their successors) needs a baseline captured
+     AFTER the move, not compared against a pre-move artefact.
+  3. **`.fln` files pick up the workspace prelude (`prelude-of`) --
+     check, at the time of the move, whether that changes stdlib
+     semantics.** `lib/deps.edn` today declares no `:flint/prelude`, so
+     `prelude-of` falls back to `default-prelude` (`clojure.core`-only) for
+     every file regardless of dialect, and the move changes nothing about
+     stdlib name resolution by itself. But a `.fln` is the only dialect a
+     CUSTOM workspace prelude can ever apply to
+     (`DECISIONS.md#dialects-and-preludes`), so if a prelude is later added
+     to `lib/deps.edn`'s own workspace, every stdlib file (now `.fln`) would
+     pick it up where a `.cljc` sibling would not have -- worth re-checking
+     at whichever point a stdlib-workspace prelude is proposed, not assumed
+     settled by this move. Recorded as a thing to check then, not a finding
+     now: no such prelude exists in this tree today.
+  4. **The dialect check for `defalias` keys on the resolver's answer, never
+     on anything the source asserts.** Consistent with
+     `DECISIONS.md#dialects-and-preludes`'s `:dialect`, "derived from the
+     file's extension by `flint.project/dialect-of`" and threaded through
+     the compile context rather than re-derived: the file's dialect is
+     conferred by whichever reader resolved it (`.fln` vs `.cljc` vs `.clj`),
+     the same way a grant is conferred by whoever answered a resolver
+     request and never by an assertion the caller made about itself
+     (`AGENTS.md §5`). A `.cljc` file has no in-file spelling that lets it
+     use `defalias` anyway, because nothing in-file is consulted for the
+     check -- only the resolver's answer is.
 
 1. **An answer is a function of the namespace name alone, within one
    compile.** No "who is asking" is passed, deliberately. A name that
@@ -16026,6 +16170,26 @@ sizes are estimates from reading the code, not measurements.
    Mostly deletion.
 8. **The snapshot cache**, as its own decision once §7's ordering question is
    answered.
+9. **Stdlib directory split and `.fln` rename, as one `git mv`.** Every
+   `lib/*.cljc` moves under `lib/stdcore/` or `lib/stdextra/` AND is renamed
+   to `.fln` in the same change (§4's "one churn, not two", above);
+   `clojure/core.cljc` additionally grows the `defalias` forms that alias
+   `flint.core.impl`'s vars back out under `clojure.core`'s public names.
+   *Sequencing:* after step 1 (one reader) lands, not folded into it and not
+   blocked on steps 2-8 -- it touches where stdlib source sits and what
+   extension it carries, not the request/resolution machinery those steps
+   build. Follow `AGENTS.md §3`'s build order (`bin/build-dist` before
+   `cargo build`) when rebuilding to check it, since this changes what
+   `dist/stdcore.forms`/`dist/stdextra.forms` contain. *Gate:* the four (plus
+   `cli/build.rs`) path constants named in
+   `DECISIONS.md#dialects-and-preludes`'s "What this collides with" updated
+   to the two new roots; the embedded stdlib forms and any byte-identity
+   harness (the corpus sweep, `sdks/cli/selftest.mjs`) re-baselined fresh
+   rather than compared to a pre-move artefact (§4's interplay note 2,
+   above); the `defalias` special form itself, built and probed as a program
+   per `AGENTS.md §5` (not merely read as sensible), including the
+   `.cljc`-refusal case. Mostly `git mv` on 36 files plus the new special
+   form; estimate not measured.
 
 **Kin or per-runtime.** Nothing here is kin. The compiler side is guest code
 (`src/`), which is already one copy for every runtime. The host side is
