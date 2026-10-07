@@ -1,0 +1,525 @@
+;; SYNTAX QUOTE, as `flint.reader/sq-form` expands it, and the canonical key
+;; `flint.canon` sorts a syntax-quoted map's entries by.
+;;
+;; CONTEXT-FREE (`DECISIONS.md#context-free-reader`): a symbol is LEFT for the
+;; analyzer as `(flint.reader/syntax-quoted f)`, because what `f` names is
+;; compile state. Only what needs no context is decided here -- an auto-gensym
+;; `x#`, a `.method`, a special form.
+;;
+;; THE AUTO-GENSYM IS NUMBERED FROM THE READ, not from a process. The guest's
+;; reader called `gensym`, whose counter is the whole process's: the number a
+;; file's `x#` got depended on everything that had run before the file was
+;; read, which is a reader that is not a function of its text. A host-side
+;; reader has no such counter to share, so the read is given its first number
+;; (`rd-new`'s `gensym0`). Whether that is enough -- two files' templates can
+;; now both name `x__1` -- is recorded as open in
+;; `DECISIONS.md#namespaces-over-the-system-port`.
+;;
+;; A MAP'S ENTRIES ARE SORTED BY `flint.canon/ckey`, a string built the same
+;; way on every runtime -- doubles by their bits, never by their printing --
+;; and compared in UTF-16 order, as the guest's `compare` compares strings.
+(ns flint.rt.readsq
+  (:require [flint.impl.rt :refer [defn declarefn return if let do local set
+                                   while for forever break comment doc not and
+                                   or == != < <= > >= + - * mark push r set-r
+                                   pop-to nil? slot fixnum as-fixnum symbol-of
+                                   as-idx to-i32 to-i64 f64-bits num-f64
+                                   is-double sink-open sink-put
+                                   sink-close sink-string cps-at cps-len
+                                   cps-close str-const
+                                   Rt Value RootIx I32 I64 Bool Sink Cps Cmp StaticText
+                                   NIL TRUE FALSE NOT_FOUND I64_MIN]]
+            [flint.rt.seqcore :refer [is-seq list-from-roots]]
+            [flint.rt.seqwalk :refer [first next seq]]
+            [flint.rt.vecread :refer [is-vector-like vec-count vec-nth]]
+            [flint.rt.mapcore :refer [is-map]]
+            [flint.rt.setcore :refer [is-set]]
+            [flint.rt.collvec :refer [map-entry-vector set-element-vector]]
+            [flint.rt.names :refer [is-symbol is-keyword name-of ns-of]]
+            [flint.rt.ropemeas :refer [is-string]]
+            [flint.rt.ropeflat :refer [s-append]]
+            [flint.rt.ropecmp :refer [str-cmp]]
+            [flint.rt.numkind :refer [is-int]]
+            [flint.rt.dblstr :refer [num-to-str]]
+            [flint.rt.codepoints :refer [code-points]]
+            [flint.rt.mapread :refer [map-get]]
+            [flint.rt.mapwrite :refer [map-assoc]]
+            [flint.rt.readcore :refer [rd-get rd-put rd-int rd-set-int rd-fail-lit lit-symbol lit-symbol1 is-sym1 is-sym2 msg-lit msg-int sink-put-cp]]
+            [flint.rt.readconst :refer [RDS_GENSYMS RDS_GENSYM_N RS_OK]]))
+
+;; --- building lists ---------------------------------------------------------
+
+(doc "Replace the `n` values rooted at `base` with ONE: the list of them.")
+(defn ^:pub ^:method collapse-list [^:mut ^Rt rt ^RootIx base ^I32 n]
+  (let [^Value l (list-from-roots rt base n)]
+    (pop-to rt base)
+    (push rt l)))
+
+;; --- the canonical key ------------------------------------------------------
+
+(declarefn ckey-put)
+
+(doc "Insertion-sort the `n` strings rooted at `base` in UTF-16 order --"
+     "STABLE, as the guest's `sort` is.")
+(defn ^:pub ^:method sort-roots [^:mut ^Rt rt ^RootIx base ^I32 n]
+  (local ^:mut ^I32 i)
+  (set i 1)
+  (while (< i n)
+    (do (local ^:mut ^I32 j)
+        (set j i)
+        (forever
+          (if (== j 0)
+            (break))
+          (let [^Value a (r rt (+ base (as-idx (- j 1))))
+                ^Value b (r rt (+ base (as-idx j)))
+                ^Cmp c (str-cmp rt a b)]
+            (if (<= c 0)
+              (break))
+            (let [^Value lo (r rt (+ base (as-idx (- j 1))))
+                  ^Value hi (r rt (+ base (as-idx j)))]
+              (set-r rt (+ base (as-idx (- j 1))) hi)
+              (set-r rt (+ base (as-idx j)) lo))
+            (set j (- j 1))))
+        (set i (+ i 1)))))
+
+(doc "Append a name's namespace (empty for none), a slash and its name.")
+(defn ^:method ckey-name [^:mut ^Rt rt ^Sink sk ^Value v]
+  (let [^RootIx base (mark rt)
+        ^RootIx vi (push rt v)
+        ^Value nsv (ns-of rt (r rt vi))]
+    (if (not (nil? rt nsv))
+      (s-append rt nsv sk))
+    (sink-put rt sk 47)
+    (let [^Value nm (name-of rt (r rt vi))]
+      (s-append rt nm sk))
+    (pop-to rt base)))
+
+(doc "The elements of the vector `xs`, each keyed and followed by the"
+     "separator; SORTED when `sorted`, which is a set's.")
+(defn ^:method ckey-elements [^:mut ^Rt rt ^Sink sk ^Value xs ^Bool sorted]
+  (let [^RootIx base (mark rt)
+        ^RootIx xi (push rt xs)
+        ^I32 n (vec-count rt (r rt xi))
+        ^RootIx at (+ base 1)]
+    (for [^I32 i 0 n]
+      (let [^Sink ek (sink-open rt)]
+        (ckey-put rt ek (vec-nth rt (r rt xi) i NIL))
+        (sink-put rt ek 31)
+        (let [^Value one (sink-string rt ek)]
+          (sink-close rt ek)
+          (push rt one))))
+    (if sorted
+      (sort-roots rt at n))
+    (for [^I32 k 0 n]
+      (s-append rt (r rt (+ at (as-idx k))) sk))
+    (pop-to rt base)))
+
+(doc "A map's entries, each as `key SEP value SEP`, sorted.")
+(defn ^:method ckey-map [^:mut ^Rt rt ^Sink sk ^Value m]
+  (let [^RootIx base (mark rt)
+        ^Value ev (map-entry-vector rt m)
+        ^RootIx evi (push rt ev)
+        ^I32 n (vec-count rt (r rt evi))
+        ^RootIx at (+ base 1)]
+    (for [^I32 i 0 n]
+      (let [^Value e (vec-nth rt (r rt evi) i NIL)
+            ^RootIx ei (push rt e)
+            ^Sink ek (sink-open rt)]
+        (ckey-put rt ek (slot rt (r rt ei) 0))
+        (sink-put rt ek 31)
+        (ckey-put rt ek (slot rt (r rt ei) 1))
+        (sink-put rt ek 31)
+        (let [^Value one (sink-string rt ek)]
+          (sink-close rt ek)
+          (set-r rt ei one))))
+    (sort-roots rt at n)
+    (for [^I32 k 0 n]
+      (s-append rt (r rt (+ at (as-idx k))) sk))
+    (pop-to rt base)))
+
+(doc "Append `flint.canon/ckey` of `v`.")
+(defn ^:pub ^:method ckey-put [^:mut ^Rt rt ^Sink sk ^Value v]
+  (if (nil? rt v)
+    (do (sink-put rt sk 48) (return)))
+  (if (== v TRUE)
+    (do (sink-put rt sk 49) (sink-put rt sk 116) (return)))
+  (if (== v FALSE)
+    (do (sink-put rt sk 49) (sink-put rt sk 102) (return)))
+  (if (is-int rt v)
+    (let [^Value t (num-to-str rt v)]
+      (sink-put rt sk 50)
+      (s-append rt t sk)
+      (return)))
+  (if (is-double rt v)
+    (let [^I64 bits (f64-bits (num-f64 rt v))]
+      (sink-put rt sk 51)
+      (if (< bits 0)
+        (do (sink-put rt sk 45)
+            (comment "The most negative bit pattern has no positive"
+                     "counterpart, so it is spelled rather than negated.")
+            (if (== bits I64_MIN)
+              (msg-lit rt sk "9223372036854775808")
+              (msg-int rt sk (- 0 bits))))
+        (msg-int rt sk bits))
+      (return)))
+  (if (is-string rt v)
+    (do (sink-put rt sk 52) (s-append rt v sk) (return)))
+  (if (is-keyword rt v)
+    (do (sink-put rt sk 53) (ckey-name rt sk v) (return)))
+  (if (is-symbol rt v)
+    (do (sink-put rt sk 54) (ckey-name rt sk v) (return)))
+  (if (is-vector-like rt v)
+    (do (sink-put rt sk 55) (ckey-elements rt sk v false) (return)))
+  (if (is-set rt v)
+    (let [^Value xs (set-element-vector rt v)]
+      (sink-put rt sk 56)
+      (ckey-elements rt sk xs true)
+      (return)))
+  (if (is-map rt v)
+    (do (sink-put rt sk 57) (ckey-map rt sk v) (return)))
+  (if (is-seq rt v)
+    (let [^RootIx base (mark rt)
+          ^Value s0 (seq rt v)
+          ^RootIx si (push rt s0)]
+      (sink-put rt sk 97)
+      (forever
+        (if (nil? rt (r rt si))
+          (break))
+        (let [^Value x (first rt (r rt si))]
+          (ckey-put rt sk x))
+        (sink-put rt sk 31)
+        (let [^Value nx (next rt (r rt si))]
+          (set-r rt si nx)))
+      (pop-to rt base)
+      (return)))
+  (comment "Only a tagged literal reaches here, and syntax quote refuses the"
+           "one kind the reader makes (`deferred-guard`); its printing is not"
+           "reproduced.")
+  (sink-put rt sk 122))
+
+;; --- syntax quote -----------------------------------------------------------
+
+(doc "Is `f` the list `(head x ..)` for the symbol `ns`/`nm`?")
+(defn ^:method ^Bool headed [^:mut ^Rt rt ^Value f ^StaticText ns ^StaticText nm]
+  (if (not (is-seq rt f))
+    (return false))
+  (let [^Value h (first rt f)]
+    (return (is-sym2 rt h ns nm))))
+
+(doc "The second element of the seq `f`, or nil.")
+(defn ^:method ^Value second-of [^:mut ^Rt rt ^Value f]
+  (let [^Value nx (next rt f)]
+    (if (nil? rt nx)
+      (return NIL))
+    (return (first rt nx))))
+
+(doc "Is `sym` one of the special forms syntax quote leaves unqualified,"
+     "exactly as Clojure does?")
+(defn ^:method ^Bool is-special [^:mut ^Rt rt ^Value sym]
+  (if (is-sym1 rt sym "if") (return true))
+  (if (is-sym1 rt sym "do") (return true))
+  (if (is-sym1 rt sym "let*") (return true))
+  (if (is-sym1 rt sym "loop*") (return true))
+  (if (is-sym1 rt sym "recur") (return true))
+  (if (is-sym1 rt sym "fn*") (return true))
+  (if (is-sym1 rt sym "quote") (return true))
+  (if (is-sym1 rt sym "var") (return true))
+  (if (is-sym1 rt sym "throw") (return true))
+  (if (is-sym1 rt sym "try") (return true))
+  (if (is-sym1 rt sym "catch") (return true))
+  (if (is-sym1 rt sym "finally") (return true))
+  (if (is-sym1 rt sym "def") (return true))
+  (if (is-sym1 rt sym "new") (return true))
+  (if (is-sym1 rt sym "set!") (return true))
+  (if (is-sym1 rt sym ".") (return true))
+  (if (is-sym1 rt sym "&") (return true))
+  (if (is-sym1 rt sym "monitor-enter") (return true))
+  (if (is-sym1 rt sym "monitor-exit") (return true))
+  (if (is-sym1 rt sym "deftype*") (return true))
+  (if (is-sym1 rt sym "reify*") (return true))
+  (if (is-sym1 rt sym "case*") (return true))
+  (if (is-sym1 rt sym "letfn*") (return true))
+  (if (is-sym1 rt sym "ns") (return true))
+  (return false))
+
+(doc "Push `(head x)` for the symbol `ns`/`nm` -- nil for no namespace -- and"
+     "the value rooted at `xi`.")
+(defn ^:method push-pair [^:mut ^Rt rt ^Value head ^RootIx xi]
+  (let [^RootIx base (mark rt)]
+    (push rt head)
+    (push rt (r rt xi))
+    (collapse-list rt base 2)))
+
+(declarefn sq-form)
+
+(doc "A symbol inside syntax quote, pushed: `(quote sym)` for a `.method` or a"
+     "special form, and otherwise `(flint.reader/syntax-quoted sym)` for the"
+     "analyzer.")
+(defn ^:method ^I32 sq-symbol [^:mut ^Rt rt ^RootIx sti ^RootIx fi]
+  (let [^Value nm (name-of rt (r rt fi))
+        ^Cps c (code-points rt nm)
+        ^Bool dotted (and (> (cps-len rt c) 0) (== (cps-at rt c 0) 46))]
+    (cps-close rt c)
+    (if (or (and (nil? rt (ns-of rt (r rt fi))) dotted) (is-special rt (r rt fi)))
+      (let [^Value q (lit-symbol1 rt "quote")]
+        (push-pair rt q fi)
+        (return RS_OK)))
+    (let [^Value sq (lit-symbol rt "flint.reader" "syntax-quoted")]
+      (push-pair rt sq fi)
+      (return RS_OK))))
+
+(doc "An auto-gensym `x#`, pushed as `(quote x__N)`: one name per syntax-quote"
+     "form, the same name for every `x#` in it.")
+(defn ^:method ^I32 sq-gensym [^:mut ^Rt rt ^RootIx sti ^RootIx fi]
+  (let [^Value g (rd-get rt sti RDS_GENSYMS)]
+    (if (nil? rt g)
+      (return (rd-fail-lit rt sti "an auto-gensym inside a syntax quote nested in another cannot be read")))
+    (let [^Value hit (map-get rt g (r rt fi) NOT_FOUND)]
+      (if (!= hit NOT_FOUND)
+        (let [^RootIx hbase (mark rt)
+              ^RootIx hi (push rt hit)
+              ^Value hq (lit-symbol1 rt "quote")]
+          (push-pair rt hq hi)
+          (let [^Value hdone (r rt (+ hbase 1))]
+            (pop-to rt hbase)
+            (push rt hdone))
+          (return RS_OK)))))
+  (let [^RootIx base (mark rt)
+        ^Value nm (name-of rt (r rt fi))
+        ^Cps c (code-points rt nm)
+        ^I32 n (cps-len rt c)
+        ^Sink sk (sink-open rt)]
+    (for [^I32 i 0 (- n 1)]
+      (sink-put-cp rt sk (cps-at rt c i)))
+    (cps-close rt c)
+    (sink-put rt sk 95)
+    (sink-put rt sk 95)
+    (let [^I64 k (rd-int rt sti RDS_GENSYM_N)]
+      (msg-int rt sk k)
+      (rd-set-int rt sti RDS_GENSYM_N (+ k 1)))
+    (let [^Value text (sink-string rt sk)]
+      (sink-close rt sk)
+      (let [^Value s (symbol-of rt NIL text)
+            ^RootIx si (push rt s)
+            ^Value g2 (map-assoc rt (rd-get rt sti RDS_GENSYMS) (r rt fi) (r rt si))]
+        (rd-put rt sti RDS_GENSYMS g2)
+        (let [^Value q (lit-symbol1 rt "quote")]
+          (push-pair rt q si))
+        (let [^Value done (r rt (+ base 1))]
+          (pop-to rt base)
+          (push rt done))
+        (return RS_OK)))))
+
+(doc "`sq-expand-seq` over the values rooted at `at`..`at + n`: each item"
+     "pushed in turn, `(clojure.core/list x)` for an unquote, the form itself"
+     "for an unquote-splicing, and `(clojure.core/list <sq-form>)` otherwise."
+     "Then the whole run is replaced by `(clojure.core/concat ..)` with them.")
+(defn ^:method ^I32 sq-expand [^:mut ^Rt rt ^RootIx sti ^RootIx at ^I32 n]
+  (let [^RootIx out (mark rt)
+        ^Value cc (lit-symbol rt "clojure.core" "concat")]
+    (push rt cc)
+    (for [^I32 i 0 n]
+      (let [^RootIx ii (+ at (as-idx i))]
+        (if (headed rt (r rt ii) "clojure.core" "unquote")
+          (let [^Value l (lit-symbol rt "clojure.core" "list")
+                ^RootIx li (push rt l)
+                ^Value x (second-of rt (r rt ii))]
+            (push rt x)
+            (collapse-list rt li 2))
+          (if (headed rt (r rt ii) "clojure.core" "unquote-splicing")
+            (let [^Value xs (second-of rt (r rt ii))]
+              (push rt xs))
+            (let [^Value l2 (lit-symbol rt "clojure.core" "list")
+                  ^RootIx l2i (push rt l2)
+                  ^I32 st (sq-form rt sti ii)]
+              (if (!= st RS_OK)
+                (do (pop-to rt out)
+                    (return st)))
+              (collapse-list rt l2i 2))))))
+    (collapse-list rt out (+ n 1))
+    (return RS_OK)))
+
+(doc "Push the seq rooted at `fi`'s elements, answering how many.")
+(defn ^:method ^I32 push-seq [^:mut ^Rt rt ^RootIx fi]
+  (local ^:mut ^I32 n)
+  (set n 0)
+  (let [^Value s0 (seq rt (r rt fi))
+        ^RootIx si (push rt s0)]
+    (forever
+      (if (nil? rt (r rt si))
+        (break))
+      (let [^Value x (first rt (r rt si))]
+        (push rt x))
+      (set n (+ n 1))
+      (comment "The seq's slot is BELOW the elements just pushed, so it is"
+               "re-read through its root.")
+      (let [^Value nx (next rt (r rt si))]
+        (set-r rt si nx))))
+  (return n))
+
+(doc "Push the elements of the vector `v` (rooted at `vi`), answering how many.")
+(defn ^:method ^I32 push-vec [^:mut ^Rt rt ^RootIx vi]
+  (let [^I32 n (vec-count rt (r rt vi))]
+    (for [^I32 i 0 n]
+      (let [^Value x (vec-nth rt (r rt vi) i NIL)]
+        (push rt x)))
+    (return n)))
+
+(doc "Wrap what `sq-expand` left on the stack at `at` in `(head <concat>)`"
+     "and move the result down to `base`.")
+(defn ^:method wrap-at [^:mut ^Rt rt ^RootIx base ^RootIx at ^Value head]
+  (let [^RootIx hi (push rt head)
+        ^Value body (r rt at)]
+    (comment "`(head body)`: the head was pushed AFTER the body, so the two"
+             "are pushed again in order.")
+    (push rt (r rt hi))
+    (push rt body)
+    (collapse-list rt (+ hi 1) 2)
+    (let [^Value done (r rt (+ hi 1))]
+      (pop-to rt base)
+      (push rt done))))
+
+(doc "Syntax quote of the form rooted at `fi`, pushed.")
+(defn ^:pub ^:method ^I32 sq-form [^:mut ^Rt rt ^RootIx sti ^RootIx fi]
+  (let [^RootIx base (mark rt)]
+    (if (headed rt (r rt fi) "clojure.core" "unquote")
+      (let [^Value x (second-of rt (r rt fi))]
+        (push rt x)
+        (return RS_OK)))
+    (if (is-symbol rt (r rt fi))
+      (let [^Value nm (name-of rt (r rt fi))
+            ^Cps c (code-points rt nm)
+            ^I32 n (cps-len rt c)
+            ^Bool hashed (and (> n 0) (== (cps-at rt c (- n 1)) 35))]
+        (cps-close rt c)
+        (if hashed
+          (return (sq-gensym rt sti fi)))
+        (return (sq-symbol rt sti fi))))
+    (if (headed rt (r rt fi) "flint.reader" "syntax-quoted")
+      (let [^Value q (lit-symbol1 rt "quote")
+            ^RootIx qi (push rt q)
+            ^Value x (second-of rt (r rt fi))]
+        (push rt x)
+        (collapse-list rt qi 2)
+        (let [^I32 st (sq-form rt sti qi)]
+          (if (!= st RS_OK)
+            (do (pop-to rt base)
+                (return st)))
+          (let [^Value done (r rt (+ qi 1))]
+            (pop-to rt base)
+            (push rt done)
+            (return RS_OK)))))
+    (if (is-seq rt (r rt fi))
+      (let [^I32 n (push-seq rt fi)]
+        (if (== n 0)
+          (let [^Value l (lit-symbol rt "clojure.core" "list")]
+            (pop-to rt base)
+            (push rt l)
+            (collapse-list rt base 1)
+            (return RS_OK)))
+        (let [^RootIx at (+ base 1)
+              ^I32 st (sq-expand rt sti at n)]
+          (if (!= st RS_OK)
+            (do (pop-to rt base)
+                (return st)))
+          (let [^Value h (lit-symbol rt "clojure.core" "seq")]
+            (wrap-at rt base (+ at (as-idx n)) h)
+            (return RS_OK)))))
+    (if (is-vector-like rt (r rt fi))
+      (let [^I32 vn (push-vec rt fi)
+            ^RootIx vat base
+            ^I32 vst (sq-expand rt sti vat vn)]
+        (if (!= vst RS_OK)
+          (do (pop-to rt base)
+              (return vst)))
+        (let [^Value vh (lit-symbol rt "clojure.core" "vec")]
+          (wrap-at rt base (+ vat (as-idx vn)) vh)
+          (return RS_OK))))
+    (if (is-set rt (r rt fi))
+      (let [^Value xs (set-element-vector rt (r rt fi))
+            ^RootIx xsi (push rt xs)
+            ^I32 sn (push-vec rt xsi)
+            ^RootIx sat (+ base 1)
+            ^I32 sst (sq-expand rt sti sat sn)]
+        (if (!= sst RS_OK)
+          (do (pop-to rt base)
+              (return sst)))
+        (let [^Value sh (lit-symbol rt "clojure.core" "set")]
+          (wrap-at rt base (+ sat (as-idx sn)) sh)
+          (return RS_OK))))
+    (comment "A MAP, SORTED BY THE CANONICAL KEY: each entry's key string is"
+             "sorted with the entry's index beside it, and the entries are"
+             "then read back in that order and flattened.")
+    (if (is-map rt (r rt fi))
+      (let [^Value ev (map-entry-vector rt (r rt fi))
+            ^RootIx evi (push rt ev)
+            ^I32 mn (vec-count rt (r rt evi))
+            ^RootIx keys (mark rt)]
+        (for [^I32 i 0 mn]
+          (let [^Value e (vec-nth rt (r rt evi) i NIL)
+                ^RootIx ei (push rt e)
+                ^Sink ek (sink-open rt)]
+            (ckey-put rt ek (slot rt (r rt ei) 0))
+            (sink-put rt ek 31)
+            (ckey-put rt ek (slot rt (r rt ei) 1))
+            (let [^Value ks (sink-string rt ek)]
+              (sink-close rt ek)
+              (set-r rt ei ks))))
+        (comment "Sort the key strings and carry each entry's index beside it:"
+                 "the entries vector is read back by the index afterwards.")
+        (let [^RootIx idx (mark rt)]
+          (for [^I32 j 0 mn]
+            (push rt (fixnum j)))
+          (comment "Insertion sort of `keys` with `idx` moved alongside.")
+          (local ^:mut ^I32 a)
+          (set a 1)
+          (while (< a mn)
+            (do (local ^:mut ^I32 b)
+                (set b a)
+                (forever
+                  (if (== b 0)
+                    (break))
+                  (let [^RootIx p (+ keys (as-idx (- b 1)))
+                        ^RootIx q (+ keys (as-idx b))
+                        ^Cmp cmpv (str-cmp rt (r rt p) (r rt q))]
+                    (if (<= cmpv 0)
+                      (break))
+                    (let [^Value kp (r rt p)
+                          ^Value kq (r rt q)
+                          ^Value ip (r rt (+ idx (as-idx (- b 1))))
+                          ^Value iq (r rt (+ idx (as-idx b)))]
+                      (set-r rt p kq)
+                      (set-r rt q kp)
+                      (set-r rt (+ idx (as-idx (- b 1))) iq)
+                      (set-r rt (+ idx (as-idx b)) ip))
+                    (set b (- b 1))))
+                (set a (+ a 1))))
+          (let [^RootIx flat (mark rt)]
+            (for [^I32 k 0 mn]
+              (let [^I32 which (to-i32 (as-fixnum (r rt (+ idx (as-idx k)))))
+                    ^Value e2 (vec-nth rt (r rt evi) which NIL)
+                    ^RootIx e2i (push rt e2)
+                    ^Value kk (slot rt (r rt e2i) 0)]
+                (set-r rt e2i kk)
+                (let [^Value vv (slot rt (vec-nth rt (r rt evi) which NIL) 1)]
+                  (push rt vv))))
+            (let [^I32 mst (sq-expand rt sti flat (* 2 mn))]
+              (if (!= mst RS_OK)
+                (do (pop-to rt base)
+                    (return mst)))
+              (comment "`(clojure.core/apply clojure.core/hash-map <concat>)`.")
+              (let [^Value body (r rt (+ flat (as-idx (* 2 mn))))
+                    ^RootIx bi (push rt body)
+                    ^RootIx three (mark rt)
+                    ^Value ap (lit-symbol rt "clojure.core" "apply")]
+                (push rt ap)
+                (let [^Value hm (lit-symbol rt "clojure.core" "hash-map")]
+                  (push rt hm))
+                (push rt (r rt bi))
+                (collapse-list rt three 3)
+                (let [^Value done (r rt three)]
+                  (pop-to rt base)
+                  (push rt done)
+                  (return RS_OK))))))))
+    (push rt (r rt fi))
+    (return RS_OK)))

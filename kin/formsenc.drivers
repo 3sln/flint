@@ -1,0 +1,1905 @@
+--rust-head
+// A TOY HEAP modelling just enough of flint's Value space to drive the
+// forms encoder: tagged fixnums/bigints/doubles plus heap objects for
+// strings, symbols, keywords, vectors, lists, sets, maps, map-entries,
+// tagged literals and byte-strings. Metadata lives on the object (symbols,
+// vectors, lists, sets and maps only, matching `own-pos`/`put-value`'s own
+// guard), so `meta-of` is a field read and nothing more.
+//
+// Equality (`val-eq`) is STRUCTURAL and, for a symbol or keyword, ignores
+// metadata -- the comment in `put-bare` ("equality ignores it") is read
+// here as a fact about the host and built in, not re-derived.
+//
+// INTERIOR MUTABILITY, matching the real runtime (`runtime/src/rt.rs`'s
+// `empty_map`/`empty_vec` are `&self`, not `&mut self`): the generated
+// `forms-encode` chains allocation INTO another call's argument --
+// `self.to_transient(self.empty_map())` -- which two mutable borrows behind
+// one `&mut self` cannot do but a `&self` call nested in a reserved
+// `&mut self` can. A `Vec<Obj>` behind `&mut self` throughout, the obvious
+// mock, does not compile against this file for exactly that reason; a
+// `RefCell` per field is what the real runtime's own heap is standing in
+// for here.
+use std::cell::RefCell;
+
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xF000_0000_0000_0000);
+const TRUE: Value = Value(0xF000_0000_0000_0001);
+const FALSE: Value = Value(0xF000_0000_0000_0002);
+const NOT_FOUND: Value = Value(0xF000_0000_0000_0003);
+
+const TAG_HEAP: u64 = 0x1;
+const TAG_DOUBLE: u64 = 0xA;
+const TAG_BIGINT: u64 = 0xB;
+const TAG_FIXNUM: u64 = 0xD;
+
+fn vtag(v: Value) -> u64 { v.0 >> 60 }
+fn vidx(v: Value) -> usize { (v.0 & 0x0FFF_FFFF_FFFF_FFFF) as usize }
+
+impl Value {
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+    fn is_double(self) -> bool { vtag(self) == TAG_DOUBLE }
+    fn fixnum(n: i64) -> Value { Value((TAG_FIXNUM << 60) | ((n as u64) & 0x0000_FFFF_FFFF_FFFF)) }
+    fn as_fixnum(self) -> i64 { ((self.0 << 16) as i64) >> 16 }
+}
+
+const TY_NODE: u8 = 1;
+const TY_STRING: u8 = 2;
+const TY_SYM: u8 = 3;
+const TY_KW: u8 = 4;
+const TY_VEC: u8 = 5;
+const TY_LIST: u8 = 6;
+const TY_SET: u8 = 7;
+const TY_MAP: u8 = 8;
+const TY_ENTRY: u8 = 9;
+const TY_TAGGED: u8 = 10;
+const TY_BYTES: u8 = 11;
+
+struct Obj {
+    ty: u8,
+    slots: Vec<Value>,
+    text: String,
+    ns: Option<String>,
+    meta: Value,
+    bytes: Vec<u8>,
+}
+
+struct Rt {
+    objs: RefCell<Vec<Obj>>,
+    roots: RefCell<Vec<Value>>,
+    bigints: RefCell<Vec<i64>>,
+    doubles: RefCell<Vec<f64>>,
+    sinks: RefCell<Vec<Vec<u8>>>,
+    // `read-top`'s mock script: the pre-built forms it hands back one per
+    // call, per the task's own instruction.
+    script: RefCell<Vec<Value>>,
+    script_pos: RefCell<usize>,
+}
+
+fn zigzag(n: i64) -> i64 { if n < 0 { (-2 * n) - 1 } else { 2 * n } }
+
+
+// --- the constants `kin/readconst.kin` declares, mirrored exactly --------
+const RDS_DEFER: u32 = 10;
+const RDS_CONDS: u32 = 11;
+const RDS_ERRMSG: u32 = 17;
+const RDS_ERRLINE: u32 = 18;
+const RDS_ERRCOL: u32 = 19;
+const RDS_ERRPLAIN: u32 = 20;
+const RS_OK: u32 = 0;
+const RS_EOF: u32 = 1;
+const RS_ERR: u32 = 4;
+const FT_NIL: u32 = 0;
+const FT_TRUE: u32 = 1;
+const FT_FALSE: u32 = 2;
+const FT_INT: u32 = 3;
+const FT_NEG: u32 = 4;
+const FT_NUM: u32 = 5;
+const FT_STR: u32 = 6;
+const FT_NAME: u32 = 7;
+const FT_LIST: u32 = 8;
+const FT_VEC: u32 = 9;
+const FT_MAP: u32 = 10;
+const FT_SET: u32 = 11;
+const FT_TAGGED: u32 = 12;
+const FT_META: u32 = 13;
+const FT_POS: u32 = 14;
+const FT_POS_SYM: u32 = 15;
+const FF_CP_DERIVED: u32 = 1;
+const FF_CP_FULL: u32 = 2;
+const FF_EXTRA: u32 = 4;
+const FN_SYM: u32 = 0;
+const FN_SYM_NS: u32 = 1;
+const FN_KW: u32 = 2;
+const FN_KW_NS: u32 = 3;
+const VARINT_LIMIT: i64 = 140737488355328;
+const FE_BODY: u32 = 0;
+const FE_FILE: u32 = 1;
+const FE_LINE: u32 = 2;
+const FE_STRS: u32 = 3;
+const FE_STRXS: u32 = 4;
+const FE_NAMES: u32 = 5;
+const FE_NAMEXS: u32 = 6;
+const FE_CPFIRST: u32 = 7;
+const FE_KLINE: u32 = 8;
+const FE_KCOL: u32 = 9;
+const FE_KFILE: u32 = 10;
+const FE_KCP: u32 = 11;
+const FE_ERR: u32 = 12;
+const FE_LEN: u32 = 13;
+impl Rt {
+    fn new_obj(&self, ty: u8) -> usize {
+        let mut b = self.objs.borrow_mut();
+        b.push(Obj { ty, slots: Vec::new(), text: String::new(), ns: None, meta: NIL, bytes: Vec::new() });
+        b.len() - 1
+    }
+    fn heap(i: usize) -> Value { Value((TAG_HEAP << 60) | (i as u64)) }
+    fn is_heap_ty(&self, v: Value, ty: u8) -> bool {
+        if v == NIL || v == TRUE || v == FALSE || v == NOT_FOUND { return false; }
+        if vtag(v) != TAG_HEAP { return false; }
+        self.objs.borrow()[vidx(v)].ty == ty
+    }
+
+    // --- the root stack, as every other driver has it ----------------------
+    fn mark(&self) -> usize { self.roots.borrow().len() }
+    fn push(&self, v: Value) -> usize { let mut b = self.roots.borrow_mut(); b.push(v); b.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots.borrow()[i] }
+    fn set_r(&self, i: usize, v: Value) { self.roots.borrow_mut()[i] = v; }
+    fn pop_to(&self, n: usize) { self.roots.borrow_mut().truncate(n); }
+    fn slot(&self, v: Value, i: u32) -> Value { self.objs.borrow()[vidx(v)].slots[i as usize] }
+
+    // --- the node (the encoder's own mutable scratch record) ---------------
+    fn new_node(&self, n: u32, init: Value) -> Value {
+        let i = self.new_obj(TY_NODE);
+        self.objs.borrow_mut()[i].slots = vec![init; n as usize];
+        Self::heap(i)
+    }
+    fn node_get(&self, v: Value, i: u32) -> Value { self.objs.borrow()[vidx(v)].slots[i as usize] }
+    fn node_set(&self, v: Value, i: u32, x: Value) { self.objs.borrow_mut()[vidx(v)].slots[i as usize] = x; }
+
+    // --- sinks: a host byte list, as a handle into `self.sinks` ------------
+    fn sink_open(&self) -> u32 { let mut b = self.sinks.borrow_mut(); b.push(Vec::new()); (b.len() - 1) as u32 }
+    fn sink_put(&self, sk: u32, b: u32) { self.sinks.borrow_mut()[sk as usize].push(b as u8); }
+    fn sink_close(&self, _sk: u32) {}
+    fn sink_string(&self, sk: u32) -> Value {
+        let bytes = self.sinks.borrow()[sk as usize].clone();
+        let s = String::from_utf8(bytes).unwrap_or_default();
+        self.string(&s)
+    }
+    fn sink_bytes(&self, sk: u32) -> Value {
+        let bytes = self.sinks.borrow()[sk as usize].clone();
+        let i = self.new_obj(TY_BYTES);
+        self.objs.borrow_mut()[i].bytes = bytes;
+        Self::heap(i)
+    }
+
+    // --- strings -------------------------------------------------------------
+    fn string(&self, s: &str) -> Value {
+        let i = self.new_obj(TY_STRING);
+        self.objs.borrow_mut()[i].text = s.to_string();
+        Self::heap(i)
+    }
+    fn is_string(&self, v: Value) -> bool { self.is_heap_ty(v, TY_STRING) }
+    fn s_bytes(&self, v: Value) -> u32 { self.objs.borrow()[vidx(v)].text.as_bytes().len() as u32 }
+    fn s_append(&self, v: Value, sk: u32) {
+        let bytes = self.objs.borrow()[vidx(v)].text.as_bytes().to_vec();
+        self.sinks.borrow_mut()[sk as usize].extend_from_slice(&bytes);
+    }
+
+    // --- numbers ---------------------------------------------------------
+    fn mk_bigint(&self, n: i64) -> Value {
+        let mut b = self.bigints.borrow_mut();
+        b.push(n);
+        Value((TAG_BIGINT << 60) | ((b.len() - 1) as u64))
+    }
+    fn mk_double(&self, d: f64) -> Value {
+        let mut b = self.doubles.borrow_mut();
+        b.push(d);
+        Value((TAG_DOUBLE << 60) | ((b.len() - 1) as u64))
+    }
+    fn is_int(&self, v: Value) -> bool { vtag(v) == TAG_FIXNUM || vtag(v) == TAG_BIGINT }
+    fn integer_value(&self, v: Value) -> i64 {
+        if vtag(v) == TAG_FIXNUM { v.as_fixnum() } else { self.bigints.borrow()[vidx(v)] }
+    }
+    fn num_f64(&self, v: Value) -> f64 { self.doubles.borrow()[vidx(v)] }
+    // DETERMINISTIC BY CONSTRUCTION: the only finite double this file ever
+    // asks `num-to-str` about is 2.5, hardcoded rather than formatted, so no
+    // language's float-printing quirks can enter a byte that three hosts
+    // must agree on. A bigint's text is plain decimal, which `i64::to_string`
+    // (and its Java/C# equivalents) already produce identically.
+    fn num_to_str(&self, v: Value) -> Value {
+        if v.is_double() {
+            let d = self.num_f64(v);
+            let text = if d == 2.5 { "2.5".to_string() } else { format!("{}", d) };
+            self.string(&text)
+        } else {
+            let n = self.integer_value(v);
+            self.string(&n.to_string())
+        }
+    }
+
+    // --- symbols and keywords --------------------------------------------
+    fn is_symbol(&self, v: Value) -> bool { self.is_heap_ty(v, TY_SYM) }
+    fn is_keyword(&self, v: Value) -> bool { self.is_heap_ty(v, TY_KW) }
+    fn mk_sym(&self, ns: Option<&str>, name: &str, meta: Value) -> Value {
+        let i = self.new_obj(TY_SYM);
+        {
+            let mut b = self.objs.borrow_mut();
+            b[i].text = name.to_string();
+            b[i].ns = ns.map(|s| s.to_string());
+            b[i].meta = meta;
+        }
+        Self::heap(i)
+    }
+    fn mk_kw(&self, ns: Option<&str>, name: &str) -> Value {
+        let i = self.new_obj(TY_KW);
+        {
+            let mut b = self.objs.borrow_mut();
+            b[i].text = name.to_string();
+            b[i].ns = ns.map(|s| s.to_string());
+        }
+        Self::heap(i)
+    }
+    fn lit_keyword1(&self, s: &str) -> Value { self.mk_kw(None, s) }
+    fn name_of(&self, v: Value) -> Value { let s = self.objs.borrow()[vidx(v)].text.clone(); self.string(&s) }
+    fn ns_of(&self, v: Value) -> Value {
+        let ns = self.objs.borrow()[vidx(v)].ns.clone();
+        match ns { Some(s) => self.string(&s), None => NIL }
+    }
+
+    // --- metadata ----------------------------------------------------------
+    fn meta_of(&self, v: Value) -> Value {
+        if vtag(v) == TAG_HEAP { self.objs.borrow()[vidx(v)].meta } else { NIL }
+    }
+
+    // --- equality, ignoring a symbol's/keyword's own metadata --------------
+    fn val_eq(&self, a: Value, b: Value) -> bool {
+        if a == NIL || b == NIL || a == TRUE || b == TRUE || a == FALSE || b == FALSE || a == NOT_FOUND || b == NOT_FOUND {
+            return a == b;
+        }
+        if self.is_int(a) || self.is_int(b) {
+            return self.is_int(a) && self.is_int(b) && self.integer_value(a) == self.integer_value(b);
+        }
+        if a.is_double() || b.is_double() {
+            return a.is_double() && b.is_double() && self.num_f64(a) == self.num_f64(b);
+        }
+        if vtag(a) != TAG_HEAP || vtag(b) != TAG_HEAP { return false; }
+        let oa = vidx(a);
+        let ob = vidx(b);
+        let (tya, tyb) = (self.objs.borrow()[oa].ty, self.objs.borrow()[ob].ty);
+        if tya != tyb { return false; }
+        match tya {
+            TY_STRING => self.objs.borrow()[oa].text == self.objs.borrow()[ob].text,
+            TY_SYM | TY_KW => {
+                self.objs.borrow()[oa].ns == self.objs.borrow()[ob].ns && self.objs.borrow()[oa].text == self.objs.borrow()[ob].text
+            }
+            TY_VEC | TY_LIST | TY_SET => {
+                let sa = self.objs.borrow()[oa].slots.clone();
+                let sb = self.objs.borrow()[ob].slots.clone();
+                if sa.len() != sb.len() { return false; }
+                for i in 0..sa.len() { if !self.val_eq(sa[i], sb[i]) { return false; } }
+                true
+            }
+            TY_MAP => {
+                let sa = self.objs.borrow()[oa].slots.clone();
+                let sb = self.objs.borrow()[ob].slots.clone();
+                if sa.len() != sb.len() { return false; }
+                let mut i = 0;
+                while i < sa.len() {
+                    let k = sa[i];
+                    let v = sa[i + 1];
+                    let mut j = 0;
+                    let mut found = false;
+                    while j < sb.len() {
+                        if self.val_eq(k, sb[j]) {
+                            if !self.val_eq(v, sb[j + 1]) { return false; }
+                            found = true;
+                            break;
+                        }
+                        j += 2;
+                    }
+                    if !found { return false; }
+                    i += 2;
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    // --- maps (a flat [k0 v0 k1 v1 ..] array-map: new keys append) ---------
+    fn empty_map(&self) -> Value { Self::heap(self.new_obj(TY_MAP)) }
+    fn is_map(&self, v: Value) -> bool { self.is_heap_ty(v, TY_MAP) }
+    fn map_get(&self, m: Value, k: Value, d: Value) -> Value {
+        let slots = self.objs.borrow()[vidx(m)].slots.clone();
+        let mut i = 0;
+        while i < slots.len() {
+            if self.val_eq(slots[i], k) { return slots[i + 1]; }
+            i += 2;
+        }
+        d
+    }
+    fn map_count(&self, m: Value) -> u32 { (self.objs.borrow()[vidx(m)].slots.len() / 2) as u32 }
+    fn map_assoc(&self, m: Value, k: Value, v: Value) -> Value {
+        let mut slots = self.objs.borrow()[vidx(m)].slots.clone();
+        let meta = self.objs.borrow()[vidx(m)].meta;
+        let mut i = 0;
+        let mut found = false;
+        while i < slots.len() {
+            if self.val_eq(slots[i], k) { slots[i + 1] = v; found = true; break; }
+            i += 2;
+        }
+        if !found { slots.push(k); slots.push(v); }
+        let oi = self.new_obj(TY_MAP);
+        {
+            let mut b = self.objs.borrow_mut();
+            b[oi].slots = slots;
+            b[oi].meta = meta;
+        }
+        Self::heap(oi)
+    }
+    fn map_entry_vector(&self, m: Value) -> Value {
+        let slots = self.objs.borrow()[vidx(m)].slots.clone();
+        let mut entries = Vec::new();
+        let mut i = 0;
+        while i < slots.len() {
+            let ei = self.new_obj(TY_ENTRY);
+            self.objs.borrow_mut()[ei].slots = vec![slots[i], slots[i + 1]];
+            entries.push(Self::heap(ei));
+            i += 2;
+        }
+        let vi = self.new_obj(TY_VEC);
+        self.objs.borrow_mut()[vi].slots = entries;
+        Self::heap(vi)
+    }
+    fn ordered_map(&self, flat: Value) -> Value {
+        let elems = self.objs.borrow()[vidx(flat)].slots.clone();
+        let mut m = self.empty_map();
+        let mut i = 0;
+        while i < elems.len() { m = self.map_assoc(m, elems[i], elems[i + 1]); i += 2; }
+        m
+    }
+    fn to_transient(&self, m: Value) -> Value { m }
+    fn transient_assoc(&self, tm: Value, k: Value, v: Value) -> Value { self.map_assoc(tm, k, v) }
+    fn tmap_get(&self, tm: Value, k: Value, d: Value) -> Value { self.map_get(tm, k, d) }
+    // `merge3`: reduce `b`'s pairs then `c`'s into `a`, in order, pushing the
+    // result -- a NIL `b`/`c` contributes nothing. This file's own choice of
+    // map-assoc order (new keys append) is what decides `cp-first?`, and the
+    // decision only has to be made ONCE, here.
+    fn merge3(&self, ai: usize, bi: usize, ci: usize) {
+        let mut res = self.r(ai);
+        let bv = self.r(bi);
+        if !bv.is_nil() {
+            let slots = self.objs.borrow()[vidx(bv)].slots.clone();
+            let mut i = 0;
+            while i < slots.len() { res = self.map_assoc(res, slots[i], slots[i + 1]); i += 2; }
+        }
+        let cv = self.r(ci);
+        if !cv.is_nil() {
+            let slots = self.objs.borrow()[vidx(cv)].slots.clone();
+            let mut i = 0;
+            while i < slots.len() { res = self.map_assoc(res, slots[i], slots[i + 1]); i += 2; }
+        }
+        self.push(res);
+    }
+
+    // --- vectors, lists and sets --------------------------------------------
+    fn empty_vec(&self) -> Value { Self::heap(self.new_obj(TY_VEC)) }
+    fn is_vector_like(&self, v: Value) -> bool { self.is_heap_ty(v, TY_VEC) }
+    fn is_seq(&self, v: Value) -> bool { self.is_heap_ty(v, TY_LIST) }
+    fn is_set(&self, v: Value) -> bool { self.is_heap_ty(v, TY_SET) }
+    fn is_tagged(&self, v: Value) -> bool { self.is_heap_ty(v, TY_TAGGED) }
+    fn vec_count(&self, v: Value) -> u32 { self.objs.borrow()[vidx(v)].slots.len() as u32 }
+    fn vec_nth(&self, v: Value, i: u32, d: Value) -> Value { self.objs.borrow()[vidx(v)].slots.get(i as usize).copied().unwrap_or(d) }
+    fn vec_conj(&self, v: Value, x: Value) -> Value {
+        let mut slots = self.objs.borrow()[vidx(v)].slots.clone();
+        let meta = self.objs.borrow()[vidx(v)].meta;
+        slots.push(x);
+        let oi = self.new_obj(TY_VEC);
+        {
+            let mut b = self.objs.borrow_mut();
+            b[oi].slots = slots;
+            b[oi].meta = meta;
+        }
+        Self::heap(oi)
+    }
+    fn vec_from_roots(&self, base: usize, n: u32) -> Value {
+        let mut slots = Vec::new();
+        for i in 0..n { slots.push(self.r(base + i as usize)); }
+        let oi = self.new_obj(TY_VEC);
+        self.objs.borrow_mut()[oi].slots = slots;
+        Self::heap(oi)
+    }
+    fn mk_vec(&self, elems: Vec<Value>, meta: Value) -> Value {
+        let oi = self.new_obj(TY_VEC);
+        {
+            let mut b = self.objs.borrow_mut();
+            b[oi].slots = elems;
+            b[oi].meta = meta;
+        }
+        Self::heap(oi)
+    }
+    fn mk_set(&self, elems: Vec<Value>) -> Value {
+        let oi = self.new_obj(TY_SET);
+        self.objs.borrow_mut()[oi].slots = elems;
+        Self::heap(oi)
+    }
+    fn set_element_vector(&self, v: Value) -> Value {
+        let slots = self.objs.borrow()[vidx(v)].slots.clone();
+        let oi = self.new_obj(TY_VEC);
+        self.objs.borrow_mut()[oi].slots = slots;
+        Self::heap(oi)
+    }
+    fn seq(&self, v: Value) -> Value {
+        if self.is_seq(v) {
+            if self.objs.borrow()[vidx(v)].slots.is_empty() { NIL } else { v }
+        } else { NIL }
+    }
+    fn first(&self, v: Value) -> Value { self.objs.borrow()[vidx(v)].slots[0] }
+    fn next(&self, v: Value) -> Value {
+        let slots = self.objs.borrow()[vidx(v)].slots.clone();
+        if slots.len() <= 1 { NIL } else {
+            let oi = self.new_obj(TY_LIST);
+            self.objs.borrow_mut()[oi].slots = slots[1..].to_vec();
+            Self::heap(oi)
+        }
+    }
+
+    // --- bytes ---------------------------------------------------------------
+    fn b_concat(&self, a: Value, b: Value) -> Value {
+        let mut bytes = self.objs.borrow()[vidx(a)].bytes.clone();
+        bytes.extend_from_slice(&self.objs.borrow()[vidx(b)].bytes);
+        let oi = self.new_obj(TY_BYTES);
+        self.objs.borrow_mut()[oi].bytes = bytes;
+        Self::heap(oi)
+    }
+
+    // --- the mocked reader: `read-top` hands back the scripted forms, one
+    // per call, pushing each as a side effect the way the real reader does. ------------------------------------------------------
+    fn rd_new(&self, _src: Value, _file: Value, _features: Value, _tags: Value, _portable: bool, _gensym0: i64) -> Value {
+        *self.script_pos.borrow_mut() = 0;
+        NIL
+    }
+    fn rd_close(&self, _sti: usize) {}
+    fn rd_get(&self, _sti: usize, _domain: u32) -> Value { NIL }
+    fn rd_int(&self, _sti: usize, _domain: u32) -> i64 { 0 }
+    fn rd_flag(&self, _sti: usize, _domain: u32) -> bool { false }
+    fn read_top(&self, _sti: usize) -> u32 {
+        let pos = *self.script_pos.borrow();
+        let len = self.script.borrow().len();
+        if pos < len {
+            let f = self.script.borrow()[pos];
+            *self.script_pos.borrow_mut() = pos + 1;
+            self.push(f);
+            RS_OK
+        } else {
+            RS_EOF
+        }
+    }
+    fn msg_lit(&self, sk: u32, s: &str) { let b = s.as_bytes().to_vec(); self.sinks.borrow_mut()[sk as usize].extend_from_slice(&b); }
+    fn msg_val(&self, _sk: u32, _v: Value) {}
+    fn msg_int(&self, _sk: u32, _n: i64) {}
+    fn set_script(&self, forms: Vec<Value>) { *self.script.borrow_mut() = forms; }
+
+    // --- test-only helpers: metadata maps in the order THIS file's own
+    // `map-assoc`/`merge3` rebuild them (line, column, file, [child-pos]) --
+    // and the extra case (line, column, file, [extra keys..]). -------------
+    fn meta_simple(&self, line: i64, col: i64, file: Value) -> Value {
+        let e = self.empty_map();
+        let kl = self.lit_keyword1("line");
+        let m1 = self.map_assoc(e, kl, Value::fixnum(line));
+        let kc = self.lit_keyword1("column");
+        let m2 = self.map_assoc(m1, kc, Value::fixnum(col));
+        let kf = self.lit_keyword1("file");
+        self.map_assoc(m2, kf, file)
+    }
+    fn meta_with_cp(&self, line: i64, col: i64, cp: Vec<i64>, file: Value) -> Value {
+        let m = self.meta_simple(line, col, file);
+        let kcp = self.lit_keyword1("child-pos");
+        let cpvals: Vec<Value> = cp.iter().map(|n| Value::fixnum(*n)).collect();
+        let cpv = self.mk_vec(cpvals, NIL);
+        self.map_assoc(m, kcp, cpv)
+    }
+    fn meta_with_extra(&self, line: i64, col: i64, extra: Vec<(Value, Value)>, file: Value) -> Value {
+        let mut m = self.meta_simple(line, col, file);
+        for (k, v) in extra { m = self.map_assoc(m, k, v); }
+        m
+    }
+--rust
+}
+
+fn hexs(bs: &[u8]) -> String {
+    bs.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ")
+}
+
+fn run_varint(rt: &mut Rt) -> String {
+    let sk = rt.sink_open();
+    rt.put_varint(sk, 0);
+    rt.put_varint(sk, 127);
+    rt.put_varint(sk, 128);
+    rt.put_varint(sk, 300);
+    rt.put_varint(sk, 16384);
+    let bv = rt.sink_bytes(sk);
+    rt.sink_close(sk);
+    hexs(&rt.objs.borrow()[vidx(bv)].bytes)
+}
+
+fn run_forms(rt: &mut Rt, header: Value, forms: Vec<Value>, file: Value) -> String {
+    let base = rt.mark();
+    let hi = rt.push(header);
+    let fv = rt.mk_vec(forms, NIL);
+    let fi = rt.push(fv);
+    let filei = rt.push(file);
+    let _st = rt.forms_encode(hi, fi, filei);
+    let out = rt.r(base + 3);
+    let s = hexs(&rt.objs.borrow()[vidx(out)].bytes);
+    rt.pop_to(base);
+    s
+}
+
+fn run_read(rt: &mut Rt, features: Value) -> String {
+    let base = rt.mark();
+    let file = rt.string("t.fln");
+    rt.set_script(vec![Value::fixnum(7)]);
+    let out = rt.read_forms(NIL, file, features, NIL, false, 0);
+    let s = hexs(&rt.objs.borrow()[vidx(out)].bytes);
+    rt.pop_to(base);
+    s
+}
+
+fn main() {
+    let mut rt = Rt { objs: RefCell::new(Vec::new()), roots: RefCell::new(Vec::new()), bigints: RefCell::new(Vec::new()), doubles: RefCell::new(Vec::new()), sinks: RefCell::new(Vec::new()), script: RefCell::new(Vec::new()), script_pos: RefCell::new(0) };
+    let mut out = String::new();
+
+    out.push_str("varint "); out.push_str(&run_varint(&mut rt)); out.push_str(" / ");
+
+    // T_POS_SYM: a symbol with only a position.
+    let file = rt.string("t.fln");
+    let m = rt.meta_simple(5, 3, file);
+    let sym = rt.mk_sym(None, "abc", m);
+    let h1 = rt.empty_map();
+    out.push_str("possym "); out.push_str(&run_forms(&mut rt, h1, vec![sym], file)); out.push_str(" / ");
+
+    // Zigzag deltas going UP then DOWN, and the same name reused.
+    let mx1 = rt.meta_simple(10, 1, file);
+    let x1 = rt.mk_sym(None, "x", mx1);
+    let mx2 = rt.meta_simple(4, 2, file);
+    let x2 = rt.mk_sym(None, "x", mx2);
+    let h2 = rt.empty_map();
+    out.push_str("zigzag "); out.push_str(&run_forms(&mut rt, h2, vec![x1, x2], file)); out.push_str(" / ");
+
+    // A namespaced keyword: the name table adds ns THEN name.
+    let kw = rt.mk_kw(Some("ns"), "kw");
+    let h3 = rt.empty_map();
+    out.push_str("nsname "); out.push_str(&run_forms(&mut rt, h3, vec![kw], file)); out.push_str(" / ");
+
+    // Integers in the varint range, negative, past 2^47 as text, and
+    // doubles including NaN/Inf.
+    let big = rt.mk_bigint(140737488355328 + 5);
+    let negbig = rt.mk_bigint(-(140737488355328 + 5));
+    let d25 = rt.mk_double(2.5);
+    let dnan = rt.mk_double(f64::NAN);
+    let dinf = rt.mk_double(f64::INFINITY);
+    let dninf = rt.mk_double(f64::NEG_INFINITY);
+    let nforms = vec![Value::fixnum(42), Value::fixnum(-17), big, negbig, d25, dnan, dinf, dninf];
+    let h4 = rt.empty_map();
+    out.push_str("numbers "); out.push_str(&run_forms(&mut rt, h4, nforms, file)); out.push_str(" / ");
+
+    // A vector whose child positions are DERIVED (children carry their own
+    // matching position) and one whose are FULL (a child's own position
+    // mismatches what the parent's child-pos says).
+    let mp = rt.meta_simple(2, 5, file);
+    let p = rt.mk_sym(None, "p", mp);
+    let mq = rt.meta_simple(3, 7, file);
+    let q = rt.mk_sym(None, "q", mq);
+    let mvd = rt.meta_with_cp(1, 1, vec![2, 5, 3, 7], file);
+    let vderived = rt.mk_vec(vec![p, q], mvd);
+    let mr = rt.meta_simple(2, 5, file);
+    let r = rt.mk_sym(None, "r", mr);
+    let mvf = rt.meta_with_cp(1, 1, vec![99, 99, 11, 11], file);
+    let vfull = rt.mk_vec(vec![r, Value::fixnum(300)], mvf);
+    let h5 = rt.empty_map();
+    out.push_str("vecs "); out.push_str(&run_forms(&mut rt, h5, vec![vderived, vfull], file)); out.push_str(" / ");
+
+    // Metadata with an extra author key: F_EXTRA.
+    let kauthor = rt.lit_keyword1("author");
+    let ray = rt.string("ray");
+    let mzz = rt.meta_with_extra(9, 2, vec![(kauthor, ray)], file);
+    let zz = rt.mk_sym(None, "zz", mzz);
+    let h6 = rt.empty_map();
+    out.push_str("extra "); out.push_str(&run_forms(&mut rt, h6, vec![zz], file)); out.push_str(" / ");
+
+    // Metadata that cannot be rebuilt (a mismatched :file): T_META.
+    let other = rt.string("OTHER");
+    let e7 = rt.empty_map();
+    let kl7 = rt.lit_keyword1("line");
+    let m7a = rt.map_assoc(e7, kl7, Value::fixnum(1));
+    let kc7 = rt.lit_keyword1("column");
+    let m7b = rt.map_assoc(m7a, kc7, Value::fixnum(1));
+    let kf7 = rt.lit_keyword1("file");
+    let badmeta = rt.map_assoc(m7b, kf7, other);
+    let bad = rt.mk_sym(None, "bad", badmeta);
+    let h7 = rt.empty_map();
+    out.push_str("fallback "); out.push_str(&run_forms(&mut rt, h7, vec![bad], file)); out.push_str(" / ");
+
+    // The deferred header (`features` nil, `:features :any`) vs the eager
+    // one (an actual feature set), through `read-forms` end to end.
+    out.push_str("deferred "); out.push_str(&run_read(&mut rt, NIL)); out.push_str(" / ");
+    let perf = rt.lit_keyword1("perf");
+    let featset = rt.mk_set(vec![perf]);
+    out.push_str("eager "); out.push_str(&run_read(&mut rt, featset));
+
+    println!("{}", out);
+}
+--java-head
+    // A TOY HEAP, the same shape as the Rust fixture: tagged longs (fixnum,
+    // bigint, double, heap) plus heap objects for strings, symbols,
+    // keywords, vectors, lists, sets, maps, map-entries and byte-strings.
+    // Metadata lives on the object (symbols, vectors, lists, sets, maps --
+    // `own-pos`'s own guard), so `metaOf` is a field read.
+    static final long NIL = 0xF000000000000000L;
+    static final long TRUE = 0xF000000000000001L;
+    static final long FALSE = 0xF000000000000002L;
+    static final long NOT_FOUND = 0xF000000000000003L;
+    static final long TAG_HEAP = 0x1L;
+    static final long TAG_DOUBLE = 0xAL;
+    static final long TAG_BIGINT = 0xBL;
+    static final long TAG_FIXNUM = 0xDL;
+    static long vtag(long v) { return v >>> 60; }
+    static int vidx(long v) { return (int) (v & 0x0FFFFFFFFFFFFFFFL); }
+
+    static final int TY_NODE = 1, TY_STRING = 2, TY_SYM = 3, TY_KW = 4, TY_VEC = 5, TY_LIST = 6, TY_SET = 7,
+        TY_MAP = 8, TY_ENTRY = 9, TY_TAGGED = 10, TY_BYTES = 11;
+
+    static final class Obj {
+        int ty;
+        java.util.ArrayList<Long> slots = new java.util.ArrayList<>();
+        String text = "";
+        String ns = null;
+        long meta = NIL;
+        java.util.ArrayList<Integer> bytes = new java.util.ArrayList<>();
+    }
+
+    public static final class Rt {
+        java.util.ArrayList<Obj> objs = new java.util.ArrayList<>();
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        java.util.ArrayList<Long> bigints = new java.util.ArrayList<>();
+        java.util.ArrayList<Double> doubles = new java.util.ArrayList<>();
+        java.util.ArrayList<java.util.ArrayList<Integer>> sinks = new java.util.ArrayList<>();
+        java.util.ArrayList<Long> script = new java.util.ArrayList<>();
+        int scriptPos = 0;
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void setR(int i, long v) { roots.set(i, v); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long slot(long v, int i) { return objs.get(vidx(v)).slots.get(i); }
+        int sinkOpen() { sinks.add(new java.util.ArrayList<>()); return sinks.size() - 1; }
+        void sinkPut(int sk, int b) { sinks.get(sk).add(b & 0xFF); }
+        void sinkClose(int sk) {}
+        long sinkString(int sk) {
+            byte[] bs = new byte[sinks.get(sk).size()];
+            for (int i = 0; i < bs.length; i++) bs[i] = (byte) (int) sinks.get(sk).get(i);
+            return Str.of(this, new String(bs, java.nio.charset.StandardCharsets.UTF_8));
+        }
+        long sinkBytes(int sk) {
+            int i = newObj(this, TY_BYTES);
+            objs.get(i).bytes = new java.util.ArrayList<>(sinks.get(sk));
+            return heap(i);
+        }
+        // Reached by reflection from `com.flint.rt.Maps.empty`, which the
+        // real vocabulary (`kin/src/flint/impl/rt.cljc`) names fully
+        // qualified -- and a class in a NAMED package cannot import a type
+        // from the unnamed one at all (not even by its qualified form,
+        // because an unnamed package has no name to qualify with), which a
+        // plain `Probe.Rt` reference confirmed by failing to compile with
+        // "package Probe does not exist". Reflection is the one route that
+        // needs no such reference.
+        public long newEmptyMapForMaps() { return heap(newObj(this, TY_MAP)); }
+    }
+
+    static int newObj(Rt rt, int ty) {
+        Obj o = new Obj();
+        o.ty = ty;
+        rt.objs.add(o);
+        return rt.objs.size() - 1;
+    }
+    static long heap(int i) { return (TAG_HEAP << 60) | (long) i; }
+    static boolean isHeapTy(Rt rt, long v, int ty) {
+        if (v == NIL || v == TRUE || v == FALSE || v == NOT_FOUND) return false;
+        if (vtag(v) != TAG_HEAP) return false;
+        return rt.objs.get(vidx(v)).ty == ty;
+    }
+    static long zigzag(long n) { return n < 0 ? (-2 * n) - 1 : 2 * n; }
+
+    static final class Val {
+        static final long NIL = Probe.NIL, TRUE = Probe.TRUE, FALSE = Probe.FALSE, NOT_FOUND = Probe.NOT_FOUND;
+        static boolean isNil(long v) { return v == NIL; }
+        static boolean isDouble(long v) { return vtag(v) == TAG_DOUBLE; }
+        static long fixnum(long n) { return (TAG_FIXNUM << 60) | (n & 0x0000FFFFFFFFFFFFL); }
+        static long asFixnum(long v) { return (v << 16) >> 16; }
+    }
+    static final class Vec { static long empty(Rt rt) { return heap(newObj(rt, TY_VEC)); } }
+    static final class Str {
+        static long of(Rt rt, String s) {
+            int i = newObj(rt, TY_STRING);
+            rt.objs.get(i).text = s;
+            return heap(i);
+        }
+    }
+    static final class Num {
+        static double f64(Rt rt, long v) { return rt.doubles.get(vidx(v)); }
+    }
+
+    // --- node (the encoder's own mutable scratch record) -----------------
+    static long newNode(Rt rt, int n, long init) {
+        int i = newObj(rt, TY_NODE);
+        for (int k = 0; k < n; k++) rt.objs.get(i).slots.add(init);
+        return heap(i);
+    }
+    static long nodeGet(Rt rt, long v, int i) { return rt.objs.get(vidx(v)).slots.get(i); }
+    static void nodeSet(Rt rt, long v, int i, long x) { rt.objs.get(vidx(v)).slots.set(i, x); }
+
+    // --- strings -----------------------------------------------------------
+    static boolean isString(Rt rt, long v) { return isHeapTy(rt, v, TY_STRING); }
+    static int sBytes(Rt rt, long v) { return rt.objs.get(vidx(v)).text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length; }
+    static void sAppend(Rt rt, long v, int sk) {
+        byte[] bs = rt.objs.get(vidx(v)).text.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        for (byte b : bs) rt.sinks.get(sk).add(b & 0xFF);
+    }
+
+    // --- numbers -------------------------------------------------------------
+    static long mkBigint(Rt rt, long n) { rt.bigints.add(n); return (TAG_BIGINT << 60) | (long) (rt.bigints.size() - 1); }
+    static long mkDouble(Rt rt, double d) { rt.doubles.add(d); return (TAG_DOUBLE << 60) | (long) (rt.doubles.size() - 1); }
+    static boolean isInt(Rt rt, long v) { return vtag(v) == TAG_FIXNUM || vtag(v) == TAG_BIGINT; }
+    static long integerValue(Rt rt, long v) { return vtag(v) == TAG_FIXNUM ? Val.asFixnum(v) : rt.bigints.get(vidx(v)); }
+    static long numToStr(Rt rt, long v) {
+        if (Val.isDouble(v)) {
+            double d = Num.f64(rt, v);
+            String text = (d == 2.5) ? "2.5" : Double.toString(d);
+            return Str.of(rt, text);
+        } else {
+            long n = integerValue(rt, v);
+            return Str.of(rt, Long.toString(n));
+        }
+    }
+
+    // --- symbols and keywords ----------------------------------------------
+    static boolean isSymbol(Rt rt, long v) { return isHeapTy(rt, v, TY_SYM); }
+    static boolean isKeyword(Rt rt, long v) { return isHeapTy(rt, v, TY_KW); }
+    static long mkSym(Rt rt, String ns, String name, long meta) {
+        int i = newObj(rt, TY_SYM);
+        rt.objs.get(i).text = name;
+        rt.objs.get(i).ns = ns;
+        rt.objs.get(i).meta = meta;
+        return heap(i);
+    }
+    static long mkKw(Rt rt, String ns, String name) {
+        int i = newObj(rt, TY_KW);
+        rt.objs.get(i).text = name;
+        rt.objs.get(i).ns = ns;
+        return heap(i);
+    }
+    static long litKeyword1(Rt rt, String s) { return mkKw(rt, null, s); }
+    static long nameOf(Rt rt, long v) { return Str.of(rt, rt.objs.get(vidx(v)).text); }
+    static long nsOf(Rt rt, long v) {
+        String ns = rt.objs.get(vidx(v)).ns;
+        return ns == null ? NIL : Str.of(rt, ns);
+    }
+
+    // --- metadata ------------------------------------------------------------
+    static long metaOf(Rt rt, long v) {
+        return vtag(v) == TAG_HEAP ? rt.objs.get(vidx(v)).meta : NIL;
+    }
+
+    // --- equality, ignoring a symbol's/keyword's own metadata ---------------
+    static boolean valEq(Rt rt, long a, long b) {
+        if (a == NIL || b == NIL || a == TRUE || b == TRUE || a == FALSE || b == FALSE || a == NOT_FOUND || b == NOT_FOUND) {
+            return a == b;
+        }
+        if (isInt(rt, a) || isInt(rt, b)) {
+            return isInt(rt, a) && isInt(rt, b) && integerValue(rt, a) == integerValue(rt, b);
+        }
+        if (Val.isDouble(a) || Val.isDouble(b)) {
+            return Val.isDouble(a) && Val.isDouble(b) && Num.f64(rt, a) == Num.f64(rt, b);
+        }
+        if (vtag(a) != TAG_HEAP || vtag(b) != TAG_HEAP) return false;
+        Obj oa = rt.objs.get(vidx(a));
+        Obj ob = rt.objs.get(vidx(b));
+        if (oa.ty != ob.ty) return false;
+        switch (oa.ty) {
+            case TY_STRING: return oa.text.equals(ob.text);
+            case TY_SYM: case TY_KW:
+                return java.util.Objects.equals(oa.ns, ob.ns) && oa.text.equals(ob.text);
+            case TY_VEC: case TY_LIST: case TY_SET: {
+                if (oa.slots.size() != ob.slots.size()) return false;
+                for (int i = 0; i < oa.slots.size(); i++) {
+                    if (!valEq(rt, oa.slots.get(i), ob.slots.get(i))) return false;
+                }
+                return true;
+            }
+            case TY_MAP: {
+                if (oa.slots.size() != ob.slots.size()) return false;
+                int i = 0;
+                while (i < oa.slots.size()) {
+                    long k = oa.slots.get(i), v = oa.slots.get(i + 1);
+                    boolean found = false;
+                    int j = 0;
+                    while (j < ob.slots.size()) {
+                        if (valEq(rt, k, ob.slots.get(j))) {
+                            if (!valEq(rt, v, ob.slots.get(j + 1))) return false;
+                            found = true;
+                            break;
+                        }
+                        j += 2;
+                    }
+                    if (!found) return false;
+                    i += 2;
+                }
+                return true;
+            }
+            default: return false;
+        }
+    }
+
+    // --- maps (a flat [k0 v0 k1 v1 ..] array-map: new keys append) ---------
+    static boolean isMap(Rt rt, long v) { return isHeapTy(rt, v, TY_MAP); }
+    static long mapGet(Rt rt, long m, long k, long d) {
+        java.util.ArrayList<Long> slots = rt.objs.get(vidx(m)).slots;
+        int i = 0;
+        while (i < slots.size()) {
+            if (valEq(rt, slots.get(i), k)) return slots.get(i + 1);
+            i += 2;
+        }
+        return d;
+    }
+    static int mapCount(Rt rt, long m) { return rt.objs.get(vidx(m)).slots.size() / 2; }
+    static long mapAssoc(Rt rt, long m, long k, long v) {
+        java.util.ArrayList<Long> slots = new java.util.ArrayList<>(rt.objs.get(vidx(m)).slots);
+        long meta = rt.objs.get(vidx(m)).meta;
+        int i = 0;
+        boolean found = false;
+        while (i < slots.size()) {
+            if (valEq(rt, slots.get(i), k)) { slots.set(i + 1, v); found = true; break; }
+            i += 2;
+        }
+        if (!found) { slots.add(k); slots.add(v); }
+        int oi = newObj(rt, TY_MAP);
+        rt.objs.get(oi).slots = slots;
+        rt.objs.get(oi).meta = meta;
+        return heap(oi);
+    }
+    static long mapEntryVector(Rt rt, long m) {
+        java.util.ArrayList<Long> slots = rt.objs.get(vidx(m)).slots;
+        java.util.ArrayList<Long> entries = new java.util.ArrayList<>();
+        int i = 0;
+        while (i < slots.size()) {
+            int ei = newObj(rt, TY_ENTRY);
+            java.util.ArrayList<Long> es = new java.util.ArrayList<>();
+            es.add(slots.get(i));
+            es.add(slots.get(i + 1));
+            rt.objs.get(ei).slots = es;
+            entries.add(heap(ei));
+            i += 2;
+        }
+        int vi = newObj(rt, TY_VEC);
+        rt.objs.get(vi).slots = entries;
+        return heap(vi);
+    }
+    static long orderedMap(Rt rt, long flat) {
+        java.util.ArrayList<Long> elems = rt.objs.get(vidx(flat)).slots;
+        long m = com.flint.rt.Maps.empty(rt);
+        int i = 0;
+        while (i < elems.size()) { m = mapAssoc(rt, m, elems.get(i), elems.get(i + 1)); i += 2; }
+        return m;
+    }
+    static long toTransient(Rt rt, long m) { return m; }
+    static long transientAssoc(Rt rt, long tm, long k, long v) { return mapAssoc(rt, tm, k, v); }
+    static long tmapGet(Rt rt, long tm, long k, long d) { return mapGet(rt, tm, k, d); }
+    static void merge3(Rt rt, int ai, int bi, int ci) {
+        long res = rt.r(ai);
+        long bv = rt.r(bi);
+        if (!Val.isNil(bv)) {
+            java.util.ArrayList<Long> slots = rt.objs.get(vidx(bv)).slots;
+            int i = 0;
+            while (i < slots.size()) { res = mapAssoc(rt, res, slots.get(i), slots.get(i + 1)); i += 2; }
+        }
+        long cv = rt.r(ci);
+        if (!Val.isNil(cv)) {
+            java.util.ArrayList<Long> slots = rt.objs.get(vidx(cv)).slots;
+            int i = 0;
+            while (i < slots.size()) { res = mapAssoc(rt, res, slots.get(i), slots.get(i + 1)); i += 2; }
+        }
+        rt.push(res);
+    }
+
+    // --- vectors, lists and sets --------------------------------------------
+    static boolean isVectorLike(Rt rt, long v) { return isHeapTy(rt, v, TY_VEC); }
+    static boolean isSeq(Rt rt, long v) { return isHeapTy(rt, v, TY_LIST); }
+    static boolean isSet(Rt rt, long v) { return isHeapTy(rt, v, TY_SET); }
+    static boolean isTagged(Rt rt, long v) { return isHeapTy(rt, v, TY_TAGGED); }
+    static int vecCount(Rt rt, long v) { return rt.objs.get(vidx(v)).slots.size(); }
+    static long vecNth(Rt rt, long v, int i, long d) {
+        java.util.ArrayList<Long> slots = rt.objs.get(vidx(v)).slots;
+        return (i < 0 || i >= slots.size()) ? d : slots.get(i);
+    }
+    static long vecConj(Rt rt, long v, long x) {
+        java.util.ArrayList<Long> slots = new java.util.ArrayList<>(rt.objs.get(vidx(v)).slots);
+        long meta = rt.objs.get(vidx(v)).meta;
+        slots.add(x);
+        int oi = newObj(rt, TY_VEC);
+        rt.objs.get(oi).slots = slots;
+        rt.objs.get(oi).meta = meta;
+        return heap(oi);
+    }
+    static long vecFromRoots(Rt rt, int base, int n) {
+        java.util.ArrayList<Long> slots = new java.util.ArrayList<>();
+        for (int i = 0; i < n; i++) slots.add(rt.r(base + i));
+        int oi = newObj(rt, TY_VEC);
+        rt.objs.get(oi).slots = slots;
+        return heap(oi);
+    }
+    static long mkVec(Rt rt, java.util.ArrayList<Long> elems, long meta) {
+        int oi = newObj(rt, TY_VEC);
+        rt.objs.get(oi).slots = elems;
+        rt.objs.get(oi).meta = meta;
+        return heap(oi);
+    }
+    static long mkSet(Rt rt, java.util.ArrayList<Long> elems) {
+        int oi = newObj(rt, TY_SET);
+        rt.objs.get(oi).slots = elems;
+        return heap(oi);
+    }
+    static long setElementVector(Rt rt, long v) {
+        java.util.ArrayList<Long> slots = new java.util.ArrayList<>(rt.objs.get(vidx(v)).slots);
+        int oi = newObj(rt, TY_VEC);
+        rt.objs.get(oi).slots = slots;
+        return heap(oi);
+    }
+    static long seq(Rt rt, long v) {
+        if (isSeq(rt, v)) { return rt.objs.get(vidx(v)).slots.isEmpty() ? NIL : v; }
+        return NIL;
+    }
+    static long first(Rt rt, long v) { return rt.objs.get(vidx(v)).slots.get(0); }
+    static long next(Rt rt, long v) {
+        java.util.ArrayList<Long> slots = rt.objs.get(vidx(v)).slots;
+        if (slots.size() <= 1) return NIL;
+        int oi = newObj(rt, TY_LIST);
+        rt.objs.get(oi).slots = new java.util.ArrayList<>(slots.subList(1, slots.size()));
+        return heap(oi);
+    }
+
+    // --- bytes -----------------------------------------------------------------
+    static long bConcat(Rt rt, long a, long b) {
+        int oi = newObj(rt, TY_BYTES);
+        java.util.ArrayList<Integer> bytes = new java.util.ArrayList<>(rt.objs.get(vidx(a)).bytes);
+        bytes.addAll(rt.objs.get(vidx(b)).bytes);
+        rt.objs.get(oi).bytes = bytes;
+        return heap(oi);
+    }
+
+    // --- the mocked reader: `readTop` hands back the scripted forms, one per
+    // call, pushing each as a side effect the way the real reader does. ----
+    static long rdNew(Rt rt, long src, long file, long features, long tags, boolean portable, long gensym0) {
+        rt.scriptPos = 0;
+        return NIL;
+    }
+    static void rdClose(Rt rt, int sti) {}
+    static long rdGet(Rt rt, int sti, int domain) { return NIL; }
+    static long rdInt(Rt rt, int sti, int domain) { return 0; }
+    static boolean rdFlag(Rt rt, int sti, int domain) { return false; }
+    static int readTop(Rt rt, int sti) {
+        if (rt.scriptPos < rt.script.size()) {
+            long f = rt.script.get(rt.scriptPos);
+            rt.scriptPos++;
+            rt.push(f);
+            return RS_OK;
+        }
+        return RS_EOF;
+    }
+    static void msgLit(Rt rt, int sk, String s) {
+        byte[] bs = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        for (byte b : bs) rt.sinks.get(sk).add(b & 0xFF);
+    }
+    static void msgVal(Rt rt, int sk, long v) {}
+    static void msgInt(Rt rt, int sk, long n) {}
+
+    // --- test-only helpers: metadata maps in the order THIS file's own
+    // mapAssoc/merge3 rebuild them (line, column, file, [child-pos]) -- and
+    // the extra case (line, column, file, [extra keys..]). -------------------
+    static long metaSimple(Rt rt, long line, long col, long file) {
+        long e = com.flint.rt.Maps.empty(rt);
+        long kl = litKeyword1(rt, "line");
+        long m1 = mapAssoc(rt, e, kl, Val.fixnum(line));
+        long kc = litKeyword1(rt, "column");
+        long m2 = mapAssoc(rt, m1, kc, Val.fixnum(col));
+        long kf = litKeyword1(rt, "file");
+        return mapAssoc(rt, m2, kf, file);
+    }
+    static long metaWithCp(Rt rt, long line, long col, long[] cp, long file) {
+        long m = metaSimple(rt, line, col, file);
+        long kcp = litKeyword1(rt, "child-pos");
+        java.util.ArrayList<Long> cpvals = new java.util.ArrayList<>();
+        for (long n : cp) cpvals.add(Val.fixnum(n));
+        long cpv = mkVec(rt, cpvals, NIL);
+        return mapAssoc(rt, m, kcp, cpv);
+    }
+    static long metaWithExtra(Rt rt, long line, long col, long[][] extra, long file) {
+        long m = metaSimple(rt, line, col, file);
+        for (long[] kv : extra) m = mapAssoc(rt, m, kv[0], kv[1]);
+        return m;
+    }
+
+    // --- the constants `kin/readconst.kin` declares, mirrored exactly ------
+    static final int RDS_DEFER = 10;
+    static final int RDS_CONDS = 11;
+    static final int RDS_ERRMSG = 17;
+    static final int RDS_ERRLINE = 18;
+    static final int RDS_ERRCOL = 19;
+    static final int RDS_ERRPLAIN = 20;
+    static final int RS_OK = 0;
+    static final int RS_EOF = 1;
+    static final int RS_ERR = 4;
+    static final int FT_NIL = 0;
+    static final int FT_TRUE = 1;
+    static final int FT_FALSE = 2;
+    static final int FT_INT = 3;
+    static final int FT_NEG = 4;
+    static final int FT_NUM = 5;
+    static final int FT_STR = 6;
+    static final int FT_NAME = 7;
+    static final int FT_LIST = 8;
+    static final int FT_VEC = 9;
+    static final int FT_MAP = 10;
+    static final int FT_SET = 11;
+    static final int FT_TAGGED = 12;
+    static final int FT_META = 13;
+    static final int FT_POS = 14;
+    static final int FT_POS_SYM = 15;
+    static final int FF_CP_DERIVED = 1;
+    static final int FF_CP_FULL = 2;
+    static final int FF_EXTRA = 4;
+    static final int FN_SYM = 0;
+    static final int FN_SYM_NS = 1;
+    static final int FN_KW = 2;
+    static final int FN_KW_NS = 3;
+    static final long VARINT_LIMIT = 140737488355328L;
+    static final int FE_BODY = 0;
+    static final int FE_FILE = 1;
+    static final int FE_LINE = 2;
+    static final int FE_STRS = 3;
+    static final int FE_STRXS = 4;
+    static final int FE_NAMES = 5;
+    static final int FE_NAMEXS = 6;
+    static final int FE_CPFIRST = 7;
+    static final int FE_KLINE = 8;
+    static final int FE_KCOL = 9;
+    static final int FE_KFILE = 10;
+    static final int FE_KCP = 11;
+    static final int FE_ERR = 12;
+    static final int FE_LEN = 13;
+--java
+    static String hexs(java.util.ArrayList<Integer> bs) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < bs.size(); i++) {
+            if (i > 0) sb.append(' ');
+            sb.append(String.format("%02x", bs.get(i)));
+        }
+        return sb.toString();
+    }
+
+    static String runVarint(Rt rt) {
+        int sk = rt.sinkOpen();
+        putVarint(rt, sk, 0);
+        putVarint(rt, sk, 127);
+        putVarint(rt, sk, 128);
+        putVarint(rt, sk, 300);
+        putVarint(rt, sk, 16384);
+        long bv = rt.sinkBytes(sk);
+        rt.sinkClose(sk);
+        return hexs(rt.objs.get(vidx(bv)).bytes);
+    }
+
+    static String runForms(Rt rt, long header, java.util.ArrayList<Long> forms, long file) {
+        int base = rt.mark();
+        int hi = rt.push(header);
+        long fv = mkVec(rt, forms, NIL);
+        int fi = rt.push(fv);
+        int filei = rt.push(file);
+        formsEncode(rt, hi, fi, filei);
+        long out = rt.r(base + 3);
+        String s = hexs(rt.objs.get(vidx(out)).bytes);
+        rt.popTo(base);
+        return s;
+    }
+
+    static String runRead(Rt rt, long features) {
+        int base = rt.mark();
+        long file = Str.of(rt, "t.fln");
+        rt.script = new java.util.ArrayList<>();
+        rt.script.add(Val.fixnum(7));
+        long out = readForms(rt, NIL, file, features, NIL, false, 0);
+        String s = hexs(rt.objs.get(vidx(out)).bytes);
+        rt.popTo(base);
+        return s;
+    }
+
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder out = new StringBuilder();
+
+        out.append("varint ").append(runVarint(rt)).append(" / ");
+
+        long file = Str.of(rt, "t.fln");
+        long m1 = metaSimple(rt, 5, 3, file);
+        long sym = mkSym(rt, null, "abc", m1);
+        java.util.ArrayList<Long> f1 = new java.util.ArrayList<>();
+        f1.add(sym);
+        long h1 = com.flint.rt.Maps.empty(rt);
+        out.append("possym ").append(runForms(rt, h1, f1, file)).append(" / ");
+
+        long mx1 = metaSimple(rt, 10, 1, file);
+        long x1 = mkSym(rt, null, "x", mx1);
+        long mx2 = metaSimple(rt, 4, 2, file);
+        long x2 = mkSym(rt, null, "x", mx2);
+        java.util.ArrayList<Long> f2 = new java.util.ArrayList<>();
+        f2.add(x1); f2.add(x2);
+        long h2 = com.flint.rt.Maps.empty(rt);
+        out.append("zigzag ").append(runForms(rt, h2, f2, file)).append(" / ");
+
+        long kw = mkKw(rt, "ns", "kw");
+        java.util.ArrayList<Long> f3 = new java.util.ArrayList<>();
+        f3.add(kw);
+        long h3 = com.flint.rt.Maps.empty(rt);
+        out.append("nsname ").append(runForms(rt, h3, f3, file)).append(" / ");
+
+        long big = mkBigint(rt, 140737488355328L + 5);
+        long negbig = mkBigint(rt, -(140737488355328L + 5));
+        long d25 = mkDouble(rt, 2.5);
+        long dnan = mkDouble(rt, Double.NaN);
+        long dinf = mkDouble(rt, Double.POSITIVE_INFINITY);
+        long dninf = mkDouble(rt, Double.NEGATIVE_INFINITY);
+        java.util.ArrayList<Long> f4 = new java.util.ArrayList<>();
+        f4.add(Val.fixnum(42)); f4.add(Val.fixnum(-17)); f4.add(big); f4.add(negbig);
+        f4.add(d25); f4.add(dnan); f4.add(dinf); f4.add(dninf);
+        long h4 = com.flint.rt.Maps.empty(rt);
+        out.append("numbers ").append(runForms(rt, h4, f4, file)).append(" / ");
+
+        long mp = metaSimple(rt, 2, 5, file);
+        long p = mkSym(rt, null, "p", mp);
+        long mq = metaSimple(rt, 3, 7, file);
+        long q = mkSym(rt, null, "q", mq);
+        long mvd = metaWithCp(rt, 1, 1, new long[]{2, 5, 3, 7}, file);
+        java.util.ArrayList<Long> vdElems = new java.util.ArrayList<>();
+        vdElems.add(p); vdElems.add(q);
+        long vderived = mkVec(rt, vdElems, mvd);
+        long mr = metaSimple(rt, 2, 5, file);
+        long r = mkSym(rt, null, "r", mr);
+        long mvf = metaWithCp(rt, 1, 1, new long[]{99, 99, 11, 11}, file);
+        java.util.ArrayList<Long> vfElems = new java.util.ArrayList<>();
+        vfElems.add(r); vfElems.add(Val.fixnum(300));
+        long vfull = mkVec(rt, vfElems, mvf);
+        java.util.ArrayList<Long> f5 = new java.util.ArrayList<>();
+        f5.add(vderived); f5.add(vfull);
+        long h5 = com.flint.rt.Maps.empty(rt);
+        out.append("vecs ").append(runForms(rt, h5, f5, file)).append(" / ");
+
+        long kauthor = litKeyword1(rt, "author");
+        long ray = Str.of(rt, "ray");
+        long mzz = metaWithExtra(rt, 9, 2, new long[][]{{kauthor, ray}}, file);
+        long zz = mkSym(rt, null, "zz", mzz);
+        java.util.ArrayList<Long> f6 = new java.util.ArrayList<>();
+        f6.add(zz);
+        long h6 = com.flint.rt.Maps.empty(rt);
+        out.append("extra ").append(runForms(rt, h6, f6, file)).append(" / ");
+
+        long other = Str.of(rt, "OTHER");
+        long e7 = com.flint.rt.Maps.empty(rt);
+        long kl7 = litKeyword1(rt, "line");
+        long m7a = mapAssoc(rt, e7, kl7, Val.fixnum(1));
+        long kc7 = litKeyword1(rt, "column");
+        long m7b = mapAssoc(rt, m7a, kc7, Val.fixnum(1));
+        long kf7 = litKeyword1(rt, "file");
+        long badmeta = mapAssoc(rt, m7b, kf7, other);
+        long bad = mkSym(rt, null, "bad", badmeta);
+        java.util.ArrayList<Long> f7 = new java.util.ArrayList<>();
+        f7.add(bad);
+        long h7 = com.flint.rt.Maps.empty(rt);
+        out.append("fallback ").append(runForms(rt, h7, f7, file)).append(" / ");
+
+        out.append("deferred ").append(runRead(rt, NIL)).append(" / ");
+        long perf = litKeyword1(rt, "perf");
+        java.util.ArrayList<Long> featElems = new java.util.ArrayList<>();
+        featElems.add(perf);
+        long featset = mkSet(rt, featElems);
+        out.append("eager ").append(runRead(rt, featset));
+
+        System.out.println(out.toString());
+    }
+--java-pre
+package com.flint.rt;
+// `empty-map` is qualified `com.flint.rt.Maps.empty` for java (and
+// `global::Flint.Rt.Maps.Empty` for C#) by the real vocabulary -- see
+// `kin/src/flint/impl/rt.cljc`'s `empty-map` entry -- so the fixture needs a
+// real class at that package-qualified name, which cannot live inside
+// `Probe`.
+//
+// NOT a `Probe.Rt` reference: a class in a NAMED package cannot import, or
+// even name, a type from the unnamed package at all -- there is no
+// qualified form of "Probe" to write, because the unnamed package has no
+// name. `public static long empty(Probe.Rt rt)` here fails to compile with
+// "package Probe does not exist", which names the wrong thing (there is no
+// missing package; there is a package Java will not let this one see).
+// Reflection is the one route that needs no such reference: `Probe.Rt` is
+// public, and so is the method it is asked for.
+public class Maps {
+    public static long empty(Object rt) {
+        try {
+            java.lang.reflect.Method m = rt.getClass().getMethod("newEmptyMapForMaps");
+            return (Long) m.invoke(rt);
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException(e);
+        }
+    }
+}
+--csharp-pre
+namespace Flint.Rt {
+    // See the Java `--java-pre` section: `empty-map` is qualified
+    // `global::Flint.Rt.Maps.Empty` for C# by the real vocabulary, which
+    // needs a real top-level namespace a nested class cannot provide.
+    internal static class Maps {
+        internal static long Empty(Probe.Rt rt) { return Probe.AllocEmptyMap(rt); }
+    }
+}
+--csharp-head
+    // A TOY HEAP, the same shape as the Rust and Java fixtures.
+    internal const long NIL = unchecked((long) 0xF000000000000000UL);
+    internal const long TRUE = unchecked((long) 0xF000000000000001UL);
+    internal const long FALSE = unchecked((long) 0xF000000000000002UL);
+    internal const long NOT_FOUND = unchecked((long) 0xF000000000000003UL);
+    internal const long TAG_HEAP = 0x1L;
+    internal const long TAG_DOUBLE = 0xAL;
+    internal const long TAG_BIGINT = 0xBL;
+    internal const long TAG_FIXNUM = 0xDL;
+    internal static long Vtag(long v) { return (long) ((ulong) v >> 60); }
+    internal static int Vidx(long v) { return (int) (v & 0x0FFFFFFFFFFFFFFFL); }
+
+    internal const int TY_NODE = 1, TY_STRING = 2, TY_SYM = 3, TY_KW = 4, TY_VEC = 5, TY_LIST = 6, TY_SET = 7,
+        TY_MAP = 8, TY_ENTRY = 9, TY_TAGGED = 10, TY_BYTES = 11;
+
+    internal sealed class Obj {
+        internal int Ty;
+        internal System.Collections.Generic.List<long> Slots = new();
+        internal string Text = "";
+        internal string Ns = null;
+        internal long Meta = NIL;
+        internal System.Collections.Generic.List<int> Bytes = new();
+    }
+
+    internal sealed class Rt {
+        internal System.Collections.Generic.List<Obj> Objs = new();
+        internal System.Collections.Generic.List<long> Roots = new();
+        internal System.Collections.Generic.List<long> Bigints = new();
+        internal System.Collections.Generic.List<double> Doubles = new();
+        internal System.Collections.Generic.List<System.Collections.Generic.List<int>> Sinks = new();
+        internal System.Collections.Generic.List<long> Script = new();
+        internal int ScriptPos = 0;
+        internal int Mark() { return Roots.Count; }
+        internal int Push(long v) { Roots.Add(v); return Roots.Count - 1; }
+        internal long R(int i) { return Roots[i]; }
+        internal void SetR(int i, long v) { Roots[i] = v; }
+        internal void PopTo(int n) { while (Roots.Count > n) Roots.RemoveAt(Roots.Count - 1); }
+        internal long Slot(long v, int i) { return Objs[Vidx(v)].Slots[i]; }
+        internal int SinkOpen() { Sinks.Add(new System.Collections.Generic.List<int>()); return Sinks.Count - 1; }
+        internal void SinkPut(int sk, int b) { Sinks[sk].Add(b & 0xFF); }
+        internal void SinkClose(int sk) {}
+        internal long SinkString(int sk) {
+            byte[] bs = new byte[Sinks[sk].Count];
+            for (int i = 0; i < bs.Length; i++) bs[i] = (byte) Sinks[sk][i];
+            return Str.Of(this, System.Text.Encoding.UTF8.GetString(bs));
+        }
+        internal long SinkBytes(int sk) {
+            int i = NewObj(this, TY_BYTES);
+            Objs[i].Bytes = new System.Collections.Generic.List<int>(Sinks[sk]);
+            return Heap(i);
+        }
+    }
+
+    internal static int NewObj(Rt rt, int ty) {
+        Obj o = new Obj();
+        o.Ty = ty;
+        rt.Objs.Add(o);
+        return rt.Objs.Count - 1;
+    }
+    internal static long Heap(int i) { return (TAG_HEAP << 60) | (long) i; }
+    internal static bool IsHeapTy(Rt rt, long v, int ty) {
+        if (v == NIL || v == TRUE || v == FALSE || v == NOT_FOUND) return false;
+        if (Vtag(v) != TAG_HEAP) return false;
+        return rt.Objs[Vidx(v)].Ty == ty;
+    }
+    internal static long AllocEmptyMap(Rt rt) { return Heap(NewObj(rt, TY_MAP)); }
+
+    internal static long Zigzag(long n) { return n < 0 ? (-2 * n) - 1 : 2 * n; }
+
+    internal static class Val {
+        internal const long Nil = Probe.NIL, True = Probe.TRUE, False = Probe.FALSE, NotFound = Probe.NOT_FOUND;
+        internal static bool IsNil(long v) { return v == Nil; }
+        internal static bool IsDouble(long v) { return Vtag(v) == TAG_DOUBLE; }
+        internal static long Fixnum(long n) { return (TAG_FIXNUM << 60) | (n & 0x0000FFFFFFFFFFFFL); }
+        internal static long AsFixnum(long v) { return (v << 16) >> 16; }
+    }
+    internal static class Vec { internal static long Empty(Rt rt) { return Heap(NewObj(rt, TY_VEC)); } }
+    internal static class Str {
+        internal static long Of(Rt rt, string s) {
+            int i = NewObj(rt, TY_STRING);
+            rt.Objs[i].Text = s;
+            return Heap(i);
+        }
+    }
+    internal static class Num {
+        internal static double F64(Rt rt, long v) { return rt.Doubles[Vidx(v)]; }
+    }
+
+    // --- node (the encoder's own mutable scratch record) -----------------
+    internal static long NewNode(Rt rt, int n, long init) {
+        int i = NewObj(rt, TY_NODE);
+        for (int k = 0; k < n; k++) rt.Objs[i].Slots.Add(init);
+        return Heap(i);
+    }
+    internal static long NodeGet(Rt rt, long v, int i) { return rt.Objs[Vidx(v)].Slots[i]; }
+    internal static void NodeSet(Rt rt, long v, int i, long x) { rt.Objs[Vidx(v)].Slots[i] = x; }
+
+    // --- strings -----------------------------------------------------------
+    internal static bool IsString(Rt rt, long v) { return IsHeapTy(rt, v, TY_STRING); }
+    internal static int SBytes(Rt rt, long v) { return System.Text.Encoding.UTF8.GetByteCount(rt.Objs[Vidx(v)].Text); }
+    internal static void SAppend(Rt rt, long v, int sk) {
+        byte[] bs = System.Text.Encoding.UTF8.GetBytes(rt.Objs[Vidx(v)].Text);
+        foreach (byte b in bs) rt.Sinks[sk].Add(b & 0xFF);
+    }
+
+    // --- numbers -------------------------------------------------------------
+    internal static long MkBigint(Rt rt, long n) { rt.Bigints.Add(n); return (TAG_BIGINT << 60) | (long) (rt.Bigints.Count - 1); }
+    internal static long MkDouble(Rt rt, double d) { rt.Doubles.Add(d); return (TAG_DOUBLE << 60) | (long) (rt.Doubles.Count - 1); }
+    internal static bool IsInt(Rt rt, long v) { return Vtag(v) == TAG_FIXNUM || Vtag(v) == TAG_BIGINT; }
+    internal static long IntegerValue(Rt rt, long v) { return Vtag(v) == TAG_FIXNUM ? Val.AsFixnum(v) : rt.Bigints[Vidx(v)]; }
+    internal static long NumToStr(Rt rt, long v) {
+        if (Val.IsDouble(v)) {
+            double d = Num.F64(rt, v);
+            string text = (d == 2.5) ? "2.5" : d.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return Str.Of(rt, text);
+        } else {
+            long n = IntegerValue(rt, v);
+            return Str.Of(rt, n.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+    }
+
+    // --- symbols and keywords ----------------------------------------------
+    internal static bool IsSymbol(Rt rt, long v) { return IsHeapTy(rt, v, TY_SYM); }
+    internal static bool IsKeyword(Rt rt, long v) { return IsHeapTy(rt, v, TY_KW); }
+    internal static long MkSym(Rt rt, string ns, string name, long meta) {
+        int i = NewObj(rt, TY_SYM);
+        rt.Objs[i].Text = name;
+        rt.Objs[i].Ns = ns;
+        rt.Objs[i].Meta = meta;
+        return Heap(i);
+    }
+    internal static long MkKw(Rt rt, string ns, string name) {
+        int i = NewObj(rt, TY_KW);
+        rt.Objs[i].Text = name;
+        rt.Objs[i].Ns = ns;
+        return Heap(i);
+    }
+    internal static long LitKeyword1(Rt rt, string s) { return MkKw(rt, null, s); }
+    internal static long NameOf(Rt rt, long v) { return Str.Of(rt, rt.Objs[Vidx(v)].Text); }
+    internal static long NsOf(Rt rt, long v) {
+        string ns = rt.Objs[Vidx(v)].Ns;
+        return ns == null ? NIL : Str.Of(rt, ns);
+    }
+
+    // --- metadata ------------------------------------------------------------
+    internal static long MetaOf(Rt rt, long v) {
+        return Vtag(v) == TAG_HEAP ? rt.Objs[Vidx(v)].Meta : NIL;
+    }
+
+    // --- equality, ignoring a symbol's/keyword's own metadata ---------------
+    internal static bool ValEq(Rt rt, long a, long b) {
+        if (a == NIL || b == NIL || a == TRUE || b == TRUE || a == FALSE || b == FALSE || a == NOT_FOUND || b == NOT_FOUND) {
+            return a == b;
+        }
+        if (IsInt(rt, a) || IsInt(rt, b)) {
+            return IsInt(rt, a) && IsInt(rt, b) && IntegerValue(rt, a) == IntegerValue(rt, b);
+        }
+        if (Val.IsDouble(a) || Val.IsDouble(b)) {
+            return Val.IsDouble(a) && Val.IsDouble(b) && Num.F64(rt, a) == Num.F64(rt, b);
+        }
+        if (Vtag(a) != TAG_HEAP || Vtag(b) != TAG_HEAP) return false;
+        Obj oa = rt.Objs[Vidx(a)];
+        Obj ob = rt.Objs[Vidx(b)];
+        if (oa.Ty != ob.Ty) return false;
+        switch (oa.Ty) {
+            case TY_STRING: return oa.Text == ob.Text;
+            case TY_SYM: case TY_KW:
+                return oa.Ns == ob.Ns && oa.Text == ob.Text;
+            case TY_VEC: case TY_LIST: case TY_SET: {
+                if (oa.Slots.Count != ob.Slots.Count) return false;
+                for (int i = 0; i < oa.Slots.Count; i++) {
+                    if (!ValEq(rt, oa.Slots[i], ob.Slots[i])) return false;
+                }
+                return true;
+            }
+            case TY_MAP: {
+                if (oa.Slots.Count != ob.Slots.Count) return false;
+                int i = 0;
+                while (i < oa.Slots.Count) {
+                    long k = oa.Slots[i], v = oa.Slots[i + 1];
+                    bool found = false;
+                    int j = 0;
+                    while (j < ob.Slots.Count) {
+                        if (ValEq(rt, k, ob.Slots[j])) {
+                            if (!ValEq(rt, v, ob.Slots[j + 1])) return false;
+                            found = true;
+                            break;
+                        }
+                        j += 2;
+                    }
+                    if (!found) return false;
+                    i += 2;
+                }
+                return true;
+            }
+            default: return false;
+        }
+    }
+
+    // --- maps (a flat [k0 v0 k1 v1 ..] array-map: new keys append) ---------
+    internal static bool IsMap(Rt rt, long v) { return IsHeapTy(rt, v, TY_MAP); }
+    internal static long MapGet(Rt rt, long m, long k, long d) {
+        var slots = rt.Objs[Vidx(m)].Slots;
+        int i = 0;
+        while (i < slots.Count) {
+            if (ValEq(rt, slots[i], k)) return slots[i + 1];
+            i += 2;
+        }
+        return d;
+    }
+    internal static int MapCount(Rt rt, long m) { return rt.Objs[Vidx(m)].Slots.Count / 2; }
+    internal static long MapAssoc(Rt rt, long m, long k, long v) {
+        var slots = new System.Collections.Generic.List<long>(rt.Objs[Vidx(m)].Slots);
+        long meta = rt.Objs[Vidx(m)].Meta;
+        int i = 0;
+        bool found = false;
+        while (i < slots.Count) {
+            if (ValEq(rt, slots[i], k)) { slots[i + 1] = v; found = true; break; }
+            i += 2;
+        }
+        if (!found) { slots.Add(k); slots.Add(v); }
+        int oi = NewObj(rt, TY_MAP);
+        rt.Objs[oi].Slots = slots;
+        rt.Objs[oi].Meta = meta;
+        return Heap(oi);
+    }
+    internal static long MapEntryVector(Rt rt, long m) {
+        var slots = rt.Objs[Vidx(m)].Slots;
+        var entries = new System.Collections.Generic.List<long>();
+        int i = 0;
+        while (i < slots.Count) {
+            int ei = NewObj(rt, TY_ENTRY);
+            var es = new System.Collections.Generic.List<long>();
+            es.Add(slots[i]);
+            es.Add(slots[i + 1]);
+            rt.Objs[ei].Slots = es;
+            entries.Add(Heap(ei));
+            i += 2;
+        }
+        int vi = NewObj(rt, TY_VEC);
+        rt.Objs[vi].Slots = entries;
+        return Heap(vi);
+    }
+    internal static long OrderedMap(Rt rt, long flat) {
+        var elems = rt.Objs[Vidx(flat)].Slots;
+        long m = global::Flint.Rt.Maps.Empty(rt);
+        int i = 0;
+        while (i < elems.Count) { m = MapAssoc(rt, m, elems[i], elems[i + 1]); i += 2; }
+        return m;
+    }
+    internal static long ToTransient(Rt rt, long m) { return m; }
+    internal static long TransientAssoc(Rt rt, long tm, long k, long v) { return MapAssoc(rt, tm, k, v); }
+    internal static long TmapGet(Rt rt, long tm, long k, long d) { return MapGet(rt, tm, k, d); }
+    internal static void Merge3(Rt rt, int ai, int bi, int ci) {
+        long res = rt.R(ai);
+        long bv = rt.R(bi);
+        if (!Val.IsNil(bv)) {
+            var slots = rt.Objs[Vidx(bv)].Slots;
+            int i = 0;
+            while (i < slots.Count) { res = MapAssoc(rt, res, slots[i], slots[i + 1]); i += 2; }
+        }
+        long cv = rt.R(ci);
+        if (!Val.IsNil(cv)) {
+            var slots = rt.Objs[Vidx(cv)].Slots;
+            int i = 0;
+            while (i < slots.Count) { res = MapAssoc(rt, res, slots[i], slots[i + 1]); i += 2; }
+        }
+        rt.Push(res);
+    }
+
+    // --- vectors, lists and sets --------------------------------------------
+    internal static bool IsVectorLike(Rt rt, long v) { return IsHeapTy(rt, v, TY_VEC); }
+    internal static bool IsSeq(Rt rt, long v) { return IsHeapTy(rt, v, TY_LIST); }
+    internal static bool IsSet(Rt rt, long v) { return IsHeapTy(rt, v, TY_SET); }
+    internal static bool IsTagged(Rt rt, long v) { return IsHeapTy(rt, v, TY_TAGGED); }
+    internal static int VecCount(Rt rt, long v) { return rt.Objs[Vidx(v)].Slots.Count; }
+    internal static long VecNth(Rt rt, long v, int i, long d) {
+        var slots = rt.Objs[Vidx(v)].Slots;
+        return (i < 0 || i >= slots.Count) ? d : slots[i];
+    }
+    internal static long VecConj(Rt rt, long v, long x) {
+        var slots = new System.Collections.Generic.List<long>(rt.Objs[Vidx(v)].Slots);
+        long meta = rt.Objs[Vidx(v)].Meta;
+        slots.Add(x);
+        int oi = NewObj(rt, TY_VEC);
+        rt.Objs[oi].Slots = slots;
+        rt.Objs[oi].Meta = meta;
+        return Heap(oi);
+    }
+    internal static long VecFromRoots(Rt rt, int bse, int n) {
+        var slots = new System.Collections.Generic.List<long>();
+        for (int i = 0; i < n; i++) slots.Add(rt.R(bse + i));
+        int oi = NewObj(rt, TY_VEC);
+        rt.Objs[oi].Slots = slots;
+        return Heap(oi);
+    }
+    internal static long MkVec(Rt rt, System.Collections.Generic.List<long> elems, long meta) {
+        int oi = NewObj(rt, TY_VEC);
+        rt.Objs[oi].Slots = elems;
+        rt.Objs[oi].Meta = meta;
+        return Heap(oi);
+    }
+    internal static long MkSet(Rt rt, System.Collections.Generic.List<long> elems) {
+        int oi = NewObj(rt, TY_SET);
+        rt.Objs[oi].Slots = elems;
+        return Heap(oi);
+    }
+    internal static long SetElementVector(Rt rt, long v) {
+        var slots = new System.Collections.Generic.List<long>(rt.Objs[Vidx(v)].Slots);
+        int oi = NewObj(rt, TY_VEC);
+        rt.Objs[oi].Slots = slots;
+        return Heap(oi);
+    }
+    internal static long Seq(Rt rt, long v) {
+        if (IsSeq(rt, v)) { return rt.Objs[Vidx(v)].Slots.Count == 0 ? NIL : v; }
+        return NIL;
+    }
+    internal static long First(Rt rt, long v) { return rt.Objs[Vidx(v)].Slots[0]; }
+    internal static long Next(Rt rt, long v) {
+        var slots = rt.Objs[Vidx(v)].Slots;
+        if (slots.Count <= 1) return NIL;
+        int oi = NewObj(rt, TY_LIST);
+        rt.Objs[oi].Slots = new System.Collections.Generic.List<long>(slots.GetRange(1, slots.Count - 1));
+        return Heap(oi);
+    }
+
+    // --- bytes -----------------------------------------------------------------
+    internal static long BConcat(Rt rt, long a, long b) {
+        int oi = NewObj(rt, TY_BYTES);
+        var bytes = new System.Collections.Generic.List<int>(rt.Objs[Vidx(a)].Bytes);
+        bytes.AddRange(rt.Objs[Vidx(b)].Bytes);
+        rt.Objs[oi].Bytes = bytes;
+        return Heap(oi);
+    }
+
+    // --- the mocked reader: `ReadTop` hands back the scripted forms, one per
+    // call, pushing each as a side effect the way the real reader does. ----
+    internal static long RdNew(Rt rt, long src, long file, long features, long tags, bool portable, long gensym0) {
+        rt.ScriptPos = 0;
+        return NIL;
+    }
+    internal static void RdClose(Rt rt, int sti) {}
+    internal static long RdGet(Rt rt, int sti, int domain) { return NIL; }
+    internal static long RdInt(Rt rt, int sti, int domain) { return 0; }
+    internal static bool RdFlag(Rt rt, int sti, int domain) { return false; }
+    internal static int ReadTop(Rt rt, int sti) {
+        if (rt.ScriptPos < rt.Script.Count) {
+            long f = rt.Script[rt.ScriptPos];
+            rt.ScriptPos++;
+            rt.Push(f);
+            return RsOk;
+        }
+        return RsEof;
+    }
+    internal static void MsgLit(Rt rt, int sk, string s) {
+        byte[] bs = System.Text.Encoding.UTF8.GetBytes(s);
+        foreach (byte b in bs) rt.Sinks[sk].Add(b & 0xFF);
+    }
+    internal static void MsgVal(Rt rt, int sk, long v) {}
+    internal static void MsgInt(Rt rt, int sk, long n) {}
+
+    // --- test-only helpers: metadata maps in the order THIS file's own
+    // MapAssoc/Merge3 rebuild them (line, column, file, [child-pos]) -- and
+    // the extra case (line, column, file, [extra keys..]). -------------------
+    internal static long MetaSimple(Rt rt, long line, long col, long file) {
+        long e = global::Flint.Rt.Maps.Empty(rt);
+        long kl = LitKeyword1(rt, "line");
+        long m1 = MapAssoc(rt, e, kl, Val.Fixnum(line));
+        long kc = LitKeyword1(rt, "column");
+        long m2 = MapAssoc(rt, m1, kc, Val.Fixnum(col));
+        long kf = LitKeyword1(rt, "file");
+        return MapAssoc(rt, m2, kf, file);
+    }
+    internal static long MetaWithCp(Rt rt, long line, long col, long[] cp, long file) {
+        long m = MetaSimple(rt, line, col, file);
+        long kcp = LitKeyword1(rt, "child-pos");
+        var cpvals = new System.Collections.Generic.List<long>();
+        foreach (long n in cp) cpvals.Add(Val.Fixnum(n));
+        long cpv = MkVec(rt, cpvals, NIL);
+        return MapAssoc(rt, m, kcp, cpv);
+    }
+    internal static long MetaWithExtra(Rt rt, long line, long col, long[][] extra, long file) {
+        long m = MetaSimple(rt, line, col, file);
+        foreach (long[] kv in extra) m = MapAssoc(rt, m, kv[0], kv[1]);
+        return m;
+    }
+
+    // --- the constants `kin/readconst.kin` declares, mirrored exactly ------
+    internal const int RdsDefer = 10;
+    internal const int RdsConds = 11;
+    internal const int RdsErrmsg = 17;
+    internal const int RdsErrline = 18;
+    internal const int RdsErrcol = 19;
+    internal const int RdsErrplain = 20;
+    internal const int RsOk = 0;
+    internal const int RsEof = 1;
+    internal const int RsErr = 4;
+    internal const int FtNil = 0;
+    internal const int FtTrue = 1;
+    internal const int FtFalse = 2;
+    internal const int FtInt = 3;
+    internal const int FtNeg = 4;
+    internal const int FtNum = 5;
+    internal const int FtStr = 6;
+    internal const int FtName = 7;
+    internal const int FtList = 8;
+    internal const int FtVec = 9;
+    internal const int FtMap = 10;
+    internal const int FtSet = 11;
+    internal const int FtTagged = 12;
+    internal const int FtMeta = 13;
+    internal const int FtPos = 14;
+    internal const int FtPosSym = 15;
+    internal const int FfCpDerived = 1;
+    internal const int FfCpFull = 2;
+    internal const int FfExtra = 4;
+    internal const int FnSym = 0;
+    internal const int FnSymNs = 1;
+    internal const int FnKw = 2;
+    internal const int FnKwNs = 3;
+    internal const long VarintLimit = 140737488355328L;
+    internal const int FeBody = 0;
+    internal const int FeFile = 1;
+    internal const int FeLine = 2;
+    internal const int FeStrs = 3;
+    internal const int FeStrxs = 4;
+    internal const int FeNames = 5;
+    internal const int FeNamexs = 6;
+    internal const int FeCpfirst = 7;
+    internal const int FeKline = 8;
+    internal const int FeKcol = 9;
+    internal const int FeKfile = 10;
+    internal const int FeKcp = 11;
+    internal const int FeErr = 12;
+    internal const int FeLen = 13;
+--csharp
+    internal static string Hexs(System.Collections.Generic.List<int> bs) {
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < bs.Count; i++) {
+            if (i > 0) sb.Append(' ');
+            sb.Append(bs[i].ToString("x2"));
+        }
+        return sb.ToString();
+    }
+
+    internal static string RunVarint(Rt rt) {
+        int sk = rt.SinkOpen();
+        PutVarint(rt, sk, 0);
+        PutVarint(rt, sk, 127);
+        PutVarint(rt, sk, 128);
+        PutVarint(rt, sk, 300);
+        PutVarint(rt, sk, 16384);
+        long bv = rt.SinkBytes(sk);
+        rt.SinkClose(sk);
+        return Hexs(rt.Objs[Vidx(bv)].Bytes);
+    }
+
+    internal static string RunForms(Rt rt, long header, System.Collections.Generic.List<long> forms, long file) {
+        int bse = rt.Mark();
+        int hi = rt.Push(header);
+        long fv = MkVec(rt, forms, NIL);
+        int fi = rt.Push(fv);
+        int filei = rt.Push(file);
+        FormsEncode(rt, hi, fi, filei);
+        long outv = rt.R(bse + 3);
+        string s = Hexs(rt.Objs[Vidx(outv)].Bytes);
+        rt.PopTo(bse);
+        return s;
+    }
+
+    internal static string RunRead(Rt rt, long features) {
+        int bse = rt.Mark();
+        long file = Str.Of(rt, "t.fln");
+        rt.Script = new System.Collections.Generic.List<long>();
+        rt.Script.Add(Val.Fixnum(7));
+        long outv = ReadForms(rt, NIL, file, features, NIL, false, 0);
+        string s = Hexs(rt.Objs[Vidx(outv)].Bytes);
+        rt.PopTo(bse);
+        return s;
+    }
+
+    public static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+
+        o.Append("varint ").Append(RunVarint(rt)).Append(" / ");
+
+        long file = Str.Of(rt, "t.fln");
+        long m1 = MetaSimple(rt, 5, 3, file);
+        long sym = MkSym(rt, null, "abc", m1);
+        var f1 = new System.Collections.Generic.List<long>();
+        f1.Add(sym);
+        long h1 = global::Flint.Rt.Maps.Empty(rt);
+        o.Append("possym ").Append(RunForms(rt, h1, f1, file)).Append(" / ");
+
+        long mx1 = MetaSimple(rt, 10, 1, file);
+        long x1 = MkSym(rt, null, "x", mx1);
+        long mx2 = MetaSimple(rt, 4, 2, file);
+        long x2 = MkSym(rt, null, "x", mx2);
+        var f2 = new System.Collections.Generic.List<long>();
+        f2.Add(x1); f2.Add(x2);
+        long h2 = global::Flint.Rt.Maps.Empty(rt);
+        o.Append("zigzag ").Append(RunForms(rt, h2, f2, file)).Append(" / ");
+
+        long kw = MkKw(rt, "ns", "kw");
+        var f3 = new System.Collections.Generic.List<long>();
+        f3.Add(kw);
+        long h3 = global::Flint.Rt.Maps.Empty(rt);
+        o.Append("nsname ").Append(RunForms(rt, h3, f3, file)).Append(" / ");
+
+        long big = MkBigint(rt, 140737488355328L + 5);
+        long negbig = MkBigint(rt, -(140737488355328L + 5));
+        long d25 = MkDouble(rt, 2.5);
+        long dnan = MkDouble(rt, double.NaN);
+        long dinf = MkDouble(rt, double.PositiveInfinity);
+        long dninf = MkDouble(rt, double.NegativeInfinity);
+        var f4 = new System.Collections.Generic.List<long>();
+        f4.Add(Val.Fixnum(42)); f4.Add(Val.Fixnum(-17)); f4.Add(big); f4.Add(negbig);
+        f4.Add(d25); f4.Add(dnan); f4.Add(dinf); f4.Add(dninf);
+        long h4 = global::Flint.Rt.Maps.Empty(rt);
+        o.Append("numbers ").Append(RunForms(rt, h4, f4, file)).Append(" / ");
+
+        long mp = MetaSimple(rt, 2, 5, file);
+        long p = MkSym(rt, null, "p", mp);
+        long mq = MetaSimple(rt, 3, 7, file);
+        long q = MkSym(rt, null, "q", mq);
+        long mvd = MetaWithCp(rt, 1, 1, new long[]{2, 5, 3, 7}, file);
+        var vdElems = new System.Collections.Generic.List<long>();
+        vdElems.Add(p); vdElems.Add(q);
+        long vderived = MkVec(rt, vdElems, mvd);
+        long mr = MetaSimple(rt, 2, 5, file);
+        long r = MkSym(rt, null, "r", mr);
+        long mvf = MetaWithCp(rt, 1, 1, new long[]{99, 99, 11, 11}, file);
+        var vfElems = new System.Collections.Generic.List<long>();
+        vfElems.Add(r); vfElems.Add(Val.Fixnum(300));
+        long vfull = MkVec(rt, vfElems, mvf);
+        var f5 = new System.Collections.Generic.List<long>();
+        f5.Add(vderived); f5.Add(vfull);
+        long h5 = global::Flint.Rt.Maps.Empty(rt);
+        o.Append("vecs ").Append(RunForms(rt, h5, f5, file)).Append(" / ");
+
+        long kauthor = LitKeyword1(rt, "author");
+        long ray = Str.Of(rt, "ray");
+        long mzz = MetaWithExtra(rt, 9, 2, new long[][]{new long[]{kauthor, ray}}, file);
+        long zz = MkSym(rt, null, "zz", mzz);
+        var f6 = new System.Collections.Generic.List<long>();
+        f6.Add(zz);
+        long h6 = global::Flint.Rt.Maps.Empty(rt);
+        o.Append("extra ").Append(RunForms(rt, h6, f6, file)).Append(" / ");
+
+        long other = Str.Of(rt, "OTHER");
+        long e7 = global::Flint.Rt.Maps.Empty(rt);
+        long kl7 = LitKeyword1(rt, "line");
+        long m7a = MapAssoc(rt, e7, kl7, Val.Fixnum(1));
+        long kc7 = LitKeyword1(rt, "column");
+        long m7b = MapAssoc(rt, m7a, kc7, Val.Fixnum(1));
+        long kf7 = LitKeyword1(rt, "file");
+        long badmeta = MapAssoc(rt, m7b, kf7, other);
+        long bad = MkSym(rt, null, "bad", badmeta);
+        var f7 = new System.Collections.Generic.List<long>();
+        f7.Add(bad);
+        long h7 = global::Flint.Rt.Maps.Empty(rt);
+        o.Append("fallback ").Append(RunForms(rt, h7, f7, file)).Append(" / ");
+
+        o.Append("deferred ").Append(RunRead(rt, NIL)).Append(" / ");
+        long perf = LitKeyword1(rt, "perf");
+        var featElems = new System.Collections.Generic.List<long>();
+        featElems.Add(perf);
+        long featset = MkSet(rt, featElems);
+        o.Append("eager ").Append(RunRead(rt, featset));
+
+        System.Console.WriteLine(o.ToString());
+    }
+--expect
+varint 00 7f 80 01 ac 02 80 80 01 / possym 46 4c 46 31 01 03 61 62 63 01 00 00 0a 00 01 0f 08 03 00 / zigzag 46 4c 46 31 01 01 78 01 00 00 0a 00 02 0f 12 01 00 0f 0b 02 00 / nsname 46 4c 46 31 02 02 6e 73 02 6b 77 01 03 00 01 0a 00 01 07 00 / numbers 46 4c 46 31 06 0f 31 34 30 37 33 37 34 38 38 33 35 35 33 33 33 10 2d 31 34 30 37 33 37 34 38 38 33 35 35 33 33 33 03 32 2e 35 05 23 23 4e 61 4e 05 23 23 49 6e 66 06 23 23 2d 49 6e 66 00 0a 00 08 03 2a 04 11 05 00 05 01 05 02 05 03 05 04 05 05 / vecs 46 4c 46 31 03 01 70 01 71 01 72 03 00 00 00 01 00 02 0a 00 02 0e 00 01 01 09 02 0f 02 05 00 0f 02 07 01 0e 03 01 02 09 02 0f 02 05 02 03 ac 02 02 c4 01 63 14 0b / extra 46 4c 46 31 03 03 72 61 79 06 61 75 74 68 6f 72 02 7a 7a 02 02 01 00 02 0a 00 01 0e 10 02 04 01 07 00 06 00 07 01 / fallback 46 4c 46 31 05 05 4f 54 48 45 52 04 6c 69 6e 65 06 63 6f 6c 75 6d 6e 04 66 69 6c 65 03 62 61 64 04 02 01 02 02 02 03 00 04 0a 00 01 0d 0a 03 07 00 03 01 07 01 03 01 07 02 06 00 07 03 / deferred 46 4c 46 31 09 05 74 2e 66 6c 6e 04 6f 70 74 73 04 66 69 6c 65 08 66 65 61 74 75 72 65 73 03 61 6e 79 04 74 61 67 73 07 64 69 61 6c 65 63 74 05 66 6c 69 6e 74 05 63 6f 6e 64 73 08 02 01 02 02 02 03 02 04 02 05 02 06 02 07 02 08 0a 02 07 00 0a 04 07 01 06 00 07 02 07 03 07 04 00 07 05 07 06 07 07 09 00 01 03 07 / eager 46 4c 46 31 09 05 74 2e 66 6c 6e 04 6f 70 74 73 04 66 69 6c 65 08 66 65 61 74 75 72 65 73 04 70 65 72 66 04 74 61 67 73 07 64 69 61 6c 65 63 74 05 66 6c 69 6e 74 05 63 6f 6e 64 73 08 02 01 02 02 02 03 02 04 02 05 02 06 02 07 02 08 0a 02 07 00 0a 04 07 01 06 00 07 02 0b 01 07 03 07 04 00 07 05 07 06 07 07 09 00 01 03 07
+--expect-why
+DERIVED FROM THE FORMAT (`src/flint/forms.cljc`, mirrored by this file), by
+hand-assembling each byte and cross-checking with an independent Python
+re-implementation of `put-bare`/`put-value`/`pos-parts`/`derivable?` (not
+committed; this is the method, not the artefact) before transcribing. Every
+line is `FLF1` + string table + name table + body, in that order, over a
+header that is always the same two cases asked about directly:
+
+  varint     `put-varint` of 0,127,128,300,16384: 00; 7f; 80 01 (128 =
+             0*128+128 continuation, then 1); ac 02 (300 = 44+128, then 2);
+             80 80 01 (16384 = 128*128). Pins the 128-boundary both ways.
+
+  possym     one symbol `abc` at line 5 col 3, no child-pos, no extra: the
+             T_POS_SYM(15) fast path. Line delta from FE_LINE's start (1) is
+             zigzag(4)=8; interning "abc" is the string table's only entry.
+
+  zigzag     symbol `x` at (10,1) then again at (4,2): the SAME name reused
+             (index 0 both times, one string-table entry) and the delta
+             going UP (zigzag(9)=18) then DOWN (zigzag(-6)=11).
+
+  nsname     a bare namespaced keyword `ns/kw`, no position: FT_NAME(7), and
+             the name table resolves it to TWO strings, namespace then name
+             (`FN_KW_NS`=3, then the "ns" index, then the "kw" index).
+
+  numbers    42 (FT_INT), -17 (FT_NEG), 2^47+5 and -(2^47+5) (both past
+             VARINT_LIMIT, so FT_NUM text -- plain decimal, which every
+             host's integer-to-string already agrees on), 2.5 (FT_NUM text,
+             hardcoded by this file's own `num-to-str` mock rather than
+             formatted, so no language's float printer can disagree), then
+             NaN, +Inf, -Inf (FT_NUM text "##NaN"/"##Inf"/"##-Inf" -- these
+             never reach `num-to-str` at all, `put-num-text` special-cases
+             them first). Five new strings, in that order.
+
+  vecs       two forms. First a 2-element vector at (1,1) whose child-pos
+             is `[2 5 3 7]` and whose children `p`,`q` carry exactly those
+             positions themselves -- `derivable?` is true, so the flag is
+             F_CP_DERIVED(1) and NOTHING further is written for the child
+             positions (both are recovered from the children's own T_POS_SYM
+             encoding). Second, a vector at (1,1) whose first child `r` has
+             its OWN position (2,5) but the vector's child-pos says (99,99)
+             for it -- a MISMATCH, so `derivable?` is false, flag is
+             F_CP_FULL(2), and the full pair list is written after the
+             children: quot(4,2)=2 pairs, each `zigzag(line-1)` then column.
+
+  extra      symbol `zz` at (9,2) with one extra metadata key `:author
+             "ray"`, no child-pos: flag is F_EXTRA(4) alone, the pair count
+             is 1, then the key (interned as a name) and the string "ray".
+
+  fallback   symbol `bad` whose recorded `:file` is `"OTHER"`, not the file
+             `forms-encode` was called with -- `pos-parts`'s file check
+             fails first, so this is T_META(13): the metadata map itself
+             (three entries, :line/:column/:file, each key a freshly
+             interned name) written as an ordinary value, then the bare
+             symbol.
+
+  deferred/eager  `read-forms` end to end, through a mocked `read-top` that
+             hands back one scripted form (the int 7) and then RS_EOF, as
+             the task asks. `deferred` passes `features` nil, so the opts
+             map's `:features` is the keyword `:any`; `eager` passes a
+             one-element set `#{:perf}`, so it is that set, FT_SET(11) with
+             one FT_NAME element. Everything else -- the opts map's key
+             order (file, features, tags, dialect), the header's (opts,
+             conds), and conds staying an empty vector since the mocked
+             reader never sets `RDS_DEFER` -- is identical between the two,
+             which is what makes the diff legible as exactly the one key.
+
+THE MAP ORDER THIS FILE RELIES ON: `map-assoc` here always APPENDS a new
+key at the end and leaves an existing one in place (array-map/insertion
+order), and `merge3` folds `b` then `c` into `a` the same way. That is a
+choice this fixture makes once, not a guess at the real runtime's CHAMP
+order -- `forms-encode`'s own `cp-first?` probe (lines 584-622 of the kin
+source) asks ITS OWN runtime the same question the real encoder asks of
+ITS, and under this fixture's map it comes back false (`:child-pos` lands
+AFTER `:file`), which is why every `push-literal` above writes the column
+before the child-pos pair. `pos-parts`'s own rebuild-and-compare is what
+makes this self-consistent regardless of which order wins.

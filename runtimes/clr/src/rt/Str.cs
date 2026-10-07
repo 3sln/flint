@@ -398,6 +398,18 @@ public static class Str {
         return Val.Heap(a);
     }
 
+    /// `(symbol ns name)` and `(keyword ns name)` from two VALUES, the namespace
+    /// nil for none -- the vocabulary's `symbol-of`/`keyword-of`, which the
+    /// generated source reader (`kin/readcore.kin`) builds names with. The
+    /// same conversion `flint/symbol2` and `flint/keyword2` make.
+    public static long SymbolOf(Rt rt, long ns, long name) {
+        return Symbol(rt, Val.IsNil(ns) ? null : Builtins.NameOf(rt, ns), Builtins.NameOf(rt, name));
+    }
+
+    public static long KeywordOf(Rt rt, long ns, long name) {
+        return Keyword(rt, Val.IsNil(ns) ? null : Builtins.NameOf(rt, ns), Builtins.NameOf(rt, name));
+    }
+
     /// A symbol: `[ns, name, meta, hash]`. Interned like a keyword, and for the
     /// same reason: `=` on two symbols compares their slots, so two copies of
     /// one symbol would compare unequal while printing identically.

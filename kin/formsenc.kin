@@ -1,0 +1,810 @@
+;; READ FORMS AS `flint.forms` BYTES, and the whole read: text in, bytes out.
+;;
+;; The encoder is `flint.forms/encode`, rule for rule, and the format is that
+;; file's (`DECISIONS.md#stdlib-preread`): magic `FLF1`, a string table, a
+;; name table, the header `{:opts .. :conds ..}`, the forms. The DECODER stays
+;; in the compiler; only this half moves out, because the host is now the one
+;; that reads (`DECISIONS.md#namespaces-over-the-system-port`).
+;;
+;; A POSITION IS WRITTEN COMPACTLY ONLY WHEN IT REBUILDS EXACTLY. The decoder
+;; rebuilds a form's metadata with `flint.forms/pos-map`, so the encoder builds
+;; that same map here -- a literal, or the merge `position-meta` does -- and
+;; compares it, entries AND key order, with what the form carries. Anything
+;; else is written as the map it is. Which of the two a form gets is therefore
+;; a fact about the runtime's CHAMP order, and this is the runtime asking it.
+;;
+;; THE BYTES GO TO TWO SINKS, the body and then the tables, because the
+;; tables are complete only when the body is; the answer is the two joined.
+;;
+;; NOT REPRODUCED: the guest's re-read of every number it writes as text,
+;; which refused one that did not read back as itself. Every number this
+;; writes as text came from `num->str`, whose whole contract is that it does.
+(ns flint.rt.formsenc
+  (:require [flint.impl.rt :refer [defn declarefn defconst return if let do
+                                   local set while for forever break continue
+                                   comment doc not and or == != < <= > >= + -
+                                   * quot rem mark push r set-r pop-to nil? slot
+                                   fixnum fixnum64 as-fixnum to-i32 to-i64
+                                   as-idx num-f64 is-double f-nan? f-inf?
+                                   empty-map empty-vec empty-set
+                                   sink-open sink-put sink-close sink-string
+                                   sink-bytes sink-len str-const
+                                   Rt Value RootIx I32 I64 F64 Bool Sink StaticText
+                                   NIL TRUE FALSE NOT_FOUND]]
+            [flint.rt.seqcore :refer [is-seq]]
+            [flint.rt.seqwalk :refer [first next seq]]
+            [flint.rt.vecroots :refer [vec-from-roots]]
+            [flint.rt.vecread :refer [is-vector-like vec-count vec-nth]]
+            [flint.rt.vecwrite :refer [vec-conj]]
+            [flint.rt.mapcore :refer [is-map map-count]]
+            [flint.rt.mapread :refer [map-get map-contains]]
+            [flint.rt.mapwrite :refer [map-assoc]]
+            [flint.rt.mapmake :refer [ordered-map]]
+            [flint.rt.setcore :refer [is-set]]
+            [flint.rt.collvec :refer [map-entry-vector set-element-vector]]
+            [flint.rt.transients :refer [to-transient to-persistent
+                                         transient-assoc]]
+            [flint.rt.maptrans :refer [tmap-get]]
+            [flint.rt.meta :refer [meta-of]]
+            [flint.rt.opaque :refer [is-tagged]]
+            [flint.rt.names :refer [is-symbol is-keyword name-of ns-of]]
+            [flint.rt.ropemeas :refer [is-string s-bytes]]
+            [flint.rt.ropeflat :refer [s-append]]
+            [flint.rt.numkind :refer [is-int]]
+            [flint.rt.numint :refer [integer-value]]
+            [flint.rt.dblstr :refer [num-to-str]]
+            [flint.rt.valeq :refer [val-eq]]
+            [flint.rt.byteconcat :refer [b-concat]]
+            [flint.rt.vecnode :refer [new-node node-get node-set]]
+            [flint.rt.readcore :refer [rd-new rd-close rd-get rd-int rd-flag lit-keyword1 lit-symbol msg-lit msg-val msg-int sink-put-cp]]
+            [flint.rt.readform :refer [read-top merge3]]
+            [flint.rt.readconst :refer [RDS_DEFER RDS_CONDS RDS_ERRMSG RDS_ERRLINE RDS_ERRCOL RDS_ERRPLAIN RS_OK RS_EOF RS_ERR FT_NIL FT_TRUE FT_FALSE FT_INT FT_NEG FT_NUM FT_STR FT_NAME FT_LIST FT_VEC FT_MAP FT_SET FT_TAGGED FT_META FT_POS FT_POS_SYM FF_CP_DERIVED FF_CP_FULL FF_EXTRA FN_SYM FN_SYM_NS FN_KW FN_KW_NS VARINT_LIMIT FE_BODY FE_FILE FE_LINE FE_STRS FE_STRXS FE_NAMES FE_NAMEXS FE_CPFIRST FE_KLINE FE_KCOL FE_KFILE FE_KCP FE_ERR FE_LEN zigzag]]))
+
+;; --- the format -------------------------------------------------------------
+
+
+
+
+
+;; --- the encoder's state ----------------------------------------------------
+
+
+(defn ^:method ^Value eget [^Rt rt ^RootIx esi ^I32 s]
+  (return (node-get rt (r rt esi) s)))
+
+(defn ^:method eput [^:mut ^Rt rt ^RootIx esi ^I32 s ^Value v]
+  (node-set rt (r rt esi) s v))
+
+(defn ^:method ^Sink ebody [^Rt rt ^RootIx esi]
+  (return (to-i32 (as-fixnum (eget rt esi FE_BODY)))))
+
+;; --- bytes ------------------------------------------------------------------
+
+(doc "`n`, non-negative, as a varint: seven bits a byte, low first.")
+(defn ^:pub ^:method put-varint [^:mut ^Rt rt ^Sink sk ^I64 n]
+  (local ^:mut ^I64 v)
+  (set v n)
+  (while (>= v 128)
+    (do (sink-put rt sk (to-i32 (+ 128 (rem v 128))))
+        (set v (quot v 128))))
+  (sink-put rt sk (to-i32 v)))
+
+
+(doc "The index of `v` in one of the two tables (`FE_STRS`/`FE_STRXS` or"
+     "`FE_NAMES`/`FE_NAMEXS`), adding it when it is new.")
+(defn ^:method ^I64 intern [^:mut ^Rt rt ^RootIx esi ^I32 ix ^I32 xs ^Value v]
+  (let [^RootIx base (mark rt)
+        ^RootIx vi (push rt v)
+        ^Value hit (tmap-get rt (eget rt esi ix) (r rt vi) NOT_FOUND)]
+    (if (!= hit NOT_FOUND)
+      (do (pop-to rt base)
+          (return (as-fixnum hit))))
+    (let [^I32 i (vec-count rt (eget rt esi xs))
+          ^Value t2 (transient-assoc rt (eget rt esi ix) (r rt vi) (fixnum i))]
+      (eput rt esi ix t2)
+      (let [^Value v2 (vec-conj rt (eget rt esi xs) (r rt vi))]
+        (eput rt esi xs v2))
+      (pop-to rt base)
+      (return (to-i64 i)))))
+
+;; --- metadata a position can rebuild ----------------------------------------
+
+(doc "`{:line l :column c :file f}` as the decoder's literal builds it,"
+     "pushed; with `:child-pos` (rooted at `cpi`) before `:file` when"
+     "`cp-first`, after it otherwise, or not at all when `cpi` holds nil.")
+(defn ^:method push-literal [^:mut ^Rt rt ^RootIx esi ^I64 line ^I64 col ^RootIx cpi]
+  (let [^RootIx base (mark rt)
+        ^Value e (empty-map rt)
+        ^RootIx mi (push rt e)
+        ^Bool has-cp (not (nil? rt (r rt cpi)))
+        ^Bool cpf (== (eget rt esi FE_CPFIRST) TRUE)]
+    (let [^Value m1 (map-assoc rt (r rt mi) (eget rt esi FE_KLINE) (fixnum64 line))]
+      (set-r rt mi m1))
+    (let [^Value m2 (map-assoc rt (r rt mi) (eget rt esi FE_KCOL) (fixnum64 col))]
+      (set-r rt mi m2))
+    (if (and has-cp cpf)
+      (let [^Value m3 (map-assoc rt (r rt mi) (eget rt esi FE_KCP) (r rt cpi))]
+        (set-r rt mi m3)))
+    (let [^Value m4 (map-assoc rt (r rt mi) (eget rt esi FE_KFILE) (eget rt esi FE_FILE))]
+      (set-r rt mi m4))
+    (if (and has-cp (not cpf))
+      (let [^Value m5 (map-assoc rt (r rt mi) (eget rt esi FE_KCP) (r rt cpi))]
+        (set-r rt mi m5)))
+    (let [^Value out (r rt mi)]
+      (pop-to rt base)
+      (push rt out))))
+
+(doc "`flint.forms/pos-map`, pushed: the literal when there are no extra"
+     "keys, and otherwise `position-meta` -- the literal, the child positions"
+     "and the extra keys as an array map, MERGED.")
+(defn ^:method push-pos-map [^:mut ^Rt rt ^RootIx esi ^I64 line ^I64 col ^RootIx cpi
+                             ^RootIx extrai]
+  (if (== (vec-count rt (r rt extrai)) 0)
+    (do (push-literal rt esi line col cpi)
+        (return)))
+  (let [^RootIx base (mark rt)
+        ^RootIx nocp (push rt NIL)]
+    (push-literal rt esi line col nocp)
+    (comment "`(when (seq children) {:child-pos children})`.")
+    (if (nil? rt (r rt cpi))
+      (push rt NIL)
+      (if (== (vec-count rt (r rt cpi)) 0)
+        (push rt NIL)
+        (let [^Value e (empty-map rt)
+              ^Value m (map-assoc rt e (eget rt esi FE_KCP) (r rt cpi))]
+          (push rt m))))
+    (let [^Value am (ordered-map rt (r rt extrai))]
+      (push rt am))
+    (merge3 rt (+ base 1) (+ base 2) (+ base 3))
+    (let [^Value out (r rt (+ base 4))]
+      (pop-to rt base)
+      (push rt out))))
+
+(doc "Do the maps at `ai` and `bi` hold equal entries IN THE SAME KEY ORDER?")
+(defn ^:method ^Bool same-map [^:mut ^Rt rt ^RootIx ai ^RootIx bi]
+  (if (not (val-eq rt (r rt ai) (r rt bi)))
+    (return false))
+  (let [^RootIx base (mark rt)
+        ^Value ea (map-entry-vector rt (r rt ai))
+        ^RootIx eai (push rt ea)
+        ^Value eb (map-entry-vector rt (r rt bi))
+        ^RootIx ebi (push rt eb)
+        ^I32 n (vec-count rt (r rt eai))]
+    (for [^I32 i 0 n]
+      (let [^Value ka (slot rt (vec-nth rt (r rt eai) i NIL) 0)
+            ^RootIx kai (push rt ka)
+            ^Value kb (slot rt (vec-nth rt (r rt ebi) i NIL) 0)
+            ^Bool same (val-eq rt (r rt kai) kb)]
+        (pop-to rt kai)
+        (if (not same)
+          (do (pop-to rt base)
+              (return false)))))
+    (pop-to rt base)
+    (return true)))
+
+(doc "The integer at the key in slot `k` of the metadata rooted at `mi`.")
+(defn ^:method ^I64 meta-int [^:mut ^Rt rt ^RootIx esi ^RootIx mi ^I32 k]
+  (let [^Value v (map-get rt (r rt mi) (eget rt esi k) NIL)]
+    (return (integer-value rt v))))
+
+(doc "Is `v` a non-negative integer?")
+(defn ^:method ^Bool is-nat [^:mut ^Rt rt ^Value v]
+  (if (not (is-int rt v))
+    (return false))
+  (return (>= (integer-value rt v) 0)))
+
+(doc "`flint.forms/pos-parts` of the metadata rooted at `mi`: true when the"
+     "decoder's construction rebuilds it EXACTLY, with the child positions and"
+     "the extra keys -- a flat `[k v ..]` vector, in the map's order --"
+     "pushed in that order. False pushes nothing.")
+(defn ^:method ^Bool pos-parts [^:mut ^Rt rt ^RootIx esi ^RootIx mi]
+  (let [^Value lv (map-get rt (r rt mi) (eget rt esi FE_KLINE) NIL)
+        ^Value cv (map-get rt (r rt mi) (eget rt esi FE_KCOL) NIL)]
+    (if (not (and (is-int rt lv) (is-nat rt cv)))
+      (return false)))
+  (let [^Value fv (map-get rt (r rt mi) (eget rt esi FE_KFILE) NIL)]
+    (if (not (val-eq rt (eget rt esi FE_FILE) fv))
+      (return false)))
+  (let [^RootIx base (mark rt)
+        ^Value cp (map-get rt (r rt mi) (eget rt esi FE_KCP) NIL)
+        ^RootIx cpi (push rt cp)]
+    (if (not (nil? rt (r rt cpi)))
+      (do (if (not (is-vector-like rt (r rt cpi)))
+            (do (pop-to rt base) (return false)))
+          (let [^I32 cn (vec-count rt (r rt cpi))]
+            (if (!= (rem cn 2) 0)
+              (do (pop-to rt base) (return false)))
+            (for [^I32 i 0 cn]
+              (if (not (is-nat rt (vec-nth rt (r rt cpi) i NIL)))
+                (do (pop-to rt base) (return false)))))))
+    (comment "THE EXTRA KEYS: everything but the four the reader writes.")
+    (let [^Value ev (map-entry-vector rt (r rt mi))
+          ^RootIx evi (push rt ev)
+          ^RootIx flat (mark rt)
+          ^I32 n (vec-count rt (r rt evi))]
+      (for [^I32 j 0 n]
+        (let [^Value en (vec-nth rt (r rt evi) j NIL)
+              ^RootIx eni (push rt en)
+              ^Value k (slot rt (r rt eni) 0)]
+          (if (or (val-eq rt k (eget rt esi FE_KLINE))
+                  (or (val-eq rt (slot rt (r rt eni) 0) (eget rt esi FE_KCOL))
+                      (or (val-eq rt (slot rt (r rt eni) 0) (eget rt esi FE_KFILE))
+                          (val-eq rt (slot rt (r rt eni) 0) (eget rt esi FE_KCP)))))
+            (pop-to rt eni)
+            (let [^Value vv (slot rt (r rt eni) 1)]
+              (set-r rt eni (slot rt (r rt eni) 0))
+              (push rt vv)))))
+      (let [^Value extra (vec-from-roots rt flat (to-i32 (- (mark rt) flat)))]
+        (pop-to rt flat)
+        (set-r rt evi extra)
+        (let [^I64 line (meta-int rt esi mi FE_KLINE)
+              ^I64 col (meta-int rt esi mi FE_KCOL)]
+          (push-pos-map rt esi line col cpi evi)
+          (let [^RootIx bi (+ evi 1)]
+            (if (not (same-map rt bi mi))
+              (do (pop-to rt base)
+                  (return false)))
+            (pop-to rt bi)
+            (comment "Leave exactly `cp extra`, which is what is at `base`.")
+            (return true)))))))
+
+(doc "A child's own `[line col]`, when its metadata has both as integers:"
+     "true and pushed, or false and nothing.")
+(defn ^:method ^Bool own-pos [^:mut ^Rt rt ^RootIx esi ^Value x]
+  (if (not (or (is-symbol rt x) (or (is-vector-like rt x)
+           (or (is-map rt x) (or (is-set rt x) (is-seq rt x))))))
+    (return false))
+  (let [^Value m (meta-of rt x)]
+    (if (nil? rt m)
+      (return false))
+    (let [^RootIx base (mark rt)
+          ^RootIx mi (push rt m)
+          ^Value l (map-get rt (r rt mi) (eget rt esi FE_KLINE) NIL)
+          ^Value c (map-get rt (r rt mi) (eget rt esi FE_KCOL) NIL)]
+      (if (and (is-int rt l) (is-int rt c))
+        (do (pop-to rt base)
+            (push rt l)
+            (push rt c)
+            (return true)))
+      (pop-to rt base)
+      (return false))))
+
+(doc "Can the child positions rooted at `cpi` be rebuilt from the children"
+     "(the vector at `xsi`) and the pairs written for those without their own?")
+(defn ^:method ^Bool derivable [^:mut ^Rt rt ^RootIx esi ^RootIx cpi ^RootIx xsi]
+  (let [^I32 n (vec-count rt (r rt xsi))]
+    (if (!= (vec-count rt (r rt cpi)) (* 2 n))
+      (return false))
+    (for [^I32 i 0 n]
+      (let [^RootIx base (mark rt)]
+        (if (own-pos rt esi (vec-nth rt (r rt xsi) i NIL))
+          (let [^Bool same (and (val-eq rt (r rt base) (vec-nth rt (r rt cpi) (* 2 i) NIL))
+                                (val-eq rt (r rt (+ base 1)) (vec-nth rt (r rt cpi) (+ (* 2 i) 1) NIL)))]
+            (pop-to rt base)
+            (if (not same)
+              (return false))))))
+    (return true)))
+
+;; --- values -----------------------------------------------------------------
+
+(declarefn put-value)
+
+(doc "Write the elements rooted at `at` .. `at + n`.")
+(defn ^:method ^I32 put-run [^:mut ^Rt rt ^RootIx esi ^RootIx at ^I32 n]
+  (for [^I32 i 0 n]
+    (let [^I32 st (put-value rt esi (+ at (as-idx i)))]
+      (if (!= st RS_OK)
+        (return st))))
+  (return RS_OK))
+
+(doc "Push every element of the collection at `vi`, answering how many: a"
+     "seq walked, a vector indexed, a set in its own order.")
+(defn ^:method ^I32 push-elements [^:mut ^Rt rt ^RootIx vi]
+  (if (is-vector-like rt (r rt vi))
+    (let [^I32 n (vec-count rt (r rt vi))]
+      (for [^I32 i 0 n]
+        (push rt (vec-nth rt (r rt vi) i NIL)))
+      (return n)))
+  (if (is-set rt (r rt vi))
+    (let [^Value xs (set-element-vector rt (r rt vi))
+          ^RootIx xsi (push rt xs)
+          ^I32 sn (vec-count rt (r rt xsi))]
+      (for [^I32 j 0 sn]
+        (push rt (vec-nth rt (r rt xsi) j NIL)))
+      (comment "The element vector's root sits under the elements; move them"
+               "down over it.")
+      (for [^I32 k 0 sn]
+        (set-r rt (+ xsi (as-idx k)) (r rt (+ xsi (as-idx (+ k 1))))))
+      (pop-to rt (+ xsi (as-idx sn)))
+      (return sn)))
+  (let [^Value s0 (seq rt (r rt vi))
+        ^RootIx si (push rt s0)]
+    (local ^:mut ^I32 cnt)
+    (set cnt 0)
+    (forever
+      (if (nil? rt (r rt si))
+        (break))
+      (let [^Value x (first rt (r rt si))]
+        (push rt x))
+      (set cnt (+ cnt 1))
+      (let [^Value nx (next rt (r rt si))]
+        (set-r rt si nx)))
+    (for [^I32 q 0 cnt]
+      (set-r rt (+ si (as-idx q)) (r rt (+ si (as-idx (+ q 1))))))
+    (pop-to rt (+ si (as-idx cnt)))
+    (return cnt)))
+
+(doc "Record an encoder error and answer `RS_ERR`.")
+(defn ^:method ^I32 efail [^:mut ^Rt rt ^RootIx esi ^Sink sk]
+  (let [^Value m (sink-string rt sk)]
+    (sink-close rt sk)
+    (eput rt esi FE_ERR m)
+    (return RS_ERR)))
+
+(doc "A number written as text, `FT_NUM`: what `num->str` says, or the three"
+     "that have no digits.")
+(defn ^:method put-num-text [^:mut ^Rt rt ^RootIx esi ^Value v]
+  (local ^:mut ^Value text)
+  (set text NIL)
+  (if (is-double rt v)
+    (let [^F64 d (num-f64 rt v)]
+      (if (f-nan? d)
+        (set text (str-const rt "##NaN"))
+        (if (f-inf? d)
+          (if (> d 0.0)
+            (set text (str-const rt "##Inf"))
+            (set text (str-const rt "##-Inf")))))))
+  (if (nil? rt text)
+    (set text (num-to-str rt v)))
+  (let [^I64 ix (intern rt esi FE_STRS FE_STRXS text)]
+    (sink-put rt (ebody rt esi) FT_NUM)
+    (put-varint rt (ebody rt esi) ix)))
+
+(doc "`v`, rooted at `vi`, WITHOUT its metadata.")
+(defn ^:method ^I32 put-bare [^:mut ^Rt rt ^RootIx esi ^RootIx vi]
+  (let [^Sink b (ebody rt esi)
+        ^Value v (r rt vi)]
+    (if (nil? rt v)
+      (do (sink-put rt b FT_NIL) (return RS_OK)))
+    (if (== v TRUE)
+      (do (sink-put rt b FT_TRUE) (return RS_OK)))
+    (if (== v FALSE)
+      (do (sink-put rt b FT_FALSE) (return RS_OK)))
+    (if (is-int rt v)
+      (let [^I64 n (integer-value rt v)]
+        (if (and (> n -1) (< n VARINT_LIMIT))
+          (do (sink-put rt b FT_INT)
+              (put-varint rt b n)
+              (return RS_OK)))
+        (if (and (> n (- 0 VARINT_LIMIT)) (< n 0))
+          (do (sink-put rt b FT_NEG)
+              (put-varint rt b (- 0 n))
+              (return RS_OK)))
+        (put-num-text rt esi (r rt vi))
+        (return RS_OK)))
+    (if (is-double rt v)
+      (do (put-num-text rt esi v)
+          (return RS_OK)))
+    (if (is-string rt v)
+      (let [^I64 si (intern rt esi FE_STRS FE_STRXS v)]
+        (sink-put rt (ebody rt esi) FT_STR)
+        (put-varint rt (ebody rt esi) si)
+        (return RS_OK)))
+    (if (or (is-symbol rt v) (is-keyword rt v))
+      (comment "INTERNED WITHOUT METADATA: equality ignores it, so the symbol"
+               "itself is the key, and the table writes only its names."))
+    (if (or (is-symbol rt v) (is-keyword rt v))
+      (let [^I64 ni (intern rt esi FE_NAMES FE_NAMEXS v)]
+        (sink-put rt (ebody rt esi) FT_NAME)
+        (put-varint rt (ebody rt esi) ni)
+        (return RS_OK)))
+    (if (or (is-seq rt v) (or (is-vector-like rt v) (is-set rt v)))
+      (let [^RootIx base (mark rt)
+            ^Bool is-list (is-seq rt (r rt vi))
+            ^Bool is-vec (is-vector-like rt (r rt vi))
+            ^I32 n (push-elements rt vi)]
+        (if is-list
+          (sink-put rt (ebody rt esi) FT_LIST)
+          (if is-vec
+            (sink-put rt (ebody rt esi) FT_VEC)
+            (sink-put rt (ebody rt esi) FT_SET)))
+        (put-varint rt (ebody rt esi) (to-i64 n))
+        (let [^I32 st (put-run rt esi base n)]
+          (pop-to rt base)
+          (return st))))
+    (if (is-map rt v)
+      (let [^RootIx mbase (mark rt)
+            ^Value ev (map-entry-vector rt (r rt vi))
+            ^RootIx evi (push rt ev)
+            ^I32 mn (vec-count rt (r rt evi))]
+        (sink-put rt (ebody rt esi) FT_MAP)
+        (put-varint rt (ebody rt esi) (to-i64 mn))
+        (for [^I32 i 0 mn]
+          (let [^Value en (vec-nth rt (r rt evi) i NIL)
+                ^RootIx ki (push rt (slot rt en 0))
+                ^RootIx vvi (push rt (slot rt (vec-nth rt (r rt evi) i NIL) 1))
+                ^I32 kst (put-value rt esi ki)]
+            (if (!= kst RS_OK)
+              (do (pop-to rt mbase) (return kst)))
+            (let [^I32 vst (put-value rt esi vvi)]
+              (if (!= vst RS_OK)
+                (do (pop-to rt mbase) (return vst))))
+            (pop-to rt ki)))
+        (pop-to rt mbase)
+        (return RS_OK)))
+    (if (is-tagged rt v)
+      (let [^RootIx tbase (mark rt)
+            ^RootIx tgi (push rt (slot rt v 0))
+            ^RootIx fmi (push rt (slot rt (r rt vi) 1))]
+        (sink-put rt (ebody rt esi) FT_TAGGED)
+        (let [^I32 tst (put-value rt esi tgi)]
+          (if (!= tst RS_OK)
+            (do (pop-to rt tbase) (return tst))))
+        (let [^I32 fst (put-value rt esi fmi)]
+          (pop-to rt tbase)
+          (return fst))))
+    (let [^Sink ek (sink-open rt)]
+      (msg-lit rt ek "flint.forms cannot write this value")
+      (return (efail rt esi ek)))))
+
+(doc "A position: the line as a delta from the last one written, the column.")
+(defn ^:method put-pos [^:mut ^Rt rt ^RootIx esi ^I64 line ^I64 col]
+  (let [^I64 last (as-fixnum (eget rt esi FE_LINE))]
+    (put-varint rt (ebody rt esi) (zigzag (- line last)))
+    (eput rt esi FE_LINE (fixnum64 line))
+    (put-varint rt (ebody rt esi) col)))
+
+(doc "`v`, rooted at `vi`, with its metadata.")
+(defn ^:pub ^:method ^I32 put-value [^:mut ^Rt rt ^RootIx esi ^RootIx vi]
+  (let [^Value v (r rt vi)]
+    (if (not (or (is-symbol rt v) (or (is-vector-like rt v)
+             (or (is-map rt v) (or (is-set rt v) (is-seq rt v))))))
+      (return (put-bare rt esi vi))))
+  (let [^RootIx base (mark rt)
+        ^Value m (meta-of rt (r rt vi))
+        ^RootIx mi (push rt m)]
+    (if (nil? rt (r rt mi))
+      (do (pop-to rt base)
+          (return (put-bare rt esi vi))))
+    (if (not (pos-parts rt esi mi))
+      (do (sink-put rt (ebody rt esi) FT_META)
+          (let [^I32 mst (put-value rt esi mi)]
+            (if (!= mst RS_OK)
+              (do (pop-to rt base) (return mst))))
+          (let [^I32 bst (put-bare rt esi vi)]
+            (pop-to rt base)
+            (return bst))))
+    (comment "`cp extra` are at `mi + 1` and `mi + 2`.")
+    (let [^RootIx cpi (+ mi 1)
+          ^RootIx exi (+ mi 2)
+          ^I64 line (meta-int rt esi mi FE_KLINE)
+          ^I64 col (meta-int rt esi mi FE_KCOL)
+          ^Bool has-cp (not (nil? rt (r rt cpi)))
+          ^I32 nextra (vec-count rt (r rt exi))]
+      (if (and (is-symbol rt (r rt vi)) (and (not has-cp) (== nextra 0)))
+        (let [^I64 ni (intern rt esi FE_NAMES FE_NAMEXS (r rt vi))]
+          (sink-put rt (ebody rt esi) FT_POS_SYM)
+          (put-pos rt esi line col)
+          (put-varint rt (ebody rt esi) ni)
+          (pop-to rt base)
+          (return RS_OK)))
+      (comment "THE CHILDREN, when there are positions for them: a map has"
+               "none to derive from.")
+      (local ^:mut ^Bool derived)
+      (set derived false)
+      (let [^RootIx xsi (mark rt)]
+        (if (and has-cp (not (is-map rt (r rt vi))))
+          (let [^RootIx eb (mark rt)
+                ^I32 en (push-elements rt vi)
+                ^Value xs (vec-from-roots rt eb en)]
+            (pop-to rt eb)
+            (push rt xs)
+            (set derived (derivable rt esi cpi xsi)))
+          (push rt NIL))
+        (sink-put rt (ebody rt esi) FT_POS)
+        (put-pos rt esi line col)
+        (local ^:mut ^I64 flags)
+        (set flags 0)
+        (if has-cp
+          (if derived
+            (set flags (to-i64 FF_CP_DERIVED))
+            (set flags (to-i64 FF_CP_FULL))))
+        (if (> nextra 0)
+          (set flags (+ flags (to-i64 FF_EXTRA))))
+        (put-varint rt (ebody rt esi) flags)
+        (if (> nextra 0)
+          (do (put-varint rt (ebody rt esi) (to-i64 (quot nextra 2)))
+              (let [^RootIx xb (mark rt)]
+                (for [^I32 i 0 nextra]
+                  (push rt (vec-nth rt (r rt exi) i NIL)))
+                (let [^I32 xst (put-run rt esi xb nextra)]
+                  (pop-to rt xb)
+                  (if (!= xst RS_OK)
+                    (do (pop-to rt base) (return xst)))))))
+        (let [^I32 bst2 (put-bare rt esi vi)]
+          (if (!= bst2 RS_OK)
+            (do (pop-to rt base) (return bst2))))
+        (comment "THE CHILD POSITIONS AFTER THE CHILDREN, so the derived ones"
+                 "can be read off what was just decoded.")
+        (if has-cp
+          (if derived
+            (let [^I32 n (vec-count rt (r rt xsi))]
+              (for [^I32 k 0 n]
+                (let [^RootIx ob (mark rt)]
+                  (if (own-pos rt esi (vec-nth rt (r rt xsi) k NIL))
+                    (pop-to rt ob)
+                    (let [^I64 cl (integer-value rt (vec-nth rt (r rt cpi) (* 2 k) NIL))
+                          ^I64 cc (integer-value rt (vec-nth rt (r rt cpi) (+ (* 2 k) 1) NIL))]
+                      (put-varint rt (ebody rt esi) (zigzag (- cl line)))
+                      (put-varint rt (ebody rt esi) cc))))))
+            (let [^I32 cn (vec-count rt (r rt cpi))]
+              (put-varint rt (ebody rt esi) (to-i64 (quot cn 2)))
+              (local ^:mut ^I32 q)
+              (set q 0)
+              (while (< q cn)
+                (do (let [^I64 fl (integer-value rt (vec-nth rt (r rt cpi) q NIL))
+                          ^I64 fc (integer-value rt (vec-nth rt (r rt cpi) (+ q 1) NIL))]
+                      (put-varint rt (ebody rt esi) (zigzag (- fl line)))
+                      (put-varint rt (ebody rt esi) fc))
+                    (set q (+ q 2)))))))
+        (pop-to rt base)
+        (return RS_OK)))))
+
+;; --- the whole read ---------------------------------------------------------
+
+(doc "A string's UTF-8: its byte count, then the bytes.")
+(defn ^:method put-string [^:mut ^Rt rt ^Sink sk ^Value s]
+  (put-varint rt sk (to-i64 (s-bytes rt s)))
+  (s-append rt s sk))
+
+(doc "`flint.forms/encode` of the header rooted at `hi` and the forms vector"
+     "at `fi`, with the file named `file` (rooted at `filei`). Pushes the"
+     "bytes, or an error message string with `RS_ERR`.")
+(defn ^:pub ^:method ^I32 forms-encode [^:mut ^Rt rt ^RootIx hi ^RootIx fi ^RootIx filei]
+  (let [^RootIx base (mark rt)
+        ^Value node (new-node rt FE_LEN NIL)
+        ^RootIx esi (push rt node)
+        ^Sink body (sink-open rt)]
+    (eput rt esi FE_BODY (fixnum body))
+    (eput rt esi FE_FILE (r rt filei))
+    (eput rt esi FE_LINE (fixnum 1))
+    (let [^Value t1 (to-transient rt (empty-map rt))]
+      (eput rt esi FE_STRS t1))
+    (eput rt esi FE_STRXS (empty-vec rt))
+    (let [^Value t2 (to-transient rt (empty-map rt))]
+      (eput rt esi FE_NAMES t2))
+    (eput rt esi FE_NAMEXS (empty-vec rt))
+    (let [^Value kl (lit-keyword1 rt "line")]
+      (eput rt esi FE_KLINE kl))
+    (let [^Value kc (lit-keyword1 rt "column")]
+      (eput rt esi FE_KCOL kc))
+    (let [^Value kf (lit-keyword1 rt "file")]
+      (eput rt esi FE_KFILE kf))
+    (let [^Value kp (lit-keyword1 rt "child-pos")]
+      (eput rt esi FE_KCP kp))
+    (comment "`cp-first?`: does the merge leave `:child-pos` before `:file`?"
+             "Asked of the runtime, as the guest asks it -- the order is the"
+             "trie's, and both halves of the format have to agree about it.")
+    (let [^RootIx qb (mark rt)
+          ^Value e0 (empty-map rt)
+          ^RootIx q0 (push rt e0)]
+      (let [^Value m1 (map-assoc rt (r rt q0) (eget rt esi FE_KLINE) (fixnum 1))]
+        (set-r rt q0 m1))
+      (let [^Value m2 (map-assoc rt (r rt q0) (eget rt esi FE_KCOL) (fixnum 1))]
+        (set-r rt q0 m2))
+      (let [^Value fs (str-const rt "f")
+            ^Value m3 (map-assoc rt (r rt q0) (eget rt esi FE_KFILE) fs)]
+        (set-r rt q0 m3))
+      (let [^RootIx q1 (push rt NIL)
+            ^Value e1 (empty-map rt)
+            ^RootIx cpm (push rt e1)]
+        (push rt (fixnum 1))
+        (push rt (fixnum 1))
+        (let [^Value cpv (vec-from-roots rt (+ cpm 1) 2)]
+          (pop-to rt (+ cpm 1))
+          (let [^Value m4 (map-assoc rt (r rt cpm) (eget rt esi FE_KCP) cpv)]
+            (set-r rt q1 m4)
+            (pop-to rt cpm)))
+        (push rt NIL)
+        (merge3 rt q0 q1 (+ q1 1))
+        (let [^Value ev (map-entry-vector rt (r rt (+ q1 2)))
+              ^RootIx evi (push rt ev)]
+          (comment "The keys, in order, are exactly line column child-pos file?")
+          (local ^:mut ^Bool cpf)
+          (set cpf (== (vec-count rt (r rt evi)) 4))
+          (if cpf
+            (set cpf (and (and (val-eq rt (slot rt (vec-nth rt (r rt evi) 0 NIL) 0) (eget rt esi FE_KLINE))
+                               (val-eq rt (slot rt (vec-nth rt (r rt evi) 1 NIL) 0) (eget rt esi FE_KCOL)))
+                          (and (val-eq rt (slot rt (vec-nth rt (r rt evi) 2 NIL) 0) (eget rt esi FE_KCP))
+                               (val-eq rt (slot rt (vec-nth rt (r rt evi) 3 NIL) 0) (eget rt esi FE_KFILE))))))
+          (if cpf
+            (eput rt esi FE_CPFIRST TRUE)
+            (eput rt esi FE_CPFIRST FALSE))))
+      (pop-to rt qb))
+    (local ^:mut ^I32 st)
+    (set st (put-value rt esi hi))
+    (if (== st RS_OK)
+      (do (put-varint rt body (to-i64 (vec-count rt (r rt fi))))
+          (let [^I32 n (vec-count rt (r rt fi))]
+            (for [^I32 i 0 n]
+              (if (== st RS_OK)
+                (let [^RootIx xi (push rt (vec-nth rt (r rt fi) i NIL))]
+                  (set st (put-value rt esi xi))
+                  (pop-to rt xi)))))))
+    (if (!= st RS_OK)
+      (let [^Value err (eget rt esi FE_ERR)]
+        (sink-close rt body)
+        (pop-to rt base)
+        (push rt err)
+        (return RS_ERR)))
+    (comment "THE NAME TABLE refers into the string table, so it is resolved"
+             "to indices before the string table is written -- and may add to"
+             "it: namespace first, then name.")
+    (let [^Sink names (sink-open rt)
+          ^Value nxs (eget rt esi FE_NAMEXS)
+          ^RootIx nxi (push rt nxs)
+          ^I32 nn (vec-count rt (r rt nxi))]
+      (put-varint rt names (to-i64 nn))
+      (for [^I32 j 0 nn]
+        (let [^Value nmv (vec-nth rt (r rt nxi) j NIL)
+              ^RootIx nmi (push rt nmv)
+              ^Value nsv (ns-of rt (r rt nmi))
+              ^Bool kw (is-keyword rt (r rt nmi))]
+          (if (nil? rt nsv)
+            (let [^Value nm1 (name-of rt (r rt nmi))
+                  ^I64 i1 (intern rt esi FE_STRS FE_STRXS nm1)]
+              (if kw (sink-put rt names FN_KW) (sink-put rt names FN_SYM))
+              (put-varint rt names i1))
+            (let [^RootIx nsi (push rt nsv)
+                  ^I64 i2 (intern rt esi FE_STRS FE_STRXS (r rt nsi))
+                  ^Value nm2 (name-of rt (r rt nmi))
+                  ^I64 i3 (intern rt esi FE_STRS FE_STRXS nm2)]
+              (if kw (sink-put rt names FN_KW_NS) (sink-put rt names FN_SYM_NS))
+              (put-varint rt names i2)
+              (put-varint rt names i3)))
+          (pop-to rt nmi)))
+      (let [^Sink head (sink-open rt)
+            ^Value sxs (eget rt esi FE_STRXS)
+            ^RootIx sxi (push rt sxs)
+            ^I32 sn (vec-count rt (r rt sxi))]
+        (sink-put rt head 70)
+        (sink-put rt head 76)
+        (sink-put rt head 70)
+        (sink-put rt head 49)
+        (put-varint rt head (to-i64 sn))
+        (for [^I32 k 0 sn]
+          (put-string rt head (vec-nth rt (r rt sxi) k NIL)))
+        (let [^Value hb (sink-bytes rt head)
+              ^RootIx hbi (push rt hb)
+              ^Value nb (sink-bytes rt names)
+              ^RootIx nbi (push rt nb)
+              ^Value bb (sink-bytes rt body)
+              ^RootIx bbi (push rt bb)
+              ^Value hn (b-concat rt (r rt hbi) (r rt nbi))
+              ^Value all (b-concat rt hn (r rt bbi))]
+          (sink-close rt body)
+          (pop-to rt base)
+          (push rt all)
+          (return RS_OK))))))
+
+(doc "THE READER'S ENTRY: the string `src`, read as `file`, as `flint.forms`"
+     "bytes -- or, when it does not read, `[message line column plain]`, the"
+     "message whole (\"read error: .. (file:l:c)\" for the reader's own,"
+     "bare for an error the guest raised from underneath it, `plain` true)."
+     ""
+     "`features` nil is a DEFERRED read, `:features :any` in its options;"
+     "otherwise the set the conditionals are chosen by. `tags` is the"
+     "workspace's tag map or nil, `portable` the dialect, `gensym0` the first"
+     "auto-gensym's number. The header's options are"
+     "`{:file :features :tags :dialect}` -- `flint.project/read-options`, which"
+     "is what the compiler checks them against on arrival.")
+(defn ^:pub ^:method ^Value read-forms [^:mut ^Rt rt ^Value src ^Value file ^Value features
+                                        ^Value tags ^Bool portable ^I64 gensym0]
+  (let [^RootIx base (mark rt)
+        ^RootIx filei (push rt file)
+        ^RootIx feati (push rt features)
+        ^RootIx tagsi (push rt tags)
+        ^Value st0 (rd-new rt src (r rt filei) (r rt feati) (r rt tagsi) portable gensym0)
+        ^RootIx sti (push rt st0)
+        ^Value cv (empty-vec rt)
+        ^RootIx condsi (push rt cv)
+        ^RootIx forms (mark rt)]
+    (local ^:mut ^I32 n)
+    (set n 0)
+    (local ^:mut ^I32 status)
+    (set status RS_OK)
+    (forever
+      (let [^I64 n0 (rd-int rt sti RDS_CONDS)
+            ^I32 rst (read-top rt sti)]
+        (if (== rst RS_EOF)
+          (break))
+        (if (== rst RS_ERR)
+          (do (set status RS_ERR)
+              (break)))
+        (if (and (rd-flag rt sti RDS_DEFER) (!= n0 (rd-int rt sti RDS_CONDS)))
+          (let [^Value c2 (vec-conj rt (r rt condsi) (fixnum n))]
+            (set-r rt condsi c2)))
+        (set n (+ n 1))))
+    (rd-close rt sti)
+    (if (== status RS_ERR)
+      (let [^Sink sk (sink-open rt)
+            ^Bool plain (rd-flag rt sti RDS_ERRPLAIN)]
+        (if (not plain)
+          (msg-lit rt sk "read error: "))
+        (msg-val rt sk (rd-get rt sti RDS_ERRMSG))
+        (if (not plain)
+          (do (msg-lit rt sk " (")
+              (msg-val rt sk (r rt filei))
+              (msg-lit rt sk ":")
+              (msg-int rt sk (rd-int rt sti RDS_ERRLINE))
+              (msg-lit rt sk ":")
+              (msg-int rt sk (rd-int rt sti RDS_ERRCOL))
+              (msg-lit rt sk ")")))
+        (let [^Value msg (sink-string rt sk)]
+          (sink-close rt sk)
+          (pop-to rt forms)
+          (push rt msg)
+          (push rt (rd-get rt sti RDS_ERRLINE))
+          (push rt (rd-get rt sti RDS_ERRCOL))
+          (if plain (push rt TRUE) (push rt FALSE))
+          (let [^Value ev (vec-from-roots rt forms 4)]
+            (pop-to rt base)
+            (return ev)))))
+    (let [^Value fv (vec-from-roots rt forms n)]
+      (pop-to rt forms)
+      (let [^RootIx fvi (push rt fv)
+            ^RootIx optsb (mark rt)
+            ^Value e (empty-map rt)
+            ^RootIx oi (push rt e)]
+        (comment "`{:file .. :features .. :tags .. :dialect ..}`, a map literal.")
+        (let [^Value k1 (lit-keyword1 rt "file")
+              ^Value o1 (map-assoc rt (r rt oi) k1 (r rt filei))]
+          (set-r rt oi o1))
+        (let [^Value k2 (lit-keyword1 rt "features")]
+          (if (nil? rt (r rt feati))
+            (let [^RootIx k2i (push rt k2)
+                  ^Value anyk (lit-keyword1 rt "any")
+                  ^Value o2 (map-assoc rt (r rt oi) (r rt k2i) anyk)]
+              (set-r rt oi o2)
+              (pop-to rt k2i))
+            (let [^Value o2b (map-assoc rt (r rt oi) k2 (r rt feati))]
+              (set-r rt oi o2b))))
+        (let [^Value k3 (lit-keyword1 rt "tags")]
+          (local ^:mut ^Value tv)
+          (set tv (r rt tagsi))
+          (if (not (nil? rt tv))
+            (if (== (map-count rt tv) 0)
+              (set tv NIL)))
+          (let [^Value o3 (map-assoc rt (r rt oi) k3 tv)]
+            (set-r rt oi o3)))
+        (let [^Value k4 (lit-keyword1 rt "dialect")
+              ^RootIx k4i (push rt k4)]
+          (local ^:mut ^Value dv)
+          (if portable
+            (set dv (lit-keyword1 rt "portable"))
+            (set dv (lit-keyword1 rt "flint")))
+          (let [^Value o4 (map-assoc rt (r rt oi) (r rt k4i) dv)]
+            (set-r rt oi o4)
+            (pop-to rt k4i)))
+        (comment "`{:opts .. :conds ..}`, a map literal.")
+        (let [^Value he (empty-map rt)
+              ^RootIx hi (push rt he)
+              ^Value ko (lit-keyword1 rt "opts")
+              ^Value h1 (map-assoc rt (r rt hi) ko (r rt oi))]
+          (set-r rt hi h1)
+          (let [^Value kc (lit-keyword1 rt "conds")
+                ^Value h2 (map-assoc rt (r rt hi) kc (r rt condsi))]
+            (set-r rt hi h2))
+          (let [^I32 est (forms-encode rt hi fvi filei)
+                ^Value out (r rt (+ hi 1))]
+            (if (== est RS_ERR)
+              (do (pop-to rt optsb)
+                  (push rt out)
+                  (push rt (fixnum 0))
+                  (push rt (fixnum 0))
+                  (push rt TRUE)
+                  (let [^Value ev2 (vec-from-roots rt optsb 4)]
+                    (pop-to rt base)
+                    (return ev2))))
+            (pop-to rt base)
+            (return out)))))))

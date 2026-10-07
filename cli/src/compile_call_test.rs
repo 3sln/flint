@@ -187,7 +187,12 @@ fn assert_waves(name: &str, o: &Outcome) {
 fn the_compile_call_builds_the_same_ir_as_the_edn_path_and_asks_each_namespace_once() {
     let only = std::env::var("FLINT_COMPILE_CALL_ONLY").ok();
     let srcs = vec![corpus()];
+    // ONE ANSWER SET PER FEATURE SET: the host reads each project file under
+    // the compile's features (`crate::read`), and `llvm_request` asks for
+    // `[perf]`'s with `aot`.
     let answers = Answers::new(&srcs, &[], None).unwrap();
+    let perf = [":flint".to_string(), ":flint/nested".to_string()];
+    let answers_perf = Answers::new(&srcs, &[], Some(&perf)).unwrap();
     let mut names: Vec<String> = std::fs::read_dir(corpus())
         .unwrap()
         .filter_map(|e| {
@@ -204,7 +209,8 @@ fn the_compile_call_builds_the_same_ir_as_the_edn_path_and_asks_each_namespace_o
         let entry = format!("{name}/main");
         for aot in [false, true] {
             let label = format!("{name}{}", if aot { " :optimize [perf]" } else { "" });
-            let new = compile_call(llvm_request(&entry, aot), &|n| answers.answer(n), None);
+            let ans = if aot { &answers_perf } else { &answers };
+            let new = compile_call(llvm_request(&entry, aot), &|n| ans.answer(n), None);
             match old_llvm(&srcs, &entry, aot) {
                 Ok(old) => {
                     assert!(new.errors().is_empty(), "{label}: {:?}", new.errors());

@@ -45,23 +45,7 @@ cp "$root/lib/deps.edn" dist/lib-deps.edn
 # (`AGENTS.md` "one fact, four front doors"): its own copy, which nothing in
 # `bin/build-dist` or `cargo build` touches.
 cp "$root/lib/flint/deps/deps.edn" dist/flint-deps-deps.edn
-node -e '
-const fs = require("fs"), path = require("path");
-const lib = path.join("'"$root"'", "lib");
-const out = {};
-(function walk(dir, prefix) {
-  for (const name of fs.readdirSync(dir).sort()) {
-    const full = path.join(dir, name);
-    const rel = prefix ? prefix + "/" + name : name;
-    if (fs.statSync(full).isDirectory()) walk(full, rel);
-    else if (rel.endsWith(".cljc") || rel.endsWith(".clj"))
-      out[rel] = fs.readFileSync(full, "utf8");
-  }
-})(lib, "");
-fs.writeFileSync("dist/stdlib.json", JSON.stringify(out));
-console.log("    " + Object.keys(out).length + " files, " +
-            (JSON.stringify(out).length / 1024).toFixed(0) + " KB");
-'
+node "$root/sdks/esm/stdlib-walk.mjs" "$root/lib" dist/stdlib.json
 
 echo "==> the guest driver"
 # COPIED, not reimplemented. `sdks/esm/src/guest.js` is the reference driver --

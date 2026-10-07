@@ -13,6 +13,7 @@ public static class Program {
         if (args.Length >= 2 && args[0] == "--rt-snap-stream")
             return RtSnapStream(args[1], args.Length > 2 ? args[2] : null);
         if (args.Length >= 1 && args[0] == "--rt-maps") return RtMaps();
+        if (args.Length >= 2 && args[0] == "--rt-reader") return RtReaderConform.Run(args[1]);
         if (args.Length >= 1 && args[0] == "--rt-parallel") return RtParallel();
         if (args.Length >= 1 && args[0] == "--rt-stale") return RtStale();
         if (args.Length >= 3 && args[0] == "--rt-shelve") return RtShelve(args[1], args[2]);

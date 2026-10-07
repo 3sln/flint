@@ -1768,6 +1768,18 @@
     'name-of (core/call {:rust "{0}.name_of({1})"
                          :java "{0}.nameOf({1})" :csharp "{0}.NameOf({1})"}
                         {:tag Value})
+    ;; A SYMBOL OR KEYWORD FROM TWO STRING VALUES, the namespace nil for none:
+    ;; `(symbol ns name)` and `(keyword ns name)`. Interning is the host's, so
+    ;; these stay hand-written; the source reader (`kin/readcore.kin`) is what
+    ;; needed them spelled.
+    'symbol-of (core/call {:rust "{0}.symbol_from_values({1}, {2})"
+                           :java "com.flint.rt.Str.symbolOf({0}, {1}, {2})"
+                           :csharp "global::Flint.Rt.Str.SymbolOf({0}, {1}, {2})"}
+                          {:tag Value})
+    'keyword-of (core/call {:rust "{0}.keyword_from_values({1}, {2})"
+                            :java "com.flint.rt.Str.keywordOf({0}, {1}, {2})"
+                            :csharp "global::Flint.Rt.Str.KeywordOf({0}, {1}, {2})"}
+                           {:tag Value})
     ;; STILL HAND-WRITTEN, and reached as calls until they are not. `kind-of`
     ;; is the closed set of `threads-and-ports` and `type-ok` the schema's type check; both
     ;; want a keyword built from a literal, which the vocabulary cannot spell

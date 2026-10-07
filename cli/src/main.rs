@@ -18,6 +18,7 @@ mod deps;
 mod depscmd;
 mod pod;
 mod policy;
+mod read;
 mod resolve;
 mod script;
 mod serve;
@@ -28,6 +29,8 @@ mod snapstream_test;
 mod control_test;
 #[cfg(test)]
 mod compile_call_test;
+#[cfg(test)]
+mod kin_reader_test;
 
 use anyhow::{bail, Context, Result};
 use flint_rt::native::Program;
@@ -359,7 +362,8 @@ fn render_workspaces(workspaces: &[WsEntry], out: &mut String) {
 /// (`build_spec_impl` for the EDN-spec path, `resolve::Answers::new` for the
 /// host-driven one) because both read `:flint/nested` and `FLINT_PREREAD`
 /// the same way and neither should decide it twice.
-pub(crate) fn spec_inputs(srcs: &[PathBuf], pods: &[(String, Vec<String>)], nested: bool, as_text: bool)
+pub(crate) fn spec_inputs(srcs: &[PathBuf], pods: &[(String, Vec<String>)], nested: bool, as_text: bool,
+                          read_features: Option<&[String]>)
                -> Result<SpecInputs> {
     // THE STANDARD LIBRARY AS FORMS, one read for every feature set
     // (`DECISIONS.md#stdlib-preread`). As text only for the test hooks:
@@ -485,7 +489,58 @@ pub(crate) fn spec_inputs(srcs: &[PathBuf], pods: &[(String, Vec<String>)], nest
             }
         }
     }
+    // THE HOST READS THE PROJECT (`DECISIONS.md#namespaces-over-the-system-port`,
+    // step 2): each project file read here by the kin reader, under the
+    // compile's features and its own workspace's tags, and handed over as
+    // `flint.forms` bytes with its dialect beside them. A file this cannot read
+    // -- or whose tag map is not plain symbol pairs -- goes over as TEXT, so the
+    // compiler reads it and reports exactly what it always reported; and only a
+    // file the compile reaches is ever read there. `FLINT_HOST_READ=0` sends
+    // text throughout, which is the A/B for this step.
+    if let Some(features) = read_features {
+        if !std::env::var("FLINT_HOST_READ").is_ok_and(|v| v == "0") {
+            let project: Vec<String> = owned.iter().flat_map(|(_, ps)| ps.iter().cloned()).collect();
+            let total = project.len();
+            let mut read = 0;
+            for path in project {
+                let matched = workspaces.iter().find(|w| {
+                    let prefix = match w {
+                        WsEntry::Virtual { prefix, .. } | WsEntry::Source { prefix, .. } => prefix,
+                    };
+                    prefix.is_empty() || path.starts_with(prefix.as_str())
+                });
+                let tags = match matched {
+                    Some(WsEntry::Source { ws, .. }) => crate::read::tag_pairs(&ws.tags),
+                    _ => Some(Vec::new()),
+                };
+                let Some(tags) = tags else { continue };
+                let Some(Body::Text(text)) = files.get(&path) else { continue };
+                let portable = !path.ends_with(".fln");
+                let how = crate::read::ReadAs { features: Some(features), tags: &tags, portable };
+                if let Ok(bytes) = crate::read::read_forms(&path, text, &how) {
+                    files.insert(path, Body::Read(bytes, if portable { "portable" } else { "flint" }));
+                    read += 1;
+                }
+            }
+            // `FLINT_HOST_READ=report` says how many it read, so an A/B can
+            // tell "read here and identical" from "fell back to text".
+            if std::env::var("FLINT_HOST_READ").is_ok_and(|v| v == "report") {
+                eprintln!("host-read {read} of {total} project files");
+            }
+        }
+    }
     Ok(SpecInputs { files, workspaces })
+}
+
+/// The features a compile READS under: what it was given, `[perf]`'s set when
+/// checks are stripped, and otherwise `flint.reader/default-features` -- the
+/// same three cases `build_spec_impl` renders into the spec.
+pub(crate) fn read_features(features: Option<&[String]>, strip_checks: bool) -> Vec<String> {
+    match features {
+        Some(f) => f.to_vec(),
+        None if strip_checks => vec![":flint".into(), ":flint/nested".into()],
+        None => vec![":flint".into(), ":flint/check".into(), ":flint/nested".into()],
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -511,6 +566,9 @@ fn compile_split(c: &mut Program, args: &[&str], files: &SplitFiles)
             // `{:preread bytes}`, which `flint.project/file-answer` takes apart
             // (`DECISIONS.md#stdlib-preread`).
             Body::Forms(b) => { w.map(1).keyword(None, "preread").bytes(b); }
+            // Read by the HOST, with the dialect it was read under: the
+            // compiler checks both against what it would have read it as.
+            Body::Read(b, d) => { w.map(2).keyword(None, "preread").bytes(b).keyword(None, "dialect").keyword(None, d); }
         }
     }
     for a in args {
@@ -549,6 +607,8 @@ pub(crate) struct SplitFiles {
 pub(crate) enum Body {
     Text(String),
     Forms(&'static [u8]),
+    /// A project file the host read itself (`crate::read`), and its dialect.
+    Read(Vec<u8>, &'static str),
 }
 
 /// The text of standard-library file `path`, FROM THE SOURCE TREE this binary
@@ -618,7 +678,10 @@ fn build_spec_impl(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
     let as_text = !split || std::env::var("FLINT_PREREAD").is_ok_and(|v| v == "0");
     // THE FILES AND WORKSPACES, built once (`spec_inputs`) and rendered below
     // -- the EDN text here, a namespace at a time in `resolve::Answers`.
-    let inputs = spec_inputs(srcs, pods, nested, as_text)?;
+    // Read by the host only on the split path: the EDN spec has nowhere to put
+    // bytes, which is the same reason the standard library goes as text there.
+    let rf = read_features(features, strip_checks);
+    let inputs = spec_inputs(srcs, pods, nested, as_text, if split { Some(&rf) } else { None })?;
     let files = inputs.files;
     let mut out = String::from("{:files {");
     if !split {

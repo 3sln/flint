@@ -1,0 +1,114 @@
+;; THE SOURCE READER'S NUMBERS AND ITS CHARACTER CLASSES, apart.
+;;
+;; Apart because they are CONSTANTS AND FREE FUNCTIONS, and a module whose
+;; other functions are methods on the runtime emits everything inside the
+;; runtime's `impl` on Rust -- where a bare `S_I` or `is_ws(c)` no longer
+;; resolves. The readers' state slots (`RDS_`), what a read answers (`RS_`),
+;; and `flint.forms`'s tags (`FT_`), flags (`FF_`), name kinds (`FN_`) and the
+;; encoder's slots (`FE_`) all live here, prefixed so that no runtime's own
+;; statics, imported wholesale beside them, can collide.
+(ns flint.rt.readconst
+  (:require [flint.impl.rt :refer [defn defconst return if doc not and or ==
+                                   < <= > >= + - * to-i64 I32 I64 Bool]]))
+
+(defconst ^:pub ^I32 RDS_CPS 0)
+(defconst ^:pub ^I32 RDS_I 1)
+(defconst ^:pub ^I32 RDS_N 2)
+(defconst ^:pub ^I32 RDS_LINE 3)
+(defconst ^:pub ^I32 RDS_COL 4)
+(defconst ^:pub ^I32 RDS_FILE 5)
+(defconst ^:pub ^I32 RDS_GENSYMS 6)
+(defconst ^:pub ^I32 RDS_FEATURES 7)
+(defconst ^:pub ^I32 RDS_NS 8)
+(defconst ^:pub ^I32 RDS_ALIASES 9)
+(defconst ^:pub ^I32 RDS_DEFER 10)
+(defconst ^:pub ^I32 RDS_CONDS 11)
+(defconst ^:pub ^I32 RDS_APARTIAL 12)
+(defconst ^:pub ^I32 RDS_PORTABLE 13)
+(defconst ^:pub ^I32 RDS_TAGS 14)
+(defconst ^:pub ^I32 RDS_CHILDPOS 15)
+(defconst ^:pub ^I32 RDS_GENSYM_N 16)
+(defconst ^:pub ^I32 RDS_ERRMSG 17)
+(defconst ^:pub ^I32 RDS_ERRLINE 18)
+(defconst ^:pub ^I32 RDS_ERRCOL 19)
+(defconst ^:pub ^I32 RDS_ERRPLAIN 20)
+(defconst ^:pub ^I32 RDS_LEN 21)
+(defconst ^:pub ^I32 RS_OK 0)
+(defconst ^:pub ^I32 RS_EOF 1)
+(defconst ^:pub ^I32 RS_NONE 2)
+(defconst ^:pub ^I32 RS_SPLICE 3)
+(defconst ^:pub ^I32 RS_ERR 4)
+(defconst ^:pub ^I32 NO_CP 1114112)
+(defconst ^:pub ^I32 FT_NIL 0)
+(defconst ^:pub ^I32 FT_TRUE 1)
+(defconst ^:pub ^I32 FT_FALSE 2)
+(defconst ^:pub ^I32 FT_INT 3)
+(defconst ^:pub ^I32 FT_NEG 4)
+(defconst ^:pub ^I32 FT_NUM 5)
+(defconst ^:pub ^I32 FT_STR 6)
+(defconst ^:pub ^I32 FT_NAME 7)
+(defconst ^:pub ^I32 FT_LIST 8)
+(defconst ^:pub ^I32 FT_VEC 9)
+(defconst ^:pub ^I32 FT_MAP 10)
+(defconst ^:pub ^I32 FT_SET 11)
+(defconst ^:pub ^I32 FT_TAGGED 12)
+(defconst ^:pub ^I32 FT_META 13)
+(defconst ^:pub ^I32 FT_POS 14)
+(defconst ^:pub ^I32 FT_POS_SYM 15)
+(defconst ^:pub ^I32 FF_CP_DERIVED 1)
+(defconst ^:pub ^I32 FF_CP_FULL 2)
+(defconst ^:pub ^I32 FF_EXTRA 4)
+(defconst ^:pub ^I32 FN_SYM 0)
+(defconst ^:pub ^I32 FN_SYM_NS 1)
+(defconst ^:pub ^I32 FN_KW 2)
+(defconst ^:pub ^I32 FN_KW_NS 3)
+(defconst ^:pub ^I64 VARINT_LIMIT (* (to-i64 8388608) 16777216))
+(defconst ^:pub ^I32 FE_BODY 0)
+(defconst ^:pub ^I32 FE_FILE 1)
+(defconst ^:pub ^I32 FE_LINE 2)
+(defconst ^:pub ^I32 FE_STRS 3)
+(defconst ^:pub ^I32 FE_STRXS 4)
+(defconst ^:pub ^I32 FE_NAMES 5)
+(defconst ^:pub ^I32 FE_NAMEXS 6)
+(defconst ^:pub ^I32 FE_CPFIRST 7)
+(defconst ^:pub ^I32 FE_KLINE 8)
+(defconst ^:pub ^I32 FE_KCOL 9)
+(defconst ^:pub ^I32 FE_KFILE 10)
+(defconst ^:pub ^I32 FE_KCP 11)
+(defconst ^:pub ^I32 FE_ERR 12)
+(defconst ^:pub ^I32 FE_LEN 13)
+
+(doc "Whitespace to the reader: space, tab, newline, return, form feed and"
+     "the COMMA.")
+(defn ^:pub ^Bool is-ws [^I32 c]
+  (return (or (== c 32) (or (== c 9) (or (== c 10) (or (== c 13)
+                                                       (or (== c 12) (== c 44))))))))
+
+(doc "Ends a token. Clojure's `isTerminatingMacro` leaves out `#`, `'` and"
+     "`%`, which is why `acc'`, `x#` and `%1` are single tokens.")
+(defn ^:pub ^Bool is-term [^I32 c]
+  (return (or (== c 34) (or (== c 59) (or (== c 64) (or (== c 94)
+          (or (== c 96) (or (== c 126) (or (== c 40) (or (== c 41)
+          (or (== c 91) (or (== c 93) (or (== c 123) (or (== c 125)
+                                                          (== c 92)))))))))))))))
+
+(doc "An ASCII digit.")
+(defn ^:pub ^Bool is-digit [^I32 c]
+  (return (and (>= c 48) (<= c 57))))
+
+(doc "The value of `c` as a hex digit, or 16 when it is not one.")
+(defn ^:pub ^I32 hex-digit [^I32 c]
+  (if (and (>= c 48) (<= c 57)) (return (- c 48)))
+  (if (and (>= c 97) (<= c 102)) (return (- c 87)))
+  (if (and (>= c 65) (<= c 70)) (return (- c 55)))
+  (return 16))
+
+(doc "Is `n` a code point a string can hold: in range, and not a surrogate?")
+(defn ^:pub ^Bool is-scalar [^I64 n]
+  (return (and (>= n 0) (and (<= n 1114111) (or (< n 55296) (> n 57343))))))
+
+(doc "A signed delta as a varint's unsigned: 0 -1 1 -2 .. as 0 1 2 3 ..")
+(defn ^:pub ^I64 zigzag [^I64 n]
+  (if (< n 0)
+    (return (- (* -2 n) 1)))
+  (return (* 2 n)))

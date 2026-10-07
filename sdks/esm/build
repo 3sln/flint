@@ -18,29 +18,7 @@ echo "==> the wasm artifacts"
 echo "==> the standard library, as data"
 # Embedded as JSON rather than as files: there is no filesystem to read them
 # from at run time.
-node -e '
-const fs = require("fs"), path = require("path");
-const lib = path.join("'"$root"'", "lib");
-const out = {};
-(function walk(dir, prefix) {
-  for (const name of fs.readdirSync(dir).sort()) {
-    const full = path.join(dir, name);
-    const rel = prefix ? prefix + "/" + name : name;
-    if (fs.statSync(full).isDirectory()) walk(full, rel);
-    // `.fln` FIRST, and its absence here was a silent one. This walk embeds
-    // the standard library into the SDK bundle; a namespace renamed to `.fln`
-    // would simply stop being in it, with no error from either side -- the
-    // same failure `cli/build.rs` carries a comment about, in the seventh
-    // place that enumerates these extensions.
-    else if (rel.endsWith(".fln") || rel.endsWith(".cljc") || rel.endsWith(".clj"))
-      out[rel] = fs.readFileSync(full, "utf8");
-  }
-})(lib, "");
-fs.mkdirSync("gen", {recursive: true});
-fs.writeFileSync("gen/stdlib.json", JSON.stringify(out));
-console.log("    " + Object.keys(out).length + " files, " +
-            (JSON.stringify(out).length / 1024).toFixed(0) + " KB");
-'
+node "$root/sdks/esm/stdlib-walk.mjs" "$root/lib" gen/stdlib.json
 
 echo "==> bundling"
 npx --yes esbuild src/flint.js \

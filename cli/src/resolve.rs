@@ -47,7 +47,8 @@ impl Answers {
         // means.
         let nested = features.map_or(true, |f| f.iter().any(|x| x == ":flint/nested"));
         let as_text = std::env::var("FLINT_PREREAD").is_ok_and(|v| v == "0");
-        let inputs = crate::spec_inputs(srcs, pods, nested, as_text)?;
+        let rf = crate::read_features(features, false);
+        let inputs = crate::spec_inputs(srcs, pods, nested, as_text, Some(&rf))?;
         Ok(Answers { inputs })
     }
 
@@ -117,6 +118,10 @@ impl Answers {
         match &self.inputs.files[&path] {
             Body::Text(t) => m.push((kw("source"), Val::Str(t.clone()))),
             Body::Forms(b) => m.push((kw("forms"), Val::Bytes(b.to_vec()))),
+            Body::Read(b, d) => {
+                m.push((kw("forms"), Val::Bytes(b.clone())));
+                m.push((kw("dialect"), kw(d)));
+            }
         }
 
         match matched {
