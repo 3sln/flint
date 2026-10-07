@@ -15463,6 +15463,222 @@ distinct from the other seven -- it is pulled in by fiat, not by a reachable
 edge, because the edge that would otherwise justify it (the implicit refer)
 is exactly the one the graph cannot see.
 
+**2026-10-07: the maintainer proposes shrinking stdcore further, to four
+namespaces, and this reverses the verdict just above.** stdcore becomes
+exactly `flint.port`, `flint.wire`, `flint.protocols` and `flint.core` --
+what the call loop and its own two `:require`s reach -- and `clojure.core`
+(and everything it pulls in: `flint.regex`, `flint.nfa`, `clojure.string`)
+moves to stdextra along with the other 28. Whatever the four stdcore
+namespaces need FROM `clojure.core` moves into a new internal namespace
+(`flint.core.impl`, `(ns ^:internal flint.core.impl ...)`,
+`DECISIONS.md#namespace-is-workspace-local`), and `clojure.core` ALIASES
+those vars back out under its own public names, so a program that requires
+`clojure.core` sees no difference. This is a design only -- nothing below
+moves a file -- surveyed against this tree at `7577a7ce`.
+
+* **What the four reach.** Followed `lib/flint/port.cljc`,
+  `lib/flint/wire.cljc`, `lib/flint/protocols.cljc` and `lib/flint/core.cljc`'s
+  own text (none of the four `:require`s `clojure.core`; all four get it
+  through the implicit refer every namespace gets) for every symbol that is
+  not a special form (`src/flint/analyzer.cljc`'s `special-forms`, which
+  includes `ns`, so `ns`'s own machinery needs nothing from `clojure.core`)
+  and not a bootstrap macro (`src/flint/macros.cljc`'s `bootstrap` map --
+  `let`, `loop`, `fn`, `defn`, `defn-`, `defmacro`, `when`, `comment` --
+  which the analyzer's `bootstrap-key` resolves BEFORE any macro or var
+  lookup runs, for an unqualified name or one spelled `clojure.core/x`
+  alike, so a call to any of these eight never reaches `clojure.core` even
+  though `clojure.core.cljc` itself happens to also define `when` and
+  `comment` -- both are therefore DEAD CODE in the current tree, shadowed by
+  the bootstrap table for every caller, found while tracing this closure and
+  not fixed here). Then walked the reached vars' own bodies in
+  `lib/clojure/core.cljc` to a fixed point the same way, textually, with
+  three corrections a plain grep would have missed (`AGENTS.md` #1's "a
+  count produced by a grep counts what the pattern understood"): a token
+  immediately after `:` is a keyword, not a var (`:map`/`:set`/`:vector` in
+  `doseq`'s own kind-dispatch vectors is not a call to `map`/`set`/`vector`);
+  a `#?(:flint/check ...)` branch is dev-build-only and absent under the
+  default build this survey targets, which drops `check-partition` and
+  `kind-explain` (`partition`'s and the type predicates' check-mode-only
+  helpers) even though they are reached transitively from `doseq`/`int?` when
+  that branch is read as plain text; and `with-open`'s own body (the one
+  real use of syntax quote among the four files, in `flint.port`) expands at
+  READ time into `clojure.core/seq`, `clojure.core/concat`,
+  `clojure.core/list` and `clojure.core/vec` (`src/flint/reader.cljc`'s
+  `sq-form`), invisibly to a text scan of `flint/port.cljc` itself -- found
+  by reading the reader's syntax-quote expansion rules, not by grepping.
+
+  **The result: 90 vars (92 counting the two dead `when`/`comment` shadows
+  back in, which this count excludes since no caller ever reaches them), of
+  which 7 are macros -- `and`, `cond`, `declare`, `doseq`, `if-not`,
+  `lazy-seq`, `or` -- and 14 are already-private `defn-` helpers pulled in
+  transitively (`pr-str*`, `join-with*`, `join-entries*`, `escape-string`,
+  `kw-or-sym-str`, `apply2`, `spread`, `cmp-chain`, `map2`, `map-over-vec`,
+  `filter-over-vec`, `reduce-seq`, `reduce-indexed`, `seq-binding-form`),
+  plus one bare `def` (`gensym-counter`, an atom `gensym` closes over).
+  Approx 510 lines, summing each reached top-level form's own line span
+  (method: a script-assisted textual closure over `lib/clojure/core.cljc`,
+  manually corrected for the three cases above; not independently
+  cross-checked against a second reader, so treat the exact count as
+  approximate rather than exact -- the shape, not the number to the var, is
+  what should survive a re-run).** The full list: `<` `=` `and` `apply`
+  `apply2` `assoc` `assoc!` `atom` `boolean` `cmp-chain` `compare-and-set!`
+  `concat` `cond` `conj` `conj!` `cons` `count` `dec` `declare` `deref`
+  `doseq` `drop` `empty?` `escape-string` `ex-info` `extend` `false?`
+  `filter` `filter-over-vec` `find-protocol-method` `first` `gensym`
+  `gensym-counter` `get` `hash-map` `identical?` `if-not` `inc` `int?` `into`
+  `join-entries*` `join-with*` `key` `keyword` `keyword?` `kw-or-sym-str`
+  `lazy-seq` `list` `list?` `map` `map-over-vec` `map2` `map?` `mapv`
+  `merge` `meta` `name` `namespace` `next` `nil?` `nnext` `not` `not=` `nth`
+  `number?` `or` `persistent!` `pos?` `pr-str` `pr-str*` `range` `reduce`
+  `reduce-indexed` `reduce-seq` `reduced?` `remove` `reset!` `rest`
+  `reverse` `second` `seq` `seq-binding-form` `seq?` `sequential?` `set?`
+  `some` `some?` `str` `string?` `swap!` `symbol` `symbol?` `tagged-literal`
+  `tagged-literal?` `take` `transient` `true?` `update` `val` `vec`
+  `vector?` `volatile!` `vswap!` `with-meta`.
+
+  **Nothing here comes from `defprotocol`/`extend-protocol` expansion or
+  from destructuring.** `flint.protocols` defines its three protocols
+  longhand specifically so it does not need `defprotocol` (its own comment:
+  "a namespace that defines the machinery cannot also use it"), and none of
+  the four files destructures a `let`/`fn` binding in real code (only in a
+  docstring) -- destructuring itself is compiler machinery
+  (`src/flint/macros.cljc`'s `destructure`/`destructure-binding`, in `src/`,
+  not `lib/`) that would call `clojure.core/nth`, `nthnext`, `seq?`, `apply`,
+  `hash-map` and `get` IF a pattern were used, so this is a real but
+  currently-dormant dependency of the FOUR NAMESPACES' DEFINITIONS, not of
+  anything in this closure today.
+
+* **An alias form does not exist yet, and a plain `def` is not one.**
+  Grepped `src/flint/analyzer.cljc`, `src/flint/compiler.cljc` and
+  `src/flint/project.cljc` for `:alias`, re-export and `refer`-passthrough
+  handling: the only hits are `::alias/kw` (reader keyword-alias syntax, a
+  different feature) and `project.cljc`'s "re-export" comment, which is
+  about a workspace guard being satisfied transitively through a REQUIRE
+  edge (`DECISIONS.md#system-namespaces-and-deps`'s delegation rules), not
+  about one var standing in for another. `analyze-special`'s `def` arm
+  (`src/flint/analyzer.cljc` ~1415) is generic: it records `:declared` and
+  merges `:private`/`:internal`/`:flint/capabilities-guard` from the form's
+  own metadata into `:var-meta`, then analyses the init form as an ordinary
+  expression -- nothing special-cases an init form that is a bare symbol
+  naming another var. So `(def clojure.core/seq flint.core.impl/seq)`:
+  copies the VALUE (an ordinary var read of the alias's init, same cost as
+  reading any other var -- no extra closure or indirection beyond the one
+  dereference every var call already has); does NOT copy macro-ness
+  (`:macro true` lives in `:declared`/`:var-meta` under the ORIGINAL
+  symbol, set only by `defmacro`'s own `def` of an `:macro true`-tagged
+  var, and a value-copying `def` does not set it on the alias, so
+  `(clojure.core/and a b)` after such an alias would try to CALL the
+  function value with two arguments, where `m-defmacro` built it to take
+  `[&form &env & args]` -- broken, not merely indirect); and does NOT copy
+  `:inline` (`:inlines` is a flat map keyed by the exact qualified symbol
+  passed to `register-inline!`/read by `inline-fn`'s `(qualify env sym)` --
+  `src/flint/analyzer.cljc` ~353-364 -- so an alias's own qualified symbol
+  has no entry unless something separately puts one there; `qualify`'s
+  result is the map key, and nothing propagates one key's entry to another).
+  **Measured aside: no var in `lib/` uses `:inline` today** (`grep -rn
+  "^{:inline\\|:inline (fn" lib/` is empty), so this specific risk is
+  theoretical for the 90-var list above, but the maintainer's question was
+  about the mechanism, not this list, and the mechanism has no cover today.
+
+  **What the compiler would need.** For the 7 macros, aliasing is cheap and
+  needs no new mechanism: a macro is never present at run time
+  (`inline-fn`'s own docstring -- "flint carries no var metadata at run
+  time" -- is true of macro-ness too), so `clojure.core/and` can be `(def
+  ^:macro clojure.core/and (fn [&form &env a b] ...))` whose body simply
+  calls through to `flint.core.impl/and`'s own expander function; the
+  expansion a caller sees is identical either way and costs nothing extra
+  in the emitted image, because by the time anything is emitted the macro
+  has already fully expanded. For an ordinary function with no `:inline`,
+  a value-copying `def` already works with zero extra runtime cost, by the
+  same reasoning (one var dereference, same as calling the original
+  directly). **The real gap is `:inline`, and it needs a dedicated alias
+  form, not a bare `def`:** a `defalias`-shaped special form that, when
+  analysing `(defalias clojure.core/seq flint.core.impl/seq)`, reads
+  `flint.core.impl/seq`'s own entries out of `@cc` -- `:declared`,
+  `:var-meta`, and `(get-in @cc [:inlines 'flint.core.impl/seq])` if present
+  -- and COPIES them under the alias's qualified symbol too, rather than
+  wrapping one more call around them. Because `:inline` lookup is an exact
+  map hit on whichever qualified symbol a call site resolved to
+  (`qualify env sym`), copying the entry at ALIAS-DEFINITION time (once, at
+  compile time of `clojure.core.cljc` itself) means a call written as
+  `(seq x)` inside stdcore, resolving to `clojure.core/seq`, and a call
+  written as `(flint.core.impl/seq x)` from inside stdcore's OWN
+  definitions, both find an `:inlines` entry and both inline identically --
+  satisfying `AGENTS.md` #3's "inlined calls must stay inlined" with no
+  per-call indirection, at the one-time cost of a map copy per aliased var
+  when `clojure.core.cljc` compiles. Arglists and docstrings are cosmetic by
+  comparison and can be copied the same way, or simply re-stated on the
+  alias; sketched, not built, and not probed as a program
+  (`AGENTS.md` #5) because nothing here exists yet to probe.
+
+* **stdcore and stdextra must stay ONE workspace.** `^:internal`/`^:private`
+  on an `ns` form means WORKSPACE-local
+  (`DECISIONS.md#namespace-is-workspace-local`), so `flint.core.impl` is
+  reachable from `clojure.core.cljc`'s own aliasing only if both files
+  resolve to the SAME `:flint/workspace`. Today that is automatic and not a
+  new fact to maintain: the whole `lib/` tree (and so both proposed
+  `lib/stdcore/` and `lib/stdextra/` roots under it) answers to the single
+  `lib/deps.edn`, `{:flint/workspace flint/flint}`
+  (`root-of`/`project-of`), and nothing in the directory-split design above
+  (`git mv` only, no new `deps.edn`) introduces a second one -- checked by
+  reading that proposal again rather than assuming it: it names four build
+  sites that need to learn two ROOT PATHS, never a second workspace symbol.
+  The existing precedent is `flint.nfa`/`flint.pike`, `^:internal` and
+  reachable only from `flint.regex`, all three in `flint/flint` -- the same
+  shape `flint.core.impl` would be, one workspace wider than `flint.regex`'s
+  immediate caller but still inside the one workspace boundary. **The one
+  place this file already records a DIFFERENT workspace is irrelevant here
+  and worth saying so explicitly:** `flint.deps`, `flint.deps.manifest`,
+  `flint.deps.registry` and `flint.deps.resolve` moved to their own
+  workspace, `flint/deps` (`DECISIONS.md#flint-deps-is-its-own-workspace`),
+  which do not and would not need to reach `flint.core.impl` directly --
+  they call `clojure.core`'s ordinary PUBLIC surface like any other
+  cross-workspace caller (`clojure.edn`/`clojure.string` today), and
+  `clojure.core`'s aliased vars are public regardless of what they alias
+  to, the same way `flint.regex`'s public surface hides `flint.nfa` from
+  callers outside `flint/flint` today. So `flint/deps` being a separate
+  workspace neither helps nor hurts this proposal; it is simply a workspace
+  this proposal does not touch.
+
+* **`clojure.core` stops being a guaranteed root, and the change is
+  smaller than it sounds.** `flint.project/project-roots` (line ~486) today
+  hardcodes `(let [given (vec (or roots* ['clojure.core entry-ns]))] ...)`
+  -- `clojure.core` is unconditional. Under this proposal only `flint.port`
+  and `flint.wire` stay unconditional roots (the call loop names them by var,
+  `src/flint/callentry.cljc`); `flint.protocols` and `flint.core` need no
+  separate entry because the ordinary `:require` graph already reaches them
+  from those two. `clojure.core` moves from "always a root" to "a root only
+  when the resolver in play can actually answer it" -- which is NOT a
+  per-symbol lazy fetch (resolution works in WAVES of whole-namespace
+  requests, `collect-waves`, not per-reference), so `clojure.core` is still
+  REQUESTED in the first wave like today, but a `:missing` answer for it
+  specifically must stop being fatal. It is fatal today for every root,
+  unconditionally -- `src/flint/selfhost.cljc`'s compile entries all read
+  `(if (:missing built) {:missing ...} ...)` with no namespace-by-namespace
+  exception -- so this needs a new notion of an OPTIONAL root alongside the
+  existing (hard) ones, threaded from `project-roots` through
+  `collect-waves`/`resolve-project` to that final check: requested in wave
+  one same as before, but a miss on an optional root is dropped from the
+  `:missing` list that aborts the compile rather than added to it.
+  **Nothing else in the analyzer needs to change**, checked by reading
+  `prelude-resolve`/`unqualified-ref`/`qualify`
+  (`src/flint/analyzer.cljc` ~108-161): the implicit-refer lookup already
+  asks only "does `cc[:vars]` hold `clojure.core/<name>`", with no
+  hardcoded assumption that `clojure.core` exists -- it simply finds
+  nothing if `clojure.core` was never analysed, and `prelude-resolve`
+  returns nil the same way it would for a prelude entry nobody granted.
+  **What a compile with no `clojure.core` looks like, consequently:** a
+  program using only special forms, bootstrap macros and `flint.rt`
+  builtins compiles exactly as it does today; a program using any ordinary
+  implicitly-referred name (`=`, `str`, `+`, `map`, ...) gets "unable to
+  resolve symbol: `<name>`" at that call site -- the SAME error already
+  produced for a genuinely undefined name, not a new or special one, because
+  nothing distinguishes "clojure.core was never offered" from "this
+  identifier was never defined" once the hardcoded root is gone. This
+  reverses this section's own "Verdict: required" two paragraphs above,
+  which was correct for the tree it was written against and is the claim
+  this amendment supersedes, not merely restates.
+
 **"Required to resolve" is not "required to link."** `clojure.core`'s own
 `:require` of `flint.regex` means the WAVE WALK must find source for
 `flint.regex` (and transitively `clojure.string`, `flint.nfa`) for every
