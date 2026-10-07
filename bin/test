@@ -185,6 +185,23 @@ FLINT_DIST_FRESH=1 ./sdks/cli/build > /tmp/flint-cli-build.log 2>&1 \
   || { show_build_log /tmp/flint-cli-build.log; fail "sdks/cli/build (before bin/check and door-agreement)"; }
 echo "  ok"
 
+# THE ESM SDK, BUILT HERE TOO, for the same reason the npm CLI just was:
+# `bin/check` now runs `check-esm-portable`, which `readdirSync`s
+# `sdks/esm/dist` -- a directory `sdks/esm/build` writes and nothing else
+# does. `sdks/esm/dist/` is gitignored, so on a fresh checkout (every CI run)
+# that read throws ENOENT before `bin/check` asserts anything, and on a dev
+# box that already has a `dist/` left over from a previous build, `bin/check`
+# silently checked whatever that stale bundle happened to contain. CAUGHT at
+# CI run 37555937460 on `80e9aec0`: `bin/check-esm-portable` added by
+# `94f4df4b` without this build, so CI's first fresh checkout after it failed
+# with `ENOENT: ... scandir '.../sdks/esm/dist'` -- the exact silently-stale
+# shape the npm-CLI comment above already warns about, one SDK over, and this
+# file's own author had already written the warning once.
+sec "the esm SDK, built before bin/check reads its dist/"
+./sdks/esm/build > /tmp/flint-esm-build.log 2>&1 \
+  || { show_build_log /tmp/flint-esm-build.log; fail "sdks/esm/build (before bin/check)"; }
+echo "  ok"
+
 # THE FAST GATE IN FULL, so this file is a SUPERSET of it.
 #
 # It was not, and CI runs only this file (`.github/workflows/test.yml`,
