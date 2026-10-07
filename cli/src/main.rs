@@ -437,6 +437,16 @@ pub(crate) fn spec_inputs(srcs: &[PathBuf], pods: &[(String, Vec<String>)], nest
     // `bin/flint` read `deps.edn` and refused the same program. The binary
     // users run was the one nothing tested, because every test for the guard
     // and for `:flint/tag-readers` drives `bin/flint`.
+    // `flint.deps`'s own workspace, BEFORE the blanket `flint/` entry below
+    // (first matching prefix wins, same reason the virtual ones go first).
+    // "flint/deps" with no trailing slash, on purpose: it has to match BOTH
+    // `flint/deps.cljc` (the namespace `flint.deps` itself, a FILE beside
+    // this directory, not in it) and `flint/deps/manifest.cljc` and friends
+    // (`DECISIONS.md#flint-deps-is-its-own-workspace`).
+    let deps_ws = read_workspace(DEPS_WORKSPACE_DEPS);
+    if let Some(e) = workspace_entry("flint/deps", &deps_ws, "") {
+        workspaces.push(e);
+    }
     let stdlib = read_workspace(STDLIB_DEPS);
     for pre in ["clojure/", "flint/"] {
         if let Some(e) = workspace_entry(pre, &stdlib, "") {

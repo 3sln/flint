@@ -40,6 +40,11 @@ echo "==> the standard library, as data"
 # to build the spec, and a tree would be a second walk producing the same map
 # with more ways to go wrong.
 cp "$root/lib/deps.edn" dist/lib-deps.edn
+# `flint.deps`'s OWN workspace, separate from the one above
+# (`DECISIONS.md#flint-deps-is-its-own-workspace`). This is the THIRD DOOR
+# (`AGENTS.md` "one fact, four front doors"): its own copy, which nothing in
+# `bin/build-dist` or `cargo build` touches.
+cp "$root/lib/flint/deps/deps.edn" dist/flint-deps-deps.edn
 node -e '
 const fs = require("fs"), path = require("path");
 const lib = path.join("'"$root"'", "lib");

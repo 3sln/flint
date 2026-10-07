@@ -1247,6 +1247,12 @@ equality rather than a hope.
 > work that did not happen, written in a voice that reads as though it had.
 > The idea may still be worth building; it is tracked in `ROADMAP.md` as an
 > unbuilt item rather than recorded here as a settled one.
+>
+> **2026-10-06: `lib/flint/snapshot.cljc` is also gone**, and with it
+> `flint.snapshot/snapshot!` (`DECISIONS.md#flint-snapshot-is-shelved`). "The
+> real API is `flint.snapshot/snapshot!`" above was true when written and is
+> not any more; the three builtins it wrapped are still there, nameless to
+> any wrapper now.
 
 **And it is not only for debugging.** Snapshot-restore doubles as the fix for
 flint's per-invocation cold-start cost: snapshot after top-level
@@ -15421,6 +15427,25 @@ development build: `project-roots` only adds it as a root when the
 `:flint/check` feature is set, which is a build-time choice the SAME
 `stdextra()`-shaped mechanism can express, not an unconditional need.
 
+**2026-10-06: this list and its "8 of 36 / 28 of 36" count are stale, same
+day.** `flint.fs` and `flint.snapshot`, two of the 28 named above, are
+deleted (`DECISIONS.md#flint-fs-is-gone`, `DECISIONS.md#flint-snapshot-is-shelved`);
+the closure was not re-run, so the count here should read 26 of 34, not 28 of
+36, until someone does. Separately (`DECISIONS.md#flint-deps-is-its-own-workspace`),
+`flint.deps` and its three siblings move to their own workspace, which this
+section does not mention and is a DIFFERENT axis from the one it measures.
+`flint.deps`/`flint.deps.manifest`/`flint.deps.registry` fit "stdextra"
+exactly as described -- pure, portable, composable by any host that wants
+them. `flint.deps.resolve` nominally fits the same slot but its only real
+caller is `flint.deps.npm`/`-git`/`-mvn`, virtual namespaces that ONLY the
+native and npm CLIs serve (`DECISIONS.md#flint-deps-is-its-own-workspace`'s
+portability survey) -- a JVM or CLR host, or any host composing a plain
+`stdextra()`, could link it and would fail the moment it actually called out.
+stdcore/stdextra asks "required or optional"; whether a namespace can
+SUCCEED on a given target is the separate question the portability survey
+below answers, and "fits stdextra, portable only through the CLIs" is
+`flint.deps.resolve`'s honest position in both schemes at once.
+
 **`clojure.core`'s verdict, with the evidence asked for.** It is NOT reached
 by any `:require` edge from the call loop or from `flint.port`/`flint.wire`
 themselves -- none of those three names it. It is a root purely because
@@ -16451,3 +16476,320 @@ toolchain` uses for the Rust toolchain. Recompute `kin/casetable.drivers`'s
 `--expect` the same independent way (a script that reads `kin/casetable.kin`
 directly, not through `bin/casetable`), and check `kin/casemap.drivers`'s
 stub array sizes are still comfortably ahead of the new row counts.
+
+**2026-10-06: two of the above are resolved, not merely listed.** `flint.fs`
+and `flint.snapshot` are deleted rather than marked -- `^:internal` would have
+been the wrong tool for "nothing left to require it" (`flint-fs-is-gone`
+below) and redundant with an already-absent builtin
+(`flint-snapshot-is-shelved` below). `flint.virtual`, `flint.deps.manifest`/
+`flint.deps.registry`/`flint.deps.resolve` and `flint.cli` are still exactly
+where this list left them.
+
+## flint-fs-is-gone
+
+**The `flint.fs` namespace is deleted.**
+
+**Ratified:** ☐ not signed off
+
+**Status: shipped — verified 2026-10-06 by `bb test/cli.clj` passing unchanged
+(`cli: ok`) after inlining its one real caller.**
+
+The candidate list above (`doc/api-review.md`) said "0 compiled test
+program(s)" for `flint.fs`, and read that as nothing left to require it. That
+count was wrong, not merely stale: `test/cli.clj` builds an `entry.cljc`
+whose `:require` is assembled with `(str "(ns entry (:require ... [flint.fs
+:as fs]))\n" ...)` rather than written as a literal form, which is exactly
+the shape `AGENTS.md` §1 warns about -- "a count produced by a grep counts
+what the pattern understood, not what was asked." Whatever produced "0" did
+not read that file's generated source, only (at a guess) a literal `:require`
+pattern over `test/*.clj`.
+
+Found by checking the ONE claimed user before deleting, per this task's own
+instruction, rather than trusting the count. `grep -rn "flint\.fs\b"` over
+`lib/ src/ test/ sdks/ cli/ doc/ README.md doc/manifest.edn bin/manifest`
+turned up exactly one real site: `test/cli.clj:61`, building that generated
+namespace.
+
+What it needed was never `flint.fs` as a published convenience -- it was the
+capability transport underneath it, to prove the project CLI's `slurp*`
+reads through a granted `:fs` port the same way under a compiled module as
+`bin/flint` reads it under babashka. `flint.fs` itself was three functions
+over `flint.rpc`/`flint.port` (`open`, `exists?`, `read-file`) plus `list-dir`/
+`write-file`/`root`/`walk`, none of which any other site in the tree named.
+`test/cli.clj` now opens the `"fs"` port and calls `rpc/call` directly,
+inlining exactly the two ops it used; `bb test/cli.clj` passes unchanged
+after the edit (same 406-line suite, same final `cli: ok`).
+
+`flint.sys.fs` -- the VIRTUAL, served filesystem a real flint program
+requires -- is a different namespace entirely (`DECISIONS.md#system-namespaces-and-deps`)
+and is untouched by this. Nothing else in `lib/`, `src/`, `sdks/`, `cli/`,
+`doc/manifest.edn`, `bin/manifest` or `README.md` named `flint.fs`.
+
+## flint-snapshot-is-shelved
+
+**`lib/flint/snapshot.cljc` is deleted; the mechanism underneath it is not.**
+
+**Ratified:** ☐ not signed off
+
+**Status: shipped — verified 2026-10-06 by `python3 bin/check_api_review.py`
+passing with the namespace's section removed, and `./bin/check-decisions`
+passing with this citation added.**
+
+This was already the closest thing to a settled answer on the "genuinely
+unclear" row of `doc/api-review.md`'s own table: `flint.snapshot` is a
+DIAGNOSTICS-build-only wrapper around three builtins
+(`flint.rt/snapshot`, `-size`, `-restore`) that a release CLI cannot even
+compile a reference to -- `(:require [flint.snapshot])` fails closed with
+"no such builtin" by construction (`DECISIONS.md#two-builds`). What was not
+yet settled was whether to keep the wrapper around that absence. Its only
+caller in the whole tree was `test/snapshot.clj`, a suite that exists to test
+the wrapper itself; nothing in `lib/`, `src/`, `sdks/`, `cli/`, or any other
+test required it.
+
+**What is removed:** `lib/flint/snapshot.cljc`, `test/snapshot.clj`, its
+section in `bin/test`, and its entry in `bin/test-diagnostics`'s `SUITES`
+(now four suites, not five).
+
+**What is NOT removed, and why it is not dead.** `AGENTS.md`'s instruction for
+this change was explicit: leave `runtime/src/snap.rs`'s diagnostics-only
+memcpy capture/restore alone unless it becomes entirely dead, and report
+rather than delete if it does. It has not: `runtime/src/native.rs`,
+`runtime/src/rt.rs` and `runtime/src/kgen/rt/control.rs` all call into
+`snap.rs` independently of the three builtins `flint.snapshot.cljc` wrapped --
+`kgen/rt/control.rs` is the CONTROL PLANE's host-requested, streamed live-set
+export (`DECISIONS.md#snapshots`, "Host-requested, streamed"), which every
+build ships and which guest code cannot trigger. That mechanism is a
+different FORMAT (the live set, version 2) serving a different caller (the
+host, over the system port) than the verbatim memcpy capture `flint.snapshot`
+exposed to a guest program directly, and it is explicitly out of scope here
+("Shelving/live-set snapshots are untouched"). `units-src/flint-snap` (the
+unit providing the three builtins) and `host/snapshot.mjs`/`bin/check-snapshot-layout`
+(the diagnostic heap inspector and its layout check) are also left in place:
+none of them name `flint.snapshot`, and the builtins remain reachable by a
+guest naming `flint.rt/snapshot` directly -- there was never a compiler rule
+requiring the wrapper to reach a builtin, only convenience.
+
+**One residual, reported rather than fixed.** `test/snapshot.mjs` had exactly
+one caller, `test/snapshot.clj`, which is now gone; it is an orphan with
+nothing left to invoke it. It was left alone rather than deleted because it
+does not name `flint.snapshot` and was not explicitly in scope, but it is
+worth the maintainer's attention: either it gets a new caller, or it is the
+next thing to remove.
+
+## flint-virtual-stays-public
+
+**`flint.virtual` is NOT marked `^:internal`. It was tried, and it breaks
+every virtual-namespace program.**
+
+**Ratified:** ☐ not signed off
+
+**Status: shipped (as "stays public") — verified 2026-10-06 by marking it,
+rebuilding, and watching the breakage; reverted and rebuilt again before this
+was written.**
+
+`doc/api-review.md`'s own evidence line for `flint.virtual` reads "0 compiled
+test program(s), 0 other `lib` namespace(s), 0 README mentions", and its own
+words are "a program naming it directly would be a mistake" -- a description
+that, read quickly, sounds exactly like a candidate for
+`DECISIONS.md#namespace-is-workspace-local`'s `^:internal` mark. The task
+that asked for this decision flagged the risk by name: the compiler REWRITES
+a reference to a virtual namespace, and the rewritten call might land in the
+caller's own namespace rather than in `flint.virtual`'s, which would make an
+`^:internal` mark on `flint.virtual` refuse the caller rather than protect
+anything.
+
+**It does land in the caller's namespace, confirmed by reading
+`src/flint/analyzer.cljc` and then by compiling something.** A `:require` of
+`flint.sys.fs` resolves `fs/list-dir` to a virtual var
+(`virtual-var`/`check-virtual-call!`, `src/flint/analyzer.cljc` ~line 950),
+and the call site is rewritten to `(flint.virtual/call 'flint.sys.fs/list-dir
+...)` and re-analysed through the ORDINARY call path -- the same one that
+calls `record-dep!`/`privacy-check!` on `flint.virtual/call` as a plain
+qualified reference, with `(current-ns env)` at that point being whatever
+namespace wrote the original `(:require [flint.sys.fs ...])`. `privacy-check!`
+compares THAT namespace's workspace against `flint.virtual`'s
+(`flint/flint`), not against anything belonging to `flint.virtual` itself.
+
+**Probed rather than trusted.** `(ns ^:internal flint.virtual ...)`,
+`bin/build-dist`, `cargo build --release -p flint-cli` (`AGENTS.md` §3's
+order, both steps), then two checks:
+
+1. A fresh program, `(ns probe (:require [flint.sys.fs :as fs])) (defn main
+   [_] (str (fs/exists? "x")))`, with no `deps.edn` (the anonymous
+   workspace -- the ordinary case for a standalone script). Before the mark:
+   `target/release/flint run :path . :fn probe/main :with [fs]` -> `false`.
+   After: `Error: ExceptionInfo: compile error: flint.virtual/call is
+   internal to flint/flint (its namespace, flint.virtual, is marked
+   ^internal); . is outside it`.
+2. `bb test/sysns.clj` (the existing virtual-namespace suite, run against
+   `target/release/flint`) went from 3 pre-existing failures (a "wedged
+   (status 4): the host pump made no progress" timeout on three load-time
+   checks, unrelated to this and not investigated here -- machine load
+   average was 15-24 at the time) to **37 failures**, because nearly every
+   check in that suite drives some `flint.sys.*`/pod/sandbox call and every
+   one of those compiles through `flint.virtual/call`.
+
+Reverted (`git checkout -- lib/flint/virtual.cljc`), `bin/build-dist` and
+`cargo build` run again, both checks re-run clean.
+
+**What this does NOT settle.** "A program naming `flint.virtual` directly
+would be a mistake" is still true and is a narrower claim than "only
+`flint.virtual`'s own workspace may reach it through the compiler" -- the
+first is about a human writing `(flint.virtual/call ...)` by hand in their
+own source, which nothing stops today and which `^:internal` would not
+specially catch either (the refusal would name whichever namespace wrote
+it, caller or not). If THAT is worth closing, the options are: (a) exempt
+compiler-EMITTED references from the workspace check, keyed on provenance
+rather than on the var, so only a hand-written reference is caught; or (b)
+leave `flint.virtual` public and say so in its docstring, which is what this
+decision does for now, because (a) is a compiler change to the analyzer's
+notion of where a form "is", untested here and bigger than this task's
+scope. `flint.virtual`'s docstring already explains it is machinery with no
+job for user source; that remains the only guard.
+
+## flint-deps-is-its-own-workspace
+
+**`flint.deps`, `flint.deps.manifest`, `flint.deps.registry` and
+`flint.deps.resolve` move from the stdlib's blanket `flint/flint` workspace to
+their own, `flint/deps`, with no grant. `flint.deps.manifest` and
+`flint.deps.registry` are also marked `^:internal`; `flint.deps` and
+`flint.deps.resolve` stay public.**
+
+**Ratified:** ☐ not signed off
+
+**Status: shipped — verified 2026-10-06 on the native CLI by two adversarial
+probes (below) against a binary built from this change.**
+
+**Why a separate workspace at all.** Every `lib/` file inherits
+`flint/flint`'s grant, `[:host]`, by nothing more than living under `lib/`
+(`lib/deps.edn`). Surveyed what the four `flint.deps*` files actually call:
+`flint.deps`, `flint.deps.manifest` and `flint.deps.registry` require only
+`clojure.edn`/`clojure.string` -- no `flint.host`, no `flint.rt/request`, no
+virtual namespace. `flint.deps.resolve` additionally requires the virtual
+`flint.deps.npm`/`-git`/`-mvn`, but reaching a virtual namespace is gated by
+a RUNTIME `:with` grant the host checks when the port opens
+(`doc/api-review.md`'s "Served, not linked" section: "Gated by `:with
+[deps]`"), not by this compile-time workspace mechanism. So none of the four
+needs `:host`, and `flint/deps`'s `deps.edn` (`lib/flint/deps/deps.edn`)
+grants nothing -- the four files stop inheriting a capability they never
+asked for and never used.
+
+**Visibility, probed rather than assumed from the doc's evidence lines.**
+`doc/api-review.md`'s own counts say `flint.deps.manifest` and
+`flint.deps.registry` are "required only within `flint.deps.*`" and
+`flint.deps.resolve` is "required by nothing in `lib`; reached by the CLI" --
+reading the last one as a reason to mark it `^:internal` was the candidate
+`DECISIONS.md#namespace-is-workspace-local` left unmarked. Checked how the
+CLI actually reaches it: `cli/src/depscmd.rs` compiles small glue programs
+(`depsadd`, `depsview`, `depsbump`, `depsagree`) that `(:require
+[flint.deps.resolve :as r])` from THEIR OWN namespace, each in its own temp
+directory with no `deps.edn` of its own -- the anonymous workspace, not
+`flint/deps`. Marking `flint.deps.resolve` `^:internal` would refuse `flint
+deps add`/`view`/`bump`/`agree` at compile time: the exact shape
+`DECISIONS.md#flint-virtual-stays-public` found and proved for
+`flint.virtual`, found here by reading `cli/src/depscmd.rs` first instead of
+rebuilding to find out the hard way. `flint.deps.manifest` and
+`flint.deps.registry` have no such caller -- grepped `cli/src/*.rs` and
+`sdks/cli/src/*.mjs` for both names, found only `flint.deps.resolve` named
+directly by glue code -- so those two are marked `^:internal` and
+`flint.deps`/`flint.deps.resolve` stay public.
+
+**Probed on the native CLI, both directions, after `bin/build-dist` then
+`cargo build --release -p flint-cli` (`AGENTS.md` §3's order):**
+
+    $ flint run :path <plain project, no deps.edn> :fn entry/main   # entry requires flint.cli
+    ok                                                              # flint.cli -> flint.deps: public, cross-workspace, works
+
+    $ flint run :path <plain project, no deps.edn> :fn entry/main   # entry requires flint.deps.manifest directly
+    Error: ... flint.deps.manifest/package-json is internal to flint/deps
+    (its namespace, flint.deps.manifest, is marked ^internal); this program
+    is outside it
+
+**Four doors, each with its own copy, same shape `AGENTS.md` names for the
+stdlib's own `deps.edn`:**
+
+* `lib/flint/deps/deps.edn` is the one new fact (`{:flint/workspace
+  flint/deps}`), governing all FOUR files by NAMESPACE PREFIX
+  (`"flint/deps"`, no trailing slash) rather than by directory containment --
+  `flint.deps` itself is `lib/flint/deps.cljc`, a file beside this directory,
+  not inside it, so a slash-terminated prefix would miss it.
+* **Native CLI**: `cli/build.rs` embeds it as `DEPS_WORKSPACE_DEPS`
+  (alongside the existing `STDLIB_DEPS`); `cli/src/main.rs` pushes a
+  `WsEntry` for prefix `"flint/deps"` before the existing `["clojure/",
+  "flint/"]` loop (first matching prefix wins).
+* **npm/wasm SDK** (`sdks/esm/src/flint.js`): `collectSources` pushes `{
+  prefix: 'flint/deps', name: 'flint/deps' }` before the existing
+  `clojure/`/`flint/` pushes. This door never reads `deps.edn` files at
+  all -- it hardcodes the same facts `lib/deps.edn` states, by convention
+  ("KEEP THIS THE SAME SENTENCE AS `lib/deps.edn`") -- so the new entry is a
+  literal here too, not a file read.
+* **THE THIRD DOOR, found while implementing this and not in the task's own
+  list of places to check: `sdks/cli`, the npm CLI's OWN spec builder**
+  (`sdks/cli/src/spec.mjs`), independent of `sdks/esm/src/flint.js`'s
+  `collectSources` despite both existing to answer the same question. It
+  reads `dist/lib-deps.edn`, copied from `lib/deps.edn` by `sdks/cli/build` --
+  exactly the copy `AGENTS.md` §3 already warns is its own door, untouched by
+  `bin/build-dist` or `cargo build`. Missing this one would have left the npm
+  CLI compiling `flint.deps.*` into the blanket workspace while the native
+  CLI and the ESM SDK agreed on the new one -- a door disagreement
+  indistinguishable from a bug, the exact failure mode `AGENTS.md` §1
+  describes. Fixed the same way: `sdks/cli/build` now also copies
+  `lib/flint/deps/deps.edn` to `dist/flint-deps-deps.edn`;
+  `artifacts.mjs` reads it as `depsWorkspaceDeps()`; `spec.mjs`'s
+  `buildSpec` takes a `depsWorkspaceDeps` param and pushes the `flint/deps`
+  entry before `clojure/`/`flint/`, same as the other two; `cli.mjs`'s six
+  call sites pass it through.
+* **`bin/flint`** cannot do this by directory root the way its own
+  `project-of`/`root-of` otherwise works, because `flint.deps` is a FILE
+  (`lib/flint/deps.cljc`) beside the directory (`lib/flint/deps/`) its
+  siblings live in -- the two cannot share a directory-based root without
+  ALSO pulling in every other unrelated file in `lib/flint/`. Fixed in
+  `root-of` itself: when the matched root is the plain `lib` root and the
+  file's path contains `/lib/flint/deps.cljc` or `/lib/flint/deps/`, the
+  returned root is one path segment deeper (`lib/flint/deps`), so
+  `project-of` reads `lib/flint/deps/deps.edn` instead of `lib/deps.edn` for
+  exactly those four files and nothing else in `lib/flint/`.
+* **JVM and CLR have no fifth door to patch**: `runtimes/jvm` and
+  `runtimes/clr` name `flint.deps` nowhere (`grep -rln "flint.deps"
+  runtimes/` is empty) -- they never compile these namespaces at all, so
+  there is no workspace table for them to disagree about.
+
+**Where this sits in `stdcore`/`stdextra`** (`DECISIONS.md#namespaces-over-the-system-port`):
+recorded there rather than repeated here, because that is where the
+survey and its own stale count live. Short version: `flint.deps`,
+`flint.deps.manifest` and `flint.deps.registry` fit `stdextra` exactly as
+defined -- pure, portable, optional. `flint.deps.resolve` fits the same slot
+by the same test but only SUCCEEDS on a host that serves
+`flint.deps.npm`/`-git`/`-mvn`, which today is only the native and npm CLIs --
+a different axis (can it run here) from stdcore/stdextra's (is it required),
+and the one the portability item below answers in full.
+
+**A flaky run, not a regression -- kept here rather than deleted because the
+distinction is the point of this section's own advice.** `bb test/cli.clj`
+showed 9 failures on one run, all transitive-fetch checks (maven/npm/local-root
+builds) failing with `ENOENT: ... out/app.wasm`, i.e. a build that never
+wrote its output. The machine was at load average 50-83 throughout (many
+unrelated agents on unrelated worktrees). A direct, unhurried reproduction of
+the `:local/root` case outside the test harness built clean, and a second
+full `bb test/cli.clj` run immediately after, no code changed, came back
+`cli: ok` -- zero failures, same binary, same tree. Treated as contention
+(a `ProcessBuilder`-spawned `bin/flint` losing a race for a file descriptor
+or a process slot under that load, not a logic error), consistent with
+`AGENTS.md` §3's "a test that fails on a port but passes on native right
+after a native change" being one of the two shapes that mean check freshness
+first -- the general shape, load rather than staleness, applies the same
+test.
+
+**A REAL door disagreement, caught by the right test and fixed by the right
+build.** `bb test/door-agreement.clj` failed for real: `:to :llvm` plain and
+`:optimize [perf]` disagreed, naming `npm`. Cause was exactly `AGENTS.md`'s
+own warning about the THIRD DOOR -- `sdks/cli/build` had not been run since
+`sdks/cli/src/spec.mjs`/`artifacts.mjs`/`cli.mjs` changed, so `sdks/cli/dist/`
+was still carrying the stdlib's OLD workspace table and `sdks/cli/bin/flint.mjs`
+was compiling `flint.deps.*` into `flint/flint` while the native CLI and `bb`
+had already moved it to `flint/deps` -- a door disagreement that reads
+exactly like the bug being chased, because it is the shape this file's own
+`AGENTS.md` citation predicts. Ran `./sdks/cli/build` (which also runs
+`sdks/cli/selftest.mjs`, itself green: "byte-identical to the native CLI"
+across plain, `[perf]`, `:checks`, a script, `:to :clr`, `:to :jvm`) and
+reran `bb test/door-agreement.clj`: clean.

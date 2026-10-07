@@ -295,6 +295,15 @@ function collectSources({ resolve, files, workspaces, target, withLib }) {
   // own now, and no source may name that builtin
   // (`DECISIONS.md#the-control-plane-is-the-runtimes`).
   if (withLib) {
+    // `flint.deps`'s own workspace, BEFORE the blanket `flint/` entry below
+    // (the compiler takes the first match, so the specific precedes the
+    // broad -- same rule the comment above gives for exact paths before
+    // prefixes). No trailing slash: it has to match both `flint/deps.cljc`
+    // (the namespace `flint.deps` itself, a FILE beside `flint/deps/`, not
+    // in it) and `flint/deps/manifest.cljc` and its siblings
+    // (`DECISIONS.md#flint-deps-is-its-own-workspace`). No grant: none of
+    // the four files call anything `:host`-guarded.
+    spaces.push({ prefix: 'flint/deps', name: 'flint/deps' });
     spaces.push({ prefix: 'clojure/', name: 'flint/flint', grants: ['host'] });
     spaces.push({ prefix: 'flint/', name: 'flint/flint', grants: ['host'] });
   }

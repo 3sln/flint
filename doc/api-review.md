@@ -43,9 +43,17 @@ What the counts say, as a starting point rather than an answer:
 | `flint.bytes` | 5 programs, and `flint.protocols.io` | public, never manifested |
 | `flint.table` | 2 programs, has its own decision | public, never manifested |
 | `flint.host` | 0 programs, 2 README mentions | ~~genuinely unclear~~ — **capability-guarded**, see below |
-| `flint.snapshot` | nothing requires it at all | ~~genuinely unclear~~ — **not public, by design**, see below |
-| `flint.fs` | nothing requires it; `flint.sys.fs` is what programs use | may have no job left |
 | the rest | required only by tooling or by each other | internal |
+
+**`flint.fs` is gone.** It read "nothing requires it; `flint.sys.fs` is what
+programs use", and that held once the ONE real user was checked rather than
+grepped for: `test/cli.clj`'s compiled `entry.cljc` required it, in a form
+(`(str "...flint.fs...")`) a plain `grep -rn "flint\.fs"` over `test/` would
+have caught, but the count behind this row was never that -- it was "0
+compiled test programs", counted some other way, and it was wrong. What
+`entry.cljc` needed was the three-line `flint.rpc`/`flint.port` wrapper, not
+the namespace itself, so the test now writes those three lines inline and
+`lib/flint/fs.cljc` is deleted (`DECISIONS.md#flint-fs-is-gone`).
 
 The three "public, never manifested" ones are the concrete finding: adding a
 namespace to `bin/manifest` makes `test/manifest.clj` assert every var in it is
@@ -76,6 +84,12 @@ every touched file restored from a saved copy and `git status` confirmed clean:
           flint.host           flint.host/ask is guarded with #{:host}
           flint.deps.resolve   cannot find source for flint.deps.npm
 
+**2026-10-06: `flint.fs` is no longer one of the eleven.** It is deleted
+(`DECISIONS.md#flint-fs-is-gone`), so this row of the historical measurement
+above now names a namespace that does not exist; the other ten are
+unaffected. Re-running `bin/manifest`/`test/manifest.clj` today would find
+ten, not eleven.
+
 **ELEVEN WOULD PASS TODAY**, so for those the question is purely whether to
 publish; there is no defect behind any of them. The three that fail each fail
 for a reason worth reading, and **two of the three answer a row the table above
@@ -94,6 +108,15 @@ calls "genuinely unclear"**:
   `production` — and reads exactly like breakage. What settled it was grepping
   for what PROVIDES the builtin rather than what calls it. Its UNMANIFESTED
   marker is correct and should stay.
+
+  **2026-10-06: the namespace itself is now gone.** "Not public, by design"
+  was settled; "worth keeping as dead weight" was not asked until this
+  namespace's own ONLY callers were its three vars' doc comments and
+  `test/snapshot.clj`. It is shelved, not merely unmanifested
+  (`DECISIONS.md#flint-snapshot-is-shelved`) — the three builtins, the unit
+  that provides them, and the Rust capture/restore underneath are untouched,
+  because the control plane's host-requested live-set export
+  (`DECISIONS.md#snapshots`) still calls into the same `runtime/src/snap.rs`.
 * **`flint.host` is capability-guarded**, not unclear: `flint.host/ask` is
   guarded with `#{:host}` and the manifest probe grants nothing. Manifesting it
   would need the probe to hold `:host`, which is a decision about the probe.
@@ -192,7 +215,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Is this public?** Required by 0 compiled test program(s), 2 other `lib` namespace(s), named 0 time(s) in README. **This row read "1 other" and "Required only by other `flint.deps.*` namespaces" until 2026-09-26, and both were wrong.** The two requirers are `lib/flint/deps/resolve.cljc` — which is the `flint.deps.*` family — and `lib/flint/cli.cljc`, which is not: the project surface `bin/flint` is thin over depends on this namespace. "Used only within its own family" reads as internal and was the conclusion a reviewer would have acted on; "the CLI's own surface requires it" is a different answer to the same question. Tooling for reading `deps.edn`.
 
-**Change requests:** _none recorded_
+**Change requests:** **Stays public.** `flint.cli` requires it directly from a different workspace (`flint/flint`, below), which is exactly the case `DECISIONS.md#namespace-is-workspace-local`'s candidate list already excluded it from marking `^:internal` for. 2026-10-06: it (and its three siblings) now have their OWN workspace, `flint/deps`, separate from the stdlib's blanket `flint/flint` (`DECISIONS.md#flint-deps-is-its-own-workspace`) — a different mechanism from `^:internal`, and one that does not restrict who may call a PUBLIC var in it.
 
 ## flint.deps.manifest
 
@@ -202,7 +225,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Is this public?** Required by 0 compiled test program(s), 2 other `lib` namespace(s), named 0 time(s) in README. Required only within `flint.deps.*`. Tooling.
 
-**Change requests:** _none recorded_
+**Change requests:** **Marked `^:internal` 2026-10-06** (`DECISIONS.md#flint-deps-is-its-own-workspace`): checked for an external caller beyond the two `lib` namespaces this row already counts (the `flint.deps.resolve` CLI glue in `cli/src/depscmd.rs` requires `flint.deps.resolve` directly but never `flint.deps.manifest`), found none, and it is now workspace-local to `flint/deps`.
 
 ## flint.deps.registry
 
@@ -212,7 +235,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Is this public?** Required by 0 compiled test program(s), 1 other `lib` namespace(s), named 0 time(s) in README. Required only within `flint.deps.*`. Tooling.
 
-**Change requests:** _none recorded_
+**Change requests:** **Marked `^:internal` 2026-10-06**, same evidence and same workspace as `flint.deps.manifest` above (`DECISIONS.md#flint-deps-is-its-own-workspace`).
 
 ## flint.deps.resolve
 
@@ -222,7 +245,7 @@ These are ours to design. Nothing constrains the names but us.
 
 **Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. Required by nothing in `lib`; reached by the CLI. Tooling.
 
-**Change requests:** _none recorded_
+**Change requests:** **Stays public — checked, not assumed.** "Reached by the CLI" undersells how: `cli/src/depscmd.rs` compiles small glue programs (`depsadd`, `depsview`, `depsbump`, `depsagree`) that `:require [flint.deps.resolve :as r]` from THEIR OWN namespace, each in its own temp directory with no `deps.edn` — the anonymous workspace, not `flint/deps`. Marking `flint.deps.resolve` `^:internal` would refuse `flint deps add`/`view`/`bump`/`agree` at compile time, the same shape `DECISIONS.md#flint-virtual-stays-public` found for `flint.virtual`. It is in the new `flint/deps` workspace (`DECISIONS.md#flint-deps-is-its-own-workspace`) but left public.
 
 ## flint.doc
 
@@ -232,15 +255,18 @@ These are ours to design. Nothing constrains the names but us.
 
 **Change requests:** _none recorded_
 
-## flint.fs
+## Removed 2026-10-06: `flint.fs`
 
-**Reviewed:** ☐ not signed off
-
-7 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. The filesystem, as a capability (`DECISIONS.md#cli`). Nothing here is privileged.
-
-**Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. Nothing requires it, and `flint.sys.fs` is the served filesystem a program actually uses. Worth checking whether this one still has a job.
-
-**Change requests:** _none recorded_
+Not a surface any more, so no box. The evidence line above it read "0
+compiled test program(s)", and that was wrong rather than stale: `test/cli.clj`
+built an `entry.cljc` that required it, assembled through `str` rather than
+written as a literal `:require`, which is why a grep for the pattern this
+checker's own evidence line is built from never found it
+(`DECISIONS.md#flint-fs-is-gone`). Checked for real before deleting: that one
+caller needed three lines over `flint.rpc`/`flint.port` (`open`, `exists?`,
+`read-file`), which are now inlined in the test and do not need a wrapper
+namespace. `flint.sys.fs` -- the served, virtual filesystem a real program
+uses -- is untouched.
 
 ## flint.host
 
@@ -316,15 +342,17 @@ These are ours to design. Nothing constrains the names but us.
 
 **Change requests:** _none recorded_
 
-## flint.snapshot
+## Removed 2026-10-06: `flint.snapshot`
 
-**Reviewed:** ☐ not signed off
-
-3 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Capture the whole VM state, and put it back (`DECISIONS.md#snapshots`).
-
-**Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. Nothing requires it and no program names it, but capturing VM state is the kind of thing a host wants. Unclear which side of the line it is on.
-
-**Change requests:** _none recorded_
+Not a surface any more, so no box. Shelved rather than fixed
+(`DECISIONS.md#flint-snapshot-is-shelved`): it had no caller but
+`test/snapshot.clj`, which tested the namespace itself, and its three vars
+were already unreachable outside a DIAGNOSTICS build. The builtins it
+wrapped (`flint.rt/snapshot`, `-size`, `-restore`), the `units-src/flint-snap`
+unit that provides them, and the Rust capture/restore in `runtime/src/snap.rs`
+are untouched -- the host-requested live-set export the control plane uses
+for shelving a sandbox (`DECISIONS.md#snapshots`) calls into the same file
+and is unaffected.
 
 ## Removed 2026-10-06: `flint.system`, and what replaced it
 
@@ -379,7 +407,7 @@ recorded under the SDKs below.
 
 **Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. Compiler machinery: the target `:require` of a virtual namespace compiles INTO. A program naming it directly would be a mistake.
 
-**Change requests:** _none recorded_
+**Change requests:** **Stays public, deliberately — marking it `^:internal` was tried and breaks every virtual-namespace program.** The compiler rewrites `(:require [flint.sys.fs ...]) (fs/list-dir ...)` into `(flint.virtual/call 'flint.sys.fs/list-dir ...)`, and that emitted reference lands in the CALLING program's own namespace — not in `flint.virtual`'s — so the workspace check at `flint.virtual/call` compares the caller's workspace against `flint.virtual`'s (`flint/flint`). Proved rather than reasoned about (`DECISIONS.md#flint-virtual-stays-public`): marking it `^:internal` and rebuilding turned a working probe program into `flint.virtual/call is internal to flint/flint ...; . is outside it`, and the same build turned `test/sysns.clj` from 3 pre-existing failures into 37. "A program naming it directly would be a mistake" is still true and is a different claim from "nobody but its own workspace may reach it through the compiler" — only the second is what `^:internal` enforces, and it is the wrong tool here.
 
 ---
 

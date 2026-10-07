@@ -1,4 +1,4 @@
-(ns flint.deps.registry
+(ns ^:internal flint.deps.registry
   "Where a pod comes from (`DECISIONS.md#pods-are-a-resolvable-dependency`).
 
   A pod is an ordinary `:deps` entry. `:pod/path` names a directory that

@@ -56,6 +56,13 @@ fn main() {
     let lib_deps = fs::read_to_string(lib.join("deps.edn")).unwrap_or_default();
     let mut src = format!("pub static STDLIB_DEPS: &str = {:?};\n", lib_deps);
 
+    // `flint.deps`'s OWN workspace, separate from the blanket one above
+    // (`DECISIONS.md#flint-deps-is-its-own-workspace`). A second embedded
+    // `deps.edn` rather than a second copy of its contents, for the reason
+    // the first one is embedded rather than hand-copied.
+    let deps_ws_deps = fs::read_to_string(lib.join("flint/deps/deps.edn")).unwrap_or_default();
+    src.push_str(&format!("pub static DEPS_WORKSPACE_DEPS: &str = {:?};\n", deps_ws_deps));
+
     // THE STANDARD LIBRARY, ALREADY READ, and not as text at all
     // (`DECISIONS.md#stdlib-preread`): read by the compiler this binary embeds,
     // so the forms are the ones that compiler would have read at run time and

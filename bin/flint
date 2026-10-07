@@ -200,9 +200,26 @@
 (defn- root-of
   "Which search-path dir a file came from. A file belongs to the project that
   owns its root, and reader tags are bound per PROJECT (`DECISIONS.md#reader-tags`),
-  so this is what a tag lookup keys on."
+  so this is what a tag lookup keys on.
+
+  `flint.deps`'s own workspace carve-out
+  (`DECISIONS.md#flint-deps-is-its-own-workspace`) lives here rather than
+  changing what gets searched: every OTHER door (the native CLI,
+  `sdks/esm/src/flint.js`) assigns a workspace by NAMESPACE PREFIX
+  (\"flint/deps\", no trailing slash, so it matches `flint.deps` itself --
+  `lib/flint/deps.cljc`, a file beside `lib/flint/deps/`, not inside it --
+  as well as `flint.deps.manifest` and its siblings), but this fn works from
+  the matched ROOT outward, so the same carve-out is a path check on `f`
+  rather than a namespace check. A file under it gets a root one level
+  deeper than its directory, so `project-of` reads
+  `lib/flint/deps/deps.edn` instead of `lib/deps.edn`."
   [dirs f]
-  (first (filter (clojure.core/fn [d] (str/starts-with? (str f) (str d))) dirs)))
+  (let [d (first (filter (clojure.core/fn [d] (str/starts-with? (str f) (str d))) dirs))]
+    (if (and d (str/ends-with? (str d) "/lib")
+             (or (str/includes? (str f) "/lib/flint/deps.cljc")
+                 (str/includes? (str f) "/lib/flint/deps/")))
+      (str d "/flint/deps")
+      d)))
 
 (defn find-source
   "First hit wins. The path is `:src` dirs, then `:wasm-path` dirs, then flint's
