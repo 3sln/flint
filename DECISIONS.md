@@ -2298,7 +2298,72 @@ no host changes.
    relink leaves.
 5. **Independently, and small:** have `flint.bundle` REPLACE the prebuilt
    image and registry segments rather than append over them. That is at least
-   35 476 bytes off every shipped-door module.
+   35 476 bytes off every shipped-door module. **DONE 2026-10-08, see below.**
+
+### Item 5, done: `flint.bundle` now replaces
+
+**2026-10-08, branch `bundle-dead` off `10887020`.** `flint.compiler.wasm`
+gained `remove-data-at`, `data-at` and `u32-at`; `flint.compiler.bundle/into-module`
+now calls `remove-data-at` on the base module's own image -- always at the
+same `img-addr`, computed from `__heap_base`, which does not move -- and on
+its own registry blob, found by reading the descriptor that still names it
+(`data-at` at the `FLINT_BUILTIN_REGISTRY` address) *before* that descriptor
+is overwritten. Both removals are no-ops when there is nothing at that
+address, so a base not built `--loader` is unaffected.
+
+**Measured by calling `flint.compiler.bundle/into-module` directly** -- same
+`dist/flint-runtime.wasm` (832 940 bytes, `bin/build-dist` then
+`cargo build --release -p flint-cli`, macOS aarch64), same program image, same
+`dist/slots.json` -- with and without this change (`git stash` on
+`src/flint/compiler/{bundle,wasm}.cljc` alone; babashka reads `.cljc`
+interpreted, so flipping the arm needs no rebuild):
+
+| call, `hello` program (`test/shake.clj`'s fixture) | before | after | saved |
+|---|---|---|---|
+| no `:slots` (what `test/shake.clj` passes) | 700 706 | 669 500 | 31 206 |
+| with `:slots` (what every shipped door actually passes) | 863 224 | 827 515 | 35 709 |
+
+35 709 bytes confirms the 35 476-byte estimate above -- that number was
+computed by hand from the base module's own segment sizes; this is
+`into-module`'s own answer on the same inputs, with the fix flipped on and off
+and nothing else changed.
+
+`bb test/shake.clj`, which does not pass `:slots`, moved its own printed line
+from "recovered 44%" to "recovered 54%" of what the linker removes (prebuilt
+832 940, shaken 700 706 → 669 500, linked 530 903), still inside the asserted
+`(0.35, 1.0)` band. `ROADMAP.md`'s `no-runtime-linking` row is updated to the
+same 54%/669 500 figure.
+
+**Functional check.** The native CLI (`target/release/flint`, built against
+the fixed `dist/`) compiled `corpus/{nqueens,words,lzw,sudoku,mandelbrot}/main`
+and a one-off `(ns portprog (:require [flint.thread :as t])) (defn main [_]
+(str (t/join (t/spawn (fn [] 42)))))` -- the exact shape `into-module`'s own
+docstring warns about ("failed for anything using ports") -- all `:to :wasm`,
+and all ran under `node host/flint.mjs` with their expected output, unchanged
+from before this fix.
+
+**Door agreement.** `sdks/cli/build`'s own selftest (`sdks/cli/selftest.mjs`)
+passed every byte-identity row against the native CLI, including plain and
+`:optimize [perf]` `:to :wasm`, after this fix. `FLINT_DOORS_CORPUS=all bb
+test/door-agreement.clj` -- the four-door matrix, `bb`/native/npm/ESM across
+every target and the whole corpus -- ran green on the fixed tree (`sdks/esm/dist`
+had to be built first with `./sdks/esm/build`; it had never been built in this
+fresh worktree, and its absence failed every ESM row from the very first
+`:to :clr` check, unrelated to this fix -- a reminder that "every door
+disagrees from the first row" names a missing build step before it names a
+bug).
+
+**Budgets checked, not changed.** `test/threads.clj`'s and
+`test/twobuilds.clj`'s "pure-module" byte budgets (`< 545000`, e.g.
+`test/threads.clj` line 587, `test/twobuilds.clj` line 178) build through
+`./bin/flint` -- the LINKED door (`rust-lld --gc-sections`, `namespace-units`),
+confirmed by reading both files' `sh "./bin/flint" ...`/`build!` call sites --
+which never calls `into-module` and carries no base-module scaffolding to
+remove. Those budgets measure a different artifact and do not move.
+`bin/check-resources` measures host RSS/CPU/instructions
+(`test/resource-budgets.edn`), not any wasm file's byte size, and is likewise
+untouched. No file under `doc/` or `dist/README.md` hardcodes the dead-byte
+figure this fixes.
 
 ### Migration sketch, for 2
 

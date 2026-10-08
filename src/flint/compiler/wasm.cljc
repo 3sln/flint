@@ -275,6 +275,74 @@
         m (if (< (or (memory-min m) 0) pages) (set-memory-min m pages) m)]
     m))
 
+(defn- data-segments
+  "Section 11's segments as a seq of `{:addr :seg-start :seg-end :data-start
+  :data-end}`, every position absolute within `payload`. Every data segment
+  this codebase writes -- and every one `rust-lld` writes for a single,
+  non-shared memory 0 -- is `{flags=0, i32.const addr, end, uleb len, bytes}`;
+  the wasm module here never carries a shared-memory build, where lld may emit
+  a passive segment instead (`DECISIONS.md#composing-runtime-units`, PIC
+  units), so that shape is not handled."
+  [payload]
+  (let [[n i0] (rd-uleb payload 0)]
+    (loop [i i0 k 0 out []]
+      (if (= k n)
+        out
+        (let [seg-start i
+              _ (assert (zero? (ub payload i)) "expected an active data segment (memory 0)")
+              _ (assert (= 0x41 (ub payload (inc i))) "expected i32.const offset")
+              [off i2] (rd-sleb payload (+ i 2))
+              _ (assert (= 0x0b (ub payload i2)) "expected end opcode")
+              [len i3] (rd-uleb payload (inc i2))
+              data-end (+ i3 len)]
+          (recur data-end (inc k)
+                 (conj out {:addr off :seg-start seg-start :seg-end data-end
+                            :data-start i3 :data-end data-end})))))))
+
+(defn ^:internal data-at
+  "The bytes an EXISTING active data segment in section 11 already writes at
+  address `addr`, or nil if none starts there. Lets a caller read what a
+  prebuilt module's own descriptor currently points at before overwriting the
+  descriptor -- the only way to find the bytes again afterwards."
+  [m addr]
+  (when-let [{:keys [payload]} (section m 11)]
+    (when-let [seg (first (filter #(= (:addr %) addr) (data-segments payload)))]
+      (flint.rt/b-slice payload (:data-start seg) (:data-end seg)))))
+
+(defn ^:internal remove-data-at
+  "Drop every active data segment in section 11 that starts at address `addr`.
+  No-op if none does.
+
+  Splicing a replacement at the same address used to rely on `a later segment
+  wins`, which is true only at RUN time: the shadowed segment's bytes stayed in
+  the FILE. Every shipped-door module carried a prebuilt loader's own image and
+  builtin registry this way, dead weight on every program compiled to wasm
+  (`DECISIONS.md#composing-runtime-units`). Calling this before appending the
+  replacement makes the splice a replacement on disk too."
+  [m addr]
+  (if-let [{:keys [payload]} (section m 11)]
+    (let [segs (data-segments payload)
+          keep (remove #(= (:addr %) addr) segs)]
+      (if (= (count keep) (count segs))
+        m
+        (-> m
+            (put-section 11 (->bytes [(uleb (count keep))
+                                      (map (fn [{:keys [seg-start seg-end]}]
+                                             (flint.rt/b-slice payload seg-start seg-end))
+                                           keep)]))
+            ((fn [m] (if (section m 12) (put-section m 12 (->bytes (uleb (count keep)))) m))))))
+    m))
+
+(defn ^:internal u32-at
+  "Little-endian u32 at byte index `i` of `b` -- the width
+  `flint.compiler.image/u32` writes, and the only one this file decodes as a
+  fixed-width integer rather than a LEB128."
+  [b i]
+  (bit-or (ub b i)
+          (bit-shift-left (ub b (+ i 1)) 8)
+          (bit-shift-left (ub b (+ i 2)) 16)
+          (bit-shift-left (ub b (+ i 3)) 24)))
+
 (defn ^:internal strip-custom
   "Drop custom sections by name (`name`, `producers`, `target_features`, ...).
   Saves real bytes in the output module."
