@@ -1,6 +1,8 @@
-// Run a flint module. The module is self-contained: no imports, no host
-// functions, nothing to wire up. This wrapper exists only to turn
-// a call into a message on the module's system port (`calls-are-ports`).
+// Run a flint module. The module needs nothing wired up BY THIS WRAPPER: the
+// one wasm import every module carries (`env.flint_panic`,
+// `DECISIONS.md#panic-message-import`) is supplied by `guest.js`'s
+// `instantiate`, not by a caller of this file. This wrapper exists only to
+// turn a call into a message on the module's system port (`calls-are-ports`).
 import { readFileSync } from 'fs';
 // The guest driver -- arguments, the pump, capabilities -- is portable and
 // lives with the SDK, which needs the same thing. This file is the node half:

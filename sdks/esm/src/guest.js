@@ -21,9 +21,79 @@ import { codec, Val } from './codec.js';
 /// the wording matches the native host's `WEDGED_MSG` in `cli/src/serve.rs`.
 const WEDGED = 'wedged (status 4): the host pump made no progress';
 
+/// The host side of flint's one wasm IMPORT (`DECISIONS.md#panic-message-import`):
+/// `runtime/src/lib.rs`'s `#[panic_handler]` calls `env.flint_panic(ptr, len,
+/// file_ptr, file_len, line, col)` just before it traps, on EVERY wasm build
+/// this tree produces -- so every host that instantiates one of these modules
+/// must supply this import or instantiation itself fails (`WebAssembly.Instance`
+/// refuses a module with an unsatisfied import before any code runs). `len`/
+/// `file_len` are byte lengths into the instance's OWN memory, read fresh here
+/// rather than cached, since a panic can happen after the memory has grown.
+///
+/// `file_len === 0` means "no location" -- always true in a release build
+/// (`-Zlocation-detail=none` already reduces it to nothing worth passing) and
+/// true in a diagnostics build only when `PanicInfo::location()` itself was
+/// `None`, which core never actually does. One wasm import signature covers
+/// both builds; a host branches on the one flag rather than two signatures.
+///
+/// Shared by `instantiate` below and `resolve.js`'s `Reader`, which links the
+/// same `runtime/src/lib.rs` and so carries the same import -- one definition
+/// rather than two (AGENTS.md sec. 1).
+export function panicImport(dec = new TextDecoder()) {
+  let last = null;
+  let mem = null;
+  function flint_panic(ptr, len, filePtr, fileLen, line, col) {
+    const bytes = new Uint8Array(mem.buffer);
+    last = { message: dec.decode(bytes.slice(ptr, ptr + len)) };
+    if (fileLen) {
+      last.file = dec.decode(bytes.slice(filePtr, filePtr + fileLen));
+      last.line = line;
+      last.col = col;
+    }
+  }
+  return {
+    imports: { env: { flint_panic } },
+    /// Wrap an instance's `exports` so a trap caused by a RECORDED panic
+    /// carries its message; any other trap or thrown value passes through
+    /// completely unchanged, which is what keeps this safe to wrap every
+    /// export with rather than naming the handful that can run guest code.
+    ///
+    /// A PLAIN COPY, not a `Proxy` over the real exports object. `Proxy`'s
+    /// `get` trap is bound by an invariant for a non-configurable,
+    /// non-writable property -- which every function `WebAssembly.Instance`
+    /// exports is -- to return the EXACT SAME VALUE as the target's own, so a
+    /// trap that hands back a wrapping closure instead throws `TypeError:
+    /// 'get' on proxy: ... the proxy did not return its actual value` on the
+    /// very first call. A fresh object has no such property to violate.
+    wrap(exports) {
+      mem = exports.memory;
+      const out = {};
+      for (const key of Object.keys(exports)) {
+        const v = exports[key];
+        if (typeof v !== 'function') { out[key] = v; continue; }
+        out[key] = (...args) => {
+          try {
+            return v.apply(exports, args);
+          } catch (err) {
+            if (last && err instanceof WebAssembly.RuntimeError) {
+              const p = last;
+              last = null;
+              const msg = p.file ? `${p.message} at ${p.file}:${p.line}:${p.col}` : p.message;
+              throw new WebAssembly.RuntimeError(msg);
+            }
+            throw err;
+          }
+        };
+      }
+      return out;
+    },
+  };
+}
+
 export function instantiate(module, { stepLimit = 0 } = {}) {
-  const instance = new WebAssembly.Instance(module, {});
-  const e = instance.exports;
+  const panic = panicImport();
+  const instance = new WebAssembly.Instance(module, panic.imports);
+  const e = panic.wrap(instance.exports);
   const enc = new TextEncoder();
   const dec = new TextDecoder();
 

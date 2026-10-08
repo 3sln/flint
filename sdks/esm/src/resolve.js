@@ -36,6 +36,7 @@
 // user file under `flint/` was granted the standard library's `:host`.
 
 import { codec, Val } from './codec.js';
+import { panicImport } from './guest.js';
 
 /// `flint.compiler.resolve/source-extensions`: which file WINS for a namespace when more
 /// than one exists, most specific first. `.fln` is flint's own dialect, so it is
@@ -74,8 +75,13 @@ export function extensionOf(dialect) {
 /// `flint.compiler.forms` bytes, the same code the native CLI reads with.
 export class Reader {
   constructor(module) {
-    this.inst = new WebAssembly.Instance(module, {});
-    this.e = this.inst.exports;
+    // The reader module links the same `runtime/src/lib.rs` as every other
+    // flint wasm module, so it carries the same ONE wasm import
+    // (`DECISIONS.md#panic-message-import`, `guest.js`'s `panicImport`) and
+    // instantiation fails outright without it.
+    const panic = panicImport();
+    this.inst = new WebAssembly.Instance(module, panic.imports);
+    this.e = panic.wrap(this.inst.exports);
   }
 
   static async load(bytes) {

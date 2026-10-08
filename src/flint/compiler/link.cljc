@@ -71,6 +71,18 @@
                     getAbsoluteFile getParentFile getParentFile getParentFile getParentFile)
                 "bin" "nightly-toolchain")))
 
+;; `runtime/wasm-imports.txt`, found the same way `nightly-file` is above --
+;; the classloader's own idea of where this file is, not the working
+;; directory. ONE list of symbols flint's own units leave undefined ON
+;; PURPOSE (`flint_panic`, the wasm panic-message import,
+;; `DECISIONS.md#panic-message-import`), read directly by `--allow-undefined-file`
+;; below and by `bin/build-units`'s own direct `rust-lld` call for
+;; `flint-reader.wasm`, rather than restated in each (AGENTS.md sec. 1).
+(def ^:private wasm-imports-file
+  (str (io/file (.. (io/as-file (io/resource "flint/compiler/link.cljc"))
+                    getAbsoluteFile getParentFile getParentFile getParentFile getParentFile)
+                "runtime" "wasm-imports.txt")))
+
 (defn- toolchain-root []
   (let [nightly (str/trim (slurp nightly-file))
         rustc (run-out "rustup" "which" "--toolchain" nightly "rustc")]
@@ -339,6 +351,11 @@
                       ;; `DECISIONS.md#the-shadow-stack-is-not-a-default`, with
                       ;; the measurements in `doc/goals/kin-port.md`.
                       "-z" "stack-size=1048576" "--stack-first"
+                      ;; Without this, every program's own link fails outright
+                      ;; ("undefined symbol: flint_panic"): an undefined
+                      ;; FUNCTION is not a wasm import by default, only one
+                      ;; this flag names is -- see `wasm-imports-file` above.
+                      (str "--allow-undefined-file=" wasm-imports-file)
                       "--export=__heap_base" "--export=FLINT_IMAGE_DESC"]
                      (map #(str "--export=" %) abi-exports)
                      (map #(str "--export=" %) (if (:loader? p) loader-exports []))

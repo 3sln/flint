@@ -100,9 +100,54 @@ pub mod vector;
 pub mod vm;
 pub mod value;
 
+/// The ONE wasm import flint defines (`DECISIONS.md#panic-message-import`).
+/// An undefined FUNCTION is not automatically a wasm import to `rust-lld`'s
+/// wasm port, any more than an undefined DATA symbol is: linking fails with
+/// `undefined symbol: flint_panic` unless the symbol is named in
+/// `runtime/wasm-imports.txt`, which `flint.compiler.link/link-objects` and
+/// `bin/build-units`'s own direct link both pass as
+/// `--allow-undefined-file`.
+///
+/// `(ptr, len)` is the panic's message, always present. `(file_ptr, file_len,
+/// line, col)` is its location, present (`file_len != 0`) only in a
+/// diagnostics build -- a release build always passes zeros, so every host
+/// needs exactly one check (`file_len === 0`) to know whether a location
+/// came with the message, rather than one wasm import signature per build.
+#[cfg(target_arch = "wasm32")]
+extern "C" {
+    fn flint_panic(ptr: u32, len: u32, file_ptr: u32, file_len: u32, line: u32, col: u32);
+}
+
+/// Tells the host what a wasm panic was, without pulling `core::fmt` into a
+/// `no_std` build the way rendering `PanicInfo` with `{}` or `{:?}` would.
+///
+/// `PanicMessage::as_str()` is the no-fmt API `core::panic::PanicInfo::message()`
+/// exists for: `Some` for a literal `panic!("...")`/`unwrap()`/`expect("...")`
+/// message (the overwhelming majority of panics in this tree), `None` for one
+/// built with format arguments, where the fallback below stands in rather than
+/// formatting anything. `info.location()`'s `file()`/`line()`/`column()` are
+/// read only under `diagnostics`: `bin/rust-release-flags`'
+/// `-Zlocation-detail=none` already reduces a RELEASE build's `file()` to the
+/// literal `"<redacted>"` and its line/column to 0, so a release build never
+/// even asks -- the diagnostics build is the one `bin/build-units` gives a
+/// real location to (DECISIONS.md#reproducible-build-paths).
 #[cfg(all(target_arch = "wasm32", not(test)))]
 #[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    const FALLBACK: &str = "panic (formatted message unavailable)";
+    let msg = info.message().as_str().unwrap_or(FALLBACK);
+
+    #[cfg(feature = "diagnostics")]
+    let loc = info.location();
+    #[cfg(feature = "diagnostics")]
+    let (file_ptr, file_len, line, col) = match loc {
+        Some(l) => (l.file().as_ptr() as u32, l.file().len() as u32, l.line(), l.column()),
+        None => (0, 0, 0, 0),
+    };
+    #[cfg(not(feature = "diagnostics"))]
+    let (file_ptr, file_len, line, col): (u32, u32, u32, u32) = (0, 0, 0, 0);
+
+    unsafe { flint_panic(msg.as_ptr() as u32, msg.len() as u32, file_ptr, file_len, line, col) };
     core::arch::wasm32::unreachable()
 }
 
