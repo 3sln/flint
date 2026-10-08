@@ -115,7 +115,14 @@
   module then traps on the first builtin an image resolves by name. It ran fine
   for small programs and failed for anything using ports, which is exactly the
   shape that hides. So the splice writes the registry too, and the whole layout
-  is determined here rather than half inherited."
+  is determined here rather than half inherited.
+
+  The base module's own image and registry are REMOVED, not just shadowed, before
+  the new ones are written. A later segment at the same address wins at RUN
+  time, so leaving the old ones in place used to work -- but their bytes
+  still shipped: every door that splices into a `--loader` base carried that
+  base's own loader-program image and its registry blob, dead in every program
+  compiled to wasm (`DECISIONS.md#composing-runtime-units`)."
   [base image opts]
   (let [m (w/parse base)
         exp (w/exports m)
@@ -125,6 +132,10 @@
         ;; arena past all of them, so a spliced segment is not eaten.
         img-addr (bit-and (+ heap-base 15) (bit-not 15))
         desc-addr (global-addr m exp "FLINT_IMAGE_DESC")
+        ;; The base's own image always lands at this same `img-addr` -- it is
+        ;; computed from `__heap_base`, which does not move -- so it is always
+        ;; findable by address alone, whatever size it was.
+        m (w/remove-data-at m img-addr)
         m (w/append-data m img-addr image)
         ;; A later segment wins, so a descriptor is overwritten in place rather
         ;; than surgically edited inside the linker's own data.
@@ -135,6 +146,15 @@
         ;; is re-pointed at this module's table by name (`DECISIONS.md#construe-integration-bar`).
         m (if-let [slots (:slots opts)]
             (let [addr (global-addr m exp "FLINT_BUILTIN_REGISTRY")
+                  ;; Unlike the image, the base's own registry blob moves: its
+                  ;; address depends on the SIZE of whatever image preceded it,
+                  ;; which differs per base build. It can only be found again
+                  ;; by reading the descriptor that still names it, before that
+                  ;; descriptor is overwritten below.
+                  old-blob (w/data-at m addr)
+                  old-at (when (and old-blob (= 8 (b-count old-blob)))
+                           (w/u32-at old-blob 0))
+                  m (if old-at (w/remove-data-at m old-at) m)
                   blob (w/->bytes
                         (for [k (sort (keys slots))]
                           (let [b (w/utf8-bytes k)]
