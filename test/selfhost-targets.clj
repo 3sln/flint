@@ -1,6 +1,6 @@
 ;; EVERY TARGET THE SELF-HOSTED COMPILER CLAIMS, DRIVEN END TO END.
 ;;
-;; `src/flint/selfhost.cljc` states its targets THREE times and they must agree:
+;; `src/flint/compiler/selfhost.cljc` states its targets THREE times and they must agree:
 ;; the `known?` list that decides whether the first argument is a mode or a spec,
 ;; the `cond` that dispatches it, and the output `cond` that turns each result map
 ;; back into one string. A target present in the first two and absent from the
@@ -57,7 +57,7 @@
 ;; The only test that mentioned it asserted the UNKNOWN-TARGET MESSAGE lists
 ;; `:to :clr` (`bin/test:643`) -- the help text, not the target.
 ;;
-;; `src/flint/selfhost.cljc` has cited this file since before it existed, which is
+;; `src/flint/compiler/selfhost.cljc` has cited this file since before it existed, which is
 ;; its own lesson: a comment naming a test is not a test.
 ;;
 ;; THE ASSERTION IS THE ARTIFACT'S MAGIC, not the exit code. A compiler that
@@ -86,7 +86,7 @@
 ;; source check runs without a build and names the target that was forgotten,
 ;; and the behavioural one catches a target that is listed everywhere and still
 ;; does not work.
-(let [src (slurp (str root "/src/flint/selfhost.cljc"))
+(let [src (slurp (str root "/src/flint/compiler/selfhost.cljc"))
       known (set (map second (re-seq #"\(= mode \"([a-z]+)\"\)" src)))
       ;; `project` and `spec` are not TARGETS -- they answer with an image the
       ;; usual way -- so only the artifact-producing modes need an output arm.

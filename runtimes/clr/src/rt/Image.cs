@@ -35,7 +35,7 @@ public sealed class Image {
     Image(byte[] bytes, Assembly asm) {
         this.bytes = bytes;
         this.asm = asm;
-        // THE ARTIFACT'S TYPE IS `Program` (`src/flint/clr.cljc`). Refused by name
+        // THE ARTIFACT'S TYPE IS `Program` (`src/flint/compiler/clr.cljc`). Refused by name
         // rather than answering a null type: an assembly that is not a flint
         // artifact is a caller's mistake, and `NullReferenceException` three calls
         // later names nothing.

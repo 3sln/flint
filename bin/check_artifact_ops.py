@@ -67,7 +67,7 @@ FACES = {
     # runtime halves are `flint_native_boot`/`_loop`/`_link` in
     # `nativeabi/src/lib.rs`, but what a host CALLS is what the artifact declares,
     # so that is what gets checked.
-    'llvm': {'path': 'src/flint/llvm.cljc',                        'built': True},
+    'llvm': {'path': 'src/flint/compiler/llvm.cljc',                        'built': True},
 }
 
 
@@ -82,7 +82,7 @@ def read(rel):
 # ---------------------------------------------------------------- tiny edn read
 #
 # Enough EDN for this one file, and NOT a general reader: keywords, strings,
-# integers, vectors, maps, and `;` comments. A general reader is `flint.reader`'s
+# integers, vectors, maps, and `;` comments. A general reader is `flint.compiler.reader`'s
 # job and pulling babashka in here would make a python gate depend on a jvm.
 
 class Edn:
@@ -263,7 +263,7 @@ def main():
 
         # THE TWO-WAY RULE, AGAINST THE FACE AND NOT THE FILE. This asked whether
         # the PATH EXISTED, which worked only while every face had a file of its
-        # own. The llvm face is emitted from `src/flint/llvm.cljc`, a file that
+        # own. The llvm face is emitted from `src/flint/compiler/llvm.cljc`, a file that
         # exists to emit a `main` -- so its existence says nothing about whether
         # the three operations are there, and a `built: False` row would have been
         # reported as a contradiction instead of as the gap it records.

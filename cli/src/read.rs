@@ -1,9 +1,9 @@
 //! THE HOST READS (`DECISIONS.md#namespaces-over-the-system-port`, migration
 //! step 2): a project's source text read here, outside the compiler sandbox,
 //! by the kin-generated reader every runtime carries (`Rt::read_forms`,
-//! `kin/formsenc.kin`), and handed to the compiler as `flint.forms` bytes.
+//! `kin/formsenc.kin`), and handed to the compiler as `flint.compiler.forms` bytes.
 //!
-//! The compiler checks the bytes' options on arrival (`flint.project/read-entry`):
+//! The compiler checks the bytes' options on arrival (`flint.compiler.resolve/read-entry`):
 //! `{:file :features :tags :dialect}` must be exactly what it would have read
 //! the file under, so a host that read with the wrong features or tags is
 //! refused rather than compiled. The DIALECT is passed in, never derived here
@@ -25,7 +25,7 @@ pub(crate) struct ReadAs<'a> {
     pub portable: bool,
 }
 
-/// `text`, read as the file `name`, as `flint.forms` bytes; or the message the
+/// `text`, read as the file `name`, as `flint.compiler.forms` bytes; or the message the
 /// read failed with, exactly as the guest's reader words it.
 ///
 /// DELEGATES to `flint_rt::hostread::read_text`, which the JavaScript doors'

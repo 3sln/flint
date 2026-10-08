@@ -1,12 +1,12 @@
-(ns flint.llvm
+(ns flint.compiler.llvm
   "Bytecode to LLVM IR, one arity at a time (`DECISIONS.md#llvm-ir-target`).
 
   ## The same shape, aimed at a different target
 
-  This is `flint.aot` with the bytes replaced by text. Everything ABOUT the
+  This is `flint.compiler.aot` with the bytes replaced by text. Everything ABOUT the
   bytecode -- decoding it, where a chunk begins, how deep the operand stack
   gets, where compiled code resumes after handing an instruction back -- is
-  read from `flint.aot` rather than restated here, because two emitters that
+  read from `flint.compiler.aot` rather than restated here, because two emitters that
   disagree about a chunk boundary agree on every program that never takes the
   disagreeing path (AGENTS.md §1). What lives here is only EMISSION.
 
@@ -20,7 +20,7 @@
 
   ## What LLVM makes easier, and the one thing it does not change
 
-  wasm cannot branch INTO structured control flow, which is why `flint.aot`
+  wasm cannot branch INTO structured control flow, which is why `flint.compiler.aot`
   wraps its chunks in nested blocks and pays a `br_table` for every backward
   jump. LLVM has no such rule: a jump is `br label %chunkN` in either
   direction, and the `switch` runs once on the way in rather than once per
@@ -40,7 +40,7 @@
   promotes what it can. That is not laziness about phi nodes: a chunk is a
   RE-ENTRY POINT, and every value that crosses one has to be somewhere the
   interpreter can also see. The operand stack is already the runtime's own
-  `Vec`, for the reason `flint.aot` gives -- wasm locals are not scannable --
+  `Vec`, for the reason `flint.compiler.aot` gives -- wasm locals are not scannable --
   and a native register is no more scannable than a wasm local.
 
   ## 64-bit only
@@ -49,7 +49,7 @@
   `i64`. LLVM IR is not target-independent about integer widths, and the only
   hosts flint links natively are 64-bit. A 32-bit target would need the struct
   type re-emitted, and nothing else."
-  (:require [flint.aot :as aot]
+  (:require [flint.compiler.aot :as aot]
             [flint.rt]
             [clojure.string :as str]))
 
@@ -145,7 +145,7 @@
 
 (defn- reload!
   "Everything a call back into Rust can invalidate. `need` is what this body
-  actually reads -- see `flint.aot/needs`, which is where the measurement that
+  actually reads -- see `flint.compiler.aot/needs`, which is where the measurement that
   made it conditional lives."
   [b need]
   (base! b "%sync.stack" "%L.sp")
@@ -229,12 +229,12 @@
 ;; Emitted only where the compiler PROVED both operands are integers, so the
 ;; fast path below is the path taken. `^int` means integer and not fixnum, so
 ;; the tags are still tested and everything else goes to the helper --
-;; `flint.aot` carries the argument for why this is a helper and not a bail.
+;; `flint.compiler.aot` carries the argument for why this is a helper and not a bail.
 
 (def ^:private TAG-SHIFTED (bit-shift-left aot/TAG-FIXNUM 48))
 
 (def ^:private PAYLOAD-BITS
-  "The 48 payload bits of a NaN box. `flint.aot` names the same constant
+  "The 48 payload bits of a NaN box. `flint.compiler.aot` names the same constant
   `FIXNUM-BITS` because that is the only place it uses it; a heap address is
   masked with it too, and `Value::as_heap` is the Rust half of that sentence."
   aot/FIXNUM-BITS)
@@ -349,7 +349,7 @@
     (op2! b "or" "i1" a c)))
 
 (defn- opcode-byte
-  "The byte an opcode keyword was decoded from. Read back out of `flint.aot/OPS`
+  "The byte an opcode keyword was decoded from. Read back out of `flint.compiler.aot/OPS`
   rather than restated, so there is one table (AGENTS.md §1)."
   [k]
   (or (first (keep (fn [e] (when (= (first (val e)) k) (key e))) aot/OPS))
@@ -390,7 +390,7 @@
       ;; root the collector could not see -- so this reads it exactly as the
       ;; interpreter does.
       ;;
-      ;; MASKED to 48 bits, not truncated to 32. `flint.aot` writes
+      ;; MASKED to 48 bits, not truncated to 32. `flint.compiler.aot` writes
       ;; `i32.wrap_i64` here and that IS the mask on wasm, where an address is
       ;; 32 bits by the platform's definition. `mem::Addr` is a `u64` and
       ;; `Value::as_heap` takes 48 payload bits, so a 32-bit wrap is a heap cap
@@ -496,10 +496,10 @@
   name is stable whether or not its neighbours compiled.
 
   `chunk-all?` makes EVERY instruction a boundary, and it is a bisection handle
-  rather than a mode, for the reason `flint.aot/boundaries` gives: if a failure
+  rather than a mode, for the reason `flint.compiler.aot/boundaries` gives: if a failure
   survives maximal chunking then no boundary was missing and the fault is in
   how an opcode is EMITTED. Nothing passes it yet -- the wasm side reaches its
-  copy through `flint.link`, which reads the environment, and this namespace is
+  copy through `flint.compiler.link`, which reads the environment, and this namespace is
   compiled BY flint and has no host interop -- so today it is reached by calling
   this arity directly."
   ([code start len k] (compile-arity code start len k false))
@@ -552,7 +552,7 @@
   "Emit an LLVM function for every arity the emitter can take, and stamp each
   one's slot into the image builder.
 
-  The mirror of `flint.bundle/compile-arities`, and the same order: `(fn-index,
+  The mirror of `flint.compiler.bundle/compile-arities`, and the same order: `(fn-index,
   arity-index)` ascending, so the table this produces and the indices it stores
   into the arities cannot drift apart.
 
@@ -599,7 +599,7 @@
   "The image as the body of an LLVM `c\"...\"` constant.
 
   Built into a BYTE STRING through a transient, for the reason
-  `flint.selfhost/base64` gives: the obvious version allocates one string per
+  `flint.compiler.selfhost/base64` gives: the obvious version allocates one string per
   byte, and an image is hundreds of thousands of them."
   [bytes]
   (let [bs (if (flint.rt/bytes? bytes) bytes (flint.rt/vec->b bytes))

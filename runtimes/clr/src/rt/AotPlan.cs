@@ -3,7 +3,7 @@ namespace Flint.Rt;
 using System.Collections.Generic;
 
 /// The analysis half of `DECISIONS.md#emit-wasm-instead-of-dispatch`, a MIRROR of the JVM port's
-/// `AotPlan.java` which is itself a port of `src/flint/aot.cljc`.
+/// `AotPlan.java` which is itself a port of `src/flint/compiler/aot.cljc`.
 ///
 /// Decoding, chunk boundaries and the gas charge are decisions about FLINT
 /// BYTECODE, so they have nothing to do with which machine the result is

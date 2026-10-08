@@ -8,7 +8,7 @@
 //
 // What happens in a compile:
 //
-//   1. the host calls `flint.selfhost/compile` with a REQUEST (data, not EDN
+//   1. the host calls `flint.compiler.selfhost/compile` with a REQUEST (data, not EDN
 //      text) and a RESOLVER PORT it minted. Holding the port is the compiler's
 //      only way to ask for anything;
 //   2. the compiler sends `{:id :want [ns ..]}` on that port, one sorted WAVE
@@ -17,7 +17,7 @@
 //      answered from the embedded copy and the host's resolver is never asked
 //      for it; every other name goes to the host's resolver, whose answer is
 //      READ HERE (the kin reader, `dist/flint-reader.wasm`) under the
-//      compile's features and handed over as `flint.forms` bytes -- so source
+//      compile's features and handed over as `flint.compiler.forms` bytes -- so source
 //      text never enters the compiler sandbox;
 //   4. the compiler answers `{:artifact bytes :reached [..]}` or `{:errors [..]}`.
 //
@@ -37,12 +37,12 @@
 
 import { codec, Val } from './codec.js';
 
-/// `flint.project/source-extensions`: which file WINS for a namespace when more
+/// `flint.compiler.resolve/source-extensions`: which file WINS for a namespace when more
 /// than one exists, most specific first. `.fln` is flint's own dialect, so it is
 /// preferred over a portable `.cljc` of the same namespace.
 export const SOURCE_EXTENSIONS = ['.fln', '.cljc', '.clj'];
 
-/// `flint.reader/default-features`, and `[perf]`'s set, which drops checks and
+/// `flint.compiler.reader/default-features`, and `[perf]`'s set, which drops checks and
 /// keeps `:flint/nested` -- the same three cases as the native CLI's
 /// `read_features`. A host READS user text under exactly the set the compile
 /// runs with, and the compiler checks the bytes' options on arrival, so a drift
@@ -50,13 +50,13 @@ export const SOURCE_EXTENSIONS = ['.fln', '.cljc', '.clj'];
 export const DEFAULT_FEATURES = [':flint', ':flint/check', ':flint/nested'];
 export const PERF_FEATURES = [':flint', ':flint/nested'];
 
-/// `my.app-x` -> `my/app_x`: `flint.project/ns->path`, without an extension.
+/// `my.app-x` -> `my/app_x`: `flint.compiler.resolve/ns->path`, without an extension.
 export function nsPath(ns) {
   return String(ns).replace(/-/g, '_').replace(/\./g, '/');
 }
 
 /// Which dialect a FILE NAME implies: `.fln` is flint, everything else is
-/// portable (`flint.project/dialect-of`). Only a fallback -- an answer that
+/// portable (`flint.compiler.resolve/dialect-of`). Only a fallback -- an answer that
 /// says `dialect` is taken at its word, because the dialect belongs to whoever
 /// answered, not to a spelling.
 export function dialectOf(file) {
@@ -71,7 +71,7 @@ export function extensionOf(dialect) {
 // --- the reader ---------------------------------------------------------------
 
 /// The kin reader, alone (`units-src/flint-reader`): source text to
-/// `flint.forms` bytes, the same code the native CLI reads with.
+/// `flint.compiler.forms` bytes, the same code the native CLI reads with.
 export class Reader {
   constructor(module) {
     this.inst = new WebAssembly.Instance(module, {});
@@ -309,7 +309,7 @@ export function virtualNamespaces(table) {
 
 // --- the request --------------------------------------------------------------
 
-/// The compile REQUEST as the wire value `flint.selfhost/compile` takes. Only
+/// The compile REQUEST as the wire value `flint.compiler.selfhost/compile` takes. Only
 /// what was given is said, so two doors that mean the same compile send the
 /// same map.
 export function compileRequest({
@@ -383,7 +383,7 @@ export function compileCall(inst, request, { resolve, stdcore, reader, features 
     const want = (msg && msg[':want']) || [];
     return answerWave(want.map(String));
   };
-  return inst.callServing('flint.selfhost/compile', [request, codec.port(port)], serve);
+  return inst.callServing('flint.compiler.selfhost/compile', [request, codec.port(port)], serve);
 }
 
 /// A failed compile's `:errors`, as the sentences the CLIs have always printed.

@@ -4,7 +4,7 @@
 ;;     bin/build-jvm-artifact :src <dir> :fn <ns/fn> :class <dir>   # the artifact
 ;;     bin/build-jvm-artifact :src <dir> :fn <ns/fn> :out <app.jar> # and a runtime
 ;;
-;; THE EMITTING IS `src/flint/jvm.cljc` AND NOTHING HERE. This file reads files,
+;; THE EMITTING IS `src/flint/compiler/jvm.cljc` AND NOTHING HERE. This file reads files,
 ;; shells out to `bin/flint` for the image, and writes bytes -- the three things a
 ;; flint program has no business doing. Everything between the image and the class
 ;; file is cljc, so the same code runs when flint compiles itself and there is no
@@ -21,7 +21,7 @@
 (require '[babashka.fs :as fs] '[clojure.edn :as edn] '[babashka.process :as p])
 (def root (str (fs/parent (fs/parent (fs/real-path *file*)))))
 (babashka.classpath/add-classpath (str root "/src:" root "/lib"))
-(require '[flint.jvm :as jvm] '[flint.jar :as jar] '[flint.rt])
+(require '[flint.compiler.jvm :as jvm] '[flint.compiler.jar :as jar] '[flint.rt])
 
 (defn die! [m] (binding [*out* *err*] (println m)) (System/exit 1))
 

@@ -1,7 +1,7 @@
-(ns flint.hostfns
+(ns flint.compiler.hostfns
   "Builtin implementations for compile-time evaluation.
 
-  When `flint.eval` runs a macro body it hits `:native` nodes -- the macro called
+  When `flint.compiler.eval` runs a macro body it hits `:native` nodes -- the macro called
   `conj`, or `str`, or `=`. Those cannot dispatch into the wasm table at compile
   time, so they dispatch here.
 

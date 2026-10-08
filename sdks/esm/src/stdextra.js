@@ -3,7 +3,7 @@
 //
 // Everything in `lib/` that an image does not need whatever the host supplies
 // -- `clojure.set`, `clojure.edn`, `clojure.walk`, `flint.data.json` and the
-// rest -- pre-read into `flint.forms` bytes at build time
+// rest -- pre-read into `flint.compiler.forms` bytes at build time
 // (`bin/build-stdlib-forms`), each answer carrying the workspace and grants of
 // the `deps.edn` that owns it. A host composes it into the resolver it passes,
 // usually first:

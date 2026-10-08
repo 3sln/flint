@@ -1,4 +1,4 @@
-(ns flint.shake
+(ns flint.compiler.shake
   "Tree shaking, as a pass over a FINISHED module.
 
   `--gc-sections` does this at link time, and it is worth 306 KB of code on

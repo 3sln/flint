@@ -50,7 +50,7 @@ for _n in ["boolean?", "float?", "fn?", "int?", "keyword?", "map?", "nil?",
     ACCOUNTED[_n] = "compiled to the TYPE_P opcode, which opcov-gate asserts"
 ACCOUNTED["flint/apply"] = "compiled to the APPLY opcode, which opcov-gate asserts"
 # `flint/array-map` used to be reached only through the MAP opcode (a literal
-# `{}`), which is what the entry above claimed. `src/flint/callentry.cljc`
+# `{}`), which is what the entry above claimed. `src/flint/compiler/callentry.cljc`
 # (the call-loop machinery added when the control plane moved into the
 # runtime) now calls `flint.rt/array-map` directly to build its messages --
 # `(flint.rt/array-map [:tx tx :op :return ...])`, keeping source order from a
@@ -110,7 +110,7 @@ for _n in ["flint/sin", "flint/cos", "flint/tan", "flint/asin", "flint/acos",
 # the job it exists for.
 # `flint/bindings` and `flint/set-bindings` HAVE NO FLINT-LEVEL NAME. They live
 # in the concurrency unit and carry a green thread's dynamic bindings across a
-# spawn, and `src/flint/hostfns.cljc` has no entry for either -- so no program
+# spawn, and `src/flint/compiler/hostfns.cljc` has no entry for either -- so no program
 # can write one and no conformance image will ever name one. Permanently
 # unreachable from here, which is a different thing from unwatched.
 #

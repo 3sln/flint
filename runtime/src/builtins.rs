@@ -382,7 +382,7 @@ builtins! {
     // -- the analyzer elides it -- so this runs only where something was
     // genuinely unknown.
     //
-    // The codes are `flint.types/code`, and `test/types.clj` asserts the two
+    // The codes are `flint.compiler.types/code`, and `test/types.clj` asserts the two
     // tables agree. They are integers rather than keywords because this is on
     // the write path of every annotated binding.
     "flint/check-tag", flint_b_check_tag, b_check_tag, |rt, a, n| {

@@ -95,8 +95,8 @@ The honest list. Nothing here is stubbed and reported as working.
 - **`format` is `%s`, `%d`, `%f` and `%%` only.** `%f` prints six decimal places
   as Java's does, but loses precision at very large magnitudes where Java's does
   not.
-- **The linker driver is host-side only.** The compiler self-hosts; `flint.wasm`
-  and `flint.link` run next to `rust-lld` and are not part of that requirement
+- **The linker driver is host-side only.** The compiler self-hosts; `flint.compiler.wasm`
+  and `flint.compiler.link` run next to `rust-lld` and are not part of that requirement
   (a flint module has no processes to spawn).
 - **Transit's caching is not implemented.** The writer never emits cache codes,
   so a message with many repeated keys is larger than a caching writer's would

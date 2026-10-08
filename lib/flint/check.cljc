@@ -274,7 +274,7 @@
   "Is this var one of the grouped checks `flint test` runs?
 
   The compiler indexes EVERY var's metadata, not just this key -- see
-  `flint.compiler`. This is one client of that index; a doc generator or a
+  `flint.compiler.core`. This is one client of that index; a doc generator or a
   lint pass would be another asking the same map a different question.
 
   IDENTICAL in both variants: it is a pure read of a var's own metadata, which

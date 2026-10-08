@@ -27,7 +27,7 @@
  ;; instead of calling `flint.port`/`flint.wire`. It is 85 now that the loop
  ;; calls them -- `flint.port` and `flint.wire` are ROOTS in every compile
  ;; again, same day, because the loop references them by var
- ;; (`flint.project/resolve-project`) -- still well under 91, because the rest
+ ;; (`flint.compiler.resolve/resolve-project`) -- still well under 91, because the rest
  ;; of what `flint.system` dragged in (the control plane itself, `flint.thread`)
  ;; stayed out. 85 measured by reading `nnatives` out of
  ;; `./bin/flint ... --emit-image` for this program, 2026-10-06.
@@ -54,7 +54,7 @@
  :meta
  {:section "com.3sln.flint.meta"
   :must-not-answer-to "flint"
-  :why-namespaced "It was the bare word `flint` until 2026-09-24. `flint.modmeta/section-name`
+  :why-namespaced "It was the bare word `flint` until 2026-09-24. `flint.compiler.modmeta/section-name`
                    is the one place it is written for the compiler; this file is the
                    one place it is written for the checker, and the check is that they
                    agree."

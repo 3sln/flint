@@ -46,7 +46,7 @@ fn split_name(s: &str) -> (Option<&str>, &str) {
     }
 }
 
-/// `text`, read as the file `name`, as `flint.forms` bytes; or the error the
+/// `text`, read as the file `name`, as `flint.compiler.forms` bytes; or the error the
 /// read failed with, exactly as the guest's reader words it.
 ///
 /// Leaves `rt`'s root stack as it found it, so one `Rt` serves any number of

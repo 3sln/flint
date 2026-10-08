@@ -6,13 +6,13 @@
 ;; caused it. This is the same reasoning as every instrument that earned its
 ;; place in the GC hunt: put the check where it can name the culprit.
 (babashka.classpath/add-classpath "src")
-(require '[flint.wasm :as w] '[flint.aot :as aot] '[clojure.string :as string])
+(require '[flint.compiler.wasm :as w] '[flint.compiler.aot :as aot] '[clojure.string :as string])
 
 (def fails (atom 0))
 (defn check [label ok] (if ok (println "  ok  " label)
                            (do (println "  FAIL " label) (swap! fails inc))))
 
-;; Four helpers, in the order `flint.aot` indexes them.
+;; Four helpers, in the order `flint.compiler.aot` indexes them.
 (def HELPERS {:native 0 :return 1 :bail 2 :tick 3 :call 4})
 (def HELPER-TYPES
   ;; native (rt idx argc top ip block gas)->i32, return (rt top gas)->(),

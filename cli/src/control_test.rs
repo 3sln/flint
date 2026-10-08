@@ -2,7 +2,7 @@
 //!
 //! `:bind`, `:unbind` and `:close` are served by the RUNTIME (`kin/control.kin`)
 //! and a bound port's calls by the call loop the compiler puts in every image
-//! (`src/flint/callentry.cljc`). This is `test/system.cljc`'s rows -- which drove
+//! (`src/flint/compiler/callentry.cljc`). This is `test/system.cljc`'s rows -- which drove
 //! `flint.system/serve` over a local channel -- asked of the thing that replaced
 //! it, through the events a host actually sees.
 
@@ -167,7 +167,7 @@ fn the_initialisers_run_before_the_first_call() {
 /// own builtin re-implementation of the wire codec -- which never asked, so a
 /// reply crossed with no metadata regardless of what the value opted in to.
 ///
-/// FAILS before the fix: the hand-written `emit` in `src/flint/callentry.cljc`
+/// FAILS before the fix: the hand-written `emit` in `src/flint/compiler/callentry.cljc`
 /// had no `K_WITH_META` case at all, so `tagged`'s reply decoded as a bare
 /// `{:a 1}`, indistinguishable from `untagged`'s. PASSES after: the loop calls
 /// `flint.port/send`, which asks `WireMeta` and wraps the value in `K_WITH_META`

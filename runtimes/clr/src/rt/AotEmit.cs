@@ -5,7 +5,7 @@ using System.Reflection;
 using System.Reflection.Emit;
 
 /// The emitter: one flint arity to one IL method. A MIRROR of the JVM port's
-/// `AotEmit.java`, which is a port of `src/flint/aot.cljc`.
+/// `AotEmit.java`, which is a port of `src/flint/compiler/aot.cljc`.
 ///
 /// ## Why this is a port and not a new backend
 ///

@@ -8,8 +8,8 @@
 ;; (A == B), and the second generation must reproduce itself byte for byte
 ;; (B == C).
 (babashka.classpath/add-classpath "src")
-(require '[flint.compiler :as compiler] '[flint.image :as img] '[flint.link :as link]
-         '[flint.reader :as reader] '[flint.imgread :as imgread]
+(require '[flint.compiler.core :as compiler] '[flint.compiler.image :as img] '[flint.compiler.link :as link]
+         '[flint.compiler.reader :as reader] '[flint.compiler.imgread :as imgread]
          '[clojure.java.io :as io] '[clojure.string :as str]
          '[babashka.fs :as fs])
 
@@ -58,7 +58,7 @@
               k)))
 
 (def dirs ["src" "lib"])
-(def entry 'flint.selfhost/main)
+(def entry 'flint.compiler.selfhost/main)
 ;; `flint.system` WAS A ROOT here, the fourth place that had to say so, because
 ;; bootstrap spawned it by NAME. The control plane is the runtime's now and the
 ;; call loop is compiled into every image (`DECISIONS.md#the-control-plane-is-the-runtimes`),
@@ -66,14 +66,14 @@
 ;;
 ;; BUT `flint.port` AND `flint.wire` ARE, and this comment's claim that there
 ;; was "nothing for a `collect` to miss" was wrong the moment `bc6ddd42` made
-;; them -- not `flint.system` -- the call loop's roots: `flint.callentry` now
+;; them -- not `flint.system` -- the call loop's roots: `flint.compiler.callentry` now
 ;; calls `flint.port/send` and `flint.wire/read-from` directly, so
-;; `flint.project/project-roots` adds both unconditionally for every real
+;; `flint.compiler.resolve/project-roots` adds both unconditionally for every real
 ;; compile. This file builds its OWN spec with `collect` instead of going
 ;; through `project-roots`, which is why `bin/flint` and `test/visibility.clj`
 ;; were updated in that commit and this file, building the exact same shape of
 ;; spec, was not: `collect dirs [(symbol (namespace entry)) 'clojure.core]`
-;; happened to still work here because `flint.selfhost`'s own transitive
+;; happened to still work here because `flint.compiler.selfhost`'s own transitive
 ;; requires already reach `flint.port`, but the minimal spec below (`small`)
 ;; has no such luck and failed with "unable to resolve flint.port/send -- is
 ;; flint.port required?" -- the exact message `project.cljc` predicts for a
@@ -153,7 +153,7 @@
         (println "        first differing fn:" (:name-a f))
         (println "          bb   " (pr-str (:a f)))
         (println "          flint" (pr-str (:b f)))
-        (require '[flint.disasm :as dis])
+        (require '[flint.compiler.disasm :as dis])
         (let [pa (imgread/parse a)
               pb (imgread/parse bimg)
               fa (imgread/parse-fns a (:consts-end pa))
@@ -163,9 +163,9 @@
               ar (first (:arities (:a f)))
               br (first (:arities (:b f)))]
           (println "        --- bb ---")
-          (println ((resolve 'flint.disasm/disasm) code-a (:off ar) (:len ar)))
+          (println ((resolve 'flint.compiler.disasm/disasm) code-a (:off ar) (:len ar)))
           (println "        --- flint ---")
-          (println ((resolve 'flint.disasm/disasm) code-b (:off br) (:len br))))))))
+          (println ((resolve 'flint.compiler.disasm/disasm) code-b (:off br) (:len br))))))))
 
 (println "self-hosting fixpoint")
 (let [t0 (System/nanoTime)
@@ -201,7 +201,7 @@
   (let [n 500
         ;; `flint.port`/`flint.wire`, same as the `sources` root list above: the
         ;; call loop every image carries calls them unconditionally, so a spec
-        ;; built by hand (rather than through `flint.project/project-roots`,
+        ;; built by hand (rather than through `flint.compiler.resolve/project-roots`,
         ;; which adds both for exactly this reason) must add them itself or
         ;; gen0 refuses the compile with "is flint.port required?".
         small (collect dirs ['clojure.core 'flint.port 'flint.wire])

@@ -41,7 +41,7 @@ using System;
 ///
 /// ## The value is EDN, deliberately
 ///
-/// The same `pr-str` of the map `src/flint/modmeta.cljc` builds that every other
+/// The same `pr-str` of the map `src/flint/compiler/modmeta.cljc` builds that every other
 /// target carries, byte for byte. Not a set of typed attribute properties,
 /// because then the CLR would carry a DIFFERENT metadata shape from wasm and the
 /// JVM and the three could drift without anything noticing. One producer, one

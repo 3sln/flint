@@ -1,4 +1,4 @@
-(ns flint.reader
+(ns flint.compiler.reader
   "The Clojure reader: source text to data.
 
   flint reads its own source rather than borrowing the host's reader. That is
@@ -10,7 +10,7 @@
   Returns ordinary Clojure data, with `:line`/`:column`/`:file` metadata on
   every form that can carry it."
   (:require [clojure.string :as str]
-            [flint.canon :as canon]
+            [flint.compiler.canon :as canon]
             [flint.rt]))
 
 ;; Characters are one-character strings throughout: flint has no char type, and
@@ -104,7 +104,7 @@
   `:child-pos`; and a reader-tag expansion gets the three `:flint/read-*` keys
   that say what was written, what it resolved to, and the form it produced.
 
-  PUBLISHED, BECAUSE THE ANALYSER HAS TO SUBTRACT IT. `flint.analyzer` carries an
+  PUBLISHED, BECAUSE THE ANALYSER HAS TO SUBTRACT IT. `flint.compiler.analyzer` carries an
   author's metadata onto a literal, and anything left in this map would ride along
   -- so the two must agree about what is bookkeeping. They did not: the analyser
   knew the four position keys and not the three `:flint/read-*` ones, so every
@@ -129,18 +129,18 @@
 ;; dropped it as "no form here". The symptom was a mis-shaped `if` a long way
 ;; downstream. A fresh volatile has identity nothing can forge, and `identical?`
 ;; is the only comparison used against it.
-(def EOF (flint.rt/volatile "flint.reader/eof"))
+(def EOF (flint.rt/volatile "flint.compiler.reader/eof"))
 (defn eof? [v] (identical? v EOF))
 
 ;; Same reasoning for the "this reader conditional matched nothing" marker.
-(def SPLICE-NONE (flint.rt/volatile "flint.reader/splice-none"))
+(def SPLICE-NONE (flint.rt/volatile "flint.compiler.reader/splice-none"))
 
 ;; And the same reasoning again for a MATCHED `#?@`, which has to carry a value
 ;; out to the enclosing collection. It was a map, `{::splice v}` -- and this
 ;; file contains that map as a literal, so reading flint's own reader spliced
 ;; it. A marker that source can spell is a marker source can forge; the tag is
 ;; a fresh volatile, and `identical?` is the only comparison made against it.
-(def SPLICE-TAG (flint.rt/volatile "flint.reader/splice"))
+(def SPLICE-TAG (flint.rt/volatile "flint.compiler.reader/splice"))
 (defn- splice [v] [SPLICE-TAG v])
 (defn- spliced? [x]
   (and (vector? x) (= 2 (count x)) (identical? (nth x 0) SPLICE-TAG)))
@@ -381,7 +381,7 @@
                   ;; and an unmatched one left the `SPLICE-NONE` sentinel -- so
                   ;; `(ns s (:require [a] #?@(:cljs [[b]])))` asked for a
                   ;; namespace literally called
-                  ;; `[:flint.reader/splice [[b]]]`, and the unmatched case
+                  ;; `[:flint.compiler.reader/splice [[b]]]`, and the unmatched case
                   ;; reached the compiler as a Volatile.
                   ;;
                   ;; This is how a library conditionally adds a `:require`, so
@@ -848,7 +848,7 @@
   "The metadata `stamp` gives a form at `line`/`col` in `file` with `children`
   positions, over the `existing` metadata it already had.
 
-  PUBLIC because `flint.forms` rebuilds read forms' metadata, and has to build
+  PUBLIC because `flint.compiler.forms` rebuilds read forms' metadata, and has to build
   it THE SAME WAY: `merge` goes through a transient, so the key order of the
   answer is the host's -- insertion order on one, hash order on another -- and
   only the same construction is sure to give the same map."
@@ -945,7 +945,7 @@
   "The `ns` clauses that NAME NAMESPACES.
 
   One set, read by everything that needs the answer: the analyzer binds their
-  aliases and refers, `flint.compiler/ns-requires` builds the load-order graph
+  aliases and refers, `flint.compiler.core/ns-requires` builds the load-order graph
   from the same heads, and `ns-aliases` below gives `::alias/kw` its namespace.
   Two spellings of \"which clause names a namespace\" is a graph that disagrees
   with the bindings. It lives HERE because the reader is the one of those that
@@ -1028,7 +1028,7 @@
   `:dialect` and `:features` (default `default-features`).
 
   `:dialect` is `:flint` or `:portable` and comes from the file's EXTENSION
-  (`flint.project/dialect-of`). `:portable` refuses flint-only reader tags; a
+  (`flint.compiler.resolve/dialect-of`). `:portable` refuses flint-only reader tags; a
   caller that does not say gets `:flint`, which is what every reader of
   non-file text wants."
   ([src] (reader src {}))

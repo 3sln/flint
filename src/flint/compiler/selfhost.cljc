@@ -1,4 +1,4 @@
-(ns flint.selfhost
+(ns flint.compiler.selfhost
   "The compiler, as a flint program.
 
   Compiled by babashka once; from then on flint compiles flint. Input and output
@@ -9,17 +9,17 @@
   What stays on the host is only what a flint module has no business doing:
   reading files and running `rust-lld`. The compiler itself -- reader, analyzer,
   emitter, macro evaluation -- is all in here."
-  (:require [flint.compiler :as compiler]
-            [flint.image :as img]
-            [flint.reader :as reader]
-            [flint.project :as project]
-            [flint.wasm :as w]
-            [flint.bundle :as bundle]
-            [flint.llvm :as llvm]
-            [flint.clr :as clr]
-            [flint.jvm :as jvm]
-            [flint.modmeta :as modmeta]
-            [flint.wasmshake :as wshake]
+  (:require [flint.compiler.core :as compiler]
+            [flint.compiler.image :as img]
+            [flint.compiler.reader :as reader]
+            [flint.compiler.resolve :as project]
+            [flint.compiler.wasm :as w]
+            [flint.compiler.bundle :as bundle]
+            [flint.compiler.llvm :as llvm]
+            [flint.compiler.clr :as clr]
+            [flint.compiler.jvm :as jvm]
+            [flint.compiler.modmeta :as modmeta]
+            [flint.compiler.wasmshake :as wshake]
 
             ;; The resolver PORT is flint's alone: babashka drives
             ;; `compile-with` with a resolver of its own and never loads this.
@@ -36,7 +36,7 @@
   accumulating one-character strings and joining -- allocates one string per
   character. A wasm module is three-quarters of a million of them."
   [bytes]
-  ;; `flint.image/emit` still answers with a VECTOR of byte values, so this
+  ;; `flint.compiler.image/emit` still answers with a VECTOR of byte values, so this
   ;; accepts either. Converting once here is cheap; what is not cheap is the
   ;; vector itself, and moving the image builder onto byte strings is worth
   ;; doing separately.
@@ -84,7 +84,7 @@
 (defn compile-to-base64
   "`spec` is EDN: {:sources {ns {:src .. :file ..}} :order [..] :entry ns/fn
   :builtins #{..}}. Returns the base64 image, with native slots left at zero for
-  the host to patch (`flint.image/patch-native-slots`)."
+  the host to patch (`flint.compiler.image/patch-native-slots`)."
   [spec-edn]
   (let [spec (read-spec spec-edn)
         result (compiler/compile-image spec)
@@ -164,7 +164,7 @@
   Answers `{:missing ..}`, `{:refused ..}` or `{:builder ..}`."
   [spec builtins]
   (let [files (:files spec)
-        features (or (:features spec) flint.reader/default-features)
+        features (or (:features spec) flint.compiler.reader/default-features)
         entry (:entry spec)
         entry-ns (symbol (namespace entry))
         ;; The namespace RESOLVER (`DECISIONS.md#workspace-capabilities`). This used to be a
@@ -211,7 +211,7 @@
                                                                 ;; already read, so the
                                                                 ;; compiler does not read
                                                                 ;; the file a second time
-                                                                ;; (`flint.compiler/read-source`).
+                                                                ;; (`flint.compiler.core/read-source`).
                                                                 :forms (:forms (val e))
                                                                 :file (:file (val e))
                                                                 :tags (:tags (val e))
@@ -272,7 +272,7 @@
        :entry my.app/main
        :builtins #{..}
        :workspaces [{:prefix \"vendor/foo/\" :name foo/bar :tags {t f}} ..]
-       :features flint.reader/default-features}
+       :features flint.compiler.reader/default-features}
 
   `:workspaces` says who OWNS which files, first matching prefix winning. It is
   how a caller with no filesystem says what the CLI reads off a source root:
@@ -425,7 +425,7 @@
   finished artifact here to cut down. What comes out is text.
 
   `:aot` compiles every arity it can to an LLVM function
-  (`flint.llvm/compile-arities`); without it the module is the program image
+  (`flint.compiler.llvm/compile-arities`); without it the module is the program image
   and the two calls that start it, and every arity is interpreted.
 
   NOTHING IS LINKED HERE and nothing needs to be. That was the error in the
@@ -501,7 +501,7 @@
   passes all 39 rows of `runtimes/clr/artifact/Check.cs`, with or without `:slots`.
 
   `name` is the output file's BASENAME, or empty when there is no output file --
-  `flint.clr/assembly-name` turns it into the assembly name and is the only place
+  `flint.compiler.clr/assembly-name` turns it into the assembly name and is the only place
   that rule lives. `bin/flint` derived the name from `:out` and this door could
   not, so the two produced artifacts differing by 56 bytes of string-heap offsets
   -- the only thing left between them once the describe was canonical. Byte
@@ -524,7 +524,7 @@
         ;; inputs below. `:abi :clr` and the three exports are properties of the
         ;; TARGET, and this was one of the two places restating them
         ;; (`DECISIONS.md#four-operations`, "the emitter owns describe"). The
-        ;; compatibility key is still computed by `flint.modmeta` exactly once --
+        ;; compatibility key is still computed by `flint.compiler.modmeta` exactly once --
         ;; that has not changed, only WHO calls it.
         ;; `vec->b`, AND `compile-to-jvm`'S COMMENT ALREADY CLAIMED THIS PATH DID IT.
         ;; `img/emit` answers a VECTOR of byte values; `clr/assemble` measures its
@@ -658,15 +658,15 @@
   read it again (`DECISIONS.md#stdlib-preread`).
 
   Each file is asked exactly the question a compile asks of it,
-  `flint.project/file-answer` over the spec's `:files` and `:workspaces`, and
-  read by `flint.reader/read-deferred`, which keeps reader conditionals as
+  `flint.compiler.resolve/file-answer` over the spec's `:files` and `:workspaces`, and
+  read by `flint.compiler.reader/read-deferred`, which keeps reader conditionals as
   data: one read serves the default build, `:optimize [perf]` and any explicit
-  `:features`. The bytes are `flint.forms`'s, which carry every form's
+  `:features`. The bytes are `flint.compiler.forms`'s, which carry every form's
   position metadata and the options the read was made under, which a compile
   checks before it uses them.
 
   A spec with `:features` reads EAGERLY under that set instead
-  (`flint.project/read-eager`) -- the bytes a host-side reader must reproduce,
+  (`flint.compiler.resolve/read-eager`) -- the bytes a host-side reader must reproduce,
   which is what the kin reader's conformity guard compares against
   (`cli/src/kin_reader_test.rs`). With `:guard` a file that does not read
   answers `{:error message}` in place of its bytes, so one bad fixture does
@@ -701,10 +701,10 @@
 
 (defn- answer-forms
   "One element of the host's answer with its file READ: `:forms` bytes (the
-  `flint.forms` encoding, checked against the options this compile reads
-  under, `flint.project/read-entry`) or, until hosts read user text
+  `flint.compiler.forms` encoding, checked against the options this compile reads
+  under, `flint.compiler.resolve/read-entry`) or, until hosts read user text
   themselves, `:source` text -- either way `:forms` comes out as forms, which
-  is all `flint.project/Resolver` speaks. A read that fails is the element's
+  is all `flint.compiler.resolve/Resolver` speaks. A read that fails is the element's
   `{:error ..}`, positioned, rather than a throw that would lose the others."
   [a features]
   (if (or (nil? a) (:virtual a) (:error a))
@@ -758,7 +758,7 @@
       :else (-> r (dissoc :bytes) (assoc :artifact (:bytes r))))))
 
 (defn compile-with
-  "Compile a program, asking `resolver` -- any `flint.project/Resolver` -- for
+  "Compile a program, asking `resolver` -- any `flint.compiler.resolve/Resolver` -- for
   each namespace it reaches (`DECISIONS.md#namespaces-over-the-system-port`,
   migration step 2). The entry for anything that can implement the protocol:
   babashka over a directory, or `compile` below over a host's port.
@@ -769,7 +769,7 @@
        :entry    my.app/main
        :roots    [ns ..]          optional; replaces the entry as the start
        :exports  [sym ..]
-       :features #{:flint ..}     the read features; default flint.reader/default-features
+       :features #{:flint ..}     the read features; default flint.compiler.reader/default-features
        :target   :image | :wasm | :llvm | :clr | :jvm     (default :image)
        :aot bool :shake bool :meta {..}
        :slots    {\"name\" n}     or :builtins #{..}
@@ -778,7 +778,7 @@
        :name     \"out.dll\"      :clr only: the output's basename}
 
   `resolver` is asked in sorted waves, each namespace once
-  (`flint.project/resolve-wave` says what it answers).
+  (`flint.compiler.resolve/resolve-wave` says what it answers).
 
   Answers `{:artifact bytes :reached [{:ns :workspace} ..] ..}` -- `:natives`
   and `:stats` for `:image`, `:compiled`/`:arities` where the target compiles
@@ -806,7 +806,7 @@
 #?(:flint
    (do
      (defn port-resolver
-       "A `flint.project/Resolver` over the resolver PORT a host passed into
+       "A `flint.compiler.resolve/Resolver` over the resolver PORT a host passed into
        `compile`: one request per wave, `{:id id :want [ns ..]}`, parked until the
        host answers a vector parallel to `:want`
        (`DECISIONS.md#namespaces-over-the-system-port`).
@@ -825,7 +825,7 @@
        (flint has no `reify`)."
        [id p features]
        (with-meta {}
-         {'flint.project/resolve-wave
+         {'flint.compiler.resolve/resolve-wave
           (fn [_ want]
             (when-not (port/port? p)
               (throw (ex-info "this host does not serve namespaces: the compile was given no resolver port"
@@ -852,7 +852,7 @@
        "`compile-with`, asking for namespaces on `resolver`: a PORT the host
        opened and passed in (`DECISIONS.md#namespaces-over-the-system-port`).
        An ORDINARY CALL on a bound port, `{:op :call :fn
-       \"flint.selfhost/compile\" :args [request resolver]}`.
+       \"flint.compiler.selfhost/compile\" :args [request resolver]}`.
 
        On the port the compiler sends `{:id (:id request) :want [ns ..]}` and
        the host answers a vector parallel to `:want` whose elements are nil (not
@@ -939,7 +939,7 @@
       ;; there is no import order for the host to apply.
       (:module r) (:module r)
       ;; THE ONE ANSWER THAT IS NOT A STRING: `{path bytes}`, each file's
-      ;; forms in `flint.forms`'s encoding (`preread`).
+      ;; forms in `flint.compiler.forms`'s encoding (`preread`).
       (:preread r) (:preread r)
       ;; `:clr` -- AND THIS ARM WAS MISSING, so `:to :clr` through the
       ;; SELF-HOSTED compiler had never once worked. `compile-to-clr` answers

@@ -5,7 +5,7 @@
 ;; pick up the same bytes, and `flint run` has to tell a module from an image.
 (require '[clojure.string :as str] '[clojure.edn :as edn] '[babashka.fs :as fs])
 (babashka.classpath/add-classpath "src")
-(require '[flint.modmeta :as mm] '[flint.wasm :as w])
+(require '[flint.compiler.modmeta :as mm] '[flint.compiler.wasm :as w])
 
 (def fails (atom 0))
 (defn check [label actual expected]
@@ -131,7 +131,7 @@
        (mm/compat-key {:compat (get-in prod [:meta :compat])}))
 
 ;; TWO FRONT DOORS FOR ONE NAME, so this is a check and not a comment. The
-;; section name is stated in `flint.modmeta` and again in `host/modmeta.mjs`,
+;; section name is stated in `flint.compiler.modmeta` and again in `host/modmeta.mjs`,
 ;; which cannot read cljc. It is NAMESPACED (`com.3sln.flint.meta`) because
 ;; custom section names are a flat global namespace shared with every wasm
 ;; producer, and the bare `flint` it used to be was one collision from a
@@ -140,7 +140,7 @@
       m (re-find #"export const SECTION = '([^']+)'" js)]
   (check-that "host/modmeta.mjs states a SECTION at all"
               (some? m))
-  (check "  ... and it is the one flint.modmeta states"
+  (check "  ... and it is the one flint.compiler.modmeta states"
          mm/section-name (second m))
   (check-that "  ... which is namespaced, not a bare word"
               (str/includes? mm/section-name ".")))

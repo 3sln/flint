@@ -32,7 +32,7 @@
 
 ;; --- the two tables must agree ---------------------------------------------
 ;;
-;; The codes live twice: `flint.types/code` and `type-p`. Drift between them
+;; The codes live twice: `flint.compiler.types/code` and `type-p`. Drift between them
 ;; would not fail loudly -- it would check the WRONG type, quietly, at every
 ;; annotated binding.
 ;;
@@ -46,7 +46,7 @@
 ;; fails if any of the three has drifted from the source. So this compares the
 ;; compiler's table against the runtime's table, singular, rather than against
 ;; whichever copy it could find.
-(let [cljc (slurp "src/flint/types.cljc")
+(let [cljc (slurp "src/flint/compiler/types.cljc")
       rs   (slurp "kin/typep.kin")
       from-cljc (into {} (for [[_ k v] (re-seq #":(\w+) (\d+)" (re-find #"\{:int 1[^}]+\}" cljc))]
                            [(keyword k) (parse-long v)]))

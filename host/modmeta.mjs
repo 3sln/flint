@@ -4,7 +4,7 @@
 // instantiate, and on what glue, and that decision cannot depend on having
 // already done it. Custom sections are ignored by every engine and sit in the
 // byte stream, so this is a few lines of parsing anywhere.
-// MUST EQUAL `flint.modmeta/section-name`. Two front doors for one fact is how
+// MUST EQUAL `flint.compiler.modmeta/section-name`. Two front doors for one fact is how
 // this repo breaks, so `test/modmeta.clj` asserts these agree rather than
 // trusting the comment.
 export const SECTION = 'com.3sln.flint.meta';

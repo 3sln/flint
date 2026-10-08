@@ -1,4 +1,4 @@
-(ns flint.compiler
+(ns flint.compiler.core
   "The driver: sources in, program image out.
 
   Three passes, and the middle one is the reason there are three:
@@ -6,20 +6,20 @@
   1. **read and declare** every namespace, so forward references inside a
      namespace resolve without `declare` gymnastics;
   2. **analyze** every top-level form to an AST, running `defmacro` bodies
-     through `flint.eval` as they are met, and recording which vars each var
+     through `flint.compiler.eval` as they are met, and recording which vars each var
      refers to;
   3. **reach and emit** -- start from `:fn`, take the transitive closure over
      that reference graph, and emit only those. Tree shaking is per VAR, not per
      namespace, which is what makes `clojure.core` affordable to ship."
   (:require [clojure.string :as str]
-            [flint.reader :as reader]
-            [flint.analyzer :as ana]
-            [flint.emitter :as emit]
-            [flint.eval :as ev]
-            [flint.types :as ty]
-            [flint.image :as img]
-            [flint.macros :as macros]
-            [flint.callentry :as callentry]))
+            [flint.compiler.reader :as reader]
+            [flint.compiler.analyzer :as ana]
+            [flint.compiler.emitter :as emit]
+            [flint.compiler.eval :as ev]
+            [flint.compiler.types :as ty]
+            [flint.compiler.image :as img]
+            [flint.compiler.macros :as macros]
+            [flint.compiler.callentry :as callentry]))
 
 (defn- err [msg data] (throw (ex-info msg (assoc data :type :compile))))
 
@@ -437,7 +437,7 @@
 (defn read-source
   "Every form in one namespace's source. A function of the TEXT and how to read
   it -- features, tags, dialect -- and of nothing the compiler has learned, so
-  `flint.project/collect-waves`'s read, which finds the requires, is this read, and
+  `flint.compiler.resolve/collect-waves`'s read, which finds the requires, is this read, and
   `compile-image` takes those forms rather than reading the file again
   (`flint.reader/syntax-quoted` says why it used to have to)."
   [cc nsname src file tags]
@@ -768,16 +768,16 @@
     :else nil))
 
 (defn emit-call-entry!
-  "Analyse and emit `flint.callentry/forms`, answering the fn index of the call
+  "Analyse and emit `flint.compiler.callentry/forms`, answering the fn index of the call
   loop -- a function of NO arguments whose ONE upvalue is the bound port
   (`DECISIONS.md#the-control-plane-is-the-runtimes`).
 
   Twice refused if it names anything else: by `check-self-contained!` on the
   forms, before any macro could expand, and here on the analysed tree, which
-  must reference no var outside `flint.callentry/allowed-vars` -- the normal
+  must reference no var outside `flint.compiler.callentry/allowed-vars` -- the normal
   `flint.port`/`flint.wire` codec, resolved exactly as any other reference
   would be (`qualify`), not injected. `:trusted-entry` is what lets it name
-  `flint.rt/var-named`, which nothing else may (`flint.analyzer/native-name`)."
+  `flint.rt/var-named`, which nothing else may (`flint.compiler.analyzer/native-name`)."
   [cc ctx]
   (let [form (callentry/bare (callentry/check-self-contained! callentry/forms))
         env (assoc (base-env cc call-entry-ns) :trusted-entry true)
@@ -925,10 +925,10 @@
           ;; NO CONTROL PLANE IS ADDED HERE ANY MORE. `flint.system/boot` was,
           ;; because bootstrap spawned it by name and nothing referenced it;
           ;; the control plane is the RUNTIME's now and the call loop is
-          ;; compiled from `flint.callentry` below, by index and not by var
+          ;; compiled from `flint.compiler.callentry` below, by index and not by var
           ;; (`DECISIONS.md#the-control-plane-is-the-runtimes`).
           ;;
-          ;; `flint.callentry/allowed-vars` ARE ROOTS TOO, for the same reason
+          ;; `flint.compiler.callentry/allowed-vars` ARE ROOTS TOO, for the same reason
           ;; `exports` is: the call loop references `flint.port/send` and
           ;; `flint.wire/read-from` by var, but it is emitted by
           ;; `emit-call-entry!` AFTER `kept`/`var-slots` below are built from
@@ -991,7 +991,7 @@
       (doseq [it kept]
         (let [{:keys [fn-index]} (emit/emit-fn-object ctx (:ast it))]
           (img/add-init! b fn-index)))
-      ;; THE CALL LOOP (`flint.callentry`), in every image, by index.
+      ;; THE CALL LOOP (`flint.compiler.callentry`), in every image, by index.
       (img/set-serve! b (emit-call-entry! cc ctx))
       ;; The entry itself: a 1-arg closure over the shim var.
       (let [main-idx (get var-slots entry-var)]

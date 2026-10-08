@@ -254,7 +254,7 @@ unsafe impl Send for ParkedRoots {}
 ///
 /// Both spellings are `#[repr(transparent)]` over eight bytes, which is not
 /// cosmetic: compiled code reads this array through a raw base pointer
-/// (`flint.aot`), so the representation is part of an ABI.
+/// (`flint.compiler.aot`), so the representation is part of an ABI.
 #[cfg(feature = "parallel")]
 #[repr(transparent)]
 pub struct GlobalSlot(core::sync::atomic::AtomicU64);
@@ -310,7 +310,7 @@ pub struct SharedRoots {
     /// Atomic because several executors read them while one may be writing.
     /// `AtomicU64` has the same layout as the `u64` a `Value` is, which matters
     /// beyond tidiness: compiled code reads this array through a raw base
-    /// pointer (`flint.aot`), so the representation is part of an ABI.
+    /// pointer (`flint.compiler.aot`), so the representation is part of an ABI.
     ///
     /// Relaxed ordering throughout. A var slot carries no happens-before for
     /// anything else -- the heap object it names is published by the

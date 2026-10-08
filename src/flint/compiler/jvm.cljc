@@ -1,4 +1,4 @@
-(ns flint.jvm
+(ns flint.compiler.jvm
   "`:to :jvm`: a program as ONE CLASS FILE.
 
   ## What the artifact is
@@ -37,7 +37,7 @@
   It costs the modified-UTF-8 expansion, and here the image is nearly the whole
   artifact, so that is the dominant cost and not an incidental one: 1.417x measured
   on a 26 715-byte image and 1.323x on a 218 859-byte one, over a flat ~1 050 bytes
-  of class structure. `flint.classfile` has the encoding, the chunking, and why
+  of class structure. `flint.compiler.classfile` has the encoding, the chunking, and why
   seven-bit packing was not taken.
 
   ## What is not here
@@ -45,11 +45,11 @@
   No `javac` and no linker at any point, which is the whole reason this is cljc.
   And no AOT: compiled arities are what would make this more than a bytecode
   carrier, and emitting one needs branches, which needs `StackMapTable`, which is
-  the one thing `flint.classfile` does not do."
+  the one thing `flint.compiler.classfile` does not do."
   (:require [flint.rt]
-            [flint.jar :as jar]
-            [flint.classfile :as cf]
-            [flint.modmeta :as modmeta]))
+            [flint.compiler.jar :as jar]
+            [flint.compiler.classfile :as cf]
+            [flint.compiler.modmeta :as modmeta]))
 
 ;; --------------------------------------------------------------- the face
 ;;
@@ -57,7 +57,7 @@
 ;; that is its whole job: a consumer calls `flint.Artifact.boot`, never
 ;; `com.flint.rt.Sandbox.boot`, so which interpreter is underneath stays a
 ;; detail. Every body is one delegation, which is why this needs no dataflow
-;; pass -- see `flint.classfile`.
+;; pass -- see `flint.compiler.classfile`.
 
 ;; THE DEFAULT NAME, not the only one. It was a bare constant, and because a JVM
 ;; loads a class only from a path matching its own name, that constant is what made
@@ -85,7 +85,7 @@
 
   Returns `[[from to] ..]`. A 26 715-byte image is one piece and the 206 383-byte
   compiler is five, because the cut is on ENCODED length and the encoding is
-  1.33x-1.42x on real images (`flint.classfile`)."
+  1.33x-1.42x on real images (`flint.compiler.classfile`)."
   [image]
   (let [n (flint.rt/b-count image)]
     (loop [at 0 out []]
@@ -98,7 +98,7 @@
 (defn- push-chunks
   "`String[]` of the image's pieces, built on the operand stack.
 
-  BRANCH-FREE, and that is what keeps `flint.classfile` free of a dataflow pass: a
+  BRANCH-FREE, and that is what keeps `flint.compiler.classfile` free of a dataflow pass: a
   `<clinit>` loop filling a `byte[]` would need a `StackMapTable` at the loop
   head, and the unrolled `bipush`/`bastore` alternative costs about four bytes of
   code per image byte against a `Code` attribute that also caps at 65 535 -- two
@@ -131,7 +131,7 @@
   ## There is no `prop`
 
   It was the fourth operation until 2026-09-24. The metadata is a class ATTRIBUTE
-  named `flint.modmeta/section-name` -- the same string the wasm custom section
+  named `flint.compiler.modmeta/section-name` -- the same string the wasm custom section
   uses -- because all three containers carry metadata a reader gets at WITHOUT
   executing anything, and a call never can.
 
@@ -237,7 +237,7 @@
   `:gas-in-aot` is false and stays false however `:optimize` was set: this port
   emits compiled arities at LOAD time from the same bytecode, so the artifact is
   identical either way and the preference travels inside the image's flags
-  (`src/flint/image.cljc`, `FLAG-PERF`)."
+  (`src/flint/compiler/image.cljc`, `FLAG-PERF`)."
   [opts]
   (modmeta/describe
    {:abi {:runtime 1 :value 1 :image (:image-version opts 3)}
@@ -272,7 +272,7 @@
 (defn emit
   "THE ARTIFACT: one class file.
 
-  `image` is what `flint.image/emit` wrote with an EMPTY slot map -- native slots
+  `image` is what `flint.compiler.image/emit` wrote with an EMPTY slot map -- native slots
   belong to whichever module linked the builtins, and this target resolves every
   one of them BY NAME through the resolver `boot` is handed, so a slot written
   here would be a number meaningful nowhere."
@@ -286,7 +286,7 @@
   a copy of the interpreter next to it for a consumer who has not got one, the way
   a distribution ships a JRE beside an application. `runtime-jar` is
   `dist/flint-rt.jar`, prebuilt by `bin/build-jvm-runtime`, and it is appended to
-  rather than rebuilt -- `flint.jar/append` never inflates anything."
+  rather than rebuilt -- `flint.compiler.jar/append` never inflates anything."
   [runtime-jar image opts]
   (jar/append runtime-jar
               [{:name (str (artifact-class-name opts) ".class")

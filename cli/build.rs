@@ -36,7 +36,7 @@ fn main() {
             let rel = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
             if p.is_dir() {
                 walk(&p, &rel, out);
-            // `flint.project/source-extensions` is the list that decides which
+            // `flint.compiler.resolve/source-extensions` is the list that decides which
             // file WINS for a namespace; this one only decides what is worth
             // embedding, so a superset costs a read and a SUBSET loses a file
             // silently. `.fln` was missing here after the extension landed
@@ -68,7 +68,7 @@ fn main() {
     // so the forms are the ones that compiler would have read at run time and
     // there is no second reader to drift. ONE read serves every feature set --
     // the reader keeps `#?` as data and each compile resolves it -- and each
-    // file is `flint.forms`'s compact encoding, decoded by the guest only when
+    // file is `flint.compiler.forms`'s compact encoding, decoded by the guest only when
     // a compile reaches its namespace.
     let out = Path::new(&env::var("OUT_DIR").unwrap()).to_path_buf();
     let bytecode = fs::read(dist.join("flintc.bytecode")).unwrap();
@@ -87,7 +87,7 @@ fn main() {
 }
 
 /// Run the embedded compiler's `preread` mode over `entries` and answer one
-/// blob holding each file's `flint.forms` bytes back to back, with an index of
+/// blob holding each file's `flint.compiler.forms` bytes back to back, with an index of
 /// where each starts and ends, sorted by path.
 fn preread(bytecode: &[u8], entries: &[(String, String)]) -> (Vec<u8>, Vec<(String, usize, usize)>) {
     use flint_rt::codec::{parse, Val, Wire};
@@ -97,7 +97,7 @@ fn preread(bytecode: &[u8], entries: &[(String, String)]) -> (Vec<u8>, Vec<(Stri
     let files = Val::Map(entries.iter()
         .map(|(k, v)| (Val::Str(k.clone()), Val::Str(v.clone()))).collect());
     let call = Val::Vector(vec![
-        Val::Str("flint.selfhost/main".into()),
+        Val::Str("flint.compiler.selfhost/main".into()),
         Val::Vector(vec![Val::Str("split".into()), files, Val::Str("preread".into()),
                          Val::Str("{:files {}}".into())]),
     ]);

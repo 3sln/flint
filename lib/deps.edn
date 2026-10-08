@@ -30,7 +30,7 @@
 {:flint/workspace flint/flint
  ;; NOT `:vars` ANY MORE. It was held here because `flint.system` resolved a
  ;; call's `:fn` through the `:vars`-guarded `flint/var-named`; that loop is the
- ;; compiler's own now (`flint.callentry`), and no source may name the builtin
+ ;; compiler's own now (`flint.compiler.callentry`), and no source may name the builtin
  ;; at all (`DECISIONS.md#the-control-plane-is-the-runtimes`), so there is no
  ;; guard left for the grant to satisfy.
  :flint/capabilities-grant [:host]}

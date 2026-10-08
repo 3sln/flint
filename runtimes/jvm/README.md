@@ -56,7 +56,7 @@ whichever module it was linked against.
 Two things worth knowing before relying on it:
 
 **There is no cross-compilation.** Unlike the wasm backend -- which is
-`src/flint/aot.cljc`, written in flint -- this emitter is Java, so producing
+`src/flint/compiler/aot.cljc`, written in flint -- this emitter is Java, so producing
 JVM bytecode needs a JVM present. Deliberate; see `DECISIONS.md#jvm-runtime`.
 
 **It is not ahead of deployment.** Each arity is compiled the first time it is

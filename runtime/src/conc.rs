@@ -1344,7 +1344,7 @@ pub fn run_entry(rt: &mut Rt, f: Value) -> Value {
 
 /// Start the CALL LOOP on bound port `p` (`DECISIONS.md#the-control-plane-is-the-runtimes`):
 /// the image's `serve` function -- emitted by the compiler from
-/// `flint.callentry`, named by INDEX and by nothing else -- closed over `p`
+/// `flint.compiler.callentry`, named by INDEX and by nothing else -- closed over `p`
 /// as its one upvalue, and spawned. False when the image has no call loop,
 /// which an image built before there was one does not.
 ///

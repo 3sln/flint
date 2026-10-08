@@ -80,7 +80,7 @@ pub const NO_CONST: u32 = 0xFFFF_FFFF;
 /// `runtimes/clr/src/rt/Img.cs` each carry their own copy of this function
 /// because the loader itself is hand-ported per runtime, not kin-generated,
 /// but the two constants below are the ones every copy -- including
-/// `src/flint/clr.cljc`'s emitted `Fnv1a()` IL -- must restate exactly. They
+/// `src/flint/compiler/clr.cljc`'s emitted `Fnv1a()` IL -- must restate exactly. They
 /// used to carry an extra zero (`0xcbf29ce484222325` was right, but the prime
 /// was `0x1000000001b3`, not `0x100000001b3`) in every one of the four
 /// runtimes, because the typo started here and the other three were hand-

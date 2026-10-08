@@ -1,12 +1,12 @@
 ;; THE COMPILER RUNS UNDER ANY CLOJURE THAT CAN IMPLEMENT ITS RESOLVER PROTOCOL.
 ;;
 ;; `DECISIONS.md#namespaces-over-the-system-port`, "the resolver protocol". The
-;; compiler asks `flint.project/Resolver` for namespaces in sorted waves and
+;; compiler asks `flint.compiler.resolve/Resolver` for namespaces in sorted waves and
 ;; takes FORMS back. Inside the sandbox an adapter over the host's port
-;; implements it (`flint.selfhost/compile`, held by the native test
+;; implements it (`flint.compiler.selfhost/compile`, held by the native test
 ;; `cli/src/compile_call_test.rs`); here babashka implements it with `reify`,
-;; reading files off the disk with `flint.reader`, and calls
-;; `flint.selfhost/compile-with` -- the SAME compiler source, interpreted by sci
+;; reading files off the disk with `flint.compiler.reader`, and calls
+;; `flint.compiler.selfhost/compile-with` -- the SAME compiler source, interpreted by sci
 ;; instead of compiled by flint.
 ;;
 ;; What is asserted:
@@ -29,9 +29,9 @@
 
 (def root (str (fs/parent (fs/parent (fs/absolutize *file*)))))
 (cp/add-classpath (str root "/src:" root "/lib"))
-(require '[flint.project :as project]
-         '[flint.reader :as reader]
-         '[flint.selfhost :as selfhost])
+(require '[flint.compiler.resolve :as project]
+         '[flint.compiler.reader :as reader]
+         '[flint.compiler.selfhost :as selfhost])
 
 (def fails (atom 0))
 (defn check-that [label ok]
@@ -57,7 +57,7 @@
        (assoc s :forms (reader/read-all (slurp f) (project/read-options s features)))))))
 
 (defn dir-resolver
-  "A `flint.project/Resolver` over directories, recording every wave asked."
+  "A `flint.compiler.resolve/Resolver` over directories, recording every wave asked."
   [dirs features asked]
   (reify project/Resolver
     (resolve-wave [_ names]
@@ -148,10 +148,10 @@
       wrong (compile1 'wrongname/main)]
   (check-that "resolved as ab-cd, declared ab-cd: compiles (the fixed convention)"
               (and (empty? (:errors ok)) (some? (:artifact ok))))
-  ;; This walk (`flint.project/collect-waves`) catches a mismatch EARLY, as a
+  ;; This walk (`flint.compiler.resolve/collect-waves`) catches a mismatch EARLY, as a
   ;; `:resolver` error naming both sides -- before the analyzer would ever see
   ;; the form. `bin/flint`'s own walk has no such pre-check (it duplicates
-  ;; `flint.project/collect`, a function this one replaced), so the SAME
+  ;; `flint.compiler.resolve/collect`, a function this one replaced), so the SAME
   ;; mismatch reaches `bin/flint` as the analyzer's `:compile`-kind "resolved
   ;; as namespace .. and its ns form names .." error instead -- which is what
   ;; `runtimes/conform/aot_try.cljc` actually showed in CI. Both doors still

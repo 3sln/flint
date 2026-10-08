@@ -47,7 +47,7 @@ public class RtSelfHost {
     // after it. That is `DECISIONS.md#a-vec-of-values-is-not-a-root`, in the test harness rather than
     // in the runtime, and it read back as the compiler's reader failing at
     // column 2 of its input.
-    // `flint.selfhost/main` is a VAR, not a named entry in the function table
+    // `flint.compiler.selfhost/main` is a VAR, not a named entry in the function table
     // -- functions there are named `main`, `-main` and so on, while the
     // qualified name lives in the var table. The initialisers put the closure
     // in its slot, which is why they have to have run first.
@@ -57,15 +57,15 @@ public class RtSelfHost {
     // whatever it got, which read exactly like a runtime bug in the reader.
     int slot = -1;
     for (int i = 0; i < img.varNames.length; i++) {
-      if ("flint.selfhost/main".equals(Str.text(rt, rt.consts[img.varNames[i]]))) slot = i;
+      if ("flint.compiler.selfhost/main".equals(Str.text(rt, rt.consts[img.varNames[i]]))) slot = i;
     }
-    if (slot < 0) { System.out.println("  FAIL flint.selfhost/main is not in the var table"); System.exit(1); }
+    if (slot < 0) { System.out.println("  FAIL flint.compiler.selfhost/main is not in the var table"); System.exit(1); }
     long compiler = rt.roots.shared.globals[slot];
     if (Val.isNil(compiler)) {
-      System.out.println("  FAIL flint.selfhost/main is unbound after the initialisers");
+      System.out.println("  FAIL flint.compiler.selfhost/main is unbound after the initialisers");
       System.exit(1);
     }
-    System.out.println("  ok   flint.selfhost/main is bound: " + rt.describe(compiler));
+    System.out.println("  ok   flint.compiler.selfhost/main is bound: " + rt.describe(compiler));
     // ROOTED. `Str.of` on a 97 KB spec allocates, and so does anything after
     // it: a value held in a Java local across an allocation comes back holding
     // the address it had before the collector moved it. `DECISIONS.md#a-vec-of-values-is-not-a-root`.
@@ -74,9 +74,9 @@ public class RtSelfHost {
     // AN OPTIONAL MODE, as `a[2]`, PUSHED FIRST so it is the argv's head.
     //
     // Without it this harness could only reach mode `spec`, because
-    // `flint.selfhost/main` reads an unrecognised first element AS the spec. That
+    // `flint.compiler.selfhost/main` reads an unrecognised first element AS the spec. That
     // is not a small restriction: a resolved spec SKIPS
-    // `flint.project/resolve-project`, so the resolver -- where a hash-order bug
+    // `flint.compiler.resolve/resolve-project`, so the resolver -- where a hash-order bug
     // made two hosts disagree about `(ns t)` on 2026-09-28
     // (`DECISIONS.md#compiles-are-byte-reproducible`) -- never ran on this
     // runtime at all, and a check that compares the compiler's output byte for

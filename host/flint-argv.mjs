@@ -1,7 +1,7 @@
 // Run the compiler with a FULL ARGV, not just a spec.
 //
 // `host/flint-file.mjs` passes `[spec]`, so it can only reach mode `spec`
-// (`flint.selfhost/main` dispatches on the first element). Every ARTIFACT target
+// (`flint.compiler.selfhost/main` dispatches on the first element). Every ARTIFACT target
 // -- `jvm`, `clr`, `llvm` -- needs `["jvm", spec, "", ""]`, and nothing could
 // hand that to the wasm compiler, which is why wasm-against-a-port comparisons
 // only ever covered mode `spec`.
@@ -20,8 +20,8 @@ const inst = instantiate(module);
 if (inst.exports.set_memory_limit) inst.exports.set_memory_limit(3_000_000_000);
 const spec = readFileSync(specPath, 'utf8');
 // MODE FIRST, then the spec, then whatever the mode takes -- the order
-// `flint.selfhost/main` reads its argv in.
+// `flint.compiler.selfhost/main` reads its argv in.
 const argv = [rest[0], spec, ...rest.slice(1)];
-const r = inst.run('flint.selfhost/main', argv);
+const r = inst.run('flint.compiler.selfhost/main', argv);
 process.exitCode = r.code;
 process.stdout.write(r.out);

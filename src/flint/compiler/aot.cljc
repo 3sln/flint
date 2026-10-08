@@ -1,4 +1,4 @@
-(ns flint.aot
+(ns flint.compiler.aot
   "Bytecode to wasm, one arity at a time (`DECISIONS.md#emit-wasm-instead-of-dispatch`).
 
   ## The shape, and why it is this shape
@@ -52,7 +52,7 @@
   about to. `DECISIONS.md#two-builds` makes gas a production feature and construe's
   gates depend on the count, so `test/aot.clj` asserts the count is IDENTICAL
   with and without compilation rather than merely close."
-  (:require [flint.wasm :as w]))
+  (:require [flint.compiler.wasm :as w]))
 
 ;; ------------------------------------------------------------------ opcodes
 
@@ -139,7 +139,7 @@
                                 :len (+ 1 nb)
                                 :b (subvec (vec code) (inc ip) (+ ip 1 nb))})))))))))
 
-;; Public because `flint.llvm` decodes the same operand bytes. One reader of
+;; Public because `flint.compiler.llvm` decodes the same operand bytes. One reader of
 ;; the instruction stream, not two: an emitter that restated the widths would
 ;; be a second table that agrees until it does not (AGENTS.md §1).
 (defn u16 [bs] (bit-or (nth bs 0) (bit-shift-left (nth bs 1) 8)))
@@ -451,7 +451,7 @@
 ;; chose this one. The slow path is a bigint or an overflow; it does not
 ;; deserve a boundary in the module for every `+` in the program.
 
-;; Public for the same reason `u16` is: `flint.llvm` boxes fixnums with the
+;; Public for the same reason `u16` is: `flint.compiler.llvm` boxes fixnums with the
 ;; same mask, and a second copy of it is a second thing to get wrong.
 (def FIXNUM-BITS 0x0000FFFFFFFFFFFF)
 
@@ -621,7 +621,7 @@
       ;; `k`, not `op`. `op` is the BYTE EMITTER defined above, and passing it
       ;; here made `resume-after`'s `(= op :tail-call)` compare a function to a
       ;; keyword -- always false, so the tail-call arm that whole docstring is
-      ;; about never ran. Found by writing `flint.llvm` against the same
+      ;; about never ran. Found by writing `flint.compiler.llvm` against the same
       ;; function and having to decide which of the two arguments was meant.
       ;;
       ;; Latent rather than live, which is why nothing caught it: a TAIL_CALL

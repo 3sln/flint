@@ -1,4 +1,4 @@
-(ns flint.callentry
+(ns flint.compiler.callentry
   "THE CALL LOOP, which the compiler carries itself and puts in every image
   (`DECISIONS.md#the-control-plane-is-the-runtimes`).
 
@@ -50,10 +50,10 @@
   code reaches this loop only through `flint.port`/`flint.wire`'s own
   references, which `compile-image` seeds as extra GC roots so the shake
   cannot drop them out from under an image that never otherwise calls them
-  (`flint.compiler/emit-call-entry!`).
+  (`flint.compiler.core/emit-call-entry!`).
 
   `flint.port`/`flint.wire` are ordinary REQUIRED namespaces for this loop,
-  resolved exactly as any reference would be: `flint.project/resolve-project`
+  resolved exactly as any reference would be: `flint.compiler.resolve/resolve-project`
   and `bin/flint`'s own copy add them as ROOTS, alongside `clojure.core`, so
   every compile collects them from the resolver -- no implicit injection, and
   a resolver that cannot answer `flint.port` fails the compile with the same
@@ -175,7 +175,7 @@
   "`form` with every piece of metadata removed.
 
   THE FORMS ARE READ BY WHICHEVER HOST RUNS THE COMPILER, not by
-  `flint.reader`: babashka's reader puts `:line`/`:column` on lists and flint's
+  `flint.compiler.reader`: babashka's reader puts `:line`/`:column` on lists and flint's
   puts them on symbols too. Positions travel into the image, so the same
   compiler source made different bytes depending on which compiler read it --
   measured: `bin/flint` and the native CLI disagreed on a `:to :clr` assembly

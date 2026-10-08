@@ -1,7 +1,7 @@
-(ns flint.disasm
+(ns flint.compiler.disasm
   "Bytecode disassembler. Written because 'it takes the wrong branch' is not a
   bug you can reason your way out of -- you have to look at the instructions."
-  (:require [flint.emitter :as emit]
+  (:require [flint.compiler.emitter :as emit]
             [clojure.string :as str]))
 
 (def ^:private by-code (into {} (map (fn [[k v]] [v k]) emit/op)))

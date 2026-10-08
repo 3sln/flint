@@ -4,7 +4,7 @@
   `flint.rt/x` is not an ordinary namespace when flint compiles it: the analyzer
   intercepts those symbols and emits a direct call into the wasm table, so this
   file is never compiled into a module. It exists so that the SAME source runs on
-  a host -- babashka running the compiler, and `flint.eval` running a macro body.
+  a host -- babashka running the compiler, and `flint.compiler.eval` running a macro body.
 
   Two implementations of one contract is a drift risk, so keep them together:
   every function here corresponds to an entry in `builtins::CATALOGUE`, and

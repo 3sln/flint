@@ -174,7 +174,7 @@ pub fn read_ns(src: &str) -> Option<ScriptNs> {
             // because the flag is what everyone writes and the map is what a
             // file whose entry is not called `main` needs.
             // FOUR SPELLINGS, one idea at four levels of detail, matching
-            // `flint.analyzer/script-spec`:
+            // `flint.compiler.analyzer/script-spec`:
             //
             //     ^:script                   entry is ns/main
             //     ^{:script go}              entry is ns/go
@@ -249,7 +249,7 @@ pub fn read_ns(src: &str) -> Option<ScriptNs> {
 /// on disk.
 ///
 /// A script is `~/bin/greet` or `./do-the-thing.fln`; the compiler looks a
-/// namespace up by `flint.project/ns->path`, so a file handed over BY NAME has
+/// namespace up by `flint.compiler.resolve/ns->path`, so a file handed over BY NAME has
 /// to be keyed by the namespace it declares or it is simply not there. Keying
 /// by filename is what this used to do, and it worked only where the two
 /// already agreed.

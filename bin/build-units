@@ -237,7 +237,7 @@ build_parser flint.data.html flint/data/html units-src/flint-data-html flint_dat
 
 cp "$SYS"/libcore-*.rlib "$SYS"/liballoc-*.rlib "$SYS"/libcompiler_builtins-*.rlib \
    "$SYS"/librustc_std_workspace_core-*.rlib units/.sysroot/ 2>/dev/null || true
-# The REAL `.rlib` (`rlib()`, not `metalib()`): this is what `flint.link`'s
+# The REAL `.rlib` (`rlib()`, not `metalib()`): this is what `flint.compiler.link`'s
 # own final link step needs (real compiled object code), not metadata --
 # copying the metadata-only `.rmeta` here left `trunc`/`cos`/`sin`/... all
 # undefined at that later link, found building `dist/flint-loader.wasm`.
@@ -263,11 +263,11 @@ if [ -z "$DIAG" ] && [ -z "$AOT" ]; then
   # (`@loader_path/../lib`) resolves to `lib/rustlib/<triple>/lib`, which does
   # not exist. `rustc` sets this up itself before running `rust-lld` as its
   # own linker subprocess; a direct call, as this always was, needs it set by
-  # hand (`src/flint/link.cljc`'s `lld-env` needed the identical fix for the
+  # hand (`src/flint/compiler/link.cljc`'s `lld-env` needed the identical fix for the
   # compiler's own direct `rust-lld` call).
   export DYLD_LIBRARY_PATH="$TC/lib:${DYLD_LIBRARY_PATH:-}"
   export LD_LIBRARY_PATH="$TC/lib:${LD_LIBRARY_PATH:-}"
-  # The same stack placement every flint module gets (`flint.link/link-objects`
+  # The same stack placement every flint module gets (`flint.compiler.link/link-objects`
   # says why: an overflow must trap at address zero, not scribble the statics).
   "$LLD" -flavor wasm --no-entry --gc-sections --strip-all \
     -z stack-size=1048576 --stack-first \

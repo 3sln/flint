@@ -1,4 +1,4 @@
-(ns flint.types
+(ns flint.compiler.types
   "The tag vocabulary, shared by the analyzer and the runtime.
 
   A tag written on a binding is a CHECKED claim, not a hint. `(let [^int x e]
@@ -144,7 +144,7 @@
 ;; `(if (string? s) ...)` as good as an annotation without anyone writing one.
 ;;
 ;; The general form is a declaration on the function, `:flint/result-projected-meta`,
-;; read by `flint.compiler`. The table below is the same thing for BUILTINS,
+;; read by `flint.compiler.core`. The table below is the same thing for BUILTINS,
 ;; which carry no metadata -- and it is where the core predicates get theirs,
 ;; because `(int? x)` in user code is rewritten to the builtin by
 ;; `register-native-aliases!` before anything else sees it.

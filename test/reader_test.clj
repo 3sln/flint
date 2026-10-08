@@ -1,4 +1,4 @@
-(require '[flint.reader :as r] '[clojure.string :as str])
+(require '[flint.compiler.reader :as r] '[clojure.string :as str])
 (def fails (atom 0))
 (defn check [label actual expected]
   (if (= actual expected)
@@ -34,7 +34,7 @@
 (check "deref" (reads "@x") '(clojure.core/deref x))
 (check "var quote" (reads "#'x") '(var x))
 (check "comment skipped" (r/read-all "; hi\n1 ; there\n2") [1 2])
-(check "the eof sentinel cannot be forged from source" (r/read-all "::flint.reader/eof :x") [:flint.reader/eof :x])
+(check "the eof sentinel cannot be forged from source" (r/read-all "::flint.compiler.reader/eof :x") [:flint.compiler.reader/eof :x])
 (check "discard" (r/read-all "#_1 2") [2])
 (check "discard in coll" (reads "[1 #_2 3]") [1 3])
 (check "commas are whitespace" (reads "[1,2,3]") [1 2 3])
@@ -97,13 +97,13 @@
 (println "reader: quote resolves syntax-quoted markers nested in quoted data")
 ;; `'`x` is QUOTED, so it is never analysed as code -- the reader leaves the
 ;; marker `(flint.reader/syntax-quoted x)` exactly as `` `x `` alone would, and
-;; `flint.analyzer/resolve-quoted-syntax-quotes` (private, reached below via
+;; `flint.compiler.analyzer/resolve-quoted-syntax-quotes` (private, reached below via
 ;; `resolve`) is what turns it into `(quote my.ns/x)` wherever it sits inside
 ;; the quoted structure. It already walked into lists and vectors; these check
 ;; map keys, map values, sets, and a map nested inside a vector, which it did
 ;; not.
-(require '[flint.analyzer])
-(def resolve-quoted (deref (resolve 'flint.analyzer/resolve-quoted-syntax-quotes)))
+(require '[flint.compiler.analyzer])
+(def resolve-quoted (deref (resolve 'flint.compiler.analyzer/resolve-quoted-syntax-quotes)))
 (def rq-env {:ns 'my.ns :cc (atom {:namespaces {'my.ns {:aliases {}}} :declared {}})})
 (defn rq [src]
   (let [st (r/reader src {:ns 'my.ns})
@@ -120,13 +120,13 @@
        (rq "'[{:a `x}]") '[{:a (quote my.ns/x)}])
 
 (println "reader: syntax quote resolves symbols the way Clojure does (DECISIONS.md#context-free-reader)")
-;; `flint.analyzer/resolve-syntax-quoted` (private, reached via `resolve`) is
+;; `flint.compiler.analyzer/resolve-syntax-quoted` (private, reached via `resolve`) is
 ;; what `(flint.reader/syntax-quoted sym)` resolves to once the namespace it
 ;; sits in is being ANALYSED -- the reader cannot answer this (it is
 ;; context-free), so it leaves the marker for here. `sq` below builds the
 ;; `cc` state Clojure's own namespace mapping would have, and calls the
 ;; function directly rather than through a whole compile.
-(def resolve-sq (deref (resolve 'flint.analyzer/resolve-syntax-quoted)))
+(def resolve-sq (deref (resolve 'flint.compiler.analyzer/resolve-syntax-quoted)))
 (defn sq
   "`` `sym `` resolved in namespace `my.ns`, given `:vars`, `:declared`,
   `:aliases` and `:refers` -- each defaulting to empty, as a fresh namespace's
@@ -184,7 +184,7 @@
 ;; from `#?`, and it was not happening anywhere. A matched splice left the
 ;; marker map sitting in the collection and an unmatched one left a sentinel
 ;; Volatile, so `(ns s (:require [a] #?@(:cljs [[b]])))` asked for a namespace
-;; literally called `[:flint.reader/splice [[b]]]`. Conditionally adding a
+;; literally called `[:flint.compiler.reader/splice [[b]]]`. Conditionally adding a
 ;; `:require` is how real `.cljc` is written, so this is on the common path.
 (check "#?@ splices its elements in"
        (r/read-all "[:a #?@(:flint [1 2]) :z]" {:features #{:flint}}) [[:a 1 2 :z]])
@@ -224,7 +224,7 @@
 ;; vanishes is still a `defn`, so `(defn f [x] #?(:clj ...))` becomes
 ;; `(defn f [x])`: a function returning nil, with no diagnostic anywhere.
 ;;
-;; `flint.wasm/utf8-bytes` was exactly that, and got away with it only because
+;; `flint.compiler.wasm/utf8-bytes` was exactly that, and got away with it only because
 ;; the self-hosted compiler does not link, so the namespace never shipped. It
 ;; will the moment the CLI links for itself. This asserts the shape rather than
 ;; waiting for the next one.
@@ -459,14 +459,14 @@
        (deferred "(ns a (:require [b.c :as b] #?(:clj [x]))) ::b/x" #{:flint})
        ['(ns a (:require [b.c :as b])) :b.c/x])
 
-;; --- read forms, encoded (`flint.forms`, `DECISIONS.md#stdlib-preread`) -------
+;; --- read forms, encoded (`flint.compiler.forms`, `DECISIONS.md#stdlib-preread`) -------
 ;;
-;; The native CLI ships the standard library as `flint.forms` bytes, and the
+;; The native CLI ships the standard library as `flint.compiler.forms` bytes, and the
 ;; contract is EXACTNESS: decoding gives back the forms `read-deferred` read,
 ;; metadata and all, key order included. Every file in `lib/`, compared with
 ;; `*print-meta*` on, which prints key order as well as content.
-(require '[flint.forms :as ff])
-(println "reader: flint.forms decodes what it encoded, metadata and all")
+(require '[flint.compiler.forms :as ff])
+(println "reader: flint.compiler.forms decodes what it encoded, metadata and all")
 (let [lib (->> (file-seq (clojure.java.io/file "lib"))
                (filter #(.isFile %))
                (filter #(re-find #"\.(cljc|fln)$" (.getName %))))

@@ -17,7 +17,7 @@
 ;; everything passes its own test and breaks the build, so each refusal here
 ;; is paired with the reference that must still be allowed.
 (babashka.classpath/add-classpath "src:lib")
-(require '[flint.project :as project] '[flint.compiler :as compiler]
+(require '[flint.compiler.resolve :as project] '[flint.compiler.core :as compiler]
          '[clojure.string :as str])
 
 (def fails (atom 0))
@@ -27,8 +27,8 @@
     (do (swap! fails inc) (println "  FAIL" label detail))))
 
 ;; THE CALL LOOP NEEDS `flint.port`/`flint.wire` IN EVERY COMPILE NOW
-;; (`DECISIONS.md#the-control-plane-is-the-runtimes`; `flint.project/resolve-project`
-;; adds them as unconditional roots because `src/flint/callentry.cljc`
+;; (`DECISIONS.md#the-control-plane-is-the-runtimes`; `flint.compiler.resolve/resolve-project`
+;; adds them as unconditional roots because `src/flint/compiler/callentry.cljc`
 ;; references them by var). This file's `files` maps are minimal and hand-written
 ;; -- unlike `test/shake.clj`'s, which merges the real `lib/` -- so every helper
 ;; below merges in two trivial stand-ins rather than making a privacy or guard

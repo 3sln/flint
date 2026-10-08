@@ -1,4 +1,4 @@
-(ns flint.emitter
+(ns flint.compiler.emitter
   "AST to bytecode.
 
   A post-order walk, which is the whole argument for a stack machine on the
@@ -9,8 +9,8 @@
   Tail positions become `TAIL_CALL`, which drops the caller's frame before the
   callee's is pushed, so mutual recursion in tail position runs in constant
   space even though Clojure's `recur` only handles self-recursion."
-  (:require [flint.image :as img]
-            [flint.types :as ty]))
+  (:require [flint.compiler.image :as img]
+            [flint.compiler.types :as ty]))
 
 (def op
   ;; 0x00, 0x10, 0x1D and 0x1F..0x22 ARE RETIRED, NOT FREE.
@@ -67,7 +67,7 @@
    :set-local-w 0x2D})
 
 (def type-predicates
-  "Builtin name to the `flint.types/code` its test corresponds to. One
+  "Builtin name to the `flint.compiler.types/code` its test corresponds to. One
   argument exactly."
   {"nil?" :nil "string?" :string "keyword?" :keyword "symbol?" :symbol
    "number?" :number "int?" :int "float?" :float "boolean?" :boolean

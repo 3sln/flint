@@ -1,8 +1,8 @@
-(ns flint.bundle
+(ns flint.compiler.bundle
   "Splice a program image into a PREBUILT wasm module, producing a standalone
   one.
 
-  This is the half of `flint.link/compose` that is not linking. Linking merges
+  This is the half of `flint.compiler.link/compose` that is not linking. Linking merges
   relocatable objects and is `wasm-ld`, a native tool; everything after it --
   appending the image as a data segment, pointing the descriptor at it,
   renaming the entry -- is byte manipulation on a finished module, and there is
@@ -16,11 +16,11 @@
   `slots` is a parameter: it is generated beside the runtime module it
   describes (`dist/slots.json`), because a slot is a property of the artifact
   and not of the compiler."
-  (:require [flint.wasm :as w]
-            [flint.image :as img]
-            [flint.aot :as aot]
+  (:require [flint.compiler.wasm :as w]
+            [flint.compiler.image :as img]
+            [flint.compiler.aot :as aot]
             [flint.rt]
-            [flint.modmeta :as modmeta]
+            [flint.compiler.modmeta :as modmeta]
             [clojure.string :as str]))
 
 (def aot-helpers
@@ -34,11 +34,11 @@
   "Emit a wasm function for every arity the emitter can take, append them to
   `m`, and stamp each one's table slot into the image builder.
 
-  Lives here rather than in `flint.link` because it needs NO linker. Compiled
+  Lives here rather than in `flint.compiler.link` because it needs NO linker. Compiled
   arities are appended to a module that is already linked -- wasm cannot add a
   function to a module that exists, which is why this happens at build time,
   and appending is byte manipulation, which is why it does not need `wasm-ld`.
-  `flint.link` wraps this with the bisection knobs, which read the environment
+  `flint.compiler.link` wraps this with the bisection knobs, which read the environment
   and so cannot compile to wasm.
 
   `select` decides which arities to compile, by ordinal; nil means all."
@@ -167,8 +167,8 @@
                ;; times as a literal -- and a bumped ABI would have moved one of
                ;; them (AGENTS.md sec. 1).
                ;;
-               ;; IT LIVES IN `flint.wasm` AND NOT IN `flint.link`, which is where
-               ;; it was and where it reads more naturally. `flint.link` requires
+               ;; IT LIVES IN `flint.compiler.wasm` AND NOT IN `flint.compiler.link`, which is where
+               ;; it was and where it reads more naturally. `flint.compiler.link` requires
                ;; `clojure.java.io` because it shells out to a linker, so it is a
                ;; HOST-ONLY namespace -- and this one is compiled INTO the
                ;; compiler. Requiring it from here died as "cannot find source for

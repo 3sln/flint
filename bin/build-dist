@@ -73,7 +73,7 @@ echo "==> production units"
 echo "==> builtins.json"
 bb -e '
 (require (quote [babashka.classpath :as cp])) (cp/add-classpath "src")
-(require (quote [flint.link :as link]) (quote [clojure.string :as str]))
+(require (quote [flint.compiler.link :as link]) (quote [clojure.string :as str]))
 (let [units (link/discover-units ["units"])
       names (sort (into #{} (mapcat (fn [e] (keys (:provides (val e)))) units)))]
   (spit "dist/builtins.json"
@@ -157,14 +157,14 @@ echo "==> the compiler, as a module and as bytecode"
 # against 15.6 s through a wasm engine. It is not published and not attached to
 # a release.
 #
-# `:exports flint.selfhost/compile`: the compile as an ordinary CALL
+# `:exports flint.compiler.selfhost/compile`: the compile as an ordinary CALL
 # (`DECISIONS.md#namespaces-over-the-system-port`), which nothing inside the
 # compiler references, so the shake would drop it and a host asking for it by
 # name would be told this image has no such function.
-indent ./bin/flint :src src :fn flint.selfhost/main :exports flint.selfhost/compile :out dist/flintc.bytecode.tmp --emit-image
+indent ./bin/flint :src src :fn flint.compiler.selfhost/main :exports flint.compiler.selfhost/compile :out dist/flintc.bytecode.tmp --emit-image
 freshen dist/flintc.bytecode.tmp dist/flintc.bytecode
 
-indent ./bin/flint :src src :fn flint.selfhost/main :exports flint.selfhost/compile :out dist/flintc.wasm.tmp
+indent ./bin/flint :src src :fn flint.compiler.selfhost/main :exports flint.compiler.selfhost/compile :out dist/flintc.wasm.tmp
 freshen dist/flintc.wasm.tmp dist/flintc.wasm
 
 echo "==> the standard library, read, in its two layers"

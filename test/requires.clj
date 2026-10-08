@@ -110,8 +110,8 @@
 
 ;; --- WHAT AN `ns` FORM MAY SAY -------------------------------------------
 ;;
-;; The clause heads are one set (`flint.analyzer/known-ns-clauses`), read both
-;; by the analyzer that binds aliases and by `flint.compiler/ns-requires`,
+;; The clause heads are one set (`flint.compiler.analyzer/known-ns-clauses`), read both
+;; by the analyzer that binds aliases and by `flint.compiler.core/ns-requires`,
 ;; which builds the load-order graph. An unknown head used to be dropped in
 ;; silence, which turned a misspelled `:require` into a namespace with no
 ;; dependencies -- failing much later, as an unresolved var, naming nothing

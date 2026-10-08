@@ -2,7 +2,7 @@
 //! (`DECISIONS.md#namespaces-over-the-system-port`, "where the reader lives").
 //!
 //! A JavaScript host answers the compiler's namespace requests with
-//! `flint.forms` BYTES, so it has to read source text itself, outside the
+//! `flint.compiler.forms` BYTES, so it has to read source text itself, outside the
 //! compiler sandbox -- and the only reader of the language there is the one
 //! the Rust runtime carries, generated from `kin/read*.kin`. This module is
 //! that reader with four exports and nothing else: no interpreter, no image, no

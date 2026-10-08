@@ -80,7 +80,7 @@
                                  (:call-args case-map)))
             img (fs/read-all-bytes (str work "/t.image"))
             ;; `nnatives` is the first `u32` after "FLINTIMG" and the version
-            ;; (`src/flint/image.cljc`), little-endian.
+            ;; (`src/flint/compiler/image.cljc`), little-endian.
             nnat (reduce (fn [a i] (+ a (bit-shift-left (bit-and (aget ^bytes img (+ 12 i)) 0xff)
                                                         (* 8 i))))
                          0 (range 4))]
@@ -95,7 +95,7 @@
   ;; does, for all three. A row appears here when a target gains a `:run`, and
   ;; until then its absence costs nothing that the other gate does not cover.
   [{:name "jvm"    :built? true
-    :face (str root "/src/flint/jvm.cljc") :run run-jvm}])
+    :face (str root "/src/flint/compiler/jvm.cljc") :run run-jvm}])
 
 ;; ---------------------------------------------------------------- the checks
 

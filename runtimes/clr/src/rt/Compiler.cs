@@ -12,7 +12,7 @@ using System;
 /// this sequence was worked out and where the four things a second implementation
 /// gets wrong are written down:
 ///
-///   * `flint.selfhost/main` is a VAR, found through the image's var table.
+///   * `flint.compiler.selfhost/main` is a VAR, found through the image's var table.
 ///     `img.entry` is a different function, and calling it hands the compiler
 ///     something that is not the spec.
 ///   * THE INITIALISERS MUST RUN FIRST, or that var is unbound.
@@ -59,14 +59,14 @@ public sealed class Compiler {
             rt.Call(rt.MakeClosure(fn, Array.Empty<long>()), Array.Empty<long>());
         int slot = -1;
         for (int i = 0; i < img.varNames.Length; i++)
-            if (Str.Text(rt, rt.consts[img.varNames[i]]) == "flint.selfhost/main") slot = i;
+            if (Str.Text(rt, rt.consts[img.varNames[i]]) == "flint.compiler.selfhost/main") slot = i;
         if (slot < 0) {
-            throw new InvalidOperationException("flint.selfhost/main is not in the var table");
+            throw new InvalidOperationException("flint.compiler.selfhost/main is not in the var table");
         }
         long compiler = rt.roots.shared.Globals[slot];
         if (Val.IsNil(compiler)) {
             throw new InvalidOperationException(
-                "flint.selfhost/main is unbound after the initialisers");
+                "flint.compiler.selfhost/main is unbound after the initialisers");
         }
         int bas = rt.Mark();
         int ci = rt.Push(compiler);

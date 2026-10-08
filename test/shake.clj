@@ -10,9 +10,9 @@
 ;; removes something reachable produces a module that is SMALLER and traps at
 ;; run time, and only running it says so.
 (require '[babashka.classpath :as cp]) (cp/add-classpath "src")
-(require '[flint.bundle :as bundle] '[flint.image :as img]
-         '[flint.compiler :as compiler] '[flint.project :as project]
-         '[flint.wasm :as w] '[flint.wasmshake :as ws] '[flint.shake :as shake]
+(require '[flint.compiler.bundle :as bundle] '[flint.compiler.image :as img]
+         '[flint.compiler.core :as compiler] '[flint.compiler.resolve :as project]
+         '[flint.compiler.wasm :as w] '[flint.compiler.wasmshake :as ws] '[flint.compiler.shake :as shake]
          '[clojure.java.io :as io] '[clojure.edn :as edn] '[clojure.string :as str])
 
 (def fails (atom 0))
@@ -112,7 +112,7 @@
 ;;
 ;; THE LINKER'S POINTERS ARE ROOTS TOO, and this file used to leave them out.
 ;; Below `slots` the table holds what Rust compiled a closure or a trait object
-;; to, and nothing here can tell which are reachable. `flint.selfhost` learned
+;; to, and nothing here can tell which are reachable. `flint.compiler.selfhost` learned
 ;; that when stubbing them "stubbed the scheduler's own callbacks, and every
 ;; program using ports trapped inside `conc::scheduler`" -- and this file kept
 ;; the narrower rule, which was harmless only while a call did not use a port.
@@ -183,7 +183,7 @@
     ;; (`DECISIONS.md#calls-are-ports`). The shaker now roots the linker's own
     ;; function pointers -- Rust's closures and trait objects, below `slots` --
     ;; because a call uses a port and a stubbed scheduler callback traps under
-    ;; its own feet. That is the same lesson `flint.selfhost` already carried
+    ;; its own feet. That is the same lesson `flint.compiler.selfhost` already carried
     ;; and this file did not, which is why the row above went `unreachable`
     ;; before it went smaller.
     ;;

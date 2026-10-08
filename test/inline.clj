@@ -88,7 +88,7 @@
 ;; Silently is the word. Every answer stayed correct; the same loop went from
 ;; 34,293 gas to 42,305, a 23% regression that existed only in the build with
 ;; checks ON -- which is to say in every build but the shipping one, where it
-;; would never have been measured. `fn-under-meta` in `flint.compiler` looks
+;; would never have been measured. `fn-under-meta` in `flint.compiler.core` looks
 ;; through the wrapper.
 ;;
 ;; Measured as a SLOPE rather than as a total, and that distinction is the

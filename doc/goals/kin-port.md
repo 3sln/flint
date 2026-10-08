@@ -4176,7 +4176,7 @@ WHICH precondition failed would have answered this in one build.
 
 gen0 reaches stage 4 of `boot_system_thread_once` -- initialisers ran -- and
 then `var_named "flint.system/boot"` answers None. The table is healthy (721
-entries) and a control lookup of `flint.selfhost/main` in the same image
+entries) and a control lookup of `flint.compiler.selfhost/main` in the same image
 succeeds, so the name is specifically absent. No control plane spawns, nothing
 parks on a bridge, the sandbox settles, and the call is never answered.
 
@@ -4390,8 +4390,8 @@ answer without touching the module, and from there:
   down to 8 / 187 KB**, at a fixpoint where every further removal breaks
   compilation instead of fixing the hang.
 
-      flint.aot flint.regex flint.nfa flint.protocols
-      clojure.core flint.wasm clojure.string app
+      flint.compiler.aot flint.regex flint.nfa flint.protocols
+      clojure.core flint.compiler.wasm clojure.string app
 
 None of it is reachable from a three-line entry, so all of it is shaken out --
 the fault is in reading and analysing sources whose output is then discarded.
@@ -4769,7 +4769,7 @@ means an overflow runs off address zero and traps. At 64 KiB with
 overflowing all along and getting away with what it hit. Silent corruption
 becomes `memory access out of bounds` at the instruction that did it.
 
-**Shipped: `-z stack-size=1048576 --stack-first`** in `src/flint/link.cljc`, the
+**Shipped: `-z stack-size=1048576 --stack-first`** in `src/flint/compiler/link.cljc`, the
 only place a module is linked. Verified: selfhost green, `flat 3200` compiles,
 `flat 4000` traps cleanly rather than corrupting, `bin/check` green. The cost is
 initial memory and not file size -- 5 pages to 20, **+960 KiB a module**, the
@@ -8298,7 +8298,7 @@ native AOT was built.
 Checked by RUNNING each target:
 
     claim, as it stood                        checked 2026-09-20
-    "nothing in `src/` or `lib/` emits IR"    `src/flint/llvm.cljc`
+    "nothing in `src/` or `lib/` emits IR"    `src/flint/compiler/llvm.cljc`
     "`:to :llvm` refuses"                     2 135 218 bytes of IR
     `"llvm" | "native"` is ONE match arm      two arms, main.rs:760-761
     "Native AOT is not built"                 contradicted three lines below
@@ -8312,7 +8312,7 @@ feature the record called unbuilt is not merely built, it is GATED.
 ### Two front doors, and the record conflated them
 
 **`bin/flint` is not built on the native target.** It is a 1 172-line babashka
-script that `require`s `flint.compiler` out of `src/` and `lib/`;
+script that `require`s `flint.compiler.core` out of `src/` and `lib/`;
 `target/release/flint` is the Rust crate `flint-cli` carrying an EMBEDDED
 compiler sandbox. Neither invokes the other, and only the second accepts
 `:to`. The recorded "15.6 s -> 3.5 s" compares two things this record does not

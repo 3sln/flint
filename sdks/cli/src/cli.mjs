@@ -134,8 +134,8 @@ function from(srcs) {
 /// `:to :llvm`: LLVM IR, TEXT out.
 ///
 /// THIS PACKAGE REFUSED IT UNTIL 2026-09-26 AND CARRIED THE EMITTER ALL ALONG.
-/// `src/flint/llvm.cljc` is portable cljc with no reader conditionals, and
-/// `src/flint/selfhost.cljc` already accepts `"llvm"` as a mode and calls
+/// `src/flint/compiler/llvm.cljc` is portable cljc with no reader conditionals, and
+/// `src/flint/compiler/selfhost.cljc` already accepts `"llvm"` as a mode and calls
 /// `compile-to-llvm` -- inside `dist/flintc.wasm`, which is what `compileVia`
 /// below runs. So the refusal was unwired dispatch and not a missing capability,
 /// and the comment that said "`:to :llvm` is not available from this package"
@@ -166,7 +166,7 @@ function compileLlvmText(srcs, entry, optimize,
 /// `compile_clr`: the assembly's natives resolve BY NAME against whatever table
 /// the host carries, and there is no prebuilt module here to cut down.
 /// `name` is the output file's BASENAME, or `''` when there is no output file.
-/// `flint.clr/assembly-name` inside the compiler interprets it -- this door passes
+/// `flint.compiler.clr/assembly-name` inside the compiler interprets it -- this door passes
 /// it raw so there is no sanitiser here to drift from the other two.
 ///
 /// THIS DOOR SENT NO NAME AT ALL until 2026-09-28, so every assembly it wrote was
@@ -386,7 +386,7 @@ export function runSource(srcs, entry, args, caps, roots,
   const named = caps.map((n, i) => [n, i + 1]);
   // THE ENTRY SHIM takes one argument, `[args caps]`, and hands `args` and
   // `caps` to the entry -- `caps` only when the entry has a 2-arity
-  // (`src/flint/compiler.cljc`, "the entry shim"). Calling the user's function
+  // (`src/flint/compiler/core.cljc`, "the entry shim"). Calling the user's function
   // directly instead would silently drop `:with`, because the projection is the
   // shim's doing and not the runtime's.
   const arg = codec.vec([

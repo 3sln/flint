@@ -1,4 +1,4 @@
-(ns flint.eval
+(ns flint.compiler.eval
   "An interpreter for the analyzer's AST.
 
   This is what makes user `defmacro` work. A macro has to RUN at compile time,
@@ -10,7 +10,7 @@
   It also means the bootstrap needs no second compiler. `doc/decisions` warned
   that a seed pass in Rust would be the implementation that drifts; this is how
   we avoid needing one."
-  (:require [flint.hostfns :as hostfns]
+  (:require [flint.compiler.hostfns :as hostfns]
             [flint.rt]))
 
 (def ^:private RECUR ::recur)
@@ -54,7 +54,7 @@
           (vswap! locals assoc (nth slots fixed) (seq (drop fixed args))))
         (loop []
           (let [r (ev ctx locals upvals-vals (:body arity))]
-            (if (and (map? r) (= RECUR (:flint.eval/tag r)))
+            (if (and (map? r) (= RECUR (:flint.compiler.eval/tag r)))
               (do (doseq [pair (map vector (:slots r) (:vals r))]
                     (vswap! locals assoc (first pair) (second pair)))
                   (recur))
@@ -107,12 +107,12 @@
                 (vswap! locals assoc (:idx b) (ev ctx locals upvals (:init b))))
               (loop []
                 (let [r (ev ctx locals upvals (:body node))]
-                  (if (and (map? r) (= RECUR (:flint.eval/tag r)) (= (:id r) (:id node)))
+                  (if (and (map? r) (= RECUR (:flint.compiler.eval/tag r)) (= (:id r) (:id node)))
                     (do (doseq [pair (map vector (:slots r) (:vals r))]
                           (vswap! locals assoc (first pair) (second pair)))
                         (recur))
                     r))))
-    :recur {:flint.eval/tag RECUR :id (:id node) :slots (:slots node)
+    :recur {:flint.compiler.eval/tag RECUR :id (:id node) :slots (:slots node)
             :vals (mapv #(ev ctx locals upvals %) (:args node))}
     :fn (let [captured (mapv (fn [u] (case (:kind u)
                                        :local (nth @locals (:idx u))

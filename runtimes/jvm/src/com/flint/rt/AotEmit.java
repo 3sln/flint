@@ -9,7 +9,7 @@ import java.util.*;
 import static java.lang.constant.ConstantDescs.*;
 
 /// The emitter: one flint arity to one JVM method, ported from
-/// `src/flint/aot.cljc`.
+/// `src/flint/compiler/aot.cljc`.
 ///
 /// ## Why this is a port and not a new backend
 ///

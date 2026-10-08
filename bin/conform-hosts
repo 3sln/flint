@@ -1922,8 +1922,8 @@ if [ "${FLINT_SELFHOST:-0}" = "1" ]; then
   # AND AGAIN WITH AN UNRESOLVED SPEC, WHICH IS A DIFFERENT HALF OF THE COMPILER.
   #
   # Everything above passes `--emit-spec`'s output: `{:sources .. :order ..}`,
-  # already resolved. `flint.selfhost/build-image` SKIPS
-  # `flint.project/resolve-project` for such a spec, so the resolver, the
+  # already resolved. `flint.compiler.selfhost/build-image` SKIPS
+  # `flint.compiler.resolve/resolve-project` for such a spec, so the resolver, the
   # dependency walk, the workspace lookup and the topological order never ran on
   # either port -- and that is where a real divergence lived. A hash-ordered
   # worklist seed made two hosts disagree about `(ns t)` on 2026-09-28

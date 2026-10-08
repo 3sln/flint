@@ -1,11 +1,11 @@
-(ns flint.image
+(ns flint.compiler.image
   "Writes the flint program image: the compiler's output, which `flint` splices
   into the linked module as a data segment.
 
   The format is described in `runtime/src/image.rs`; this namespace and that one
   are the two halves of it, and `test/image_roundtrip.clj` pins them together."
   (:require [flint.rt]
-            [flint.canon :as canon]))
+            [flint.compiler.canon :as canon]))
 
 (def MAGIC [70 76 73 78 84 73 77 71])                        ; "FLINTIMG"
 (def VERSION 3)
@@ -252,7 +252,7 @@
       ;; THE CALL LOOP, by fn index, or `NO-SERVE` when this image has none
       ;; (`DECISIONS.md#the-control-plane-is-the-runtimes`). The runtime closes
       ;; that function over a port when the host binds one, and spawns it --
-      ;; by INDEX, because it has no var and no name (`flint.callentry`).
+      ;; by INDEX, because it has no var and no name (`flint.compiler.callentry`).
       ;; After the flags, so every offset above is unchanged; a reader that
       ;; finds the image ending here instead treats it as `NO-SERVE`, which is
       ;; what an image built before this was.
@@ -285,7 +285,7 @@
 
 (defn set-entry! [b i] (vswap! b assoc :entry i))
 (defn set-serve!
-  "Record the call loop's fn index (`flint.callentry`)."
+  "Record the call loop's fn index (`flint.compiler.callentry`)."
   [b i] (vswap! b assoc :serve i))
 (defn add-init! [b i] (vswap! b update :init conj i))
 (defn natives

@@ -1,9 +1,9 @@
-(ns flint.analyzer
+(ns flint.compiler.analyzer
   "Forms to AST.
 
   Two phases, not one: analysis produces an AST, and only then does emission
   produce bytecode. The extra phase pays for itself three times over --
-  `flint.eval` walks the AST so that `defmacro` works on any host, tree shaking
+  `flint.compiler.eval` walks the AST so that `defmacro` works on any host, tree shaking
   walks the reference graph the AST records, and the emitter stays a
   straightforward post-order walk.
 
@@ -14,13 +14,13 @@
   needs boxing -- and a captured value that is never re-read cannot keep an
   object alive, which matters given the collector."
   (:require [clojure.string :as str]
-            [flint.canon :as canon]
-            [flint.macros :as macros]
+            [flint.compiler.canon :as canon]
+            [flint.compiler.macros :as macros]
             ;; For `bookkeeping-meta` alone: what the reader attaches is the
             ;; reader's to say, and `author-meta` subtracts it rather than
             ;; keeping a second copy that can fall behind -- which it did.
-            [flint.reader :as reader]
-            [flint.types :as ty]))
+            [flint.compiler.reader :as reader]
+            [flint.compiler.types :as ty]))
 
 (def specials
   '#{def if do let* loop* recur fn* quote var throw try catch finally binding
@@ -74,7 +74,7 @@
   "What resolves without a `:require` when a workspace says nothing.
 
   `clojure.core` alone, which is what flint has always done and what Clojure
-  does. NOT the same list as `flint.project/core-first`: that pins four
+  does. NOT the same list as `flint.compiler.resolve/core-first`: that pins four
   namespaces into the front of the LOAD order because the compiler emits
   references into them, which is a question about initialisation rather than
   about what a bare symbol means."
@@ -224,7 +224,7 @@
           ;; sees -- private vars and guarded ones included -- so it was
           ;; guarded `:vars`, and the guard is checked nowhere in a program
           ;; that declares no workspaces: such a program could call it. The
-          ;; loop the compiler injects (`flint.callentry`) is the one caller
+          ;; loop the compiler injects (`flint.compiler.callentry`) is the one caller
           ;; that needs it, and it is analysed with `:trusted-entry`. Every
           ;; other route -- by name, in value position, through an alias, a
           ;; macro or an `:inline` -- arrives here and is refused.
@@ -1621,7 +1621,7 @@
 ;; ------------------------------------------------------------------- ns
 
 (def require-clauses
-  "The `ns` clauses that NAME NAMESPACES -- `flint.reader/require-clauses`,
+  "The `ns` clauses that NAME NAMESPACES -- `flint.compiler.reader/require-clauses`,
   which is the one set; it lives in the reader because `::alias/kw` needs it
   and the reader cannot require this file."
   reader/require-clauses)

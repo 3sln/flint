@@ -1,4 +1,4 @@
-(ns flint.project
+(ns flint.compiler.resolve
   "Reading a program from its entry namespace outwards.
 
   This used to live in `bin/flint`, which is babashka, which meant the compiler
@@ -21,10 +21,10 @@
   of the two front doors had been taught the concept.
 
   One function, two producers, and nothing here knows which it got."
-  (:require [flint.reader :as reader]
-            [flint.forms :as forms]
+  (:require [flint.compiler.reader :as reader]
+            [flint.compiler.forms :as forms]
             [clojure.string :as str]
-            [flint.compiler :as compiler]))
+            [flint.compiler.core :as compiler]))
 
 (def virtual-namespaces
   "Namespaces with no source: the compiler answers for them itself."
@@ -111,7 +111,7 @@
 
 (defn preread-options
   "The options a PRE-READ of resolver answer `s` is made under: `read-options`
-  with `:features :any`, because `flint.reader/read-deferred` keeps reader
+  with `:features :any`, because `flint.compiler.reader/read-deferred` keeps reader
   conditionals as data and one read serves every feature set
   (`DECISIONS.md#stdlib-preread`). The rest -- file, tags, dialect -- still
   decides what the text reads as, so it is still the key."
@@ -119,14 +119,14 @@
   (read-options s :any))
 
 (defn preread
-  "Resolver answer `s`'s source read ahead of its features, as `flint.forms`
+  "Resolver answer `s`'s source read ahead of its features, as `flint.compiler.forms`
   bytes: what the native CLI embeds for each standard-library file."
   [s]
   (let [opts (preread-options s)]
     (forms/encode (assoc (reader/read-deferred (:src s) (dissoc opts :features)) :opts opts))))
 
 (defn read-eager
-  "Resolver answer `s`'s source read EAGERLY under `features`, as `flint.forms`
+  "Resolver answer `s`'s source read EAGERLY under `features`, as `flint.compiler.forms`
   bytes: what a host hands the compiler for user text it has read itself
   (`DECISIONS.md#namespaces-over-the-system-port`). Its `:opts` are
   `read-options` and its `:conds` empty, so `read-entry` takes it as read."
@@ -174,7 +174,7 @@
 (defn file-answer
   "What `files-resolver` answers for the SOURCE FILE at `path`, which must be
   in `files`. Apart from the resolver so the pre-read step
-  (`flint.selfhost/preread`) asks exactly the question a compile asks of each
+  (`flint.compiler.selfhost/preread`) asks exactly the question a compile asks of each
   file, and so cannot read it under options the compile would not use."
   [files workspaces path]
   (let [w (first (filter (fn [w] (let [pre (:prefix w)]
@@ -182,7 +182,7 @@
                                        (str/starts-with? (str path) (str pre)))))
                          (or workspaces [])))
         ;; A BODY IS TEXT, OR A FILE ALREADY READ: `{:preread bytes}`, the
-        ;; `flint.forms` encoding, which is how the native CLI hands over the
+        ;; `flint.compiler.forms` encoding, which is how the native CLI hands over the
         ;; standard library (`DECISIONS.md#stdlib-preread`) -- with no text
         ;; beside it. `read-entry` decodes it if the namespace is reached;
         ;; this only passes it on.
@@ -511,12 +511,12 @@
   ;; `flint.system` IS NOT A ROOT ANY MORE. It was the control plane, added
   ;; here and in every other door because nothing referenced it; the control
   ;; plane is the RUNTIME's now, and the call loop is compiled from
-  ;; `flint.callentry` into every image by the compiler itself
+  ;; `flint.compiler.callentry` into every image by the compiler itself
   ;; (`DECISIONS.md#the-control-plane-is-the-runtimes`).
   ;;
   ;; `flint.port` AND `flint.wire` ARE ROOTS, unconditionally: the call loop is
   ;; in every image and references `flint.port/send`/`flint.wire/read-from` by
-  ;; var (`src/flint/callentry.cljc`), which no `:require` in the program names.
+  ;; var (`src/flint/compiler/callentry.cljc`), which no `:require` in the program names.
   ;; Call serving is always on (the maintainer's decision), so this is the
   ;; ordinary require graph, not an injection -- a resolver that cannot answer
   ;; `flint.port` reports it missing like any other unresolved require.
@@ -566,9 +566,9 @@
   protocol\").
 
   It speaks FORMS, not text and not bytes. Whoever implements it has already
-  read each file -- babashka with `flint.reader` over a directory, the sandboxed
-  compiler's adapter by decoding the `flint.forms` bytes its host sent
-  (`flint.selfhost/port-resolver`) -- so nothing below this line reads source.
+  read each file -- babashka with `flint.compiler.reader` over a directory, the sandboxed
+  compiler's adapter by decoding the `flint.compiler.forms` bytes its host sent
+  (`flint.compiler.selfhost/port-resolver`) -- so nothing below this line reads source.
 
   An ordinary BLOCKING call: a file read in babashka, a park on a port in the
   sandbox. Implemented by METADATA in flint, which has no `reify`; the
@@ -602,7 +602,7 @@
     {:forms (:forms a)
      ;; The TEXT too, when the resolver had it: a caller that rebuilds the
      ;; sources field by field from `:src` (`test/shake.clj` does) compiles
-     ;; from it. Unused when `:forms` is present (`flint.compiler/read-source`).
+     ;; from it. Unused when `:forms` is present (`flint.compiler.core/read-source`).
      :src (:src a)
      :file (:file a) :dialect (or (:dialect a) (dialect-of (:file a)))
      :workspace (:workspace a) :tags (:tags a)
@@ -751,7 +751,7 @@
   across every file it reads, not just one."
   [resolve-ns features & [sink]]
   (with-meta {}
-    {'flint.project/resolve-wave
+    {'flint.compiler.resolve/resolve-wave
      (fn [_ names]
        (mapv (fn [n]
                (let [s (resolve-ns n)]

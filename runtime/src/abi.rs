@@ -735,7 +735,7 @@ pub extern "C" fn flint_load_image(ptr: u32, len: u32) -> i32 {
 // it duplicated a route every real consumer already takes. `FLINT_IMAGE_DESC`
 // is `--export`ed as a global, and both readers go to the global rather than
 // the call -- `runtime/src/native.rs:43` via `global_addr`, and
-// `src/flint/bundle.cljc:127` via `global-addr`.
+// `src/flint/compiler/bundle.cljc:127` via `global-addr`.
 
 const _: () = {
     let _ = NIL.bits();

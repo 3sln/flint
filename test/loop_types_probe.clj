@@ -19,13 +19,13 @@
 ;; point: `clojure -i`'s this file, in the driver's own JVM, before
 ;; `flint.driver.main` is required -- so the hooks below are installed before
 ;; the compile they watch ever runs, and `require`ing an already-loaded
-;; `flint.emitter` from inside the driver does not reload it and undo them
+;; `flint.compiler.emitter` from inside the driver does not reload it and undo them
 ;; (true of this file exactly as it was true of the old one).
 ;;
 ;; THE SHUTDOWN HOOK USED TO WRITE `(pr-str @counts)` ALONE. A JVM-wide
 ;; shutdown hook fires on every exit path -- a clean compile, a compile the
 ;; driver itself rejects with `System/exit 1`/`2`, or `require`ing
-;; `flint.emitter` throwing because this file's own hooks never attach -- and
+;; `flint.compiler.emitter` throwing because this file's own hooks never attach -- and
 ;; in every one of those failure cases `counts` is still `{}`, the same value
 ;; a program with no integer-opcode arithmetic would leave. `test/loop_types.clj`
 ;; read that `{}` as "every row missed its specialisation" and failed nine
@@ -76,7 +76,7 @@
 ;; report "PROBE DID NOT RUN" with that exact message instead of nine
 ;; inference-looking failures.
 (try
-  (require '[flint.emitter :as em])
+  (require '[flint.compiler.emitter :as em])
   (catch Throwable t
     (reset! probe-error (str t))))
 

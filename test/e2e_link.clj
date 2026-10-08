@@ -7,7 +7,7 @@
 ;; control plane, and calling is a message to one now. Nothing about the shake
 ;; needs the module to be called -- what it needs is for the module to be real,
 ;; which instantiating proves.
-(require '[flint.image :as img] '[flint.link :as link] '[flint.wasm :as w]
+(require '[flint.compiler.image :as img] '[flint.compiler.link :as link] '[flint.compiler.wasm :as w]
          '[clojure.java.io :as io] '[clojure.string :as str])
 
 (def op {:const 0x01 :nil 0x02 :int 0x05 :local 0x06 :return 0x13

@@ -223,7 +223,7 @@ public final class Sandbox {
         }
 
         // COMPILED ARITIES, when the image asks for them. `:optimize [perf]` sets
-        // `FLAG_PERF` in the image (`src/flint/image.cljc`), and until now nothing
+        // `FLAG_PERF` in the image (`src/flint/compiler/image.cljc`), and until now nothing
         // on this port acted on it: `AotEmit` is 408 lines that ran only from
         // `runtimes/jvm/test/RtAot.java`, so every artifact was interpreted however
         // it was compiled. The producer's own comment says the case was built for
@@ -236,8 +236,8 @@ public final class Sandbox {
         //
         // `false` for `chunkAll`: it makes EVERY instruction a chunk boundary and
         // is "a bisection handle, not a mode" in `AotPlan`'s own words. The
-        // reference producer agrees -- `src/flint/aot.cljc`'s four-argument
-        // `compile-arity` delegates with `false`, and `src/flint/bundle.cljc` calls
+        // reference producer agrees -- `src/flint/compiler/aot.cljc`'s four-argument
+        // `compile-arity` delegates with `false`, and `src/flint/compiler/bundle.cljc` calls
         // that form.
         //
         // AN ARITY THAT CANNOT BE COMPILED STAYS INTERPRETED, so this cannot fail a

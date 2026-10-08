@@ -1,4 +1,4 @@
-(ns flint.canon
+(ns flint.compiler.canon
   "A canonical ordering for map and set literals.
 
   Maps and sets are unordered, and their iteration order genuinely differs

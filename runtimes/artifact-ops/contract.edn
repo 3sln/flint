@@ -116,7 +116,7 @@
  ;; Not an operation. Each container has a path the platform already understands,
  ;; and a reader gets at it without executing anything.
  :metadata
- {:value "pr-str of the map src/flint/modmeta.cljc builds -- ONE producer, one
+ {:value "pr-str of the map src/flint/compiler/modmeta.cljc builds -- ONE producer, one
           string, three containers, so the three cannot drift into different
           shapes"
   :carriers

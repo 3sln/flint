@@ -112,7 +112,7 @@ impl<'a> Sections<'a> {
     /// `len` bytes at a linear-memory address, from whichever segment covers
     /// it. A LATER segment wins, because that is how the splice overwrites a
     /// descriptor in place rather than editing the linker's own data
-    /// (`flint.bundle`).
+    /// (`flint.compiler.bundle`).
     /// NOT an `Addr`. This is a wasm module's LINEAR-MEMORY address, from its
     /// data segments -- 32-bit by the platform's definition, and nothing to do
     /// with flint's heap addresses even though both are integers. The two being

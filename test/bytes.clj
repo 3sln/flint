@@ -92,13 +92,13 @@
 
 (println "bytes: what they were built for")
 
-;; `flint.wasm` is the wasm binary reader and writer, and it used to be Java
+;; `flint.compiler.wasm` is the wasm binary reader and writer, and it used to be Java
 ;; byte arrays -- `aget`, `alength`, `ByteArrayOutputStream` -- which is why
 ;; the compiler compiled to wasm could emit a bytecode image and not a module.
 ;; It runs on byte strings now, so it compiles for flint too. This asserts
 ;; that, because it is the whole reason the type exists.
-(let [x (sh "./bin/flint" ":src" "src" ":fn" "flint.wasm/parse" ":out" "/tmp/wasmport.wasm")]
-  (check-that "flint.wasm compiles FOR flint, not just on the host"
+(let [x (sh "./bin/flint" ":src" "src" ":fn" "flint.compiler.wasm/parse" ":out" "/tmp/wasmport.wasm")]
+  (check-that "flint.compiler.wasm compiles FOR flint, not just on the host"
               (zero? (:exit x))))
 ;; No check on host interop here. The real guarantee is the one above -- that
 ;; the file COMPILES for flint -- and a proxy for it that counts `Arrays/` and

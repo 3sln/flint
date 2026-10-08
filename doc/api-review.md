@@ -380,7 +380,7 @@ sections below should know what left (`DECISIONS.md#the-control-plane-is-the-run
   program's own `flint/system.cljc` having taken a snapshot of itself -- is
   answered by there being nothing to replace: the control plane is runtime code
   (`kin/control.kin`) and the call loop is compiled into every image by the
-  compiler and named by index (`src/flint/callentry.cljc`).
+  compiler and named by index (`src/flint/compiler/callentry.cljc`).
 * **Three builtins left the guest-nameable catalogue**: `flint.rt/system-port`,
   `flint.rt/snapshot-export`, `flint.rt/snapshot-chunk`. Naming one is a
   compile error (`no such builtin`).
@@ -644,7 +644,7 @@ namespace.
 What an EMBEDDER calls. These are versioned surfaces other people build
 against, so a change here is a change to somebody else's build.
 
-### flint.selfhost/main
+### flint.compiler.selfhost/main
 
 *Not gated by `bin/check-api-review`* -- its `wanted` set is closed over
 `lib/` namespaces, `sdks/*` directories and the two CLIs' dispatched commands
@@ -654,7 +654,7 @@ exists". Recorded as `###` instead so the review still has a place to live.
 
 **Reviewed:** ☐ not signed off
 
-The compiler's one entry point, called as `inst.run("flint.selfhost/main", args)`
+The compiler's one entry point, called as `inst.run("flint.compiler.selfhost/main", args)`
 -- what `flintc.wasm` and `flintc.bytecode` hand to any host, and what every SDK
 here and every CLI door eventually calls through. `args` is `[mode & rest]`, or
 `["split" files mode & rest]` when the caller hands file bodies over already
@@ -666,9 +666,9 @@ above.
 **The sixth, `preread`, is new** (`1c9bff0b`, `DECISIONS.md#stdlib-preread`;
 its answer changed on branch `read-forms`): `["preread" spec-edn]`, answering
 `{path bytes}` -- every file named in the spec's `:files`, read once by
-`flint.reader/read-deferred` (reader conditionals kept as data, so the spec's
+`flint.compiler.reader/read-deferred` (reader conditionals kept as data, so the spec's
 `:features` no longer matter and are ignored) and encoded by
-`flint.forms/encode`, which records the read options a compile checks before
+`flint.compiler.forms/encode`, which records the read options a compile checks before
 it uses the forms (`:file` `:tags` `:dialect`, and `:features :any`). It
 produces no artifact; it is the standard library READ, ahead of any feature
 set. It answered `{path {:opts .. :forms ..}}` through the host codec before,
@@ -683,7 +683,7 @@ sense that it is a mode of the same `main` the wasm build exposes, not because
 any host exercises that path today.
 
 **What a caller may HAND BACK changed with it.** A `split` file body may now be
-`{:preread bytes}` -- those bytes, and no `:src` -- and `flint.project/read-entry`
+`{:preread bytes}` -- those bytes, and no `:src` -- and `flint.compiler.resolve/read-entry`
 decodes them only if the compile reaches that namespace, refusing them with a
 sentence when their options are not the compile's. The first version took
 `{:src text :preread {:opts .. :forms ..}}`, which no longer decodes.
@@ -938,7 +938,7 @@ reason alone. Sizes in bytes, and whether the bytes agree:
 **EVERY TARGET NOW WORKS FROM EVERY DOOR, byte for byte.** The two gaps this
 table recorded were both unwired dispatch rather than anything missing:
 `bin/flint` refused `:to :llvm` and the npm CLI refused `:to :jvm`, while
-`src/flint/llvm.cljc` is portable cljc and `src/flint/selfhost.cljc` accepts both
+`src/flint/compiler/llvm.cljc` is portable cljc and `src/flint/compiler/selfhost.cljc` accepts both
 `"llvm"` and `"jvm"` as modes -- inside the compiler both doors already run. Held
 to it by `bb test/selfhost-targets.clj` (four rows plus a harness control) and
 `node sdks/cli/selftest.mjs` (`:to :clr`, `:to :jvm`, both `:out` spellings, and
@@ -946,7 +946,7 @@ the refusal), and recorded in
 [`compiles-are-byte-reproducible`](DECISIONS.md#compiles-are-byte-reproducible).
 
 **`:optimize [perf]` was the arm that mattered.** Comparing the plain arms alone
-would not have caught it: `flint.selfhost` never wrote the image's `FLAG-PERF`, so
+would not have caught it: `flint.compiler.selfhost` never wrote the image's `FLAG-PERF`, so
 every artifact the native and npm doors emitted under `:optimize [perf]` asked its
 port to compile nothing -- 1987 arities through `bin/flint` and 0 through the
 native CLI, from one source, both reporting "every check passed" because the count

@@ -21,9 +21,9 @@ until something unusual is asked.
 - If two lists must exist, make one *read* the other rather than restate it.
 - `bin/flint` is a thin `sh` wrapper over a JVM Clojure driver
   (`driver/flint/driver/main.clj`), not babashka, and no longer a second copy
-  of `flint.project`'s wave walk. What it still owns is finding files on a
+  of `flint.compiler.resolve`'s wave walk. What it still owns is finding files on a
   search path, reading `deps.edn` for grants and tags, and reading source
-  text through the kin-generated Java reader rather than `flint.reader`
+  text through the kin-generated Java reader rather than `flint.compiler.reader`
   (`DECISIONS.md#namespaces-over-the-system-port`).
 - Toolchain versions are pinned once, not per caller: `bin/nightly-toolchain`,
   `bin/bb-version` and `bin/clojure-version` are the single source CI reads

@@ -17,7 +17,7 @@
 //! (`bin/flint`, with and without `--loader`, and the native runtime). It is
 //! not the ring size -- 16 traps exactly as 1024 does -- and channels are
 //! unaffected, which is what makes `open` the thing to look at rather than the
-//! ring itself. The shaker is `src/flint/wasmshake.cljc`; the new call edges
+//! ring itself. The shaker is `src/flint/compiler/wasmshake.cljc`; the new call edges
 //! `new_port` gained are the place to start.
 
 #![cfg(feature = "parallel")]

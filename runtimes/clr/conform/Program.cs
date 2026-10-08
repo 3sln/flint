@@ -1664,23 +1664,23 @@ public static class Program {
         rt.EnsureStarted();
         Console.WriteLine("  ok   " + img.init.Length + " initialisers ran");
 
-        // `flint.selfhost/main` is a VAR, not a named entry in the function
+        // `flint.compiler.selfhost/main` is a VAR, not a named entry in the function
         // table. The initialisers bind it, which is why they have to run first.
         int slot = -1;
         for (int i = 0; i < img.varNames.Length; i++)
-            if (Flint.Rt.Str.Text(rt, rt.consts[img.varNames[i]]) == "flint.selfhost/main") slot = i;
-        if (slot < 0) { Console.WriteLine("  FAIL flint.selfhost/main is not in the var table"); return 1; }
+            if (Flint.Rt.Str.Text(rt, rt.consts[img.varNames[i]]) == "flint.compiler.selfhost/main") slot = i;
+        if (slot < 0) { Console.WriteLine("  FAIL flint.compiler.selfhost/main is not in the var table"); return 1; }
         long compiler = rt.roots.shared.Globals[slot];
         if (Flint.Rt.Val.IsNil(compiler)) {
-            Console.WriteLine("  FAIL flint.selfhost/main is unbound after the initialisers");
+            Console.WriteLine("  FAIL flint.compiler.selfhost/main is unbound after the initialisers");
             return 1;
         }
-        Console.WriteLine("  ok   flint.selfhost/main is bound: " + rt.Describe(compiler));
+        Console.WriteLine("  ok   flint.compiler.selfhost/main is bound: " + rt.Describe(compiler));
 
         // ROOTED, and passed as an ARGV: `main` dispatches on the FIRST element --
         // so an optional MODE is pushed first. See `RtSelfHost.java` for why that
         // is worth having: without it only mode `spec` was reachable, and a
-        // resolved spec skips `flint.project/resolve-project` entirely.
+        // resolved spec skips `flint.compiler.resolve/resolve-project` entirely.
         int bas = rt.Mark();
         int ci = rt.Push(compiler);
         int mi = mode != null ? rt.Push(Flint.Rt.Str.Of(rt, mode)) : -1;

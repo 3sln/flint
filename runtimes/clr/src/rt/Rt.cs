@@ -262,7 +262,7 @@ public sealed class Rt : System.IDisposable {
     /// The CALL LOOP's fn index, or `Img.NoServe`
     /// (`DECISIONS.md#the-control-plane-is-the-runtimes`): what `Conc.SpawnCall`
     /// closes over a bound port and spawns. By index because it has no var and
-    /// no name -- the compiler emits it from `flint.callentry`.
+    /// no name -- the compiler emits it from `flint.compiler.callentry`.
     public long serve = Img.NoServe;
 
     /// Whether this image's initialisers have run.
@@ -1453,7 +1453,7 @@ public sealed class Rt : System.IDisposable {
         return dflt;   // `get` on a non-collection is nil, as Clojure's is
     }
 
-    /// `flint.types/code`'s canonical table, GENERATED from `kin/typep.kin`
+    /// `flint.compiler.types/code`'s canonical table, GENERATED from `kin/typep.kin`
     /// so that the three runtimes cannot drift from each other -- which the
     /// comments this replaced record happening twice.
     public bool TypeP(int code, long v) {

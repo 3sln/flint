@@ -16,7 +16,7 @@
 ;; Values are NaN-boxed fixnums throughout, untagged and retagged exactly as the
 ;; runtime does, so the arithmetic is not cheated.
 (babashka.classpath/add-classpath "src")
-(require '[flint.wasm :as w] '[clojure.java.io :as io])
+(require '[flint.compiler.wasm :as w] '[clojure.java.io :as io])
 
 (def TAG-FIX (bit-shift-left 0xFFFA 48))
 (def TAG-SPEC (bit-shift-left 0xFFFB 48))

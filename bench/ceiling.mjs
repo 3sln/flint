@@ -6,7 +6,7 @@
 //   C1  operands in wasm LOCALS, a real `loop`, arithmetic inlined
 //   C2  the same, with the arithmetic through `call_indirect`
 //   C3  operands on a linear-memory stack driven by `loop` + `br_table`,
-//       which is what `flint.aot` emits
+//       which is what `flint.compiler.aot` emits
 //
 // C2 -> C3 is the cost of OUR EMISSION SHAPE, and it is the number that decides
 // whether register-allocating operands between safepoints is worth building.

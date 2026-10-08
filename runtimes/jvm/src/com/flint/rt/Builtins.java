@@ -47,7 +47,7 @@ public final class Builtins {
     static void def(String n, Fn f) { TABLE.put(n, f); }
 
     /// The annotation names, indexed by the code `check-tag` is handed. The
-    /// codes are `flint.types/code` and `test/types.clj` asserts the tables
+    /// codes are `flint.compiler.types/code` and `test/types.clj` asserts the tables
     /// agree; they are integers rather than keywords because this is on the
     /// write path of every annotated binding.
     static final String[] TAG_NAMES = {
@@ -169,7 +169,7 @@ public final class Builtins {
         //     BIGINT on the heap -- and `asFixnum` reads the tagged payload of
         //     whatever it is handed, which for a bigint is the address. So the
         //     answer depended on where the collector had put it and CHANGED
-        //     BETWEEN TWO CALLS IN ONE RUN. `flint.modmeta/fnv1a` is exactly
+        //     BETWEEN TWO CALLS IN ONE RUN. `flint.compiler.modmeta/fnv1a` is exactly
         //     this: it multiplies to ~7.2e16 before masking, so every module's
         //     compatibility key was garbage on both ports -- measured,
         //     `(bit-and (* 2166136261 16777619) 0xffffffff)` answered 121168

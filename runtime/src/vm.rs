@@ -102,7 +102,7 @@ pub mod op {
     pub const GT_INT: u8 = 0x29;
     pub const GE_INT: u8 = 0x2A;
     pub const EQ_INT: u8 = 0x2B;
-    /// Every type predicate, with the `flint.types/code` as its operand. These
+    /// Every type predicate, with the `flint.compiler.types/code` as its operand. These
     /// need no type information to EMIT -- `(nil? x)` is a tag test whatever
     /// `x` is -- so they fire on code nobody annotated, which is where the
     /// census says the time actually is: 28% of the native calls in a real
@@ -186,7 +186,7 @@ pub struct Image {
     /// The CALL LOOP's fn index, or `image::NO_SERVE`
     /// (`DECISIONS.md#the-control-plane-is-the-runtimes`): what the runtime
     /// closes over a bound port and spawns. By index because it has no var and
-    /// no name -- the compiler emits it from `flint.callentry`.
+    /// no name -- the compiler emits it from `flint.compiler.callentry`.
     pub serve: u32,
     /// One entry per compiled arity (`DECISIONS.md#emit-wasm-instead-of-dispatch`). Empty in a module
     /// built without AOT, which is what lets the interpreter's own loop be

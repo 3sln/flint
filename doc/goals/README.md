@@ -634,7 +634,7 @@ WHAT WAS OBSERVED:
   trouble. They are called at runtime; `extend-method` is called while a
   using namespace is loading.
 
-WHERE IT IS NOT. The error comes from `var-slot!` in `src/flint/emitter.cljc`,
+WHERE IT IS NOT. The error comes from `var-slot!` in `src/flint/compiler/emitter.cljc`,
 which reads the EMITTER's slot table -- so this is about what gets emitted,
 not about initialisation order, and my first explanation was looking in the
 wrong pass entirely.
@@ -665,7 +665,7 @@ THE REASON I GAVE FOR IT WAS WRONG, and this is the third correction this
 section has taken, so it is worth saying plainly. I wrote that the reference
 "passed silently" because privacy was order-dependent and `flint.protocols` is
 analysed BEFORE `clojure.core`. It is not. `core-first`
-(`src/flint/project.cljc:267`) pins `clojure.core` to the FRONT of the order
+(`src/flint/compiler/resolve.cljc:267`) pins `clojure.core` to the FRONT of the order
 unconditionally -- `(concat pinned (remove pin? order))` -- whatever the
 require graph says. So `clojure.core` is analysed first, its `:var-meta` is
 already filled when `flint.protocols` is analysed, and the old check would have

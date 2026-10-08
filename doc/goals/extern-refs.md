@@ -16,7 +16,7 @@
 
 flint has no host interop, by design and in four places that say so: the
 analyzer refuses `new`, `.`, `set!`, `deftype*` and `reify*`
-(`src/flint/analyzer.cljc:992`), `:import` is refused by name
+(`src/flint/compiler/analyzer.cljc:992`), `:import` is refused by name
 (`analyzer.cljc:1089`), `flint.deps` tells a library author that "flint has no
 host interop" when their code will not compile, and `README.md:1758` lists it
 under Limits.

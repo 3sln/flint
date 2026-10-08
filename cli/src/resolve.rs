@@ -1,6 +1,6 @@
 //! One namespace's answer, for the host-driven compile path.
 //!
-//! `flint.project/files-resolver` and `flint.project/file-answer` answer a
+//! `flint.compiler.resolve/files-resolver` and `flint.compiler.resolve/file-answer` answer a
 //! namespace resolution request against a flat `files` map and a
 //! `workspaces` vector -- the same two things `build_spec_impl` builds and
 //! renders as the `:workspaces` EDN today (`DECISIONS.md#namespaces-over-the-system-port`).
@@ -56,7 +56,7 @@ impl Answers {
     /// `ns`, as a wire value -- `Val::Nil` when there is no source and no
     /// virtual entry claims it.
     pub(crate) fn answer(&self, ns: &str) -> Val {
-        // `flint.project/ns->path`'s mapping, with no extension: which file
+        // `flint.compiler.resolve/ns->path`'s mapping, with no extension: which file
         // answers is `source-extensions`' choice below, not the mapping's.
         let base = &crate::script::ns_key(ns, "");
         let base_slash = format!("{base}/");
@@ -95,7 +95,7 @@ impl Answers {
 
         // `source-extensions` order: `.fln` before `.cljc` before `.clj`,
         // because that is the order a namespace's source wins under when more
-        // than one exists (`flint.project/source-extensions`).
+        // than one exists (`flint.compiler.resolve/source-extensions`).
         let path = [".fln", ".cljc", ".clj"].iter()
             .map(|ext| format!("{base}{ext}"))
             .find(|cand| self.inputs.files.contains_key(cand));
@@ -172,7 +172,7 @@ fn kw(name: &str) -> Val {
 
 /// `ns/name` -> a namespaced symbol, a bare name -> an unnamespaced one.
 /// Shared by var names, workspace names and prelude/tag entries, because
-/// `flint.project` reads all of them the same way: a symbol is a symbol.
+/// `flint.compiler.resolve` reads all of them the same way: a symbol is a symbol.
 fn name_sym(text: &str) -> Val {
     match text.split_once('/') {
         Some((ns, name)) if !ns.is_empty() && !name.is_empty() =>

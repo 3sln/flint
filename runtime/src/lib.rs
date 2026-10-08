@@ -57,7 +57,7 @@ pub mod err;
 pub mod fmath;
 pub mod gc;
 pub mod hash;
-/// The host-side read: source text to `flint.forms` bytes, outside a sandbox
+/// The host-side read: source text to `flint.compiler.forms` bytes, outside a sandbox
 /// (`DECISIONS.md#namespaces-over-the-system-port`).
 pub mod hostread;
 // The generated subtree. See `kgen.rs` -- these `mod` lines are the one

@@ -175,10 +175,10 @@
   (check-that "ab_cd.cljc declaring (ns ab-cd): resolving the real namespace compiles"
               (zero? (:exit ok)))
   ;; THE WORDING CHANGED, not the refusal. Through babashka's own `collect`,
-  ;; this reached the ANALYZER's check (`src/flint/analyzer.cljc`, "this
+  ;; this reached the ANALYZER's check (`src/flint/compiler/analyzer.cljc`, "this
   ;; source was resolved as namespace ..", `DECISIONS.md#a-source-defines-only-its-own-namespace`)
   ;; because `collect` had no check of its own. The JVM driver resolves
-  ;; through `flint.project/resolve-project-waves` -- the SAME wave walk every
+  ;; through `flint.compiler.resolve/resolve-project-waves` -- the SAME wave walk every
   ;; door now goes through -- whose own `take-answer` catches exactly this
   ;; case one step earlier, before the compiler ever sees the file
   ;; (`DECISIONS.md#namespaces-over-the-system-port`): "asked for ab_cd,

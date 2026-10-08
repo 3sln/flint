@@ -5,7 +5,7 @@
 // Each is one wire-encoded map, `{"clojure/core" <answer bytes>, ..}`, keyed by
 // the namespace's path without an extension, whose values are the COMPLETE
 // resolver answers the JavaScript doors hand the compiler: `:file`, `:forms`
-// (`flint.forms` bytes, read DEFERRED by the kin reader so one read serves every
+// (`flint.compiler.forms` bytes, read DEFERRED by the kin reader so one read serves every
 // feature set), `:dialect`, and the workspace, tags, prelude, grants and guard
 // of the `deps.edn` that owns the file. Built once here and embedded by both
 // JS doors, so they cannot answer the library two ways.
@@ -19,7 +19,7 @@
 // it, moves here with no list to edit.
 //
 // `flint.check` LANDS IN STDCORE BY THIS SAME MEASUREMENT, not by a special
-// case here -- it does not need one. `flint.project/project-roots` makes it a
+// case here -- it does not need one. `flint.compiler.resolve/project-roots` makes it a
 // root UNCONDITIONALLY now, the same way it already does `flint.port` and
 // `flint.wire` (`DECISIONS.md#checks`), so the probe below reaches it even
 // though the probe's own features are `[perf]`'s (no `:flint/check`): the

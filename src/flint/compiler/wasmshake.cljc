@@ -1,5 +1,5 @@
-(ns flint.wasmshake
-  "The wasm half of `flint.shake`: get the call graph out of a module, and put
+(ns flint.compiler.wasmshake
+  "The wasm half of `flint.compiler.shake`: get the call graph out of a module, and put
   the dead functions back in as nothing.
 
   Two decisions worth stating, because both look like corners cut and are not.
@@ -20,8 +20,8 @@
   valid and still drops the bytes, which are almost all of the prize -- the
   code section is 89% of flint's runtime module and the tables that would also
   shrink are under 1%."
-  (:require [flint.wasm :as w]
-            [flint.shake :as shake]
+  (:require [flint.compiler.wasm :as w]
+            [flint.compiler.shake :as shake]
             [flint.rt]))
 
 (def ^:private CALL 0x10)

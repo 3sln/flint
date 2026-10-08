@@ -167,7 +167,7 @@
    (c "case: a map test is one constant" (case {:a 1} {:a 1} :map :default) :map)
    ;; READER METADATA ON A LITERAL reaches run time. It did not: the reader
    ;; attached it and `with-meta` applied it, and the analyser dropped it in
-   ;; between, where a literal becomes a node. Every shape `flint.reader`'s
+   ;; between, where a literal becomes a node. Every shape `flint.compiler.reader`'s
    ;; `meta-able?` admits is here, because the fix had to be made TWICE -- the
    ;; four below came right and the quoted symbol did not, since a quoted value
    ;; lands straight in a constant from the `quote` arm.

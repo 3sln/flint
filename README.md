@@ -1135,7 +1135,7 @@ gen1   flint compiled the compiler     88 089 image bytes   -- IDENTICAL
 gen2   reproduces itself byte for byte
 ```
 
-**`defmacro` works by running the macro body through `flint.eval`**, an
+**`defmacro` works by running the macro body through `flint.compiler.eval`**, an
 interpreter for the compiler's own AST. Handing the form to the host's `eval`
 would have been less code and would have made the compiler behave differently on
 babashka than on flint — exactly the divergence a fixpoint test exists to catch.
@@ -1823,8 +1823,8 @@ The honest list. Nothing here is stubbed and reported as working.
 - **`format` is `%s`, `%d`, `%f` and `%%` only.** `%f` prints six decimal places
   as Java's does, but loses precision at very large magnitudes where Java's does
   not.
-- **The linker driver is host-side only.** The compiler self-hosts; `flint.wasm`
-  and `flint.link` run next to `rust-lld` and are not part of that requirement
+- **The linker driver is host-side only.** The compiler self-hosts; `flint.compiler.wasm`
+  and `flint.compiler.link` run next to `rust-lld` and are not part of that requirement
   (a flint module has no processes to spawn).
 - **Transit's caching is not implemented.** The writer never emits cache codes,
   so a message with many repeated keys is larger than a caching writer's would

@@ -3,39 +3,39 @@
 ;;
 ;; THIS REPLACES BABASHKA. The resolution this file used to do by hand --
 ;; `collect`, `topo-order`, `refuse-guarded-requires!`, `core-first` -- now
-;; lives in `flint.project` (AGENTS.md sec. 1: two lists drift, so the second
+;; lives in `flint.compiler.resolve` (AGENTS.md sec. 1: two lists drift, so the second
 ;; one is deleted rather than kept in step). What stays here is the HOST half
 ;; only `bin/flint` can be: finding files on a search path, reading `deps.edn`
 ;; for a workspace's grants and tags, and implementing
-;; `flint.project/Resolver` over the filesystem with the kin-generated Java
-;; reader (`flint.driver.host-reader`) instead of `flint.reader` -- the guest's
+;; `flint.compiler.resolve/Resolver` over the filesystem with the kin-generated Java
+;; reader (`flint.driver.host-reader`) instead of `flint.compiler.reader` -- the guest's
 ;; own reader, which this driver no longer calls to resolve a project (see
-;; `ns-of` and the compile below). `flint.reader` stays required for now:
-;; `flint.project/read-entry` still calls `resolve-conditionals` on it to
+;; `ns-of` and the compile below). `flint.compiler.reader` stays required for now:
+;; `flint.compiler.resolve/read-entry` still calls `resolve-conditionals` on it to
 ;; resolve a deferred read's conditionals for this compile's features, which
 ;; is forms-to-forms work and not a second text reader.
 ;; flint :src <dir> :fn <ns/fn> [:out <file.wasm>]
 (ns flint.driver.main
   (:require [clojure.string :as str] [clojure.java.io :as io]
             [flint.driver.fs :as fs] [clojure.edn :as edn]
-            [flint.compiler :as compiler] [flint.image :as img] [flint.link :as link]
-            [flint.reader :as reader] [flint.lint :as lint]
-            [flint.forms :as forms]
+            [flint.compiler.core :as compiler] [flint.compiler.image :as img] [flint.compiler.link :as link]
+            [flint.compiler.reader :as reader] [flint.compiler.lint :as lint]
+            [flint.compiler.forms :as forms]
             [flint.driver.host-reader :as hr]
             ;; For `source-extensions` and now for the whole resolver walk:
-            ;; `flint.project/fn-resolver` and `flint.project/resolve-project-waves`
+            ;; `flint.compiler.resolve/fn-resolver` and `flint.compiler.resolve/resolve-project-waves`
             ;; are the ONE wave walk every door goes through.
-            [flint.project :as project]
+            [flint.compiler.resolve :as project]
             ;; The project surface -- `tasks`, `task`, `build`, `fetch`, ... -- is
             ;; flint code, in `lib/`, because 0021's argument is that it has to
             ;; survive losing babashka. What is in this file is the host half.
             [flint.cli :as cli] [flint.deps :as deps]
-            [flint.wasm :as w] [flint.modmeta :as modmeta]
+            [flint.compiler.wasm :as w] [flint.compiler.modmeta :as modmeta]
             ;; The CLR writer, for `:to :clr`. Portable cljc, so this driver and
             ;; the self-hosted compiler load the same emitter.
-            [flint.clr :as clr]
+            [flint.compiler.clr :as clr]
             ;; The JVM writer, for `:to :jvm`, and portable cljc for the same reason.
-            [flint.jvm :as jvm] [flint.rt]))
+            [flint.compiler.jvm :as jvm] [flint.rt]))
 
 ;; THE REPO ROOT, from `FLINT_ROOT` -- NOT the current directory. `bin/flint`
 ;; sets it (computed in a subshell, never `cd`ing the process itself) because
@@ -51,13 +51,13 @@
 (def root (or (System/getenv "FLINT_ROOT") (.getCanonicalPath (io/file "."))))
 
 (defn clr-name
-  "An assembly name from the output path -- READ from `flint.clr/assembly-name`
+  "An assembly name from the output path -- READ from `flint.compiler.clr/assembly-name`
   rather than restated here.
 
   This door had its own copy of the rule, and the native CLI and `sdks/cli` each
   wanted one too. Three copies of a sanitiser agree on `app.dll` and part ways on
   `a.b.dll`, which is the drift `AGENTS.md` sec. 1 names; the shared one is in the
-  emitter both this door and `flint.selfhost` already call.
+  emitter both this door and `flint.compiler.selfhost` already call.
 
   Deriving it from the path is what makes `:out app.dll` and `:out other.dll`
   distinct rather than both `Program`. It is also what makes the two doors'
@@ -202,7 +202,7 @@
         :else (do (println "unknown argument:" k) (System/exit 2)))
       m)))
 
-;; `ns->path` USED TO BE DEFINED HERE, byte-for-byte what `flint.project/ns->path`
+;; `ns->path` USED TO BE DEFINED HERE, byte-for-byte what `flint.compiler.resolve/ns->path`
 ;; already does (AGENTS.md sec. 1: a fourth copy was a fourth chance to
 ;; disagree about what a source file is). Read from there instead.
 
@@ -312,10 +312,10 @@
 (def elisions
   "Reader conditionals that matched no feature, gathered across every source.
 
-  Was DEAD from the move off babashka until this fix: `flint.reader/elided`
+  Was DEAD from the move off babashka until this fix: `flint.compiler.reader/elided`
   was a property of the LIVE reader state `collect` held, and the kin
   reader's deferred forms carried no such log back through
-  `flint.project/read-entry` -- nothing pushed into this volatile, so the
+  `flint.compiler.resolve/read-entry` -- nothing pushed into this volatile, so the
   note it fed (\"N reader conditional(s) ... matched none of ... -- the form
   each stood in was DELETED\") never printed, and no suite caught it: a
   `grep` for the message over `test/cli.clj`, `test/door-agreement.clj` and
@@ -324,7 +324,7 @@
   justified leaving this dead did not cover every list).
 
   Revived by threading an optional `sink` through
-  `flint.reader/resolve-conditionals` (and `flint.project/read-entry` and
+  `flint.compiler.reader/resolve-conditionals` (and `flint.compiler.resolve/read-entry` and
   `fn-resolver` above it) down to the one place that calls `choose` on a
   deferred conditional -- so a DEFERRED read now records an elision the same
   way the live reader's `read-cond` always did, as `{:file :line :offered}`,
@@ -352,19 +352,19 @@
 ;;
 ;; `collect`, `topo-order`, `refuse-guarded-requires!`, `core-first` and
 ;; `implied-requires` USED TO BE HERE, hand-duplicating
-;; `flint.project` (AGENTS.md sec. 1). They are gone: `resolve-ns` below only
+;; `flint.compiler.resolve` (AGENTS.md sec. 1). They are gone: `resolve-ns` below only
 ;; finds a file and reads it -- the one thing the compiler cannot do for
 ;; itself -- and the wave walk, the topological order, the guard check and
-;; `core-first` all come from `flint.project/resolve-project-waves`, the SAME
+;; `core-first` all come from `flint.compiler.resolve/resolve-project-waves`, the SAME
 ;; walk the EDN doors go through (`DECISIONS.md#namespaces-over-the-system-port`).
 
 (defn resolve-ns
-  "A `flint.project/fn-resolver` function over the filesystem, through the kin
-  Java reader (`flint.driver.host-reader`) instead of `flint.reader`.
+  "A `flint.compiler.resolve/fn-resolver` function over the filesystem, through the kin
+  Java reader (`flint.driver.host-reader`) instead of `flint.compiler.reader`.
 
   Answers `nil` (not found) or `{:preread :src :file :dialect :workspace
   :tags :prelude :grants :guard}` -- `fn-resolver` decodes `:preread` under
-  this compile's features via `flint.project/read-entry`, so a file is read
+  this compile's features via `flint.compiler.resolve/read-entry`, so a file is read
   ONCE here, deferred, however many compiles in this process reach it.
 
   `:src` RIDES ALONG, UNUSED BY THE NORMAL PATH: `read-entry` takes the
@@ -372,13 +372,13 @@
   driver just read itself), so `:src` is dead weight on every ordinary
   compile. It matters for `--emit-spec` and `--self`: the spec they build
   keeps every field but `:forms` (`(dissoc s :forms)`, below), and without
-  `:src` a spec handed to `flint.selfhost`'s `build-image` -- which skips
+  `:src` a spec handed to `flint.compiler.selfhost`'s `build-image` -- which skips
   resolution for an already-resolved spec and falls through to
-  `flint.compiler/read-source`'s `:src`-or-nothing fallback -- found NO text
+  `flint.compiler.core/read-source`'s `:src`-or-nothing fallback -- found NO text
   for `clojure.core` at all: `bin/check-sdk`'s reference artifact failed
   with \"no source for namespace clojure.core\" before this was added.
 
-  A read the kin reader refuses THROWS, as `flint.project/fn-resolver`'s own
+  A read the kin reader refuses THROWS, as `flint.compiler.resolve/fn-resolver`'s own
   docstring says every resolver function here must: `flint.driver.host-reader/deferred-read`
   raises `ex-info` with `:file`, `:line`, `:column`, and this driver's `catch`
   around the whole compile reports it exactly as a compile error would be."
@@ -392,7 +392,7 @@
        :prelude (:prelude proj) :grants (:grants proj) :guard (:guard proj)})))
 
 (defn- format-resolve-error
-  "One `flint.project/resolve-project-waves` error, as a line for a person --
+  "One `flint.compiler.resolve/resolve-project-waves` error, as a line for a person --
   the same three messages `collect`, `refuse-guarded-requires!` and the cycle
   check in `topo-order` used to print by hand, now read off the shared walk's
   own error shapes instead of a second copy of the rule that produces them."
@@ -412,9 +412,9 @@
   "Everything a compile needs, from `entry-ns` outwards, over the filesystem
   resolver above -- `dirs`, `entry-ns`, `roots*` and `features` exactly as
   `collect`'s arguments used to be, but through
-  `flint.project/resolve-project-waves`. `:sources` and `:order` come back
+  `flint.compiler.resolve/resolve-project-waves`. `:sources` and `:order` come back
   already topologically sorted and core-first
-  (`flint.project/finish-project`); any resolution error -- missing, refused, a
+  (`flint.compiler.resolve/finish-project`); any resolution error -- missing, refused, a
   bad answer shape -- is reported all at once and exits 1, the way `collect`
   reported a missing namespace and `refuse-guarded-requires!` reported a guard
   in one shot each, now unified into one report.
@@ -446,7 +446,7 @@
     (println "building the self-hosted compiler (once) ...")
     (let [p (.start (ProcessBuilder.
                      (into-array String [(str root "/bin/flint") ":src" (str root "/src")
-                                         ":fn" "flint.selfhost/main" ":out" selfc])))]
+                                         ":fn" "flint.compiler.selfhost/main" ":out" selfc])))]
       (slurp (.getInputStream p)) (slurp (.getErrorStream p)) (.waitFor p)
       (when-not (zero? (.exitValue p))
         (println "could not build the self-hosted compiler") (System/exit 1))))
@@ -907,7 +907,7 @@
   ;;
   ;; `:llvm` IS IN THIS LIST NOW. It was not, and the comment here said "this
   ;; door does not emit IR: the native CLI does" -- which described the DISPATCH
-  ;; and read as a property of the door. `src/flint/llvm.cljc` is portable cljc
+  ;; and read as a property of the door. `src/flint/compiler/llvm.cljc` is portable cljc
   ;; and this file runs the compiler's own source, so the emitter was always in
   ;; reach; the npm CLI had the same refusal for the same non-reason and was
   ;; wired up on 2026-09-26. Three doors, one emitter, byte-identical output
@@ -975,7 +975,7 @@
                         (map (clojure.core/fn [pth] (ns-of pth)))
                         (remove nil?)
                         vec))
-        ;; `roots*`, OVERRIDING `flint.project/project-roots`'s default only in
+        ;; `roots*`, OVERRIDING `flint.compiler.resolve/project-roots`'s default only in
         ;; test mode: ordinary compiles pass `nil` and get `[clojure.core
         ;; entry-ns]`, which is the same set `(cons entry-ns ['clojure.core])`
         ;; named here before. `flint.port`, `flint.wire` and `flint.check` are
@@ -987,7 +987,7 @@
         roots* (when test-mode? (vec (cons 'clojure.core src-nses)))
         ;; `resolve-sources!` is `collect` + `refuse-guarded-requires!` +
         ;; `core-first (topo-order ..)`, all three now
-        ;; `flint.project/resolve-project-waves`'s job, over the filesystem
+        ;; `flint.compiler.resolve/resolve-project-waves`'s job, over the filesystem
         ;; resolver above. Any resolution error exits 1 from inside it.
         {:keys [sources order]} (resolve-sources! dirs entry-ns features roots*)
         out (or out "out.wasm")
@@ -1062,8 +1062,8 @@
         ;; artifact, built by handing THIS spec to `flintc.wasm`
         ;; (`host/flint-argv.mjs`), failed with "no source for namespace
         ;; clojure.core" the one time `:src` was missing:
-        ;; `flint.selfhost/build-image` skips resolution for an
-        ;; already-resolved spec like this one, and `flint.compiler/read-source`'s
+        ;; `flint.compiler.selfhost/build-image` skips resolution for an
+        ;; already-resolved spec like this one, and `flint.compiler.core/read-source`'s
         ;; fallback for a namespace with no `:forms` is `:src`, not nothing.
         spec {:sources (into {} (map (clojure.core/fn [[n s]] [n (dissoc s :forms)]) sources))
               :order order :entry fn
@@ -1087,7 +1087,7 @@
             (doseq [it (filter #(= explain (:sym %)) (:items compiled))]
               (println "    ns" (:ns it) "kind" (:kind it) "macro?" (:macro? it))))
         _ (when (and disasm (not self))
-            (require '[flint.disasm :as dis])
+            (require '[flint.compiler.disasm :as dis])
             (let [b (:builder compiled)
                   st @b]
               (doseq [[i f] (map-indexed vector (:fns st))
@@ -1096,7 +1096,7 @@
                 (println "fn" i nm)
                 (doseq [a (:arities f)]
                   (println " arity argc" (:argc a) "variadic" (:variadic? a) "nlocals" (:nlocals a))
-                  (println ((resolve 'flint.disasm/disasm) (:code st) (:off a) (:len a)))))))
+                  (println ((resolve 'flint.compiler.disasm/disasm) (:code st) (:off a) (:len a)))))))
         _ (when const
             (let [b @(:builder compiled)]
               (doseq [i (range (max 0 (- const 3)) (min (count (:consts b)) (+ const 4)))]
@@ -1226,15 +1226,15 @@
         ;; ARITIES BEFORE THE IMAGE, which is not an ordering this door gets to
         ;; choose: `llvm/compile-arities` writes each arity's slot INTO the
         ;; builder, so an image emitted first carries none of them.
-        ;; `flint.selfhost/compile-to-llvm` says the same thing at the same place,
+        ;; `flint.compiler.selfhost/compile-to-llvm` says the same thing at the same place,
         ;; and the two are meant to stay identical (AGENTS.md sec. 1) -- verified
         ;; byte-for-byte against the native CLI and the npm CLI by
         ;; `bb test/selfhost-targets.clj`.
         _ (when (= to "llvm")
-            (require '[flint.llvm :as llvm])
-            (let [res (when perf? ((resolve 'flint.llvm/compile-arities) builder))
+            (require '[flint.compiler.llvm :as llvm])
+            (let [res (when perf? ((resolve 'flint.compiler.llvm/compile-arities) builder))
                   image (if self (:image selfres) (img/emit builder {}))
-                  ir ((resolve 'flint.llvm/emit-module)
+                  ir ((resolve 'flint.compiler.llvm/emit-module)
                       image (or (:ir res) "") (or (:names res) []))]
               (spit (str out) ir)
               (println "wrote" out (str "(" (count ir) " bytes"

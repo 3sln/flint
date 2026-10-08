@@ -101,8 +101,8 @@ def unit_names():
 # the dependency recorded for it.
 EMITTED_NODE = re.compile(r':op\s+:native\s+:name\s+"([^"]+)"')
 EMITTED_DEP = re.compile(r'symbol\s+"flint\.native"\s+"([^"]+)"')
-COMPILER_SRC = ["src/flint/analyzer.cljc", "src/flint/emitter.cljc",
-                "src/flint/types.cljc"]
+COMPILER_SRC = ["src/flint/compiler/analyzer.cljc", "src/flint/compiler/emitter.cljc",
+                "src/flint/compiler/types.cljc"]
 
 
 def compiler_emitted():

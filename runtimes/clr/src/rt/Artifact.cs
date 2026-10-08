@@ -184,7 +184,7 @@ public sealed class Artifact {
     /// THIS EXISTS FOR A WRITER, NOT FOR A HOST. A generated artifact's `link`
     /// forwards to this because `Func<byte[],byte[]>` is a GENERIC INSTANTIATION,
     /// and spelling one in metadata needs a `TypeSpec` row and a `GENERICINST`
-    /// signature that `flint.clr` does not emit yet. `object` needs neither.
+    /// signature that `flint.compiler.clr` does not emit yet. `object` needs neither.
     public static void Link(IBridge bridge, string name, object fn) {
         if (fn is Func<byte[], byte[]> wire) { Link(bridge, name, wire); return; }
         if (fn is Builtins.Fn raw) { LinkRaw(bridge, name, raw); return; }
@@ -277,7 +277,7 @@ public sealed class Artifact {
         }
 
         // COMPILED ARITIES, when the image asks for them. `:optimize [perf]` sets
-        // `FlagPerf` in the image (`src/flint/image.cljc`), and until now nothing on
+        // `FlagPerf` in the image (`src/flint/compiler/image.cljc`), and until now nothing on
         // this port acted on it: `AotEmit.cs` is 498 lines that ran only from
         // `runtimes/clr/conform/Program.cs`, so every artifact was interpreted
         // however it was compiled. The producer's own comment says the case exists
@@ -290,7 +290,7 @@ public sealed class Artifact {
         //
         // `false` for `chunkAll`: it makes EVERY instruction a chunk boundary and is
         // "a bisection handle, not a mode" in `AotPlan`'s own words. The reference
-        // producer agrees -- `src/flint/aot.cljc`'s four-argument `compile-arity`
+        // producer agrees -- `src/flint/compiler/aot.cljc`'s four-argument `compile-arity`
         // delegates with `false`.
         //
         // AN ARITY THAT CANNOT BE COMPILED STAYS INTERPRETED, so this cannot fail a

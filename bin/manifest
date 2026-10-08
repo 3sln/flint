@@ -8,7 +8,7 @@
          '[clojure.edn :as edn] '[babashka.fs :as fs])
 (def root (str (fs/parent (fs/parent (fs/real-path *file*)))))
 (babashka.classpath/add-classpath (str root "/src"))
-(require '[flint.reader :as reader] '[flint.compiler :as compiler] '[flint.macros :as macros])
+(require '[flint.compiler.reader :as reader] '[flint.compiler.core :as compiler] '[flint.compiler.macros :as macros])
 
 (def shipped
   "Namespace -> source file. These are what a flint program can require."

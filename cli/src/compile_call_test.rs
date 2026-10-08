@@ -103,7 +103,7 @@ impl Outcome {
     }
 }
 
-/// Call `flint.selfhost/compile` with `request` and a resolver port, answering
+/// Call `flint.compiler.selfhost/compile` with `request` and a resolver port, answering
 /// each wave with `answer` (one element per wanted name) -- or with `whole`'s
 /// value for the whole wave when it is given, which is how a malformed answer
 /// is made.
@@ -131,7 +131,7 @@ fn compile_call(request: Val, answer: &dyn Fn(&str) -> Val, whole: Option<Val>) 
         Some(w.done())
     };
     let bytes = host
-        .call_serving(&mut p, &caller, "flint.selfhost/compile", &[request, Val::Port(rport)], &mut serve)
+        .call_serving(&mut p, &caller, "flint.compiler.selfhost/compile", &[request, Val::Port(rport)], &mut serve)
         .unwrap_or_else(|e| panic!("the compile call failed: {e}"));
     Outcome { result: codec::parse(&bytes).unwrap(), waves }
 }

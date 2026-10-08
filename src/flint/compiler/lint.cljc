@@ -1,4 +1,4 @@
-(ns flint.lint
+(ns flint.compiler.lint
   "What was written for flint, and does nothing.
 
   Metadata is an OPEN MAP. Anyone may put anything in it -- another library,
@@ -14,7 +14,7 @@
   separate pass rather than a compiler warning: warnings in a build that prints
   other things are warnings nobody reads, and this one is allowed to be wrong
   about intent, which a compiler is not."
-  (:require [flint.types :as ty]))
+  (:require [flint.compiler.types :as ty]))
 
 (def flint-keys
   "The function metadata flint reads. Namespaced because it is flint's own.

@@ -2,7 +2,7 @@ package com.flint.rt;
 
 import java.util.*;
 
-/// The analysis half of `DECISIONS.md#emit-wasm-instead-of-dispatch`, ported from `src/flint/aot.cljc`.
+/// The analysis half of `DECISIONS.md#emit-wasm-instead-of-dispatch`, ported from `src/flint/compiler/aot.cljc`.
 ///
 /// Decoding, chunk boundaries and gas charge are decisions about FLINT
 /// BYTECODE, so they have nothing to do with which machine the result is

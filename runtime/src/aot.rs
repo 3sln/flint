@@ -435,8 +435,8 @@ const _: () = {
     // emitted code.
     assert!(core::mem::size_of::<Value>() == 8);
     // Seven pointer-width fields, no padding. BOTH emitters hard-code these
-    // offsets -- `flint.aot` as `S-STACK`..`S-CHK` for a 4-byte word,
-    // `flint.llvm` as a struct type for an 8-byte one -- so the layout is
+    // offsets -- `flint.compiler.aot` as `S-STACK`..`S-CHK` for a 4-byte word,
+    // `flint.compiler.llvm` as a struct type for an 8-byte one -- so the layout is
     // asserted here rather than trusted at either end.
     assert!(core::mem::size_of::<AotSync>() == 7 * core::mem::size_of::<usize>());
 };

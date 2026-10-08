@@ -1,4 +1,4 @@
-(ns flint.clr
+(ns flint.compiler.clr
   "An ECMA-335 assembly writer: enough to emit a loadable .NET assembly from
   scratch, with the bytecode image as a static byte array in `.text`.
 
@@ -25,12 +25,12 @@
 
   `System.Reflection.Emit.PersistedAssemblyBuilder` exists on .NET 9+ and does
   all of this. It is also unreachable: flint's compiler runs on babashka and on
-  flint, neither of which is .NET. Same reason `flint.wasm` writes wasm by hand
+  flint, neither of which is .NET. Same reason `flint.compiler.wasm` writes wasm by hand
   next to a linker that could have.
 
   ## Portability
 
-  Byte strings throughout, via `flint.rt/b-*`, for the reason `flint.wasm` gives
+  Byte strings throughout, via `flint.rt/b-*`, for the reason `flint.compiler.wasm` gives
   in its own header: a namespace that reaches for host byte arrays is a
   namespace the self-hosted compiler cannot run. Nothing here touches a host
   type. The caller writes the returned byte string to a file, which is the only
@@ -43,11 +43,11 @@
   (only methods are data-driven here), `TypeSpec` for generic instantiations (so
   `link` forwards `object` rather than `Func<byte[],byte[]>`), an entry point for
   the exe variant, and the bytecode-to-CIL translation itself -- which is
-  `flint.aot`'s job for wasm and has no CLR counterpart yet."
-  ;; `flint.modmeta` because THE EMITTER DESCRIBES now: the target's `:abi` shape
+  `flint.compiler.aot`'s job for wasm and has no CLR counterpart yet."
+  ;; `flint.compiler.modmeta` because THE EMITTER DESCRIBES now: the target's `:abi` shape
   ;; is a property of the target, so it is built here and not in each caller
   ;; (`DECISIONS.md#four-operations`).
-  (:require [clojure.string :as str] [flint.rt] [flint.modmeta :as modmeta]))
+  (:require [clojure.string :as str] [flint.rt] [flint.compiler.modmeta :as modmeta]))
 
 ;; ---------------------------------------------------------------- byte output
 ;;
@@ -66,7 +66,7 @@
 
 (defn ->bytes
   "Flatten a nested structure of byte values and byte strings into one byte
-  string. Through a transient, for `flint.wasm/->bytes`'s reason: this is the
+  string. Through a transient, for `flint.compiler.wasm/->bytes`'s reason: this is the
   output path for a whole assembly."
   [x]
   (let [out (flint.rt/b-transient (flint.rt/str->b ""))]
@@ -188,7 +188,7 @@
 
 ;; ----------------------------------------------------------------- CIL: the ISA
 ;;
-;; `flint.wasm` has no counterpart to this section, and the reason is worth
+;; `flint.compiler.wasm` has no counterpart to this section, and the reason is worth
 ;; stating because it is the one place CIL is genuinely harder than wasm rather
 ;; than merely different. Wasm needs NEITHER of the two things below:
 ;;
@@ -200,7 +200,7 @@
 ;; CIL needs both. A branch carries a signed displacement that is one byte or
 ;; four, and a method body declares `MaxStack`, which the runtime believes.
 ;;
-;; What IS mirrored is `flint.aot/max-depth`, deliberately: `max-stack` below is
+;; What IS mirrored is `flint.compiler.aot/max-depth`, deliberately: `max-stack` below is
 ;; the same worklist over the same kind of graph, for the reason that function's
 ;; docstring gives -- two edges of one branch leave different depths, so a
 ;; running total quietly gets one of them wrong. Its refusal discipline is
@@ -339,7 +339,7 @@
 
 (defn max-stack
   "The deepest the CIL evaluation stack gets. A WORKLIST, mirroring
-  `flint.aot/max-depth` and for its stated reason: the two edges of a branch
+  `flint.compiler.aot/max-depth` and for its stated reason: the two edges of a branch
   leave different depths, and a running total would quietly get one of them
   wrong. Returns nil if any instruction's effect is unknown.
 
@@ -724,7 +724,7 @@
   and whatever the program's own `:meta` is.
 
   `:gas-in-aot` is false and stays false however `:optimize` was set, for
-  `flint.jvm/describe`'s reason: this port compiles arities at LOAD time from the
+  `flint.compiler.jvm/describe`'s reason: this port compiles arities at LOAD time from the
   same bytecode, so the artifact is identical either way and the preference travels
   inside the image's flags."
   [opts]
@@ -750,7 +750,7 @@
   ONE COPY, BECAUSE FOUR DOORS NEED IT
   (`DECISIONS.md#compiles-are-byte-reproducible`). `bin/flint` calls `clr/assemble` from
   babashka, `cli/src/main.rs` and `sdks/cli` reach it through
-  `flint.selfhost/compile-to-clr`, and each of the three derived this string
+  `flint.compiler.selfhost/compile-to-clr`, and each of the three derived this string
   itself. That is the shape `AGENTS.md` sec. 1 is about -- three tables agreeing on
   the common cases and not on `a.b.dll`, where stripping one extension twice
   gives `a` and stripping it once gives `a_b`. The doors now pass the raw
@@ -797,7 +797,7 @@
         ;; emits the target (`DECISIONS.md#four-operations`, "the emitter owns
         ;; describe").
         ;;
-        ;; `:meta` STILL ACCEPTED AS A STRING, for one reason: `flint.selfhost`
+        ;; `:meta` STILL ACCEPTED AS A STRING, for one reason: `flint.compiler.selfhost`
         ;; runs inside a sandbox with no `pr-str` of its own to spare and already
         ;; has the canonical text. A caller with the inputs passes `:describe`
         ;; instead and this builds it.

@@ -1,17 +1,17 @@
-(ns flint.macros
+(ns flint.compiler.macros
   "The bootstrap macros: the ones the compiler must know before any Clojure has
   been compiled.
 
   Everything else -- `when`, `cond`, `->`, `for`, `doseq`, `defmulti` and the
   rest -- is an ordinary `defmacro` in `clojure/core.cljc`, expanded by running
-  the macro function through `flint.eval`. Only what is needed to compile
+  the macro function through `flint.compiler.eval`. Only what is needed to compile
   `defmacro` itself lives here, which keeps the compiler small and puts the
   language in the language.
 
   `destructure` is here because `let`, `fn` and `loop` all need it and it is
   pure form-to-form work."
   (:require [clojure.string :as str]
-            [flint.canon :as canon]))
+            [flint.compiler.canon :as canon]))
 
 (defn- gsym [prefix] (gensym (str prefix "__")))
 

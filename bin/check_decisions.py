@@ -96,7 +96,7 @@ def main():
         # A STATUS LINE THAT NAMES A FILE IS CLAIMING IT EXISTS, and that is
         # the one claim here a script can settle. This was added 2026-09-24
         # because `four-operations` shipped saying the CLR face "is written and
-        # runs (`src/flint/clr.cljc`, `runtimes/clr/src/rt/Artifact.cs`)" when
+        # runs (`src/flint/compiler/clr.cljc`, `runtimes/clr/src/rt/Artifact.cs`)" when
         # neither file was in the tree -- both were in a subagent's worktree. A
         # SUBAGENT CAUGHT IT, not this gate, and it mirrored the prose rather
         # than a working file as a result.

@@ -11,7 +11,7 @@ is publishing and attaches them there.
 | `flint-loader.wasm` | the runtime. Any image loads into it and runs. |
 | `flint-runtime.wasm` | what a compiled module is spliced into. |
 | `flint-runtime-aot.wasm` | the same, carrying the compiled-arity helpers. |
-| `flint-reader.wasm` | the kin reader alone: source text to `flint.forms` bytes, for a host that reads outside the compiler (`DECISIONS.md#namespaces-over-the-system-port`). |
+| `flint-reader.wasm` | the kin reader alone: source text to `flint.compiler.forms` bytes, for a host that reads outside the compiler (`DECISIONS.md#namespaces-over-the-system-port`). |
 | `stdcore.forms`, `stdextra.forms` | the standard library, read, in its required and optional layers (`bin/build-stdlib-forms`). |
 | `builtins.json`, `slots.json`, `slots-aot.json` | what those runtimes carry, and where. |
 | `src/loader.cljc` | generated: names every builtin so the linker keeps it. |

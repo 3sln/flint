@@ -1,8 +1,8 @@
 (ns flint.driver.host-reader
   "The JVM driver's own copy of 'a reader', over the kin-generated Java reader
-  rather than `flint.reader` (`DECISIONS.md#namespaces-over-the-system-port`,
+  rather than `flint.compiler.reader` (`DECISIONS.md#namespaces-over-the-system-port`,
   migration step 1.2). `bin/flint` used to read every source with
-  `src/flint/reader.cljc`, which is the GUEST'S reader compiled to run under
+  `src/flint/compiler/reader.cljc`, which is the GUEST'S reader compiled to run under
   plain Clojure; this calls the SAME generated Java the JVM runtime embeds
   (`runtimes/jvm/src/com/_3sln/flint/kgen/rt/Formsenc.java`, entry
   `readForms`), through reflection, so there is no second reader
@@ -15,15 +15,15 @@
   call, so this is the same dispatch an `:import`ed call would get, aimed at a
   class discovered at run time instead of compile time.
 
-  Every read answers `flint.forms` bytes under `:features :any` (a DEFERRED
+  Every read answers `flint.compiler.forms` bytes under `:features :any` (a DEFERRED
   read, `DECISIONS.md#stdlib-preread`): this driver never decides a compile's
   feature set before it has read the `ns` form, so every file is read once,
-  deferred, and `flint.project/read-entry` resolves the conditionals for
+  deferred, and `flint.compiler.resolve/read-entry` resolves the conditionals for
   whichever compile reaches it -- pure data work on the decoded forms, nothing
   here reads text twice."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
-            [flint.forms :as forms]))
+            [flint.compiler.forms :as forms]))
 
 ;; THE REPO ROOT, from `FLINT_ROOT` -- NOT the current directory, and NOT
 ;; `*file*` either. `*file*` is relative to whichever classpath entry this
@@ -194,18 +194,18 @@
 
 (defn deferred-read
   "`text`, read deferred (every reader conditional kept as data, under
-  `:features :any`) by the kin Java reader, as `flint.forms` bytes --
-  `flint.project/preread`'s answer, produced by the generated reader instead of
-  `flint.reader` + `flint.forms/encode`.
+  `:features :any`) by the kin Java reader, as `flint.compiler.forms` bytes --
+  `flint.compiler.resolve/preread`'s answer, produced by the generated reader instead of
+  `flint.compiler.reader` + `flint.compiler.forms/encode`.
 
   `dialect` is `:flint` or `:portable`, carried EXPLICITLY (never derived from
-  the extension down here -- `flint.project/dialect-of` already decided it, and
+  the extension down here -- `flint.compiler.resolve/dialect-of` already decided it, and
   repeating that decision is the duplication AGENTS.md sec. 1 warns against).
 
   Returns the bytes (a `byte[]`, what `flint.rt/b-persistent!` would have
   returned) or throws `ex-info` with `:file`, `:line`, `:column` on a read
-  error -- the same shape `flint.project/resolve-wave` answers as `{:error
-  ..}`, thrown here because `flint.project/fn-resolver`'s contract is that a
+  error -- the same shape `flint.compiler.resolve/resolve-wave` answers as `{:error
+  ..}`, thrown here because `flint.compiler.resolve/fn-resolver`'s contract is that a
   failed read throws."
   [path text dialect tags]
   (ensure-classes!)

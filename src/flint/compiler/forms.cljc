@@ -1,5 +1,5 @@
-(ns flint.forms
-  "A compact encoding for READ FORMS -- what `flint.reader/read-deferred`
+(ns flint.compiler.forms
+  "A compact encoding for READ FORMS -- what `flint.compiler.reader/read-deferred`
   answers -- so a file can travel already read (`DECISIONS.md#stdlib-preread`).
 
   Not the wire codec, and deliberately not a mode of it. The wire codec
@@ -27,7 +27,7 @@
   by the native CLI's images being byte-identical to a text read. Anything the
   compact meta form cannot say exactly -- keys in another order, another file
   -- falls back to writing the map as a value."
-  (:require [flint.reader :as reader]
+  (:require [flint.compiler.reader :as reader]
             [flint.rt]))
 
 ;; ------------------------------------------------------------------ format
@@ -91,7 +91,7 @@
 
 (defn- pos-map
   "The reader's position metadata, BUILT the way the decoder builds it: by
-  `flint.reader/position-meta`, the reader's own construction, then any
+  `flint.compiler.reader/position-meta`, the reader's own construction, then any
   author's keys. ONE CONSTRUCTION for the decoder and for the encoder's check,
   because what a map's keys come back in is the host's business -- insertion
   order on one, hash order on another -- and the only portable test of \"this
@@ -165,7 +165,7 @@
                             (= v ##-Inf) "##-Inf"
                             :else (flint.rt/num->str v))]
                     (when-not (or (= "##NaN" s) (= v (number-of s)))
-                      (throw (ex-info (str "flint.forms cannot write the number " s " exactly")
+                      (throw (ex-info (str "flint.compiler.forms cannot write the number " s " exactly")
                                       {:value v})))
                     (flint.rt/b-conj! t T-NUM)
                     (put-varint! t (intern! (:strs st) s)))
@@ -184,7 +184,7 @@
       (flint.rt/tagged-literal? v) (do (flint.rt/b-conj! t T-TAGGED)
                                        (put-value! st (:tag v))
                                        (put-value! st (:form v)))
-      :else (throw (ex-info (str "flint.forms cannot write a " (pr-str (type v))) {:value v})))))
+      :else (throw (ex-info (str "flint.compiler.forms cannot write a " (pr-str (type v))) {:value v})))))
 
 (defn- own-pos
   "A child's own `[line col]`, when its metadata has one."
@@ -332,7 +332,7 @@
     (= tag T-SET) (set (take-n! st b at (take-varint! b at)))
     (= tag T-TAGGED) (let [tg (take-value! st b at)]
                        (flint.rt/tagged-literal tg (take-value! st b at)))
-    :else (throw (ex-info (str "flint.forms: unknown tag " tag) {:tag tag}))))
+    :else (throw (ex-info (str "flint.compiler.forms: unknown tag " tag) {:tag tag}))))
 
 (defn- take-line!
   "A position's line: a delta from the last one taken."
@@ -396,7 +396,7 @@
   [b]
   (when-not (and (>= (flint.rt/b-count b) 4)
                  (= MAGIC (mapv (fn [i] (flint.rt/b-at b i)) [0 1 2 3])))
-    (throw (ex-info "flint.forms: not an encoding of read forms" {})))
+    (throw (ex-info "flint.compiler.forms: not an encoding of read forms" {})))
   (let [at (volatile! 4)
         nstr (take-varint! b at)
         strs (loop [i 0 acc []]

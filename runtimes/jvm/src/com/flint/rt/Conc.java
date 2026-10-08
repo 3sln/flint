@@ -1602,7 +1602,7 @@ public final class Conc {
     // it.
 
     /// Does this image have a call loop at all? `serve == NO_SERVE` means an
-    /// image built before `flint.callentry` existed -- which has nothing
+    /// image built before `flint.compiler.callentry` existed -- which has nothing
     /// `:bind` could ever start, so a hand-built image with a system port
     /// and no call loop must still be able to SETTLE once its program ends,
     /// rather than read forever as "the control plane is still waiting".
@@ -1612,7 +1612,7 @@ public final class Conc {
 
     /// Start the CALL LOOP on bound port `p`
     /// (`DECISIONS.md#the-control-plane-is-the-runtimes`): the image's
-    /// `serve` function -- emitted by the compiler from `flint.callentry`,
+    /// `serve` function -- emitted by the compiler from `flint.compiler.callentry`,
     /// named by INDEX and by nothing else -- closed over `p` as its one
     /// upvalue, and spawned. False when the image has no call loop, which an
     /// image built before there was one does not.

@@ -1,4 +1,4 @@
-(ns flint.wasm
+(ns flint.compiler.wasm
   "A minimal wasm binary reader/writer: enough to inspect a linked module and to
   splice in the pieces `flint` decides at link time.
 
@@ -12,10 +12,10 @@
   do not touch -- which is what keeps this small and robust against new wasm
   features appearing in the linker's output."
   (:require [clojure.string :as str]
-            ;; `flint.modmeta` because THE EMITTER DESCRIBES: what is true of the
+            ;; `flint.compiler.modmeta` because THE EMITTER DESCRIBES: what is true of the
             ;; TARGET belongs in the file that emits the target, not restated in
             ;; each caller (`DECISIONS.md#four-operations`).
-            [flint.modmeta :as modmeta]
+            [flint.compiler.modmeta :as modmeta]
             [flint.rt]))
 
 ;; ------------------------------------------------------------------- bytes
@@ -110,7 +110,7 @@
   ;; NOTHING -- and a `defn` whose body vanishes is still a `defn`, so what you
   ;; get is `(defn utf8-bytes [s])`, returning nil, with no diagnostic
   ;; anywhere. It has been unreachable rather than harmless: the self-hosted
-  ;; compiler does not link, so `flint.wasm` never shipped. It will the moment
+  ;; compiler does not link, so `flint.compiler.wasm` never shipped. It will the moment
   ;; the CLI links for itself. `test/reader_test.clj` now asserts the shape.
   ;; No longer a conditional at all: `flint.rt/str->b` is implemented on both
   ;; sides now, which is the point of `no-runtime-linking`'s byte strings. The `:flint`
@@ -467,7 +467,7 @@
 ;; ----------------------------------------------------------------- metadata
 ;;
 ;; THE EMITTER DESCRIBES, and this had two callers doing it instead:
-;; `flint.link/link` and `flint.bundle`. They restated `:memory :unshared` -- an
+;; `flint.compiler.link/link` and `flint.compiler.bundle`. They restated `:memory :unshared` -- an
 ;; input to the COMPATIBILITY KEY -- the identical `:imports` derivation, and the
 ;; five feature probes, and they had already DIVERGED on one of the probe names.
 ;;
@@ -502,8 +502,8 @@
   :image    the program image format
 
   HERE, BESIDE `describe`, BECAUSE THREE NAMESPACES NEED IT AND ONE OF THEM IS
-  HOST-ONLY. It was `flint.link/current-abi`, and `flint.link` requires
-  `clojure.java.io` to shell out to a linker -- so `flint.bundle`, which is
+  HOST-ONLY. It was `flint.compiler.link/current-abi`, and `flint.compiler.link` requires
+  `clojure.java.io` to shell out to a linker -- so `flint.compiler.bundle`, which is
   compiled into the compiler, could not read it and carried its own copy of the
   literal instead. Two copies plus a fallback made four, forty lines and one file
   apart from the definition (AGENTS.md sec. 1). `describe` is what consumes it,

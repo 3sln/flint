@@ -8,10 +8,10 @@
 # it can run `wasm-ld`.
 #
 # So this needs a JDK and the compiler does not. That is the whole point of the
-# split: `src/flint/jvm.cljc` appends zip entries and emits one branch-free class,
+# split: `src/flint/compiler/jvm.cljc` appends zip entries and emits one branch-free class,
 # both of which run wherever flint runs.
 #
-# STORED, NOT DEFLATED (`jar -0`). `flint.jar/append` copies the base jar's local
+# STORED, NOT DEFLATED (`jar -0`). `flint.compiler.jar/append` copies the base jar's local
 # records verbatim and never inflates anything, so compression here would work
 # either way -- but an uncompressed base makes the appended artifact's size
 # readable as "the runtime plus the program" rather than as two compression

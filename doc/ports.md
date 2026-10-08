@@ -44,7 +44,7 @@ for compiled arities, and `Img.load` already read an image from bytes. Verified:
 
 A loader per artifact is what makes the second row true. `Class.forName` is kept
 for a consumer who put the class on a classpath, and the emitter's class name is a
-parameter now (`flint.jvm/artifact-class-name`), defaulting to `flint/Artifact` so
+parameter now (`flint.compiler.jvm/artifact-class-name`), defaulting to `flint/Artifact` so
 existing output is byte-identical.
 
 **`:out` TAKES A FILE ON BOTH DOORS as of 2026-09-26.** `:out Prog.class` emits a
@@ -170,7 +170,7 @@ what the wasm compiler emits**, which is the assertion
 `runtimes/jvm/test/RtSelfHost.java` makes and where this was promoted from.
 
 Four things a second implementation gets wrong now live in one place, each learnt
-the hard way by that harness: `flint.selfhost/main` is a VAR found through the
+the hard way by that harness: `flint.compiler.selfhost/main` is a VAR found through the
 image's var table and not `img.entry`; the initialisers must run first or it is
 unbound; everything is rooted across allocations because the nursery copies; and
 the spec goes in a LIST, because `main` takes an argv and dispatches on its first
@@ -256,7 +256,7 @@ every value was already a host object, and the ported runtime uses NaN-boxed
 longs in a flat heap.
 
 That reasoning was about the wrong artifact. The thing to port was never
-`Aot.java`; it is `runtime/src/aot.rs` and `src/flint/aot.cljc`, which run over
+`Aot.java`; it is `runtime/src/aot.rs` and `src/flint/compiler/aot.cljc`, which run over
 the SAME value model the ported runtime already mirrors -- and they port the way
 everything else here did.
 

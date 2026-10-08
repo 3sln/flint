@@ -336,7 +336,7 @@ public final class Rt {
     /// The CALL LOOP's fn index, or `Img.NO_SERVE`
     /// (`DECISIONS.md#the-control-plane-is-the-runtimes`): what the runtime
     /// closes over a bound port and spawns. By index because it has no var
-    /// and no name -- the compiler emits it from `flint.callentry`.
+    /// and no name -- the compiler emits it from `flint.compiler.callentry`.
     public long serve = Img.NO_SERVE;
 
     /// Whether this image's initialisers have run.
@@ -1612,7 +1612,7 @@ public final class Rt {
         return dflt;   // `get` on a non-collection is nil, as Clojure's is
     }
 
-    /// `flint.types/code`'s canonical table, GENERATED from `kin/typep.kin`
+    /// `flint.compiler.types/code`'s canonical table, GENERATED from `kin/typep.kin`
     /// so that the three runtimes cannot drift from each other -- which the
     /// comments this replaced record happening twice.
     public boolean typeP(int code, long v) {

@@ -20,7 +20,7 @@ public static class Builtins {
     }
 
     /// The annotation names, indexed by the code `check-tag` is handed. The
-    /// codes are `flint.types/code` and `test/types.clj` asserts the tables
+    /// codes are `flint.compiler.types/code` and `test/types.clj` asserts the tables
     /// agree; they are integers rather than keywords because this is on the
     /// write path of every annotated binding.
     static readonly string[] TagNames = {

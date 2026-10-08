@@ -42,7 +42,7 @@ export const slotsAot = () =>
 /// flint's own `clojure.core` and everything it requires. Every program needs
 /// them and a user should not have to carry them.
 /// The kin reader, alone (`units-src/flint-reader`): this host reads project
-/// source itself and hands the compiler `flint.forms` bytes.
+/// source itself and hands the compiler `flint.compiler.forms` bytes.
 export const readerWasm = () => once('reader', () => read('flint-reader.wasm'));
 
 /// The standard library, READ, in its two layers (`bin/build-stdlib-forms`):

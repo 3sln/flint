@@ -32,7 +32,7 @@ import com.flint.rt.Val;
 /// Promoted from `runtimes/jvm/test/RtSelfHost.java`, which learnt each of them
 /// the hard way and wrote them down:
 ///
-///   * `flint.selfhost/main` is a VAR, found through the image's var table.
+///   * `flint.compiler.selfhost/main` is a VAR, found through the image's var table.
 ///     `img.entry` is a different function, and calling it hands the compiler
 ///     something that is not the spec -- the reader then fails at column 2 of
 ///     whatever it got, which reads exactly like a bug in the reader.
@@ -70,12 +70,12 @@ public final class Compiler {
         for (int fn : img.init) rt.call(rt.makeClosure(fn, new long[0]), new long[0]);
         int slot = -1;
         for (int i = 0; i < img.varNames.length; i++) {
-            if ("flint.selfhost/main".equals(Str.text(rt, rt.consts[img.varNames[i]]))) slot = i;
+            if ("flint.compiler.selfhost/main".equals(Str.text(rt, rt.consts[img.varNames[i]]))) slot = i;
         }
-        if (slot < 0) throw new IllegalStateException("flint.selfhost/main is not in the var table");
+        if (slot < 0) throw new IllegalStateException("flint.compiler.selfhost/main is not in the var table");
         long compiler = rt.roots.shared.globals[slot];
         if (Val.isNil(compiler)) {
-            throw new IllegalStateException("flint.selfhost/main is unbound after the initialisers");
+            throw new IllegalStateException("flint.compiler.selfhost/main is unbound after the initialisers");
         }
         int base = rt.mark();
         int ci = rt.push(compiler);

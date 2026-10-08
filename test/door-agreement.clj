@@ -12,12 +12,12 @@
 ;; for the same bytes, and neither would have failed a smaller version of this
 ;; file:
 ;;
-;;   * `flint.project/topo-order` seeded its worklist from a hash map's keys, so
+;;   * `flint.compiler.resolve/topo-order` seeded its worklist from a hash map's keys, so
 ;;     namespaces ready in the same wave came out in the HOST's hash order.
 ;;     Whether two doors agreed depended on the namespace NAME -- `t`, `abc` and
 ;;     `abcde` diverged, `ab`, `abcd`, `prog` and `progx` agreed -- which is why
 ;;     the names already in the suite never caught it.
-;;   * `flint.selfhost` never wrote the image's `FLAG-PERF`, so every `:to :clr`
+;;   * `flint.compiler.selfhost` never wrote the image's `FLAG-PERF`, so every `:to :clr`
 ;;     and `:to :jvm` artifact the native and npm doors emitted under
 ;;     `:optimize [perf]` asked its port to compile nothing: 1987 arities through
 ;;     `bin/flint`, 0 through the native CLI. The PLAIN arms alone could not see
@@ -85,7 +85,7 @@
     ;;
     ;; `a.b.dll` is the case three separately written sanitisers part ways on:
     ;; strip one extension and the assembly is `a_b`, strip greedily and it is
-    ;; `a`. `flint.clr/assembly-name` is the only copy of that rule now.
+    ;; `a`. `flint.compiler.clr/assembly-name` is the only copy of that rule now.
     (doseq [base ["app.dll" "a.b.dll" "9odd-name.v2.dll"]]
       (check-that (str "`:to :clr :out " base "`: all four doors agree byte for byte")
                   (let [a (emit "bb" base [":to" ":clr"])
@@ -181,9 +181,9 @@
     (let [src-root (str root "/src")
           bb-out (str work "/bb/Compiler.dll")
           nat-out (str work "/nat/Compiler.dll")]
-      (sh (str root "/bin/flint") ":src" src-root ":fn" "flint.selfhost/main"
+      (sh (str root "/bin/flint") ":src" src-root ":fn" "flint.compiler.selfhost/main"
           ":to" ":clr" ":out" bb-out)
-      (sh cli "compile" ":path" src-root ":fn" "flint.selfhost/main"
+      (sh cli "compile" ":path" src-root ":fn" "flint.compiler.selfhost/main"
           ":to" ":clr" ":out" nat-out)
       (check-that "the WHOLE COMPILER: bin/flint and the native CLI agree byte for byte"
                   (same? bb-out nat-out)))))

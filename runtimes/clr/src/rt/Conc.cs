@@ -1529,7 +1529,7 @@ public static class Conc {
     // system port, and no var's value is trusted with it.
 
     /// Does this image have a call loop to serve a bound port with? False for
-    /// an image built before `flint.callentry` existed -- `rt.serve` stays
+    /// an image built before `flint.compiler.callentry` existed -- `rt.serve` stays
     /// `Img.NoServe` -- which is what lets `Control.ControlWaiting` answer
     /// "settled" for a hand-built image that has a system port but nothing a
     /// `:bind` could ever start, rather than reporting "the host is needed"
@@ -1540,7 +1540,7 @@ public static class Conc {
 
     /// Start the CALL LOOP on bound port `p` (`DECISIONS.md#the-control-plane-is-the-runtimes`):
     /// the image's `serve` function -- emitted by the compiler from
-    /// `flint.callentry`, named by INDEX and by nothing else -- closed over
+    /// `flint.compiler.callentry`, named by INDEX and by nothing else -- closed over
     /// `p` as its one upvalue, and spawned. False when the image has no call
     /// loop, which an image built before there was one does not.
     ///

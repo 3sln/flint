@@ -15,7 +15,7 @@ gen1   flint compiled the compiler     88 089 image bytes   -- IDENTICAL
 gen2   reproduces itself byte for byte
 ```
 
-**`defmacro` works by running the macro body through `flint.eval`**, an
+**`defmacro` works by running the macro body through `flint.compiler.eval`**, an
 interpreter for the compiler's own AST. Handing the form to the host's `eval`
 would have been less code and would have made the compiler behave differently on
 babashka than on flint — exactly the divergence a fixpoint test exists to catch.

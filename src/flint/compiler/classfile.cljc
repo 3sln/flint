@@ -1,4 +1,4 @@
-(ns flint.classfile
+(ns flint.compiler.classfile
   "A JVM class-file writer in flint, for the `:to :jvm` target's entry class.
 
   ## What it does and where it stops
@@ -32,7 +32,7 @@
   entries -- index 0 is not an entry and means \"absent\". Long and Double take two
   slots, which is the other trap; nothing here emits either."
   (:require [flint.rt]
-            [flint.jar :as jar]))
+            [flint.compiler.jar :as jar]))
 
 ;; Class-file version 52 is Java 8. Chosen as the FLOOR, not to match anything:
 ;; the interpreter classes beside this one need 24 for `java.lang.classfile`, so
@@ -42,7 +42,7 @@
 (def MINOR 0)
 
 ;; BIG-ENDIAN, and this is the one thing to get wrong: a ZIP is little-endian and
-;; a class file is big-endian, so reusing `flint.jar/u16` here writes
+;; a class file is big-endian, so reusing `flint.compiler.jar/u16` here writes
 ;; `0xBEBAFECA` and `javap` says "Bad magic number" -- which is a true report of
 ;; a file whose every other field is also byte-swapped. They are separate
 ;; functions for that reason and not because two formats wanted two spellings.
@@ -251,7 +251,7 @@
   (`DECISIONS.md#four-operations`). JVMS 4.7 REQUIRES a reader to silently ignore
   an attribute whose name it does not recognise, which is what makes a custom one
   legal and inert -- and also what makes the NAME have to be namespaced, because a
-  collision there is quiet rather than loud. The name is `flint.modmeta/section-name`,
+  collision there is quiet rather than loud. The name is `flint.compiler.modmeta/section-name`,
   the same string the wasm custom section uses; the whole point is one name, not
   one per target.
 

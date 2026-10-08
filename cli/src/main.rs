@@ -152,7 +152,7 @@ fn read_sources(dir: &Path, prefix: &str, out: &mut BTreeMap<String, String>) ->
         let rel = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
         if p.is_dir() {
             read_sources(&p, &rel, out)?;
-        // `flint.project/source-extensions` is the same list, and the one that
+        // `flint.compiler.resolve/source-extensions` is the same list, and the one that
         // decides which file WINS for a namespace. This side only decides what
         // is worth reading off the disk, so order does not matter here and a
         // superset would merely cost a read.
@@ -172,7 +172,7 @@ fn read_sources(dir: &Path, prefix: &str, out: &mut BTreeMap<String, String>) ->
 fn source_ext(name: &str) -> &'static str {
     for e in [".fln", ".cljc", ".clj"] {
         if name.ends_with(e) {
-            // The list is `flint.project/source-extensions`; this returns a
+            // The list is `flint.compiler.resolve/source-extensions`; this returns a
             // `'static` copy of the match so the key can outlive the name.
             return match e {
                 ".cljc" => ".cljc",
@@ -492,7 +492,7 @@ pub(crate) fn spec_inputs(srcs: &[PathBuf], pods: &[(String, Vec<String>)], nest
     // THE HOST READS THE PROJECT (`DECISIONS.md#namespaces-over-the-system-port`,
     // step 2): each project file read here by the kin reader, under the
     // compile's features and its own workspace's tags, and handed over as
-    // `flint.forms` bytes with its dialect beside them. A file this cannot read
+    // `flint.compiler.forms` bytes with its dialect beside them. A file this cannot read
     // -- or whose tag map is not plain symbol pairs -- goes over as TEXT, so the
     // compiler reads it and reports exactly what it always reported; and only a
     // file the compile reaches is ever read there. `FLINT_HOST_READ=0` sends
@@ -533,7 +533,7 @@ pub(crate) fn spec_inputs(srcs: &[PathBuf], pods: &[(String, Vec<String>)], nest
 }
 
 /// The features a compile READS under: what it was given, `[perf]`'s set when
-/// checks are stripped, and otherwise `flint.reader/default-features` -- the
+/// checks are stripped, and otherwise `flint.compiler.reader/default-features` -- the
 /// same three cases `build_spec_impl` renders into the spec.
 pub(crate) fn read_features(features: Option<&[String]>, strip_checks: bool) -> Vec<String> {
     match features {
@@ -557,13 +557,13 @@ fn compile_split(c: &mut Program, args: &[&str], files: &SplitFiles)
     // over as the bytes `build.rs` embedded, borrowed, and the guest decodes
     // them only if the compile reaches that namespace.
     let mut w = Wire::new();
-    w.vector(2).string("flint.selfhost/main").vector(2 + args.len() as u32).string("split");
+    w.vector(2).string("flint.compiler.selfhost/main").vector(2 + args.len() as u32).string("split");
     w.map(files.bodies.len() as u32);
     for (k, v) in &files.bodies {
         w.string(k);
         match v {
             Body::Text(t) => { w.string(t); }
-            // `{:preread bytes}`, which `flint.project/file-answer` takes apart
+            // `{:preread bytes}`, which `flint.compiler.resolve/file-answer` takes apart
             // (`DECISIONS.md#stdlib-preread`).
             Body::Forms(b) => { w.map(1).keyword(None, "preread").bytes(b); }
             // Read by the HOST, with the dialect it was read under: the
@@ -600,7 +600,7 @@ pub(crate) struct SplitFiles {
 }
 
 /// One file as the compile receives it: a project's TEXT, or a standard
-/// library file already READ -- its `flint.forms` bytes, borrowed from the
+/// library file already READ -- its `flint.compiler.forms` bytes, borrowed from the
 /// binary. Which one a path holds is decided where the map is built, so a
 /// project file at a stdlib path replaces the forms rather than being paired
 /// with them.
@@ -953,7 +953,7 @@ fn missing_message(missing: &str, features: Option<&[String]>) -> String {
 /// The extension a DIALECT is written in -- `.fln` for flint's own, `.cljc` for
 /// portable -- for naming a file that has no name of its own.
 ///
-/// The other direction of `flint.project/dialect-of`, and only for text whose
+/// The other direction of `flint.compiler.resolve/dialect-of`, and only for text whose
 /// dialect is already known: `flint.ception`'s `:sources` are portable source
 /// by that surface's contract, so the file they are spilled to is spelled that
 /// way. It used to be `ns_to_path`, which appended `.cljc` to every namespace it
@@ -1022,7 +1022,7 @@ fn compile_clr(srcs: &[PathBuf], entry: &str, out_path: &Path,
     // agreement between the doors is the standard `sdks/cli/selftest.mjs` already
     // holds `:to :wasm` to.
     //
-    // THE RAW BASENAME, not a name this door derives. `flint.clr/assembly-name`
+    // THE RAW BASENAME, not a name this door derives. `flint.compiler.clr/assembly-name`
     // interprets it, and it is the only copy of that rule -- three doors
     // sanitising separately agree on `app.dll` and part ways on `a.b.dll`.
     //
@@ -2008,7 +2008,7 @@ struct Args {
     // implies"; `Some(false)` means off whatever it implies.
     checks: Option<bool>,
     // `:features [flint flint/check]` -- the reader's feature set, said rather
-    // than defaulted. `None` means `flint.reader/default-features`.
+    // than defaulted. `None` means `flint.compiler.reader/default-features`.
     //
     // It also decides whether `flint.ception` is NAMEABLE: `:flint/nested` is in
     // the default set, and a build compiled without it cannot `:require` the

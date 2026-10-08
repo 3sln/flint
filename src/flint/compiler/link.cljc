@@ -1,4 +1,4 @@
-(ns flint.link
+(ns flint.compiler.link
   "Composes a module from units.
 
   Reachability decides what is linked (`DECISIONS.md#namespace-units`):
@@ -9,14 +9,14 @@
   segment -- which is why nothing in the runtime holds a table of builtins."
   (:require [clojure.string :as str]
             [clojure.java.io :as io]
-            [flint.wasm :as w]
-            ;; Required rather than assumed: `flint.image/u32` is used below and
+            [flint.compiler.wasm :as w]
+            ;; Required rather than assumed: `flint.compiler.image/u32` is used below and
             ;; this namespace only ever loaded because `bin/flint` happened to
             ;; require it first. Anything else that reaches for the linker got a
             ;; resolution error from a file it did not touch.
-            [flint.image]
-            [flint.modmeta :as modmeta]
-            [flint.aot :as aot]))
+            [flint.compiler.image]
+            [flint.compiler.modmeta :as modmeta]
+            [flint.compiler.aot :as aot]))
 
 (defn- run-out
   "Run a command and return its trimmed stdout. Throws with stderr attached on
@@ -57,7 +57,7 @@
   parents with `getAbsoluteFile`, which is true of babashka's classpath (an
   ABSOLUTE `root/src:root/lib`) and false of the JVM driver's (`deps.edn`'s
   `:paths [\"src\" ...]`, relative): there `*file*` is the RESOURCE path
-  (`flint/link.cljc`, classpath-relative, two segments) rather than a
+  (`flint/compiler/link.cljc`, classpath-relative, two segments) rather than a
   filesystem path, and `.getAbsoluteFile` silently resolved it against the
   working directory anyway -- one `getParentFile` short, landing in the
   WORKTREE'S PARENT rather than its root. `FileNotFoundException:
@@ -67,8 +67,8 @@
   file, which is a real filesystem URL on every loader -- babashka's or the
   JVM driver's -- so the walk up three parents lands on the repo root either
   way."
-  (str (io/file (.. (io/as-file (io/resource "flint/link.cljc"))
-                    getAbsoluteFile getParentFile getParentFile getParentFile)
+  (str (io/file (.. (io/as-file (io/resource "flint/compiler/link.cljc"))
+                    getAbsoluteFile getParentFile getParentFile getParentFile getParentFile)
                 "bin" "nightly-toolchain")))
 
 (defn- toolchain-root []
@@ -123,10 +123,10 @@
                        {:code code :err err :out out})))
      {:out out :err err})))
 
-;; `current-abi` MOVED TO `flint.wasm`, which owns `describe` -- the function that
+;; `current-abi` MOVED TO `flint.compiler.wasm`, which owns `describe` -- the function that
 ;; consumes it -- and which every caller already requires. It was defined here and
-;; `flint.bundle` could not read it: this namespace requires `clojure.java.io` to
-;; shell out to a linker, so it is host-only, and `flint.bundle` is compiled into
+;; `flint.compiler.bundle` could not read it: this namespace requires `clojure.java.io` to
+;; shell out to a linker, so it is host-only, and `flint.compiler.bundle` is compiled into
 ;; the compiler. That is how the same three-key map came to be written out four
 ;; times (AGENTS.md sec. 1).
 
@@ -552,15 +552,15 @@
                   blob (w/->bytes
                         (for [[nm slot] (sort-by key slots)]
                           (let [b (w/utf8-bytes nm)]
-                            [(flint.image/u32 slot) (flint.image/u32 (alength b)) b])))
+                            [(flint.compiler.image/u32 slot) (flint.compiler.image/u32 (alength b)) b])))
                   at (bit-and (+ img-addr (count image) 15) (bit-not 15))]
               (-> m
                   (w/append-data at blob)
-                  (w/append-data addr (w/->bytes [(flint.image/u32 at)
-                                                  (flint.image/u32 (alength blob))])))))
+                  (w/append-data addr (w/->bytes [(flint.compiler.image/u32 at)
+                                                  (flint.compiler.image/u32 (alength blob))])))))
         m (w/append-data m desc-addr
-                         (w/->bytes [(flint.image/u32 img-addr)
-                                     (flint.image/u32 (count image))]))
+                         (w/->bytes [(flint.compiler.image/u32 img-addr)
+                                     (flint.compiler.image/u32 (count image))]))
         m (w/strip-custom m (if keep-names #{"producers" "target_features"}
                                 #{"producers" "target_features" "name"}))
         ;; What the module says about itself (`DECISIONS.md#module-metadata-and-shards`). Written

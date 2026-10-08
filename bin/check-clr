@@ -133,7 +133,7 @@ if [ -x target/release/flint ]; then
 
   # AND ITS `:optimize [perf]` ARTIFACT ACTUALLY ASKS FOR ARITIES. The perf arm
   # below builds with `bin/flint` and asserts the entry count, which is the right
-  # assertion on the wrong door: `flint.selfhost` never wrote `FLAG-PERF` into the
+  # assertion on the wrong door: `flint.compiler.selfhost` never wrote `FLAG-PERF` into the
   # image at all, so every artifact the NATIVE and npm doors emitted under
   # `:optimize [perf]` asked its port to compile nothing.
   #

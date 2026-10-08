@@ -1,6 +1,6 @@
 #!/usr/bin/env flint
 ;; Reader fixtures for the kin reader's conformity guard
-;; (`cli/src/kin_reader_test.rs`). Every construct `flint.reader` has a rule
+;; (`cli/src/kin_reader_test.rs`). Every construct `flint.compiler.reader` has a rule
 ;; for, read by the guest and by the kin reader and compared byte for byte.
 (ns test.reader.tricky
   (:require [clojure.string :as str :refer [join]]
