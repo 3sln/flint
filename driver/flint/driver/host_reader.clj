@@ -25,12 +25,17 @@
             [clojure.string :as str]
             [flint.forms :as forms]))
 
-;; THE REPO ROOT, from the CURRENT DIRECTORY rather than `*file*`: this
-;; namespace loads off a classpath entry (`driver/`), so `*file*` is relative
-;; to THAT root and not this repo's, and counting path segments back up is
-;; exactly the kind of thing that silently breaks when a file moves. `bin/flint`
-;; always `cd`s to the repo root before starting the JVM.
-(def root (.getCanonicalPath (io/file ".")))
+;; THE REPO ROOT, from `FLINT_ROOT` -- NOT the current directory, and NOT
+;; `*file*` either. `*file*` is relative to whichever classpath entry this
+;; namespace loaded from (`driver/`), not to the repo, so counting path
+;; segments back up from it is exactly the kind of thing that silently
+;; breaks when a file moves. The current directory is worse: `bin/flint`
+;; deliberately does NOT `cd` to the repo root any more (`flint.driver.main`'s
+;; own `root` says why -- `flint task`/`flint build` need the CALLER's
+;; working directory left alone), so this process's cwd is the caller's
+;; project, not this repo. `bin/flint` sets `FLINT_ROOT` from a subshell that
+;; never touches its own cwd to get it.
+(def root (or (System/getenv "FLINT_ROOT") (.getCanonicalPath (io/file "."))))
 
 (def classes-dir (io/file root "target" "kin-reader-classes"))
 

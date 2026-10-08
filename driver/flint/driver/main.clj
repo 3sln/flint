@@ -37,11 +37,18 @@
             ;; The JVM writer, for `:to :jvm`, and portable cljc for the same reason.
             [flint.jvm :as jvm] [flint.rt]))
 
-;; THE REPO ROOT, from the CURRENT DIRECTORY: `bin/flint` always `cd`s there
-;; before starting the JVM, so this does not need to find itself on a
-;; classpath the way `(fs/real-path *file*)` used to (`*file*` is relative to
-;; the classpath entry this namespace loaded from, not to the repo).
-(def root (.getCanonicalPath (io/file ".")))
+;; THE REPO ROOT, from `FLINT_ROOT` -- NOT the current directory. `bin/flint`
+;; sets it (computed in a subshell, never `cd`ing the process itself) because
+;; `flint task`/`flint build` read a "deps.edn" in the CALLER's own working
+;; directory as that caller's project (`test/cli.clj` runs this with its cwd
+;; set to a temp project precisely so that lookup finds it); a `cd` to the
+;; repo root here would have this door running every task against ITS OWN
+;; deps.edn instead, which is what "no such task: greet" turned out to mean.
+;; Falls back to the current directory when run directly (`FLINT_ROOT` unset)
+;; so a `clojure -M -m flint.driver.main` invocation from the repo root --
+;; what the earlier `(fs/real-path *file*)` approach this replaced also could
+;; not do -- still works for exploration.
+(def root (or (System/getenv "FLINT_ROOT") (.getCanonicalPath (io/file "."))))
 
 (defn clr-name
   "An assembly name from the output path -- READ from `flint.clr/assembly-name`

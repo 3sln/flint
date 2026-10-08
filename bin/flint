@@ -109,15 +109,28 @@ CP=$(tail -1 "$CPFILE")
 # to check a task's own output is clean) saw fifteen `WARNING:` lines ahead of
 # its answer and failed on that noise, not on anything the task did.
 #
+# `DEPRECATED: Libs must be qualified, change x => x/x (<deps.edn path>)` is
+# a SECOND, unrelated noise source on the same stream, from `clojure` itself
+# -- a courtesy lint over whatever "deps.edn" sits in the CALLER's working
+# directory (`ROOT`'s note says why that is not this repo's), unconditional
+# and NOT silenced by `-Scp`: measured directly, invoking `clojure -Scp
+# ... -M -e '(println :ok)'` from a directory whose deps.edn declares an
+# unqualified npm-fetched lib (`flint task`/`flint build`'s own `:deps
+# {portable-cljc {:npm/version ..}}`, a SHAPE `-Scp` otherwise has nothing to
+# do with) still printed it. `flint deps`'s own coordinate vocabulary
+# (`:npm/version`, `:git/sha`, ...) is not Clojure's, so this fires on
+# ordinary flint projects, not on a malformed one.
+#
 # Buffered rather than streamed: `grep` has to see the whole thing to tell a
-# `WARNING:` line from a wrapped stack trace line that happens to start the
-# same way, and a filter that could emit a real error out of order is worse
-# than one that is merely synchronous. `$?` is the DRIVER's exit code, not
-# `grep`'s -- captured before the filter runs, and returned after it.
+# `WARNING:`/`DEPRECATED:` line from a wrapped stack trace line that happens
+# to start the same way, and a filter that could emit a real error out of
+# order is worse than one that is merely synchronous. `$?` is the DRIVER's
+# exit code, not `grep`'s -- captured before the filter runs, and returned
+# after it.
 set +e
 tmperr=$(mktemp "${TMPDIR:-/tmp}/flint-stderr.XXXXXX")
 clojure -Scp "$CP" -M -m flint.driver.main "$@" 2>"$tmperr"
 status=$?
-grep -v '^WARNING: ' "$tmperr" >&2
+grep -vE '^(WARNING|DEPRECATED): ' "$tmperr" >&2
 rm -f "$tmperr"
 exit $status
