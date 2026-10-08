@@ -43,7 +43,7 @@ import { panicImport } from './guest.js';
 /// preferred over a portable `.cljc` of the same namespace.
 export const SOURCE_EXTENSIONS = ['.fln', '.cljc', '.clj'];
 
-/// `flint.compiler.reader/default-features`, and `[perf]`'s set, which drops checks and
+/// `flint.compiler.forms/default-features`, and `[perf]`'s set, which drops checks and
 /// keeps `:flint/nested` -- the same three cases as the native CLI's
 /// `read_features`. A host READS user text under exactly the set the compile
 /// runs with, and the compiler checks the bytes' options on arrival, so a drift

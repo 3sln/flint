@@ -21,6 +21,12 @@ flint-rt = { path = "../../runtime", features = ["parallel"] }
 # reason.
 flint-conc = { path = "../../units-src/flint-conc" }
 
+[build-dependencies]
+# The runtime AGAIN, for the build script: its kin reader (`flint_rt::hostread`)
+# reads the standard library, so it is embedded already read
+# (`DECISIONS.md#one-reader-and-no-other`).
+flint-rt = { path = "../../runtime" }
+
 [features]
 default = []
 # The C ABI, for the C and C++ SDKs. A separate crate type would build a

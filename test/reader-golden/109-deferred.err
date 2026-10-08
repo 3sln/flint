@@ -1,0 +1,1 @@
+read error: a reader conditional inside syntax quote cannot be read before its features are known (DECISIONS.md#stdlib-preread) (test/reader/err-cond-in-sq.cljc:1:18)

@@ -14,7 +14,7 @@
 //!
 //! let compiler = Compiler::embedded()?;
 //! let image = compiler.compile(flint::Compile {
-//!     resolve: &|ns| std::fs::read_to_string(format!("src/{ns}.cljc")).ok(),
+//!     resolve: &|ns| std::fs::read_to_string(format!("src/{ns}.cljc")).ok().map(flint::Source::portable),
 //!     fn_name: "my.app/handler",
 //!     ..Default::default()
 //! })?;
@@ -86,11 +86,48 @@ static RUNTIME: &[u8] = include_bytes!("../../../dist/flint-runtime.wasm");
 static RUNTIME_AOT: &[u8] = include_bytes!("../../../dist/flint-runtime-aot.wasm");
 static SLOTS: &str = include_str!("../../../dist/slots.json");
 static SLOTS_AOT: &str = include_str!("../../../dist/slots-aot.json");
-static STDLIB: &[(&str, &str)] = &include!(concat!(env!("OUT_DIR"), "/stdlib.rs"));
+/// The standard library and `flint.deps`, READ at build time (`build.rs`):
+/// `(path, start, end, dialect)` into `STDLIB_FORMS`.
+static STDLIB_INDEX: &[(&str, usize, usize, &str)] = &include!(concat!(env!("OUT_DIR"), "/stdlib.rs"));
+static STDLIB_FORMS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/stdlib.forms"));
+
+/// Which dialect a source is written in (`DECISIONS.md#dialects-and-preludes`):
+/// a portable `.cljc`/`.clj`, or a flint-only `.fln`. The dialect decides what
+/// the source may use -- a workspace prelude, a flint-only reader tag,
+/// `defalias` -- and it is the RESOLVER's to say, never the source's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dialect {
+    /// `.cljc` or `.clj`: means the same under Clojure.
+    Portable,
+    /// `.fln`: flint's own dialect.
+    Flint,
+}
+
+/// A namespace's source, as a resolver answers it: the TEXT, and the dialect it
+/// is written in. The SDK reads the text itself, with the kin reader, before
+/// the compiler sees it (`DECISIONS.md#one-reader-and-no-other`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Source {
+    pub text: String,
+    pub dialect: Dialect,
+}
+
+impl Source {
+    /// Portable source, the `.cljc` case.
+    pub fn portable(text: impl Into<String>) -> Source {
+        Source { text: text.into(), dialect: Dialect::Portable }
+    }
+
+    /// flint-only source, the `.fln` case.
+    pub fn flint(text: impl Into<String>) -> Source {
+        Source { text: text.into(), dialect: Dialect::Flint }
+    }
+}
 
 /// Read source from a directory tree, the way the CLI does. One resolver among
-/// several, and the only one that needs a filesystem.
-pub fn dir_resolver(root: impl Into<std::path::PathBuf>) -> impl Fn(&str) -> Option<String> {
+/// several, and the only one that needs a filesystem. The dialect is the
+/// EXTENSION the file was found under.
+pub fn dir_resolver(root: impl Into<std::path::PathBuf>) -> impl Fn(&str) -> Option<Source> {
     let root = root.into();
     move |ns: &str| {
         let path = ns.replace('-', "_").replace('.', "/");
@@ -99,7 +136,7 @@ pub fn dir_resolver(root: impl Into<std::path::PathBuf>) -> impl Fn(&str) -> Opt
         for ext in [".fln", ".cljc", ".clj"] {
             let p = root.join(format!("{path}{ext}"));
             if let Ok(s) = std::fs::read_to_string(&p) {
-                return Some(s);
+                return Some(if ext == ".fln" { Source::flint(s) } else { Source::portable(s) });
             }
         }
         None
@@ -119,8 +156,9 @@ pub enum Optimize {
 
 /// What to compile.
 pub struct Compile<'a> {
-    /// A namespace to its source, or `None` if this resolver does not have it.
-    pub resolve: &'a dyn Fn(&str) -> Option<String>,
+    /// A namespace to its source and dialect, or `None` if this resolver does
+    /// not have it.
+    pub resolve: &'a dyn Fn(&str) -> Option<Source>,
     /// The function a default run would call, as `"my.ns/main"`.
     pub fn_name: &'a str,
     /// Every OTHER function that must stay callable. Only reachable code ships
@@ -178,9 +216,13 @@ impl Compiler {
         let slots = parse_slots(if aot { SLOTS_AOT } else { SLOTS })?;
         let base = if aot { RUNTIME_AOT } else { RUNTIME };
 
-        let mut files: BTreeMap<String, String> = BTreeMap::new();
-        for (p, body) in STDLIB {
-            files.insert((*p).to_string(), (*body).to_string());
+        // EVERY BODY GOES READ (`DECISIONS.md#one-reader-and-no-other`): the
+        // standard library as embedded, and each resolved source read here by
+        // the kin reader, DEFERRED -- the compiler resolves its conditionals
+        // for the compile's features -- with its dialect beside it.
+        let mut files: BTreeMap<String, (Vec<u8>, &'static str)> = BTreeMap::new();
+        for (p, a, b, d) in STDLIB_INDEX {
+            files.insert((*p).to_string(), (STDLIB_FORMS[*a..*b].to_vec(), *d));
         }
         // Follow the requires, so a resolver is asked only for what is reached.
         let mut want: Vec<String> = vec![opts.fn_name.split('/').next().unwrap_or("").to_string()];
@@ -188,12 +230,13 @@ impl Compiler {
             want.push(e.split('/').next().unwrap_or("").to_string());
         }
         let mut seen = std::collections::BTreeSet::new();
+        let mut rt = flint_rt::rt::Rt::new();
         while let Some(ns) = want.pop() {
             if !seen.insert(ns.clone()) {
                 continue;
             }
             if let Some(src) = (opts.resolve)(&ns) {
-                for cap in src.split('[').skip(1) {
+                for cap in src.text.split('[').skip(1) {
                     let name: String = cap
                         .chars()
                         .take_while(|c| c.is_alphanumeric() || "._-".contains(*c))
@@ -202,25 +245,26 @@ impl Compiler {
                         want.push(name);
                     }
                 }
-                // `.cljc` ON PURPOSE, not `.fln`: this is a namespace `STDLIB`
-                // did not already have (an embedder's own program, which the
-                // module doc's example resolves as `src/{ns}.cljc`), and
-                // `resolve`'s `Fn(&str) -> Option<String>` contract -- shared
-                // with the C ABI in `capi.rs`, which only ever hands back a
-                // string -- has no way to say which extension a source came
-                // from. A `.fln` file under a caller's own `resolve` would be
-                // found (the probe above now tries that extension), but
-                // labelled `.cljc` here, which reads it as the `:portable`
-                // dialect rather than `:flint` (`flint.compiler.resolve/dialect-of`).
-                // Not a concern for `STDLIB` itself, which `build.rs` keys by
-                // each file's real extension before this loop ever runs.
-                let path = format!("{}.cljc", ns.replace('-', "_").replace('.', "/"));
-                files.insert(path, src);
+                // THE EXTENSION FOLLOWS THE DIALECT THE RESOLVER SAID, so the
+                // compiler reads the file as what it is. Until 2026-10-08 the
+                // hook returned bare text and every embedder's namespace was
+                // labelled `.cljc` -- portable -- whatever it was.
+                let portable = src.dialect == Dialect::Portable;
+                let path = format!("{}{}", ns.replace('-', "_").replace('.', "/"),
+                                   if portable { ".cljc" } else { ".fln" });
+                let how = flint_rt::hostread::ReadAs { features: None, tags: &[], portable };
+                let bytes = flint_rt::hostread::read_text(&mut rt, &path, &src.text, &how)
+                    .map_err(|e| Error::Compile(e.message))?;
+                files.insert(path, (bytes, if portable { "portable" } else { "flint" }));
             }
         }
 
-        let spec = build_spec(&files, opts.fn_name, opts.exports, &slots, aot, opts.shake,
-                              &opts.meta);
+        let spec = build_spec(opts.fn_name, opts.exports, &slots, aot, opts.shake, &opts.meta);
+        let spec_bytes = {
+            let how = flint_rt::hostread::ReadAs { features: Some(&[]), tags: &[], portable: true };
+            flint_rt::hostread::read_text(&mut rt, "spec.edn", &spec, &how)
+                .map_err(|e| Error::Compile(format!("the spec does not read: {}", e.message)))?
+        };
         // `load_with`, not `load`: see the note on the dependency in Cargo.toml.
         // Plain `load` sees only the runtime's own registry, and every image
         // needs `flint/spawn` from the concurrency unit.
@@ -231,10 +275,28 @@ impl Compiler {
         // three quarters of a megabyte of base64 in an EDN string is three
         // quarters of a megabyte for flint's reader to scan a character at a
         // time -- 198 seconds against 10.
-        let r = p.run(&["wasm", &spec, &base64(base)]);
-        if r.code != 0 {
-            return Err(Error::Compile(r.out.trim().to_string()));
+        // `split`, as the native CLI calls it: the bodies as an ENCODED map
+        // the runtime decodes natively, then the mode, the spec as the
+        // `flint.forms` bytes read above, and the runtime module.
+        use flint_rt::codec::{parse, Val, Wire};
+        let mut w = Wire::new();
+        w.vector(2).string("flint.compiler.selfhost/main").vector(5).string("split");
+        w.map(files.len() as u32);
+        for (k, (b, d)) in &files {
+            w.string(k);
+            w.map(2).keyword(None, "preread").bytes(b).keyword(None, "dialect").keyword(None, d);
         }
+        w.string("wasm").bytes(&spec_bytes).string(&base64(base));
+        let r = match p.call(&w.done()).map_err(Error::Compile).and_then(|b| parse(&b).map_err(Error::Compile))? {
+            Val::Str(s) => s,
+            v => match (v.get("error"), v.get("message").and_then(|m| m.as_str())) {
+                (Some(Val::Keyword(_, k)), Some(m)) | (Some(Val::Symbol(_, k)), Some(m)) => {
+                    return Err(Error::Compile(format!("{k}: {m}")))
+                }
+                _ => return Err(Error::Compile(format!("the compiler answered something that is not a string: {v:?}"))),
+            },
+        };
+        let r = flint_rt::native::Outcome { code: 0, out: r };
         if let Some(rest) = r.out.strip_prefix("!missing") {
             return Err(Error::Compile(format!(
                 "no source for{}; every namespace a program requires has to be resolvable",
@@ -301,17 +363,13 @@ fn edn_string(s: &str) -> String {
     out
 }
 
+/// The spec's ENVELOPE: everything but the file bodies, which go beside it
+/// already read.
 fn build_spec(
-    files: &BTreeMap<String, String>, entry: &str, exports: &[&str],
+    entry: &str, exports: &[&str],
     slots: &BTreeMap<String, u32>, aot: bool, shake: bool, meta: &[(String, Value)],
 ) -> String {
     let mut out = String::from("{:files {");
-    for (k, v) in files {
-        out.push_str(&edn_string(k));
-        out.push(' ');
-        out.push_str(&edn_string(v));
-        out.push(' ');
-    }
     out.push_str("} :entry ");
     out.push_str(entry);
     if !exports.is_empty() {

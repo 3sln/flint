@@ -1,0 +1,1 @@
+read error: map literal needs an even number of forms (test/reader/err-odd-map.cljc:1:10)

@@ -1,6 +1,8 @@
 (ns ^:internal flint.compiler.forms
-  "A compact encoding for READ FORMS -- what `flint.compiler.reader/read-deferred`
-  answers -- so a file can travel already read (`DECISIONS.md#stdlib-preread`).
+  "READ FORMS: what they carry, how a deferred read is resolved, and a compact
+  encoding for them, so a file can travel already read
+  (`DECISIONS.md#stdlib-preread`). Every host reads with the kin reader and
+  ENCODES; the compiler only DECODES (`DECISIONS.md#one-reader-and-no-other`).
 
   Not the wire codec, and deliberately not a mode of it. The wire codec
   (`flint.wire`, `runtime/src/codec.rs`) carries ANY value across a boundary
@@ -17,18 +19,378 @@
     the previous one, the file not at all -- and rebuilt by the decoder;
   * counts and integers are varints.
 
-  The encoder runs where `preread` runs, at the native CLI's build; the
-  decoder runs in every compile that is handed a file this way, and only for
-  the files it reaches. Both are ordinary guest code, so no runtime, port or
-  door has anything new to carry.
+  The ENCODER that runs is the kin one, in every host (`kin/formsenc.kin`,
+  rule for rule this file's `encode`, which stays as its specification and as
+  `test/reader_test.clj`'s check of it); the decoder runs in every compile that
+  is handed a file, and only for the files it reaches.
 
   EXACTNESS IS THE CONTRACT: `decode` of `encode` is the same forms with the
-  same metadata, held by `test/reader_test.clj` over every file in `lib/` and
-  by the native CLI's images being byte-identical to a text read. Anything the
+  same metadata, and `encode` of what the kin reader wrote, decoded, is the
+  kin reader's bytes -- held by `test/reader_test.clj` over every file in
+  `lib/` and `cli/lib/`. Anything the
   compact meta form cannot say exactly -- keys in another order, another file
   -- falls back to writing the map as a value."
-  (:require [flint.compiler.reader :as reader]
-            [flint.rt]))
+  (:require [flint.rt]))
+
+;; ------------------------------------------------------- what a read leaves
+;;
+;; EVERYTHING ABOUT READ FORMS THAT IS NOT READING TEXT, moved here from
+;; `flint.compiler.reader` when that namespace was deleted
+;; (`DECISIONS.md#one-reader-and-no-other`): the compiler READS NOTHING -- every
+;; host reads source with the one kin-generated reader and hands over these
+;; bytes -- but it still has to know what the reader's own metadata is, what a
+;; deferred conditional and a syntax-quoted symbol look like, and how to resolve
+;; a deferred read for a compile's features. Those are facts about the FORMS,
+;; and the decoder that rebuilds them is in this file.
+
+(def bookkeeping-meta
+  "Metadata keys the READER writes, which are not the program's.
+
+  Every meta-able form gets `:line`, `:column` and `:file`; a sequence also gets
+  `:child-pos`; and a reader-tag expansion gets the three `:flint/read-*` keys
+  that say what was written, what it resolved to, and the form it produced.
+
+  PUBLISHED, BECAUSE THE ANALYSER HAS TO SUBTRACT IT. `flint.compiler.analyzer` carries an
+  author's metadata onto a literal, and anything left in this map would ride along
+  -- so the two must agree about what is bookkeeping. They did not: the analyser
+  knew the four position keys and not the three `:flint/read-*` ones, so every
+  reader-tag expansion was wrapped in a `with-meta` whose map held the tag SYMBOL,
+  which then resolved as a var. `#x \"one\"` answered \"unable to resolve symbol:
+  x\", and four suites failed on it -- `test/tags.clj`, `test/sysns.clj`,
+  `test/tables.clj` (`#flint/table` is a reader tag too) and `sdks/esm/build`.
+  One list, read by both (AGENTS.md sec. 1)."
+  #{:line :column :file :child-pos
+    :flint/read-form :flint/read-tag :flint/read-var})
+
+(defn meta-able?
+  "Which values can carry metadata. Numbers, strings and keywords cannot, here
+  or in Clojure."
+  [v]
+  (or (symbol? v) (vector? v) (map? v) (set? v) (seq? v) (list? v)))
+
+;; The end-of-input sentinel must be a value that CANNOT appear in source.
+;; It used to be the keyword `::eof`, which worked until the reader read its own
+;; source -- where `::eof` appears as a literal, and `read-delimited` silently
+;; dropped it as "no form here". The symptom was a mis-shaped `if` a long way
+;; downstream. A fresh volatile has identity nothing can forge, and `identical?`
+;; is the only comparison used against it.
+(def EOF (flint.rt/volatile "flint.compiler.forms/eof"))
+(defn eof? [v] (identical? v EOF))
+
+;; Same reasoning for the "this reader conditional matched nothing" marker.
+(def SPLICE-NONE (flint.rt/volatile "flint.compiler.forms/splice-none"))
+
+;; And the same reasoning again for a MATCHED `#?@`, which has to carry a value
+;; out to the enclosing collection. It was a map, `{::splice v}` -- and this
+;; file contains that map as a literal, so reading flint's own reader spliced
+;; it. A marker that source can spell is a marker source can forge; the tag is
+;; a fresh volatile, and `identical?` is the only comparison made against it.
+(def SPLICE-TAG (flint.rt/volatile "flint.compiler.forms/splice"))
+(defn- splice [v] [SPLICE-TAG v])
+(defn- spliced? [x]
+  (and (vector? x) (= 2 (count x)) (identical? (nth x 0) SPLICE-TAG)))
+
+;; A READER CONDITIONAL KEPT AS DATA, for a read that does not yet know its
+;; features (`read-deferred`, `DECISIONS.md#stdlib-preread`). A tagged literal
+;; whose tag is a symbol NO SOURCE CAN SPELL -- `#` cannot begin a symbol token
+;; -- so, like the two markers above, it is a value only this reader makes; and
+;; unlike them it must survive the host codec, which a volatile cannot.
+;;
+;; Its form is `[kind line col child-pos items]`: `kind` is `:one` (`#?`),
+;; `:splice` (`#?@`), or `:map` / `:set` for a map or set literal that holds a
+;; conditional where resolving it can change the literal's SIZE -- a key, or a
+;; splice -- and so cannot be built until it is resolved. `line`/`col` are
+;; where the `#` (or `{`) was, `child-pos` the clause list's own positions,
+;; and `items` the clauses (or the literal's elements) as read.
+(def conditional-tag (symbol "flint.reader" "#?"))
+(defn conditional?
+  "Is `x` a reader conditional a deferred read left unresolved?"
+  [x]
+  (and (flint.rt/tagged-literal? x) (= conditional-tag (:tag x))))
+
+(defn- choose
+  "The branch of `clauses` that `features` selects: the value, a `splice` of
+  it, or a marker for \"matched nothing\" -- `SPLICE-NONE` for a splice and
+  `EOF` otherwise. ONE RULE for both the reader, which chooses as it reads
+  when it knows the features, and `resolve-conditionals`, which chooses later
+  when it did not."
+  [clauses features splicing?]
+  (loop [[k v & more] clauses]
+    (cond
+      (nil? k) (if splicing? SPLICE-NONE EOF)
+      (or (features k) (= k :default)) (if splicing? (splice v) v)
+      :else (recur more))))
+
+(def syntax-quoted
+  "The head of the form syntax quote leaves where a symbol needs RESOLVING:
+  `` `(f x) `` reads as `(clojure.core/seq (clojure.core/concat
+  (clojure.core/list (flint.reader/syntax-quoted f)) ..))`, and the ANALYZER
+  turns `(flint.reader/syntax-quoted f)` into the quoted symbol `f` names in
+  the namespace being compiled.
+
+  NOT HERE, because what `f` names is compile state -- the namespace's
+  aliases, what `clojure.core` declares -- and a reader that consults it reads
+  the same file differently depending on when it is asked. That is what made
+  every file get read TWICE in a compile: once context-free to find its
+  requires, and again with the compiler's state to hand, which was 3.9 M of a
+  trivial `flint run`'s 8.2 M instructions. The reader is now a function of
+  the text and the file's own `ns` form, so the first read is the only one
+  (`DECISIONS.md#context-free-reader`).
+
+  What does not depend on context is still decided here: a gensym (`x#`, one
+  name per syntax-quote form), a `.method`, and a special form, all of which
+  read as `(quote sym)` exactly as before."
+  'flint.reader/syntax-quoted)
+
+(defn syntax-quoted?
+  "Is `f` a symbol syntax quote left for the analyzer to resolve?"
+  [f]
+  (and (seq? f) (= syntax-quoted (first f))))
+
+(defn position-meta
+  "The metadata `stamp` gives a form at `line`/`col` in `file` with `children`
+  positions, over the `existing` metadata it already had.
+
+  PUBLIC because `flint.compiler.forms` rebuilds read forms' metadata, and has to build
+  it THE SAME WAY: `merge` goes through a transient, so the key order of the
+  answer is the host's -- insertion order on one, hash order on another -- and
+  only the same construction is sure to give the same map."
+  [file line col children existing]
+  (merge {:line line :column col :file file}
+         (when (seq children) {:child-pos children})
+         existing))
+
+(defn- stamp
+  "`with-pos` with the file named rather than read off the reader state, so
+  `resolve-conditionals` stamps a chosen branch exactly as the reader would
+  have when it chose as it read."
+  [file line col v children]
+   (if (meta-able? v)
+     ;; A POSITION ALREADY THERE WINS.
+     ;;
+     ;; `#?(:flint/check (expect string? 42))` returns the inner list, and the
+     ;; conditional's own `read-form*` then stamps it -- so the form ended up
+     ;; claiming the column of the `#?` and carrying the CONDITIONAL's children
+     ;; rather than its own. Every check failure inside a reader conditional
+     ;; pointed at the `#?` and could not find its arguments.
+     ;;
+     ;; The rule is simply that a form which already knows where it is does not
+     ;; get relabelled by whatever it came out of. It was invisible while only
+     ;; sequences carried a position and nothing read `:child-pos`.
+     (with-meta v (position-meta file line col children (meta v)))
+     v))
+
+(def require-clauses
+  "The `ns` clauses that NAME NAMESPACES.
+
+  One set, read by everything that needs the answer: the analyzer binds their
+  aliases and refers, `flint.compiler.core/ns-requires` builds the load-order graph
+  from the same heads, and the kin reader gives `::alias/kw` its namespace by
+  the same two heads (`kin/readform.kin`).
+  Two spellings of \"which clause names a namespace\" is a graph that disagrees
+  with the bindings."
+  #{:require :use})
+
+(def default-features
+  "Which reader-conditional branches are selected, unless a caller says
+  otherwise.
+
+  Not `#{:clj}`: flint is not the JVM, and a `:clj` branch is host interop we
+  cannot compile. Ported code needs a `:flint` or `:default` branch.
+
+  It lives here, once, because it did not: `bin/flint` read every source twice
+  more -- to find its requires and to order them -- each with its own literal
+  `#{:flint}`, so overriding the compiler's set changed nothing. That is the
+  same shape as the two EDN readers that both had to learn `#:ns{...}`.
+
+  `:flint/check` is ON by default and removed by `:optimize [perf]`
+  (`DECISIONS.md#checks`). A check that has to be asked for is a check nobody
+  turns on, and one that survives into production is a tax on every call --
+  so the default is the developer's build and the release build is the
+  exception. Everything inside `#?(:flint/check ...)` then does not merely
+  compile to nothing: the reader never hands it to the analyzer, so it costs no
+  image bytes, no constants, and no shaking.
+
+  `:flint/nested` is ON by default and is what makes `flint.ception` nameable
+  (`DECISIONS.md#flint-ception`). Unlike the others it selects no reader branch:
+  the CLI reads it to decide whether to offer that virtual namespace at all, so
+  a build compiled without it cannot `:require` the SDK rather than being
+  refused later. It is a feature and not a grant because the SDK confers no
+  access -- turning it off is a statement about what this artifact is allowed to
+  BE, not about what it may reach."
+  #{:flint :flint/check :flint/nested})
+
+(declare resolve-form resolve-node)
+
+(defn- resolve-err [file line col msg]
+  (throw (ex-info (str "read error: " msg " (" file ":" line ":" col ")")
+                  {:type :reader :line line :column col :file file})))
+
+(defn- resolve-items
+  "A delimited collection's elements, resolved -- a conditional replaced by its
+  branch, spliced, or dropped, exactly as `read-delimited` does when it
+  chooses as it reads -- with its flat `poss` rebuilt to match. Answers
+  `[items poss changed?]`; `poss` is nil when the input's was not one pair per
+  element (a `'x` carries a stale one), in which case it is left alone.
+
+  `sink`, threaded through every resolve-* fn to the one place that calls
+  `choose` (`resolve-node`'s `:else` branch): nil, or a volatile a matched-
+  nothing conditional is `conj`ed onto. See `resolve-conditionals`."
+  [items poss features file sink]
+  (let [n (count items)
+        paired? (= (count poss) (* 2 n))]
+    (loop [i 0 acc [] ps [] changed? false]
+      (if (= i n)
+        [acc (when paired? ps) changed?]
+        (let [x (nth items i)
+              l (when paired? (nth poss (* 2 i)))
+              c (when paired? (nth poss (inc (* 2 i))))]
+          (if (conditional? x)
+            (let [r (resolve-node x features file sink)]
+              (cond
+                (eof? r) (recur (inc i) acc ps true)
+                (identical? r SPLICE-NONE) (recur (inc i) acc ps true)
+                (spliced? r) (let [xs (nth r 1)]
+                               (recur (inc i) (into acc xs)
+                                      (into ps (mapcat (fn [_] [l c]) xs)) true))
+                :else (recur (inc i) (conj acc r) (conj ps l c) true)))
+            (let [y (resolve-form x features file sink)]
+              (recur (inc i) (conj acc y) (conj ps l c)
+                     (or changed? (not (identical? x y)))))))))))
+
+(defn- resolve-one
+  "A conditional in a position that holds exactly ONE form -- a map value, a
+  metadata value -- resolved, or refused as the odd count it would have read
+  as."
+  [x features file sink]
+  (if (conditional? x)
+    (let [r (resolve-node x features file sink)
+          [_ line col] (:form x)]
+      (if (or (eof? r) (identical? r SPLICE-NONE) (spliced? r))
+        (resolve-err file line col "map literal needs an even number of forms")
+        r))
+    (resolve-form x features file sink)))
+
+(defn- resolve-meta
+  "Metadata with any conditional in it resolved. Only an author's `^{..}` can
+  hold one; the reader's own keys never do, and are skipped."
+  [m features file sink]
+  (reduce (fn [acc e]
+            (let [k (key e) v (val e)]
+              (if (contains? bookkeeping-meta k)
+                acc
+                (let [v2 (resolve-one v features file sink)]
+                  (if (identical? v v2) acc (assoc acc k v2))))))
+          m m))
+
+(defn- resolve-node
+  "One conditional node: `EOF` or `SPLICE-NONE` when it matched nothing, a
+  `splice` when a `#?@` matched, and otherwise the form -- stamped as
+  `read-form*` stamps what a `#?` reads as.
+
+  Every conditional, top-level or nested, resolves through the `:else` branch
+  below -- `:map`/`:set` only recurse into one by way of `resolve-items` -- so
+  it is the one place `sink` is written to, mirroring `read-cond`'s `:elided`
+  for the live reader (same shape: `{:file :line :offered}`)."
+  [x features file sink]
+  (let [[kind line col cpos items] (:form x)]
+    (cond
+      (= kind :map)
+      (let [[kvs] (resolve-items items nil features file sink)]
+        (when (odd? (count kvs))
+          (resolve-err file line col "map literal needs an even number of forms"))
+        (stamp file line col (flint.rt/array-map kvs) nil))
+
+      (= kind :set)
+      (let [[xs] (resolve-items items nil features file sink)]
+        (stamp file line col (set xs) nil))
+
+      :else
+      (let [[clauses cps] (resolve-items items cpos features file sink)
+            v (choose clauses features (= kind :splice))]
+        (when (and sink (or (eof? v) (identical? v SPLICE-NONE)))
+          (vswap! sink conj {:file file :line line :offered (vec (take-nth 2 clauses))}))
+        (if (or (eof? v) (identical? v SPLICE-NONE) (spliced? v))
+          v
+          (stamp file line col v (when (seq? v) (or cps cpos))))))))
+
+(defn- resolve-form
+  "`f` with every conditional inside it resolved; `f` itself, metadata and
+  all, when it holds none."
+  [f features file sink]
+  (let [m (meta f)
+        m2 (if m (resolve-meta m features file sink) m)
+        rebuilt
+        (cond
+          (or (seq? f) (vector? f))
+          (let [[xs ps changed?] (resolve-items (vec f) (:child-pos m) features file sink)]
+            (when changed?
+              [(if (seq? f) (apply list xs) xs)
+               ;; THE POSITIONS FOLLOW THE ELEMENTS, and an empty list has
+               ;; none -- `with-pos` writes `:child-pos` only when there are
+               ;; children.
+               (if (and ps (contains? m2 :child-pos))
+                 (if (seq ps) (assoc m2 :child-pos ps) (dissoc m2 :child-pos))
+                 m2)]))
+
+          (map? f)
+          (let [kvs (vec (mapcat (fn [e] [(key e) (val e)]) f))
+                n (count kvs)
+                out (loop [i 0 acc [] changed? false]
+                      (if (= i n)
+                        (when changed? acc)
+                        (let [x (nth kvs i)
+                              y (if (even? i)
+                                  (resolve-form x features file sink)
+                                  (resolve-one x features file sink))]
+                          (recur (inc i) (conj acc y)
+                                 (or changed? (not (identical? x y)))))))]
+            (when out [(flint.rt/array-map out) m2]))
+
+          (set? f)
+          (let [xs (vec f)
+                ys (mapv (fn [x] (resolve-form x features file sink)) xs)]
+            (when (some true? (map (fn [x y] (not (identical? x y))) xs ys))
+              [(set ys) m2]))
+
+          :else nil)]
+    (cond
+      rebuilt (let [[v vm] rebuilt] (if vm (with-meta v vm) v))
+      (identical? m m2) f
+      :else (with-meta f m2))))
+(defn resolve-conditionals
+  "The forms of a `read-deferred` answer under `features`: what `read-all`
+  with those features would have read from the same text, metadata included.
+  Only the top-level forms `:conds` names are walked. `file` is the read's
+  `:file`, which positions are stamped with.
+
+  `sink`, optional: a volatile every matched-nothing conditional is `conj`ed
+  onto, as `{:file :line :offered}` -- the same shape `read-cond` builds for
+  the live reader's `:elided`, so a caller can report elisions from a
+  deferred read the same way `elided` reports them from a live one. Omitted
+  (the 3-arg arity), nothing is recorded -- the behaviour every existing
+  caller already gets."
+  ([d features file] (resolve-conditionals d features file nil))
+  ([{:keys [forms conds]} features file sink]
+   (if (empty? conds)
+     forms
+     (let [at (set conds)
+           n (count forms)]
+       (loop [i 0 acc []]
+         (if (= i n)
+           acc
+           (let [f (nth forms i)]
+             (if (contains? at i)
+               (if (conditional? f)
+                 (let [r (resolve-node f features file sink)
+                       [_ line col] (:form f)]
+                   (cond
+                     (or (eof? r) (identical? r SPLICE-NONE)) (recur (inc i) acc)
+                     (spliced? r) (resolve-err file line col "#?@ outside a collection")
+                     :else (recur (inc i) (conj acc r))))
+                 (recur (inc i) (conj acc (resolve-form f features file sink))))
+               (recur (inc i) (conj acc f))))))))))
+
 
 ;; ------------------------------------------------------------------ format
 ;;
@@ -87,11 +449,11 @@
   Which order a merge answers is the host's business (`pos-map`), so it is
   asked rather than assumed -- and `pos-parts` still checks every map."
   (= [:line :column :child-pos :file]
-     (vec (keys (reader/position-meta "f" 1 1 [1 1] nil)))))
+     (vec (keys (position-meta "f" 1 1 [1 1] nil)))))
 
 (defn- pos-map
   "The reader's position metadata, BUILT the way the decoder builds it: by
-  `flint.compiler.reader/position-meta`, the reader's own construction, then any
+  `position-meta`, the reader's own construction, then any
   author's keys. ONE CONSTRUCTION for the decoder and for the encoder's check,
   because what a map's keys come back in is the host's business -- insertion
   order on one, hash order on another -- and the only portable test of \"this
@@ -102,7 +464,7 @@
     ;; them on this host (`cp-first?`) -- a literal is a fraction of a merge's
     ;; cost, and these are built once per decoded form. Anything else takes
     ;; the reader's own construction.
-    (seq extra) (reader/position-meta file line col cp (flint.rt/array-map extra))
+    (seq extra) (position-meta file line col cp (flint.rt/array-map extra))
     (nil? cp) {:line line :column col :file file}
     cp-first? {:line line :column col :child-pos cp :file file}
     :else {:line line :column col :file file :child-pos cp}))

@@ -1,0 +1,1 @@
+read error: ::b/ in a file whose ns form holds a reader conditional cannot be read before its features are known (DECISIONS.md#stdlib-preread) (test/reader/err-alias-partial.cljc:1:45)

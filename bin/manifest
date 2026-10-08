@@ -8,7 +8,18 @@
          '[clojure.edn :as edn] '[babashka.fs :as fs])
 (def root (str (fs/parent (fs/parent (fs/real-path *file*)))))
 (babashka.classpath/add-classpath (str root "/src"))
-(require '[flint.compiler.reader :as reader] '[flint.compiler.core :as compiler] '[flint.compiler.macros :as macros])
+;; READ BY THE KIN READER (`test/hostread.clj`): there is no other reader in this
+;; tree (`DECISIONS.md#one-reader-and-no-other`).
+(load-file (str root "/test/hostread.clj"))
+(require '[flint.compiler.forms :as forms] '[flint.compiler.core :as compiler] '[flint.compiler.macros :as macros])
+
+(defn read-all
+  "`src`, read as `file` under `#{:flint}` -- the forms."
+  [src file]
+  (let [a (first (hostread/read-texts [{:file file :text src :dialect (hostread/dialect-of file)
+                                         :features #{:flint}}]))]
+    (when-let [e (:read-error a)] (throw (ex-info (:message e) e)))
+    (:forms (forms/decode (:preread a)))))
 
 (def shipped
   "Namespace -> source file. These are what a flint program can require.
@@ -61,7 +72,7 @@
   namespace the standard library aliases out of, before anything asks."
   (delay
     (let [src (slurp (io/file root "lib/stdcore/flint/core/impl.fln"))]
-      (into #{} (for [f (reader/read-all src {:file "impl.fln" :features #{:flint}})
+      (into #{} (for [f (read-all src "impl.fln")
                       :when (and (seq? f) (= 'defmacro (first f)))]
                   (symbol "flint.core.impl" (name (second f))))))))
 
@@ -108,7 +119,7 @@
   [file]
   (let [src (slurp (io/file root file))
         forms (compiler/flatten-top-level
-               (reader/read-all src {:file file :features #{:flint}}))]
+               (read-all src file))]
     (into {} (mapcat defined-by (filter seq? forms)))))
 
 (def real-clojure-core

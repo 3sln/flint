@@ -50,6 +50,19 @@ public sealed class Compiler {
     /// Run the compiler with `argv`, e.g. `Run("clr", spec)`. Answers exactly what
     /// the compiler answered: a base64 artifact, or a diagnostic opening
     /// `!missing` or `!refused`.
+    /// Which argument of `argv` is the SPEC: the one after a mode
+    /// `flint.compiler.selfhost/main` knows, or the first when there is none --
+    /// the rule `main*` applies itself.
+    static int SpecIndex(string[] argv) {
+        if (argv.Length == 0) return -1;
+        switch (argv[0]) {
+            case "project": case "wasm": case "llvm": case "clr": case "jvm":
+                return argv.Length > 1 ? 1 : -1;
+            default:
+                return 0;
+        }
+    }
+
     public string Run(params string[] argv) {
         var rt = new Rt(64L * 1024 * 1024, 2048L * 1024 * 1024);
         var img = Img.Load(rt, bytecode);
@@ -71,8 +84,25 @@ public sealed class Compiler {
         int bas = rt.Mark();
         int ci = rt.Push(compiler);
         int first = -1;
-        foreach (string s in argv) {
-            int i = rt.Push(Str.Of(rt, s));
+        int specAt = SpecIndex(argv);
+        for (int k = 0; k < argv.Length; k++) {
+            int i = rt.Push(Str.Of(rt, argv[k]));
+            if (k == specAt) {
+                // THE SPEC GOES READ (`DECISIONS.md#one-reader-and-no-other`):
+                // the compiler reads no text, so this host reads the EDN with
+                // the kin reader every runtime carries and passes the
+                // `flint.forms` bytes. Deferred (nil features): a spec has no
+                // reader conditionals, and the compiler takes either.
+                long fi = Str.Of(rt, "spec.edn");
+                long read = global::_3sln.Flint.Kgen.Rt.Formsenc.ReadForms(
+                    rt, rt.R(i), fi, Val.Nil, Val.Nil, true, 0L);
+                if (!global::_3sln.Flint.Kgen.Rt.Bytecore.IsBytes(rt, read)) {
+                    string why = rt.Describe(read);
+                    rt.PopTo(bas);
+                    throw new InvalidOperationException("the spec does not read: " + why);
+                }
+                rt.SetR(i, read);
+            }
             if (first < 0) first = i;
         }
         int li = rt.Push(Seqs.FromRoots(rt, first, argv.Length));

@@ -59,6 +59,19 @@ public final class Compiler {
         return new Compiler(compilerBytecode);
     }
 
+    /// Which argument of `argv` is the SPEC: the one after a mode
+    /// `flint.compiler.selfhost/main` knows, or the first when there is none --
+    /// the rule `main*` applies itself.
+    static int specIndex(String[] argv) {
+        if (argv.length == 0) return -1;
+        switch (argv[0]) {
+            case "project": case "wasm": case "llvm": case "clr": case "jvm":
+                return argv.length > 1 ? 1 : -1;
+            default:
+                return 0;
+        }
+    }
+
     /// Run the compiler with `argv`, e.g. `run("jvm", specEdn)`. Answers exactly
     /// what the compiler answered: a base64 artifact, or a diagnostic starting
     /// `!missing` or `!refused`.
@@ -80,8 +93,25 @@ public final class Compiler {
         int base = rt.mark();
         int ci = rt.push(compiler);
         int first = -1;
-        for (String s : argv) {
-            int i = rt.push(Str.of(rt, s));
+        int specAt = specIndex(argv);
+        for (int k = 0; k < argv.length; k++) {
+            int i = rt.push(Str.of(rt, argv[k]));
+            if (k == specAt) {
+                // THE SPEC GOES READ (`DECISIONS.md#one-reader-and-no-other`):
+                // the compiler reads no text, so this host reads the EDN with
+                // the kin reader every runtime carries and passes the
+                // `flint.forms` bytes. Deferred (nil features): a spec has no
+                // reader conditionals, and the compiler takes either.
+                long fi = Str.of(rt, "spec.edn");
+                long read = com._3sln.flint.kgen.rt.Formsenc.readForms(
+                    rt, rt.r(i), fi, Val.NIL, Val.NIL, true, 0L);
+                if (!com._3sln.flint.kgen.rt.Bytecore.isBytes(rt, read)) {
+                    String why = rt.describe(read);
+                    rt.popTo(base);
+                    throw new IllegalStateException("the spec does not read: " + why);
+                }
+                rt.setR(i, read);
+            }
             if (first < 0) first = i;
         }
         int li = rt.push(Seqs.fromRoots(rt, first, argv.length));

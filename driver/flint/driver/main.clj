@@ -8,18 +8,15 @@
 ;; only `bin/flint` can be: finding files on a search path, reading `deps.edn`
 ;; for a workspace's grants and tags, and implementing
 ;; `flint.compiler.resolve/Resolver` over the filesystem with the kin-generated Java
-;; reader (`flint.driver.host-reader`) instead of `flint.compiler.reader` -- the guest's
-;; own reader, which this driver no longer calls to resolve a project (see
-;; `ns-of` and the compile below). `flint.compiler.reader` stays required for now:
-;; `flint.compiler.resolve/read-entry` still calls `resolve-conditionals` on it to
-;; resolve a deferred read's conditionals for this compile's features, which
-;; is forms-to-forms work and not a second text reader.
+;; reader (`flint.driver.host-reader`) -- the only reader there is
+;; (`DECISIONS.md#one-reader-and-no-other`); `flint check` and `flint inspect`
+;; read with it too (`read-text-forms`).
 ;; flint :src <dir> :fn <ns/fn> [:out <file.wasm>]
 (ns flint.driver.main
   (:require [clojure.string :as str] [clojure.java.io :as io]
             [flint.driver.fs :as fs] [clojure.edn :as edn]
             [flint.compiler.core :as compiler] [flint.compiler.image :as img] [flint.compiler.link :as link]
-            [flint.compiler.reader :as reader] [flint.compiler.lint :as lint]
+            [flint.compiler.lint :as lint]
             [flint.compiler.forms :as forms]
             [flint.driver.host-reader :as hr]
             ;; For `source-extensions` and now for the whole resolver walk:
@@ -328,12 +325,23 @@
   justified leaving this dead did not cover every list).
 
   Revived by threading an optional `sink` through
-  `flint.compiler.reader/resolve-conditionals` (and `flint.compiler.resolve/read-entry` and
+  `flint.compiler.forms/resolve-conditionals` (and `flint.compiler.resolve/read-entry` and
   `fn-resolver` above it) down to the one place that calls `choose` on a
   deferred conditional -- so a DEFERRED read now records an elision the same
   way the live reader's `read-cond` always did, as `{:file :line :offered}`,
   and `resolve-sources!` passes this volatile as that sink."
   (volatile! []))
+
+(defn read-text-forms
+  "`text` read as the file `path`, under the default features, by the kin Java
+  reader -- what `flint check` lints and `flint inspect` reads a module's
+  metadata with, now that there is no other reader
+  (`DECISIONS.md#one-reader-and-no-other`). Deferred, then resolved: one
+  construction for both."
+  [path text]
+  (forms/resolve-conditionals
+   (forms/decode (hr/deferred-read (str path) text (project/dialect-of (str path)) {}))
+   forms/default-features (str path)))
 
 (defn ns-of
   "The namespace a source file at `path` declares, or nil.
@@ -539,8 +547,11 @@
             (binding [*out* *err*] (println "usage: flint inspect <file.wasm>"))
             (System/exit 2))
         bytes (java.nio.file.Files/readAllBytes (.toPath (io/file file)))
-        m (try (reader/read-one (String. ^bytes (w/custom-section (w/parse bytes) modmeta/section-name)
-                                         "UTF-8"))
+        ;; READ BY THE KIN READER, as every source is: there is no other reader
+        ;; in this tree (`DECISIONS.md#one-reader-and-no-other`).
+        m (try (first (read-text-forms (str file "#" modmeta/section-name)
+                                       (String. ^bytes (w/custom-section (w/parse bytes) modmeta/section-name)
+                                                "UTF-8")))
                (catch Exception _ nil))]
     (if (nil? m)
       (do (binding [*out* *err*]
@@ -603,7 +614,7 @@
                    (map (clojure.core/fn [f] (.getPath ^java.io.File f)))
                    sort)
         findings (mapcat (clojure.core/fn [f]
-                           (try (lint/check (reader/read-all (slurp f)) f)
+                           (try (lint/check (read-text-forms f (slurp f)) f)
                                 (catch Exception e
                                   [{:kind :unreadable :what (ex-message e)
                                     :why "this file could not be read"
@@ -956,7 +967,7 @@
         ;; It has to happen HERE, before the sources are collected: the
         ;; collection reads every file, and a feature decided afterwards would
         ;; leave the branches already read in.
-        features (cond-> (or features reader/default-features)
+        features (cond-> (or features forms/default-features)
                    (some #{"perf" ":perf"} (or optimize [])) (disj :flint/check))
         ;; In test mode every namespace under `:src` is a root: a test that
         ;; nothing requires is still a test, and collecting from one entry
@@ -1073,7 +1084,17 @@
         ;; `flint.compiler.selfhost/build-image` skips resolution for an
         ;; already-resolved spec like this one, and `flint.compiler.core/read-source`'s
         ;; fallback for a namespace with no `:forms` is `:src`, not nothing.
-        spec {:sources (into {} (map (clojure.core/fn [[n s]] [n (dissoc s :forms)]) sources))
+        ;; AND NO TEXT EITHER, since the compiler that takes it reads none
+        ;; (`DECISIONS.md#one-reader-and-no-other`): each source goes READ, its
+        ;; `flint.forms` bytes as base64 under `:preread` -- an EDN spec has
+        ;; nowhere else to put bytes -- beside the `:file`, `:tags` and
+        ;; `:dialect` the compile checks them against.
+        spec {:sources (into {} (map (clojure.core/fn [[n s]]
+                                       [n (cond-> (dissoc s :forms :src)
+                                            (:preread s)
+                                            (assoc :preread (.encodeToString (java.util.Base64/getEncoder)
+                                                                             ^bytes (:preread s))))])
+                                     sources))
               :order order :entry fn
               :exports (vec (distinct exports))
               :features features

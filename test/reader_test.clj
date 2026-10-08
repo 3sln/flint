@@ -1,4 +1,57 @@
-(require '[flint.compiler.reader :as r] '[clojure.string :as str])
+;; THE READER, through the one there is (`DECISIONS.md#one-reader-and-no-other`).
+;;
+;; This suite used to test `flint.compiler.reader`, the compiler's own reader,
+;; which is gone: every host reads with the kin-generated reader and the
+;; compiler only decodes. The checks below are the same claims about what
+;; source reads as, made of the kin reader (`test/hostread.clj`, the wasm module
+;; the JavaScript SDK reads with), plus the compiler's half -- resolving a
+;; deferred read for a compile's features, decoding, and what the analyzer does
+;; with what the reader leaves -- which still lives in `src/`.
+;;
+;; `r/` below is a small shim with the old reader's calling shape, so each check
+;; still reads as the claim it always made. What the kin reader has no shape
+;; for -- a caller's namespace handed to a read (`::foo` takes the FILE's own
+;; `ns` form), a stateful reader, the forgeable-EOF sentinel -- was rewritten to
+;; the file-level form or dropped, and says so where it was.
+(require '[clojure.string :as str])
+(load-file "test/hostread.clj")
+(require '[flint.compiler.forms :as ff])
+
+(ns r (:require [flint.compiler.forms :as ff]))
+(defn- read-bytes [src {:keys [file features tags dialect]}]
+  (first (hostread/read-texts [{:file (or file "<string>") :text src
+                                :dialect (or dialect :flint) :tags tags :features features}])))
+(defn- refuse [{:keys [message line column]} file]
+  (throw (ex-info message {:type :reader :line line :column column :file file})))
+(def default-features ff/default-features)
+(defn read-deferred
+  "The forms of a DEFERRED read: `{:opts :forms :conds}`."
+  ([src] (read-deferred src {}))
+  ([src opts]
+   (let [a (read-bytes src (assoc opts :features nil))]
+     (if-let [e (:read-error a)] (refuse e (:file opts)) (ff/decode (:preread a))))))
+(defn read-all
+  "An EAGER read under `:features` (default `default-features`)."
+  ([src] (read-all src {}))
+  ([src opts]
+   (let [features (or (:features opts) default-features)
+         a (read-bytes src (assoc opts :features features))]
+     (if-let [e (:read-error a)]
+       (refuse e (:file opts))
+       (:forms (ff/decode (:preread a)))))))
+(defn read-one [src] (first (read-all src)))
+(defn resolve-conditionals
+  ([d features file] (ff/resolve-conditionals d features file))
+  ([d features file sink] (ff/resolve-conditionals d features file sink)))
+(defn elided
+  "The conditionals that matched nothing when `src` is read under `features`:
+  a deferred read resolved with a sink, the way `bin/flint` collects them."
+  [src features]
+  (let [sink (volatile! [])]
+    (resolve-conditionals (read-deferred src {:file "<string>"}) features "<string>" sink)
+    @sink))
+
+(ns user (:require [clojure.string :as str] [flint.compiler.forms :as ff] [r]))
 (def fails (atom 0))
 (defn check [label actual expected]
   (if (= actual expected)
@@ -34,7 +87,6 @@
 (check "deref" (reads "@x") '(clojure.core/deref x))
 (check "var quote" (reads "#'x") '(var x))
 (check "comment skipped" (r/read-all "; hi\n1 ; there\n2") [1 2])
-(check "the eof sentinel cannot be forged from source" (r/read-all "::flint.compiler.reader/eof :x") [:flint.compiler.reader/eof :x])
 (check "discard" (r/read-all "#_1 2") [2])
 (check "discard in coll" (reads "[1 #_2 3]") [1 3])
 (check "commas are whitespace" (reads "[1,2,3]") [1 2 3])
@@ -60,15 +112,15 @@
 (check "quote still works at the start" (reads "'acc") '(quote acc))
 
 (println "reader: syntax quote")
-(let [st (r/reader "`(a ~b ~@c)" {:ns 'my.ns})]
+(let [form (r/read-one "`(a ~b ~@c)")]
   ;; A symbol is LEFT for the analyzer to resolve (`flint.reader/syntax-quoted`):
   ;; what `a` names is compile state, and the reader does not depend on it.
-  (check "syntax quote" (r/read-form st)
+  (check "syntax quote" form
          '(clojure.core/seq (clojure.core/concat (clojure.core/list (flint.reader/syntax-quoted a))
                                                  (clojure.core/list b)
                                                  c))))
-(check "  ... and reads the same whatever namespace the reader was given"
-       (r/read-form (r/reader "`(a x/b)" {:ns 'my.ns :aliases {'x 'other.ns}}))
+(check "  ... and reads the same whatever namespace the file declares"
+       (second (r/read-all "(ns my.ns (:require [other.ns :as x])) `(a x/b)"))
        (r/read-one "`(a x/b)"))
 (check "  ... while what needs no context is decided here"
        (r/read-one "`(if .m &)")
@@ -79,19 +131,16 @@
        (r/read-one "``a")
        '(clojure.core/seq (clojure.core/concat (clojure.core/list (quote quote))
                                                (clojure.core/list (flint.reader/syntax-quoted a)))))
-(let [st (r/reader "`x#" {:ns 'my.ns})
-      f (r/read-form st)]
+(let [f (r/read-one "`x#")]
   (check "gensym form" (and (seq? f) (= 'quote (first f)) (str/starts-with? (name (second f)) "x__")) true))
-(let [st (r/reader "`[x# x#]" {:ns 'my.ns})
-      f (r/read-form st)
+(let [f (r/read-one "`[x# x#]")
       syms (filter symbol? (tree-seq coll? seq f))]
   (check "gensym is stable within one syntax quote"
          (= 1 (count (distinct (filter #(str/starts-with? (name %) "x__") syms)))) true))
-(let [st (r/reader "`:kw" {:ns 'my.ns})]
-  (check "keywords are self-quoting" (r/read-form st) :kw))
-(let [st (r/reader "`(1 :a \"s\")" {:ns 'my.ns})]
+(check "keywords are self-quoting" (r/read-one "`:kw") :kw)
+(let [form (r/read-one "`(1 :a \"s\")")]
   (check "literals inside syntax quote"
-         (r/read-form st)
+         form
          '(clojure.core/seq (clojure.core/concat (clojure.core/list 1) (clojure.core/list :a) (clojure.core/list "s")))))
 
 (println "reader: quote resolves syntax-quoted markers nested in quoted data")
@@ -106,8 +155,7 @@
 (def resolve-quoted (deref (resolve 'flint.compiler.analyzer/resolve-quoted-syntax-quotes)))
 (def rq-env {:ns 'my.ns :cc (atom {:namespaces {'my.ns {:aliases {}}} :declared {}})})
 (defn rq [src]
-  (let [st (r/reader src {:ns 'my.ns})
-        form (r/read-form st)] ; (quote <data>)
+  (let [form (r/read-one src)] ; (quote <data>)
     (resolve-quoted rq-env (second form))))
 ;; already working (list / vector), pinned alongside the new cases
 (check "quote resolves a marker inside a quoted list" (rq "'(`x)") '((quote my.ns/x)))
@@ -200,10 +248,10 @@
        ['(ns s (:require [a]))])
 
 (println "reader: auto-resolved keywords")
-(let [st (r/reader "::foo" {:ns 'my.ns})]
-  (check "::foo" (r/read-form st) :my.ns/foo))
-(let [st (r/reader "::str/x" {:ns 'my.ns :aliases {'str 'clojure.string}})]
-  (check "::alias/foo" (r/read-form st) :clojure.string/x))
+;; The FILE's `ns` decides; the kin reader takes no namespace from its caller.
+(check "::foo" (second (r/read-all "(ns my.ns) ::foo")) :my.ns/foo)
+(check "::alias/foo" (second (r/read-all "(ns my.ns (:require [clojure.string :as str])) ::str/x"))
+       :clojure.string/x)
 ;; The FILE's `ns` form sets them, inside the reader: the compiler used to, so
 ;; the read that finds requires saw `:user/foo` where the compile saw the right
 ;; one, and the two reads could not be one.
@@ -232,20 +280,12 @@
 ;; The form the conditional stood in VANISHES -- a function body becomes nil, a
 ;; :require becomes a dependency the compiler never learns about. Across 20 real
 ;; libraries, 16 of the 28 namespaces that compiled had been cut this way.
-(let [st (r/reader "(defn f [x] #?(:clj (inc x)))" {:features #{:flint}})]
-  (dorun (take-while (complement r/eof?) (repeatedly #(r/read-form st))))
-  (check "an unmatched conditional is recorded with its line and what it offered"
-         (mapv (juxt :line :offered) (r/elided st)) [[1 [:clj]]]))
-(let [st (r/reader "#?(:cljs 1 :default 9)" {:features #{:flint}})]
-  (dorun (take-while (complement r/eof?) (repeatedly #(r/read-form st))))
-  (check "  ... and a :default branch is NOT an elision" (r/elided st) []))
-(let [st (r/reader "#?(:flint 1 :clj 2)" {:features #{:flint}})]
-  (dorun (take-while (complement r/eof?) (repeatedly #(r/read-form st))))
-  (check "  ... nor is one that matches" (r/elided st) []))
-(let [st (r/reader "(ns a #?@(:clj [(:require [x])]))" {:features #{:flint}})]
-  (dorun (take-while (complement r/eof?) (repeatedly #(r/read-form st))))
-  (check "  ... and the splicing form counts too, which is how a :require disappears"
-         (count (r/elided st)) 1))
+(check "an unmatched conditional is recorded with its line and what it offered"
+       (mapv (juxt :line :offered) (r/elided "(defn f [x] #?(:clj (inc x)))" #{:flint})) [[1 [:clj]]])
+(check "  ... and a :default branch is NOT an elision" (r/elided "#?(:cljs 1 :default 9)" #{:flint}) [])
+(check "  ... nor is one that matches" (r/elided "#?(:flint 1 :clj 2)" #{:flint}) [])
+(check "  ... and the splicing form counts too, which is how a :require disappears"
+       (count (r/elided "(ns a #?@(:clj [(:require [x])]))" #{:flint})) 1)
 
 (println "reader: every conditional in flint's own sources selects something")
 (let [srcs (->> (concat (file-seq (clojure.java.io/file "src"))
@@ -463,32 +503,36 @@
 
 ;; --- read forms, encoded (`flint.compiler.forms`, `DECISIONS.md#stdlib-preread`) -------
 ;;
-;; The native CLI ships the standard library as `flint.compiler.forms` bytes, and the
-;; contract is EXACTNESS: decoding gives back the forms `read-deferred` read,
-;; metadata and all, key order included. Every file in `lib/` and `cli/lib/`
-;; -- the four shipped roots `cli/build.rs` embeds this way -- compared with
-;; `*print-meta*` on, which prints key order as well as content.
-(require '[flint.compiler.forms :as ff])
-(println "reader: flint.compiler.forms decodes what it encoded, metadata and all")
+;; Every door ships source as `flint.forms` bytes the KIN encoder wrote, and the
+;; compiler decodes them. The contract is EXACTNESS: what the decoder rebuilds
+;; from the kin reader's bytes, `flint.compiler.forms/encode` -- kept as the
+;; encoder's specification, which `kin/formsenc.kin` follows "rule for rule" --
+;; encodes to bytes that decode to the SAME forms, metadata and key order
+;; included. Every file in the shipped roots.
+;;
+;; NOT byte for byte against the kin reader's own bytes, which was tried first:
+;; under babashka a decoded map is babashka's, which iterates in a different
+;; order from the flint runtime's CHAMP for more than eight keys, so `encode`
+;; here writes `clojure.edn`'s big maps in another order than the kin encoder
+;; did. That is the host's business (`pos-map`'s own note), not a disagreement.
+(println "reader: the compiler's decoder and the encoder agree, metadata and all")
 (let [lib (->> (concat (file-seq (clojure.java.io/file "lib"))
                        (file-seq (clojure.java.io/file "cli/lib")))
                (filter #(.isFile %))
                (filter #(re-find #"\.(cljc|fln)$" (.getName %))))
-      opts (fn [path] {:file path :features :any :tags nil :dialect :portable})
       sizes (atom [0 0])
-      bad (vec (for [f lib
-                     :let [path (.getPath f)
-                           src (slurp f)
-                           d (assoc (r/read-deferred src {:file path}) :opts (opts path))
-                           b (ff/encode d)
-                           back (ff/decode b)
-                           _ (swap! sizes (fn [[x y]] [(+ x (count src)) (+ y (count b))]))]
+      read (hostread/read-texts (mapv (fn [f] {:file (.getPath f) :text (slurp f)
+                                               :dialect (hostread/dialect-of (.getPath f))})
+                                      lib))
+      bad (vec (for [[f a] (map vector lib read)
+                     :let [b (:preread a)
+                           _ (swap! sizes (fn [[x y]] [(+ x (count (slurp f))) (+ y (count b))]))
+                           d (ff/decode b)
+                           back (ff/decode (ff/encode d))]
                      :when (not= (pm [(:opts d) (:conds d) (:forms d)])
                                  (pm [(:opts back) (:conds back) (:forms back)]))]
-                 path))]
+                 (.getPath f)))]
   (check (str "  every file in lib/ and cli/lib/ round-trips (" (count lib) " files)") bad [])
-  ;; Measured here on babashka, whose maps keep insertion order; the guest's
-  ;; size is what `cli/build.rs` prints.
   (check (str "  ... and the encoding is smaller than the text (" (second @sizes) " < "
               (first @sizes) " bytes)")
          (< (second @sizes) (first @sizes)) true))
@@ -500,7 +544,7 @@
         [##-Inf -5 (Math/pow 2 50) 1.5]])
 (check "  ... and a corrupted encoding does not decode to the same forms"
        (let [src "(defn f [x] (inc x))"
-             b (ff/encode (assoc (r/read-deferred src {:file "t.cljc"}) :opts {:file "t.cljc"}))
+             b (:preread (first (hostread/read-texts [{:file "t.cljc" :text src}])))
              i (- (count b) 3)
              b2 (doto (aclone b) (aset-byte i (byte (bit-xor (aget b i) 1))))]
          (= (pm (:forms (ff/decode b)))

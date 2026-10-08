@@ -1685,6 +1685,19 @@ public static class Program {
         int ci = rt.Push(compiler);
         int mi = mode != null ? rt.Push(Flint.Rt.Str.Of(rt, mode)) : -1;
         int si = rt.Push(Flint.Rt.Str.Of(rt, File.ReadAllText(specPath)));
+        // READ HERE, not by the compiler (`DECISIONS.md#one-reader-and-no-other`):
+        // the kin reader turns the spec's EDN into `flint.forms` bytes, which is
+        // what `flint.compiler.selfhost/main` takes.
+        {
+            long fi = Flint.Rt.Str.Of(rt, "spec.edn");
+            long read = global::_3sln.Flint.Kgen.Rt.Formsenc.ReadForms(rt, rt.R(si), fi,
+                Flint.Rt.Val.Nil, Flint.Rt.Val.Nil, true, 0L);
+            if (!global::_3sln.Flint.Kgen.Rt.Bytecore.IsBytes(rt, read)) {
+                Console.WriteLine("  FAIL the spec does not read: " + rt.Describe(read));
+                return 1;
+            }
+            rt.SetR(si, read);
+        }
         int li = rt.Push(mi >= 0 ? Flint.Rt.Seqs.FromRoots(rt, mi, 2)
                                  : Flint.Rt.Seqs.FromRoots(rt, si, 1));
         long outv = rt.RunProgram(rt.R(ci), new long[]{ rt.R(li) });

@@ -261,7 +261,9 @@ private:
 
 /// How a namespace becomes source. Return an empty optional-ish `false` for
 /// "no such namespace"; there is no filesystem here on purpose.
-using Resolver = std::function<bool(const std::string &ns, std::string &out)>;
+/// A namespace to its source and dialect. `dialect` starts portable; a
+/// resolver answering `.fln` source sets it to `FLINT_DIALECT_FLINT`.
+using Resolver = std::function<bool(const std::string &ns, std::string &out, FlintDialect &dialect)>;
 
 /// What to compile.
 struct Compile {
@@ -301,11 +303,13 @@ public:
     FlintCompileOpts c{};
     c.fn_name = opts.fn.c_str();
     c.resolve_ctx = &t;
-    c.resolve = [](void *ctx, const char *ns, const char **out) -> int {
+    c.resolve = [](void *ctx, const char *ns, const char **out, FlintDialect *dialect) -> int {
       auto *t = static_cast<Trampoline *>(ctx);
       if (!t->resolve || !*t->resolve) return 0;
       std::string got;
-      if (!(*t->resolve)(ns, got)) return 0;
+      FlintDialect d = FLINT_DIALECT_PORTABLE;
+      if (!(*t->resolve)(ns, got, d)) return 0;
+      *dialect = d;
       t->held = std::move(got);
       *out = t->held.c_str();
       return 1;

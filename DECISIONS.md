@@ -119,6 +119,7 @@ this block.
 - [panic-message-import](#panic-message-import) -- A wasm panic tells the host what happened, without pulling `core::fmt` into a `no_std` runtime.
 - [four-units](#four-units) -- The guest source flint ships is four units, each its own workspace in its own source root
 - [defalias](#defalias) -- `defalias`: a second name for one var, resolved at compile time, and only in a `.fln`
+- [one-reader-and-no-other](#one-reader-and-no-other) -- The compiler reads no text: every host reads with the one kin reader and hands over `flint.forms` bytes, and `flint.compiler.reader` is deleted
 <!-- TOC:END -->
 
 ---
@@ -17544,7 +17545,11 @@ sizes are estimates from reading the code, not measurements.
    protocol can be implemented in babashka, which remains true, and is not
    "the bootstrap" this sub-step is about.
 
-   **Sub-step 4 NOT DONE.** `src/flint/compiler/reader.cljc` is not deleted:
+   **Sub-step 4 BUILT 2026-10-08** (`DECISIONS.md#one-reader-and-no-other`):
+   `src/flint/compiler/reader.cljc` is deleted, every door hands the compiler
+   read forms, and the four forms-level helpers live in
+   `flint.compiler.forms`. *What follows is the state before, kept for the
+   record.* Sub-step 4 was NOT DONE. `src/flint/compiler/reader.cljc` was not deleted:
    `flint.compiler.core/read-source` still falls back to `flint.compiler.reader/read-all`
    when a source arrives with `:src` and no `:forms` --
    `test/selfhost.clj`'s own hand-built spec does this (it reads with
@@ -17731,7 +17736,11 @@ sizes are estimates from reading the code, not measurements.
      carries the grant; a throwing resolver, and an answer declaring the wrong
      namespace, reject rather than hang.
    * `bin/check-reader`'s new wasm row (step 1.1 above): 489 reads, 0 differ.
-5. **Rust SDK, C API, JVM and CLR `Compiler`.** These carry the new resolver
+5. **Rust SDK, C API, JVM and CLR `Compiler`.** *The READING half BUILT
+   2026-10-08 (`DECISIONS.md#one-reader-and-no-other`): every one of them hands
+   the compiler read forms and a read spec, and the Rust SDK and C API resolvers
+   say the dialect. They still compile through the EDN modes of `main`, not the
+   compile call.* These carry the new resolver
    signatures, and the C ABI changes. Update `doc/api-review.md` for each
    surface (AGENTS.md §9). *Gate:* `sdks/c/selftest`, the Rust SDK tests,
    `bin/conform-hosts`. Medium: about 300 lines across four languages.
@@ -19787,22 +19796,16 @@ workspaces as a host composes them, the same as for every other `^:internal`.)
 
 ### Open
 
-* **`src/flint/compiler/reader.cljc` is NOT deleted.** The condition the
-  maintainer set -- the compiler's `:src` fallback and the forms-level helpers
-  no longer needing it -- does not hold yet, counted 2026-10-08: the compiler
-  still READS TEXT for every door that hands it text (the EDN-spec path, which
-  the Rust SDK, the C API, the JVM/CLR `Compiler`, `FLINT_PREREAD=0` and
-  `--emit-spec` replays all use; and its own synthetic namespaces, the entry
-  shim and the check registry, which it writes as text and reads back), and
-  `bin/manifest`, `driver/flint/driver/main.clj` (`flint check`'s lint,
-  `read-one` for module metadata) and `cli/src/kin_reader_test.rs`'s oracle
-  (`preread` mode) call it. The forms-level half (`default-features`,
-  `bookkeeping-meta`, `position-meta`, `require-clauses`, the
-  `syntax-quoted`/`#?` markers, `resolve-conditionals`) can move to
-  `flint.compiler.forms` mechanically; the text half needs migration step 5
-  (forms-only answers from every door) first. `bin/check-reader`'s oracle
-  would then need committed golden forms bytes, since the guest reader it
-  compares against would be gone.
+* ~~`src/flint/compiler/reader.cljc` is NOT deleted.~~ *Deleted 2026-10-08,
+  with every door reading for the compiler: `DECISIONS.md#one-reader-and-no-other`.*
+* ~~The Rust SDK cannot say a source is `.fln`.~~ *It can, since 2026-10-08:
+  `Compile::resolve` answers a `Source { text, dialect }`, and the C API's
+  resolver a `FlintDialect` (`DECISIONS.md#one-reader-and-no-other`).*
+* **A host resolver answering `clojure.core` ahead of `stdextra()` REPLACES it,
+  by design** (the maintainer, 2026-10-08): the resolver decides, and only
+  stdcore -- with `flint.check`'s two variants -- is never asked of a host.
+  This is the consequence `### stdcore shrinks to six` records above as one to
+  review; the maintainer answered it on 2026-10-08.
 
 ## defalias
 
@@ -20092,3 +20095,126 @@ already did for this same crate, so there is one toolchain combination in use
 here, not two. `sdks/esm` and `sdks/cli` were not re-audited in this pass
 either, for the same reason the first audit skipped them: they copy `dist/`'s
 already-fixed files rather than invoking cargo or rustc themselves.
+
+## one-reader-and-no-other
+
+**The compiler reads no text: every host reads with the one kin reader and hands over `flint.forms` bytes, and `flint.compiler.reader` is deleted**
+
+**Ratified:** ☐ not signed off
+
+**Status (2026-10-08, branch `step5`): BUILT** -- migration step 5 of
+`DECISIONS.md#namespaces-over-the-system-port` together with sub-step 4 of its
+step 1, which the maintainer ordered done as one. What proves each part is
+named beside it.
+
+### What was decided
+
+The maintainer (2026-10-08): move every door that still handed the compiler
+source TEXT onto host-read forms, then delete `src/flint/compiler/reader.cljc`,
+giving `bin/check-reader` an oracle that stays meaningful without it; change
+the Rust SDK's resolve hook, and the C API that mirrors it, so an embedder can
+say a source is `.fln`, breaking the signature (pre-release).
+
+### What the compiler takes now
+
+* **Source arrives as `flint.forms` bytes, always.** `flint.compiler.resolve/read-entry`
+  decodes `:preread` bytes and refuses anything else by name ("arrived as source
+  text, and the compiler reads no text"); `flint.compiler.core/compile-image`
+  takes `:forms` and refuses a namespace without them. A file the HOST could not
+  read arrives as `{:read-error {:message :line :column}}` and is reported only
+  if the compile reaches it, worded exactly as before (the kin reader's message
+  is the guest's, whole: `read error: unterminated string (broken.cljc:3:1)`).
+* **The spec arrives read too.** `flint.compiler.selfhost/main`'s spec argument
+  is the `flint.forms` bytes of the spec's EDN, which the caller reads with the
+  same kin reader -- or a map. A spec handed over as a string is refused by
+  name. Inside an EDN spec a body is `{:preread "<base64>" :dialect d}`, the one
+  way EDN can carry bytes. The compile call (`flint.compiler.selfhost/compile`)
+  takes a request map and was already data; its `:source` text answer is
+  refused like any other text.
+* **The compiler's own synthetic namespaces are built as forms**: the entry
+  shim and the check registry, which it used to write as text and read back.
+* **What was in `flint.compiler.reader` and is not reading** -- the reader's
+  own metadata keys, the deferred-conditional and syntax-quote markers,
+  `require-clauses`, `default-features`, `position-meta` and
+  `resolve-conditionals` -- moved to `flint.compiler.forms`, beside the decoder.
+  `flint.compiler.forms/encode` STAYS, as the specification
+  `kin/formsenc.kin` follows rule for rule and as `test/reader_test.clj`'s
+  round-trip check; nothing in a compile calls it.
+* **The `preread` mode is deleted**, with `flint.compiler.resolve/preread` and
+  `read-eager`: its one caller, `cli/build.rs`, reads with the kin reader
+  itself now (`DECISIONS.md#four-units`).
+
+### Every door, and how it reads
+
+| door | before | now |
+|---|---|---|
+| native CLI | project files host-read, but text on a read failure, on a tag map that was not plain symbol pairs, under `FLINT_HOST_READ=0`, and the whole library under `FLINT_PREREAD=0`; the spec envelope as EDN text | every body read (`Body::Forms`/`Read`/`Unreadable`); the envelope read by `crate::read::read_spec`; `FLINT_PREREAD=0` and `FLINT_HOST_READ=0` deleted; `FLINT_SPEC_OUT`'s EDN carries base64 bodies |
+| npm CLI, ESM SDK | read in the SDK already (`sdks/esm/src/resolve.js`) | unchanged |
+| Rust SDK | `Fn(&str) -> Option<String>`, every source labelled `.cljc`, the spec with every file as EDN text, the stdlib embedded as text | `Fn(&str) -> Option<Source>` with `Source { text, dialect }`; each source read by `flint_rt::hostread`, the stdlib embedded read (`sdks/rust/build.rs`), the bodies handed over as a `split` map |
+| C API | `int (*)(ctx, ns, const char **out)` | `int (*)(ctx, ns, const char **out, FlintDialect *dialect)`; `flint.hpp`'s `Resolver` gains `FlintDialect &` |
+| JVM / CLR `Compiler`, `RtSelfHost`, `--rt-selfhost` | spec text to `selfhost/main` | the spec read by `Formsenc.readForms` first |
+| `host/flint-file.mjs`, `host/flint-argv.mjs` | spec text | the spec read by `dist/flint-reader.wasm` (`host/spec.mjs`) |
+| `bin/flint` (`--emit-spec`, `--self`) | sources as `:src` text | `:preread` base64 beside `:file`, `:tags`, `:dialect` |
+| `bin/flint check`, `flint inspect` | `flint.compiler.reader` | the kin Java reader |
+| babashka suites (`test/selfhost.clj`, `shake`, `visibility`, `resolver-protocol`, `reader_test`, `bin/manifest`) | `flint.compiler.reader` in-process | `test/hostread.clj` over `host/read-forms.mjs` -- the wasm kin reader, one node process per suite (`--serve`) |
+
+`test/selfhost.clj` resolves through `flint.compiler.resolve/resolve-project`
+now rather than its own `collect`/`topo`, which kept its own root list and had
+fallen behind the real one twice.
+
+### The oracle: a frozen golden set
+
+With the guest reader gone there is nothing to regenerate a reference from,
+so `bin/check-reader` compares against `test/reader-golden/`: FROZEN copies of
+135 inputs (the test fixtures, the corpus and the standard library -- every
+input the old guard read except `src/flint/compiler/*`) and what the guest
+reader answered for them, 161 reads (deferred for every input, both eager
+modes for the 26 that hold a reader conditional). Captured at `8ce4a488`, the
+last tree with the guest reader, by that tree's own guard, which reported
+`495 reads compared (165 files x 3 modes), 56 failed alike, 0 differ, 3 known
+gap` -- so the kin reader agreed with all of it but the known
+`tagged-custom.fln` gap (`DECISIONS.md#reader-tags`), which stays reported as
+known. The inputs are copies on purpose: a reference over the live tree would
+end up compared with the reader under test. `test/reader-golden/README.md`
+says how it was made and that it must not be refreshed from the kin reader.
+
+`test/reader_test.clj` keeps its claims, made of the kin reader: what source
+reads as, conditionals, located errors, elisions, tags and dialects, what the
+analyzer does with syntax-quote markers, deferred-then-resolved equal to an
+eager read for every conditional in the tree, and decode/encode round trips
+over the shipped roots. What the kin reader has no shape for -- a namespace
+handed to a read by its caller, a stateful reader, the forgeable-EOF
+sentinel -- was rewritten to the file-level form or dropped.
+
+### Why `test/cli.clj`'s pre-read ratio fell from above 4x to 3.7x, measured
+
+The row compared one compile with the library pre-read against the same compile
+with `FLINT_PREREAD=0`, which made the compiler read the library's text. It
+failed its 4x bound at `9279c30a` (`DECISIONS.md#four-units`). *Measured with the
+native CLI built at `211e5876` (before) and `8ce4a488` (after), each run in a
+checkout of its own commit, `FLINT_CHECK_SPLIT=1 flint run :path corpus :fn
+words/main`, guest instruction counts (`split-steps`):*
+
+| | pre-read | text | ratio |
+|---|---|---|---|
+| `211e5876` | 669 760 | 4 473 152 | 6.7x |
+| `8ce4a488` | 669 048 | 2 497 249 | 3.7x |
+
+The pre-read compile did not change (712 steps); the TEXT compile got 1.98 M
+steps cheaper. The same holds for a trivial `(ns t)` (632 242 / 4 435 634
+against 631 404 / 2 459 605), and an extra namespace costs the same at both
+commits (`clojure.set`: 4 281 steps over the pre-read either way). The saving
+is in reading `clojure.core`: with project files sent as text
+(`FLINT_HOST_READ=0`) and each file as a probe namespace, the guest reader took
+3 467 479 steps for `211e5876`'s `clojure/core.fln`, and 88 310 + 1 377 586 for
+`8ce4a488`'s `clojure/core.fln` + `flint/core/impl.fln` -- the same text, split
+in two by `9279c30a`. The guest reader's cost was NOT linear in its input: the
+first and second halves of the old `clojure/core.fln` read as 55 458 and
+1 809 525 steps apiece, against 3 467 479 together. So the ratio fell because
+its denominator, the cost of the text path the row compared against, shrank
+when a large file was split -- not because the pre-read path regressed, which
+is what the bound was there to catch. *Why* the old reader was superlinear on
+that file was not pursued: the reader is deleted, and with it the text path,
+so the row has nothing to compare against and is removed rather than given a
+new bound. Nothing can read the library a second time now: a body that is not
+bytes is refused.

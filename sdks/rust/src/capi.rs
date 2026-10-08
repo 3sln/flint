@@ -17,7 +17,7 @@
 //!
 //! Build with `--features capi`; without it none of this is compiled.
 
-use crate::{Compile, Compiler, Image, Optimize, Sandbox, Value};
+use crate::{Compile, Compiler, Image, Optimize, Sandbox, Source, Value};
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::ptr;
 
@@ -62,12 +62,14 @@ pub unsafe extern "C" fn flint_string_free(s: *mut c_char) {
 /// There is no filesystem here (`DECISIONS.md#structured-ports`): a resolver is asked for
 /// a namespace and answers with source or with nothing, which is what lets a
 /// caller compile out of a database, a zip, or memory. Return 0 and leave
-/// `*out` alone for "no such namespace".
+/// `*out` alone for "no such namespace"; otherwise set `*out` to the source and
+/// `*dialect` to `0` (portable) or `1` (flint, `.fln`) -- left alone, portable.
 ///
 /// `*out` must stay valid until the resolver is called again or compilation
 /// returns; flint copies it before asking for anything else.
 pub type FlintResolver = Option<
-    unsafe extern "C" fn(ctx: *mut c_void, ns: *const c_char, out: *mut *const c_char) -> c_int,
+    unsafe extern "C" fn(ctx: *mut c_void, ns: *const c_char, out: *mut *const c_char,
+                         dialect: *mut c_int) -> c_int,
 >;
 
 /// The embedded compiler. One is enough for any number of compiles.
@@ -153,12 +155,14 @@ pub unsafe extern "C" fn flint_compile(
     };
 
     let ctx = opts.resolve_ctx;
-    let resolver = move |ns: &str| -> Option<String> {
+    let resolver = move |ns: &str| -> Option<Source> {
         let Ok(cns) = CString::new(ns) else { return None };
         let mut out: *const c_char = ptr::null();
-        let ok = unsafe { resolve(ctx, cns.as_ptr(), &mut out) };
+        let mut dialect: c_int = 0;
+        let ok = unsafe { resolve(ctx, cns.as_ptr(), &mut out, &mut dialect) };
         if ok == 0 { return None }
-        unsafe { borrowed(out) }.map(String::from)
+        let text = unsafe { borrowed(out) }.map(String::from)?;
+        Some(if dialect == 1 { Source::flint(text) } else { Source::portable(text) })
     };
 
     let exports = unsafe { strings(opts.exports, opts.exports_len) };

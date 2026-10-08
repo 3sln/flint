@@ -27,8 +27,9 @@ static const char *APP =
 
 /* There is no filesystem here: a resolver answers for a namespace, which is
  * what lets a caller compile out of anything at all -- here, a string. */
-static int resolve(void *ctx, const char *ns, const char **out) {
+static int resolve(void *ctx, const char *ns, const char **out, FlintDialect *dialect) {
   (void)ctx;
+  *dialect = FLINT_DIALECT_PORTABLE;
   if (strcmp(ns, "app") != 0) return 0;
   *out = APP;
   return 1;

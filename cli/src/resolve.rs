@@ -34,11 +34,8 @@ pub(crate) struct Answers {
 
 impl Answers {
     /// The same inputs `build_spec_split` would hand the compiler for `srcs`
-    /// (split = true): the standard library as pre-read forms unless
-    /// `FLINT_PREREAD=0` asks for text, which is the same rule
-    /// `build_spec_impl` applies and the same reason -- a suspected pre-read
-    /// defect is ruled in or out by reading the library as text instead
-    /// (`DECISIONS.md#stdlib-preread`).
+    /// (split = true): every file already read, the standard library and the
+    /// project alike (`DECISIONS.md#one-reader-and-no-other`).
     pub(crate) fn new(srcs: &[PathBuf], pods: &[(String, Vec<String>)],
                       features: Option<&[String]>) -> anyhow::Result<Answers> {
         // `:flint/nested` decides whether `flint.ception` is offered at all --
@@ -46,9 +43,8 @@ impl Answers {
         // exported separately so the two can't disagree about what "nested"
         // means.
         let nested = features.map_or(true, |f| f.iter().any(|x| x == ":flint/nested"));
-        let as_text = std::env::var("FLINT_PREREAD").is_ok_and(|v| v == "0");
         let rf = crate::read_features(features, false);
-        let inputs = crate::spec_inputs(srcs, pods, nested, as_text, Some(&rf))?;
+        let inputs = crate::spec_inputs(srcs, pods, nested, Some(&rf))?;
         Ok(Answers { inputs })
     }
 
@@ -113,7 +109,19 @@ impl Answers {
 
         let mut m = vec![(kw("file"), Val::Str(path.clone()))];
         match &self.inputs.files[&path] {
-            Body::Text(t) => m.push((kw("source"), Val::Str(t.clone()))),
+            // NOT `:source` text, which the compiler no longer reads
+            // (`DECISIONS.md#one-reader-and-no-other`): the read error, worded
+            // as the compiler's own read would have worded it.
+            Body::Unreadable(msg, l, c) => {
+                return Val::Map(vec![(kw("error"), Val::Map(vec![
+                    // WHOLE, as the kin reader words it ("read error: ..
+                    // (file:line:col)"), exactly as the compiler's read did.
+                    (kw("message"), Val::Str(msg.clone())),
+                    (kw("file"), Val::Str(path.clone())),
+                    (kw("line"), Val::Int(*l)),
+                    (kw("column"), Val::Int(*c)),
+                ]))]);
+            }
             Body::Forms(b, d) => {
                 m.push((kw("forms"), Val::Bytes(b.to_vec())));
                 m.push((kw("dialect"), kw(d)));

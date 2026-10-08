@@ -1,0 +1,1238 @@
+(ns clojure.core
+  "flint's clojure.core.
+
+  Written in cljc on top of the Rust primitives, for the reason in
+  DECISIONS.md#modularity: a cljc function tree-shakes per var, so a program that
+  never calls `partition-by` does not carry it. A var whose whole body is one
+  `flint.rt/x` call is detected by the compiler and called directly, so the
+  wrapper layer costs nothing at the call site."
+  (:require ;; WHERE MOST OF WHAT THIS NAMESPACE PUBLISHES IS DEFINED, given its
+            ;; public names below with `defalias`; `:refer :all` so the code left
+            ;; here calls it unqualified, as it always did (`DECISIONS.md#four-units`).
+            [flint.core.impl :refer :all]
+            [flint.protocols] [flint.regex]
+            ;; A REFER RATHER THAN A QUALIFIED CALL at every site: a refer is not
+            ;; a definition, so what this namespace PUBLISHES is unchanged.
+            [flint.core :refer [form kind opaque-label opaque? tag]]))
+
+;; ------------------------------------------------------------- aliases
+;;
+;; THE VARS stdcore NEEDS LIVE IN `flint.core.impl` (`DECISIONS.md#four-units`),
+;; and these give them their public names here. `defalias` is a second name for
+;; one var, resolved at compile time: a call to `clojure.core/seq` compiles
+;; exactly as a call to `flint.core.impl/seq` -- its inline, its native alias,
+;; its macro-ness and its metadata are the target's -- so it costs nothing
+;; (`DECISIONS.md#defalias`). Only in a `.fln`, which this file is.
+
+(defalias not flint.core.impl/not)
+(defalias nil? flint.core.impl/nil?)
+(defalias some? flint.core.impl/some?)
+(defalias true? flint.core.impl/true?)
+(defalias false? flint.core.impl/false?)
+(defalias boolean flint.core.impl/boolean)
+(defalias = flint.core.impl/=)
+(defalias not= flint.core.impl/not=)
+(defalias first flint.core.impl/first)
+(defalias rest flint.core.impl/rest)
+(defalias next flint.core.impl/next)
+(defalias seq flint.core.impl/seq)
+(defalias cons flint.core.impl/cons)
+(defalias count flint.core.impl/count)
+(defalias name flint.core.impl/name)
+(defalias namespace flint.core.impl/namespace)
+(defalias meta flint.core.impl/meta)
+(defalias with-meta flint.core.impl/with-meta)
+(defalias atom flint.core.impl/atom)
+(defalias deref flint.core.impl/deref)
+(defalias reset! flint.core.impl/reset!)
+(defalias compare-and-set! flint.core.impl/compare-and-set!)
+(defalias ex-message flint.core.impl/ex-message)
+(defalias transient flint.core.impl/transient)
+(defalias persistent! flint.core.impl/persistent!)
+(defalias conj! flint.core.impl/conj!)
+(defalias assoc! flint.core.impl/assoc!)
+(defalias list flint.core.impl/list)
+(defalias number? flint.core.impl/number?)
+(defalias int? flint.core.impl/int?)
+(defalias string? flint.core.impl/string?)
+(defalias keyword? flint.core.impl/keyword?)
+(defalias symbol? flint.core.impl/symbol?)
+(defalias vector? flint.core.impl/vector?)
+(defalias map? flint.core.impl/map?)
+(defalias set? flint.core.impl/set?)
+(defalias seq? flint.core.impl/seq?)
+(defalias list? flint.core.impl/list?)
+(defalias sequential? flint.core.impl/sequential?)
+(defalias second flint.core.impl/second)
+(defalias nnext flint.core.impl/nnext)
+(defalias empty? flint.core.impl/empty?)
+(defalias inc flint.core.impl/inc)
+(defalias dec flint.core.impl/dec)
+(defalias pos? flint.core.impl/pos?)
+(defalias neg? flint.core.impl/neg?)
+(defalias lazy-seq flint.core.impl/lazy-seq)
+(defalias if-not flint.core.impl/if-not)
+(defalias cond flint.core.impl/cond)
+(defalias and flint.core.impl/and)
+(defalias or flint.core.impl/or)
+(defalias concat flint.core.impl/concat)
+(defalias apply flint.core.impl/apply)
+(defalias reduce flint.core.impl/reduce)
+(defalias reduced? flint.core.impl/reduced?)
+(defalias into flint.core.impl/into)
+(defalias vec flint.core.impl/vec)
+(defalias hash-map flint.core.impl/hash-map)
+(defalias conj flint.core.impl/conj)
+(defalias assoc flint.core.impl/assoc)
+(defalias get flint.core.impl/get)
+(defalias nth flint.core.impl/nth)
+(defalias + flint.core.impl/+)
+(defalias - flint.core.impl/-)
+(defalias * flint.core.impl/*)
+(defalias < flint.core.impl/<)
+(defalias > flint.core.impl/>)
+(defalias max flint.core.impl/max)
+(defalias str flint.core.impl/str)
+(defalias subs flint.core.impl/subs)
+(defalias keyword flint.core.impl/keyword)
+(defalias symbol flint.core.impl/symbol)
+(defalias tagged-literal flint.core.impl/tagged-literal)
+(defalias tagged-literal? flint.core.impl/tagged-literal?)
+(defalias int flint.core.impl/int)
+(defalias doseq flint.core.impl/doseq)
+(defalias map flint.core.impl/map)
+(defalias filter flint.core.impl/filter)
+(defalias remove flint.core.impl/remove)
+(defalias take flint.core.impl/take)
+(defalias drop flint.core.impl/drop)
+(defalias range flint.core.impl/range)
+(defalias repeat flint.core.impl/repeat)
+(defalias interpose flint.core.impl/interpose)
+(defalias mapcat flint.core.impl/mapcat)
+(defalias some flint.core.impl/some)
+(defalias reverse flint.core.impl/reverse)
+(defalias swap! flint.core.impl/swap!)
+(defalias ex-info flint.core.impl/ex-info)
+(defalias key flint.core.impl/key)
+(defalias val flint.core.impl/val)
+(defalias merge flint.core.impl/merge)
+(defalias update flint.core.impl/update)
+(defalias partition flint.core.impl/partition)
+(defalias mapv flint.core.impl/mapv)
+(defalias list* flint.core.impl/list*)
+(defalias pr-str flint.core.impl/pr-str)
+(defalias volatile! flint.core.impl/volatile!)
+(defalias vswap! flint.core.impl/vswap!)
+(defalias gensym flint.core.impl/gensym)
+(defalias find-protocol-method flint.core.impl/find-protocol-method)
+(defalias extend flint.core.impl/extend)
+
+
+
+;; ---------------------------------------------------------------- primitives
+
+(defn identity [x] x)
+(defn boolean? [x] (flint.rt/boolean? x))
+(defn distinct? ([a] true) ([a b] (not (flint.rt/= a b))))
+(defn identical? [a b] (flint.rt/identical? a b))
+(defn hash [x] (flint.rt/hash x))
+(defn compare [a b] (flint.rt/compare a b))
+
+(defn ifn? [x] (if (flint.rt/fn? x) true (if (flint.rt/keyword? x) true
+                                            (if (flint.rt/map? x) true
+                                                (if (flint.rt/set? x) true
+                                                    (flint.rt/vector? x))))))
+(defn coll? [x] (if (flint.rt/sequential? x) true
+                    (if (flint.rt/map? x) true (flint.rt/set? x))))
+(defn associative? [x] (if (flint.rt/map? x) true (flint.rt/vector? x)))
+(defn char? [x] (if (flint.rt/string? x) (flint.rt/= 1 (flint.rt/count x)) false))
+(defn ident? [x] (if (flint.rt/keyword? x) true (flint.rt/symbol? x)))
+(defn simple-keyword? [x] (if (flint.rt/keyword? x) (flint.rt/nil? (flint.rt/namespace x)) false))
+(defn qualified-keyword? [x] (if (flint.rt/keyword? x) (some? (flint.rt/namespace x)) false))
+(defn simple-symbol? [x] (if (flint.rt/symbol? x) (flint.rt/nil? (flint.rt/namespace x)) false))
+(defn qualified-symbol? [x] (if (flint.rt/symbol? x) (some? (flint.rt/namespace x)) false))
+(defn empty [coll] (flint.rt/empty coll))
+(defn peek [coll] (flint.rt/peek coll))
+(defn pop [coll] (flint.rt/pop coll))
+(defn contains? [coll k] (flint.rt/contains? coll k))
+(defn vary-meta
+  ([x f] (flint.rt/with-meta x (f (flint.rt/meta x))))
+  ([x f a] (flint.rt/with-meta x (f (flint.rt/meta x) a)))
+  ([x f a b] (flint.rt/with-meta x (f (flint.rt/meta x) a b)))
+  ([x f a b c] (flint.rt/with-meta x (f (flint.rt/meta x) a b c))))
+(defn ex-data [e] (flint.rt/ex-data e))
+
+;; A byte string answers `bytes?`, as it does in Clojure. Everything else about
+;; them lives in `flint.bytes`: `byte-cat` and `str->bytes` are flint's, not
+;; Clojure's, and `clojure.core` is a namespace people expect to match.
+(defn bytes? [x] (flint.rt/bytes? x))
+(defn dissoc! [c k] (flint.rt/dissoc! c k))
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "an integer")}
+                             :default nil)}
+  integer? [x] (flint.rt/int? x))
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a float")}
+                             :default nil)}
+  float? [x] (flint.rt/float? x))
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a float")}
+                             :default nil)}
+  double? [x] (flint.rt/float? x))
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a function")}
+                             :default nil)}
+  fn? [x] (flint.rt/fn? x))
+(defn ffirst [coll] (flint.rt/first (flint.rt/first coll)))
+(defn nfirst [coll] (flint.rt/next (flint.rt/first coll)))
+(defn fnext [coll] (flint.rt/first (flint.rt/next coll)))
+(defn zero? [n] (flint.rt/num-eq n 0))
+(defn quot [a b] (flint.rt/quot a b))
+(defn rem [a b] (flint.rt/rem a b))
+(defn mod [a b] (let [m (flint.rt/rem a b)]
+                  (if (if (flint.rt/num-eq m 0) true
+                          (flint.rt/= (flint.rt/gt a 0) (flint.rt/gt b 0)))
+                    m
+                    (flint.rt/add m b))))
+(defn even? [n] (flint.rt/num-eq 0 (flint.rt/rem n 2)))
+(defn odd? [n] (not (flint.rt/num-eq 0 (flint.rt/rem n 2))))
+
+(defmacro when [test & body]
+  (list 'if test (cons 'do body)))
+
+(defmacro when-not [test & body]
+  (list 'if test nil (cons 'do body)))
+
+(defmacro declare [& names]
+  (cons 'do (map2 (fn [n] (list 'def n)) names)))
+
+(defn reduced [x] (flint.rt/with-meta [x] {:flint/reduced true}))
+(defn set [coll] (if (set? coll) coll (into #{} coll)))
+
+(defn hash-set [& xs] (set xs))
+(defn vector [& xs] (vec xs))
+
+(defn dissoc
+  ([m] m)
+  ([m k] (flint.rt/dissoc m k))
+  ([m k & more] (reduce flint.rt/dissoc (flint.rt/dissoc m k) more)))
+
+(defn disj
+  ([s] s)
+  ([s k] (flint.rt/disj s k))
+  ([s k & more] (reduce flint.rt/disj (flint.rt/disj s k) more)))
+
+(defn last [coll]
+  (loop [s (seq coll)]
+    (if s (if (next s) (recur (next s)) (first s)) nil)))
+
+(defn butlast [coll]
+  (loop [acc [] s (seq coll)]
+    (if (and s (next s)) (recur (conj acc (first s)) (next s)) (seq acc))))
+
+(defn nthnext [coll n]
+  (loop [n n s (seq coll)] (if (and s (pos? n)) (recur (dec n) (next s)) s)))
+
+(defn nthrest [coll n]
+  (loop [n n s coll] (if (pos? n) (recur (dec n) (rest s)) s)))
+(defn /
+  ([a] (flint.rt/div 1 a)) ([a b] (flint.rt/div a b))
+  ([a b & more] (reduce flint.rt/div (flint.rt/div a b) more)))
+(defn <= ([a] true) ([a b] (flint.rt/le a b)) ([a b & more] (cmp-chain flint.rt/le a b more)))
+(defn >= ([a] true) ([a b] (flint.rt/ge a b)) ([a b & more] (cmp-chain flint.rt/ge a b more)))
+(defn == ([a] true) ([a b] (flint.rt/num-eq a b)) ([a b & more] (cmp-chain flint.rt/num-eq a b more)))
+
+(defn min ([a] a) ([a b] (if (flint.rt/lt a b) a b))
+  ([a b & more] (reduce min (min a b) more)))
+(defn abs [n] (if (flint.rt/lt n 0) (flint.rt/sub 0 n) n))
+
+;; ---------------------------------------------------------------- bit fiddling
+
+(defn bit-and ([a b] (flint.rt/bit-and a b)) ([a b & more] (reduce flint.rt/bit-and (flint.rt/bit-and a b) more)))
+(defn bit-or ([a b] (flint.rt/bit-or a b)) ([a b & more] (reduce flint.rt/bit-or (flint.rt/bit-or a b) more)))
+(defn bit-xor ([a b] (flint.rt/bit-xor a b)) ([a b & more] (reduce flint.rt/bit-xor (flint.rt/bit-xor a b) more)))
+(defn bit-not [a] (flint.rt/bit-not a))
+(defn bit-shift-left [a n] (flint.rt/bit-shift-left a n))
+(defn bit-shift-right [a n] (flint.rt/bit-shift-right a n))
+(defn unsigned-bit-shift-right [a n] (flint.rt/unsigned-bit-shift-right a n))
+(defn bit-test [a n] (flint.rt/bit-test a n))
+(defn bit-set [a n] (flint.rt/bit-or a (flint.rt/bit-shift-left 1 n)))
+(defn bit-clear [a n] (flint.rt/bit-and a (flint.rt/bit-not (flint.rt/bit-shift-left 1 n))))
+(defn bit-flip [a n] (flint.rt/bit-xor a (flint.rt/bit-shift-left 1 n)))
+
+
+(defn parse-long [s] (let [v (flint.rt/str->num s)] (if (int? v) v nil)))
+(defn parse-double [s] (let [v (flint.rt/str->num s)] (if (number? v) (flint.rt/add v 0.0) nil)))
+
+(defn long
+  "Truncate toward zero to a 64-bit integer, as Clojure's `long` does."
+  [x] (flint.rt/to-long x))
+(defn double [x] (flint.rt/add x 0.0))
+(defn num [x] x)
+
+(defn char [n] (flint.rt/from-code-point n))
+
+
+;; -------------------------------------------------------------- more macros
+
+(defmacro ->
+  [x & forms]
+  (loop [x x forms forms]
+    (if forms
+      (let [form (first forms)
+            threaded (if (seq? form)
+                       (cons (first form) (cons x (rest form)))
+                       (list form x))]
+        (recur threaded (next forms)))
+      x)))
+
+(defmacro ->>
+  [x & forms]
+  (loop [x x forms forms]
+    (if forms
+      (let [form (first forms)
+            threaded (if (seq? form)
+                       (concat form (list x))
+                       (list form x))]
+        (recur threaded (next forms)))
+      x)))
+
+(defmacro as-> [expr nm & forms]
+  (list 'let* (vec (concat [nm expr]
+                           (interleave2 (repeat2 (count forms) nm) forms)))
+        nm))
+
+(defmacro cond-> [expr & clauses]
+  (let [g (gensym "ct")
+        pairs (partition 2 clauses)]
+    (list 'clojure.core/let
+          (vec (concat [g expr]
+                       (mapcat (fn [p]
+                                 (let [test (first p) step (second p)]
+                                   [g (list 'if test
+                                            (if (seq? step)
+                                              (cons (first step) (cons g (rest step)))
+                                              (list step g))
+                                            g)]))
+                               pairs)))
+          g)))
+
+(defmacro cond->> [expr & clauses]
+  (let [g (gensym "ct")
+        pairs (partition 2 clauses)]
+    (list 'clojure.core/let
+          (vec (concat [g expr]
+                       (mapcat (fn [p]
+                                 (let [test (first p) step (second p)]
+                                   [g (list 'if test
+                                            (if (seq? step) (concat step (list g)) (list step g))
+                                            g)]))
+                               pairs)))
+          g)))
+
+(defmacro some->> [expr & forms]
+  (let [g (gensym "st")]
+    (list 'clojure.core/let [g expr]
+          (loop [acc g fs forms]
+            (if fs
+              (let [form (first fs)
+                    step (if (seq? form) (concat form (list acc)) (list form acc))]
+                (recur (list 'if (list 'clojure.core/nil? acc) nil step) (next fs)))
+              acc)))))
+
+(defmacro letfn*
+  "Mutually recursive local functions, over FLAT `name value` pairs.
+
+  This is the special form Clojure's `letfn` expands into, and code written
+  against it directly -- macro output, and jank's dialect suite, whose
+  `form/letfn` tests are all `(letfn* [a (fn* a ..)] ..)` -- reaches it without
+  going through `letfn`. It used to be refused by the analyzer with \"letfn* is
+  not implemented\", which cost 14 of that suite's 64 `pass-*` failures while the
+  mechanism to serve them was already here under the other name.
+
+  flint closures capture by value, so each name is bound to a stub that
+  dispatches through a volatile; the real functions are installed afterwards.
+  That indirection is the price of by-value capture, and by-value capture is
+  what keeps dead closure slots from retaining objects.
+
+  WHAT THIS IS NOT: bindings that genuinely exist before their initialisers run,
+  which is what `ROADMAP.md` records as the remaining work. The stub is variadic,
+  so a wrong-arity call inside the body is caught by the real function rather than
+  at the call site, and the error names the real one. Behaviour is right; the
+  diagnosis is one frame further in."
+  [bindings & body]
+  ;; THE BINDINGS ARE CHECKED, and leaving them unchecked cost four tests going
+  ;; the other way. While the analyzer refused `letfn*` outright, jank's four
+  ;; `fail-*` cases -- `(letfn* 1)`, an odd-length vector, a qualified name, and a
+  ;; vector holding a bare `fn*` -- were "correctly refused" for a reason that had
+  ;; nothing to do with them. Implementing the form turned all four into programs
+  ;; flint accepted, so the score rose by 13 and fell by 4 in the same run.
+  ;;
+  ;; A macro that takes an odd-length vector produces a `nil` function body and
+  ;; fails somewhere else entirely, which is the shape worth refusing here.
+  ;; NO `flint.rt/kind` IN THE MESSAGE. A macro body runs in the COMPILE-TIME
+  ;; evaluator, which serves a subset of the builtins: naming the kind here read
+  ;; better and answered "builtin `flint/kind` is not available at compile time",
+  ;; so the refusal was about the compiler instead of about the program.
+  (when-not (vector? bindings)
+    (throw (ex-info (str "letfn* wants a vector of name/fn pairs, got `"
+                         (str bindings) "`")
+                    {:form bindings})))
+  (when-not (even? (count bindings))
+    (throw (ex-info (str "letfn* wants an even number of binding forms, got "
+                         (count bindings))
+                    {:form bindings})))
+  (let [pairs (partition 2 bindings)
+        names (map first pairs)
+        fns (map second pairs)
+        ;; A `loop`, NOT `doseq`/`remove`. This is `clojure.core` and a macro body
+        ;; runs at expansion time, so it may use only what is already defined ABOVE
+        ;; it: `doseq` is a macro in this very namespace and the compiler says so --
+        ;; "clojure.core/doseq is a macro, and clojure.core is compiled before the
+        ;; namespace that defines it" -- and `filter`/`remove` are 250 lines further
+        ;; down. `loop` is a special form and `first`/`next`/`seq` are at the top.
+        ;;
+        ;; A ONE-VECTOR rather than the offender itself, because `nil` is a name
+        ;; somebody can write: `some`-style truthiness would walk past
+        ;; `(letfn* [nil (fn* ..)] ..)` and report nothing.
+        bad (loop [xs (seq names)]
+              (if (flint.rt/nil? xs)
+                nil
+                (if (simple-symbol? (first xs))
+                  (recur (next xs))
+                  [(first xs)])))
+        _ (when-not (flint.rt/nil? bad)
+            (throw (ex-info (str "letfn* binds simple symbols; `" (first bad)
+                                 "` is not one")
+                            {:form (first bad)})))
+        boxes (map (fn [n] (gensym (str (name n) "-box"))) names)
+        argsym (gensym "letfn-args")
+        box-binds (mapcat (fn [b] [b (list 'clojure.core/volatile! nil)]) boxes)
+        stub-binds (mapcat (fn [n b]
+                             [n (list 'clojure.core/fn ['& argsym]
+                                      (list 'clojure.core/apply (list 'clojure.core/deref b) argsym))])
+                           names boxes)
+        sets (map (fn [f b] (list 'clojure.core/vreset! b f)) fns boxes)]
+    (list 'clojure.core/let (vec (concat box-binds stub-binds))
+          (cons 'do (concat sets body)))))
+
+(defmacro letfn
+  "Mutually recursive local functions, over `(name [args] body)` specs.
+
+  ONE MECHANISM, TWO SPELLINGS: this rewrites its specs into flat pairs and hands
+  them to `letfn*`, which is where the volatile-stub trick lives. It used to carry
+  its own copy, and then `letfn*` was refused outright -- two spellings of one
+  feature with the implementation in the one nobody writes by hand (AGENTS.md
+  sec. 1). Clojure's `letfn` expands to `letfn*` for the same reason."
+  [fnspecs & body]
+  (cons 'clojure.core/letfn*
+        (cons (vec (mapcat (fn [spec]
+                             [(first spec) (cons 'clojure.core/fn (rest spec))])
+                           fnspecs))
+              body)))
+
+(defmacro some-> [expr & forms]
+  (let [g (gensym "some")]
+    (list 'let* [g expr]
+          (loop [acc g fs forms]
+            (if fs
+              (let [form (first fs)
+                    step (if (seq? form) (cons (first form) (cons acc (rest form))) (list form acc))]
+                (recur (list 'if (list 'clojure.core/nil? acc) nil step) (next fs)))
+              acc)))))
+
+(defmacro if-let
+  ([bindings then] (list 'clojure.core/if-let bindings then nil))
+  ([bindings then else]
+   (let [b (first bindings) v (second bindings) g (gensym "iflet")]
+     ;; `clojure.core/let`, not `let*`: the binding form may be a destructuring
+     ;; pattern, and only the macro layer knows how to take one apart.
+     (list 'let* [g v]
+           (list 'if g (list 'clojure.core/let [b g] then) else)))))
+
+(defmacro when-let [bindings & body]
+  (list 'clojure.core/if-let bindings (cons 'do body) nil))
+
+(defmacro if-some
+  ([bindings then] (list 'clojure.core/if-some bindings then nil))
+  ([bindings then else]
+   (let [b (first bindings) v (second bindings) g (gensym "ifsome")]
+     (list 'let* [g v]
+           (list 'if (list 'clojure.core/nil? g) else (list 'clojure.core/let [b g] then))))))
+
+(defmacro when-some [bindings & body]
+  (list 'clojure.core/if-some bindings (cons 'do body) nil))
+
+(defmacro when-first [bindings & body]
+  (let [b (first bindings) v (second bindings) g (gensym "wf")]
+    (list 'clojure.core/when-let [g (list 'clojure.core/seq v)]
+          (list 'clojure.core/let [b (list 'clojure.core/first g)] (cons 'do body)))))
+
+(defmacro doto [x & forms]
+  (let [g (gensym "doto")]
+    (list 'let* [g x]
+          (cons 'do (map2 (fn [f]
+                            (if (seq? f)
+                              (cons (first f) (cons g (rest f)))
+                              (list f g)))
+                          forms))
+          g)))
+
+(defmacro condp [pred expr & clauses]
+  (let [g (gensym "condp")]
+    (list 'clojure.core/let [g expr]
+          (loop [cs (reverse (partition-all 2 clauses)) acc nil]
+            (if (nil? (seq cs))
+              acc
+              (let [c (first cs)]
+                (if (= 1 (count c))
+                  (recur (next cs) (first c))
+                  (recur (next cs)
+                         (list 'if (list pred (first c) g) (second c) acc)))))))))
+
+(defmacro case [e & clauses]
+  ;; flint has no jump-table opcode yet; `case` is a chain of `=` tests. Keys
+  ;; are keywords and small strings most of the time, and those compare as a
+  ;; single 64-bit word, so the chain is cheaper than it looks. Noted in the
+  ;; README as a difference: flint's `case` is O(n), Clojure's is O(1).
+  (list 'let* ['case__g e]
+        (loop [cs clauses acc nil seen []]
+          (if (nil? cs)
+            (list 'clojure.core/cond-chain 'case__g seen acc)
+            (if (nil? (next cs))
+              (recur nil (first cs) seen)
+              (recur (nnext cs) acc (conj seen [(first cs) (second cs)])))))))
+
+(defmacro ^:private cond-chain [g pairs default]
+  (loop [ps (reverse pairs) acc default]
+    (if (nil? (seq ps))
+      acc
+      (let [[test result] (first ps)
+            t (if (and (seq? test) (= 'quote (first test))) (second test) test)
+                ;; A LIST IS ALTERNATIVES; A VECTOR, SET OR MAP IS ONE CONSTANT.
+            ;; This read `(or (vector? t) (seq? t) (set? t))`, so a vector or a
+            ;; set test was expanded into a chain of alternatives -- wrong in
+            ;; BOTH directions, and silently, because `case` answers its default
+            ;; rather than failing.
+            ;;
+            ;; MEASURED against babashka 2026-09-29, one expression per shape:
+            ;;
+            ;;   (case 2      (1 2)  ..)  -> matches      both
+            ;;   (case [1 2]  [1 2]  ..)  -> matches      Clojure; flint MISSED
+            ;;   (case 2      [1 2]  ..)  -> no match     Clojure; flint MATCHED
+            ;;   (case #{1 2} #{1 2} ..)  -> matches      Clojure; flint MISSED
+            ;;   (case 2      #{1 2} ..)  -> no match     Clojure; flint MATCHED
+            ;;   (case {:a 1} {:a 1} ..)  -> matches      both (maps were never
+            ;;                                            in the alternatives test)
+            ;;
+            ;; It cost two of jank's tests -- `form/case/pass-vector` and
+            ;; `pass-set` -- and they are the kind worth having: the program ran
+            ;; and computed a different answer.
+            cnd (if (seq? t)
+                  (cons 'clojure.core/or (map2 (fn [k] (list 'clojure.core/= g (list 'quote k))) t))
+                  (list 'clojure.core/= g (list 'quote t)))]
+        (recur (next ps) (list 'if cnd result acc))))))
+
+(defmacro dotimes [bindings & body]
+  (let [i (first bindings) n (second bindings) g (gensym "n")]
+    (list 'let* [g n]
+          (list 'loop* [i 0]
+                (list 'if (list 'clojure.core/< i g)
+                      (cons 'do (concat body (list (list 'recur (list 'clojure.core/inc i)))))
+                      nil)))))
+
+(defmacro while [test & body]
+  (list 'loop* []
+        (list 'if test (cons 'do (concat body (list (list 'recur)))) nil)))
+
+(defmacro assert
+  ([x] (list 'if x nil (list 'throw (list 'clojure.core/ex-info "assert failed" {}))))
+  ([x msg] (list 'if x nil (list 'throw (list 'clojure.core/ex-info msg {})))))
+
+(defmacro comment [& _] nil)
+
+(defmacro defonce [nm expr]
+  (list 'def nm expr))
+
+(defmacro time [expr] expr)
+
+(defmacro for [bindings body]
+  (seq-binding-form
+   (partition 2 bindings)
+   (fn [b v acc] (list 'clojure.core/mapcat (list 'clojure.core/fn [b] acc) v))
+   (list 'clojure.core/list body)))
+
+(defn- keep2 [f coll]
+  (lazy-seq (let [s (seq coll)]
+              (when s
+                (let [v (f (first s))]
+                  (if (nil? v) (keep2 f (rest s)) (cons v (keep2 f (rest s)))))))))
+(defn keep [f coll] (keep2 f coll))
+
+(defn take-while [pred coll]
+  (lazy-seq (let [s (seq coll)]
+              (when s (when (pred (first s))
+                        (cons (first s) (take-while pred (rest s))))))))
+
+;; EMPTY IS `()` here too -- see `drop`.
+(defn drop-while [pred coll]
+  (loop [s (seq coll)]
+    (if (and s (pred (first s))) (recur (next s)) (if s s (list)))))
+
+(defn- interleave2 [a b]
+  (lazy-seq (let [sa (seq a) sb (seq b)]
+              (when (and sa sb)
+                (cons (first sa) (cons (first sb) (interleave2 (rest sa) (rest sb))))))))
+(defn interleave
+  ([a b] (interleave2 a b))
+  ([a b & more] (apply2 interleave-all (cons a (cons b more)))))
+(defn- interleave-all [colls]
+  (lazy-seq (let [ss (map2 seq colls)]
+              (when (every? some? ss)
+                (concat (map2 first ss) (interleave-all (map2 rest ss))))))) 
+
+(defn every? [pred coll]
+  (loop [s (seq coll)] (if s (if (pred (first s)) (recur (next s)) false) true)))
+(defn not-any? [pred coll] (not (some pred coll)))
+(defn not-every? [pred coll] (not (every? pred coll)))
+
+(defn comp
+  ([] identity)
+  ([f] f)
+  ([f g] (fn [& args] (f (apply2 g args))))
+  ([f g h] (fn [& args] (f (g (apply2 h args)))))
+  ([f g h & more] (reduce (fn [a b] (comp a b)) (comp f g h) more)))
+
+(defn partial
+  ([f] f)
+  ([f a] (fn [& args] (apply2 f (cons a args))))
+  ([f a b] (fn [& args] (apply2 f (cons a (cons b args)))))
+  ([f a b c] (fn [& args] (apply2 f (cons a (cons b (cons c args))))))
+  ([f a b c & more] (fn [& args] (apply2 f (concat (cons a (cons b (cons c more))) args)))))
+
+(defn constantly [x] (fn [& _] x))
+(defn complement [f] (fn [& args] (not (apply2 f args))))
+
+(defn juxt
+  ([f] (fn [& args] [(apply2 f args)]))
+  ([f g] (fn [& args] [(apply2 f args) (apply2 g args)]))
+  ([f g h] (fn [& args] [(apply2 f args) (apply2 g args) (apply2 h args)]))
+  ([f g h & more] (let [fs (cons f (cons g (cons h more)))]
+                    (fn [& args] (mapv (fn [x] (apply2 x args)) fs)))))
+
+;; NIL FOR AN EMPTY MAP, and `()` is the wrong answer even though it is what
+;; every other seq function gives. Clojure is not uniform about this and it
+;; cannot be reasoned out -- `(map inc [])` is `()` and `(keys {})` is nil --
+;; so `test/conform/basics.cljc` asks real Clojure and this follows.
+;;
+;; WALKED BY INDEX, not through `map`. These were `(map2 first m)`, which pays
+;; the lazy layer TWICE: once for the map's own seq, which is a vecseq over the
+;; entry vector, and once for the `map` on top of it. They measured 8.1 and 9.1
+;; allocations per element, the worst of any bulk operation.
+;;
+;; Still lazy, one cell per element, over the vector the map already has.
+(defn- keyvals-from [ev ^int i ^int n which]
+  (lazy-seq
+    (if (flint.rt/lt i n)
+      (cons (flint.rt/nth (flint.rt/nth ev i) which)
+            (keyvals-from ev (flint.rt/add i 1) n which))
+      nil)))
+
+(defn- keyvals [m which]
+  (let [ev (flint.rt/coll-vec m)]
+    (if (nil? ev)
+      (when (seq m) (map2 (if (flint.rt/= which 0) first second) m))
+      (let [^int n (count ev)]
+        (when (flint.rt/lt 0 n) (keyvals-from ev 0 n which))))))
+
+(defn keys [m] (keyvals m 0))
+(defn vals [m] (keyvals m 1))
+
+(defn select-keys [m ks]
+  (persistent!
+   (reduce (fn [acc k] (if (contains? m k) (assoc! acc k (get m k)) acc))
+           (transient {}) ks)))
+
+(defn get-in
+  ([m ks] (reduce (fn [acc k] (if (nil? acc) nil (get acc k))) m ks))
+  ([m ks not-found]
+   (loop [acc m s (seq ks)]
+     (if s
+       (if (and (associative? acc) (contains? acc (first s)))
+         (recur (get acc (first s)) (next s))
+         (if (and (set? acc) (contains? acc (first s)))
+           (recur (get acc (first s)) (next s))
+           not-found))
+       acc))))
+(defn assoc-in [m ks v]
+  (let [k (first ks)]
+    (if (next ks)
+      (assoc m k (assoc-in (get m k) (next ks) v))
+      (assoc m k v))))
+(defn update-in
+  ([m ks f] (assoc-in m ks (f (get-in m ks))))
+  ([m ks f a] (assoc-in m ks (f (get-in m ks) a)))
+  ([m ks f a b] (assoc-in m ks (f (get-in m ks) a b)))
+  ([m ks f a b & more] (assoc-in m ks (apply2 f (cons (get-in m ks) (cons a (cons b more)))))))
+
+(defn frequencies [coll]
+  (persistent! (reduce (fn [m x] (assoc! m x (inc (get m x 0)))) (transient {}) coll)))
+
+(defn group-by [f coll]
+  ;; The outer map is transient; the per-key vectors stay persistent because
+  ;; they are read back on the next element that lands in the same group.
+  (persistent!
+   (reduce (fn [m x] (let [k (f x)] (assoc! m k (conj (get m k []) x))))
+           (transient {}) coll)))
+
+;; LAZY, like Clojure's, and the `seen` set is PERSISTENT because it is
+;; carried into a thunk that may be forced later, or never. A transient
+;; cannot be: it belongs to one thread of control and this hands it across a
+;; suspension.
+;;
+;; The duplicate skip is a `loop` rather than a recursive call, so a long run
+;; of repeats costs one thunk in total rather than one per element.
+(defn- distinct2 [coll seen]
+  (lazy-seq
+    (loop [s (seq coll)]
+      (if s
+        (let [x (first s)]
+          (if (contains? seen x)
+            (recur (next s))
+            (cons x (distinct2 (rest s) (conj seen x)))))
+        nil))))
+
+(defn distinct [coll] (distinct2 coll #{}))
+
+(defn- as-comparator
+  "Clojure lets a predicate stand in for a comparator: (sort > xs) works because
+  a boolean-returning fn is read as `less-than`."
+  [f]
+  (fn [a b]
+    (let [r (f a b)]
+      (if (number? r) r (if r -1 (if (f b a) 1 0))))))
+
+(defn sort
+  ([coll] (merge-sort compare (vec coll)))
+  ([cmp coll] (merge-sort (as-comparator cmp) (vec coll))))
+
+;; ONE RUN MERGED INTO `acc`: `src[lo..mid)` against `src[mid..hi)`, both
+;; already sorted, appended in order.
+;;
+;; A TIE TAKES FROM THE LEFT, which is what makes the sort STABLE -- `<= 0`
+;; and not `< 0`. Clojure's sort is stable and `sort-by` is worth nothing
+;; without it.
+(defn- merge-run [cmp src acc lo mid hi]
+  (loop [acc acc ^int i lo ^int j mid]
+    (if (flint.rt/lt i mid)
+      (if (flint.rt/lt j hi)
+        (if (<= (cmp (flint.rt/nth src i) (flint.rt/nth src j)) 0)
+          (recur (conj! acc (flint.rt/nth src i)) (flint.rt/add i 1) j)
+          (recur (conj! acc (flint.rt/nth src j)) i (flint.rt/add j 1)))
+        (recur (conj! acc (flint.rt/nth src i)) (flint.rt/add i 1) j))
+      (if (flint.rt/lt j hi)
+        (recur (conj! acc (flint.rt/nth src j)) i (flint.rt/add j 1))
+        acc))))
+
+;; BOTTOM-UP, so nothing is sliced and nothing is walked as a seq.
+;;
+;; The recursive top-down version split with `subvec`, which COPIES here --
+;; O(n) per level, so O(n log n) element copies before any comparing -- and
+;; then merged through `first`/`next` with a persistent `conj` per element.
+;; `sort` is the only caller and it paid for all three.
+;;
+;; This makes runs of 1, 2, 4, ... and merges pairs of them into a transient,
+;; one fresh vector per pass. Same complexity, and none of the copying.
+(defn- merge-sort [cmp v0]
+  (let [^int n (count v0)]
+    (if (< n 2)
+      ;; `()` and not nil for an empty input: `(seq [])` is nil, and Clojure's
+      ;; `sort` answers an empty seq.
+      (if (< n 1) (list) (seq v0))
+      (loop [src v0 ^int width 1]
+        (if (flint.rt/lt (flint.rt/sub n 1) width)
+          (seq src)
+          (recur
+            (persistent!
+              (loop [acc (transient []) ^int lo 0]
+                (if (flint.rt/lt lo n)
+                  (let [^int mid (if (flint.rt/lt n (flint.rt/add lo width))
+                                   n (flint.rt/add lo width))
+                        ^int hi (if (flint.rt/lt n (flint.rt/add mid width))
+                                  n (flint.rt/add mid width))]
+                    (recur (merge-run cmp src acc lo mid hi) hi))
+                  acc)))
+            (flint.rt/add width width)))))))
+
+(defn- subvec2 [v start end]
+  (loop [acc [] i start] (if (< i end) (recur (conj acc (nth v i)) (inc i)) acc)))
+
+(defn- check-subvec
+  "Throw a subvector range error that says which end was wrong, and by how much.
+
+  The same shape as `check-subs` one screen up, and for the same reason: an
+  inverted range used to answer `[]` here, which is Clojure throwing and flint
+  quietly agreeing to something. `(subvec [1 2 3] 2 1)` is a program with a bug
+  in it, and the empty vector it got back was indistinguishable from a slice
+  that really was empty.
+
+  AN EMPTY RANGE IS NOT AN INVERTED ONE. `(subvec [1 2 3] 3 3)` is `[]` in
+  Clojure and must stay `[]` here; `(subvec [1 2 3] 4 4)` throws, because the
+  start is past the end of the vector even though the range is empty. So the
+  bound is checked against `n` before the two ends are compared."
+  [v start end]
+  (let [n (count v)]
+    (cond
+      (not (int? start))
+      (throw (ex-info (str "subvec start must be an integer, got "
+                           (name (flint.rt/kind start)))
+                      {:start start}))
+      (not (int? end))
+      (throw (ex-info (str "subvec end must be an integer, got "
+                           (name (flint.rt/kind end)))
+                      {:end end}))
+      (neg? start)
+      (throw (ex-info (str "subvec start is negative: " start)
+                      {:start start :end end :length n}))
+      (> end n)
+      (throw (ex-info (str "subvec end is " end ", past the end of a vector of "
+                           n " element" (if (= n 1) "" "s"))
+                      {:start start :end end :length n}))
+      (> start end)
+      (throw (ex-info (str "subvec start " start " is past its end " end)
+                      {:start start :end end :length n}))
+      :else nil)))
+
+(defn subvec
+  ([v start] (subvec v start (count v)))
+  ([v start end] (check-subvec v start end) (subvec2 v start end)))
+
+(defn sort-by
+  ([kf coll] (merge-sort (fn [a b] (compare (kf a) (kf b))) (vec coll)))
+  ([kf cmp coll] (let [c (as-comparator cmp)]
+                   (merge-sort (fn [a b] (c (kf a) (kf b))) (vec coll)))))
+
+(defn partition-all
+  ([n coll] (partition-all n n coll))
+  ([n step coll]
+   #?(:flint/check (check-partition "partition-all" n step))
+   (lazy-seq (let [s (seq coll)]
+               (when s (cons (seq (vec (take n s))) (partition-all n step (drop step s))))))))
+
+(defn iterate [f x] (lazy-seq (cons x (iterate f (f x)))))
+
+(defn zipmap [ks vs]
+  (loop [m (transient {}) ks (seq ks) vs (seq vs)]
+    (if (and ks vs)
+      (recur (assoc! m (first ks) (first vs)) (next ks) (next vs))
+      (persistent! m))))
+(defn filterv [pred coll]
+  (persistent! (reduce (fn [acc x] (if (pred x) (conj! acc x) acc)) (transient []) coll)))
+
+;; LAZY, like `map` and `keep` next door and like Clojure. These two built the
+;; whole answer into a vector and handed back its seq, so
+;; `(take 3 (map-indexed f (iterate inc 0)))` did not return -- while the same
+;; expression with plain `map` did. Nothing recorded that as a divergence
+;; because nothing asked it.
+(defn- map-indexed2 [f i coll]
+  (lazy-seq (let [s (seq coll)]
+              (when s
+                (cons (f i (first s)) (map-indexed2 f (inc i) (rest s)))))))
+
+(defn map-indexed [f coll] (map-indexed2 f 0 coll))
+
+(defn- keep-indexed2 [f i coll]
+  (lazy-seq (let [s (seq coll)]
+              (when s
+                (let [v (f i (first s))]
+                  (if (nil? v)
+                    (keep-indexed2 f (inc i) (rest s))
+                    (cons v (keep-indexed2 f (inc i) (rest s)))))))))
+
+(defn keep-indexed [f coll] (keep-indexed2 f 0 coll))
+
+(defn reduce-kv [f init m]
+  (reduce (fn [acc e] (f acc (key e) (val e))) init m))
+
+(defn fnil
+  ([f d] (fn [x & args] (apply2 f (cons (if (nil? x) d x) args))))
+  ([f d1 d2] (fn [x y & args] (apply2 f (cons (if (nil? x) d1 x)
+                                              (cons (if (nil? y) d2 y) args))))))
+
+(defn run! [f coll] (reduce (fn [_ x] (f x) nil) nil coll) nil)
+(defn doall [coll] (do (count coll) coll))
+(defn dorun [coll] (do (count coll) nil))
+(defn sequence [coll] (seq coll))
+
+(defn not-empty [coll] (if (seq coll) coll nil))
+(defn find [m k] (if (contains? m k) [k (get m k)] nil))
+
+(defn split-at [n coll] [(vec (take n coll)) (drop n coll)])
+(defn split-with [pred coll] [(vec (take-while pred coll)) (drop-while pred coll)])
+
+(defn take-last [n coll] (let [c (count coll)] (drop (max 0 (- c n)) coll)))
+(defn drop-last
+  ([coll] (drop-last 1 coll))
+  ([n coll] (take (max 0 (- (count coll) n)) coll)))
+
+(defn take-nth [n coll]
+  (keep-indexed (fn [i x] (if (zero? (rem i n)) x nil)) coll))
+
+;; LAZY, for the same reason as `distinct` beside it, and the run of repeats
+;; is skipped with a `loop` so it costs one thunk however long it is.
+(defn- dedupe2 [coll prev]
+  (lazy-seq
+    (loop [s (seq coll)]
+      (if s
+        (let [x (first s)]
+          (if (= x prev)
+            (recur (next s))
+            (cons x (dedupe2 (rest s) x))))
+        nil))))
+
+(defn dedupe [coll] (dedupe2 coll ::none))
+
+;; LAZY, and one run at a time. The eager version walked the whole input
+;; before returning anything, so an infinite seq never came back.
+;;
+;; The run is taken with `take-while` and dropped with `drop`, which is how
+;; Clojure writes it -- and it means only the run being asked for is forced.
+(defn partition-by [f coll]
+  (lazy-seq
+    (let [s (seq coll)]
+      (when s
+        (let [fst (first s)
+              fv (f fst)
+              run (cons fst (take-while (fn [x] (= fv (f x))) (next s)))]
+          (cons run (partition-by f (drop (count run) s))))))))
+
+(defn flatten [x]
+  (filter (fn [e] (not (sequential? e)))
+          (rest (tree-seq sequential? seq x))))
+
+(defn tree-seq [branch? children root]
+  (let [walk (fn walk [node]
+               (lazy-seq
+                (cons node (when (branch? node) (mapcat walk (children node))))))]
+    (walk root)))
+
+(defn max-key
+  ([k x] x)
+  ([k x y] (if (> (k x) (k y)) x y))
+  ([k x y & more] (reduce (fn [a b] (if (> (k a) (k b)) a b)) (max-key k x y) more)))
+(defn min-key
+  ([k x] x)
+  ([k x y] (if (< (k x) (k y)) x y))
+  ([k x y & more] (reduce (fn [a b] (if (< (k a) (k b)) a b)) (min-key k x y) more)))
+
+(defn merge-with [f & maps]
+  (let [ms (remove nil? maps)]
+    (if (nil? (seq ms))
+      nil
+      (persistent!
+       (reduce (fn [m b]
+                 (reduce (fn [m e]
+                           (let [k (key e) v (val e)]
+                             (if (contains? m k)
+                               (assoc! m k (f (get m k) v))
+                               (assoc! m k v))))
+                         m b))
+               (transient (first ms)) (rest ms))))))
+
+(defn update-vals [m f] (reduce-kv (fn [acc k v] (assoc acc k (f v))) {} m))
+(defn update-keys [m f] (reduce-kv (fn [acc k v] (assoc acc (f k) v)) {} m))
+
+(defn array-map [& kvs] (apply2 hash-map kvs))
+
+(defn memoize [f]
+  (let [cache (atom {})]
+    (fn [& args]
+      (let [k (vec args)]
+        (if (contains? @cache k)
+          (get @cache k)
+          (let [v (apply2 f args)]
+            (reset! cache (assoc @cache k v))
+            v))))))
+
+(defn trampoline
+  ([f] (loop [r (f)] (if (fn? r) (recur (r)) r)))
+  ([f & args] (trampoline (fn [] (apply2 f args)))))
+
+(defn cycle [coll] (lazy-seq (concat coll (cycle coll))))
+
+(defn every-pred
+  ([p] (fn [& args] (every? (fn [x] (p x)) args)))
+  ([p q] (fn [& args] (and (every? (fn [x] (p x)) args) (every? (fn [x] (q x)) args)))))
+(defn some-fn
+  ([p] (fn [& args] (some (fn [x] (p x)) args)))
+  ([p q] (fn [& args] (or (some (fn [x] (p x)) args) (some (fn [x] (q x)) args)))))
+
+(defn- count-matching [pred coll] (reduce (fn [n x] (if (pred x) (inc n) n)) 0 coll))
+
+(defn ratio? [x] false)
+
+(defn decimal? [x] false)
+(defn rational? [x] (int? x))
+(defn nat-int? [x] (and (int? x) (>= x 0)))
+(defn pos-int? [x] (and (int? x) (> x 0)))
+(defn neg-int? [x] (and (int? x) (< x 0)))
+(defn indexed? [x] (vector? x))
+(defn counted? [x] (or (vector? x) (map? x) (set? x) (string? x)))
+(defn seqable? [x] (or (nil? x) (coll? x) (string? x)))
+
+(defn type [x]
+  (cond (nil? x) nil (string? x) :string (keyword? x) :keyword (symbol? x) :symbol
+        (int? x) :int (float? x) :double (boolean? x) :boolean
+        (vector? x) :vector (map? x) :map (set? x) :set (seq? x) :seq (fn? x) :fn
+        :else :unknown))
+
+(defn- nil-or [x d] (if (nil? x) d x))
+
+(defn prn-str [x] (flint.rt/str2 (pr-str x) "\n"))
+
+;; ------------------------------------------------------------------- regexes
+;;
+;; These forward to `flint.regex`, which is cljc and therefore only linked into
+;; a program that actually reaches one of them.
+
+(defn re-pattern [s] (if (flint.regex/pattern? s) s (flint.regex/pattern s)))
+(defn re-find
+  ([re s] (flint.regex/re-find (re-pattern re) s))
+  ([re s from] (flint.regex/re-find (re-pattern re) s from)))
+(defn re-matches [re s] (flint.regex/re-matches (re-pattern re) s))
+(defn re-seq [re s] (flint.regex/re-seq (re-pattern re) s))
+
+;; ------------------------------------------------------------------- delays
+
+(defmacro delay [& body] (list 'flint.rt/delay (cons 'fn* (cons [] body))))
+(defn force [x] (if (flint.rt/delay? x) (flint.rt/deref x) x))
+(defn delay? [x] (flint.rt/delay? x))
+(defn realized? [x] (flint.rt/realized? x))
+
+;; ------------------------------------------------------------- multimethods
+;;
+;; No hierarchies: dispatch is `=` on the dispatch value, with `:default` as the
+;; fallback. `derive`/`isa?`/`prefer-method` are absent and listed as such.
+;;
+;; The method table is a separate var rather than metadata on the function,
+;; because a flint closure has nowhere to put metadata.
+
+(defmacro defmulti [name dispatch-fn & _opts]
+  (let [tbl (if (namespace name)
+              (symbol (namespace name) (str (clojure.core/name name) "__methods"))
+              (symbol (str (clojure.core/name name) "__methods")))]
+    (list 'do
+          (list 'def tbl (list 'clojure.core/atom {}))
+          (list 'def name
+                (list 'clojure.core/let ['dfn dispatch-fn]
+                      (list 'clojure.core/fn ['& 'args]
+                            (list 'clojure.core/let
+                                  ['dv (list 'clojure.core/apply 'dfn 'args)]
+                                  (list 'clojure.core/let
+                                        ['f (list 'clojure.core/or
+                                                  (list 'clojure.core/get
+                                                        (list 'clojure.core/deref tbl) 'dv)
+                                                  (list 'clojure.core/get
+                                                        (list 'clojure.core/deref tbl) :default))]
+                                        (list 'if 'f
+                                              (list 'clojure.core/apply 'f 'args)
+                                              (list 'throw
+                                                    (list 'clojure.core/ex-info
+                                                          "no method for dispatch value"
+                                                          (list 'clojure.core/hash-map
+                                                                :multi (list 'quote name)
+                                                                :dispatch-value 'dv))))))))))))
+
+(defmacro defmethod [name dispatch-val & fn-tail]
+  (let [tbl (if (namespace name)
+              (symbol (namespace name) (str (clojure.core/name name) "__methods"))
+              (symbol (str (clojure.core/name name) "__methods")))]
+    (list 'clojure.core/reset! tbl
+          (list 'clojure.core/assoc (list 'clojure.core/deref tbl) dispatch-val
+                (cons 'clojure.core/fn fn-tail)))))
+
+
+;; ---------------------------------------------------------- unchecked & misc
+
+(defn unchecked-add [a b] (flint.rt/unchecked-add a b))
+(defn unchecked-subtract [a b] (flint.rt/unchecked-sub a b))
+(defn unchecked-multiply [a b] (flint.rt/unchecked-mul a b))
+(defn unchecked-inc [a] (flint.rt/unchecked-add a 1))
+(defn unchecked-dec [a] (flint.rt/unchecked-sub a 1))
+(defn unchecked-negate [a] (flint.rt/unchecked-sub 0 a))
+(defn bit-and-not [a b] (flint.rt/bit-and a (flint.rt/bit-not b)))
+
+(defn any? [_] true)
+(defn NaN? [x] (and (float? x) (not (flint.rt/num-eq x x))))
+(defn infinite? [x] (and (float? x) (not (NaN? x)) (or (> x 1.7976931348623157E308)
+                                                       (< x -1.7976931348623157E308))))
+(defn parse-boolean [s] (cond (= s "true") true (= s "false") false :else nil))
+(defn map-entry? [x] (flint.rt/map-entry? x))
+(defn simple-ident? [x] (and (ident? x) (nil? (namespace x))))
+(defn qualified-ident? [x] (and (ident? x) (some? (namespace x))))
+(defn bounded-count [n coll] (if (counted? coll) (count coll) (count (take n coll))))
+(defn unreduced [x] (if (reduced? x) (nth x 0) x))
+(defn ensure-reduced [x] (if (reduced? x) x (reduced x)))
+(defn chunked-seq? [_] false)
+(defn record? [_] false)
+(defn reversible? [x] (vector? x))
+(defn rseq [v] (when (seq v) (map (fn [i] (nth v i)) (range (dec (count v)) -1 -1))))
+
+(defn repeatedly
+  ([f] (lazy-seq (cons (f) (repeatedly f))))
+  ([n f] (take n (repeatedly f))))
+
+(defn reductions
+  ([f coll] (let [s (seq coll)] (if s (reductions f (first s) (rest s)) (list (f)))))
+  ([f init coll]
+   (cons init (lazy-seq (let [s (seq coll)]
+                          (when s (reductions f (f init (first s)) (rest s))))))))
+
+(defn replace [smap coll]
+  (if (vector? coll)
+    (mapv (fn [x] (if (contains? smap x) (get smap x) x)) coll)
+    (map (fn [x] (if (contains? smap x) (get smap x) x)) coll)))
+
+(defmacro lazy-cat [& colls]
+  (cons 'clojure.core/concat (map2 (fn [c] (list 'clojure.core/lazy-seq c)) colls)))
+
+(defn swap-vals!
+  ([a f] (let [old @a] [old (reset! a (f old))]))
+  ([a f x] (let [old @a] [old (reset! a (f old x))])))
+(defn reset-vals! [a v] (let [old @a] [old (reset! a v)]))
+
+(defn pop! [t] (flint.rt/pop! t))
+(defn disj! [t x] (flint.rt/dissoc! t x))
+
+(defn hash-ordered-coll [coll] (hash (vec coll)))
+(defn hash-unordered-coll [coll] (hash (set coll)))
+
+(defn print-str [& xs] (join-with* " " xs false))
+
+(defn- fixed6
+  "A double with exactly six decimal places, which is what %f means."
+  [x]
+  (let [neg? (< x 0)
+        v (if neg? (- x) x)
+        scaled (flint.rt/to-long (flint.rt/floor (flint.rt/add (flint.rt/mul v 1000000.0) 0.5)))
+        whole (quot scaled 1000000)
+        frac (rem scaled 1000000)
+        fs (flint.rt/num->str frac)
+        pad (subs "000000" 0 (- 6 (count fs)))]
+    (str (if neg? "-" "") (flint.rt/num->str whole) "." pad fs)))
+
+(defn format
+  "A small subset of `format`: %s, %d, %f and %% only. Anything else is left
+  alone rather than guessed at. %f prints six decimal places, as Java's does;
+  very large magnitudes lose precision, which Java's does not."
+  [fmt & args]
+  (loop [acc [] i 0 as (seq args)]
+    (if (>= i (count fmt))
+      (flint.rt/str-join acc)
+      (let [c (nth fmt i)]
+        (if (and (= c "%") (< (inc i) (count fmt)))
+          (let [d (nth fmt (inc i))]
+            (cond
+              (= d "%") (recur (conj acc "%") (+ i 2) as)
+              (or (= d "s") (= d "d")) (recur (conj acc (str (first as))) (+ i 2) (next as))
+              (= d "f") (recur (conj acc (fixed6 (double (first as)))) (+ i 2) (next as))
+              :else (recur (conj acc c) (inc i) as)))
+          (recur (conj acc c) (inc i) as))))))
+(defn vreset! [v x] (flint.rt/reset! v x))
+(defn volatile? [x] (flint.rt/volatile? x))
+
+;; ------------------------------------------------------------------- strings
+
+
+;; ---------------------------------------------------------------- interop-free
+;;
+;; `read-string` and `eval` do not exist: a flint module carries no compiler.
+;; `clojure.edn/read-string` is the way to turn text into data.
+
+
+(defn println-str [& xs] (flint.rt/str2 (join-with* " " xs false) "\n"))
+(comment
+  "`method-key` and `extend-method` LIVE IN `flint.protocols`, which is where
+  `defprotocol` expands a call to. They are the two names here that only
+  `defprotocol` and `extend-protocol` ever reach, and `methods-of` and
+  `protocol-miss` moved there earlier for the same reason: Clojure has neither,
+  so a port that keeps them here is publishing under somebody else's name.
+
+  This namespace now publishes exactly what Clojure does -- `doc/manifest.edn`
+  records that as `:extra #{}`.
+
+  It could not move until `flint.protocols` was PINNED. A top-level
+  `(extend-protocol ...)` calls `extend-method` while the using namespace is
+  initialising, and the load order is built from `:require` edges, which that
+  call has none of. `clojure.core` is pinned first by `core-first` and so was
+  the only namespace reachable from there.")
+
+(defn satisfies?
+  "Does `x` have an implementation of every method of `protocol`, by metadata or
+  by kind?"
+  [protocol x]
+  (let [m (meta x)
+        bykind (get (deref (:impls protocol)) (flint.rt/kind x))]
+    (every? (fn [k] (or (contains? m k) (contains? bykind k))) (:method-keys protocol))))
+
+(defmacro defprotocol
+  "Define a protocol and its methods.
+
+      (defprotocol Shape
+        \"docs\"
+        (area [s] \"docs\")
+        (scale [s k]))
+
+  Each method becomes a function that dispatches on `s`: metadata first, then
+  the value's built-in kind. A value with no implementation fails with a message
+  naming the protocol and the kind."
+  [pname & sigs]
+  (let [nsname (str (:ns &env))
+        sigs (remove string? sigs)
+        methods (map (fn [sig]
+                       (let [mname (first sig)
+                             arglists (take-while vector? (rest sig))]
+                         {:name mname
+                          :key (symbol nsname (name mname))
+                          :arglists (if (seq arglists) arglists (list (second sig)))}))
+                     sigs)
+        impls-sym (symbol (str (name pname) "__impls"))
+        qual (symbol nsname (name pname))]
+    (list* 'do
+           (list 'def impls-sym (list 'clojure.core/atom {}))
+           (list 'def pname
+                 (list 'clojure.core/hash-map
+                       :flint/protocol (list 'quote qual)
+                       :impls impls-sym
+                       :method-keys (list 'quote (vec (map :key methods)))))
+           (map (fn [m]
+                  (list* 'defn (:name m)
+                         (map (fn [args]
+                                (list args
+                                      (list 'clojure.core/let
+                                            ['f (list 'clojure.core/find-protocol-method
+                                                      impls-sym (list 'quote (:key m)) (first args))]
+                                            (list 'if 'f
+                                                  (list* 'f args)
+                                                  (list 'flint.protocols/protocol-miss
+                                                        (list 'quote qual)
+                                                        (list 'quote (symbol nsname (name (:name m))))
+                                                        (first args))))))
+                              (:arglists m))))
+                methods))))
+
+(defmacro extend-protocol
+  "Extend a protocol to one or more built-in kinds.
+
+      (extend-protocol Shape
+        :vector (area [s] (* (nth s 0) (nth s 1)))
+        :map    (area [s] (* (:w s) (:h s))))"
+  [pname & body]
+  (let [groups (loop [xs body k nil acc []]
+                 (if (empty? xs)
+                   acc
+                   (if (keyword? (first xs))
+                     (recur (rest xs) (first xs) acc)
+                     (recur (rest xs) k (conj acc [k (first xs)])))))]
+    (list* 'do
+           (map (fn [[k mform]]
+                  (list 'flint.protocols/extend-method pname k
+                        (name (first mform))
+                        (list* 'clojure.core/fn (rest mform))))
+                groups))))

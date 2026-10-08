@@ -87,7 +87,7 @@ fn main() {
     // embedded beside the bytes, so the compile is told it rather than
     // re-deriving it from a path (`DECISIONS.md#four-units`). This used to run
     // the embedded compiler's `preread` mode, which read with the compiler's
-    // own `flint.compiler.reader`.
+    // own reader, since deleted (`DECISIONS.md#one-reader-and-no-other`).
     let out = Path::new(&env::var("OUT_DIR").unwrap()).to_path_buf();
     let mut rt = flint_rt::rt::Rt::new();
     let mut blob = Vec::new();

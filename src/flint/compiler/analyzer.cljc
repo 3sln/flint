@@ -16,10 +16,12 @@
   (:require [clojure.string :as str]
             [flint.compiler.canon :as canon]
             [flint.compiler.macros :as macros]
-            ;; For `bookkeeping-meta` alone: what the reader attaches is the
-            ;; reader's to say, and `author-meta` subtracts it rather than
-            ;; keeping a second copy that can fall behind -- which it did.
-            [flint.compiler.reader :as reader]
+            ;; For `bookkeeping-meta` and the syntax-quote marker: what the
+            ;; reader attaches is the reader's to say, and `author-meta`
+            ;; subtracts it rather than keeping a second copy that can fall
+            ;; behind -- which it did. The forms' facts, now the reader is kin's
+            ;; (`DECISIONS.md#one-reader-and-no-other`).
+            [flint.compiler.forms :as reader]
             [flint.compiler.types :as ty]))
 
 (def specials
@@ -1766,7 +1768,7 @@
 ;; ------------------------------------------------------------------- ns
 
 (def require-clauses
-  "The `ns` clauses that NAME NAMESPACES -- `flint.compiler.reader/require-clauses`,
+  "The `ns` clauses that NAME NAMESPACES -- `flint.compiler.forms/require-clauses`,
   which is the one set; it lives in the reader because `::alias/kw` needs it
   and the reader cannot require this file."
   reader/require-clauses)
