@@ -805,11 +805,26 @@
       (if (not (is-symbol rt (r rt base)))
         (do (pop-to rt base)
             (return (rd-fail-lit rt sti "reader tag must be a symbol"))))
-      (let [^Value target (map-get rt (rd-get rt sti RDS_TAGS) (r rt base) NIL)]
-        (if (nil? rt target)
+      (let [^Value target0 (map-get rt (rd-get rt sti RDS_TAGS) (r rt base) NIL)]
+        (if (nil? rt target0)
           (let [^I32 te (tag-error rt sti base)]
             (pop-to rt base)
             (return te)))
+        ;; STRIPPED OF WHATEVER METADATA IT CARRIED IN. `target0` is a value
+        ;; out of the WORKSPACE'S OWN tag map, not out of the text this read
+        ;; is reading -- `deps.edn`'s own position when a host reads it with
+        ;; a full reader, nothing at all when a host builds the map
+        ;; programmatically (this reader's own tags argument, built by
+        ;; `cli/src/resolve.rs`'s tokenizer with no position at all).
+        ;; Embedding it as received made `:flint/read-var` carry a DIFFERENT
+        ;; symbol -- same name, different metadata -- depending on how the
+        ;; CALLER happened to build the tags map, so the same source read
+        ;; the same way still disagreed byte for byte
+        ;; (`DECISIONS.md#reader-tags`; the guest's `src/flint/reader.cljc`
+        ;; carries the matching fix and its own longer account of what was
+        ;; found). A tag binding's own var does not say where IT was bound;
+        ;; that is not this read's business either way.
+        (let [^Value target (with-meta rt target0 NIL)]
         (let [^RootIx tgi (push rt target)]
           (if (rd-flag rt sti RDS_PORTABLE)
             (let [^I32 pe (portability-error rt sti base)]
@@ -845,7 +860,7 @@
               (let [^Value out (with-meta rt (r rt two) (r rt mi))]
                 (pop-to rt base)
                 (push rt out)
-                (return RS_OK)))))))))
+                (return RS_OK))))))))))
 
 ;; --- # ----------------------------------------------------------------------
 

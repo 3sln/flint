@@ -1,0 +1,2 @@
+(ns test.reader.tagged-custom)
+(def v #test/echo [1 2 3])

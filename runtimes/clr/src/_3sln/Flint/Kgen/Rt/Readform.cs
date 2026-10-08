@@ -860,12 +860,13 @@ public static class Readform {
             rt.PopTo(@base);
             return RdFailLit(rt, sti, "reader tag must be a symbol");
         }
-        long target = MapGet(rt, RdGet(rt, sti, RdsTags), rt.R(@base), Val.Nil);
-        if (Val.IsNil(target)) {
+        long target0 = MapGet(rt, RdGet(rt, sti, RdsTags), rt.R(@base), Val.Nil);
+        if (Val.IsNil(target0)) {
             int te = TagError(rt, sti, @base);
             rt.PopTo(@base);
             return te;
         }
+        long target = WithMeta(rt, target0, Val.Nil);
         int tgi = rt.Push(target);
         if (RdFlag(rt, sti, RdsPortable)) {
             int pe = PortabilityError(rt, sti, @base);
