@@ -31,6 +31,19 @@ if [ ! -d "$SYS" ]; then
   exit 1
 fi
 DEPS=target/wasm32-unknown-unknown/release/deps
+
+# Which build this invocation is, decided BEFORE the flags below are built --
+# the two builds choose different flags, not just different `--cfg`s, so the
+# choice has to exist first (DECISIONS.md#two-builds).
+DIAG=""
+AOT=""
+for arg in "$@"; do
+  case "$arg" in
+    --diagnostics) DIAG=1 ;;
+    --aot) AOT=1 ;;
+  esac
+done
+
 # REMAP, not restated: `bin/rust-remap-flags` is the one definition of the
 # checkout-path and cargo-registry-path remap (DECISIONS.md#reproducible-build-paths).
 # Appending it to every direct rustc call is a safe no-op where the call's own
@@ -38,31 +51,39 @@ DEPS=target/wasm32-unknown-unknown/release/deps
 # FROM prefix then never appears in what gets embedded, and it is what fixes
 # the cargo-built dependency rlibs (`flint_rt`, `serde_json`, `htmlparser`...)
 # that the `cargo build` below links into every one of them.
+#
+# A production build also drops the panic-location machinery itself via
+# `bin/rust-release-flags` (`-Zlocation-detail=none`), so no `.rs` path
+# remains at all, not just an unidentifying one. The DIAGNOSTICS build keeps
+# `bin/rust-remap-flags` alone -- a crash location is the point of it
+# (DECISIONS.md#reproducible-build-paths). This runs under the pinned nightly
+# `rustc` unconditionally already (the wasm32 target demands it), so the
+# unstable `-Z` flag needs no extra toolchain plumbing here, unlike the
+# native release build sites.
 REMAP="$(./bin/rust-remap-flags)"
-export RUSTFLAGS="$REMAP ${RUSTFLAGS:-}"
-FLAGS="--target wasm32-unknown-unknown --edition 2021 -C opt-level=3 -C panic=abort -C debuginfo=0 $REMAP"
+if [ -n "$DIAG" ]; then
+  RELFLAGS="$REMAP"
+else
+  RELFLAGS="$(./bin/rust-release-flags)"
+fi
+export RUSTFLAGS="$RELFLAGS ${RUSTFLAGS:-}"
+FLAGS="--target wasm32-unknown-unknown --edition 2021 -C opt-level=3 -C panic=abort -C debuginfo=0 $RELFLAGS"
 
 # Two builds (DECISIONS.md#two-builds). A production module carries NO diagnostic
 # machinery -- absent, not disabled -- so it is a cargo feature rather than a
 # runtime flag. `--diagnostics` builds the instrumented runtime and the units
 # that need it.
-DIAG=""
-AOT=""
-for arg in "$@"; do
-  case "$arg" in
-    --diagnostics)
-      DIAG=1
-      FLAGS="$FLAGS --cfg feature=\"diagnostics\""
-      echo "  (diagnostics build)" ;;
-    # Compiled arities (DECISIONS.md#emit-wasm-instead-of-dispatch). Absent by default for the same
-    # reason diagnostics are: measured at 7 002 bytes of production module, for
-    # machinery a module without compiled code never runs.
-    --aot)
-      AOT=1
-      FLAGS="$FLAGS --cfg feature=\"aot\""
-      echo "  (aot build)" ;;
-  esac
-done
+if [ -n "$DIAG" ]; then
+  FLAGS="$FLAGS --cfg feature=\"diagnostics\""
+  echo "  (diagnostics build)"
+fi
+# Compiled arities (DECISIONS.md#emit-wasm-instead-of-dispatch). Absent by default for the same
+# reason diagnostics are: measured at 7 002 bytes of production module, for
+# machinery a module without compiled code never runs.
+if [ -n "$AOT" ]; then
+  FLAGS="$FLAGS --cfg feature=\"aot\""
+  echo "  (aot build)"
+fi
 mkdir -p out units/.sysroot
 
 # WHICH BUILD IS IN THE TREE, recorded where anything can read it. A
@@ -149,7 +170,18 @@ $RUSTC $FLAGS --crate-type rlib --crate-name flint_rt --extern libm="$LIBM" \
   --emit=obj runtime/src/lib.rs -o units/flint/rt.o
 $RUSTC $FLAGS --crate-type rlib --crate-name flint_rt --extern libm="$LIBM" \
   --emit=link runtime/src/lib.rs -o units/flint/libflint_rt.rlib
-cargo run -q -p flint-rt --features host-tools --bin catalogue > units/flint/rt.unit.edn
+# REMAP ONLY, not $RELFLAGS: this is a HOST binary (the catalogue generator,
+# `host-tools`), built by whatever cargo is on PATH by default -- stable, not
+# the pinned nightly $RUSTC resolved above -- and `-Zlocation-detail=none` is
+# unstable, so stable rustc refuses it outright ("the option `Z` is only
+# accepted on the nightly compiler"). Found by running this exact line by
+# hand after `bin/build-dist` died here with no visible error (its stderr
+# does not reach the log when stdout alone is redirected past `cargo run`'s
+# own `-q`, which is itself the thing to watch out for next time this goes
+# quiet). This generator is not shipped, so it has no reason to carry
+# `-Zlocation-detail=none` at all -- only the remap, for the same cache
+# reason `bin/build-cli`'s header gives.
+RUSTFLAGS="$REMAP" cargo run -q -p flint-rt --features host-tools --bin catalogue > units/flint/rt.unit.edn
 # The diagnostic edge lives on the runtime unit, so only this build declares it
 # and `flint` needs no flag of its own.
 if [ -n "$DIAG" ]; then
@@ -200,7 +232,8 @@ mkdir -p units/flint
 $RUSTC $FLAGS --crate-type rlib --crate-name flint_conc \
   --extern flint_rt=units/flint/libflint_rt.rlib -L $DEPS \
   --emit=obj units-src/flint-conc/src/lib.rs -o units/flint/conc.o
-cargo run -q -p flint-conc --features host-tools --bin manifest > units/flint/conc.unit.edn
+# REMAP ONLY -- see the identical note on the catalogue generator above.
+RUSTFLAGS="$REMAP" cargo run -q -p flint-conc --features host-tools --bin manifest > units/flint/conc.unit.edn
 
 # The snapshot unit (DECISIONS.md#snapshots). Capture and restore live in the
 # runtime; this carries the host-facing surface, so a program that never asks

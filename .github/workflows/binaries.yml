@@ -109,15 +109,25 @@ jobs:
 
       - name: Build the binary
         shell: bash
-        # Remapped (DECISIONS.md#reproducible-build-paths): without this, the
-        # shipped binary embeds the runner's own checkout path
-        # (`/home/runner/work/...`, `/Users/runner/work/...`, or the
-        # Windows equivalent) and its cargo-registry cache path in every
-        # panic location, so a `flint-linux-x86_64` built today and one built
-        # from the same commit tomorrow are not byte-identical.
+        # Remapped, AND with the panic-location machinery itself absent, not
+        # just remapped (DECISIONS.md#reproducible-build-paths): without this,
+        # the shipped binary embeds the runner's own checkout path
+        # (`/home/runner/work/...`, `/Users/runner/work/...`, or the Windows
+        # equivalent), its cargo-registry cache path, and every
+        # panic!/unwrap()/assert! location's file/line/column, so a
+        # `flint-linux-x86_64` built today and one built from the same commit
+        # tomorrow would not be byte-identical, and a release binary would
+        # carry `.rs` paths at all.
+        #
+        # `+nightly` here is now the PINNED nightly, not the rolling alias
+        # the bare name would otherwise resolve to -- a GitHub-hosted runner
+        # already carries its own unpinned `nightly` toolchain, so `+nightly`
+        # on its own silently built against whichever one that was instead
+        # of the toolchain installed above (DECISIONS.md#pin-the-nightly-toolchain).
         run: |
-          export RUSTFLAGS="$(./bin/rust-remap-flags) ${RUSTFLAGS:-}"
-          cargo +nightly build -p flint-cli --release --target ${{ matrix.target }}
+          NIGHTLY="$(cat bin/nightly-toolchain)"
+          export RUSTFLAGS="$(./bin/rust-release-flags) ${RUSTFLAGS:-}"
+          cargo "+$NIGHTLY" build -p flint-cli --release --target ${{ matrix.target }}
 
       # A binary that builds and cannot compile a program is not a release
       # artifact. Every platform proves it for itself.

@@ -18234,8 +18234,9 @@ differently-flagged invocation invalidates cargo's fingerprint for it, so a
 caller that disagreed would make every OTHER caller pay for a rebuild it did
 not ask for. `cli/src/main.rs`'s `stdlib_text` no longer resolves `lib/`
 through `env!("CARGO_MANIFEST_DIR")`. `bin/check-build-paths` greps the
-shipped artifacts for this checkout's own path and `$HOME/.cargo`, and runs in
-`bin/check`'s fast tier.
+shipped artifacts for this checkout's own path, `$HOME/.cargo`, and (as of
+2026-10-08, see "Release builds carry no Rust source path at all" below) any
+remaining Rust source path whatsoever, and runs in `bin/check`'s fast tier.
 
 ### What was found
 
@@ -18697,3 +18698,220 @@ workspace granted `:host` aliases `flint.host/ask`, and a program in a
 workspace without `:host` calling the alias is refused, "flint.host/ask is
 guarded with #{:host} by flint/flint"; the control grants the caller `:host`
 and compiles.
+
+### Release builds carry no Rust source path at all
+
+**Maintainer decision (2026-10-08): a shipped release artifact must not carry
+a Rust source path AT ALL, not merely one remapped to an unidentifying
+string.** The remap above still leaves a `panic!`/`unwrap()`/`assert!`
+location's file (and, for the diagnostics build, its line and column) in the
+artifact as bytes -- rewritten to `/flint/...` or `/cargo-registry/...`
+instead of this machine's real path, but still a path, still three fields of
+information about where the crash happened. For a production build, that is
+stripped entirely: `rustc`'s own `-Zlocation-detail=none` removes the
+file/line/column a panicking `Location` captures, replacing it with the
+literal string `<redacted>:0:0` at the point a panic would print it, and
+leaving no per-call-site path bytes in the compiled artifact to find.
+
+**One definition, `bin/rust-release-flags`:** `bin/rust-remap-flags`'s output
+plus `-Zlocation-detail=none`. Read by every RELEASE build site:
+`bin/build-units`'s production path, `bin/build-cli`, `sdks/c/build`, and
+`bin/check-llvm`'s `flint-native-abi` build (each now via `bin/cargo-wasm`,
+below), and CI's `binaries.yml` release matrix. The DIAGNOSTICS build
+(`units/.build-mode` = diagnostics, the `diagnostics` feature) keeps calling
+`bin/rust-remap-flags` alone -- a crash location is the reason that build
+exists -- and `bin/build-units` is the one site that builds both, so it is the
+one site that chooses between the two flag sets.
+
+**`-Z` is gated on the `rustc` BINARY's release channel, not on which `cargo`
+invoked it.** `bin/build-units` already runs entirely under the pinned
+nightly (`bin/nightly-toolchain`) for the wasm32 target, so the flag needed no
+new plumbing there. `bin/build-cli`, `sdks/c/build`, and `bin/check-llvm`'s
+native-abi build previously ran on whatever stable cargo was on `PATH`
+(deliberately -- see "The fix, and the one it could not be" above, about
+`trim-paths` needing nightly), so each now runs its `cargo build` through
+`bin/cargo-wasm` instead of a bare `cargo`, which resolves that same pinned
+nightly's `cargo`+`rustc` pair onto `PATH`. `bin/cargo-wasm` also now exports
+`DYLD_LIBRARY_PATH`/`LD_LIBRARY_PATH` at the nightly toolchain's own `lib/`,
+needed for its `rust-objcopy` (the release profile's `strip = true` step) to
+find `libLLVM.dylib` -- the identical fix `bin/build-units`'s own `rust-lld`
+call already needed, found the same way: it aborted (SIGABRT) and cargo only
+warned, so a build that skipped this would still "succeed" with an unstripped
+binary.
+
+CI's `binaries.yml` release-binary step already ran `cargo +nightly` before
+this change -- not because of this flag, but because the install step only
+adds each matrix target to the PINNED nightly, so the bare name was the only
+toolchain with the right target installed. **That bare `+nightly` was a bug
+this change exposed rather than introduced:** on a GitHub-hosted runner,
+`+nightly` resolves to the runner's OWN pre-installed, unpinned nightly, not
+the pinned one just installed -- silently a different, drifting toolchain
+from the one `bin/build-units` uses in the very same job. Fixed to
+`cargo "+$NIGHTLY"`, reading `bin/nightly-toolchain` the same way the install
+step above it already does.
+
+**A build-time surprise found and fixed along the way:** `bin/build-units`
+exports `RUSTFLAGS` once for its whole script, which two lines inherit
+without wanting to -- `cargo run -q -p flint-rt --features host-tools --bin
+catalogue` and the equivalent `flint-conc` line, both HOST-targeted generator
+binaries built by whatever `cargo` is on the ambient `PATH` (stable, not the
+nightly `$RUSTC` resolved earlier in the script for the wasm32 build). With
+`-Zlocation-detail=none` in the inherited `RUSTFLAGS`, stable `rustc` refuses
+outright: `error: the option `Z` is only accepted on the nightly compiler`.
+`bin/build-dist` swallows this well enough to look like success: it redirects
+`./bin/build-units`'s STDOUT to `/dev/null` (so the step markers that would
+have shown where it stopped never printed) while leaving stderr to flow to
+the caller -- and in practice it was still hard to spot, because cargo's own
+wrapping of the underlying rustc probe error did not reliably reach a
+redirected-to-file stderr in every invocation shape tried while chasing it,
+only a direct terminal pipe. The build simply stopped, silently, partway
+through the first unit, every time, reproducibly. Fixed by overriding
+`RUSTFLAGS` back down to the bare remap (`RUSTFLAGS="$REMAP" cargo run ...`)
+on just those two lines: they are not shipped, so they have no reason to
+carry `-Zlocation-detail=none` at all, only the remap, for the cache reason
+`bin/build-cli`'s own header already gives.
+
+**Checking this needed more than a grep**, in `bin/check-rs-paths.py` (read by
+`bin/check-build-paths`), and its own header records three bugs found by
+running early versions against real artifacts and getting the wrong answer,
+not by rereading the regex:
+
+* a negative lookbehind for a backtick (`` (?<!`)PATTERN ``) correctly
+  refuses to start a match right after a backtick, but the engine then just
+  tries one character further in and matches a path one character short --
+  `` `cli/src/main.rs` `` still came back as a hit for `li/src/main.rs`;
+* the word-boundary assertion written to fix that then matched NOTHING with
+  a leading `/`, because `/` was itself in the "blocks a boundary" character
+  class -- `/rustc/<hash>/library/alloc/src/fmt.rs` came back truncated to
+  `library/alloc/src/fmt.rs`, found by checking where a reported hit actually
+  started in the raw bytes rather than trusting the pattern;
+* several first-party `.rs` paths are present in release artifacts ON
+  PURPOSE and are not panic locations at all: doc comments (and, in
+  `flintc.wasm`/`flintc.bytecode` -- the self-hosted compiler, which is
+  flint source, not Rust -- flint docstrings) that cross-reference another
+  file by name for a human reader, e.g. `cli/src/main.rs`'s own doc comment
+  mentioning `` `runtime/src/aot.rs` ``. Surveyed across all seven checked
+  artifacts: every hit past the sysroot exclusions was one of these, always
+  immediately preceded by a backtick -- excluding exactly that, rather than
+  a hardcoded filename list, is what tells a doc-comment mention apart from
+  a compiled `Location`.
+
+The sysroot exclusions themselves are the prebuilt std's OWN paths, baked in
+by the Rust project's release build of std before this build ever runs, and
+not something `-Zlocation-detail` touches (it flags the CALLING crate's
+compilation, not std's): `/rustc/<hash>/library/...`, a BARE `library/...`
+with no hash prefix at all (confirmed real, not a truncation artifact, by
+reading the raw bytes around one -- a contiguous, NUL-terminated
+`library/std/src/panicking.rs` with nothing resembling a hash before it), and
+`/cargo/registry/<hash>/...` (the backtrace machinery's own vendored
+dependencies -- addr2line, gimli, rustc-demangle, hashbrown -- a different
+path shape from our own remap target, `/cargo-registry` with no internal
+slash, chosen in `bin/rust-remap-flags` precisely so the two cannot collide).
+
+**(a) Proof the check works, including failing on purpose, with the
+toolchain held constant.** Comparing a nightly-`cargo-wasm` build against a
+stable-`cargo` build would confound the flag with a different rustc/std
+entirely (and did, the first time: a stable-built CLI showed a different set
+of bare `library/...` sysroot strings than the nightly-built one, which is a
+std-version difference, not a location-detail one). So the controlled pair
+is the SAME pinned nightly both times, via `bin/cargo-wasm`, differing only
+in `RUSTFLAGS`:
+
+| artifact | remap-only (`bin/rust-remap-flags`) | remap + `-Zlocation-detail=none` |
+|---|---|---|
+| `target/release/flint` | 199 non-sysroot `.rs` hits | **0** |
+| a direct `rustc` build of `runtime/src/lib.rs` to a wasm object | 25 hits (`runtime/src/*.rs`, `units-src/flint-conc/src/lib.rs`) | **0** |
+
+`./bin/check-build-paths` passes against the flagged build and fails against
+the unflagged one, reporting exactly the non-sysroot, non-doc-comment hits
+above.
+
+**(b) The diagnostics build still carries a real location -- but a wasm
+module never surfaces it to anything, in EITHER build.** flint's
+`#[panic_handler]` for `target_arch = "wasm32"` (`runtime/src/lib.rs:104-107`)
+is `core::arch::wasm32::unreachable()` and discards the `PanicInfo` --
+including its `Location` -- unconditionally, diagnostics or production. So
+"the diagnostics build reports a panic location" cannot mean a wasm trap ever
+shows one to a host; it was never true, in any build, and this is not a
+regression this session introduced. What IS true, and checked two ways:
+
+* **at the bytes level:** `bin/build-units --diagnostics`'s `units/flint/rt.o`
+  carries 25 real `runtime/src/*.rs` hits via `bin/check-rs-paths.py` -- the
+  same count and the same files as the remap-only nightly comparison above,
+  confirming the diagnostics branch's flag choice (`bin/rust-remap-flags`
+  alone) is the one actually taking effect, not a stale cache or a dead
+  branch;
+* **at the host level**, where a Location IS read: a throwaway `#[cfg(feature
+  = "diagnostics")] #[test]` added to `runtime/tests/` (built and deleted
+  within this session, never committed) that indexes an empty `Vec`, run via
+  `cargo test -p flint-rt --features diagnostics` with no `RUSTFLAGS` set (the
+  ambient default this host invocation always runs under, matching the
+  diagnostics branch's own choice), printed
+  `thread '...' panicked at runtime/tests/_panic_probe.rs:7:21:` -- a real,
+  relative, non-redacted location, because std's DEFAULT panic hook (native
+  target, not wasm32) is what reads a `Location` and prints it, and nothing
+  here touched that hook.
+
+**(c) Size change, same method both times: full `bin/build-dist` +
+`bin/build-cli`, pinned nightly throughout, differing only in whether
+`bin/rust-release-flags` included `-Zlocation-detail=none`** (toggled by
+temporarily editing that one file and restoring it byte-for-byte afterward,
+diffed against a saved copy to confirm the restore).
+
+| artifact | before (remap only) | after (+ `-Zlocation-detail=none`) | change |
+|---|---|---|---|
+| `dist/flint-runtime.wasm` | 838 157 B | 832 710 B | -5 447 B |
+| `dist/flint-runtime-aot.wasm` | 846 823 B | 841 160 B | -5 663 B |
+| `dist/flintc.wasm` | 913 519 B | 908 784 B | -4 735 B |
+| `dist/flint-reader.wasm` | 438 217 B | 436 313 B | -1 904 B |
+| `target/release/flint` (native CLI) | 5 288 144 B | 5 238 256 B | -49 888 B |
+| `dist/flintc.bytecode` | 278 132 B | 278 132 B | unchanged |
+
+`flintc.bytecode` is the self-hosted compiler's own bytecode image -- flint
+compiling itself, no Rust panic machinery in it at all -- so it was expected
+to be, and is, untouched.
+
+**(d) Reproducibility still holds for everything in this project's control;
+one macOS-linker artifact outside it, found and not hidden.** Two
+`git worktree add --detach` checkouts of the same commit, one padded with 36
+extra characters exactly as the original proof above did, both carrying this
+session's uncommitted changes, both built `bin/build-dist` then
+`bin/build-cli` the same way. **Byte-identical (`cmp`):**
+`dist/flint-runtime.wasm`, `dist/flint-runtime-aot.wasm`,
+`dist/flint-loader.wasm`, `dist/flintc.wasm`, `dist/flint-reader.wasm`,
+`dist/flintc.bytecode` -- all six of the portable artifacts.
+
+`target/release/flint` was NOT byte-identical: same size (5 238 256 B),
+differing in exactly two short spans (`cmp -l`: 16 bytes starting at offset
+1865, 4 bytes at the very end). `otool -l` identifies the first span as the
+Mach-O `LC_UUID` load command -- a different UUID in each checkout
+(`87302080-E8C5-3F52-87B1-3983655DF498` against
+`ED64DFCE-6409-36B4-8E8B-2B185C83763D`) -- and `codesign -dvvv` shows the
+second span is the consequence: macOS's ad-hoc linker-signing hashes the
+UUID in, so a different UUID means a different `CandidateCDHash`. Neither
+copy contains this checkout's path, `$HOME`, or any non-sysroot Rust source
+path (`bin/check-build-paths` passes on both) -- the 48 bytes are Apple's own
+linker assigning a build identifier, not anything this decision's remap or
+`-Zlocation-detail` could address, and not something either of them
+regressed: it is orthogonal to RUSTFLAGS entirely, the same category of
+non-determinism any Rust (or C, or Swift) binary linked by `ld`/`ld-prime` on
+macOS carries. **This narrows, rather than contradicts, the earlier Proof
+section's claim** that `target/release/flint` came out byte-identical: that
+measurement did not isolate or rule out this source, and may have been run
+under a linker/Xcode CLT version or signing configuration where it did not
+show up, or simply did not get a differing UUID that particular time. Nothing
+here re-confirms the EARLIER claim's exact byte-identity for the native CLI;
+it only confirms the WASM/bytecode side, which is what every shipped SDK
+actually embeds (`sdks/cli`, `sdks/esm`). The native CLI's binary-for-binary
+reproducibility, if it matters for a release process, is better verified on
+Linux (no `ld64`/codesigning in the loop) than re-chased further here.
+
+**What is not claimed.** `cargo-wasm`-mediated stable-cargo-plus-nightly-rustc
+mixing (pointing `RUSTC` at the nightly while leaving `cargo` on stable) was
+tried and worked in isolation on a throwaway crate, but was NOT used for any
+site that ships: every release build site above runs fully under the nightly
+`cargo`+`rustc` pair via `bin/cargo-wasm`, matching what CI's binaries.yml
+already did for this same crate, so there is one toolchain combination in use
+here, not two. `sdks/esm` and `sdks/cli` were not re-audited in this pass
+either, for the same reason the first audit skipped them: they copy `dist/`'s
+already-fixed files rather than invoking cargo or rustc themselves.

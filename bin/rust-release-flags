@@ -1,0 +1,28 @@
+#!/bin/sh
+# ONE DEFINITION of the RELEASE-build RUSTFLAGS: the path remap
+# (`bin/rust-remap-flags`, DECISIONS.md#reproducible-build-paths) plus
+# `-Zlocation-detail=none`, which drops a panic!/unwrap()/assert! location's
+# file/line/column ENTIRELY -- not just the directory prefix the remap
+# rewrites, the whole thing, replaced by rustc's own literal "<redacted>:0:0".
+# Read by every build site that produces a RELEASE artifact: `bin/build-units`
+# (its production path only), `bin/build-cli`, `bin/cargo-wasm`,
+# `sdks/c/build`, `bin/check-llvm`'s `flint-native-abi` build, and CI's
+# `binaries.yml` release matrix.
+#
+# The DIAGNOSTICS build (`units/.build-mode` = diagnostics, the `diagnostics`
+# feature) does NOT read this -- a crash location is exactly what it is for --
+# and calls `bin/rust-remap-flags` alone instead. `bin/build-units` is the one
+# site that builds both, so it is the one site that chooses between the two.
+#
+# `-Z` IS AN UNSTABLE FLAG, gated on the `rustc` BINARY's own release channel,
+# not on which `cargo` invoked it. Confirmed directly against the pinned
+# nightly (`bin/nightly-toolchain`), not assumed from its vintage: a STABLE
+# cargo 1.92.0 with `RUSTC` pointed at that nightly's `rustc` built and ran a
+# release binary with `-Zlocation-detail=none`, and the panic it triggered
+# printed `<redacted>:0:0` with no file path left to find by `strings`.
+# `bin/cargo-wasm` is what resolves that nightly `rustc` for the call sites
+# that are not already on it (`bin/build-units` runs under the nightly
+# unconditionally already, for the wasm32 target).
+set -e
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+printf '%s -Zlocation-detail=none' "$("$ROOT/bin/rust-remap-flags")"
