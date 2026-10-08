@@ -111,6 +111,8 @@ this block.
 - [flint-virtual-stays-public](#flint-virtual-stays-public) -- `flint.virtual` is NOT marked `^:internal`. It was tried, and it breaks every virtual-namespace program.
 - [flint-deps-is-its-own-workspace](#flint-deps-is-its-own-workspace) -- `flint.deps`, `flint.deps.manifest`, `flint.deps.registry` and `flint.deps.resolve` move from the stdlib's blanket `flint/flint` workspace to their own, `flint/deps`, with no grant. `flint.deps.manifest` and `flint.deps.registry` are also marked `^:internal`; `flint.deps` and `flint.deps.resolve` stay public.
 - [pin-the-babashka-version](#pin-the-babashka-version) -- A test-methodology trap found while verifying, recorded so it is not repeated.
+- [gate-timings](#gate-timings) -- Gate wall-clock figures, re-derived after `bin/check` and `bin/test` grew, and two earlier figures corrected.
+- [rebuild-order-pitfalls](#rebuild-order-pitfalls) -- Two incidents where a stale build artefact read exactly like a real divergence between doors.
 <!-- TOC:END -->
 
 ---
@@ -17799,3 +17801,151 @@ pinning stops the version from moving unannounced, it does not make the
 generator version-independent. Bumping `bin/bb-version` in the future needs
 `bb test/manifest.clj` run on the bumped version before the bump lands, the
 same discipline a nightly bump already needs.
+
+---
+
+## gate-timings
+
+**Gate wall-clock figures, re-derived after `bin/check` and `bin/test` grew,
+and two earlier figures corrected.**
+
+**Ratified:** ☐ not signed off
+
+**Status: timings current as of 2026-09-28. These support the tier table and
+rules in `AGENTS.md`'s gate section; this record holds the derivations so
+that section does not have to.**
+
+### `bin/check`
+
+Re-measured 2026-09-28 at `c17c0f1e`, load averages 2.64/3.07/4.80: `time -p
+./bin/check` gave 52.3 s, 48.6 s and 53.4 s on three consecutive runs -- call
+it ~51 s, up from 26.8 s two days earlier. The increase is checks ADDED, not a
+slowdown: `bin/check-clr` gained a native-door `:optimize [perf]` arm (two
+more CLR loads), `bin/check-wedged` and `check-four-ops` are unchanged, and
+`test/selfhost-targets.clj` went from 4.7 s to 11.5 s. A door-agreement matrix
+had briefly taken that suite to 40.8 s, which is why it moved out to
+`test/door-agreement.clj` and `bin/test` -- the fast gate keeps one row of it.
+
+`bin/check` is sixteen static checks plus four heavier items, and it runs
+`check-kin` (74 s) only when kin sources or the generated trees actually
+moved. The heavy four, same 2026-09-28 measurement: `check-clr` (grew the
+perf arm above), `test/selfhost-targets.clj` 11.5 s, `check-wedged` 9.4 s,
+`check-four-ops` 6.0 s, `check-api-review` 0.05 s. An earlier pass here said
+"four sub-second static checks plus two suites that are 1 s and 3 s", which
+was true of a smaller gate and stopped being true as checks accumulated.
+Contents were chosen by measuring, not guessing: two suites that looked like
+candidates for the fast tier are not -- one is 15 s, and the other is 16 s AND
+fails standalone because it needs build state the full gate happens to
+produce.
+
+### `bin/test`
+
+Two full green runs hours apart, same day: 2 319 s (38.6 min) and 3 008 s
+(50.1 min) -- which is why the table gives a RANGE and not a number. The
+689 s between them is machine load, not the 74 s that session's own change
+added: the spread is in sections nothing in that change touched -- `units:
+the DIAGNOSTICS build` 262→415 s, `rust: runtime unit tests` 151→282 s,
+`rust: green threads` 94→208 s, `kin` 101→155 s -- while the new `doors`
+section cost 74 s, close to the 67 s measured standalone. A single figure for
+this gate is folklore whatever care goes into producing it; what it is good
+for is "did my change add a section's worth", and the per-section
+itemisation `bin/test` prints at the end answers that, and a total does not.
+The first measurement put 71% of the time in 12 of 60 sections, and the
+largest was a CHECK rather than a suite.
+
+**Check `uptime` before treating any of these as a measurement.** A third
+green run the same afternoon took 4 134 s (69 min), outside the range above --
+at load averages 6.50/9.88/14.10, with an unrelated process from another
+project pinning a core for three hours. The shape gives it away: `hosts`
+184→678 s and `kin` 136→527 s, sections that run's change did not touch,
+while the section it DID add stayed at 80 s. That run is a valid PASS and not
+a valid timing -- a contended machine does not make a green gate less green.
+
+### `bin/release-gate`
+
+`bin/release-gate` is `bin/test` plus a SECOND full `bin/conform-hosts` run
+with `FLINT_SELFHOST=1`, from the top -- not `bin/test` plus just the
+self-hosting step, since `bin/test` already runs `conform-hosts` once in its
+own `hosts:` section. `bin/conform-hosts` alone: 220 s (3.67 min), exit 0,
+load average 1.71, nothing else in flight (checked 2026-09-26 at `be0aee8c`,
+and this measurement held up). Self-hosting itself is 8.85 s on top of that.
+So `bin/release-gate` ≈ `bin/test` (2 139 s, an earlier green run) + 220 s +
+8.85 s ≈ 39.5 min -- DERIVED from three separate measurements, not timed end
+to end, which is why `AGENTS.md`'s table says `> bin/test` rather than this
+figure. An estimate carried into that derivation was initially ~11 minutes
+for `conform-hosts`, from a remembered phase count rather than a clock; it
+was wrong, and the 220 s figure above replaced it only after being measured
+directly.
+
+### Corrections of earlier figures
+
+The figures the current ones replace were right when written -- 26.8 s for
+`bin/check`, 2 139 s for `bin/test`. But at one point the table said
+`bin/check` was `~5 s` while a paragraph fifteen lines below it said
+`bin/test` was 23 minutes where the table's own row said 20 -- two numbers
+for one gate, which is the shape that says a section was spliced into the
+file rather than reasoned about when it was written. Separately,
+`bin/release-gate` once said `~25 min`, BELOW `bin/test`'s own figure in the
+same table, which cannot be right for a superset of it: that is the mistake
+the derivation above replaces.
+
+### What this is for
+
+A door-agreement matrix, self-hosting, and the full four-runtime conformance
+corpus are all real work with real cost; the point of measuring and
+re-measuring this is not to make the number small but to make it honest
+enough that "did my change make the gate meaningfully slower" has an answer
+other than a guess.
+
+---
+
+## rebuild-order-pitfalls
+
+**Two incidents where a stale build artefact read exactly like a real
+divergence between doors.**
+
+**Ratified:** ☐ not signed off
+
+**Status: both resolved by rebuilding in the documented order
+(`AGENTS.md`'s rebuild table), with no source change.**
+
+### The slot table, and build order
+
+`cli/src/main.rs` does `include_str!("../../dist/slots.json")`, and
+`bin/build-dist` is what writes that file; `cli/build.rs` separately reads
+`lib/` from source at build time. A stdlib edit that changes which builtins
+are REACHABLE moves the slot table, so building the CLI before re-running
+`bin/build-dist` embeds the OLD table. Measured: a one-line change to
+`lib/flint/system.cljc` made the native and npm doors disagree on `:to :wasm`
+by 1 166 bytes, and failed all five byte-identity rows of
+`sdks/cli/selftest.mjs`. Rebuilding in the documented order -- `bin/build-dist`,
+then `cargo build`, then `sdks/cli/build` -- fixed all five with no source
+change. "A stdlib change needs only the cargo build" was true of a stdlib
+change that adds no builtin call, which is most of them, and not all.
+
+### The third door, caught looking like the first door's bug
+
+`sdks/cli/dist/` holds the npm CLI's `flintc.wasm`, runtimes and stdlib,
+copied there by `sdks/cli/build`. Nothing in `bin/build-dist` or `cargo build`
+touches it, so after a `src/` change the npm CLI keeps running the previous
+compiler -- and reports success, because a stale compiler is a working one.
+Measured 2026-09-28: the npm door's `:to :clr` assembly differed from the
+other two doors' for five basenames out of five, which reads exactly like
+`DECISIONS.md#compiles-are-byte-reproducible`'s real hash-order and
+assembly-naming bug, found the same day by the same kind of byte comparison.
+It was not that bug: running `FLINT_DIST_FRESH=1 ./sdks/cli/build` (skipping
+only the redundant re-run of `bin/build-dist` already done) resolved the
+disagreement with no source change at all, where the real bug needed a fix to
+`flint.project/topo-order` and `flint.clr/assembly-name` to go green. The two
+are easy to conflate because they produce the identical-looking symptom --
+doors agreeing on everything except `:to :clr` basenames -- and the only way
+to tell them apart is to rebuild the stale arm and see whether the
+disagreement survives.
+
+### The general symptom
+
+Two signs that mean *check freshness before believing a result*, not
+specific to either incident above: the two arms agree **exactly** (a
+comparison that cannot tell its arms apart is not evidence they are equal),
+and a test that fails on a port but passes on native right after a
+native-only change (the port's build is what is stale).
