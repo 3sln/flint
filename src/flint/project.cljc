@@ -143,8 +143,12 @@
   read would take apart from features. Pre-read forms read under other options
   -- another workspace's tags -- are refused, or read from `:src` when the
   answer has it too: forms read under the wrong options are a different
-  program, never a faster one."
-  [s features]
+  program, never a faster one.
+
+  `sink`, optional: passed straight through to `resolve-conditionals`, so a
+  caller can collect every matched-nothing conditional across a whole
+  project read the same way one file's deferred read already can."
+  [s features & [sink]]
   (if-let [pre (:preread s)]
     (let [d (forms/decode pre)]
       (cond
@@ -156,7 +160,7 @@
         ;; `:conds` is empty and `resolve-conditionals` hands the forms back.
         (or (= (:opts d) (preread-options s))
             (= (:opts d) (read-options s features)))
-        (reader/resolve-conditionals d features (:file s))
+        (reader/resolve-conditionals d features (:file s) sink)
 
         (:src s) (reader/read-all (:src s) (read-options s features))
 
@@ -740,8 +744,12 @@
   answers), reading each file with `read-entry` under `features`. How every
   caller that still holds a function -- the EDN-spec doors, the tests -- walks
   through the ONE wave walk rather than a second copy of it. A read that fails
-  THROWS here, as it always has for these callers."
-  [resolve-ns features]
+  THROWS here, as it always has for these callers.
+
+  `sink`, optional: forwarded to every `read-entry` call, so a caller driving
+  a whole project through this resolver can collect elided conditionals
+  across every file it reads, not just one."
+  [resolve-ns features & [sink]]
   (with-meta {}
     {'flint.project/resolve-wave
      (fn [_ names]
@@ -749,7 +757,7 @@
                (let [s (resolve-ns n)]
                  (if (or (nil? s) (:virtual s))
                    s
-                   (assoc (dissoc s :preread) :forms (read-entry s features)))))
+                   (assoc (dissoc s :preread) :forms (read-entry s features sink)))))
              names))}))
 
 (defn resolve-project

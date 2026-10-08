@@ -127,9 +127,27 @@ CP=$(tail -1 "$CPFILE")
 # order is worse than one that is merely synchronous. `$?` is the DRIVER's
 # exit code, not `grep`'s -- captured before the filter runs, and returned
 # after it.
+#
+# `FLINT_PRELOAD`, optional: a `.clj` file `clojure -i`'d before `flint.driver.main`
+# is required -- the one extension point the babashka script offered for free
+# and this driver otherwise does not. The babashka script WAS Clojure source, so
+# a caller could `load-file` it after installing its own hooks (`alter-var-root`
+# on `flint.emitter`, say) and run in the SAME process; `test/loop_types_probe.clj`
+# did exactly that to count what the emitter specialises (AGENTS.md sec. 1 --
+# this is the loop-type inference probe's own doc). This driver cannot be
+# `load-file`d (it is `sh`, not Clojure -- `load-file`ing it is a read error on
+# its first `#` comment), and babashka cannot run it at all (migration step 1.2).
+# `-i` runs the preload's top-level forms (hook installation, a shutdown hook)
+# with `*command-line-args*` already bound to `"$@"`, before `-m` requires
+# `flint.driver.main` -- which only then triggers the compile the hooks are
+# watching, in this same JVM.
+PRELOAD_OPTS=""
+if [ -n "$FLINT_PRELOAD" ]; then
+  PRELOAD_OPTS="-i $FLINT_PRELOAD"
+fi
 set +e
 tmperr=$(mktemp "${TMPDIR:-/tmp}/flint-stderr.XXXXXX")
-clojure -Scp "$CP" -M -m flint.driver.main "$@" 2>"$tmperr"
+clojure -Scp "$CP" -M $PRELOAD_OPTS -m flint.driver.main "$@" 2>"$tmperr"
 status=$?
 grep -vE '^(WARNING|DEPRECATED): ' "$tmperr" >&2
 rm -f "$tmperr"

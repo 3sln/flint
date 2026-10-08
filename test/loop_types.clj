@@ -38,8 +38,9 @@
 (let [dir (str (fs/create-temp-dir))
       out (str dir "/counts.edn")]
   (spit (str dir "/p.cljc") src)
-  (let [r @(p/process ["bb" "test/loop_types_probe.clj" ":src" dir ":fn" "p/main" ":out" (str dir "/p.wasm")]
-                      {:out :string :err :string :extra-env {"PROBE_OUT" out}})
+  (let [r @(p/process ["./bin/flint" ":src" dir ":fn" "p/main" ":out" (str dir "/p.wasm")]
+                      {:out :string :err :string
+                       :extra-env {"PROBE_OUT" out "FLINT_PRELOAD" "test/loop_types_probe.clj"}})
         c (edn/read-string (slurp out))
         n (fn [f op outcome] (get c [f op outcome] 0))
         missed (fn [f] (reduce + (for [[[g _ o] k] c :when (and (= g f) (not= o :specialised))] k)))]
