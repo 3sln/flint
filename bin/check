@@ -70,17 +70,21 @@ done
 # was exercised. A run that asserts nothing must not read as a pass.
 ./bin/check-four-ops || fail "bin/check-four-ops"
 
-# THE FOUR FILES BABASHKA LOADS OUT OF `lib/` MUST STAY `.cljc`.
+# THE FOUR FILES THE BOOTSTRAP DRIVER LOADS OUT OF `lib/` MUST STAY `.cljc`.
 #
-# `bin/flint` runs under babashka and requires these from `lib/`; babashka
-# cannot read a `.fln`. Renaming one would break the bootstrap host with an
-# error naming the namespace rather than the extension, and the dialect rule
-# actively invites the rename -- every one of them calls `flint.rt` somewhere
-# or is flint-specific, so "is this portable?" says `.fln` while "does anything
-# outside flint read it?" says `.cljc`. The second question is the one that
-# governs, and this is the only place that says so.
+# `bin/flint` (a JVM Clojure driver as of
+# `DECISIONS.md#namespaces-over-the-system-port` migration step 1.2 -- it was
+# babashka when this check was written, and the requirement is the same
+# either way) requires these from `lib/`, and plain Clojure cannot read a
+# `.fln` any more than babashka could. Renaming one would break the bootstrap
+# host with an error naming the namespace rather than the extension, and the
+# dialect rule actively invites the rename -- every one of them calls
+# `flint.rt` somewhere or is flint-specific, so "is this portable?" says
+# `.fln` while "does anything outside flint read it?" says `.cljc`. The
+# second question is the one that governs, and this is the only place that
+# says so.
 for f in flint/cli flint/deps flint/deps/manifest flint/deps/registry; do
-  [ -f "lib/$f.cljc" ] || fail "lib/$f.cljc is gone -- babashka loads it, so it cannot be .fln"
+  [ -f "lib/$f.cljc" ] || fail "lib/$f.cljc is gone -- the bootstrap driver loads it, so it cannot be .fln"
 done
 echo "  ok   the four lib namespaces babashka loads are still .cljc"
 

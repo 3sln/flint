@@ -50,7 +50,7 @@
       img-path (or (:image m) (str "out/" (clojure.string/replace entry #"/" "-") ".image"))
       _ (when-not (and (:image m) (fs/exists? img-path))
           (fs/create-dirs (fs/parent (fs/absolutize img-path)))
-          (let [r (apply p/sh (concat ["bb" (str root "/bin/flint") ":fn" entry
+          (let [r (apply p/sh (concat [(str root "/bin/flint") ":fn" entry
                                       "--emit-image" ":out" img-path]
                                       (mapcat (fn [d] [":src" d]) (or (:src m) []))))]
             (when-not (zero? (:exit r)) (die! (str (:out r) (:err r))))))

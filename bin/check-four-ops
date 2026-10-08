@@ -66,7 +66,7 @@
       (sh! "sh" (str root "/bin/build-jvm-runtime"))
       ;; THROUGH THE COMMITTED TOOLS, not inline: a hand-configured one-off encodes
       ;; decisions the real path lacks.
-      (apply sh! (concat ["bb" (str root "/bin/flint") ":src" src ":fn" (:entry case-map)
+      (apply sh! (concat [(str root "/bin/flint") ":src" src ":fn" (:entry case-map)
                           "--emit-image" ":out" (str work "/t.image")]
                          ;; `:optimize [perf]` SETS THE IMAGE'S PERF BIT, which is
                          ;; the only thing that makes `boot` compile arities. Passed
