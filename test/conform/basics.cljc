@@ -351,8 +351,18 @@
    (d "chars are one-character strings" (nth "abc" 1) "b" \b)
    (d "char literals read as strings" \a "a" \a)
    (d "str of a char" (str \a) "a" "a")
+   ;; WRITTEN LITERALLY, not as a `\ud83d\ude00` escape pair: real Clojure's
+   ;; `\u` escape names one UTF-16 CODE UNIT (so two escapes can combine into
+   ;; a surrogate pair, a JVM `String` internal), while flint's `\u` escape
+   ;; names one Unicode SCALAR VALUE and refuses a lone surrogate half
+   ;; outright (`is-scalar`, `kin/readconst.kin`; `test/reader/err-surrogate.cljc`
+   ;; is the dedicated guard for that refusal) -- flint strings are UTF-8 and
+   ;; have no escape that reaches past U+FFFF (AGENTS.md sec. 6: simulating
+   ;; the other platform's internal representation is a bug here, not a
+   ;; feature to port). The literal character reads on both sides and is the
+   ;; same test either way.
    (d "count on a string is code points, not UTF-16 units"
-      (count "a\u00e9\ud83d\ude00") 3 4)
+      (count "a\u00e9😀") 3 4)
    (d "inexact integer division is a double, not a Ratio" (str (/ 1 2)) "0.5" "1/2")
    (d "hash of a char is the hash of its string" (hash \a) 1455541201 97)
    (d "no char type, so char? is string-of-length-1" (char? \a) true true)

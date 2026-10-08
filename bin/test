@@ -278,8 +278,26 @@ tail -1 /tmp/flint-test.out
 
 echo
 sec "conformance: Clojure expressions, on flint"
-./bin/flint :src test :fn conform.runner/main :out out/conform.wasm >/dev/null
-node host/flint.mjs out/conform.wasm conform.runner/main | tee /tmp/conform.out
+# BOTH STEPS CHECKED, NEITHER BY A PIPE'S OWN EXIT STATUS. This was the one
+# step in this file that did not heed the "every step checks its own result"
+# rule at the top -- `./bin/flint` ran unguarded, and `node | tee` reports
+# `tee`'s exit code, not `node`'s, so a failing run would have looked the
+# same as a passing one. Measured 2026-10-07: a surrogate-pair escape (two
+# backslash-u escapes, hex D83D and DE00, spelling a non-BMP emoji) in a
+# conformance fixture (real Clojure's backslash-u escape names one UTF-16
+# code UNIT, so two combine into a non-BMP character; flint's backslash-u
+# escape names one Unicode SCALAR VALUE and refuses a lone surrogate half --
+# AGENTS.md sec. 6, and `test/reader/err-surrogate.cljc` already guards that
+# refusal) made `./bin/flint` exit 1 with "not a code point: 55357" on
+# stderr, and with the command unguarded, `set -e` killed the whole script
+# right there -- not through `fail` -- so the "N of M sections ran" summary
+# never printed. `fail` cannot run after the shell has already exited, which
+# is why this needs guarding here rather than fixed once in `fail` itself.
+./bin/flint :src test :fn conform.runner/main :out out/conform.wasm >/dev/null \
+  || fail "bin/flint (conform compile)"
+node host/flint.mjs out/conform.wasm conform.runner/main > /tmp/conform.out 2>&1 \
+  || { cat /tmp/conform.out; fail "conform.runner/main"; }
+cat /tmp/conform.out
 # A FLOOR, not the count. The runner prints `PASS <n>`, and this grepped for
 # `^PASS` alone -- so an EMPTY corpus reported success, while the header said
 # 130 and nothing checked that either. The header now says nothing it cannot
